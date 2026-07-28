@@ -82,7 +82,12 @@ describe("transcription model selection", () => {
 				},
 			],
 		};
-		expect(isSpeechGenerationModel(provider.modelList![0])).toBe(true);
+		expect(provider.modelList?.[0]).toBeDefined();
+		expect(
+			provider.modelList?.[0]
+				? isSpeechGenerationModel(provider.modelList[0])
+				: false,
+		).toBe(true);
 		expect(
 			selectSpeechGenerationModel([provider], {
 				providerId: "gemini",
@@ -123,6 +128,14 @@ describe("transcription model selection", () => {
 				outputModalities: ["audio"],
 			}),
 		).toBe(false);
+		expect(
+			isChatModel({
+				id: "imagen",
+				name: "Imagen",
+				inputModalities: ["text"],
+				outputModalities: ["image"],
+			}),
+		).toBe(true);
 	});
 
 	it("selects only the explicitly configured enabled model", () => {

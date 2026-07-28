@@ -231,6 +231,7 @@ export type AgentModelFinishReason =
 
 export type AgentModelEvent =
 	| { type: "text-delta"; text: string }
+	| { type: "image"; data: string; mediaType: string }
 	| {
 			type: "reasoning-delta";
 			text: string;

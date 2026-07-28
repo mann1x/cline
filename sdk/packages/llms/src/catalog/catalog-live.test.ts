@@ -127,7 +127,7 @@ describe("models-dev-catalog", () => {
 		expect(providerModels.cohere).toBeUndefined();
 	});
 
-	it("keeps dedicated transcription and speech models without tool calling", () => {
+	it("keeps dedicated audio and image models without tool calling", () => {
 		const providerModels = normalizeModelsDevProviderModels({
 			groq: {
 				id: "groq",
@@ -150,6 +150,10 @@ describe("models-dev-catalog", () => {
 						tool_call: false,
 						modalities: { input: ["text"], output: ["audio"] },
 					},
+					"image-model": {
+						tool_call: false,
+						modalities: { input: ["text"], output: ["image"] },
+					},
 					"embedding-model": {
 						tool_call: false,
 						modalities: { input: ["text"], output: ["text"] },
@@ -164,6 +168,9 @@ describe("models-dev-catalog", () => {
 			},
 			"speech-model": {
 				modalities: { input: ["text"], output: ["audio"] },
+			},
+			"image-model": {
+				modalities: { input: ["text"], output: ["image"] },
 			},
 			"gpt-realtime-whisper": {
 				capabilities: ["transcription-streaming"],

@@ -839,11 +839,19 @@ async function handleSend(
 		} else {
 			deleteMaterializedAttachments(sessionId, userFiles);
 		}
-		ctx.logger?.log("Desktop chat prompt completed", {
+		const completionMetadata = {
 			sessionId,
 			finishReason: result?.finishReason,
 			textLength: result?.text?.length ?? 0,
-		});
+		};
+		if (result?.finishReason === "error") {
+			ctx.logger?.error?.("Desktop chat prompt returned an error result", {
+				...completionMetadata,
+				failure: result.text,
+			});
+		} else {
+			ctx.logger?.log("Desktop chat prompt completed", completionMetadata);
+		}
 		if (session && ownsBusyState) {
 			session.status = "idle";
 			if (result?.messages) session.messages = result.messages as unknown[];

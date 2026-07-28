@@ -130,16 +130,19 @@ describe("useChatSession", () => {
 	it.each([
 		{
 			finishReason: "completed",
+			expectedRole: "assistant",
 			expected:
 				'[{"code":"too_small","path":["workspaces","/","hint"],"message":"expected string to have >=1 characters"}]',
 		},
 		{
 			finishReason: "error",
+			expectedRole: "error",
 			expected:
 				'[{"code":"too_small","path":["workspaces","/","hint"],"message":"expected string to have >=1 characters"}]',
 		},
 	])("handles schema-like assistant text for $finishReason responses", async ({
 		finishReason,
+		expectedRole,
 		expected,
 	}) => {
 		const schemaLikeText =
@@ -177,9 +180,59 @@ describe("useChatSession", () => {
 		await act(async () => current.sendPrompt("Explain this validation error"));
 
 		expect(
-			current.messages.findLast((message) => message.role === "assistant")
+			current.messages.findLast((message) => message.role === expectedRole)
 				?.content,
 		).toBe(expected);
+		expect(current.status).toBe(
+			finishReason === "error" ? "failed" : "completed",
+		);
+	});
+
+	it("keeps a runtime error visible after canonical history hydration", async () => {
+		const runtimeError =
+			"Model 'openai/gpt-image-2' is an image model, not a language model.";
+		invokeMock.mockImplementation(
+			async (command: string, args?: Record<string, unknown>) => {
+				if (command === "get_process_context") {
+					return { cwd: "/workspace/cline", workspaceRoot: "/workspace/cline" };
+				}
+				if (command === "chat_session_command") {
+					const request = args?.request as
+						| { action?: string; config?: { sessionId?: string } }
+						| undefined;
+					if (request?.action === "start") {
+						return { sessionId: request.config?.sessionId ?? "session-test" };
+					}
+					if (request?.action === "send") {
+						return {
+							ok: true,
+							result: { text: runtimeError, finishReason: "error" },
+						};
+					}
+				}
+				if (command === "read_session_messages") {
+					return [
+						{
+							id: "persisted-user",
+							sessionId: "session-test",
+							role: "user",
+							content: "Generate an image",
+							createdAt: 1,
+						},
+					];
+				}
+				return [];
+			},
+		);
+
+		await act(async () => current.sendPrompt("Generate an image"));
+
+		expect(current.status).toBe("failed");
+		expect(current.error).toBe(runtimeError);
+		expect(current.messages.at(-1)).toMatchObject({
+			role: "error",
+			content: runtimeError,
+		});
 	});
 
 	it("publishes the first user message before cold session startup resolves", async () => {
@@ -465,6 +518,181 @@ describe("useChatSession", () => {
 		]);
 	});
 
+	it("appends live generated images to the active assistant message", async () => {
+		invokeMock.mockImplementation(
+			async (command: string, args?: Record<string, unknown>) => {
+				if (command === "get_process_context") {
+					return { cwd: "/workspace/cline", workspaceRoot: "/workspace/cline" };
+				}
+				if (command === "chat_session_command") {
+					const request = args?.request as
+						| { action?: string; config?: { sessionId?: string } }
+						| undefined;
+					if (request?.action === "start") {
+						return { sessionId: request.config?.sessionId };
+					}
+					if (request?.action === "send") {
+						return { ok: true };
+					}
+				}
+				return [];
+			},
+		);
+		await act(async () => current.sendPrompt("Draw a lighthouse"));
+		const chatEventHandler = subscribeMock.mock.calls.find(
+			([eventName]) => eventName === "chat_event",
+		)?.[1] as ((payload: unknown) => void) | undefined;
+
+		await act(async () => {
+			chatEventHandler?.({
+				sessionId: current.sessionId,
+				stream: "chat_text",
+				chunk: "Here it is.",
+				ts: Date.now(),
+				index: 1,
+			});
+			chatEventHandler?.({
+				sessionId: current.sessionId,
+				stream: "chat_image",
+				chunk: JSON.stringify({
+					data: "aGVsbG8=",
+					mediaType: "image/webp",
+				}),
+				ts: Date.now(),
+				index: 2,
+			});
+		});
+
+		const assistant = current.messages.findLast(
+			(message) => message.role === "assistant",
+		);
+		expect(assistant).toMatchObject({
+			content: "Here it is.",
+			images: [
+				expect.objectContaining({
+					data: "aGVsbG8=",
+					mediaType: "image/webp",
+				}),
+			],
+		});
+	});
+
+	it("deduplicates repeated live generated image events", async () => {
+		invokeMock.mockImplementation(
+			async (command: string, args?: Record<string, unknown>) => {
+				if (command === "get_process_context") {
+					return { cwd: "/workspace/cline", workspaceRoot: "/workspace/cline" };
+				}
+				if (command === "chat_session_command") {
+					const request = args?.request as
+						| { action?: string; config?: { sessionId?: string } }
+						| undefined;
+					if (request?.action === "start") {
+						return { sessionId: request.config?.sessionId };
+					}
+					if (request?.action === "send") {
+						return { ok: true };
+					}
+				}
+				return [];
+			},
+		);
+		await act(async () => current.sendPrompt("Draw three puppies"));
+		const chatEventHandler = subscribeMock.mock.calls.find(
+			([eventName]) => eventName === "chat_event",
+		)?.[1] as ((payload: unknown) => void) | undefined;
+
+		await act(async () => {
+			for (const [index, data] of [
+				"aGVsbG8=",
+				"aGVsbG8=",
+				"d29ybGQ=",
+			].entries()) {
+				chatEventHandler?.({
+					sessionId: current.sessionId,
+					stream: "chat_image",
+					chunk: JSON.stringify({ data, mediaType: "image/webp" }),
+					ts: Date.now(),
+					index: index + 1,
+				});
+			}
+		});
+
+		const assistant = current.messages.findLast(
+			(message) => message.role === "assistant",
+		);
+		expect(assistant?.images?.map((image) => image.data)).toEqual([
+			"aGVsbG8=",
+			"d29ybGQ=",
+		]);
+	});
+
+	it("renders generated images returned in the completed RPC result", async () => {
+		invokeMock.mockImplementation(
+			async (command: string, args?: Record<string, unknown>) => {
+				if (command === "get_process_context") {
+					return { cwd: "/workspace/cline", workspaceRoot: "/workspace/cline" };
+				}
+				if (command === "chat_session_command") {
+					const request = args?.request as
+						| { action?: string; config?: { sessionId?: string } }
+						| undefined;
+					if (request?.action === "start") {
+						return { sessionId: request.config?.sessionId ?? "session-test" };
+					}
+					if (request?.action === "send") {
+						return {
+							ok: true,
+							result: {
+								text: "",
+								finishReason: "completed",
+								messages: [
+									{
+										role: "assistant",
+										content: [
+											{
+												type: "image",
+												data: "aGVsbG8=",
+												mediaType: "image/png",
+											},
+										],
+									},
+								],
+							},
+						};
+					}
+				}
+				if (command === "read_session_messages") {
+					return [
+						{
+							id: "persisted-user",
+							sessionId: "session-test",
+							role: "user",
+							content: "Draw a lighthouse",
+							createdAt: 1,
+						},
+					];
+				}
+				return [];
+			},
+		);
+
+		await act(async () => current.sendPrompt("Draw a lighthouse"));
+
+		expect(current.status).toBe("completed");
+		expect(
+			current.messages.findLast((message) => message.role === "assistant"),
+		).toMatchObject({
+			content: "",
+			images: [
+				expect.objectContaining({
+					data: "aGVsbG8=",
+					mediaType: "image/png",
+				}),
+			],
+		});
+	});
+
 	it("returns to a completed status when a queued turn finishes via chat_done", async () => {
 		invokeMock.mockImplementation(
 			async (command: string, args?: Record<string, unknown>) => {
@@ -616,6 +844,7 @@ describe("useChatSession", () => {
 	});
 
 	it("marks a queued turn as failed when chat_done reports an error", async () => {
+		const runtimeError = "Image provider rejected the request";
 		invokeMock.mockImplementation(
 			async (command: string, args?: Record<string, unknown>) => {
 				if (command === "get_process_context") {
@@ -657,12 +886,20 @@ describe("useChatSession", () => {
 			chatEventHandler?.({
 				sessionId: current.sessionId,
 				stream: "chat_done",
-				chunk: JSON.stringify({ reason: "error" }),
+				chunk: JSON.stringify({
+					reason: "error",
+					text: runtimeError,
+				}),
 				ts: Date.now(),
 				index: 2,
 			});
 		});
 		expect(current.status).toBe("failed");
+		expect(current.error).toBe(runtimeError);
+		expect(current.messages.at(-1)).toMatchObject({
+			role: "error",
+			content: runtimeError,
+		});
 	});
 
 	it("shares one cold start and queues a second prompt behind it", async () => {

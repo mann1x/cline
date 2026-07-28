@@ -188,6 +188,8 @@ export type {
 export {
 	ApiFormat,
 	ApiFormatSchema,
+	isDedicatedImageGenerationModel,
+	isImageGenerationModel,
 	type ModelCapability,
 	ModelCapabilitySchema,
 	type ModelInfo,

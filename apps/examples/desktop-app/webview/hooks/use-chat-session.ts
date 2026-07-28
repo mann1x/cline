@@ -21,6 +21,7 @@ import type {
 	ChatSessionHookEvent,
 	ChatTransportState,
 	CoreLogChunk,
+	ImageDeltaEvent,
 	ProcessContext,
 	PromptInQueue,
 	ReasoningDeltaEvent,
@@ -30,6 +31,7 @@ import type {
 } from "@/hooks/chat-session/types";
 import {
 	type ChatMessage,
+	ChatMessageImageSchema,
 	type ChatSessionConfig,
 	ChatSessionConfigSchema,
 	type ChatSessionStatus,
@@ -63,6 +65,7 @@ const STREAM_FLUSH_INTERVAL_MS = 48;
 const RELEVANT_STREAMS = new Set([
 	"chat_text",
 	"chat_reasoning",
+	"chat_image",
 	"chat_queued_prompt_start",
 	"chat_tool_call_start",
 	"chat_tool_call_end",
@@ -324,6 +327,24 @@ export function useChatSession() {
 			setMessages((prev) =>
 				sliceMessages([...prev, makeErrorChatMessage(sid, msg)]),
 			);
+		},
+		[],
+	);
+
+	const appendRuntimeError = useCallback(
+		(msg: string, sid: string | null = null) => {
+			setError(msg);
+			setMessages((prev) => {
+				const duplicate = prev.some(
+					(message) =>
+						message.role === "error" &&
+						message.sessionId === sid &&
+						message.content === msg,
+				);
+				return duplicate
+					? prev
+					: sliceMessages([...prev, makeErrorChatMessage(sid, msg)]);
+			});
 		},
 		[],
 	);
@@ -828,6 +849,61 @@ export function useChatSession() {
 			// observe fully applied text, so drain the buffers first.
 			flushPendingStream();
 
+			if (payload.stream === "chat_image") {
+				let parsed: ImageDeltaEvent;
+				try {
+					parsed = JSON.parse(payload.chunk) as ImageDeltaEvent;
+				} catch {
+					return;
+				}
+				const image = ChatMessageImageSchema.safeParse({
+					id: makeId("generated_image"),
+					data: parsed.data,
+					mediaType: parsed.mediaType,
+				});
+				if (!image.success) {
+					console.warn(
+						"[desktop:chat] Ignoring invalid generated image",
+						image.error.flatten(),
+					);
+					return;
+				}
+				let assistantId = activeAssistantMessageIdRef.current;
+				if (!assistantId) {
+					assistantId = makeId("assistant");
+					addMessage({
+						id: assistantId,
+						sessionId: listeningSessionId,
+						role: "assistant",
+						content: "",
+						images: [image.data],
+						createdAt: chunkCreatedAt(payload),
+					});
+					activeAssistantMessageIdRef.current = assistantId;
+					setActiveAssistantMessageId(assistantId);
+					return;
+				}
+				setMessages((prev) =>
+					updateMessageById(prev, assistantId, (message) => {
+						const images = message.images ?? [];
+						if (
+							images.some(
+								(existing) =>
+									existing.data === image.data.data &&
+									existing.mediaType === image.data.mediaType,
+							)
+						) {
+							return message;
+						}
+						return {
+							...message,
+							images: [...images, image.data],
+						};
+					}),
+				);
+				return;
+			}
+
 			if (payload.stream === "chat_queued_prompt_start") {
 				let parsed: {
 					prompt?: string;
@@ -913,11 +989,19 @@ export function useChatSession() {
 				// signal. Without it the composer stays on "Agent is working..."
 				// forever.
 				let doneReason = "";
+				let doneText = "";
 				try {
-					const parsed = JSON.parse(payload.chunk) as { reason?: string };
+					const parsed = JSON.parse(payload.chunk) as {
+						reason?: string;
+						text?: string;
+					};
 					doneReason = parsed.reason?.trim() ?? "";
+					doneText = parsed.text?.trim() ?? "";
 				} catch {
 					// Missing reason still means the turn ended.
+				}
+				if (doneReason === "error" && doneText) {
+					appendRuntimeError(doneText, listeningSessionId);
 				}
 				setStatus(
 					doneReason === "aborted"
@@ -1007,6 +1091,7 @@ export function useChatSession() {
 		},
 		[
 			addMessage,
+			appendRuntimeError,
 			clearLiveToolRefs,
 			flushPendingStream,
 			schedulePendingStreamFlush,
@@ -1403,11 +1488,14 @@ export function useChatSession() {
 					setStatus("cancelled");
 					return;
 				}
+				const isErrorResult = result?.finishReason === "error";
 				const assistantText = (result?.text ?? "").trim();
 				const fallbackAssistantTurn = extractAssistantTurnDataFromRpcMessages(
 					result?.messages,
 				);
-				const rawAssistantText = assistantText || fallbackAssistantTurn.text;
+				const rawAssistantText = isErrorResult
+					? ""
+					: assistantText || fallbackAssistantTurn.text;
 				const resolvedAssistantText = rawAssistantText;
 				if (resolvedAssistantText) {
 					const assistantMessageId =
@@ -1436,8 +1524,9 @@ export function useChatSession() {
 						]);
 					});
 				} else if (
-					fallbackAssistantTurn.reasoning ||
-					fallbackAssistantTurn.reasoningRedacted
+					!isErrorResult &&
+					(fallbackAssistantTurn.reasoning ||
+						fallbackAssistantTurn.reasoningRedacted)
 				) {
 					const assistantMessageId =
 						activeAssistantMessageIdRef.current ?? makeId("assistant");
@@ -1470,7 +1559,63 @@ export function useChatSession() {
 							},
 						]);
 					});
-				} else {
+				}
+				const fallbackImages = isErrorResult
+					? []
+					: fallbackAssistantTurn.images.flatMap((candidate) => {
+							const image = ChatMessageImageSchema.safeParse({
+								id: makeId("generated_image"),
+								...candidate,
+							});
+							return image.success ? [image.data] : [];
+						});
+				if (fallbackImages.length > 0) {
+					const assistantMessageId =
+						activeAssistantMessageIdRef.current ?? makeId("assistant");
+					activeAssistantMessageIdRef.current = assistantMessageId;
+					setActiveAssistantMessageId(assistantMessageId);
+					setMessages((prev) => {
+						const updated = updateMessageById(
+							prev,
+							assistantMessageId,
+							(message) => {
+								const existing = message.images ?? [];
+								const additions = fallbackImages.filter(
+									(image) =>
+										!existing.some(
+											(candidate) =>
+												candidate.data === image.data &&
+												candidate.mediaType === image.mediaType,
+										),
+								);
+								return additions.length > 0
+									? { ...message, images: [...existing, ...additions] }
+									: message;
+							},
+						);
+						if (updated !== prev) return updated;
+						return sliceMessages([
+							...prev,
+							{
+								id: assistantMessageId,
+								sessionId: activeSessionId,
+								role: "assistant" as const,
+								content: resolvedAssistantText,
+								images: fallbackImages,
+								reasoning: fallbackAssistantTurn.reasoning || undefined,
+								reasoningRedacted:
+									fallbackAssistantTurn.reasoningRedacted || undefined,
+								createdAt: now + 1,
+							},
+						]);
+					});
+				}
+				const hasFallbackAssistantTurn =
+					Boolean(resolvedAssistantText) ||
+					Boolean(fallbackAssistantTurn.reasoning) ||
+					fallbackAssistantTurn.reasoningRedacted ||
+					fallbackImages.length > 0;
+				if (!hasFallbackAssistantTurn) {
 					// Recovery: load canonical messages if transport missed result text.
 					try {
 						const historyMessages = await desktopClient.invoke<ChatMessage[]>(
@@ -1497,8 +1642,48 @@ export function useChatSession() {
 						"read_session_messages",
 						{ sessionId: activeSessionId, maxMessages: MAX_MESSAGES },
 					);
-					if (historyMessages.length > 0) {
-						setMessages(historyMessages);
+					const hasCanonicalAssistantTurn = historyMessages.some(
+						(message) => message.role === "assistant",
+					);
+					if (
+						historyMessages.length > 0 &&
+						(!hasFallbackAssistantTurn || hasCanonicalAssistantTurn)
+					) {
+						const assistantIndex = historyMessages.findLastIndex(
+							(message) => message.role === "assistant",
+						);
+						const canonicalMessages =
+							assistantIndex >= 0 && hasFallbackAssistantTurn
+								? historyMessages.map((message, index) => {
+										if (index !== assistantIndex) return message;
+										const existingImages = message.images ?? [];
+										const missingImages = fallbackImages.filter(
+											(image) =>
+												!existingImages.some(
+													(candidate) =>
+														candidate.data === image.data &&
+														candidate.mediaType === image.mediaType,
+												),
+										);
+										return {
+											...message,
+											content: message.content || resolvedAssistantText,
+											reasoning:
+												message.reasoning ||
+												fallbackAssistantTurn.reasoning ||
+												undefined,
+											reasoningRedacted:
+												message.reasoningRedacted ||
+												fallbackAssistantTurn.reasoningRedacted ||
+												undefined,
+											images:
+												missingImages.length > 0
+													? [...existingImages, ...missingImages]
+													: message.images,
+										};
+									})
+								: historyMessages;
+						setMessages(canonicalMessages);
 					}
 				} catch {
 					// Keep optimistic state if canonical hydration fails.
@@ -1554,19 +1739,17 @@ export function useChatSession() {
 					payload.promptsInQueue.length > 0;
 				if (abortedRef.current) {
 					setStatus("cancelled");
-				} else if (result?.finishReason === "error") {
-					if (!resolvedAssistantText) {
-						const toolError = Array.isArray(result?.toolCalls)
-							? result.toolCalls.find((c) => c.error)?.error
-							: undefined;
-						addMessage(
-							makeErrorChatMessage(
-								activeSessionId,
-								toolError?.trim() ||
-									"Runtime turn failed before an assistant response was produced.",
-							),
-						);
-					}
+				} else if (isErrorResult) {
+					const toolError = Array.isArray(result?.toolCalls)
+						? result.toolCalls.find((c) => c.error)?.error
+						: undefined;
+					appendRuntimeError(
+						assistantText ||
+							fallbackAssistantTurn.text ||
+							toolError?.trim() ||
+							"Runtime turn failed before an assistant response was produced.",
+						activeSessionId,
+					);
 					setStatus("failed");
 				} else if (result?.finishReason === "aborted") {
 					setStatus("cancelled");
@@ -1599,6 +1782,7 @@ export function useChatSession() {
 		},
 		[
 			addMessage,
+			appendRuntimeError,
 			applyPromptsInQueue,
 			clearAbortFallbackTimeout,
 			clearLiveToolRefs,

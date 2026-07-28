@@ -525,6 +525,7 @@ export type HubEventName =
 	| "iteration.started"
 	| "iteration.finished"
 	| "assistant.delta"
+	| "assistant.image"
 	| "assistant.finished"
 	| "session.notice"
 	| "reasoning.delta"

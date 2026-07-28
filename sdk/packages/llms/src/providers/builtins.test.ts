@@ -106,6 +106,24 @@ describe("cline-pass builtin spec", () => {
 });
 
 describe("built-in provider metadata", () => {
+	it("declares OpenRouter image transport for Cline-compatible gateways", async () => {
+		await expect(getProvider("cline")).resolves.toMatchObject({
+			metadata: {
+				imageTransport: "openrouter",
+				responseEnvelope: "success-data",
+			},
+		});
+		await expect(getProvider("cline-pass")).resolves.toMatchObject({
+			metadata: {
+				imageTransport: "openrouter",
+				responseEnvelope: "success-data",
+			},
+		});
+		await expect(getProvider("openrouter")).resolves.toMatchObject({
+			metadata: { imageTransport: "openrouter" },
+		});
+	});
+
 	it("registers ElevenLabs transcription and speech generation models", async () => {
 		await expect(getProvider("elevenlabs")).resolves.toMatchObject({
 			id: "elevenlabs",

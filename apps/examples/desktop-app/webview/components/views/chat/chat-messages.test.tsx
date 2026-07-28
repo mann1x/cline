@@ -251,6 +251,61 @@ describe("ChatMessages tool disclosures", () => {
 	});
 });
 
+describe("ChatMessages copy actions", () => {
+	it("copies displayed user text without the internal user_input envelope", async () => {
+		const writeText = vi.fn().mockResolvedValue(undefined);
+		Object.defineProperty(navigator, "clipboard", {
+			configurable: true,
+			value: { writeText },
+		});
+
+		await renderMessages([
+			{
+				id: "wrapped-user",
+				sessionId: "session-1",
+				role: "user",
+				content: '<user_input mode="act">\nPlease fix the tests\n</user_input>',
+				createdAt: 1,
+			},
+		]);
+
+		const copy = container.querySelector<HTMLButtonElement>(
+			'button[aria-label="Copy user message"]',
+		);
+		await act(async () => copy?.click());
+
+		expect(writeText).toHaveBeenCalledWith("Please fix the tests");
+	});
+});
+
+describe("ChatMessages errors", () => {
+	it("caps persisted error messages in a scrollable block", async () => {
+		await renderMessages([
+			{
+				id: "error-1",
+				sessionId: "session-1",
+				role: "error",
+				content: "Invalid prompt\n".repeat(100),
+				createdAt: 1,
+			},
+		]);
+
+		const alert = container.querySelector<HTMLElement>('[role="alert"]');
+		expect(alert?.className).toContain("max-h-44");
+		expect(alert?.className).toContain("overflow-y-auto");
+	});
+
+	it("caps transient error banners in a scrollable block", async () => {
+		await renderMessages([], {
+			error: "Request failed\n".repeat(100),
+		});
+
+		const alert = container.querySelector<HTMLElement>('[role="alert"]');
+		expect(alert?.className).toContain("max-h-44");
+		expect(alert?.className).toContain("overflow-y-auto");
+	});
+});
+
 describe("ChatMessages image attachments", () => {
 	it("renders persisted image blocks in the user message", async () => {
 		await renderMessages([
@@ -273,6 +328,83 @@ describe("ChatMessages image attachments", () => {
 		expect(image?.className).toContain("max-h-[225px]");
 		expect(image?.className).toContain("max-w-[225px]");
 		expect(container.textContent).toContain("Describe this");
+	});
+
+	it("renders an image-only assistant response", async () => {
+		await renderMessages([
+			{
+				id: "assistant-image",
+				sessionId: "session-1",
+				role: "assistant",
+				content: "",
+				images: [
+					{
+						id: "generated-image-1",
+						mediaType: "image/webp",
+						data: "aGVsbG8=",
+					},
+				],
+				createdAt: 1,
+			},
+		]);
+
+		expect(
+			container.querySelector<HTMLImageElement>('img[alt="Generated result 1"]')
+				?.src,
+		).toBe("data:image/webp;base64,aGVsbG8=");
+	});
+
+	it("shows one generated image at a time and navigates the result set", async () => {
+		await renderMessages([
+			{
+				id: "assistant-images",
+				sessionId: "session-1",
+				role: "assistant",
+				content: "",
+				images: [
+					{
+						id: "generated-image-1",
+						mediaType: "image/png",
+						data: "Zmlyc3Q=",
+					},
+					{
+						id: "generated-image-2",
+						mediaType: "image/png",
+						data: "c2Vjb25k",
+					},
+				],
+				createdAt: 1,
+			},
+		]);
+
+		expect(
+			container.querySelector<HTMLImageElement>('img[alt="Generated result 1"]')
+				?.src,
+		).toBe("data:image/png;base64,Zmlyc3Q=");
+		expect(container.querySelector('img[alt="Generated result 2"]')).toBeNull();
+		expect(container.textContent).toContain("1 / 2");
+
+		const previous = container.querySelector<HTMLButtonElement>(
+			'button[aria-label="Previous generated image"]',
+		);
+		const next = container.querySelector<HTMLButtonElement>(
+			'button[aria-label="Next generated image"]',
+		);
+		expect(previous?.disabled).toBe(true);
+		await act(async () => next?.click());
+
+		expect(
+			container.querySelector<HTMLImageElement>('img[alt="Generated result 2"]')
+				?.src,
+		).toBe("data:image/png;base64,c2Vjb25k");
+		expect(container.textContent).toContain("2 / 2");
+		expect(next?.disabled).toBe(true);
+
+		await act(async () => previous?.click());
+		expect(
+			container.querySelector<HTMLImageElement>('img[alt="Generated result 1"]')
+				?.src,
+		).toBe("data:image/png;base64,Zmlyc3Q=");
 	});
 
 	it("expands an attachment within the conversation and closes it", async () => {

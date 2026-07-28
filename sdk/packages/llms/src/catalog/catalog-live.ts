@@ -257,16 +257,26 @@ function toModalities(
 		);
 	const input = normalize(modalities.input);
 	const output = normalize(modalities.output);
-	if (!input.includes("audio") && !output.includes("audio")) {
+	// A one-sided declaration is incomplete and must not turn an otherwise
+	// usable chat model into an input- or output-incompatible model.
+	if (input.length === 0 || output.length === 0) {
+		return undefined;
+	}
+	if (
+		!input.includes("audio") &&
+		!output.includes("audio") &&
+		!output.includes("image")
+	) {
 		return undefined;
 	}
 	return { input, output };
 }
 
-function isAudioModel(model: ModelsDevModel): boolean {
+function isSpecializedMediaModel(model: ModelsDevModel): boolean {
 	return (
 		model.modalities?.input?.includes("audio") === true ||
-		model.modalities?.output?.includes("audio") === true
+		model.modalities?.output?.includes("audio") === true ||
+		model.modalities?.output?.includes("image") === true
 	);
 }
 
@@ -347,7 +357,7 @@ export function normalizeModelsDevProviderModels(
 		const models: Record<string, ModelInfo> = {};
 		for (const [modelId, model] of Object.entries(source.models)) {
 			if (
-				(model.tool_call !== true && !isAudioModel(model)) ||
+				(model.tool_call !== true && !isSpecializedMediaModel(model)) ||
 				isDeprecatedModel(model)
 			) {
 				continue;

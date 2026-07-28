@@ -21,6 +21,11 @@ export type ReasoningDeltaEvent = {
 	redacted?: boolean;
 };
 
+export type ImageDeltaEvent = {
+	data?: string;
+	mediaType?: string;
+};
+
 export type ToolCallStartEvent = {
 	toolCallId?: string;
 	toolName?: string;

@@ -102,6 +102,7 @@ function toGatewayModelDefinition(
 		contextWindow: model.contextWindow,
 		maxInputTokens: model.maxInputTokens,
 		maxOutputTokens: model.maxTokens,
+		modalities: model.modalities,
 		capabilities: toGatewayCapabilities(model.capabilities),
 		metadata: {
 			family: model.family,
@@ -556,6 +557,13 @@ function toApiStreamChunk(id: string, event: AgentModelEvent): ApiStreamChunk {
 	switch (event.type) {
 		case "text-delta":
 			return { type: "text", id, text: event.text };
+		case "image":
+			return {
+				type: "image",
+				id,
+				data: event.data,
+				mediaType: event.mediaType,
+			};
 		case "reasoning-delta": {
 			const metadata = event.metadata as Record<string, unknown> | undefined;
 			return {
