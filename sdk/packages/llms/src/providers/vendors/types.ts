@@ -7,6 +7,7 @@ import type { CallSettings } from "ai";
 export interface ProviderFactoryResult {
 	model: (modelId: string) => unknown;
 	imageModel?: (modelId: string) => unknown;
+	providerTools?: Record<string, unknown>;
 	buildStreamConfig?: (
 		request: GatewayStreamRequest,
 		context: GatewayProviderContext,

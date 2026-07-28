@@ -34,11 +34,13 @@ import {
 	Search,
 	ShieldAlert,
 	SplitIcon,
+	Square,
 	SquareTerminalIcon,
 	UndoIcon,
+	Volume2,
 	X,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/hooks/use-toast";
 import type {
@@ -46,6 +48,12 @@ import type {
 	ChatMessageImage,
 	ChatSessionStatus,
 } from "@/lib/chat-schema";
+import { desktopClient, writeDesktopDebugLog } from "@/lib/desktop-client";
+import {
+	loadProviderModelCatalog,
+	MODE_SETTINGS_CHANGED_EVENT,
+	type SpeechGenerationModelTarget,
+} from "@/lib/provider-model-catalog";
 import { parseApplyPatchInput } from "@/lib/session-diff";
 import { cn } from "@/lib/utils";
 import { MemoizedMarkdown } from "../../ui/markdown";
@@ -73,6 +81,7 @@ type ChatMessagesProps = {
 	) => void | Promise<void>;
 	onRestoreCheckpoint?: (runCount: number) => void | Promise<void>;
 	onForkSession?: () => void | Promise<void>;
+	onOpenVoiceOutputSettings?: () => void;
 };
 
 type ToolApprovalRequestItem = {
@@ -102,6 +111,20 @@ type AskQuestionRequestItem = {
 type ChatRenderItem =
 	| { type: "message"; message: ChatMessage }
 	| { type: "tools"; messages: ChatMessage[] };
+
+type AssistantSpeechState = {
+	messageId: string;
+	phase: "generating" | "playing";
+};
+
+function base64ToAudioBlob(audioBase64: string, mediaType: string): Blob {
+	const binary = window.atob(audioBase64);
+	const bytes = new Uint8Array(binary.length);
+	for (let index = 0; index < binary.length; index += 1) {
+		bytes[index] = binary.charCodeAt(index);
+	}
+	return new Blob([bytes.buffer], { type: mediaType });
+}
 
 function AssistantImageCarousel({
 	images,
@@ -240,6 +263,7 @@ function ChatMessagesImpl({
 	onAnswerAskQuestion,
 	onRestoreCheckpoint,
 	onForkSession,
+	onOpenVoiceOutputSettings,
 }: ChatMessagesProps) {
 	const hasMessages = messages.length > 0;
 	const lastErrorMessage = [...messages]
@@ -281,6 +305,15 @@ function ChatMessagesImpl({
 	const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
 	const [forkingMessageId, setForkingMessageId] = useState<string | null>(null);
 	const [forkErrors, setForkErrors] = useState<Record<string, string>>({});
+	const [speechGenerationTarget, setSpeechGenerationTarget] =
+		useState<SpeechGenerationModelTarget | null>(null);
+	const [speechSettingsLoaded, setSpeechSettingsLoaded] = useState(false);
+	const [assistantSpeech, setAssistantSpeech] =
+		useState<AssistantSpeechState | null>(null);
+	const activeSpeechAudioRef = useRef<HTMLAudioElement | null>(null);
+	const activeSpeechAudioUrlRef = useRef<string | null>(null);
+	const speechRequestIdRef = useRef(0);
+	const speechSessionIdRef = useRef(sessionId);
 	const [expandedImage, setExpandedImage] = useState<{
 		sessionId: string | null;
 		image: ChatMessageImage;
@@ -292,6 +325,177 @@ function ChatMessagesImpl({
 	const renderItems = useMemo(
 		() => groupConsecutiveToolMessages(messages),
 		[messages],
+	);
+
+	useEffect(() => {
+		let cancelled = false;
+		let loadId = 0;
+		const loadVoiceOutput = () => {
+			const currentLoadId = ++loadId;
+			setSpeechSettingsLoaded(false);
+			loadProviderModelCatalog()
+				.then((catalog) => {
+					if (!cancelled && currentLoadId === loadId) {
+						setSpeechGenerationTarget(catalog.modes.voiceOutput);
+						setSpeechSettingsLoaded(true);
+					}
+				})
+				.catch(() => {
+					if (!cancelled && currentLoadId === loadId) {
+						setSpeechGenerationTarget(null);
+						setSpeechSettingsLoaded(true);
+					}
+				});
+		};
+		const handleModeSettingsChanged = (event: Event) => {
+			const mode = (event as CustomEvent<{ mode?: string }>).detail?.mode;
+			if (!mode || mode === "voiceOutput") {
+				loadVoiceOutput();
+			}
+		};
+		loadVoiceOutput();
+		window.addEventListener(
+			MODE_SETTINGS_CHANGED_EVENT,
+			handleModeSettingsChanged,
+		);
+		return () => {
+			cancelled = true;
+			loadId += 1;
+			window.removeEventListener(
+				MODE_SETTINGS_CHANGED_EVENT,
+				handleModeSettingsChanged,
+			);
+		};
+	}, []);
+
+	const stopSpeechPlayback = useCallback(() => {
+		speechRequestIdRef.current += 1;
+		const audio = activeSpeechAudioRef.current;
+		if (audio) {
+			audio.pause();
+			audio.removeAttribute("src");
+			activeSpeechAudioRef.current = null;
+		}
+		const audioUrl = activeSpeechAudioUrlRef.current;
+		if (audioUrl) {
+			URL.revokeObjectURL(audioUrl);
+			activeSpeechAudioUrlRef.current = null;
+		}
+		setAssistantSpeech(null);
+	}, []);
+
+	useEffect(() => {
+		if (speechSessionIdRef.current !== sessionId) {
+			speechSessionIdRef.current = sessionId;
+			stopSpeechPlayback();
+		}
+	}, [sessionId, stopSpeechPlayback]);
+
+	useEffect(() => stopSpeechPlayback, [stopSpeechPlayback]);
+
+	const handleSpeakMessage = useCallback(
+		async (messageId: string, content: string) => {
+			if (assistantSpeech?.messageId === messageId) {
+				stopSpeechPlayback();
+				return;
+			}
+			if (!speechGenerationTarget) {
+				onOpenVoiceOutputSettings?.();
+				return;
+			}
+			const text = content.trim();
+			if (!text) return;
+
+			stopSpeechPlayback();
+			const requestId = speechRequestIdRef.current;
+			setAssistantSpeech({ messageId, phase: "generating" });
+			writeDesktopDebugLog({
+				scope: "voice-output",
+				level: "debug",
+				message: "Assistant message requested generated speech",
+				timestamp: new Date().toISOString(),
+				metadata: {
+					messageId,
+					providerId: speechGenerationTarget.providerId,
+					modelId: speechGenerationTarget.modelId,
+					textCharacters: text.length,
+				},
+			});
+
+			try {
+				const result = await desktopClient.invoke<{
+					audioBase64?: string;
+					mediaType?: string;
+				}>("synthesize_speech", { text });
+				if (speechRequestIdRef.current !== requestId) return;
+				if (!result.audioBase64) {
+					throw new Error("The speech provider returned no audio");
+				}
+
+				const mediaType = result.mediaType?.trim() || "audio/mpeg";
+				const audioBlob = base64ToAudioBlob(result.audioBase64, mediaType);
+				const audioUrl = URL.createObjectURL(audioBlob);
+				const audio = new Audio(audioUrl);
+				activeSpeechAudioRef.current = audio;
+				activeSpeechAudioUrlRef.current = audioUrl;
+				let released = false;
+				const release = () => {
+					if (released) return;
+					released = true;
+					if (activeSpeechAudioRef.current === audio) {
+						activeSpeechAudioRef.current = null;
+					}
+					if (activeSpeechAudioUrlRef.current === audioUrl) {
+						URL.revokeObjectURL(audioUrl);
+						activeSpeechAudioUrlRef.current = null;
+					}
+					if (speechRequestIdRef.current === requestId) {
+						setAssistantSpeech((current) =>
+							current?.messageId === messageId ? null : current,
+						);
+					}
+				};
+				audio.addEventListener("ended", release, { once: true });
+				audio.addEventListener("error", release, { once: true });
+				setAssistantSpeech({ messageId, phase: "playing" });
+				await audio.play();
+				writeDesktopDebugLog({
+					scope: "voice-output",
+					level: "debug",
+					message: "Webview started assistant message speech playback",
+					timestamp: new Date().toISOString(),
+					metadata: {
+						messageId,
+						providerId: speechGenerationTarget.providerId,
+						modelId: speechGenerationTarget.modelId,
+						mediaType,
+						audioBytes: audioBlob.size,
+					},
+				});
+			} catch (error) {
+				if (speechRequestIdRef.current !== requestId) return;
+				stopSpeechPlayback();
+				const message = error instanceof Error ? error.message : String(error);
+				writeDesktopDebugLog({
+					scope: "voice-output",
+					level: "error",
+					message: "Assistant message voice playback failed in the webview",
+					timestamp: new Date().toISOString(),
+					metadata: { failure: message, messageId },
+				});
+				toast({
+					variant: "destructive",
+					title: "Voice playback failed",
+					description: message,
+				});
+			}
+		},
+		[
+			assistantSpeech?.messageId,
+			onOpenVoiceOutputSettings,
+			speechGenerationTarget,
+			stopSpeechPlayback,
+		],
 	);
 
 	useEffect(() => {
@@ -572,6 +776,19 @@ function ChatMessagesImpl({
 										}
 										forkPending={forkingMessageId === message.id}
 										forkError={forkErrors[message.id]}
+										onSpeakMessage={handleSpeakMessage}
+										speechAvailable={Boolean(speechGenerationTarget)}
+										speechSettingsLoaded={speechSettingsLoaded}
+										speechState={
+											assistantSpeech?.messageId === message.id
+												? assistantSpeech.phase
+												: undefined
+										}
+										speechTargetLabel={
+											speechGenerationTarget
+												? `${speechGenerationTarget.providerName} / ${speechGenerationTarget.modelName}`
+												: undefined
+										}
 									/>
 								);
 							})}
@@ -874,6 +1091,11 @@ const MessageBubble = memo(function MessageBubble({
 	onForkSession,
 	forkPending = false,
 	forkError,
+	onSpeakMessage,
+	speechAvailable = false,
+	speechSettingsLoaded = false,
+	speechState,
+	speechTargetLabel,
 }: {
 	message: ChatMessage;
 	isStreaming?: boolean;
@@ -890,6 +1112,11 @@ const MessageBubble = memo(function MessageBubble({
 	onForkSession?: (messageId: string) => void | Promise<void>;
 	forkPending?: boolean;
 	forkError?: string;
+	onSpeakMessage?: (messageId: string, content: string) => void | Promise<void>;
+	speechAvailable?: boolean;
+	speechSettingsLoaded?: boolean;
+	speechState?: AssistantSpeechState["phase"];
+	speechTargetLabel?: string;
 }) {
 	const isUser = message.role === "user";
 	const isError = message.role === "error";
@@ -903,11 +1130,12 @@ const MessageBubble = memo(function MessageBubble({
 		!isStreaming &&
 		!isError &&
 		Boolean(displayContent.trim()) &&
-		Boolean(onCopyMessage || onForkSession);
+		Boolean(onCopyMessage || onForkSession || onSpeakMessage);
 	const shouldRenderUserActions =
 		isUser && Boolean(onCopyMessage || checkpoint);
 	const keepUserActionsVisible = restorePending || Boolean(restoreError);
-	const keepAssistantActionsVisible = forkPending || Boolean(forkError);
+	const keepAssistantActionsVisible =
+		forkPending || Boolean(forkError) || Boolean(speechState);
 
 	const reasoningContent = message.reasoning?.trim() || "";
 	return (
@@ -1002,6 +1230,40 @@ const MessageBubble = memo(function MessageBubble({
 								<Check className="h-3 w-3" />
 							) : (
 								<Copy className="h-3 w-3" />
+							)}
+						</MessageAction>
+					) : null}
+					{onSpeakMessage ? (
+						<MessageAction
+							disabled={!speechSettingsLoaded}
+							label={
+								speechState === "generating"
+									? "Cancel speech generation"
+									: speechState === "playing"
+										? "Stop speaking assistant message"
+										: speechAvailable
+											? "Speak assistant message"
+											: "Configure voice output"
+							}
+							onClick={() => void onSpeakMessage(message.id, displayContent)}
+							title={
+								!speechSettingsLoaded
+									? "Loading voice output settings"
+									: speechState === "generating"
+										? "Cancel speech generation"
+										: speechState === "playing"
+											? "Stop speaking"
+											: speechTargetLabel
+												? `Speak with ${speechTargetLabel}`
+												: "Configure voice output in Settings → Models"
+							}
+						>
+							{speechState === "generating" ? (
+								<Square className="h-3 w-3 animate-pulse" />
+							) : speechState === "playing" ? (
+								<Square className="h-3 w-3" />
+							) : (
+								<Volume2 className="h-3 w-3" />
 							)}
 						</MessageAction>
 					) : null}

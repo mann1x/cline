@@ -326,6 +326,9 @@ export default function Home() {
 									onOpenVoiceInputSettings={() =>
 										handleSettingsSectionChange("Models")
 									}
+									onOpenVoiceOutputSettings={() =>
+										handleSettingsSectionChange("Models")
+									}
 									onThreadStarted={handleThreadStarted}
 								/>
 							</div>
@@ -360,6 +363,7 @@ function ChatThreadPane({
 	onNewThread,
 	onOpenSession,
 	onOpenVoiceInputSettings,
+	onOpenVoiceOutputSettings,
 	onThreadStarted,
 }: {
 	threadId: string;
@@ -373,6 +377,7 @@ function ChatThreadPane({
 	onNewThread?: () => void;
 	onOpenSession?: (session: SessionHistoryItem) => void;
 	onOpenVoiceInputSettings?: () => void;
+	onOpenVoiceOutputSettings?: () => void;
 	onThreadStarted?: (threadId: string) => void;
 }) {
 	const {
@@ -1286,6 +1291,7 @@ function ChatThreadPane({
 								messages={displayedMessages}
 								onRestoreCheckpoint={handleRestoreCheckpoint}
 								onForkSession={handleForkSession}
+								onOpenVoiceOutputSettings={onOpenVoiceOutputSettings}
 								pendingToolApprovals={pendingToolApprovals}
 								pendingAskQuestions={pendingAskQuestions}
 								sessionId={displayedSessionId}

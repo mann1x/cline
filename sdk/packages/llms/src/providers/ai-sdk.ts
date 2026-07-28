@@ -12,6 +12,7 @@ import {
 	type AiSdkFormatterPart,
 	captureSdkError,
 	formatMessagesForAiSdk,
+	isDedicatedImageGenerationModel,
 	isImageGenerationModel,
 	parseJsonStream,
 	sanitizeSurrogates,
@@ -60,6 +61,7 @@ interface GatewayNormalizedUsage {
 	totalCost?: number;
 }
 type ProviderModuleKind = AiSdkProviderOptionsTarget;
+const OPENAI_IMAGE_GENERATION_TOOL_NAME = "image_generation";
 
 type ImageGenerationInput = string | Uint8Array | ArrayBuffer;
 type ImageGenerationPrompt =
@@ -150,6 +152,41 @@ function extractGeneratedImage(
 		data: validation.base64,
 		mediaType: validation.mediaType,
 	};
+}
+
+function isOpenAiImageGenerationToolPart(part: AiSdkStreamPart): boolean {
+	return (
+		part.providerExecuted === true &&
+		(part.toolName === OPENAI_IMAGE_GENERATION_TOOL_NAME ||
+			part.name === OPENAI_IMAGE_GENERATION_TOOL_NAME)
+	);
+}
+
+function extractOpenAiImageGenerationToolResult(
+	part: AiSdkStreamPart,
+): { data: string; mediaType: string } | undefined {
+	if (part.type !== "tool-result" || !isOpenAiImageGenerationToolPart(part)) {
+		return undefined;
+	}
+	const output =
+		part.output &&
+		typeof part.output === "object" &&
+		!Array.isArray(part.output)
+			? (part.output as Record<string, unknown>)
+			: part.result &&
+					typeof part.result === "object" &&
+					!Array.isArray(part.result)
+				? (part.result as Record<string, unknown>)
+				: undefined;
+	if (typeof output?.result !== "string") {
+		throw new Error(
+			"OpenAI image generation tool returned no supported image output",
+		);
+	}
+	return extractGeneratedImage({
+		base64: output.result,
+		mediaType: "image/png",
+	});
 }
 
 export function buildAiSdkStreamConfig(
@@ -504,6 +541,17 @@ function toAiSdkTools(
 			} as unknown,
 		]),
 	);
+}
+
+function mergeAiSdkTools(
+	runtimeTools: Record<string, unknown> | undefined,
+	providerTools: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+	const tools = {
+		...(runtimeTools ?? {}),
+		...(providerTools ?? {}),
+	};
+	return Object.keys(tools).length > 0 ? tools : undefined;
 }
 
 interface RepairableToolCall {
@@ -1057,6 +1105,27 @@ async function* emitAiSdkEvents(
 					continue;
 				}
 
+				if (
+					part.type === "tool-call" &&
+					isOpenAiImageGenerationToolPart(part)
+				) {
+					// OpenAI executes this provider tool itself. Do not project it
+					// as a runtime tool call that Cline would try to execute.
+					continue;
+				}
+
+				if (
+					part.type === "tool-result" &&
+					isOpenAiImageGenerationToolPart(part)
+				) {
+					const image = extractOpenAiImageGenerationToolResult(part);
+					if (image) {
+						emittedImages += 1;
+						yield { type: "image", ...image };
+					}
+					continue;
+				}
+
 				if (part.type === "tool-call") {
 					sawToolCalls = true;
 					const toolCallId =
@@ -1315,8 +1384,21 @@ function createAiSdkProvider(kind: ProviderModuleKind): GatewayProviderFactory {
 									modalities: ["image", "text"],
 								},
 							}
-						: composedProviderOptions;
-				if (isImageGenerationModel(context.model)) {
+						: kind === "google" &&
+								isImageGenerationModel(context.model) &&
+								!isDedicatedImageGenerationModel(context.model)
+							? {
+									...composedProviderOptions,
+									google: {
+										...((composedProviderOptions.google ?? {}) as Record<
+											string,
+											unknown
+										>),
+										responseModalities: ["TEXT", "IMAGE"],
+									},
+								}
+							: composedProviderOptions;
+				if (isDedicatedImageGenerationModel(context.model)) {
 					if (!provider.imageModel) {
 						throw new Error(
 							`Provider "${context.provider.id}" does not support image generation models`,
@@ -1362,7 +1444,7 @@ function createAiSdkProvider(kind: ProviderModuleKind): GatewayProviderFactory {
 				);
 				const tools = providerDisablesExternalToolExecution(context)
 					? undefined
-					: toAiSdkTools(request);
+					: mergeAiSdkTools(toAiSdkTools(request), provider.providerTools);
 				const systemPrompt = resolveAiSdkSystemPrompt(request);
 				const useSystemOption =
 					typeof systemPrompt === "string" && systemPrompt.trim().length > 0;

@@ -823,6 +823,31 @@ describe("formatMessagesForAiSdk", () => {
 		]);
 	});
 
+	it("never emits a generated image on an assistant turn without a following user turn", () => {
+		const image = imageData(8);
+		const messages = formatMessagesForAiSdk(undefined, [
+			{
+				role: "user",
+				content: [{ type: "text", text: "Generate an image" }],
+			},
+			{
+				role: "assistant",
+				content: [{ type: "image", image, mediaType: "image/png" }],
+			},
+		]);
+
+		expect(messages).toEqual([
+			{
+				role: "user",
+				content: [{ type: "text", text: "Generate an image" }],
+			},
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "[generated image]" }],
+			},
+		]);
+	});
+
 	it("keeps raw base64 string images without mediaType by defaulting to png", () => {
 		const image = imageData(8);
 		const messages = formatMessagesForAiSdk(undefined, [

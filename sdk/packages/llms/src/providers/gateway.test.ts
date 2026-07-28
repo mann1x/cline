@@ -33,6 +33,10 @@ const openaiCompatibleSpy = vi.fn((modelId: string) => ({
 	modelId,
 	family: "openai-compatible",
 }));
+const openaiCompatibleImageSpy = vi.fn((modelId: string) => ({
+	modelId,
+	family: "openai-compatible-image",
+}));
 const openaiResponsesSpy = vi.fn((modelId: string) => ({
 	modelId,
 	family: "openai",
@@ -40,6 +44,11 @@ const openaiResponsesSpy = vi.fn((modelId: string) => ({
 const openaiImageSpy = vi.fn((modelId: string) => ({
 	modelId,
 	family: "openai-image",
+}));
+const openaiImageGenerationToolSpy = vi.fn((options: unknown) => ({
+	type: "provider-tool",
+	id: "openai.image_generation",
+	options,
 }));
 const openRouterFactorySpy = vi.fn();
 const openRouterChatSpy = vi.fn((modelId: string) => ({
@@ -95,6 +104,10 @@ vi.mock("@ai-sdk/openai", () => ({
 	createOpenAI: () => ({
 		responses: (modelId: string) => openaiResponsesSpy(modelId),
 		image: (modelId: string) => openaiImageSpy(modelId),
+		tools: {
+			imageGeneration: (options: unknown) =>
+				openaiImageGenerationToolSpy(options),
+		},
 	}),
 }));
 
@@ -110,7 +123,9 @@ vi.mock("@ai-sdk/gateway", () => ({
 vi.mock("@ai-sdk/openai-compatible", () => ({
 	createOpenAICompatible: (config: unknown) => {
 		openaiCompatibleFactorySpy(config);
-		return (modelId: string) => openaiCompatibleSpy(modelId);
+		return Object.assign((modelId: string) => openaiCompatibleSpy(modelId), {
+			imageModel: (modelId: string) => openaiCompatibleImageSpy(modelId),
+		});
 	},
 }));
 
@@ -201,8 +216,10 @@ describe("sdk-gateway", () => {
 		vercelGatewayImageSpy.mockReset();
 		openaiCompatibleFactorySpy.mockReset();
 		openaiCompatibleSpy.mockReset();
+		openaiCompatibleImageSpy.mockReset();
 		openaiResponsesSpy.mockReset();
 		openaiImageSpy.mockReset();
+		openaiImageGenerationToolSpy.mockClear();
 		openRouterFactorySpy.mockReset();
 		openRouterChatSpy.mockReset();
 		openRouterImageSpy.mockReset();
@@ -217,6 +234,10 @@ describe("sdk-gateway", () => {
 		openaiCompatibleSpy.mockImplementation((modelId: string) => ({
 			modelId,
 			family: "openai-compatible",
+		}));
+		openaiCompatibleImageSpy.mockImplementation((modelId: string) => ({
+			modelId,
+			family: "openai-compatible-image",
 		}));
 		openaiResponsesSpy.mockImplementation((modelId: string) => ({
 			modelId,
@@ -834,6 +855,120 @@ describe("sdk-gateway", () => {
 		);
 	});
 
+	it("normalizes OpenAI Responses image-generation tool results as images", async () => {
+		streamTextSpy.mockReturnValue({
+			fullStream: makeStreamParts([
+				{
+					type: "tool-call",
+					toolCallId: "image-call-1",
+					toolName: "image_generation",
+					input: {},
+					providerExecuted: true,
+				},
+				{
+					type: "tool-result",
+					toolCallId: "image-call-1",
+					toolName: "image_generation",
+					output: { result: "aGVsbG8=" },
+					providerExecuted: true,
+				},
+				{ type: "finish", finishReason: "stop" },
+			]),
+		});
+		const gateway = createGateway({
+			providerConfigs: [
+				{
+					providerId: "openai-native",
+					apiKey: "test",
+					models: [
+						{
+							id: "gpt-mixed-image-test",
+							name: "GPT Mixed Image Test",
+							modalities: {
+								input: ["text", "image"],
+								output: ["text", "image"],
+							},
+						},
+					],
+				},
+			],
+		});
+
+		const events = await collect(
+			await gateway.stream({
+				providerId: "openai-native",
+				modelId: "gpt-mixed-image-test",
+				messages: baseMessages,
+			}),
+		);
+
+		expect(openaiImageGenerationToolSpy).toHaveBeenCalledWith({
+			outputFormat: "png",
+		});
+		expect(streamTextSpy).toHaveBeenCalledWith(
+			expect.objectContaining({
+				tools: expect.objectContaining({
+					image_generation: expect.objectContaining({
+						id: "openai.image_generation",
+					}),
+				}),
+			}),
+		);
+		expect(events).toEqual([
+			{ type: "image", data: "aGVsbG8=", mediaType: "image/png" },
+			{ type: "finish", reason: "stop" },
+		]);
+	});
+
+	it("uses the standardized image model for OpenAI-compatible providers", async () => {
+		generateImageSpy.mockResolvedValue({
+			images: [{ mediaType: "image/webp", base64: "aGVsbG8=" }],
+		});
+		const gateway = createGateway({
+			providerConfigs: [
+				{
+					providerId: "openai-compatible",
+					apiKey: "test",
+					baseUrl: "https://images.example.com/v1",
+					models: [
+						{
+							id: "compatible-image-test",
+							name: "Compatible Image Test",
+							modalities: {
+								input: ["text", "image"],
+								output: ["image"],
+							},
+						},
+					],
+				},
+			],
+		});
+
+		const events = await collect(
+			await gateway.stream({
+				providerId: "openai-compatible",
+				modelId: "compatible-image-test",
+				messages: baseMessages,
+			}),
+		);
+
+		expect(openaiCompatibleImageSpy).toHaveBeenCalledWith(
+			"compatible-image-test",
+		);
+		expect(generateImageSpy).toHaveBeenCalledWith(
+			expect.objectContaining({
+				model: expect.objectContaining({
+					family: "openai-compatible-image",
+				}),
+				prompt: "Hello",
+			}),
+		);
+		expect(events).toEqual([
+			{ type: "image", data: "aGVsbG8=", mediaType: "image/webp" },
+			{ type: "finish", reason: "stop" },
+		]);
+	});
+
 	it("uses the versioned AI SDK endpoint for Vercel image generation", async () => {
 		generateImageSpy.mockResolvedValue({
 			images: [{ mediaType: "image/png", base64: "aGVsbG8=" }],
@@ -923,8 +1058,15 @@ describe("sdk-gateway", () => {
 	});
 
 	it("uses the OpenRouter image transport for mixed Cline image models", async () => {
-		generateImageSpy.mockResolvedValue({
-			images: [{ mediaType: "image/png", base64: "aGVsbG8=" }],
+		streamTextSpy.mockReturnValue({
+			fullStream: makeStreamParts([
+				{ type: "text-delta", text: "Here is the image." },
+				{
+					type: "file",
+					file: { mediaType: "image/png", base64: "aGVsbG8=" },
+				},
+				{ type: "finish", finishReason: "stop" },
+			]),
 		});
 		const gateway = createGateway({
 			providerConfigs: [
@@ -954,16 +1096,22 @@ describe("sdk-gateway", () => {
 			}),
 		);
 
-		expect(openRouterImageSpy).toHaveBeenCalledWith("google/gemini-image-test");
-		expect(generateImageSpy).toHaveBeenCalledWith(
+		expect(openRouterChatSpy).toHaveBeenCalledWith("google/gemini-image-test");
+		expect(streamTextSpy).toHaveBeenCalledWith(
 			expect.objectContaining({
-				model: expect.objectContaining({ family: "openrouter-image" }),
+				model: expect.objectContaining({ family: "openrouter-chat" }),
 				providerOptions: expect.objectContaining({
-					openrouter: expect.any(Object),
+					openrouter: expect.objectContaining({
+						modalities: ["image", "text"],
+					}),
 				}),
 			}),
 		);
-		expect(streamTextSpy).not.toHaveBeenCalled();
+		expect(generateImageSpy).not.toHaveBeenCalled();
+		expect(events).toContainEqual({
+			type: "text-delta",
+			text: "Here is the image.",
+		});
 		expect(events).toContainEqual({
 			type: "image",
 			data: "aGVsbG8=",
@@ -972,8 +1120,11 @@ describe("sdk-gateway", () => {
 	});
 
 	it("returns an error when a mixed image model produces no image", async () => {
-		generateImageSpy.mockResolvedValue({
-			images: [],
+		streamTextSpy.mockReturnValue({
+			fullStream: makeStreamParts([
+				{ type: "text-delta", text: "No image was produced." },
+				{ type: "finish", finishReason: "stop" },
+			]),
 		});
 		const gateway = createGateway({
 			providerConfigs: [
@@ -1005,9 +1156,70 @@ describe("sdk-gateway", () => {
 		expect(events.at(-1)).toEqual({
 			type: "finish",
 			reason: "error",
-			error: "Image model returned no supported images",
+			error: "Image model completed without returning a supported image output",
 		});
-		expect(streamTextSpy).not.toHaveBeenCalled();
+		expect(streamTextSpy).toHaveBeenCalledOnce();
+		expect(generateImageSpy).not.toHaveBeenCalled();
+	});
+
+	it("streams Google Gemini text and image outputs as one multimodal response", async () => {
+		streamTextSpy.mockReturnValue({
+			fullStream: makeStreamParts([
+				{ type: "text-delta", text: "A Gemini-generated result." },
+				{
+					type: "file",
+					file: { mediaType: "image/png", base64: "aGVsbG8=" },
+				},
+				{ type: "finish", finishReason: "stop" },
+			]),
+		});
+		const gateway = createGateway({
+			providerConfigs: [
+				{
+					providerId: "gemini",
+					apiKey: "test",
+					models: [
+						{
+							id: "gemini-image-test",
+							name: "Gemini Image Test",
+							modalities: {
+								input: ["text", "image"],
+								output: ["text", "image"],
+							},
+						},
+					],
+				},
+			],
+		});
+
+		const events = await collect(
+			await gateway.stream({
+				providerId: "gemini",
+				modelId: "gemini-image-test",
+				messages: baseMessages,
+			}),
+		);
+
+		expect(googleSpy).toHaveBeenCalledWith("gemini-image-test");
+		expect(streamTextSpy).toHaveBeenCalledWith(
+			expect.objectContaining({
+				providerOptions: expect.objectContaining({
+					google: expect.objectContaining({
+						responseModalities: ["TEXT", "IMAGE"],
+					}),
+				}),
+			}),
+		);
+		expect(generateImageSpy).not.toHaveBeenCalled();
+		expect(events).toContainEqual({
+			type: "text-delta",
+			text: "A Gemini-generated result.",
+		});
+		expect(events).toContainEqual({
+			type: "image",
+			data: "aGVsbG8=",
+			mediaType: "image/png",
+		});
 	});
 
 	it("sends explicit maxOutputTokens through the OpenAI Responses provider", async () => {
@@ -1333,6 +1545,98 @@ describe("sdk-gateway", () => {
 				]),
 			}),
 		);
+	});
+
+	it("normalizes generated image history before Vercel AI Gateway schema validation", async () => {
+		streamTextSpy.mockReturnValue({
+			fullStream: makeStreamParts([
+				{ type: "finish", usage: { inputTokens: 1, outputTokens: 1 } },
+			]),
+		});
+
+		const gateway = createGateway({
+			providerConfigs: [
+				{
+					providerId: "vercel-ai-gateway",
+					apiKey: "test",
+				},
+			],
+		});
+
+		await collect(
+			await gateway.stream({
+				providerId: "vercel-ai-gateway",
+				modelId: "xai/grok-4.20-multi-agent",
+				messages: [
+					{
+						id: "user_1",
+						role: "user",
+						content: [
+							{
+								type: "text",
+								text: "Generate an image of a robot coding.",
+							},
+						],
+						createdAt: 1,
+					},
+					{
+						id: "assistant_1",
+						role: "assistant",
+						content: [
+							{
+								type: "image",
+								mediaType: "image/jpeg",
+								image: "aGVsbG8=",
+							},
+						],
+						createdAt: 2,
+					},
+					{
+						id: "user_2",
+						role: "user",
+						content: [{ type: "text", text: "Tell me about this image" }],
+						createdAt: 3,
+					},
+				],
+			}),
+		);
+
+		const call = streamTextSpy.mock.calls.at(-1)?.[0] as {
+			messages?: Array<Record<string, unknown>>;
+		};
+		const { modelMessageSchema } =
+			await vi.importActual<typeof import("ai")>("ai");
+		expect(
+			call.messages?.map(
+				(message) => modelMessageSchema.safeParse(message).success,
+			),
+		).toEqual([true, true, true]);
+		expect(call.messages).toEqual([
+			{
+				role: "user",
+				content: [
+					{
+						type: "text",
+						text: "Generate an image of a robot coding.",
+					},
+				],
+			},
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "[generated image]" }],
+			},
+			{
+				role: "user",
+				content: [
+					{ type: "text", text: "Tell me about this image" },
+					{
+						type: "image",
+						image: "aGVsbG8=",
+						mediaType: "image/jpeg",
+					},
+				],
+			},
+		]);
 	});
 
 	it("strips reasoning history before sending Cerebras follow-up requests", async () => {
