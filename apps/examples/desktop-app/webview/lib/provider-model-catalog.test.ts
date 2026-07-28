@@ -198,10 +198,12 @@ describe("transcription model selection", () => {
 			providerId: "elevenlabs",
 			modelId: "scribe_v2",
 		};
-		const catalog = buildProviderModelCatalog([elevenLabs], selection);
+		const catalog = buildProviderModelCatalog([elevenLabs], {
+			voiceInput: selection,
+		});
 		expect(catalog.enabledProviderIds).toEqual([]);
 		expect(catalog.providerModels.elevenlabs).toEqual([]);
-		expect(catalog.voiceInput).toMatchObject({
+		expect(catalog.modes.voiceInput).toMatchObject({
 			providerId: "elevenlabs",
 			modelId: "scribe_v2",
 			supportsStreaming: false,

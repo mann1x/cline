@@ -621,12 +621,12 @@ export {
 	normalizeOAuthProvider,
 	refreshProviderModelsFromSource,
 	resolveLocalClineAuthToken,
+	type SaveModeSettingsRequest,
 	type SynthesizeConfiguredVoiceOutputRequest,
 	type SynthesizeLocalSpeechRequest,
 	saveLocalProviderOAuthCredentials,
 	saveLocalProviderSettings,
-	saveVoiceInputSettings,
-	saveVoiceOutputSettings,
+	saveModeSettings,
 	synthesizeConfiguredVoiceOutput,
 	synthesizeLocalSpeech,
 	type TranscribeConfiguredVoiceInputRequest,
@@ -997,9 +997,13 @@ export type {
 } from "./types/provider-settings";
 export {
 	emptyStoredProviderSettings,
+	ProviderModeSettingsSchemas,
+	parseProviderModeSettings,
 	StoredProviderModesSchema,
 	StoredProviderSettingsEntrySchema,
 	StoredProviderSettingsSchema,
+	VoiceInputModeSettingsSchema,
+	VoiceOutputModeSettingsSchema,
 } from "./types/provider-settings";
 export type {
 	SessionHistoryMetadata,

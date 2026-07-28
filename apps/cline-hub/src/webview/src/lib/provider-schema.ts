@@ -1,3 +1,5 @@
+import type { ProviderModesSettings } from "@cline/shared/browser";
+
 export interface ProviderModel {
 	id: string;
 	name: string;
@@ -67,12 +69,7 @@ export interface ProviderSettingsUpdate {
 export interface ProviderCatalogResponse {
 	providers: Provider[];
 	settingsPath: string;
-	voiceInput?: VoiceInputSelection;
-}
-
-export interface VoiceInputSelection {
-	providerId: string;
-	modelId: string;
+	modes: ProviderModesSettings;
 }
 
 export interface ProviderModelsResponse {

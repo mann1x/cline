@@ -32,6 +32,7 @@ import {
 	listPluginTools,
 	normalizeOAuthProvider,
 	ProviderSettingsManager,
+	parseProviderModeSettings,
 	RuntimeOAuthTokenManager,
 	readGlobalSettings,
 	resolveLocalClineAuthToken,
@@ -40,8 +41,7 @@ import {
 	resolveAgentConfigSearchPaths as resolveSharedAgentConfigSearchPaths,
 	SqliteSessionStore,
 	saveLocalProviderSettings,
-	saveVoiceInputSettings,
-	saveVoiceOutputSettings,
+	saveModeSettings,
 	setAutoUpdateEnabledGlobally,
 	setDisabledPlugin,
 	setDisabledTools,
@@ -61,6 +61,7 @@ import {
 	isCanonicalBase64,
 	ONE_TIME_SCHEDULE_CRON_PATTERN,
 	ONE_TIME_SCHEDULE_RUN_AT_METADATA_KEY,
+	ProviderModeSchema,
 	readHubScheduleMode,
 } from "@cline/shared";
 import { readFileSyncStrippingUtf8Bom } from "@cline/shared/node";
@@ -154,7 +155,7 @@ function sanitizeDiagnosticFailure(
 
 function emitDesktopDebugLog(
 	ctx: SidecarContext,
-	scope: "voice-input" | "voice-output",
+	scope: string,
 	level: DesktopDebugLogLevel,
 	message: string,
 	metadata?: Record<string, unknown>,
@@ -1503,7 +1504,7 @@ export async function handleCommand(
 	}
 	if (command === "create_streaming_transcription_session") {
 		const manager = new ProviderSettingsManager();
-		const selection = manager.getVoiceInputSettings();
+		const selection = manager.getModeSettings("voiceInput");
 		const providerConfig = selection
 			? manager.getProviderConfig(selection.providerId, {
 					includeKnownModels: false,
@@ -1574,7 +1575,7 @@ export async function handleCommand(
 			);
 		}
 		const manager = new ProviderSettingsManager();
-		const selection = manager.getVoiceInputSettings();
+		const selection = manager.getModeSettings("voiceInput");
 		const providerConfig = selection
 			? manager.getProviderConfig(selection.providerId, {
 					includeKnownModels: false,
@@ -1633,32 +1634,6 @@ export async function handleCommand(
 			throw new Error(failure, { cause: error });
 		}
 	}
-	if (command === "save_voice_input_settings") {
-		const providerId = String(args?.provider ?? "").trim();
-		const modelId = String(args?.model ?? "").trim();
-		if (Boolean(providerId) !== Boolean(modelId)) {
-			throw new Error(
-				"voice input provider and model must both be set or both be cleared",
-			);
-		}
-		const manager = new ProviderSettingsManager();
-		const result = await saveVoiceInputSettings(
-			manager,
-			providerId && modelId ? { providerId, modelId } : undefined,
-		);
-		emitDesktopDebugLog(
-			ctx,
-			"voice-input",
-			"info",
-			"Voice input settings saved",
-			{
-				providerId: result.voiceInput?.providerId,
-				modelId: result.voiceInput?.modelId,
-				configured: Boolean(result.voiceInput),
-			},
-		);
-		return result;
-	}
 	if (command === "synthesize_speech") {
 		const text = String(args?.text ?? "").trim();
 		if (!text) {
@@ -1670,7 +1645,7 @@ export async function handleCommand(
 			);
 		}
 		const manager = new ProviderSettingsManager();
-		const selection = manager.getVoiceOutputSettings();
+		const selection = manager.getModeSettings("voiceOutput");
 		const providerConfig = selection
 			? manager.getProviderConfig(selection.providerId, {
 					includeKnownModels: false,
@@ -1734,34 +1709,20 @@ export async function handleCommand(
 			throw new Error(failure, { cause: error });
 		}
 	}
-	if (command === "save_voice_output_settings") {
-		const providerId = String(args?.provider ?? "").trim();
-		const modelId = String(args?.model ?? "").trim();
-		const voice = String(args?.voice ?? "").trim() || undefined;
-		if (Boolean(providerId) !== Boolean(modelId)) {
-			throw new Error(
-				"voice output provider and model must both be set or both be cleared",
-			);
-		}
+	if (command === "save_mode_settings") {
+		const mode = ProviderModeSchema.parse(args?.mode);
+		const settings =
+			args?.settings == null
+				? undefined
+				: parseProviderModeSettings(mode, args.settings);
 		const manager = new ProviderSettingsManager();
-		const result = await saveVoiceOutputSettings(
-			manager,
-			providerId && modelId
-				? { providerId, modelId, ...(voice ? { voice } : {}) }
-				: undefined,
-		);
-		emitDesktopDebugLog(
-			ctx,
-			"voice-output",
-			"info",
-			"Voice output settings saved",
-			{
-				providerId: result.voiceOutput?.providerId,
-				modelId: result.voiceOutput?.modelId,
-				voiceConfigured: Boolean(result.voiceOutput?.voice),
-				configured: Boolean(result.voiceOutput),
-			},
-		);
+		const result = await saveModeSettings(manager, { mode, settings });
+		emitDesktopDebugLog(ctx, "mode-settings", "info", "Mode settings saved", {
+			mode,
+			providerId: settings?.providerId,
+			modelId: settings?.modelId,
+			configured: Boolean(settings),
+		});
 		return result;
 	}
 	if (command === "save_provider_settings") {

@@ -74,13 +74,13 @@ describe("ProviderSettingsManager", () => {
 			},
 			{ setLastUsed: true },
 		);
-		manager.setVoiceInputSettings({
+		manager.setModeSettings("voiceInput", {
 			providerId: "elevenlabs",
 			modelId: "scribe_v2",
 		});
 
 		const reloaded = new ProviderSettingsManager({ filePath });
-		expect(reloaded.getVoiceInputSettings()).toEqual({
+		expect(reloaded.getModeSettings("voiceInput")).toEqual({
 			providerId: "elevenlabs",
 			modelId: "scribe_v2",
 		});
@@ -99,9 +99,9 @@ describe("ProviderSettingsManager", () => {
 		expect(persisted).not.toHaveProperty("voiceInput");
 		expect(reloaded.getLastUsedProviderSettings()?.provider).toBe("anthropic");
 
-		reloaded.setVoiceInputSettings(undefined);
+		reloaded.setModeSettings("voiceInput", undefined);
 		expect(
-			new ProviderSettingsManager({ filePath }).getVoiceInputSettings(),
+			new ProviderSettingsManager({ filePath }).getModeSettings("voiceInput"),
 		).toBe(undefined);
 		expect(JSON.parse(readFileSync(filePath, "utf8"))).toMatchObject({
 			modes: {},
@@ -116,14 +116,14 @@ describe("ProviderSettingsManager", () => {
 		const filePath = path.join(tempDir, "provider-settings.json");
 		const manager = new ProviderSettingsManager({ filePath });
 
-		manager.setVoiceOutputSettings({
+		manager.setModeSettings("voiceOutput", {
 			providerId: "gemini",
 			modelId: "gemini-2.5-flash-preview-tts",
 			voice: "Kore",
 		});
 
 		const reloaded = new ProviderSettingsManager({ filePath });
-		expect(reloaded.getVoiceOutputSettings()).toEqual({
+		expect(reloaded.getModeSettings("voiceOutput")).toEqual({
 			providerId: "gemini",
 			modelId: "gemini-2.5-flash-preview-tts",
 			voice: "Kore",
@@ -138,10 +138,38 @@ describe("ProviderSettingsManager", () => {
 			},
 		});
 
-		reloaded.setVoiceOutputSettings(undefined);
+		reloaded.setModeSettings("voiceOutput", undefined);
 		expect(
-			new ProviderSettingsManager({ filePath }).getVoiceOutputSettings(),
+			new ProviderSettingsManager({ filePath }).getModeSettings("voiceOutput"),
 		).toBeUndefined();
+	});
+
+	it("updates one mode without replacing settings for other modes", () => {
+		const tempDir = mkdtempSync(
+			path.join(os.tmpdir(), "core-provider-settings-"),
+		);
+		tempDirs.push(tempDir);
+		const filePath = path.join(tempDir, "provider-settings.json");
+		const manager = new ProviderSettingsManager({ filePath });
+
+		manager.setModeSettings("voiceInput", {
+			providerId: "groq",
+			modelId: "whisper-large-v3",
+		});
+		manager.setModeSettings("voiceOutput", {
+			providerId: "gemini",
+			modelId: "gemini-2.5-flash-preview-tts",
+			voice: "Kore",
+		});
+		manager.setModeSettings("voiceInput", undefined);
+
+		const reloaded = new ProviderSettingsManager({ filePath });
+		expect(reloaded.getModeSettings("voiceInput")).toBeUndefined();
+		expect(reloaded.getModeSettings("voiceOutput")).toEqual({
+			providerId: "gemini",
+			modelId: "gemini-2.5-flash-preview-tts",
+			voice: "Kore",
+		});
 	});
 
 	it("writes atomically, leaving no temp file behind", () => {

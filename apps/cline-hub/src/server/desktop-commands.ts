@@ -17,16 +17,18 @@ import {
 	type ProviderClient,
 	type ProviderProtocol,
 	type ProviderSettings,
+	parseProviderModeSettings,
 	readGlobalSettings,
 	saveLocalProviderOAuthCredentials,
 	saveLocalProviderSettings,
+	saveModeSettings,
 	setAutoUpdateEnabledGlobally,
 	setDisabledPlugin,
 	setDisabledTools,
 	setTelemetryOptOutGlobally,
 	toggleDisabledTool,
 } from "@cline/core";
-import { getClineEnvironmentConfig } from "@cline/shared";
+import { getClineEnvironmentConfig, ProviderModeSchema } from "@cline/shared";
 import {
 	connectorChannelsPayload,
 	startConnectorChannel,
@@ -114,6 +116,14 @@ export async function handleDesktopCommand(
 			provider,
 			providerSettingsManager.getProviderConfig(provider),
 		);
+	}
+	if (command === "save_mode_settings") {
+		const mode = ProviderModeSchema.parse(args?.mode);
+		const settings =
+			args?.settings == null
+				? undefined
+				: parseProviderModeSettings(mode, args.settings);
+		return await saveModeSettings(providerSettingsManager, { mode, settings });
 	}
 	if (command === "save_provider_settings") {
 		return saveLocalProviderSettings(providerSettingsManager, {

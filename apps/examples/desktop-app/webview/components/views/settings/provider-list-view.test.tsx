@@ -5,8 +5,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
 	Provider,
-	VoiceInputSelection,
-	VoiceOutputSelection,
+	VoiceInputModeSettings,
+	VoiceOutputModeSettings,
 } from "@/lib/provider-schema";
 import {
 	ProviderDetailContent,
@@ -124,7 +124,7 @@ describe("ProviderListContent voice input settings", () => {
 
 	it("lets the user choose and clear the voice provider and model", async () => {
 		const onVoiceInputChange = vi.fn();
-		let selection: VoiceInputSelection | undefined = {
+		let selection: VoiceInputModeSettings | undefined = {
 			providerId: "elevenlabs",
 			modelId: "scribe_v2",
 		};
@@ -195,7 +195,7 @@ describe("ProviderListContent voice input settings", () => {
 
 	it("lets the user configure a text-to-audio model and provider voice", async () => {
 		const onVoiceOutputChange = vi.fn();
-		let selection: VoiceOutputSelection | undefined;
+		let selection: VoiceOutputModeSettings | undefined;
 		const render = async () => {
 			await act(async () => {
 				root.render(

@@ -4,10 +4,12 @@ import { desktopClient } from "@/lib/desktop-client";
 import type {
 	Provider,
 	ProviderCatalogResponse,
+	ProviderMode,
 	ProviderModel,
 	ProviderModelsResponse,
-	VoiceInputSelection,
-	VoiceOutputSelection,
+	ProviderModesSettings,
+	VoiceInputModeSettings,
+	VoiceOutputModeSettings,
 } from "@/lib/provider-schema";
 
 export type ProviderModelCatalog = {
@@ -15,8 +17,7 @@ export type ProviderModelCatalog = {
 	enabledProviderIds: string[];
 	providerModels: Record<string, string[]>;
 	providerReasoningModels: Record<string, string[]>;
-	voiceInput: TranscriptionModelTarget | null;
-	voiceOutput: SpeechGenerationModelTarget | null;
+	modes: ProviderModeModelTargets;
 };
 
 export type TranscriptionModelTarget = {
@@ -33,6 +34,15 @@ export type SpeechGenerationModelTarget = {
 	modelId: string;
 	modelName: string;
 	voice?: string;
+};
+
+export interface ProviderModeModelTargetMap {
+	voiceInput: TranscriptionModelTarget;
+	voiceOutput: SpeechGenerationModelTarget;
+}
+
+export type ProviderModeModelTargets = {
+	[Mode in ProviderMode]: ProviderModeModelTargetMap[Mode] | null;
 };
 
 export function isDedicatedTranscriptionModel(model: ProviderModel): boolean {
@@ -62,7 +72,7 @@ export function isSpeechGenerationModel(model: ProviderModel): boolean {
 
 export function selectTranscriptionModel(
 	providers: Provider[],
-	selection: VoiceInputSelection | undefined,
+	selection: VoiceInputModeSettings | undefined,
 ): TranscriptionModelTarget | null {
 	if (!selection) return null;
 	const provider = providers.find(
@@ -86,7 +96,7 @@ export function selectTranscriptionModel(
 
 export function selectSpeechGenerationModel(
 	providers: Provider[],
-	selection: VoiceOutputSelection | undefined,
+	selection: VoiceOutputModeSettings | undefined,
 ): SpeechGenerationModelTarget | null {
 	if (!selection) return null;
 	const provider = providers.find(
@@ -128,8 +138,7 @@ function toReasoningModelIds(models: ProviderModel[] | undefined): string[] {
 
 export function buildProviderModelCatalog(
 	providers: Provider[],
-	voiceInput?: VoiceInputSelection,
-	voiceOutput?: VoiceOutputSelection,
+	modes: ProviderModesSettings = {},
 ): ProviderModelCatalog {
 	return {
 		providers,
@@ -151,8 +160,10 @@ export function buildProviderModelCatalog(
 				toReasoningModelIds(provider.modelList),
 			]),
 		),
-		voiceInput: selectTranscriptionModel(providers, voiceInput),
-		voiceOutput: selectSpeechGenerationModel(providers, voiceOutput),
+		modes: {
+			voiceInput: selectTranscriptionModel(providers, modes.voiceInput),
+			voiceOutput: selectSpeechGenerationModel(providers, modes.voiceOutput),
+		},
 	};
 }
 
@@ -161,10 +172,7 @@ export function buildProviderModelCatalog(
 // Deduplicate concurrent requests and keep the response briefly so the app
 // boot issues a single round-trip instead of one per consumer.
 const PROVIDER_CATALOG_CACHE_TTL_MS = 5_000;
-export const VOICE_INPUT_SETTINGS_CHANGED_EVENT =
-	"cline:voice-input-settings-changed";
-export const VOICE_OUTPUT_SETTINGS_CHANGED_EVENT =
-	"cline:voice-output-settings-changed";
+export const MODE_SETTINGS_CHANGED_EVENT = "cline:mode-settings-changed";
 
 let providerCatalogCache: {
 	fetchedAt: number;
@@ -199,27 +207,18 @@ export function invalidateProviderCatalogCache(): void {
 	providerCatalogCache = null;
 }
 
-export function notifyVoiceInputSettingsChanged(): void {
+export function notifyModeSettingsChanged(mode: ProviderMode): void {
 	invalidateProviderCatalogCache();
 	if (typeof window !== "undefined") {
-		window.dispatchEvent(new Event(VOICE_INPUT_SETTINGS_CHANGED_EVENT));
-	}
-}
-
-export function notifyVoiceOutputSettingsChanged(): void {
-	invalidateProviderCatalogCache();
-	if (typeof window !== "undefined") {
-		window.dispatchEvent(new Event(VOICE_OUTPUT_SETTINGS_CHANGED_EVENT));
+		window.dispatchEvent(
+			new CustomEvent(MODE_SETTINGS_CHANGED_EVENT, { detail: { mode } }),
+		);
 	}
 }
 
 export async function loadProviderModelCatalog(): Promise<ProviderModelCatalog> {
 	const payload = await fetchProviderCatalog();
-	return buildProviderModelCatalog(
-		payload.providers ?? [],
-		payload.voiceInput,
-		payload.voiceOutput,
-	);
+	return buildProviderModelCatalog(payload.providers ?? [], payload.modes);
 }
 
 export async function loadProviderModels(

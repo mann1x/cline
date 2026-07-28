@@ -141,10 +141,9 @@ Supported commands:
 | `chat_session_command` | shared Hub through `ClineCore` |
 | `list_provider_catalog` | `ProviderSettingsManager` + `listLocalProviders` |
 | `list_provider_models` | `getLocalProviderModels` |
-| `save_voice_input_settings` | validates and persists the selected transcription provider/model |
+| `save_mode_settings` | validates and persists settings for the selected mode (`voiceInput`, `voiceOutput`, and future registered modes) |
 | `create_streaming_transcription_session` | mints a short-lived, transcription-bound browser token without exposing provider credentials |
 | `transcribe_audio` | configured voice input selection + provider credentials |
-| `save_voice_output_settings` | validates and persists the selected speech provider/model/voice |
 | `synthesize_speech` | configured voice output selection + provider credentials |
 | `save_provider_settings` | `saveLocalProviderSettings` |
 | `add_provider` | `addLocalProvider` |

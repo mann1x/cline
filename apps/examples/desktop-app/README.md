@@ -174,12 +174,15 @@ credentials, request headers, recorded audio, or transcript contents.
 - Speech input requires an enabled provider whose models.dev metadata identifies
   a dedicated `audio`-to-`text` model, or the built-in ElevenLabs provider with
   its Scribe v2 model. Choose the voice input provider and model explicitly under
-  **Settings → Models → Voice input**. That selection is stored separately from
-  the chat model as `modes.voiceInput` in
+  **Settings → Models → Voice input**. Mode-specific provider settings are stored
+  separately from the chat model under the `modes` map in
   `~/.cline/data/settings/providers.json`; provider credentials remain in their
-  existing provider entry and never enter the webview. ElevenLabs uses its native
+  existing provider entry and never enter the webview. All modes use the single
+  `save_mode_settings` sidecar command with a typed mode discriminator rather
+  than adding a save command per mode. ElevenLabs uses its native
   `/v1/speech-to-text` API. Text-to-speech models with `output: ["audio"]` are
-  not used for microphone transcription.
+  configured independently under `modes.voiceOutput` and are not used for
+  microphone transcription.
 - Streaming transcription models, such as Vercel AI Gateway's
   `openai/gpt-realtime-whisper`, update the composer while the user speaks.
   The sidecar mints a short-lived transcription token; the long-lived gateway

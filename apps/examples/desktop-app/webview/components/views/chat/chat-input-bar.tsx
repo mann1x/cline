@@ -47,10 +47,9 @@ import {
 	isChatModel,
 	loadProviderModelCatalog,
 	loadProviderModels,
+	MODE_SETTINGS_CHANGED_EVENT,
 	type SpeechGenerationModelTarget,
 	type TranscriptionModelTarget,
-	VOICE_INPUT_SETTINGS_CHANGED_EVENT,
-	VOICE_OUTPUT_SETTINGS_CHANGED_EVENT,
 } from "@/lib/provider-model-catalog";
 import { cn } from "@/lib/utils";
 import { startVercelStreamingTranscription } from "@/lib/vercel-streaming-transcription";
@@ -441,12 +440,12 @@ export function ChatInputBar({
 
 	useEffect(() => {
 		let cancelled = false;
-		const loadVoiceInput = () => {
+		const loadModeSettings = () => {
 			loadProviderModelCatalog()
 				.then((catalog) => {
 					if (!cancelled) {
-						setTranscriptionTarget(catalog.voiceInput);
-						setSpeechGenerationTarget(catalog.voiceOutput);
+						setTranscriptionTarget(catalog.modes.voiceInput);
+						setSpeechGenerationTarget(catalog.modes.voiceOutput);
 					}
 				})
 				.catch(() => {
@@ -456,22 +455,11 @@ export function ChatInputBar({
 					}
 				});
 		};
-		loadVoiceInput();
-		window.addEventListener(VOICE_INPUT_SETTINGS_CHANGED_EVENT, loadVoiceInput);
-		window.addEventListener(
-			VOICE_OUTPUT_SETTINGS_CHANGED_EVENT,
-			loadVoiceInput,
-		);
+		loadModeSettings();
+		window.addEventListener(MODE_SETTINGS_CHANGED_EVENT, loadModeSettings);
 		return () => {
 			cancelled = true;
-			window.removeEventListener(
-				VOICE_INPUT_SETTINGS_CHANGED_EVENT,
-				loadVoiceInput,
-			);
-			window.removeEventListener(
-				VOICE_OUTPUT_SETTINGS_CHANGED_EVENT,
-				loadVoiceInput,
-			);
+			window.removeEventListener(MODE_SETTINGS_CHANGED_EVENT, loadModeSettings);
 		};
 	}, []);
 

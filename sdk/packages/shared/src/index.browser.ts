@@ -340,19 +340,26 @@ export type {
 	ProviderConfigFieldPrimitive,
 	ProviderConfigFieldType,
 	ProviderListItem,
+	ProviderMode,
 	ProviderModel,
+	ProviderModelModeSettings,
 	ProviderModelsResponse,
+	ProviderModeSettings,
+	ProviderModeSettingsMap,
+	ProviderModesSettings,
 	ProviderOAuthLoginResponse,
 	ProviderProtocol,
 	ProviderSettingsActionRequest,
 	RuntimeLoggerConfig,
 	SaveProviderSettingsActionRequest,
-	VoiceInputSelection,
-	VoiceOutputSelection,
+	VoiceInputModeSettings,
+	VoiceOutputModeSettings,
 } from "./rpc/runtime";
 export {
+	PROVIDER_MODE_IDS,
 	ProviderCapabilitySchema,
 	ProviderClientSchema,
+	ProviderModeSchema,
 	ProviderProtocolSchema,
 } from "./rpc/runtime";
 export type {

@@ -202,22 +202,37 @@ export interface ProviderListItem {
 	family?: string;
 }
 
-export interface VoiceInputSelection {
+export interface ProviderModelModeSettings {
 	providerId: string;
 	modelId: string;
 }
 
-export interface VoiceOutputSelection {
-	providerId: string;
-	modelId: string;
+export type VoiceInputModeSettings = ProviderModelModeSettings;
+
+export interface VoiceOutputModeSettings extends ProviderModelModeSettings {
 	voice?: string;
 }
+
+export const PROVIDER_MODE_IDS = ["voiceInput", "voiceOutput"] as const;
+export const ProviderModeSchema = z.enum(PROVIDER_MODE_IDS);
+export type ProviderMode = z.infer<typeof ProviderModeSchema>;
+
+export interface ProviderModeSettingsMap {
+	voiceInput: VoiceInputModeSettings;
+	voiceOutput: VoiceOutputModeSettings;
+}
+
+export type ProviderModeSettings<Mode extends ProviderMode = ProviderMode> =
+	ProviderModeSettingsMap[Mode];
+
+export type ProviderModesSettings = {
+	[Mode in ProviderMode]?: ProviderModeSettingsMap[Mode];
+};
 
 export interface ProviderCatalogResponse {
 	providers: ProviderListItem[];
 	settingsPath: string;
-	voiceInput?: VoiceInputSelection;
-	voiceOutput?: VoiceOutputSelection;
+	modes: ProviderModesSettings;
 }
 
 export interface ProviderModelsResponse {

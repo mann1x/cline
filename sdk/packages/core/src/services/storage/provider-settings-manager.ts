@@ -8,6 +8,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { basename, dirname } from "node:path";
+import type { ProviderMode, ProviderModeSettingsMap } from "@cline/shared";
 import { resolveProviderSettingsPath } from "@cline/shared/storage";
 import { getLiveModelsCatalog } from "../..";
 import { getProviderAuthHandler } from "../../auth/provider-auth-registry";
@@ -18,14 +19,11 @@ import {
 	type ProviderSettings,
 	ProviderSettingsSchemaTyped as ProviderSettingsSchema,
 	type ProviderTokenSource,
+	parseProviderModeSettings,
 	type StoredProviderSettings,
 	StoredProviderSettingsSchema,
 	type ToProviderConfigOptions,
 	toProviderConfig,
-	type VoiceInputSettings,
-	VoiceInputSettingsSchema,
-	type VoiceOutputSettings,
-	VoiceOutputSettingsSchema,
 } from "../../types/provider-settings";
 import {
 	ensureCustomProvidersLoadedSync,
@@ -218,35 +216,21 @@ export class ProviderSettingsManager {
 		return this.resolveProviderSettings(state, providerId);
 	}
 
-	getVoiceInputSettings(): VoiceInputSettings | undefined {
-		return this.read().modes.voiceInput;
+	getModeSettings<Mode extends ProviderMode>(
+		mode: Mode,
+	): ProviderModeSettingsMap[Mode] | undefined {
+		return this.read().modes[mode];
 	}
 
-	setVoiceInputSettings(
-		settings: VoiceInputSettings | undefined,
+	setModeSettings<Mode extends ProviderMode>(
+		mode: Mode,
+		settings: ProviderModeSettingsMap[Mode] | undefined,
 	): StoredProviderSettings {
 		const state = this.read();
 		if (settings) {
-			state.modes.voiceInput = VoiceInputSettingsSchema.parse(settings);
+			state.modes[mode] = parseProviderModeSettings(mode, settings);
 		} else {
-			delete state.modes.voiceInput;
-		}
-		this.write(state);
-		return state;
-	}
-
-	getVoiceOutputSettings(): VoiceOutputSettings | undefined {
-		return this.read().modes.voiceOutput;
-	}
-
-	setVoiceOutputSettings(
-		settings: VoiceOutputSettings | undefined,
-	): StoredProviderSettings {
-		const state = this.read();
-		if (settings) {
-			state.modes.voiceOutput = VoiceOutputSettingsSchema.parse(settings);
-		} else {
-			delete state.modes.voiceOutput;
+			delete state.modes[mode];
 		}
 		this.write(state);
 		return state;

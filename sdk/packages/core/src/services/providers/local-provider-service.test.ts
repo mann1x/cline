@@ -25,8 +25,7 @@ import {
 	refreshProviderModelsFromSource,
 	resolveLocalClineAuthToken,
 	saveLocalProviderSettings,
-	saveVoiceInputSettings,
-	saveVoiceOutputSettings,
+	saveModeSettings,
 	synthesizeConfiguredVoiceOutput,
 	synthesizeLocalSpeech,
 	transcribeConfiguredVoiceInput,
@@ -942,14 +941,19 @@ describe("audio transcription", () => {
 
 	it("persists and uses the configured voice input model", async () => {
 		await expect(
-			saveVoiceInputSettings(manager, {
-				providerId: "audio-provider",
-				modelId: "whisper-large-v3",
+			saveModeSettings(manager, {
+				mode: "voiceInput",
+				settings: {
+					providerId: "audio-provider",
+					modelId: "whisper-large-v3",
+				},
 			}),
 		).resolves.toMatchObject({
-			voiceInput: {
-				providerId: "audio-provider",
-				modelId: "whisper-large-v3",
+			modes: {
+				voiceInput: {
+					providerId: "audio-provider",
+					modelId: "whisper-large-v3",
+				},
 			},
 		});
 
@@ -979,9 +983,12 @@ describe("audio transcription", () => {
 			capabilities: ["transcription-streaming"],
 			modalities: { input: ["audio"], output: ["text"] },
 		});
-		await saveVoiceInputSettings(manager, {
-			providerId: "audio-provider",
-			modelId: "realtime-whisper",
+		await saveModeSettings(manager, {
+			mode: "voiceInput",
+			settings: {
+				providerId: "audio-provider",
+				modelId: "realtime-whisper",
+			},
 		});
 		const createSessionSpy = vi
 			.spyOn(LlmsModels, "createStreamingAudioTranscriptionSession")
@@ -1005,14 +1012,17 @@ describe("audio transcription", () => {
 
 	it("rejects a voice input selection that is not an audio-to-text model", async () => {
 		await expect(
-			saveVoiceInputSettings(manager, {
-				providerId: "audio-provider",
-				modelId: "missing-model",
+			saveModeSettings(manager, {
+				mode: "voiceInput",
+				settings: {
+					providerId: "audio-provider",
+					modelId: "missing-model",
+				},
 			}),
 		).rejects.toThrow(
 			'Model "missing-model" is not a dedicated audio-to-text transcription model',
 		);
-		expect(manager.getVoiceInputSettings()).toBeUndefined();
+		expect(manager.getModeSettings("voiceInput")).toBeUndefined();
 	});
 
 	it("resolves the built-in ElevenLabs endpoint from providers.json", async () => {
@@ -1093,10 +1103,13 @@ describe("speech generation", () => {
 	});
 
 	it("synthesizes with the configured provider, model, and voice", async () => {
-		await saveVoiceOutputSettings(manager, {
-			providerId: "speech-provider",
-			modelId: "tts-model",
-			voice: "voice-123",
+		await saveModeSettings(manager, {
+			mode: "voiceOutput",
+			settings: {
+				providerId: "speech-provider",
+				modelId: "tts-model",
+				voice: "voice-123",
+			},
 		});
 		const generateSpy = vi
 			.spyOn(LlmsModels, "generateSpeechAudio")
@@ -1222,11 +1235,11 @@ describe("saveLocalProviderSettings", () => {
 	afterEach(() => cleanup());
 
 	it("disabling a provider removes it from settings", () => {
-		manager.setVoiceInputSettings({
+		manager.setModeSettings("voiceInput", {
 			providerId: "test-provider",
 			modelId: "m1",
 		});
-		manager.setVoiceOutputSettings({
+		manager.setModeSettings("voiceOutput", {
 			providerId: "test-provider",
 			modelId: "m1",
 		});
@@ -1237,8 +1250,8 @@ describe("saveLocalProviderSettings", () => {
 
 		expect(result.enabled).toBe(false);
 		expect(manager.getProviderSettings("test-provider")).toBeUndefined();
-		expect(manager.getVoiceInputSettings()).toBeUndefined();
-		expect(manager.getVoiceOutputSettings()).toBeUndefined();
+		expect(manager.getModeSettings("voiceInput")).toBeUndefined();
+		expect(manager.getModeSettings("voiceOutput")).toBeUndefined();
 	});
 
 	it("updates apiKey", () => {
@@ -1638,13 +1651,16 @@ describe("listLocalProviders", () => {
 			name: "Whisper",
 			modalities: { input: ["audio"], output: ["text"] },
 		});
-		await saveVoiceInputSettings(manager, {
-			providerId: "voice-list-provider",
-			modelId: "whisper",
+		await saveModeSettings(manager, {
+			mode: "voiceInput",
+			settings: {
+				providerId: "voice-list-provider",
+				modelId: "whisper",
+			},
 		});
 
 		const catalog = await listLocalProviders(manager);
-		expect(catalog.voiceInput).toEqual({
+		expect(catalog.modes.voiceInput).toEqual({
 			providerId: "voice-list-provider",
 			modelId: "whisper",
 		});
@@ -1662,14 +1678,17 @@ describe("listLocalProviders", () => {
 			name: "TTS",
 			modalities: { input: ["text"], output: ["audio"] },
 		});
-		await saveVoiceOutputSettings(manager, {
-			providerId: "speech-list-provider",
-			modelId: "tts",
-			voice: "voice-123",
+		await saveModeSettings(manager, {
+			mode: "voiceOutput",
+			settings: {
+				providerId: "speech-list-provider",
+				modelId: "tts",
+				voice: "voice-123",
+			},
 		});
 
 		const catalog = await listLocalProviders(manager);
-		expect(catalog.voiceOutput).toEqual({
+		expect(catalog.modes.voiceOutput).toEqual({
 			providerId: "speech-list-provider",
 			modelId: "tts",
 			voice: "voice-123",

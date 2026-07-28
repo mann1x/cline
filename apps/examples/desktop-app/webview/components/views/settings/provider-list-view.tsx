@@ -33,8 +33,8 @@ import type {
 	ProviderConfigField,
 	ProviderConfigFieldPrimitive,
 	ProviderSettingsUpdate,
-	VoiceInputSelection,
-	VoiceOutputSelection,
+	VoiceInputModeSettings,
+	VoiceOutputModeSettings,
 } from "@/lib/provider-schema";
 import { cn } from "@/lib/utils";
 
@@ -112,13 +112,13 @@ export function ProviderListContent({
 	onToggle: (id: string) => void;
 	onConfigure: (id: string) => void;
 	onAddProvider: () => void;
-	onVoiceInputChange: (selection: VoiceInputSelection | undefined) => void;
-	onVoiceOutputChange: (selection: VoiceOutputSelection | undefined) => void;
+	onVoiceInputChange: (settings: VoiceInputModeSettings | undefined) => void;
+	onVoiceOutputChange: (settings: VoiceOutputModeSettings | undefined) => void;
 	selectedProviderId?: string | null;
 	variant?: "page" | "panel";
-	voiceInput?: VoiceInputSelection;
+	voiceInput?: VoiceInputModeSettings;
 	voiceInputSaving?: boolean;
-	voiceOutput?: VoiceOutputSelection;
+	voiceOutput?: VoiceOutputModeSettings;
 	voiceOutputSaving?: boolean;
 }) {
 	const [providerSearchOpen, setProviderSearchOpen] = useState(false);

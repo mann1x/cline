@@ -6,11 +6,13 @@ import type {
 	ProviderConfigField,
 	ProviderConfigFieldPrimitive,
 	ProviderListItem,
+	ProviderMode,
 	ProviderModel,
+	ProviderModeSettingsMap,
+	ProviderModesSettings,
 	SaveProviderSettingsActionRequest,
-	VoiceInputSelection,
-	VoiceOutputSelection,
 } from "@cline/shared";
+import { PROVIDER_MODE_IDS } from "@cline/shared";
 import { createOAuthClientCallbacks } from "../../auth/client";
 import {
 	getProviderAuthHandler,
@@ -26,7 +28,10 @@ import type {
 	ProviderProtocol,
 	ProviderSettings,
 } from "../../services/llms/provider-settings";
-import type { ProviderTokenSource } from "../../types/provider-settings";
+import {
+	type ProviderTokenSource,
+	parseProviderModeSettings,
+} from "../../types/provider-settings";
 import type { ProviderSettingsManager } from "../storage/provider-settings-manager";
 import {
 	readModelsFile,
@@ -99,6 +104,13 @@ export interface SynthesizeConfiguredVoiceOutputRequest {
 	abortSignal?: AbortSignal;
 }
 
+export interface SaveModeSettingsRequest<
+	Mode extends ProviderMode = ProviderMode,
+> {
+	mode: Mode;
+	settings?: ProviderModeSettingsMap[Mode];
+}
+
 // --- Small pure helpers ---
 
 function resolveVisibleApiKey(settings: {
@@ -165,6 +177,56 @@ export function isSpeechGenerationModel(
 		model.outputModalities?.length === 1 &&
 		model.outputModalities[0] === "audio"
 	);
+}
+
+const MODE_MODEL_PREDICATES = {
+	voiceInput: isDedicatedTranscriptionModel,
+	voiceOutput: isSpeechGenerationModel,
+} satisfies Record<ProviderMode, (model: ProviderModel) => boolean>;
+
+function setModeSettingsValue<Mode extends ProviderMode>(
+	target: ProviderModesSettings,
+	mode: Mode,
+	settings: ProviderModeSettingsMap[Mode],
+): void {
+	target[mode] = settings;
+}
+
+function collectAvailableModeSettings(
+	providers: ProviderListItem[],
+	configuredModes: ProviderModesSettings,
+): ProviderModesSettings {
+	const availableModes: ProviderModesSettings = {};
+	for (const mode of PROVIDER_MODE_IDS) {
+		const settings = configuredModes[mode];
+		if (!settings) continue;
+		const provider = providers.find(
+			(candidate) => candidate.enabled && candidate.id === settings.providerId,
+		);
+		const model = provider?.modelList?.find(
+			(candidate) =>
+				candidate.id === settings.modelId &&
+				MODE_MODEL_PREDICATES[mode](candidate),
+		);
+		if (model) {
+			setModeSettingsValue(availableModes, mode, settings);
+		}
+	}
+	return availableModes;
+}
+
+function removeProviderModeSettings(
+	modes: ProviderModesSettings,
+	providerId: string,
+): boolean {
+	let mutated = false;
+	for (const mode of PROVIDER_MODE_IDS) {
+		if (modes[mode]?.providerId === providerId) {
+			delete modes[mode];
+			mutated = true;
+		}
+	}
+	return mutated;
 }
 
 export function isChatProviderModel(
@@ -413,14 +475,7 @@ function removeProviderFromSettingsState(
 		delete state.lastUsedProvider;
 		mutated = true;
 	}
-	if (state.modes.voiceInput?.providerId === providerId) {
-		delete state.modes.voiceInput;
-		mutated = true;
-	}
-	if (state.modes.voiceOutput?.providerId === providerId) {
-		delete state.modes.voiceOutput;
-		mutated = true;
-	}
+	mutated = removeProviderModeSettings(state.modes, providerId) || mutated;
 	if (mutated) manager.write(state);
 	LlmsModels.unregisterProvider(providerId);
 }
@@ -754,8 +809,7 @@ export async function listLocalProviders(
 ): Promise<{
 	providers: ProviderListItem[];
 	settingsPath: string;
-	voiceInput?: VoiceInputSelection;
-	voiceOutput?: VoiceOutputSelection;
+	modes: ProviderModesSettings;
 }> {
 	const state = manager.read();
 	const ids = LlmsModels.getProviderIds();
@@ -827,43 +881,10 @@ export async function listLocalProviders(
 		);
 	}
 
-	const configuredVoiceInput = manager.getVoiceInputSettings();
-	const voiceProvider = configuredVoiceInput
-		? providers.find(
-				(provider) =>
-					provider.id === configuredVoiceInput.providerId && provider.enabled,
-			)
-		: undefined;
-	const voiceModel = voiceProvider?.modelList?.find(
-		(model) =>
-			model.id === configuredVoiceInput?.modelId &&
-			isDedicatedTranscriptionModel(model),
-	);
-	const voiceInput =
-		configuredVoiceInput && voiceModel ? configuredVoiceInput : undefined;
-
-	const configuredVoiceOutput = manager.getVoiceOutputSettings();
-	const voiceOutputProvider = configuredVoiceOutput
-		? providers.find(
-				(provider) =>
-					provider.id === configuredVoiceOutput.providerId && provider.enabled,
-			)
-		: undefined;
-	const voiceOutputModel = voiceOutputProvider?.modelList?.find(
-		(model) =>
-			model.id === configuredVoiceOutput?.modelId &&
-			isSpeechGenerationModel(model),
-	);
-	const voiceOutput =
-		configuredVoiceOutput && voiceOutputModel
-			? configuredVoiceOutput
-			: undefined;
-
 	return {
 		providers,
 		settingsPath: manager.getFilePath(),
-		voiceInput,
-		voiceOutput,
+		modes: collectAvailableModeSettings(providers, state.modes),
 	};
 }
 
@@ -914,47 +935,11 @@ export async function transcribeLocalAudio(
 	});
 }
 
-export async function saveVoiceInputSettings(
-	manager: ProviderSettingsManager,
-	selection: VoiceInputSelection | undefined,
-): Promise<{ settingsPath: string; voiceInput?: VoiceInputSelection }> {
-	if (!selection) {
-		manager.setVoiceInputSettings(undefined);
-		return { settingsPath: manager.getFilePath() };
-	}
-
-	const providerId = selection.providerId.trim();
-	const modelId = selection.modelId.trim();
-	if (!providerId || !modelId) {
-		throw new Error("Voice input provider and model are required");
-	}
-	const state = manager.read();
-	if (!state.providers[providerId]) {
-		throw new Error(
-			`Voice input provider "${providerId}" must be enabled and configured`,
-		);
-	}
-	const config = manager.getProviderConfig(providerId, {
-		includeKnownModels: false,
-	});
-	const { models } = await getLocalProviderModels(providerId, config);
-	const model = models.find((candidate) => candidate.id === modelId);
-	if (!model || !isDedicatedTranscriptionModel(model)) {
-		throw new Error(
-			`Model "${modelId}" is not a dedicated audio-to-text transcription model`,
-		);
-	}
-
-	const voiceInput = { providerId, modelId };
-	manager.setVoiceInputSettings(voiceInput);
-	return { settingsPath: manager.getFilePath(), voiceInput };
-}
-
 export async function transcribeConfiguredVoiceInput(
 	manager: ProviderSettingsManager,
 	request: TranscribeConfiguredVoiceInputRequest,
 ): Promise<LlmsModels.AudioTranscriptionResult> {
-	const selection = manager.getVoiceInputSettings();
+	const selection = manager.getModeSettings("voiceInput");
 	if (!selection) {
 		throw new Error("Configure a voice input provider and model in Settings");
 	}
@@ -970,7 +955,7 @@ export async function createConfiguredStreamingTranscriptionSession(
 	manager: ProviderSettingsManager,
 	request: CreateConfiguredStreamingTranscriptionSessionRequest = {},
 ): Promise<LlmsModels.StreamingAudioTranscriptionSession> {
-	const selection = manager.getVoiceInputSettings();
+	const selection = manager.getModeSettings("voiceInput");
 	if (!selection) {
 		throw new Error("Configure a voice input provider and model in Settings");
 	}
@@ -1033,48 +1018,11 @@ export async function synthesizeLocalSpeech(
 	});
 }
 
-export async function saveVoiceOutputSettings(
-	manager: ProviderSettingsManager,
-	selection: VoiceOutputSelection | undefined,
-): Promise<{ settingsPath: string; voiceOutput?: VoiceOutputSelection }> {
-	if (!selection) {
-		manager.setVoiceOutputSettings(undefined);
-		return { settingsPath: manager.getFilePath() };
-	}
-
-	const providerId = selection.providerId.trim();
-	const modelId = selection.modelId.trim();
-	const voice = selection.voice?.trim() || undefined;
-	if (!providerId || !modelId) {
-		throw new Error("Voice output provider and model are required");
-	}
-	const state = manager.read();
-	if (!state.providers[providerId]) {
-		throw new Error(
-			`Voice output provider "${providerId}" must be enabled and configured`,
-		);
-	}
-	const config = manager.getProviderConfig(providerId, {
-		includeKnownModels: false,
-	});
-	const { models } = await getLocalProviderModels(providerId, config);
-	const model = models.find((candidate) => candidate.id === modelId);
-	if (!model || !isSpeechGenerationModel(model)) {
-		throw new Error(
-			`Model "${modelId}" is not a dedicated text-to-audio speech model`,
-		);
-	}
-
-	const voiceOutput = { providerId, modelId, ...(voice ? { voice } : {}) };
-	manager.setVoiceOutputSettings(voiceOutput);
-	return { settingsPath: manager.getFilePath(), voiceOutput };
-}
-
 export async function synthesizeConfiguredVoiceOutput(
 	manager: ProviderSettingsManager,
 	request: SynthesizeConfiguredVoiceOutputRequest,
 ): Promise<LlmsModels.SpeechGenerationResult> {
-	const selection = manager.getVoiceOutputSettings();
+	const selection = manager.getModeSettings("voiceOutput");
 	if (!selection) {
 		throw new Error("Configure a voice output provider and model in Settings");
 	}
@@ -1083,6 +1031,94 @@ export async function synthesizeConfiguredVoiceOutput(
 		text: request.text,
 		abortSignal: request.abortSignal,
 	});
+}
+
+type ModeSettingsValidator<Mode extends ProviderMode> = (
+	manager: ProviderSettingsManager,
+	settings: ProviderModeSettingsMap[Mode],
+) => Promise<ProviderModeSettingsMap[Mode]>;
+
+async function validateProviderModelModeSettings(
+	manager: ProviderSettingsManager,
+	settings: ProviderModeSettingsMap[ProviderMode],
+	options: {
+		label: string;
+		isModelSupported: (model: ProviderModel) => boolean;
+		unsupportedModelMessage: (modelId: string) => string;
+	},
+): Promise<{ providerId: string; modelId: string }> {
+	const providerId = settings.providerId.trim();
+	const modelId = settings.modelId.trim();
+	if (!providerId || !modelId) {
+		throw new Error(`${options.label} provider and model are required`);
+	}
+	const state = manager.read();
+	if (!state.providers[providerId]) {
+		throw new Error(
+			`${options.label} provider "${providerId}" must be enabled and configured`,
+		);
+	}
+	const config = manager.getProviderConfig(providerId, {
+		includeKnownModels: false,
+	});
+	const { models } = await getLocalProviderModels(providerId, config);
+	const model = models.find((candidate) => candidate.id === modelId);
+	if (!model || !options.isModelSupported(model)) {
+		throw new Error(options.unsupportedModelMessage(modelId));
+	}
+	return { providerId, modelId };
+}
+
+const MODE_SETTINGS_VALIDATORS = {
+	voiceInput: async (manager, settings) =>
+		validateProviderModelModeSettings(manager, settings, {
+			label: "Voice input",
+			isModelSupported: isDedicatedTranscriptionModel,
+			unsupportedModelMessage: (modelId) =>
+				`Model "${modelId}" is not a dedicated audio-to-text transcription model`,
+		}),
+	voiceOutput: async (manager, settings) => {
+		const selection = await validateProviderModelModeSettings(
+			manager,
+			settings,
+			{
+				label: "Voice output",
+				isModelSupported: isSpeechGenerationModel,
+				unsupportedModelMessage: (modelId) =>
+					`Model "${modelId}" is not a dedicated text-to-audio speech model`,
+			},
+		);
+		const voice = settings.voice?.trim() || undefined;
+		return { ...selection, ...(voice ? { voice } : {}) };
+	},
+} satisfies {
+	[Mode in ProviderMode]: ModeSettingsValidator<Mode>;
+};
+
+async function validateModeSettings<Mode extends ProviderMode>(
+	manager: ProviderSettingsManager,
+	mode: Mode,
+	settings: ProviderModeSettingsMap[Mode],
+): Promise<ProviderModeSettingsMap[Mode]> {
+	const validator = MODE_SETTINGS_VALIDATORS[
+		mode
+	] as ModeSettingsValidator<Mode>;
+	return validator(manager, settings);
+}
+
+export async function saveModeSettings<Mode extends ProviderMode>(
+	manager: ProviderSettingsManager,
+	request: SaveModeSettingsRequest<Mode>,
+): Promise<{ settingsPath: string; modes: ProviderModesSettings }> {
+	if (!request.settings) {
+		const state = manager.setModeSettings(request.mode, undefined);
+		return { settingsPath: manager.getFilePath(), modes: state.modes };
+	}
+
+	const parsed = parseProviderModeSettings(request.mode, request.settings);
+	const normalized = await validateModeSettings(manager, request.mode, parsed);
+	const state = manager.setModeSettings(request.mode, normalized);
+	return { settingsPath: manager.getFilePath(), modes: state.modes };
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -1128,12 +1164,7 @@ export function saveLocalProviderSettings(
 		const state = manager.read();
 		delete state.providers[providerId];
 		if (state.lastUsedProvider === providerId) delete state.lastUsedProvider;
-		if (state.modes.voiceInput?.providerId === providerId) {
-			delete state.modes.voiceInput;
-		}
-		if (state.modes.voiceOutput?.providerId === providerId) {
-			delete state.modes.voiceOutput;
-		}
+		removeProviderModeSettings(state.modes, providerId);
 		manager.write(state);
 		return { providerId, enabled: false, settingsPath: manager.getFilePath() };
 	}
