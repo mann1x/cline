@@ -47,8 +47,10 @@ import {
 	isChatModel,
 	loadProviderModelCatalog,
 	loadProviderModels,
+	type SpeechGenerationModelTarget,
 	type TranscriptionModelTarget,
 	VOICE_INPUT_SETTINGS_CHANGED_EVENT,
+	VOICE_OUTPUT_SETTINGS_CHANGED_EVENT,
 } from "@/lib/provider-model-catalog";
 import { cn } from "@/lib/utils";
 import { startVercelStreamingTranscription } from "@/lib/vercel-streaming-transcription";
@@ -135,6 +137,15 @@ async function blobToBase64(blob: Blob): Promise<string> {
 		);
 	}
 	return window.btoa(binary);
+}
+
+function base64ToAudioBlob(audioBase64: string, mediaType: string): Blob {
+	const binary = window.atob(audioBase64);
+	const bytes = new Uint8Array(binary.length);
+	for (let index = 0; index < binary.length; index += 1) {
+		bytes[index] = binary.charCodeAt(index);
+	}
+	return new Blob([bytes.buffer], { type: mediaType });
 }
 
 function resolveEffortIndex(
@@ -371,8 +382,13 @@ export function ChatInputBar({
 		start: number;
 		end: number;
 	} | null>(null);
+	const streamingTranscriptTextRef = useRef("");
+	const activeSpeechAudioRef = useRef<HTMLAudioElement | null>(null);
+	const activeSpeechAudioUrlRef = useRef<string | null>(null);
 	const [transcriptionTarget, setTranscriptionTarget] =
 		useState<TranscriptionModelTarget | null>(null);
+	const [speechGenerationTarget, setSpeechGenerationTarget] =
+		useState<SpeechGenerationModelTarget | null>(null);
 	const [promptInputFocused, setPromptInputFocused] = useState(false);
 	const [cursorIndex, setCursorIndex] = useState(() => promptInput.length);
 	// Mention/slash detection is derived synchronously from the input +
@@ -428,22 +444,114 @@ export function ChatInputBar({
 		const loadVoiceInput = () => {
 			loadProviderModelCatalog()
 				.then((catalog) => {
-					if (!cancelled) setTranscriptionTarget(catalog.voiceInput);
+					if (!cancelled) {
+						setTranscriptionTarget(catalog.voiceInput);
+						setSpeechGenerationTarget(catalog.voiceOutput);
+					}
 				})
 				.catch(() => {
-					if (!cancelled) setTranscriptionTarget(null);
+					if (!cancelled) {
+						setTranscriptionTarget(null);
+						setSpeechGenerationTarget(null);
+					}
 				});
 		};
 		loadVoiceInput();
 		window.addEventListener(VOICE_INPUT_SETTINGS_CHANGED_EVENT, loadVoiceInput);
+		window.addEventListener(
+			VOICE_OUTPUT_SETTINGS_CHANGED_EVENT,
+			loadVoiceInput,
+		);
 		return () => {
 			cancelled = true;
 			window.removeEventListener(
 				VOICE_INPUT_SETTINGS_CHANGED_EVENT,
 				loadVoiceInput,
 			);
+			window.removeEventListener(
+				VOICE_OUTPUT_SETTINGS_CHANGED_EVENT,
+				loadVoiceInput,
+			);
 		};
 	}, []);
+
+	const stopSpeechPlayback = useCallback(() => {
+		const audio = activeSpeechAudioRef.current;
+		if (audio) {
+			audio.pause();
+			audio.removeAttribute("src");
+			activeSpeechAudioRef.current = null;
+		}
+		const audioUrl = activeSpeechAudioUrlRef.current;
+		if (audioUrl) {
+			URL.revokeObjectURL(audioUrl);
+			activeSpeechAudioUrlRef.current = null;
+		}
+	}, []);
+
+	useEffect(() => stopSpeechPlayback, [stopSpeechPlayback]);
+
+	const requestVoicePlayback = useCallback(
+		async (transcript: string) => {
+			if (!speechGenerationTarget || !transcript.trim()) return;
+			try {
+				const result = await desktopClient.invoke<{
+					audioBase64?: string;
+					mediaType?: string;
+				}>("synthesize_speech", { text: transcript.trim() });
+				if (!result.audioBase64) {
+					throw new Error("The speech provider returned no audio");
+				}
+				const mediaType = result.mediaType?.trim() || "audio/mpeg";
+				const audioBlob = base64ToAudioBlob(result.audioBase64, mediaType);
+				stopSpeechPlayback();
+				const audioUrl = URL.createObjectURL(audioBlob);
+				const audio = new Audio(audioUrl);
+				activeSpeechAudioRef.current = audio;
+				activeSpeechAudioUrlRef.current = audioUrl;
+				const release = () => {
+					if (activeSpeechAudioRef.current === audio) {
+						activeSpeechAudioRef.current = null;
+					}
+					if (activeSpeechAudioUrlRef.current === audioUrl) {
+						URL.revokeObjectURL(audioUrl);
+						activeSpeechAudioUrlRef.current = null;
+					}
+				};
+				audio.addEventListener("ended", release, { once: true });
+				audio.addEventListener("error", release, { once: true });
+				await audio.play();
+				writeDesktopDebugLog({
+					scope: "voice-output",
+					level: "debug",
+					message: "Webview started generated speech playback",
+					timestamp: new Date().toISOString(),
+					metadata: {
+						providerId: speechGenerationTarget.providerId,
+						modelId: speechGenerationTarget.modelId,
+						mediaType,
+						audioBytes: audioBlob.size,
+					},
+				});
+			} catch (error) {
+				stopSpeechPlayback();
+				const message = error instanceof Error ? error.message : String(error);
+				writeDesktopDebugLog({
+					scope: "voice-output",
+					level: "error",
+					message: "Voice playback failed in the webview",
+					timestamp: new Date().toISOString(),
+					metadata: { failure: message },
+				});
+				toast({
+					variant: "destructive",
+					title: "Voice playback failed",
+					description: message,
+				});
+			}
+		},
+		[speechGenerationTarget, stopSpeechPlayback],
+	);
 
 	const handleTranscriptionChange = useCallback(
 		(transcript: string) => {
@@ -479,11 +587,13 @@ export function ChatInputBar({
 		const start = input?.selectionStart ?? current.length;
 		const end = input?.selectionEnd ?? start;
 		streamingTranscriptRangeRef.current = { start, end };
+		streamingTranscriptTextRef.current = "";
 	}, []);
 
 	const handleStreamingTranscriptionChange = useCallback(
 		(transcript: string) => {
 			const text = transcript.trim();
+			streamingTranscriptTextRef.current = text;
 			const range = streamingTranscriptRangeRef.current;
 			if (!text || !range) return;
 
@@ -511,9 +621,17 @@ export function ChatInputBar({
 		[setPromptInput],
 	);
 
-	const handleStreamingTranscriptionEnd = useCallback(() => {
-		streamingTranscriptRangeRef.current = null;
-	}, []);
+	const handleStreamingTranscriptionEnd = useCallback(
+		(completed: boolean) => {
+			streamingTranscriptRangeRef.current = null;
+			const transcript = streamingTranscriptTextRef.current;
+			streamingTranscriptTextRef.current = "";
+			if (completed && transcript) {
+				void requestVoicePlayback(transcript);
+			}
+		},
+		[requestVoicePlayback],
+	);
 
 	const handleStartStreamingTranscription = useCallback(
 		() =>
@@ -557,9 +675,10 @@ export function ChatInputBar({
 			if (!text) {
 				throw new Error("The transcription provider returned no text");
 			}
+			void requestVoicePlayback(text);
 			return text;
 		},
-		[transcriptionTarget],
+		[requestVoicePlayback, transcriptionTarget],
 	);
 
 	const handleSpeechInputError = useCallback((error: unknown) => {

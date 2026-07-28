@@ -18,6 +18,8 @@ vi.mock("@/lib/provider-model-catalog", () => ({
 	loadProviderModelCatalog: loadProviderModelCatalogMock,
 	loadProviderModels: loadProviderModelsMock,
 	VOICE_INPUT_SETTINGS_CHANGED_EVENT: "cline:test-voice-input-settings-changed",
+	VOICE_OUTPUT_SETTINGS_CHANGED_EVENT:
+		"cline:test-voice-output-settings-changed",
 }));
 
 let container: HTMLDivElement;
@@ -31,6 +33,7 @@ beforeEach(() => {
 		providerModels: { cline: ["test-model"] },
 		providerReasoningModels: { cline: [] },
 		voiceInput: null,
+		voiceOutput: null,
 	});
 	loadProviderModelsMock.mockReset().mockResolvedValue([]);
 	HTMLElement.prototype.scrollIntoView = vi.fn();

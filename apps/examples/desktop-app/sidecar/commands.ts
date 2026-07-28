@@ -41,15 +41,20 @@ import {
 	SqliteSessionStore,
 	saveLocalProviderSettings,
 	saveVoiceInputSettings,
+	saveVoiceOutputSettings,
 	setAutoUpdateEnabledGlobally,
 	setDisabledPlugin,
 	setDisabledTools,
 	setTelemetryOptOutGlobally,
+	synthesizeConfiguredVoiceOutput,
 	toggleDisabledTool,
 	transcribeConfiguredVoiceInput,
 	updateMcpSettingsFileSync,
 } from "@cline/core";
-import { resolveAudioTranscriptionRoute } from "@cline/llms";
+import {
+	resolveAudioTranscriptionRoute,
+	resolveSpeechGenerationRoute,
+} from "@cline/llms";
 import {
 	CLINE_DEFAULT_MODEL_ID,
 	getClineEnvironmentConfig,
@@ -105,6 +110,8 @@ import type {
 // app until the child exits.
 const execFileAsync = promisify(execFile);
 const MAX_RECORDED_AUDIO_BYTES = 25 * 1024 * 1024;
+const MAX_GENERATED_SPEECH_BYTES = 25 * 1024 * 1024;
+const MAX_SPEECH_TEXT_CHARACTERS = 10_000;
 
 type DesktopDebugLogLevel = "debug" | "info" | "error";
 
@@ -147,6 +154,7 @@ function sanitizeDiagnosticFailure(
 
 function emitDesktopDebugLog(
 	ctx: SidecarContext,
+	scope: "voice-input" | "voice-output",
 	level: DesktopDebugLogLevel,
 	message: string,
 	metadata?: Record<string, unknown>,
@@ -159,7 +167,7 @@ function emitDesktopDebugLog(
 		ctx.logger?.debug(message, metadata);
 	}
 	broadcastEvent(ctx, "desktop_debug_log", {
-		scope: "voice-input",
+		scope,
 		level,
 		message,
 		timestamp: new Date().toISOString(),
@@ -1512,6 +1520,7 @@ export async function handleCommand(
 		};
 		emitDesktopDebugLog(
 			ctx,
+			"voice-input",
 			"debug",
 			"Creating streaming transcription session",
 			diagnostics,
@@ -1524,6 +1533,7 @@ export async function handleCommand(
 			);
 			emitDesktopDebugLog(
 				ctx,
+				"voice-input",
 				"debug",
 				"Streaming transcription session created",
 				{
@@ -1537,6 +1547,7 @@ export async function handleCommand(
 			const failure = sanitizeDiagnosticFailure(error, providerConfig);
 			emitDesktopDebugLog(
 				ctx,
+				"voice-input",
 				"error",
 				"Streaming transcription session setup failed",
 				{
@@ -1582,6 +1593,7 @@ export async function handleCommand(
 		};
 		emitDesktopDebugLog(
 			ctx,
+			"voice-input",
 			"debug",
 			"Starting audio transcription",
 			diagnostics,
@@ -1592,20 +1604,32 @@ export async function handleCommand(
 				audio: Buffer.from(audioBase64, "base64"),
 				mediaType,
 			});
-			emitDesktopDebugLog(ctx, "debug", "Audio transcription completed", {
-				...diagnostics,
-				durationMs: Date.now() - startedAt,
-				transcriptCharacters: result.text.length,
-				language: result.language,
-			});
+			emitDesktopDebugLog(
+				ctx,
+				"voice-input",
+				"debug",
+				"Audio transcription completed",
+				{
+					...diagnostics,
+					durationMs: Date.now() - startedAt,
+					transcriptCharacters: result.text.length,
+					language: result.language,
+				},
+			);
 			return result;
 		} catch (error) {
 			const failure = sanitizeDiagnosticFailure(error, providerConfig);
-			emitDesktopDebugLog(ctx, "error", "Audio transcription failed", {
-				...diagnostics,
-				durationMs: Date.now() - startedAt,
-				failure,
-			});
+			emitDesktopDebugLog(
+				ctx,
+				"voice-input",
+				"error",
+				"Audio transcription failed",
+				{
+					...diagnostics,
+					durationMs: Date.now() - startedAt,
+					failure,
+				},
+			);
 			throw new Error(failure, { cause: error });
 		}
 	}
@@ -1622,11 +1646,122 @@ export async function handleCommand(
 			manager,
 			providerId && modelId ? { providerId, modelId } : undefined,
 		);
-		emitDesktopDebugLog(ctx, "info", "Voice input settings saved", {
-			providerId: result.voiceInput?.providerId,
-			modelId: result.voiceInput?.modelId,
-			configured: Boolean(result.voiceInput),
-		});
+		emitDesktopDebugLog(
+			ctx,
+			"voice-input",
+			"info",
+			"Voice input settings saved",
+			{
+				providerId: result.voiceInput?.providerId,
+				modelId: result.voiceInput?.modelId,
+				configured: Boolean(result.voiceInput),
+			},
+		);
+		return result;
+	}
+	if (command === "synthesize_speech") {
+		const text = String(args?.text ?? "").trim();
+		if (!text) {
+			throw new Error("speech text is required");
+		}
+		if (text.length > MAX_SPEECH_TEXT_CHARACTERS) {
+			throw new Error(
+				`speech text exceeds the ${MAX_SPEECH_TEXT_CHARACTERS} character limit`,
+			);
+		}
+		const manager = new ProviderSettingsManager();
+		const selection = manager.getVoiceOutputSettings();
+		const providerConfig = selection
+			? manager.getProviderConfig(selection.providerId, {
+					includeKnownModels: false,
+				})
+			: undefined;
+		const route = providerConfig
+			? resolveSpeechGenerationRoute(providerConfig)
+			: undefined;
+		const diagnostics = {
+			providerId: selection?.providerId,
+			modelId: selection?.modelId,
+			voiceConfigured: Boolean(selection?.voice),
+			transport: route?.kind,
+			endpoint: sanitizeDiagnosticUrl(route?.endpoint),
+			textCharacters: text.length,
+		};
+		emitDesktopDebugLog(
+			ctx,
+			"voice-output",
+			"debug",
+			"Starting speech generation",
+			diagnostics,
+		);
+		const startedAt = Date.now();
+		try {
+			const result = await synthesizeConfiguredVoiceOutput(manager, { text });
+			if (result.audio.byteLength > MAX_GENERATED_SPEECH_BYTES) {
+				throw new Error(
+					`generated speech exceeds the ${MAX_GENERATED_SPEECH_BYTES} byte limit`,
+				);
+			}
+			emitDesktopDebugLog(
+				ctx,
+				"voice-output",
+				"debug",
+				"Speech generation completed",
+				{
+					...diagnostics,
+					durationMs: Date.now() - startedAt,
+					audioBytes: result.audio.byteLength,
+					mediaType: result.mediaType,
+				},
+			);
+			return {
+				audioBase64: Buffer.from(result.audio).toString("base64"),
+				mediaType: result.mediaType,
+			};
+		} catch (error) {
+			const failure = sanitizeDiagnosticFailure(error, providerConfig);
+			emitDesktopDebugLog(
+				ctx,
+				"voice-output",
+				"error",
+				"Speech generation failed",
+				{
+					...diagnostics,
+					durationMs: Date.now() - startedAt,
+					failure,
+				},
+			);
+			throw new Error(failure, { cause: error });
+		}
+	}
+	if (command === "save_voice_output_settings") {
+		const providerId = String(args?.provider ?? "").trim();
+		const modelId = String(args?.model ?? "").trim();
+		const voice = String(args?.voice ?? "").trim() || undefined;
+		if (Boolean(providerId) !== Boolean(modelId)) {
+			throw new Error(
+				"voice output provider and model must both be set or both be cleared",
+			);
+		}
+		const manager = new ProviderSettingsManager();
+		const result = await saveVoiceOutputSettings(
+			manager,
+			providerId && modelId
+				? { providerId, modelId, ...(voice ? { voice } : {}) }
+				: undefined,
+		);
+		emitDesktopDebugLog(
+			ctx,
+			"voice-output",
+			"info",
+			"Voice output settings saved",
+			{
+				providerId: result.voiceOutput?.providerId,
+				modelId: result.voiceOutput?.modelId,
+				voiceConfigured: Boolean(result.voiceOutput?.voice),
+				configured: Boolean(result.voiceOutput),
+			},
+		);
 		return result;
 	}
 	if (command === "save_provider_settings") {

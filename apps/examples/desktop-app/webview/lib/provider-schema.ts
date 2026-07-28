@@ -69,11 +69,18 @@ export interface ProviderCatalogResponse {
 	providers: Provider[];
 	settingsPath: string;
 	voiceInput?: VoiceInputSelection;
+	voiceOutput?: VoiceOutputSelection;
 }
 
 export interface VoiceInputSelection {
 	providerId: string;
 	modelId: string;
+}
+
+export interface VoiceOutputSelection {
+	providerId: string;
+	modelId: string;
+	voice?: string;
 }
 
 export interface ProviderModelsResponse {

@@ -29,8 +29,17 @@ export const VoiceInputSettingsSchema = z.object({
 
 export type VoiceInputSettings = z.infer<typeof VoiceInputSettingsSchema>;
 
+export const VoiceOutputSettingsSchema = z.object({
+	providerId: z.string().min(1),
+	modelId: z.string().min(1),
+	voice: z.string().min(1).optional(),
+});
+
+export type VoiceOutputSettings = z.infer<typeof VoiceOutputSettingsSchema>;
+
 export interface StoredProviderModes {
 	voiceInput?: VoiceInputSettings;
+	voiceOutput?: VoiceOutputSettings;
 }
 
 export interface StoredProviderSettingsEntry {
@@ -49,6 +58,7 @@ export interface StoredProviderSettings {
 export const StoredProviderModesSchema: z.ZodType<StoredProviderModes> =
 	z.object({
 		voiceInput: VoiceInputSettingsSchema.optional(),
+		voiceOutput: VoiceOutputSettingsSchema.optional(),
 	});
 
 export const StoredProviderSettingsEntrySchema: z.ZodType<StoredProviderSettingsEntry> =

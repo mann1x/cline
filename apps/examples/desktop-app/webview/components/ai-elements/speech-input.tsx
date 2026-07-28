@@ -59,7 +59,7 @@ export type SpeechInputProps = Omit<
 	onAudioRecorded?: (audioBlob: Blob) => Promise<string>;
 	onStartStreaming?: () => Promise<StreamingSpeechSession>;
 	onStreamingStart?: () => void;
-	onStreamingEnd?: () => void;
+	onStreamingEnd?: (completed: boolean) => void;
 	onError?: (error: unknown) => void;
 	lang?: string;
 	recordingMode?: "auto" | "media-recorder" | "streaming";
@@ -219,21 +219,21 @@ export function SpeechInput({
 					streamingSessionRef.current = null;
 					setIsListening(false);
 					setIsProcessing(false);
-					onStreamingEndRef.current?.();
+					onStreamingEndRef.current?.(true);
 				},
 				(error) => {
 					if (streamingSessionRef.current !== session) return;
 					streamingSessionRef.current = null;
 					setIsListening(false);
 					setIsProcessing(false);
-					onStreamingEndRef.current?.();
+					onStreamingEndRef.current?.(false);
 					onErrorRef.current?.(error);
 				},
 			);
 		} catch (error) {
 			setIsListening(false);
 			setIsProcessing(false);
-			onStreamingEndRef.current?.();
+			onStreamingEndRef.current?.(false);
 			onErrorRef.current?.(error);
 		}
 	}, []);

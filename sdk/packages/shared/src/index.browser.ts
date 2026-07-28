@@ -348,6 +348,7 @@ export type {
 	RuntimeLoggerConfig,
 	SaveProviderSettingsActionRequest,
 	VoiceInputSelection,
+	VoiceOutputSelection,
 } from "./rpc/runtime";
 export {
 	ProviderCapabilitySchema,

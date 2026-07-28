@@ -18,6 +18,7 @@ import {
 	deleteLocalProvider,
 	getLocalProviderModels,
 	isDedicatedTranscriptionModel,
+	isSpeechGenerationModel,
 	listLocalProviders,
 	markLocalProviderEnabled,
 	normalizeOAuthProvider,
@@ -25,6 +26,9 @@ import {
 	resolveLocalClineAuthToken,
 	saveLocalProviderSettings,
 	saveVoiceInputSettings,
+	saveVoiceOutputSettings,
+	synthesizeConfiguredVoiceOutput,
+	synthesizeLocalSpeech,
 	transcribeConfiguredVoiceInput,
 	transcribeLocalAudio,
 	updateLocalProvider,
@@ -1045,6 +1049,97 @@ describe("audio transcription", () => {
 	});
 });
 
+describe("speech generation", () => {
+	let manager: ProviderSettingsManager;
+	let cleanup: () => void;
+
+	beforeEach(async () => {
+		({ manager, cleanup } = makeTempManager());
+		await addLocalProvider(manager, {
+			providerId: "speech-provider",
+			name: "Speech Provider",
+			baseUrl: "https://speech.example.invalid/v1",
+			apiKey: "speech-key",
+			models: ["tts-model"],
+		});
+		LlmsModels.registerModel("speech-provider", "tts-model", {
+			id: "tts-model",
+			name: "TTS Model",
+			modalities: { input: ["text"], output: ["audio"] },
+		});
+	});
+
+	afterEach(() => cleanup());
+
+	it("recognizes only dedicated text-to-audio models", () => {
+		expect(
+			isSpeechGenerationModel({
+				inputModalities: ["text"],
+				outputModalities: ["audio"],
+			}),
+		).toBe(true);
+		expect(
+			isSpeechGenerationModel({
+				inputModalities: ["audio"],
+				outputModalities: ["text"],
+			}),
+		).toBe(false);
+		expect(
+			isSpeechGenerationModel({
+				inputModalities: ["text", "audio"],
+				outputModalities: ["audio", "text"],
+			}),
+		).toBe(false);
+	});
+
+	it("synthesizes with the configured provider, model, and voice", async () => {
+		await saveVoiceOutputSettings(manager, {
+			providerId: "speech-provider",
+			modelId: "tts-model",
+			voice: "voice-123",
+		});
+		const generateSpy = vi
+			.spyOn(LlmsModels, "generateSpeechAudio")
+			.mockResolvedValue({
+				audio: new Uint8Array([1, 2, 3]),
+				mediaType: "audio/mpeg",
+			});
+
+		await expect(
+			synthesizeConfiguredVoiceOutput(manager, { text: "Hello" }),
+		).resolves.toEqual({
+			audio: new Uint8Array([1, 2, 3]),
+			mediaType: "audio/mpeg",
+		});
+		expect(generateSpy).toHaveBeenCalledWith(
+			expect.objectContaining({
+				modelId: "tts-model",
+				text: "Hello",
+				voice: "voice-123",
+				providerConfig: expect.objectContaining({
+					providerId: "speech-provider",
+					apiKey: "speech-key",
+				}),
+			}),
+		);
+	});
+
+	it("rejects non-speech models and missing voice output settings", async () => {
+		await expect(
+			synthesizeLocalSpeech(manager, {
+				providerId: "speech-provider",
+				modelId: "missing",
+				text: "Hello",
+			}),
+		).rejects.toThrow(
+			'Model "missing" is not a dedicated text-to-audio speech model',
+		);
+		await expect(
+			synthesizeConfiguredVoiceOutput(manager, { text: "Hello" }),
+		).rejects.toThrow("Configure a voice output provider and model");
+	});
+});
+
 // ===========================================================================
 // models.json – built-in provider model overlays
 // ===========================================================================
@@ -1131,6 +1226,10 @@ describe("saveLocalProviderSettings", () => {
 			providerId: "test-provider",
 			modelId: "m1",
 		});
+		manager.setVoiceOutputSettings({
+			providerId: "test-provider",
+			modelId: "m1",
+		});
 		const result = saveLocalProviderSettings(manager, {
 			providerId: "test-provider",
 			enabled: false,
@@ -1139,6 +1238,7 @@ describe("saveLocalProviderSettings", () => {
 		expect(result.enabled).toBe(false);
 		expect(manager.getProviderSettings("test-provider")).toBeUndefined();
 		expect(manager.getVoiceInputSettings()).toBeUndefined();
+		expect(manager.getVoiceOutputSettings()).toBeUndefined();
 	});
 
 	it("updates apiKey", () => {
@@ -1547,6 +1647,32 @@ describe("listLocalProviders", () => {
 		expect(catalog.voiceInput).toEqual({
 			providerId: "voice-list-provider",
 			modelId: "whisper",
+		});
+	});
+
+	it("returns the configured voice output selection", async () => {
+		await addLocalProvider(manager, {
+			providerId: "speech-list-provider",
+			name: "Speech List Provider",
+			baseUrl: "https://example.invalid/v1",
+			models: ["tts"],
+		});
+		LlmsModels.registerModel("speech-list-provider", "tts", {
+			id: "tts",
+			name: "TTS",
+			modalities: { input: ["text"], output: ["audio"] },
+		});
+		await saveVoiceOutputSettings(manager, {
+			providerId: "speech-list-provider",
+			modelId: "tts",
+			voice: "voice-123",
+		});
+
+		const catalog = await listLocalProviders(manager);
+		expect(catalog.voiceOutput).toEqual({
+			providerId: "speech-list-provider",
+			modelId: "tts",
+			voice: "voice-123",
 		});
 	});
 

@@ -18,13 +18,14 @@ import {
 	Star,
 	X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import {
 	isDedicatedTranscriptionModel,
+	isSpeechGenerationModel,
 	supportsAudio,
 } from "@/lib/provider-model-catalog";
 import type {
@@ -33,6 +34,7 @@ import type {
 	ProviderConfigFieldPrimitive,
 	ProviderSettingsUpdate,
 	VoiceInputSelection,
+	VoiceOutputSelection,
 } from "@/lib/provider-schema";
 import { cn } from "@/lib/utils";
 
@@ -98,23 +100,31 @@ export function ProviderListContent({
 	onConfigure,
 	onAddProvider,
 	onVoiceInputChange,
+	onVoiceOutputChange,
 	selectedProviderId,
 	variant = "page",
 	voiceInput,
 	voiceInputSaving = false,
+	voiceOutput,
+	voiceOutputSaving = false,
 }: {
 	providers: Provider[];
 	onToggle: (id: string) => void;
 	onConfigure: (id: string) => void;
 	onAddProvider: () => void;
 	onVoiceInputChange: (selection: VoiceInputSelection | undefined) => void;
+	onVoiceOutputChange: (selection: VoiceOutputSelection | undefined) => void;
 	selectedProviderId?: string | null;
 	variant?: "page" | "panel";
 	voiceInput?: VoiceInputSelection;
 	voiceInputSaving?: boolean;
+	voiceOutput?: VoiceOutputSelection;
+	voiceOutputSaving?: boolean;
 }) {
 	const [providerSearchOpen, setProviderSearchOpen] = useState(false);
 	const [providerSearch, setProviderSearch] = useState("");
+	const providerSearchInputRef = useRef<HTMLInputElement>(null);
+	const voiceOutputInputId = useId();
 	const enabledProviderCount = providers.filter(
 		(provider) => provider.enabled,
 	).length;
@@ -136,6 +146,60 @@ export function ProviderListContent({
 		(entry) => entry.provider.id === voiceInput?.providerId,
 	);
 	const selectedVoiceModels = selectedVoiceProvider?.models ?? [];
+	const speechProviders = providers
+		.filter((provider) => provider.enabled)
+		.map((provider) => ({
+			provider,
+			models: (provider.modelList ?? []).filter(isSpeechGenerationModel),
+		}))
+		.filter((entry) => entry.models.length > 0);
+	const selectedSpeechProvider = speechProviders.find(
+		(entry) => entry.provider.id === voiceOutput?.providerId,
+	);
+	const selectedSpeechModels = selectedSpeechProvider?.models ?? [];
+	const [voiceDraft, setVoiceDraft] = useState(voiceOutput?.voice ?? "");
+	useEffect(() => {
+		setVoiceDraft(voiceOutput?.voice ?? "");
+	}, [voiceOutput?.voice]);
+
+	useEffect(() => {
+		const focusProviderSearch = () => {
+			providerSearchInputRef.current?.focus();
+			providerSearchInputRef.current?.select();
+		};
+		const handleFindShortcut = (event: KeyboardEvent) => {
+			if (
+				event.key.toLowerCase() !== "f" ||
+				(!event.metaKey && !event.ctrlKey) ||
+				event.altKey ||
+				event.shiftKey
+			) {
+				return;
+			}
+			event.preventDefault();
+			if (providerSearchOpen) {
+				focusProviderSearch();
+			} else {
+				setProviderSearchOpen(true);
+			}
+		};
+
+		window.addEventListener("keydown", handleFindShortcut);
+		return () => window.removeEventListener("keydown", handleFindShortcut);
+	}, [providerSearchOpen]);
+
+	useEffect(() => {
+		if (providerSearchOpen) {
+			providerSearchInputRef.current?.focus();
+			providerSearchInputRef.current?.select();
+		}
+	}, [providerSearchOpen]);
+
+	const defaultVoiceForProvider = (providerId: string): string | undefined => {
+		if (providerId === "gemini") return "Kore";
+		if (providerId === "elevenlabs") return undefined;
+		return "alloy";
+	};
 
 	return (
 		<ScrollArea className="h-full">
@@ -261,6 +325,121 @@ export function ProviderListContent({
 							</select>
 						</label>
 					</div>
+					<div className="mt-6 border-t pt-5">
+						<div className="mb-3">
+							<h2 className="text-[17px] font-semibold text-foreground">
+								Voice playback
+							</h2>
+							<p className="mt-1 text-sm leading-5 text-muted-foreground">
+								Choose a configured text-to-audio model to speak each completed
+								microphone transcript. The voice is a provider voice name or ID.
+							</p>
+						</div>
+						<div className="grid grid-cols-3 gap-3 max-[720px]:grid-cols-1">
+							<label className="space-y-1.5 text-sm text-muted-foreground">
+								<span>Provider</span>
+								<select
+									aria-label="Voice output provider"
+									className="h-9 w-full rounded border border-border bg-background px-3 text-sm text-foreground outline-none focus:ring-1 focus:ring-ring"
+									disabled={voiceOutputSaving}
+									onChange={(event) => {
+										const providerId = event.target.value;
+										if (!providerId) {
+											onVoiceOutputChange(undefined);
+											return;
+										}
+										const entry = speechProviders.find(
+											(candidate) => candidate.provider.id === providerId,
+										);
+										const modelId = entry?.models[0]?.id;
+										if (modelId) {
+											const voice = defaultVoiceForProvider(providerId);
+											onVoiceOutputChange({
+												providerId,
+												modelId,
+												...(voice ? { voice } : {}),
+											});
+										}
+									}}
+									value={selectedSpeechProvider?.provider.id ?? ""}
+								>
+									<option value="">Not configured</option>
+									{speechProviders.map(({ provider }) => (
+										<option key={provider.id} value={provider.id}>
+											{provider.name}
+										</option>
+									))}
+								</select>
+							</label>
+							<label className="space-y-1.5 text-sm text-muted-foreground">
+								<span>Model</span>
+								<select
+									aria-label="Voice output model"
+									className="h-9 w-full rounded border border-border bg-background px-3 text-sm text-foreground outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+									disabled={!selectedSpeechProvider || voiceOutputSaving}
+									onChange={(event) => {
+										if (!selectedSpeechProvider || !event.target.value) return;
+										onVoiceOutputChange({
+											providerId: selectedSpeechProvider.provider.id,
+											modelId: event.target.value,
+											...(voiceOutput?.voice
+												? { voice: voiceOutput.voice }
+												: {}),
+										});
+									}}
+									value={voiceOutput?.modelId ?? ""}
+								>
+									{selectedSpeechModels.length === 0 ? (
+										<option value="">
+											Enable a text-to-audio provider first
+										</option>
+									) : null}
+									{selectedSpeechModels.map((model) => (
+										<option key={model.id} value={model.id}>
+											{model.name}
+										</option>
+									))}
+								</select>
+							</label>
+							<label
+								className="space-y-1.5 text-sm text-muted-foreground"
+								htmlFor={voiceOutputInputId}
+							>
+								<span>Voice</span>
+								<Input
+									aria-label="Voice output voice"
+									className="h-9"
+									disabled={!selectedSpeechProvider || voiceOutputSaving}
+									id={voiceOutputInputId}
+									onBlur={() => {
+										if (
+											!selectedSpeechProvider ||
+											!voiceOutput ||
+											voiceDraft.trim() === (voiceOutput.voice ?? "")
+										) {
+											return;
+										}
+										onVoiceOutputChange({
+											providerId: selectedSpeechProvider.provider.id,
+											modelId: voiceOutput.modelId,
+											...(voiceDraft.trim()
+												? { voice: voiceDraft.trim() }
+												: {}),
+										});
+									}}
+									onChange={(event) => setVoiceDraft(event.target.value)}
+									placeholder={
+										selectedSpeechProvider?.provider.id === "elevenlabs"
+											? "ElevenLabs voice ID"
+											: selectedSpeechProvider?.provider.id === "gemini"
+												? "Kore"
+												: "alloy"
+									}
+									value={voiceDraft}
+								/>
+							</label>
+						</div>
+					</div>
 				</div>
 
 				{providerSearchOpen ? (
@@ -273,6 +452,7 @@ export function ProviderListContent({
 								className="h-7 border-0 bg-transparent px-0 text-sm"
 								onChange={(event) => setProviderSearch(event.target.value)}
 								placeholder="Search providers"
+								ref={providerSearchInputRef}
 								value={providerSearch}
 							/>
 						</div>

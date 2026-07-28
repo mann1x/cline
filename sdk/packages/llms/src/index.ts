@@ -102,6 +102,14 @@ export {
 } from "./providers/request-headers";
 export { disposeLangfuseTelemetry } from "./services/langfuse-telemetry";
 export {
+	DEFAULT_SPEECH_GENERATION_TIMEOUT_MS,
+	generateSpeechAudio,
+	resolveSpeechGenerationRoute,
+	type SpeechGenerationRequest,
+	type SpeechGenerationResult,
+	type SpeechGenerationRoute,
+} from "./speech";
+export {
 	type AudioTranscriptionRequest,
 	type AudioTranscriptionResult,
 	type AudioTranscriptionRoute,

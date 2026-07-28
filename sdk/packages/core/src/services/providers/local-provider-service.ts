@@ -9,6 +9,7 @@ import type {
 	ProviderModel,
 	SaveProviderSettingsActionRequest,
 	VoiceInputSelection,
+	VoiceOutputSelection,
 } from "@cline/shared";
 import { createOAuthClientCallbacks } from "../../auth/client";
 import {
@@ -85,6 +86,19 @@ export interface CreateConfiguredStreamingTranscriptionSessionRequest {
 	abortSignal?: AbortSignal;
 }
 
+export interface SynthesizeLocalSpeechRequest {
+	providerId: string;
+	modelId: string;
+	text: string;
+	voice?: string;
+	abortSignal?: AbortSignal;
+}
+
+export interface SynthesizeConfiguredVoiceOutputRequest {
+	text: string;
+	abortSignal?: AbortSignal;
+}
+
 // --- Small pure helpers ---
 
 function resolveVisibleApiKey(settings: {
@@ -139,6 +153,17 @@ export function isDedicatedTranscriptionModel(
 		model.inputModalities[0] === "audio" &&
 		model.outputModalities?.length === 1 &&
 		model.outputModalities[0] === "text"
+	);
+}
+
+export function isSpeechGenerationModel(
+	model: Pick<ProviderModel, "inputModalities" | "outputModalities">,
+): boolean {
+	return (
+		model.inputModalities?.length === 1 &&
+		model.inputModalities[0] === "text" &&
+		model.outputModalities?.length === 1 &&
+		model.outputModalities[0] === "audio"
 	);
 }
 
@@ -390,6 +415,10 @@ function removeProviderFromSettingsState(
 	}
 	if (state.modes.voiceInput?.providerId === providerId) {
 		delete state.modes.voiceInput;
+		mutated = true;
+	}
+	if (state.modes.voiceOutput?.providerId === providerId) {
+		delete state.modes.voiceOutput;
 		mutated = true;
 	}
 	if (mutated) manager.write(state);
@@ -726,6 +755,7 @@ export async function listLocalProviders(
 	providers: ProviderListItem[];
 	settingsPath: string;
 	voiceInput?: VoiceInputSelection;
+	voiceOutput?: VoiceOutputSelection;
 }> {
 	const state = manager.read();
 	const ids = LlmsModels.getProviderIds();
@@ -812,7 +842,29 @@ export async function listLocalProviders(
 	const voiceInput =
 		configuredVoiceInput && voiceModel ? configuredVoiceInput : undefined;
 
-	return { providers, settingsPath: manager.getFilePath(), voiceInput };
+	const configuredVoiceOutput = manager.getVoiceOutputSettings();
+	const voiceOutputProvider = configuredVoiceOutput
+		? providers.find(
+				(provider) =>
+					provider.id === configuredVoiceOutput.providerId && provider.enabled,
+			)
+		: undefined;
+	const voiceOutputModel = voiceOutputProvider?.modelList?.find(
+		(model) =>
+			model.id === configuredVoiceOutput?.modelId &&
+			isSpeechGenerationModel(model),
+	);
+	const voiceOutput =
+		configuredVoiceOutput && voiceOutputModel
+			? configuredVoiceOutput
+			: undefined;
+
+	return {
+		providers,
+		settingsPath: manager.getFilePath(),
+		voiceInput,
+		voiceOutput,
+	};
 }
 
 export async function getLocalProviderModels(
@@ -949,6 +1001,90 @@ export async function createConfiguredStreamingTranscriptionSession(
 	});
 }
 
+export async function synthesizeLocalSpeech(
+	manager: ProviderSettingsManager,
+	request: SynthesizeLocalSpeechRequest,
+): Promise<LlmsModels.SpeechGenerationResult> {
+	const providerId = request.providerId.trim();
+	const modelId = request.modelId.trim();
+	const config = manager.getProviderConfig(providerId, {
+		includeKnownModels: false,
+	});
+	if (!config) {
+		throw new Error(
+			`Speech provider "${providerId}" is not configured in providers.json`,
+		);
+	}
+
+	const { models } = await getLocalProviderModels(providerId, config);
+	const model = models.find((candidate) => candidate.id === modelId);
+	if (!model || !isSpeechGenerationModel(model)) {
+		throw new Error(
+			`Model "${modelId}" is not a dedicated text-to-audio speech model`,
+		);
+	}
+
+	return LlmsModels.generateSpeechAudio({
+		providerConfig: config,
+		modelId,
+		text: request.text,
+		voice: request.voice,
+		abortSignal: request.abortSignal,
+	});
+}
+
+export async function saveVoiceOutputSettings(
+	manager: ProviderSettingsManager,
+	selection: VoiceOutputSelection | undefined,
+): Promise<{ settingsPath: string; voiceOutput?: VoiceOutputSelection }> {
+	if (!selection) {
+		manager.setVoiceOutputSettings(undefined);
+		return { settingsPath: manager.getFilePath() };
+	}
+
+	const providerId = selection.providerId.trim();
+	const modelId = selection.modelId.trim();
+	const voice = selection.voice?.trim() || undefined;
+	if (!providerId || !modelId) {
+		throw new Error("Voice output provider and model are required");
+	}
+	const state = manager.read();
+	if (!state.providers[providerId]) {
+		throw new Error(
+			`Voice output provider "${providerId}" must be enabled and configured`,
+		);
+	}
+	const config = manager.getProviderConfig(providerId, {
+		includeKnownModels: false,
+	});
+	const { models } = await getLocalProviderModels(providerId, config);
+	const model = models.find((candidate) => candidate.id === modelId);
+	if (!model || !isSpeechGenerationModel(model)) {
+		throw new Error(
+			`Model "${modelId}" is not a dedicated text-to-audio speech model`,
+		);
+	}
+
+	const voiceOutput = { providerId, modelId, ...(voice ? { voice } : {}) };
+	manager.setVoiceOutputSettings(voiceOutput);
+	return { settingsPath: manager.getFilePath(), voiceOutput };
+}
+
+export async function synthesizeConfiguredVoiceOutput(
+	manager: ProviderSettingsManager,
+	request: SynthesizeConfiguredVoiceOutputRequest,
+): Promise<LlmsModels.SpeechGenerationResult> {
+	const selection = manager.getVoiceOutputSettings();
+	if (!selection) {
+		throw new Error("Configure a voice output provider and model in Settings");
+	}
+	return synthesizeLocalSpeech(manager, {
+		...selection,
+		text: request.text,
+		abortSignal: request.abortSignal,
+	});
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
 	return value != null && typeof value === "object" && !Array.isArray(value);
 }
@@ -994,6 +1130,9 @@ export function saveLocalProviderSettings(
 		if (state.lastUsedProvider === providerId) delete state.lastUsedProvider;
 		if (state.modes.voiceInput?.providerId === providerId) {
 			delete state.modes.voiceInput;
+		}
+		if (state.modes.voiceOutput?.providerId === providerId) {
+			delete state.modes.voiceOutput;
 		}
 		manager.write(state);
 		return { providerId, enabled: false, settingsPath: manager.getFilePath() };

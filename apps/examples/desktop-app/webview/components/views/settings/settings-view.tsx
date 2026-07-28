@@ -15,6 +15,7 @@ import { resetOnboarding } from "@/lib/onboarding";
 import {
 	invalidateProviderCatalogCache,
 	notifyVoiceInputSettingsChanged,
+	notifyVoiceOutputSettingsChanged,
 } from "@/lib/provider-model-catalog";
 import type {
 	Provider,
@@ -22,6 +23,7 @@ import type {
 	ProviderModelsResponse,
 	ProviderSettingsUpdate,
 	VoiceInputSelection,
+	VoiceOutputSelection,
 } from "@/lib/provider-schema";
 import {
 	type HubAccent,
@@ -84,6 +86,7 @@ let providerCatalogCache: {
 	fetchedAt: number;
 } | null = null;
 let voiceInputCache: VoiceInputSelection | undefined;
+let voiceOutputCache: VoiceOutputSelection | undefined;
 
 // -----------------------------------------------------------
 // Component
@@ -125,6 +128,10 @@ export function SettingsView({
 		() => voiceInputCache,
 	);
 	const [voiceInputSaving, setVoiceInputSaving] = useState(false);
+	const [voiceOutput, setVoiceOutput] = useState<
+		VoiceOutputSelection | undefined
+	>(() => voiceOutputCache);
+	const [voiceOutputSaving, setVoiceOutputSaving] = useState(false);
 
 	useEffect(() => {
 		if (section !== "Models") {
@@ -158,6 +165,7 @@ export function SettingsView({
 		) {
 			setProviders(providerCatalogCache.providers);
 			setVoiceInput(voiceInputCache);
+			setVoiceOutput(voiceOutputCache);
 			setProvidersLoading(false);
 			setProviderCatalogError(null);
 			return;
@@ -172,6 +180,8 @@ export function SettingsView({
 			setProvidersWithCache(payload.providers);
 			voiceInputCache = payload.voiceInput;
 			setVoiceInput(payload.voiceInput);
+			voiceOutputCache = payload.voiceOutput;
+			setVoiceOutput(payload.voiceOutput);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			setProviderCatalogError(message);
@@ -235,6 +245,8 @@ export function SettingsView({
 					const nextEnabled = !p.enabled;
 					const clearsVoiceInput =
 						!nextEnabled && voiceInput?.providerId === id;
+					const clearsVoiceOutput =
+						!nextEnabled && voiceOutput?.providerId === id;
 					void persistProviderSettings(id, { enabled: nextEnabled }).then(
 						(saved) => {
 							if (saved && clearsVoiceInput) {
@@ -242,13 +254,18 @@ export function SettingsView({
 								setVoiceInput(undefined);
 								notifyVoiceInputSettingsChanged();
 							}
+							if (saved && clearsVoiceOutput) {
+								voiceOutputCache = undefined;
+								setVoiceOutput(undefined);
+								notifyVoiceOutputSettingsChanged();
+							}
 						},
 					);
 					return { ...p, enabled: nextEnabled };
 				}),
 			);
 		},
-		[persistProviderSettings, setProvidersWithCache, voiceInput],
+		[persistProviderSettings, setProvidersWithCache, voiceInput, voiceOutput],
 	);
 
 	const updateVoiceInput = useCallback(
@@ -269,6 +286,30 @@ export function SettingsView({
 				window.alert(`Failed to save voice input settings: ${message}`);
 			} finally {
 				setVoiceInputSaving(false);
+			}
+		},
+		[],
+	);
+
+	const updateVoiceOutput = useCallback(
+		async (selection: VoiceOutputSelection | undefined) => {
+			setVoiceOutputSaving(true);
+			try {
+				const result = await desktopClient.invoke<{
+					voiceOutput?: VoiceOutputSelection;
+				}>("save_voice_output_settings", {
+					provider: selection?.providerId,
+					model: selection?.modelId,
+					voice: selection?.voice,
+				});
+				voiceOutputCache = result.voiceOutput;
+				setVoiceOutput(result.voiceOutput);
+				notifyVoiceOutputSettingsChanged();
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				window.alert(`Failed to save voice output settings: ${message}`);
+			} finally {
+				setVoiceOutputSaving(false);
 			}
 		},
 		[],
@@ -447,11 +488,14 @@ export function SettingsView({
 				onConfigure={openProviderDetail}
 				onToggle={toggleProvider}
 				onVoiceInputChange={(selection) => void updateVoiceInput(selection)}
+				onVoiceOutputChange={(selection) => void updateVoiceOutput(selection)}
 				providers={providers}
 				selectedProviderId={selectedProvider.id}
 				variant="panel"
 				voiceInput={voiceInput}
 				voiceInputSaving={voiceInputSaving}
+				voiceOutput={voiceOutput}
+				voiceOutputSaving={voiceOutputSaving}
 			/>
 			<aside className="min-h-0 overflow-hidden border-l bg-background max-[1100px]:border-l-0 max-[1100px]:border-t">
 				<ProviderDetailContent
@@ -477,9 +521,12 @@ export function SettingsView({
 			onConfigure={openProviderDetail}
 			onToggle={toggleProvider}
 			onVoiceInputChange={(selection) => void updateVoiceInput(selection)}
+			onVoiceOutputChange={(selection) => void updateVoiceOutput(selection)}
 			providers={providers}
 			voiceInput={voiceInput}
 			voiceInputSaving={voiceInputSaving}
+			voiceOutput={voiceOutput}
+			voiceOutputSaving={voiceOutputSaving}
 		/>
 	);
 

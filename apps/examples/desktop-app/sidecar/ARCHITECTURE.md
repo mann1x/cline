@@ -144,6 +144,8 @@ Supported commands:
 | `save_voice_input_settings` | validates and persists the selected transcription provider/model |
 | `create_streaming_transcription_session` | mints a short-lived, transcription-bound browser token without exposing provider credentials |
 | `transcribe_audio` | configured voice input selection + provider credentials |
+| `save_voice_output_settings` | validates and persists the selected speech provider/model/voice |
+| `synthesize_speech` | configured voice output selection + provider credentials |
 | `save_provider_settings` | `saveLocalProviderSettings` |
 | `add_provider` | `addLocalProvider` |
 | `run_provider_oauth_login` | `loginLocalProvider` |

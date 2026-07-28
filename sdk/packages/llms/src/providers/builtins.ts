@@ -387,6 +387,20 @@ function buildOpenAICodexModels(): Record<string, ModelInfo> {
 }
 
 function buildElevenLabsModels(): Record<string, ModelInfo> {
+	const speechModel = (
+		id: string,
+		name: string,
+		description: string,
+	): ModelInfo => ({
+		id,
+		name,
+		description,
+		family: "elevenlabs",
+		modalities: {
+			input: ["text"],
+			output: ["audio"],
+		},
+	});
 	return {
 		scribe_v2: {
 			id: "scribe_v2",
@@ -399,6 +413,26 @@ function buildElevenLabsModels(): Record<string, ModelInfo> {
 				output: ["text"],
 			},
 		},
+		eleven_v3: speechModel(
+			"eleven_v3",
+			"Eleven v3",
+			"Expressive multilingual text-to-speech model",
+		),
+		eleven_multilingual_v2: speechModel(
+			"eleven_multilingual_v2",
+			"Eleven Multilingual v2",
+			"High-quality multilingual text-to-speech model",
+		),
+		eleven_flash_v2_5: speechModel(
+			"eleven_flash_v2_5",
+			"Eleven Flash v2.5",
+			"Low-latency multilingual text-to-speech model",
+		),
+		eleven_turbo_v2_5: speechModel(
+			"eleven_turbo_v2_5",
+			"Eleven Turbo v2.5",
+			"Fast, high-quality multilingual text-to-speech model",
+		),
 	};
 }
 
@@ -986,7 +1020,7 @@ const BUILTIN_SPEC_OVERRIDES: BuiltinSpecOverride[] = [
 		defaultModelId: "scribe_v2",
 		apiKeyEnv: ["ELEVENLABS_API_KEY"],
 		modelsFactory: buildElevenLabsModels,
-		docsUrl: "https://elevenlabs.io/docs/overview/capabilities/speech-to-text",
+		docsUrl: "https://elevenlabs.io/docs/overview",
 		defaults: { baseUrl: "https://api.elevenlabs.io/v1" },
 	},
 	{

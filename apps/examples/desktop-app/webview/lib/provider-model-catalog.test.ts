@@ -3,6 +3,8 @@ import {
 	buildProviderModelCatalog,
 	isChatModel,
 	isDedicatedTranscriptionModel,
+	isSpeechGenerationModel,
+	selectSpeechGenerationModel,
 	selectTranscriptionModel,
 	supportsAudio,
 } from "./provider-model-catalog";
@@ -61,6 +63,39 @@ describe("transcription model selection", () => {
 				outputModalities: ["text"],
 			}),
 		).toBe(false);
+	});
+
+	it("selects dedicated text-to-audio models for voice playback", () => {
+		const provider: Provider = {
+			id: "gemini",
+			name: "Google Gemini",
+			models: 1,
+			color: "#000000",
+			letter: "GG",
+			enabled: true,
+			modelList: [
+				{
+					id: "gemini-2.5-flash-preview-tts",
+					name: "Gemini 2.5 Flash Preview TTS",
+					inputModalities: ["text"],
+					outputModalities: ["audio"],
+				},
+			],
+		};
+		expect(isSpeechGenerationModel(provider.modelList![0])).toBe(true);
+		expect(
+			selectSpeechGenerationModel([provider], {
+				providerId: "gemini",
+				modelId: "gemini-2.5-flash-preview-tts",
+				voice: "Kore",
+			}),
+		).toEqual({
+			providerId: "gemini",
+			providerName: "Google Gemini",
+			modelId: "gemini-2.5-flash-preview-tts",
+			modelName: "Gemini 2.5 Flash Preview TTS",
+			voice: "Kore",
+		});
 	});
 
 	it("keeps audio utility models out of the chat model selector", () => {

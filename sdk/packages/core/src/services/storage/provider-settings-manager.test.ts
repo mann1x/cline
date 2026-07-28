@@ -108,6 +108,42 @@ describe("ProviderSettingsManager", () => {
 		});
 	});
 
+	it("persists voice output provider, model, and voice independently", () => {
+		const tempDir = mkdtempSync(
+			path.join(os.tmpdir(), "core-provider-settings-"),
+		);
+		tempDirs.push(tempDir);
+		const filePath = path.join(tempDir, "provider-settings.json");
+		const manager = new ProviderSettingsManager({ filePath });
+
+		manager.setVoiceOutputSettings({
+			providerId: "gemini",
+			modelId: "gemini-2.5-flash-preview-tts",
+			voice: "Kore",
+		});
+
+		const reloaded = new ProviderSettingsManager({ filePath });
+		expect(reloaded.getVoiceOutputSettings()).toEqual({
+			providerId: "gemini",
+			modelId: "gemini-2.5-flash-preview-tts",
+			voice: "Kore",
+		});
+		expect(JSON.parse(readFileSync(filePath, "utf8"))).toMatchObject({
+			modes: {
+				voiceOutput: {
+					providerId: "gemini",
+					modelId: "gemini-2.5-flash-preview-tts",
+					voice: "Kore",
+				},
+			},
+		});
+
+		reloaded.setVoiceOutputSettings(undefined);
+		expect(
+			new ProviderSettingsManager({ filePath }).getVoiceOutputSettings(),
+		).toBeUndefined();
+	});
+
 	it("writes atomically, leaving no temp file behind", () => {
 		const tempDir = mkdtempSync(
 			path.join(os.tmpdir(), "core-provider-settings-"),

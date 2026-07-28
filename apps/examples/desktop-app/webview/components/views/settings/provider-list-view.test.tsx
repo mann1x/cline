@@ -3,7 +3,11 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Provider, VoiceInputSelection } from "@/lib/provider-schema";
+import type {
+	Provider,
+	VoiceInputSelection,
+	VoiceOutputSelection,
+} from "@/lib/provider-schema";
 import {
 	ProviderDetailContent,
 	ProviderListContent,
@@ -23,6 +27,12 @@ const providers: Provider[] = [
 				name: "Scribe v2",
 				inputModalities: ["audio"],
 				outputModalities: ["text"],
+			},
+			{
+				id: "eleven_turbo_v2_5",
+				name: "Eleven Turbo v2.5",
+				inputModalities: ["text"],
+				outputModalities: ["audio"],
 			},
 		],
 	},
@@ -73,6 +83,45 @@ afterEach(async () => {
 });
 
 describe("ProviderListContent voice input settings", () => {
+	it("opens and focuses provider search with Cmd+F or Ctrl+F", async () => {
+		await act(async () => {
+			root.render(
+				<ProviderListContent
+					onAddProvider={vi.fn()}
+					onConfigure={vi.fn()}
+					onToggle={vi.fn()}
+					onVoiceInputChange={vi.fn()}
+					onVoiceOutputChange={vi.fn()}
+					providers={providers}
+				/>,
+			);
+		});
+
+		const cmdFind = new KeyboardEvent("keydown", {
+			key: "f",
+			metaKey: true,
+			bubbles: true,
+			cancelable: true,
+		});
+		await act(async () => window.dispatchEvent(cmdFind));
+		const searchInput = container.querySelector<HTMLInputElement>(
+			'[aria-label="Search model providers"]',
+		);
+		expect(cmdFind.defaultPrevented).toBe(true);
+		expect(document.activeElement).toBe(searchInput);
+
+		searchInput?.blur();
+		const ctrlFind = new KeyboardEvent("keydown", {
+			key: "F",
+			ctrlKey: true,
+			bubbles: true,
+			cancelable: true,
+		});
+		await act(async () => window.dispatchEvent(ctrlFind));
+		expect(ctrlFind.defaultPrevented).toBe(true);
+		expect(document.activeElement).toBe(searchInput);
+	});
+
 	it("lets the user choose and clear the voice provider and model", async () => {
 		const onVoiceInputChange = vi.fn();
 		let selection: VoiceInputSelection | undefined = {
@@ -87,6 +136,7 @@ describe("ProviderListContent voice input settings", () => {
 						onConfigure={vi.fn()}
 						onToggle={vi.fn()}
 						onVoiceInputChange={onVoiceInputChange}
+						onVoiceOutputChange={vi.fn()}
 						providers={providers}
 						voiceInput={selection}
 					/>,
@@ -141,6 +191,64 @@ describe("ProviderListContent voice input settings", () => {
 			groqProviderSelect.dispatchEvent(new Event("change", { bubbles: true }));
 		});
 		expect(onVoiceInputChange).toHaveBeenLastCalledWith(undefined);
+	});
+
+	it("lets the user configure a text-to-audio model and provider voice", async () => {
+		const onVoiceOutputChange = vi.fn();
+		let selection: VoiceOutputSelection | undefined;
+		const render = async () => {
+			await act(async () => {
+				root.render(
+					<ProviderListContent
+						onAddProvider={vi.fn()}
+						onConfigure={vi.fn()}
+						onToggle={vi.fn()}
+						onVoiceInputChange={vi.fn()}
+						onVoiceOutputChange={onVoiceOutputChange}
+						providers={providers}
+						voiceOutput={selection}
+					/>,
+				);
+			});
+		};
+
+		await render();
+		const providerSelect = container.querySelector<HTMLSelectElement>(
+			'[aria-label="Voice output provider"]',
+		);
+		await act(async () => {
+			if (!providerSelect) return;
+			providerSelect.value = "elevenlabs";
+			providerSelect.dispatchEvent(new Event("change", { bubbles: true }));
+		});
+		expect(onVoiceOutputChange).toHaveBeenLastCalledWith({
+			providerId: "elevenlabs",
+			modelId: "eleven_turbo_v2_5",
+		});
+
+		selection = {
+			providerId: "elevenlabs",
+			modelId: "eleven_turbo_v2_5",
+		};
+		await render();
+		const voiceInput = container.querySelector<HTMLInputElement>(
+			'[aria-label="Voice output voice"]',
+		);
+		await act(async () => {
+			if (!voiceInput) return;
+			const setValue = Object.getOwnPropertyDescriptor(
+				HTMLInputElement.prototype,
+				"value",
+			)?.set;
+			setValue?.call(voiceInput, "voice-123");
+			voiceInput.dispatchEvent(new Event("input", { bubbles: true }));
+			voiceInput.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+		});
+		expect(onVoiceOutputChange).toHaveBeenLastCalledWith({
+			providerId: "elevenlabs",
+			modelId: "eleven_turbo_v2_5",
+			voice: "voice-123",
+		});
 	});
 });
 

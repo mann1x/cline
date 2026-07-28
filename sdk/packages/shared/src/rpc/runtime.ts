@@ -207,10 +207,17 @@ export interface VoiceInputSelection {
 	modelId: string;
 }
 
+export interface VoiceOutputSelection {
+	providerId: string;
+	modelId: string;
+	voice?: string;
+}
+
 export interface ProviderCatalogResponse {
 	providers: ProviderListItem[];
 	settingsPath: string;
 	voiceInput?: VoiceInputSelection;
+	voiceOutput?: VoiceOutputSelection;
 }
 
 export interface ProviderModelsResponse {
