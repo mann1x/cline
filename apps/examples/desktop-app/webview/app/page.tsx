@@ -323,6 +323,9 @@ export default function Home() {
 									onDeleteSession={handleDeleteSession}
 									onNewThread={handleNewThread}
 									onOpenSession={handleOpenSession}
+									onOpenVoiceInputSettings={() =>
+										handleSettingsSectionChange("Models")
+									}
 									onThreadStarted={handleThreadStarted}
 								/>
 							</div>
@@ -356,6 +359,7 @@ function ChatThreadPane({
 	onDeleteSession,
 	onNewThread,
 	onOpenSession,
+	onOpenVoiceInputSettings,
 	onThreadStarted,
 }: {
 	threadId: string;
@@ -368,6 +372,7 @@ function ChatThreadPane({
 	onDeleteSession?: (sessionId: string, threadId?: string) => void;
 	onNewThread?: () => void;
 	onOpenSession?: (session: SessionHistoryItem) => void;
+	onOpenVoiceInputSettings?: () => void;
 	onThreadStarted?: (threadId: string) => void;
 }) {
 	const {
@@ -1175,6 +1180,7 @@ function ChatThreadPane({
 				}))
 			}
 			onPromptInputChange={handlePromptInputChange}
+			onOpenVoiceInputSettings={onOpenVoiceInputSettings}
 			onReasoningChange={handleReasoningChange}
 			onSteerPromptInQueue={(promptId) => {
 				void steerPromptInQueue(promptId);

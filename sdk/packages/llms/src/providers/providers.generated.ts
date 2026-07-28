@@ -63,10 +63,11 @@ export const GENERATED_PROVIDER_SPECS: readonly BuiltinSpec[] = [
     "description": "abliteration.ai model provider from models.dev",
     "family": "openai-compatible",
     "capabilities": [
-      "tools"
+      "tools",
+      "reasoning"
     ],
     "modelsProviderId": "abliteration-ai",
-    "defaultModelId": "abliterated-model",
+    "defaultModelId": "abliterated-model-large",
     "apiKeyEnv": [
       "ABLIT_KEY"
     ],
@@ -96,6 +97,26 @@ export const GENERATED_PROVIDER_SPECS: readonly BuiltinSpec[] = [
     }
   },
   {
+    "id": "aiand",
+    "name": "ai&",
+    "description": "ai& model provider from models.dev",
+    "family": "openai-compatible",
+    "capabilities": [
+      "tools",
+      "reasoning",
+      "prompt-cache"
+    ],
+    "modelsProviderId": "aiand",
+    "defaultModelId": "moonshotai/kimi-k3",
+    "apiKeyEnv": [
+      "AIAND_API_KEY"
+    ],
+    "docsUrl": "https://docs.aiand.com/",
+    "defaults": {
+      "baseUrl": "https://api.aiand.com/v1"
+    }
+  },
+  {
     "id": "aihubmix",
     "name": "AIHubMix",
     "description": "AIHubMix model provider from models.dev",
@@ -106,11 +127,30 @@ export const GENERATED_PROVIDER_SPECS: readonly BuiltinSpec[] = [
       "prompt-cache"
     ],
     "modelsProviderId": "aihubmix",
-    "defaultModelId": "gpt-5.6-luna",
+    "defaultModelId": "kimi-k3",
     "apiKeyEnv": [
       "AIHUBMIX_API_KEY"
     ],
     "docsUrl": "https://docs.aihubmix.com"
+  },
+  {
+    "id": "aki-io",
+    "name": "AKI.IO",
+    "description": "AKI.IO model provider from models.dev",
+    "family": "openai-compatible",
+    "capabilities": [
+      "tools",
+      "reasoning"
+    ],
+    "modelsProviderId": "aki-io",
+    "defaultModelId": "kimi-k2.7-code-1100b",
+    "apiKeyEnv": [
+      "AKI_IO_API_KEY"
+    ],
+    "docsUrl": "https://aki.io/docs/",
+    "defaults": {
+      "baseUrl": "https://aki.io/v1"
+    }
   },
   {
     "id": "alibaba",
@@ -261,7 +301,7 @@ export const GENERATED_PROVIDER_SPECS: readonly BuiltinSpec[] = [
       "prompt-cache"
     ],
     "modelsProviderId": "anthropic",
-    "defaultModelId": "claude-sonnet-5",
+    "defaultModelId": "claude-opus-5",
     "apiKeyEnv": [
       "ANTHROPIC_API_KEY"
     ],
@@ -353,7 +393,7 @@ export const GENERATED_PROVIDER_SPECS: readonly BuiltinSpec[] = [
       "prompt-cache"
     ],
     "modelsProviderId": "baseten",
-    "defaultModelId": "thinkingmachines/inkling",
+    "defaultModelId": "moonshotai/Kimi-K3",
     "apiKeyEnv": [
       "BASETEN_API_KEY"
     ],
@@ -373,7 +413,7 @@ export const GENERATED_PROVIDER_SPECS: readonly BuiltinSpec[] = [
       "prompt-cache"
     ],
     "modelsProviderId": "bedrock",
-    "defaultModelId": "openai.gpt-5.6-luna",
+    "defaultModelId": "anthropic.claude-opus-5",
     "apiKeyEnv": [
       "AWS_ACCESS_KEY_ID",
       "AWS_SECRET_ACCESS_KEY",
@@ -508,7 +548,7 @@ export const GENERATED_PROVIDER_SPECS: readonly BuiltinSpec[] = [
       "prompt-cache"
     ],
     "modelsProviderId": "cline-pass",
-    "defaultModelId": "cline-pass/glm-5.2",
+    "defaultModelId": "cline-pass/kimi-k3",
     "apiKeyEnv": [
       "CLINE_API_KEY"
     ],
@@ -568,7 +608,7 @@ export const GENERATED_PROVIDER_SPECS: readonly BuiltinSpec[] = [
       "prompt-cache"
     ],
     "modelsProviderId": "cortecs",
-    "defaultModelId": "glm-5.2",
+    "defaultModelId": "hy3",
     "apiKeyEnv": [
       "CORTECS_API_KEY"
     ],
@@ -588,7 +628,7 @@ export const GENERATED_PROVIDER_SPECS: readonly BuiltinSpec[] = [
       "prompt-cache"
     ],
     "modelsProviderId": "crof",
-    "defaultModelId": "glm-5.2",
+    "defaultModelId": "kimi-k3",
     "apiKeyEnv": [
       "CROF_API_KEY"
     ],
@@ -608,7 +648,7 @@ export const GENERATED_PROVIDER_SPECS: readonly BuiltinSpec[] = [
       "prompt-cache"
     ],
     "modelsProviderId": "crossmodel",
-    "defaultModelId": "moonshot/kimi-k3",
+    "defaultModelId": "anthropic/claude-opus-5",
     "apiKeyEnv": [
       "CROSSMODEL_API_KEY"
     ],
@@ -708,7 +748,7 @@ export const GENERATED_PROVIDER_SPECS: readonly BuiltinSpec[] = [
       "reasoning"
     ],
     "modelsProviderId": "dinference",
-    "defaultModelId": "glm-5.1",
+    "defaultModelId": "glm-5.2",
     "apiKeyEnv": [
       "DINFERENCE_API_KEY"
     ],
@@ -825,7 +865,7 @@ export const GENERATED_PROVIDER_SPECS: readonly BuiltinSpec[] = [
       "prompt-cache"
     ],
     "modelsProviderId": "fireworks",
-    "defaultModelId": "accounts/fireworks/routers/glm-5p2-fast",
+    "defaultModelId": "accounts/fireworks/models/kimi-k3",
     "apiKeyEnv": [
       "FIREWORKS_API_KEY"
     ],
@@ -924,7 +964,7 @@ export const GENERATED_PROVIDER_SPECS: readonly BuiltinSpec[] = [
       "prompt-cache"
     ],
     "modelsProviderId": "github-copilot",
-    "defaultModelId": "gpt-5.6-luna",
+    "defaultModelId": "claude-opus-5",
     "apiKeyEnv": [
       "GITHUB_TOKEN"
     ],
@@ -1010,6 +1050,25 @@ export const GENERATED_PROVIDER_SPECS: readonly BuiltinSpec[] = [
     }
   },
   {
+    "id": "hetzner",
+    "name": "Hetzner",
+    "description": "Hetzner model provider from models.dev",
+    "family": "openai-compatible",
+    "capabilities": [
+      "tools",
+      "reasoning"
+    ],
+    "modelsProviderId": "hetzner",
+    "defaultModelId": "Qwen/Qwen3.6-35B-A3B-FP8",
+    "apiKeyEnv": [
+      "HETZNER_API_KEY"
+    ],
+    "docsUrl": "https://experiments.hetzner.com/docs/inference",
+    "defaults": {
+      "baseUrl": "https://inference.hetzner.com/api/v1"
+    }
+  },
+  {
     "id": "hpc-ai",
     "name": "HPC-AI",
     "description": "HPC-AI model provider from models.dev",
@@ -1040,13 +1099,33 @@ export const GENERATED_PROVIDER_SPECS: readonly BuiltinSpec[] = [
       "prompt-cache"
     ],
     "modelsProviderId": "huggingface",
-    "defaultModelId": "zai-org/GLM-5.2",
+    "defaultModelId": "moonshotai/Kimi-K3",
     "apiKeyEnv": [
       "HF_TOKEN"
     ],
     "docsUrl": "https://huggingface.co/docs/inference-providers",
     "defaults": {
       "baseUrl": "https://router.huggingface.co/v1"
+    }
+  },
+  {
+    "id": "hyper",
+    "name": "Charm Hyper",
+    "description": "Charm Hyper model provider from models.dev",
+    "family": "openai-compatible",
+    "capabilities": [
+      "tools",
+      "reasoning",
+      "prompt-cache"
+    ],
+    "modelsProviderId": "hyper",
+    "defaultModelId": "deepseek-v4-flash",
+    "apiKeyEnv": [
+      "HYPER_API_KEY"
+    ],
+    "docsUrl": "https://hyper.charm.land",
+    "defaults": {
+      "baseUrl": "https://hyper.charm.land/v1"
     }
   },
   {
@@ -1194,7 +1273,7 @@ export const GENERATED_PROVIDER_SPECS: readonly BuiltinSpec[] = [
       "reasoning"
     ],
     "modelsProviderId": "kenari",
-    "defaultModelId": "glm-5-2",
+    "defaultModelId": "kimi-k3",
     "apiKeyEnv": [
       "KENARI_API_KEY"
     ],
@@ -1310,7 +1389,7 @@ export const GENERATED_PROVIDER_SPECS: readonly BuiltinSpec[] = [
       "prompt-cache"
     ],
     "modelsProviderId": "llmgateway",
-    "defaultModelId": "kimi-k3",
+    "defaultModelId": "claude-opus-5",
     "apiKeyEnv": [
       "LLMGATEWAY_API_KEY"
     ],
@@ -1728,7 +1807,7 @@ export const GENERATED_PROVIDER_SPECS: readonly BuiltinSpec[] = [
       "prompt-cache"
     ],
     "modelsProviderId": "nebius",
-    "defaultModelId": "zai-org/GLM-5.2",
+    "defaultModelId": "moonshotai/Kimi-K3",
     "apiKeyEnv": [
       "NEBIUS_API_KEY"
     ],
@@ -1828,13 +1907,33 @@ export const GENERATED_PROVIDER_SPECS: readonly BuiltinSpec[] = [
       "prompt-cache"
     ],
     "modelsProviderId": "nvidia",
-    "defaultModelId": "z-ai/glm-5.2",
+    "defaultModelId": "thinkingmachines/inkling",
     "apiKeyEnv": [
       "NVIDIA_API_KEY"
     ],
     "docsUrl": "https://docs.api.nvidia.com/nim/",
     "defaults": {
       "baseUrl": "https://integrate.api.nvidia.com/v1"
+    }
+  },
+  {
+    "id": "ofox",
+    "name": "Ofox",
+    "description": "Ofox model provider from models.dev",
+    "family": "openai-compatible",
+    "capabilities": [
+      "tools",
+      "reasoning",
+      "prompt-cache"
+    ],
+    "modelsProviderId": "ofox",
+    "defaultModelId": "openai/gpt-5.6-luna",
+    "apiKeyEnv": [
+      "OFOX_API_KEY"
+    ],
+    "docsUrl": "https://ofox.ai/docs",
+    "defaults": {
+      "baseUrl": "https://api.ofox.ai/v1"
     }
   },
   {
@@ -1847,7 +1946,7 @@ export const GENERATED_PROVIDER_SPECS: readonly BuiltinSpec[] = [
       "reasoning"
     ],
     "modelsProviderId": "ollama",
-    "defaultModelId": "glm-5.2",
+    "defaultModelId": "kimi-k3",
     "apiKeyEnv": [
       "OLLAMA_API_KEY"
     ],
@@ -1884,7 +1983,7 @@ export const GENERATED_PROVIDER_SPECS: readonly BuiltinSpec[] = [
       "prompt-cache"
     ],
     "modelsProviderId": "opencode",
-    "defaultModelId": "gemini-3.5-flash-lite",
+    "defaultModelId": "claude-opus-5",
     "apiKeyEnv": [
       "OPENCODE_API_KEY"
     ],
@@ -1924,7 +2023,7 @@ export const GENERATED_PROVIDER_SPECS: readonly BuiltinSpec[] = [
       "prompt-cache"
     ],
     "modelsProviderId": "openrouter",
-    "defaultModelId": "google/gemini-3.5-flash-lite",
+    "defaultModelId": "qwen/qwen3.7-flash",
     "apiKeyEnv": [
       "OPENROUTER_API_KEY"
     ],
@@ -2042,7 +2141,7 @@ export const GENERATED_PROVIDER_SPECS: readonly BuiltinSpec[] = [
       "reasoning"
     ],
     "modelsProviderId": "poolside",
-    "defaultModelId": "poolside/laguna-xs-2.1",
+    "defaultModelId": "poolside/laguna-s-2.1",
     "apiKeyEnv": [
       "POOLSIDE_API_KEY"
     ],
@@ -2450,7 +2549,7 @@ export const GENERATED_PROVIDER_SPECS: readonly BuiltinSpec[] = [
       "prompt-cache"
     ],
     "modelsProviderId": "synthetic",
-    "defaultModelId": "hf:zai-org/GLM-5.2",
+    "defaultModelId": "hf:moonshotai/Kimi-K3",
     "apiKeyEnv": [
       "SYNTHETIC_API_KEY"
     ],
@@ -2539,20 +2638,20 @@ export const GENERATED_PROVIDER_SPECS: readonly BuiltinSpec[] = [
     "id": "thinkingmachines",
     "name": "Thinking Machines",
     "description": "Thinking Machines model provider from models.dev",
-    "family": "openai-compatible",
+    "family": "anthropic",
     "capabilities": [
       "tools",
       "reasoning",
       "prompt-cache"
     ],
     "modelsProviderId": "thinkingmachines",
-    "defaultModelId": "inkling",
+    "defaultModelId": "thinkingmachines/Inkling",
     "apiKeyEnv": [
       "TINKER_API_KEY"
     ],
-    "docsUrl": "https://tinker-docs.thinkingmachines.ai/tinker/compatible-apis/openai/",
+    "docsUrl": "https://tinker-docs.thinkingmachines.ai/tinker/compatible-apis/anthropic/",
     "defaults": {
-      "baseUrl": "https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/v1"
+      "baseUrl": "https://tinker.thinkingmachines.dev/services/tinker-prod/anthropic/api/v1"
     }
   },
   {
@@ -2585,7 +2684,7 @@ export const GENERATED_PROVIDER_SPECS: readonly BuiltinSpec[] = [
       "prompt-cache"
     ],
     "modelsProviderId": "together",
-    "defaultModelId": "thinkingmachines/Inkling",
+    "defaultModelId": "moonshotai/Kimi-K3",
     "apiKeyEnv": [
       "TOGETHER_API_KEY"
     ],
@@ -2714,7 +2813,7 @@ export const GENERATED_PROVIDER_SPECS: readonly BuiltinSpec[] = [
       "prompt-cache"
     ],
     "modelsProviderId": "vercel-ai-gateway",
-    "defaultModelId": "google/gemini-3.5-flash-lite",
+    "defaultModelId": "moonshotai/kimi-k3-fast",
     "apiKeyEnv": [
       "AI_GATEWAY_API_KEY"
     ],
@@ -2731,7 +2830,7 @@ export const GENERATED_PROVIDER_SPECS: readonly BuiltinSpec[] = [
       "prompt-cache"
     ],
     "modelsProviderId": "vertex",
-    "defaultModelId": "claude-sonnet-5@default",
+    "defaultModelId": "claude-opus-5@default",
     "apiKeyEnv": [
       "GOOGLE_VERTEX_PROJECT",
       "GOOGLE_VERTEX_LOCATION",

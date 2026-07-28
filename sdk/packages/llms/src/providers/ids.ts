@@ -13,6 +13,7 @@ export enum BUILT_IN_PROVIDER {
 	CLAUDE_CODE = "claude-code",
 	CLINE = "cline",
 	CLINE_PASS = "cline-pass",
+	ELEVENLABS = "elevenlabs",
 	// OpenAI variants
 	OPENAI_COMPATIBLE = "openai-compatible",
 	OPENAI_NATIVE = "openai-native",
@@ -73,7 +74,8 @@ export enum BUILT_IN_PROVIDER {
  *
  * Keep this map as the single source of truth for alias handling.
  */
-export type GeneratedBuiltInProviderId = (typeof GENERATED_PROVIDER_IDS)[number];
+export type GeneratedBuiltInProviderId =
+	(typeof GENERATED_PROVIDER_IDS)[number];
 
 export type BuiltInProviderId = BUILT_IN_PROVIDER | GeneratedBuiltInProviderId;
 

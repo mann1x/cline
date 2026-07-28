@@ -7,7 +7,7 @@ import {
 	fetchClineRecommendedModelsPayload,
 	normalizeClineRecommendedProviderModels,
 } from "./catalog-cline-recommended";
-import type { ModelInfo } from "./types";
+import type { ModelInfo, ModelModality } from "./types";
 
 export interface ModelsDevModel {
 	name?: string;
@@ -30,6 +30,7 @@ export interface ModelsDevModel {
 	};
 	modalities?: {
 		input?: string[];
+		output?: string[];
 	};
 	status?: string;
 }
@@ -177,7 +178,30 @@ function getSelectedModelsDevProviders(
 	return selected;
 }
 
-function toCapabilities(model: ModelsDevModel): ModelInfo["capabilities"] {
+function isStreamingTranscriptionModel(
+	modelId: string,
+	model: ModelsDevModel,
+): boolean {
+	const isDedicatedTranscriptionModel =
+		model.modalities?.input?.length === 1 &&
+		model.modalities.input[0] === "audio" &&
+		model.modalities.output?.length === 1 &&
+		model.modalities.output[0] === "text";
+	if (!isDedicatedTranscriptionModel) {
+		return false;
+	}
+
+	// models.dev exposes modalities but does not currently distinguish batch
+	// transcription from WebSocket-only transcription. Realtime transcription
+	// models consistently carry "realtime" in their canonical model/name.
+	const identity = `${modelId} ${model.name ?? ""}`.toLowerCase();
+	return /(?:^|[/_.-])realtime(?:$|[/_.-])/.test(identity);
+}
+
+function toCapabilities(
+	modelId: string,
+	model: ModelsDevModel,
+): ModelInfo["capabilities"] {
 	const capabilities: NonNullable<ModelInfo["capabilities"]> = [];
 	if (model.modalities?.input?.includes("image")) {
 		capabilities.push("images");
@@ -197,6 +221,9 @@ function toCapabilities(model: ModelsDevModel): ModelInfo["capabilities"] {
 	if (model.temperature === true) {
 		capabilities.push("temperature");
 	}
+	if (isStreamingTranscriptionModel(modelId, model)) {
+		capabilities.push("transcription-streaming");
+	}
 	if (
 		(model.cost?.cache_read && model.cost?.cache_read >= 0) ||
 		(model.cost?.cache_write && model.cost?.cache_write >= 0)
@@ -204,6 +231,51 @@ function toCapabilities(model: ModelsDevModel): ModelInfo["capabilities"] {
 		capabilities.push("prompt-cache");
 	}
 	return Array.from(new Set(capabilities));
+}
+
+const KNOWN_MODEL_MODALITIES = new Set<ModelModality>([
+	"text",
+	"image",
+	"audio",
+	"video",
+	"pdf",
+]);
+
+function toModalities(
+	modalities: ModelsDevModel["modalities"],
+): ModelInfo["modalities"] {
+	if (!modalities) {
+		return undefined;
+	}
+	const normalize = (values: string[] | undefined): ModelModality[] =>
+		Array.from(
+			new Set(
+				(values ?? []).filter((value): value is ModelModality =>
+					KNOWN_MODEL_MODALITIES.has(value as ModelModality),
+				),
+			),
+		);
+	const input = normalize(modalities.input);
+	const output = normalize(modalities.output);
+	if (!input.includes("audio") && !output.includes("audio")) {
+		return undefined;
+	}
+	return { input, output };
+}
+
+function isAudioModel(model: ModelsDevModel): boolean {
+	return (
+		model.modalities?.input?.includes("audio") === true ||
+		model.modalities?.output?.includes("audio") === true
+	);
+}
+
+function isChatModel(model: ModelInfo): boolean {
+	return (
+		(model.modalities === undefined ||
+			model.modalities.input.includes("text")) &&
+		(model.modalities === undefined || model.modalities.output.includes("text"))
+	);
 }
 
 function toStatus(status: string | undefined): ModelInfo["status"] {
@@ -234,6 +306,7 @@ function toModelInfo(modelId: string, model: ModelsDevModel): ModelInfo {
 	const maxInputTokens = resolveMaxInputTokens(model.limit);
 	const outputToken = model.limit?.output ?? DEFAULT_MAX_TOKENS;
 	const rawContextLimit = model.limit?.context;
+	const modalities = toModalities(model.modalities);
 
 	return {
 		id: modelId,
@@ -241,7 +314,7 @@ function toModelInfo(modelId: string, model: ModelsDevModel): ModelInfo {
 		contextWindow: rawContextLimit,
 		maxInputTokens,
 		maxTokens: Math.floor(outputToken),
-		capabilities: toCapabilities(model),
+		capabilities: toCapabilities(modelId, model),
 		pricing: {
 			input: model.cost?.input ?? 0,
 			output: model.cost?.output ?? 0,
@@ -251,6 +324,7 @@ function toModelInfo(modelId: string, model: ModelsDevModel): ModelInfo {
 		status: toStatus(model.status),
 		releaseDate: model.release_date,
 		family: model.family,
+		...(modalities !== undefined ? { modalities } : {}),
 	};
 }
 
@@ -272,7 +346,10 @@ export function normalizeModelsDevProviderModels(
 
 		const models: Record<string, ModelInfo> = {};
 		for (const [modelId, model] of Object.entries(source.models)) {
-			if (model.tool_call !== true || isDeprecatedModel(model)) {
+			if (
+				(model.tool_call !== true && !isAudioModel(model)) ||
+				isDeprecatedModel(model)
+			) {
 				continue;
 			}
 			models[modelId] = toModelInfo(modelId, model);
@@ -336,6 +413,9 @@ export function normalizeModelsDevProviderSpecs(
 	)) {
 		const baseUrl = normalizeBaseUrl(source.api);
 		const models = providerModels[targetProviderId];
+		const defaultModelId =
+			Object.values(models ?? {}).find(isChatModel)?.id ??
+			Object.keys(models ?? {})[0];
 		const spec: ModelsDevGeneratedProviderSpec = {
 			id: targetProviderId,
 			name: source.name || targetProviderId,
@@ -343,7 +423,7 @@ export function normalizeModelsDevProviderSpecs(
 			family: toProviderFamily(source),
 			capabilities: toProviderCapabilities(models),
 			modelsProviderId: targetProviderId,
-			defaultModelId: Object.keys(models ?? {})[0],
+			defaultModelId,
 			apiKeyEnv: source.env?.length ? [...source.env] : undefined,
 			docsUrl: source.doc,
 			defaults: baseUrl ? { baseUrl } : undefined,

@@ -386,6 +386,22 @@ function buildOpenAICodexModels(): Record<string, ModelInfo> {
 	return filterOpenAICodexModels(generatedModels("openai-native"));
 }
 
+function buildElevenLabsModels(): Record<string, ModelInfo> {
+	return {
+		scribe_v2: {
+			id: "scribe_v2",
+			name: "Scribe v2",
+			description:
+				"ElevenLabs speech recognition model for accurate multilingual transcription",
+			family: "elevenlabs",
+			modalities: {
+				input: ["audio"],
+				output: ["text"],
+			},
+		},
+	};
+}
+
 function buildClineModels(): Record<string, ModelInfo> {
 	// Cline is OpenRouter-backed generally, but its recommended-model endpoint
 	// can return Vercel-style ids. Include those exact ids so runtime metadata
@@ -960,6 +976,18 @@ const BUILTIN_SPEC_OVERRIDES: BuiltinSpecOverride[] = [
 		defaults: { baseUrl: "https://chatgpt.com/backend-api/codex" },
 		configFields: [],
 		metadata: { usageCostDisplay: "subscription" },
+	},
+	{
+		id: "elevenlabs",
+		name: "ElevenLabs",
+		description: "ElevenLabs speech-to-text and audio services",
+		family: "openai-compatible",
+		client: "fetch",
+		defaultModelId: "scribe_v2",
+		apiKeyEnv: ["ELEVENLABS_API_KEY"],
+		modelsFactory: buildElevenLabsModels,
+		docsUrl: "https://elevenlabs.io/docs/overview/capabilities/speech-to-text",
+		defaults: { baseUrl: "https://api.elevenlabs.io/v1" },
 	},
 	{
 		id: "anthropic",

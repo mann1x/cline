@@ -4,7 +4,12 @@ export interface ProviderModel {
 	supportsAttachments?: boolean;
 	supportsVision?: boolean;
 	supportsReasoning?: boolean;
+	supportsStreamingTranscription?: boolean;
+	inputModalities?: ModelModality[];
+	outputModalities?: ModelModality[];
 }
+
+export type ModelModality = "text" | "image" | "audio" | "video" | "pdf";
 
 export type ProviderConfigFieldType =
 	| "text"
@@ -63,6 +68,12 @@ export interface ProviderSettingsUpdate {
 export interface ProviderCatalogResponse {
 	providers: Provider[];
 	settingsPath: string;
+	voiceInput?: VoiceInputSelection;
+}
+
+export interface VoiceInputSelection {
+	providerId: string;
+	modelId: string;
 }
 
 export interface ProviderModelsResponse {

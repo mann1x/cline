@@ -25,6 +25,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { SpeechInput } from "@/components/ai-elements/speech-input";
 import {
 	Select,
 	SelectContent,
@@ -34,18 +35,23 @@ import {
 } from "@/components/ui/select";
 import { useWorkspace } from "@/contexts/workspace-context";
 import type { PromptInQueue } from "@/hooks/chat-session/types";
+import { toast } from "@/hooks/use-toast";
 import type { ChatSessionConfig, ChatSessionStatus } from "@/lib/chat-schema";
-import { desktopClient } from "@/lib/desktop-client";
+import { desktopClient, writeDesktopDebugLog } from "@/lib/desktop-client";
 import {
 	readModelSelectionStorageFromWindow,
 	writeModelSelectionStorageToWindow,
 } from "@/lib/model-selection";
 import { normalizeProviderId } from "@/lib/provider-id";
 import {
+	isChatModel,
 	loadProviderModelCatalog,
 	loadProviderModels,
+	type TranscriptionModelTarget,
+	VOICE_INPUT_SETTINGS_CHANGED_EVENT,
 } from "@/lib/provider-model-catalog";
 import { cn } from "@/lib/utils";
+import { startVercelStreamingTranscription } from "@/lib/vercel-streaming-transcription";
 import { SearchableSelect } from "./searchable-select";
 import { WorkspaceSelector as WorkspaceSelectorImpl } from "./workspace-selector";
 
@@ -113,6 +119,23 @@ const EFFORT_LEVELS: ReasoningEffortOption[] = [
 ];
 const PROMPT_INPUT_COLLAPSED_ROWS = 1;
 const PROMPT_INPUT_FOCUSED_ROWS = 5;
+const AUDIO_BASE64_CHUNK_SIZE = 0x8000;
+const MAX_RECORDED_AUDIO_BYTES = 25 * 1024 * 1024;
+
+async function blobToBase64(blob: Blob): Promise<string> {
+	const bytes = new Uint8Array(await blob.arrayBuffer());
+	let binary = "";
+	for (
+		let offset = 0;
+		offset < bytes.length;
+		offset += AUDIO_BASE64_CHUNK_SIZE
+	) {
+		binary += String.fromCharCode(
+			...bytes.subarray(offset, offset + AUDIO_BASE64_CHUNK_SIZE),
+		);
+	}
+	return window.btoa(binary);
+}
 
 function resolveEffortIndex(
 	thinking: ChatSessionConfig["thinking"],
@@ -242,6 +265,7 @@ type ChatInputBarProps = {
 		prompt: string,
 	) => Promise<void> | void;
 	onRemovePromptInQueue: (promptId: string) => Promise<void> | void;
+	onOpenVoiceInputSettings?: () => void;
 	summary: {
 		toolCalls: number;
 		tokensIn: number;
@@ -275,6 +299,7 @@ export function ChatInputBar({
 	onSteerPromptInQueue,
 	onEditPromptInQueue,
 	onRemovePromptInQueue,
+	onOpenVoiceInputSettings,
 	summary,
 }: ChatInputBarProps) {
 	const {
@@ -287,9 +312,11 @@ export function ChatInputBar({
 	// Keystrokes only update this local state; the parent page tree is not
 	// re-rendered per keypress. External writers push text in via promptDraft.
 	const [promptInput, setPromptInputState] = useState(promptDraft.value);
+	const promptInputValueRef = useRef(promptDraft.value);
 	const appliedDraftVersionRef = useRef(promptDraft.version);
 	const setPromptInput = useCallback(
 		(value: string) => {
+			promptInputValueRef.current = value;
 			setPromptInputState(value);
 			onPromptInputChange(value);
 		},
@@ -340,6 +367,12 @@ export function ChatInputBar({
 	}, [onSend, promptInput, setPromptInput]);
 	const fileInputRef = useRef<HTMLInputElement | null>(null);
 	const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
+	const streamingTranscriptRangeRef = useRef<{
+		start: number;
+		end: number;
+	} | null>(null);
+	const [transcriptionTarget, setTranscriptionTarget] =
+		useState<TranscriptionModelTarget | null>(null);
 	const [promptInputFocused, setPromptInputFocused] = useState(false);
 	const [cursorIndex, setCursorIndex] = useState(() => promptInput.length);
 	// Mention/slash detection is derived synchronously from the input +
@@ -389,6 +422,164 @@ export function ChatInputBar({
 	>(null);
 	const [queueExpanded, setQueueExpanded] = useState(false);
 	const queuedPromptsId = useId();
+
+	useEffect(() => {
+		let cancelled = false;
+		const loadVoiceInput = () => {
+			loadProviderModelCatalog()
+				.then((catalog) => {
+					if (!cancelled) setTranscriptionTarget(catalog.voiceInput);
+				})
+				.catch(() => {
+					if (!cancelled) setTranscriptionTarget(null);
+				});
+		};
+		loadVoiceInput();
+		window.addEventListener(VOICE_INPUT_SETTINGS_CHANGED_EVENT, loadVoiceInput);
+		return () => {
+			cancelled = true;
+			window.removeEventListener(
+				VOICE_INPUT_SETTINGS_CHANGED_EVENT,
+				loadVoiceInput,
+			);
+		};
+	}, []);
+
+	const handleTranscriptionChange = useCallback(
+		(transcript: string) => {
+			const text = transcript.trim();
+			if (!text) return;
+
+			const current = promptInputValueRef.current;
+			const input = promptInputRef.current;
+			const insertionStart = input?.selectionStart ?? current.length;
+			const insertionEnd = input?.selectionEnd ?? insertionStart;
+			const before = current.slice(0, insertionStart);
+			const after = current.slice(insertionEnd);
+			const leadingSpace = before.length > 0 && !/\s$/.test(before) ? " " : "";
+			const trailingSpace = after.length > 0 && !/^\s/.test(after) ? " " : "";
+			const insertedText = `${leadingSpace}${text}${trailingSpace}`;
+			const next = `${before}${insertedText}${after}`;
+			const nextCursor = before.length + insertedText.length;
+			setPromptInput(next);
+			requestAnimationFrame(() => {
+				const textarea = promptInputRef.current;
+				if (!textarea) return;
+				textarea.focus();
+				textarea.setSelectionRange(nextCursor, nextCursor);
+				setCursorIndex(nextCursor);
+			});
+		},
+		[setPromptInput],
+	);
+
+	const handleStreamingTranscriptionStart = useCallback(() => {
+		const current = promptInputValueRef.current;
+		const input = promptInputRef.current;
+		const start = input?.selectionStart ?? current.length;
+		const end = input?.selectionEnd ?? start;
+		streamingTranscriptRangeRef.current = { start, end };
+	}, []);
+
+	const handleStreamingTranscriptionChange = useCallback(
+		(transcript: string) => {
+			const text = transcript.trim();
+			const range = streamingTranscriptRangeRef.current;
+			if (!text || !range) return;
+
+			const current = promptInputValueRef.current;
+			const before = current.slice(0, range.start);
+			const after = current.slice(range.end);
+			const leadingSpace = before.length > 0 && !/\s$/.test(before) ? " " : "";
+			const trailingSpace = after.length > 0 && !/^\s/.test(after) ? " " : "";
+			const insertion = `${leadingSpace}${text}${trailingSpace}`;
+			const next = `${before}${insertion}${after}`;
+			const nextEnd = range.start + insertion.length;
+			streamingTranscriptRangeRef.current = {
+				start: range.start,
+				end: nextEnd,
+			};
+			setPromptInput(next);
+
+			requestAnimationFrame(() => {
+				const textarea = promptInputRef.current;
+				textarea?.focus();
+				textarea?.setSelectionRange(nextEnd, nextEnd);
+				setCursorIndex(nextEnd);
+			});
+		},
+		[setPromptInput],
+	);
+
+	const handleStreamingTranscriptionEnd = useCallback(() => {
+		streamingTranscriptRangeRef.current = null;
+	}, []);
+
+	const handleStartStreamingTranscription = useCallback(
+		() =>
+			startVercelStreamingTranscription({
+				onTranscript: handleStreamingTranscriptionChange,
+			}),
+		[handleStreamingTranscriptionChange],
+	);
+
+	const handleAudioRecorded = useCallback(
+		async (audioBlob: Blob): Promise<string> => {
+			if (!transcriptionTarget) {
+				throw new Error(
+					"Configure an audio-to-text provider before using speech input",
+				);
+			}
+			if (audioBlob.size > MAX_RECORDED_AUDIO_BYTES) {
+				throw new Error("Recorded audio exceeds the 25 MiB upload limit");
+			}
+			writeDesktopDebugLog({
+				scope: "voice-input",
+				level: "debug",
+				message: "Webview recorded audio and is sending it to the sidecar",
+				timestamp: new Date().toISOString(),
+				metadata: {
+					providerId: transcriptionTarget.providerId,
+					modelId: transcriptionTarget.modelId,
+					mediaType: audioBlob.type,
+					audioBytes: audioBlob.size,
+				},
+			});
+			const audioBase64 = await blobToBase64(audioBlob);
+			const result = await desktopClient.invoke<{ text?: string }>(
+				"transcribe_audio",
+				{
+					audioBase64,
+					mediaType: audioBlob.type,
+				},
+			);
+			const text = result.text?.trim();
+			if (!text) {
+				throw new Error("The transcription provider returned no text");
+			}
+			return text;
+		},
+		[transcriptionTarget],
+	);
+
+	const handleSpeechInputError = useCallback((error: unknown) => {
+		const message =
+			error instanceof Error
+				? error.message
+				: "Check microphone permission and audio provider settings.";
+		writeDesktopDebugLog({
+			scope: "voice-input",
+			level: "error",
+			message: "Speech input failed in the webview",
+			timestamp: new Date().toISOString(),
+			metadata: { failure: message },
+		});
+		toast({
+			variant: "destructive",
+			title: "Speech input failed",
+			description: message,
+		});
+	}, []);
 
 	const tokensSummary = useMemo(() => {
 		const total = summary.tokensIn + summary.tokensOut;
@@ -1235,6 +1426,39 @@ export function ChatInputBar({
 								<CircleStop className="h-4 w-4" />
 							</button>
 						)}
+						<SpeechInput
+							allowUnavailableClick={!transcriptionTarget}
+							onAudioRecorded={handleAudioRecorded}
+							onClick={(event) => {
+								if (!transcriptionTarget) {
+									event.preventDefault();
+									onOpenVoiceInputSettings?.();
+								}
+							}}
+							onError={handleSpeechInputError}
+							onStartStreaming={
+								transcriptionTarget?.supportsStreaming
+									? handleStartStreamingTranscription
+									: undefined
+							}
+							onStreamingEnd={handleStreamingTranscriptionEnd}
+							onStreamingStart={handleStreamingTranscriptionStart}
+							onTranscriptionChange={
+								transcriptionTarget?.supportsStreaming
+									? undefined
+									: handleTranscriptionChange
+							}
+							recordingMode={
+								transcriptionTarget?.supportsStreaming
+									? "streaming"
+									: "media-recorder"
+							}
+							title={
+								transcriptionTarget
+									? `${transcriptionTarget.supportsStreaming ? "Transcribe live" : "Transcribe"} with ${transcriptionTarget.providerName} / ${transcriptionTarget.modelName}`
+									: "Configure voice input in Settings → Models"
+							}
+						/>
 						{(!isBusy || canSend) && (
 							<button
 								aria-label="Send message"
@@ -1393,9 +1617,10 @@ const ModelSelector = memo(function ModelSelector({
 				if (cancelled || models.length === 0) {
 					return;
 				}
-				const modelIds = models.map((entry) => entry.id);
+				const chatModels = models.filter(isChatModel);
+				const modelIds = chatModels.map((entry) => entry.id);
 				const reasoningModelIds = models
-					.filter((entry) => entry.supportsReasoning)
+					.filter((entry) => isChatModel(entry) && entry.supportsReasoning)
 					.map((entry) => entry.id);
 				setProviderModels((current) => ({
 					...current,
