@@ -153,10 +153,10 @@ Logging can be configured with the same environment variables as the CLI:
 - `CLINE_LOG_PATH` overrides the log destination.
 - `CLINE_LOG_NAME` overrides the logger name.
 
-In a development webview, sidecar voice-input diagnostics are also streamed to
-the webview console as `[desktop:voice-input]` entries. Production builds can
-enable the same console stream with `NEXT_PUBLIC_CLINE_DEBUG_LOGS=1` at build
-time, or at runtime from DevTools with
+In a development webview, sidecar audio diagnostics are also streamed to the
+webview console as `[desktop:voice-input]` and `[desktop:realtime-voice]`
+entries. Production builds can enable the same console stream with
+`NEXT_PUBLIC_CLINE_DEBUG_LOGS=1` at build time, or at runtime from DevTools with
 `localStorage.setItem("cline.debugLogs", "1")` followed by a reload. Diagnostic
 events include the selected provider/model and sanitized endpoint, but never
 credentials, request headers, recorded audio, or transcript contents.
@@ -188,3 +188,19 @@ credentials, request headers, recorded audio, or transcript contents.
   The sidecar mints a short-lived transcription token; the long-lived gateway
   credential is never sent to the webview. Batch models such as
   `openai/whisper-1` continue to transcribe after recording stops.
+- Realtime voice is configured independently under `modes.realtimeVoice`.
+  Eligible models accept and return audio and expose a supported AI SDK
+  realtime transport through OpenAI, Google Gemini, or Vercel AI Gateway. The
+  sidecar binds a short-lived browser token to the saved provider/model/voice;
+  the webview then streams microphone and playback audio directly over the
+  provider's realtime WebSocket without receiving the provider API key. Start
+  it from the Audio Live button beside speech input in the chat composer; its
+  status panel opens directly above the composer. Tool-capable realtime models
+  receive the live audio turn and
+  delegate it through the session-scoped `run_cline` tool. That tool sends the
+  request through the active Cline chat session, then returns Cline's completed
+  response to the realtime model for spoken playback. Models without realtime
+  tool calling use a transcript bridge instead. Both paths use the same
+  persisted history, chat model, workspace context, tools, MCP servers, and
+  approval flow as typed turns. Tool approvals and questions remain visible in
+  the canonical chat UI and are reflected in the composer status panel.

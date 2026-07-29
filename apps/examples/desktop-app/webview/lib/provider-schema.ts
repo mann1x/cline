@@ -3,6 +3,8 @@ import type {
 	ProviderModeSettings,
 	ProviderModeSettingsMap,
 	ProviderModesSettings,
+	RealtimeVoiceModeSession,
+	RealtimeVoiceModeSettings,
 	VoiceInputModeSettings,
 	VoiceOutputModeSettings,
 } from "@cline/shared/browser";
@@ -13,6 +15,7 @@ export interface ProviderModel {
 	supportsAttachments?: boolean;
 	supportsVision?: boolean;
 	supportsReasoning?: boolean;
+	supportsTools?: boolean;
 	supportsStreamingTranscription?: boolean;
 	inputModalities?: ModelModality[];
 	outputModalities?: ModelModality[];
@@ -90,6 +93,8 @@ export type {
 	ProviderModeSettings,
 	ProviderModeSettingsMap,
 	ProviderModesSettings,
+	RealtimeVoiceModeSession,
+	RealtimeVoiceModeSettings,
 	VoiceInputModeSettings,
 	VoiceOutputModeSettings,
 };

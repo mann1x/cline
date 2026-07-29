@@ -2,12 +2,12 @@ import type {
 	GatewayProviderContext,
 	GatewayStreamRequest,
 } from "@cline/shared";
-import type { CallSettings } from "ai";
+import type { CallSettings, ToolSet } from "ai";
 
 export interface ProviderFactoryResult {
 	model: (modelId: string) => unknown;
 	imageModel?: (modelId: string) => unknown;
-	providerTools?: Record<string, unknown>;
+	providerTools?: ToolSet;
 	buildStreamConfig?: (
 		request: GatewayStreamRequest,
 		context: GatewayProviderContext,

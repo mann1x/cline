@@ -1,5 +1,4 @@
 import { createMistral } from "@ai-sdk/mistral";
-import type { LanguageModelV3 } from "@ai-sdk/provider";
 import type { GatewayResolvedProviderConfig } from "@cline/shared";
 import { wrapLanguageModel } from "ai";
 import { resolveApiKey } from "../http";
@@ -24,7 +23,7 @@ export async function createMistralProviderModule(
 		// converter runs. See `middleware/split-tool-images.ts`.
 		model: (modelId) =>
 			wrapLanguageModel({
-				model: provider(modelId) as LanguageModelV3,
+				model: provider(modelId),
 				middleware: splitToolImagesMiddleware,
 			}),
 	};

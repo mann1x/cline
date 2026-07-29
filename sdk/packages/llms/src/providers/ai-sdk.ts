@@ -24,6 +24,8 @@ import {
 	jsonSchema,
 	NoSuchToolError,
 	streamText,
+	type ToolSet,
+	tool,
 } from "ai";
 import { nanoid } from "nanoid";
 import { extractErrorMessage } from "./format";
@@ -518,9 +520,7 @@ function toAiSdkMessages(
 	});
 }
 
-function toAiSdkTools(
-	request: GatewayStreamRequest,
-): Record<string, unknown> | undefined {
+function toAiSdkTools(request: GatewayStreamRequest): ToolSet | undefined {
 	if (!request.tools?.length) {
 		return undefined;
 	}
@@ -533,20 +533,20 @@ function toAiSdkTools(
 	return Object.fromEntries(
 		request.tools.map((definition) => [
 			definition.name,
-			{
+			tool({
 				description: definition.description,
 				inputSchema: jsonSchema(
 					normalizeAiSdkToolInputSchema(definition.inputSchema),
-				) as never,
-			} as unknown,
+				),
+			}),
 		]),
 	);
 }
 
 function mergeAiSdkTools(
-	runtimeTools: Record<string, unknown> | undefined,
-	providerTools: Record<string, unknown> | undefined,
-): Record<string, unknown> | undefined {
+	runtimeTools: ToolSet | undefined,
+	providerTools: ToolSet | undefined,
+): ToolSet | undefined {
 	const tools = {
 		...(runtimeTools ?? {}),
 		...(providerTools ?? {}),
@@ -1472,7 +1472,7 @@ function createAiSdkProvider(kind: ProviderModuleKind): GatewayProviderFactory {
 					model: provider.model(context.model.id) as never,
 					messages: messages as never,
 					...(useSystemOption ? { system: systemPrompt } : {}),
-					tools: tools as never,
+					tools,
 					abortSignal: request.signal,
 					experimental_repairToolCall: repairMalformedToolCall as never,
 					experimental_telemetry: {

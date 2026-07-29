@@ -605,14 +605,15 @@ export {
 } from "./services/providers/local-provider-registry";
 export {
 	addLocalProvider,
-	type CreateConfiguredStreamingTranscriptionSessionRequest,
-	createConfiguredStreamingTranscriptionSession,
+	type CreateConfiguredModeSessionRequest,
+	createConfiguredModeSession,
 	type DeleteLocalProviderRequest,
 	deleteLocalProvider,
 	ensureCustomProvidersLoaded,
 	getLocalProviderModels,
 	isChatProviderModel,
 	isDedicatedTranscriptionModel,
+	isRealtimeVoiceModel,
 	isSpeechGenerationModel,
 	listLocalProviders,
 	loginAndSaveLocalProviderOAuthCredentials,

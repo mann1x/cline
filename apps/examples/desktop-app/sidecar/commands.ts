@@ -20,7 +20,7 @@ import type {
 import {
 	addLocalProvider,
 	ClineAccountService,
-	createConfiguredStreamingTranscriptionSession,
+	createConfiguredModeSession,
 	createUserInstructionConfigService,
 	discoverPluginModulePaths,
 	ensureCustomProvidersLoaded,
@@ -62,6 +62,7 @@ import {
 	ONE_TIME_SCHEDULE_CRON_PATTERN,
 	ONE_TIME_SCHEDULE_RUN_AT_METADATA_KEY,
 	ProviderModeSchema,
+	ProviderSessionModeSchema,
 	readHubScheduleMode,
 } from "@cline/shared";
 import { readFileSyncStrippingUtf8Bom } from "@cline/shared/node";
@@ -1502,45 +1503,54 @@ export async function handleCommand(
 			manager.getProviderConfig(String(args?.provider ?? "").trim()),
 		);
 	}
-	if (command === "create_streaming_transcription_session") {
+	if (command === "create_mode_session") {
+		const mode = ProviderSessionModeSchema.parse(args?.mode);
 		const manager = new ProviderSettingsManager();
-		const selection = manager.getModeSettings("voiceInput");
+		const selection = manager.getModeSettings(mode);
 		const providerConfig = selection
 			? manager.getProviderConfig(selection.providerId, {
 					includeKnownModels: false,
 				})
 			: undefined;
-		const route = providerConfig
-			? resolveAudioTranscriptionRoute(providerConfig)
-			: undefined;
+		const route =
+			mode === "voiceInput" && providerConfig
+				? resolveAudioTranscriptionRoute(providerConfig)
+				: undefined;
 		const diagnostics = {
+			mode,
 			providerId: selection?.providerId,
 			modelId: selection?.modelId,
-			transport: route?.kind,
-			endpoint: sanitizeDiagnosticUrl(route?.endpoint),
+			...(mode === "voiceInput"
+				? {
+						transport: route?.kind,
+						endpoint: sanitizeDiagnosticUrl(route?.endpoint),
+					}
+				: {}),
 		};
 		emitDesktopDebugLog(
 			ctx,
-			"voice-input",
+			mode === "voiceInput" ? "voice-input" : "realtime-voice",
 			"debug",
-			"Creating streaming transcription session",
+			"Creating provider mode session",
 			diagnostics,
 		);
 		const startedAt = Date.now();
 		try {
-			const session = await createConfiguredStreamingTranscriptionSession(
-				manager,
-				{ expiresAfterSeconds: 300 },
-			);
+			const session = await createConfiguredModeSession(manager, {
+				mode,
+				expiresAfterSeconds: 300,
+			});
 			emitDesktopDebugLog(
 				ctx,
-				"voice-input",
+				mode === "voiceInput" ? "voice-input" : "realtime-voice",
 				"debug",
-				"Streaming transcription session created",
+				"Provider mode session created",
 				{
 					...diagnostics,
 					durationMs: Date.now() - startedAt,
 					expiresAt: session.expiresAt,
+					kind: session.kind,
+					...("transport" in session ? { transport: session.transport } : {}),
 				},
 			);
 			return session;
@@ -1548,9 +1558,9 @@ export async function handleCommand(
 			const failure = sanitizeDiagnosticFailure(error, providerConfig);
 			emitDesktopDebugLog(
 				ctx,
-				"voice-input",
+				mode === "voiceInput" ? "voice-input" : "realtime-voice",
 				"error",
-				"Streaming transcription session setup failed",
+				"Provider mode session setup failed",
 				{
 					...diagnostics,
 					durationMs: Date.now() - startedAt,

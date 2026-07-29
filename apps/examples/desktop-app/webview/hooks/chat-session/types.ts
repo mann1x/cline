@@ -92,6 +92,13 @@ export type ChatApiResult = {
 	messages?: unknown[];
 };
 
+export type ChatPromptCompletion = {
+	sessionId: string;
+	queued: boolean;
+	text?: string;
+	result?: ChatApiResult;
+};
+
 export type ChatWsResponseEvent = {
 	type: "chat_response";
 	requestId: string;

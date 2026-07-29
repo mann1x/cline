@@ -232,6 +232,7 @@ export function toProviderModel(
 		supportsVision: info.capabilities?.includes("images"),
 		supportsReasoning:
 			info.capabilities?.includes("reasoning") || info.thinkingConfig != null,
+		...(info.capabilities?.includes("tools") ? { supportsTools: true } : {}),
 		...(info.capabilities?.includes("transcription-streaming")
 			? { supportsStreamingTranscription: true }
 			: {}),

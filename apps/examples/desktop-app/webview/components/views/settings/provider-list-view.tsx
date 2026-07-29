@@ -24,7 +24,9 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import {
+	hasRealtimeVoiceTransport,
 	isDedicatedTranscriptionModel,
+	isRealtimeVoiceModel,
 	isSpeechGenerationModel,
 	supportsAudio,
 } from "@/lib/provider-model-catalog";
@@ -33,6 +35,7 @@ import type {
 	ProviderConfigField,
 	ProviderConfigFieldPrimitive,
 	ProviderSettingsUpdate,
+	RealtimeVoiceModeSettings,
 	VoiceInputModeSettings,
 	VoiceOutputModeSettings,
 } from "@/lib/provider-schema";
@@ -101,12 +104,15 @@ export function ProviderListContent({
 	onAddProvider,
 	onVoiceInputChange,
 	onVoiceOutputChange,
+	onRealtimeVoiceChange,
 	selectedProviderId,
 	variant = "page",
 	voiceInput,
 	voiceInputSaving = false,
 	voiceOutput,
 	voiceOutputSaving = false,
+	realtimeVoice,
+	realtimeVoiceSaving = false,
 }: {
 	providers: Provider[];
 	onToggle: (id: string) => void;
@@ -114,17 +120,23 @@ export function ProviderListContent({
 	onAddProvider: () => void;
 	onVoiceInputChange: (settings: VoiceInputModeSettings | undefined) => void;
 	onVoiceOutputChange: (settings: VoiceOutputModeSettings | undefined) => void;
+	onRealtimeVoiceChange: (
+		settings: RealtimeVoiceModeSettings | undefined,
+	) => void;
 	selectedProviderId?: string | null;
 	variant?: "page" | "panel";
 	voiceInput?: VoiceInputModeSettings;
 	voiceInputSaving?: boolean;
 	voiceOutput?: VoiceOutputModeSettings;
 	voiceOutputSaving?: boolean;
+	realtimeVoice?: RealtimeVoiceModeSettings;
+	realtimeVoiceSaving?: boolean;
 }) {
 	const [providerSearchOpen, setProviderSearchOpen] = useState(false);
 	const [providerSearch, setProviderSearch] = useState("");
 	const providerSearchInputRef = useRef<HTMLInputElement>(null);
 	const voiceOutputInputId = useId();
+	const realtimeVoiceInputId = useId();
 	const enabledProviderCount = providers.filter(
 		(provider) => provider.enabled,
 	).length;
@@ -157,10 +169,29 @@ export function ProviderListContent({
 		(entry) => entry.provider.id === voiceOutput?.providerId,
 	);
 	const selectedSpeechModels = selectedSpeechProvider?.models ?? [];
+	const realtimeProviders = providers
+		.filter(
+			(provider) => provider.enabled && hasRealtimeVoiceTransport(provider.id),
+		)
+		.map((provider) => ({
+			provider,
+			models: (provider.modelList ?? []).filter(isRealtimeVoiceModel),
+		}))
+		.filter((entry) => entry.models.length > 0);
+	const selectedRealtimeProvider = realtimeProviders.find(
+		(entry) => entry.provider.id === realtimeVoice?.providerId,
+	);
+	const selectedRealtimeModels = selectedRealtimeProvider?.models ?? [];
 	const [voiceDraft, setVoiceDraft] = useState(voiceOutput?.voice ?? "");
+	const [realtimeVoiceDraft, setRealtimeVoiceDraft] = useState(
+		realtimeVoice?.voice ?? "",
+	);
 	useEffect(() => {
 		setVoiceDraft(voiceOutput?.voice ?? "");
 	}, [voiceOutput?.voice]);
+	useEffect(() => {
+		setRealtimeVoiceDraft(realtimeVoice?.voice ?? "");
+	}, [realtimeVoice?.voice]);
 
 	useEffect(() => {
 		const focusProviderSearch = () => {
@@ -436,6 +467,122 @@ export function ProviderListContent({
 												: "alloy"
 									}
 									value={voiceDraft}
+								/>
+							</label>
+						</div>
+					</div>
+					<div className="mt-6 border-t pt-5">
+						<div className="mb-3">
+							<h2 className="text-[17px] font-semibold text-foreground">
+								Realtime voice
+							</h2>
+							<p className="mt-1 text-sm leading-5 text-muted-foreground">
+								Choose an audio-in/audio-out live model for a direct,
+								low-latency conversation. Provider credentials stay in the
+								sidecar; the webview receives only a short-lived session token.
+							</p>
+						</div>
+						<div className="grid grid-cols-3 gap-3 max-[720px]:grid-cols-1">
+							<label className="space-y-1.5 text-sm text-muted-foreground">
+								<span>Provider</span>
+								<select
+									aria-label="Realtime voice provider"
+									className="h-9 w-full rounded border border-border bg-background px-3 text-sm text-foreground outline-none focus:ring-1 focus:ring-ring"
+									disabled={realtimeVoiceSaving}
+									onChange={(event) => {
+										const providerId = event.target.value;
+										if (!providerId) {
+											onRealtimeVoiceChange(undefined);
+											return;
+										}
+										const entry = realtimeProviders.find(
+											(candidate) => candidate.provider.id === providerId,
+										);
+										const modelId = entry?.models[0]?.id;
+										if (modelId) {
+											onRealtimeVoiceChange({
+												providerId,
+												modelId,
+											});
+										}
+									}}
+									value={selectedRealtimeProvider?.provider.id ?? ""}
+								>
+									<option value="">Not configured</option>
+									{realtimeProviders.map(({ provider }) => (
+										<option key={provider.id} value={provider.id}>
+											{provider.name}
+										</option>
+									))}
+								</select>
+							</label>
+							<label className="space-y-1.5 text-sm text-muted-foreground">
+								<span>Model</span>
+								<select
+									aria-label="Realtime voice model"
+									className="h-9 w-full rounded border border-border bg-background px-3 text-sm text-foreground outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+									disabled={!selectedRealtimeProvider || realtimeVoiceSaving}
+									onChange={(event) => {
+										if (!selectedRealtimeProvider || !event.target.value) {
+											return;
+										}
+										onRealtimeVoiceChange({
+											providerId: selectedRealtimeProvider.provider.id,
+											modelId: event.target.value,
+											...(realtimeVoice?.voice
+												? { voice: realtimeVoice.voice }
+												: {}),
+										});
+									}}
+									value={realtimeVoice?.modelId ?? ""}
+								>
+									{selectedRealtimeModels.length === 0 ? (
+										<option value="">
+											Enable OpenAI, Gemini, or Vercel AI Gateway first
+										</option>
+									) : null}
+									{selectedRealtimeModels.map((model) => (
+										<option key={model.id} value={model.id}>
+											{model.name}
+										</option>
+									))}
+								</select>
+							</label>
+							<label
+								className="space-y-1.5 text-sm text-muted-foreground"
+								htmlFor={realtimeVoiceInputId}
+							>
+								<span>Voice</span>
+								<Input
+									aria-label="Realtime voice name"
+									className="h-9"
+									disabled={!selectedRealtimeProvider || realtimeVoiceSaving}
+									id={realtimeVoiceInputId}
+									onBlur={() => {
+										if (
+											!selectedRealtimeProvider ||
+											!realtimeVoice ||
+											realtimeVoiceDraft.trim() === (realtimeVoice.voice ?? "")
+										) {
+											return;
+										}
+										onRealtimeVoiceChange({
+											providerId: selectedRealtimeProvider.provider.id,
+											modelId: realtimeVoice.modelId,
+											...(realtimeVoiceDraft.trim()
+												? { voice: realtimeVoiceDraft.trim() }
+												: {}),
+										});
+									}}
+									onChange={(event) =>
+										setRealtimeVoiceDraft(event.target.value)
+									}
+									placeholder={
+										selectedRealtimeProvider
+											? "Provider default"
+											: "Select a provider first"
+									}
+									value={realtimeVoiceDraft}
 								/>
 							</label>
 						</div>

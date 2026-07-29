@@ -11,6 +11,7 @@ import {
 } from "react";
 import { AgentHeader } from "@/components/agent-header";
 import { AgentSidebar } from "@/components/agent-sidebar";
+import type { RealtimeChatBridge } from "@/components/realtime-voice-bridge";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -329,6 +330,9 @@ export default function Home() {
 									onOpenVoiceOutputSettings={() =>
 										handleSettingsSectionChange("Models")
 									}
+									onOpenRealtimeVoiceSettings={() =>
+										handleSettingsSectionChange("Models")
+									}
 									onThreadStarted={handleThreadStarted}
 								/>
 							</div>
@@ -364,6 +368,7 @@ function ChatThreadPane({
 	onOpenSession,
 	onOpenVoiceInputSettings,
 	onOpenVoiceOutputSettings,
+	onOpenRealtimeVoiceSettings,
 	onThreadStarted,
 }: {
 	threadId: string;
@@ -378,6 +383,7 @@ function ChatThreadPane({
 	onOpenSession?: (session: SessionHistoryItem) => void;
 	onOpenVoiceInputSettings?: () => void;
 	onOpenVoiceOutputSettings?: () => void;
+	onOpenRealtimeVoiceSettings?: () => void;
 	onThreadStarted?: (threadId: string) => void;
 }) {
 	const {
@@ -809,6 +815,38 @@ function ChatThreadPane({
 		},
 		[onThreadStarted, pendingAttachments, sendPrompt, setPromptInput, threadId],
 	);
+	const handleRealtimeSend = useCallback(
+		async (prompt: string) => {
+			onThreadStarted?.(threadId);
+			return sendPrompt(prompt);
+		},
+		[onThreadStarted, sendPrompt, threadId],
+	);
+
+	const realtimeBridge = useMemo<RealtimeChatBridge>(
+		() => ({
+			threadId,
+			sessionId,
+			providerId: config.provider,
+			modelId: config.model,
+			status,
+			hasChatHistory: messages.length > 0,
+			pendingToolApprovals,
+			pendingQuestionCount: pendingAskQuestions.length,
+			sendPrompt: handleRealtimeSend,
+		}),
+		[
+			config.model,
+			config.provider,
+			handleRealtimeSend,
+			messages.length,
+			pendingAskQuestions.length,
+			pendingToolApprovals,
+			sessionId,
+			status,
+			threadId,
+		],
+	);
 
 	const handleReasoningChange = useCallback(
 		(next: Pick<ChatSessionConfig, "thinking" | "reasoningEffort">) => {
@@ -1185,6 +1223,7 @@ function ChatThreadPane({
 				}))
 			}
 			onPromptInputChange={handlePromptInputChange}
+			onOpenRealtimeVoiceSettings={onOpenRealtimeVoiceSettings}
 			onOpenVoiceInputSettings={onOpenVoiceInputSettings}
 			onReasoningChange={handleReasoningChange}
 			onSteerPromptInQueue={(promptId) => {
@@ -1216,6 +1255,7 @@ function ChatThreadPane({
 			promptDraft={promptDraft}
 			provider={config.provider}
 			reasoningEffort={config.reasoningEffort}
+			realtimeBridge={realtimeBridge}
 			status={status}
 			summary={summary}
 			thinking={config.thinking}

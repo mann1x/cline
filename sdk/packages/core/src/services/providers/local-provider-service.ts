@@ -8,8 +8,10 @@ import type {
 	ProviderListItem,
 	ProviderMode,
 	ProviderModel,
+	ProviderModeSessionMap,
 	ProviderModeSettingsMap,
 	ProviderModesSettings,
+	ProviderSessionMode,
 	SaveProviderSettingsActionRequest,
 } from "@cline/shared";
 import { PROVIDER_MODE_IDS } from "@cline/shared";
@@ -86,9 +88,11 @@ export interface TranscribeConfiguredVoiceInputRequest {
 	abortSignal?: AbortSignal;
 }
 
-export interface CreateConfiguredStreamingTranscriptionSessionRequest {
+export interface CreateConfiguredModeSessionRequest<
+	Mode extends ProviderSessionMode = ProviderSessionMode,
+> {
+	mode: Mode;
 	expiresAfterSeconds?: number;
-	abortSignal?: AbortSignal;
 }
 
 export interface SynthesizeLocalSpeechRequest {
@@ -179,9 +183,27 @@ export function isSpeechGenerationModel(
 	);
 }
 
+export function isRealtimeVoiceModel(
+	model: Pick<
+		ProviderModel,
+		"id" | "name" | "inputModalities" | "outputModalities"
+	>,
+): boolean {
+	if (
+		model.inputModalities?.includes("audio") !== true ||
+		model.outputModalities?.includes("audio") !== true
+	) {
+		return false;
+	}
+	return /(?:^|[/_.\s-])(realtime|live|voice)(?:$|[/_.\s-])/i.test(
+		`${model.id} ${model.name}`,
+	);
+}
+
 const MODE_MODEL_PREDICATES = {
 	voiceInput: isDedicatedTranscriptionModel,
 	voiceOutput: isSpeechGenerationModel,
+	realtimeVoice: isRealtimeVoiceModel,
 } satisfies Record<ProviderMode, (model: ProviderModel) => boolean>;
 
 function setModeSettingsValue<Mode extends ProviderMode>(
@@ -952,10 +974,10 @@ export async function transcribeConfiguredVoiceInput(
 	});
 }
 
-export async function createConfiguredStreamingTranscriptionSession(
+async function createStreamingVoiceInputSession(
 	manager: ProviderSettingsManager,
-	request: CreateConfiguredStreamingTranscriptionSessionRequest = {},
-): Promise<LlmsModels.StreamingAudioTranscriptionSession> {
+	expiresAfterSeconds: number | undefined,
+): Promise<ProviderModeSessionMap["voiceInput"]> {
 	const selection = manager.getModeSettings("voiceInput");
 	if (!selection) {
 		throw new Error("Configure a voice input provider and model in Settings");
@@ -979,12 +1001,81 @@ export async function createConfiguredStreamingTranscriptionSession(
 			`Model "${selection.modelId}" does not support streaming transcription`,
 		);
 	}
-	return LlmsModels.createStreamingAudioTranscriptionSession({
+	const session = await LlmsModels.createStreamingAudioTranscriptionSession({
 		providerConfig: config,
 		modelId: selection.modelId,
-		expiresAfterSeconds: request.expiresAfterSeconds,
-		abortSignal: request.abortSignal,
+		expiresAfterSeconds,
 	});
+	return {
+		kind: "streaming-transcription",
+		providerId: selection.providerId,
+		modelId: selection.modelId,
+		...session,
+	};
+}
+
+async function createRealtimeVoiceModeSession(
+	manager: ProviderSettingsManager,
+	expiresAfterSeconds: number | undefined,
+): Promise<ProviderModeSessionMap["realtimeVoice"]> {
+	const selection = manager.getModeSettings("realtimeVoice");
+	if (!selection) {
+		throw new Error(
+			"Configure a realtime voice provider and model in Settings",
+		);
+	}
+	const config = manager.getProviderConfig(selection.providerId, {
+		includeKnownModels: false,
+	});
+	if (!config) {
+		throw new Error(
+			`Realtime provider "${selection.providerId}" is not configured in providers.json`,
+		);
+	}
+	const { models } = await getLocalProviderModels(selection.providerId, config);
+	const model = models.find((candidate) => candidate.id === selection.modelId);
+	if (!model || !isRealtimeVoiceModel(model)) {
+		throw new Error(
+			`Model "${selection.modelId}" is not a realtime audio model`,
+		);
+	}
+	const session = await LlmsModels.createRealtimeVoiceSession({
+		providerConfig: config,
+		modelId: selection.modelId,
+		voice: selection.voice,
+		expiresAfterSeconds,
+	});
+	return {
+		kind: "realtime",
+		providerId: selection.providerId,
+		modelId: selection.modelId,
+		supportsTools: model.supportsTools === true,
+		...session,
+	};
+}
+
+type ModeSessionCreator<Mode extends ProviderSessionMode> = (
+	manager: ProviderSettingsManager,
+	expiresAfterSeconds: number | undefined,
+) => Promise<ProviderModeSessionMap[Mode]>;
+
+const MODE_SESSION_CREATORS = {
+	voiceInput: createStreamingVoiceInputSession,
+	realtimeVoice: createRealtimeVoiceModeSession,
+} satisfies {
+	[Mode in ProviderSessionMode]: ModeSessionCreator<Mode>;
+};
+
+export async function createConfiguredModeSession<
+	Mode extends ProviderSessionMode,
+>(
+	manager: ProviderSettingsManager,
+	request: CreateConfiguredModeSessionRequest<Mode>,
+): Promise<ProviderModeSessionMap[Mode]> {
+	const creator = MODE_SESSION_CREATORS[
+		request.mode
+	] as ModeSessionCreator<Mode>;
+	return creator(manager, request.expiresAfterSeconds);
 }
 
 export async function synthesizeLocalSpeech(
@@ -1089,6 +1180,29 @@ const MODE_SETTINGS_VALIDATORS = {
 					`Model "${modelId}" is not a dedicated text-to-audio speech model`,
 			},
 		);
+		const voice = settings.voice?.trim() || undefined;
+		return { ...selection, ...(voice ? { voice } : {}) };
+	},
+	realtimeVoice: async (manager, settings) => {
+		const selection = await validateProviderModelModeSettings(
+			manager,
+			settings,
+			{
+				label: "Realtime voice",
+				isModelSupported: isRealtimeVoiceModel,
+				unsupportedModelMessage: (modelId) =>
+					`Model "${modelId}" is not a realtime audio model`,
+			},
+		);
+		const config = manager.getProviderConfig(selection.providerId, {
+			includeKnownModels: false,
+		});
+		if (!config) {
+			throw new Error(
+				`Realtime provider "${selection.providerId}" is not configured in providers.json`,
+			);
+		}
+		LlmsModels.resolveRealtimeProviderTransport(config);
 		const voice = settings.voice?.trim() || undefined;
 		return { ...selection, ...(voice ? { voice } : {}) };
 	},

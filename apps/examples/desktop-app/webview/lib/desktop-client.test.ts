@@ -44,4 +44,30 @@ describe("writeDesktopDebugLog", () => {
 
 		expect(debugSpy).not.toHaveBeenCalled();
 	});
+
+	it("prints handled errors without triggering the Next.js error overlay", () => {
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+		writeDesktopDebugLog({
+			scope: "realtime-voice",
+			level: "error",
+			message: "Realtime voice session failed in the webview",
+			timestamp: "2026-07-28T00:00:00.000Z",
+			metadata: {
+				providerId: "vercel-ai-gateway",
+				modelId: "xai/grok-voice-think-fast-1.0",
+				failure: "User not found.",
+			},
+		});
+
+		expect(errorSpy).not.toHaveBeenCalled();
+		expect(warnSpy).toHaveBeenCalledWith(
+			"[desktop:realtime-voice] Realtime voice session failed in the webview",
+			expect.objectContaining({
+				severity: "error",
+				failure: "User not found.",
+			}),
+		);
+	});
 });

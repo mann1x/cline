@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
 	Provider,
+	RealtimeVoiceModeSettings,
 	VoiceInputModeSettings,
 	VoiceOutputModeSettings,
 } from "@/lib/provider-schema";
@@ -64,6 +65,22 @@ const providers: Provider[] = [
 			},
 		],
 	},
+	{
+		id: "gemini",
+		name: "Google Gemini",
+		models: 1,
+		color: "#000000",
+		letter: "GG",
+		enabled: true,
+		modelList: [
+			{
+				id: "gemini-3.5-live-translate-preview",
+				name: "Gemini 3.5 Live Translate Preview",
+				inputModalities: ["audio"],
+				outputModalities: ["audio", "text"],
+			},
+		],
+	},
 ];
 
 let container: HTMLDivElement;
@@ -89,6 +106,7 @@ describe("ProviderListContent voice input settings", () => {
 				<ProviderListContent
 					onAddProvider={vi.fn()}
 					onConfigure={vi.fn()}
+					onRealtimeVoiceChange={vi.fn()}
 					onToggle={vi.fn()}
 					onVoiceInputChange={vi.fn()}
 					onVoiceOutputChange={vi.fn()}
@@ -134,6 +152,7 @@ describe("ProviderListContent voice input settings", () => {
 					<ProviderListContent
 						onAddProvider={vi.fn()}
 						onConfigure={vi.fn()}
+						onRealtimeVoiceChange={vi.fn()}
 						onToggle={vi.fn()}
 						onVoiceInputChange={onVoiceInputChange}
 						onVoiceOutputChange={vi.fn()}
@@ -202,6 +221,7 @@ describe("ProviderListContent voice input settings", () => {
 					<ProviderListContent
 						onAddProvider={vi.fn()}
 						onConfigure={vi.fn()}
+						onRealtimeVoiceChange={vi.fn()}
 						onToggle={vi.fn()}
 						onVoiceInputChange={vi.fn()}
 						onVoiceOutputChange={onVoiceOutputChange}
@@ -249,6 +269,57 @@ describe("ProviderListContent voice input settings", () => {
 			modelId: "eleven_turbo_v2_5",
 			voice: "voice-123",
 		});
+	});
+
+	it("lets the user configure a realtime audio model without hard-coding a voice", async () => {
+		const onRealtimeVoiceChange = vi.fn();
+		let selection: RealtimeVoiceModeSettings | undefined;
+		const render = async () => {
+			await act(async () => {
+				root.render(
+					<ProviderListContent
+						onAddProvider={vi.fn()}
+						onConfigure={vi.fn()}
+						onRealtimeVoiceChange={onRealtimeVoiceChange}
+						onToggle={vi.fn()}
+						onVoiceInputChange={vi.fn()}
+						onVoiceOutputChange={vi.fn()}
+						providers={providers}
+						realtimeVoice={selection}
+					/>,
+				);
+			});
+		};
+
+		await render();
+		const providerSelect = container.querySelector<HTMLSelectElement>(
+			'[aria-label="Realtime voice provider"]',
+		);
+		await act(async () => {
+			if (!providerSelect) return;
+			providerSelect.value = "gemini";
+			providerSelect.dispatchEvent(new Event("change", { bubbles: true }));
+		});
+		expect(onRealtimeVoiceChange).toHaveBeenLastCalledWith({
+			providerId: "gemini",
+			modelId: "gemini-3.5-live-translate-preview",
+		});
+
+		selection = {
+			providerId: "gemini",
+			modelId: "gemini-3.5-live-translate-preview",
+		};
+		await render();
+		expect(
+			container.querySelector<HTMLSelectElement>(
+				'[aria-label="Realtime voice model"]',
+			)?.value,
+		).toBe("gemini-3.5-live-translate-preview");
+		expect(
+			container.querySelector<HTMLInputElement>(
+				'[aria-label="Realtime voice name"]',
+			)?.placeholder,
+		).toBe("Provider default");
 	});
 });
 

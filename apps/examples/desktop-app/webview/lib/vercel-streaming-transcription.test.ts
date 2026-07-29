@@ -95,8 +95,12 @@ describe("Vercel streaming transcription", () => {
 		FakeWebSocket.instances = [];
 		FakeAudioContext.instances = [];
 		invokeMock.mockReset().mockResolvedValue({
+			kind: "streaming-transcription",
+			providerId: "vercel-ai-gateway",
+			modelId: "openai/gpt-realtime-whisper",
 			token: "vcst_short_lived",
 			url: "wss://ai-gateway.vercel.sh/v4/ai/transcription-model?ai-model-id=openai%2Fgpt-realtime-whisper",
+			transport: "vercel-ai-gateway",
 		});
 		Object.defineProperty(window, "WebSocket", {
 			configurable: true,
@@ -123,6 +127,9 @@ describe("Vercel streaming transcription", () => {
 	it("streams PCM audio and emits cumulative transcript text", async () => {
 		const onTranscript = vi.fn();
 		const startPromise = startVercelStreamingTranscription({ onTranscript });
+		expect(invokeMock).toHaveBeenCalledWith("create_mode_session", {
+			mode: "voiceInput",
+		});
 		const socket = await vi.waitFor(() => {
 			expect(FakeWebSocket.instances).toHaveLength(1);
 			return FakeWebSocket.instances[0] as FakeWebSocket;

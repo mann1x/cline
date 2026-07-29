@@ -1,17 +1,12 @@
 "use client";
 
+import type { StreamingVoiceInputModeSession } from "@cline/shared/browser";
 import { desktopClient, writeDesktopDebugLog } from "@/lib/desktop-client";
 
 const OUTPUT_SAMPLE_RATE = 24_000;
 const STREAM_FINISH_TIMEOUT_MS = 15_000;
 const GATEWAY_TRANSCRIPTION_PROTOCOL = "ai-gateway-transcription.v1";
 const GATEWAY_AUTH_PROTOCOL_PREFIX = "ai-gateway-auth.";
-
-type StreamingTranscriptionCredentials = {
-	token: string;
-	url: string;
-	expiresAt?: number;
-};
 
 type TranscriptionStreamPart =
 	| { type: "stream-start" }
@@ -139,9 +134,13 @@ export async function startVercelStreamingTranscription(options: {
 		timestamp: new Date().toISOString(),
 	});
 	const credentials =
-		await desktopClient.invoke<StreamingTranscriptionCredentials>(
-			"create_streaming_transcription_session",
+		await desktopClient.invoke<StreamingVoiceInputModeSession>(
+			"create_mode_session",
+			{ mode: "voiceInput" },
 		);
+	if (credentials.kind !== "streaming-transcription") {
+		throw new Error("Voice input returned an unexpected provider mode session");
+	}
 	const mediaStream = await navigator.mediaDevices.getUserMedia({
 		audio: true,
 	});

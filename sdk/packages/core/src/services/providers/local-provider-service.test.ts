@@ -14,11 +14,12 @@ import {
 } from "./local-provider-registry";
 import {
 	addLocalProvider,
-	createConfiguredStreamingTranscriptionSession,
+	createConfiguredModeSession,
 	deleteLocalProvider,
 	getLocalProviderModels,
 	isChatProviderModel,
 	isDedicatedTranscriptionModel,
+	isRealtimeVoiceModel,
 	isSpeechGenerationModel,
 	listLocalProviders,
 	markLocalProviderEnabled,
@@ -999,13 +1000,82 @@ describe("audio transcription", () => {
 			});
 
 		await expect(
-			createConfiguredStreamingTranscriptionSession(manager),
-		).resolves.toMatchObject({ token: "short-lived-token" });
+			createConfiguredModeSession(manager, { mode: "voiceInput" }),
+		).resolves.toMatchObject({
+			kind: "streaming-transcription",
+			token: "short-lived-token",
+		});
 		expect(createSessionSpy).toHaveBeenCalledWith(
 			expect.objectContaining({
 				modelId: "realtime-whisper",
 				providerConfig: expect.objectContaining({
 					providerId: "audio-provider",
+				}),
+			}),
+		);
+	});
+
+	it("persists a realtime audio model and creates a short-lived mode session", async () => {
+		manager.saveProviderSettings(
+			{
+				provider: "vercel-ai-gateway",
+				model: "openai/gpt-realtime",
+				apiKey: "gateway-key",
+			},
+			{ setLastUsed: false },
+		);
+		LlmsModels.registerModel("vercel-ai-gateway", "openai/gpt-realtime", {
+			id: "openai/gpt-realtime",
+			name: "GPT Realtime",
+			capabilities: ["tools"],
+			modalities: { input: ["text", "audio"], output: ["text", "audio"] },
+		});
+		expect(
+			isRealtimeVoiceModel({
+				id: "openai/gpt-realtime",
+				name: "GPT Realtime",
+				inputModalities: ["text", "audio"],
+				outputModalities: ["text", "audio"],
+			}),
+		).toBe(true);
+
+		await saveModeSettings(manager, {
+			mode: "realtimeVoice",
+			settings: {
+				providerId: "vercel-ai-gateway",
+				modelId: "openai/gpt-realtime",
+				voice: "alloy",
+			},
+		});
+		const createSessionSpy = vi
+			.spyOn(LlmsModels, "createRealtimeVoiceSession")
+			.mockResolvedValue({
+				token: "ephemeral-token",
+				url: "wss://realtime.example.test/session",
+				transport: "vercel-ai-gateway",
+				sessionConfig: {
+					outputModalities: ["audio"],
+					voice: "alloy",
+				},
+			});
+
+		await expect(
+			createConfiguredModeSession(manager, { mode: "realtimeVoice" }),
+		).resolves.toMatchObject({
+			kind: "realtime",
+			providerId: "vercel-ai-gateway",
+			modelId: "openai/gpt-realtime",
+			supportsTools: true,
+			token: "ephemeral-token",
+			transport: "vercel-ai-gateway",
+		});
+		expect(createSessionSpy).toHaveBeenCalledWith(
+			expect.objectContaining({
+				modelId: "openai/gpt-realtime",
+				voice: "alloy",
+				providerConfig: expect.objectContaining({
+					providerId: "vercel-ai-gateway",
+					apiKey: "gateway-key",
 				}),
 			}),
 		);

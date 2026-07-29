@@ -368,11 +368,12 @@ async function resolveSystemPrompt(config: JsonRecord): Promise<string> {
 		return String(config.systemPrompt ?? config.system_prompt ?? "").trim();
 	}
 	const providerId = String(config.provider ?? config.providerId ?? "").trim();
-	const mode = config.autoApproveTools
-		? "yolo"
-		: config.mode === "plan"
-			? "plan"
-			: "act";
+	// Mode comes from config.mode only. `autoApproveTools` is a tool-approval
+	// policy (see resolveToolPolicies) and must NOT switch the session to the
+	// non-interactive "yolo" persona, whose prompt demands a `submit_and_exit`
+	// tool that interactive desktop sessions do not expose.
+	const mode =
+		config.mode === "plan" ? "plan" : config.mode === "yolo" ? "yolo" : "act";
 	const metadata = await consumeWorkspaceMetadata(cwd);
 	const inlineRules =
 		typeof config.rules === "string" && config.rules.trim().length > 0

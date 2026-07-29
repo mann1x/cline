@@ -1,6 +1,5 @@
 import { createGateway } from "@ai-sdk/gateway";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
-import type { LanguageModelV3 } from "@ai-sdk/provider";
 import type {
 	GatewayProviderContext,
 	GatewayResolvedProviderConfig,
@@ -135,8 +134,9 @@ function createSuccessDataResponseFetch(baseFetch: typeof fetch): typeof fetch {
 
 		const text = await response.text();
 		let unwrapped = text;
+		let responseContentType = response.headers.get("content-type");
 		try {
-			const payload = JSON.parse(text) as unknown;
+			let payload = JSON.parse(text) as unknown;
 			if (
 				payload &&
 				typeof payload === "object" &&
@@ -145,7 +145,55 @@ function createSuccessDataResponseFetch(baseFetch: typeof fetch): typeof fetch {
 				payload.success === true &&
 				"data" in payload
 			) {
-				unwrapped = JSON.stringify(payload.data);
+				payload = payload.data;
+				unwrapped = JSON.stringify(payload);
+			}
+
+			// Cline's OpenRouter transport can return a completed chat response
+			// even when the AI SDK requested a stream. Project that response onto
+			// the standard OpenAI-compatible event stream so the v4 provider
+			// emits text, files, tools, usage, and finish metadata normally.
+			const completionCandidate =
+				payload && typeof payload === "object" && !Array.isArray(payload)
+					? (payload as Record<string, unknown>)
+					: undefined;
+			const completionChoices = completionCandidate?.choices;
+			if (
+				completionCandidate &&
+				Array.isArray(completionChoices) &&
+				completionChoices.some(
+					(choice: unknown) =>
+						choice !== null &&
+						typeof choice === "object" &&
+						!Array.isArray(choice) &&
+						"message" in choice,
+				)
+			) {
+				const completion = completionCandidate;
+				const choices = (completion.choices as unknown[]).map((choice) => {
+					if (
+						choice === null ||
+						typeof choice !== "object" ||
+						Array.isArray(choice)
+					) {
+						return choice;
+					}
+					const { message, ...rest } = choice as Record<string, unknown>;
+					return {
+						...rest,
+						delta:
+							message !== null &&
+							typeof message === "object" &&
+							!Array.isArray(message)
+								? message
+								: {},
+					};
+				});
+				unwrapped = `data: ${JSON.stringify({
+					...completion,
+					choices,
+				})}\n\ndata: [DONE]\n\n`;
+				responseContentType = "text/event-stream";
 			}
 		} catch {
 			// Recreate the original response below so consuming it for envelope
@@ -153,6 +201,9 @@ function createSuccessDataResponseFetch(baseFetch: typeof fetch): typeof fetch {
 		}
 
 		const headers = new Headers(response.headers);
+		if (responseContentType) {
+			headers.set("content-type", responseContentType);
+		}
 		headers.delete("content-encoding");
 		headers.delete("content-length");
 		return new Response(unwrapped, {
@@ -229,7 +280,7 @@ export async function createOpenAICompatibleProviderModule(
 		// Completions wire format does NOT support multimodal tool messages
 		// (the `@ai-sdk/openai-compatible` chat-messages converter
 		// `JSON.stringify`s the parts array, losing image bytes). The
-		// middleware operates on the typed `LanguageModelV3Prompt` BEFORE
+		// middleware operates on the typed `LanguageModelV4Prompt` BEFORE
 		// the converter runs, so the converter sees only text-only tool
 		// messages with adjacent multimodal user messages — the wire
 		// pattern that classic Cline used in production for years (see
@@ -237,8 +288,7 @@ export async function createOpenAICompatibleProviderModule(
 		// on origin/main).
 		model: (modelId) =>
 			wrapLanguageModel({
-				model: (openRouterImageProvider?.chat(modelId) ??
-					provider(modelId)) as LanguageModelV3,
+				model: openRouterImageProvider?.chat(modelId) ?? provider(modelId),
 				middleware: splitToolImagesMiddleware,
 			}),
 		imageModel: (modelId) =>

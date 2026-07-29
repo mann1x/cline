@@ -3,7 +3,9 @@ import {
 	buildProviderModelCatalog,
 	isChatModel,
 	isDedicatedTranscriptionModel,
+	isRealtimeVoiceModel,
 	isSpeechGenerationModel,
+	selectRealtimeVoiceModel,
 	selectSpeechGenerationModel,
 	selectTranscriptionModel,
 	supportsAudio,
@@ -248,5 +250,55 @@ describe("transcription model selection", () => {
 				modelId: "openai/gpt-realtime-whisper",
 			}),
 		).toMatchObject({ supportsStreaming: true });
+	});
+
+	it("selects configured live audio models only on realtime transports", () => {
+		const gemini: Provider = {
+			id: "gemini",
+			name: "Google Gemini",
+			models: 1,
+			color: "#000000",
+			letter: "GG",
+			enabled: true,
+			modelList: [
+				{
+					id: "gemini-3.5-live-translate-preview",
+					name: "Gemini 3.5 Live Translate Preview",
+					supportsTools: true,
+					inputModalities: ["audio"],
+					outputModalities: ["audio", "text"],
+				},
+			],
+		};
+		const unsupportedTransport = {
+			...gemini,
+			id: "custom-audio",
+			name: "Custom Audio",
+		};
+		const liveModel = gemini.modelList?.[0];
+		expect(liveModel).toBeDefined();
+		if (!liveModel) throw new Error("Missing realtime model fixture");
+
+		expect(isRealtimeVoiceModel(liveModel)).toBe(true);
+		expect(
+			selectRealtimeVoiceModel([gemini], {
+				providerId: "gemini",
+				modelId: "gemini-3.5-live-translate-preview",
+				voice: "Kore",
+			}),
+		).toEqual({
+			providerId: "gemini",
+			providerName: "Google Gemini",
+			modelId: "gemini-3.5-live-translate-preview",
+			modelName: "Gemini 3.5 Live Translate Preview",
+			supportsTools: true,
+			voice: "Kore",
+		});
+		expect(
+			selectRealtimeVoiceModel([unsupportedTransport], {
+				providerId: "custom-audio",
+				modelId: "gemini-3.5-live-translate-preview",
+			}),
+		).toBeNull();
 	});
 });

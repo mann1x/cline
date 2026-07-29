@@ -476,7 +476,12 @@ export function SettingsView({
 				onVoiceOutputChange={(settings) =>
 					void updateModeSettings("voiceOutput", settings)
 				}
+				onRealtimeVoiceChange={(settings) =>
+					void updateModeSettings("realtimeVoice", settings)
+				}
 				providers={providers}
+				realtimeVoice={modeSettings.realtimeVoice}
+				realtimeVoiceSaving={savingModes.realtimeVoice}
 				selectedProviderId={selectedProvider.id}
 				variant="panel"
 				voiceInput={modeSettings.voiceInput}
@@ -513,7 +518,12 @@ export function SettingsView({
 			onVoiceOutputChange={(settings) =>
 				void updateModeSettings("voiceOutput", settings)
 			}
+			onRealtimeVoiceChange={(settings) =>
+				void updateModeSettings("realtimeVoice", settings)
+			}
 			providers={providers}
+			realtimeVoice={modeSettings.realtimeVoice}
+			realtimeVoiceSaving={savingModes.realtimeVoice}
 			voiceInput={modeSettings.voiceInput}
 			voiceInputSaving={savingModes.voiceInput}
 			voiceOutput={modeSettings.voiceOutput}

@@ -2,6 +2,7 @@ import type {
 	ProviderMode,
 	ProviderModeSettingsMap,
 	ProviderModesSettings,
+	RealtimeVoiceModeSettings,
 	VoiceInputModeSettings,
 	VoiceOutputModeSettings,
 } from "@cline/shared";
@@ -43,9 +44,17 @@ export const VoiceOutputModeSettingsSchema: z.ZodType<VoiceOutputModeSettings> =
 		voice: z.string().min(1).optional(),
 	});
 
+export const RealtimeVoiceModeSettingsSchema: z.ZodType<RealtimeVoiceModeSettings> =
+	z.object({
+		providerId: z.string().min(1),
+		modelId: z.string().min(1),
+		voice: z.string().min(1).optional(),
+	});
+
 export const ProviderModeSettingsSchemas = {
 	voiceInput: VoiceInputModeSettingsSchema,
 	voiceOutput: VoiceOutputModeSettingsSchema,
+	realtimeVoice: RealtimeVoiceModeSettingsSchema,
 } as const satisfies {
 	[Mode in ProviderMode]: z.ZodType<ProviderModeSettingsMap[Mode]>;
 };

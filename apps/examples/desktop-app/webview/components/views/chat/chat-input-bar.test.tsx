@@ -54,6 +54,7 @@ afterEach(async () => {
 describe("ChatInputBar", () => {
 	it("preserves an explicit High selection across capability and status updates", async () => {
 		const onReasoningChange = vi.fn();
+		const onOpenRealtimeVoiceSettings = vi.fn();
 		const onOpenVoiceInputSettings = vi.fn();
 		const render = async (status: ChatSessionStatus) => {
 			await act(async () => {
@@ -83,6 +84,7 @@ describe("ChatInputBar", () => {
 							}))}
 							onModeToggle={vi.fn()}
 							onModelChange={vi.fn()}
+							onOpenRealtimeVoiceSettings={onOpenRealtimeVoiceSettings}
 							onOpenVoiceInputSettings={onOpenVoiceInputSettings}
 							onPromptInputChange={vi.fn()}
 							onProviderChange={vi.fn()}
@@ -176,6 +178,9 @@ describe("ChatInputBar", () => {
 		const speechTrigger = container.querySelector<HTMLButtonElement>(
 			'[aria-label="Record speech"]',
 		);
+		const realtimeTrigger = container.querySelector<HTMLButtonElement>(
+			'[aria-label="Configure realtime voice"]',
+		);
 		const thinkingTrigger = container.querySelector<HTMLButtonElement>(
 			'[aria-label="Thinking level"]',
 		);
@@ -201,9 +206,19 @@ describe("ChatInputBar", () => {
 			'[aria-label="Send message"]',
 		);
 		expect(rightControls?.contains(sendTrigger ?? null)).toBe(true);
+		expect(rightControls?.contains(realtimeTrigger ?? null)).toBe(true);
 		expect(rightControls?.contains(speechTrigger ?? null)).toBe(true);
+		expect(
+			realtimeTrigger?.querySelector(".lucide-audio-waveform"),
+		).not.toBeNull();
+		expect(speechTrigger?.querySelector(".lucide-mic")).not.toBeNull();
+		expect(realtimeTrigger?.nextElementSibling).toBe(
+			speechTrigger?.parentElement,
+		);
 		expect(speechTrigger?.parentElement?.nextElementSibling).toBe(sendTrigger);
 		expect(leftControls?.parentElement).toBe(rightControls?.parentElement);
+		await act(async () => realtimeTrigger?.click());
+		expect(onOpenRealtimeVoiceSettings).toHaveBeenCalledOnce();
 		await act(async () => speechTrigger?.click());
 		expect(onOpenVoiceInputSettings).toHaveBeenCalledOnce();
 	});

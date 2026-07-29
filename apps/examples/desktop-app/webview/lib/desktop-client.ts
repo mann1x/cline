@@ -158,7 +158,11 @@ export function writeDesktopDebugLog(payload: unknown): void {
 		...(entry.metadata ?? {}),
 	};
 	if (entry.level === "error") {
-		console.error(prefix, details);
+		// Next.js treats console.error calls from application code as runtime
+		// errors and opens its development error overlay. These entries are
+		// already handled diagnostics (the caller owns user-facing recovery),
+		// so keep them visible in DevTools without presenting a false crash.
+		console.warn(prefix, { ...details, severity: "error" });
 	} else if (entry.level === "info") {
 		console.info(prefix, details);
 	} else {

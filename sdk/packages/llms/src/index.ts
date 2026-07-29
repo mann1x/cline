@@ -100,6 +100,14 @@ export {
 	type ResolveProviderRequestHeadersInput,
 	resolveProviderRequestHeaders,
 } from "./providers/request-headers";
+export {
+	createRealtimeVoiceSession,
+	type RealtimeProviderTransport,
+	type RealtimeVoiceSession,
+	type RealtimeVoiceSessionRequest,
+	resolveRealtimeProviderTransport,
+	resolveVercelAIGatewayBaseUrl,
+} from "./realtime";
 export { disposeLangfuseTelemetry } from "./services/langfuse-telemetry";
 export {
 	DEFAULT_SPEECH_GENERATION_TIMEOUT_MS,

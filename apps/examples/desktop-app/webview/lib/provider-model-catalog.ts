@@ -8,6 +8,7 @@ import type {
 	ProviderModel,
 	ProviderModelsResponse,
 	ProviderModesSettings,
+	RealtimeVoiceModeSettings,
 	VoiceInputModeSettings,
 	VoiceOutputModeSettings,
 } from "@/lib/provider-schema";
@@ -36,9 +37,19 @@ export type SpeechGenerationModelTarget = {
 	voice?: string;
 };
 
+export type RealtimeVoiceModelTarget = {
+	providerId: string;
+	providerName: string;
+	modelId: string;
+	modelName: string;
+	supportsTools: boolean;
+	voice?: string;
+};
+
 export interface ProviderModeModelTargetMap {
 	voiceInput: TranscriptionModelTarget;
 	voiceOutput: SpeechGenerationModelTarget;
+	realtimeVoice: RealtimeVoiceModelTarget;
 }
 
 export type ProviderModeModelTargets = {
@@ -67,6 +78,27 @@ export function isSpeechGenerationModel(model: ProviderModel): boolean {
 		model.inputModalities[0] === "text" &&
 		model.outputModalities?.length === 1 &&
 		model.outputModalities[0] === "audio"
+	);
+}
+
+export function isRealtimeVoiceModel(model: ProviderModel): boolean {
+	if (
+		model.inputModalities?.includes("audio") !== true ||
+		model.outputModalities?.includes("audio") !== true
+	) {
+		return false;
+	}
+	return /(?:^|[/_.\s-])(realtime|live|voice)(?:$|[/_.\s-])/i.test(
+		`${model.id} ${model.name}`,
+	);
+}
+
+export function hasRealtimeVoiceTransport(providerId: string): boolean {
+	return (
+		providerId === "vercel-ai-gateway" ||
+		providerId === "gemini" ||
+		providerId === "openai-native" ||
+		providerId === "openai"
 	);
 }
 
@@ -112,6 +144,33 @@ export function selectSpeechGenerationModel(
 				providerName: provider.name,
 				modelId: model.id,
 				modelName: model.name,
+				voice: selection.voice,
+			}
+		: null;
+}
+
+export function selectRealtimeVoiceModel(
+	providers: Provider[],
+	selection: RealtimeVoiceModeSettings | undefined,
+): RealtimeVoiceModelTarget | null {
+	if (!selection) return null;
+	const provider = providers.find(
+		(candidate) =>
+			candidate.enabled &&
+			candidate.id === selection.providerId &&
+			hasRealtimeVoiceTransport(candidate.id),
+	);
+	const model = provider?.modelList?.find(
+		(candidate) =>
+			candidate.id === selection.modelId && isRealtimeVoiceModel(candidate),
+	);
+	return provider && model
+		? {
+				providerId: provider.id,
+				providerName: provider.name,
+				modelId: model.id,
+				modelName: model.name,
+				supportsTools: model.supportsTools === true,
 				voice: selection.voice,
 			}
 		: null;
@@ -164,6 +223,7 @@ export function buildProviderModelCatalog(
 		modes: {
 			voiceInput: selectTranscriptionModel(providers, modes.voiceInput),
 			voiceOutput: selectSpeechGenerationModel(providers, modes.voiceOutput),
+			realtimeVoice: selectRealtimeVoiceModel(providers, modes.realtimeVoice),
 		},
 	};
 }

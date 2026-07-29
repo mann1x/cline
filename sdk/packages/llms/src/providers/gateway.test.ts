@@ -88,6 +88,7 @@ vi.mock("ai", () => ({
 		jsonSchema: schema,
 		...(options && typeof options === "object" ? options : {}),
 	}),
+	tool: (definition: unknown) => definition,
 	generateImage: (input: unknown) => generateImageSpy(input),
 	streamText: (input: unknown) => streamTextSpy(input),
 	// `wrapLanguageModel` is used by the openai-compatible and mistral
@@ -3146,13 +3147,10 @@ describe("sdk-gateway", () => {
 						instructions: "You are helpful.",
 						store: false,
 					}),
-					"openai-codex": expect.objectContaining({
+					openaiCodex: expect.objectContaining({
 						store: false,
 						reasoningEffort: "high",
 						reasoningSummary: "auto",
-					}),
-					openaiCodex: expect.objectContaining({
-						store: false,
 					}),
 				}),
 			}),
@@ -3165,9 +3163,7 @@ describe("sdk-gateway", () => {
 			| undefined;
 		expect(call).not.toHaveProperty("maxOutputTokens");
 		expect(call?.providerOptions?.openai).not.toHaveProperty("truncation");
-		expect(call?.providerOptions?.["openai-codex"]).not.toHaveProperty(
-			"truncation",
-		);
+		expect(call?.providerOptions?.["openai-codex"]).toBeUndefined();
 		expect(call?.providerOptions?.openaiCodex).not.toHaveProperty("truncation");
 	});
 
@@ -3964,8 +3960,8 @@ describe("sdk-gateway", () => {
 		{
 			providerId: "vercel-ai-gateway",
 			modelId: "alibaba/qwen3.6-plus",
-			providerOptionsKey: "vercel-ai-gateway",
-			aliasKey: "vercelAiGateway",
+			providerOptionsKey: "vercelAiGateway",
+			aliasKey: undefined,
 		},
 	])("forwards Qwen prompt cache controls without Anthropic reasoning for $providerId", async ({
 		providerId,
@@ -4393,9 +4389,6 @@ describe("sdk-gateway", () => {
 						reasoning: { exclude: true },
 					}),
 					vercelAiGateway: expect.objectContaining({
-						reasoning: { exclude: true },
-					}),
-					"vercel-ai-gateway": expect.objectContaining({
 						reasoning: { exclude: true },
 					}),
 				}),

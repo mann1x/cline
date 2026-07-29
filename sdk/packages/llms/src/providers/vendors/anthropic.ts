@@ -1,5 +1,4 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
-import type { LanguageModelV3 } from "@ai-sdk/provider";
 import type {
 	GatewayProviderContext,
 	GatewayResolvedProviderConfig,
@@ -30,7 +29,7 @@ export async function createAnthropicProviderModule(
 			const model = provider(modelId);
 			return isMiniMax
 				? wrapLanguageModel({
-						model: model as LanguageModelV3,
+						model,
 						middleware: miniMaxThinkingDisabledMiddleware,
 					})
 				: model;
