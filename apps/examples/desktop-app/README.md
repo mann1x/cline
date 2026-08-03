@@ -176,8 +176,9 @@ credentials, request headers, recorded audio, or transcript contents.
   its Scribe v2 model. Choose the voice input provider and model explicitly under
   **Settings → Models → Voice input**. Mode-specific provider settings are stored
   separately from the chat model under the `modes` map in
-  `~/.cline/data/settings/providers.json`; provider credentials remain in their
-  existing provider entry and never enter the webview. All modes use the single
+  `~/.cline/data/settings/clients/desktop/settings.json`. Provider credentials remain in
+  `~/.cline/data/settings/providers.json`, shared with other clients; provider secrets
+  stay in their existing provider entry and never enter the webview. All modes use the single
   `save_mode_settings` sidecar command with a typed mode discriminator rather
   than adding a save command per mode. ElevenLabs uses its native
   `/v1/speech-to-text` API. Text-to-speech models with `output: ["audio"]` are

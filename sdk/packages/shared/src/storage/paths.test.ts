@@ -11,6 +11,7 @@ import {
 	RULES_CONFIG_DIRECTORY_NAME,
 	resolveAgentsConfigDirPath,
 	resolveChatWorkspacePath,
+	resolveClientSettingsPath,
 	resolveClineDataDir,
 	resolveConnectorDataDir,
 	resolveConnectorSettingsPath,
@@ -145,6 +146,24 @@ describe("storage path resolution", () => {
 
 		expect(resolveProviderSettingsPath()).toBe(
 			join("/tmp/cline-data", "settings", "providers.json"),
+		);
+	});
+
+	it("scopes client settings below the client id", () => {
+		snapshot = captureEnv();
+		process.env.CLINE_DATA_DIR = "/tmp/cline-data";
+
+		expect(resolveClientSettingsPath("desktop")).toBe(
+			join(
+				"/tmp/cline-data",
+				"settings",
+				"clients",
+				"desktop",
+				"settings.json",
+			),
+		);
+		expect(() => resolveClientSettingsPath("../desktop")).toThrow(
+			"Invalid client settings id",
 		);
 	});
 

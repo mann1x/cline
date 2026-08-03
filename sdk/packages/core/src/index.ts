@@ -620,6 +620,7 @@ export {
 	loginLocalProvider,
 	markLocalProviderEnabled,
 	normalizeOAuthProvider,
+	type ProviderModeSettingsStore,
 	refreshProviderModelsFromSource,
 	resolveLocalClineAuthToken,
 	type SaveModeSettingsRequest,
@@ -643,6 +644,11 @@ export {
 	type ProviderConfigFieldRequirement,
 	type ProviderConfigFields,
 } from "./services/providers/provider-config-fields";
+export {
+	ClientSettingsManager,
+	type ClientSettingsManagerOptions,
+	type StoredClientSettings,
+} from "./services/storage/client-settings-manager";
 export {
 	type MigrateLegacyProviderSettingsOptions,
 	type MigrateLegacyProviderSettingsResult,

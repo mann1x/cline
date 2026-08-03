@@ -34,7 +34,11 @@ import {
 	startConnectorChannel,
 	stopConnectorChannel,
 } from "./connectors";
-import { providerSettingsManager, workspaceRoot } from "./deps";
+import {
+	desktopClientSettingsManager,
+	providerSettingsManager,
+	workspaceRoot,
+} from "./deps";
 import {
 	installMarketplaceEntryForDesktopCommand,
 	listMarketplaceInstalledEntries,
@@ -108,6 +112,7 @@ export async function handleDesktopCommand(
 		await ensureCustomProvidersLoaded(providerSettingsManager);
 		return await listLocalProviders(providerSettingsManager, {
 			isClinePassEnabled: true,
+			modeSettings: desktopClientSettingsManager.read().modes,
 		});
 	}
 	if (command === "list_provider_models") {
@@ -123,7 +128,11 @@ export async function handleDesktopCommand(
 			args?.settings == null
 				? undefined
 				: parseProviderModeSettings(mode, args.settings);
-		return await saveModeSettings(providerSettingsManager, { mode, settings });
+		return await saveModeSettings(
+			providerSettingsManager,
+			{ mode, settings },
+			desktopClientSettingsManager,
+		);
 	}
 	if (command === "save_provider_settings") {
 		return saveLocalProviderSettings(providerSettingsManager, {

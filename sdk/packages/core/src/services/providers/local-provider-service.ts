@@ -53,6 +53,18 @@ const CLINE_PASS_PROVIDER_ID = "cline-pass";
 
 export interface ListLocalProvidersOptions {
 	isClinePassEnabled?: boolean;
+	modeSettings?: ProviderModesSettings;
+}
+
+export interface ProviderModeSettingsStore {
+	getFilePath(): string;
+	getModeSettings<Mode extends ProviderMode>(
+		mode: Mode,
+	): ProviderModeSettingsMap[Mode] | undefined;
+	setModeSettings<Mode extends ProviderMode>(
+		mode: Mode,
+		settings: ProviderModeSettingsMap[Mode] | undefined,
+	): { modes: ProviderModesSettings };
 }
 
 export interface UpdateLocalProviderRequest {
@@ -907,7 +919,10 @@ export async function listLocalProviders(
 	return {
 		providers,
 		settingsPath: manager.getFilePath(),
-		modes: collectAvailableModeSettings(providers, state.modes),
+		modes: collectAvailableModeSettings(
+			providers,
+			options.modeSettings ?? state.modes,
+		),
 	};
 }
 
@@ -961,8 +976,9 @@ export async function transcribeLocalAudio(
 export async function transcribeConfiguredVoiceInput(
 	manager: ProviderSettingsManager,
 	request: TranscribeConfiguredVoiceInputRequest,
+	modeSettingsStore: ProviderModeSettingsStore = manager,
 ): Promise<LlmsModels.AudioTranscriptionResult> {
-	const selection = manager.getModeSettings("voiceInput");
+	const selection = modeSettingsStore.getModeSettings("voiceInput");
 	if (!selection) {
 		throw new Error("Configure a voice input provider and model in Settings");
 	}
@@ -976,9 +992,10 @@ export async function transcribeConfiguredVoiceInput(
 
 async function createStreamingVoiceInputSession(
 	manager: ProviderSettingsManager,
+	modeSettingsStore: ProviderModeSettingsStore,
 	expiresAfterSeconds: number | undefined,
 ): Promise<ProviderModeSessionMap["voiceInput"]> {
-	const selection = manager.getModeSettings("voiceInput");
+	const selection = modeSettingsStore.getModeSettings("voiceInput");
 	if (!selection) {
 		throw new Error("Configure a voice input provider and model in Settings");
 	}
@@ -1016,9 +1033,10 @@ async function createStreamingVoiceInputSession(
 
 async function createRealtimeVoiceModeSession(
 	manager: ProviderSettingsManager,
+	modeSettingsStore: ProviderModeSettingsStore,
 	expiresAfterSeconds: number | undefined,
 ): Promise<ProviderModeSessionMap["realtimeVoice"]> {
-	const selection = manager.getModeSettings("realtimeVoice");
+	const selection = modeSettingsStore.getModeSettings("realtimeVoice");
 	if (!selection) {
 		throw new Error(
 			"Configure a realtime voice provider and model in Settings",
@@ -1056,6 +1074,7 @@ async function createRealtimeVoiceModeSession(
 
 type ModeSessionCreator<Mode extends ProviderSessionMode> = (
 	manager: ProviderSettingsManager,
+	modeSettingsStore: ProviderModeSettingsStore,
 	expiresAfterSeconds: number | undefined,
 ) => Promise<ProviderModeSessionMap[Mode]>;
 
@@ -1071,11 +1090,12 @@ export async function createConfiguredModeSession<
 >(
 	manager: ProviderSettingsManager,
 	request: CreateConfiguredModeSessionRequest<Mode>,
+	modeSettingsStore: ProviderModeSettingsStore = manager,
 ): Promise<ProviderModeSessionMap[Mode]> {
 	const creator = MODE_SESSION_CREATORS[
 		request.mode
 	] as ModeSessionCreator<Mode>;
-	return creator(manager, request.expiresAfterSeconds);
+	return creator(manager, modeSettingsStore, request.expiresAfterSeconds);
 }
 
 export async function synthesizeLocalSpeech(
@@ -1113,8 +1133,9 @@ export async function synthesizeLocalSpeech(
 export async function synthesizeConfiguredVoiceOutput(
 	manager: ProviderSettingsManager,
 	request: SynthesizeConfiguredVoiceOutputRequest,
+	modeSettingsStore: ProviderModeSettingsStore = manager,
 ): Promise<LlmsModels.SpeechGenerationResult> {
-	const selection = manager.getModeSettings("voiceOutput");
+	const selection = modeSettingsStore.getModeSettings("voiceOutput");
 	if (!selection) {
 		throw new Error("Configure a voice output provider and model in Settings");
 	}
@@ -1224,16 +1245,20 @@ async function validateModeSettings<Mode extends ProviderMode>(
 export async function saveModeSettings<Mode extends ProviderMode>(
 	manager: ProviderSettingsManager,
 	request: SaveModeSettingsRequest<Mode>,
+	modeSettingsStore: ProviderModeSettingsStore = manager,
 ): Promise<{ settingsPath: string; modes: ProviderModesSettings }> {
 	if (!request.settings) {
-		const state = manager.setModeSettings(request.mode, undefined);
-		return { settingsPath: manager.getFilePath(), modes: state.modes };
+		const state = modeSettingsStore.setModeSettings(request.mode, undefined);
+		return {
+			settingsPath: modeSettingsStore.getFilePath(),
+			modes: state.modes,
+		};
 	}
 
 	const parsed = parseProviderModeSettings(request.mode, request.settings);
 	const normalized = await validateModeSettings(manager, request.mode, parsed);
-	const state = manager.setModeSettings(request.mode, normalized);
-	return { settingsPath: manager.getFilePath(), modes: state.modes };
+	const state = modeSettingsStore.setModeSettings(request.mode, normalized);
+	return { settingsPath: modeSettingsStore.getFilePath(), modes: state.modes };
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

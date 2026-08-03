@@ -19,6 +19,7 @@ import type {
 } from "@cline/core";
 import {
 	addLocalProvider,
+	ClientSettingsManager,
 	ClineAccountService,
 	createConfiguredModeSession,
 	createUserInstructionConfigService,
@@ -114,6 +115,15 @@ const execFileAsync = promisify(execFile);
 const MAX_RECORDED_AUDIO_BYTES = 25 * 1024 * 1024;
 const MAX_GENERATED_SPEECH_BYTES = 25 * 1024 * 1024;
 const MAX_SPEECH_TEXT_CHARACTERS = 10_000;
+const desktopClientSettingsManager = new ClientSettingsManager({
+	clientId: "desktop",
+});
+
+function createDesktopProviderSettingsManager(): ProviderSettingsManager {
+	const manager = new ProviderSettingsManager();
+	desktopClientSettingsManager.initializeModesIfMissing(manager.read().modes);
+	return manager;
+}
 
 type DesktopDebugLogLevel = "debug" | "info" | "error";
 
@@ -1492,9 +1502,12 @@ export async function handleCommand(
 
 	// ── Provider management ────────────────────────────────────────────
 	if (command === "list_provider_catalog") {
-		const manager = new ProviderSettingsManager();
+		const manager = createDesktopProviderSettingsManager();
 		await ensureCustomProvidersLoaded(manager);
-		return await listLocalProviders(manager, { isClinePassEnabled: true });
+		return await listLocalProviders(manager, {
+			isClinePassEnabled: true,
+			modeSettings: desktopClientSettingsManager.read().modes,
+		});
 	}
 	if (command === "list_provider_models") {
 		const manager = new ProviderSettingsManager();
@@ -1505,8 +1518,8 @@ export async function handleCommand(
 	}
 	if (command === "create_mode_session") {
 		const mode = ProviderSessionModeSchema.parse(args?.mode);
-		const manager = new ProviderSettingsManager();
-		const selection = manager.getModeSettings(mode);
+		const manager = createDesktopProviderSettingsManager();
+		const selection = desktopClientSettingsManager.getModeSettings(mode);
 		const providerConfig = selection
 			? manager.getProviderConfig(selection.providerId, {
 					includeKnownModels: false,
@@ -1536,10 +1549,14 @@ export async function handleCommand(
 		);
 		const startedAt = Date.now();
 		try {
-			const session = await createConfiguredModeSession(manager, {
-				mode,
-				expiresAfterSeconds: 300,
-			});
+			const session = await createConfiguredModeSession(
+				manager,
+				{
+					mode,
+					expiresAfterSeconds: 300,
+				},
+				desktopClientSettingsManager,
+			);
 			emitDesktopDebugLog(
 				ctx,
 				mode === "voiceInput" ? "voice-input" : "realtime-voice",
@@ -1584,8 +1601,9 @@ export async function handleCommand(
 				`recorded audio exceeds the ${MAX_RECORDED_AUDIO_BYTES} byte limit`,
 			);
 		}
-		const manager = new ProviderSettingsManager();
-		const selection = manager.getModeSettings("voiceInput");
+		const manager = createDesktopProviderSettingsManager();
+		const selection =
+			desktopClientSettingsManager.getModeSettings("voiceInput");
 		const providerConfig = selection
 			? manager.getProviderConfig(selection.providerId, {
 					includeKnownModels: false,
@@ -1611,10 +1629,14 @@ export async function handleCommand(
 		);
 		const startedAt = Date.now();
 		try {
-			const result = await transcribeConfiguredVoiceInput(manager, {
-				audio: Buffer.from(audioBase64, "base64"),
-				mediaType,
-			});
+			const result = await transcribeConfiguredVoiceInput(
+				manager,
+				{
+					audio: Buffer.from(audioBase64, "base64"),
+					mediaType,
+				},
+				desktopClientSettingsManager,
+			);
 			emitDesktopDebugLog(
 				ctx,
 				"voice-input",
@@ -1654,8 +1676,9 @@ export async function handleCommand(
 				`speech text exceeds the ${MAX_SPEECH_TEXT_CHARACTERS} character limit`,
 			);
 		}
-		const manager = new ProviderSettingsManager();
-		const selection = manager.getModeSettings("voiceOutput");
+		const manager = createDesktopProviderSettingsManager();
+		const selection =
+			desktopClientSettingsManager.getModeSettings("voiceOutput");
 		const providerConfig = selection
 			? manager.getProviderConfig(selection.providerId, {
 					includeKnownModels: false,
@@ -1681,7 +1704,11 @@ export async function handleCommand(
 		);
 		const startedAt = Date.now();
 		try {
-			const result = await synthesizeConfiguredVoiceOutput(manager, { text });
+			const result = await synthesizeConfiguredVoiceOutput(
+				manager,
+				{ text },
+				desktopClientSettingsManager,
+			);
 			if (result.audio.byteLength > MAX_GENERATED_SPEECH_BYTES) {
 				throw new Error(
 					`generated speech exceeds the ${MAX_GENERATED_SPEECH_BYTES} byte limit`,
@@ -1725,8 +1752,12 @@ export async function handleCommand(
 			args?.settings == null
 				? undefined
 				: parseProviderModeSettings(mode, args.settings);
-		const manager = new ProviderSettingsManager();
-		const result = await saveModeSettings(manager, { mode, settings });
+		const manager = createDesktopProviderSettingsManager();
+		const result = await saveModeSettings(
+			manager,
+			{ mode, settings },
+			desktopClientSettingsManager,
+		);
 		emitDesktopDebugLog(ctx, "mode-settings", "info", "Mode settings saved", {
 			mode,
 			providerId: settings?.providerId,
