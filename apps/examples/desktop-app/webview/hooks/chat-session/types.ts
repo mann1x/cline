@@ -21,9 +21,13 @@ export type ReasoningDeltaEvent = {
 	redacted?: boolean;
 };
 
-export type ImageDeltaEvent = {
-	data?: string;
-	mediaType?: string;
+export type ChatUsageEvent = {
+	/** Tokens consumed by the latest model request. */
+	inputTokens?: number;
+	/** Tokens produced by the latest model request. */
+	outputTokens?: number;
+	/** Cost of the latest model request. */
+	cost?: number;
 };
 
 export type ToolCallStartEvent = {
@@ -90,6 +94,19 @@ export type ChatApiResult = {
 		durationMs?: number;
 	}>;
 	messages?: unknown[];
+};
+
+export type ChatSessionCommandResponse = {
+	sessionId?: string;
+	cwd?: string;
+	workspaceRoot?: string;
+	result?: ChatApiResult;
+	ok?: boolean;
+	queued?: boolean;
+	promptsInQueue?: PromptInQueue[];
+	prompt?: PromptInQueue;
+	updated?: boolean;
+	removed?: boolean;
 };
 
 export type ChatPromptCompletion = {

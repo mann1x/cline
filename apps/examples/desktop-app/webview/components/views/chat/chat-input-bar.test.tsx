@@ -17,7 +17,7 @@ const { loadProviderModelCatalogMock, loadProviderModelsMock } = vi.hoisted(
 vi.mock("@/lib/provider-model-catalog", () => ({
 	loadProviderModelCatalog: loadProviderModelCatalogMock,
 	loadProviderModels: loadProviderModelsMock,
-	MODE_SETTINGS_CHANGED_EVENT: "cline:test-mode-settings-changed",
+	MODE_SETTINGS_CHANGED_EVENT: "cline:mode-settings-changed",
 }));
 
 let container: HTMLDivElement;
@@ -30,10 +30,6 @@ beforeEach(() => {
 		enabledProviderIds: ["cline"],
 		providerModels: { cline: ["test-model"] },
 		providerReasoningModels: { cline: [] },
-		modes: {
-			voiceInput: null,
-			voiceOutput: null,
-		},
 	});
 	loadProviderModelsMock.mockReset().mockResolvedValue([]);
 	HTMLElement.prototype.scrollIntoView = vi.fn();
@@ -127,10 +123,12 @@ describe("ChatInputBar", () => {
 		await act(async () => compactModelTrigger?.click());
 		expect(compactModelTrigger?.getAttribute("aria-expanded")).toBe("true");
 		expect(
-			container.querySelectorAll<HTMLButtonElement>('[aria-label="Provider"]'),
+			container.querySelectorAll<HTMLButtonElement>(
+				'[aria-label^="Provider:"]',
+			),
 		).toHaveLength(2);
 		expect(
-			container.querySelectorAll<HTMLButtonElement>('[aria-label="Model"]'),
+			container.querySelectorAll<HTMLButtonElement>('[aria-label^="Model:"]'),
 		).toHaveLength(2);
 		await act(async () =>
 			container
@@ -142,8 +140,11 @@ describe("ChatInputBar", () => {
 		const promptInput = container.querySelector<HTMLTextAreaElement>(
 			'textarea[role="combobox"]',
 		);
-		expect(promptInput?.className).toContain("overflow-y-hidden");
-		expect(promptInput?.className).not.toContain("overflow-y-auto");
+		expect(promptInput?.rows).toBe(2);
+		expect(promptInput?.className).toContain("field-sizing-content");
+		expect(promptInput?.className).toContain("overflow-y-auto");
+		expect(promptInput?.style.minHeight).toBe("2.5rem");
+		expect(promptInput?.style.maxHeight).toBe("6.25rem");
 
 		await act(async () => {
 			if (!promptInput) return;
@@ -154,7 +155,7 @@ describe("ChatInputBar", () => {
 			setValue?.call(promptInput, "first line\nsecond line");
 			promptInput.dispatchEvent(new Event("input", { bubbles: true }));
 		});
-		expect(promptInput?.className).toContain("overflow-y-auto");
+		expect(promptInput?.rows).toBe(2);
 
 		await render("starting");
 		expect(container.querySelector('[aria-label="Stop agent"]')).toBeNull();
@@ -163,7 +164,7 @@ describe("ChatInputBar", () => {
 
 		expect(onReasoningChange).not.toHaveBeenCalled();
 		const providerTrigger = container.querySelector<HTMLButtonElement>(
-			'[aria-label="Provider"]',
+			'[aria-label^="Provider:"]',
 		);
 		expect(providerTrigger?.parentElement?.parentElement?.className).toContain(
 			"max-[560px]:hidden",
@@ -188,7 +189,6 @@ describe("ChatInputBar", () => {
 		expect(leftControls?.className).toContain("max-[560px]:flex-nowrap");
 		expect(leftControls?.contains(compactModelTrigger ?? null)).toBe(true);
 		expect(leftControls?.contains(thinkingTrigger ?? null)).toBe(true);
-		expect(leftControls?.contains(speechTrigger ?? null)).toBe(false);
 
 		expect(workspaceTrigger?.disabled).toBe(true);
 		expect(workspaceTrigger?.className).toContain("max-[560px]:size-7");
@@ -200,14 +200,14 @@ describe("ChatInputBar", () => {
 		expect(workspaceFooterSlot?.className).not.toContain("truncate");
 		expect(workspaceFooterSlot?.className).not.toContain("hidden");
 		expect(workspaceFooterSlot?.className).not.toContain("max-w-");
-		const rightControls = workspaceFooterSlot?.parentElement;
+		const rightControls = workspaceFooterSlot?.parentElement?.parentElement;
 		expect(rightControls?.contains(workspaceTrigger ?? null)).toBe(true);
 		const sendTrigger = container.querySelector<HTMLButtonElement>(
 			'[aria-label="Send message"]',
 		);
-		expect(rightControls?.contains(sendTrigger ?? null)).toBe(true);
-		expect(rightControls?.contains(realtimeTrigger ?? null)).toBe(true);
-		expect(rightControls?.contains(speechTrigger ?? null)).toBe(true);
+		const voiceControls = realtimeTrigger?.parentElement;
+		expect(voiceControls?.contains(realtimeTrigger ?? null)).toBe(true);
+		expect(voiceControls?.contains(speechTrigger ?? null)).toBe(true);
 		expect(
 			realtimeTrigger?.querySelector(".lucide-audio-waveform"),
 		).not.toBeNull();
@@ -215,7 +215,7 @@ describe("ChatInputBar", () => {
 		expect(realtimeTrigger?.nextElementSibling).toBe(
 			speechTrigger?.parentElement,
 		);
-		expect(speechTrigger?.parentElement?.nextElementSibling).toBe(sendTrigger);
+		expect(sendTrigger).not.toBeNull();
 		expect(leftControls?.parentElement).toBe(rightControls?.parentElement);
 		await act(async () => realtimeTrigger?.click());
 		expect(onOpenRealtimeVoiceSettings).toHaveBeenCalledOnce();
@@ -417,5 +417,155 @@ describe("ChatInputBar", () => {
 		});
 
 		expect(onRemovePromptInQueue).toHaveBeenCalledWith("queued-prompt-1");
+	});
+});
+
+describe("ChatInputBar token ring", () => {
+	const renderTokenUsage = async (
+		summary: Parameters<typeof ChatInputBar>[0]["summary"],
+		modelContextWindow?: number,
+	) => {
+		await act(async () => {
+			root.render(
+				<WorkspaceProvider
+					value={{
+						workspaceRoot: "/workspace/cline",
+						workspaces: ["/workspace/cline"],
+						listWorkspaces: vi.fn(async () => ["/workspace/cline"]),
+						refreshWorkspaces: vi.fn(async () => undefined),
+						switchWorkspace: vi.fn(async () => true),
+						pickWorkspaceDirectory: vi.fn(async () => null),
+						selectChat: vi.fn(async () => true),
+					}}
+				>
+					<ChatInputBar
+						attachments={[]}
+						gitBranch="main"
+						mode="act"
+						model="test-model"
+						modelContextWindow={modelContextWindow}
+						onAbort={vi.fn()}
+						onAttachFiles={vi.fn()}
+						onEditPromptInQueue={vi.fn()}
+						onListGitBranches={vi.fn(async () => ({
+							current: "main",
+							branches: ["main"],
+						}))}
+						onModeToggle={vi.fn()}
+						onModelChange={vi.fn()}
+						onPromptInputChange={vi.fn()}
+						onProviderChange={vi.fn()}
+						onReasoningChange={vi.fn()}
+						onRemoveAttachment={vi.fn()}
+						onRemovePromptInQueue={vi.fn()}
+						onSend={vi.fn()}
+						onSteerPromptInQueue={vi.fn()}
+						onSwitchGitBranch={vi.fn(async () => true)}
+						promptDraft={{ version: 0, value: "" }}
+						promptsInQueue={[]}
+						provider="cline"
+						reasoningEffort="low"
+						status="idle"
+						summary={summary}
+						thinking
+					/>
+				</WorkspaceProvider>,
+			);
+			await Promise.resolve();
+		});
+		return container.querySelector<HTMLButtonElement>("#token-usage");
+	};
+
+	it("waits for input usage and model context metadata", async () => {
+		expect(
+			await renderTokenUsage({
+				toolCalls: 0,
+				tokensIn: 500,
+				tokensOut: 0,
+			}),
+		).toBeNull();
+		expect(
+			await renderTokenUsage(
+				{
+					toolCalls: 0,
+					tokensIn: 0,
+					tokensOut: 500,
+				},
+				2000,
+			),
+		).toBeNull();
+	});
+
+	it("fills from input only and sits immediately before the workspace selector", async () => {
+		const trigger = await renderTokenUsage(
+			{
+				toolCalls: 0,
+				tokensIn: 1000,
+				tokensOut: 500,
+			},
+			2000,
+		);
+		expect(trigger?.getAttribute("aria-label")).toBe(
+			"Context window: 1,000 of 2,000 input tokens used (50%)",
+		);
+		expect(trigger?.textContent).toBe("");
+		const ring = trigger?.querySelector("svg");
+		expect(ring?.classList.contains("size-3.5")).toBe(true);
+		expect(ring?.getAttribute("height")).toBe("22");
+		expect(ring?.getAttribute("width")).toBe("22");
+		const progressCircle = trigger?.querySelector("circle.stroke-primary");
+		expect(progressCircle?.getAttribute("stroke-width")).toBe("4");
+		const circumference = 2 * Math.PI * 8.5;
+		expect(
+			Number(progressCircle?.getAttribute("stroke-dashoffset")),
+		).toBeCloseTo(circumference * 0.5);
+
+		const workspaceSelector = container.querySelector("#git-branch-btn");
+		expect(workspaceSelector).not.toBeNull();
+		expect(trigger?.parentElement?.classList.contains("gap-0")).toBe(true);
+		expect(trigger?.parentElement?.contains(workspaceSelector)).toBe(true);
+		expect(
+			Boolean(
+				trigger?.compareDocumentPosition(workspaceSelector as Node) &
+					Node.DOCUMENT_POSITION_FOLLOWING,
+			),
+		).toBe(true);
+		expect(container.textContent).not.toContain("1,500 tokens");
+	});
+
+	it("opens only supported usage details on click", async () => {
+		const trigger = await renderTokenUsage(
+			{
+				toolCalls: 0,
+				tokensIn: 500_000,
+				tokensOut: 500,
+				totalCostUsd: 0.0142,
+			},
+			1_000_000,
+		);
+		await act(async () => {
+			trigger?.click();
+		});
+
+		const panel = document.querySelector("#token-usage-panel");
+		expect(panel?.textContent).toContain("Context window500k / 1.0M (50%)");
+		expect(panel?.textContent).toContain("Output tokens500");
+		expect(panel?.textContent).toContain("Cost$0.014");
+		expect(panel?.textContent).not.toContain("Total");
+		expect(panel?.textContent).not.toContain("usage limit");
+	});
+
+	it("saturates at 100% without switching to a destructive style", async () => {
+		const trigger = await renderTokenUsage(
+			{
+				toolCalls: 0,
+				tokensIn: 130_000,
+				tokensOut: 5_000,
+			},
+			128_000,
+		);
+		const progressCircle = trigger?.querySelector("circle.stroke-primary");
+		expect(progressCircle?.getAttribute("stroke-dashoffset")).toBe("0");
+		expect(trigger?.querySelector(".stroke-destructive")).toBeNull();
 	});
 });

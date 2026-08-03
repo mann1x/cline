@@ -43,6 +43,7 @@ import { AccountProvider } from "@/contexts/account-context";
 import { WorkspaceProvider } from "@/contexts/workspace-context";
 import { useAppUpdate } from "@/hooks/use-app-update";
 import { useChatSession } from "@/hooks/use-chat-session";
+import { useSessionAgents } from "@/hooks/use-session-agents";
 import { useSessionHistory } from "@/hooks/use-session-history";
 import { toast } from "@/hooks/use-toast";
 import { syncAppIcon } from "@/lib/app-icon";
@@ -54,6 +55,10 @@ import {
 	desktopAppReducer,
 } from "@/lib/desktop-app-state";
 import { desktopClient } from "@/lib/desktop-client";
+import {
+	subscribeToDesktopMenuActions,
+	watchDesktopTrayStatus,
+} from "@/lib/desktop-tray";
 import { syncDesktopWindowTitle } from "@/lib/desktop-window-title";
 import { createLatestSuccessfulRequestGate } from "@/lib/latest-successful-request";
 import {
@@ -62,6 +67,10 @@ import {
 	ONBOARDING_RESET_EVENT,
 } from "@/lib/onboarding";
 import { fetchProviderCatalog } from "@/lib/provider-model-catalog";
+import {
+	buildSessionAgentActivity,
+	mergeAgentActivity,
+} from "@/lib/session-agents";
 import {
 	getSessionMetadataTitle,
 	type SessionHistoryItem,
@@ -150,6 +159,8 @@ export default function Home() {
 		void syncDesktopWindowTitle();
 	}, []);
 
+	useEffect(() => watchDesktopTrayStatus(), []);
+
 	const handleNewThread = useCallback(() => {
 		dispatchApp({ type: "new-thread", threadId: makeThreadId() });
 	}, []);
@@ -162,9 +173,12 @@ export default function Home() {
 		handleNewThread();
 	}, [handleNewThread]);
 
-	const handleOpenSession = useCallback((session: SessionHistoryItem) => {
-		dispatchApp({ type: "open-session", session });
-	}, []);
+	const handleOpenSession = useCallback(
+		(session: SessionHistoryItem, initialPromptDraft?: string) => {
+			dispatchApp({ type: "open-session", session, initialPromptDraft });
+		},
+		[],
+	);
 
 	const handleDeleteSession = useCallback(
 		(deletedSessionId: string, deletedThreadId?: string) => {
@@ -225,8 +239,25 @@ export default function Home() {
 		},
 		[navigateWith],
 	);
+	useEffect(
+		() =>
+			subscribeToDesktopMenuActions((action) => {
+				switch (action) {
+					case "new-session":
+						handleNewThread();
+						break;
+					case "open-settings":
+						handleViewChange("settings");
+						break;
+				}
+			}),
+		[handleNewThread, handleViewChange],
+	);
 	const handleThreadStarted = useCallback((threadId: string) => {
 		dispatchApp({ type: "thread-started", threadId });
+	}, []);
+	const handleInitialPromptDraftConsumed = useCallback((threadId: string) => {
+		dispatchApp({ type: "consume-initial-prompt-draft", threadId });
 	}, []);
 	const sessionHistory = useSessionHistory({
 		activeSessionId: activeHistorySessionId,
@@ -266,6 +297,19 @@ export default function Home() {
 		() => workspacePathsFromSessions(sessionHistory.sessions),
 		[sessionHistory.sessions],
 	);
+	// A child agent session names its parent, but only the history list knows the
+	// parent's title — resolve it here so the chat header can point back to it.
+	const activeParentSession = useMemo(() => {
+		const parentSessionId =
+			activeThread?.historySession?.parentSessionId?.trim();
+		if (!parentSessionId) {
+			return undefined;
+		}
+		const title = sessionHistory.threads.find(
+			(thread) => thread.id === parentSessionId,
+		)?.title;
+		return { sessionId: parentSessionId, title };
+	}, [activeThread?.historySession?.parentSessionId, sessionHistory.threads]);
 
 	return (
 		<AccountProvider>
@@ -318,16 +362,19 @@ export default function Home() {
 								<ChatThreadPane
 									key={activeThread.id}
 									historySession={activeThread.historySession}
+									initialPromptDraft={activeThread.initialPromptDraft}
 									knownWorkspacePaths={historyWorkspacePaths}
+									onInitialPromptDraftConsumed={
+										handleInitialPromptDraftConsumed
+									}
 									onUpdateSessionMetadata={handleUpdateSessionMetadata}
 									threadId={activeThread.id}
 									onDeleteSession={handleDeleteSession}
 									onNewThread={handleNewThread}
 									onOpenSession={handleOpenSession}
+									onOpenSessionById={handleOpenSessionById}
+									parentSession={activeParentSession}
 									onOpenVoiceInputSettings={() =>
-										handleSettingsSectionChange("Models")
-									}
-									onOpenVoiceOutputSettings={() =>
 										handleSettingsSectionChange("Models")
 									}
 									onOpenRealtimeVoiceSettings={() =>
@@ -361,28 +408,37 @@ export default function Home() {
 function ChatThreadPane({
 	threadId,
 	historySession,
+	initialPromptDraft,
 	knownWorkspacePaths,
+	onInitialPromptDraftConsumed,
 	onUpdateSessionMetadata,
 	onDeleteSession,
 	onNewThread,
 	onOpenSession,
+	onOpenSessionById,
+	parentSession,
 	onOpenVoiceInputSettings,
-	onOpenVoiceOutputSettings,
 	onOpenRealtimeVoiceSettings,
 	onThreadStarted,
 }: {
 	threadId: string;
 	historySession?: SessionHistoryItem;
+	initialPromptDraft?: string;
 	knownWorkspacePaths: string[];
+	onInitialPromptDraftConsumed?: (threadId: string) => void;
 	onUpdateSessionMetadata?: (
 		sessionId: string,
 		metadata: SessionMetadata,
 	) => void;
 	onDeleteSession?: (sessionId: string, threadId?: string) => void;
 	onNewThread?: () => void;
-	onOpenSession?: (session: SessionHistoryItem) => void;
+	onOpenSession?: (
+		session: SessionHistoryItem,
+		initialPromptDraft?: string,
+	) => void;
+	onOpenSessionById?: (sessionId: string) => void | Promise<void>;
+	parentSession?: { sessionId: string; title?: string };
 	onOpenVoiceInputSettings?: () => void;
-	onOpenVoiceOutputSettings?: () => void;
 	onOpenRealtimeVoiceSettings?: () => void;
 	onThreadStarted?: (threadId: string) => void;
 }) {
@@ -443,6 +499,8 @@ function ChatThreadPane({
 	const [providerCredentials, setProviderCredentials] = useState<
 		Record<string, { apiKey: string }>
 	>({});
+	const [providerModelContextWindows, setProviderModelContextWindows] =
+		useState<Record<string, Record<string, number>>>({});
 	const [providersLoaded, setProvidersLoaded] = useState(false);
 	// History paths lead each merge: they are ordered by session recency, so
 	// stored or stale entries only append after them.
@@ -500,6 +558,7 @@ function ChatThreadPane({
 					return;
 				}
 				const next: Record<string, { apiKey: string }> = {};
+				const nextContextWindows: Record<string, Record<string, number>> = {};
 				for (const provider of payload.providers ?? []) {
 					const id = provider.id?.trim();
 					if (!id) {
@@ -508,8 +567,21 @@ function ChatThreadPane({
 					next[id] = {
 						apiKey: provider.apiKey?.trim() ?? "",
 					};
+					const contextWindows: Record<string, number> = {};
+					for (const model of provider.modelList ?? []) {
+						if (
+							model.id &&
+							typeof model.contextWindow === "number" &&
+							Number.isFinite(model.contextWindow) &&
+							model.contextWindow > 0
+						) {
+							contextWindows[model.id] = model.contextWindow;
+						}
+					}
+					nextContextWindows[id] = contextWindows;
 				}
 				setProviderCredentials(next);
+				setProviderModelContextWindows(nextContextWindows);
 			} catch {
 				// Keep current config if provider catalog cannot be read.
 			} finally {
@@ -522,6 +594,9 @@ function ChatThreadPane({
 			cancelled = true;
 		};
 	}, []);
+
+	const modelContextWindow =
+		providerModelContextWindows[config.provider.trim()]?.[config.model.trim()];
 
 	useEffect(() => {
 		const selected = providerCredentials[config.provider];
@@ -792,11 +867,21 @@ function ChatThreadPane({
 			return;
 		}
 		hydratedSessionRef.current = historySession.sessionId;
-		setPromptInput("");
+		setPromptInput(initialPromptDraft ?? "");
+		if (initialPromptDraft !== undefined) {
+			onInitialPromptDraftConsumed?.(threadId);
+		}
 		setPendingAttachments([]);
 		setManualTitle(getSessionMetadataTitle(historySession.metadata));
 		void hydrateSession(historySession);
-	}, [historySession, hydrateSession, setPromptInput]);
+	}, [
+		historySession,
+		hydrateSession,
+		initialPromptDraft,
+		onInitialPromptDraftConsumed,
+		setPromptInput,
+		threadId,
+	]);
 
 	const handleSend = useCallback(
 		async (prompt: string) => {
@@ -893,16 +978,18 @@ function ChatThreadPane({
 		[answerAskQuestion],
 	);
 	const handleRestoreCheckpoint = useCallback(
-		(runCount: number) => {
-			void restoreCheckpoint(runCount);
-		},
+		(runCount: number) => restoreCheckpoint(runCount),
 		[restoreCheckpoint],
 	);
 
-	const handleForkSession = useCallback(async () => {
-		const result = await forkSession();
-		// Open the forked session as a new thread in the sidebar.
-		if (onOpenSession) {
+	const openForkedSession = useCallback(
+		(
+			result: Awaited<ReturnType<typeof forkSession>>,
+			editedPrompt?: string,
+		) => {
+			if (!onOpenSession) {
+				return;
+			}
 			const workspaceRoot = config.workspaceRoot;
 			const cwd = config.cwd ?? workspaceRoot;
 			const forkedHistorySession: SessionHistoryItem = {
@@ -920,9 +1007,23 @@ function ChatThreadPane({
 					},
 				},
 			};
-			onOpenSession(forkedHistorySession);
-		}
-	}, [config, forkSession, onOpenSession]);
+			onOpenSession(forkedHistorySession, editedPrompt);
+		},
+		[config, onOpenSession],
+	);
+
+	const handleForkSession = useCallback(async () => {
+		const result = await forkSession();
+		openForkedSession(result);
+	}, [forkSession, openForkedSession]);
+
+	const handleEditMessage = useCallback(
+		async (_messageId: string, content: string, runCount: number) => {
+			const result = await forkSession({ beforeRunCount: runCount });
+			openForkedSession(result, content);
+		},
+		[forkSession, openForkedSession],
+	);
 
 	const visibleHistorySession =
 		historySession?.sessionId &&
@@ -1107,6 +1208,44 @@ function ChatThreadPane({
 		: isHydratingSession;
 	const isWelcomeState =
 		displayedMessages.length === 0 && !displayedIsSwitching && !displayedError;
+	const isSessionActive =
+		displayedStatus === "starting" ||
+		displayedStatus === "running" ||
+		displayedStatus === "stopping";
+	const derivedAgentActivity = useMemo(
+		() =>
+			buildSessionAgentActivity(displayedMessages, {
+				sessionActive: isSessionActive,
+			}),
+		[displayedMessages, isSessionActive],
+	);
+	// The roster is read for every displayed session, not gated on the tally
+	// above: that tally only sees the newest messages, so gating on it would hide
+	// the agents of exactly the long sessions this is most useful for. Opening the
+	// panel re-reads; polling is what the active check gates.
+	const [agentPanelOpen, setAgentPanelOpen] = useState(false);
+	const {
+		agents,
+		loading: agentsLoading,
+		error: agentsError,
+	} = useSessionAgents({
+		sessionId: displayedSessionId,
+		panelOpen: agentPanelOpen,
+		sessionActive: isSessionActive,
+	});
+	const agentActivity = useMemo(
+		() =>
+			mergeAgentActivity(agents, derivedAgentActivity, {
+				sessionActive: isSessionActive,
+			}),
+		[agents, derivedAgentActivity, isSessionActive],
+	);
+	// A child agent has its own session row, so opening it goes through the same
+	// path as any other session — it is just never listed in the sidebar.
+	const onOpenAgentSession = useCallback(
+		(agentSessionId: string) => onOpenSessionById?.(agentSessionId),
+		[onOpenSessionById],
+	);
 
 	const handleRenameTitle = useCallback(
 		async (nextTitle: string) => {
@@ -1250,6 +1389,7 @@ function ChatThreadPane({
 			onSend={(prompt) => void handleSend(prompt)}
 			gitBranch={gitBranch}
 			model={config.model}
+			modelContextWindow={modelContextWindow}
 			mode={config.mode}
 			promptsInQueue={promptsInQueue}
 			promptDraft={promptDraft}
@@ -1293,6 +1433,14 @@ function ChatThreadPane({
 				{!isWelcomeState ? (
 					<div className="z-20 border-b border-border/70 bg-background/85 backdrop-blur-sm">
 						<AgentHeader
+							agentActivity={agentActivity}
+							agents={agents}
+							agentsError={agentsError}
+							agentsLoading={agentsLoading}
+							onAgentsOpenChange={setAgentPanelOpen}
+							onOpenAgentSession={onOpenAgentSession}
+							onOpenParentSession={onOpenSessionById}
+							parentSession={hideDeletedSessionUi ? undefined : parentSession}
 							canEditTitle={Boolean(activeSessionForTitle)}
 							canDeleteSession={Boolean(activeSessionToDelete)}
 							deletingSession={deletingSession}
@@ -1329,9 +1477,9 @@ function ChatThreadPane({
 								chatTransportState={chatTransportState}
 								error={displayedError}
 								messages={displayedMessages}
+								onEditMessage={handleEditMessage}
 								onRestoreCheckpoint={handleRestoreCheckpoint}
 								onForkSession={handleForkSession}
-								onOpenVoiceOutputSettings={onOpenVoiceOutputSettings}
 								pendingToolApprovals={pendingToolApprovals}
 								pendingAskQuestions={pendingAskQuestions}
 								sessionId={displayedSessionId}

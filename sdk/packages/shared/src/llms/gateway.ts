@@ -7,6 +7,10 @@ import type { BasicLogger } from "../logging/logger";
 import type { ProviderCapability, ProviderConfigField } from "../rpc/runtime";
 import type { ITelemetryService } from "../services/telemetry";
 import type { ModelModalities } from "./model-info";
+import type {
+	ModelReasoningOption,
+	ReasoningEffort,
+} from "./reasoning-options";
 
 export type JsonValue =
 	| string
@@ -112,6 +116,7 @@ export interface GatewayModelDefinition {
 	maxOutputTokens?: number;
 	modalities?: ModelModalities;
 	capabilities?: readonly GatewayModelCapability[];
+	reasoningOptions?: readonly ModelReasoningOption[];
 	metadata?: Record<string, JsonValue | undefined>;
 }
 
@@ -190,7 +195,7 @@ export interface GatewayStreamRequest {
 	metadata?: Record<string, unknown>;
 	reasoning?: {
 		enabled?: boolean;
-		effort?: "low" | "medium" | "high";
+		effort?: ReasoningEffort;
 		budgetTokens?: number;
 	};
 	signal?: AbortSignal;
@@ -223,7 +228,7 @@ export interface GatewayModelHandleOptions {
 	metadata?: Record<string, unknown>;
 	reasoning?: {
 		enabled?: boolean;
-		effort?: "low" | "medium" | "high";
+		effort?: ReasoningEffort;
 		budgetTokens?: number;
 	};
 	signal?: AbortSignal;

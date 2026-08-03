@@ -12,6 +12,7 @@ import type {
 export interface ProviderModel {
 	id: string;
 	name: string;
+	contextWindow?: number;
 	supportsAttachments?: boolean;
 	supportsVision?: boolean;
 	supportsReasoning?: boolean;

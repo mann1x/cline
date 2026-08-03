@@ -171,6 +171,7 @@ function toGatewayConfiguredModel(
 		maxOutputTokens: model.maxTokens,
 		modalities: model.modalities,
 		capabilities: toGatewayCapabilities(model.capabilities),
+		reasoningOptions: model.reasoningOptions,
 		metadata: {
 			family: model.family,
 			pricing: model.pricing,

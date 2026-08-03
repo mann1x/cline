@@ -199,6 +199,15 @@ export {
 	resolveReasoningBudgetFromRatio,
 	resolveReasoningEffortRatio,
 } from "./llms/reasoning-effort";
+export {
+	type ModelReasoningOption,
+	ModelReasoningOptionSchema,
+	REASONING_LEVELS,
+	type ReasoningEffort,
+	ReasoningEffortSchema,
+	type ReasoningLevel,
+	ReasoningLevelSchema,
+} from "./llms/reasoning-options";
 export { serializeAbortReason } from "./llms/requests";
 export {
 	CHARS_PER_TOKEN,
@@ -218,6 +227,8 @@ export {
 	type BasicLogMetadata,
 	noopBasicLogger,
 } from "./logging/logger";
+export * from "./mcp";
+export { getErrorCode, getErrorMessage } from "./parse/error";
 export {
 	normalizeJsonLikeStringsForSchema,
 	parseJsonStream,
@@ -229,7 +240,9 @@ export { type OmitUndefinedValues, omitUndefinedValues } from "./parse/object";
 export {
 	getDefaultShell,
 	getShellArgs,
+	getShellInvocation,
 	getShellKind,
+	type ShellInvocation,
 	type ShellKind,
 } from "./parse/shell";
 export {

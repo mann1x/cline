@@ -1,4 +1,6 @@
-import { fstatSync } from "node:fs";
+import { fstatSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
 	CliMigrationNotice,
@@ -18,6 +20,7 @@ vi.mock("node:fs", async () => {
 const originalArgv = [...process.argv];
 const originalStdinIsTTY = process.stdin.isTTY;
 const originalStdoutIsTTY = process.stdout.isTTY;
+const originalGlobalSettingsPath = process.env.CLINE_GLOBAL_SETTINGS_PATH;
 const mockState = vi.hoisted(() => ({
 	runAgentImports: 0,
 	runInteractiveImports: 0,
@@ -93,15 +96,10 @@ const worktreeMocks = vi.hoisted(() => ({
 	createTaskWorktree: vi.fn(),
 }));
 const historyMocks = vi.hoisted(() => ({
-	runHistoryList: vi.fn<() => Promise<number | string>>(async () => 0),
+	runHistoryList: vi.fn<() => Promise<number>>(async () => 0),
 	runHistoryDelete: vi.fn(async () => 0),
 	runHistoryExport: vi.fn(async () => 0),
 	runHistoryUpdate: vi.fn(async () => 0),
-}));
-const historyResumeMocks = vi.hoisted(() => ({
-	spawnHistoryResume: vi.fn<() => Promise<number | undefined>>(
-		async () => undefined,
-	),
 }));
 const loggingMocks = vi.hoisted(() => ({
 	createCliLoggerAdapter: vi.fn(() => ({
@@ -209,15 +207,23 @@ vi.mock("./commands/connect", () => connectMocks);
 vi.mock("./kanban-migration/notice", () => migrationNoticeMocks);
 vi.mock("./commands/update", () => updateMocks);
 vi.mock("./commands/history", () => historyMocks);
-vi.mock("./utils/history-resume", () => historyResumeMocks);
 vi.mock("./logging/adapter", () => loggingMocks);
 vi.mock("./utils/hub-runtime", () => hubRuntimeMocks);
 vi.mock("./utils/telemetry", () => telemetryMocks);
 vi.mock("./utils/worktree", () => worktreeMocks);
 
 describe("runCli lightweight command dispatch", () => {
+	let globalSettingsRoot: string | undefined;
+
 	beforeEach(() => {
 		process.exitCode = undefined;
+		// Startup now reads persisted general settings; point the resolver at a
+		// fresh temp file so the developer's real settings cannot leak in.
+		globalSettingsRoot = mkdtempSync(join(tmpdir(), "cline-cli-main-test-"));
+		process.env.CLINE_GLOBAL_SETTINGS_PATH = join(
+			globalSettingsRoot,
+			"global-settings.json",
+		);
 		mockState.runAgentImports = 0;
 		mockState.runInteractiveImports = 0;
 		mockState.runAgentCalls = 0;
@@ -229,8 +235,6 @@ describe("runCli lightweight command dispatch", () => {
 		historyMocks.runHistoryExport.mockResolvedValue(0);
 		historyMocks.runHistoryUpdate.mockReset();
 		historyMocks.runHistoryUpdate.mockResolvedValue(0);
-		historyResumeMocks.spawnHistoryResume.mockReset();
-		historyResumeMocks.spawnHistoryResume.mockResolvedValue(undefined);
 		sessionMocks.getSessionRow.mockReset();
 		sessionMocks.getSessionRow.mockResolvedValue({
 			sessionId: "sess_123",
@@ -312,10 +316,24 @@ describe("runCli lightweight command dispatch", () => {
 			value: true,
 			configurable: true,
 		});
+		Object.defineProperty(process.stdout, "isTTY", {
+			value: true,
+			configurable: true,
+		});
 	});
 
 	afterEach(() => {
 		process.exitCode = undefined;
+
+		if (originalGlobalSettingsPath === undefined) {
+			delete process.env.CLINE_GLOBAL_SETTINGS_PATH;
+		} else {
+			process.env.CLINE_GLOBAL_SETTINGS_PATH = originalGlobalSettingsPath;
+		}
+		if (globalSettingsRoot) {
+			rmSync(globalSettingsRoot, { recursive: true, force: true });
+			globalSettingsRoot = undefined;
+		}
 
 		process.argv = [...originalArgv];
 		Object.defineProperty(process.stdin, "isTTY", {
@@ -458,7 +476,7 @@ describe("runCli lightweight command dispatch", () => {
 		const { runCli } = await import("./main");
 
 		await expect(runCli()).resolves.toBeUndefined();
-		expect(process.exitCode).toBe(0);
+		expect(process.exitCode).toBe(1);
 		expect(mockState.runAgentImports).toBe(0);
 		expect(mockState.runInteractiveImports).toBe(0);
 	});
@@ -595,10 +613,6 @@ describe("runCli lightweight command dispatch", () => {
 	});
 
 	it("creates a worktree for default interactive mode", async () => {
-		Object.defineProperty(process.stdout, "isTTY", {
-			value: true,
-			configurable: true,
-		});
 		process.argv = ["bun", "src/index.ts", "--worktree"];
 
 		const { runCli } = await import("./main");
@@ -701,7 +715,7 @@ describe("runCli lightweight command dispatch", () => {
 			expect.anything(),
 			undefined,
 			expect.objectContaining({
-				initialView: undefined,
+				startupTarget: undefined,
 			}),
 		);
 	});
@@ -712,10 +726,6 @@ describe("runCli lightweight command dispatch", () => {
 			title: "Try ClinePass",
 		};
 		migrationNoticeMocks.getClineCliMigrationNotice.mockReturnValue(notice);
-		Object.defineProperty(process.stdout, "isTTY", {
-			value: true,
-			configurable: true,
-		});
 		process.argv = ["bun", "src/index.ts"];
 
 		const { runCli } = await import("./main");
@@ -744,10 +754,6 @@ describe("runCli lightweight command dispatch", () => {
 		providerSettingsMocks.getLastUsedProviderSettings.mockReturnValue({
 			provider: "cline-pass",
 			model: "cline-pass/test-model",
-		});
-		Object.defineProperty(process.stdout, "isTTY", {
-			value: true,
-			configurable: true,
 		});
 		process.argv = ["bun", "src/index.ts"];
 
@@ -853,7 +859,7 @@ describe("runCli lightweight command dispatch", () => {
 			undefined,
 			expect.objectContaining({
 				initialPrompt: "sup",
-				initialView: undefined,
+				startupTarget: undefined,
 			}),
 		);
 	});
@@ -915,6 +921,172 @@ describe("runCli lightweight command dispatch", () => {
 		);
 	});
 
+	describe("persisted general settings at startup", () => {
+		function writePersistedSettings(settings: Record<string, unknown>) {
+			const path = process.env.CLINE_GLOBAL_SETTINGS_PATH;
+			if (!path) {
+				throw new Error("CLINE_GLOBAL_SETTINGS_PATH is not set");
+			}
+			writeFileSync(path, JSON.stringify(settings));
+		}
+
+		it("restores the persisted plan mode when no mode flag is provided", async () => {
+			writePersistedSettings({ planActMode: "plan" });
+			promptMocks.resolveSystemPrompt.mockClear();
+			process.argv = ["bun", "src/index.ts"];
+
+			const { runCli } = await import("./main");
+
+			await expect(runCli()).resolves.toBeUndefined();
+			expect(runtimeMocks.runInteractive).toHaveBeenCalledWith(
+				expect.objectContaining({ mode: "plan" }),
+				expect.anything(),
+				undefined,
+				expect.any(Object),
+			);
+			expect(promptMocks.resolveSystemPrompt).toHaveBeenCalledWith(
+				expect.objectContaining({ mode: "plan" }),
+			);
+		});
+
+		it("prefers an explicit --act flag over the persisted plan mode", async () => {
+			writePersistedSettings({ planActMode: "plan" });
+			promptMocks.resolveSystemPrompt.mockClear();
+			process.argv = ["bun", "src/index.ts", "--act"];
+
+			const { runCli } = await import("./main");
+
+			await expect(runCli()).resolves.toBeUndefined();
+			expect(runtimeMocks.runInteractive).toHaveBeenCalledWith(
+				expect.objectContaining({ mode: "act" }),
+				expect.anything(),
+				undefined,
+				expect.any(Object),
+			);
+			expect(promptMocks.resolveSystemPrompt).toHaveBeenCalledWith(
+				expect.objectContaining({ mode: "act" }),
+			);
+		});
+
+		it("restores the persisted auto-approve setting as a runtime policy", async () => {
+			writePersistedSettings({ toolAutoApprove: false });
+			process.argv = ["bun", "src/index.ts"];
+
+			const { runCli } = await import("./main");
+
+			await expect(runCli()).resolves.toBeUndefined();
+			expect(runtimeMocks.runInteractive).toHaveBeenCalledWith(
+				expect.objectContaining({
+					defaultToolAutoApprove: true,
+					toolPolicies: {
+						"*": { autoApprove: false },
+					},
+				}),
+				expect.anything(),
+				undefined,
+				expect.any(Object),
+			);
+		});
+
+		it("prefers an explicit --auto-approve flag over the persisted setting", async () => {
+			writePersistedSettings({ toolAutoApprove: false });
+			process.argv = ["bun", "src/index.ts", "--auto-approve", "true"];
+
+			const { runCli } = await import("./main");
+
+			await expect(runCli()).resolves.toBeUndefined();
+			expect(runtimeMocks.runInteractive).toHaveBeenCalledWith(
+				expect.objectContaining({
+					toolPolicies: {
+						"*": { autoApprove: true },
+					},
+				}),
+				expect.anything(),
+				undefined,
+				expect.any(Object),
+			);
+		});
+
+		it("restores disabled compaction across restarts", async () => {
+			writePersistedSettings({
+				compactionEnabled: false,
+				compactionStrategy: "basic",
+			});
+			process.argv = ["bun", "src/index.ts"];
+
+			const { runCli } = await import("./main");
+
+			await expect(runCli()).resolves.toBeUndefined();
+			expect(runtimeMocks.runInteractive).toHaveBeenCalledWith(
+				expect.objectContaining({
+					compaction: { enabled: false },
+				}),
+				expect.anything(),
+				undefined,
+				expect.any(Object),
+			);
+		});
+
+		it("restores the persisted compaction strategy across restarts", async () => {
+			writePersistedSettings({
+				compactionEnabled: true,
+				compactionStrategy: "basic",
+			});
+			process.argv = ["bun", "src/index.ts"];
+
+			const { runCli } = await import("./main");
+
+			await expect(runCli()).resolves.toBeUndefined();
+			expect(runtimeMocks.runInteractive).toHaveBeenCalledWith(
+				expect.objectContaining({
+					compaction: { enabled: true, strategy: "basic" },
+				}),
+				expect.anything(),
+				undefined,
+				expect.any(Object),
+			);
+		});
+
+		it("prefers an explicit --compaction flag over the persisted mode", async () => {
+			writePersistedSettings({ compactionEnabled: false });
+			process.argv = ["bun", "src/index.ts", "--compaction", "agentic"];
+
+			const { runCli } = await import("./main");
+
+			await expect(runCli()).resolves.toBeUndefined();
+			expect(runtimeMocks.runInteractive).toHaveBeenCalledWith(
+				expect.objectContaining({
+					compaction: { enabled: true, strategy: "agentic" },
+				}),
+				expect.anything(),
+				undefined,
+				expect.any(Object),
+			);
+		});
+
+		it("applies persisted settings to single-prompt runs as well", async () => {
+			writePersistedSettings({
+				compactionEnabled: true,
+				compactionStrategy: "basic",
+				planActMode: "plan",
+			});
+			forcePromptModeInput();
+			process.argv = ["bun", "src/index.ts", "say hello"];
+
+			const { runCli } = await import("./main");
+
+			await expect(runCli()).resolves.toBeUndefined();
+			expect(runtimeMocks.runAgent).toHaveBeenCalledWith(
+				"say hello",
+				expect.objectContaining({
+					compaction: { enabled: true, strategy: "basic" },
+					mode: "plan",
+				}),
+				expect.anything(),
+			);
+		});
+	});
+
 	it("forces chat view when resuming a session", async () => {
 		process.argv = ["bun", "src/index.ts", "--id", "sess_123"];
 
@@ -927,65 +1099,33 @@ describe("runCli lightweight command dispatch", () => {
 			expect.anything(),
 			"sess_123",
 			expect.objectContaining({
-				initialView: "chat",
+				startupTarget: "chat",
 			}),
 		);
 	});
 
-	it("resumes a history-picked session in a child process", async () => {
-		historyMocks.runHistoryList.mockImplementationOnce(
-			async () => "sess_from_history",
-		);
-		historyResumeMocks.spawnHistoryResume.mockResolvedValueOnce(0);
+	it("opens history inside the interactive TUI for the history picker", async () => {
+		migrationNoticeMocks.getClineCliMigrationNotice.mockReturnValue({
+			id: "cline-cli-cline-pass-intro",
+			title: "Try ClinePass",
+		});
 		process.argv = ["bun", "src/index.ts", "history"];
 
 		const { runCli } = await import("./main");
 
 		await expect(runCli()).resolves.toBeUndefined();
-		expect(historyResumeMocks.spawnHistoryResume).toHaveBeenCalledTimes(1);
-		expect(historyResumeMocks.spawnHistoryResume).toHaveBeenCalledWith(
-			expect.objectContaining({
-				sessionId: "sess_from_history",
-				normalizedArgs: ["history"],
-				remainingArgs: ["history"],
-			}),
-		);
-		expect(runtimeMocks.runInteractive).not.toHaveBeenCalled();
-		expect(process.exitCode).toBe(0);
-	});
-
-	it("propagates the child exit code when resuming from history picker", async () => {
-		historyMocks.runHistoryList.mockImplementationOnce(
-			async () => "sess_from_history",
-		);
-		historyResumeMocks.spawnHistoryResume.mockResolvedValueOnce(3);
-		process.argv = ["bun", "src/index.ts", "history"];
-
-		const { runCli } = await import("./main");
-
-		await expect(runCli()).resolves.toBeUndefined();
-		expect(process.exitCode).toBe(3);
-		expect(runtimeMocks.runInteractive).not.toHaveBeenCalled();
-	});
-
-	it("forces chat view when the history-picker child cannot launch", async () => {
-		historyMocks.runHistoryList.mockImplementationOnce(
-			async () => "sess_from_history",
-		);
-		historyResumeMocks.spawnHistoryResume.mockResolvedValueOnce(undefined);
-		process.argv = ["bun", "src/index.ts", "history"];
-
-		const { runCli } = await import("./main");
-
-		await expect(runCli()).resolves.toBeUndefined();
+		expect(historyMocks.runHistoryList).not.toHaveBeenCalled();
+		expect(
+			migrationNoticeMocks.getClineCliMigrationNotice,
+		).not.toHaveBeenCalled();
 		expect(runtimeMocks.runInteractive).toHaveBeenCalledTimes(1);
 		expect(runtimeMocks.runInteractive).toHaveBeenCalledWith(
 			expect.any(Object),
 			expect.anything(),
-			"sess_from_history",
+			undefined,
 			expect.objectContaining({
 				initialPrompt: undefined,
-				initialView: "chat",
+				startupTarget: "history",
 			}),
 		);
 	});

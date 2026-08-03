@@ -19,10 +19,11 @@ import type {
 	AskQuestionRequestItem,
 	ChatApiResult,
 	ChatPromptCompletion,
+	ChatSessionCommandResponse,
 	ChatSessionHookEvent,
 	ChatTransportState,
+	ChatUsageEvent,
 	CoreLogChunk,
-	ImageDeltaEvent,
 	ProcessContext,
 	PromptInQueue,
 	ReasoningDeltaEvent,
@@ -32,7 +33,6 @@ import type {
 } from "@/hooks/chat-session/types";
 import {
 	type ChatMessage,
-	ChatMessageImageSchema,
 	type ChatSessionConfig,
 	ChatSessionConfigSchema,
 	type ChatSessionStatus,
@@ -66,7 +66,6 @@ const STREAM_FLUSH_INTERVAL_MS = 48;
 const RELEVANT_STREAMS = new Set([
 	"chat_text",
 	"chat_reasoning",
-	"chat_image",
 	"chat_queued_prompt_start",
 	"chat_tool_call_start",
 	"chat_tool_call_end",
@@ -136,9 +135,7 @@ function sortMessagesChronologically(messages: ChatMessage[]): ChatMessage[] {
 }
 
 function chunkCreatedAt(payload: AgentChunkEvent): number {
-	const ts = payload.ts || Date.now();
-	const index = payload.index ?? 0;
-	return ts * 1000 + index;
+	return payload.ts || Date.now();
 }
 
 function mergeHydratedMessagesWithLive(options: {
@@ -191,6 +188,58 @@ function updateMessageById(
 	return changed ? next : messages;
 }
 
+type SessionUsageSummary = {
+	tokensIn: number;
+	tokensOut: number;
+	totalCostUsd: number;
+};
+
+type TurnCostTracker = {
+	streamedCostUsd: number;
+};
+
+/**
+ * Read current context usage and cumulative cost from persisted chat messages.
+ *
+ * Each assistant message contains metrics for one model request. The latest
+ * request represents current context-window pressure; summing every request's
+ * input would instead measure lifetime traffic and make the ring saturate even
+ * after context compaction. Cost remains a session-wide sum.
+ */
+function summarizeSessionUsage(
+	messages: ChatMessage[],
+): SessionUsageSummary | undefined {
+	let tokensIn: number | undefined;
+	let tokensOut: number | undefined;
+	let totalCostUsd = 0;
+	let hasCost = false;
+
+	for (const message of messages) {
+		const meta = message.meta;
+		if (!meta) continue;
+		if (
+			typeof meta.inputTokens === "number" ||
+			typeof meta.outputTokens === "number"
+		) {
+			tokensIn = meta.inputTokens ?? 0;
+			tokensOut = meta.outputTokens ?? 0;
+		}
+		if (typeof meta.totalCost === "number") {
+			totalCostUsd += meta.totalCost;
+			hasCost = true;
+		}
+	}
+
+	if (tokensIn === undefined && tokensOut === undefined && !hasCost) {
+		return undefined;
+	}
+	return {
+		tokensIn: tokensIn ?? 0,
+		tokensOut: tokensOut ?? 0,
+		totalCostUsd,
+	};
+}
+
 // ---------------------------------------------------------------------------
 // Core log dispatcher — avoids repeated if/else chains
 // ---------------------------------------------------------------------------
@@ -229,6 +278,7 @@ export function useChatSession() {
 	const [toolCalls, setToolCalls] = useState(0);
 	const [tokensIn, setTokensIn] = useState(0);
 	const [tokensOut, setTokensOut] = useState(0);
+	const [totalCostUsd, setTotalCostUsd] = useState(0);
 	const [fileDiffs, setFileDiffs] = useState<SessionFileDiff[]>([]);
 	const [diffSummary, setDiffSummary] =
 		useState<SessionDiffSummary>(EMPTY_DIFF_SUMMARY);
@@ -261,11 +311,26 @@ export function useChatSession() {
 	const sessionStartPromiseRef = useRef<Promise<string> | null>(null);
 	const promptDispatchTailRef = useRef<Promise<void>>(Promise.resolve());
 	const activePromptSubmissionsRef = useRef(0);
+	const activeTurnCostTrackerRef = useRef<TurnCostTracker | null>(null);
+	const unpersistedCostUsdRef = useRef(0);
+	const lastPersistedCostUsdRef = useRef(0);
 	const [chatTransportState, setChatTransportState] =
 		useState<ChatTransportState>(desktopClient.getTransportState());
 	const [chatTransportError, setChatTransportError] = useState<string | null>(
 		desktopClient.getTransportError(),
 	);
+	const persistedUsage = useMemo(
+		() =>
+			sessionId
+				? summarizeSessionUsage(
+						messages.filter((message) => message.sessionId === sessionId),
+					)
+				: undefined,
+		[messages, sessionId],
+	);
+	const persistedTokensIn = persistedUsage?.tokensIn;
+	const persistedTokensOut = persistedUsage?.tokensOut;
+	const persistedTotalCostUsd = persistedUsage?.totalCostUsd;
 	// ---- Ref syncs ----
 
 	useEffect(() => {
@@ -277,6 +342,30 @@ export function useChatSession() {
 	useEffect(() => {
 		messagesRef.current = messages;
 	}, [messages]);
+	useEffect(() => {
+		if (
+			persistedTokensIn === undefined ||
+			persistedTokensOut === undefined ||
+			persistedTotalCostUsd === undefined
+		) {
+			return;
+		}
+		setTokensIn(persistedTokensIn);
+		setTokensOut(persistedTokensOut);
+		// Move newly persisted spend out of the live ledger. Multiple queued turns
+		// may finish before their message metadata is hydrated, so this ledger is
+		// session-wide rather than tied only to the currently active turn.
+		const newlyPersistedCostUsd = Math.max(
+			0,
+			persistedTotalCostUsd - lastPersistedCostUsdRef.current,
+		);
+		unpersistedCostUsdRef.current = Math.max(
+			0,
+			unpersistedCostUsdRef.current - newlyPersistedCostUsd,
+		);
+		lastPersistedCostUsdRef.current = persistedTotalCostUsd;
+		setTotalCostUsd(persistedTotalCostUsd + unpersistedCostUsdRef.current);
+	}, [persistedTokensIn, persistedTokensOut, persistedTotalCostUsd]);
 	useEffect(() => {
 		promptsInQueueRef.current = promptsInQueue;
 	}, [promptsInQueue]);
@@ -314,9 +403,13 @@ export function useChatSession() {
 	}, []);
 
 	const resetCounters = useCallback(() => {
+		activeTurnCostTrackerRef.current = null;
+		unpersistedCostUsdRef.current = 0;
+		lastPersistedCostUsdRef.current = 0;
 		setToolCalls(0);
 		setTokensIn(0);
 		setTokensOut(0);
+		setTotalCostUsd(0);
 		setFileDiffs([]);
 		setDiffSummary(EMPTY_DIFF_SUMMARY);
 	}, []);
@@ -332,39 +425,21 @@ export function useChatSession() {
 		[],
 	);
 
-	const appendRuntimeError = useCallback(
-		(msg: string, sid: string | null = null) => {
-			setError(msg);
-			setMessages((prev) => {
-				const duplicate = prev.some(
-					(message) =>
-						message.role === "error" &&
-						message.sessionId === sid &&
-						message.content === msg,
-				);
-				return duplicate
-					? prev
-					: sliceMessages([...prev, makeErrorChatMessage(sid, msg)]);
-			});
-		},
-		[],
-	);
-
 	// ---- Data fetching ----
 
 	const postSession = useCallback(async (body: Record<string, unknown>) => {
-		return await desktopClient.invoke<{
-			sessionId?: string;
-			cwd?: string;
-			workspaceRoot?: string;
-			result?: ChatApiResult;
-			ok?: boolean;
-			queued?: boolean;
-			promptsInQueue?: PromptInQueue[];
-			prompt?: PromptInQueue;
-			updated?: boolean;
-			removed?: boolean;
-		}>("chat_session_command", { request: body });
+		const request = { request: body };
+		if (body.action === "send") {
+			return await desktopClient.invoke<ChatSessionCommandResponse>(
+				"chat_session_command",
+				request,
+				{ timeoutMs: null },
+			);
+		}
+		return await desktopClient.invoke<ChatSessionCommandResponse>(
+			"chat_session_command",
+			request,
+		);
 	}, []);
 
 	const refreshPromptsInQueue = useCallback(
@@ -411,8 +486,6 @@ export function useChatSession() {
 							e.hookEventName === "tool_call" || e.hookName === "tool_call",
 					).length,
 				);
-				setTokensIn(events.reduce((sum, e) => sum + (e.inputTokens ?? 0), 0));
-				setTokensOut(events.reduce((sum, e) => sum + (e.outputTokens ?? 0), 0));
 			} catch {
 				// Ignore in non-Tauri mode.
 			}
@@ -850,63 +923,10 @@ export function useChatSession() {
 			// observe fully applied text, so drain the buffers first.
 			flushPendingStream();
 
-			if (payload.stream === "chat_image") {
-				let parsed: ImageDeltaEvent;
-				try {
-					parsed = JSON.parse(payload.chunk) as ImageDeltaEvent;
-				} catch {
-					return;
-				}
-				const image = ChatMessageImageSchema.safeParse({
-					id: makeId("generated_image"),
-					data: parsed.data,
-					mediaType: parsed.mediaType,
-				});
-				if (!image.success) {
-					console.warn(
-						"[desktop:chat] Ignoring invalid generated image",
-						image.error.flatten(),
-					);
-					return;
-				}
-				let assistantId = activeAssistantMessageIdRef.current;
-				if (!assistantId) {
-					assistantId = makeId("assistant");
-					addMessage({
-						id: assistantId,
-						sessionId: listeningSessionId,
-						role: "assistant",
-						content: "",
-						images: [image.data],
-						createdAt: chunkCreatedAt(payload),
-					});
-					activeAssistantMessageIdRef.current = assistantId;
-					setActiveAssistantMessageId(assistantId);
-					return;
-				}
-				setMessages((prev) =>
-					updateMessageById(prev, assistantId, (message) => {
-						const images = message.images ?? [];
-						if (
-							images.some(
-								(existing) =>
-									existing.data === image.data.data &&
-									existing.mediaType === image.data.mediaType,
-							)
-						) {
-							return message;
-						}
-						return {
-							...message,
-							images: [...images, image.data],
-						};
-					}),
-				);
-				return;
-			}
-
 			if (payload.stream === "chat_queued_prompt_start") {
+				activeTurnCostTrackerRef.current = { streamedCostUsd: 0 };
 				let parsed: {
+					promptId?: string;
 					prompt?: string;
 					attachmentCount?: number;
 					userImages?: string[];
@@ -976,8 +996,28 @@ export function useChatSession() {
 			}
 
 			if (payload.stream === "chat_usage") {
-				// Usage is still finalized from the send() response to avoid
-				// double-counting when both stream and response include it.
+				let usage: ChatUsageEvent;
+				try {
+					usage = JSON.parse(payload.chunk) as ChatUsageEvent;
+				} catch {
+					return;
+				}
+				if (typeof usage.inputTokens === "number") {
+					setTokensIn(usage.inputTokens);
+				}
+				if (typeof usage.outputTokens === "number") {
+					setTokensOut(usage.outputTokens);
+				}
+				const cost = usage.cost;
+				if (typeof cost === "number") {
+					const tracker = activeTurnCostTrackerRef.current ?? {
+						streamedCostUsd: 0,
+					};
+					tracker.streamedCostUsd += cost;
+					activeTurnCostTrackerRef.current = tracker;
+					unpersistedCostUsdRef.current += cost;
+					setTotalCostUsd((previous) => previous + cost);
+				}
 				return;
 			}
 
@@ -990,19 +1030,11 @@ export function useChatSession() {
 				// signal. Without it the composer stays on "Agent is working..."
 				// forever.
 				let doneReason = "";
-				let doneText = "";
 				try {
-					const parsed = JSON.parse(payload.chunk) as {
-						reason?: string;
-						text?: string;
-					};
+					const parsed = JSON.parse(payload.chunk) as { reason?: string };
 					doneReason = parsed.reason?.trim() ?? "";
-					doneText = parsed.text?.trim() ?? "";
 				} catch {
 					// Missing reason still means the turn ended.
-				}
-				if (doneReason === "error" && doneText) {
-					appendRuntimeError(doneText, listeningSessionId);
 				}
 				setStatus(
 					doneReason === "aborted"
@@ -1092,7 +1124,6 @@ export function useChatSession() {
 		},
 		[
 			addMessage,
-			appendRuntimeError,
 			clearLiveToolRefs,
 			flushPendingStream,
 			schedulePendingStreamFlush,
@@ -1334,6 +1365,9 @@ export function useChatSession() {
 				(hasEarlierPromptSubmission ||
 					Boolean(pendingSessionStart) ||
 					BUSY_STATUSES.has(status));
+			const turnCostTracker: TurnCostTracker | undefined = shouldQueue
+				? undefined
+				: { streamedCostUsd: 0 };
 			const optimisticQueuedPromptId = shouldQueue
 				? makeId("queued_prompt")
 				: null;
@@ -1460,6 +1494,7 @@ export function useChatSession() {
 				}
 				if (!shouldQueue) {
 					activeSessionIdRef.current = activeSessionId;
+					activeTurnCostTrackerRef.current = turnCostTracker ?? null;
 					setStatus("starting");
 				}
 				await precedingPromptDispatch;
@@ -1495,14 +1530,11 @@ export function useChatSession() {
 					setStatus("cancelled");
 					return;
 				}
-				const isErrorResult = result?.finishReason === "error";
 				const assistantText = (result?.text ?? "").trim();
 				const fallbackAssistantTurn = extractAssistantTurnDataFromRpcMessages(
 					result?.messages,
 				);
-				const rawAssistantText = isErrorResult
-					? ""
-					: assistantText || fallbackAssistantTurn.text;
+				const rawAssistantText = assistantText || fallbackAssistantTurn.text;
 				const resolvedAssistantText = rawAssistantText;
 				if (resolvedAssistantText) {
 					const assistantMessageId =
@@ -1531,9 +1563,8 @@ export function useChatSession() {
 						]);
 					});
 				} else if (
-					!isErrorResult &&
-					(fallbackAssistantTurn.reasoning ||
-						fallbackAssistantTurn.reasoningRedacted)
+					fallbackAssistantTurn.reasoning ||
+					fallbackAssistantTurn.reasoningRedacted
 				) {
 					const assistantMessageId =
 						activeAssistantMessageIdRef.current ?? makeId("assistant");
@@ -1566,63 +1597,7 @@ export function useChatSession() {
 							},
 						]);
 					});
-				}
-				const fallbackImages = isErrorResult
-					? []
-					: fallbackAssistantTurn.images.flatMap((candidate) => {
-							const image = ChatMessageImageSchema.safeParse({
-								id: makeId("generated_image"),
-								...candidate,
-							});
-							return image.success ? [image.data] : [];
-						});
-				if (fallbackImages.length > 0) {
-					const assistantMessageId =
-						activeAssistantMessageIdRef.current ?? makeId("assistant");
-					activeAssistantMessageIdRef.current = assistantMessageId;
-					setActiveAssistantMessageId(assistantMessageId);
-					setMessages((prev) => {
-						const updated = updateMessageById(
-							prev,
-							assistantMessageId,
-							(message) => {
-								const existing = message.images ?? [];
-								const additions = fallbackImages.filter(
-									(image) =>
-										!existing.some(
-											(candidate) =>
-												candidate.data === image.data &&
-												candidate.mediaType === image.mediaType,
-										),
-								);
-								return additions.length > 0
-									? { ...message, images: [...existing, ...additions] }
-									: message;
-							},
-						);
-						if (updated !== prev) return updated;
-						return sliceMessages([
-							...prev,
-							{
-								id: assistantMessageId,
-								sessionId: activeSessionId,
-								role: "assistant" as const,
-								content: resolvedAssistantText,
-								images: fallbackImages,
-								reasoning: fallbackAssistantTurn.reasoning || undefined,
-								reasoningRedacted:
-									fallbackAssistantTurn.reasoningRedacted || undefined,
-								createdAt: now + 1,
-							},
-						]);
-					});
-				}
-				const hasFallbackAssistantTurn =
-					Boolean(resolvedAssistantText) ||
-					Boolean(fallbackAssistantTurn.reasoning) ||
-					fallbackAssistantTurn.reasoningRedacted ||
-					fallbackImages.length > 0;
-				if (!hasFallbackAssistantTurn) {
+				} else {
 					// Recovery: load canonical messages if transport missed result text.
 					try {
 						const historyMessages = await desktopClient.invoke<ChatMessage[]>(
@@ -1649,48 +1624,8 @@ export function useChatSession() {
 						"read_session_messages",
 						{ sessionId: activeSessionId, maxMessages: MAX_MESSAGES },
 					);
-					const hasCanonicalAssistantTurn = historyMessages.some(
-						(message) => message.role === "assistant",
-					);
-					if (
-						historyMessages.length > 0 &&
-						(!hasFallbackAssistantTurn || hasCanonicalAssistantTurn)
-					) {
-						const assistantIndex = historyMessages.findLastIndex(
-							(message) => message.role === "assistant",
-						);
-						const canonicalMessages =
-							assistantIndex >= 0 && hasFallbackAssistantTurn
-								? historyMessages.map((message, index) => {
-										if (index !== assistantIndex) return message;
-										const existingImages = message.images ?? [];
-										const missingImages = fallbackImages.filter(
-											(image) =>
-												!existingImages.some(
-													(candidate) =>
-														candidate.data === image.data &&
-														candidate.mediaType === image.mediaType,
-												),
-										);
-										return {
-											...message,
-											content: message.content || resolvedAssistantText,
-											reasoning:
-												message.reasoning ||
-												fallbackAssistantTurn.reasoning ||
-												undefined,
-											reasoningRedacted:
-												message.reasoningRedacted ||
-												fallbackAssistantTurn.reasoningRedacted ||
-												undefined,
-											images:
-												missingImages.length > 0
-													? [...existingImages, ...missingImages]
-													: message.images,
-										};
-									})
-								: historyMessages;
-						setMessages(canonicalMessages);
+					if (historyMessages.length > 0) {
+						setMessages(historyMessages);
 					}
 				} catch {
 					// Keep optimistic state if canonical hydration fails.
@@ -1699,17 +1634,26 @@ export function useChatSession() {
 				// Token / cost bookkeeping
 				const inputTokens = result?.usage?.inputTokens ?? result?.inputTokens;
 				if (typeof inputTokens === "number") {
-					setTokensIn((prev) => prev + inputTokens);
+					setTokensIn(inputTokens);
 				}
 				const outputTokens =
 					result?.usage?.outputTokens ?? result?.outputTokens;
 				if (typeof outputTokens === "number") {
-					setTokensOut((prev) => prev + outputTokens);
+					setTokensOut(outputTokens);
 				}
 				const totalCost =
 					typeof result?.usage?.totalCost === "number"
 						? result.usage.totalCost
 						: undefined;
+				const streamedTurnCostUsd = turnCostTracker?.streamedCostUsd ?? 0;
+				if (activeTurnCostTrackerRef.current === turnCostTracker) {
+					activeTurnCostTrackerRef.current = null;
+				}
+				if (typeof totalCost === "number") {
+					const unstreamedCostUsd = totalCost - streamedTurnCostUsd;
+					unpersistedCostUsdRef.current += unstreamedCostUsd;
+					setTotalCostUsd((previous) => previous + unstreamedCostUsd);
+				}
 				const assistantMessageId = activeAssistantMessageIdRef.current;
 				if (
 					assistantMessageId &&
@@ -1746,17 +1690,19 @@ export function useChatSession() {
 					payload.promptsInQueue.length > 0;
 				if (abortedRef.current) {
 					setStatus("cancelled");
-				} else if (isErrorResult) {
-					const toolError = Array.isArray(result?.toolCalls)
-						? result.toolCalls.find((c) => c.error)?.error
-						: undefined;
-					appendRuntimeError(
-						assistantText ||
-							fallbackAssistantTurn.text ||
-							toolError?.trim() ||
-							"Runtime turn failed before an assistant response was produced.",
-						activeSessionId,
-					);
+				} else if (result?.finishReason === "error") {
+					if (!resolvedAssistantText) {
+						const toolError = Array.isArray(result?.toolCalls)
+							? result.toolCalls.find((c) => c.error)?.error
+							: undefined;
+						addMessage(
+							makeErrorChatMessage(
+								activeSessionId,
+								toolError?.trim() ||
+									"Runtime turn failed before an assistant response was produced.",
+							),
+						);
+					}
 					setStatus("failed");
 				} else if (result?.finishReason === "aborted") {
 					setStatus("cancelled");
@@ -1795,7 +1741,6 @@ export function useChatSession() {
 		},
 		[
 			addMessage,
-			appendRuntimeError,
 			applyPromptsInQueue,
 			clearAbortFallbackTimeout,
 			clearLiveToolRefs,
@@ -2135,44 +2080,50 @@ export function useChatSession() {
 		],
 	);
 
-	const forkSession = useCallback(async (): Promise<{
-		newSessionId: string;
-		forkedFromSessionId: string;
-		messages: ChatMessage[];
-	}> => {
-		const activeSessionId = activeSessionIdRef.current;
-		if (!activeSessionId) {
-			throw new Error("No active session to fork.");
-		}
-		if (BUSY_STATUSES.has(status)) {
-			throw new Error("Wait for the current turn to finish before forking.");
-		}
-		const payload = (await postSession({
-			action: "fork",
-			sessionId: activeSessionId,
-			config,
-		})) as {
-			sessionId?: string;
-			forkedFromSessionId?: string;
-			messages?: ChatMessage[];
-		};
-		const newSessionId =
-			typeof payload.sessionId === "string" ? payload.sessionId.trim() : "";
-		if (!newSessionId) {
-			throw new Error("Fork did not return a new session id.");
-		}
-		const forkedFromSessionId =
-			typeof payload.forkedFromSessionId === "string"
-				? payload.forkedFromSessionId
-				: activeSessionId;
-		const nextMessages = Array.isArray(payload.messages)
-			? (payload.messages as ChatMessage[])
-			: await desktopClient.invoke<ChatMessage[]>("read_session_messages", {
-					sessionId: newSessionId,
-					maxMessages: MAX_MESSAGES,
-				});
-		return { newSessionId, forkedFromSessionId, messages: nextMessages };
-	}, [config, postSession, status]);
+	const forkSession = useCallback(
+		async (options?: {
+			beforeRunCount?: number;
+		}): Promise<{
+			newSessionId: string;
+			forkedFromSessionId: string;
+			messages: ChatMessage[];
+		}> => {
+			const activeSessionId = activeSessionIdRef.current;
+			if (!activeSessionId) {
+				throw new Error("No active session to fork.");
+			}
+			if (BUSY_STATUSES.has(status)) {
+				throw new Error("Wait for the current turn to finish before forking.");
+			}
+			const payload = (await postSession({
+				action: "fork",
+				sessionId: activeSessionId,
+				config,
+				forkBeforeRunCount: options?.beforeRunCount,
+			})) as {
+				sessionId?: string;
+				forkedFromSessionId?: string;
+				messages?: ChatMessage[];
+			};
+			const newSessionId =
+				typeof payload.sessionId === "string" ? payload.sessionId.trim() : "";
+			if (!newSessionId) {
+				throw new Error("Fork did not return a new session id.");
+			}
+			const forkedFromSessionId =
+				typeof payload.forkedFromSessionId === "string"
+					? payload.forkedFromSessionId
+					: activeSessionId;
+			const nextMessages = Array.isArray(payload.messages)
+				? (payload.messages as ChatMessage[])
+				: await desktopClient.invoke<ChatMessage[]>("read_session_messages", {
+						sessionId: newSessionId,
+						maxMessages: MAX_MESSAGES,
+					});
+			return { newSessionId, forkedFromSessionId, messages: nextMessages };
+		},
+		[config, postSession, status],
+	);
 
 	const steerPromptInQueue = useCallback(
 		async (promptId: string) => {
@@ -2235,6 +2186,7 @@ export function useChatSession() {
 			toolCalls,
 			tokensIn,
 			tokensOut,
+			totalCostUsd,
 			additions: diffSummary.additions,
 			deletions: diffSummary.deletions,
 		}),
@@ -2243,6 +2195,7 @@ export function useChatSession() {
 			diffSummary.deletions,
 			tokensIn,
 			tokensOut,
+			totalCostUsd,
 			toolCalls,
 		],
 	);

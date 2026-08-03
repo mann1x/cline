@@ -1,6 +1,7 @@
 import type {
 	GatewayProviderContext,
 	GatewayStreamRequest,
+	ModelReasoningOption,
 } from "@cline/shared";
 import { describe, expect, it } from "vitest";
 import { GLM_THINKING_ROUTING_METADATA } from "./glm-thinking";
@@ -21,6 +22,7 @@ type ContextOverrides = {
 	modelId?: string;
 	family?: string;
 	maxOutputTokens?: number;
+	reasoningOptions?: readonly ModelReasoningOption[];
 	modelMetadata?: NonNullable<GatewayProviderContext["model"]["metadata"]>;
 	capabilities?: GatewayProviderContext["model"]["capabilities"];
 	metadata?: GatewayProviderContext["provider"]["metadata"];
@@ -89,6 +91,7 @@ function makeContext(options?: ContextOverrides): GatewayProviderContext {
 			name: modelId,
 			providerId,
 			maxOutputTokens: options?.maxOutputTokens,
+			reasoningOptions: options?.reasoningOptions,
 			capabilities: options?.capabilities,
 			metadata: modelMetadata,
 		},
@@ -115,6 +118,18 @@ function makeRequest(overrides: RequestOverrides): GatewayStreamRequest {
 		signal: overrides.signal,
 		tools: overrides.tools,
 	};
+}
+
+function effortOptions(
+	values: Extract<ModelReasoningOption, { type: "effort" }>["values"],
+): ModelReasoningOption[] {
+	return [{ type: "effort", values }];
+}
+
+function budgetOptions(min: number, max?: number): ModelReasoningOption[] {
+	return [
+		{ type: "budget_tokens", min, ...(max === undefined ? {} : { max }) },
+	];
 }
 
 /**
@@ -212,9 +227,7 @@ describe("composeAiSdkProviderOptions: AI SDK v7 bucket emission", () => {
 		);
 
 		const expected = {
-			effort: "high",
 			reasoningEffort: "high",
-			reasoningSummary: "auto",
 		};
 		expect(result["vercel-ai-gateway"]).toBeUndefined();
 		expect(result.vercelAiGateway).toEqual(
@@ -226,6 +239,7 @@ describe("composeAiSdkProviderOptions: AI SDK v7 bucket emission", () => {
 		expect(result.openaiCompatible).toEqual(
 			expect.objectContaining({ strictJsonSchema: false }),
 		);
+		expect(result["vercel-ai-gateway"]).toBeUndefined();
 	});
 
 	it("disables strict JSON schema for the OpenAI adapter bucket", () => {
@@ -293,7 +307,10 @@ describe("composeAiSdkProviderOptions: Anthropic thinking precedence", () => {
 				modelId: "claude-sonnet-4-5",
 				reasoning: { enabled: true, effort: "high" },
 			},
-			context: { family: "claude-sonnet" },
+			context: {
+				family: "claude-sonnet",
+				reasoningOptions: budgetOptions(1024),
+			},
 			expect: [
 				{
 					bucket: "anthropic",
@@ -303,103 +320,97 @@ describe("composeAiSdkProviderOptions: Anthropic thinking precedence", () => {
 			],
 		},
 		{
-			name: "Opus 4.6 -> adaptive thinking with effort",
+			name: "Opus 4.6 clamps unsupported xhigh effort to max",
 			request: {
 				providerId: "anthropic",
 				modelId: "claude-opus-4-6",
-				reasoning: { enabled: true, effort: "high" },
+				reasoning: { enabled: true, effort: "xhigh" },
 			},
-			context: { family: "claude-opus" },
+			context: {
+				family: "claude-opus",
+				reasoningOptions: effortOptions(["low", "medium", "high", "max"]),
+			},
 			expect: [
 				{
 					bucket: "anthropic",
-					has: { thinking: ADAPTIVE_THINKING, effort: "high" },
+					has: { thinking: ADAPTIVE_THINKING, effort: "max" },
 				},
 			],
 		},
 		{
-			name: "Opus 4.7 -> adaptive thinking with effort",
+			name: "Fable 5 uses adaptive thinking and preserves xhigh effort",
 			request: {
 				providerId: "anthropic",
-				modelId: "claude-opus-4-7",
-				reasoning: { enabled: true, effort: "high" },
+				modelId: "claude-fable-5",
+				reasoning: { enabled: true, effort: "xhigh" },
 			},
-			context: { family: "claude-opus" },
+			context: {
+				family: "claude-fable",
+				reasoningOptions: effortOptions([
+					"low",
+					"medium",
+					"high",
+					"xhigh",
+					"max",
+				]),
+			},
 			expect: [
 				{
 					bucket: "anthropic",
-					has: { thinking: ADAPTIVE_THINKING, effort: "high" },
+					has: { thinking: ADAPTIVE_THINKING, effort: "xhigh" },
 				},
 			],
 		},
 		{
-			name: "Opus before 4.6 -> manual thinking, no effort",
+			name: "Sonnet 5 emits the explicit disabled thinking control",
 			request: {
 				providerId: "anthropic",
-				modelId: "claude-opus-4-5",
-				reasoning: { enabled: true, effort: "high" },
+				modelId: "claude-sonnet-5",
+				reasoning: { enabled: false },
 			},
-			context: { family: "claude-opus" },
+			context: {
+				family: "claude-sonnet",
+				reasoningOptions: [
+					{ type: "toggle" },
+					...effortOptions(["low", "medium", "high", "xhigh", "max"]),
+				],
+			},
 			expect: [
 				{
 					bucket: "anthropic",
-					has: { thinking: MANUAL_THINKING },
+					has: { thinking: { type: "disabled" } },
 					lacks: ["effort"],
 				},
 			],
 		},
 		{
-			name: "Sonnet 4.6 -> adaptive thinking with effort",
+			name: "Sonnet 4.6 explicit budget selects manual thinking despite adaptive effort support",
 			request: {
 				providerId: "anthropic",
 				modelId: "claude-sonnet-4-6",
-				reasoning: { enabled: true, effort: "high" },
+				reasoning: { enabled: true, budgetTokens: 4096 },
 			},
-			context: { family: "claude-sonnet" },
+			context: {
+				family: "claude-sonnet",
+				reasoningOptions: [
+					...effortOptions(["low", "medium", "high", "max"]),
+					...budgetOptions(1024, 64_000),
+				],
+			},
 			expect: [
 				{
 					bucket: "anthropic",
-					has: { thinking: ADAPTIVE_THINKING, effort: "high" },
-				},
-			],
-		},
-		{
-			name: "future Claude major (Sonnet 5.0) -> adaptive thinking",
-			request: {
-				providerId: "anthropic",
-				modelId: "claude-sonnet-5-0",
-				reasoning: { enabled: true, effort: "high" },
-			},
-			context: { family: "claude-sonnet" },
-			expect: [
-				{
-					bucket: "anthropic",
-					has: { thinking: ADAPTIVE_THINKING, effort: "high" },
-				},
-			],
-		},
-		{
-			name: "Claude date suffixes are not mistaken for adaptive version numbers",
-			request: {
-				providerId: "anthropic",
-				modelId: "claude-opus-4-20250514",
-				reasoning: { enabled: true, effort: "high" },
-			},
-			context: { family: "claude-opus" },
-			expect: [
-				{
-					bucket: "anthropic",
-					has: { thinking: MANUAL_THINKING },
+					has: { thinking: { type: "enabled", budgetTokens: 4096 } },
 					lacks: ["effort"],
 				},
 			],
 		},
 		{
-			name: "Haiku 4.5 -> manual thinking, no effort",
+			name: "unknown future Claude aliases fall back without inferred adaptive effort",
 			request: {
 				providerId: "anthropic",
-				modelId: "claude-haiku-4-5",
-				reasoning: { enabled: true, effort: "high" },
+				modelId: "claude-haiku-5",
+				reasoning: { enabled: true, effort: "xhigh" },
 			},
 			context: { family: "claude-haiku" },
 			expect: [
@@ -419,59 +430,6 @@ describe("composeAiSdkProviderOptions: Anthropic thinking precedence", () => {
 			},
 			context: { family: "claude-sonnet" },
 			expect: [{ bucket: "anthropic", has: { thinking: MANUAL_THINKING } }],
-		},
-		{
-			name: "manual thinking budget defaults when maxTokens is too small",
-			request: {
-				providerId: "anthropic",
-				modelId: "claude-sonnet-4-5",
-				maxTokens: 512,
-				reasoning: { enabled: true, effort: "low" },
-			},
-			context: { family: "claude-sonnet" },
-			expect: [{ bucket: "anthropic", has: { thinking: MANUAL_THINKING } }],
-		},
-		{
-			name: "manual thinking budget defaults for unknown effort values",
-			request: {
-				providerId: "anthropic",
-				modelId: "claude-sonnet-4-5",
-				reasoning: { enabled: true, effort: "minimal" as "low" },
-			},
-			context: { family: "claude-sonnet" },
-			expect: [{ bucket: "anthropic", has: { thinking: MANUAL_THINKING } }],
-		},
-		{
-			name: "lower reasoning model (Sonnet 4.0) -> manual thinking, no effort",
-			request: {
-				providerId: "anthropic",
-				modelId: "claude-sonnet-4-0",
-				reasoning: { enabled: true, effort: "medium" },
-			},
-			context: { family: "claude-sonnet", capabilities: ["reasoning"] },
-			expect: [
-				{
-					bucket: "anthropic",
-					has: { thinking: MANUAL_THINKING },
-					lacks: ["effort"],
-				},
-			],
-		},
-		{
-			name: "lower reasoning model (Sonnet 3.7) -> manual thinking, no effort",
-			request: {
-				providerId: "anthropic",
-				modelId: "claude-3-7-sonnet-20250219",
-				reasoning: { enabled: true, effort: "medium" },
-			},
-			context: { family: "claude-sonnet", capabilities: ["reasoning"] },
-			expect: [
-				{
-					bucket: "anthropic",
-					has: { thinking: MANUAL_THINKING },
-					lacks: ["effort"],
-				},
-			],
 		},
 		{
 			name: "lower non-reasoning Sonnet 3.5 -> no thinking on either bucket",
@@ -569,6 +527,77 @@ describe("composeAiSdkProviderOptions: Anthropic thinking precedence", () => {
 			],
 		},
 	]);
+
+	it("reserves visible-output headroom for manual Anthropic max effort", () => {
+		const result = composeAiSdkProviderOptions(
+			makeRequest({
+				providerId: "anthropic",
+				modelId: "claude-sonnet-4-5",
+				maxTokens: 32_000,
+				reasoning: { enabled: true, effort: "max" },
+			}),
+			makeContext({
+				providerId: "anthropic",
+				modelId: "claude-sonnet-4-5",
+				family: "claude-sonnet",
+				reasoningOptions: budgetOptions(1024),
+			}),
+		);
+
+		expect(result.anthropic).toEqual(
+			expect.objectContaining({
+				thinking: { type: "enabled", budgetTokens: 30_399 },
+			}),
+		);
+	});
+
+	it("rejects manual Anthropic thinking when the output cap cannot fit a budget", () => {
+		expect(() =>
+			composeAiSdkProviderOptions(
+				makeRequest({
+					providerId: "anthropic",
+					modelId: "claude-sonnet-4-5",
+					maxTokens: 1,
+					reasoning: { enabled: true },
+				}),
+				makeContext({
+					providerId: "anthropic",
+					modelId: "claude-sonnet-4-5",
+					family: "claude-sonnet",
+					reasoningOptions: budgetOptions(1024, 32_000),
+				}),
+			),
+		).toThrow(
+			"Anthropic manual thinking requires a positive budget smaller than maxTokens.",
+		);
+	});
+
+	it.each([
+		["provider cap", undefined, 200_000, 128_000],
+		["output cap", 2048, 200_000, 2047],
+		["small output cap", 64, 4096, 63],
+	] as const)("clamps custom Anthropic explicit budgets to the %s", (_, maxTokens, budgetTokens, expected) => {
+		const result = composeAiSdkProviderOptions(
+			makeRequest({
+				providerId: "anthropic",
+				modelId: "claude-custom",
+				maxTokens,
+				reasoning: { enabled: true, budgetTokens },
+			}),
+			makeContext({
+				providerId: "anthropic",
+				modelId: "claude-custom",
+				family: "claude",
+			}),
+		);
+
+		expect(result.anthropic).toMatchObject({
+			thinking: { type: "enabled", budgetTokens: expected },
+		});
+		expect(result.openaiCompatible).toMatchObject({
+			reasoning: { enabled: true, max_tokens: expected },
+		});
+	});
 });
 
 describe("composeAiSdkProviderOptions: family/provider thinking patches", () => {
@@ -593,6 +622,53 @@ describe("composeAiSdkProviderOptions: family/provider thinking patches", () => 
 			],
 		},
 		{
+			name: "openrouter preserves exact maximum reasoning effort",
+			request: {
+				providerId: "openrouter",
+				modelId: "moonshotai/reasoning-model",
+				reasoning: { effort: "max" },
+			},
+			context: {
+				reasoningOptions: effortOptions(["low", "medium", "high", "max"]),
+			},
+			expect: [
+				{
+					bucket: "openrouter",
+					has: { reasoning: { effort: "max" } },
+					lacks: ["thinking", "effort", "reasoningEffort"],
+				},
+				{
+					bucket: "openaiCompatible",
+					lacks: ["thinking", "reasoning", "effort", "reasoningEffort"],
+				},
+			],
+		},
+		{
+			name: "openrouter preserves supported Anthropic xhigh effort",
+			request: {
+				providerId: "openrouter",
+				modelId: "anthropic/claude-opus-4-7",
+				reasoning: { effort: "xhigh" },
+			},
+			context: {
+				family: "claude-opus",
+				reasoningOptions: effortOptions([
+					"low",
+					"medium",
+					"high",
+					"xhigh",
+					"max",
+				]),
+			},
+			expect: [
+				{
+					bucket: "openrouter",
+					has: { reasoning: { effort: "xhigh" } },
+					lacks: ["thinking", "reasoningEffort"],
+				},
+			],
+		},
+		{
 			name: "openrouter reasoning enabled-only -> reasoning.enabled",
 			request: {
 				providerId: "openrouter",
@@ -608,6 +684,44 @@ describe("composeAiSdkProviderOptions: family/provider thinking patches", () => 
 				{
 					bucket: "openaiCompatible",
 					lacks: ["thinking", "reasoning", "effort", "reasoningEffort"],
+				},
+			],
+		},
+		{
+			name: "models.dev default effort bypasses unlisted-model heuristics",
+			request: {
+				providerId: "groq",
+				modelId: "qwen/qwen3-32b",
+				reasoning: { enabled: true },
+			},
+			context: {
+				family: "qwen",
+				reasoningOptions: effortOptions(["none", "default"]),
+			},
+			expect: [
+				{
+					bucket: "groq",
+					has: { reasoningEffort: "default" },
+					lacks: ["effort", "reasoningSummary"],
+				},
+			],
+		},
+		{
+			name: "Anthropic default effort uses adaptive thinking without an invalid effort",
+			request: {
+				providerId: "anthropic",
+				modelId: "claude-future",
+				reasoning: { enabled: true },
+			},
+			context: {
+				family: "claude",
+				reasoningOptions: effortOptions(["none", "default"]),
+			},
+			expect: [
+				{
+					bucket: "anthropic",
+					has: { thinking: { type: "adaptive" } },
+					lacks: ["effort", "reasoningEffort"],
 				},
 			],
 		},
@@ -1163,16 +1277,45 @@ describe("composeAiSdkProviderOptions: family/provider thinking patches", () => 
 			expect: [{ bucket: "cline", has: { reasoning: { enabled: false } } }],
 		},
 		{
-			name: "cline Claude Fable reasoning.enabled=false uses lowest supported reasoning",
+			name: "cline Claude Fable omits an unadvertised disabled control",
 			request: {
 				providerId: "cline",
 				modelId: "anthropic/claude-fable-5",
 				reasoning: { enabled: false },
 			},
+			context: {
+				reasoningOptions: effortOptions([
+					"low",
+					"medium",
+					"high",
+					"xhigh",
+					"max",
+				]),
+			},
 			expect: [
 				{
 					bucket: "cline",
-					has: { reasoning: { max_tokens: 1024 } },
+					lacks: ["reasoning", "thinking"],
+				},
+			],
+		},
+		{
+			name: "cline Claude Fable ignores an advertised toggle because reasoning is mandatory",
+			request: {
+				providerId: "cline",
+				modelId: "anthropic/claude-fable-5",
+				reasoning: { enabled: false },
+			},
+			context: {
+				reasoningOptions: [
+					{ type: "toggle" },
+					...effortOptions(["low", "medium", "high", "xhigh", "max"]),
+				],
+			},
+			expect: [
+				{
+					bucket: "cline",
+					lacks: ["reasoning", "thinking"],
 				},
 			],
 		},
@@ -1401,7 +1544,7 @@ describe("composeAiSdkProviderOptions: family/provider thinking patches", () => 
 			],
 		},
 		{
-			name: "vercel MiniMax M3 sibling id -> no MiniMax M3 gateway exception",
+			name: "vercel MiniMax M3 sibling without advertised controls -> no reasoning control",
 			request: {
 				providerId: "vercel-ai-gateway",
 				modelId: "minimax/minimax-m3-pro",
@@ -1414,8 +1557,7 @@ describe("composeAiSdkProviderOptions: family/provider thinking patches", () => 
 			expect: [
 				{
 					bucket: "vercelAiGateway",
-					has: { thinking: { type: "adaptive" } },
-					lacks: ["reasoning"],
+					lacks: ["thinking", "reasoning"],
 				},
 			],
 		},
@@ -1516,7 +1658,7 @@ describe("composeAiSdkProviderOptions: family/provider thinking patches", () => 
 			],
 		},
 		{
-			name: "direct MiniMax M2.5 reasoning enabled -> existing generic adaptive thinking",
+			name: "direct MiniMax M2.5 without an advertised control -> no generic thinking",
 			request: {
 				providerId: "minimax",
 				modelId: "MiniMax-M2.5",
@@ -1530,13 +1672,11 @@ describe("composeAiSdkProviderOptions: family/provider thinking patches", () => 
 			expect: [
 				{
 					bucket: "minimax",
-					has: { thinking: { type: "adaptive" } },
-					lacks: ["reasoning"],
+					lacks: ["thinking", "reasoning"],
 				},
 				{
 					bucket: "openaiCompatible",
-					has: { thinking: { type: "adaptive" } },
-					lacks: ["reasoning"],
+					lacks: ["thinking", "reasoning"],
 				},
 			],
 		},
@@ -1706,6 +1846,122 @@ describe("composeAiSdkProviderOptions: family/provider thinking patches", () => 
 	]);
 });
 
+describe("composeAiSdkProviderOptions: catalog-driven provider codecs", () => {
+	it.each([
+		[true, "enabled"],
+		[false, "disabled"],
+	] as const)("maps Moonshot toggle %s to thinking.type=%s", (enabled, type) => {
+		const result = composeAiSdkProviderOptions(
+			makeRequest({
+				providerId: "moonshot",
+				modelId: "kimi-k3",
+				reasoning: { enabled },
+			}),
+			makeContext({
+				providerId: "moonshot",
+				modelId: "kimi-k3",
+				family: "kimi-k3",
+				reasoningOptions: [{ type: "toggle" }],
+			}),
+		);
+		expect(result.moonshot).toMatchObject({ thinking: { type } });
+		expect(result.openaiCompatible).toMatchObject({ thinking: { type } });
+		expect(result.moonshot).not.toHaveProperty("effort");
+		expect(result.moonshot).not.toHaveProperty("reasoningSummary");
+	});
+
+	it.each([
+		[
+			"effort",
+			{ effort: "max" },
+			effortOptions(["low", "medium", "high", "max"]),
+			{ reasoningEffort: "max" },
+		],
+		[
+			"off",
+			{ enabled: false },
+			[{ type: "toggle" }],
+			{ reasoningEffort: "none" },
+		],
+		[
+			"on",
+			{ enabled: true },
+			[{ type: "toggle" }, ...effortOptions(["low", "medium", "high", "max"])],
+			{ reasoningEffort: "medium" },
+		],
+		[
+			"budget",
+			{ budgetTokens: 4096 },
+			budgetOptions(128, 32_768),
+			{ thinking: { type: "enabled", budget_tokens: 4096 } },
+		],
+	] as const)("maps Fireworks %s to its supported wire shape", (_, reasoning, reasoningOptions, expected) => {
+		const result = composeAiSdkProviderOptions(
+			makeRequest({
+				providerId: "fireworks",
+				modelId: "accounts/fireworks/models/kimi-k3",
+				reasoning,
+			}),
+			makeContext({
+				providerId: "fireworks",
+				modelId: "accounts/fireworks/models/kimi-k3",
+				reasoningOptions,
+			}),
+		);
+		expect(result.fireworks).toMatchObject(expected);
+		expect(result.fireworks).not.toHaveProperty("effort");
+		expect(result.fireworks).not.toHaveProperty("reasoningSummary");
+		if ("thinking" in expected) {
+			expect(result.fireworks).not.toHaveProperty("reasoningEffort");
+		} else {
+			expect(result.fireworks).not.toHaveProperty("thinking");
+		}
+	});
+
+	it("maps Together off to reasoning.enabled=false", () => {
+		const result = composeAiSdkProviderOptions(
+			makeRequest({
+				providerId: "together",
+				modelId: "zai-org/glm-5.2",
+				reasoning: { enabled: false },
+			}),
+			makeContext({
+				providerId: "together",
+				modelId: "zai-org/glm-5.2",
+				family: "glm",
+				reasoningOptions: [{ type: "toggle" }],
+			}),
+		);
+		expect(result.together).toMatchObject({
+			reasoning: { enabled: false },
+		});
+		expect(result.together).not.toHaveProperty("thinking");
+	});
+
+	it("keeps Vercel Gemini budget metadata out of Anthropic headroom", () => {
+		const result = composeAiSdkProviderOptions(
+			makeRequest({
+				providerId: "vercel-ai-gateway",
+				modelId: "google/gemini-2.5-pro",
+				maxTokens: 64,
+				reasoning: { budgetTokens: 128 },
+			}),
+			makeContext({
+				providerId: "vercel-ai-gateway",
+				modelId: "google/gemini-2.5-pro",
+				family: "gemini-pro",
+				reasoningOptions: budgetOptions(128, 32_768),
+				maxOutputTokens: 64,
+			}),
+		);
+		expect(result["vercel-ai-gateway"]).toBeUndefined();
+		expect(result.vercelAiGateway).toMatchObject({
+			reasoning: { max_tokens: 128 },
+		});
+		expect(result.vercelAiGateway).not.toHaveProperty("thinking");
+	});
+});
+
 describe("composeAiSdkProviderOptions: provider-specific overlays", () => {
 	it.each([
 		"openai",
@@ -1719,6 +1975,65 @@ describe("composeAiSdkProviderOptions: provider-specific overlays", () => {
 		expect(result.openai).toHaveProperty("truncation", "auto");
 	});
 
+	it("emits native OpenAI reasoning effort in the canonical adapter bucket", () => {
+		const result = composeAiSdkProviderOptions(
+			makeRequest({
+				providerId: "openai-native",
+				modelId: "gpt-5.6",
+				reasoning: { effort: "max" },
+			}),
+			makeContext({
+				providerId: "openai-native",
+				modelId: "gpt-5.6",
+				reasoningOptions: effortOptions([
+					"none",
+					"low",
+					"medium",
+					"high",
+					"xhigh",
+					"max",
+				]),
+			}),
+		);
+
+		expect(result.openai).toEqual(
+			expect.objectContaining({
+				reasoningEffort: "max",
+				truncation: "auto",
+			}),
+		);
+		expect(result).not.toHaveProperty("openai-native");
+	});
+
+	it("maps an advertised native OpenAI off control to reasoning effort none", () => {
+		const result = composeAiSdkProviderOptions(
+			makeRequest({
+				providerId: "openai-native",
+				modelId: "gpt-5.6",
+				reasoning: { enabled: false },
+			}),
+			makeContext({
+				providerId: "openai-native",
+				modelId: "gpt-5.6",
+				reasoningOptions: effortOptions([
+					"none",
+					"low",
+					"medium",
+					"high",
+					"xhigh",
+					"max",
+				]),
+			}),
+		);
+
+		expect(result.openai).toEqual(
+			expect.objectContaining({
+				reasoningEffort: "none",
+				truncation: "auto",
+			}),
+		);
+	});
+
 	it("emits the openai-codex `openai` bucket alongside its canonical bucket", () => {
 		const result = composeAiSdkProviderOptions(
 			makeRequest({
@@ -1727,7 +2042,11 @@ describe("composeAiSdkProviderOptions: provider-specific overlays", () => {
 				systemPrompt: "you are helpful",
 				reasoning: { effort: "high" },
 			}),
-			makeContext({ providerId: "openai-codex", modelId: "gpt-5.4" }),
+			makeContext({
+				providerId: "openai-codex",
+				modelId: "gpt-5.4",
+				reasoningOptions: effortOptions(["low", "medium", "high", "xhigh"]),
+			}),
 		);
 
 		expect(result.openai).toEqual(
@@ -1745,6 +2064,31 @@ describe("composeAiSdkProviderOptions: provider-specific overlays", () => {
 		expect(result.openaiCodex).not.toHaveProperty("truncation");
 	});
 
+	it("normalizes unsupported OpenAI Codex effort in every emitted bucket", () => {
+		const result = composeAiSdkProviderOptions(
+			makeRequest({
+				providerId: "openai-codex",
+				modelId: "gpt-5.4",
+				reasoning: { effort: "max" },
+			}),
+			makeContext({
+				providerId: "openai-codex",
+				modelId: "gpt-5.4",
+				reasoningOptions: effortOptions(["low", "medium", "high", "xhigh"]),
+			}),
+		);
+
+		for (const bucket of ["openai", "openaiCodex"]) {
+			expect(result[bucket]).toEqual(
+				expect.objectContaining({
+					effort: "xhigh",
+					reasoningEffort: "xhigh",
+				}),
+			);
+		}
+		expect(result["openai-codex"]).toBeUndefined();
+	});
+
 	it("emits Gemini 2.5 google.thinkingConfig budget only when reasoning effort is set", () => {
 		const withEffort = composeAiSdkProviderOptions(
 			makeRequest({
@@ -1752,10 +2096,17 @@ describe("composeAiSdkProviderOptions: provider-specific overlays", () => {
 				modelId: "gemini-2.5-flash",
 				reasoning: { effort: "medium" },
 			}),
-			makeContext({ providerId: "gemini", modelId: "gemini-2.5-flash" }),
+			makeContext({
+				providerId: "gemini",
+				modelId: "gemini-2.5-flash",
+				reasoningOptions: [
+					{ type: "toggle" },
+					{ type: "budget_tokens", min: 0, max: 24_576 },
+				],
+			}),
 		);
 		expect(withEffort.google).toEqual({
-			thinkingConfig: { thinkingBudget: 8192, includeThoughts: true },
+			thinkingConfig: { thinkingBudget: 12_288, includeThoughts: true },
 		});
 
 		const withoutEffort = composeAiSdkProviderOptions(
@@ -1765,6 +2116,24 @@ describe("composeAiSdkProviderOptions: provider-specific overlays", () => {
 		expect(withoutEffort).not.toHaveProperty("google");
 	});
 
+	it("maps unsupported Gemini 3 Pro levels to the nearest supported level", () => {
+		const withMinimal = composeAiSdkProviderOptions(
+			makeRequest({
+				providerId: "gemini",
+				modelId: "gemini-3-pro-preview",
+				reasoning: { effort: "minimal" },
+			}),
+			makeContext({
+				providerId: "gemini",
+				modelId: "gemini-3-pro-preview",
+				reasoningOptions: effortOptions(["low", "high"]),
+			}),
+		);
+		expect(withMinimal.google).toEqual({
+			thinkingConfig: { thinkingLevel: "low", includeThoughts: true },
+		});
+	});
+
 	it("keeps the google bucket owned by the gemini patch for direct google providers", () => {
 		const result = composeAiSdkProviderOptions(
 			makeRequest({
@@ -1772,11 +2141,18 @@ describe("composeAiSdkProviderOptions: provider-specific overlays", () => {
 				modelId: "gemini-2.5-flash",
 				reasoning: { enabled: true, effort: "high" },
 			}),
-			makeContext({ providerId: "google", modelId: "gemini-2.5-flash" }),
+			makeContext({
+				providerId: "google",
+				modelId: "gemini-2.5-flash",
+				reasoningOptions: [
+					{ type: "toggle" },
+					{ type: "budget_tokens", min: 0, max: 24_576 },
+				],
+			}),
 		);
 
 		expect(result.google).toEqual({
-			thinkingConfig: { thinkingBudget: 24576, includeThoughts: true },
+			thinkingConfig: { thinkingBudget: 19_660, includeThoughts: true },
 		});
 		expect(result.google).not.toHaveProperty("thinking");
 		expect(result.google).not.toHaveProperty("effort");
@@ -1794,6 +2170,7 @@ describe("composeAiSdkProviderOptions: provider-specific overlays", () => {
 			makeContext({
 				providerId: "vertex",
 				modelId: "gemini-3-flash-preview",
+				reasoningOptions: effortOptions(["minimal", "low", "medium", "high"]),
 			}),
 		);
 
@@ -1835,7 +2212,7 @@ describe("composeAiSdkProviderOptions: provider-specific overlays", () => {
 		expect(result.vertex).not.toHaveProperty("reasoningSummary");
 	});
 
-	it("maps disabled Vertex thinking to minimal thinkingConfig", () => {
+	it("omits disabled Vertex thinking when the model advertises no off control", () => {
 		const result = composeAiSdkProviderOptions(
 			makeRequest({
 				providerId: "vertex",
@@ -1845,14 +2222,11 @@ describe("composeAiSdkProviderOptions: provider-specific overlays", () => {
 			makeContext({
 				providerId: "vertex",
 				modelId: "gemini-3-flash-preview",
+				reasoningOptions: effortOptions(["minimal", "low", "medium", "high"]),
 			}),
 		);
 
-		expect(result.vertex).toEqual(
-			expect.objectContaining({
-				thinkingConfig: { thinkingLevel: "minimal", includeThoughts: false },
-			}),
-		);
+		expect(result.vertex).toEqual({});
 		expect(result.vertex).not.toHaveProperty("thinking");
 		expect(result.vertex).not.toHaveProperty("effort");
 		expect(result.vertex).not.toHaveProperty("reasoningEffort");
@@ -1872,6 +2246,10 @@ describe("composeAiSdkProviderOptions: provider-specific overlays", () => {
 				modelId: "gemini-flash-latest",
 				family: "gemini-flash",
 				capabilities: ["reasoning"],
+				reasoningOptions: [
+					{ type: "toggle" },
+					{ type: "budget_tokens", min: 0, max: 24_576 },
+				],
 			}),
 		);
 
@@ -1887,7 +2265,7 @@ describe("composeAiSdkProviderOptions: provider-specific overlays", () => {
 		expect(result.google).toBeUndefined();
 	});
 
-	it("maps Vertex Gemini Flash Latest effort to a Gemini 2.5 thinking budget", () => {
+	it("maps Vertex Gemini Flash Latest effort to its advertised thinking level", () => {
 		const result = composeAiSdkProviderOptions(
 			makeRequest({
 				providerId: "vertex",
@@ -1899,12 +2277,13 @@ describe("composeAiSdkProviderOptions: provider-specific overlays", () => {
 				modelId: "gemini-flash-latest",
 				family: "gemini-flash",
 				capabilities: ["reasoning"],
+				reasoningOptions: effortOptions(["minimal", "low", "medium", "high"]),
 			}),
 		);
 
 		expect(result.vertex).toEqual(
 			expect.objectContaining({
-				thinkingConfig: { thinkingBudget: 24576, includeThoughts: true },
+				thinkingConfig: { thinkingLevel: "high", includeThoughts: true },
 			}),
 		);
 		expect(result.vertex).not.toHaveProperty("thinking");
@@ -1914,7 +2293,7 @@ describe("composeAiSdkProviderOptions: provider-specific overlays", () => {
 		expect(result.google).toBeUndefined();
 	});
 
-	it("keeps disabled Vertex Gemini 2.5 Pro on a valid minimum thinking budget", () => {
+	it("omits disabled Vertex Gemini 2.5 Pro without an advertised off control", () => {
 		const result = composeAiSdkProviderOptions(
 			makeRequest({
 				providerId: "vertex",
@@ -1926,14 +2305,11 @@ describe("composeAiSdkProviderOptions: provider-specific overlays", () => {
 				modelId: "gemini-2.5-pro",
 				family: "gemini-pro",
 				capabilities: ["reasoning"],
+				reasoningOptions: budgetOptions(128, 32_768),
 			}),
 		);
 
-		expect(result.vertex).toEqual(
-			expect.objectContaining({
-				thinkingConfig: { thinkingBudget: 128, includeThoughts: false },
-			}),
-		);
+		expect(result.vertex).toEqual({});
 		expect(result.vertex).not.toHaveProperty("thinking");
 		expect(result.vertex).not.toHaveProperty("effort");
 		expect(result.vertex).not.toHaveProperty("reasoningEffort");
