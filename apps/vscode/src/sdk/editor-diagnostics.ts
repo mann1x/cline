@@ -18,6 +18,8 @@
 // `afterTool` reports the difference. The user can still ask for the whole
 // picture with `@problems`.
 
+import { appendFileSync } from "node:fs"
+import { tmpdir } from "node:os"
 import type { AgentAfterToolContext, AgentBeforeToolContext, AgentHooks } from "@cline/shared"
 import { getNewDiagnostics, singleFileDiagnosticsToProblemsString } from "@integrations/diagnostics"
 import * as path from "path"
@@ -220,6 +222,30 @@ export function appendToOutput(output: unknown, block: string): unknown {
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
 /**
+ * Append one line per edit to `<tmpdir>/cline-editor-diagnostics.jsonl`.
+ *
+ * Silence from this feature is ambiguous by design — a clean edit and a broken
+ * lookup both produce nothing — and the first live run was exactly that: four
+ * edits, no block, no way to tell which link failed. This makes the difference
+ * visible: what the editor was asked about, how many diagnostics it held before
+ * and after, and whether anything was new.
+ *
+ * Best-effort and never throws; a diagnostic about diagnostics must not be able
+ * to break an edit.
+ */
+function appendEditorDiagnosticsTrace(entry: Record<string, unknown>): void {
+	try {
+		appendFileSync(
+			path.join(tmpdir(), "cline-editor-diagnostics.jsonl"),
+			`${JSON.stringify({ at: new Date().toISOString(), ...entry })}\n`,
+			"utf8",
+		)
+	} catch {
+		// ignored
+	}
+}
+
+/**
  * Read the touched files' diagnostics once the language server has stopped
  * changing its mind, or once the budget runs out — whichever comes first.
  */
@@ -268,11 +294,28 @@ export function createEditorDiagnosticsHooks(options: EditorDiagnosticsOptions):
 				}
 				const paths = resolveTargets(ctx.toolCall.toolName, ctx.input)
 				if (paths.length === 0) {
+					appendEditorDiagnosticsTrace({
+						phase: "before",
+						tool: ctx.toolCall.toolName,
+						targets: [],
+						rawPaths: readTargetPaths(ctx.toolCall.toolName, ctx.input),
+					})
 					return undefined
 				}
+				const all = await read()
 				pending.set(ctx.toolCall.toolCallId, {
 					paths,
-					before: filterToPaths(await read(), new Set(paths)),
+					before: filterToPaths(all, new Set(paths)),
+				})
+				appendEditorDiagnosticsTrace({
+					phase: "before",
+					tool: ctx.toolCall.toolName,
+					targets: paths,
+					workspaceFiles: all.length,
+					// The paths the editor is reporting on, so a match failure is
+					// distinguishable from an editor that simply has nothing to say.
+					workspaceSample: all.slice(0, 5).map((file) => file.filePath),
+					matched: filterToPaths(all, new Set(paths)).length,
 				})
 			} catch (error) {
 				Logger.error("[EditorDiagnostics] failed to snapshot diagnostics:", error)
@@ -291,6 +334,14 @@ export function createEditorDiagnosticsHooks(options: EditorDiagnosticsOptions):
 				}
 				const after = await readSettledDiagnostics(new Set(snapshot.paths), read, delay)
 				const block = await formatIntroducedDiagnostics(snapshot.before, after)
+				appendEditorDiagnosticsTrace({
+					phase: "after",
+					tool: ctx.toolCall.toolName,
+					targets: snapshot.paths,
+					before: snapshot.before.reduce((total, file) => total + file.diagnostics.length, 0),
+					after: after.reduce((total, file) => total + file.diagnostics.length, 0),
+					blockChars: block.length,
+				})
 				if (!block) {
 					return undefined
 				}

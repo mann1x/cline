@@ -1188,6 +1188,58 @@ describe("createContextCompactionPrepareTurn", () => {
 			expect(result?.messages).toBeDefined();
 		});
 
+		it("recovers the count from the transcript when the process did not see it", async () => {
+			// Repro for every resume compacting. The calibration lives in process
+			// memory, so a task resumed after a host restart decides on the raw
+			// estimate — measured live at 237,977 and 261,494 tokens against a
+			// 115,200 trigger, for a session that had been reporting 108,099 and
+			// 72,995 actual tokens minutes earlier. The transcript knew: each
+			// assistant turn records what the provider counted for it.
+			// 400,000 characters the provider counted as 68,000 tokens: 5.9
+			// characters each, and comfortably under the 115,200 trigger. The
+			// estimate reads the same transcript as ~133,000 and compacts it.
+			const resumed: MessageWithMetadata[] = [
+				{ role: "user", content: "start the task" },
+				{ role: "assistant", content: "x".repeat(400_000) },
+				{ role: "user", content: "continue" },
+				{
+					role: "assistant",
+					content: "on it",
+					metrics: { inputTokens: 68_000 },
+				},
+			];
+
+			const result = await prepare(resumed);
+			expect(result?.messages).toBeUndefined();
+		});
+
+		it("still compacts a resumed transcript the provider counted as full", async () => {
+			const resumed: MessageWithMetadata[] = [
+				{ role: "user", content: "start the task" },
+				{ role: "assistant", content: "x".repeat(700_000) },
+				{ role: "user", content: "continue" },
+				{
+					role: "assistant",
+					content: "on it",
+					metrics: { inputTokens: 117_000 },
+				},
+			];
+
+			const result = await prepare(resumed);
+			expect(result?.messages).toBeDefined();
+		});
+
+		it("leaves a transcript with no recorded counts on the estimate", async () => {
+			// A first run, or a provider that reports no usage: there is nothing
+			// to recover, and the estimate is all there ever was.
+			const result = await prepare([
+				{ role: "user", content: "start the task" },
+				{ role: "assistant", content: "x".repeat(400_000), metrics: {} },
+				{ role: "user", content: "continue" },
+			] as MessageWithMetadata[]);
+			expect(result?.messages).toBeDefined();
+		});
+
 		it("does not compact when the provider counted a context well under the trigger", async () => {
 			// the request that produced those messages really cost 40,000 tokens
 			observeRequestTokens(163_772, 40_000);

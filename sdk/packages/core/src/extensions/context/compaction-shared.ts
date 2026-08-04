@@ -3,6 +3,8 @@ import {
 	CHARS_PER_TOKEN,
 	estimateTokens,
 	type MessageWithMetadata,
+	measureRequestInputChars,
+	seedRequestTokenCalibration,
 } from "@cline/shared";
 
 export { CHARS_PER_TOKEN, estimateTokens };
@@ -983,4 +985,52 @@ export function buildSummaryMessage(options: {
 			generatedAt: Date.now(),
 		} satisfies CompactionSummaryMetadata,
 	};
+}
+
+/**
+ * Recover the token calibration from a transcript that was written by an
+ * earlier process.
+ *
+ * Every assistant turn records what the provider counted for the request that
+ * produced it, so a resumed session is not actually uncalibrated — it just
+ * starts as if it were, because the calibration lives in process memory. That
+ * gap is what makes a resume compact immediately: the character estimate reads
+ * roughly twice the real size of a transcript (three assumed characters per
+ * token against a measured 5.9), and twice a normal working context is over any
+ * threshold.
+ *
+ * The newest turn with a recorded count is used, paired with the request that
+ * produced it — the messages before it, plus the system prompt and tools, which
+ * is the same payload {@link measureRequestInputChars} measures live. Both the
+ * ratio and the count are adopted, so the first decision after a resume is made
+ * on the same evidence the last decision before it was.
+ *
+ * Nothing happens once a live response has been observed, and nothing happens
+ * for a transcript that carries no counts (a fresh session, or a provider that
+ * reports no usage) — those keep the estimate they always had.
+ */
+export function seedCalibrationFromTranscript(request: {
+	systemPrompt?: string;
+	messages: MessageWithMetadata[];
+	tools?: unknown[];
+}): void {
+	for (let index = request.messages.length - 1; index >= 0; index -= 1) {
+		const message = request.messages[index];
+		if (message?.role !== "assistant") {
+			continue;
+		}
+		const tokens = message.metrics?.inputTokens;
+		if (typeof tokens !== "number" || !Number.isFinite(tokens) || tokens <= 0) {
+			continue;
+		}
+		seedRequestTokenCalibration(
+			measureRequestInputChars({
+				systemPrompt: request.systemPrompt,
+				messages: request.messages.slice(0, index),
+				tools: request.tools,
+			}),
+			tokens,
+		);
+		return;
+	}
 }

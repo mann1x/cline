@@ -212,6 +212,7 @@ export {
 	measureRequestInputChars,
 	observeRequestTokens,
 	resetTokenCalibration,
+	seedRequestTokenCalibration,
 	type TokenEstimatedRequest,
 } from "./llms/tokens";
 export type {

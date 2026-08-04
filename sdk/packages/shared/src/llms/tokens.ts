@@ -111,6 +111,34 @@ export function observeRequestTokens(chars: number, tokens: number): void {
 }
 
 /**
+ * Adopt a measurement taken from somewhere other than a live response, and only
+ * while nothing has been measured in this process.
+ *
+ * A resumed session starts with no measurement at all, so the trigger falls
+ * back to the character estimate — and that estimate assumes three characters
+ * per token, against a measured 5.9 for real transcript content. Measured live
+ * on two consecutive resumes: 237,977 and 261,494 estimated tokens against a
+ * 115,200 trigger, both compacting immediately, while the same session had been
+ * reporting 108,099 and 72,995 actual tokens minutes earlier in the previous
+ * process. Every resume after a host restart therefore threw away most of the
+ * transcript before the first request.
+ *
+ * The measurement is out there: the transcript records what the provider
+ * counted for each turn it already ran. This is how it gets back in. It never
+ * overwrites a live observation — a real response is always better evidence
+ * than a reconstruction of one.
+ */
+export function seedRequestTokenCalibration(
+	chars: number,
+	tokens: number,
+): void {
+	if (calibration().charsPerToken !== undefined) {
+		return;
+	}
+	observeRequestTokens(chars, tokens);
+}
+
+/**
  * What the last request actually cost, according to the provider, or
  * `undefined` before any response has been seen.
  *

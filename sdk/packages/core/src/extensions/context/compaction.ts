@@ -36,6 +36,7 @@ import {
 	DEFAULT_TARGET_RATIO,
 	resolveEffectiveMaxInputTokens,
 	resolveRecencyBounds,
+	seedCalibrationFromTranscript,
 } from "./compaction-shared";
 
 export interface ContextPipelinePrepareTurnInput {
@@ -382,6 +383,14 @@ export function createContextCompactionPrepareTurn(
 		// before; the ratio below `maxInputTokens` is the headroom that pays
 		// for that. The estimate remains the fallback for the first request of
 		// a session, when nothing has been counted yet.
+		// A resumed session has counts on record from the process that ran it
+		// before; without this the fallback below is reached with nothing
+		// measured at all, and the estimate it falls back to is roughly double.
+		seedCalibrationFromTranscript({
+			systemPrompt: context.systemPrompt,
+			messages: context.messages,
+			tools: context.tools,
+		});
 		const observedRequestTokens = lastObservedRequestTokens();
 		const triggerInputTokens = observedRequestTokens ?? requestInputTokens;
 		const shouldCompact = triggerInputTokens >= requestTriggerTokens;
