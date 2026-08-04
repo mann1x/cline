@@ -13,9 +13,11 @@ import type { LanguageModelV4 } from "@ai-sdk/provider";
 import type {
 	GatewayProviderContext,
 	GatewayResolvedProviderConfig,
+	GatewayStreamRequest,
 } from "@cline/shared";
-import { wrapLanguageModel } from "ai";
+import { type CallSettings, wrapLanguageModel } from "ai";
 import { createOllama } from "ai-sdk-ollama";
+import { buildAiSdkStreamConfig } from "../ai-sdk";
 import { OLLAMA_DEFAULT_CONTEXT_WINDOW } from "../builtins";
 import { ensureFetch, resolveApiKey } from "../http";
 import { createRetryEmptyResponseMiddleware } from "../middleware/retry-empty-response";
@@ -164,5 +166,45 @@ export async function createOllamaProviderModule(
 				}) as LanguageModelV4,
 				middleware: [retryEmptyResponseMiddleware, splitToolImagesMiddleware],
 			}),
+		buildStreamConfig: buildOllamaStreamConfig,
 	};
+}
+
+/**
+ * The effort a request stands for when it asks for reasoning without naming a
+ * level.
+ *
+ * `medium` rather than the strongest: turning reasoning on is a request for the
+ * model to think, not for it to think as hard as it can. On Ollama an effort
+ * level also bounds how much of the response the model may spend inside the
+ * thinking block, so the middle of the scale is the reading that leaves room
+ * for an answer.
+ */
+export const OLLAMA_DEFAULT_REASONING_EFFORT = "medium" as const;
+
+/**
+ * Ollama's stream config: the shared one, plus a level for the case the AI
+ * SDK's vocabulary cannot express.
+ *
+ * That vocabulary is a scale of efforts — `none`, `minimal`, `low`, `medium`,
+ * `high`, `xhigh` — with no plain "on". `provider-default` is the nearest
+ * thing, but it means "whatever the model was constructed with", and this
+ * vendor constructs models with no reasoning setting precisely so reasoning
+ * stays a per-request decision. A request that asks for reasoning and names no
+ * level would otherwise reach Ollama with `think` unset, and get none.
+ *
+ * Naming the level here keeps that decision provider-local. Ollama is the
+ * provider whose wire format has a boolean `think`, so it is the provider that
+ * has to say what a bare "on" means; nothing about it reaches the generic
+ * factory.
+ */
+export function buildOllamaStreamConfig(
+	request: GatewayStreamRequest,
+	context: GatewayProviderContext,
+): Partial<CallSettings> {
+	const config = buildAiSdkStreamConfig(request, context);
+	if (config.reasoning !== undefined || request.reasoning?.enabled !== true) {
+		return config;
+	}
+	return { ...config, reasoning: OLLAMA_DEFAULT_REASONING_EFFORT };
 }
