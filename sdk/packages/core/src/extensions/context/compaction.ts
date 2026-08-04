@@ -545,6 +545,30 @@ export function createContextCompactionPrepareTurn(
 				executedStrategy = "basic";
 				result = await BUILTIN_COMPACTION_STRATEGIES.basic(builtinOptions);
 			}
+			// Reaching here means the trigger already decided this transcript has
+			// to shrink, so "the strategy declined" is not an answer that leaves
+			// the run in a good place: skipping just hands the same oversized
+			// transcript to the next turn, one turn larger. Agentic compaction
+			// can decline for reasons that have nothing to do with the transcript
+			// being small enough -- an empty summary, a summarizer input budget
+			// that does not fit, a cut with nothing left to fold -- and it needs a
+			// working model request to succeed at exactly the moment the context
+			// is fullest. Basic compaction needs no request and cannot decline for
+			// any of those reasons, so it is what stands between a declined
+			// compaction and a turn that runs out of room to answer in.
+			if (strategy === "agentic" && !result?.messages) {
+				config.logger?.log(
+					"Agentic compaction produced no result; falling back to basic compaction",
+					{
+						severity: "warn",
+						messageInputTokens,
+						messageTargetTokens,
+						messageCount: context.messages.length,
+					},
+				);
+				executedStrategy = "basic";
+				result = await BUILTIN_COMPACTION_STRATEGIES.basic(builtinOptions);
+			}
 		}
 
 		const durationMs = Date.now() - startedAt;

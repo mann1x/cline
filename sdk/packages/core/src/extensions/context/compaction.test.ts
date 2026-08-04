@@ -2260,6 +2260,110 @@ describe("createContextCompactionPrepareTurn", () => {
 		}
 	});
 
+	it("falls back to basic compaction when agentic declines", async () => {
+		// The trigger has already decided this transcript has to shrink, so a
+		// declined agentic compaction cannot be answered with "skip": that
+		// hands the same oversized transcript to the next turn, one turn
+		// bigger. Agentic needs a working model request to succeed at exactly
+		// the moment the context is fullest — here the summarizer comes back
+		// empty. Basic needs no request and cannot decline for that reason.
+		const createMessage = vi.fn(() =>
+			streamChunks([
+				{ type: "text", id: "summary-empty", text: "   " },
+				{ type: "done", id: "summary-empty", success: true },
+			]),
+		);
+		createHandlerMock.mockReturnValue({ createMessage });
+
+		const captureCalls: Array<{
+			event: string;
+			properties?: Record<string, unknown>;
+		}> = [];
+		const messages: MessageWithMetadata[] = [
+			{ role: "user", content: "<task>Build the feature</task>" },
+		];
+		for (let i = 0; i < 12; i++) {
+			messages.push({
+				role: "assistant",
+				content: [
+					{
+						type: "tool_use",
+						id: `decline-tool-${i}`,
+						name: "read_files",
+						input: { file_paths: [`/tmp/d${i}.ts`] },
+					},
+				],
+			});
+			messages.push({
+				role: "user",
+				content: [
+					{
+						type: "tool_result",
+						tool_use_id: `decline-tool-${i}`,
+						name: "read_files",
+						content: "w".repeat(1_500),
+					},
+				],
+			});
+		}
+		messages.push({ role: "assistant", content: "working on it" });
+
+		const prepareTurn = createContextCompactionPrepareTurn({
+			providerId: "anthropic",
+			modelId: "mock-model",
+			providerConfig: {
+				providerId: "anthropic",
+				modelId: "mock-model",
+			} as LlmsProviders.ProviderConfig,
+			compaction: {
+				enabled: true,
+				strategy: "agentic",
+				preserveRecentTokens: 1_000,
+			},
+			sessionId: "ulid-fallback-1",
+			telemetry: {
+				capture: (call: {
+					event: string;
+					properties?: Record<string, unknown>;
+				}) => captureCalls.push(call),
+				captureRequired: () => {},
+				setDistinctId: () => {},
+				updateCommonProperties: () => {},
+			} as never,
+			logger: undefined,
+		});
+
+		const result = await prepareTurn?.({
+			agentId: "agent-1",
+			conversationId: "conv-1",
+			parentAgentId: null,
+			iteration: 4,
+			abortSignal: new AbortController().signal,
+			systemPrompt: "You are helpful.",
+			tools: [],
+			messages,
+			apiMessages: messages,
+			model: {
+				id: "mock-model",
+				provider: "anthropic",
+				info: { id: "mock-model", maxInputTokens: 4_000 },
+			},
+		});
+
+		// Agentic got its chance and gave up.
+		expect(createMessage).toHaveBeenCalledTimes(1);
+		expect(result?.messages).toBeDefined();
+		expect(totalJsonTokens(result?.messages ?? [])).toBeLessThan(
+			totalJsonTokens(messages),
+		);
+		const executed = captureCalls.find(
+			(call) => call.event === "task.compaction_executed",
+		);
+		expect((executed?.properties as Record<string, unknown>)?.strategy).toBe(
+			"basic",
+		);
+	});
+
 	it("uses the configured summarizer model for compaction", async () => {
 		createHandlerMock.mockReturnValue({
 			createMessage: vi.fn(() =>
@@ -3912,7 +4016,12 @@ describe("createContextCompactionPrepareTurn", () => {
 			model: {
 				id: "mock-model",
 				provider: "anthropic",
-				info: { id: "mock-model", maxInputTokens: 100 },
+				// 200 puts the trigger at 180: the request that actually goes
+				// out is ~102 tokens and must not compact, while the
+				// pre-truncation transcript is ~382 and would. At 100 the
+				// request itself cleared the threshold, so this only ever
+				// asserted that agentic compaction declined.
+				info: { id: "mock-model", maxInputTokens: 200 },
 			},
 		});
 
