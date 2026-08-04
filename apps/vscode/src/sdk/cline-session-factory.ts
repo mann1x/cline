@@ -12,6 +12,7 @@ import {
 	type ClineCoreStartInput,
 	type CoreSessionConfig,
 	getProviderAuthHandler,
+	mergeAgentHooks,
 	type ProviderSettings,
 	readCompactionStrategyGlobally,
 	resolveProviderApiKeyFromSettings,
@@ -43,6 +44,7 @@ import { ExtensionRegistryInfo } from "@/registry"
 import { getDistinctId } from "@/services/logging/distinctId"
 import { fetch } from "@/shared/net"
 import { type BedrockProviderConfig, buildBedrockProviderConfig } from "./bedrock-config"
+import { createEditorDiagnosticsHooks } from "./editor-diagnostics"
 import { buildAgentHooks } from "./hooks-adapter"
 import { readTaskHistory, resolveDataDir } from "./legacy-state-reader"
 import type { ResolvedModelSelection } from "./model-catalog/contracts"
@@ -1078,7 +1080,10 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 			},
 			logger: sdkLogger,
 		},
-		hooks: buildAgentHooks(StateManager.get()),
+		// The file-based hook adapter first: a user hook script that stops the
+		// run should do so before anything is appended to a result nobody will
+		// read.
+		hooks: mergeAgentHooks([buildAgentHooks(StateManager.get()), createEditorDiagnosticsHooks({ cwd })]),
 	}
 
 	return config

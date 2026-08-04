@@ -53,6 +53,9 @@ export function resolveModelsRegistryPath(): string {
 
 export function ensureCustomProvidersLoadedSync(): void {}
 
+// Re-exported from source rather than stubbed: the session factory composes
+// its hook layers with it, so a fake would test the fake's composition.
+export { mergeAgentHooks } from "../../../../sdk/packages/core/src/hooks/hook-file-hooks"
 // Real implementation re-exported from the sdk source (same pattern as the
 // apply-patch executors below) so store writes are reflected in the live
 // @cline/llms registry exactly as in production. Tests that touch it must
