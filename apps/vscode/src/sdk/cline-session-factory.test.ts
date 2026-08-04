@@ -7,6 +7,7 @@ import { ApiFormat } from "@shared/proto/cline/models"
 import { Logger } from "@shared/services/Logger"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
+	buildOutputBudgetSection,
 	buildResumeSessionInput,
 	buildSessionConfig,
 	buildStartSessionInput,
@@ -1270,5 +1271,34 @@ describe("updateHistoryItem", () => {
 		expect(result).toHaveLength(2)
 		expect(result[0].id).toBe("task-new")
 		expect(result[1].id).toBe("task-old")
+	})
+})
+
+describe("buildOutputBudgetSection", () => {
+	it("states the cap the reply will actually be truncated at", () => {
+		const section = buildOutputBudgetSection(8_000, 200_000)
+
+		expect(section).toContain("capped at 8000 tokens, thinking included")
+		expect(section).toContain("The context window is 200000 tokens.")
+		// No reason to reserve headroom: the cap is a small share of the window.
+		expect(section).not.toContain("leave the remaining")
+	})
+
+	it("hands back a safe share when the cap is effectively the whole window", () => {
+		// The default 32,000 cap against a 32,768-token model: filling it leaves
+		// nothing for the conversation and forces a compaction round trip.
+		const section = buildOutputBudgetSection(32_000, 32_768)
+
+		expect(section).toContain("effectively the whole 32768-token context window")
+		expect(section).toContain("keep each reply under 24000 tokens")
+		expect(section).toContain("leave the remaining 25% free for compaction")
+	})
+
+	it("still states the cap when the context window is unknown", () => {
+		const section = buildOutputBudgetSection(32_000, undefined)
+
+		expect(section).toContain("capped at 32000 tokens")
+		expect(section).not.toContain("context window is")
+		expect(section).toContain("Prefer several focused tool calls")
 	})
 })
