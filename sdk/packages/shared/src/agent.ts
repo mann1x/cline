@@ -447,6 +447,17 @@ export interface AgentRuntimeConfig {
 	completionPolicy?: {
 		requireCompletionTool?: boolean;
 		completionGuard?: () => string | undefined;
+		/**
+		 * How many consecutive turns that produce no tool calls may be nudged to
+		 * continue before the run is allowed to end. Zero (the default) keeps the
+		 * standard contract: a turn with no tool calls completes the run.
+		 *
+		 * Set this for models that announce work instead of doing it — "I will use
+		 * multiple editor calls to fix this", then stop — which ends a task with
+		 * none of it done. The counter resets on any turn that does call tools, so
+		 * the bound is on consecutive silence rather than on the run.
+		 */
+		maxNoToolCallNudges?: number;
 	};
 	toolExecution?: "sequential" | "parallel";
 	toolPolicies?: Record<string, ToolPolicy>;

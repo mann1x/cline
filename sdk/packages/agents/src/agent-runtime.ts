@@ -51,6 +51,39 @@ const MAX_TOKENS_INCOMPLETE_TURN_MESSAGE =
 	"Model reached the maximum output token limit before completing the turn";
 
 /**
+ * What a run is told when a turn produced no tool calls and no completion
+ * policy had anything to say about it.
+ *
+ * A turn with no tool calls ends the run, on the assumption that a model with
+ * nothing left to call has nothing left to do. That assumption fails on models
+ * that announce their plan and stop — "I will use multiple editor calls to
+ * fix this" — which ends the task with none of the work done, and leaves the
+ * user restarting the same cycle by hand. Measured on gemma4: 7 of 7 replays
+ * of one captured request returned text and no tool call.
+ *
+ * The runtime already knows how to recover from a turn that should not have
+ * ended: it appends a reminder as a user turn and continues. This supplies one
+ * when nothing else does.
+ */
+const NO_TOOL_CALL_NUDGE_MESSAGE =
+	"[SYSTEM] Your last message contained no tool calls, so the run was about to end. " +
+	"If the task is not finished, continue now by emitting the tool calls it needs - do not " +
+	"describe what you are going to do without doing it. If the task really is finished, " +
+	"say so in one short sentence.";
+
+/**
+ * The nudge budget for hosts that want it without picking a number.
+ *
+ * Off by default, because "a turn with no tool calls ends the run" is the
+ * runtime's contract and not an oversight. A bound is what keeps the nudge
+ * from being a way to make a run immortal: a model that genuinely has nothing
+ * left to do says so, twice, and stops. The counter resets on any turn that
+ * does call tools, so the limit applies to consecutive silent turns rather
+ * than to the run as a whole.
+ */
+export const DEFAULT_MAX_NO_TOOL_CALL_NUDGES = 2;
+
+/**
  * Terminal message when a context-window overflow cannot be recovered because
  * there is no conversation history to compact — the system prompt, tools, and
  * current input alone exceed the window.
@@ -462,6 +495,8 @@ export class AgentRuntime {
 	};
 	/** One automatic overflow-recovery attempt per run. */
 	private overflowRecoveryAttempted = false;
+	/** Consecutive turns nudged for producing no tool calls; reset by any turn that does. */
+	private consecutiveNoToolCallNudges = 0;
 	private initialization?: Promise<void>;
 	private abortController?: AbortController;
 	private readonly telemetryProviderId?: string;
@@ -625,6 +660,17 @@ export class AgentRuntime {
 		].filter((message): message is string => Boolean(message));
 	}
 
+	/**
+	 * The nudge for a turn that produced no tool calls, or undefined once the
+	 * consecutive limit is reached and the run should be allowed to end.
+	 */
+	private getNoToolCallNudgeMessage(): string | undefined {
+		const budget = this.config.completionPolicy?.maxNoToolCallNudges ?? 0;
+		return this.consecutiveNoToolCallNudges < budget
+			? NO_TOOL_CALL_NUDGE_MESSAGE
+			: undefined;
+	}
+
 	private async addUserReminderMessage(text: string): Promise<AgentMessage> {
 		const reminderMessage = createMessage("user", [{ type: "text", text }], {
 			userRunSpan: 0,
@@ -742,6 +788,12 @@ export class AgentRuntime {
 						}
 						continue;
 					}
+					const noToolCallNudge = this.getNoToolCallNudgeMessage();
+					if (noToolCallNudge) {
+						this.consecutiveNoToolCallNudges += 1;
+						await this.addUserReminderMessage(noToolCallNudge);
+						continue;
+					}
 					const result = this.finishRun("completed", finalAssistantMessage);
 					await this.callAfterRunHooks(result);
 					await this.emit({
@@ -752,6 +804,9 @@ export class AgentRuntime {
 					return result;
 				}
 
+				// A turn that calls tools is a turn that is working, so the
+				// consecutive-silence budget starts over.
+				this.consecutiveNoToolCallNudges = 0;
 				const toolMessages = await this.executeToolCalls(toolCalls);
 				this.state.pendingToolCalls = [];
 				for (const toolMessage of toolMessages) {

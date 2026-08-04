@@ -16,7 +16,7 @@ import {
 	TASK_PROVIDER_STREAM_STARTED_EVENT,
 } from "@cline/shared";
 import { describe, expect, it, vi } from "vitest";
-import { AgentRuntime } from "./index";
+import { AgentRuntime, DEFAULT_MAX_NO_TOOL_CALL_NUDGES } from "./index";
 
 class ScriptedModel implements AgentModel {
 	public readonly requests: AgentModelRequest[] = [];
@@ -652,6 +652,113 @@ describe("AgentRuntime", () => {
 		expect(result.iterations).toBe(2);
 		expect(result.outputText).toBe("submitted: done");
 		expect(model.requests).toHaveLength(2);
+	});
+
+	it("ends a no-tool turn when the nudge budget is unset", async () => {
+		// The default contract: a turn with no tool calls completes the run.
+		const model = new ScriptedModel([
+			() => [
+				{ type: "text-delta", text: "I will now fix the file" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({ model, tools: [] });
+
+		const result = await runtime.run("Start");
+
+		expect(result.status).toBe("completed");
+		expect(result.iterations).toBe(1);
+		expect(model.requests).toHaveLength(1);
+	});
+
+	it("nudges a no-tool turn to continue when a budget is set", async () => {
+		// Repro for a run ending with none of the work done: gemma4 announces
+		// its plan and stops, 7 of 7 replays of one captured request. The
+		// runtime already recovers from a turn that should not have ended by
+		// appending a reminder as a user turn; this supplies one.
+		const editTool: AgentTool<{ path: string }, string> = {
+			name: "edit_file",
+			description: "Edit a file",
+			inputSchema: { type: "object" },
+			async execute(input) {
+				return `edited: ${input.path}`;
+			},
+		};
+		const model = new ScriptedModel([
+			() => [
+				{ type: "text-delta", text: "I will use multiple editor calls" },
+				{ type: "finish", reason: "stop" },
+			],
+			(request) => {
+				const reminder = request.messages.at(-1);
+				expect(reminder?.role).toBe("user");
+				expect(
+					reminder?.content.some(
+						(part) =>
+							part.type === "text" &&
+							part.text.includes("contained no tool calls"),
+					),
+				).toBe(true);
+				expect(reminder?.metadata?.userRunSpan).toBe(0);
+				return [
+					{
+						type: "tool-call-delta",
+						toolCallId: "call_edit",
+						toolName: "edit_file",
+						inputText: '{"path":"/tmp/x.ts"}',
+					},
+					{ type: "finish", reason: "tool-calls" },
+				];
+			},
+			() => [
+				{ type: "text-delta", text: "Done" },
+				{ type: "finish", reason: "stop" },
+			],
+			() => [
+				{ type: "text-delta", text: "Done" },
+				{ type: "finish", reason: "stop" },
+			],
+			() => [
+				{ type: "text-delta", text: "Done" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			tools: [editTool],
+			completionPolicy: {
+				maxNoToolCallNudges: DEFAULT_MAX_NO_TOOL_CALL_NUDGES,
+			},
+		});
+
+		const result = await runtime.run("Fix the file");
+
+		expect(result.status).toBe("completed");
+		// The first silent turn was nudged instead of ending the run, and the
+		// model then did the work it had only described.
+		expect(result.outputText).toBe("Done");
+		expect(model.requests.length).toBeGreaterThanOrEqual(3);
+	});
+
+	it("stops nudging after the consecutive budget is spent", async () => {
+		// The bound is what keeps the nudge from making a run immortal.
+		const model = new ScriptedModel(
+			Array.from({ length: 8 }, () => () => [
+				{ type: "text-delta" as const, text: "still talking" },
+				{ type: "finish" as const, reason: "stop" as const },
+			]),
+		);
+		const runtime = new AgentRuntime({
+			model,
+			tools: [],
+			completionPolicy: { maxNoToolCallNudges: 2 },
+		});
+
+		const result = await runtime.run("Start");
+
+		expect(result.status).toBe("completed");
+		// One original turn plus exactly two nudged retries.
+		expect(model.requests).toHaveLength(3);
 	});
 
 	it("announces and enforces required completion tools from tool lifecycle metadata", async () => {

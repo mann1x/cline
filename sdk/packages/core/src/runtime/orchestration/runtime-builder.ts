@@ -1,3 +1,4 @@
+import { DEFAULT_MAX_NO_TOOL_CALL_NUDGES } from "@cline/agents";
 import type {
 	AgentTool,
 	BasicLogger,
@@ -710,16 +711,16 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 					return undefined;
 				}
 			: undefined;
-		const completionPolicy = requiresCompletionTool
-			? {
-					requireCompletionTool: true,
-					...(teamCompletionGuard
-						? { completionGuard: teamCompletionGuard }
-						: {}),
-				}
-			: teamCompletionGuard
-				? { completionGuard: teamCompletionGuard }
-				: undefined;
+		// `maxNoToolCallNudges` is always set here: the SDK leaves it off so the
+		// bare runtime keeps its "a turn with no tool calls ends the run"
+		// contract, but a coding agent is the case the nudge exists for. A model
+		// that announces edits and stops leaves the task undone and the user
+		// restarting the same cycle by hand.
+		const completionPolicy = {
+			...(requiresCompletionTool ? { requireCompletionTool: true } : {}),
+			...(teamCompletionGuard ? { completionGuard: teamCompletionGuard } : {}),
+			maxNoToolCallNudges: DEFAULT_MAX_NO_TOOL_CALL_NUDGES,
+		};
 
 		return {
 			tools: finalTools,
