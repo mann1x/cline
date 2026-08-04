@@ -271,6 +271,14 @@ export type AgentModelEvent =
 			reason: AgentModelFinishReason;
 			error?: string;
 			errorClass?: ProviderErrorClass;
+			/**
+			 * The model layer already recorded `sdk.error` telemetry for this
+			 * failure. `error` is a flattened string, so the reported tag on the
+			 * raw error object (see `SDK_ERROR_REPORTED`) cannot cross this
+			 * boundary — this bit carries it instead, letting the agent loop
+			 * tag the `Error` it reconstructs and outer reporters skip it.
+			 */
+			errorReported?: boolean;
 	  };
 
 export interface AgentModel {

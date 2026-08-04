@@ -143,6 +143,231 @@ export interface ITelemetryService {
 
 export const SDK_ERROR_TELEMETRY_EVENT = "sdk.error";
 
+// =============================================================================
+// Cross-layer de-duplication for `sdk.error`
+// =============================================================================
+//
+// One underlying failure must produce (at most) one `sdk.error` event. The
+// canonical reporter is the INNERMOST layer — the first `captureSdkError`
+// call that sees the failure, because it still holds the richest context
+// (provider id, model id, raw error structure). Outer layers that catch the
+// same error as it propagates (agents `agent.run`, core `session.turn`, ...)
+// must skip it instead of re-reporting it verbatim.
+//
+// Mechanism: `captureSdkError` tags the error object with a non-enumerable
+// symbol once it takes ownership of reporting it. Errors are often wrapped
+// or rethrown as new instances between layers, so the reported check walks
+// the `cause` chain. Where a boundary flattens the error to a plain string
+// (e.g. the model stream's `finish` event), the boundary carries an explicit
+// "already reported" bit instead and the outer layer re-tags its
+// reconstructed `Error` (see `errorReported` on the model `finish` event).
+
+/**
+ * Non-enumerable marker set on error objects whose failure has already been
+ * recorded by {@link captureSdkError}. Registered via `Symbol.for` so the tag
+ * survives multiple bundled copies of `@cline/shared` in one process.
+ */
+export const SDK_ERROR_REPORTED = Symbol.for("cline.sdkErrorReported");
+
+/** Fallback for error objects that cannot accept new properties (frozen). */
+const reportedSdkErrors = new WeakSet<object>();
+
+const SDK_ERROR_CAUSE_CHAIN_LIMIT = 16;
+
+/**
+ * Tag an error as already reported to `sdk.error` telemetry so outer layers
+ * skip it. Safe on any value; non-object errors cannot be tagged and are
+ * ignored. Never throws.
+ */
+export function markSdkErrorReported(error: unknown): void {
+	if (typeof error !== "object" || error === null) {
+		return;
+	}
+	try {
+		Object.defineProperty(error, SDK_ERROR_REPORTED, {
+			value: true,
+			enumerable: false,
+			configurable: true,
+			writable: false,
+		});
+	} catch {
+		try {
+			reportedSdkErrors.add(error);
+		} catch {
+			// Non-taggable value; dedup falls back to rate limiting only.
+		}
+	}
+}
+
+/**
+ * Whether this error — or any error in its `cause` chain — was already
+ * reported to `sdk.error` telemetry. Cycle-safe and never throws.
+ */
+export function isSdkErrorReported(error: unknown): boolean {
+	try {
+		let current: unknown = error;
+		const seen = new Set<unknown>();
+		for (let depth = 0; depth < SDK_ERROR_CAUSE_CHAIN_LIMIT; depth++) {
+			if (typeof current !== "object" || current === null) {
+				return false;
+			}
+			if (seen.has(current)) {
+				return false;
+			}
+			seen.add(current);
+			if (
+				(current as Record<PropertyKey, unknown>)[SDK_ERROR_REPORTED] ===
+					true ||
+				reportedSdkErrors.has(current)
+			) {
+				return true;
+			}
+			current = (current as { cause?: unknown }).cause;
+		}
+	} catch {
+		// Exotic error objects (throwing getters/proxies) are treated as
+		// unreported; the rate limiter still bounds their volume.
+	}
+	return false;
+}
+
+// =============================================================================
+// Per-process rate limiting for `sdk.error`
+// =============================================================================
+
+/** Identical errors allowed per key per window before suppression starts. */
+export const SDK_ERROR_RATE_LIMIT_MAX_PER_WINDOW = 5;
+/** Fixed suppression window. */
+export const SDK_ERROR_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
+/** Bound on distinct error keys tracked in memory (oldest evicted first). */
+const SDK_ERROR_RATE_LIMIT_MAX_TRACKED_KEYS = 512;
+
+interface SdkErrorRateLimitEntry {
+	windowStartMs: number;
+	emittedInWindow: number;
+	suppressedInWindow: number;
+}
+
+export interface SdkErrorRateLimitDecision {
+	/** Whether the event may be emitted. */
+	allowed: boolean;
+	/**
+	 * When `allowed`, the number of identical events suppressed since the
+	 * previous allowed emission (attached to the event as
+	 * `suppressed_count`). Zero when nothing was suppressed.
+	 */
+	suppressedCount: number;
+}
+
+/**
+ * In-memory, per-process cap on identical `sdk.error` events. Keys on
+ * `(event, component, operation, error_type, normalized message)` and allows
+ * {@link SDK_ERROR_RATE_LIMIT_MAX_PER_WINDOW} events per key per
+ * {@link SDK_ERROR_RATE_LIMIT_WINDOW_MS}. Once a key's window resets, the
+ * next allowed emission carries a `suppressed_count` summarizing what was
+ * dropped, so a hot retry loop stays visible (dozens of events per day)
+ * without flooding (thousands). No disk state; `admit` never throws.
+ */
+export class SdkErrorRateLimiter {
+	private readonly entries = new Map<string, SdkErrorRateLimitEntry>();
+
+	constructor(
+		private readonly options: {
+			maxPerWindow?: number;
+			windowMs?: number;
+			maxTrackedKeys?: number;
+			now?: () => number;
+		} = {},
+	) {}
+
+	admit(key: string): SdkErrorRateLimitDecision {
+		try {
+			const now = (this.options.now ?? Date.now)();
+			const windowMs = this.options.windowMs ?? SDK_ERROR_RATE_LIMIT_WINDOW_MS;
+			const maxPerWindow =
+				this.options.maxPerWindow ?? SDK_ERROR_RATE_LIMIT_MAX_PER_WINDOW;
+			const entry = this.entries.get(key);
+			if (entry && now - entry.windowStartMs < windowMs) {
+				if (entry.emittedInWindow < maxPerWindow) {
+					entry.emittedInWindow += 1;
+					return { allowed: true, suppressedCount: 0 };
+				}
+				entry.suppressedInWindow += 1;
+				return { allowed: false, suppressedCount: entry.suppressedInWindow };
+			}
+			// New key, or the window elapsed: emit, carrying forward the count
+			// of events suppressed in the previous window.
+			const carriedSuppressed = entry?.suppressedInWindow ?? 0;
+			this.entries.delete(key);
+			this.evictOldestBeyond(
+				(this.options.maxTrackedKeys ?? SDK_ERROR_RATE_LIMIT_MAX_TRACKED_KEYS) -
+					1,
+			);
+			this.entries.set(key, {
+				windowStartMs: now,
+				emittedInWindow: 1,
+				suppressedInWindow: 0,
+			});
+			return { allowed: true, suppressedCount: carriedSuppressed };
+		} catch {
+			return { allowed: true, suppressedCount: 0 };
+		}
+	}
+
+	reset(): void {
+		this.entries.clear();
+	}
+
+	private evictOldestBeyond(maxKeys: number): void {
+		while (this.entries.size > Math.max(0, maxKeys)) {
+			const oldest = this.entries.keys().next();
+			if (oldest.done) {
+				return;
+			}
+			this.entries.delete(oldest.value);
+		}
+	}
+}
+
+const defaultSdkErrorRateLimiter = new SdkErrorRateLimiter();
+
+/** Clear the process-wide `sdk.error` rate-limiter state (test isolation). */
+export function resetSdkErrorRateLimiterForTests(): void {
+	defaultSdkErrorRateLimiter.reset();
+}
+
+/**
+ * Build the rate-limit key for an `sdk.error` emission. The message is
+ * normalized (digit runs collapsed, whitespace folded, case-insensitive,
+ * bounded) so retry loops whose messages differ only by counters or ids
+ * still coalesce into one key.
+ */
+export function sdkErrorRateLimitKey(
+	event: string,
+	properties: TelemetryProperties,
+): string {
+	const message =
+		typeof properties.error_message === "string"
+			? properties.error_message
+			: "";
+	return [
+		event,
+		String(properties.component ?? ""),
+		String(properties.operation ?? ""),
+		String(properties.error_type ?? ""),
+		normalizeSdkErrorMessageForRateLimitKey(message),
+	].join("\u0000");
+}
+
+function normalizeSdkErrorMessageForRateLimitKey(message: string): string {
+	return message
+		.replace(/\d+/g, "#")
+		.replace(/\s+/g, " ")
+		.trim()
+		.toLowerCase()
+		.slice(0, 256);
+}
+
 export function captureAgentUnexpectedReasoningTokens(
 	telemetry: ITelemetryService | undefined,
 	input: CaptureAgentUnexpectedReasoningTokensInput,
@@ -193,17 +418,49 @@ export function captureTaskLifecycleEvent(
 	});
 }
 
+/**
+ * Report an SDK error, at most once per underlying failure and with a
+ * per-process cap on identical failures.
+ *
+ * - Cross-layer dedup: if `input.error` (or anything in its `cause` chain)
+ *   was already reported, the call is a no-op — the innermost reporter is
+ *   canonical (see the {@link SDK_ERROR_REPORTED} policy note). Otherwise
+ *   the error object is tagged so outer layers skip it.
+ * - Rate limiting: identical failures (same event/component/operation/
+ *   error type/normalized message) are capped per process per hour; the
+ *   first allowed emission after suppression carries `suppressed_count`.
+ *
+ * Returns `true` when the failure is recorded in `sdk.error` telemetry —
+ * by this call (even if rate-limit-suppressed) or a previous one — and
+ * `false` when telemetry is unavailable. Never throws.
+ */
 export function captureSdkError(
 	telemetry: ITelemetryService | undefined,
 	input: CaptureSdkErrorInput,
-): void {
+): boolean {
 	if (!telemetry) {
-		return;
+		return false;
+	}
+	if (isSdkErrorReported(input.error)) {
+		return true;
+	}
+	markSdkErrorReported(input.error);
+	const event = input.event ?? SDK_ERROR_TELEMETRY_EVENT;
+	const properties = buildSdkErrorProperties(input);
+	const decision = defaultSdkErrorRateLimiter.admit(
+		sdkErrorRateLimitKey(event, properties),
+	);
+	if (!decision.allowed) {
+		return true;
 	}
 	telemetry.capture({
-		event: input.event ?? SDK_ERROR_TELEMETRY_EVENT,
-		properties: buildSdkErrorProperties(input),
+		event,
+		properties:
+			decision.suppressedCount > 0
+				? { ...properties, suppressed_count: decision.suppressedCount }
+				: properties,
 	});
+	return true;
 }
 
 export function buildSdkErrorProperties(
