@@ -1,5 +1,6 @@
 import { openAiModelInfoSafeDefaults } from "@shared/api"
 import { StringRequest } from "@shared/proto/cline/common"
+import type { ProviderSamplingPatch } from "@shared/proto/cline/models"
 import { Mode } from "@shared/storage/types"
 import { VSCodeCheckbox, VSCodeLink } from "@vscode/webview-ui-toolkit/react"
 import { useCallback, useEffect, useMemo, useState } from "react"
@@ -223,7 +224,10 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 
 	const commitSampling = useCallback(
 		(draft: SamplingDraft) => {
-			const next: Record<string, unknown> = {}
+			// The patch shape is the proto one, where `stop` is a plain repeated
+			// field and therefore always present; every other parameter is
+			// optional and stays absent when the user left it blank.
+			const next: ProviderSamplingPatch = { stop: [] }
 			for (const field of OLLAMA_SAMPLING_FIELDS) {
 				const raw =
 					draft[field.key] ?? (storedSampling?.[field.key] !== undefined ? String(storedSampling[field.key]) : "")
@@ -237,9 +241,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 				.split("\n")
 				.map((entry) => entry.trim())
 				.filter((entry) => entry !== "")
-			if (stop.length > 0) {
-				next.stop = stop
-			}
+			next.stop = stop
 			for (const key of ["thinkBudget", "thinkBudgetMessage"] as const) {
 				const raw = (draft[key] ?? storedSampling?.[key] ?? "").trim()
 				if (raw !== "") {
@@ -269,7 +271,9 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 
 	const handleSamplingReset = useCallback(() => {
 		setSamplingDraft({})
-		void write({ sampling: null }).catch((error) => console.error("Failed to clear Ollama sampling:", error))
+		// An empty patch is how the section is cleared: no parameter set means
+		// nothing to send, which the write path stores as no sampling at all.
+		void write({ sampling: { stop: [] } }).catch((error) => console.error("Failed to clear Ollama sampling:", error))
 	}, [write])
 
 	const samplingCount = useMemo(() => {
