@@ -4,9 +4,11 @@ import type {
 } from "@cline/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	buildOllamaStreamConfig,
 	createOllamaProviderModule,
 	normalizeOllamaBaseUrl,
 	OLLAMA_DEFAULT_NUM_CTX,
+	OLLAMA_DEFAULT_REASONING_EFFORT,
 	OLLAMA_DEFAULT_TIMEOUT_MS,
 	readOllamaNumCtx,
 	readOllamaTimeoutMs,
@@ -244,3 +246,51 @@ function context(model: Record<string, unknown> = {}): GatewayProviderContext {
 		},
 	} as unknown as GatewayProviderContext;
 }
+
+describe("buildOllamaStreamConfig", () => {
+	const context = {} as never;
+	const base = {
+		providerId: "ollama",
+		modelId: "local-model",
+		messages: [],
+	} as never;
+
+	function config(reasoning: unknown) {
+		return buildOllamaStreamConfig(
+			{ ...(base as object), reasoning } as never,
+			context,
+		);
+	}
+
+	it("names a level for a request that only asks for reasoning", () => {
+		// the SDK vocabulary has no plain "on", and provider-default would
+		// defer to a model setting this vendor deliberately does not set
+		expect(config({ enabled: true }).reasoning).toBe(
+			OLLAMA_DEFAULT_REASONING_EFFORT,
+		);
+	});
+
+	it("leaves an explicit level alone", () => {
+		expect(config({ enabled: true, effort: "low" }).reasoning).toBe("low");
+		expect(config({ effort: "high" }).reasoning).toBe("high");
+		expect(config({ effort: "max" }).reasoning).toBe("xhigh");
+	});
+
+	it("does not name a level for a request that asked for none", () => {
+		expect(config({ enabled: false }).reasoning).toBe("none");
+	});
+
+	it("expresses no preference when the request has none", () => {
+		expect(config(undefined).reasoning).toBeUndefined();
+		expect(config({}).reasoning).toBeUndefined();
+	});
+
+	it("passes the shared settings through untouched", () => {
+		const built = buildOllamaStreamConfig(
+			{ ...(base as object), maxTokens: 4096, temperature: 0.2 } as never,
+			context,
+		);
+		expect(built.maxOutputTokens).toBe(4096);
+		expect(built.temperature).toBe(0.2);
+	});
+});
