@@ -20,6 +20,7 @@ import { normalizeModelsDevProviderModels } from "../catalog/catalog-live";
 import {
 	createGateway,
 	DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS,
+	GATEWAY_MIN_OUTPUT_TOKENS,
 	resolveGatewayRequestMaxTokens,
 } from "./gateway";
 
@@ -349,10 +350,10 @@ describe("sdk-gateway", () => {
 			resolveGatewayRequestMaxTokens({
 				requestedMaxTokens: 202_800,
 				model: { maxOutputTokens: 202_800, contextWindow: 202_800 },
-				estimatedInputTokens: 201_500,
+				estimatedInputTokens: 199_500,
 				outputReserveTokens: 1_024,
 			}),
-		).toBe(276);
+		).toBe(2_276);
 
 		expect(
 			resolveGatewayRequestMaxTokens({
@@ -379,7 +380,51 @@ describe("sdk-gateway", () => {
 			contextWindow: 10_000,
 			estimatedInputTokens: 9_500,
 			reserveTokens: 1_024,
+			remainingContext: -524,
+			minOutputTokens: GATEWAY_MIN_OUTPUT_TOKENS,
 		});
+	});
+
+	it("sends no output cap rather than a cap too small to answer with", () => {
+		// A high estimate walks the remaining-context term down; below the floor
+		// the estimate is the likelier explanation than an exhausted window, and a
+		// 60-token cap is not a request worth sending -- with Ollama it also sizes
+		// the thinking budget, which then forces its end sequence into a tool call.
+		const onContextOverflow = vi.fn();
+
+		expect(
+			resolveGatewayRequestMaxTokens({
+				requestedMaxTokens: 32_000,
+				model: { maxOutputTokens: 32_000, contextWindow: 128_000 },
+				estimatedInputTokens: 126_916,
+				outputReserveTokens: 1_024,
+				onContextOverflow,
+			}),
+		).toBeUndefined();
+		expect(onContextOverflow).toHaveBeenCalledWith(
+			expect.objectContaining({ remainingContext: 60 }),
+		);
+
+		// A caller that wants the starving cap can lower the floor to ask for it.
+		expect(
+			resolveGatewayRequestMaxTokens({
+				requestedMaxTokens: 32_000,
+				model: { maxOutputTokens: 32_000, contextWindow: 128_000 },
+				estimatedInputTokens: 126_916,
+				outputReserveTokens: 1_024,
+				minOutputTokens: 1,
+			}),
+		).toBe(60);
+
+		// Right at the floor the cap is still worth sending.
+		expect(
+			resolveGatewayRequestMaxTokens({
+				requestedMaxTokens: 32_000,
+				model: { maxOutputTokens: 32_000, contextWindow: 128_000 },
+				estimatedInputTokens: 125_952,
+				outputReserveTokens: 1_024,
+			}),
+		).toBe(GATEWAY_MIN_OUTPUT_TOKENS);
 	});
 
 	it("keeps estimating when request tools cannot be JSON stringified", () => {

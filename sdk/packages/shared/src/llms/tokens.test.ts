@@ -40,6 +40,21 @@ describe("token calibration", () => {
 		expect(charsPerToken()).toBe(calibrated);
 	});
 
+	it("keeps a serialized request from a large-vocabulary tokenizer", () => {
+		// Measured live: Gemma-4 counted 78,138 prompt tokens for a 645,803
+		// character serialized request. At the old ceiling of 8 this observation
+		// and every later one was thrown away as broken.
+		observeRequestTokens(645_803, 78_138);
+		expect(charsPerToken()).toBeCloseTo(8.26, 2);
+	});
+
+	it("keeps the provider's count even when the ratio is rejected", () => {
+		// Only the pairing can be wrong. The count is what the provider counted.
+		observeRequestTokens(1_000, 1); // 1000 chars/token, rejected
+		expect(charsPerToken()).toBe(CHARS_PER_TOKEN);
+		expect(lastObservedRequestTokens()).toBe(1);
+	});
+
 	it("ignores absent, zero and negative counts", () => {
 		observeRequestTokens(3_000, 0);
 		observeRequestTokens(3_000, -5);
@@ -104,9 +119,21 @@ describe("the last observed request", () => {
 		expect(lastObservedRequestTokens()).toBe(100_182);
 	});
 
-	it("is not updated by an observation that was discarded", () => {
+	it("survives an observation whose ratio was discarded", () => {
+		// A ratio out of range means the character count did not belong with this
+		// token count. The token count is still what the provider counted, and the
+		// compaction trigger reads it -- holding it back freezes the trigger on a
+		// stale number for as long as the ratios keep landing out of range.
 		observeRequestTokens(3_000, 1_000);
 		observeRequestTokens(1_000, 1); // out of range
+		expect(lastObservedRequestTokens()).toBe(1);
+	});
+
+	it("is still ignored when the report itself is unusable", () => {
+		observeRequestTokens(3_000, 1_000);
+		observeRequestTokens(3_000, 0);
+		observeRequestTokens(3_000, -5);
+		observeRequestTokens(3_000, Number.NaN);
 		expect(lastObservedRequestTokens()).toBe(1_000);
 	});
 
