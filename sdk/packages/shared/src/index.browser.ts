@@ -205,8 +205,13 @@ export {
 export { serializeAbortReason } from "./llms/requests";
 export {
 	CHARS_PER_TOKEN,
+	charsPerToken,
 	estimateRequestInputTokens,
 	estimateTokens,
+	lastObservedRequestTokens,
+	measureRequestInputChars,
+	observeRequestTokens,
+	resetTokenCalibration,
 	type TokenEstimatedRequest,
 } from "./llms/tokens";
 export type {

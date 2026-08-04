@@ -13,7 +13,9 @@ import type {
 	ReasoningEffort,
 } from "@cline/shared";
 import {
-	estimateRequestInputTokens,
+	estimateTokens,
+	measureRequestInputChars,
+	observeRequestTokens,
 	ReasoningEffortSchema,
 } from "@cline/shared";
 import { toAsyncIterable } from "./async";
@@ -309,10 +311,11 @@ export class DefaultGateway implements Gateway {
 			request.providerId,
 		);
 		const provider = await providerRecord.createProvider(providerRecord.config);
+		const inputChars = measureRequestInputChars(request);
 		const maxTokens = resolveGatewayRequestMaxTokens({
 			requestedMaxTokens: request.maxTokens,
 			model: resolved.model,
-			estimatedInputTokens: estimateRequestInputTokens(request),
+			estimatedInputTokens: estimateTokens(inputChars),
 			reasoningBudgetTokens: request.reasoning?.budgetTokens,
 			onContextOverflow: (details) => {
 				this.logger?.log(
@@ -345,7 +348,31 @@ export class DefaultGateway implements Gateway {
 			},
 		);
 
-		return toAsyncIterable(stream);
+		return calibrateFromUsage(toAsyncIterable(stream), inputChars);
+	}
+}
+
+/**
+ * Pass events through untouched, and feed any provider-reported input token
+ * count back into the estimator paired with the character count of the request
+ * that produced it.
+ *
+ * This is the only place both halves are in hand: the request was serialized
+ * here, and the count comes back on this stream. Providers that report nothing
+ * leave the estimator on its default.
+ */
+async function* calibrateFromUsage(
+	events: AsyncIterable<AgentModelEvent>,
+	inputChars: number,
+): AsyncIterable<AgentModelEvent> {
+	for await (const event of events) {
+		if (
+			event.type === "usage" &&
+			isPositiveFiniteNumber(event.usage.inputTokens)
+		) {
+			observeRequestTokens(inputChars, event.usage.inputTokens);
+		}
+		yield event;
 	}
 }
 
