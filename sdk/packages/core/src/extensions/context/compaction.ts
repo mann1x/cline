@@ -1,4 +1,8 @@
+import { appendFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
+	charsPerToken,
 	estimateRequestInputTokens,
 	lastObservedRequestTokens,
 } from "@cline/shared";
@@ -177,6 +181,32 @@ const BUILTIN_COMPACTION_STRATEGIES = {
 		}),
 } satisfies Record<CoreCompactionStrategy, BuiltinCompactionStrategyRunner>;
 
+/**
+ * Append a compaction decision to `<tmpdir>/cline-compaction.jsonl`.
+ *
+ * The decision is already handed to `logger?.debug`, but in the VS Code host
+ * that ends up in an output channel that exists only in memory: by the time a
+ * bad compaction is noticed the evidence for it is gone, and reproducing it
+ * means reproducing the whole session. A decision that cannot be inspected
+ * after the fact can only be reasoned about, and reasoning about this one has
+ * been wrong more than once.
+ *
+ * Best-effort and never throws: diagnostics must not be able to break the
+ * pipeline they describe.
+ */
+function appendCompactionDiagnostics(
+	diagnostics: Record<string, unknown>,
+): void {
+	try {
+		appendFileSync(
+			join(tmpdir(), "cline-compaction.jsonl"),
+			`${JSON.stringify({ at: new Date().toISOString(), ...diagnostics })}\n`,
+		);
+	} catch {
+		// A diagnostics sink that can fail the run is worse than no sink.
+	}
+}
+
 function resolveManualMessageTargetTokens(input: {
 	messageInputTokens: number;
 	messageTriggerTokens: number;
@@ -346,7 +376,7 @@ export function createContextCompactionPrepareTurn(
 		const observedRequestTokens = lastObservedRequestTokens();
 		const triggerInputTokens = observedRequestTokens ?? requestInputTokens;
 		const shouldCompact = triggerInputTokens >= requestTriggerTokens;
-		config.logger?.debug("Context compaction diagnostics", {
+		const diagnostics = {
 			mode: effectiveMode,
 			strategy,
 			iteration: context.iteration,
@@ -366,8 +396,11 @@ export function createContextCompactionPrepareTurn(
 			messageCount: context.messages.length,
 			apiMessageCount: context.apiMessages.length,
 			apiMessagesJsonChars: safeJsonSize(context.apiMessages),
+			charsPerToken: Math.round(charsPerToken() * 100) / 100,
 			...summarizeToolResults(context.apiMessages),
-		});
+		};
+		config.logger?.debug("Context compaction diagnostics", diagnostics);
+		appendCompactionDiagnostics(diagnostics);
 		if (effectiveMode === "auto" && !shouldCompact) {
 			return undefined;
 		}
