@@ -1,11 +1,69 @@
-import { chmodSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { setClineDir, setHomeDir } from "@cline/shared/storage";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readGlobalSettings, writeGlobalSettings } from "./global-settings";
 import { uninstallPlugin } from "./plugin-uninstall";
+
+/**
+ * Armed filesystem failures for the two tests about what uninstall does when a
+ * step fails partway through.
+ *
+ * Injected rather than provoked with `chmod`, because a permission bit only
+ * denies a process the kernel checks it for. It does not on Windows, where
+ * read-only directory permissions do not prevent removing the files inside
+ * them, and it does not for root, which bypasses the check outright
+ * (CAP_DAC_OVERRIDE) — so under either the simulated failure never happened,
+ * uninstall succeeded, and the tests failed asserting a rejection that the
+ * setup had quietly made impossible. Containers commonly run as root, which is
+ * to say the environment where these two tests were skipped or broken was the
+ * ordinary one.
+ */
+const failure = vi.hoisted(() => ({
+	mcpSettingsCleanup: false,
+	removePath: undefined as string | undefined,
+}));
+
+vi.mock("./plugin-mcp-settings", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("./plugin-mcp-settings")>();
+	return {
+		...actual,
+		removePluginMcpServersFromSettings: (
+			options: Parameters<typeof actual.removePluginMcpServersFromSettings>[0],
+		) => {
+			if (failure.mcpSettingsCleanup) {
+				throw new Error(
+					"EACCES: permission denied, open 'cline_mcp_settings.json'",
+				);
+			}
+			return actual.removePluginMcpServersFromSettings(options);
+		},
+	};
+});
+
+vi.mock("node:fs", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:fs")>();
+	return {
+		...actual,
+		default: actual,
+		// Armed for one exact path at a time; everything else, including this
+		// file's own temp-directory cleanup, goes to the real implementation.
+		rmSync: (
+			path: Parameters<typeof actual.rmSync>[0],
+			options?: Parameters<typeof actual.rmSync>[1],
+		) => {
+			if (
+				failure.removePath !== undefined &&
+				resolve(String(path)) === failure.removePath
+			) {
+				throw new Error(`EACCES: permission denied, unlink '${String(path)}'`);
+			}
+			return actual.rmSync(path, options);
+		},
+	};
+});
 
 describe("plugin uninstall service", () => {
 	let root = "";
@@ -64,6 +122,8 @@ describe("plugin uninstall service", () => {
 		} else {
 			process.env.CLINE_MCP_SETTINGS_PATH = originalMcpSettingsPath;
 		}
+		failure.mcpSettingsCleanup = false;
+		failure.removePath = undefined;
 		rmSync(root, { recursive: true, force: true });
 	});
 
@@ -134,83 +194,75 @@ describe("plugin uninstall service", () => {
 		expect(existsSync(pluginPath)).toBe(false);
 	});
 
-	it.skipIf(process.platform === "win32")(
-		"keeps plugin files when MCP settings cleanup fails",
-		async () => {
-			const pluginPath = join(home, ".cline", "plugins", "mcp-plugin.ts");
-			const settingsPath = join(root, "cline_mcp_settings.json");
-			process.env.CLINE_MCP_SETTINGS_PATH = settingsPath;
-			await mkdir(join(home, ".cline", "plugins"), { recursive: true });
-			await writeFile(
-				pluginPath,
-				"export default { name: 'mcp-plugin', manifest: { capabilities: ['mcp'] } };",
-				"utf8",
-			);
-			await writeFile(
-				settingsPath,
-				JSON.stringify(
-					{
-						mcpServers: {
-							smoke: {
-								transport: {
-									type: "stdio",
-									command: process.execPath,
-									args: ["-e", "process.exit(0)"],
-								},
-								metadata: {
-									source: "plugin",
-									pluginName: "mcp-plugin",
-									pluginPath,
-								},
+	it("keeps plugin files when MCP settings cleanup fails", async () => {
+		const pluginPath = join(home, ".cline", "plugins", "mcp-plugin.ts");
+		const settingsPath = join(root, "cline_mcp_settings.json");
+		process.env.CLINE_MCP_SETTINGS_PATH = settingsPath;
+		await mkdir(join(home, ".cline", "plugins"), { recursive: true });
+		await writeFile(
+			pluginPath,
+			"export default { name: 'mcp-plugin', manifest: { capabilities: ['mcp'] } };",
+			"utf8",
+		);
+		await writeFile(
+			settingsPath,
+			JSON.stringify(
+				{
+					mcpServers: {
+						smoke: {
+							transport: {
+								type: "stdio",
+								command: process.execPath,
+								args: ["-e", "process.exit(0)"],
+							},
+							metadata: {
+								source: "plugin",
+								pluginName: "mcp-plugin",
+								pluginPath,
 							},
 						},
 					},
-					null,
-					2,
-				),
-				"utf8",
-			);
-			chmodSync(settingsPath, 0o444);
+				},
+				null,
+				2,
+			),
+			"utf8",
+		);
+		failure.mcpSettingsCleanup = true;
 
-			try {
-				await expect(uninstallPlugin({ path: pluginPath })).rejects.toThrow();
-			} finally {
-				chmodSync(settingsPath, 0o644);
-			}
+		await expect(uninstallPlugin({ path: pluginPath })).rejects.toThrow(
+			/permission denied/,
+		);
 
-			expect(existsSync(pluginPath)).toBe(true);
-		},
-	);
+		// The plugin is still registered in MCP settings, so deleting its files
+		// would leave the settings pointing at nothing.
+		expect(existsSync(pluginPath)).toBe(true);
+	});
 
-	// chmod-based deletion failure cannot be simulated on Windows, where read-only
-	// directory permissions do not prevent removing files inside them.
-	it.skipIf(process.platform === "win32")(
-		"keeps disabled plugin settings if file deletion fails",
-		async () => {
-			const pluginRoot = join(home, ".cline", "plugins");
-			const pluginPath = join(pluginRoot, "locked-plugin.ts");
-			await mkdir(pluginRoot, { recursive: true });
-			await writeFile(
-				pluginPath,
-				"export default { name: 'locked', manifest: { capabilities: ['tools'] } };",
-				"utf8",
-			);
-			writeGlobalSettings({ disabledPlugins: [pluginPath] });
-			chmodSync(pluginRoot, 0o555);
+	it("keeps disabled plugin settings if file deletion fails", async () => {
+		const pluginRoot = join(home, ".cline", "plugins");
+		const pluginPath = join(pluginRoot, "locked-plugin.ts");
+		await mkdir(pluginRoot, { recursive: true });
+		await writeFile(
+			pluginPath,
+			"export default { name: 'locked', manifest: { capabilities: ['tools'] } };",
+			"utf8",
+		);
+		writeGlobalSettings({ disabledPlugins: [pluginPath] });
+		failure.removePath = resolve(pluginPath);
 
-			try {
-				await expect(uninstallPlugin({ path: pluginPath })).rejects.toThrow();
-				expect(existsSync(pluginPath)).toBe(true);
-				expect(readGlobalSettings()).toEqual({
-					autoUpdateEnabled: true,
-					disabledPlugins: [pluginPath],
-					telemetryOptOut: false,
-				});
-			} finally {
-				chmodSync(pluginRoot, 0o755);
-			}
-		},
-	);
+		await expect(uninstallPlugin({ path: pluginPath })).rejects.toThrow(
+			/permission denied/,
+		);
+		expect(existsSync(pluginPath)).toBe(true);
+		// The plugin is still installed and still disabled; forgetting that it
+		// was disabled would silently re-enable it on the next load.
+		expect(readGlobalSettings()).toEqual({
+			autoUpdateEnabled: true,
+			disabledPlugins: [pluginPath],
+			telemetryOptOut: false,
+		});
+	});
 
 	it("reports unmatched names clearly", async () => {
 		await expect(uninstallPlugin({ name: "missing-plugin" })).rejects.toThrow(
