@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ActiveSession } from "../../../types/session";
-import { AgentEventBridge, type AgentEventBridgeDeps } from "./agent-event-bridge";
+import {
+	AgentEventBridge,
+	type AgentEventBridgeDeps,
+} from "./agent-event-bridge";
 
 function createTelemetryStub() {
 	return {
@@ -12,7 +15,9 @@ function createTelemetryStub() {
 	};
 }
 
-function createBridge(telemetry: ReturnType<typeof createTelemetryStub> | undefined) {
+function createBridge(
+	telemetry: ReturnType<typeof createTelemetryStub> | undefined,
+) {
 	const session = telemetry
 		? ({ config: { telemetry } } as unknown as ActiveSession)
 		: undefined;

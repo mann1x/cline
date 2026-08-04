@@ -186,6 +186,8 @@ export function splitCoreSessionConfig(config: ClineCoreStartConfig): {
 							enabled: compaction.enabled,
 							strategy: compaction.strategy,
 							preserveRecentTokens: compaction.preserveRecentTokens,
+							preserveRecentMessagesRatio:
+								compaction.preserveRecentMessagesRatio,
 							summarizer: compaction.summarizer,
 						},
 					}

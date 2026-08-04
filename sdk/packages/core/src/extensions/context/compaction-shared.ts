@@ -336,20 +336,103 @@ function isSafeCutBoundary(message: MessageWithMetadata): boolean {
 export const PINNED_PROMPT_FOLD_RATIO = 0.5;
 
 /**
- * Walk back from the end until the preserved tail reaches the token budget.
- * Returns the index the tail would start at, before any turn-boundary rules.
+ * The share of a transcript's messages the preserved tail should reach before
+ * the token floor alone is allowed to end the walk.
+ *
+ * A token floor on its own says nothing about how much *conversation* survives,
+ * and the two come apart when messages are heavy. Measured live: a 113-message
+ * transcript whose recent turns carried ~3.3k tokens each satisfied a 20,000
+ * token floor after six messages, so a compaction with a ~73,000 token budget
+ * kept seven. Twenty thousand tokens of two file dumps is not a thread anyone
+ * can pick up.
+ *
+ * A quarter is chosen to be legible on a short transcript and irrelevant on a
+ * long one: 25% of 500 messages will always reach the ceiling first, so the
+ * ratio stops applying exactly where honouring it would be reckless.
+ */
+export const DEFAULT_PRESERVE_RECENT_MESSAGES_RATIO = 0.25;
+
+/**
+ * The three bounds on how much of the tail survives a compaction.
+ *
+ * Two lower bounds and one upper, because "how much is enough" and "how much is
+ * too much" are different questions and only the second has a budget behind it.
+ */
+export interface RecencyBounds {
+	/**
+	 * Minimum tokens to preserve; the conversation is unusable below this, and
+	 * never more than the budget the compacted request has to fit in — a floor
+	 * above the ceiling is not a floor, it is a refusal to compact.
+	 */
+	tokenFloor: number;
+	/** Minimum share of the transcript's messages to preserve. */
+	messagesRatio: number;
+	/**
+	 * Maximum tokens to preserve. Compaction computes a target for the
+	 * post-compaction request and this is what that target buys: without it the
+	 * floor is also the ceiling, and every compaction folds to the minimum no
+	 * matter how much room the model actually had.
+	 */
+	tokenCeiling: number;
+}
+
+export function resolveRecencyBounds(input: {
+	preserveRecentTokens: number;
+	preserveRecentMessagesRatio?: number;
+	messageTargetTokens?: number;
+}): RecencyBounds {
+	const preserve = Math.max(1, input.preserveRecentTokens);
+	// Without a usable target there is nothing to spend, so the floor is also
+	// the ceiling and the walk behaves as it did before there were two bounds.
+	const tokenCeiling = isPositiveFiniteNumber(input.messageTargetTokens)
+		? input.messageTargetTokens
+		: preserve;
+	const ratio = input.preserveRecentMessagesRatio;
+	return {
+		// A model too small to hold the default floor still has to compact:
+		// asking to preserve 20,000 tokens inside a 1,200-token budget is a
+		// request to keep everything, which is how a small context ends up
+		// never compacting at all.
+		tokenFloor: Math.min(preserve, tokenCeiling),
+		messagesRatio:
+			typeof ratio === "number" && Number.isFinite(ratio) && ratio > 0
+				? Math.min(1, ratio)
+				: DEFAULT_PRESERVE_RECENT_MESSAGES_RATIO,
+		tokenCeiling,
+	};
+}
+
+/**
+ * Walk back from the newest message until the preserved tail is big enough,
+ * and stop early if it would grow past what the compaction is aiming for.
+ *
+ * The count floor proposes and the token ceiling disposes: asking for a share
+ * of the messages is what keeps a thread legible when turns are heavy, and
+ * capping it in tokens is what stops that request being honoured into a
+ * transcript that no longer fits. Neither bound alone survives both shapes,
+ * because how many tokens a message costs is not something either can know in
+ * advance.
  */
 function findRecencyCandidate(
 	messages: MessageWithMetadata[],
-	preserveRecentTokens: number,
+	bounds: RecencyBounds,
 	estimateMessageTokens: EstimateMessageTokens,
 ): number {
+	const countFloor = Math.min(
+		messages.length,
+		Math.ceil(messages.length * bounds.messagesRatio),
+	);
 	let total = 0;
+	let kept = 0;
 	let candidate = messages.length;
 	for (let index = messages.length - 1; index >= 0; index -= 1) {
 		total += estimateMessageTokens(messages[index]);
+		kept += 1;
 		candidate = index;
-		if (total >= preserveRecentTokens) {
+		if (total >= bounds.tokenCeiling) {
+			break;
+		}
+		if (total >= bounds.tokenFloor && kept >= countFloor) {
 			break;
 		}
 	}
@@ -427,12 +510,12 @@ const NO_CUT: CompactionCutPlan = { cutIndex: 0, pinnedIndex: -1 };
  */
 export function findCutPlan(
 	messages: MessageWithMetadata[],
-	preserveRecentTokens: number,
+	bounds: RecencyBounds,
 	estimateMessageTokens: EstimateMessageTokens,
 ): CompactionCutPlan {
 	const candidate = findRecencyCandidate(
 		messages,
-		preserveRecentTokens,
+		bounds,
 		estimateMessageTokens,
 	);
 	if (candidate <= 0) {
@@ -457,7 +540,7 @@ export function findCutPlan(
 	return planPinnedCut(
 		messages,
 		lastTurnStartIndex,
-		preserveRecentTokens,
+		bounds,
 		estimateMessageTokens,
 	);
 }
@@ -465,7 +548,7 @@ export function findCutPlan(
 function planPinnedCut(
 	messages: MessageWithMetadata[],
 	pinnedIndex: number,
-	preserveRecentTokens: number,
+	bounds: RecencyBounds,
 	estimateMessageTokens: EstimateMessageTokens,
 ): CompactionCutPlan {
 	const tailStart = pinnedIndex + 1;
@@ -480,9 +563,16 @@ function planPinnedCut(
 	// The ratio governs a large tail and the recency budget governs a small
 	// one, and neither may be violated: fold at least half, but never keep
 	// less than the budget asks for.
-	const keepTokens = Math.max(
-		tailTokens * PINNED_PROMPT_FOLD_RATIO,
-		Math.min(preserveRecentTokens, tailTokens),
+	//
+	// The ceiling only ever lowers this, so the fold guarantee survives it: a
+	// tail too big for the post-compaction budget gets cut to the budget, which
+	// folds strictly more than half, not less.
+	const keepTokens = Math.min(
+		Math.max(
+			tailTokens * PINNED_PROMPT_FOLD_RATIO,
+			Math.min(bounds.tokenFloor, tailTokens),
+		),
+		bounds.tokenCeiling,
 	);
 
 	let total = 0;

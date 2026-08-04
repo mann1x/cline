@@ -21,6 +21,7 @@ import {
 	findCutPlan,
 	findLatestSummaryIndex,
 	getCompactionSummaryMetadata,
+	type RecencyBounds,
 	resolveEffectiveMaxInputTokens,
 	resolveSummarizerConfig,
 	serializeConversation,
@@ -98,7 +99,7 @@ export async function runAgenticCompaction(options: {
 	context: CoreCompactionContext;
 	providerConfig: ProviderConfig;
 	summarizer?: CoreCompactionSummarizerConfig;
-	preserveRecentTokens: number;
+	bounds: RecencyBounds;
 	estimateMessageTokens: EstimateMessageTokens;
 	logger?: BasicLogger;
 }): Promise<CoreCompactionResult | undefined> {
@@ -109,7 +110,7 @@ export async function runAgenticCompaction(options: {
 
 	const { cutIndex, pinnedIndex } = findCutPlan(
 		messages,
-		options.preserveRecentTokens,
+		options.bounds,
 		options.estimateMessageTokens,
 	);
 	if (cutIndex <= 0 || cutIndex >= messages.length) {

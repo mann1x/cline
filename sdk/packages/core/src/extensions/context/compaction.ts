@@ -35,6 +35,7 @@ import {
 	DEFAULT_PRESERVE_RECENT_TOKENS,
 	DEFAULT_TARGET_RATIO,
 	resolveEffectiveMaxInputTokens,
+	resolveRecencyBounds,
 } from "./compaction-shared";
 
 export interface ContextPipelinePrepareTurnInput {
@@ -172,10 +173,18 @@ const BUILTIN_COMPACTION_STRATEGIES = {
 			context,
 			providerConfig,
 			summarizer: compaction?.summarizer,
-			preserveRecentTokens: Math.min(
-				compaction?.preserveRecentTokens ?? DEFAULT_PRESERVE_RECENT_TOKENS,
-				context.budget.messages.targetTokens,
-			),
+			// The recency budget is a floor and the message budget a ceiling —
+			// two different bounds, not one clamped by the other. Taking the
+			// smaller of the pair (as this did) collapses them: the floor is
+			// always the smaller number in practice, so the clamp was a no-op
+			// and the room the target bought went unused, every compaction
+			// folding to the 20,000-token minimum no matter how much fit.
+			bounds: resolveRecencyBounds({
+				preserveRecentTokens:
+					compaction?.preserveRecentTokens ?? DEFAULT_PRESERVE_RECENT_TOKENS,
+				preserveRecentMessagesRatio: compaction?.preserveRecentMessagesRatio,
+				messageTargetTokens: context.budget.messages.targetTokens,
+			}),
 			estimateMessageTokens,
 			logger,
 		}),

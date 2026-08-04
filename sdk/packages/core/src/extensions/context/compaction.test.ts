@@ -22,6 +22,7 @@ import {
 	estimateTokens,
 	findCutPlan,
 	resolveEffectiveMaxInputTokens,
+	resolveRecencyBounds,
 	resolveSummarizerConfig,
 	serializeMessage,
 	TOOL_RESULT_CHAR_LIMIT,
@@ -49,6 +50,22 @@ function totalJsonTokens(messages: LlmsProviders.Message[]): number {
 		(total, message) => total + estimateJsonTokens(message),
 		0,
 	);
+}
+
+/**
+ * Recency bounds for the token-only cases these tests were written against:
+ * no count floor, and a ceiling that never binds.
+ */
+function bounds(
+	preserveRecentTokens: number,
+	overrides: { messagesRatio?: number; messageTargetTokens?: number } = {},
+) {
+	return resolveRecencyBounds({
+		preserveRecentTokens,
+		preserveRecentMessagesRatio: overrides.messagesRatio ?? Number.EPSILON,
+		messageTargetTokens:
+			overrides.messageTargetTokens ?? Number.MAX_SAFE_INTEGER,
+	});
 }
 
 /** Multi-turn transcript with prunable tool output for basic-compaction tests. */
@@ -2025,7 +2042,7 @@ describe("createContextCompactionPrepareTurn", () => {
 			{ role: "user", content: "second task" },
 			{ role: "assistant", content: "second answer" },
 		];
-		expect(findCutPlan(messages, 1, estimateJsonTokens)).toEqual({
+		expect(findCutPlan(messages, bounds(1), estimateJsonTokens)).toEqual({
 			cutIndex: 2,
 			pinnedIndex: -1,
 		});
@@ -2074,7 +2091,7 @@ describe("createContextCompactionPrepareTurn", () => {
 			});
 		}
 
-		const plan = findCutPlan(messages, 1, estimateJsonTokens);
+		const plan = findCutPlan(messages, bounds(1), estimateJsonTokens);
 		expect(plan.pinnedIndex).toBe(1);
 		// Something other than the summary and the prompt has to be folded,
 		// or the compaction is the no-op this replaces.
@@ -2116,9 +2133,80 @@ describe("createContextCompactionPrepareTurn", () => {
 			{ role: "assistant", content: "short reply" },
 			{ role: "assistant", content: "another short reply" },
 		];
-		expect(findCutPlan(messages, 1_000_000, estimateJsonTokens)).toEqual({
+		expect(
+			findCutPlan(messages, bounds(1_000_000), estimateJsonTokens),
+		).toEqual({
 			cutIndex: 0,
 			pinnedIndex: -1,
+		});
+	});
+
+	it("keeps a share of the messages when the token floor is met too early", () => {
+		// Repro for `113 → 7 messages`. Heavy turns satisfy a token floor in a
+		// handful of messages, and the floor has nothing to say about that: the
+		// tail was within budget and unusable as a conversation. Every message
+		// here weighs a quarter of the floor, so tokens alone stop after four.
+		const messages: MessageWithMetadata[] = Array.from(
+			{ length: 40 },
+			(_, index) => ({
+				role: index % 2 === 0 ? "user" : "assistant",
+				content: `turn ${index} ${"z".repeat(1_000)}`,
+			}),
+		);
+
+		const tokenOnly = findCutPlan(messages, bounds(4_000), estimateJsonTokens);
+		expect(messages.length - tokenOnly.cutIndex).toBeLessThanOrEqual(6);
+
+		const withRatio = findCutPlan(
+			messages,
+			bounds(4_000, { messagesRatio: 0.25 }),
+			estimateJsonTokens,
+		);
+		expect(messages.length - withRatio.cutIndex).toBeGreaterThanOrEqual(10);
+	});
+
+	it("stops at the message budget rather than honour the count floor past it", () => {
+		// The count floor asks and the ceiling answers. A quarter of these
+		// messages is 10, which would cost ~10,000 tokens against a budget of
+		// 3,000 — the compaction would end above the target it exists to reach.
+		const messages: MessageWithMetadata[] = Array.from(
+			{ length: 40 },
+			(_, index) => ({
+				role: index % 2 === 0 ? "user" : "assistant",
+				content: `turn ${index} ${"z".repeat(1_000)}`,
+			}),
+		);
+
+		const plan = findCutPlan(
+			messages,
+			bounds(1_000, { messagesRatio: 0.25, messageTargetTokens: 3_000 }),
+			estimateJsonTokens,
+		);
+		expect(totalJsonTokens(messages.slice(plan.cutIndex))).toBeLessThanOrEqual(
+			3_000 + estimateJsonTokens(messages[plan.cutIndex]),
+		);
+	});
+
+	it("clamps the token floor to a budget smaller than it", () => {
+		// A model whose whole message budget is 5,000 tokens cannot preserve
+		// 20,000 of them, and a floor it cannot meet reads as "keep everything"
+		// — which is how a small context ends up never compacting at all.
+		const small = resolveRecencyBounds({
+			preserveRecentTokens: 20_000,
+			messageTargetTokens: 5_000,
+		});
+		expect(small).toMatchObject({ tokenFloor: 5_000, tokenCeiling: 5_000 });
+
+		// The case this whole change is about: the floor is a floor and the
+		// budget is headroom above it, not a clamp on it.
+		const roomy = resolveRecencyBounds({
+			preserveRecentTokens: 20_000,
+			messageTargetTokens: 73_000,
+		});
+		expect(roomy).toMatchObject({
+			tokenFloor: 20_000,
+			tokenCeiling: 73_000,
+			messagesRatio: 0.25,
 		});
 	});
 

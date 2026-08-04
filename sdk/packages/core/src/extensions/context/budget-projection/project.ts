@@ -6,10 +6,10 @@ import type {
 import type {
 	BudgetAction,
 	BudgetMutationAction,
+	BudgetPolicyIntent,
 	BudgetProjectionOptions,
 	BudgetProjectionResult,
 	BudgetProjectionWarning,
-	BudgetPolicyIntent,
 } from "./types";
 
 type EstimateMessageTokens = (message: MessageWithMetadata) => number;

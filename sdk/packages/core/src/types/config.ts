@@ -159,6 +159,18 @@ export interface CoreCompactionConfig {
 	enabled?: boolean;
 	strategy?: CoreCompactionStrategy;
 	preserveRecentTokens?: number;
+	/**
+	 * Minimum share of the transcript's messages the preserved tail should reach
+	 * before `preserveRecentTokens` alone is allowed to end it (0–1).
+	 *
+	 * A token budget is a poor proxy for how much conversation survives, and the
+	 * two diverge exactly when messages are heavy: measured live, a 113-message
+	 * transcript satisfied a 20,000-token budget after six messages and compacted
+	 * to seven while the post-compaction budget allowed ~73,000. Defaults to
+	 * {@link DEFAULT_PRESERVE_RECENT_MESSAGES_RATIO}; the token budget for the
+	 * compacted request still caps it, so this can only ask, never overrun.
+	 */
+	preserveRecentMessagesRatio?: number;
 	summarizer?: CoreCompactionSummarizerConfig;
 	compact?: (
 		context: CoreCompactionContext,
