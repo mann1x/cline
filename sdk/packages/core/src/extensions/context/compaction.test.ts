@@ -20,6 +20,7 @@ import {
 import {
 	createTokenEstimator,
 	estimateTokens,
+	findCutPlan,
 	resolveEffectiveMaxInputTokens,
 	resolveSummarizerConfig,
 	serializeMessage,
@@ -2014,6 +2015,249 @@ describe("createContextCompactionPrepareTurn", () => {
 			}),
 		});
 		expect(result?.messages.length).toBeLessThan(messages.length);
+	});
+
+	it("leaves the cut at the latest typed prompt when that still folds work", () => {
+		// The ordinary shape: the cap costs nothing, so nothing is pinned.
+		const messages: MessageWithMetadata[] = [
+			{ role: "user", content: "first task" },
+			{ role: "assistant", content: "first answer" },
+			{ role: "user", content: "second task" },
+			{ role: "assistant", content: "second answer" },
+		];
+		expect(findCutPlan(messages, 1, estimateJsonTokens)).toEqual({
+			cutIndex: 2,
+			pinnedIndex: -1,
+		});
+	});
+
+	it("pins the prompt and cuts past it when the cap folds nothing", () => {
+		const summary: MessageWithMetadata = {
+			role: "user",
+			content: [{ type: "text", text: "Context summary:\n\nearlier work" }],
+			metadata: {
+				kind: "compaction_summary",
+				displayRole: "system",
+				userRunSpan: 2,
+				summary: "earlier work",
+				details: { readFiles: [], modifiedFiles: [] },
+				tokensBefore: 100,
+				generatedAt: 1,
+			},
+		};
+		const messages: MessageWithMetadata[] = [
+			summary,
+			{ role: "user", content: "the one typed prompt" },
+		];
+		for (let i = 0; i < 3; i++) {
+			messages.push({
+				role: "assistant",
+				content: [
+					{
+						type: "tool_use",
+						id: `plan-tool-${i}`,
+						name: "read_files",
+						input: { file_paths: [`/tmp/p${i}.ts`] },
+					},
+				],
+			});
+			messages.push({
+				role: "user",
+				content: [
+					{
+						type: "tool_result",
+						tool_use_id: `plan-tool-${i}`,
+						name: "read_files",
+						content: "q".repeat(1_500),
+					},
+				],
+			});
+		}
+
+		const plan = findCutPlan(messages, 1, estimateJsonTokens);
+		expect(plan.pinnedIndex).toBe(1);
+		// Something other than the summary and the prompt has to be folded,
+		// or the compaction is the no-op this replaces.
+		expect(plan.cutIndex).toBeGreaterThanOrEqual(3);
+		// The cut lands where a preserved tail cannot orphan a tool_result.
+		expect(messages[plan.cutIndex].role).toBe("assistant");
+
+		const tail = messages.slice(2);
+		const tailTokens = totalJsonTokens(tail);
+		const largestTailMessage = Math.max(...tail.map(estimateJsonTokens));
+		const preservedTailTokens = totalJsonTokens(messages.slice(plan.cutIndex));
+		// Half of the tail, plus at most the one message that straddles the
+		// halfway mark. A ratio, not a token threshold: the estimator this
+		// runs on drifts by multiples, and the bias cancels in a ratio.
+		expect(preservedTailTokens).toBeLessThanOrEqual(
+			tailTokens / 2 + largestTailMessage,
+		);
+	});
+
+	it("declines to pin when the recency budget wants the whole tail", () => {
+		// Folding is only worth an LLM call when there is something to fold.
+		// A recency budget larger than the tail asks to keep all of it, and
+		// the answer is no compaction rather than a pointless one.
+		const messages: MessageWithMetadata[] = [
+			{
+				role: "user",
+				content: [{ type: "text", text: "Context summary:\n\nearlier work" }],
+				metadata: {
+					kind: "compaction_summary",
+					displayRole: "system",
+					userRunSpan: 1,
+					summary: "earlier work",
+					details: { readFiles: [], modifiedFiles: [] },
+					tokensBefore: 100,
+					generatedAt: 1,
+				},
+			},
+			{ role: "user", content: "the one typed prompt" },
+			{ role: "assistant", content: "short reply" },
+			{ role: "assistant", content: "another short reply" },
+		];
+		expect(findCutPlan(messages, 1_000_000, estimateJsonTokens)).toEqual({
+			cutIndex: 0,
+			pinnedIndex: -1,
+		});
+	});
+
+	it("keeps compacting when the typed prompt sits behind a summary", async () => {
+		// Repro for auto-compaction becoming a permanent no-op after the first
+		// pass. The projection above has no typed prompt, but a real run does:
+		// once a summary is prepended the transcript reads
+		// [summary, typed prompt, ...tool loop], so the prompt sits at index 1
+		// and the prompt-preservation cap pinned the cut there. Everything the
+		// cut could fold was the summary itself, `newMessagesToFold` came out
+		// empty, and every later turn skipped while the tail grew until the
+		// model ran out of room to answer in. Live: seven consecutive skips,
+		// 122 -> 134 messages, num_predict 26,538 -> 1,232, turn lost.
+		createHandlerMock.mockReturnValue({
+			createMessage: vi.fn(() =>
+				streamChunks([
+					{
+						type: "text",
+						id: "summary-pinned",
+						text: "## Goal\nStill building\n\n## Next\nContinue",
+					},
+					{ type: "done", id: "summary-pinned", success: true },
+				]),
+			),
+		});
+
+		const typedPrompt: MessageWithMetadata = {
+			role: "user",
+			content: "<task>Fix the linter errors I pasted</task>",
+		};
+		const messages: MessageWithMetadata[] = [
+			{
+				role: "user",
+				content: [{ type: "text", text: "Context summary:\n\nearlier work" }],
+				metadata: {
+					kind: "compaction_summary",
+					displayRole: "system",
+					userRunSpan: 2,
+					summary: "earlier work",
+					details: { readFiles: [], modifiedFiles: [] },
+					tokensBefore: 100,
+					generatedAt: 1,
+				},
+			},
+			typedPrompt,
+		];
+		for (let i = 0; i < 12; i++) {
+			messages.push({
+				role: "assistant",
+				content: [
+					{
+						type: "tool_use",
+						id: `pinned-tool-${i}`,
+						name: "read_files",
+						input: { file_paths: [`/tmp/h${i}.ts`] },
+					},
+				],
+			});
+			messages.push({
+				role: "user",
+				content: [
+					{
+						type: "tool_result",
+						tool_use_id: `pinned-tool-${i}`,
+						name: "read_files",
+						content: "z".repeat(1_500),
+					},
+				],
+			});
+		}
+		const tailLength = messages.length - 2;
+
+		const emitStatusNotice = vi.fn();
+		const prepareTurn = createContextCompactionPrepareTurn({
+			providerId: "anthropic",
+			modelId: "mock-model",
+			providerConfig: {
+				providerId: "anthropic",
+				modelId: "mock-model",
+			} as LlmsProviders.ProviderConfig,
+			compaction: {
+				enabled: true,
+				strategy: "agentic",
+				preserveRecentTokens: 1_000,
+			},
+			logger: undefined,
+		});
+
+		const result = await prepareTurn?.({
+			agentId: "agent-1",
+			conversationId: "conv-1",
+			parentAgentId: null,
+			iteration: 3,
+			abortSignal: new AbortController().signal,
+			emitStatusNotice,
+			systemPrompt: "You are helpful.",
+			tools: [],
+			messages,
+			apiMessages: messages,
+			model: {
+				id: "mock-model",
+				provider: "anthropic",
+				info: { id: "mock-model", maxInputTokens: 4_000 },
+			},
+		});
+
+		expect(emitStatusNotice).toHaveBeenCalledWith(
+			"auto-compacted",
+			expect.objectContaining({ kind: "auto_compaction" }),
+		);
+		const compacted = result?.messages ?? [];
+		expect(compacted[0]).toMatchObject({
+			role: "user",
+			metadata: expect.objectContaining({ kind: "compaction_summary" }),
+		});
+		// The prompt keeps its place and its text: pinning it out of the fold
+		// is what lets the cut move past it, not a licence to summarize it.
+		expect(compacted[1]).toEqual(typedPrompt);
+		// Progress is the point: at least half of what followed the prompt is
+		// gone, so the next turn starts from a transcript that actually shrank.
+		expect(compacted.length - 2).toBeLessThanOrEqual(tailLength / 2 + 1);
+
+		const toolUseIds = new Set<string>();
+		const toolResultIds = new Set<string>();
+		for (const msg of compacted) {
+			if (!Array.isArray(msg.content)) continue;
+			for (const block of msg.content) {
+				if (block.type === "tool_use") toolUseIds.add(block.id);
+				if (block.type === "tool_result") {
+					toolResultIds.add(block.tool_use_id);
+				}
+			}
+		}
+		for (const id of toolUseIds) {
+			expect(toolResultIds.has(id)).toBe(true);
+		}
+		for (const id of toolResultIds) {
+			expect(toolUseIds.has(id)).toBe(true);
+		}
 	});
 
 	it("uses the configured summarizer model for compaction", async () => {

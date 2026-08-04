@@ -323,7 +323,23 @@ function isSafeCutBoundary(message: MessageWithMetadata): boolean {
 	return message.role === "assistant" || isTurnStartMessage(message);
 }
 
-export function findCutIndex(
+/**
+ * The share of the material after a pinned prompt that a compaction folds when
+ * the prompt-preservation cap would otherwise leave it nothing to do.
+ *
+ * A fraction rather than a token count, deliberately. Every absolute threshold
+ * in this pipeline is only as trustworthy as the token estimator feeding it,
+ * and that estimator drifts by multiples. "Half of what follows the prompt" is
+ * half of what follows the prompt no matter how the counting drifts, because
+ * the bias appears in both sides of the ratio and cancels.
+ */
+export const PINNED_PROMPT_FOLD_RATIO = 0.5;
+
+/**
+ * Walk back from the end until the preserved tail reaches the token budget.
+ * Returns the index the tail would start at, before any turn-boundary rules.
+ */
+function findRecencyCandidate(
 	messages: MessageWithMetadata[],
 	preserveRecentTokens: number,
 	estimateMessageTokens: EstimateMessageTokens,
@@ -337,25 +353,152 @@ export function findCutIndex(
 			break;
 		}
 	}
+	return candidate;
+}
 
+function walkBackToSafeBoundary(
+	messages: MessageWithMetadata[],
+	cut: number,
+	floor: number,
+): number {
+	let index = cut;
+	while (index > floor && !isSafeCutBoundary(messages[index])) {
+		index -= 1;
+	}
+	return index;
+}
+
+/**
+ * How many messages a cut would actually fold into a summary: those before the
+ * cut that no existing summary already stands for, minus any pinned message
+ * that survives verbatim. Zero means the compaction cannot make progress —
+ * it would replace a summary with a summary of that same summary.
+ */
+function countFoldableMessages(
+	messages: MessageWithMetadata[],
+	cutIndex: number,
+	pinnedIndex: number,
+): number {
+	const latestSummaryIndex = findLatestSummaryIndex(
+		messages.slice(0, cutIndex),
+	);
+	let count = 0;
+	for (let index = latestSummaryIndex + 1; index < cutIndex; index += 1) {
+		if (index !== pinnedIndex) {
+			count += 1;
+		}
+	}
+	return count;
+}
+
+export interface CompactionCutPlan {
+	/**
+	 * Everything before this index is folded into the summary; the messages
+	 * from here on survive verbatim. Zero means no cut makes progress.
+	 */
+	cutIndex: number;
+	/**
+	 * A typed prompt that lies *before* the cut but must still survive
+	 * verbatim, or -1 when the cut already preserves every typed prompt.
+	 */
+	pinnedIndex: number;
+}
+
+const NO_CUT: CompactionCutPlan = { cutIndex: 0, pinnedIndex: -1 };
+
+/**
+ * Decide where to cut a transcript, and whether the latest typed prompt has to
+ * be lifted out of the folded region to survive.
+ *
+ * The ordinary rule is the recency budget capped at the latest typed prompt,
+ * so that whole turn stays verbatim. That cap has one failure shape: after a
+ * compaction the transcript reads `[summary, prompt, ...tool loop]`, so the
+ * prompt sits at index 1 and the cap pins the cut there — folding only the
+ * summary, which is no progress at all. An agentic run driven by a single
+ * typed prompt could therefore be compacted exactly once, and every later
+ * attempt returned "nothing to do" while the context kept growing.
+ *
+ * When that happens the cut moves past the prompt and the prompt is pinned
+ * instead: it survives verbatim without holding the cut hostage. The pinned
+ * cut folds at least {@link PINNED_PROMPT_FOLD_RATIO} of the material after
+ * the prompt, so a compaction that runs always shrinks the transcript by a
+ * measurable share of it, while still honouring the recency budget when that
+ * budget asks to keep less than half.
+ */
+export function findCutPlan(
+	messages: MessageWithMetadata[],
+	preserveRecentTokens: number,
+	estimateMessageTokens: EstimateMessageTokens,
+): CompactionCutPlan {
+	const candidate = findRecencyCandidate(
+		messages,
+		preserveRecentTokens,
+		estimateMessageTokens,
+	);
 	if (candidate <= 0) {
-		return 0;
+		return NO_CUT;
 	}
 
 	// Never summarize away the latest typed user prompt: when one exists
 	// past index 0, the cut stays at or before it so that whole turn
 	// survives verbatim. Transcripts without a later typed turn (a single
-	// task followed by one long tool loop, or a projection that starts
-	// with a compaction summary) still cut at the token-budget candidate.
+	// task followed by one long tool loop) still cut at the token-budget
+	// candidate.
 	const lastTurnStartIndex = findLastTurnStartIndex(messages);
-	let cut =
+	const cappedCut =
 		lastTurnStartIndex > 0
 			? Math.min(candidate, lastTurnStartIndex)
 			: candidate;
-	while (cut > 0 && !isSafeCutBoundary(messages[cut])) {
-		cut -= 1;
+	const cutIndex = walkBackToSafeBoundary(messages, cappedCut, 0);
+	if (countFoldableMessages(messages, cutIndex, -1) > 0) {
+		return { cutIndex, pinnedIndex: -1 };
 	}
-	return cut;
+
+	return planPinnedCut(
+		messages,
+		lastTurnStartIndex,
+		preserveRecentTokens,
+		estimateMessageTokens,
+	);
+}
+
+function planPinnedCut(
+	messages: MessageWithMetadata[],
+	pinnedIndex: number,
+	preserveRecentTokens: number,
+	estimateMessageTokens: EstimateMessageTokens,
+): CompactionCutPlan {
+	const tailStart = pinnedIndex + 1;
+	if (pinnedIndex <= 0 || tailStart >= messages.length) {
+		return NO_CUT;
+	}
+
+	let tailTokens = 0;
+	for (let index = tailStart; index < messages.length; index += 1) {
+		tailTokens += estimateMessageTokens(messages[index]);
+	}
+	// The ratio governs a large tail and the recency budget governs a small
+	// one, and neither may be violated: fold at least half, but never keep
+	// less than the budget asks for.
+	const keepTokens = Math.max(
+		tailTokens * PINNED_PROMPT_FOLD_RATIO,
+		Math.min(preserveRecentTokens, tailTokens),
+	);
+
+	let total = 0;
+	let cut = messages.length;
+	for (let index = messages.length - 1; index >= tailStart; index -= 1) {
+		total += estimateMessageTokens(messages[index]);
+		cut = index;
+		if (total >= keepTokens) {
+			break;
+		}
+	}
+	cut = walkBackToSafeBoundary(messages, cut, tailStart);
+	if (countFoldableMessages(messages, cut, pinnedIndex) === 0) {
+		return NO_CUT;
+	}
+	return { cutIndex: cut, pinnedIndex };
 }
 
 export function collectPaths(value: unknown): string[] {

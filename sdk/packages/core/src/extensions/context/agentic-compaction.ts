@@ -18,7 +18,7 @@ import {
 	ensureFilesSection,
 	estimateTokens,
 	extractFileOps,
-	findCutIndex,
+	findCutPlan,
 	findLatestSummaryIndex,
 	getCompactionSummaryMetadata,
 	resolveEffectiveMaxInputTokens,
@@ -107,7 +107,7 @@ export async function runAgenticCompaction(options: {
 		return undefined;
 	}
 
-	const cutIndex = findCutIndex(
+	const { cutIndex, pinnedIndex } = findCutPlan(
 		messages,
 		options.preserveRecentTokens,
 		options.estimateMessageTokens,
@@ -116,7 +116,12 @@ export async function runAgenticCompaction(options: {
 		return undefined;
 	}
 
-	const messagesToSummarize = messages.slice(0, cutIndex);
+	// A pinned prompt lies before the cut but survives verbatim, so it is not
+	// part of what gets summarized.
+	const pinnedMessage = pinnedIndex >= 0 ? messages[pinnedIndex] : undefined;
+	const messagesToSummarize = messages
+		.slice(0, cutIndex)
+		.filter((_, index) => index !== pinnedIndex);
 	const latestSummaryIndex = findLatestSummaryIndex(messagesToSummarize);
 	const previousSummary =
 		latestSummaryIndex >= 0
@@ -213,7 +218,8 @@ export async function runAgenticCompaction(options: {
 	options.logger?.debug("Agentic compaction summarizer diagnostics", {
 		messagesToSummarize: messagesToSummarize.length,
 		newMessagesToFold: newMessagesToFold.length,
-		preservedMessages: messages.length - cutIndex,
+		preservedMessages: messages.length - cutIndex + (pinnedMessage ? 1 : 0),
+		pinnedPromptIndex: pinnedIndex,
 		previousSummaryChars: previousSummary?.length ?? 0,
 		conversationTextChars: conversationText.length,
 		summaryRequestChars: summaryRequest.length,
@@ -252,6 +258,7 @@ export async function runAgenticCompaction(options: {
 			tokensBefore,
 			userRunSpan: countUserRunMessages(messagesToSummarize),
 		}),
+		...(pinnedMessage ? [pinnedMessage] : []),
 		...messages.slice(cutIndex),
 	];
 	const tokensAfter = resultMessages.reduce(
@@ -261,8 +268,8 @@ export async function runAgenticCompaction(options: {
 	options.logger?.debug("Performed agentic compaction", {
 		messagesBefore: messages.length,
 		messagesAfter: resultMessages.length,
-		messagesSummarized: cutIndex,
-		messagesPreserved: messages.length - cutIndex,
+		messagesSummarized: messagesToSummarize.length,
+		messagesPreserved: resultMessages.length - 1,
 		tokensBefore,
 		tokensAfter,
 		maxInputTokens: options.context.budget.request.maxInputTokens,
