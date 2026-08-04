@@ -116,3 +116,37 @@ describe("the last observed request", () => {
 		expect(lastObservedRequestTokens()).toBe(22_661);
 	});
 });
+
+describe("calibration state across module copies", () => {
+	// The bundler produces more than one copy of this module: `@cline/llms`
+	// inlines internal workspace code, `@cline/core` imports the published
+	// package. A second copy addressing its own module variables is what let
+	// the gateway record counts the compaction pipeline never saw.
+	const STATE_KEY = Symbol.for("cline.shared.tokenCalibration");
+
+	it("keeps the observation where a second copy of this module can read it", () => {
+		resetTokenCalibration();
+		observeRequestTokens(35_000, 10_000);
+
+		// Stand in for the other copy: same registered symbol, no shared closure.
+		const foreign = (globalThis as unknown as Record<symbol, unknown>)[
+			STATE_KEY
+		] as { charsPerToken?: number; requestTokens?: number } | undefined;
+
+		expect(foreign?.requestTokens).toBe(10_000);
+		expect(foreign?.charsPerToken).toBeCloseTo(3.5, 5);
+		expect(lastObservedRequestTokens()).toBe(10_000);
+	});
+
+	it("reads an observation a second copy recorded", () => {
+		resetTokenCalibration();
+		(globalThis as unknown as Record<symbol, unknown>)[STATE_KEY] = {
+			charsPerToken: 5.9,
+			requestTokens: 128_000,
+		};
+
+		expect(lastObservedRequestTokens()).toBe(128_000);
+		expect(charsPerToken()).toBeCloseTo(5.9, 5);
+		resetTokenCalibration();
+	});
+});

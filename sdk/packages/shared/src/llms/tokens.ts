@@ -32,15 +32,53 @@ const MAX_OBSERVED_CHARS_PER_TOKEN = 8;
 /** Weight given to the newest observation once a baseline exists. */
 const OBSERVATION_WEIGHT = 0.3;
 
-let observedCharsPerToken: number | undefined;
-let observedRequestTokens: number | undefined;
+/**
+ * Calibration state, held on `globalThis` rather than in module scope.
+ *
+ * Module scope would be the obvious home and is the wrong one here, because
+ * this module does not exist once at runtime. `@cline/llms` bundles internal
+ * workspace code into its own output ("bundle internal workspace code" --
+ * llms/bun.mts filters `@cline/*` out of `external`), while `@cline/core`
+ * keeps its declared dependencies external and imports the published package.
+ * So the gateway, which records what a request cost, and the compaction
+ * pipeline, which reads it back, run against two different copies of this file
+ * with two different sets of module variables.
+ *
+ * That is not a hypothetical: it shipped. Across 14 consecutive compaction
+ * decisions the observed request count stayed `undefined` and the ratio stayed
+ * on its 3.0 default while the provider was reporting real counts on every
+ * turn -- so the trigger fell back to an estimate running 1.96x high, and
+ * compacted transcripts that had ample room.
+ *
+ * `Symbol.for` resolves through the cross-realm registry, so every copy of
+ * this module -- however many the bundler produces -- addresses the same slot.
+ */
+const CALIBRATION_STATE = Symbol.for("cline.shared.tokenCalibration");
+
+interface TokenCalibrationState {
+	charsPerToken?: number;
+	requestTokens?: number;
+}
+
+function calibration(): TokenCalibrationState {
+	const container = globalThis as unknown as Record<symbol, unknown>;
+	const existing = container[CALIBRATION_STATE] as
+		| TokenCalibrationState
+		| undefined;
+	if (existing) {
+		return existing;
+	}
+	const created: TokenCalibrationState = {};
+	container[CALIBRATION_STATE] = created;
+	return created;
+}
 
 /**
  * The ratio in force: measured if a provider has reported one, otherwise the
  * conservative default.
  */
 export function charsPerToken(): number {
-	return observedCharsPerToken ?? CHARS_PER_TOKEN;
+	return calibration().charsPerToken ?? CHARS_PER_TOKEN;
 }
 
 /**
@@ -63,12 +101,13 @@ export function observeRequestTokens(chars: number, tokens: number): void {
 	) {
 		return;
 	}
-	observedCharsPerToken =
-		observedCharsPerToken === undefined
+	const state = calibration();
+	state.charsPerToken =
+		state.charsPerToken === undefined
 			? ratio
-			: observedCharsPerToken * (1 - OBSERVATION_WEIGHT) +
+			: state.charsPerToken * (1 - OBSERVATION_WEIGHT) +
 				ratio * OBSERVATION_WEIGHT;
-	observedRequestTokens = tokens;
+	state.requestTokens = tokens;
 }
 
 /**
@@ -80,13 +119,14 @@ export function observeRequestTokens(chars: number, tokens: number): void {
  * exactness for being one turn behind.
  */
 export function lastObservedRequestTokens(): number | undefined {
-	return observedRequestTokens;
+	return calibration().requestTokens;
 }
 
 /** Drop any measured ratio and fall back to `CHARS_PER_TOKEN`. */
 export function resetTokenCalibration(): void {
-	observedCharsPerToken = undefined;
-	observedRequestTokens = undefined;
+	const state = calibration();
+	state.charsPerToken = undefined;
+	state.requestTokens = undefined;
 }
 
 export function estimateTokens(chars: number): number {
