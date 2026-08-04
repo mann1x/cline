@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import fixtures from "../../fixtures/usage.json";
-import { normalizeUsage } from "./ai-sdk";
+import { buildAiSdkStreamConfig, normalizeUsage } from "./ai-sdk";
 
 /**
  * These tests validate usage normalization across different AI SDK stream result shapes.
@@ -409,5 +409,66 @@ describe("ai-sdk usage normalization", () => {
 			expect(geminiRaw).toHaveProperty("promptTokenCount");
 			expect(geminiRaw).toHaveProperty("candidatesTokenCount");
 		});
+	});
+});
+
+describe("reasoning passthrough", () => {
+	// `reasoning` is a standard AI SDK call option
+	// (LanguageModelV*CallOptions.reasoning), so mapping onto it is
+	// provider-neutral: any provider that honours it gets the request-scoped
+	// intent without the model being reconstructed. `ai-sdk-ollama` >= 4 maps
+	// it straight onto Ollama's `think` field -- none => false, minimal|low =>
+	// "low", medium => "medium", high|xhigh => "high" -- which is what makes
+	// per-request reasoning work there without a provider-specific escape
+	// hatch.
+	const context = {} as never;
+	const base = {
+		providerId: "ollama",
+		modelId: "local-model",
+		messages: [],
+	} as never;
+
+	function config(reasoning: unknown) {
+		return buildAiSdkStreamConfig(
+			{ ...(base as object), reasoning } as never,
+			context,
+		);
+	}
+
+	it("expresses no preference when the request has none", () => {
+		expect(config(undefined).reasoning).toBeUndefined();
+		expect(config({}).reasoning).toBeUndefined();
+	});
+
+	it("forwards each effort level unchanged", () => {
+		for (const effort of ["minimal", "low", "medium", "high", "xhigh"]) {
+			expect(config({ effort }).reasoning).toBe(effort);
+		}
+	});
+
+	it("maps max onto the highest level the SDK has", () => {
+		expect(config({ effort: "max" }).reasoning).toBe("xhigh");
+	});
+
+	it("treats reasoning turned off as an explicit none", () => {
+		expect(config({ enabled: false }).reasoning).toBe("none");
+		// an explicit off wins over an effort left over from earlier state
+		expect(config({ enabled: false, effort: "high" }).reasoning).toBe("none");
+	});
+
+	it("leaves an enabled request with no effort on provider-default", () => {
+		// The SDK vocabulary has no plain "on": the levels are efforts, and
+		// provider-default defers to whatever the model was constructed with.
+		expect(config({ enabled: true }).reasoning).toBeUndefined();
+	});
+
+	it("does not disturb the other call settings", () => {
+		const built = buildAiSdkStreamConfig(
+			{ ...(base as object), maxTokens: 512, temperature: 0.4 } as never,
+			context,
+		);
+		expect(built.maxOutputTokens).toBe(512);
+		expect(built.temperature).toBe(0.4);
+		expect(built.reasoning).toBeUndefined();
 	});
 });
