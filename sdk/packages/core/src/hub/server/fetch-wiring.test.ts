@@ -192,7 +192,7 @@ describe("hub runtime wiring", () => {
 				throw new Error("Expected submit_and_exit to be available.");
 			}
 			expect(submitTool.lifecycle).toEqual({ completesRun: true });
-			expect(runtime.completionPolicy).toEqual({
+			expect(runtime.completionPolicy).toMatchObject({
 				requireCompletionTool: true,
 			});
 			await expect(

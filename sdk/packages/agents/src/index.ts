@@ -54,4 +54,5 @@ export {
 	AgentRuntimeAbortError,
 	createAgent,
 	createAgentRuntime,
+	DEFAULT_MAX_NO_TOOL_CALL_NUDGES,
 } from "./agent-runtime";

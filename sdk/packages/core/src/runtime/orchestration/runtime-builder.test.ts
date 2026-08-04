@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DEFAULT_MAX_NO_TOOL_CALL_NUDGES } from "@cline/agents";
 import {
 	type AgentExtension,
 	type AgentTool,
@@ -221,7 +222,7 @@ Use the review guidance.`,
 		const names = runtime.tools.map((tool) => tool.name);
 		expect(names).not.toContain("ask_question");
 		expect(names).toContain("submit_and_exit");
-		expect(runtime.completionPolicy).toEqual({
+		expect(runtime.completionPolicy).toMatchObject({
 			requireCompletionTool: true,
 		});
 	});
@@ -235,7 +236,12 @@ Use the review guidance.`,
 
 		const names = runtime.tools.map((tool) => tool.name);
 		expect(names).not.toContain("submit_and_exit");
-		expect(runtime.completionPolicy).toBeUndefined();
+		expect(runtime.completionPolicy?.requireCompletionTool).toBeUndefined();
+		// Not requiring a completion tool is not the same as letting a turn with
+		// no tool calls end the run silently.
+		expect(runtime.completionPolicy?.maxNoToolCallNudges).toBe(
+			DEFAULT_MAX_NO_TOOL_CALL_NUDGES,
+		);
 	});
 
 	it("keeps ask_question available in non-yolo modes", async () => {
@@ -253,7 +259,7 @@ Use the review guidance.`,
 			const names = runtime.tools.map((tool) => tool.name);
 			expect(names).toContain("ask_question");
 			expect(names).not.toContain("submit_and_exit");
-			expect(runtime.completionPolicy).toBeUndefined();
+			expect(runtime.completionPolicy?.requireCompletionTool).toBeUndefined();
 		}
 	}, 10_000);
 
@@ -288,7 +294,7 @@ Use the review guidance.`,
 		});
 
 		expect(runtime.tools.map((tool) => tool.name)).not.toContain("spawn_agent");
-		expect(runtime.completionPolicy).toBeUndefined();
+		expect(runtime.completionPolicy?.requireCompletionTool).toBeUndefined();
 	});
 
 	it("uses apply_patch instead of editor for codex/gpt model IDs in act mode", async () => {
