@@ -227,6 +227,13 @@ export function toRedactedProviderConfigResponse(
 		aws: toRedactedAwsProviderConfigProto(config.aws),
 		gcp: toRedactedGcpProviderConfigProto(config.gcp),
 		contextWindow: config.contextWindow,
+		reasoning: config.reasoning
+			? {
+					enabled: config.reasoning.enabled,
+					effort: config.reasoning.effort,
+					budgetTokens: config.reasoning.budgetTokens,
+				}
+			: undefined,
 	})
 }
 

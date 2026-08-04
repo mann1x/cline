@@ -105,6 +105,17 @@ export interface EffectiveProviderConfig {
 	 */
 	readonly contextWindow?: number
 	/**
+	 * Provider-level reasoning settings (providers.json `reasoning`). Read as
+	 * well as written so a settings UI can show the state it is about to
+	 * change; an absent value means the provider was never asked, which is not
+	 * the same as being asked for none.
+	 */
+	readonly reasoning?: {
+		readonly enabled?: boolean
+		readonly effort?: string
+		readonly budgetTokens?: number
+	}
+	/**
 	 * OAuth-style auth bundle (e.g. cline provider's WorkOS token).
 	 * Compatible with `apiKey`; some providers populate both.
 	 */

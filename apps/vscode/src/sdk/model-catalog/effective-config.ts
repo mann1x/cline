@@ -19,8 +19,34 @@ type ProviderSettingsLike = {
 	readonly aws?: AwsProviderConfig
 	readonly gcp?: GcpProviderConfig
 	readonly contextWindow?: number
+	readonly reasoning?: ReasoningConfig
 	readonly auth?: AuthConfig
 	readonly extras?: ExtrasConfig
+}
+
+type ReasoningConfig = NonNullable<EffectiveProviderConfig["reasoning"]>
+
+/**
+ * Read the stored reasoning settings. Absent stays absent: on providers whose
+ * wire format has an on/off thinking flag, "never asked" and "asked for none"
+ * are different requests, and collapsing them here would lose that.
+ */
+function readReasoning(settings: Record<string, unknown>): ReasoningConfig | undefined {
+	const reasoning = settings.reasoning
+	if (!isPlainRecord(reasoning)) {
+		return undefined
+	}
+	const enabled = typeof reasoning.enabled === "boolean" ? reasoning.enabled : undefined
+	const effort = typeof reasoning.effort === "string" ? reasoning.effort : undefined
+	const budgetTokens = readPositiveInteger(reasoning.budgetTokens)
+	if (enabled === undefined && effort === undefined && budgetTokens === undefined) {
+		return undefined
+	}
+	return {
+		...(enabled !== undefined ? { enabled } : {}),
+		...(effort !== undefined ? { effort } : {}),
+		...(budgetTokens !== undefined ? { budgetTokens } : {}),
+	}
 }
 
 const apiKeyFields: Partial<Record<string, keyof ApiConfiguration>> = {
@@ -215,6 +241,7 @@ function readProviderSettings(providerId: ProviderId): ConfigParts {
 			aws: readAws(settings),
 			gcp: readGcp(settings),
 			contextWindow: readPositiveInteger(settings.contextWindow),
+			reasoning: readReasoning(settings),
 			auth: readAuth(settings),
 			extras: isPlainRecord(settings.extras) ? settings.extras : undefined,
 		} satisfies ProviderSettingsLike
@@ -396,6 +423,8 @@ export function buildEffectiveProviderConfig(providerId: ProviderId): EffectiveP
 	// Ollama StateManager key is a migration fallback (the store mirrors writes
 	// to both).
 	assignIfDefined(merged, "contextWindow", providerSettings.contextWindow ?? stateConfig.contextWindow)
+	// providers.json is the only writer of reasoning; there is no legacy key.
+	assignIfDefined(merged, "reasoning", providerSettings.reasoning)
 	assignIfDefined(merged, "auth", stateConfig.auth ?? providerSettings.auth)
 	assignIfDefined(merged, "extras", mergeExtras(providerSettings.extras, stateConfig.extras))
 

@@ -256,6 +256,9 @@ message ProviderConfigResponse {
   // Provider-level context window (providers.json `contextWindow`). Used by
   // bring-your-own-model providers (e.g. Ollama, where it maps to num_ctx).
   optional int32 context_window = 14;
+  // Provider-level reasoning settings, so a settings UI can show the state it
+  // is about to write. Carries no secret, so it is returned unredacted.
+  optional ProviderReasoningPatch reasoning = 15;
 }
 
 message CommittedModelSelection {
