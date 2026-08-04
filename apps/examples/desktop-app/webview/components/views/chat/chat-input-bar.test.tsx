@@ -333,7 +333,12 @@ describe("ChatInputBar", () => {
 	});
 
 	it("shows queued prompts in an accessible list with clear priority actions", async () => {
-		const onSteerPromptInQueue = vi.fn();
+		const onSteerPromptInQueue = vi
+			.fn()
+			.mockRejectedValue(new Error("steer failed"));
+		const onEditPromptInQueue = vi
+			.fn()
+			.mockRejectedValue(new Error("edit failed"));
 		const onRemovePromptInQueue = vi.fn();
 		await act(async () => {
 			root.render(
@@ -355,7 +360,7 @@ describe("ChatInputBar", () => {
 						model="test-model"
 						onAbort={vi.fn()}
 						onAttachFiles={vi.fn()}
-						onEditPromptInQueue={vi.fn()}
+						onEditPromptInQueue={onEditPromptInQueue}
 						onListGitBranches={vi.fn(async () => ({
 							current: "main",
 							branches: ["main"],
@@ -430,6 +435,42 @@ describe("ChatInputBar", () => {
 		});
 
 		expect(onSteerPromptInQueue).toHaveBeenCalledWith("queued-prompt-1");
+		await vi.waitFor(() =>
+			expect(queuedPrompts?.textContent).toContain("steer failed"),
+		);
+
+		await act(async () => {
+			container
+				.querySelector<HTMLButtonElement>('[aria-label="Edit queued prompt"]')
+				?.click();
+		});
+		const editor = container.querySelector<HTMLTextAreaElement>(
+			'[aria-label="Edit queued prompt"]',
+		);
+		expect(editor).not.toBeNull();
+		await act(async () => {
+			container
+				.querySelector<HTMLButtonElement>('[aria-label="Save queued prompt"]')
+				?.click();
+			await Promise.resolve();
+		});
+
+		expect(onEditPromptInQueue).toHaveBeenCalledWith(
+			"queued-prompt-1",
+			"What else can we update the title to?",
+		);
+		await vi.waitFor(() => {
+			expect(editor?.isConnected).toBe(true);
+			expect(queuedPrompts?.textContent).toContain("edit failed");
+		});
+
+		await act(async () => {
+			container
+				.querySelector<HTMLButtonElement>(
+					'[aria-label="Cancel editing queued prompt"]',
+				)
+				?.click();
+		});
 
 		await act(async () => {
 			container
