@@ -1,8 +1,10 @@
 import { openAiModelInfoSafeDefaults } from "@shared/api"
 import { StringRequest } from "@shared/proto/cline/common"
 import { Mode } from "@shared/storage/types"
-import { VSCodeLink } from "@vscode/webview-ui-toolkit/react"
+import { VSCodeCheckbox, VSCodeLink } from "@vscode/webview-ui-toolkit/react"
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { useProviderConfig } from "@/hooks/useProviderConfig"
 import { useProviderModelSelection } from "@/hooks/useProviderModelSelection"
@@ -21,6 +23,28 @@ interface OllamaProviderProps {
 	showModelOptions: boolean
 	isPopup?: boolean
 	currentMode: Mode
+}
+
+/**
+ * Thinking levels offered for Ollama, in the order they escalate.
+ *
+ * `unset` is a real choice rather than a placeholder: it leaves the request
+ * without an effort so the vendor's own default applies, which is what a user
+ * who wants thinking on but has no opinion about how much actually means.
+ * The rest are the levels Ollama itself accepts, `xhigh` being the name the AI
+ * SDK gives Ollama's `max`.
+ */
+const OLLAMA_THINKING_LEVELS = ["unset", "minimal", "low", "medium", "high", "xhigh"] as const
+
+type OllamaThinkingLevel = (typeof OLLAMA_THINKING_LEVELS)[number]
+
+const OLLAMA_THINKING_LEVEL_LABELS: Record<OllamaThinkingLevel, string> = {
+	unset: "Default (provider decides)",
+	minimal: "Minimal",
+	low: "Low",
+	medium: "Medium",
+	high: "High",
+	xhigh: "Max",
 }
 
 /**
@@ -74,6 +98,34 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 			throw error
 		}
 	}, [write])
+
+	// Thinking is stored on the provider config rather than per mode: it
+	// describes what the local model is asked to do, not how a task is run.
+	const thinkingEnabled = config?.reasoning?.enabled === true
+	const thinkingLevel: OllamaThinkingLevel =
+		config?.reasoning?.effort && (OLLAMA_THINKING_LEVELS as readonly string[]).includes(config.reasoning.effort)
+			? (config.reasoning.effort as OllamaThinkingLevel)
+			: "unset"
+
+	const handleThinkingEnabledChange = useCallback(
+		(enabled: boolean) => {
+			// Clearing the effort alongside a disable keeps the two coherent:
+			// a stored level that cannot apply reads as though it does.
+			void write({ reasoning: { enabled, effort: enabled ? (config?.reasoning?.effort ?? undefined) : undefined } }).catch(
+				(error) => console.error("Failed to update Ollama thinking:", error),
+			)
+		},
+		[write, config?.reasoning?.effort],
+	)
+
+	const handleThinkingLevelChange = useCallback(
+		(level: OllamaThinkingLevel) => {
+			void write({ reasoning: { enabled: true, effort: level === "unset" ? undefined : level } }).catch((error) =>
+				console.error("Failed to update Ollama thinking level:", error),
+			)
+		},
+		[write],
+	)
 
 	// Fetch ollama models on mount and whenever the base URL changes. The
 	// picker also refetches on focus — do NOT poll on an interval: the base
@@ -140,6 +192,47 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 				selectedModelId={selectedModel.modelId || ""}
 			/>
 
+			{/* Thinking. Rendered only once the provider config has resolved, for
+			    the same reason as the context-window field below: mounting
+			    against an unloaded config would show "off" for a provider that
+			    has thinking enabled. */}
+			{config !== undefined && (
+				<div className="flex flex-col gap-1">
+					<VSCodeCheckbox
+						checked={thinkingEnabled}
+						onChange={(event) => handleThinkingEnabledChange((event.target as HTMLInputElement).checked)}>
+						Enable thinking
+					</VSCodeCheckbox>
+					<p className="text-xs mt-0 mb-1 text-description">
+						Asks the model to think in its own reasoning channel instead of into its answer. On a reasoning model this
+						also lets Ollama bound how much of a reply is spent thinking.
+					</p>
+					{thinkingEnabled && (
+						<div className="mb-1">
+							<Label className="text-xs font-medium">Thinking level</Label>
+							<Select
+								onValueChange={(value) => handleThinkingLevelChange(value as OllamaThinkingLevel)}
+								value={thinkingLevel}>
+								<SelectTrigger className="w-full">
+									<SelectValue />
+								</SelectTrigger>
+								<SelectContent>
+									{OLLAMA_THINKING_LEVELS.map((level) => (
+										<SelectItem key={level} value={level}>
+											{OLLAMA_THINKING_LEVEL_LABELS[level]}
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+							<p className="text-xs mt-1 mb-0 text-description">
+								Higher levels let the model think for longer before answering, leaving less of the reply for the
+								answer itself.
+							</p>
+						</div>
+					)}
+				</div>
+			)}
+
 			{/* Show status message based on model availability */}
 			{ollamaModels.length === 0 && (
 				<p className="text-sm mt-1 text-description italic">
@@ -191,7 +284,9 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 			{showModelOptions && (
 				<>
 					<DebouncedTextField
-						initialValue={apiConfiguration?.requestTimeoutMs ? apiConfiguration.requestTimeoutMs.toString() : "300000"}
+						initialValue={
+							apiConfiguration?.requestTimeoutMs ? apiConfiguration.requestTimeoutMs.toString() : "300000"
+						}
 						onChange={(value) => {
 							// Convert to number, with validation
 							const numValue = Number.parseInt(value, 10)

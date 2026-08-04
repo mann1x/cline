@@ -144,8 +144,18 @@ type ReasoningEffort = NonNullable<CoreSessionConfig["reasoningEffort"]>
 type ProviderReasoningSettings = NonNullable<ProviderSettings["reasoning"]>
 type SessionReasoningConfig = Pick<CoreSessionConfig, "thinking" | "reasoningEffort">
 
+/**
+ * The efforts the SDK actually accepts, not a subset of them.
+ *
+ * `minimal` and `max` were missing here while the gateway parses the full
+ * `ReasoningEffortSchema`, so a provider UI offering either wrote a value this
+ * guard then dropped on the way to the session config -- the setting appeared
+ * to save and never reached the wire.
+ */
 function isReasoningEffort(value: unknown): value is ReasoningEffort {
-	return value === "low" || value === "medium" || value === "high" || value === "xhigh"
+	return (
+		value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "xhigh" || value === "max"
+	)
 }
 
 function hasStaleDisabledReasoningFields(reasoning: ProviderReasoningSettings | undefined): boolean {

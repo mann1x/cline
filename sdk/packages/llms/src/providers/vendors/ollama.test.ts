@@ -280,9 +280,15 @@ describe("buildOllamaStreamConfig", () => {
 		expect(config({ enabled: false }).reasoning).toBe("none");
 	});
 
-	it("expresses no preference when the request has none", () => {
-		expect(config(undefined).reasoning).toBeUndefined();
-		expect(config({}).reasoning).toBeUndefined();
+	it("names a level when the request says nothing about reasoning", () => {
+		// Repro for `think` never reaching the wire. An absent reasoning config
+		// on this provider means "never asked", not "off": read as off, a
+		// reasoning model runs with `think` unset, thinks into content anyway,
+		// and leaves a thinking budget no level to derive a cap from. Measured
+		// as a turn ending on the 32,000-token output limit at ~51k input, with
+		// `think` absent from every logged request body.
+		expect(config(undefined).reasoning).toBe(OLLAMA_DEFAULT_REASONING_EFFORT);
+		expect(config({}).reasoning).toBe(OLLAMA_DEFAULT_REASONING_EFFORT);
 	});
 
 	it("passes the shared settings through untouched", () => {

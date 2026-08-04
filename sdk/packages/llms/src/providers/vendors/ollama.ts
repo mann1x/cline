@@ -171,39 +171,48 @@ export async function createOllamaProviderModule(
 }
 
 /**
- * The effort a request stands for when it asks for reasoning without naming a
- * level.
+ * The effort a request stands for when it does not name one.
  *
- * `medium` rather than the strongest: turning reasoning on is a request for the
- * model to think, not for it to think as hard as it can. On Ollama an effort
- * level also bounds how much of the response the model may spend inside the
- * thinking block, so the middle of the scale is the reading that leaves room
- * for an answer.
+ * `medium` rather than the strongest: asking a model to think is not asking it
+ * to think as hard as it can. On Ollama an effort level also bounds how much of
+ * the response the model may spend inside the thinking block, so the middle of
+ * the scale is the reading that leaves room for an answer.
  */
 export const OLLAMA_DEFAULT_REASONING_EFFORT = "medium" as const;
 
 /**
- * Ollama's stream config: the shared one, plus a level for the case the AI
- * SDK's vocabulary cannot express.
+ * Ollama's stream config: the shared one, plus a level whenever the request did
+ * not settle on one.
  *
- * That vocabulary is a scale of efforts — `none`, `minimal`, `low`, `medium`,
- * `high`, `xhigh` — with no plain "on". `provider-default` is the nearest
- * thing, but it means "whatever the model was constructed with", and this
- * vendor constructs models with no reasoning setting precisely so reasoning
- * stays a per-request decision. A request that asks for reasoning and names no
- * level would otherwise reach Ollama with `think` unset, and get none.
+ * The AI SDK's vocabulary is a scale of efforts — `none`, `minimal`, `low`,
+ * `medium`, `high`, `xhigh` — with no plain "on". `provider-default` is the
+ * nearest thing, but it means "whatever the model was constructed with", and
+ * this vendor constructs models with no reasoning setting precisely so
+ * reasoning stays a per-request decision.
  *
- * Naming the level here keeps that decision provider-local. Ollama is the
- * provider whose wire format has a boolean `think`, so it is the provider that
- * has to say what a bare "on" means; nothing about it reaches the generic
- * factory.
+ * The level is supplied for an absent reasoning config as well as an enabled
+ * one, because on this provider those are the same situation. Nothing writes
+ * the field: the extension's Ollama settings are `provider`, `model`,
+ * `contextWindow` and `timeout`, and its settings UI has no reasoning control
+ * at all, so `reasoning` is not "off", it is "never asked". Treating that as
+ * off sends a reasoning model to Ollama with `think` unset, and a model that
+ * thinks anyway then does it into `content`, unbounded, with no level for a
+ * thinking budget to derive a cap from. Measured: a turn at ~51k input, 32,000
+ * output tokens available, ended on "Model reached the maximum output token
+ * limit before completing the turn" with `think` absent from the wire.
+ *
+ * An explicit `enabled: false` still means off — it reaches
+ * `buildAiSdkStreamConfig` as `"none"`, so `config.reasoning` is already set
+ * and this leaves it alone. Only the unset case is filled in, and only here:
+ * Ollama is the provider whose wire format has a boolean `think`, so it is the
+ * provider that has to say what silence means.
  */
 export function buildOllamaStreamConfig(
 	request: GatewayStreamRequest,
 	context: GatewayProviderContext,
 ): Partial<CallSettings> {
 	const config = buildAiSdkStreamConfig(request, context);
-	if (config.reasoning !== undefined || request.reasoning?.enabled !== true) {
+	if (config.reasoning !== undefined) {
 		return config;
 	}
 	return { ...config, reasoning: OLLAMA_DEFAULT_REASONING_EFFORT };
