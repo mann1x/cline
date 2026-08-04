@@ -77,6 +77,39 @@ export const ReasoningSettingsSchema = z.object({
 
 export type ReasoningSettings = z.infer<typeof ReasoningSettingsSchema>;
 
+/**
+ * Sampling parameters stored per provider.
+ *
+ * Every field is optional and an absent one is not a zero: it means the request
+ * will not mention that parameter, leaving whatever the model was built with in
+ * force. A local model carries a sampler in its Modelfile — often one measured
+ * against that quant — and a client that sent a complete set on every request
+ * would silently replace it.
+ *
+ * `repeatLastN`, `numPredict` and `numKeep` accept negative values because
+ * Ollama gives -1 a meaning there (whole context / unlimited), and
+ * `temperature` and `seed` accept zero because zero is a real setting.
+ */
+export const SamplingSettingsSchema = z.object({
+	temperature: z.number().nonnegative().optional(),
+	topK: z.number().int().nonnegative().optional(),
+	topP: z.number().nonnegative().optional(),
+	minP: z.number().nonnegative().optional(),
+	typicalP: z.number().nonnegative().optional(),
+	repeatLastN: z.number().int().optional(),
+	repeatPenalty: z.number().nonnegative().optional(),
+	presencePenalty: z.number().optional(),
+	frequencyPenalty: z.number().optional(),
+	seed: z.number().int().optional(),
+	numPredict: z.number().int().optional(),
+	numKeep: z.number().int().optional(),
+	stop: z.array(z.string()).optional(),
+	thinkBudget: z.string().optional(),
+	thinkBudgetMessage: z.string().optional(),
+});
+
+export type SamplingSettings = z.infer<typeof SamplingSettingsSchema>;
+
 export const AwsSettingsSchema = z.object({
 	accessKey: z.string().optional(),
 	secretKey: z.string().optional(),
@@ -152,6 +185,7 @@ export const ProviderSettingsSchema = z.object({
 	headers: z.record(z.string(), z.string()).optional(),
 	timeout: z.number().int().positive().optional(),
 	reasoning: ReasoningSettingsSchema.optional(),
+	sampling: SamplingSettingsSchema.optional(),
 	aws: AwsSettingsSchema.optional(),
 	gcp: GcpSettingsSchema.optional(),
 	azure: AzureSettingsSchema.optional(),
@@ -270,6 +304,7 @@ export function toProviderConfig(
 		thinking: settings.reasoning?.enabled,
 		reasoningEffort,
 		thinkingBudgetTokens: settings.reasoning?.budgetTokens,
+		sampling: settings.sampling,
 		region: settings.region ?? settings.aws?.region ?? settings.gcp?.region,
 		apiLine: settings.apiLine,
 		useCrossRegionInference: settings.aws?.useCrossRegionInference,

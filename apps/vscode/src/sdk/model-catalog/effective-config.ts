@@ -20,11 +20,70 @@ type ProviderSettingsLike = {
 	readonly gcp?: GcpProviderConfig
 	readonly contextWindow?: number
 	readonly reasoning?: ReasoningConfig
+	readonly sampling?: SamplingConfig
 	readonly auth?: AuthConfig
 	readonly extras?: ExtrasConfig
 }
 
 type ReasoningConfig = NonNullable<EffectiveProviderConfig["reasoning"]>
+type SamplingConfig = NonNullable<EffectiveProviderConfig["sampling"]>
+
+/** Sampling fields that are read as numbers, and the sign each one allows. */
+const SAMPLING_NUMBER_FIELDS = {
+	temperature: "non-negative",
+	topK: "non-negative",
+	topP: "non-negative",
+	minP: "non-negative",
+	typicalP: "non-negative",
+	repeatLastN: "any",
+	repeatPenalty: "non-negative",
+	presencePenalty: "any",
+	frequencyPenalty: "any",
+	seed: "any",
+	numPredict: "any",
+	numKeep: "any",
+} as const
+
+/**
+ * Read the stored sampling settings.
+ *
+ * Absent stays absent, field by field: an unset parameter is one the request
+ * will not mention, leaving the model's own value in force, and a zero is a
+ * real value for several of these (`temperature: 0`, `seed: 0`). `repeatLastN`,
+ * `numPredict` and `numKeep` accept negatives because Ollama gives -1 a meaning
+ * (whole context / unlimited).
+ */
+function readSampling(settings: Record<string, unknown>): SamplingConfig | undefined {
+	const sampling = settings.sampling
+	if (!isPlainRecord(sampling)) {
+		return undefined
+	}
+	const result: Record<string, unknown> = {}
+	for (const [field, sign] of Object.entries(SAMPLING_NUMBER_FIELDS)) {
+		const raw = sampling[field]
+		const parsed = typeof raw === "string" ? Number(raw) : raw
+		if (typeof parsed !== "number" || !Number.isFinite(parsed)) {
+			continue
+		}
+		if (sign === "non-negative" && parsed < 0) {
+			continue
+		}
+		result[field] = parsed
+	}
+	for (const field of ["thinkBudget", "thinkBudgetMessage"] as const) {
+		const raw = sampling[field]
+		if (typeof raw === "string" && raw !== "") {
+			result[field] = raw
+		}
+	}
+	if (Array.isArray(sampling.stop)) {
+		const stop = sampling.stop.filter((entry): entry is string => typeof entry === "string" && entry !== "")
+		if (stop.length > 0) {
+			result.stop = stop
+		}
+	}
+	return Object.keys(result).length > 0 ? (result as SamplingConfig) : undefined
+}
 
 /**
  * Read the stored reasoning settings. Absent stays absent: on providers whose
@@ -242,6 +301,7 @@ function readProviderSettings(providerId: ProviderId): ConfigParts {
 			gcp: readGcp(settings),
 			contextWindow: readPositiveInteger(settings.contextWindow),
 			reasoning: readReasoning(settings),
+			sampling: readSampling(settings),
 			auth: readAuth(settings),
 			extras: isPlainRecord(settings.extras) ? settings.extras : undefined,
 		} satisfies ProviderSettingsLike
@@ -425,6 +485,8 @@ export function buildEffectiveProviderConfig(providerId: ProviderId): EffectiveP
 	assignIfDefined(merged, "contextWindow", providerSettings.contextWindow ?? stateConfig.contextWindow)
 	// providers.json is the only writer of reasoning; there is no legacy key.
 	assignIfDefined(merged, "reasoning", providerSettings.reasoning)
+	// Same as reasoning: providers.json is the only writer.
+	assignIfDefined(merged, "sampling", providerSettings.sampling)
 	assignIfDefined(merged, "auth", stateConfig.auth ?? providerSettings.auth)
 	assignIfDefined(merged, "extras", mergeExtras(providerSettings.extras, stateConfig.extras))
 

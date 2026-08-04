@@ -18,7 +18,7 @@ import {
 	resolveProviderApiKeyFromSettings,
 	type StartSessionResult,
 } from "@cline/core"
-import type { ProviderApiLine, ModelInfo as SdkModelInfo } from "@cline/llms"
+import type { ProviderApiLine, ProviderSamplingOptions, ModelInfo as SdkModelInfo } from "@cline/llms"
 import {
 	DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS,
 	getGeneratedModelsForProvider,
@@ -643,6 +643,7 @@ export function resolveVertexProviderConfig(config: ApiConfiguration): Pick<Prov
 type OllamaProviderConfig = {
 	modelInfo?: { id: string; name: string; contextWindow: number }
 	timeoutMs?: number
+	sampling?: ProviderSamplingOptions
 }
 
 /**
@@ -665,6 +666,13 @@ export function resolveOllamaProviderConfig(config: ApiConfiguration, modelId: s
 	} catch {
 		Logger.warn("[SessionFactory] Failed to read Ollama settings from providers.json")
 	}
+	let sampling: ProviderSamplingOptions | undefined
+	try {
+		const stored = getProviderSettingsManager().getProviderSettings("ollama")?.sampling
+		sampling = stored && typeof stored === "object" ? (stored as ProviderSamplingOptions) : undefined
+	} catch {
+		Logger.warn("[SessionFactory] Failed to read Ollama sampling settings from providers.json")
+	}
 	const raw = config.ollamaApiOptionsCtxNum?.trim()
 	const parsed = raw ? Number(raw) : Number.NaN
 	const legacyContextWindow = Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined
@@ -672,6 +680,7 @@ export function resolveOllamaProviderConfig(config: ApiConfiguration, modelId: s
 	const timeoutMs = config.requestTimeoutMs
 	return {
 		...(typeof timeoutMs === "number" && timeoutMs > 0 ? { timeoutMs } : {}),
+		...(sampling ? { sampling } : {}),
 		...(modelId ? { modelInfo: { id: modelId, name: modelId, contextWindow } } : {}),
 	}
 }

@@ -48,6 +48,73 @@ const OLLAMA_THINKING_LEVEL_LABELS: Record<OllamaThinkingLevel, string> = {
 }
 
 /**
+ * The sampling parameters Ollama accepts on `/api/chat`, in the order its API
+ * docs list them.
+ *
+ * Every one is left blank by default, and blank means "not sent". That is the
+ * whole design of this section: a local model carries its sampler in the
+ * Modelfile, usually one that was measured against that quant, and a settings
+ * screen that shipped defaults would quietly overwrite it the first time it was
+ * opened. Only fields the user types are transmitted.
+ */
+const OLLAMA_SAMPLING_FIELDS = [
+	{
+		key: "temperature",
+		label: "temperature",
+		kind: "number",
+		hint: "Randomness of the next-token choice. Lower is more deterministic.",
+	},
+	{ key: "topK", label: "top_k", kind: "integer", hint: "Sample from the K most likely tokens." },
+	{ key: "topP", label: "top_p", kind: "number", hint: "Sample from the smallest set whose probabilities sum to P." },
+	{ key: "minP", label: "min_p", kind: "number", hint: "Drop tokens below this fraction of the most likely one." },
+	{ key: "typicalP", label: "typical_p", kind: "number", hint: "Locally typical sampling." },
+	{
+		key: "repeatLastN",
+		label: "repeat_last_n",
+		kind: "integer",
+		hint: "How far back the repeat penalty looks. 0 disables it, -1 uses the whole context.",
+	},
+	{ key: "repeatPenalty", label: "repeat_penalty", kind: "number", hint: "Penalty applied within that window." },
+	{
+		key: "presencePenalty",
+		label: "presence_penalty",
+		kind: "number",
+		hint: "Flat penalty for tokens already used, over the whole context.",
+	},
+	{
+		key: "frequencyPenalty",
+		label: "frequency_penalty",
+		kind: "number",
+		hint: "Penalty proportional to how often a token was used, over the whole context.",
+	},
+	{ key: "seed", label: "seed", kind: "integer", hint: "Fixes sampling for reproducible runs." },
+	{
+		key: "numPredict",
+		label: "num_predict",
+		kind: "integer",
+		hint: "Maximum tokens to generate. -1 is unlimited.",
+	},
+	{ key: "numKeep", label: "num_keep", kind: "integer", hint: "Tokens kept from the prompt when the context is trimmed." },
+] as const
+
+type OllamaSamplingFieldKey = (typeof OLLAMA_SAMPLING_FIELDS)[number]["key"]
+
+/** Sampling values as the panel edits them: raw text, so a half-typed number survives a render. */
+type SamplingDraft = Partial<Record<OllamaSamplingFieldKey | "stop" | "thinkBudget" | "thinkBudgetMessage", string>>
+
+function parseSamplingNumber(raw: string | undefined, kind: "number" | "integer"): number | undefined {
+	const trimmed = raw?.trim()
+	if (!trimmed) {
+		return undefined
+	}
+	const parsed = Number(trimmed)
+	if (!Number.isFinite(parsed)) {
+		return undefined
+	}
+	return kind === "integer" ? Math.trunc(parsed) : parsed
+}
+
+/**
  * The Ollama provider configuration component
  */
 export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: OllamaProviderProps) => {
@@ -126,6 +193,93 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 		},
 		[write],
 	)
+
+	// Sampling is edited as text and committed on blur: these are numbers a user
+	// types digit by digit, and writing on every keystroke would persist "0." and
+	// "1e" as settings.
+	const [samplingExpanded, setSamplingExpanded] = useState(false)
+	const [samplingDraft, setSamplingDraft] = useState<SamplingDraft>({})
+
+	const storedSampling = config?.sampling
+	// The stored values are the source of truth; the draft only holds what is
+	// being typed right now, so a write from anywhere else still shows up.
+	const samplingValue = useCallback(
+		(key: OllamaSamplingFieldKey | "stop" | "thinkBudget" | "thinkBudgetMessage"): string => {
+			const draft = samplingDraft[key]
+			if (draft !== undefined) {
+				return draft
+			}
+			if (!storedSampling) {
+				return ""
+			}
+			if (key === "stop") {
+				return (storedSampling.stop ?? []).join("\n")
+			}
+			const stored = storedSampling[key as keyof typeof storedSampling]
+			return stored === undefined || stored === null ? "" : String(stored)
+		},
+		[samplingDraft, storedSampling],
+	)
+
+	const commitSampling = useCallback(
+		(draft: SamplingDraft) => {
+			const next: Record<string, unknown> = {}
+			for (const field of OLLAMA_SAMPLING_FIELDS) {
+				const raw =
+					draft[field.key] ?? (storedSampling?.[field.key] !== undefined ? String(storedSampling[field.key]) : "")
+				const parsed = parseSamplingNumber(raw, field.kind)
+				if (parsed !== undefined) {
+					next[field.key] = parsed
+				}
+			}
+			const stopRaw = draft.stop ?? (storedSampling?.stop ?? []).join("\n")
+			const stop = stopRaw
+				.split("\n")
+				.map((entry) => entry.trim())
+				.filter((entry) => entry !== "")
+			if (stop.length > 0) {
+				next.stop = stop
+			}
+			for (const key of ["thinkBudget", "thinkBudgetMessage"] as const) {
+				const raw = (draft[key] ?? storedSampling?.[key] ?? "").trim()
+				if (raw !== "") {
+					next[key] = raw
+				}
+			}
+			// An empty object clears the section — the patch layer reads "no
+			// parameters set" as a request to stop sending any.
+			void write({ sampling: next }).catch((error) => console.error("Failed to update Ollama sampling:", error))
+		},
+		[write, storedSampling],
+	)
+
+	const handleSamplingChange = useCallback(
+		(key: OllamaSamplingFieldKey | "stop" | "thinkBudget" | "thinkBudgetMessage", value: string) => {
+			setSamplingDraft((current) => ({ ...current, [key]: value }))
+		},
+		[],
+	)
+
+	const handleSamplingCommit = useCallback(() => {
+		setSamplingDraft((current) => {
+			commitSampling(current)
+			return {}
+		})
+	}, [commitSampling])
+
+	const handleSamplingReset = useCallback(() => {
+		setSamplingDraft({})
+		void write({ sampling: null }).catch((error) => console.error("Failed to clear Ollama sampling:", error))
+	}, [write])
+
+	const samplingCount = useMemo(() => {
+		if (!storedSampling) {
+			return 0
+		}
+		return Object.entries(storedSampling).filter(([, value]) =>
+			Array.isArray(value) ? value.length > 0 : value !== undefined && value !== null && value !== "",
+		).length
+	}, [storedSampling])
 
 	// Fetch ollama models on mount and whenever the base URL changes. The
 	// picker also refetches on focus — do NOT poll on an interval: the base
@@ -228,6 +382,109 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 								Higher levels let the model think for longer before answering, leaving less of the reply for the
 								answer itself.
 							</p>
+						</div>
+					)}
+				</div>
+			)}
+
+			{/* Sampling. Collapsed by default: these are the model's own knobs and
+			    most sessions never touch them, but when a model misbehaves they
+			    are the only thing that changes its behaviour. */}
+			{config !== undefined && (
+				<div className="flex flex-col gap-1">
+					<button
+						aria-expanded={samplingExpanded}
+						className="flex items-center gap-1 bg-transparent border-0 p-0 cursor-pointer text-left text-foreground"
+						onClick={() => setSamplingExpanded((expanded) => !expanded)}
+						type="button">
+						<span className={`codicon codicon-chevron-${samplingExpanded ? "down" : "right"} text-xs`} />
+						<span className="text-xs font-medium uppercase tracking-wider">Advanced</span>
+						{samplingCount > 0 && (
+							<span className="text-xs text-description">
+								({samplingCount} sampling {samplingCount === 1 ? "parameter" : "parameters"} set)
+							</span>
+						)}
+					</button>
+					{samplingExpanded && (
+						<div className="flex flex-col gap-2 mt-1">
+							<p className="text-xs mt-0 mb-1 text-description">
+								Sampling parameters sent with every request. Leave a field empty to not send it at all, which
+								leaves whatever the model was built with in force — a Modelfile's own values are not overwritten
+								by an empty field here. Anything you do set overrides the model's value for this provider.
+							</p>
+							<div className="grid grid-cols-2 gap-2">
+								{OLLAMA_SAMPLING_FIELDS.map((field) => (
+									<div key={field.key}>
+										<DebouncedTextField
+											className="w-full"
+											initialValue={samplingValue(field.key)}
+											onChange={(value: string) => {
+												handleSamplingChange(field.key, value)
+												handleSamplingCommit()
+											}}
+											placeholder="model default">
+											<span className="font-medium text-xs">{field.label}</span>
+										</DebouncedTextField>
+										<p className="text-xs mt-0 mb-0 text-description">{field.hint}</p>
+									</div>
+								))}
+							</div>
+							<div>
+								<DebouncedTextField
+									className="w-full"
+									initialValue={samplingValue("stop")}
+									onChange={(value: string) => {
+										handleSamplingChange("stop", value)
+										handleSamplingCommit()
+									}}
+									placeholder="one sequence per line">
+									<span className="font-medium text-xs">stop</span>
+								</DebouncedTextField>
+								<p className="text-xs mt-0 mb-0 text-description">Sequences that end generation, one per line.</p>
+							</div>
+							<div>
+								<DebouncedTextField
+									className="w-full"
+									initialValue={samplingValue("thinkBudget")}
+									onChange={(value: string) => {
+										handleSamplingChange("thinkBudget", value)
+										handleSamplingCommit()
+									}}
+									placeholder="model default">
+									<span className="font-medium text-xs">think_budget</span>
+								</DebouncedTextField>
+								<p className="text-xs mt-0 mb-0 text-description">
+									Caps how many tokens the model may spend inside a thinking block. A token count, or an effort
+									level (minimal / low / medium / high / max). Overrides the model's own PARAMETER.
+								</p>
+							</div>
+							<div>
+								<DebouncedTextField
+									className="w-full"
+									initialValue={samplingValue("thinkBudgetMessage")}
+									onChange={(value: string) => {
+										handleSamplingChange("thinkBudgetMessage", value)
+										handleSamplingCommit()
+									}}
+									placeholder="model default">
+									<span className="font-medium text-xs">think_budget_message</span>
+								</DebouncedTextField>
+								<p className="text-xs mt-0 mb-0 text-description">
+									Written into the thinking block just before the closing tag is forced, so the model reads that
+									it has to answer now rather than being cut off with no explanation.
+								</p>
+							</div>
+							{samplingCount > 0 && (
+								<VSCodeLink
+									className="text-xs self-start"
+									href="#"
+									onClick={(event) => {
+										event.preventDefault()
+										handleSamplingReset()
+									}}>
+									Clear all sampling parameters
+								</VSCodeLink>
+							)}
 						</div>
 					)}
 				</div>

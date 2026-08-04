@@ -4,6 +4,7 @@ import type {
 } from "@cline/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	buildOllamaSamplingOptions,
 	buildOllamaStreamConfig,
 	createOllamaProviderModule,
 	normalizeOllamaBaseUrl,
@@ -246,6 +247,71 @@ function context(model: Record<string, unknown> = {}): GatewayProviderContext {
 		},
 	} as unknown as GatewayProviderContext;
 }
+
+describe("buildOllamaSamplingOptions", () => {
+	it("maps every parameter onto its Ollama wire name", () => {
+		expect(
+			buildOllamaSamplingOptions({
+				temperature: 0.9,
+				topK: 64,
+				topP: 0.95,
+				minP: 0.05,
+				typicalP: 1,
+				repeatLastN: 1024,
+				repeatPenalty: 1.05,
+				presencePenalty: 0.1,
+				frequencyPenalty: 0.2,
+				seed: 7,
+				numPredict: -1,
+				numKeep: 24,
+				stop: ["</done>"],
+				thinkBudget: "8192",
+				thinkBudgetMessage: "answer now",
+			}),
+		).toEqual({
+			temperature: 0.9,
+			top_k: 64,
+			top_p: 0.95,
+			min_p: 0.05,
+			typical_p: 1,
+			repeat_last_n: 1024,
+			repeat_penalty: 1.05,
+			presence_penalty: 0.1,
+			frequency_penalty: 0.2,
+			seed: 7,
+			num_predict: -1,
+			num_keep: 24,
+			stop: ["</done>"],
+			think_budget: "8192",
+			think_budget_message: "answer now",
+		});
+	});
+
+	it("sends nothing for parameters the user did not set", () => {
+		// The model's own Modelfile is the default, and it is usually one that
+		// was measured. An unset field must not reach the wire as a zero.
+		expect(buildOllamaSamplingOptions(undefined)).toEqual({});
+		expect(buildOllamaSamplingOptions({})).toEqual({});
+		expect(buildOllamaSamplingOptions({ stop: [], thinkBudget: "  " })).toEqual(
+			{},
+		);
+	});
+
+	it("keeps zero, which is a real setting", () => {
+		expect(
+			buildOllamaSamplingOptions({ temperature: 0, seed: 0, repeatLastN: 0 }),
+		).toEqual({ temperature: 0, seed: 0, repeat_last_n: 0 });
+	});
+
+	it("drops values that are not finite", () => {
+		expect(
+			buildOllamaSamplingOptions({
+				temperature: Number.NaN,
+				topP: Number.POSITIVE_INFINITY,
+			}),
+		).toEqual({});
+	});
+});
 
 describe("buildOllamaStreamConfig", () => {
 	const context = {} as never;

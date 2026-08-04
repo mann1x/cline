@@ -591,6 +591,39 @@ function writeProviderSettingsFields(providerId: ProviderId, patch: ProviderConf
 		}
 	}
 
+	// Sampling is written whole rather than merged field by field: the settings
+	// UI owns the section and always sends the complete state it is showing, and
+	// a merge would make clearing one parameter impossible.
+	if ("sampling" in patch) {
+		const samplingPatch = patch.sampling
+		if (samplingPatch === null || samplingPatch === undefined) {
+			delete (next as Record<string, unknown>).sampling
+		} else {
+			const stored: Record<string, unknown> = {}
+			for (const [key, value] of Object.entries(samplingPatch)) {
+				if (value === undefined || value === null) {
+					continue
+				}
+				if (Array.isArray(value)) {
+					const entries = value.filter((entry) => typeof entry === "string" && entry !== "")
+					if (entries.length > 0) {
+						stored[key] = entries
+					}
+					continue
+				}
+				if (typeof value === "string" && value === "") {
+					continue
+				}
+				stored[key] = value
+			}
+			if (Object.keys(stored).length > 0) {
+				;(next as Record<string, unknown>).sampling = stored
+			} else {
+				delete (next as Record<string, unknown>).sampling
+			}
+		}
+	}
+
 	// Handle reasoning patch separately — maps to ProviderSettings.reasoning
 	if ("reasoning" in patch) {
 		const reasoningPatch = patch.reasoning

@@ -50,6 +50,7 @@ export type {
 	ProviderCapability,
 	ProviderConfig,
 	ProviderId,
+	ProviderSamplingOptions,
 	RedactedThinkingContent,
 	TextContent,
 	ThinkingContent,

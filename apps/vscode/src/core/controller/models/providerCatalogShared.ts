@@ -234,6 +234,7 @@ export function toRedactedProviderConfigResponse(
 					budgetTokens: config.reasoning.budgetTokens,
 				}
 			: undefined,
+		sampling: config.sampling ? { ...config.sampling, stop: [...(config.sampling.stop ?? [])] } : undefined,
 	})
 }
 
@@ -264,6 +265,19 @@ export function toProviderConfigPatch(protoPatch: WriteProviderConfigPatch | und
 						refreshToken: protoPatch.refreshToken,
 						accountId: protoPatch.accountId,
 					},
+				}
+			: {}),
+		// An explicitly empty sampling message clears every parameter; the UI
+		// sends one when the user resets the section.
+		...(protoPatch.sampling !== undefined
+			? {
+					sampling: Object.keys(protoPatch.sampling).some(
+						(key) =>
+							protoPatch.sampling?.[key as keyof typeof protoPatch.sampling] !== undefined &&
+							(key !== "stop" || (protoPatch.sampling.stop?.length ?? 0) > 0),
+					)
+						? { ...protoPatch.sampling, stop: protoPatch.sampling.stop ?? undefined }
+						: null,
 				}
 			: {}),
 		...(protoPatch.reasoning

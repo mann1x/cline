@@ -250,6 +250,46 @@ export interface CloudConfig {
 }
 
 /**
+ * Sampling parameters passed through to a provider that exposes them.
+ *
+ * Every field is optional and nothing is defaulted: an unset field is one the
+ * request does not mention, which leaves whatever the model was built with in
+ * force. That matters for local models, where the Modelfile is where a
+ * validated sampler lives and a client that always sends a full set would
+ * silently overwrite it.
+ *
+ * The names are Ollama's own (`/api/chat` `options`), because this exists to
+ * carry them and inventing neutral synonyms would only make the mapping
+ * lossy. Providers that do not understand a field ignore the whole bag.
+ */
+export interface ProviderSamplingOptions {
+	temperature?: number;
+	topK?: number;
+	topP?: number;
+	minP?: number;
+	typicalP?: number;
+	repeatLastN?: number;
+	repeatPenalty?: number;
+	presencePenalty?: number;
+	frequencyPenalty?: number;
+	seed?: number;
+	numPredict?: number;
+	numKeep?: number;
+	stop?: string[];
+	/**
+	 * Bound on how many tokens the model may spend inside a thinking block,
+	 * as a token count or an effort level. Ollama's `think_budget`.
+	 */
+	thinkBudget?: string;
+	/**
+	 * Text written into the thinking block just before the closing tag is
+	 * forced, so the model reads that it has to answer now. Ollama's
+	 * `think_budget_message`.
+	 */
+	thinkBudgetMessage?: string;
+}
+
+/**
  * Provider-specific options that don't fit other categories
  */
 export interface ProviderOptions {
@@ -257,6 +297,8 @@ export interface ProviderOptions {
 	openRouterProviderSorting?: string;
 	/** Runtime model catalog refresh configuration */
 	modelCatalog?: ModelCatalogConfig;
+	/** Sampling parameters for providers that accept them per request. */
+	sampling?: ProviderSamplingOptions;
 }
 
 /**

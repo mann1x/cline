@@ -31,6 +31,7 @@ export {
 	type ProviderDefaultsConfig,
 	type ProviderId,
 	type ProviderOptions,
+	type ProviderSamplingOptions,
 	type ProviderSpecificConfig,
 	type ReasoningConfig,
 	type RegionConfig,

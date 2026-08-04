@@ -16,6 +16,7 @@ export {
 	type ProviderCapability,
 	type ProviderConfig,
 	type ProviderId,
+	type ProviderSamplingOptions,
 } from "./providers/types";
 
 import {

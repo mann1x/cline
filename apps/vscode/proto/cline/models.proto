@@ -259,6 +259,9 @@ message ProviderConfigResponse {
   // Provider-level reasoning settings, so a settings UI can show the state it
   // is about to write. Carries no secret, so it is returned unredacted.
   optional ProviderReasoningPatch reasoning = 15;
+  // Provider-level sampling parameters, so a settings UI can show the state it
+  // is about to write. Carries no secret, so it is returned unredacted.
+  optional ProviderSamplingPatch sampling = 16;
 }
 
 message CommittedModelSelection {
@@ -272,6 +275,29 @@ message ProviderReasoningPatch {
   optional bool enabled = 1;
   optional string effort = 2; // "none" | "low" | "medium" | "high" | "xhigh"
   optional int32 budget_tokens = 3;
+}
+
+// Sampling parameters for providers that accept them per request (Ollama's
+// `/api/chat` options). Every field is optional and an absent one is not a
+// zero: it means the request does not mention that parameter, leaving whatever
+// the model was built with in force.
+message ProviderSamplingPatch {
+  optional double temperature = 1;
+  optional int32 top_k = 2;
+  optional double top_p = 3;
+  optional double min_p = 4;
+  optional double typical_p = 5;
+  optional int32 repeat_last_n = 6;
+  optional double repeat_penalty = 7;
+  optional double presence_penalty = 8;
+  optional double frequency_penalty = 9;
+  optional int32 seed = 10;
+  optional int32 num_predict = 11;
+  optional int32 num_keep = 12;
+  repeated string stop = 13;
+  // Token count or effort level, as typed.
+  optional string think_budget = 14;
+  optional string think_budget_message = 15;
 }
 
 message WriteProviderConfigPatch {
@@ -289,6 +315,8 @@ message WriteProviderConfigPatch {
   optional GcpProviderConfig gcp = 12;
   // Provider-level context window; 0 clears the setting.
   optional int32 context_window = 13;
+  // Sampling parameters; an explicitly empty message clears them.
+  optional ProviderSamplingPatch sampling = 14;
 }
 
 message WriteProviderConfigRequest {

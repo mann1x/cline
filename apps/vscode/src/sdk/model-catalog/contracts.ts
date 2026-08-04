@@ -89,6 +89,34 @@ export interface GcpProviderConfig {
 	readonly region?: string
 }
 
+/**
+ * Sampling parameters for providers that accept them per request.
+ *
+ * Field names are Ollama's own (`/api/chat` options), spelled camelCase. Every
+ * field is optional and an absent one is not a zero: it means the request does
+ * not mention that parameter, which leaves whatever the model was built with in
+ * force. Local models carry a sampler in the Modelfile — often one that was
+ * measured against that quant — and a client that sends a complete set on every
+ * request would silently replace it.
+ */
+export interface ProviderSamplingSettings {
+	readonly temperature?: number
+	readonly topK?: number
+	readonly topP?: number
+	readonly minP?: number
+	readonly typicalP?: number
+	readonly repeatLastN?: number
+	readonly repeatPenalty?: number
+	readonly presencePenalty?: number
+	readonly frequencyPenalty?: number
+	readonly seed?: number
+	readonly numPredict?: number
+	readonly numKeep?: number
+	readonly stop?: readonly string[]
+	readonly thinkBudget?: string
+	readonly thinkBudgetMessage?: string
+}
+
 export interface EffectiveProviderConfig {
 	readonly providerId: ProviderId
 	readonly apiKey?: string
@@ -115,6 +143,12 @@ export interface EffectiveProviderConfig {
 		readonly effort?: string
 		readonly budgetTokens?: number
 	}
+	/**
+	 * Provider-level sampling parameters (providers.json `sampling`). Read as
+	 * well as written, for the same reason as `reasoning`: a settings UI has to
+	 * show what it is about to change.
+	 */
+	readonly sampling?: ProviderSamplingSettings
 	/**
 	 * OAuth-style auth bundle (e.g. cline provider's WorkOS token).
 	 * Compatible with `apiKey`; some providers populate both.
@@ -164,6 +198,7 @@ export interface ProviderConfigPatch {
 		readonly accountId?: string
 	} | null
 	readonly reasoning?: ProviderReasoningPatch | null
+	readonly sampling?: ProviderSamplingSettings | null
 	readonly extras?: Readonly<Record<string, unknown>> | null
 }
 

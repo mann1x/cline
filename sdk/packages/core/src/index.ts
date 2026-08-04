@@ -917,6 +917,7 @@ export type {
 	ProviderProtocol,
 	ProviderSettings,
 	ReasoningSettings,
+	SamplingSettings,
 	SapSettings,
 	ToProviderConfigOptions,
 } from "./services/llms/provider-settings";
@@ -938,6 +939,7 @@ export {
 	ProviderSettingsSchema,
 	parseSettings,
 	ReasoningSettingsSchema,
+	SamplingSettingsSchema,
 	SapSettingsSchema,
 	safeCreateProviderConfig,
 	safeParseSettings,

@@ -19,6 +19,7 @@ import { type CallSettings, wrapLanguageModel } from "ai";
 import { createOllama } from "ai-sdk-ollama";
 import { buildAiSdkStreamConfig } from "../ai-sdk";
 import { OLLAMA_DEFAULT_CONTEXT_WINDOW } from "../builtins";
+import type { ProviderSamplingOptions } from "../config";
 import { ensureFetch, resolveApiKey } from "../http";
 import { createRetryEmptyResponseMiddleware } from "../middleware/retry-empty-response";
 import { splitToolImagesMiddleware } from "../middleware/split-tool-images";
@@ -131,6 +132,82 @@ export function withOllamaResponseTimeout(
 	}) as typeof fetch;
 }
 
+/**
+ * Ollama's wire names for the sampling parameters, in the order the API docs
+ * list them.
+ *
+ * Spelled out rather than derived from the camelCase keys: `top_k` is not what
+ * a naive transform produces from `topK`, and a settings screen that silently
+ * sends `topk` looks exactly like one whose values do nothing.
+ */
+const OLLAMA_SAMPLING_WIRE_NAMES = {
+	temperature: "temperature",
+	topK: "top_k",
+	topP: "top_p",
+	minP: "min_p",
+	typicalP: "typical_p",
+	repeatLastN: "repeat_last_n",
+	repeatPenalty: "repeat_penalty",
+	presencePenalty: "presence_penalty",
+	frequencyPenalty: "frequency_penalty",
+	seed: "seed",
+	numPredict: "num_predict",
+	numKeep: "num_keep",
+	stop: "stop",
+	thinkBudget: "think_budget",
+	thinkBudgetMessage: "think_budget_message",
+} as const satisfies Record<keyof ProviderSamplingOptions, string>;
+
+/**
+ * Translate configured sampling parameters onto the wire.
+ *
+ * Only fields the user actually set are sent. An unset field is not a zero: a
+ * local model carries a sampler in its Modelfile — often one that was tuned and
+ * measured against that quant — and a client that sends a complete set on every
+ * request silently replaces it. An empty `stop` list is dropped for the same
+ * reason.
+ */
+export function buildOllamaSamplingOptions(
+	sampling: ProviderSamplingOptions | undefined,
+): Record<string, unknown> {
+	if (!sampling) {
+		return {};
+	}
+	const options: Record<string, unknown> = {};
+	for (const [key, wireName] of Object.entries(OLLAMA_SAMPLING_WIRE_NAMES)) {
+		const value = sampling[key as keyof ProviderSamplingOptions];
+		if (value === undefined || value === null) {
+			continue;
+		}
+		if (typeof value === "number" && !Number.isFinite(value)) {
+			continue;
+		}
+		if (typeof value === "string" && value.trim() === "") {
+			continue;
+		}
+		if (Array.isArray(value)) {
+			const entries = value.filter((entry) => entry.trim() !== "");
+			if (entries.length === 0) {
+				continue;
+			}
+			options[wireName] = entries;
+			continue;
+		}
+		options[wireName] = value;
+	}
+	return options;
+}
+
+/** Read the sampling parameters carried on the resolved provider config. */
+export function readOllamaSamplingOptions(
+	config: GatewayResolvedProviderConfig,
+): ProviderSamplingOptions | undefined {
+	const sampling = config.options?.sampling;
+	return sampling && typeof sampling === "object"
+		? (sampling as ProviderSamplingOptions)
+		: undefined;
+}
+
 export async function createOllamaProviderModule(
 	config: GatewayResolvedProviderConfig,
 	context: GatewayProviderContext,
@@ -150,6 +227,14 @@ export async function createOllamaProviderModule(
 		),
 	});
 	const numCtx = readOllamaNumCtx(context);
+	// Model-level options are merged last by `ai-sdk-ollama`, after the ones it
+	// derives from the shared call settings, so a value set here is the one that
+	// reaches the server. That is the intent: these are the provider's own
+	// controls, and a user who sets `temperature` on the Ollama panel means that
+	// temperature, not the agent's generic default.
+	const samplingOptions = buildOllamaSamplingOptions(
+		readOllamaSamplingOptions(config),
+	);
 	// Retry empty responses (a common local-backend glitch that otherwise
 	// hard-fails the task). Outermost so each retry re-runs the whole request.
 	// `splitToolImagesMiddleware` is inner, for the same reason as the
@@ -162,7 +247,7 @@ export async function createOllamaProviderModule(
 		model: (modelId) =>
 			wrapLanguageModel({
 				model: provider(modelId, {
-					options: { num_ctx: numCtx },
+					options: { num_ctx: numCtx, ...samplingOptions },
 				}) as LanguageModelV4,
 				middleware: [retryEmptyResponseMiddleware, splitToolImagesMiddleware],
 			}),
