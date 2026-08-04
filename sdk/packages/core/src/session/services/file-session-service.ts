@@ -160,6 +160,7 @@ class FileSessionPersistenceAdapter implements SessionPersistenceAdapter {
 				: existing.statusLock;
 		const next: SessionRow = {
 			...existing,
+			pid: input.pid ?? existing.pid,
 			status: input.status ?? existing.status,
 			endedAt:
 				input.endedAt !== undefined

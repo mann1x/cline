@@ -23,6 +23,7 @@ import {
 	isNonTerminalSessionStatus,
 	type SessionStatus,
 	type TerminalSessionStatus,
+	withoutSessionTerminalMarkers,
 } from "../../types/common";
 import type {
 	PersistedSessionUpdateInput,
@@ -178,16 +179,43 @@ export class UnifiedSessionPersistenceService {
 		return { manifestPath, messagesPath, compactionPath, manifest };
 	}
 
+	/**
+	 * Move a session to `status`, and — when that status means the session is
+	 * live — record the process it is live in.
+	 *
+	 * Only the process actually running a session moves it to a non-terminal
+	 * status, so that write is the moment its ownership is known. Recording it
+	 * matters because the row keeps whichever pid created it, and a resumed
+	 * session runs in a different process than the one that opened it: after a
+	 * host restart, the reconciler tested a pid belonging to the dead host,
+	 * concluded the live session had failed, and re-marked it on every
+	 * `listSessions` scan. The task then offered "Resume" forever — for a
+	 * session that had in fact completed a dozen turns since — because the
+	 * resume affordance is chosen from exactly this status.
+	 *
+	 * The same write clears the reconciler's death certificate from the
+	 * metadata, so a session that turned out to be alive does not keep carrying
+	 * the record of having been declared dead.
+	 */
 	async updateSessionStatus(
 		sessionId: string,
 		status: SessionStatus,
 		exitCode?: number | null,
+		pid?: number,
 	): Promise<{ updated: boolean; endedAt?: string }> {
 		let endedAt: string | undefined;
+		const claimsOwnership =
+			isNonTerminalSessionStatus(status) &&
+			typeof pid === "number" &&
+			Number.isFinite(pid) &&
+			pid > 0;
 		const result = await withOccRetry(
 			() => this.adapter.getSession(sessionId),
 			async (row) => {
 				endedAt = isNonTerminalSessionStatus(status) ? undefined : nowIso();
+				const metadata = claimsOwnership
+					? withoutSessionTerminalMarkers(row.metadata)
+					: undefined;
 				return this.adapter.updateSession({
 					sessionId,
 					status,
@@ -197,6 +225,10 @@ export class UnifiedSessionPersistenceService {
 						: typeof exitCode === "number"
 							? exitCode
 							: null,
+					...(claimsOwnership && row.pid !== pid ? { pid } : {}),
+					...(metadata !== undefined && metadata !== row.metadata
+						? { metadata }
+						: {}),
 					expectedStatusLock: row.statusLock,
 				});
 			},

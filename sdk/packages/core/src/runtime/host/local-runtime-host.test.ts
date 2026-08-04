@@ -912,18 +912,21 @@ describe("LocalRuntimeHost", () => {
 			sessionId,
 			"pending",
 			null,
+			process.pid,
 		);
 		expect(updateSessionStatus).toHaveBeenNthCalledWith(
 			2,
 			sessionId,
 			"running",
 			null,
+			process.pid,
 		);
 		expect(updateSessionStatus).toHaveBeenNthCalledWith(
 			3,
 			sessionId,
 			"idle",
 			null,
+			process.pid,
 		);
 		await expect(manager.getSession(sessionId)).resolves.toMatchObject({
 			sessionId,
@@ -1173,6 +1176,7 @@ describe("LocalRuntimeHost", () => {
 			sessionId,
 			"completed",
 			0,
+			process.pid,
 		);
 		await expect(manager.getSession(sessionId)).resolves.toMatchObject({
 			sessionId,
@@ -1338,6 +1342,7 @@ describe("LocalRuntimeHost", () => {
 			sessionId,
 			"idle",
 			null,
+			process.pid,
 		);
 		await expect(manager.getSession(sessionId)).resolves.toMatchObject({
 			sessionId,
@@ -1574,7 +1579,12 @@ describe("LocalRuntimeHost", () => {
 		expect(run).toHaveBeenCalledTimes(1);
 		expect(continueFn).not.toHaveBeenCalled();
 		expect(persistSessionMessages).toHaveBeenCalledTimes(1);
-		expect(updateSessionStatus).toHaveBeenCalledWith(sessionId, "completed", 0);
+		expect(updateSessionStatus).toHaveBeenCalledWith(
+			sessionId,
+			"completed",
+			0,
+			process.pid,
+		);
 		expect(writeSessionManifest).toHaveBeenCalledTimes(1);
 		expect(shutdown).toHaveBeenCalledTimes(1);
 	});
@@ -1783,7 +1793,12 @@ describe("LocalRuntimeHost", () => {
 		);
 
 		expect(started.result?.finishReason).toBe("completed");
-		expect(updateSessionStatus).toHaveBeenCalledWith(sessionId, "completed", 0);
+		expect(updateSessionStatus).toHaveBeenCalledWith(
+			sessionId,
+			"completed",
+			0,
+			process.pid,
+		);
 		// `SessionRuntime.shutdown(reason?, timeoutMs?)` forwards the
 		// reason string into the `session_shutdown` hook payload, so
 		// host-level hook-file handlers can route on it (e.g.
@@ -2854,18 +2869,21 @@ describe("LocalRuntimeHost", () => {
 			sessionId,
 			"idle",
 			null,
+			process.pid,
 		);
 		expect(sessionService.updateSessionStatus).toHaveBeenNthCalledWith(
 			2,
 			sessionId,
 			"running",
 			null,
+			process.pid,
 		);
 		expect(sessionService.updateSessionStatus).toHaveBeenNthCalledWith(
 			3,
 			sessionId,
 			"idle",
 			null,
+			process.pid,
 		);
 		expect(events).not.toContainEqual(
 			expect.objectContaining({
@@ -3084,6 +3102,7 @@ describe("LocalRuntimeHost", () => {
 			sessionId,
 			"failed",
 			1,
+			process.pid,
 		);
 	});
 
@@ -3583,12 +3602,14 @@ describe("LocalRuntimeHost", () => {
 			sessionId,
 			"running",
 			null,
+			process.pid,
 		);
 		expect(updateSessionStatus).toHaveBeenNthCalledWith(
 			2,
 			sessionId,
 			"idle",
 			null,
+			process.pid,
 		);
 		expect(updateSessionStatus).toHaveBeenCalledTimes(2);
 		const persistedMetadata = updateSession.mock.calls[0]?.[0]
@@ -4379,6 +4400,7 @@ describe("LocalRuntimeHost", () => {
 			sessionId,
 			"failed",
 			1,
+			process.pid,
 		);
 		expect(agentShutdown).toHaveBeenCalledTimes(1);
 		expect(runtimeShutdown).toHaveBeenCalledTimes(1);
@@ -4443,6 +4465,7 @@ describe("LocalRuntimeHost", () => {
 			sessionId,
 			"failed",
 			1,
+			process.pid,
 		);
 	});
 
@@ -5676,6 +5699,7 @@ describe("LocalRuntimeHost", () => {
 			sessionId,
 			"completed",
 			0,
+			process.pid,
 		);
 	});
 

@@ -153,6 +153,10 @@ class LocalSessionPersistenceAdapter implements SessionPersistenceAdapter {
 			fields.push("exit_code = ?");
 			params.push(input.exitCode);
 		}
+		if (input.pid !== undefined) {
+			fields.push("pid = ?");
+			params.push(input.pid);
+		}
 		if (input.prompt !== undefined) {
 			fields.push("prompt = ?");
 			params.push(input.prompt ?? null);

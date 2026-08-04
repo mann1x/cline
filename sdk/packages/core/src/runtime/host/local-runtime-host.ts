@@ -82,6 +82,7 @@ import {
 	isNonTerminalSessionStatus,
 	SessionSource,
 	type SessionStatus,
+	withoutSessionTerminalMarkers,
 } from "../../types/common";
 import type { CoreSessionConfig } from "../../types/config";
 import type { CoreSessionEvent } from "../../types/events";
@@ -1885,8 +1886,19 @@ export class LocalRuntimeHost implements RuntimeHost {
 	}
 
 	private async markTurnRunning(session: ActiveSession): Promise<void> {
-		if (session.status === "running") return;
+		// The status write is also where this process claims the session, so a
+		// session already recorded as running still needs one when the pid on
+		// record belongs to someone else — a host that crashed mid-run leaves
+		// exactly that, and skipping the write here leaves the reconciler free
+		// to declare the resumed session dead.
+		if (session.status === "running" && this.ownsSessionRecord(session)) return;
 		await this.updateStatus(session, "running", null);
+	}
+
+	/** Whether the session record already names this process as its owner. */
+	private ownsSessionRecord(session: ActiveSession): boolean {
+		const manifest = session.artifacts?.manifest;
+		return manifest === undefined || manifest.pid === process.pid;
 	}
 
 	private async refreshActiveSessionGitMetadata(
@@ -2136,6 +2148,10 @@ export class LocalRuntimeHost implements RuntimeHost {
 			session.sessionId,
 			status,
 			exitCode,
+			// This process is running the session, so it is the one whose death
+			// should invalidate it. Supplied on every status write and used only
+			// for the non-terminal ones — see updateSessionStatus.
+			process.pid,
 		);
 		if (!result.updated) return;
 		const latestManifest = await this.mutateSessionManifest(
@@ -2145,6 +2161,8 @@ export class LocalRuntimeHost implements RuntimeHost {
 				if (isNonTerminalSessionStatus(status)) {
 					delete manifest.ended_at;
 					manifest.exit_code = null;
+					manifest.pid = process.pid;
+					manifest.metadata = withoutSessionTerminalMarkers(manifest.metadata);
 				} else {
 					manifest.ended_at = result.endedAt ?? nowIso();
 					manifest.exit_code = typeof exitCode === "number" ? exitCode : null;

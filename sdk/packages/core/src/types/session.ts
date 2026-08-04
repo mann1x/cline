@@ -90,6 +90,16 @@ export interface PersistedSessionUpdateInput {
 	sessionId: string;
 	expectedStatusLock?: number;
 	status?: SessionStatus;
+	/**
+	 * The process that owns the session from now on.
+	 *
+	 * Set when a session becomes live again in a process other than the one that
+	 * created it (a resumed task after the host restarted). The stale-session
+	 * reconciler decides a session is dead by testing this pid, so a row that
+	 * keeps a dead pid is declared failed on every scan no matter how alive it
+	 * is.
+	 */
+	pid?: number;
 	endedAt?: string | null;
 	exitCode?: number | null;
 	prompt?: string | null;

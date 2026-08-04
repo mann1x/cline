@@ -264,6 +264,74 @@ describe("UnifiedSessionPersistenceService", () => {
 	);
 
 	sqliteIt(
+		"stops reconciling a resumed session once a live process claims it",
+		async () => {
+			// Repro for a task that offers "Resume" forever. The row keeps the pid
+			// of the process that created it, so a session resumed after the host
+			// restarted is owned on paper by a dead process: every listSessions
+			// scan reconciles the live session into "failed", and the resume
+			// affordance is chosen from exactly that status.
+			const dbDir = mkdtempSync(join(tmpdir(), "resumed-session-claim-db-"));
+			const sessionsDir = mkdtempSync(
+				join(tmpdir(), "resumed-session-claim-sessions-"),
+			);
+			tempDirs.push(dbDir, sessionsDir);
+
+			const store = new SqliteSessionStore({ sessionsDir: dbDir });
+			stores.push(store);
+			const service = new CoreSessionService(store, {
+				sessionArtifactsDir: sessionsDir,
+			});
+			const sessionId = "resumed-root-session";
+			await service.createRootSessionWithArtifacts({
+				sessionId,
+				source: SessionSource.CLI,
+				pid: 999_999_999,
+				interactive: true,
+				provider: "mock-provider",
+				model: "mock-model",
+				cwd: "/tmp/project",
+				workspaceRoot: "/tmp/project",
+				enableTools: true,
+				enableSpawn: true,
+				enableTeams: false,
+				prompt: "hello",
+				startedAt: "2026-01-01T00:00:00.000Z",
+			});
+
+			expect(await service.reconcileDeadSessions()).toBe(1);
+			expect((await service.listSessions(10))[0]?.status).toBe("failed");
+
+			// The user resumes the task and it starts a turn in this process.
+			await service.updateSessionStatus(
+				sessionId,
+				"running",
+				null,
+				process.pid,
+			);
+
+			// listSessions reconciles before it lists, so this is the scan that
+			// used to declare the resumed session dead.
+			const [claimed] = await service.listSessions(10);
+			expect(claimed).toMatchObject({ status: "running", pid: process.pid });
+			// The death certificate goes with it — the session is demonstrably
+			// alive, and a stale marker is what made it look otherwise.
+			expect(claimed?.metadata ?? {}).not.toHaveProperty("terminal_marker");
+			expect(await service.reconcileDeadSessions()).toBe(0);
+
+			// Ending the turn keeps the claim: only a non-terminal status takes
+			// ownership, and a terminal one must still record how it ended.
+			await service.updateSessionStatus(sessionId, "completed", 0, process.pid);
+			expect((await service.listSessions(10))[0]).toMatchObject({
+				status: "completed",
+				exitCode: 0,
+				pid: process.pid,
+			});
+		},
+		15_000,
+	);
+
+	sqliteIt(
 		"persists teammate task metadata in the file envelope and usage on messages",
 		async () => {
 			const dbDir = mkdtempSync(join(tmpdir(), "team-task-messages-db-"));

@@ -32,6 +32,39 @@ export function isNonTerminalSessionStatus(
 	return !isTerminalSessionStatus(status);
 }
 
+/**
+ * Metadata keys written when a session is declared dead by the stale-session
+ * reconciler.
+ *
+ * Shared because two places have to agree on them: the reconciler that writes
+ * them, and the status write that clears them when the session turns out to be
+ * alive after all.
+ */
+export const SESSION_TERMINAL_MARKER_KEYS = [
+	"terminal_marker",
+	"terminal_marker_at",
+	"terminal_marker_pid",
+	"terminal_marker_source",
+] as const;
+
+/** Strip the reconciler's death certificate from a metadata bag. */
+export function withoutSessionTerminalMarkers(
+	metadata: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | undefined {
+	if (!metadata) {
+		return undefined;
+	}
+	const next = { ...metadata };
+	let changed = false;
+	for (const key of SESSION_TERMINAL_MARKER_KEYS) {
+		if (key in next) {
+			delete next[key];
+			changed = true;
+		}
+	}
+	return changed ? next : metadata;
+}
+
 export const SessionSource = {
 	CORE: "core",
 	CLI: "cli",
