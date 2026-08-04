@@ -1,4 +1,7 @@
-import { estimateRequestInputTokens } from "@cline/shared";
+import {
+	estimateRequestInputTokens,
+	lastObservedRequestTokens,
+} from "@cline/shared";
 import {
 	captureCompactionBudgetEmergency,
 	captureCompactionExecuted,
@@ -320,7 +323,29 @@ export function createContextCompactionPrepareTurn(
 			requestTriggerTokens,
 			requestOverheadTokens,
 		);
-		const shouldCompact = requestInputTokens >= requestTriggerTokens;
+		// `requestInputTokens` measures `apiMessages`, which is not the payload
+		// the provider receives, and it is wrong in both directions. Measured
+		// live against the request bodies a local provider logged: 803,588
+		// characters of `apiMessages` against a 163,772-byte request body, so
+		// the estimate read 151,556 tokens for a context that really cost about
+		// 40,000 and it compacted a 17-message transcript that was nowhere near
+		// full -- then again on every following turn, because compaction cannot
+		// reclaim what was never really there. It goes the other way once a
+		// compaction state exists, since `createCompactionStateAwarePrepareTurn`
+		// replaces `apiMessages` with canonical projected messages: that
+		// under-count let another session reach 126,000 tokens without
+		// compacting at all, while the request path -- which measures the real
+		// payload -- had already ratcheted the output cap from 32,000 to 976.
+		//
+		// The provider's own count for the last request is not an estimate, so
+		// prefer it. The cost is that it describes the previous request, so the
+		// trigger fires one turn after the threshold is crossed rather than
+		// before; the ratio below `maxInputTokens` is the headroom that pays
+		// for that. The estimate remains the fallback for the first request of
+		// a session, when nothing has been counted yet.
+		const observedRequestTokens = lastObservedRequestTokens();
+		const triggerInputTokens = observedRequestTokens ?? requestInputTokens;
+		const shouldCompact = triggerInputTokens >= requestTriggerTokens;
 		config.logger?.debug("Context compaction diagnostics", {
 			mode: effectiveMode,
 			strategy,
@@ -328,6 +353,8 @@ export function createContextCompactionPrepareTurn(
 			providerId: config.providerId,
 			modelId: config.modelId,
 			requestInputTokens,
+			observedRequestTokens,
+			triggerInputTokens,
 			apiMessageTokens,
 			messageInputTokens,
 			requestOverheadTokens,

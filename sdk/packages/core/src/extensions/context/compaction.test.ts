@@ -2,8 +2,10 @@ import type * as LlmsProviders from "@cline/llms";
 import {
 	estimateRequestInputTokens,
 	type MessageWithMetadata,
+	observeRequestTokens,
+	resetTokenCalibration,
 } from "@cline/shared";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	createSessionCompactionState,
 	projectSessionCompactionState,
@@ -1112,6 +1114,82 @@ describe("createContextCompactionPrepareTurn", () => {
 		expect(firstText).toBe(task);
 		expect(JSON.stringify(result?.messages)).toContain("Create /app/filter.py");
 		expect(JSON.stringify(result?.messages)).not.toContain("<user_input\n...");
+	});
+
+	describe("what the trigger measures", () => {
+		// `apiMessages` is not the provider payload. Live, against a local
+		// provider's own request log, it ran ~5x the body that went out --
+		// 803,588 characters against 163,772 bytes -- so the estimate read
+		// 151,556 tokens for a context that really cost about 40,000, and
+		// compaction fired on a transcript that was nowhere near full.
+		const bloatedApiMessages: LlmsProviders.Message[] = [
+			{ role: "user", content: "start the task" },
+			{ role: "assistant", content: "x".repeat(400_000) },
+			{ role: "user", content: "continue" },
+		];
+
+		function prepare(messages: LlmsProviders.Message[]) {
+			const prepareTurn = createContextCompactionPrepareTurn({
+				providerId: "ollama",
+				modelId: "local-model",
+				providerConfig: {
+					providerId: "ollama",
+					modelId: "local-model",
+				} as LlmsProviders.ProviderConfig,
+				compaction: { enabled: true, strategy: "basic" },
+				logger: undefined,
+			});
+			return prepareTurn?.({
+				agentId: "agent-1",
+				conversationId: "conv-1",
+				parentAgentId: null,
+				iteration: 4,
+				abortSignal: new AbortController().signal,
+				systemPrompt: "You are helpful.",
+				tools: [],
+				messages,
+				apiMessages: messages,
+				model: {
+					id: "local-model",
+					provider: "ollama",
+					info: { id: "local-model", contextWindow: 128_000 },
+				},
+			});
+		}
+
+		beforeEach(() => {
+			resetTokenCalibration();
+		});
+
+		afterEach(() => {
+			resetTokenCalibration();
+		});
+
+		it("compacts on the estimate before anything has been counted", async () => {
+			const result = await prepare(bloatedApiMessages);
+			expect(result?.messages).toBeDefined();
+		});
+
+		it("does not compact when the provider counted a context well under the trigger", async () => {
+			// the request that produced those messages really cost 40,000 tokens
+			observeRequestTokens(163_772, 40_000);
+			const result = await prepare(bloatedApiMessages);
+			expect(result?.messages).toBeUndefined();
+		});
+
+		it("compacts when the provider counted a context over the trigger", async () => {
+			observeRequestTokens(420_000, 117_000);
+			const result = await prepare(bloatedApiMessages);
+			expect(result?.messages).toBeDefined();
+		});
+
+		it("stops compacting once the counted context comes back down", async () => {
+			observeRequestTokens(420_000, 117_000);
+			expect((await prepare(bloatedApiMessages))?.messages).toBeDefined();
+			// after a compaction the next request is genuinely smaller
+			observeRequestTokens(80_000, 22_661);
+			expect((await prepare(bloatedApiMessages))?.messages).toBeUndefined();
+		});
 	});
 
 	it("can truncate an oversized first task prompt when it exceeds the trigger", () => {
