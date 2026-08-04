@@ -1,6 +1,10 @@
 import { createOpenAI } from "@ai-sdk/openai";
 import { experimental_generateSpeech as generateSpeech } from "ai";
 import type { ProviderConfig } from "./providers/config";
+import {
+	resolveVercelAiGatewayBaseUrl,
+	trimTrailingSlashes,
+} from "./providers/url";
 
 export const DEFAULT_SPEECH_GENERATION_TIMEOUT_MS = 120_000;
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
@@ -32,21 +36,13 @@ export interface SpeechGenerationRoute {
 	endpoint: string;
 }
 
-function trimTrailingSlashes(value: string): string {
-	return value.replace(/\/+$/, "");
-}
-
 function resolveVercelAIGatewayBaseUrl(
 	configuredBaseUrl: string | undefined,
 ): string {
-	const baseUrl = trimTrailingSlashes(
-		configuredBaseUrl ?? DEFAULT_VERCEL_AI_GATEWAY_BASE_URL,
+	return resolveVercelAiGatewayBaseUrl(
+		configuredBaseUrl,
+		DEFAULT_VERCEL_AI_GATEWAY_BASE_URL,
 	);
-	if (baseUrl.endsWith("/v4/ai")) return baseUrl;
-	if (/\/v\d+(?:\/ai)?$/.test(baseUrl)) {
-		return baseUrl.replace(/\/v\d+(?:\/ai)?$/, "/v4/ai");
-	}
-	return `${baseUrl}/v4/ai`;
 }
 
 export function resolveSpeechGenerationRoute(

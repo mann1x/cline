@@ -1,5 +1,6 @@
 import { createGateway } from "@ai-sdk/gateway";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import type { LanguageModelV4 } from "@ai-sdk/provider";
 import type {
 	GatewayProviderContext,
 	GatewayResolvedProviderConfig,
@@ -288,7 +289,8 @@ export async function createOpenAICompatibleProviderModule(
 		// on origin/main).
 		model: (modelId) =>
 			wrapLanguageModel({
-				model: openRouterImageProvider?.chat(modelId) ?? provider(modelId),
+				model: (openRouterImageProvider?.chat(modelId) ??
+					provider(modelId)) as LanguageModelV4,
 				middleware: splitToolImagesMiddleware,
 			}),
 		imageModel: (modelId) =>

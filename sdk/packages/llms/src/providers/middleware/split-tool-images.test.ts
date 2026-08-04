@@ -10,107 +10,153 @@ import {
 
 const PLACEHOLDER = "(see following user message for image)";
 const OMITTED_PLACEHOLDER = "[media omitted: invalid or exceeds size limit]";
-
-function toolMessage(
-	value: Extract<
-		Extract<LanguageModelV4Message, { role: "tool" }>["content"][number],
-		{ type: "tool-result" }
-	>["output"],
-): LanguageModelV4Message {
-	return {
-		role: "tool",
-		content: [
-			{
-				type: "tool-result",
-				toolCallId: "call_1",
-				toolName: "read_files",
-				output: value,
-			},
-		],
-	};
-}
+const imageData = (byteLength: number, fill = 1) =>
+	Buffer.alloc(byteLength, fill).toString("base64");
 
 describe("rewritePromptToolImages", () => {
-	it("leaves prompts without media-bearing tool results unchanged", () => {
+	it("leaves prompts without tool messages unchanged", () => {
 		const prompt: LanguageModelV4Message[] = [
 			{ role: "system", content: "you are a helpful assistant" },
-			{ role: "user", content: [{ type: "text", text: "what is 2+2?" }] },
-			toolMessage({ type: "text", value: "4" }),
-			toolMessage({
-				type: "content",
-				value: [{ type: "text", text: "still no media" }],
-			}),
+			{
+				role: "user",
+				content: [{ type: "text", text: "what is 2+2?" }],
+			},
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "4" }],
+			},
 		];
 
-		const result = rewritePromptToolImages(prompt);
+		const out = rewritePromptToolImages(prompt);
 
-		expect(result.mutated).toBe(false);
-		expect(result.prompt).toEqual(prompt);
+		expect(out.mutated).toBe(false);
+		// When nothing mutates, the implementation re-builds the array.
+		// What matters is that the contents are equivalent.
+		expect(out.prompt).toEqual(prompt);
 	});
 
-	it("moves image data into a typed synthetic user message", () => {
-		const prompt = [
-			toolMessage({
-				type: "content",
-				value: [
-					{ type: "text", text: "Successfully read image" },
+	it("leaves text-only tool messages unchanged", () => {
+		const prompt: LanguageModelV4Message[] = [
+			{
+				role: "tool",
+				content: [
 					{
-						type: "file",
-						data: { type: "data", data: "QkFTRTY0SU1BR0VCWVRFUw==" },
-						mediaType: "image/jpeg",
+						type: "tool-result",
+						toolCallId: "call_1",
+						toolName: "read_files",
+						output: { type: "text", value: "no images here" },
+					},
+					{
+						type: "tool-result",
+						toolCallId: "call_2",
+						toolName: "read_files",
+						output: {
+							type: "content",
+							value: [{ type: "text", text: "still no images" }],
+						},
 					},
 				],
-			}),
+			},
 		];
 
-		const result = rewritePromptToolImages(prompt);
+		const out = rewritePromptToolImages(prompt);
 
-		expect(result.mutated).toBe(true);
-		expect(result.prompt).toHaveLength(2);
-		const [tool, syntheticUser] = result.prompt;
-		expect(tool).toEqual(
-			toolMessage({
-				type: "content",
-				value: [
-					{ type: "text", text: "Successfully read image" },
-					{ type: "text", text: PLACEHOLDER },
+		expect(out.mutated).toBe(false);
+		expect(out.prompt).toHaveLength(1);
+	});
+
+	it("splits image-data parts into a synthetic user message", () => {
+		const prompt: LanguageModelV4Message[] = [
+			{
+				role: "tool",
+				content: [
+					{
+						type: "tool-result",
+						toolCallId: "call_1",
+						toolName: "read_files",
+						output: {
+							type: "content",
+							value: [
+								{ type: "text", text: "Successfully read image" },
+								{
+									type: "file",
+									data: { type: "data", data: "QkFTRTY0SU1BR0VCWVRFUw==" },
+									mediaType: "image/jpeg",
+								},
+							],
+						},
+					},
 				],
-			}),
-		);
+			},
+		];
+
+		const out = rewritePromptToolImages(prompt);
+
+		expect(out.mutated).toBe(true);
+		expect(out.prompt).toHaveLength(2);
+
+		const [toolMsg, syntheticUser] = out.prompt;
+		expect(toolMsg.role).toBe("tool");
+		// Tool-result should now have placeholder text instead of image-data.
+		const toolResult = (
+			toolMsg as Extract<LanguageModelV4Message, { role: "tool" }>
+		).content[0];
+		if (toolResult.type !== "tool-result") {
+			throw new Error("expected tool-result");
+		}
+		expect(toolResult.output).toEqual({
+			type: "content",
+			value: [
+				{ type: "text", text: "Successfully read image" },
+				{ type: "text", text: PLACEHOLDER },
+			],
+		});
+
+		// Synthetic user message carries the image as a FilePart.
 		expect(syntheticUser).toEqual({
 			role: "user",
 			content: [
 				{
 					type: "file",
-					data: {
-						type: "data",
-						data: "QkFTRTY0SU1BR0VCWVRFUw==",
-					},
+					data: { type: "data", data: "QkFTRTY0SU1BR0VCWVRFUw==" },
 					mediaType: "image/jpeg",
 				},
 			],
 		});
 	});
 
-	it("preserves file metadata when moving non-image file data", () => {
-		const prompt = [
-			toolMessage({
-				type: "content",
-				value: [
+	it("preserves filename and provider options on file-data parts", () => {
+		const prompt: LanguageModelV4Message[] = [
+			{
+				role: "tool",
+				content: [
 					{
-						type: "file",
-						data: { type: "data", data: "QkFTRTY0UERGQllURVM=" },
-						mediaType: "application/pdf",
-						filename: "spec.pdf",
-						providerOptions: { openai: { detail: "high" } },
+						type: "tool-result",
+						toolCallId: "call_1",
+						toolName: "read_files",
+						output: {
+							type: "content",
+							value: [
+								{
+									type: "file",
+									data: { type: "data", data: "QkFTRTY0UERGQllURVM=" },
+									mediaType: "application/pdf",
+									filename: "spec.pdf",
+									providerOptions: {
+										openai: { detail: "high" },
+									},
+								},
+							],
+						},
 					},
 				],
-			}),
+			},
 		];
 
-		const result = rewritePromptToolImages(prompt);
+		const out = rewritePromptToolImages(prompt);
 
-		expect(result.prompt[1]).toEqual({
+		expect(out.mutated).toBe(true);
+		expect(out.prompt[1]).toEqual({
 			role: "user",
 			content: [
 				{
@@ -118,42 +164,99 @@ describe("rewritePromptToolImages", () => {
 					data: { type: "data", data: "QkFTRTY0UERGQllURVM=" },
 					mediaType: "application/pdf",
 					filename: "spec.pdf",
-					providerOptions: { openai: { detail: "high" } },
+					providerOptions: {
+						openai: { detail: "high" },
+					},
 				},
 			],
 		});
 	});
 
-	it("moves a remote URL and applies the aggregate media budget", () => {
-		const prompt = [
-			toolMessage({
-				type: "content",
-				value: [
+	it("converts image-url parts to file parts", () => {
+		const prompt: LanguageModelV4Message[] = [
+			{
+				role: "tool",
+				content: [
 					{
-						type: "file",
-						data: {
-							type: "url",
-							url: new URL("https://example.com/a.png"),
+						type: "tool-result",
+						toolCallId: "call_1",
+						toolName: "read_files",
+						output: {
+							type: "content",
+							value: [
+								{
+									type: "file",
+									data: {
+										type: "url",
+										url: new URL("https://example.com/cat.png"),
+									},
+									mediaType: "image/*",
+								},
+							],
 						},
-						mediaType: "image/png",
-					},
-					{
-						type: "file",
-						data: {
-							type: "url",
-							url: new URL("https://example.com/b.png"),
-						},
-						mediaType: "image/png",
 					},
 				],
-			}),
+			},
 		];
 
-		const result = rewritePromptToolImages(prompt);
+		const out = rewritePromptToolImages(prompt);
 
-		expect(result.mutated).toBe(true);
-		expect(result.prompt).toHaveLength(2);
-		expect(result.prompt[1]).toEqual({
+		expect(out.mutated).toBe(true);
+		expect(out.prompt[1]).toEqual({
+			role: "user",
+			content: [
+				{
+					type: "file",
+					data: {
+						type: "url",
+						url: new URL("https://example.com/cat.png"),
+					},
+					mediaType: "image/*",
+				},
+			],
+		});
+	});
+
+	it("omits image-url parts that exceed the aggregate media budget", () => {
+		const prompt: LanguageModelV4Message[] = [
+			{
+				role: "tool",
+				content: [
+					{
+						type: "tool-result",
+						toolCallId: "call_1",
+						toolName: "read_files",
+						output: {
+							type: "content",
+							value: [
+								{
+									type: "file",
+									data: {
+										type: "url",
+										url: new URL("https://example.com/a.png"),
+									},
+									mediaType: "image/*",
+								},
+								{
+									type: "file",
+									data: {
+										type: "url",
+										url: new URL("https://example.com/b.png"),
+									},
+									mediaType: "image/*",
+								},
+							],
+						},
+					},
+				],
+			},
+		];
+
+		const out = rewritePromptToolImages(prompt);
+
+		expect(out.mutated).toBe(true);
+		expect(out.prompt).toHaveLength(2);
+		expect(out.prompt[1]).toEqual({
 			role: "user",
 			content: [
 				{
@@ -162,110 +265,656 @@ describe("rewritePromptToolImages", () => {
 						type: "url",
 						url: new URL("https://example.com/a.png"),
 					},
+					mediaType: "image/*",
+				},
+			],
+		});
+		expect(JSON.stringify(out.prompt[0])).toContain(OMITTED_PLACEHOLDER);
+		expect(JSON.stringify(out.prompt[0])).not.toContain(
+			"https://example.com/b.png",
+		);
+	});
+
+	it("omits invalid data URL image-url parts instead of splitting them", () => {
+		const prompt: LanguageModelV4Message[] = [
+			{
+				role: "tool",
+				content: [
+					{
+						type: "tool-result",
+						toolCallId: "call_1",
+						toolName: "read_files",
+						output: {
+							type: "content",
+							value: [
+								{
+									type: "file",
+									data: {
+										type: "url",
+										url: new URL("data:image/png;base64,not-base64"),
+									},
+									mediaType: "image/*",
+								},
+							],
+						},
+					},
+				],
+			},
+		];
+
+		const out = rewritePromptToolImages(prompt);
+
+		expect(out.mutated).toBe(true);
+		expect(out.prompt).toHaveLength(1);
+		expect(JSON.stringify(out.prompt[0])).toContain(OMITTED_PLACEHOLDER);
+		expect(JSON.stringify(out.prompt[0])).not.toContain("not-base64");
+	});
+
+	it("omits unsupported uppercase data URL image-url parts before splitting", () => {
+		const prompt: LanguageModelV4Message[] = [
+			{
+				role: "tool",
+				content: [
+					{
+						type: "tool-result",
+						toolCallId: "call_1",
+						toolName: "read_files",
+						output: {
+							type: "content",
+							value: [
+								{
+									type: "file",
+									data: {
+										type: "url",
+										url: new URL("DATA:image/svg+xml;base64,PHN2Zz4="),
+									},
+									mediaType: "image/*",
+								},
+							],
+						},
+					},
+				],
+			},
+		];
+
+		const out = rewritePromptToolImages(prompt);
+
+		expect(out.mutated).toBe(true);
+		expect(out.prompt).toHaveLength(1);
+		expect(JSON.stringify(out.prompt[0])).toContain(OMITTED_PLACEHOLDER);
+		expect(JSON.stringify(out.prompt[0])).not.toContain("PHN2Zz4=");
+	});
+
+	it("omits file-url parts that exceed the aggregate media budget", () => {
+		const prompt: LanguageModelV4Message[] = [
+			{
+				role: "tool",
+				content: [
+					{
+						type: "tool-result",
+						toolCallId: "call_1",
+						toolName: "read_files",
+						output: {
+							type: "content",
+							value: [
+								{
+									type: "file",
+									data: {
+										type: "url",
+										url: new URL("https://example.com/a.pdf"),
+									},
+									mediaType: "application/octet-stream",
+								},
+								{
+									type: "file",
+									data: {
+										type: "url",
+										url: new URL("https://example.com/b.pdf"),
+									},
+									mediaType: "application/octet-stream",
+								},
+							],
+						},
+					},
+				],
+			},
+		];
+
+		const out = rewritePromptToolImages(prompt);
+
+		expect(out.mutated).toBe(true);
+		expect(out.prompt).toHaveLength(2);
+		expect(out.prompt[1]).toEqual({
+			role: "user",
+			content: [
+				{
+					type: "file",
+					data: {
+						type: "url",
+						url: new URL("https://example.com/a.pdf"),
+					},
+					mediaType: "application/octet-stream",
+				},
+			],
+		});
+		expect(JSON.stringify(out.prompt[0])).toContain(OMITTED_PLACEHOLDER);
+		expect(JSON.stringify(out.prompt[0])).not.toContain(
+			"https://example.com/b.pdf",
+		);
+	});
+
+	it("omits malformed file-url data URLs instead of splitting them", () => {
+		const prompt: LanguageModelV4Message[] = [
+			{
+				role: "tool",
+				content: [
+					{
+						type: "tool-result",
+						toolCallId: "call_1",
+						toolName: "read_files",
+						output: {
+							type: "content",
+							value: [
+								{
+									type: "file",
+									data: {
+										type: "url",
+										url: new URL("data:application/pdf;base64,not-base64"),
+									},
+									mediaType: "application/octet-stream",
+								},
+							],
+						},
+					},
+				],
+			},
+		];
+
+		const out = rewritePromptToolImages(prompt);
+
+		expect(out.mutated).toBe(true);
+		expect(out.prompt).toHaveLength(1);
+		expect(JSON.stringify(out.prompt[0])).toContain(OMITTED_PLACEHOLDER);
+		expect(JSON.stringify(out.prompt[0])).not.toContain("not-base64");
+	});
+
+	it("omits oversized file-data parts instead of splitting them", () => {
+		const oversizedFile = "A".repeat(6 * 1024 * 1024);
+		const prompt: LanguageModelV4Message[] = [
+			{
+				role: "tool",
+				content: [
+					{
+						type: "tool-result",
+						toolCallId: "call_1",
+						toolName: "read_files",
+						output: {
+							type: "content",
+							value: [
+								{
+									type: "file",
+									data: { type: "data", data: oversizedFile },
+									mediaType: "application/pdf",
+								},
+							],
+						},
+					},
+				],
+			},
+		];
+
+		const out = rewritePromptToolImages(prompt);
+
+		expect(out.mutated).toBe(true);
+		expect(out.prompt).toHaveLength(1);
+		expect(JSON.stringify(out.prompt[0])).toContain(OMITTED_PLACEHOLDER);
+		expect(JSON.stringify(out.prompt[0])).not.toContain(oversizedFile);
+	});
+
+	it("replaces invalid image-data with a text placeholder instead of splitting it", () => {
+		const prompt: LanguageModelV4Message[] = [
+			{
+				role: "tool",
+				content: [
+					{
+						type: "tool-result",
+						toolCallId: "call_1",
+						toolName: "read_files",
+						output: {
+							type: "content",
+							value: [
+								{
+									type: "file",
+									data: { type: "data", data: "not-base64" },
+									mediaType: "image/png",
+								},
+							],
+						},
+					},
+				],
+			},
+		];
+
+		const out = rewritePromptToolImages(prompt);
+
+		expect(out.mutated).toBe(true);
+		expect(out.prompt).toHaveLength(1);
+		const toolResult = (
+			out.prompt[0] as Extract<LanguageModelV4Message, { role: "tool" }>
+		).content[0];
+		if (toolResult.type !== "tool-result") {
+			throw new Error("expected tool-result");
+		}
+		expect(toolResult.output).toEqual({
+			type: "content",
+			value: [
+				{
+					type: "text",
+					text: "[media omitted: invalid or exceeds size limit]",
+				},
+			],
+		});
+	});
+
+	it("leaves image-file-id parts in place (no FilePart equivalent)", () => {
+		// image-file-id is an OpenAI-specific provider reference. It can't
+		// be expressed as a `LanguageModelV4FilePart`, so we leave it inside
+		// the tool-result. That path is already multimodal-aware and doesn't
+		// need the rewrite.
+		const prompt: LanguageModelV4Message[] = [
+			{
+				role: "tool",
+				content: [
+					{
+						type: "tool-result",
+						toolCallId: "call_1",
+						toolName: "read_files",
+						output: {
+							type: "content",
+							value: [
+								{ type: "text", text: "Successfully read image" },
+								{
+									type: "file",
+									data: {
+										type: "reference",
+										reference: { openai: "file_abc" },
+									},
+									mediaType: "image/*",
+								},
+							],
+						},
+					},
+				],
+			},
+		];
+
+		const out = rewritePromptToolImages(prompt);
+
+		expect(out.mutated).toBe(false);
+		const toolResult = (
+			out.prompt[0] as Extract<LanguageModelV4Message, { role: "tool" }>
+		).content[0];
+		if (toolResult.type !== "tool-result") {
+			throw new Error("expected tool-result");
+		}
+		// Output is unchanged when only image-file-id is present.
+		expect(toolResult.output).toEqual({
+			type: "content",
+			value: [
+				{ type: "text", text: "Successfully read image" },
+				{
+					type: "file",
+					data: { type: "reference", reference: { openai: "file_abc" } },
+					mediaType: "image/*",
+				},
+			],
+		});
+	});
+
+	it("aggregates images from multiple tool-results in one tool message", () => {
+		// `read_files` with two paths produces a single `role:'tool'` message
+		// with two `tool-result` parts (or one tool-result with two images,
+		// depending on how the agent emits them). Either way, the rewritten
+		// user message should carry both images.
+		const prompt: LanguageModelV4Message[] = [
+			{
+				role: "tool",
+				content: [
+					{
+						type: "tool-result",
+						toolCallId: "call_1",
+						toolName: "read_files",
+						output: {
+							type: "content",
+							value: [
+								{ type: "text", text: "image 1" },
+								{
+									type: "file",
+									data: { type: "data", data: "QUFB" },
+									mediaType: "image/jpeg",
+								},
+							],
+						},
+					},
+					{
+						type: "tool-result",
+						toolCallId: "call_2",
+						toolName: "read_files",
+						output: {
+							type: "content",
+							value: [
+								{ type: "text", text: "image 2" },
+								{
+									type: "file",
+									data: { type: "data", data: "QkJC" },
+									mediaType: "image/png",
+								},
+							],
+						},
+					},
+				],
+			},
+		];
+
+		const out = rewritePromptToolImages(prompt);
+
+		expect(out.mutated).toBe(true);
+		expect(out.prompt).toHaveLength(2);
+		expect(out.prompt[1]).toEqual({
+			role: "user",
+			content: [
+				{
+					type: "file",
+					data: { type: "data", data: "QUFB" },
+					mediaType: "image/jpeg",
+				},
+				{
+					type: "file",
+					data: { type: "data", data: "QkJC" },
 					mediaType: "image/png",
 				},
 			],
 		});
-		expect(JSON.stringify(result.prompt[0])).toContain(OMITTED_PLACEHOLDER);
-		expect(JSON.stringify(result.prompt[0])).not.toContain("b.png");
 	});
 
-	it("omits malformed data URLs and oversized inline files", () => {
-		const malformed = [
-			toolMessage({
-				type: "content",
-				value: [
+	it("omits images that exceed the aggregate media budget in the split backstop", () => {
+		const firstImage = imageData(3_600_000, 1);
+		const secondImage = imageData(3_600_000, 2);
+		const prompt: LanguageModelV4Message[] = [
+			{
+				role: "tool",
+				content: [
 					{
-						type: "file",
-						data: {
-							type: "url",
-							url: new URL("data:image/png;base64,not-base64"),
+						type: "tool-result",
+						toolCallId: "call_1",
+						toolName: "read_files",
+						output: {
+							type: "content",
+							value: [
+								{ type: "text", text: "image 1" },
+								{
+									type: "file",
+									data: { type: "data", data: firstImage },
+									mediaType: "image/png",
+								},
+							],
 						},
-						mediaType: "image/png",
 					},
-				],
-			}),
-		];
-		const oversized = [
-			toolMessage({
-				type: "content",
-				value: [
 					{
-						type: "file",
-						data: { type: "data", data: "A".repeat(6 * 1024 * 1024) },
-						mediaType: "application/pdf",
+						type: "tool-result",
+						toolCallId: "call_2",
+						toolName: "read_files",
+						output: {
+							type: "content",
+							value: [
+								{ type: "text", text: "image 2" },
+								{
+									type: "file",
+									data: { type: "data", data: secondImage },
+									mediaType: "image/png",
+								},
+							],
+						},
 					},
 				],
-			}),
+			},
 		];
 
-		for (const prompt of [malformed, oversized]) {
-			const result = rewritePromptToolImages(prompt);
-			expect(result.mutated).toBe(true);
-			expect(result.prompt).toHaveLength(1);
-			expect(JSON.stringify(result.prompt[0])).toContain(OMITTED_PLACEHOLDER);
+		const out = rewritePromptToolImages(prompt);
+
+		expect(out.mutated).toBe(true);
+		expect(out.prompt).toHaveLength(2);
+		expect(out.prompt[1]).toEqual({
+			role: "user",
+			content: [
+				{
+					type: "file",
+					data: { type: "data", data: firstImage },
+					mediaType: "image/png",
+				},
+			],
+		});
+		const toolMessage = out.prompt[0];
+		if (toolMessage.role !== "tool") {
+			throw new Error("expected tool message");
 		}
+		expect(JSON.stringify(toolMessage)).toContain(OMITTED_PLACEHOLDER);
+		expect(JSON.stringify(toolMessage)).not.toContain(secondImage);
 	});
 
-	it("leaves provider file references in the tool result", () => {
-		const prompt = [
-			toolMessage({
-				type: "content",
-				value: [
+	it("handles multiple separate tool messages in the same prompt", () => {
+		const prompt: LanguageModelV4Message[] = [
+			{
+				role: "user",
+				content: [{ type: "text", text: "show me both" }],
+			},
+			{
+				role: "assistant",
+				content: [
 					{
-						type: "file",
-						data: {
-							type: "reference",
-							reference: { openai: "file_123" },
-						},
-						mediaType: "image/png",
+						type: "tool-call",
+						toolCallId: "call_1",
+						toolName: "read_files",
+						input: { paths: ["a.jpg"] },
 					},
 				],
-			}),
+			},
+			{
+				role: "tool",
+				content: [
+					{
+						type: "tool-result",
+						toolCallId: "call_1",
+						toolName: "read_files",
+						output: {
+							type: "content",
+							value: [
+								{ type: "text", text: "first" },
+								{
+									type: "file",
+									data: { type: "data", data: "QUFB" },
+									mediaType: "image/jpeg",
+								},
+							],
+						},
+					},
+				],
+			},
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "tool-call",
+						toolCallId: "call_2",
+						toolName: "read_files",
+						input: { paths: ["b.jpg"] },
+					},
+				],
+			},
+			{
+				role: "tool",
+				content: [
+					{
+						type: "tool-result",
+						toolCallId: "call_2",
+						toolName: "read_files",
+						output: {
+							type: "content",
+							value: [
+								{ type: "text", text: "second" },
+								{
+									type: "file",
+									data: { type: "data", data: "QkJC" },
+									mediaType: "image/png",
+								},
+							],
+						},
+					},
+				],
+			},
 		];
 
-		const result = rewritePromptToolImages(prompt);
+		const out = rewritePromptToolImages(prompt);
 
-		expect(result.mutated).toBe(false);
-		expect(result.prompt).toEqual(prompt);
+		expect(out.mutated).toBe(true);
+		// Original 5 + 2 synthetic user messages.
+		expect(out.prompt).toHaveLength(7);
+		expect(out.prompt[3].role).toBe("user");
+		expect(out.prompt[6].role).toBe("user");
+	});
+
+	it("does not mutate the input prompt array or its messages", () => {
+		const original: LanguageModelV4Message[] = [
+			{
+				role: "tool",
+				content: [
+					{
+						type: "tool-result",
+						toolCallId: "call_1",
+						toolName: "read_files",
+						output: {
+							type: "content",
+							value: [
+								{ type: "text", text: "before" },
+								{
+									type: "file",
+									data: { type: "data", data: "QUFB" },
+									mediaType: "image/jpeg",
+								},
+							],
+						},
+					},
+				],
+			},
+		];
+		const snapshot = JSON.parse(JSON.stringify(original));
+
+		rewritePromptToolImages(original);
+
+		expect(original).toEqual(snapshot);
 	});
 });
 
 describe("splitToolImagesMiddleware", () => {
-	it("uses the AI SDK 7 V4 middleware contract", async () => {
+	it("has v4 specification version", () => {
+		expect(splitToolImagesMiddleware.specificationVersion).toBe("v4");
+	});
+
+	it("returns the same params object reference when no rewrite is needed", async () => {
 		const params: LanguageModelV4CallOptions = {
 			prompt: [
-				toolMessage({
-					type: "content",
-					value: [
-						{
-							type: "file",
-							data: { type: "data", data: "QkFTRTY0SU1BR0VCWVRFUw==" },
-							mediaType: "image/jpeg",
-						},
-					],
-				}),
+				{
+					role: "user",
+					content: [{ type: "text", text: "hello" }],
+				},
 			],
 		};
 
-		const transformed = await splitToolImagesMiddleware.transformParams?.({
+		const out = await splitToolImagesMiddleware.transformParams?.({
 			type: "stream",
 			params,
-			model: {
-				specificationVersion: "v4",
-				provider: "test",
-				modelId: "test",
-				supportedUrls: {},
-				doGenerate: async () => {
-					throw new Error("unused");
-				},
-				doStream: async () => {
-					throw new Error("unused");
-				},
-			},
+			// `model` isn't used by this middleware; cast for the test.
+			model: undefined as never,
 		});
 
-		expect(splitToolImagesMiddleware.specificationVersion).toBe("v4");
-		expect(transformed?.prompt).toHaveLength(2);
+		// Identity preserved means downstream sees the original CallOptions
+		// without an unnecessary clone.
+		expect(out).toBe(params);
+	});
+
+	it("returns transformed params with rewritten prompt when images are present", async () => {
+		const params: LanguageModelV4CallOptions = {
+			prompt: [
+				{
+					role: "tool",
+					content: [
+						{
+							type: "tool-result",
+							toolCallId: "call_1",
+							toolName: "read_files",
+							output: {
+								type: "content",
+								value: [
+									{ type: "text", text: "ok" },
+									{
+										type: "file",
+										data: { type: "data", data: "QUFB" },
+										mediaType: "image/jpeg",
+									},
+								],
+							},
+						},
+					],
+				},
+			],
+		};
+
+		const out = await splitToolImagesMiddleware.transformParams?.({
+			type: "stream",
+			params,
+			model: undefined as never,
+		});
+
+		expect(out).not.toBe(params);
+		expect(out?.prompt).toHaveLength(2);
+		expect(out?.prompt[1].role).toBe("user");
+	});
+
+	it("preserves call-options siblings (temperature, tools, etc.)", async () => {
+		const params: LanguageModelV4CallOptions = {
+			prompt: [
+				{
+					role: "tool",
+					content: [
+						{
+							type: "tool-result",
+							toolCallId: "call_1",
+							toolName: "read_files",
+							output: {
+								type: "content",
+								value: [
+									{
+										type: "file",
+										data: { type: "data", data: "QUFB" },
+										mediaType: "image/jpeg",
+									},
+								],
+							},
+						},
+					],
+				},
+			],
+			temperature: 0.7,
+			maxOutputTokens: 1000,
+		};
+
+		const out = await splitToolImagesMiddleware.transformParams?.({
+			type: "stream",
+			params,
+			model: undefined as never,
+		});
+
+		expect(out?.temperature).toBe(0.7);
+		expect(out?.maxOutputTokens).toBe(1000);
 	});
 });

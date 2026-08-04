@@ -170,11 +170,11 @@ export function writeDesktopDebugLog(payload: unknown): void {
 		// errors and opens its development error overlay. These entries are
 		// already handled diagnostics (the caller owns user-facing recovery),
 		// so keep them visible in DevTools without presenting a false crash.
-		console.warn(prefix, { ...details, severity: "error" });
+		console.warn("%s", prefix, { ...details, severity: "error" });
 	} else if (entry.level === "info") {
-		console.info(prefix, details);
+		console.info("%s", prefix, details);
 	} else {
-		console.debug(prefix, details);
+		console.debug("%s", prefix, details);
 	}
 }
 

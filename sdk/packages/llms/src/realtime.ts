@@ -3,6 +3,7 @@ import { createGoogle } from "@ai-sdk/google";
 import { createOpenAI } from "@ai-sdk/openai";
 import type { Experimental_RealtimeSessionConfig } from "ai";
 import type { ProviderConfig } from "./providers/config";
+import { resolveVercelAiGatewayBaseUrl } from "./providers/url";
 
 const DEFAULT_VERCEL_AI_GATEWAY_BASE_URL = "https://ai-gateway.vercel.sh/v4/ai";
 const DEFAULT_REALTIME_VOICE_INSTRUCTIONS = [
@@ -39,23 +40,13 @@ function resolveApiKey(
 	return config.apiKey?.trim() || config.accessToken?.trim() || undefined;
 }
 
-function trimTrailingSlashes(value: string): string {
-	return value.replace(/\/+$/, "");
-}
-
 export function resolveVercelAIGatewayBaseUrl(
 	configuredBaseUrl: string | undefined,
 ): string {
-	const baseUrl = trimTrailingSlashes(
-		configuredBaseUrl ?? DEFAULT_VERCEL_AI_GATEWAY_BASE_URL,
+	return resolveVercelAiGatewayBaseUrl(
+		configuredBaseUrl,
+		DEFAULT_VERCEL_AI_GATEWAY_BASE_URL,
 	);
-	if (baseUrl.endsWith("/v4/ai")) {
-		return baseUrl;
-	}
-	if (/\/v\d+(?:\/ai)?$/.test(baseUrl)) {
-		return baseUrl.replace(/\/v\d+(?:\/ai)?$/, "/v4/ai");
-	}
-	return `${baseUrl}/v4/ai`;
 }
 
 export function resolveRealtimeProviderTransport(

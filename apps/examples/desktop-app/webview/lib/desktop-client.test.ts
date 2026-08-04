@@ -170,7 +170,8 @@ describe("DesktopClient command deadlines", () => {
 		).toBe(0);
 	});
 
-	it("prints handled errors without triggering the Next.js error overlay", () => {
+	it("prints handled errors without triggering the Next.js error overlay", async () => {
+		const { writeDesktopDebugLog } = await import("./desktop-client");
 		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -188,6 +189,7 @@ describe("DesktopClient command deadlines", () => {
 
 		expect(errorSpy).not.toHaveBeenCalled();
 		expect(warnSpy).toHaveBeenCalledWith(
+			"%s",
 			"[desktop:realtime-voice] Realtime voice session failed in the webview",
 			expect.objectContaining({
 				severity: "error",
