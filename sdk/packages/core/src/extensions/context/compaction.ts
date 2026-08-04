@@ -645,7 +645,15 @@ export function createContextCompactionPrepareTurn(
 				reason: statusReason,
 				phase: "completed",
 				iteration: context.iteration,
-				tokensBefore: requestInputTokens,
+				// Report what the decision was actually made on, which is the
+				// provider's own count once one exists. `requestInputTokens`
+				// estimates the same quantity and read 96% high before the
+				// estimator was calibrated, which put this notice at odds with
+				// the context bar it sits above. The "after" figure has no
+				// counterpart to use -- it describes a request that has not
+				// been sent -- so it stays an estimate and is corrected by the
+				// next response's usage.
+				tokensBefore: triggerInputTokens,
 				tokensAfter: afterRequestTokens,
 				messagesBefore: beforeMessageCount,
 				messagesAfter: result.messages.length,
@@ -658,9 +666,9 @@ export function createContextCompactionPrepareTurn(
 				messagesBefore: beforeMessageCount,
 				messagesAfter: result.messages.length,
 				messagesRemoved: beforeMessageCount - result.messages.length,
-				tokensBefore: requestInputTokens,
+				tokensBefore: triggerInputTokens,
 				tokensAfter: afterRequestTokens,
-				tokensSaved: requestInputTokens - afterRequestTokens,
+				tokensSaved: triggerInputTokens - afterRequestTokens,
 				triggerTokens: requestTriggerTokens,
 				maxInputTokens,
 				thresholdRatio: COMPACTION_TRIGGER_RATIO,
