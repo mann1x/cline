@@ -35,6 +35,7 @@ import {
 	captureSdkError,
 	captureTaskLifecycleEvent,
 	estimateTokens,
+	markSdkErrorReported,
 	mergeModelOptions,
 	normalizeJsonLikeStringsForSchema,
 	omitUndefinedValues,
@@ -459,6 +460,19 @@ export class AgentRuntime {
 		usage: cloneUsage(DEFAULT_USAGE),
 		lastError: undefined as string | undefined,
 		lastErrorClass: undefined as ProviderErrorClass | undefined,
+		/**
+		 * Whether the model layer already recorded `sdk.error` telemetry for
+		 * `lastError` (carried on the stream's `finish` event, since the raw
+		 * error object does not cross that boundary).
+		 */
+		lastErrorReported: false,
+		/**
+		 * Errored model turns this run survived (the loop continued instead of
+		 * failing) — errored turns that still produced tool calls, plus the
+		 * overflow-recovery retry. Reported as `retry_count` on the terminal
+		 * `sdk.error` so retry loops show up as one event, not one per turn.
+		 */
+		erroredTurnsRetried: 0,
 	};
 	/** One automatic overflow-recovery attempt per run. */
 	private overflowRecoveryAttempted = false;
@@ -538,6 +552,8 @@ export class AgentRuntime {
 		this.state.usage = cloneUsage(DEFAULT_USAGE);
 		this.state.lastError = undefined;
 		this.state.lastErrorClass = undefined;
+		this.state.lastErrorReported = false;
+		this.state.erroredTurnsRetried = 0;
 		this.state.messages = cloneMessages(messages);
 		this.config = {
 			...this.config,
@@ -651,6 +667,8 @@ export class AgentRuntime {
 		this.state.pendingToolCalls = [];
 		this.state.lastError = undefined;
 		this.state.lastErrorClass = undefined;
+		this.state.lastErrorReported = false;
+		this.state.erroredTurnsRetried = 0;
 		this.state.usage = cloneUsage(DEFAULT_USAGE);
 		this.overflowRecoveryAttempted = false;
 
@@ -693,11 +711,9 @@ export class AgentRuntime {
 					throw this.normalizeAbortError();
 				}
 				if (message.content.length === 0) {
-					throw new Error(
-						finishReason === "error"
-							? (this.state.lastError ?? "Model stream failed")
-							: "Model returned empty response",
-					);
+					throw finishReason === "error"
+						? this.modelStreamFailure()
+						: new Error("Model returned empty response");
 				}
 				const toolCalls = message.content.filter(
 					(part: AgentMessagePart): part is AgentToolCallPart =>
@@ -723,7 +739,13 @@ export class AgentRuntime {
 					throw new Error(MAX_TOKENS_INCOMPLETE_TURN_MESSAGE);
 				}
 				if (finishReason === "error" && toolCalls.length === 0) {
-					throw new Error(this.state.lastError ?? "Model stream failed");
+					throw this.modelStreamFailure();
+				}
+				if (finishReason === "error") {
+					// The errored turn still produced tool calls, so the loop
+					// continues past it — count it as a retried turn instead of
+					// letting it surface as a fresh terminal error later.
+					this.state.erroredTurnsRetried += 1;
 				}
 				this.state.pendingToolCalls = toolCalls.map((part) => part.toolCallId);
 
@@ -901,6 +923,7 @@ export class AgentRuntime {
 				providerError,
 			},
 		});
+		this.state.erroredTurnsRetried += 1;
 		const retry = await this.generateAssistantMessage({
 			overflowRecovery: true,
 		});
@@ -1142,6 +1165,7 @@ export class AgentRuntime {
 						// stays eligible for overflow recovery.
 						this.state.lastErrorClass =
 							event.errorClass ?? classifyProviderError(event.error);
+						this.state.lastErrorReported = event.errorReported === true;
 					}
 					break;
 				}
@@ -1755,6 +1779,22 @@ export class AgentRuntime {
 		}
 	}
 
+	/**
+	 * Reconstruct the provider failure that ended the current turn as an
+	 * `Error`. The model stream flattens the provider error to a string, so
+	 * when the model layer already recorded `sdk.error` telemetry for it
+	 * (`finish.errorReported`), the reconstructed error is re-tagged as
+	 * reported — outer reporters (the `run-failed` handler, core hosts) then
+	 * skip it instead of emitting a duplicate event.
+	 */
+	private modelStreamFailure(): Error {
+		const error = new Error(this.state.lastError ?? "Model stream failed");
+		if (this.state.lastError !== undefined && this.state.lastErrorReported) {
+			markSdkErrorReported(error);
+		}
+		return error;
+	}
+
 	private normalizeAbortError(): Error {
 		const reason = this.abortController?.signal.reason;
 		if (reason instanceof Error) {
@@ -1797,13 +1837,20 @@ export class AgentRuntime {
 					...metadata,
 					error: event.error,
 				});
+				// No-op when the model layer already reported this failure
+				// (`captureSdkError` skips errors tagged as reported) — the
+				// innermost reporter is canonical. Emits only for failures that
+				// originate in the run loop itself.
 				captureSdkError(this.config.telemetry, {
 					component: "agents",
 					operation: "agent.run",
 					error: event.error,
 					severity: "error",
 					handled: false,
-					context: metadata as TelemetryProperties,
+					context: {
+						...(metadata as TelemetryProperties),
+						retry_count: this.state.erroredTurnsRetried,
+					},
 				});
 				break;
 			default:
