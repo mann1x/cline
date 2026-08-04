@@ -240,6 +240,20 @@ async function executeShellCommands(
 // =============================================================================
 
 /**
+ * What a successful read with no content is told to mean.
+ *
+ * A range whose start is past the end of the file is not an error — the read
+ * succeeds and returns nothing. To a model that is paging through a file, an
+ * empty successful result reads as "nothing here yet, try again", and it does:
+ * measured against a local model, 15 identical `read_files` calls in a row,
+ * which no instruction and no output budget broke out of, because every one of
+ * them looked like a retryable miss. Saying what the emptiness means, and that
+ * there is nothing further to ask for, is what ends the loop.
+ */
+export const EMPTY_READ_EXPLANATION =
+	"[no content returned: the requested line range starts past the end of this file, or the file is empty. Do not request another range for this file - use the content you already have.]";
+
+/**
  * Create the read_files tool
  *
  * Reads the content of one or more files from the filesystem.
@@ -317,7 +331,10 @@ export function createReadFilesTool(
 						);
 						return {
 							query: formatReadFileQuery(request),
-							result: content,
+							result:
+								typeof content === "string" && content.trim() === ""
+									? EMPTY_READ_EXPLANATION
+									: content,
 							success: true,
 						};
 					} catch (error) {

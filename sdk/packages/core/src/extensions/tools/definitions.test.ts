@@ -8,6 +8,7 @@ import {
 	createSearchTool,
 	createShellTool,
 	createSkillsTool,
+	EMPTY_READ_EXPLANATION,
 } from "./definitions";
 import { CommandExitError } from "./executors/bash";
 import { RUN_COMMAND_QUERY_PREVIEW_LIMIT, TimeoutError } from "./helpers";
@@ -1378,6 +1379,46 @@ describe("default read_files tool", () => {
 				iteration: 1,
 			}),
 		);
+	});
+
+	it("says what an empty successful read means", async () => {
+		// A range starting past EOF is not an error: the read succeeds and
+		// returns nothing. Handed back bare, that reads to a model as a
+		// retryable miss — measured live as 15 identical read_files calls in a
+		// row that no instruction or output budget broke out of.
+		const execute = vi.fn(async () => "   \n  ");
+		const tool = createReadFilesTool(execute);
+
+		const result = await tool.execute(
+			{ files: [{ path: "/tmp/example.ts", start_line: 900, end_line: 950 }] },
+			{ agentId: "agent-1", conversationId: "conv-1", iteration: 1 },
+		);
+
+		expect(result).toEqual([
+			{
+				query: "/tmp/example.ts:900-950",
+				result: EMPTY_READ_EXPLANATION,
+				success: true,
+			},
+		]);
+	});
+
+	it("leaves a non-empty read exactly as the executor returned it", async () => {
+		const execute = vi.fn(async () => "\n\tactual content\n");
+		const tool = createReadFilesTool(execute);
+
+		const result = await tool.execute(
+			{ files: [{ path: "/tmp/example.ts" }] },
+			{ agentId: "agent-1", conversationId: "conv-1", iteration: 1 },
+		);
+
+		expect(result).toEqual([
+			{
+				query: "/tmp/example.ts",
+				result: "\n\tactual content\n",
+				success: true,
+			},
+		]);
 	});
 
 	it("accepts string union inputs reading full file content", async () => {
