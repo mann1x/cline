@@ -19,6 +19,7 @@ import {
 } from "@cline/core"
 import type { ProviderApiLine, ModelInfo as SdkModelInfo } from "@cline/llms"
 import {
+	DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS,
 	getGeneratedModelsForProvider,
 	getModelsForProvider,
 	isProviderApiLine,
@@ -283,6 +284,51 @@ function toSdkModelInfo(selection: ResolvedModelSelection): SdkModelInfo {
 				}
 			: {}),
 	}
+}
+
+/**
+ * The share of the cap a model is told to aim for when the cap is effectively
+ * the whole context window, leaving the rest for the conversation.
+ */
+const OUTPUT_BUDGET_SAFE_SHARE = 0.75
+
+/**
+ * The point at which a per-turn cap stops being a cap and becomes the context
+ * window: at or above this share of it, filling the cap leaves nothing for
+ * anything else.
+ */
+const OUTPUT_BUDGET_WINDOW_SHARE_THRESHOLD = 0.9
+
+/**
+ * Build the system-prompt section describing the per-turn output cap.
+ *
+ * Every request carries a `maxOutputTokens` the provider truncates at
+ * (`num_predict`, for Ollama), and nothing in the prompt mentions it: the model
+ * is asked for a full plan plus edits with no idea its reply will be cut off
+ * mid-sentence, thinking included, and the turn wasted. When no per-model
+ * override exists the value is the gateway default of 32,000, which on a
+ * 32,768-token model is the entire context window — filling it leaves nothing
+ * for the conversation and forces a compaction round trip.
+ *
+ * Exported for tests: the wording is the whole behaviour.
+ */
+export function buildOutputBudgetSection(outputCap: number, contextWindow: number | undefined): string {
+	let section =
+		`\n\n# Output Budget\n\nEach reply you produce is capped at ${outputCap} tokens, thinking included. ` +
+		"Anything past the cap is cut off mid-sentence and the turn is wasted."
+	if (contextWindow !== undefined && outputCap >= contextWindow * OUTPUT_BUDGET_WINDOW_SHARE_THRESHOLD) {
+		const safeCap = Math.floor(outputCap * OUTPUT_BUDGET_SAFE_SHARE)
+		const reservedPercent = Math.round((1 - OUTPUT_BUDGET_SAFE_SHARE) * 100)
+		section +=
+			` That cap is effectively the whole ${contextWindow}-token context window, so keep each reply under ` +
+			`${safeCap} tokens and leave the remaining ${reservedPercent}% free for compaction.`
+	} else if (contextWindow !== undefined) {
+		section += ` The context window is ${contextWindow} tokens.`
+	}
+	section +=
+		" Prefer several focused tool calls over one oversized reply: if the remaining work does not fit, " +
+		"do the part that fits, call the tools it needs, and continue in the next turn."
+	return section
 }
 
 function resolveCommittedRuntimeModel(
@@ -902,6 +948,16 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		}
 	} catch (error) {
 		Logger.warn("[SessionFactory] Failed to inject preferredLanguage instructions:", error)
+	}
+
+	// Tell the model about the cap its reply will actually be truncated at.
+	try {
+		const outputCap = maxTokensPerTurn ?? DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS
+		const contextWindow = positiveFiniteNumber(committedRuntimeModel?.modelInfo?.contextWindow)
+		systemPrompt = `${systemPrompt}${buildOutputBudgetSection(outputCap, contextWindow)}`
+		Logger.log(`[SessionFactory] Output budget: cap=${outputCap} contextWindow=${contextWindow ?? "unknown"}`)
+	} catch (error) {
+		Logger.warn("[SessionFactory] Failed to inject output budget instructions:", error)
 	}
 
 	const stateManager = StateManager.get()
