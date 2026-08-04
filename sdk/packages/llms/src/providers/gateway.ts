@@ -28,6 +28,24 @@ export type * from "@cline/shared";
 export const DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS = 32_000;
 const GATEWAY_OUTPUT_RESERVE_TOKENS = 1_024;
 
+/**
+ * The smallest remaining-context cap worth sending as an output limit.
+ *
+ * That term is `contextWindow - estimatedInputTokens - reserve`: a difference of
+ * two large numbers, so it carries the estimate's error magnified. When it comes
+ * out below a floor, the estimate is the likelier explanation than a genuinely
+ * exhausted window -- compaction reads what the provider counted rather than an
+ * estimate, and would have fired first if the window were really full.
+ *
+ * Sending the tiny number anyway is worse than sending none. Observed live: an
+ * estimate running 1.7x high walked the cap down to 60 tokens; Ollama sizes an
+ * effort-level thinking budget as a share of `num_predict`, so the budget came
+ * out at 15 tokens, the forced end-of-thinking sequence spliced into a tool call
+ * the model had already started, and the turn died on "expected '{' in tool
+ * call" -- reported to the user as reaching the output limit.
+ */
+export const GATEWAY_MIN_OUTPUT_TOKENS = 1_024;
+
 function mergeRequestMetadata(
 	defaults: Record<string, unknown> | undefined,
 	request: Record<string, unknown> | undefined,
@@ -183,11 +201,14 @@ export function resolveGatewayRequestMaxTokens(input: {
 	estimatedInputTokens: number;
 	defaultMaxOutputTokens?: number;
 	outputReserveTokens?: number;
+	minOutputTokens?: number;
 	reasoningBudgetTokens?: number;
 	onContextOverflow?: (details: {
 		contextWindow: number;
 		estimatedInputTokens: number;
 		reserveTokens: number;
+		remainingContext: number;
+		minOutputTokens: number;
 	}) => void;
 }): number | undefined {
 	const caps: number[] = [];
@@ -220,13 +241,18 @@ export function resolveGatewayRequestMaxTokens(input: {
 	if (isPositiveFiniteNumber(input.model.contextWindow)) {
 		const reserveTokens =
 			input.outputReserveTokens ?? GATEWAY_OUTPUT_RESERVE_TOKENS;
+		const minOutputTokens = isPositiveFiniteNumber(input.minOutputTokens)
+			? input.minOutputTokens
+			: GATEWAY_MIN_OUTPUT_TOKENS;
 		const remainingContext =
 			input.model.contextWindow - input.estimatedInputTokens - reserveTokens;
-		if (remainingContext <= 0) {
+		if (remainingContext < minOutputTokens) {
 			input.onContextOverflow?.({
 				contextWindow: input.model.contextWindow,
 				estimatedInputTokens: input.estimatedInputTokens,
 				reserveTokens,
+				remainingContext,
+				minOutputTokens,
 			});
 			return undefined;
 		}
@@ -319,7 +345,7 @@ export class DefaultGateway implements Gateway {
 			reasoningBudgetTokens: request.reasoning?.budgetTokens,
 			onContextOverflow: (details) => {
 				this.logger?.log(
-					"Estimated prompt tokens exceed model context window",
+					"Estimated remaining context leaves no usable output budget; sending no output cap",
 					{
 						severity: "warn",
 						providerId: resolved.provider.id,

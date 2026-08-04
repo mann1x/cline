@@ -25,9 +25,19 @@ export const CHARS_PER_TOKEN = 3;
  * A ratio outside these bounds says something went wrong with the measurement
  * rather than something about the content -- a truncated request, a provider
  * counting something other than the prompt -- so it is discarded.
+ *
+ * The upper bound has to clear what a large-vocabulary tokenizer does to a
+ * serialized request, which is well past the 4-ish chars/token of plain English:
+ * `measureRequestInputChars` counts JSON, where every quote, brace and escape is
+ * a character but rarely a token of its own. Measured on Gemma-4 (262k vocab)
+ * against its own count: 645,803 serialized characters for 78,138 prompt tokens,
+ * a ratio of 8.26. At a ceiling of 8 that observation -- and every later one in
+ * the session -- was discarded as broken, so the ratio stayed frozen at a stale
+ * 5.07 while the estimate it fed ran 1.7x high, and the remaining-context term
+ * of the output cap decayed from 14,695 tokens to 60 over ten turns.
  */
 const MIN_OBSERVED_CHARS_PER_TOKEN = 1.2;
-const MAX_OBSERVED_CHARS_PER_TOKEN = 8;
+const MAX_OBSERVED_CHARS_PER_TOKEN = 16;
 
 /** Weight given to the newest observation once a baseline exists. */
 const OBSERVATION_WEIGHT = 0.3;
@@ -86,6 +96,14 @@ export function charsPerToken(): number {
  * according to the provider. The first observation is taken whole -- the
  * default it replaces is a guess, not a measurement -- and subsequent ones are
  * smoothed, so one unusual request cannot move the estimate far.
+ *
+ * The count and the ratio are recorded independently, because only one of them
+ * can be wrong. `tokens` is what the provider counted for the request that just
+ * ran; nothing about the character measurement can make that untrue. The ratio
+ * pairs it with a character count, and a mismatched pairing is what the bounds
+ * above reject -- so a rejected ratio must not take the count down with it.
+ * Keeping them together froze `lastObservedRequestTokens` at a count from
+ * fourteen turns earlier while the compaction trigger kept reading it.
  */
 export function observeRequestTokens(chars: number, tokens: number): void {
 	if (!Number.isFinite(chars) || !Number.isFinite(tokens)) {
@@ -94,6 +112,8 @@ export function observeRequestTokens(chars: number, tokens: number): void {
 	if (chars <= 0 || tokens <= 0) {
 		return;
 	}
+	const state = calibration();
+	state.requestTokens = tokens;
 	const ratio = chars / tokens;
 	if (
 		ratio < MIN_OBSERVED_CHARS_PER_TOKEN ||
@@ -101,13 +121,11 @@ export function observeRequestTokens(chars: number, tokens: number): void {
 	) {
 		return;
 	}
-	const state = calibration();
 	state.charsPerToken =
 		state.charsPerToken === undefined
 			? ratio
 			: state.charsPerToken * (1 - OBSERVATION_WEIGHT) +
 				ratio * OBSERVATION_WEIGHT;
-	state.requestTokens = tokens;
 }
 
 /**
