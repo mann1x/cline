@@ -1,4 +1,4 @@
-import { normalizeUserInput, stripModeNotices } from "@cline/shared"
+import { NO_TOOL_CALL_NUDGE_MESSAGE, normalizeUserInput, stripModeNotices } from "@cline/shared"
 
 /**
  * Canned prompt SdkModeCoordinator sends to drive the plan -> act
@@ -43,9 +43,10 @@ export function extractSdkUserText(message: SdkUserMessage): string {
 
 /**
  * Prompts sent to the SDK without a visible user_feedback echo (task
- * resumption, plan -> act auto-continue). They exist in SDK history but not
- * in the visible transcript, so ordinal mapping between the two must skip
- * them or every later user message maps one slot too early.
+ * resumption, plan -> act auto-continue, the runtime's no-tool-call nudge).
+ * They exist in SDK history but not in the visible transcript, so ordinal
+ * mapping between the two must skip them or every later user message maps one
+ * slot too early.
  */
 export function isSyntheticUserPrompt(text: string): boolean {
 	// Persisted prompts are wrapped by formatModePrompt as
@@ -55,7 +56,15 @@ export function isSyntheticUserPrompt(text: string): boolean {
 	// the synthetic prompt would start counting as a visible user message and
 	// shift every later edit/regenerate ordinal by one.
 	const normalized = stripModeNotices(normalizeUserInput(text))
-	return normalized.startsWith("[TASK RESUMPTION]") || normalized === ACT_MODE_CONTINUATION_PROMPT
+	return (
+		normalized.startsWith("[TASK RESUMPTION]") ||
+		normalized === ACT_MODE_CONTINUATION_PROMPT ||
+		// The runtime appends this as a user turn when a turn produced no tool
+		// calls. It is addressed to the model, not from the user: rendered as a
+		// bubble it reads as an instruction they never typed, and it splits the
+		// turn it was meant to continue into two.
+		normalized === NO_TOOL_CALL_NUDGE_MESSAGE
+	)
 }
 
 function hasAttachmentBlocks(message: SdkUserMessage): boolean {

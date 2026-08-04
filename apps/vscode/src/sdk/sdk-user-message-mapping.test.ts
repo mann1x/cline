@@ -1,3 +1,4 @@
+import { NO_TOOL_CALL_NUDGE_MESSAGE } from "@cline/shared"
 import { describe, expect, it } from "vitest"
 import {
 	ACT_MODE_CONTINUATION_PROMPT,
@@ -15,6 +16,15 @@ describe("isSyntheticUserPrompt", () => {
 	it("flags task resumption and act-mode continuation prompts", () => {
 		expect(isSyntheticUserPrompt("[TASK RESUMPTION] Please continue where you left off.")).toBe(true)
 		expect(isSyntheticUserPrompt(ACT_MODE_CONTINUATION_PROMPT)).toBe(true)
+	})
+
+	it("flags the runtime's no-tool-call nudge", () => {
+		// It is addressed to the model, not from the user. Rendered as a bubble
+		// it reads as an instruction they never typed, and it splits the turn it
+		// was meant to continue into two — which is how a nudged run came back
+		// from a reload asking to be resumed rather than showing as finished.
+		expect(isSyntheticUserPrompt(NO_TOOL_CALL_NUDGE_MESSAGE)).toBe(true)
+		expect(isSyntheticUserPrompt(wrapped(NO_TOOL_CALL_NUDGE_MESSAGE))).toBe(true)
 	})
 
 	it("flags the wrapped persisted shape of synthetic prompts", () => {

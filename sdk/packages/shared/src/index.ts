@@ -283,6 +283,7 @@ export {
 	formatModeSwitchNotice,
 	formatUserCommandBlock,
 	formatUserInputBlock,
+	NO_TOOL_CALL_NUDGE_MESSAGE,
 	normalizeUserInput,
 	parseUserCommandEnvelope,
 	parseUserInputMode,
