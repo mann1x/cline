@@ -61,14 +61,52 @@ interface GatewayNormalizedUsage {
 }
 type ProviderModuleKind = AiSdkProviderOptionsTarget;
 
+/**
+ * Map the gateway's reasoning intent onto the AI SDK's own per-request
+ * `reasoning` call option.
+ *
+ * The two vocabularies are the same except for `max`, which the SDK does not
+ * have and which means the same thing as `xhigh` here. `enabled: false` is
+ * `none` — an explicit instruction to reason as little as possible, which is
+ * different from expressing no preference.
+ *
+ * Returns `undefined` when the request expresses no preference, leaving the
+ * SDK on `provider-default` so a model configured with a reasoning setting
+ * keeps it.
+ */
+function toAiSdkReasoning(
+	reasoning: GatewayStreamRequest["reasoning"],
+): CallSettings["reasoning"] {
+	if (!reasoning) {
+		return undefined;
+	}
+	if (reasoning.enabled === false) {
+		return "none";
+	}
+	switch (reasoning.effort) {
+		case "max":
+			return "xhigh";
+		case "xhigh":
+		case "high":
+		case "medium":
+		case "low":
+		case "minimal":
+			return reasoning.effort;
+		default:
+			return undefined;
+	}
+}
+
 export function buildAiSdkStreamConfig(
 	request: GatewayStreamRequest,
 	_context: GatewayProviderContext,
 ): Partial<CallSettings> {
+	const reasoning = toAiSdkReasoning(request.reasoning);
 	return {
 		...(request.maxTokens !== undefined
 			? { maxOutputTokens: request.maxTokens }
 			: {}),
+		...(reasoning !== undefined ? { reasoning } : {}),
 		temperature: request.temperature,
 	};
 }
