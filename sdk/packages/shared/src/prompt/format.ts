@@ -146,6 +146,29 @@ export function normalizeUserInput(input?: string): string {
 }
 
 /**
+ * What a run is told when a turn produced no tool calls and no completion
+ * policy had anything to say about it.
+ *
+ * A turn with no tool calls ends the run, on the assumption that a model with
+ * nothing left to call has nothing left to do. That assumption fails on models
+ * that announce their plan and stop — "I will use multiple editor calls to fix
+ * this" — which ends the task with none of the work done. Measured on gemma4:
+ * 7 of 7 replays of one captured request returned text and no tool call.
+ *
+ * It lives here, beside the other text that is generated rather than typed,
+ * because two layers need to agree on it: the runtime appends it as a user
+ * turn, and the display layer has to recognise it to keep it out of the
+ * transcript. A nudge rendered as a user message is a message the user never
+ * sent, and it makes the turn it interrupts look like it ended on a question
+ * from them.
+ */
+export const NO_TOOL_CALL_NUDGE_MESSAGE =
+	"[SYSTEM] Your last message contained no tool calls, so the run was about to end. " +
+	"If the task is not finished, continue now by emitting the tool calls it needs - do not " +
+	"describe what you are going to do without doing it. If the task really is finished, " +
+	"say so in one short sentence.";
+
+/**
  * Removes runtime-generated <mode_notice> elements (content included): they
  * are not user-typed text and must not render as such. Deliberately NOT part
  * of normalizeUserInput -- that function also sanitizes outbound prompts
