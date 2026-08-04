@@ -88,6 +88,17 @@ async function clickButton(text: string, last = false): Promise<void> {
 }
 
 describe("WelcomeScreen", () => {
+	it("keeps the welcome composer in the upper portion of the page", async () => {
+		await renderWelcomeScreen({
+			workspaceRoot: "/projects/project-1",
+			workspaces: ["/projects/project-1"],
+		});
+
+		const content = container.querySelector(".max-w-240");
+		expect(content?.className).toContain("pt-[clamp(4rem,14vh,9rem)]");
+		expect(content?.className).not.toContain("26vh");
+	});
+
 	it("starts chat with the selected quick-action prompt", async () => {
 		const onStartChat = vi.fn();
 		await renderWelcomeScreen({

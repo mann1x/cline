@@ -659,77 +659,15 @@ export function handleHubLiveEvent(
 	}
 
 	switch (event.event) {
-		case "assistant.delta": {
-			const text =
-				typeof event.payload?.text === "string" ? event.payload.text : "";
-			if (text) {
-				emitChunk(ctx, sessionId, "chat_text", text);
-			}
+		case "assistant.delta":
+		case "assistant.image":
+		case "reasoning.delta":
+		case "tool.started":
+		case "tool.finished":
+			// HubRuntimeHost already projects these into the canonical Core event
+			// stream consumed by handleCoreSessionEvent. Relaying the raw Hub copy
+			// too duplicates text and creates two tool-start rows for one tool call.
 			return;
-		}
-		case "assistant.image": {
-			// HubRuntimeHost projects this raw Hub event into Core's canonical
-			// content_end(image) event, which handleAgentEvent relays. Emitting it
-			// here too briefly renders the same image twice until history reloads.
-			return;
-		}
-		case "reasoning.delta": {
-			const text =
-				typeof event.payload?.text === "string" ? event.payload.text : "";
-			const redacted = event.payload?.redacted === true;
-			if (!text && !redacted) {
-				return;
-			}
-			emitChunk(
-				ctx,
-				sessionId,
-				"chat_reasoning",
-				JSON.stringify({ text, redacted }),
-			);
-			return;
-		}
-		case "tool.started": {
-			emitChunk(
-				ctx,
-				sessionId,
-				"chat_tool_call_start",
-				JSON.stringify({
-					toolCallId:
-						typeof event.payload?.toolCallId === "string"
-							? event.payload.toolCallId
-							: undefined,
-					toolName:
-						typeof event.payload?.toolName === "string"
-							? event.payload.toolName
-							: "tool",
-					input: event.payload?.input,
-				}),
-			);
-			return;
-		}
-		case "tool.finished": {
-			emitChunk(
-				ctx,
-				sessionId,
-				"chat_tool_call_end",
-				JSON.stringify({
-					toolCallId:
-						typeof event.payload?.toolCallId === "string"
-							? event.payload.toolCallId
-							: undefined,
-					toolName:
-						typeof event.payload?.toolName === "string"
-							? event.payload.toolName
-							: "tool",
-					output: event.payload?.output,
-					error:
-						typeof event.payload?.error === "string"
-							? event.payload.error
-							: undefined,
-				}),
-			);
-			return;
-		}
 		case "run.started":
 		case "session.attached":
 		case "session.updated": {

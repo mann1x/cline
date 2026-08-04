@@ -222,7 +222,7 @@ describe("Code sidecar runtime capabilities", () => {
 		});
 	});
 
-	it("leaves attached-session assistant image projection to the Core event stream", async () => {
+	it("leaves attached-session content projection to the Core event stream", async () => {
 		const { createSidecarContext, handleHubLiveEvent } = await import(
 			"./context"
 		);
@@ -238,16 +238,23 @@ describe("Code sidecar runtime capabilities", () => {
 			attachedViaHub: true,
 		});
 
-		handleHubLiveEvent(ctx, {
-			event: "assistant.image",
-			sessionId: "session-image",
-			payload: {
-				image: {
-					data: "aGVsbG8=",
-					mediaType: "image/png",
+		for (const event of [
+			"assistant.delta",
+			"assistant.image",
+			"reasoning.delta",
+			"tool.started",
+			"tool.finished",
+		]) {
+			handleHubLiveEvent(ctx, {
+				event,
+				sessionId: "session-image",
+				payload: {
+					text: "one canonical copy",
+					toolCallId: "tool-1",
+					toolName: "run_commands",
 				},
-			},
-		});
+			});
+		}
 
 		expect(readEvents(ctx)).toEqual([]);
 	});

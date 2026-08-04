@@ -80,7 +80,7 @@ export function WelcomeScreen({
 				<div
 					className={cn(
 						active
-							? "mx-auto flex w-full max-w-240 flex-col px-6 pb-32 pt-[clamp(8rem,26vh,17rem)] max-[720px]:px-4 max-[720px]:pb-20 max-[720px]:pt-16"
+							? "mx-auto flex w-full max-w-240 flex-col px-6 pb-32 pt-[clamp(4rem,14vh,9rem)] max-[720px]:px-4 max-[720px]:pb-20 max-[720px]:pt-10"
 							: "contents",
 					)}
 				>

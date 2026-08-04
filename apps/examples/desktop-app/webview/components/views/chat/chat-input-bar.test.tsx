@@ -186,6 +186,11 @@ describe("ChatInputBar", () => {
 			'[aria-label="Thinking level"]',
 		);
 		const leftControls = attachTrigger?.parentElement;
+		expect(
+			attachTrigger?.querySelector(".lucide-paperclip")?.classList,
+		).toContain("size-3");
+		expect(thinkingTrigger?.querySelector(".lucide-wifi-high")).not.toBeNull();
+		expect(thinkingTrigger?.querySelector(".lucide-brain")).toBeNull();
 		expect(leftControls?.className).toContain("max-[560px]:flex-nowrap");
 		expect(leftControls?.contains(compactModelTrigger ?? null)).toBe(true);
 		expect(leftControls?.contains(thinkingTrigger ?? null)).toBe(true);
@@ -205,9 +210,20 @@ describe("ChatInputBar", () => {
 		const sendTrigger = container.querySelector<HTMLButtonElement>(
 			'[aria-label="Send message"]',
 		);
-		const voiceControls = realtimeTrigger?.parentElement;
-		expect(voiceControls?.contains(realtimeTrigger ?? null)).toBe(true);
-		expect(voiceControls?.contains(speechTrigger ?? null)).toBe(true);
+		const stopTrigger = container.querySelector<HTMLButtonElement>(
+			'[aria-label="Stop agent"]',
+		);
+		const promptControls = promptInput?.parentElement;
+		expect(promptControls?.className).toContain("items-end");
+		expect(sendTrigger).toBeNull();
+		expect(promptControls?.contains(stopTrigger ?? null)).toBe(true);
+		expect(promptControls?.contains(realtimeTrigger ?? null)).toBe(true);
+		expect(promptControls?.contains(speechTrigger ?? null)).toBe(true);
+		expect(stopTrigger?.parentElement?.lastElementChild).toBe(stopTrigger);
+		expect(stopTrigger?.parentElement?.className).toContain("gap-1");
+		expect(stopTrigger?.className).toContain("size-7");
+		expect(stopTrigger?.className).toContain("place-items-center");
+		expect(rightControls?.contains(sendTrigger ?? null)).toBe(false);
 		expect(
 			realtimeTrigger?.querySelector(".lucide-audio-waveform"),
 		).not.toBeNull();
@@ -215,7 +231,7 @@ describe("ChatInputBar", () => {
 		expect(realtimeTrigger?.nextElementSibling).toBe(
 			speechTrigger?.parentElement,
 		);
-		expect(sendTrigger).not.toBeNull();
+		expect(speechTrigger?.parentElement?.nextElementSibling).toBe(stopTrigger);
 		expect(leftControls?.parentElement).toBe(rightControls?.parentElement);
 		await act(async () => realtimeTrigger?.click());
 		expect(onOpenRealtimeVoiceSettings).toHaveBeenCalledOnce();
@@ -297,6 +313,12 @@ describe("ChatInputBar", () => {
 			expect(element).toBeDefined();
 			return element as HTMLElement;
 		});
+		expect(highOption.querySelector(".lucide-wifi-high")).not.toBeNull();
+		expect(
+			[...document.querySelectorAll<HTMLElement>('[role="option"]')]
+				.find((option) => option.textContent?.includes("None"))
+				?.querySelector(".lucide-wifi-off"),
+		).not.toBeNull();
 		await act(async () => {
 			highOption.dispatchEvent(
 				new MouseEvent("pointerup", { bubbles: true, cancelable: true }),

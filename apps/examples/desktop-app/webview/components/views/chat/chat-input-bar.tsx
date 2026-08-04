@@ -4,7 +4,6 @@ import { CLINE_DEFAULT_MODEL_ID } from "@cline/shared/browser";
 import { SearchCombobox } from "@cline/ui";
 import {
 	ArrowUp,
-	Brain,
 	Check,
 	ChevronDown,
 	ChevronRight,
@@ -14,6 +13,11 @@ import {
 	Paperclip,
 	Pencil,
 	Trash2,
+	Wifi,
+	WifiHigh,
+	WifiLow,
+	WifiOff,
+	WifiZero,
 	X,
 } from "lucide-react";
 import {
@@ -123,7 +127,45 @@ const EFFORT_LEVELS: ReasoningEffortOption[] = [
 	{ label: "High", value: "high" },
 	{ label: "Extra", value: "xhigh" },
 ];
+
+function ReasoningEffortIcon({
+	value,
+	className = "size-3",
+}: {
+	value: ReasoningEffortOption["value"];
+	className?: string;
+}) {
+	const Icon =
+		value === "none"
+			? WifiOff
+			: value === "low"
+				? WifiZero
+				: value === "medium"
+					? WifiLow
+					: value === "high"
+						? WifiHigh
+						: Wifi;
+	return <Icon className={className} />;
+}
 const PROMPT_INPUT_COLLAPSED_ROWS = 1;
+const PROMPT_INPUT_WELCOME_ROWS = 3;
+const AUDIO_BASE64_CHUNK_SIZE = 0x8000;
+const MAX_RECORDED_AUDIO_BYTES = 25 * 1024 * 1024;
+
+async function blobToBase64(blob: Blob): Promise<string> {
+	const bytes = new Uint8Array(await blob.arrayBuffer());
+	let binary = "";
+	for (
+		let offset = 0;
+		offset < bytes.length;
+		offset += AUDIO_BASE64_CHUNK_SIZE
+	) {
+		binary += String.fromCharCode(
+			...bytes.subarray(offset, offset + AUDIO_BASE64_CHUNK_SIZE),
+		);
+	}
+	return window.btoa(binary);
+}
 const PROMPT_INPUT_EXPANDED_ROWS = 2;
 const PROMPT_INPUT_MAX_ROWS = 5;
 const PROMPT_INPUT_LINE_HEIGHT_REM = 1.25;
@@ -611,9 +653,11 @@ export function ChatInputBar({
 				? "None"
 				: (EFFORT_LEVELS[effortIndex]?.label ?? "Reasoning");
 	const promptInputRows =
-		variant === "welcome" || promptInputFocused
-			? PROMPT_INPUT_EXPANDED_ROWS
-			: PROMPT_INPUT_COLLAPSED_ROWS;
+		variant === "welcome"
+			? PROMPT_INPUT_WELCOME_ROWS
+			: promptInputFocused
+				? PROMPT_INPUT_EXPANDED_ROWS
+				: PROMPT_INPUT_COLLAPSED_ROWS;
 	const handleEffortChange = useCallback(
 		(value: string) => {
 			if (modelSupportsReasoning !== true) {
@@ -904,7 +948,7 @@ export function ChatInputBar({
 			)}
 		>
 			{/* Input area */}
-			<div className={cn("px-4 py-3", variant === "welcome" && "pb-2 pt-4")}>
+			<div className="px-4 py-3">
 				{promptsInQueue.length > 0 && (
 					<div className="mb-2">
 						<button
@@ -1150,7 +1194,7 @@ export function ChatInputBar({
 						className={cn(
 							"flex items-end gap-2 rounded-lg border border-border bg-background px-3 py-2.5 transition-all focus-within:border-primary/50 focus-within:ring-1 focus-within:ring-primary/20",
 							variant === "welcome" &&
-								"min-h-16 rounded-none border-0 bg-transparent px-0 py-0 focus-within:ring-0",
+								"rounded-none border-0 bg-transparent px-0 py-0 focus-within:ring-0",
 						)}
 					>
 						<textarea
@@ -1275,25 +1319,66 @@ export function ChatInputBar({
 							}}
 							value={promptInput}
 						/>
-						<div className="flex shrink-0 items-center gap-2">
-							{canAbort && (
+						<div className="flex shrink-0 items-center gap-1">
+							<RealtimeVoiceOverlay
+								bridge={realtimeBridge}
+								onConfigure={() => onOpenRealtimeVoiceSettings?.()}
+								onOpenChange={setRealtimeVoiceOpen}
+								open={realtimeVoiceOpen}
+								target={realtimeVoiceTarget}
+							/>
+							<SpeechInput
+								allowUnavailableClick={!transcriptionTarget}
+								onAudioRecorded={handleAudioRecorded}
+								onClick={(event) => {
+									if (!transcriptionTarget) {
+										event.preventDefault();
+										onOpenVoiceInputSettings?.();
+									}
+								}}
+								onError={handleSpeechInputError}
+								onStartStreaming={
+									transcriptionTarget?.supportsStreaming
+										? handleStartStreamingTranscription
+										: undefined
+								}
+								onStreamingEnd={handleStreamingTranscriptionEnd}
+								onStreamingStart={handleStreamingTranscriptionStart}
+								onTranscriptionChange={
+									transcriptionTarget?.supportsStreaming
+										? undefined
+										: handleTranscriptionChange
+								}
+								recordingMode={
+									transcriptionTarget?.supportsStreaming
+										? "streaming"
+										: "media-recorder"
+								}
+								title={
+									transcriptionTarget
+										? `${transcriptionTarget.supportsStreaming ? "Transcribe live" : "Transcribe"} with ${transcriptionTarget.providerName} / ${transcriptionTarget.modelName}`
+										: "Configure voice input in Settings → Models"
+								}
+							/>
+							{canAbort ? (
 								<button
 									aria-label="Stop agent"
 									className={cn(
-										"bg-foreground p-0 text-background transition-colors hover:bg-primary/80",
-										variant === "welcome" ? "rounded-md" : "rounded-full",
+										"inline-grid size-7 shrink-0 place-items-center p-0 text-background transition-colors hover:bg-primary/80",
+										variant === "welcome"
+											? "rounded-md bg-foreground"
+											: "rounded-full bg-foreground",
 									)}
 									onClick={onAbort}
 									type="button"
 								>
 									<CircleStop className="size-2" />
 								</button>
-							)}
-							{(!isBusy || canSend) && (
+							) : !isBusy || canSend ? (
 								<button
 									aria-label="Send message"
 									className={cn(
-										"p-1.5 transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+										"inline-grid size-7 shrink-0 place-items-center p-0 transition-colors disabled:cursor-not-allowed disabled:opacity-50",
 										variant === "welcome"
 											? "rounded-md bg-[linear-gradient(145deg,var(--primary-emphasis),var(--primary))] text-white shadow-sm hover:brightness-110"
 											: "rounded-full bg-primary text-background hover:bg-primary/80",
@@ -1304,7 +1389,7 @@ export function ChatInputBar({
 								>
 									<ArrowUp className="size-2" />
 								</button>
-							)}
+							) : null}
 						</div>
 					</div>
 				</div>
@@ -1339,7 +1424,7 @@ export function ChatInputBar({
 						onClick={() => fileInputRef.current?.click()}
 						type="button"
 					>
-						<Paperclip className="h-4 w-4" />
+						<Paperclip className="size-3" />
 					</button>
 					<input
 						accept="*/*"
@@ -1412,7 +1497,9 @@ export function ChatInputBar({
 									: undefined
 							}
 						>
-							<Brain className="size-3" />
+							<ReasoningEffortIcon
+								value={EFFORT_LEVELS[effortIndex]?.value ?? "low"}
+							/>
 							<span className="max-[560px]:sr-only">
 								<SelectValue>{effortLabel}</SelectValue>
 							</span>
@@ -1420,6 +1507,7 @@ export function ChatInputBar({
 						<SelectContent align="start">
 							{EFFORT_LEVELS.map((option) => (
 								<SelectItem key={option.value} value={option.value}>
+									<ReasoningEffortIcon value={option.value} />
 									{option.label}
 								</SelectItem>
 							))}
@@ -1453,48 +1541,6 @@ export function ChatInputBar({
 							</div>
 						</div>
 					) : null}
-					<div className="flex shrink-0 items-center gap-2">
-						<RealtimeVoiceOverlay
-							bridge={realtimeBridge}
-							onConfigure={() => onOpenRealtimeVoiceSettings?.()}
-							onOpenChange={setRealtimeVoiceOpen}
-							open={realtimeVoiceOpen}
-							target={realtimeVoiceTarget}
-						/>
-						<SpeechInput
-							allowUnavailableClick={!transcriptionTarget}
-							onAudioRecorded={handleAudioRecorded}
-							onClick={(event) => {
-								if (!transcriptionTarget) {
-									event.preventDefault();
-									onOpenVoiceInputSettings?.();
-								}
-							}}
-							onError={handleSpeechInputError}
-							onStartStreaming={
-								transcriptionTarget?.supportsStreaming
-									? handleStartStreamingTranscription
-									: undefined
-							}
-							onStreamingEnd={handleStreamingTranscriptionEnd}
-							onStreamingStart={handleStreamingTranscriptionStart}
-							onTranscriptionChange={
-								transcriptionTarget?.supportsStreaming
-									? undefined
-									: handleTranscriptionChange
-							}
-							recordingMode={
-								transcriptionTarget?.supportsStreaming
-									? "streaming"
-									: "media-recorder"
-							}
-							title={
-								transcriptionTarget
-									? `${transcriptionTarget.supportsStreaming ? "Transcribe live" : "Transcribe"} with ${transcriptionTarget.providerName} / ${transcriptionTarget.modelName}`
-									: "Configure voice input in Settings → Models"
-							}
-						/>
-					</div>
 				</div>
 			</div>
 		</div>
