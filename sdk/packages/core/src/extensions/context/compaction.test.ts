@@ -3372,7 +3372,7 @@ describe("createContextCompactionPrepareTurn", () => {
 		expect(result).toBeUndefined();
 	});
 
-	it("targets basic compaction at half the input budget for long conversations", async () => {
+	it("targets basic compaction at a third of the input budget for long conversations", async () => {
 		const compact = vi.fn((_context: CoreCompactionContext) => ({
 			messages: [
 				{ role: "user" as const, content: "Compacted by target budget" },
@@ -3426,7 +3426,9 @@ describe("createContextCompactionPrepareTurn", () => {
 		expect(compact).toHaveBeenCalledTimes(1);
 		const context = compact.mock.calls[0]?.[0];
 		expect(context?.budget.request.triggerTokens).toBe(244_800);
-		expect(context?.budget.request.targetTokens).toBe(136_000);
+		// A third of maxInputTokens (272,000), so one summary buys the run about
+		// two thirds of the window back rather than 40 points of it.
+		expect(context?.budget.request.targetTokens).toBe(89_760);
 		expect(context?.budget.messages.targetTokens).toBe(
 			(context?.budget.request.targetTokens ?? 0) -
 				(context?.budget.request.overheadTokens ?? 0),
@@ -3491,7 +3493,7 @@ describe("createContextCompactionPrepareTurn", () => {
 		expect(compact).toHaveBeenCalledTimes(1);
 		const context = compact.mock.calls[0]?.[0];
 		expect(context?.budget.request.triggerTokens).toBe(90);
-		expect(context?.budget.request.targetTokens).toBe(50);
+		expect(context?.budget.request.targetTokens).toBe(33);
 		expect(context?.budget.messages.targetTokens).toBe(
 			Math.max(
 				1,

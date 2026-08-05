@@ -94,7 +94,23 @@ export interface ContextCompactionPrepareTurnOptions {
 	manualTargetRatio?: number;
 }
 
-const LONG_CONVERSATION_TARGET_RATIO = 0.5;
+/**
+ * Where a long conversation lands after an automatic compaction, as a share of
+ * the usable input budget.
+ *
+ * Compaction is not free — it costs a summarizer call, and it costs whatever
+ * the summary fails to carry — so the measure that matters is how many turns it
+ * buys before the next one. At 0.5, a session that triggers at 0.9 recovers 40
+ * points of window and, on a transcript that grows a couple of points a turn,
+ * is back at the threshold within a handful of turns: observed sessions sat
+ * near half full and compacted again and again. A third leaves nearly twice the
+ * runway for one summary at the same price.
+ *
+ * Lower is not automatically better. The summarizer has to fit the discarded
+ * turns into what is left, and below roughly a third the summary becomes the
+ * thing that loses the detail, rather than the window.
+ */
+const LONG_CONVERSATION_TARGET_RATIO = 0.33;
 
 function isCompactionCancellation(
 	error: unknown,
