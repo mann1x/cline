@@ -27,8 +27,10 @@ export async function generatePromptTemplate(controller: Controller, _request: E
 
 	let family: string | undefined
 	if (providerId === "ollama") {
+		// An unset base URL is Ollama's default endpoint, which is where the
+		// generated template's own session will be sent.
 		const baseUrl = resolveBaseUrl(providerId, apiConfiguration)
-		family = baseUrl ? await resolveOllamaModelFamily(baseUrl, modelId).catch(() => undefined) : undefined
+		family = await resolveOllamaModelFamily(baseUrl, modelId).catch(() => undefined)
 	}
 
 	const generated = await generateTemplateForModel({

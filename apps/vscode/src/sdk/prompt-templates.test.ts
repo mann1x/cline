@@ -119,6 +119,22 @@ describe("resolveSessionPromptTemplate", () => {
 		expect(mocks.resolveOllamaModelFamily).not.toHaveBeenCalled()
 	})
 
+	it("still asks Ollama when no base url is configured", async () => {
+		// Blank is the normal state for a local install, and it means Ollama's
+		// default endpoint — which is where this session's own requests go.
+		// Skipping the lookup here is how a local Qwen lands on default.md.
+		mocks.resolveOllamaModelFamily.mockResolvedValue("qwen35moe")
+
+		const result = await resolveSessionPromptTemplate({
+			providerId: "ollama",
+			modelId: "a3b-coder_tb:vision-Q3_K_M",
+		})
+
+		expect(mocks.resolveOllamaModelFamily).toHaveBeenCalledWith(undefined, "a3b-coder_tb:vision-Q3_K_M")
+		expect(result.family).toBe("qwen35moe")
+		expect(result.rendered?.name).toBe("qwen")
+	})
+
 	it("lands on default.md when nothing claims the model", async () => {
 		const result = await resolveSessionPromptTemplate({
 			providerId: "openai",
