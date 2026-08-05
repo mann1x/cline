@@ -761,6 +761,32 @@ describe("AgentRuntime", () => {
 		expect(model.requests).toHaveLength(3);
 	});
 
+	it("does not ask again once the model has answered the nudge", async () => {
+		// The nudge asks a question with two branches — keep working, or say you
+		// are finished in one short sentence. Both are answered in one turn.
+		// Measured: a model replied "The task is fully complete ...", got the
+		// identical nudge back, and repeated itself verbatim.
+		const model = new ScriptedModel(
+			Array.from({ length: 6 }, () => () => [
+				{ type: "text-delta" as const, text: "The task is fully complete." },
+				{ type: "finish" as const, reason: "stop" as const },
+			]),
+		);
+		const runtime = new AgentRuntime({
+			model,
+			tools: [],
+			completionPolicy: {
+				maxNoToolCallNudges: DEFAULT_MAX_NO_TOOL_CALL_NUDGES,
+			},
+		});
+
+		const result = await runtime.run("Start");
+
+		expect(result.status).toBe("completed");
+		// The original turn plus exactly one nudged retry — never a second ask.
+		expect(model.requests).toHaveLength(2);
+	});
+
 	it("announces and enforces required completion tools from tool lifecycle metadata", async () => {
 		const submitTool: AgentTool<{ summary: string }, string> = {
 			name: "custom_finish",
