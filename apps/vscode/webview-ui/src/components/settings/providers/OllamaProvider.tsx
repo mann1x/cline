@@ -391,6 +391,77 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 				</div>
 			)}
 
+			{/* Show status message based on model availability */}
+			{ollamaModels.length === 0 && (
+				<p className="text-sm mt-1 text-description italic">
+					Unable to fetch models from Ollama server. Please ensure Ollama is running and accessible, or enter the model
+					ID manually above.
+				</p>
+			)}
+
+			{/* Render only after the provider config RPC has resolved: the
+			    debounced input fires onChange for its initial value shortly
+			    after mount, so mounting before `config` loads would persist
+			    the 32768 fallback over a value saved in providers.json. */}
+			{config !== undefined && (
+				<DebouncedTextField
+					initialValue={Number.isFinite(ollamaNumCtx) && ollamaNumCtx > 0 ? String(ollamaNumCtx) : ""}
+					onChange={(v) => {
+						const contextWindow = Number.parseInt(v, 10)
+						const numCtx = Number.isFinite(contextWindow) && contextWindow > 0 ? contextWindow : undefined
+						// The debounced input also fires for its initial value and
+						// external prop syncs — only persist actual changes.
+						const currentNumCtx = Number.isFinite(ollamaNumCtx) && ollamaNumCtx > 0 ? ollamaNumCtx : undefined
+						if (numCtx === currentNumCtx) {
+							return
+						}
+						// Persist to providers.json (`contextWindow`); the store
+						// mirrors the value to the legacy state key for older
+						// readers. Zero clears the setting.
+						void write({ contextWindow: numCtx ?? 0 }).catch((error) =>
+							console.error("Failed to update Ollama context window:", error),
+						)
+
+						if (selectedModel.modelId) {
+							void commitModelSelection({
+								modelId: selectedModel.modelId,
+								modelInfo: {
+									...openAiModelInfoSafeDefaults,
+									name: selectedModel.modelId,
+									...(numCtx ? { contextWindow: numCtx } : {}),
+								},
+							}).catch((error) => console.error("Failed to update Ollama context window:", error))
+						}
+					}}
+					placeholder={"Default: 32768"}
+					style={{ width: "100%" }}>
+					<span className="font-semibold">Model Context Window</span>
+				</DebouncedTextField>
+			)}
+
+			{showModelOptions && (
+				<>
+					<DebouncedTextField
+						initialValue={
+							apiConfiguration?.requestTimeoutMs ? apiConfiguration.requestTimeoutMs.toString() : "300000"
+						}
+						onChange={(value) => {
+							// Convert to number, with validation
+							const numValue = Number.parseInt(value, 10)
+							if (!Number.isNaN(numValue) && numValue > 0) {
+								handleFieldChange("requestTimeoutMs", numValue)
+							}
+						}}
+						placeholder="Default: 300000 (5 minutes)"
+						style={{ width: "100%" }}>
+						<span className="font-semibold">Request Timeout (ms)</span>
+					</DebouncedTextField>
+					<p className="text-xs mt-0 text-description">
+						Maximum time in milliseconds to wait for API responses before timing out.
+					</p>
+				</>
+			)}
+
 			{/* Sampling. Collapsed by default: these are the model's own knobs and
 			    most sessions never touch them, but when a model misbehaves they
 			    are the only thing that changes its behaviour. */}
@@ -492,77 +563,6 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 						</div>
 					)}
 				</div>
-			)}
-
-			{/* Show status message based on model availability */}
-			{ollamaModels.length === 0 && (
-				<p className="text-sm mt-1 text-description italic">
-					Unable to fetch models from Ollama server. Please ensure Ollama is running and accessible, or enter the model
-					ID manually above.
-				</p>
-			)}
-
-			{/* Render only after the provider config RPC has resolved: the
-			    debounced input fires onChange for its initial value shortly
-			    after mount, so mounting before `config` loads would persist
-			    the 32768 fallback over a value saved in providers.json. */}
-			{config !== undefined && (
-				<DebouncedTextField
-					initialValue={Number.isFinite(ollamaNumCtx) && ollamaNumCtx > 0 ? String(ollamaNumCtx) : ""}
-					onChange={(v) => {
-						const contextWindow = Number.parseInt(v, 10)
-						const numCtx = Number.isFinite(contextWindow) && contextWindow > 0 ? contextWindow : undefined
-						// The debounced input also fires for its initial value and
-						// external prop syncs — only persist actual changes.
-						const currentNumCtx = Number.isFinite(ollamaNumCtx) && ollamaNumCtx > 0 ? ollamaNumCtx : undefined
-						if (numCtx === currentNumCtx) {
-							return
-						}
-						// Persist to providers.json (`contextWindow`); the store
-						// mirrors the value to the legacy state key for older
-						// readers. Zero clears the setting.
-						void write({ contextWindow: numCtx ?? 0 }).catch((error) =>
-							console.error("Failed to update Ollama context window:", error),
-						)
-
-						if (selectedModel.modelId) {
-							void commitModelSelection({
-								modelId: selectedModel.modelId,
-								modelInfo: {
-									...openAiModelInfoSafeDefaults,
-									name: selectedModel.modelId,
-									...(numCtx ? { contextWindow: numCtx } : {}),
-								},
-							}).catch((error) => console.error("Failed to update Ollama context window:", error))
-						}
-					}}
-					placeholder={"Default: 32768"}
-					style={{ width: "100%" }}>
-					<span className="font-semibold">Model Context Window</span>
-				</DebouncedTextField>
-			)}
-
-			{showModelOptions && (
-				<>
-					<DebouncedTextField
-						initialValue={
-							apiConfiguration?.requestTimeoutMs ? apiConfiguration.requestTimeoutMs.toString() : "300000"
-						}
-						onChange={(value) => {
-							// Convert to number, with validation
-							const numValue = Number.parseInt(value, 10)
-							if (!Number.isNaN(numValue) && numValue > 0) {
-								handleFieldChange("requestTimeoutMs", numValue)
-							}
-						}}
-						placeholder="Default: 300000 (5 minutes)"
-						style={{ width: "100%" }}>
-						<span className="font-semibold">Request Timeout (ms)</span>
-					</DebouncedTextField>
-					<p className="text-xs mt-0 text-description">
-						Maximum time in milliseconds to wait for API responses before timing out.
-					</p>
-				</>
 			)}
 
 			<p
