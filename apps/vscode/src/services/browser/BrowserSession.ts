@@ -8,8 +8,7 @@ import * as chromeLauncher from "chrome-launcher"
 import os from "os"
 import pWaitFor from "p-wait-for"
 import * as path from "path"
-// @ts-ignore
-import type { LoggerMessage, ScreenshotOptions } from "puppeteer-core"
+import type { ConsoleMessage, ScreenshotOptions } from "puppeteer-core"
 import { Browser, connect, launch, Page, TimeoutError } from "puppeteer-core"
 import { StateManager } from "@/core/storage/StateManager"
 import { telemetryService } from "@/services/telemetry"
@@ -385,7 +384,7 @@ export class BrowserSession {
 		const logs: string[] = []
 		let lastLogTs = Date.now()
 
-		const LoggerListener = (msg: LoggerMessage) => {
+		const consoleListener = (msg: ConsoleMessage) => {
 			if (msg.type() === "log") {
 				logs.push(msg.text())
 			} else {
@@ -400,7 +399,7 @@ export class BrowserSession {
 		}
 
 		// Add the listeners
-		this.page.on("Logger", LoggerListener)
+		this.page.on("console", consoleListener)
 		this.page.on("pageerror", errorListener)
 
 		try {
@@ -467,7 +466,7 @@ export class BrowserSession {
 		}
 
 		// this.page.removeAllListeners() <- causes the page to crash!
-		this.page.off("Logger", LoggerListener)
+		this.page.off("console", consoleListener)
 		this.page.off("pageerror", errorListener)
 
 		return {
