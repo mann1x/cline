@@ -545,5 +545,72 @@ describe("Diagnostics Tests", () => {
 				"src/file1.ts\n- [Error] Line 1, column 1: Error message\n- [Warning] Line 2, column 1: Warning message\n- [Information] Line 3, column 1: Info message\n- [Hint] Line 4, column 1: Hint message",
 			)
 		})
+
+		const errorAt = (line: number, character: number, message: string) => ({
+			severity: DiagnosticSeverity.DIAGNOSTIC_ERROR,
+			message,
+			range: { start: { line, character }, end: { line, character: character + 1 } },
+		})
+
+		it("points at an unbalanced delimiter reported behind the errors it caused", async () => {
+			// The shape measured live: a run of cascade errors near the top of
+			// the file and the actual unclosed brace reported last, at EOF.
+			const diagnostics: FileDiagnostics[] = [
+				{
+					filePath: "/workspace/src/file1.ts",
+					diagnostics: [
+						errorAt(89, 4, "',' expected."),
+						errorAt(89, 12, "':' expected."),
+						errorAt(91, 14, "';' expected."),
+						errorAt(176, 0, "'}' expected."),
+					],
+				},
+			]
+
+			const result = await diagnosticsToProblemsString(diagnostics)
+
+			const hint = result.split("\n")[1]
+			expect(hint).to.contain("Start here")
+			expect(hint).to.contain("'}' expected at line 177, column 1")
+			expect(hint).to.contain("The other 3 errors")
+			// The full list still follows, unreordered.
+			expect(result).to.contain("- [Error] Line 90, column 5: ',' expected.")
+			expect(result.indexOf("Start here")).to.be.lessThan(result.indexOf("Line 90"))
+		})
+
+		it("does not add a hint when every error is structural, or when there are too few", async () => {
+			const allStructural: FileDiagnostics[] = [
+				{
+					filePath: "/workspace/src/file1.ts",
+					diagnostics: [errorAt(1, 0, "'}' expected."), errorAt(2, 0, "')' expected."), errorAt(3, 0, "']' expected.")],
+				},
+			]
+			expect(await diagnosticsToProblemsString(allStructural)).to.not.contain("Start here")
+
+			const tooFew: FileDiagnostics[] = [
+				{
+					filePath: "/workspace/src/file1.ts",
+					diagnostics: [errorAt(1, 0, "',' expected."), errorAt(176, 0, "'}' expected.")],
+				},
+			]
+			expect(await diagnosticsToProblemsString(tooFew)).to.not.contain("Start here")
+		})
+
+		it("does not mistake a cascade message for the root cause", async () => {
+			// `',' expected` and `';' expected` are what an unclosed brace
+			// produces, so they must never be promoted to the hint themselves.
+			const diagnostics: FileDiagnostics[] = [
+				{
+					filePath: "/workspace/src/file1.ts",
+					diagnostics: [
+						errorAt(0, 0, "',' expected."),
+						errorAt(1, 0, "';' expected."),
+						errorAt(2, 0, "Declaration or statement expected."),
+					],
+				},
+			]
+
+			expect(await diagnosticsToProblemsString(diagnostics)).to.not.contain("Start here")
+		})
 	})
 })
