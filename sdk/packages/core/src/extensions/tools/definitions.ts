@@ -738,10 +738,11 @@ export function createEditorTool(
 	return createTool<EditFileInput, ToolOperationResult>({
 		name: "editor",
 		description:
-			"An editor for controlled filesystem edits on the text file at the provided path. It does four things, chosen by which arguments you send:\n" +
+			"An editor for controlled filesystem edits on the text file at the provided path. It does six things, chosen by which arguments you send:\n" +
 			"- Replace text: `old_text` plus `new_text`. When `old_text` occurs more than once, add `occurrence` (one-based, in file order) to pick one, or `replace_all: true` to change every one.\n" +
 			"- Replace lines: `start_line` plus `new_text`, with optional `end_line` (inclusive, defaults to `start_line`). No `old_text` needed. Prefer this when the text is long, minified or repeated: a diagnostic already gives you the line number, and a line number cannot be ambiguous. An empty `new_text` deletes the range.\n" +
-			"- Insert: `insert_line` plus `new_text`, which adds text before that line without replacing anything. Use `line_count + 1` to append at EOF.\n" +
+			"- Replace characters: `start_line` and `start_column` plus `new_text`, with optional `end_line`/`end_column` (both inclusive; each defaults to its start). This is the unit a diagnostic speaks in — `Line 108, column 385` — and on a long or minified line it is the only edit that leaves the other 400 characters untouched. `start_column` on its own replaces exactly one character.\n" +
+			"- Insert: `insert_line` plus `new_text`, which adds text before that line without replacing anything. Use `line_count + 1` to append at EOF. Add `insert_column` to insert *within* that line instead, before the character at that column — this is how you add one missing bracket. Use `line_length + 1` to append at the end of the line.\n" +
 			"- Create: `new_text` alone, when the file does not exist.\n" +
 			"Use this rather than a shell command for anything that changes a file. If several edits to different files or non-overlapping regions are already known, emit multiple editor tool calls in the same response instead of serializing them across turns. " +
 			"Output: a single `{query, result, success, error?}` object for this one edit, where `query` is `edit:<path>` or `insert:<path>` and `result` describes what changed. " +

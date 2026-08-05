@@ -290,6 +290,174 @@ describe("createEditorExecutor", () => {
 			await fs.rm(dir, { recursive: true, force: true });
 		}
 	});
+	describe("editing by column", () => {
+		// Measured: 73 of 95 shell commands in one session were
+		// `IndexOf`/`Substring` surgery, hand-rolled because the tool could
+		// address a line but never a position inside one.
+		const MINIFIED = "a\nd(){x();y();}}\nb";
+
+		it("inserts a single character without touching the rest of the line", async () => {
+			await withTempFile(MINIFIED, async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const result = await editor(
+					{
+						path: filePath,
+						insert_line: 2,
+						insert_column: 5,
+						new_text: "}",
+					},
+					dir,
+					context,
+				);
+
+				expect(result).toContain("Inserted 1 character(s) at line 2 column 5");
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+					"a\nd(){}x();y();}}\nb",
+				);
+			});
+		});
+
+		it("appends at the end of a line with line_length + 1", async () => {
+			await withTempFile(MINIFIED, async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				await editor(
+					{
+						path: filePath,
+						insert_line: 2,
+						insert_column: 15,
+						new_text: "}",
+					},
+					dir,
+					context,
+				);
+
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+					"a\nd(){x();y();}}}\nb",
+				);
+			});
+		});
+
+		it("replaces exactly one character when only start_column is given", async () => {
+			await withTempFile(MINIFIED, async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const result = await editor(
+					{ path: filePath, start_line: 2, start_column: 14, new_text: ")" },
+					dir,
+					context,
+				);
+
+				expect(result).toContain("line 2, columns 14-14");
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+					"a\nd(){x();y();})\nb",
+				);
+			});
+		});
+
+		it("replaces an inclusive column range", async () => {
+			await withTempFile(MINIFIED, async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				await editor(
+					{
+						path: filePath,
+						start_line: 2,
+						start_column: 5,
+						end_column: 13,
+						new_text: "Z",
+					},
+					dir,
+					context,
+				);
+
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+					"a\nd(){Z}\nb",
+				);
+			});
+		});
+
+		it("spans lines when end_line is past start_line", async () => {
+			await withTempFile("keep1 CUT\nCUT keep2", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				await editor(
+					{
+						path: filePath,
+						start_line: 1,
+						start_column: 7,
+						end_line: 2,
+						end_column: 3,
+						new_text: "-",
+					},
+					dir,
+					context,
+				);
+
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+					"keep1 - keep2",
+				);
+			});
+		});
+
+		it("says how long the line is when the column is past its end", async () => {
+			await withTempFile(MINIFIED, async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				await expect(
+					editor(
+						{ path: filePath, start_line: 2, start_column: 99, new_text: "x" },
+						dir,
+						context,
+					),
+				).rejects.toThrow(
+					"Line 2 has 14 character(s), so start_column must be between 1 and 14",
+				);
+			});
+		});
+
+		it("points at insert_column when asked to replace an empty range", async () => {
+			await withTempFile(MINIFIED, async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				await expect(
+					editor(
+						{
+							path: filePath,
+							start_line: 2,
+							start_column: 8,
+							end_column: 3,
+							new_text: "x",
+						},
+						dir,
+						context,
+					),
+				).rejects.toThrow("use insert_line with insert_column");
+			});
+		});
+
+		it("rejects a column with no line to be a column of", async () => {
+			await withTempFile(MINIFIED, async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				await expect(
+					editor(
+						{ path: filePath, start_column: 3, new_text: "x" },
+						dir,
+						context,
+					),
+				).rejects.toThrow("need `start_line`");
+			});
+		});
+
+		it("reports a column edit that changed nothing", async () => {
+			await withTempFile(MINIFIED, async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const result = await editor(
+					{ path: filePath, start_line: 2, start_column: 14, new_text: "}" },
+					dir,
+					context,
+				);
+
+				expect(result).toContain("No change");
+				expect(result).not.toContain("Replaced");
+			});
+		});
+	});
+
 	describe("replacing a line range", () => {
 		// Twelve shell commands in one measured session existed only to do
 		// `$lines[91] = "..."`, because there was no tool for it.

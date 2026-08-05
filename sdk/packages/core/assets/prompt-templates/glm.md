@@ -63,6 +63,9 @@ Edits a text file at the provided absolute path. Use this instead of shell comma
 - `new_text`: string (required).
 - `start_line`: integer (optional). Use with `new_text` to replace lines (inclusive, defaults to `start_line` if `end_line` omitted). No `old_text` needed. Prefer this when the text is long, minified or repeated: a diagnostic already gives you the line number, and a line number cannot be ambiguous. An empty `new_text` deletes the range.
 - `end_line`: integer (optional). Use with `start_line` to set the inclusive end of the replaced range.
+- `start_column`: integer (optional). Use with `start_line` to replace characters rather than whole lines. A diagnostic reports `Line N, column C`; this is the edit that spends the column, and on a minified line it leaves everything else alone. Defaults `end_column` to itself, replacing exactly one character.
+- `end_column`: integer (optional). Inclusive last character on `end_line`.
+- `insert_column`: integer (optional). With `insert_line`, inserts `new_text` before that character inside the line instead of as a new line. This is how you add one missing bracket. Use `line_length + 1` to append at the end of the line.
 - `occurrence`: integer (optional). When `old_text` occurs more than once, add this (one-based, in file order) to pick one.
 - `replace_all`: boolean (optional). Set to true to change every occurrence of `old_text`.
 - Emit multiple `editor` calls together for independent edits to different files or non-overlapping regions.
