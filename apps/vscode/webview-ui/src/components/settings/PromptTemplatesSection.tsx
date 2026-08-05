@@ -39,7 +39,12 @@ const MAX_NAMED_GAPS = 4
  */
 function describeCoverage(covered: readonly string[], everyTool: readonly string[]): string {
 	if (everyTool.length === 0) {
-		return covered.length > 0 ? `${covered.length} tools` : "no tool overrides"
+		// No `default` row to measure against, so a count is all that can be
+		// said honestly.
+		if (covered.length === 0) {
+			return "no tool overrides"
+		}
+		return covered.length === 1 ? "1 tool" : `${covered.length} tools`
 	}
 	const missing = everyTool.filter((tool) => !covered.includes(tool))
 	if (missing.length === 0) {
