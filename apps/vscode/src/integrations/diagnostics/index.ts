@@ -51,11 +51,19 @@ export async function singleFileDiagnosticsToProblemsString(filePath: string, di
 
 	for (const diagnostic of diagnostics) {
 		const label = severityToString(diagnostic.severity)
-		// Lines are 0-indexed
-		const line = diagnostic.range?.start ? `${diagnostic.range.start.line + 1}` : ""
+		// Lines and characters are both 0-indexed in the protocol.
+		const start = diagnostic.range?.start
+		const line = start ? `${start.line + 1}` : ""
+		// The column is the part that makes a diagnostic actionable on a long
+		// line, and it was being dropped. Measured on a minified file: the one
+		// error that mattered was at line 92 *column 293*, and "Line 92" alone
+		// sent the model into fifteen shell commands counting braces by hand to
+		// find what the language server had already located exactly. The
+		// browser's own console said `manic_miner.html:92:293`.
+		const column = start?.character !== undefined ? `, column ${start.character + 1}` : ""
 
 		const source = diagnostic.source ? `${diagnostic.source} ` : ""
-		result += `\n- [${source}${label}] Line ${line}: ${diagnostic.message}`
+		result += `\n- [${source}${label}] Line ${line}${column}: ${diagnostic.message}`
 	}
 	return result
 }

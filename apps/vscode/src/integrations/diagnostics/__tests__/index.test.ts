@@ -258,7 +258,7 @@ describe("Diagnostics Tests", () => {
 
 			const result = await diagnosticsToProblemsString(diagnostics, severities)
 
-			expect(result).to.equal("src/file1.ts\n- [Error] Line 10: Type error")
+			expect(result).to.equal("src/file1.ts\n- [Error] Line 10, column 6: Type error")
 		})
 
 		it("should handle diagnostics without range information", async () => {
@@ -281,7 +281,7 @@ describe("Diagnostics Tests", () => {
 
 			const result = await diagnosticsToProblemsString(diagnostics, severities)
 
-			expect(result).to.equal("src/file1.ts\n- [Error] Line 1: File-level error")
+			expect(result).to.equal("src/file1.ts\n- [Error] Line 1, column 1: File-level error")
 		})
 
 		it("should handle diagnostics with missing start property in range", async () => {
@@ -325,7 +325,7 @@ describe("Diagnostics Tests", () => {
 
 			const result = await diagnosticsToProblemsString(diagnostics, severities)
 
-			expect(result).to.equal("src/file1.ts\n- [typescript Error] Line 1: Type error")
+			expect(result).to.equal("src/file1.ts\n- [typescript Error] Line 1, column 1: Type error")
 		})
 
 		it("should handle multiple severities", async () => {
@@ -364,7 +364,9 @@ describe("Diagnostics Tests", () => {
 
 			const result = await diagnosticsToProblemsString(diagnostics, severities)
 
-			expect(result).to.equal("src/file1.ts\n- [Error] Line 1: Error message\n- [Warning] Line 6: Warning message")
+			expect(result).to.equal(
+				"src/file1.ts\n- [Error] Line 1, column 1: Error message\n- [Warning] Line 6, column 1: Warning message",
+			)
 		})
 
 		it("should handle multiple files", async () => {
@@ -401,7 +403,7 @@ describe("Diagnostics Tests", () => {
 			const result = await diagnosticsToProblemsString(diagnostics, severities)
 
 			expect(result).to.equal(
-				"src/file1.ts\n- [Error] Line 1: Error in file1\n\nsrc/file2.ts\n- [Error] Line 6: Error in file2",
+				"src/file1.ts\n- [Error] Line 1, column 1: Error in file1\n\nsrc/file2.ts\n- [Error] Line 6, column 1: Error in file2",
 			)
 		})
 
@@ -425,7 +427,7 @@ describe("Diagnostics Tests", () => {
 
 			const result = await diagnosticsToProblemsString(diagnostics, severities)
 
-			expect(result).to.equal("../other/path/file1.ts\n- [Error] Line 1: Error outside workspace")
+			expect(result).to.equal("../other/path/file1.ts\n- [Error] Line 1, column 1: Error outside workspace")
 		})
 
 		it("should handle all diagnostic severity types", async () => {
@@ -466,7 +468,7 @@ describe("Diagnostics Tests", () => {
 			const result = await diagnosticsToProblemsString(diagnostics, severities)
 
 			expect(result).to.equal(
-				"src/file1.ts\n- [Error] Line 1: Error\n- [Warning] Line 2: Warning\n- [Information] Line 3: Information\n- [Hint] Line 4: Hint",
+				"src/file1.ts\n- [Error] Line 1, column 1: Error\n- [Warning] Line 2, column 1: Warning\n- [Information] Line 3, column 1: Information\n- [Hint] Line 4, column 1: Hint",
 			)
 		})
 
@@ -491,7 +493,7 @@ describe("Diagnostics Tests", () => {
 			const result = await diagnosticsToProblemsString(diagnostics, severities)
 
 			// Line 0 should be displayed as Line 1 (1-indexed)
-			expect(result).to.equal("src/file1.ts\n- [Error] Line 1: Error on first line")
+			expect(result).to.equal("src/file1.ts\n- [Error] Line 1, column 1: Error on first line")
 		})
 
 		it("should include all diagnostics when severities is undefined", async () => {
@@ -540,7 +542,7 @@ describe("Diagnostics Tests", () => {
 
 			// Should include all diagnostics regardless of severity
 			expect(result).to.equal(
-				"src/file1.ts\n- [Error] Line 1: Error message\n- [Warning] Line 2: Warning message\n- [Information] Line 3: Info message\n- [Hint] Line 4: Hint message",
+				"src/file1.ts\n- [Error] Line 1, column 1: Error message\n- [Warning] Line 2, column 1: Warning message\n- [Information] Line 3, column 1: Info message\n- [Hint] Line 4, column 1: Hint message",
 			)
 		})
 	})
