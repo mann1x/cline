@@ -83,8 +83,11 @@ export async function readPromptTemplateSettings(options: ReadPromptTemplateSett
 	const globalDirectory = resolveGlobalTemplateDirectory()
 	const workspaceDirectory = options.workspaceRoot ? resolveWorkspaceTemplateDirectory(options.workspaceRoot) : undefined
 
+	// The panel has to agree with the session about which template is active,
+	// so it resolves the family the same way: an unset base URL is Ollama's
+	// default endpoint rather than a reason to skip the lookup.
 	let family: string | undefined
-	if (options.providerId === "ollama" && options.baseUrl) {
+	if (options.providerId === "ollama") {
 		family = await resolveOllamaModelFamily(options.baseUrl, options.modelId).catch(() => undefined)
 	}
 

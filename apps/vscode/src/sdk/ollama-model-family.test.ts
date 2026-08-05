@@ -1,6 +1,6 @@
 import axios from "axios"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { clearOllamaModelFamilyCache, resolveOllamaModelFamily } from "./ollama-model-family"
+import { clearOllamaModelFamilyCache, DEFAULT_OLLAMA_BASE_URL, resolveOllamaModelFamily } from "./ollama-model-family"
 
 vi.mock("axios")
 vi.mock("@/shared/net", () => ({ getAxiosSettings: () => ({}) }))
@@ -86,6 +86,24 @@ describe("resolveOllamaModelFamily", () => {
 		await expect(resolveOllamaModelFamily("not a url", "m")).resolves.toBeUndefined()
 		await expect(resolveOllamaModelFamily("http://localhost:11434", "   ")).resolves.toBeUndefined()
 		expect(post).not.toHaveBeenCalled()
+	})
+
+	it("falls back to Ollama's own endpoint when none is configured", async () => {
+		// The settings field is blank for anyone running Ollama where it
+		// installs itself, and skipping the lookup there sent every local model
+		// to default.md however clearly the GGUF named its architecture.
+		post.mockResolvedValue({ data: { details: { family: "qwen35moe" } } } as never)
+
+		await expect(resolveOllamaModelFamily(undefined, "a3b-coder_tb:vision-Q3_K_M")).resolves.toBe("qwen35moe")
+		await expect(resolveOllamaModelFamily("   ", "a3b-coder_tb:vision-Q3_K_M")).resolves.toBe("qwen35moe")
+
+		expect(post).toHaveBeenCalledWith(
+			`${DEFAULT_OLLAMA_BASE_URL}/api/show`,
+			{ model: "a3b-coder_tb:vision-Q3_K_M" },
+			expect.anything(),
+		)
+		// Both spellings of "unset" land on one cache entry.
+		expect(post).toHaveBeenCalledTimes(1)
 	})
 
 	it("treats a blank family as no family", async () => {

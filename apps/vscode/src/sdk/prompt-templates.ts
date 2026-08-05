@@ -36,7 +36,7 @@ export interface ResolvePromptTemplateOptions {
 	providerId: string
 	modelId: string
 	workspaceRoot?: string
-	/** Ollama's endpoint, when that is the provider. */
+	/** Ollama's endpoint, when that is the provider. Blank means its default. */
 	baseUrl?: string
 	/** Tool names, so a section naming something else can be reported. */
 	knownToolNames?: readonly string[]
@@ -59,7 +59,10 @@ export interface ResolvedSessionPromptTemplate {
  * provider or model instead.
  */
 async function resolveFamily(options: ResolvePromptTemplateOptions): Promise<string | undefined> {
-	if (options.providerId !== "ollama" || !options.baseUrl) {
+	// No check on `baseUrl`: an unset one is Ollama's default endpoint, not the
+	// absence of one, and `resolveOllamaModelFamily` resolves it the same way
+	// the request path does.
+	if (options.providerId !== "ollama") {
 		return undefined
 	}
 	try {

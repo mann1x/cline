@@ -69,6 +69,21 @@ describe("readPromptTemplateSettings", () => {
 		expect(settings.templates.filter((template) => template.active).map((t) => t.name)).toEqual(["gemma"])
 	})
 
+	it("still asks Ollama when no base url is configured", async () => {
+		// The panel has to agree with the session, and the session treats a
+		// blank base URL as Ollama's default endpoint rather than as none.
+		mocks.resolveOllamaModelFamily.mockResolvedValue("qwen35moe")
+
+		const settings = await readPromptTemplateSettings({
+			providerId: "ollama",
+			modelId: "a3b-coder_tb:vision-Q3_K_M",
+		})
+
+		expect(mocks.resolveOllamaModelFamily).toHaveBeenCalledWith(undefined, "a3b-coder_tb:vision-Q3_K_M")
+		expect(settings.family).toBe("qwen35moe")
+		expect(settings.activeName).toBe("qwen")
+	})
+
 	it("says which rules a template would match on", async () => {
 		const settings = await readPromptTemplateSettings({ providerId: "openai", modelId: "gpt-5.5" })
 		const gemma = settings.templates.find((template) => template.name === "gemma")
