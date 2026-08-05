@@ -12,7 +12,7 @@ import {
 } from "./definitions";
 import { CommandExitError } from "./executors/bash";
 import { RUN_COMMAND_QUERY_PREVIEW_LIMIT, TimeoutError } from "./helpers";
-import { type EditFileInput, INPUT_ARG_CHAR_LIMIT } from "./schemas";
+import { EDITOR_ARG_CHAR_LIMIT, type EditFileInput } from "./schemas";
 import type { SkillsExecutorWithMetadata } from "./types";
 
 function hasSchemaKey(value: unknown, key: string): boolean {
@@ -1598,6 +1598,94 @@ describe("default read_files tool", () => {
 		);
 	});
 
+	it("reads a path field that carries a bracketed list instead of a path", async () => {
+		const execute = vi.fn(
+			async (request: { path: string }) => `content:${request.path}`,
+		);
+		const tool = createReadFilesTool(execute);
+
+		// The three shapes measured live, each of which validated as a path and
+		// was then joined onto the cwd: a stringified JSON array, the same with
+		// Windows separators unescaped, and a bare bracketed path.
+		await tool.execute({ path: '["/tmp/game.js"]' } as never, {
+			agentId: "agent-1",
+			conversationId: "conv-1",
+			iteration: 1,
+		});
+		await tool.execute({ path: "[/tmp/game.js]" } as never, {
+			agentId: "agent-1",
+			conversationId: "conv-1",
+			iteration: 2,
+		});
+		await tool.execute({ path: "[/tmp/a.ts, /tmp/b.ts]" } as never, {
+			agentId: "agent-1",
+			conversationId: "conv-1",
+			iteration: 3,
+		});
+
+		expect(execute).toHaveBeenNthCalledWith(
+			1,
+			{ path: "/tmp/game.js" },
+			expect.objectContaining({ iteration: 1 }),
+		);
+		expect(execute).toHaveBeenNthCalledWith(
+			2,
+			{ path: "/tmp/game.js" },
+			expect.objectContaining({ iteration: 2 }),
+		);
+		expect(execute).toHaveBeenNthCalledWith(
+			3,
+			{ path: "/tmp/a.ts" },
+			expect.objectContaining({ iteration: 3 }),
+		);
+		expect(execute).toHaveBeenNthCalledWith(
+			4,
+			{ path: "/tmp/b.ts" },
+			expect.objectContaining({ iteration: 3 }),
+		);
+	});
+
+	it("keeps a line range when expanding a bracketed path list", async () => {
+		const execute = vi.fn(
+			async (request: { path: string }) => `content:${request.path}`,
+		);
+		const tool = createReadFilesTool(execute);
+
+		await tool.execute(
+			{ path: "[/tmp/a.ts, /tmp/b.ts]", start_line: 10, end_line: 20 } as never,
+			{ agentId: "agent-1", conversationId: "conv-1", iteration: 1 },
+		);
+
+		expect(execute).toHaveBeenNthCalledWith(
+			1,
+			{ path: "/tmp/a.ts", start_line: 10, end_line: 20 },
+			expect.anything(),
+		);
+		expect(execute).toHaveBeenNthCalledWith(
+			2,
+			{ path: "/tmp/b.ts", start_line: 10, end_line: 20 },
+			expect.anything(),
+		);
+	});
+
+	it("leaves a path that merely contains a bracket alone", async () => {
+		const execute = vi.fn(
+			async (request: { path: string }) => `content:${request.path}`,
+		);
+		const tool = createReadFilesTool(execute);
+
+		await tool.execute({ path: "/tmp/dir[1]/file.ts" } as never, {
+			agentId: "agent-1",
+			conversationId: "conv-1",
+			iteration: 1,
+		});
+
+		expect(execute).toHaveBeenCalledWith(
+			{ path: "/tmp/dir[1]/file.ts" },
+			expect.anything(),
+		);
+	});
+
 	it("rejects orphan range entries that cannot be attached to a file entry", async () => {
 		const execute = vi.fn(async () => "should not run");
 		const tool = createReadFilesTool(execute);
@@ -2053,10 +2141,12 @@ describe("default editor tool", () => {
 			throw new Error("Expected editor tool to be defined.");
 		}
 
-		const oversizedText = "x".repeat(INPUT_ARG_CHAR_LIMIT + 1);
+		const oversizedText = "x".repeat(EDITOR_ARG_CHAR_LIMIT + 1);
 		const result = await editorTool.execute(
 			{
 				path: "/tmp/example.ts",
+				start_line: 4,
+				end_line: 9,
 				new_text: oversizedText,
 			},
 			{
@@ -2075,9 +2165,89 @@ describe("default editor tool", () => {
 		if (typeof result !== "object" || result == null || !("error" in result)) {
 			throw new Error("Expected editor tool result to include an error.");
 		}
-		expect(result.error).toContain(
-			`recommended limit of ${INPUT_ARG_CHAR_LIMIT}`,
+		expect(result.error).toContain(`limit of ${EDITOR_ARG_CHAR_LIMIT}`);
+		expect(execute).not.toHaveBeenCalled();
+	});
+
+	it("lets an oversized whole-file write through, since it cannot be split", async () => {
+		const execute = vi.fn(async () => "File created successfully");
+		const tools = createDefaultTools({
+			executors: {
+				editor: execute,
+			},
+			enableReadFiles: false,
+			enableSearch: false,
+			enableBash: false,
+			enableWebFetch: false,
+			enableSkills: false,
+			enableAskQuestion: false,
+			enableApplyPatch: false,
+			enableEditor: true,
+		});
+		const editorTool = tools.find((tool) => tool.name === "editor");
+		if (!editorTool) {
+			throw new Error("Expected editor tool to be defined.");
+		}
+
+		const oversizedText = "x".repeat(EDITOR_ARG_CHAR_LIMIT + 1);
+		const result = await editorTool.execute(
+			{
+				path: "/tmp/example.ts",
+				new_text: oversizedText,
+			},
+			{
+				agentId: "agent-1",
+				conversationId: "conv-1",
+				iteration: 1,
+			},
 		);
+
+		expect(result).toEqual({
+			query: "edit:/tmp/example.ts",
+			result: "File created successfully",
+			success: true,
+		});
+		expect(execute).toHaveBeenCalled();
+	});
+
+	it("still guards an oversized old_text, and names the line-number route", async () => {
+		const execute = vi.fn(async () => "patched");
+		const tools = createDefaultTools({
+			executors: {
+				editor: execute,
+			},
+			enableReadFiles: false,
+			enableSearch: false,
+			enableBash: false,
+			enableWebFetch: false,
+			enableSkills: false,
+			enableAskQuestion: false,
+			enableApplyPatch: false,
+			enableEditor: true,
+		});
+		const editorTool = tools.find((tool) => tool.name === "editor");
+		if (!editorTool) {
+			throw new Error("Expected editor tool to be defined.");
+		}
+
+		const result = await editorTool.execute(
+			{
+				path: "/tmp/example.ts",
+				old_text: "y".repeat(EDITOR_ARG_CHAR_LIMIT + 1),
+				new_text: "z",
+			},
+			{
+				agentId: "agent-1",
+				conversationId: "conv-1",
+				iteration: 1,
+			},
+		);
+
+		if (typeof result !== "object" || result == null || !("error" in result)) {
+			throw new Error("Expected editor tool result to include an error.");
+		}
+		expect(result.error).toContain("old_text was");
+		expect(result.error).toContain("start_line");
 		expect(execute).not.toHaveBeenCalled();
 	});
 });

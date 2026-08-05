@@ -81,7 +81,7 @@ Make precise edits to a single text file at `path`. Six modes, chosen by which a
 - Replace lines: `start_line` plus `new_text`, with optional `end_line` (inclusive, defaults to `start_line`). No `old_text` needed. Prefer this when the text is long, minified or repeated: a diagnostic already gives you the line number, and a line number cannot be ambiguous. An empty `new_text` deletes the range.
 - Replace characters: `start_line` and `start_column` plus `new_text`, with optional `end_line`/`end_column` (both inclusive, each defaulting to its start). This is the unit a diagnostic speaks in — `Line 108, column 385` — and on a long or minified line it is the only edit that leaves the rest of the line untouched. `start_column` on its own replaces exactly one character.
 - Insert: `insert_line` plus `new_text`, which adds text before that line without replacing anything. Use `line_count + 1` to append at EOF. Add `insert_column` to insert inside that line instead, before the character at that column — this is how you add one missing bracket, with `line_length + 1` appending at the end of the line.
-- Create: `new_text` alone, when the file does not exist.
+- Create: `new_text` alone, when the file does not exist. No size limit on this one — a file written whole cannot be split. To rewrite a file that already exists, replace lines 1 through its line count.
 
 Use this rather than a shell command for anything that changes a file. If several edits to different files or non-overlapping regions are already known, emit multiple editor calls in the same response instead of serializing them across turns.
 

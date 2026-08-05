@@ -1,7 +1,7 @@
 import { validateWithZod } from "@cline/shared";
 import {
 	type EditFileInput,
-	INPUT_ARG_CHAR_LIMIT,
+	EDITOR_ARG_CHAR_LIMIT,
 	type ReadFileRequest,
 	RunCommandsInputUnionSchema,
 	type StructuredCommandInput,
@@ -17,16 +17,42 @@ export function formatError(error: unknown): string {
 	return String(error);
 }
 
+/**
+ * Whether this call writes a whole file rather than editing part of one.
+ *
+ * `new_text` with no `old_text`, `insert_line` or `start_line` is the create
+ * form: the executor writes the payload as the entire file. There is no
+ * "smaller tool call" it can be split into, so the size guard must not ask
+ * for one.
+ */
+function isWholeFileWrite(input: EditFileInput): boolean {
+	return (
+		input.old_text == null &&
+		input.insert_line == null &&
+		input.start_line == null
+	);
+}
+
 export function getEditorSizeError(input: EditFileInput): string | null {
 	if (
 		typeof input.old_text === "string" &&
-		input.old_text.length > INPUT_ARG_CHAR_LIMIT
+		input.old_text.length > EDITOR_ARG_CHAR_LIMIT
 	) {
-		return `Editor input too large: old_text was ${input.old_text.length} characters, exceeding the recommended limit of ${INPUT_ARG_CHAR_LIMIT}. Split the edit into smaller tool calls so later tool calls are less likely to be truncated or time out.`;
+		return `Editor input too large: old_text was ${input.old_text.length} characters, exceeding the limit of ${EDITOR_ARG_CHAR_LIMIT}. A match string this long is the slow way to address an edit: replace the region by line number with \`start_line\`/\`end_line\` and no \`old_text\` at all, or split it into smaller edits.`;
 	}
 
-	if (input.new_text.length > INPUT_ARG_CHAR_LIMIT) {
-		return `Editor input too large: new_text was ${input.new_text.length} characters, exceeding the recommended limit of ${INPUT_ARG_CHAR_LIMIT}. Split the edit into smaller tool calls so later tool calls are less likely to be truncated or time out.`;
+	// A whole-file write is exempt: it is the one edit shape that cannot be
+	// made smaller. Measured on a 156-message session — the model sent a
+	// 13,279-character rewrite of a file it had failed to patch incrementally,
+	// was told to "split the edit into smaller tool calls", and twenty turns
+	// later asked the user whether it should try rewriting the file from
+	// scratch. It had already tried, and this guard was why it could not.
+	if (isWholeFileWrite(input)) {
+		return null;
+	}
+
+	if (input.new_text.length > EDITOR_ARG_CHAR_LIMIT) {
+		return `Editor input too large: new_text was ${input.new_text.length} characters, exceeding the limit of ${EDITOR_ARG_CHAR_LIMIT}. Split the edit into smaller tool calls, or replace the whole region in one call by line number with \`start_line\`/\`end_line\`.`;
 	}
 
 	return null;
@@ -131,6 +157,101 @@ export function coalesceOrphanReadRanges(input: unknown): unknown {
 			}
 		}
 	}
+	return input;
+}
+
+/** Path-carrying keys a model might put a bracketed list into. */
+const READ_PATH_KEYS = [
+	"path",
+	"file_path",
+	"filePath",
+	"paths",
+	"file_paths",
+	"files",
+] as const;
+
+/**
+ * Read a path field whose value is a list rendered as a string.
+ *
+ * Returns the paths it contains, or null when the value is an ordinary path.
+ * Only a value that is bracketed end to end qualifies — a path that merely
+ * contains a bracket is left alone.
+ */
+export function parseBracketedPathList(value: string): string[] | null {
+	const trimmed = value.trim();
+	if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) {
+		return null;
+	}
+
+	// `["c:\\dir\\a.js"]` — a JSON array the model stringified. Parsing it
+	// also undoes the escaping, which a naive split would leave behind.
+	try {
+		const parsed: unknown = JSON.parse(trimmed);
+		if (
+			Array.isArray(parsed) &&
+			parsed.length > 0 &&
+			parsed.every((entry) => typeof entry === "string" && entry.trim())
+		) {
+			return parsed.map((entry) => (entry as string).trim());
+		}
+	} catch {
+		// Not JSON; fall through to the bare form below.
+	}
+
+	// `[c:\dir\a.js, c:\dir\b.js]` — brackets with no quoting at all.
+	const paths = trimmed
+		.slice(1, -1)
+		.split(",")
+		.map((entry) => entry.trim().replace(/^["']|["']$/g, ""))
+		.filter(Boolean);
+	return paths.length > 0 ? paths : null;
+}
+
+/**
+ * Expand a path field holding a bracketed list into the real list.
+ *
+ * `read_files` is plural and its sibling `check_file` takes `paths: [...]`,
+ * so a model that has just used one reaches for an array here too — but
+ * `path` is a string, and a string is what a bracketed list validates as.
+ * Measured on a 156-message session: three consecutive calls sent
+ * `path: "[\"c:\\...\\game.js\"]"`, `"[c:\\...\\game.js]"` and
+ * `"[c:/.../game.js]"`, each of which passed validation and was then joined
+ * onto the cwd, so all three came back
+ * `ENOENT ... stat 'c:\...\test\["c:\...\game.js"]'`. The list was always
+ * there in the argument; nothing was reading it as one.
+ */
+export function expandBracketedPathLists(input: unknown): unknown {
+	if (typeof input === "string") {
+		return parseBracketedPathList(input) ?? input;
+	}
+
+	if (input === null || typeof input !== "object" || Array.isArray(input)) {
+		return input;
+	}
+
+	const record = input as Record<string, unknown>;
+	for (const key of READ_PATH_KEYS) {
+		const value = record[key];
+		if (typeof value !== "string") {
+			continue;
+		}
+		const paths = parseBracketedPathList(value);
+		if (!paths) {
+			continue;
+		}
+		if (paths.length === 1) {
+			return { ...record, [key]: paths[0] };
+		}
+		// Several files in one field: the entry's own range fields apply to
+		// each of them, since that is the only file they could have meant.
+		const { [key]: _listed, start_line, end_line, ...rest } = record;
+		const range = {
+			...(start_line === undefined ? {} : { start_line }),
+			...(end_line === undefined ? {} : { end_line }),
+		};
+		return { ...rest, files: paths.map((path) => ({ path, ...range })) };
+	}
+
 	return input;
 }
 

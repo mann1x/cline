@@ -67,7 +67,7 @@ Edit text files at an absolute path. Supports six operations chosen by which arg
 - Replace lines: `start_line` plus `new_text`, with optional `end_line` (inclusive, defaults to `start_line`). No `old_text` needed. Prefer this when the text is long, minified or repeated. An empty `new_text` deletes the range.
 - Replace characters: `start_line` and `start_column` plus `new_text`, with optional `end_line`/`end_column` (both inclusive, each defaulting to its start). Diagnostics report a column, so this is the edit for a one-character fix on a long or minified line. `start_column` on its own replaces exactly one character.
 - Insert: `insert_line` plus `new_text`, which adds text before that line without replacing anything. Use `line_count + 1` to append at EOF. Add `insert_column` to insert inside that line instead, before the character at that column; `line_length + 1` appends at the end of the line.
-- Create: `new_text` alone, when the file does not exist.
+- Create: `new_text` alone, when the file does not exist. No size limit on this one — a file written whole cannot be split. To rewrite a file that already exists, replace lines 1 through its line count.
 Use this rather than a shell command for anything that changes a file. If several edits to different files or non-overlapping regions are already known, emit multiple editor tool calls in the same response. Output: a single `{query, result, success, error?}` object for this one edit, where `query` is `edit:<path>` or `insert:<path>` and `result` describes what changed. A failed edit changes nothing: `success` is false, `error` says why, and the file is exactly as it was. Text copied from `read_files` must have its line-number gutter removed first.
 
 # tool: apply_patch

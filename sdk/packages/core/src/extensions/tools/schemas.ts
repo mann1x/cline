@@ -10,6 +10,19 @@ import { z } from "zod";
 export const INPUT_ARG_CHAR_LIMIT = 6000;
 
 /**
+ * Character ceiling for a single `editor` payload.
+ *
+ * Higher than the shared limit because an edit is not a shell command: the
+ * text is a region of a file, and its size is set by the file rather than by
+ * how concise the model is being. Measured on a 156-message session — a
+ * class-body replacement came to 6,407 characters and was refused for being
+ * 407 over, which cost a re-read and several follow-up edits to say the same
+ * thing. The guard is still here to catch a runaway payload; it should not be
+ * catching ordinary work.
+ */
+export const EDITOR_ARG_CHAR_LIMIT = 16_000;
+
+/**
  * A boolean that also accepts the string a model actually sends.
  *
  * Measured: a model called `read_files` with
@@ -276,12 +289,12 @@ export const EditFileInputSchema = z
 			.nullable()
 			.optional()
 			.describe(
-				`Exact text to replace (must match exactly once). Omit this when creating a missing file or inserting via insert_line. Keep this at or below ${INPUT_ARG_CHAR_LIMIT} characters when possible; larger payloads should be split across multiple tool calls to avoid timeouts.`,
+				`Exact text to replace (must match exactly once). Omit this when creating a missing file or inserting via insert_line. Keep this at or below ${EDITOR_ARG_CHAR_LIMIT} characters; a match string approaching that length means you are retyping the file, so address the region with start_line/end_line instead.`,
 			),
 		new_text: z
 			.string()
 			.describe(
-				`The new content to write when creating a missing file, the replacement text for edits, or the inserted text when insert_line is provided. Keep this at or below ${INPUT_ARG_CHAR_LIMIT} characters when possible; for large edits, use multiple calls with small chunks of old_text and new_text to iteratively edit the file.`,
+				`The new content to write when creating a missing file, the replacement text for edits, or the inserted text when insert_line is provided. Keep this at or below ${EDITOR_ARG_CHAR_LIMIT} characters for an edit; a whole-file write — new_text with no old_text, insert_line or start_line — has no limit, because there is nothing to split it into.`,
 			),
 		// See start_line above: coerced so a stringified line number still applies.
 		insert_line: z.coerce

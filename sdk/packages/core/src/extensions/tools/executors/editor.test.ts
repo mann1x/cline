@@ -694,6 +694,22 @@ describe("createEditorExecutor", () => {
 			});
 		});
 
+		it("names the whole-file replace route when new_text arrives without old_text", async () => {
+			// A model that has failed to patch a file incrementally sends the
+			// whole file back with no `old_text`. Saying only that `old_text` is
+			// missing leaves it with no way to do what it asked for.
+			await withTempFile("one\ntwo\nthree", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+
+				await expect(
+					editor({ path: filePath, new_text: "rewritten" }, dir, context),
+				).rejects.toThrow(/`start_line: 1` and `end_line: 3`/);
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+					"one\ntwo\nthree",
+				);
+			});
+		});
+
 		it("points at the line-number gutter when that is why nothing matched", async () => {
 			// Measured: the model pasted `fill();}});}\n93 | ` straight out of a
 			// read_files result, and "text not found" told it nothing.

@@ -25,6 +25,7 @@ import {
 } from "./executors/output-limits";
 import {
 	coalesceOrphanReadRanges,
+	expandBracketedPathLists,
 	formatError,
 	formatReadFileQuery,
 	formatRunCommandQueryPreview,
@@ -299,7 +300,7 @@ export function createReadFilesTool(
 		execute: async (input, context) => {
 			const validate = validateWithZod(
 				ReadFilesInputUnionSchema,
-				coalesceOrphanReadRanges(input),
+				coalesceOrphanReadRanges(expandBracketedPathLists(input)),
 			);
 			let requests: ReadFileRequest[];
 			if (typeof validate === "string") {
@@ -743,7 +744,7 @@ export function createEditorTool(
 			"- Replace lines: `start_line` plus `new_text`, with optional `end_line` (inclusive, defaults to `start_line`). No `old_text` needed. Prefer this when the text is long, minified or repeated: a diagnostic already gives you the line number, and a line number cannot be ambiguous. An empty `new_text` deletes the range.\n" +
 			"- Replace characters: `start_line` and `start_column` plus `new_text`, with optional `end_line`/`end_column` (both inclusive; each defaults to its start). This is the unit a diagnostic speaks in — `Line 108, column 385` — and on a long or minified line it is the only edit that leaves the other 400 characters untouched. `start_column` on its own replaces exactly one character.\n" +
 			"- Insert: `insert_line` plus `new_text`, which adds text before that line without replacing anything. Use `line_count + 1` to append at EOF. Add `insert_column` to insert *within* that line instead, before the character at that column — this is how you add one missing bracket. Use `line_length + 1` to append at the end of the line.\n" +
-			"- Create: `new_text` alone, when the file does not exist.\n" +
+			"- Create: `new_text` alone, when the file does not exist. This one has no size limit, because a file being written whole cannot be split. To rewrite a file that already exists, replace lines 1 through its line count.\n" +
 			"Use this rather than a shell command for anything that changes a file. If several edits to different files or non-overlapping regions are already known, emit multiple editor tool calls in the same response instead of serializing them across turns. " +
 			"Output: a single `{query, result, success, error?}` object for this one edit, where `query` is `edit:<path>` or `insert:<path>` and `result` describes what changed. " +
 			"A failed edit changes nothing: `success` is false, `error` says why, and the file is exactly as it was. Do not resend the same call — `error` names the fix. In particular, text copied out of a `read_files` result must have its `123 | ` line-number gutter removed first.",

@@ -671,8 +671,16 @@ export function createEditorExecutor(
 			return createFile(filePath, input.new_text, encoding);
 		}
 		if (input.old_text == null) {
+			// `new_text` alone against an existing file is a model asking to
+			// rewrite it wholesale. That is a legitimate move once incremental
+			// edits have failed, and the route exists — it is a line range
+			// covering the file — so name it rather than only naming what is
+			// missing.
+			const lineCount = (await fs.readFile(filePath, encoding)).split(
+				/\r\n|\n/,
+			).length;
 			throw new Error(
-				"Parameter `old_text` is required when editing an existing file without `insert_line` or `start_line`",
+				`Parameter \`old_text\` is required when editing an existing file without \`insert_line\` or \`start_line\`. To replace ${filePath} in full, send the same \`new_text\` with \`start_line: 1\` and \`end_line: ${lineCount}\`.`,
 			);
 		}
 
