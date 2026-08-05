@@ -347,11 +347,19 @@ async function replaceLineRange(
 			`Invalid start_line: ${startLineOneBased}. The file has ${lines.length} line(s), so start_line must be between 1 and ${lines.length}.`,
 		);
 	}
-	if (endLineOneBased < startLineOneBased || endLineOneBased > lines.length) {
+	if (endLineOneBased < startLineOneBased) {
 		throw new Error(
-			`Invalid end_line: ${endLineOneBased}. It must be at least start_line (${startLineOneBased}) and at most ${lines.length}.`,
+			`Invalid end_line: ${endLineOneBased}. It must be at least start_line (${startLineOneBased}).`,
 		);
 	}
+
+	// An end_line past the last line can only mean "to the end of the file",
+	// so honour that rather than rejecting it. Measured: a model sent
+	// `end_line: 9999` twice as a stand-in for EOF — it had no way to know the
+	// line count — and both calls failed. Clamping removes the need to know
+	// the count at all, which matters because replacing lines 1..count is the
+	// route we point at for rewriting a file whole.
+	const effectiveEndLine = Math.min(endLineOneBased, lines.length);
 
 	// An empty new_text deletes the range outright, which is the natural
 	// reading and what a caller removing a bad line wants.
@@ -359,14 +367,14 @@ async function replaceLineRange(
 		newStr == null || newStr === "" ? [] : newStr.split(/\r\n|\n/);
 	lines.splice(
 		startLineOneBased - 1,
-		endLineOneBased - startLineOneBased + 1,
+		effectiveEndLine - startLineOneBased + 1,
 		...replacement,
 	);
 	const updated = lines.join(eol);
 	const range =
-		startLineOneBased === endLineOneBased
+		startLineOneBased === effectiveEndLine
 			? `line ${startLineOneBased}`
-			: `lines ${startLineOneBased}-${endLineOneBased}`;
+			: `lines ${startLineOneBased}-${effectiveEndLine}`;
 
 	if (updated === content) {
 		return noChangeMessage(filePath, `${range} already reads exactly this way`);
@@ -379,7 +387,7 @@ async function replaceLineRange(
 	// lines where one was already correct shows a single line and reads like a
 	// half-applied edit. Measured: a model spent a turn asking whether line 90
 	// had been touched. Say it instead of leaving it to be inferred.
-	const requestedLines = endLineOneBased - startLineOneBased + 1;
+	const requestedLines = effectiveEndLine - startLineOneBased + 1;
 	const { removed } = changedLineCounts(content, updated);
 	const unchanged = requestedLines - removed;
 	const note =
@@ -676,11 +684,19 @@ export function createEditorExecutor(
 			// edits have failed, and the route exists — it is a line range
 			// covering the file — so name it rather than only naming what is
 			// missing.
+			//
+			// Every argument of the working call is spelled out, `path`
+			// included. An earlier version of this message named only the two
+			// line numbers to add, and a model rebuilt the call from the
+			// sentence instead of amending its own: it sent `start_line`,
+			// `end_line` and `new_text` with no `path` at all, three times in
+			// a row. A message that lists some of the arguments will be read
+			// as listing all of them.
 			const lineCount = (await fs.readFile(filePath, encoding)).split(
 				/\r\n|\n/,
 			).length;
 			throw new Error(
-				`Parameter \`old_text\` is required when editing an existing file without \`insert_line\` or \`start_line\`. To replace ${filePath} in full, send the same \`new_text\` with \`start_line: 1\` and \`end_line: ${lineCount}\`.`,
+				`Parameter \`old_text\` is required when editing an existing file without \`insert_line\` or \`start_line\`. To replace ${filePath} in full, send this call again with every argument it already has — \`path: "${filePath}"\` and the same \`new_text\` — plus \`start_line: 1\` and \`end_line: ${lineCount}\`.`,
 			);
 		}
 

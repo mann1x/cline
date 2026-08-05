@@ -39,7 +39,7 @@ export const CODE_INTEL_OPERATIONS = [
 
 export type CodeIntelOperation = (typeof CODE_INTEL_OPERATIONS)[number]
 
-export const CODE_INTEL_TOOL_DESCRIPTION = `Ask the IDE's language servers about a symbol. This answers questions that a text search cannot: it understands the code, so it distinguishes a definition from a mention and this class's method from another class's method of the same name.
+export const CODE_INTEL_TOOL_DESCRIPTION = `Ask the IDE's language servers — the LSP — about a symbol. If you are reaching for an LSP tool or an MCP server that wraps one, this is it: the same protocol, already running against this workspace and its open files, with no server to start. This answers questions a text search cannot, because it understands the code: it distinguishes a definition from a mention, and this class's method from another class's method of the same name.
 
 Use this before falling back to \`search_codebase\` for anything about a symbol. It is faster, exact, and does not need you to read files to interpret the result.
 

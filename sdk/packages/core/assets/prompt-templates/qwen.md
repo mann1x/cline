@@ -203,15 +203,16 @@ Execute shell commands for builds, tests, git operations, package management, or
 {{DEFAULT}}
 
 # tool: check_file
-Check files for errors and warnings using the IDE's language servers.
+Check files for errors and warnings using the IDE's language servers (LSP). These are live and follow your edits: a result is current as of the moment you ask, so a problem still reported after an edit is still there. There is no language server to restart from here.
 
 - **Usage**: Call this after editing a file to validate syntax/types before running heavy builds. It answers what `tsc`, `eslint`, `ruff`, etc., would tell you, but instantly.
 - **Parallelism**: Pass all files to check in the `paths` array.
 - **Arguments**: `paths` is an array of strings.
 - **Output**: Plain text listing problems per file (`file:line:column severity message`). If no problems are reported, the file is valid according to the IDE. Note: This does not run tests or builds; use `run_commands` for those.
+When a file's brackets do not match, a `Delimiter scan:` section follows the problems and names the *opening* bracket involved. A parse error is always reported where the parser gave up, which is the closing bracket; the opener is the one you have to edit, and it is the one the error cannot name. Trust that line over counting brackets yourself — it skips strings, comments and regex literals.
 
 # tool: code_intel
-Query the IDE's language servers for precise symbol information. Use this INSTEAD of `search_codebase` when asking about definitions, references, implementations, or types.
+Query the IDE's language servers — the LSP — for precise symbol information. This is the LSP: if you are reaching for an LSP tool or an MCP server that wraps one, this is it, already running against this workspace. Use this INSTEAD of `search_codebase` when asking about definitions, references, implementations, or types.
 
 Reach for it the moment you are about to do one of these by hand:
 - search for a name to find where it is defined -> `definition`

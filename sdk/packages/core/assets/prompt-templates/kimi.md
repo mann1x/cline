@@ -129,7 +129,7 @@ Output: one object per command, in order — `{query, result, success, error?}`,
 {{DEFAULT}}
 
 # tool: check_file
-Check files for errors and warnings using the IDE's language servers. Call this before running a checker yourself with `run_commands`. For files the IDE understands, it answers the same question as `tsc`, `eslint`, `biome`, `ruff`, `mypy`, `go build`, or `cargo check` — for the files you name, in milliseconds, without building the project.
+Check files for errors and warnings using the IDE's language servers (LSP). These are live and follow your edits: a result is current as of the moment you ask, so a problem still reported after an edit is still there. There is no language server to restart from here. Call this before running a checker yourself with `run_commands`. For files the IDE understands, it answers the same question as `tsc`, `eslint`, `biome`, `ruff`, `mypy`, `go build`, or `cargo check` — for the files you name, in milliseconds, without building the project.
 
 When to call:
 - After editing a file, to confirm the edit is valid before moving on.
@@ -141,9 +141,10 @@ Pass every file you want checked in one call.
 Read a clean result carefully. "No problems reported by the editor" is conclusive only where the IDE has a language server for that file, and it does not for every language on every machine. If this reports nothing and you have reason to expect a problem, or the project has a checker the IDE does not run, run that checker with `run_commands`. Tests and builds are always `run_commands`; this tool does not run them.
 
 Output: plain text, one section per file, each problem on its own line as `file:line:column` with severity and message. A clean file says so in one line. No object to unpack, no `success` field — problems being listed is this tool working, not failing.
+When a file's brackets do not match, a `Delimiter scan:` section follows the problems and names the *opening* bracket involved. A parse error is always reported where the parser gave up, which is the closing bracket; the opener is the one you have to edit, and it is the one the error cannot name. Trust that line over counting brackets yourself — it skips strings, comments and regex literals.
 
 # tool: code_intel
-Ask the IDE's language servers about a symbol. Use this before falling back to `search_codebase` for anything about a symbol. It is faster, exact, and does not need you to read files to interpret the result.
+Ask the IDE's language servers — the LSP — about a symbol. This is the LSP: if you are reaching for an LSP tool or an MCP server that wraps one, this is it, already running against this workspace. Use this before falling back to `search_codebase` for anything about a symbol. It is faster, exact, and does not need you to read files to interpret the result.
 
 Reach for it the moment you are about to do one of these by hand:
 - search for a name to find where it is defined -> `definition`

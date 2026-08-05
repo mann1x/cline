@@ -187,7 +187,7 @@ Nor is it the way to type-check or lint one file: `check_file` asks the IDE's ow
 {{DEFAULT}}
 
 # tool: check_file
-Check files for errors and warnings, using the editor's own language servers.
+Check files for errors and warnings, using the editor's own language servers (LSP). These are live and follow your edits: a result is current as of the moment you ask, so a problem still reported after an edit is still there. There is no language server to restart from here.
 
 Call shape: `check_file(paths: [string])` — absolute paths, every file you want checked in one call.
 
@@ -201,9 +201,10 @@ When to call it:
 Output: plain text, one section per file you named. Each problem is its own line, `file:line:column` with a severity and a message; a file with nothing wrong says so in one line. There is no object to unpack and no `success` field — problems being listed is this tool working, not failing.
 
 Read a clean result carefully. "No problems reported by the editor" is conclusive only where the IDE has a language server for that file, and it does not for every language on every machine. If this reports nothing and you have reason to expect a problem, or the project has a checker the IDE does not run, run that checker with `run_commands`. Tests and builds are always `run_commands`; this tool does not run them.
+When a file's brackets do not match, a `Delimiter scan:` section follows the problems and names the *opening* bracket involved. A parse error is always reported where the parser gave up, which is the closing bracket; the opener is the one you have to edit, and it is the one the error cannot name. Trust that line over counting brackets yourself — it skips strings, comments and regex literals.
 
 # tool: code_intel
-Ask the IDE's language servers about a symbol. It understands the code, so it separates a definition from a mention, and this class's method from another class's method of the same name.
+Ask the IDE's language servers — the LSP — about a symbol. This is the LSP: if you are reaching for an LSP tool or an MCP server that wraps one, this is it, already running against this workspace. It understands the code, so it separates a definition from a mention, and this class's method from another class's method of the same name.
 
 Reach for it the moment you are about to do one of these by hand:
 - search for a name to find where it is defined -> `definition`
