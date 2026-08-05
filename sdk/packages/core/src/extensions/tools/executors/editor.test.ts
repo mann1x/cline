@@ -694,6 +694,50 @@ describe("createEditorExecutor", () => {
 			});
 		});
 
+		it("treats an end_line past the last line as the end of the file", async () => {
+			// Measured: a model sent `end_line: 9999` twice as a stand-in for
+			// EOF, having no way to learn the line count, and both were
+			// rejected. The number can only mean one thing.
+			await withTempFile("one\ntwo\nthree", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const result = await editor(
+					{ path: filePath, start_line: 2, end_line: 9999, new_text: "TWO" },
+					dir,
+					context,
+				);
+
+				expect(result).toContain("Replaced lines 2-3");
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("one\nTWO");
+			});
+		});
+
+		it("replaces a whole file when the range starts at one and runs past the end", async () => {
+			await withTempFile("a\nb\nc", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				await editor(
+					{ path: filePath, start_line: 1, end_line: 9999, new_text: "only" },
+					dir,
+					context,
+				);
+
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("only");
+			});
+		});
+
+		it("still rejects an end_line before start_line", async () => {
+			await withTempFile("a\nb\nc", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+
+				await expect(
+					editor(
+						{ path: filePath, start_line: 3, end_line: 1, new_text: "x" },
+						dir,
+						context,
+					),
+				).rejects.toThrow(/at least start_line/);
+			});
+		});
+
 		it("names the whole-file replace route when new_text arrives without old_text", async () => {
 			// A model that has failed to patch a file incrementally sends the
 			// whole file back with no `old_text`. Saying only that `old_text` is

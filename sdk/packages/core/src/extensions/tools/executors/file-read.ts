@@ -58,6 +58,20 @@ const DEFAULT_FILE_READ_OPTIONS: Required<FileReadExecutorOptions> = {
 const MAX_TEXT_STREAM_BYTES = 100_000_000;
 const MAX_UNRANGED_LINE_SCAN = 50_000;
 
+/**
+ * How far the reader keeps counting lines after it has stopped capturing them,
+ * so that every read can report how long the file is.
+ *
+ * A ranged read used to stop at `end_line` and never learn the file's length,
+ * which left no way to ask the question at all. Measured on a 265-message
+ * session: five consecutive shell commands trying to find a line count —
+ * `wc -l` (not a Windows command), `type | find`, and three spellings of
+ * `(Get-Content).Count` — followed by two `editor` calls sending
+ * `end_line: 9999` as a guess at EOF. Counting the remaining lines costs one
+ * stream pass with no capture and no allocation.
+ */
+const MAX_LINE_COUNT_SCAN = 500_000;
+
 interface CapturedLine {
 	lineNumber: number;
 	text: string;
@@ -97,6 +111,9 @@ async function readTextWindow(
 	let totalLines = 0;
 	let capped = false;
 	let approximateTotalLines = false;
+	let fileLineCount = 0;
+	let approximateFileLineCount = false;
+	let doneCapturing = false;
 	const maxCapturedLineNumber = Number.isFinite(requestedEndLine)
 		? Math.min(requestedEndLine, requestedStartLine + MAX_READ_LINES - 1)
 		: requestedStartLine + MAX_READ_LINES - 1;
@@ -119,14 +136,28 @@ async function readTextWindow(
 
 	try {
 		for await (const rawLine of reader) {
+			fileLineCount += 1;
+			if (fileLineCount > MAX_LINE_COUNT_SCAN) {
+				fileLineCount -= 1;
+				approximateFileLineCount = true;
+				break;
+			}
+			// Past the requested range the loop keeps turning purely to count,
+			// so the result can say how long the file is.
+			if (doneCapturing) {
+				continue;
+			}
+
 			totalLines += 1;
 			if (totalLines > requestedEndLine) {
 				totalLines = requestedEndLine;
-				break;
+				doneCapturing = true;
+				continue;
 			}
 			if (!hasFiniteEndLine && capped && totalLines >= maxScannedLine) {
 				approximateTotalLines = true;
-				break;
+				doneCapturing = true;
+				continue;
 			}
 			if (totalLines < requestedStartLine || capped) {
 				continue;
@@ -173,13 +204,31 @@ async function readTextWindow(
 		return body;
 	}
 
+	// How long the file is, said on every read rather than only on a truncated
+	// one. It is the number needed to replace a file whole (`start_line: 1`
+	// with `end_line` at the count) and there was no way to ask for it.
+	const fileLength = approximateFileLineCount
+		? `${fileLineCount}+`
+		: `${fileLineCount}`;
+
 	const effectiveEndLine = Math.min(requestedEndLine, totalLines);
 	if (lastCapturedLine >= effectiveEndLine) {
-		return body;
+		const readWholeFile =
+			requestedStartLine === 1 &&
+			!approximateFileLineCount &&
+			lastCapturedLine === fileLineCount;
+		return readWholeFile
+			? `${body}\n\n[${fileLength} lines, shown in full.]`
+			: `${body}\n\n[Lines ${requestedStartLine}-${lastCapturedLine} of ${fileLength}.]`;
 	}
-	const totalLineText = approximateTotalLines
-		? `${totalLines}+ lines`
-		: effectiveEndLine;
+
+	// `approximateTotalLines` was the old ceiling on counting: an unranged read
+	// stopped scanning and could only say "50000+". The count now continues
+	// past the capture window, so say the real number whenever there is one.
+	const totalLineText =
+		approximateFileLineCount && approximateTotalLines
+			? `${fileLength} lines`
+			: fileLength;
 
 	return (
 		`${body}\n\n` +

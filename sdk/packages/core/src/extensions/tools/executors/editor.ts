@@ -347,11 +347,19 @@ async function replaceLineRange(
 			`Invalid start_line: ${startLineOneBased}. The file has ${lines.length} line(s), so start_line must be between 1 and ${lines.length}.`,
 		);
 	}
-	if (endLineOneBased < startLineOneBased || endLineOneBased > lines.length) {
+	if (endLineOneBased < startLineOneBased) {
 		throw new Error(
-			`Invalid end_line: ${endLineOneBased}. It must be at least start_line (${startLineOneBased}) and at most ${lines.length}.`,
+			`Invalid end_line: ${endLineOneBased}. It must be at least start_line (${startLineOneBased}).`,
 		);
 	}
+
+	// An end_line past the last line can only mean "to the end of the file",
+	// so honour that rather than rejecting it. Measured: a model sent
+	// `end_line: 9999` twice as a stand-in for EOF — it had no way to know the
+	// line count — and both calls failed. Clamping removes the need to know
+	// the count at all, which matters because replacing lines 1..count is the
+	// route we point at for rewriting a file whole.
+	const effectiveEndLine = Math.min(endLineOneBased, lines.length);
 
 	// An empty new_text deletes the range outright, which is the natural
 	// reading and what a caller removing a bad line wants.
@@ -359,14 +367,14 @@ async function replaceLineRange(
 		newStr == null || newStr === "" ? [] : newStr.split(/\r\n|\n/);
 	lines.splice(
 		startLineOneBased - 1,
-		endLineOneBased - startLineOneBased + 1,
+		effectiveEndLine - startLineOneBased + 1,
 		...replacement,
 	);
 	const updated = lines.join(eol);
 	const range =
-		startLineOneBased === endLineOneBased
+		startLineOneBased === effectiveEndLine
 			? `line ${startLineOneBased}`
-			: `lines ${startLineOneBased}-${endLineOneBased}`;
+			: `lines ${startLineOneBased}-${effectiveEndLine}`;
 
 	if (updated === content) {
 		return noChangeMessage(filePath, `${range} already reads exactly this way`);
@@ -379,7 +387,7 @@ async function replaceLineRange(
 	// lines where one was already correct shows a single line and reads like a
 	// half-applied edit. Measured: a model spent a turn asking whether line 90
 	// had been touched. Say it instead of leaving it to be inferred.
-	const requestedLines = endLineOneBased - startLineOneBased + 1;
+	const requestedLines = effectiveEndLine - startLineOneBased + 1;
 	const { removed } = changedLineCounts(content, updated);
 	const unchanged = requestedLines - removed;
 	const note =

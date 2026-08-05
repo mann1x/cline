@@ -7,7 +7,7 @@ import { createFileReadExecutor } from "./file-read";
 describe("createFileReadExecutor", () => {
 	it("reads a file from an absolute path", async () => {
 		const result = await readTempFile("hello absolute path");
-		expect(result).toBe("1 | hello absolute path");
+		expect(result).toBe("1 | hello absolute path\n\n[1 lines, shown in full.]");
 	});
 
 	it("returns only the requested inclusive line range", async () => {
@@ -15,7 +15,7 @@ describe("createFileReadExecutor", () => {
 			start_line: 2,
 			end_line: 3,
 		});
-		expect(result).toBe("2 | beta\n3 | gamma");
+		expect(result).toBe("2 | beta\n3 | gamma\n\n[Lines 2-3 of 4.]");
 	});
 
 	async function readTempFile(
@@ -56,8 +56,10 @@ describe("createFileReadExecutor", () => {
 		expect(result).toContain("1 | line 1");
 		expect(result).toContain("2000 | line 2000");
 		expect(result).not.toContain("line 2001");
+		// Counting now continues past the capture window, so the real length is
+		// reported where this used to say "50000+".
 		expect(result).toContain(
-			"[Showing lines 1-2000 of 50000+ lines. Use start_line/end_line to read other sections.]",
+			"[Showing lines 1-2000 of 60000. Use start_line/end_line to read other sections.]",
 		);
 	});
 
@@ -67,7 +69,9 @@ describe("createFileReadExecutor", () => {
 			end_line: 2402,
 		});
 
-		expect(result).toBe("2400 | line 2400\n2401 | line 2401\n2402 | line 2402");
+		expect(result).toBe(
+			"2400 | line 2400\n2401 | line 2401\n2402 | line 2402\n\n[Lines 2400-2402 of 2500.]",
+		);
 	});
 
 	it("reports the requested finite end line when a range exceeds the line cap", async () => {
@@ -96,7 +100,9 @@ describe("createFileReadExecutor", () => {
 				{ agentId: "agent-1", conversationId: "conv-1", iteration: 1 },
 			)) as string;
 
-			expect(result).toBe("50 | line 50\n51 | line 51\n52 | line 52");
+			expect(result).toBe(
+				"50 | line 50\n51 | line 51\n52 | line 52\n\n[Lines 50-52 of 100.]",
+			);
 		} finally {
 			await fs.rm(dir, { recursive: true, force: true });
 		}
