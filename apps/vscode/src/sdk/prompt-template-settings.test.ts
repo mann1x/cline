@@ -50,7 +50,15 @@ describe("readPromptTemplateSettings", () => {
 	it("lists every shipped template, not only the one that won", async () => {
 		const settings = await readPromptTemplateSettings({ providerId: "openai", modelId: "gpt-5.5" })
 
-		expect(settings.templates.map((template) => template.name).sort()).toEqual(["claude", "default", "gemma", "qwen"])
+		expect(settings.templates.map((template) => template.name).sort()).toEqual([
+			"claude",
+			"deepseek",
+			"default",
+			"gemma",
+			"glm",
+			"kimi",
+			"qwen",
+		])
 		expect(settings.templates.every((template) => template.source === "builtin")).toBe(true)
 	})
 

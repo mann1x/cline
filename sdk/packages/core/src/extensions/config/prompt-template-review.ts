@@ -73,6 +73,9 @@ Hard constraints:
 - Covering every tool is a hard requirement. A tool with no section keeps its built-in description, and that fallback exists for exactly one situation: Cline gains a new tool and the templates have not been regenerated yet. It is not a way to skip tools you have nothing to say about. A template that covers six of thirty-one tools is not using the fallback, it is relying on it, and nothing in the file shows which twenty-five were left out.
 - '{{DEFAULT}}' expands to the tool's built-in description at runtime, and it is how you cover a tool cheaply. Where you would improve on the built-in wording, write your own and put '{{DEFAULT}}' on its own line where the built-in text should follow. Where you would not, the entire section body may be just '{{DEFAULT}}'. Either is a covered tool; an absent section is not.
 - These eight tools must be written in your own words, and a section containing only '{{DEFAULT}}' is not acceptable for any of them: read_files, search_codebase, editor, apply_patch, run_commands, fetch_web_content, check_file, code_intel. They are the tools models in your family are observed to misuse, so they are the whole reason this template exists. For these eight, your own text — not the inherited text — has to carry the three things listed below: every value of any closed set, every argument and when to use it, and what comes back. Adding '{{DEFAULT}}' after your text is allowed and does not excuse you from any of that.
+- Do not copy a built-in description out word for word. That is a snapshot: it says the same thing today and stops tracking the built-in text tomorrow, so the next edit to it reaches every model except you. If you would not change the wording, write '{{DEFAULT}}' — that is what it is for.
+- Where you rule a use of a tool out, name the tool that replaces it. 'run_commands' in particular must name 'read_files', 'editor' and 'search_codebase' in your own text: "do not use this for file operations when dedicated tools exist" is a rule the reader has to already know the answer to in order to follow, which is the same as not writing it.
+- Two of those eight — 'run_commands' and 'skills' — must keep '{{DEFAULT}}' in the section as well. Their built-in descriptions are not fixed text: 'run_commands' is composed against the shell that will actually run the commands, so PowerShell, cmd and a POSIX shell get different quoting and sequencing advice, and 'skills' appends the skills installed on that machine. Replace either outright and you freeze one machine's answer into every machine's prompt, silently. Write your own text and put '{{DEFAULT}}' on its own line where the built-in text should follow.
 - For the other tools, a section whose body is exactly '{{DEFAULT}}' is a complete and correct answer. Do not pad them. Nothing about how you read changes what 'team_finalize_outcome' should say.
 - Emit every section exactly once. Do not repeat '# system', and do not write two '# tool: <name>' headings for the same tool. Only the last copy of a repeated section survives, so a duplicate silently throws away your own work.
 - Leave the 'match:' block in the frontmatter exactly as it is. It is what routes this template to you; change it and your rewrite reaches a different model, or none.
@@ -337,6 +340,42 @@ export function summarizeToolCallSignatures(
 const MIN_OUTPUT_DESCRIPTION_CHARS = 24;
 
 /**
+ * Tools whose built-in description is composed at runtime, not a fixed string.
+ *
+ * `run_commands` is written against the shell that will actually execute the
+ * commands — PowerShell, cmd and a POSIX shell get different quoting and
+ * sequencing advice, and WSL gets a note about where the Windows drive is
+ * mounted. `skills` appends the list of skills installed on this machine.
+ *
+ * A template that replaces either outright freezes one machine's answer into
+ * every machine's prompt, and does it silently: the section parses, resolves
+ * and applies, and the only symptom is a model being given `&&` sequencing
+ * advice on a shell that does not have it. Observed in two of five generated
+ * templates, which is why it is a rule and not a note.
+ */
+const COMPUTED_TOOL_NAMES = ["run_commands", "skills"];
+
+/**
+ * Tools whose description has to name the tool it redirects to.
+ *
+ * "Do not use this for file operations when dedicated tools exist" is a rule a
+ * model can agree with and still break, because it does not say what to reach
+ * for instead — the reader has to already know the answer to follow the
+ * advice. Observed verbatim from one of five models. Naming `read_files`,
+ * `editor` and `search_codebase` at the point of temptation is the whole
+ * mechanism these templates exist for; leaving them out keeps the shape of the
+ * guidance and loses its effect.
+ */
+const REQUIRED_REDIRECTS: Readonly<Record<string, readonly string[]>> = {
+	run_commands: ["read_files", "editor", "search_codebase"],
+};
+
+/** Whitespace and case only, so a reflowed copy still reads as a copy. */
+function normalizeForComparison(text: string): string {
+	return text.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+/**
  * Hold a rewritten tool section to what the built-in one already told the model.
  *
  * A section that keeps `{{DEFAULT}}` inherits the whole built-in description
@@ -382,7 +421,30 @@ export function auditToolSectionContent(
 		if (outputProblem) {
 			problems.push(outputProblem);
 		}
+		if (
+			COMPUTED_TOOL_NAMES.includes(name) &&
+			!body.includes(PROMPT_TEMPLATE_DEFAULT_MARKER)
+		) {
+			problems.push(
+				`The '# tool: ${name}' section replaces the built-in description, and that one is not a fixed string — it is composed for the machine the session is running on. Replacing it drops that. Keep your own text and put '{{DEFAULT}}' on its own line where the built-in text should follow.`,
+			);
+		}
 		const own = body.split(PROMPT_TEMPLATE_DEFAULT_MARKER).join("").trim();
+		// Only judged when there is own text to judge. A section that is nothing
+		// but the marker inherits the built-in description, which already names
+		// them; demanding they be repeated would be demanding the model write
+		// what it just chose to inherit.
+		const redirects = own === "" ? undefined : REQUIRED_REDIRECTS[name];
+		if (redirects) {
+			const missing = redirects.filter(
+				(tool) => !new RegExp(`\\b${tool}\\b`).test(own),
+			);
+			if (missing.length > 0) {
+				problems.push(
+					`The '# tool: ${name}' section tells the model what not to do without naming what to do instead: it never mentions ${missing.join(", ")}. A prohibition the reader cannot act on is one they will agree with and break. Name the tool that replaces each use you are ruling out.`,
+				);
+			}
+		}
 		if (mustRewrite.has(name) && own === "") {
 			problems.push(
 				`The '# tool: ${name}' section is nothing but '{{DEFAULT}}'. This is one of the tools models in your family actually misuse, so it is the one place the marker is not enough — write the description in your own words, in the form you would rather receive it.`,
@@ -402,6 +464,18 @@ export function auditToolSectionContent(
 		const signature = byName.get(name);
 		const builtin = builtinDescriptions[name];
 		if (!signature || builtin === undefined) {
+			continue;
+		}
+
+		// A section that reproduces the built-in text word for word is strictly
+		// worse than '{{DEFAULT}}': it says the same thing today and freezes it,
+		// so the next edit to the built-in description reaches every model
+		// except the ones whose template copied it. Observed on `editor`, where
+		// a model asked for its own words returned the default verbatim.
+		if (normalizeForComparison(own) === normalizeForComparison(builtin)) {
+			problems.push(
+				`The '# tool: ${name}' section is the built-in description copied out word for word. That is a snapshot, not a rewrite: it says the same thing today and stops tracking the built-in text tomorrow. Either write it in your own words or make the section body '{{DEFAULT}}'.`,
+			);
 			continue;
 		}
 		const judged = mustRewrite.has(name) ? own : body;

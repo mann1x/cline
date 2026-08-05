@@ -28,8 +28,11 @@ describe("builtin prompt templates", () => {
 	it("inlines every shipped template", () => {
 		expect(BUILTIN_PROMPT_TEMPLATE_FILES.map((file) => file.fileName)).toEqual([
 			"claude.md",
+			"deepseek.md",
 			"default.md",
 			"gemma.md",
+			"glm.md",
+			"kimi.md",
 			"qwen.md",
 		]);
 	});
