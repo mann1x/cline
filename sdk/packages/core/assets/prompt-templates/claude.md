@@ -87,18 +87,22 @@ If the user asks a question that does not need the codebase, just answer it.
 # tool: read_files
 Read text or image files at absolute paths, optionally a line range of one.
 
-Call shape: `read_files(files: [{path, start_line?, end_line?}])`. The argument is always the `files` array, one entry per file — a bare path, or a bare list of paths, is rejected. `start_line` and `end_line` are one-based and inclusive, and belong on the same entry as the `path` they narrow.
+Call shape: `read_files(files: [{path, start_line?, end_line?, line_numbers?}])`. The argument is always the `files` array, one entry per file — a bare path, or a bare list of paths, is rejected. `start_line` and `end_line` are one-based and inclusive, and belong on the same entry as the `path` they narrow.
 
 Put every file you already know you need into one call. Two `read_files` calls in consecutive turns, for files both known at the start, is a round trip spent on nothing.
 
 Each read returns at most 2000 lines / ~47k characters. A longer file reports its total line count; page through it with `start_line`/`end_line` on that file's entry. Binary files that are not images, and very large files, are not supported.
 
-Output: one object per requested file, in the order you requested them — `{query, result, success, error?}`. `query` echoes the path you asked for, as `path:start-end` when you gave a range, which is how you map a result back onto its request. `result` is that file's content. A file that could not be read has `success: false` and the reason in `error`; the other entries in the same call are unaffected.
+Output: one object per requested file, in the order you requested them — `{query, result, success, error?}`. `query` echoes the path you asked for, as `path:start-end` when you gave a range, which is how you map a result back onto its request. `result` is that file's content, every line prefixed with its number as `  92 | text`.
+
+Those numbers are how you address an edit and they are not in the file. Never paste one into another tool: text still carrying a `92 | ` prefix matches nothing. When you are reading in order to copy text into `editor`, set `line_numbers: false` on that entry and get it clean. A file that could not be read has `success: false` and the reason in `error`; the other entries in the same call are unaffected.
 
 # tool: search_codebase
 Search the codebase with regular expressions.
 
-Call shape: `search_codebase(queries: [string])` — a list of regex patterns, run in parallel. Send every independent pattern in one call rather than one per turn.
+Call shape: `search_codebase(queries: [string], context_lines?: number, max_per_file?: number)` — a list of regex patterns, run in parallel. Send every independent pattern in one call rather than one per turn.
+
+It reports one match per file by default, which answers *which files* mention something and cannot answer *how many times, and where*. Raise `max_per_file` when the question is about occurrences inside one file. `context_lines` sets how many lines are shown either side of a match; it defaults to 2, and 0 gives you just the matching lines.
 
 This is the right tool for text: string literals, comments, config keys, TODO markers, a spelling you want to find everywhere. It is the wrong tool for a question about a symbol — where something is defined, what uses it, what implements it — because it cannot tell a definition from a mention, and answering that way means reading several files to work out which hit was real. `code_intel` answers those exactly, in one call.
 
@@ -118,10 +122,11 @@ Output: one object per request — `{query, result, success, error?}`. `query` i
 # tool: editor
 Make one controlled edit to one text file.
 
-Call shape: `editor(path: string, old_text?: string, new_text: string, insert_line?: integer)`. Which of the three things it does is decided by the arguments you send, and those are the only three:
+Call shape: `editor(path: string, new_text: string, old_text?: string, insert_line?: integer, start_line?: integer, end_line?: integer, occurrence?: integer, replace_all?: boolean)`. Which of the four things it does is decided by the arguments you send, and those are the only four:
 
-- Replace: `path`, `old_text`, `new_text`. `old_text` must match the file exactly, whitespace and indentation included.
-- Insert: `path`, `insert_line`, `new_text` — inserts at that line number.
+- Replace text: `path`, `old_text`, `new_text`. `old_text` must match the file exactly, whitespace and indentation included. If it occurs more than once, pass `occurrence` (one-based, in file order) to pick one or `replace_all: true` to change every one — the error tells you which lines they are on.
+- Replace lines: `path`, `start_line`, `new_text`, with optional `end_line` (inclusive, defaulting to `start_line`). No `old_text`. Prefer this whenever the text is long, minified or repeated: a diagnostic hands you the line number, and a line number cannot be ambiguous. An empty `new_text` deletes the range.
+- Insert: `path`, `insert_line`, `new_text` — inserts before that line, replacing nothing.
 - Create: `path`, `new_text`, with the file not existing yet.
 
 Use this rather than a shell command for writing files. `sed -i`, `echo >` and `cat > file <<EOF` do the same job without telling you whether the edit landed where you meant.
@@ -197,6 +202,13 @@ Read a clean result carefully. "No problems reported by the editor" is conclusiv
 
 # tool: code_intel
 Ask the IDE's language servers about a symbol. It understands the code, so it separates a definition from a mention, and this class's method from another class's method of the same name.
+
+Reach for it the moment you are about to do one of these by hand:
+- search for a name to find where it is defined -> `definition`
+- search for a name to find what uses it, or what would break -> `references` or `callers`
+- open a file just to read a signature, type or doc comment -> `hover`
+- scroll a file, or count brackets, to work out its structure -> `document_symbols`
+- grep the repo to find which file something lives in -> `workspace_symbols`
 
 Call shape: `code_intel(operation: string, path?: string, symbol?: string, line?: number, character?: number)`.
 

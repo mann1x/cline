@@ -73,6 +73,7 @@ Hard constraints:
 - Covering every tool is a hard requirement. A tool with no section keeps its built-in description, and that fallback exists for exactly one situation: Cline gains a new tool and the templates have not been regenerated yet. It is not a way to skip tools you have nothing to say about. A template that covers six of thirty-one tools is not using the fallback, it is relying on it, and nothing in the file shows which twenty-five were left out.
 - '{{DEFAULT}}' expands to the tool's built-in description at runtime, and it is how you cover a tool cheaply. Where you would improve on the built-in wording, write your own and put '{{DEFAULT}}' on its own line where the built-in text should follow. Where you would not, the entire section body may be just '{{DEFAULT}}'. Either is a covered tool; an absent section is not.
 - These eight tools must be written in your own words, and a section containing only '{{DEFAULT}}' is not acceptable for any of them: read_files, search_codebase, editor, apply_patch, run_commands, fetch_web_content, check_file, code_intel. They are the tools models in your family are observed to misuse, so they are the whole reason this template exists. For these eight, your own text — not the inherited text — has to carry the three things listed below: every value of any closed set, every argument and when to use it, and what comes back. Adding '{{DEFAULT}}' after your text is allowed and does not excuse you from any of that.
+- For 'code_intel', say when to reach for it, not only what it does. List at least three concrete situations as the reader actually meets them — "about to search for a name to find where it is defined", "about to open a file just to read a signature", "about to scroll or count brackets to work out a file's structure" — each pointing at the operation that answers it, and name 'search_codebase' as the thing those situations would otherwise go to. This is not padding: measured across a whole session against a real bug, a template that described all eight operations correctly and said only "prefer this over search_codebase for anything about a symbol" produced zero calls to the tool, while the model hand-rolled the same answers in the shell twenty times. It could not recognise the moment.
 - Do not copy a built-in description out word for word. That is a snapshot: it says the same thing today and stops tracking the built-in text tomorrow, so the next edit to it reaches every model except you. If you would not change the wording, write '{{DEFAULT}}' — that is what it is for.
 - Where you rule a use of a tool out, name the tool that replaces it. 'run_commands' in particular must name 'read_files', 'editor' and 'search_codebase' in your own text: "do not use this for file operations when dedicated tools exist" is a rule the reader has to already know the answer to in order to follow, which is the same as not writing it.
 - Two of those eight — 'run_commands' and 'skills' — must keep '{{DEFAULT}}' in the section as well. Their built-in descriptions are not fixed text: 'run_commands' is composed against the shell that will actually run the commands, so PowerShell, cmd and a POSIX shell get different quoting and sequencing advice, and 'skills' appends the skills installed on that machine. Replace either outright and you freeze one machine's answer into every machine's prompt, silently. Write your own text and put '{{DEFAULT}}' on its own line where the built-in text should follow.
@@ -370,6 +371,33 @@ const REQUIRED_REDIRECTS: Readonly<Record<string, readonly string[]>> = {
 	run_commands: ["read_files", "editor", "search_codebase"],
 };
 
+/**
+ * Tools whose section has to say *when* to reach for them, not only what they
+ * do and how to call them.
+ *
+ * `code_intel` is the case that proved it. Every template described its eight
+ * operations correctly and told the model to prefer it over `search_codebase`
+ * "for anything about a symbol" — and across a 279-message session against a
+ * real bug it was called exactly zero times, while the model spent twenty
+ * shell commands hand-rolling what `document_symbols` and `references` answer
+ * outright. A capability the reader cannot recognise the moment for is a
+ * capability they do not have. What was missing is the trigger: the situation
+ * as it actually appears, in the words the reader would be thinking.
+ *
+ * Judged by cues rather than by wording, because the phrasing is the model's
+ * own and the templates are regenerated: what has to be present is a section
+ * that talks about *situations*, at least a few of them.
+ */
+const REQUIRED_USE_CASES: Readonly<
+	Record<string, { minimum: number; namesInstead?: string }>
+> = {
+	code_intel: { minimum: 3, namesInstead: "search_codebase" },
+};
+
+/** Ways a use case gets phrased. Deliberately broad; the count is the test. */
+const USE_CASE_CUES =
+	/\binstead of\b|\brather than\b|\bwhen you\b|\bbefore you\b|\buse (?:this|it) (?:for|when|to)\b|->|→/gi;
+
 /** Whitespace and case only, so a reflowed copy still reads as a copy. */
 function normalizeForComparison(text: string): string {
 	return text.replace(/\s+/g, " ").trim().toLowerCase();
@@ -460,6 +488,24 @@ export function auditToolSectionContent(
 		) {
 			// Inherits the built-in text, which already says all of this.
 			continue;
+		}
+
+		const useCases = own === "" ? undefined : REQUIRED_USE_CASES[name];
+		if (useCases) {
+			const found = own.match(USE_CASE_CUES)?.length ?? 0;
+			if (found < useCases.minimum) {
+				problems.push(
+					`The '# tool: ${name}' section says what the tool does and how to call it, but not when to reach for it. Add at least ${useCases.minimum} concrete situations, written as the reader would meet them — "about to search for a name to find where it is defined", "about to open a file just to read a signature" — each pointing at the operation that answers it. Describing the operations is not the same as recognising the moment to use one.`,
+				);
+			}
+			if (
+				useCases.namesInstead &&
+				!new RegExp(`\\b${useCases.namesInstead}\\b`).test(own)
+			) {
+				problems.push(
+					`The '# tool: ${name}' section never mentions \`${useCases.namesInstead}\`, which is what a model reaches for instead when it does not recognise this tool's moment. Say which questions belong here rather than there.`,
+				);
+			}
 		}
 		const signature = byName.get(name);
 		const builtin = builtinDescriptions[name];

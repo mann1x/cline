@@ -92,3 +92,7 @@ apps/examples/desktop-app/webview/.next
 
 # Next.js generated type shim (churns between dev and build)
 apps/examples/desktop-app/webview/next-env.d.ts
+
+# Raw reviewer output from scripts/audit-prompt-template.mts. Regenerable, and
+# the templates it produced carry their own provenance header.
+prompt-reviews/

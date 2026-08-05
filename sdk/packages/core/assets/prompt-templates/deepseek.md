@@ -53,16 +53,21 @@ If user asked a simple question without any coding context, answer it directly w
 {{CLINE_METADATA}}
 
 # tool: read_files
-Read file contents by absolute path. Pass an array of `{path, start_line?, end_line?}` objects. When you know multiple files are needed, read them all in one call. Each file returns up to 2000 lines / ~47k chars; longer files report total line count — page with start_line/end_line. Binary non-image files and very large files are not supported. Output: one object per file in request order — `{query, result, success, error?}`. Failed entries have `success: false` with reason in `error`. `query` echoes the path (as `path:start-end` when ranged), `result` is the content.
+Read file contents by absolute path. Pass an array of `{path, start_line?, end_line?, line_numbers?}` objects. When you know multiple files are needed, read them all in one call. Each file returns up to 2000 lines / ~47k chars; longer files report total line count — page with start_line/end_line. Binary non-image files and very large files are not supported. Output: one object per file in request order — `{query, result, success, error?}`. Failed entries have `success: false` with reason in `error`. `query` echoes the path (as `path:start-end` when ranged), `result` is the content. When `line_numbers: true` (default), each line is prefixed with its number as `  92 | text` — strip this prefix before pasting into `editor`. Set `line_numbers: false` to get clean text for copying.
 
 # tool: search_codebase
-Regex search across the codebase. Pass an array of pattern strings. When several independent patterns are useful, send them together in one call. Use for finding code patterns, function definitions, class names, imports, etc. Output beyond ~48k chars per query is middle-truncated; narrow patterns beat broad ones. Output: one object per pattern — `{query, result, success, error?}`. Failed entries have `success: false` with reason in `error`. `query` is the pattern, `result` is matching lines with file paths. A pattern that matched nothing has `success: true` with empty `result` — that is a definite answer, not a failure.
+Regex search across the codebase. Pass an array of pattern strings. When several independent patterns are useful, send them together in one call. Use for finding code patterns, function definitions, class names, imports, etc. It reports one match per file by default; raise `max_per_file` to find every occurrence inside a file. `context_lines` sets lines shown either side of a match (default 2). Output beyond ~48k chars per query is middle-truncated; narrow patterns beat broad ones. Output: one object per pattern — `{query, result, success, error?}`. Failed entries have `success: false` with reason in `error`. `query` is the pattern, `result` is matching lines with file paths. A pattern that matched nothing has `success: true` with empty `result` — that is a definite answer, not a failure.
 
 # tool: fetch_web_content
 Fetch and analyze web content from URLs. Pass an array of `{url, prompt}` objects. Each request includes a URL and a prompt describing what information to extract. Fetch independent URLs together in one call. Use for documentation, API references, or any web content. Output: one object per request — `{query, result, success, error?}`. Failed entries have `success: false` with reason in `error`. `query` is the URL, `result` is extracted text.
 
 # tool: editor
-Edit text files at an absolute path. Provide `insert_line` to insert `new_text` at a specific line number. Otherwise, the tool replaces `old_text` with `new_text`, or creates the file with `new_text` if it does not exist. Use for small precise edits or creating new files — not shell commands. When several edits to different files or non-overlapping regions are known, emit them together in one response. Output: a single `{query, result, success, error?}` object. `query` is `edit:<path>` or `insert:<path>`, `result` describes what changed. If `old_text` was not found, `success` is false, `error` says why, and the file is unchanged — re-read the region and match the text exactly including indentation.
+Edit text files at an absolute path. Supports four operations chosen by which arguments you send:
+- Replace text: `old_text` plus `new_text`. When `old_text` occurs more than once, add `occurrence` (one-based, in file order) to pick one, or `replace_all: true` to change every one.
+- Replace lines: `start_line` plus `new_text`, with optional `end_line` (inclusive, defaults to `start_line`). No `old_text` needed. Prefer this when the text is long, minified or repeated. An empty `new_text` deletes the range.
+- Insert: `insert_line` plus `new_text`, which adds text before that line without replacing anything. Use `line_count + 1` to append at EOF.
+- Create: `new_text` alone, when the file does not exist.
+Use this rather than a shell command for anything that changes a file. If several edits to different files or non-overlapping regions are already known, emit multiple editor tool calls in the same response. Output: a single `{query, result, success, error?}` object for this one edit, where `query` is `edit:<path>` or `insert:<path>` and `result` describes what changed. A failed edit changes nothing: `success` is false, `error` says why, and the file is exactly as it was. Text copied from `read_files` must have its line-number gutter removed first.
 
 # tool: apply_patch
 Edit files using a canonical freeform patch grammar. Pass the patch text as the `input` string. Supported actions: `*** Add File: <path>`, `*** Update File: <path>`, `*** Delete File: <path>`, with optional `*** Move to: <new path>` after an Update header. In Add sections, every content line starts with `+`. In Update sections, use context lines plus `-` and `+` lines. Use `@@` markers for disambiguation. No line numbers — context-based. Prefer direct patch body; legacy `%%bash` and `apply_patch <<"EOF"` wrappers accepted but not preferred. Output: a single `{query, result, success, error?}` object covering the whole patch. `result` says which files were added, updated, moved or deleted. A patch that did not apply sets `success: false` with reason in `error` — re-read the file and rebuild from what is actually there.
@@ -86,6 +91,13 @@ Check files for errors and warnings using the editor's own language servers. Use
 # tool: code_intel
 Ask the IDE's language servers about a symbol. Use this before falling back to search_codebase for anything about a symbol — it is faster, exact, and does not need you to read files to interpret the result. Operations: `definition` (where defined), `references` (every use), `implementations` (classes/functions implementing an interface or abstract method), `type_definition` (where the type of an expression is defined), `hover` (signature, type, documentation as shown on hover), `document_symbols` (outline of one file: classes, functions, methods), `workspace_symbols` (find by name across the whole project when you do not know the file), `callers` (what calls this function). Address a symbol: usually with `path` plus `symbol` (the name as it appears in that file); if you know the exact position, use `path`, `line` and `character` (both 1-based); if you do not know the file, use `symbol` alone with `operation: "workspace_symbols"`. Output: plain text, one result per line as `file:line:column` followed by that source line. `hover` returns signature and documentation as text; `document_symbols` and `workspace_symbols` name each symbol's kind. No results is a definite answer — the language server understands this symbol and nothing matches — so do not fall back to a text search for the same question.
 
+Reach for it the moment you are about to do one of these by hand:
+- search for a name to find where it is defined -> `definition`
+- search for a name to find what uses it, or what would break -> `references` or `callers`
+- open a file just to read a signature, type or doc comment -> `hover`
+- scroll a file, or count brackets, to work out its structure -> `document_symbols`
+- grep the repo to find which file something lives in -> `workspace_symbols`
+
 # tool: switch_to_act_mode
 Switch from plan mode to act mode. Switching immediately starts executing the plan, so only call this after the user has explicitly approved the plan in a message sent AFTER you presented it (e.g. 'looks good', 'go ahead', 'switch to act mode'). Never call this in the same turn you present a plan, never call it proactively, and never treat the original task request as approval. Output: a one-line confirmation as plain text. This call ends the current run and the next one starts in act mode with file and command tools available — it is a handover, not a failure; carry on with the plan there.
 
@@ -102,10 +114,10 @@ Spawn a sub-agent with a custom system prompt for specialized tasks. Use when de
 {{DEFAULT}}
 
 # tool: team_task
-Manage shared team tasks with action-specific payloads. `create` requires title and description, with optional dependsOn and assignee. `list` accepts optional status, assignee. `claim` requires taskId. `complete` requires taskId and summary. `block` requires taskId and reason. Do not include fields from other actions. Output: `{action: "create", taskId, status, ignoredFields?: [...], note?}` | `{action: "list", tasks: [{...}]}` | `{action: "claim", taskId, status, nextStep}` | `{action: "complete", taskId, status}` | `{action: "block", taskId, status}`. The shape depends on the action you sent; only list returns the tasks themselves.
+{{DEFAULT}}
 
 # tool: team_run_task
-Route a delegated task to a teammate. Choose sync (wait) or async (run in background). Output: {agentId, mode, status, dispatched, message, deduped?, runId?, text?, iterations?}. In sync mode text holds the teammate's answer. In async mode it does not — you get a runId, and the answer arrives from team_await_runs.
+{{DEFAULT}}
 
 # tool: team_cancel_run
 {{DEFAULT}}
