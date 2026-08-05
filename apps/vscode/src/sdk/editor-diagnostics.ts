@@ -38,7 +38,7 @@ const FILE_WRITING_TOOLS = new Set(["editor", "apply_patch"])
  * "this import could be type-only" — and a model handed them will act on them,
  * turning every edit into a style refactor nobody asked for.
  */
-const REPORTED_SEVERITIES = [DiagnosticSeverity.DIAGNOSTIC_ERROR, DiagnosticSeverity.DIAGNOSTIC_WARNING]
+export const REPORTED_SEVERITIES = [DiagnosticSeverity.DIAGNOSTIC_ERROR, DiagnosticSeverity.DIAGNOSTIC_WARNING]
 
 /**
  * Extensions whose diagnostics are never about the code the model wrote.
@@ -93,7 +93,7 @@ const OPAQUE_EXTENSIONS = new Set([
  * A truncated list still says "this edit broke something, look here", which is
  * the whole job. An untruncated one can be longer than the file.
  */
-const MAX_DIAGNOSTICS_PER_FILE = 20
+export const MAX_DIAGNOSTICS_PER_FILE = 20
 
 /**
  * How long to wait for the language server to catch up with the write.
@@ -105,8 +105,8 @@ const MAX_DIAGNOSTICS_PER_FILE = 20
  * whole budget. The budget is small on purpose: this sits between the model and
  * its next turn, and a slow linter must not become a slow agent.
  */
-const SETTLE_POLL_MS = 250
-const SETTLE_TIMEOUT_MS = 2_000
+export const SETTLE_POLL_MS = 250
+export const SETTLE_TIMEOUT_MS = 2_000
 
 /** Paths touched by a tool call, captured before it ran. */
 type PendingSnapshot = {
@@ -165,7 +165,7 @@ function filterToPaths(diagnostics: FileDiagnostics[], absolutePaths: Set<string
 	return diagnostics.filter((file) => absolutePaths.has(path.resolve(file.filePath)))
 }
 
-function reportableSeverity(diagnostic: Diagnostic): boolean {
+export function isReportableDiagnostic(diagnostic: Diagnostic): boolean {
 	return REPORTED_SEVERITIES.includes(diagnostic.severity)
 }
 
@@ -174,20 +174,27 @@ function reportableSeverity(diagnostic: Diagnostic): boolean {
  * introduced none — silence is the correct output for a clean edit, and the
  * cheapest.
  */
+export async function renderFileDiagnostics(filePath: string, diagnostics: readonly Diagnostic[]): Promise<string> {
+	const reportable = diagnostics.filter(isReportableDiagnostic)
+	if (reportable.length === 0) {
+		return ""
+	}
+	const shown = reportable.slice(0, MAX_DIAGNOSTICS_PER_FILE)
+	const section = await singleFileDiagnosticsToProblemsString(filePath, shown)
+	if (!section) {
+		return ""
+	}
+	const omitted = reportable.length - shown.length
+	return omitted > 0 ? `${section}\n- ...and ${omitted} more` : section
+}
+
 export async function formatIntroducedDiagnostics(before: FileDiagnostics[], after: FileDiagnostics[]): Promise<string> {
 	const sections: string[] = []
 	for (const file of getNewDiagnostics(before, after)) {
-		const reportable = file.diagnostics.filter(reportableSeverity)
-		if (reportable.length === 0) {
-			continue
+		const section = await renderFileDiagnostics(file.filePath, file.diagnostics)
+		if (section !== "") {
+			sections.push(section)
 		}
-		const shown = reportable.slice(0, MAX_DIAGNOSTICS_PER_FILE)
-		const section = await singleFileDiagnosticsToProblemsString(file.filePath, shown)
-		if (!section) {
-			continue
-		}
-		const omitted = reportable.length - shown.length
-		sections.push(omitted > 0 ? `${section}\n- ...and ${omitted} more` : section)
 	}
 	if (sections.length === 0) {
 		return ""
@@ -219,7 +226,12 @@ export function appendToOutput(output: unknown, block: string): unknown {
 	return output
 }
 
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+export const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+/** The editor's current verdict on the whole workspace. */
+export async function readHostDiagnostics(): Promise<FileDiagnostics[]> {
+	return (await HostProvider.workspace.getDiagnostics({})).fileDiagnostics
+}
 
 /**
  * Append one line per edit to `<tmpdir>/cline-editor-diagnostics.jsonl`.
@@ -249,16 +261,18 @@ function appendEditorDiagnosticsTrace(entry: Record<string, unknown>): void {
  * Read the touched files' diagnostics once the language server has stopped
  * changing its mind, or once the budget runs out — whichever comes first.
  */
-async function readSettledDiagnostics(
+export async function readSettledDiagnostics(
 	absolutePaths: Set<string>,
 	read: () => Promise<FileDiagnostics[]>,
 	delay: (ms: number) => Promise<void>,
+	budget: { pollMs?: number; timeoutMs?: number } = {},
 ): Promise<FileDiagnostics[]> {
+	const pollMs = budget.pollMs ?? SETTLE_POLL_MS
 	let previous = ""
 	let latest: FileDiagnostics[] = []
-	const deadline = Date.now() + SETTLE_TIMEOUT_MS
+	const deadline = Date.now() + (budget.timeoutMs ?? SETTLE_TIMEOUT_MS)
 	do {
-		await delay(SETTLE_POLL_MS)
+		await delay(pollMs)
 		latest = filterToPaths(await read(), absolutePaths)
 		const fingerprint = JSON.stringify(latest)
 		if (fingerprint === previous) {
@@ -277,7 +291,7 @@ async function readSettledDiagnostics(
  * none, and this is not optional in the same way.
  */
 export function createEditorDiagnosticsHooks(options: EditorDiagnosticsOptions): AgentHooks {
-	const read = options.readDiagnostics ?? (async () => (await HostProvider.workspace.getDiagnostics({})).fileDiagnostics)
+	const read = options.readDiagnostics ?? readHostDiagnostics
 	const delay = options.delay ?? sleep
 	const pending = new Map<string, PendingSnapshot>()
 

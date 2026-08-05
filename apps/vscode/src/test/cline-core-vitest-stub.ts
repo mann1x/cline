@@ -53,6 +53,38 @@ export function resolveModelsRegistryPath(): string {
 
 export function ensureCustomProvidersLoadedSync(): void {}
 
+export {
+	getBuiltinPromptTemplateSource,
+	getBuiltinPromptTemplates,
+} from "../../../../sdk/packages/core/src/extensions/config/builtin-templates"
+// Prompt templates are re-exported from source rather than stubbed: the
+// session factory both resolves a template and layers its hooks into the
+// stack, and a stub that returned nothing would let a broken layering pass.
+export { createPromptTemplateHooks } from "../../../../sdk/packages/core/src/extensions/config/prompt-template-hooks"
+export type {
+	PromptTemplateDirectory,
+	PromptTemplateFileWarnings,
+	PromptTemplateLoadError,
+	PromptTemplateLoadResult,
+} from "../../../../sdk/packages/core/src/extensions/config/prompt-template-loader"
+export {
+	loadPromptTemplates,
+	loadPromptTemplatesFromDirectory,
+	PROMPT_TEMPLATES_DIRECTORY_NAME,
+	resolvePromptTemplateDirectories,
+} from "../../../../sdk/packages/core/src/extensions/config/prompt-template-loader"
+export { parsePromptTemplate } from "../../../../sdk/packages/core/src/extensions/config/prompt-template-parser"
+export {
+	auditPromptTemplateProposal,
+	DEFAULT_REQUIRED_REWRITES,
+	generatePromptTemplate,
+	summarizeToolCallSignatures,
+	type ToolCallSignature,
+} from "../../../../sdk/packages/core/src/extensions/config/prompt-template-review"
+export {
+	getShippedToolCallSignatures,
+	HOST_TOOL_INPUT_SCHEMAS,
+} from "../../../../sdk/packages/core/src/extensions/config/shipped-tool-signatures"
 // Re-exported from source rather than stubbed: the session factory composes
 // its hook layers with it, so a fake would test the fake's composition.
 export { mergeAgentHooks } from "../../../../sdk/packages/core/src/hooks/hook-file-hooks"

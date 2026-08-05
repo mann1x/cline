@@ -11,6 +11,7 @@
 import {
 	type ClineCoreStartInput,
 	type CoreSessionConfig,
+	createPromptTemplateHooks,
 	getProviderAuthHandler,
 	mergeAgentHooks,
 	type ProviderSettings,
@@ -27,7 +28,7 @@ import {
 	MODEL_COLLECTIONS_BY_PROVIDER_ID,
 	OLLAMA_DEFAULT_CONTEXT_WINDOW,
 } from "@cline/llms"
-import { buildClineSystemPrompt } from "@cline/shared"
+import { type AgentHooks, buildClineSystemPrompt, type RenderedPromptTemplate } from "@cline/shared"
 import type { ApiConfiguration } from "@shared/api"
 import { ClineClient } from "@shared/cline"
 import type { HistoryItem } from "@shared/HistoryItem"
@@ -52,6 +53,7 @@ import { nonNegativeFiniteNumber, positiveFiniteNumber, toSdkApiFormat } from ".
 import { parseProviderId } from "./model-catalog/provider-id"
 import { toSdkProviderId } from "./model-catalog/sdk-provider-id"
 import { createProviderConfigStore, resolveRuntimeModelSelection } from "./model-catalog/store"
+import { resolveSessionPromptTemplate } from "./prompt-templates"
 import { getProviderSettingsManager } from "./provider-migration"
 import { buildSapProviderConfig, type SapProviderConfig } from "./sap-config"
 import type { SdkSessionHost } from "./session-host"
@@ -791,6 +793,29 @@ export function resolveApiLine(providerId: string, config: ApiConfiguration): Pr
 // ---------------------------------------------------------------------------
 
 /**
+ * Assemble the session's hook stack.
+ *
+ * Every layer a session runs with is listed here and nowhere else. It used to
+ * be assembled in two places — here and again in `SdkSessionConfigBuilder`,
+ * which rebuilds the file-hook layer with a message emitter — and the second
+ * one assigned `config.hooks` outright, so the layers added here never reached
+ * a real session. Only the tests, which call `buildSessionConfig` directly, saw
+ * the full stack. A caller that needs to swap a layer rebuilds the stack
+ * through this function rather than replacing the result of it.
+ *
+ * Order matters: the file-based hook adapter goes first, because a user hook
+ * script that stops the run should do so before anything is appended to a
+ * result nobody will read.
+ */
+export function composeSessionHooks(
+	fileHooks: AgentHooks | undefined,
+	cwd: string,
+	rendered?: RenderedPromptTemplate,
+): AgentHooks | undefined {
+	return mergeAgentHooks([fileHooks, createEditorDiagnosticsHooks({ cwd }), createPromptTemplateHooks({ rendered })])
+}
+
+/**
  * Build a CoreSessionConfig from the current state.
  *
  * Reads provider settings from the classic StateManager's ApiConfiguration
@@ -942,6 +967,25 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	// expects callers to provide a concrete systemPrompt, but the prompt builder
 	// can derive baseline workspace context from the root path and workspace
 	// name, so we avoid duplicating core's richer workspace metadata pass here.
+	// Which prompt template governs this session. Resolved once, here: reading
+	// the template directories, asking Ollama what a local model actually is,
+	// and merging the winner over default.md all happen at this point and
+	// nowhere else. A failure leaves `rendered` undefined and the session runs
+	// on the built-in prompt, which is what it did before templates existed.
+	let renderedTemplate: Awaited<ReturnType<typeof resolveSessionPromptTemplate>>["rendered"]
+	try {
+		renderedTemplate = (
+			await resolveSessionPromptTemplate({
+				providerId,
+				modelId,
+				workspaceRoot,
+				baseUrl: apiConfig ? resolveBaseUrl(providerId, apiConfig) : undefined,
+			})
+		).rendered
+	} catch (error) {
+		Logger.warn("[SessionFactory] Failed to resolve a prompt template:", error)
+	}
+
 	let systemPrompt = ""
 	try {
 		const workspaceName = resolveWorkspaceName(cwd)
@@ -952,6 +996,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 			mode: mode === "plan" ? "plan" : "act",
 			providerId,
 			platform: process.platform,
+			basePrompt: renderedTemplate?.system,
 		})
 		Logger.log(`[SessionFactory] Built system prompt: ${systemPrompt.length} chars`)
 	} catch (error) {
@@ -1089,10 +1134,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 			},
 			logger: sdkLogger,
 		},
-		// The file-based hook adapter first: a user hook script that stops the
-		// run should do so before anything is appended to a result nobody will
-		// read.
-		hooks: mergeAgentHooks([buildAgentHooks(StateManager.get()), createEditorDiagnosticsHooks({ cwd })]),
+		hooks: composeSessionHooks(buildAgentHooks(StateManager.get()), cwd, renderedTemplate),
 	}
 
 	return config

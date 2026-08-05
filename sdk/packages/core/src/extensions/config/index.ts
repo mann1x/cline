@@ -1,7 +1,45 @@
+export {
+	getBuiltinPromptTemplateSource,
+	getBuiltinPromptTemplates,
+} from "./builtin-templates";
+export {
+	createPromptTemplateHooks,
+	type PromptTemplateHooksOptions,
+} from "./prompt-template-hooks";
+export {
+	loadPromptTemplates,
+	loadPromptTemplatesFromDirectory,
+	PROMPT_TEMPLATES_DIRECTORY_NAME,
+	type PromptTemplateDirectory,
+	type PromptTemplateFileWarnings,
+	type PromptTemplateLoadError,
+	type PromptTemplateLoadResult,
+	resolvePromptTemplateDirectories,
+} from "./prompt-template-loader";
+export {
+	type PromptTemplateParseInput,
+	type PromptTemplateParseResult,
+	parsePromptTemplate,
+} from "./prompt-template-parser";
+export {
+	type AuditPromptTemplateProposalArgs,
+	DEFAULT_REQUIRED_REWRITES,
+	auditPromptTemplateProposal,
+	type GeneratePromptTemplateArgs,
+	type GeneratePromptTemplateResult,
+	generatePromptTemplate,
+	type PromptTemplateProposalAudit,
+	summarizeToolCallSignatures,
+	type ToolCallSignature,
+} from "./prompt-template-review";
 export type {
 	AvailableRuntimeCommand,
 	RuntimeCommandKind,
 } from "./runtime-commands";
+export {
+	getShippedToolCallSignatures,
+	HOST_TOOL_INPUT_SCHEMAS,
+} from "./shipped-tool-signatures";
 // Skill frontmatter mutation is intentionally not exported from this barrel.
 export type {
 	UnifiedConfigDefinition,

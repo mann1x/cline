@@ -93,6 +93,57 @@ service FileService {
 
   // Deletes an existing skill directory
   rpc deleteSkillFile(DeleteSkillRequest) returns (SkillsToggles);
+
+  // Lists the prompt templates the current provider and model can resolve to
+  rpc getPromptTemplates(EmptyRequest) returns (PromptTemplates);
+
+  // Opens a prompt template for editing, copying a builtin to disk first
+  rpc openPromptTemplate(PromptTemplateEditRequest) returns (Empty);
+
+  // Asks the selected model to write a prompt template for itself
+  rpc generatePromptTemplate(EmptyRequest) returns (GeneratedPromptTemplate);
+}
+
+// The outcome of asking a model to write its own template
+message GeneratedPromptTemplate {
+  string file_path = 1;
+  string name = 2;
+  int32 attempts = 3; // Model calls it took, including repairs
+  repeated string problems = 4; // Empty when the proposal was clean
+}
+
+// One prompt template, as the settings panel shows it
+message PromptTemplateInfo {
+  string name = 1; // Template name, from frontmatter or the filename
+  string file_name = 2; // e.g. gemma.md
+  string source = 3; // builtin, global, or workspace
+  optional string file_path = 4; // Absent for a builtin, which is not on disk
+  bool active = 5; // The one the current provider and model resolve to
+  bool shadowed = 6; // Replaced by a nearer template of the same name
+  repeated string match = 7; // Match rules rendered for display
+  repeated string tools = 8; // Tool descriptions this template overrides
+  bool has_system = 9; // Whether it replaces the system prompt
+  repeated string warnings = 10; // Non-fatal problems found in the file
+  optional string error = 11; // Set instead of the rest when it did not parse
+}
+
+// The prompt template state behind the settings panel
+message PromptTemplates {
+  string provider_id = 1;
+  string model_id = 2;
+  optional string family = 3; // What the provider says the model is
+  optional string active_name = 4;
+  bool overlaid = 5; // Whether the active template layers over default.md
+  string global_directory = 6;
+  optional string workspace_directory = 7;
+  repeated PromptTemplateInfo templates = 8;
+}
+
+// Request to open a prompt template for editing
+message PromptTemplateEditRequest {
+  Metadata metadata = 1;
+  string file_name = 2; // Identifies a builtin, which has no path
+  optional string file_path = 3; // Present for a template already on disk
 }
 
 // Response for refreshRules operation

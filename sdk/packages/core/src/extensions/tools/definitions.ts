@@ -240,6 +240,24 @@ async function executeShellCommands(
 // =============================================================================
 
 /**
+ * What comes back, said once, in the words the tools actually use.
+ *
+ * Every tool here is described in terms of what it does and none of them in
+ * terms of what they hand back, so a model reading the descriptions has no way
+ * to know that the answer to `read_files` is an array of `{query, result}`
+ * rather than the file's text. It finds out by receiving one, which costs it a
+ * turn of inference at best; watched against small models it costs more than
+ * that, because a result it cannot map onto its request looks like a tool that
+ * did not work, and a tool that does not work gets replaced by `cat`.
+ *
+ * `query` is the part worth naming. These tools are batched — several paths,
+ * several patterns, several commands in one call — so the entries have to be
+ * matched back to the requests, and `query` is what they are matched by.
+ */
+const TOOL_RESULT_ENVELOPE =
+	"`{query, result, success, error?}`, where a failed entry has `success: false` and the reason in `error`.";
+
+/**
  * What a successful read with no content is told to mean.
  *
  * A range whose start is past the end of the file is not an error — the read
@@ -271,7 +289,7 @@ export function createReadFilesTool(
 			"When you already know multiple files you need, read them together in one call, and call this tool in the same response as other independent tool calls. " +
 			`Each read returns at most ${MAX_READ_LINES} lines / ~${Math.round(MAX_READ_OUTPUT_CHARS / 1024)}k characters; longer files report their total line count, page through them with start_line/end_line on that file's entry. ` +
 			"Binary files that are not image and large files are not supported. " +
-			"Returns file contents or error messages for each path. ",
+			`Output: one object per requested file, in the order requested — ${TOOL_RESULT_ENVELOPE} \`query\` echoes the path you asked for (as \`path:start-end\` when you gave a range), and \`result\` is that file's content. `,
 		inputSchema: zodToJsonSchema(ReadFilesInputSchema),
 		timeoutMs: timeoutMs * 2, // Account for multiple files
 		retryable: true,
@@ -370,7 +388,8 @@ export function createSearchTool(
 			"Perform regex pattern searches across the codebase. " +
 			"Supports multiple parallel searches. When several search patterns could be useful and do not depend on each other, run them together in one call, and call this tool in the same response as other independent tool calls. " +
 			"Use for finding code patterns, function definitions, class names, imports, etc. " +
-			`Output beyond ~${Math.round(MAX_SEARCH_OUTPUT_CHARS / 1000)}k characters per query is middle-truncated; narrow patterns beat broad ones.`,
+			`Output beyond ~${Math.round(MAX_SEARCH_OUTPUT_CHARS / 1000)}k characters per query is middle-truncated; narrow patterns beat broad ones. ` +
+			`Output: one object per pattern — ${TOOL_RESULT_ENVELOPE} \`query\` is the pattern you sent and \`result\` is the matching lines with their file paths. A pattern that matched nothing still has \`success: true\` with an empty \`result\`; that is an answer, not a failure, and re-running it will not change it.`,
 		inputSchema: zodToJsonSchema(SearchCodebaseInputSchema),
 		timeoutMs: timeoutMs * 2,
 		retryable: true,
@@ -419,6 +438,15 @@ const RUN_COMMANDS_SHARED_INSTRUCTIONS =
 	"Commands must be non-interactive. Commands that require follow-up input like pagers should be skipped or used with supported flags/env (e.g. git --no-pager, --non-interactive) to bypass the interaction steps. ";
 
 /**
+ * Said separately from the envelope because the failure case is the useful
+ * part: a command that exits non-zero is exactly the command whose output the
+ * model needs, and `success: false` reads as "there is nothing here".
+ */
+const RUN_COMMANDS_OUTPUT =
+	`Output: one object per command — ${TOOL_RESULT_ENVELOPE} \`query\` is the command and \`result\` is its combined stdout and stderr. ` +
+	"A non-zero exit sets `success: false` and describes the exit in `error`, but `result` still holds everything the command printed — read it, that is where the compiler or test failure is.";
+
+/**
  * Build the run_commands tool description for the shell that will actually
  * execute the commands. The shell kind decides the syntax guidance (quoting,
  * sequencing, heredocs), and isWindows adds environment context for POSIX
@@ -436,7 +464,8 @@ export function buildRunCommandsDescription(
 			RUN_COMMANDS_SHARED_INSTRUCTIONS +
 			`Output beyond ~${Math.round(MAX_COMMAND_OUTPUT_CHARS / 1000)}k characters is middle-truncated (start and end preserved); filter output when you need specific sections. ` +
 			`Commands run through ${shellName}; quote paths and arguments for ${shellName} and use ${sequencingOperator} to sequence commands. ` +
-			"Include multiple commands in the same call when they are independent and safe to run concurrently. When independent reads, searches, or edits are also needed, call those tools in the same response."
+			"Include multiple commands in the same call when they are independent and safe to run concurrently. When independent reads, searches, or edits are also needed, call those tools in the same response. " +
+			RUN_COMMANDS_OUTPUT
 		);
 	}
 
@@ -452,7 +481,8 @@ export function buildRunCommandsDescription(
 		environmentNote +
 		"Commands should be properly shell-escaped and targeted to avoid error or timeout. Include multiple commands in the same call when they are independent complete shell commands and safe to run concurrently; multiline scripts and heredocs must be a single command string. When independent reads, searches, or edits are also needed, call those tools in the same response. " +
 		`Output beyond ~${Math.round(MAX_COMMAND_OUTPUT_CHARS / 1000)}k characters is middle-truncated (start and end preserved); pipe through grep/head/tail when you need specific sections of large output. ` +
-		"For long-running commands, run them in background and redirect output to a tmp file that you can read from later."
+		"For long-running commands, run them in background and redirect output to a tmp file that you can read from later. " +
+		RUN_COMMANDS_OUTPUT
 	);
 }
 
@@ -543,7 +573,8 @@ export function createWebFetchTool(
 		description:
 			"Fetch content from URLs and analyze them using the provided prompts. " +
 			"Use for retrieving documentation, API references, or any web content. " +
-			"Each request includes a URL and a prompt describing what information to extract. Fetch independent URLs together in one call, and call this tool in the same response as other independent tool calls.",
+			"Each request includes a URL and a prompt describing what information to extract. Fetch independent URLs together in one call, and call this tool in the same response as other independent tool calls. " +
+			`Output: one object per request — ${TOOL_RESULT_ENVELOPE} \`query\` is the URL and \`result\` is what was extracted from that page for your prompt, as text.`,
 		inputSchema: zodToJsonSchema(FetchWebContentInputSchema),
 		timeoutMs: timeoutMs * 2,
 		retryable: true,
@@ -618,7 +649,9 @@ Example:
      </div>
    );
  }
-*** End Patch`;
+*** End Patch
+
+Output: a single \`{query, result, success, error?}\` object covering the whole patch, where \`result\` says which files were added, updated, moved or deleted. A patch that did not apply — usually because its context lines no longer match the file — sets \`success: false\` and says so in \`error\`; re-read the file and rebuild the patch from what is actually there rather than resending it.`;
 
 /**
  * Create the apply_patch tool
@@ -687,7 +720,9 @@ export function createEditorTool(
 			"An editor for controlled filesystem edits on the text file at the provided path. " +
 			"Provide `insert_line` to insert `new_text` at a specific line number. " +
 			"Otherwise, the tool replaces `old_text` with `new_text`, or creates the file with `new_text` if file does not exist. " +
-			"Use this tool for making small, precise edits to existing files or creating new files over shell commands. If several edits to different files or non-overlapping regions are already known, emit multiple editor tool calls in the same response instead of serializing them across turns.",
+			"Use this tool for making small, precise edits to existing files or creating new files over shell commands. If several edits to different files or non-overlapping regions are already known, emit multiple editor tool calls in the same response instead of serializing them across turns. " +
+			"Output: a single `{query, result, success, error?}` object for this one edit, where `query` is `edit:<path>` or `insert:<path>` and `result` describes what changed. " +
+			"If `old_text` was not found the edit did not happen: `success` is false, `error` says why, and the file is exactly as it was — read the region and match the text as it really is, including its indentation.",
 
 		inputSchema: zodToJsonSchema(EditFileInputSchema),
 		timeoutMs,
@@ -749,7 +784,8 @@ export function createSkillsTool(
 		"When users reference a slash command, invoke it with this tool. " +
 		'Input: `skill` (required) and optional `args`. Example: `skill: "pdf"`, `skill: "commit", args: "-m \\"Fix bug\\""`, `skill: "review-pr", args: "123"`, `skill: "ms-office-suite:pdf"`. ' +
 		"When a skill matches the user's request, invoking this tool is a blocking requirement before any other response. " +
-		"Never mention a skill without invoking this tool.";
+		"Never mention a skill without invoking this tool. " +
+		"Output: the skill's own output, as plain text — not an object, and not wrapped in anything. Treat it as instructions to follow, and continue working; it is not the end of your turn.";
 
 	const tool = createTool<SkillsInput, string>({
 		name: "skills",
@@ -804,7 +840,8 @@ export function createAskQuestionTool(
 			"For example, ask the user clarifying questions about a key implementation decision. " +
 			"You should only ask one question. " +
 			"Provide an array of 2-5 options for the user to choose from. " +
-			"Never include an option to toggle to Act mode.",
+			"Never include an option to toggle to Act mode. " +
+			"Output: the user's answer, as plain text — one of the options you offered, or whatever they wrote instead. Act on it in the same turn; the answer arriving is not a reason to stop.",
 		inputSchema: zodToJsonSchema(AskQuestionInputSchema),
 		retryable: false,
 		maxRetries: 0,
@@ -828,7 +865,8 @@ export function createSubmitAndExitTool(
 			"For example, submit a summary of the investigation and confirm the issue is resolved. " +
 			"You should only submit once all necessary steps are completed. " +
 			"Make sure to verify your output matches the expected format, data types, and file locations specified. " +
-			"Provide a summary of the investigation and confirm the issue is resolved.",
+			"Provide a summary of the investigation and confirm the issue is resolved. " +
+			"Output: a short confirmation, as plain text. This call ends the run — nothing you plan after it will happen, so call it only when there is nothing left to do.",
 		inputSchema: zodToJsonSchema(SubmitInputSchema),
 		lifecycle: {
 			completesRun: true,

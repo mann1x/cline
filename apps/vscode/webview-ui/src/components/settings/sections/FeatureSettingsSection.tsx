@@ -5,6 +5,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useExtensionState } from "@/context/ExtensionStateContext"
+import PromptTemplatesSection from "../PromptTemplatesSection"
 import Section from "../Section"
 import { updateSetting } from "../utils/settingsHandlers"
 
@@ -297,6 +298,8 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 						</div>
 					</div>
 				</div>
+
+				<PromptTemplatesSection />
 			</Section>
 		</div>
 	)

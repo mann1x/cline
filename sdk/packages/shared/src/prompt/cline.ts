@@ -103,6 +103,19 @@ export interface ClineSystemPromptOptions
 	workspaceRoot?: string;
 	/** Per-request system prompt override */
 	overridePrompt?: string;
+	/**
+	 * System prompt supplied by a matching prompt template, used in place of the
+	 * built-in one.
+	 *
+	 * Distinct from `overridePrompt`, and deliberately so: an override is
+	 * returned as the caller wrote it, with no substitution, because the caller
+	 * is handing over a finished prompt. A template is not finished — it is the
+	 * same kind of thing as the built-in prompt, written by hand, and it needs
+	 * the same `{{CWD}}` / `{{CLINE_RULES}}` treatment. Routing templates
+	 * through `overridePrompt` would deliver `{{CWD}}` to the model as literal
+	 * text.
+	 */
+	basePrompt?: string;
 	/** Provider ID — used to gate Cline-specific metadata injection */
 	providerId?: string;
 }
@@ -135,8 +148,18 @@ export function buildClineSystemPrompt(
 		return trimmed;
 	}
 
-	const basePrompt =
-		mode === "yolo" ? YOLO_CLINE_SYSTEM_PROMPT : DEFAULT_CLINE_SYSTEM_PROMPT;
+	const templatePrompt = options.basePrompt?.trim();
+	// A hand-written template that forgets `{{CLINE_RULES}}` would silently drop
+	// the plan-mode contract and the mode-tag explanation — the model would stop
+	// being told it is in plan mode, and nothing in the pipeline would say so.
+	// Appending is the recoverable failure; losing them is not.
+	const basePrompt = templatePrompt
+		? templatePrompt.includes("{{CLINE_RULES}}")
+			? templatePrompt
+			: `${templatePrompt}\n\n{{CLINE_RULES}}`
+		: mode === "yolo"
+			? YOLO_CLINE_SYSTEM_PROMPT
+			: DEFAULT_CLINE_SYSTEM_PROMPT;
 
 	// Mode semantics ride in the rules slot so every host emits them without
 	// composing its own copy. Order matches what the CLI historically built by

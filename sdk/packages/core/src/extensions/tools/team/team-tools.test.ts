@@ -989,3 +989,49 @@ describe("createAgentTeamsTools runtime behavior", () => {
 		});
 	});
 });
+
+/**
+ * The output sentence is generated from each tool's own result schema, so what
+ * is worth pinning is not the wording but that it stays true: every team tool
+ * says what it answers with, and the shape it names is the shape the tool
+ * really returns. A schema change that silently stops being described is
+ * exactly the drift this whole change exists to remove.
+ */
+describe("team tool output descriptions", () => {
+	const tools = createAgentTeamsTools({
+		runtime: new AgentTeamsRuntime({ teamName: "test-team" }),
+		requesterId: "lead",
+		teammateConfigProvider: makeTeammateConfigProvider(),
+	});
+
+	it("describes an output for every tool", () => {
+		const undescribed = tools
+			.filter((tool) => !tool.description?.includes("Output: "))
+			.map((tool) => tool.name);
+		expect(undescribed).toEqual([]);
+	});
+
+	it("names the fields a caller has to read", () => {
+		const describedBy = (name: string) =>
+			tools.find((tool) => tool.name === name)?.description ?? "";
+
+		expect(describedBy("team_spawn_teammate")).toContain(
+			"Output: {agentId, status}.",
+		);
+		expect(describedBy("team_create_outcome")).toContain(
+			"Output: {outcomeId, status, requiredSections: [...]}.",
+		);
+		// A list tool has to look like a list, or its result reads as one item.
+		expect(describedBy("team_list_outcomes")).toContain("Output: [{");
+	});
+
+	it("keeps the discriminator of a branching result", () => {
+		// `team_task` answers with a different shape per action. Repeating the
+		// bare word `action` five times would say nothing; the literal is what
+		// tells a model which branch it is about to get.
+		const description =
+			tools.find((tool) => tool.name === "team_task")?.description ?? "";
+		expect(description).toContain('action: "create"');
+		expect(description).toContain('action: "list", tasks:');
+	});
+});

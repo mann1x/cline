@@ -245,6 +245,7 @@ export {
 } from "./logging/logger";
 export * from "./mcp";
 export { getErrorCode, getErrorMessage } from "./parse/error";
+export { splitFrontmatter } from "./parse/frontmatter";
 export {
 	normalizeJsonLikeStringsForSchema,
 	parseJsonStream,
@@ -296,6 +297,38 @@ export {
 	stripModeNotices,
 	xmlTagsRemoval,
 } from "./prompt/format";
+export {
+	DEFAULT_CLINE_SYSTEM_PROMPT,
+	YOLO_CLINE_SYSTEM_PROMPT,
+} from "./prompt/system";
+export type {
+	PromptTemplate,
+	PromptTemplateMatch,
+	PromptTemplateSource,
+	PromptTemplateTarget,
+	RenderedPromptTemplate,
+} from "./prompt/template-types";
+export {
+	applyPromptTemplateToTools,
+	DEFAULT_PROMPT_TEMPLATE_NAME,
+	matchesPromptPattern,
+	PROMPT_TEMPLATE_DEFAULT_MARKER,
+	PROMPT_TEMPLATE_SPECIFICITY,
+	renderPromptTemplate,
+	resolvePromptTemplate,
+	scorePromptTemplate,
+	shadowPromptTemplates,
+} from "./prompt/template-types";
+export type {
+	PromptTemplateWarning,
+	PromptTemplateWarningCode,
+	ValidatePromptTemplateOptions,
+} from "./prompt/template-validation";
+export {
+	PROMPT_TEMPLATE_REQUIRED_PLACEHOLDERS,
+	PROMPT_TEMPLATE_SYSTEM_PLACEHOLDERS,
+	validatePromptTemplate,
+} from "./prompt/template-validation";
 export { CLINE_DEFAULT_MODEL_ID } from "./providers/defaults";
 export { isClineProvider } from "./providers/utils";
 export {

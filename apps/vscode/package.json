@@ -337,7 +337,18 @@
 		},
 		"configuration": {
 			"title": "Cline",
-			"properties": {}
+			"properties": {
+				"cline.lintCommand": {
+					"type": "string",
+					"default": "",
+					"markdownDescription": "Command the `check_file` tool falls back to when the editor's language servers report nothing for a file. Use `${file}` for the file path; if omitted, the path is appended. Leave empty to rely on the editor alone, which is correct for any language with a working language server.",
+					"examples": [
+						"ruff check ${file}",
+						"shellcheck",
+						"npx eslint --format unix ${file}"
+					]
+				}
+			}
 		}
 	},
 	"scripts": {
