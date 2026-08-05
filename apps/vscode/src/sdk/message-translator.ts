@@ -337,6 +337,20 @@ export class MessageTranslatorState {
 		return this.errorSeen
 	}
 
+	/**
+	 * Forget an error the turn went on to recover from.
+	 *
+	 * `errorSeen` is sticky for the whole turn, which is right while the turn is
+	 * still running — but a turn that ends with `done(reason: "completed")` did
+	 * not fail, whatever happened in the middle of it. Left sticky, one
+	 * recovered provider hiccup in a 438-message turn resolves the finished
+	 * turn to the error phase: Retry / Start New Task, and `sendingDisabled`,
+	 * so the user cannot even type a reply to a task that just succeeded.
+	 */
+	clearErrorSeen(): void {
+		this.errorSeen = false
+	}
+
 	// -----------------------------------------------------------------------
 	// Turn-final text tracking — the SDK agent usually ends a turn with a plain
 	// text response instead of a completion tool. When a turn ends cleanly with
@@ -1736,6 +1750,11 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 			// resolves to the "error" phase (Retry / Start New Task).
 			if (event.reason === "error") {
 				state.setErrorSeen()
+			} else if (event.reason === "completed") {
+				// The turn recovered: whatever failed mid-turn was retried and the
+				// run reached its end. The terminal reason is the authority on the
+				// outcome, not the worst thing that happened on the way there.
+				state.clearErrorSeen()
 			}
 
 			// Inferred completion feedback: the SDK agent normally ends a turn with a plain

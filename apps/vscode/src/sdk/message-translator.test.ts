@@ -1272,6 +1272,57 @@ describe("translateSessionEvent — agent_event error", () => {
 		expect(state.wasErrorSeen()).toBe(false)
 	})
 
+	it("forgets a mid-turn error once the turn completes", () => {
+		// A recovered provider hiccup used to poison the turn's final phase:
+		// `errorSeen` is sticky for the whole turn, so a 438-message turn that
+		// ended cleanly still resolved to Retry / Start New Task with the
+		// composer disabled — the user could not reply to a task that had just
+		// succeeded. The terminal reason is the authority on the outcome.
+		const state = new MessageTranslatorState()
+		state.setErrorSeen()
+
+		translateSessionEvent(
+			{
+				type: "agent_event",
+				payload: {
+					sessionId: "session-1",
+					event: {
+						type: "done",
+						reason: "completed",
+						text: "",
+						iterations: 12,
+					} as AgentEvent,
+				},
+			},
+			state,
+		)
+
+		expect(state.wasErrorSeen()).toBe(false)
+	})
+
+	it("keeps a mid-turn error when the turn itself ends in one", () => {
+		const state = new MessageTranslatorState()
+		state.setErrorSeen()
+
+		translateSessionEvent(
+			{
+				type: "agent_event",
+				payload: {
+					sessionId: "session-1",
+					event: {
+						type: "done",
+						reason: "error",
+						text: "stream failed",
+						iterations: 3,
+					} as AgentEvent,
+				},
+			},
+			state,
+		)
+
+		expect(state.wasErrorSeen()).toBe(true)
+	})
+
 	it("reshapes insufficient_credits error into ClineError-compatible format", () => {
 		const state = new MessageTranslatorState()
 		const errorJson = JSON.stringify({

@@ -76,12 +76,20 @@ const NO_TOOL_CALL_NUDGE_MESSAGE =
  *
  * Off by default, because "a turn with no tool calls ends the run" is the
  * runtime's contract and not an oversight. A bound is what keeps the nudge
- * from being a way to make a run immortal: a model that genuinely has nothing
- * left to do says so, twice, and stops. The counter resets on any turn that
+ * from being a way to make a run immortal. The counter resets on any turn that
  * does call tools, so the limit applies to consecutive silent turns rather
  * than to the run as a whole.
+ *
+ * One, not two. The nudge asks a question with two branches — keep working, or
+ * say you are finished in one short sentence — and both are answered in a
+ * single turn. Sending it twice asks a model that has already answered to
+ * answer again, and it costs a full provider round trip to learn nothing.
+ * Measured on a 438-message session: the model was nudged, replied "The task
+ * is fully complete — all syntax errors have been resolved and verified",
+ * was nudged again with the identical text, and replied with the same
+ * sentence. The second nudge has never once changed an outcome.
  */
-export const DEFAULT_MAX_NO_TOOL_CALL_NUDGES = 2;
+export const DEFAULT_MAX_NO_TOOL_CALL_NUDGES = 1;
 
 /**
  * Terminal message when a context-window overflow cannot be recovered because
