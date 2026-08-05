@@ -1,9 +1,11 @@
 import { createMcpTools } from "@cline/core"
 import type { AgentTool, AgentToolContext } from "@cline/shared"
+import { loadDocumentForDiagnostics, resolveLintCommand, runLintCommand } from "@/hosts/vscode/check-file-support"
 import type { VscodeTerminalManager } from "@/hosts/vscode/terminal/VscodeTerminalManager"
 import type { McpHub } from "@/services/mcp/McpHub"
 import { resolveMcpServerTimeoutMs } from "@/services/mcp/timeout"
 import { Logger } from "@/shared/services/Logger"
+import { createCheckFileTool } from "./check-file-tool"
 import type { SdkForegroundCommandCoordinator } from "./sdk-foreground-command-coordinator"
 import { createVscodeRunCommandsTool, VSCODE_FOREGROUND_RUN_COMMANDS_TIMEOUT_MS } from "./vscode-run-commands-tool"
 
@@ -86,6 +88,19 @@ export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExt
 	// response, and the turn-end inference in message-translator.ts styles that
 	// final text as the completion feedback row.
 	const tools: AgentTool[] = [...mcpTools.flat()]
+
+	// `check_file` needs no configuration and no terminal, so it is always
+	// present: the shell commands it exists to displace are always available
+	// too, and a tool that is only sometimes there is one a model learns not to
+	// rely on.
+	tools.push(
+		createCheckFileTool({
+			cwd: options?.cwd ?? process.cwd(),
+			loadDocument: loadDocumentForDiagnostics,
+			resolveLintCommand,
+			runLintCommand,
+		}),
+	)
 
 	// Add the custom run_commands tool when a terminal manager is available.
 	// This replaces the SDK's built-in run_commands, which is suppressed via
