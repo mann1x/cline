@@ -511,6 +511,10 @@ describe("auditToolSectionContent", () => {
 	]);
 
 	/** What the built-in description says; nothing beyond it is required. */
+	/** Satisfies the use-case rule without naming an operation. */
+	const USE_CASES =
+		"Use this instead of search_codebase when you are about to grep for a name, when you are about to open a file just to read a signature, or when you need to know what would break.";
+
 	const BUILTIN = {
 		code_intel: [
 			"Ask the language server about a symbol.",
@@ -523,6 +527,7 @@ describe("auditToolSectionContent", () => {
 	it("passes a replacement that names the operations, the arguments and the output", () => {
 		const body = [
 			"Ask the language server about a symbol.",
+			USE_CASES,
 			"Operations: definition, references, hover.",
 			"Address it by path plus symbol, or by operation alone.",
 			"Output: one result per line as file:line:column with the source line.",
@@ -536,6 +541,7 @@ describe("auditToolSectionContent", () => {
 	it("catches a replacement that hides half of a closed set", () => {
 		const body = [
 			"Use this for definition lookups.",
+			USE_CASES,
 			"Address it by path plus symbol, with operation set.",
 			"Output: one result per line as file:line:column with the source line.",
 		].join("\n");
@@ -731,8 +737,12 @@ describe("required rewrites", () => {
 	});
 
 	it("accepts a required rewrite that carries the contract itself", () => {
+		// The contract a required rewrite has to carry includes the use cases:
+		// a section that lists the operations without naming the moments to
+		// reach for them is the shape that produced zero calls in practice.
 		const body = [
 			"Ask the language server about a symbol instead of grepping for it.",
+			"Use this instead of search_codebase when you are about to grep for a name, when you are about to open a file just to read a signature, or when you need to know what would break.",
 			"Operations: definition, references.",
 			"Address it with path plus the symbol name.",
 			"Output: one result per line as file:line:column with the source line.",
@@ -744,6 +754,30 @@ describe("required rewrites", () => {
 				"code_intel",
 			]),
 		).toEqual([]);
+	});
+
+	it("rejects a required rewrite that lists operations but never a use case", () => {
+		// The failure this rule exists for. Across one full session against a
+		// real bug, a template that described all eight operations correctly
+		// and said only "prefer this over search_codebase for anything about a
+		// symbol" produced zero calls to the tool, while the model hand-rolled
+		// the same answers in the shell twenty times.
+		const body = [
+			"Ask the language server about a symbol.",
+			"Operations: definition, references.",
+			"Address it with path plus the symbol name.",
+			"Output: one result per line as file:line:column with the source line.",
+		].join("\n");
+
+		const problems = auditToolSectionContent(
+			{ code_intel: body },
+			SIGNATURES,
+			BUILTIN,
+			["code_intel"],
+		);
+
+		expect(problems.some((p) => p.includes("when to reach for it"))).toBe(true);
+		expect(problems.some((p) => p.includes("search_codebase"))).toBe(true);
 	});
 
 	it("still lets an unlisted tool inherit everything", () => {
