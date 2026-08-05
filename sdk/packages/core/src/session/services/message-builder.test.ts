@@ -171,6 +171,77 @@ describe("MessageBuilder", () => {
 		expect(block.is_error).toBe(true);
 	});
 
+	it("says who removed the text, so a spliced read does not read as a damaged file", () => {
+		// A model that saw `...[truncated 3047 chars]...` between line 91 and
+		// line 104 of a read concluded the file was corrupt and started
+		// repairing intact source. The marker has to name Cline, state the
+		// source is complete, and say how to recover the omitted range.
+		const builder = new MessageBuilder();
+		const messages: Message[] = [
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "tool_use",
+						id: "tool_1",
+						name: "read_files",
+						input: { files: [{ path: "/repo/manic_miner.html" }] },
+					},
+				],
+			},
+			{
+				role: "user",
+				content: [
+					{
+						type: "tool_result",
+						tool_use_id: "tool_1",
+						name: "read_files",
+						content: "x".repeat(DEFAULT_MAX_TOOL_RESULT_CHARS * 2),
+					},
+				],
+			},
+		];
+
+		const block = firstToolResult(builder.buildForApi(messages)[1]);
+		expect(block.content).toContain("Cline removed them");
+		expect(block.content).toContain("itself is complete");
+		expect(block.content).toContain("Read the missing range again");
+	});
+
+	it("drops the explanation rather than the cap when the budget cannot hold both", () => {
+		// Small-context experiments set caps far below the explanatory marker.
+		// Content beats commentary there, and the cap still has to hold.
+		const builder = new MessageBuilder({ maxToolResultChars: 100 });
+		const messages: Message[] = [
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "tool_use",
+						id: "tool_1",
+						name: "read_files",
+						input: { files: [{ path: "/repo/a.ts" }] },
+					},
+				],
+			},
+			{
+				role: "user",
+				content: [
+					{
+						type: "tool_result",
+						tool_use_id: "tool_1",
+						name: "read_files",
+						content: "x".repeat(4_000),
+					},
+				],
+			},
+		];
+
+		const block = firstToolResult(builder.buildForApi(messages)[1]);
+		expect(block.content.length).toBeLessThanOrEqual(100);
+		expect(block.content).toContain("chars by Cline");
+	});
+
 	it("truncates search_codebase tool results before provider requests", () => {
 		const builder = new MessageBuilder({ maxToolResultChars: 100 });
 		const messages: Message[] = [
@@ -1847,6 +1918,15 @@ function structuredReadToolResult(
 
 function serializedBlockAt(result: Message[], index: number): string {
 	return JSON.stringify(result[index]);
+}
+
+function firstToolResult(message: Message): { content: string } {
+	const content = message.content;
+	const block = Array.isArray(content) ? content[0] : undefined;
+	if (block?.type !== "tool_result" || typeof block.content !== "string") {
+		throw new Error("expected a tool_result block with string content");
+	}
+	return { content: block.content };
 }
 
 describe("MessageBuilder outdated-read rewrite batching (prefix-cache stability)", () => {

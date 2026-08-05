@@ -49,10 +49,26 @@ const READ_TOOL_NAMES = new Set(["read", "read_files"]);
 const OUTDATED_FILE_CONTENT = "[outdated - see the latest file content]";
 const MISSING_TOOL_RESULT_TEXT =
 	"Tool execution was interrupted before a result was produced.";
+// A middle-truncation marker has a second job beyond bookkeeping: it has to
+// say *who* removed the text. Measured on a live session, a model read a file,
+// hit `...[truncated 3047 chars]...` between line 91 and line 104, and
+// concluded the file was damaged — it announced "there's a missing portion of
+// code between line 91 and line 104" and set about repairing source that was
+// intact. Splicing the head to the tail is exactly what a corrupted file looks
+// like, so the marker has to name Cline as the actor, say the source is
+// unchanged, and point at the way to get the omitted text back. The
+// `...[truncated ` prefix is load-bearing: it is the sentinel the tests and
+// downstream readers match on.
 const TRUNCATE_MARKER_DEFAULT = (n: number) =>
-	`\n\n...[truncated ${n} chars]...\n\n`;
+	`\n\n...[truncated ${n} chars: Cline removed them from the middle of this tool result to keep the transcript small. The file or command output itself is complete — the gap is only in what you were shown here. Read the missing range again if you need it.]...\n\n`;
 const TRUNCATE_MARKER_BUDGET = (n: number) =>
-	`\n\n...[truncated ${n} chars to fit provider request budget]...\n\n`;
+	`\n\n...[truncated ${n} chars to fit provider request budget: Cline removed them from the middle of this tool result. The file or command output itself is complete — the gap is only in what you were shown here. Read the missing range again if you need it.]...\n\n`;
+// Used when the cap is too small to carry the explanation; see
+// truncateMiddleByChars.
+const TRUNCATE_MARKER_TERSE = (n: number) =>
+	`\n\n...[truncated ${n} chars by Cline]...\n\n`;
+const TRUNCATE_MARKER_FILE_ATTACHMENT = (n: number) =>
+	`\n\n...[truncated ${n} chars: Cline removed them from the middle of this attached file to keep the transcript small. The file on disk is complete — the gap is only in what you were shown here. Open the file directly if you need the missing part.]...\n\n`;
 const TRUNCATE_ASSISTANT_TEXT_MARKER = (n: number) =>
 	`\n\n...[assistant text truncated: omitted ${n} chars]...\n\n`;
 const TRUNCATE_ASSISTANT_TEXT_BUDGET_MARKER = (n: number) =>
@@ -236,7 +252,7 @@ export class MessageBuilder {
 			const truncated = truncateMiddleByChars(
 				block.content,
 				this.maxFileContentChars,
-				TRUNCATE_MARKER_DEFAULT,
+				TRUNCATE_MARKER_FILE_ATTACHMENT,
 			);
 			return truncated === block.content
 				? block
@@ -1540,16 +1556,26 @@ function truncateMiddleByChars(
 	if (text.length <= maxChars) {
 		return text;
 	}
+	// The explanatory markers run a couple of hundred characters, which is
+	// nothing against the 8k default cap and everything against the tiny caps
+	// used for small-context experiments and tests. When the note would claim
+	// more room than the content it annotates, drop to the terse form: at that
+	// size there is no space for the explanation, and the result still has to
+	// respect the cap it was given.
+	const render =
+		makeMarker(text.length - maxChars).length * 2 > maxChars
+			? TRUNCATE_MARKER_TERSE
+			: makeMarker;
 	// Two-pass: marker length depends on the removed-char count, which depends
 	// on the marker length. Compute a tentative marker, derive the final
 	// removed count, then build the real marker.
-	const tentativeMarker = makeMarker(text.length - maxChars);
+	const tentativeMarker = render(text.length - maxChars);
 	const tentativeKeep = Math.max(
 		0,
 		Math.floor((maxChars - tentativeMarker.length) / 2),
 	);
 	const removed = Math.max(0, text.length - tentativeKeep * 2);
-	const marker = makeMarker(removed);
+	const marker = render(removed);
 	const keep = Math.max(0, Math.floor((maxChars - marker.length) / 2));
 	const start = text.slice(0, keep);
 	const end = keep > 0 ? text.slice(-keep) : "";
