@@ -1,11 +1,13 @@
 import { createMcpTools } from "@cline/core"
 import type { AgentTool, AgentToolContext } from "@cline/shared"
 import { loadDocumentForDiagnostics, resolveLintCommand, runLintCommand } from "@/hosts/vscode/check-file-support"
+import { createVscodeCodeIntelProvider } from "@/hosts/vscode/code-intel-support"
 import type { VscodeTerminalManager } from "@/hosts/vscode/terminal/VscodeTerminalManager"
 import type { McpHub } from "@/services/mcp/McpHub"
 import { resolveMcpServerTimeoutMs } from "@/services/mcp/timeout"
 import { Logger } from "@/shared/services/Logger"
 import { createCheckFileTool } from "./check-file-tool"
+import { createCodeIntelTool } from "./code-intel-tool"
 import type { SdkForegroundCommandCoordinator } from "./sdk-foreground-command-coordinator"
 import { createVscodeRunCommandsTool, VSCODE_FOREGROUND_RUN_COMMANDS_TIMEOUT_MS } from "./vscode-run-commands-tool"
 
@@ -99,6 +101,16 @@ export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExt
 			loadDocument: loadDocumentForDiagnostics,
 			resolveLintCommand,
 			runLintCommand,
+		}),
+	)
+
+	// `code_intel` is likewise unconditional. It answers from whichever language
+	// servers the user already has; a language nobody installed support for
+	// returns nothing, which is a cheaper failure than the tool being absent.
+	tools.push(
+		createCodeIntelTool({
+			cwd: options?.cwd ?? process.cwd(),
+			provider: createVscodeCodeIntelProvider(),
 		}),
 	)
 
