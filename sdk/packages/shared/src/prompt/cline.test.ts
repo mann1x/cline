@@ -73,3 +73,75 @@ describe("buildClineSystemPrompt mode instructions", () => {
 		expect(prompt).toBe("You are a custom agent.");
 	});
 });
+
+describe("buildClineSystemPrompt with a template base prompt", () => {
+	const TEMPLATE = [
+		"You are Cline, per the gemma template.",
+		"Working Directory: {{CWD}}",
+		"Platform: {{PLATFORM_NAME}}",
+		"{{CLINE_RULES}}",
+	].join("\n");
+
+	it("substitutes a template's placeholders, unlike an override", () => {
+		const prompt = buildClineSystemPrompt({
+			...BASE_OPTIONS,
+			mode: "act",
+			basePrompt: TEMPLATE,
+		});
+
+		expect(prompt).toContain("You are Cline, per the gemma template.");
+		expect(prompt).toContain("Working Directory: /workspace/project");
+		expect(prompt).toContain("Platform: linux");
+		expect(prompt).not.toContain("{{CWD}}");
+		expect(prompt).not.toContain("{{PLATFORM_NAME}}");
+	});
+
+	it("still carries the mode instructions into a template", () => {
+		const prompt = buildClineSystemPrompt({
+			...BASE_OPTIONS,
+			mode: "plan",
+			basePrompt: TEMPLATE,
+		});
+
+		expect(prompt).toContain(MODE_TAG_INSTRUCTIONS);
+		expect(prompt).toContain(PLAN_MODE_INSTRUCTIONS);
+	});
+
+	it("appends the rules slot when a template forgets it", () => {
+		// Losing {{CLINE_RULES}} would silently drop the plan-mode contract, and
+		// nothing else in the pipeline reports it. Appending is recoverable;
+		// losing it is not.
+		const prompt = buildClineSystemPrompt({
+			...BASE_OPTIONS,
+			mode: "plan",
+			basePrompt: "A template that forgot the rules slot.",
+		});
+
+		expect(prompt).toContain("A template that forgot the rules slot.");
+		expect(prompt).toContain(PLAN_MODE_INSTRUCTIONS);
+	});
+
+	it("ignores an empty or whitespace-only template", () => {
+		const fromBlank = buildClineSystemPrompt({
+			...BASE_OPTIONS,
+			mode: "act",
+			basePrompt: "   \n  ",
+		});
+		const builtin = buildClineSystemPrompt({ ...BASE_OPTIONS, mode: "act" });
+
+		expect(fromBlank).toBe(builtin);
+	});
+
+	it("lets a per-request override still win over a template", () => {
+		// An override is a finished prompt handed over by the caller; a template
+		// is a starting point. The finished one wins, unsubstituted as always.
+		const prompt = buildClineSystemPrompt({
+			...BASE_OPTIONS,
+			mode: "act",
+			basePrompt: TEMPLATE,
+			overridePrompt: "Just this. {{CWD}}",
+		});
+
+		expect(prompt).toBe("Just this. {{CWD}}");
+	});
+});

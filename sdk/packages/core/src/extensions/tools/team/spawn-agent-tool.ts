@@ -119,7 +119,10 @@ export function createSpawnAgentTool(
 ): AgentTool<SpawnAgentInput, SpawnAgentOutput> {
 	return createTool<SpawnAgentInput, SpawnAgentOutput>({
 		name: "spawn_agent",
-		description: `Spawn a sub-agent with a custom system prompt for specialized tasks. Use when delegating work that benefits from focused expertise.`,
+		description:
+			"Spawn a sub-agent with a custom system prompt for specialized tasks. Use when delegating work that benefits from focused expertise. " +
+			"Output: `{text, iterations, finishReason, usage: {inputTokens, outputTokens}}`. " +
+			"`text` is the sub-agent's final answer and the only part you need: it worked in its own context, so nothing it read or edited is visible to you except through `text`. It has already finished by the time you see this — there is nothing to poll and nothing to await.",
 		inputSchema: zodToJsonSchema(SpawnAgentInputSchema),
 		execute: async (input, context) => {
 			const tools = config.createSubAgentTools

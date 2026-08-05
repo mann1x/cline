@@ -11,6 +11,7 @@ import {
 	buildResumeSessionInput,
 	buildSessionConfig,
 	buildStartSessionInput,
+	composeSessionHooks,
 	createHistoryItemFromSession,
 	getDefaultModelIdForProvider,
 	getHistoryItemById,
@@ -1300,5 +1301,31 @@ describe("buildOutputBudgetSection", () => {
 		expect(section).toContain("capped at 32000 tokens")
 		expect(section).not.toContain("context window is")
 		expect(section).toContain("Prefer several focused tool calls")
+	})
+})
+
+describe("composeSessionHooks", () => {
+	// The editor-diagnostics layer is the reason this function exists: it is the
+	// only hook that reports a broken edit back to the model, and it is easy to
+	// lose because losing it is silent — the model simply carries on against a
+	// file that does not parse.
+	it("layers the editor diagnostics hooks on top of the file hooks", async () => {
+		const beforeTool = vi.fn(async () => undefined)
+		const hooks = composeSessionHooks({ beforeTool }, "/workspace")
+
+		expect(hooks?.beforeTool).toBeDefined()
+		expect(hooks?.afterTool).toBeDefined()
+
+		// Both layers run, and the caller's own layer is not displaced by the one
+		// added here.
+		await hooks?.beforeTool?.({ toolCall: { toolName: "read_files", toolCallId: "1" }, input: {} } as never)
+		expect(beforeTool).toHaveBeenCalledOnce()
+	})
+
+	it("still supplies the diagnostics hooks when there are no file hooks", () => {
+		const hooks = composeSessionHooks(undefined, "/workspace")
+
+		expect(hooks?.beforeTool).toBeDefined()
+		expect(hooks?.afterTool).toBeDefined()
 	})
 })

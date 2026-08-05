@@ -78,6 +78,95 @@ import {
 } from "./delegated-agent";
 import type { AgentTeamsRuntime } from "./multi-agent";
 
+/**
+ * Say what a team tool answers with, in the shape it really answers with.
+ *
+ * These eighteen tools are the only ones that reply with a structured object
+ * rather than text, and every one of their descriptions says what the tool does
+ * without ever saying what comes back. A model calling `team_task` cannot tell
+ * whether it will receive a task id, the task, or a list of them until it has
+ * spent a call finding out — and a result it cannot map onto its request is
+ * indistinguishable, from where it is standing, from a tool that is broken.
+ *
+ * Derived from the schema each tool already validates its result against, so
+ * the sentence cannot drift away from the answer: change the schema and the
+ * description changes with it.
+ */
+function describeResultShape(schema: unknown, depth = 0): string {
+	const def = (schema as { def?: { type?: string } } | undefined)?.def;
+	switch (def?.type) {
+		case "optional":
+		case "nullable":
+		case "default":
+			return describeResultShape(
+				(def as { innerType?: unknown }).innerType,
+				depth,
+			);
+		case "array": {
+			const element = describeResultShape(
+				(def as { element?: unknown }).element,
+				depth + 1,
+			);
+			// A list of scalars still has to look like a list — `[...]` rather
+			// than the bare name — or a model reads `dependsOn` as one id.
+			return element === "" ? "[...]" : `[${element}]`;
+		}
+		case "literal": {
+			// The discriminator is the whole point of a union: `action` repeated
+			// five times says nothing, `action: "create"` says which branch a
+			// model is about to get back.
+			const values = (def as { values?: unknown[] }).values ?? [];
+			return values.map((value) => JSON.stringify(value)).join(" | ");
+		}
+		case "union": {
+			const options = (def as { options?: unknown[] }).options ?? [];
+			return options
+				.map((option) => describeResultShape(option, depth))
+				.join(" | ");
+		}
+		case "object": {
+			// Two levels is the whole budget: one to name the fields the model
+			// reads, one to show that a nested field is itself an object. Deeper
+			// than that and the sentence costs more attention than the schema it
+			// is standing in for.
+			if (depth >= 2) {
+				return "{...}";
+			}
+			const shape = (schema as { shape: Record<string, unknown> }).shape;
+			const fields = Object.entries(shape).map(([key, value]) => {
+				const optional =
+					(value as { def?: { type?: string } }).def?.type === "optional"
+						? "?"
+						: "";
+				const nested = describeResultShape(value, depth + 1);
+				return nested === ""
+					? `${key}${optional}`
+					: `${key}${optional}: ${nested}`;
+			});
+			return `{${fields.join(", ")}}`;
+		}
+		default:
+			// Scalars are left unnamed. `taskId: string` tells a model nothing it
+			// could not read off the name, and doubles the length of the line.
+			return "";
+	}
+}
+
+/** `Output: …`, ready to append to a tool description. */
+function describeOutput(schema: unknown, note?: string): string {
+	const shape = describeResultShape(schema);
+	return ` Output: ${shape}.${note ? ` ${note}` : ""}`;
+}
+
+/**
+ * The same, for the tools that answer with an array of a schema rather than
+ * the schema itself. Written this way so the file does not have to import zod
+ * only to wrap four schemas in `z.array`.
+ */
+function describeListOutput(schema: unknown, note?: string): string {
+	return ` Output: [${describeResultShape(schema, 1)}].${note ? ` ${note}` : ""}`;
+}
+
 function truncateText(value: string, maxLength: number): string {
 	const normalized = value.replace(/\s+/g, " ").trim();
 	if (normalized.length <= maxLength) {
@@ -301,7 +390,12 @@ export function createAgentTeamsTools(
 		tools.push(
 			createTool<TeamSpawnTeammateInput, { agentId: string; status: string }>({
 				name: "team_spawn_teammate",
-				description: "Spawn a teammate with a required agentId and rolePrompt.",
+				description:
+					"Spawn a teammate with a required agentId and rolePrompt." +
+					describeOutput(
+						TeamSimpleAgentStatusToolResultSchema,
+						"The teammate exists after this returns but has done nothing; give it work with team_run_task.",
+					),
 				inputSchema: zodToJsonSchema(TeamSpawnTeammateInputSchema),
 				execute: async (input) => {
 					const validatedInput = validateWithZod(
@@ -351,7 +445,9 @@ export function createAgentTeamsTools(
 	tools.push(
 		createTool<TeamShutdownTeammateInput, { agentId: string; status: string }>({
 			name: "team_shutdown_teammate",
-			description: "Shutdown a teammate by agentId.",
+			description:
+				"Shutdown a teammate by agentId." +
+				describeOutput(TeamSimpleAgentStatusToolResultSchema),
 			inputSchema: zodToJsonSchema(TeamShutdownTeammateInputSchema),
 			execute: async (input) => {
 				const validatedInput = validateWithZod(
@@ -377,7 +473,11 @@ export function createAgentTeamsTools(
 		createTool<TeamStatusInput, TeamStatusToolResult>({
 			name: "team_status",
 			description:
-				"Return a snapshot of team members, task counts, mailbox, and mission log stats.",
+				"Return a snapshot of team members, task counts, mailbox, and mission log stats." +
+				describeOutput(
+					TeamStatusToolResultSchema,
+					"Counts only. Read the mailbox or the run list for the contents behind them.",
+				),
 			inputSchema: zodToJsonSchema(TeamStatusInputSchema),
 			execute: async (input) => {
 				validateWithZod(TeamStatusInputSchema, input);
@@ -397,7 +497,11 @@ export function createAgentTeamsTools(
 				"create requires title and description, with optional dependsOn and assignee. " +
 				"list accepts optional status, assignee. " +
 				"claim requires taskId. complete requires taskId and summary. block requires taskId and reason. " +
-				"Do not include fields from other actions.",
+				"Do not include fields from other actions." +
+				describeOutput(
+					TeamTaskToolResultSchema,
+					"The shape depends on the action you sent; only list returns the tasks themselves.",
+				),
 			inputSchema: zodToJsonSchema(TeamTaskInputSchema),
 			execute: async (input) => {
 				const validatedInput = validateWithZod(TeamTaskInputSchema, input);
@@ -494,7 +598,11 @@ export function createAgentTeamsTools(
 		createTool<TeamRunTaskInput, TeamRunTaskToolResult>({
 			name: "team_run_task",
 			description:
-				"Route a delegated task to a teammate. Choose sync (wait) or async (run in background).",
+				"Route a delegated task to a teammate. Choose sync (wait) or async (run in background)." +
+				describeOutput(
+					TeamRunTaskToolResultSchema,
+					"In sync mode text holds the teammate's answer. In async mode it does not: you get a runId, and the answer arrives from team_await_runs.",
+				),
 			inputSchema: zodToJsonSchema(TeamRunTaskInputSchema),
 			execute: async (input) => {
 				const validatedInput = validateWithZod(TeamRunTaskInputSchema, input);
@@ -561,7 +669,9 @@ export function createAgentTeamsTools(
 	tools.push(
 		createTool<TeamCancelRunInput, { runId: string; status: string }>({
 			name: "team_cancel_run",
-			description: "Cancel one async teammate run.",
+			description:
+				"Cancel one async teammate run." +
+				describeOutput(TeamCancelRunToolResultSchema),
 			inputSchema: zodToJsonSchema(TeamCancelRunInputSchema),
 			execute: async (input) => {
 				const validatedInput = validateWithZod(TeamCancelRunInputSchema, input);
@@ -581,7 +691,8 @@ export function createAgentTeamsTools(
 		createTool<TeamListRunsInput, TeamRunToolSummary[]>({
 			name: "team_list_runs",
 			description:
-				"List teammate runs started with team_run_task in async mode, including live activity/progress fields when available.",
+				"List teammate runs started with team_run_task in async mode, including live activity/progress fields when available." +
+				describeListOutput(TeamRunToolSummarySchema),
 			inputSchema: zodToJsonSchema(TeamListRunsInputSchema),
 			execute: async (input) =>
 				validateWithZod(
@@ -597,7 +708,11 @@ export function createAgentTeamsTools(
 		createTool<TeamAwaitRunsInput, TeamRunToolSummary | TeamRunToolSummary[]>({
 			name: "team_await_runs",
 			description:
-				"Wait for async teammate runs. Provide runId to wait for one run, or omit it to wait for all active async runs. Uses a long timeout for legitimate teammate work.",
+				"Wait for async teammate runs. Provide runId to wait for one run, or omit it to wait for all active async runs. Uses a long timeout for legitimate teammate work." +
+				describeListOutput(
+					TeamRunToolSummarySchema,
+					"resultSummary carries each finished run's answer, truncated to a preview; a run that is still going has no resultSummary.",
+				),
 			inputSchema: zodToJsonSchema(TeamAwaitRunsInputSchema),
 			timeoutMs: TEAM_AWAIT_TIMEOUT_MS,
 			execute: async (input) => {
@@ -633,7 +748,12 @@ export function createAgentTeamsTools(
 	tools.push(
 		createTool<TeamSendMessageInput, { id: string; toAgentId: string }>({
 			name: "team_send_message",
-			description: "Send a mailbox message to a specific teammate.",
+			description:
+				"Send a mailbox message to a specific teammate." +
+				describeOutput(
+					TeamSendMessageToolResultSchema,
+					"Delivery only. The teammate reads its mailbox on its own schedule and there is no reply here.",
+				),
 			inputSchema: zodToJsonSchema(TeamSendMessageInputSchema),
 			execute: async (input) => {
 				const validatedInput = validateWithZod(
@@ -658,7 +778,9 @@ export function createAgentTeamsTools(
 	tools.push(
 		createTool<TeamBroadcastInput, { delivered: number }>({
 			name: "team_broadcast",
-			description: "Broadcast a message to all teammates.",
+			description:
+				"Broadcast a message to all teammates." +
+				describeOutput(TeamBroadcastToolResultSchema),
 			inputSchema: zodToJsonSchema(TeamBroadcastInputSchema),
 			execute: async (input) => {
 				const validatedInput = validateWithZod(TeamBroadcastInputSchema, input);
@@ -680,7 +802,12 @@ export function createAgentTeamsTools(
 	tools.push(
 		createTool<TeamReadMailboxInput, TeamMailboxMessageToolResult[]>({
 			name: "team_read_mailbox",
-			description: "Read the current agent mailbox.",
+			description:
+				"Read the current agent mailbox." +
+				describeListOutput(
+					TeamMailboxMessageToolResultSchema,
+					"Reading marks the messages read, so the next call will not return them again.",
+				),
 			inputSchema: zodToJsonSchema(TeamReadMailboxInputSchema),
 			execute: async (input) => {
 				const validatedInput = validateWithZod(
@@ -701,7 +828,9 @@ export function createAgentTeamsTools(
 	tools.push(
 		createTool<TeamMissionLogInput, { id: string }>({
 			name: "team_mission_log",
-			description: "Append a mission log update for your team.",
+			description:
+				"Append a mission log update for your team." +
+				describeOutput(TeamMissionLogToolResultSchema),
 			inputSchema: zodToJsonSchema(TeamMissionLogInputSchema),
 			execute: async (input) => {
 				const validatedInput = validateWithZod(
@@ -729,7 +858,8 @@ export function createAgentTeamsTools(
 		createTool<TeamCleanupInput, { status: string }>({
 			name: "team_cleanup",
 			description:
-				"Clean up the team runtime. Fails if teammates are still running.",
+				"Clean up the team runtime. Fails if teammates are still running." +
+				describeOutput(TeamCleanupToolResultSchema),
 			inputSchema: zodToJsonSchema(TeamCleanupInputSchema),
 			execute: async (input) => {
 				validateWithZod(TeamCleanupInputSchema, input);
@@ -747,7 +877,12 @@ export function createAgentTeamsTools(
 	tools.push(
 		createTool<TeamCreateOutcomeInput, TeamCreateOutcomeToolResult>({
 			name: "team_create_outcome",
-			description: "Create a converged team outcome.",
+			description:
+				"Create a converged team outcome." +
+				describeOutput(
+					TeamCreateOutcomeToolResultSchema,
+					"requiredSections lists what must be filled before the outcome can be finalized.",
+				),
 			inputSchema: zodToJsonSchema(TeamCreateOutcomeInputSchema),
 			execute: async (input) => {
 				const validatedInput = validateWithZod(
@@ -774,7 +909,9 @@ export function createAgentTeamsTools(
 			{ fragmentId: string; status: string }
 		>({
 			name: "team_attach_outcome_fragment",
-			description: "Attach a fragment to an outcome section.",
+			description:
+				"Attach a fragment to an outcome section." +
+				describeOutput(TeamOutcomeFragmentToolResultSchema),
 			inputSchema: zodToJsonSchema(TeamAttachOutcomeFragmentInputSchema),
 			execute: async (input) => {
 				const validatedInput = validateWithZod(
@@ -802,7 +939,9 @@ export function createAgentTeamsTools(
 			{ fragmentId: string; status: string }
 		>({
 			name: "team_review_outcome_fragment",
-			description: "Review one outcome fragment.",
+			description:
+				"Review one outcome fragment." +
+				describeOutput(TeamOutcomeFragmentToolResultSchema),
 			inputSchema: zodToJsonSchema(TeamReviewOutcomeFragmentInputSchema),
 			execute: async (input) => {
 				const validatedInput = validateWithZod(
@@ -826,7 +965,9 @@ export function createAgentTeamsTools(
 		createTool<TeamFinalizeOutcomeInput, { outcomeId: string; status: string }>(
 			{
 				name: "team_finalize_outcome",
-				description: "Finalize one outcome.",
+				description:
+					"Finalize one outcome." +
+					describeOutput(TeamFinalizeOutcomeToolResultSchema),
 				inputSchema: zodToJsonSchema(TeamFinalizeOutcomeInputSchema),
 				execute: async (input) => {
 					const validatedInput = validateWithZod(
@@ -848,7 +989,8 @@ export function createAgentTeamsTools(
 	tools.push(
 		createTool<TeamListOutcomesInput, TeamOutcomeToolResult[]>({
 			name: "team_list_outcomes",
-			description: "List team outcomes.",
+			description:
+				"List team outcomes." + describeListOutput(TeamOutcomeToolResultSchema),
 			inputSchema: zodToJsonSchema(TeamListOutcomesInputSchema),
 			execute: async (input) => {
 				validateWithZod(TeamListOutcomesInputSchema, input);
