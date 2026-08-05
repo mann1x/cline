@@ -138,6 +138,13 @@ Ask the IDE's language servers about a symbol. This answers questions that a tex
 
 Use this before falling back to `search_codebase` for anything about a symbol. It is faster, exact, and does not need you to read files to interpret the result.
 
+Reach for it the moment you are about to do one of these by hand:
+- search for a name to find where it is defined -> `definition`
+- search for a name to find what uses it, or what would break -> `references` or `callers`
+- open a file just to read a signature, type or doc comment -> `hover`
+- scroll a file, or count brackets, to work out its structure -> `document_symbols`
+- grep the repo to find which file something lives in -> `workspace_symbols`
+
 Operations:
 - `definition` — where a symbol is defined.
 - `references` — every place it is actually used.

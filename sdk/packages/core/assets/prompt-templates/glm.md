@@ -41,6 +41,8 @@ Reads text or image files at absolute paths. Use this instead of shell commands 
 # tool: search_codebase
 Performs regex pattern searches across the codebase. Use this for finding text patterns, not for finding symbol definitions or references (use `code_intel` for that).
 - `queries`: Array of regex strings. Run multiple independent searches together in one call.
+- `context_lines`: integer (optional). Sets how many lines are shown either side of a match, 2 by default.
+- `max_per_file`: integer (optional). Reports one match per file by default; raise this to find every occurrence inside a file.
 - Output beyond ~48k characters per query is middle-truncated; narrow patterns beat broad ones.
 - Output: One object per pattern: `{query, result, success, error?}`. `query` is the pattern. `result` is matching lines with file paths. A pattern that matched nothing has `success: true` with empty `result`—this is an answer, not a failure.
 {{DEFAULT}}
@@ -59,6 +61,10 @@ Edits a text file at the provided absolute path. Use this instead of shell comma
 - If `insert_line` is omitted: replaces `old_text` with `new_text`. If file does not exist, creates it with `new_text`.
 - `old_text`: string (optional, required for replacement). Must match exactly, including indentation.
 - `new_text`: string (required).
+- `start_line`: integer (optional). Use with `new_text` to replace lines (inclusive, defaults to `start_line` if `end_line` omitted). No `old_text` needed. Prefer this when the text is long, minified or repeated: a diagnostic already gives you the line number, and a line number cannot be ambiguous. An empty `new_text` deletes the range.
+- `end_line`: integer (optional). Use with `start_line` to set the inclusive end of the replaced range.
+- `occurrence`: integer (optional). When `old_text` occurs more than once, add this (one-based, in file order) to pick one.
+- `replace_all`: boolean (optional). Set to true to change every occurrence of `old_text`.
 - Emit multiple `editor` calls together for independent edits to different files or non-overlapping regions.
 - Output: `{query, result, success, error?}`. `query` is `edit:<path>` or `insert:<path>`. If `old_text` not found, `success` is false and file is unchanged.
 {{DEFAULT}}
@@ -120,6 +126,13 @@ Asks the IDE's language servers about a symbol. Use this instead of `search_code
 - Addressing: 1) `path` + `symbol`; 2) `path` + `line` + `character`; 3) `symbol` alone with `operation: "workspace_symbols"`.
 - Output: Plain text, one result per line as `file:line:column` followed by source line. `hover` returns signature/docs. `document_symbols` and `workspace_symbols` name each symbol's kind. No results is a definite answer; do not fall back to text search.
 {{DEFAULT}}
+
+Reach for it the moment you are about to do one of these by hand:
+- search for a name to find where it is defined -> `definition`
+- search for a name to find what uses it, or what would break -> `references` or `callers`
+- open a file just to read a signature, type or doc comment -> `hover`
+- scroll a file, or count brackets, to work out its structure -> `document_symbols`
+- grep the repo to find which file something lives in -> `workspace_symbols`
 
 # tool: switch_to_act_mode
 Switches from plan mode to act mode.
