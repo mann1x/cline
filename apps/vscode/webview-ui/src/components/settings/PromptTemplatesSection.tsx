@@ -1,7 +1,7 @@
 import { EmptyRequest } from "@shared/proto/cline/common"
 import { PromptTemplateEditRequest, type PromptTemplateInfo, type PromptTemplates } from "@shared/proto/cline/file"
 import { AlertTriangle, CircleAlert, FilePenLine, RefreshCw, Sparkles } from "lucide-react"
-import { memo, useCallback, useEffect, useState } from "react"
+import { memo, useCallback, useEffect, useMemo, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { FileServiceClient } from "@/services/grpc-client"
@@ -25,8 +25,45 @@ function sourceLabel(source: string): string {
 	return source === "global" ? "Global" : "Workspace"
 }
 
+/** At most this many names before the gap is reported as a count. */
+const MAX_NAMED_GAPS = 4
+
+/**
+ * Say what a template does *not* cover, rather than what it does.
+ *
+ * Every shipped template covers all thirty-one tools, so listing them printed
+ * the same paragraph under every row and buried the two things a reader is
+ * actually looking for: which template is active, and whether it has a hole in
+ * it. A gap is the exception and the only part worth the width — a tool with no
+ * section silently keeps its built-in description.
+ */
+function describeCoverage(covered: readonly string[], everyTool: readonly string[]): string {
+	if (everyTool.length === 0) {
+		return covered.length > 0 ? `${covered.length} tools` : "no tool overrides"
+	}
+	const missing = everyTool.filter((tool) => !covered.includes(tool))
+	if (missing.length === 0) {
+		return `all ${everyTool.length} tools`
+	}
+	if (missing.length === everyTool.length) {
+		return "no tool overrides"
+	}
+	const named = missing.slice(0, MAX_NAMED_GAPS).join(", ")
+	const rest = missing.length - MAX_NAMED_GAPS
+	return `missing ${rest > 0 ? `${named} and ${rest} more` : named}`
+}
+
 const TemplateRow = memo(
-	({ template, onEdit }: { template: PromptTemplateInfo; onEdit: (template: PromptTemplateInfo) => void }) => {
+	({
+		template,
+		everyTool,
+		onEdit,
+	}: {
+		template: PromptTemplateInfo
+		/** Every tool a session can be handed, for reporting what is not covered. */
+		everyTool: readonly string[]
+		onEdit: (template: PromptTemplateInfo) => void
+	}) => {
 		const dimmed = template.shadowed || template.error !== undefined
 
 		return (
@@ -62,7 +99,7 @@ const TemplateRow = memo(
 					<div className="text-xs text-description">
 						<span>{template.match.join(" · ") || "any model"}</span>
 						{template.hasSystem && <span> · system prompt</span>}
-						{template.tools.length > 0 && <span> · tools: {template.tools.join(", ")}</span>}
+						<span> · {describeCoverage(template.tools, everyTool)}</span>
 					</div>
 				)}
 
@@ -99,6 +136,17 @@ const PromptTemplatesSection = () => {
 	useEffect(() => {
 		void refresh()
 	}, [refresh])
+
+	// `default.md` is the base layer and carries a section for every tool by
+	// construction, so it is the list every other template is measured against.
+	// Falling back to the union keeps the reading honest if it is ever missing.
+	const everyTool = useMemo(() => {
+		const base = state?.templates.find((template) => template.name === "default")
+		if (base && base.tools.length > 0) {
+			return base.tools
+		}
+		return [...new Set((state?.templates ?? []).flatMap((template) => template.tools))].sort()
+	}, [state])
 
 	const handleEdit = useCallback(
 		async (template: PromptTemplateInfo) => {
@@ -210,6 +258,7 @@ const PromptTemplatesSection = () => {
 				) : (
 					state?.templates.map((template) => (
 						<TemplateRow
+							everyTool={everyTool}
 							key={`${template.source}:${template.filePath ?? template.fileName}`}
 							onEdit={handleEdit}
 							template={template}
