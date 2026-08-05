@@ -44,6 +44,7 @@ import {
 	EditFileInputSchema,
 	type FetchWebContentInput,
 	FetchWebContentInputSchema,
+	LooseFetchWebContentInputSchema,
 	type ReadFileRequest,
 	type ReadFilesInput,
 	ReadFilesInputSchema,
@@ -289,7 +290,8 @@ export function createReadFilesTool(
 			"When you already know multiple files you need, read them together in one call, and call this tool in the same response as other independent tool calls. " +
 			`Each read returns at most ${MAX_READ_LINES} lines / ~${Math.round(MAX_READ_OUTPUT_CHARS / 1024)}k characters; longer files report their total line count, page through them with start_line/end_line on that file's entry. ` +
 			"Binary files that are not image and large files are not supported. " +
-			`Output: one object per requested file, in the order requested — ${TOOL_RESULT_ENVELOPE} \`query\` echoes the path you asked for (as \`path:start-end\` when you gave a range), and \`result\` is that file's content. `,
+			`Output: one object per requested file, in the order requested — ${TOOL_RESULT_ENVELOPE} \`query\` echoes the path you asked for (as \`path:start-end\` when you gave a range), and \`result\` is that file's content, with every line prefixed by its number as \`  92 | text\`. ` +
+			"Those numbers are how you address an edit, and they are not in the file. Never paste them into another tool: text carrying a `92 | ` prefix will not match anything. When you are reading in order to copy text into `editor`, set `line_numbers: false` on that file's entry and get it clean. ",
 		inputSchema: zodToJsonSchema(ReadFilesInputSchema),
 		timeoutMs: timeoutMs * 2, // Account for multiple files
 		retryable: true,
@@ -388,6 +390,7 @@ export function createSearchTool(
 			"Perform regex pattern searches across the codebase. " +
 			"Supports multiple parallel searches. When several search patterns could be useful and do not depend on each other, run them together in one call, and call this tool in the same response as other independent tool calls. " +
 			"Use for finding code patterns, function definitions, class names, imports, etc. " +
+			"It reports one match per file by default, which answers which files mention something. To find every occurrence inside a file — how many times a name appears and where each one is — raise `max_per_file`. `context_lines` sets how many lines are shown either side of a match, 2 by default. " +
 			`Output beyond ~${Math.round(MAX_SEARCH_OUTPUT_CHARS / 1000)}k characters per query is middle-truncated; narrow patterns beat broad ones. ` +
 			`Output: one object per pattern — ${TOOL_RESULT_ENVELOPE} \`query\` is the pattern you sent and \`result\` is the matching lines with their file paths. A pattern that matched nothing still has \`success: true\` with an empty \`result\`; that is an answer, not a failure, and re-running it will not change it.`,
 		inputSchema: zodToJsonSchema(SearchCodebaseInputSchema),
@@ -404,12 +407,25 @@ export function createSearchTool(
 						? validate.queries
 						: [validate.queries]
 					: [validate];
+			const queryOptions =
+				!Array.isArray(validate) && typeof validate === "object"
+					? {
+							contextLines:
+								"context_lines" in validate
+									? (validate.context_lines ?? undefined)
+									: undefined,
+							maxPerFile:
+								"max_per_file" in validate
+									? (validate.max_per_file ?? undefined)
+									: undefined,
+						}
+					: undefined;
 
 			return Promise.all(
 				queries.map(async (query): Promise<ToolOperationResult> => {
 					try {
 						const results = await withTimeout(
-							executor(query, cwd, context),
+							executor(query, cwd, context, queryOptions),
 							timeoutMs,
 							`Search timed out after ${timeoutMs}ms`,
 						);
@@ -581,7 +597,12 @@ export function createWebFetchTool(
 		maxRetries: 2,
 		execute: async (input, context) => {
 			// Validate input with Zod schema
-			const validatedInput = validateWithZod(FetchWebContentInputSchema, input);
+			// Advertises `{requests: [...]}`, accepts the flattenings of it too.
+			// See LooseFetchWebContentInputSchema for why.
+			const validatedInput = validateWithZod(
+				LooseFetchWebContentInputSchema,
+				input,
+			);
 
 			return Promise.all(
 				validatedInput.requests.map(
@@ -717,12 +738,14 @@ export function createEditorTool(
 	return createTool<EditFileInput, ToolOperationResult>({
 		name: "editor",
 		description:
-			"An editor for controlled filesystem edits on the text file at the provided path. " +
-			"Provide `insert_line` to insert `new_text` at a specific line number. " +
-			"Otherwise, the tool replaces `old_text` with `new_text`, or creates the file with `new_text` if file does not exist. " +
-			"Use this tool for making small, precise edits to existing files or creating new files over shell commands. If several edits to different files or non-overlapping regions are already known, emit multiple editor tool calls in the same response instead of serializing them across turns. " +
+			"An editor for controlled filesystem edits on the text file at the provided path. It does four things, chosen by which arguments you send:\n" +
+			"- Replace text: `old_text` plus `new_text`. When `old_text` occurs more than once, add `occurrence` (one-based, in file order) to pick one, or `replace_all: true` to change every one.\n" +
+			"- Replace lines: `start_line` plus `new_text`, with optional `end_line` (inclusive, defaults to `start_line`). No `old_text` needed. Prefer this when the text is long, minified or repeated: a diagnostic already gives you the line number, and a line number cannot be ambiguous. An empty `new_text` deletes the range.\n" +
+			"- Insert: `insert_line` plus `new_text`, which adds text before that line without replacing anything. Use `line_count + 1` to append at EOF.\n" +
+			"- Create: `new_text` alone, when the file does not exist.\n" +
+			"Use this rather than a shell command for anything that changes a file. If several edits to different files or non-overlapping regions are already known, emit multiple editor tool calls in the same response instead of serializing them across turns. " +
 			"Output: a single `{query, result, success, error?}` object for this one edit, where `query` is `edit:<path>` or `insert:<path>` and `result` describes what changed. " +
-			"If `old_text` was not found the edit did not happen: `success` is false, `error` says why, and the file is exactly as it was — read the region and match the text as it really is, including its indentation.",
+			"A failed edit changes nothing: `success` is false, `error` says why, and the file is exactly as it was. Do not resend the same call — `error` names the fix. In particular, text copied out of a `read_files` result must have its `123 | ` line-number gutter removed first.",
 
 		inputSchema: zodToJsonSchema(EditFileInputSchema),
 		timeoutMs,

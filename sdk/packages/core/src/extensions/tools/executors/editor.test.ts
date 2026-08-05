@@ -290,4 +290,201 @@ describe("createEditorExecutor", () => {
 			await fs.rm(dir, { recursive: true, force: true });
 		}
 	});
+	describe("replacing a line range", () => {
+		// Twelve shell commands in one measured session existed only to do
+		// `$lines[91] = "..."`, because there was no tool for it.
+		it("replaces one line addressed by number", async () => {
+			await withTempFile("one\ntwo\nthree", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const result = await editor(
+					{ path: filePath, new_text: "TWO", start_line: 2 },
+					dir,
+					context,
+				);
+
+				expect(result).toContain("Replaced line 2");
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+					"one\nTWO\nthree",
+				);
+			});
+		});
+
+		it("replaces an inclusive range, and with fewer lines than it removed", async () => {
+			await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const result = await editor(
+					{ path: filePath, new_text: "X", start_line: 2, end_line: 3 },
+					dir,
+					context,
+				);
+
+				expect(result).toContain("Replaced lines 2-3");
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("a\nX\nd");
+			});
+		});
+
+		it("deletes the range when new_text is empty", async () => {
+			await withTempFile("keep\ndrop\nkeep", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				await editor(
+					{ path: filePath, new_text: "", start_line: 2 },
+					dir,
+					context,
+				);
+
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+					"keep\nkeep",
+				);
+			});
+		});
+
+		it("keeps the file's own line endings", async () => {
+			await withTempFile("one\r\ntwo\r\nthree", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				await editor(
+					{ path: filePath, new_text: "TWO\nEXTRA", start_line: 2 },
+					dir,
+					context,
+				);
+
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+					"one\r\nTWO\r\nEXTRA\r\nthree",
+				);
+			});
+		});
+
+		it("refuses a range outside the file rather than guessing", async () => {
+			await withTempFile("one\ntwo", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+
+				await expect(
+					editor(
+						{ path: filePath, new_text: "x", start_line: 9 },
+						dir,
+						context,
+					),
+				).rejects.toThrow("Invalid start_line: 9. The file has 2 line(s)");
+				await expect(
+					editor(
+						{ path: filePath, new_text: "x", start_line: 2, end_line: 1 },
+						dir,
+						context,
+					),
+				).rejects.toThrow("Invalid end_line: 1");
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("one\ntwo");
+			});
+		});
+
+		it("refuses to both insert and replace in one call", async () => {
+			await withTempFile("one\ntwo", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+
+				await expect(
+					editor(
+						{ path: filePath, new_text: "x", insert_line: 1, start_line: 1 },
+						dir,
+						context,
+					),
+				).rejects.toThrow("Send one or the other");
+			});
+		});
+	});
+
+	describe("choosing among repeated matches", () => {
+		it("replaces the occurrence asked for and leaves the others", async () => {
+			await withTempFile("x\nsame\ny\nsame\nz\nsame", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				await editor(
+					{
+						path: filePath,
+						old_text: "same",
+						new_text: "SECOND",
+						occurrence: 2,
+					},
+					dir,
+					context,
+				);
+
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+					"x\nsame\ny\nSECOND\nz\nsame",
+				);
+			});
+		});
+
+		it("replaces every occurrence when asked", async () => {
+			await withTempFile("a b a b a", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const result = await editor(
+					{ path: filePath, old_text: "a", new_text: "Z", replace_all: true },
+					dir,
+					context,
+				);
+
+				expect(result).toContain("3 occurrence(s)");
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("Z b Z b Z");
+			});
+		});
+
+		it("names the lines and the ways out when the match is ambiguous", async () => {
+			// The old message said only "multiple occurrences", which left the
+			// shell as the only exit.
+			await withTempFile("dup\nother\ndup", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+
+				await expect(
+					editor(
+						{ path: filePath, old_text: "dup", new_text: "x" },
+						dir,
+						context,
+					),
+				).rejects.toThrow(
+					/appears 2 times .*on lines 1, 3.*occurrence.*replace_all.*start_line/s,
+				);
+			});
+		});
+
+		it("refuses an occurrence past the end, and refuses both selectors", async () => {
+			await withTempFile("dup\ndup", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+
+				await expect(
+					editor(
+						{ path: filePath, old_text: "dup", new_text: "x", occurrence: 5 },
+						dir,
+						context,
+					),
+				).rejects.toThrow("occurrence 5 is out of range");
+				await expect(
+					editor(
+						{
+							path: filePath,
+							old_text: "dup",
+							new_text: "x",
+							occurrence: 1,
+							replace_all: true,
+						},
+						dir,
+						context,
+					),
+				).rejects.toThrow("Send one or the other");
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("dup\ndup");
+			});
+		});
+
+		it("points at the line-number gutter when that is why nothing matched", async () => {
+			// Measured: the model pasted `fill();}});}\n93 | ` straight out of a
+			// read_files result, and "text not found" told it nothing.
+			await withTempFile("real content", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+
+				await expect(
+					editor(
+						{ path: filePath, old_text: "  92 | real content", new_text: "x" },
+						dir,
+						context,
+					),
+				).rejects.toThrow("line-number gutter");
+			});
+		});
+	});
 });

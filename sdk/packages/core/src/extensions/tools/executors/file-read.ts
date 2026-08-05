@@ -211,6 +211,10 @@ export function createFileReadExecutor(
 
 	return async (request: ReadFileRequest, context: AgentToolContext) => {
 		const { path: filePath, start_line, end_line } = request;
+		// Per-request, falling back to the executor default. A caller about to
+		// copy this text into `editor` needs it without the gutter; everyone
+		// else keeps the line numbers they address edits by.
+		const withLineNumbers = request.line_numbers ?? includeLineNumbers;
 		const initialPath = path.isAbsolute(filePath)
 			? path.normalize(filePath)
 			: path.resolve(process.cwd(), filePath);
@@ -260,7 +264,7 @@ export function createFileReadExecutor(
 		return readTextWindow(
 			resolvedPath,
 			encoding,
-			includeLineNumbers,
+			withLineNumbers,
 			start_line,
 			end_line,
 			context.signal,
