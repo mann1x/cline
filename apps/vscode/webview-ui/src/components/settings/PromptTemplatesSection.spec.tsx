@@ -66,7 +66,10 @@ describe("PromptTemplatesSection", () => {
 		render(<PromptTemplatesSection />)
 
 		await waitFor(() => expect(screen.getByText(/family: gemma\*/)).toBeTruthy())
-		expect(screen.getByText(/tools: editor/)).toBeTruthy()
+		// The row reports coverage, not a tool list: with no `default` template
+		// in this fixture there is nothing to measure gaps against, so a count
+		// is all it can say.
+		expect(screen.getByText(/1 tool/)).toBeTruthy()
 	})
 
 	it("opens a template for editing and reloads afterwards", async () => {

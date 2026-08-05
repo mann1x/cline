@@ -1288,6 +1288,50 @@ describe("SessionRuntime.addTools / updateConnection / clearHistory / restore", 
 		expect(messages[1].role).toBe("assistant");
 	});
 
+	it("caps tool results at the size the host configured", () => {
+		// The setting is the point of the plumbing: without it the cap is only
+		// reachable through an environment variable, which no settings screen
+		// can offer.
+		const { deps } = makeRecordingRuntimeFactory();
+		const session = new SessionRuntime(
+			makeAgentConfig({ maxToolResultChars: 300 }),
+			deps,
+		);
+
+		const built = session.messageBuilder.buildForApi([
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "tool_use",
+						id: "call_1",
+						name: "read_files",
+						input: { files: [{ path: "/repo/a.ts" }] },
+					},
+				],
+			},
+			{
+				role: "user",
+				content: [
+					{
+						type: "tool_result",
+						tool_use_id: "call_1",
+						name: "read_files",
+						content: "x".repeat(20_000),
+					},
+				],
+			},
+		]);
+
+		const block = Array.isArray(built[1].content)
+			? built[1].content[0]
+			: undefined;
+		if (block?.type !== "tool_result" || typeof block.content !== "string") {
+			throw new Error("expected a tool_result block with string content");
+		}
+		expect(block.content.length).toBeLessThanOrEqual(300);
+	});
+
 	it("restore clears stale MessageBuilder rewrite state when tool ids are reused", async () => {
 		const previousThresholdEnv =
 			process.env[MESSAGE_BUILDER_LIMIT_ENV.minOutdatedRewriteBytes];

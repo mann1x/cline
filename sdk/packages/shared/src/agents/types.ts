@@ -740,6 +740,12 @@ export interface AgentConfig {
 	 */
 	maxTokensPerTurn?: number;
 	/**
+	 * How much of one tool result survives into the provider request; anything
+	 * longer is middle-truncated with a marker naming Cline as the author of
+	 * the gap. Omit for the message builder's own default.
+	 */
+	maxToolResultChars?: number;
+	/**
 	 * Sampling temperature per API call
 	 */
 	temperature?: number;
@@ -929,6 +935,7 @@ export const AgentConfigSchema = z.object({
 	maxIterations: z.number().positive().optional(),
 	maxParallelToolCalls: z.number().int().positive().default(8),
 	maxTokensPerTurn: z.number().positive().optional(),
+	maxToolResultChars: z.number().int().positive().optional(),
 	temperature: z.number().nonnegative().optional(),
 	apiTimeoutMs: z.number().positive().default(180000),
 	userFileContentLoader: z

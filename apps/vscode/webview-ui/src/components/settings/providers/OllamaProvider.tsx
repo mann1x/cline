@@ -1,6 +1,7 @@
 import { openAiModelInfoSafeDefaults } from "@shared/api"
 import { StringRequest } from "@shared/proto/cline/common"
 import type { ProviderSamplingPatch } from "@shared/proto/cline/models"
+import { fromProtobufModelOverrides } from "@shared/proto-conversions/models/modelOverrides"
 import { Mode } from "@shared/storage/types"
 import { VSCodeCheckbox, VSCodeLink } from "@vscode/webview-ui-toolkit/react"
 import { useCallback, useEffect, useMemo, useState } from "react"
@@ -14,6 +15,7 @@ import { ApiKeyField } from "../common/ApiKeyField"
 import { BaseUrlField } from "../common/BaseUrlField"
 import { DebouncedTextField } from "../common/DebouncedTextField"
 import OllamaModelPicker from "../OllamaModelPicker"
+import { updateSetting } from "../utils/settingsHandlers"
 import { useApiConfigurationHandlers } from "../utils/useApiConfigurationHandlers"
 import { useProviderApiKeyField } from "../utils/useProviderApiKeyField"
 
@@ -36,6 +38,14 @@ interface OllamaProviderProps {
  * SDK gives Ollama's `max`.
  */
 const OLLAMA_THINKING_LEVELS = ["unset", "minimal", "low", "medium", "high", "xhigh"] as const
+
+/**
+ * Placeholder text only. The real defaults live in the SDK
+ * (`DEFAULT_MAX_TOOL_RESULT_CHARS`, `DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS`);
+ * the webview cannot import them, so these say what they are worth: a hint.
+ */
+const DEFAULT_TOOL_RESULT_CHARS_HINT = 32000
+const DEFAULT_MAX_OUTPUT_TOKENS_HINT = 32000
 
 type OllamaThinkingLevel = (typeof OLLAMA_THINKING_LEVELS)[number]
 
@@ -119,7 +129,7 @@ function parseSamplingNumber(raw: string | undefined, kind: "number" | "integer"
  * The Ollama provider configuration component
  */
 export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: OllamaProviderProps) => {
-	const { apiConfiguration } = useExtensionState()
+	const { apiConfiguration, maxToolResultChars } = useExtensionState()
 	const { handleFieldChange } = useApiConfigurationHandlers()
 	const { config, write, commitSelection } = useProviderConfig("ollama")
 
@@ -139,13 +149,24 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 		() => Object.fromEntries(ollamaModels.map((modelId) => [modelId, { ...ollamaModelInfo, name: modelId }])),
 		[ollamaModelInfo, ollamaModels],
 	)
-	const { selectedModel, commitModelSelection } = useProviderModelSelection("ollama", currentMode, {
+	const { committedSelection, selectedModel, commitModelSelection } = useProviderModelSelection("ollama", currentMode, {
 		models: ollamaModelInfoById,
 		config,
 		commitSelection,
 		fallbackModelInfo: ollamaModelInfo,
 		customModelInfo: (modelId) => ({ ...ollamaModelInfo, name: modelId }),
 	})
+	// The committed per-model overrides, so the panel can show the value it is
+	// about to replace and carry the other overrides across when it writes.
+	const committedOverrides = useMemo(
+		() => fromProtobufModelOverrides(committedSelection?.overrides),
+		[committedSelection?.overrides],
+	)
+	const committedMaxTokens =
+		typeof committedOverrides?.maxTokens === "number" && committedOverrides.maxTokens > 0
+			? committedOverrides.maxTokens
+			: undefined
+
 	const { savedApiKeyMask, handleApiKeyChange } = useProviderApiKeyField({
 		apiKeyLength: config?.apiKeyLength,
 		providerName: "Ollama",
@@ -437,6 +458,67 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 					style={{ width: "100%" }}>
 					<span className="font-semibold">Model Context Window</span>
 				</DebouncedTextField>
+			)}
+
+			{/* The two budgets that decide how much of the context window the
+			    session is allowed to spend, sitting under the window itself
+			    because that is the number they are read against. */}
+			{config !== undefined && (
+				<>
+					<DebouncedTextField
+						initialValue={maxToolResultChars ? String(maxToolResultChars) : ""}
+						onChange={(v) => {
+							const parsed = Number.parseInt(v, 10)
+							const next = Number.isFinite(parsed) && parsed > 0 ? parsed : 0
+							// The debounced input also fires for its initial value.
+							if (next === (maxToolResultChars ?? 0)) {
+								return
+							}
+							updateSetting("maxToolResultChars", next)
+						}}
+						placeholder={`Default: ${DEFAULT_TOOL_RESULT_CHARS_HINT}`}
+						style={{ width: "100%" }}>
+						<span className="font-semibold">Tool Results Character Cap</span>
+					</DebouncedTextField>
+					<p className="text-xs mt-0 text-description">
+						How much of a single tool result reaches the model. Anything longer keeps its start and its end and loses
+						the middle, with a note saying Cline removed it. Applies to every provider. Blank restores the default.
+					</p>
+
+					<DebouncedTextField
+						initialValue={committedMaxTokens ? String(committedMaxTokens) : ""}
+						onChange={(v) => {
+							const parsed = Number.parseInt(v, 10)
+							const requested = Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
+							// A reply cannot be longer than the window it has to
+							// fit in, so clamp rather than accept a number the
+							// gateway would silently reduce anyway.
+							const next =
+								requested !== undefined && Number.isFinite(ollamaNumCtx) && ollamaNumCtx > 0
+									? Math.min(requested, ollamaNumCtx)
+									: requested
+							if (next === committedMaxTokens || !selectedModel.modelId) {
+								return
+							}
+							// Overrides replace wholesale, so carry the rest of
+							// them across; dropping maxTokens from an otherwise
+							// empty set clears the entry, which is the intent.
+							const { maxTokens: _replaced, ...rest } = committedOverrides ?? {}
+							void commitModelSelection({
+								modelId: selectedModel.modelId,
+								overrides: { ...rest, ...(next !== undefined ? { maxTokens: next } : {}) },
+							}).catch((error) => console.error("Failed to update Ollama per-turn output cap:", error))
+						}}
+						placeholder={`Default: ${DEFAULT_MAX_OUTPUT_TOKENS_HINT}`}
+						style={{ width: "100%" }}>
+						<span className="font-semibold">Per-Turn Max Output Tokens</span>
+					</DebouncedTextField>
+					<p className="text-xs mt-0 text-description">
+						The cap on one reply — Ollama's <code>num_predict</code>. The system prompt tells the model this number,
+						so it is also what the model believes it has to work with. Clamped to the context window. Blank restores
+						the default. Setting <code>num_predict</code> under Sampling overrides this.
+					</p>
+				</>
 			)}
 
 			{showModelOptions && (
