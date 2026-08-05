@@ -375,7 +375,14 @@ export class SessionRuntime {
 			deps.createAgentRuntimeImpl ?? createAgentRuntime;
 
 		this.conversation = new ConversationStore(config.initialMessages);
-		this.messageBuilder = new MessageBuilder(getMessageBuilderOptionsFromEnv());
+		// A host-configured cap wins over the environment: the env vars are the
+		// rollback lever, the setting is a choice someone actually made.
+		this.messageBuilder = new MessageBuilder({
+			...getMessageBuilderOptionsFromEnv(),
+			...(config.maxToolResultChars !== undefined
+				? { maxToolResultChars: config.maxToolResultChars }
+				: {}),
+		});
 		this.contributionRegistry = createContributionRegistry<
 			AgentExtension,
 			AgentTool,

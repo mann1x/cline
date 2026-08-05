@@ -25,7 +25,13 @@ import {
 	validateAndReserveImageMedia,
 } from "@cline/shared";
 
-export const DEFAULT_MAX_TOOL_RESULT_CHARS = 8_000;
+// 8k held one search result comfortably and cut a real file read in half.
+// Reads are the tool whose output the model is asked to reason about line by
+// line, and a hole in the middle of one costs more than the tokens it saves —
+// measured: a model spent a dozen turns "repairing" a file that was only
+// truncated in the transcript. 32k is the per-result ceiling; `read_files` has
+// its own read cap well under it, so this bites only on genuinely large output.
+export const DEFAULT_MAX_TOOL_RESULT_CHARS = 32_000;
 export const DEFAULT_MAX_FILE_CONTENT_CHARS = 50_000;
 // The aggregate budget intentionally stays far above what the per-result cap
 // usually produces: budget truncation rewrites bytes mid-transcript, which
