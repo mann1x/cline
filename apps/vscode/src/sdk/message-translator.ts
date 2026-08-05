@@ -577,7 +577,13 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown): ClineSayTool 
 			// the file to already exist), so it is an edit — not a new-file creation. Without
 			// this the card mislabels a prepend/insert as "Cline wants to create a new file".
 			const insertLine = getNumberField(parsedInput, "insert_line")
-			const isEdit = toolName === "replace_in_file" || !!oldText || insertLine != null
+			// So does a line range: you cannot replace line 92 of a file that does not
+			// exist. This predicate knew about `old_text` and `insert_line` but not about
+			// `start_line`, which arrived later — and a line-range replace is the shape a
+			// model reaches for on minified or generated files, so most of the edit cards
+			// in a session were reading "Cline wants to create a new file".
+			const startLine = getNumberField(parsedInput, "start_line")
+			const isEdit = toolName === "replace_in_file" || !!oldText || insertLine != null || startLine != null
 
 			// When the SDK provides both old and new text, build a search/replace
 			// diff in the format DiffEditRow expects. ChatRow passes `content` to

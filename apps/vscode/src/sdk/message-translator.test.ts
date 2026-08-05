@@ -3116,6 +3116,36 @@ describe("sdkToolToClineSayTool — editor diff rendering (S6-48)", () => {
 		expect(tool.content).toBe("------- SEARCH\nconsole.log('world')\n=======\nconsole.log('hello')\n+++++++ REPLACE")
 	})
 
+	it("labels a line-range replace as an edit, not a new file", () => {
+		// You cannot replace line 92 of a file that does not exist. The predicate
+		// knew about old_text and insert_line but not start_line, so a session
+		// that leaned on line-range edits showed "Cline wants to create a new
+		// file" on nearly every card.
+		const state = new MessageTranslatorState()
+		const event: CoreSessionEvent = {
+			type: "agent_event",
+			payload: {
+				sessionId: "session-1",
+				event: {
+					type: "content_start",
+					contentType: "tool",
+					toolName: "editor",
+					toolCallId: "call-1",
+					input: {
+						path: "/src/app.ts",
+						start_line: 92,
+						end_line: 92,
+						new_text: "const x = 1",
+					},
+				} as AgentEvent,
+			},
+		}
+		const result = translateSessionEvent(event, state)
+		const tool = JSON.parse(result.messages[0].text!)
+		expect(tool.tool).toBe("editedExistingFile")
+		expect(tool.path).toBe("/src/app.ts")
+	})
+
 	it("S6-48: editor with only new_text keeps raw new_text in content", () => {
 		const state = new MessageTranslatorState()
 		const event: CoreSessionEvent = {

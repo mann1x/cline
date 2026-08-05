@@ -10,6 +10,29 @@ import { z } from "zod";
 export const INPUT_ARG_CHAR_LIMIT = 6000;
 
 /**
+ * A boolean that also accepts the string a model actually sends.
+ *
+ * Measured: a model called `read_files` with
+ * `{path, start_line: "108", end_line: "108", line_numbers: "false"}`. The
+ * numbers coerced — they are `z.coerce.number()` — and the quoted boolean did
+ * not, so the whole union failed and the tool answered `✖ Invalid input`
+ * with no field named. Every boolean in this file is reachable the same way,
+ * so none of them is strict.
+ */
+const LooseBoolean = z.preprocess((value) => {
+	if (typeof value === "string") {
+		const normalized = value.trim().toLowerCase();
+		if (normalized === "true") {
+			return true;
+		}
+		if (normalized === "false") {
+			return false;
+		}
+	}
+	return value;
+}, z.boolean());
+
+/**
  * Schema for read tool input
  */
 const AbsolutePath = z
@@ -46,9 +69,7 @@ export const ReadFileRequestSchema = z
 		path: AbsolutePath,
 		start_line: ReadFileLineRangeSchema.shape.start_line,
 		end_line: ReadFileLineRangeSchema.shape.end_line,
-		line_numbers: z
-			.boolean()
-			.nullable()
+		line_numbers: LooseBoolean.nullable()
 			.optional()
 			.describe(
 				"Whether to prefix each line with its number. True by default, because line numbers are how you address an edit. Set false when you are going to copy text out of the result into another tool: the `123 | ` prefix is not in the file, and text pasted back with it cannot match.",
@@ -287,6 +308,30 @@ export const EditFileInputSchema = z
 			.describe(
 				"Optional positive one-based last line to replace, inclusive. Defaults to start_line, so start_line on its own replaces exactly that line.",
 			),
+		start_column: z.coerce
+			.number()
+			.int()
+			.nullable()
+			.optional()
+			.describe(
+				"Optional positive one-based first character to replace on start_line. Diagnostics report a column, so this is the unit for a one-character fix on a long or minified line: nothing else on the line is retyped or at risk.",
+			),
+		end_column: z.coerce
+			.number()
+			.int()
+			.nullable()
+			.optional()
+			.describe(
+				"Optional positive one-based last character to replace, inclusive, on end_line. Defaults to start_column, so start_column on its own replaces exactly that one character.",
+			),
+		insert_column: z.coerce
+			.number()
+			.int()
+			.nullable()
+			.optional()
+			.describe(
+				"Optional positive one-based column on insert_line. When provided, new_text is inserted *before* that character on the existing line rather than as a new line; use line_length + 1 to append at the end of the line. This is how you add a single missing bracket without touching the rest of the line.",
+			),
 		occurrence: z.coerce
 			.number()
 			.int()
@@ -295,9 +340,7 @@ export const EditFileInputSchema = z
 			.describe(
 				"Which occurrence of old_text to replace when it appears more than once, one-based in file order. Omit when old_text is unique. Cannot be combined with replace_all.",
 			),
-		replace_all: z
-			.boolean()
-			.nullable()
+		replace_all: LooseBoolean.nullable()
 			.optional()
 			.describe(
 				"Replace every occurrence of old_text instead of requiring exactly one. Cannot be combined with occurrence.",

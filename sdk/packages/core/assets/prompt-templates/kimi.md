@@ -75,11 +75,12 @@ Fetch web pages and extract information using a prompt. Each request needs a `ur
 Output: one object per request — `{query, result, success, error?}`. `query` is the URL. `result` is the extracted text for your prompt. A failed entry has `success: false` with the reason in `error`.
 
 # tool: editor
-Make precise edits to a single text file at `path`. Four modes, chosen by which arguments you send:
+Make precise edits to a single text file at `path`. Six modes, chosen by which arguments you send:
 
 - Replace text: `old_text` plus `new_text`. When `old_text` occurs more than once, add `occurrence` (one-based, in file order) to pick one, or `replace_all: true` to change every one.
 - Replace lines: `start_line` plus `new_text`, with optional `end_line` (inclusive, defaults to `start_line`). No `old_text` needed. Prefer this when the text is long, minified or repeated: a diagnostic already gives you the line number, and a line number cannot be ambiguous. An empty `new_text` deletes the range.
-- Insert: `insert_line` plus `new_text`, which adds text before that line without replacing anything. Use `line_count + 1` to append at EOF.
+- Replace characters: `start_line` and `start_column` plus `new_text`, with optional `end_line`/`end_column` (both inclusive, each defaulting to its start). This is the unit a diagnostic speaks in — `Line 108, column 385` — and on a long or minified line it is the only edit that leaves the rest of the line untouched. `start_column` on its own replaces exactly one character.
+- Insert: `insert_line` plus `new_text`, which adds text before that line without replacing anything. Use `line_count + 1` to append at EOF. Add `insert_column` to insert inside that line instead, before the character at that column — this is how you add one missing bracket, with `line_length + 1` appending at the end of the line.
 - Create: `new_text` alone, when the file does not exist.
 
 Use this rather than a shell command for anything that changes a file. If several edits to different files or non-overlapping regions are already known, emit multiple editor calls in the same response instead of serializing them across turns.

@@ -122,10 +122,12 @@ Output: one object per request — `{query, result, success, error?}`. `query` i
 # tool: editor
 Make one controlled edit to one text file.
 
-Call shape: `editor(path: string, new_text: string, old_text?: string, insert_line?: integer, start_line?: integer, end_line?: integer, occurrence?: integer, replace_all?: boolean)`. Which of the four things it does is decided by the arguments you send, and those are the only four:
+Call shape: `editor(path: string, new_text: string, old_text?: string, insert_line?: integer, insert_column?: integer, start_line?: integer, end_line?: integer, start_column?: integer, end_column?: integer, occurrence?: integer, replace_all?: boolean)`. Which of the six things it does is decided by the arguments you send, and those are the only six:
 
 - Replace text: `path`, `old_text`, `new_text`. `old_text` must match the file exactly, whitespace and indentation included. If it occurs more than once, pass `occurrence` (one-based, in file order) to pick one or `replace_all: true` to change every one — the error tells you which lines they are on.
 - Replace lines: `path`, `start_line`, `new_text`, with optional `end_line` (inclusive, defaulting to `start_line`). No `old_text`. Prefer this whenever the text is long, minified or repeated: a diagnostic hands you the line number, and a line number cannot be ambiguous. An empty `new_text` deletes the range.
+- Replace characters: `path`, `start_line`, `start_column`, `new_text`, with optional `end_line`/`end_column` (both inclusive, each defaulting to its start). A diagnostic reports `Line 108, column 385`; this is the edit that spends that column. On a minified line it is the only form that leaves the other 400 characters untouched. `start_column` alone replaces exactly one character.
+- Insert at a column: `path`, `insert_line`, `insert_column`, `new_text` — inserts before that character without replacing anything. This is how you add one missing bracket. `line_length + 1` appends at the end of the line.
 - Insert: `path`, `insert_line`, `new_text` — inserts before that line, replacing nothing.
 - Create: `path`, `new_text`, with the file not existing yet.
 

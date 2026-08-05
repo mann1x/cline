@@ -1381,6 +1381,42 @@ describe("default read_files tool", () => {
 		);
 	});
 
+	it("accepts a bare single-file request whose flags arrived as strings", async () => {
+		// Measured live: `{path, start_line: "108", end_line: "108",
+		// line_numbers: "false"}`. The numbers coerce; the quoted boolean did
+		// not, so the union failed and the model got `✖ Invalid input` with no
+		// field named and no way to tell which of the four was wrong.
+		const execute = vi.fn(async () => "line 108");
+		const tool = createReadFilesTool(execute);
+
+		const result = await tool.execute(
+			{
+				path: "/tmp/manic_miner.html",
+				start_line: "108",
+				end_line: "108",
+				line_numbers: "false",
+			},
+			{ agentId: "agent-1", conversationId: "conv-1", iteration: 1 },
+		);
+
+		expect(result).toEqual([
+			{
+				query: "/tmp/manic_miner.html:108-108",
+				result: "line 108",
+				success: true,
+			},
+		]);
+		expect(execute).toHaveBeenCalledWith(
+			expect.objectContaining({
+				path: "/tmp/manic_miner.html",
+				start_line: 108,
+				end_line: 108,
+				line_numbers: false,
+			}),
+			expect.anything(),
+		);
+	});
+
 	it("says what an empty successful read means", async () => {
 		// A range starting past EOF is not an error: the read succeeds and
 		// returns nothing. Handed back bare, that reads to a model as a
