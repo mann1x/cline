@@ -502,6 +502,7 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 			reasoningEffort: config.reasoningEffort,
 			thinkingBudgetTokens: config.thinkingBudgetTokens,
 			maxTokensPerTurn: config.maxTokensPerTurn,
+			maxToolResultChars: config.maxToolResultChars,
 			temperature: config.temperature,
 			maxIterations: config.maxIterations,
 			hooks,

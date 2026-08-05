@@ -1022,6 +1022,9 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	// `useAutoCondense` default in shared/storage/state-keys.ts.
 	const globalUseAutoCondense = stateManager.getGlobalSettingsKey("useAutoCondense") ?? true
 	const compactionStrategy = readCompactionStrategyGlobally()
+	// Per-tool-result cap. Stored as 0 when unset, which is not "keep nothing":
+	// it hands the decision back to the SDK default.
+	const maxToolResultChars = positiveFiniteNumber(stateManager.getGlobalSettingsKey("maxToolResultChars"))
 	const enableCheckpoints = stateManager.getGlobalSettingsKey("enableCheckpointsSetting") ?? true
 	const useAutoCondense = input.taskSettings?.useAutoCondense ?? globalUseAutoCondense
 
@@ -1103,6 +1106,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		mode: mode === "plan" ? "plan" : "act",
 		...reasoningConfig,
 		...(maxTokensPerTurn !== undefined ? { maxTokensPerTurn } : {}),
+		...(maxToolResultChars !== undefined ? { maxToolResultChars: Math.floor(maxToolResultChars) } : {}),
 		...(temperature !== undefined ? { temperature } : {}),
 		maxIterations: undefined,
 		logger: sdkLogger,

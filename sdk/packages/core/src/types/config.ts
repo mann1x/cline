@@ -46,6 +46,11 @@ export interface CoreModelConfig {
 	 */
 	maxTokensPerTurn?: number;
 	/**
+	 * How much of one tool result reaches the provider before the message
+	 * builder middle-truncates it. Omit for the built-in default.
+	 */
+	maxToolResultChars?: number;
+	/**
 	 * Sampling temperature per API call.
 	 */
 	temperature?: number;

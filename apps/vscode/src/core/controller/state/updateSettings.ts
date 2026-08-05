@@ -117,6 +117,16 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			controller.terminalManager?.setShellIntegrationTimeout(Number(request.shellIntegrationTimeout))
 		}
 
+		// How much of a single tool result survives into the provider request.
+		// Zero clears the override and hands the decision back to the SDK.
+		if (request.maxToolResultChars !== undefined) {
+			const requested = Number(request.maxToolResultChars)
+			controller.stateManager.setGlobalState(
+				"maxToolResultChars",
+				Number.isFinite(requested) && requested > 0 ? Math.floor(requested) : 0,
+			)
+		}
+
 		// Update terminal reuse setting
 		if (request.terminalReuseEnabled !== undefined) {
 			controller.stateManager.setGlobalState("terminalReuseEnabled", request.terminalReuseEnabled)

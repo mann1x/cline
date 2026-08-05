@@ -282,7 +282,10 @@ describe("MessageBuilder", () => {
 	});
 
 	it("uses an aggressive per-result cap and a loose aggregate budget", () => {
-		expect(DEFAULT_MAX_TOOL_RESULT_CHARS).toBe(8_000);
+		// 32k, not the original 8k: a file read is the tool output a model has
+		// to reason about line by line, and a hole in the middle of one costs
+		// more than the tokens it saves.
+		expect(DEFAULT_MAX_TOOL_RESULT_CHARS).toBe(32_000);
 		expect(DEFAULT_MAX_FILE_CONTENT_CHARS).toBe(50_000);
 		// The aggregate budget stays loose on purpose: budget truncation
 		// rewrites mid-transcript bytes and breaks provider prefix caching, so
@@ -903,9 +906,12 @@ describe("MessageBuilder with structured ToolOperationResult content", () => {
 			currentDefaults.buildForApi(messages),
 		);
 
+		// The margin narrowed when the per-result cap went from 8k to 32k: this
+		// is now a ~35% saving rather than a ~75% one, which is the price paid
+		// for not cutting holes in file reads. The cap still has to bite.
 		expect(previousPayload.length).toBeGreaterThan(900_000);
-		expect(currentPayload.length).toBeLessThan(previousPayload.length * 0.25);
-		expect(currentPayload.length).toBeLessThan(250_000);
+		expect(currentPayload.length).toBeLessThan(previousPayload.length * 0.7);
+		expect(currentPayload.length).toBeLessThan(700_000);
 		expect(currentPayload).not.toContain(MIDDLE_SENTINEL);
 	});
 
@@ -2099,7 +2105,7 @@ describe("MessageBuilder outdated-read rewrite batching (prefix-cache stability)
 	});
 
 	it("uses provider-bound stale bytes after per-result truncation", () => {
-		const builder = new MessageBuilder({ minOutdatedRewriteBytes: 20_000 });
+		const builder = new MessageBuilder({ minOutdatedRewriteBytes: 50_000 });
 		const messages: Message[] = [
 			{ role: "user", content: "task" },
 			readToolUse("t1"),
@@ -2111,7 +2117,9 @@ describe("MessageBuilder outdated-read rewrite batching (prefix-cache stability)
 		const result = builder.buildForApi(messages);
 
 		// Raw t1 history is ~140KB, but the provider-bound stale entry is capped
-		// near 8KB before threshold accounting. A 20KB threshold must defer.
+		// at the 32KB per-result limit before threshold accounting. A 50KB
+		// threshold sits between the two, so a builder that measured raw bytes
+		// would rewrite here and one that measures what the provider sees defers.
 		expect(JSON.stringify(result[2])).not.toContain("outdated");
 		expect(JSON.stringify(result[2])).toContain("...[truncated");
 	});

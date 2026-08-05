@@ -653,6 +653,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 				configWithProvider.reasoningEffort ?? providerConfig.reasoningEffort,
 			thinkingBudgetTokens: configWithProvider.thinkingBudgetTokens,
 			maxTokensPerTurn: configWithProvider.maxTokensPerTurn,
+			maxToolResultChars: configWithProvider.maxToolResultChars,
 			temperature: configWithProvider.temperature,
 			systemPrompt: configWithProvider.systemPrompt,
 			maxIterations: configWithProvider.maxIterations,

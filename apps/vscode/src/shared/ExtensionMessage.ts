@@ -87,6 +87,8 @@ export interface ExtensionState {
 	taskHistory: HistoryItem[]
 	telemetrySetting: TelemetrySetting
 	shellIntegrationTimeout: number
+	/** Per-tool-result character cap; 0 means the SDK default applies. */
+	maxToolResultChars?: number
 	terminalReuseEnabled?: boolean
 	defaultTerminalProfile?: string
 	vscodeTerminalExecutionMode: string

@@ -31,6 +31,7 @@ export type DelegatedAgentConnectionConfig = Pick<
 	| "reasoningEffort"
 	| "thinkingBudgetTokens"
 	| "maxTokensPerTurn"
+	| "maxToolResultChars"
 	| "temperature"
 >;
 
@@ -96,6 +97,7 @@ export function createDelegatedAgentConfigProvider(
 			reasoningEffort: runtimeConfig.reasoningEffort,
 			thinkingBudgetTokens: runtimeConfig.thinkingBudgetTokens,
 			maxTokensPerTurn: runtimeConfig.maxTokensPerTurn,
+			maxToolResultChars: runtimeConfig.maxToolResultChars,
 			temperature: runtimeConfig.temperature,
 		}),
 		updateConnectionDefaults: (overrides) => {
