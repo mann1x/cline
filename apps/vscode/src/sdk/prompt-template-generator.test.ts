@@ -45,14 +45,28 @@ function replyWith(...replies: string[]) {
  * what makes covering thirty-one tools cheap here and cheap for a model.
  */
 /**
- * `run_commands` and `skills` are computed per machine, so `default.md` holds
- * the marker for them rather than one host's answer. A required rewrite cannot
- * be satisfied by re-emitting that, so the fixture supplies its own line.
+ * A section for one of the eight tools that must be written rather than
+ * inherited, in the cheapest shape that is actually acceptable.
+ *
+ * Not the built-in text itself: the audit rejects a verbatim copy, because a
+ * copy says the same thing today and stops tracking the built-in tomorrow. A
+ * sentence of the author's own, followed by the built-in text, is the shape the
+ * instructions bless — it cannot have dropped an enum, an argument or an output
+ * claim, and it is not a snapshot.
+ *
+ * `run_commands` and `skills` are composed per machine, so `default.md` holds
+ * the marker for them rather than one host's answer. Their sections have to
+ * keep the marker as well as carry their own words.
  */
 function written(builtin: string): string {
 	return builtin.trim() === "{{DEFAULT}}"
-		? "Run it. Output: one object per command, `{query, result, success, error?}`, with the command in `query`."
-		: builtin
+		? [
+				"Run it, and only for work no other tool covers: `read_files` reads, `editor` writes, `search_codebase` searches.",
+				"Output: one object per command, `{query, result, success, error?}`, with the command in `query`.",
+				"",
+				"{{DEFAULT}}",
+			].join("\n")
+		: `Read this one carefully; it is a tool models in this family misuse.\n\n${builtin}`
 }
 
 function coverEveryTool(): string {

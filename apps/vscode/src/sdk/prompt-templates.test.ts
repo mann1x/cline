@@ -84,7 +84,15 @@ describe("resolveSessionPromptTemplate", () => {
 		expect(result.rendered?.overlaid).toBe(true)
 	})
 
-	it("falls back to default.md for a tool the family template never mentions", async () => {
+	it("falls back to default.md for a tool the matched template never mentions", async () => {
+		// The shipped templates all cover every tool, so the fallback has to be
+		// provoked with one that does not — which is the situation it exists
+		// for: Cline gains a tool and a template has not been regenerated yet.
+		writeTemplate(
+			join(mocks.dataDir, "templates"),
+			"partial.md",
+			"---\nname: partial\nmatch:\n  family: [gemma*]\n---\n\n# tool: editor\nOnly this one.\n",
+		)
 		mocks.resolveOllamaModelFamily.mockResolvedValue("gemma4")
 
 		const result = await resolveSessionPromptTemplate({
@@ -93,10 +101,13 @@ describe("resolveSessionPromptTemplate", () => {
 			baseUrl: "http://localhost:11434",
 		})
 
-		// gemma.md rewrites these four and says nothing about the rest.
-		expect(result.rendered?.tools.editor).toContain("sed -i")
-		expect(result.rendered?.tools.apply_patch).toBeDefined()
+		expect(result.rendered?.name).toBe("partial")
+		expect(result.rendered?.tools.editor).toBe("Only this one.")
+		// Everything it said nothing about still arrives, from default.md.
+		expect(result.rendered?.tools.apply_patch).toContain("*** Begin Patch")
 		expect(result.rendered?.tools.ask_question).toBeDefined()
+		// And so does the system prompt it never wrote.
+		expect(result.rendered?.system).toContain("You are Cline")
 	})
 
 	it("routes Claude on its model name, with no family to go on", async () => {

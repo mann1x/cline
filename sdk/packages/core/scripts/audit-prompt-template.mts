@@ -18,11 +18,28 @@ import {
 } from "../src/extensions/config/prompt-template-review";
 import { getShippedToolCallSignatures } from "../src/extensions/config/shipped-tool-signatures";
 
-const path = process.argv[2];
-if (!path) {
-	throw new Error("usage: audit-prompt-template.mts <file.md> [expectedName]");
+const argv = process.argv.slice(2);
+function flag(name: string): string | undefined {
+	const index = argv.indexOf(name);
+	return index >= 0 ? argv[index + 1] : undefined;
 }
-const expectedName = process.argv[3];
+
+const path = argv.find((arg) => arg.endsWith(".md"));
+if (!path) {
+	throw new Error(
+		"usage: audit-prompt-template.mts <file.md> [--provider id] [--model id] [--family name]",
+	);
+}
+
+/**
+ * One of the audit's checks is that the template still claims the session it
+ * was written for, so it needs a session to check against. Without one the
+ * check fires on every file that is not for the default target, which reads as
+ * a defect in the template rather than a missing argument.
+ */
+const providerId = flag("--provider") ?? "ollama";
+const modelId = flag("--model") ?? "unknown";
+const family = flag("--family");
 
 const templates = getBuiltinPromptTemplates();
 const base = templates.find(
@@ -33,11 +50,11 @@ const knownToolNames = Object.keys(base?.tools ?? {});
 const audit = auditPromptTemplateProposal({
 	raw: readFileSync(path, "utf8"),
 	fileName: path.split("/").pop() ?? path,
-	providerId: "anthropic",
-	modelId: "claude-opus-5",
-	family: undefined,
+	providerId,
+	modelId,
+	family,
 	knownToolNames,
-	expectedName,
+	expectedName: flag("--name"),
 	requiredSections: knownToolNames,
 	requiredRewrites: DEFAULT_REQUIRED_REWRITES,
 	toolSignatures: getShippedToolCallSignatures(),
