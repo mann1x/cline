@@ -748,6 +748,12 @@ describe("createEditorExecutor", () => {
 				await expect(
 					editor({ path: filePath, new_text: "rewritten" }, dir, context),
 				).rejects.toThrow(/`start_line: 1` and `end_line: 3`/);
+				// The message must name `path` too. Measured: a model rebuilt
+				// the call from an earlier version of this sentence, which
+				// named only the line numbers, and dropped `path` three times.
+				await expect(
+					editor({ path: filePath, new_text: "rewritten" }, dir, context),
+				).rejects.toThrow(new RegExp(`path: "${filePath.replace(/\\/g, "\\\\")}"`));
 				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
 					"one\ntwo\nthree",
 				);

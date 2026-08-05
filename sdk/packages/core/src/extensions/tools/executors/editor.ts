@@ -684,11 +684,19 @@ export function createEditorExecutor(
 			// edits have failed, and the route exists — it is a line range
 			// covering the file — so name it rather than only naming what is
 			// missing.
+			//
+			// Every argument of the working call is spelled out, `path`
+			// included. An earlier version of this message named only the two
+			// line numbers to add, and a model rebuilt the call from the
+			// sentence instead of amending its own: it sent `start_line`,
+			// `end_line` and `new_text` with no `path` at all, three times in
+			// a row. A message that lists some of the arguments will be read
+			// as listing all of them.
 			const lineCount = (await fs.readFile(filePath, encoding)).split(
 				/\r\n|\n/,
 			).length;
 			throw new Error(
-				`Parameter \`old_text\` is required when editing an existing file without \`insert_line\` or \`start_line\`. To replace ${filePath} in full, send the same \`new_text\` with \`start_line: 1\` and \`end_line: ${lineCount}\`.`,
+				`Parameter \`old_text\` is required when editing an existing file without \`insert_line\` or \`start_line\`. To replace ${filePath} in full, send this call again with every argument it already has — \`path: "${filePath}"\` and the same \`new_text\` — plus \`start_line: 1\` and \`end_line: ${lineCount}\`.`,
 			);
 		}
 
