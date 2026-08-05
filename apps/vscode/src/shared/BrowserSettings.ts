@@ -22,7 +22,11 @@ export const DEFAULT_BROWSER_SETTINGS: BrowserSettings = {
 	remoteBrowserHost: "http://localhost:9222",
 	chromeExecutablePath: "", // Changed from undefined to empty string
 	// chromeType: "chromium",
-	disableToolUse: true,
+	// On by default. Upstream shipped this off because its `browser_action`
+	// was heavyweight and on the way out; here the tool is the point — a model
+	// that has to be configured before it can check its own page will go on
+	// asking the user whether the page works.
+	disableToolUse: false,
 	customArgs: "",
 }
 

@@ -1,11 +1,13 @@
 import { createMcpTools } from "@cline/core"
 import type { AgentTool, AgentToolContext } from "@cline/shared"
+import { createVscodeBrowserDriver, isBrowserToolEnabled } from "@/hosts/vscode/browser-support"
 import { loadDocumentForDiagnostics, resolveLintCommand, runLintCommand } from "@/hosts/vscode/check-file-support"
 import { createVscodeCodeIntelProvider } from "@/hosts/vscode/code-intel-support"
 import type { VscodeTerminalManager } from "@/hosts/vscode/terminal/VscodeTerminalManager"
 import type { McpHub } from "@/services/mcp/McpHub"
 import { resolveMcpServerTimeoutMs } from "@/services/mcp/timeout"
 import { Logger } from "@/shared/services/Logger"
+import { createBrowserTool } from "./browser-tool"
 import { createCheckFileTool } from "./check-file-tool"
 import { createCodeIntelTool } from "./code-intel-tool"
 import type { SdkForegroundCommandCoordinator } from "./sdk-foreground-command-coordinator"
@@ -113,6 +115,21 @@ export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExt
 			provider: createVscodeCodeIntelProvider(),
 		}),
 	)
+
+	// `browser` is on unless the user turned it off, and the reflex it displaces
+	// is asking the user whether the page works — so it is present by default,
+	// like the other two. Chrome is not launched until the model calls it, so a
+	// session that never browses costs nothing for having had the tool.
+	if (isBrowserToolEnabled()) {
+		tools.push(
+			createBrowserTool({
+				cwd: options?.cwd ?? process.cwd(),
+				createDriver: createVscodeBrowserDriver,
+			}),
+		)
+	} else {
+		Logger.log("[VscodeRuntimeTools] browser tool disabled by browserSettings.disableToolUse")
+	}
 
 	// Add the custom run_commands tool when a terminal manager is available.
 	// This replaces the SDK's built-in run_commands, which is suppressed via

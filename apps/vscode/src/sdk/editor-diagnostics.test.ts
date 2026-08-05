@@ -6,6 +6,7 @@ import {
 	formatIntroducedDiagnostics,
 	isLintableFile,
 	readTargetPaths,
+	samePath,
 } from "./editor-diagnostics"
 
 vi.mock("@/hosts/host-provider", () => ({
@@ -228,5 +229,37 @@ describe("createEditorDiagnosticsHooks", () => {
 		})
 		await bag.beforeTool?.(toolContext())
 		expect(await bag.afterTool?.(toolContext())).toBeUndefined()
+	})
+})
+
+describe("samePath", () => {
+	function onPlatform<T>(platform: string, body: () => T): T {
+		const original = Object.getOwnPropertyDescriptor(process, "platform") as PropertyDescriptor
+		Object.defineProperty(process, "platform", { value: platform, configurable: true })
+		try {
+			return body()
+		} finally {
+			Object.defineProperty(process, "platform", original)
+		}
+	}
+
+	it("ignores case on Windows, where the filesystem does", () => {
+		// The editor reports the path as the workspace has it; the model types
+		// its own. Measured: workspace `c:\\Users\\manni\\...` against the model's
+		// `C:\\Users\\manni\\...`. One capital letter, and the lookup missed — which
+		// this tool reports as a clean file.
+		onPlatform("win32", () => {
+			expect(samePath("/Repo/Src/App.ts", "/repo/src/app.ts")).toBe(true)
+		})
+	})
+
+	it("keeps case elsewhere, where two such files can both exist", () => {
+		onPlatform("linux", () => {
+			expect(samePath("/repo/App.ts", "/repo/app.ts")).toBe(false)
+		})
+	})
+
+	it("still normalizes the path itself", () => {
+		expect(samePath("/repo/src/../src/app.ts", "/repo/src/app.ts")).toBe(true)
 	})
 })
