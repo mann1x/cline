@@ -308,6 +308,30 @@ export const EditFileInputSchema = z
 			.describe(
 				"Optional positive one-based last line to replace, inclusive. Defaults to start_line, so start_line on its own replaces exactly that line.",
 			),
+		start_column: z.coerce
+			.number()
+			.int()
+			.nullable()
+			.optional()
+			.describe(
+				"Optional positive one-based first character to replace on start_line. Diagnostics report a column, so this is the unit for a one-character fix on a long or minified line: nothing else on the line is retyped or at risk.",
+			),
+		end_column: z.coerce
+			.number()
+			.int()
+			.nullable()
+			.optional()
+			.describe(
+				"Optional positive one-based last character to replace, inclusive, on end_line. Defaults to start_column, so start_column on its own replaces exactly that one character.",
+			),
+		insert_column: z.coerce
+			.number()
+			.int()
+			.nullable()
+			.optional()
+			.describe(
+				"Optional positive one-based column on insert_line. When provided, new_text is inserted *before* that character on the existing line rather than as a new line; use line_length + 1 to append at the end of the line. This is how you add a single missing bracket without touching the rest of the line.",
+			),
 		occurrence: z.coerce
 			.number()
 			.int()

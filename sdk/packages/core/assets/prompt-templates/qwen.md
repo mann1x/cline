@@ -140,10 +140,11 @@ Create and edit text files. This is the **only** correct way to write or modify 
 - **Modes**:
   - **Replace**: Provide `old_text` and `new_text`. `old_text` must match the file content exactly (including indentation). Use `occurrence` (1-based) if multiple matches exist, or `replace_all: true`.
   - **Replace Lines**: Provide `start_line`, `new_text`, and optionally `end_line`. No `old_text` needed. Preferred for diagnostics that give line numbers.
-  - **Insert**: Provide `insert_line` (integer) and `new_text`. Inserts before the specified line. Use `line_count + 1` to append at EOF.
+  - **Replace Characters**: Provide `start_line`, `start_column`, and `new_text`, optionally `end_line`/`end_column` (inclusive, each defaults to its start). Diagnostics give you `Line N, column C` — this is the mode that uses the column. On a minified line it changes only those characters. `start_column` alone replaces one character.
+  - **Insert**: Provide `insert_line` (integer) and `new_text`. Inserts before the specified line. Use `line_count + 1` to append at EOF. Add `insert_column` to insert within the line, before that character — this is how you add a single missing bracket; `line_length + 1` appends at the end of the line.
   - **Create**: Provide `new_text` and a `path` that does not exist yet.
 - **Parallelism**: If you have multiple independent edits (different files or non-overlapping regions), emit multiple `editor` calls in the same response. Do not wait for one edit to finish before sending the next.
-- **Arguments**: `path` (string), `old_text` (string, optional), `new_text` (string), `insert_line` (integer, optional), `start_line` (integer, optional), `end_line` (integer, optional), `occurrence` (integer, optional), `replace_all` (boolean, optional).
+- **Arguments**: `path` (string), `old_text` (string, optional), `new_text` (string), `insert_line` (integer, optional), `insert_column` (integer, optional), `start_line` (integer, optional), `end_line` (integer, optional), `start_column` (integer, optional), `end_column` (integer, optional), `occurrence` (integer, optional), `replace_all` (boolean, optional).
 - **Output**: Returns `{query, result, success, error?}`. If `success` is false (e.g., `old_text` not found), the file is unchanged. Read the file again to get the correct context. Note: Text copied from `read_files` must have line number gutters removed before using as `old_text`.
 
 {{DEFAULT}}

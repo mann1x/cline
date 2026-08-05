@@ -88,7 +88,9 @@ Precise text edits or file creation. This is the primary tool for writing files.
     - `new_text`: The text to insert or replace.
     - `old_text` (Optional): The exact text to be replaced. Must match indentation perfectly.
     - `insert_line` (Optional): 1-based line number to insert `new_text` before.
-    - `start_line`/`end_line` (Optional): Range to replace.
+    - `start_line`/`end_line` (Optional): Line range to replace (inclusive).
+    - `start_column`/`end_column` (Optional): Character range on those lines (inclusive, each defaults to its start). Diagnostics report a column; this replaces only those characters, which is what a long or minified line needs.
+    - `insert_column` (Optional): With `insert_line`, inserts inside that line before this character instead of adding a new line. Use it to add a single missing bracket; `line_length + 1` appends at the end of the line.
     - `occurrence` (Optional): 1-based index if `old_text` appears multiple times.
     - `replace_all` (Optional): Boolean to replace all occurrences of `old_text`.
 - **When to use:** For small, precise changes or creating new files. Emit multiple `editor` calls in one response for different files or non-overlapping regions.

@@ -414,6 +414,165 @@ async function insertInFile(
 }
 
 /**
+ * Replace an inclusive character range — the operation 73 shell commands were
+ * emulating.
+ *
+ * Measured on a live session against a minified file: after line-range replace
+ * existed, the model stopped retyping lines and started doing this instead —
+ *
+ *   $c = [System.IO.File]::ReadAllText($p)
+ *   $idx = $c.IndexOf('collectGem();})')
+ *   $c = $c.Substring(0,$idx) + 'collectGem();}})' + $c.Substring($idx+15)
+ *
+ * — seventy-three times, hand-rolled, to move one bracket. It was not evading
+ * the tool; it was reaching for a position the tool could not name. Every
+ * diagnostic already reports `line, column`, so a column is the one coordinate
+ * the model is holding and could not spend.
+ *
+ * Columns are one-based and inclusive on both ends, matching `start_line` /
+ * `end_line` rather than LSP's half-open ranges: one convention per tool beats
+ * fidelity to a spec the model never reads.
+ */
+async function replaceColumnRange(
+	filePath: string,
+	startLineOneBased: number,
+	startColumnOneBased: number,
+	endLineOneBased: number,
+	endColumnOneBased: number,
+	newStr: string | null | undefined,
+	encoding: BufferEncoding,
+	maxDiffLines: number,
+): Promise<string> {
+	const content = await fs.readFile(filePath, encoding);
+	const eol = detectLineEnding(content);
+	const lines = content.split(/\r\n|\n/);
+
+	assertLineInRange(startLineOneBased, lines.length, "start_line");
+	assertLineInRange(endLineOneBased, lines.length, "end_line");
+	if (endLineOneBased < startLineOneBased) {
+		throw new Error(
+			`Invalid end_line: ${endLineOneBased}. It must be at least start_line (${startLineOneBased}).`,
+		);
+	}
+
+	const startLineText = lines[startLineOneBased - 1] ?? "";
+	const endLineText = lines[endLineOneBased - 1] ?? "";
+	assertColumnInRange(
+		startColumnOneBased,
+		startLineText,
+		startLineOneBased,
+		"start_column",
+	);
+	assertColumnInRange(
+		endColumnOneBased,
+		endLineText,
+		endLineOneBased,
+		"end_column",
+	);
+	if (
+		startLineOneBased === endLineOneBased &&
+		endColumnOneBased < startColumnOneBased
+	) {
+		throw new Error(
+			`Invalid end_column: ${endColumnOneBased}. On a single line it must be at least start_column (${startColumnOneBased}). To insert without replacing anything, use insert_line with insert_column.`,
+		);
+	}
+
+	const head = startLineText.slice(0, startColumnOneBased - 1);
+	const tail = endLineText.slice(endColumnOneBased);
+	const replaced = `${head}${newStr ?? ""}${tail}`;
+	lines.splice(
+		startLineOneBased - 1,
+		endLineOneBased - startLineOneBased + 1,
+		...replaced.split(/\r\n|\n/),
+	);
+	const updated = lines.join(eol);
+
+	const span =
+		startLineOneBased === endLineOneBased
+			? `line ${startLineOneBased}, columns ${startColumnOneBased}-${endColumnOneBased}`
+			: `line ${startLineOneBased} column ${startColumnOneBased} through line ${endLineOneBased} column ${endColumnOneBased}`;
+
+	if (updated === content) {
+		return noChangeMessage(filePath, `${span} already reads exactly this way`);
+	}
+
+	await fs.writeFile(filePath, updated, { encoding });
+	const diff = createLineDiff(content, updated, maxDiffLines);
+	return `Replaced ${span} in ${filePath}\n${diff}`;
+}
+
+/**
+ * Insert text at a column without replacing anything.
+ *
+ * Adding one missing bracket is the whole reason this exists, and it is not
+ * expressible as an inclusive range: `columns 385-385` replaces the character
+ * at 385. Insertion needs its own verb.
+ */
+async function insertAtColumn(
+	filePath: string,
+	lineOneBased: number,
+	columnOneBased: number,
+	newStr: string,
+	encoding: BufferEncoding,
+	maxDiffLines: number,
+): Promise<string> {
+	const content = await fs.readFile(filePath, encoding);
+	const eol = detectLineEnding(content);
+	const lines = content.split(/\r\n|\n/);
+
+	assertLineInRange(lineOneBased, lines.length, "insert_line");
+	const lineText = lines[lineOneBased - 1] ?? "";
+	// One past the last character is the append position, so the bound here is
+	// length + 1 rather than length.
+	if (columnOneBased < 1 || columnOneBased > lineText.length + 1) {
+		throw new Error(
+			`Invalid insert_column: ${columnOneBased}. Line ${lineOneBased} has ${lineText.length} character(s), so insert_column must be between 1 and ${lineText.length + 1}. Use ${lineText.length + 1} to append at the end of the line.`,
+		);
+	}
+
+	lines[lineOneBased - 1] =
+		`${lineText.slice(0, columnOneBased - 1)}${newStr}${lineText.slice(columnOneBased - 1)}`;
+	const updated = lines.join(eol);
+
+	if (updated === content) {
+		return noChangeMessage(
+			filePath,
+			`inserting nothing at line ${lineOneBased} column ${columnOneBased} leaves it unchanged`,
+		);
+	}
+
+	await fs.writeFile(filePath, updated, { encoding });
+	const diff = createLineDiff(content, updated, maxDiffLines);
+	return `Inserted ${newStr.length} character(s) at line ${lineOneBased} column ${columnOneBased} in ${filePath}\n${diff}`;
+}
+
+function assertLineInRange(
+	lineOneBased: number,
+	lineCount: number,
+	field: string,
+): void {
+	if (lineOneBased < 1 || lineOneBased > lineCount) {
+		throw new Error(
+			`Invalid ${field}: ${lineOneBased}. The file has ${lineCount} line(s), so ${field} must be between 1 and ${lineCount}.`,
+		);
+	}
+}
+
+function assertColumnInRange(
+	columnOneBased: number,
+	lineText: string,
+	lineOneBased: number,
+	field: string,
+): void {
+	if (columnOneBased < 1 || columnOneBased > lineText.length) {
+		throw new Error(
+			`Invalid ${field}: ${columnOneBased}. Line ${lineOneBased} has ${lineText.length} character(s), so ${field} must be between 1 and ${lineText.length}.`,
+		);
+	}
+}
+
+/**
  * Create an editor executor using Node.js fs module
  */
 export function createEditorExecutor(
@@ -438,11 +597,34 @@ export function createEditorExecutor(
 					"`insert_line` adds text at a boundary and `start_line` replaces existing lines. Send one or the other.",
 				);
 			}
+			// A column turns the boundary insert into an in-line one: the same
+			// verb, addressed one level finer.
+			if (input.insert_column != null) {
+				if (!(await fileExists(filePath))) {
+					throw new Error(
+						`Cannot insert into ${filePath}: the file does not exist. Omit insert_line and insert_column to create it.`,
+					);
+				}
+				return insertAtColumn(
+					filePath,
+					input.insert_line,
+					input.insert_column,
+					input.new_text,
+					encoding,
+					maxDiffLines,
+				);
+			}
 			return insertInFile(
 				filePath,
 				input.insert_line, // One-based index
 				input.new_text,
 				encoding,
+			);
+		}
+
+		if (input.insert_column != null) {
+			throw new Error(
+				"`insert_column` needs `insert_line` to say which line it is a column of.",
 			);
 		}
 
@@ -452,6 +634,23 @@ export function createEditorExecutor(
 					`Cannot replace lines in ${filePath}: the file does not exist. Omit start_line to create it.`,
 				);
 			}
+			if (input.start_column != null) {
+				return replaceColumnRange(
+					filePath,
+					input.start_line,
+					input.start_column,
+					input.end_line ?? input.start_line,
+					input.end_column ?? input.start_column,
+					input.new_text,
+					encoding,
+					maxDiffLines,
+				);
+			}
+			if (input.end_column != null) {
+				throw new Error(
+					"`end_column` needs `start_column`: without it the tool replaces whole lines and the column has nothing to bound.",
+				);
+			}
 			return replaceLineRange(
 				filePath,
 				input.start_line,
@@ -459,6 +658,12 @@ export function createEditorExecutor(
 				input.new_text,
 				encoding,
 				maxDiffLines,
+			);
+		}
+
+		if (input.start_column != null || input.end_column != null) {
+			throw new Error(
+				"`start_column`/`end_column` need `start_line` to say which line they are columns of.",
 			);
 		}
 
