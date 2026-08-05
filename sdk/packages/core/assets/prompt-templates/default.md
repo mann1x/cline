@@ -119,7 +119,7 @@ Submit the final answer and exit the conversation. For example, submit a summary
 {{DEFAULT}}
 
 # tool: check_file
-Check files for errors and warnings, using the editor's own language servers.
+Check files for errors and warnings, using the editor's own language servers (LSP). These are live and follow your edits — a result is current as of the moment you ask, so if it still reports a problem after an edit, the problem is still there. Restarting a language server is neither possible nor necessary from here.
 
 Ask this before running a checker yourself. For a file whose language the IDE understands, it answers the same question as `tsc`, `eslint`, `biome`, `ruff`, `mypy`, `go build` or `cargo check` would — for the files you name, in milliseconds, without building the project.
 
@@ -134,8 +134,10 @@ Read a clean result carefully. "No problems reported by the editor" is conclusiv
 
 Output: plain text, one section per file you named, each problem on its own line as `file:line:column` with its severity and message. A file with nothing wrong says so in one line. There is no object to unpack and no `success` field — problems being listed is this tool working, not failing.
 
+When a file's brackets do not match, a `Delimiter scan:` section follows the problems and names the *opening* bracket involved. A parse error is always reported where the parser gave up, which is the closing bracket; the opener is the one you have to edit, and it is the one the error cannot name. Trust that line over counting brackets yourself — it skips strings, comments and regex literals, which counting characters does not.
+
 # tool: code_intel
-Ask the IDE's language servers about a symbol. This answers questions that a text search cannot: it understands the code, so it distinguishes a definition from a mention and this class's method from another class's method of the same name.
+Ask the IDE's language servers — the LSP — about a symbol. If you are reaching for an LSP tool or an MCP server that wraps one, this is it: the same protocol, already running against this workspace and its open files, with no server to start. This answers questions a text search cannot, because it understands the code: it distinguishes a definition from a mention, and this class's method from another class's method of the same name.
 
 Use this before falling back to `search_codebase` for anything about a symbol. It is faster, exact, and does not need you to read files to interpret the result.
 

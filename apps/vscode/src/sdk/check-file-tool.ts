@@ -1,7 +1,9 @@
 import { type AgentTool, createTool } from "@cline/shared"
+import * as fs from "fs/promises"
 import * as path from "path"
 import type { FileDiagnostics } from "@/shared/proto/index.cline"
 import { Logger } from "@/shared/services/Logger"
+import { describeDelimiterBalance } from "./delimiter-balance"
 import { readHostDiagnostics, readSettledDiagnostics, renderFileDiagnostics, sleep } from "./editor-diagnostics"
 
 /**
@@ -37,7 +39,7 @@ export const CHECK_FILE_TOOL_NAME = "check_file"
  * replaces them, which is where a model is standing when it is about to make
  * the mistake.
  */
-export const CHECK_FILE_TOOL_DESCRIPTION = `Check files for errors and warnings, using the editor's own language servers.
+export const CHECK_FILE_TOOL_DESCRIPTION = `Check files for errors and warnings, using the editor's own language servers (LSP). These are live and follow your edits — a result is current as of the moment you ask, so if it still reports a problem after an edit, the problem is still there. Restarting a language server is neither possible nor necessary from here.
 
 Ask this before running a checker yourself. For a file whose language the IDE understands, it answers the same question as \`tsc\`, \`eslint\`, \`biome\`, \`ruff\`, \`mypy\`, \`go build\` or \`cargo check\` would — for the files you name, in milliseconds, without building the project.
 
@@ -50,7 +52,9 @@ Pass every file you want checked in one call.
 
 Read a clean result carefully. "No problems reported by the editor" is conclusive only where the IDE has a language server for that file, and it does not for every language on every machine. If this reports nothing and you have reason to expect a problem, or the project has a checker the IDE does not run, run that checker with \`run_commands\`. Tests and builds are always \`run_commands\`; this tool does not run them.
 
-Output: plain text, one section per file you named, each problem on its own line as \`file:line:column\` with its severity and message. A file with nothing wrong says so in one line. There is no object to unpack and no \`success\` field — problems being listed is this tool working, not failing.`
+Output: plain text, one section per file you named, each problem on its own line as \`file:line:column\` with its severity and message. A file with nothing wrong says so in one line. There is no object to unpack and no \`success\` field — problems being listed is this tool working, not failing.
+
+When a file's brackets do not match, a \`Delimiter scan:\` section follows the problems and names the *opening* bracket involved. A parse error is always reported where the parser gave up, which is the closing bracket; the opener is the one you have to edit, and it is the one the error cannot name. Trust that line over counting brackets yourself — it skips strings, comments and regex literals, which counting characters does not.`
 
 /**
  * Exported so the template generator can state this tool's real call shape.
@@ -204,6 +208,21 @@ export function createCheckFileTool(options: CheckFileToolOptions): AgentTool {
 	})
 }
 
+/**
+ * The delimiter scan for a file, or nothing when it cannot be read or has
+ * nothing to report. A failure here must never mask the diagnostics it is
+ * appended to, so every error is swallowed.
+ */
+async function describeBalance(absolutePath: string): Promise<string | null> {
+	try {
+		const text = await fs.readFile(absolutePath, "utf-8")
+		return describeDelimiterBalance(absolutePath, text)
+	} catch (error) {
+		Logger.error(`[CheckFile] delimiter scan skipped for ${absolutePath}:`, error)
+		return null
+	}
+}
+
 async function describeFile(args: {
 	displayPath: string
 	absolutePath: string
@@ -219,7 +238,12 @@ async function describeFile(args: {
 	// than either.
 	const rendered = file ? await renderFileDiagnostics(file.filePath, file.diagnostics) : ""
 	if (rendered !== "") {
-		return rendered
+		// A parse error is reported where the parser gave up, which is the
+		// closing bracket — never the opening one it failed to match. Say
+		// which opener it belongs to, since that is the edit to make and the
+		// language server structurally cannot tell you.
+		const balance = await describeBalance(absolutePath)
+		return balance ? `${rendered}\n${balance}` : rendered
 	}
 
 	// The editor said nothing, which is not the same as "this file is fine".
