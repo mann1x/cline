@@ -10,6 +10,29 @@ import { z } from "zod";
 export const INPUT_ARG_CHAR_LIMIT = 6000;
 
 /**
+ * A boolean that also accepts the string a model actually sends.
+ *
+ * Measured: a model called `read_files` with
+ * `{path, start_line: "108", end_line: "108", line_numbers: "false"}`. The
+ * numbers coerced — they are `z.coerce.number()` — and the quoted boolean did
+ * not, so the whole union failed and the tool answered `✖ Invalid input`
+ * with no field named. Every boolean in this file is reachable the same way,
+ * so none of them is strict.
+ */
+const LooseBoolean = z.preprocess((value) => {
+	if (typeof value === "string") {
+		const normalized = value.trim().toLowerCase();
+		if (normalized === "true") {
+			return true;
+		}
+		if (normalized === "false") {
+			return false;
+		}
+	}
+	return value;
+}, z.boolean());
+
+/**
  * Schema for read tool input
  */
 const AbsolutePath = z
@@ -46,6 +69,11 @@ export const ReadFileRequestSchema = z
 		path: AbsolutePath,
 		start_line: ReadFileLineRangeSchema.shape.start_line,
 		end_line: ReadFileLineRangeSchema.shape.end_line,
+		line_numbers: LooseBoolean.nullable()
+			.optional()
+			.describe(
+				"Whether to prefix each line with its number. True by default, because line numbers are how you address an edit. Set false when you are going to copy text out of the result into another tool: the `123 | ` prefix is not in the file, and text pasted back with it cannot match.",
+			),
 	})
 	.describe(
 		"A file read request with optional inclusive one-based line bounds. Always include path; start_line/end_line must be on the same object as the path they apply to, never in a separate array element",
@@ -112,6 +140,26 @@ export const SearchCodebaseInputSchema = z.object({
 	queries: z
 		.array(z.string())
 		.describe("Array of regex search queries to execute"),
+	context_lines: z.coerce
+		.number()
+		.int()
+		.min(0)
+		.max(20)
+		.nullable()
+		.optional()
+		.describe(
+			"How many lines to show either side of each match. Defaults to 2. Use 0 for just the matching lines.",
+		),
+	max_per_file: z.coerce
+		.number()
+		.int()
+		.positive()
+		.max(200)
+		.nullable()
+		.optional()
+		.describe(
+			"How many matches to report per file. Defaults to 1, which is right for finding *which* files mention something. Raise it when you need every occurrence within one file — how many times a name appears, and where each one is.",
+		),
 });
 
 /**
@@ -189,6 +237,32 @@ export const FetchWebContentInputSchema = z.object({
 });
 
 /**
+ * What the tool will actually accept, as opposed to what it advertises.
+ *
+ * The advertised shape stays `{requests: [{url, prompt}]}` — one shape to
+ * document, and the batching it exists for is the point. But the wrapper is
+ * the single most-missed detail in this whole tool set: measured on a live
+ * session, a model sent `{url, prompt}` three times, got
+ * `Invalid input: expected array, received undefined → at requests` three
+ * times, and never worked out what to change. `read_files` has long tolerated
+ * the same slip in its own shape; this brings `fetch_web_content` in line.
+ *
+ * Only the unambiguous flattenings are accepted. Nothing here guesses at a
+ * missing `prompt`.
+ */
+export const LooseFetchWebContentInputSchema = z.union([
+	FetchWebContentInputSchema,
+	// `{url, prompt}` — one request, sent without its wrapper.
+	WebFetchRequestSchema.transform((request) => ({ requests: [request] })),
+	// `{requests: {url, prompt}}` — wrapper present, array forgotten.
+	z
+		.object({ requests: WebFetchRequestSchema })
+		.transform(({ requests }) => ({ requests: [requests] })),
+	// `[{url, prompt}, ...]` — the array alone.
+	z.array(WebFetchRequestSchema).transform((requests) => ({ requests })),
+]);
+
+/**
  * Schema for editor tool input
  */
 export const EditFileInputSchema = z
@@ -218,9 +292,38 @@ export const EditFileInputSchema = z
 			.describe(
 				"Optional positive one-based boundary line. When provided, the tool inserts new_text before that line instead of performing a replacement edit; use line_count + 1 to append at EOF.",
 			),
+		start_line: z.coerce
+			.number()
+			.int()
+			.nullable()
+			.optional()
+			.describe(
+				"Optional positive one-based first line to replace. With end_line, new_text replaces that whole line range and old_text is not needed. Use this when the text to replace is long, minified or repeated: a line number is unambiguous where an exact match is not.",
+			),
+		end_line: z.coerce
+			.number()
+			.int()
+			.nullable()
+			.optional()
+			.describe(
+				"Optional positive one-based last line to replace, inclusive. Defaults to start_line, so start_line on its own replaces exactly that line.",
+			),
+		occurrence: z.coerce
+			.number()
+			.int()
+			.nullable()
+			.optional()
+			.describe(
+				"Which occurrence of old_text to replace when it appears more than once, one-based in file order. Omit when old_text is unique. Cannot be combined with replace_all.",
+			),
+		replace_all: LooseBoolean.nullable()
+			.optional()
+			.describe(
+				"Replace every occurrence of old_text instead of requiring exactly one. Cannot be combined with occurrence.",
+			),
 	})
 	.describe(
-		"Edit a text file by replacing old_text with new_text, create the file with new_text if it does not exist, or insert new_text at insert_line when insert_line is provided. Prefer using this tool for file edits over shell commands. IMPORTANT: large edits can time out, so use small chunks and multiple calls when possible.",
+		"Edit a text file by replacing old_text with new_text, by replacing the start_line..end_line range with new_text, by creating the file with new_text if it does not exist, or by inserting new_text at insert_line. Prefer using this tool for file edits over shell commands. IMPORTANT: large edits can time out, so use small chunks and multiple calls when possible.",
 	);
 
 /**

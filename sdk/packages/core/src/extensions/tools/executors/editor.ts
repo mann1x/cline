@@ -167,13 +167,56 @@ async function fileExists(filePath: string): Promise<boolean> {
 	}
 }
 
+/**
+ * Replace the nth occurrence, counting from one, leaving the rest alone.
+ *
+ * An index walk rather than a regex or split/join: a regex would need the
+ * needle escaped, and `String.replace` would expand `$&` and friends in the
+ * replacement text.
+ */
+function replaceNthOccurrence(
+	content: string,
+	needle: string,
+	replacement: string,
+	occurrence: number,
+): string {
+	let index = -1;
+	for (let seen = 0; seen < occurrence; seen++) {
+		index = content.indexOf(needle, index + 1);
+		if (index < 0) {
+			return content;
+		}
+	}
+	return (
+		content.slice(0, index) + replacement + content.slice(index + needle.length)
+	);
+}
+
+/** Where the occurrences sit, as one-based line numbers, for the error text. */
+function occurrenceLines(content: string, needle: string): number[] {
+	const lines: number[] = [];
+	let index = content.indexOf(needle);
+	while (index >= 0) {
+		lines.push(content.slice(0, index).split(/\r\n|\n/).length);
+		index = content.indexOf(needle, index + 1);
+	}
+	return lines;
+}
+
 async function replaceInFile(
 	filePath: string,
 	oldStr: string,
 	newStr: string | null | undefined,
 	encoding: BufferEncoding,
 	maxDiffLines: number,
+	options: { occurrence?: number | null; replaceAll?: boolean | null } = {},
 ): Promise<string> {
+	if (options.occurrence != null && options.replaceAll) {
+		throw new Error(
+			"No replacement performed: `occurrence` picks one match and `replace_all` takes every match. Send one or the other.",
+		);
+	}
+
 	const content = await fs.readFile(filePath, encoding);
 	const eol = detectLineEnding(content);
 	const normalizedOldStr = normalizeLineEndings(oldStr, eol);
@@ -181,22 +224,169 @@ async function replaceInFile(
 	const occurrences = countOccurrences(content, normalizedOldStr);
 
 	if (occurrences === 0) {
-		throw new Error(`No replacement performed: text not found in ${filePath}.`);
-	}
-
-	if (occurrences > 1) {
+		// The commonest cause, measured on a live session: `read_files` renders
+		// content as `  92 | <text>` and the model pastes the gutter back in.
+		// Naming it turns a dead end into a retry that works.
+		const looksNumbered = /(^|\n)\s*\d+\s\|\s/.test(normalizedOldStr);
 		throw new Error(
-			`No replacement performed: multiple occurrences of text found in ${filePath}.`,
+			`No replacement performed: text not found in ${filePath}.${
+				looksNumbered
+					? " `old_text` still carries the `123 | ` line-number gutter from the read output; send the file's own text without it."
+					: " Re-read the region and copy the text exactly, or replace by line number with `start_line`/`end_line` instead."
+			}`,
 		);
 	}
 
-	// Replacer function so "$"-sequences in new_text ($&, $', $`, $$, $n)
-	// are inserted literally instead of being expanded by String.replace.
-	const updated = content.replace(normalizedOldStr, () => normalizedNewStr);
+	let updated: string;
+	if (options.replaceAll) {
+		updated = content.split(normalizedOldStr).join(normalizedNewStr);
+	} else if (options.occurrence != null) {
+		if (options.occurrence < 1 || options.occurrence > occurrences) {
+			throw new Error(
+				`No replacement performed: occurrence ${options.occurrence} is out of range; the text appears ${occurrences} time(s) in ${filePath}.`,
+			);
+		}
+		updated = replaceNthOccurrence(
+			content,
+			normalizedOldStr,
+			normalizedNewStr,
+			options.occurrence,
+		);
+	} else if (occurrences > 1) {
+		// Refusing ambiguity with no way to resolve it is a dead end, and the
+		// measured exit from it was PowerShell. Say where they are and how to
+		// choose.
+		throw new Error(
+			`No replacement performed: the text appears ${occurrences} times in ${filePath}, on lines ${occurrenceLines(content, normalizedOldStr).join(", ")}. Extend \`old_text\` until it is unique, pass \`occurrence\` to pick one, pass \`replace_all\` to change every one, or replace by line number with \`start_line\`/\`end_line\`.`,
+		);
+	} else {
+		// Replacer function so "$"-sequences in new_text ($&, $', $`, $$, $n)
+		// are inserted literally instead of being expanded by String.replace.
+		updated = content.replace(normalizedOldStr, () => normalizedNewStr);
+	}
+
+	if (updated === content) {
+		return noChangeMessage(filePath, "the text already reads exactly this way");
+	}
+
 	await fs.writeFile(filePath, updated, { encoding });
 
 	const diff = createLineDiff(content, updated, maxDiffLines);
-	return `Edited ${filePath}\n${diff}`;
+	const scope = options.replaceAll ? ` (${occurrences} occurrence(s))` : "";
+	return `Edited ${filePath}${scope}\n${diff}`;
+}
+
+/**
+ * What to say when an edit changed nothing.
+ *
+ * Measured on a live session: 24 of 45 successful `editor` results carried an
+ * empty ```diff fence. The tool had reported `Replaced line 108 in ...` — the
+ * success wording — for a replacement identical to what was already there, so
+ * the model had to infer "no-op" from an absence. It re-sent the same edit,
+ * then six identical inserts at the same line. An outcome a model has to
+ * deduce from missing output is one it will deduce wrong.
+ */
+function noChangeMessage(filePath: string, why: string): string {
+	return `No change: ${why} in ${filePath}. The file was not modified — do not retry this edit; re-read the region if you expected something different.`;
+}
+
+/**
+ * How many lines actually differ, using the same prefix/suffix trim as the
+ * diff renderer so the two can never disagree about what changed.
+ */
+function changedLineCounts(
+	oldContent: string,
+	newContent: string,
+): { removed: number; added: number } {
+	const oldLines = oldContent.split(/\r\n|\n/);
+	const newLines = newContent.split(/\r\n|\n/);
+	let start = 0;
+	while (
+		start < oldLines.length &&
+		start < newLines.length &&
+		oldLines[start] === newLines[start]
+	) {
+		start++;
+	}
+	let oldEnd = oldLines.length;
+	let newEnd = newLines.length;
+	while (
+		oldEnd > start &&
+		newEnd > start &&
+		oldLines[oldEnd - 1] === newLines[newEnd - 1]
+	) {
+		oldEnd--;
+		newEnd--;
+	}
+	return { removed: oldEnd - start, added: newEnd - start };
+}
+
+/**
+ * Replace a whole line range — the operation that had no tool.
+ *
+ * Measured on a live session: twelve shell commands existed only to do
+ * `$lines[91] = "..."` and write the file back, because `editor` could insert
+ * at a line but never replace one. On a minified file — one 293-character
+ * line — exact-match replacement is barely usable, while the line number is
+ * exactly what every diagnostic already reports.
+ */
+async function replaceLineRange(
+	filePath: string,
+	startLineOneBased: number,
+	endLineOneBased: number,
+	newStr: string | null | undefined,
+	encoding: BufferEncoding,
+	maxDiffLines: number,
+): Promise<string> {
+	const content = await fs.readFile(filePath, encoding);
+	const eol = detectLineEnding(content);
+	const lines = content.split(/\r\n|\n/);
+
+	if (startLineOneBased < 1 || startLineOneBased > lines.length) {
+		throw new Error(
+			`Invalid start_line: ${startLineOneBased}. The file has ${lines.length} line(s), so start_line must be between 1 and ${lines.length}.`,
+		);
+	}
+	if (endLineOneBased < startLineOneBased || endLineOneBased > lines.length) {
+		throw new Error(
+			`Invalid end_line: ${endLineOneBased}. It must be at least start_line (${startLineOneBased}) and at most ${lines.length}.`,
+		);
+	}
+
+	// An empty new_text deletes the range outright, which is the natural
+	// reading and what a caller removing a bad line wants.
+	const replacement =
+		newStr == null || newStr === "" ? [] : newStr.split(/\r\n|\n/);
+	lines.splice(
+		startLineOneBased - 1,
+		endLineOneBased - startLineOneBased + 1,
+		...replacement,
+	);
+	const updated = lines.join(eol);
+	const range =
+		startLineOneBased === endLineOneBased
+			? `line ${startLineOneBased}`
+			: `lines ${startLineOneBased}-${endLineOneBased}`;
+
+	if (updated === content) {
+		return noChangeMessage(filePath, `${range} already reads exactly this way`);
+	}
+
+	await fs.writeFile(filePath, updated, { encoding });
+
+	const diff = createLineDiff(content, updated, maxDiffLines);
+	// The diff trims lines that are identical on both sides, so replacing two
+	// lines where one was already correct shows a single line and reads like a
+	// half-applied edit. Measured: a model spent a turn asking whether line 90
+	// had been touched. Say it instead of leaving it to be inferred.
+	const requestedLines = endLineOneBased - startLineOneBased + 1;
+	const { removed } = changedLineCounts(content, updated);
+	const unchanged = requestedLines - removed;
+	const note =
+		unchanged > 0
+			? ` (${unchanged} of the ${requestedLines} line(s) in the range were already identical, so the diff below does not show them)`
+			: "";
+	return `Replaced ${range} in ${filePath}${note}\n${diff}`;
 }
 
 async function insertInFile(
@@ -243,6 +433,11 @@ export function createEditorExecutor(
 		const filePath = resolveFilePath(cwd, input.path, restrictToCwd);
 
 		if (input.insert_line != null) {
+			if (input.start_line != null) {
+				throw new Error(
+					"`insert_line` adds text at a boundary and `start_line` replaces existing lines. Send one or the other.",
+				);
+			}
 			return insertInFile(
 				filePath,
 				input.insert_line, // One-based index
@@ -251,12 +446,28 @@ export function createEditorExecutor(
 			);
 		}
 
+		if (input.start_line != null) {
+			if (!(await fileExists(filePath))) {
+				throw new Error(
+					`Cannot replace lines in ${filePath}: the file does not exist. Omit start_line to create it.`,
+				);
+			}
+			return replaceLineRange(
+				filePath,
+				input.start_line,
+				input.end_line ?? input.start_line,
+				input.new_text,
+				encoding,
+				maxDiffLines,
+			);
+		}
+
 		if (!(await fileExists(filePath))) {
 			return createFile(filePath, input.new_text, encoding);
 		}
 		if (input.old_text == null) {
 			throw new Error(
-				"Parameter `old_text` is required when editing an existing file without `insert_line`",
+				"Parameter `old_text` is required when editing an existing file without `insert_line` or `start_line`",
 			);
 		}
 
@@ -266,6 +477,7 @@ export function createEditorExecutor(
 			input.new_text,
 			encoding,
 			maxDiffLines,
+			{ occurrence: input.occurrence, replaceAll: input.replace_all },
 		);
 	};
 }

@@ -63,10 +63,22 @@ export type FileReadExecutor = (
  * @param context - Tool execution context
  * @returns Search results as a formatted string
  */
+/** Per-call overrides for one search, on top of the executor's defaults. */
+export interface SearchQueryOptions {
+	/** Lines shown either side of a match. */
+	contextLines?: number;
+	/**
+	 * Matches reported per file. One by default, which answers "which files
+	 * mention this" and cannot answer "how many times, and where".
+	 */
+	maxPerFile?: number;
+}
+
 export type SearchExecutor = (
 	query: string,
 	cwd: string,
 	context: AgentToolContext,
+	options?: SearchQueryOptions,
 ) => Promise<string>;
 
 /**

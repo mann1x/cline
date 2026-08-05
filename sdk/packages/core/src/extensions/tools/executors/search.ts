@@ -9,7 +9,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentToolContext } from "@cline/shared";
 import { getFileIndex } from "../../../services/workspace";
-import type { SearchExecutor } from "../types";
+import type { SearchExecutor, SearchQueryOptions } from "../types";
 import { MAX_SEARCH_OUTPUT_CHARS } from "./output-limits";
 
 /**
@@ -161,13 +161,24 @@ function searchWithRipgrep(
 	cwd: string,
 	maxResults: number,
 	contextLines: number,
+	maxPerFile: number,
 	timeoutMs: number = 5000,
 	abortSignal?: AbortSignal,
 ): Promise<SearchMatch[] | null> {
 	return new Promise((resolve) => {
 		const child = spawn(
 			"rg",
-			["--json", `--context=${contextLines}`, "--max-count=1", "-i", query],
+			[
+				"--json",
+				`--context=${contextLines}`,
+				// One per file by default. That answers "which files mention
+				// this" and cannot answer "how many times, and where" — the
+				// question that sent a measured session into twenty shell
+				// commands walking IndexOf by hand.
+				`--max-count=${maxPerFile}`,
+				"-i",
+				query,
+			],
 			{
 				cwd,
 				stdio: ["ignore", "pipe", "pipe"],
@@ -326,7 +337,10 @@ export function createSearchExecutor(
 		query: string,
 		cwd: string,
 		context: AgentToolContext,
+		queryOptions?: SearchQueryOptions,
 	): Promise<string> => {
+		const effectiveContextLines = queryOptions?.contextLines ?? contextLines;
+		const effectiveMaxPerFile = queryOptions?.maxPerFile ?? 1;
 		// Check for abort before starting
 		if (context.signal?.aborted) {
 			throw new Error("Search operation aborted");
@@ -340,7 +354,8 @@ export function createSearchExecutor(
 				query,
 				cwd,
 				maxResults,
-				contextLines,
+				effectiveContextLines,
+				effectiveMaxPerFile,
 				5000,
 				context.signal,
 			);
