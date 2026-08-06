@@ -125,6 +125,7 @@ Open a page in a real browser and report what it printed to the console and what
 Actions: `open` (with `url`; an absolute file path is accepted), `click` (with `coordinate` as `"x,y"`), `type` (with `text`), `scroll_down`, `scroll_up`, `close`.
 
 Call it after editing any HTML, CSS or JavaScript and before reporting a task finished. `check_file` cannot answer this — no language server checks the script inside an `.html` file, and a file that parses can still throw when it runs. `[error]` and `[Page Error]` lines are real failures; a page that printed nothing is a pass, not a failed call. The browser stays open between calls; `close` it when done.
+A parse error from the browser names no line. For a local file a `Delimiter scan:` section follows it and names the *opening* bracket the parser could not match — read that instead of counting brackets yourself.
 {{DEFAULT}}
 
 # tool: code_intel

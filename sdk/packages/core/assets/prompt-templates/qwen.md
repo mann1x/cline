@@ -218,6 +218,7 @@ Open a page in a real browser and report its console output and uncaught errors.
 - **Arguments**: `action` is one of `open`, `click`, `type`, `scroll_down`, `scroll_up`, `close`. `open` takes `url` (an absolute file path is accepted and converted). `click` takes `coordinate` as `"x,y"` in page pixels. `type` takes `text`.
 - **Output**: The console messages and uncaught errors produced while the action ran. `[error]` and `[Page Error]` lines are real failures. A page that printed nothing is a pass, not a failed call.
 - **Session**: The browser stays open between calls, so `open` once and then interact. `close` when finished.
+A parse error from the browser names no line. For a local file a `Delimiter scan:` section follows it and names the *opening* bracket the parser could not match — read that instead of counting brackets yourself.
 {{DEFAULT}}
 
 # tool: code_intel

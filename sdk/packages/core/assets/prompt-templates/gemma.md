@@ -142,6 +142,7 @@ Open a page in a real browser and read its console output. Use this to check tha
 - **When to use:** After editing any HTML, CSS or JavaScript, and before finishing a task. `check_file` cannot check a page: no language server checks the script inside an `.html` file, and a file that parses can still throw when it runs.
 - **Output:** The console messages and uncaught errors produced while the action ran. `[error]` and `[Page Error]` lines are real failures; a page that printed nothing is a pass.
 The browser stays open between calls. `close` it when finished.
+A parse error from the browser names no line. For a local file a `Delimiter scan:` section follows it and names the *opening* bracket the parser could not match — read that instead of counting brackets yourself.
 {{DEFAULT}}
 
 # tool: code_intel

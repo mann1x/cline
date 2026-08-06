@@ -1,6 +1,8 @@
 import { type AgentTool, createTool } from "@cline/shared"
+import * as fs from "fs/promises"
 import type { BrowserActionResult } from "@/shared/ExtensionMessage"
 import { Logger } from "@/shared/services/Logger"
+import { describeDelimiterBalance } from "./delimiter-balance"
 
 /**
  * A tool that answers "does this page actually work?".
@@ -44,6 +46,8 @@ Actions:
 - \`close\` — shut the browser down. Do this when finished with it.
 
 Every action reports the console messages and uncaught errors produced while it ran, so a syntax error, a failed fetch or a null dereference comes back as text you can act on. \`[error]\` and \`[Page Error]\` lines are real failures. A page that says nothing printed nothing — that is a pass, not a failed call.
+
+A parse error from the browser names no line, because the script never ran. For a local file a \`Delimiter scan:\` section follows it and names the *opening* bracket the parser could not match. Read that line instead of counting brackets yourself — counting a whole file by hand costs more thinking than you have, and the scan skips strings, comments and regex literals, which counting does not.
 
 The browser stays open between calls, so \`open\` once and then interact. Only one page is open at a time; \`open\` again to go elsewhere.`
 
@@ -103,6 +107,8 @@ export interface BrowserToolOptions {
 	cwd: string
 	/** Built on first use, so a session that never browses never spawns Chrome. */
 	createDriver: () => BrowserDriver | Promise<BrowserDriver>
+	/** Injection point for tests; defaults to reading the file off disk. */
+	readFile?: (filePath: string) => Promise<string>
 }
 
 interface BrowserToolInput {
@@ -182,6 +188,64 @@ export function renderBrowserResult(action: string, result: BrowserActionResult,
 export function splitDataUrl(dataUrl: string): { data: string; mediaType: string } | undefined {
 	const match = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i.exec(dataUrl)
 	return match ? { mediaType: match[1], data: match[2] } : undefined
+}
+
+/**
+ * A parse error the browser reports but cannot place.
+ *
+ * V8 says `SyntaxError: missing ) after argument list` and stops. There is no
+ * line, no column, and for a parse failure there is no stack either — the
+ * script never ran. That is the whole message the model gets.
+ */
+const PARSE_ERROR = /\bSyntaxError\b|\bUnexpected (token|end of input)\b/
+
+/** The local path behind a `file://` URL, or nothing for anything remote. */
+export function localPathOf(url: string | undefined): string | undefined {
+	if (!url?.startsWith("file://")) {
+		return undefined
+	}
+	try {
+		const decoded = decodeURI(url.slice("file://".length))
+		// `file:///C:/x` -> `C:/x`, but `file:///repo/x` -> `/repo/x`.
+		return /^\/[a-zA-Z]:/.test(decoded) ? decoded.slice(1) : decoded
+	} catch {
+		return undefined
+	}
+}
+
+/**
+ * Locate a parse error the browser could only name.
+ *
+ * Measured, and this is why the tool exists in this shape: the browser
+ * reported `SyntaxError: missing ) after argument list` on a 14 KB page, the
+ * model had no position to work from, and it spent its entire 8,000-token
+ * thinking budget counting brackets by hand — `forEach(` (1), `e=>{` (2) — and
+ * still had not finished when the budget ran out. The scanner answers the same
+ * question in milliseconds and it was already in this extension, one import
+ * away, answering it for `check_file`.
+ *
+ * Only for local files: a remote page's source is not ours to scan, and the
+ * error may come from a script on another host entirely.
+ */
+async function locateParseError(
+	url: string | undefined,
+	logs: string,
+	readFile: (filePath: string) => Promise<string>,
+): Promise<string | null> {
+	if (!PARSE_ERROR.test(logs)) {
+		return null
+	}
+	const filePath = localPathOf(url)
+	if (!filePath) {
+		return null
+	}
+	try {
+		return describeDelimiterBalance(filePath, await readFile(filePath))
+	} catch (error) {
+		// Never mask the console output this is appended to.
+		Logger.error(`[Browser] delimiter scan skipped for ${filePath}:`, error)
+		return null
+	}
 }
 
 export function createBrowserTool(options: BrowserToolOptions): AgentTool {
@@ -272,7 +336,13 @@ export function createBrowserTool(options: BrowserToolOptions): AgentTool {
 				return `The browser could not ${action}: ${message}`
 			}
 
-			const text = renderBrowserResult(action, result, target)
+			const rendered = renderBrowserResult(action, result, target)
+			const located = await locateParseError(
+				result.currentUrl ?? target,
+				result.logs ?? "",
+				options.readFile ?? ((filePath) => fs.readFile(filePath, "utf-8")),
+			)
+			const text = located ? `${rendered}\n\n${located}` : rendered
 
 			// A screenshot is only worth its tokens to a model that can see it.
 			// The metadata defaults to true when a model declares no capabilities

@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { BrowserActionResult } from "@/shared/ExtensionMessage"
-import { type BrowserDriver, createBrowserTool, renderBrowserResult, splitDataUrl, toNavigableUrl } from "./browser-tool"
+import {
+	type BrowserDriver,
+	createBrowserTool,
+	localPathOf,
+	renderBrowserResult,
+	splitDataUrl,
+	toNavigableUrl,
+} from "./browser-tool"
 
 vi.mock("@/shared/services/Logger", () => ({
 	Logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -101,6 +108,77 @@ describe("splitDataUrl", () => {
 	it("returns nothing for something that is not an image data URL", () => {
 		expect(splitDataUrl("https://example.com/a.png")).toBeUndefined()
 		expect(splitDataUrl("")).toBeUndefined()
+	})
+})
+
+describe("localPathOf", () => {
+	it("unwraps a Windows file URL", () => {
+		expect(localPathOf("file:///C:/Users/manni/game.html")).toBe("C:/Users/manni/game.html")
+	})
+
+	it("unwraps a POSIX file URL and decodes escapes", () => {
+		expect(localPathOf("file:///repo/my%20game.html")).toBe("/repo/my game.html")
+	})
+
+	it("declines anything remote", () => {
+		// A remote page's source is not ours to scan, and the failing script may
+		// live on another host entirely.
+		expect(localPathOf("http://localhost:3000/app.js")).toBeUndefined()
+		expect(localPathOf(undefined)).toBeUndefined()
+	})
+})
+
+describe("the delimiter scan on a parse error", () => {
+	const BROKEN = "<body><script>\nfoo.forEach(e=>{if(e){bar();}});\n</script></body>"
+
+	function toolFor(logs: string, files: Record<string, string> = {}) {
+		return createBrowserTool({
+			cwd: CWD,
+			createDriver: () => fakeDriver({ navigateToUrl: vi.fn(async () => result({ logs })) }),
+			readFile: async (filePath: string) => {
+				const text = files[filePath]
+				if (text === undefined) {
+					throw new Error(`ENOENT ${filePath}`)
+				}
+				return text
+			},
+		})
+	}
+
+	it("names the opener the browser could not", async () => {
+		// Measured: the browser said `SyntaxError: missing ) after argument
+		// list` with no line, and the model spent its entire 8,000-token
+		// thinking budget counting brackets by hand rather than finding it.
+		const tool = toolFor("[Page Error] SyntaxError: missing ) after argument list", {
+			"/repo/game.html": "<body><script>\nfoo.forEach(e=>{if(e){bar();}}});\n</script></body>",
+		})
+
+		const output = await run(tool, { action: "open", url: "/repo/game.html" })
+
+		expect(output).toContain("SyntaxError")
+		expect(output).toContain("Delimiter scan")
+		expect(output).toContain("line 2")
+	})
+
+	it("stays quiet when the page threw something that is not a parse error", async () => {
+		const tool = toolFor("[Page Error] TypeError: x is not a function", { "/repo/game.html": BROKEN })
+
+		expect(await run(tool, { action: "open", url: "/repo/game.html" })).not.toContain("Delimiter scan")
+	})
+
+	it("stays quiet for a remote page", async () => {
+		const tool = toolFor("[Page Error] SyntaxError: Unexpected token )")
+
+		const output = await run(tool, { action: "open", url: "http://localhost:3000" })
+
+		expect(output).toContain("SyntaxError")
+		expect(output).not.toContain("Delimiter scan")
+	})
+
+	it("is skipped, not fatal, when the file cannot be read", async () => {
+		const tool = toolFor("[Page Error] SyntaxError: Unexpected token )")
+
+		expect(await run(tool, { action: "open", url: "/repo/gone.html" })).toContain("SyntaxError")
 	})
 })
 

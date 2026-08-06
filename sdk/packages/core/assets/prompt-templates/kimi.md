@@ -150,6 +150,7 @@ Actions: `open` (with `url`; an absolute file path is accepted and converted), `
 
 Call it after editing any HTML, CSS or JavaScript, and before reporting a task finished — `check_file` cannot answer this, since no language server checks the script inside an `.html` file and a file that parses can still throw when it runs. `[error]` and `[Page Error]` lines are real failures; a page that printed nothing is a pass, not a failed call. The browser stays open between calls; `close` it when finished.
 
+A parse error from the browser names no line. For a local file a `Delimiter scan:` section follows it and names the *opening* bracket the parser could not match — read that instead of counting brackets yourself.
 # tool: code_intel
 Ask the IDE's language servers — the LSP — about a symbol. This is the LSP: if you are reaching for an LSP tool or an MCP server that wraps one, this is it, already running against this workspace. Use this before falling back to `search_codebase` for anything about a symbol. It is faster, exact, and does not need you to read files to interpret the result.
 

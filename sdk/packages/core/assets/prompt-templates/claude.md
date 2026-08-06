@@ -212,6 +212,7 @@ Actions: `open` (with `url` — an absolute file path is accepted and converted)
 
 Every action reports the console messages and uncaught errors produced while it ran. `[error]` and `[Page Error]` lines are real failures; a page that printed nothing is a pass, not a failed call. The browser stays open between calls, so `open` once and then interact; only one page is open at a time.
 
+A parse error from the browser names no line. For a local file a `Delimiter scan:` section follows it and names the *opening* bracket the parser could not match — read that instead of counting brackets yourself.
 # tool: code_intel
 Ask the IDE's language servers — the LSP — about a symbol. This is the LSP: if you are reaching for an LSP tool or an MCP server that wraps one, this is it, already running against this workspace. It understands the code, so it separates a definition from a mention, and this class's method from another class's method of the same name.
 

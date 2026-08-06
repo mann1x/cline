@@ -150,8 +150,9 @@ Actions:
 
 Every action reports the console messages and uncaught errors produced while it ran, so a syntax error, a failed fetch or a null dereference comes back as text you can act on. `[error]` and `[Page Error]` lines are real failures. A page that says nothing printed nothing — that is a pass, not a failed call.
 
-The browser stays open between calls, so `open` once and then interact. Only one page is open at a time; `open` again to go elsewhere.
+A parse error from the browser names no line, because the script never ran. For a local file a `Delimiter scan:` section follows it and names the *opening* bracket the parser could not match. Read that line instead of counting brackets yourself — counting a whole file by hand costs more thinking than you have, and the scan skips strings, comments and regex literals, which counting does not.
 
+The browser stays open between calls, so `open` once and then interact. Only one page is open at a time; `open` again to go elsewhere.
 # tool: code_intel
 Ask the IDE's language servers — the LSP — about a symbol. If you are reaching for an LSP tool or an MCP server that wraps one, this is it: the same protocol, already running against this workspace and its open files, with no server to start. This answers questions a text search cannot, because it understands the code: it distinguishes a definition from a mention, and this class's method from another class's method of the same name.
 
