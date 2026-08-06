@@ -146,6 +146,11 @@ export class VscodeSessionHost implements SdkSessionHost {
 						vscodeTerminalExecutionMode: getEffectiveTerminalExecutionMode(requestedTerminalExecutionMode),
 						foregroundCommands: options.foregroundCommands,
 					})
+					// The focus-chain settings have been reachable in the UI all
+					// along — enabled by default, with a reminder interval — while
+					// nothing read them, because the SDK path had no checklist at
+					// all. This is the wire between that setting and the behaviour.
+					const focusChainSettings = StateManager.get().getGlobalSettingsKey("focusChainSettings")
 					return {
 						...inputWithRemoteConfig,
 						source: inputWithRemoteConfig.source ?? "vscode",
@@ -153,6 +158,12 @@ export class VscodeSessionHost implements SdkSessionHost {
 							...inputWithRemoteConfig.config,
 							telemetry: inputWithRemoteConfig.config.telemetry ?? options.telemetry,
 							extraTools: [...(inputWithRemoteConfig.config.extraTools ?? []), ...extraTools],
+							taskProgress: {
+								enabled: focusChainSettings?.enabled ?? true,
+								...(focusChainSettings?.remindClineInterval !== undefined
+									? { reminderInterval: focusChainSettings.remindClineInterval }
+									: {}),
+							},
 						},
 					}
 				},

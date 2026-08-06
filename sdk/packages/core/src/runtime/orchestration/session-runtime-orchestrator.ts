@@ -435,7 +435,13 @@ export class SessionRuntime {
 		this.conversation = new ConversationStore(config.initialMessages);
 		// A host-configured cap wins over the environment: the env vars are the
 		// rollback lever, the setting is a choice someone actually made.
+		// The context window scales the stale-read rewrite threshold. Without it
+		// the builder falls back to a fixed 64KB, which on a measured 110k-token
+		// session left 13,801 bytes of correctly-detected superseded reads
+		// unreclaimed on every build.
+		const contextWindowTokens = tryGetModelInfo(config)?.contextWindow;
 		this.messageBuilder = new MessageBuilder({
+			...(contextWindowTokens !== undefined ? { contextWindowTokens } : {}),
 			...getMessageBuilderOptionsFromEnv(),
 			...(config.maxToolResultChars !== undefined
 				? { maxToolResultChars: config.maxToolResultChars }

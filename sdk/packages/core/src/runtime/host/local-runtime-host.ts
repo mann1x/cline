@@ -22,6 +22,7 @@ import {
 import type { ToolExecutors } from "../../extensions/tools";
 import { DefaultToolNames } from "../../extensions/tools";
 import {
+	findLatestTaskProgress,
 	TaskProgressTracker,
 	withTaskProgressCapture,
 } from "../../extensions/tools/task-progress";
@@ -594,6 +595,15 @@ export class LocalRuntimeHost implements RuntimeHost {
 						: {}),
 				})
 			: undefined;
+		// A resumed task would otherwise come back with an empty checklist and the
+		// model would be reminded of nothing. History is the durable copy — every
+		// call that carried a checklist is in it — so the tracker is warmed from
+		// the transcript rather than persisted separately.
+		taskProgressTracker?.hydrate(
+			findLatestTaskProgress(
+				initialMessages as readonly { content?: unknown }[] | undefined,
+			),
+		);
 		const tools = taskProgressTracker
 			? mergedTools.map((tool) =>
 					withTaskProgressCapture(tool, taskProgressTracker),

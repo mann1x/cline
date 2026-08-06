@@ -4,6 +4,7 @@ import {
 	buildTaskProgressReminder,
 	buildTaskProgressState,
 	DEFAULT_TASK_PROGRESS_REMINDER_INTERVAL,
+	findLatestTaskProgress,
 	parseTaskProgress,
 	readTaskProgress,
 	TASK_PROGRESS_PARAM,
@@ -340,5 +341,59 @@ describe("wrapping twice", () => {
 		// One call, not two: the reminder is still one call away.
 		expect(await twice.execute({}, {} as AgentToolContext)).toBe("contents")
 		expect(await twice.execute({}, {} as AgentToolContext)).toContain("<task_progress>")
+	})
+})
+
+describe("surviving a session restore", () => {
+	const transcript = [
+		{ role: "user", content: "fix the bugs" },
+		{
+			role: "assistant",
+			content: [
+				{ type: "tool_use", input: { [TASK_PROGRESS_PARAM]: "- [ ] a\n- [ ] b" } },
+			],
+		},
+		{
+			role: "assistant",
+			content: [
+				{ type: "text", text: "thinking" },
+				{ type: "tool_use", input: { [TASK_PROGRESS_PARAM]: "- [x] a\n- [ ] b" } },
+			],
+		},
+	]
+
+	it("finds the newest checklist in the transcript", () => {
+		expect(findLatestTaskProgress(transcript)).toBe("- [x] a\n- [ ] b")
+	})
+
+	it("returns nothing when no call ever carried one", () => {
+		expect(findLatestTaskProgress([{ role: "user", content: "hi" }])).toBeUndefined()
+		expect(findLatestTaskProgress(undefined)).toBeUndefined()
+		expect(findLatestTaskProgress([{ content: [null, "x", { type: "text" }] }])).toBeUndefined()
+	})
+
+	it("restores the checklist so a resumed task still gets reminded", () => {
+		const tracker = new TaskProgressTracker({ reminderInterval: 1 })
+		tracker.hydrate(findLatestTaskProgress(transcript))
+
+		expect(tracker.getState()).toMatchObject({ completed: 1, total: 2 })
+		// Without this the resumed session would remind the model of nothing.
+		expect(tracker.recordToolCall({})).toContain("- [ ] b")
+	})
+
+	// A restore is not the model saying something new; replaying it would
+	// re-emit a checklist the UI already has.
+	it("does not fire onUpdate", () => {
+		const onUpdate = vi.fn()
+		new TaskProgressTracker({ onUpdate }).hydrate("- [ ] a")
+		expect(onUpdate).not.toHaveBeenCalled()
+	})
+
+	it("never overwrites a live checklist with an older one", () => {
+		const tracker = new TaskProgressTracker()
+		tracker.recordToolCall({ [TASK_PROGRESS_PARAM]: "- [x] a\n- [x] b\n- [ ] c" })
+		tracker.hydrate("- [ ] a\n- [ ] b")
+
+		expect(tracker.getState()).toMatchObject({ completed: 2, total: 3 })
 	})
 })

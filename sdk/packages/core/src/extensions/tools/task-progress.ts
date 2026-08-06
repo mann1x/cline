@@ -169,6 +169,44 @@ export function buildTaskProgressReminder(state: TaskProgressState): string {
 }
 
 /**
+ * Find the most recent checklist in a transcript.
+ *
+ * Structurally typed rather than importing the message types: this reads one
+ * optional field out of tool-call inputs, and every shape it walks is
+ * defensively narrowed, so tying it to a concrete Message union would buy
+ * nothing but a dependency.
+ */
+export function findLatestTaskProgress(
+	messages: readonly { content?: unknown }[] | undefined,
+): string | undefined {
+	if (!messages) {
+		return undefined;
+	}
+	let latest: string | undefined;
+	for (const message of messages) {
+		if (!Array.isArray(message?.content)) {
+			continue;
+		}
+		for (const block of message.content) {
+			if (
+				!block ||
+				typeof block !== "object" ||
+				(block as { type?: unknown }).type !== "tool_use"
+			) {
+				continue;
+			}
+			const markdown = readTaskProgress((block as { input?: unknown }).input);
+			if (markdown !== undefined) {
+				// Later wins: the transcript is in order, and the newest checklist
+				// the model sent is the one it is working from.
+				latest = markdown;
+			}
+		}
+	}
+	return latest;
+}
+
+/**
  * Marks a tool that already carries the checklist wrapper. A symbol rather than
  * a field: it must not appear in anything that serializes a tool definition.
  */
@@ -210,6 +248,30 @@ export class TaskProgressTracker {
 	/** The checklist as last sent, or undefined if the model never sent one. */
 	getState(): TaskProgressState | undefined {
 		return this.state;
+	}
+
+	/**
+	 * Restore the checklist from history without treating it as a fresh update.
+	 *
+	 * The tracker is per-session memory, so a resumed task would otherwise come
+	 * back with an empty list and the model would be reminded of nothing. It
+	 * does not need to be persisted separately: every call that carried a
+	 * checklist is already in the transcript, so history is the durable copy and
+	 * this is a cache being warmed from it. Silent by design — a restore is not
+	 * the model saying something new, and firing `onUpdate` would replay a
+	 * checklist message the UI already has.
+	 *
+	 * Only fills an empty tracker; a live checklist is never overwritten by an
+	 * older one from history.
+	 */
+	hydrate(markdown: string | undefined): void {
+		if (this.state !== undefined || markdown === undefined) {
+			return;
+		}
+		const restored = buildTaskProgressState(markdown);
+		if (restored.total > 0) {
+			this.state = restored;
+		}
 	}
 
 	/**

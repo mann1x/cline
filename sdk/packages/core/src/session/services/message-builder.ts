@@ -43,9 +43,66 @@ export const DEFAULT_MAX_FILE_CONTENT_CHARS = 50_000;
 export const DEFAULT_MAX_TOTAL_TEXT_BYTES = 6_000_000;
 export const DEFAULT_MAX_ASSISTANT_TEXT_CHARS = 200_000;
 export const DEFAULT_MAX_ASSISTANT_TOOL_MARKUP_CHARS = 12_000;
-// Batch stale-read rewrites to avoid breaking provider prefix caches on every re-read.
-// 64KB is roughly 8 provider-capped read results; set to 0 for eager rewriting.
+// Batch stale-read rewrites to avoid breaking provider prefix caches on every
+// re-read. Set to 0 for eager rewriting.
+//
+// This fixed value is now only the fallback for an unknown context window;
+// production scales it — see `resolveMinOutdatedRewriteBytes`. A static 64KB
+// was the whole bug. Measured on a live 110k-token session: the builder
+// correctly identified two superseded reads with 13,801 bytes to reclaim, and
+// declined to act because 13,801 < 65,536. Nothing was ever reclaimed, the
+// transcript kept growing, and the run died on the max-output-token error that
+// context growth produces.
 export const DEFAULT_MIN_OUTDATED_REWRITE_BYTES = 65_536;
+/**
+ * Bytes of transcript text one token stands for, near enough for a threshold.
+ * Deliberately crude: this decides whether a cleanup is worth a cache break,
+ * not whether a request fits.
+ */
+const APPROX_BYTES_PER_TOKEN = 4;
+/**
+ * Share of the context window that must be reclaimable before stale reads are
+ * rewritten.
+ *
+ * A rewrite invalidates the provider's prefix cache from that point onward, so
+ * it has to buy back enough to be worth the break. Expressing that as a share
+ * of the window is the only way it can be right at both ends of the range:
+ * 64KB is a rounding error in a 1M-token context and more than a 32k context
+ * can hold at all.
+ */
+const OUTDATED_REWRITE_CONTEXT_SHARE = 0.02;
+/** Never churn the prefix cache for less than this. */
+const MIN_OUTDATED_REWRITE_FLOOR_BYTES = 4_096;
+/** Never let stale content grow past this, however large the window. */
+const MIN_OUTDATED_REWRITE_CEILING_BYTES = 65_536;
+
+/**
+ * Scale the stale-read rewrite threshold to the model's context window.
+ *
+ * Falls back to the fixed default when the window is unknown, so a caller that
+ * cannot say keeps the previous behaviour rather than guessing.
+ */
+export function resolveMinOutdatedRewriteBytes(
+	contextWindowTokens: number | undefined,
+): number {
+	if (
+		typeof contextWindowTokens !== "number" ||
+		!Number.isFinite(contextWindowTokens) ||
+		contextWindowTokens <= 0
+	) {
+		return DEFAULT_MIN_OUTDATED_REWRITE_BYTES;
+	}
+	const scaled =
+		contextWindowTokens *
+		APPROX_BYTES_PER_TOKEN *
+		OUTDATED_REWRITE_CONTEXT_SHARE;
+	return Math.round(
+		Math.min(
+			MIN_OUTDATED_REWRITE_CEILING_BYTES,
+			Math.max(MIN_OUTDATED_REWRITE_FLOOR_BYTES, scaled),
+		),
+	);
+}
 const MIN_TOTAL_BUDGET_TOOL_RESULT_BYTES = 2_000;
 const MIN_TOTAL_BUDGET_ASSISTANT_TEXT_BYTES = 40_000;
 const REPEATED_TOOL_CALL_MARKUP_THRESHOLD = 8;
@@ -149,6 +206,11 @@ export interface MessageBuilderOptions {
 	maxAssistantTextChars?: number;
 	maxAssistantToolMarkupChars?: number;
 	minOutdatedRewriteBytes?: number;
+	/**
+	 * The model's context window, in tokens. Scales the stale-read rewrite
+	 * threshold; ignored when `minOutdatedRewriteBytes` is given explicitly.
+	 */
+	contextWindowTokens?: number;
 }
 
 export function getMessageBuilderOptionsFromEnv(
@@ -219,9 +281,11 @@ export class MessageBuilder {
 			options.maxAssistantToolMarkupChars,
 			DEFAULT_MAX_ASSISTANT_TOOL_MARKUP_CHARS,
 		);
+		// An explicit value still wins — the env var is the rollback lever, and a
+		// host that names a number meant it. Only the fallback is scaled.
 		this.minOutdatedRewriteBytes = normalizeNonNegativeLimit(
 			options.minOutdatedRewriteBytes,
-			DEFAULT_MIN_OUTDATED_REWRITE_BYTES,
+			resolveMinOutdatedRewriteBytes(options.contextWindowTokens),
 		);
 	}
 
