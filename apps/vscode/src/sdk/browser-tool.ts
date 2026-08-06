@@ -47,7 +47,7 @@ Actions:
 
 Every action reports the console messages and uncaught errors produced while it ran, so a syntax error, a failed fetch or a null dereference comes back as text you can act on. \`[error]\` and \`[Page Error]\` lines are real failures. A page that says nothing printed nothing — that is a pass, not a failed call.
 
-A parse error from the browser names no line, because the script never ran. For a local file a \`Delimiter scan:\` section follows it and names the *opening* bracket the parser could not match. Read that line instead of counting brackets yourself — counting a whole file by hand costs more thinking than you have, and the scan skips strings, comments and regex literals, which counting does not.
+A parse error from the browser names no line, because the script never ran. For a local file a \`Delimiter scan\` section follows it and names the *opening* bracket the parser could not match — one line per place the trouble starts, since a file can be broken in several spots at once. Fix every line it lists in one edit and reload once, rather than one edit and one reload per line. Read those lines instead of counting brackets yourself: counting a whole file by hand costs more thinking than you have, and the scan skips strings, comments and regex literals, which counting does not.
 
 The browser stays open between calls, so \`open\` once and then interact. Only one page is open at a time; \`open\` again to go elsewhere.`
 

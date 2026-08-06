@@ -134,8 +134,7 @@ Read a clean result carefully. "No problems reported by the editor" is conclusiv
 
 Output: plain text, one section per file you named, each problem on its own line as `file:line:column` with its severity and message. A file with nothing wrong says so in one line. There is no object to unpack and no `success` field — problems being listed is this tool working, not failing.
 
-When a file's brackets do not match, a `Delimiter scan:` section names the *opening* bracket involved. A parse error is always reported where the parser gave up, which is the closing bracket; the opener is the one you have to edit, and it is the one the error cannot name. Trust that line over counting brackets yourself — it skips strings, comments and regex literals, which counting characters does not. The scan runs whether or not the editor reported anything, so it can appear beneath a file the editor called clean — no language server checks the script inside an `.html` file, and there this is the only report you will get.
-
+When a file's brackets do not match, a `Delimiter scan` section names the *opening* bracket involved, and one line per place the trouble starts — a file can be broken in several spots at once, so fix every line it lists in one edit rather than one per round trip. A parse error is always reported where the parser gave up, which is the closing bracket; the opener is the one you have to edit, and it is the one the error cannot name. Trust those lines over counting brackets yourself — the scan skips strings, comments and regex literals, which counting characters does not. It runs whether or not the editor reported anything, so it can appear beneath a file the editor called clean — no language server checks the script inside an `.html` file, and there this is the only report you will get.
 # tool: browser
 Open a page in a real browser and report what it printed to the console and what it threw. This is how you check that a page works. Do not ask the user whether it works — open it and read the errors yourself.
 
@@ -150,7 +149,7 @@ Actions:
 
 Every action reports the console messages and uncaught errors produced while it ran, so a syntax error, a failed fetch or a null dereference comes back as text you can act on. `[error]` and `[Page Error]` lines are real failures. A page that says nothing printed nothing — that is a pass, not a failed call.
 
-A parse error from the browser names no line, because the script never ran. For a local file a `Delimiter scan:` section follows it and names the *opening* bracket the parser could not match. Read that line instead of counting brackets yourself — counting a whole file by hand costs more thinking than you have, and the scan skips strings, comments and regex literals, which counting does not.
+A parse error from the browser names no line, because the script never ran. For a local file a `Delimiter scan` section follows it and names the *opening* bracket the parser could not match — one line per place the trouble starts, since a file can be broken in several spots at once. Fix every line it lists in one edit and reload once, rather than one edit and one reload per line. Read those lines instead of counting brackets yourself: counting a whole file by hand costs more thinking than you have, and the scan skips strings, comments and regex literals, which counting does not.
 
 The browser stays open between calls, so `open` once and then interact. Only one page is open at a time; `open` again to go elsewhere.
 # tool: code_intel

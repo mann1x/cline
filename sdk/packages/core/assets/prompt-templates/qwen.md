@@ -209,7 +209,7 @@ Check files for errors and warnings using the IDE's language servers (LSP). Thes
 - **Parallelism**: Pass all files to check in the `paths` array.
 - **Arguments**: `paths` is an array of strings.
 - **Output**: Plain text listing problems per file (`file:line:column severity message`). If no problems are reported, the file is valid according to the IDE. Note: This does not run tests or builds; use `run_commands` for those.
-When a file's brackets do not match, a `Delimiter scan:` section names the *opening* bracket involved. A parse error is always reported where the parser gave up, which is the closing bracket; the opener is the one you have to edit, and it is the one the error cannot name. Trust that line over counting brackets yourself — it skips strings, comments and regex literals. It runs even when the editor reported nothing, which is the only report you get for script inside an `.html` file.
+When a file's brackets do not match, a `Delimiter scan` section names the *opening* bracket involved, one line per place the trouble starts — fix every line it lists in one edit. A parse error is always reported where the parser gave up, which is the closing bracket; the opener is the one you have to edit, and it is the one the error cannot name. Trust that line over counting brackets yourself — it skips strings, comments and regex literals. It runs even when the editor reported nothing, which is the only report you get for script inside an `.html` file.
 
 # tool: browser
 Open a page in a real browser and report its console output and uncaught errors. Use it to verify a page yourself instead of asking the user whether it works.
@@ -218,7 +218,7 @@ Open a page in a real browser and report its console output and uncaught errors.
 - **Arguments**: `action` is one of `open`, `click`, `type`, `scroll_down`, `scroll_up`, `close`. `open` takes `url` (an absolute file path is accepted and converted). `click` takes `coordinate` as `"x,y"` in page pixels. `type` takes `text`.
 - **Output**: The console messages and uncaught errors produced while the action ran. `[error]` and `[Page Error]` lines are real failures. A page that printed nothing is a pass, not a failed call.
 - **Session**: The browser stays open between calls, so `open` once and then interact. `close` when finished.
-A parse error from the browser names no line. For a local file a `Delimiter scan:` section follows it and names the *opening* bracket the parser could not match — read that instead of counting brackets yourself.
+A parse error from the browser names no line. For a local file a `Delimiter scan` section follows it and names the *opening* bracket the parser could not match, one line per place the trouble starts — fix every line it lists in one edit rather than one reload per line, and read those lines instead of counting brackets yourself.
 {{DEFAULT}}
 
 # tool: code_intel

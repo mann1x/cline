@@ -77,6 +77,39 @@ describe("describeDelimiterBalance", () => {
 		expect(report).toContain("`{` opened at line 1, column 22 is closed by `)` at line 1, column 29")
 	})
 
+	it("names every line that does not balance, not just the first", () => {
+		// Measured: a real file had five separately broken lines, each a
+		// minified one-liner ending `}})` where it should end `});`. Reporting
+		// two of them sent the model round the loop — edit, reload, read, edit —
+		// once per line, and it fixed a line the report had not named.
+		const source = [
+			"<script>",
+			"a.forEach(p=>{if(p){x();}})}",
+			"b.forEach(p=>{if(p){y();}})}",
+			"c.forEach(p=>{if(p){z();}})}",
+			"</script>",
+		].join("\n")
+
+		const report = describeDelimiterBalance("game.html", source)
+
+		expect(report).toContain("line(s) do not balance")
+		expect(report).toContain("line 2")
+		expect(report).toContain("line 3")
+		expect(report).toContain("line 4")
+	})
+
+	it("reports one line once, however many crossings it holds", () => {
+		const report = describeDelimiterBalance("app.ts", "function f(){ if (a) { b(); ) } ) }")
+		const named = (report ?? "").split("\n").filter((line) => line.startsWith("  the ") || line.startsWith("  `"))
+		expect(named).toHaveLength(1)
+	})
+
+	it("keeps the singular heading when only one line is at fault", () => {
+		const report = describeDelimiterBalance("app.ts", "function f(){ if (a) { b(); ) }")
+		expect(report).toContain("Delimiter scan:")
+		expect(report).toContain("Fix that opener")
+	})
+
 	it("scans script bodies in HTML at their real line numbers", () => {
 		const html = ["<!DOCTYPE html>", "<body>", "<script>", "function f(){ g(); ) }", "</script>", "</body>"].join("\n")
 		const report = describeDelimiterBalance("game.html", html)
