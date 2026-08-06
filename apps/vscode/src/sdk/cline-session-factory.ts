@@ -1085,7 +1085,16 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 
 	// Tell the model about the cap its reply will actually be truncated at.
 	try {
-		const outputCap = maxTokensPerTurn ?? DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS
+		// Both figures below answer the same question: what will the server
+		// actually hold this reply to. A configured `num_predict` is that
+		// answer — it goes on the wire ahead of the session's cap and wins — so
+		// the prompt has to say it. Stating the fallback while sending something
+		// smaller tells the model it has room it does not have, which is the
+		// same defect as the context window and fails the same way.
+		const ollamaProviderConfig =
+			toSdkProviderId(providerId) === "ollama" && apiConfig ? resolveOllamaProviderConfig(apiConfig, modelId) : undefined
+		const configuredNumPredict = positiveFiniteNumber(ollamaProviderConfig?.sampling?.numPredict)
+		const outputCap = configuredNumPredict ?? maxTokensPerTurn ?? DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS
 		// The window Ollama is actually given, not the one the catalog guessed.
 		// These came from different places and disagreed: `num_ctx` on the wire
 		// comes from `resolveOllamaProviderConfig` reading providers.json, while
@@ -1095,10 +1104,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		// 128000 — eighteen thousand tokens of room it did not have, in the
 		// direction that overruns rather than wastes. Same resolver for both is
 		// the only way they cannot drift.
-		const wireContextWindow =
-			toSdkProviderId(providerId) === "ollama" && apiConfig
-				? positiveFiniteNumber(resolveOllamaProviderConfig(apiConfig, modelId).modelInfo?.contextWindow)
-				: undefined
+		const wireContextWindow = positiveFiniteNumber(ollamaProviderConfig?.modelInfo?.contextWindow)
 		const contextWindow = wireContextWindow ?? positiveFiniteNumber(committedRuntimeModel?.modelInfo?.contextWindow)
 		const thinking = await resolveOllamaThinkingAllowance(
 			providerId,

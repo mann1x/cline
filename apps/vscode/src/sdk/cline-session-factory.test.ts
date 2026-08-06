@@ -1355,6 +1355,22 @@ describe("resolveOllamaProviderConfig", () => {
 		expect(resolved.modelInfo?.contextWindow).toBe(110_000)
 	})
 
+	it("surfaces a configured num_predict, which is the cap the server enforces", () => {
+		// `num_predict` goes on the wire ahead of the session's own cap and wins,
+		// so it is the number the reply is actually truncated at — and therefore
+		// the only number the system prompt may state. Saying the fallback while
+		// sending something smaller is the same defect as the context window.
+		mocks.providerSettingsManager.getProviderSettings.mockReturnValue({
+			contextWindow: 110_000,
+			sampling: { numPredict: 20_000 },
+		} as never)
+
+		const resolved = resolveOllamaProviderConfig({} as never, "v7-coder_tb:vision-iq4_nl")
+
+		expect(resolved.sampling?.numPredict).toBe(20_000)
+		expect(resolved.modelInfo?.contextWindow).toBe(110_000)
+	})
+
 	it("falls back to the legacy field only when providers.json carries nothing", () => {
 		mocks.providerSettingsManager.getProviderSettings.mockReturnValue(undefined as never)
 
