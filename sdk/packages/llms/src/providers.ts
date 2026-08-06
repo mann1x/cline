@@ -132,3 +132,7 @@ export async function createHandlerAsync(
 
 	return createGatewayApiHandlerAsync(normalizedConfig);
 }
+// The level an Ollama request stands for when none is set. Exported because
+// it decides the thinking budget the server enforces, so anything asking the
+// server what that budget will be has to ask about this level.
+export { OLLAMA_DEFAULT_REASONING_EFFORT } from "./providers/vendors/ollama";

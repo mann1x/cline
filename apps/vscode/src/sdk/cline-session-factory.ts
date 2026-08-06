@@ -27,15 +27,9 @@ import {
 	isProviderApiLine,
 	MODEL_COLLECTIONS_BY_PROVIDER_ID,
 	OLLAMA_DEFAULT_CONTEXT_WINDOW,
+	OLLAMA_DEFAULT_REASONING_EFFORT,
 } from "@cline/llms"
-import {
-	type AgentHooks,
-	buildClineSystemPrompt,
-	canonicalOllamaThinkLevel,
-	OLLAMA_DEFAULT_THINK_LEVEL,
-	type RenderedPromptTemplate,
-	resolveOllamaThinkBudget,
-} from "@cline/shared"
+import { type AgentHooks, buildClineSystemPrompt, type RenderedPromptTemplate } from "@cline/shared"
 import type { ApiConfiguration } from "@shared/api"
 import { ClineClient } from "@shared/cline"
 import type { HistoryItem } from "@shared/HistoryItem"
@@ -60,6 +54,7 @@ import { nonNegativeFiniteNumber, positiveFiniteNumber, toSdkApiFormat } from ".
 import { parseProviderId } from "./model-catalog/provider-id"
 import { toSdkProviderId } from "./model-catalog/sdk-provider-id"
 import { createProviderConfigStore, resolveRuntimeModelSelection } from "./model-catalog/store"
+import { resolveOllamaThinkBudget } from "./ollama-model-family"
 import { resolveSessionPromptTemplate } from "./prompt-templates"
 import { getProviderSettingsManager } from "./provider-migration"
 import { buildSapProviderConfig, type SapProviderConfig } from "./sap-config"
@@ -371,57 +366,50 @@ export function buildOutputBudgetSection(
 /**
  * The thinking allowance an Ollama turn will actually be held to.
  *
- * Ollama computes this server-side — a level is a fraction of
- * `min(num_predict, num_ctx)` — using its own table, which is not the AI SDK
- * effort scale. `resolveOllamaThinkBudget` mirrors that arithmetic so the
- * number in the prompt is the number the server will enforce, and so a literal
- * `think_budget` that has stopped fitting the response cap is reported at the
- * value it will really be held to rather than the one someone typed once.
+ * Asked of the server, never derived here. The budget is a share of the room
+ * the response has, resolved by Ollama from its own table, so a copy of that
+ * table on this side would have to be kept in step with it — and a stale copy
+ * would put a bound in the system prompt that the model is not held to, which
+ * is worse than saying nothing. `/api/show` answers for the think value and
+ * options this session will actually send.
  *
- * Returns undefined for every other provider: no other one here enforces a
- * separate thinking cap, and inventing a figure would be worse than silence.
- *
- * Exported for tests: the arithmetic is the behaviour. Handing a number to
- * `buildOutputBudgetSection` only proves the sentence renders — this is the
- * function that has to agree with the server's table.
+ * Returns undefined for every other provider, and for an Ollama that does not
+ * report a budget: no other provider here enforces a separate thinking cap, and
+ * an invented figure would be worse than silence.
  */
-export function resolveOllamaThinkingAllowance(
+export async function resolveOllamaThinkingAllowance(
 	providerId: string,
 	reasoning: SessionReasoningConfig,
 	outputCap: number,
 	contextWindow: number | undefined,
-): { level: string; budgetTokens: number } | undefined {
-	if (toSdkProviderId(providerId) !== "ollama" || reasoning.thinking === false) {
+	baseUrl: string | undefined,
+	modelId: string | undefined,
+): Promise<{ level: string; budgetTokens: number } | undefined> {
+	if (toSdkProviderId(providerId) !== "ollama" || reasoning.thinking === false || !modelId) {
 		return undefined
 	}
 
-	let thinkBudget: string | undefined
 	let numPredict: number | undefined
 	try {
 		const settings = getProviderSettingsManager(resolveDataDir()).getProviderSettings(providerSettingsProviderId(providerId))
-		const sampling = settings?.sampling
-		thinkBudget = typeof sampling?.thinkBudget === "string" ? sampling.thinkBudget : undefined
-		numPredict = positiveFiniteNumber(sampling?.numPredict)
+		numPredict = positiveFiniteNumber(settings?.sampling?.numPredict)
 	} catch (error) {
-		// Advisory: a prompt without the figure is worse than no prompt at all.
+		// Advisory: the session's own cap is the sensible stand-in.
 		Logger.warn("[SessionFactory] Failed to read Ollama sampling settings:", error)
 	}
 
-	// A configured `num_predict` is the cap the server will apply, so it is the
-	// window the level is a share of — the agent's own per-turn cap only wins
-	// when nothing more specific was set.
-	const level = canonicalOllamaThinkLevel(
-		thinkBudget && !/^\d+$/.test(thinkBudget.trim())
-			? thinkBudget
-			: (reasoning.reasoningEffort ?? OLLAMA_DEFAULT_THINK_LEVEL),
-	)
-	const resolved = resolveOllamaThinkBudget({
-		thinkBudget,
-		level,
-		numCtx: contextWindow,
+	// The level this session will send. The vendor fills in its default when
+	// nothing set one, so that is the level to ask about — asking about "no
+	// level" would answer for a request this session never makes.
+	const think = reasoning.reasoningEffort ?? OLLAMA_DEFAULT_REASONING_EFFORT
+	return resolveOllamaThinkBudget(baseUrl, modelId, {
+		think,
+		// A configured num_predict is the cap the server will apply; the
+		// agent's own per-turn cap only stands in when nothing more specific
+		// was set.
 		numPredict: numPredict ?? outputCap,
+		numCtx: contextWindow,
 	})
-	return resolved.tokens > 0 ? { level, budgetTokens: resolved.tokens } : undefined
 }
 
 function resolveCommittedRuntimeModel(
@@ -1099,7 +1087,14 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	try {
 		const outputCap = maxTokensPerTurn ?? DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS
 		const contextWindow = positiveFiniteNumber(committedRuntimeModel?.modelInfo?.contextWindow)
-		const thinking = resolveOllamaThinkingAllowance(providerId, reasoningConfig, outputCap, contextWindow)
+		const thinking = await resolveOllamaThinkingAllowance(
+			providerId,
+			reasoningConfig,
+			outputCap,
+			contextWindow,
+			apiConfig ? resolveBaseUrl(providerId, apiConfig) : undefined,
+			modelId,
+		)
 		systemPrompt = `${systemPrompt}${buildOutputBudgetSection(outputCap, contextWindow, thinking)}`
 		Logger.log(
 			`[SessionFactory] Output budget: cap=${outputCap} contextWindow=${contextWindow ?? "unknown"}` +

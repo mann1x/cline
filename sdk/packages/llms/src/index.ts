@@ -90,6 +90,7 @@ export {
 	isRegisteredHandlerAsync,
 	normalizeProviderId,
 	OLLAMA_DEFAULT_CONTEXT_WINDOW,
+	OLLAMA_DEFAULT_REASONING_EFFORT,
 	type ProviderApiLine,
 	registerAsyncHandler,
 	registerHandler,

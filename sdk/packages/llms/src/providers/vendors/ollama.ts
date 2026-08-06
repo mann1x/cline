@@ -15,7 +15,6 @@ import type {
 	GatewayResolvedProviderConfig,
 	GatewayStreamRequest,
 } from "@cline/shared";
-import { OLLAMA_DEFAULT_THINK_LEVEL } from "@cline/shared";
 import { type CallSettings, wrapLanguageModel } from "ai";
 import { createOllama } from "ai-sdk-ollama";
 import { buildAiSdkStreamConfig } from "../ai-sdk";
@@ -264,11 +263,11 @@ export async function createOllamaProviderModule(
  * the response the model may spend inside the thinking block, so the middle of
  * the scale is the reading that leaves room for an answer.
  *
- * Defined in `@cline/shared` alongside the budget table that costs the level
- * out, so the level the wire defaults to and the level anything else predicts
- * a budget from are the same value.
+ * Exported because the level decides the thinking budget the server will
+ * enforce, and anything that wants to report that budget has to ask about the
+ * level that will actually be sent.
  */
-export const OLLAMA_DEFAULT_REASONING_EFFORT = OLLAMA_DEFAULT_THINK_LEVEL;
+export const OLLAMA_DEFAULT_REASONING_EFFORT = "medium" as const;
 
 /**
  * Ollama's stream config: the shared one, plus a level whenever the request did

@@ -3,12 +3,7 @@ import os from "node:os"
 import path from "node:path"
 import type { CoreSessionConfig } from "@cline/core"
 import * as LlmsModels from "@cline/llms"
-import {
-	OLLAMA_DEFAULT_THINK_LEVEL,
-	OLLAMA_THINK_BUDGET_FRACTIONS,
-	ollamaThinkBudgetTokens,
-	ollamaThinkBudgetWindow,
-} from "@cline/shared"
+import { OLLAMA_DEFAULT_REASONING_EFFORT } from "@cline/llms"
 import { ApiFormat } from "@shared/proto/cline/models"
 import { Logger } from "@shared/services/Logger"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -41,6 +36,7 @@ const mocks = vi.hoisted(() => {
 	return {
 		getDistinctId: vi.fn(() => "test-distinct-id"),
 		getProviderSettingsManager: vi.fn(() => providerSettingsManager),
+		resolveOllamaThinkBudget: vi.fn(async (): Promise<{ level: string; budgetTokens: number } | undefined> => undefined),
 		providerSettingsManager,
 		stateManager: {
 			getApiConfiguration: vi.fn(() => ({
@@ -73,6 +69,11 @@ vi.mock("@/services/logging/distinctId", () => ({
 
 vi.mock("./provider-migration", () => ({
 	getProviderSettingsManager: mocks.getProviderSettingsManager,
+}))
+
+vi.mock("./ollama-model-family", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./ollama-model-family")>()),
+	resolveOllamaThinkBudget: mocks.resolveOllamaThinkBudget,
 }))
 
 vi.mock("@shared/services/Logger", () => ({
@@ -1315,13 +1316,11 @@ describe("buildOutputBudgetSection", () => {
 		// A model told only the outer number reads all of it as room to think
 		// in, and spends the turn doing exactly that.
 		//
-		// The figure is derived, not typed: this asserts the sentence carries
-		// whatever the shared table says, so changing a fraction cannot leave a
-		// stale number in the prompt while the test still passes.
-		const budgetTokens = ollamaThinkBudgetTokens("medium", ollamaThinkBudgetWindow(128_000, 32_000))
+		// The figure is whatever the server reported; this only pins that the
+		// sentence carries it through unchanged.
+		const budgetTokens = 4321
 		const section = buildOutputBudgetSection(32_000, 128_000, { level: "medium", budgetTokens })
 
-		expect(budgetTokens).toBeGreaterThan(0)
 		expect(section).toContain(`at most ${budgetTokens} tokens may be spent thinking (effort medium)`)
 		expect(section).toContain("reach a decision inside it")
 	})
@@ -1342,75 +1341,107 @@ describe("buildOutputBudgetSection", () => {
 describe("resolveOllamaThinkingAllowance", () => {
 	beforeEach(() => {
 		mocks.providerSettingsManager.getProviderSettings.mockReturnValue(undefined)
+		mocks.resolveOllamaThinkBudget.mockResolvedValue(undefined)
 	})
 
-	it("agrees with the server's table for every budgeted level", () => {
-		// The check the formatter cannot make. Each level is asserted against
-		// the fraction Ollama will apply, so a divergence between this side and
-		// `api/types.go` fails here rather than in a live session.
-		for (const [level, [numerator, denominator]] of Object.entries(OLLAMA_THINK_BUDGET_FRACTIONS)) {
-			const allowance = resolveOllamaThinkingAllowance("ollama", { reasoningEffort: level as never }, 32_000, 128_000)
+	it("reports the budget the server resolved, never one derived here", async () => {
+		// The whole point: Ollama computes the budget from its own table, so
+		// whatever it answers is the number the model is held to. Nothing on
+		// this side recomputes it, and a changed fraction upstream cannot make
+		// the prompt state a bound that is not enforced.
+		mocks.resolveOllamaThinkBudget.mockResolvedValue({ level: "medium", budgetTokens: 4321 })
 
-			expect(allowance).toEqual({ level, budgetTokens: Math.floor((32_000 * numerator) / denominator) })
-		}
+		const allowance = await resolveOllamaThinkingAllowance(
+			"ollama",
+			{ reasoningEffort: "medium" },
+			32_000,
+			128_000,
+			"http://localhost:11434",
+			"v7-coder",
+		)
+
+		expect(allowance).toEqual({ level: "medium", budgetTokens: 4321 })
 	})
 
-	it("divides the response cap, not the context window", () => {
-		// The failure mode: a share of a 128k context is not a bound on a reply
-		// that will be cut off at 32k.
-		const allowance = resolveOllamaThinkingAllowance("ollama", { reasoningEffort: "medium" }, 32_000, 128_000)
+	it("asks about the think value and options the session will actually send", async () => {
+		await resolveOllamaThinkingAllowance(
+			"ollama",
+			{ reasoningEffort: "high" },
+			8_000,
+			128_000,
+			"http://localhost:11434",
+			"v7-coder",
+		)
 
-		expect(allowance?.budgetTokens).toBe(8_000)
-		expect(allowance?.budgetTokens).toBeLessThan(32_000)
+		expect(mocks.resolveOllamaThinkBudget).toHaveBeenCalledWith("http://localhost:11434", "v7-coder", {
+			think: "high",
+			numPredict: 8_000,
+			numCtx: 128_000,
+		})
 	})
 
-	it("shrinks with the response cap as the conversation grows", () => {
-		const roomy = resolveOllamaThinkingAllowance("ollama", { reasoningEffort: "medium" }, 26_538, 128_000)
-		const cramped = resolveOllamaThinkingAllowance("ollama", { reasoningEffort: "medium" }, 1_232, 128_000)
+	it("asks about the level the vendor will fill in when none is set", async () => {
+		// Asking about "no level" would answer for a request this session never
+		// makes: the Ollama vendor supplies its default when reasoning is unset.
+		await resolveOllamaThinkingAllowance("ollama", {}, 8_000, 128_000, "http://localhost:11434", "v7-coder")
 
-		expect(roomy?.budgetTokens).toBe(6_634)
-		expect(cramped?.budgetTokens).toBe(308)
+		expect(mocks.resolveOllamaThinkBudget).toHaveBeenCalledWith(
+			"http://localhost:11434",
+			"v7-coder",
+			expect.objectContaining({ think: OLLAMA_DEFAULT_REASONING_EFFORT }),
+		)
 	})
 
-	it("defaults to the level the wire defaults to", () => {
-		const allowance = resolveOllamaThinkingAllowance("ollama", {}, 32_000, 128_000)
-
-		expect(allowance?.level).toBe(OLLAMA_DEFAULT_THINK_LEVEL)
-	})
-
-	it("resolves xhigh to the level Ollama knows it by", () => {
-		const allowance = resolveOllamaThinkingAllowance("ollama", { reasoningEffort: "xhigh" }, 32_000, 128_000)
-
-		expect(allowance?.level).toBe("max")
-		expect(allowance?.budgetTokens).toBe(Math.floor((32_000 * 4) / 5))
-	})
-
-	it("clamps a configured literal budget that no longer fits the cap", () => {
-		mocks.providerSettingsManager.getProviderSettings.mockReturnValue({
-			sampling: { thinkBudget: "8192" },
-		} as never)
-
-		const allowance = resolveOllamaThinkingAllowance("ollama", { reasoningEffort: "medium" }, 1_232, 128_000)
-
-		expect(allowance?.budgetTokens).toBe(308)
-	})
-
-	it("treats a configured num_predict as the cap the server will apply", () => {
+	it("prefers a configured num_predict as the cap the server will apply", async () => {
 		mocks.providerSettingsManager.getProviderSettings.mockReturnValue({
 			sampling: { numPredict: 4_000 },
 		} as never)
 
-		const allowance = resolveOllamaThinkingAllowance("ollama", { reasoningEffort: "medium" }, 32_000, 128_000)
+		await resolveOllamaThinkingAllowance(
+			"ollama",
+			{ reasoningEffort: "medium" },
+			32_000,
+			128_000,
+			"http://localhost:11434",
+			"v7-coder",
+		)
 
-		expect(allowance?.budgetTokens).toBe(1_000)
+		expect(mocks.resolveOllamaThinkBudget).toHaveBeenCalledWith(
+			"http://localhost:11434",
+			"v7-coder",
+			expect.objectContaining({ numPredict: 4_000 }),
+		)
 	})
 
-	it("says nothing for providers that do not enforce a thinking cap", () => {
-		expect(resolveOllamaThinkingAllowance("anthropic", { reasoningEffort: "medium" }, 32_000, 128_000)).toBeUndefined()
+	it("says nothing when the server reports no budget", async () => {
+		// An older Ollama, or a model with no bound at all. Silence beats a
+		// guess, because the guess would go into the system prompt as fact.
+		mocks.resolveOllamaThinkBudget.mockResolvedValue(undefined)
+
+		await expect(
+			resolveOllamaThinkingAllowance("ollama", { reasoningEffort: "medium" }, 32_000, 128_000, undefined, "v7-coder"),
+		).resolves.toBeUndefined()
 	})
 
-	it("says nothing when thinking is switched off", () => {
-		expect(resolveOllamaThinkingAllowance("ollama", { thinking: false }, 32_000, 128_000)).toBeUndefined()
+	it("never asks for providers that do not enforce a thinking cap", async () => {
+		await expect(
+			resolveOllamaThinkingAllowance("anthropic", { reasoningEffort: "medium" }, 32_000, 128_000, undefined, "claude"),
+		).resolves.toBeUndefined()
+		expect(mocks.resolveOllamaThinkBudget).not.toHaveBeenCalled()
+	})
+
+	it("never asks when thinking is switched off", async () => {
+		await expect(
+			resolveOllamaThinkingAllowance("ollama", { thinking: false }, 32_000, 128_000, undefined, "v7-coder"),
+		).resolves.toBeUndefined()
+		expect(mocks.resolveOllamaThinkBudget).not.toHaveBeenCalled()
+	})
+
+	it("never asks without a model to ask about", async () => {
+		await expect(
+			resolveOllamaThinkingAllowance("ollama", { reasoningEffort: "medium" }, 32_000, 128_000, undefined, undefined),
+		).resolves.toBeUndefined()
+		expect(mocks.resolveOllamaThinkBudget).not.toHaveBeenCalled()
 	})
 })
 
