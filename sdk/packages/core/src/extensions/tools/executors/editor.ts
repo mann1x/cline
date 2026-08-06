@@ -457,7 +457,7 @@ async function replaceLineRange(
 		unchanged > 0
 			? ` (${unchanged} of the ${requestedLines} line(s) in the range were already identical, so the diff below does not show them)`
 			: "";
-	return `Replaced ${range} in ${filePath}${note}\n${diff}${lineCountNote(content, updated, effectiveEndLine)}`;
+	return `Replaced ${range} in ${filePath}${note}\n${diff}${lineCountNote(content, updated, effectiveEndLine, filePath)}`;
 }
 
 /**
@@ -472,12 +472,20 @@ async function replaceLineRange(
  * edits landed on it.
  *
  * Only reported when the count actually changed; a same-size edit shifts
- * nothing and the note would be noise.
+ * nothing and the note would be noise — and it also leaves the read receipt
+ * intact, so the instruction to read again would be wrong as well as noisy.
+ *
+ * The note names the next action rather than only the fact, because stating
+ * the fact was not enough. Measured: a model read this, composed a large
+ * replacement anyway, and had it refused for editing from a retired read —
+ * minutes of generation thrown away. The cost of skipping the read is the
+ * part it needs to know, so the note says it.
  */
 function lineCountNote(
 	oldContent: string,
 	newContent: string,
 	editedThroughLine: number,
+	filePathForNote = "this file",
 ): string {
 	const before = oldContent.split(/\r\n|\n/).length;
 	const after = newContent.split(/\r\n|\n/).length;
@@ -486,7 +494,7 @@ function lineCountNote(
 	}
 	const shift = after - before;
 	const direction = shift > 0 ? `+${shift}` : `${shift}`;
-	return `\n\nThe file is now ${after} lines (was ${before}). Every line after ${editedThroughLine} has moved by ${direction}, so line numbers you read before this edit no longer point at the same code.`;
+	return `\n\nThe file is now ${after} lines (was ${before}). Every line after ${editedThroughLine} has moved by ${direction}, so line numbers you read before this edit no longer point at the same code. Your earlier read of ${filePathForNote} no longer counts as having read it: call \`read_files\` for the lines you intend to change next, before you compose that edit. An edit built on the old numbers is refused — and it is refused only after you have written the replacement out in full, so reading first is the cheaper path.`;
 }
 
 async function insertInFile(

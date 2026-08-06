@@ -606,6 +606,26 @@ describe("createEditorExecutor", () => {
 			});
 		});
 
+		// Stating the fact was not enough. Measured: a model read this note,
+		// composed a large replacement anyway, and had it refused for editing
+		// from a retired read — minutes of generation thrown away because the
+		// refusal comes only after the whole payload has been written.
+		it("tells the model to read again before its next edit, and why", async () => {
+			await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const result = await editor(
+					{ path: filePath, new_text: "B1\nB2\nB3", start_line: 2 },
+					dir,
+					context,
+				);
+
+				expect(result).toContain("no longer counts as having read it");
+				expect(result).toContain("read_files");
+				// The cost of skipping it is the part that changes behaviour.
+				expect(result).toContain("after you have written the replacement out in full");
+			});
+		});
+
 		it("says nothing about line numbers when the count did not change", async () => {
 			await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
 				const editor = createEditorExecutor();

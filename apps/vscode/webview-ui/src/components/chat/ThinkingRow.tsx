@@ -109,7 +109,15 @@ export const ThinkingRow = memo(
 						<div className="relative flex-1">
 							<div
 								className={cn(
-									"flex max-h-[150px] overflow-y-auto text-description leading-normal truncated break-words pl-0 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden [direction:ltr]",
+									"flex max-h-[150px] overflow-y-auto overflow-x-hidden text-description leading-normal truncated break-words pl-0 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden [direction:ltr]",
+									// Markdown brings its own wide content — fenced code, tables,
+									// long URLs — and none of it wraps by default, so a rendered
+									// thinking block pushed its text off the side of the panel with
+									// no way to reach it. The block itself never scrolls sideways;
+									// only the elements that genuinely cannot wrap do, inside their
+									// own box.
+									"[&_pre]:max-w-full [&_pre]:overflow-x-auto [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto",
+									"[&_*]:min-w-0 [&_p]:break-words [&_code]:break-words [&_a]:break-all",
 								)}
 								onScroll={checkScrollable}
 								ref={scrollRef}>
