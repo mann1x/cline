@@ -334,9 +334,54 @@ async function replaceInFile(
  * kept re-deriving the same replacement because it believed it was sending a
  * fix.
  */
-function noChangeMessage(filePath: string, why: string): never {
+/** Beyond this the quote stops being readable and starts being the file. */
+const MAX_NO_CHANGE_QUOTE_CHARS = 4_000;
+
+/**
+ * The lines as they stand, numbered the way `read_files` numbers them.
+ *
+ * Width is taken from the last line number in the span, matching the read
+ * renderer, so the two agree about how far the gutter is indented for the same
+ * range.
+ */
+function quoteCurrentLines(
+	content: string,
+	startOneBased: number,
+	endOneBased: number,
+): string | undefined {
+	const lines = content.split(/\r\n|\n/);
+	const first = Math.max(1, startOneBased);
+	const last = Math.min(lines.length, endOneBased);
+	if (last < first) {
+		return undefined;
+	}
+	const width = String(last).length;
+	const rendered: string[] = [];
+	for (let n = first; n <= last; n++) {
+		rendered.push(`${String(n).padStart(width)} | ${lines[n - 1] ?? ""}`);
+	}
+	const text = rendered.join("\n");
+	return text.length > MAX_NO_CHANGE_QUOTE_CHARS
+		? `${text.slice(0, MAX_NO_CHANGE_QUOTE_CHARS)}\n… truncated`
+		: text;
+}
+
+function noChangeMessage(
+	filePath: string,
+	why: string,
+	quoted?: string,
+): never {
+	// The instruction to compare used to end "differs from the text quoted back
+	// to you" while quoting nothing at all. Measured on a live session: the
+	// model read that, went looking for the quote, found none, and fell back to
+	// re-reading the file — "the editor said No change but then showed a diff …
+	// let me read those lines VERY carefully". An instruction to diff against
+	// something has to carry the something.
+	const comparison = quoted
+		? ` If you meant to change something there, work out how the text you want differs from what those lines hold now — shown below — and send that; if the fix belongs on a different line, edit that line instead.\n\n${quoted}`
+		: ` If you meant to change something there, work out how the text you want differs from what is already in the file at that spot and send that; if the fix belongs on a different line, edit that line instead.`;
 	throw new Error(
-		`No change: ${why} in ${filePath}. The file was not modified. What you sent as \`new_text\` is character-for-character what that part of the file already holds, so this edit asks for nothing and sending it again cannot help. If you meant to change something there, work out how the text you want differs from the text quoted back to you and send that; if the fix belongs on a different line, edit that line instead.`,
+		`No change: ${why} in ${filePath}. The file was not modified. What you sent as \`new_text\` is character-for-character what that part of the file already holds, so this edit asks for nothing and sending it again cannot help.${comparison}`,
 	);
 }
 
@@ -364,7 +409,7 @@ function duplicatedRangeMessage(
 	added: number,
 ): never {
 	throw new Error(
-		`Duplicated instead of replaced: the edit to ${range} in ${filePath} was not applied. None of the ${requestedLines} line(s) you named were removed, yet ${added} new line(s) were added — so what you sent as \`new_text\` opens with the text already at ${range} and then continues, which appends a second copy rather than replacing anything. If you meant to rewrite that range, send only the text that should end up there, without restating the lines already quoted back to you. If you meant to add code, insert it at the line it belongs on instead. Re-read the file first: after earlier edits the line numbers you are working from may no longer point at what you think.`,
+		`Duplicated instead of replaced: the edit to ${range} in ${filePath} was not applied. None of the ${requestedLines} line(s) you named were removed, yet ${added} new line(s) were added — so what you sent as \`new_text\` opens with the text already at ${range} and then continues, which appends a second copy rather than replacing anything. If you meant to rewrite that range, send only the text that should end up there, without restating the lines that are already at ${range}. If you meant to add code, insert it at the line it belongs on instead. Re-read the file first: after earlier edits the line numbers you are working from may no longer point at what you think.`,
 	);
 }
 
@@ -477,7 +522,11 @@ async function replaceLineRange(
 			: `lines ${startLineOneBased}-${effectiveEndLine}`;
 
 	if (updated === content) {
-		return noChangeMessage(filePath, `${range} already reads exactly this way`);
+		return noChangeMessage(
+			filePath,
+			`${range} already reads exactly this way`,
+			quoteCurrentLines(content, startLineOneBased, effectiveEndLine),
+		);
 	}
 
 	// Everything that can refuse the edit has to run before the write, or a
@@ -682,7 +731,11 @@ async function replaceColumnRange(
 			: `line ${startLineOneBased} column ${startColumnOneBased} through line ${endLineOneBased} column ${endColumnOneBased}`;
 
 	if (updated === content) {
-		return noChangeMessage(filePath, `${span} already reads exactly this way`);
+		return noChangeMessage(
+			filePath,
+			`${span} already reads exactly this way`,
+			quoteCurrentLines(content, startLineOneBased, endLineOneBased),
+		);
 	}
 
 	await fs.writeFile(filePath, updated, { encoding });

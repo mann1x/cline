@@ -513,6 +513,12 @@ describe("createEditorExecutor", () => {
 					"line 2 already reads exactly this way",
 				);
 				await expect(failure).rejects.toThrow("character-for-character");
+				// The message tells the model to work out how its text differs from
+				// what is there, so it has to show what is there. It used to say
+				// "differs from the text quoted back to you" and quote nothing;
+				// measured live, the model went looking for the quote and fell back
+				// to re-reading the file.
+				await expect(failure).rejects.toThrow("2 | two");
 				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
 					"one\ntwo\nthree",
 				);
