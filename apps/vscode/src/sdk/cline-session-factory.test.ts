@@ -19,6 +19,7 @@ import {
 	normalizeProviderReasoningSettings,
 	normalizeSdkBaseUrl,
 	resolveApiKey,
+	resolveOllamaProviderConfig,
 	resolveOllamaThinkingAllowance,
 	updateHistoryItem,
 } from "./cline-session-factory"
@@ -1335,6 +1336,31 @@ describe("buildOutputBudgetSection", () => {
 		const section = buildOutputBudgetSection(32_000, 128_000, { level: "none", budgetTokens: 0 })
 
 		expect(section).not.toContain("may be spent thinking")
+	})
+})
+
+describe("resolveOllamaProviderConfig", () => {
+	// The window Ollama is actually loaded with. `ollama ps` on a live box
+	// reported CONTEXT 110000 while the system prompt was telling the model
+	// 128000 — the prompt read the resolved model selection (catalog, state
+	// hint or fallback), which never consults this setting. Both sides read
+	// this resolver now, so they cannot drift.
+	it("takes the context window from providers.json", () => {
+		mocks.providerSettingsManager.getProviderSettings.mockReturnValueOnce({
+			contextWindow: 110_000,
+		} as never)
+
+		const resolved = resolveOllamaProviderConfig({} as never, "v7-coder_tb:vision-iq4_nl")
+
+		expect(resolved.modelInfo?.contextWindow).toBe(110_000)
+	})
+
+	it("falls back to the legacy field only when providers.json carries nothing", () => {
+		mocks.providerSettingsManager.getProviderSettings.mockReturnValue(undefined as never)
+
+		const resolved = resolveOllamaProviderConfig({ ollamaApiOptionsCtxNum: "64000" } as never, "v7-coder_tb:vision-iq4_nl")
+
+		expect(resolved.modelInfo?.contextWindow).toBe(64_000)
 	})
 })
 

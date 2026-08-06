@@ -1086,7 +1086,20 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	// Tell the model about the cap its reply will actually be truncated at.
 	try {
 		const outputCap = maxTokensPerTurn ?? DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS
-		const contextWindow = positiveFiniteNumber(committedRuntimeModel?.modelInfo?.contextWindow)
+		// The window Ollama is actually given, not the one the catalog guessed.
+		// These came from different places and disagreed: `num_ctx` on the wire
+		// comes from `resolveOllamaProviderConfig` reading providers.json, while
+		// this line read the resolved model selection, which is built from the
+		// catalog, a state hint, or a fallback and never consults that setting.
+		// Measured live: providers.json held 110000 and the prompt told the model
+		// 128000 — eighteen thousand tokens of room it did not have, in the
+		// direction that overruns rather than wastes. Same resolver for both is
+		// the only way they cannot drift.
+		const wireContextWindow =
+			toSdkProviderId(providerId) === "ollama" && apiConfig
+				? positiveFiniteNumber(resolveOllamaProviderConfig(apiConfig, modelId).modelInfo?.contextWindow)
+				: undefined
+		const contextWindow = wireContextWindow ?? positiveFiniteNumber(committedRuntimeModel?.modelInfo?.contextWindow)
 		const thinking = await resolveOllamaThinkingAllowance(
 			providerId,
 			reasoningConfig,
