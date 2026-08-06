@@ -1,10 +1,14 @@
 <#
 .SYNOPSIS
-    Collects one Cline session and its logs into a zip for analysis.
+    Collects Cline session transcripts and logs into a zip for analysis.
 
 .DESCRIPTION
-    Gathers the transcript of the most recent Cline task, the extension's own
+    Gathers the transcript of one or more Cline tasks, the extension's own
     output log, and a short description of the machine, into a single zip.
+
+    Run with no arguments it lists the sessions on this machine - when each
+    ran, which model, how it ended, how large the transcript is and the task
+    it was given - and puts the ones you tick into the zip.
 
     WHAT THIS CONTAINS. The transcript is the full conversation: every prompt,
     every model reply, and the contents of every file the model read or wrote.
@@ -17,10 +21,15 @@
     credentials somewhere unusual.
 
 .PARAMETER SessionCount
-    How many of the most recent sessions to include. Default 1.
+    Take this many of the most recent sessions without asking. Passing it at
+    all skips the picker.
 
 .PARAMETER SessionId
-    Collect this specific session id instead of the most recent.
+    Collect this specific session id, without asking.
+
+.PARAMETER Latest
+    Skip the picker and take the most recent session (or -SessionCount of
+    them). Useful when the script is run from another script.
 
 .PARAMETER OutputPath
     Directory to write the zip to. Default: Desktop.
@@ -35,6 +44,13 @@
 .EXAMPLE
     .\Collect-ClineReport.ps1
 
+    Lists the sessions and asks which to include.
+
+.EXAMPLE
+    .\Collect-ClineReport.ps1 -Latest
+
+    Takes the most recent session without asking.
+
 .EXAMPLE
     .\Collect-ClineReport.ps1 -SessionCount 3 -OutputPath C:\temp
 #>
@@ -43,6 +59,7 @@
 param(
     [int]$SessionCount = 1,
     [string]$SessionId,
+    [switch]$Latest,
     [string]$OutputPath = [Environment]::GetFolderPath('Desktop'),
     [switch]$IncludeOllamaRequests,
     [switch]$NoSettings
@@ -124,6 +141,260 @@ function Copy-Redacted {
     return $true
 }
 
+# ------------------------------------------------------ the session picker ---
+#
+# A transcript is only useful to whoever receives it if it is the right one.
+# The name on disk is a uuid, so the person sending the report has nothing to
+# choose by unless we read each session's metadata and show it: when it ran,
+# which model, how it ended, and the first line of what was asked.
+
+function Get-JsonField {
+    param($Object, [string]$Name, $Default = '')
+
+    if ($null -eq $Object) { return $Default }
+    $prop = $Object.PSObject.Properties[$Name]
+    if ($null -eq $prop -or $null -eq $prop.Value) { return $Default }
+    return $prop.Value
+}
+
+function Get-SessionSummary {
+    param($Dir)
+
+    $meta = $null
+    $metaPath = Join-Path $Dir.FullName "$($Dir.Name).json"
+    if (Test-Path -LiteralPath $metaPath) {
+        try {
+            $meta = Get-Content -LiteralPath $metaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        } catch {
+            # An unreadable header still leaves a transcript worth sending.
+            $meta = $null
+        }
+    }
+
+    $bytes = 0
+    foreach ($file in Get-ChildItem -LiteralPath $Dir.FullName -File -ErrorAction SilentlyContinue) {
+        $bytes += $file.Length
+    }
+
+    # started_at is the truth about when the work happened; the directory's
+    # timestamp only says when something last touched it.
+    $when = $Dir.LastWriteTime
+    $started = [string](Get-JsonField $meta 'started_at')
+    if ($started) {
+        try { $when = [datetime]::Parse($started).ToLocalTime() } catch { }
+    }
+
+    [pscustomobject]@{
+        Dir      = $Dir
+        Id       = $Dir.Name
+        When     = $when
+        Provider = [string](Get-JsonField $meta 'provider' 'unknown')
+        Model    = [string](Get-JsonField $meta 'model' 'unknown')
+        Status   = [string](Get-JsonField $meta 'status')
+        Cwd      = [string](Get-JsonField $meta 'cwd')
+        Task     = (([string](Get-JsonField $meta 'prompt')) -replace '\s+', ' ').Trim()
+        Bytes    = $bytes
+    }
+}
+
+function Format-Size {
+    param([long]$Bytes)
+
+    if ($Bytes -ge 1MB) { return '{0,6:N1} MB' -f ($Bytes / 1MB) }
+    return '{0,6:N0} KB' -f ($Bytes / 1KB)
+}
+
+function Format-Column {
+    param([string]$Text, [int]$Width)
+
+    if ($Text.Length -le $Width) { return $Text.PadRight($Width) }
+    return $Text.Substring(0, $Width - 3) + '...'
+}
+
+function Format-SessionRow {
+    param($Session)
+
+    '{0}  {1}  {2}  {3}  {4}' -f
+        $Session.When.ToString('yyyy-MM-dd HH:mm'),
+        (Format-Column $Session.Model 28),
+        (Format-Column $Session.Status 9),
+        (Format-Size $Session.Bytes),
+        (Format-Column $Session.Task 46)
+}
+
+function Select-SessionsGui {
+    param($Sessions)
+
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+    [System.Windows.Forms.Application]::EnableVisualStyles()
+
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = 'Cline report - choose which sessions to send'
+    $form.ClientSize = New-Object System.Drawing.Size(940, 520)
+    $form.StartPosition = 'CenterScreen'
+    $form.MinimizeBox = $false
+    $form.MaximizeBox = $true
+    $form.TopMost = $true
+
+    $blurb = New-Object System.Windows.Forms.Label
+    $blurb.Text = 'Tick the sessions to put in the zip. Each transcript holds the whole conversation, ' +
+        'including the contents of every file the model read or wrote. Send only what you mean to share.'
+    $blurb.SetBounds(12, 10, 916, 34)
+    $blurb.Anchor = 'Top,Left,Right'
+    $form.Controls.Add($blurb)
+
+    $header = New-Object System.Windows.Forms.Label
+    $header.Text = '     ' + ('{0}  {1}  {2}  {3}  {4}' -f
+        'started         ', (Format-Column 'model' 28), (Format-Column 'status' 9), 'size   ', 'task')
+    $header.Font = New-Object System.Drawing.Font('Consolas', 9, [System.Drawing.FontStyle]::Bold)
+    $header.SetBounds(12, 48, 916, 18)
+    $header.Anchor = 'Top,Left,Right'
+    $form.Controls.Add($header)
+
+    $list = New-Object System.Windows.Forms.CheckedListBox
+    $list.SetBounds(12, 68, 916, 372)
+    $list.Font = New-Object System.Drawing.Font('Consolas', 9)
+    $list.CheckOnClick = $true
+    $list.HorizontalScrollbar = $true
+    $list.Anchor = 'Top,Left,Right,Bottom'
+    foreach ($session in $Sessions) { [void]$list.Items.Add((Format-SessionRow $session)) }
+    $form.Controls.Add($list)
+
+    $total = New-Object System.Windows.Forms.Label
+    $total.SetBounds(12, 450, 500, 20)
+    $total.Anchor = 'Bottom,Left'
+    $form.Controls.Add($total)
+
+    $refreshTotal = {
+        $bytes = 0
+        foreach ($index in $list.CheckedIndices) { $bytes += $Sessions[$index].Bytes }
+        $total.Text = '{0} selected, {1} of transcript' -f $list.CheckedIndices.Count, (Format-Size $bytes).Trim()
+    }.GetNewClosure()
+
+    # ItemCheck fires before the item's state flips, so read the total after
+    # the control has settled rather than from inside the event. The cast is
+    # required: BeginInvoke takes a Delegate, and Windows PowerShell will not
+    # pick an overload for a bare script block.
+    $updateTotal = [System.Action]$refreshTotal
+    # There is nothing to marshal to before the window exists; the ticks set
+    # up below the dialog are followed by a direct call.
+    $list.Add_ItemCheck({
+        if ($form.IsHandleCreated) { [void]$form.BeginInvoke($updateTotal) }
+    }.GetNewClosure())
+
+    $makeButton = {
+        param([string]$Text, [int]$X)
+        $button = New-Object System.Windows.Forms.Button
+        $button.Text = $Text
+        $button.SetBounds($X, 480, 110, 30)
+        $button.Anchor = 'Bottom,Left'
+        $form.Controls.Add($button)
+        return $button
+    }
+
+    $all = & $makeButton 'Select all' 12
+    $all.Add_Click({
+        for ($i = 0; $i -lt $list.Items.Count; $i++) { $list.SetItemChecked($i, $true) }
+    }.GetNewClosure())
+
+    $none = & $makeButton 'Clear' 130
+    $none.Add_Click({
+        for ($i = 0; $i -lt $list.Items.Count; $i++) { $list.SetItemChecked($i, $false) }
+    }.GetNewClosure())
+
+    $ok = New-Object System.Windows.Forms.Button
+    $ok.Text = 'Create zip'
+    $ok.SetBounds(700, 480, 110, 30)
+    $ok.Anchor = 'Bottom,Right'
+    $ok.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $form.Controls.Add($ok)
+
+    $cancel = New-Object System.Windows.Forms.Button
+    $cancel.Text = 'Cancel'
+    $cancel.SetBounds(818, 480, 110, 30)
+    $cancel.Anchor = 'Bottom,Right'
+    $cancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $form.Controls.Add($cancel)
+
+    $form.AcceptButton = $ok
+    $form.CancelButton = $cancel
+
+    # The newest session is what someone reporting a problem almost always
+    # wants, so it starts ticked and Enter alone is a sensible answer.
+    if ($list.Items.Count -gt 0) { $list.SetItemChecked(0, $true) }
+    & $refreshTotal
+
+    $answer = $form.ShowDialog()
+    $picked = @()
+    if ($answer -eq [System.Windows.Forms.DialogResult]::OK) {
+        foreach ($index in $list.CheckedIndices) { $picked += $Sessions[$index] }
+    }
+    $form.Dispose()
+
+    return ,$picked
+}
+
+function Expand-IndexList {
+    param([string]$Text, [int]$Count)
+
+    $indexes = New-Object System.Collections.ArrayList
+    foreach ($part in ($Text -split ',')) {
+        $trimmed = $part.Trim()
+        if ($trimmed -eq '') { continue }
+
+        if ($trimmed -match '^(\d+)\s*-\s*(\d+)$') {
+            $from = [int]$Matches[1]
+            $to   = [int]$Matches[2]
+            if ($from -gt $to) { $swap = $from; $from = $to; $to = $swap }
+        } elseif ($trimmed -match '^\d+$') {
+            $from = [int]$trimmed
+            $to   = $from
+        } else {
+            continue
+        }
+
+        for ($n = $from; $n -le $to; $n++) {
+            if ($n -ge 1 -and $n -le $Count) { [void]$indexes.Add($n - 1) }
+        }
+    }
+
+    return @($indexes | Sort-Object -Unique)
+}
+
+function Select-SessionsConsole {
+    param($Sessions)
+
+    Add-Note ''
+    Add-Note 'Sessions on this machine, newest first:' 'Cyan'
+    Add-Note ('      {0}  {1}  {2}  {3}  {4}' -f
+        'started         ', (Format-Column 'model' 28), (Format-Column 'status' 9), 'size   ', 'task') 'DarkGray'
+    for ($i = 0; $i -lt $Sessions.Count; $i++) {
+        Add-Note ('  {0,2}. {1}' -f ($i + 1), (Format-SessionRow $Sessions[$i]))
+    }
+    Add-Note ''
+    Add-Note 'Which ones? Numbers like 1,3 or a range like 1-3, or "all". Blank takes the newest.' 'Yellow'
+
+    $answer = Read-Host 'Sessions'
+    if ($null -eq $answer -or $answer.Trim() -eq '') { return ,@($Sessions[0]) }
+    if ($answer.Trim() -match '^(a|all)$') { return ,@($Sessions) }
+
+    $picked = @()
+    foreach ($index in (Expand-IndexList $answer $Sessions.Count)) { $picked += $Sessions[$index] }
+    return ,$picked
+}
+
+function Select-Sessions {
+    param($Sessions)
+
+    try {
+        return (Select-SessionsGui $Sessions)
+    } catch {
+        Add-Note "Could not open the picker window ($($_.Exception.Message)); asking here instead." 'DarkYellow'
+        return (Select-SessionsConsole $Sessions)
+    }
+}
+
 # ---------------------------------------------------------------- staging ---
 
 $stamp    = Get-Date -Format 'yyyyMMdd-HHmmss'
@@ -146,23 +417,57 @@ if (-not (Test-Path -LiteralPath $sessionsRoot)) {
     exit 1
 }
 
-if ($SessionId) {
-    $sessionDirs = @(Get-ChildItem -LiteralPath $sessionsRoot -Directory |
-        Where-Object { $_.Name -eq $SessionId })
-    if ($sessionDirs.Count -eq 0) {
-        Add-Note "No session directory named '$SessionId'." 'Red'
-        exit 1
-    }
-} else {
-    $sessionDirs = @(Get-ChildItem -LiteralPath $sessionsRoot -Directory |
-        Sort-Object LastWriteTime -Descending |
-        Select-Object -First $SessionCount)
-}
+# Reading every session's header to build the list costs a file read each, so
+# only go back as far as anyone plausibly would when reporting a problem.
+$ListedSessionLimit = 40
 
-if ($sessionDirs.Count -eq 0) {
+$allDirs = @(Get-ChildItem -LiteralPath $sessionsRoot -Directory |
+    Sort-Object LastWriteTime -Descending)
+
+if ($allDirs.Count -eq 0) {
     Add-Note "No sessions found under $sessionsRoot." 'Red'
     exit 1
 }
+
+# An explicit id or count is an answer already given; only ask when nothing
+# in the invocation says which sessions are wanted, and never ask when there
+# is no one there to answer.
+$chosen = $null
+if ($SessionId) {
+    $chosen = @($allDirs | Where-Object { $_.Name -eq $SessionId } | ForEach-Object { Get-SessionSummary $_ })
+    if ($chosen.Count -eq 0) {
+        Add-Note "No session directory named '$SessionId'." 'Red'
+        exit 1
+    }
+} elseif ($Latest -or $PSBoundParameters.ContainsKey('SessionCount') -or -not [Environment]::UserInteractive) {
+    $chosen = @($allDirs | Select-Object -First $SessionCount | ForEach-Object { Get-SessionSummary $_ })
+} else {
+    $offered = @($allDirs | Select-Object -First $ListedSessionLimit | ForEach-Object { Get-SessionSummary $_ })
+    $chosen = @(Select-Sessions $offered)
+    if ($chosen.Count -eq 0) {
+        Add-Note 'Nothing selected, so nothing was collected.' 'Yellow'
+        exit 1
+    }
+}
+
+Add-Note ''
+Add-Note ("Collecting {0} session(s):" -f $chosen.Count) 'Cyan'
+$chosenBytes = 0
+foreach ($session in $chosen) {
+    $chosenBytes += $session.Bytes
+    Add-Note ("  {0}  {1}" -f $session.Id, (Format-SessionRow $session)) 'DarkGray'
+}
+
+# A transcript that will not fit through email or a chat upload is the usual
+# reason a report never arrives. Say so here rather than at the far end.
+if ($chosenBytes -ge 20MB) {
+    Add-Note ''
+    Add-Note ("These transcripts total {0} before compression, which many chat and mail" -f (Format-Size $chosenBytes).Trim()) 'Yellow'
+    Add-Note 'clients will refuse. Screenshots taken by the browser tool are the usual bulk;' 'Yellow'
+    Add-Note 'run again and pick fewer sessions if the zip turns out to be too large to send.' 'Yellow'
+}
+
+$sessionDirs = @($chosen | ForEach-Object { $_.Dir })
 
 $sessionTarget = Join-Path $staging 'sessions'
 New-Item -ItemType Directory -Path $sessionTarget -Force | Out-Null
@@ -348,7 +653,17 @@ $environment = [ordered]@{
         OLLAMA_KV_CACHE_TYPE = $env:OLLAMA_KV_CACHE_TYPE
         OLLAMA_FLASH_ATTENTION = $env:OLLAMA_FLASH_ATTENTION
     }
-    sessionsCollected = @($sessionDirs | ForEach-Object { $_.Name })
+    sessionsCollected = @($chosen | ForEach-Object {
+        [ordered]@{
+            id       = $_.Id
+            started  = $_.When.ToString('s')
+            provider = $_.Provider
+            model    = $_.Model
+            status   = $_.Status
+            cwd      = $_.Cwd
+            task     = $_.Task
+        }
+    })
 }
 
 $environment | ConvertTo-Json -Depth 100 |
@@ -363,7 +678,9 @@ Cline session report
 
 Collected  : $((Get-Date).ToString('yyyy-MM-dd HH:mm:ss zzz'))
 Machine    : $env:COMPUTERNAME
-Sessions   : $(@($sessionDirs | ForEach-Object { $_.Name }) -join ', ')
+Sessions   : $(($chosen | ForEach-Object {
+                 '{0}  {1}  {2}' -f $_.When.ToString('yyyy-MM-dd HH:mm'), $_.Model, $_.Id
+             }) -join "`n             ")
 
 Contents
 --------
