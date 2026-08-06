@@ -9,6 +9,9 @@
  * Per-instance caches make this host state.
  */
 
+import { appendFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
 	type ContentBlock,
 	createMediaBudgetState,
@@ -52,6 +55,29 @@ export const MESSAGE_BUILDER_LIMIT_ENV = {
 	minOutdatedRewriteBytes: "CLINE_MESSAGE_BUILDER_MIN_OUTDATED_REWRITE_BYTES",
 } as const;
 const READ_TOOL_NAMES = new Set(["read", "read_files"]);
+
+/**
+ * Append one line per API build to `<tmpdir>/cline-message-builder.jsonl`.
+ *
+ * Measured on a live session: twelve full copies of one file, 82% of a 128k
+ * context, and not a single stale-read placeholder — while every reconstruction
+ * of that session in a test collapses them correctly. Silence is ambiguous
+ * here; this makes the difference visible from the running extension.
+ *
+ * Best-effort and never throws: a diagnostic about message building must not
+ * be able to break message building.
+ */
+function appendMessageBuilderTrace(entry: Record<string, unknown>): void {
+	try {
+		appendFileSync(
+			join(tmpdir(), "cline-message-builder.jsonl"),
+			`${JSON.stringify({ at: new Date().toISOString(), ...entry })}\n`,
+			"utf8",
+		);
+	} catch {
+		// ignored
+	}
+}
 const OUTDATED_FILE_CONTENT = "[outdated - see the latest file content]";
 const MISSING_TOOL_RESULT_TEXT =
 	"Tool execution was interrupted before a result was produced.";
@@ -359,6 +385,19 @@ export class MessageBuilder {
 		const pending = new Map<string, Set<string>>();
 		const seenToolUseIds = new Set<string>();
 		let pendingBytes = 0;
+		// Diagnostic counters. A live session sent twelve full copies of one
+		// file — 82% of a 128k context — while this rewrite produced not a
+		// single placeholder, and every reconstruction of that session in a
+		// test collapses it correctly. The difference has to be observable
+		// from the running extension, so each decision here is recorded.
+		const seen = {
+			toolResults: 0,
+			readResults: 0,
+			locators: 0,
+			outdated: 0,
+			otherToolNames: new Set<string>(),
+			keys: [] as string[],
+		};
 
 		for (const message of messages) {
 			if (!Array.isArray(message.content)) {
@@ -368,19 +407,27 @@ export class MessageBuilder {
 				if (block.type !== "tool_result" || block.is_error === true) {
 					continue;
 				}
+				seen.toolResults += 1;
 				const toolName = this.resolveToolName(block);
 				if (!this.isReadTool(toolName)) {
+					seen.otherToolNames.add(toolName ?? "<unresolved>");
 					continue;
 				}
+				seen.readResults += 1;
 				seenToolUseIds.add(block.tool_use_id);
 				const committed = this.committedOutdatedRewrites.get(block.tool_use_id);
 				const newKeys = new Set<string>();
 				const validKeys = new Set<string>();
 				for (const locator of this.getReadLocators(block)) {
 					const key = this.toReadLocatorKey(locator);
+					seen.locators += 1;
+					if (seen.keys.length < 20) {
+						seen.keys.push(key);
+					}
 					if (!this.isOutdatedReadLocator(locator, block.tool_use_id)) {
 						continue;
 					}
+					seen.outdated += 1;
 					validKeys.add(key);
 					if (!committed?.has(key)) {
 						newKeys.add(key);
@@ -423,7 +470,25 @@ export class MessageBuilder {
 			}
 		}
 
-		if (pending.size === 0 || pendingBytes < this.minOutdatedRewriteBytes) {
+		const committing =
+			pending.size > 0 && pendingBytes >= this.minOutdatedRewriteBytes;
+		appendMessageBuilderTrace({
+			toolResults: seen.toolResults,
+			readResults: seen.readResults,
+			// Non-read tool results, by resolved name. If `read_files` shows up
+			// here, the name never reached `READ_TOOL_NAMES` and nothing else
+			// below can fire.
+			otherTools: [...seen.otherToolNames].slice(0, 8),
+			locators: seen.locators,
+			outdated: seen.outdated,
+			keys: seen.keys,
+			pendingBlocks: pending.size,
+			pendingBytes,
+			threshold: this.minOutdatedRewriteBytes,
+			committing,
+			alreadyCommitted: this.committedOutdatedRewrites.size,
+		});
+		if (!committing) {
 			return;
 		}
 
