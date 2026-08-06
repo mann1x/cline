@@ -40,8 +40,8 @@ const stubExecutor = (() => {
 /**
  * The host tools' schemas, restated, because this package cannot build them.
  *
- * `check_file`, `code_intel` and `switch_to_act_mode` are contributed by the VS
- * Code extension. The review script runs here and has no way to reach them,
+ * `check_file`, `code_intel`, `switch_to_act_mode` and `browser` are
+ * contributed by the VS Code extension. The review script runs here and has no way to reach them,
  * and leaving them out would mean the audit never checked the one tool with a
  * closed set of operations — which is precisely the tool a rewrite was
  * observed to gut. `HOST_TOOL_NAMES` in the shipped-templates test is the same
@@ -91,6 +91,29 @@ export const HOST_TOOL_INPUT_SCHEMAS: readonly {
 	{
 		name: "switch_to_act_mode",
 		inputSchema: { type: "object", properties: {} },
+	},
+	{
+		name: "browser",
+		inputSchema: {
+			type: "object",
+			properties: {
+				action: {
+					type: "string",
+					enum: [
+						"open",
+						"click",
+						"type",
+						"scroll_down",
+						"scroll_up",
+						"close",
+					],
+				},
+				url: { type: "string" },
+				coordinate: { type: "string" },
+				text: { type: "string" },
+			},
+			required: ["action"],
+		},
 	},
 ];
 

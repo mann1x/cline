@@ -22,6 +22,10 @@ export const DEFAULT_BROWSER_SETTINGS: BrowserSettings = {
 	remoteBrowserHost: "http://localhost:9222",
 	chromeExecutablePath: "", // Changed from undefined to empty string
 	// chromeType: "chromium",
+	// Read by nobody since the SDK migration removed `browser_action`, and left
+	// at upstream's value so the diff stays small. The `browser` tool answers to
+	// `cline.browserTool` instead — see `hosts/vscode/browser-support.ts` for
+	// why this flag could not be reused.
 	disableToolUse: true,
 	customArgs: "",
 }

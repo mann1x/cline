@@ -296,6 +296,9 @@ function scriptSpans(text: string): Array<{ body: string; origin: Cursor }> {
 	return spans
 }
 
+/** Lines named in one report. Past this it is a rewrite, not a fix. */
+const MAX_REPORTED_LINES = 6
+
 /**
  * Render the balance findings for a file, or null when there is nothing
  * useful to say — the file's language is not one this understands, or its
@@ -317,9 +320,31 @@ export function describeDelimiterBalance(filePath: string, text: string): string
 		return null
 	}
 
-	// Only the first two are worth reporting: after the first crossing every
-	// subsequent pairing is suspect, exactly as the parser's own cascade is.
-	const lines = findings.slice(0, 2).map((finding) => {
+	// One finding per line the trouble starts on.
+	//
+	// Reporting the first two findings was wrong on a real file. It had five
+	// separately broken lines, each a minified one-liner ending `}})` where it
+	// should end `});`, and naming two of them sent the model round the loop —
+	// edit, reload the page, read, edit — once per line. Worse, it fixed a line
+	// the report had not named and then had to work out for itself why the
+	// error had not moved.
+	//
+	// Two findings on one line say less than two findings on two lines, so the
+	// list is deduplicated by line rather than truncated by count.
+	const seen = new Set<number>()
+	const distinct = findings.filter((finding) => {
+		// The line the fix goes on: the opener for a crossing or an unclosed
+		// bracket, and the stray character itself when nothing was open.
+		const line = finding.openLine ?? finding.line
+		if (seen.has(line)) {
+			return false
+		}
+		seen.add(line)
+		return true
+	})
+
+	const shown = distinct.slice(0, MAX_REPORTED_LINES)
+	const lines = shown.map((finding) => {
 		switch (finding.kind) {
 			case "mismatch":
 				return `  the \`${finding.opener}\` opened at line ${finding.openLine}, column ${finding.openColumn} is closed by \`${finding.found}\` at line ${finding.line}, column ${finding.column}`
@@ -330,10 +355,20 @@ export function describeDelimiterBalance(filePath: string, text: string): string
 		}
 	})
 
-	const more = findings.length > 2 ? ` (${findings.length - 2} further crossing(s) follow from these)` : ""
-	return [
-		`Delimiter scan${more}:`,
-		...lines,
-		"  This scan skips strings, comments and regex literals, so it is counting real code. Fix the first one and re-check — it is the opener the parse error could not name.",
-	].join("\n")
+	const hidden = distinct.length - shown.length
+	const heading =
+		shown.length === 1
+			? "Delimiter scan:"
+			: `Delimiter scan — ${distinct.length} line(s) do not balance${hidden > 0 ? `, first ${shown.length} shown` : ""}:`
+
+	// The first line is certain: it is where the parser gave up. The rest are
+	// scanned with a stack the first crossing already disturbed, so they are
+	// leads rather than verdicts — which is why the closing line says to fix
+	// them together and re-check rather than trusting the list wholesale.
+	const closing =
+		shown.length === 1
+			? "  This scan skips strings, comments and regex literals, so it is counting real code. Fix that opener — it is the one the parse error could not name."
+			: "  This scan skips strings, comments and regex literals, so it is counting real code. The first line is where the parser gave up; the others are scanned past it and may shift once it is fixed. Fix them in one edit, then re-check."
+
+	return [heading, ...lines, closing].join("\n")
 }
