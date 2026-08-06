@@ -41,6 +41,13 @@
 .PARAMETER NoSettings
     Skip provider settings entirely.
 
+.PARAMETER StripImages
+    Replace the base64 payload of every image in the transcript with a
+    placeholder - screenshots the browser tool returned, and images embedded
+    in files the model read. Use it when the zip is too large to send. The
+    transcript is otherwise byte-identical, including the text that came back
+    alongside each picture.
+
 .EXAMPLE
     .\Collect-ClineReport.ps1
 
@@ -53,6 +60,12 @@
 
 .EXAMPLE
     .\Collect-ClineReport.ps1 -SessionCount 3 -OutputPath C:\temp
+
+.EXAMPLE
+    .\Collect-ClineReport.ps1 -StripImages
+
+    Leaves the screenshots out, for when the zip will not fit through
+    whatever you are sending it with.
 #>
 
 [CmdletBinding()]
@@ -62,13 +75,15 @@ param(
     [switch]$Latest,
     [string]$OutputPath = [Environment]::GetFolderPath('Desktop'),
     [switch]$IncludeOllamaRequests,
-    [switch]$NoSettings
+    [switch]$NoSettings,
+    [switch]$StripImages
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 
 $script:Manifest = New-Object System.Collections.ArrayList
+$script:ImagesStripped = 0
 
 function Add-Note {
     param([string]$Text, [string]$Colour = 'Gray')
@@ -139,6 +154,48 @@ function Copy-Redacted {
     $clean = Protect-Secrets $parsed
     $clean | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $Destination -Encoding UTF8
     return $true
+}
+
+# ------------------------------------------------------- image stripping ---
+#
+# Base64 is what makes a transcript too large to send, and it arrives by more
+# than one route: a screenshot the browser tool returned, a sprite sheet the
+# model read out of a source file, an inline data: URI. Keying on the JSON
+# field would only catch the first, so match the payload by its own magic
+# number instead - iVBORw0KGgo is a PNG header encoded, /9j/ a JPEG, R0lGOD a
+# GIF, UklGR a WebP. That identifies an image wherever it sits, and prose
+# cannot be mistaken for one.
+#
+# The character class stops at a backslash, so a match can never run past the
+# end of the JSON string it lives in: base64 has no escapes, and every other
+# byte in the file that could follow one does.
+
+$ImagePayloadPattern = '(?<![A-Za-z0-9+/])(?:iVBORw0KGgo|/9j/|R0lGOD|UklGR)[A-Za-z0-9+/]{200,}={0,2}'
+
+function Remove-ImageData {
+    param([string]$Source, [string]$Destination)
+
+    $text = Get-Content -LiteralPath $Source -Raw -Encoding UTF8
+    if ($null -eq $text) { return $null }
+
+    $images = 0
+    $chars  = 0
+    foreach ($match in [regex]::Matches($text, $ImagePayloadPattern)) {
+        $images++
+        $chars += $match.Length
+    }
+
+    $evaluator = [System.Text.RegularExpressions.MatchEvaluator] {
+        param($match)
+        "[image removed by -StripImages: $($match.Length) base64 characters]"
+    }
+    $text = [regex]::Replace($text, $ImagePayloadPattern, $evaluator)
+
+    # No BOM: Get-Content read one off if there was one, and a JSON parser at
+    # the far end is entitled to choke on it.
+    [System.IO.File]::WriteAllText($Destination, $text, (New-Object System.Text.UTF8Encoding($false)))
+
+    return [pscustomobject]@{ Images = $images; Chars = $chars }
 }
 
 # ------------------------------------------------------ the session picker ---
@@ -463,8 +520,12 @@ foreach ($session in $chosen) {
 if ($chosenBytes -ge 20MB) {
     Add-Note ''
     Add-Note ("These transcripts total {0} before compression, which many chat and mail" -f (Format-Size $chosenBytes).Trim()) 'Yellow'
-    Add-Note 'clients will refuse. Screenshots taken by the browser tool are the usual bulk;' 'Yellow'
-    Add-Note 'run again and pick fewer sessions if the zip turns out to be too large to send.' 'Yellow'
+    Add-Note 'clients will refuse. If the zip turns out to be too large to send, run again' 'Yellow'
+    if ($StripImages) {
+        Add-Note 'and pick fewer sessions.' 'Yellow'
+    } else {
+        Add-Note 'with -StripImages, or pick fewer sessions.' 'Yellow'
+    }
 }
 
 $sessionDirs = @($chosen | ForEach-Object { $_.Dir })
@@ -477,9 +538,28 @@ foreach ($dir in $sessionDirs) {
     New-Item -ItemType Directory -Path $dest -Force | Out-Null
 
     foreach ($file in Get-ChildItem -LiteralPath $dir.FullName -File) {
-        Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $dest $file.Name)
-        $kb = [math]::Round($file.Length / 1KB, 1)
-        Add-Item "session/$($dir.Name)" "$($file.Name) (${kb} KB)"
+        $target = Join-Path $dest $file.Name
+
+        $stripped = $null
+        if ($StripImages -and $file.Name -like '*.messages.json') {
+            try {
+                $stripped = Remove-ImageData -Source $file.FullName -Destination $target
+            } catch {
+                Add-Note "  Could not strip images from $($file.Name): $($_.Exception.Message)" 'DarkYellow'
+                $stripped = $null
+            }
+        }
+        if ($null -eq $stripped) {
+            Copy-Item -LiteralPath $file.FullName -Destination $target
+        }
+
+        $kb = [math]::Round((Get-Item -LiteralPath $target).Length / 1KB, 1)
+        $note = "$($file.Name) (${kb} KB)"
+        if ($null -ne $stripped -and $stripped.Images -gt 0) {
+            $script:ImagesStripped += $stripped.Images
+            $note += ", $($stripped.Images) image(s) removed"
+        }
+        Add-Item "session/$($dir.Name)" $note
     }
 }
 
@@ -653,6 +733,7 @@ $environment = [ordered]@{
         OLLAMA_KV_CACHE_TYPE = $env:OLLAMA_KV_CACHE_TYPE
         OLLAMA_FLASH_ATTENTION = $env:OLLAMA_FLASH_ATTENTION
     }
+    imagesStripped    = $script:ImagesStripped
     sessionsCollected = @($chosen | ForEach-Object {
         [ordered]@{
             id       = $_.Id
@@ -686,7 +767,12 @@ Contents
 --------
 sessions/<id>/<id>.messages.json    The full transcript: prompts, replies,
                                     tool calls, and the contents of every file
-                                    that was read or written.
+                                    that was read or written.$(if ($script:ImagesStripped -gt 0) {
+"
+                                    Run with -StripImages: $($script:ImagesStripped) base64 image(s),
+                                    screenshots and any embedded in the files
+                                    that were read, are replaced by a
+                                    placeholder. Nothing else was changed." })
 sessions/<id>/<id>.compaction.json  The compacted summary, if the task ran long
                                     enough to be compacted.
 sessions/<id>/<id>.json             Task metadata: timestamps, token counts.
