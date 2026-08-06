@@ -610,6 +610,71 @@ describe("createEditorExecutor", () => {
 		// composed a large replacement anyway, and had it refused for editing
 		// from a retired read — minutes of generation thrown away because the
 		// refusal comes only after the whole payload has been written.
+		// Mined from real sessions: one model pasted the `read_files` gutter into
+		// `old_text` ten times in a row against an error message that explains
+		// the mistake precisely, burning a full generation each time. Naming it
+		// was not enough, so the editor recovers.
+		it("recovers when old_text carries the read gutter", async () => {
+			await withTempFile("alpha\nbeta\ngamma", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const result = await editor(
+					{ path: filePath, old_text: "  2 | beta", new_text: "BETA" },
+					dir,
+					context,
+				);
+
+				expect(result).not.toContain("No replacement performed");
+				const { readFile } = await import("node:fs/promises");
+				expect(await readFile(filePath, "utf8")).toBe("alpha\nBETA\ngamma");
+			});
+		});
+
+		// A model in "gutter mode" numbers both sides; writing the gutter into
+		// the file is the worse of the two failures.
+		it("strips the gutter from new_text too", async () => {
+			await withTempFile("alpha\nbeta\ngamma", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				await editor(
+					{ path: filePath, old_text: "  2 | beta", new_text: "  2 | BETA" },
+					dir,
+					context,
+				);
+
+				const { readFile } = await import("node:fs/promises");
+				expect(await readFile(filePath, "utf8")).toBe("alpha\nBETA\ngamma");
+			});
+		});
+
+		// The file decides, not the shape of the input: text that genuinely
+		// looks like a gutter and does not match must still fail.
+		it("still refuses when stripping does not produce a match", async () => {
+			await withTempFile("alpha\nbeta", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				await expect(
+					editor(
+						{ path: filePath, old_text: "  9 | nowhere", new_text: "x" },
+						dir,
+						context,
+					),
+				).rejects.toThrow("No replacement performed");
+			});
+		});
+
+		// A single line starting with a number and a pipe is ordinary source.
+		it("leaves real content that looks like a gutter alone", async () => {
+			await withTempFile("a\n12 | pipe row\nb", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				await editor(
+					{ path: filePath, old_text: "12 | pipe row", new_text: "12 | changed" },
+					dir,
+					context,
+				);
+
+				const { readFile } = await import("node:fs/promises");
+				expect(await readFile(filePath, "utf8")).toBe("a\n12 | changed\nb");
+			});
+		});
+
 		it("tells the model to read again before its next edit, and why", async () => {
 			await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
 				const editor = createEditorExecutor();
@@ -877,19 +942,24 @@ describe("createEditorExecutor", () => {
 			});
 		});
 
-		it("points at the line-number gutter when that is why nothing matched", async () => {
+		it("recovers from the line-number gutter rather than pointing at it", async () => {
 			// Measured: the model pasted `fill();}});}\n93 | ` straight out of a
-			// read_files result, and "text not found" told it nothing.
+			// read_files result, and "text not found" told it nothing. Naming the
+			// gutter came next — and mining the sessions showed a model repeating
+			// the mistake ten times against that explanation, so the edit now
+			// succeeds instead. The message still exists for the case where
+			// stripping does not produce a match.
 			await withTempFile("real content", async (filePath, dir) => {
 				const editor = createEditorExecutor();
 
-				await expect(
-					editor(
-						{ path: filePath, old_text: "  92 | real content", new_text: "x" },
-						dir,
-						context,
-					),
-				).rejects.toThrow("line-number gutter");
+				const result = await editor(
+					{ path: filePath, old_text: "  92 | real content", new_text: "x" },
+					dir,
+					context,
+				);
+
+				expect(result).not.toContain("No replacement performed");
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("x");
 			});
 		});
 	});

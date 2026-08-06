@@ -230,15 +230,36 @@ async function replaceInFile(
 
 	const content = await fs.readFile(filePath, encoding);
 	const eol = detectLineEnding(content);
-	const normalizedOldStr = normalizeLineEndings(oldStr, eol);
-	const normalizedNewStr = normalizeLineEndings(newStr ?? "", eol);
-	const occurrences = countOccurrences(content, normalizedOldStr);
+	let normalizedOldStr = normalizeLineEndings(oldStr, eol);
+	let normalizedNewStr = normalizeLineEndings(newStr ?? "", eol);
+	let occurrences = countOccurrences(content, normalizedOldStr);
+
+	// `read_files` renders content as `  92 | <text>` and the model pastes the
+	// gutter back in. Naming the mistake was not enough: mined from real
+	// sessions, one model made this exact error ten times in a row against an
+	// error message that explains it precisely, and every attempt cost a full
+	// generation of the replacement text. So recover instead of refusing.
+	//
+	// Safe because the file decides. The gutter is only stripped when the
+	// stripped text then actually occurs in the file — that match is the
+	// evidence, not the shape of the input, so a file that genuinely contains
+	// `123 | ` text is unaffected. `new_text` is stripped on the same condition
+	// it is detected on: a model in "gutter mode" numbers both, and writing the
+	// gutter *into* the file is the worse failure of the two.
+	if (occurrences === 0 && hasLineNumberGutter(normalizedOldStr)) {
+		const strippedOld = stripLineNumberGutter(normalizedOldStr);
+		const strippedOccurrences = countOccurrences(content, strippedOld);
+		if (strippedOccurrences > 0) {
+			normalizedOldStr = strippedOld;
+			occurrences = strippedOccurrences;
+			if (hasLineNumberGutter(normalizedNewStr)) {
+				normalizedNewStr = stripLineNumberGutter(normalizedNewStr);
+			}
+		}
+	}
 
 	if (occurrences === 0) {
-		// The commonest cause, measured on a live session: `read_files` renders
-		// content as `  92 | <text>` and the model pastes the gutter back in.
-		// Naming it turns a dead end into a retry that works.
-		const looksNumbered = /(^|\n)\s*\d+\s\|\s/.test(normalizedOldStr);
+		const looksNumbered = hasLineNumberGutter(normalizedOldStr);
 		throw new Error(
 			`No replacement performed: text not found in ${filePath}.${
 				looksNumbered
@@ -458,6 +479,33 @@ async function replaceLineRange(
 			? ` (${unchanged} of the ${requestedLines} line(s) in the range were already identical, so the diff below does not show them)`
 			: "";
 	return `Replaced ${range} in ${filePath}${note}\n${diff}${lineCountNote(content, updated, effectiveEndLine, filePath)}`;
+}
+
+
+/** `  92 | text` — the gutter `read_files` renders, on every non-empty line. */
+const LINE_NUMBER_GUTTER = /^\s*\d+\s\|\s?/;
+
+/**
+ * Whether every non-empty line carries the read gutter.
+ *
+ * Uniformity is the test rather than "any line matches": a single line that
+ * happens to start with a number and a pipe is ordinary source (a table row, a
+ * regex alternation), and stripping it would corrupt the text.
+ */
+function hasLineNumberGutter(text: string): boolean {
+	const lines = text.split("\n").filter((line) => line.trim() !== "");
+	if (lines.length === 0) {
+		return false;
+	}
+	return lines.every((line) => LINE_NUMBER_GUTTER.test(line));
+}
+
+/** Remove the read gutter, leaving the source's own indentation intact. */
+function stripLineNumberGutter(text: string): string {
+	return text
+		.split("\n")
+		.map((line) => (line.trim() === "" ? line : line.replace(LINE_NUMBER_GUTTER, "")))
+		.join("\n");
 }
 
 /**

@@ -1134,6 +1134,26 @@ function asFiniteNumber(value: unknown): number | undefined {
  */
 const INTERNAL_STATUS_NOTICES = new Set(["compaction-budget-adjusted"])
 
+/**
+ * Read the task checklist off a tool call's input.
+ *
+ * The parameter is optional on every tool, so most calls carry nothing. A
+ * non-string value is not a checklist and is ignored rather than guessed at —
+ * putting invented items on screen is worse than showing none.
+ */
+export function readTaskProgressFromToolInput(input: unknown): string | undefined {
+	const parsed = typeof input === "string" ? parseToolInput(input) : input
+	if (!parsed || typeof parsed !== "object") {
+		return undefined
+	}
+	const value = (parsed as Record<string, unknown>).task_progress
+	if (typeof value !== "string") {
+		return undefined
+	}
+	const trimmed = value.trim()
+	return trimmed === "" ? undefined : trimmed
+}
+
 /** Build the say:"compaction" divider message for a compaction status payload. */
 export function buildCompactionMessage(info: ClineCompactionInfo, ts: number): ClineMessage {
 	return {
@@ -1581,6 +1601,23 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 					// doesn't carry the input (S6-24 fix)
 					const storedInput = state.getStreamingToolInput()
 					const ts = state.clearStreamingTool()
+
+					// The checklist rides along on whatever tool the model was already
+					// calling, so this is the only place it surfaces. Emitted as its own
+					// say:"task_progress" row rather than folded into the tool row: the
+					// panel wants the newest checklist regardless of which tool carried
+					// it, and `openFocusChainFile` already looks for exactly this message
+					// type.
+					const checklist = readTaskProgressFromToolInput(storedInput)
+					if (checklist) {
+						messages.push({
+							ts: state.nextTs(),
+							type: "say",
+							say: "task_progress" as ClineSay,
+							text: checklist,
+							partial: false,
+						})
+					}
 
 					// Special handling: read_files may read multiple files in one tool call.
 					// Emit one readFile UI message per file so the tool group summary and
