@@ -152,6 +152,11 @@ export {
 } from "../../../../sdk/packages/core/src/extensions/tools/executors/apply-patch"
 export { PATCH_MARKERS, PatchActionType } from "../../../../sdk/packages/core/src/extensions/tools/executors/apply-patch-parser"
 export { createEditorExecutor } from "../../../../sdk/packages/core/src/extensions/tools/executors/editor"
+export { createFileReadExecutor } from "../../../../sdk/packages/core/src/extensions/tools/executors/file-read"
+export {
+	createReadReceipts,
+	type ReadReceipts,
+} from "../../../../sdk/packages/core/src/extensions/tools/executors/read-receipts"
 export type { EditFileInput } from "../../../../sdk/packages/core/src/extensions/tools/schemas"
 export type { ApplyPatchExecutor, EditorExecutor, ToolExecutors } from "../../../../sdk/packages/core/src/extensions/tools/types"
 

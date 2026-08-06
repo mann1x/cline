@@ -7,6 +7,7 @@ import {
 	type EditFileInput,
 	type EditorExecutor,
 	PatchActionType,
+	type ReadReceipts,
 } from "@cline/core"
 import type { AgentToolContext } from "@cline/shared"
 import * as fs from "fs/promises"
@@ -38,6 +39,12 @@ export interface SdkDiffEditCoordinatorOptions {
 	createEditPreview?: () => EditPreview
 	/** Injectable for tests. Defaults to the SDK's disk-writing editor executor. */
 	fallbackEditorExecutor?: EditorExecutor
+	/**
+	 * Record of what has been read, shared with the `read_files` executor.
+	 * Without it the read-before-edit guard is off; with a *different* object
+	 * it would refuse every edit, so there is one registry per controller.
+	 */
+	receipts?: ReadReceipts
 	/** Injectable for tests. Defaults to the SDK's disk-writing apply_patch executor. */
 	fallbackApplyPatchExecutor?: ApplyPatchExecutor
 	/** Test seam: overrides the auto-approve preview linger. */
@@ -83,7 +90,9 @@ export class SdkDiffEditCoordinator {
 	private readonly previewOpenTimeoutMs: number
 
 	constructor(private readonly options: SdkDiffEditCoordinatorOptions) {
-		this.fallbackEditorExecutor = options.fallbackEditorExecutor ?? createEditorExecutor()
+		// Same registry the workspace reader records into, or the read-before-edit
+		// guard never sees the reads it is meant to check.
+		this.fallbackEditorExecutor = options.fallbackEditorExecutor ?? createEditorExecutor({ receipts: options.receipts })
 		this.fallbackApplyPatchExecutor = options.fallbackApplyPatchExecutor ?? createApplyPatchExecutor()
 		this.autoApprovePreviewLingerMs = options.autoApprovePreviewLingerMs ?? AUTO_APPROVE_PREVIEW_LINGER_MS
 		this.previewOpenTimeoutMs = options.previewOpenTimeoutMs ?? PREVIEW_OPEN_TIMEOUT_MS

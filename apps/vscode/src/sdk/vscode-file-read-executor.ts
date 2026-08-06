@@ -1,4 +1,4 @@
-import { createDefaultExecutors, type ToolExecutors } from "@cline/core"
+import { createFileReadExecutor, type ReadReceipts, type ToolExecutors } from "@cline/core"
 import * as path from "path"
 
 type FileReadExecutor = NonNullable<ToolExecutors["readFile"]>
@@ -11,12 +11,17 @@ type FileReadExecutor = NonNullable<ToolExecutors["readFile"]>
  * VS Code extension host is usually "/" — not the workspace — so every relative-path
  * read failed with ENOENT and pushed the model into terminal fallbacks. The terminal
  * and editor tools already run against the workspace root; this makes reads match.
+ *
+ * `receipts` has to be the same object the editor executor was given. This
+ * override replaces the reader the SDK wired up, so a registry minted here
+ * would record reads that the editor never checks — and the read-before-edit
+ * guard would refuse every edit while looking like it was working.
  */
-export function createWorkspaceFileReadExecutor(getWorkspaceRoot: () => Promise<string>): FileReadExecutor {
-	const readFile = createDefaultExecutors().readFile
-	if (!readFile) {
-		throw new Error("SDK default executors did not provide a readFile executor")
-	}
+export function createWorkspaceFileReadExecutor(
+	getWorkspaceRoot: () => Promise<string>,
+	receipts?: ReadReceipts,
+): FileReadExecutor {
+	const readFile = createFileReadExecutor({ receipts })
 	return async (request, context) => {
 		if (path.isAbsolute(request.path)) {
 			return readFile(request, context)
