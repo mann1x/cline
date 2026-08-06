@@ -458,6 +458,18 @@ export interface AgentRuntimeConfig {
 		 * the bound is on consecutive silence rather than on the run.
 		 */
 		maxNoToolCallNudges?: number;
+		/**
+		 * How many consecutive turns cut off at the per-turn output cap are
+		 * retried before the run ends. Defaults to 2; zero restores the older
+		 * behaviour where a truncated turn ends the run.
+		 *
+		 * A turn that hits the cap with no tool calls in it produced nothing the
+		 * run can use, and the model cannot see that it was cut off. Retrying
+		 * discards the truncated reply — it never enters the history — and tells
+		 * the model what happened, so the retry differs instead of reproducing
+		 * the same overlong output. The counter resets on any turn that finishes.
+		 */
+		maxTruncatedTurnRetries?: number;
 	};
 	toolExecution?: "sequential" | "parallel";
 	toolPolicies?: Record<string, ToolPolicy>;

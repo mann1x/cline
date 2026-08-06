@@ -113,7 +113,13 @@ describe("AgentRuntime", () => {
 				{ type: "finish", reason: "max-tokens" },
 			],
 		]);
-		const runtime = new AgentRuntime({ model, logger });
+		// Retries off: this case pins what happens once the budget is spent. The
+		// recovery itself is covered below.
+		const runtime = new AgentRuntime({
+			model,
+			logger,
+			completionPolicy: { maxTruncatedTurnRetries: 0 },
+		});
 
 		const result = await runtime.run("Hi");
 
@@ -143,6 +149,58 @@ describe("AgentRuntime", () => {
 				}),
 			}),
 		);
+	});
+
+	it("retries a turn truncated at the output limit instead of ending the run", async () => {
+		// The model cannot see that it was cut off — it emitted a well-formed
+		// reply and never saw it end. So the turn is restarted and the model is
+		// told, which is what makes the retry differ from the attempt.
+		const model = new ScriptedModel([
+			() => [
+				{ type: "reasoning-delta", text: "a very long think..." },
+				{ type: "finish", reason: "max-tokens" },
+			],
+			() => [
+				{ type: "text-delta", text: "short answer" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({ model });
+
+		const result = await runtime.run("Hi");
+
+		expect(result.status).toBe("completed");
+		expect(result.outputText).toBe("short answer");
+		expect(model.requests).toHaveLength(2);
+
+		// The truncated reply never enters the history: resending it would spend
+		// the same budget on output already thrown away.
+		const serialized = JSON.stringify(result.messages);
+		expect(serialized).not.toContain("a very long think...");
+		// The retry's prompt carries the explanation.
+		const retryPrompt = JSON.stringify(model.requests[1].messages);
+		expect(retryPrompt).toContain("hit the per-turn output limit");
+	});
+
+	it("gives up after the truncated-turn retry budget is spent", async () => {
+		const truncated = () =>
+			[
+				{ type: "reasoning-delta", text: "still too long" },
+				{ type: "finish", reason: "max-tokens" },
+			] as AgentModelEvent[];
+		const model = new ScriptedModel([truncated, truncated, truncated]);
+		const runtime = new AgentRuntime({
+			model,
+			completionPolicy: { maxTruncatedTurnRetries: 2 },
+		});
+
+		const result = await runtime.run("Hi");
+
+		expect(result.status).toBe("failed");
+		expect(result.error?.message).toContain("maximum output token limit");
+		// The attempt itself plus two retries, then it stops rather than
+		// burning the window on a model that will not shorten.
+		expect(model.requests).toHaveLength(3);
 	});
 
 	it("does not persist an empty assistant message when the model stream fails", async () => {

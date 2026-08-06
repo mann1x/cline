@@ -52,6 +52,39 @@ const MAX_TOKENS_INCOMPLETE_TURN_MESSAGE =
 	"Model reached the maximum output token limit before completing the turn";
 
 /**
+ * How many truncated turns in a row are retried before the run ends.
+ *
+ * Bounded because each attempt costs a whole generation — up to the output cap
+ * itself, which on a local model is minutes of GPU time. Two is enough for the
+ * case this exists for: a model that reasoned past the cap once and, told so,
+ * produces a shorter reply. A model that truncates three times running is not
+ * going to be talked out of it, and ending the run beats burning the window.
+ *
+ * The counter is consecutive, not per-run: any turn that finishes resets it, so
+ * a long session gets the same protection at every point rather than spending a
+ * single allowance early.
+ */
+export const DEFAULT_MAX_TOKENS_TURN_RETRIES = 2;
+
+/**
+ * What the model is told after its reply was cut off.
+ *
+ * Said plainly, because the failure is invisible from the model's side: it
+ * emitted a well-formed reply and simply never saw it end. Without being told,
+ * a regenerated turn reproduces the same overlong output — the prompt has not
+ * changed, and at a low temperature neither will the answer.
+ *
+ * It names the discarded work, since that is the part that changes behaviour:
+ * the model's reasoning was thrown away and is not in the conversation, so
+ * continuing from it is not an option and the cheapest correct move is one
+ * small step.
+ */
+const MAX_TOKENS_INCOMPLETE_TURN_REMINDER =
+	"[SYSTEM] Your last reply hit the per-turn output limit before you finished, so it was discarded — none of it, including your reasoning, is in this conversation. " +
+	"Do not try to reproduce it. Take the smallest useful next step instead: make one tool call, or write one short paragraph. " +
+	"If the work you were planning does not fit in one reply, do the part that fits, call the tools it needs, and continue in the next turn.";
+
+/**
  * The nudge budget for hosts that want it without picking a number.
  *
  * Off by default, because "a turn with no tool calls ends the run" is the
@@ -485,6 +518,8 @@ export class AgentRuntime {
 	private overflowRecoveryAttempted = false;
 	/** Consecutive turns nudged for producing no tool calls; reset by any turn that does. */
 	private consecutiveNoToolCallNudges = 0;
+	/** Consecutive turns cut off at the output cap; reset by any turn that completes. */
+	private consecutiveMaxTokensRetries = 0;
 	private initialization?: Promise<void>;
 	private abortController?: AbortController;
 	private readonly telemetryProviderId?: string;
@@ -659,6 +694,21 @@ export class AgentRuntime {
 			: undefined;
 	}
 
+	/**
+	 * Retries allowed for turns truncated at the output cap.
+	 *
+	 * Defaulted on rather than opted into, unlike the no-tool-call nudge: a
+	 * nudge asks a model that has finished to keep going, which is a policy
+	 * question, while this recovers a turn the model never got to finish. A
+	 * host that wants the old behaviour sets it to zero.
+	 */
+	private getMaxTokensRetryBudget(): number {
+		const configured = this.config.completionPolicy?.maxTruncatedTurnRetries;
+		return typeof configured === "number" && Number.isFinite(configured)
+			? Math.max(0, Math.floor(configured))
+			: DEFAULT_MAX_TOKENS_TURN_RETRIES;
+	}
+
 	private async addUserReminderMessage(text: string): Promise<AgentMessage> {
 		const reminderMessage = createMessage("user", [{ type: "text", text }], {
 			userRunSpan: 0,
@@ -738,6 +788,42 @@ export class AgentRuntime {
 						part.type === "tool-call",
 				);
 
+				// A turn cut off at the output cap with nothing actionable in it is
+				// a wasted turn, not a failed run. Restarting is only possible
+				// *here*, before the push: the truncated message never enters the
+				// history, so the retry starts from the same place the turn did
+				// rather than from a half-written reply that would be resent in
+				// full and eat the same budget again.
+				//
+				// The reminder is what makes the retry differ. Regenerating from an
+				// unchanged prompt reproduces an overlong reply, so the model is
+				// told what happened and asked for the smallest next step.
+				// `prepareTurn` runs on the retry like any other turn, so if the
+				// window is what is tight, compaction happens there.
+				if (
+					finishReason === "max-tokens" &&
+					toolCalls.length === 0 &&
+					this.consecutiveMaxTokensRetries < this.getMaxTokensRetryBudget()
+				) {
+					this.consecutiveMaxTokensRetries += 1;
+					await this.emit({
+						type: "status-notice",
+						snapshot: this.snapshot(),
+						message: "output limit reached before the turn finished — retrying",
+						metadata: {
+							kind: "max_tokens_turn_recovery",
+							reason: "max_tokens_turn_recovery",
+							phase: "started",
+							iteration: this.state.iteration,
+							attempt: this.consecutiveMaxTokensRetries,
+						},
+					});
+					await this.addUserReminderMessage(
+						MAX_TOKENS_INCOMPLETE_TURN_REMINDER,
+					);
+					continue;
+				}
+
 				finalAssistantMessage = message;
 				this.state.messages.push(message);
 				await this.emit({
@@ -795,6 +881,9 @@ export class AgentRuntime {
 				// A turn that calls tools is a turn that is working, so the
 				// consecutive-silence budget starts over.
 				this.consecutiveNoToolCallNudges = 0;
+				// Same for truncation: a turn that reached its tool calls did not
+				// run out of room, so a later one gets the full allowance again.
+				this.consecutiveMaxTokensRetries = 0;
 				const toolMessages = await this.executeToolCalls(toolCalls);
 				this.state.pendingToolCalls = [];
 				for (const toolMessage of toolMessages) {
