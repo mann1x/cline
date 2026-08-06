@@ -26,6 +26,7 @@ export function buildToolPolicies(
 	set(["editor", "replace_in_file", "write_to_file", "apply_patch", "delete_file"])
 	set(["run_commands", "execute_command"])
 	set(["fetch_web_content", "web_fetch", "web_search"])
+	set(["browser", "browser_action"])
 
 	if (mcpHub) {
 		for (const server of mcpHub.getServers()) {
@@ -87,7 +88,17 @@ function isCommandTool(toolName: string): boolean {
 }
 
 function isBrowserTool(toolName: string): boolean {
-	return toolName === "fetch_web_content" || toolName === "web_fetch" || toolName === "web_search"
+	return (
+		toolName === "fetch_web_content" ||
+		toolName === "web_fetch" ||
+		toolName === "web_search" ||
+		// The tool that actually drives a browser. It reaches the network and
+		// spawns a process, so it answers to the same "Use the browser"
+		// checkbox the user already has rather than to the SDK's
+		// auto-approve-by-default for unlisted tools.
+		toolName === "browser" ||
+		toolName === "browser_action"
+	)
 }
 
 function parseMcpToolName(toolName: string): { serverName: string; toolName: string } | undefined {
