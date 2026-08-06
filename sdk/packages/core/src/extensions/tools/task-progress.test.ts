@@ -346,15 +346,13 @@ describe("wrapping twice", () => {
 
 describe("surviving a session restore", () => {
 	const transcript = [
-		{ role: "user", content: "fix the bugs" },
+		{ content: "fix the bugs" },
 		{
-			role: "assistant",
 			content: [
 				{ type: "tool_use", input: { [TASK_PROGRESS_PARAM]: "- [ ] a\n- [ ] b" } },
 			],
 		},
 		{
-			role: "assistant",
 			content: [
 				{ type: "text", text: "thinking" },
 				{ type: "tool_use", input: { [TASK_PROGRESS_PARAM]: "- [x] a\n- [ ] b" } },
@@ -367,7 +365,7 @@ describe("surviving a session restore", () => {
 	})
 
 	it("returns nothing when no call ever carried one", () => {
-		expect(findLatestTaskProgress([{ role: "user", content: "hi" }])).toBeUndefined()
+		expect(findLatestTaskProgress([{ content: "hi" }])).toBeUndefined()
 		expect(findLatestTaskProgress(undefined)).toBeUndefined()
 		expect(findLatestTaskProgress([{ content: [null, "x", { type: "text" }] }])).toBeUndefined()
 	})

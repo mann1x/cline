@@ -109,3 +109,33 @@ describe("ThinkingRow body visibility", () => {
 		expect(screen.getByText("Deciding which file to read")).toBeInTheDocument()
 	})
 })
+
+describe("ThinkingRow while streaming", () => {
+	const twoLines = "First I read the file.\nThen I fix line 94."
+
+	// Single newlines are not line breaks in Markdown, so live reasoning renders
+	// as one running paragraph — reported as a code snippet "collapsed in a
+	// single line".
+	it("keeps line breaks in streaming reasoning", () => {
+		const { container } = render(
+			<ThinkingRow isExpanded={true} isStreaming={true} isVisible={true} reasoningContent={twoLines} showTitle={true} />,
+		)
+
+		expect(container.textContent).toContain("First I read the file.\nThen I fix line 94.")
+		expect(container.querySelector(".whitespace-pre-wrap")).not.toBeNull()
+	})
+
+	it("renders Markdown once the text has stopped arriving", () => {
+		render(
+			<ThinkingRow
+				isExpanded={true}
+				isStreaming={false}
+				isVisible={true}
+				reasoningContent={"## Plan\n\n- read the file"}
+				showTitle={true}
+			/>,
+		)
+
+		expect(screen.getByRole("heading", { name: "Plan" })).toBeInTheDocument()
+	})
+})

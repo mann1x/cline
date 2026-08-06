@@ -123,8 +123,32 @@ export const ThinkingRow = memo(
 								 * now, and keeping it would double every blank
 								 * line.
 								 */}
+								{/*
+								 * Markdown only once the text has stopped arriving.
+								 *
+								 * Two things go wrong rendering a live stream as
+								 * Markdown. Single newlines are not line breaks in
+								 * Markdown, so reasoning — which is mostly single-newline
+								 * prose — collapses into one running paragraph; and the
+								 * text is re-parsed on every token, with the tail
+								 * routinely mid-construct (an unclosed fence, a half
+								 * written list), so what is on screen stops tracking what
+								 * has arrived until the turn ends and the last parse
+								 * finally succeeds. Both were reported together:
+								 * a code snippet flattened to one line, then no updates
+								 * at all, then the whole block appearing complete.
+								 *
+								 * While streaming this is what the model is emitting, so
+								 * it is shown verbatim with its line breaks intact.
+								 * Once complete the same text renders as Markdown, which
+								 * is what makes a long thinking block readable afterwards.
+								 */}
 								<span className="pb-2 block text-sm w-full min-w-0">
-									<MarkdownBlock markdown={reasoningContent} />
+									{isStreaming ? (
+										<span className="whitespace-pre-wrap break-words">{reasoningContent}</span>
+									) : (
+										<MarkdownBlock markdown={reasoningContent} />
+									)}
 								</span>
 							</div>
 							{canScrollUp && (

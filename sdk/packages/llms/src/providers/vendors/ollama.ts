@@ -116,9 +116,52 @@ export function readOllamaTimeoutMs(
  * Mirrors the legacy handler, which raced the chat call (stream start)
  * against a timeout rather than bounding the whole generation.
  */
+/**
+ * A dispatcher with Node's stream timeouts switched off, or undefined where
+ * there is none to configure.
+ *
+ * Node's `fetch` is undici, and undici applies a `bodyTimeout` (5 minutes by
+ * default) *between body chunks*. A reasoning model streaming from Ollama
+ * sends nothing at all while it thinks, so a long thinking phase is
+ * indistinguishable from a stalled connection and the stream is aborted with
+ * `UND_ERR_BODY_TIMEOUT` — observed ending a live run. `headersTimeout` is
+ * switched off for the same reason on the cold-load path, where Ollama holds
+ * the response open for minutes before the first byte.
+ *
+ * Removing these is safe precisely because this vendor already brings its own
+ * bound: `withOllamaResponseTimeout` fails a request that never *starts*. What
+ * is being given up is only the rule that a started response must keep
+ * arriving at a fixed rate, which is the rule a thinking model breaks by
+ * design.
+ *
+ * Resolved once, lazily, and never rethrows: a runtime without undici (a
+ * browser, a custom fetch) simply gets no dispatcher and keeps its own
+ * behaviour.
+ */
+let cachedDispatcher: unknown;
+let dispatcherResolved = false;
+async function resolveNoStreamTimeoutDispatcher(): Promise<unknown> {
+	if (dispatcherResolved) {
+		return cachedDispatcher;
+	}
+	dispatcherResolved = true;
+	try {
+		const undici = (await import("undici")) as {
+			Agent?: new (options: Record<string, unknown>) => unknown;
+		};
+		cachedDispatcher = undici.Agent
+			? new undici.Agent({ bodyTimeout: 0, headersTimeout: 0 })
+			: undefined;
+	} catch {
+		cachedDispatcher = undefined;
+	}
+	return cachedDispatcher;
+}
+
 export function withOllamaResponseTimeout(
 	baseFetch: typeof fetch,
 	timeoutMs: number,
+	dispatcher?: unknown,
 ): typeof fetch {
 	return (async (input, init) => {
 		const timeoutController = new AbortController();
@@ -138,8 +181,17 @@ export function withOllamaResponseTimeout(
 		const signal = upstreamSignal
 			? AbortSignal.any([upstreamSignal, timeoutController.signal])
 			: timeoutController.signal;
+		// `dispatcher` is an undici extension to RequestInit; a runtime that does
+		// not know the key ignores it, and it is undefined where there is no
+		// undici to configure. Resolved by the caller rather than awaited here:
+		// an await before `baseFetch` moves the call after any synchronous
+		// abort, so a signal that fires immediately would be attached too late.
 		try {
-			return await baseFetch(input, { ...init, signal });
+			return await baseFetch(input, {
+				...init,
+				signal,
+				...(dispatcher ? { dispatcher } : {}),
+			} as RequestInit);
 		} finally {
 			clearTimeout(timer);
 		}
@@ -243,6 +295,7 @@ export async function createOllamaProviderModule(
 		fetch: withOllamaResponseTimeout(
 			ensureFetch(config.fetch),
 			readOllamaTimeoutMs(config),
+			await resolveNoStreamTimeoutDispatcher(),
 		),
 	});
 	// `num_ctx` and the sampler no longer ride on the model: this package has no

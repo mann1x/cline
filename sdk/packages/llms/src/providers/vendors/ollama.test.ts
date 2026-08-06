@@ -362,3 +362,36 @@ describe("buildOllamaStreamConfig", () => {
 		expect(built.temperature).toBe(0.2);
 	});
 });
+
+describe("stream timeouts", () => {
+	// Node's fetch is undici, which aborts a stream when no body chunk arrives
+	// for `bodyTimeout` (5 min by default). A reasoning model sends nothing at
+	// all while it thinks, so a long thinking phase looks exactly like a stalled
+	// connection — observed ending a live run with UND_ERR_BODY_TIMEOUT.
+	it("passes the dispatcher through to the request", async () => {
+		const seen: RequestInit[] = [];
+		const baseFetch = (async (_input: unknown, init: RequestInit) => {
+			seen.push(init);
+			return new Response("ok");
+		}) as unknown as typeof fetch;
+		const dispatcher = { marker: true };
+
+		const wrapped = withOllamaResponseTimeout(baseFetch, 1000, dispatcher);
+		await wrapped("http://localhost:11434/api/chat");
+
+		expect((seen[0] as { dispatcher?: unknown }).dispatcher).toBe(dispatcher);
+	});
+
+	it("omits the key entirely when there is no dispatcher", async () => {
+		const seen: RequestInit[] = [];
+		const baseFetch = (async (_input: unknown, init: RequestInit) => {
+			seen.push(init);
+			return new Response("ok");
+		}) as unknown as typeof fetch;
+
+		const wrapped = withOllamaResponseTimeout(baseFetch, 1000);
+		await wrapped("http://localhost:11434/api/chat");
+
+		expect("dispatcher" in (seen[0] as object)).toBe(false);
+	});
+});
