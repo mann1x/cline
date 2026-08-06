@@ -73,3 +73,39 @@ describe("ThinkingRow", () => {
 		expect(onToggle).toHaveBeenCalledTimes(1)
 	})
 })
+
+describe("ThinkingRow body visibility", () => {
+	// The body renders only when expanded. A caller that leaves `isExpanded`
+	// false during streaming shows a shimmering title and nothing else, and the
+	// reasoning becomes readable only once the turn is over — the exact failure
+	// this row exists to avoid. RequestStartRow therefore passes
+	// `isExpanded || showStreamingThinking`.
+	it("hides the reasoning body when collapsed", () => {
+		render(
+			<ThinkingRow
+				isExpanded={false}
+				isStreaming={true}
+				isVisible={true}
+				reasoningContent="Deciding which file to read"
+				showTitle={true}
+			/>,
+		)
+
+		expect(screen.getByText("Thinking")).toBeInTheDocument()
+		expect(screen.queryByText("Deciding which file to read")).not.toBeInTheDocument()
+	})
+
+	it("shows the reasoning body while it is still streaming in", () => {
+		render(
+			<ThinkingRow
+				isExpanded={true}
+				isStreaming={true}
+				isVisible={true}
+				reasoningContent="Deciding which file to read"
+				showTitle={true}
+			/>,
+		)
+
+		expect(screen.getByText("Deciding which file to read")).toBeInTheDocument()
+	})
+})

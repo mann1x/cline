@@ -16,6 +16,7 @@ import type {
 	SessionWorkspaceConfig,
 } from "@cline/shared";
 import type { ToolRoutingRule } from "../extensions/tools/model-tool-routing";
+import type { TaskProgressState } from "../extensions/tools/task-progress";
 import type { TeamEvent } from "../extensions/tools/team";
 import type { ProviderConfig } from "./provider-settings";
 
@@ -158,6 +159,21 @@ export interface CoreCompactionSummarizerConfig {
 	maxOutputTokens?: number;
 }
 
+/**
+ * Session settings for the model's task checklist.
+ *
+ * Off unless a host asks for it: the checklist costs a parameter on every tool
+ * description and re-sent text every few calls, which is a trade a host makes
+ * knowingly rather than inherits.
+ */
+export interface CoreTaskProgressConfig {
+	enabled: boolean;
+	/** Tool calls between reminders. Non-positive disables reminding only. */
+	reminderInterval?: number;
+	/** Called whenever the model sends a new checklist. */
+	onUpdate?: (state: TaskProgressState) => void;
+}
+
 export type CoreCompactionStrategy = "basic" | "agentic";
 
 export interface CoreCompactionConfig {
@@ -287,6 +303,15 @@ export interface CoreSessionConfig
 	telemetry?: ITelemetryService;
 	extensionContext?: ExtensionContext;
 	extraTools?: AgentTool[];
+	/**
+	 * The checklist the model keeps while it works.
+	 *
+	 * Applied to the whole session toolset — builtins and `extraTools` alike.
+	 * A host that replaces a builtin (VS Code swaps `run_commands` for its own
+	 * terminal-aware version) would otherwise leave the most-used tool in a
+	 * coding run as the one tool carrying no checklist.
+	 */
+	taskProgress?: CoreTaskProgressConfig;
 	pluginPaths?: string[];
 	extensions?: AgentConfig["extensions"];
 	execution?: AgentConfig["execution"];

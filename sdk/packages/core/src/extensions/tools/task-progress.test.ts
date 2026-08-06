@@ -318,3 +318,27 @@ describe("createDefaultTools wiring", () => {
 		expect(tracker.getState()).toMatchObject({ completed: 1, total: 2 })
 	})
 })
+
+describe("wrapping twice", () => {
+	// The toolset can be wrapped at more than one layer: the builtin factory
+	// takes a tracker, and a host wraps the merged list so its own tools are
+	// covered too. Counting one call as two would pull every reminder forward.
+	it("is idempotent", async () => {
+		const tracker = new TaskProgressTracker({ reminderInterval: 2 })
+		const base = {
+			name: "read_files",
+			description: "reads files",
+			inputSchema: { type: "object", properties: {} },
+			execute: async () => "contents",
+		} as unknown as AgentTool<unknown, unknown>
+
+		const once = withTaskProgressCapture(base, tracker)
+		const twice = withTaskProgressCapture(once, tracker)
+		expect(twice).toBe(once)
+
+		await twice.execute({ [TASK_PROGRESS_PARAM]: "- [ ] a" }, {} as AgentToolContext)
+		// One call, not two: the reminder is still one call away.
+		expect(await twice.execute({}, {} as AgentToolContext)).toBe("contents")
+		expect(await twice.execute({}, {} as AgentToolContext)).toContain("<task_progress>")
+	})
+})

@@ -168,6 +168,19 @@ export function buildTaskProgressReminder(state: TaskProgressState): string {
 	return `\n\n<task_progress>\n${heading}\n${state.markdown}\n</task_progress>`;
 }
 
+/**
+ * Marks a tool that already carries the checklist wrapper. A symbol rather than
+ * a field: it must not appear in anything that serializes a tool definition.
+ */
+const TASK_PROGRESS_WRAPPED: unique symbol = Symbol.for(
+	"cline.taskProgressWrapped",
+);
+
+/** Whether a tool has already been wrapped for checklist capture. */
+export function isTaskProgressWrapped(tool: object): boolean {
+	return (tool as Record<symbol, unknown>)[TASK_PROGRESS_WRAPPED] === true;
+}
+
 export interface TaskProgressTrackerOptions {
 	/** Tool calls between reminders. Zero or less disables reminding. */
 	reminderInterval?: number;
@@ -251,7 +264,14 @@ export function withTaskProgressCapture<TInput, TOutput>(
 	tool: AgentTool<TInput, TOutput>,
 	tracker: TaskProgressTracker,
 ): AgentTool<TInput, TOutput> {
-	return {
+	// Wrapping twice would count one call as two and pull the reminder forward,
+	// and the toolset can legitimately be wrapped at more than one layer — the
+	// builtin factory takes a tracker, and the host wraps the merged list so
+	// its own tools are covered too. Idempotence is what lets both exist.
+	if (isTaskProgressWrapped(tool)) {
+		return tool;
+	}
+	const wrapped: AgentTool<TInput, TOutput> = {
 		...tool,
 		inputSchema: withTaskProgressParam(tool.inputSchema),
 		execute: async (input, context) => {
@@ -263,4 +283,9 @@ export function withTaskProgressCapture<TInput, TOutput>(
 			return `${result}${reminder}` as TOutput;
 		},
 	};
+	Object.defineProperty(wrapped, TASK_PROGRESS_WRAPPED, {
+		value: true,
+		enumerable: false,
+	});
+	return wrapped;
 }

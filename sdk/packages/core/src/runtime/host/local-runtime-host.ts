@@ -21,6 +21,10 @@ import {
 } from "../../extensions/context/compaction";
 import type { ToolExecutors } from "../../extensions/tools";
 import { DefaultToolNames } from "../../extensions/tools";
+import {
+	TaskProgressTracker,
+	withTaskProgressCapture,
+} from "../../extensions/tools/task-progress";
 import type { TeamEvent } from "../../extensions/tools/team";
 import type { HookEventPayload } from "../../hooks";
 import { buildTelemetryAgentIdentity } from "../../services/agent-events";
@@ -569,7 +573,32 @@ export class LocalRuntimeHost implements RuntimeHost {
 			onAuthError,
 		});
 
-		const tools = [...runtime.tools, ...(configWithProvider.extraTools ?? [])];
+		// Builtins and host tools are merged before the checklist is applied, so
+		// a host that replaces a builtin with its own (VS Code swaps
+		// `run_commands` for a terminal-aware version) does not end up with the
+		// most-used tool in a coding run as the only one carrying no checklist.
+		// The wrapper is idempotent, so a toolset already wrapped by the builtin
+		// factory passes through untouched rather than counting calls twice.
+		const mergedTools = [
+			...runtime.tools,
+			...(configWithProvider.extraTools ?? []),
+		];
+		const taskProgressConfig = configWithProvider.taskProgress;
+		const taskProgressTracker = taskProgressConfig?.enabled
+			? new TaskProgressTracker({
+					...(taskProgressConfig.reminderInterval !== undefined
+						? { reminderInterval: taskProgressConfig.reminderInterval }
+						: {}),
+					...(taskProgressConfig.onUpdate
+						? { onUpdate: taskProgressConfig.onUpdate }
+						: {}),
+				})
+			: undefined;
+		const tools = taskProgressTracker
+			? mergedTools.map((tool) =>
+					withTaskProgressCapture(tool, taskProgressTracker),
+				)
+			: mergedTools;
 		const extensions = runtime.extensions ?? bootstrap.extensions;
 		const explicitInitialCompactionState = startInput.initialCompactionState;
 		let activeSessionRef: ActiveSession | undefined;

@@ -155,9 +155,12 @@ export const RequestStartRow: React.FC<RequestStartRowProps> = ({
 
 	const apiReqState: ApiReqState = hasError ? "error" : hasCost ? "final" : hasReasoning ? "thinking" : "pre"
 
-	// While reasoning is streaming, keep the Brain ThinkingBlock exactly as-is.
-	// Once response content starts (any text/tool/command), collapse into a compact
-	// "🧠 Thinking" row that can be expanded to show the reasoning only.
+	// While reasoning is streaming, the body is shown whether or not the user
+	// expanded it; once response content starts it collapses to a row they can
+	// open again. `ThinkingRow` renders its body only when expanded, so without
+	// this a whole thinking phase shows nothing but the shimmering title and the
+	// reasoning only becomes visible after the turn ends — which is the bug this
+	// row was changed to fix in the first place.
 	const showStreamingThinking = useMemo(
 		() => hasReasoning && !hasError && !cost && !responseStarted,
 		[hasReasoning, hasError, cost, responseStarted],
@@ -244,7 +247,7 @@ export const RequestStartRow: React.FC<RequestStartRowProps> = ({
 			 */}
 			{reasoningContent && (
 				<ThinkingRow
-					isExpanded={isExpanded}
+					isExpanded={isExpanded || showStreamingThinking}
 					isStreaming={!hasCost}
 					isVisible={true}
 					onToggle={handleToggle}
