@@ -186,9 +186,48 @@ export function readOllamaTimeoutMs(
  * Resolved once, lazily, and never rethrows: a runtime without undici (a
  * browser, a custom fetch) simply gets no dispatcher and keeps its own
  * behaviour.
+ *
+ * The import alone is not enough in a bundled host, and that is not a
+ * hypothetical. A variable specifier is invisible to a bundler by
+ * construction — that is the point of it — so esbuild leaves `import("undici")`
+ * in the output as a *runtime* resolution against the extension's own
+ * directory. A packaged VSIX ships no `node_modules`, so it resolved nothing,
+ * the catch below swallowed it, and every build shipped with undici's default
+ * five-minute `bodyTimeout` still in force while reporting nothing at all.
+ * `UND_ERR_BODY_TIMEOUT` kept ending runs across four releases that were
+ * supposed to have fixed it.
+ *
+ * Hence {@link setOllamaNoStreamTimeoutDispatcher}: a host that already has
+ * undici linked hands one in, and the dynamic import stays as the fallback for
+ * hosts that do not. Nothing here reaches for a bundler-visible import, because
+ * that is exactly what this package cannot have.
  */
 let cachedDispatcher: unknown;
 let dispatcherResolved = false;
+
+/**
+ * Supply the dispatcher instead of having this module find one.
+ *
+ * For hosts that bundle: the injected value is used as-is and no import is
+ * attempted. Passing `undefined` clears an earlier injection and lets the
+ * import run again, which is what tests need between cases.
+ */
+export function setOllamaNoStreamTimeoutDispatcher(dispatcher: unknown): void {
+	cachedDispatcher = dispatcher;
+	dispatcherResolved = dispatcher !== undefined;
+}
+
+/**
+ * Whether a dispatcher is in force, for hosts that want to say so in a log.
+ *
+ * Exported because the absence of one is invisible from the outside and was
+ * invisible for four releases: the wrapper works either way, and the only
+ * symptom is a timeout minutes later that looks like a network fault.
+ */
+export function hasOllamaNoStreamTimeoutDispatcher(): boolean {
+	return cachedDispatcher !== undefined;
+}
+
 async function resolveNoStreamTimeoutDispatcher(): Promise<unknown> {
 	if (dispatcherResolved) {
 		return cachedDispatcher;

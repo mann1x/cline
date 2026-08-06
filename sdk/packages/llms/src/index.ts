@@ -95,6 +95,11 @@ export {
 	registerAsyncHandler,
 	registerHandler,
 	resolveProviderApiLineBaseUrl,
+	// A host that bundles has to hand the Ollama vendor its stream dispatcher:
+	// the vendor's own lookup is written to be invisible to bundlers, so it
+	// finds nothing once packaged.
+	hasOllamaNoStreamTimeoutDispatcher,
+	setOllamaNoStreamTimeoutDispatcher,
 } from "./providers";
 export {
 	type ProviderUsageCostDisplay,

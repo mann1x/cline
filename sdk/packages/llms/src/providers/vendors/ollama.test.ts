@@ -7,6 +7,7 @@ import {
 	buildOllamaSamplingOptions,
 	buildOllamaStreamConfig,
 	createOllamaProviderModule,
+	hasOllamaNoStreamTimeoutDispatcher,
 	normalizeOllamaBaseUrl,
 	OLLAMA_DEFAULT_NUM_CTX,
 	OLLAMA_DEFAULT_REASONING_EFFORT,
@@ -14,6 +15,7 @@ import {
 	readOllamaNumCtx,
 	readOllamaNumPredict,
 	readOllamaTimeoutMs,
+	setOllamaNoStreamTimeoutDispatcher,
 	withOllamaResponseTimeout,
 } from "./ollama";
 
@@ -397,9 +399,11 @@ describe("buildOllamaStreamConfig", () => {
 
 describe("stream timeouts", () => {
 	// Node's fetch is undici, which aborts a stream when no body chunk arrives
-	// for `bodyTimeout` (5 min by default). A reasoning model sends nothing at
-	// all while it thinks, so a long thinking phase looks exactly like a stalled
-	// connection — observed ending a live run with UND_ERR_BODY_TIMEOUT.
+	// for `bodyTimeout` (5 min by default) — a bound on any single gap, not on
+	// the response as a whole. Thinking is not the gap: Ollama streams reasoning
+	// deltas, so a thinking model is sending. The gap is prompt prefill, which
+	// happens after the headers are already out — observed ending live runs with
+	// UND_ERR_BODY_TIMEOUT.
 	it("passes the dispatcher through to the request", async () => {
 		const seen: RequestInit[] = [];
 		const baseFetch = (async (_input: unknown, init: RequestInit) => {
@@ -425,5 +429,55 @@ describe("stream timeouts", () => {
 		await wrapped("http://localhost:11434/api/chat");
 
 		expect("dispatcher" in (seen[0] as object)).toBe(false);
+	});
+});
+
+describe("setOllamaNoStreamTimeoutDispatcher", () => {
+	afterEach(() => {
+		setOllamaNoStreamTimeoutDispatcher(undefined);
+	});
+
+	// The vendor's own lookup uses a variable specifier so no bundler can see
+	// it — which is also why it finds nothing in a packaged extension, where
+	// there is no `node_modules` to resolve against at runtime. It failed into
+	// a silent catch for four releases while UND_ERR_BODY_TIMEOUT kept ending
+	// runs. A host that has undici linked hands one in instead.
+	it("reports whether a dispatcher is in force", () => {
+		expect(hasOllamaNoStreamTimeoutDispatcher()).toBe(false);
+
+		setOllamaNoStreamTimeoutDispatcher({ marker: true });
+
+		expect(hasOllamaNoStreamTimeoutDispatcher()).toBe(true);
+	});
+
+	it("puts the injected dispatcher on the requests the provider makes", async () => {
+		// End to end through the module, because the bug was never in the
+		// wrapper — it was that nothing ever reached it.
+		const injected = { marker: "injected" };
+		setOllamaNoStreamTimeoutDispatcher(injected);
+
+		createOllamaMock.mockReset();
+		createOllamaMock.mockReturnValue({ chat: ollamaModelMock });
+		const seen: RequestInit[] = [];
+		const baseFetch = (async (_input: unknown, init: RequestInit) => {
+			seen.push(init);
+			return new Response("ok");
+		}) as unknown as typeof fetch;
+
+		await createOllamaProviderModule(
+			config({ baseUrl: "http://localhost:11434", fetch: baseFetch }),
+			context({}),
+		);
+		const passedFetch = createOllamaMock.mock.calls[0][0].fetch as typeof fetch;
+		await passedFetch("http://localhost:11434/api/chat");
+
+		expect((seen[0] as { dispatcher?: unknown }).dispatcher).toBe(injected);
+	});
+
+	it("clears back to lookup when the injection is removed", () => {
+		setOllamaNoStreamTimeoutDispatcher({ marker: true });
+		setOllamaNoStreamTimeoutDispatcher(undefined);
+
+		expect(hasOllamaNoStreamTimeoutDispatcher()).toBe(false);
 	});
 });

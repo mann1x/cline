@@ -135,4 +135,10 @@ export async function createHandlerAsync(
 // The level an Ollama request stands for when none is set. Exported because
 // it decides the thinking budget the server enforces, so anything asking the
 // server what that budget will be has to ask about this level.
-export { OLLAMA_DEFAULT_REASONING_EFFORT } from "./providers/vendors/ollama";
+export {
+	hasOllamaNoStreamTimeoutDispatcher,
+	OLLAMA_DEFAULT_REASONING_EFFORT,
+	// Takes an opaque `unknown` and touches no Node API, so the browser build
+	// carries a setter nobody calls rather than needing a conditional export.
+	setOllamaNoStreamTimeoutDispatcher,
+} from "./providers/vendors/ollama";
