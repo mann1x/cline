@@ -40,4 +40,57 @@ describe("ollama-ai-provider-v2 patch contract", () => {
 
 		expect(source).toMatch(/\}\)\.catchall\(/)
 	})
+
+	/**
+	 * Where the API prefix lives.
+	 *
+	 * This package appends bare paths to `baseURL` (`/chat`), so `/api` has to
+	 * be part of the base URL. The previous provider took the opposite
+	 * convention — a bare origin, with `/api/...` appended by the client — and
+	 * carrying that normalization over sent every request to `/chat`, which
+	 * Ollama answers with a plain `404 page not found`.
+	 *
+	 * The rest of this vendor's tests mock `createOllama`, so no test of our own
+	 * wiring can see which convention the package follows. This one lets the
+	 * real package build the URL and asserts the path it actually requests.
+	 */
+	it("requests /api/chat when given a configured origin", async () => {
+		const { createOllamaProviderModule } = await import("./ollama")
+
+		const requested: string[] = []
+		const fetchMock = (async (input: RequestInfo | URL) => {
+			requested.push(typeof input === "string" ? input : input.toString())
+			return new Response(
+				`${JSON.stringify({
+					model: "m",
+					created_at: "2024-01-01T00:00:00Z",
+					message: { role: "assistant", content: "" },
+					done: true,
+					done_reason: "stop",
+					prompt_eval_count: 1,
+					eval_count: 1,
+				})}\n`,
+				{ status: 200, headers: { "content-type": "application/x-ndjson" } },
+			)
+		}) as typeof fetch
+
+		const provider = await createOllamaProviderModule(
+			{ providerId: "ollama", baseUrl: "http://localhost:11434", fetch: fetchMock } as never,
+			{
+				provider: { id: "ollama", name: "Ollama", defaultModelId: "", models: [] },
+				model: { id: "m", name: "m", providerId: "ollama" },
+			} as never,
+		)
+
+		const stream = await provider.model("m").doStream({
+			prompt: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+		} as never)
+		// Drain so the request is actually issued and the mock is not left open.
+		const reader = (stream as { stream: ReadableStream }).stream.getReader()
+		while (!(await reader.read()).done) {
+			// no-op
+		}
+
+		expect(requested[0]).toBe("http://localhost:11434/api/chat")
+	})
 })

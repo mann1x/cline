@@ -30,30 +30,33 @@ vi.mock("ollama-ai-provider-v2", () => ({
 }));
 
 describe("normalizeOllamaBaseUrl", () => {
-	it("passes a bare origin through (the ollama client appends /api itself)", () => {
+	// The provider appends bare paths (`/chat`), so the `/api` prefix has to be
+	// part of the base URL. Returning an origin here is what sent every request
+	// to `/chat` and got back a plain `404 page not found`.
+	it("appends the /api prefix a bare origin is missing", () => {
 		expect(normalizeOllamaBaseUrl("http://localhost:11434")).toBe(
-			"http://localhost:11434",
+			"http://localhost:11434/api",
 		);
 		expect(normalizeOllamaBaseUrl("https://ollama.com")).toBe(
-			"https://ollama.com",
+			"https://ollama.com/api",
 		);
 	});
 
-	it("strips a legacy OpenAI-compat /v1 suffix", () => {
+	it("replaces a legacy OpenAI-compat /v1 suffix", () => {
 		expect(normalizeOllamaBaseUrl("http://localhost:11434/v1")).toBe(
-			"http://localhost:11434",
+			"http://localhost:11434/api",
 		);
 	});
 
-	it("strips a native-API /api suffix", () => {
+	it("keeps a native-API /api suffix without doubling it", () => {
 		expect(normalizeOllamaBaseUrl("http://localhost:11434/api")).toBe(
-			"http://localhost:11434",
+			"http://localhost:11434/api",
 		);
 	});
 
 	it("strips trailing slashes", () => {
 		expect(normalizeOllamaBaseUrl("http://localhost:11434/")).toBe(
-			"http://localhost:11434",
+			"http://localhost:11434/api",
 		);
 	});
 
@@ -183,7 +186,7 @@ describe("createOllamaProviderModule", () => {
 		// This package takes auth through headers rather than an `apiKey` field.
 		expect(createOllamaMock).toHaveBeenCalledWith(
 			expect.objectContaining({
-				baseURL: "https://ollama.com",
+				baseURL: "https://ollama.com/api",
 				headers: expect.objectContaining({
 					Authorization: "Bearer ollama-key",
 				}),

@@ -36,12 +36,19 @@ import type { ProviderFactoryResult } from "./types";
 export const OLLAMA_DEFAULT_NUM_CTX = OLLAMA_DEFAULT_CONTEXT_WINDOW;
 
 /**
- * Normalize a configured base URL to the origin the `ollama` client expects
- * as its `host` (the client appends `/api/...` itself).
+ * Normalize a configured base URL to the `baseURL` this provider expects.
  *
- * Users configure hosts like `http://localhost:11434` or
- * `https://ollama.com`; configs saved by the 4.0.0 OpenAI-compatible
- * routing may carry a `/v1` suffix, and native-API configs an `/api` one.
+ * The API prefix belongs *in* the base URL here: the package appends bare
+ * paths (`/chat`, `/show`) and its own default is
+ * `http://127.0.0.1:11434/api`. This is the opposite of the `ollama` client
+ * the previous provider used, which took a bare origin as its `host` and
+ * appended `/api/...` itself — so returning an origin sends every request to
+ * `/chat`, which Ollama answers with a plain `404 page not found`.
+ *
+ * Users configure hosts like `http://localhost:11434` or `https://ollama.com`;
+ * configs saved by the 4.0.0 OpenAI-compatible routing may carry a `/v1`
+ * suffix, and native-API configs an `/api` one. All three normalize to the
+ * same origin, and `/api` is then appended exactly once.
  */
 export function normalizeOllamaBaseUrl(
 	baseUrl: string | undefined,
@@ -50,7 +57,7 @@ export function normalizeOllamaBaseUrl(
 	if (!trimmed) {
 		return undefined;
 	}
-	return trimmed.replace(/\/(?:v1|api)$/, "");
+	return `${trimmed.replace(/\/(?:v1|api)$/, "")}/api`;
 }
 
 /**
