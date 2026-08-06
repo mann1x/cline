@@ -201,8 +201,18 @@ When to call it:
 Output: plain text, one section per file you named. Each problem is its own line, `file:line:column` with a severity and a message; a file with nothing wrong says so in one line. There is no object to unpack and no `success` field — problems being listed is this tool working, not failing.
 
 Read a clean result carefully. "No problems reported by the editor" is conclusive only where the IDE has a language server for that file, and it does not for every language on every machine. If this reports nothing and you have reason to expect a problem, or the project has a checker the IDE does not run, run that checker with `run_commands`. Tests and builds are always `run_commands`; this tool does not run them.
-When a file's brackets do not match, a `Delimiter scan:` section follows the problems and names the *opening* bracket involved. A parse error is always reported where the parser gave up, which is the closing bracket; the opener is the one you have to edit, and it is the one the error cannot name. Trust that line over counting brackets yourself — it skips strings, comments and regex literals.
+When a file's brackets do not match, a `Delimiter scan` section names the *opening* bracket involved, one line per place the trouble starts — fix every line it lists in one edit. A parse error is always reported where the parser gave up, which is the closing bracket; the opener is the one you have to edit, and it is the one the error cannot name. Trust that line over counting brackets yourself — it skips strings, comments and regex literals. It runs even when the editor reported nothing, which is the only report you get for script inside an `.html` file.
 
+# tool: browser
+Open a page in a real browser and report what it printed to the console and what it threw. This is how you check that a page works — open it and read the errors rather than asking the user whether it works.
+
+Use it after editing any HTML, CSS or JavaScript the page loads, and before reporting a task finished. `check_file` cannot answer this: no language server checks the script inside an `.html` file, and a file that parses can still throw the moment it runs.
+
+Actions: `open` (with `url` — an absolute file path is accepted and converted), `click` (with `coordinate` as `"x,y"` in page pixels), `type` (with `text`), `scroll_down`, `scroll_up`, `close`.
+
+Every action reports the console messages and uncaught errors produced while it ran. `[error]` and `[Page Error]` lines are real failures; a page that printed nothing is a pass, not a failed call. The browser stays open between calls, so `open` once and then interact; only one page is open at a time.
+
+A parse error from the browser names no line. For a local file a `Delimiter scan` section follows it and names the *opening* bracket the parser could not match, one line per place the trouble starts — fix every line it lists in one edit rather than one reload per line, and read those lines instead of counting brackets yourself.
 # tool: code_intel
 Ask the IDE's language servers — the LSP — about a symbol. This is the LSP: if you are reaching for an LSP tool or an MCP server that wraps one, this is it, already running against this workspace. It understands the code, so it separates a definition from a mention, and this class's method from another class's method of the same name.
 

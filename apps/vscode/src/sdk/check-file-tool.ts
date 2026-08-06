@@ -4,7 +4,7 @@ import * as path from "path"
 import type { FileDiagnostics } from "@/shared/proto/index.cline"
 import { Logger } from "@/shared/services/Logger"
 import { describeDelimiterBalance } from "./delimiter-balance"
-import { readHostDiagnostics, readSettledDiagnostics, renderFileDiagnostics, sleep } from "./editor-diagnostics"
+import { readHostDiagnostics, readSettledDiagnostics, renderFileDiagnostics, samePath, sleep } from "./editor-diagnostics"
 
 /**
  * A tool that answers "is this file broken?".
@@ -54,7 +54,7 @@ Read a clean result carefully. "No problems reported by the editor" is conclusiv
 
 Output: plain text, one section per file you named, each problem on its own line as \`file:line:column\` with its severity and message. A file with nothing wrong says so in one line. There is no object to unpack and no \`success\` field — problems being listed is this tool working, not failing.
 
-When a file's brackets do not match, a \`Delimiter scan:\` section follows the problems and names the *opening* bracket involved. A parse error is always reported where the parser gave up, which is the closing bracket; the opener is the one you have to edit, and it is the one the error cannot name. Trust that line over counting brackets yourself — it skips strings, comments and regex literals, which counting characters does not.`
+When a file's brackets do not match, a \`Delimiter scan\` section names the *opening* bracket involved, and one line per place the trouble starts — a file can be broken in several spots at once, so fix every line it lists in one edit rather than one per round trip. A parse error is always reported where the parser gave up, which is the closing bracket; the opener is the one you have to edit, and it is the one the error cannot name. Trust those lines over counting brackets yourself — the scan skips strings, comments and regex literals, which counting characters does not. It runs whether or not the editor reported anything, so it can appear beneath a file the editor called clean — no language server checks the script inside an \`.html\` file, and there this is the only report you will get.`
 
 /**
  * Exported so the template generator can state this tool's real call shape.
@@ -231,19 +231,26 @@ async function describeFile(args: {
 	signal?: AbortSignal
 }): Promise<string> {
 	const { displayPath, absolutePath, diagnostics, options, signal } = args
-	const file = diagnostics.find((entry) => path.resolve(entry.filePath) === absolutePath)
+	const file = diagnostics.find((entry) => samePath(entry.filePath, absolutePath))
+
+	// A parse error is reported where the parser gave up, which is the closing
+	// bracket — never the opening one it failed to match. Say which opener it
+	// belongs to, since that is the edit to make and the language server
+	// structurally cannot tell you.
+	//
+	// Scanned whatever the editor said, including when it said nothing. A file
+	// with no language server behind it is exactly where this is the only
+	// answer available: VS Code ships no syntax checking for the script inside
+	// an `.html` file, so an unclosed brace there is reported by nobody.
+	const balance = await describeBalance(absolutePath)
+	const withBalance = (text: string) => (balance ? `${text}\n${balance}` : text)
 
 	// Same cap, same severity filter, same rendering as the post-edit report:
 	// two different answers to "what is wrong with this file" would be worse
 	// than either.
 	const rendered = file ? await renderFileDiagnostics(file.filePath, file.diagnostics) : ""
 	if (rendered !== "") {
-		// A parse error is reported where the parser gave up, which is the
-		// closing bracket — never the opening one it failed to match. Say
-		// which opener it belongs to, since that is the edit to make and the
-		// language server structurally cannot tell you.
-		const balance = await describeBalance(absolutePath)
-		return balance ? `${rendered}\n${balance}` : rendered
+		return withBalance(rendered)
 	}
 
 	// The editor said nothing, which is not the same as "this file is fine".
@@ -253,18 +260,24 @@ async function describeFile(args: {
 		try {
 			const result = await options.runLintCommand(template, absolutePath, signal)
 			if (result.exitCode !== 0 || result.output.trim() !== "") {
-				return [
-					`${displayPath}: the editor reported nothing, so \`${command}\` was run.`,
-					result.output.trim() || `(no output; exit code ${result.exitCode})`,
-				].join("\n")
+				return withBalance(
+					[
+						`${displayPath}: the editor reported nothing, so \`${command}\` was run.`,
+						result.output.trim() || `(no output; exit code ${result.exitCode})`,
+					].join("\n"),
+				)
 			}
-			return `${displayPath}: no problems. The editor reported none and \`${command}\` passed.`
+			return withBalance(`${displayPath}: no problems. The editor reported none and \`${command}\` passed.`)
 		} catch (error) {
-			return `${displayPath}: the editor reported nothing, and \`${command}\` failed to run: ${
-				error instanceof Error ? error.message : String(error)
-			}`
+			return withBalance(
+				`${displayPath}: the editor reported nothing, and \`${command}\` failed to run: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+			)
 		}
 	}
 
-	return `${displayPath}: no problems reported by the editor. If no language server handles this file type, that is not the same as clean.`
+	return withBalance(
+		`${displayPath}: no problems reported by the editor. If no language server handles this file type, that is not the same as clean.`,
+	)
 }

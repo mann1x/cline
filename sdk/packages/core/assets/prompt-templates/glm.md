@@ -119,6 +119,15 @@ Checks files for errors and warnings using the editor's language servers. Use th
 - Output: Plain text, one section per file. Problems listed as `file:line:column` with severity and message. A file with no problems says so in one line. No `success` field; problems being listed is the tool working.
 {{DEFAULT}}
 
+# tool: browser
+Open a page in a real browser and report what it printed to the console and what it threw. Check the page yourself rather than asking the user whether it works.
+
+Actions: `open` (with `url`; an absolute file path is accepted), `click` (with `coordinate` as `"x,y"`), `type` (with `text`), `scroll_down`, `scroll_up`, `close`.
+
+Call it after editing any HTML, CSS or JavaScript and before reporting a task finished. `check_file` cannot answer this — no language server checks the script inside an `.html` file, and a file that parses can still throw when it runs. `[error]` and `[Page Error]` lines are real failures; a page that printed nothing is a pass, not a failed call. The browser stays open between calls; `close` it when done.
+A parse error from the browser names no line. For a local file a `Delimiter scan` section follows it and names the *opening* bracket the parser could not match, one line per place the trouble starts — fix every line it lists in one edit rather than one reload per line, and read those lines instead of counting brackets yourself.
+{{DEFAULT}}
+
 # tool: code_intel
 Asks the IDE's language servers about a symbol. Use this instead of `search_codebase` for any question about a symbol (definitions, references, implementations, types, etc.). It is exact and does not require reading files to interpret results.
 - `operation`: string. One of: `definition`, `references`, `implementations`, `type_definition`, `hover`, `document_symbols`, `workspace_symbols`, `callers`.
