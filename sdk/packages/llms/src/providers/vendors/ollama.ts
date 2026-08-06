@@ -121,12 +121,22 @@ export function readOllamaTimeoutMs(
  * there is none to configure.
  *
  * Node's `fetch` is undici, and undici applies a `bodyTimeout` (5 minutes by
- * default) *between body chunks*. A reasoning model streaming from Ollama
- * sends nothing at all while it thinks, so a long thinking phase is
- * indistinguishable from a stalled connection and the stream is aborted with
- * `UND_ERR_BODY_TIMEOUT` — observed ending a live run. `headersTimeout` is
- * switched off for the same reason on the cold-load path, where Ollama holds
- * the response open for minutes before the first byte.
+ * default) *between body chunks* — it is not a budget for the whole response,
+ * only for how long any single gap in it may be.
+ *
+ * Thinking itself is not the gap: Ollama streams reasoning deltas, so a model
+ * that is thinking is sending chunks. The gap is before the first token —
+ * prompt prefill, which the server does after the response headers are out.
+ * At a large context that is minutes of silence on an otherwise healthy
+ * connection, and undici aborts it with `UND_ERR_BODY_TIMEOUT`.
+ *
+ * This interacts with our own transcript rewrites, which is why it surfaced
+ * now. A stale-read rewrite changes bytes mid-transcript and invalidates the
+ * provider's prefix cache from that point, so the next request re-prefills
+ * what would otherwise have been cached — the longest possible gap, produced
+ * by the cleanup that is supposed to help. `headersTimeout` goes for the
+ * related cold-load reason: Ollama holds the response open while it loads a
+ * model and sends no headers until it is ready.
  *
  * Removing these is safe precisely because this vendor already brings its own
  * bound: `withOllamaResponseTimeout` fails a request that never *starts*. What
@@ -146,7 +156,12 @@ async function resolveNoStreamTimeoutDispatcher(): Promise<unknown> {
 	}
 	dispatcherResolved = true;
 	try {
-		const undici = (await import("undici")) as {
+		// The specifier is a variable on purpose: a literal makes `undici` a hard
+		// build-time dependency of this package, and this package also builds for
+		// the browser, where there is no undici to depend on. Kept optional and
+		// resolved at runtime, it stays a capability rather than a requirement.
+		const specifier = "undici";
+		const undici = (await import(specifier)) as {
 			Agent?: new (options: Record<string, unknown>) => unknown;
 		};
 		cachedDispatcher = undici.Agent
