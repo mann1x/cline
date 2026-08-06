@@ -136,6 +136,13 @@ Verify file validity using IDE language servers. Use this instead of running a f
 - **Output:** Plain text listing `file:line:column` with severity and message. "No problems reported" means the file is valid according to the server.
 {{DEFAULT}}
 
+# tool: list_files
+List the files in the workspace. Use this to find out what exists instead of running `ls`, `dir` or `find` through `run_commands`.
+- **Arguments:** `path` lists one directory (absolute, or relative to the workspace root; omit for the root). `pattern` is a glob searched across the workspace, e.g. `**/*.html`. `max_results` caps the listing.
+- **When to use:** Whenever you need to know what files exist or where a file lives. Prefer it over a shell command: it is limited to the folders the user opened, and it leaves out `node_modules`, `.git` and build output.
+- **Output:** Directories first with a trailing `/`, then files with their size. A path outside the workspace is refused rather than listed.
+This says which files exist, not what is in them — use `search_codebase` to find files by their contents.
+{{DEFAULT}}
 # tool: browser
 Open a page in a real browser and read its console output. Use this to check that a page works instead of asking the user whether it works.
 - **Arguments:** `action` is one of `open`, `click`, `type`, `scroll_down`, `scroll_up`, `close`. `open` takes `url` (an absolute file path is accepted). `click` takes `coordinate` as `"x,y"`. `type` takes `text`.

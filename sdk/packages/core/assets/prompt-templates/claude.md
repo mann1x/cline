@@ -203,6 +203,17 @@ Output: plain text, one section per file you named. Each problem is its own line
 Read a clean result carefully. "No problems reported by the editor" is conclusive only where the IDE has a language server for that file, and it does not for every language on every machine. If this reports nothing and you have reason to expect a problem, or the project has a checker the IDE does not run, run that checker with `run_commands`. Tests and builds are always `run_commands`; this tool does not run them.
 When a file's brackets do not match, a `Delimiter scan` section names the *opening* bracket involved, one line per place the trouble starts — fix every line it lists in one edit. A parse error is always reported where the parser gave up, which is the closing bracket; the opener is the one you have to edit, and it is the one the error cannot name. Trust that line over counting brackets yourself — it skips strings, comments and regex literals. It runs even when the editor reported nothing, which is the only report you get for script inside an `.html` file.
 
+# tool: list_files
+List what is in the workspace. This is the tool for finding out what exists — reach for it instead of running `ls`, `dir`, `find` or `Get-ChildItem` through `run_commands`.
+
+Call shape: `list_files(path?: string, pattern?: string, max_results?: number)`. Give `path` to list one directory, or `pattern` to glob across the workspace (`**/*.html`, `src/**/*.ts`). With neither, you get the workspace root.
+
+Two reasons to prefer it over the shell. It is scoped: only the folders the user opened can be listed, and a path outside them is refused rather than answered — a shell has no such boundary, and `dir /s` from the wrong directory walks the whole drive. And it is filtered: the excludes already in the user's settings apply, so `node_modules`, `.git` and build output do not bury the answer.
+
+Output is directories first with a trailing `/`, then files with their sizes — the size being what tells you whether reading a file whole is reasonable.
+
+This answers what files are called, not what is in them. For that use `search_codebase`, which reports the line each match is on.
+{{DEFAULT}}
 # tool: browser
 Open a page in a real browser and report what it printed to the console and what it threw. This is how you check that a page works — open it and read the errors rather than asking the user whether it works.
 

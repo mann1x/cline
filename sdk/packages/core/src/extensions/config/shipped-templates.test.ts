@@ -89,6 +89,7 @@ const HOST_TOOL_NAMES = [
 	"code_intel",
 	"switch_to_act_mode",
 	"browser",
+	"list_files",
 ];
 
 const SHIPPED_TOOL_NAMES = [

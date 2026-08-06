@@ -89,6 +89,19 @@ function startsRegex(text: string, slashIndex: number): boolean {
 	return false
 }
 
+/** Opens minus closes on one line, per bracket kind, counting code only. */
+export interface LineBalance {
+	round: number
+	square: number
+	curly: number
+}
+
+export interface DelimiterScan {
+	findings: DelimiterFinding[]
+	/** Keyed by 1-based line number. Absent means the line held no brackets. */
+	balance: Map<number, LineBalance>
+}
+
 /**
  * Scan one span of C-family source and report where its delimiters cross.
  *
@@ -97,7 +110,34 @@ function startsRegex(text: string, slashIndex: number): boolean {
  * counting characters, and the reason a hand-rolled counter misleads.
  */
 export function scanDelimiters(text: string, origin: Cursor = { line: 1, column: 1 }): DelimiterFinding[] {
+	return scanWithBalance(text, origin).findings
+}
+
+/**
+ * The same scan, keeping the per-line tally it passes over anyway.
+ *
+ * The tally is what turns a crossing into an instruction. A report can say
+ * where two brackets cross, but not whether the fix is to delete one, add one
+ * or move one — and on a minified line those are very different edits. The
+ * counts settle it, and they are free: the walk already visits every bracket
+ * in code and skips every one in a string.
+ */
+export function scanWithBalance(text: string, origin: Cursor = { line: 1, column: 1 }): DelimiterScan {
 	const findings: DelimiterFinding[] = []
+	const balance = new Map<number, LineBalance>()
+	const tally = (at: number, kind: keyof LineBalance, delta: number) => {
+		const entry = balance.get(at) ?? { round: 0, square: 0, curly: 0 }
+		entry[kind] += delta
+		balance.set(at, entry)
+	}
+	const kindOf: Record<string, keyof LineBalance> = {
+		"(": "round",
+		")": "round",
+		"[": "square",
+		"]": "square",
+		"{": "curly",
+		"}": "curly",
+	}
 	// `resumesTemplate` marks the `{` of a `${...}` substitution: closing it
 	// puts the scanner back inside the template literal rather than in code.
 	// Without it the tail of every template — the part after the last `}` —
@@ -139,6 +179,7 @@ export function scanDelimiters(text: string, origin: Cursor = { line: 1, column:
 			}
 			if (char === "$" && text[index + 1] === "{") {
 				advance(1)
+				tally(line, "curly", 1)
 				stack.push({ opener: "{", line, column, resumesTemplate: true })
 				inTemplate = false
 				advance(1)
@@ -220,12 +261,14 @@ export function scanDelimiters(text: string, origin: Cursor = { line: 1, column:
 		}
 
 		if (PAIRS[char]) {
+			tally(line, kindOf[char], 1)
 			stack.push({ opener: char, line, column })
 			advance(1)
 			continue
 		}
 
 		if (CLOSERS[char]) {
+			tally(line, kindOf[char], -1)
 			const open = stack.pop()
 			if (open?.resumesTemplate && char === "}") {
 				inTemplate = true
@@ -263,7 +306,7 @@ export function scanDelimiters(text: string, origin: Cursor = { line: 1, column:
 		})
 	}
 
-	return findings
+	return { findings, balance }
 }
 
 /** Every `<script>` body in an HTML-ish file, with where each one starts. */
@@ -300,6 +343,46 @@ function scriptSpans(text: string): Array<{ body: string; origin: Cursor }> {
 const MAX_REPORTED_LINES = 6
 
 /**
+ * What the counts on one line say about the fix.
+ *
+ * A crossing says two brackets do not match. It does not say whether to delete
+ * one, add one, or move one — and on a minified line those are very different
+ * edits. Measured: a model was told `(` opened at 94:29 was closed by `}` at
+ * 94:289, and answered by sending back the line it already had, twelve times,
+ * because "these two cross" is a description and not an instruction. The line
+ * held four `{` against five `}`. Saying so is the whole fix.
+ *
+ * It speaks up only where the tally is sound. A line that opens a block and
+ * leaves it open is perfectly ordinary code, so this is used only when the
+ * trouble is confined to one line: a crossing that both begins and ends there,
+ * or a closer that matched nothing at all.
+ */
+function surplusNote(line: number, balance: Map<number, LineBalance>): string {
+	const counts = balance.get(line)
+	if (!counts) {
+		return ""
+	}
+
+	const surplus: string[] = []
+	for (const [net, open, close] of [
+		[counts.curly, "{", "}"],
+		[counts.round, "(", ")"],
+		[counts.square, "[", "]"],
+	] as const) {
+		if (net > 0) {
+			surplus.push(`${net} more \`${open}\` than \`${close}\``)
+		} else if (net < 0) {
+			surplus.push(`${-net} more \`${close}\` than \`${open}\``)
+		}
+	}
+
+	if (surplus.length === 0) {
+		return "; this line's own brackets do balance, so one is in the wrong place rather than missing or spare"
+	}
+	return `; counting only code, this line has ${surplus.join(" and ")} — that is the edit`
+}
+
+/**
  * Render the balance findings for a file, or null when there is nothing
  * useful to say — the file's language is not one this understands, or its
  * delimiters match.
@@ -308,10 +391,24 @@ export function describeDelimiterBalance(filePath: string, text: string): string
 	const extension = filePath.slice(filePath.lastIndexOf(".")).toLowerCase()
 
 	let findings: DelimiterFinding[]
+	const balance = new Map<number, LineBalance>()
+	const absorb = (scan: DelimiterScan) => {
+		for (const [at, counts] of scan.balance) {
+			const entry = balance.get(at) ?? { round: 0, square: 0, curly: 0 }
+			entry.round += counts.round
+			entry.square += counts.square
+			entry.curly += counts.curly
+			balance.set(at, entry)
+		}
+		return scan.findings
+	}
+
 	if (C_FAMILY.has(extension)) {
-		findings = scanDelimiters(text)
+		findings = absorb(scanWithBalance(text))
 	} else if (EMBEDS_SCRIPT.has(extension)) {
-		findings = scriptSpans(text).flatMap((span) => scanDelimiters(span.body, span.origin))
+		// One line can hold the end of one `<script>` and the start of the next,
+		// so the tallies are summed rather than replaced.
+		findings = scriptSpans(text).flatMap((span) => absorb(scanWithBalance(span.body, span.origin)))
 	} else {
 		return null
 	}
@@ -346,10 +443,14 @@ export function describeDelimiterBalance(filePath: string, text: string): string
 	const shown = distinct.slice(0, MAX_REPORTED_LINES)
 	const lines = shown.map((finding) => {
 		switch (finding.kind) {
-			case "mismatch":
-				return `  the \`${finding.opener}\` opened at line ${finding.openLine}, column ${finding.openColumn} is closed by \`${finding.found}\` at line ${finding.line}, column ${finding.column}`
+			case "mismatch": {
+				// Only when the crossing opens and closes on the same line: that
+				// span has to balance within itself, so the tally is a verdict.
+				const note = finding.openLine === finding.line ? surplusNote(finding.line, balance) : ""
+				return `  the \`${finding.opener}\` opened at line ${finding.openLine}, column ${finding.openColumn} is closed by \`${finding.found}\` at line ${finding.line}, column ${finding.column}${note}`
+			}
 			case "unmatched-close":
-				return `  \`${finding.found}\` at line ${finding.line}, column ${finding.column} closes nothing that is open`
+				return `  \`${finding.found}\` at line ${finding.line}, column ${finding.column} closes nothing that is open${surplusNote(finding.line, balance)}`
 			default:
 				return `  the \`${finding.opener}\` opened at line ${finding.openLine}, column ${finding.openColumn} is never closed`
 		}

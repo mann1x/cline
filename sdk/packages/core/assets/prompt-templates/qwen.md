@@ -211,6 +211,16 @@ Check files for errors and warnings using the IDE's language servers (LSP). Thes
 - **Output**: Plain text listing problems per file (`file:line:column severity message`). If no problems are reported, the file is valid according to the IDE. Note: This does not run tests or builds; use `run_commands` for those.
 When a file's brackets do not match, a `Delimiter scan` section names the *opening* bracket involved, one line per place the trouble starts — fix every line it lists in one edit. A parse error is always reported where the parser gave up, which is the closing bracket; the opener is the one you have to edit, and it is the one the error cannot name. Trust that line over counting brackets yourself — it skips strings, comments and regex literals. It runs even when the editor reported nothing, which is the only report you get for script inside an `.html` file.
 
+# tool: list_files
+List files in the workspace. Use this rather than `ls`, `dir` or `find` through `run_commands`.
+
+- **Usage**: Call it whenever you need to know what exists, or where a file lives, before reading anything.
+- **Arguments**: `path` is one directory to list (absolute, or relative to the workspace root; omit for the root). `pattern` is a glob searched workspace-wide, e.g. `**/*.html` — given this, `path` is ignored. `max_results` caps the listing.
+- **Scope**: Only the folders the user opened. A path outside them is refused. `node_modules`, `.git` and build output are excluded automatically.
+- **Output**: Directories first with a trailing `/`, then files with sizes.
+
+This finds files by name. To find them by their contents, use `search_codebase`.
+{{DEFAULT}}
 # tool: browser
 Open a page in a real browser and report its console output and uncaught errors. Use it to verify a page yourself instead of asking the user whether it works.
 

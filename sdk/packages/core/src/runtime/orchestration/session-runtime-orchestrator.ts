@@ -90,6 +90,37 @@ function formatToolResultError(output: unknown): string {
 	}
 }
 
+/**
+ * Whether every operation in a tool result reported failure.
+ *
+ * Tools answer with the `{query, result, success, error?}` envelope — one
+ * object, or one per request when the call was batched. A partial failure is
+ * still progress, so only a result whose every entry failed counts as having
+ * got nowhere.
+ *
+ * Anything that is not that envelope is read as productive. An unrecognised
+ * shape must never be taken for failure: this feeds a loop stop, and the cost
+ * of guessing wrong is ending a task that was working.
+ */
+function allOperationsFailed(output: unknown): boolean {
+	const entries = Array.isArray(output) ? output : [output];
+	if (entries.length === 0) {
+		return false;
+	}
+	for (const entry of entries) {
+		if (entry == null || typeof entry !== "object") {
+			return false;
+		}
+		if (!("success" in entry)) {
+			return false;
+		}
+		if ((entry as { success?: unknown }).success !== false) {
+			return false;
+		}
+	}
+	return true;
+}
+
 async function resolveRuleContent(
 	rule: AgentExtensionRule,
 ): Promise<string | undefined> {
@@ -1114,6 +1145,19 @@ export class SessionRuntime {
 				);
 				const isError =
 					resultPart?.type === "tool-result" && resultPart.isError === true;
+				// Tell the loop tracker whether this call got anywhere. A tool
+				// that returns the `{query, result, success}` envelope reports
+				// its own failure there rather than by throwing, so a thrown
+				// error is not the whole story: an edit that changed nothing
+				// comes back as a normal return with `success: false`.
+				this.noteLoopOutcome(
+					!isError &&
+						!allOperationsFailed(
+							resultPart?.type === "tool-result"
+								? resultPart.output
+								: undefined,
+						),
+				);
 				const errorText = isError
 					? formatToolResultError(
 							resultPart?.type === "tool-result"
@@ -1247,6 +1291,17 @@ export class SessionRuntime {
 	 *                 `action: "stop"`, append the stop notice and
 	 *                 abort the active runtime.
 	 */
+	/**
+	 * Report a finished tool call's outcome to the loop tracker, so a repeat
+	 * that keeps failing can be told apart from one that keeps working.
+	 */
+	private noteLoopOutcome(productive: boolean): void {
+		if (this.loopDetectionDisabled) {
+			return;
+		}
+		this.loopTracker.noteOutcome(productive);
+	}
+
 	private inspectLoopForToolCall(
 		toolName: string,
 		input: unknown,

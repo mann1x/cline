@@ -285,9 +285,27 @@ async function replaceInFile(
  * the model had to infer "no-op" from an absence. It re-sent the same edit,
  * then six identical inserts at the same line. An outcome a model has to
  * deduce from missing output is one it will deduce wrong.
+ *
+ * Saying so in prose was not enough either. A later session sent one identical
+ * call twelve times, each answered "The file was not modified — do not retry
+ * this edit", because the envelope around that sentence still said
+ * `success: true`. A model weighing a structured flag against a paragraph
+ * takes the flag, and the flag was telling it the edit had worked.
+ *
+ * So it throws. The tool wrapper turns that into `success: false` with the
+ * reason in `error`, which is exactly what the tool's own description already
+ * promises a failed edit looks like — and it is the truth: an edit that
+ * changed nothing did not do what it was asked to do.
+ *
+ * The wording names the thing the model actually had wrong, which was not
+ * "retrying is unwise" but "the text you sent is the text already there". It
+ * kept re-deriving the same replacement because it believed it was sending a
+ * fix.
  */
-function noChangeMessage(filePath: string, why: string): string {
-	return `No change: ${why} in ${filePath}. The file was not modified — do not retry this edit; re-read the region if you expected something different.`;
+function noChangeMessage(filePath: string, why: string): never {
+	throw new Error(
+		`No change: ${why} in ${filePath}. The file was not modified. What you sent as \`new_text\` is character-for-character what that part of the file already holds, so this edit asks for nothing and sending it again cannot help. If you meant to change something there, work out how the text you want differs from the text quoted back to you and send that; if the fix belongs on a different line, edit that line instead.`,
+	);
 }
 
 /**

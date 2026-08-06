@@ -17,10 +17,31 @@ import type { LoopDetectionConfig } from "@cline/shared";
 // Pure helpers (verbatim port)
 // =============================================================================
 
+/**
+ * How many times one call may fail, be interrupted, and be sent again.
+ *
+ * The consecutive counter is defeated by any call in between. Measured on a
+ * live session: the same `editor` call — same path, same range, the same 684
+ * characters — was sent twelve times and reported "No change" every time. Two
+ * calls to a different line in the middle reset the consecutive count twice,
+ * so the hard stop did not arrive until the twelfth. Counting per signature
+ * instead of per adjacency ends it at the fifth.
+ *
+ * Only failures count, which is what makes this safe. Re-running the same test
+ * command after each edit, or re-checking the same file, is how work gets done;
+ * those calls succeed, and a success clears the tally for that signature. What
+ * accrues here is strictly a call that has been tried and got nowhere.
+ */
+const BARREN_REPEAT_LIMIT = 5;
+
 export interface LoopDetectionState {
 	lastToolName: string;
 	lastToolSignature: string;
 	consecutiveIdenticalCount: number;
+	/** Per `name:signature`, how many times it has been tried and failed. */
+	barrenCounts: Map<string, number>;
+	/** The call awaiting its outcome, so the result can be attributed. */
+	pendingKey: string;
 }
 
 export function createLoopDetectionState(): LoopDetectionState {
@@ -28,6 +49,8 @@ export function createLoopDetectionState(): LoopDetectionState {
 		lastToolName: "",
 		lastToolSignature: "",
 		consecutiveIdenticalCount: 0,
+		barrenCounts: new Map(),
+		pendingKey: "",
 	};
 }
 
@@ -35,6 +58,8 @@ export function resetLoopDetectionState(state: LoopDetectionState): void {
 	state.lastToolName = "";
 	state.lastToolSignature = "";
 	state.consecutiveIdenticalCount = 0;
+	state.barrenCounts.clear();
+	state.pendingKey = "";
 }
 
 function sortKeys(value: unknown): unknown {
@@ -135,6 +160,17 @@ export class LoopDetectionTracker {
 
 	inspect(call: LoopDetectionCall): LoopDetectionVerdict {
 		const signature = toolCallSignature(call.input);
+		const key = `${call.name}:${signature}`;
+		this.state.pendingKey = key;
+
+		const barren = this.state.barrenCounts.get(key) ?? 0;
+		if (barren >= BARREN_REPEAT_LIMIT) {
+			return {
+				kind: "hard",
+				message: `This exact call to \`${call.name}\` has already been made ${barren} times and failed every time; stopping to avoid a loop. The arguments have not changed between attempts, so neither will the result — the next attempt needs different arguments or a different tool.`,
+			};
+		}
+
 		const result = checkRepeatedToolCall(
 			this.state,
 			call.name,
@@ -154,6 +190,29 @@ export class LoopDetectionTracker {
 			};
 		}
 		return { kind: "ok" };
+	}
+
+	/**
+	 * Attribute an outcome to the call `inspect()` last saw.
+	 *
+	 * A productive call clears its own tally rather than merely not adding to
+	 * it: a command that works, stops working, then works again is a normal
+	 * edit-test cycle, and it should not inherit a count from the failures in
+	 * between.
+	 */
+	noteOutcome(productive: boolean): void {
+		const key = this.state.pendingKey;
+		if (key === "") {
+			return;
+		}
+		if (productive) {
+			this.state.barrenCounts.delete(key);
+			return;
+		}
+		this.state.barrenCounts.set(
+			key,
+			(this.state.barrenCounts.get(key) ?? 0) + 1,
+		);
 	}
 
 	reset(): void {

@@ -8,6 +8,7 @@ import {
 	CODE_INTEL_TOOL_INPUT_SCHEMA,
 	CODE_INTEL_TOOL_NAME,
 } from "./code-intel-tool"
+import { LIST_FILES_TOOL_DESCRIPTION, LIST_FILES_TOOL_INPUT_SCHEMA, LIST_FILES_TOOL_NAME } from "./list-files-tool"
 import { SWITCH_TO_ACT_MODE_TOOL_DESCRIPTION, SWITCH_TO_ACT_MODE_TOOL_NAME } from "./sdk-session-config-builder"
 
 /**
@@ -40,6 +41,10 @@ describe("host tool descriptions in default.md", () => {
 	it("reproduces browser verbatim", () => {
 		expect(shipped?.tools[BROWSER_TOOL_NAME]).toBe(BROWSER_TOOL_DESCRIPTION.trim())
 	})
+
+	it("reproduces list_files verbatim", () => {
+		expect(shipped?.tools[LIST_FILES_TOOL_NAME]).toBe(LIST_FILES_TOOL_DESCRIPTION.trim())
+	})
 })
 
 /**
@@ -63,6 +68,12 @@ describe("host tool schemas restated in core", () => {
 		const mirrored = signatureOf(BROWSER_TOOL_NAME, restated.get(BROWSER_TOOL_NAME))
 		expect(mirrored).toEqual(signatureOf(BROWSER_TOOL_NAME, BROWSER_TOOL_INPUT_SCHEMA))
 		expect(mirrored?.enumValues).toEqual([...BROWSER_ACTIONS])
+	})
+
+	it("matches list_files", () => {
+		expect(signatureOf(LIST_FILES_TOOL_NAME, restated.get(LIST_FILES_TOOL_NAME))).toEqual(
+			signatureOf(LIST_FILES_TOOL_NAME, LIST_FILES_TOOL_INPUT_SCHEMA),
+		)
 	})
 
 	it("matches check_file", () => {

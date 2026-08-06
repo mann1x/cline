@@ -120,4 +120,36 @@ describe("describeDelimiterBalance", () => {
 		const html = ['<script src="game.js"></script>', "<p>)))</p>"].join("\n")
 		expect(describeDelimiterBalance("game.html", html)).toBeNull()
 	})
+
+	/**
+	 * The counts are what make the report an instruction rather than a
+	 * description. A model told only that two brackets cross sent back the line
+	 * it already had, twelve times; the line held one `}` more than it opened.
+	 */
+	describe("surplus counts", () => {
+		it("names the surplus when a crossing starts and ends on one line", () => {
+			// `dPw(){...}}` — one closing brace too many, all on line 1.
+			const report = describeDelimiterBalance("app.js", "function dPw(c){ if (c) { c(); }}}\n")
+			expect(report).toContain("1 more `}` than `{`")
+			expect(report).toContain("that is the edit")
+		})
+
+		it("says a crossed line that balances is out of order, not short", () => {
+			const report = describeDelimiterBalance("app.js", "const x = ({)};\n")
+			expect(report).toContain("do balance")
+			expect(report).toContain("wrong place")
+		})
+
+		it("says nothing about counts for a block left open across lines", () => {
+			// Ordinary code: line 1 opens a brace it does not close. That is not
+			// a surplus, and calling it one would send an edit to a correct line.
+			const report = describeDelimiterBalance("app.js", "function f() {\n  g();\n)\n")
+			expect(report).not.toContain("that is the edit")
+		})
+
+		it("counts only code, not brackets inside strings", () => {
+			const report = describeDelimiterBalance("app.js", 'function f(){ s = "}}}}"; }}\n')
+			expect(report).toContain("1 more `}` than `{`")
+		})
+	})
 })

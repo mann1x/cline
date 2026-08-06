@@ -3,6 +3,7 @@ import type { AgentTool, AgentToolContext } from "@cline/shared"
 import { createVscodeBrowserDriver, isBrowserToolEnabled } from "@/hosts/vscode/browser-support"
 import { loadDocumentForDiagnostics, resolveLintCommand, runLintCommand } from "@/hosts/vscode/check-file-support"
 import { createVscodeCodeIntelProvider } from "@/hosts/vscode/code-intel-support"
+import { createVscodeWorkspaceLister } from "@/hosts/vscode/list-files-support"
 import type { VscodeTerminalManager } from "@/hosts/vscode/terminal/VscodeTerminalManager"
 import type { McpHub } from "@/services/mcp/McpHub"
 import { resolveMcpServerTimeoutMs } from "@/services/mcp/timeout"
@@ -10,6 +11,7 @@ import { Logger } from "@/shared/services/Logger"
 import { createBrowserTool } from "./browser-tool"
 import { createCheckFileTool } from "./check-file-tool"
 import { createCodeIntelTool } from "./code-intel-tool"
+import { createListFilesTool } from "./list-files-tool"
 import type { SdkForegroundCommandCoordinator } from "./sdk-foreground-command-coordinator"
 import { createVscodeRunCommandsTool, VSCODE_FOREGROUND_RUN_COMMANDS_TIMEOUT_MS } from "./vscode-run-commands-tool"
 
@@ -113,6 +115,17 @@ export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExt
 		createCodeIntelTool({
 			cwd: options?.cwd ?? process.cwd(),
 			provider: createVscodeCodeIntelProvider(),
+		}),
+	)
+
+	// `list_files` is unconditional for the same reason as the other two, and
+	// for one more: the thing it displaces is a shell command that already
+	// works. A model that finds the tool missing does not go without — it runs
+	// `dir /s`, which is exactly the unscoped search this exists to prevent.
+	tools.push(
+		createListFilesTool({
+			cwd: options?.cwd ?? process.cwd(),
+			createLister: createVscodeWorkspaceLister,
 		}),
 	)
 

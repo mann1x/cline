@@ -119,6 +119,15 @@ Checks files for errors and warnings using the editor's language servers. Use th
 - Output: Plain text, one section per file. Problems listed as `file:line:column` with severity and message. A file with no problems says so in one line. No `success` field; problems being listed is the tool working.
 {{DEFAULT}}
 
+# tool: list_files
+Lists files in the workspace. Use this instead of `ls`, `dir`, `find` or `Get-ChildItem` via `run_commands`.
+- `path`: String. One directory to list, absolute or relative to the workspace root. Omit to list the root.
+- `pattern`: String. A glob searched across the whole workspace, e.g. `**/*.html`. Given this, `path` is ignored.
+- `max_results`: Number. Caps the listing.
+- When to call: To find out what files exist, or where a named file lives.
+- Output: Plain text. Directories first with a trailing `/`, then files with sizes. Scoped to the folders the user opened; `node_modules`, `.git` and build output are excluded. A path outside the workspace is refused.
+Finds files by name. To find them by their contents, use `search_codebase`.
+{{DEFAULT}}
 # tool: browser
 Open a page in a real browser and report what it printed to the console and what it threw. Check the page yourself rather than asking the user whether it works.
 

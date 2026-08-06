@@ -443,17 +443,17 @@ describe("createEditorExecutor", () => {
 			});
 		});
 
-		it("reports a column edit that changed nothing", async () => {
+		it("fails a column edit that changed nothing", async () => {
 			await withTempFile(MINIFIED, async (filePath, dir) => {
 				const editor = createEditorExecutor();
-				const result = await editor(
-					{ path: filePath, start_line: 2, start_column: 14, new_text: "}" },
-					dir,
-					context,
-				);
 
-				expect(result).toContain("No change");
-				expect(result).not.toContain("Replaced");
+				await expect(
+					editor(
+						{ path: filePath, start_line: 2, start_column: 14, new_text: "}" },
+						dir,
+						context,
+					),
+				).rejects.toThrow("No change");
 			});
 		});
 	});
@@ -491,22 +491,27 @@ describe("createEditorExecutor", () => {
 			});
 		});
 
-		it("says nothing changed instead of reporting an empty diff", async () => {
+		it("fails instead of reporting an empty diff", async () => {
 			// Measured: 24 of 45 successful editor results carried an empty diff
 			// fence. The model read the absence as "already correct", re-sent the
 			// edit, then sent six identical inserts at the same line.
+			//
+			// Saying so in the result text was not enough on its own — a later
+			// session sent one identical call twelve times, because the envelope
+			// around that text still reported success. It has to fail.
 			await withTempFile("one\ntwo\nthree", async (filePath, dir) => {
 				const editor = createEditorExecutor();
-				const result = await editor(
+				const failure = editor(
 					{ path: filePath, new_text: "two", start_line: 2 },
 					dir,
 					context,
 				);
 
-				expect(result).toContain("No change");
-				expect(result).toContain("line 2 already reads exactly this way");
-				expect(result).toContain("do not retry");
-				expect(result).not.toContain("Replaced");
+				await expect(failure).rejects.toThrow("No change");
+				await expect(failure).rejects.toThrow(
+					"line 2 already reads exactly this way",
+				);
+				await expect(failure).rejects.toThrow("character-for-character");
 				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
 					"one\ntwo\nthree",
 				);
@@ -532,17 +537,17 @@ describe("createEditorExecutor", () => {
 			});
 		});
 
-		it("says nothing changed when old_text and new_text are the same", async () => {
+		it("fails when old_text and new_text are the same", async () => {
 			await withTempFile("alpha beta", async (filePath, dir) => {
 				const editor = createEditorExecutor();
-				const result = await editor(
-					{ path: filePath, old_text: "beta", new_text: "beta" },
-					dir,
-					context,
-				);
 
-				expect(result).toContain("No change");
-				expect(result).not.toContain("Edited");
+				await expect(
+					editor(
+						{ path: filePath, old_text: "beta", new_text: "beta" },
+						dir,
+						context,
+					),
+				).rejects.toThrow("No change");
 			});
 		});
 

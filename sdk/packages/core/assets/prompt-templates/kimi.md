@@ -143,6 +143,18 @@ Read a clean result carefully. "No problems reported by the editor" is conclusiv
 Output: plain text, one section per file, each problem on its own line as `file:line:column` with severity and message. A clean file says so in one line. No object to unpack, no `success` field — problems being listed is this tool working, not failing.
 When a file's brackets do not match, a `Delimiter scan` section names the *opening* bracket involved, one line per place the trouble starts — fix every line it lists in one edit. A parse error is always reported where the parser gave up, which is the closing bracket; the opener is the one you have to edit, and it is the one the error cannot name. Trust that line over counting brackets yourself — it skips strings, comments and regex literals. It runs even when the editor reported nothing, which is the only report you get for script inside an `.html` file.
 
+# tool: list_files
+List the files in the workspace. Use this to find out what exists, rather than running `ls`, `dir`, `find` or `Get-ChildItem` with `run_commands` — this is scoped to the folders the user opened and those commands are not.
+
+How to ask:
+- `path` — list one directory. Absolute, or relative to the workspace root. Omit it for the root.
+- `pattern` — a glob searched across the workspace, e.g. `**/*.html` or `**/manic_miner.*`. Use it when you know part of a name but not where it lives. Given this, `path` is ignored.
+- `max_results` — caps the listing.
+
+The excludes in the user's settings apply, so `node_modules`, `.git` and build output stay out of the way. A path outside the workspace is refused rather than listed.
+
+Output is directories first with a trailing `/`, then files with their sizes. This tells you what files are called, not what is in them — for that use `search_codebase`.
+{{DEFAULT}}
 # tool: browser
 Open a page in a real browser and report its console output and uncaught errors. Check the page yourself instead of asking the user whether it works.
 

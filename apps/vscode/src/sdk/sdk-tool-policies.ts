@@ -56,8 +56,13 @@ export function isToolAutoApproved(toolName: string, settings: AutoApprovalSetti
 	if (isCommandTool(toolName)) {
 		return !!settings.actions.executeSafeCommands
 	}
-	if (isBrowserTool(toolName)) {
+	if (isWebFetchTool(toolName)) {
 		return !!settings.actions.useBrowser
+	}
+	if (isBrowserTool(toolName)) {
+		// Falls back to the web-fetch toggle when the browser one is absent,
+		// which is what settings written before it existed look like.
+		return !!(settings.actions.useBrowserTool ?? settings.actions.useBrowser)
 	}
 
 	const mcpTool = parseMcpToolName(toolName)
@@ -87,18 +92,21 @@ function isCommandTool(toolName: string): boolean {
 	return toolName === "run_commands" || toolName === "execute_command"
 }
 
+function isWebFetchTool(toolName: string): boolean {
+	return toolName === "fetch_web_content" || toolName === "web_fetch" || toolName === "web_search"
+}
+
+/**
+ * The tools that drive a real browser.
+ *
+ * Kept apart from the web-fetch tools, which used to share their toggle. They
+ * are not the same risk: fetching a URL returns its text, while this launches a
+ * browser process that runs whatever the page contains. Someone can reasonably
+ * want the first to go through unattended and the second to ask every time, and
+ * with one checkbox for both they could not have it.
+ */
 function isBrowserTool(toolName: string): boolean {
-	return (
-		toolName === "fetch_web_content" ||
-		toolName === "web_fetch" ||
-		toolName === "web_search" ||
-		// The tool that actually drives a browser. It reaches the network and
-		// spawns a process, so it answers to the same "Use the browser"
-		// checkbox the user already has rather than to the SDK's
-		// auto-approve-by-default for unlisted tools.
-		toolName === "browser" ||
-		toolName === "browser_action"
-	)
+	return toolName === "browser" || toolName === "browser_action"
 }
 
 function parseMcpToolName(toolName: string): { serverName: string; toolName: string } | undefined {
