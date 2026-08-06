@@ -54,7 +54,6 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 		workspaceRoots,
 		platform,
 		clineMessages,
-		focusChainSettings,
 	} = useExtensionState()
 
 	const [isHighlightedTextExpanded, setIsHighlightedTextExpanded] = useState(false)
@@ -227,8 +226,15 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 						 * Under the context window, where the old focus chain lived. It
 						 * renders nothing until the model actually sends a checklist, so
 						 * a model that ignores the parameter costs no screen space.
+						 *
+						 * No `enabled` prop yet: `focusChainSettings` is read by the
+						 * extension when it configures the session, but it never reaches
+						 * the webview — it is absent from `ExtensionState`, and the
+						 * Features toggle that used to drive it was deleted with the rest
+						 * of the focus chain. Turning the checklist off therefore
+						 * suppresses the messages, and this panel disappears with them.
 						 */}
-						<TaskProgressPanel clineMessages={clineMessages} enabled={focusChainSettings?.enabled ?? true} />
+						<TaskProgressPanel clineMessages={clineMessages} />
 					</div>
 				)}
 			</div>
