@@ -203,6 +203,16 @@ export {
 } from "./llms/model-info";
 export { mergeModelOptions } from "./llms/model-options";
 export {
+	canonicalOllamaThinkLevel,
+	isBudgetedOllamaThinkLevel,
+	OLLAMA_DEFAULT_THINK_LEVEL,
+	OLLAMA_THINK_BUDGET_FRACTIONS,
+	OLLAMA_THINK_LEVEL_ALIASES,
+	ollamaThinkBudgetTokens,
+	ollamaThinkBudgetWindow,
+	resolveOllamaThinkBudget,
+} from "./llms/ollama-think-budget";
+export {
 	DEFAULT_REASONING_EFFORT,
 	REASONING_EFFORT_RATIOS,
 	resolveEffectiveReasoningEffort,

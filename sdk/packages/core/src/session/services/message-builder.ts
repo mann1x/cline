@@ -114,6 +114,25 @@ interface ReadLocator {
 	endLine: number | null;
 }
 
+/** One read of one path, positioned in the transcript. */
+interface IndexedRead {
+	order: number;
+	toolUseId: string;
+	startLine: number | null;
+	endLine: number | null;
+}
+
+/**
+ * Separates a path from the range read out of it.
+ *
+ * A colon cannot do this job: these paths are frequently Windows paths, so
+ * `C:\src\app.ts` already contains one and `path:29-136` is ambiguous about
+ * where the path stops. A ranged key is the whole-file key plus this suffix,
+ * which is what makes "is this a range of that file" a prefix test rather than
+ * a parse.
+ */
+const READ_LOCATOR_RANGE_SEPARATOR = "\u0000#";
+
 interface TruncationCandidate {
 	byteLength: number;
 	minBytes: number;
@@ -161,11 +180,11 @@ export class MessageBuilder {
 		string,
 		ReadLocator[]
 	>();
-	private readonly latestReadToolUseByLocatorCache = new Map<string, string>();
-	private readonly latestFullContentOwnerByPathCache = new Map<
-		string,
-		string
-	>();
+	// Every read of a path, in transcript order. Staleness is a question about
+	// two reads — which came later, and does the later one contain the earlier
+	// — so neither half can be a "latest wins" map keyed by locator.
+	private readonly readsByPathCache = new Map<string, IndexedRead[]>();
+	private readOrderCounter = 0;
 	private readResultLocatorCache = new WeakMap<object, ReadLocator[]>();
 	private readonly maxToolResultChars: number;
 	private readonly maxFileContentChars: number;
@@ -341,10 +360,10 @@ export class MessageBuilder {
 			for (let j = 0; j < message.content.length; j++) {
 				const block = message.content[j];
 				if (block.type === "file") {
-					this.latestFullContentOwnerByPathCache.set(
-						block.path,
-						`file:${i}:${j}`,
-					);
+					// An attached file is whole-file content, and its own owner:
+					// no tool_use_id can collide with this synthetic one, so it
+					// supersedes earlier reads and is never superseded by itself.
+					this.noteIndexedRead(block.path, `file:${i}:${j}`, null, null);
 				} else if (block.type === "tool_use") {
 					const normalizedName = block.name.toLowerCase();
 					this.toolNameByIdCache.set(block.id, normalizedName);
@@ -359,18 +378,13 @@ export class MessageBuilder {
 					if (!this.isReadTool(toolName) || block.is_error === true) {
 						continue;
 					}
-					const locators = this.getReadLocators(block);
-					for (const locator of locators) {
-						this.latestReadToolUseByLocatorCache.set(
-							this.toReadLocatorKey(locator),
+					for (const locator of this.getReadLocators(block)) {
+						this.noteIndexedRead(
+							locator.path,
 							block.tool_use_id,
+							locator.startLine,
+							locator.endLine,
 						);
-						if (this.isFullFileRead(locator)) {
-							this.latestFullContentOwnerByPathCache.set(
-								locator.path,
-								block.tool_use_id,
-							);
-						}
 					}
 				}
 			}
@@ -802,8 +816,8 @@ export class MessageBuilder {
 		this.indexedTailRef = undefined;
 		this.toolNameByIdCache.clear();
 		this.readLocatorsByToolUseIdCache.clear();
-		this.latestReadToolUseByLocatorCache.clear();
-		this.latestFullContentOwnerByPathCache.clear();
+		this.readsByPathCache.clear();
+		this.readOrderCounter = 0;
 		this.readResultLocatorCache = new WeakMap<object, ReadLocator[]>();
 	}
 
@@ -974,26 +988,93 @@ export class MessageBuilder {
 		if (this.isFullFileRead(locator)) {
 			return locator.path;
 		}
-		return `${locator.path}:${locator.startLine ?? 1}-${locator.endLine ?? "EOF"}`;
+		const start = locator.startLine ?? 1;
+		const end = locator.endLine ?? "EOF";
+		return `${locator.path}${READ_LOCATOR_RANGE_SEPARATOR}${start}-${end}`;
 	}
 
 	private isFullFileRead(locator: ReadLocator): boolean {
 		return locator.startLine == null && locator.endLine == null;
 	}
 
+	/**
+	 * Whether a later read makes an earlier one redundant.
+	 *
+	 * A whole-file read covers every range of that file. A range covers another
+	 * range only when it contains it, and never covers a whole-file read: the
+	 * file has lines the range does not, and dropping the only copy of them to
+	 * save bytes trades a correct transcript for a smaller one.
+	 */
+	private readCovers(candidate: IndexedRead, locator: ReadLocator): boolean {
+		if (candidate.startLine == null && candidate.endLine == null) {
+			return true;
+		}
+		if (this.isFullFileRead(locator)) {
+			return false;
+		}
+		const candidateStart = candidate.startLine ?? 1;
+		const candidateEnd = candidate.endLine ?? Number.MAX_SAFE_INTEGER;
+		const locatorStart = locator.startLine ?? 1;
+		const locatorEnd = locator.endLine ?? Number.MAX_SAFE_INTEGER;
+		return candidateStart <= locatorStart && candidateEnd >= locatorEnd;
+	}
+
+	/**
+	 * A read is outdated when a *later* read covers it.
+	 *
+	 * The recency half is what the previous "latest full read owns the path"
+	 * check got wrong: it compared owners by identity, so a whole-file read at
+	 * turn 5 marked a ranged read at turn 20 as outdated — the newest content
+	 * in the transcript was replaced by a placeholder pointing at an older
+	 * copy, and the model was left reading the file it had already superseded.
+	 */
 	private isOutdatedReadLocator(
 		locator: ReadLocator,
 		toolUseId: string,
 	): boolean {
-		const fullOwner = this.latestFullContentOwnerByPathCache.get(locator.path);
-		if (fullOwner && fullOwner !== toolUseId) {
-			return true;
+		const reads = this.readsByPathCache.get(locator.path);
+		if (!reads) {
+			return false;
 		}
-		return (
-			this.latestReadToolUseByLocatorCache.get(
-				this.toReadLocatorKey(locator),
-			) !== toolUseId
+		let selfOrder = -1;
+		for (const read of reads) {
+			if (
+				read.toolUseId === toolUseId &&
+				read.startLine === locator.startLine &&
+				read.endLine === locator.endLine
+			) {
+				selfOrder = read.order;
+			}
+		}
+		if (selfOrder < 0) {
+			return false;
+		}
+		return reads.some(
+			(read) =>
+				read.order > selfOrder &&
+				read.toolUseId !== toolUseId &&
+				this.readCovers(read, locator),
 		);
+	}
+
+	/** Records one read of one path at the next transcript position. */
+	private noteIndexedRead(
+		path: string,
+		toolUseId: string,
+		startLine: number | null,
+		endLine: number | null,
+	): void {
+		let reads = this.readsByPathCache.get(path);
+		if (!reads) {
+			reads = [];
+			this.readsByPathCache.set(path, reads);
+		}
+		reads.push({
+			order: this.readOrderCounter++,
+			toolUseId,
+			startLine,
+			endLine,
+		});
 	}
 
 	private replaceOutdatedReadContent(

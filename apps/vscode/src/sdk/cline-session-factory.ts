@@ -28,7 +28,14 @@ import {
 	MODEL_COLLECTIONS_BY_PROVIDER_ID,
 	OLLAMA_DEFAULT_CONTEXT_WINDOW,
 } from "@cline/llms"
-import { type AgentHooks, buildClineSystemPrompt, type RenderedPromptTemplate } from "@cline/shared"
+import {
+	type AgentHooks,
+	buildClineSystemPrompt,
+	canonicalOllamaThinkLevel,
+	OLLAMA_DEFAULT_THINK_LEVEL,
+	type RenderedPromptTemplate,
+	resolveOllamaThinkBudget,
+} from "@cline/shared"
 import type { ApiConfiguration } from "@shared/api"
 import { ClineClient } from "@shared/cline"
 import type { HistoryItem } from "@shared/HistoryItem"
@@ -324,12 +331,28 @@ const OUTPUT_BUDGET_WINDOW_SHARE_THRESHOLD = 0.9
  * 32,768-token model is the entire context window — filling it leaves nothing
  * for the conversation and forces a compaction round trip.
  *
+ * `thinking` names the share of that cap the model may spend reasoning, when
+ * the provider enforces one. Ollama does: a level is a fraction of
+ * `min(num_predict, num_ctx)`, computed server-side, and a model told only the
+ * outer cap reads the whole of it as available to think in. Sessions ended on
+ * "reached the maximum output token limit" with the entire allowance spent
+ * inside the thinking block and no answer written.
+ *
  * Exported for tests: the wording is the whole behaviour.
  */
-export function buildOutputBudgetSection(outputCap: number, contextWindow: number | undefined): string {
+export function buildOutputBudgetSection(
+	outputCap: number,
+	contextWindow: number | undefined,
+	thinking?: { level: string; budgetTokens: number },
+): string {
 	let section =
 		`\n\n# Output Budget\n\nEach reply you produce is capped at ${outputCap} tokens, thinking included. ` +
 		"Anything past the cap is cut off mid-sentence and the turn is wasted."
+	if (thinking && thinking.budgetTokens > 0) {
+		section +=
+			` Of that, at most ${thinking.budgetTokens} tokens may be spent thinking (effort ${thinking.level}); ` +
+			"reasoning past that point is cut short, so reach a decision inside it and write the answer with what is left."
+	}
 	if (contextWindow !== undefined && outputCap >= contextWindow * OUTPUT_BUDGET_WINDOW_SHARE_THRESHOLD) {
 		const safeCap = Math.floor(outputCap * OUTPUT_BUDGET_SAFE_SHARE)
 		const reservedPercent = Math.round((1 - OUTPUT_BUDGET_SAFE_SHARE) * 100)
@@ -343,6 +366,62 @@ export function buildOutputBudgetSection(outputCap: number, contextWindow: numbe
 		" Prefer several focused tool calls over one oversized reply: if the remaining work does not fit, " +
 		"do the part that fits, call the tools it needs, and continue in the next turn."
 	return section
+}
+
+/**
+ * The thinking allowance an Ollama turn will actually be held to.
+ *
+ * Ollama computes this server-side — a level is a fraction of
+ * `min(num_predict, num_ctx)` — using its own table, which is not the AI SDK
+ * effort scale. `resolveOllamaThinkBudget` mirrors that arithmetic so the
+ * number in the prompt is the number the server will enforce, and so a literal
+ * `think_budget` that has stopped fitting the response cap is reported at the
+ * value it will really be held to rather than the one someone typed once.
+ *
+ * Returns undefined for every other provider: no other one here enforces a
+ * separate thinking cap, and inventing a figure would be worse than silence.
+ *
+ * Exported for tests: the arithmetic is the behaviour. Handing a number to
+ * `buildOutputBudgetSection` only proves the sentence renders — this is the
+ * function that has to agree with the server's table.
+ */
+export function resolveOllamaThinkingAllowance(
+	providerId: string,
+	reasoning: SessionReasoningConfig,
+	outputCap: number,
+	contextWindow: number | undefined,
+): { level: string; budgetTokens: number } | undefined {
+	if (toSdkProviderId(providerId) !== "ollama" || reasoning.thinking === false) {
+		return undefined
+	}
+
+	let thinkBudget: string | undefined
+	let numPredict: number | undefined
+	try {
+		const settings = getProviderSettingsManager(resolveDataDir()).getProviderSettings(providerSettingsProviderId(providerId))
+		const sampling = settings?.sampling
+		thinkBudget = typeof sampling?.thinkBudget === "string" ? sampling.thinkBudget : undefined
+		numPredict = positiveFiniteNumber(sampling?.numPredict)
+	} catch (error) {
+		// Advisory: a prompt without the figure is worse than no prompt at all.
+		Logger.warn("[SessionFactory] Failed to read Ollama sampling settings:", error)
+	}
+
+	// A configured `num_predict` is the cap the server will apply, so it is the
+	// window the level is a share of — the agent's own per-turn cap only wins
+	// when nothing more specific was set.
+	const level = canonicalOllamaThinkLevel(
+		thinkBudget && !/^\d+$/.test(thinkBudget.trim())
+			? thinkBudget
+			: (reasoning.reasoningEffort ?? OLLAMA_DEFAULT_THINK_LEVEL),
+	)
+	const resolved = resolveOllamaThinkBudget({
+		thinkBudget,
+		level,
+		numCtx: contextWindow,
+		numPredict: numPredict ?? outputCap,
+	})
+	return resolved.tokens > 0 ? { level, budgetTokens: resolved.tokens } : undefined
 }
 
 function resolveCommittedRuntimeModel(
@@ -1020,8 +1099,12 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	try {
 		const outputCap = maxTokensPerTurn ?? DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS
 		const contextWindow = positiveFiniteNumber(committedRuntimeModel?.modelInfo?.contextWindow)
-		systemPrompt = `${systemPrompt}${buildOutputBudgetSection(outputCap, contextWindow)}`
-		Logger.log(`[SessionFactory] Output budget: cap=${outputCap} contextWindow=${contextWindow ?? "unknown"}`)
+		const thinking = resolveOllamaThinkingAllowance(providerId, reasoningConfig, outputCap, contextWindow)
+		systemPrompt = `${systemPrompt}${buildOutputBudgetSection(outputCap, contextWindow, thinking)}`
+		Logger.log(
+			`[SessionFactory] Output budget: cap=${outputCap} contextWindow=${contextWindow ?? "unknown"}` +
+				(thinking ? ` thinking=${thinking.budgetTokens} (${thinking.level})` : ""),
+		)
 	} catch (error) {
 		Logger.warn("[SessionFactory] Failed to inject output budget instructions:", error)
 	}

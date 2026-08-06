@@ -3,6 +3,12 @@ import os from "node:os"
 import path from "node:path"
 import type { CoreSessionConfig } from "@cline/core"
 import * as LlmsModels from "@cline/llms"
+import {
+	OLLAMA_DEFAULT_THINK_LEVEL,
+	OLLAMA_THINK_BUDGET_FRACTIONS,
+	ollamaThinkBudgetTokens,
+	ollamaThinkBudgetWindow,
+} from "@cline/shared"
 import { ApiFormat } from "@shared/proto/cline/models"
 import { Logger } from "@shared/services/Logger"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -18,6 +24,7 @@ import {
 	normalizeProviderReasoningSettings,
 	normalizeSdkBaseUrl,
 	resolveApiKey,
+	resolveOllamaThinkingAllowance,
 	updateHistoryItem,
 } from "./cline-session-factory"
 import { parseProviderId } from "./model-catalog/provider-id"
@@ -1301,6 +1308,109 @@ describe("buildOutputBudgetSection", () => {
 		expect(section).toContain("capped at 32000 tokens")
 		expect(section).not.toContain("context window is")
 		expect(section).toContain("Prefer several focused tool calls")
+	})
+
+	it("names the separate thinking allowance when the provider enforces one", () => {
+		// Ollama caps thinking at a fraction of the response cap, server-side.
+		// A model told only the outer number reads all of it as room to think
+		// in, and spends the turn doing exactly that.
+		//
+		// The figure is derived, not typed: this asserts the sentence carries
+		// whatever the shared table says, so changing a fraction cannot leave a
+		// stale number in the prompt while the test still passes.
+		const budgetTokens = ollamaThinkBudgetTokens("medium", ollamaThinkBudgetWindow(128_000, 32_000))
+		const section = buildOutputBudgetSection(32_000, 128_000, { level: "medium", budgetTokens })
+
+		expect(budgetTokens).toBeGreaterThan(0)
+		expect(section).toContain(`at most ${budgetTokens} tokens may be spent thinking (effort medium)`)
+		expect(section).toContain("reach a decision inside it")
+	})
+
+	it("says nothing about thinking for providers that do not cap it", () => {
+		const section = buildOutputBudgetSection(32_000, 128_000)
+
+		expect(section).not.toContain("may be spent thinking")
+	})
+
+	it("omits the allowance rather than printing a zero", () => {
+		const section = buildOutputBudgetSection(32_000, 128_000, { level: "none", budgetTokens: 0 })
+
+		expect(section).not.toContain("may be spent thinking")
+	})
+})
+
+describe("resolveOllamaThinkingAllowance", () => {
+	beforeEach(() => {
+		mocks.providerSettingsManager.getProviderSettings.mockReturnValue(undefined)
+	})
+
+	it("agrees with the server's table for every budgeted level", () => {
+		// The check the formatter cannot make. Each level is asserted against
+		// the fraction Ollama will apply, so a divergence between this side and
+		// `api/types.go` fails here rather than in a live session.
+		for (const [level, [numerator, denominator]] of Object.entries(OLLAMA_THINK_BUDGET_FRACTIONS)) {
+			const allowance = resolveOllamaThinkingAllowance("ollama", { reasoningEffort: level as never }, 32_000, 128_000)
+
+			expect(allowance).toEqual({ level, budgetTokens: Math.floor((32_000 * numerator) / denominator) })
+		}
+	})
+
+	it("divides the response cap, not the context window", () => {
+		// The failure mode: a share of a 128k context is not a bound on a reply
+		// that will be cut off at 32k.
+		const allowance = resolveOllamaThinkingAllowance("ollama", { reasoningEffort: "medium" }, 32_000, 128_000)
+
+		expect(allowance?.budgetTokens).toBe(8_000)
+		expect(allowance?.budgetTokens).toBeLessThan(32_000)
+	})
+
+	it("shrinks with the response cap as the conversation grows", () => {
+		const roomy = resolveOllamaThinkingAllowance("ollama", { reasoningEffort: "medium" }, 26_538, 128_000)
+		const cramped = resolveOllamaThinkingAllowance("ollama", { reasoningEffort: "medium" }, 1_232, 128_000)
+
+		expect(roomy?.budgetTokens).toBe(6_634)
+		expect(cramped?.budgetTokens).toBe(308)
+	})
+
+	it("defaults to the level the wire defaults to", () => {
+		const allowance = resolveOllamaThinkingAllowance("ollama", {}, 32_000, 128_000)
+
+		expect(allowance?.level).toBe(OLLAMA_DEFAULT_THINK_LEVEL)
+	})
+
+	it("resolves xhigh to the level Ollama knows it by", () => {
+		const allowance = resolveOllamaThinkingAllowance("ollama", { reasoningEffort: "xhigh" }, 32_000, 128_000)
+
+		expect(allowance?.level).toBe("max")
+		expect(allowance?.budgetTokens).toBe(Math.floor((32_000 * 4) / 5))
+	})
+
+	it("clamps a configured literal budget that no longer fits the cap", () => {
+		mocks.providerSettingsManager.getProviderSettings.mockReturnValue({
+			sampling: { thinkBudget: "8192" },
+		} as never)
+
+		const allowance = resolveOllamaThinkingAllowance("ollama", { reasoningEffort: "medium" }, 1_232, 128_000)
+
+		expect(allowance?.budgetTokens).toBe(308)
+	})
+
+	it("treats a configured num_predict as the cap the server will apply", () => {
+		mocks.providerSettingsManager.getProviderSettings.mockReturnValue({
+			sampling: { numPredict: 4_000 },
+		} as never)
+
+		const allowance = resolveOllamaThinkingAllowance("ollama", { reasoningEffort: "medium" }, 32_000, 128_000)
+
+		expect(allowance?.budgetTokens).toBe(1_000)
+	})
+
+	it("says nothing for providers that do not enforce a thinking cap", () => {
+		expect(resolveOllamaThinkingAllowance("anthropic", { reasoningEffort: "medium" }, 32_000, 128_000)).toBeUndefined()
+	})
+
+	it("says nothing when thinking is switched off", () => {
+		expect(resolveOllamaThinkingAllowance("ollama", { thinking: false }, 32_000, 128_000)).toBeUndefined()
 	})
 })
 
