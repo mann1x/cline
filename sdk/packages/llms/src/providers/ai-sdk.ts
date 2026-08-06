@@ -29,6 +29,7 @@ import { extractErrorMessage } from "./format";
 import {
 	isAnthropicCompatibleModel,
 	isCerebrasProvider,
+	isOllamaProvider,
 	resolveModelFamily,
 } from "./model-facts";
 import {
@@ -117,7 +118,7 @@ function buildCachedAiSdkMessages(
 	systemPrompt?: string,
 ) {
 	const aiMessages = toAiSdkMessages(request.messages, systemPrompt, {
-		includeReasoning: shouldIncludeReasoningHistory(request, context),
+		reasoningHistory: resolveReasoningHistoryMode(request, context),
 	}) as Array<Record<string, unknown>>;
 	const includeAnthropic = isAnthropicCompatibleModel({
 		modelId: request.modelId,
@@ -297,11 +298,42 @@ function wrapFetchForStickySession(
 	return sessionFetch;
 }
 
-function shouldIncludeReasoningHistory(
+/**
+ * How much of the transcript's reasoning goes back to the model.
+ *
+ * `all` is the historical behaviour, `none` is for backends that reject it,
+ * and `last` keeps only the most recent message's reasoning.
+ *
+ * `last` is what a tool loop actually needs. The state a coding agent carries
+ * between turns lives in the tool calls and their results; its own reasoning
+ * from six turns ago is not an input to anything, it is a transcript of how it
+ * got here. The exception is the turn in flight — a model that has just
+ * reasoned its way to a tool call needs that reasoning when the result comes
+ * back, which is also the only reasoning Anthropic requires be echoed.
+ *
+ * Measured on a live Ollama session at effort `high`: 242,078 characters of
+ * thinking against 61,728 for every tool call, result and message combined —
+ * 79.7% of the transcript, ~60,500 tokens, resent in full on every request.
+ * Compaction could only get 103.2k down to 62.2k because four-fifths of what
+ * it was compacting was stale reasoning.
+ */
+type ReasoningHistoryMode = "all" | "last" | "none";
+
+function resolveReasoningHistoryMode(
 	request: GatewayStreamRequest,
 	context: GatewayProviderContext,
-): boolean {
-	return !isCerebrasProvider(request, context);
+): ReasoningHistoryMode {
+	if (isCerebrasProvider(request, context)) {
+		return "none";
+	}
+	// Scoped to Ollama rather than applied everywhere: this is where it was
+	// measured, and where a local model's context window is the binding
+	// constraint. Other providers keep the behaviour they were tuned against
+	// until there is a measurement for them too.
+	if (isOllamaProvider(request, context)) {
+		return "last";
+	}
+	return "all";
 }
 
 async function ensureGatewayLangfuseTelemetry(
@@ -318,12 +350,28 @@ async function ensureGatewayLangfuseTelemetry(
 function toAiSdkMessages(
 	messages: readonly AgentMessage[],
 	systemPrompt?: string,
-	options?: { includeReasoning?: boolean },
+	options?: { reasoningHistory?: ReasoningHistoryMode },
 ) {
-	const includeReasoning = options?.includeReasoning ?? true;
+	const reasoningHistory = options?.reasoningHistory ?? "all";
+	// Which message keeps its reasoning under `last`. Found by scanning for the
+	// final message that actually carries a reasoning part, not by taking the
+	// final message: the last turn is often a tool result, and "keep the last
+	// one" has to mean the last reasoning there is.
+	let lastReasoningIndex = -1;
+	if (reasoningHistory === "last") {
+		for (let i = messages.length - 1; i >= 0; i--) {
+			if (messages[i]?.content.some((part) => part.type === "reasoning")) {
+				lastReasoningIndex = i;
+				break;
+			}
+		}
+	}
 	const normalizedMessages: AiSdkFormatterMessage[] = [];
 
-	for (const message of messages) {
+	for (const [messageIndex, message] of messages.entries()) {
+		const includeReasoning =
+			reasoningHistory === "all" ||
+			(reasoningHistory === "last" && messageIndex === lastReasoningIndex);
 		const content: AiSdkFormatterPart[] = [];
 		let skippedReasoning = false;
 		for (const part of message.content) {
@@ -1250,7 +1298,7 @@ function createAiSdkProvider(kind: ProviderModuleKind): GatewayProviderFactory {
 				const messages = shouldApplyPromptCache(request, context)
 					? buildCachedAiSdkMessages(request, context, messagesSystemPrompt)
 					: toAiSdkMessages(request.messages, messagesSystemPrompt, {
-							includeReasoning: shouldIncludeReasoningHistory(request, context),
+							reasoningHistory: resolveReasoningHistoryMode(request, context),
 						});
 				const providerOptions = composeAiSdkProviderOptions(
 					request,

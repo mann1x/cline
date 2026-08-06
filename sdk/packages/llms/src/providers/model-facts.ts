@@ -346,6 +346,25 @@ export function isCerebrasProvider(
 	);
 }
 
+/**
+ * Whether this request is going to an Ollama server.
+ *
+ * Checks the same three identifiers as {@link isCerebrasProvider}: a provider
+ * can be named at the request, at the resolved config, or by the manifest, and
+ * a custom entry pointed at a local Ollama carries the name in only one of
+ * them.
+ */
+export function isOllamaProvider(
+	request: Pick<GatewayStreamRequest, "providerId">,
+	context: GatewayProviderContext,
+): boolean {
+	return [
+		request.providerId,
+		context.config.providerId,
+		context.provider.id,
+	].some((id) => id.toLowerCase() === "ollama");
+}
+
 export function modelReasoningDefaultsOn(options: {
 	request: Pick<GatewayStreamRequest, "providerId" | "modelId">;
 	context: GatewayProviderContext;
