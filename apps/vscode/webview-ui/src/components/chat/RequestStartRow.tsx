@@ -231,26 +231,27 @@ export const RequestStartRow: React.FC<RequestStartRowProps> = ({
 					</div>
 				</div>
 			)}
-			{reasoningContent &&
-				(!hasCost ? (
-					// Still streaming - show "Thinking..." text with shimmer
-					<div className="ml-1 pl-0 mb-1 -mt-1.25 pt-1">
-						<div className="inline-flex justify-baseline gap-0.5 text-left select-none px-0 w-full">
-							<span className="animate-shimmer bg-linear-90 from-foreground to-description bg-[length:200%_100%] bg-clip-text text-transparent text-[13px] leading-none">
-								Thinking...
-							</span>
-						</div>
-					</div>
-				) : (
-					// Complete - always show collapsible thinking section
-					<ThinkingRow
-						isExpanded={isExpanded}
-						isVisible={true}
-						onToggle={handleToggle}
-						reasoningContent={reasoningContent}
-						showTitle={true}
-					/>
-				))}
+			{/*
+			 * One row for both states. While the request was in flight this
+			 * rendered a bare "Thinking..." shimmer and dropped
+			 * `reasoningContent` on the floor: the reasoning was arriving and
+			 * being thrown away, so a long thinking phase showed one word and
+			 * nothing else, and the content only became readable once the turn
+			 * had finished. `ThinkingRow` already handles streaming — it
+			 * shimmers its title on `isStreaming` and follows the tail as
+			 * content grows — so this case needed the component, not a
+			 * placeholder standing in for it.
+			 */}
+			{reasoningContent && (
+				<ThinkingRow
+					isExpanded={isExpanded}
+					isStreaming={!hasCost}
+					isVisible={true}
+					onToggle={handleToggle}
+					reasoningContent={reasoningContent}
+					showTitle={true}
+				/>
+			)}
 
 			{apiReqState === "error" && (
 				<ErrorRow

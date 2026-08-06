@@ -835,6 +835,16 @@ describe("createEditorExecutor", () => {
 				await expect(
 					editor({ path: filePath, new_text: "rewritten" }, dir, context),
 				).rejects.toThrow(/`start_line: 1` and `end_line: 3`/);
+				// ...but named as the fallback, after the targeted edit. Live: a
+				// model quoted this sentence back as its reason for rewriting a
+				// 138-line file whole on every retry, and triplicated a class
+				// doing it. The order of the two routes is the behaviour.
+				await expect(
+					editor({ path: filePath, new_text: "rewritten" }, dir, context),
+				).rejects.toThrow(/Edit the lines you mean to change[\s\S]*Replacing the file in full/);
+				await expect(
+					editor({ path: filePath, new_text: "rewritten" }, dir, context),
+				).rejects.toThrow(/only after a targeted edit has failed/);
 				// The message must name `path` too. Measured: a model rebuilt
 				// the call from an earlier version of this sentence, which
 				// named only the line numbers, and dropped `path` three times.

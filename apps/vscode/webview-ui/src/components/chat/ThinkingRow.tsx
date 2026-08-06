@@ -1,5 +1,6 @@
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react"
 import { memo, useCallback, useEffect, useRef, useState } from "react"
+import MarkdownBlock from "@/components/common/MarkdownBlock"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
@@ -86,28 +87,45 @@ export const ThinkingRow = memo(
 					</Button>
 				) : null}
 
+				{/*
+				 * A div, not a Button. Reasoning renders as Markdown now,
+				 * and Markdown carries its own interactive elements — file
+				 * links are buttons — which cannot be nested inside one.
+				 * Losing click-to-collapse on the body is the point rather
+				 * than the cost: the title still toggles, and selecting a
+				 * line of reasoning no longer collapses the block out from
+				 * under the selection.
+				 */}
 				{isExpanded && (
-					<Button
+					<div
 						className={cn(
-							"flex gap-0 overflow-hidden w-full min-w-0 max-h-0 opacity-0 items-baseline justify-baseline text-left !p-0 !pl-0",
-							"disabled:cursor-text disabled:opacity-100",
+							"flex gap-0 overflow-hidden w-full min-w-0 max-h-0 opacity-0 items-baseline justify-baseline text-left p-0 pl-0",
 							{
 								"max-h-[200px] opacity-100": isVisible,
 								"transition-[max-height] duration-[250ms] ease-[cubic-bezier(0.4,0,0.2,1)] [transition:max-height_250ms_cubic-bezier(0.4,0,0.2,1),opacity_150ms_ease-out]":
 									isVisible,
 							},
-						)}
-						disabled={!showTitle}
-						onClick={onToggle}
-						variant="text">
+						)}>
 						<div className="relative flex-1">
 							<div
 								className={cn(
-									"flex max-h-[150px] overflow-y-auto text-description leading-normal truncated whitespace-pre-wrap break-words pl-0 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden [direction:ltr]",
+									"flex max-h-[150px] overflow-y-auto text-description leading-normal truncated break-words pl-0 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden [direction:ltr]",
 								)}
 								onScroll={checkScrollable}
 								ref={scrollRef}>
-								<span className="pb-2 block text-sm">{reasoningContent}</span>
+								{/*
+								 * Reasoning arrives as Markdown and was being
+								 * shown as its source. Models write headings,
+								 * lists and fenced code while they think, and a
+								 * wall of `##` and backticks is what a reader
+								 * had to work through. `whitespace-pre-wrap`
+								 * goes with it: Markdown owns the line breaks
+								 * now, and keeping it would double every blank
+								 * line.
+								 */}
+								<span className="pb-2 block text-sm w-full min-w-0">
+									<MarkdownBlock markdown={reasoningContent} />
+								</span>
 							</div>
 							{canScrollUp && (
 								<div className="absolute top-0 left-0 right-0 h-6 pointer-events-none bg-gradient-to-b from-background to-transparent" />
@@ -116,7 +134,7 @@ export const ThinkingRow = memo(
 								<div className="absolute bottom-0 left-0 right-0 h-6 pointer-events-none bg-gradient-to-t from-background to-transparent" />
 							)}
 						</div>
-					</Button>
+					</div>
 				)}
 			</div>
 		)

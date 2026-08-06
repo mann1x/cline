@@ -834,23 +834,29 @@ export function createEditorExecutor(
 		}
 		if (input.old_text == null) {
 			// `new_text` alone against an existing file is a model asking to
-			// rewrite it wholesale. That is a legitimate move once incremental
-			// edits have failed, and the route exists — it is a line range
-			// covering the file — so name it rather than only naming what is
-			// missing.
+			// rewrite it wholesale. The route exists and has to be named, but
+			// naming it *first* turned it into the instruction: a model that
+			// could not get `old_text` to match read this message as sanctioning
+			// a full rewrite, took it on every retry, and grew a 138-line file
+			// to 440 lines carrying three copies of the same class. It quoted
+			// this sentence back while doing it. So the targeted route leads,
+			// and the wholesale one is named as what it is — the fallback, with
+			// the reason it is a fallback attached.
 			//
 			// Every argument of the working call is spelled out, `path`
-			// included. An earlier version of this message named only the two
-			// line numbers to add, and a model rebuilt the call from the
-			// sentence instead of amending its own: it sent `start_line`,
-			// `end_line` and `new_text` with no `path` at all, three times in
-			// a row. A message that lists some of the arguments will be read
-			// as listing all of them.
+			// included, on both routes. An earlier version of this message named
+			// only the two line numbers to add, and a model rebuilt the call
+			// from the sentence instead of amending its own: it sent
+			// `start_line`, `end_line` and `new_text` with no `path` at all,
+			// three times in a row. A message that lists some of the arguments
+			// will be read as listing all of them.
 			const lineCount = (await fs.readFile(filePath, encoding)).split(
 				/\r\n|\n/,
 			).length;
 			throw new Error(
-				`Parameter \`old_text\` is required when editing an existing file without \`insert_line\` or \`start_line\`. To replace ${filePath} in full, send this call again with every argument it already has — \`path: "${filePath}"\` and the same \`new_text\` — plus \`start_line: 1\` and \`end_line: ${lineCount}\`.`,
+				`Parameter \`old_text\` is required when editing an existing file without \`insert_line\` or \`start_line\`. ` +
+					`Edit the lines you mean to change: call \`read_files\` for ${filePath} around them, then send this call again with \`path: "${filePath}"\`, the \`new_text\` for just those lines, and the \`start_line\`/\`end_line\` that read reports. ` +
+					`Replacing the file in full is the same call with \`start_line: 1\` and \`end_line: ${lineCount}\`, but it rewrites every line — a whole-file rewrite that is slightly wrong duplicates the parts it did not mean to touch, so reach for it only after a targeted edit has failed.`,
 			);
 		}
 
