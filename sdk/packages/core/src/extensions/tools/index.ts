@@ -55,6 +55,22 @@ export {
 	resolveToolRoutingConfig,
 	type ToolRoutingRule,
 } from "./model-tool-routing";
+// Task progress (the checklist the model keeps while it works)
+export {
+	buildTaskProgressReminder,
+	buildTaskProgressState,
+	DEFAULT_TASK_PROGRESS_REMINDER_INTERVAL,
+	parseTaskProgress,
+	readTaskProgress,
+	TASK_PROGRESS_PARAM,
+	TASK_PROGRESS_PARAM_DESCRIPTION,
+	type TaskProgressItem,
+	type TaskProgressState,
+	TaskProgressTracker,
+	type TaskProgressTrackerOptions,
+	withTaskProgressCapture,
+	withTaskProgressParam,
+} from "./task-progress";
 // Presets
 export {
 	createDefaultToolsWithPreset,

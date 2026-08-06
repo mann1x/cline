@@ -35,6 +35,7 @@ import {
 	TimeoutError,
 	withTimeout,
 } from "./helpers";
+import { withTaskProgressCapture } from "./task-progress";
 import {
 	type ApplyPatchInput,
 	ApplyPatchInputSchema,
@@ -971,6 +972,7 @@ export function createDefaultTools(
 		enableSkills = true,
 		enableAskQuestion = true,
 		enableSubmitAndExit = false,
+		taskProgress,
 		...config
 	} = options;
 
@@ -1020,6 +1022,15 @@ export function createDefaultTools(
 	// Add submit_and_exit tool if enabled and executor provided
 	if (submitExecutor) {
 		tools.push(createSubmitAndExitTool(submitExecutor, config));
+	}
+
+	// Applied last, so every tool the caller enabled carries the checklist —
+	// including any added above after this line was written. The wrapper only
+	// adds a parameter and observes it; a tool's own behaviour is unchanged.
+	if (taskProgress) {
+		return tools.map((tool) =>
+			withTaskProgressCapture(tool, taskProgress),
+		) as unknown as AgentTool[];
 	}
 
 	return tools as unknown as AgentTool[];

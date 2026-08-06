@@ -16,6 +16,7 @@ import type {
 	ReadFileRequest,
 	StructuredCommandInput,
 } from "./schemas";
+import type { TaskProgressTracker } from "./task-progress";
 
 // =============================================================================
 // Tool Result Types
@@ -384,4 +385,14 @@ export interface CreateDefaultToolsOptions extends DefaultToolsConfig {
 	 * Only tools with provided executors will be available
 	 */
 	executors: ToolExecutors;
+	/**
+	 * Session-scoped checklist tracker. When provided, every tool gains the
+	 * optional `task_progress` parameter, and results carry the checklist back
+	 * to the model periodically.
+	 *
+	 * Absent by default: the tracker holds per-session state, so a shared or
+	 * missing one is the difference between a checklist and a leak between
+	 * tasks. Hosts opt in by constructing one per session.
+	 */
+	taskProgress?: TaskProgressTracker;
 }
