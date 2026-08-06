@@ -121,6 +121,33 @@ function allOperationsFailed(output: unknown): boolean {
 	return true;
 }
 
+/**
+ * Whether a tool result reports that it made things worse.
+ *
+ * Failure is not the only way a call gets nowhere. An edit can land, report
+ * `success: true`, and leave the file with diagnostics it did not have before —
+ * which the host marks on the result as `regressed`. Measured on a live
+ * session: eight consecutive `editor` calls, every one successful, the file's
+ * diagnostics 2 → 20, and the class under repair written into the file three
+ * times over. Read as eight productive calls, the barren-repeat counter was
+ * reset on each and the loop stop could never fire.
+ *
+ * Same conservative reading as `allOperationsFailed`: only an explicit `true`
+ * counts, so an unrecognised shape can never end a task that was working.
+ *
+ * Exported for tests: it is the whole of the new loop signal, and driving a
+ * full runtime to assert one boolean would test the harness instead.
+ */
+export function introducedRegression(output: unknown): boolean {
+	const entries = Array.isArray(output) ? output : [output];
+	return entries.some(
+		(entry) =>
+			entry != null &&
+			typeof entry === "object" &&
+			(entry as { regressed?: unknown }).regressed === true,
+	);
+}
+
 async function resolveRuleContent(
 	rule: AgentExtensionRule,
 ): Promise<string | undefined> {
@@ -1149,21 +1176,18 @@ export class SessionRuntime {
 				// that returns the `{query, result, success}` envelope reports
 				// its own failure there rather than by throwing, so a thrown
 				// error is not the whole story: an edit that changed nothing
-				// comes back as a normal return with `success: false`.
+				// comes back as a normal return with `success: false`, and an
+				// edit that broke the file comes back successful but marked
+				// `regressed`.
+				const finishedOutput =
+					resultPart?.type === "tool-result" ? resultPart.output : undefined;
 				this.noteLoopOutcome(
 					!isError &&
-						!allOperationsFailed(
-							resultPart?.type === "tool-result"
-								? resultPart.output
-								: undefined,
-						),
+						!allOperationsFailed(finishedOutput) &&
+						!introducedRegression(finishedOutput),
 				);
 				const errorText = isError
-					? formatToolResultError(
-							resultPart?.type === "tool-result"
-								? resultPart.output
-								: undefined,
-						)
+					? formatToolResultError(finishedOutput)
 					: undefined;
 				const record: ToolCallRecord = {
 					id: event.toolCall.toolCallId,

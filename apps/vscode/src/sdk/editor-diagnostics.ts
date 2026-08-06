@@ -19,6 +19,7 @@
 // picture with `@problems`.
 
 import { appendFileSync } from "node:fs"
+import { readFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import type { AgentAfterToolContext, AgentBeforeToolContext, AgentHooks } from "@cline/shared"
 import { getNewDiagnostics, singleFileDiagnosticsToProblemsString } from "@integrations/diagnostics"
@@ -26,6 +27,7 @@ import * as path from "path"
 import { HostProvider } from "@/hosts/host-provider"
 import { type Diagnostic, DiagnosticSeverity, type FileDiagnostics } from "@/shared/proto/index.cline"
 import { Logger } from "@/shared/services/Logger"
+import { describeDelimiterBalance } from "./delimiter-balance"
 
 /** Tools whose successful execution can leave a file in a state a linter judges. */
 const FILE_WRITING_TOOLS = new Set(["editor", "apply_patch"])
@@ -255,6 +257,56 @@ export function appendToOutput(output: unknown, block: string): unknown {
 	return output
 }
 
+/**
+ * Mark a tool result as having made the file worse.
+ *
+ * The loop tracker asks one question of every finished call: did it get
+ * anywhere? It answered that from failure alone — a thrown error, or the
+ * `{success: false}` envelope — which is blind to the way a weaker model
+ * actually stalls. Measured on a live session: eight consecutive `editor` calls
+ * all returned `success: true` while the file's diagnostics went 2 → 20 and the
+ * class under repair ended up in the file three times. Nothing failed, so the
+ * barren-repeat counter was reset on every one of those turns and the loop
+ * detector could never fire.
+ *
+ * An edit that introduces diagnostics did not get anywhere, whatever its
+ * envelope says. The flag rides on the result so the runtime can read it
+ * without this package having to know about the loop tracker.
+ */
+export function markRegressed(output: unknown): unknown {
+	if (output && typeof output === "object" && !Array.isArray(output)) {
+		return { ...(output as Record<string, unknown>), regressed: true }
+	}
+	return output
+}
+
+/**
+ * The delimiter verdict for the files an edit touched, when they have one.
+ *
+ * `check_file` already computes this and says exactly the thing a stuck model
+ * needs — "counting only code, this line has 1 more `}` than `{` — that is the
+ * edit". In the measured session it was never called: across 111,790 characters
+ * of reasoning the model named two of the twenty-five tools available to it and
+ * `check_file` was not one of them. So this stops depending on the model
+ * choosing it, and attaches the verdict to the edit that caused the trouble.
+ */
+async function describeBalanceForPaths(paths: readonly string[]): Promise<string> {
+	const sections: string[] = []
+	for (const filePath of paths) {
+		try {
+			const text = await readFile(filePath, "utf8")
+			const verdict = describeDelimiterBalance(filePath, text)
+			if (verdict) {
+				sections.push(verdict)
+			}
+		} catch {
+			// A file that cannot be read has no verdict; the diagnostics block
+			// above is still worth sending on its own.
+		}
+	}
+	return sections.join("\n\n")
+}
+
 export const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
 /** The editor's current verdict on the whole workspace. */
@@ -377,6 +429,9 @@ export function createEditorDiagnosticsHooks(options: EditorDiagnosticsOptions):
 				}
 				const after = await readSettledDiagnostics(new Set(snapshot.paths), read, delay)
 				const block = await formatIntroducedDiagnostics(snapshot.before, after)
+				// Only worth reading the file back when the edit already looks
+				// wrong. A clean edit pays nothing for this.
+				const balance = block ? await describeBalanceForPaths(snapshot.paths) : ""
 				appendEditorDiagnosticsTrace({
 					phase: "after",
 					tool: ctx.toolCall.toolName,
@@ -384,11 +439,19 @@ export function createEditorDiagnosticsHooks(options: EditorDiagnosticsOptions):
 					before: snapshot.before.reduce((total, file) => total + file.diagnostics.length, 0),
 					after: after.reduce((total, file) => total + file.diagnostics.length, 0),
 					blockChars: block.length,
+					balanceChars: balance.length,
+					regressed: block !== "",
 				})
 				if (!block) {
 					return undefined
 				}
-				return { result: { ...ctx.result, output: appendToOutput(ctx.result.output, block) } }
+				const appended = [block, balance].filter((part) => part !== "").join("\n\n")
+				return {
+					result: {
+						...ctx.result,
+						output: markRegressed(appendToOutput(ctx.result.output, appended)),
+					},
+				}
 			} catch (error) {
 				Logger.error("[EditorDiagnostics] failed to report diagnostics:", error)
 				return undefined

@@ -35,6 +35,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { MESSAGE_BUILDER_LIMIT_ENV } from "../../session/services/message-builder";
 import {
+	introducedRegression,
 	SessionRuntime,
 	type SessionRuntimeOrchestratorDeps,
 } from "./session-runtime-orchestrator";
@@ -2530,5 +2531,51 @@ describe("SessionRuntime auth retry", () => {
 		expect(onAuthError).not.toHaveBeenCalled();
 		expect(createdCount()).toBe(1);
 		expect(result.finishReason).toBe("error");
+	});
+});
+
+describe("introducedRegression", () => {
+	// The measured failure this exists for: eight consecutive `editor` calls,
+	// every one `success: true`, the file's diagnostics going 2 -> 20 and the
+	// class under repair written into the file three times. Judged on failure
+	// alone all eight looked productive, so the barren-repeat counter reset on
+	// each and the loop stop could never fire.
+	it("sees the mark the host puts on an edit that broke the file", () => {
+		expect(
+			introducedRegression({
+				query: "edit:game.html",
+				result: "Replaced lines 84-98",
+				success: true,
+				regressed: true,
+			}),
+		).toBe(true);
+	});
+
+	it("leaves a successful, clean edit alone", () => {
+		expect(
+			introducedRegression({
+				query: "edit:game.html",
+				result: "Replaced lines 84-98",
+				success: true,
+			}),
+		).toBe(false);
+	});
+
+	it("finds the mark on any entry of a batched result", () => {
+		expect(
+			introducedRegression([
+				{ query: "edit:a.ts", result: "ok", success: true },
+				{ query: "edit:b.ts", result: "ok", success: true, regressed: true },
+			]),
+		).toBe(true);
+	});
+
+	it("reads anything unrecognised as no regression", () => {
+		// Same conservative rule as `allOperationsFailed`: this feeds a loop
+		// stop, and the cost of guessing wrong is ending a task that worked.
+		expect(introducedRegression(undefined)).toBe(false);
+		expect(introducedRegression("edited")).toBe(false);
+		expect(introducedRegression({ regressed: "yes" })).toBe(false);
+		expect(introducedRegression([])).toBe(false);
 	});
 });

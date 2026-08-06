@@ -1390,12 +1390,16 @@ describe("default read_files tool", () => {
 		const tool = createReadFilesTool(execute);
 
 		const result = await tool.execute(
+			// Deliberately the shape the declared input type forbids: a bare
+			// single-file request, unwrapped, with every flag arriving as a
+			// string. That is what a live model sent, and accepting it is the
+			// whole point of the test, so the cast is part of the assertion.
 			{
 				path: "/tmp/manic_miner.html",
 				start_line: "108",
 				end_line: "108",
 				line_numbers: "false",
-			},
+			} as never,
 			{ agentId: "agent-1", conversationId: "conv-1", iteration: 1 },
 		);
 

@@ -13,6 +13,7 @@ import {
 } from "./apply-patch";
 import { createShellExecutor, type ShellExecutorOptions } from "./bash";
 import { createEditorExecutor, type EditorExecutorOptions } from "./editor";
+import { createReadReceipts, type ReadReceipts } from "./read-receipts";
 import {
 	createFileReadExecutor,
 	type FileReadExecutorOptions,
@@ -37,6 +38,7 @@ export {
 	type ShellExecutorOptions,
 } from "./bash";
 export { createEditorExecutor, type EditorExecutorOptions } from "./editor";
+export { createReadReceipts, type ReadReceipts } from "./read-receipts";
 export {
 	createFileReadExecutor,
 	type FileReadExecutorOptions,
@@ -57,6 +59,13 @@ export interface DefaultExecutorsOptions {
 	webFetch?: WebFetchExecutorOptions;
 	applyPatch?: ApplyPatchExecutorOptions;
 	editor?: EditorExecutorOptions;
+
+	/**
+	 * Record of what has been read, shared by the reader and the editor.
+	 * Supply one to observe it or to span several executor sets; omit it and
+	 * each set gets its own, which is the right scope for a session.
+	 */
+	receipts?: ReadReceipts;
 }
 
 /**
@@ -91,12 +100,17 @@ export function createDefaultShellExecutor(options: ShellExecutorOptions = {}) {
 export function createDefaultExecutors(
 	options: DefaultExecutorsOptions = {},
 ): ToolExecutors {
+	// One registry, shared by the reader and the writer: the reader records
+	// what was seen and the writer refuses to edit anything that was not. They
+	// are useless apart, so they are wired together here rather than left to
+	// each caller to remember.
+	const receipts = options.receipts ?? createReadReceipts();
 	return {
-		readFile: createFileReadExecutor(options.fileRead),
+		readFile: createFileReadExecutor({ ...options.fileRead, receipts }),
 		search: createSearchExecutor(options.search),
 		bash: createDefaultShellExecutor(options.bash),
 		webFetch: createWebFetchExecutor(options.webFetch),
 		applyPatch: createApplyPatchExecutor(options.applyPatch),
-		editor: createEditorExecutor(options.editor),
+		editor: createEditorExecutor({ ...options.editor, receipts }),
 	};
 }

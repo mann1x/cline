@@ -1,3 +1,6 @@
+import * as fs from "node:fs/promises"
+import * as os from "node:os"
+import * as path from "node:path"
 import { describe, expect, it, vi } from "vitest"
 import { DiagnosticSeverity, type FileDiagnostics } from "@/shared/proto/index.cline"
 import {
@@ -221,6 +224,63 @@ describe("createEditorDiagnosticsHooks", () => {
 		await bag.beforeTool?.(context)
 		await bag.afterTool?.(context)
 		expect(read).not.toHaveBeenCalled()
+	})
+
+	it("marks a regressing edit so the loop tracker can see it", async () => {
+		// Measured: eight consecutive `editor` calls all returned success: true
+		// while the file's diagnostics went 2 -> 20. Read as eight productive
+		// calls, the barren-repeat counter reset on every one and the loop stop
+		// could never fire.
+		const states: FileDiagnostics[][] = [
+			[],
+			[{ filePath: "/repo/src/app.ts", diagnostics: [diagnostic({ message: "Unterminated string literal" })] }],
+		]
+		let call = 0
+		const bag = hooks(async () => states[Math.min(call++, states.length - 1)])
+
+		await bag.beforeTool?.(toolContext())
+		const after = await bag.afterTool?.(toolContext())
+
+		expect((after as { result: { output: { regressed?: boolean } } }).result.output.regressed).toBe(true)
+	})
+
+	it("leaves a clean edit unmarked", async () => {
+		const bag = hooks(async () => [])
+		await bag.beforeTool?.(toolContext())
+		expect(await bag.afterTool?.(toolContext())).toBeUndefined()
+	})
+
+	it("attaches the delimiter verdict for the file it just broke", async () => {
+		// `check_file` already computes exactly the sentence a stuck model needs,
+		// and in the measured session it was never called: across 111,790
+		// characters of reasoning the model named two of its twenty-five tools.
+		// So the verdict rides along with the edit that caused the trouble
+		// instead of waiting to be asked for.
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cline-diag-"))
+		try {
+			const filePath = path.join(dir, "app.ts")
+			await fs.writeFile(filePath, "const f = () => {\n\tgo();\n}}\n", "utf8")
+			const states: FileDiagnostics[][] = [
+				[],
+				[{ filePath, diagnostics: [diagnostic({ message: "Declaration or statement expected." })] }],
+			]
+			let call = 0
+			const bag = createEditorDiagnosticsHooks({
+				cwd: dir,
+				readDiagnostics: async () => states[Math.min(call++, states.length - 1)],
+				delay: noDelay,
+			})
+			const context = toolContext({ input: { path: "app.ts" } })
+
+			await bag.beforeTool?.(context)
+			const after = await bag.afterTool?.(context)
+
+			const text = String((after as { result: { output: { result: string } } }).result.output.result)
+			expect(text).toContain("Declaration or statement expected.")
+			expect(text).toContain("more `}` than `{`")
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true })
+		}
 	})
 
 	it("keeps a failure to read diagnostics away from the tool result", async () => {

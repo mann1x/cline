@@ -9,6 +9,7 @@ import * as path from "node:path";
 import type { AgentToolContext } from "@cline/shared";
 import type { EditFileInput } from "../schemas";
 import type { EditorExecutor } from "../types";
+import type { ReadReceipts } from "./read-receipts";
 
 /**
  * Options for the editor executor
@@ -32,6 +33,16 @@ export interface EditorExecutorOptions {
 	 * @default 200
 	 */
 	maxDiffLines?: number;
+
+	/**
+	 * Shared record of what has been read, used to refuse an edit aimed at
+	 * lines the model has never seen.
+	 *
+	 * Optional, and the guard is off when it is absent: an executor built on
+	 * its own has no reader to pair with, and failing every edit would be the
+	 * wrong default for an embedder wiring the tools up one at a time.
+	 */
+	receipts?: ReadReceipts;
 }
 
 function resolveFilePath(
@@ -309,6 +320,34 @@ function noChangeMessage(filePath: string, why: string): never {
 }
 
 /**
+ * Refuse a "replacement" that removed nothing and grew the range instead.
+ *
+ * Measured on a live session, on a dense single-file game: the model asked to
+ * replace lines 84-98 with a block that opened with those same fifteen lines
+ * and then restated the rest of the class. Nothing was removed, ~140 lines were
+ * added, and the class ended up in the file three times over. The result read
+ * `success: true` with the note "15 of the 15 line(s) in the range were already
+ * identical", which is true and reassuring and describes a file that had just
+ * been corrupted. Diagnostics went from 3 to 14 on that one call.
+ *
+ * The signature is exact: a range replacement that deletes none of the range it
+ * names, while adding more lines than the range holds, did not replace anything
+ * — it appended a second copy. Wrapping a block (try/catch, an if) removes
+ * nothing either, but adds a handful of lines rather than more than the block
+ * itself, so it stays under this.
+ */
+function duplicatedRangeMessage(
+	filePath: string,
+	range: string,
+	requestedLines: number,
+	added: number,
+): never {
+	throw new Error(
+		`Duplicated instead of replaced: the edit to ${range} in ${filePath} was not applied. None of the ${requestedLines} line(s) you named were removed, yet ${added} new line(s) were added — so what you sent as \`new_text\` opens with the text already at ${range} and then continues, which appends a second copy rather than replacing anything. If you meant to rewrite that range, send only the text that should end up there, without restating the lines already quoted back to you. If you meant to add code, insert it at the line it belongs on instead. Re-read the file first: after earlier edits the line numbers you are working from may no longer point at what you think.`,
+	);
+}
+
+/**
  * How many lines actually differ, using the same prefix/suffix trim as the
  * diff renderer so the two can never disagree about what changed.
  */
@@ -398,6 +437,14 @@ async function replaceLineRange(
 		return noChangeMessage(filePath, `${range} already reads exactly this way`);
 	}
 
+	// Everything that can refuse the edit has to run before the write, or a
+	// rejected edit still lands on disk and the model is told it failed.
+	const requestedLines = effectiveEndLine - startLineOneBased + 1;
+	const { removed, added } = changedLineCounts(content, updated);
+	if (removed === 0 && added > requestedLines) {
+		duplicatedRangeMessage(filePath, range, requestedLines, added);
+	}
+
 	await fs.writeFile(filePath, updated, { encoding });
 
 	const diff = createLineDiff(content, updated, maxDiffLines);
@@ -405,14 +452,41 @@ async function replaceLineRange(
 	// lines where one was already correct shows a single line and reads like a
 	// half-applied edit. Measured: a model spent a turn asking whether line 90
 	// had been touched. Say it instead of leaving it to be inferred.
-	const requestedLines = effectiveEndLine - startLineOneBased + 1;
-	const { removed } = changedLineCounts(content, updated);
 	const unchanged = requestedLines - removed;
 	const note =
 		unchanged > 0
 			? ` (${unchanged} of the ${requestedLines} line(s) in the range were already identical, so the diff below does not show them)`
 			: "";
-	return `Replaced ${range} in ${filePath}${note}\n${diff}`;
+	return `Replaced ${range} in ${filePath}${note}\n${diff}${lineCountNote(content, updated, effectiveEndLine)}`;
+}
+
+/**
+ * Say how the file's length changed, and by how much the lines below the edit
+ * moved.
+ *
+ * Every line number the model holds — from a diagnostic, from an earlier read,
+ * from its own plan — refers to the file as it was. An edit that changes the
+ * line count silently invalidates all of them below it. Measured: eight
+ * consecutive edits addressed lines 84-98 of a file that had meanwhile grown
+ * from ~120 lines to 440, so by the end the range named unrelated code and the
+ * edits landed on it.
+ *
+ * Only reported when the count actually changed; a same-size edit shifts
+ * nothing and the note would be noise.
+ */
+function lineCountNote(
+	oldContent: string,
+	newContent: string,
+	editedThroughLine: number,
+): string {
+	const before = oldContent.split(/\r\n|\n/).length;
+	const after = newContent.split(/\r\n|\n/).length;
+	if (before === after) {
+		return "";
+	}
+	const shift = after - before;
+	const direction = shift > 0 ? `+${shift}` : `${shift}`;
+	return `\n\nThe file is now ${after} lines (was ${before}). Every line after ${editedThroughLine} has moved by ${direction}, so line numbers you read before this edit no longer point at the same code.`;
 }
 
 async function insertInFile(
@@ -608,7 +682,38 @@ export function createEditorExecutor(
 		encoding = "utf-8",
 		restrictToCwd = true,
 		maxDiffLines = 200,
+		receipts,
 	} = options;
+
+	/** How many lines the file holds right now, or null if it has none to count. */
+	const countLines = async (filePath: string): Promise<number | null> => {
+		try {
+			return (await fs.readFile(filePath, encoding)).split(/\r\n|\n/).length;
+		} catch {
+			return null;
+		}
+	};
+
+	/**
+	 * Refuse an edit aimed at lines the model has not read.
+	 *
+	 * The message names the exact call that would satisfy it, because the
+	 * measured failure was not refusal to read but never considering it: in
+	 * 111,790 characters of reasoning across eight edits, `read_files` was
+	 * mentioned nine times and called zero.
+	 */
+	const requireRead = (filePath: string, first: number, last: number): void => {
+		if (!receipts || receipts.covers(filePath, first, last)) {
+			return;
+		}
+		const range = first === last ? `line ${first}` : `lines ${first}-${last}`;
+		const why = receipts.wasRetired(filePath)
+			? `${range} of ${filePath} has not been read in its current state — either it was never read, or an earlier edit changed the file's length and moved every line below it`
+			: `${filePath} has not been read in this session`;
+		throw new Error(
+			`Read before editing: ${why}. The file was not modified. Call \`read_files\` for ${filePath} covering ${range} — with \`start_line\` and \`end_line\` around it, not the whole file — then send this edit again using the line numbers that read reports. Editing lines you have not seen is how a correct-looking edit lands on the wrong code.`,
+		);
+	};
 
 	return async (
 		input: EditFileInput,
@@ -616,6 +721,16 @@ export function createEditorExecutor(
 		_context: AgentToolContext,
 	): Promise<string> => {
 		const filePath = resolveFilePath(cwd, input.path, restrictToCwd);
+		const linesBefore = receipts ? await countLines(filePath) : null;
+		const noteWrite = async (): Promise<void> => {
+			if (!receipts || linesBefore == null) {
+				return;
+			}
+			const linesAfter = await countLines(filePath);
+			if (linesAfter != null) {
+				receipts.noteWrite(filePath, linesBefore, linesAfter);
+			}
+		};
 
 		if (input.insert_line != null) {
 			if (input.start_line != null) {
@@ -631,7 +746,8 @@ export function createEditorExecutor(
 						`Cannot insert into ${filePath}: the file does not exist. Omit insert_line and insert_column to create it.`,
 					);
 				}
-				return insertAtColumn(
+				requireRead(filePath, input.insert_line, input.insert_line);
+				const result = await insertAtColumn(
 					filePath,
 					input.insert_line,
 					input.insert_column,
@@ -639,13 +755,23 @@ export function createEditorExecutor(
 					encoding,
 					maxDiffLines,
 				);
+				await noteWrite();
+				return result;
 			}
-			return insertInFile(
+			// A boundary insert only shifts lines; it never overwrites one. The
+			// line it is anchored to still has to have been seen, or the text
+			// lands next to something other than what the model thinks.
+			if (linesBefore != null) {
+				requireRead(filePath, input.insert_line, input.insert_line);
+			}
+			const result = await insertInFile(
 				filePath,
 				input.insert_line, // One-based index
 				input.new_text,
 				encoding,
 			);
+			await noteWrite();
+			return result;
 		}
 
 		if (input.insert_column != null) {
@@ -661,7 +787,12 @@ export function createEditorExecutor(
 				);
 			}
 			if (input.start_column != null) {
-				return replaceColumnRange(
+				requireRead(
+					filePath,
+					input.start_line,
+					input.end_line ?? input.start_line,
+				);
+				const result = await replaceColumnRange(
 					filePath,
 					input.start_line,
 					input.start_column,
@@ -671,13 +802,16 @@ export function createEditorExecutor(
 					encoding,
 					maxDiffLines,
 				);
+				await noteWrite();
+				return result;
 			}
 			if (input.end_column != null) {
 				throw new Error(
 					"`end_column` needs `start_column`: without it the tool replaces whole lines and the column has nothing to bound.",
 				);
 			}
-			return replaceLineRange(
+			requireRead(filePath, input.start_line, input.end_line ?? input.start_line);
+			const result = await replaceLineRange(
 				filePath,
 				input.start_line,
 				input.end_line ?? input.start_line,
@@ -685,6 +819,8 @@ export function createEditorExecutor(
 				encoding,
 				maxDiffLines,
 			);
+			await noteWrite();
+			return result;
 		}
 
 		if (input.start_column != null || input.end_column != null) {
@@ -718,7 +854,17 @@ export function createEditorExecutor(
 			);
 		}
 
-		return replaceInFile(
+		// A text-matched edit does not name a line, so there is no range to
+		// insist on — but editing a file sight-unseen is the same mistake at a
+		// coarser grain, and the match itself can land on a repeat the model
+		// never saw.
+		if (receipts && !receipts.hasAny(filePath)) {
+			throw new Error(
+				`Read before editing: ${filePath} has not been read in this session. The file was not modified. Call \`read_files\` for it first — narrow it with \`start_line\`/\`end_line\` around the text you mean to change — then send this edit again.`,
+			);
+		}
+
+		const result = await replaceInFile(
 			filePath,
 			input.old_text,
 			input.new_text,
@@ -726,5 +872,7 @@ export function createEditorExecutor(
 			maxDiffLines,
 			{ occurrence: input.occurrence, replaceAll: input.replace_all },
 		);
+		await noteWrite();
+		return result;
 	};
 }
