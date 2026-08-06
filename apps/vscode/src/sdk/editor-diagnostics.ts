@@ -273,6 +273,30 @@ export function appendToOutput(output: unknown, block: string): unknown {
  * envelope says. The flag rides on the result so the runtime can read it
  * without this package having to know about the loop tracker.
  */
+/**
+ * How many diagnostics on these files are worth a turn of attention.
+ *
+ * The count, not the novelty. The first cut of this marked an edit regressed
+ * whenever it introduced *any* diagnostic that was not there before, and a
+ * live run showed what that costs: edits that took the file from 14 problems
+ * to 10, from 12 to 11, from 9 to 6 — real progress every time — were all
+ * scored as having got nowhere, because each of them also moved one error to
+ * a new line. Repairing a broken file almost always shifts a diagnostic while
+ * removing others, so the novel-diagnostic test fires on exactly the work it
+ * should be encouraging.
+ *
+ * A net-neutral edit is left unflagged too. It is not progress, but a loop
+ * stop is expensive and being wrong here ends a task that was working; the
+ * repeat detectors already cover a model that churns without moving.
+ */
+function countReportable(files: readonly FileDiagnostics[]): number {
+	let total = 0
+	for (const file of files) {
+		total += file.diagnostics.filter(isReportableDiagnostic).length
+	}
+	return total
+}
+
 export function markRegressed(output: unknown): unknown {
 	if (output && typeof output === "object" && !Array.isArray(output)) {
 		return { ...(output as Record<string, unknown>), regressed: true }
@@ -432,24 +456,28 @@ export function createEditorDiagnosticsHooks(options: EditorDiagnosticsOptions):
 				// Only worth reading the file back when the edit already looks
 				// wrong. A clean edit pays nothing for this.
 				const balance = block ? await describeBalanceForPaths(snapshot.paths) : ""
+				const wasCount = countReportable(snapshot.before)
+				const nowCount = countReportable(after)
+				const regressed = nowCount > wasCount
 				appendEditorDiagnosticsTrace({
 					phase: "after",
 					tool: ctx.toolCall.toolName,
 					targets: snapshot.paths,
-					before: snapshot.before.reduce((total, file) => total + file.diagnostics.length, 0),
-					after: after.reduce((total, file) => total + file.diagnostics.length, 0),
+					before: wasCount,
+					after: nowCount,
 					blockChars: block.length,
 					balanceChars: balance.length,
-					regressed: block !== "",
+					regressed,
 				})
 				if (!block) {
 					return undefined
 				}
 				const appended = [block, balance].filter((part) => part !== "").join("\n\n")
+				const output = appendToOutput(ctx.result.output, appended)
 				return {
 					result: {
 						...ctx.result,
-						output: markRegressed(appendToOutput(ctx.result.output, appended)),
+						output: regressed ? markRegressed(output) : output,
 					},
 				}
 			} catch (error) {

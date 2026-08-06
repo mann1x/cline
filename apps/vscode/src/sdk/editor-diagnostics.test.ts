@@ -226,6 +226,37 @@ describe("createEditorDiagnosticsHooks", () => {
 		expect(read).not.toHaveBeenCalled()
 	})
 
+	it("does not mark an edit that removed more problems than it added", async () => {
+		// Measured on a live run: edits taking the file 14 -> 10, 12 -> 11 and
+		// 9 -> 6 problems were all marked regressed, because each also moved one
+		// error to a new line. Repairing a broken file nearly always shifts a
+		// diagnostic while removing others, so keying on novelty punished
+		// exactly the work worth encouraging.
+		const states: FileDiagnostics[][] = [
+			[
+				{
+					filePath: "/repo/src/app.ts",
+					diagnostics: [
+						diagnostic({ message: "one" }),
+						diagnostic({ message: "two" }),
+						diagnostic({ message: "three" }),
+					],
+				},
+			],
+			[{ filePath: "/repo/src/app.ts", diagnostics: [diagnostic({ message: "moved here instead" })] }],
+		]
+		let call = 0
+		const bag = hooks(async () => states[Math.min(call++, states.length - 1)])
+
+		await bag.beforeTool?.(toolContext())
+		const after = await bag.afterTool?.(toolContext())
+
+		// The new diagnostic is still reported — it is useful either way.
+		const result = after as { result: { output: { result: string; regressed?: boolean } } }
+		expect(String(result.result.output.result)).toContain("moved here instead")
+		expect(result.result.output.regressed).toBeUndefined()
+	})
+
 	it("marks a regressing edit so the loop tracker can see it", async () => {
 		// Measured: eight consecutive `editor` calls all returned success: true
 		// while the file's diagnostics went 2 -> 20. Read as eight productive
