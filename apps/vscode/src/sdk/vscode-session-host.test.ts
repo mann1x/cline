@@ -18,10 +18,18 @@ vi.mock("@/services/logging/distinctId", () => ({
 	getDistinctId: () => "distinct-id",
 }))
 
+const mockFocusChainSettings = vi.hoisted(() => ({
+	value: { enabled: true, remindClineInterval: 9 } as { enabled: boolean; remindClineInterval: number } | undefined,
+}))
+
 vi.mock("@/core/storage/StateManager", () => ({
 	StateManager: {
 		get: () => ({
 			getGlobalStateKey: () => undefined,
+			// `prepare` reads the focus-chain settings to build `taskProgress`.
+			// A mock without this throws inside session start rather than
+			// failing an assertion — which is exactly how it went unnoticed.
+			getGlobalSettingsKey: (key: string) => (key === "focusChainSettings" ? mockFocusChainSettings.value : undefined),
 		}),
 	},
 }))
@@ -37,6 +45,7 @@ describe("VscodeSessionHost telemetry wiring", () => {
 		mockClineCoreCreate.mockReset()
 		mockClineCoreCreate.mockResolvedValue({ runtimeAddress: undefined })
 		mockCreateVscodeExtraTools.mockReset().mockResolvedValue([])
+		mockFocusChainSettings.value = { enabled: true, remindClineInterval: 9 }
 	})
 
 	it("passes shared telemetry to ClineCore.create", async () => {
@@ -163,6 +172,32 @@ describe("VscodeSessionHost telemetry wiring", () => {
 		expect(result.source).toBe("vscode")
 		expect(result.config.extensions).toEqual([{ name: "remote-config" }])
 		expect(result.config.extraTools).toEqual([{ name: "remote-tool" }, { name: "vscode-tool" }])
+	})
+
+	it("carries the focus-chain setting into the session's taskProgress config", async () => {
+		mockFocusChainSettings.value = { enabled: false, remindClineInterval: 4 }
+		await VscodeSessionHost.create({
+			// biome-ignore lint/suspicious/noExplicitAny: focused host unit test
+			mcpHub: {} as any,
+		})
+
+		const bootstrap = await mockClineCoreCreate.mock.calls[0][0].prepare()
+		const prepared = await bootstrap.applyToStartSessionInput({ config: { cwd: "/workspace" } })
+
+		expect(prepared.config.taskProgress).toEqual({ enabled: false, reminderInterval: 4 })
+	})
+
+	it("defaults taskProgress to enabled when the setting has never been written", async () => {
+		mockFocusChainSettings.value = undefined
+		await VscodeSessionHost.create({
+			// biome-ignore lint/suspicious/noExplicitAny: focused host unit test
+			mcpHub: {} as any,
+		})
+
+		const bootstrap = await mockClineCoreCreate.mock.calls[0][0].prepare()
+		const prepared = await bootstrap.applyToStartSessionInput({ config: { cwd: "/workspace" } })
+
+		expect(prepared.config.taskProgress).toEqual({ enabled: true })
 	})
 })
 

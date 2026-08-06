@@ -1,3 +1,4 @@
+import { DEFAULT_FOCUS_CHAIN_SETTINGS } from "@shared/FocusChainSettings"
 import { UpdateSettingsRequest } from "@shared/proto/cline/state"
 import { memo, type ReactNode } from "react"
 import { Label } from "@/components/ui/label"
@@ -39,6 +40,13 @@ const agentFeatures: FeatureToggle[] = [
 		settingKey: "useAutoCondense",
 	},
 ]
+
+// Not in `agentFeatures`: that table maps a state key to a flat boolean, and
+// this setting is an object (`enabled` plus the reminder interval). Toggling it
+// has to preserve the interval rather than replace the whole object with a
+// boolean, so it gets its own row against the same `FeatureRow`.
+const TASK_CHECKLIST_DESCRIPTION =
+	"Ask the model to keep a checklist of the task's steps, shown under the context window and updated as it works."
 
 const editorFeatures: FeatureToggle[] = [
 	{
@@ -161,6 +169,7 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		remoteConfigSettings,
 		backgroundEditEnabled,
 		showFeatureTips,
+		focusChainSettings,
 	} = useExtensionState()
 
 	const isYoloRemoteLocked = remoteConfigSettings?.yoloModeToggled !== undefined
@@ -203,6 +212,22 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 									onChange={(checked) => updateSetting(feature.settingKey, checked)}
 								/>
 							))}
+							<FeatureRow
+								checked={focusChainSettings?.enabled ?? true}
+								description={TASK_CHECKLIST_DESCRIPTION}
+								label="Task Checklist"
+								onChange={(checked) =>
+									updateSetting("focusChainSettings", {
+										enabled: checked,
+										// Carried through, not defaulted: dropping it here would
+										// silently reset a tuned interval every time the toggle
+										// is flipped.
+										remindClineInterval:
+											focusChainSettings?.remindClineInterval ??
+											DEFAULT_FOCUS_CHAIN_SETTINGS.remindClineInterval,
+									})
+								}
+							/>
 							<div className="space-y-2 py-3">
 								<Label className="text-sm font-medium text-foreground">Auto Compact Strategy</Label>
 								<p className="text-xs text-muted-foreground">Controls how auto compaction rewrites context.</p>

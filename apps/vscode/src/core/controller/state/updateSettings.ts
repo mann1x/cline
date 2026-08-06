@@ -276,6 +276,20 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			controller.stateManager.setGlobalState("showFeatureTips", request.showFeatureTips)
 		}
 
+		// Merged onto the stored value rather than assigned: the settings UI sends
+		// only the field it changed, and proto3 gives an absent number the same
+		// wire form as zero — assigning the request wholesale would reset the
+		// reminder interval to 0 (i.e. remind on every message) whenever the
+		// toggle is flipped.
+		if (request.focusChainSettings !== undefined) {
+			const current = controller.stateManager.getGlobalSettingsKey("focusChainSettings")
+			const remindClineInterval = request.focusChainSettings.remindClineInterval
+			controller.stateManager.setGlobalState("focusChainSettings", {
+				enabled: request.focusChainSettings.enabled,
+				remindClineInterval: remindClineInterval > 0 ? remindClineInterval : current.remindClineInterval,
+			})
+		}
+
 		// Post updated state to webview
 		await controller.postStateToWebview()
 

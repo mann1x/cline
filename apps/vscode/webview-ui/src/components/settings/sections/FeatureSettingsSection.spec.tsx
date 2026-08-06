@@ -35,6 +35,7 @@ describe("FeatureSettingsSection", () => {
 			...mockExtensionState.value,
 			useAutoCondense: false,
 			compactionStrategy: "basic",
+			focusChainSettings: { enabled: false, remindClineInterval: 6 },
 		}
 	})
 
@@ -87,6 +88,28 @@ describe("FeatureSettingsSection", () => {
 		fireEvent.click(hooksSwitch as Element)
 
 		expect(mockUpdateSetting).toHaveBeenCalledWith("hooksEnabled", true)
+	})
+
+	it("renders the Task Checklist toggle in the Agent section", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		const agentSection = container.querySelector("#agent-features")
+		expect(agentSection?.querySelector('[id="Task Checklist"]')).toBeTruthy()
+	})
+
+	it("keeps the reminder interval when the Task Checklist is toggled", () => {
+		// The setting is an object, so the toggle has to send the whole thing.
+		// A tuned interval must survive that round trip rather than snapping
+		// back to the default.
+		mockExtensionState.value = {
+			...mockExtensionState.value,
+			focusChainSettings: { enabled: false, remindClineInterval: 11 },
+		}
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		fireEvent.click(container.querySelector('[id="Task Checklist"]') as Element)
+
+		expect(mockUpdateSetting).toHaveBeenCalledWith("focusChainSettings", { enabled: true, remindClineInterval: 11 })
 	})
 
 	it("calls updateSetting with showFeatureTips when toggled", () => {
