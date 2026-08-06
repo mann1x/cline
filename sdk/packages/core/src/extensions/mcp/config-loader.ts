@@ -50,6 +50,12 @@ const oauthStateSchema = z
 		lastAuthenticatedAt: z.number().int().positive().optional(),
 	})
 	.strip();
+const oauthClientSchema = z
+	.object({
+		clientId: z.string().min(1),
+		clientSecret: z.string().min(1).optional(),
+	})
+	.strip();
 
 const stdioTransportSchema = z.object({
 	type: z.literal("stdio"),
@@ -83,6 +89,7 @@ const nestedRegistrationBodySchema = z
 		disabled: z.boolean().optional(),
 		timeout: timeoutFieldSchema,
 		metadata: metadataSchema.optional(),
+		oauthClient: oauthClientSchema.optional(),
 		oauth: oauthStateSchema.optional(),
 	})
 	.transform((value) => ({
@@ -90,6 +97,7 @@ const nestedRegistrationBodySchema = z
 		disabled: value.disabled,
 		timeoutSeconds: value.timeout,
 		metadata: value.metadata,
+		oauthClient: value.oauthClient,
 		oauth: value.oauth,
 	}));
 
@@ -103,6 +111,7 @@ const legacyRegistrationBaseSchema = z.object({
 	disabled: z.boolean().optional(),
 	timeout: timeoutFieldSchema,
 	metadata: metadataSchema.optional(),
+	oauthClient: oauthClientSchema.optional(),
 	oauth: oauthStateSchema.optional(),
 });
 
@@ -147,6 +156,7 @@ const legacyStdioRegistrationSchema = legacyRegistrationBaseSchema
 		disabled: value.disabled,
 		timeoutSeconds: value.timeout,
 		metadata: value.metadata,
+		oauthClient: value.oauthClient,
 		oauth: value.oauth,
 	}));
 
@@ -180,6 +190,7 @@ const legacyUrlRegistrationSchema = legacyRegistrationBaseSchema
 				disabled: value.disabled,
 				timeoutSeconds: value.timeout,
 				metadata: value.metadata,
+				oauthClient: value.oauthClient,
 				oauth: value.oauth,
 			};
 		}
@@ -192,6 +203,7 @@ const legacyUrlRegistrationSchema = legacyRegistrationBaseSchema
 			disabled: value.disabled,
 			timeoutSeconds: value.timeout,
 			metadata: value.metadata,
+			oauthClient: value.oauthClient,
 			oauth: value.oauth,
 		};
 	});
@@ -714,6 +726,7 @@ export function resolveMcpServerRegistrations(
 		disabled: value.disabled,
 		timeoutSeconds: value.timeoutSeconds,
 		metadata: value.metadata,
+		oauthClient: value.oauthClient,
 		oauth: value.oauth,
 	}));
 }
