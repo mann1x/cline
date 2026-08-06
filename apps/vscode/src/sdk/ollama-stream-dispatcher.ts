@@ -1,4 +1,4 @@
-import { setOllamaNoStreamTimeoutDispatcher } from "@cline/llms"
+import { hasOllamaNoStreamTimeoutDispatcher, setOllamaNoStreamTimeoutDispatcher } from "@cline/llms"
 import { Agent } from "undici"
 import { Logger } from "@/shared/services/Logger"
 
@@ -24,17 +24,38 @@ import { Logger } from "@/shared/services/Logger"
  * that worked until a request stalls minutes later and looks like a network
  * fault.
  */
+let installError: string | undefined
+
 export function installOllamaStreamDispatcher(): void {
 	try {
 		setOllamaNoStreamTimeoutDispatcher(new Agent({ bodyTimeout: 0, headersTimeout: 0 }))
-		Logger.log("[Ollama] Stream dispatcher installed: bodyTimeout and headersTimeout disabled")
 	} catch (error) {
 		// Left to the vendor's own lookup rather than rethrown: a missing
 		// dispatcher degrades to undici's defaults, which is worse but not fatal.
-		Logger.warn(
-			`[Ollama] Could not install the stream dispatcher, falling back to undici defaults: ${
-				error instanceof Error ? error.message : String(error)
-			}`,
-		)
+		installError = error instanceof Error ? error.message : String(error)
 	}
+}
+
+/**
+ * Say whether the dispatcher is in force, once there is somewhere to say it.
+ *
+ * Split from the install because `Logger` fans out to a set of subscribers and
+ * the Cline output channel registers late in activation — anything logged
+ * before that goes to an empty set. The first cut of this logged from the
+ * installer at the top of `activate()`, so the one line written to prove the
+ * dispatcher was attached could never appear, which is the same shape of
+ * silent failure the dispatcher itself had. The install has to stay early
+ * (before any session can cache the vendor's own answer); only the reporting
+ * moves.
+ */
+export function reportOllamaStreamDispatcher(): void {
+	if (installError !== undefined) {
+		Logger.warn(`[Ollama] Could not install the stream dispatcher, falling back to undici defaults: ${installError}`)
+		return
+	}
+	Logger.log(
+		hasOllamaNoStreamTimeoutDispatcher()
+			? "[Ollama] Stream dispatcher installed: bodyTimeout and headersTimeout disabled"
+			: "[Ollama] No stream dispatcher in force; undici's default bodyTimeout applies",
+	)
 }

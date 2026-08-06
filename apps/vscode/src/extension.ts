@@ -50,7 +50,7 @@ import { VscodeWebviewProvider } from "./hosts/vscode/VscodeWebviewProvider"
 import { exportVSCodeStorageToSharedFiles } from "./hosts/vscode/vscode-to-file-migration"
 import { ExtensionRegistryInfo } from "./registry"
 import { AuthService, LogoutReason } from "./sdk/auth-service"
-import { installOllamaStreamDispatcher } from "./sdk/ollama-stream-dispatcher"
+import { installOllamaStreamDispatcher, reportOllamaStreamDispatcher } from "./sdk/ollama-stream-dispatcher"
 import { telemetryService } from "./services/telemetry"
 import type { RolloutBundleActivation } from "./services/telemetry/rollout-metadata"
 import { LG_TASK_URI_PATH, SharedUriHandler, TASK_URI_PATH } from "./services/uri/SharedUriHandler"
@@ -599,6 +599,9 @@ async function showJupyterPromptInput(title: string, placeholder: string): Promi
 function setupHostProvider(context: ExtensionContext) {
 	const outputChannel = registerClineOutputChannel(context)
 	outputChannel.appendLine("[Cline] Setting up VS Code host...")
+	// Now that there is a channel to write to. The install happened at the top
+	// of activation; this only reports what it did.
+	reportOllamaStreamDispatcher()
 
 	const createWebview = () => new VscodeWebviewProvider(context)
 	const createEditPreview = () => new VscodeEditPreview()
