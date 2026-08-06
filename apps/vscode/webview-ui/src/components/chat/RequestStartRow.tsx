@@ -156,15 +156,18 @@ export const RequestStartRow: React.FC<RequestStartRowProps> = ({
 	const apiReqState: ApiReqState = hasError ? "error" : hasCost ? "final" : hasReasoning ? "thinking" : "pre"
 
 	// While reasoning is streaming, the body is shown whether or not the user
-	// expanded it; once response content starts it collapses to a row they can
-	// open again. `ThinkingRow` renders its body only when expanded, so without
+	// expanded it; it collapses to a row they can open again once the turn ends.
+	//
+	// Deliberately not keyed on `responseStarted`. A tool call *is* response
+	// content, so any turn containing one flipped that true and hid every
+	// thinking block that came after it — reported as "whenever there's a
+	// codebase search the thinking doesn't stream anymore, it surfaces only
+	// after the edit". Reasoning that arrives mid-turn is exactly the reasoning
+	// worth watching. `cost` is the honest end-of-turn signal. `ThinkingRow` renders its body only when expanded, so without
 	// this a whole thinking phase shows nothing but the shimmering title and the
 	// reasoning only becomes visible after the turn ends — which is the bug this
 	// row was changed to fix in the first place.
-	const showStreamingThinking = useMemo(
-		() => hasReasoning && !hasError && !cost && !responseStarted,
-		[hasReasoning, hasError, cost, responseStarted],
-	)
+	const showStreamingThinking = useMemo(() => hasReasoning && !hasError && !cost, [hasReasoning, hasError, cost])
 
 	// Check if this api_req will be absorbed into a tool group (reasoning will disappear)
 	const willBeAbsorbed = useMemo(() => {

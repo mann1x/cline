@@ -614,6 +614,57 @@ describe("createEditorExecutor", () => {
 		// `old_text` ten times in a row against an error message that explains
 		// the mistake precisely, burning a full generation each time. Naming it
 		// was not enough, so the editor recovers.
+		// Measured: start_line 30 / end_line 134 with 101 replacement lines in a
+		// 138-line file left 278 problems behind, and every existing guard passed
+		// it — read-before-edit was satisfied, and "adds more lines than the range
+		// holds" passes because 101 < 105.
+		it("refuses an unanchored replacement that is really a whole-file rewrite", async () => {
+			const file = Array.from({ length: 138 }, (_, i) => `line ${i + 1}`).join("\n");
+			await withTempFile(file, async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				await expect(
+					editor(
+						{
+							path: filePath,
+							start_line: 30,
+							end_line: 134,
+							new_text: Array.from({ length: 101 }, (_, i) => `new ${i}`).join("\n"),
+						},
+						dir,
+						context,
+					),
+				).rejects.toThrow("whole-file rewrite");
+			});
+		});
+
+		// Anchored edits are self-verifying, so size is not the objection.
+		it("allows a large range when old_text anchors it", async () => {
+			const file = Array.from({ length: 138 }, (_, i) => `line ${i + 1}`).join("\n");
+			await withTempFile(file, async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const result = await editor(
+					{ path: filePath, old_text: "line 30", new_text: "changed" },
+					dir,
+					context,
+				);
+				expect(result).not.toContain("No replacement performed");
+			});
+		});
+
+		// Small files must stay editable: replacing most of something tiny is a
+		// normal edit, not a rewrite in disguise.
+		it("allows replacing most of a small file", async () => {
+			await withTempFile("a\nb\nc\nd\ne", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const result = await editor(
+					{ path: filePath, start_line: 1, end_line: 5, new_text: "x\ny" },
+					dir,
+					context,
+				);
+				expect(result).not.toContain("No replacement performed");
+			});
+		});
+
 		it("recovers when old_text carries the read gutter", async () => {
 			await withTempFile("alpha\nbeta\ngamma", async (filePath, dir) => {
 				const editor = createEditorExecutor();

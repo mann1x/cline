@@ -9,6 +9,7 @@ import { BrowserSettings } from "./BrowserSettings"
 import { ClineFeatureSetting } from "./ClineFeatureSetting"
 import { BannerCardData } from "./cline/banner"
 import { ClineRulesToggles } from "./cline-rules"
+import type { FocusChainSettings } from "./FocusChainSettings"
 import { HistoryItem } from "./HistoryItem"
 import { McpDisplayMode } from "./McpDisplayMode"
 import { ClineMessageModelInfo } from "./messages"
@@ -120,6 +121,9 @@ export interface ExtensionState {
 	mcpResponsesCollapsed?: boolean
 	yoloModeToggled?: boolean
 	useAutoCondense?: boolean
+	/** Focus Chain / task checklist. Read by the webview so the panel and the
+	 * Features toggle agree with what the session was actually configured with. */
+	focusChainSettings?: FocusChainSettings
 	compactionStrategy?: string
 	subagentsEnabled?: boolean
 	worktreesEnabled?: ClineFeatureSetting

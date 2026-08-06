@@ -439,6 +439,28 @@ async function replaceLineRange(
 	// route we point at for rewriting a file whole.
 	const effectiveEndLine = Math.min(endLineOneBased, lines.length);
 
+	// A range edit with no `old_text` asserts nothing about the file: the model
+	// names two numbers and trusts its memory of what lives between them.
+	// Anchored edits are self-verifying — the file must actually contain the
+	// text — so the larger an *unanchored* range grows, the more it is a
+	// whole-file rewrite wearing a range's clothing.
+	//
+	// Measured: `start_line: 30, end_line: 134` with 101 replacement lines in a
+	// 138-line file, which left 278 problems behind. Every existing guard
+	// passed it — read-before-edit was satisfied, and the "adds more lines than
+	// the range holds" check passes because 101 < 105. Telling the model in
+	// prose that whole-file rewrites are a last resort did not stop it either,
+	// so this is the enforcement.
+	const spanned = effectiveEndLine - startLineOneBased + 1;
+	if (
+		spanned > MAX_UNANCHORED_RANGE_LINES &&
+		spanned > lines.length * MAX_UNANCHORED_RANGE_SHARE
+	) {
+		throw new Error(
+			`No replacement performed: lines ${startLineOneBased}-${effectiveEndLine} is ${spanned} of the file's ${lines.length} lines, and the call carries no \`old_text\` to check it against. An unanchored replacement this large is a whole-file rewrite, and one that is slightly wrong duplicates or drops the parts it did not mean to touch. Make the edit in smaller pieces, each anchored with the \`old_text\` it replaces, or send \`old_text\` for this range so the file can verify it.`,
+		);
+	}
+
 	// An empty new_text deletes the range outright, which is the natural
 	// reading and what a caller removing a bad line wants.
 	const replacement =
@@ -481,6 +503,16 @@ async function replaceLineRange(
 	return `Replaced ${range} in ${filePath}${note}\n${diff}${lineCountNote(content, updated, effectiveEndLine, filePath)}`;
 }
 
+
+/**
+ * How large an unanchored range replacement may be before it is refused.
+ *
+ * Both bounds must be exceeded. The absolute floor keeps small files editable —
+ * replacing 20 lines of a 25-line file is a normal rewrite of something tiny —
+ * while the share is what catches a "range" that is really the whole file.
+ */
+const MAX_UNANCHORED_RANGE_LINES = 60;
+const MAX_UNANCHORED_RANGE_SHARE = 0.5;
 
 /** `  92 | text` — the gutter `read_files` renders, on every non-empty line. */
 const LINE_NUMBER_GUTTER = /^\s*\d+\s\|\s?/;

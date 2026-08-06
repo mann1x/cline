@@ -54,6 +54,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 		workspaceRoots,
 		platform,
 		clineMessages,
+		focusChainSettings,
 	} = useExtensionState()
 
 	const [isHighlightedTextExpanded, setIsHighlightedTextExpanded] = useState(false)
@@ -234,7 +235,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 						 * of the focus chain. Turning the checklist off therefore
 						 * suppresses the messages, and this panel disappears with them.
 						 */}
-						<TaskProgressPanel clineMessages={clineMessages} />
+						<TaskProgressPanel clineMessages={clineMessages} enabled={focusChainSettings?.enabled ?? true} />
 					</div>
 				)}
 			</div>
