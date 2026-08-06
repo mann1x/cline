@@ -91,6 +91,14 @@ export async function activate(context: vscode.ExtensionContext) {
 	// IMPORTANT: Must be done after host provider is setup and migrations are complete
 	const webview = (await initialize(storageContext)) as VscodeWebviewProvider
 
+	// Only now can anything be logged. `Logger` fans out to a set of
+	// subscribers and `initialize` is what adds them — registering the output
+	// channel earlier creates somewhere to write but nothing writing to it.
+	// This line has moved twice for that reason: first from the top of
+	// `activate`, then from `setupHostProvider`, each time still ahead of the
+	// subscriber and each time silently producing nothing.
+	reportOllamaStreamDispatcher()
+
 	// 5. Register services and commands specific to VS Code
 	// Initialize hook discovery cache for performance optimization
 	HookDiscoveryCache.getInstance().initialize(
@@ -599,9 +607,6 @@ async function showJupyterPromptInput(title: string, placeholder: string): Promi
 function setupHostProvider(context: ExtensionContext) {
 	const outputChannel = registerClineOutputChannel(context)
 	outputChannel.appendLine("[Cline] Setting up VS Code host...")
-	// Now that there is a channel to write to. The install happened at the top
-	// of activation; this only reports what it did.
-	reportOllamaStreamDispatcher()
 
 	const createWebview = () => new VscodeWebviewProvider(context)
 	const createEditPreview = () => new VscodeEditPreview()

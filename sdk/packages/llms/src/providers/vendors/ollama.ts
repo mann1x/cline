@@ -381,6 +381,16 @@ export async function createOllamaProviderModule(
 		...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
 		...config.headers,
 	};
+	// Reported at the point of use, not only where it is installed. A host that
+	// injects one and a host that finds one are indistinguishable from here,
+	// and so is a host that got neither — the wrapper works either way and the
+	// only symptom is a stall minutes later that reads as a network fault.
+	const streamDispatcher = await resolveNoStreamTimeoutDispatcher();
+	context.logger?.debug(
+		streamDispatcher
+			? "[ollama] stream dispatcher attached: undici body/headers timeouts disabled"
+			: "[ollama] no stream dispatcher: undici's default bodyTimeout applies to this request",
+	);
 	const provider = createOllama({
 		...(baseURL ? { baseURL } : {}),
 		...(Object.keys(headers).length > 0 ? { headers } : {}),
@@ -388,7 +398,7 @@ export async function createOllamaProviderModule(
 		fetch: withOllamaResponseTimeout(
 			ensureFetch(config.fetch),
 			readOllamaTimeoutMs(config),
-			await resolveNoStreamTimeoutDispatcher(),
+			streamDispatcher,
 		),
 	});
 	// `num_ctx` and the sampler no longer ride on the model: this package has no
