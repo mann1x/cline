@@ -347,6 +347,11 @@
 						"shellcheck",
 						"npx eslint --format unix ${file}"
 					]
+				},
+				"cline.browserTool": {
+					"type": "boolean",
+					"default": true,
+					"markdownDescription": "Offer the `browser` tool, which opens a page in a real browser and reports its console output and uncaught errors. Turn this off to remove it from the model's tools; Chrome is only launched if the model actually calls it."
 				}
 			}
 		}

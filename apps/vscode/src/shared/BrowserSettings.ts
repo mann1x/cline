@@ -22,11 +22,11 @@ export const DEFAULT_BROWSER_SETTINGS: BrowserSettings = {
 	remoteBrowserHost: "http://localhost:9222",
 	chromeExecutablePath: "", // Changed from undefined to empty string
 	// chromeType: "chromium",
-	// On by default. Upstream shipped this off because its `browser_action`
-	// was heavyweight and on the way out; here the tool is the point — a model
-	// that has to be configured before it can check its own page will go on
-	// asking the user whether the page works.
-	disableToolUse: false,
+	// Read by nobody since the SDK migration removed `browser_action`, and left
+	// at upstream's value so the diff stays small. The `browser` tool answers to
+	// `cline.browserTool` instead — see `hosts/vscode/browser-support.ts` for
+	// why this flag could not be reused.
+	disableToolUse: true,
 	customArgs: "",
 }
 

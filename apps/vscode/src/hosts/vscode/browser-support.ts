@@ -1,3 +1,4 @@
+import * as vscode from "vscode"
 import { StateManager } from "@/core/storage/StateManager"
 import type { BrowserDriver } from "@/sdk/browser-tool"
 import { BrowserSession } from "@/services/browser/BrowserSession"
@@ -27,19 +28,19 @@ export function createVscodeBrowserDriver(): BrowserDriver {
 /**
  * Whether to offer the tool at all.
  *
- * `browserSettings.disableToolUse` is the checkbox the user already has in the
- * browser settings menu. It had stopped meaning anything — the SDK migration
- * removed the tool that read it, leaving the setting plumbed through every
- * update path and consulted by nobody. This is the reader it lost.
+ * Deliberately *not* `browserSettings.disableToolUse`, which was the obvious
+ * candidate and is a trap. That flag has no UI: it appears nowhere in the
+ * webview, and the menu that would have owned it renders only inside a
+ * `BrowserSessionRow` — which cannot exist until the browser has already run.
+ * It also defaulted to `true` upstream and was written back verbatim by every
+ * settings save, so a real machine had `"disableToolUse": true` persisted with
+ * no way to change it. Gating on it removed the tool for everyone, permanently,
+ * with no recourse.
+ *
+ * A VS Code setting instead: visible in the Settings UI, editable in
+ * `settings.json`, overridable per workspace, and consistent with
+ * `cline.lintCommand`, which `check_file` already reads the same way.
  */
 export function isBrowserToolEnabled(): boolean {
-	try {
-		// The same accessor `BrowserSession` itself reads this through, so the
-		// tool's presence and the browser's configuration cannot disagree.
-		return StateManager.get().getGlobalSettingsKey("browserSettings")?.disableToolUse !== true
-	} catch {
-		// Before the state manager is up there is no session to build tools for
-		// either; the next call answers properly.
-		return true
-	}
+	return vscode.workspace.getConfiguration("cline").get<boolean>("browserTool") !== false
 }

@@ -128,7 +128,7 @@ export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExt
 			}),
 		)
 	} else {
-		Logger.log("[VscodeRuntimeTools] browser tool disabled by browserSettings.disableToolUse")
+		Logger.log("[VscodeRuntimeTools] browser tool omitted; cline.browserTool is false")
 	}
 
 	// Add the custom run_commands tool when a terminal manager is available.
