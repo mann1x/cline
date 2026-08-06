@@ -2405,6 +2405,75 @@ describe("composeAiSdkProviderOptions: ollama native options", () => {
 		);
 	});
 
+	it("sends the per-turn cap as num_predict", () => {
+		// `ollama-ai-provider-v2` names `num_predict` only in its provider-options
+		// schema and never derives one from `maxOutputTokens`, so without this the
+		// cap reaches Ollama on no request at all. It is not only the cap that
+		// goes missing: Ollama sizes the thinking budget from
+		// `min(num_predict, num_ctx)`, so an absent one makes the whole context
+		// window the base and the bound stated in the system prompt four times
+		// smaller than the one actually enforced.
+		const result = composeAiSdkProviderOptions(
+			makeRequest({
+				providerId: "ollama",
+				modelId: "v7-coder",
+				maxTokens: 32_000,
+			}),
+			makeContext({
+				providerId: "ollama",
+				modelId: "v7-coder",
+				contextWindow: 128_000,
+			}),
+		);
+
+		expect(result.ollama).toEqual(
+			expect.objectContaining({
+				options: expect.objectContaining({
+					num_ctx: 128_000,
+					num_predict: 32_000,
+				}),
+			}),
+		);
+	});
+
+	it("lets a configured num_predict win over the per-turn cap", () => {
+		// The panel value is the user's deliberate choice about their own model;
+		// the cap is what the session assumed in its absence.
+		const result = composeAiSdkProviderOptions(
+			makeRequest({
+				providerId: "ollama",
+				modelId: "v7-coder",
+				maxTokens: 32_000,
+			}),
+			makeContext({
+				providerId: "ollama",
+				modelId: "v7-coder",
+				contextWindow: 128_000,
+				configOptions: { sampling: { numPredict: 4_096 } },
+			}),
+		);
+
+		expect(
+			(result.ollama as { options: Record<string, unknown> }).options
+				.num_predict,
+		).toBe(4_096);
+	});
+
+	it("omits num_predict when no cap is known", () => {
+		const result = composeAiSdkProviderOptions(
+			makeRequest({ providerId: "ollama", modelId: "v7-coder" }),
+			makeContext({
+				providerId: "ollama",
+				modelId: "v7-coder",
+				contextWindow: 128_000,
+			}),
+		);
+
+		expect(
+			(result.ollama as { options: Record<string, unknown> }).options,
+		).not.toHaveProperty("num_predict");
+	});
+
 	it("carries think_budget, which the package's own schema would drop", () => {
 		// The reason the dependency is patched: `ollama-ai-provider-v2` parses
 		// its options against a closed allowlist that does not name

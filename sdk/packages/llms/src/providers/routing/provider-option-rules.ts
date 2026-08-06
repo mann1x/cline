@@ -29,6 +29,7 @@ import { buildOpenRouterReasoningOptions } from "./reasoning-codecs";
 import {
 	buildOllamaSamplingOptions,
 	readOllamaNumCtx,
+	readOllamaNumPredict,
 	readOllamaSamplingOptions,
 } from "../vendors/ollama";
 import {
@@ -558,16 +559,25 @@ const ollamaNativeOptionsRule: ProviderOptionRule = {
 		"Ollama receives its context window and configured sampler through native provider options; reasoning stays top-level.",
 	applies: (input) => input.target === "ollama",
 	suppresses: { genericThinking: true },
-	build: (input) => ({
-		ollama: {
-			options: {
-				num_ctx: readOllamaNumCtx(input.context),
-				...buildOllamaSamplingOptions(
-					readOllamaSamplingOptions(input.context.config),
-				),
+	build: (input) => {
+		const numPredict = readOllamaNumPredict(input.request, input.context);
+		return {
+			ollama: {
+				options: {
+					num_ctx: readOllamaNumCtx(input.context),
+					// Before the sampler, so a `num_predict` the user configured in
+					// the Ollama panel still wins — this only fills in the cap the
+					// session already believes it is sending.
+					...(numPredict !== undefined
+						? { num_predict: numPredict }
+						: {}),
+					...buildOllamaSamplingOptions(
+						readOllamaSamplingOptions(input.context.config),
+					),
+				},
 			},
-		},
-	}),
+		};
+	},
 };
 
 const nonGlmProviderRoutingSuppressionRule: ProviderOptionRule = {

@@ -75,6 +75,45 @@ export function readOllamaNumCtx(context: GatewayProviderContext): number {
 }
 
 /**
+ * Resolve the `num_predict` to request from the resolved model's output cap.
+ *
+ * `ollama-ai-provider-v2` names `num_predict` in its provider-options schema
+ * and nowhere else: it never derives one from the request's
+ * `maxOutputTokens`. So the per-turn cap the agent computes — and states in the
+ * system prompt — reached Ollama on no request at all, and two things followed
+ * from that.
+ *
+ * The cap itself was not enforced. Worse, Ollama sizes the thinking budget from
+ * `min(num_predict, num_ctx)`: with no `num_predict` the whole context window is
+ * the base, so a 128k-context model on effort `medium` (one quarter) was
+ * allowed 32,000 thinking tokens while the prompt told it 8,000 — the figure
+ * `/api/show` reports when asked with the cap the session believes it is
+ * sending. Measured on a real session: single thinking blocks of ~16,000
+ * tokens, twice the stated bound, and runs ending on "reached the maximum
+ * output token limit" with the entire allowance spent reasoning and no tool
+ * call emitted.
+ *
+ * Sending it makes both numbers true at once, which is the point: the bound in
+ * the prompt is only worth stating if the server holds the model to it.
+ */
+export function readOllamaNumPredict(
+	request: Pick<GatewayStreamRequest, "maxTokens">,
+	context: GatewayProviderContext,
+): number | undefined {
+	// The request's cap first, and not only as a fallback ordering: it is the
+	// number `buildOutputBudgetSection` puts in the system prompt, including
+	// when the gateway synthesized it from a default. A local model's catalog
+	// entry usually carries no output cap at all, so reading the model alone
+	// would leave this undefined on exactly the models that need it.
+	for (const value of [request.maxTokens, context.model?.maxOutputTokens]) {
+		if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+			return Math.floor(value);
+		}
+	}
+	return undefined;
+}
+
+/**
  * Time to wait for the response to start when no timeout is configured.
  *
  * Deliberately generous: Ollama holds `/api/chat` open while it cold-loads

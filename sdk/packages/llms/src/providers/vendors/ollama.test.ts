@@ -12,6 +12,7 @@ import {
 	OLLAMA_DEFAULT_REASONING_EFFORT,
 	OLLAMA_DEFAULT_TIMEOUT_MS,
 	readOllamaNumCtx,
+	readOllamaNumPredict,
 	readOllamaTimeoutMs,
 	withOllamaResponseTimeout,
 } from "./ollama";
@@ -83,6 +84,37 @@ describe("readOllamaNumCtx", () => {
 		expect(readOllamaNumCtx(context({ contextWindow: -1 }))).toBe(
 			OLLAMA_DEFAULT_NUM_CTX,
 		);
+	});
+});
+
+describe("readOllamaNumPredict", () => {
+	it("reads the request's per-turn cap", () => {
+		expect(readOllamaNumPredict({ maxTokens: 32000 }, context({}))).toBe(32000);
+	});
+
+	it("prefers the request cap over the model's catalog entry", () => {
+		// The request cap is the number the system prompt states, so it is the
+		// one the server has to be held to.
+		expect(
+			readOllamaNumPredict(
+				{ maxTokens: 32000 },
+				context({ maxOutputTokens: 8192 }),
+			),
+		).toBe(32000);
+	});
+
+	it("falls back to the model's output cap when the request carries none", () => {
+		expect(
+			readOllamaNumPredict({}, context({ maxOutputTokens: 8192 })),
+		).toBe(8192);
+	});
+
+	it("returns undefined when neither is a usable number", () => {
+		expect(readOllamaNumPredict({}, context({}))).toBeUndefined();
+		expect(readOllamaNumPredict({ maxTokens: 0 }, context({}))).toBeUndefined();
+		expect(
+			readOllamaNumPredict({ maxTokens: -1 }, context({})),
+		).toBeUndefined();
 	});
 });
 
