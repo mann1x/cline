@@ -1,5 +1,12 @@
 // Ollama vendor backed by the native Ollama API (`/api/chat`) via the
-// `ai-sdk-ollama` AI SDK provider (which wraps the official `ollama` client).
+// `ollama-ai-provider-v2` AI SDK provider.
+//
+// The package is vendored with a patch. Two of its contracts are wrong for a
+// server that resolves thinking budgets: `think` is typed as a boolean and any
+// effort level is collapsed to `true`, which on Ollama means *unbounded*; and
+// the request options are a closed allowlist that silently drops anything it
+// does not name, `think_budget` included. The patch widens `think` to accept a
+// level and gives the options schema a catchall.
 //
 // Ollama cannot be driven through the generic OpenAI-compatible path
 // (`/v1/chat/completions`): that endpoint ignores Ollama's proprietary
@@ -16,7 +23,7 @@ import type {
 	GatewayStreamRequest,
 } from "@cline/shared";
 import { type CallSettings, wrapLanguageModel } from "ai";
-import { createOllama } from "ai-sdk-ollama";
+import { createOllama } from "ollama-ai-provider-v2";
 import { buildAiSdkStreamConfig } from "../ai-sdk";
 import { OLLAMA_DEFAULT_CONTEXT_WINDOW } from "../builtins";
 import type { ProviderSamplingOptions } from "../config";
@@ -213,28 +220,29 @@ export async function createOllamaProviderModule(
 	context: GatewayProviderContext,
 ): Promise<ProviderFactoryResult> {
 	// An API key is only needed for Ollama Cloud (ollama.com); local servers
-	// accept unauthenticated requests, so a missing key is not an error.
-	// `ai-sdk-ollama` turns `apiKey` into an `Authorization: Bearer` header.
+	// accept unauthenticated requests, so a missing key is not an error. This
+	// provider takes auth through headers rather than an `apiKey` field, so the
+	// bearer is built here; an explicitly configured header still wins.
 	const apiKey = await resolveApiKey(config);
 	const baseURL = normalizeOllamaBaseUrl(config.baseUrl);
+	const headers = {
+		...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+		...config.headers,
+	};
 	const provider = createOllama({
 		...(baseURL ? { baseURL } : {}),
-		...(apiKey ? { apiKey } : {}),
-		...(config.headers ? { headers: config.headers } : {}),
+		...(Object.keys(headers).length > 0 ? { headers } : {}),
+		compatibility: "strict",
 		fetch: withOllamaResponseTimeout(
 			ensureFetch(config.fetch),
 			readOllamaTimeoutMs(config),
 		),
 	});
-	const numCtx = readOllamaNumCtx(context);
-	// Model-level options are merged last by `ai-sdk-ollama`, after the ones it
-	// derives from the shared call settings, so a value set here is the one that
-	// reaches the server. That is the intent: these are the provider's own
-	// controls, and a user who sets `temperature` on the Ollama panel means that
-	// temperature, not the agent's generic default.
-	const samplingOptions = buildOllamaSamplingOptions(
-		readOllamaSamplingOptions(config),
-	);
+	// `num_ctx` and the sampler no longer ride on the model: this package has no
+	// model-level options hook, so they reach the wire as request-scoped
+	// provider options built by `provider.ollama.native-options`. That rule is
+	// also the only place they can be merged rather than replace what the
+	// option-rule pipeline already composed.
 	// Retry empty responses (a common local-backend glitch that otherwise
 	// hard-fails the task). Outermost so each retry re-runs the whole request.
 	// `splitToolImagesMiddleware` is inner, for the same reason as the
@@ -246,9 +254,7 @@ export async function createOllamaProviderModule(
 	return {
 		model: (modelId) =>
 			wrapLanguageModel({
-				model: provider(modelId, {
-					options: { num_ctx: numCtx, ...samplingOptions },
-				}) as LanguageModelV4,
+				model: provider.chat(modelId) as LanguageModelV4,
 				middleware: [retryEmptyResponseMiddleware, splitToolImagesMiddleware],
 			}),
 		buildStreamConfig: buildOllamaStreamConfig,
@@ -293,8 +299,9 @@ export const OLLAMA_DEFAULT_REASONING_EFFORT = "medium" as const;
  * An explicit `enabled: false` still means off — it reaches
  * `buildAiSdkStreamConfig` as `"none"`, so `config.reasoning` is already set
  * and this leaves it alone. Only the unset case is filled in, and only here:
- * Ollama is the provider whose wire format has a boolean `think`, so it is the
+ * Ollama is the provider whose wire format has a `think` field, so it is the
  * provider that has to say what silence means.
+ *
  */
 export function buildOllamaStreamConfig(
 	request: GatewayStreamRequest,

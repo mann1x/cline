@@ -28,6 +28,8 @@ type ContextOverrides = {
 	metadata?: GatewayProviderContext["provider"]["metadata"];
 	/** Test helper escape hatch for Claude-like models that should not get an auto-injected Anthropic reasoning route. */
 	disableAutoAnthropicRouting?: boolean;
+	contextWindow?: number;
+	configOptions?: Record<string, unknown>;
 };
 
 function makeContext(options?: ContextOverrides): GatewayProviderContext {
@@ -90,12 +92,16 @@ function makeContext(options?: ContextOverrides): GatewayProviderContext {
 			id: modelId,
 			name: modelId,
 			providerId,
+			contextWindow: options?.contextWindow,
 			maxOutputTokens: options?.maxOutputTokens,
 			reasoningOptions: options?.reasoningOptions,
 			capabilities: options?.capabilities,
 			metadata: modelMetadata,
 		},
-		config: { providerId },
+		config: {
+			providerId,
+			...(options?.configOptions ? { options: options.configOptions } : {}),
+		},
 	};
 }
 
@@ -2371,5 +2377,57 @@ describe("composeAiSdkProviderOptions: provider-specific overlays", () => {
 		expect(result.vertex).not.toHaveProperty("reasoningEffort");
 		expect(result.vertex).not.toHaveProperty("reasoningSummary");
 		expect(result.google).toBeUndefined();
+	});
+});
+
+describe("composeAiSdkProviderOptions: ollama native options", () => {
+	it("sends the context window and the configured sampler as request options", () => {
+		// This package has no model-level options hook, so these have to arrive
+		// as provider options or not at all.
+		const result = composeAiSdkProviderOptions(
+			makeRequest({ providerId: "ollama", modelId: "v7-coder" }),
+			makeContext({
+				providerId: "ollama",
+				modelId: "v7-coder",
+				contextWindow: 65_536,
+				configOptions: { sampling: { temperature: 0.7, numPredict: 8_000 } },
+			}),
+		);
+
+		expect(result.ollama).toEqual(
+			expect.objectContaining({
+				options: expect.objectContaining({
+					num_ctx: 65_536,
+					temperature: 0.7,
+					num_predict: 8_000,
+				}),
+			}),
+		);
+	});
+
+	it("carries think_budget, which the package's own schema would drop", () => {
+		// The reason the dependency is patched: `ollama-ai-provider-v2` parses
+		// its options against a closed allowlist that does not name
+		// `think_budget`, and zod strips what it does not name. Losing it means
+		// a request that is silently unbounded.
+		const result = composeAiSdkProviderOptions(
+			makeRequest({ providerId: "ollama", modelId: "v7-coder" }),
+			makeContext({
+				providerId: "ollama",
+				modelId: "v7-coder",
+				configOptions: {
+					sampling: { thinkBudget: "medium", thinkBudgetMessage: "wrap up" },
+				},
+			}),
+		);
+
+		expect(result.ollama).toEqual(
+			expect.objectContaining({
+				options: expect.objectContaining({
+					think_budget: "medium",
+					think_budget_message: "wrap up",
+				}),
+			}),
+		);
 	});
 });

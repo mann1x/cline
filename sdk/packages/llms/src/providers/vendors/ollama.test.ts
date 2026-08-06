@@ -25,7 +25,7 @@ const ollamaModelMock = vi.hoisted(() =>
 	})),
 );
 
-vi.mock("ai-sdk-ollama", () => ({
+vi.mock("ollama-ai-provider-v2", () => ({
 	createOllama: createOllamaMock,
 }));
 
@@ -169,7 +169,7 @@ describe("withOllamaResponseTimeout", () => {
 describe("createOllamaProviderModule", () => {
 	beforeEach(() => {
 		createOllamaMock.mockReset();
-		createOllamaMock.mockReturnValue(ollamaModelMock);
+		createOllamaMock.mockReturnValue({ chat: ollamaModelMock });
 		ollamaModelMock.mockClear();
 	});
 
@@ -180,37 +180,30 @@ describe("createOllamaProviderModule", () => {
 		);
 		provider.model("minimax-m3:cloud");
 
+		// This package takes auth through headers rather than an `apiKey` field.
 		expect(createOllamaMock).toHaveBeenCalledWith(
 			expect.objectContaining({
 				baseURL: "https://ollama.com",
-				apiKey: "ollama-key",
+				headers: expect.objectContaining({
+					Authorization: "Bearer ollama-key",
+				}),
 			}),
 		);
-		expect(ollamaModelMock).toHaveBeenCalledWith(
-			"minimax-m3:cloud",
-			expect.anything(),
-		);
+		expect(ollamaModelMock).toHaveBeenCalledWith("minimax-m3:cloud");
 	});
 
-	it("requests num_ctx from the resolved model's context window", async () => {
+	// `num_ctx` and the sampler moved off the model and onto request-scoped
+	// provider options — this package has no model-level options hook. They are
+	// asserted where they are now built, in the provider-option rules; here the
+	// model must be constructed with nothing but its id.
+	it("constructs the model with no per-model options", async () => {
 		const provider = await createOllamaProviderModule(
 			config({}),
 			context({ contextWindow: 65536 }),
 		);
 		provider.model("qwen3-coder:30b");
 
-		expect(ollamaModelMock).toHaveBeenCalledWith("qwen3-coder:30b", {
-			options: { num_ctx: 65536 },
-		});
-	});
-
-	it("requests the default num_ctx when the model has no context window", async () => {
-		const provider = await createOllamaProviderModule(config({}), context({}));
-		provider.model("llama3.1");
-
-		expect(ollamaModelMock).toHaveBeenCalledWith("llama3.1", {
-			options: { num_ctx: OLLAMA_DEFAULT_NUM_CTX },
-		});
+		expect(ollamaModelMock).toHaveBeenCalledWith("qwen3-coder:30b");
 	});
 
 	it("omits baseURL and apiKey for a default local server", async () => {

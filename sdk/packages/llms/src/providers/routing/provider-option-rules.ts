@@ -27,6 +27,11 @@ import type {
 } from "./provider-options-types";
 import { buildOpenRouterReasoningOptions } from "./reasoning-codecs";
 import {
+	buildOllamaSamplingOptions,
+	readOllamaNumCtx,
+	readOllamaSamplingOptions,
+} from "../vendors/ollama";
+import {
 	buildProviderAndAliasPatch,
 	buildThinkingPatch,
 	type ProviderOptionsPatch,
@@ -532,6 +537,39 @@ const ollamaReasoningDefaultOnDisableRule: ProviderOptionRule = {
 	},
 };
 
+/**
+ * Ollama's own request options: the context window and the configured sampler.
+ *
+ * `ollama-ai-provider-v2` has no model-level options hook, so everything
+ * Ollama-specific has to arrive as request-scoped provider options. This is the
+ * only place that can happen without loss: `buildStreamConfig`'s result is
+ * spread *after* the composed provider options in `ai-sdk.ts`, so returning a
+ * `providerOptions` from there would replace the whole composed bucket rather
+ * than add to it.
+ *
+ * The sampler comes from the user's Ollama panel and includes `think_budget`,
+ * which the package's option schema does not name — the vendored patch gives
+ * that schema a catchall so it survives the parse instead of being dropped.
+ */
+const ollamaNativeOptionsRule: ProviderOptionRule = {
+	id: "provider.ollama.native-options",
+	phase: "provider-reasoning",
+	description:
+		"Ollama receives its context window and configured sampler through native provider options; reasoning stays top-level.",
+	applies: (input) => input.target === "ollama",
+	suppresses: { genericThinking: true },
+	build: (input) => ({
+		ollama: {
+			options: {
+				num_ctx: readOllamaNumCtx(input.context),
+				...buildOllamaSamplingOptions(
+					readOllamaSamplingOptions(input.context.config),
+				),
+			},
+		},
+	}),
+};
+
 const nonGlmProviderRoutingSuppressionRule: ProviderOptionRule = {
 	id: "provider.routing.glm-thinking.non-glm.suppress-generic-thinking",
 	phase: "provider",
@@ -614,6 +652,7 @@ export const PROVIDER_OPTION_RULES: ReadonlyArray<ProviderOptionRule> = [
 	kimiK26ThinkingRule,
 	deepSeekThinkingRule,
 	ollamaReasoningDefaultOnDisableRule,
+	ollamaNativeOptionsRule,
 	nonGlmProviderRoutingSuppressionRule,
 	nativeZaiGlmThinkingRule,
 	miniMaxThinkingRule,
