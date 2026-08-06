@@ -161,8 +161,37 @@ export function isLintableFile(filePath: string): boolean {
 	return !OPAQUE_EXTENSIONS.has(path.extname(filePath).toLowerCase())
 }
 
+/**
+ * A path in the form used to compare two paths for identity.
+ *
+ * Windows filesystems are case-insensitive, and the two sides of this
+ * comparison come from different places: the editor reports the path as the
+ * workspace has it, and the model types the path itself. Measured on a live
+ * session — the workspace was `c:\Users\manni\source\repos\test` and the model
+ * asked about `C:\Users\...`. One capital letter, and `Set.has` said no.
+ *
+ * The consequence is the worst one available to this tool: no match means no
+ * diagnostics, and no diagnostics reads as a clean file. Six consecutive
+ * `check_file` calls answered "no problems reported by the editor" for a file
+ * that `node --check` rejects, and the model believed them.
+ *
+ * Only the case is normalized. Symlinks, 8.3 short names and UNC spellings are
+ * still distinct here, which is correct: this is a comparison key, not a
+ * canonical path.
+ */
+export function comparablePath(filePath: string): string {
+	const resolved = path.resolve(filePath)
+	return process.platform === "win32" ? resolved.toLowerCase() : resolved
+}
+
+/** Whether two paths name the same file, as this platform judges it. */
+export function samePath(a: string, b: string): boolean {
+	return comparablePath(a) === comparablePath(b)
+}
+
 function filterToPaths(diagnostics: FileDiagnostics[], absolutePaths: Set<string>): FileDiagnostics[] {
-	return diagnostics.filter((file) => absolutePaths.has(path.resolve(file.filePath)))
+	const wanted = new Set([...absolutePaths].map(comparablePath))
+	return diagnostics.filter((file) => wanted.has(comparablePath(file.filePath)))
 }
 
 export function isReportableDiagnostic(diagnostic: Diagnostic): boolean {

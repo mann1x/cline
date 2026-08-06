@@ -134,8 +134,25 @@ Read a clean result carefully. "No problems reported by the editor" is conclusiv
 
 Output: plain text, one section per file you named, each problem on its own line as `file:line:column` with its severity and message. A file with nothing wrong says so in one line. There is no object to unpack and no `success` field — problems being listed is this tool working, not failing.
 
-When a file's brackets do not match, a `Delimiter scan:` section follows the problems and names the *opening* bracket involved. A parse error is always reported where the parser gave up, which is the closing bracket; the opener is the one you have to edit, and it is the one the error cannot name. Trust that line over counting brackets yourself — it skips strings, comments and regex literals, which counting characters does not.
+When a file's brackets do not match, a `Delimiter scan:` section names the *opening* bracket involved. A parse error is always reported where the parser gave up, which is the closing bracket; the opener is the one you have to edit, and it is the one the error cannot name. Trust that line over counting brackets yourself — it skips strings, comments and regex literals, which counting characters does not. The scan runs whether or not the editor reported anything, so it can appear beneath a file the editor called clean — no language server checks the script inside an `.html` file, and there this is the only report you will get.
 
+# tool: browser
+Open a page in a real browser and report what it printed to the console and what it threw. This is how you check that a page works. Do not ask the user whether it works — open it and read the errors yourself.
+
+Use it after editing any HTML, CSS or JavaScript the page loads, and before reporting a task finished. `check_file` cannot answer this: no language server checks the script inside an `.html` file, and a file that parses can still throw the moment it runs.
+
+Actions:
+- `open` — go to `url` and report the console output. Launches the browser on first use. A local file is a URL: pass the absolute path and it is converted for you.
+- `click` — click at `coordinate` ("x,y" in page pixels, from the screenshot).
+- `type` — type `text` at the current focus.
+- `scroll_down`, `scroll_up` — one viewport.
+- `close` — shut the browser down. Do this when finished with it.
+
+Every action reports the console messages and uncaught errors produced while it ran, so a syntax error, a failed fetch or a null dereference comes back as text you can act on. `[error]` and `[Page Error]` lines are real failures. A page that says nothing printed nothing — that is a pass, not a failed call.
+
+A parse error from the browser names no line, because the script never ran. For a local file a `Delimiter scan:` section follows it and names the *opening* bracket the parser could not match. Read that line instead of counting brackets yourself — counting a whole file by hand costs more thinking than you have, and the scan skips strings, comments and regex literals, which counting does not.
+
+The browser stays open between calls, so `open` once and then interact. Only one page is open at a time; `open` again to go elsewhere.
 # tool: code_intel
 Ask the IDE's language servers — the LSP — about a symbol. If you are reaching for an LSP tool or an MCP server that wraps one, this is it: the same protocol, already running against this workspace and its open files, with no server to start. This answers questions a text search cannot, because it understands the code: it distinguishes a definition from a mention, and this class's method from another class's method of the same name.
 

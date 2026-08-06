@@ -136,6 +136,15 @@ Verify file validity using IDE language servers. Use this instead of running a f
 - **Output:** Plain text listing `file:line:column` with severity and message. "No problems reported" means the file is valid according to the server.
 {{DEFAULT}}
 
+# tool: browser
+Open a page in a real browser and read its console output. Use this to check that a page works instead of asking the user whether it works.
+- **Arguments:** `action` is one of `open`, `click`, `type`, `scroll_down`, `scroll_up`, `close`. `open` takes `url` (an absolute file path is accepted). `click` takes `coordinate` as `"x,y"`. `type` takes `text`.
+- **When to use:** After editing any HTML, CSS or JavaScript, and before finishing a task. `check_file` cannot check a page: no language server checks the script inside an `.html` file, and a file that parses can still throw when it runs.
+- **Output:** The console messages and uncaught errors produced while the action ran. `[error]` and `[Page Error]` lines are real failures; a page that printed nothing is a pass.
+The browser stays open between calls. `close` it when finished.
+A parse error from the browser names no line. For a local file a `Delimiter scan:` section follows it and names the *opening* bracket the parser could not match — read that instead of counting brackets yourself.
+{{DEFAULT}}
+
 # tool: code_intel
 Query the IDE's language server for semantic information. Use this instead of `search_codebase` for symbol-related questions.
 - **Arguments:** 

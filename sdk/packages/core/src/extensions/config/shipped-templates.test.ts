@@ -84,7 +84,12 @@ const COMPUTED_TOOL_NAMES = ["run_commands", "skills"];
  * constants it has to match. Listed because a template may override them and
  * the validator must not call such a section "a tool that does not exist".
  */
-const HOST_TOOL_NAMES = ["check_file", "code_intel", "switch_to_act_mode"];
+const HOST_TOOL_NAMES = [
+	"check_file",
+	"code_intel",
+	"switch_to_act_mode",
+	"browser",
+];
 
 const SHIPPED_TOOL_NAMES = [
 	...LIVE_TOOLS.map((tool) => tool.name),
