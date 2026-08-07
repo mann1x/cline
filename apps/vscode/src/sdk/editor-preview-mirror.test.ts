@@ -171,16 +171,25 @@ describe("editor preview mirrors the SDK executor", () => {
 		expect(executor).toBe(["alpha", "B", "G"].join("\r\n"))
 	})
 
-	it("refuses an unanchored range that is really a whole-file rewrite", async () => {
+	it("refuses an unanchored range that is a whole-file rewrite in disguise", async () => {
+		// 80 of 100 lines, claiming to be a partial edit. This is the case the
+		// guard exists for.
 		const big = Array.from({ length: 100 }, (_, i) => `line ${i + 1}`).join("\n")
 		await fs.writeFile(filePath, big, "utf-8")
 		expect(() =>
 			computeNewEditorContent(
 				big,
-				{ path: filePath, start_line: 1, end_line: 100, new_text: "x" } as EditFileInput,
+				{ path: filePath, start_line: 10, end_line: 89, new_text: "x" } as EditFileInput,
 				filePath,
 				"modify",
 			),
-		).toThrow(/whole-file rewrite|No replacement performed/)
+		).toThrow(/No replacement performed/)
+	})
+
+	it("agrees on a stated whole-file rewrite, lines 1 to the line count", async () => {
+		const big = Array.from({ length: 100 }, (_, i) => `line ${i + 1}`).join("\n")
+		const { executor, preview } = await bothWays(big, { start_line: 1, end_line: 100, new_text: "rewritten" })
+		expect(preview).toBe(executor)
+		expect(executor).toBe("rewritten")
 	})
 })

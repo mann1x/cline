@@ -33,6 +33,25 @@ function isWholeFileWrite(input: EditFileInput): boolean {
 	);
 }
 
+/**
+ * Whether this call replaces the file from its first line down.
+ *
+ * A range that starts at line 1 with no `old_text` is a rewrite in its own
+ * clothing — the model is not claiming to touch part of the file, it is saying
+ * where the new content begins. Whether it truly reaches EOF cannot be known
+ * here (this runs before the file is read), so the range guard in the executor
+ * makes that call with the line count in hand; the point of recognising the
+ * shape *here* is only that "split it into smaller calls" is the wrong advice
+ * for it.
+ */
+function isFromTopRangeRewrite(input: EditFileInput): boolean {
+	return (
+		input.start_line === 1 &&
+		input.old_text == null &&
+		input.start_column == null
+	);
+}
+
 export function getEditorSizeError(input: EditFileInput): string | null {
 	if (
 		typeof input.old_text === "string" &&
@@ -51,8 +70,26 @@ export function getEditorSizeError(input: EditFileInput): string | null {
 		return null;
 	}
 
+	// Same exemption, other spelling. On an existing file the create form is
+	// refused ("`old_text` is required..."), and that refusal names
+	// `start_line: 1, end_line: <line count>` as the way to rewrite it — so this
+	// is the shape the tool itself asks for. Measured: the model followed that
+	// advice with a 17,266-character payload, was told to "replace the whole
+	// region in one call by line number", which is what it had just done, and
+	// sent the same call twice more. Three refusals, ~52,000 characters of
+	// generated text, no edit. Let the range guard in the executor decide this
+	// one — it can see the line count, so it can tell a real rewrite from a
+	// partial replacement pretending to be one.
+	if (isFromTopRangeRewrite(input)) {
+		return null;
+	}
+
 	if (input.new_text.length > EDITOR_ARG_CHAR_LIMIT) {
-		return `Editor input too large: new_text was ${input.new_text.length} characters, exceeding the limit of ${EDITOR_ARG_CHAR_LIMIT}. Split the edit into smaller tool calls, or replace the whole region in one call by line number with \`start_line\`/\`end_line\`.`;
+		const range =
+			input.start_line != null
+				? ` Lines ${input.start_line}-${input.end_line ?? input.start_line} is too much to rewrite in one call: replace it in consecutive pieces, lowest-numbered last, so the line numbers of the pieces you have not done yet do not move.`
+				: " Split the edit into smaller tool calls, or replace the region in one call by line number with `start_line`/`end_line`.";
+		return `Editor input too large: new_text was ${input.new_text.length} characters, exceeding the limit of ${EDITOR_ARG_CHAR_LIMIT}.${range}`;
 	}
 
 	return null;

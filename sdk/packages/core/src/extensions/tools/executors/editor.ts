@@ -497,12 +497,24 @@ async function replaceLineRange(
 	// prose that whole-file rewrites are a last resort did not stop it either,
 	// so this is the enforcement.
 	const spanned = effectiveEndLine - startLineOneBased + 1;
+	// Lines 1..count is not a range wearing a rewrite's clothing — it *is* the
+	// rewrite, stated plainly, and it is the shape this tool's own errors send
+	// the model to when the create form is refused on an existing file. Refusing
+	// it too left no reachable way to rewrite a file at all: measured, the model
+	// was bounced between three guards for five calls and ~52,000 characters of
+	// generated text before giving up and editing in pieces. A partial range
+	// that merely covers most of the file is still refused below — that is the
+	// case the guard was written for, where the model believes it is touching
+	// part of the file and is not.
+	const isFullSpanRewrite =
+		startLineOneBased === 1 && effectiveEndLine === lines.length;
 	if (
+		!isFullSpanRewrite &&
 		spanned > MAX_UNANCHORED_RANGE_LINES &&
 		spanned > lines.length * MAX_UNANCHORED_RANGE_SHARE
 	) {
 		throw new Error(
-			`No replacement performed: lines ${startLineOneBased}-${effectiveEndLine} is ${spanned} of the file's ${lines.length} lines, and the call carries no \`old_text\` to check it against. An unanchored replacement this large is a whole-file rewrite, and one that is slightly wrong duplicates or drops the parts it did not mean to touch. Make the edit in smaller pieces, each anchored with the \`old_text\` it replaces, or send \`old_text\` for this range so the file can verify it.`,
+			`No replacement performed: lines ${startLineOneBased}-${effectiveEndLine} is ${spanned} of the file's ${lines.length} lines, and the call carries no \`old_text\` to check it against. An unanchored replacement this large is a whole-file rewrite, and one that is slightly wrong duplicates or drops the parts it did not mean to touch. Make the edit in smaller pieces, each anchored with the \`old_text\` it replaces, or send \`old_text\` for this range so the file can verify it — or, if you do mean to rewrite the file, say so exactly with \`start_line: 1\` and \`end_line: ${lines.length}\`.`,
 		);
 	}
 

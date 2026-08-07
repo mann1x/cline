@@ -20,7 +20,37 @@ export const INPUT_ARG_CHAR_LIMIT = 6000;
  * thing. The guard is still here to catch a runaway payload; it should not be
  * catching ordinary work.
  */
-export const EDITOR_ARG_CHAR_LIMIT = 16_000;
+export const DEFAULT_EDITOR_ARG_CHAR_LIMIT = 32_000;
+
+/**
+ * Resolve the ceiling, allowing a deployment to move it.
+ *
+ * The number that actually constrains an edit is the per-turn output cap, and
+ * that is a property of the model, not of this file. At a 32,000-token cap with
+ * 16,000 reserved for thinking there is roughly 41,000 characters of room for
+ * the reply, so a 16,000-character ceiling was leaving most of the budget
+ * unusable; a smaller local model may want it lower again. Read once at module
+ * load — the value is interpolated into the tool description the model reads,
+ * so it cannot be allowed to change underneath a running session and leave the
+ * prompt describing a limit that is no longer enforced.
+ *
+ * Anything unparseable, zero or negative falls back to the default rather than
+ * disabling the guard: a typo in an environment variable should not silently
+ * remove a safety limit.
+ */
+function resolveEditorArgCharLimit(): number {
+	const raw = process.env.CLINE_EDITOR_ARG_CHAR_LIMIT?.trim();
+	if (!raw) {
+		return DEFAULT_EDITOR_ARG_CHAR_LIMIT;
+	}
+	const parsed = Number(raw);
+	if (!Number.isFinite(parsed) || parsed <= 0) {
+		return DEFAULT_EDITOR_ARG_CHAR_LIMIT;
+	}
+	return Math.floor(parsed);
+}
+
+export const EDITOR_ARG_CHAR_LIMIT = resolveEditorArgCharLimit();
 
 /**
  * A boolean that also accepts the string a model actually sends.
@@ -294,7 +324,7 @@ export const EditFileInputSchema = z
 		new_text: z
 			.string()
 			.describe(
-				`The new content to write when creating a missing file, the replacement text for edits, or the inserted text when insert_line is provided. Keep this at or below ${EDITOR_ARG_CHAR_LIMIT} characters for an edit; a whole-file write — new_text with no old_text, insert_line or start_line — has no limit, because there is nothing to split it into.`,
+				`The new content to write when creating a missing file, the replacement text for edits, or the inserted text when insert_line is provided. Keep this at or below ${EDITOR_ARG_CHAR_LIMIT} characters for an edit. A whole-file write has no limit, because there is nothing to split it into: that is new_text alone for a file that does not exist, or start_line: 1 with end_line set to the file's line count for one that does.`,
 			),
 		// See start_line above: coerced so a stringified line number still applies.
 		insert_line: z.coerce

@@ -540,7 +540,9 @@ export function computeNewEditorContent(
 		// An end_line past the last line means "to the end of the file".
 		const effectiveEndLine = Math.min(endLine, lines.length)
 		const spanned = effectiveEndLine - input.start_line + 1
-		if (spanned > MAX_UNANCHORED_RANGE_LINES && spanned > lines.length * MAX_UNANCHORED_RANGE_SHARE) {
+		// Lines 1..count is the stated whole-file rewrite, not a disguised one.
+		const isFullSpanRewrite = input.start_line === 1 && effectiveEndLine === lines.length
+		if (!isFullSpanRewrite && spanned > MAX_UNANCHORED_RANGE_LINES && spanned > lines.length * MAX_UNANCHORED_RANGE_SHARE) {
 			throw new Error(
 				`No replacement performed: lines ${input.start_line}-${effectiveEndLine} is ${spanned} of the file's ${lines.length} lines, and the call carries no \`old_text\` to check it against.`,
 			)

@@ -643,6 +643,63 @@ describe("createEditorExecutor", () => {
 			});
 		});
 
+		// The refusal above names `start_line: 1, end_line: <count>` as the way to
+		// rewrite a file on purpose, and the create form's refusal on an existing
+		// file names the same call. Measured: both routes then hit this guard and
+		// the size guard, so there was no reachable way to rewrite a file at all —
+		// the model bounced between the three for five calls and ~52,000 characters
+		// of generated text before giving up.
+		it("allows a rewrite stated exactly as lines 1 through the line count", async () => {
+			const file = Array.from({ length: 138 }, (_, i) => `line ${i + 1}`).join("\n");
+			await withTempFile(file, async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const result = await editor(
+					{
+						path: filePath,
+						start_line: 1,
+						end_line: 138,
+						new_text: "rewritten",
+					},
+					dir,
+					context,
+				);
+				expect(result).not.toContain("No replacement performed");
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("rewritten");
+			});
+		});
+
+		// end_line past EOF already means "to the end of the file", so this is the
+		// same rewrite written by a model that does not know the line count.
+		it("treats lines 1 to past-EOF as the same stated rewrite", async () => {
+			const file = Array.from({ length: 138 }, (_, i) => `line ${i + 1}`).join("\n");
+			await withTempFile(file, async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const result = await editor(
+					{ path: filePath, start_line: 1, end_line: 9999, new_text: "rewritten" },
+					dir,
+					context,
+				);
+				expect(result).not.toContain("No replacement performed");
+			});
+		});
+
+		// The exemption is for a rewrite that says so, not for one that starts at
+		// line 1 and stops short — that is still a partial edit the model may have
+		// mismeasured.
+		it("still refuses a large unanchored range that starts at line 1 but stops short", async () => {
+			const file = Array.from({ length: 138 }, (_, i) => `line ${i + 1}`).join("\n");
+			await withTempFile(file, async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				await expect(
+					editor(
+						{ path: filePath, start_line: 1, end_line: 100, new_text: "rewritten" },
+						dir,
+						context,
+					),
+				).rejects.toThrow("whole-file rewrite");
+			});
+		});
+
 		// Anchored edits are self-verifying, so size is not the objection.
 		it("allows a large range when old_text anchors it", async () => {
 			const file = Array.from({ length: 138 }, (_, i) => `line ${i + 1}`).join("\n");
