@@ -456,6 +456,11 @@ export class SessionRuntime {
 	 */
 	private activeTrackerWork: Promise<void> = Promise.resolve();
 	/** True when tracker logic has issued an abort for the active run. */
+	/**
+	 * Set once a model has refused an image. Session-scoped: capabilities do not
+	 * change mid-run, and re-attaching after a refusal only repeats it.
+	 */
+	private imageInputRefused = false;
 	private trackerAbortInFlight = false;
 
 	constructor(config: AgentConfig, deps: SessionRuntimeOrchestratorDeps = {}) {
@@ -942,7 +947,12 @@ export class SessionRuntime {
 			this.conversation.getMessages(),
 		);
 		const runtimeConfig = createAgentRuntimeConfig({
-			agentConfig: this.config,
+			agentConfig: {
+				...this.config,
+				onImageInputUnsupported: () => {
+					this.imageInputRefused = true;
+				},
+			},
 			sessionId: this.config.sessionId,
 			agentId: this.agentId,
 			conversationId,
@@ -952,8 +962,15 @@ export class SessionRuntime {
 			telemetry: this.telemetry,
 			tools,
 			toolContextMetadata: {
+				// Optimistic when a model declares no capabilities, which is every
+				// model outside the shipped catalog — including the local ones this
+				// fork runs, where screenshots do work. A model that refuses an
+				// image says so, and `onImageInputUnsupported` flips this for the
+				// rest of the session, so the wrong guess costs one turn instead of
+				// one per tool call.
 				modelSupportsImages:
-					modelInfo?.capabilities?.includes("images") ?? true,
+					!this.imageInputRefused &&
+					(modelInfo?.capabilities?.includes("images") ?? true),
 				...this.config.toolContextMetadata,
 			},
 			hooks: this.createRuntimeHooks(),

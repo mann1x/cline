@@ -151,7 +151,43 @@ function collectSignals(
  * provider code), no rate-limit signal, and — when any HTTP status is
  * visible — an invalid-request-family status.
  */
+/**
+ * Message shapes providers use when a request carried an image the model
+ * cannot accept.
+ *
+ * Measured: a tester ran DeepSeek on Ollama Cloud, the `browser` tool attached
+ * a screenshot, and the session ended on "this model does not support image
+ * input". The tool guards on `modelSupportsImages`, but that flag defaults to
+ * true when a model carries no declared capabilities — which is every model
+ * outside the shipped catalog, including the local ones this fork is used
+ * with. Tightening the default would fix the cloud model and silently disable
+ * screenshots for the local ones, so the provider's own refusal is the signal
+ * to act on.
+ *
+ * Deliberately narrow: these must never swallow a generic 400. Each names both
+ * an image noun and a refusal, so an error merely mentioning an image cannot
+ * match.
+ */
+const IMAGE_UNSUPPORTED_PATTERNS = [
+	/\b(?:does\s*not|doesn'?t|cannot|can'?t)\s+support\s+(?:image|vision|multimodal)/i,
+	/\b(?:image|vision)\s+(?:input|content)?\s*(?:is\s+)?not\s+supported\b/i,
+	/\bmodel\s+(?:is\s+)?not\s+(?:a\s+)?(?:vision|multimodal)\b/i,
+	/\bno\s+support\s+for\s+(?:image|vision)/i,
+	/\bunsupported\s+(?:content\s+)?type\b.*\bimage\b/i,
+];
+
 function verdictFromSignals(signals: ErrorSignals): ProviderErrorClass {
+	// Checked before the rate-limit and status gates below: a refusal to accept
+	// an image is a property of the request's content, not of its HTTP shape,
+	// and providers return it under assorted 4xx codes.
+	if (
+		signals.messages.some((message) =>
+			IMAGE_UNSUPPORTED_PATTERNS.some((pattern) => pattern.test(message)),
+		)
+	) {
+		return "image_input_unsupported";
+	}
+
 	if ([...signals.codes].some((code) => CONTEXT_WINDOW_CODES.has(code))) {
 		return "context_window_exceeded";
 	}

@@ -174,9 +174,10 @@ describe("createAgentModelFromConfig", () => {
 			undefined,
 		);
 
-		const call = gatewayMock.createGateway.mock.calls.at(-1)?.[0] as {
-			providerConfigs: Array<{ options?: Record<string, unknown> }>;
-		};
+		const calls = gatewayMock.createGateway.mock.calls as unknown as Array<
+			[{ providerConfigs: Array<{ options?: Record<string, unknown> }> }]
+		>;
+		const call = calls[calls.length - 1][0];
 		expect(call.providerConfigs[0].options ?? {}).not.toHaveProperty("sampling");
 	});
 

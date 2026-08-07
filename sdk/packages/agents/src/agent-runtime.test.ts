@@ -2512,3 +2512,104 @@ describe("AgentRuntime", () => {
 		});
 	});
 });
+
+describe("a model that will not take an image", () => {
+	const refusal: AgentModelEvent = {
+		type: "finish",
+		reason: "error",
+		error: "this model does not support image input",
+		errorClass: "image_input_unsupported",
+	};
+
+	function withScreenshot(): AgentMessage[] {
+		return [
+			{
+				role: "user",
+				content: [
+					{ type: "text", text: "Console: nothing." },
+					{ type: "image", image: "iVBORw0KGgo=", mediaType: "image/png" },
+				],
+			} as AgentMessage,
+		];
+	}
+
+	// Measured: a tester ran DeepSeek on Ollama Cloud, the browser tool attached
+	// a screenshot, and the session ended here. Tools guard on
+	// `modelSupportsImages`, which defaults to true for any model with no
+	// declared capabilities — so the guess has to be survivable.
+	it("drops the images and finishes the turn instead of failing", async () => {
+		const model = new ScriptedModel([
+			() => [refusal],
+			() => [
+				{ type: "text-delta", text: "recovered" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({ model, initialMessages: withScreenshot() });
+
+		const result = await runtime.run("look at the page");
+
+		expect(result.status).toBe("completed");
+		expect(result.outputText).toBe("recovered");
+		expect(model.requests).toHaveLength(2);
+		// The retry must carry no image anywhere in the transcript.
+		const retried = model.requests[1].messages.flatMap((m) => m.content);
+		expect(retried.some((part) => part.type === "image")).toBe(false);
+	});
+
+	// A tool result that silently loses its screenshot reads as a tool that did
+	// nothing, and the model calls it again.
+	it("leaves a note where the image was, and keeps the text beside it", async () => {
+		const model = new ScriptedModel([
+			() => [refusal],
+			() => [{ type: "text-delta", text: "ok" }, { type: "finish", reason: "stop" }],
+		]);
+		const runtime = new AgentRuntime({ model, initialMessages: withScreenshot() });
+
+		await runtime.run("look at the page");
+
+		const retried = model.requests[1].messages.flatMap((m) => m.content);
+		const texts = retried.filter((p) => p.type === "text").map((p) => (p as { text: string }).text);
+		expect(texts).toContain("Console: nothing.");
+		expect(texts.some((t) => t.includes("image omitted"))).toBe(true);
+	});
+
+	it("tells the host, so later tool calls stop attaching images", async () => {
+		const onImageInputUnsupported = vi.fn();
+		const model = new ScriptedModel([
+			() => [refusal],
+			() => [{ type: "text-delta", text: "ok" }, { type: "finish", reason: "stop" }],
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			initialMessages: withScreenshot(),
+			onImageInputUnsupported,
+		});
+
+		await runtime.run("look at the page");
+
+		expect(onImageInputUnsupported).toHaveBeenCalledTimes(1);
+	});
+
+	// A second refusal means images were not the cause; that error is the
+	// caller's to see, unchanged.
+	it("retries once, not repeatedly", async () => {
+		const model = new ScriptedModel([() => [refusal], () => [refusal]]);
+		const runtime = new AgentRuntime({ model, initialMessages: withScreenshot() });
+
+		const result = await runtime.run("look at the page");
+
+		expect(result.status).toBe("failed");
+		expect(model.requests).toHaveLength(2);
+	});
+
+	it("does not retry when the transcript holds no image", async () => {
+		const model = new ScriptedModel([() => [refusal]]);
+		const runtime = new AgentRuntime({ model });
+
+		const result = await runtime.run("hi");
+
+		expect(result.status).toBe("failed");
+		expect(model.requests).toHaveLength(1);
+	});
+});

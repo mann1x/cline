@@ -335,3 +335,32 @@ describe("classifyProviderError", () => {
 		});
 	});
 });
+
+describe("image input refusals", () => {
+	// Measured: a tester ran DeepSeek on Ollama Cloud, the browser tool attached
+	// a screenshot, and the session ended on this error.
+	it.each([
+		"this model does not support image input",
+		"The model doesn't support images",
+		"vision input is not supported for this model",
+		"model is not multimodal",
+		"no support for image content",
+	])("classifies %j as recoverable", (message) => {
+		expect(classifyProviderError(new Error(message))).toBe(
+			"image_input_unsupported",
+		);
+	});
+
+	// The patterns must never swallow a generic failure — dropping images from
+	// the transcript and retrying would be the wrong move for any of these.
+	it.each([
+		"Bad request",
+		"invalid image format: expected png",
+		"rate limit exceeded",
+		"the image was too large",
+	])("leaves %j alone", (message) => {
+		expect(classifyProviderError(new Error(message))).not.toBe(
+			"image_input_unsupported",
+		);
+	});
+});

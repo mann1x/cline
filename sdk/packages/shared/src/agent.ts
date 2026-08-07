@@ -243,7 +243,15 @@ export type AgentModelFinishReason =
  * runtime's recovery policy and telemetry (`error_class`). Extend with new
  * classes (auth, rate_limit, billing, ...) as consumers need them.
  */
-export type ProviderErrorClass = "context_window_exceeded" | "unknown";
+export type ProviderErrorClass =
+	| "context_window_exceeded"
+	/**
+	 * The model refused an image in the request. Told apart from `unknown`
+	 * because it is recoverable without the user: the images can be dropped and
+	 * the turn resent, where an unknown failure has nowhere to go.
+	 */
+	| "image_input_unsupported"
+	| "unknown";
 
 export type AgentModelEvent =
 	| { type: "text-delta"; text: string }
@@ -493,6 +501,13 @@ export interface AgentRuntimeConfig {
 	// Optional host callback used by interactive sessions to inject a queued
 	// user steering message between agent loop iterations, before the next
 	// model request.
+	/**
+	 * Called once when a model refuses a request for carrying an image, after
+	 * the runtime has dropped the images and before it retries. Lets the host
+	 * stop attaching them for the rest of the session, so the refusal costs one
+	 * turn rather than one per tool call.
+	 */
+	onImageInputUnsupported?: () => void;
 	consumePendingUserMessage?: () =>
 		| string
 		| undefined

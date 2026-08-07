@@ -79,6 +79,15 @@ export const DEFAULT_MAX_TOKENS_TURN_RETRIES = 2;
  * continuing from it is not an option and the cheapest correct move is one
  * small step.
  */
+/**
+ * Stands in for an image the model would not accept.
+ *
+ * Says so rather than vanishing: a tool result that quietly loses its
+ * screenshot reads as a tool that did nothing, and the model calls it again.
+ */
+const IMAGE_DROPPED_NOTICE =
+	"[image omitted — this model does not accept image input; the text above is what the tool reported]";
+
 const MAX_TOKENS_INCOMPLETE_TURN_REMINDER =
 	"[SYSTEM] Your last reply hit the per-turn output limit before you finished, so it was discarded — none of it, including your reasoning, is in this conversation. " +
 	"Do not try to reproduce it. Take the smallest useful next step instead: make one tool call, or write one short paragraph. " +
@@ -516,6 +525,11 @@ export class AgentRuntime {
 	};
 	/** One automatic overflow-recovery attempt per run. */
 	private overflowRecoveryAttempted = false;
+	/**
+	 * Whether this run has already dropped images after a model refused them.
+	 * Once is enough: the second refusal means images were not the problem.
+	 */
+	private imageRecoveryAttempted = false;
 	/** Consecutive turns nudged for producing no tool calls; reset by any turn that does. */
 	private consecutiveNoToolCallNudges = 0;
 	/** Consecutive turns cut off at the output cap; reset by any turn that completes. */
@@ -737,6 +751,7 @@ export class AgentRuntime {
 		this.state.lastErrorClass = undefined;
 		this.state.usage = cloneUsage(DEFAULT_USAGE);
 		this.overflowRecoveryAttempted = false;
+		this.imageRecoveryAttempted = false;
 
 		try {
 			await this.callBeforeRunHooks();
@@ -1019,6 +1034,9 @@ export class AgentRuntime {
 		finishReason: AgentModelFinishReason;
 	}> {
 		const first = await this.generateAssistantMessage();
+		if (this.isRecoverableImageTurn(first)) {
+			return await this.retryWithoutImages();
+		}
 		if (!this.isRecoverableOverflowTurn(first)) {
 			return first;
 		}
@@ -1055,6 +1073,83 @@ export class AgentRuntime {
 			);
 		}
 		return retry;
+	}
+
+	/**
+	 * Whether the model refused the turn because it carried an image.
+	 *
+	 * Measured: a tester ran DeepSeek on Ollama Cloud, the `browser` tool
+	 * attached a screenshot, and the session ended on "this model does not
+	 * support image input". Tools guard on `modelSupportsImages`, but that flag
+	 * defaults to true for any model with no declared capabilities — every model
+	 * outside the shipped catalog, including the local ones this fork runs.
+	 * Tightening the default would trade one broken setup for another, so the
+	 * refusal itself is what we act on.
+	 */
+	private isRecoverableImageTurn(turn: {
+		message: AgentMessage;
+		finishReason: AgentModelFinishReason;
+	}): boolean {
+		return (
+			turn.finishReason === "error" &&
+			this.state.lastErrorClass === "image_input_unsupported" &&
+			!this.imageRecoveryAttempted &&
+			this.hasImageContent()
+		);
+	}
+
+	private hasImageContent(): boolean {
+		return this.state.messages.some((message) =>
+			message.content.some((part) => part.type === "image"),
+		);
+	}
+
+	/**
+	 * Drop every image from the transcript and take the turn again.
+	 *
+	 * The images are replaced with a line saying so rather than deleted: a tool
+	 * result that silently loses its screenshot reads as a tool that did
+	 * nothing, and the model would call it again. What remains is the text the
+	 * same tool returned — for `browser`, the console output and page state,
+	 * which is the part a non-vision model could act on anyway.
+	 *
+	 * Retried once. A second refusal means images were not the cause, and that
+	 * error belongs to the caller unchanged.
+	 */
+	private async retryWithoutImages(): Promise<{
+		message: AgentMessage;
+		finishReason: AgentModelFinishReason;
+	}> {
+		this.imageRecoveryAttempted = true;
+		const providerError = this.state.lastError;
+		let dropped = 0;
+		for (const message of this.state.messages) {
+			for (let i = 0; i < message.content.length; i++) {
+				if (message.content[i]?.type !== "image") {
+					continue;
+				}
+				dropped += 1;
+				message.content[i] = {
+					type: "text",
+					text: IMAGE_DROPPED_NOTICE,
+				} as AgentMessagePart;
+			}
+		}
+		this.config.onImageInputUnsupported?.();
+		await this.emit({
+			type: "status-notice",
+			snapshot: this.snapshot(),
+			message: "model does not accept images — resending without them",
+			metadata: {
+				kind: "image_input_recovery",
+				reason: "image_input_recovery",
+				phase: "started",
+				iteration: this.state.iteration,
+				droppedImages: dropped,
+				providerError,
+			},
+		});
+		return await this.generateAssistantMessage();
 	}
 
 	private isRecoverableOverflowTurn(turn: {

@@ -917,6 +917,8 @@ export interface AgentConfig {
 	 * call. This allows the host to feed user input into a running loop
 	 * without waiting for the current run to finish.
 	 */
+	/** See `AgentConfig.onImageInputUnsupported`. */
+	onImageInputUnsupported?: () => void;
 	consumePendingUserMessage?: () => string | undefined;
 
 	// -------------------------------------------------------------------------
