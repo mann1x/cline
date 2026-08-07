@@ -1322,3 +1322,65 @@ describe("a range edit carrying the read gutter", () => {
 		});
 	});
 });
+
+describe("how long the file is", () => {
+	it("agrees with what the read output showed", async () => {
+		// Measured live: `read_files` said "[270 lines, shown in full.]" while
+		// the editor said "the file's 271 lines", and the model spent its turns
+		// alternating between the two looking for the one that meant "all of it".
+		// The extra one is the empty string after the final newline.
+		await withTempFile("a\nb\nc\n", async (filePath, dir) => {
+			const editor = createEditorExecutor();
+
+			await expect(
+				editor(
+					{ path: filePath, start_line: 4, end_line: 4, new_text: "d" },
+					dir,
+					context,
+				),
+			).rejects.toThrow("The file has 3 line(s)");
+		});
+	});
+
+	it("takes the whole file at its last real line", async () => {
+		await withTempFile("a\nb\nc\n", async (filePath, dir) => {
+			const editor = createEditorExecutor();
+
+			await editor(
+				{ path: filePath, start_line: 1, end_line: 3, new_text: "only" },
+				dir,
+				context,
+			);
+
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("only\n");
+		});
+	});
+
+	it("keeps the trailing newline it did not count", async () => {
+		await withTempFile("a\nb\n", async (filePath, dir) => {
+			const editor = createEditorExecutor();
+
+			await editor(
+				{ path: filePath, start_line: 2, end_line: 2, new_text: "B" },
+				dir,
+				context,
+			);
+
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("a\nB\n");
+		});
+	});
+
+	it("leaves a file with no trailing newline without one", async () => {
+		await withTempFile("a\nb", async (filePath, dir) => {
+			const editor = createEditorExecutor();
+
+			await editor(
+				{ path: filePath, start_line: 2, end_line: 2, new_text: "B" },
+				dir,
+				context,
+			);
+
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("a\nB");
+		});
+	});
+});

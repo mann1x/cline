@@ -338,6 +338,41 @@ async function replaceInFile(
 const MAX_NO_CHANGE_QUOTE_CHARS = 4_000;
 
 /**
+ * A file's lines, counted the way `read_files` counts them.
+ *
+ * Splitting on newlines yields one element more than the file has lines
+ * whenever it ends with a newline, because the text after the last separator is
+ * empty. `read_files` counts with `readline`, which does not emit that element,
+ * so the two tools described the same file as 270 lines and 271 lines. Measured
+ * live: a model was told "lines 1-270 is 270 of the file's 271 lines", could
+ * only see 270 in the read output, and spent its turns alternating between the
+ * two numbers trying to find the one that meant "the whole file".
+ *
+ * The trailing newline is kept and re-applied on write; it is a property of the
+ * file, not a line of it.
+ */
+function splitFileLines(content: string): {
+	lines: string[];
+	trailingNewline: boolean;
+} {
+	const lines = content.split(/\r\n|\n/);
+	const trailingNewline = lines.length > 1 && lines[lines.length - 1] === "";
+	if (trailingNewline) {
+		lines.pop();
+	}
+	return { lines, trailingNewline };
+}
+
+/** Reassemble what {@link splitFileLines} took apart. */
+function joinFileLines(
+	lines: readonly string[],
+	eol: string,
+	trailingNewline: boolean,
+): string {
+	return lines.join(eol) + (trailingNewline ? eol : "");
+}
+
+/**
  * The lines as they stand, numbered the way `read_files` numbers them.
  *
  * Width is taken from the last line number in the span, matching the read
@@ -349,7 +384,7 @@ function quoteCurrentLines(
 	startOneBased: number,
 	endOneBased: number,
 ): string | undefined {
-	const lines = content.split(/\r\n|\n/);
+	const { lines } = splitFileLines(content);
 	const first = Math.max(1, startOneBased);
 	const last = Math.min(lines.length, endOneBased);
 	if (last < first) {
@@ -473,7 +508,7 @@ async function replaceLineRange(
 ): Promise<string> {
 	const content = await fs.readFile(filePath, encoding);
 	const eol = detectLineEnding(content);
-	const lines = content.split(/\r\n|\n/);
+	const { lines, trailingNewline } = splitFileLines(content);
 
 	if (startLineOneBased < 1 || startLineOneBased > lines.length) {
 		throw new Error(
@@ -559,7 +594,7 @@ async function replaceLineRange(
 		effectiveEndLine - startLineOneBased + 1,
 		...replacement,
 	);
-	const updated = lines.join(eol);
+	const updated = joinFileLines(lines, eol, trailingNewline);
 	const range =
 		startLineOneBased === effectiveEndLine
 			? `line ${startLineOneBased}`
@@ -681,8 +716,8 @@ function lineCountNote(
 	editedThroughLine: number,
 	filePathForNote = "this file",
 ): string {
-	const before = oldContent.split(/\r\n|\n/).length;
-	const after = newContent.split(/\r\n|\n/).length;
+	const before = splitFileLines(oldContent).lines.length;
+	const after = splitFileLines(newContent).lines.length;
 	if (before === after) {
 		return "";
 	}
@@ -894,7 +929,7 @@ export function createEditorExecutor(
 	/** How many lines the file holds right now, or null if it has none to count. */
 	const countLines = async (filePath: string): Promise<number | null> => {
 		try {
-			return (await fs.readFile(filePath, encoding)).split(/\r\n|\n/).length;
+			return splitFileLines(await fs.readFile(filePath, encoding)).lines.length;
 		} catch {
 			return null;
 		}
