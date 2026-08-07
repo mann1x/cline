@@ -95,16 +95,41 @@ describe("a call the tool has declared a no-op", () => {
 
 	// Measured: this exact shape was sent seven times against six "No change"
 	// refusals, with the whole file re-read between four of them. Twenty-four
-	// minutes, no edit, and the run ended on the loop stop anyway.
-	it("is stopped on its first repeat, not its fifth", () => {
+	// minutes, no edit, and the run ended on the loop stop anyway — so the leash
+	// is one repeat, not five. It is not zero either: a live run was killed on
+	// the second attempt with the rest of its task still to do, and a no-op says
+	// the file already holds what was asked for, which is a misread rather than
+	// a runaway.
+	it("warns on its first repeat and stops on the second, not the fifth", () => {
 		const tracker = new LoopDetectionTracker();
 
 		expect(tracker.inspect(call).kind).toBe("ok");
 		tracker.noteOutcome(false, true);
 
+		const warned = tracker.inspect(call);
+		expect(warned.kind).toBe("soft");
+		expect(warned.message).toContain("refused as a no-op");
+		expect(warned.message).toContain("already in place");
+		tracker.noteOutcome(false, true);
+
 		const verdict = tracker.inspect(call);
 		expect(verdict.kind).toBe("hard");
 		expect(verdict.message).toContain("character-for-character");
+	});
+
+	it("gives a payload that goes futile again its own warning", () => {
+		// The warning belongs to the episode, not to the payload for the rest of
+		// the session: an edit that starts working again has changed situation.
+		const tracker = new LoopDetectionTracker();
+
+		tracker.inspect(call);
+		tracker.noteOutcome(false, true);
+		expect(tracker.inspect(call).kind).toBe("soft");
+		tracker.noteOutcome(true);
+
+		expect(tracker.inspect(call).kind).toBe("ok");
+		tracker.noteOutcome(false, true);
+		expect(tracker.inspect(call).kind).toBe("soft");
 	});
 
 	// Measured: `editor` applied lines 94-97, then the identical call was sent

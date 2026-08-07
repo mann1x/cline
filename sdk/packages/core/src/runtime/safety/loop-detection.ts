@@ -202,11 +202,21 @@ export class LoopDetectionTracker {
 			// model was told the text matched the file, which is true and reads
 			// like a failure, and never that its own edit was what put it there.
 			// So say that once, and escalate only if it comes back again.
-			if (this.state.appliedKeys.has(key) && !this.state.settledKeys.has(key)) {
+			//
+			// Either way the first repeat is a warning, not a stop. A no-op means
+			// the file already holds what the call asked for, so the state the
+			// model wants is the state on disk — that is a misread, not a runaway,
+			// and killing the run on the second attempt loses everything still
+			// left to do. Measured: a live run died on one repeated `editor` call
+			// with the rest of its task untouched. The escalation still arrives on
+			// the attempt after, which is what the seven-attempt case needed.
+			if (!this.state.settledKeys.has(key)) {
 				this.state.settledKeys.add(key);
 				return {
 					kind: "soft",
-					message: `This \`${call.name}\` call already succeeded earlier in this task, and the file still holds exactly what it wrote — that is why sending it again is refused as a no-op rather than applied. Nothing is wrong and nothing was lost: this edit is done. Move on to the next thing that still needs changing, and if you are unsure what that is, re-read the file and compare it against what you set out to fix.`,
+					message: this.state.appliedKeys.has(key)
+						? `This \`${call.name}\` call already succeeded earlier in this task, and the file still holds exactly what it wrote — that is why sending it again is refused as a no-op rather than applied. Nothing is wrong and nothing was lost: this edit is done. Move on to the next thing that still needs changing, and if you are unsure what that is, re-read the file and compare it against what you set out to fix.`
+						: `This \`${call.name}\` call was refused as a no-op: what it sends is character-for-character what the file already holds, so the change it asks for is already in place. Nothing failed and nothing was lost. Sending it again unchanged cannot do anything — move on to the next thing that still needs changing, and if this is not the state you meant the file to be in, the range or the text has to differ, not the attempt.`,
 				};
 			}
 			return {
@@ -260,6 +270,10 @@ export class LoopDetectionTracker {
 		if (productive) {
 			this.state.barrenCounts.delete(key);
 			this.state.futileKeys.delete(key);
+			// The warning is spent with the episode it belonged to: if this
+			// payload goes futile again later, that is a new situation and gets
+			// its own warning before the stop.
+			this.state.settledKeys.delete(key);
 			this.state.appliedKeys.add(key);
 			return;
 		}
