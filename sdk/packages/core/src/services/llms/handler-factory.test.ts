@@ -125,6 +125,61 @@ describe("createAgentModelFromConfig", () => {
 		);
 	});
 
+	// Measured on a live box: temperature 0.6 and frequencyPenalty 0.3 sat in
+	// providers.json for days and never reached Ollama. Vendors read their
+	// settings out of the gateway's `options` bag, and nothing lifted the
+	// configured sampler into it — so every request carried exactly num_ctx and
+	// num_predict (which arrive by other routes) and looked well-formed while
+	// the model ran on its Modelfile defaults.
+	it("lifts the configured sampler into the gateway options bag", async () => {
+		const { createAgentModelFromConfig } = await import("./handler-factory");
+
+		createAgentModelFromConfig(
+			{
+				providerId: "ollama",
+				modelId: "v7-coder_tb:vision-iq4_nl",
+				tools: [],
+				providerConfig: {
+					providerId: "ollama",
+					modelId: "v7-coder_tb:vision-iq4_nl",
+					sampling: { temperature: 0.6, frequencyPenalty: 0.3 },
+				},
+			} as never,
+			undefined,
+		);
+
+		expect(gatewayMock.createGateway).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				providerConfigs: [
+					expect.objectContaining({
+						options: expect.objectContaining({
+							sampling: { temperature: 0.6, frequencyPenalty: 0.3 },
+						}),
+					}),
+				],
+			}),
+		);
+	});
+
+	it("adds no sampler key when none is configured", async () => {
+		const { createAgentModelFromConfig } = await import("./handler-factory");
+
+		createAgentModelFromConfig(
+			{
+				providerId: "ollama",
+				modelId: "v7-coder_tb:vision-iq4_nl",
+				tools: [],
+				providerConfig: { providerId: "ollama", modelId: "v7-coder_tb:vision-iq4_nl" },
+			} as never,
+			undefined,
+		);
+
+		const call = gatewayMock.createGateway.mock.calls.at(-1)?.[0] as {
+			providerConfigs: Array<{ options?: Record<string, unknown> }>;
+		};
+		expect(call.providerConfigs[0].options ?? {}).not.toHaveProperty("sampling");
+	});
+
 	it("preserves model capabilities and metadata when configuring gateway models", async () => {
 		const { createAgentModelFromConfig } = await import("./handler-factory");
 

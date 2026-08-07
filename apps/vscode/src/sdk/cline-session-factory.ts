@@ -712,6 +712,11 @@ export function resolveVertexProviderConfig(config: ApiConfiguration): Pick<Prov
 type OllamaProviderConfig = {
 	modelInfo?: { id: string; name: string; contextWindow: number }
 	timeoutMs?: number
+	/**
+	 * The sampler as configured. Read here for the output budget (`numPredict`),
+	 * and carried to the wire by `buildGatewayProviderOptions`, which lifts it
+	 * into the gateway's `options` bag where the Ollama vendor looks for it.
+	 */
 	sampling?: ProviderSamplingOptions
 }
 

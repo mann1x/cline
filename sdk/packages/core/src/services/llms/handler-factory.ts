@@ -40,6 +40,18 @@ function buildGatewayProviderOptions(
 		apiLine: config.apiLine,
 		openRouterProviderSorting: config.openRouterProviderSorting,
 		modelCatalog: config.modelCatalog,
+		// The configured sampler. `ProviderConfig` carries it at the top level —
+		// `toProviderConfig` reads it straight off providers.json — but vendors
+		// read their settings out of this bag, so a field that is never lifted
+		// into it reaches nothing.
+		//
+		// Measured on a live box: `temperature: 0.6` and `frequencyPenalty: 0.3`
+		// sat in providers.json for days and never once appeared on the wire.
+		// Every request carried exactly `num_ctx` and `num_predict`, which arrive
+		// by other routes, so the payload looked well-formed while the model ran
+		// on its Modelfile defaults. Both hosts were affected: this is the only
+		// place the lift can happen for either.
+		sampling: config.sampling,
 	};
 
 	if (usesOpenAICompatibleClient(config)) {
