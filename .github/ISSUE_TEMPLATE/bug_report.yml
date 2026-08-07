@@ -1,88 +1,81 @@
 name: 🐛 Bug Report
-description: File a bug report
+description: Something in this build is broken
 labels: ['bug']
 body:
-  - type: markdown
-    attributes:
-      value: |
-        **Important:** All bug reports must be reproducible using Claude Sonnet 4.5. Cline uses complex prompts so less capable models may not work as expected.
-  - type: dropdown
-    id: cline-surface
-    attributes:
-      label: Cline Surface
-      description: Which Cline surface are you reporting a bug for?
-      options:
-        - VSCode Extension
-        - JetBrains Plugin
-        - CLI
-      default: 0
-    validations:
-      required: true
-  - type: input
-    id: cline-version
-    attributes:
-      label: Cline Version
-      description: What version of Cline are you using? (You can find this at the bottom of the Settings view)
-      placeholder: 'e.g., 1.2.3'
-    validations:
-      required: true
-  - type: checkboxes
-    id: beta
-    attributes:
-      label: Beta version
-      options:
-        - label: I am using a beta version of Cline
-  - type: textarea
-    id: what-happened
-    attributes:
-      label: What happened?
-      description: Also tell us, what did you expect to happen?
-      placeholder: Tell us what you see!
-    validations:
-      required: true
-  - type: textarea
-    id: steps
-    attributes:
-      label: Steps to reproduce
-      description: How do you trigger this bug? Please walk us through it step by step.
-      value: |
-        1.
-        2.
-        3.
-    validations:
-      required: false
-  - type: input
-    id: provider-model
-    attributes:
-      label: Provider/Model
-      description: What provider and model were you using when the issue occurred?
-      placeholder: 'e.g., cline:anthropic/claude-sonnet-4.5, gemini:gemini-2.5-pro-exp-03-25'
-    validations:
-      required: false
-  - type: textarea
-    id: ide-diagnostics
-    attributes:
-      label: IDE / CLI Diagnostics
-      description: |
-        Paste the "About" diagnostics for your Cline surface. This captures the IDE build, runtime, and host details we need.
-        - VSCode Extension: open `Help → About` (Windows/Linux) or `Code → About Visual Studio Code` (macOS), then copy the info.
-        - JetBrains Plugin: open `Help → About` (Windows/Linux) or `<IDE name> → About` (macOS), then click `Copy` to grab build, runtime, OS, memory, and cores.
-        - CLI: there is no About dialog. Run `cline --version` and paste the output.
-      placeholder: Paste the copied About info or `cline --version` output here.
-    validations:
-      required: false
-  - type: textarea
-    id: system-info
-    attributes:
-      label: System Information
-      description: What operating system and hardware are you using?
-      placeholder: |
-        Operating System: Windows 11, macOS Sonoma, Ubuntu 22.04, etc.
-        Hardware: CPU, GPU, RAM specifications if relevant
-        e.g.,
-        OS: Windows 11
-        CPU: Intel Core i7-11700K
-        GPU: NVIDIA GeForce RTX 3070
-        RAM: 32GB DDR4
-    validations:
-      required: false
+    - type: markdown
+      attributes:
+          value: |
+              This fork exists to run local models well, so a report against a local model is exactly the kind that belongs here — you do not need to reproduce it on a frontier model first.
+
+              The one thing worth checking before filing: whether the newest [release](https://github.com/mann1x/cline/releases) still does it, and whether official Cline does it too. If official Cline does, it belongs [upstream](https://github.com/cline/cline/issues).
+
+    - type: input
+      id: version
+      attributes:
+          label: Build
+          description: The version shown in the VS Code extensions list, e.g. `4.99.65`.
+          placeholder: '4.99.65'
+      validations:
+          required: true
+
+    - type: textarea
+      id: model
+      attributes:
+          label: Model and provider
+          description: |
+              The model id, the provider, and the context size you have configured. For Ollama, the output of `ollama show <model>` is ideal.
+          placeholder: |
+              Provider: Ollama (http://localhost:11434)
+              Model: qwen3-coder:iq4_nl
+              Context size setting: 110000
+          render: text
+      validations:
+          required: true
+
+    - type: textarea
+      id: what-happened
+      attributes:
+          label: What happened?
+          description: What you did, what you expected, and what you got instead. Quote any message Cline showed you verbatim — the exact wording usually identifies the code path.
+      validations:
+          required: true
+
+    - type: textarea
+      id: repro
+      attributes:
+          label: Steps to reproduce
+          description: If it only happens sometimes, say so and describe what it seems to depend on. An intermittent report is still worth filing.
+          placeholder: |
+              1. Start a task on a large file
+              2. Let it run until the context bar is nearly full
+              3. …
+      validations:
+          required: false
+
+    - type: textarea
+      id: logs
+      attributes:
+          label: Logs
+          description: |
+              The single most useful thing you can attach. In VS Code: **Output** panel → **Cline** in the dropdown.
+
+              If the problem involves long sessions or context, these two are worth attaching as well (Windows paths shown; on macOS and Linux they live in the system temp directory):
+
+              - `%TEMP%\cline-compaction.jsonl` — one line per compaction decision
+              - `%TEMP%\ollama-request-logs-*\` — the exact request bodies sent to Ollama
+
+              Redact anything private before pasting. These files can contain your source code.
+          render: shell
+      validations:
+          required: false
+
+    - type: dropdown
+      id: os
+      attributes:
+          label: Operating system
+          options:
+              - Windows
+              - macOS
+              - Linux
+      validations:
+          required: false
