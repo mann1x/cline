@@ -958,6 +958,12 @@ export class SessionRuntime {
 				// catalog has never heard of. The recovery retry exists only for
 				// the case where neither could say.
 				imageSupportDeclared: modelInfo?.capabilities !== undefined,
+				// The same answer the tools guard on, so a description that could
+				// not be produced is judged against what this model can actually
+				// do rather than against a second opinion.
+				modelSupportsImages:
+					!this.imageInputRefused &&
+					(modelInfo?.capabilities?.includes("images") ?? true),
 			},
 			sessionId: this.config.sessionId,
 			agentId: this.agentId,

@@ -34,6 +34,10 @@ const createHandlerMock = vi.fn();
 
 vi.mock("@cline/llms", () => ({
 	createHandlerAsync: (config: unknown) => createHandlerMock(config),
+	// The estimator has to measure what the provider will send, so compaction
+	// asks which reasoning the provider keeps. These tests use a stub provider,
+	// which keeps all of it.
+	reasoningHistoryModeForProvider: () => "all",
 }));
 
 async function* streamChunks(chunks: FakeChunk[]): AsyncGenerator<FakeChunk> {

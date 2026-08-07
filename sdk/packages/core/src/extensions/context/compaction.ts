@@ -29,6 +29,7 @@ import type {
 import type { ProviderConfig } from "../../types/provider-settings";
 import { runAgenticCompaction } from "./agentic-compaction";
 import { runBasicCompaction } from "./basic-compaction";
+import { reasoningHistoryModeForProvider } from "@cline/llms";
 import {
 	COMPACTION_TRIGGER_RATIO,
 	createTokenEstimator,
@@ -358,11 +359,22 @@ export function createContextCompactionPrepareTurn(
 			(total: number, message) => total + estimateMessageTokens(message),
 			0,
 		);
-		const requestInputTokens = estimateRequestInputTokens({
-			systemPrompt: context.systemPrompt,
-			messages: context.apiMessages,
-			tools: context.tools,
-		});
+		// Measured the way the gateway measures it: reasoning the provider will
+		// drop is not part of the request, and counting it here ran the estimate
+		// at roughly twice the provider's own count (139,991 against 60,444,
+		// measured live). The trigger prefers the observed count, so this is the
+		// fallback path -- the first request of a session, and every resume --
+		// which is exactly where an estimate that high compacts a transcript that
+		// had ample room.
+		const reasoningHistory = reasoningHistoryModeForProvider(config.providerId);
+		const requestInputTokens = estimateRequestInputTokens(
+			{
+				systemPrompt: context.systemPrompt,
+				messages: context.apiMessages,
+				tools: context.tools,
+			},
+			{ reasoningHistory },
+		);
 		const messageInputTokens = context.messages.reduce(
 			(total: number, message) => total + estimateMessageTokens(message),
 			0,
@@ -412,6 +424,7 @@ export function createContextCompactionPrepareTurn(
 			systemPrompt: context.systemPrompt,
 			messages: context.messages,
 			tools: context.tools,
+			reasoningHistory,
 		});
 		const observedRequestTokens = lastObservedRequestTokens();
 		const triggerInputTokens = observedRequestTokens ?? requestInputTokens;

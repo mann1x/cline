@@ -112,6 +112,10 @@ export {
 	DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS,
 	DefaultGateway,
 } from "./providers/gateway";
+export {
+	type ReasoningHistoryMode,
+	reasoningHistoryModeForProvider,
+} from "./providers/model-facts";
 export { resolveProviderModelCatalogKeys } from "./providers/provider-keys";
 export {
 	type OpenAICodexRequestHeaderContext,

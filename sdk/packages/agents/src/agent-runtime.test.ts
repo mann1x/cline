@@ -3125,3 +3125,105 @@ describe("a turn cut off at the output cap", () => {
 		}
 	});
 });
+
+describe("when the vision model cannot describe an image", () => {
+	const imageTurn = () => [
+		{
+			role: "user" as const,
+			content: [
+				{ type: "text" as const, text: "what is wrong here?" },
+				{ type: "image" as const, image: "iVBORw0KGgo=", mediaType: "image/png" },
+			],
+		},
+	];
+
+	function sentImageParts(model: ScriptedModel): number {
+		return model.requests
+			.at(-1)!
+			.messages.flatMap((message) => message.content)
+			.filter((part) => part.type === "image").length;
+	}
+
+	it("does not hand the image to a model that cannot read one", async () => {
+		// Configuring a vision model says the primary one is not expected to
+		// cope. Leaving the image turns a failed description into a failed turn,
+		// and the vision model being down is exactly when that happens.
+		const model = new ScriptedModel([
+			() => [
+				{ type: "text-delta", text: "ok" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			tools: [],
+			initialMessages: imageTurn(),
+			alwaysDescribeImages: true,
+			modelSupportsImages: false,
+			describeImages: async () => {
+				throw new Error("vision model unreachable");
+			},
+		});
+
+		await runtime.run("go");
+
+		expect(sentImageParts(model)).toBe(0);
+		expect(JSON.stringify(model.requests.at(-1))).toContain("could not describe it");
+	});
+
+	it("leaves the image alone when the model can read it", async () => {
+		// A real image beats a note saying there was one.
+		const model = new ScriptedModel([
+			() => [
+				{ type: "text-delta", text: "ok" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			tools: [],
+			initialMessages: imageTurn(),
+			alwaysDescribeImages: true,
+			modelSupportsImages: true,
+			describeImages: async () => {
+				throw new Error("vision model unreachable");
+			},
+		});
+
+		await runtime.run("go");
+
+		expect(sentImageParts(model)).toBe(1);
+	});
+
+	it("replaces the ones it could not describe and keeps the ones it could", async () => {
+		const model = new ScriptedModel([
+			() => [
+				{ type: "text-delta", text: "ok" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			tools: [],
+			initialMessages: [
+				{
+					role: "user",
+					content: [
+						{ type: "image", image: "one=", mediaType: "image/png" },
+						{ type: "image", image: "two=", mediaType: "image/png" },
+					],
+				},
+			],
+			alwaysDescribeImages: true,
+			modelSupportsImages: false,
+			describeImages: async () => ["a login form", undefined],
+		});
+
+		await runtime.run("go");
+
+		const serialized = JSON.stringify(model.requests.at(-1));
+		expect(sentImageParts(model)).toBe(0);
+		expect(serialized).toContain("a login form");
+		expect(serialized).toContain("could not describe it");
+	});
+});

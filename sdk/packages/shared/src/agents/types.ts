@@ -926,6 +926,13 @@ export interface AgentConfig {
 	) => Promise<readonly (string | undefined)[]>;
 	/** See `AgentConfig.alwaysDescribeImages`. */
 	alwaysDescribeImages?: boolean;
+	/**
+	 * Whether the primary model can read an image itself.
+	 *
+	 * Only consulted when a description could not be produced: it decides
+	 * between leaving the image and replacing it with a note.
+	 */
+	modelSupportsImages?: boolean;
 	/** See `AgentConfig.imageSupportDeclared`. */
 	imageSupportDeclared?: boolean;
 	consumePendingUserMessage?: () => string | undefined;

@@ -95,6 +95,10 @@ export const DEFAULT_MAX_TOKENS_TURN_RETRIES = 2;
  */
 const IMAGE_DESCRIPTION_CONTEXT_LIMIT = 2_000;
 
+const IMAGE_DESCRIPTION_UNAVAILABLE_NOTICE =
+	"[an image was here; the vision model could not describe it, and this model cannot read images. " +
+	"Work from what the surrounding text says about it, or ask for the detail you need.]";
+
 const IMAGE_DROPPED_NOTICE =
 	"[image omitted — this model does not accept image input; the text above is what the tool reported]";
 
@@ -1328,29 +1332,45 @@ export class AgentRuntime {
 			return 0;
 		}
 
-		let descriptions: readonly (string | undefined)[];
+		let descriptions: readonly (string | undefined)[] = [];
 		try {
 			descriptions = await describeImages(images);
 		} catch (error) {
 			this.config.logger?.log?.(
-				`Vision model could not describe ${images.length} image(s), leaving them in place: ${
+				`Vision model could not describe ${images.length} image(s): ${
 					error instanceof Error ? error.message : String(error)
 				}`,
 				{ severity: "warn" },
 			);
-			return 0;
 		}
+
+		// Whether an image the vision model could not describe may be left for
+		// the primary model to look at.
+		//
+		// It may, unless that model is known not to read images. A real image
+		// beats a note saying there was one, and where the capability is unknown
+		// the refusal path already recovers a turn that goes wrong. But where it
+		// is known — Ollama answers from `/api/show` — leaving the image turns a
+		// failed description into a failed turn, and the vision model being
+		// unreachable is exactly when that happens.
+		//
+		// Optimistic by default, matching the flag the tools guard on: the two
+		// disagreeing about the same model is how a screenshot reached a model
+		// that could not read one.
+		const primaryCanSeeImages = this.config.modelSupportsImages !== false;
 
 		let replaced = 0;
 		for (let i = 0; i < targets.length; i++) {
 			const description = descriptions[i]?.trim();
-			if (!description) {
+			if (!description && primaryCanSeeImages) {
 				continue;
 			}
 			const target = targets[i];
 			target.message.content[target.index] = {
 				type: "text",
-				text: `[image description, from the vision model]\n${description}`,
+				text: description
+					? `[image description, from the vision model]\n${description}`
+					: IMAGE_DESCRIPTION_UNAVAILABLE_NOTICE,
 			} as AgentMessagePart;
 			replaced += 1;
 		}

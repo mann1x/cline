@@ -313,23 +313,31 @@ function withSentReasoningOnly(
 		}
 		return {
 			...(message as object),
-			content: (content as { type?: string }[]).filter(
-				(part) => part?.type !== "reasoning",
-			),
+			content: (content as unknown[]).filter((part) => !isReasoningPart(part)),
 		} as (typeof messages)[number];
 	});
 }
 
-function hasReasoningPart(content: unknown): boolean {
+/**
+ * Both spellings of a reasoning part.
+ *
+ * The runtime's own messages call it `reasoning`; the stored transcript and the
+ * `apiMessages` the compaction pipeline measures call it `thinking`. A filter
+ * that knew only one would silently do nothing on the other -- which is not a
+ * visible failure, just an estimate quietly back to counting what is never sent.
+ */
+const REASONING_PART_TYPES = new Set(["reasoning", "thinking", "redacted_thinking"]);
+
+function isReasoningPart(part: unknown): boolean {
 	return (
-		Array.isArray(content) &&
-		content.some(
-			(part) =>
-				typeof part === "object" &&
-				part !== null &&
-				(part as { type?: string }).type === "reasoning",
-		)
+		typeof part === "object" &&
+		part !== null &&
+		REASONING_PART_TYPES.has((part as { type?: string }).type ?? "")
 	);
+}
+
+function hasReasoningPart(content: unknown): boolean {
+	return Array.isArray(content) && content.some(isReasoningPart);
 }
 
 export function measureRequestInputChars(
@@ -363,6 +371,7 @@ export function measureRequestInputChars(
  */
 export function estimateRequestInputTokens(
 	request: TokenEstimatedRequest,
+	options?: { reasoningHistory?: ReasoningHistoryMode },
 ): number {
-	return estimateTokens(measureRequestInputChars(request));
+	return estimateTokens(measureRequestInputChars(request, options));
 }

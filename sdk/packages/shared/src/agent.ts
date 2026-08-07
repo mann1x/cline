@@ -534,6 +534,13 @@ export interface AgentRuntimeConfig {
 	 */
 	alwaysDescribeImages?: boolean;
 	/**
+	 * Whether the primary model can read an image itself.
+	 *
+	 * Only consulted when a description could not be produced: it decides
+	 * between leaving the image and replacing it with a note.
+	 */
+	modelSupportsImages?: boolean;
+	/**
 	 * Whether the model's image support is known rather than assumed.
 	 *
 	 * When the catalog (or the provider, for Ollama) states it either way, a

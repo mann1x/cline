@@ -1,4 +1,4 @@
-import type { ModelInfo, ToolResultContent } from "@cline/llms";
+import type { ModelInfo, ReasoningHistoryMode, ToolResultContent } from "@cline/llms";
 import {
 	CHARS_PER_TOKEN,
 	estimateTokens,
@@ -1064,6 +1064,7 @@ export function seedCalibrationFromTranscript(request: {
 	systemPrompt?: string;
 	messages: MessageWithMetadata[];
 	tools?: unknown[];
+	reasoningHistory?: ReasoningHistoryMode;
 }): void {
 	for (let index = request.messages.length - 1; index >= 0; index -= 1) {
 		const message = request.messages[index];
@@ -1075,11 +1076,14 @@ export function seedCalibrationFromTranscript(request: {
 			continue;
 		}
 		seedRequestTokenCalibration(
-			measureRequestInputChars({
-				systemPrompt: request.systemPrompt,
-				messages: request.messages.slice(0, index),
-				tools: request.tools,
-			}),
+			measureRequestInputChars(
+				{
+					systemPrompt: request.systemPrompt,
+					messages: request.messages.slice(0, index),
+					tools: request.tools,
+				},
+				{ reasoningHistory: request.reasoningHistory },
+			),
 			tokens,
 		);
 		return;

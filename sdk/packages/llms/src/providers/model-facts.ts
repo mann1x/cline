@@ -377,6 +377,26 @@ export function modelReasoningDefaultsOn(options: {
 
 export type ReasoningHistoryMode = "all" | "last" | "none";
 
+/**
+ * The mode for a provider named only by its id.
+ *
+ * The context-aware resolver below is the one the request path uses, because a
+ * custom entry can carry the provider's name in any of three places. Callers
+ * outside that path -- the compaction pipeline, which must measure the same
+ * request the gateway will send -- have only the id, and for the providers this
+ * rule names that is enough.
+ */
+export function reasoningHistoryModeForProvider(providerId: string | undefined): ReasoningHistoryMode {
+	switch ((providerId ?? "").toLowerCase()) {
+		case "cerebras":
+			return "none";
+		case "ollama":
+			return "last";
+		default:
+			return "all";
+	}
+}
+
 export function resolveReasoningHistoryMode(
 	request: GatewayStreamRequest,
 	context: GatewayProviderContext,
