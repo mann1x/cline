@@ -77,6 +77,11 @@ function toProfile(entry: unknown): ApiConfigurationProfile | null {
 		snapshot: {
 			global: isRecord(snapshot.global) ? snapshot.global : {},
 			mode: isRecord(snapshot.mode) ? snapshot.mode : {},
+			// Same drop as in `parseApiConfigurationSnapshot`: a saved profile
+			// stored its provider settings and got a profile back without them,
+			// so loading one restored the provider and model but not the context
+			// size, sampling or thinking budget saved alongside them.
+			...(isRecord(snapshot.providerConfig) ? { providerConfig: snapshot.providerConfig } : {}),
 		},
 	}
 }
@@ -102,6 +107,12 @@ export function parseApiConfigurationSnapshot(raw: string | undefined): ApiConfi
 		return {
 			global: isRecord(parsed.global) ? parsed.global : {},
 			mode: isRecord(parsed.mode) ? parsed.mode : {},
+			// Rebuilding only the two known sections silently dropped this one.
+			// The write landed and the read threw it away, so the Vision tab kept
+			// showing the first model in the list however many times a model was
+			// chosen, and a profile never restored the provider settings it had
+			// stored.
+			...(isRecord(parsed.providerConfig) ? { providerConfig: parsed.providerConfig } : {}),
 		}
 	} catch {
 		return undefined

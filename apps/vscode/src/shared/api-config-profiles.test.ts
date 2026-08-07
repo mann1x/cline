@@ -57,6 +57,31 @@ describe("parseApiConfigurationProfiles", () => {
 		const raw = JSON.stringify([{ name: "half", snapshot: { mode: { apiProvider: "ollama" } } }])
 		expect(parseApiConfigurationProfiles(raw)[0].snapshot.global).toEqual({})
 	})
+
+	// Rebuilding only the two known sections dropped the provider settings, so a
+	// profile saved with a context size and a thinking budget loaded back without
+	// them and the panel fell back to whatever was already there.
+	it("keeps the provider settings a profile was saved with", () => {
+		const raw = JSON.stringify([
+			{
+				name: "ollama / qwen3",
+				snapshot: {
+					global: {},
+					mode: { apiProvider: "ollama" },
+					providerConfig: { selectedModelId: "qwen3:iq4_nl", contextWindow: 110000 },
+				},
+			},
+		])
+		expect(parseApiConfigurationProfiles(raw)[0].snapshot.providerConfig).toEqual({
+			selectedModelId: "qwen3:iq4_nl",
+			contextWindow: 110000,
+		})
+	})
+
+	it("leaves the provider settings absent when a profile never had them", () => {
+		const raw = JSON.stringify([{ name: "bare", snapshot: { global: {}, mode: {} } }])
+		expect(parseApiConfigurationProfiles(raw)[0].snapshot).not.toHaveProperty("providerConfig")
+	})
 })
 
 describe("proposeProfileName", () => {
@@ -117,6 +142,20 @@ describe("parseApiConfigurationSnapshot", () => {
 		expect(parseApiConfigurationSnapshot(raw)).toEqual({
 			global: { ollamaBaseUrl: "http://x" },
 			mode: { apiProvider: "ollama" },
+		})
+	})
+
+	// This is how the Vision tab remembers which model it points at. Dropping it
+	// here is what made a chosen vision model revert to the first in the list on
+	// the next time the panel was opened.
+	it("keeps the provider settings stored alongside the snapshot", () => {
+		const raw = JSON.stringify({
+			global: {},
+			mode: { apiProvider: "ollama" },
+			providerConfig: { selectedModelId: "a3b-coder_tb:vision-Q3_K_M" },
+		})
+		expect(parseApiConfigurationSnapshot(raw)?.providerConfig).toEqual({
+			selectedModelId: "a3b-coder_tb:vision-Q3_K_M",
 		})
 	})
 

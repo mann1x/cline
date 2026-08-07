@@ -76,9 +76,15 @@ const VisionModelTab = () => {
 				await writeSnapshot({ ...storedProviderSettings, selectedModelId: modelId })
 			},
 			save: async (updated: ApiConfiguration) => {
+				// The captured snapshot holds only the settings sections, so the
+				// provider settings have to be carried across or every edit to any
+				// other field would drop the model this tab is pointed at.
 				await StateServiceClient.updateSettings(
 					UpdateSettingsRequest.create({
-						visionModeApiConfiguration: JSON.stringify(captureApiConfigurationSnapshot(updated, "act")),
+						visionModeApiConfiguration: JSON.stringify({
+							...captureApiConfigurationSnapshot(updated, "act"),
+							...(Object.keys(storedProviderSettings).length > 0 ? { providerConfig: storedProviderSettings } : {}),
+						}),
 					}),
 				)
 				// An API key typed on this tab belongs to its provider, not to this
