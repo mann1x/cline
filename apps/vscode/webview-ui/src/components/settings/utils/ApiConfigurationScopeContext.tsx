@@ -14,6 +14,17 @@ import { createContext, useContext } from "react"
 export interface ApiConfigurationScope {
 	/** Receives the whole configuration with the edit already applied. */
 	save: (configuration: ApiConfiguration) => Promise<void>
+	/**
+	 * Whether provider settings belong to this scope rather than the session.
+	 *
+	 * `useApiConfigurationHandlers` was the only write path this context
+	 * redirected. `useProviderConfig` writes providers.json keyed by provider id
+	 * alone, so the Vision tab and the Plan/Act tabs shared one entry — and the
+	 * model selection is stored per mode in that same entry, so choosing a
+	 * vision model overwrote Act's. This tells that hook to key off its own
+	 * entry instead.
+	 */
+	ownsProviderSettings?: boolean
 }
 
 export const ApiConfigurationScopeContext = createContext<ApiConfigurationScope | undefined>(undefined)

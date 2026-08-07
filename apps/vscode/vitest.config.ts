@@ -11,6 +11,7 @@ export default defineConfig({
 			"src/hosts/vscode/VscodeEditPreview.test.ts",
 			"src/shared/vsCodeSelectorUtils.test.ts",
 			"src/shared/api-config-snapshot.test.ts",
+			"src/shared/vision-provider-id.test.ts",
 			"src/shared/api-config-profiles.test.ts",
 			"src/shared/proto-conversions/models/**/*.test.ts",
 			"src/core/storage/remote-config/**/*.test.ts",

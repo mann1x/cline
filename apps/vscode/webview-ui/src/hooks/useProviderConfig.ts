@@ -11,7 +11,9 @@ import {
 	type ProviderModelOverrides,
 	toProtobufModelOverrides as toProtobufProviderModelOverrides,
 } from "@shared/proto-conversions/models/modelOverrides"
+import { baseProviderId, visionProviderId } from "@shared/vision-provider-id"
 import { useCallback, useEffect, useRef, useState } from "react"
+import { useApiConfigurationScope } from "@/components/settings/utils/ApiConfigurationScopeContext"
 import type { ProviderId } from "@/context/ExtensionStateContext"
 import { ModelsServiceClient } from "@/services/grpc-client"
 
@@ -51,7 +53,12 @@ function toWriteProviderConfigPatch(patch: ProviderConfigWritePatch): WriteProvi
 	})
 }
 
-export function useProviderConfig(providerId: ProviderId) {
+export function useProviderConfig(requestedProviderId: ProviderId) {
+	// Which providers.json entry this panel is bound to. The Vision tab owns its
+	// own, so its base URL, context window, sampler and model selection stop
+	// landing on the entry Plan and Act read.
+	const scope = useApiConfigurationScope()
+	const providerId = (scope?.ownsProviderSettings ? visionProviderId(requestedProviderId) : requestedProviderId) as ProviderId
 	const [config, setConfig] = useState<ProviderConfigResponse | undefined>(undefined)
 
 	// Reads and writes resolve asynchronously and can complete out of order
@@ -110,8 +117,13 @@ export function useProviderConfig(providerId: ProviderId) {
 
 	const commitSelection = useCallback(
 		async (mode: "plan" | "act", selection: ProviderModelSelection) => {
-			if (selection.providerId !== providerId) {
-				throw new Error(`selection providerId ${selection.providerId} does not match hook providerId ${providerId}`)
+			// Compared against the vendor, not the entry: a scoped panel stores
+			// under a suffixed id while still selecting a model for the real
+			// provider, and the two are the same vendor by construction.
+			if (selection.providerId !== baseProviderId(providerId)) {
+				throw new Error(
+					`selection providerId ${selection.providerId} does not match hook providerId ${baseProviderId(providerId)}`,
+				)
 			}
 
 			await ModelsServiceClient.commitModelSelection(

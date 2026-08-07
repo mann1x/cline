@@ -730,20 +730,24 @@ type OllamaProviderConfig = {
  * budgets against the window Ollama actually applies (Ollama truncates the
  * prompt to `num_ctx` server-side).
  */
-export function resolveOllamaProviderConfig(config: ApiConfiguration, modelId: string | undefined): OllamaProviderConfig {
+export function resolveOllamaProviderConfig(
+	config: ApiConfiguration,
+	modelId: string | undefined,
+	settingsProviderId = "ollama",
+): OllamaProviderConfig {
 	// providers.json (`contextWindow`) is the source of truth; the legacy
 	// StateManager string is a migration fallback (the config store mirrors
 	// writes to both).
 	let settingsContextWindow: number | undefined
 	try {
-		const value = getProviderSettingsManager().getProviderSettings("ollama")?.contextWindow
+		const value = getProviderSettingsManager().getProviderSettings(settingsProviderId)?.contextWindow
 		settingsContextWindow = typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined
 	} catch {
 		Logger.warn("[SessionFactory] Failed to read Ollama settings from providers.json")
 	}
 	let sampling: ProviderSamplingOptions | undefined
 	try {
-		const stored = getProviderSettingsManager().getProviderSettings("ollama")?.sampling
+		const stored = getProviderSettingsManager().getProviderSettings(settingsProviderId)?.sampling
 		sampling = stored && typeof stored === "object" ? (stored as ProviderSamplingOptions) : undefined
 	} catch {
 		Logger.warn("[SessionFactory] Failed to read Ollama sampling settings from providers.json")

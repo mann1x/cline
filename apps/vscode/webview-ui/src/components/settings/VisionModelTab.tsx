@@ -45,6 +45,9 @@ const VisionModelTab = () => {
 
 	const scope = useMemo(
 		() => ({
+			// The Vision tab keeps its own providers.json entry; without this the
+			// panel's other write path lands on the one Plan and Act read.
+			ownsProviderSettings: true,
 			save: async (updated: ApiConfiguration) => {
 				await StateServiceClient.updateSettings(
 					UpdateSettingsRequest.create({

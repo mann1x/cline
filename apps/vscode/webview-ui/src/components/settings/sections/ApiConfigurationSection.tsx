@@ -1,12 +1,12 @@
 import { UpdateSettingsRequest } from "@shared/proto/cline/state"
 import { Mode } from "@shared/storage/types"
-import { VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
 import { useState } from "react"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { StateServiceClient } from "@/services/grpc-client"
 import { TabButton } from "../../mcp/configuration/McpConfigurationView"
 import ApiConfigProfileBar from "../ApiConfigProfileBar"
 import ApiOptions from "../ApiOptions"
+import { SettingsCheckbox } from "../common/SettingsCheckbox"
 import Section from "../Section"
 import { syncModeConfigurations } from "../utils/providerUtils"
 import { useApiConfigurationHandlers } from "../utils/useApiConfigurationHandlers"
@@ -113,11 +113,10 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 				)}
 
 				<div className="mb-[5px]">
-					<VSCodeCheckbox
+					<SettingsCheckbox
 						checked={planActSeparateModelsSetting}
 						className="mb-[5px]"
-						onChange={async (e: any) => {
-							const checked = e.target.checked === true
+						onChange={async (checked: boolean) => {
 							try {
 								// If unchecking the toggle, wait a bit for state to update, then sync configurations
 								if (!checked) {
@@ -134,10 +133,11 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 								)
 							} catch (error) {
 								console.error("Failed to update separate models setting:", error)
+								throw error
 							}
 						}}>
 						Use different models for Plan and Act modes
-					</VSCodeCheckbox>
+					</SettingsCheckbox>
 					<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
 						Switching between Plan and Act mode will persist the API and model used in the previous mode. This may be
 						helpful e.g. when using a strong reasoning model to architect a plan for a cheaper coding model to act on.
@@ -145,21 +145,21 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 				</div>
 
 				<div className="mb-[5px]">
-					<VSCodeCheckbox
+					<SettingsCheckbox
 						checked={visionModelEnabled}
 						className="mb-[5px]"
-						onChange={async (e: any) => {
-							const checked = e.target.checked === true
+						onChange={async (checked: boolean) => {
 							try {
 								await StateServiceClient.updateSettings(
 									UpdateSettingsRequest.create({ visionModelEnabled: checked }),
 								)
 							} catch (error) {
 								console.error("Failed to update vision model setting:", error)
+								throw error
 							}
 						}}>
 						Use a different model for vision processing
-					</VSCodeCheckbox>
+					</SettingsCheckbox>
 					<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
 						Images produced by tools — browser screenshots, for example — are sent to the model configured on the
 						Vision tab, which describes them in text for the main model. Useful when the main model cannot read images

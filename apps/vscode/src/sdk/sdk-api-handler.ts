@@ -31,6 +31,15 @@ export interface BuildApiHandlerOptions {
 	 * OpenRouter don't receive a reasoning config at all.
 	 */
 	disableReasoning?: boolean
+	/**
+	 * Read provider settings from this entry instead of the vendor's own.
+	 *
+	 * The vision model is configured on its own tab and stores its base URL,
+	 * context window and sampler under a suffixed provider id. Without this the
+	 * handler would be built from the primary model's entry, so a tab that looks
+	 * separate would still send the primary model's `num_ctx` and sampler.
+	 */
+	providerSettingsId?: string
 }
 
 /**
@@ -81,7 +90,7 @@ export function buildSdkProviderConfig(
 		// (`num_ctx`) on the provider config; without this, standalone callers
 		// ignore an explicit Request Timeout setting and load models with
 		// Ollama's 4096-token server default.
-		...(providerId === "ollama" ? resolveOllamaProviderConfig(configuration, modelId) : {}),
+		...(providerId === "ollama" ? resolveOllamaProviderConfig(configuration, modelId, options?.providerSettingsId) : {}),
 	}
 
 	if (options?.disableReasoning) {
