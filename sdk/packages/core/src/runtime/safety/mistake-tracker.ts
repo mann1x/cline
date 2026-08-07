@@ -45,7 +45,15 @@ export interface RecordMistakeInput {
 	iteration: number;
 	reason: MistakeReason;
 	details?: string;
-	/** When true, jump straight to maxConsecutiveMistakes instead of incrementing by 1. */
+	/**
+	 * Stop now, whatever the count says.
+	 *
+	 * This used to jump the counter to the limit, which forced the stop but also
+	 * made the count a lie: a repeated-call loop stopped a run that had two
+	 * failures behind it and the user was told Cline "ran into 6 errors in a
+	 * row", with two successful edits among the turns it was counting. The stop
+	 * is forced here instead, so the number stays the number.
+	 */
 	forceAtLimit?: boolean;
 }
 
@@ -87,7 +95,8 @@ export class MistakeTracker {
 
 	async record(input: RecordMistakeInput): Promise<MistakeOutcome> {
 		const max = this.options.maxConsecutiveMistakes;
-		const next = input.forceAtLimit && max ? max : this.consecutiveMistakes + 1;
+		const forced = input.forceAtLimit === true && !!max;
+		const next = this.consecutiveMistakes + 1;
 		this.consecutiveMistakes = next;
 
 		const errorMessage =
@@ -118,7 +127,7 @@ export class MistakeTracker {
 			},
 		);
 
-		if (!max || next < max) {
+		if (!max || (!forced && next < max)) {
 			return { action: "continue" };
 		}
 
@@ -128,6 +137,7 @@ export class MistakeTracker {
 			maxConsecutiveMistakes: max,
 			reason: input.reason,
 			details: input.details,
+			...(forced ? { forced: true } : {}),
 		};
 		this.options.onLimitTelemetry?.(limitContext);
 		const decision = await resolveConsecutiveMistakeDecision(
@@ -154,6 +164,7 @@ export class MistakeTracker {
 				reason: input.reason,
 				details: input.details,
 				stopReason: decision.reason,
+				forced,
 			}),
 		};
 	}
@@ -182,9 +193,13 @@ export function buildMistakeLimitStopMessage(input: {
 		| "tool_execution_failed";
 	details?: string;
 	stopReason?: string;
+	/** Stopped on demand rather than by reaching the limit. */
+	forced?: boolean;
 }): string {
 	const parts = [
-		`Stopped after ${input.consecutiveMistakes}/${input.maxConsecutiveMistakes} consecutive mistakes (${input.reason}) at iteration ${input.iteration}.`,
+		input.forced
+			? `Stopped at iteration ${input.iteration} (${input.reason}), with ${input.consecutiveMistakes}/${input.maxConsecutiveMistakes} consecutive mistakes recorded.`
+			: `Stopped after ${input.consecutiveMistakes}/${input.maxConsecutiveMistakes} consecutive mistakes (${input.reason}) at iteration ${input.iteration}.`,
 	];
 	const details = input.details?.trim();
 	if (details) {

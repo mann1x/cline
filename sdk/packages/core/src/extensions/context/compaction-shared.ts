@@ -19,10 +19,47 @@ export const CONTEXT_WINDOW_INPUT_RATIO = 0.9;
 export const COMPACTION_TRIGGER_RATIO = 0.9;
 export const DEFAULT_TARGET_RATIO = 0.7;
 export const DEFAULT_PRESERVE_RECENT_TOKENS = 20_000;
+/** Floor for a compaction summary, and the cap when no window is known. */
 export const DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS = 1_024;
+/**
+ * Ceiling for a compaction summary, however much window is free.
+ *
+ * A summary is the whole of what survives the messages it replaces, so it is
+ * worth spending real tokens on -- but it also becomes the context every later
+ * turn carries, so it cannot be allowed to grow into the space compaction just
+ * freed. This is the point past which a longer summary stops being a better one.
+ */
+export const MAX_SUMMARY_OUTPUT_TOKENS = 8_192;
+/** Share of the usable input budget a summary may occupy. */
+export const SUMMARY_OUTPUT_WINDOW_SHARE = 0.08;
+
 export const TOOL_RESULT_CHAR_LIMIT = 2_000;
 export const FILE_CONTENT_CHAR_LIMIT = 2_000;
 export const MIN_TRUNCATED_MESSAGE_TOKENS = 8;
+
+/**
+ * How much a compaction summary is allowed to write.
+ *
+ * The flat default was applied whatever the window: one compaction sent a
+ * 67,363-character transcript into a 110,000-token window and asked for 1,024
+ * tokens back, leaving roughly 87,000 unused on the single generation every
+ * turn after it depends on. Sizing from the window keeps a small model's
+ * summary small and lets a large window buy a complete one.
+ */
+export function resolveSummaryMaxOutputTokens(
+	maxInputTokens: number | undefined,
+): number {
+	if (!isPositiveFiniteNumber(maxInputTokens)) {
+		return DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS;
+	}
+	return Math.min(
+		MAX_SUMMARY_OUTPUT_TOKENS,
+		Math.max(
+			DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
+			Math.floor(maxInputTokens * SUMMARY_OUTPUT_WINDOW_SHARE),
+		),
+	);
+}
 
 /**
  * Output room to keep free when the model reports no per-turn cap of its own.
@@ -974,8 +1011,16 @@ Edited: ${options.fileOps.modifiedFiles.join(", ") || "none"}`,
 export function resolveSummarizerConfig(options: {
 	activeProviderConfig: ProviderConfig;
 	summarizer?: CoreCompactionSummarizerConfig;
+	/**
+	 * The summarizer's usable input budget, once it is known. Left out on the
+	 * first pass, which exists to resolve that budget from the merged model.
+	 */
+	maxInputTokens?: number;
 }): ProviderConfig {
 	const summarizer = options.summarizer;
+	const summaryMaxOutputTokens = resolveSummaryMaxOutputTokens(
+		options.maxInputTokens,
+	);
 	const withSummarizerDefaults = (config: ProviderConfig): ProviderConfig => {
 		if (config.providerId === "openai-codex") {
 			const { maxOutputTokens: _maxOutputTokens, ...rest } = config;
@@ -986,8 +1031,7 @@ export function resolveSummarizerConfig(options: {
 		}
 		return {
 			...config,
-			maxOutputTokens:
-				config.maxOutputTokens ?? DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
+			maxOutputTokens: config.maxOutputTokens ?? summaryMaxOutputTokens,
 			thinking: false,
 		};
 	};
@@ -1007,8 +1051,7 @@ export function resolveSummarizerConfig(options: {
 		headers: summarizer.headers ?? baseProviderConfig?.headers,
 		modelInfo: summarizer.modelInfo ?? baseProviderConfig?.modelInfo,
 		knownModels: summarizer.knownModels ?? baseProviderConfig?.knownModels,
-		maxOutputTokens:
-			summarizer.maxOutputTokens ?? DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
+		maxOutputTokens: summarizer.maxOutputTokens ?? summaryMaxOutputTokens,
 	});
 }
 

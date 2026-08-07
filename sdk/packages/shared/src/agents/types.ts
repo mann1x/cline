@@ -216,6 +216,16 @@ export interface ConsecutiveMistakeLimitContext {
 	maxConsecutiveMistakes: number;
 	reason: "api_error" | "invalid_tool_call" | "tool_execution_failed";
 	details?: string;
+	/**
+	 * The stop was demanded outright -- a repeated-call loop -- rather than
+	 * reached by counting up to the limit.
+	 *
+	 * Hosts word the two differently. `consecutiveMistakes` carries the real
+	 * count when this is set, and it is usually well below the limit, so
+	 * reporting it as "ran into N errors in a row" describes something that did
+	 * not happen.
+	 */
+	forced?: boolean;
 }
 
 export type ConsecutiveMistakeLimitDecision =

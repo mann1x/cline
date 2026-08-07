@@ -45,6 +45,15 @@ export interface LoopDetectionState {
 	 * because this is not a tally: one such outcome is already conclusive.
 	 */
 	futileKeys: Set<string>;
+	/**
+	 * Signatures that have succeeded at least once this session.
+	 *
+	 * A repeat of one of these is a different situation from a repeat that has
+	 * only ever failed: the work is done and the model has not registered it.
+	 */
+	appliedKeys: Set<string>;
+	/** Signatures already told once that their work had landed. */
+	settledKeys: Set<string>;
 	/** The call awaiting its outcome, so the result can be attributed. */
 	pendingKey: string;
 }
@@ -56,6 +65,8 @@ export function createLoopDetectionState(): LoopDetectionState {
 		consecutiveIdenticalCount: 0,
 		barrenCounts: new Map(),
 		futileKeys: new Set(),
+		appliedKeys: new Set(),
+		settledKeys: new Set(),
 		pendingKey: "",
 	};
 }
@@ -66,6 +77,8 @@ export function resetLoopDetectionState(state: LoopDetectionState): void {
 	state.consecutiveIdenticalCount = 0;
 	state.barrenCounts.clear();
 	state.futileKeys.clear();
+	state.appliedKeys.clear();
+	state.settledKeys.clear();
 	state.pendingKey = "";
 }
 
@@ -181,6 +194,21 @@ export class LoopDetectionTracker {
 		// run died on the loop stop anyway — so the only thing the extra five
 		// attempts bought was the time.
 		if (this.state.futileKeys.has(key)) {
+			// One case is not a loop: the same call already *worked*, and what is
+			// being repeated is a success the model did not register. Measured: an
+			// `editor` call applied lines 94-97, then was sent twice more
+			// unchanged; the second was refused as a no-op and the third stopped
+			// the run, with two successful edits in the four turns before it. The
+			// model was told the text matched the file, which is true and reads
+			// like a failure, and never that its own edit was what put it there.
+			// So say that once, and escalate only if it comes back again.
+			if (this.state.appliedKeys.has(key) && !this.state.settledKeys.has(key)) {
+				this.state.settledKeys.add(key);
+				return {
+					kind: "soft",
+					message: `This \`${call.name}\` call already succeeded earlier in this task, and the file still holds exactly what it wrote — that is why sending it again is refused as a no-op rather than applied. Nothing is wrong and nothing was lost: this edit is done. Move on to the next thing that still needs changing, and if you are unsure what that is, re-read the file and compare it against what you set out to fix.`,
+				};
+			}
 			return {
 				kind: "hard",
 				message: `This exact call to \`${call.name}\` was already refused because what it sends is character-for-character what the file already holds. The arguments are unchanged, so the result cannot be either. Stopping to avoid a loop — the fix belongs somewhere other than this call: a different range, different text, or a different tool.`,
@@ -232,6 +260,7 @@ export class LoopDetectionTracker {
 		if (productive) {
 			this.state.barrenCounts.delete(key);
 			this.state.futileKeys.delete(key);
+			this.state.appliedKeys.add(key);
 			return;
 		}
 		if (futile) {

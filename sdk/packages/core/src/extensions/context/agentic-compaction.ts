@@ -138,12 +138,16 @@ export async function runAgenticCompaction(options: {
 	}
 
 	const preProjectionFileOps = extractFileOps(messagesToSummarize);
-	const summarizerProviderConfig = resolveSummarizerConfig({
+	// Resolved twice, because the two answers depend on each other: the input
+	// limit comes from the merged model, and the output cap is sized from that
+	// limit. The first pass exists only to identify the model; its output cap is
+	// never used.
+	const summarizerModelConfig = resolveSummarizerConfig({
 		activeProviderConfig: options.providerConfig,
 		summarizer: options.summarizer,
 	});
 	const resolvedSummarizerInputLimit = resolveProviderMaxInputTokens(
-		summarizerProviderConfig,
+		summarizerModelConfig,
 	);
 	const canUseActiveContextLimit = options.summarizer === undefined;
 	const activeCompactionInputLimit = Math.max(
@@ -156,8 +160,8 @@ export async function runAgenticCompaction(options: {
 			"Agentic compaction summarizer has no known input limit; using conservative summary budget",
 			{
 				severity: "warn",
-				summarizerProviderId: summarizerProviderConfig.providerId,
-				summarizerModelId: summarizerProviderConfig.modelId,
+				summarizerProviderId: summarizerModelConfig.providerId,
+				summarizerModelId: summarizerModelConfig.modelId,
 				fallbackInputLimit: MIN_AGENTIC_SUMMARY_INPUT_TOKENS,
 			},
 		);
@@ -167,6 +171,11 @@ export async function runAgenticCompaction(options: {
 		(canUseActiveContextLimit
 			? activeCompactionInputLimit
 			: MIN_AGENTIC_SUMMARY_INPUT_TOKENS);
+	const summarizerProviderConfig = resolveSummarizerConfig({
+		activeProviderConfig: options.providerConfig,
+		summarizer: options.summarizer,
+		maxInputTokens: summarizerInputLimit,
+	});
 	const summaryRequestOverheadTokens = estimateTokens(
 		buildSummaryRequest({
 			previousSummary,

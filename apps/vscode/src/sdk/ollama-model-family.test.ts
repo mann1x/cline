@@ -4,10 +4,13 @@ const mocks = vi.hoisted(() => ({ fetch: vi.fn() }))
 
 vi.mock("@/shared/net", () => ({ fetch: mocks.fetch }))
 vi.mock("@/shared/services/Logger", () => ({ Logger: { log: vi.fn() } }))
+vi.mock("@/hosts/host-provider", () => ({ HostProvider: { window: { showMessage: vi.fn(async () => undefined) } } }))
 
+import { HostProvider } from "@/hosts/host-provider"
 import {
 	clearOllamaModelFamilyCache,
 	DEFAULT_OLLAMA_BASE_URL,
+	OllamaModelInfoUnavailableError,
 	resolveOllamaContextWindow,
 	resolveOllamaImageSupport,
 	resolveOllamaModelFamily,
@@ -16,17 +19,44 @@ import {
 
 const post = mocks.fetch
 
+/** Every attempt in the ladder, so a run that never succeeds can be watched to the end. */
+const SHOW_MAX_ATTEMPTS = 30
+
+/**
+ * Drive a lookup past its retries.
+ *
+ * The ladder deliberately waits between attempts; a test that waited with it
+ * would take half a minute to assert one throw.
+ */
+async function settle<T>(pending: Promise<T>): Promise<T> {
+	// Captured before the clock moves. Advancing timers with a bare rejection in
+	// flight leaves it unhandled for a microtask turn, which vitest reports as
+	// an error even though the test goes on to assert it.
+	const settled = pending.then(
+		(value) => ({ ok: true as const, value }),
+		(error: unknown) => ({ ok: false as const, error }),
+	)
+	await vi.advanceTimersByTimeAsync(120_000)
+	const result = await settled
+	if (result.ok) {
+		return result.value
+	}
+	throw result.error
+}
+
 /** What `fetch` gives back, as much of it as this module reads. */
 function ok(payload: unknown) {
 	return { ok: true, status: 200, json: async () => payload }
 }
 
 beforeEach(() => {
+	vi.useFakeTimers()
 	clearOllamaModelFamilyCache()
 	post.mockReset()
 })
 
 afterEach(() => {
+	vi.useRealTimers()
 	vi.clearAllMocks()
 })
 
@@ -54,12 +84,13 @@ describe("resolveOllamaModelFamily", () => {
 		await expect(resolveOllamaModelFamily("http://localhost:11434", "old-build")).resolves.toBe("qwen35moe")
 	})
 
-	it("resolves to nothing when Ollama is not reachable", async () => {
-		// A session must still start; it falls back to the provider or default
-		// template.
-		post.mockRejectedValueOnce(new Error("ECONNREFUSED"))
+	// A family is a nicety: without one the session uses the default template.
+	// It must not sit through a retry ladder to find that out.
+	it("resolves to nothing, in one attempt, when Ollama is not reachable", async () => {
+		post.mockRejectedValue(new Error("ECONNREFUSED"))
 
 		await expect(resolveOllamaModelFamily("http://localhost:11434", "anything")).resolves.toBeUndefined()
+		expect(post).toHaveBeenCalledTimes(1)
 	})
 
 	it("sends a body undici will accept", async () => {
@@ -81,7 +112,7 @@ describe("resolveOllamaModelFamily", () => {
 	it("treats a non-2xx answer as no family", async () => {
 		// A wrong endpoint answers 404 rather than throwing, and a 404 body is
 		// not a model description.
-		post.mockResolvedValueOnce({ ok: false, status: 404, json: async () => ({}) } as never)
+		post.mockResolvedValue({ ok: false, status: 404, json: async () => ({}) } as never)
 
 		await expect(resolveOllamaModelFamily("http://localhost:11434", "m")).resolves.toBeUndefined()
 	})
@@ -96,7 +127,7 @@ describe("resolveOllamaModelFamily", () => {
 	})
 
 	it("caches a miss so an absent Ollama is not waited on every session", async () => {
-		post.mockRejectedValueOnce(new Error("ECONNREFUSED"))
+		post.mockRejectedValue(new Error("ECONNREFUSED"))
 
 		await resolveOllamaModelFamily("http://localhost:11434", "m")
 		await resolveOllamaModelFamily("http://localhost:11434", "m")
@@ -177,10 +208,51 @@ describe("resolveOllamaImageSupport", () => {
 		await expect(resolveOllamaImageSupport("http://localhost:11434", "llama3")).resolves.toBeUndefined()
 	})
 
-	it("says nothing when Ollama is unreachable", async () => {
-		post.mockRejectedValueOnce(new Error("connect ECONNREFUSED") as never)
+	// Everything the demanded lookup answers -- context window, image support --
+	// is a value the session would otherwise guess, and a guessed context window
+	// is the bug this fork has had to fix twice. Ollama is local and it recovers,
+	// so this waits for it, says so on screen, and then gives up loudly.
+	it("fails rather than letting a session start on guessed values", async () => {
+		post.mockRejectedValue(new Error("connect ECONNREFUSED") as never)
 
-		await expect(resolveOllamaImageSupport("http://localhost:11434", "llama3")).resolves.toBeUndefined()
+		await expect(settle(resolveOllamaImageSupport("http://localhost:11434", "llama3"))).rejects.toBeInstanceOf(
+			OllamaModelInfoUnavailableError,
+		)
+		expect(post).toHaveBeenCalledTimes(SHOW_MAX_ATTEMPTS)
+	})
+
+	it("keeps trying, and takes the answer when it arrives", async () => {
+		post.mockRejectedValueOnce(new Error("The operation was aborted due to timeout"))
+		post.mockRejectedValueOnce(new Error("The operation was aborted due to timeout"))
+		post.mockResolvedValueOnce(ok({ capabilities: ["vision"] }) as never)
+
+		await expect(settle(resolveOllamaImageSupport("http://localhost:11434", "m"))).resolves.toBe(true)
+		expect(post).toHaveBeenCalledTimes(3)
+	})
+
+	// The first ten attempts are quick enough to go unnoticed. Past that the
+	// wait is real, so it is said out loud -- once, not thirty times.
+	it("says on screen that it is waiting, once", async () => {
+		post.mockRejectedValue(new Error("ECONNREFUSED") as never)
+
+		await expect(settle(resolveOllamaImageSupport("http://localhost:11434", "m"))).rejects.toThrow()
+
+		expect(HostProvider.window.showMessage).toHaveBeenCalledTimes(1)
+		const message = vi.mocked(HostProvider.window.showMessage).mock.calls[0]?.[0] as { message: string }
+		expect(message.message).toContain("/api/show")
+	})
+
+	// Context window, image support and think budget read the same response and
+	// do not all run at once. Without the cooldown each would climb the whole
+	// ladder again, turning one three-minute wait into three.
+	it("does not climb the ladder again for the next reader of the same failure", async () => {
+		post.mockRejectedValue(new Error("ECONNREFUSED") as never)
+
+		await expect(settle(resolveOllamaImageSupport("http://localhost:11434", "m"))).rejects.toThrow()
+		const afterFirst = post.mock.calls.length
+		await expect(resolveOllamaContextWindow("http://localhost:11434", "m")).rejects.toThrow()
+
+		expect(post).toHaveBeenCalledTimes(afterFirst)
 	})
 
 	// Family and capabilities arrive in the same response; asking twice would

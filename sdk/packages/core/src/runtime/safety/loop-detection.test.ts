@@ -107,6 +107,29 @@ describe("a call the tool has declared a no-op", () => {
 		expect(verdict.message).toContain("character-for-character");
 	});
 
+	// Measured: `editor` applied lines 94-97, then the identical call was sent
+	// twice more. The second was refused as a no-op and the third stopped the
+	// run -- with two successful edits among the four turns before it. The model
+	// was told the text matched the file, which reads like a failure, and never
+	// that its own edit had put it there.
+	it("says the work already landed before it stops a repeat of a success", () => {
+		const tracker = new LoopDetectionTracker();
+
+		expect(tracker.inspect(call).kind).toBe("ok");
+		tracker.noteOutcome(true);
+
+		expect(tracker.inspect(call).kind).toBe("ok");
+		tracker.noteOutcome(false, true);
+
+		const first = tracker.inspect(call);
+		expect(first.kind).toBe("soft");
+		expect(first.message).toContain("already succeeded");
+		tracker.noteOutcome(false, true);
+
+		// Told once. A third identical call is the loop the guard is for.
+		expect(tracker.inspect(call).kind).toBe("hard");
+	});
+
 	// An ordinary failure may stop failing — a range that had moved, a read that
 	// had gone stale. Only a no-op is answerable in advance.
 	it("does not shorten the leash for an ordinary failure", () => {

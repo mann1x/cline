@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
 	COMPACTION_TRIGGER_RATIO,
 	DEFAULT_OUTPUT_ROOM_TOKENS,
+	DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
+	MAX_SUMMARY_OUTPUT_TOKENS,
 	resolveCompactionTriggerTokens,
+	resolveSummaryMaxOutputTokens,
+	SUMMARY_OUTPUT_WINDOW_SHARE,
 } from "./compaction-shared";
 
 describe("the compaction trigger", () => {
@@ -66,3 +70,41 @@ describe("the compaction trigger", () => {
 		);
 	});
 });
+
+describe("the compaction summary budget", () => {
+	// Measured: a 67,363-character transcript went into a 110,000-token window
+	// and the summarizer was given 1,024 tokens to answer in, leaving roughly
+	// 87,000 unused on the one generation every later turn reads.
+	it("buys a full summary when the window can afford one", () => {
+		expect(resolveSummaryMaxOutputTokens(110_000)).toBe(MAX_SUMMARY_OUTPUT_TOKENS);
+	});
+
+	it("scales down with the window rather than filling it", () => {
+		expect(resolveSummaryMaxOutputTokens(32_000)).toBe(2_560);
+	});
+
+	// A summary becomes the context every turn after it carries, so it cannot be
+	// allowed to grow into the space compaction just freed.
+	it("never spends more than its share", () => {
+		for (const window of [40_000, 128_000, 1_000_000]) {
+			expect(resolveSummaryMaxOutputTokens(window)).toBeLessThanOrEqual(
+				Math.max(MAX_SUMMARY_OUTPUT_TOKENS, window * SUMMARY_OUTPUT_WINDOW_SHARE),
+			);
+			expect(resolveSummaryMaxOutputTokens(window)).toBeLessThanOrEqual(
+				MAX_SUMMARY_OUTPUT_TOKENS,
+			);
+		}
+	});
+
+	it("keeps the old default as a floor, and when nothing is known", () => {
+		expect(resolveSummaryMaxOutputTokens(8_000)).toBe(
+			DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
+		);
+		expect(resolveSummaryMaxOutputTokens(undefined)).toBe(
+			DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
+		);
+		expect(resolveSummaryMaxOutputTokens(0)).toBe(
+			DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
+		);
+	});
+})
