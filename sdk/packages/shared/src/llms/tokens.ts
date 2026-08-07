@@ -264,20 +264,93 @@ function safeStringify(value: unknown): string {
  * request's true token cost needs the character count to pair with it -- see
  * `observeRequestTokens`.
  */
+/**
+ * How much of the transcript's reasoning the provider will actually send.
+ *
+ * Mirrors the request path's own rule. Kept as a plain value rather than a
+ * predicate so the estimator does not have to know which providers do what.
+ */
+export type ReasoningHistoryMode = "all" | "last" | "none";
+
+/**
+ * The messages as the provider will send them, for measurement purposes.
+ *
+ * The estimator measured the request it was handed; the provider then dropped
+ * most of its reasoning and sent the rest. Everything between those two points
+ * was counted and never transmitted.
+ *
+ * This was not a rounding error. Measured on a live 43-message session,
+ * reasoning was between 32% and 61% of the transcript by characters, and the
+ * share moved every turn as the model alternated between long thinking and
+ * tool work -- so the estimate ran 5% high on one turn and 45% high two turns
+ * later. Calibration cannot absorb that: pairing an inflated character count
+ * with a true token count only teaches the ratio the *average* inflation, and
+ * every departure from that average becomes error, always in the direction that
+ * overstates the prompt and shrinks the output cap.
+ */
+function withSentReasoningOnly(
+	messages: TokenEstimatedRequest["messages"],
+	mode: ReasoningHistoryMode,
+): TokenEstimatedRequest["messages"] {
+	if (mode === "all" || messages === undefined) {
+		return messages;
+	}
+	// "the last reasoning there is", not "the last message" -- the final message
+	// is usually a tool result, and taking it would drop every block.
+	let lastReasoningIndex = -1;
+	if (mode === "last") {
+		for (let i = messages.length - 1; i >= 0; i -= 1) {
+			if (hasReasoningPart((messages[i] as { content?: unknown })?.content)) {
+				lastReasoningIndex = i;
+				break;
+			}
+		}
+	}
+	return messages.map((message, index) => {
+		const content = (message as { content?: unknown }).content;
+		if (index === lastReasoningIndex || !hasReasoningPart(content)) {
+			return message;
+		}
+		return {
+			...(message as object),
+			content: (content as { type?: string }[]).filter(
+				(part) => part?.type !== "reasoning",
+			),
+		} as (typeof messages)[number];
+	});
+}
+
+function hasReasoningPart(content: unknown): boolean {
+	return (
+		Array.isArray(content) &&
+		content.some(
+			(part) =>
+				typeof part === "object" &&
+				part !== null &&
+				(part as { type?: string }).type === "reasoning",
+		)
+	);
+}
+
 export function measureRequestInputChars(
 	request: TokenEstimatedRequest,
+	options?: { reasoningHistory?: ReasoningHistoryMode },
 ): number {
+	const messages = withSentReasoningOnly(
+		request.messages,
+		options?.reasoningHistory ?? "all",
+	);
 	let serialized: string;
 	try {
 		serialized = JSON.stringify({
 			systemPrompt: request.systemPrompt,
-			messages: request.messages,
+			messages,
 			tools: request.tools,
 		});
 	} catch {
 		serialized = [
 			safeStringify(request.systemPrompt),
-			safeStringify(request.messages),
+			safeStringify(messages),
 			safeStringify(request.tools),
 		].join("\n");
 	}

@@ -374,3 +374,23 @@ export function modelReasoningDefaultsOn(options: {
 		isOllamaQwen3ModelIdFallback(options.request)
 	);
 }
+
+export type ReasoningHistoryMode = "all" | "last" | "none";
+
+export function resolveReasoningHistoryMode(
+	request: GatewayStreamRequest,
+	context: GatewayProviderContext,
+): ReasoningHistoryMode {
+	if (isCerebrasProvider(request, context)) {
+		return "none";
+	}
+	// Scoped to Ollama rather than applied everywhere: this is where it was
+	// measured, and where a local model's context window is the binding
+	// constraint. Other providers keep the behaviour they were tuned against
+	// until there is a measurement for them too.
+	if (isOllamaProvider(request, context)) {
+		return "last";
+	}
+	return "all";
+}
+

@@ -21,6 +21,8 @@ import {
 } from "@cline/shared";
 import { toAsyncIterable } from "./async";
 import { BUILTIN_PROVIDER_REGISTRATIONS } from "./builtins-runtime";
+import type { GatewayProviderContext } from "@cline/shared";
+import { resolveReasoningHistoryMode } from "./model-facts";
 import { GatewayRegistry } from "./registry";
 import { isPositiveFiniteNumber } from "./utils";
 
@@ -404,7 +406,21 @@ export class DefaultGateway implements Gateway {
 			request.providerId,
 		);
 		const provider = await providerRecord.createProvider(providerRecord.config);
-		const inputChars = measureRequestInputChars(request);
+		// Measure what the provider will send, not what it was handed.
+		//
+		// `toAiSdkMessages` drops all but the last reasoning block for Ollama,
+		// and it does it after this point -- so everything measured here that it
+		// then removed was counted and never transmitted. Reasoning ran 32-61% of
+		// a live transcript by characters, moving every turn, which is the whole
+		// of the estimator's error: 5% high on a tool-heavy turn, 45% high two
+		// turns after a long think, and always in the direction that shrinks the
+		// output cap.
+		const reasoningHistory = resolveReasoningHistoryMode(request, {
+			provider: resolved.provider,
+			model: resolved.model,
+			config: providerRecord.config,
+		} as GatewayProviderContext);
+		const inputChars = measureRequestInputChars(request, { reasoningHistory });
 		const estimatedInputTokens = estimateTokens(inputChars);
 		const maxTokens = resolveGatewayRequestMaxTokens({
 			requestedMaxTokens: request.maxTokens,

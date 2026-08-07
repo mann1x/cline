@@ -217,7 +217,7 @@ export {
 	seedRequestTokenCalibration,
 	type TokenEstimatedRequest,
 } from "./llms/tokens";
-export type { ContextOverflowReport } from "./llms/tokens";
+export type { ContextOverflowReport, ReasoningHistoryMode } from "./llms/tokens";
 export type {
 	ToolApprovalRequest,
 	ToolApprovalResult,

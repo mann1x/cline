@@ -28,8 +28,8 @@ import { classifyProviderError } from "./error-classification";
 import { extractErrorMessage } from "./format";
 import {
 	isAnthropicCompatibleModel,
-	isCerebrasProvider,
-	isOllamaProvider,
+	type ReasoningHistoryMode,
+	resolveReasoningHistoryMode,
 	resolveModelFamily,
 } from "./model-facts";
 import {
@@ -317,25 +317,6 @@ function wrapFetchForStickySession(
  * Compaction could only get 103.2k down to 62.2k because four-fifths of what
  * it was compacting was stale reasoning.
  */
-type ReasoningHistoryMode = "all" | "last" | "none";
-
-function resolveReasoningHistoryMode(
-	request: GatewayStreamRequest,
-	context: GatewayProviderContext,
-): ReasoningHistoryMode {
-	if (isCerebrasProvider(request, context)) {
-		return "none";
-	}
-	// Scoped to Ollama rather than applied everywhere: this is where it was
-	// measured, and where a local model's context window is the binding
-	// constraint. Other providers keep the behaviour they were tuned against
-	// until there is a measurement for them too.
-	if (isOllamaProvider(request, context)) {
-		return "last";
-	}
-	return "all";
-}
-
 async function ensureGatewayLangfuseTelemetry(
 	providerId: string,
 ): Promise<boolean> {
