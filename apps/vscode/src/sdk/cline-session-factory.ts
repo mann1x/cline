@@ -657,13 +657,37 @@ export function resolveModelId(providerId: string, mode: Mode, config: ApiConfig
 /**
  * Resolve the base URL for a given provider from the ApiConfiguration.
  */
+/**
+ * Put a scheme back on a base URL that lost one.
+ *
+ * Reported live: a remote Ollama at `http://192.168.1.100:30068` ended up
+ * stored without its scheme, and every request then died on
+ * `Failed to parse URL from 192.168.1.100:30068/api/chat` -- the provider
+ * unusable, with nothing on screen connecting the two. Whatever dropped it,
+ * `host:port` has exactly one sensible reading, and refusing to take it is
+ * worse than assuming it.
+ *
+ * `http`, not `https`: this is the spelling a local or LAN Ollama answers on,
+ * and it is the one the field's own placeholder shows. Anything that already
+ * names a scheme is left alone.
+ */
+export function ensureBaseUrlScheme(value: string): string {
+	if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
+		return value
+	}
+	// A bare `localhost:11434` parses as a URL whose *protocol* is `localhost:`,
+	// so `URL.canParse` cannot be used to tell a scheme-less authority from a
+	// real one. The shape is what distinguishes them.
+	return `http://${value.replace(/^\/+/, "")}`
+}
+
 export function normalizeSdkBaseUrl(providerId: string, baseUrl: unknown): string | undefined {
 	if (typeof baseUrl !== "string") {
 		return undefined
 	}
 
-	const trimmed = baseUrl.trim()
-	if (!trimmed) {
+	const trimmed = ensureBaseUrlScheme(baseUrl.trim())
+	if (!trimmed || trimmed === "http://") {
 		return undefined
 	}
 

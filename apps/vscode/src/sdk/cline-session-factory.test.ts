@@ -272,6 +272,21 @@ describe("normalizeSdkBaseUrl", () => {
 		expect(normalizeSdkBaseUrl("ollama", "http://localhost:11434/v1")).toBe("http://localhost:11434/v1")
 	})
 
+	// Reported live: a remote Ollama at 192.168.1.100:30068 ended up stored
+	// without its scheme, and every request died on
+	// `Failed to parse URL from 192.168.1.100:30068/api/chat` with nothing on
+	// screen connecting the two. `host:port` has one sensible reading.
+	it("puts a scheme back on a base URL that lost one", () => {
+		expect(normalizeSdkBaseUrl("ollama", "192.168.1.100:30068")).toBe("http://192.168.1.100:30068")
+		expect(normalizeSdkBaseUrl("ollama", " localhost:11434 ")).toBe("http://localhost:11434")
+		expect(normalizeSdkBaseUrl("ollama", "//192.168.1.100:30068")).toBe("http://192.168.1.100:30068")
+	})
+
+	it("leaves a scheme that is already there alone, including https", () => {
+		expect(normalizeSdkBaseUrl("ollama", "https://ollama.example.com")).toBe("https://ollama.example.com")
+		expect(normalizeSdkBaseUrl("openai", "https://example.com/custom")).toBe("https://example.com/custom")
+	})
+
 	it("preserves explicit user paths", () => {
 		expect(normalizeSdkBaseUrl("openai", " https://example.com/custom ")).toBe("https://example.com/custom")
 	})

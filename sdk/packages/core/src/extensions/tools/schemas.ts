@@ -248,17 +248,68 @@ const StructuredCommandsInputSchema = z.object({
 });
 
 /**
+ * One command, however the model chose to spell it.
+ *
+ * Measured live: `run_commands` answered `Invalid input` to every call in a
+ * session -- for `echo` as much as for a pipeline -- and the model concluded
+ * the tool was "definitively non-functional in this environment". The union
+ * accepted `cmd` at the top level but not inside `commands`, and `args` only
+ * as an array, so a single spelling slip failed the whole call with a message
+ * that named no field.
+ *
+ * These are the unambiguous spellings only. Each is transformed to the
+ * canonical entry so everything downstream sees one shape.
+ */
+const ARGV_MIN_LENGTH = 1;
+
+const LooseCommandEntrySchema = z.union([
+	CommandInputSchema,
+	StructuredCommandInputSchema,
+	// `args` as a single string rather than a list.
+	z
+		.object({ command: z.string().min(1), args: z.string() })
+		.transform(({ command, args }) => ({ command, args: [args] })),
+	// `cmd` inside `commands`, which the top level already accepted.
+	z
+		.object({
+			cmd: z.string().min(1),
+			args: z.union([z.array(z.string()), z.string()]).optional(),
+		})
+		.transform(({ cmd, args }) => ({
+			command: cmd,
+			...(args === undefined
+				? {}
+				: { args: typeof args === "string" ? [args] : args }),
+		})),
+	// The other names models reach for when they mean "a shell command".
+	z
+		.object({ shell_command: z.string().min(1) })
+		.transform(({ shell_command }) => shell_command),
+	z.object({ script: z.string().min(1) }).transform(({ script }) => script),
+	// An argv list: first element is the executable, the rest are arguments.
+	z
+		.array(z.string())
+		.min(ARGV_MIN_LENGTH)
+		.transform((argv) => ({ command: argv[0], args: argv.slice(1) })),
+]);
+
+/**
  * Union schema for run_commands tool input. More flexible.
  */
 export const RunCommandsInputUnionSchema = z.union([
 	RunCommandsInputSchema,
 	StructuredCommandsInputSchema,
-	z.object({ commands: StructuredCommandEntrySchema }),
+	z.object({ commands: z.array(LooseCommandEntrySchema) }),
+	z.object({ commands: LooseCommandEntrySchema }),
 	z.array(StructuredCommandInputSchema),
 	StructuredCommandInputSchema,
 	z.object({ command: CommandInputSchema }),
 	z.object({ cmd: CommandInputSchema }),
+	// Before the loose entry, and deliberately: a bare list of strings has
+	// always meant a list of shell commands, and the loose entry would read the
+	// same value as one argv list. Order is the only thing separating them.
 	z.array(z.string()),
+	LooseCommandEntrySchema,
 	z.string(),
 ]);
 

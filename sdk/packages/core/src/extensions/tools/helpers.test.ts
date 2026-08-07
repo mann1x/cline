@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getEditorSizeError } from "./helpers";
+import { getEditorSizeError, normalizeRunCommandsInput } from "./helpers";
 import { EDITOR_ARG_CHAR_LIMIT, type EditFileInput } from "./schemas";
 
 const OVERSIZED = "x".repeat(EDITOR_ARG_CHAR_LIMIT + 1);
@@ -69,3 +69,34 @@ describe("getEditorSizeError", () => {
 		expect(error).toContain(String(EDITOR_ARG_CHAR_LIMIT));
 	});
 });
+
+describe("run_commands input shapes", () => {
+	// Reported live: `run_commands` answered `Invalid input` to every call in a
+	// session, `echo` included, and the model concluded the tool was
+	// "definitively non-functional in this environment". The union took `cmd` at
+	// the top level but not inside `commands`, and `args` only as an array.
+	it("takes the spellings a model actually sends", () => {
+		expect(normalizeRunCommandsInput({ commands: [{ cmd: "echo hi" }] })).toEqual([{ command: "echo hi" }])
+		expect(normalizeRunCommandsInput({ commands: [{ command: "echo", args: "hi" }] })).toEqual([
+			{ command: "echo", args: ["hi"] },
+		])
+		expect(normalizeRunCommandsInput({ commands: [["echo", "hi"]] })).toEqual([{ command: "echo", args: ["hi"] }])
+		expect(normalizeRunCommandsInput({ shell_command: "echo hi" })).toEqual(["echo hi"])
+		expect(normalizeRunCommandsInput({ script: "echo hi" })).toEqual(["echo hi"])
+	})
+
+	// A bare list of strings has always meant a list of shell commands. The
+	// argv branch would read the same value as one command plus arguments, so
+	// only the order of the union keeps them apart.
+	it("still reads a list of strings as a list of commands", () => {
+		expect(normalizeRunCommandsInput(["echo hi"])).toEqual(["echo hi"])
+		expect(normalizeRunCommandsInput(["echo hi", "ls"])).toEqual(["echo hi", "ls"])
+		expect(normalizeRunCommandsInput({ commands: ["echo hi", "ls"] })).toEqual(["echo hi", "ls"])
+	})
+
+	// A shape nobody anticipated still has to leave the model something to act
+	// on: a bare "Invalid input" is what it retried identically five times.
+	it("shows the caller what it sent when nothing matches", () => {
+		expect(() => normalizeRunCommandsInput({ nonsense: 1 })).toThrow(/Received: \{"nonsense":1\}/)
+	})
+})

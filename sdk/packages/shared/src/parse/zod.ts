@@ -56,6 +56,41 @@ function describeMissingFields(
 		: `Missing required arguments: ${names}. Send them and call again.`;
 }
 
+/** Longest preview of the offending input included in an error. */
+const RECEIVED_PREVIEW_LIMIT = 300;
+
+/**
+ * Say what was actually sent, when nothing else in the error does.
+ *
+ * A union that matches no branch prettifies to bare `✖ Invalid input`: no
+ * path, no field, no type. Measured on a live session, `run_commands` answered
+ * exactly that to every call, the model could not tell what to change, sent the
+ * identical arguments five times, and the loop guard stopped the task. A model
+ * cannot fix what it is not told, so at minimum it is shown its own arguments
+ * back and can compare them against the schema in the tool description.
+ */
+function describeReceived(input: unknown): string | null {
+	let rendered: string;
+	try {
+		rendered = JSON.stringify(input);
+	} catch {
+		return null;
+	}
+	if (rendered === undefined) {
+		return `Received: ${String(input)}`;
+	}
+	const preview =
+		rendered.length > RECEIVED_PREVIEW_LIMIT
+			? `${rendered.slice(0, RECEIVED_PREVIEW_LIMIT)}…`
+			: rendered;
+	return `Received: ${preview}`;
+}
+
+/** Whether the message already points at a field the caller can act on. */
+function namesAField(message: string): boolean {
+	return message.includes("→ at ");
+}
+
 /**
  * Validate input using a Zod schema
  * Throws a formatted error if validation fails
@@ -63,9 +98,17 @@ function describeMissingFields(
 export function validateWithZod<T>(schema: z.ZodType<T>, input: unknown): T {
 	const result = schema.safeParse(input);
 	if (!result.success) {
+		const missing = describeMissingFields(result.error, input);
+		if (missing) {
+			throw new Error(missing);
+		}
+		const prettified = z.prettifyError(result.error);
+		if (namesAField(prettified)) {
+			throw new Error(prettified);
+		}
+		const received = describeReceived(input);
 		throw new Error(
-			describeMissingFields(result.error, input) ??
-				z.prettifyError(result.error),
+			received ? `${prettified}\n${received}` : prettified,
 		);
 	}
 	return result.data;
