@@ -72,6 +72,22 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			controller.stateManager.setGlobalState("planActSeparateModelsSetting", request.planActSeparateModelsSetting)
 		}
 
+		// Vision model: a second model that reads images for a primary one that
+		// cannot. The configuration and the profile list travel as JSON strings;
+		// see `@shared/api-config-snapshot` for why they are not proto messages.
+		if (request.visionModelEnabled !== undefined) {
+			controller.stateManager.setGlobalState("visionModelEnabled", request.visionModelEnabled)
+		}
+		if (request.visionModeApiConfiguration !== undefined) {
+			controller.stateManager.setGlobalState("visionModeApiConfiguration", request.visionModeApiConfiguration)
+		}
+		if (request.apiConfigurationProfiles !== undefined) {
+			controller.stateManager.setGlobalState("apiConfigurationProfiles", request.apiConfigurationProfiles)
+		}
+		if (request.activeApiConfigurationProfile !== undefined) {
+			controller.stateManager.setGlobalState("activeApiConfigurationProfile", request.activeApiConfigurationProfile)
+		}
+
 		// Update checkpoints setting
 		if (request.enableCheckpointsSetting !== undefined) {
 			controller.stateManager.setGlobalState("enableCheckpointsSetting", request.enableCheckpointsSetting)

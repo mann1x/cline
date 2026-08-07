@@ -2613,3 +2613,162 @@ describe("a model that will not take an image", () => {
 		expect(model.requests).toHaveLength(1);
 	});
 });
+
+describe("a second model that reads the images", () => {
+	const refusal: AgentModelEvent = {
+		type: "finish",
+		reason: "error",
+		error: "this model does not support image input",
+		errorClass: "image_input_unsupported",
+	};
+
+	function withScreenshot(): AgentMessage[] {
+		return [
+			{
+				role: "user",
+				content: [
+					{ type: "text", text: "Console: TypeError on line 3." },
+					{ type: "image", image: "iVBORw0KGgo=", mediaType: "image/png" },
+				],
+			} as AgentMessage,
+		];
+	}
+
+	function textParts(request: { messages: AgentMessage[] }): string[] {
+		return request.messages
+			.flatMap((m) => m.content)
+			.filter((p) => p.type === "text")
+			.map((p) => (p as { text: string }).text);
+	}
+
+	// The point of configuring a vision model is that the primary one never sees
+	// the image — not that it sees it until something complains.
+	it("describes images before the first attempt, not after a refusal", async () => {
+		const describeImages = vi.fn(async () => ["A login form with a red error under the password field."]);
+		const model = new ScriptedModel([
+			() => [{ type: "text-delta", text: "ok" }, { type: "finish", reason: "stop" }],
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			initialMessages: withScreenshot(),
+			describeImages,
+			alwaysDescribeImages: true,
+		});
+
+		await runtime.run("look at the page");
+
+		expect(describeImages).toHaveBeenCalledTimes(1);
+		expect(model.requests).toHaveLength(1);
+		const sent = model.requests[0].messages.flatMap((m) => m.content);
+		expect(sent.some((p) => p.type === "image")).toBe(false);
+		expect(textParts(model.requests[0]).some((t) => t.includes("red error under the password field"))).toBe(true);
+	});
+
+	it("passes the text beside the image along as context", async () => {
+		const describeImages = vi.fn(async () => ["described"]);
+		const model = new ScriptedModel([
+			() => [{ type: "text-delta", text: "ok" }, { type: "finish", reason: "stop" }],
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			initialMessages: withScreenshot(),
+			describeImages,
+			alwaysDescribeImages: true,
+		});
+
+		await runtime.run("look at the page");
+
+		expect(describeImages.mock.calls[0][0][0].context).toContain("TypeError on line 3");
+		expect(describeImages.mock.calls[0][0][0].image).toBe("iVBORw0KGgo=");
+	});
+
+	// This runs on every turn, including for models that read images perfectly
+	// well. A vision model that is briefly unreachable must not cost them the
+	// screenshot.
+	it("leaves the image in place when the describer fails", async () => {
+		const model = new ScriptedModel([
+			() => [{ type: "text-delta", text: "ok" }, { type: "finish", reason: "stop" }],
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			initialMessages: withScreenshot(),
+			describeImages: async () => {
+				throw new Error("connection refused");
+			},
+			alwaysDescribeImages: true,
+		});
+
+		const result = await runtime.run("look at the page");
+
+		expect(result.status).toBe("completed");
+		const sent = model.requests[0].messages.flatMap((m) => m.content);
+		expect(sent.some((p) => p.type === "image")).toBe(true);
+	});
+
+	it("leaves an image the describer had no answer for", async () => {
+		const model = new ScriptedModel([
+			() => [{ type: "text-delta", text: "ok" }, { type: "finish", reason: "stop" }],
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			initialMessages: withScreenshot(),
+			describeImages: async () => [undefined],
+			alwaysDescribeImages: true,
+		});
+
+		await runtime.run("look at the page");
+
+		const sent = model.requests[0].messages.flatMap((m) => m.content);
+		expect(sent.some((p) => p.type === "image")).toBe(true);
+	});
+
+	it("is not used at all unless the user turned it on", async () => {
+		const describeImages = vi.fn(async () => ["described"]);
+		const model = new ScriptedModel([
+			() => [{ type: "text-delta", text: "ok" }, { type: "finish", reason: "stop" }],
+		]);
+		const runtime = new AgentRuntime({ model, initialMessages: withScreenshot(), describeImages });
+
+		await runtime.run("look at the page");
+
+		expect(describeImages).not.toHaveBeenCalled();
+		expect(model.requests[0].messages.flatMap((m) => m.content).some((p) => p.type === "image")).toBe(true);
+	});
+
+	// The refusal path already drops images. With a describer available it can
+	// do better than dropping them.
+	it("describes rather than drops when a model refuses the image", async () => {
+		const model = new ScriptedModel([
+			() => [refusal],
+			() => [{ type: "text-delta", text: "ok" }, { type: "finish", reason: "stop" }],
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			initialMessages: withScreenshot(),
+			describeImages: async () => ["A login form."],
+		});
+
+		await runtime.run("look at the page");
+
+		const retried = textParts(model.requests[1]);
+		expect(retried.some((t) => t.includes("A login form."))).toBe(true);
+		expect(retried.some((t) => t.includes("image omitted"))).toBe(false);
+	});
+
+	it("still drops the image if the describer cannot help either", async () => {
+		const model = new ScriptedModel([
+			() => [refusal],
+			() => [{ type: "text-delta", text: "ok" }, { type: "finish", reason: "stop" }],
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			initialMessages: withScreenshot(),
+			describeImages: async () => [undefined],
+		});
+
+		const result = await runtime.run("look at the page");
+
+		expect(result.status).toBe("completed");
+		expect(textParts(model.requests[1]).some((t) => t.includes("image omitted"))).toBe(true);
+	});
+});

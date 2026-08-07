@@ -59,6 +59,7 @@ import { resolveSessionPromptTemplate } from "./prompt-templates"
 import { getProviderSettingsManager } from "./provider-migration"
 import { buildSapProviderConfig, type SapProviderConfig } from "./sap-config"
 import type { SdkSessionHost } from "./session-host"
+import { buildVisionApiConfiguration, createVisionImageDescriber } from "./vision-model"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1137,6 +1138,13 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	// it hands the decision back to the SDK default.
 	const maxToolResultChars = positiveFiniteNumber(stateManager.getGlobalSettingsKey("maxToolResultChars"))
 	const enableCheckpoints = stateManager.getGlobalSettingsKey("enableCheckpointsSetting") ?? true
+	// A second model that reads images for the primary one. Only installed when
+	// the user has both enabled it and picked a model for it: without a
+	// describer the runtime keeps its existing behaviour of sending images
+	// straight through, and falling back to a refusal if the model objects.
+	const visionApiConfiguration = stateManager.getGlobalSettingsKey("visionModelEnabled")
+		? buildVisionApiConfiguration(apiConfig, stateManager.getGlobalSettingsKey("visionModeApiConfiguration"))
+		: undefined
 	const useAutoCondense = input.taskSettings?.useAutoCondense ?? globalUseAutoCondense
 
 	// Core resolves providers against the SDK registry, which uses the SDK's
@@ -1241,6 +1249,14 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 			logger: sdkLogger,
 		},
 		hooks: composeSessionHooks(buildAgentHooks(StateManager.get()), cwd, renderedTemplate),
+		...(visionApiConfiguration
+			? {
+					describeImages: createVisionImageDescriber(visionApiConfiguration),
+					// Configuring a vision model means the primary model is not
+					// meant to see the image, whether or not it could have.
+					alwaysDescribeImages: true,
+				}
+			: {}),
 	}
 
 	return config

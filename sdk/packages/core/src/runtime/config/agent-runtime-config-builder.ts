@@ -104,6 +104,8 @@ export function createAgentRuntimeConfig(
 		hooks,
 		prepareTurn: input.prepareTurn,
 		onImageInputUnsupported: agentConfig.onImageInputUnsupported,
+		describeImages: agentConfig.describeImages,
+		alwaysDescribeImages: agentConfig.alwaysDescribeImages,
 		consumePendingUserMessage: agentConfig.consumePendingUserMessage,
 		plugins: input.plugins,
 		logger: input.logger ?? agentConfig.logger,

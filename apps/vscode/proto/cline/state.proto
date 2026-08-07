@@ -289,6 +289,10 @@ message Settings {
   optional string act_mode_cline_pass_model_id = 185;
   optional OpenRouterModelInfo act_mode_cline_pass_model_info = 186;
   optional int32 max_tool_result_chars = 187;
+  optional bool vision_model_enabled = 188;
+  optional string api_configuration_profiles = 189;
+  optional string active_api_configuration_profile = 190;
+  optional string vision_mode_api_configuration = 191;
 }
 
 message State {
@@ -433,6 +437,13 @@ message UpdateSettingsRequest {
   optional string compaction_strategy = 44;
   // 0 restores the SDK default rather than meaning "keep nothing".
   optional int32 max_tool_result_chars = 45;
+  optional bool vision_model_enabled = 46;
+  // JSON, not a message: these carry a snapshot of the API configuration panel,
+  // whose field list is generated from `ApiHandlerSettingsKeys` and grows with
+  // every provider added. See `@shared/api-config-snapshot`.
+  optional string api_configuration_profiles = 47;
+  optional string active_api_configuration_profile = 48;
+  optional string vision_mode_api_configuration = 49;
 }
 
 message UpdateTerminalConnectionTimeoutRequest {

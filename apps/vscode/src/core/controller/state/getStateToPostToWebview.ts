@@ -51,6 +51,10 @@ export async function getStateToPostToWebview(controller: {
 	const mcpDisplayMode = stateManager.getGlobalStateKey("mcpDisplayMode")
 	const telemetrySetting = stateManager.getGlobalSettingsKey("telemetrySetting")
 	const planActSeparateModelsSetting = stateManager.getGlobalSettingsKey("planActSeparateModelsSetting")
+	const visionModelEnabled = stateManager.getGlobalSettingsKey("visionModelEnabled")
+	const visionModeApiConfiguration = stateManager.getGlobalSettingsKey("visionModeApiConfiguration")
+	const apiConfigurationProfiles = stateManager.getGlobalSettingsKey("apiConfigurationProfiles")
+	const activeApiConfigurationProfile = stateManager.getGlobalSettingsKey("activeApiConfigurationProfile")
 	const enableCheckpointsSetting = stateManager.getGlobalSettingsKey("enableCheckpointsSetting")
 	const globalClineRulesToggles = stateManager.getGlobalStateKey("globalClineRulesToggles")
 	const globalWorkflowToggles = stateManager.getGlobalStateKey("globalWorkflowToggles")
@@ -131,6 +135,10 @@ export async function getStateToPostToWebview(controller: {
 		mcpDisplayMode,
 		telemetrySetting,
 		planActSeparateModelsSetting,
+		visionModelEnabled,
+		visionModeApiConfiguration,
+		apiConfigurationProfiles,
+		activeApiConfigurationProfile,
 		enableCheckpointsSetting: enableCheckpointsSetting ?? true,
 		platform,
 		environment,

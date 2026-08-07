@@ -243,6 +243,14 @@ export type AgentModelFinishReason =
  * runtime's recovery policy and telemetry (`error_class`). Extend with new
  * classes (auth, rate_limit, billing, ...) as consumers need them.
  */
+export interface AgentImageToDescribe {
+	/** Base64 image data, as carried on an `AgentMessagePart` of type `image`. */
+	image: string;
+	mediaType?: string;
+	/** Text that accompanied the image, e.g. the tool's console output. */
+	context?: string;
+}
+
 export type ProviderErrorClass =
 	| "context_window_exceeded"
 	/**
@@ -508,6 +516,23 @@ export interface AgentRuntimeConfig {
 	 * turn rather than one per tool call.
 	 */
 	onImageInputUnsupported?: () => void;
+	/**
+	 * Turns images into text using a second model, for a primary model that
+	 * cannot read them (or reads them poorly).
+	 *
+	 * Returns one entry per image, in order; `undefined` for any the second
+	 * model could not describe, so the caller can decide what to do with that
+	 * one rather than losing the whole batch.
+	 */
+	describeImages?: (
+		images: readonly AgentImageToDescribe[],
+	) => Promise<readonly (string | undefined)[]>;
+	/**
+	 * Describe images on every turn rather than only after a refusal. Set when
+	 * the user has configured a separate vision model: the point of doing so is
+	 * that the primary model never sees the image.
+	 */
+	alwaysDescribeImages?: boolean;
 	consumePendingUserMessage?: () =>
 		| string
 		| undefined

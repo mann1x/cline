@@ -12,6 +12,7 @@
 
 import { z } from "zod";
 import type {
+	AgentImageToDescribe,
 	AgentRuntimeHooks,
 	AgentTool,
 	ProviderErrorClass,
@@ -919,6 +920,12 @@ export interface AgentConfig {
 	 */
 	/** See `AgentConfig.onImageInputUnsupported`. */
 	onImageInputUnsupported?: () => void;
+	/** See `AgentConfig.describeImages`. */
+	describeImages?: (
+		images: readonly AgentImageToDescribe[],
+	) => Promise<readonly (string | undefined)[]>;
+	/** See `AgentConfig.alwaysDescribeImages`. */
+	alwaysDescribeImages?: boolean;
 	consumePendingUserMessage?: () => string | undefined;
 
 	// -------------------------------------------------------------------------

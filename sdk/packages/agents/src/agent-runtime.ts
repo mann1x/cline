@@ -5,6 +5,7 @@ import {
 } from "@cline/llms";
 import type {
 	AgentAfterToolResult,
+	AgentImageToDescribe,
 	AgentBeforeModelResult,
 	AgentBeforeToolResult,
 	AgentMessage,
@@ -85,6 +86,15 @@ export const DEFAULT_MAX_TOKENS_TURN_RETRIES = 2;
  * Says so rather than vanishing: a tool result that quietly loses its
  * screenshot reads as a tool that did nothing, and the model calls it again.
  */
+/**
+ * How much of the surrounding text goes to the vision model as context.
+ *
+ * Enough for a browser tool's URL and console output, which is what turns "a
+ * web page" into "the login form, with an error under the password field";
+ * short enough that a large tool result does not become the prompt.
+ */
+const IMAGE_DESCRIPTION_CONTEXT_LIMIT = 2_000;
+
 const IMAGE_DROPPED_NOTICE =
 	"[image omitted — this model does not accept image input; the text above is what the tool reported]";
 
@@ -1033,6 +1043,12 @@ export class AgentRuntime {
 		message: AgentMessage;
 		finishReason: AgentModelFinishReason;
 	}> {
+		// With a vision model configured, the primary model is not meant to see
+		// the image at all — the point of configuring one is that a description
+		// goes in its place, whether or not the primary model could have coped.
+		if (this.config.alwaysDescribeImages === true) {
+			await this.describeImagesInTranscript();
+		}
 		const first = await this.generateAssistantMessage();
 		if (this.isRecoverableImageTurn(first)) {
 			return await this.retryWithoutImages();
@@ -1122,6 +1138,10 @@ export class AgentRuntime {
 	}> {
 		this.imageRecoveryAttempted = true;
 		const providerError = this.state.lastError;
+		// A configured vision model turns the screenshot into something the
+		// primary model can still act on. Anything it could not describe falls
+		// through to the notice below.
+		const described = await this.describeImagesInTranscript();
 		let dropped = 0;
 		for (const message of this.state.messages) {
 			for (let i = 0; i < message.content.length; i++) {
@@ -1146,10 +1166,84 @@ export class AgentRuntime {
 				phase: "started",
 				iteration: this.state.iteration,
 				droppedImages: dropped,
+				describedImages: described,
 				providerError,
 			},
 		});
 		return await this.generateAssistantMessage();
+	}
+
+	/**
+	 * Replace images in the transcript with a second model's description of them.
+	 *
+	 * Returns how many were replaced. Images the describer could not handle are
+	 * left exactly as they were: this runs on every turn when a vision model is
+	 * configured, including for primary models that read images perfectly well,
+	 * and a describer that is briefly unreachable must not cost the primary
+	 * model its screenshot.
+	 *
+	 * Text that shared the message with an image is passed along as context —
+	 * for a browser screenshot that is the URL and console output, which is what
+	 * makes the difference between "a web page" and "the login form, with an
+	 * error under the password field".
+	 */
+	private async describeImagesInTranscript(): Promise<number> {
+		const describeImages = this.config.describeImages;
+		if (!describeImages) {
+			return 0;
+		}
+		const targets: Array<{ message: AgentMessage; index: number }> = [];
+		const images: AgentImageToDescribe[] = [];
+		for (const message of this.state.messages) {
+			const context = message.content
+				.filter((part) => part.type === "text")
+				.map((part) => (part as { text: string }).text)
+				.join("\n")
+				.slice(0, IMAGE_DESCRIPTION_CONTEXT_LIMIT);
+			for (let i = 0; i < message.content.length; i++) {
+				const part = message.content[i];
+				if (part?.type !== "image" || typeof part.image !== "string") {
+					continue;
+				}
+				targets.push({ message, index: i });
+				images.push({
+					image: part.image,
+					mediaType: part.mediaType,
+					context: context.length > 0 ? context : undefined,
+				});
+			}
+		}
+		if (images.length === 0) {
+			return 0;
+		}
+
+		let descriptions: readonly (string | undefined)[];
+		try {
+			descriptions = await describeImages(images);
+		} catch (error) {
+			this.config.logger?.log?.(
+				`Vision model could not describe ${images.length} image(s), leaving them in place: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+				{ severity: "warn" },
+			);
+			return 0;
+		}
+
+		let replaced = 0;
+		for (let i = 0; i < targets.length; i++) {
+			const description = descriptions[i]?.trim();
+			if (!description) {
+				continue;
+			}
+			const target = targets[i];
+			target.message.content[target.index] = {
+				type: "text",
+				text: `[image description, from the vision model]\n${description}`,
+			} as AgentMessagePart;
+			replaced += 1;
+		}
+		return replaced;
 	}
 
 	private isRecoverableOverflowTurn(turn: {

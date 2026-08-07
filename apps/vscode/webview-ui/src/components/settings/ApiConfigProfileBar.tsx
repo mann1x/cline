@@ -1,0 +1,133 @@
+import type { Mode } from "@shared/storage/types"
+import { VSCodeButton, VSCodeDropdown, VSCodeOption, VSCodeTextField } from "@vscode/webview-ui-toolkit/react"
+import { useEffect, useState } from "react"
+import { useApiConfigurationProfiles } from "./utils/useApiConfigurationProfiles"
+
+const NO_PROFILE = "__none__"
+
+interface ApiConfigProfileBarProps {
+	/** The tab this bar sits above; decides what a save captures. */
+	mode: Mode
+	/** Shown under the controls, e.g. to say a tab has its own model. */
+	description?: string
+}
+
+/**
+ * Load, save and update named API-configuration profiles.
+ *
+ * Sits above the Plan/Act/Vision tabs so it is reachable from all of them, and
+ * always describes the tab currently in view: with separate Plan and Act models
+ * enabled the two tabs hold different configurations, so a bar that ignored the
+ * tab would save one and appear to describe the other.
+ */
+const ApiConfigProfileBar = ({ mode, description }: ApiConfigProfileBarProps) => {
+	const { profiles, activeName, isDirty, suggestedName, loadProfile, saveProfile, deleteProfile } =
+		useApiConfigurationProfiles(mode)
+	const [isNaming, setIsNaming] = useState(false)
+	const [draftName, setDraftName] = useState("")
+
+	// Reopening the field after the panel has changed should offer a name for
+	// what is in it now, not the one suggested the last time it was opened.
+	useEffect(() => {
+		if (isNaming) {
+			setDraftName(suggestedName)
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [isNaming])
+
+	const nameIsTaken = profiles.some((profile) => profile.name.toLowerCase() === draftName.trim().toLowerCase())
+
+	const commitSave = async () => {
+		if (!draftName.trim()) {
+			return
+		}
+		await saveProfile(draftName)
+		setIsNaming(false)
+	}
+
+	return (
+		<div className="mb-4 pb-3 border-0 border-b border-solid border-(--vscode-panel-border)">
+			<div className="flex items-center gap-2 flex-wrap">
+				<label className="text-xs shrink-0" htmlFor="api-config-profile">
+					Profile
+				</label>
+				<VSCodeDropdown
+					className="flex-1 min-w-[140px]"
+					id="api-config-profile"
+					onChange={async (event: any) => {
+						const value = event.target.value
+						if (value && value !== NO_PROFILE) {
+							await loadProfile(value)
+						}
+					}}
+					value={activeName || NO_PROFILE}>
+					<VSCodeOption value={NO_PROFILE}>
+						{profiles.length === 0 ? "No saved profiles" : "Select a profile…"}
+					</VSCodeOption>
+					{profiles.map((profile) => (
+						<VSCodeOption key={profile.name} value={profile.name}>
+							{profile.name}
+						</VSCodeOption>
+					))}
+				</VSCodeDropdown>
+
+				{activeName && isDirty ? (
+					<VSCodeButton appearance="primary" onClick={() => saveProfile(activeName)}>
+						Update
+					</VSCodeButton>
+				) : null}
+				<VSCodeButton appearance="secondary" onClick={() => setIsNaming((open) => !open)}>
+					Save as…
+				</VSCodeButton>
+				{activeName ? (
+					<VSCodeButton appearance="secondary" onClick={() => deleteProfile(activeName)}>
+						Delete
+					</VSCodeButton>
+				) : null}
+			</div>
+
+			{isNaming ? (
+				<div className="flex items-center gap-2 mt-2">
+					<VSCodeTextField
+						className="flex-1"
+						onInput={(event: any) => setDraftName(event.target.value)}
+						onKeyDown={(event: any) => {
+							if (event.key === "Enter") {
+								void commitSave()
+							}
+							if (event.key === "Escape") {
+								setIsNaming(false)
+							}
+						}}
+						placeholder="Profile name"
+						value={draftName}
+					/>
+					<VSCodeButton appearance="primary" disabled={!draftName.trim()} onClick={commitSave}>
+						{nameIsTaken ? "Overwrite" : "Save"}
+					</VSCodeButton>
+					<VSCodeButton appearance="secondary" onClick={() => setIsNaming(false)}>
+						Cancel
+					</VSCodeButton>
+				</div>
+			) : null}
+
+			<p className="text-xs mt-[5px] mb-0 text-(--vscode-descriptionForeground)">
+				{activeName && isDirty ? (
+					<span className="text-(--vscode-charts-yellow)">
+						“{activeName}” has unsaved changes — Update to keep them, or reselect it to discard them.
+					</span>
+				) : activeName ? (
+					<span>Loaded from “{activeName}”.</span>
+				) : (
+					// Without this the panel looks like it simply has no profile
+					// selected, when in fact these settings are live and unsaved.
+					<span>These settings are not saved to a profile.</span>
+				)}{" "}
+				{description ??
+					"A profile stores every setting on this tab — provider, model, URL, context size and the rest. API keys are stored separately and are not part of a profile."}
+			</p>
+		</div>
+	)
+}
+
+export default ApiConfigProfileBar

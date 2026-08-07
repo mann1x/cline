@@ -31,7 +31,10 @@ const unknownModelInfo: ModelInfo = {
  * adding a provider that needs its own model-id field, extend the map
  * here and the corresponding writer.
  */
-function getActiveProviderAndModelId(apiConfiguration: ReturnType<typeof useExtensionState>["apiConfiguration"], mode: Mode) {
+export function getActiveProviderAndModelId(
+	apiConfiguration: ReturnType<typeof useExtensionState>["apiConfiguration"],
+	mode: Mode,
+) {
 	// State written by older builds or other hosts may carry SDK catalog
 	// spellings (e.g. `openai-compatible`); fold them back to the legacy
 	// `ApiProvider` spelling so the provider-keyed lookups below resolve.

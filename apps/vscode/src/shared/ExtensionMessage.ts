@@ -81,6 +81,14 @@ export interface ExtensionState {
 	mcpMarketplaceEnabled?: boolean
 	mcpDisplayMode: McpDisplayMode
 	planActSeparateModelsSetting: boolean
+	/** Use a second model to describe images for a primary model that cannot read them. */
+	visionModelEnabled: boolean
+	/** JSON `ApiConfigurationSnapshot` for the vision model. */
+	visionModeApiConfiguration: string
+	/** JSON `ApiConfigurationProfile[]`. */
+	apiConfigurationProfiles: string
+	/** Name of the loaded profile, or "" when the panel matches no profile. */
+	activeApiConfigurationProfile: string
 	enableCheckpointsSetting?: boolean
 	platform: Platform
 	environment?: Environment

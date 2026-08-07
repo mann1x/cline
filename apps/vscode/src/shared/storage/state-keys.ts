@@ -268,6 +268,21 @@ const USER_SETTINGS_FIELDS = {
 	},
 	telemetrySetting: { default: "unset" as TelemetrySetting },
 	planActSeparateModelsSetting: { default: false as boolean, isComputed: true },
+	// Use a second model to turn images into text for a primary model that
+	// cannot read them itself.
+	visionModelEnabled: { default: false as boolean },
+	// Both of these hold JSON rather than a proto message. What they carry is a
+	// snapshot of the API configuration panel, and the panel's field list grows
+	// with every provider added — spelling it out here would mean a generated
+	// proto field per setting per profile, and a schema that has to be revised
+	// in step with a list that is already the single source of truth
+	// (`ApiHandlerSettingsKeys`). See `@shared/api-config-snapshot`.
+	/** JSON `ApiConfigurationProfile[]`. */
+	apiConfigurationProfiles: { default: "" as string },
+	/** Name of the profile currently loaded, or "" when the panel is unsaved. */
+	activeApiConfigurationProfile: { default: "" as string },
+	/** JSON `ApiConfigurationSnapshot` for the vision model. */
+	visionModeApiConfiguration: { default: "" as string },
 	enableCheckpointsSetting: { default: true as boolean },
 	shellIntegrationTimeout: { default: 4000 as number },
 	// 0 means "unset": the SDK's own DEFAULT_MAX_TOOL_RESULT_CHARS applies.

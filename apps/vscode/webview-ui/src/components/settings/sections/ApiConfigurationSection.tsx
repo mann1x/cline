@@ -5,53 +5,107 @@ import { useState } from "react"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { StateServiceClient } from "@/services/grpc-client"
 import { TabButton } from "../../mcp/configuration/McpConfigurationView"
+import ApiConfigProfileBar from "../ApiConfigProfileBar"
 import ApiOptions from "../ApiOptions"
 import Section from "../Section"
 import { syncModeConfigurations } from "../utils/providerUtils"
 import { useApiConfigurationHandlers } from "../utils/useApiConfigurationHandlers"
+import VisionModelTab from "../VisionModelTab"
 
 interface ApiConfigurationSectionProps {
 	renderSectionHeader?: (tabId: string) => JSX.Element | null
 	initialModelTab?: "recommended" | "free"
 }
 
+/** The Vision tab is not a `Mode`; it configures a second model, not a mode. */
+type ConfigTab = Mode | "vision"
+
 const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiConfigurationSectionProps) => {
-	const { planActSeparateModelsSetting, mode, apiConfiguration } = useExtensionState()
-	const [currentTab, setCurrentTab] = useState<Mode>(mode)
+	const { planActSeparateModelsSetting, visionModelEnabled, mode, apiConfiguration } = useExtensionState()
+	const [currentTab, setCurrentTab] = useState<ConfigTab>(mode)
 	const { handleFieldsChange } = useApiConfigurationHandlers()
+
+	// A tab can be turned off while it is showing; fall back rather than render
+	// a configuration the user can no longer see the toggle for.
+	const activeTab: ConfigTab = currentTab === "vision" && !visionModelEnabled ? mode : currentTab
+	const showTabs = planActSeparateModelsSetting || visionModelEnabled
+	// The bar always describes the tab in view. The Vision tab keeps its own
+	// configuration, so profiles there would have to be a second, separate list
+	// — the bar names the mode whose settings it can actually save.
+	const profileMode: Mode = activeTab === "vision" ? mode : activeTab
+
 	return (
 		<div>
 			{renderSectionHeader?.("api-config")}
 			<Section>
-				{/* Tabs container */}
-				{planActSeparateModelsSetting ? (
+				{activeTab === "vision" ? (
+					<ApiConfigProfileBar
+						description="This tab configures the vision model; the profile above applies to the Plan and Act tabs."
+						mode={profileMode}
+					/>
+				) : (
+					<ApiConfigProfileBar mode={profileMode} />
+				)}
+
+				{showTabs ? (
 					<div className="rounded-md mb-5">
 						<div className="flex gap-px mb-[10px] -mt-2 border-0 border-b border-solid border-(--vscode-panel-border)">
-							<TabButton
-								disabled={currentTab === "plan"}
-								isActive={currentTab === "plan"}
-								onClick={() => setCurrentTab("plan")}
-								style={{
-									opacity: 1,
-									cursor: "pointer",
-								}}>
-								Plan Mode
-							</TabButton>
-							<TabButton
-								disabled={currentTab === "act"}
-								isActive={currentTab === "act"}
-								onClick={() => setCurrentTab("act")}
-								style={{
-									opacity: 1,
-									cursor: "pointer",
-								}}>
-								Act Mode
-							</TabButton>
+							{planActSeparateModelsSetting ? (
+								<>
+									<TabButton
+										disabled={activeTab === "plan"}
+										isActive={activeTab === "plan"}
+										onClick={() => setCurrentTab("plan")}
+										style={{
+											opacity: 1,
+											cursor: "pointer",
+										}}>
+										Plan Mode
+									</TabButton>
+									<TabButton
+										disabled={activeTab === "act"}
+										isActive={activeTab === "act"}
+										onClick={() => setCurrentTab("act")}
+										style={{
+											opacity: 1,
+											cursor: "pointer",
+										}}>
+										Act Mode
+									</TabButton>
+								</>
+							) : (
+								<TabButton
+									disabled={activeTab !== "vision"}
+									isActive={activeTab !== "vision"}
+									onClick={() => setCurrentTab(mode)}
+									style={{
+										opacity: 1,
+										cursor: "pointer",
+									}}>
+									Model
+								</TabButton>
+							)}
+							{visionModelEnabled ? (
+								<TabButton
+									disabled={activeTab === "vision"}
+									isActive={activeTab === "vision"}
+									onClick={() => setCurrentTab("vision")}
+									style={{
+										opacity: 1,
+										cursor: "pointer",
+									}}>
+									Vision
+								</TabButton>
+							) : null}
 						</div>
 
 						{/* Content container */}
 						<div className="-mb-3">
-							<ApiOptions currentMode={currentTab} initialModelTab={initialModelTab} showModelOptions={true} />
+							{activeTab === "vision" ? (
+								<VisionModelTab />
+							) : (
+								<ApiOptions currentMode={activeTab} initialModelTab={initialModelTab} showModelOptions={true} />
+							)}
 						</div>
 					</div>
 				) : (
@@ -67,7 +121,11 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 							try {
 								// If unchecking the toggle, wait a bit for state to update, then sync configurations
 								if (!checked) {
-									await syncModeConfigurations(apiConfiguration, currentTab, handleFieldsChange)
+									await syncModeConfigurations(
+										apiConfiguration,
+										activeTab === "vision" ? mode : activeTab,
+										handleFieldsChange,
+									)
 								}
 								await StateServiceClient.updateSettings(
 									UpdateSettingsRequest.create({
@@ -83,6 +141,29 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 					<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
 						Switching between Plan and Act mode will persist the API and model used in the previous mode. This may be
 						helpful e.g. when using a strong reasoning model to architect a plan for a cheaper coding model to act on.
+					</p>
+				</div>
+
+				<div className="mb-[5px]">
+					<VSCodeCheckbox
+						checked={visionModelEnabled}
+						className="mb-[5px]"
+						onChange={async (e: any) => {
+							const checked = e.target.checked === true
+							try {
+								await StateServiceClient.updateSettings(
+									UpdateSettingsRequest.create({ visionModelEnabled: checked }),
+								)
+							} catch (error) {
+								console.error("Failed to update vision model setting:", error)
+							}
+						}}>
+						Use a different model for vision processing
+					</VSCodeCheckbox>
+					<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
+						Images produced by tools — browser screenshots, for example — are sent to the model configured on the
+						Vision tab, which describes them in text for the main model. Useful when the main model cannot read images
+						at all, or reads them poorly.
 					</p>
 				</div>
 			</Section>
