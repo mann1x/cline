@@ -16,13 +16,14 @@ import {
 	captureApiConfigurationSnapshot,
 	captureProviderConfigSnapshot,
 } from "@shared/api-config-snapshot"
+import { CommitModelSelectionRequest } from "@shared/proto/cline/models"
 import { UpdateSettingsRequest } from "@shared/proto/cline/state"
 import type { Mode } from "@shared/storage/types"
 import { useCallback, useMemo } from "react"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { getActiveProviderAndModelId } from "@/hooks/useNormalizedApiConfiguration"
 import { useProviderConfig } from "@/hooks/useProviderConfig"
-import { StateServiceClient } from "@/services/grpc-client"
+import { ModelsServiceClient, StateServiceClient } from "@/services/grpc-client"
 import { useApiConfigurationHandlers } from "./useApiConfigurationHandlers"
 
 const EMPTY_SNAPSHOT: ApiConfigurationSnapshot = { global: {}, mode: {} }
@@ -84,7 +85,7 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 				: apiConfiguration
 		return getActiveProviderAndModelId(configuration, scopeMode).provider
 	}, [scope, apiConfiguration, visionModeApiConfiguration, scopeMode])
-	const { config: providerConfig, write: writeProviderConfig } = useProviderConfig(activeProviderId as never)
+	const { config: providerConfig, write: writeProviderConfig, commitSelection } = useProviderConfig(activeProviderId as never)
 
 	const profiles = useMemo(() => parseApiConfigurationProfiles(apiConfigurationProfiles), [apiConfigurationProfiles])
 
@@ -145,16 +146,71 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 			if (snapshot.providerConfig) {
 				await writeProviderConfig(snapshot.providerConfig as never)
 			}
+
+			// Which model the profile is for. The settings snapshot records it
+			// (`ollamaModelId` and friends), but that is not where the panel or the
+			// session read it from — both go to the provider store's per-mode
+			// selection. A load that wrote only the settings left the two disagreeing:
+			// measured on a live install, providers.json still said
+			// `v7-coder_tb:cd-q2_k` while the settings copy said
+			// `a3b-coder_tb:vision-cd-iq2_xs`. The picker did not move, the session
+			// would have run the old model, and because the dirty check reads the
+			// settings copy, nothing even looked unsaved.
+			const selection = getActiveProviderAndModelId(
+				applyApiConfigurationSnapshot(snapshot, [scopeMode]) as ApiConfiguration,
+				scopeMode,
+			)
+
 			if (scope.kind === "vision") {
+				// The vision tab keeps its selection inside its own snapshot, under
+				// the key its picker reads.
+				const providerConfig = {
+					...((snapshot.providerConfig as Record<string, unknown> | undefined) ?? {}),
+					...(selection.modelId ? { selectedModelId: selection.modelId } : {}),
+				}
 				await StateServiceClient.updateSettings(
-					UpdateSettingsRequest.create({ visionModeApiConfiguration: JSON.stringify(snapshot) }),
+					UpdateSettingsRequest.create({
+						visionModeApiConfiguration: JSON.stringify(
+							Object.keys(providerConfig).length > 0 ? { ...snapshot, providerConfig } : snapshot,
+						),
+					}),
 				)
 				return
 			}
+
 			const targetModes: Mode[] = planActSeparateModelsSetting ? [scope.mode] : ["plan", "act"]
 			await handleFieldsChange(applyApiConfigurationSnapshot(snapshot, targetModes))
+			if (!selection.modelId) {
+				return
+			}
+			for (const mode of targetModes) {
+				if (selection.provider === activeProviderId) {
+					// Same provider: this re-reads the store, so the picker shows the
+					// loaded model without waiting for a remount.
+					await commitSelection(mode, { providerId: selection.provider as never, modelId: selection.modelId })
+					continue
+				}
+				// A profile that also switches provider cannot go through the hook,
+				// which is bound to the provider the panel was showing. The switch
+				// rebinds it, and it re-reads on its own.
+				await ModelsServiceClient.commitModelSelection(
+					CommitModelSelectionRequest.create({
+						providerId: selection.provider,
+						mode,
+						modelId: selection.modelId,
+					}),
+				)
+			}
 		},
-		[scope, planActSeparateModelsSetting, handleFieldsChange, writeProviderConfig],
+		[
+			scope,
+			scopeMode,
+			planActSeparateModelsSetting,
+			handleFieldsChange,
+			writeProviderConfig,
+			commitSelection,
+			activeProviderId,
+		],
 	)
 
 	const loadProfile = useCallback(

@@ -96,18 +96,20 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 				</DropdownContainer>
 
 				{activeName && isDirty ? (
-					<>
-						<VSCodeButton appearance="secondary" onClick={() => saveProfile(activeName)} style={unsavedStyle}>
-							Update
-						</VSCodeButton>
-						{/* Reloading was only reachable by picking a different profile
-						    and picking this one back: the dropdown fires nothing when
-						    the value it already holds is chosen again, so there was no
-						    way to discard an edit and return to what was saved. */}
-						<VSCodeButton appearance="secondary" onClick={() => loadProfile(activeName)}>
-							Revert
-						</VSCodeButton>
-					</>
+					<VSCodeButton appearance="secondary" onClick={() => saveProfile(activeName)} style={unsavedStyle}>
+						Update
+					</VSCodeButton>
+				) : null}
+				{/* Applying the selected profile has to be reachable on its own. The
+				    dropdown fires nothing when the value it already holds is picked
+				    again, so with a profile selected there was no way to ask for it to
+				    be applied — neither to discard an edit nor to retry a load that
+				    looked like it had not taken. It is the same action either way; the
+				    label says which one it is from where the user is standing. */}
+				{activeName ? (
+					<VSCodeButton appearance="secondary" onClick={() => loadProfile(activeName)}>
+						{isDirty ? "Revert" : "Load"}
+					</VSCodeButton>
 				) : null}
 				<VSCodeButton appearance="secondary" onClick={() => setIsNaming((open) => !open)} style={unsavedStyle}>
 					Save as…
