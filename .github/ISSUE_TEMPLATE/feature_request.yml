@@ -1,0 +1,51 @@
+name: ✨ Feature Request
+description: Suggest something this build should do
+labels: ['enhancement']
+body:
+    - type: markdown
+      attributes:
+          value: |
+              This is a personal fork of Cline aimed at running local models well — mostly Ollama, mostly Qwen-family builds. Requests that make local models work better are the ones most likely to happen.
+
+              If you are asking for something that would equally suit official Cline, it is worth [asking upstream](https://github.com/cline/cline/discussions/categories/feature-requests) too — they reach far more people than this fork does.
+
+    - type: textarea
+      id: problem
+      attributes:
+          label: What is the problem?
+          description: What are you trying to do, and what makes it hard or impossible today? Describe the situation rather than the fix — the fix is easier to judge once the problem is clear.
+          placeholder: |
+              Long sessions with a 110k-token model stop after a couple of hours because…
+      validations:
+          required: true
+
+    - type: textarea
+      id: proposal
+      attributes:
+          label: What should happen instead?
+          description: Your idea of the fix, if you have one. Rough is fine.
+      validations:
+          required: true
+
+    - type: textarea
+      id: alternatives
+      attributes:
+          label: What have you tried?
+          description: Settings you changed, workarounds you are using, or other tools that get this right. Say if you have tried nothing — that is useful too.
+      validations:
+          required: false
+
+    - type: dropdown
+      id: area
+      attributes:
+          label: Which part of Cline?
+          multiple: true
+          options:
+              - Context / auto-compaction
+              - Tools (editor, read_files, browser, …)
+              - Ollama provider and model settings
+              - Prompt templates
+              - Settings UI / profiles
+              - Something else
+      validations:
+          required: false
