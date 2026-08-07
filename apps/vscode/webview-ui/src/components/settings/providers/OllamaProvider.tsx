@@ -14,6 +14,7 @@ import { useProviderModelSelection } from "@/hooks/useProviderModelSelection"
 import { ModelsServiceClient } from "@/services/grpc-client"
 import { ApiKeyField } from "../common/ApiKeyField"
 import { BaseUrlField } from "../common/BaseUrlField"
+import { DebouncedTextArea } from "../common/DebouncedTextArea"
 import { DebouncedTextField } from "../common/DebouncedTextField"
 import OllamaModelPicker from "../OllamaModelPicker"
 import { updateSetting } from "../utils/settingsHandlers"
@@ -37,8 +38,14 @@ interface OllamaProviderProps {
  * who wants thinking on but has no opinion about how much actually means.
  * The rest are the levels Ollama itself accepts, `xhigh` being the name the AI
  * SDK gives Ollama's `max`.
+ *
+ * `custom` is the one entry that is not an effort at all: it stands for "no
+ * effort, a `think_budget` instead". Keeping it in this list is what makes the
+ * dropdown the single control -- the budget field used to sit separately under
+ * the advanced parameters, where it looked like a second, competing way to say
+ * the same thing, and nothing on screen said which of the two won.
  */
-const OLLAMA_THINKING_LEVELS = ["unset", "minimal", "low", "medium", "high", "xhigh"] as const
+const OLLAMA_THINKING_LEVELS = ["unset", "minimal", "low", "medium", "high", "xhigh", "custom"] as const
 
 /**
  * Placeholder text only. The real defaults live in the SDK
@@ -57,6 +64,7 @@ const OLLAMA_THINKING_LEVEL_LABELS: Record<OllamaThinkingLevel, string> = {
 	medium: "Medium",
 	high: "High",
 	xhigh: "Max",
+	custom: "Custom (think_budget)",
 }
 
 /**
@@ -195,10 +203,18 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 	// Thinking is stored on the provider config rather than per mode: it
 	// describes what the local model is asked to do, not how a task is run.
 	const thinkingEnabled = config?.reasoning?.enabled === true
+	// The level is derived from the two things that actually go on the wire
+	// rather than stored a third time. An effort means that level; no effort but
+	// a `think_budget` means Custom; neither means unset. Because the two are
+	// mutually exclusive by construction, the dropdown cannot disagree with what
+	// is sent -- which is what "the dropdown is the master" has to mean.
+	const storedThinkBudget = typeof config?.sampling?.thinkBudget === "string" ? config.sampling.thinkBudget.trim() : ""
 	const thinkingLevel: OllamaThinkingLevel =
 		config?.reasoning?.effort && (OLLAMA_THINKING_LEVELS as readonly string[]).includes(config.reasoning.effort)
 			? (config.reasoning.effort as OllamaThinkingLevel)
-			: "unset"
+			: storedThinkBudget !== ""
+				? "custom"
+				: "unset"
 
 	const handleThinkingEnabledChange = useCallback(
 		(enabled: boolean) => {
@@ -209,15 +225,6 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 			)
 		},
 		[write, config?.reasoning?.effort],
-	)
-
-	const handleThinkingLevelChange = useCallback(
-		(level: OllamaThinkingLevel) => {
-			void write({ reasoning: { enabled: true, effort: level === "unset" ? undefined : level } }).catch((error) =>
-				console.error("Failed to update Ollama thinking level:", error),
-			)
-		},
-		[write],
 	)
 
 	// Sampling is edited as text and committed on blur: these are numbers a user
@@ -247,8 +254,8 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 		[samplingDraft, storedSampling],
 	)
 
-	const commitSampling = useCallback(
-		(draft: SamplingDraft) => {
+	const buildSamplingPatch = useCallback(
+		(draft: SamplingDraft): ProviderSamplingPatch => {
 			// The patch shape is the proto one, where `stop` is a plain repeated
 			// field and therefore always present; every other parameter is
 			// optional and stays absent when the user left it blank.
@@ -273,11 +280,39 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 					next[key] = raw
 				}
 			}
+			return next
+		},
+		[storedSampling],
+	)
+
+	const commitSampling = useCallback(
+		(draft: SamplingDraft) => {
 			// An empty object clears the section — the patch layer reads "no
 			// parameters set" as a request to stop sending any.
-			void write({ sampling: next }).catch((error) => console.error("Failed to update Ollama sampling:", error))
+			void write({ sampling: buildSamplingPatch(draft) }).catch((error) =>
+				console.error("Failed to update Ollama sampling:", error),
+			)
 		},
-		[write, storedSampling],
+		[write, buildSamplingPatch],
+	)
+
+	const handleThinkingLevelChange = useCallback(
+		(level: OllamaThinkingLevel) => {
+			// Choosing a level clears `think_budget`, in the same write that sets
+			// the effort. Leaving it stored would leave two live answers to one
+			// question, and the user's rule is that the dropdown decides: a budget
+			// left over from an earlier Custom must not quietly outrank the level
+			// now on screen. Custom is the only setting that keeps one.
+			const patch =
+				level === "custom"
+					? { reasoning: { enabled: true, effort: undefined } }
+					: {
+							reasoning: { enabled: true, effort: level === "unset" ? undefined : level },
+							sampling: buildSamplingPatch({ thinkBudget: "" }),
+						}
+			void write(patch).catch((error) => console.error("Failed to update Ollama thinking level:", error))
+		},
+		[write, buildSamplingPatch],
 	)
 
 	const handleSamplingChange = useCallback(
@@ -467,6 +502,24 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 								Higher levels let the model think for longer before answering, leaving less of the reply for the
 								answer itself.
 							</p>
+							{thinkingLevel === "custom" && (
+								<div className="mt-2">
+									<DebouncedTextField
+										className="w-full"
+										initialValue={samplingValue("thinkBudget")}
+										onChange={(value: string) => {
+											handleSamplingChange("thinkBudget", value)
+											handleSamplingCommit()
+										}}
+										placeholder={samplingPlaceholder("think_budget")}>
+										<span className="font-medium text-xs">think_budget</span>
+									</DebouncedTextField>
+									<p className="text-xs mt-1 mb-0 text-description">
+										A token count, or an effort level (minimal / low / medium / high / max). Sent only while
+										Custom is selected; picking any other level above clears it.
+									</p>
+								</div>
+							)}
 						</div>
 					)}
 				</div>
@@ -662,32 +715,20 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 								<p className="text-xs mt-0 mb-0 text-description">Sequences that end generation, one per line.</p>
 							</div>
 							<div>
-								<DebouncedTextField
-									className="w-full"
-									initialValue={samplingValue("thinkBudget")}
-									onChange={(value: string) => {
-										handleSamplingChange("thinkBudget", value)
-										handleSamplingCommit()
-									}}
-									placeholder={samplingPlaceholder("think_budget")}>
-									<span className="font-medium text-xs">think_budget</span>
-								</DebouncedTextField>
-								<p className="text-xs mt-0 mb-0 text-description">
-									Caps how many tokens the model may spend inside a thinking block. A token count, or an effort
-									level (minimal / low / medium / high / max). Overrides the model's own PARAMETER.
-								</p>
-							</div>
-							<div>
-								<DebouncedTextField
+								<DebouncedTextArea
 									className="w-full"
 									initialValue={samplingValue("thinkBudgetMessage")}
 									onChange={(value: string) => {
 										handleSamplingChange("thinkBudgetMessage", value)
 										handleSamplingCommit()
 									}}
-									placeholder={samplingPlaceholder("think_budget_message")}>
+									// The model's own message runs to several paragraphs, so
+									// the placeholder is the whole of it rather than the
+									// truncated one line the other fields use: this is the
+									// value the user is deciding whether to replace.
+									placeholder={modelParameters.think_budget_message ?? "the model's own message"}>
 									<span className="font-medium text-xs">think_budget_message</span>
-								</DebouncedTextField>
+								</DebouncedTextArea>
 								<p className="text-xs mt-0 mb-0 text-description">
 									Written into the thinking block just before the closing tag is forced, so the model reads that
 									it has to answer now rather than being cut off with no explanation.

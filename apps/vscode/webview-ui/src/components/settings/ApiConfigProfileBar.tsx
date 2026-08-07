@@ -38,6 +38,20 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 
 	const nameIsTaken = profiles.some((profile) => profile.name.toLowerCase() === draftName.trim().toLowerCase())
 
+	// A red outline on the buttons that resolve it.
+	//
+	// The wording below already said the panel had drifted from the profile, and
+	// it was missed: it is a line of small grey-on-grey text under a row of
+	// controls, and the controls themselves looked exactly as they do when
+	// everything is saved. The colour goes where the user is already looking.
+	const unsavedStyle = isDirty
+		? ({
+				background: "transparent",
+				border: "1px solid var(--vscode-inputValidation-errorBorder, var(--vscode-errorForeground))",
+				color: "var(--vscode-errorForeground)",
+			} as React.CSSProperties)
+		: undefined
+
 	const commitSave = async () => {
 		if (!draftName.trim()) {
 			return
@@ -73,11 +87,11 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 				</VSCodeDropdown>
 
 				{activeName && isDirty ? (
-					<VSCodeButton appearance="primary" onClick={() => saveProfile(activeName)}>
+					<VSCodeButton appearance="secondary" onClick={() => saveProfile(activeName)} style={unsavedStyle}>
 						Update
 					</VSCodeButton>
 				) : null}
-				<VSCodeButton appearance="secondary" onClick={() => setIsNaming((open) => !open)}>
+				<VSCodeButton appearance="secondary" onClick={() => setIsNaming((open) => !open)} style={unsavedStyle}>
 					Save as…
 				</VSCodeButton>
 				{activeName ? (
@@ -114,7 +128,7 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 
 			<p className="text-xs mt-[5px] mb-0 text-(--vscode-descriptionForeground)">
 				{activeName && isDirty ? (
-					<span className="text-(--vscode-charts-yellow)">
+					<span className="text-(--vscode-errorForeground)">
 						“{activeName}” has unsaved changes — Update to keep them, or reselect it to discard them.
 					</span>
 				) : activeName ? (

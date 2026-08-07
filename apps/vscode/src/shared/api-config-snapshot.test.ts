@@ -5,6 +5,7 @@ import {
 	apiConfigurationSnapshotsEqual,
 	applyApiConfigurationSnapshot,
 	captureApiConfigurationSnapshot,
+	captureProviderConfigSnapshot,
 	modeScopedKey,
 	parseModeScopedKey,
 } from "./api-config-snapshot"
@@ -145,5 +146,73 @@ describe("apiConfigurationSnapshotsEqual", () => {
 		expect(apiConfigurationSnapshotsEqual({ global: {}, mode: {} }, { global: { ollamaBaseUrl: undefined }, mode: {} })).toBe(
 			true,
 		)
+	})
+})
+
+describe("the provider config a profile carries", () => {
+	it("captures what providers.json holds for the panel", () => {
+		// The Ollama panel keeps two keys in ApiHandlerSettingsKeys and everything
+		// the user actually tunes here.
+		const captured = captureProviderConfigSnapshot({
+			baseUrl: "http://localhost:11434",
+			contextWindow: 110000,
+			reasoning: { enabled: true, effort: "medium" },
+			sampling: { temperature: 0.7, thinkBudget: "8000" },
+		})
+
+		expect(captured).toEqual({
+			baseUrl: "http://localhost:11434",
+			contextWindow: 110000,
+			reasoning: { enabled: true, effort: "medium" },
+			sampling: { temperature: 0.7, thinkBudget: "8000" },
+		})
+	})
+
+	it("never carries a credential", () => {
+		const captured = captureProviderConfigSnapshot({
+			baseUrl: "http://localhost:11434",
+			apiKey: "sk-secret",
+			apiKeyLength: 9,
+			accessToken: "token",
+			refreshToken: "refresh",
+		})
+
+		expect(captured).toEqual({ baseUrl: "http://localhost:11434" })
+	})
+
+	it("says nothing when the provider has no entry", () => {
+		expect(captureProviderConfigSnapshot(undefined)).toBeUndefined()
+		expect(captureProviderConfigSnapshot({})).toBeUndefined()
+	})
+
+	it("sees a retuned sampler as a difference", () => {
+		// The reported bug: the sampler was retuned and the bar said nothing,
+		// because none of the settings keys had moved.
+		const saved = {
+			global: {},
+			mode: {},
+			providerConfig: { sampling: { temperature: 0.7 } },
+		}
+		const edited = {
+			global: {},
+			mode: {},
+			providerConfig: { sampling: { temperature: 0.2 } },
+		}
+
+		expect(apiConfigurationSnapshotsEqual(saved, edited)).toBe(false)
+	})
+
+	it("leaves a profile saved before this existed alone", () => {
+		// It never captured the field, which is not the same as capturing it
+		// empty — reading it as empty would show every old profile as dirty and
+		// wipe providers.json on load.
+		const old = { global: { ollamaBaseUrl: "http://localhost:11434" }, mode: {} }
+		const current = {
+			global: { ollamaBaseUrl: "http://localhost:11434" },
+			mode: {},
+			providerConfig: { sampling: { temperature: 0.7 } },
+		}
+
+		expect(apiConfigurationSnapshotsEqual(old, current)).toBe(true)
 	})
 })

@@ -1223,7 +1223,14 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	// `maxInputTokens` goes too, and has to: left at the model's own figure it
 	// outranks `contextWindow` in `resolveEffectiveMaxInputTokens`, which is how
 	// the stale window survived into the trigger in the first place.
-	if (sessionContextWindow !== undefined) {
+	// Only a window that was actually reported gets written here. The resolved
+	// model's own figure can be a catalog guess or a pure fallback, and writing
+	// that would fabricate model metadata for a provider whose lookup failed —
+	// which is the one thing the known-model path is careful not to do. An
+	// existing entry is still amended, because there the metadata is real and
+	// only the window is in question.
+	const reportedContextWindow = configuredContextWindow ?? declaredContextWindow
+	if (sessionContextWindow !== undefined && (reportedContextWindow !== undefined || knownModels?.[modelId])) {
 		const existing = knownModels?.[modelId]
 		knownModels = {
 			...(knownModels ?? {}),

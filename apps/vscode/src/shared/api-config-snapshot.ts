@@ -37,6 +37,58 @@ export interface ApiConfigurationSnapshot {
 	global: Record<string, unknown>
 	/** Mode-scoped fields, held without their `planMode` / `actMode` prefix. */
 	mode: Record<string, unknown>
+	/**
+	 * The provider's own entry in providers.json.
+	 *
+	 * `ApiHandlerSettingsKeys` is not the whole panel, and for some providers it
+	 * is barely any of it. Ollama keeps exactly two keys there — the base URL and
+	 * a legacy context string — while the reasoning level, the context window and
+	 * every sampling parameter live in providers.json, written through
+	 * `useProviderConfig`. A profile built from the settings keys alone stored
+	 * none of that, and, because nothing it tracked had changed, also reported no
+	 * unsaved changes after the user had just retuned the whole sampler.
+	 *
+	 * Absent for providers with no such entry, and for profiles saved before this
+	 * existed — those load exactly as they did, leaving providers.json alone.
+	 */
+	providerConfig?: Record<string, unknown>
+}
+
+/**
+ * The providers.json fields a profile carries.
+ *
+ * Everything here is writable through `WriteProviderConfigPatch`, so a load can
+ * put back what a save took. Credentials are excluded for the same reason API
+ * keys are excluded from the settings snapshot: a profile is a named set of
+ * preferences, and it gets shared, exported and pasted into issues.
+ */
+export const PROVIDER_CONFIG_PROFILE_KEYS = [
+	"baseUrl",
+	"apiLine",
+	"contextWindow",
+	"reasoning",
+	"sampling",
+	"headers",
+	"region",
+	"aws",
+	"gcp",
+] as const
+
+/** Reads the profile-carried fields out of a provider config response. */
+export function captureProviderConfigSnapshot(config: unknown): Record<string, unknown> | undefined {
+	if (!config || typeof config !== "object") {
+		return undefined
+	}
+	const source = config as Record<string, unknown>
+	const captured: Record<string, unknown> = {}
+	for (const key of PROVIDER_CONFIG_PROFILE_KEYS) {
+		const value = source[key]
+		if (value === undefined || value === null) {
+			continue
+		}
+		captured[key] = value
+	}
+	return Object.keys(captured).length > 0 ? captured : undefined
 }
 
 /** Splits a configuration key into its mode and unprefixed name, if it has one. */
@@ -139,7 +191,14 @@ export function applyApiConfigurationSnapshot(
  * whose key order is not stable across a round trip through storage.
  */
 export function apiConfigurationSnapshotsEqual(a: ApiConfigurationSnapshot, b: ApiConfigurationSnapshot): boolean {
-	return sameValues(a.global, b.global) && sameValues(a.mode, b.mode)
+	return (
+		sameValues(a.global, b.global) &&
+		sameValues(a.mode, b.mode) &&
+		// A profile saved before provider configs were carried has none, and must
+		// not read as differing from a panel that has one — it never captured the
+		// field, which is not the same as capturing it empty.
+		(a.providerConfig === undefined || b.providerConfig === undefined ? true : sameValues(a.providerConfig, b.providerConfig))
+	)
 }
 
 function sameValues(a: Record<string, unknown>, b: Record<string, unknown>): boolean {

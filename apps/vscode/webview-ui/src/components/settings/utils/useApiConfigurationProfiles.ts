@@ -14,12 +14,14 @@ import {
 	apiConfigurationSnapshotsEqual,
 	applyApiConfigurationSnapshot,
 	captureApiConfigurationSnapshot,
+	captureProviderConfigSnapshot,
 } from "@shared/api-config-snapshot"
 import { UpdateSettingsRequest } from "@shared/proto/cline/state"
 import type { Mode } from "@shared/storage/types"
 import { useCallback, useMemo } from "react"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { getActiveProviderAndModelId } from "@/hooks/useNormalizedApiConfiguration"
+import { useProviderConfig } from "@/hooks/useProviderConfig"
 import { StateServiceClient } from "@/services/grpc-client"
 import { useApiConfigurationHandlers } from "./useApiConfigurationHandlers"
 
@@ -69,15 +71,32 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 	} = useExtensionState()
 	const { handleFieldsChange } = useApiConfigurationHandlers()
 
+	// The provider whose providers.json entry this bar saves and loads. Read from
+	// the configuration in view rather than the panel's tab, so the Vision bar
+	// carries the vision model's provider and not the one Act happens to be on.
+	const scopeMode: Mode = scope.kind === "vision" ? "act" : scope.mode
+	const activeProviderId = useMemo(() => {
+		const configuration =
+			scope.kind === "vision"
+				? (applyApiConfigurationSnapshot(parseApiConfigurationSnapshot(visionModeApiConfiguration) ?? EMPTY_SNAPSHOT, [
+						"act",
+					]) as ApiConfiguration)
+				: apiConfiguration
+		return getActiveProviderAndModelId(configuration, scopeMode).provider
+	}, [scope, apiConfiguration, visionModeApiConfiguration, scopeMode])
+	const { config: providerConfig, write: writeProviderConfig } = useProviderConfig(activeProviderId as never)
+
 	const profiles = useMemo(() => parseApiConfigurationProfiles(apiConfigurationProfiles), [apiConfigurationProfiles])
 
 	// What the tab in view currently holds, in the same shape a profile stores.
 	const currentSnapshot = useMemo(() => {
-		if (scope.kind === "vision") {
-			return parseApiConfigurationSnapshot(visionModeApiConfiguration) ?? EMPTY_SNAPSHOT
-		}
-		return captureApiConfigurationSnapshot(apiConfiguration, scope.mode)
-	}, [scope, apiConfiguration, visionModeApiConfiguration])
+		const base =
+			scope.kind === "vision"
+				? (parseApiConfigurationSnapshot(visionModeApiConfiguration) ?? EMPTY_SNAPSHOT)
+				: captureApiConfigurationSnapshot(apiConfiguration, scope.mode)
+		const captured = captureProviderConfigSnapshot(providerConfig)
+		return captured === undefined ? base : { ...base, providerConfig: captured }
+	}, [scope, apiConfiguration, visionModeApiConfiguration, providerConfig])
 
 	// The active profile is per scope: loading one into Vision says nothing
 	// about what Plan and Act are holding, so a single stored name would show
@@ -120,6 +139,12 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 	/** Writes a snapshot into whichever configuration this bar is looking at. */
 	const applySnapshot = useCallback(
 		async (snapshot: ApiConfigurationSnapshot) => {
+			// providers.json first: it holds the context window and the sampler,
+			// and a load that set the model before them would run one turn on the
+			// old sampler if anything started in between.
+			if (snapshot.providerConfig) {
+				await writeProviderConfig(snapshot.providerConfig as never)
+			}
 			if (scope.kind === "vision") {
 				await StateServiceClient.updateSettings(
 					UpdateSettingsRequest.create({ visionModeApiConfiguration: JSON.stringify(snapshot) }),
@@ -129,7 +154,7 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 			const targetModes: Mode[] = planActSeparateModelsSetting ? [scope.mode] : ["plan", "act"]
 			await handleFieldsChange(applyApiConfigurationSnapshot(snapshot, targetModes))
 		},
-		[scope, planActSeparateModelsSetting, handleFieldsChange],
+		[scope, planActSeparateModelsSetting, handleFieldsChange, writeProviderConfig],
 	)
 
 	const loadProfile = useCallback(
