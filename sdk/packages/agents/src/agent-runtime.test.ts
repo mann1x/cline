@@ -461,7 +461,12 @@ describe("AgentRuntime", () => {
 	});
 
 	it("injects a pending user message after tool results and before the next model request", async () => {
-		const consumePendingUserMessage = vi.fn(() => "steer now");
+		// One pending message, as a queue-backed host delivers it: a mock that
+		// answered every poll would re-interject on the resume turn.
+		const consumePendingUserMessage = vi
+			.fn<() => string | undefined>()
+			.mockReturnValueOnce("steer now")
+			.mockReturnValue(undefined);
 		const model = new ScriptedModel([
 			() => [
 				{
@@ -496,6 +501,11 @@ describe("AgentRuntime", () => {
 					{ type: "finish", reason: "stop" },
 				];
 			},
+			// The resume turn: the model takes up the interrupted work again.
+			() => [
+				{ type: "text-delta", text: "resumed and finished" },
+				{ type: "finish", reason: "stop" },
+			],
 		]);
 		const addedMessages: AgentMessage[] = [];
 		const runtime = new AgentRuntime({
@@ -511,13 +521,18 @@ describe("AgentRuntime", () => {
 
 		const result = await runtime.run("Start");
 
-		expect(consumePendingUserMessage).toHaveBeenCalledTimes(1);
-		expect(model.requests).toHaveLength(2);
+		// Polled once per turn; only the first poll had anything to deliver.
+		expect(consumePendingUserMessage).toHaveBeenCalledTimes(2);
+		// Two turns, then the resume turn: answering an interjection no longer
+		// ends the run, since the work it interrupted is still outstanding.
+		expect(model.requests).toHaveLength(3);
 		expect(result.status).toBe("completed");
 		expect(result.messages.map((message) => message.role)).toEqual([
 			"user",
 			"assistant",
 			"tool",
+			"user",
+			"assistant",
 			"user",
 			"assistant",
 		]);
@@ -540,7 +555,10 @@ describe("AgentRuntime", () => {
 	});
 
 	it("injects pending user messages before prepareTurn projects the provider request", async () => {
-		const consumePendingUserMessage = vi.fn(() => "steer before prepare");
+		const consumePendingUserMessage = vi
+			.fn<() => string | undefined>()
+			.mockReturnValueOnce("steer before prepare")
+			.mockReturnValue(undefined);
 		const prepareTurn = vi.fn(
 			(context: { messages: readonly AgentMessage[] }) => ({
 				messages: context.messages.slice(),
@@ -566,6 +584,12 @@ describe("AgentRuntime", () => {
 					{ type: "finish", reason: "stop" },
 				];
 			},
+			// Answering the message does not end the run: the interrupted
+			// work is taken up again on one more turn.
+			() => [
+				{ type: "text-delta", text: "resumed and finished" },
+				{ type: "finish", reason: "stop" },
+			],
 		]);
 		const runtime = new AgentRuntime({
 			model,
@@ -577,12 +601,13 @@ describe("AgentRuntime", () => {
 		const result = await runtime.run("Start");
 
 		expect(result.status).toBe("completed");
-		expect(prepareTurn).toHaveBeenCalledTimes(2);
-		expect(consumePendingUserMessage).toHaveBeenCalledTimes(1);
+		expect(prepareTurn).toHaveBeenCalledTimes(3);
 		expect(result.messages.map((message) => message.role)).toEqual([
 			"user",
 			"assistant",
 			"tool",
+			"user",
+			"assistant",
 			"user",
 			"assistant",
 		]);
@@ -594,7 +619,10 @@ describe("AgentRuntime", () => {
 	});
 
 	it("lets prepareTurn project tool results after pending user input is added", async () => {
-		const consumePendingUserMessage = vi.fn(() => "latest steering");
+		const consumePendingUserMessage = vi
+			.fn<() => string | undefined>()
+			.mockReturnValueOnce("latest steering")
+			.mockReturnValue(undefined);
 		const hugeToolOutput = "x".repeat(100_000);
 		const prepareTurn = vi.fn(
 			(context: { messages: readonly AgentMessage[] }) => {
@@ -635,6 +663,12 @@ describe("AgentRuntime", () => {
 					{ type: "finish", reason: "stop" },
 				];
 			},
+			// Answering the message does not end the run: the interrupted
+			// work is taken up again on one more turn.
+			() => [
+				{ type: "text-delta", text: "resumed and finished" },
+				{ type: "finish", reason: "stop" },
+			],
 		]);
 		const runtime = new AgentRuntime({
 			model,
@@ -653,8 +687,8 @@ describe("AgentRuntime", () => {
 		const result = await runtime.run("Start");
 
 		expect(result.status).toBe("completed");
-		expect(result.outputText).toBe("compacted");
-		expect(prepareTurn).toHaveBeenCalledTimes(2);
+		expect(result.outputText).toBe("resumed and finished");
+		expect(prepareTurn).toHaveBeenCalledTimes(3);
 		const secondPrepareMessages = prepareTurn.mock.calls[1]?.[0].messages;
 		expect(JSON.stringify(secondPrepareMessages)).toContain(hugeToolOutput);
 		expect(secondPrepareMessages.at(-1)).toMatchObject({
@@ -2909,6 +2943,114 @@ describe("a turn that produced nothing", () => {
 		const result = await runtime.run("fix the game");
 
 		expect(result.status).toBe("failed");
+		expect(model.requests).toHaveLength(1);
+	});
+});
+
+/**
+ * Measured: asked "how many lines is manic_miner.html?" in the middle of a fix.
+ * The model answered, the run stopped, and the file was left half-edited until
+ * "continue fixing manic_miner.html" was typed by hand. Answering a question is
+ * a turn with nothing to call, and that is how a run ends.
+ */
+describe("a message sent while the run is going", () => {
+	function scriptedAnswerThenWork() {
+		return new ScriptedModel([
+			() => [
+				{ type: "tool-call-delta", toolCallId: "call_1", toolName: "echo", inputText: '{"text":"hi"}' },
+				{ type: "finish", reason: "tool-calls" },
+			],
+			// Answers the interjection, calls nothing.
+			() => [{ type: "text-delta", text: "It is 137 lines." }, { type: "finish", reason: "stop" }],
+			() => [
+				{ type: "tool-call-delta", toolCallId: "call_2", toolName: "echo", inputText: '{"text":"hi"}' },
+				{ type: "finish", reason: "tool-calls" },
+			],
+			() => [{ type: "text-delta", text: "done" }, { type: "finish", reason: "stop" }],
+		]);
+	}
+
+	it("does not end the run when the model has only answered", async () => {
+		let delivered = false;
+		const model = scriptedAnswerThenWork();
+		const runtime = new AgentRuntime({
+			model,
+			tools: [createEchoTool()],
+			consumePendingUserMessage: () => {
+				if (delivered) return undefined;
+				delivered = true;
+				return "how many lines is manic_miner.html?";
+			},
+		});
+
+		const result = await runtime.run("fix the game");
+
+		expect(result.status).toBe("completed");
+		// Answer, resume, and the work that follows it.
+		expect(model.requests.length).toBeGreaterThan(2);
+	});
+
+	it("tells the model its answer was passed on, so it resumes instead of repeating it", async () => {
+		let delivered = false;
+		const model = scriptedAnswerThenWork();
+		const runtime = new AgentRuntime({
+			model,
+			tools: [createEchoTool()],
+			consumePendingUserMessage: () => {
+				if (delivered) return undefined;
+				delivered = true;
+				return "how many lines is manic_miner.html?";
+			},
+		});
+
+		await runtime.run("fix the game");
+
+		const resumeTurn = model.requests[2];
+		const texts = resumeTurn.messages
+			.flatMap((m) => m.content)
+			.filter((p) => p.type === "text")
+			.map((p) => (p as { text: string }).text);
+		expect(texts.some((t) => t.includes("Your answer has been passed on"))).toBe(true);
+		expect(texts.some((t) => t.includes("still unfinished"))).toBe(true);
+	});
+
+	// One extra turn, not a loop: a model that means to stop has to be able to.
+	it("nudges once per interjection", async () => {
+		let delivered = false;
+		const model = new ScriptedModel([
+			() => [
+				{ type: "tool-call-delta", toolCallId: "call_1", toolName: "echo", inputText: '{"text":"hi"}' },
+				{ type: "finish", reason: "tool-calls" },
+			],
+			() => [{ type: "text-delta", text: "answered" }, { type: "finish", reason: "stop" }],
+			() => [{ type: "text-delta", text: "and now I am done" }, { type: "finish", reason: "stop" }],
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			tools: [createEchoTool()],
+			consumePendingUserMessage: () => {
+				if (delivered) return undefined;
+				delivered = true;
+				return "how many lines?";
+			},
+		});
+
+		const result = await runtime.run("fix the game");
+
+		expect(result.status).toBe("completed");
+		expect(result.outputText).toBe("and now I am done");
+		expect(model.requests).toHaveLength(3);
+	});
+
+	it("leaves an ordinary run alone", async () => {
+		const model = new ScriptedModel([
+			() => [{ type: "text-delta", text: "done" }, { type: "finish", reason: "stop" }],
+		]);
+		const runtime = new AgentRuntime({ model });
+
+		const result = await runtime.run("say hi");
+
+		expect(result.status).toBe("completed");
 		expect(model.requests).toHaveLength(1);
 	});
 });

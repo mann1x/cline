@@ -111,6 +111,17 @@ const MAX_TOKENS_INCOMPLETE_TURN_REMINDER =
  * sits. It reasoned, the reply never arrived, and reproducing the thought that
  * did not fit is the one thing that cannot work.
  */
+/**
+ * Sent after the model answers a message that arrived mid-run.
+ *
+ * Deliberately says the answer was received: without that the model re-answers
+ * instead of resuming, having no way to tell the reminder apart from the user
+ * asking again.
+ */
+const STEER_RESUME_REMINDER =
+	"[SYSTEM] Your answer has been passed on. That message came in while you were working, so it did not replace the task you were given — " +
+	"the work you were doing when it arrived is still unfinished. Take that work up again from where you left off, unless the message told you to change course or to stop.";
+
 const EMPTY_TURN_REMINDER =
 	"[SYSTEM] Your last reply ran out of room before any of it was delivered, so it was discarded — none of it, including your reasoning, is in this conversation. " +
 	"Do not try to reproduce it. Take the smallest useful next step instead: make one tool call, or write one short paragraph. " +
@@ -555,6 +566,13 @@ export class AgentRuntime {
 	private imageRecoveryAttempted = false;
 	/** Consecutive turns nudged for producing no tool calls; reset by any turn that does. */
 	private consecutiveNoToolCallNudges = 0;
+	/**
+	 * A message arrived mid-run and the model has not been asked to resume yet.
+	 *
+	 * Cleared as soon as the resume nudge is sent, so an interjection costs one
+	 * extra turn at most and a model that means to stop still can.
+	 */
+	private steerAwaitingResume = false;
 	/** Consecutive turns cut off at the output cap; reset by any turn that completes. */
 	private consecutiveMaxTokensRetries = 0;
 	private initialization?: Promise<void>;
@@ -786,6 +804,7 @@ export class AgentRuntime {
 		this.state.usage = cloneUsage(DEFAULT_USAGE);
 		this.overflowRecoveryAttempted = false;
 		this.imageRecoveryAttempted = false;
+		this.steerAwaitingResume = false;
 
 		try {
 			await this.callBeforeRunHooks();
@@ -944,6 +963,17 @@ export class AgentRuntime {
 						for (const reminderMessage of completionReminderMessages) {
 							await this.addUserReminderMessage(reminderMessage);
 						}
+						continue;
+					}
+					// A message sent while the run was going answers to the user, and
+					// answering it is a turn with nothing to call — which is how a run
+					// ends. Measured: asked "how many lines is manic_miner.html?" in
+					// the middle of a fix, the model answered, the run stopped, and
+					// the file was left half-edited until "continue fixing" was typed
+					// by hand. Nobody interjecting a question means "and stop".
+					if (this.steerAwaitingResume) {
+						this.steerAwaitingResume = false;
+						await this.addUserReminderMessage(STEER_RESUME_REMINDER);
 						continue;
 					}
 					const noToolCallNudge = this.getNoToolCallNudgeMessage();
@@ -1817,6 +1847,9 @@ export class AgentRuntime {
 		const message = createMessage("user", [{ type: "text", text: pending }], {
 			userRunSpan: 0,
 		});
+		// A message sent mid-run is an interjection, not a new instruction: the
+		// work it interrupted is still outstanding. See the resume nudge below.
+		this.steerAwaitingResume = true;
 		this.state.messages.push(message);
 		await this.emit({
 			type: "message-added",
