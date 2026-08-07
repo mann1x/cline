@@ -52,6 +52,22 @@ export interface SdkFollowupCoordinatorOptions {
 	onFollowUpAbandoned: () => void
 }
 
+/**
+ * How a message typed while the agent is working reaches it.
+ *
+ * `"queue"` holds the message until the whole run ends; `"steer"` hands it to the
+ * agent at the next turn boundary, where the runtime appends it to the request
+ * before the model is called again.
+ *
+ * Steer is the right default for something typed *during* a run. Measured: a
+ * 58-minute, 72-request run in which the user could see the model reasoning down
+ * a wrong path and had no way to say so — a queued message would have arrived
+ * after the run it was meant to change. Nothing is lost by steering: the runtime
+ * consumes at most one steer per turn and the rest of the queue is untouched, so
+ * a message sent seconds before the run ends still lands, just at the end.
+ */
+const MID_RUN_DELIVERY = "steer" as const
+
 export class SdkFollowupCoordinator {
 	constructor(private readonly options: SdkFollowupCoordinatorOptions) {}
 
@@ -125,7 +141,7 @@ export class SdkFollowupCoordinator {
 	): Promise<void> {
 		const { sdkHost, sessionId } = activeSession
 		if (shouldQueue) {
-			Logger.log(`[SdkController] Session is running - queuing follow-up message for session: ${sessionId}`)
+			Logger.log(`[SdkController] Session is running - steering follow-up into session: ${sessionId}`)
 		}
 
 		this.options.sessions.setRunning(true)
@@ -141,7 +157,7 @@ export class SdkFollowupCoordinator {
 			resolvedPrompt,
 			images,
 			files,
-			shouldQueue ? "queue" : undefined,
+			shouldQueue ? MID_RUN_DELIVERY : undefined,
 		)
 	}
 
