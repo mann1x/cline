@@ -1,14 +1,13 @@
-import type { Mode } from "@shared/storage/types"
 import { VSCodeButton, VSCodeDropdown, VSCodeOption, VSCodeTextField } from "@vscode/webview-ui-toolkit/react"
 import { useEffect, useState } from "react"
-import { useApiConfigurationProfiles } from "./utils/useApiConfigurationProfiles"
+import { type ApiConfigurationProfileScope, useApiConfigurationProfiles } from "./utils/useApiConfigurationProfiles"
 
 const NO_PROFILE = "__none__"
 
 interface ApiConfigProfileBarProps {
-	/** The tab this bar sits above; decides what a save captures. */
-	mode: Mode
-	/** Shown under the controls, e.g. to say a tab has its own model. */
+	/** The configuration in view; decides what a save captures and a load writes. */
+	scope: ApiConfigurationProfileScope
+	/** Shown under the controls, e.g. to say what this tab's profile covers. */
 	description?: string
 }
 
@@ -16,13 +15,15 @@ interface ApiConfigProfileBarProps {
  * Load, save and update named API-configuration profiles.
  *
  * Sits above the Plan/Act/Vision tabs so it is reachable from all of them, and
- * always describes the tab currently in view: with separate Plan and Act models
- * enabled the two tabs hold different configurations, so a bar that ignored the
- * tab would save one and appear to describe the other.
+ * always acts on the tab currently in view. One list serves all three: what a
+ * profile holds is a provider, a model and the settings around them, and none
+ * of that is specific to the tab it was saved from. Which profile is loaded is
+ * tracked per tab, because loading one into Vision says nothing about what Plan
+ * and Act are holding.
  */
-const ApiConfigProfileBar = ({ mode, description }: ApiConfigProfileBarProps) => {
+const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) => {
 	const { profiles, activeName, isDirty, suggestedName, loadProfile, saveProfile, deleteProfile } =
-		useApiConfigurationProfiles(mode)
+		useApiConfigurationProfiles(scope)
 	const [isNaming, setIsNaming] = useState(false)
 	const [draftName, setDraftName] = useState("")
 

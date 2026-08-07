@@ -54,7 +54,7 @@ import { nonNegativeFiniteNumber, positiveFiniteNumber, toSdkApiFormat } from ".
 import { parseProviderId } from "./model-catalog/provider-id"
 import { toSdkProviderId } from "./model-catalog/sdk-provider-id"
 import { createProviderConfigStore, resolveRuntimeModelSelection } from "./model-catalog/store"
-import { resolveOllamaThinkBudget } from "./ollama-model-family"
+import { resolveOllamaImageSupport, resolveOllamaThinkBudget } from "./ollama-model-family"
 import { resolveSessionPromptTemplate } from "./prompt-templates"
 import { getProviderSettingsManager } from "./provider-migration"
 import { buildSapProviderConfig, type SapProviderConfig } from "./sap-config"
@@ -1173,6 +1173,30 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		}
 	} catch (error) {
 		Logger.warn(`[SessionFactory] Failed to resolve known models for provider=${sdkProviderId}:`, error)
+	}
+
+	// Ask Ollama whether this model reads images, rather than guessing.
+	//
+	// The catalog is silent for every model it has never heard of — all the
+	// local ones, and anything published since the last catalog build — and the
+	// default there is optimistic. That is how a browser screenshot reached a
+	// model that could not read one. Ollama reports the answer, so for this
+	// provider the tools that attach images can be told before they attach one,
+	// instead of the model refusing the turn after the fact.
+	const ollamaImageSupport =
+		sdkProviderId === "ollama" && modelId ? await resolveOllamaImageSupport(baseUrl, modelId) : undefined
+	if (ollamaImageSupport !== undefined) {
+		const existing = knownModels?.[modelId]
+		const capabilities = new Set<string>(existing?.capabilities ?? [])
+		if (ollamaImageSupport) {
+			capabilities.add("images")
+		} else {
+			capabilities.delete("images")
+		}
+		knownModels = {
+			...(knownModels ?? {}),
+			[modelId]: { ...(existing ?? {}), capabilities: [...capabilities] },
+		} as typeof knownModels
 	}
 
 	// Always pass a providerConfig so the proxy/CA-aware fetch reaches the SDK

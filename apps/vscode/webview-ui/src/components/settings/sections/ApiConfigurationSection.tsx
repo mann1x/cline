@@ -10,6 +10,7 @@ import ApiOptions from "../ApiOptions"
 import Section from "../Section"
 import { syncModeConfigurations } from "../utils/providerUtils"
 import { useApiConfigurationHandlers } from "../utils/useApiConfigurationHandlers"
+import type { ApiConfigurationProfileScope } from "../utils/useApiConfigurationProfiles"
 import VisionModelTab from "../VisionModelTab"
 
 interface ApiConfigurationSectionProps {
@@ -29,10 +30,9 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 	// a configuration the user can no longer see the toggle for.
 	const activeTab: ConfigTab = currentTab === "vision" && !visionModelEnabled ? mode : currentTab
 	const showTabs = planActSeparateModelsSetting || visionModelEnabled
-	// The bar always describes the tab in view. The Vision tab keeps its own
-	// configuration, so profiles there would have to be a second, separate list
-	// — the bar names the mode whose settings it can actually save.
-	const profileMode: Mode = activeTab === "vision" ? mode : activeTab
+	// One profile list for every tab; only the target changes with the tab.
+	const profileScope: ApiConfigurationProfileScope =
+		activeTab === "vision" ? { kind: "vision" } : { kind: "mode", mode: activeTab }
 
 	return (
 		<div>
@@ -40,11 +40,11 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 			<Section>
 				{activeTab === "vision" ? (
 					<ApiConfigProfileBar
-						description="This tab configures the vision model; the profile above applies to the Plan and Act tabs."
-						mode={profileMode}
+						description="Saving here stores the vision model's settings. Profiles are shared with the other tabs, so one saved from Act can be loaded here."
+						scope={profileScope}
 					/>
 				) : (
-					<ApiConfigProfileBar mode={profileMode} />
+					<ApiConfigProfileBar scope={profileScope} />
 				)}
 
 				{showTabs ? (

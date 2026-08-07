@@ -1,13 +1,16 @@
+import type { ApiConfiguration } from "@shared/api"
 import {
 	type ApiConfigurationProfile,
 	findApiConfigurationProfile,
 	parseApiConfigurationProfiles,
+	parseApiConfigurationSnapshot,
 	proposeProfileName,
 	removeApiConfigurationProfile,
 	serializeApiConfigurationProfiles,
 	upsertApiConfigurationProfile,
 } from "@shared/api-config-profiles"
 import {
+	type ApiConfigurationSnapshot,
 	apiConfigurationSnapshotsEqual,
 	applyApiConfigurationSnapshot,
 	captureApiConfigurationSnapshot,
@@ -20,6 +23,18 @@ import { getActiveProviderAndModelId } from "@/hooks/useNormalizedApiConfigurati
 import { StateServiceClient } from "@/services/grpc-client"
 import { useApiConfigurationHandlers } from "./useApiConfigurationHandlers"
 
+const EMPTY_SNAPSHOT: ApiConfigurationSnapshot = { global: {}, mode: {} }
+
+/**
+ * Which configuration the bar is looking at.
+ *
+ * There is one list of profiles for the whole panel; this is only about where a
+ * load lands and where a save reads from. The Vision tab holds its own
+ * configuration, so a bar there that wrote to Plan or Act would save the wrong
+ * settings under a name the user chose for the vision model.
+ */
+export type ApiConfigurationProfileScope = { kind: "mode"; mode: Mode } | { kind: "vision" }
+
 export interface ApiConfigurationProfilesState {
 	profiles: ApiConfigurationProfile[]
 	/** Name of the loaded profile, or "" when the panel matches no profile. */
@@ -31,28 +46,47 @@ export interface ApiConfigurationProfilesState {
 	loadProfile: (name: string) => Promise<void>
 	saveProfile: (name: string) => Promise<void>
 	deleteProfile: (name: string) => Promise<void>
-	clearActiveProfile: () => Promise<void>
 }
 
 /**
  * The profile list behind the API configuration panel.
  *
- * `mode` is the tab the bar is sitting above, and it decides both halves of the
- * job: what a save captures, and where a load is written. With separate models
- * for Plan and Act turned off the two modes are kept identical, so a load has
- * to write both — otherwise selecting a profile in the panel would leave the
- * other mode pointed at the previous model.
+ * One list, shared by every tab: a profile saved from the Act tab can be loaded
+ * into Plan, or into Vision, because what it holds is a provider and a model
+ * and the settings around them — nothing about which tab it came from.
+ *
+ * With separate models for Plan and Act turned off the two modes are kept
+ * identical, so a load has to write both; otherwise picking a profile would
+ * leave the other mode pointed at the previous model.
  */
-export function useApiConfigurationProfiles(mode: Mode): ApiConfigurationProfilesState {
-	const { apiConfiguration, apiConfigurationProfiles, activeApiConfigurationProfile, planActSeparateModelsSetting } =
-		useExtensionState()
+export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope): ApiConfigurationProfilesState {
+	const {
+		apiConfiguration,
+		apiConfigurationProfiles,
+		activeApiConfigurationProfile,
+		visionModeApiConfiguration,
+		planActSeparateModelsSetting,
+	} = useExtensionState()
 	const { handleFieldsChange } = useApiConfigurationHandlers()
 
 	const profiles = useMemo(() => parseApiConfigurationProfiles(apiConfigurationProfiles), [apiConfigurationProfiles])
-	const currentSnapshot = useMemo(() => captureApiConfigurationSnapshot(apiConfiguration, mode), [apiConfiguration, mode])
+
+	// What the tab in view currently holds, in the same shape a profile stores.
+	const currentSnapshot = useMemo(() => {
+		if (scope.kind === "vision") {
+			return parseApiConfigurationSnapshot(visionModeApiConfiguration) ?? EMPTY_SNAPSHOT
+		}
+		return captureApiConfigurationSnapshot(apiConfiguration, scope.mode)
+	}, [scope, apiConfiguration, visionModeApiConfiguration])
+
+	// The active profile is per scope: loading one into Vision says nothing
+	// about what Plan and Act are holding, so a single stored name would show
+	// the wrong one on two tabs out of three.
+	const activeNames = useMemo(() => parseActiveNames(activeApiConfigurationProfile), [activeApiConfigurationProfile])
+	const scopeKey = scope.kind === "vision" ? "vision" : scope.mode
 	const activeProfile = useMemo(
-		() => findApiConfigurationProfile(profiles, activeApiConfigurationProfile),
-		[profiles, activeApiConfigurationProfile],
+		() => findApiConfigurationProfile(profiles, activeNames[scopeKey] ?? ""),
+		[profiles, activeNames, scopeKey],
 	)
 
 	const isDirty = useMemo(
@@ -61,27 +95,42 @@ export function useApiConfigurationProfiles(mode: Mode): ApiConfigurationProfile
 	)
 
 	const suggestedName = useMemo(() => {
-		const { provider, modelId } = getActiveProviderAndModelId(apiConfiguration, mode)
-		// An unchanged profile suggests its own name, so "Update" and "Save"
+		// An unchanged profile suggests its own name, so "Update" and "Save as"
 		// agree about what the user is looking at.
 		if (activeProfile && !isDirty) {
 			return activeProfile.name
 		}
+		const configuration =
+			scope.kind === "vision"
+				? (applyApiConfigurationSnapshot(currentSnapshot, ["act"]) as ApiConfiguration)
+				: apiConfiguration
+		const { provider, modelId } = getActiveProviderAndModelId(configuration, scope.kind === "vision" ? "act" : scope.mode)
 		return proposeProfileName(provider, modelId, profiles)
-	}, [apiConfiguration, mode, profiles, activeProfile, isDirty])
+	}, [scope, apiConfiguration, currentSnapshot, profiles, activeProfile, isDirty])
 
-	const writeProfiles = useCallback(async (next: ApiConfigurationProfile[], activeName: string) => {
+	const writeActiveNames = useCallback(async (next: Record<string, string>, profileList?: ApiConfigurationProfile[]) => {
 		await StateServiceClient.updateSettings(
 			UpdateSettingsRequest.create({
-				apiConfigurationProfiles: serializeApiConfigurationProfiles(next),
-				activeApiConfigurationProfile: activeName,
+				activeApiConfigurationProfile: JSON.stringify(next),
+				...(profileList ? { apiConfigurationProfiles: serializeApiConfigurationProfiles(profileList) } : {}),
 			}),
 		)
 	}, [])
 
-	const setActiveName = useCallback(async (activeName: string) => {
-		await StateServiceClient.updateSettings(UpdateSettingsRequest.create({ activeApiConfigurationProfile: activeName }))
-	}, [])
+	/** Writes a snapshot into whichever configuration this bar is looking at. */
+	const applySnapshot = useCallback(
+		async (snapshot: ApiConfigurationSnapshot) => {
+			if (scope.kind === "vision") {
+				await StateServiceClient.updateSettings(
+					UpdateSettingsRequest.create({ visionModeApiConfiguration: JSON.stringify(snapshot) }),
+				)
+				return
+			}
+			const targetModes: Mode[] = planActSeparateModelsSetting ? [scope.mode] : ["plan", "act"]
+			await handleFieldsChange(applyApiConfigurationSnapshot(snapshot, targetModes))
+		},
+		[scope, planActSeparateModelsSetting, handleFieldsChange],
+	)
 
 	const loadProfile = useCallback(
 		async (name: string) => {
@@ -89,11 +138,10 @@ export function useApiConfigurationProfiles(mode: Mode): ApiConfigurationProfile
 			if (!profile) {
 				return
 			}
-			const targetModes: Mode[] = planActSeparateModelsSetting ? [mode] : ["plan", "act"]
-			await handleFieldsChange(applyApiConfigurationSnapshot(profile.snapshot, targetModes))
-			await setActiveName(profile.name)
+			await applySnapshot(profile.snapshot)
+			await writeActiveNames({ ...activeNames, [scopeKey]: profile.name })
 		},
-		[profiles, planActSeparateModelsSetting, mode, handleFieldsChange, setActiveName],
+		[profiles, applySnapshot, activeNames, scopeKey, writeActiveNames],
 	)
 
 	const saveProfile = useCallback(
@@ -102,30 +150,27 @@ export function useApiConfigurationProfiles(mode: Mode): ApiConfigurationProfile
 			if (!trimmed) {
 				return
 			}
-			const profile: ApiConfigurationProfile = {
-				name: trimmed,
-				updatedAt: Date.now(),
-				snapshot: currentSnapshot,
-			}
-			await writeProfiles(upsertApiConfigurationProfile(profiles, profile), trimmed)
+			const profile: ApiConfigurationProfile = { name: trimmed, updatedAt: Date.now(), snapshot: currentSnapshot }
+			await writeActiveNames({ ...activeNames, [scopeKey]: trimmed }, upsertApiConfigurationProfile(profiles, profile))
 		},
-		[currentSnapshot, profiles, writeProfiles],
+		[currentSnapshot, profiles, activeNames, scopeKey, writeActiveNames],
 	)
 
 	const deleteProfile = useCallback(
 		async (name: string) => {
 			const remaining = removeApiConfigurationProfile(profiles, name)
-			// Deleting the loaded profile leaves the panel as it is; only the
-			// association with a saved name goes away.
-			const stillActive = findApiConfigurationProfile(remaining, activeApiConfigurationProfile)
-			await writeProfiles(remaining, stillActive?.name ?? "")
+			// Deleting a profile leaves every panel exactly as it is; only the
+			// association with a saved name goes away, on whichever tabs had it.
+			const nextNames: Record<string, string> = {}
+			for (const [key, value] of Object.entries(activeNames)) {
+				if (findApiConfigurationProfile(remaining, value)) {
+					nextNames[key] = value
+				}
+			}
+			await writeActiveNames(nextNames, remaining)
 		},
-		[profiles, activeApiConfigurationProfile, writeProfiles],
+		[profiles, activeNames, writeActiveNames],
 	)
-
-	const clearActiveProfile = useCallback(async () => {
-		await setActiveName("")
-	}, [setActiveName])
 
 	return {
 		profiles,
@@ -135,6 +180,33 @@ export function useApiConfigurationProfiles(mode: Mode): ApiConfigurationProfile
 		loadProfile,
 		saveProfile,
 		deleteProfile,
-		clearActiveProfile,
 	}
+}
+
+/**
+ * Reads the per-scope active names.
+ *
+ * Stored as JSON keyed by scope. Earlier builds stored a bare profile name, and
+ * that is still readable: it is taken as the name for every scope, which is
+ * what it meant when there was only one.
+ */
+function parseActiveNames(raw: string | undefined): Record<string, string> {
+	if (!raw) {
+		return {}
+	}
+	try {
+		const parsed = JSON.parse(raw)
+		if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+			const names: Record<string, string> = {}
+			for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+				if (typeof value === "string") {
+					names[key] = value
+				}
+			}
+			return names
+		}
+	} catch {
+		// Not JSON: a bare name from an earlier build.
+	}
+	return { plan: raw, act: raw, vision: raw }
 }

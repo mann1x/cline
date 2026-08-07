@@ -533,6 +533,16 @@ export interface AgentRuntimeConfig {
 	 * that the primary model never sees the image.
 	 */
 	alwaysDescribeImages?: boolean;
+	/**
+	 * Whether the model's image support is known rather than assumed.
+	 *
+	 * When the catalog (or the provider, for Ollama) states it either way, a
+	 * refusal is not something to recover from by guessing again: the tools were
+	 * already told, so an image in the transcript is not the cause and dropping
+	 * one would only hide the real error. Left unset when nobody could say, which
+	 * is the only case the retry exists for.
+	 */
+	imageSupportDeclared?: boolean;
 	consumePendingUserMessage?: () =>
 		| string
 		| undefined

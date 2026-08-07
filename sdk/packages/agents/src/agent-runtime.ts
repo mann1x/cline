@@ -1109,6 +1109,11 @@ export class AgentRuntime {
 		return (
 			turn.finishReason === "error" &&
 			this.state.lastErrorClass === "image_input_unsupported" &&
+			// Only when nobody could say whether this model reads images. Where
+			// the catalog or the provider stated it, the tools were told before
+			// they attached anything, so an image is not what went wrong — and a
+			// retry would spend a turn hiding the real error.
+			this.config.imageSupportDeclared !== true &&
 			!this.imageRecoveryAttempted &&
 			this.hasImageContent()
 		);

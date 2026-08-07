@@ -2772,3 +2772,53 @@ describe("a second model that reads the images", () => {
 		expect(textParts(model.requests[1]).some((t) => t.includes("image omitted"))).toBe(true);
 	});
 });
+
+describe("when the model's image support is known", () => {
+	const refusal: AgentModelEvent = {
+		type: "finish",
+		reason: "error",
+		error: "this model does not support image input",
+		errorClass: "image_input_unsupported",
+	};
+
+	function withScreenshot(): AgentMessage[] {
+		return [
+			{
+				role: "user",
+				content: [
+					{ type: "text", text: "Console: nothing." },
+					{ type: "image", image: "iVBORw0KGgo=", mediaType: "image/png" },
+				],
+			} as AgentMessage,
+		];
+	}
+
+	// The tools were already told before they attached anything, so an image is
+	// not what went wrong here — a retry would spend a turn hiding the real
+	// error behind a plausible-looking recovery.
+	it("does not retry, and reports the error as it came", async () => {
+		const model = new ScriptedModel([() => [refusal]]);
+		const runtime = new AgentRuntime({
+			model,
+			initialMessages: withScreenshot(),
+			imageSupportDeclared: true,
+		});
+
+		const result = await runtime.run("look at the page");
+
+		expect(result.status).toBe("failed");
+		expect(model.requests).toHaveLength(1);
+	});
+
+	it("still retries when nobody could say", async () => {
+		const model = new ScriptedModel([
+			() => [refusal],
+			() => [{ type: "text-delta", text: "ok" }, { type: "finish", reason: "stop" }],
+		]);
+		const runtime = new AgentRuntime({ model, initialMessages: withScreenshot() });
+
+		await runtime.run("look at the page");
+
+		expect(model.requests).toHaveLength(2);
+	});
+});

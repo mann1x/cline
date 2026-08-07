@@ -926,6 +926,8 @@ export interface AgentConfig {
 	) => Promise<readonly (string | undefined)[]>;
 	/** See `AgentConfig.alwaysDescribeImages`. */
 	alwaysDescribeImages?: boolean;
+	/** See `AgentConfig.imageSupportDeclared`. */
+	imageSupportDeclared?: boolean;
 	consumePendingUserMessage?: () => string | undefined;
 
 	// -------------------------------------------------------------------------
