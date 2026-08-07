@@ -76,6 +76,8 @@ export interface MessageHandlers {
 	executeButtonAction: (action: ButtonActionType, text?: string, images?: string[], files?: string[]) => Promise<void>
 	handleSendMessage: (text: string, images: string[], files: string[]) => Promise<void>
 	handleTaskCloseButtonClick: () => void
+	/** Attach an image from the transcript to the message being composed. */
+	handleReferenceImage: (image: string) => void
 	startNewTask: () => Promise<void>
 }
 

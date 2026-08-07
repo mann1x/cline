@@ -247,6 +247,7 @@ export type ClineSay =
 	| "browser_action_launch"
 	| "browser_action"
 	| "browser_action_result"
+	| "browser_screenshot" // a screenshot the `browser` tool returned, shown under its tool row
 	| "mcp_server_request_started"
 	| "mcp_server_response"
 	| "mcp_notification"

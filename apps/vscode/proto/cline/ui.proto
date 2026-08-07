@@ -76,6 +76,8 @@ enum ClineSay {
   SUBAGENT_USAGE = 36;
   COMPACTION = 37;
   PLAN_COMPLETION_RESULT = 38;
+  // A screenshot returned by the `browser` tool, shown under its tool row.
+  BROWSER_SCREENSHOT = 39;
 }
 
 // Enum for ClineSayTool tool types

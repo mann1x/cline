@@ -958,6 +958,11 @@ export function extractToolOutputText(output: unknown): string {
 					parts.push(record.result)
 				} else if ("error" in record && typeof record.error === "string" && record.error) {
 					parts.push(record.error)
+				} else if (record.type === "text" && typeof record.text === "string" && record.text) {
+					// Content-block output, as the browser tool returns alongside its
+					// screenshot. Without this the whole array — base64 image and all —
+					// went through JSON.stringify below and became the row's text.
+					parts.push(record.text)
 				}
 			}
 		}
@@ -968,6 +973,33 @@ export function extractToolOutputText(output: unknown): string {
 
 	// Fallback for unknown structured output
 	return JSON.stringify(output)
+}
+
+/**
+ * Pull image content blocks out of a tool result as data URLs.
+ *
+ * Tools hand images back as `{ type: "image", data, mediaType }` with raw base64,
+ * while everything on the webview side — attachments, thumbnails, the image
+ * opener — speaks data URLs. Converting here means the rest of the UI needs no
+ * special case for an image that came from a tool rather than from the user.
+ */
+export function extractToolOutputImages(output: unknown): string[] {
+	if (!Array.isArray(output)) {
+		return []
+	}
+	const images: string[] = []
+	for (const item of output) {
+		if (typeof item !== "object" || item === null) {
+			continue
+		}
+		const record = item as Record<string, unknown>
+		if (record.type !== "image" || typeof record.data !== "string" || record.data === "") {
+			continue
+		}
+		const mediaType = typeof record.mediaType === "string" && record.mediaType ? record.mediaType : "image/png"
+		images.push(record.data.startsWith("data:") ? record.data : `data:${mediaType};base64,${record.data}`)
+	}
+	return images
 }
 
 // ---------------------------------------------------------------------------
@@ -1688,6 +1720,26 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 							type: "say",
 							say: "tool",
 							text: JSON.stringify(sayTool),
+							partial: false,
+						})
+					}
+
+					// The browser tool hands the model a screenshot, and until now the user
+					// could not see it: the tool row is built from the call's *input*, and
+					// the output — where the image lives — was dropped. So the model was
+					// looking at the page and the person watching was not, which is the one
+					// case where the user has something to say that the model cannot know.
+					// Emitted as its own row so the image sits under the tool call it came
+					// from, and carried in `images` (the field user attachments already use)
+					// so referencing one back into a reply is just re-attaching it.
+					const screenshots = extractToolOutputImages(event.output)
+					if (screenshots.length > 0) {
+						messages.push({
+							ts: state.nextTs(),
+							type: "say",
+							say: "browser_screenshot" as ClineSay,
+							text: extractToolOutputText(event.output),
+							images: screenshots,
 							partial: false,
 						})
 					}

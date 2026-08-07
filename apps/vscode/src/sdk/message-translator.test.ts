@@ -1,8 +1,9 @@
 import type { CoreSessionEvent } from "@cline/core"
 import type { AgentEvent } from "@cline/shared"
-import type { ClineAskUseMcpServer } from "@shared/ExtensionMessage"
+import type { ClineAskUseMcpServer, ClineMessage } from "@shared/ExtensionMessage"
 import { describe, expect, it } from "vitest"
 import {
+	extractToolOutputImages,
 	extractToolOutputText,
 	historyItemToSessionFields,
 	MessageTranslatorState,
@@ -3759,5 +3760,101 @@ describe("MCP tool rendering (serverName__toolName convention)", () => {
 		expect(result.messages).toHaveLength(1)
 		expect(result.messages[0].say).toBe("use_mcp_server")
 		expect(result.messages[0].partial).toBe(false)
+	})
+})
+
+// ---------------------------------------------------------------------------
+// browser screenshots
+// ---------------------------------------------------------------------------
+
+describe("browser screenshots reach the transcript", () => {
+	const PNG = "iVBORw0KGgoAAAANSUhEUg"
+
+	function browserCall(output: unknown): ClineMessage[] {
+		const state = new MessageTranslatorState()
+		translateSessionEvent(
+			{
+				type: "agent_event",
+				payload: {
+					sessionId: "session-1",
+					event: {
+						type: "content_start",
+						contentType: "tool",
+						toolName: "browser",
+						toolCallId: "browser-call",
+						input: { action: "open", url: "file:///game.html" },
+					} as AgentEvent,
+				},
+			},
+			state,
+		)
+		return translateSessionEvent(
+			{
+				type: "agent_event",
+				payload: {
+					sessionId: "session-1",
+					event: {
+						type: "content_end",
+						contentType: "tool",
+						toolName: "browser",
+						toolCallId: "browser-call",
+						output,
+					} as AgentEvent,
+				},
+			},
+			state,
+		).messages
+	}
+
+	it("emits a screenshot row under the tool row", () => {
+		const messages = browserCall([
+			{ type: "text", text: "open: file:///game.html\n\nConsole: nothing." },
+			{ type: "image", data: PNG, mediaType: "image/png" },
+		])
+
+		expect(messages.map((message) => message.say)).toEqual(["tool", "browser_screenshot"])
+		const shot = messages[1]
+		expect(shot.images).toEqual([`data:image/png;base64,${PNG}`])
+		// The console text is the caption; the base64 must not leak into it.
+		expect(shot.text).toContain("Console: nothing.")
+		expect(shot.text).not.toContain(PNG)
+	})
+
+	it("emits no screenshot row when the tool returned only text", () => {
+		const messages = browserCall([{ type: "text", text: "Browser closed." }])
+		expect(messages.map((message) => message.say)).toEqual(["tool"])
+	})
+
+	it("reads the console text instead of dumping the whole payload as JSON", () => {
+		// Before this, an array of content blocks matched no known shape and fell
+		// through to JSON.stringify — putting the entire base64 image in the row.
+		const text = extractToolOutputText([
+			{ type: "text", text: "Console (1 message(s), 1 of them errors):" },
+			{ type: "image", data: PNG, mediaType: "image/png" },
+		])
+		expect(text).toBe("Console (1 message(s), 1 of them errors):")
+	})
+
+	describe("extractToolOutputImages", () => {
+		it("returns data URLs for image blocks", () => {
+			expect(extractToolOutputImages([{ type: "image", data: PNG, mediaType: "image/jpeg" }])).toEqual([
+				`data:image/jpeg;base64,${PNG}`,
+			])
+		})
+
+		it("defaults the media type to png", () => {
+			expect(extractToolOutputImages([{ type: "image", data: PNG }])).toEqual([`data:image/png;base64,${PNG}`])
+		})
+
+		it("passes an already-formed data URL through untouched", () => {
+			const url = `data:image/png;base64,${PNG}`
+			expect(extractToolOutputImages([{ type: "image", data: url }])).toEqual([url])
+		})
+
+		it("returns nothing for output that carries no images", () => {
+			expect(extractToolOutputImages("plain string")).toEqual([])
+			expect(extractToolOutputImages([{ type: "text", text: "hi" }])).toEqual([])
+			expect(extractToolOutputImages(undefined)).toEqual([])
+		})
 	})
 })

@@ -44,6 +44,7 @@ import { cn } from "@/lib/utils"
 import { FileServiceClient, UiServiceClient } from "@/services/grpc-client"
 import { findMatchingResourceOrTemplate } from "@/utils/mcp"
 import CodeAccordian, { cleanPathPrefix } from "../common/CodeAccordian"
+import BrowserScreenshotRow from "./BrowserScreenshotRow"
 import { CommandOutputContent, CommandOutputRow } from "./CommandOutputRow"
 import CompactionRow from "./CompactionRow"
 import { CompletionOutputRow } from "./CompletionOutputRow"
@@ -74,6 +75,8 @@ interface ChatRowProps {
 	onLastRowContentChange: () => void
 	inputValue?: string
 	sendMessageFromChatRow?: (text: string, images: string[], files: string[]) => void
+	/** Attach an image from the transcript to the message being composed. */
+	onReferenceImage?: (image: string) => void
 	onSetQuote: (text: string) => void
 	onCancelCommand?: () => void
 	mode?: Mode
@@ -139,6 +142,7 @@ export const ChatRowContent = memo(
 		isLast,
 		inputValue,
 		sendMessageFromChatRow,
+		onReferenceImage,
 		onSetQuote,
 		onCancelCommand,
 		onLastRowContentChange,
@@ -1001,6 +1005,14 @@ export const ChatRowContent = memo(
 						)
 					case "task_progress":
 						return <InvisibleSpacer /> // task_progress messages should be displayed in TaskHeader only, not in chat
+					case "browser_screenshot":
+						return (
+							<BrowserScreenshotRow
+								images={message.images ?? []}
+								onReference={onReferenceImage}
+								text={message.text}
+							/>
+						)
 					case "compaction":
 						return <CompactionRow message={message} />
 					default:
