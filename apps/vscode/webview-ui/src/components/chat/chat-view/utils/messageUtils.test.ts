@@ -16,10 +16,18 @@ const createToolMessage = (ts: number, tool: string): ClineMessage => ({
 	ts,
 })
 
-const createReasoningMessage = (ts: number, text: string): ClineMessage => ({
+const createReasoningMessage = (ts: number, text: string, partial = false): ClineMessage => ({
 	type: "say",
 	say: "reasoning",
 	text,
+	ts,
+	...(partial ? { partial: true } : {}),
+})
+
+const createBrowserScreenshotMessage = (ts: number): ClineMessage => ({
+	type: "say",
+	say: "browser_screenshot",
+	images: ["data:image/png;base64,iVBORw0KGgo="],
 	ts,
 })
 
@@ -165,5 +173,61 @@ describe("groupLowStakesTools", () => {
 		expect(grouped).toHaveLength(2)
 		expect(grouped[0]).toMatchObject({ type: "say", say: "reasoning", text: "Planning next read" })
 		expect(isToolGroup(grouped[1])).toBe(true)
+	})
+})
+
+/**
+ * Reasoning absorbed into a tool group is not merely reordered — `ToolGroupRenderer`
+ * drops it ("Skip reasoning messages - they should not be in file lists"). So a
+ * reasoning row that lands in a group is a reasoning row nobody ever sees, and
+ * for a partial row that is the whole live "Thinking..." display.
+ */
+describe("reasoning that arrives while a tool group is open", () => {
+	it("stays visible instead of disappearing into the group", () => {
+		const grouped = groupLowStakesTools([
+			createToolMessage(1, "readFile"),
+			createReasoningMessage(2, "Thinking about the next step"),
+		])
+
+		const standalone = grouped.filter((item) => !isToolGroup(item))
+		expect(standalone).toContainEqual(expect.objectContaining({ say: "reasoning" }))
+	})
+
+	// The live case: the row is still streaming, so this is the only thing on
+	// screen while the model thinks.
+	it("keeps a streaming reasoning row out of the group", () => {
+		const grouped = groupLowStakesTools([
+			createToolMessage(1, "readFile"),
+			createToolMessage(2, "searchFiles"),
+			createReasoningMessage(3, "Thinking", true),
+		])
+
+		const standalone = grouped.filter((item) => !isToolGroup(item))
+		expect(standalone).toContainEqual(expect.objectContaining({ say: "reasoning", partial: true }))
+	})
+
+	// The sequence a browser turn actually produces: the screenshot row is a say
+	// type this grouping does not know, and it lands between the tools and the
+	// next turn's thinking.
+	it("survives a browser screenshot row between the tools and the thinking", () => {
+		const grouped = groupLowStakesTools([
+			createToolMessage(1, "readFile"),
+			createBrowserScreenshotMessage(2),
+			createReasoningMessage(3, "Thinking", true),
+			createToolMessage(4, "readFile"),
+		])
+
+		const standalone = grouped.filter((item) => !isToolGroup(item))
+		expect(standalone).toContainEqual(expect.objectContaining({ say: "reasoning", partial: true }))
+	})
+
+	it("still groups the tools themselves", () => {
+		const grouped = groupLowStakesTools([
+			createToolMessage(1, "readFile"),
+			createReasoningMessage(2, "Thinking"),
+			createToolMessage(3, "searchFiles"),
+		])
+
+		expect(grouped.some((item) => isToolGroup(item))).toBe(true)
 	})
 })

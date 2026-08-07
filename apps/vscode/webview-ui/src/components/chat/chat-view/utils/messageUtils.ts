@@ -143,7 +143,8 @@ export function filterVisibleMessages(messages: ClineMessage[]): ClineMessage[] 
 			case "task_progress": // task progress messages are displayed in TaskHeader, not in main chat
 			case "checkpoint_created": // checkpoint restore is exposed from user-message edit controls
 				return false
-			// NOTE: reasoning passes through to be included in tool groups
+			// NOTE: reasoning passes through and renders as its own row; it is
+			// never folded into a tool group, which would discard it.
 			case "api_req_started": {
 				// api_req_started rows only render visible content for errors/cancels.
 				// Reasoning has its own standalone ChatRows. Everything else renders
@@ -533,7 +534,6 @@ function isApiReqFollowedOnlyByLowStakesTools(index: number, messages: (ClineMes
 export function groupLowStakesTools(groupedMessages: (ClineMessage | ClineMessage[])[]): (ClineMessage | ClineMessage[])[] {
 	const result: (ClineMessage | ClineMessage[])[] = []
 	let toolGroup: ClineMessage[] = []
-	let pendingReasoning: ClineMessage[] = []
 	let pendingApiReq: ClineMessage[] = []
 	let hasTools = false
 	const pendingTools: ClineMessage[] = []
@@ -542,11 +542,7 @@ export function groupLowStakesTools(groupedMessages: (ClineMessage | ClineMessag
 		pendingApiReq.forEach((m) => {
 			result.push(m)
 		})
-		pendingReasoning.forEach((m) => {
-			result.push(m)
-		})
 		pendingApiReq = []
-		pendingReasoning = []
 	}
 
 	const commitToolGroup = () => {
@@ -554,7 +550,6 @@ export function groupLowStakesTools(groupedMessages: (ClineMessage | ClineMessag
 			const group = toolGroup as ClineMessage[] & { _isToolGroup: boolean }
 			group._isToolGroup = true
 			result.push(group)
-			pendingReasoning = []
 			pendingApiReq = []
 		}
 		toolGroup = []
@@ -585,11 +580,6 @@ export function groupLowStakesTools(groupedMessages: (ClineMessage | ClineMessag
 
 		// Low-stakes tool - absorb pending and add to group
 		if (isLowStakesTool(message)) {
-			// Keep reasoning visible as its own row when it happens before a tool group.
-			// If we absorb it into the group, ToolGroupRenderer hides it entirely.
-			if (!hasTools && pendingReasoning.length > 0) {
-				flushPending()
-			}
 			absorbPending()
 			hasTools = true
 			toolGroup.push(message)
@@ -601,13 +591,25 @@ export function groupLowStakesTools(groupedMessages: (ClineMessage | ClineMessag
 			continue
 		}
 
-		// Reasoning - add to group if active, otherwise queue
+		// Reasoning - always its own row, never absorbed.
+		//
+		// `ToolGroupRenderer` drops reasoning outright ("Skip reasoning messages
+		// - they should not be in file lists"), so a reasoning row that goes into
+		// a group is a reasoning row nobody ever sees. For a finished block that
+		// is merely a loss; for a streaming one it is total, because the partial
+		// row *is* the live "Thinking..." display, and absorbing it leaves the
+		// screen blank for as long as the model thinks.
+		//
+		// Whether it got absorbed depended on nothing but whether a tool group
+		// happened to be open when the reasoning started — which is why this has
+		// come back each time the tool mix changed. Closing the group first keeps
+		// the rows in the order they actually happened.
 		if (messageType === "reasoning") {
 			if (hasTools) {
-				toolGroup.push(message)
-			} else {
-				pendingReasoning.push(message)
+				commitToolGroup()
 			}
+			flushPending()
+			result.push(message)
 			continue
 		}
 
