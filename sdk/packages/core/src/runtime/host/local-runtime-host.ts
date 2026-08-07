@@ -22,6 +22,7 @@ import {
 import type { ToolExecutors } from "../../extensions/tools";
 import { DefaultToolNames } from "../../extensions/tools";
 import {
+	createTaskProgressCompletionGuard,
 	findLatestTaskProgress,
 	TaskProgressTracker,
 	withTaskProgressCapture,
@@ -609,6 +610,21 @@ export class LocalRuntimeHost implements RuntimeHost {
 					withTaskProgressCapture(tool, taskProgressTracker),
 				)
 			: mergedTools;
+		// Don't let the run end quietly on a checklist with open boxes. Composed
+		// rather than assigned: the runtime may already carry a guard (team
+		// obligations), and that one speaks to work the model cannot simply tick
+		// off, so it goes first and the checklist only gets a say once it passes.
+		const checklistCloseOutGuard = taskProgressTracker
+			? createTaskProgressCompletionGuard(taskProgressTracker)
+			: undefined;
+		const existingCompletionGuard = runtime.completionPolicy?.completionGuard;
+		const completionPolicyWithChecklistCloseOut = checklistCloseOutGuard
+			? {
+					...runtime.completionPolicy,
+					completionGuard: () =>
+						existingCompletionGuard?.() ?? checklistCloseOutGuard(),
+				}
+			: runtime.completionPolicy;
 		const extensions = runtime.extensions ?? bootstrap.extensions;
 		const explicitInitialCompactionState = startInput.initialCompactionState;
 		let activeSessionRef: ActiveSession | undefined;
@@ -732,7 +748,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 			telemetry: configWithProvider.telemetry,
 			onConsecutiveMistakeLimitReached:
 				configWithProvider.onConsecutiveMistakeLimitReached,
-			completionPolicy: runtime.completionPolicy,
+			completionPolicy: completionPolicyWithChecklistCloseOut,
 			consumePendingUserMessage: () => {
 				const entry = this.pendingPromptsController.consumeSteer(sessionId);
 				return entry

@@ -7,6 +7,7 @@ import {
 	findLatestTaskProgress,
 	parseTaskProgress,
 	readTaskProgress,
+	createTaskProgressCompletionGuard,
 	TASK_PROGRESS_PARAM,
 	TaskProgressTracker,
 	withTaskProgressCapture,
@@ -395,3 +396,44 @@ describe("surviving a session restore", () => {
 		expect(tracker.getState()).toMatchObject({ completed: 2, total: 3 })
 	})
 })
+
+describe("createTaskProgressCompletionGuard", () => {
+	function trackerWith(markdown: string): TaskProgressTracker {
+		const tracker = new TaskProgressTracker();
+		tracker.recordToolCall({ [TASK_PROGRESS_PARAM]: markdown });
+		return tracker;
+	}
+
+	it("names the open items when the run tries to end on them", () => {
+		const guard = createTaskProgressCompletionGuard(
+			trackerWith("- [x] fix the parse error\n- [ ] verify in the browser"),
+		);
+
+		const nudge = guard();
+		expect(nudge).toContain("verify in the browser");
+		// The one it already ticked is not worth re-sending.
+		expect(nudge).not.toContain("fix the parse error");
+	});
+
+	// The guard makes the runtime take another turn, so a guard that kept firing
+	// would loop against a model that disagrees about the list.
+	it("fires once and then stays quiet", () => {
+		const guard = createTaskProgressCompletionGuard(trackerWith("- [ ] a"));
+
+		expect(guard()).toBeDefined();
+		expect(guard()).toBeUndefined();
+		expect(guard()).toBeUndefined();
+	});
+
+	it("says nothing when every box is ticked", () => {
+		expect(
+			createTaskProgressCompletionGuard(trackerWith("- [x] a\n- [x] b"))(),
+		).toBeUndefined();
+	});
+
+	it("says nothing when the model never wrote a checklist", () => {
+		expect(
+			createTaskProgressCompletionGuard(new TaskProgressTracker())(),
+		).toBeUndefined();
+	});
+});

@@ -207,6 +207,63 @@ export function findLatestTaskProgress(
 }
 
 /**
+ * The nudge sent when a run is about to end with checklist items still open.
+ *
+ * Measured: a 58-minute run set the checklist once, on its 11th message of 137,
+ * and never touched it again — finishing with "Fix syntax errors" and "Verify
+ * fix with browser" unticked, both of which it had in fact done. The list is
+ * written as a side effect of a tool call, so once the model stops passing
+ * `task_progress` nothing ever ticks the boxes, and the panel ends the run
+ * reading as though the task failed.
+ *
+ * Two outcomes are acceptable and the message names both, because the checklist
+ * being stale and the work being unfinished are genuinely different situations
+ * and only the model knows which one it is in.
+ */
+export function buildTaskProgressCloseOutNudge(
+	state: TaskProgressState,
+): string {
+	const open = state.items
+		.filter((item) => !item.done)
+		.map((item) => `- ${item.text}`)
+		.join("\n");
+	return [
+		"[SYSTEM] Before this run ends, close out your checklist. These items are still unticked:",
+		open,
+		"",
+		"If you have in fact done them, send the list back with those boxes ticked — `task_progress` rides along on any tool call, so one call is enough.",
+		"If any is genuinely still open, do it now rather than ending here.",
+	].join("\n");
+}
+
+/**
+ * A `completionPolicy.completionGuard` that will not let a run end quietly on a
+ * checklist with open items.
+ *
+ * Fires **once** per run. The guard's return value makes the runtime send the
+ * text and take another turn, so a guard that kept firing would loop against a
+ * model that has decided the list is wrong — one prompt is a reminder, a
+ * repeated one is a trap. After it has fired, the ordinary no-tool-call nudge
+ * and its own budget take over.
+ */
+export function createTaskProgressCompletionGuard(
+	tracker: TaskProgressTracker,
+): () => string | undefined {
+	let fired = false;
+	return () => {
+		if (fired) {
+			return undefined;
+		}
+		const state = tracker.getState();
+		if (!state || state.total === 0 || state.completed >= state.total) {
+			return undefined;
+		}
+		fired = true;
+		return buildTaskProgressCloseOutNudge(state);
+	};
+}
+
+/**
  * Marks a tool that already carries the checklist wrapper. A symbol rather than
  * a field: it must not appear in anything that serializes a tool definition.
  */
