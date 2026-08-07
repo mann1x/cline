@@ -48,6 +48,7 @@ import {
 	mergeModelOptions,
 	type ToolCallRecord,
 } from "@cline/shared";
+import { NO_CHANGE_ERROR_PREFIX } from "../../extensions/tools/executors/editor";
 import { filterDisabledTools } from "../../services/global-settings";
 import {
 	createAgentModelFromConfig,
@@ -146,6 +147,42 @@ export function introducedRegression(output: unknown): boolean {
 			typeof entry === "object" &&
 			(entry as { regressed?: unknown }).regressed === true,
 	);
+}
+
+/**
+ * Whether a tool result says the call asked for nothing.
+ *
+ * This is a different animal from ordinary failure. An edit can fail for a
+ * reason that will not hold next time — a range that had moved, a read that had
+ * gone stale — and retrying it is reasonable. A "No change" refusal is the
+ * tool reporting that it compared the payload against the file and they were
+ * already identical, so an identical retry is answerable in advance.
+ *
+ * Measured: the same `editor` call, lines 94-96 and the same 1,336 characters,
+ * sent seven times against six of these refusals, with the whole file re-read
+ * between four of them. Twenty-four minutes, no edit, and the run ended on the
+ * loop stop regardless.
+ *
+ * Matches on the marker the message is built from rather than a copied string,
+ * and only where the envelope reports failure — a file whose contents happen to
+ * mention "No change" cannot trip it.
+ *
+ * Exported for tests, like `introducedRegression`: it is one boolean, and
+ * driving a full runtime to assert it would test the harness instead.
+ */
+export function declaredNoOp(output: unknown): boolean {
+	const entries = Array.isArray(output) ? output : [output];
+	return entries.some((entry) => {
+		if (entry == null || typeof entry !== "object") {
+			return false;
+		}
+		const record = entry as { success?: unknown; error?: unknown };
+		return (
+			record.success === false &&
+			typeof record.error === "string" &&
+			record.error.includes(NO_CHANGE_ERROR_PREFIX)
+		);
+	});
 }
 
 async function resolveRuleContent(
@@ -1191,6 +1228,7 @@ export class SessionRuntime {
 					!isError &&
 						!allOperationsFailed(finishedOutput) &&
 						!introducedRegression(finishedOutput),
+					declaredNoOp(finishedOutput),
 				);
 				const errorText = isError
 					? formatToolResultError(finishedOutput)
@@ -1325,11 +1363,11 @@ export class SessionRuntime {
 	 * Report a finished tool call's outcome to the loop tracker, so a repeat
 	 * that keeps failing can be told apart from one that keeps working.
 	 */
-	private noteLoopOutcome(productive: boolean): void {
+	private noteLoopOutcome(productive: boolean, futile = false): void {
 		if (this.loopDetectionDisabled) {
 			return;
 		}
-		this.loopTracker.noteOutcome(productive);
+		this.loopTracker.noteOutcome(productive, futile);
 	}
 
 	private inspectLoopForToolCall(

@@ -98,7 +98,15 @@ export class MistakeTracker {
 			recoverable: true,
 			iteration: input.iteration,
 		});
-		this.options.log("warn", "Recorded consecutive mistake", {
+		// Reason and details in the text, not only in the metadata: hosts drop
+		// structured log arguments (the VS Code host keeps them only under
+		// IS_DEV), and this line is the one that says *why* a run is about to be
+		// stopped. Measured: a loop-detector abort logged "Recorded consecutive
+		// mistake" with the tool name and the loop message one field away, unread.
+		this.options.log(
+			"warn",
+			`Recorded consecutive mistake ${next}/${max ?? "-"} (${input.reason}): ${errorMessage}`,
+			{
 			agentId: this.options.agentId,
 			conversationId: this.options.getConversationId(),
 			runId: this.options.getActiveRunId(),
@@ -106,8 +114,9 @@ export class MistakeTracker {
 			reason: input.reason,
 			details: input.details,
 			consecutiveMistakes: next,
-			maxConsecutiveMistakes: this.options.maxConsecutiveMistakes,
-		});
+				maxConsecutiveMistakes: this.options.maxConsecutiveMistakes,
+			},
+		);
 
 		if (!max || next < max) {
 			return { action: "continue" };

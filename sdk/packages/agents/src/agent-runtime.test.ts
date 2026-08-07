@@ -132,7 +132,10 @@ describe("AgentRuntime", () => {
 			content: [{ type: "reasoning", text: "thinking..." }],
 		});
 		expect(logger.log).toHaveBeenCalledWith(
-			"Agent loop caught error",
+			// The reason has to be in the message text, not only in the metadata:
+			// hosts drop structured log arguments, and a run that ends with an
+			// unreadable log is a run the user cannot diagnose.
+			expect.stringContaining("maximum output token limit"),
 			expect.objectContaining({
 				severity: "error",
 				status: "failed",
@@ -2418,7 +2421,7 @@ describe("AgentRuntime", () => {
 		expect(result.status).toBe("failed");
 		expect(events).toContain("run-failed");
 		expect(logger.log).toHaveBeenCalledWith(
-			"Agent loop caught error",
+			expect.stringContaining("Agent loop caught error (failed): Error: model failed"),
 			expect.objectContaining({
 				severity: "error",
 				status: "failed",

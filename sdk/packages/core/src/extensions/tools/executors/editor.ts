@@ -366,6 +366,16 @@ function quoteCurrentLines(
 		: text;
 }
 
+/**
+ * Marker that opens every "this edit asks for nothing" refusal.
+ *
+ * Imported rather than copied wherever the outcome has to be recognised, so the
+ * detector cannot drift from the message. The loop tracker uses it: a call the
+ * tool has compared against the file and found identical is the one kind of
+ * failure that provably cannot succeed on a retry.
+ */
+export const NO_CHANGE_ERROR_PREFIX = "No change: ";
+
 function noChangeMessage(
 	filePath: string,
 	why: string,
@@ -381,7 +391,7 @@ function noChangeMessage(
 		? ` If you meant to change something there, work out how the text you want differs from what those lines hold now — shown below — and send that; if the fix belongs on a different line, edit that line instead.\n\n${quoted}`
 		: ` If you meant to change something there, work out how the text you want differs from what is already in the file at that spot and send that; if the fix belongs on a different line, edit that line instead.`;
 	throw new Error(
-		`No change: ${why} in ${filePath}. The file was not modified. What you sent as \`new_text\` is character-for-character what that part of the file already holds, so this edit asks for nothing and sending it again cannot help.${comparison}`,
+		`${NO_CHANGE_ERROR_PREFIX}${why} in ${filePath}. The file was not modified. What you sent as \`new_text\` is character-for-character what that part of the file already holds, so this edit asks for nothing and sending it again cannot help.${comparison}`,
 	);
 }
 

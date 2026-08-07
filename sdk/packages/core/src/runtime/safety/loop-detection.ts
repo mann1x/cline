@@ -40,6 +40,11 @@ export interface LoopDetectionState {
 	consecutiveIdenticalCount: number;
 	/** Per `name:signature`, how many times it has been tried and failed. */
 	barrenCounts: Map<string, number>;
+	/**
+	 * Signatures the tool has declared no-ops. Separate from `barrenCounts`
+	 * because this is not a tally: one such outcome is already conclusive.
+	 */
+	futileKeys: Set<string>;
 	/** The call awaiting its outcome, so the result can be attributed. */
 	pendingKey: string;
 }
@@ -50,6 +55,7 @@ export function createLoopDetectionState(): LoopDetectionState {
 		lastToolSignature: "",
 		consecutiveIdenticalCount: 0,
 		barrenCounts: new Map(),
+		futileKeys: new Set(),
 		pendingKey: "",
 	};
 }
@@ -59,6 +65,7 @@ export function resetLoopDetectionState(state: LoopDetectionState): void {
 	state.lastToolSignature = "";
 	state.consecutiveIdenticalCount = 0;
 	state.barrenCounts.clear();
+	state.futileKeys.clear();
 	state.pendingKey = "";
 }
 
@@ -163,6 +170,23 @@ export class LoopDetectionTracker {
 		const key = `${call.name}:${signature}`;
 		this.state.pendingKey = key;
 
+		// A call the tool has already declared a no-op does not get five tries.
+		// The barren counter is for calls that fail for reasons that might change
+		// — a file that was locked, a range that has since moved. This is not one
+		// of those: the tool compared the payload against the file and found them
+		// identical, and the payload is byte-for-byte the same one. Measured: the
+		// same `editor` call, lines 94-96 and the same 1,336 characters, sent
+		// seven times against six "No change" refusals, with a full re-read of
+		// the file between four of them. Twenty-four minutes, no edit, and the
+		// run died on the loop stop anyway — so the only thing the extra five
+		// attempts bought was the time.
+		if (this.state.futileKeys.has(key)) {
+			return {
+				kind: "hard",
+				message: `This exact call to \`${call.name}\` was already refused because what it sends is character-for-character what the file already holds. The arguments are unchanged, so the result cannot be either. Stopping to avoid a loop — the fix belongs somewhere other than this call: a different range, different text, or a different tool.`,
+			};
+		}
+
 		const barren = this.state.barrenCounts.get(key) ?? 0;
 		if (barren >= BARREN_REPEAT_LIMIT) {
 			return {
@@ -200,13 +224,21 @@ export class LoopDetectionTracker {
 	 * edit-test cycle, and it should not inherit a count from the failures in
 	 * between.
 	 */
-	noteOutcome(productive: boolean): void {
+	noteOutcome(productive: boolean, futile = false): void {
 		const key = this.state.pendingKey;
 		if (key === "") {
 			return;
 		}
 		if (productive) {
 			this.state.barrenCounts.delete(key);
+			this.state.futileKeys.delete(key);
+			return;
+		}
+		if (futile) {
+			// Recorded rather than counted: the next identical call is stopped on
+			// sight, because the tool has already compared this payload against
+			// the file and found nothing to do.
+			this.state.futileKeys.add(key);
 			return;
 		}
 		this.state.barrenCounts.set(

@@ -952,7 +952,15 @@ export class AgentRuntime {
 				usage: cloneUsage(this.state.usage),
 				error: status === "failed" ? normalized : undefined,
 			};
-			this.config.logger?.log?.("Agent loop caught error", {
+			// The name and message go in the text, not only in the metadata below.
+			// Hosts routinely drop structured log arguments — the VS Code host
+			// serialises them only when `IS_DEV=true`, so in a packaged build this
+			// line read "Agent loop caught error" and nothing else. Measured: a run
+			// aborted by the loop detector produced exactly that, and the user saw a
+			// task end with no message at all while the reason sat one field away.
+			this.config.logger?.log?.(
+				`Agent loop caught error (${status}): ${normalized.name}: ${normalized.message}`,
+				{
 				severity: status === "failed" ? "error" : "warn",
 				agentId: this.state.agentId,
 				agentRole: this.state.agentRole,
@@ -962,7 +970,8 @@ export class AgentRuntime {
 				errorName: normalized.name,
 				errorMessage: normalized.message,
 				assistantContentPartCount: lastAssistantMessage?.content.length ?? 0,
-			});
+				},
+			);
 			await this.callAfterRunHooks(result);
 			if (status === "failed") {
 				await this.emit({

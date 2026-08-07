@@ -86,3 +86,68 @@ describe("LoopDetectionTracker", () => {
 		expect(tracker.inspect(call).kind).toBe("ok");
 	});
 });
+
+describe("a call the tool has declared a no-op", () => {
+	const call = {
+		name: "editor",
+		input: { path: "game.html", start_line: 94, end_line: 96, new_text: "…" },
+	};
+
+	// Measured: this exact shape was sent seven times against six "No change"
+	// refusals, with the whole file re-read between four of them. Twenty-four
+	// minutes, no edit, and the run ended on the loop stop anyway.
+	it("is stopped on its first repeat, not its fifth", () => {
+		const tracker = new LoopDetectionTracker();
+
+		expect(tracker.inspect(call).kind).toBe("ok");
+		tracker.noteOutcome(false, true);
+
+		const verdict = tracker.inspect(call);
+		expect(verdict.kind).toBe("hard");
+		expect(verdict.message).toContain("character-for-character");
+	});
+
+	// An ordinary failure may stop failing — a range that had moved, a read that
+	// had gone stale. Only a no-op is answerable in advance.
+	it("does not shorten the leash for an ordinary failure", () => {
+		const tracker = new LoopDetectionTracker();
+
+		tracker.inspect(call);
+		tracker.noteOutcome(false);
+		expect(tracker.inspect(call).kind).not.toBe("hard");
+	});
+
+	it("only binds the identical payload", () => {
+		const tracker = new LoopDetectionTracker();
+
+		tracker.inspect(call);
+		tracker.noteOutcome(false, true);
+
+		const different = {
+			name: "editor",
+			input: { ...call.input, new_text: "something else" },
+		};
+		expect(tracker.inspect(different).kind).toBe("ok");
+	});
+
+	it("is forgiven once that payload does something", () => {
+		const tracker = new LoopDetectionTracker();
+
+		tracker.inspect(call);
+		tracker.noteOutcome(false, true);
+		tracker.inspect(call);
+		tracker.noteOutcome(true);
+
+		expect(tracker.inspect(call).kind).toBe("ok");
+	});
+
+	it("is cleared by reset, so a new task starts even", () => {
+		const tracker = new LoopDetectionTracker();
+
+		tracker.inspect(call);
+		tracker.noteOutcome(false, true);
+		tracker.reset();
+
+		expect(tracker.inspect(call).kind).toBe("ok");
+	});
+});

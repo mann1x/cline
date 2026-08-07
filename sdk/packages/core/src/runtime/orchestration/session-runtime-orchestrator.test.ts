@@ -35,6 +35,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { MESSAGE_BUILDER_LIMIT_ENV } from "../../session/services/message-builder";
 import {
+	declaredNoOp,
 	introducedRegression,
 	SessionRuntime,
 	type SessionRuntimeOrchestratorDeps,
@@ -2577,5 +2578,50 @@ describe("introducedRegression", () => {
 		expect(introducedRegression("edited")).toBe(false);
 		expect(introducedRegression({ regressed: "yes" })).toBe(false);
 		expect(introducedRegression([])).toBe(false);
+	});
+});
+
+describe("declaredNoOp", () => {
+	const noChange =
+		"Editor operation failed: No change: lines 94-96 already reads exactly this way in game.html. The file was not modified.";
+
+	it("recognises the tool refusing an edit that asks for nothing", () => {
+		expect(
+			declaredNoOp({ query: "edit:game.html", result: "", error: noChange, success: false }),
+		).toBe(true);
+	});
+
+	it("recognises it inside a multi-operation result", () => {
+		expect(
+			declaredNoOp([
+				{ query: "edit:a.ts", result: "changed", success: true },
+				{ query: "edit:game.html", result: "", error: noChange, success: false },
+			]),
+		).toBe(true);
+	});
+
+	// An ordinary failure may stop failing next time; this one cannot, which is
+	// the whole distinction the loop tracker acts on.
+	it("does not fire on an ordinary failure", () => {
+		expect(
+			declaredNoOp({
+				query: "edit:game.html",
+				result: "",
+				error: "Editor operation failed: No replacement performed: text not found in game.html.",
+				success: false,
+			}),
+		).toBe(false);
+	});
+
+	it("does not fire on success, whatever the text says", () => {
+		expect(
+			declaredNoOp({ query: "edit:game.html", result: noChange, success: true }),
+		).toBe(false);
+	});
+
+	it("ignores shapes it does not recognise", () => {
+		expect(declaredNoOp(undefined)).toBe(false);
+		expect(declaredNoOp("No change: something")).toBe(false);
+		expect(declaredNoOp([{ success: false }])).toBe(false);
 	});
 });
