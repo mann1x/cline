@@ -2822,3 +2822,93 @@ describe("when the model's image support is known", () => {
 		expect(model.requests).toHaveLength(2);
 	});
 });
+
+/**
+ * Measured on a 1h19m session: the prompt estimate ran 8.2% low, so the output
+ * cap was sized from room that was not there. The model reasoned for 6,489
+ * tokens, hit the end of the 110,000-token window inside an unterminated
+ * thinking block, and the parser emitted nothing. The stream finished normally
+ * with an empty message, and the run ended on "Model returned empty response".
+ */
+describe("a turn that produced nothing", () => {
+	it("takes the turn again instead of ending the run", async () => {
+		const model = new ScriptedModel([
+			() => [
+				{ type: "usage", usage: { inputTokens: 103_591, outputTokens: 6_489 } },
+				{ type: "finish", reason: "stop" },
+			],
+			() => [{ type: "text-delta", text: "recovered" }, { type: "finish", reason: "stop" }],
+		]);
+		const runtime = new AgentRuntime({ model });
+
+		const result = await runtime.run("fix the game");
+
+		expect(result.status).toBe("completed");
+		expect(result.outputText).toBe("recovered");
+		expect(model.requests).toHaveLength(2);
+	});
+
+	// Regenerating from an unchanged prompt reproduces the reply that did not
+	// fit, so the retry has to differ from the turn it replaces.
+	it("tells the model what happened before asking again", async () => {
+		const model = new ScriptedModel([
+			() => [
+				{ type: "usage", usage: { inputTokens: 103_591, outputTokens: 6_489 } },
+				{ type: "finish", reason: "stop" },
+			],
+			() => [{ type: "text-delta", text: "ok" }, { type: "finish", reason: "stop" }],
+		]);
+		const runtime = new AgentRuntime({ model });
+
+		await runtime.run("fix the game");
+
+		const retried = model.requests[1].messages
+			.flatMap((m) => m.content)
+			.filter((p) => p.type === "text")
+			.map((p) => (p as { text: string }).text);
+		expect(retried.some((t) => t.includes("ran out of room"))).toBe(true);
+		expect(retried.some((t) => t.includes("smallest useful next step"))).toBe(true);
+	});
+
+	// A provider handing back empty responses instantly is a different problem,
+	// and retrying it would spin.
+	it("does not retry when the model generated nothing at all", async () => {
+		const model = new ScriptedModel([() => [{ type: "finish", reason: "stop" }]]);
+		const runtime = new AgentRuntime({ model });
+
+		const result = await runtime.run("fix the game");
+
+		expect(result.status).toBe("failed");
+		expect(model.requests).toHaveLength(1);
+	});
+
+	it("gives up rather than retrying forever", async () => {
+		const empty = () => [
+			{ type: "usage", usage: { inputTokens: 100, outputTokens: 500 } },
+			{ type: "finish", reason: "stop" },
+		];
+		const model = new ScriptedModel([empty, empty, empty, empty, empty, empty, empty, empty]);
+		const runtime = new AgentRuntime({ model });
+
+		const result = await runtime.run("fix the game");
+
+		expect(result.status).toBe("failed");
+		expect(model.requests.length).toBeLessThan(8);
+	});
+
+	// An errored stream is reported as the error it was, not as a wasted turn.
+	it("leaves a stream error alone", async () => {
+		const model = new ScriptedModel([
+			() => [
+				{ type: "usage", usage: { inputTokens: 100, outputTokens: 500 } },
+				{ type: "finish", reason: "error", error: "upstream exploded" },
+			],
+		]);
+		const runtime = new AgentRuntime({ model });
+
+		const result = await runtime.run("fix the game");
+
+		expect(result.status).toBe("failed");
+		expect(model.requests).toHaveLength(1);
+	});
+});

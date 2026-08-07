@@ -195,6 +195,43 @@ class GatewayModelAdapter implements AgentModel {
 	}
 }
 
+/**
+ * Share of the estimated prompt held back to absorb the estimate's own error.
+ *
+ * `estimatedInputTokens` is a character count divided by a calibrated ratio,
+ * and the ratio is smoothed across turns, so it lags whenever the content
+ * changes shape — which it does constantly as a transcript fills with prose and
+ * reasoning. A flat reserve cannot cover that: the error scales with the
+ * prompt, and the reserve did not.
+ *
+ * Measured on a 1h19m session that died of it. Estimate 95,115 tokens against a
+ * real 103,591 on a 110,000-token window: the estimate was short by 8,476, or
+ * 8.9% of itself. The flat 1,024 reserve left `num_predict` at 13,861 when the
+ * true remaining room was 5,385. The model reasoned for 6,489 tokens, ran off
+ * the end of the window mid-thought, and returned an empty message.
+ *
+ * 12% is that measured 8.9% with margin, and it is cheap: it comes out of a
+ * per-turn output cap, which is the binding constraint only when the prompt has
+ * nearly filled the window — precisely the case where being wrong ends the run.
+ */
+const OUTPUT_RESERVE_ESTIMATE_ERROR_SHARE = 0.12;
+
+/**
+ * The reserve to hold back for a prompt of this estimated size.
+ *
+ * Never below the flat floor, which covers the small fixed costs (chat
+ * scaffolding, a stop sequence) that do not scale with the prompt.
+ */
+function resolveOutputReserveTokens(estimatedInputTokens: number): number {
+	if (!isPositiveFiniteNumber(estimatedInputTokens)) {
+		return GATEWAY_OUTPUT_RESERVE_TOKENS;
+	}
+	return Math.max(
+		GATEWAY_OUTPUT_RESERVE_TOKENS,
+		Math.ceil(estimatedInputTokens * OUTPUT_RESERVE_ESTIMATE_ERROR_SHARE),
+	);
+}
+
 export function resolveGatewayRequestMaxTokens(input: {
 	requestedMaxTokens?: number;
 	model: Pick<GatewayModelDefinition, "contextWindow" | "maxOutputTokens">;
@@ -240,7 +277,8 @@ export function resolveGatewayRequestMaxTokens(input: {
 
 	if (isPositiveFiniteNumber(input.model.contextWindow)) {
 		const reserveTokens =
-			input.outputReserveTokens ?? GATEWAY_OUTPUT_RESERVE_TOKENS;
+			input.outputReserveTokens ??
+			resolveOutputReserveTokens(input.estimatedInputTokens);
 		const minOutputTokens = isPositiveFiniteNumber(input.minOutputTokens)
 			? input.minOutputTokens
 			: GATEWAY_MIN_OUTPUT_TOKENS;

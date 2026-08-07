@@ -5137,3 +5137,69 @@ describe("sdk-gateway", () => {
 		);
 	});
 });
+
+/**
+ * From the session this was written for: a 110,000-token window, an estimate of
+ * 95,115 against a real 103,591, and a model that reasoned past the end of the
+ * window and returned nothing.
+ */
+describe("the reserve that absorbs the estimate's error", () => {
+	const model = { contextWindow: 110_000, maxOutputTokens: undefined };
+
+	it("leaves room the estimate could have got wrong", () => {
+		const maxTokens = resolveGatewayRequestMaxTokens({
+			requestedMaxTokens: 32_000,
+			model,
+			estimatedInputTokens: 95_115,
+		});
+
+		// The real prompt was 103,591; the reply has to fit in what is left of
+		// the window after it, not after the estimate.
+		expect(maxTokens).toBeDefined();
+		expect(103_591 + (maxTokens as number)).toBeLessThan(110_000);
+	});
+
+	it("scales with the prompt rather than staying flat", () => {
+		const small = resolveGatewayRequestMaxTokens({
+			requestedMaxTokens: 200_000,
+			model: { contextWindow: 200_000, maxOutputTokens: undefined },
+			estimatedInputTokens: 1_000,
+		})
+		const large = resolveGatewayRequestMaxTokens({
+			requestedMaxTokens: 200_000,
+			model: { contextWindow: 200_000, maxOutputTokens: undefined },
+			estimatedInputTokens: 100_000,
+		})
+
+		expect(200_000 - 1_000 - (small as number)).toBeLessThan(200_000 - 100_000 - (large as number))
+	})
+
+	// A short prompt's 8% is a handful of tokens; the fixed costs it also has to
+	// cover are not proportional to anything.
+	it("never drops below the flat floor", () => {
+		const maxTokens = resolveGatewayRequestMaxTokens({
+			requestedMaxTokens: 8_000,
+			model: { contextWindow: 8_192, maxOutputTokens: undefined },
+			estimatedInputTokens: 100,
+		})
+
+		expect(maxTokens).toBeLessThanOrEqual(8_192 - 100 - 1_024)
+	})
+
+	it("still lets an explicit reserve win", () => {
+		const maxTokens = resolveGatewayRequestMaxTokens({
+			requestedMaxTokens: 32_000,
+			model,
+			estimatedInputTokens: 95_115,
+			outputReserveTokens: 0,
+		})
+
+		expect(maxTokens).toBe(110_000 - 95_115)
+	})
+
+	it("does not touch a request the cap already bounds", () => {
+		expect(
+			resolveGatewayRequestMaxTokens({ requestedMaxTokens: 4_000, model, estimatedInputTokens: 1_000 }),
+		).toBe(4_000)
+	})
+})

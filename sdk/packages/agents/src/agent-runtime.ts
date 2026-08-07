@@ -104,6 +104,19 @@ const MAX_TOKENS_INCOMPLETE_TURN_REMINDER =
 	"If the work you were planning does not fit in one reply, do the part that fits, call the tools it needs, and continue in the next turn.";
 
 /**
+ * Sent when a turn spent its tokens and delivered nothing.
+ *
+ * Same wording as the output-limit reminder for the same reason: what the model
+ * has to do next is identical, and the two are indistinguishable from where it
+ * sits. It reasoned, the reply never arrived, and reproducing the thought that
+ * did not fit is the one thing that cannot work.
+ */
+const EMPTY_TURN_REMINDER =
+	"[SYSTEM] Your last reply ran out of room before any of it was delivered, so it was discarded — none of it, including your reasoning, is in this conversation. " +
+	"Do not try to reproduce it. Take the smallest useful next step instead: make one tool call, or write one short paragraph. " +
+	"If the work you were planning does not fit in one reply, do the part that fits, call the tools it needs, and continue in the next turn.";
+
+/**
  * The nudge budget for hosts that want it without picking a number.
  *
  * Off by default, because "a turn with no tool calls ends the run" is the
@@ -726,6 +739,17 @@ export class AgentRuntime {
 	 * question, while this recovers a turn the model never got to finish. A
 	 * host that wants the old behaviour sets it to zero.
 	 */
+	/**
+	 * Whether the turn generated anything at all, whatever became of it.
+	 *
+	 * The difference between a model that reasoned itself out of room and a
+	 * provider handing back empty responses as fast as it can. The first is worth
+	 * another turn; the second would spin, and is left to fail as it did before.
+	 */
+	private turnProducedOutputTokens(before: AgentUsage): boolean {
+		return this.state.usage.outputTokens > before.outputTokens;
+	}
+
 	private getMaxTokensRetryBudget(): number {
 		const configured = this.config.completionPolicy?.maxTruncatedTurnRetries;
 		return typeof configured === "number" && Number.isFinite(configured)
@@ -796,12 +820,47 @@ export class AgentRuntime {
 					iteration: this.state.iteration,
 				});
 
+				const usageBeforeTurn = cloneUsage(this.state.usage);
 				const { message, finishReason } =
 					await this.generateAssistantMessageWithOverflowRecovery();
 				if (finishReason === "aborted") {
 					throw this.normalizeAbortError();
 				}
 				if (message.content.length === 0) {
+					// A turn that spent tokens and delivered nothing is a wasted
+					// turn, not a failed run — the same situation as one cut off at
+					// the output cap, and it gets the same retry.
+					//
+					// Measured on a 1h19m session: the prompt estimate ran 8.2% low
+					// (95,115 against a real 103,591), so the output cap was sized
+					// from room that was not there. The model reasoned for 6,489
+					// tokens, hit the true end of the 110,000-token window inside an
+					// unterminated thinking block, and the parser — with no closing
+					// marker — emitted nothing at all. Not an error: the stream
+					// finished normally, with an empty message. The run died there,
+					// on a turn the model could simply have taken again.
+					if (
+						finishReason !== "error" &&
+						this.turnProducedOutputTokens(usageBeforeTurn) &&
+						this.consecutiveMaxTokensRetries < this.getMaxTokensRetryBudget()
+					) {
+						this.consecutiveMaxTokensRetries += 1;
+						await this.emit({
+							type: "status-notice",
+							snapshot: this.snapshot(),
+							message: "the model produced nothing usable — retrying",
+							metadata: {
+								kind: "empty_turn_recovery",
+								reason: "empty_turn_recovery",
+								phase: "started",
+								iteration: this.state.iteration,
+								attempt: this.consecutiveMaxTokensRetries,
+								finishReason,
+							},
+						});
+						await this.addUserReminderMessage(EMPTY_TURN_REMINDER);
+						continue;
+					}
 					throw new Error(
 						finishReason === "error"
 							? (this.state.lastError ?? "Model stream failed")
