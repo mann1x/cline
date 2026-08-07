@@ -1228,3 +1228,97 @@ describe("requiring a read before an edit", () => {
 		});
 	});
 });
+
+describe("a range edit carrying the read gutter", () => {
+	it("does not write the gutter into the file", async () => {
+		// Measured live: this exact call was accepted verbatim and the file's
+		// last two lines became the read output that described them.
+		//
+		// Stripped, the edit asks for what the file already holds, so it is
+		// refused as a no-op — which is the honest answer, and the one the model
+		// can act on. Silently writing the gutter was neither.
+		await withTempFile("<body>\n  <p>hi</p>\n</body>\n</html>", async (filePath, dir) => {
+			const editor = createEditorExecutor();
+
+			await expect(
+				editor(
+					{
+						path: filePath,
+						start_line: 3,
+						end_line: 4,
+						new_text: "  3 | </body>\n  4 | </html>",
+					},
+					dir,
+					context,
+				),
+			).rejects.toThrow("No change");
+
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+				"<body>\n  <p>hi</p>\n</body>\n</html>",
+			);
+		});
+	});
+
+	it("keeps the source's own indentation", async () => {
+		await withTempFile("a\nb", async (filePath, dir) => {
+			const editor = createEditorExecutor();
+			await editor(
+				{
+					path: filePath,
+					start_line: 1,
+					end_line: 2,
+					new_text: "  1 |     indented\n  2 | plain",
+				},
+				dir,
+				context,
+			);
+
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+				"    indented\nplain",
+			);
+		});
+	});
+
+	it("leaves content alone when the numbers do not match the range", async () => {
+		// Real text that merely looks like a gutter. The numbers are the
+		// evidence: these do not count up from start_line, so nothing is
+		// stripped.
+		await withTempFile("x\ny", async (filePath, dir) => {
+			const editor = createEditorExecutor();
+			await editor(
+				{
+					path: filePath,
+					start_line: 1,
+					end_line: 2,
+					new_text: "  42 | first\n  99 | second",
+				},
+				dir,
+				context,
+			);
+
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+				"  42 | first\n  99 | second",
+			);
+		});
+	});
+
+	it("strips only when every line is numbered in sequence", async () => {
+		await withTempFile("x\ny", async (filePath, dir) => {
+			const editor = createEditorExecutor();
+			await editor(
+				{
+					path: filePath,
+					start_line: 1,
+					end_line: 2,
+					new_text: "  1 | first\nplain second",
+				},
+				dir,
+				context,
+			);
+
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+				"  1 | first\nplain second",
+			);
+		});
+	});
+});

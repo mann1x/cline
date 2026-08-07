@@ -1303,7 +1303,13 @@ export class SessionRuntime {
 				} else if (succeeded > 0) {
 					// Productive turn — reset the tracker so transient
 					// failures don't accumulate across unrelated turns.
-					this.mistakeTracker.reset();
+					//
+					// Through the same queue the records go through. Resetting
+					// synchronously raced them: a record already queued applied
+					// after the reset had run and restored the count, so a run
+					// that alternated failures with successful edits still
+					// stopped on "6 errors in a row" having never had six.
+					this.enqueueMistakeReset();
 				}
 				break;
 			}
@@ -1436,6 +1442,19 @@ export class SessionRuntime {
 	 * to the conversation and abort the active runtime so the run ends
 	 * with `finishReason: "aborted"`.
 	 */
+	/** Clear the tracker in order with any records already queued. */
+	private enqueueMistakeReset(): void {
+		if (this.trackerAbortInFlight) {
+			return;
+		}
+		this.activeTrackerWork = this.activeTrackerWork.then(() => {
+			if (this.trackerAbortInFlight) {
+				return;
+			}
+			this.mistakeTracker.reset();
+		});
+	}
+
 	private enqueueMistakeRecord(input: {
 		iteration: number;
 		reason: "api_error" | "invalid_tool_call" | "tool_execution_failed";

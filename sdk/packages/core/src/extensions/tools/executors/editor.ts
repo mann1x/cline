@@ -528,10 +528,32 @@ async function replaceLineRange(
 		);
 	}
 
+	// Strip the read gutter the model pasted back in.
+	//
+	// The `old_text` form recovers from this already, and can, because the file
+	// itself decides: strip, and see whether the text now occurs. A range edit
+	// has no such anchor, so nothing stopped a gutter from being written *into*
+	// the file. Measured live: `new_text` of "  135 | </body>\n  136 | </html>"
+	// against `start_line: 135` was accepted verbatim, and the file's last two
+	// lines became the read output that described them.
+	//
+	// The numbers are the evidence instead. Text whose gutter counts up from
+	// exactly `start_line` came from a read of exactly this range; content that
+	// happens to begin "  135 | " on line 135, then "  136 | " on line 136, does
+	// not occur. So the check is narrow, and silence is the failure it prevents:
+	// a refusal would cost a turn, but a gutter written into a file is a
+	// corruption that reads as success.
+	const replacementText =
+		newStr != null && newStr !== "" && hasSequentialGutter(newStr, startLineOneBased)
+			? stripLineNumberGutter(normalizeLineEndings(newStr, eol))
+			: newStr;
+
 	// An empty new_text deletes the range outright, which is the natural
 	// reading and what a caller removing a bad line wants.
 	const replacement =
-		newStr == null || newStr === "" ? [] : newStr.split(/\r\n|\n/);
+		replacementText == null || replacementText === ""
+			? []
+			: replacementText.split(/\r\n|\n/);
 	lines.splice(
 		startLineOneBased - 1,
 		effectiveEndLine - startLineOneBased + 1,
@@ -601,6 +623,27 @@ function hasLineNumberGutter(text: string): boolean {
 		return false;
 	}
 	return lines.every((line) => LINE_NUMBER_GUTTER.test(line));
+}
+
+/**
+ * Whether the gutter on this text numbers consecutively from `firstLine`.
+ *
+ * The narrow test that makes stripping safe without a file to match against.
+ * Every non-blank line must carry a gutter, and the numbers must run
+ * 1-by-1 from the line the edit starts at -- which is what a paste of a read
+ * of that range looks like, and what ordinary content does not.
+ */
+function hasSequentialGutter(text: string, firstLine: number): boolean {
+	if (!hasLineNumberGutter(text)) {
+		return false;
+	}
+	const numbered = text
+		.split(/\r\n|\n/)
+		.filter((line) => line.trim() !== "")
+		.map((line) => Number.parseInt(line.trim(), 10));
+	return numbered.every(
+		(value, index) => Number.isFinite(value) && value === firstLine + index,
+	);
 }
 
 /** Remove the read gutter, leaving the source's own indentation intact. */
