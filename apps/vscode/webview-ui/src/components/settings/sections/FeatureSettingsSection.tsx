@@ -1,11 +1,13 @@
 import { DEFAULT_FOCUS_CHAIN_SETTINGS } from "@shared/FocusChainSettings"
 import { UpdateSettingsRequest } from "@shared/proto/cline/state"
+import { VSCodeButton } from "@vscode/webview-ui-toolkit/react"
 import { memo, type ReactNode } from "react"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useExtensionState } from "@/context/ExtensionStateContext"
+import { DebouncedTextArea } from "../common/DebouncedTextArea"
 import PromptTemplatesSection from "../PromptTemplatesSection"
 import Section from "../Section"
 import { updateSetting } from "../utils/settingsHandlers"
@@ -163,6 +165,8 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		mcpDisplayMode,
 		yoloModeToggled,
 		useAutoCondense,
+		compactionPrompt,
+		defaultCompactionPrompt,
 		compactionStrategy,
 		subagentsEnabled,
 		worktreesEnabled,
@@ -325,6 +329,31 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 				</div>
 
 				<PromptTemplatesSection />
+
+				{/* Last, because it is the longest field on the page and the one
+				    most people never touch. */}
+				<div className="space-y-2 pt-2">
+					<Label className="text-sm font-medium text-foreground">Compaction Prompt</Label>
+					<p className="text-xs text-muted-foreground">
+						The instruction the summarizer is given when auto compaction runs. The summary replaces the turns it
+						stands for, so this decides what survives. Leave empty for the built-in prompt.{" "}
+						<code>{"{{files_read}}"}</code> and <code>{"{{files_edited}}"}</code> are substituted; the transcript is
+						appended automatically.
+					</p>
+					<DebouncedTextArea
+						disabled={!useAutoCondense}
+						initialValue={compactionPrompt ?? ""}
+						maxRows={24}
+						minRows={4}
+						onChange={(value) => updateSetting("compactionPrompt", value)}
+						placeholder={defaultCompactionPrompt}
+					/>
+					{compactionPrompt?.trim() ? (
+						<VSCodeButton appearance="secondary" onClick={() => updateSetting("compactionPrompt", "")}>
+							Reset to default
+						</VSCodeButton>
+					) : null}
+				</div>
 			</Section>
 		</div>
 	)

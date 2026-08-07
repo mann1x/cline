@@ -116,6 +116,22 @@ export interface ContextCompactionPrepareTurnOptions {
  */
 const LONG_CONVERSATION_TARGET_RATIO = 0.33;
 
+/**
+ * The share of the budget past which the last turn loses its exemption.
+ *
+ * The cut normally stops at the start of the latest typed turn so the model
+ * keeps the request it is working on intact. A turn is a prompt and everything
+ * the model did about it, so one prompt followed by a long tool loop is a
+ * single turn that can be most of the transcript -- and then the exemption is
+ * not protecting the model's train of thought, it is refusing to compact.
+ *
+ * Two thirds is chosen to sit above the 0.33 target with real room to spare, so
+ * an ordinary compaction that simply lands wide of its target does not start
+ * cutting into the live turn; only one that would leave the window still mostly
+ * full does.
+ */
+const LAST_TURN_PRESERVE_CEILING_RATIO = 0.66;
+
 function isCompactionCancellation(
 	error: unknown,
 	abortSignal: AbortSignal,
@@ -193,6 +209,7 @@ const BUILTIN_COMPACTION_STRATEGIES = {
 			context,
 			providerConfig,
 			summarizer: compaction?.summarizer,
+			summaryPrompt: compaction?.summaryPrompt,
 			// The recency budget is a floor and the message budget a ceiling —
 			// two different bounds, not one clamped by the other. Taking the
 			// smaller of the pair (as this did) collapses them: the floor is
@@ -204,6 +221,11 @@ const BUILTIN_COMPACTION_STRATEGIES = {
 					compaction?.preserveRecentTokens ?? DEFAULT_PRESERVE_RECENT_TOKENS,
 				preserveRecentMessagesRatio: compaction?.preserveRecentMessagesRatio,
 				messageTargetTokens: context.budget.messages.targetTokens,
+				lastTurnCeiling:
+					translateRequestBudgetToMessages(
+						context.budget.request.maxInputTokens,
+						context.budget.request.overheadTokens,
+					) * LAST_TURN_PRESERVE_CEILING_RATIO,
 			}),
 			estimateMessageTokens,
 			logger,
@@ -276,6 +298,33 @@ function resolveAutoRequestTargetTokens(input: {
 		1,
 		Math.min(targetTokens, input.maxInputTokens, triggerCeiling),
 	);
+}
+
+/**
+ * Put an estimate on the same scale as the provider's own count.
+ *
+ * `estimate` and `estimateOfObserved` measure the same transcript the same way;
+ * `observed` is what the provider charged for it. The ratio between the last
+ * two is this session's standing estimator error, and applying it to the first
+ * is what makes a "before" and an "after" comparable. Falls back to the raw
+ * estimate when there is nothing to calibrate against -- the first request of a
+ * session, before any response has been counted.
+ */
+export function scaleEstimateToObserved(
+	estimate: number,
+	estimateOfObserved: number,
+	observed: number | undefined,
+): number {
+	if (
+		observed === undefined ||
+		!Number.isFinite(observed) ||
+		observed <= 0 ||
+		!Number.isFinite(estimateOfObserved) ||
+		estimateOfObserved <= 0
+	) {
+		return estimate;
+	}
+	return Math.max(1, Math.round(estimate * (observed / estimateOfObserved)));
 }
 
 function translateRequestBudgetToMessages(
@@ -685,6 +734,12 @@ export function createContextCompactionPrepareTurn(
 				0,
 			);
 			const afterRequestTokens = requestOverheadTokens + afterMessageTokens;
+			// On the provider's scale, so it can be compared with `tokensBefore`.
+			const scaledAfterRequestTokens = scaleEstimateToObserved(
+				afterRequestTokens,
+				requestInputTokens,
+				observedRequestTokens,
+			);
 			config.logger?.log("Context compaction completed", {
 				severity: "info",
 				strategy: executedStrategy,
@@ -714,10 +769,19 @@ export function createContextCompactionPrepareTurn(
 				// estimator was calibrated, which put this notice at odds with
 				// the context bar it sits above. The "after" figure has no
 				// counterpart to use -- it describes a request that has not
-				// been sent -- so it stays an estimate and is corrected by the
-				// next response's usage.
+				// been sent.
+				//
+				// It can only be an estimate, but printing a measurement and an
+				// estimate as the two ends of one arrow compares two different
+				// rulers. Measured live: 89,881 observed before against 93,844
+				// estimated after, shown as a compaction that made the context
+				// *larger* -- and the next response counted 80,317. So the estimate
+				// is scaled by how far this same transcript's estimate stood from
+				// the count the provider gave it. That is the only calibration
+				// available here and it is the right one: the same messages,
+				// measured the same way, moments earlier.
 				tokensBefore: triggerInputTokens,
-				tokensAfter: afterRequestTokens,
+				tokensAfter: scaledAfterRequestTokens,
 				messagesBefore: beforeMessageCount,
 				messagesAfter: result.messages.length,
 				maxInputTokens,
@@ -730,8 +794,8 @@ export function createContextCompactionPrepareTurn(
 				messagesAfter: result.messages.length,
 				messagesRemoved: beforeMessageCount - result.messages.length,
 				tokensBefore: triggerInputTokens,
-				tokensAfter: afterRequestTokens,
-				tokensSaved: triggerInputTokens - afterRequestTokens,
+				tokensAfter: scaledAfterRequestTokens,
+				tokensSaved: triggerInputTokens - scaledAfterRequestTokens,
 				triggerTokens: requestTriggerTokens,
 				maxInputTokens,
 				thresholdRatio: COMPACTION_TRIGGER_RATIO,

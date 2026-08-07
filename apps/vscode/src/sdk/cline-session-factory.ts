@@ -1118,6 +1118,17 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	const sessionContextWindow =
 		configuredContextWindow ?? declaredContextWindow ?? positiveFiniteNumber(committedRuntimeModel?.modelInfo?.contextWindow)
 
+	// The per-turn output cap, resolved once: the system prompt states it, and
+	// compaction budgets against it. A configured `num_predict` goes on the wire
+	// ahead of the session's cap and wins, so it is the answer wherever the
+	// question is "how long can this reply be".
+	const configuredNumPredict = positiveFiniteNumber(ollamaProviderConfig?.sampling?.numPredict)
+	// What the user or the session actually chose, as opposed to the figure used
+	// when nobody has chosen anything. Only the former may overrule a model's own
+	// published cap.
+	const explicitOutputCap = configuredNumPredict ?? maxTokensPerTurn
+	const sessionOutputCap = explicitOutputCap ?? DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS
+
 	// Tell the model about the cap its reply will actually be truncated at.
 	try {
 		// Both figures below answer the same question: what will the server
@@ -1126,8 +1137,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		// the prompt has to say it. Stating the fallback while sending something
 		// smaller tells the model it has room it does not have, which is the
 		// same defect as the context window and fails the same way.
-		const configuredNumPredict = positiveFiniteNumber(ollamaProviderConfig?.sampling?.numPredict)
-		const outputCap = configuredNumPredict ?? maxTokensPerTurn ?? DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS
+		const outputCap = sessionOutputCap
 		const contextWindow = sessionContextWindow
 		const thinking = await resolveOllamaThinkingAllowance(
 			providerId,
@@ -1151,6 +1161,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	// `useAutoCondense` default in shared/storage/state-keys.ts.
 	const globalUseAutoCondense = stateManager.getGlobalSettingsKey("useAutoCondense") ?? true
 	const compactionStrategy = readCompactionStrategyGlobally()
+	const compactionPrompt = (stateManager.getGlobalSettingsKey("compactionPrompt") ?? "").trim()
 	// Per-tool-result cap. Stored as 0 when unset, which is not "keep nothing":
 	// it hands the decision back to the SDK default.
 	const maxToolResultChars = positiveFiniteNumber(stateManager.getGlobalSettingsKey("maxToolResultChars"))
@@ -1248,15 +1259,38 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	const reportedContextWindow = configuredContextWindow ?? declaredContextWindow
 	if (sessionContextWindow !== undefined && (reportedContextWindow !== undefined || knownModels?.[modelId])) {
 		const existing = knownModels?.[modelId]
+		// Spread rather than assigned: writing `undefined` still creates the key,
+		// and a key that exists with no value is not the same as no key -- the
+		// `-1`-sentinel path asserts the difference.
+		const resolvedMaxTokens =
+			explicitOutputCap ?? existing?.maxTokens ?? (sdkProviderId === "ollama" ? sessionOutputCap : undefined)
 		knownModels = {
 			...(knownModels ?? {}),
 			[modelId]: {
 				...(existing ?? {}),
 				contextWindow: sessionContextWindow,
 				maxInputTokens: Math.min(existing?.maxInputTokens ?? sessionContextWindow, sessionContextWindow),
+				// The per-turn cap belongs here too. Compaction reads it as
+				// `model.info.maxTokens` to decide how far a long conversation should
+				// be compacted, and for a local model it was never set: every
+				// diagnostic read `modelMaxTokens: null`, so the branch aiming at a
+				// third of the window was unreachable and the target silently fell
+				// back to 70% of the trigger. Measured live, that is a compaction
+				// aiming at 54,600 instead of 36,300 -- one reclaimed 10% and the
+				// very next turn triggered another.
+				// A configured cap is what goes on the wire, so it wins. Absent one,
+				// a model that publishes its own figure keeps it -- overwriting a
+				// catalog model's real 128,000 with a fallback would be inventing
+				// metadata, which is the mistake the guard above exists to prevent.
+				// The synthesized default is written only for Ollama, where the model
+				// publishes nothing and the session's cap is what the wire will carry;
+				// that is what finally gives the long-conversation target its number.
+				...(resolvedMaxTokens !== undefined ? { maxTokens: resolvedMaxTokens } : {}),
 			},
 		} as typeof knownModels
-		Logger.log(`[SessionFactory] Context window: ${sessionContextWindow} (model=${modelId})`)
+		Logger.log(
+			`[SessionFactory] Context window: ${sessionContextWindow} maxTokens=${resolvedMaxTokens ?? "unset"} (model=${modelId})`,
+		)
 	}
 
 	// Always pass a providerConfig so the proxy/CA-aware fetch reaches the SDK
@@ -1302,6 +1336,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 					compaction: {
 						enabled: true,
 						strategy: compactionStrategy,
+						...(compactionPrompt ? { summaryPrompt: compactionPrompt } : {}),
 					},
 				}
 			: {}),

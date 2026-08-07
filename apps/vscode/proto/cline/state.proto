@@ -293,6 +293,7 @@ message Settings {
   optional string api_configuration_profiles = 189;
   optional string active_api_configuration_profile = 190;
   optional string vision_mode_api_configuration = 191;
+  optional string compaction_prompt = 192;
 }
 
 message State {
@@ -444,6 +445,7 @@ message UpdateSettingsRequest {
   optional string api_configuration_profiles = 47;
   optional string active_api_configuration_profile = 48;
   optional string vision_mode_api_configuration = 49;
+  optional string compaction_prompt = 50;
 }
 
 message UpdateTerminalConnectionTimeoutRequest {

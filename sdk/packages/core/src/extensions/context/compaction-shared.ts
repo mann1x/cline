@@ -458,6 +458,20 @@ export interface RecencyBounds {
 	/** Minimum share of the transcript's messages to preserve. */
 	messagesRatio: number;
 	/**
+	 * The most the preserved tail may cost before the last turn stops being
+	 * exempt from the cut.
+	 *
+	 * The last typed turn survives verbatim so the model keeps the request it is
+	 * working on. That exemption is unbounded, and a long tool loop under one
+	 * prompt is all one turn: measured live, a 250,621-byte request compacted to
+	 * 226,763 -- ten small messages folded, 9.5 percent reclaimed -- because the
+	 * cut was clamped to the start of a turn that was nearly the whole
+	 * transcript, and the trigger fired again on the very next turn. Past this
+	 * ceiling, keeping the turn whole costs more than it is worth and the cut is
+	 * allowed into it.
+	 */
+	lastTurnCeiling?: number;
+	/**
 	 * Maximum tokens to preserve. Compaction computes a target for the
 	 * post-compaction request and this is what that target buys: without it the
 	 * floor is also the ceiling, and every compaction folds to the minimum no
@@ -470,6 +484,7 @@ export function resolveRecencyBounds(input: {
 	preserveRecentTokens: number;
 	preserveRecentMessagesRatio?: number;
 	messageTargetTokens?: number;
+	lastTurnCeiling?: number;
 }): RecencyBounds {
 	const preserve = Math.max(1, input.preserveRecentTokens);
 	// Without a usable target there is nothing to spend, so the floor is also
@@ -484,6 +499,9 @@ export function resolveRecencyBounds(input: {
 		// request to keep everything, which is how a small context ends up
 		// never compacting at all.
 		tokenFloor: Math.min(preserve, tokenCeiling),
+		lastTurnCeiling: isPositiveFiniteNumber(input.lastTurnCeiling)
+			? input.lastTurnCeiling
+			: undefined,
 		messagesRatio:
 			typeof ratio === "number" && Number.isFinite(ratio) && ratio > 0
 				? Math.min(1, ratio)
@@ -598,6 +616,32 @@ const NO_CUT: CompactionCutPlan = { cutIndex: 0, pinnedIndex: -1 };
  * measurable share of it, while still honouring the recency budget when that
  * budget asks to keep less than half.
  */
+/**
+ * Would preserving the whole last turn leave more than the ceiling allows?
+ *
+ * Measured against what the tail would actually cost, not against the message
+ * count: a turn is expensive because of what is in it, and a tool loop's
+ * arguments and results are most of that.
+ */
+function exceedsLastTurnCeiling(
+	messages: MessageWithMetadata[],
+	lastTurnStartIndex: number,
+	bounds: RecencyBounds,
+	estimateMessageTokens: EstimateMessageTokens,
+): boolean {
+	if (!isPositiveFiniteNumber(bounds.lastTurnCeiling)) {
+		return false;
+	}
+	let tail = 0;
+	for (let index = lastTurnStartIndex; index < messages.length; index += 1) {
+		tail += estimateMessageTokens(messages[index]);
+		if (tail > bounds.lastTurnCeiling) {
+			return true;
+		}
+	}
+	return false;
+}
+
 export function findCutPlan(
 	messages: MessageWithMetadata[],
 	bounds: RecencyBounds,
@@ -618,6 +662,35 @@ export function findCutPlan(
 	// task followed by one long tool loop) still cut at the token-budget
 	// candidate.
 	const lastTurnStartIndex = findLastTurnStartIndex(messages);
+	// Unless keeping the whole turn is what defeats the compaction. One prompt
+	// followed by a long tool loop is a single turn, so this clamp could drag the
+	// cut back to near the start of the transcript and fold almost nothing:
+	// measured live, a 250,621-byte request compacted to 226,763 and the trigger
+	// fired again on the very next turn.
+	//
+	// The prompt still survives. What costs the window is the tool traffic under
+	// it, not the sentence that asked for it, so an over-budget turn is cut with
+	// the prompt pinned rather than summarized away -- the model keeps the
+	// request it is working on and loses only the loop it can re-derive.
+	if (
+		lastTurnStartIndex > 0 &&
+		exceedsLastTurnCeiling(
+			messages,
+			lastTurnStartIndex,
+			bounds,
+			estimateMessageTokens,
+		)
+	) {
+		const pinned = planPinnedCut(
+			messages,
+			lastTurnStartIndex,
+			bounds,
+			estimateMessageTokens,
+		);
+		if (pinned.cutIndex > 0) {
+			return pinned;
+		}
+	}
 	const cappedCut =
 		lastTurnStartIndex > 0
 			? Math.min(candidate, lastTurnStartIndex)
@@ -972,32 +1045,76 @@ export function ensureFilesSection(
 	return `${summary.trim()}\n\n${renderFilesSection(fileOps)}`.trim();
 }
 
+/**
+ * What the summarizer is asked for when nothing else is configured.
+ *
+ * The summary replaces the turns it stands for, permanently: every later turn
+ * reads this and never the conversation again. So the instruction that matters
+ * is not "be concise" -- brevity is what loses the work -- but which specific
+ * things must survive the compression. The old default asked for a concise,
+ * factual note under five headings and said nothing about identifiers, paths,
+ * decisions already taken or approaches already ruled out, which is exactly
+ * what a model needs in order not to redo them.
+ *
+ * `{{files_read}}` and `{{files_edited}}` are substituted before sending. A
+ * template that omits them still gets a Files section appended, because losing
+ * track of which files are in play is the one failure that makes a summary
+ * actively misleading rather than merely thin.
+ */
+export const DEFAULT_COMPACTION_PROMPT = `You are writing the hand-over note for a coding session that is about to lose its transcript. Everything below will be discarded; only your note survives, and the agent continuing this work will have nothing else to go on.
+
+Write for that reader. Prefer specifics over summary: exact file paths, function and symbol names, error text, commands, and numbers. Do not compress away detail that would have to be rediscovered — an over-long note costs a little context, a vague one costs the whole investigation.
+
+## Goal
+What is being built or fixed, in one or two sentences, including any constraint the user stated.
+
+## Done
+What is finished and verified, with the evidence — which files changed, what the test or command said. Be specific enough that none of it gets redone.
+
+## In progress
+What is underway right now, and exactly where it stopped.
+
+## Ruled out
+Approaches already tried that did not work, and why. Omit if none — but never drop one that was tried, or it will be tried again.
+
+## Key facts
+Decisions taken, values discovered, identifiers, signatures, and anything learned about the codebase that is not obvious from reading it. Omit if none.
+
+## Next
+The immediate next steps, in order.
+
+## Files
+Read: {{files_read}}
+Edited: {{files_edited}}`;
+
+function renderCompactionPrompt(
+	template: string,
+	fileOps: FileOperationSummary,
+): string {
+	const read = fileOps.readFiles.join(", ") || "none";
+	const edited = fileOps.modifiedFiles.join(", ") || "none";
+	const rendered = template
+		.replaceAll("{{files_read}}", read)
+		.replaceAll("{{files_edited}}", edited);
+	if (rendered.includes(read) && rendered.includes(edited)) {
+		return rendered;
+	}
+	// A custom template that names neither placeholder still gets the file list:
+	// a summary that has lost track of which files are in play is worse than a
+	// thin one, because it reads as authoritative.
+	return `${rendered.trim()}\n\n## Files\nRead: ${read}\nEdited: ${edited}`;
+}
+
 export function buildSummaryRequest(options: {
 	previousSummary?: string;
 	conversationText: string;
 	fileOps: FileOperationSummary;
+	/** Overrides {@link DEFAULT_COMPACTION_PROMPT}; blank falls back to it. */
+	promptTemplate?: string;
 }): string {
-	const parts: string[] = [
-		`Summarize this session for continuation. Be concise and factual.
-
-## Goal
-One sentence: what is being built or fixed.
-
-## State
-- Done: completed steps
-- In Progress: current work
-- Blocked: blockers or open questions
-
-## Highlights
-Key technical choices or notable findings (omit if none).
-
-## Next
-Immediate next steps.
-
-## Files
-Read: ${options.fileOps.readFiles.join(", ") || "none"}
-Edited: ${options.fileOps.modifiedFiles.join(", ") || "none"}`,
-	];
+	const template =
+		options.promptTemplate?.trim() || DEFAULT_COMPACTION_PROMPT;
+	const parts: string[] = [renderCompactionPrompt(template, options.fileOps)];
 
 	if (options.previousSummary?.trim()) {
 		parts.push(`Previous summary:\n${options.previousSummary.trim()}`);

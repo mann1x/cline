@@ -129,6 +129,15 @@ export interface ExtensionState {
 	mcpResponsesCollapsed?: boolean
 	yoloModeToggled?: boolean
 	useAutoCondense?: boolean
+	/** Replaces the built-in compaction summary instruction; empty means default. */
+	compactionPrompt?: string
+	/**
+	 * The built-in instruction, so the settings field can show what it replaces.
+	 *
+	 * Sent from the host rather than imported: the webview is a browser bundle
+	 * and `@cline/core` reaches Node-only code through `@cline/llms`.
+	 */
+	defaultCompactionPrompt?: string
 	/** Focus Chain / task checklist. Read by the webview so the panel and the
 	 * Features toggle agree with what the session was actually configured with. */
 	focusChainSettings?: FocusChainSettings

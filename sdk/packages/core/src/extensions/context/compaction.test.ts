@@ -62,13 +62,18 @@ function totalJsonTokens(messages: LlmsProviders.Message[]): number {
  */
 function bounds(
 	preserveRecentTokens: number,
-	overrides: { messagesRatio?: number; messageTargetTokens?: number } = {},
+	overrides: {
+		messagesRatio?: number;
+		messageTargetTokens?: number;
+		lastTurnCeiling?: number;
+	} = {},
 ) {
 	return resolveRecencyBounds({
 		preserveRecentTokens,
 		preserveRecentMessagesRatio: overrides.messagesRatio ?? Number.EPSILON,
 		messageTargetTokens:
 			overrides.messageTargetTokens ?? Number.MAX_SAFE_INTEGER,
+		lastTurnCeiling: overrides.lastTurnCeiling,
 	});
 }
 
@@ -1469,7 +1474,13 @@ describe("createContextCompactionPrepareTurn", () => {
 				iteration: 1,
 			}),
 		);
-		expect(result?.messages).toHaveLength(5);
+		// Three, not five: this model reports a 10-token input budget and the
+		// last turn costs 116, so keeping that turn whole would leave the
+		// transcript over the ceiling and the trigger would fire again at once.
+		// The turn is cut with its prompt pinned -- what the window cannot afford
+		// is the tool traffic under the prompt, not the sentence that asked for
+		// it, and the assertions below still hold.
+		expect(result?.messages).toHaveLength(3);
 		expect(result?.messages[0]).toMatchObject({
 			role: "user",
 			metadata: expect.objectContaining({
@@ -1477,7 +1488,10 @@ describe("createContextCompactionPrepareTurn", () => {
 				displayRole: "system",
 				userRunSpan: 2,
 				details: {
-					readFiles: [],
+					// The read is folded now rather than sitting in the preserved
+					// tail, so the summary is what carries it -- which is the point
+					// of recording file operations in the summary at all.
+					readFiles: ["/tmp/example.ts"],
 					modifiedFiles: [],
 				},
 			}),
@@ -1496,7 +1510,7 @@ describe("createContextCompactionPrepareTurn", () => {
 			role: "user",
 			content: "Implement the change",
 		});
-		expect(result?.messages[4]).toEqual({
+		expect(result?.messages.at(-1)).toEqual({
 			role: "assistant",
 			content: "Recent assistant state",
 		});
@@ -2088,6 +2102,50 @@ describe("createContextCompactionPrepareTurn", () => {
 			}),
 		});
 		expect(result?.messages.length).toBeLessThan(messages.length);
+	});
+
+	// Measured live: one typed prompt followed by a long tool loop is a single
+	// turn, so clamping the cut to its start dragged the cut back to near the
+	// beginning of the transcript. A 250,621-byte request compacted to 226,763 --
+	// 9.5% reclaimed -- and the trigger fired again on the very next turn.
+	it("cuts into the last turn when keeping it whole would reclaim nothing", () => {
+		const messages: MessageWithMetadata[] = [
+			{ role: "user", content: "first task" },
+			{ role: "assistant", content: "first answer" },
+			{ role: "user", content: "the one long turn" },
+			...Array.from({ length: 6 }, () => ({
+				role: "assistant" as const,
+				content: "x".repeat(4_000),
+			})),
+		];
+		const lastTurnStart = 2;
+
+		// Without a ceiling the cut cannot pass the start of that turn.
+		expect(
+			findCutPlan(messages, bounds(1), estimateJsonTokens).cutIndex,
+		).toBeLessThanOrEqual(lastTurnStart);
+
+		// With one the turn stops being exempt, so the cut lands past it.
+		expect(
+			findCutPlan(messages, bounds(1, { lastTurnCeiling: 100 }), estimateJsonTokens)
+				.cutIndex,
+		).toBeGreaterThan(lastTurnStart);
+	});
+
+	it("keeps the last turn whole when it fits inside the ceiling", () => {
+		const messages: MessageWithMetadata[] = [
+			{ role: "user", content: "first task" },
+			{ role: "assistant", content: "first answer" },
+			{ role: "user", content: "second task" },
+			{ role: "assistant", content: "second answer" },
+		];
+		expect(
+			findCutPlan(
+				messages,
+				bounds(1, { lastTurnCeiling: Number.MAX_SAFE_INTEGER }),
+				estimateJsonTokens,
+			),
+		).toEqual({ cutIndex: 2, pinnedIndex: -1 });
 	});
 
 	it("leaves the cut at the latest typed prompt when that still folds work", () => {

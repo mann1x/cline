@@ -190,6 +190,10 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		}
 
 		// Update auto-condense setting
+		if (request.compactionPrompt !== undefined) {
+			controller.stateManager.setGlobalState("compactionPrompt", request.compactionPrompt)
+		}
+
 		if (request.useAutoCondense !== undefined) {
 			if (controller.task) {
 				telemetryService.captureAutoCondenseToggle(

@@ -68,7 +68,10 @@ async function generateSummary(options: {
 	const handler = await createHandlerAsync(options.providerConfig);
 	let text = "";
 	for await (const chunk of handler.createMessage(
-		"Summarize the provided coding session into a concise continuation note with detailed next steps.",
+		// The system half said "concise" while the user half asks for the detail
+		// that has to survive; the model was being pulled both ways on the one
+		// message that has to carry everything.
+		"You write hand-over notes for coding sessions. The transcript you are given is about to be discarded, so your note is the only record that remains. Follow the requested structure exactly, and keep every specific — paths, names, errors, numbers — that the next agent would otherwise have to rediscover.",
 		[{ role: "user", content: options.request }],
 	)) {
 		if (chunk.type === "text") {
@@ -99,6 +102,8 @@ export async function runAgenticCompaction(options: {
 	context: CoreCompactionContext;
 	providerConfig: ProviderConfig;
 	summarizer?: CoreCompactionSummarizerConfig;
+	/** Overrides the built-in summary instruction; blank uses the default. */
+	summaryPrompt?: string;
 	bounds: RecencyBounds;
 	estimateMessageTokens: EstimateMessageTokens;
 	logger?: BasicLogger;
@@ -181,6 +186,7 @@ export async function runAgenticCompaction(options: {
 			previousSummary,
 			conversationText: "",
 			fileOps: preProjectionFileOps,
+			promptTemplate: options.summaryPrompt,
 		}).length,
 	);
 	const availableSummaryInputTokens =
@@ -224,6 +230,7 @@ export async function runAgenticCompaction(options: {
 		previousSummary,
 		conversationText,
 		fileOps,
+		promptTemplate: options.summaryPrompt,
 	});
 	options.logger?.debug("Agentic compaction summarizer diagnostics", {
 		messagesToSummarize: messagesToSummarize.length,

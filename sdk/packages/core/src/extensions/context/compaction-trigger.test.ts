@@ -8,6 +8,7 @@ import {
 	resolveSummaryMaxOutputTokens,
 	SUMMARY_OUTPUT_WINDOW_SHARE,
 } from "./compaction-shared";
+import { scaleEstimateToObserved } from "./compaction";
 
 describe("the compaction trigger", () => {
 	it("keeps a full turn's output inside the window", () => {
@@ -106,5 +107,23 @@ describe("the compaction summary budget", () => {
 		expect(resolveSummaryMaxOutputTokens(0)).toBe(
 			DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
 		);
+	});
+})
+
+describe("scaling an estimate onto the provider's ruler", () => {
+	// Measured live: 89,881 observed before, 93,844 estimated after, printed as a
+	// compaction that made the context larger. The next response counted 80,317.
+	it("makes a before and an after comparable", () => {
+		expect(scaleEstimateToObserved(93_844, 104_010, 89_881)).toBe(81_096);
+	});
+
+	it("leaves the estimate alone when nothing has been counted yet", () => {
+		expect(scaleEstimateToObserved(50_000, 60_000, undefined)).toBe(50_000);
+		expect(scaleEstimateToObserved(50_000, 0, 40_000)).toBe(50_000);
+		expect(scaleEstimateToObserved(50_000, 60_000, 0)).toBe(50_000);
+	});
+
+	it("scales up as readily as down", () => {
+		expect(scaleEstimateToObserved(100, 100, 130)).toBe(130);
 	});
 })

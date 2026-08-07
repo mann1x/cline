@@ -292,6 +292,14 @@ const USER_SETTINGS_FIELDS = {
 	yoloModeToggled: { default: false as boolean },
 	autoApproveAllToggled: { default: false as boolean },
 	useAutoCondense: { default: true as boolean },
+	/**
+	 * Replaces the built-in instruction given to the compaction summarizer.
+	 *
+	 * Empty means the default. What a summary has to carry depends on the work
+	 * and on the model writing it, and the summary is all that survives the turns
+	 * it replaces, so this is worth being able to tune without a rebuild.
+	 */
+	compactionPrompt: { default: "" as string },
 	subagentsEnabled: { default: false as boolean },
 	worktreesEnabled: { default: false as boolean },
 	preferredLanguage: { default: "English" as string },

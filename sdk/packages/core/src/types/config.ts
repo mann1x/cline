@@ -192,6 +192,16 @@ export interface CoreCompactionConfig {
 	 * compacted request still caps it, so this can only ask, never overrun.
 	 */
 	preserveRecentMessagesRatio?: number;
+	/**
+	 * Replaces the built-in instruction the summarizer is given.
+	 *
+	 * The summary is all that survives the turns it stands for, and what a good
+	 * one contains depends on the work and on the model writing it, so this is
+	 * worth being able to change without a rebuild. `{{files_read}}` and
+	 * `{{files_edited}}` are substituted; the transcript is appended by the
+	 * caller either way. Blank or unset uses the default.
+	 */
+	summaryPrompt?: string;
 	summarizer?: CoreCompactionSummarizerConfig;
 	compact?: (
 		context: CoreCompactionContext,
