@@ -1,5 +1,6 @@
 import { VSCodeButton, VSCodeDropdown, VSCodeOption, VSCodeTextField } from "@vscode/webview-ui-toolkit/react"
 import { useEffect, useState } from "react"
+import { DROPDOWN_Z_INDEX, DropdownContainer } from "./ApiOptions"
 import { type ApiConfigurationProfileScope, useApiConfigurationProfiles } from "./utils/useApiConfigurationProfiles"
 
 const NO_PROFILE = "__none__"
@@ -66,25 +67,33 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 				<label className="text-xs shrink-0" htmlFor="api-config-profile">
 					Profile
 				</label>
-				<VSCodeDropdown
-					className="flex-1 min-w-[140px]"
-					id="api-config-profile"
-					onChange={async (event: any) => {
-						const value = event.target.value
-						if (value && value !== NO_PROFILE) {
-							await loadProfile(value)
-						}
-					}}
-					value={activeName || NO_PROFILE}>
-					<VSCodeOption value={NO_PROFILE}>
-						{profiles.length === 0 ? "No saved profiles" : "Select a profile…"}
-					</VSCodeOption>
-					{profiles.map((profile) => (
-						<VSCodeOption key={profile.name} value={profile.name}>
-							{profile.name}
+				{/* The open list has to paint over the provider controls below it. The
+				    API Provider combobox sets `zIndex: DROPDOWN_Z_INDEX` on its own
+				    input, so a list opened from up here was drawn underneath it and cut
+				    off — the more profiles are saved, the more of the list is lost.
+				    This is the container the provider dropdowns already use, one step
+				    higher, and it also pins the list to open downward. */}
+				<DropdownContainer className="flex-1 min-w-[140px]" zIndex={DROPDOWN_Z_INDEX + 1}>
+					<VSCodeDropdown
+						className="w-full"
+						id="api-config-profile"
+						onChange={async (event: any) => {
+							const value = event.target.value
+							if (value && value !== NO_PROFILE) {
+								await loadProfile(value)
+							}
+						}}
+						value={activeName || NO_PROFILE}>
+						<VSCodeOption value={NO_PROFILE}>
+							{profiles.length === 0 ? "No saved profiles" : "Select a profile…"}
 						</VSCodeOption>
-					))}
-				</VSCodeDropdown>
+						{profiles.map((profile) => (
+							<VSCodeOption key={profile.name} value={profile.name}>
+								{profile.name}
+							</VSCodeOption>
+						))}
+					</VSCodeDropdown>
+				</DropdownContainer>
 
 				{activeName && isDirty ? (
 					<>
