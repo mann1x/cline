@@ -376,11 +376,83 @@ export class SdkDiffEditCoordinator {
 	}
 }
 
+/** Mirrors the executor's detectLineEnding: one CRLF anywhere makes the file CRLF. */
+function detectLineEnding(content: string): "\r\n" | "\n" {
+	return content.includes("\r\n") ? "\r\n" : "\n"
+}
+
+/** Mirrors the executor's normalizeLineEndings, so LF input matches a CRLF file. */
+function normalizeLineEndings(text: string, eol: "\r\n" | "\n"): string {
+	return text.split(/\r\n|\n/).join(eol)
+}
+
+/** Mirrors the executor's LINE_NUMBER_GUTTER and its two helpers. */
+const LINE_NUMBER_GUTTER = /^\s*\d+\s\|\s?/
+
+function hasLineNumberGutter(text: string): boolean {
+	const lines = text.split("\n").filter((line) => line.trim() !== "")
+	return lines.length > 0 && lines.every((line) => LINE_NUMBER_GUTTER.test(line))
+}
+
+function stripLineNumberGutter(text: string): string {
+	return text
+		.split("\n")
+		.map((line) => (line.trim() === "" ? line : line.replace(LINE_NUMBER_GUTTER, "")))
+		.join("\n")
+}
+
+/** Mirrors the executor's unanchored-range guard (MAX_UNANCHORED_RANGE_LINES/SHARE). */
+const MAX_UNANCHORED_RANGE_LINES = 60
+const MAX_UNANCHORED_RANGE_SHARE = 0.5
+
+function countOccurrences(haystack: string, needle: string): number {
+	return needle.length === 0 ? 0 : haystack.split(needle).length - 1
+}
+
+function replaceNthOccurrence(content: string, oldStr: string, newStr: string, occurrence: number): string {
+	let index = -1
+	for (let n = 0; n < occurrence; n++) {
+		index = content.indexOf(oldStr, index + (n === 0 ? 0 : 1))
+		if (index < 0) {
+			return content
+		}
+	}
+	return content.slice(0, index) + newStr + content.slice(index + oldStr.length)
+}
+
+function assertLineInRange(line: number, lineCount: number, field: string): void {
+	if (line < 1 || line > lineCount) {
+		throw new Error(
+			`Invalid ${field}: ${line}. The file has ${lineCount} line(s), so ${field} must be between 1 and ${lineCount}.`,
+		)
+	}
+}
+
+function assertColumnInRange(column: number, lineText: string, line: number, field: string): void {
+	if (column < 1 || column > lineText.length) {
+		throw new Error(
+			`Invalid ${field}: ${column}. Line ${line} has ${lineText.length} character(s), so ${field} must be between 1 and ${lineText.length}.`,
+		)
+	}
+}
+
 /**
  * Computes the full proposed file content for an `editor` tool input, mirroring the
  * SDK executor's semantics (sdk/packages/core/src/extensions/tools/executors/editor.ts)
  * so the preview shows exactly what the executor will write. Inputs the SDK would
  * reject throw here too, and the preview is simply skipped.
+ *
+ * The branch order below is the executor's own, and it matters: when `start_line` is
+ * present the executor replaces by line number and never looks at `old_text`, so a call
+ * carrying both must not fall through to the match path.
+ *
+ * Measured: this function knew only `insert_line`, create and `old_text` while the
+ * executor had grown line ranges, column ranges and column inserts. In a 58-minute
+ * session 29 of 30 `editor` calls threw here — 20 "`old_text` is required" and 9 "text
+ * not found" — so every edit applied with no diff preview at all. Line-range edits are
+ * now the common shape, which is exactly the shape that was missing. `editor-preview-
+ * mirror.test.ts` runs both implementations over the same inputs so the next divergence
+ * fails a test instead of silently costing the preview.
  */
 export function computeNewEditorContent(
 	originalContent: string,
@@ -388,16 +460,99 @@ export function computeNewEditorContent(
 	filePath: string,
 	editType: "create" | "modify",
 ): string {
+	const eol = detectLineEnding(originalContent)
+	const lines = originalContent.split(/\r\n|\n/)
+
 	if (input.insert_line != null) {
-		const lines = originalContent.split("\n")
+		if (input.start_line != null) {
+			throw new Error(
+				"`insert_line` adds text at a boundary and `start_line` replaces existing lines. Send one or the other.",
+			)
+		}
+		if (input.insert_column != null) {
+			assertLineInRange(input.insert_line, lines.length, "insert_line")
+			const lineText = lines[input.insert_line - 1] ?? ""
+			// One past the last character is the append position.
+			if (input.insert_column < 1 || input.insert_column > lineText.length + 1) {
+				throw new Error(
+					`Invalid insert_column: ${input.insert_column}. Line ${input.insert_line} has ${lineText.length} character(s), so insert_column must be between 1 and ${lineText.length + 1}. Use ${lineText.length + 1} to append at the end of the line.`,
+				)
+			}
+			lines[input.insert_line - 1] =
+				`${lineText.slice(0, input.insert_column - 1)}${input.new_text}${lineText.slice(input.insert_column - 1)}`
+			return lines.join(eol)
+		}
 		const maxBoundaryLine = lines.length + 1
 		if (input.insert_line < 1 || input.insert_line > maxBoundaryLine) {
 			throw new Error(
 				`Invalid insert_line: ${input.insert_line}. insert_line must be a positive one-based boundary line in the range 1-${maxBoundaryLine}. Use ${maxBoundaryLine} to append at EOF.`,
 			)
 		}
-		lines.splice(input.insert_line - 1, 0, ...input.new_text.split("\n"))
-		return lines.join("\n")
+		lines.splice(input.insert_line - 1, 0, ...input.new_text.split(/\r\n|\n/))
+		return lines.join(eol)
+	}
+
+	if (input.insert_column != null) {
+		throw new Error("`insert_column` needs `insert_line` to say which line it is a column of.")
+	}
+
+	if (input.start_line != null) {
+		if (editType === "create") {
+			throw new Error(`Cannot replace lines in ${filePath}: the file does not exist. Omit start_line to create it.`)
+		}
+		const endLine = input.end_line ?? input.start_line
+
+		if (input.start_column != null) {
+			assertLineInRange(input.start_line, lines.length, "start_line")
+			assertLineInRange(endLine, lines.length, "end_line")
+			if (endLine < input.start_line) {
+				throw new Error(`Invalid end_line: ${endLine}. It must be at least start_line (${input.start_line}).`)
+			}
+			const startLineText = lines[input.start_line - 1] ?? ""
+			const endLineText = lines[endLine - 1] ?? ""
+			const endColumn = input.end_column ?? input.start_column
+			assertColumnInRange(input.start_column, startLineText, input.start_line, "start_column")
+			assertColumnInRange(endColumn, endLineText, endLine, "end_column")
+			if (input.start_line === endLine && endColumn < input.start_column) {
+				throw new Error(
+					`Invalid end_column: ${endColumn}. On a single line it must be at least start_column (${input.start_column}). To insert without replacing anything, use insert_line with insert_column.`,
+				)
+			}
+			const replaced = `${startLineText.slice(0, input.start_column - 1)}${input.new_text ?? ""}${endLineText.slice(endColumn)}`
+			lines.splice(input.start_line - 1, endLine - input.start_line + 1, ...replaced.split(/\r\n|\n/))
+			return lines.join(eol)
+		}
+
+		if (input.end_column != null) {
+			throw new Error(
+				"`end_column` needs `start_column`: without it the tool replaces whole lines and the column has nothing to bound.",
+			)
+		}
+
+		if (input.start_line < 1 || input.start_line > lines.length) {
+			throw new Error(
+				`Invalid start_line: ${input.start_line}. The file has ${lines.length} line(s), so start_line must be between 1 and ${lines.length}.`,
+			)
+		}
+		if (endLine < input.start_line) {
+			throw new Error(`Invalid end_line: ${endLine}. It must be at least start_line (${input.start_line}).`)
+		}
+		// An end_line past the last line means "to the end of the file".
+		const effectiveEndLine = Math.min(endLine, lines.length)
+		const spanned = effectiveEndLine - input.start_line + 1
+		if (spanned > MAX_UNANCHORED_RANGE_LINES && spanned > lines.length * MAX_UNANCHORED_RANGE_SHARE) {
+			throw new Error(
+				`No replacement performed: lines ${input.start_line}-${effectiveEndLine} is ${spanned} of the file's ${lines.length} lines, and the call carries no \`old_text\` to check it against.`,
+			)
+		}
+		// An empty new_text deletes the range outright.
+		const replacement = input.new_text == null || input.new_text === "" ? [] : input.new_text.split(/\r\n|\n/)
+		lines.splice(input.start_line - 1, spanned, ...replacement)
+		return lines.join(eol)
+	}
+
+	if (input.start_column != null || input.end_column != null) {
+		throw new Error("`start_column`/`end_column` need `start_line` to say which line they are columns of.")
 	}
 
 	if (editType === "create") {
@@ -405,17 +560,46 @@ export function computeNewEditorContent(
 	}
 
 	if (input.old_text == null) {
-		throw new Error("Parameter `old_text` is required when editing an existing file without `insert_line`")
+		throw new Error("Parameter `old_text` is required when editing an existing file without `insert_line` or `start_line`")
 	}
 
-	const occurrences = input.old_text.length === 0 ? 0 : originalContent.split(input.old_text).length - 1
+	let oldStr = normalizeLineEndings(input.old_text, eol)
+	let newStr = normalizeLineEndings(input.new_text ?? "", eol)
+	let occurrences = countOccurrences(originalContent, oldStr)
+
+	// The file decides: the gutter is only stripped when the stripped text then
+	// actually occurs, so a file that genuinely contains `123 | ` is unaffected.
+	if (occurrences === 0 && hasLineNumberGutter(oldStr)) {
+		const strippedOld = stripLineNumberGutter(oldStr)
+		const strippedOccurrences = countOccurrences(originalContent, strippedOld)
+		if (strippedOccurrences > 0) {
+			oldStr = strippedOld
+			occurrences = strippedOccurrences
+			if (hasLineNumberGutter(newStr)) {
+				newStr = stripLineNumberGutter(newStr)
+			}
+		}
+	}
+
 	if (occurrences === 0) {
 		throw new Error(`No replacement performed: text not found in ${filePath}.`)
+	}
+	if (input.replace_all) {
+		return originalContent.split(oldStr).join(newStr)
+	}
+	if (input.occurrence != null) {
+		if (input.occurrence < 1 || input.occurrence > occurrences) {
+			throw new Error(
+				`No replacement performed: occurrence ${input.occurrence} is out of range; the text appears ${occurrences} time(s) in ${filePath}.`,
+			)
+		}
+		return replaceNthOccurrence(originalContent, oldStr, newStr, input.occurrence)
 	}
 	if (occurrences > 1) {
 		throw new Error(`No replacement performed: multiple occurrences of text found in ${filePath}.`)
 	}
-	return originalContent.replace(input.old_text, input.new_text ?? "")
+	// Replacer function so "$"-sequences in new_text are inserted literally.
+	return originalContent.replace(oldStr, () => newStr)
 }
 
 /** Mirrors the SDK executor's resolveFilePath (restrictToCwd=true): absolute paths pass through. */
