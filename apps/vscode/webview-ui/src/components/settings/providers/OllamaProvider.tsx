@@ -1,6 +1,7 @@
 import { openAiModelInfoSafeDefaults } from "@shared/api"
 import { StringRequest } from "@shared/proto/cline/common"
 import type { ProviderSamplingPatch } from "@shared/proto/cline/models"
+import { OllamaModelParametersRequest } from "@shared/proto/cline/models"
 import { fromProtobufModelOverrides } from "@shared/proto-conversions/models/modelOverrides"
 import { Mode } from "@shared/storage/types"
 import { VSCodeCheckbox, VSCodeLink } from "@vscode/webview-ui-toolkit/react"
@@ -109,6 +110,9 @@ const OLLAMA_SAMPLING_FIELDS = [
 ] as const
 
 type OllamaSamplingFieldKey = (typeof OLLAMA_SAMPLING_FIELDS)[number]["key"]
+
+/** Placeholders are shown in a two-column grid in a sidebar; this is what fits. */
+const SAMPLING_PLACEHOLDER_MAX_LENGTH = 48
 
 /** Sampling values as the panel edits them: raw text, so a half-typed number survives a render. */
 type SamplingDraft = Partial<Record<OllamaSamplingFieldKey | "stop" | "thinkBudget" | "thinkBudgetMessage", string>>
@@ -329,6 +333,62 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 	useEffect(() => {
 		requestOllamaModels()
 	}, [requestOllamaModels])
+
+	// What the selected model's own Modelfile sets, so a blank field can say
+	// which value it is leaving in force instead of only that it is leaving one.
+	const [modelParameters, setModelParameters] = useState<Record<string, string>>({})
+	const selectedModelId = selectedModel.modelId
+
+	useEffect(() => {
+		if (!selectedModelId) {
+			setModelParameters({})
+			return
+		}
+		let cancelled = false
+		void ModelsServiceClient.getOllamaModelParameters(
+			OllamaModelParametersRequest.create({ baseUrl: ollamaBaseUrl || "", modelId: selectedModelId }),
+		)
+			.then((response) => {
+				if (!cancelled) {
+					setModelParameters(response?.parameters ?? {})
+				}
+			})
+			.catch(() => {
+				// Placeholder text only: an Ollama that is not reachable leaves the
+				// fields reading "model default", which is what they said before.
+				if (!cancelled) {
+					setModelParameters({})
+				}
+			})
+		return () => {
+			cancelled = true
+		}
+	}, [ollamaBaseUrl, selectedModelId])
+
+	/**
+	 * Placeholder for a sampling field the user has not filled in.
+	 *
+	 * Named by Ollama's own spelling, which is what the labels already are. When
+	 * the model sets the parameter its value is shown; when it does not, the
+	 * field falls back to saying the default is out of our hands.
+	 *
+	 * Shortened for display because not every parameter is a number: measured on
+	 * `v7-coder_tb:vision-iq4_nl`, `think_budget_message` is three paragraphs,
+	 * and a placeholder that long buries the field it belongs to.
+	 */
+	const samplingPlaceholder = useCallback(
+		(name: string): string => {
+			const value = modelParameters[name]
+			if (value === undefined) {
+				return "model default"
+			}
+			const collapsed = value.replace(/\s+/g, " ").trim()
+			return collapsed.length > SAMPLING_PLACEHOLDER_MAX_LENGTH
+				? `${collapsed.slice(0, SAMPLING_PLACEHOLDER_MAX_LENGTH - 1)}…`
+				: collapsed
+		},
+		[modelParameters],
+	)
 
 	return (
 		<div className="flex flex-col gap-2">
@@ -567,7 +627,9 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 							<p className="text-xs mt-0 mb-1 text-description">
 								Sampling parameters sent with every request. Leave a field empty to not send it at all, which
 								leaves whatever the model was built with in force — a Modelfile's own values are not overwritten
-								by an empty field here. Anything you do set overrides the model's value for this provider.
+								by an empty field here. Anything you do set overrides the model's value for this provider. A
+								greyed value is the one this model's Modelfile sets; fields reading “model default” are not set by
+								the model either, and fall back to Ollama's own.
 							</p>
 							<div className="grid grid-cols-2 gap-2">
 								{OLLAMA_SAMPLING_FIELDS.map((field) => (
@@ -579,7 +641,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 												handleSamplingChange(field.key, value)
 												handleSamplingCommit()
 											}}
-											placeholder="model default">
+											placeholder={samplingPlaceholder(field.label)}>
 											<span className="font-medium text-xs">{field.label}</span>
 										</DebouncedTextField>
 										<p className="text-xs mt-0 mb-0 text-description">{field.hint}</p>
@@ -594,7 +656,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 										handleSamplingChange("stop", value)
 										handleSamplingCommit()
 									}}
-									placeholder="one sequence per line">
+									placeholder={modelParameters.stop ? samplingPlaceholder("stop") : "one sequence per line"}>
 									<span className="font-medium text-xs">stop</span>
 								</DebouncedTextField>
 								<p className="text-xs mt-0 mb-0 text-description">Sequences that end generation, one per line.</p>
@@ -607,7 +669,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 										handleSamplingChange("thinkBudget", value)
 										handleSamplingCommit()
 									}}
-									placeholder="model default">
+									placeholder={samplingPlaceholder("think_budget")}>
 									<span className="font-medium text-xs">think_budget</span>
 								</DebouncedTextField>
 								<p className="text-xs mt-0 mb-0 text-description">
@@ -623,7 +685,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 										handleSamplingChange("thinkBudgetMessage", value)
 										handleSamplingCommit()
 									}}
-									placeholder="model default">
+									placeholder={samplingPlaceholder("think_budget_message")}>
 									<span className="font-medium text-xs">think_budget_message</span>
 								</DebouncedTextField>
 								<p className="text-xs mt-0 mb-0 text-description">

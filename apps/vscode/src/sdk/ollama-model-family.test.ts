@@ -10,6 +10,7 @@ import {
 	DEFAULT_OLLAMA_BASE_URL,
 	resolveOllamaImageSupport,
 	resolveOllamaModelFamily,
+	resolveOllamaModelParameters,
 } from "./ollama-model-family"
 
 const post = mocks.fetch
@@ -202,5 +203,129 @@ describe("resolveOllamaImageSupport", () => {
 		await expect(resolveOllamaImageSupport("", "qwen2.5vl:7b")).resolves.toBe(true)
 
 		expect(post).toHaveBeenCalledWith(`${DEFAULT_OLLAMA_BASE_URL.replace(/\/+$/, "")}/api/show`, expect.anything())
+	})
+})
+
+/**
+ * The panel leaves sampling fields blank and sends nothing for them, so the
+ * model's own values stand — which left every field saying "model default" and
+ * no way to find out what that default was.
+ *
+ * `/api/show` returns them as the Modelfile wrote them: a name, whitespace, a
+ * value, one per line.
+ */
+describe("resolveOllamaModelParameters", () => {
+	const v7Coder = [
+		'stop                           "<end_of_turn>"',
+		"temperature                    0.7",
+		"top_k                          64",
+		"top_p                          0.95",
+		"min_p                          0.05",
+		"repeat_penalty                 1.1",
+		"frequency_penalty              0.3",
+		"think_budget                   medium",
+		"num_ctx                        128000",
+	].join("\n")
+
+	it("reads what the model actually sets", async () => {
+		post.mockResolvedValueOnce(ok({ parameters: v7Coder }) as never)
+
+		const parameters = await resolveOllamaModelParameters("http://localhost:11434", "v7-coder_tb:vision-iq4_nl")
+
+		expect(parameters.temperature).toBe("0.7")
+		expect(parameters.top_k).toBe("64")
+		expect(parameters.min_p).toBe("0.05")
+		expect(parameters.think_budget).toBe("medium")
+	})
+
+	// The names have to match the panel's field labels exactly, or a value is
+	// read and then shown against nothing.
+	it("keys them by the spelling the panel labels its fields with", async () => {
+		post.mockResolvedValueOnce(ok({ parameters: v7Coder }) as never)
+
+		const parameters = await resolveOllamaModelParameters("http://localhost:11434", "m")
+
+		for (const label of ["temperature", "top_k", "top_p", "min_p", "repeat_penalty", "frequency_penalty"]) {
+			expect(Object.hasOwn(parameters, label)).toBe(true)
+		}
+	})
+
+	it("unquotes a quoted value", async () => {
+		post.mockResolvedValueOnce(ok({ parameters: 'stop "<end_of_turn>"' }) as never)
+
+		expect((await resolveOllamaModelParameters("http://localhost:11434", "m")).stop).toBe("<end_of_turn>")
+	})
+
+	// `stop` is the one that repeats, and the panel's own stop field is a
+	// newline-separated list.
+	it("joins a repeated parameter the way the panel writes it", async () => {
+		post.mockResolvedValueOnce(ok({ parameters: 'stop "<end_of_turn>"\nstop "<eos>"\ntemperature 0.7' }) as never)
+
+		const parameters = await resolveOllamaModelParameters("http://localhost:11434", "m")
+
+		expect(parameters.stop).toBe("<end_of_turn>\n<eos>")
+		expect(parameters.temperature).toBe("0.7")
+	})
+
+	it("keeps a value that contains spaces", async () => {
+		post.mockResolvedValueOnce(ok({ parameters: 'think_budget_message "You must answer now."' }) as never)
+
+		expect((await resolveOllamaModelParameters("http://localhost:11434", "m")).think_budget_message).toBe(
+			"You must answer now.",
+		)
+	})
+
+	// Taken from the live model: `think_budget` arrives quoted even though it is
+	// a bare word, and `think_budget_message` writes its paragraphs as escapes.
+	it("unquotes a value that did not need quoting", async () => {
+		post.mockResolvedValueOnce(ok({ parameters: 'think_budget                   "medium"' }) as never)
+
+		expect((await resolveOllamaModelParameters("http://localhost:11434", "m")).think_budget).toBe("medium")
+	})
+
+	it("turns escaped newlines back into newlines", async () => {
+		post.mockResolvedValueOnce(
+			ok({ parameters: 'think_budget_message "\\n\\nI have used my thinking budget.\\nI\'ll be terse.\\n"' }) as never,
+		)
+
+		const value = (await resolveOllamaModelParameters("http://localhost:11434", "m")).think_budget_message
+
+		expect(value).not.toContain("\\n")
+		expect(value).toContain("I have used my thinking budget.")
+		expect(value.split("\n").length).toBeGreaterThan(2)
+	})
+
+	// A model that sets nothing, and a server that cannot be reached, both leave
+	// the fields reading what they read before.
+	it("reports nothing rather than failing when the model sets no parameters", async () => {
+		post.mockResolvedValueOnce(ok({ details: { family: "gemma4" } }) as never)
+
+		expect(await resolveOllamaModelParameters("http://localhost:11434", "m")).toEqual({})
+	})
+
+	it("reports nothing when Ollama is unreachable", async () => {
+		post.mockRejectedValueOnce(new Error("connect ECONNREFUSED") as never)
+
+		expect(await resolveOllamaModelParameters("http://localhost:11434", "m")).toEqual({})
+	})
+
+	it("asks for nothing when no model is selected", async () => {
+		expect(await resolveOllamaModelParameters("http://localhost:11434", "  ")).toEqual({})
+		expect(post).not.toHaveBeenCalled()
+	})
+
+	it("shares its request with the family and capability lookups", async () => {
+		post.mockResolvedValueOnce(ok({ parameters: v7Coder, details: { family: "gemma4" }, capabilities: ["vision"] }) as never)
+
+		const [parameters, family, images] = await Promise.all([
+			resolveOllamaModelParameters("http://localhost:11434", "m"),
+			resolveOllamaModelFamily("http://localhost:11434", "m"),
+			resolveOllamaImageSupport("http://localhost:11434", "m"),
+		])
+
+		expect(parameters.temperature).toBe("0.7")
+		expect(family).toBe("gemma4")
+		expect(images).toBe(true)
+		expect(post).toHaveBeenCalledTimes(1)
 	})
 })
