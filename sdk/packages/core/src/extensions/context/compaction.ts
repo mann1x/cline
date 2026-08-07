@@ -4,6 +4,7 @@ import { join } from "node:path";
 import {
 	charsPerToken,
 	estimateRequestInputTokens,
+	consumeContextOverflow,
 	lastObservedRequestTokens,
 } from "@cline/shared";
 import {
@@ -34,6 +35,7 @@ import {
 	DEFAULT_MAX_INPUT_TOKENS,
 	DEFAULT_PRESERVE_RECENT_TOKENS,
 	DEFAULT_TARGET_RATIO,
+	resolveCompactionTriggerTokens,
 	resolveEffectiveMaxInputTokens,
 	resolveRecencyBounds,
 	seedCalibrationFromTranscript,
@@ -374,7 +376,11 @@ export function createContextCompactionPrepareTurn(
 				maxInputTokens: context.model.info?.maxInputTokens,
 				contextWindow: context.model.info?.contextWindow,
 			}) ?? DEFAULT_MAX_INPUT_TOKENS;
-		const requestTriggerTokens = maxInputTokens * COMPACTION_TRIGGER_RATIO;
+		const requestTriggerTokens = resolveCompactionTriggerTokens({
+			maxInputTokens,
+			contextWindow: context.model.info?.contextWindow,
+			modelMaxTokens: context.model.info?.maxTokens,
+		});
 		const messageTriggerTokens = translateRequestBudgetToMessages(
 			requestTriggerTokens,
 			requestOverheadTokens,
@@ -409,7 +415,14 @@ export function createContextCompactionPrepareTurn(
 		});
 		const observedRequestTokens = lastObservedRequestTokens();
 		const triggerInputTokens = observedRequestTokens ?? requestInputTokens;
-		const shouldCompact = triggerInputTokens >= requestTriggerTokens;
+		// The request path found no room for a reply on the last turn. That is
+		// not a projection that could be miscalibrated -- it is the budget
+		// arithmetic having already failed -- so it compacts whatever the ratio
+		// above concludes, and covers the case where the two disagree.
+		const contextOverflow = consumeContextOverflow();
+		const shouldCompact =
+			contextOverflow !== undefined ||
+			triggerInputTokens >= requestTriggerTokens;
 		const diagnostics = {
 			mode: effectiveMode,
 			strategy,
@@ -426,6 +439,9 @@ export function createContextCompactionPrepareTurn(
 			requestTriggerTokens,
 			messageTriggerTokens,
 			thresholdRatio: COMPACTION_TRIGGER_RATIO,
+			contextWindow: context.model.info?.contextWindow,
+			modelMaxTokens: context.model.info?.maxTokens,
+			contextOverflow,
 			shouldCompact,
 			messageCount: context.messages.length,
 			apiMessageCount: context.apiMessages.length,

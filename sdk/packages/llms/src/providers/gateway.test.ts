@@ -11,9 +11,11 @@ import { join } from "node:path";
 import {
 	type AgentMessage,
 	type AgentModelEvent,
+	consumeContextOverflow,
 	estimateRequestInputTokens,
 	type GatewayModelHandleOptions,
 	type ITelemetryService,
+	resetTokenCalibration,
 } from "@cline/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeModelsDevProviderModels } from "../catalog/catalog-live";
@@ -383,6 +385,38 @@ describe("sdk-gateway", () => {
 			remainingContext: -524,
 			minOutputTokens: GATEWAY_MIN_OUTPUT_TOKENS,
 		});
+	});
+
+	it("records the overflow for compaction, not only for the caller", () => {
+		// The callback is optional and its one real caller only logged. Compaction
+		// runs before the next request and is the thing that can make room, so the
+		// finding has to be left somewhere it will look -- whether or not anyone
+		// passed a callback.
+		resetTokenCalibration();
+		expect(
+			resolveGatewayRequestMaxTokens({
+				requestedMaxTokens: 8_192,
+				model: { maxOutputTokens: 202_800, contextWindow: 10_000 },
+				estimatedInputTokens: 9_500,
+				outputReserveTokens: 1_024,
+			}),
+		).toBeUndefined();
+		expect(consumeContextOverflow()).toMatchObject({
+			contextWindow: 10_000,
+			remainingContext: -524,
+		});
+	});
+
+	it("leaves nothing behind when the budget is fine", () => {
+		resetTokenCalibration();
+		expect(
+			resolveGatewayRequestMaxTokens({
+				requestedMaxTokens: 8_192,
+				model: { maxOutputTokens: 202_800, contextWindow: 200_000 },
+				estimatedInputTokens: 9_500,
+			}),
+		).toBe(8_192);
+		expect(consumeContextOverflow()).toBeUndefined();
 	});
 
 	it("sends no output cap rather than a cap too small to answer with", () => {

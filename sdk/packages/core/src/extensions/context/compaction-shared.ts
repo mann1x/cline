@@ -24,6 +24,57 @@ export const TOOL_RESULT_CHAR_LIMIT = 2_000;
 export const FILE_CONTENT_CHAR_LIMIT = 2_000;
 export const MIN_TRUNCATED_MESSAGE_TOKENS = 8;
 
+/**
+ * Output room to keep free when the model reports no per-turn cap of its own.
+ *
+ * Matches the gateway's `DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS`, which is the cap it
+ * synthesizes in exactly the same situation. Two different numbers here would
+ * put the two back into the disagreement this whole path exists to end.
+ */
+export const DEFAULT_OUTPUT_ROOM_TOKENS = 32_000;
+
+/**
+ * Floor on the trigger, as a share of the window.
+ *
+ * Output room is subtracted from the window, and on a small window a large cap
+ * can eat most of it -- a 32,000 cap against a 40,000 window would put the
+ * trigger at 8,000 and compact almost every turn. Below this share the cap is
+ * the unreasonable figure, not the transcript.
+ */
+const MIN_TRIGGER_WINDOW_SHARE = 0.5;
+
+/**
+ * The largest prompt that still leaves the model room to answer.
+ *
+ * The trigger used to ask only whether the prompt fit. It does not follow that
+ * a reply fits: a turn needs the prompt *and* its output inside one window, and
+ * the output cap is up to `maxTokens`. Measured live on a 110,000-token window
+ * with a 32,000 cap -- the transcript was allowed to 99,000, the request path
+ * then found 11,000 short of what it needed and sent no cap at all, and the turn
+ * died on the output limit with compaction still reporting there was room.
+ *
+ * Taking the smaller of the two keeps the old ratio as an upper bound while
+ * making room for a full turn the binding constraint, which is what it is.
+ */
+export function resolveCompactionTriggerTokens(input: {
+	maxInputTokens: number;
+	contextWindow?: number;
+	modelMaxTokens?: number;
+}): number {
+	const ratioTrigger = input.maxInputTokens * COMPACTION_TRIGGER_RATIO;
+	if (!isPositiveFiniteNumber(input.contextWindow)) {
+		return ratioTrigger;
+	}
+	const outputRoom = isPositiveFiniteNumber(input.modelMaxTokens)
+		? input.modelMaxTokens
+		: DEFAULT_OUTPUT_ROOM_TOKENS;
+	const roomTrigger = Math.max(
+		input.contextWindow - outputRoom,
+		input.contextWindow * MIN_TRIGGER_WINDOW_SHARE,
+	);
+	return Math.min(ratioTrigger, roomTrigger);
+}
+
 export interface FileOperationSummary {
 	readFiles: string[];
 	modifiedFiles: string[];

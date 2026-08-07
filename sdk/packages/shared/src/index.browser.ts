@@ -208,13 +208,16 @@ export {
 	charsPerToken,
 	estimateRequestInputTokens,
 	estimateTokens,
+	consumeContextOverflow,
 	lastObservedRequestTokens,
+	noteContextOverflow,
 	measureRequestInputChars,
 	observeRequestTokens,
 	resetTokenCalibration,
 	seedRequestTokenCalibration,
 	type TokenEstimatedRequest,
 } from "./llms/tokens";
+export type { ContextOverflowReport } from "./llms/tokens";
 export type {
 	ToolApprovalRequest,
 	ToolApprovalResult,

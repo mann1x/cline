@@ -3224,7 +3224,12 @@ describe("createContextCompactionPrepareTurn", () => {
 		expect(context?.budget.request.maxInputTokens).toBeCloseTo(
 			contextWindow * 0.9,
 		);
-		expect(context?.budget.request.triggerTokens).toBeCloseTo(inputTokens);
+		// A window of a few dozen tokens is smaller than the default output room
+		// subtracted from it, so the floor decides: half the window, rather than
+		// the negative number the subtraction gives.
+		expect(context?.budget.request.triggerTokens).toBeCloseTo(
+			contextWindow * 0.5,
+		);
 		expect(result?.messages).toEqual([
 			{ role: "user", content: "Compacted at 81%" },
 		]);
@@ -3602,7 +3607,11 @@ describe("createContextCompactionPrepareTurn", () => {
 		expect(compact).toHaveBeenCalledTimes(1);
 		const context = compact.mock.calls[0]?.[0];
 		expect(context?.budget.request.maxInputTokens).toBe(360_000);
-		expect(context?.budget.request.triggerTokens).toBe(324_000);
+		// The ratio would allow 324,000, but this model reports a 128,000 output
+		// cap and a turn has to hold prompt and reply in one 400,000 window. The
+		// trigger is whichever bound comes first, and here it is the one that
+		// leaves room to answer.
+		expect(context?.budget.request.triggerTokens).toBe(272_000);
 		expect(context?.budget.request.thresholdRatio).toBe(0.9);
 		expect(result?.messages).toEqual([
 			{ role: "user", content: "Compacted by derived input budget" },

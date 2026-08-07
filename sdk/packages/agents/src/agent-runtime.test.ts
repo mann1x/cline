@@ -3054,3 +3054,74 @@ describe("a message sent while the run is going", () => {
 		expect(model.requests).toHaveLength(1);
 	});
 });
+
+describe("a turn cut off at the output cap", () => {
+	it("makes room before retrying, instead of only asking for less", async () => {
+		// Re-prompting alone asks the model to be briefer, which changes nothing
+		// when the cap is small because the prompt has taken the window: the
+		// retry hits the same wall and the run spends its whole budget on
+		// identical failures. Compaction is the part that moves the constraint.
+		const prepareTurn = vi.fn(
+			(context: { messages: readonly AgentMessage[] }) => ({
+				messages: context.messages.slice(),
+			}),
+		);
+		const model = new ScriptedModel([
+			() => [
+				{ type: "text-delta", text: "a very long answer that ran out of room" },
+				{ type: "finish", reason: "max-tokens" },
+			],
+			() => [
+				{ type: "text-delta", text: "short answer" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({ model, tools: [], prepareTurn });
+
+		const result = await runtime.run("Start");
+
+		expect(result.status).toBe("completed");
+		expect(result.outputText).toBe("short answer");
+		expect(prepareTurn).toHaveBeenCalledTimes(2);
+		expect(prepareTurn.mock.calls[0]?.[0]).not.toMatchObject({
+			overflowRecovery: true,
+		});
+		expect(prepareTurn.mock.calls[1]?.[0]).toMatchObject({
+			overflowRecovery: true,
+		});
+	});
+
+	it("does not ask for compaction on a turn that finished normally", async () => {
+		const prepareTurn = vi.fn(
+			(context: { messages: readonly AgentMessage[] }) => ({
+				messages: context.messages.slice(),
+			}),
+		);
+		const model = new ScriptedModel([
+			() => [
+				{
+					type: "tool-call-delta",
+					toolCallId: "call_1",
+					toolName: "echo",
+					inputText: '{"text":"hi"}',
+				},
+				{ type: "finish", reason: "tool-calls" },
+			],
+			() => [
+				{ type: "text-delta", text: "done" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			tools: [createEchoTool()],
+			prepareTurn,
+		});
+
+		await runtime.run("Start");
+
+		for (const call of prepareTurn.mock.calls) {
+			expect(call[0]).not.toMatchObject({ overflowRecovery: true });
+		}
+	});
+});

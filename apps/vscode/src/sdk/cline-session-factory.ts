@@ -54,7 +54,7 @@ import { nonNegativeFiniteNumber, positiveFiniteNumber, toSdkApiFormat } from ".
 import { parseProviderId } from "./model-catalog/provider-id"
 import { toSdkProviderId } from "./model-catalog/sdk-provider-id"
 import { createProviderConfigStore, resolveRuntimeModelSelection } from "./model-catalog/store"
-import { resolveOllamaImageSupport, resolveOllamaThinkBudget } from "./ollama-model-family"
+import { resolveOllamaContextWindow, resolveOllamaImageSupport, resolveOllamaThinkBudget } from "./ollama-model-family"
 import { resolveSessionPromptTemplate } from "./prompt-templates"
 import { getProviderSettingsManager } from "./provider-migration"
 import { buildSapProviderConfig, type SapProviderConfig } from "./sap-config"
@@ -1089,6 +1089,31 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		Logger.warn("[SessionFactory] Failed to inject preferredLanguage instructions:", error)
 	}
 
+	// The one context window for this session.
+	//
+	// Everything that budgets against the window has to read this and nothing
+	// else. They did not, and the consequences were not subtle: the wire carried
+	// `num_ctx: 110000` from providers.json while the compaction trigger was
+	// computed from a catalog-shaped 128,000, putting the trigger at 115,200 --
+	// five thousand tokens beyond the end of the real window. Auto-compaction
+	// could never fire, and every long session ran until its per-turn output cap
+	// collapsed to nothing.
+	//
+	// The order is what the user asked for, and it is the order that cannot
+	// surprise them: a context size they set is the context size, whatever the
+	// model would allow. Asking for 128k from a model that supports 512k means
+	// 128k. Only when they have set nothing does the model get to answer, and for
+	// Ollama it can answer exactly -- `num_ctx` is in the Modelfile and
+	// `/api/show` reports it -- rather than being guessed at by a catalog that
+	// has never heard of a local model.
+	const configuredContextWindow = positiveFiniteNumber(ollamaProviderConfig?.modelInfo?.contextWindow)
+	const declaredContextWindow =
+		configuredContextWindow === undefined && toSdkProviderId(providerId) === "ollama"
+			? await resolveOllamaContextWindow(apiConfig ? resolveBaseUrl(providerId, apiConfig) : undefined, modelId)
+			: undefined
+	const sessionContextWindow =
+		configuredContextWindow ?? declaredContextWindow ?? positiveFiniteNumber(committedRuntimeModel?.modelInfo?.contextWindow)
+
 	// Tell the model about the cap its reply will actually be truncated at.
 	try {
 		// Both figures below answer the same question: what will the server
@@ -1097,21 +1122,9 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		// the prompt has to say it. Stating the fallback while sending something
 		// smaller tells the model it has room it does not have, which is the
 		// same defect as the context window and fails the same way.
-		const ollamaProviderConfig =
-			toSdkProviderId(providerId) === "ollama" && apiConfig ? resolveOllamaProviderConfig(apiConfig, modelId) : undefined
 		const configuredNumPredict = positiveFiniteNumber(ollamaProviderConfig?.sampling?.numPredict)
 		const outputCap = configuredNumPredict ?? maxTokensPerTurn ?? DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS
-		// The window Ollama is actually given, not the one the catalog guessed.
-		// These came from different places and disagreed: `num_ctx` on the wire
-		// comes from `resolveOllamaProviderConfig` reading providers.json, while
-		// this line read the resolved model selection, which is built from the
-		// catalog, a state hint, or a fallback and never consults that setting.
-		// Measured live: providers.json held 110000 and the prompt told the model
-		// 128000 — eighteen thousand tokens of room it did not have, in the
-		// direction that overruns rather than wastes. Same resolver for both is
-		// the only way they cannot drift.
-		const wireContextWindow = positiveFiniteNumber(ollamaProviderConfig?.modelInfo?.contextWindow)
-		const contextWindow = wireContextWindow ?? positiveFiniteNumber(committedRuntimeModel?.modelInfo?.contextWindow)
+		const contextWindow = sessionContextWindow
 		const thinking = await resolveOllamaThinkingAllowance(
 			providerId,
 			reasoningConfig,
@@ -1197,6 +1210,30 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 			...(knownModels ?? {}),
 			[modelId]: { ...(existing ?? {}), capabilities: [...capabilities] },
 		} as typeof knownModels
+	}
+
+	// The window compaction budgets against.
+	//
+	// `knownModels[modelId]` is where the runtime reads it from, and for a local
+	// model it was filled from the resolved model selection -- catalog, state
+	// hint, or fallback -- none of which consult the setting that decides what
+	// actually goes on the wire. Writing the session's window here is what makes
+	// the compaction trigger and `num_ctx` the same number.
+	//
+	// `maxInputTokens` goes too, and has to: left at the model's own figure it
+	// outranks `contextWindow` in `resolveEffectiveMaxInputTokens`, which is how
+	// the stale window survived into the trigger in the first place.
+	if (sessionContextWindow !== undefined) {
+		const existing = knownModels?.[modelId]
+		knownModels = {
+			...(knownModels ?? {}),
+			[modelId]: {
+				...(existing ?? {}),
+				contextWindow: sessionContextWindow,
+				maxInputTokens: Math.min(existing?.maxInputTokens ?? sessionContextWindow, sessionContextWindow),
+			},
+		} as typeof knownModels
+		Logger.log(`[SessionFactory] Context window: ${sessionContextWindow} (model=${modelId})`)
 	}
 
 	// Always pass a providerConfig so the proxy/CA-aware fetch reaches the SDK

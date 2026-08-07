@@ -560,6 +560,16 @@ export class AgentRuntime {
 	/** One automatic overflow-recovery attempt per run. */
 	private overflowRecoveryAttempted = false;
 	/**
+	 * Compact before the next request, whatever the trigger concludes.
+	 *
+	 * Set when a turn was cut off at the output cap. Re-prompting on its own only
+	 * asks the model to be briefer, which does nothing when the cap is small
+	 * because the prompt has taken the window -- the retry then hits the same
+	 * wall, and the run spends its whole retry budget on identical failures.
+	 * Making room is the part that changes the outcome.
+	 */
+	private compactBeforeNextTurn = false;
+	/**
 	 * Whether this run has already dropped images after a model refused them.
 	 * Once is enough: the second refusal means images were not the problem.
 	 */
@@ -803,6 +813,7 @@ export class AgentRuntime {
 		this.state.lastErrorClass = undefined;
 		this.state.usage = cloneUsage(DEFAULT_USAGE);
 		this.overflowRecoveryAttempted = false;
+		this.compactBeforeNextTurn = false;
 		this.imageRecoveryAttempted = false;
 		this.steerAwaitingResume = false;
 
@@ -909,6 +920,7 @@ export class AgentRuntime {
 					this.consecutiveMaxTokensRetries < this.getMaxTokensRetryBudget()
 				) {
 					this.consecutiveMaxTokensRetries += 1;
+					this.compactBeforeNextTurn = true;
 					await this.emit({
 						type: "status-notice",
 						snapshot: this.snapshot(),
@@ -1138,7 +1150,11 @@ export class AgentRuntime {
 		if (this.config.alwaysDescribeImages === true) {
 			await this.describeImagesInTranscript();
 		}
-		const first = await this.generateAssistantMessage();
+		const forceCompaction = this.compactBeforeNextTurn;
+		this.compactBeforeNextTurn = false;
+		const first = await this.generateAssistantMessage(
+			forceCompaction ? { overflowRecovery: true } : undefined,
+		);
 		if (this.isRecoverableImageTurn(first)) {
 			return await this.retryWithoutImages();
 		}
@@ -1167,6 +1183,7 @@ export class AgentRuntime {
 		});
 		const retry = await this.generateAssistantMessage({
 			overflowRecovery: true,
+			requireSmallerRequest: true,
 		});
 		if (
 			retry.finishReason === "error" &&
@@ -1359,6 +1376,7 @@ export class AgentRuntime {
 
 	private async generateAssistantMessage(options?: {
 		overflowRecovery?: boolean;
+		requireSmallerRequest?: boolean;
 	}): Promise<{
 		message: AgentMessage;
 		finishReason: AgentModelFinishReason;
@@ -1766,13 +1784,21 @@ export class AgentRuntime {
 
 	private async prepareTurnForModelRequest(
 		request: AgentModelRequest,
-		options?: { overflowRecovery?: boolean },
+		options?: { overflowRecovery?: boolean; requireSmallerRequest?: boolean },
 	): Promise<AgentModelRequest> {
 		if (!this.config.prepareTurn) {
 			return request;
 		}
 
 		const overflowRecovery = options?.overflowRecovery === true;
+		// Whether compaction finding nothing to remove is fatal.
+		//
+		// It is when the provider has already rejected the request: resending an
+		// identical one fails identically. It is not when the last turn merely ran
+		// past its output cap -- the transcript may be nowhere near full, and a
+		// long reply to a short prompt is exactly that case. Treating the two the
+		// same turns a retryable turn into a dead run.
+		const requireSmallerRequest = options?.requireSmallerRequest === true;
 		const result = await this.config.prepareTurn({
 			agentId: this.state.agentId,
 			conversationId: this.config.conversationId,
@@ -1796,7 +1822,7 @@ export class AgentRuntime {
 				});
 			},
 		});
-		if (overflowRecovery) {
+		if (requireSmallerRequest) {
 			// Only retry a provider-rejected overflow with a request that is
 			// actually smaller — anything else is guaranteed to fail again.
 			//

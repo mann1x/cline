@@ -15,6 +15,7 @@ import type {
 import {
 	estimateTokens,
 	measureRequestInputChars,
+	noteContextOverflow,
 	observeRequestTokens,
 	ReasoningEffortSchema,
 } from "@cline/shared";
@@ -305,13 +306,21 @@ export function resolveGatewayRequestMaxTokens(input: {
 		const remainingContext =
 			input.model.contextWindow - input.estimatedInputTokens - reserveTokens;
 		if (remainingContext < minOutputTokens) {
-			input.onContextOverflow?.({
+			const report = {
 				contextWindow: input.model.contextWindow,
 				estimatedInputTokens: input.estimatedInputTokens,
 				reserveTokens,
 				remainingContext,
 				minOutputTokens,
-			});
+			};
+			// Left where compaction collects it before the next request. Reporting
+			// it only through the callback made acting on it optional, and the one
+			// caller that mattered only logged: that is how a session walked its
+			// cap from 20,547 to nothing over six turns while auto-compact sat
+			// below a trigger computed from a different window. Recording it here
+			// means finding the overflow and reporting it are the same act.
+			noteContextOverflow(report);
+			input.onContextOverflow?.(report);
 			return undefined;
 		}
 		caps.push(Math.floor(remainingContext));

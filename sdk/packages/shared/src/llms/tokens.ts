@@ -68,6 +68,23 @@ const CALIBRATION_STATE = Symbol.for("cline.shared.tokenCalibration");
 interface TokenCalibrationState {
 	charsPerToken?: number;
 	requestTokens?: number;
+	contextOverflow?: ContextOverflowReport;
+}
+
+/**
+ * What the request path found when it ran out of room.
+ *
+ * Every other trigger in this file is a projection: a character count, a ratio,
+ * a share held back against the ratio being wrong. This one is not. It is the
+ * budget arithmetic having already failed for a request that was about to go
+ * out, which is true whatever the projections said.
+ */
+export interface ContextOverflowReport {
+	contextWindow: number;
+	estimatedInputTokens: number;
+	reserveTokens: number;
+	remainingContext: number;
+	minOutputTokens: number;
 }
 
 function calibration(): TokenCalibrationState {
@@ -168,11 +185,43 @@ export function lastObservedRequestTokens(): number | undefined {
 	return calibration().requestTokens;
 }
 
+/**
+ * Record that a request could not be given a usable output budget.
+ *
+ * The request path is the only place that learns this, and it learns it too
+ * late to act: the prompt is already built. Compaction runs before the *next*
+ * request and is the thing that can do something about it, so the finding is
+ * left here for it to collect.
+ *
+ * This is deliberately not a threshold. A window whose remaining room will not
+ * hold a minimum reply is full, whether or not any ratio agreed -- which is the
+ * property that makes it worth having alongside the estimate-driven trigger
+ * rather than instead of it.
+ */
+export function noteContextOverflow(report: ContextOverflowReport): void {
+	calibration().contextOverflow = report;
+}
+
+/**
+ * Take the pending overflow report, if there is one, and clear it.
+ *
+ * Consumed rather than read so a single overflow forces a single compaction:
+ * left set, it would force one on every following turn, including the ones the
+ * compaction it triggered had already made room for.
+ */
+export function consumeContextOverflow(): ContextOverflowReport | undefined {
+	const state = calibration();
+	const report = state.contextOverflow;
+	state.contextOverflow = undefined;
+	return report;
+}
+
 /** Drop any measured ratio and fall back to `CHARS_PER_TOKEN`. */
 export function resetTokenCalibration(): void {
 	const state = calibration();
 	state.charsPerToken = undefined;
 	state.requestTokens = undefined;
+	state.contextOverflow = undefined;
 }
 
 export function estimateTokens(chars: number): number {

@@ -8,6 +8,7 @@ vi.mock("@/shared/services/Logger", () => ({ Logger: { log: vi.fn() } }))
 import {
 	clearOllamaModelFamilyCache,
 	DEFAULT_OLLAMA_BASE_URL,
+	resolveOllamaContextWindow,
 	resolveOllamaImageSupport,
 	resolveOllamaModelFamily,
 	resolveOllamaModelParameters,
@@ -327,5 +328,51 @@ describe("resolveOllamaModelParameters", () => {
 		expect(family).toBe("gemma4")
 		expect(images).toBe(true)
 		expect(post).toHaveBeenCalledTimes(1)
+	})
+})
+
+describe("resolveOllamaContextWindow", () => {
+	it("reads the num_ctx the model will actually load with", async () => {
+		// The whole reason this exists: a local model is not in the catalog, so
+		// the window was guessed at 128,000 while the wire carried 110,000, and
+		// the compaction trigger — 90% of the guess — landed past the end of the
+		// real window.
+		post.mockResolvedValueOnce(ok({ parameters: "num_ctx                        110000\ntemperature 0.7" }) as never)
+
+		await expect(resolveOllamaContextWindow(DEFAULT_OLLAMA_BASE_URL, "v7-coder_tb:vision-iq4_nl")).resolves.toBe(110000)
+	})
+
+	it("falls back to the architecture's own ceiling", async () => {
+		post.mockResolvedValueOnce(
+			ok({
+				parameters: "temperature 0.7",
+				model_info: { "general.architecture": "qwen3", "qwen3.context_length": 262144 },
+			}) as never,
+		)
+
+		await expect(resolveOllamaContextWindow(DEFAULT_OLLAMA_BASE_URL, "qwen3:8b")).resolves.toBe(262144)
+	})
+
+	it("prefers what the model runs with over what it could run with", async () => {
+		post.mockResolvedValueOnce(
+			ok({
+				parameters: "num_ctx 32768",
+				model_info: { "general.architecture": "qwen3", "qwen3.context_length": 262144 },
+			}) as never,
+		)
+
+		await expect(resolveOllamaContextWindow(DEFAULT_OLLAMA_BASE_URL, "qwen3:8b")).resolves.toBe(32768)
+	})
+
+	it("says nothing rather than guessing when the server does not report one", async () => {
+		post.mockResolvedValueOnce(ok({ parameters: "temperature 0.7" }) as never)
+
+		await expect(resolveOllamaContextWindow(DEFAULT_OLLAMA_BASE_URL, "mystery:latest")).resolves.toBeUndefined()
+	})
+
+	it("rejects a non-numeric or non-positive num_ctx", async () => {
+		post.mockResolvedValueOnce(ok({ parameters: "num_ctx 0" }) as never)
+
+		await expect(resolveOllamaContextWindow(DEFAULT_OLLAMA_BASE_URL, "broken:latest")).resolves.toBeUndefined()
 	})
 })
