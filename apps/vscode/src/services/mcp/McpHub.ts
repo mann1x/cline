@@ -73,6 +73,16 @@ const LIST_CHANGED_MAX_WAIT_MS = 2000
 const LIST_CHANGED_MAX_RETRIES = 3
 const LIST_CHANGED_RETRY_BASE_DELAY_MS = 1000
 
+/**
+ * The MCP SDK's `Protocol.request` raises a bare `Not connected` when the client
+ * has no transport — before the request is written, so the call was never sent.
+ * That distinction is what makes retrying it after a reconnect safe.
+ */
+function isMcpNotConnectedError(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error ?? "")
+	return message.trim().toLowerCase() === "not connected"
+}
+
 export class McpHub {
 	getMcpServersPath: () => Promise<string>
 	private getSettingsDirectoryPath: () => Promise<string>
@@ -1709,8 +1719,8 @@ export class McpHub {
 			toolArguments ? Object.keys(toolArguments) : undefined,
 		)
 
-		try {
-			const result = await connection.client.request(
+		const sendRequest = (client: McpConnection["client"]) =>
+			client.request(
 				{
 					method: "tools/call",
 					params: {
@@ -1724,6 +1734,36 @@ export class McpHub {
 					signal,
 				},
 			)
+
+		try {
+			let result: Awaited<ReturnType<typeof sendRequest>>
+			try {
+				result = await sendRequest(connection.client)
+			} catch (error) {
+				if (!isMcpNotConnectedError(error) || signal?.aborted) {
+					throw error
+				}
+				// A stdio server that exits (or any transport that closes) leaves the
+				// client in place with its transport cleared, and only the connection's
+				// status is updated — nothing rebuilds it. Every later call then failed
+				// with a bare `Not connected`, which reached the model as the tool's
+				// result with no indication that the server had simply gone away.
+				//
+				// Retrying is safe here and only here: the SDK raises this before the
+				// request touches the transport, so the call was never sent and cannot
+				// be duplicated. Timeouts and in-flight failures are rethrown untouched.
+				Logger.warn(`MCP server "${serverName}" was not connected for ${toolName}; reconnecting and retrying once`)
+				const reconnected = await this.reconnectForToolCall(serverName)
+				if (!reconnected?.client) {
+					const detail = this.connections.find((conn) => conn.server.name === serverName)?.server.error
+					throw new Error(
+						`Server "${serverName}" disconnected and could not be reconnected, so ${toolName} was not run.${
+							detail ? ` Last error: ${detail}` : ""
+						}`,
+					)
+				}
+				result = await sendRequest(reconnected.client)
+			}
 
 			this.telemetryService.captureMcpToolCall(
 				ulid,
@@ -1749,6 +1789,41 @@ export class McpHub {
 			)
 			throw augmentMcpTimeoutError(error, serverName, timeout)
 		}
+	}
+
+	/**
+	 * Rebuild a connection whose transport died, from inside a tool call.
+	 *
+	 * `restartConnection` is the user-facing path: it announces itself with toasts
+	 * and waits half a second so the restart is visible. Neither belongs in the
+	 * middle of a tool call the agent is waiting on, so this is the quiet
+	 * equivalent — same delete/connect, no notifications, no artificial delay.
+	 */
+	private async reconnectForToolCall(serverName: string): Promise<McpConnection | undefined> {
+		const existing = this.connections.find((conn) => conn.server.name === serverName)
+		const config = existing?.server.config
+		if (!config) {
+			return undefined
+		}
+
+		existing.server.status = "connecting"
+		existing.server.error = ""
+		this.isConnecting = true
+		try {
+			await this.deleteConnection(serverName)
+			await this.connectToServer(serverName, JSON.parse(config), "internal")
+		} catch (error) {
+			Logger.error(`Failed to reconnect MCP server ${serverName} for a tool call:`, error)
+			return undefined
+		} finally {
+			this.isConnecting = false
+			await this.notifyWebviewOfServerChanges().catch((notifyError) => {
+				Logger.error(`Failed to publish server state for "${serverName}":`, notifyError)
+			})
+		}
+
+		const reconnected = this.connections.find((conn) => conn.server.name === serverName)
+		return reconnected?.server.status === "connected" ? reconnected : undefined
 	}
 
 	/**

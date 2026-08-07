@@ -1,7 +1,7 @@
 import type { CoreSessionEvent } from "@cline/core"
 import type { ClineMessage } from "@shared/ExtensionMessage"
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { MessageTranslatorState } from "./message-translator"
+import { MessageTranslatorState, translateSessionEvent } from "./message-translator"
 import { PROVIDER_FAILURE_ERROR_TYPE, PROVIDER_FAILURE_PHASE } from "./provider-failure-telemetry"
 import { SdkSessionEventCoordinator, type SdkSessionEventCoordinatorOptions } from "./sdk-session-event-coordinator"
 
@@ -124,6 +124,35 @@ describe("SdkSessionEventCoordinator", () => {
 
 		expect(options.setTurnPhase).toHaveBeenCalledWith("error")
 		expect(options.setTurnPhase).not.toHaveBeenCalledWith("awaiting_followup")
+	})
+
+	it("leaves a running turn alone when the SDK emits a recoverable mistake notice", async () => {
+		// End to end with the real translator, because the bug lived in the seam: the
+		// translator marked a mid-run notice as turn-complete, and the coordinator —
+		// correctly, for a real turn end — answered by setting the phase and clearing
+		// isRunning. The footer showed Retry / Start New Task over a task that was
+		// still working, and nothing later put it back.
+		const noticeEvent: CoreSessionEvent = {
+			type: "agent_event",
+			payload: {
+				sessionId: "session-123",
+				event: {
+					type: "error",
+					error: new Error('1 tool call(s) failed: [task_progress] {"error":"unavailable tool"}'),
+					recoverable: true,
+					iteration: 4,
+				},
+			},
+		} as unknown as CoreSessionEvent
+		const { coordinator, options } = makeCoordinator({
+			translation: translateSessionEvent(noticeEvent, new MessageTranslatorState()),
+		})
+
+		await coordinator.handleSessionEvent(noticeEvent)
+
+		expect(options.setTurnPhase).not.toHaveBeenCalled()
+		expect(options.sessions.setRunning).not.toHaveBeenCalled()
+		expect(options.messages.appendAndEmit).toHaveBeenCalledOnce()
 	})
 
 	it("marks a submitted queued prompt as a new streaming turn", async () => {

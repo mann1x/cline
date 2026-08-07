@@ -1234,6 +1234,37 @@ describe("translateSessionEvent — agent_event error", () => {
 		expect(result.turnComplete).toBe(true)
 	})
 
+	it("treats a recoverable error as an in-run notice, not a failed turn", () => {
+		// The MistakeTracker emits one of these for every recorded mistake and the
+		// run carries straight on. Ending the turn on it put the footer into
+		// Retry / Start New Task — and cleared `isRunning` — over a task that was
+		// still working, with nothing on the continuing run to undo either.
+		const state = new MessageTranslatorState()
+		const event: CoreSessionEvent = {
+			type: "agent_event",
+			payload: {
+				sessionId: "session-1",
+				event: {
+					type: "error",
+					error: new Error(`1 tool call(s) failed: [task_progress] {"error":"unavailable tool"}`),
+					recoverable: true,
+					iteration: 4,
+				} as unknown as AgentEvent,
+			},
+		}
+
+		const result = translateSessionEvent(event, state)
+
+		// Still visible, and still red — but as a say, so no ask owns the footer.
+		expect(result.messages).toHaveLength(1)
+		expect(result.messages[0].type).toBe("say")
+		expect(result.messages[0].say).toBe("error")
+		expect(result.messages[0].text).toContain("1 tool call(s) failed: [task_progress]")
+		expect(result.messages.some((message) => message.ask === "api_req_failed")).toBe(false)
+		expect(result.turnComplete).toBe(false)
+		expect(state.wasErrorSeen()).toBe(false)
+	})
+
 	it("records the error outcome when the turn terminates with done(reason:'error')", () => {
 		const state = new MessageTranslatorState()
 		const event: CoreSessionEvent = {
@@ -1963,6 +1994,31 @@ describe("translateSessionEvent — agent_event notice", () => {
 		expect(divider).toBeDefined()
 		expect(divider?.ts).toBe(started[0].ts)
 		expect(JSON.parse(divider?.text ?? "{}")).toMatchObject({ status: "failed" })
+	})
+
+	it("leaves the compaction divider open for a recoverable in-run notice", () => {
+		// A mistake notice arriving while a compaction is in flight used to close the
+		// divider as "failed" — the compaction was still running and went on to finish.
+		const state = new MessageTranslatorState()
+		translateSessionEvent(noticeEvent("auto-compacting", { kind: "auto_compaction", phase: "started" }), state)
+
+		const notice = translateSessionEvent(
+			{
+				type: "agent_event",
+				payload: {
+					sessionId: "session-1",
+					event: {
+						type: "error",
+						error: new Error("1 tool call(s) failed: [editor] boom"),
+						recoverable: true,
+						iteration: 2,
+					} as unknown as AgentEvent,
+				},
+			},
+			state,
+		).messages
+
+		expect(notice.some((message) => message.say === "compaction")).toBe(false)
 	})
 
 	it("finalizes a dangling compaction divider as cancelled when the turn ends", () => {

@@ -1871,12 +1871,32 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 		}
 
 		case "error": {
-			finalizeDanglingCompaction(state, messages, "failed")
-			// An errored turn didn't end on its text response — no completion retag.
-			state.clearTurnFinalText()
 			if (state.isSuppressedToolApprovalDenial(event.error)) {
 				break
 			}
+
+			// `recoverable: true` is an in-run NOTICE, not a failed turn. The
+			// MistakeTracker emits one for every recorded mistake ("1 tool call(s)
+			// failed: [task_progress] ..."), and extension setup failures surface the
+			// same way — the run carries straight on afterwards. Treating those like a
+			// terminal provider error put the footer into Retry / Start New Task and
+			// marked the session not-running while the agent was still working, and
+			// nothing on the continuing run ever cleared it. Only `run-failed` carries
+			// `recoverable: false`.
+			if (event.recoverable === true) {
+				messages.push({
+					ts: state.nextTs(),
+					type: "say",
+					say: "error",
+					text: event.error instanceof Error ? event.error.message : String(event.error ?? ""),
+					partial: false,
+				})
+				break
+			}
+
+			finalizeDanglingCompaction(state, messages, "failed")
+			// An errored turn didn't end on its text response — no completion retag.
+			state.clearTurnFinalText()
 
 			// Record the error outcome so turn end resolves to the "error" phase
 			// (footer shows Retry / Start New Task) instead of awaiting_followup.
@@ -1991,7 +2011,15 @@ export function translateSessionEvent(event: CoreSessionEvent, state: MessageTra
 			if (agentEvent.type === "done") {
 				result.turnComplete = true
 			}
-			if (agentEvent.type === "error" && !state.isSuppressedToolApprovalDenial(agentEvent.error)) {
+			if (
+				agentEvent.type === "error" &&
+				agentEvent.recoverable !== true &&
+				!state.isSuppressedToolApprovalDenial(agentEvent.error)
+			) {
+				// Terminal failures only. A recoverable notice completes nothing — the
+				// coordinator resolves the turn phase (and clears `isRunning`) off this
+				// flag, so treating a mid-run mistake notice as turn end was what left
+				// Retry / Start New Task on screen over a still-running task.
 				result.turnComplete = true
 			}
 
