@@ -232,6 +232,26 @@ function resolveOutputReserveTokens(estimatedInputTokens: number): number {
 	);
 }
 
+/**
+ * The budget terms, flattened into the message.
+ *
+ * `BasicLogger` keeps the message and drops the rest, so anything that has to
+ * survive into a log file has to be in the string.
+ */
+function describeOutputBudget(details: {
+	contextWindow?: number;
+	estimatedInputTokens?: number;
+	inputChars?: number;
+	reserveTokens?: number;
+	remainingContext?: number;
+	minOutputTokens?: number;
+}): string {
+	return Object.entries(details)
+		.filter(([, value]) => value !== undefined)
+		.map(([key, value]) => `${key}=${value}`)
+		.join(" ");
+}
+
 export function resolveGatewayRequestMaxTokens(input: {
 	requestedMaxTokens?: number;
 	model: Pick<GatewayModelDefinition, "contextWindow" | "maxOutputTokens">;
@@ -376,14 +396,16 @@ export class DefaultGateway implements Gateway {
 		);
 		const provider = await providerRecord.createProvider(providerRecord.config);
 		const inputChars = measureRequestInputChars(request);
+		const estimatedInputTokens = estimateTokens(inputChars);
 		const maxTokens = resolveGatewayRequestMaxTokens({
 			requestedMaxTokens: request.maxTokens,
 			model: resolved.model,
-			estimatedInputTokens: estimateTokens(inputChars),
+			estimatedInputTokens,
 			reasoningBudgetTokens: request.reasoning?.budgetTokens,
 			onContextOverflow: (details) => {
 				this.logger?.log(
-					"Estimated remaining context leaves no usable output budget; sending no output cap",
+					"Estimated remaining context leaves no usable output budget; sending no output cap" +
+						` (${describeOutputBudget(details)})`,
 					{
 						severity: "warn",
 						providerId: resolved.provider.id,
@@ -393,6 +415,20 @@ export class DefaultGateway implements Gateway {
 				);
 			},
 		});
+		// The terms behind the cap, not just the cap. A session was watched
+		// ratchet from 20,547 down to no cap at all over six turns while
+		// compaction sat below its trigger the whole way, and the logs could not
+		// say which term moved: the window, the estimate, or the reserve. The
+		// structured fields above are dropped by the logger, so they go in the
+		// message.
+		this.logger?.log(
+			`Resolved output cap ${maxTokens ?? "none"} (${describeOutputBudget({
+				contextWindow: resolved.model.contextWindow,
+				estimatedInputTokens,
+				inputChars,
+			})})`,
+			{ severity: "info" },
+		);
 		const stream = await provider.stream(
 			{
 				...request,
