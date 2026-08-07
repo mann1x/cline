@@ -5,7 +5,7 @@ import { UpdateApiConfigurationRequest } from "@shared/proto/cline/models"
 import { UpdateSettingsRequest } from "@shared/proto/cline/state"
 import { convertApiConfigurationToProto } from "@shared/proto-conversions/models/api-configuration-conversion"
 import { SecretKeys } from "@shared/storage/state-keys"
-import { useMemo } from "react"
+import { useCallback, useMemo } from "react"
 import { ExtensionStateContext, useExtensionState } from "@/context/ExtensionStateContext"
 import { ModelsServiceClient, StateServiceClient } from "@/services/grpc-client"
 import ApiOptions from "./ApiOptions"
@@ -43,11 +43,38 @@ const VisionModelTab = () => {
 		return { ...secrets, ...settings } as ApiConfiguration
 	}, [visionModeApiConfiguration, apiConfiguration])
 
+	// The provider settings this tab holds, kept in its own snapshot rather than
+	// in providers.json. The host's store writes the session's global provider
+	// and model keys alongside the file, so a second configuration cannot live
+	// there without overwriting the first.
+	const storedProviderSettings = useMemo(() => {
+		const snapshot = parseApiConfigurationSnapshot(visionModeApiConfiguration)
+		const held = (snapshot as { providerConfig?: Record<string, unknown> } | undefined)?.providerConfig
+		return held ?? {}
+	}, [visionModeApiConfiguration])
+
+	const writeSnapshot = useCallback(
+		async (next: Record<string, unknown>) => {
+			const snapshot = parseApiConfigurationSnapshot(visionModeApiConfiguration) ?? EMPTY_SNAPSHOT
+			await StateServiceClient.updateSettings(
+				UpdateSettingsRequest.create({
+					visionModeApiConfiguration: JSON.stringify({ ...snapshot, providerConfig: next }),
+				}),
+			)
+		},
+		[visionModeApiConfiguration],
+	)
+
 	const scope = useMemo(
 		() => ({
-			// The Vision tab keeps its own providers.json entry; without this the
-			// panel's other write path lands on the one Plan and Act read.
 			ownsProviderSettings: true,
+			providerSettings: storedProviderSettings,
+			writeProviderSettings: async (patch: Record<string, unknown>) => {
+				await writeSnapshot({ ...storedProviderSettings, ...patch })
+			},
+			commitModelSelection: async (modelId: string) => {
+				await writeSnapshot({ ...storedProviderSettings, selectedModelId: modelId })
+			},
 			save: async (updated: ApiConfiguration) => {
 				await StateServiceClient.updateSettings(
 					UpdateSettingsRequest.create({
@@ -76,7 +103,7 @@ const VisionModelTab = () => {
 				}
 			},
 		}),
-		[apiConfiguration],
+		[apiConfiguration, storedProviderSettings, writeSnapshot],
 	)
 
 	const scopedState = useMemo(

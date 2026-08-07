@@ -39,7 +39,7 @@ export interface BuildApiHandlerOptions {
 	 * handler would be built from the primary model's entry, so a tab that looks
 	 * separate would still send the primary model's `num_ctx` and sampler.
 	 */
-	providerSettingsId?: string
+	visionProviderSettings?: Record<string, unknown>
 }
 
 /**
@@ -90,7 +90,7 @@ export function buildSdkProviderConfig(
 		// (`num_ctx`) on the provider config; without this, standalone callers
 		// ignore an explicit Request Timeout setting and load models with
 		// Ollama's 4096-token server default.
-		...(providerId === "ollama" ? resolveOllamaProviderConfig(configuration, modelId, options?.providerSettingsId) : {}),
+		...(providerId === "ollama" ? resolveOllamaProviderConfig(configuration, modelId, options?.visionProviderSettings) : {}),
 	}
 
 	if (options?.disableReasoning) {

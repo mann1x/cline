@@ -25,6 +25,19 @@ export interface ApiConfigurationScope {
 	 * entry instead.
 	 */
 	ownsProviderSettings?: boolean
+	/**
+	 * The provider settings this scope holds, and how to change them.
+	 *
+	 * Not the host's provider store. `commitSelection` there writes the global
+	 * `<mode>ModeApiProvider` and model-id keys as well as providers.json, so a
+	 * second configuration routed through it does not get its own entry — it
+	 * overwrites the session's. Measured: choosing a vision model wrote nothing
+	 * under the scoped id and left the picker showing the first model in the
+	 * list, because nothing had been committed anywhere it reads from.
+	 */
+	providerSettings?: Record<string, unknown>
+	writeProviderSettings?: (patch: Record<string, unknown>) => Promise<void>
+	commitModelSelection?: (modelId: string) => Promise<void>
 }
 
 export const ApiConfigurationScopeContext = createContext<ApiConfigurationScope | undefined>(undefined)

@@ -733,21 +733,21 @@ type OllamaProviderConfig = {
 export function resolveOllamaProviderConfig(
 	config: ApiConfiguration,
 	modelId: string | undefined,
-	settingsProviderId = "ollama",
+	overrideSettings?: Record<string, unknown>,
 ): OllamaProviderConfig {
 	// providers.json (`contextWindow`) is the source of truth; the legacy
 	// StateManager string is a migration fallback (the config store mirrors
 	// writes to both).
 	let settingsContextWindow: number | undefined
 	try {
-		const value = getProviderSettingsManager().getProviderSettings(settingsProviderId)?.contextWindow
+		const value = (overrideSettings ?? getProviderSettingsManager().getProviderSettings("ollama"))?.contextWindow
 		settingsContextWindow = typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined
 	} catch {
 		Logger.warn("[SessionFactory] Failed to read Ollama settings from providers.json")
 	}
 	let sampling: ProviderSamplingOptions | undefined
 	try {
-		const stored = getProviderSettingsManager().getProviderSettings(settingsProviderId)?.sampling
+		const stored = (overrideSettings ?? getProviderSettingsManager().getProviderSettings("ollama"))?.sampling
 		sampling = stored && typeof stored === "object" ? (stored as ProviderSamplingOptions) : undefined
 	} catch {
 		Logger.warn("[SessionFactory] Failed to read Ollama sampling settings from providers.json")
@@ -1159,6 +1159,18 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	// the user has both enabled it and picked a model for it: without a
 	// describer the runtime keeps its existing behaviour of sending images
 	// straight through, and falling back to a refusal if the model objects.
+	// The vision tab's own provider settings, held in its snapshot rather than
+	// in providers.json — the shared entry belongs to the primary model.
+	const visionProviderSettings = (() => {
+		try {
+			const raw = stateManager.getGlobalSettingsKey("visionModeApiConfiguration")
+			const parsed = typeof raw === "string" && raw ? JSON.parse(raw) : undefined
+			const held = parsed?.providerConfig
+			return held && typeof held === "object" ? (held as Record<string, unknown>) : undefined
+		} catch {
+			return undefined
+		}
+	})()
 	const visionApiConfiguration = stateManager.getGlobalSettingsKey("visionModelEnabled")
 		? buildVisionApiConfiguration(apiConfig, stateManager.getGlobalSettingsKey("visionModeApiConfiguration"))
 		: undefined
@@ -1323,7 +1335,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		hooks: composeSessionHooks(buildAgentHooks(StateManager.get()), cwd, renderedTemplate),
 		...(visionApiConfiguration
 			? {
-					describeImages: createVisionImageDescriber(visionApiConfiguration),
+					describeImages: createVisionImageDescriber(visionApiConfiguration, visionProviderSettings),
 					// Configuring a vision model means the primary model is not
 					// meant to see the image, whether or not it could have.
 					alwaysDescribeImages: true,

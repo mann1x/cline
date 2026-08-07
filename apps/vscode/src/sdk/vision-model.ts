@@ -4,7 +4,6 @@ import { parseApiConfigurationSnapshot } from "@shared/api-config-profiles"
 import { applyApiConfigurationSnapshot } from "@shared/api-config-snapshot"
 import { Logger } from "@shared/services/Logger"
 import { SecretKeys } from "@shared/storage/state-keys"
-import { visionProviderId } from "@shared/vision-provider-id"
 import { buildApiHandler } from "./sdk-api-handler"
 
 /**
@@ -68,14 +67,14 @@ export function buildVisionApiConfiguration(
  */
 export function createVisionImageDescriber(
 	configuration: ApiConfiguration,
+	visionProviderSettings?: Record<string, unknown>,
 ): (images: readonly AgentImageToDescribe[]) => Promise<readonly (string | undefined)[]> {
 	return async (images) => {
 		// Built from the vision tab's own provider entry, so the base URL,
 		// context window and sampler are the ones configured for this model
 		// rather than the primary model's.
-		const provider = (configuration as Record<string, unknown>).actModeApiProvider
 		const handler = buildApiHandler(configuration, "act", {
-			providerSettingsId: typeof provider === "string" ? visionProviderId(provider) : undefined,
+			visionProviderSettings,
 		})
 		const descriptions: (string | undefined)[] = []
 		for (const image of images) {

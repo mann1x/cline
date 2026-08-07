@@ -11,7 +11,6 @@ import {
 	type ProviderModelOverrides,
 	toProtobufModelOverrides as toProtobufProviderModelOverrides,
 } from "@shared/proto-conversions/models/modelOverrides"
-import { baseProviderId, visionProviderId } from "@shared/vision-provider-id"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useApiConfigurationScope } from "@/components/settings/utils/ApiConfigurationScopeContext"
 import type { ProviderId } from "@/context/ExtensionStateContext"
@@ -58,7 +57,7 @@ export function useProviderConfig(requestedProviderId: ProviderId) {
 	// own, so its base URL, context window, sampler and model selection stop
 	// landing on the entry Plan and Act read.
 	const scope = useApiConfigurationScope()
-	const providerId = (scope?.ownsProviderSettings ? visionProviderId(requestedProviderId) : requestedProviderId) as ProviderId
+	const providerId = requestedProviderId
 	const [config, setConfig] = useState<ProviderConfigResponse | undefined>(undefined)
 
 	// Reads and writes resolve asynchronously and can complete out of order
@@ -73,6 +72,21 @@ export function useProviderConfig(requestedProviderId: ProviderId) {
 		setConfig(response)
 	}, [])
 
+	// A scoped panel reads what the scope holds rather than the shared entry, so
+	// the picker shows what it just committed instead of falling back to the
+	// first model in the list.
+	const scopedConfig = scope?.ownsProviderSettings
+		? ({
+				...(scope.providerSettings ?? {}),
+				actSelection: scope.providerSettings?.selectedModelId
+					? { modelId: scope.providerSettings.selectedModelId }
+					: undefined,
+				planSelection: scope.providerSettings?.selectedModelId
+					? { modelId: scope.providerSettings.selectedModelId }
+					: undefined,
+			} as unknown as ProviderConfigResponse)
+		: undefined
+
 	const read = useCallback(async () => {
 		const seq = ++requestSeqRef.current
 		const response = await ModelsServiceClient.readProviderConfig(StringRequest.create({ value: providerId }))
@@ -86,6 +100,10 @@ export function useProviderConfig(requestedProviderId: ProviderId) {
 
 	const write = useCallback(
 		async (patch: ProviderConfigWritePatch) => {
+			if (scope?.writeProviderSettings) {
+				await scope.writeProviderSettings(patch as Record<string, unknown>)
+				return undefined
+			}
 			const seq = ++requestSeqRef.current
 			try {
 				const response = await ModelsServiceClient.writeProviderConfig(
@@ -112,18 +130,21 @@ export function useProviderConfig(requestedProviderId: ProviderId) {
 				throw error
 			}
 		},
-		[providerId, applyConfig, read],
+		[providerId, applyConfig, read, scope],
 	)
 
 	const commitSelection = useCallback(
 		async (mode: "plan" | "act", selection: ProviderModelSelection) => {
-			// Compared against the vendor, not the entry: a scoped panel stores
-			// under a suffixed id while still selecting a model for the real
-			// provider, and the two are the same vendor by construction.
-			if (selection.providerId !== baseProviderId(providerId)) {
-				throw new Error(
-					`selection providerId ${selection.providerId} does not match hook providerId ${baseProviderId(providerId)}`,
-				)
+			if (selection.providerId !== providerId) {
+				throw new Error(`selection providerId ${selection.providerId} does not match hook providerId ${providerId}`)
+			}
+			// A scoped panel keeps its own settings; the host's commitSelection
+			// writes the session's global provider and model keys as well as
+			// providers.json, so routing a second configuration through it
+			// overwrites the one it is meant to sit beside.
+			if (scope?.commitModelSelection) {
+				await scope.commitModelSelection(selection.modelId)
+				return
 			}
 
 			await ModelsServiceClient.commitModelSelection(
@@ -137,8 +158,8 @@ export function useProviderConfig(requestedProviderId: ProviderId) {
 			)
 			await read()
 		},
-		[providerId, read],
+		[providerId, read, scope],
 	)
 
-	return { config, write, commitSelection }
+	return { config: scopedConfig ?? config, write, commitSelection }
 }
