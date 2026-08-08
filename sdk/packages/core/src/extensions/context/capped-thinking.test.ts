@@ -3,8 +3,10 @@ import { observeRequestTokens, resetTokenCalibration } from "@cline/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	buildCappedThinkingRequest,
+	createCappedThinkingNoteWriter,
 	createCappedThinkingPrepareTurn,
 	findCappedThinkingIndex,
+	isDegenerateNote,
 	locateCappedThinking,
 } from "./capped-thinking";
 
@@ -504,16 +506,18 @@ describe("what the condenser asks the summariser for", () => {
 		resetTokenCalibration();
 	});
 
-	it("sends no output cap of its own", async () => {
+	it("caps the note without letting the cap swallow it", async () => {
 		// Cleared here, not in `afterEach`: earlier tests in this file drive the
 		// same condenser and their calls are captured too.
 		summarizerConfigs().length = 0;
-		// A fixed 700-token cap was the whole failure. Against a template that
-		// reasons whatever the request asks for, the summariser spent the entire
-		// budget thinking and returned one usage chunk with no text -- measured
-		// three times running, on thinks of 22,011, 19,007 and 39,544 chars.
-		// Unset, the cap resolves from the window like any other turn: large
-		// enough to survive a forced think, and already scaled to the session.
+		// A fixed 700-token cap was the original failure: against a summariser
+		// that reasons, the whole budget went into thinking and the call returned
+		// one usage chunk with no text -- measured three times running, on thinks
+		// of 22,011, 19,007 and 39,544 chars. The fix was to stop asking for
+		// reasoning, not to remove the cap; with `thinking: false` the budget is
+		// the note, and something has to stop a small model that starts
+		// repeating itself. Well above what the note needs, so it is a stop
+		// rather than a target.
 		const budgetMessage = "I have used my thinking budget.";
 		const prepareTurn = createCappedThinkingPrepareTurn(undefined, {
 			enabled: true,
@@ -543,7 +547,7 @@ describe("what the condenser asks the summariser for", () => {
 
 		expect(summarizerConfigs()).toHaveLength(1);
 		const config = summarizerConfigs()[0];
-		expect(config).not.toHaveProperty("maxOutputTokens");
+		expect(config.maxOutputTokens).toBe(2_000);
 		// The note needs no reasoning of its own, and asking for it is what left
 		// no room for the note.
 		expect(config.thinking).toBe(false);
@@ -590,5 +594,100 @@ describe("what the condenser asks the summariser for", () => {
 		// The instruction half stays short and says nothing about the reasoning.
 		expect(call.system).not.toContain("the parser gives up at line 90");
 		expect(call.system.length).toBeLessThan(1_000);
+	});
+});
+
+/**
+ * Measured on a live run: the condensation came back as thirty variations of
+ * its own opening line and went into the thinking channel, where the model read
+ * it as thirty things it had thought.
+ */
+describe("a note that is the model repeating itself", () => {
+	const observed = [
+		"Summary-of-thought process:",
+		"Summary-of-thought process:",
+		"Summary-of-font-process:",
+		"Summary-of-font-process:",
+		"Summary-of-font process:",
+		"Summary-of-font process:",
+		"Summary-of-font process:",
+		"Summary of the task at hand is at thethought process:",
+		"Summary of the task at hand is at thethought process:",
+		"Summary of the task at hand is at the thought process:",
+	].join("\n");
+
+	it("recognises the shape, near-identical lines included", () => {
+		expect(isDegenerateNote(observed)).toBe(true);
+	});
+
+	it("leaves a real note alone", () => {
+		const note =
+			"The parser gives up at line 90 of manic_miner.html, and the delimiter scan says line 97 closes nothing that is open. " +
+			"I have ruled out the missing paren at 111: its own brackets balance, so the count there is a consequence rather than the cause. " +
+			"What I still do not know is whether the stray brace at 97 was introduced by my own edit or was already there. " +
+			"Next I read 88 to 99 with line numbers and compare against what the scan reported.";
+		expect(isDegenerateNote(note)).toBe(false);
+	});
+
+	it("does not call a short note degenerate for want of evidence", () => {
+		expect(isDegenerateNote("Line 90 is the one. Read it, then fix it.")).toBe(
+			false,
+		);
+	});
+});
+
+describe("salvaging a turn discarded at the output cap", () => {
+	const config = {
+		enabled: true,
+		providerConfig: { providerId: "ollama", modelId: "m" },
+	};
+
+	// The two passes a compaction makes, because a turn cut off by num_predict
+	// has most of its window free -- measured at 48,508 tokens against 110,000.
+	it("writes both a note and a retrospective when the window was not the cap", async () => {
+		summarizerCalls().length = 0;
+		const writer = createCappedThinkingNoteWriter(config);
+		expect(writer).toBeDefined();
+
+		const result = await writer?.({
+			reasoning: "the parser gives up at line 90",
+			text: "I will fix line 90 by",
+			windowBound: false,
+		});
+
+		expect(result?.note).toBe("the note");
+		expect(result?.retrospective).toBe("the note");
+		expect(summarizerCalls()).toHaveLength(2);
+		// The reply it had begun writing goes in too: it is more committal than
+		// the reasoning around it and was discarded with everything else.
+		expect(summarizerCalls()[0].messages[0].content).toContain(
+			"I will fix line 90 by",
+		);
+	});
+
+	// No room is no room: the second pass is exactly what there is no budget for.
+	it("writes the note alone when the window was the cap", async () => {
+		summarizerCalls().length = 0;
+		const writer = createCappedThinkingNoteWriter(config);
+
+		const result = await writer?.({
+			reasoning: "the parser gives up at line 90",
+			windowBound: true,
+		});
+
+		expect(result?.note).toBe("the note");
+		expect(result?.retrospective).toBeUndefined();
+		expect(summarizerCalls()).toHaveLength(1);
+	});
+
+	it("pays for the same discarded turn once", async () => {
+		summarizerCalls().length = 0;
+		const writer = createCappedThinkingNoteWriter(config);
+		const input = { reasoning: "same reasoning", windowBound: true };
+
+		await writer?.(input);
+		await writer?.({ ...input });
+
+		expect(summarizerCalls()).toHaveLength(1);
 	});
 });

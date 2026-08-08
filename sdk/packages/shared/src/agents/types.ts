@@ -15,6 +15,8 @@ import type {
 	AgentImageToDescribe,
 	AgentRuntimeHooks,
 	AgentTool,
+	DiscardedTurnCondensation,
+	DiscardedTurnInput,
 	ProviderErrorClass,
 } from "../agent";
 import type { ExtensionContext } from "../extensions/context";
@@ -878,8 +880,11 @@ export interface AgentConfig {
 	 * never re-enters the transcript. Returning nothing discards as before.
 	 */
 	condenseDiscardedReasoning?: (
-		reasoning: string,
-	) => Promise<string | undefined> | string | undefined;
+		input: DiscardedTurnInput,
+	) =>
+		| Promise<DiscardedTurnCondensation | undefined>
+		| DiscardedTurnCondensation
+		| undefined;
 	/**
 	 * Optional Telemetry service for emitting structured events about agent execution to configured telemetry backends.
 	 */

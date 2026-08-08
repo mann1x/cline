@@ -109,6 +109,17 @@ const MAX_TOKENS_INCOMPLETE_TURN_REMINDER =
 	"If the work you were planning does not fit in one reply, do the part that fits, call the tools it needs, and continue in the next turn.";
 
 /**
+ * How the retrospective is introduced, when there was room to write one.
+ *
+ * Separate from the note because it answers a different question. The note is
+ * where the turn had got to; this is what the reasoning learned on the way --
+ * the part a summary drops first and the part that stops the next pass walking
+ * into the same wall.
+ */
+const DISCARDED_RETROSPECTIVE_PREFIX =
+	"And what that reasoning had established about the problem itself:";
+
+/**
  * How the salvaged reasoning is introduced to the model.
  *
  * As the model's own note, not as a system finding: it wrote the reasoning this
@@ -812,7 +823,8 @@ export class AgentRuntime {
 	 */
 	private async noteDiscardedReasoning(
 		message: AgentMessage,
-	): Promise<string | undefined> {
+		windowBound: boolean,
+	): Promise<{ note?: string; retrospective?: string } | undefined> {
 		const condense = this.config.condenseDiscardedReasoning;
 		if (!condense) {
 			return undefined;
@@ -820,24 +832,54 @@ export class AgentRuntime {
 		const reasoning = message.content
 			.filter(
 				(part: AgentMessagePart): part is AgentMessagePart & { text: string } =>
-					part.type === "reasoning" && typeof (part as { text?: unknown }).text === "string",
+					part.type === "reasoning" &&
+					typeof (part as { text?: unknown }).text === "string",
 			)
 			.map((part) => part.text)
 			.join("")
 			.trim();
-		if (!reasoning) {
+		// The reply as far as it got. It was on its way to the bin with the
+		// reasoning, and it states what the turn had decided more plainly than the
+		// reasoning does. (There is never a tool call to collect here: this path
+		// runs only for a truncated turn that produced none.)
+		const text = message.content
+			.filter(
+				(part: AgentMessagePart): part is AgentMessagePart & { text: string } =>
+					part.type === "text" &&
+					typeof (part as { text?: unknown }).text === "string",
+			)
+			.map((part) => part.text)
+			.join("")
+			.trim();
+		if (!reasoning && !text) {
 			return undefined;
 		}
 		try {
-			const note = (await condense(reasoning))?.trim();
-			if (!note) {
+			const condensation = await condense({
+				reasoning,
+				...(text ? { text } : {}),
+				windowBound,
+			});
+			const note = condensation?.note?.trim();
+			const retrospective = condensation?.retrospective?.trim();
+			if (!note && !retrospective) {
 				return undefined;
 			}
 			this.config.logger?.log?.(
-				`Condensed ${reasoning.length} chars of discarded reasoning into a ${note.length}-char note for the retry`,
-				{ severity: "info", reasoningChars: reasoning.length, noteChars: note.length },
+				`Condensed ${reasoning.length} chars of discarded reasoning into a ${
+					note?.length ?? 0
+				}-char note and a ${retrospective?.length ?? 0}-char retrospective for the retry`,
+				{
+					severity: "info",
+					reasoningChars: reasoning.length,
+					noteChars: note?.length ?? 0,
+					retrospectiveChars: retrospective?.length ?? 0,
+				},
 			);
-			return note;
+			return {
+				...(note ? { note } : {}),
+				...(retrospective ? { retrospective } : {}),
+			};
 		} catch (error) {
 			this.config.logger?.log?.(
 				"Could not condense the discarded reasoning; retrying without a note",
@@ -1010,7 +1052,10 @@ export class AgentRuntime {
 					// only when there was no room to continue past it, which is the same
 					// condition that lands here -- so a condenser watching the transcript
 					// never sees one.
-					const discardedNote = await this.noteDiscardedReasoning(message);
+					const discardedNote = await this.noteDiscardedReasoning(
+						message,
+						this.compactBeforeNextTurn,
+					);
 					await this.emit({
 						type: "status-notice",
 						snapshot: this.snapshot(),
@@ -1027,7 +1072,18 @@ export class AgentRuntime {
 					});
 					await this.addUserReminderMessage(
 						discardedNote
-							? `${MAX_TOKENS_INCOMPLETE_TURN_REMINDER}\n\n${DISCARDED_REASONING_NOTE_PREFIX}\n\n${discardedNote}`
+							? [
+									MAX_TOKENS_INCOMPLETE_TURN_REMINDER,
+									...(discardedNote.note
+										? [DISCARDED_REASONING_NOTE_PREFIX, discardedNote.note]
+										: []),
+									...(discardedNote.retrospective
+										? [
+												DISCARDED_RETROSPECTIVE_PREFIX,
+												discardedNote.retrospective,
+											]
+										: []),
+								].join("\n\n")
 							: MAX_TOKENS_INCOMPLETE_TURN_REMINDER,
 					);
 					continue;

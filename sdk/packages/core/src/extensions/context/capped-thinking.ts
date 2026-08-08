@@ -19,10 +19,16 @@
  */
 
 import { createHandlerAsync } from "@cline/llms";
-import type { BasicLogger, MessageWithMetadata } from "@cline/shared";
+import type {
+	BasicLogger,
+	DiscardedTurnCondensation,
+	DiscardedTurnInput,
+	MessageWithMetadata,
+} from "@cline/shared";
 import type { CoreCompactionSummarizerConfig } from "../../types/config";
 import type { ProviderConfig } from "../../types/provider-settings";
 import {
+	buildThinkingSummaryRequest,
 	estimateThinkingTokens,
 	flattenToolResultContent,
 	formatToolInput,
@@ -116,6 +122,75 @@ function endsWithBudgetMessage(thinking: string, message: string): boolean {
 const CONDENSED_THINKING_MAX_CHARS = 12_000;
 
 /**
+ * The output cap for the condensation call itself.
+ *
+ * A fixed cap was removed once, for a good reason: at 700 tokens against a
+ * summariser that reasons, the whole budget went into thinking and the call
+ * returned no text at all. The condensation call now asks for no reasoning, so
+ * the budget is the note -- and something has to bound it, because a small
+ * model asked for prose in its own voice can fall into repeating itself.
+ * Measured live: a note that opened "Summary-of-thought process:" and then said
+ * a variant of that line thirty times.
+ *
+ * Set well above what the note needs, so it is a stop rather than a limit the
+ * note is written to.
+ */
+const CONDENSED_THINKING_MAX_OUTPUT_TOKENS = 2_000;
+
+/**
+ * Whether a note is the model repeating itself rather than writing.
+ *
+ * Degeneration is not a graceful failure here: the note goes into the thinking
+ * channel as the model's own reasoning, so thirty near-identical lines are read
+ * as thirty things it thought. No note at all is strictly better -- the turn
+ * then re-derives, which is the behaviour this feature improves on rather than
+ * one it breaks.
+ *
+ * Two cheap tests, because the shape is unmistakable: mostly-repeated lines, or
+ * one line that repeats a phrase over and over.
+ */
+export function isDegenerateNote(note: string): boolean {
+	const lines = note
+		.split("\n")
+		.map((line) => line.trim().toLowerCase())
+		.filter((line) => line.length > 0);
+	if (lines.length >= 6) {
+		// Thresholds set against the observed sample rather than by taste: ten
+		// lines, five of them exact repeats and four sharing an opening. Prose
+		// that is actually written repeats neither way, so the gap between a real
+		// note and this one is wide.
+		const distinct = new Set(lines).size;
+		if (distinct / lines.length <= 0.6) {
+			return true;
+		}
+		// Near-identical rather than identical: "Summary-of-thought process:" and
+		// "Summary of the task at hand is at the thought process:" are different
+		// strings and the same failure. Compare on the first few words.
+		const stems = lines.map((line) => line.split(/\s+/).slice(0, 4).join(" "));
+		if (new Set(stems).size / stems.length <= 0.5) {
+			return true;
+		}
+	}
+	const words = note.trim().toLowerCase().split(/\s+/);
+	if (words.length >= 40) {
+		const distinct = new Set(words).size;
+		if (distinct / words.length < 0.35) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * The instruction half of the retrospective call.
+ *
+ * The user half is the compaction's own retrospective prompt; this only says
+ * who is writing and for whom.
+ */
+const CAPPED_THINKING_RETROSPECTIVE_SYSTEM_PROMPT =
+	"You are recording what a train of reasoning established about the problem it was working on, for the agent that is about to reason about the same problem again. Not what it decided -- that is written down elsewhere -- but what it found out: the constraints, the dead ends and why they were dead, the facts about the code that took work to establish. Plain prose, no headings, no preamble.";
+
+/**
  * The line the condensed reasoning arrives under, inside the thinking channel.
  *
  * First person, because of where it lands. The note replaces a thinking block
@@ -143,7 +218,8 @@ export const DEFAULT_CAPPED_THINKING_PROMPT = `You were reasoning about a proble
 Rewrite that reasoning, compressed, as the thinking it is. It is going back into your own reasoning channel as the part you have already done, so that your next pass starts from here instead of starting over and arriving at this same point again.
 
 Write it as thought, not as a report about thought:
-- First person, present tense, the way you were already thinking. No headings, no bullet lists, no preamble, no sign-off.
+- First person, present tense, the way you were already thinking. No headings, no bullet lists, no preamble, no sign-off. Do not label it or announce what it is; just think.
+- A paragraph or two. Long enough to carry the specifics, short enough that none of it is padding. If you find yourself restating a line you have already written, you are finished: stop.
 - State what you have settled as settled. Do not re-derive it and do not hedge it.
 - Say what you ruled out and why, in a clause each. This is the part that stops the next pass repeating this one, and it is the part that gets dropped first if you are careless.
 - End on the one question still open and the single next action, stated concretely.
@@ -433,11 +509,20 @@ export function buildCappedThinkingRequest(options: {
 	thinking: string;
 	outcomes: readonly ToolOutcome[];
 	promptTemplate?: string;
+	/** The reply the turn had begun writing before it was cut off. */
+	partialAnswer?: string;
 }): string {
 	const parts = [
 		options.promptTemplate?.trim() || DEFAULT_CAPPED_THINKING_PROMPT,
 		`Your reasoning, as far as it got:\n${options.thinking}`,
 	];
+	if (options.partialAnswer?.trim()) {
+		// What it had actually started to say. More committal than the reasoning
+		// around it, and discarded with everything else.
+		parts.push(
+			`The reply you had begun writing when you were cut off:\n${options.partialAnswer.trim()}`,
+		);
+	}
 	if (options.outcomes.length > 0) {
 		parts.push(
 			`What you then called, and what it returned:\n${options.outcomes
@@ -503,11 +588,13 @@ async function writeCappedThinkingNote(options: {
 	outcomes: readonly ToolOutcome[];
 	config: CappedThinkingCondenserConfig;
 	providerConfig: ProviderConfig;
+	partialAnswer?: string;
 }): Promise<string> {
 	const request = buildCappedThinkingRequest({
 		thinking: options.thinking,
 		outcomes: options.outcomes,
 		promptTemplate: options.config.promptTemplate,
+		...(options.partialAnswer ? { partialAnswer: options.partialAnswer } : {}),
 	});
 	try {
 		// No output cap of its own. A fixed one was the whole failure: at 700
@@ -517,11 +604,13 @@ async function writeCappedThinkingNote(options: {
 		// 22,011, 19,007 and 39,544 characters. Left unset, the cap resolves from
 		// the window like any other turn, which is both large enough to survive a
 		// forced think and already scaled to what the session has room for.
-		const { maxOutputTokens: _uncapped, ...summarizerConfig } =
-			resolveSummarizerConfig({
+		const summarizerConfig = {
+			...resolveSummarizerConfig({
 				activeProviderConfig: options.providerConfig,
 				summarizer: options.config.summarizer,
-			});
+			}),
+			maxOutputTokens: CONDENSED_THINKING_MAX_OUTPUT_TOKENS,
+		};
 		const handler = await createHandlerAsync(summarizerConfig);
 		let text = "";
 		let chunks = 0;
@@ -552,6 +641,13 @@ async function writeCappedThinkingNote(options: {
 			}
 		}
 		const note = truncateText(text.trim(), CONDENSED_THINKING_MAX_CHARS);
+		if (note && isDegenerateNote(note)) {
+			options.config.logger?.log(
+				`Capped-thinking condensation degenerated into repetition; discarding the note (${note.length} chars from ${options.thinking.length} chars of reasoning)`,
+				{ severity: "warn", noteChars: note.length },
+			);
+			return "";
+		}
 		if (!note) {
 			// An empty note used to return in silence, which reads exactly like a
 			// condenser that was never called -- and for a whole session that is
@@ -602,34 +698,120 @@ async function writeCappedThinkingNote(options: {
  */
 export function createCappedThinkingNoteWriter(
 	config: CappedThinkingCondenserConfig,
-): ((thinking: string) => Promise<string>) | undefined {
+):
+	| ((input: DiscardedTurnInput) => Promise<DiscardedTurnCondensation>)
+	| undefined {
 	if (config.enabled === false || !config.providerConfig) {
 		return undefined;
 	}
 	const providerConfig = config.providerConfig;
 	// Keyed by the reasoning, like the pipeline's: a retry that reproduces the
 	// same think pays for the note once.
-	const condensed = new Map<string, string>();
-	return async (thinking: string) => {
-		const trimmed = thinking.trim();
-		if (!trimmed) {
-			return "";
+	const condensed = new Map<string, DiscardedTurnCondensation>();
+	return async (input: DiscardedTurnInput) => {
+		const trimmed = input.reasoning.trim();
+		const text = input.text?.trim();
+		if (!trimmed && !text) {
+			return {};
 		}
-		const cached = condensed.get(trimmed);
+		const key = `${trimmed}\u0000${text ?? ""}`;
+		const cached = condensed.get(key);
 		if (cached !== undefined) {
 			return cached;
 		}
 		const note = await writeCappedThinkingNote({
 			thinking: trimmed,
-			// No outcomes: a turn discarded at the output cap made no tool call.
-			// That is the definition of the case, not a shortcut.
+			// The reply the turn had begun writing, offered as what it had already
+			// committed to. There is never a tool call here -- a turn that made one
+			// is not discarded -- so `outcomes` stays empty by definition rather
+			// than by omission.
+			...(text ? { partialAnswer: text } : {}),
 			outcomes: [],
 			config,
 			providerConfig,
 		});
-		condensed.set(trimmed, note);
-		return note;
+		// The second pass, and the reason the caller says whether the window was
+		// what capped the turn.
+		//
+		// A turn cut off by `num_predict` has, typically, most of its window
+		// free: measured live, 48,508 tokens of request against 110,000, ended by
+		// the caller's own 32,000-token cap. Salvaging that is worth two passes,
+		// the same two a compaction makes -- a summary of where the turn had got
+		// to, and a retrospective of what its reasoning established. A turn cut
+		// off *by the window* has no such room, and gets the note alone.
+		const retrospective =
+			input.windowBound === true || !trimmed
+				? undefined
+				: await writeDiscardedRetrospective({
+						reasoning: trimmed,
+						config,
+						providerConfig,
+					});
+		const result: DiscardedTurnCondensation = {
+			...(note ? { note } : {}),
+			...(retrospective ? { retrospective } : {}),
+		};
+		condensed.set(key, result);
+		return result;
 	};
+}
+
+/**
+ * The retrospective half, over reasoning that is being discarded whole.
+ *
+ * Deliberately the compaction's own instruction rather than a second one
+ * written for this: the question is identical -- what did this reasoning
+ * establish that its conclusions do not carry -- and two prompts that drift
+ * apart would give the same session two different kinds of retrospective
+ * depending on which cap it hit.
+ *
+ * Cannot fail the retry: every exit is `undefined` and the note stands alone.
+ */
+async function writeDiscardedRetrospective(options: {
+	reasoning: string;
+	config: CappedThinkingCondenserConfig;
+	providerConfig: ProviderConfig;
+}): Promise<string | undefined> {
+	try {
+		const request = buildThinkingSummaryRequest({
+			reasoningText: options.reasoning,
+		});
+		const summarizerConfig = {
+			...resolveSummarizerConfig({
+				activeProviderConfig: options.providerConfig,
+				summarizer: options.config.summarizer,
+			}),
+			maxOutputTokens: CONDENSED_THINKING_MAX_OUTPUT_TOKENS,
+		};
+		const handler = await createHandlerAsync(summarizerConfig);
+		let text = "";
+		for await (const chunk of handler.createMessage(
+			CAPPED_THINKING_RETROSPECTIVE_SYSTEM_PROMPT,
+			[{ role: "user", content: request }],
+		)) {
+			if (chunk.type === "text") {
+				text += chunk.text;
+			}
+		}
+		const retrospective = truncateText(
+			text.trim(),
+			CONDENSED_THINKING_MAX_CHARS,
+		);
+		if (!retrospective || isDegenerateNote(retrospective)) {
+			return undefined;
+		}
+		options.config.logger?.debug?.(
+			`Discarded-turn retrospective: ${options.reasoning.length} chars of reasoning to ${retrospective.length} chars`,
+		);
+		return retrospective;
+	} catch (error) {
+		options.config.logger?.debug?.(
+			`Discarded-turn retrospective failed; keeping the note alone: ${
+				error instanceof Error ? error.message : String(error)
+			}`,
+		);
+		return undefined;
+	}
 }
 
 /**

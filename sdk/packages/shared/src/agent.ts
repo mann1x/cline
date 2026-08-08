@@ -364,6 +364,36 @@ export interface AgentRunLifecycleContext {
 // =============================================================================
 
 /**
+ * Everything a turn discarded at the output cap was carrying.
+ *
+ * Not just the reasoning. The answer it had begun writing and the call it had
+ * begun making are the most concrete statements of what it decided, and both
+ * went into the bin with the rest.
+ */
+export interface DiscardedTurnInput {
+	reasoning: string;
+	/** The reply as far as it got before the cap cut it off. */
+	text?: string;
+	/**
+	 * Whether the cap that cut this turn off was the context window.
+	 *
+	 * The distinction decides how much may be spent salvaging it. A turn cut off
+	 * by `num_predict` with two thirds of the window free can afford the same
+	 * two passes a compaction makes; one cut off because there was no room left
+	 * to answer in cannot, and gets the cheap single pass.
+	 */
+	windowBound?: boolean;
+}
+
+/** What a host makes of a discarded turn. Both halves are optional. */
+export interface DiscardedTurnCondensation {
+	/** Where the turn had got to, in its own voice. */
+	note?: string;
+	/** What the reasoning learned, which the note does not carry. */
+	retrospective?: string;
+}
+
+/**
  * 7-callback hook bag consumed by `AgentRuntime`.
  */
 export interface AgentRuntimeHooks {
@@ -520,8 +550,11 @@ export interface AgentRuntimeConfig {
 	 * never re-enters the transcript. Returning nothing discards as before.
 	 */
 	condenseDiscardedReasoning?: (
-		reasoning: string,
-	) => Promise<string | undefined> | string | undefined;
+		input: DiscardedTurnInput,
+	) =>
+		| Promise<DiscardedTurnCondensation | undefined>
+		| DiscardedTurnCondensation
+		| undefined;
 	// Optional host callback used by interactive sessions to inject a queued
 	// user steering message between agent loop iterations, before the next
 	// model request.

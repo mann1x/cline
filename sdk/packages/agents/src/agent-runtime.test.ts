@@ -3185,7 +3185,10 @@ describe("a turn cut off at the output cap", () => {
 		// which is why every capped turn of a measured session went in the bin
 		// with 14,000 characters of analysis the retry then redid from nothing.
 		const condenseDiscardedReasoning = vi.fn(
-			async (reasoning: string) => `note about ${reasoning.length} chars`,
+			async (input: { reasoning: string; text?: string }) => ({
+				note: `note about ${input.reasoning.length} chars`,
+				retrospective: "and what the reasoning established",
+			}),
 		);
 		const model = new ScriptedModel([
 			() => [
@@ -3203,10 +3206,13 @@ describe("a turn cut off at the output cap", () => {
 
 		expect(result.status).toBe("completed");
 		expect(condenseDiscardedReasoning).toHaveBeenCalledWith(
-			"a very long think that hit the cap",
+			expect.objectContaining({ reasoning: "a very long think that hit the cap" }),
 		);
 		const retryPrompt = JSON.stringify(model.requests[1].messages);
 		expect(retryPrompt).toContain("note about 34 chars");
+		// The retrospective travels with the note when the host wrote one: it is
+		// what the reasoning established, which the note does not carry.
+		expect(retryPrompt).toContain("and what the reasoning established");
 		// The note, not the reasoning: resending what overran the budget is the
 		// one thing this must not do.
 		expect(retryPrompt).not.toContain("a very long think that hit the cap");
@@ -3214,6 +3220,35 @@ describe("a turn cut off at the output cap", () => {
 		expect(JSON.stringify(result.messages)).not.toContain(
 			"a very long think that hit the cap",
 		);
+	});
+
+	// What the host is told, because it decides how much may be spent: a turn
+	// cut off by `num_predict` still has most of its window, and can afford the
+	// second pass a compaction makes.
+	it("says whether the window was what capped the turn", async () => {
+		const seen: Array<{ windowBound?: boolean }> = [];
+		const model = new ScriptedModel([
+			() => [
+				{ type: "reasoning-delta", text: "think" },
+				{ type: "finish", reason: "max-tokens" },
+			],
+			() => [
+				{ type: "text-delta", text: "ok" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			condenseDiscardedReasoning: (input) => {
+				seen.push({ windowBound: input.windowBound });
+				return { note: "n" };
+			},
+		});
+
+		await runtime.run("Hi");
+
+		expect(seen).toHaveLength(1);
+		expect(seen[0].windowBound).toBe(true);
 	});
 
 	it("retries as before when the condenser fails or has nothing to say", async () => {
