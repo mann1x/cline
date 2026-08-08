@@ -1,5 +1,10 @@
-import { hasOllamaNoStreamTimeoutDispatcher, setOllamaNoStreamTimeoutDispatcher } from "@cline/llms"
-import { Agent } from "undici"
+import {
+	hasOllamaFetch,
+	hasOllamaNoStreamTimeoutDispatcher,
+	setOllamaFetch,
+	setOllamaNoStreamTimeoutDispatcher,
+} from "@cline/llms"
+import { Agent, fetch as undiciFetch } from "undici"
 import { Logger } from "@/shared/services/Logger"
 
 /**
@@ -29,6 +34,15 @@ let installError: string | undefined
 export function installOllamaStreamDispatcher(): void {
 	try {
 		setOllamaNoStreamTimeoutDispatcher(new Agent({ bodyTimeout: 0, headersTimeout: 0 }))
+		// The dispatcher travels with a fetch that reads it. `dispatcher` is
+		// undici's own extension to `RequestInit`, so it means something only to
+		// undici's fetch — and the global here is not undici's. The extension
+		// host installs a proxy-aware fetch over it, and a wrapper that rebuilds
+		// the request from the fields it knows about drops the ones it does not.
+		// That is why `UND_ERR_BODY_TIMEOUT` outlived the release that installed
+		// the dispatcher: it was attached to every request and honoured by none,
+		// and the log line saying so was true and useless.
+		setOllamaFetch(undiciFetch as unknown as typeof fetch)
 	} catch (error) {
 		// Left to the vendor's own lookup rather than rethrown: a missing
 		// dispatcher degrades to undici's defaults, which is worse but not fatal.
@@ -53,9 +67,13 @@ export function reportOllamaStreamDispatcher(): void {
 		Logger.warn(`[Ollama] Could not install the stream dispatcher, falling back to undici defaults: ${installError}`)
 		return
 	}
+	if (!hasOllamaNoStreamTimeoutDispatcher()) {
+		Logger.log("[Ollama] No stream dispatcher in force; undici's default bodyTimeout applies")
+		return
+	}
 	Logger.log(
-		hasOllamaNoStreamTimeoutDispatcher()
-			? "[Ollama] Stream dispatcher installed: bodyTimeout and headersTimeout disabled"
-			: "[Ollama] No stream dispatcher in force; undici's default bodyTimeout applies",
+		hasOllamaFetch()
+			? "[Ollama] Stream dispatcher installed on undici's own fetch: bodyTimeout and headersTimeout disabled"
+			: "[Ollama] Stream dispatcher installed, but no undici fetch to honour it; the host global may discard it",
 	)
 }

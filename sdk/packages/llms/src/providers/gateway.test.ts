@@ -1193,12 +1193,13 @@ describe("sdk-gateway", () => {
 		expect(JSON.stringify(call?.messages)).not.toContain("reasoning");
 	});
 
-	it("keeps only the most recent reasoning on Ollama requests", async () => {
-		// Measured at effort `high`: 79.7% of a live transcript was thinking,
-		// ~60,500 tokens resent on every request, which is why compaction could
-		// only take 103.2k to 62.2k. The newest reasoning stays — a model that
-		// has just reasoned its way to a tool call needs it when the result
-		// comes back — and everything older goes.
+	it("sends the whole reasoning history on Ollama requests", async () => {
+		// Reclaiming thinking is compaction's job, not every request's. Dropping
+		// it per-request looked like a cheap 79.7% cut of a live transcript, but
+		// what it cuts is the model's own record of what it has already ruled
+		// out — and a chat template that replays reasoning from the last user
+		// turn onward makes the loss invisible from the client side. Whatever is
+		// still in the transcript goes out.
 		streamTextSpy.mockReturnValue({
 			fullStream: makeStreamParts([
 				{ type: "finish", usage: { inputTokens: 1, outputTokens: 1 } },
@@ -1248,9 +1249,8 @@ describe("sdk-gateway", () => {
 		const serialized = JSON.stringify(
 			(streamTextSpy.mock.calls.at(-1)?.[0] as { messages?: unknown })?.messages,
 		);
-		expect(serialized).not.toContain("stale thinking");
+		expect(serialized).toContain("stale thinking");
 		expect(serialized).toContain("current thinking");
-		// The turn that lost its reasoning keeps its text rather than vanishing.
 		expect(serialized).toContain("Hello!");
 	});
 

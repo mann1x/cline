@@ -136,8 +136,12 @@ export async function createHandlerAsync(
 // it decides the thinking budget the server enforces, so anything asking the
 // server what that budget will be has to ask about this level.
 export {
+	hasOllamaFetch,
 	hasOllamaNoStreamTimeoutDispatcher,
 	OLLAMA_DEFAULT_REASONING_EFFORT,
+	// The dispatcher is only honoured by a fetch that reads it, so the host
+	// hands over both or neither.
+	setOllamaFetch,
 	// Takes an opaque `unknown` and touches no Node API, so the browser build
 	// carries a setter nobody calls rather than needing a conditional export.
 	setOllamaNoStreamTimeoutDispatcher,

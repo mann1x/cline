@@ -18,6 +18,7 @@
 
 import type { LanguageModelV4 } from "@ai-sdk/provider";
 import type {
+	BasicLogger,
 	GatewayProviderContext,
 	GatewayResolvedProviderConfig,
 	GatewayStreamRequest,
@@ -30,6 +31,12 @@ import type { ProviderSamplingOptions } from "../config";
 import { ensureFetch, resolveApiKey } from "../http";
 import { createRetryEmptyResponseMiddleware } from "../middleware/retry-empty-response";
 import { splitToolImagesMiddleware } from "../middleware/split-tool-images";
+import {
+	createOllamaHealthProbe,
+	watchForStall,
+	withStallWatchdog,
+} from "./ollama-stall-watchdog";
+import { rewriteOllamaChatBody } from "./ollama-tool-images";
 import type { ProviderFactoryResult } from "./types";
 
 /** See {@link OLLAMA_DEFAULT_CONTEXT_WINDOW} — re-exported under the wire-format name. */
@@ -228,6 +235,37 @@ export function hasOllamaNoStreamTimeoutDispatcher(): boolean {
 	return cachedDispatcher !== undefined;
 }
 
+/**
+ * A fetch that is known to honour `init.dispatcher`, when the host has one.
+ *
+ * `dispatcher` is undici's extension to `RequestInit`, and it only does
+ * anything if the fetch reading it *is* undici's. `globalThis.fetch` is undici
+ * in plain Node, so passing the dispatcher there is enough — but not every host
+ * leaves that global alone. A VS Code extension host installs its own
+ * proxy-aware fetch over the global, and a wrapper that rebuilds the request
+ * from the fields it knows about drops the ones it does not. The dispatcher
+ * then goes out with every request and takes effect on none of them.
+ *
+ * That is not a hypothetical either. It is why `UND_ERR_BODY_TIMEOUT` survived
+ * the fix that installed the dispatcher: the vendor logged `attached` on a
+ * dispatcher that was silently discarded one layer up, and the default
+ * five-minute `bodyTimeout` kept killing prefill. The log was true and useless.
+ *
+ * So a host that has undici hands over its `fetch` as well as its `Agent`, and
+ * the two travel together. A caller-supplied `config.fetch` still wins: that is
+ * someone deliberately routing these requests, and second-guessing it here
+ * would break the case this exists to serve.
+ */
+let injectedFetch: typeof fetch | undefined;
+
+export function setOllamaFetch(value: typeof fetch | undefined): void {
+	injectedFetch = value;
+}
+
+export function hasOllamaFetch(): boolean {
+	return injectedFetch !== undefined;
+}
+
 async function resolveNoStreamTimeoutDispatcher(): Promise<unknown> {
 	if (dispatcherResolved) {
 		return cachedDispatcher;
@@ -251,22 +289,59 @@ async function resolveNoStreamTimeoutDispatcher(): Promise<unknown> {
 	return cachedDispatcher;
 }
 
+function requestUrl(input: Parameters<typeof fetch>[0]): string {
+	if (typeof input === "string") {
+		return input;
+	}
+	if (input instanceof URL) {
+		return input.toString();
+	}
+	return (input as Request).url;
+}
+
 export function withOllamaResponseTimeout(
 	baseFetch: typeof fetch,
 	timeoutMs: number,
 	dispatcher?: unknown,
+	options?: { logger?: BasicLogger },
 ): typeof fetch {
 	return (async (input, init) => {
+		const url = requestUrl(input);
+		// One parse serves both jobs: the images have to be folded back onto the
+		// tool message they came from, and the health probe wants to name the
+		// model it is waiting for. These bodies are a quarter of a megabyte.
+		const rewritten = rewriteOllamaChatBody(init?.body);
+		if (rewritten?.merged) {
+			options?.logger?.debug?.(
+				`[ollama] folded ${rewritten.merged} tool-result image message(s) back onto their tool messages`,
+			);
+		}
+		const probe = createOllamaHealthProbe({
+			url,
+			fetch: baseFetch,
+			model: rewritten?.model,
+			dispatcher,
+			logger: options?.logger,
+		});
 		const timeoutController = new AbortController();
-		const timer = setTimeout(
-			() =>
+		// The wait for the first byte is bounded by the server's own liveness
+		// rather than by a constant. Prefill at a large context is silence of
+		// exactly the shape a dead server makes, and the only thing that tells
+		// the two apart is asking.
+		const headerWatcher = watchForStall({
+			probe,
+			intervalMs: timeoutMs,
+			logger: options?.logger,
+			label: "response",
+			onDead: (elapsedMs) =>
 				timeoutController.abort(
 					new Error(
-						`Ollama request timed out after ${timeoutMs / 1000} seconds`,
+						`Ollama did not start responding within ${Math.round(
+							elapsedMs / 1000,
+						)} seconds and stopped answering health checks`,
 					),
 				),
-			timeoutMs,
-		);
+		});
 		// AbortSignal.any keeps upstream cancellation live for the entire
 		// request (including body streaming after the timer is cleared) and
 		// cleans up its own listeners — no manual listener management.
@@ -279,15 +354,25 @@ export function withOllamaResponseTimeout(
 		// undici to configure. Resolved by the caller rather than awaited here:
 		// an await before `baseFetch` moves the call after any synchronous
 		// abort, so a signal that fires immediately would be attached too late.
+		let response: Response;
 		try {
-			return await baseFetch(input, {
+			response = await baseFetch(input, {
 				...init,
+				...(rewritten ? { body: rewritten.body } : {}),
 				signal,
 				...(dispatcher ? { dispatcher } : {}),
 			} as RequestInit);
 		} finally {
-			clearTimeout(timer);
+			headerWatcher.stop();
 		}
+		// The same rule, applied to the body. undici's `bodyTimeout` is switched
+		// off wherever the dispatcher takes, and was never honoured where it did
+		// not; either way the bound that matters is this one.
+		return withStallWatchdog(response, {
+			probe,
+			logger: options?.logger,
+			label: "response data",
+		});
 	}) as typeof fetch;
 }
 
@@ -388,7 +473,13 @@ export async function createOllamaProviderModule(
 	const streamDispatcher = await resolveNoStreamTimeoutDispatcher();
 	context.logger?.debug(
 		streamDispatcher
-			? "[ollama] stream dispatcher attached: undici body/headers timeouts disabled"
+			? `[ollama] stream dispatcher attached: undici body/headers timeouts disabled (fetch: ${
+					config.fetch
+						? "caller-supplied"
+						: injectedFetch
+							? "host undici"
+							: "global — the dispatcher may be discarded by it"
+				})`
 			: "[ollama] no stream dispatcher: undici's default bodyTimeout applies to this request",
 	);
 	const provider = createOllama({
@@ -396,9 +487,10 @@ export async function createOllamaProviderModule(
 		...(Object.keys(headers).length > 0 ? { headers } : {}),
 		compatibility: "strict",
 		fetch: withOllamaResponseTimeout(
-			ensureFetch(config.fetch),
+			ensureFetch(config.fetch ?? injectedFetch),
 			readOllamaTimeoutMs(config),
 			streamDispatcher,
+			{ logger: context.logger },
 		),
 	});
 	// `num_ctx` and the sampler no longer ride on the model: this package has no

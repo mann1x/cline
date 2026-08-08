@@ -75,6 +75,11 @@ export {
 	getClinePassSubscriptionUrl,
 	getRegisteredHandler,
 	getRegisteredHandlerAsync,
+	// A host that bundles has to hand the Ollama vendor its stream dispatcher:
+	// the vendor's own lookup is written to be invisible to bundlers, so it
+	// finds nothing once packaged.
+	hasOllamaFetch,
+	hasOllamaNoStreamTimeoutDispatcher,
 	hasRegisteredHandler,
 	isBuiltInProviderId,
 	isClineFreeModelLimitError,
@@ -95,10 +100,7 @@ export {
 	registerAsyncHandler,
 	registerHandler,
 	resolveProviderApiLineBaseUrl,
-	// A host that bundles has to hand the Ollama vendor its stream dispatcher:
-	// the vendor's own lookup is written to be invisible to bundlers, so it
-	// finds nothing once packaged.
-	hasOllamaNoStreamTimeoutDispatcher,
+	setOllamaFetch,
 	setOllamaNoStreamTimeoutDispatcher,
 } from "./providers";
 export {

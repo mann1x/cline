@@ -151,21 +151,58 @@ describe("withOllamaResponseTimeout", () => {
 		vi.useRealTimers();
 	});
 
-	it("aborts when the response does not start within the timeout", async () => {
-		const hangingFetch = ((_input, init) =>
-			new Promise((_resolve, reject) => {
+	// The wait for the first byte is no longer a stopwatch. Prefill at a large
+	// context is minutes of silence on a healthy socket, and from the stream
+	// alone that is indistinguishable from a dead server — so the stream is not
+	// what decides. Each quiet interval asks the server, and only a server that
+	// stops answering ends the request.
+	it("aborts once the server has also stopped answering", async () => {
+		const hangingFetch = ((input, init) => {
+			if (String(input).endsWith("/api/ps")) {
+				return Promise.reject(new Error("ECONNREFUSED"));
+			}
+			return new Promise((_resolve, reject) => {
 				init?.signal?.addEventListener("abort", () =>
 					reject(init.signal?.reason),
 				);
-			})) as typeof fetch;
+			});
+		}) as typeof fetch;
 
 		const wrapped = withOllamaResponseTimeout(hangingFetch, 1000);
 		const pending = wrapped("http://localhost:11434/api/chat");
 		const assertion = expect(pending).rejects.toThrow(
-			"Ollama request timed out after 1 seconds",
+			"stopped answering health checks",
 		);
-		await vi.advanceTimersByTimeAsync(1001);
+		await vi.advanceTimersByTimeAsync(10_000);
 		await assertion;
+	});
+
+	it("keeps waiting through a long prefill while the server answers", async () => {
+		let probes = 0;
+		const prefillingFetch = ((input, init) => {
+			if (String(input).endsWith("/api/ps")) {
+				probes += 1;
+				return Promise.resolve(
+					new Response(JSON.stringify({ models: [] }), { status: 200 }),
+				);
+			}
+			return new Promise((_resolve, reject) => {
+				init?.signal?.addEventListener("abort", () =>
+					reject(init.signal?.reason),
+				);
+			});
+		}) as typeof fetch;
+
+		const wrapped = withOllamaResponseTimeout(prefillingFetch, 1000);
+		const pending = wrapped("http://localhost:11434/api/chat");
+		let settled = false;
+		void pending.catch(() => {
+			settled = true;
+		});
+		await vi.advanceTimersByTimeAsync(20_000);
+
+		expect(probes).toBeGreaterThan(5);
+		expect(settled).toBe(false);
 	});
 
 	it("does not abort once the response has started", async () => {
