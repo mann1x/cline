@@ -1175,6 +1175,49 @@ describe("requiring a read before an edit", () => {
 		});
 	});
 
+	it("accepts an edit whose range runs past the end of the file", async () => {
+		// Measured live, three identical cycles before the run was stopped: the
+		// file was 198 lines, the model aimed at lines 101-200, `read_files`
+		// 101-200 returned what existed and recorded a receipt for 101-198, and
+		// the guard demanded coverage of 101-200 — then told the model to go and
+		// read 101-200, which it did, correctly, every time. Two lines that do
+		// not exist cannot be read, so requiring them is a demand with no
+		// satisfying answer, and the instruction to satisfy it is the loop.
+		await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			// What `read_files` records for a request that overshoots: the file.
+			receipts.noteRead(filePath, 3, 4);
+
+			const result = await editor(
+				{ path: filePath, new_text: "C\nD", start_line: 3, end_line: 99 },
+				dir,
+				context,
+			);
+
+			expect(result).toContain("Replaced lines 3-4");
+		});
+	});
+
+	it("still refuses when the read stops short inside the file", async () => {
+		// The clamp is to the end of the file, not to whatever was read. A range
+		// that ends inside the file and was only partly read is the case the
+		// guard exists for, and it has to keep failing.
+		await withTempFile("a\nb\nc\nd\ne\nf", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 3);
+
+			const failure = editor(
+				{ path: filePath, new_text: "X", start_line: 2, end_line: 5 },
+				dir,
+				context,
+			);
+
+			await expect(failure).rejects.toThrow("Read before editing");
+		});
+	});
+
 	it("refuses an edit outside the range that was read", async () => {
 		await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
 			const receipts = createReadReceipts();

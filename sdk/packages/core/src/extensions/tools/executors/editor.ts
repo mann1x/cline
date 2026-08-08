@@ -978,11 +978,29 @@ export function createEditorExecutor(
 	 * 111,790 characters of reasoning across eight edits, `read_files` was
 	 * mentioned nine times and called zero.
 	 */
-	const requireRead = (filePath: string, first: number, last: number): void => {
-		if (!receipts || receipts.covers(filePath, first, last)) {
+	const requireRead = async (
+		filePath: string,
+		first: number,
+		last: number,
+	): Promise<void> => {
+		if (!receipts) {
 			return;
 		}
-		const range = first === last ? `line ${first}` : `lines ${first}-${last}`;
+		// Clamped to the file. A range that runs past the last line cannot be
+		// read -- `read_files` returns what exists and records a receipt for
+		// that -- so requiring a receipt covering the overshoot is a demand no
+		// read can satisfy, and the message telling the model to go and read it
+		// sends it round again. Measured: an edit aimed at lines 101-200 of a
+		// 198-line file, read correctly three times, refused three times, with
+		// the model doing exactly as instructed each time.
+		const lineCount = await countLines(filePath);
+		const end =
+			lineCount != null && lineCount > 0 ? Math.min(last, lineCount) : last;
+		const wanted = Math.max(first, end);
+		if (receipts.covers(filePath, first, wanted)) {
+			return;
+		}
+		const range = first === wanted ? `line ${first}` : `lines ${first}-${wanted}`;
 		const why = receipts.wasRetired(filePath)
 			? `${range} of ${filePath} has not been read in its current state — either it was never read, or an earlier edit changed the file's length and moved every line below it`
 			: `${filePath} has not been read in this session`;
@@ -1022,7 +1040,7 @@ export function createEditorExecutor(
 						`Cannot insert into ${filePath}: the file does not exist. Omit insert_line and insert_column to create it.`,
 					);
 				}
-				requireRead(filePath, input.insert_line, input.insert_line);
+				await requireRead(filePath, input.insert_line, input.insert_line);
 				const result = await insertAtColumn(
 					filePath,
 					input.insert_line,
@@ -1038,7 +1056,7 @@ export function createEditorExecutor(
 			// line it is anchored to still has to have been seen, or the text
 			// lands next to something other than what the model thinks.
 			if (linesBefore != null) {
-				requireRead(filePath, input.insert_line, input.insert_line);
+				await requireRead(filePath, input.insert_line, input.insert_line);
 			}
 			const result = await insertInFile(
 				filePath,
@@ -1063,7 +1081,7 @@ export function createEditorExecutor(
 				);
 			}
 			if (input.start_column != null) {
-				requireRead(
+				await requireRead(
 					filePath,
 					input.start_line,
 					input.end_line ?? input.start_line,
@@ -1086,7 +1104,11 @@ export function createEditorExecutor(
 					"`end_column` needs `start_column`: without it the tool replaces whole lines and the column has nothing to bound.",
 				);
 			}
-			requireRead(filePath, input.start_line, input.end_line ?? input.start_line);
+			await requireRead(
+				filePath,
+				input.start_line,
+				input.end_line ?? input.start_line,
+			);
 			const result = await replaceLineRange(
 				filePath,
 				input.start_line,
