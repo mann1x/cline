@@ -39,7 +39,11 @@ type FakeChunk = Record<string, unknown>;
 
 const createHandlerMock = vi.fn();
 
-vi.mock("@cline/llms", () => ({
+vi.mock("@cline/llms", async (importOriginal) => ({
+	// Partial: compaction also reaches the PolyKV session registry through this
+	// module, and a mock that names only what these tests stub turns any new
+	// dependency into 54 failures that say nothing about compaction.
+	...((await importOriginal()) as Record<string, unknown>),
 	createHandlerAsync: (config: unknown) => createHandlerMock(config),
 	// The estimator has to measure what the provider will send, so compaction
 	// asks which reasoning the provider keeps. These tests use a stub provider,

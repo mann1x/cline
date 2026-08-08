@@ -114,9 +114,18 @@ const MAX_TOKENS_INCOMPLETE_TURN_REMINDER =
  * As the model's own note, not as a system finding: it wrote the reasoning this
  * summarises, and a turn told "here is what you concluded" resumes, where one
  * told "here is some context" re-derives it to check.
+ *
+ * The precedence sentence is not decoration. The first note this produced on a
+ * live run carried a fragment of the file as the model had read it -- `…
+ * c.fill();}}});}` -- and the file had been edited since, so the model opened
+ * its next turn arguing with a tool result: "I see this in my thought process
+ * but the tool output says…". A note is a recollection of reasoning, and the
+ * only thing it can be wrong about is the world; saying which one wins costs a
+ * sentence and settles it before it starts.
  */
 const DISCARDED_REASONING_NOTE_PREFIX =
-	"Before it was discarded, your reasoning was condensed into the note below. It is what you had worked out when you ran out of room. Continue from it rather than repeating it.";
+	"Before it was discarded, your reasoning was condensed into the note below. It is what you had worked out when you ran out of room. Continue from it rather than repeating it. " +
+	"It is a record of your thinking, not an observation of the workspace: where it disagrees with a tool result in this conversation, the tool result is what is true and the note is out of date.";
 
 /**
  * Sent when a turn spent its tokens and delivered nothing.

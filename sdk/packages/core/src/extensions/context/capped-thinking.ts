@@ -116,6 +116,19 @@ function endsWithBudgetMessage(thinking: string, message: string): boolean {
 const CONDENSED_THINKING_MAX_CHARS = 12_000;
 
 /**
+ * The line the condensed reasoning arrives under, inside the thinking channel.
+ *
+ * First person, because of where it lands. The note replaces a thinking block
+ * and is read as thinking; a line announcing "this is the note you left
+ * yourself" turns the model's own reasoning into a document handed to it, and a
+ * document gets checked rather than continued. Measured on a live run: the
+ * model opened its next turn quoting the note back and arguing with a tool
+ * result about it, then re-read the same file and reasoned to the budget again.
+ */
+const CONDENSED_THINKING_LEAD_IN =
+	"I have already reasoned this far on this problem, up to the point where I ran out of thinking budget. Picking up from here rather than starting again:";
+
+/**
  * The instruction half of the condensation request.
  *
  * Short on purpose, and separate from the task itself, which travels as the
@@ -123,31 +136,21 @@ const CONDENSED_THINKING_MAX_CHARS = 12_000;
  * note is for; `DEFAULT_CAPPED_THINKING_PROMPT` says what it must contain.
  */
 export const CAPPED_THINKING_SYSTEM_PROMPT =
-	"You are writing a note to yourself. Your own reasoning was cut off mid-way by a budget, and this note is all of it that survives into your next attempt at the same problem. Follow the requested structure exactly, keep every specific -- paths, names, errors, numbers, line numbers -- and record what you ruled out as carefully as what you settled.";
+	"You are compressing a train of thought, in the voice of the person who was thinking it. What you write goes back into that same reasoning as its own continuation -- not as a report about it -- so write it the way thinking is written: first person, present tense, plain sentences, no headings and no lists. Keep every specific: paths, symbols, line numbers, error text, and above all what was already ruled out and why.";
 
-export const DEFAULT_CAPPED_THINKING_PROMPT = `Your reasoning on the last turn ran out of budget and was cut off. You are about to think again about the same problem, and without this note you will start from the beginning and reach the same point.
+export const DEFAULT_CAPPED_THINKING_PROMPT = `You were reasoning about a problem and ran out of thinking budget mid-thought. Below is how far you got, and what the tool call you managed to make returned.
 
-Below is the reasoning you had produced when it was cut, and what the tool call you managed to make came back as.
+Rewrite that reasoning, compressed, as the thinking it is. It is going back into your own reasoning channel as the part you have already done, so that your next pass starts from here instead of starting over and arriving at this same point again.
 
-Write the note your next turn needs. Conclusions, not narration:
+Write it as thought, not as a report about thought:
+- First person, present tense, the way you were already thinking. No headings, no bullet lists, no preamble, no sign-off.
+- State what you have settled as settled. Do not re-derive it and do not hedge it.
+- Say what you ruled out and why, in a clause each. This is the part that stops the next pass repeating this one, and it is the part that gets dropped first if you are careless.
+- End on the one question still open and the single next action, stated concretely.
 
-## Settled
-What you worked out and do not need to work out again.
-
-## Ruled out
-Approaches you already considered and rejected, with the reason in a few words each. This is the most important section — it is what stops the next pass repeating this one.
-
-## Open
-The one question you had not answered yet.
-
-## Next
-The single next action, stated concretely.
-
-Rules:
-- Be brief. This is a note to yourself, not a report.
-- Do not re-argue anything. If you settled it, state it as settled.
-- If the tool result contradicts what you expected, say so plainly and say what it means.
-- Leave out any section with nothing in it.`;
+Two things to keep out of it:
+- Do not copy file contents. Name the file and the line and say what you concluded about it. Quoted code goes stale the moment the file is edited, and reasoning that argues with the next tool result costs more than it saved.
+- Do not narrate the interruption. It is not part of the problem.`;
 
 interface ToolOutcome {
 	name: string;
@@ -743,7 +746,7 @@ export function createCappedThinkingPrepareTurn<T extends PrepareTurn>(
 			content: [
 				{
 					type: "thinking",
-					thinking: `[Your previous reasoning ran out of budget and was cut off. This is the note you left yourself.]\n\n${note}`,
+					thinking: `${CONDENSED_THINKING_LEAD_IN}\n\n${note}`,
 				},
 				...(Array.isArray(target.content)
 					? target.content.filter((block) => block.type !== "thinking")

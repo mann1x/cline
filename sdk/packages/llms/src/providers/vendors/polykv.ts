@@ -132,6 +132,54 @@ export interface PolykvClient {
 	tokenize(content: string): Promise<number[]>;
 }
 
+/**
+ * Which pool each live conversation is currently attached to.
+ *
+ * A registry rather than a field on the provider config because the two move at
+ * different rates: the config is resolved once for a session, and the pool it
+ * points at is replaced every time a compaction re-roots the conversation.
+ * Compaction is a prompt rewrite -- the compacted text cannot match the old
+ * cells -- so the correct primitive is a fork with a new id, and a session that
+ * kept reading its pool from a frozen config would keep attaching to the pool
+ * that was just released.
+ *
+ * Keyed by the session id the host already has. Entries are cleared when the
+ * session ends; a leaked entry costs a lookup, a leaked *pin* costs the cells,
+ * which is why release is a separate and deliberate step.
+ */
+export interface PolykvSessionState {
+	poolId: string;
+	/**
+	 * Where this pool's own range begins -- the length of the prefix it shares
+	 * with its ancestors, and the `branch_pos` a re-root forks at.
+	 */
+	prefixTokens: number;
+}
+
+const POLYKV_SESSIONS = new Map<string, PolykvSessionState>();
+
+export function setPolykvSession(
+	sessionId: string,
+	state: PolykvSessionState,
+): void {
+	POLYKV_SESSIONS.set(sessionId, state);
+}
+
+export function getPolykvSession(
+	sessionId: string | undefined,
+): PolykvSessionState | undefined {
+	return sessionId ? POLYKV_SESSIONS.get(sessionId) : undefined;
+}
+
+export function clearPolykvSession(sessionId: string): void {
+	POLYKV_SESSIONS.delete(sessionId);
+}
+
+/** Test seam. Does not unpin anything -- see `releasePool` for that. */
+export function resetPolykvSessions(): void {
+	POLYKV_SESSIONS.clear();
+}
+
 export function createPolykvClient(
 	options: PolykvClientOptions,
 ): PolykvClient {

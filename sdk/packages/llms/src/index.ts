@@ -120,6 +120,20 @@ export {
 } from "./providers/model-facts";
 export { resolveProviderModelCatalogKeys } from "./providers/provider-keys";
 export {
+	clearPolykvSession,
+	createPolykvClient,
+	getPolykvSession,
+	type PolykvCapacity,
+	type PolykvClient,
+	type PolykvClientOptions,
+	type PolykvPool,
+	PolykvSaturatedError,
+	type PolykvSessionState,
+	polykvRoot,
+	resetPolykvSessions,
+	setPolykvSession,
+} from "./providers/vendors/polykv";
+export {
 	type OpenAICodexRequestHeaderContext,
 	type ProviderRequestHeaderClientContext,
 	type ProviderRequestHeaderLayers,

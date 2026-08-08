@@ -126,6 +126,7 @@ import {
 	createSessionSubAgentLifecycleCallbacks,
 	type SubAgentStartTracker,
 } from "./local/spawn-tool";
+import { releasePolykvSession } from "../../extensions/context/polykv-session";
 import { loadUserFileContent } from "./local/user-files";
 import type {
 	PendingPromptsServiceApi,
@@ -2112,6 +2113,16 @@ export class LocalRuntimeHost implements RuntimeHost {
 			});
 		}
 		notifyTeamRunWaiters(session);
+		// A pin outliving the session it was taken for is a leak of the cells it
+		// holds -- the engine reports the orphan, but nothing reclaims it. This
+		// is the one place every ended session passes through.
+		await releasePolykvSession({
+			sessionId: session.sessionId,
+			providerConfig: (session.config.providerConfig ?? {
+				providerId: session.config.providerId,
+			}) as never,
+			logger: session.config.logger,
+		});
 
 		const cleanupErrors: unknown[] = [];
 		const recordCleanupError = (stage: string, error: unknown) => {

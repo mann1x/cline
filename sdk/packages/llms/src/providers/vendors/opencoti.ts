@@ -7,7 +7,7 @@ import type {
 import { wrapLanguageModel } from "ai";
 import { splitToolImagesMiddleware } from "../middleware/split-tool-images";
 import { localStreamFetch, resolveLocalStreamDispatcher } from "./ollama";
-import { PolykvSaturatedError } from "./polykv";
+import { getPolykvSession, PolykvSaturatedError } from "./polykv";
 
 /**
  * opencoti-llamafile: llama.cpp's wire format with a KV control plane attached.
@@ -148,12 +148,23 @@ export function readOpencotiRequestOptions(
 ): OpencotiRequestOptions {
 	const options = (context.config?.options ?? {}) as Record<string, unknown>;
 	const read = (key: string): unknown => options[key];
-	const poolId = read("polykvPoolId");
+	const configuredPool = read("polykvPoolId");
 	const sessionId = read("polykvSessionId");
 	const sharedPrefix = read("polykvSharedPrefixTokens");
 	const overcommit = read("polykvOvercommit");
+	// The live pool wins over anything the config froze: after a compaction
+	// re-roots the conversation the configured id names a pool that has been
+	// released.
+	const live = getPolykvSession(
+		typeof sessionId === "string" ? sessionId : undefined,
+	);
+	const poolId =
+		live?.poolId ??
+		(typeof configuredPool === "string" && configuredPool
+			? configuredPool
+			: undefined);
 	return {
-		...(typeof poolId === "string" && poolId ? { poolId } : {}),
+		...(poolId ? { poolId } : {}),
 		...(typeof sessionId === "string" && sessionId ? { sessionId } : {}),
 		...(typeof sharedPrefix === "number" && Number.isFinite(sharedPrefix)
 			? { sharedPrefixTokens: sharedPrefix }

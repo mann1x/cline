@@ -214,7 +214,10 @@ describe("finding the turn that ran out of thinking budget", () => {
 });
 
 describe("the continuation note's request", () => {
-	it("leads with what was ruled out, which is what stops the next pass", () => {
+	// The note lands in the thinking channel and is read as thinking, so the
+	// request asks for thought rather than for a report about it: a model handed
+	// a document checks it, and one handed its own reasoning continues it.
+	it("asks for the reasoning in its own voice, ruled-out reasons included", () => {
 		const request = buildCappedThinkingRequest({
 			thinking: "I should try old_text again",
 			outcomes: [
@@ -226,7 +229,9 @@ describe("the continuation note's request", () => {
 			],
 		});
 
-		expect(request).toContain("## Ruled out");
+		expect(request).toContain("ruled out");
+		expect(request).toContain("First person, present tense");
+		expect(request).toContain("No headings, no bullet lists");
 		expect(request).toContain("I should try old_text again");
 		expect(request).toContain("No change: already reads that way");
 	});

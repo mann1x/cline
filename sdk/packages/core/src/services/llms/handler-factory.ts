@@ -34,6 +34,7 @@ function usesOpenAICompatibleClient(config: ProviderConfig): boolean {
 
 function buildGatewayProviderOptions(
 	config: ProviderConfig,
+	sessionId?: string,
 ): Record<string, unknown> | undefined {
 	const options: Record<string, unknown> = {
 		region: config.region,
@@ -59,6 +60,13 @@ function buildGatewayProviderOptions(
 			apiVersion: config.azure?.apiVersion,
 			useIdentity: config.azure?.useIdentity,
 		});
+	}
+
+	// The pool a request attaches to is not in the config -- it changes every
+	// time a compaction re-roots the conversation -- so what travels here is the
+	// key the vendor looks the live pool up under. See `polykv-session.ts`.
+	if (normalizeProviderId(config.providerId) === "opencoti" && sessionId) {
+		options.polykvSessionId = sessionId;
 	}
 
 	if (config.providerId === "bedrock") {
@@ -247,7 +255,10 @@ export function createAgentModelFromConfig(
 				headers: normalizedProviderConfig.headers,
 				timeoutMs: normalizedProviderConfig.timeoutMs,
 				fetch: normalizedProviderConfig.fetch,
-				options: buildGatewayProviderOptions(normalizedProviderConfig),
+				options: buildGatewayProviderOptions(
+					normalizedProviderConfig,
+					config.sessionId,
+				),
 				models: normalizedProviderConfig.knownModels
 					? Object.entries(normalizedProviderConfig.knownModels).map(
 							([id, model]) => toGatewayConfiguredModel(id, model),

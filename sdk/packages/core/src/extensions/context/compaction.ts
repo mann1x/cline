@@ -29,6 +29,12 @@ import type {
 import type { ProviderConfig } from "../../types/provider-settings";
 import { runAgenticCompaction } from "./agentic-compaction";
 import { runBasicCompaction } from "./basic-compaction";
+import {
+	ensurePolykvPool,
+	polykvSaysCompact,
+	readPolykvCapacity,
+	repointPolykvAfterCompaction,
+} from "./polykv-session";
 import { reasoningHistoryModeForProvider } from "@cline/llms";
 import {
 	COMPACTION_TRIGGER_RATIO,
@@ -537,9 +543,32 @@ export function createContextCompactionPrepareTurn(
 		// arithmetic having already failed -- so it compacts whatever the ratio
 		// above concludes, and covers the case where the two disagree.
 		const contextOverflow = consumeContextOverflow();
+		// The one signal here that is not an estimate.
+		//
+		// On an engine with a KV pool tree, the pool knows what it holds and
+		// says how close to full it is; everything else on this path is
+		// inference from character counts. It is asked only when the session
+		// actually has a pool, it cannot fail the turn, and it can only ever add
+		// a reason to compact -- a pool that says there is room does not
+		// overrule arithmetic that says there is not.
+		await ensurePolykvPool({
+			sessionId: config.sessionId,
+			providerConfig,
+			systemPrompt: context.systemPrompt,
+			tools: context.tools,
+			logger: config.logger,
+		});
+		const polykvCapacity = await readPolykvCapacity({
+			sessionId: config.sessionId,
+			providerConfig,
+			expectedTokens: triggerInputTokens,
+			logger: config.logger,
+		});
+		const polykvPressure = polykvSaysCompact(polykvCapacity);
 		const shouldCompact =
 			contextOverflow !== undefined ||
-			triggerInputTokens >= requestTriggerTokens;
+			triggerInputTokens >= requestTriggerTokens ||
+			polykvPressure;
 		const diagnostics = {
 			mode: effectiveMode,
 			strategy,
@@ -560,6 +589,9 @@ export function createContextCompactionPrepareTurn(
 			modelMaxTokens: context.model.info?.maxTokens,
 			observedOutputTokens,
 			contextOverflow,
+			polykvCompactionPressure: polykvCapacity?.compaction_pressure,
+			polykvKvHeadroomPct: polykvCapacity?.kv_headroom_pct,
+			polykvPressure,
 			shouldCompact,
 			messageCount: context.messages.length,
 			apiMessageCount: context.apiMessages.length,
@@ -856,6 +888,17 @@ export function createContextCompactionPrepareTurn(
 		};
 
 		if (result?.messages) {
+			// Compaction is a prompt rewrite, so the pool it was serving is now
+			// serving text that no longer exists. Re-rooting forks the shared
+			// prefix -- which did not change -- and releases the old subtree; the
+			// alternative is a pinned pool nothing will ever match again, which
+			// is the leak the engine's own design warns about.
+			await repointPolykvAfterCompaction({
+				sessionId: config.sessionId,
+				providerConfig,
+				compactedPrompt: JSON.stringify(result.messages),
+				logger: config.logger,
+			});
 			const compactedSummary = result.messages
 				.map((message) => getCompactionSummaryMetadata(message))
 				.find((metadata) => metadata !== undefined);
