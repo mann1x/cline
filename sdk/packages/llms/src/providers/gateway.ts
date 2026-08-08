@@ -7,21 +7,23 @@ import type {
 	GatewayModelDefinition,
 	GatewayModelHandleOptions,
 	GatewayModelSelection,
+	GatewayProviderContext,
 	GatewayProviderRegistration,
 	GatewayStreamRequest,
 	ITelemetryService,
 	ReasoningEffort,
 } from "@cline/shared";
 import {
+	estimateThinkingTokens,
 	estimateTokens,
 	measureRequestInputChars,
+	measureRequestReasoningChars,
 	noteContextOverflow,
 	observeRequestTokens,
 	ReasoningEffortSchema,
 } from "@cline/shared";
 import { toAsyncIterable } from "./async";
 import { BUILTIN_PROVIDER_REGISTRATIONS } from "./builtins-runtime";
-import type { GatewayProviderContext } from "@cline/shared";
 import { resolveReasoningHistoryMode } from "./model-facts";
 import { GatewayRegistry } from "./registry";
 import { isPositiveFiniteNumber } from "./utils";
@@ -421,7 +423,19 @@ export class DefaultGateway implements Gateway {
 			config: providerRecord.config,
 		} as GatewayProviderContext);
 		const inputChars = measureRequestInputChars(request, { reasoningHistory });
-		const estimatedInputTokens = estimateTokens(inputChars);
+		// Reasoning is counted at its own rate. One ratio for a whole request is
+		// an average over two populations that do not tokenize alike, and the mix
+		// moves every turn — which undercounts exactly the reasoning-heavy
+		// requests that are already closest to the window.
+		const reasoningChars = Math.min(
+			inputChars,
+			measureRequestReasoningChars(request, { reasoningHistory }),
+		);
+		const estimatedInputTokens =
+			reasoningChars > 0
+				? estimateTokens(inputChars - reasoningChars) +
+					estimateThinkingTokens(reasoningChars)
+				: estimateTokens(inputChars);
 		const maxTokens = resolveGatewayRequestMaxTokens({
 			requestedMaxTokens: request.maxTokens,
 			model: resolved.model,
@@ -473,7 +487,11 @@ export class DefaultGateway implements Gateway {
 			},
 		);
 
-		return calibrateFromUsage(toAsyncIterable(stream), inputChars);
+		return calibrateFromUsage(
+			toAsyncIterable(stream),
+			inputChars,
+			reasoningChars,
+		);
 	}
 }
 
@@ -489,13 +507,14 @@ export class DefaultGateway implements Gateway {
 async function* calibrateFromUsage(
 	events: AsyncIterable<AgentModelEvent>,
 	inputChars: number,
+	reasoningChars?: number,
 ): AsyncIterable<AgentModelEvent> {
 	for await (const event of events) {
 		if (
 			event.type === "usage" &&
 			isPositiveFiniteNumber(event.usage.inputTokens)
 		) {
-			observeRequestTokens(inputChars, event.usage.inputTokens);
+			observeRequestTokens(inputChars, event.usage.inputTokens, reasoningChars);
 		}
 		yield event;
 	}

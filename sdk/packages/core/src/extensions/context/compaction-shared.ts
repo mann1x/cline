@@ -1,13 +1,18 @@
-import type { ModelInfo, ReasoningHistoryMode, ToolResultContent } from "@cline/llms";
+import type {
+	ModelInfo,
+	ReasoningHistoryMode,
+	ToolResultContent,
+} from "@cline/llms";
 import {
 	CHARS_PER_TOKEN,
+	estimateThinkingTokens,
 	estimateTokens,
 	type MessageWithMetadata,
 	measureRequestInputChars,
 	seedRequestTokenCalibration,
 } from "@cline/shared";
 
-export { CHARS_PER_TOKEN, estimateTokens };
+export { CHARS_PER_TOKEN, estimateThinkingTokens, estimateTokens };
 
 import type { CoreCompactionSummarizerConfig } from "../../types/config";
 import type { ProviderConfig } from "../../types/provider-settings";
@@ -176,9 +181,7 @@ export function resolveCompactionOutputBudgets(input: {
 }): CompactionOutputBudgets {
 	const generation = Math.max(
 		1,
-		Math.floor(
-			isPositiveFiniteNumber(input.generation) ? input.generation : 1,
-		),
+		Math.floor(isPositiveFiniteNumber(input.generation) ? input.generation : 1),
 	);
 	const share =
 		COMPACTION_BUDGET_LADDER[
@@ -313,9 +316,8 @@ export function resolveObservedOutputTokens(
 		if (message.role !== "assistant") {
 			continue;
 		}
-		const outputTokens = (
-			message as { metrics?: { outputTokens?: number } }
-		).metrics?.outputTokens;
+		const outputTokens = (message as { metrics?: { outputTokens?: number } })
+			.metrics?.outputTokens;
 		if (isPositiveFiniteNumber(outputTokens)) {
 			observed.push(outputTokens);
 		}
@@ -561,10 +563,7 @@ export function serializeReasoningWithOutcomes(
 		}
 		for (const block of message.content) {
 			if (block.type === "tool_result") {
-				outcomeByToolUseId.set(
-					block.tool_use_id,
-					describeToolOutcome(block),
-				);
+				outcomeByToolUseId.set(block.tool_use_id, describeToolOutcome(block));
 			}
 		}
 	}
@@ -1485,6 +1484,13 @@ Decisions taken, values discovered, identifiers, signatures, and anything learne
 ## Next
 The immediate next steps, in order.
 
+Write them for a reader holding no file contents. Every step that touches a file
+must begin by reading the part it touches, and no step may say to write, rewrite
+or restore content that this note does not itself contain — that reader would
+have to reconstruct it from memory, and what it produces will be a worse version
+of a file that is still on disk. Prefer the smallest edit that fixes the problem
+over rewriting the whole of anything.
+
 ## Files
 Read: {{files_read}}
 Edited: {{files_edited}}`;
@@ -1514,8 +1520,7 @@ export function buildSummaryRequest(options: {
 	/** Overrides {@link DEFAULT_COMPACTION_PROMPT}; blank falls back to it. */
 	promptTemplate?: string;
 }): string {
-	const template =
-		options.promptTemplate?.trim() || DEFAULT_COMPACTION_PROMPT;
+	const template = options.promptTemplate?.trim() || DEFAULT_COMPACTION_PROMPT;
 	const parts: string[] = [renderCompactionPrompt(template, options.fileOps)];
 
 	if (options.previousSummary?.trim()) {
@@ -1585,7 +1590,6 @@ export function buildThinkingSummaryRequest(options: {
 	);
 	return parts.join("\n\n");
 }
-
 
 export function resolveSummarizerConfig(options: {
 	activeProviderConfig: ProviderConfig;
@@ -1688,7 +1692,15 @@ export function buildSummaryMessage(options: {
 				? [
 						{
 							type: "text" as const,
-							text: `Retrospective on the work this summary replaces — your own assessment, carried forward:\n\n${thinkingSummary}`,
+							// The trailing break is load-bearing. A converter is free
+							// to join a message's text parts with nothing between
+							// them, and Ollama's does: the retrospective ran
+							// straight into the next block on the wire, as
+							// `…before attempting further modifications.Context
+							// summary:`. Ending the part rather than trusting the
+							// join keeps the two readable however they are
+							// concatenated.
+							text: `Retrospective on the work this summary replaces — your own assessment, carried forward:\n\n${thinkingSummary}\n\n`,
 						},
 					]
 				: []),

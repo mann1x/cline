@@ -1,5 +1,6 @@
 import type { MessageWithMetadata } from "@cline/shared";
-import { describe, expect, it } from "vitest";
+import { observeRequestTokens, resetTokenCalibration } from "@cline/shared";
+import { afterEach, describe, expect, it } from "vitest";
 import {
 	buildCappedThinkingRequest,
 	findCappedThinkingIndex,
@@ -21,9 +22,23 @@ describe("finding the turn that ran out of thinking budget", () => {
 			],
 		}) as MessageWithMetadata;
 
+	/** A turn that also reported what the provider counted for it. */
+	const measuredTurn = (
+		thinkingChars: number,
+		outputTokens: number,
+	): MessageWithMetadata =>
+		({
+			...turn(thinkingChars),
+			metrics: { outputTokens },
+		}) as MessageWithMetadata;
+
 	// 16,000 tokens of allowance at the ~2.6 chars per token this model reasons
 	// at is roughly 41,600 characters.
 	const budget = 16_000;
+
+	afterEach(() => {
+		resetTokenCalibration();
+	});
 
 	it("recognises a turn that spent its whole allowance", () => {
 		expect(findCappedThinkingIndex([turn(45_000)], budget)).toBe(0);
@@ -59,7 +74,11 @@ describe("the continuation note's request", () => {
 		const request = buildCappedThinkingRequest({
 			thinking: "I should try old_text again",
 			outcomes: [
-				{ name: "editor", input: "path", result: "No change: already reads that way" },
+				{
+					name: "editor",
+					input: "path",
+					result: "No change: already reads that way",
+				},
 			],
 		});
 
@@ -82,5 +101,78 @@ describe("the continuation note's request", () => {
 				promptTemplate: "Two lines, no more.",
 			}),
 		).toContain("Two lines, no more.");
+	});
+});
+
+/**
+ * The detector was dead for its whole first life, and the reason was what it
+ * compared against rather than how it compared. These pin both halves of the
+ * fix.
+ */
+describe("what the budget is measured against", () => {
+	afterEach(() => {
+		resetTokenCalibration();
+	});
+
+	const cappedTurn = {
+		role: "assistant",
+		content: [
+			{ type: "thinking", thinking: "x".repeat(43_000) },
+			{ type: "tool_use", id: "c", name: "editor", input: {} },
+		],
+		metrics: { outputTokens: 16_400 },
+	} as MessageWithMetadata;
+
+	it("survives a request-wide ratio calibrated on JSON and code", () => {
+		// The live failure. A session measured 4.2 characters per token across
+		// whole serialized requests, and reasoning at that rate turned a turn
+		// that had spent all 16,000 of its tokens into ~10,300 — below the
+		// 14,400 line, on every one of nearly 300 capped requests.
+		observeRequestTokens(420_000, 100_000);
+
+		expect(findCappedThinkingIndex([cappedTurn], 16_000)).toBe(0);
+	});
+
+	it("uses the turn's own reported cost rather than any ratio at all", () => {
+		// Nothing here needs a chars-per-token assumption: the provider counted
+		// 16,400 output tokens for what this turn wrote, and the thinking is
+		// effectively all of it.
+		const noRatioNeeded = {
+			...cappedTurn,
+			content: [{ type: "thinking", thinking: "x".repeat(1_000) }],
+			metrics: { outputTokens: 15_000 },
+		} as MessageWithMetadata;
+
+		expect(findCappedThinkingIndex([noRatioNeeded], 16_000)).toBe(0);
+	});
+
+	it("does not read a long tool call as a long think", () => {
+		// The share matters: a turn whose output went into arguments rather than
+		// reasoning did not run out of thinking budget, however many tokens it
+		// cost.
+		const toolHeavy = {
+			role: "assistant",
+			content: [
+				{ type: "thinking", thinking: "x".repeat(1_000) },
+				{
+					type: "tool_use",
+					id: "c",
+					name: "editor",
+					input: { new_text: "y".repeat(60_000) },
+				},
+			],
+			metrics: { outputTokens: 16_400 },
+		} as MessageWithMetadata;
+
+		expect(findCappedThinkingIndex([toolHeavy], 16_000)).toBe(-1);
+	});
+
+	it("falls back to the reasoning ratio when the turn reported nothing", () => {
+		const unreported = {
+			role: "assistant",
+			content: [{ type: "thinking", thinking: "x".repeat(43_000) }],
+		} as MessageWithMetadata;
+
+		expect(findCappedThinkingIndex([unreported], 16_000)).toBe(0);
 	});
 });

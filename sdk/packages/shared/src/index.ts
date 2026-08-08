@@ -219,21 +219,29 @@ export {
 	ReasoningLevelSchema,
 } from "./llms/reasoning-options";
 export { serializeAbortReason } from "./llms/requests";
+export type {
+	ContextOverflowReport,
+	ReasoningHistoryMode,
+} from "./llms/tokens";
 export {
 	CHARS_PER_TOKEN,
 	charsPerToken,
-	estimateRequestInputTokens,
-	estimateTokens,
 	consumeContextOverflow,
+	estimateRequestInputTokens,
+	estimateThinkingTokens,
+	estimateTokens,
 	lastObservedRequestTokens,
-	noteContextOverflow,
 	measureRequestInputChars,
+	measureRequestReasoningChars,
+	noteContextOverflow,
 	observeRequestTokens,
+	observeThinkingTokens,
 	resetTokenCalibration,
 	seedRequestTokenCalibration,
+	THINKING_CHARS_PER_TOKEN,
 	type TokenEstimatedRequest,
+	thinkingCharsPerToken,
 } from "./llms/tokens";
-export type { ContextOverflowReport, ReasoningHistoryMode } from "./llms/tokens";
 export type {
 	ToolApprovalRequest,
 	ToolApprovalResult,

@@ -22,6 +22,32 @@
 export const CHARS_PER_TOKEN = 3;
 
 /**
+ * The same approximation, for reasoning text specifically.
+ *
+ * One ratio for a whole request is a weighted average of two populations that
+ * do not tokenize alike. A serialized request is mostly JSON, code and tool
+ * output — punctuation, escapes and identifiers, where a character is often
+ * not a token's worth of anything, measured on this workload at 3.8 to 4.4
+ * characters per token. Reasoning is prose the model wrote for itself, and runs
+ * near 2.7.
+ *
+ * Averaging them works exactly as long as the mix holds still, and it does not:
+ * reasoning was between 32% and 61% of a live transcript by characters and
+ * moved every turn. Each departure from the average becomes error, and the
+ * error is not symmetric in consequence. A request that is unusually
+ * reasoning-heavy is *undercounted*, which is the direction that lets a request
+ * be built too large — measured live at 71,610 estimated tokens for a request
+ * the server then rejected against a 110,000 window, which cost that run its
+ * transcript: overflow recovery is deliberately deterministic, so it fell to
+ * basic compaction and cut nineteen messages to three.
+ *
+ * So the two are counted apart. This is the starting point for the reasoning
+ * half, replaced by measurement as soon as a turn reports what its own output
+ * cost.
+ */
+export const THINKING_CHARS_PER_TOKEN = 2.7;
+
+/**
  * A ratio outside these bounds says something went wrong with the measurement
  * rather than something about the content -- a truncated request, a provider
  * counting something other than the prompt -- so it is discarded.
@@ -67,6 +93,7 @@ const CALIBRATION_STATE = Symbol.for("cline.shared.tokenCalibration");
 
 interface TokenCalibrationState {
 	charsPerToken?: number;
+	thinkingCharsPerToken?: number;
 	requestTokens?: number;
 	contextOverflow?: ContextOverflowReport;
 }
@@ -108,6 +135,47 @@ export function charsPerToken(): number {
 	return calibration().charsPerToken ?? CHARS_PER_TOKEN;
 }
 
+/** The reasoning ratio in force: measured if a turn has reported one. */
+export function thinkingCharsPerToken(): number {
+	return calibration().thinkingCharsPerToken ?? THINKING_CHARS_PER_TOKEN;
+}
+
+/**
+ * Record what a turn's own output cost, to calibrate the reasoning ratio.
+ *
+ * The evidence is already in the transcript: a completed assistant turn carries
+ * the provider's own output-token count alongside the characters it produced.
+ * Only turns that are mostly reasoning are used — the caller decides that,
+ * since it is the one holding the message — because a turn that is mostly a
+ * tool call would teach this ratio about JSON.
+ */
+export function observeThinkingTokens(chars: number, tokens: number): void {
+	if (!Number.isFinite(chars) || !Number.isFinite(tokens)) {
+		return;
+	}
+	if (chars <= 0 || tokens <= 0) {
+		return;
+	}
+	const ratio = chars / tokens;
+	if (
+		ratio < MIN_OBSERVED_CHARS_PER_TOKEN ||
+		ratio > MAX_OBSERVED_CHARS_PER_TOKEN
+	) {
+		return;
+	}
+	const state = calibration();
+	state.thinkingCharsPerToken =
+		state.thinkingCharsPerToken === undefined
+			? ratio
+			: state.thinkingCharsPerToken * (1 - OBSERVATION_WEIGHT) +
+				ratio * OBSERVATION_WEIGHT;
+}
+
+/** Tokens for reasoning text, which is denser than the rest of a request. */
+export function estimateThinkingTokens(chars: number): number {
+	return Math.max(1, Math.ceil(chars / thinkingCharsPerToken()));
+}
+
 /**
  * Record that a request of `chars` characters cost `tokens` input tokens
  * according to the provider. The first observation is taken whole -- the
@@ -122,7 +190,11 @@ export function charsPerToken(): number {
  * Keeping them together froze `lastObservedRequestTokens` at a count from
  * fourteen turns earlier while the compaction trigger kept reading it.
  */
-export function observeRequestTokens(chars: number, tokens: number): void {
+export function observeRequestTokens(
+	chars: number,
+	tokens: number,
+	reasoningChars?: number,
+): void {
 	if (!Number.isFinite(chars) || !Number.isFinite(tokens)) {
 		return;
 	}
@@ -131,7 +203,24 @@ export function observeRequestTokens(chars: number, tokens: number): void {
 	}
 	const state = calibration();
 	state.requestTokens = tokens;
-	const ratio = chars / tokens;
+	// With the reasoning share known, this ratio describes the rest of the
+	// request rather than a blend of two populations. Charging reasoning at its
+	// own rate first and calibrating on what is left is what keeps the two
+	// halves of the estimate from both trying to account for the same
+	// characters.
+	const reasoning =
+		typeof reasoningChars === "number" &&
+		Number.isFinite(reasoningChars) &&
+		reasoningChars > 0
+			? Math.min(reasoningChars, chars)
+			: 0;
+	let ratio = chars / tokens;
+	if (reasoning > 0 && reasoning < chars) {
+		const remainingTokens = tokens - estimateThinkingTokens(reasoning);
+		if (remainingTokens > 0) {
+			ratio = (chars - reasoning) / remainingTokens;
+		}
+	}
 	if (
 		ratio < MIN_OBSERVED_CHARS_PER_TOKEN ||
 		ratio > MAX_OBSERVED_CHARS_PER_TOKEN
@@ -220,6 +309,7 @@ export function consumeContextOverflow(): ContextOverflowReport | undefined {
 export function resetTokenCalibration(): void {
 	const state = calibration();
 	state.charsPerToken = undefined;
+	state.thinkingCharsPerToken = undefined;
 	state.requestTokens = undefined;
 	state.contextOverflow = undefined;
 }
@@ -326,7 +416,11 @@ function withSentReasoningOnly(
  * that knew only one would silently do nothing on the other -- which is not a
  * visible failure, just an estimate quietly back to counting what is never sent.
  */
-const REASONING_PART_TYPES = new Set(["reasoning", "thinking", "redacted_thinking"]);
+const REASONING_PART_TYPES = new Set([
+	"reasoning",
+	"thinking",
+	"redacted_thinking",
+]);
 
 function isReasoningPart(part: unknown): boolean {
 	return (
@@ -338,6 +432,36 @@ function isReasoningPart(part: unknown): boolean {
 
 function hasReasoningPart(content: unknown): boolean {
 	return Array.isArray(content) && content.some(isReasoningPart);
+}
+
+/**
+ * How many of a request's characters are reasoning.
+ *
+ * Measured the same way the whole request is — serialized — so the two counts
+ * are in the same unit and one can be subtracted from the other without the
+ * remainder quietly meaning something else.
+ */
+export function measureRequestReasoningChars(
+	request: TokenEstimatedRequest,
+	options?: { reasoningHistory?: ReasoningHistoryMode },
+): number {
+	const messages = withSentReasoningOnly(
+		request.messages,
+		options?.reasoningHistory ?? "all",
+	);
+	let chars = 0;
+	for (const message of messages) {
+		const content = (message as { content?: unknown }).content;
+		if (!Array.isArray(content)) {
+			continue;
+		}
+		for (const part of content) {
+			if (isReasoningPart(part)) {
+				chars += safeStringify(part).length;
+			}
+		}
+	}
+	return chars;
 }
 
 export function measureRequestInputChars(
@@ -373,5 +497,18 @@ export function estimateRequestInputTokens(
 	request: TokenEstimatedRequest,
 	options?: { reasoningHistory?: ReasoningHistoryMode },
 ): number {
-	return estimateTokens(measureRequestInputChars(request, options));
+	const chars = measureRequestInputChars(request, options);
+	const reasoningChars = Math.min(
+		chars,
+		measureRequestReasoningChars(request, options),
+	);
+	if (reasoningChars <= 0) {
+		return estimateTokens(chars);
+	}
+	// Counted apart because they do not tokenize alike, and because the mix
+	// moves every turn. See THINKING_CHARS_PER_TOKEN.
+	return (
+		estimateTokens(chars - reasoningChars) +
+		estimateThinkingTokens(reasoningChars)
+	);
 }

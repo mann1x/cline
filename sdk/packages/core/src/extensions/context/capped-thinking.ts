@@ -18,12 +18,12 @@
  * conclusions rather than as a transcript to resume.
  */
 
-import type { BasicLogger, MessageWithMetadata } from "@cline/shared";
 import { createHandlerAsync } from "@cline/llms";
-import type { ProviderConfig } from "../../types/provider-settings";
+import type { BasicLogger, MessageWithMetadata } from "@cline/shared";
 import type { CoreCompactionSummarizerConfig } from "../../types/config";
+import type { ProviderConfig } from "../../types/provider-settings";
 import {
-	estimateTokens,
+	estimateThinkingTokens,
 	flattenToolResultContent,
 	formatToolInput,
 	resolveSummarizerConfig,
@@ -33,10 +33,18 @@ import {
 /**
  * How close to the budget counts as having hit it.
  *
- * Not equality: the cap is enforced on the server's own token count, the
- * transcript stores characters, and the estimate between them is approximate.
- * A turn that spent nine tenths of its allowance was cut short in every way
- * that matters here.
+ * Not equality: a budget is enforced on whole tokens as they are produced, and
+ * the turn stops on the first one that does not fit, so the last few are never
+ * spent. A turn that spent nine tenths of its allowance was cut short in every
+ * way that matters here.
+ *
+ * What this is compared against matters more than the ratio. The first version
+ * of this compared an *estimate* — reasoning characters over the request-wide
+ * chars-per-token ratio, 3.8 to 4.4 on a serialized request full of JSON and
+ * code — against a budget denominated in the model's own tokens. A turn that
+ * spent all 16,000 of its allowance, about 43,000 characters of prose,
+ * therefore measured as ~10,300 and never crossed the line. The cap fired on
+ * nearly 300 requests in one session and the detector saw none of them.
  */
 const CAP_PROXIMITY = 0.9;
 
@@ -92,10 +100,7 @@ function collectToolOutcomes(
 		}
 		for (const block of later.content) {
 			if (block.type === "tool_result") {
-				results.set(
-					block.tool_use_id,
-					flattenToolResultContent(block.content),
-				);
+				results.set(block.tool_use_id, flattenToolResultContent(block.content));
 			}
 		}
 	}
@@ -107,10 +112,7 @@ function collectToolOutcomes(
 		outcomes.push({
 			name: block.name,
 			input: truncateText(formatToolInput(block.input), 1_000),
-			result: truncateText(
-				results.get(block.id) ?? "(no result yet)",
-				2_000,
-			),
+			result: truncateText(results.get(block.id) ?? "(no result yet)", 2_000),
 		});
 	}
 	return outcomes;
@@ -125,6 +127,53 @@ function thinkingText(message: MessageWithMetadata): string {
 		.map((block) => block.thinking)
 		.join("\n")
 		.trim();
+}
+
+/**
+ * What this turn's reasoning cost, in the model's own tokens.
+ *
+ * Measured rather than estimated wherever the turn reported its output: the
+ * ratio between the characters a turn produced and the tokens the provider
+ * counted for them is that turn's own, and needs no assumption about how prose
+ * tokenizes. The estimate is the fallback, and uses the reasoning-specific
+ * ratio rather than the request-wide one, which is what made the first version
+ * of this never fire.
+ */
+function measuredThinkingTokens(
+	message: MessageWithMetadata,
+	thinking: string,
+): number {
+	const outputTokens = (message as { metrics?: { outputTokens?: number } })
+		.metrics?.outputTokens;
+	if (
+		typeof outputTokens === "number" &&
+		Number.isFinite(outputTokens) &&
+		outputTokens > 0
+	) {
+		const producedChars = producedCharacters(message);
+		if (producedChars > 0) {
+			return Math.round((thinking.length / producedChars) * outputTokens);
+		}
+	}
+	return estimateThinkingTokens(thinking.length);
+}
+
+/** Everything the turn wrote, which is what its output tokens were spent on. */
+function producedCharacters(message: MessageWithMetadata): number {
+	if (!Array.isArray(message.content)) {
+		return 0;
+	}
+	let chars = 0;
+	for (const block of message.content) {
+		if (block.type === "thinking") {
+			chars += block.thinking.length;
+		} else if (block.type === "text") {
+			chars += block.text.length;
+		} else if (block.type === "tool_use") {
+			chars += formatToolInput(block.input).length + block.name.length;
+		}
+	}
+	return chars;
 }
 
 /**
@@ -157,7 +206,8 @@ export function findCappedThinkingIndex(
 			// this has already been superseded.
 			return -1;
 		}
-		return estimateTokens(thinking.length) >= budgetTokens * CAP_PROXIMITY
+		return measuredThinkingTokens(message, thinking) >=
+			budgetTokens * CAP_PROXIMITY
 			? index
 			: -1;
 	}
@@ -200,7 +250,9 @@ export interface CappedThinkingCondenserConfig {
 }
 
 type PrepareTurnInput = { messages: MessageWithMetadata[] };
-type PrepareTurnResult = { messages?: readonly MessageWithMetadata[] } | undefined;
+type PrepareTurnResult =
+	| { messages?: readonly MessageWithMetadata[] }
+	| undefined;
 type PrepareTurn = (
 	context: never,
 ) => PrepareTurnResult | Promise<PrepareTurnResult>;
