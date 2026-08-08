@@ -407,9 +407,17 @@ export const ChatRowContent = memo(
 				case "editedExistingFile":
 					const content = tool?.content || ""
 					const isApplyingPatch = content?.startsWith("%%bash") && !content.endsWith("*** End Patch\nEOF")
+					// The mode belongs in the header because the payload that would
+					// otherwise reveal it is collapsed, and "wants to edit this
+					// file" is the one thing about an edit that is never in
+					// question. A SEARCH/REPLACE and a line-range replace fail in
+					// completely different ways, and telling them apart at a
+					// glance is most of reading a session back.
 					const editToolTitle = isApplyingPatch
 						? "Cline is creating patches to edit this file:"
-						: "Cline wants to edit this file:"
+						: tool.editMode
+							? `Cline wants to edit this file (${tool.editMode}):`
+							: "Cline wants to edit this file:"
 					return (
 						<div>
 							<div className={HEADER_CLASSNAMES}>

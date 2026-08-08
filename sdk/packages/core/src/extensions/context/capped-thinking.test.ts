@@ -1,0 +1,86 @@
+import type { MessageWithMetadata } from "@cline/shared";
+import { describe, expect, it } from "vitest";
+import {
+	buildCappedThinkingRequest,
+	findCappedThinkingIndex,
+} from "./capped-thinking";
+
+/**
+ * Measured on a live session: the same ground covered a dozen times, each pass
+ * reaching "this is the final plan" and then "wait, I just realised…", each one
+ * ending at the same cap, each one producing a differently-malformed call
+ * because writing the arguments was the part that got cut.
+ */
+describe("finding the turn that ran out of thinking budget", () => {
+	const turn = (thinkingChars: number): MessageWithMetadata =>
+		({
+			role: "assistant",
+			content: [
+				{ type: "thinking", thinking: "x".repeat(thinkingChars) },
+				{ type: "tool_use", id: "c", name: "editor", input: {} },
+			],
+		}) as MessageWithMetadata;
+
+	// 16,000 tokens of allowance at the ~2.6 chars per token this model reasons
+	// at is roughly 41,600 characters.
+	const budget = 16_000;
+
+	it("recognises a turn that spent its whole allowance", () => {
+		expect(findCappedThinkingIndex([turn(45_000)], budget)).toBe(0);
+	});
+
+	it("leaves an ordinary turn alone", () => {
+		expect(findCappedThinkingIndex([turn(2_000)], budget)).toBe(-1);
+	});
+
+	it("only ever looks at the most recent turn", () => {
+		// An older capped turn has already had its consequences play out, and
+		// rewriting history the model has since acted on is a different and more
+		// dangerous idea than helping it continue.
+		expect(findCappedThinkingIndex([turn(45_000), turn(500)], budget)).toBe(-1);
+	});
+
+	it("stands down when no allowance is known", () => {
+		expect(findCappedThinkingIndex([turn(45_000)], undefined)).toBe(-1);
+		expect(findCappedThinkingIndex([turn(45_000)], 0)).toBe(-1);
+	});
+
+	it("stands down for a turn that did not reason at all", () => {
+		const silent = {
+			role: "assistant",
+			content: [{ type: "tool_use", id: "c", name: "editor", input: {} }],
+		} as MessageWithMetadata;
+		expect(findCappedThinkingIndex([turn(45_000), silent], budget)).toBe(-1);
+	});
+});
+
+describe("the continuation note's request", () => {
+	it("leads with what was ruled out, which is what stops the next pass", () => {
+		const request = buildCappedThinkingRequest({
+			thinking: "I should try old_text again",
+			outcomes: [
+				{ name: "editor", input: "path", result: "No change: already reads that way" },
+			],
+		});
+
+		expect(request).toContain("## Ruled out");
+		expect(request).toContain("I should try old_text again");
+		expect(request).toContain("No change: already reads that way");
+	});
+
+	it("says so when the budget ran out before any call was made", () => {
+		expect(
+			buildCappedThinkingRequest({ thinking: "…", outcomes: [] }),
+		).toContain("You made no tool call before the budget ran out.");
+	});
+
+	it("takes a replacement instruction", () => {
+		expect(
+			buildCappedThinkingRequest({
+				thinking: "…",
+				outcomes: [],
+				promptTemplate: "Two lines, no more.",
+			}),
+		).toContain("Two lines, no more.");
+	});
+});

@@ -313,6 +313,14 @@ export interface ClineSayTool {
 	operationIsLocatedInWorkspace?: boolean
 	/** Starting line numbers in the original file where each SEARCH block matched */
 	startLineNumbers?: number[]
+	/**
+	 * Which shape of edit this is — SEARCH/REPLACE, a line range, an insert.
+	 *
+	 * The card said "Cline wants to edit this file" for all of them, which is
+	 * the one thing about an edit that is never in question. What the edit is
+	 * doing is inside the payload, and the payload is collapsed.
+	 */
+	editMode?: string
 	/** One-based inclusive line range requested by read_file; readLineEnd omitted = open-ended read (for UI summaries). */
 	readLineStart?: number
 	readLineEnd?: number

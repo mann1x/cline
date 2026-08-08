@@ -15,6 +15,7 @@ import {
 } from "@cline/shared";
 import { setHomeDirIfUnset } from "@cline/shared/storage";
 import { isOAuthProvider } from "../../auth/provider-auth-registry";
+import { createCappedThinkingPrepareTurn } from "../../extensions/context/capped-thinking";
 import {
 	createCompactionStateAwarePrepareTurn,
 	createContextCompactionPrepareTurn,
@@ -643,7 +644,8 @@ export class LocalRuntimeHost implements RuntimeHost {
 						rawInitialCompactionState.conversation_id?.trim() || sessionId,
 				}
 			: undefined;
-		const prepareTurn = createCompactionStateAwarePrepareTurn({
+		const prepareTurn = createCappedThinkingPrepareTurn(
+			createCompactionStateAwarePrepareTurn({
 			compact,
 			getState: () => activeSessionRef?.compactionState,
 			saveState: async (state, sourceMessages) => {
@@ -692,7 +694,19 @@ export class LocalRuntimeHost implements RuntimeHost {
 					});
 				}
 			},
-		});
+			}),
+			{
+				// Ahead of compaction: a condensed turn is a smaller turn, so
+				// whatever compaction then decides, it decides about a
+				// transcript that is not carrying an abandoned think.
+				enabled: configWithProvider.compaction?.cappedThinkingEnabled,
+				budgetTokens: configWithProvider.compaction?.thinkingBudgetTokens,
+				promptTemplate: configWithProvider.compaction?.cappedThinkingPrompt,
+				providerConfig: configWithProvider.providerConfig,
+				summarizer: configWithProvider.compaction?.summarizer,
+				logger: configWithProvider.logger,
+			},
+		);
 
 		const agentConfig = {
 			sessionId,

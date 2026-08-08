@@ -223,6 +223,19 @@ export interface CoreCompactionConfig {
 	 * default.
 	 */
 	thinkingSummaryPrompt?: string;
+	/**
+	 * Whether a turn whose reasoning hit the thinking cap has that reasoning
+	 * replaced, for the next request, with a note of what it settled.
+	 *
+	 * A capped turn is cut mid-sentence, and the next turn re-derives the same
+	 * reasoning from the beginning rather than continuing from it. Defaults on
+	 * where a thinking budget is known; without one there is nothing to detect.
+	 */
+	cappedThinkingEnabled?: boolean;
+	/** Replaces the built-in continuation-note instruction. */
+	cappedThinkingPrompt?: string;
+	/** The per-turn thinking allowance this session sends, when one is known. */
+	thinkingBudgetTokens?: number;
 	summarizer?: CoreCompactionSummarizerConfig;
 	compact?: (
 		context: CoreCompactionContext,

@@ -1142,6 +1142,11 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	const sessionContextWindow =
 		configuredContextWindow ?? declaredContextWindow ?? positiveFiniteNumber(committedRuntimeModel?.modelInfo?.contextWindow)
 
+	// The per-turn thinking allowance, once it is known. The system prompt states
+	// it, and the capped-thinking condenser needs it to tell a turn that stopped
+	// thinking from one that ran out of room to think.
+	let thinkingBudgetTokens: number | undefined
+
 	// The per-turn output cap, resolved once: the system prompt states it, and
 	// compaction budgets against it. A configured `num_predict` goes on the wire
 	// ahead of the session's cap and wins, so it is the answer wherever the
@@ -1172,6 +1177,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 			modelId,
 		)
 		systemPrompt = `${systemPrompt}${buildOutputBudgetSection(outputCap, contextWindow, thinking)}`
+		thinkingBudgetTokens = thinking?.budgetTokens
 		Logger.log(
 			`[SessionFactory] Output budget: cap=${outputCap} contextWindow=${contextWindow ?? "unknown"}` +
 				(thinking ? ` thinking=${thinking.budgetTokens} (${thinking.level})` : ""),
@@ -1367,6 +1373,11 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 						strategy: compactionStrategy,
 						...(compactionPrompt ? { summaryPrompt: compactionPrompt } : {}),
 						thinkingSummaryEnabled: thinkingCompactionEnabled,
+						// A turn that ran out of thinking budget is cut mid-sentence
+						// and the next turn re-derives the same reasoning from the
+						// start. Needs the allowance to detect it, so it stands down
+						// on any provider that does not report one.
+						...(thinkingBudgetTokens ? { thinkingBudgetTokens } : {}),
 						...(thinkingCompactionPrompt ? { thinkingSummaryPrompt: thinkingCompactionPrompt } : {}),
 					},
 				}

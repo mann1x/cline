@@ -604,11 +604,27 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown): ClineSayTool 
 			// DiffEditRow's `patch` prop, so the formatted diff must go into `content`.
 			const diffContent = oldText && newText ? `------- SEARCH\n${oldText}\n=======\n${newText}\n+++++++ REPLACE` : newText
 
+			// Named from the arguments rather than guessed from the payload: the
+			// executor branches on exactly these fields, so this is the same
+			// decision it makes, reported rather than re-derived.
+			const endLine = getNumberField(parsedInput, "end_line")
+			const editMode =
+				oldText && newText
+					? "SEARCH/REPLACE"
+					: insertLine != null
+						? `INSERT at ${insertLine}`
+						: startLine != null
+							? endLine != null && endLine !== startLine
+								? `LINES ${startLine}-${endLine}`
+								: `LINE ${startLine}`
+							: undefined
+
 			return {
 				tool: isEdit ? "editedExistingFile" : "newFileCreated",
 				path: filePath,
 				content: diffContent,
 				diff: patch,
+				...(editMode ? { editMode } : {}),
 			}
 		}
 
@@ -630,6 +646,7 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown): ClineSayTool 
 				path: filePath,
 				content: patch,
 				diff: patch,
+				editMode: "PATCH",
 			}
 		}
 

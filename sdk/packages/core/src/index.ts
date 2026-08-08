@@ -869,6 +869,11 @@ export {
 	DEFAULT_THINKING_COMPACTION_PROMPT,
 } from "./extensions/context/compaction-shared";
 export {
+	DEFAULT_CAPPED_THINKING_PROMPT,
+	createCappedThinkingPrepareTurn,
+	findCappedThinkingIndex,
+} from "./extensions/context/capped-thinking";
+export {
 	ALL_DEFAULT_TOOL_NAMES,
 	type ApplyPatchExecutor,
 	type ApplyPatchInput,
