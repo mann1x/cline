@@ -959,8 +959,6 @@ export interface AgentConfig {
 	 * between leaving the image and replacing it with a note.
 	 */
 	modelSupportsImages?: boolean;
-	/** See `AgentConfig.imageSupportDeclared`. */
-	imageSupportDeclared?: boolean;
 	consumePendingUserMessage?: () => string | undefined;
 
 	// -------------------------------------------------------------------------

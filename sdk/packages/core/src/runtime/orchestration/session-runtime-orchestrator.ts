@@ -979,12 +979,6 @@ export class SessionRuntime {
 				onImageInputUnsupported: () => {
 					this.imageInputRefused = true;
 				},
-				// Declared, not guessed: the catalog listed this model's
-				// capabilities, or the provider was asked directly — Ollama
-				// answers from `/api/show`, which covers the local models the
-				// catalog has never heard of. The recovery retry exists only for
-				// the case where neither could say.
-				imageSupportDeclared: modelInfo?.capabilities !== undefined,
 				// The same answer the tools guard on, so a description that could
 				// not be produced is judged against what this model can actually
 				// do rather than against a second opinion.

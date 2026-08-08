@@ -107,7 +107,6 @@ export function createAgentRuntimeConfig(
 		describeImages: agentConfig.describeImages,
 		alwaysDescribeImages: agentConfig.alwaysDescribeImages,
 		modelSupportsImages: agentConfig.modelSupportsImages,
-		imageSupportDeclared: agentConfig.imageSupportDeclared,
 		consumePendingUserMessage: agentConfig.consumePendingUserMessage,
 		plugins: input.plugins,
 		logger: input.logger ?? agentConfig.logger,

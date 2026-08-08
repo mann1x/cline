@@ -1236,6 +1236,12 @@ async function createProviderModule(
 			const { createOllamaProviderModule } = await import("./vendors/ollama");
 			return createOllamaProviderModule(config, context);
 		}
+		case "opencoti": {
+			const { createOpencotiProviderModule } = await import(
+				"./vendors/opencoti"
+			);
+			return createOpencotiProviderModule(config, context);
+		}
 		case "sapaicore": {
 			const { createSapAiCoreProviderModule } = await import(
 				"./vendors/community"
@@ -1412,4 +1418,5 @@ export const createOpenAICodexProvider = createAiSdkProvider("openai-codex");
 export const createOpenCodeProvider = createAiSdkProvider("opencode");
 export const createDifyProvider = createAiSdkProvider("dify");
 export const createOllamaProvider = createAiSdkProvider("ollama");
+export const createOpencotiProvider = createAiSdkProvider("opencoti");
 export const createSapAiCoreProvider = createAiSdkProvider("sapaicore");

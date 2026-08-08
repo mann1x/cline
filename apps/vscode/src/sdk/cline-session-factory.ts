@@ -39,6 +39,7 @@ import { Logger } from "@shared/services/Logger"
 import type { Settings } from "@shared/storage/state-keys"
 import type { Mode } from "@shared/storage/types"
 import { reasoningEffortFromThinkingBudget } from "@shared/utils/reasoning-support"
+import { resolveVisionModelStatus, visionSnapshotProviderId } from "@shared/vision-config"
 import { stringifyVsCodeLmModelSelector } from "@shared/vsCodeSelectorUtils"
 import { StateManager } from "@/core/storage/StateManager"
 import { HostProvider } from "@/hosts/host-provider"
@@ -1244,9 +1245,22 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 			return undefined
 		}
 	})()
-	const visionApiConfiguration = stateManager.getGlobalSettingsKey("visionModelEnabled")
-		? buildVisionApiConfiguration(apiConfig, stateManager.getGlobalSettingsKey("visionModeApiConfiguration"))
-		: undefined
+	const visionSnapshot = stateManager.getGlobalSettingsKey("visionModeApiConfiguration")
+	const visionStatus = resolveVisionModelStatus(stateManager.getGlobalSettingsKey("visionModelEnabled"), visionSnapshot)
+	const visionApiConfiguration = visionStatus === "ready" ? buildVisionApiConfiguration(apiConfig, visionSnapshot) : undefined
+	// Said out loud, because the silence was the bug: a tester's twenty-thousand
+	// line log of a session that failed on "this model does not support image
+	// input" contained no line mentioning vision at all, so there was no way to
+	// tell a describer that failed from one that was never installed.
+	if (visionStatus === "unconfigured") {
+		Logger.warn("[Vision] Vision model is enabled but the Vision tab names no provider; images will not be described")
+	} else if (visionApiConfiguration) {
+		Logger.log(
+			`[Vision] Describer installed: provider=${visionSnapshotProviderId(visionSnapshot)} model=${
+				(visionProviderSettings?.selectedModelId as string | undefined) ?? "unset"
+			}`,
+		)
+	}
 	const useAutoCondense = input.taskSettings?.useAutoCondense ?? globalUseAutoCondense
 
 	// Core resolves providers against the SDK registry, which uses the SDK's

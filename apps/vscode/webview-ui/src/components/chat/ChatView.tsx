@@ -3,6 +3,7 @@ import { combineCommandSequences } from "@shared/combineCommandSequences"
 import { combineHookSequences } from "@shared/combineHookSequences"
 import { getApiMetrics, getLastApiReqTotalTokens } from "@shared/getApiMetrics"
 import { BooleanRequest, StringRequest } from "@shared/proto/cline/common"
+import { resolveVisionModelStatus } from "@shared/vision-config"
 import { useCallback, useEffect, useMemo, useRef } from "react"
 import { useMount } from "react-use"
 import { useExtensionState } from "@/context/ExtensionStateContext"
@@ -60,6 +61,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 		queuedPrompts,
 		turnState,
 		visionModelEnabled,
+		visionModeApiConfiguration,
 	} = useExtensionState()
 	const isProdHostedApp = userInfo?.apiBaseUrl === "https://app.cline.bot"
 	const shouldShowQuickWins = isProdHostedApp && (!taskHistory || taskHistory.length < QUICK_WINS_HISTORY_THRESHOLD)
@@ -225,7 +227,13 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 	// before the primary ever sees it. Asking only the primary is how the file
 	// picker came to refuse an image for a session that was set up to handle
 	// one.
-	const imagesAccepted = selectedModelInfo.supportsImages || visionModelEnabled === true
+	//
+	// The toggle alone is not that question, though. With it on and the Vision
+	// tab empty no describer is installed, and trusting the toggle here let an
+	// image reach a model that answered "this model does not support image
+	// input" and failed the run. The session resolves it the same way.
+	const imagesAccepted =
+		selectedModelInfo.supportsImages || resolveVisionModelStatus(visionModelEnabled, visionModeApiConfiguration) === "ready"
 
 	const selectFilesAndImages = useCallback(async () => {
 		try {

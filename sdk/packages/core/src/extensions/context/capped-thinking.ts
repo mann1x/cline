@@ -115,6 +115,16 @@ function endsWithBudgetMessage(thinking: string, message: string): boolean {
  */
 const CONDENSED_THINKING_MAX_CHARS = 12_000;
 
+/**
+ * The instruction half of the condensation request.
+ *
+ * Short on purpose, and separate from the task itself, which travels as the
+ * user message: the same split the compaction summariser uses. It says what the
+ * note is for; `DEFAULT_CAPPED_THINKING_PROMPT` says what it must contain.
+ */
+export const CAPPED_THINKING_SYSTEM_PROMPT =
+	"You are writing a note to yourself. Your own reasoning was cut off mid-way by a budget, and this note is all of it that survives into your next attempt at the same problem. Follow the requested structure exactly, keep every specific -- paths, names, errors, numbers, line numbers -- and record what you ruled out as carefully as what you settled.";
+
 export const DEFAULT_CAPPED_THINKING_PROMPT = `Your reasoning on the last turn ran out of budget and was cut off. You are about to think again about the same problem, and without this note you will start from the beginning and reach the same point.
 
 Below is the reasoning you had produced when it was cut, and what the tool call you managed to make came back as.
@@ -512,10 +522,30 @@ async function writeCappedThinkingNote(options: {
 		const handler = await createHandlerAsync(summarizerConfig);
 		let text = "";
 		let chunks = 0;
-		for await (const chunk of handler.createMessage(request, [])) {
+		const seen: string[] = [];
+		let streamError: string | undefined;
+		// The prompt goes in the user half, with only the instruction above it.
+		//
+		// It used to be the whole system prompt against an empty message list,
+		// and an empty message list is not a request: nothing reached the server
+		// at all. Six condensations in one session returned a single chunk and no
+		// text -- 35,872, 39,719, 36,311, 35,623, 35,588 and 13,492 characters of
+		// reasoning, every one of them thrown away -- while the compaction
+		// summariser, which splits the same way this now does, worked throughout.
+		for await (const chunk of handler.createMessage(
+			CAPPED_THINKING_SYSTEM_PROMPT,
+			[{ role: "user", content: request }],
+		)) {
 			chunks += 1;
+			if (seen.length < 8 && !seen.includes(chunk.type)) {
+				seen.push(chunk.type);
+			}
 			if (chunk.type === "text") {
 				text += chunk.text;
+				continue;
+			}
+			if (chunk.type === "done" && !chunk.success && chunk.error) {
+				streamError = chunk.error;
 			}
 		}
 		const note = truncateText(text.trim(), CONDENSED_THINKING_MAX_CHARS);
@@ -524,9 +554,13 @@ async function writeCappedThinkingNote(options: {
 			// condenser that was never called -- and for a whole session that is
 			// how it was read. A summariser queued behind the conversation on a
 			// single-slot server comes back like this: stream opened, no chunks,
-			// no error.
+			// no error. The chunk types are named because "1 chunk" said the
+			// stream had answered something and not what: it took a server-side
+			// request log to find out the request was never made.
 			options.config.logger?.log(
-				`Capped-thinking condensation produced nothing from ${options.thinking.length} chars of reasoning (${chunks} chunks received)`,
+				`Capped-thinking condensation produced nothing from ${options.thinking.length} chars of reasoning (${chunks} chunks received: ${
+					seen.join(", ") || "none"
+				})${streamError ? `; stream reported: ${streamError}` : ""}`,
 				{ severity: "warn", chunks, thinkingChars: options.thinking.length },
 			);
 		}

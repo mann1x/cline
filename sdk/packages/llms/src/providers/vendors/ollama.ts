@@ -273,6 +273,24 @@ export function hasOllamaFetch(): boolean {
 	return injectedFetch !== undefined;
 }
 
+/**
+ * The same two facts, for the other vendors that talk to a local server.
+ *
+ * The undici problem is not Ollama's -- it belongs to any endpoint whose
+ * prefill can outrun a five-minute header timeout, which is every local engine
+ * serving a long agentic prompt. The state stays here rather than being
+ * duplicated: one dispatcher, one fetch, one place a host installs them. The
+ * names are the debt from this having been an Ollama-only concern first.
+ */
+export async function resolveLocalStreamDispatcher(): Promise<unknown> {
+	return resolveNoStreamTimeoutDispatcher();
+}
+
+/** The fetch known to honour `init.dispatcher`, if a host handed one over. */
+export function localStreamFetch(): typeof fetch | undefined {
+	return injectedFetch;
+}
+
 async function resolveNoStreamTimeoutDispatcher(): Promise<unknown> {
 	if (dispatcherResolved) {
 		return cachedDispatcher;

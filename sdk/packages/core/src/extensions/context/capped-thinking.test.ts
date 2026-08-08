@@ -24,6 +24,22 @@ function summarizerConfigs(): Array<Record<string, unknown>> {
 	return container[CAPTURED] as Array<Record<string, unknown>>;
 }
 
+/** What the condenser actually sent: the system half and the messages. */
+const CAPTURED_CALLS = Symbol.for("cline.test.summarizerCalls");
+function summarizerCalls(): Array<{
+	system: string;
+	messages: Array<{ role: string; content: string }>;
+}> {
+	const container = globalThis as unknown as Record<symbol, unknown>;
+	if (!container[CAPTURED_CALLS]) {
+		container[CAPTURED_CALLS] = [];
+	}
+	return container[CAPTURED_CALLS] as Array<{
+		system: string;
+		messages: Array<{ role: string; content: string }>;
+	}>;
+}
+
 vi.mock("@cline/llms", async (importOriginal) => ({
 	...((await importOriginal()) as Record<string, unknown>),
 	createHandlerAsync: async (config: Record<string, unknown>) => {
@@ -34,7 +50,20 @@ vi.mock("@cline/llms", async (importOriginal) => ({
 		}
 		(container[key] as Array<Record<string, unknown>>).push(config);
 		return {
-			createMessage: async function* () {
+			createMessage: async function* (
+				system: string,
+				messages: Array<{ role: string; content: string }>,
+			) {
+				const calls = Symbol.for("cline.test.summarizerCalls");
+				if (!container[calls]) {
+					container[calls] = [];
+				}
+				(
+					container[calls] as Array<{
+						system: string;
+						messages: Array<{ role: string; content: string }>;
+					}>
+				).push({ system, messages });
 				yield { type: "text", text: "the note" };
 			},
 		};
@@ -515,5 +544,46 @@ describe("what the condenser asks the summariser for", () => {
 		expect(config.thinking).toBe(false);
 		// And it still must not speak for the session.
 		expect(config.auxiliary).toBe(true);
+	});
+
+	// The reasoning used to go in as the system prompt against an empty message
+	// list, which is not a request at all: it never reached the server, and six
+	// condensations in one session each returned a single chunk and no text.
+	it("sends the reasoning as a user message, not as an empty request", async () => {
+		summarizerConfigs().length = 0;
+		summarizerCalls().length = 0;
+		const budgetMessage = "I have used my thinking budget.";
+		const prepareTurn = createCappedThinkingPrepareTurn(undefined, {
+			enabled: true,
+			budgetTokens: 16_000,
+			budgetMessage,
+			providerConfig: { providerId: "ollama", modelId: "m" },
+		});
+		const messages = [
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "thinking",
+						thinking: `the parser gives up at line 90\n${budgetMessage}`,
+					},
+				],
+			},
+		] as unknown as MessageWithMetadata[];
+
+		await (
+			prepareTurn as unknown as (input: {
+				messages: MessageWithMetadata[];
+			}) => Promise<unknown>
+		)({ messages });
+
+		expect(summarizerCalls()).toHaveLength(1);
+		const call = summarizerCalls()[0];
+		expect(call.messages).toHaveLength(1);
+		expect(call.messages[0].role).toBe("user");
+		expect(call.messages[0].content).toContain("the parser gives up at line 90");
+		// The instruction half stays short and says nothing about the reasoning.
+		expect(call.system).not.toContain("the parser gives up at line 90");
+		expect(call.system.length).toBeLessThan(1_000);
 	});
 });

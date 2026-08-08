@@ -1,5 +1,6 @@
 import { UpdateSettingsRequest } from "@shared/proto/cline/state"
 import { Mode } from "@shared/storage/types"
+import { resolveVisionModelStatus } from "@shared/vision-config"
 import { useState } from "react"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { StateServiceClient } from "@/services/grpc-client"
@@ -22,7 +23,13 @@ interface ApiConfigurationSectionProps {
 type ConfigTab = Mode | "vision"
 
 const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiConfigurationSectionProps) => {
-	const { planActSeparateModelsSetting, visionModelEnabled, mode, apiConfiguration } = useExtensionState()
+	const { planActSeparateModelsSetting, visionModelEnabled, visionModeApiConfiguration, mode, apiConfiguration } =
+		useExtensionState()
+	// Enabled with nothing on the Vision tab describes nothing. Said here
+	// because this is where it is switched on, and because the alternative was
+	// finding out from a failed run: the primary model gets the image, and a
+	// model that cannot read one fails the whole turn.
+	const visionUnconfigured = resolveVisionModelStatus(visionModelEnabled, visionModeApiConfiguration) === "unconfigured"
 	const [currentTab, setCurrentTab] = useState<ConfigTab>(mode)
 	const { handleFieldsChange } = useApiConfigurationHandlers()
 
@@ -165,6 +172,12 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 						Vision tab, which describes them in text for the main model. Useful when the main model cannot read images
 						at all, or reads them poorly.
 					</p>
+					{visionUnconfigured ? (
+						<p className="text-xs mt-[5px] text-(--vscode-errorForeground)">
+							No model is set on the Vision tab, so nothing will describe images: they go to the main model as they
+							are, and a model that cannot read one fails the turn. Pick a provider and a model on the Vision tab.
+						</p>
+					) : null}
 				</div>
 			</Section>
 		</div>

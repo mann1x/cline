@@ -13,6 +13,7 @@ export default defineConfig({
 			"src/shared/services/log-file-sink.test.ts",
 			"src/shared/api-config-snapshot.test.ts",
 			"src/shared/api-config-profiles.test.ts",
+			"src/shared/vision-config.test.ts",
 			"src/shared/proto-conversions/models/**/*.test.ts",
 			"src/core/storage/remote-config/**/*.test.ts",
 			"src/core/controller/state/**/*.test.ts",

@@ -2809,7 +2809,7 @@ describe("a second model that reads the images", () => {
 	});
 });
 
-describe("when the model's image support is known", () => {
+describe("when the model refuses an image", () => {
 	const refusal: AgentModelEvent = {
 		type: "finish",
 		reason: "error",
@@ -2829,34 +2829,40 @@ describe("when the model's image support is known", () => {
 		];
 	}
 
-	// The tools were already told before they attached anything, so an image is
-	// not what went wrong here — a retry would spend a turn hiding the real
-	// error behind a plausible-looking recovery.
-	it("does not retry, and reports the error as it came", async () => {
-		const model = new ScriptedModel([() => [refusal]]);
-		const runtime = new AgentRuntime({
-			model,
-			initialMessages: withScreenshot(),
-			imageSupportDeclared: true,
-		});
-
-		const result = await runtime.run("look at the page");
-
-		expect(result.status).toBe("failed");
-		expect(model.requests).toHaveLength(1);
-	});
-
-	it("still retries when nobody could say", async () => {
+	// A declared answer used to veto the retry, on the grounds that the tools
+	// had been told before they attached anything. Images arrive by other doors
+	// too — a paste, or a vision toggle that tells the attach guards to defer to
+	// a describer — and a tester's run died on exactly that: Ollama had declared
+	// the model reads no images, so the one recovery available was skipped.
+	it("retries without the images rather than failing the run", async () => {
 		const model = new ScriptedModel([
 			() => [refusal],
 			() => [{ type: "text-delta", text: "ok" }, { type: "finish", reason: "stop" }],
 		]);
 		const runtime = new AgentRuntime({ model, initialMessages: withScreenshot() });
 
-		await runtime.run("look at the page");
+		const result = await runtime.run("look at the page");
 
+		expect(result.status).toBe("completed");
+		expect(model.requests).toHaveLength(2);
+		const retried = model.requests[1].messages
+			.flatMap((m) => m.content)
+			.filter((p) => p.type === "text")
+			.map((p) => (p as { text: string }).text);
+		expect(retried.some((t) => t.includes("image omitted"))).toBe(true);
+	});
+
+	// Twice is not a recovery, it is a loop with a screenshot in it.
+	it("reports the second refusal as it came", async () => {
+		const model = new ScriptedModel([() => [refusal], () => [refusal]]);
+		const runtime = new AgentRuntime({ model, initialMessages: withScreenshot() });
+
+		const result = await runtime.run("look at the page");
+
+		expect(result.status).toBe("failed");
 		expect(model.requests).toHaveLength(2);
 	});
+
 });
 
 /**

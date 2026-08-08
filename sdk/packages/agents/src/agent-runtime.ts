@@ -1292,6 +1292,19 @@ export class AgentRuntime {
 	 * outside the shipped catalog, including the local ones this fork runs.
 	 * Tightening the default would trade one broken setup for another, so the
 	 * refusal itself is what we act on.
+	 *
+	 * It used to act on it only where nobody had declared the capability, on the
+	 * grounds that a declared answer means the tools were told before they
+	 * attached anything. That reasoning does not survive contact with the other
+	 * ways an image arrives: the user pastes one, or a vision model is switched
+	 * on and the attach guards defer to it. A tester hit exactly that — Ollama
+	 * declared the model reads no images, `imageSupportDeclared` was therefore
+	 * true, the vision toggle let the paste through with no describer behind it,
+	 * and the run ended on the provider's refusal with no retry. Dropping the
+	 * images and taking the turn again is strictly better than failing it, so
+	 * the declaration no longer vetoes the recovery. What still bounds it is
+	 * that the error says image input specifically, that images are actually
+	 * present, and that this is tried once.
 	 */
 	private isRecoverableImageTurn(turn: {
 		message: AgentMessage;
@@ -1300,11 +1313,6 @@ export class AgentRuntime {
 		return (
 			turn.finishReason === "error" &&
 			this.state.lastErrorClass === "image_input_unsupported" &&
-			// Only when nobody could say whether this model reads images. Where
-			// the catalog or the provider stated it, the tools were told before
-			// they attached anything, so an image is not what went wrong — and a
-			// retry would spend a turn hiding the real error.
-			this.config.imageSupportDeclared !== true &&
 			!this.imageRecoveryAttempted &&
 			this.hasImageContent()
 		);

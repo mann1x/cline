@@ -4,6 +4,7 @@ import { parseApiConfigurationSnapshot } from "@shared/api-config-profiles"
 import { applyApiConfigurationSnapshot } from "@shared/api-config-snapshot"
 import { Logger } from "@shared/services/Logger"
 import { SecretKeys } from "@shared/storage/state-keys"
+import { visionSnapshotProviderId } from "@shared/vision-config"
 import { buildApiHandler } from "./sdk-api-handler"
 
 /**
@@ -46,7 +47,10 @@ export function buildVisionApiConfiguration(
 		return undefined
 	}
 	const settings = applyApiConfigurationSnapshot(snapshot, ["plan", "act"]) as Record<string, unknown>
-	if (!settings.actModeApiProvider) {
+	// The same question the chat UI asks before it lets an image be attached.
+	// Asked here through the shared helper so the two cannot answer differently
+	// — that disagreement is what sent an image to a model that refused it.
+	if (!visionSnapshotProviderId(storedSnapshot)) {
 		return undefined
 	}
 	const secrets: Record<string, unknown> = {}
