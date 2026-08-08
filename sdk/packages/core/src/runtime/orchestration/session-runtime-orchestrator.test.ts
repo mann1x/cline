@@ -28,6 +28,7 @@ import {
 	type AgentModel,
 	type AgentRunResult,
 	type AgentRuntimeEvent,
+	type AgentRuntimeHooks,
 	type AgentTool,
 	type AgentToolContext,
 	EMPTY_CONTENT_TEXT,
@@ -2325,6 +2326,90 @@ describe("SessionRuntime.run — tracker wiring (P1 #3)", () => {
 		);
 		await session.run("loop-me");
 		expect(abortCalls.length).toBeGreaterThanOrEqual(1);
+	});
+
+	// The warning used to be appended to the conversation store, which the run
+	// had already snapshotted and would overwrite when it finished. Measured on
+	// a live session: the guard counted six refusals of one `editor` call, and
+	// not one of the twenty-six requests on the wire carried a word of it.
+	it("puts the strike countdown into the tool result the model reads", async () => {
+		const noChange =
+			"Editor operation failed: No change: lines 94-98 already reads exactly this way in game.html.";
+		const call = (id: string) => ({
+			type: "tool-call" as const,
+			toolCallId: id,
+			toolName: "editor",
+			input: { path: "game.html", start_line: 94 },
+		});
+		const refusal = (id: string): AgentRuntimeEvent => ({
+			type: "tool-finished",
+			iteration: 1,
+			toolCall: call(id),
+			message: {
+				id: `m${id}`,
+				role: "tool",
+				content: [
+					{
+						type: "tool-result",
+						toolCallId: id,
+						toolName: "editor",
+						output: { query: "edit", result: "", error: noChange, success: false },
+						isError: true,
+					},
+				],
+				createdAt: 1,
+			},
+			snapshot: makeSnapshot(),
+		});
+		const { deps } = makeScriptedRuntime({
+			events: [
+				{ type: "turn-started", iteration: 1, snapshot: makeSnapshot() },
+				{
+					type: "tool-started",
+					iteration: 1,
+					toolCall: call("tc1"),
+					snapshot: makeSnapshot(),
+				},
+				refusal("tc1"),
+				// The repeat. This is the one the guard has something to say about.
+				{
+					type: "tool-started",
+					iteration: 2,
+					toolCall: call("tc2"),
+					snapshot: makeSnapshot(),
+				},
+			],
+		});
+		let capturedHooks: Partial<AgentRuntimeHooks> | undefined;
+		const createRuntime = deps.createAgentRuntimeImpl as (
+			config: AgentRuntimeConfig,
+		) => AgentRuntime;
+		const session = new SessionRuntime(makeAgentConfig({}), {
+			createAgentRuntimeImpl: (config: AgentRuntimeConfig) => {
+				capturedHooks = config.hooks as Partial<AgentRuntimeHooks>;
+				return createRuntime(config);
+			},
+		});
+
+		await session.run("fix the game");
+
+		const after = await capturedHooks?.afterTool?.({
+			snapshot: makeSnapshot(),
+			tool: { name: "editor" },
+			toolCall: call("tc2"),
+			input: {},
+			result: {
+				output: { query: "edit", result: "", error: noChange, success: false },
+				isError: true,
+			},
+			startedAt: new Date(),
+			endedAt: new Date(),
+			durationMs: 1,
+		} as never);
+
+		const error = (after?.result?.output as { error: string }).error;
+		expect(error).toContain("No change");
+		expect(error).toContain("strikes left");
 	});
 
 	it("resets loop detection when run() starts a fresh conversation", async () => {

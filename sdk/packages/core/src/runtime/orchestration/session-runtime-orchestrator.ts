@@ -185,6 +185,31 @@ export function declaredNoOp(output: unknown): boolean {
 	});
 }
 
+/**
+ * Put the loop guard's warning where the model cannot miss it.
+ *
+ * Onto the failure text itself when there is one, because that is the sentence
+ * the model is reading to decide what to do next, and a countdown filed beside
+ * it in a field of its own is a footnote. The `No change` marker other
+ * predicates match on is at the front of that string and stays there.
+ */
+function attachLoopWarning(output: unknown, warning: string): unknown {
+	if (typeof output === "string") {
+		return `${output}\n\n${warning}`;
+	}
+	if (Array.isArray(output)) {
+		return [...output, { type: "text", text: warning }];
+	}
+	if (output != null && typeof output === "object") {
+		const record = output as Record<string, unknown>;
+		if (typeof record.error === "string" && record.error) {
+			return { ...record, error: `${record.error}\n\n${warning}` };
+		}
+		return { ...record, loop_guard: warning };
+	}
+	return warning;
+}
+
 async function resolveRuleContent(
 	rule: AgentExtensionRule,
 ): Promise<string | undefined> {
@@ -383,6 +408,8 @@ export class SessionRuntime {
 	private readonly conversation: ConversationStore;
 	private readonly mistakeTracker: MistakeTracker;
 	private readonly loopTracker: LoopDetectionTracker;
+	/** Loop-guard warnings awaiting the tool result they belong to. */
+	private readonly pendingLoopWarnings = new Map<string, string>();
 	/**
 	 * True when `execution.loopDetection === false` at construction
 	 * time. Loop inspection is skipped entirely — the tracker still
@@ -1105,6 +1132,36 @@ export class SessionRuntime {
 		]);
 		return {
 			...hooks,
+			afterTool: async (ctx) => {
+				const after = await hooks.afterTool?.(ctx);
+				const result = after?.result ?? ctx.result;
+				const warning = this.pendingLoopWarnings.get(
+					ctx.toolCall.toolCallId,
+				);
+				if (warning === undefined) {
+					return after;
+				}
+				this.pendingLoopWarnings.delete(ctx.toolCall.toolCallId);
+				// Only onto a failure. The verdict is formed before the call runs,
+				// and a repeat that finally works is the outcome the guard wants —
+				// telling it how many strikes are left would be counting down a
+				// success.
+				const failed =
+					result.isError === true ||
+					allOperationsFailed(result.output) ||
+					introducedRegression(result.output) ||
+					declaredNoOp(result.output);
+				if (!failed) {
+					return after;
+				}
+				return {
+					...after,
+					result: {
+						...result,
+						output: attachLoopWarning(result.output, warning),
+					},
+				};
+			},
 			beforeModel: async (ctx) => {
 				const control = await hooks.beforeModel?.(ctx);
 				if (control?.stop) {
@@ -1230,6 +1287,7 @@ export class SessionRuntime {
 					event.toolCall.toolName,
 					event.toolCall.input,
 					event.iteration,
+					event.toolCall.toolCallId,
 				);
 				break;
 			}
@@ -1409,6 +1467,7 @@ export class SessionRuntime {
 		toolName: string,
 		input: unknown,
 		iteration: number,
+		toolCallId: string,
 	): void {
 		if (this.trackerAbortInFlight || this.loopDetectionDisabled) {
 			return;
@@ -1419,10 +1478,15 @@ export class SessionRuntime {
 		}
 		if (verdict.kind === "soft") {
 			if (verdict.message) {
-				this.conversation.appendMessage({
-					role: "user",
-					content: [{ type: "text", text: verdict.message }],
-				});
+				// Held for `afterTool` rather than appended to the conversation
+				// store. The store is snapshotted into `initialMessages` when the
+				// run starts and overwritten from `runResult.messages` when it
+				// ends, so a message appended to it mid-run reaches nothing:
+				// verified on a live session where the guard counted six refusals
+				// and not one of the twenty-six requests on the wire contained a
+				// word of the warning. A tool result is the one channel that is
+				// certain to be read.
+				this.pendingLoopWarnings.set(toolCallId, verdict.message);
 			}
 			return;
 		}

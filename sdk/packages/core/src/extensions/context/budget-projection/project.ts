@@ -14,29 +14,54 @@ import type {
 
 type EstimateMessageTokens = (message: MessageWithMetadata) => number;
 
+/**
+ * What becomes of the transcript's reasoning.
+ *
+ * `keep` is every request that is not a compaction: reasoning is the model's
+ * own working memory and nothing here is entitled to spend it.
+ *
+ * `drop_all` is the summarizer's input. It is reading the transcript to
+ * describe it, and how the model talked itself into each tool call is not part
+ * of that description.
+ *
+ * `keep_latest_if_it_fits` is what compaction leaves behind. Compaction is
+ * where the reasoning of turns being discarded is reclaimed — that is the whole
+ * point of it — but the turn compaction *keeps* is the one the model is still
+ * working on, and handing it back its own last turn with the thinking cut out
+ * is handing back a conclusion with no reasoning attached. So the most recent
+ * block survives, and only while the result still lands inside the target.
+ */
+type ThinkingPolicy = "keep" | "drop_all" | "keep_latest_if_it_fits";
+
 interface ProjectionPolicy {
 	protectLatestTypedUser: boolean;
 	protectLiveTailFromDrop: boolean;
 	dropUnsafeOutsideLiveTail: boolean;
-	dropThinkingBlocks: boolean;
+	thinkingBlocks: ThinkingPolicy;
 }
 
 function resolveProjectionPolicy(intent: BudgetPolicyIntent): ProjectionPolicy {
 	switch (intent) {
 		case "agentic_summary":
+			return {
+				protectLatestTypedUser: true,
+				protectLiveTailFromDrop: true,
+				dropUnsafeOutsideLiveTail: true,
+				thinkingBlocks: "drop_all",
+			};
 		case "basic_compaction_projection":
 			return {
 				protectLatestTypedUser: true,
 				protectLiveTailFromDrop: true,
 				dropUnsafeOutsideLiveTail: true,
-				dropThinkingBlocks: true,
+				thinkingBlocks: "keep_latest_if_it_fits",
 			};
 		case "normal_provider_request":
 			return {
 				protectLatestTypedUser: true,
 				protectLiveTailFromDrop: true,
 				dropUnsafeOutsideLiveTail: false,
-				dropThinkingBlocks: false,
+				thinkingBlocks: "keep",
 			};
 	}
 }
@@ -206,9 +231,9 @@ function shouldDropWholeBlock(
 	policy: ProjectionPolicy,
 	isProtected: boolean,
 ): boolean {
-	if (policy.dropThinkingBlocks && block.type === "thinking") {
-		return true;
-	}
+	// Reasoning is settled before this runs, by the policy stage that knows
+	// which block is exempt. This pass has no way to tell the exempt block from
+	// the rest, so re-deciding here could only undo that.
 	return (
 		policy.dropUnsafeOutsideLiveTail && !isProtected && isUnsafeBlock(block)
 	);
@@ -298,13 +323,29 @@ function dropUnsafeBlocks(
 	});
 }
 
+/** The last message carrying reasoning, or -1. Not the last message: the final
+ * turn is usually a tool result, so "the latest thinking" has to be found. */
+function findLastThinkingIndex(messages: MessageWithMetadata[]): number {
+	for (let index = messages.length - 1; index >= 0; index -= 1) {
+		const content = messages[index]?.content;
+		if (
+			Array.isArray(content) &&
+			content.some((block) => block.type === "thinking")
+		) {
+			return index;
+		}
+	}
+	return -1;
+}
+
 function dropThinkingBlocks(
 	messages: MessageWithMetadata[],
 	originalIndexes: number[],
 	actions: BudgetAction[],
+	exemptIndex = -1,
 ): MessageWithMetadata[] {
 	return messages.map((message, messageIndex) => {
-		if (!Array.isArray(message.content)) {
+		if (!Array.isArray(message.content) || messageIndex === exemptIndex) {
 			return message;
 		}
 		let changed = false;
@@ -480,6 +521,34 @@ function closureTouchesPinnedMessage(
 	return pinnedIndex >= 0 && closure.has(pinnedIndex);
 }
 
+/**
+ * Whether the transcript still lands inside its target with the latest
+ * reasoning block left in.
+ *
+ * Priced against the target the projection was given, not against what the
+ * transcript happens to weigh: the point of compaction is to reach that number,
+ * and an exemption that puts it out of reach is not an exemption, it is the
+ * next compaction.
+ */
+function thinkingExemptionFits(
+	messages: MessageWithMetadata[],
+	options: BudgetProjectionOptions,
+): boolean {
+	const exemptIndex = findLastThinkingIndex(messages);
+	if (exemptIndex < 0) {
+		return false;
+	}
+	const priced = dropThinkingBlocks(
+		messages,
+		messages.map((_, index) => index),
+		[],
+		exemptIndex,
+	);
+	return (
+		totalTokens(priced, options.estimateMessageTokens) <= options.targetTokens
+	);
+}
+
 export function buildBudgetProjection(
 	options: BudgetProjectionOptions,
 ): BudgetProjectionResult {
@@ -507,9 +576,19 @@ export function buildBudgetProjection(
 
 	let messages = cloneMessages(options.messages);
 	let originalIndexes = messages.map((_, index) => index);
-	if (policy.dropThinkingBlocks) {
+	if (policy.thinkingBlocks !== "keep") {
+		// Measured before deciding: the exemption is only worth taking if what
+		// comes out still fits, so it is priced rather than assumed. A single
+		// block can be 14k tokens on a local model at high effort, which is the
+		// difference between landing inside the target and compacting again on
+		// the next turn.
+		const exemptIndex =
+			policy.thinkingBlocks === "keep_latest_if_it_fits" &&
+			thinkingExemptionFits(messages, options)
+				? findLastThinkingIndex(messages)
+				: -1;
 		const prunedThinking = pruneEmptyMessages(
-			dropThinkingBlocks(messages, originalIndexes, actions),
+			dropThinkingBlocks(messages, originalIndexes, actions, exemptIndex),
 			originalIndexes,
 			actions,
 			"unsafe_to_truncate",

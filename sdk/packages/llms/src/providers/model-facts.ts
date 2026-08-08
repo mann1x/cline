@@ -390,8 +390,6 @@ export function reasoningHistoryModeForProvider(providerId: string | undefined):
 	switch ((providerId ?? "").toLowerCase()) {
 		case "cerebras":
 			return "none";
-		case "ollama":
-			return "last";
 		default:
 			return "all";
 	}
@@ -404,13 +402,12 @@ export function resolveReasoningHistoryMode(
 	if (isCerebrasProvider(request, context)) {
 		return "none";
 	}
-	// Scoped to Ollama rather than applied everywhere: this is where it was
-	// measured, and where a local model's context window is the binding
-	// constraint. Other providers keep the behaviour they were tuned against
-	// until there is a measurement for them too.
-	if (isOllamaProvider(request, context)) {
-		return "last";
-	}
+	// Ollama used to resolve to "last" here, which stripped reasoning from every
+	// request rather than only reclaiming it when the context was full. That is
+	// a different thing from what it was meant to be and it took the model's own
+	// recent reasoning out of its context on turns that had ample room. The
+	// reclamation now happens once, at compaction, on the prefix compaction
+	// freezes -- see `dropStaleReasoningBlocks` in the core compaction pipeline.
 	return "all";
 }
 
