@@ -28,7 +28,7 @@ describe("LoopDetectionTracker", () => {
 	it("stops a call that keeps failing even when other calls interrupt it", () => {
 		const tracker = new LoopDetectionTracker();
 
-		for (let round = 0; round < 5; round += 1) {
+		for (let round = 0; round < 6; round += 1) {
 			expect(tracker.inspect(call).kind).not.toBe("hard");
 			tracker.noteOutcome(false);
 			// The interruption that used to reset everything.
@@ -38,7 +38,30 @@ describe("LoopDetectionTracker", () => {
 
 		const verdict = tracker.inspect(call);
 		expect(verdict.kind).toBe("hard");
-		expect(verdict.message).toContain("already been made 5 times and failed");
+		expect(verdict.message).toContain("already been made 6 times and failed");
+	});
+
+	it("counts the failures down out loud before it stops", () => {
+		const tracker = new LoopDetectionTracker();
+
+		// The first failure gets no countdown: one failure is ordinary.
+		expect(tracker.inspect(call).kind).toBe("ok");
+		tracker.noteOutcome(false);
+
+		const remaining: string[] = [];
+		for (let round = 0; round < 5; round += 1) {
+			const verdict = tracker.inspect(call);
+			expect(verdict.kind).toBe("soft");
+			remaining.push(verdict.message ?? "");
+			tracker.noteOutcome(false);
+			tracker.inspect(other);
+			tracker.noteOutcome(true);
+		}
+
+		expect(remaining[0]).toContain("only 5 strikes left");
+		expect(remaining[3]).toContain("only 2 strikes left");
+		expect(remaining[4]).toContain("this is the LAST strike");
+		expect(tracker.inspect(call).kind).toBe("hard");
 	});
 
 	it("never counts a call that worked", () => {
@@ -95,12 +118,10 @@ describe("a call the tool has declared a no-op", () => {
 
 	// Measured: this exact shape was sent seven times against six "No change"
 	// refusals, with the whole file re-read between four of them. Twenty-four
-	// minutes, no edit, and the run ended on the loop stop anyway — so the leash
-	// is one repeat, not five. It is not zero either: a live run was killed on
-	// the second attempt with the rest of its task still to do, and a no-op says
-	// the file already holds what was asked for, which is a misread rather than
-	// a runaway.
-	it("warns on its first repeat and stops on the second, not the fifth", () => {
+	// minutes, no edit, and the run ended on the loop stop anyway. That budget
+	// is what the strike count spends — the difference is that every refusal
+	// after the first now says how much of it is left.
+	it("explains the first repeat, then counts down to the stop", () => {
 		const tracker = new LoopDetectionTracker();
 
 		expect(tracker.inspect(call).kind).toBe("ok");
@@ -110,11 +131,24 @@ describe("a call the tool has declared a no-op", () => {
 		expect(warned.kind).toBe("soft");
 		expect(warned.message).toContain("refused as a no-op");
 		expect(warned.message).toContain("already in place");
+		expect(warned.message).toContain("only 5 strikes left");
 		tracker.noteOutcome(false, true);
+
+		const later: string[] = [];
+		for (let strike = 2; strike < 6; strike += 1) {
+			const verdict = tracker.inspect(call);
+			expect(verdict.kind).toBe("soft");
+			later.push(verdict.message ?? "");
+			tracker.noteOutcome(false, true);
+		}
+
+		expect(later[0]).toContain("only 4 strikes left");
+		expect(later[3]).toContain("this is the LAST strike");
 
 		const verdict = tracker.inspect(call);
 		expect(verdict.kind).toBe("hard");
 		expect(verdict.message).toContain("character-for-character");
+		expect(verdict.message).toContain("refused 6 times");
 	});
 
 	it("gives a payload that goes futile again its own warning", () => {
@@ -129,7 +163,10 @@ describe("a call the tool has declared a no-op", () => {
 
 		expect(tracker.inspect(call).kind).toBe("ok");
 		tracker.noteOutcome(false, true);
-		expect(tracker.inspect(call).kind).toBe("soft");
+		const fresh = tracker.inspect(call);
+		expect(fresh.kind).toBe("soft");
+		// The strikes go with it: the new episode gets the whole budget.
+		expect(fresh.message).toContain("only 5 strikes left");
 	});
 
 	// Measured: `editor` applied lines 94-97, then the identical call was sent
@@ -151,8 +188,11 @@ describe("a call the tool has declared a no-op", () => {
 		expect(first.message).toContain("already succeeded");
 		tracker.noteOutcome(false, true);
 
-		// Told once. A third identical call is the loop the guard is for.
-		expect(tracker.inspect(call).kind).toBe("hard");
+		// Said once, because it answers a question the later warnings do not:
+		// after that the countdown carries the message.
+		const second = tracker.inspect(call);
+		expect(second.message).not.toContain("already succeeded");
+		expect(second.message).toContain("unchanged from the one that was just refused");
 	});
 
 	// An ordinary failure may stop failing — a range that had moved, a read that

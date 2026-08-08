@@ -452,9 +452,14 @@ function duplicatedRangeMessage(
 	range: string,
 	requestedLines: number,
 	added: number,
+	/** Set when the stripped gutter numbered past `end_line` — the cause, named. */
+	gutterSpan?: { firstLine: number; lastLine: number },
 ): never {
+	const gutterHint = gutterSpan
+		? ` The gutter on your \`new_text\` covers lines ${gutterSpan.firstLine}-${gutterSpan.lastLine}, but the call names only ${range}: if you meant to replace ${gutterSpan.firstLine}-${gutterSpan.lastLine}, send \`end_line: ${gutterSpan.lastLine}\`.`
+		: "";
 	throw new Error(
-		`Duplicated instead of replaced: the edit to ${range} in ${filePath} was not applied. None of the ${requestedLines} line(s) you named were removed, yet ${added} new line(s) were added — so what you sent as \`new_text\` opens with the text already at ${range} and then continues, which appends a second copy rather than replacing anything. If you meant to rewrite that range, send only the text that should end up there, without restating the lines that are already at ${range}. If you meant to add code, insert it at the line it belongs on instead. Re-read the file first: after earlier edits the line numbers you are working from may no longer point at what you think.`,
+		`Duplicated instead of replaced: the edit to ${range} in ${filePath} was not applied. None of the ${requestedLines} line(s) you named were removed, yet ${added} new line(s) were added — so what you sent as \`new_text\` opens with the text already at ${range} and then continues, which appends a second copy rather than replacing anything.${gutterHint} If you meant to rewrite that range, send only the text that should end up there, without restating the lines that are already at ${range}. If you meant to add code, insert it at the line it belongs on instead. Re-read the file first: after earlier edits the line numbers you are working from may no longer point at what you think.`,
 	);
 }
 
@@ -578,10 +583,29 @@ async function replaceLineRange(
 	// not occur. So the check is narrow, and silence is the failure it prevents:
 	// a refusal would cost a turn, but a gutter written into a file is a
 	// corruption that reads as success.
-	const replacementText =
-		newStr != null && newStr !== "" && hasSequentialGutter(newStr, startLineOneBased)
-			? stripLineNumberGutter(normalizeLineEndings(newStr, eol))
-			: newStr;
+	const hadSequentialGutter =
+		newStr != null && newStr !== "" && hasSequentialGutter(newStr, startLineOneBased);
+	const replacementText = hadSequentialGutter
+		? stripLineNumberGutter(normalizeLineEndings(newStr as string, eol))
+		: newStr;
+
+	// The gutter also says which lines the text was read from, and that is worth
+	// keeping: when its last number runs past `end_line`, the call names a
+	// narrower range than the text it carries. Measured: `start_line: 129,
+	// end_line: 129` with a gutter of 129, 130, 131 — one line named, three
+	// pasted. The duplication guard below catches the consequence, but it
+	// describes the damage rather than the cause, leaving the model to work
+	// backwards from "2 new line(s) were added" to "I named one line".
+	//
+	// Said, never acted on. The gutter records where the text came FROM, not
+	// where it should go: a model rewriting one line into three could number
+	// them 129, 130, 131 just as legitimately, and widening the range for it
+	// would delete two lines nobody asked to touch.
+	const gutterLastLine = hadSequentialGutter
+		? startLineOneBased + countNonBlankLines(newStr as string) - 1
+		: undefined;
+	const gutterOverrunsRange =
+		gutterLastLine !== undefined && gutterLastLine > effectiveEndLine;
 
 	// An empty new_text deletes the range outright, which is the natural
 	// reading and what a caller removing a bad line wants.
@@ -613,7 +637,13 @@ async function replaceLineRange(
 	const requestedLines = effectiveEndLine - startLineOneBased + 1;
 	const { removed, added } = changedLineCounts(content, updated);
 	if (removed === 0 && added > requestedLines) {
-		duplicatedRangeMessage(filePath, range, requestedLines, added);
+		duplicatedRangeMessage(
+			filePath,
+			range,
+			requestedLines,
+			added,
+			gutterOverrunsRange ? { firstLine: startLineOneBased, lastLine: gutterLastLine as number } : undefined,
+		);
 	}
 
 	await fs.writeFile(filePath, updated, { encoding });
@@ -682,6 +712,11 @@ function hasSequentialGutter(text: string, firstLine: number): boolean {
 }
 
 /** Remove the read gutter, leaving the source's own indentation intact. */
+/** How many lines the gutter actually numbers — blank lines carry none. */
+function countNonBlankLines(text: string): number {
+	return text.split(/\r\n|\n/).filter((line) => line.trim() !== "").length;
+}
+
 function stripLineNumberGutter(text: string): string {
 	return text
 		.split("\n")

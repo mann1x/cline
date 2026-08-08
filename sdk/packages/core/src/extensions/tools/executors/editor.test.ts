@@ -572,6 +572,61 @@ describe("createEditorExecutor", () => {
 			});
 		});
 
+		it("names the gutter when it numbers past end_line", async () => {
+			// The two mistakes arrive together: a model in "gutter mode" pastes the
+			// read output back, and the gutter it pastes runs further than the range
+			// the call names. Stripped, that is a duplication — but the refusal used
+			// to describe the symptom only, and the model has the answer in its own
+			// hand: the last number it wrote is the `end_line` it meant.
+			await withTempFile("a\nb\nc\nd\ne\nf\ng\nh", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const failure = editor(
+					{
+						path: filePath,
+						start_line: 2,
+						end_line: 3,
+						new_text:
+							"  2 | b\n  3 | c\n  4 | d\n  5 | e\n  6 | f\n  7 | g\n  8 | h",
+					},
+					dir,
+					context,
+				);
+
+				await expect(failure).rejects.toThrow("Duplicated instead of replaced");
+				await expect(failure).rejects.toThrow(
+					"gutter on your `new_text` covers lines 2-8",
+				);
+				await expect(failure).rejects.toThrow("send `end_line: 8`");
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+					"a\nb\nc\nd\ne\nf\ng\nh",
+				);
+			});
+		});
+
+		it("does not blame the gutter when the range covers it", async () => {
+			// A gutter that stops inside `end_line` is not what went wrong, and
+			// pointing at it would send the model to change the one thing that was
+			// already right.
+			await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
+				const message = await createEditorExecutor()(
+					{
+						path: filePath,
+						new_text: "b\nc\nEXTRA1\nEXTRA2\nEXTRA3",
+						start_line: 2,
+						end_line: 3,
+					},
+					dir,
+					context,
+				).then(
+					() => "resolved",
+					(error: unknown) => (error as Error).message,
+				);
+
+				expect(message).toContain("Duplicated instead of replaced");
+				expect(message).not.toContain("gutter on your");
+			});
+		});
+
 		it("still allows growing a range when it actually replaces something", async () => {
 			// The guard keys on removing nothing. Wrapping or expanding a range
 			// that genuinely changes still has to work, or every refactor breaks.
