@@ -190,15 +190,42 @@ export function applyApiConfigurationSnapshot(
  * JSON form because several of them are objects (`ModelInfo`, header maps)
  * whose key order is not stable across a round trip through storage.
  */
+/**
+ * Whether two snapshots describe the same configuration.
+ *
+ * The provider config counts. It was once excluded whenever either side lacked
+ * one, to keep a profile saved before provider configs were carried from
+ * reading as changed the moment it was opened — but a profile with none always
+ * lacks one, so the exclusion was permanent: the context window lives in the
+ * provider config (`contextWindow`, the value providers.json holds and the
+ * session reads), changing it never marked the profile dirty, and it therefore
+ * could not be saved. Reported as "unable to save different context windows for
+ * each profile", which is exactly what it was.
+ *
+ * So a stored profile without one now reads as changed against a panel that has
+ * one: it does differ, saving it carries the provider config from then on, and
+ * a dot beside a profile that genuinely differs is the honest signal — a
+ * profile that cannot be saved is not. Loading such a profile still writes
+ * nothing to providers.json, which is the other half of what the old rule was
+ * protecting.
+ *
+ * The arguments are not interchangeable, and the call site passes (stored,
+ * panel). A panel that has not captured a provider config yet has not finished
+ * reading it — the RPC behind it resolves after mount — and a snapshot that is
+ * still loading is not evidence of a change.
+ */
 export function apiConfigurationSnapshotsEqual(a: ApiConfigurationSnapshot, b: ApiConfigurationSnapshot): boolean {
 	return (
-		sameValues(a.global, b.global) &&
-		sameValues(a.mode, b.mode) &&
-		// A profile saved before provider configs were carried has none, and must
-		// not read as differing from a panel that has one — it never captured the
-		// field, which is not the same as capturing it empty.
-		(a.providerConfig === undefined || b.providerConfig === undefined ? true : sameValues(a.providerConfig, b.providerConfig))
+		sameValues(a.global, b.global) && sameValues(a.mode, b.mode) && providerConfigsEqual(a.providerConfig, b.providerConfig)
 	)
+}
+
+/** See {@link apiConfigurationSnapshotsEqual} — (stored, panel), not symmetric. */
+function providerConfigsEqual(stored: Record<string, unknown> | undefined, panel: Record<string, unknown> | undefined): boolean {
+	if (panel === undefined) {
+		return true
+	}
+	return sameValues(stored ?? {}, panel)
 }
 
 function sameValues(a: Record<string, unknown>, b: Record<string, unknown>): boolean {

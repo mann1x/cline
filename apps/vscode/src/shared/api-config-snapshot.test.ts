@@ -147,6 +147,25 @@ describe("apiConfigurationSnapshotsEqual", () => {
 			true,
 		)
 	})
+
+	// The context window lives in the provider config, not in the settings
+	// snapshot: `contextWindow` is what providers.json holds and what the session
+	// reads. A comparison that skipped it whenever either side lacked one skipped
+	// it permanently for any profile that had none, so changing the context
+	// window never marked the profile dirty and it could not be saved.
+	it("notices a changed context window", () => {
+		const a = { global: {}, mode: {}, providerConfig: { contextWindow: 110000 } }
+		const b = { global: {}, mode: {}, providerConfig: { contextWindow: 32768 } }
+		expect(apiConfigurationSnapshotsEqual(a, b)).toBe(false)
+	})
+
+	it("still matches when neither side carries one", () => {
+		expect(apiConfigurationSnapshotsEqual({ global: {}, mode: {} }, { global: {}, mode: {} })).toBe(true)
+	})
+
+	it("treats an absent provider config and an empty one as the same", () => {
+		expect(apiConfigurationSnapshotsEqual({ global: {}, mode: {} }, { global: {}, mode: {}, providerConfig: {} })).toBe(true)
+	})
 })
 
 describe("the provider config a profile carries", () => {
@@ -202,10 +221,11 @@ describe("the provider config a profile carries", () => {
 		expect(apiConfigurationSnapshotsEqual(saved, edited)).toBe(false)
 	})
 
-	it("leaves a profile saved before this existed alone", () => {
-		// It never captured the field, which is not the same as capturing it
-		// empty — reading it as empty would show every old profile as dirty and
-		// wipe providers.json on load.
+	it("reads a profile saved before this existed as one that can be saved", () => {
+		// It differs, and saying so is what lets the user save it and carry a
+		// provider config from then on. The old rule called them equal, which
+		// made the difference permanent: the context window lives in the provider
+		// config, so changing it never marked the profile dirty.
 		const old = { global: { ollamaBaseUrl: "http://localhost:11434" }, mode: {} }
 		const current = {
 			global: { ollamaBaseUrl: "http://localhost:11434" },
@@ -213,6 +233,16 @@ describe("the provider config a profile carries", () => {
 			providerConfig: { sampling: { temperature: 0.7 } },
 		}
 
-		expect(apiConfigurationSnapshotsEqual(old, current)).toBe(true)
+		expect(apiConfigurationSnapshotsEqual(old, current)).toBe(false)
+	})
+
+	it("waits for the panel to finish reading its provider config", () => {
+		// The panel's copy arrives on an RPC that resolves after mount. A
+		// snapshot that is still loading is not evidence of a change, and the
+		// arguments are (stored, panel) for exactly this reason.
+		const stored = { global: {}, mode: {}, providerConfig: { contextWindow: 110000 } }
+		const stillLoading = { global: {}, mode: {} }
+
+		expect(apiConfigurationSnapshotsEqual(stored, stillLoading)).toBe(true)
 	})
 })

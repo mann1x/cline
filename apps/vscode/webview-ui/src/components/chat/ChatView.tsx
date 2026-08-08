@@ -59,6 +59,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 		checkpointRestoreInput,
 		queuedPrompts,
 		turnState,
+		visionModelEnabled,
 	} = useExtensionState()
 	const isProdHostedApp = userInfo?.apiBaseUrl === "https://app.cline.bot"
 	const shouldShowQuickWins = isProdHostedApp && (!taskHistory || taskHistory.length < QUICK_WINS_HISTORY_THRESHOLD)
@@ -219,11 +220,18 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 
 	const { selectedModelInfo } = useNormalizedApiConfiguration(mode)
 
+	// A second model configured to read images makes them usable here whatever
+	// the primary model can do — the description goes in the image's place
+	// before the primary ever sees it. Asking only the primary is how the file
+	// picker came to refuse an image for a session that was set up to handle
+	// one.
+	const imagesAccepted = selectedModelInfo.supportsImages || visionModelEnabled === true
+
 	const selectFilesAndImages = useCallback(async () => {
 		try {
 			const response = await FileServiceClient.selectFiles(
 				BooleanRequest.create({
-					value: selectedModelInfo.supportsImages,
+					value: imagesAccepted,
 				}),
 			)
 			if (
@@ -252,7 +260,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 		} catch (error) {
 			console.error("Error selecting images & files:", error)
 		}
-	}, [selectedModelInfo.supportsImages])
+	}, [imagesAccepted])
 
 	const shouldDisableFilesAndImages = selectedImages.length + selectedFiles.length >= MAX_IMAGES_AND_FILES_PER_MESSAGE
 

@@ -252,9 +252,16 @@ export function hasOllamaNoStreamTimeoutDispatcher(): boolean {
  * five-minute `bodyTimeout` kept killing prefill. The log was true and useless.
  *
  * So a host that has undici hands over its `fetch` as well as its `Agent`, and
- * the two travel together. A caller-supplied `config.fetch` still wins: that is
- * someone deliberately routing these requests, and second-guessing it here
- * would break the case this exists to serve.
+ * the two travel together.
+ *
+ * A caller-supplied `config.fetch` wins only when it is actually routing
+ * something. The distinction matters because the VS Code host supplies one
+ * unconditionally — `@/shared/net` documents its VS Code branch as "uses global
+ * fetch (VSCode provides proxy configuration)" — so preferring any supplied
+ * fetch meant preferring the global, and the dispatcher went on being ignored
+ * with a log line reading `fetch: caller-supplied` to prove it. Where the
+ * supplied fetch *is* the global there is nothing to defer to; where it is not,
+ * it is a proxy agent or a test double and it keeps precedence.
  */
 let injectedFetch: typeof fetch | undefined;
 
@@ -471,10 +478,15 @@ export async function createOllamaProviderModule(
 	// and so is a host that got neither — the wrapper works either way and the
 	// only symptom is a stall minutes later that reads as a network fault.
 	const streamDispatcher = await resolveNoStreamTimeoutDispatcher();
+	// A supplied fetch that is merely the global is not a routing decision, and
+	// the global is the one that discards `init.dispatcher`.
+	const suppliedFetch =
+		config.fetch && config.fetch !== globalThis.fetch ? config.fetch : undefined;
+	const requestFetch = suppliedFetch ?? injectedFetch;
 	context.logger?.debug(
 		streamDispatcher
 			? `[ollama] stream dispatcher attached: undici body/headers timeouts disabled (fetch: ${
-					config.fetch
+					suppliedFetch
 						? "caller-supplied"
 						: injectedFetch
 							? "host undici"
@@ -487,7 +499,7 @@ export async function createOllamaProviderModule(
 		...(Object.keys(headers).length > 0 ? { headers } : {}),
 		compatibility: "strict",
 		fetch: withOllamaResponseTimeout(
-			ensureFetch(config.fetch ?? injectedFetch),
+			ensureFetch(requestFetch),
 			readOllamaTimeoutMs(config),
 			streamDispatcher,
 			{ logger: context.logger },

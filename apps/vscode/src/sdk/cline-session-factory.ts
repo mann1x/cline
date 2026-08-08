@@ -1442,6 +1442,19 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 					// Configuring a vision model means the primary model is not
 					// meant to see the image, whether or not it could have.
 					alwaysDescribeImages: true,
+					// And it means images are usable in this session even though
+					// the primary model cannot read one. The tools guard on the
+					// primary's own capability, which is the right question when
+					// the image would reach it — with a describer installed it
+					// never does, so a screenshot the browser tool refused to
+					// attach was refused on behalf of a model that was never
+					// going to see it.
+					//
+					// `modelSupportsImages` on the agent config is deliberately
+					// left alone: that one decides whether an image the vision
+					// model *failed* to describe may be left in place, and the
+					// honest answer there is still no.
+					toolContextMetadata: { modelSupportsImages: true },
 				}
 			: {}),
 	}
