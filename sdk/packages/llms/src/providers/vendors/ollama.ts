@@ -482,12 +482,27 @@ export async function createOllamaProviderModule(
 	// the global is the one that discards `init.dispatcher`.
 	const suppliedFetch =
 		config.fetch && config.fetch !== globalThis.fetch ? config.fetch : undefined;
-	const requestFetch = suppliedFetch ?? injectedFetch;
+	// The dispatcher decides the order, not the supplier. `dispatcher` is
+	// undici's own extension to `RequestInit`, so a wrapper that rebuilds the
+	// request from the fields it knows about drops it -- and a caller-supplied
+	// fetch is exactly such a wrapper, installed for proxy and CA config that a
+	// local Ollama endpoint does not go through anyway. Preferring it silently
+	// reinstated undici's five-minute `headersTimeout` on a request the log had
+	// just called timeout-free. Measured: a 71,963-token prompt whose prefill
+	// ran past that limit died 917 seconds later -- three attempts at 300
+	// seconds -- reported as `UND_ERR_HEADERS_TIMEOUT` and reading as a network
+	// fault. The dispatcher only means something to a fetch that reads it, so
+	// when there is one to honour, that fetch goes first.
+	const requestFetch =
+		streamDispatcher && injectedFetch
+			? injectedFetch
+			: (suppliedFetch ?? injectedFetch);
+	const usingSuppliedFetch = requestFetch === suppliedFetch;
 	context.logger?.debug(
 		streamDispatcher
 			? `[ollama] stream dispatcher attached: undici body/headers timeouts disabled (fetch: ${
-					suppliedFetch
-						? "caller-supplied"
+					usingSuppliedFetch
+						? "caller-supplied — it may discard the dispatcher, leaving undici's defaults in force"
 						: injectedFetch
 							? "host undici"
 							: "global — the dispatcher may be discarded by it"

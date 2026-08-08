@@ -15,6 +15,7 @@ import {
 	readOllamaNumCtx,
 	readOllamaNumPredict,
 	readOllamaTimeoutMs,
+	setOllamaFetch,
 	setOllamaNoStreamTimeoutDispatcher,
 	withOllamaResponseTimeout,
 } from "./ollama";
@@ -509,6 +510,70 @@ describe("setOllamaNoStreamTimeoutDispatcher", () => {
 		await passedFetch("http://localhost:11434/api/chat");
 
 		expect((seen[0] as { dispatcher?: unknown }).dispatcher).toBe(injected);
+	});
+
+	it("prefers the fetch that honours the dispatcher over a supplied one", async () => {
+		// `dispatcher` is undici's own extension to `RequestInit`, so a wrapper
+		// that rebuilds the request from the fields it knows about drops it. A
+		// caller-supplied fetch is exactly such a wrapper — installed for proxy
+		// and CA config that a local Ollama endpoint does not go through — and
+		// preferring it put undici's five-minute `headersTimeout` back on a
+		// request the log had just called timeout-free. Measured: a 71,963-token
+		// prompt whose prefill ran past that died 917 seconds later, three
+		// attempts at 300 seconds, reported as a network fault.
+		const injected = { marker: "injected" };
+		setOllamaNoStreamTimeoutDispatcher(injected);
+
+		const undiciSeen: RequestInit[] = [];
+		const undiciFetch = (async (_input: unknown, init: RequestInit) => {
+			undiciSeen.push(init);
+			return new Response("ok");
+		}) as unknown as typeof fetch;
+		const suppliedSeen: RequestInit[] = [];
+		const suppliedFetch = (async (_input: unknown, init: RequestInit) => {
+			suppliedSeen.push(init);
+			return new Response("ok");
+		}) as unknown as typeof fetch;
+		setOllamaFetch(undiciFetch);
+
+		createOllamaMock.mockReset();
+		createOllamaMock.mockReturnValue({ chat: ollamaModelMock });
+		await createOllamaProviderModule(
+			config({ baseUrl: "http://localhost:11434", fetch: suppliedFetch }),
+			context({}),
+		);
+		const passedFetch = createOllamaMock.mock.calls[0][0].fetch as typeof fetch;
+		await passedFetch("http://localhost:11434/api/chat");
+
+		expect(undiciSeen).toHaveLength(1);
+		expect(suppliedSeen).toHaveLength(0);
+		expect((undiciSeen[0] as { dispatcher?: unknown }).dispatcher).toBe(
+			injected,
+		);
+
+		setOllamaFetch(undefined as unknown as typeof fetch);
+	});
+
+	it("still uses the supplied fetch when there is no dispatcher to honour", async () => {
+		// Without a dispatcher there is nothing for undici's fetch to carry, so
+		// the host's routing decision stands.
+		setOllamaNoStreamTimeoutDispatcher(undefined);
+		const suppliedSeen: RequestInit[] = [];
+		const suppliedFetch = (async (_input: unknown, init: RequestInit) => {
+			suppliedSeen.push(init);
+			return new Response("ok");
+		}) as unknown as typeof fetch;
+
+		createOllamaMock.mockReset();
+		createOllamaMock.mockReturnValue({ chat: ollamaModelMock });
+		await createOllamaProviderModule(
+			config({ baseUrl: "http://localhost:11434", fetch: suppliedFetch }),
+			context({}),
+		);
+		const passedFetch = createOllamaMock.mock.calls[0][0].fetch as typeof fetch;
+		await passedFetch("http://localhost:11434/api/chat");
+
+		expect(suppliedSeen).toHaveLength(1);
 	});
 
 	it("clears back to lookup when the injection is removed", () => {
