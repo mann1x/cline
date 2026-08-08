@@ -69,6 +69,12 @@ vi.mock("@/context/ExtensionStateContext", () => ({
 describe("useApiConfigurationProfiles — loading a profile", () => {
 	beforeEach(() => {
 		vi.clearAllMocks()
+		// clearAllMocks keeps implementations, and one test replaces them.
+		handleFieldsChange.mockResolvedValue(undefined)
+		writeProviderConfig.mockResolvedValue(undefined)
+		commitSelection.mockResolvedValue(undefined)
+		updateSettings.mockResolvedValue(undefined)
+		commitModelSelection.mockResolvedValue(undefined)
 	})
 
 	it("commits the profile's model to the provider store, not just the settings", async () => {
@@ -88,6 +94,31 @@ describe("useApiConfigurationProfiles — loading a profile", () => {
 		})
 		// And the settings copy still gets written, so the two agree.
 		expect(handleFieldsChange).toHaveBeenCalledOnce()
+	})
+
+	it("writes providers.json after the settings copy and before the model", async () => {
+		// The store mirrors the Ollama context window into the legacy settings
+		// key, so a providers.json write that lands first is followed by the
+		// profile's own copy of that key overwriting the mirror. It still has to
+		// precede the model, so that a turn starting in between runs the
+		// profile's sampler rather than the previous one.
+		const order: string[] = []
+		handleFieldsChange.mockImplementation(async () => {
+			order.push("settings")
+		})
+		writeProviderConfig.mockImplementation(async () => {
+			order.push("providerConfig")
+		})
+		commitSelection.mockImplementation(async () => {
+			order.push("model")
+		})
+
+		const { result } = renderHook(() => useApiConfigurationProfiles({ kind: "mode", mode: "act" }))
+
+		await result.current.loadProfile(PROFILE.name)
+
+		await waitFor(() => expect(order).toContain("model"))
+		expect(order.slice(0, 3)).toEqual(["settings", "providerConfig", "model"])
 	})
 
 	it("goes around the bound hook when the profile also switches provider", async () => {

@@ -140,13 +140,6 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 	/** Writes a snapshot into whichever configuration this bar is looking at. */
 	const applySnapshot = useCallback(
 		async (snapshot: ApiConfigurationSnapshot) => {
-			// providers.json first: it holds the context window and the sampler,
-			// and a load that set the model before them would run one turn on the
-			// old sampler if anything started in between.
-			if (snapshot.providerConfig) {
-				await writeProviderConfig(snapshot.providerConfig as never)
-			}
-
 			// Which model the profile is for. The settings snapshot records it
 			// (`ollamaModelId` and friends), but that is not where the panel or the
 			// session read it from — both go to the provider store's per-mode
@@ -162,6 +155,9 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 			)
 
 			if (scope.kind === "vision") {
+				if (snapshot.providerConfig) {
+					await writeProviderConfig(snapshot.providerConfig as never)
+				}
 				// The vision tab keeps its selection inside its own snapshot, under
 				// the key its picker reads.
 				const providerConfig = {
@@ -180,6 +176,17 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 
 			const targetModes: Mode[] = planActSeparateModelsSetting ? [scope.mode] : ["plan", "act"]
 			await handleFieldsChange(applyApiConfigurationSnapshot(snapshot, targetModes))
+
+			// providers.json after the settings copy and before the model. It holds
+			// the context window and the sampler, so it has to land before anything
+			// can start a turn on the old sampler — but the store also mirrors the
+			// context window into the legacy settings key, and writing it first let
+			// the profile's own (older, or absent) copy of that key overwrite the
+			// mirror on its way past.
+			if (snapshot.providerConfig) {
+				await writeProviderConfig(snapshot.providerConfig as never)
+			}
+
 			if (!selection.modelId) {
 				return
 			}

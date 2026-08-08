@@ -11,7 +11,7 @@ import {
 	type ProviderModelOverrides,
 	toProtobufModelOverrides as toProtobufProviderModelOverrides,
 } from "@shared/proto-conversions/models/modelOverrides"
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useSyncExternalStore } from "react"
 import { useApiConfigurationScope } from "@/components/settings/utils/ApiConfigurationScopeContext"
 import type { ProviderId } from "@/context/ExtensionStateContext"
 import { ModelsServiceClient } from "@/services/grpc-client"
@@ -52,25 +52,90 @@ function toWriteProviderConfigPatch(patch: ProviderConfigWritePatch): WriteProvi
 	})
 }
 
+/**
+ * One provider entry, one copy of it.
+ *
+ * A provider's `providers.json` entry is host state, but every call site used
+ * to hold a private copy read once on mount and never invalidated. Two of them
+ * are always mounted together — the API configuration profile bar and the
+ * provider's own settings panel — so a context window typed into the panel
+ * never reached the bar: it went on comparing, and saving into profiles, the
+ * value it had read when settings opened. Nothing looked unsaved, an overwrite
+ * stored the old number, and loading the profile back put the old number in.
+ *
+ * Sharing the entry means a write from any call site is what every other one
+ * sees, in the same tick, without a remount.
+ */
+interface ProviderConfigEntry {
+	response?: ProviderConfigResponse
+	/** Sequence of the newest request issued for this provider, by any caller. */
+	issued: number
+	listeners: Set<() => void>
+}
+
+const providerConfigEntries = new Map<string, ProviderConfigEntry>()
+let nextRequestSeq = 0
+
+function entryFor(providerId: string): ProviderConfigEntry {
+	const existing = providerConfigEntries.get(providerId)
+	if (existing) {
+		return existing
+	}
+	const created: ProviderConfigEntry = { issued: 0, listeners: new Set() }
+	providerConfigEntries.set(providerId, created)
+	return created
+}
+
+/**
+ * Claims the newest-request slot for a provider.
+ *
+ * Reads and writes resolve asynchronously and can complete out of order (e.g. a
+ * slow mount read landing after a user-triggered write). Only the newest issued
+ * request may apply its response; anything older is stale and would roll the UI
+ * back. The sequence is global rather than per hook, so the rule holds between
+ * two panels writing the same entry as well as within one.
+ */
+function issueRequest(providerId: string): number {
+	const entry = entryFor(providerId)
+	nextRequestSeq += 1
+	entry.issued = nextRequestSeq
+	return entry.issued
+}
+
+function publishConfig(providerId: string, seq: number, response: ProviderConfigResponse): void {
+	const entry = entryFor(providerId)
+	if (seq !== entry.issued) {
+		return
+	}
+	entry.response = response
+	for (const listener of [...entry.listeners]) {
+		listener()
+	}
+}
+
+/** Test-only: the entries outlive any one hook, which is the point of them. */
+export function __resetProviderConfigEntries(): void {
+	providerConfigEntries.clear()
+	nextRequestSeq = 0
+}
+
 export function useProviderConfig(requestedProviderId: ProviderId) {
 	// Which providers.json entry this panel is bound to. The Vision tab owns its
 	// own, so its base URL, context window, sampler and model selection stop
 	// landing on the entry Plan and Act read.
 	const scope = useApiConfigurationScope()
 	const providerId = requestedProviderId
-	const [config, setConfig] = useState<ProviderConfigResponse | undefined>(undefined)
-
-	// Reads and writes resolve asynchronously and can complete out of order
-	// (e.g. a slow initial read landing after a user-triggered write). Only
-	// the latest issued request may apply its response; anything older is
-	// stale and would roll the UI state back.
-	const requestSeqRef = useRef(0)
-	const applyConfig = useCallback((seq: number, response: ProviderConfigResponse) => {
-		if (seq !== requestSeqRef.current) {
-			return
-		}
-		setConfig(response)
-	}, [])
+	const config = useSyncExternalStore(
+		useCallback(
+			(onStoreChange: () => void) => {
+				const entry = entryFor(providerId)
+				entry.listeners.add(onStoreChange)
+				return () => entry.listeners.delete(onStoreChange)
+			},
+			[providerId],
+		),
+		useCallback(() => entryFor(providerId).response, [providerId]),
+	)
 
 	// A scoped panel reads what the scope holds rather than the shared entry, so
 	// the picker shows what it just committed instead of falling back to the
@@ -88,11 +153,11 @@ export function useProviderConfig(requestedProviderId: ProviderId) {
 		: undefined
 
 	const read = useCallback(async () => {
-		const seq = ++requestSeqRef.current
+		const seq = issueRequest(providerId)
 		const response = await ModelsServiceClient.readProviderConfig(StringRequest.create({ value: providerId }))
-		applyConfig(seq, response)
+		publishConfig(providerId, seq, response)
 		return response
-	}, [providerId, applyConfig])
+	}, [providerId])
 
 	useEffect(() => {
 		void read()
@@ -104,7 +169,7 @@ export function useProviderConfig(requestedProviderId: ProviderId) {
 				await scope.writeProviderSettings(patch as Record<string, unknown>)
 				return undefined
 			}
-			const seq = ++requestSeqRef.current
+			const seq = issueRequest(providerId)
 			try {
 				const response = await ModelsServiceClient.writeProviderConfig(
 					WriteProviderConfigRequest.create({
@@ -112,7 +177,7 @@ export function useProviderConfig(requestedProviderId: ProviderId) {
 						patch: toWriteProviderConfigPatch(patch),
 					}),
 				)
-				applyConfig(seq, response)
+				publishConfig(providerId, seq, response)
 				return response
 			} catch (error) {
 				// A failed write may still have partially applied host-side, and
@@ -124,13 +189,13 @@ export function useProviderConfig(requestedProviderId: ProviderId) {
 				// response (or its own failure recovery) supersedes this one,
 				// and a recovery read issued now could race ahead of the newer
 				// write host-side and pin a pre-write snapshot as the latest.
-				if (seq === requestSeqRef.current) {
+				if (seq === entryFor(providerId).issued) {
 					void read().catch(() => {})
 				}
 				throw error
 			}
 		},
-		[providerId, applyConfig, read, scope],
+		[providerId, read, scope],
 	)
 
 	const commitSelection = useCallback(
