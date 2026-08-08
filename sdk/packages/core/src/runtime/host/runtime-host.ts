@@ -182,22 +182,25 @@ export function splitCoreSessionConfig(config: ClineCoreStartConfig): {
 			? (localConfigOverrides as LocalRuntimeStartOptions)
 			: undefined;
 
+	// What crosses is defined by subtraction — everything but the callback —
+	// rather than by listing the fields that may. The types above already say
+	// exactly that (`Omit<…, "compact">`), but the implementation enumerated
+	// five compaction fields, so the seven added since were dropped at the
+	// transport boundary: both summary prompts, the thinking-summary switch,
+	// and every field the capped-thinking condenser reads, including the
+	// thinking budget itself. That fails the way `taskProgress` did — silently,
+	// with the feature present and declining to do anything. Measured on a live
+	// session: the factory resolved a 16,000-token budget and logged it, and
+	// 345ms later the condenser armed "at no thinking tokens".
+	const { compact: _compact, ...transportCompaction } = compaction ?? {};
+	const { createCheckpoint: _createCheckpoint, ...transportCheckpoint } =
+		checkpoint ?? {};
+
 	return {
 		config: {
 			...transportConfig,
-			...(checkpoint ? { checkpoint: { enabled: checkpoint.enabled } } : {}),
-			...(compaction
-				? {
-						compaction: {
-							enabled: compaction.enabled,
-							strategy: compaction.strategy,
-							preserveRecentTokens: compaction.preserveRecentTokens,
-							preserveRecentMessagesRatio:
-								compaction.preserveRecentMessagesRatio,
-							summarizer: compaction.summarizer,
-						},
-					}
-				: {}),
+			...(checkpoint ? { checkpoint: transportCheckpoint } : {}),
+			...(compaction ? { compaction: transportCompaction } : {}),
 		},
 		...(localRuntime ? { localRuntime } : {}),
 	};

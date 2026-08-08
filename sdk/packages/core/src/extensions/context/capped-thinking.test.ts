@@ -56,6 +56,15 @@ describe("finding the turn that ran out of thinking budget", () => {
 		expect(findCappedThinkingIndex([turn(45_000), turn(500)], budget)).toBe(-1);
 	});
 
+	it("believes the provider's own count over the character ratio", () => {
+		// Same reasoning, two different reported usages. The ratio is a fallback
+		// for turns that reported nothing; where the provider said how many
+		// tokens it produced, that is the answer, and two turns with identical
+		// text can land on either side of the cap because of it.
+		expect(findCappedThinkingIndex([measuredTurn(45_000, 16_000)], budget)).toBe(0);
+		expect(findCappedThinkingIndex([measuredTurn(45_000, 5_000)], budget)).toBe(-1);
+	});
+
 	it("stands down when no allowance is known", () => {
 		expect(findCappedThinkingIndex([turn(45_000)], undefined)).toBe(-1);
 		expect(findCappedThinkingIndex([turn(45_000)], 0)).toBe(-1);
