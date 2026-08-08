@@ -43,6 +43,8 @@ import { getEffectiveTerminalExecutionMode } from "./vscode-terminal-execution-m
 
 export interface VscodeSessionHostOptions {
 	mcpHub: McpHub
+	/** Files read this session; see `ListFilesToolOptions.getReadPaths`. */
+	getReadPaths?: () => string[]
 	requestToolApproval?: (request: {
 		agentId: string
 		conversationId: string
@@ -145,6 +147,7 @@ export class VscodeSessionHost implements SdkSessionHost {
 						getTerminalManager: options.getTerminalManager,
 						vscodeTerminalExecutionMode: getEffectiveTerminalExecutionMode(requestedTerminalExecutionMode),
 						foregroundCommands: options.foregroundCommands,
+						getReadPaths: options.getReadPaths,
 					})
 					// The focus-chain settings have been reachable in the UI all
 					// along — enabled by default, with a reminder interval — while

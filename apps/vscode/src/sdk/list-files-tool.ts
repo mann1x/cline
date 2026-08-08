@@ -94,6 +94,11 @@ export interface WorkspaceLister {
 export interface ListFilesToolOptions {
 	cwd: string
 	createLister: () => WorkspaceLister | Promise<WorkspaceLister>
+	/**
+	 * Files read this session, so a fruitless workspace search can say what it
+	 * could not have covered instead of asserting the file does not exist.
+	 */
+	getReadPaths?: () => string[]
 }
 
 interface ListFilesInput {
@@ -167,10 +172,53 @@ export function renderDirectory(displayPath: string, entries: DirectoryEntry[], 
 	return [heading, ...lines].join("\n")
 }
 
+/**
+ * Files read this session that no workspace root contains.
+ *
+ * The search is scoped to the workspace; reading and editing are not. A model
+ * that has just edited a file outside the roots and is then told the file does
+ * not exist has been given a false answer, and it does the only sensible thing
+ * with a false answer about something it just did — it asks again. Measured: a
+ * file under `repos\test` edited successfully from a workspace of `repos\osync`,
+ * then four consecutive searches denying it existed.
+ */
+function readOutsideRoots(readPaths: string[], roots: string[]): string[] {
+	if (roots.length === 0) {
+		return []
+	}
+	const outside = readPaths.filter((absolute) => !roots.some((root) => isWithin(root, absolute)))
+	return [...new Set(outside)]
+}
+
+/** Name what the search could not have found, when there is something to name. */
+function outsideNote(readPaths: string[], roots: string[], matcher?: (absolute: string) => boolean): string {
+	const outside = readOutsideRoots(readPaths, roots).filter((absolute) => matcher?.(absolute) ?? true)
+	if (outside.length === 0) {
+		return ""
+	}
+	const shown = outside.slice(0, 5)
+	return ` This search covers only the workspace, and you have already read these files outside it, which it cannot return:\n${shown
+		.map((absolute) => `  ${absolute}`)
+		.join(
+			"\n",
+		)}\nThose paths still work with \`read_files\`, \`editor\` and \`check_file\` — use them directly rather than searching again.`
+}
+
 /** Render a glob search, as paths relative to the root they were found under. */
-export function renderMatches(pattern: string, absolutePaths: string[], roots: string[], limit: number): string {
+export function renderMatches(
+	pattern: string,
+	absolutePaths: string[],
+	roots: string[],
+	limit: number,
+	readPaths: string[] = [],
+): string {
 	if (absolutePaths.length === 0) {
-		return `No file in the workspace matches \`${pattern}\`. That is an answer, not a failure — re-running it will not change it. Try a broader glob, or \`search_codebase\` if you are looking for what is inside a file rather than what it is called.`
+		const base = path.basename(pattern.replace(/\\/g, "/")).replace(/^\*+/, "").replace(/\*+$/, "")
+		const relevant = (absolute: string): boolean =>
+			base.length === 0 || path.basename(absolute).toLowerCase().includes(base.toLowerCase())
+		return `No file in the workspace matches \`${pattern}\`. Re-running it will not change that — the workspace is ${
+			roots.length > 0 ? roots.join(", ") : "the current folder"
+		}.${outsideNote(readPaths, roots, relevant)} Otherwise try a broader glob, or \`search_codebase\` if you are looking for what is inside a file rather than what it is called.`
 	}
 
 	const relativeTo = (absolute: string): string => {
@@ -213,7 +261,7 @@ export function createListFilesTool(options: ListFilesToolOptions): AgentTool {
 					const matches = await lister.findFiles(pattern, limit + 1)
 					return {
 						query,
-						result: renderMatches(pattern, matches, roots, limit),
+						result: renderMatches(pattern, matches, roots, limit, options.getReadPaths?.() ?? []),
 						success: true,
 					}
 				}
@@ -228,7 +276,7 @@ export function createListFilesTool(options: ListFilesToolOptions): AgentTool {
 					return {
 						query,
 						result: "",
-						error: `${absolute} is outside this workspace. Only these folders can be listed: ${roots.join(", ")}. If you need something elsewhere, ask the user to open that folder.`,
+						error: `${absolute} is outside this workspace, so it cannot be listed. Only these folders can be listed: ${roots.join(", ")}. Listing is the only thing scoped this way — \`read_files\`, \`editor\` and \`check_file\` all take a path outside the workspace, so if you know the file you want, open it directly. To browse this folder, ask the user to open it.`,
 						success: false,
 					}
 				}

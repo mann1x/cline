@@ -65,6 +65,8 @@ export interface VscodeExtraToolsOptions {
 	vscodeTerminalExecutionMode?: "vscodeTerminal" | "backgroundExec"
 	/** Registry of in-flight foreground executions for "Proceed While Running". */
 	foregroundCommands?: SdkForegroundCommandCoordinator
+	/** Files read this session; see `ListFilesToolOptions.getReadPaths`. */
+	getReadPaths?: () => string[]
 }
 
 export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExtraToolsOptions): Promise<AgentTool[]> {
@@ -126,6 +128,7 @@ export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExt
 		createListFilesTool({
 			cwd: options?.cwd ?? process.cwd(),
 			createLister: createVscodeWorkspaceLister,
+			getReadPaths: options?.getReadPaths,
 		}),
 	)
 

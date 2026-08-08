@@ -101,9 +101,40 @@ describe("renderMatches", () => {
 
 	it("treats no matches as an answer rather than a failure", () => {
 		// The distinction that stops a retry loop: a search that found nothing
-		// will find nothing again.
+		// will find nothing again. It now says so by naming the ground it
+		// covered, which is both the same claim and a checkable one.
 		const report = renderMatches("**/*.rs", [], [ROOT], 10)
-		expect(report).toContain("That is an answer, not a failure")
+		expect(report).toContain("Re-running it will not change that")
+		expect(report).toContain(ROOT)
+	})
+
+	it("names files read outside the workspace instead of denying they exist", () => {
+		// Measured: a file under `repos/test` edited successfully from a
+		// workspace of `repos/osync`, then four consecutive searches reporting
+		// that no such file existed. The model had just edited it, so it did the
+		// only sensible thing with an answer it knew to be false — it asked
+		// again. Reading and editing are not scoped to the workspace; only the
+		// search is, and it has to say so.
+		const outside = join("c:", "elsewhere", "manic_miner.html")
+		const report = renderMatches("manic*", [], [ROOT], 10, [outside])
+
+		expect(report).toContain(outside)
+		expect(report).toContain("read_files")
+	})
+
+	it("does not volunteer unrelated files it has read", () => {
+		// The note answers the search that was made. A model looking for one
+		// thing does not need the rest of its reading listed back at it.
+		const outside = join("c:", "elsewhere", "notes.md")
+		const report = renderMatches("manic*", [], [ROOT], 10, [outside])
+
+		expect(report).not.toContain(outside)
+	})
+
+	it("says nothing extra when everything read is inside the workspace", () => {
+		const report = renderMatches("**/*.rs", [], [ROOT], 10, [join(ROOT, "src", "app.ts")])
+
+		expect(report).not.toContain("outside it")
 	})
 })
 

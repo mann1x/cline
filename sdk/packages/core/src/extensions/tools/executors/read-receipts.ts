@@ -49,6 +49,16 @@ export interface ReadReceipts {
 	noteWrite(filePath: string, linesBefore: number, linesAfter: number): void;
 	/** Drop everything known about a file. */
 	forget(filePath: string): void;
+	/**
+	 * Every file read in this session, in the form it was resolved to.
+	 *
+	 * The receipts are the only record of which files the model has actually
+	 * touched, and they are kept whatever the file's location -- which makes
+	 * them the honest answer when a workspace-scoped search cannot find one.
+	 * Retired reads are included: a file whose receipts a write invalidated was
+	 * still read, and is still where it was.
+	 */
+	paths(): string[];
 }
 
 /**
@@ -67,6 +77,9 @@ function receiptKey(filePath: string): string {
 export function createReadReceipts(): ReadReceipts {
 	const seen = new Map<string, Span[]>();
 	const retired = new Set<string>();
+	// Keyed the same way, but holding the path as it was resolved: the key is
+	// lowercased on Windows and is no use to anyone reading it back.
+	const originals = new Map<string, string>();
 
 	return {
 		noteRead(filePath, first, last) {
@@ -85,6 +98,7 @@ export function createReadReceipts(): ReadReceipts {
 			const spans = seen.get(key) ?? [];
 			spans.push(span);
 			seen.set(key, spans);
+			originals.set(key, filePath);
 			retired.delete(key);
 		},
 
@@ -121,6 +135,11 @@ export function createReadReceipts(): ReadReceipts {
 			const key = receiptKey(filePath);
 			seen.delete(key);
 			retired.delete(key);
+			originals.delete(key);
+		},
+
+		paths() {
+			return [...originals.values()];
 		},
 	};
 }

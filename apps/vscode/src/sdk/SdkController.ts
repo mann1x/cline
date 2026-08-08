@@ -359,6 +359,11 @@ export class Controller {
 			// The SDK's built-in reader resolves relative paths against the extension
 			// host's process.cwd() (usually "/"); resolve them against the workspace instead.
 			readFileExecutor: createWorkspaceFileReadExecutor(() => this.getWorkspaceRoot(), this.readReceipts),
+			// The receipts already record every file the model has read, wherever
+			// it lives. A workspace-scoped search that finds nothing consults them
+			// so it can say what it could not have covered, rather than reporting
+			// that a file the model just edited does not exist.
+			getReadPaths: () => this.readReceipts.paths(),
 			onSessionEvent: (event) => {
 				this.sessionEvents.handleSessionEvent(event).catch((err) => {
 					Logger.error("[SdkController] Failed to handle session event:", err)
