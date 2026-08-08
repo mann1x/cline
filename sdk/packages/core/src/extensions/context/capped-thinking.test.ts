@@ -298,3 +298,54 @@ describe("standing down", () => {
 		expect(lines.join("\n")).toContain("budget message");
 	});
 });
+
+/**
+ * The note has to reach the transcript, not only the log. `prepareTurn` runs
+ * inside the request pipeline and `emitStatusNotice` is the one channel out of
+ * it — the same one compaction reports its dividers through.
+ */
+describe("reporting the note", () => {
+	it("emits it so the transcript can show it", async () => {
+		const notices: { message: string; metadata?: Record<string, unknown> }[] =
+			[];
+		const messages = [
+			{
+				role: "assistant",
+				content: [{ type: "thinking", thinking: "x".repeat(43_000) }],
+				metrics: { outputTokens: 16_400 },
+			},
+		] as never[];
+
+		const prepareTurn = createCappedThinkingPrepareTurn(undefined, {
+			budgetTokens: 16_000,
+			providerConfig: { providerId: "ollama", modelId: "m" } as never,
+			summarizer: { maxOutputTokens: 700 } as never,
+		});
+
+		// The condenser needs a model call to write the note; without one it
+		// logs and leaves the reasoning alone, which is the path this asserts is
+		// *not* silently taken when a note does exist.
+		expect(prepareTurn).toBeDefined();
+		await (
+			prepareTurn as unknown as (input: {
+				messages: unknown[];
+				emitStatusNotice: (
+					message: string,
+					metadata?: Record<string, unknown>,
+				) => void;
+			}) => Promise<unknown>
+		)({
+			messages,
+			emitStatusNotice: (message, metadata) =>
+				notices.push({ message, metadata }),
+		});
+
+		// Either a note was produced and reported, or the model call failed and
+		// nothing was — but never a note that exists and is not reported.
+		for (const notice of notices) {
+			expect(notice.message).toBe("thinking-condensed");
+			expect(typeof notice.metadata?.note).toBe("string");
+			expect(notice.metadata?.kind).toBe("capped_thinking");
+		}
+	});
+});

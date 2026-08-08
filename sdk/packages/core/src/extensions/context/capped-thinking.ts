@@ -297,7 +297,18 @@ export interface CappedThinkingCondenserConfig {
 	logger?: BasicLogger;
 }
 
-type PrepareTurnInput = { messages: MessageWithMetadata[] };
+type PrepareTurnInput = {
+	messages: MessageWithMetadata[];
+	/**
+	 * The channel the compaction pipeline reports through, and the only way
+	 * anything that happens inside `prepareTurn` reaches the transcript on
+	 * screen. Optional because a caller is free not to supply one.
+	 */
+	emitStatusNotice?: (
+		message: string,
+		metadata?: Record<string, unknown>,
+	) => void;
+};
 type PrepareTurnResult =
 	| { messages?: readonly MessageWithMetadata[] }
 	| undefined;
@@ -342,6 +353,7 @@ export function createCappedThinkingPrepareTurn<T extends PrepareTurn>(
 
 	const condense = async (
 		messages: MessageWithMetadata[],
+		emitStatusNotice?: PrepareTurnInput["emitStatusNotice"],
 	): Promise<MessageWithMetadata[]> => {
 		const index = findCappedThinkingIndex(messages, config.budgetTokens, {
 			budgetMessage: config.budgetMessage,
@@ -395,6 +407,17 @@ export function createCappedThinkingPrepareTurn<T extends PrepareTurn>(
 			noteChars: note.length,
 			budgetTokens: config.budgetTokens,
 		});
+		// On screen as well as in the log. This note is the only record of what a
+		// capped turn concluded — the reasoning it replaces is not sent again —
+		// and a summary nobody can read is a summary nobody can judge.
+		emitStatusNotice?.("thinking-condensed", {
+			kind: "capped_thinking",
+			phase: "completed",
+			thinkingChars: thinking.length,
+			noteChars: note.length,
+			budgetTokens: config.budgetTokens,
+			note,
+		});
 		const next = [...messages];
 		const target = next[index];
 		next[index] = {
@@ -413,7 +436,7 @@ export function createCappedThinkingPrepareTurn<T extends PrepareTurn>(
 	};
 
 	return (async (context: PrepareTurnInput) => {
-		const messages = await condense(context.messages);
+		const messages = await condense(context.messages, context.emitStatusNotice);
 		const result = (await (
 			inner as unknown as
 				| ((input: PrepareTurnInput) => Promise<PrepareTurnResult>)

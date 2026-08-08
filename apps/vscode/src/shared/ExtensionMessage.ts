@@ -290,6 +290,7 @@ export type ClineSay =
 	| "subagent_usage"
 	| "conditional_rules_applied"
 	| "compaction" // context compaction progress/result divider
+	| "thinking_condensed" // a capped turn's reasoning, replaced by the note it left itself
 
 export interface ClineSayTool {
 	tool:
@@ -427,6 +428,25 @@ export interface ClineCompactionInfo {
 	summary?: string
 	/** The retrospective written alongside it, when the second phase ran. */
 	thinkingSummary?: string
+}
+
+/**
+ * JSON payload of a say:"thinking_condensed" message.
+ *
+ * A turn that runs out of thinking budget is cut mid-sentence, and the next
+ * turn is given a short note in its place rather than the abandoned reasoning.
+ * That note is the only surviving account of what the turn concluded — what it
+ * replaces is never sent again — so it is shown the same way a compaction
+ * summary is: a divider that expands.
+ */
+export interface ClineThinkingCondensedInfo {
+	/** Characters of reasoning the note replaces. */
+	thinkingChars?: number
+	/** Characters of note. */
+	noteChars?: number
+	/** The allowance the turn ran out of. */
+	budgetTokens?: number
+	note: string
 }
 
 export interface ClineSubagentUsageInfo {

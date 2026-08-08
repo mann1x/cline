@@ -41,6 +41,7 @@ import type {
 	ClineSaySubagentStatus,
 	ClineSayTool,
 	ClineSubagentUsageInfo,
+	ClineThinkingCondensedInfo,
 	SubagentStatusItem,
 } from "@shared/ExtensionMessage"
 import { Logger } from "@shared/services/Logger"
@@ -1188,6 +1189,31 @@ function asFiniteNumber(value: unknown): number | undefined {
 const INTERNAL_STATUS_NOTICES = new Set(["compaction-budget-adjusted"])
 
 /**
+ * Extract a condensed-thinking payload from a status notice's metadata.
+ *
+ * Emitted by the capped-thinking condenser (see
+ * sdk/packages/core/src/extensions/context/capped-thinking.ts), which runs
+ * inside `prepareTurn` and has no other way to reach the transcript.
+ */
+export function parseThinkingCondensedNoticeMetadata(
+	metadata: Record<string, unknown> | undefined,
+): ClineThinkingCondensedInfo | undefined {
+	if (!metadata || metadata.kind !== "capped_thinking") {
+		return undefined
+	}
+	const note = typeof metadata.note === "string" ? metadata.note.trim() : ""
+	if (note === "") {
+		return undefined
+	}
+	return {
+		note,
+		thinkingChars: asFiniteNumber(metadata.thinkingChars),
+		noteChars: asFiniteNumber(metadata.noteChars),
+		budgetTokens: asFiniteNumber(metadata.budgetTokens),
+	}
+}
+
+/**
  * Read the task checklist off a tool call's input.
  *
  * The parameter is optional on every tool, so most calls carry nothing. A
@@ -1808,6 +1834,17 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 							? state.beginCompaction()
 							: (state.takeOpenCompactionTs() ?? state.nextTs())
 					messages.push(buildCompactionMessage(compaction, ts))
+					break
+				}
+				const condensed = parseThinkingCondensedNoticeMetadata(event.metadata)
+				if (condensed) {
+					messages.push({
+						ts: state.nextTs(),
+						type: "say",
+						say: "thinking_condensed",
+						text: JSON.stringify(condensed),
+						partial: false,
+					})
 					break
 				}
 				if (INTERNAL_STATUS_NOTICES.has(event.message ?? "")) {

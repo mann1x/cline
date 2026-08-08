@@ -60,6 +60,7 @@ import ReportBugPreview from "./ReportBugPreview"
 import { RequestStartRow } from "./RequestStartRow"
 import SearchResultsDisplay from "./SearchResultsDisplay"
 import SubagentStatusRow from "./SubagentStatusRow"
+import ThinkingCondensedRow from "./ThinkingCondensedRow"
 import { ThinkingRow } from "./ThinkingRow"
 import UserMessage from "./UserMessage"
 
@@ -1023,6 +1024,8 @@ export const ChatRowContent = memo(
 						)
 					case "compaction":
 						return <CompactionRow message={message} />
+					case "thinking_condensed":
+						return <ThinkingCondensedRow message={message} />
 					default:
 						return (
 							<div>

@@ -78,6 +78,8 @@ enum ClineSay {
   PLAN_COMPLETION_RESULT = 38;
   // A screenshot returned by the `browser` tool, shown under its tool row.
   BROWSER_SCREENSHOT = 39;
+  // A capped turn's reasoning, replaced by the note it left itself.
+  THINKING_CONDENSED = 40;
 }
 
 // Enum for ClineSayTool tool types
