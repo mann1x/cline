@@ -33,7 +33,7 @@ index 78a8fa3d31d67cc20113170e887b39006cdb8df4..360e15c0bb6f847e242a28d0fe66f8da
      suffix: z.ZodOptional<z.ZodString>;
      echo: z.ZodOptional<z.ZodBoolean>;
 diff --git a/dist/index.js b/dist/index.js
-index aafa72c4167302af45db22e41a227cbaf02f792f..d8d18df30617b409899de1ea200a9c545494a64a 100644
+index aafa72c4167302af45db22e41a227cbaf02f792f..02d3e10badeca1ea866e3328232ec3fcff01ae1f 100644
 --- a/dist/index.js
 +++ b/dist/index.js
 @@ -146,15 +146,12 @@ function resolveOllamaThinkFlag({
@@ -128,15 +128,46 @@ index aafa72c4167302af45db22e41a227cbaf02f792f..d8d18df30617b409899de1ea200a9c54
            images: images.length > 0 ? images : void 0
          });
          break;
-@@ -904,6 +917,7 @@ function convertToOllamaChatMessages({
+@@ -901,10 +914,37 @@ function convertToOllamaChatMessages({
+         for (const toolResponse of content) {
+           switch (toolResponse.type) {
+             case "tool-result": {
++              const toolImages = [];
++              let toolOutput = toolResponse.output;
++              if (toolOutput != null && toolOutput.type === "content" && Array.isArray(toolOutput.value)) {
++                const keptParts = [];
++                for (const outputPart of toolOutput.value) {
++                  if (
++                    outputPart != null &&
++                    outputPart.type === "file" &&
++                    typeof outputPart.mediaType === "string" &&
++                    outputPart.mediaType.startsWith("image/") &&
++                    outputPart.data != null &&
++                    outputPart.data.type !== "reference"
++                  ) {
++                    toolImages.push(extractOllamaFileData(outputPart.data));
++                    continue;
++                  }
++                  keptParts.push(outputPart);
++                }
++                if (toolImages.length > 0) {
++                  if (keptParts.length === 0) {
++                    keptParts.push({ type: "text", text: "(image attached to this tool result)" });
++                  }
++                  toolOutput = { ...toolOutput, value: keptParts };
++                }
++              }
                messages.push({
                  role: "tool",
                  tool_call_id: toolResponse.toolCallId,
+-                content: formatOllamaToolResultOutput(toolResponse.output)
 +                tool_name: toolResponse.toolName,
-                 content: formatOllamaToolResultOutput(toolResponse.output)
++                content: formatOllamaToolResultOutput(toolOutput),
++                ...(toolImages.length > 0 ? { images: toolImages } : {})
                });
                break;
-@@ -942,7 +956,7 @@ var ollamaProviderOptions = import_v45.z.object({
+             }
+@@ -942,7 +982,7 @@ var ollamaProviderOptions = import_v45.z.object({
     *
     * Only supported by certain models like DeepSeek R1 and Qwen 3.
     */
@@ -145,7 +176,7 @@ index aafa72c4167302af45db22e41a227cbaf02f792f..d8d18df30617b409899de1ea200a9c54
    options: import_v45.z.object({
      num_ctx: import_v45.z.number().optional(),
      repeat_last_n: import_v45.z.number().optional(),
-@@ -954,7 +968,7 @@ var ollamaProviderOptions = import_v45.z.object({
+@@ -954,7 +994,7 @@ var ollamaProviderOptions = import_v45.z.object({
      top_k: import_v45.z.number().optional(),
      top_p: import_v45.z.number().optional(),
      min_p: import_v45.z.number().optional()
@@ -155,7 +186,7 @@ index aafa72c4167302af45db22e41a227cbaf02f792f..d8d18df30617b409899de1ea200a9c54
  
  // src/responses/convert-to-ollama-responses-messages.ts
 diff --git a/dist/index.mjs b/dist/index.mjs
-index 5aa396bef7354dcd523cfeabc69fe7d8ada7d4c6..3e3680d0f13e0b0a7be6163d80d9384f288a1a0f 100644
+index 5aa396bef7354dcd523cfeabc69fe7d8ada7d4c6..86a6fff4f37f73ad274c551a349ca8c4fa43c920 100644
 --- a/dist/index.mjs
 +++ b/dist/index.mjs
 @@ -135,15 +135,12 @@ function resolveOllamaThinkFlag({
@@ -250,15 +281,46 @@ index 5aa396bef7354dcd523cfeabc69fe7d8ada7d4c6..3e3680d0f13e0b0a7be6163d80d9384f
            images: images.length > 0 ? images : void 0
          });
          break;
-@@ -908,6 +921,7 @@ function convertToOllamaChatMessages({
+@@ -905,10 +918,37 @@ function convertToOllamaChatMessages({
+         for (const toolResponse of content) {
+           switch (toolResponse.type) {
+             case "tool-result": {
++              const toolImages = [];
++              let toolOutput = toolResponse.output;
++              if (toolOutput != null && toolOutput.type === "content" && Array.isArray(toolOutput.value)) {
++                const keptParts = [];
++                for (const outputPart of toolOutput.value) {
++                  if (
++                    outputPart != null &&
++                    outputPart.type === "file" &&
++                    typeof outputPart.mediaType === "string" &&
++                    outputPart.mediaType.startsWith("image/") &&
++                    outputPart.data != null &&
++                    outputPart.data.type !== "reference"
++                  ) {
++                    toolImages.push(extractOllamaFileData(outputPart.data));
++                    continue;
++                  }
++                  keptParts.push(outputPart);
++                }
++                if (toolImages.length > 0) {
++                  if (keptParts.length === 0) {
++                    keptParts.push({ type: "text", text: "(image attached to this tool result)" });
++                  }
++                  toolOutput = { ...toolOutput, value: keptParts };
++                }
++              }
                messages.push({
                  role: "tool",
                  tool_call_id: toolResponse.toolCallId,
+-                content: formatOllamaToolResultOutput(toolResponse.output)
 +                tool_name: toolResponse.toolName,
-                 content: formatOllamaToolResultOutput(toolResponse.output)
++                content: formatOllamaToolResultOutput(toolOutput),
++                ...(toolImages.length > 0 ? { images: toolImages } : {})
                });
                break;
-@@ -946,7 +960,7 @@ var ollamaProviderOptions = z5.object({
+             }
+@@ -946,7 +986,7 @@ var ollamaProviderOptions = z5.object({
     *
     * Only supported by certain models like DeepSeek R1 and Qwen 3.
     */
@@ -267,7 +329,7 @@ index 5aa396bef7354dcd523cfeabc69fe7d8ada7d4c6..3e3680d0f13e0b0a7be6163d80d9384f
    options: z5.object({
      num_ctx: z5.number().optional(),
      repeat_last_n: z5.number().optional(),
-@@ -958,7 +972,7 @@ var ollamaProviderOptions = z5.object({
+@@ -958,7 +998,7 @@ var ollamaProviderOptions = z5.object({
      top_k: z5.number().optional(),
      top_p: z5.number().optional(),
      min_p: z5.number().optional()

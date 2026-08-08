@@ -30,7 +30,7 @@ import { OLLAMA_DEFAULT_CONTEXT_WINDOW } from "../builtins";
 import type { ProviderSamplingOptions } from "../config";
 import { ensureFetch, resolveApiKey } from "../http";
 import { createRetryEmptyResponseMiddleware } from "../middleware/retry-empty-response";
-import { splitToolImagesMiddleware } from "../middleware/split-tool-images";
+import { keepToolImagesMiddleware } from "../middleware/split-tool-images";
 import {
 	createOllamaHealthProbe,
 	watchForStall,
@@ -500,9 +500,15 @@ export async function createOllamaProviderModule(
 	// option-rule pipeline already composed.
 	// Retry empty responses (a common local-backend glitch that otherwise
 	// hard-fails the task). Outermost so each retry re-runs the whole request.
-	// `splitToolImagesMiddleware` is inner, for the same reason as the
-	// OpenAI-compatible vendor: the downstream converter stringifies
-	// multimodal tool-result content, losing image bytes.
+	//
+	// `keepToolImagesMiddleware` is inner, and is the half of the shared media
+	// handling that this vendor wants: the budget checks and base64 validation,
+	// without the relocation to a synthetic user message. The native API carries
+	// `images` on a tool message — the vendored converter is patched to fill it
+	// — and relocating instead costs the model its entire reasoning history,
+	// because a chat template replays thinking only from the last user turn
+	// onward. See `ollama-tool-images.ts`, which folds the relocation back at
+	// the wire layer if it ever reappears.
 	const retryEmptyResponseMiddleware = createRetryEmptyResponseMiddleware({
 		logger: context.logger,
 	});
@@ -510,7 +516,7 @@ export async function createOllamaProviderModule(
 		model: (modelId) =>
 			wrapLanguageModel({
 				model: provider.chat(modelId) as LanguageModelV4,
-				middleware: [retryEmptyResponseMiddleware, splitToolImagesMiddleware],
+				middleware: [retryEmptyResponseMiddleware, keepToolImagesMiddleware],
 			}),
 		buildStreamConfig: buildOllamaStreamConfig,
 	};
