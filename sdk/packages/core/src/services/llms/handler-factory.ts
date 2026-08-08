@@ -266,6 +266,7 @@ export function createAgentModelFromConfig(
 		{
 			maxTokens: normalizedProviderConfig.maxOutputTokens,
 			temperature: normalizedProviderConfig.temperature,
+			auxiliary: normalizedProviderConfig.auxiliary,
 		},
 	);
 }

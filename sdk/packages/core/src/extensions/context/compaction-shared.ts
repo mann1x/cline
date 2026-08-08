@@ -1621,9 +1621,13 @@ export function resolveSummarizerConfig(options: {
 			return {
 				...rest,
 				thinking: false,
+				auxiliary: true,
 			};
 		}
-		return { ...config, maxOutputTokens, thinking: false };
+		// `auxiliary` travels with every summariser config there is, so the call
+		// it produces cannot be mistaken for the conversation's when the request
+		// path records what it just sent.
+		return { ...config, maxOutputTokens, thinking: false, auxiliary: true };
 	};
 	if (!summarizer) {
 		// The caller's cap outranks the config's own. This branch runs on the

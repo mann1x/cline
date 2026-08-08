@@ -199,6 +199,7 @@ class GatewayModelAdapter implements AgentModel {
 				requestedReasoning,
 			),
 			signal: request.signal ?? this.defaults?.signal,
+			auxiliary: this.defaults?.auxiliary,
 		});
 	}
 }
@@ -261,6 +262,11 @@ function describeOutputBudget(details: {
 }
 
 interface GatewayOutputCapInput {
+	/**
+	 * Skip the process-wide overflow record. Set for calls the machinery makes
+	 * for itself, whose budget arithmetic says nothing about the conversation's.
+	 */
+	suppressGlobalNotes?: boolean;
 	requestedMaxTokens?: number;
 	model: Pick<GatewayModelDefinition, "contextWindow" | "maxOutputTokens">;
 	estimatedInputTokens: number;
@@ -351,7 +357,9 @@ export function resolveGatewayOutputCap(
 			// cap from 20,547 to nothing over six turns while auto-compact sat
 			// below a trigger computed from a different window. Recording it here
 			// means finding the overflow and reporting it are the same act.
-			noteContextOverflow(report);
+			if (!input.suppressGlobalNotes) {
+				noteContextOverflow(report);
+			}
 			input.onContextOverflow?.(report);
 			// No cap goes out, but the window is still what decided that, and the
 			// next truncation is squarely compaction's to fix.
@@ -487,6 +495,9 @@ export class DefaultGateway implements Gateway {
 					estimateThinkingTokens(reasoningChars)
 				: estimateTokens(inputChars);
 		const outputCap = resolveGatewayOutputCap({
+			// An auxiliary call running out of room is its own problem, not a
+			// reason to compact the conversation it was summarising.
+			suppressGlobalNotes: request.auxiliary,
 			requestedMaxTokens: request.maxTokens,
 			model: resolved.model,
 			estimatedInputTokens,
@@ -505,9 +516,12 @@ export class DefaultGateway implements Gateway {
 			},
 		});
 		const maxTokens = outputCap.maxTokens;
-		// Left for the agent loop, which sees the truncation but not the terms
-		// that caused it.
-		noteOutputCap(outputCap);
+		if (!request.auxiliary) {
+			// Left for the agent loop, which sees the truncation but not the terms
+			// that caused it. Not from an auxiliary call: its cap is its own, and
+			// a conversation turn truncating afterwards would be attributed to it.
+			noteOutputCap(outputCap);
+		}
 		// The terms behind the cap, not just the cap. A session was watched
 		// ratchet from 20,547 down to no cap at all over six turns while
 		// compaction sat below its trigger the whole way, and the logs could not
@@ -543,6 +557,12 @@ export class DefaultGateway implements Gateway {
 			},
 		);
 
+		if (request.auxiliary) {
+			// Served identically, but it does not get to speak for the session:
+			// a condenser prompt is not the conversation, and the ratio measured
+			// from one is not the ratio the conversation tokenizes at.
+			return toAsyncIterable(stream);
+		}
 		return calibrateFromUsage(
 			toAsyncIterable(stream),
 			inputChars,

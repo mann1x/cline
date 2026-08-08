@@ -1389,6 +1389,34 @@ describe("createContextCompactionPrepareTurn", () => {
 		expect(anthropicConfig.maxOutputTokens).toBe(1_024);
 	});
 
+	it("marks every summarizer config as auxiliary", () => {
+		// The request path keeps one process-wide record of the last request --
+		// its token count, its chars-per-token, what capped it -- and compaction
+		// reads that record as the conversation's. Measured: a 25,969-token
+		// condenser prompt overwrote a 67,572-token conversation, and the next
+		// pass stood down at `triggerInputTokens: 25969` on a transcript of
+		// 262,915 characters. Every branch here has to carry the mark, including
+		// the one that strips `maxOutputTokens`.
+		const codexConfig = resolveSummarizerConfig({
+			activeProviderConfig: {
+				providerId: "openai-codex",
+				modelId: "gpt-5.4",
+				maxOutputTokens: 16_000,
+			},
+		});
+		const activeConfig = resolveSummarizerConfig({
+			activeProviderConfig: { providerId: "anthropic", modelId: "claude-sonnet" },
+		});
+		const dedicatedConfig = resolveSummarizerConfig({
+			activeProviderConfig: { providerId: "anthropic", modelId: "claude-sonnet" },
+			summarizer: { providerId: "openai", modelId: "small-summary" },
+		});
+
+		expect(codexConfig.auxiliary).toBe(true);
+		expect(activeConfig.auxiliary).toBe(true);
+		expect(dedicatedConfig.auxiliary).toBe(true);
+	});
+
 	it("preserves summarizer modelInfo without a nested providerConfig", () => {
 		const resolved = resolveSummarizerConfig({
 			activeProviderConfig: {

@@ -355,6 +355,30 @@ describe("sdk-gateway", () => {
 		expect(uncapped).toMatchObject({ source: "uncapped", windowBound: false });
 	});
 
+	it("keeps an auxiliary call out of the process-wide overflow record", () => {
+		// A summariser running out of room is its own problem. Left in the
+		// record, it forces a compaction of the conversation it was summarising,
+		// on the strength of arithmetic about a different request entirely.
+		resetTokenCalibration();
+		const overflowing = {
+			requestedMaxTokens: 32_000,
+			model: { maxOutputTokens: 32_000, contextWindow: 60_000 },
+			estimatedInputTokens: 59_990,
+		};
+
+		expect(
+			resolveGatewayOutputCap({ ...overflowing, suppressGlobalNotes: true })
+				.source,
+		).toBe("context-overflow");
+		expect(consumeContextOverflow()).toBeUndefined();
+
+		// The conversation's own overflow is still recorded.
+		expect(resolveGatewayOutputCap(overflowing).source).toBe(
+			"context-overflow",
+		);
+		expect(consumeContextOverflow()).toMatchObject({ contextWindow: 60_000 });
+	});
+
 	it("credits a tie to the window", () => {
 		// Two terms landing on the same number leave no evidence which one
 		// truncated the reply. Withholding a compaction the window did need
