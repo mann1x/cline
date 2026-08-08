@@ -21,7 +21,9 @@ import {
 	createTokenEstimator,
 	estimateTokens,
 	findCutPlan,
+	buildSummaryMessage,
 	buildThinkingSummaryRequest,
+	getCompactionSummaryMetadata,
 	resolveCompactionOutputBudgets,
 	resolveEffectiveMaxInputTokens,
 	resolvePreserveRecentTokens,
@@ -1503,14 +1505,20 @@ describe("createContextCompactionPrepareTurn", () => {
 				},
 			}),
 		});
-		// The retrospective leads, as the summary message's own reasoning, and
-		// the summary text follows it.
+		// The retrospective leads and the summary follows, both as text. Not as a
+		// reasoning block: those are only valid on an assistant message, and a
+		// live run died on `AI_TypeValidationError: The messages do not match the
+		// ModelMessage[] schema` when this message carried one.
 		expect(result?.messages[0]?.content).toEqual([
-			expect.objectContaining({ type: "thinking" }),
+			expect.objectContaining({ type: "text" }),
 			expect.objectContaining({ type: "text" }),
 		]);
+		expect(JSON.stringify(result?.messages[0])).not.toContain('"thinking"');
+		expect(JSON.stringify(result?.messages[0])).not.toContain('"reasoning"');
 		const summaryBlock = Array.isArray(result?.messages[0]?.content)
-			? result.messages[0].content.find((block) => block.type === "text")
+			? result.messages[0].content.find(
+					(block) => block.type === "text" && block.text.startsWith("Context summary:"),
+				)
 			: undefined;
 		const summaryContent =
 			summaryBlock?.type === "text" ? summaryBlock.text : "";
@@ -5131,3 +5139,64 @@ describe("buildThinkingSummaryRequest", () => {
 		).toContain("Be brutal and be brief.");
 	});
 });
+
+describe("buildSummaryMessage", () => {
+	// The wire rejects it. Reasoning parts are valid only on an assistant
+	// message, and the compaction summary is the user turn that replaces the
+	// transcript — so a retrospective shipped as a thinking block took down a
+	// live run with `AI_TypeValidationError: The messages do not match the
+	// ModelMessage[] schema`, with a perfectly good retrospective inside it.
+	it("never puts reasoning on the user message the transcript is replaced with", () => {
+		const message = buildSummaryMessage({
+			summary: "what the task has done",
+			fileOps: { readFiles: [], modifiedFiles: [] },
+			tokensBefore: 1_000,
+			userRunSpan: 1,
+			thinkingSummary: "## What worked\n- narrowing the range",
+		});
+
+		expect(message.role).toBe("user");
+		expect(
+			Array.isArray(message.content) ? message.content.map((block) => block.type) : [],
+		).toEqual(["text", "text"]);
+	});
+
+	it("puts the retrospective first, and says what it is", () => {
+		const message = buildSummaryMessage({
+			summary: "what the task has done",
+			fileOps: { readFiles: [], modifiedFiles: [] },
+			tokensBefore: 1_000,
+			userRunSpan: 1,
+			thinkingSummary: "## What worked\n- narrowing the range",
+		});
+
+		const first = Array.isArray(message.content) ? message.content[0] : undefined;
+		expect(first?.type === "text" ? first.text : "").toContain("Retrospective");
+		expect(first?.type === "text" ? first.text : "").toContain("narrowing the range");
+	});
+
+	it("keeps it on the metadata, which is what chains it to the next compaction", () => {
+		const message = buildSummaryMessage({
+			summary: "s",
+			fileOps: { readFiles: [], modifiedFiles: [] },
+			tokensBefore: 1,
+			userRunSpan: 1,
+			generation: 3,
+			thinkingSummary: "lessons",
+		});
+
+		expect(getCompactionSummaryMetadata(message)?.thinkingSummary).toBe("lessons");
+		expect(getCompactionSummaryMetadata(message)?.generation).toBe(3);
+	});
+
+	it("is one block when there was no retrospective", () => {
+		const message = buildSummaryMessage({
+			summary: "s",
+			fileOps: { readFiles: [], modifiedFiles: [] },
+			tokensBefore: 1,
+			userRunSpan: 1,
+		});
+
+		expect(Array.isArray(message.content) ? message.content.length : 0).toBe(1);
+	});
+})

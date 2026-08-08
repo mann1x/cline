@@ -1674,14 +1674,23 @@ export function buildSummaryMessage(options: {
 	return {
 		role: "user",
 		content: [
-			// Ahead of the text, and as reasoning rather than text, because that
-			// is what it is: the model's own account of how the work went,
-			// occupying the same position in the message that its thinking
-			// occupied in the turns being replaced.
+			// Ahead of the summary, because it is what the model should read
+			// first: how the work went, before what the work was.
+			//
+			// As text, not as a reasoning block. That was the first attempt and
+			// it fails at the wire: reasoning parts are only valid on an
+			// assistant message, and this message is the user turn that replaces
+			// the transcript. A live run died on
+			// `AI_TypeValidationError: The messages do not match the
+			// ModelMessage[] schema` with a perfectly good retrospective inside
+			// it. The heading carries the framing that the block type cannot.
 			...(thinkingSummary
-				? ([
-						{ type: "thinking", thinking: thinkingSummary },
-					] as MessageWithMetadata["content"] & object[])
+				? [
+						{
+							type: "text" as const,
+							text: `Retrospective on the work this summary replaces — your own assessment, carried forward:\n\n${thinkingSummary}`,
+						},
+					]
 				: []),
 			{
 				type: "text",
