@@ -65,17 +65,42 @@ const BUDGET_MESSAGE_TAIL_MARGIN_CHARS = 400;
  * is no guessing at the wording — a model with no message configured has no
  * marker to find, and this is not consulted for one.
  */
+function collapseWhitespace(text: string): string {
+	return text.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * The line of the message to look for.
+ *
+ * The longest one, not the first. A message from a Modelfile arrives as the
+ * author wrote it — `v7-coder_tb` opens its with two blank lines — and one a
+ * user typed into the settings box can open with anything at all, including a
+ * word short enough to appear in ordinary reasoning. The longest line is the
+ * one least likely to be either.
+ */
+function budgetMessageMarker(message: string): string {
+	let marker = "";
+	for (const line of message.split("\n")) {
+		const collapsed = collapseWhitespace(line);
+		if (collapsed.length > marker.length) {
+			marker = collapsed;
+		}
+	}
+	return marker;
+}
+
 function endsWithBudgetMessage(thinking: string, message: string): boolean {
-	const marker = message
-		.split("\n")
-		.map((line) => line.trim())
-		.find((line) => line.length > 0);
+	const marker = budgetMessageMarker(message);
 	if (!marker) {
 		return false;
 	}
-	return thinking
-		.slice(-(marker.length + BUDGET_MESSAGE_TAIL_MARGIN_CHARS))
-		.includes(marker);
+	// Both sides collapsed: the same sentence is not always laid out the same
+	// way twice. A Modelfile writes its line breaks as `\n` escapes, a user
+	// types real ones, and the model's own copy of the message is whatever the
+	// server streamed — which is not required to keep either.
+	return collapseWhitespace(
+		thinking.slice(-(marker.length + BUDGET_MESSAGE_TAIL_MARGIN_CHARS)),
+	).includes(marker);
 }
 
 /** What the note is allowed to cost. It is a handful of lines by design. */
@@ -207,23 +232,51 @@ function producedCharacters(message: MessageWithMetadata): number {
 }
 
 /**
- * The most recent turn whose reasoning hit the cap, or -1.
+ * Why a look for a capped turn came back with nothing.
+ *
+ * Every one of these has been mistaken for "the feature is broken" at least
+ * once, and from the outside they are indistinguishable: no note, no error, no
+ * line. They are distinguishable from in here, so they are reported.
+ */
+export type CappedThinkingStandDown =
+	| "no-budget"
+	| "no-assistant-turn"
+	| "turn-did-not-reason"
+	| "budget-message-absent"
+	| "under-budget";
+
+export interface CappedThinkingLookup {
+	index: number;
+	reason?: CappedThinkingStandDown;
+	/** Characters of reasoning on the turn that was examined. */
+	thinkingChars?: number;
+	/** Its last few hundred characters, which is where the message would be. */
+	thinkingTail?: string;
+	/** What the estimate made of it, when the estimate is what decided. */
+	measuredTokens?: number;
+}
+
+/** How much of the reasoning tail a stand-down line carries. */
+const STAND_DOWN_TAIL_CHARS = 240;
+
+/**
+ * The most recent turn whose reasoning hit the cap, and why not when not.
  *
  * Only the most recent: older capped turns have already had their consequences
  * play out in the transcript, and rewriting history the model has since acted on
  * is a different and more dangerous idea than helping it continue.
  */
-export function findCappedThinkingIndex(
+export function locateCappedThinking(
 	messages: readonly MessageWithMetadata[],
 	budgetTokens: number | undefined,
 	options?: { budgetMessage?: string },
-): number {
+): CappedThinkingLookup {
 	if (
 		typeof budgetTokens !== "number" ||
 		!Number.isFinite(budgetTokens) ||
 		budgetTokens <= 0
 	) {
-		return -1;
+		return { index: -1, reason: "no-budget" };
 	}
 	for (let index = messages.length - 1; index >= 0; index -= 1) {
 		const message = messages[index];
@@ -235,8 +288,12 @@ export function findCappedThinkingIndex(
 			// An assistant turn that did not reason at all ends the search: the
 			// capped turn we care about is the latest one, and anything before
 			// this has already been superseded.
-			return -1;
+			return { index: -1, reason: "turn-did-not-reason", thinkingChars: 0 };
 		}
+		const found = {
+			thinkingChars: thinking.length,
+			thinkingTail: thinking.slice(-STAND_DOWN_TAIL_CHARS),
+		};
 		// A known budget message settles it either way. The measurement above is
 		// good but not certain — it cannot tell which cap stopped a turn, and it
 		// falls back to a ratio for turns that reported no usage — whereas the
@@ -245,14 +302,25 @@ export function findCappedThinkingIndex(
 		// what runs when nobody configured one.
 		const budgetMessage = options?.budgetMessage?.trim();
 		if (budgetMessage) {
-			return endsWithBudgetMessage(thinking, budgetMessage) ? index : -1;
+			return endsWithBudgetMessage(thinking, budgetMessage)
+				? { index, ...found }
+				: { index: -1, reason: "budget-message-absent", ...found };
 		}
-		return measuredThinkingTokens(message, thinking) >=
-			budgetTokens * CAP_PROXIMITY
-			? index
-			: -1;
+		const measuredTokens = measuredThinkingTokens(message, thinking);
+		return measuredTokens >= budgetTokens * CAP_PROXIMITY
+			? { index, measuredTokens, ...found }
+			: { index: -1, reason: "under-budget", measuredTokens, ...found };
 	}
-	return -1;
+	return { index: -1, reason: "no-assistant-turn" };
+}
+
+/** The index alone, for callers that have nothing to report it to. */
+export function findCappedThinkingIndex(
+	messages: readonly MessageWithMetadata[],
+	budgetTokens: number | undefined,
+	options?: { budgetMessage?: string },
+): number {
+	return locateCappedThinking(messages, budgetTokens, options).index;
 }
 
 export function buildCappedThinkingRequest(options: {
@@ -350,15 +418,37 @@ export function createCappedThinkingPrepareTurn<T extends PrepareTurn>(
 	// times the pipeline sees it, and a re-run of the same turn after an abort
 	// reuses the note rather than paying for it again.
 	const condensed = new Map<string, string>();
+	/** Stand-downs already reported, so the log carries each one once. */
+	const reportedStandDowns = new Set<string>();
 
 	const condense = async (
 		messages: MessageWithMetadata[],
 		emitStatusNotice?: PrepareTurnInput["emitStatusNotice"],
 	): Promise<MessageWithMetadata[]> => {
-		const index = findCappedThinkingIndex(messages, config.budgetTokens, {
+		const lookup = locateCappedThinking(messages, config.budgetTokens, {
 			budgetMessage: config.budgetMessage,
 		});
+		const index = lookup.index;
 		if (index < 0) {
+			// Once per distinct reasoning, not once per turn: a run asks this on
+			// every request and the answer only changes when the turn does.
+			// Without it a stand-down is invisible, and every one of these
+			// reasons has already been read as "the condenser is broken" —
+			// twice, at the cost of a morning each.
+			const seen = `${lookup.reason}:${lookup.thinkingTail ?? ""}`;
+			if (!reportedStandDowns.has(seen)) {
+				reportedStandDowns.add(seen);
+				config.logger?.debug?.("Capped-thinking condensation stood down", {
+					reason: lookup.reason,
+					thinkingChars: lookup.thinkingChars,
+					measuredTokens: lookup.measuredTokens,
+					budgetTokens: config.budgetTokens,
+					// The tail is where the budget message would be, so when the
+					// reason is that it was not found, this is the evidence.
+					thinkingTail: lookup.thinkingTail,
+					budgetMessage: config.budgetMessage,
+				});
+			}
 			return messages;
 		}
 		const thinking = thinkingText(messages[index]);

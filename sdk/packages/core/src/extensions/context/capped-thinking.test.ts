@@ -5,6 +5,7 @@ import {
 	buildCappedThinkingRequest,
 	createCappedThinkingPrepareTurn,
 	findCappedThinkingIndex,
+	locateCappedThinking,
 } from "./capped-thinking";
 
 /**
@@ -64,6 +65,54 @@ describe("finding the turn that ran out of thinking budget", () => {
 		expect(findCappedThinkingIndex([measuredTurn(45_000, 16_000)], budget)).toBe(0);
 		expect(findCappedThinkingIndex([measuredTurn(45_000, 5_000)], budget)).toBe(-1);
 	});
+
+	it("matches a Modelfile message however its line breaks survived the trip", () => {
+		// `v7-coder_tb` writes its message as one quoted line of `\n` escapes
+		// opening with two blank lines. The model's own copy of it is whatever
+		// the server streamed, which kept neither the leading blanks nor,
+		// between the two sentences, the break. Comparing the layouts rather
+		// than the words denied every capped turn in a whole run.
+		const message =
+			"\n\nI have used my thinking budget. I must stop analysing now and act on what I have: make the tool call, or give a short final answer if no call is needed.\nI'll be more terse and concise now and maybe I need to consider a different approach.\n"
+		const thinking =
+			`${"x".repeat(30_000)}\nI have used my thinking budget. I must stop analysing now and act on what I have: make the tool call, or give a short final answer if no call is needed.I'll be more terse and concise now and maybe I need to consider a different approach.`
+		const capped = {
+			role: "assistant",
+			content: [
+				{ type: "thinking", thinking },
+				{ type: "tool_use", id: "c", name: "editor", input: {} },
+			],
+		} as MessageWithMetadata
+
+		expect(
+			findCappedThinkingIndex([capped], budget, { budgetMessage: message.trim() }),
+		).toBe(0)
+	})
+
+	it("looks for the longest line of a message, not its first", () => {
+		// A message typed into the settings box can open with anything, and a
+		// short opener is a phrase ordinary reasoning also uses.
+		const message = "Stop.\nYou have spent the thinking budget you were given for this turn."
+		const innocent = turn(45_000)
+
+		expect(findCappedThinkingIndex([innocent], budget, { budgetMessage: message })).toBe(-1)
+	})
+
+	it("says why it found nothing", () => {
+		const message = "You have spent the thinking budget you were given for this turn."
+
+		expect(locateCappedThinking([turn(45_000)], budget, { budgetMessage: message })).toMatchObject({
+			index: -1,
+			reason: "budget-message-absent",
+			thinkingChars: 45_000,
+		})
+		expect(locateCappedThinking([turn(2_000)], budget)).toMatchObject({
+			index: -1,
+			reason: "under-budget",
+		})
+		expect(locateCappedThinking([], budget)).toMatchObject({ index: -1, reason: "no-assistant-turn" })
+		expect(locateCappedThinking([turn(45_000)], undefined)).toMatchObject({ index: -1, reason: "no-budget" })
+	})
 
 	it("stands down when no allowance is known", () => {
 		expect(findCappedThinkingIndex([turn(45_000)], undefined)).toBe(-1);
