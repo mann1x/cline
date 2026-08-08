@@ -356,6 +356,60 @@ export function findCappedThinkingIndex(
 	return locateCappedThinking(messages, budgetTokens, options).index;
 }
 
+/**
+ * The last few messages, as roles and block types.
+ *
+ * The detector reads the transcript the runtime hands it, which is not
+ * necessarily the one on disk — and the difference between those two is the
+ * only thing a stand-down cannot be diagnosed without. Written as
+ * `assistant:thinking(35438),tool_use` so one line says what was there.
+ */
+function describeTranscriptTail(
+	messages: readonly MessageWithMetadata[],
+	count = 3,
+): string {
+	return messages
+		.slice(-count)
+		.map((message) => {
+			if (!Array.isArray(message.content)) {
+				return `${message.role}:text`;
+			}
+			const blocks = message.content.map((block) =>
+				block.type === "thinking"
+					? `thinking(${block.thinking.length})`
+					: block.type,
+			);
+			return `${message.role}:${blocks.join("+") || "empty"}`;
+		})
+		.join(" ");
+}
+
+/** One readable line saying which stand-down this was, and on what evidence. */
+function describeStandDown(
+	lookup: CappedThinkingLookup,
+	config: { budgetTokens?: number; budgetMessage?: string },
+): string {
+	const parts: string[] = [lookup.reason ?? "unknown"];
+	if (lookup.thinkingChars !== undefined) {
+		parts.push(`thinking=${lookup.thinkingChars} chars`);
+	}
+	if (lookup.measuredTokens !== undefined) {
+		parts.push(
+			`measured=${lookup.measuredTokens} of ${config.budgetTokens ?? "?"} tokens`,
+		);
+	}
+	if (lookup.skippedFragments) {
+		parts.push(`callOnlyTurnsSkipped=${lookup.skippedFragments}`);
+	}
+	if (lookup.reason === "budget-message-absent") {
+		// The two strings that failed to match, both on one line, because the
+		// difference between them is the whole answer.
+		parts.push(`looked for=${JSON.stringify(config.budgetMessage ?? "")}`);
+		parts.push(`tail=${JSON.stringify(lookup.thinkingTail ?? "")}`);
+	}
+	return parts.join(" ");
+}
+
 export function buildCappedThinkingRequest(options: {
 	thinking: string;
 	outcomes: readonly ToolOutcome[];
@@ -471,16 +525,23 @@ export function createCappedThinkingPrepareTurn<T extends PrepareTurn>(
 			const seen = `${lookup.reason}:${lookup.thinkingTail ?? ""}`;
 			if (!reportedStandDowns.has(seen)) {
 				reportedStandDowns.add(seen);
-				config.logger?.debug?.("Capped-thinking condensation stood down", {
-					reason: lookup.reason,
-					thinkingChars: lookup.thinkingChars,
-					measuredTokens: lookup.measuredTokens,
-					budgetTokens: config.budgetTokens,
-					// The tail is where the budget message would be, so when the
-					// reason is that it was not found, this is the evidence.
-					thinkingTail: lookup.thinkingTail,
-					budgetMessage: config.budgetMessage,
-				});
+				// Written into the message rather than passed beside it: the
+				// host logger appends structured arguments only when verbose
+				// logging is on, and this line exists precisely for the case
+				// where someone is reading an ordinary log asking why nothing
+				// happened. The object still goes along for anyone running
+				// verbose.
+				config.logger?.debug?.(
+					`Capped-thinking condensation stood down: ${describeStandDown(lookup, config)} transcriptTail=[${describeTranscriptTail(messages)}]`,
+					{
+						reason: lookup.reason,
+						thinkingChars: lookup.thinkingChars,
+						measuredTokens: lookup.measuredTokens,
+						budgetTokens: config.budgetTokens,
+						thinkingTail: lookup.thinkingTail,
+						budgetMessage: config.budgetMessage,
+					},
+				);
 			}
 			return messages;
 		}
@@ -525,11 +586,14 @@ export function createCappedThinkingPrepareTurn<T extends PrepareTurn>(
 		if (!note) {
 			return messages;
 		}
-		config.logger?.debug?.("Condensed capped thinking", {
-			thinkingChars: thinking.length,
-			noteChars: note.length,
-			budgetTokens: config.budgetTokens,
-		});
+		config.logger?.debug?.(
+			`Condensed capped thinking: ${thinking.length} chars of reasoning to a ${note.length}-char note`,
+			{
+				thinkingChars: thinking.length,
+				noteChars: note.length,
+				budgetTokens: config.budgetTokens,
+			},
+		);
 		// On screen as well as in the log. This note is the only record of what a
 		// capped turn concluded — the reasoning it replaces is not sent again —
 		// and a summary nobody can read is a summary nobody can judge.
