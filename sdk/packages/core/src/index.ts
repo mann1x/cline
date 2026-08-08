@@ -870,6 +870,7 @@ export {
 } from "./extensions/context/compaction-shared";
 export {
 	DEFAULT_CAPPED_THINKING_PROMPT,
+	createCappedThinkingNoteWriter,
 	createCappedThinkingPrepareTurn,
 	findCappedThinkingIndex,
 } from "./extensions/context/capped-thinking";

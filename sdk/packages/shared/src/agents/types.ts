@@ -865,6 +865,22 @@ export interface AgentConfig {
 		| AgentPrepareTurnResult
 		| undefined;
 	/**
+	 * Optional last look at reasoning that is about to be discarded.
+	 *
+	 * A turn cut off at the output cap with no tool call is thrown away whole --
+	 * the reply was never finished, and resending it would spend the same budget
+	 * on output already abandoned. But the reasoning inside it is the only turn
+	 * that reliably ends at the model's thinking budget, and it is exactly the
+	 * work the retry is about to redo from nothing.
+	 *
+	 * Called with that reasoning before it is dropped. Whatever comes back is
+	 * given to the model as a note it left itself; the discarded message still
+	 * never re-enters the transcript. Returning nothing discards as before.
+	 */
+	condenseDiscardedReasoning?: (
+		reasoning: string,
+	) => Promise<string | undefined> | string | undefined;
+	/**
 	 * Optional Telemetry service for emitting structured events about agent execution to configured telemetry backends.
 	 */
 	telemetry?: ITelemetryService;

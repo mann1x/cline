@@ -109,6 +109,16 @@ const MAX_TOKENS_INCOMPLETE_TURN_REMINDER =
 	"If the work you were planning does not fit in one reply, do the part that fits, call the tools it needs, and continue in the next turn.";
 
 /**
+ * How the salvaged reasoning is introduced to the model.
+ *
+ * As the model's own note, not as a system finding: it wrote the reasoning this
+ * summarises, and a turn told "here is what you concluded" resumes, where one
+ * told "here is some context" re-derives it to check.
+ */
+const DISCARDED_REASONING_NOTE_PREFIX =
+	"Before it was discarded, your reasoning was condensed into the note below. It is what you had worked out when you ran out of room. Continue from it rather than repeating it.";
+
+/**
  * Sent when a turn spent its tokens and delivered nothing.
  *
  * Same wording as the output-limit reminder for the same reason: what the model
@@ -783,6 +793,54 @@ export class AgentRuntime {
 		return this.state.usage.outputTokens > before.outputTokens;
 	}
 
+
+	/**
+	 * Condense a truncated turn's reasoning, if the host asked to be given the
+	 * chance, and never at the cost of the retry it exists to help.
+	 *
+	 * A condenser that throws, or that has nothing to say, leaves the discard
+	 * exactly as it was.
+	 */
+	private async noteDiscardedReasoning(
+		message: AgentMessage,
+	): Promise<string | undefined> {
+		const condense = this.config.condenseDiscardedReasoning;
+		if (!condense) {
+			return undefined;
+		}
+		const reasoning = message.content
+			.filter(
+				(part: AgentMessagePart): part is AgentMessagePart & { text: string } =>
+					part.type === "reasoning" && typeof (part as { text?: unknown }).text === "string",
+			)
+			.map((part) => part.text)
+			.join("")
+			.trim();
+		if (!reasoning) {
+			return undefined;
+		}
+		try {
+			const note = (await condense(reasoning))?.trim();
+			if (!note) {
+				return undefined;
+			}
+			this.config.logger?.log?.(
+				`Condensed ${reasoning.length} chars of discarded reasoning into a ${note.length}-char note for the retry`,
+				{ severity: "info", reasoningChars: reasoning.length, noteChars: note.length },
+			);
+			return note;
+		} catch (error) {
+			this.config.logger?.log?.(
+				"Could not condense the discarded reasoning; retrying without a note",
+				{
+					severity: "warn",
+					errorMessage: error instanceof Error ? error.message : String(error),
+				},
+			);
+			return undefined;
+		}
+	}
+
 	private getMaxTokensRetryBudget(): number {
 		const configured = this.config.completionPolicy?.maxTruncatedTurnRetries;
 		return typeof configured === "number" && Number.isFinite(configured)
@@ -937,6 +995,13 @@ export class AgentRuntime {
 					// to be held by a limit nobody set.
 					const outputCap = lastOutputCap();
 					this.compactBeforeNextTurn = outputCap?.windowBound ?? true;
+					// The reasoning goes with the message, unless the host wants a note
+					// out of it first. This is the only turn whose thinking reliably
+					// ends at the model's budget -- a think ends *at* the budget message
+					// only when there was no room to continue past it, which is the same
+					// condition that lands here -- so a condenser watching the transcript
+					// never sees one.
+					const discardedNote = await this.noteDiscardedReasoning(message);
 					await this.emit({
 						type: "status-notice",
 						snapshot: this.snapshot(),
@@ -952,7 +1017,9 @@ export class AgentRuntime {
 						},
 					});
 					await this.addUserReminderMessage(
-						MAX_TOKENS_INCOMPLETE_TURN_REMINDER,
+						discardedNote
+							? `${MAX_TOKENS_INCOMPLETE_TURN_REMINDER}\n\n${DISCARDED_REASONING_NOTE_PREFIX}\n\n${discardedNote}`
+							: MAX_TOKENS_INCOMPLETE_TURN_REMINDER,
 					);
 					continue;
 				}

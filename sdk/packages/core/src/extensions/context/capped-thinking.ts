@@ -472,6 +472,104 @@ type PrepareTurn = (
 ) => PrepareTurnResult | Promise<PrepareTurnResult>;
 
 /**
+ * Turn one capped think into the note that replaces it.
+ *
+ * Extracted from the prepare-turn pipeline because the pipeline is not the only
+ * place a capped think appears -- and, as it turned out, not the place it
+ * appears in the case this feature exists for. See
+ * `createCappedThinkingNoteWriter`.
+ */
+async function writeCappedThinkingNote(options: {
+	thinking: string;
+	outcomes: readonly ToolOutcome[];
+	config: CappedThinkingCondenserConfig;
+	providerConfig: ProviderConfig;
+}): Promise<string> {
+	const request = buildCappedThinkingRequest({
+		thinking: options.thinking,
+		outcomes: options.outcomes,
+		promptTemplate: options.config.promptTemplate,
+	});
+	try {
+		const handler = await createHandlerAsync(
+			resolveSummarizerConfig({
+				activeProviderConfig: options.providerConfig,
+				summarizer: options.config.summarizer,
+				outputTokenCap: CONDENSED_THINKING_MAX_TOKENS,
+			}),
+		);
+		let text = "";
+		for await (const chunk of handler.createMessage(request, [])) {
+			if (chunk.type === "text") {
+				text += chunk.text;
+			}
+		}
+		return truncateText(text.trim(), CONDENSED_THINKING_MAX_CHARS);
+	} catch (error) {
+		// A note is worth having and worth nothing at the price of the turn it
+		// was meant to help.
+		options.config.logger?.log(
+			"Capped-thinking condensation failed; keeping the reasoning as it stands",
+			{
+				severity: "warn",
+				errorMessage: error instanceof Error ? error.message : String(error),
+			},
+		);
+		return "";
+	}
+}
+
+/**
+ * Condense reasoning that is about to be thrown away rather than sent again.
+ *
+ * The transcript is the wrong place to catch the turn this feature was built
+ * for. A think only ends *at* the budget message when the model had no room to
+ * continue -- which means the same turn also ends at the output cap with no
+ * tool call, and the agent loop discards those before they reach the history.
+ * Measured across a full session: every capped turn was discarded, the detector
+ * re-examined the previous uncapped one, and the condenser stood down on each
+ * of them, correctly and uselessly. The reasoning went in the bin with the
+ * turn, and the retry started the same analysis from nothing.
+ *
+ * So the loop hands the reasoning here on its way to being dropped. The
+ * truncated message still never re-enters the transcript; only the note does.
+ *
+ * Returns `undefined` when there is nothing to condense with, so a caller can
+ * tell "off" from "produced nothing".
+ */
+export function createCappedThinkingNoteWriter(
+	config: CappedThinkingCondenserConfig,
+): ((thinking: string) => Promise<string>) | undefined {
+	if (config.enabled === false || !config.providerConfig) {
+		return undefined;
+	}
+	const providerConfig = config.providerConfig;
+	// Keyed by the reasoning, like the pipeline's: a retry that reproduces the
+	// same think pays for the note once.
+	const condensed = new Map<string, string>();
+	return async (thinking: string) => {
+		const trimmed = thinking.trim();
+		if (!trimmed) {
+			return "";
+		}
+		const cached = condensed.get(trimmed);
+		if (cached !== undefined) {
+			return cached;
+		}
+		const note = await writeCappedThinkingNote({
+			thinking: trimmed,
+			// No outcomes: a turn discarded at the output cap made no tool call.
+			// That is the definition of the case, not a shortcut.
+			outcomes: [],
+			config,
+			providerConfig,
+		});
+		condensed.set(trimmed, note);
+		return note;
+	};
+}
+
+/**
  * Rewrite the capped turn's reasoning, then hand off to the rest of the
  * pipeline.
  *
@@ -548,39 +646,12 @@ export function createCappedThinkingPrepareTurn<T extends PrepareTurn>(
 		const thinking = thinkingText(messages[index]);
 		let note = condensed.get(thinking);
 		if (note === undefined) {
-			const request = buildCappedThinkingRequest({
+			note = await writeCappedThinkingNote({
 				thinking,
 				outcomes: collectToolOutcomes(messages, index),
-				promptTemplate: config.promptTemplate,
+				config,
+				providerConfig,
 			});
-			try {
-				const handler = await createHandlerAsync(
-					resolveSummarizerConfig({
-						activeProviderConfig: providerConfig,
-						summarizer: config.summarizer,
-						outputTokenCap: CONDENSED_THINKING_MAX_TOKENS,
-					}),
-				);
-				let text = "";
-				for await (const chunk of handler.createMessage(request, [])) {
-					if (chunk.type === "text") {
-						text += chunk.text;
-					}
-				}
-				note = truncateText(text.trim(), CONDENSED_THINKING_MAX_CHARS);
-			} catch (error) {
-				// A note is worth having and worth nothing at the price of the
-				// turn it was meant to help.
-				config.logger?.log(
-					"Capped-thinking condensation failed; keeping the reasoning as it stands",
-					{
-						severity: "warn",
-						errorMessage:
-							error instanceof Error ? error.message : String(error),
-					},
-				);
-				note = "";
-			}
 			condensed.set(thinking, note);
 		}
 		if (!note) {

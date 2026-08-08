@@ -15,7 +15,10 @@ import {
 } from "@cline/shared";
 import { setHomeDirIfUnset } from "@cline/shared/storage";
 import { isOAuthProvider } from "../../auth/provider-auth-registry";
-import { createCappedThinkingPrepareTurn } from "../../extensions/context/capped-thinking";
+import {
+	createCappedThinkingNoteWriter,
+	createCappedThinkingPrepareTurn,
+} from "../../extensions/context/capped-thinking";
 import {
 	createCompactionStateAwarePrepareTurn,
 	createContextCompactionPrepareTurn,
@@ -644,6 +647,31 @@ export class LocalRuntimeHost implements RuntimeHost {
 						rawInitialCompactionState.conversation_id?.trim() || sessionId,
 				}
 			: undefined;
+		const cappedThinkingConfig = {
+			// Ahead of compaction: a condensed turn is a smaller turn, so
+			// whatever compaction then decides, it decides about a
+			// transcript that is not carrying an abandoned think.
+			enabled: configWithProvider.compaction?.cappedThinkingEnabled,
+			budgetTokens: configWithProvider.compaction?.thinkingBudgetTokens,
+			budgetMessage: configWithProvider.compaction?.cappedThinkingBudgetMessage,
+			promptTemplate: configWithProvider.compaction?.cappedThinkingPrompt,
+			// The resolved one, not the one on the config: nothing sets
+			// `config.providerConfig` on this path — compaction quietly
+			// substitutes `{ providerId, modelId }` for it a few lines down,
+			// and the agent config below uses the bootstrap's. Reading the
+			// unset field meant the condenser stood down on every session,
+			// which is exactly as visible as it sounds: no note, no failure,
+			// no log, through a run where the cap fired on 288 requests.
+			providerConfig: configWithProvider.providerConfig ?? providerConfig,
+			summarizer: configWithProvider.compaction?.summarizer,
+			logger: configWithProvider.logger,
+		};
+		// The transcript is one of the two places a capped think turns up, and
+		// the rarer one. The other is the agent loop's discard path, which is
+		// where the turns that actually end at the budget message go.
+		const condenseDiscardedReasoning = createCappedThinkingNoteWriter(
+			cappedThinkingConfig,
+		);
 		const prepareTurn = createCappedThinkingPrepareTurn(
 			createCompactionStateAwarePrepareTurn({
 				compact,
@@ -695,26 +723,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 					}
 				},
 			}),
-			{
-				// Ahead of compaction: a condensed turn is a smaller turn, so
-				// whatever compaction then decides, it decides about a
-				// transcript that is not carrying an abandoned think.
-				enabled: configWithProvider.compaction?.cappedThinkingEnabled,
-				budgetTokens: configWithProvider.compaction?.thinkingBudgetTokens,
-				budgetMessage:
-					configWithProvider.compaction?.cappedThinkingBudgetMessage,
-				promptTemplate: configWithProvider.compaction?.cappedThinkingPrompt,
-				// The resolved one, not the one on the config: nothing sets
-				// `config.providerConfig` on this path — compaction quietly
-				// substitutes `{ providerId, modelId }` for it a few lines down,
-				// and the agent config below uses the bootstrap's. Reading the
-				// unset field meant the condenser stood down on every session,
-				// which is exactly as visible as it sounds: no note, no failure,
-				// no log, through a run where the cap fired on 288 requests.
-				providerConfig: configWithProvider.providerConfig ?? providerConfig,
-				summarizer: configWithProvider.compaction?.summarizer,
-				logger: configWithProvider.logger,
-			},
+			cappedThinkingConfig,
 		);
 
 		const agentConfig = {
@@ -738,6 +747,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 			maxIterations: configWithProvider.maxIterations,
 			execution: configWithProvider.execution,
 			prepareTurn,
+			condenseDiscardedReasoning,
 			tools,
 			hooks: bootstrap.hooks,
 			extensions,

@@ -3171,6 +3171,75 @@ describe("a turn cut off at the output cap", () => {
 		);
 	});
 
+	it("condenses the reasoning it is about to throw away", async () => {
+		// The turn discarded here is the only one whose thinking reliably ends
+		// at the model's budget message, because a think ends there only when
+		// there was no room to continue -- the same condition that truncates the
+		// turn. A condenser watching the transcript therefore never sees one,
+		// which is why every capped turn of a measured session went in the bin
+		// with 14,000 characters of analysis the retry then redid from nothing.
+		const condenseDiscardedReasoning = vi.fn(
+			async (reasoning: string) => `note about ${reasoning.length} chars`,
+		);
+		const model = new ScriptedModel([
+			() => [
+				{ type: "reasoning-delta", text: "a very long think that hit the cap" },
+				{ type: "finish", reason: "max-tokens" },
+			],
+			() => [
+				{ type: "text-delta", text: "short answer" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({ model, condenseDiscardedReasoning });
+
+		const result = await runtime.run("Hi");
+
+		expect(result.status).toBe("completed");
+		expect(condenseDiscardedReasoning).toHaveBeenCalledWith(
+			"a very long think that hit the cap",
+		);
+		const retryPrompt = JSON.stringify(model.requests[1].messages);
+		expect(retryPrompt).toContain("note about 34 chars");
+		// The note, not the reasoning: resending what overran the budget is the
+		// one thing this must not do.
+		expect(retryPrompt).not.toContain("a very long think that hit the cap");
+		// And the discarded turn still never enters the history.
+		expect(JSON.stringify(result.messages)).not.toContain(
+			"a very long think that hit the cap",
+		);
+	});
+
+	it("retries as before when the condenser fails or has nothing to say", async () => {
+		const failing = vi.fn(async () => {
+			throw new Error("summariser unreachable");
+		});
+		const model = new ScriptedModel([
+			() => [
+				{ type: "reasoning-delta", text: "a very long think that hit the cap" },
+				{ type: "finish", reason: "max-tokens" },
+			],
+			() => [
+				{ type: "text-delta", text: "short answer" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			condenseDiscardedReasoning: failing,
+		});
+
+		const result = await runtime.run("Hi");
+
+		// A note is worth having and worth nothing at the price of the turn it
+		// was meant to help.
+		expect(result.status).toBe("completed");
+		expect(failing).toHaveBeenCalled();
+		expect(JSON.stringify(model.requests[1].messages)).toContain(
+			"hit the per-turn output limit",
+		);
+	});
+
 	it("still makes room when the window is what set the cap", async () => {
 		noteOutputCap({
 			maxTokens: 4_000,
