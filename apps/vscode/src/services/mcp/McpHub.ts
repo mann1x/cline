@@ -1974,6 +1974,63 @@ export class McpHub {
 	}
 
 	/**
+	 * Add a server Cline launches itself and talks to over stdio.
+	 *
+	 * Written in the flat shape the settings file already uses — `command`,
+	 * `args`, and optionally `env` and `cwd` — so a server added here reads
+	 * exactly like one added by hand, and can be edited by hand afterwards. As
+	 * with the remote form, the zod-transformed config is used for validation
+	 * only; what lands in the file is what the user typed.
+	 */
+	public async addLocalServer(
+		serverName: string,
+		options: { command: string; args?: string[]; env?: Record<string, string>; cwd?: string },
+	): Promise<McpServer[]> {
+		try {
+			const settingsPath = await getMcpSettingsFilePathHelper(await this.getSettingsDirectoryPath())
+			await updateMcpSettingsFile(settingsPath, (current) => {
+				const servers = current.mcpServers as Record<string, any>
+				if (servers[serverName]) {
+					throw new Error(`An MCP server with the name "${serverName}" already exists`)
+				}
+
+				const args = (options.args ?? []).filter((arg) => arg.length > 0)
+				const env = Object.fromEntries(Object.entries(options.env ?? {}).filter(([key]) => key.trim().length > 0))
+				const cwd = options.cwd?.trim()
+				const serverConfig = {
+					type: "stdio",
+					command: options.command,
+					...(args.length > 0 ? { args } : {}),
+					...(Object.keys(env).length > 0 ? { env } : {}),
+					...(cwd ? { cwd } : {}),
+					disabled: false,
+					autoApprove: [],
+				}
+
+				// Same validation the file itself is held to, against the expanded
+				// form: a command written as `${env:HOME}/bin/thing` has to be
+				// checked as what it becomes, not as what it says.
+				const expandedConfig = expandEnvironmentVariables(serverConfig)
+				if (typeof expandedConfig.command !== "string" || expandedConfig.command.trim() === "") {
+					throw new Error("Command is required")
+				}
+				ServerConfigSchema.parse(expandedConfig)
+
+				current.mcpServers = { ...servers, [serverName]: serverConfig }
+				return current
+			})
+			const settings = await this.readPostWriteMcpSettings()
+
+			await this.updateServerConnectionsRPC(settings.mcpServers as Record<string, McpServerConfig>)
+
+			return this.getSortedMcpServers(Object.keys(settings.mcpServers || {}))
+		} catch (error) {
+			Logger.error("Failed to add local MCP server:", error)
+			throw error
+		}
+	}
+
+	/**
 	 * RPC variant of deleteServer that returns the updated server list directly
 	 * @param serverName The name of the server to delete
 	 * @returns Array of remaining MCP servers
