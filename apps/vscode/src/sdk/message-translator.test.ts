@@ -1285,6 +1285,27 @@ describe("translateSessionEvent — agent_event error", () => {
 		expect(state.wasErrorSeen()).toBe(true)
 	})
 
+	it("records the error outcome when a run stops without finishing", () => {
+		// A mistake-limit stop ends the run — the footer has to offer a way out.
+		// Measured live: `AgentRuntimeAbortError: mistake_limit_reached` arrived as
+		// done(reason:"aborted"), which set nothing, so the turn resolved to
+		// "awaiting_followup" and the task sat with no Retry and no Start New Task.
+		for (const reason of ["aborted", "mistake_limit", "max_iterations"]) {
+			const state = new MessageTranslatorState()
+			translateSessionEvent(
+				{
+					type: "agent_event",
+					payload: {
+						sessionId: "session-1",
+						event: { type: "done", reason, text: "", iterations: 4 } as unknown as AgentEvent,
+					},
+				},
+				state,
+			)
+			expect(state.wasErrorSeen(), `reason ${reason}`).toBe(true)
+		}
+	})
+
 	it("does not record an error outcome for a successful done event", () => {
 		const state = new MessageTranslatorState()
 		const event: CoreSessionEvent = {

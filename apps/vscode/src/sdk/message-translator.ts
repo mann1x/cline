@@ -1834,16 +1834,24 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 			// A compaction divider still open here means the turn was aborted mid-compaction.
 			finalizeDanglingCompaction(state, messages, "cancelled")
 
-			// A turn can terminate with done(reason:"error") without a separate
-			// "error" event — record the error outcome here too so turn end still
-			// resolves to the "error" phase (Retry / Start New Task).
-			if (event.reason === "error") {
-				state.setErrorSeen()
-			} else if (event.reason === "completed") {
-				// The turn recovered: whatever failed mid-turn was retried and the
-				// run reached its end. The terminal reason is the authority on the
-				// outcome, not the worst thing that happened on the way there.
+			// The terminal reason is the authority on the outcome, and only
+			// "completed" means the run reached its end. Everything else — an
+			// error, a mistake-limit stop, max iterations, an abort — is a run
+			// that STOPPED, and the footer has to offer a way out of it.
+			//
+			// `error` was the only reason handled here, which worked only because
+			// a mistake notice happened to set the same flag mid-run. Once those
+			// notices stopped ending the turn (4.99.68, correctly — they were
+			// putting Retry on screen over a task that was still working), nothing
+			// carried the outcome to the end: a mistake-limit stop resolved to
+			// "awaiting_followup", which shows no buttons at all. Measured:
+			// `AgentRuntimeAbortError: mistake_limit_reached` at 22:18:15, and the
+			// task sat there with no Retry and no Start New Task.
+			if (event.reason === "completed") {
+				// Whatever failed mid-turn was recovered from; the run finished.
 				state.clearErrorSeen()
+			} else {
+				state.setErrorSeen()
 			}
 
 			// Inferred completion feedback: the SDK agent normally ends a turn with a plain
