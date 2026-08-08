@@ -48,6 +48,36 @@ import {
  */
 const CAP_PROXIMITY = 0.9;
 
+/**
+ * How far back from the end of the reasoning the budget message can be.
+ *
+ * It is appended when the budget runs out, so it is at the end. Scanning only
+ * the tail keeps a model that happens to *discuss* its thinking budget
+ * mid-reasoning from being read as one that ran out of it.
+ */
+const BUDGET_MESSAGE_TAIL_MARGIN_CHARS = 400;
+
+/**
+ * Whether the server's own budget message is at the end of this reasoning.
+ *
+ * Only ever called with a message the session actually knows: either Cline set
+ * it on the request, or Ollama reported the model's own via `/api/show`. There
+ * is no guessing at the wording — a model with no message configured has no
+ * marker to find, and this is not consulted for one.
+ */
+function endsWithBudgetMessage(thinking: string, message: string): boolean {
+	const marker = message
+		.split("\n")
+		.map((line) => line.trim())
+		.find((line) => line.length > 0);
+	if (!marker) {
+		return false;
+	}
+	return thinking
+		.slice(-(marker.length + BUDGET_MESSAGE_TAIL_MARGIN_CHARS))
+		.includes(marker);
+}
+
 /** What the note is allowed to cost. It is a handful of lines by design. */
 const CONDENSED_THINKING_MAX_TOKENS = 700;
 
@@ -186,6 +216,7 @@ function producedCharacters(message: MessageWithMetadata): number {
 export function findCappedThinkingIndex(
 	messages: readonly MessageWithMetadata[],
 	budgetTokens: number | undefined,
+	options?: { budgetMessage?: string },
 ): number {
 	if (
 		typeof budgetTokens !== "number" ||
@@ -205,6 +236,16 @@ export function findCappedThinkingIndex(
 			// capped turn we care about is the latest one, and anything before
 			// this has already been superseded.
 			return -1;
+		}
+		// A known budget message settles it either way. The measurement above is
+		// good but not certain — it cannot tell which cap stopped a turn, and it
+		// falls back to a ratio for turns that reported no usage — whereas the
+		// message is the server stating what it did. So where the session knows
+		// the wording, presence confirms and absence denies, and the estimate is
+		// what runs when nobody configured one.
+		const budgetMessage = options?.budgetMessage?.trim();
+		if (budgetMessage) {
+			return endsWithBudgetMessage(thinking, budgetMessage) ? index : -1;
 		}
 		return measuredThinkingTokens(message, thinking) >=
 			budgetTokens * CAP_PROXIMITY
@@ -242,6 +283,13 @@ export interface CappedThinkingCondenserConfig {
 	enabled?: boolean;
 	/** The per-turn thinking allowance this session sends. */
 	budgetTokens?: number;
+	/**
+	 * What the server appends to the reasoning when that allowance runs out,
+	 * when the session knows it — configured by Cline, or reported by Ollama as
+	 * the model's own. Absent for a model that has none, which is the case the
+	 * measurement exists for.
+	 */
+	budgetMessage?: string;
 	promptTemplate?: string;
 	/** Absent when no provider is resolved yet; the condenser then stands down. */
 	providerConfig?: ProviderConfig;
@@ -281,7 +329,9 @@ export function createCappedThinkingPrepareTurn<T extends PrepareTurn>(
 	const condense = async (
 		messages: MessageWithMetadata[],
 	): Promise<MessageWithMetadata[]> => {
-		const index = findCappedThinkingIndex(messages, config.budgetTokens);
+		const index = findCappedThinkingIndex(messages, config.budgetTokens, {
+			budgetMessage: config.budgetMessage,
+		});
 		if (index < 0) {
 			return messages;
 		}

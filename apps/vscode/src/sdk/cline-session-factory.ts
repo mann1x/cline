@@ -54,7 +54,12 @@ import { nonNegativeFiniteNumber, positiveFiniteNumber, toSdkApiFormat } from ".
 import { parseProviderId } from "./model-catalog/provider-id"
 import { toSdkProviderId } from "./model-catalog/sdk-provider-id"
 import { createProviderConfigStore, resolveRuntimeModelSelection } from "./model-catalog/store"
-import { resolveOllamaContextWindow, resolveOllamaImageSupport, resolveOllamaThinkBudget } from "./ollama-model-family"
+import {
+	resolveOllamaContextWindow,
+	resolveOllamaImageSupport,
+	resolveOllamaModelParameters,
+	resolveOllamaThinkBudget,
+} from "./ollama-model-family"
 import { resolveSessionPromptTemplate } from "./prompt-templates"
 import { getProviderSettingsManager } from "./provider-migration"
 import { buildSapProviderConfig, type SapProviderConfig } from "./sap-config"
@@ -1147,6 +1152,13 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	// thinking from one that ran out of room to think.
 	let thinkingBudgetTokens: number | undefined
 
+	// What the server appends to reasoning it cut at the budget, when there is
+	// anything to know. Cline's own setting goes on the wire and overrides the
+	// model file, so it is the answer where it is set; otherwise the model's own
+	// is what will be appended, and Ollama reports it. A model with neither
+	// leaves this undefined, and the condenser measures instead of matching.
+	let thinkingBudgetMessage: string | undefined
+
 	// The per-turn output cap, resolved once: the system prompt states it, and
 	// compaction budgets against it. A configured `num_predict` goes on the wire
 	// ahead of the session's cap and wins, so it is the answer wherever the
@@ -1178,6 +1190,16 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		)
 		systemPrompt = `${systemPrompt}${buildOutputBudgetSection(outputCap, contextWindow, thinking)}`
 		thinkingBudgetTokens = thinking?.budgetTokens
+		const configuredBudgetMessage = ollamaProviderConfig?.sampling?.thinkBudgetMessage?.trim()
+		if (configuredBudgetMessage) {
+			thinkingBudgetMessage = configuredBudgetMessage
+		} else if (providerId === "ollama" && modelId) {
+			const parameters = await resolveOllamaModelParameters(
+				apiConfig ? resolveBaseUrl(providerId, apiConfig) : undefined,
+				modelId,
+			)
+			thinkingBudgetMessage = parameters.think_budget_message?.trim() || undefined
+		}
 		Logger.log(
 			`[SessionFactory] Output budget: cap=${outputCap} contextWindow=${contextWindow ?? "unknown"}` +
 				(thinking ? ` thinking=${thinking.budgetTokens} (${thinking.level})` : ""),
@@ -1378,6 +1400,10 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 						// start. Needs the allowance to detect it, so it stands down
 						// on any provider that does not report one.
 						...(thinkingBudgetTokens ? { thinkingBudgetTokens } : {}),
+						// Turns a good measurement into a statement: where the
+						// wording is known, its presence at the end of the
+						// reasoning is the server saying it stopped there.
+						...(thinkingBudgetMessage ? { cappedThinkingBudgetMessage: thinkingBudgetMessage } : {}),
 						...(thinkingCompactionPrompt ? { thinkingSummaryPrompt: thinkingCompactionPrompt } : {}),
 					},
 				}

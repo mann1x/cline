@@ -176,3 +176,69 @@ describe("what the budget is measured against", () => {
 		expect(findCappedThinkingIndex([unreported], 16_000)).toBe(0);
 	});
 });
+
+/**
+ * The measurement is good and not certain: it cannot tell which cap stopped a
+ * turn, and it falls back to a ratio where a turn reported no usage. Where the
+ * session knows what the server appends — Cline set it, or Ollama reported the
+ * model's own — that is not an inference at all, so it settles the question in
+ * both directions.
+ */
+describe("confirming against the server's own budget message", () => {
+	const message =
+		"\n\nI have used my thinking budget. I must stop analysing now and act on what I have.\n";
+
+	const turnEnding = (tail: string): MessageWithMetadata =>
+		({
+			role: "assistant",
+			content: [
+				{ type: "thinking", thinking: `${"x".repeat(43_000)}${tail}` },
+				{ type: "tool_use", id: "c", name: "editor", input: {} },
+			],
+			metrics: { outputTokens: 16_400 },
+		}) as MessageWithMetadata;
+
+	it("confirms a turn whose reasoning ends with it", () => {
+		expect(
+			findCappedThinkingIndex([turnEnding(message)], 16_000, {
+				budgetMessage: message,
+			}),
+		).toBe(0);
+	});
+
+	it("denies a long turn that the server did not cut", () => {
+		// Without this the measurement alone would call it capped — it is long
+		// enough — but the server says otherwise, and the server is right.
+		expect(
+			findCappedThinkingIndex([turnEnding("")], 16_000, {
+				budgetMessage: message,
+			}),
+		).toBe(-1);
+	});
+
+	it("ignores a mention of the budget in the middle of the reasoning", () => {
+		const discussed = {
+			role: "assistant",
+			content: [
+				{
+					type: "thinking",
+					thinking: `${message}${"x".repeat(43_000)}`,
+				},
+			],
+			metrics: { outputTokens: 16_400 },
+		} as MessageWithMetadata;
+
+		expect(
+			findCappedThinkingIndex([discussed], 16_000, { budgetMessage: message }),
+		).toBe(-1);
+	});
+
+	it("measures when no message is configured anywhere", () => {
+		expect(findCappedThinkingIndex([turnEnding("")], 16_000, {})).toBe(0);
+		expect(
+			findCappedThinkingIndex([turnEnding("")], 16_000, {
+				budgetMessage: "  ",
+			}),
+		).toBe(0);
+	});
+});

@@ -646,54 +646,54 @@ export class LocalRuntimeHost implements RuntimeHost {
 			: undefined;
 		const prepareTurn = createCappedThinkingPrepareTurn(
 			createCompactionStateAwarePrepareTurn({
-			compact,
-			getState: () => activeSessionRef?.compactionState,
-			saveState: async (state, sourceMessages) => {
-				const activeSession = activeSessionRef;
-				if (!activeSession) return;
-				const stateForSession = {
-					...state,
-					conversation_id: activeSession.sessionId,
-				};
-				try {
-					// Validate against the exact messages the state's hash was
-					// computed from. Mid-turn, `agent.getMessages()` (the
-					// conversation store) can legally differ from the runtime's
-					// working transcript, so validating against the store would
-					// spuriously reject the write.
-					const result = await this.persistActiveSessionCompactionState(
-						activeSession,
-						stateForSession,
-						sourceMessages,
-					);
-					if (!result.updated) {
-						configWithProvider.logger?.debug?.(
-							"Skipped stale session compaction state",
-							{
-								sessionId: activeSession.sessionId,
-								sourceMessageCount: stateForSession.source_message_count,
-							},
+				compact,
+				getState: () => activeSessionRef?.compactionState,
+				saveState: async (state, sourceMessages) => {
+					const activeSession = activeSessionRef;
+					if (!activeSession) return;
+					const stateForSession = {
+						...state,
+						conversation_id: activeSession.sessionId,
+					};
+					try {
+						// Validate against the exact messages the state's hash was
+						// computed from. Mid-turn, `agent.getMessages()` (the
+						// conversation store) can legally differ from the runtime's
+						// working transcript, so validating against the store would
+						// spuriously reject the write.
+						const result = await this.persistActiveSessionCompactionState(
+							activeSession,
+							stateForSession,
+							sourceMessages,
 						);
+						if (!result.updated) {
+							configWithProvider.logger?.debug?.(
+								"Skipped stale session compaction state",
+								{
+									sessionId: activeSession.sessionId,
+									sourceMessageCount: stateForSession.source_message_count,
+								},
+							);
+						}
+					} catch (error) {
+						configWithProvider.logger?.error?.(
+							"Failed to persist session compaction state",
+							{ sessionId: activeSession.sessionId, error },
+						);
+						captureSdkError(configWithProvider.telemetry, {
+							component: "core",
+							operation: "session.persist_compaction_state",
+							severity: "warn",
+							handled: true,
+							error,
+							context: {
+								sessionId: activeSession.sessionId,
+								providerId: configWithProvider.providerId,
+								modelId: configWithProvider.modelId,
+							},
+						});
 					}
-				} catch (error) {
-					configWithProvider.logger?.error?.(
-						"Failed to persist session compaction state",
-						{ sessionId: activeSession.sessionId, error },
-					);
-					captureSdkError(configWithProvider.telemetry, {
-						component: "core",
-						operation: "session.persist_compaction_state",
-						severity: "warn",
-						handled: true,
-						error,
-						context: {
-							sessionId: activeSession.sessionId,
-							providerId: configWithProvider.providerId,
-							modelId: configWithProvider.modelId,
-						},
-					});
-				}
-			},
+				},
 			}),
 			{
 				// Ahead of compaction: a condensed turn is a smaller turn, so
@@ -701,6 +701,8 @@ export class LocalRuntimeHost implements RuntimeHost {
 				// transcript that is not carrying an abandoned think.
 				enabled: configWithProvider.compaction?.cappedThinkingEnabled,
 				budgetTokens: configWithProvider.compaction?.thinkingBudgetTokens,
+				budgetMessage:
+					configWithProvider.compaction?.cappedThinkingBudgetMessage,
 				promptTemplate: configWithProvider.compaction?.cappedThinkingPrompt,
 				providerConfig: configWithProvider.providerConfig,
 				summarizer: configWithProvider.compaction?.summarizer,

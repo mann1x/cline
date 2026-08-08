@@ -234,6 +234,12 @@ export interface CoreCompactionConfig {
 	cappedThinkingEnabled?: boolean;
 	/** Replaces the built-in continuation-note instruction. */
 	cappedThinkingPrompt?: string;
+	/**
+	 * What the server appends to reasoning it cut at the budget, when the
+	 * session knows the wording. Confirms or denies a capped turn outright;
+	 * without one the condenser measures instead.
+	 */
+	cappedThinkingBudgetMessage?: string;
 	/** The per-turn thinking allowance this session sends, when one is known. */
 	thinkingBudgetTokens?: number;
 	summarizer?: CoreCompactionSummarizerConfig;
