@@ -104,10 +104,16 @@ function endsWithBudgetMessage(thinking: string, message: string): boolean {
 }
 
 /** What the note is allowed to cost. It is a handful of lines by design. */
-const CONDENSED_THINKING_MAX_TOKENS = 700;
-
-/** Guard against a runaway note becoming the thing that fills the window. */
-const CONDENSED_THINKING_MAX_CHARS = 4_000;
+/**
+ * Guard against a runaway note becoming the thing that fills the window.
+ *
+ * Generous, because the note is the only surviving record of a think that ran
+ * to twenty or thirty thousand characters and it has to be detailed enough to
+ * work from -- it is a summary, not a retrospective. A summary of that think
+ * lands nowhere near this in practice, which is what makes it a guard rather
+ * than a target.
+ */
+const CONDENSED_THINKING_MAX_CHARS = 12_000;
 
 export const DEFAULT_CAPPED_THINKING_PROMPT = `Your reasoning on the last turn ran out of budget and was cut off. You are about to think again about the same problem, and without this note you will start from the beginning and reach the same point.
 
@@ -491,13 +497,19 @@ async function writeCappedThinkingNote(options: {
 		promptTemplate: options.config.promptTemplate,
 	});
 	try {
-		const handler = await createHandlerAsync(
+		// No output cap of its own. A fixed one was the whole failure: at 700
+		// tokens against a template that reasons whatever the request asks for,
+		// the summariser spent the entire budget thinking and returned a single
+		// usage chunk with no text -- measured three times running, on thinks of
+		// 22,011, 19,007 and 39,544 characters. Left unset, the cap resolves from
+		// the window like any other turn, which is both large enough to survive a
+		// forced think and already scaled to what the session has room for.
+		const { maxOutputTokens: _uncapped, ...summarizerConfig } =
 			resolveSummarizerConfig({
 				activeProviderConfig: options.providerConfig,
 				summarizer: options.config.summarizer,
-				outputTokenCap: CONDENSED_THINKING_MAX_TOKENS,
-			}),
-		);
+			});
+		const handler = await createHandlerAsync(summarizerConfig);
 		let text = "";
 		let chunks = 0;
 		for await (const chunk of handler.createMessage(request, [])) {

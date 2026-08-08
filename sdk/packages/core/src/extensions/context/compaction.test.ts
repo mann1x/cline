@@ -1389,6 +1389,33 @@ describe("createContextCompactionPrepareTurn", () => {
 		expect(anthropicConfig.maxOutputTokens).toBe(1_024);
 	});
 
+	it("measures request overhead instead of inferring it from a difference", async () => {
+		// The overhead term decides how much of the window the transcript may
+		// keep. Derived as `requestInputTokens - apiMessageTokens`, it absorbed
+		// the disagreement between two estimators that do not share a ratio:
+		// 57,876 characters of system prompt and tool schemas -- about 12,700
+		// tokens -- were reported as 53,323, and the compaction that followed cut
+		// 24 messages to 4.
+		const tools = Array.from({ length: 20 }, (_index, i) => ({
+			name: `tool_${i}`,
+			description: "x".repeat(2_000),
+			inputSchema: { type: "object" as const, properties: {} },
+		}));
+		const overhead = estimateRequestInputTokens(
+			{ systemPrompt: "you are a helpful agent", messages: [], tools },
+			{ reasoningHistory: "omit" },
+		);
+
+		// Whatever the ratio, the overhead has to be in the neighbourhood of the
+		// payload it describes: ~40,000 characters of schemas cannot be 50,000
+		// tokens.
+		const overheadChars =
+			"you are a helpful agent".length +
+			tools.reduce((total, tool) => total + tool.description.length, 0);
+		expect(overhead).toBeLessThan(overheadChars);
+		expect(overhead).toBeGreaterThan(overheadChars / 10);
+	});
+
 	it("marks every summarizer config as auxiliary", () => {
 		// The request path keeps one process-wide record of the last request --
 		// its token count, its chars-per-token, what capped it -- and compaction

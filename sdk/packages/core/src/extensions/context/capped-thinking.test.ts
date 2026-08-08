@@ -1,12 +1,45 @@
 import type { MessageWithMetadata } from "@cline/shared";
 import { observeRequestTokens, resetTokenCalibration } from "@cline/shared";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	buildCappedThinkingRequest,
 	createCappedThinkingPrepareTurn,
 	findCappedThinkingIndex,
 	locateCappedThinking,
 } from "./capped-thinking";
+
+/**
+ * Configs the condenser asked for a handler with, in order.
+ *
+ * On a global rather than a module binding: `vi.mock` factories are hoisted
+ * above this file's declarations, so a module-level array is not necessarily
+ * the one the factory closes over.
+ */
+const CAPTURED = Symbol.for("cline.test.summarizerConfigs");
+function summarizerConfigs(): Array<Record<string, unknown>> {
+	const container = globalThis as unknown as Record<symbol, unknown>;
+	if (!container[CAPTURED]) {
+		container[CAPTURED] = [];
+	}
+	return container[CAPTURED] as Array<Record<string, unknown>>;
+}
+
+vi.mock("@cline/llms", async (importOriginal) => ({
+	...((await importOriginal()) as Record<string, unknown>),
+	createHandlerAsync: async (config: Record<string, unknown>) => {
+		const container = globalThis as unknown as Record<symbol, unknown>;
+		const key = Symbol.for("cline.test.summarizerConfigs");
+		if (!container[key]) {
+			container[key] = [];
+		}
+		(container[key] as Array<Record<string, unknown>>).push(config);
+		return {
+			createMessage: async function* () {
+				yield { type: "text", text: "the note" };
+			},
+		};
+	},
+}));
 
 /**
  * Measured on a live session: the same ground covered a dozen times, each pass
@@ -428,5 +461,59 @@ describe("reporting the note", () => {
 			expect(typeof notice.metadata?.note).toBe("string");
 			expect(notice.metadata?.kind).toBe("capped_thinking");
 		}
+	});
+});
+
+describe("what the condenser asks the summariser for", () => {
+	afterEach(() => {
+		summarizerConfigs().length = 0;
+		resetTokenCalibration();
+	});
+
+	it("sends no output cap of its own", async () => {
+		// Cleared here, not in `afterEach`: earlier tests in this file drive the
+		// same condenser and their calls are captured too.
+		summarizerConfigs().length = 0;
+		// A fixed 700-token cap was the whole failure. Against a template that
+		// reasons whatever the request asks for, the summariser spent the entire
+		// budget thinking and returned one usage chunk with no text -- measured
+		// three times running, on thinks of 22,011, 19,007 and 39,544 chars.
+		// Unset, the cap resolves from the window like any other turn: large
+		// enough to survive a forced think, and already scaled to the session.
+		const budgetMessage = "I have used my thinking budget.";
+		const prepareTurn = createCappedThinkingPrepareTurn(undefined, {
+			enabled: true,
+			budgetTokens: 16_000,
+			budgetMessage,
+			providerConfig: { providerId: "ollama", modelId: "m" },
+		});
+		expect(prepareTurn).toBeDefined();
+
+		const messages = [
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "thinking",
+						thinking: `${"x".repeat(45_000)}\n${budgetMessage}`,
+					},
+				],
+			},
+		] as unknown as MessageWithMetadata[];
+
+		await (
+			prepareTurn as unknown as (input: {
+				messages: MessageWithMetadata[];
+			}) => Promise<unknown>
+		)({ messages });
+
+		expect(summarizerConfigs()).toHaveLength(1);
+		const config = summarizerConfigs()[0];
+		expect(config).not.toHaveProperty("maxOutputTokens");
+		// The note needs no reasoning of its own, and asking for it is what left
+		// no room for the note.
+		expect(config.thinking).toBe(false);
+		// And it still must not speak for the session.
+		expect(config.auxiliary).toBe(true);
 	});
 });

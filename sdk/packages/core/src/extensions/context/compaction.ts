@@ -460,9 +460,25 @@ export function createContextCompactionPrepareTurn(
 			(total: number, message) => total + estimateMessageTokens(message),
 			0,
 		);
-		const requestOverheadTokens = Math.max(
-			0,
-			requestInputTokens - apiMessageTokens,
+		// Measured directly, not left over from a subtraction. `requestInputTokens`
+		// and `apiMessageTokens` do not share a ratio -- the first splits
+		// reasoning out at its own rate, the second does not -- so their
+		// difference absorbs the whole disagreement between two estimators and
+		// calls it overhead. Measured live: system prompt and tool schemas
+		// totalling 57,876 characters, about 12,700 tokens at the ratio the
+		// session had calibrated, reported as 53,323 tokens of overhead. That
+		// left 56,677 tokens for the transcript instead of ~97,000, dropped the
+		// message target to 32,380, and a compaction that had to hit it cut 24
+		// messages to 4 -- after which the model, having lost what it was working
+		// from, looped. The term also wandered 19,793 -> 53,323 across a single
+		// session while the payload it describes barely changed.
+		const requestOverheadTokens = estimateRequestInputTokens(
+			{
+				systemPrompt: context.systemPrompt,
+				messages: [],
+				tools: context.tools,
+			},
+			{ reasoningHistory },
 		);
 		const maxInputTokens =
 			resolveEffectiveMaxInputTokens({
