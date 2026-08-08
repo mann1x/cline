@@ -318,8 +318,22 @@ export function createCappedThinkingPrepareTurn<T extends PrepareTurn>(
 	config: CappedThinkingCondenserConfig,
 ): T | undefined {
 	if (config.enabled === false || !config.providerConfig) {
+		// Said out loud, because the first version of this was not: it stood down
+		// for a missing provider config on every session, and a feature that
+		// silently does nothing looks identical to one that is working and has
+		// nothing to do. There is no other line to distinguish them by.
+		config.logger?.debug?.(
+			config.enabled === false
+				? "Capped-thinking condensation is off"
+				: "Capped-thinking condensation stood down: no provider config to summarise with",
+		);
 		return inner;
 	}
+	config.logger?.debug?.(
+		`Capped-thinking condensation armed at ${config.budgetTokens ?? "no"} thinking tokens${
+			config.budgetMessage ? ", confirmed by the server's budget message" : ""
+		}`,
+	);
 	const providerConfig = config.providerConfig;
 	// Keyed by the reasoning itself, so a turn is condensed once however many
 	// times the pipeline sees it, and a re-run of the same turn after an abort

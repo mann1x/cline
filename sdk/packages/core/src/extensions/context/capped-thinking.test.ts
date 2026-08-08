@@ -3,6 +3,7 @@ import { observeRequestTokens, resetTokenCalibration } from "@cline/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	buildCappedThinkingRequest,
+	createCappedThinkingPrepareTurn,
 	findCappedThinkingIndex,
 } from "./capped-thinking";
 
@@ -240,5 +241,60 @@ describe("confirming against the server's own budget message", () => {
 				budgetMessage: "  ",
 			}),
 		).toBe(0);
+	});
+});
+
+/**
+ * A feature that silently does nothing is indistinguishable from one that is
+ * working and has nothing to do. This one stood down on every session for a
+ * missing provider config — reading a field the host never sets — and produced
+ * no note, no failure and no log through a run where the cap fired on 288
+ * requests. The only defence is saying so.
+ */
+describe("standing down", () => {
+	const logger = () => {
+		const lines: string[] = [];
+		return {
+			lines,
+			logger: { log: () => {}, debug: (line: string) => lines.push(line) },
+		};
+	};
+
+	it("says why when it has no provider config", () => {
+		const { lines, logger: log } = logger();
+
+		const result = createCappedThinkingPrepareTurn(undefined, {
+			budgetTokens: 16_000,
+			logger: log as never,
+		});
+
+		expect(result).toBeUndefined();
+		expect(lines.join("\n")).toContain("no provider config");
+	});
+
+	it("says so when it is switched off", () => {
+		const { lines, logger: log } = logger();
+
+		createCappedThinkingPrepareTurn(undefined, {
+			enabled: false,
+			providerConfig: { providerId: "ollama", modelId: "m" } as never,
+			logger: log as never,
+		});
+
+		expect(lines.join("\n")).toContain("is off");
+	});
+
+	it("says when it is armed, and with what", () => {
+		const { lines, logger: log } = logger();
+
+		createCappedThinkingPrepareTurn(undefined, {
+			budgetTokens: 16_000,
+			budgetMessage: "I have used my thinking budget.",
+			providerConfig: { providerId: "ollama", modelId: "m" } as never,
+			logger: log as never,
+		});
+
+		expect(lines.join("\n")).toContain("armed at 16000 thinking tokens");
+		expect(lines.join("\n")).toContain("budget message");
 	});
 });

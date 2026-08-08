@@ -704,7 +704,14 @@ export class LocalRuntimeHost implements RuntimeHost {
 				budgetMessage:
 					configWithProvider.compaction?.cappedThinkingBudgetMessage,
 				promptTemplate: configWithProvider.compaction?.cappedThinkingPrompt,
-				providerConfig: configWithProvider.providerConfig,
+				// The resolved one, not the one on the config: nothing sets
+				// `config.providerConfig` on this path — compaction quietly
+				// substitutes `{ providerId, modelId }` for it a few lines down,
+				// and the agent config below uses the bootstrap's. Reading the
+				// unset field meant the condenser stood down on every session,
+				// which is exactly as visible as it sounds: no note, no failure,
+				// no log, through a run where the cap fired on 288 requests.
+				providerConfig: configWithProvider.providerConfig ?? providerConfig,
 				summarizer: configWithProvider.compaction?.summarizer,
 				logger: configWithProvider.logger,
 			},
