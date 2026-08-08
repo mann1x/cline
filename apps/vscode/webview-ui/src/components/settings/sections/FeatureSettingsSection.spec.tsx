@@ -123,3 +123,40 @@ describe("FeatureSettingsSection", () => {
 		expect(mockUpdateSetting).toHaveBeenCalledWith("showFeatureTips", true)
 	})
 })
+
+describe("Thinking Compaction", () => {
+	beforeEach(() => {
+		mockUpdateSetting.mockClear()
+		mockExtensionState.value = {
+			...mockExtensionState.value,
+			useAutoCondense: true,
+		}
+	})
+
+	it("sits below the Compaction Prompt, because it is the other half of it", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		const labels = Array.from(container.querySelectorAll("label")).map((label) => label.textContent)
+		const compaction = labels.indexOf("Compaction Prompt")
+		const thinking = labels.indexOf("Thinking Compaction Prompt")
+
+		expect(compaction).toBeGreaterThanOrEqual(0)
+		expect(thinking).toBe(compaction + 1)
+	})
+
+	it("is on unless it has been turned off", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		expect(container.querySelector("#thinkingCompactionEnabled")?.getAttribute("data-state")).toBe("checked")
+	})
+
+	it("turns off from the switch", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		const toggle = container.querySelector("#thinkingCompactionEnabled")
+		expect(toggle).toBeTruthy()
+		fireEvent.click(toggle as Element)
+
+		expect(mockUpdateSetting).toHaveBeenCalledWith("thinkingCompactionEnabled", false)
+	})
+})

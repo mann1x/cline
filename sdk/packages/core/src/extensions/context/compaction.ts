@@ -34,10 +34,11 @@ import {
 	COMPACTION_TRIGGER_RATIO,
 	createTokenEstimator,
 	DEFAULT_MAX_INPUT_TOKENS,
-	DEFAULT_PRESERVE_RECENT_TOKENS,
 	DEFAULT_TARGET_RATIO,
+	getCompactionSummaryMetadata,
 	resolveCompactionTriggerTokens,
 	resolveEffectiveMaxInputTokens,
+	resolvePreserveRecentTokens,
 	resolveRecencyBounds,
 	seedCalibrationFromTranscript,
 } from "./compaction-shared";
@@ -210,6 +211,8 @@ const BUILTIN_COMPACTION_STRATEGIES = {
 			providerConfig,
 			summarizer: compaction?.summarizer,
 			summaryPrompt: compaction?.summaryPrompt,
+			thinkingSummaryEnabled: compaction?.thinkingSummaryEnabled,
+			thinkingSummaryPrompt: compaction?.thinkingSummaryPrompt,
 			// The recency budget is a floor and the message budget a ceiling —
 			// two different bounds, not one clamped by the other. Taking the
 			// smaller of the pair (as this did) collapses them: the floor is
@@ -217,8 +220,12 @@ const BUILTIN_COMPACTION_STRATEGIES = {
 			// and the room the target bought went unused, every compaction
 			// folding to the 20,000-token minimum no matter how much fit.
 			bounds: resolveRecencyBounds({
-				preserveRecentTokens:
-					compaction?.preserveRecentTokens ?? DEFAULT_PRESERVE_RECENT_TOKENS,
+				preserveRecentTokens: resolvePreserveRecentTokens({
+					contextWindow: context.model.info?.contextWindow,
+					maxInputTokens: context.budget.request.maxInputTokens,
+					messageTargetTokens: context.budget.messages.targetTokens,
+					override: compaction?.preserveRecentTokens,
+				}),
 				preserveRecentMessagesRatio: compaction?.preserveRecentMessagesRatio,
 				messageTargetTokens: context.budget.messages.targetTokens,
 				lastTurnCeiling:
@@ -729,6 +736,9 @@ export function createContextCompactionPrepareTurn(
 		};
 
 		if (result?.messages) {
+			const compactedSummary = result.messages
+				.map((message) => getCompactionSummaryMetadata(message))
+				.find((metadata) => metadata !== undefined);
 			const afterMessageTokens = result.messages.reduce(
 				(total: number, message) => total + estimateMessageTokens(message),
 				0,
@@ -785,6 +795,15 @@ export function createContextCompactionPrepareTurn(
 				messagesBefore: beforeMessageCount,
 				messagesAfter: result.messages.length,
 				maxInputTokens,
+				// The summary and the retrospective travel with the notice so
+				// the row that announces a compaction can also show what it
+				// produced. A compaction is the one operation whose output the
+				// user never sees and cannot get back to afterwards -- it
+				// replaces the messages it was written from.
+				...(compactedSummary ? { summary: compactedSummary.summary } : {}),
+				...(compactedSummary?.thinkingSummary
+					? { thinkingSummary: compactedSummary.thinkingSummary }
+					: {}),
 			});
 			captureCompactionExecuted(config.telemetry, {
 				ulid: telemetryUlid,

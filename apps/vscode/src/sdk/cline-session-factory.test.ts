@@ -1053,6 +1053,8 @@ describe("buildSessionConfig", () => {
 		expect(config.compaction).toEqual({
 			enabled: true,
 			strategy: "agentic",
+			// The second compaction phase, on by default.
+			thinkingSummaryEnabled: true,
 		})
 	})
 
@@ -1073,6 +1075,8 @@ describe("buildSessionConfig", () => {
 		expect(config.compaction).toEqual({
 			enabled: true,
 			strategy: "basic",
+			// The second compaction phase, on by default.
+			thinkingSummaryEnabled: true,
 		})
 	})
 
@@ -1093,6 +1097,8 @@ describe("buildSessionConfig", () => {
 		expect(config.compaction).toEqual({
 			enabled: true,
 			strategy: "agentic",
+			// The second compaction phase, on by default.
+			thinkingSummaryEnabled: true,
 		})
 	})
 
@@ -1131,6 +1137,8 @@ describe("buildSessionConfig", () => {
 		expect(enabledConfig.compaction).toEqual({
 			enabled: true,
 			strategy: "agentic",
+			// The second compaction phase, on by default.
+			thinkingSummaryEnabled: true,
 		})
 	})
 

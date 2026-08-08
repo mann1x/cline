@@ -300,6 +300,8 @@ const USER_SETTINGS_FIELDS = {
 	 * it replaces, so this is worth being able to tune without a rebuild.
 	 */
 	compactionPrompt: { default: "" as string },
+	thinkingCompactionEnabled: { default: true as boolean },
+	thinkingCompactionPrompt: { default: "" as string },
 	subagentsEnabled: { default: false as boolean },
 	worktreesEnabled: { default: false as boolean },
 	preferredLanguage: { default: "English" as string },

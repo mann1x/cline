@@ -1186,6 +1186,11 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	const globalUseAutoCondense = stateManager.getGlobalSettingsKey("useAutoCondense") ?? true
 	const compactionStrategy = readCompactionStrategyGlobally()
 	const compactionPrompt = (stateManager.getGlobalSettingsKey("compactionPrompt") ?? "").trim()
+	// Second-phase retrospective over the reasoning compaction discards.
+	// Defaults on: the summary alone leaves a resumed task with no memory of
+	// having been wrong, which is how a long run repeats its own mistakes.
+	const thinkingCompactionEnabled = stateManager.getGlobalSettingsKey("thinkingCompactionEnabled") ?? true
+	const thinkingCompactionPrompt = (stateManager.getGlobalSettingsKey("thinkingCompactionPrompt") ?? "").trim()
 	// Per-tool-result cap. Stored as 0 when unset, which is not "keep nothing":
 	// it hands the decision back to the SDK default.
 	const maxToolResultChars = positiveFiniteNumber(stateManager.getGlobalSettingsKey("maxToolResultChars"))
@@ -1361,6 +1366,8 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 						enabled: true,
 						strategy: compactionStrategy,
 						...(compactionPrompt ? { summaryPrompt: compactionPrompt } : {}),
+						thinkingSummaryEnabled: thinkingCompactionEnabled,
+						...(thinkingCompactionPrompt ? { thinkingSummaryPrompt: thinkingCompactionPrompt } : {}),
 					},
 				}
 			: {}),

@@ -4,7 +4,7 @@
 // This allows the SdkController to reuse the classic state-building logic
 // without inheriting the entire classic Controller implementation.
 
-import { DEFAULT_COMPACTION_PROMPT, readCompactionStrategyGlobally } from "@cline/core"
+import { DEFAULT_COMPACTION_PROMPT, DEFAULT_THINKING_COMPACTION_PROMPT, readCompactionStrategyGlobally } from "@cline/core"
 import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
 import type { ExtensionState, Platform } from "@shared/ExtensionMessage"
 import { ClineEnv } from "@/config"
@@ -44,6 +44,8 @@ export async function getStateToPostToWebview(controller: {
 	const yoloModeToggled = stateManager.getGlobalSettingsKey("yoloModeToggled")
 	const useAutoCondense = stateManager.getGlobalSettingsKey("useAutoCondense")
 	const compactionPrompt = stateManager.getGlobalSettingsKey("compactionPrompt")
+	const thinkingCompactionEnabled = stateManager.getGlobalSettingsKey("thinkingCompactionEnabled")
+	const thinkingCompactionPrompt = stateManager.getGlobalSettingsKey("thinkingCompactionPrompt")
 	const focusChainSettings = stateManager.getGlobalSettingsKey("focusChainSettings")
 	const compactionStrategy = readCompactionStrategyGlobally()
 	const subagentsEnabled = stateManager.getGlobalSettingsKey("subagentsEnabled")
@@ -130,6 +132,9 @@ export async function getStateToPostToWebview(controller: {
 		useAutoCondense,
 		compactionPrompt,
 		defaultCompactionPrompt: DEFAULT_COMPACTION_PROMPT,
+		thinkingCompactionEnabled,
+		thinkingCompactionPrompt,
+		defaultThinkingCompactionPrompt: DEFAULT_THINKING_COMPACTION_PROMPT,
 		focusChainSettings,
 		compactionStrategy,
 		subagentsEnabled,

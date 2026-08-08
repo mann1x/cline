@@ -19,6 +19,75 @@ export const CONTEXT_WINDOW_INPUT_RATIO = 0.9;
 export const COMPACTION_TRIGGER_RATIO = 0.9;
 export const DEFAULT_TARGET_RATIO = 0.7;
 export const DEFAULT_PRESERVE_RECENT_TOKENS = 20_000;
+
+/** The window the flat 20,000 default was chosen against. */
+const PRESERVE_RECENT_REFERENCE_WINDOW = 128_000;
+
+/**
+ * How the recency floor grows with the window.
+ *
+ * Sub-linear on purpose. A window ten times larger does not mean ten times as
+ * much recent work is worth carrying — the useful tail is the current task, and
+ * that is set by the task, not by the hardware. But it does not stay flat
+ * either: 20,000 tokens is a third of a 64k window and 2% of a million.
+ *
+ * Two-thirds is the exponent that puts 20,000 at 128k and ~79,000 at 1M, which
+ * are the two anchors this was specified against.
+ */
+const PRESERVE_RECENT_WINDOW_EXPONENT = 2 / 3;
+
+/**
+ * The largest share of a compaction's target the recent tail may claim.
+ *
+ * The summary and the thinking retrospective have to fit in the same target,
+ * and they are what a long task runs on. Without this the ladder wins every
+ * argument on a small window: at 32k it would ask for 7,900 tokens out of a
+ * 9,700 target and leave the summary nothing to be written into.
+ */
+const PRESERVE_RECENT_TARGET_SHARE = 0.6;
+
+/**
+ * The recency floor for a given window.
+ *
+ * `DEFAULT_PRESERVE_RECENT_TOKENS` was a single number applied to every model,
+ * which is right for exactly one window size. Measured against the two ends it
+ * has to serve: on a 32k window it asks to preserve more than the compaction
+ * target, so compaction can reclaim nothing; on a 1M window it throws away
+ * everything but the last few turns of a task with room for forty times that.
+ */
+export function resolvePreserveRecentTokens(input: {
+	contextWindow?: number;
+	maxInputTokens?: number;
+	messageTargetTokens?: number;
+	override?: number;
+}): number {
+	if (isPositiveFiniteNumber(input.override)) {
+		return input.override;
+	}
+	const window = isPositiveFiniteNumber(input.contextWindow)
+		? input.contextWindow
+		: isPositiveFiniteNumber(input.maxInputTokens)
+			? input.maxInputTokens / CONTEXT_WINDOW_INPUT_RATIO
+			: undefined;
+	const ladder =
+		window === undefined
+			? DEFAULT_PRESERVE_RECENT_TOKENS
+			: Math.round(
+					DEFAULT_PRESERVE_RECENT_TOKENS *
+						(window / PRESERVE_RECENT_REFERENCE_WINDOW) **
+							PRESERVE_RECENT_WINDOW_EXPONENT,
+				);
+	if (!isPositiveFiniteNumber(input.messageTargetTokens)) {
+		return Math.max(1, ladder);
+	}
+	return Math.max(
+		1,
+		Math.min(
+			ladder,
+			Math.floor(input.messageTargetTokens * PRESERVE_RECENT_TARGET_SHARE),
+		),
+	);
+}
 /** Floor for a compaction summary, and the cap when no window is known. */
 export const DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS = 1_024;
 /**
@@ -58,6 +127,98 @@ export function resolveSummaryMaxOutputTokens(
 			DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
 			Math.floor(maxInputTokens * SUMMARY_OUTPUT_WINDOW_SHARE),
 		),
+	);
+}
+
+/**
+ * What the summary and the retrospective may spend together, by generation.
+ *
+ * A first compaction is summarising one stretch of work. A fifth is carrying
+ * everything the task has learned, and holding that to the same budget is how a
+ * long session degrades: the standing context stops growing while the thing it
+ * has to describe keeps going, so the model relearns what it already knew and
+ * repeats mistakes it has already made.
+ *
+ * Shares of the compaction target rather than of the window, because the target
+ * is what these compete for. The last rung is the ceiling — beyond it the
+ * standing context crowds out the recent turns it is supposed to give
+ * perspective on.
+ */
+const COMPACTION_BUDGET_LADDER = [0.33, 0.4, 0.45, 0.5, 0.55] as const;
+
+/** The summary's share of the combined budget. It writes first. */
+const SUMMARY_BUDGET_SHARE = 0.7;
+
+/**
+ * The retrospective's bounds, as shares of the combined budget.
+ *
+ * It is written second and takes what the summary left, so its cap is a range
+ * rather than a number: a summary that used its whole 70% leaves the floor of
+ * 30%, and one that came in at half leaves the ceiling of 50%. What it must not
+ * do is expand to fill the room — the instruction to be terse is in the prompt,
+ * and this is only the wall behind it.
+ */
+const THINKING_BUDGET_MAX_SHARE = 0.5;
+const THINKING_BUDGET_MIN_SHARE = 0.2;
+
+export interface CompactionOutputBudgets {
+	/** Generation of the compaction being written, 1-based. */
+	generation: number;
+	/** Summary and retrospective together. */
+	combinedTokens: number;
+	summaryMaxTokens: number;
+}
+
+export function resolveCompactionOutputBudgets(input: {
+	messageTargetTokens?: number;
+	maxInputTokens?: number;
+	generation?: number;
+}): CompactionOutputBudgets {
+	const generation = Math.max(
+		1,
+		Math.floor(
+			isPositiveFiniteNumber(input.generation) ? input.generation : 1,
+		),
+	);
+	const share =
+		COMPACTION_BUDGET_LADDER[
+			Math.min(generation, COMPACTION_BUDGET_LADDER.length) - 1
+		];
+	// Falls back to the window-derived cap when there is no target to take a
+	// share of, which is the first request of a session and every manual
+	// compaction that names its own budget.
+	const combinedTokens = isPositiveFiniteNumber(input.messageTargetTokens)
+		? Math.max(
+				DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
+				Math.floor(input.messageTargetTokens * share),
+			)
+		: resolveSummaryMaxOutputTokens(input.maxInputTokens);
+	return {
+		generation,
+		combinedTokens,
+		summaryMaxTokens: Math.max(
+			DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
+			Math.floor(combinedTokens * SUMMARY_BUDGET_SHARE),
+		),
+	};
+}
+
+/**
+ * What is left for the retrospective once the summary has been written.
+ *
+ * Measured against what the summary actually cost, not what it was allowed:
+ * the point of writing them in this order is that an economical summary buys
+ * the retrospective room rather than wasting it.
+ */
+export function resolveThinkingSummaryMaxTokens(input: {
+	budgets: CompactionOutputBudgets;
+	summaryTokens: number;
+}): number {
+	const { combinedTokens } = input.budgets;
+	const remaining = combinedTokens - Math.max(0, input.summaryTokens);
+	return Math.max(
+		Math.floor(combinedTokens * THINKING_BUDGET_MIN_SHARE),
+		Math.min(Math.floor(combinedTokens * THINKING_BUDGET_MAX_SHARE), remaining),
 	);
 }
 
@@ -125,6 +286,16 @@ export interface CompactionSummaryMetadata {
 	details: FileOperationSummary;
 	tokensBefore: number;
 	generatedAt: number;
+	/**
+	 * How many compactions this summary is the product of, 1-based.
+	 *
+	 * Carried on the message because it is the only durable record of it: the
+	 * summary chains through its own metadata, and the output budget ladder is
+	 * indexed by this number.
+	 */
+	generation: number;
+	/** The retrospective written alongside this summary, if there was one. */
+	thinkingSummary?: string;
 }
 
 export type EstimateMessageTokens = (message: MessageWithMetadata) => number;
@@ -262,6 +433,118 @@ export function serializeMessage(message: MessageWithMetadata): string {
 	return lines.join("\n");
 }
 
+/**
+ * Render the discarded reasoning against what it produced.
+ *
+ * The retrospective's whole value is the pairing. Reasoning on its own reads as
+ * a plan and every plan reads as sound; it is the outcome next to it that shows
+ * which ones were. So each turn is one block: what the model thought, what it
+ * then called, and how that call came back -- applied, refused as a no-op,
+ * failed, or refused by the loop guard.
+ *
+ * Tool results are reduced to their verdict rather than included. A retrospective
+ * about method has no use for the contents of a file, and on the transcripts this
+ * was built against the results are most of the bytes.
+ */
+export function serializeReasoningWithOutcomes(
+	messages: MessageWithMetadata[],
+): string {
+	const outcomeByToolUseId = new Map<string, string>();
+	for (const message of messages) {
+		if (!Array.isArray(message.content)) {
+			continue;
+		}
+		for (const block of message.content) {
+			if (block.type === "tool_result") {
+				outcomeByToolUseId.set(
+					block.tool_use_id,
+					describeToolOutcome(block),
+				);
+			}
+		}
+	}
+
+	const turns: string[] = [];
+	for (const message of messages) {
+		if (message.role !== "assistant" || !Array.isArray(message.content)) {
+			continue;
+		}
+		const thinking = message.content
+			.filter((block) => block.type === "thinking")
+			.map((block) => block.thinking.trim())
+			.filter(Boolean)
+			.join("\n");
+		const calls = message.content
+			.filter((block) => block.type === "tool_use")
+			.map(
+				(block) =>
+					`  ${block.name} -> ${outcomeByToolUseId.get(block.id) ?? "no result recorded"}`,
+			);
+		if (!thinking && calls.length === 0) {
+			continue;
+		}
+		const lines: string[] = [];
+		if (thinking) {
+			// The reasoning is the subject here, so it keeps a far longer leash
+			// than `serializeMessage` gives it -- but not an unbounded one: a
+			// single runaway think should not be able to crowd out the twenty
+			// turns around it.
+			const cost = reasoningCostLabel(message, thinking.length);
+			lines.push(`Reasoning${cost}: ${truncateText(thinking, 6_000)}`);
+		}
+		if (calls.length > 0) {
+			lines.push(`Then called:\n${calls.join("\n")}`);
+		}
+		turns.push(lines.join("\n"));
+	}
+	return turns.join("\n\n").trim();
+}
+
+/** What a tool call came back as, in the fewest words that distinguish them. */
+function describeToolOutcome(block: ToolResultContent): string {
+	const text = flattenToolResultContent(block.content);
+	if (text.includes("strikes left") || text.includes("LAST strike")) {
+		return "refused by the loop guard as an unchanged repeat";
+	}
+	if (text.includes(NO_CHANGE_MARKER)) {
+		return "refused: the change was already in the file";
+	}
+	if (block.is_error === true) {
+		return `failed: ${truncateText(firstLine(text), 200)}`;
+	}
+	if (/"success"\s*:\s*false/.test(text)) {
+		return `reported failure: ${truncateText(firstLine(text), 200)}`;
+	}
+	return "applied";
+}
+
+/** The marker the editor builds its no-op refusal from. */
+const NO_CHANGE_MARKER = "No change:";
+
+function firstLine(text: string): string {
+	const line = text.split("\n").find((value) => value.trim());
+	return (line ?? text).trim();
+}
+
+/**
+ * How much this turn's reasoning cost, when the transcript recorded it.
+ *
+ * Handed to the model because it is the one thing it cannot infer from reading
+ * its own thinking back: whether a stretch that felt thorough was in fact the
+ * turn that spent eighteen thousand tokens and produced one refused edit.
+ */
+function reasoningCostLabel(
+	message: MessageWithMetadata,
+	thinkingChars: number,
+): string {
+	const metrics = (message as { metrics?: { outputTokens?: number } }).metrics;
+	const outputTokens = metrics?.outputTokens;
+	if (typeof outputTokens !== "number" || !Number.isFinite(outputTokens)) {
+		return "";
+	}
+	return ` (${outputTokens} output tokens, ${thinkingChars} chars of it thinking)`;
+}
+
 export function serializeConversation(messages: MessageWithMetadata[]): string {
 	return messages.map(serializeMessage).join("\n\n").trim();
 }
@@ -332,6 +615,20 @@ export function getCompactionSummaryMetadata(
 		},
 		tokensBefore: Number(metadata.tokensBefore ?? 0),
 		generatedAt: Number(metadata.generatedAt ?? 0),
+		// A summary written before the ladder existed carries no generation.
+		// Reading it as the first is right for the only case that matters: a
+		// session resumed across the upgrade starts its ladder over rather than
+		// jumping to a rung it never earned.
+		generation:
+			typeof metadata.generation === "number" &&
+			Number.isFinite(metadata.generation) &&
+			metadata.generation >= 1
+				? Math.floor(metadata.generation)
+				: 1,
+		...(typeof metadata.thinkingSummary === "string" &&
+		metadata.thinkingSummary.trim()
+			? { thinkingSummary: metadata.thinkingSummary }
+			: {}),
 	};
 }
 
@@ -1125,6 +1422,66 @@ export function buildSummaryRequest(options: {
 	return parts.join("\n\n");
 }
 
+/**
+ * The second phase's prompt: a retrospective, not a second summary.
+ *
+ * The summary describes what happened. This describes how the work went, which
+ * is the part that dies with the thinking blocks compaction discards -- every
+ * wrong turn, every retry, every stretch spent on an approach that was never
+ * going to work. A model that starts from a summary alone starts with no memory
+ * of having been wrong, and makes the same mistakes in the same order.
+ *
+ * Written hard against verbosity, because the models this matters most for are
+ * the ones that ruminate: on a coder model that hits its thinking cap most
+ * turns, an unbounded "reflect on your reasoning" produces more of exactly the
+ * behaviour it is meant to flag. Hence the ban on specifics -- those are in the
+ * summary, and repeating them here spends the budget twice for one fact.
+ */
+export const DEFAULT_THINKING_COMPACTION_PROMPT = `You are writing the retrospective that goes at the top of your own context after compaction. It is not a summary — what happened is written up separately, and repeating it here wastes the space this needs.
+
+You are reading your own reasoning from the work about to be discarded, together with what each stretch of it produced: which tool calls landed, which were refused, which were retried unchanged, and which turns ran long.
+
+Write the honest assessment. Be terse. Every line must be something you would want to know before starting the next hour of this task.
+
+## What worked
+Approaches that produced progress, stated as approaches rather than as events.
+
+## What did not
+Approaches that cost time and produced nothing. Name the failure mode: repeating an unchanged call, editing from a stale read, rewriting where narrowing would do, chasing a symptom.
+
+## Where the time went
+The stretches that were expensive against what they achieved, including any turn where the reasoning ran long without converging.
+
+## Do differently
+What to do instead. Concrete enough to act on, short enough to remember.
+
+Rules:
+- No file names, line numbers, code, identifiers or values. Those are in the summary. This is about method.
+- No narration of the sequence of events. Judgement only.
+- Leave out any section with nothing worth saying.
+- Terse throughout. A dozen short lines is a good retrospective; a page is a failed one.`;
+
+export function buildThinkingSummaryRequest(options: {
+	previousThinkingSummary?: string;
+	reasoningText: string;
+	/** Overrides {@link DEFAULT_THINKING_COMPACTION_PROMPT}; blank falls back. */
+	promptTemplate?: string;
+}): string {
+	const parts: string[] = [
+		options.promptTemplate?.trim() || DEFAULT_THINKING_COMPACTION_PROMPT,
+	];
+	if (options.previousThinkingSummary?.trim()) {
+		parts.push(
+			`Your retrospective from the previous compaction. Carry forward what still holds, revise what does not, and do not simply restate it:\n${options.previousThinkingSummary.trim()}`,
+		);
+	}
+	parts.push(
+		`Your reasoning and what it produced:\n${options.reasoningText || "(none)"}`,
+	);
+	return parts.join("\n\n");
+}
+
+
 export function resolveSummarizerConfig(options: {
 	activeProviderConfig: ProviderConfig;
 	summarizer?: CoreCompactionSummarizerConfig;
@@ -1133,12 +1490,23 @@ export function resolveSummarizerConfig(options: {
 	 * first pass, which exists to resolve that budget from the merged model.
 	 */
 	maxInputTokens?: number;
+	/**
+	 * The output cap for this call, when the caller has one.
+	 *
+	 * The window-derived default is flat for the life of a session; the
+	 * generation ladder is not, and the retrospective's cap is not even known
+	 * until the summary has been written. Both are decided by the caller.
+	 */
+	outputTokenCap?: number;
 }): ProviderConfig {
 	const summarizer = options.summarizer;
-	const summaryMaxOutputTokens = resolveSummaryMaxOutputTokens(
-		options.maxInputTokens,
-	);
-	const withSummarizerDefaults = (config: ProviderConfig): ProviderConfig => {
+	const summaryMaxOutputTokens = isPositiveFiniteNumber(options.outputTokenCap)
+		? options.outputTokenCap
+		: resolveSummaryMaxOutputTokens(options.maxInputTokens);
+	const withSummarizerDefaults = (
+		config: ProviderConfig,
+		maxOutputTokens: number,
+	): ProviderConfig => {
 		if (config.providerId === "openai-codex") {
 			const { maxOutputTokens: _maxOutputTokens, ...rest } = config;
 			return {
@@ -1146,30 +1514,46 @@ export function resolveSummarizerConfig(options: {
 				thinking: false,
 			};
 		}
-		return {
-			...config,
-			maxOutputTokens: config.maxOutputTokens ?? summaryMaxOutputTokens,
-			thinking: false,
-		};
+		return { ...config, maxOutputTokens, thinking: false };
 	};
 	if (!summarizer) {
-		return withSummarizerDefaults(options.activeProviderConfig);
+		// The caller's cap outranks the config's own. This branch runs on the
+		// *active* provider config, whose `maxOutputTokens` is the user's
+		// per-turn cap for doing the work -- 32,000 on the model this was
+		// measured against -- and was never a statement about how long a summary
+		// should be. Letting it stand would leave the ladder describing a budget
+		// that nothing enforced.
+		return withSummarizerDefaults(
+			options.activeProviderConfig,
+			isPositiveFiniteNumber(options.outputTokenCap)
+				? options.outputTokenCap
+				: (options.activeProviderConfig.maxOutputTokens ??
+						summaryMaxOutputTokens),
+		);
 	}
 	const baseProviderConfig =
 		summarizer.providerConfig?.providerId === summarizer.providerId
 			? summarizer.providerConfig
 			: undefined;
-	return withSummarizerDefaults({
-		...(baseProviderConfig ?? {}),
-		providerId: summarizer.providerId,
-		modelId: summarizer.modelId,
-		apiKey: summarizer.apiKey ?? baseProviderConfig?.apiKey,
-		baseUrl: summarizer.baseUrl ?? baseProviderConfig?.baseUrl,
-		headers: summarizer.headers ?? baseProviderConfig?.headers,
-		modelInfo: summarizer.modelInfo ?? baseProviderConfig?.modelInfo,
-		knownModels: summarizer.knownModels ?? baseProviderConfig?.knownModels,
-		maxOutputTokens: summarizer.maxOutputTokens ?? summaryMaxOutputTokens,
-	});
+	// A summarizer configured with its own cap keeps it: unlike the active
+	// provider's, that number was chosen to size a summary, so it is a decision
+	// the ladder has no business overruling.
+	return withSummarizerDefaults(
+		{
+			...(baseProviderConfig ?? {}),
+			providerId: summarizer.providerId,
+			modelId: summarizer.modelId,
+			apiKey: summarizer.apiKey ?? baseProviderConfig?.apiKey,
+			baseUrl: summarizer.baseUrl ?? baseProviderConfig?.baseUrl,
+			headers: summarizer.headers ?? baseProviderConfig?.headers,
+			modelInfo: summarizer.modelInfo ?? baseProviderConfig?.modelInfo,
+			knownModels: summarizer.knownModels ?? baseProviderConfig?.knownModels,
+		},
+		summarizer.maxOutputTokens ??
+			(isPositiveFiniteNumber(options.outputTokenCap)
+				? options.outputTokenCap
+				: summaryMaxOutputTokens),
+	);
 }
 
 export function buildSummaryMessage(options: {
@@ -1177,10 +1561,23 @@ export function buildSummaryMessage(options: {
 	fileOps: FileOperationSummary;
 	tokensBefore: number;
 	userRunSpan: number;
+	generation?: number;
+	/** The retrospective, prepended as this message's own reasoning. */
+	thinkingSummary?: string;
 }): MessageWithMetadata {
+	const thinkingSummary = options.thinkingSummary?.trim();
 	return {
 		role: "user",
 		content: [
+			// Ahead of the text, and as reasoning rather than text, because that
+			// is what it is: the model's own account of how the work went,
+			// occupying the same position in the message that its thinking
+			// occupied in the turns being replaced.
+			...(thinkingSummary
+				? ([
+						{ type: "thinking", thinking: thinkingSummary },
+					] as MessageWithMetadata["content"] & object[])
+				: []),
 			{
 				type: "text",
 				text: `Context summary:\n\n${options.summary}`,
@@ -1194,6 +1591,8 @@ export function buildSummaryMessage(options: {
 			details: options.fileOps,
 			tokensBefore: options.tokensBefore,
 			generatedAt: Date.now(),
+			generation: Math.max(1, Math.floor(options.generation ?? 1)),
+			...(thinkingSummary ? { thinkingSummary } : {}),
 		} satisfies CompactionSummaryMetadata,
 	};
 }

@@ -864,7 +864,10 @@ export {
 } from "./extensions/context/compaction";
 // Exported so the settings panel can show the built-in prompt as the
 // placeholder for the field that replaces it.
-export { DEFAULT_COMPACTION_PROMPT } from "./extensions/context/compaction-shared";
+export {
+	DEFAULT_COMPACTION_PROMPT,
+	DEFAULT_THINKING_COMPACTION_PROMPT,
+} from "./extensions/context/compaction-shared";
 export {
 	ALL_DEFAULT_TOOL_NAMES,
 	type ApplyPatchExecutor,

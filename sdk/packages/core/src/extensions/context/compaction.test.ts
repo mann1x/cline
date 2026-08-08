@@ -21,10 +21,15 @@ import {
 	createTokenEstimator,
 	estimateTokens,
 	findCutPlan,
+	buildThinkingSummaryRequest,
+	resolveCompactionOutputBudgets,
 	resolveEffectiveMaxInputTokens,
+	resolvePreserveRecentTokens,
 	resolveRecencyBounds,
 	resolveSummarizerConfig,
+	resolveThinkingSummaryMaxTokens,
 	serializeMessage,
+	serializeReasoningWithOutcomes,
 	TOOL_RESULT_CHAR_LIMIT,
 } from "./compaction-shared";
 
@@ -1465,7 +1470,9 @@ describe("createContextCompactionPrepareTurn", () => {
 			},
 		});
 
-		expect(createHandlerMock).toHaveBeenCalledTimes(1);
+		// Two: the summary, then the retrospective over the reasoning being
+		// discarded. Both go to the same summarizer.
+		expect(createHandlerMock).toHaveBeenCalledTimes(2);
 		expect(emitStatusNotice).toHaveBeenCalledWith(
 			"auto-compacting",
 			expect.objectContaining({
@@ -1496,14 +1503,17 @@ describe("createContextCompactionPrepareTurn", () => {
 				},
 			}),
 		});
+		// The retrospective leads, as the summary message's own reasoning, and
+		// the summary text follows it.
 		expect(result?.messages[0]?.content).toEqual([
+			expect.objectContaining({ type: "thinking" }),
 			expect.objectContaining({ type: "text" }),
 		]);
-		const summaryContent = Array.isArray(result?.messages[0]?.content)
-			? result.messages[0].content[0]?.type === "text"
-				? result.messages[0].content[0].text
-				: ""
-			: "";
+		const summaryBlock = Array.isArray(result?.messages[0]?.content)
+			? result.messages[0].content.find((block) => block.type === "text")
+			: undefined;
+		const summaryContent =
+			summaryBlock?.type === "text" ? summaryBlock.text : "";
 		expect(summaryContent).toContain("Context summary:");
 		expect(summaryContent).toContain("## Files");
 		expect(result?.messages[1]).toEqual({
@@ -1729,7 +1739,8 @@ describe("createContextCompactionPrepareTurn", () => {
 			},
 		});
 
-		expect(createMessage).toHaveBeenCalledTimes(1);
+		// The summary request, then the retrospective's.
+		expect(createMessage).toHaveBeenCalledTimes(2);
 		const createMessageCalls = createMessage.mock.calls as unknown as [
 			string,
 			Array<{ role: string; content: string }>,
@@ -4852,5 +4863,208 @@ describe("createContextCompactionPrepareTurn", () => {
 		expect(
 			projectSessionCompactionState(savedState, currentMessages),
 		).toBeDefined();
+	});
+});
+
+describe("the output budget ladder", () => {
+	// Generation 1 has to land where the flat cap used to, or every short task
+	// silently changes behaviour to buy something only long ones benefit from.
+	it("starts where the flat cap was and climbs to the ceiling", () => {
+		const target = 32_670; // a 110k window, the model this was specified on
+		const shares = [1, 2, 3, 4, 5, 9].map(
+			(generation) =>
+				resolveCompactionOutputBudgets({
+					messageTargetTokens: target,
+					generation,
+				}).combinedTokens / target,
+		);
+
+		expect(shares.map((share) => Number(share.toFixed(2)))).toEqual([
+			0.33, 0.4, 0.45, 0.5, 0.55, 0.55,
+		]);
+	});
+
+	it("gives the summary seven tenths and lets it write first", () => {
+		const budgets = resolveCompactionOutputBudgets({
+			messageTargetTokens: 32_670,
+			generation: 1,
+		});
+
+		expect(budgets.combinedTokens).toBe(10_781);
+		expect(budgets.summaryMaxTokens).toBe(7_546);
+	});
+
+	// The whole reason the summary is written first: an economical one buys the
+	// retrospective room rather than leaving it unspent.
+	it("hands the retrospective what the summary did not spend", () => {
+		const budgets = resolveCompactionOutputBudgets({
+			messageTargetTokens: 32_670,
+			generation: 1,
+		});
+
+		const afterAFullSummary = resolveThinkingSummaryMaxTokens({
+			budgets,
+			summaryTokens: budgets.summaryMaxTokens,
+		});
+		const afterAShortSummary = resolveThinkingSummaryMaxTokens({
+			budgets,
+			summaryTokens: Math.floor(budgets.combinedTokens * 0.3),
+		});
+
+		// 30% when the summary took its whole share, and capped at 50% when it
+		// came in well under -- not the whole 70% it left behind.
+		expect(afterAFullSummary).toBe(budgets.combinedTokens - budgets.summaryMaxTokens);
+		expect(afterAShortSummary).toBe(Math.floor(budgets.combinedTokens * 0.5));
+	});
+
+	it("keeps a floor when the summary overran its share", () => {
+		const budgets = resolveCompactionOutputBudgets({
+			messageTargetTokens: 32_670,
+			generation: 1,
+		});
+
+		expect(
+			resolveThinkingSummaryMaxTokens({
+				budgets,
+				summaryTokens: budgets.combinedTokens * 2,
+			}),
+		).toBe(Math.floor(budgets.combinedTokens * 0.2));
+	});
+});
+
+describe("resolvePreserveRecentTokens", () => {
+	// The two anchors this was specified against. A flat 20,000 is right for
+	// exactly one window: on 32k it asks to preserve more than the compaction
+	// target, and on 1M it throws away a task with room for forty times that.
+	it("holds its anchors at 128k and 1M", () => {
+		expect(resolvePreserveRecentTokens({ contextWindow: 128_000 })).toBe(20_000);
+		expect(resolvePreserveRecentTokens({ contextWindow: 1_000_000 })).toBe(78_745);
+	});
+
+	it("grows sub-linearly between them", () => {
+		const at256k = resolvePreserveRecentTokens({ contextWindow: 256_000 });
+
+		// Eight times the window buys four times the tail, not eight.
+		expect(at256k).toBeGreaterThan(20_000);
+		expect(at256k).toBeLessThan(40_000);
+	});
+
+	it("never claims more than its share of what compaction is aiming for", () => {
+		// A 32k window: the ladder asks 7,937 against a 9,732 target, which would
+		// leave the summary nothing to be written into.
+		expect(
+			resolvePreserveRecentTokens({
+				contextWindow: 32_768,
+				messageTargetTokens: 9_732,
+			}),
+		).toBe(Math.floor(9_732 * 0.6));
+	});
+
+	it("yields to an explicit setting", () => {
+		expect(
+			resolvePreserveRecentTokens({ contextWindow: 1_000_000, override: 4_000 }),
+		).toBe(4_000);
+	});
+});
+
+describe("serializeReasoningWithOutcomes", () => {
+	// Reasoning alone reads as a plan, and every plan reads as sound. What makes
+	// it a retrospective is the outcome sitting next to it.
+	it("pairs each stretch of reasoning with what its call came back as", () => {
+		const rendered = serializeReasoningWithOutcomes([
+			{
+				role: "assistant",
+				content: [
+					{ type: "thinking", thinking: "the range must have moved" },
+					{
+						type: "tool_use",
+						id: "call_1",
+						name: "editor",
+						input: { path: "game.html" },
+					},
+				],
+				metrics: { outputTokens: 17_901 },
+			} as MessageWithMetadata,
+			{
+				role: "user",
+				content: [
+					{
+						type: "tool_result",
+						tool_use_id: "call_1",
+						name: "editor",
+						content:
+							'{"error":"Editor operation failed: No change: lines 94-98 already reads exactly this way"}',
+						is_error: true,
+					},
+				],
+			} as MessageWithMetadata,
+		]);
+
+		expect(rendered).toContain("the range must have moved");
+		expect(rendered).toContain("editor -> refused: the change was already in the file");
+		// The cost, which is the one thing the model cannot read back off its own
+		// thinking: whether the turn that felt thorough was the expensive one.
+		expect(rendered).toContain("17901 output tokens");
+	});
+
+	it("names a loop-guard refusal as its own outcome", () => {
+		const rendered = serializeReasoningWithOutcomes([
+			{
+				role: "assistant",
+				content: [
+					{ type: "thinking", thinking: "try it once more" },
+					{ type: "tool_use", id: "c", name: "editor", input: {} },
+				],
+			} as MessageWithMetadata,
+			{
+				role: "user",
+				content: [
+					{
+						type: "tool_result",
+						tool_use_id: "c",
+						name: "editor",
+						content: "No change: …\n\nWarning: you have only 2 strikes left …",
+						is_error: true,
+					},
+				],
+			} as MessageWithMetadata,
+		]);
+
+		expect(rendered).toContain("refused by the loop guard as an unchanged repeat");
+	});
+
+	it("has nothing to say about turns that did not reason", () => {
+		expect(
+			serializeReasoningWithOutcomes([
+				{ role: "user", content: [{ type: "text", text: "fix it" }] },
+			] as MessageWithMetadata[]),
+		).toBe("");
+	});
+});
+
+describe("buildThinkingSummaryRequest", () => {
+	it("asks the model to revise its standing assessment, not repeat it", () => {
+		const request = buildThinkingSummaryRequest({
+			previousThinkingSummary: "editing from stale reads cost most of the time",
+			reasoningText: "Reasoning: …",
+		});
+
+		expect(request).toContain("Carry forward what still holds");
+		expect(request).toContain("editing from stale reads cost most of the time");
+	});
+
+	it("bans the specifics that belong in the summary", () => {
+		expect(buildThinkingSummaryRequest({ reasoningText: "x" })).toContain(
+			"No file names, line numbers, code, identifiers or values",
+		);
+	});
+
+	it("takes a replacement instruction", () => {
+		expect(
+			buildThinkingSummaryRequest({
+				reasoningText: "x",
+				promptTemplate: "Be brutal and be brief.",
+			}),
+		).toContain("Be brutal and be brief.");
 	});
 });

@@ -194,6 +194,14 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			controller.stateManager.setGlobalState("compactionPrompt", request.compactionPrompt)
 		}
 
+		if (request.thinkingCompactionEnabled !== undefined) {
+			controller.stateManager.setGlobalState("thinkingCompactionEnabled", request.thinkingCompactionEnabled)
+		}
+
+		if (request.thinkingCompactionPrompt !== undefined) {
+			controller.stateManager.setGlobalState("thinkingCompactionPrompt", request.thinkingCompactionPrompt)
+		}
+
 		if (request.useAutoCondense !== undefined) {
 			if (controller.task) {
 				telemetryService.captureAutoCondenseToggle(

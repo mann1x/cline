@@ -202,6 +202,27 @@ export interface CoreCompactionConfig {
 	 * caller either way. Blank or unset uses the default.
 	 */
 	summaryPrompt?: string;
+	/**
+	 * Whether compaction also writes a retrospective over the reasoning it is
+	 * discarding, prepended to the summary as its own thinking block.
+	 *
+	 * The summary records what happened; the reasoning that produced it is
+	 * thrown away with the turns, and with it every wrong approach the model
+	 * already ruled out. A model that resumes from a summary alone has no memory
+	 * of having been wrong, which is how a long task repeats its own mistakes.
+	 *
+	 * Costs one extra model call per compaction. Defaults to on.
+	 */
+	thinkingSummaryEnabled?: boolean;
+	/**
+	 * Replaces the built-in retrospective instruction.
+	 *
+	 * Worth changing per model for the same reason as `summaryPrompt`, and more
+	 * so: a model that habitually reasons to its cap needs a firmer hand about
+	 * terseness than one that thinks in three lines. Blank or unset uses the
+	 * default.
+	 */
+	thinkingSummaryPrompt?: string;
 	summarizer?: CoreCompactionSummarizerConfig;
 	compact?: (
 		context: CoreCompactionContext,

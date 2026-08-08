@@ -138,6 +138,12 @@ export interface ExtensionState {
 	 * and `@cline/core` reaches Node-only code through `@cline/llms`.
 	 */
 	defaultCompactionPrompt?: string
+	/** Whether compaction also writes a retrospective over the discarded reasoning. */
+	thinkingCompactionEnabled?: boolean
+	/** Replaces the built-in retrospective instruction; empty means default. */
+	thinkingCompactionPrompt?: string
+	/** The built-in retrospective instruction, so the field can show what it replaces. */
+	defaultThinkingCompactionPrompt?: string
 	/** Focus Chain / task checklist. Read by the webview so the panel and the
 	 * Features toggle agree with what the session was actually configured with. */
 	focusChainSettings?: FocusChainSettings
@@ -409,6 +415,10 @@ export interface ClineCompactionInfo {
 	tokensAfter?: number
 	messagesBefore?: number
 	messagesAfter?: number
+	/** The summary this compaction wrote, so the row can show it on demand. */
+	summary?: string
+	/** The retrospective written alongside it, when the second phase ran. */
+	thinkingSummary?: string
 }
 
 export interface ClineSubagentUsageInfo {

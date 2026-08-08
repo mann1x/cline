@@ -167,6 +167,9 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		useAutoCondense,
 		compactionPrompt,
 		defaultCompactionPrompt,
+		thinkingCompactionEnabled,
+		thinkingCompactionPrompt,
+		defaultThinkingCompactionPrompt,
 		compactionStrategy,
 		subagentsEnabled,
 		worktreesEnabled,
@@ -350,6 +353,42 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 					/>
 					{compactionPrompt?.trim() ? (
 						<VSCodeButton appearance="secondary" onClick={() => updateSetting("compactionPrompt", "")}>
+							Reset to default
+						</VSCodeButton>
+					) : null}
+				</div>
+
+				{/* Directly below, because it is the second half of the same
+				    operation: the summary says what happened, this says how it
+				    went. */}
+				<div className="space-y-2 pt-2">
+					<div className="flex items-center justify-between w-full">
+						<Label className="text-sm font-medium text-foreground">Thinking Compaction Prompt</Label>
+						<Switch
+							checked={thinkingCompactionEnabled ?? true}
+							className="shrink-0"
+							disabled={!useAutoCondense}
+							id="thinkingCompactionEnabled"
+							onCheckedChange={(checked) => updateSetting("thinkingCompactionEnabled", checked)}
+							size="lg"
+						/>
+					</div>
+					<p className="text-xs text-muted-foreground">
+						Compaction throws away the model&apos;s reasoning along with the turns, and with it every approach it had
+						already ruled out. This is a second pass over that reasoning &mdash; what worked, what wasted time, what
+						to do differently &mdash; written as the summary&apos;s own thinking block. Costs one extra model call per
+						compaction. Leave empty for the built-in prompt.
+					</p>
+					<DebouncedTextArea
+						disabled={!useAutoCondense || thinkingCompactionEnabled === false}
+						initialValue={thinkingCompactionPrompt ?? ""}
+						maxRows={24}
+						minRows={4}
+						onChange={(value) => updateSetting("thinkingCompactionPrompt", value)}
+						placeholder={defaultThinkingCompactionPrompt}
+					/>
+					{thinkingCompactionPrompt?.trim() ? (
+						<VSCodeButton appearance="secondary" onClick={() => updateSetting("thinkingCompactionPrompt", "")}>
 							Reset to default
 						</VSCodeButton>
 					) : null}

@@ -1,5 +1,5 @@
 import { createHandlerAsync } from "@cline/llms";
-import type { BasicLogger } from "@cline/shared";
+import type { BasicLogger, MessageWithMetadata } from "@cline/shared";
 import { countUserRunMessages } from "../../session/user-run-messages";
 import type {
 	CoreCompactionContext,
@@ -14,6 +14,7 @@ import {
 import {
 	buildSummaryMessage,
 	buildSummaryRequest,
+	buildThinkingSummaryRequest,
 	type EstimateMessageTokens,
 	ensureFilesSection,
 	estimateTokens,
@@ -22,9 +23,12 @@ import {
 	findLatestSummaryIndex,
 	getCompactionSummaryMetadata,
 	type RecencyBounds,
+	resolveCompactionOutputBudgets,
 	resolveEffectiveMaxInputTokens,
 	resolveSummarizerConfig,
+	resolveThinkingSummaryMaxTokens,
 	serializeConversation,
+	serializeReasoningWithOutcomes,
 } from "./compaction-shared";
 
 const MIN_AGENTIC_SUMMARY_INPUT_TOKENS = 1_024;
@@ -98,12 +102,95 @@ function safeJsonSize(value: unknown): number {
 	}
 }
 
+/**
+ * The second phase, in full.
+ *
+ * Self-contained and unable to fail the compaction: a retrospective is worth
+ * having and worth nothing at the price of losing the summary that was already
+ * paid for. Every exit here returns `undefined` and the compaction proceeds
+ * without it.
+ */
+async function generateThinkingSummary(options: {
+	enabled: boolean;
+	messages: MessageWithMetadata[];
+	previousThinkingSummary?: string;
+	promptTemplate?: string;
+	maxOutputTokens: number;
+	summarizer?: CoreCompactionSummarizerConfig;
+	activeProviderConfig: ProviderConfig;
+	summarizerInputLimit: number;
+	logger?: BasicLogger;
+}): Promise<string | undefined> {
+	if (!options.enabled) {
+		return undefined;
+	}
+	const reasoningText = serializeReasoningWithOutcomes(options.messages);
+	if (!reasoningText.trim() && !options.previousThinkingSummary?.trim()) {
+		// Nothing was thought and nothing was carried, so there is nothing to be
+		// retrospective about. Common on the first compaction of a session whose
+		// model does not reason at all.
+		return undefined;
+	}
+	const request = buildThinkingSummaryRequest({
+		previousThinkingSummary: options.previousThinkingSummary,
+		reasoningText,
+		promptTemplate: options.promptTemplate,
+	});
+	if (estimateTokens(request.length) > options.summarizerInputLimit) {
+		options.logger?.log(
+			"Skipped thinking compaction: reasoning exceeds the summarizer input limit",
+			{
+				severity: "warn",
+				requestEstimatedTokens: estimateTokens(request.length),
+				summarizerInputLimit: options.summarizerInputLimit,
+			},
+		);
+		return undefined;
+	}
+	const providerConfig = resolveSummarizerConfig({
+		activeProviderConfig: options.activeProviderConfig,
+		summarizer: options.summarizer,
+		maxInputTokens: options.summarizerInputLimit,
+		outputTokenCap: options.maxOutputTokens,
+	});
+	try {
+		const text = await generateSummary({
+			providerConfig,
+			request,
+			logger: options.logger,
+		});
+		const trimmed = text.trim();
+		if (!trimmed) {
+			return undefined;
+		}
+		options.logger?.debug("Generated thinking compaction", {
+			reasoningInputChars: reasoningText.length,
+			previousThinkingSummaryChars: options.previousThinkingSummary?.length ?? 0,
+			maxOutputTokens: options.maxOutputTokens,
+			outputChars: trimmed.length,
+			providerId: providerConfig.providerId,
+			modelId: providerConfig.modelId,
+		});
+		return trimmed;
+	} catch (error) {
+		options.logger?.log("Thinking compaction failed; keeping the summary alone", {
+			severity: "warn",
+			errorMessage: error instanceof Error ? error.message : String(error),
+		});
+		return undefined;
+	}
+}
+
 export async function runAgenticCompaction(options: {
 	context: CoreCompactionContext;
 	providerConfig: ProviderConfig;
 	summarizer?: CoreCompactionSummarizerConfig;
 	/** Overrides the built-in summary instruction; blank uses the default. */
 	summaryPrompt?: string;
+	/** Second phase: a retrospective over the reasoning being discarded. */
+	thinkingSummaryEnabled?: boolean;
+	/** Overrides the built-in retrospective instruction; blank uses the default. */
+	thinkingSummaryPrompt?: string;
 	bounds: RecencyBounds;
 	estimateMessageTokens: EstimateMessageTokens;
 	logger?: BasicLogger;
@@ -129,11 +216,13 @@ export async function runAgenticCompaction(options: {
 		.slice(0, cutIndex)
 		.filter((_, index) => index !== pinnedIndex);
 	const latestSummaryIndex = findLatestSummaryIndex(messagesToSummarize);
-	const previousSummary =
+	const previousSummaryMetadata =
 		latestSummaryIndex >= 0
 			? getCompactionSummaryMetadata(messagesToSummarize[latestSummaryIndex])
-					?.summary
 			: undefined;
+	const previousSummary = previousSummaryMetadata?.summary;
+	const previousThinkingSummary = previousSummaryMetadata?.thinkingSummary;
+	const generation = (previousSummaryMetadata?.generation ?? 0) + 1;
 	const newMessagesToFold =
 		latestSummaryIndex >= 0
 			? messagesToSummarize.slice(latestSummaryIndex + 1)
@@ -176,10 +265,19 @@ export async function runAgenticCompaction(options: {
 		(canUseActiveContextLimit
 			? activeCompactionInputLimit
 			: MIN_AGENTIC_SUMMARY_INPUT_TOKENS);
+	// The ladder: what the summary and the retrospective may spend together at
+	// this generation, and the summary's share of it. The summary writes first
+	// and the retrospective takes what it leaves.
+	const outputBudgets = resolveCompactionOutputBudgets({
+		messageTargetTokens: options.context.budget.messages.targetTokens,
+		maxInputTokens: summarizerInputLimit,
+		generation,
+	});
 	const summarizerProviderConfig = resolveSummarizerConfig({
 		activeProviderConfig: options.providerConfig,
 		summarizer: options.summarizer,
 		maxInputTokens: summarizerInputLimit,
+		outputTokenCap: outputBudgets.summaryMaxTokens,
 	});
 	const summaryRequestOverheadTokens = estimateTokens(
 		buildSummaryRequest({
@@ -264,6 +362,20 @@ export async function runAgenticCompaction(options: {
 	}
 
 	const summary = ensureFilesSection(rawSummary, fileOps);
+	const thinkingSummary = await generateThinkingSummary({
+		enabled: options.thinkingSummaryEnabled !== false,
+		messages: newMessagesToFold,
+		previousThinkingSummary,
+		promptTemplate: options.thinkingSummaryPrompt,
+		maxOutputTokens: resolveThinkingSummaryMaxTokens({
+			budgets: outputBudgets,
+			summaryTokens: estimateTokens(summary.length),
+		}),
+		summarizer: options.summarizer,
+		activeProviderConfig: options.providerConfig,
+		summarizerInputLimit,
+		logger: options.logger,
+	});
 	const tokensBefore = messages.reduce(
 		(total, message) => total + options.estimateMessageTokens(message),
 		0,
@@ -274,6 +386,8 @@ export async function runAgenticCompaction(options: {
 			fileOps,
 			tokensBefore,
 			userRunSpan: countUserRunMessages(messagesToSummarize),
+			generation,
+			thinkingSummary,
 		}),
 		...(pinnedMessage ? [pinnedMessage] : []),
 		...messages.slice(cutIndex),
