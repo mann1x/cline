@@ -1079,6 +1079,20 @@ describe("createEditorExecutor", () => {
 			});
 		});
 
+		// A file that ends with a newline is the common case, and this message
+		// used to count one line more than `read_files` reports for it — so the
+		// two numbers a model saw for the same file disagreed, which is the pair
+		// it was measured alternating between looking for "the whole file".
+		it("counts the file the way read_files counts it", async () => {
+			await withTempFile("one\ntwo\nthree\n", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+
+				await expect(
+					editor({ path: filePath, new_text: "rewritten" }, dir, context),
+				).rejects.toThrow(/`start_line: 1` and `end_line: 3`/);
+			});
+		});
+
 		it("names the whole-file replace route when new_text arrives without old_text", async () => {
 			// A model that has failed to patch a file incrementally sends the
 			// whole file back with no `old_text`. Saying only that `old_text` is

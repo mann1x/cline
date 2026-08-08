@@ -564,7 +564,7 @@ async function replaceLineRange(
 		spanned > lines.length * MAX_UNANCHORED_RANGE_SHARE
 	) {
 		throw new Error(
-			`No replacement performed: lines ${startLineOneBased}-${effectiveEndLine} is ${spanned} of the file's ${lines.length} lines, and the call carries no \`old_text\` to check it against. An unanchored replacement this large is a whole-file rewrite, and one that is slightly wrong duplicates or drops the parts it did not mean to touch. Make the edit in smaller pieces, each anchored with the \`old_text\` it replaces, or send \`old_text\` for this range so the file can verify it — or, if you do mean to rewrite the file, say so exactly with \`start_line: 1\` and \`end_line: ${lines.length}\`.`,
+			`No replacement performed: lines ${startLineOneBased}-${effectiveEndLine} is ${spanned} of the file's ${lines.length} lines, and the call carries no \`old_text\` to check it against. An unanchored replacement this large is a whole-file rewrite, and one that is slightly wrong duplicates or drops the parts it did not mean to touch. Make the edit in smaller pieces, each anchored with the \`old_text\` it replaces, or send \`old_text\` for this range so the file can verify it — or, if you do mean to rewrite the file, say so exactly with \`start_line: 1\` and \`end_line: ${lines.length}\`. ${lines.length} is the file's length right now, counted a moment ago; if your last read said otherwise, the file has changed since — most often because of your own edits — and this number is the current one. Anything larger works too: an \`end_line\` past the end of the file means "to the end of the file", so you never have to know the count exactly.`,
 		);
 	}
 
@@ -1148,13 +1148,21 @@ export function createEditorExecutor(
 			// `start_line`, `end_line` and `new_text` with no `path` at all,
 			// three times in a row. A message that lists some of the arguments
 			// will be read as listing all of them.
-			const lineCount = (await fs.readFile(filePath, encoding)).split(
-				/\r\n|\n/,
-			).length;
+			// Counted the way every other message in this tool counts, and the
+			// way `read_files` does. Splitting on newlines here yielded one more
+			// line than the file has whenever it ends with a newline, so this
+			// message and the whole-file-rewrite refusal a few lines above named
+			// two different numbers for the same file -- which is precisely the
+			// pair of numbers a model was measured alternating between, trying
+			// to find the one that meant "the whole file".
+			const { lines: fileLines } = splitFileLines(
+				await fs.readFile(filePath, encoding),
+			);
+			const lineCount = fileLines.length;
 			throw new Error(
 				`Parameter \`old_text\` is required when editing an existing file without \`insert_line\` or \`start_line\`. ` +
 					`Edit the lines you mean to change: call \`read_files\` for ${filePath} around them, then send this call again with \`path: "${filePath}"\`, the \`new_text\` for just those lines, and the \`start_line\`/\`end_line\` that read reports. ` +
-					`Replacing the file in full is the same call with \`start_line: 1\` and \`end_line: ${lineCount}\`, but it rewrites every line — a whole-file rewrite that is slightly wrong duplicates the parts it did not mean to touch, so reach for it only after a targeted edit has failed.`,
+					`Replacing the file in full is the same call with \`start_line: 1\` and \`end_line: ${lineCount}\` — or any larger number, since an \`end_line\` past the end of the file means "to the end of the file" — but it rewrites every line, and a whole-file rewrite that is slightly wrong duplicates the parts it did not mean to touch, so reach for it only after a targeted edit has failed.`,
 			);
 		}
 
