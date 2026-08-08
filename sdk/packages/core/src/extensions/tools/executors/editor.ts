@@ -609,10 +609,24 @@ async function replaceLineRange(
 
 	// An empty new_text deletes the range outright, which is the natural
 	// reading and what a caller removing a bad line wants.
+	//
+	// Split the way the file itself is split, trailing empty element and all.
+	// A plain split treats `new_text` ending in a newline -- which is how a
+	// model normally terminates a block of text -- as one more line than it
+	// wrote, and that phantom line is appended to the file on every edit.
+	//
+	// Measured, and it is the reason the editor looked unusable tonight: six
+	// consecutive whole-file rewrites of the same file, each refused with the
+	// model's `end_line` exactly one short of the file's length --
+	// "lines 1-136 is 136 of the file's 137 lines", then 125 of 126, then 186
+	// of 187, then 190 of 191. The file was growing a blank line per rewrite
+	// and the model's own read could never name the right number, because the
+	// number only became right after it had already been used. It shelled out
+	// to `(Get-Content).Count` to check, and the count it got was already stale.
 	const replacement =
 		replacementText == null || replacementText === ""
 			? []
-			: replacementText.split(/\r\n|\n/);
+			: splitFileLines(replacementText).lines;
 	lines.splice(
 		startLineOneBased - 1,
 		effectiveEndLine - startLineOneBased + 1,
@@ -779,7 +793,11 @@ async function insertInFile(
 	}
 
 	const insertLine = insertLineOneBased - 1;
-	lines.splice(insertLine, 0, ...newStr.split(/\r\n|\n/));
+	// Same convention as everywhere else here: a trailing newline terminates
+	// the text rather than adding a line to it. Without this, inserting "foo\n"
+	// -- the normal way to write one line -- inserts foo *and* a blank line, and
+	// the file drifts a line at a time exactly as it did on the range path.
+	lines.splice(insertLine, 0, ...splitFileLines(newStr).lines);
 	await fs.writeFile(filePath, lines.join(eol), { encoding });
 
 	return `Inserted content at line ${insertLineOneBased} in ${filePath}.`;

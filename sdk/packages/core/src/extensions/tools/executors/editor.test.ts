@@ -1079,6 +1079,58 @@ describe("createEditorExecutor", () => {
 			});
 		});
 
+		// The failure that made the editor look unusable: a whole-file rewrite
+		// whose `new_text` ended in a newline -- the normal way to terminate a
+		// block of text -- appended a blank line, so the file grew by one on
+		// every attempt and the model's `end_line`, taken from its own read, was
+		// permanently one short. Six rewrites in a row were refused this way:
+		// 136 of 137, 125 of 126, 186 of 187, 190 of 191.
+		it("does not grow a line when new_text ends with a newline", async () => {
+			await withTempFile("one\ntwo\nthree\n", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+
+				await editor(
+					{ path: filePath, start_line: 1, end_line: 3, new_text: "a\nb\nc\n" },
+					dir,
+					context,
+				);
+
+				const after = await fs.readFile(filePath, "utf8");
+				expect(after).toBe("a\nb\nc\n");
+			});
+		});
+
+		it("inserts one line for text that ends with a newline", async () => {
+			await withTempFile("one\ntwo\n", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+
+				await editor(
+					{ path: filePath, insert_line: 2, new_text: "middle\n" },
+					dir,
+					context,
+				);
+
+				expect(await fs.readFile(filePath, "utf8")).toBe("one\nmiddle\ntwo\n");
+			});
+		});
+
+		it("repeated whole-file rewrites keep the same line count", async () => {
+			await withTempFile("one\ntwo\nthree\n", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+
+				for (const text of ["a\nb\nc\n", "d\ne\nf\n", "g\nh\ni\n"]) {
+					await editor(
+						{ path: filePath, start_line: 1, end_line: 3, new_text: text },
+						dir,
+						context,
+					);
+				}
+
+				const after = await fs.readFile(filePath, "utf8");
+				expect(after.split("\n").filter((l) => l !== "").length).toBe(3);
+			});
+		});
+
 		// A file that ends with a newline is the common case, and this message
 		// used to count one line more than `read_files` reports for it — so the
 		// two numbers a model saw for the same file disagreed, which is the pair
