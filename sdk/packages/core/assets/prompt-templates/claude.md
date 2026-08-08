@@ -187,13 +187,14 @@ Nor is it the way to type-check or lint one file: `check_file` asks the IDE's ow
 {{DEFAULT}}
 
 # tool: check_file
-Check files for errors and warnings, using the editor's own language servers (LSP). These are live and follow your edits: a result is current as of the moment you ask, so a problem still reported after an edit is still there. There is no language server to restart from here.
+Check files for errors and warnings, using the editor's own language servers (LSP). **This is the linter** — and the type checker, and the IDE's Problems panel. Whatever the question calls it, ask here. These are live and follow your edits: a result is current as of the moment you ask, so a problem still reported after an edit is still there. There is no language server to restart from here.
 
 Call shape: `check_file(paths: [string])` — absolute paths, every file you want checked in one call.
 
 Ask this before running a checker yourself. For a file whose language the IDE understands it answers the same question as `tsc`, `eslint`, `biome`, `ruff`, `mypy`, `go build` or `cargo check`, for the files you name, in milliseconds, without building the project.
 
 When to call it:
+- Whenever the question is about the linter, lint errors, diagnostics, problems, type errors or compile errors — "how many errors is the linter reporting?", "is it clean now?" — call this. You have no other way to know, and the report from an earlier edit is already out of date.
 - After editing a file, to confirm the edit is valid before moving on.
 - Before reporting a task finished, on every file you changed.
 - On a file you are about to change, to see what was already wrong with it.

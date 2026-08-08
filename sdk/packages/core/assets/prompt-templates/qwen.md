@@ -203,9 +203,9 @@ Execute shell commands for builds, tests, git operations, package management, or
 {{DEFAULT}}
 
 # tool: check_file
-Check files for errors and warnings using the IDE's language servers (LSP). These are live and follow your edits: a result is current as of the moment you ask, so a problem still reported after an edit is still there. There is no language server to restart from here.
+Check files for errors and warnings using the IDE's language servers (LSP). **This is the linter** — and the type checker, and the IDE's Problems panel. Whatever the question calls it, ask here. These are live and follow your edits: a result is current as of the moment you ask, so a problem still reported after an edit is still there. There is no language server to restart from here.
 
-- **Usage**: Call this after editing a file to validate syntax/types before running heavy builds. It answers what `tsc`, `eslint`, `ruff`, etc., would tell you, but instantly.
+- **Usage**: Whenever the question is about the linter, lint errors, diagnostics, problems, type errors or compile errors — "how many errors is the linter reporting?", "is it clean now?" — call this. You have no other way to know, and the report from an earlier edit is already out of date. Call this after editing a file to validate syntax/types before running heavy builds. It answers what `tsc`, `eslint`, `ruff`, etc., would tell you, but instantly.
 - **Parallelism**: Pass all files to check in the `paths` array.
 - **Arguments**: `paths` is an array of strings.
 - **Output**: Plain text listing problems per file (`file:line:column severity message`). If no problems are reported, the file is valid according to the IDE. Note: This does not run tests or builds; use `run_commands` for those.

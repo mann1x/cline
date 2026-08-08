@@ -130,9 +130,9 @@ Execute shell commands.
 {{DEFAULT}}
 
 # tool: check_file
-Verify file validity using IDE language servers. Use this instead of running a full project build or a shell-based linter for a single file.
+Verify file validity using IDE language servers. **This is the linter** — and the type checker, and the IDE's Problems panel. Whatever the question calls it, ask here. Use this instead of running a full project build or a shell-based linter for a single file.
 - **Arguments:** `paths`: An array of absolute paths to check.
-- **When to use:** After editing a file to ensure it is syntactically correct, or before finishing a task.
+- **When to use:** After editing a file to ensure it is syntactically correct, or before finishing a task. Whenever the question is about the linter, lint errors, diagnostics, problems, type errors or compile errors — "how many errors is the linter reporting?", "is it clean now?" — call this. You have no other way to know, and the report from an earlier edit is already out of date.
 - **Output:** Plain text listing `file:line:column` with severity and message. "No problems reported" means the file is valid according to the server.
 {{DEFAULT}}
 

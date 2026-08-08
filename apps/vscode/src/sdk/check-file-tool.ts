@@ -38,12 +38,22 @@ export const CHECK_FILE_TOOL_NAME = "check_file"
  * would otherwise type are named here, in the description of the tool that
  * replaces them, which is where a model is standing when it is about to make
  * the mistake.
+ *
+ * The second failure is naming. Asked "how many errors is the linter
+ * reporting?", a model answered that it could not count them and recited the
+ * problems from its last edit report instead — with this tool in front of it.
+ * The description said "check files for errors" and named `eslint` and `ruff`,
+ * but never the word the question used, and `check_file` does not read as a
+ * linter either. So the vocabulary is stated outright: this is the linter, the
+ * type checker, the diagnostics, the Problems panel. A tool the model cannot
+ * name is a tool it does not have.
  */
-export const CHECK_FILE_TOOL_DESCRIPTION = `Check files for errors and warnings, using the editor's own language servers (LSP). These are live and follow your edits — a result is current as of the moment you ask, so if it still reports a problem after an edit, the problem is still there. Restarting a language server is neither possible nor necessary from here.
+export const CHECK_FILE_TOOL_DESCRIPTION = `Check files for errors and warnings, using the editor's own language servers (LSP). **This is the linter.** It is also the type checker, the syntax check, and the source of the problems the IDE lists in its Problems panel — whichever of those words the question uses, this is the tool that answers it. The results are live and follow your edits: one is current as of the moment you ask, so if it still reports a problem after an edit, the problem is still there. Restarting a language server is neither possible nor necessary from here.
 
 Ask this before running a checker yourself. For a file whose language the IDE understands, it answers the same question as \`tsc\`, \`eslint\`, \`biome\`, \`ruff\`, \`mypy\`, \`go build\` or \`cargo check\` would — for the files you name, in milliseconds, without building the project.
 
 When to call it:
+- Whenever the question is about the linter, lint errors, diagnostics, problems, warnings, type errors, syntax errors or compile errors — "how many errors is the linter reporting?", "is it clean now?", "what is still broken?". You have no other way to know, and the report you were shown after an earlier edit does not answer it: that was true then, and you have edited since.
 - After editing a file, to confirm the edit is valid before moving on.
 - Before reporting a task finished, on every file you changed.
 - On a file you are about to change, when you want to know what was already wrong with it.
