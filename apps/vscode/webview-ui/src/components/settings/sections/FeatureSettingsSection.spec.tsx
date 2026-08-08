@@ -160,3 +160,27 @@ describe("Thinking Compaction", () => {
 		expect(mockUpdateSetting).toHaveBeenCalledWith("thinkingCompactionEnabled", false)
 	})
 })
+
+/**
+ * The third thing that rewrites reasoning. It had a prompt and a switch in the
+ * session config from the day it shipped and nothing that wrote either, so the
+ * built-in note was the only note it could ever produce and there was no way to
+ * turn it off.
+ */
+describe("FeatureSettingsSection — capped thinking", () => {
+	it("offers the prompt and the switch", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		const labels = Array.from(container.querySelectorAll("label")).map((label) => label.textContent)
+		expect(labels).toContain("Capped Thinking Prompt")
+		expect(container.querySelector("#cappedThinkingEnabled")?.getAttribute("data-state")).toBe("checked")
+	})
+
+	it("turns off from the switch", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		fireEvent.click(container.querySelector("#cappedThinkingEnabled") as Element)
+
+		expect(mockUpdateSetting).toHaveBeenCalledWith("cappedThinkingEnabled", false)
+	})
+})

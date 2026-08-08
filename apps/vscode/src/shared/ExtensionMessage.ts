@@ -144,6 +144,12 @@ export interface ExtensionState {
 	thinkingCompactionPrompt?: string
 	/** The built-in retrospective instruction, so the field can show what it replaces. */
 	defaultThinkingCompactionPrompt?: string
+	/** Whether a turn that ran out of thinking budget has its reasoning condensed. */
+	cappedThinkingEnabled?: boolean
+	/** Replaces the built-in continuation-note instruction; empty means default. */
+	cappedThinkingPrompt?: string
+	/** The built-in continuation-note instruction, so the field can show what it replaces. */
+	defaultCappedThinkingPrompt?: string
 	/** Focus Chain / task checklist. Read by the webview so the panel and the
 	 * Features toggle agree with what the session was actually configured with. */
 	focusChainSettings?: FocusChainSettings

@@ -1219,6 +1219,11 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	// having been wrong, which is how a long run repeats its own mistakes.
 	const thinkingCompactionEnabled = stateManager.getGlobalSettingsKey("thinkingCompactionEnabled") ?? true
 	const thinkingCompactionPrompt = (stateManager.getGlobalSettingsKey("thinkingCompactionPrompt") ?? "").trim()
+	// The condenser that replaces an abandoned think with a note of what it
+	// settled. Also defaults on, and stands down by itself where no thinking
+	// budget is known, so the switch is about turning it off deliberately.
+	const cappedThinkingEnabled = stateManager.getGlobalSettingsKey("cappedThinkingEnabled") ?? true
+	const cappedThinkingPrompt = (stateManager.getGlobalSettingsKey("cappedThinkingPrompt") ?? "").trim()
 	// Per-tool-result cap. Stored as 0 when unset, which is not "keep nothing":
 	// it hands the decision back to the SDK default.
 	const maxToolResultChars = positiveFiniteNumber(stateManager.getGlobalSettingsKey("maxToolResultChars"))
@@ -1388,26 +1393,35 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		},
 		enableSpawnAgent: false,
 		enableAgentTeams: false,
-		...(useAutoCondense
-			? {
-					compaction: {
-						enabled: true,
+		// Sent whether or not auto compaction is on. `enabled` is the only thing
+		// that decides whether the transcript gets compacted — the runtime
+		// returns no compaction pass without it — but this object is also where
+		// the capped-thinking condenser reads its settings, and that condenser
+		// has nothing to do with compaction: it rewrites one turn's abandoned
+		// reasoning whatever the transcript is doing. Omitting the object when
+		// auto-condense was off silently took the condenser with it.
+		compaction: {
+			enabled: useAutoCondense,
+			...(useAutoCondense
+				? {
 						strategy: compactionStrategy,
 						...(compactionPrompt ? { summaryPrompt: compactionPrompt } : {}),
 						thinkingSummaryEnabled: thinkingCompactionEnabled,
-						// A turn that ran out of thinking budget is cut mid-sentence
-						// and the next turn re-derives the same reasoning from the
-						// start. Needs the allowance to detect it, so it stands down
-						// on any provider that does not report one.
-						...(thinkingBudgetTokens ? { thinkingBudgetTokens } : {}),
-						// Turns a good measurement into a statement: where the
-						// wording is known, its presence at the end of the
-						// reasoning is the server saying it stopped there.
-						...(thinkingBudgetMessage ? { cappedThinkingBudgetMessage: thinkingBudgetMessage } : {}),
 						...(thinkingCompactionPrompt ? { thinkingSummaryPrompt: thinkingCompactionPrompt } : {}),
-					},
-				}
-			: {}),
+					}
+				: {}),
+			// A turn that ran out of thinking budget is cut mid-sentence and the
+			// next turn re-derives the same reasoning from the start. Needs the
+			// allowance to detect it, so it stands down on any provider that
+			// does not report one.
+			...(thinkingBudgetTokens ? { thinkingBudgetTokens } : {}),
+			// Turns a good measurement into a statement: where the wording is
+			// known, its presence at the end of the reasoning is the server
+			// saying it stopped there.
+			...(thinkingBudgetMessage ? { cappedThinkingBudgetMessage: thinkingBudgetMessage } : {}),
+			cappedThinkingEnabled,
+			...(cappedThinkingPrompt ? { cappedThinkingPrompt } : {}),
+		},
 		disableMcpSettingsTools: true,
 		mode: mode === "plan" ? "plan" : "act",
 		...reasoningConfig,

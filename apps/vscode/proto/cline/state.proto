@@ -296,6 +296,8 @@ message Settings {
   optional string compaction_prompt = 192;
   optional bool thinking_compaction_enabled = 193;
   optional string thinking_compaction_prompt = 194;
+  optional bool capped_thinking_enabled = 195;
+  optional string capped_thinking_prompt = 196;
 }
 
 message State {
@@ -450,6 +452,8 @@ message UpdateSettingsRequest {
   optional string compaction_prompt = 50;
   optional bool thinking_compaction_enabled = 51;
   optional string thinking_compaction_prompt = 52;
+  optional bool capped_thinking_enabled = 53;
+  optional string capped_thinking_prompt = 54;
 }
 
 message UpdateTerminalConnectionTimeoutRequest {

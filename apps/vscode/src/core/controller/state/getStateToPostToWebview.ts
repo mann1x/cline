@@ -4,7 +4,12 @@
 // This allows the SdkController to reuse the classic state-building logic
 // without inheriting the entire classic Controller implementation.
 
-import { DEFAULT_COMPACTION_PROMPT, DEFAULT_THINKING_COMPACTION_PROMPT, readCompactionStrategyGlobally } from "@cline/core"
+import {
+	DEFAULT_CAPPED_THINKING_PROMPT,
+	DEFAULT_COMPACTION_PROMPT,
+	DEFAULT_THINKING_COMPACTION_PROMPT,
+	readCompactionStrategyGlobally,
+} from "@cline/core"
 import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
 import type { ExtensionState, Platform } from "@shared/ExtensionMessage"
 import { ClineEnv } from "@/config"
@@ -46,6 +51,8 @@ export async function getStateToPostToWebview(controller: {
 	const compactionPrompt = stateManager.getGlobalSettingsKey("compactionPrompt")
 	const thinkingCompactionEnabled = stateManager.getGlobalSettingsKey("thinkingCompactionEnabled")
 	const thinkingCompactionPrompt = stateManager.getGlobalSettingsKey("thinkingCompactionPrompt")
+	const cappedThinkingEnabled = stateManager.getGlobalSettingsKey("cappedThinkingEnabled")
+	const cappedThinkingPrompt = stateManager.getGlobalSettingsKey("cappedThinkingPrompt")
 	const focusChainSettings = stateManager.getGlobalSettingsKey("focusChainSettings")
 	const compactionStrategy = readCompactionStrategyGlobally()
 	const subagentsEnabled = stateManager.getGlobalSettingsKey("subagentsEnabled")
@@ -135,6 +142,9 @@ export async function getStateToPostToWebview(controller: {
 		thinkingCompactionEnabled,
 		thinkingCompactionPrompt,
 		defaultThinkingCompactionPrompt: DEFAULT_THINKING_COMPACTION_PROMPT,
+		cappedThinkingEnabled,
+		cappedThinkingPrompt,
+		defaultCappedThinkingPrompt: DEFAULT_CAPPED_THINKING_PROMPT,
 		focusChainSettings,
 		compactionStrategy,
 		subagentsEnabled,

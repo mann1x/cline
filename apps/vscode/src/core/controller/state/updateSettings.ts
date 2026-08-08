@@ -202,6 +202,14 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			controller.stateManager.setGlobalState("thinkingCompactionPrompt", request.thinkingCompactionPrompt)
 		}
 
+		if (request.cappedThinkingEnabled !== undefined) {
+			controller.stateManager.setGlobalState("cappedThinkingEnabled", request.cappedThinkingEnabled)
+		}
+
+		if (request.cappedThinkingPrompt !== undefined) {
+			controller.stateManager.setGlobalState("cappedThinkingPrompt", request.cappedThinkingPrompt)
+		}
+
 		if (request.useAutoCondense !== undefined) {
 			if (controller.task) {
 				telemetryService.captureAutoCondenseToggle(

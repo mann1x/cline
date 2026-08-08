@@ -302,6 +302,17 @@ const USER_SETTINGS_FIELDS = {
 	compactionPrompt: { default: "" as string },
 	thinkingCompactionEnabled: { default: true as boolean },
 	thinkingCompactionPrompt: { default: "" as string },
+	/**
+	 * The condenser that replaces a turn's abandoned reasoning with a note of
+	 * what it settled, when that reasoning ran out of thinking budget.
+	 *
+	 * On by default, and only where a budget is known — without one there is
+	 * nothing to detect. The prompt is worth tuning per model for the same
+	 * reason the compaction ones are: the note is all that survives the
+	 * reasoning it replaces.
+	 */
+	cappedThinkingEnabled: { default: true as boolean },
+	cappedThinkingPrompt: { default: "" as string },
 	subagentsEnabled: { default: false as boolean },
 	worktreesEnabled: { default: false as boolean },
 	preferredLanguage: { default: "English" as string },

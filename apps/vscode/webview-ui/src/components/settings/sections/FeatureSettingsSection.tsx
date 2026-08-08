@@ -170,6 +170,9 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		thinkingCompactionEnabled,
 		thinkingCompactionPrompt,
 		defaultThinkingCompactionPrompt,
+		cappedThinkingEnabled,
+		cappedThinkingPrompt,
+		defaultCappedThinkingPrompt,
 		compactionStrategy,
 		subagentsEnabled,
 		worktreesEnabled,
@@ -389,6 +392,41 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 					/>
 					{thinkingCompactionPrompt?.trim() ? (
 						<VSCodeButton appearance="secondary" onClick={() => updateSetting("thinkingCompactionPrompt", "")}>
+							Reset to default
+						</VSCodeButton>
+					) : null}
+				</div>
+
+				{/* The third thing that rewrites reasoning, and the only one that
+				    runs without compaction: it fires on a single capped turn,
+				    whatever the transcript is doing. */}
+				<div className="space-y-2 pt-2">
+					<div className="flex items-center justify-between w-full">
+						<Label className="text-sm font-medium text-foreground">Capped Thinking Prompt</Label>
+						<Switch
+							checked={cappedThinkingEnabled ?? true}
+							className="shrink-0"
+							id="cappedThinkingEnabled"
+							onCheckedChange={(checked) => updateSetting("cappedThinkingEnabled", checked)}
+							size="lg"
+						/>
+					</div>
+					<p className="text-xs text-muted-foreground">
+						A turn that runs out of thinking budget is cut mid-sentence, and the next turn re-derives the same
+						reasoning from the beginning rather than continuing it. This replaces the abandoned reasoning, for the
+						next request only, with a note of what it had settled. Needs a thinking budget to detect one, and stands
+						down where none is known. Leave empty for the built-in prompt.
+					</p>
+					<DebouncedTextArea
+						disabled={cappedThinkingEnabled === false}
+						initialValue={cappedThinkingPrompt ?? ""}
+						maxRows={24}
+						minRows={4}
+						onChange={(value) => updateSetting("cappedThinkingPrompt", value)}
+						placeholder={defaultCappedThinkingPrompt}
+					/>
+					{cappedThinkingPrompt?.trim() ? (
+						<VSCodeButton appearance="secondary" onClick={() => updateSetting("cappedThinkingPrompt", "")}>
 							Reset to default
 						</VSCodeButton>
 					) : null}

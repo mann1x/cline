@@ -1055,6 +1055,9 @@ describe("buildSessionConfig", () => {
 			strategy: "agentic",
 			// The second compaction phase, on by default.
 			thinkingSummaryEnabled: true,
+			// And the condenser, which travels here but does not belong to
+			// compaction; also on by default.
+			cappedThinkingEnabled: true,
 		})
 	})
 
@@ -1077,6 +1080,7 @@ describe("buildSessionConfig", () => {
 			strategy: "basic",
 			// The second compaction phase, on by default.
 			thinkingSummaryEnabled: true,
+			cappedThinkingEnabled: true,
 		})
 	})
 
@@ -1099,13 +1103,30 @@ describe("buildSessionConfig", () => {
 			strategy: "agentic",
 			// The second compaction phase, on by default.
 			thinkingSummaryEnabled: true,
+			// And the condenser, which travels here but does not belong to
+			// compaction; also on by default.
+			cappedThinkingEnabled: true,
 		})
 	})
 
 	it("does not enable SDK compaction when global useAutoCondense is false", async () => {
 		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
 
-		expect(config.compaction).toBeUndefined()
+		// The object is still sent, and `enabled` is the whole of what turns
+		// compaction off: the runtime builds no compaction pass without it.
+		expect(config.compaction?.enabled).toBe(false)
+		expect(config.compaction?.strategy).toBeUndefined()
+		expect(config.compaction?.summaryPrompt).toBeUndefined()
+	})
+
+	it("keeps the capped-thinking condenser configured with auto condense off", async () => {
+		// The condenser reads its settings out of the compaction config but has
+		// nothing to do with compaction — it rewrites one turn's abandoned
+		// reasoning whatever the transcript is doing. Omitting the object when
+		// auto-condense was off took the condenser with it, silently.
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+
+		expect(config.compaction?.cappedThinkingEnabled).toBe(true)
 	})
 
 	it("lets task useAutoCondense override the global setting", async () => {
@@ -1133,12 +1154,13 @@ describe("buildSessionConfig", () => {
 			taskSettings: { useAutoCondense: true },
 		})
 
-		expect(disabledConfig.compaction).toBeUndefined()
+		expect(disabledConfig.compaction?.enabled).toBe(false)
 		expect(enabledConfig.compaction).toEqual({
 			enabled: true,
 			strategy: "agentic",
 			// The second compaction phase, on by default.
 			thinkingSummaryEnabled: true,
+			cappedThinkingEnabled: true,
 		})
 	})
 
