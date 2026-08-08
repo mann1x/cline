@@ -119,13 +119,36 @@ describe("finding the turn that ran out of thinking budget", () => {
 		expect(findCappedThinkingIndex([turn(45_000)], 0)).toBe(-1);
 	});
 
-	it("stands down for a turn that did not reason at all", () => {
-		const silent = {
+	it("steps over the half of a turn that carries only the call", () => {
+		// A turn reaches the transcript as its reasoning and its call, and
+		// depending on how it was assembled those are one message or two.
+		// Stopping at the half without the reasoning meant never finding a
+		// capped turn at all.
+		const callOnly = {
 			role: "assistant",
 			content: [{ type: "tool_use", id: "c", name: "editor", input: {} }],
 		} as MessageWithMetadata;
-		expect(findCappedThinkingIndex([turn(45_000), silent], budget)).toBe(-1);
+
+		expect(locateCappedThinking([turn(45_000), callOnly], budget)).toMatchObject({
+			index: 0,
+			skippedFragments: 1,
+		});
 	});
+
+	it("still stops at a turn that answered without reasoning", () => {
+		// Text means it answered, and an answered turn supersedes whatever came
+		// before it — which is the whole reason only the most recent counts.
+		const answered = {
+			role: "assistant",
+			content: [{ type: "text", text: "Done." }],
+		} as MessageWithMetadata;
+
+		expect(locateCappedThinking([turn(45_000), answered], budget)).toMatchObject({
+			index: -1,
+			reason: "turn-did-not-reason",
+		});
+	});
+
 });
 
 describe("the continuation note's request", () => {

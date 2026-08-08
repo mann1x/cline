@@ -254,6 +254,8 @@ export interface CappedThinkingLookup {
 	thinkingTail?: string;
 	/** What the estimate made of it, when the estimate is what decided. */
 	measuredTokens?: number;
+	/** Call-only assistant messages stepped over on the way back. */
+	skippedFragments?: number;
 }
 
 /** How much of the reasoning tail a stand-down line carries. */
@@ -278,6 +280,7 @@ export function locateCappedThinking(
 	) {
 		return { index: -1, reason: "no-budget" };
 	}
+	let skippedFragments = 0;
 	for (let index = messages.length - 1; index >= 0; index -= 1) {
 		const message = messages[index];
 		if (message.role !== "assistant") {
@@ -285,14 +288,30 @@ export function locateCappedThinking(
 		}
 		const thinking = thinkingText(message);
 		if (!thinking) {
-			// An assistant turn that did not reason at all ends the search: the
-			// capped turn we care about is the latest one, and anything before
-			// this has already been superseded.
-			return { index: -1, reason: "turn-did-not-reason", thinkingChars: 0 };
+			if (isToolCallOnly(message)) {
+				// Not a turn — a fragment of one. A turn reaches the transcript
+				// as its reasoning and its call, and depending on how it was
+				// assembled those can arrive as one message or two. Stopping at
+				// the half without the reasoning would mean never finding a
+				// capped turn at all, so the search steps over it while its
+				// sibling is still the most recent thing that reasoned.
+				skippedFragments += 1;
+				continue;
+			}
+			// An assistant turn that answered without reasoning ends the search:
+			// the capped turn we care about is the latest one, and anything
+			// before this has already been superseded.
+			return {
+				index: -1,
+				reason: "turn-did-not-reason",
+				thinkingChars: 0,
+				skippedFragments,
+			};
 		}
 		const found = {
 			thinkingChars: thinking.length,
 			thinkingTail: thinking.slice(-STAND_DOWN_TAIL_CHARS),
+			skippedFragments,
 		};
 		// A known budget message settles it either way. The measurement above is
 		// good but not certain — it cannot tell which cap stopped a turn, and it
@@ -311,7 +330,21 @@ export function locateCappedThinking(
 			? { index, measuredTokens, ...found }
 			: { index: -1, reason: "under-budget", measuredTokens, ...found };
 	}
-	return { index: -1, reason: "no-assistant-turn" };
+	return { index: -1, reason: "no-assistant-turn", skippedFragments };
+}
+
+/**
+ * An assistant message carrying calls and nothing else.
+ *
+ * Text would make it a turn that answered; reasoning is handled by the caller.
+ * Anything else — a bare call, or a call beside an image — is half of a turn
+ * whose other half is the message before it.
+ */
+function isToolCallOnly(message: MessageWithMetadata): boolean {
+	if (!Array.isArray(message.content) || message.content.length === 0) {
+		return false;
+	}
+	return message.content.every((block) => block.type === "tool_use");
 }
 
 /** The index alone, for callers that have nothing to report it to. */
