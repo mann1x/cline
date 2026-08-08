@@ -38,6 +38,7 @@ import {
 	getCompactionSummaryMetadata,
 	resolveCompactionTriggerTokens,
 	resolveEffectiveMaxInputTokens,
+	resolveObservedOutputTokens,
 	resolvePreserveRecentTokens,
 	resolveRecencyBounds,
 	seedCalibrationFromTranscript,
@@ -111,11 +112,34 @@ export interface ContextCompactionPrepareTurnOptions {
  * near half full and compacted again and again. A third leaves nearly twice the
  * runway for one summary at the same price.
  *
- * Lower is not automatically better. The summarizer has to fit the discarded
- * turns into what is left, and below roughly a third the summary becomes the
- * thing that loses the detail, rather than the window.
+ * Lower is not automatically better, and the measured floor is higher than this
+ * reasoning assumed. Sessions retaining 69,300 and 54,600 tokens finished their
+ * task in an hour to an hour and a half; the same task at 36,300 did not finish
+ * once across a day of attempts, looping instead on files it had already read.
+ * Below roughly half, the summary becomes the thing that loses the detail rather
+ * than the window -- so this rung is for windows tight enough that there is no
+ * alternative, which {@link LONG_CONVERSATION_MAX_OUTPUT_SHARE} is what decides.
  */
 const LONG_CONVERSATION_TARGET_RATIO = 0.33;
+
+/**
+ * How small a model's per-turn output cap has to be for the aggressive target
+ * to apply.
+ *
+ * The rule used to be `modelMaxTokens < maxInputTokens`, which was written when
+ * `modelMaxTokens` was almost never populated and read as "this model has a
+ * genuinely tight cap". Once the cap reached the session it became true of every
+ * local model on every long session, so the aggressive target went from never
+ * firing to always firing and the conservative branch became dead code. That
+ * change is what took the retained context from 54,600 to 36,300, and the
+ * completions stopped on the same day.
+ *
+ * An eighth is the line between a cap that constrains and a cap that is merely
+ * smaller: a model that can only answer in 12,000 tokens against a 100,000
+ * window really does need the runway more than the history, while one allowed
+ * 32,000 of a 110,000 window does not.
+ */
+const LONG_CONVERSATION_MAX_OUTPUT_SHARE = 0.125;
 
 /**
  * The share of the budget past which the last turn loses its exemption.
@@ -297,7 +321,8 @@ function resolveAutoRequestTargetTokens(input: {
 		input.messagePairCount >= 5 &&
 		typeof input.modelMaxTokens === "number" &&
 		Number.isFinite(input.modelMaxTokens) &&
-		input.modelMaxTokens < input.maxInputTokens
+		input.modelMaxTokens <=
+			input.maxInputTokens * LONG_CONVERSATION_MAX_OUTPUT_SHARE
 			? Math.floor(input.maxInputTokens * LONG_CONVERSATION_TARGET_RATIO)
 			: Math.floor(input.triggerTokens * DEFAULT_TARGET_RATIO);
 	const triggerCeiling = Math.max(1, input.triggerTokens - 1);
@@ -444,10 +469,17 @@ export function createContextCompactionPrepareTurn(
 				maxInputTokens: context.model.info?.maxInputTokens,
 				contextWindow: context.model.info?.contextWindow,
 			}) ?? DEFAULT_MAX_INPUT_TOKENS;
+		// What this session's own turns have cost, so the room held back for the
+		// next one is sized to the model actually running rather than to its
+		// declared ceiling. A model that answers in two thousand tokens and one
+		// that opens seventeen thousand tokens of thinking want opposite
+		// reservations, and the transcript already says which is which.
+		const observedOutputTokens = resolveObservedOutputTokens(context.messages);
 		const requestTriggerTokens = resolveCompactionTriggerTokens({
 			maxInputTokens,
 			contextWindow: context.model.info?.contextWindow,
 			modelMaxTokens: context.model.info?.maxTokens,
+			observedOutputTokens,
 		});
 		const messageTriggerTokens = translateRequestBudgetToMessages(
 			requestTriggerTokens,
@@ -510,6 +542,7 @@ export function createContextCompactionPrepareTurn(
 			thresholdRatio: COMPACTION_TRIGGER_RATIO,
 			contextWindow: context.model.info?.contextWindow,
 			modelMaxTokens: context.model.info?.maxTokens,
+			observedOutputTokens,
 			contextOverflow,
 			shouldCompact,
 			messageCount: context.messages.length,

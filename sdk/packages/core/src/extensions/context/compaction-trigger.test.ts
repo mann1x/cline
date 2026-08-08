@@ -1,3 +1,4 @@
+import type { MessageWithMetadata } from "@cline/shared";
 import { describe, expect, it } from "vitest";
 import {
 	COMPACTION_TRIGGER_RATIO,
@@ -5,6 +6,7 @@ import {
 	DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
 	MAX_SUMMARY_OUTPUT_TOKENS,
 	resolveCompactionTriggerTokens,
+	resolveObservedOutputTokens,
 	resolveSummaryMaxOutputTokens,
 	SUMMARY_OUTPUT_WINDOW_SHARE,
 } from "./compaction-shared";
@@ -14,13 +16,18 @@ describe("the compaction trigger", () => {
 	it("keeps a full turn's output inside the window", () => {
 		// The live failure: 110,000 window, 32,000 cap. The ratio alone put the
 		// trigger at 99,000, leaving 11,000 for a reply that could ask for 32,000.
+		//
+		// Reserving the whole cap was itself too much, though: it took 21% of the
+		// window away from the transcript on every turn to pay for an output that
+		// almost never arrived. The reservation is capped at a quarter of the
+		// window, which still leaves room for a reply of any ordinary size.
 		expect(
 			resolveCompactionTriggerTokens({
 				maxInputTokens: 110_000,
 				contextWindow: 110_000,
 				modelMaxTokens: 32_000,
 			}),
-		).toBe(78_000);
+		).toBe(82_500);
 	});
 
 	it("never sits above the window it is meant to protect", () => {
@@ -45,14 +52,16 @@ describe("the compaction trigger", () => {
 
 	it("does not let an outsized cap collapse a small window", () => {
 		// A 32,000 cap against a 40,000 window would trigger at 8,000 and compact
-		// almost every turn; the cap is the unreasonable figure there.
+		// almost every turn; the cap is the unreasonable figure there. The quarter
+		// ceiling now catches this before the floor has to: 10,000 reserved, not
+		// 32,000.
 		expect(
 			resolveCompactionTriggerTokens({
 				maxInputTokens: 40_000,
 				contextWindow: 40_000,
 				modelMaxTokens: 32_000,
 			}),
-		).toBe(20_000);
+		).toBe(30_000);
 	});
 
 	it("keeps the ratio as the bound when it is the smaller one", () => {
@@ -126,4 +135,80 @@ describe("scaling an estimate onto the provider's ruler", () => {
 	it("scales up as readily as down", () => {
 		expect(scaleEstimateToObserved(100, 100, 130)).toBe(130);
 	});
+})
+
+/**
+ * Two models, opposite needs, same window. One answers a tool call in 24 to
+ * 2,164 output tokens and never reasons at length; the other opens 35,000 to
+ * 45,000 characters of thinking on most turns. A single fraction of the window
+ * either starves the second or robs the first, and the transcript already says
+ * which one is running.
+ */
+describe("output room sized from what the session actually produces", () => {
+	const turn = (outputTokens: number) =>
+		({
+			role: "assistant",
+			content: [{ type: "text", text: "x" }],
+			metrics: { outputTokens },
+		}) as unknown as MessageWithMetadata
+
+	it("reads the high-water turn, not the average", () => {
+		expect(
+			resolveObservedOutputTokens([turn(100), turn(17_000), turn(120), turn(90)]),
+		).toBe(17_000)
+	})
+
+	it("says nothing until there is a pattern", () => {
+		// The first turn of a session is routinely the smallest it will produce,
+		// and sizing a whole session's budget off it is how the second turn
+		// overflows.
+		expect(resolveObservedOutputTokens([])).toBeUndefined()
+		expect(resolveObservedOutputTokens([turn(500)])).toBeUndefined()
+	})
+
+	it("follows a model that changes register", () => {
+		// Twelve turns of sample: a run that reasoned in three lines for twenty
+		// turns and then opened a long think has changed what it needs.
+		const quiet = Array.from({ length: 30 }, () => turn(200))
+		expect(resolveObservedOutputTokens([...quiet, turn(40_000)])).toBe(40_000)
+		expect(resolveObservedOutputTokens([turn(40_000), ...quiet])).toBe(200)
+	})
+
+	it("hands a terse model back the window a big cap was holding", () => {
+		// Measured: turns of 24-2,164 output tokens against a 32,000 num_predict.
+		// The declared cap would reserve 32,000 of a 110,000 window for an output
+		// that never arrives.
+		expect(
+			resolveCompactionTriggerTokens({
+				maxInputTokens: 99_000,
+				contextWindow: 110_000,
+				modelMaxTokens: 32_000,
+				observedOutputTokens: 2_164,
+			}),
+		).toBe(89_100)
+	})
+
+	it("reserves for a model that really does think that long", () => {
+		// 17,000 tokens of reasoning on most turns: half again on top is 25,500,
+		// and the trigger comes down to make room for it.
+		expect(
+			resolveCompactionTriggerTokens({
+				maxInputTokens: 99_000,
+				contextWindow: 110_000,
+				modelMaxTokens: 32_000,
+				observedOutputTokens: 17_000,
+			}),
+		).toBe(84_500)
+	})
+
+	it("never reserves past the model's own cap", () => {
+		expect(
+			resolveCompactionTriggerTokens({
+				maxInputTokens: 99_000,
+				contextWindow: 110_000,
+				modelMaxTokens: 8_000,
+				observedOutputTokens: 40_000,
+			}),
+		).toBe(89_100)
+	})
 })

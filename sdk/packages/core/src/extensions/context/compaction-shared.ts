@@ -242,6 +242,96 @@ export const DEFAULT_OUTPUT_ROOM_TOKENS = 32_000;
 const MIN_TRIGGER_WINDOW_SHARE = 0.5;
 
 /**
+ * The share of the window reserved for output before this session has produced
+ * any turns to measure.
+ *
+ * `modelMaxTokens` is a ceiling, not a forecast. Reserving all of it takes the
+ * whole cap out of the transcript's budget on every turn, including the turns
+ * that answer in two hundred tokens -- measured on a 110,000-token window with a
+ * 32,000 cap, that is 21% of the window permanently unavailable to pay for an
+ * output that almost never arrives.
+ *
+ * A quarter is the cold-start compromise. Once turns have been observed, the
+ * reservation is sized from them instead; see {@link resolveObservedOutputTokens}.
+ */
+const COLD_START_OUTPUT_ROOM_WINDOW_SHARE = 0.25;
+
+/**
+ * How many recent assistant turns the reservation is measured over.
+ *
+ * Long enough that one unusually long think does not set the budget for the
+ * rest of the session, short enough to follow a model that changes register --
+ * a run that reasons in three lines for twenty turns and then opens a 40,000
+ * token think has changed what it needs, and the reservation has to notice
+ * within a few turns rather than a hundred.
+ */
+const OUTPUT_ROOM_SAMPLE_TURNS = 12;
+
+/**
+ * Multiplier on the observed high-water turn.
+ *
+ * The next turn is not bounded by the last twelve, so the measurement is a
+ * starting point rather than an answer. Half again leaves room for a turn
+ * somewhat larger than anything seen without reserving for one that never comes.
+ */
+const OUTPUT_ROOM_HEADROOM = 1.5;
+
+/** Never reserve less than this, however quiet the session has been. */
+const MIN_OUTPUT_ROOM_TOKENS = 2_048;
+
+/**
+ * The largest share of the window the measurement may claim.
+ *
+ * Above half the window, reserving for output and having a transcript become
+ * the same argument, and the floor below settles it anyway.
+ */
+const MAX_MEASURED_OUTPUT_ROOM_WINDOW_SHARE = 0.5;
+
+/**
+ * What this session's turns have actually cost, as a basis for how much of the
+ * window to hold back for the next one.
+ *
+ * The two models this was measured on want opposite things. One answers a tool
+ * call in 24 to 2,164 output tokens and never reasons at length: holding 32,000
+ * tokens back for it spends a fifth of the window on nothing. The other opens
+ * 35,000 to 45,000 characters of thinking on most turns, around 17,000 tokens,
+ * and a reservation sized for the first model would put it into overflow
+ * recovery repeatedly. No single fraction serves both, and the transcript
+ * already says which one is running.
+ *
+ * The high-water mark of the recent window rather than the mean: the reservation
+ * exists for the largest turn, and an average over a session that thinks on one
+ * turn in four describes none of them.
+ */
+export function resolveObservedOutputTokens(
+	messages: readonly MessageWithMetadata[],
+	sampleTurns = OUTPUT_ROOM_SAMPLE_TURNS,
+): number | undefined {
+	const observed: number[] = [];
+	for (let index = messages.length - 1; index >= 0; index -= 1) {
+		const message = messages[index];
+		if (message.role !== "assistant") {
+			continue;
+		}
+		const outputTokens = (
+			message as { metrics?: { outputTokens?: number } }
+		).metrics?.outputTokens;
+		if (isPositiveFiniteNumber(outputTokens)) {
+			observed.push(outputTokens);
+		}
+		if (observed.length >= sampleTurns) {
+			break;
+		}
+	}
+	// One turn is not a pattern, and the first turn of a session is routinely
+	// the smallest one it will produce.
+	if (observed.length < 2) {
+		return undefined;
+	}
+	return Math.max(...observed);
+}
+
+/**
  * The largest prompt that still leaves the model room to answer.
  *
  * The trigger used to ask only whether the prompt fit. It does not follow that
@@ -258,14 +348,29 @@ export function resolveCompactionTriggerTokens(input: {
 	maxInputTokens: number;
 	contextWindow?: number;
 	modelMaxTokens?: number;
+	/** The high-water output of recent turns, from {@link resolveObservedOutputTokens}. */
+	observedOutputTokens?: number;
 }): number {
 	const ratioTrigger = input.maxInputTokens * COMPACTION_TRIGGER_RATIO;
 	if (!isPositiveFiniteNumber(input.contextWindow)) {
 		return ratioTrigger;
 	}
-	const outputRoom = isPositiveFiniteNumber(input.modelMaxTokens)
+	const declaredRoom = isPositiveFiniteNumber(input.modelMaxTokens)
 		? input.modelMaxTokens
 		: DEFAULT_OUTPUT_ROOM_TOKENS;
+	const outputRoom = isPositiveFiniteNumber(input.observedOutputTokens)
+		? Math.min(
+				declaredRoom,
+				input.contextWindow * MAX_MEASURED_OUTPUT_ROOM_WINDOW_SHARE,
+				Math.max(
+					MIN_OUTPUT_ROOM_TOKENS,
+					input.observedOutputTokens * OUTPUT_ROOM_HEADROOM,
+				),
+			)
+		: Math.min(
+				declaredRoom,
+				input.contextWindow * COLD_START_OUTPUT_ROOM_WINDOW_SHARE,
+			);
 	const roomTrigger = Math.max(
 		input.contextWindow - outputRoom,
 		input.contextWindow * MIN_TRIGGER_WINDOW_SHARE,

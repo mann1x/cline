@@ -3297,11 +3297,11 @@ describe("createContextCompactionPrepareTurn", () => {
 		expect(context?.budget.request.maxInputTokens).toBeCloseTo(
 			contextWindow * 0.9,
 		);
-		// A window of a few dozen tokens is smaller than the default output room
-		// subtracted from it, so the floor decides: half the window, rather than
-		// the negative number the subtraction gives.
+		// A window of a few dozen tokens is smaller than the default output room,
+		// so the quarter ceiling on the reservation decides: three quarters of the
+		// window, rather than the negative number the raw subtraction gives.
 		expect(context?.budget.request.triggerTokens).toBeCloseTo(
-			contextWindow * 0.5,
+			contextWindow * 0.75,
 		);
 		expect(result?.messages).toEqual([
 			{ role: "user", content: "Compacted at 81%" },
@@ -3548,7 +3548,10 @@ describe("createContextCompactionPrepareTurn", () => {
 				info: {
 					id: "gpt-5.5",
 					maxInputTokens: 272_000,
-					maxTokens: 128_000,
+					// An eighth of the input budget: a cap this tight is a real
+					// constraint on how much a turn can say, and that is what the
+					// aggressive target is for.
+					maxTokens: 32_000,
 				},
 			},
 		});
@@ -3563,6 +3566,65 @@ describe("createContextCompactionPrepareTurn", () => {
 			(context?.budget.request.targetTokens ?? 0) -
 				(context?.budget.request.overheadTokens ?? 0),
 		);
+	});
+
+	// The regression this pins: `modelMaxTokens < maxInputTokens` was written when
+	// the cap was almost never populated, and read as "this model has a tight
+	// cap". Once the cap reached the session it was true of every local model, so
+	// the aggressive target went from never firing to always firing and the
+	// retained context fell from 54,600 to 36,300 on a 110,000-token window.
+	// Measured across a day: the task that finished in an hour at 54,600 did not
+	// finish once at 36,300.
+	it("does not take the aggressive target for a cap that is merely smaller", async () => {
+		const compact = vi.fn((_context: CoreCompactionContext) => ({
+			messages: [{ role: "user" as const, content: "Compacted" }],
+		}));
+		const prepareTurn = createContextCompactionPrepareTurn({
+			providerId: "ollama",
+			modelId: "local-model",
+			providerConfig: {
+				providerId: "ollama",
+				modelId: "local-model",
+			} as LlmsProviders.ProviderConfig,
+			compaction: { enabled: true, strategy: "basic", compact },
+			logger: undefined,
+		});
+		const messages: MessageWithMetadata[] = [
+			{ role: "user", content: "turn 1" },
+			{ role: "assistant", content: "answer 1" },
+			{ role: "user", content: "turn 2" },
+			{ role: "assistant", content: "answer 2" },
+			{ role: "user", content: "turn 3" },
+			{ role: "assistant", content: "answer 3" },
+			{ role: "user", content: "turn 4" },
+			{ role: "assistant", content: "answer 4" },
+			{ role: "user", content: "turn 5" },
+			{ role: "assistant", content: "answer 5" },
+			{ role: "user", content: "large prompt ".repeat(40_000) },
+		];
+
+		await prepareTurn?.({
+			agentId: "agent-1",
+			conversationId: "conv-1",
+			parentAgentId: null,
+			iteration: 1,
+			abortSignal: new AbortController().signal,
+			systemPrompt: "You are helpful.",
+			tools: [],
+			messages,
+			apiMessages: messages,
+			model: {
+				id: "local-model",
+				provider: "ollama",
+				// The live setup: a 110,000 window and the user's own 32,000
+				// num_predict, which is 29% of the input budget.
+				info: { id: "local-model", contextWindow: 110_000, maxTokens: 32_000 },
+			},
+		});
+
+		const context = compact.mock.calls[0]?.[0];
+		// Not 36,300. The conservative branch: 0.7 of the trigger, floored.
+		expect(context?.budget.request.targetTokens).toBeCloseTo(57_750, -1);
 	});
 
 	it("keeps the long-conversation target below the fixed trigger", async () => {
@@ -3615,7 +3677,7 @@ describe("createContextCompactionPrepareTurn", () => {
 				info: {
 					id: "mock-model",
 					maxInputTokens: 100,
-					maxTokens: 20,
+					maxTokens: 12,
 				},
 			},
 		});
@@ -3680,11 +3742,12 @@ describe("createContextCompactionPrepareTurn", () => {
 		expect(compact).toHaveBeenCalledTimes(1);
 		const context = compact.mock.calls[0]?.[0];
 		expect(context?.budget.request.maxInputTokens).toBe(360_000);
-		// The ratio would allow 324,000, but this model reports a 128,000 output
-		// cap and a turn has to hold prompt and reply in one 400,000 window. The
-		// trigger is whichever bound comes first, and here it is the one that
-		// leaves room to answer.
-		expect(context?.budget.request.triggerTokens).toBe(272_000);
+		// The ratio would allow 324,000, but a turn has to hold prompt and reply
+		// in one 400,000 window. The trigger is whichever bound comes first, and
+		// here it is the one that leaves room to answer. The model's own 128,000
+		// cap is not reserved in full -- a third of the window held back for an
+		// output that size costs more than it saves -- so a quarter is.
+		expect(context?.budget.request.triggerTokens).toBe(300_000);
 		expect(context?.budget.request.thresholdRatio).toBe(0.9);
 		expect(result?.messages).toEqual([
 			{ role: "user", content: "Compacted by derived input budget" },
