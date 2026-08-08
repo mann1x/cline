@@ -645,18 +645,26 @@ export function createContextCompactionPrepareTurn(
 		let executedStrategy = telemetryStrategy;
 		let result: CoreCompactionResult | undefined;
 		if (effectiveMode === "overflow_recovery") {
-			// The provider already rejected the request, so recovery must end
-			// deterministically: the agentic strategy's own summarizer call could
-			// overflow the same window (its input budgeting trusts the same
-			// estimator that just undercounted). A custom compactor gets first
-			// shot — it sees mode "overflow_recovery" and owns its transcript
-			// invariants — but its result is held to the same bar basic
-			// compaction aims for: strictly smaller than the input (the runtime
+			// Recovery has to end deterministically, because the provider has
+			// already rejected this request: whatever else is attempted, basic
+			// compaction is what guarantees an answer without another LLM call
+			// succeeding. But it is the *last* resort rather than the first,
+			// because of what it costs. Basic compaction drops turns whole, and
+			// measured on live runs the model does not survive it — the
+			// transcript it wakes up in has the work in it but not the reasons,
+			// and every recovery in a session was followed by the run coming
+			// apart. So the summarising strategy gets a bounded attempt first,
+			// held to exactly the bar basic aims for, and basic runs the moment
+			// that attempt throws, declines, or does not shrink the transcript
+			// enough. The failure mode this guards against is one wasted
+			// summariser call; the one it replaces was a dead run.
+			//
+			// A custom compactor still goes first — it sees mode
+			// "overflow_recovery" and owns its transcript invariants — and is
+			// held to the same bar: strictly smaller than the input (the runtime
 			// refuses to retry with a request that is not smaller) AND within
-			// the recovery token target. A marginal shrink would spend the
-			// run's single retry on a request that still cannot fit. On throw,
-			// decline, or an insufficient result, basic compaction runs so
-			// recovery never depends on another successful LLM request.
+			// the recovery token target. A marginal shrink would spend the run's
+			// single retry on a request that still cannot fit.
 			if (userCompaction?.compact) {
 				try {
 					result = await userCompaction.compact(compactionContext);
@@ -705,8 +713,71 @@ export function createContextCompactionPrepareTurn(
 				}
 			}
 			if (!result?.messages) {
+				// Basic first, but as the floor rather than the answer: it is
+				// local, deterministic and cheap, and having it in hand means the
+				// summarising attempt can be judged against what it would
+				// actually replace instead of against a target basic itself is
+				// not held to.
+				const basicResult =
+					await BUILTIN_COMPACTION_STRATEGIES.basic(builtinOptions);
+				const basicTokens = (basicResult?.messages ?? []).reduce(
+					(total: number, message) => total + estimateMessageTokens(message),
+					0,
+				);
 				executedStrategy = "basic";
-				result = await BUILTIN_COMPACTION_STRATEGIES.basic(builtinOptions);
+				result = basicResult;
+
+				if (strategy !== "basic") {
+					// The summarising attempt: one model call, and the difference
+					// between resuming with a transcript that explains itself and
+					// one that merely contains the work.
+					try {
+						const summarised = await runBuiltinStrategy(builtinOptions);
+						const summarisedTokens = (summarised?.messages ?? []).reduce(
+							(total: number, message) =>
+								total + estimateMessageTokens(message),
+							0,
+						);
+						// The bar is whether the retry fits, which is what the
+						// recovery target expresses — not whether it beats basic
+						// on size. It never will: a summary plus the recent turns
+						// is by construction bigger than the recent turns alone,
+						// and a rule that preferred the smaller transcript would
+						// choose the one that loses the reasons every single
+						// time. `basicTokens` is reported when this fails so the
+						// two are comparable in the log.
+						const acceptable =
+							(summarised?.messages?.length ?? 0) > 0 &&
+							summarisedTokens < messageInputTokens &&
+							summarisedTokens <= messageTargetTokens;
+						if (acceptable) {
+							result = summarised;
+							executedStrategy = strategy;
+						} else {
+							config.logger?.log(
+								`${strategy} compaction did not produce an acceptable overflow-recovery transcript; keeping the basic one`,
+								{
+									severity: "warn",
+									summarisedMessageCount: summarised?.messages?.length ?? 0,
+									summarisedTokens,
+									basicTokens,
+									messageTargetTokens,
+								},
+							);
+						}
+					} catch (error) {
+						if (isCompactionCancellation(error, context.abortSignal)) {
+							throw error;
+						}
+						config.logger?.log(
+							`${strategy} compaction failed during overflow recovery; keeping the basic one`,
+							{
+								severity: "warn",
+								...describeCompactionError(error),
+							},
+						);
+					}
+				}
 			}
 		} else if (userCompaction?.compact) {
 			result = await userCompaction.compact(compactionContext);

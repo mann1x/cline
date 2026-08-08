@@ -85,6 +85,46 @@ function bounds(
 }
 
 /** Multi-turn transcript with prunable tool output for basic-compaction tests. */
+/**
+ * A transcript with enough history behind it for summarising to be worth doing.
+ *
+ * The short fixture below cannot show it: on five small messages a summary plus
+ * the recent turns is larger than the recent turns alone, so recovery correctly
+ * keeps the dropped version. Recovery happens on transcripts that overflowed a
+ * context window, where the proportions are the other way around.
+ */
+function longOverflowRecoveryTranscript(): MessageWithMetadata[] {
+	const older: MessageWithMetadata[] = [];
+	for (let index = 0; index < 12; index += 1) {
+		older.push({
+			role: "assistant",
+			content: [
+				{ type: "text", text: `Older assistant explanation ${index}. ${"detail ".repeat(200)}` },
+			],
+		});
+		older.push({
+			role: "user",
+			content: [
+				{
+					type: "tool_result",
+					tool_use_id: `tool-${index}`,
+					name: "tool",
+					content: `tool output ${index}. ${"line ".repeat(200)}`,
+				},
+			],
+		});
+	}
+	return [
+		{ role: "user", content: "Initial request that should survive" },
+		...older,
+		{ role: "user", content: "Most recent user turn" },
+		{
+			role: "assistant",
+			content: [{ type: "text", text: "Most recent assistant reply" }],
+		},
+	];
+}
+
 function overflowRecoveryTranscript(): MessageWithMetadata[] {
 	return [
 		{ role: "user", content: "Initial request that should survive" },
@@ -2867,7 +2907,7 @@ describe("createContextCompactionPrepareTurn", () => {
 		assertBasicCompactionResult(result);
 	});
 
-	it("forces a basic compaction on overflow recovery, bypassing the estimate gate", async () => {
+	it("compacts on overflow recovery whatever the estimate said, and lands on basic when the summariser cannot run", async () => {
 		const emitStatusNotice = vi.fn();
 		const prepareTurn = createContextCompactionPrepareTurn({
 			providerId: "anthropic",
@@ -2878,8 +2918,9 @@ describe("createContextCompactionPrepareTurn", () => {
 			} as LlmsProviders.ProviderConfig,
 			compaction: {
 				enabled: true,
-				// Agentic is configured, but recovery must not depend on a
-				// summarizer call succeeding.
+				// Agentic is configured and is attempted first; recovery must
+				// not *depend* on that call succeeding, and here it cannot —
+				// the handler mock returns nothing to stream.
 				strategy: "agentic",
 			},
 			logger: undefined,
@@ -2906,7 +2947,7 @@ describe("createContextCompactionPrepareTurn", () => {
 			},
 		});
 
-		expect(createHandlerMock).not.toHaveBeenCalled();
+		expect(createHandlerMock).toHaveBeenCalled();
 		expect(emitStatusNotice).toHaveBeenCalledWith(
 			"overflow-recovery-compacting",
 			expect.objectContaining({
@@ -2922,6 +2963,58 @@ describe("createContextCompactionPrepareTurn", () => {
 			}),
 		);
 		assertBasicCompactionResult(result);
+	});
+
+	it("recovers by summarising rather than dropping turns when the summariser works", async () => {
+		// Basic compaction drops turns whole, and measured on live runs the model
+		// does not survive it: the transcript it wakes up in has the work but not
+		// the reasons, and every recovery was followed by the run coming apart.
+		// So the summariser gets the first attempt, and its transcript is what
+		// the retry uses when it fits.
+		createHandlerMock.mockReturnValue({
+			createMessage: vi.fn(() =>
+				streamChunks([
+					{
+						type: "text",
+						id: "summary-1",
+						text: "## Goal\nShip the feature\n\n## Next\n- Finish it",
+					},
+					{ type: "done", id: "summary-1", success: true },
+				]),
+			),
+		});
+
+		const prepareTurn = createContextCompactionPrepareTurn({
+			providerId: "anthropic",
+			modelId: "mock-model",
+			providerConfig: {
+				providerId: "anthropic",
+				modelId: "mock-model",
+			} as LlmsProviders.ProviderConfig,
+			compaction: { enabled: true, strategy: "agentic" },
+			logger: undefined,
+		});
+
+		const result = await prepareTurn?.({
+			agentId: "agent-1",
+			conversationId: "conv-1",
+			parentAgentId: null,
+			iteration: 1,
+			abortSignal: new AbortController().signal,
+			overflowRecovery: true,
+			systemPrompt: "You are helpful.",
+			tools: [],
+			messages: longOverflowRecoveryTranscript(),
+			apiMessages: longOverflowRecoveryTranscript(),
+			model: {
+				id: "mock-model",
+				provider: "anthropic",
+				info: { id: "mock-model", maxInputTokens: 1_000_000 },
+			},
+		});
+
+		expect(createHandlerMock).toHaveBeenCalled();
+		expect(JSON.stringify(result?.messages)).toContain("Ship the feature");
 	});
 
 	it("skips overflow-recovery compaction when there is nothing to remove", async () => {
@@ -3050,7 +3143,8 @@ describe("createContextCompactionPrepareTurn", () => {
 		});
 
 		expect(compact).toHaveBeenCalledTimes(1);
-		expect(createHandlerMock).not.toHaveBeenCalled();
+		// Custom declines, the summariser is tried and cannot run, basic ends it.
+		expect(createHandlerMock).toHaveBeenCalled();
 		assertBasicCompactionResult(result);
 	});
 
@@ -3166,7 +3260,8 @@ describe("createContextCompactionPrepareTurn", () => {
 		});
 
 		expect(compact).toHaveBeenCalledTimes(1);
-		expect(createHandlerMock).not.toHaveBeenCalled();
+		// Custom declines, the summariser is tried and cannot run, basic ends it.
+		expect(createHandlerMock).toHaveBeenCalled();
 		assertBasicCompactionResult(result);
 	});
 
