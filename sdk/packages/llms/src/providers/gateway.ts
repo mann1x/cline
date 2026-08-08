@@ -54,6 +54,15 @@ const GATEWAY_OUTPUT_RESERVE_TOKENS = 1_024;
  */
 export const GATEWAY_MIN_OUTPUT_TOKENS = 1_024;
 
+/**
+ * How long an auxiliary call waits for the conversation to free the model.
+ *
+ * Long enough to cover a full turn on a local model, short enough that a slot
+ * never released -- a stream abandoned without being drained -- costs one wait
+ * rather than the life of the process.
+ */
+const AUXILIARY_SLOT_WAIT_MS = 120_000;
+
 function mergeRequestMetadata(
 	defaults: Record<string, unknown> | undefined,
 	request: Record<string, unknown> | undefined,
@@ -455,9 +464,80 @@ export class DefaultGateway implements Gateway {
 		return new GatewayModelAdapter(this, selection, options);
 	}
 
+	/**
+	 * Conversation requests currently streaming, and how to wait them out.
+	 *
+	 * A local server serves one request at a time per model. An auxiliary call
+	 * issued while the conversation is streaming does not run alongside it -- it
+	 * queues, and if the turn it belongs to has moved on by the time the slot
+	 * frees, it is abandoned: no response, no error, nothing in the server's log.
+	 * Measured with a probe that sat for 89 seconds and returned only when the
+	 * session it was queued behind was stopped.
+	 *
+	 * So auxiliary calls wait for the slot instead of racing for it. The wait is
+	 * one-directional by construction: the conversation never waits for the
+	 * machinery, which is what keeps this from becoming a way to stall a turn.
+	 */
+	#conversationsInFlight = 0;
+	#slotFree: Promise<void> = Promise.resolve();
+	#releaseSlot: () => void = () => {};
+
+	#takeSlot(): () => void {
+		if (this.#conversationsInFlight === 0) {
+			this.#slotFree = new Promise<void>((resolve) => {
+				this.#releaseSlot = resolve;
+			});
+		}
+		this.#conversationsInFlight += 1;
+		let released = false;
+		return () => {
+			if (released) {
+				return;
+			}
+			released = true;
+			this.#conversationsInFlight -= 1;
+			if (this.#conversationsInFlight === 0) {
+				this.#releaseSlot();
+			}
+		};
+	}
+
+	/**
+	 * Wait for the conversation to release the model, but not indefinitely.
+	 *
+	 * A stream abandoned without being drained would otherwise hold the slot for
+	 * the life of the process, and a summary that never happens is a worse
+	 * failure than one that queues.
+	 */
+	async #awaitFreeSlot(): Promise<void> {
+		if (this.#conversationsInFlight === 0) {
+			return;
+		}
+		const waitedFrom = Date.now();
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		await Promise.race([
+			this.#slotFree,
+			new Promise<void>((resolve) => {
+				timer = setTimeout(resolve, AUXILIARY_SLOT_WAIT_MS);
+			}),
+		]);
+		if (timer) {
+			clearTimeout(timer);
+		}
+		this.logger?.log(
+			`Auxiliary request waited ${Date.now() - waitedFrom}ms for the model${
+				this.#conversationsInFlight > 0 ? " and gave up waiting" : ""
+			}`,
+			{ severity: "info" },
+		);
+	}
+
 	async stream(
 		request: GatewayStreamRequest,
 	): Promise<AsyncIterable<AgentModelEvent>> {
+		if (request.auxiliary) {
+			await this.#awaitFreeSlot();
+		}
 		const resolved = this.registry.resolveModel({
 			providerId: request.providerId,
 			modelId: request.modelId || undefined,
@@ -563,11 +643,28 @@ export class DefaultGateway implements Gateway {
 			// from one is not the ratio the conversation tokenizes at.
 			return toAsyncIterable(stream);
 		}
-		return calibrateFromUsage(
-			toAsyncIterable(stream),
-			inputChars,
-			reasoningChars,
+		return holdingSlot(
+			calibrateFromUsage(toAsyncIterable(stream), inputChars, reasoningChars),
+			this.#takeSlot(),
 		);
+	}
+}
+
+/**
+ * Hold the model's slot until the stream is done with it.
+ *
+ * `finally` covers the abandoned case as well as the finished one: a consumer
+ * that breaks out of the loop triggers the generator's `return`, so the slot is
+ * released there too rather than when the process ends.
+ */
+async function* holdingSlot(
+	events: AsyncIterable<AgentModelEvent>,
+	release: () => void,
+): AsyncIterable<AgentModelEvent> {
+	try {
+		yield* events;
+	} finally {
+		release();
 	}
 }
 

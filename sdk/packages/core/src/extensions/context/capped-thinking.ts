@@ -499,12 +499,26 @@ async function writeCappedThinkingNote(options: {
 			}),
 		);
 		let text = "";
+		let chunks = 0;
 		for await (const chunk of handler.createMessage(request, [])) {
+			chunks += 1;
 			if (chunk.type === "text") {
 				text += chunk.text;
 			}
 		}
-		return truncateText(text.trim(), CONDENSED_THINKING_MAX_CHARS);
+		const note = truncateText(text.trim(), CONDENSED_THINKING_MAX_CHARS);
+		if (!note) {
+			// An empty note used to return in silence, which reads exactly like a
+			// condenser that was never called -- and for a whole session that is
+			// how it was read. A summariser queued behind the conversation on a
+			// single-slot server comes back like this: stream opened, no chunks,
+			// no error.
+			options.config.logger?.log(
+				`Capped-thinking condensation produced nothing from ${options.thinking.length} chars of reasoning (${chunks} chunks received)`,
+				{ severity: "warn", chunks, thinkingChars: options.thinking.length },
+			);
+		}
+		return note;
 	} catch (error) {
 		// A note is worth having and worth nothing at the price of the turn it
 		// was meant to help.

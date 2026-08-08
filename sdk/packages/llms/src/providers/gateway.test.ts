@@ -355,6 +355,73 @@ describe("sdk-gateway", () => {
 		expect(uncapped).toMatchObject({ source: "uncapped", windowBound: false });
 	});
 
+	it("makes an auxiliary call wait for the conversation's slot", async () => {
+		// A local server runs one request at a time per model. An auxiliary call
+		// issued alongside a turn does not run beside it -- it queues, and if the
+		// turn moves on before the slot frees, it is abandoned with no response
+		// and no error. That is what an empty condensation looked like from
+		// inside: a stream that opened and yielded nothing.
+		const createProvider = () => ({
+			async *stream() {
+				yield { type: "text-delta", text: "ok" } satisfies AgentModelEvent;
+				yield { type: "finish", reason: "stop" } satisfies AgentModelEvent;
+			},
+		});
+		const gateway = createGateway({
+			builtins: false,
+			providers: [
+				{
+					manifest: {
+						id: "scripted",
+						name: "Scripted",
+						defaultModelId: "scripted-model",
+						models: [
+							{
+								id: "scripted-model",
+								name: "Scripted Model",
+								providerId: "scripted",
+							},
+						],
+					},
+					createProvider,
+				},
+			],
+		});
+		const order: string[] = [];
+
+		const conversation = await gateway.stream({
+			providerId: "scripted",
+			modelId: "scripted-model",
+			messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+		});
+
+		let auxiliaryIssued = false;
+		const auxiliary = gateway
+			.stream({
+				providerId: "scripted",
+				modelId: "scripted-model",
+				auxiliary: true,
+				messages: [{ role: "user", content: [{ type: "text", text: "sum" }] }],
+			})
+			.then((stream) => {
+				auxiliaryIssued = true;
+				order.push("auxiliary");
+				return stream;
+			});
+
+		// The conversation holds the slot until its stream is drained.
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(auxiliaryIssued).toBe(false);
+
+		for await (const _event of conversation) {
+			// drain
+		}
+		order.push("conversation-done");
+
+		await auxiliary;
+		expect(order).toEqual(["conversation-done", "auxiliary"]);
+	});
+
 	it("keeps an auxiliary call out of the process-wide overflow record", () => {
 		// A summariser running out of room is its own problem. Left in the
 		// record, it forces a compaction of the conversation it was summarising,
