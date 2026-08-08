@@ -96,6 +96,7 @@ interface TokenCalibrationState {
 	thinkingCharsPerToken?: number;
 	requestTokens?: number;
 	contextOverflow?: ContextOverflowReport;
+	outputCap?: OutputCapReport;
 }
 
 /**
@@ -112,6 +113,40 @@ export interface ContextOverflowReport {
 	reserveTokens: number;
 	remainingContext: number;
 	minOutputTokens: number;
+}
+
+/**
+ * Which term set the output cap on the last request.
+ *
+ * `requested` is the caller's own limit (a configured `num_predict`, say),
+ * `model-max-output` the model's declared ceiling, `default` the synthesized
+ * fallback -- none of which compaction can move. `remaining-context` and
+ * `context-overflow` are the window: the room left after the prompt, which is
+ * exactly what compaction makes.
+ */
+export type OutputCapSource =
+	| "requested"
+	| "default"
+	| "model-max-output"
+	| "remaining-context"
+	| "context-overflow"
+	| "uncapped";
+
+/**
+ * What limited the reply, recorded for whoever has to react to a truncation.
+ *
+ * A turn cut off at its output cap looks identical either way -- same finish
+ * reason, same half-written message -- but the two causes want opposite
+ * responses. A window-bound cap is compaction's to fix. A cap that came from
+ * the request or the model is not: shrinking the transcript cannot raise it, so
+ * compacting there spends the transcript to change nothing, and the turn is
+ * retried against the same ceiling with less of the work it was doing.
+ */
+export interface OutputCapReport {
+	maxTokens?: number;
+	source: OutputCapSource;
+	/** Whether the winning term was the context window. */
+	windowBound: boolean;
 }
 
 function calibration(): TokenCalibrationState {
@@ -305,6 +340,24 @@ export function consumeContextOverflow(): ContextOverflowReport | undefined {
 	return report;
 }
 
+/**
+ * Record which term capped the reply on the request that just went out.
+ *
+ * Read rather than consumed, unlike the overflow report above: that one is an
+ * event that must force exactly one compaction, this one is a standing fact
+ * about the last request, overwritten by the next. A reader asking "was the cap
+ * that just truncated this turn the window's?" wants the answer to survive
+ * being asked, and every request rewrites it before the question can go stale.
+ */
+export function noteOutputCap(report: OutputCapReport): void {
+	calibration().outputCap = report;
+}
+
+/** What capped the last request, or `undefined` before the first one. */
+export function lastOutputCap(): OutputCapReport | undefined {
+	return calibration().outputCap;
+}
+
 /** Drop any measured ratio and fall back to `CHARS_PER_TOKEN`. */
 export function resetTokenCalibration(): void {
 	const state = calibration();
@@ -312,6 +365,7 @@ export function resetTokenCalibration(): void {
 	state.thinkingCharsPerToken = undefined;
 	state.requestTokens = undefined;
 	state.contextOverflow = undefined;
+	state.outputCap = undefined;
 }
 
 export function estimateTokens(chars: number): number {

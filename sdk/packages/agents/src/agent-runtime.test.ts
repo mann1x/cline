@@ -9,13 +9,15 @@ import type {
 } from "@cline/shared";
 import {
 	AGENT_UNEXPECTED_REASONING_TOKENS_EVENT,
+	noteOutputCap,
+	resetTokenCalibration,
 	TASK_CANCELLED_EVENT,
 	TASK_FIRST_CHUNK_RECEIVED_EVENT,
 	TASK_PROVIDER_REQUEST_STARTED_EVENT,
 	TASK_PROVIDER_STREAM_FAILED_EVENT,
 	TASK_PROVIDER_STREAM_STARTED_EVENT,
 } from "@cline/shared";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentRuntime, DEFAULT_MAX_NO_TOOL_CALL_NUDGES } from "./index";
 
 class ScriptedModel implements AgentModel {
@@ -3056,6 +3058,13 @@ describe("a message sent while the run is going", () => {
 });
 
 describe("a turn cut off at the output cap", () => {
+	// What capped the last request is process-global, the way the token
+	// calibration it lives beside is. Leaving one test's cap set would decide
+	// the next one's behaviour.
+	beforeEach(() => {
+		resetTokenCalibration();
+	});
+
 	it("makes room before retrying, instead of only asking for less", async () => {
 		// Re-prompting alone asks the model to be briefer, which changes nothing
 		// when the cap is small because the prompt has taken the window: the
@@ -3123,6 +3132,73 @@ describe("a turn cut off at the output cap", () => {
 		for (const call of prepareTurn.mock.calls) {
 			expect(call[0]).not.toMatchObject({ overflowRecovery: true });
 		}
+	});
+
+	it("skips compaction when the cap that truncated it was not the window's", async () => {
+		// Measured: a 48,508-token request against a 110,000-token window
+		// recovered anyway, because the turn was cut off by the caller's own
+		// 32,000-token limit. Compaction cannot raise that limit, so the whole
+		// cost of the recovery bought a retry against the same ceiling with less
+		// of the work it was doing. The retry and its reminder still happen --
+		// asking for less is the part that can work here.
+		noteOutputCap({ maxTokens: 32_000, source: "requested", windowBound: false });
+		const prepareTurn = vi.fn(
+			(context: { messages: readonly AgentMessage[] }) => ({
+				messages: context.messages.slice(),
+			}),
+		);
+		const model = new ScriptedModel([
+			() => [
+				{ type: "text-delta", text: "a very long answer that ran out of room" },
+				{ type: "finish", reason: "max-tokens" },
+			],
+			() => [
+				{ type: "text-delta", text: "short answer" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({ model, tools: [], prepareTurn });
+
+		const result = await runtime.run("Start");
+
+		expect(result.status).toBe("completed");
+		expect(prepareTurn).toHaveBeenCalledTimes(2);
+		for (const call of prepareTurn.mock.calls) {
+			expect(call[0]).not.toMatchObject({ overflowRecovery: true });
+		}
+		expect(JSON.stringify(model.requests[1].messages)).toContain(
+			"hit the per-turn output limit",
+		);
+	});
+
+	it("still makes room when the window is what set the cap", async () => {
+		noteOutputCap({
+			maxTokens: 4_000,
+			source: "remaining-context",
+			windowBound: true,
+		});
+		const prepareTurn = vi.fn(
+			(context: { messages: readonly AgentMessage[] }) => ({
+				messages: context.messages.slice(),
+			}),
+		);
+		const model = new ScriptedModel([
+			() => [
+				{ type: "text-delta", text: "a very long answer that ran out of room" },
+				{ type: "finish", reason: "max-tokens" },
+			],
+			() => [
+				{ type: "text-delta", text: "short answer" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({ model, tools: [], prepareTurn });
+
+		await runtime.run("Start");
+
+		expect(prepareTurn.mock.calls[1]?.[0]).toMatchObject({
+			overflowRecovery: true,
+		});
 	});
 });
 

@@ -11,6 +11,8 @@ import type {
 	GatewayProviderRegistration,
 	GatewayStreamRequest,
 	ITelemetryService,
+	OutputCapReport,
+	OutputCapSource,
 	ReasoningEffort,
 } from "@cline/shared";
 import {
@@ -19,6 +21,7 @@ import {
 	measureRequestInputChars,
 	measureRequestReasoningChars,
 	noteContextOverflow,
+	noteOutputCap,
 	observeRequestTokens,
 	ReasoningEffortSchema,
 } from "@cline/shared";
@@ -257,7 +260,7 @@ function describeOutputBudget(details: {
 		.join(" ");
 }
 
-export function resolveGatewayRequestMaxTokens(input: {
+interface GatewayOutputCapInput {
 	requestedMaxTokens?: number;
 	model: Pick<GatewayModelDefinition, "contextWindow" | "maxOutputTokens">;
 	estimatedInputTokens: number;
@@ -272,10 +275,32 @@ export function resolveGatewayRequestMaxTokens(input: {
 		remainingContext: number;
 		minOutputTokens: number;
 	}) => void;
-}): number | undefined {
-	const caps: number[] = [];
+}
+
+export function resolveGatewayRequestMaxTokens(
+	input: GatewayOutputCapInput,
+): number | undefined {
+	return resolveGatewayOutputCap(input).maxTokens;
+}
+
+/**
+ * The cap and the term that set it.
+ *
+ * The cap alone is ambiguous in the one place it has to be acted on: a turn
+ * truncated at 32,000 tokens says nothing about whether 32,000 was the window's
+ * doing or the request's, and only the first is worth compacting for. The
+ * arithmetic that knows is this function's, so the answer is returned rather
+ * than reconstructed by a caller comparing numbers it would have to guess at.
+ */
+export function resolveGatewayOutputCap(
+	input: GatewayOutputCapInput,
+): OutputCapReport {
+	const caps: Array<{ tokens: number; source: OutputCapSource }> = [];
 	if (isPositiveFiniteNumber(input.requestedMaxTokens)) {
-		caps.push(Math.floor(input.requestedMaxTokens));
+		caps.push({
+			tokens: Math.floor(input.requestedMaxTokens),
+			source: "requested",
+		});
 	} else {
 		// Providers like Anthropic require max_tokens to exceed the thinking
 		// budget, so an explicit reasoning budget lifts the synthesized default
@@ -292,12 +317,15 @@ export function resolveGatewayRequestMaxTokens(input: {
 			isPositiveFiniteNumber(input.model.maxOutputTokens) ||
 			isPositiveFiniteNumber(input.model.contextWindow)
 		) {
-			caps.push(defaultMaxOutputTokens);
+			caps.push({ tokens: defaultMaxOutputTokens, source: "default" });
 		}
 	}
 
 	if (isPositiveFiniteNumber(input.model.maxOutputTokens)) {
-		caps.push(Math.floor(input.model.maxOutputTokens));
+		caps.push({
+			tokens: Math.floor(input.model.maxOutputTokens),
+			source: "model-max-output",
+		});
 	}
 
 	if (isPositiveFiniteNumber(input.model.contextWindow)) {
@@ -325,16 +353,38 @@ export function resolveGatewayRequestMaxTokens(input: {
 			// means finding the overflow and reporting it are the same act.
 			noteContextOverflow(report);
 			input.onContextOverflow?.(report);
-			return undefined;
+			// No cap goes out, but the window is still what decided that, and the
+			// next truncation is squarely compaction's to fix.
+			return { source: "context-overflow", windowBound: true };
 		}
-		caps.push(Math.floor(remainingContext));
+		caps.push({
+			tokens: Math.floor(remainingContext),
+			source: "remaining-context",
+		});
 	}
 
 	if (caps.length === 0) {
-		return undefined;
+		return { source: "uncapped", windowBound: false };
 	}
 
-	return Math.max(1, Math.floor(Math.min(...caps)));
+	// Ties resolve to the window. Two terms landing on the same number leaves no
+	// evidence which one truncated the reply, and the costlier mistake is the
+	// one that withholds a compaction the window did need.
+	let winner = caps[0];
+	for (const cap of caps.slice(1)) {
+		if (
+			cap.tokens < winner.tokens ||
+			(cap.tokens === winner.tokens && cap.source === "remaining-context")
+		) {
+			winner = cap;
+		}
+	}
+
+	return {
+		maxTokens: Math.max(1, Math.floor(winner.tokens)),
+		source: winner.source,
+		windowBound: winner.source === "remaining-context",
+	};
 }
 
 export class DefaultGateway implements Gateway {
@@ -436,7 +486,7 @@ export class DefaultGateway implements Gateway {
 				? estimateTokens(inputChars - reasoningChars) +
 					estimateThinkingTokens(reasoningChars)
 				: estimateTokens(inputChars);
-		const maxTokens = resolveGatewayRequestMaxTokens({
+		const outputCap = resolveGatewayOutputCap({
 			requestedMaxTokens: request.maxTokens,
 			model: resolved.model,
 			estimatedInputTokens,
@@ -454,6 +504,10 @@ export class DefaultGateway implements Gateway {
 				);
 			},
 		});
+		const maxTokens = outputCap.maxTokens;
+		// Left for the agent loop, which sees the truncation but not the terms
+		// that caused it.
+		noteOutputCap(outputCap);
 		// The terms behind the cap, not just the cap. A session was watched
 		// ratchet from 20,547 down to no cap at all over six turns while
 		// compaction sat below its trigger the whole way, and the logs could not
@@ -461,11 +515,13 @@ export class DefaultGateway implements Gateway {
 		// structured fields above are dropped by the logger, so they go in the
 		// message.
 		this.logger?.log(
-			`Resolved output cap ${maxTokens ?? "none"} (${describeOutputBudget({
-				contextWindow: resolved.model.contextWindow,
-				estimatedInputTokens,
-				inputChars,
-			})})`,
+			`Resolved output cap ${maxTokens ?? "none"} from ${outputCap.source} (${describeOutputBudget(
+				{
+					contextWindow: resolved.model.contextWindow,
+					estimatedInputTokens,
+					inputChars,
+				},
+			)})`,
 			{ severity: "info" },
 		);
 		const stream = await provider.stream(

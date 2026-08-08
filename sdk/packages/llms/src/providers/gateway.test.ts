@@ -23,6 +23,7 @@ import {
 	createGateway,
 	DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS,
 	GATEWAY_MIN_OUTPUT_TOKENS,
+	resolveGatewayOutputCap,
 	resolveGatewayRequestMaxTokens,
 } from "./gateway";
 
@@ -295,6 +296,81 @@ describe("sdk-gateway", () => {
 		} else {
 			process.env.CLINE_CAPTURE_CLEANUP = originalCaptureCleanup;
 		}
+	});
+
+	it("names the term that set the cap, not just the cap", () => {
+		// The cap alone cannot answer the only question a truncated turn asks:
+		// whether compacting the transcript would raise it. A caller's own limit
+		// and a window with no room left produce the same number and the same
+		// finish reason, and only one of them is compaction's to fix.
+		expect(
+			resolveGatewayOutputCap({
+				requestedMaxTokens: 32_000,
+				model: { maxOutputTokens: 202_800, contextWindow: 110_000 },
+				estimatedInputTokens: 48_508,
+			}),
+		).toMatchObject({
+			maxTokens: 32_000,
+			source: "requested",
+			windowBound: false,
+		});
+
+		// The model's declared ceiling is no more compactable than the caller's.
+		expect(
+			resolveGatewayOutputCap({
+				requestedMaxTokens: undefined,
+				model: { maxOutputTokens: 4_096, contextWindow: 200_000 },
+				estimatedInputTokens: 1_000,
+			}),
+		).toMatchObject({ maxTokens: 4_096, source: "model-max-output", windowBound: false });
+
+		// Room left in the window is.
+		expect(
+			resolveGatewayOutputCap({
+				requestedMaxTokens: 32_000,
+				model: { maxOutputTokens: 32_000, contextWindow: 60_000 },
+				estimatedInputTokens: 50_000,
+			}),
+		).toMatchObject({ source: "remaining-context", windowBound: true });
+
+		// So is having no room at all, even though no cap goes out.
+		const overflowed = resolveGatewayOutputCap({
+			requestedMaxTokens: 32_000,
+			model: { maxOutputTokens: 32_000, contextWindow: 60_000 },
+			estimatedInputTokens: 59_990,
+		});
+		expect(overflowed.maxTokens).toBeUndefined();
+		expect(overflowed).toMatchObject({
+			source: "context-overflow",
+			windowBound: true,
+		});
+
+		// A model with neither term declares nothing to attribute a cap to.
+		const uncapped = resolveGatewayOutputCap({
+			requestedMaxTokens: undefined,
+			model: {},
+			estimatedInputTokens: 1_000,
+		});
+		expect(uncapped.maxTokens).toBeUndefined();
+		expect(uncapped).toMatchObject({ source: "uncapped", windowBound: false });
+	});
+
+	it("credits a tie to the window", () => {
+		// Two terms landing on the same number leave no evidence which one
+		// truncated the reply. Withholding a compaction the window did need
+		// costs more than one that turns out to be unnecessary.
+		expect(
+			resolveGatewayOutputCap({
+				requestedMaxTokens: 8_000,
+				model: { maxOutputTokens: 8_000, contextWindow: 9_500 },
+				estimatedInputTokens: 500,
+				outputReserveTokens: 1_000,
+			}),
+		).toMatchObject({
+			maxTokens: 8_000,
+			source: "remaining-context",
+			windowBound: true,
+		});
 	});
 
 	it("uses the old default output cap when request max tokens are omitted", () => {

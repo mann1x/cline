@@ -221,6 +221,8 @@ export {
 export { serializeAbortReason } from "./llms/requests";
 export type {
 	ContextOverflowReport,
+	OutputCapReport,
+	OutputCapSource,
 	ReasoningHistoryMode,
 } from "./llms/tokens";
 export {
@@ -231,9 +233,11 @@ export {
 	estimateThinkingTokens,
 	estimateTokens,
 	lastObservedRequestTokens,
+	lastOutputCap,
 	measureRequestInputChars,
 	measureRequestReasoningChars,
 	noteContextOverflow,
+	noteOutputCap,
 	observeRequestTokens,
 	observeThinkingTokens,
 	resetTokenCalibration,

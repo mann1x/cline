@@ -36,6 +36,7 @@ import {
 	captureSdkError,
 	captureTaskLifecycleEvent,
 	estimateTokens,
+	lastOutputCap,
 	mergeModelOptions,
 	NO_TOOL_CALL_NUDGE_MESSAGE,
 	normalizeJsonLikeStringsForSchema,
@@ -916,7 +917,7 @@ export class AgentRuntime {
 				// The reminder is what makes the retry differ. Regenerating from an
 				// unchanged prompt reproduces an overlong reply, so the model is
 				// told what happened and asked for the smallest next step.
-				// `prepareTurn` runs on the retry like any other turn, so if the
+				// `prepareTurn` runs on the retry like any other turn, so when the
 				// window is what is tight, compaction happens there.
 				if (
 					finishReason === "max-tokens" &&
@@ -924,7 +925,18 @@ export class AgentRuntime {
 					this.consecutiveMaxTokensRetries < this.getMaxTokensRetryBudget()
 				) {
 					this.consecutiveMaxTokensRetries += 1;
-					this.compactBeforeNextTurn = true;
+					// Compaction only when the window is what truncated the turn.
+					// Forcing it on every truncation was measured recovering a
+					// 48,508-token request against a 110,000-token window: the cap that
+					// ended that turn was the caller's own 32,000, which no amount of
+					// compaction can raise, so the transcript was spent to leave the
+					// retry facing the same ceiling with less of the work it was doing.
+					// Absent a report -- a custom `AgentModel` that never went through
+					// the gateway -- compaction is kept: a runtime that cannot say what
+					// capped it is likelier to be near a window it never declared than
+					// to be held by a limit nobody set.
+					const outputCap = lastOutputCap();
+					this.compactBeforeNextTurn = outputCap?.windowBound ?? true;
 					await this.emit({
 						type: "status-notice",
 						snapshot: this.snapshot(),
@@ -935,6 +947,8 @@ export class AgentRuntime {
 							phase: "started",
 							iteration: this.state.iteration,
 							attempt: this.consecutiveMaxTokensRetries,
+							outputCapSource: outputCap?.source ?? "unknown",
+							compacting: this.compactBeforeNextTurn,
 						},
 					});
 					await this.addUserReminderMessage(
