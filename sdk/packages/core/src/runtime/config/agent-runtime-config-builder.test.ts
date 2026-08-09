@@ -280,6 +280,7 @@ describe("the discarded-reasoning condenser", () => {
 		// fifth.
 		const condenseDiscardedReasoning = vi.fn(async () => ({ note: "n" }));
 		const config = createAgentRuntimeConfig({
+			agentId: "a",
 			agentConfig: makeAgentConfig({ condenseDiscardedReasoning }),
 			model: nullModel,
 		});
@@ -289,6 +290,7 @@ describe("the discarded-reasoning condenser", () => {
 
 	it("stays undefined when the host installed none", () => {
 		const config = createAgentRuntimeConfig({
+			agentId: "a",
 			agentConfig: makeAgentConfig(),
 			model: nullModel,
 		});

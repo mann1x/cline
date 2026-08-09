@@ -1,15 +1,8 @@
-import {
-	chmod,
-	mkdir,
-	mkdtemp,
-	readFile,
-	rm,
-	writeFile,
-} from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { UserInstructionConfigService } from "@cline/core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	buildSlashCommandRegistry,
 	expandUserCommandPrompt,
@@ -20,6 +13,35 @@ import {
 } from "../../tui/interactive-config";
 import type { Config } from "../../utils/types";
 import { createInteractiveConfigDataLoader } from "./config-data";
+
+/**
+ * One unwritable path, for the test that needs a settings write to fail.
+ *
+ * It used to be done with `chmod(path, 0o444)`, which does not fail for uid 0:
+ * root bypasses the permission bits, the write succeeded, and the test failed
+ * everywhere it ran as root. Permissions cannot express "this write fails" for
+ * every user, so the syscall itself is what gets replaced -- and only for the
+ * one path a test names, so every other test keeps the real filesystem.
+ *
+ * `@cline/core` is aliased to source in `vitest.config.ts`, so this reaches the
+ * `writeFileSync` in `plugin-mcp-settings.ts` that the code under test calls.
+ */
+const unwritable = vi.hoisted(() => ({ path: undefined as string | undefined }));
+
+vi.mock("node:fs", async (importActual) => {
+	const actual = await importActual<typeof import("node:fs")>();
+	const writeFileSync: typeof actual.writeFileSync = (file, data, options) => {
+		if (unwritable.path !== undefined && String(file) === unwritable.path) {
+			const error: NodeJS.ErrnoException = new Error(
+				`EACCES: permission denied, open '${String(file)}'`,
+			);
+			error.code = "EACCES";
+			throw error;
+		}
+		return actual.writeFileSync(file, data, options);
+	};
+	return { ...actual, writeFileSync, default: { ...actual, writeFileSync } };
+});
 
 function createConfig(cwd: string): Config {
 	return {
@@ -940,7 +962,7 @@ Review with the bundled skill.`,
 					2,
 				)}\n`,
 			);
-			await chmod(settingsPath, 0o444);
+			unwritable.path = settingsPath;
 			const loader = createInteractiveConfigDataLoader({
 				config: createConfig(tempRoot),
 			});
@@ -957,7 +979,7 @@ Review with the bundled skill.`,
 					}),
 				).rejects.toThrow();
 			} finally {
-				await chmod(settingsPath, 0o644);
+				unwritable.path = undefined;
 			}
 
 			await expect(readFile(globalSettingsPath, "utf8")).rejects.toThrow();

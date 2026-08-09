@@ -1407,7 +1407,10 @@ describe("createContextCompactionPrepareTurn", () => {
 		}));
 		const overhead = estimateRequestInputTokens(
 			{ systemPrompt: "you are a helpful agent", messages: [], tools },
-			{ reasoningHistory: "omit" },
+			// "none", not "omit": the mode is `"all" | "last" | "none"`. "omit" is
+			// not a mode that drops reasoning, it is a mode the estimator does not
+			// have -- which is what this test was measuring.
+			{ reasoningHistory: "none" },
 		);
 
 		// Whatever the ratio, the overhead has to be in the neighbourhood of the
