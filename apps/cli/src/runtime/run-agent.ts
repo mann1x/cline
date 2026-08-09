@@ -278,6 +278,37 @@ export async function runAgent(
 			userImages,
 			userFiles,
 		} = await buildUserInputMessage(prompt, userInstructionService);
+
+		// Both of these are armed before `start()`, because `start()` is what runs
+		// the task. In non-interactive mode with a prompt it does not resolve until
+		// the whole run is over, so a timeout scheduled after it was scheduled
+		// after the thing it was meant to bound -- and then cleared immediately --
+		// while `abortAll()` spent the entire run with no `activeSessionId` to
+		// abort.
+		//
+		// Measured on one run: `-t 2400` never fired, SIGTERM at 2520s aborted
+		// nothing, and the run went on for 3649s and nine further iterations. The
+		// only mark either left was the word "aborted" in the closing summary.
+		//
+		// The id is safe to claim in advance -- it is the one passed in the config
+		// below, and the event subscription above already depends on that.
+		activeSessionId = plannedSessionId;
+		const timeoutMs =
+			typeof config.timeoutSeconds === "number" &&
+			Number.isFinite(config.timeoutSeconds) &&
+			config.timeoutSeconds > 0
+				? config.timeoutSeconds * 1000
+				: undefined;
+		const timeoutId = timeoutMs
+			? setTimeout(() => {
+					timedOut = true;
+					abortAll();
+				}, timeoutMs)
+			: undefined;
+		const clearRunTimeout = () => {
+			if (timeoutId) clearTimeout(timeoutId);
+		};
+
 		const started = await sessionManager.start({
 			source: SessionSource.CLI,
 			config: {
@@ -304,27 +335,12 @@ export async function runAgent(
 			},
 		});
 
+		// Reassigned in case the host handed back a different id than the one
+		// claimed above; the abort path has been live throughout either way.
 		activeSessionId = started.sessionId;
 		setActiveCliSession({
 			manifest: started.manifest,
 		});
-
-		// Schedule timeout abort if configured.
-		const timeoutMs =
-			typeof config.timeoutSeconds === "number" &&
-			Number.isFinite(config.timeoutSeconds) &&
-			config.timeoutSeconds > 0
-				? config.timeoutSeconds * 1000
-				: undefined;
-		const timeoutId = timeoutMs
-			? setTimeout(() => {
-					timedOut = true;
-					abortAll();
-				}, timeoutMs)
-			: undefined;
-		const clearRunTimeout = () => {
-			if (timeoutId) clearTimeout(timeoutId);
-		};
 
 		// When start() already ran the first turn (non-interactive with prompt),
 		// the session is finalized before start() returns. Use that result
@@ -376,6 +392,16 @@ export async function runAgent(
 			if (timedOut) {
 				writeErr(`run timed out after ${config.timeoutSeconds}s`);
 				process.exitCode = 1;
+				// Also on the JSON stream. A timeout used to be reported on stderr
+				// only, so anything reading the machine-readable output saw a run
+				// that stopped for no stated reason.
+				if (config.outputMode === "json") {
+					emitJsonLine("stdout", {
+						type: "run_aborted",
+						reason: "timeout",
+						message: `run timed out after ${config.timeoutSeconds}s`,
+					});
+				}
 			} else if (config.outputMode === "json") {
 				emitJsonLine("stdout", {
 					type: "run_aborted",

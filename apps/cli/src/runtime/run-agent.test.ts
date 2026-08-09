@@ -249,6 +249,80 @@ describe("runAgent", () => {
 		);
 	});
 
+	// `start()` runs the whole task in non-interactive mode, so anything wired
+	// after it is wired after the run. Measured before this: `-t 2400` never
+	// fired, a SIGTERM at 2520s aborted nothing, and the run went on to 3649s
+	// and nine further iterations.
+	it("aborts on the run timeout while start() is still running", async () => {
+		vi.useFakeTimers();
+		try {
+			let releaseStart: (() => void) | undefined;
+			const startFinished = new Promise<void>((resolve) => {
+				releaseStart = resolve;
+			});
+			sessionManagerMocks.start.mockImplementation(async () => {
+				await startFinished;
+				return {
+					sessionId: "session-timeout",
+					manifestPath: "/tmp/manifest.json",
+					messagesPath: "/tmp/messages.json",
+					manifest: { session_id: "session-timeout" },
+					result: {
+						text: "",
+						usage: {
+							inputTokens: 1,
+							outputTokens: 1,
+							cacheReadTokens: 0,
+							cacheWriteTokens: 0,
+							totalCost: undefined,
+						},
+						messages: [],
+						toolCalls: [],
+						iterations: 9,
+						finishReason: "aborted",
+						model: { id: "m", provider: "ollama", info: {} },
+						startedAt: new Date(),
+						endedAt: new Date(),
+						durationMs: 1,
+					},
+				};
+			});
+
+			const { runAgent } = await import("./run-agent");
+			const running = runAgent("prompt", {
+				cwd: process.cwd(),
+				enableTools: [],
+				execution: { maxConsecutiveMistakes: 6 },
+				logger: undefined,
+				mode: "act",
+				modelId: "m",
+				outputMode: "json",
+				providerId: "ollama",
+				systemPrompt: "system",
+				thinking: false,
+				timeoutSeconds: 60,
+				toolPolicies: { "*": { autoApprove: true } },
+				verbose: false,
+				workspaceRoot: process.cwd(),
+			} as never);
+
+			// The run is still inside start(). The timeout has to reach it there.
+			await vi.advanceTimersByTimeAsync(61_000);
+			expect(sessionManagerMocks.abort).toHaveBeenCalled();
+
+			releaseStart?.();
+			await running;
+			// And a timeout has to be visible to whatever reads the JSON stream;
+			// it used to go to stderr only.
+			expect(outputMocks.emitJsonLine).toHaveBeenCalledWith(
+				"stdout",
+				expect.objectContaining({ type: "run_aborted", reason: "timeout" }),
+			);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("registers CLI capability factory through the CLI core facade", async () => {
 		const startedAt = new Date("2026-03-22T00:00:00.000Z");
 		const endedAt = new Date("2026-03-22T00:00:01.000Z");
