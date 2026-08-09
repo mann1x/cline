@@ -794,7 +794,18 @@ export function resolveOllamaProviderConfig(
 	} catch {
 		Logger.warn("[SessionFactory] Failed to read Ollama sampling settings from providers.json")
 	}
-	const raw = config.ollamaApiOptionsCtxNum?.trim()
+	// A scoped configuration owns its own entry, so an empty context window on it
+	// means empty rather than "borrow the other model's".
+	//
+	// `ollamaApiOptionsCtxNum` is a single global value, and reaching for it here
+	// is what made the setting behave as a global one: the Vision tab holds its
+	// settings in its own snapshot, so when it named no window this fell through
+	// to the number the primary model had been given and loaded the vision model
+	// with it. The webview stopped doing this in 4.100.25 and this did not, so the
+	// panel showed the right thing while the request carried the wrong one —
+	// a display fixed over a behaviour that was not.
+	const scoped = overrideSettings !== undefined
+	const raw = scoped ? undefined : config.ollamaApiOptionsCtxNum?.trim()
 	const parsed = raw ? Number(raw) : Number.NaN
 	const legacyContextWindow = Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined
 	// The model's own `num_ctx` sits between the user's setting and the

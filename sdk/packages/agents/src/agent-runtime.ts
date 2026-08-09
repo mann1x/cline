@@ -1613,6 +1613,15 @@ export class AgentRuntime {
 			}
 		}
 		if (images.length === 0) {
+			// The silence that made this take three rounds. A describer is
+			// installed and there is nothing for it to do, which from the outside
+			// looks exactly like a describer that was never installed: both end
+			// with the image gone and the task carrying on, and neither wrote a
+			// line. Said here so the two can be told apart from a log alone.
+			// Counts only — an image and its surrounding text are the user's.
+			this.config.logger?.log?.(
+				`Vision describer found no images in ${this.state.messages.length} transcript message(s)`,
+			);
 			return 0;
 		}
 

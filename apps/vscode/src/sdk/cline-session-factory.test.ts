@@ -1423,6 +1423,34 @@ describe("resolveOllamaProviderConfig", () => {
 
 		expect(resolved.modelInfo?.contextWindow).toBe(64_000)
 	})
+
+	// The legacy field is one global value, so a scoped configuration reaching
+	// for it is how the setting behaved as a global one. The Vision tab holds
+	// its own settings: when it names no window, the answer is the vision
+	// model's own `num_ctx` or the default — never the primary model's number.
+	// 4.100.25 stopped the panel doing this and left the request doing it, so
+	// the tab displayed the right value and loaded the wrong one.
+	it("does not borrow the global legacy window for a scoped configuration", () => {
+		mocks.providerSettingsManager.getProviderSettings.mockReturnValue(undefined as never)
+
+		const resolved = resolveOllamaProviderConfig(
+			{ ollamaApiOptionsCtxNum: "64000" } as never,
+			"v7-coder_tb:vision-iq4_nl",
+			{},
+		)
+
+		expect(resolved.modelInfo?.contextWindow).not.toBe(64_000)
+	})
+
+	it("still takes a scoped window from the settings it was handed", () => {
+		mocks.providerSettingsManager.getProviderSettings.mockReturnValue(undefined as never)
+
+		const resolved = resolveOllamaProviderConfig({ ollamaApiOptionsCtxNum: "64000" } as never, "v7-coder_tb:vision-iq4_nl", {
+			contextWindow: 8_192,
+		})
+
+		expect(resolved.modelInfo?.contextWindow).toBe(8_192)
+	})
 })
 
 describe("resolveOllamaThinkingAllowance", () => {

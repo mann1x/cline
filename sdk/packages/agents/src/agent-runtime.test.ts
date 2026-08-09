@@ -2757,6 +2757,33 @@ describe("a second model that reads the images", () => {
 		expect(describeImages.mock.calls[0][0][0].image).toBe("iVBORw0KGgo=");
 	});
 
+	// An installed describer with nothing to do looks, from a log, exactly like
+	// a describer that was never installed: both end with no image and no line.
+	// Three rounds of this issue went by without being able to tell them apart,
+	// so the empty case says so itself. Counts only — the transcript is the
+	// user's.
+	it("says so when it finds no images to describe", async () => {
+		const describeImages = vi.fn(async () => []);
+		const logger = { log: vi.fn(), error: vi.fn() };
+		const model = new ScriptedModel([
+			() => [{ type: "text-delta", text: "ok" }, { type: "finish", reason: "stop" }],
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			initialMessages: [
+				{ role: "user", content: [{ type: "text", text: "no image here" }] } as AgentMessage,
+			],
+			describeImages,
+			alwaysDescribeImages: true,
+			logger,
+		});
+
+		await runtime.run("look at the page");
+
+		expect(describeImages).not.toHaveBeenCalled();
+		expect(logger.log).toHaveBeenCalledWith(expect.stringContaining("found no images"));
+	});
+
 	// This runs on every turn, including for models that read images perfectly
 	// well. A vision model that is briefly unreachable must not cost them the
 	// screenshot.
