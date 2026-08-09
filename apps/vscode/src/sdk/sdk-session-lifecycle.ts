@@ -84,6 +84,10 @@ export class SdkSessionLifecycle {
 			return
 		}
 		activeSession.isRunning = isRunning
+		if (isRunning) {
+			// Stamped on the idle→running edge, which is the start of one request.
+			activeSession.runStartedAt = Date.now()
+		}
 		if (!isRunning) {
 			this.options.onDidBecomeIdle?.()
 		}

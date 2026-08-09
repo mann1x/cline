@@ -105,6 +105,16 @@ export interface ActiveSession {
 	startResult?: StartSessionResult
 	/** Whether the session is currently running */
 	isRunning: boolean
+	/**
+	 * When the current request started, in epoch ms.
+	 *
+	 * Set when the session goes from idle to running and read when it goes back,
+	 * so it measures one request — from the message that started the work to the
+	 * turn that ends it — rather than the age of the session. A follow-up
+	 * question answered in twenty seconds and an hour of fixing a file are the
+	 * two cases this has to tell apart.
+	 */
+	runStartedAt?: number
 }
 
 function createSdkLogger() {

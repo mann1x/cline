@@ -415,13 +415,31 @@ describe("createTaskProgressCompletionGuard", () => {
 		expect(nudge).not.toContain("fix the parse error");
 	});
 
-	// The guard makes the runtime take another turn, so a guard that kept firing
-	// would loop against a model that disagrees about the list.
-	it("fires once and then stays quiet", () => {
+	// The guard makes the runtime take another turn, so one that kept firing
+	// would loop against a model that disagrees about the list. Two, because
+	// the first ask was measured changing nothing on a run that had done both
+	// its items -- and the second is a different question, not the same one
+	// again.
+	it("asks twice, differently, and then stays quiet", () => {
 		const guard = createTaskProgressCompletionGuard(trackerWith("- [ ] a"));
 
-		expect(guard()).toBeDefined();
+		const first = guard();
+		const second = guard();
+		expect(first).toBeDefined();
+		expect(second).toBeDefined();
+		expect(second).not.toBe(first);
+		expect(second).toContain("last time you will be asked");
 		expect(guard()).toBeUndefined();
+		expect(guard()).toBeUndefined();
+	});
+
+	// A model that ticks the boxes after the first ask never sees the second.
+	it("stops as soon as the checklist is closed", () => {
+		const tracker = trackerWith("- [ ] a");
+		const guard = createTaskProgressCompletionGuard(tracker);
+
+		expect(guard()).toBeDefined();
+		tracker.recordToolCall({ [TASK_PROGRESS_PARAM]: "- [x] a" });
 		expect(guard()).toBeUndefined();
 	});
 

@@ -222,44 +222,76 @@ export function findLatestTaskProgress(
  */
 export function buildTaskProgressCloseOutNudge(
 	state: TaskProgressState,
+	attempt: 1 | 2 = 1,
 ): string {
 	const open = state.items
 		.filter((item) => !item.done)
 		.map((item) => `- ${item.text}`)
 		.join("\n");
+	if (attempt === 1) {
+		return [
+			"[SYSTEM] Before this run ends, close out your checklist. These items are still unticked:",
+			open,
+			"",
+			"If you have in fact done them, send the list back with those boxes ticked — `task_progress` rides along on any tool call, so one call is enough.",
+			"If any is genuinely still open, do it now rather than ending here.",
+		].join("\n");
+	}
+	// The second ask, and it is a different ask.
+	//
+	// Repeating a reminder verbatim is what the no-tool-call nudge was measured
+	// doing to no effect, so this one does not repeat. The first asks; this one
+	// narrows to two answers and says what each costs. Measured: the first
+	// nudge fired on a finished run and the model ended anyway with
+	// "fix syntax error on line 90" and "verify with browser" both unticked,
+	// having done both.
 	return [
-		"[SYSTEM] Before this run ends, close out your checklist. These items are still unticked:",
+		"[SYSTEM] The checklist is still showing these as not done:",
 		open,
 		"",
-		"If you have in fact done them, send the list back with those boxes ticked — `task_progress` rides along on any tool call, so one call is enough.",
-		"If any is genuinely still open, do it now rather than ending here.",
+		"This is the last time you will be asked, so answer it directly rather than restating that the task is complete.",
+		"Done? Make one more tool call carrying `task_progress` with those boxes ticked — that call is the whole answer.",
+		"Not done, and not going to be? Say which items you are leaving open and why, in one sentence, so the list is not left claiming work that nobody did.",
 	].join("\n");
 }
+
+/**
+ * How many times a run may be asked to close out its checklist.
+ *
+ * Two, and they are different messages. One was the original setting, on the
+ * reasoning that a repeated prompt is a trap — true of a prompt repeated
+ * verbatim, which is what the no-tool-call nudge does and why its budget is
+ * one. Measured since: the first nudge fired on a run that had done both of
+ * its two items, and the model ended anyway with both unticked. So the first
+ * ask stands, and the second one asks differently — tick them in one call, or
+ * name what you are leaving open. A third would be the trap the original
+ * comment warned about.
+ */
+const TASK_PROGRESS_CLOSE_OUT_ATTEMPTS = 2;
 
 /**
  * A `completionPolicy.completionGuard` that will not let a run end quietly on a
  * checklist with open items.
  *
- * Fires **once** per run. The guard's return value makes the runtime send the
- * text and take another turn, so a guard that kept firing would loop against a
- * model that has decided the list is wrong — one prompt is a reminder, a
- * repeated one is a trap. After it has fired, the ordinary no-tool-call nudge
- * and its own budget take over.
+ * Stops as soon as the checklist is closed: the second ask only happens if the
+ * first one changed nothing, so a model that ticks the boxes never sees it.
+ * After the budget is spent, the ordinary no-tool-call nudge and its own budget
+ * take over.
  */
 export function createTaskProgressCompletionGuard(
 	tracker: TaskProgressTracker,
 ): () => string | undefined {
-	let fired = false;
+	let fired = 0;
 	return () => {
-		if (fired) {
+		if (fired >= TASK_PROGRESS_CLOSE_OUT_ATTEMPTS) {
 			return undefined;
 		}
 		const state = tracker.getState();
 		if (!state || state.total === 0 || state.completed >= state.total) {
 			return undefined;
 		}
-		fired = true;
-		return buildTaskProgressCloseOutNudge(state);
+		fired += 1;
+		return buildTaskProgressCloseOutNudge(state, fired === 1 ? 1 : 2);
 	};
 }
 
