@@ -203,7 +203,13 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 				// under a different name. Cleared, so the window falls back to what
 				// the model itself declares (`/api/show` for Ollama) rather than to
 				// whoever was loaded before.
-				const clearContextWindow = { contextWindow: undefined } as never
+				//
+				// `0`, not `undefined`. The patch reader treats an absent field as
+				// "leave this alone" and only a value at or below zero as a clear
+				// (`toProviderConfigPatch`: `contextWindow > 0 ? value : null`), so
+				// sending `undefined` here was a no-op that read like a fix. The
+				// Ollama panel's own field has always sent `numCtx ?? 0` for this.
+				const clearContextWindow = { contextWindow: 0 } as never
 				if (configTarget === activeProviderId) {
 					await writeProviderConfig(clearContextWindow)
 				} else {

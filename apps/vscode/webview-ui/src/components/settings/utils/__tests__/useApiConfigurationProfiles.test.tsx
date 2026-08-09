@@ -157,7 +157,10 @@ describe("useApiConfigurationProfiles — loading a profile", () => {
 		await result.current.loadProfile(SWITCHING_PROFILE.name)
 
 		await waitFor(() => expect(writeProviderConfigFor).toHaveBeenCalled())
-		expect(writeProviderConfigFor.mock.calls[0][1]).toMatchObject({ contextWindow: undefined })
+		// 0, not undefined: `toProviderConfigPatch` reads an absent field as
+		// "leave this alone" and only <= 0 as a clear, so `undefined` here was a
+		// no-op that looked like a fix.
+		expect(writeProviderConfigFor.mock.calls[0][1]).toMatchObject({ contextWindow: 0 })
 	})
 
 	it("carries the model into the vision snapshot, where that tab's picker reads it", async () => {

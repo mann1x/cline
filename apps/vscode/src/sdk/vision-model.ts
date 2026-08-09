@@ -84,6 +84,12 @@ export function createVisionImageDescriber(
 		for (const image of images) {
 			descriptions.push(await describeOne(handler, image))
 		}
+		// The one line that separates "no describer was installed" from "the
+		// describer ran and came back empty". Both end with the images dropped and
+		// the task carrying on, and until now the log could not tell them apart —
+		// which is what made this take three rounds. Counts only.
+		const described = descriptions.filter((description) => description !== undefined).length
+		Logger.log(`[Vision] Described ${described} of ${images.length} image(s)`)
 		return descriptions
 	}
 }
