@@ -890,6 +890,14 @@ export function createCappedThinkingPrepareTurn<T extends PrepareTurn>(
 		}
 		const thinking = thinkingText(messages[index]);
 		let note = condensed.get(thinking);
+		// Said apart from the write, because this runs on every turn while the
+		// capped think stays in the transcript, and a cache hit costs nothing.
+		// Logged identically, it read as repeated work: thirteen consecutive
+		// `Condensed capped thinking: 38924 chars ... 936-char note` lines, same
+		// numbers, seconds apart, while the summariser was called exactly once.
+		// The line was the only evidence anyone had, and it was describing the
+		// wrong thing.
+		const reused = note !== undefined;
 		if (note === undefined) {
 			note = await writeCappedThinkingNote({
 				thinking,
@@ -903,11 +911,14 @@ export function createCappedThinkingPrepareTurn<T extends PrepareTurn>(
 			return messages;
 		}
 		config.logger?.debug?.(
-			`Condensed capped thinking: ${thinking.length} chars of reasoning to a ${note.length}-char note`,
+			reused
+				? `Reused the condensed note for ${thinking.length} chars of capped thinking (${note.length} chars, no new request)`
+				: `Condensed capped thinking: ${thinking.length} chars of reasoning to a ${note.length}-char note`,
 			{
 				thinkingChars: thinking.length,
 				noteChars: note.length,
 				budgetTokens: config.budgetTokens,
+				reused,
 			},
 		);
 		// On screen as well as in the log. This note is the only record of what a

@@ -2710,3 +2710,40 @@ describe("declaredNoOp", () => {
 		expect(declaredNoOp([{ success: false }])).toBe(false);
 	});
 });
+
+describe("a tool result that arrives already serialised", () => {
+	// `editor` sends the `{query, result, success, error}` envelope as a JSON
+	// string, not an object. Every predicate here used to fall through the
+	// `typeof entry === "object"` test to its safe answer, and the safe answer
+	// is "productive" -- which clears the loop tally. Measured live: the
+	// identical `editor` call six times against six `No change` refusals, each
+	// recorded as a productive call, so neither the warning nor the stop fired.
+	const noChange = JSON.stringify({
+		query: "edit:manic_miner.html",
+		result: "",
+		success: false,
+		error:
+			"Editor operation failed: No change: lines 89-97 already reads exactly this way in c:\\src\\manic_miner.html",
+	});
+
+	it("is read as a no-op when it says so", () => {
+		expect(declaredNoOp(noChange)).toBe(true);
+	});
+
+	it("is read as a regression when it says so", () => {
+		expect(
+			introducedRegression(
+				JSON.stringify({ query: "edit:x", success: true, regressed: true }),
+			),
+		).toBe(true);
+	});
+
+	// The conservative half: an unrecognised string must never be taken for
+	// failure, because this feeds a loop stop and the cost of guessing wrong is
+	// ending a task that was working.
+	it("is left alone when it is not the envelope", () => {
+		expect(declaredNoOp("No change: just some file text")).toBe(false);
+		expect(declaredNoOp("{not json")).toBe(false);
+		expect(introducedRegression("regressed")).toBe(false);
+	});
+})

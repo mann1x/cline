@@ -92,6 +92,42 @@ function formatToolResultError(output: unknown): string {
 }
 
 /**
+ * The envelope entries in a tool result, whatever wrapper it arrived in.
+ *
+ * The three predicates below all read `{query, result, success, error?}`, and
+ * all three used to require it to arrive as an object. Not every tool sends it
+ * that way: `editor` returns the envelope already serialised, so its results
+ * reach here as a JSON *string* and every predicate fell through the
+ * `typeof entry === "object"` test to its safe answer -- "not a failure, not a
+ * no-op, no regression". The safe answer is `productive`, which clears the
+ * loop tally.
+ *
+ * Measured live: the identical `editor` call, one signature, six times against
+ * six `No change: lines 89-97 already reads exactly this way` refusals, with a
+ * re-read of the file between each. Every one was recorded as a productive
+ * call, so the counter never reached one, and neither the warning nor the stop
+ * could fire.
+ *
+ * Parsing is best-effort and failure is silent: a string that is not the
+ * envelope is left exactly as it was, so an unrecognised shape still reads as
+ * productive rather than ending a task that was working.
+ */
+function toResultEntries(output: unknown): unknown[] {
+	const raw = Array.isArray(output) ? output : [output];
+	return raw.map((entry) => {
+		if (typeof entry !== "string") {
+			return entry;
+		}
+		try {
+			const parsed = JSON.parse(entry);
+			return parsed != null && typeof parsed === "object" ? parsed : entry;
+		} catch {
+			return entry;
+		}
+	});
+}
+
+/**
  * Whether every operation in a tool result reported failure.
  *
  * Tools answer with the `{query, result, success, error?}` envelope — one
@@ -104,7 +140,7 @@ function formatToolResultError(output: unknown): string {
  * of guessing wrong is ending a task that was working.
  */
 function allOperationsFailed(output: unknown): boolean {
-	const entries = Array.isArray(output) ? output : [output];
+	const entries = toResultEntries(output);
 	if (entries.length === 0) {
 		return false;
 	}
@@ -140,7 +176,7 @@ function allOperationsFailed(output: unknown): boolean {
  * full runtime to assert one boolean would test the harness instead.
  */
 export function introducedRegression(output: unknown): boolean {
-	const entries = Array.isArray(output) ? output : [output];
+	const entries = toResultEntries(output);
 	return entries.some(
 		(entry) =>
 			entry != null &&
@@ -171,7 +207,7 @@ export function introducedRegression(output: unknown): boolean {
  * driving a full runtime to assert it would test the harness instead.
  */
 export function declaredNoOp(output: unknown): boolean {
-	const entries = Array.isArray(output) ? output : [output];
+	const entries = toResultEntries(output);
 	return entries.some((entry) => {
 		if (entry == null || typeof entry !== "object") {
 			return false;
