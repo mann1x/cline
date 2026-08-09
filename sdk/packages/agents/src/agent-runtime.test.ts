@@ -3177,6 +3177,74 @@ describe("a turn cut off at the output cap", () => {
 		);
 	});
 
+	it("gives a truncated turn less to spend on the retry, and less again after that", async () => {
+		// Handing back the cap the turn just overran invites the same turn and the
+		// same wait. Measured on one run: four turns ended at exactly 32,000 output
+		// tokens -- 6m15s, 5m13s, 5m39s, 5m30s -- 22m37s of a 31m43s session,
+		// generated and thrown away, none of it window-bound.
+		noteOutputCap({ maxTokens: 32_000, source: "requested", windowBound: false });
+		const model = new ScriptedModel([
+			() => [
+				{ type: "reasoning-delta", text: "thinking past the cap" },
+				{ type: "finish", reason: "max-tokens" },
+			],
+			() => [
+				{ type: "reasoning-delta", text: "and again" },
+				{ type: "finish", reason: "max-tokens" },
+			],
+			() => [
+				{
+					type: "tool-call-delta",
+					toolCallId: "call_1",
+					toolName: "echo",
+					inputText: '{"text":"hi"}',
+				},
+				{ type: "finish", reason: "tool-calls" },
+			],
+			() => [
+				{ type: "text-delta", text: "done" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			tools: [createEchoTool()],
+			completionPolicy: { maxTruncatedTurnRetries: 3 },
+		});
+
+		const result = await runtime.run("Hi");
+
+		expect(result.status).toBe("completed");
+		// The turn that overran asked for nothing in particular; the retries halve.
+		expect(model.requests[0].options?.maxTokens).toBeUndefined();
+		expect(model.requests[1].options?.maxTokens).toBe(16_000);
+		expect(model.requests[2].options?.maxTokens).toBe(8_000);
+		// And a turn that lands clears it: the next one is back to the full cap.
+		expect(model.requests[3].options?.maxTokens).toBeUndefined();
+	});
+
+	it("leaves the cap alone when the window was what truncated the turn", async () => {
+		// That cap is the room the prompt left, not a budget the model overran, and
+		// compaction is about to change it. Halving it takes room off the retry.
+		noteOutputCap({ maxTokens: 20_000, source: "remaining-context", windowBound: true });
+		const model = new ScriptedModel([
+			() => [
+				{ type: "reasoning-delta", text: "ran out of window" },
+				{ type: "finish", reason: "max-tokens" },
+			],
+			() => [
+				{ type: "text-delta", text: "recovered" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({ model });
+
+		const result = await runtime.run("Hi");
+
+		expect(result.status).toBe("completed");
+		expect(model.requests[1].options?.maxTokens).toBeUndefined();
+	});
+
 	it("says what a discarded turn was carrying, whether or not it condenses", async () => {
 		// The silence was the whole bug. Four sessions retried at the output cap
 		// and not one attached a note; with no log line the path was

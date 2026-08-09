@@ -103,6 +103,15 @@ const IMAGE_DESCRIPTION_UNAVAILABLE_NOTICE =
 const IMAGE_DROPPED_NOTICE =
 	"[image omitted — this model does not accept image input; the text above is what the tool reported]";
 
+/**
+ * The least a retry after a truncated turn may be given.
+ *
+ * Above the largest turn measured recovering from one of these (5,568 output
+ * tokens), so the ladder bounds the waste without truncating the turn that was
+ * about to get the work done.
+ */
+const RETRY_OUTPUT_CAP_FLOOR_TOKENS = 8_000;
+
 const MAX_TOKENS_INCOMPLETE_TURN_REMINDER =
 	"[SYSTEM] Your last reply hit the per-turn output limit before you finished, so it was discarded — none of it, including your reasoning, is in this conversation. " +
 	"Do not try to reproduce it. Take the smallest useful next step instead: make one tool call, or write one short paragraph. " +
@@ -620,6 +629,14 @@ export class AgentRuntime {
 	private steerAwaitingResume = false;
 	/** Consecutive turns cut off at the output cap; reset by any turn that completes. */
 	private consecutiveMaxTokensRetries = 0;
+	/**
+	 * The cap that truncated the last turn, when the cap was the request's own.
+	 *
+	 * Kept so the retry can ask for less. Unset when the window was what
+	 * truncated the turn: that cap is the room the prompt left, compaction is
+	 * about to change it, and halving it would take away room the retry needs.
+	 */
+	private truncatedOutputCapTokens: number | undefined;
 	private initialization?: Promise<void>;
 	private abortController?: AbortController;
 	private readonly telemetryProviderId?: string;
@@ -926,6 +943,39 @@ export class AgentRuntime {
 		}
 	}
 
+	/**
+	 * What the retry after a truncated turn is allowed to spend.
+	 *
+	 * A turn that just spent its whole cap without producing a tool call gets
+	 * less on the retry, halving with each consecutive failure. Handing back the
+	 * same cap invites the same turn, and the same wait: measured on one run,
+	 * four turns ended at exactly 32,000 output tokens -- 6m15s, 5m13s, 5m39s,
+	 * 5m30s -- for 22m37s of a 31m43s session generated and thrown away, none of
+	 * it window-bound (input ran 29,527 to 53,842 against a 110,000 window).
+	 *
+	 * It also asks for what the reminder asks for. "One tool call, or one short
+	 * paragraph" does not need 32,000 tokens, and the turns that recovered on
+	 * that same run did it in 5,568, 3,082 and 2,852 -- so the floor here is
+	 * still comfortably above the largest turn that ever succeeded after one of
+	 * these, and a relapse costs about a minute instead of six.
+	 *
+	 * Returns `undefined` when nothing should change: no truncation to answer
+	 * for, or one the window caused, where the cap is the room the prompt left
+	 * rather than a budget the model overran.
+	 */
+	private getRetryOutputCap(): number | undefined {
+		if (
+			this.consecutiveMaxTokensRetries < 1 ||
+			this.truncatedOutputCapTokens === undefined
+		) {
+			return undefined;
+		}
+		const halved = Math.floor(
+			this.truncatedOutputCapTokens / 2 ** this.consecutiveMaxTokensRetries,
+		);
+		return Math.max(RETRY_OUTPUT_CAP_FLOOR_TOKENS, halved);
+	}
+
 	private getMaxTokensRetryBudget(): number {
 		const configured = this.config.completionPolicy?.maxTruncatedTurnRetries;
 		return typeof configured === "number" && Number.isFinite(configured)
@@ -1080,6 +1130,9 @@ export class AgentRuntime {
 					// to be held by a limit nobody set.
 					const outputCap = lastOutputCap();
 					this.compactBeforeNextTurn = outputCap?.windowBound ?? true;
+					this.truncatedOutputCapTokens = this.compactBeforeNextTurn
+						? undefined
+						: outputCap?.maxTokens;
 					// The reasoning goes with the message, unless the host wants a note
 					// out of it first. This is the only turn whose thinking reliably
 					// ends at the model's budget -- a think ends *at* the budget message
@@ -1194,6 +1247,7 @@ export class AgentRuntime {
 				// Same for truncation: a turn that reached its tool calls did not
 				// run out of room, so a later one gets the full allowance again.
 				this.consecutiveMaxTokensRetries = 0;
+				this.truncatedOutputCapTokens = undefined;
 				const toolMessages = await this.executeToolCalls(toolCalls);
 				this.state.pendingToolCalls = [];
 				for (const toolMessage of toolMessages) {
@@ -1597,6 +1651,13 @@ export class AgentRuntime {
 			runId: this.state.runId,
 			iteration: this.state.iteration,
 		});
+		const retryOutputCap = this.getRetryOutputCap();
+		if (retryOutputCap !== undefined) {
+			this.config.logger?.log?.(
+				`Retrying a truncated turn on a reduced output cap of ${retryOutputCap} tokens (attempt ${this.consecutiveMaxTokensRetries}, was ${this.truncatedOutputCapTokens})`,
+				{ severity: "info" },
+			);
+		}
 		let request: AgentModelRequest = {
 			systemPrompt: this.config.systemPrompt,
 			messages: cloneMessages(this.state.messages),
@@ -1608,6 +1669,9 @@ export class AgentRuntime {
 			signal: this.abortController?.signal,
 			options: mergeModelOptions(this.config.modelOptions, {
 				metadata: modelRequestMetadata,
+				...(retryOutputCap !== undefined
+					? { maxTokens: retryOutputCap }
+					: {}),
 			}),
 		};
 
