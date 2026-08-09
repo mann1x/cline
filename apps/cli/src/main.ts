@@ -986,6 +986,47 @@ export async function runCli(): Promise<void> {
 			);
 		}
 		const knownModelIds = knownModels ? Object.keys(knownModels) : [];
+		const resolvedModelId =
+			args.model ??
+			selectedProviderSettings?.model ??
+			knownModelIds[0] ??
+			"anthropic/claude-sonnet-4.6";
+		// Give the session the window the model was actually built with.
+		//
+		// A local Ollama model is discovered from `/api/tags`, which reports
+		// names only, so it has no catalog entry and `model.info` is undefined
+		// for it. Everything downstream then falls back to its own default —
+		// compaction to `DEFAULT_MAX_INPUT_TOKENS` (128k), and the preserve-recent
+		// ladder to the window it scales against. Measured before this: the
+		// server was sent `num_ctx=32768` while compaction sized itself to
+		// 128,000, so it never triggered and Ollama silently truncated the
+		// prompt instead — turns pinned at 32,674 of a 32,768 window with not one
+		// compaction logged.
+		//
+		// The two numbers have to be the same number. This is the same fix as the
+		// one in the Ollama vendor, applied to the other consumer.
+		let declaredOllamaWindow: number | undefined;
+		if (provider === "ollama") {
+			const ollamaBaseUrl = selectedProviderSettings?.baseUrl as
+				| string
+				| undefined;
+			const { primeDeclaredNumCtx, readDeclaredNumCtx } = await import(
+				"@cline/core"
+			);
+			await primeDeclaredNumCtx(ollamaBaseUrl, resolvedModelId, fetch);
+			const declared = readDeclaredNumCtx(ollamaBaseUrl, resolvedModelId);
+			declaredOllamaWindow = declared;
+			if (declared !== undefined) {
+				knownModels = {
+					...knownModels,
+					[resolvedModelId]: {
+						...(knownModels?.[resolvedModelId] ?? {}),
+						id: resolvedModelId,
+						contextWindow: declared,
+					},
+				};
+			}
+		}
 		const resolvedReasoning = resolveCliReasoning({
 			thinking: args.thinking,
 			thinkingExplicitlySet: args.thinkingExplicitlySet,
@@ -1003,14 +1044,19 @@ export async function runCli(): Promise<void> {
 			hasPrompt: !!args.prompt?.trim(),
 			cwd,
 		});
+		if (declaredOllamaWindow !== undefined) {
+			// Stated because it is otherwise invisible: nothing else reports which
+			// window compaction is sizing itself against, and a wrong one shows up
+			// only as a prompt the server quietly truncated.
+			loggerAdapter.core.log(
+				`Using the context window ${resolvedModelId} declares: ${declaredOllamaWindow}`,
+				{ modelId: resolvedModelId, contextWindow: declaredOllamaWindow },
+			);
+		}
 
 		const config: Config = {
 			providerId: provider,
-			modelId:
-				args.model ??
-				selectedProviderSettings?.model ??
-				knownModelIds[0] ??
-				"anthropic/claude-sonnet-4.6",
+			modelId: resolvedModelId,
 			apiKey: apiKey ?? "",
 			knownModels,
 			systemPrompt: await resolveSystemPrompt({

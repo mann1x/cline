@@ -24,6 +24,12 @@ export {
 	isClineOrgIndividualInferenceSubscriptionMessage,
 	isClinePassLimitError,
 	isClinePassLimitMessage,
+	// A host that resolves the context window itself has to be able to ask the
+	// server what the model declares, and to ask before the first request —
+	// otherwise the window the sampler uses and the one compaction sizes itself
+	// against are two different numbers.
+	primeDeclaredNumCtx,
+	readDeclaredNumCtx,
 } from "@cline/llms";
 // Shared contracts and path helpers re-exported for app consumers.
 export type {
