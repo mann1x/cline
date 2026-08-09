@@ -1117,6 +1117,23 @@ export async function runCli(): Promise<void> {
 			},
 			teamName: !isYoloMode ? args.teamName?.trim() || undefined : undefined,
 		};
+		// A vision model means the session's model is not meant to see the image at
+		// all, whether or not it could have — the same rule the extension applies.
+		// Installed after `config` is built because the describer is made from the
+		// session's own provider settings with the model id swapped.
+		const visionModelId = args.visionModel?.trim();
+		if (visionModelId) {
+			const { createCliImageDescriber } = await import("./runtime/vision");
+			config.describeImages = createCliImageDescriber(
+				config,
+				visionModelId,
+				loggerAdapter.core,
+			);
+			config.alwaysDescribeImages = true;
+			loggerAdapter.core.log(
+				`[Vision] Describer installed: provider=${provider} model=${visionModelId}`,
+			);
+		}
 		try {
 			// For OAuth providers, don't write the resolved key into apiKey;
 			// the token lives in auth.accessToken and apiKey is reserved for

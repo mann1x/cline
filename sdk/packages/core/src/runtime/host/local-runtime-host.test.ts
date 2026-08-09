@@ -435,6 +435,59 @@ describe("LocalRuntimeHost", () => {
 		expect(names.filter((name) => name === "task_progress")).toHaveLength(1);
 	});
 
+	// This object is an explicit list with no spread, so a field a host sets on
+	// the session config and nobody copies is dropped in silence. Both halves of
+	// the vision model were: the describer was built, logged as installed, and
+	// never called once, so the image went to the model that configuring a
+	// vision model exists to keep it away from. Measured through the CLI with a
+	// real image and a real vision model — `Describer installed`, no describe
+	// call, and the image still in the transcript at request time.
+	it("hands the image describer to the agent", async () => {
+		const runtimeBuilder = {
+			build: vi.fn().mockReturnValue({
+				tools: [],
+				shutdown: vi.fn().mockResolvedValue(undefined),
+			}),
+		};
+		const agent = {
+			run: vi.fn().mockResolvedValue(createResult()),
+			continue: vi.fn().mockResolvedValue(createResult()),
+			getMessages: vi.fn().mockReturnValue([]),
+			getAgentId: vi.fn().mockReturnValue("agent-vision"),
+			getConversationId: vi.fn().mockReturnValue("conv-vision"),
+			abort: vi.fn(),
+			subscribeEvents: vi.fn().mockReturnValue(() => {}),
+			canStartRun: vi.fn().mockReturnValue(true),
+			shutdown: vi.fn().mockResolvedValue(undefined),
+		};
+		let agentConfig:
+			| { describeImages?: unknown; alwaysDescribeImages?: unknown }
+			| undefined;
+		const describeImages = vi.fn(async () => ["a screenshot"]);
+		const manager = new RuntimeHostUnderTest({
+			distinctId,
+			sessionService: new FileSessionService(join(isolatedHomeDir, "sessions")),
+			runtimeBuilder: runtimeBuilder as never,
+			createAgent: ((config: typeof agentConfig) => {
+				agentConfig = config;
+				return agent;
+			}) as never,
+		});
+
+		await manager.startSession(
+			normalizeStartInput({
+				config: createConfig({
+					describeImages,
+					alwaysDescribeImages: true,
+				} as never),
+				prompt: "hello",
+			}),
+		);
+
+		expect(agentConfig?.describeImages).toBe(describeImages);
+		expect(agentConfig?.alwaysDescribeImages).toBe(true);
+	});
+
 	it.each([
 		{ source: "generated", requestedSessionId: undefined },
 		{ source: "requested", requestedSessionId: "session-explicit" },

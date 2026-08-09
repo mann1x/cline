@@ -894,6 +894,20 @@ export class LocalRuntimeHost implements RuntimeHost {
 						)
 					: undefined;
 			},
+			// The describer and the rule that it runs on every turn, which is the
+			// whole of the vision-model feature from this layer's point of view.
+			//
+			// This object is an explicit list with no spread, so a field a host
+			// sets on the session config and nobody copies here is dropped in
+			// silence — the same way `condenseDiscardedReasoning` was, one layer
+			// further in. Both of these were dropped, so the describer was built,
+			// logged as installed, and then never called: the image went to the
+			// session's model, which is exactly what configuring a vision model is
+			// supposed to prevent. Measured through the CLI with a real image and a
+			// real vision model — `[Vision] Describer installed`, no describe call,
+			// and the image still in the transcript at request time.
+			describeImages: configWithProvider.describeImages,
+			alwaysDescribeImages: configWithProvider.alwaysDescribeImages,
 			logger: runtime.logger ?? configWithProvider.logger,
 			extensionContext: configWithProvider.extensionContext,
 			onEvent: (event: AgentEvent) =>

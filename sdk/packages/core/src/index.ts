@@ -1011,6 +1011,11 @@ export {
 	safeParseSettings,
 	toProviderConfig,
 } from "./services/llms/provider-settings";
+// Exported so a host can build a *second* model from a session's own settings —
+// a describer that reads images for the session's model. The extension builds
+// one from its own handler; the CLI had no way to reach this at all, which is
+// why the vision path could not be run headlessly.
+export { createAgentModelFromConfig } from "./services/llms/handler-factory";
 export {
 	defineLlmsConfig,
 	loadLlmsConfigFromFile,

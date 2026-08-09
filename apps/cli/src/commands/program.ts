@@ -57,6 +57,10 @@ export function addRootOptions(cmd: Command): Command {
 				"Number of maximum consecutive mistakes (retries) before exiting (default: 6)",
 			)
 			.option(
+				"--vision-model <model-id>",
+				"Describe images with this model instead of sending them to the session's model (same provider)",
+			)
+			.option(
 				"-t, --timeout <seconds>",
 				"Optional timeout in seconds (default: 0 for no timeout)",
 			)
@@ -223,6 +227,7 @@ export function commanderToParsedArgs(program: Command): ParsedArgs {
 	if (opts.teamName !== undefined) result.teamName = opts.teamName;
 	if (opts.system !== undefined) result.systemPrompt = opts.system;
 	if (opts.model !== undefined) result.model = opts.model;
+	if (opts.visionModel !== undefined) result.visionModel = opts.visionModel;
 	if (opts.provider !== undefined) result.provider = opts.provider;
 	if (opts.key !== undefined) result.key = opts.key;
 	else if (opts.apiKey !== undefined) result.key = opts.apiKey;

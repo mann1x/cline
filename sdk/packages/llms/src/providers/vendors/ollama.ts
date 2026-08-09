@@ -516,8 +516,11 @@ export function withOllamaResponseTimeout(
 				//
 				// Unknown keys in a fetch init are ignored, so this is inert on Node
 				// for the same reason `dispatcher` is inert on Bun.
+				// `timeout` is Bun's extension to RequestInit and `dispatcher` is
+				// undici's; neither is in the DOM lib, so the cast goes through
+				// `unknown` rather than claiming a direct overlap that does not exist.
 				timeout: false,
-			} as RequestInit);
+			} as unknown as RequestInit);
 		} finally {
 			headerWatcher.stop();
 		}

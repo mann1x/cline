@@ -365,6 +365,20 @@ export interface CoreSessionConfig
 	 * transcript/tool/hook context.
 	 */
 	sessionId?: string;
+	/**
+	 * Turn images into text with a second model, so the session's model never
+	 * sees one. See `AgentConfig.describeImages`.
+	 *
+	 * Declared here because it is a session-level setting that hosts already
+	 * pass: the VS Code host has set both of these since the vision model
+	 * shipped, and only got away with it because it adds them through a
+	 * conditional spread, which excess-property checking does not inspect. A
+	 * host assigning them directly — the CLI — was rejected for setting a field
+	 * that has always been read.
+	 */
+	describeImages?: AgentConfig["describeImages"];
+	/** See `AgentConfig.alwaysDescribeImages`. */
+	alwaysDescribeImages?: boolean;
 	workspaceRoot?: string;
 	systemPrompt: string;
 	teamName?: string;

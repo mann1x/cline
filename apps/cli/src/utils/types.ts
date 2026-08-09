@@ -94,6 +94,7 @@ export interface ParsedArgs {
 	id?: string;
 	retries?: number;
 	invalidRetries?: string;
+	visionModel?: string;
 	cwd?: string;
 	teamName?: string;
 	defaultToolAutoApprove: boolean;
