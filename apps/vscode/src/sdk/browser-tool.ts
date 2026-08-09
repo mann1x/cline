@@ -1,8 +1,8 @@
+import { describeDelimiterBalance } from "@cline/core"
 import { type AgentTool, createTool } from "@cline/shared"
 import * as fs from "fs/promises"
 import type { BrowserActionResult } from "@/shared/ExtensionMessage"
 import { Logger } from "@/shared/services/Logger"
-import { describeDelimiterBalance } from "./delimiter-balance"
 
 /**
  * A tool that answers "does this page actually work?".

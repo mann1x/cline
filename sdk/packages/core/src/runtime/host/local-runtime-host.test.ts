@@ -270,8 +270,11 @@ describe("LocalRuntimeHost", () => {
 		},
 	);
 
-	// A host with no linter must not get a guard it can never satisfy.
-	it("stands aside when the host names no checker", async () => {
+	// This host used to have no checker of its own, and a guard nothing can
+	// satisfy is worse than no guard, so it stood aside. It supplies one now, so
+	// the same setup has to produce the opposite result: the run is held back,
+	// and the tool named is the one that can clear it.
+	it("guards the run now that it supplies its own checker", async () => {
 		const runtimeBuilder = {
 			build: vi.fn().mockReturnValue({
 				tools: [
@@ -313,9 +316,16 @@ describe("LocalRuntimeHost", () => {
 			}),
 		);
 
+		// The checker is added by the host, not by the runtime builder above.
+		expect(
+			agentConfig?.tools?.some((tool) => tool.name === "check_file"),
+		).toBe(true);
+
 		const editor = agentConfig?.tools?.find((tool) => tool.name === "editor");
 		await editor?.execute({ path: "a.ts" }, {});
-		expect(agentConfig?.completionPolicy?.completionGuard?.()).toBeUndefined();
+		const verdict = agentConfig?.completionPolicy?.completionGuard?.();
+		expect(verdict).toContain("a.ts");
+		expect(verdict).toContain("check_file");
 	});
 
 	it.each([

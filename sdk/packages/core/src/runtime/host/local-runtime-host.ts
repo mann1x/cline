@@ -25,6 +25,10 @@ import {
 } from "../../extensions/context/compaction";
 import type { ToolExecutors } from "../../extensions/tools";
 import { DefaultToolNames } from "../../extensions/tools";
+import {
+	CHECK_FILE_TOOL_NAME,
+	createCheckFileTool,
+} from "../../extensions/tools/check-file";
 import { createTaskProgressTool } from "../../extensions/tools/definitions";
 import {
 	createEditVerificationCompletionGuard,
@@ -642,14 +646,33 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// what it did was checked. Both watch the same merged list, so a host
 		// tool -- VS Code's own terminal-aware `run_commands`, its `check_file`
 		// -- is covered exactly like a builtin.
+		// A host with no checker gets no guard, and this host had no checker: the
+		// editor's language servers are VS Code's, and nothing replaced them
+		// here. So one is supplied. It answers a narrower question than the
+		// editor does -- syntax and brackets, not types -- but it is the
+		// difference between a model that can confirm its own edit and one that
+		// cannot, and on the CLI the measured result of the latter was ten edits,
+		// no checks, and "the implementation is complete" on a file that does not
+		// parse.
+		const checklessTools = mergedToolsWithChecklist;
+		const mergedToolsWithChecker = checklessTools.some(
+			(tool) => tool.name === CHECK_FILE_TOOL_NAME,
+		)
+			? checklessTools
+			: [...checklessTools, createCheckFileTool({ cwd: configWithProvider.cwd })];
 		const editVerificationConfig = configWithProvider.editVerification;
-		const editVerificationMode = editVerificationConfig?.mode ?? "off";
+		// Nudge rather than off, now that this host always has a checker to
+		// name. Off was the honest default while it had none — a guard that can
+		// never be satisfied is worse than no guard — and that is no longer the
+		// situation. Nudging costs a run two turns; not nudging cost one the
+		// whole task.
+		const editVerificationMode = editVerificationConfig?.mode ?? "nudge";
 		const editVerificationSettings = {
 			editTools: editVerificationConfig?.editTools ?? [
 				DefaultToolNames.EDITOR,
 				DefaultToolNames.APPLY_PATCH,
 			],
-			checkTools: editVerificationConfig?.checkTools ?? [],
+			checkTools: editVerificationConfig?.checkTools ?? [CHECK_FILE_TOOL_NAME],
 			// "require" is the same guard given more room to insist.
 			attempts: editVerificationMode === "require" ? 4 : 2,
 		};
@@ -658,12 +681,15 @@ export class LocalRuntimeHost implements RuntimeHost {
 			editVerificationSettings.checkTools.length === 0
 				? undefined
 				: new EditVerificationTracker(editVerificationSettings);
-		const toolsToWrap = mergedToolsWithChecklist;
+		const toolsToWrap = mergedToolsWithChecker;
 		const withChecklist = taskProgressTracker
 			? toolsToWrap.map((tool) =>
 					withTaskProgressCapture(tool, taskProgressTracker),
 				)
-			: mergedTools;
+			// `toolsToWrap`, not `mergedTools`: falling back to the pre-checklist
+			// list drops every tool added since, which is how the checker would
+			// have gone missing on exactly the runs that have no checklist.
+			: toolsToWrap;
 		const tools = editVerificationTracker
 			? withChecklist.map((tool) =>
 					withEditVerificationCapture(tool, editVerificationTracker),

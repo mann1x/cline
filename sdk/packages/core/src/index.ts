@@ -926,6 +926,25 @@ export {
 	truncateCommandOutput,
 } from "./extensions/tools";
 export {
+	CHECK_FILE_TOOL_DESCRIPTION,
+	CHECK_FILE_TOOL_INPUT_SCHEMA,
+	CHECK_FILE_TOOL_NAME,
+	checkSource,
+	compileCheck,
+	createCheckFileTool,
+	extractScripts,
+} from "./extensions/tools/check-file";
+// The bracket scanner is host-independent and two hosts want it: the checker
+// above, and VS Code's own `check_file`, which pairs it with the language
+// servers this one has no access to.
+export {
+	type DelimiterFinding,
+	type DelimiterScan,
+	describeDelimiterBalance,
+	scanDelimiters,
+	scanWithBalance,
+} from "./extensions/tools/delimiter-balance";
+export {
 	type ClineRecommendedModel,
 	type ClineRecommendedModelsData,
 	FALLBACK_CLINE_RECOMMENDED_MODELS,

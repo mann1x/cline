@@ -21,13 +21,13 @@
 import { appendFileSync } from "node:fs"
 import { readFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
+import { describeDelimiterBalance } from "@cline/core"
 import type { AgentAfterToolContext, AgentBeforeToolContext, AgentHooks } from "@cline/shared"
 import { getNewDiagnostics, singleFileDiagnosticsToProblemsString } from "@integrations/diagnostics"
 import * as path from "path"
 import { HostProvider } from "@/hosts/host-provider"
 import { type Diagnostic, DiagnosticSeverity, type FileDiagnostics } from "@/shared/proto/index.cline"
 import { Logger } from "@/shared/services/Logger"
-import { describeDelimiterBalance } from "./delimiter-balance"
 
 /** Tools whose successful execution can leave a file in a state a linter judges. */
 const FILE_WRITING_TOOLS = new Set(["editor", "apply_patch"])
