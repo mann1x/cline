@@ -572,6 +572,31 @@ describe("stream timeouts", () => {
 
 		expect("dispatcher" in (seen[0] as object)).toBe(false);
 	});
+
+	// Bun enforces the same gap rule and does not read `dispatcher`, so the
+	// dispatcher above lifted nothing wherever the CLI runs. Measured on Bun
+	// 1.3.14: a stream that goes silent fails at 300s with `TimeoutError: The
+	// operation timed out.`, one sending a chunk every 30s completes at 600s,
+	// and `timeout: false` survived past 800s of silence. The flag has to go out
+	// on every request, with or without a dispatcher to travel beside.
+	it("switches off the runtime's own gap timeout either way", async () => {
+		const seen: RequestInit[] = [];
+		const baseFetch = (async (_input: unknown, init: RequestInit) => {
+			seen.push(init);
+			return new Response("ok");
+		}) as unknown as typeof fetch;
+
+		await withOllamaResponseTimeout(baseFetch, 1000, { marker: true })(
+			"http://localhost:11434/api/chat",
+		);
+		await withOllamaResponseTimeout(baseFetch, 1000)(
+			"http://localhost:11434/api/chat",
+		);
+
+		expect(seen.map((init) => (init as { timeout?: unknown }).timeout)).toEqual(
+			[false, false],
+		);
+	});
 });
 
 describe("setOllamaNoStreamTimeoutDispatcher", () => {

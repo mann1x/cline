@@ -495,6 +495,28 @@ export function withOllamaResponseTimeout(
 				...(rewritten ? { body: rewritten.body } : {}),
 				signal,
 				...(dispatcher ? { dispatcher } : {}),
+				// The same rule again, arriving from the other runtime. Bun's fetch
+				// applies its own bound on the gap between body chunks, and
+				// `dispatcher` is undici's key — Bun does not read it, so everything
+				// argued above about `bodyTimeout` was true and had no effect wherever
+				// the CLI runs. Measured on Bun 1.3.14 against a local server: a stream
+				// that goes silent dies at 300s with `TimeoutError: The operation timed
+				// out.`; the same stream with this flag was still alive past 800s; and
+				// a stream sending a chunk every 30s ran to completion at 600s. So it
+				// is a bound on the gap rather than a budget for the whole response,
+				// and the gap is what this vendor exists to allow.
+				//
+				// A timeout that names nothing is what makes this expensive. The
+				// message carries no host, no URL and no subsystem, so it reads as a
+				// network fault and gets blamed on the server. The two bounds that are
+				// actually ours both say so — `Ollama did not start responding within
+				// Ns` and `Ollama stopped responding: no response data for Ns` — and
+				// both ask the server whether it is alive instead of trusting a
+				// constant. Giving this one up costs nothing those two do not cover.
+				//
+				// Unknown keys in a fetch init are ignored, so this is inert on Node
+				// for the same reason `dispatcher` is inert on Bun.
+				timeout: false,
 			} as RequestInit);
 		} finally {
 			headerWatcher.stop();
