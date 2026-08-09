@@ -25,8 +25,10 @@ import {
 } from "../../extensions/context/compaction";
 import type { ToolExecutors } from "../../extensions/tools";
 import { DefaultToolNames } from "../../extensions/tools";
+import { createTaskProgressTool } from "../../extensions/tools/definitions";
 import {
 	createTaskProgressCompletionGuard,
+	TASK_PROGRESS_PARAM,
 	findLatestTaskProgress,
 	TaskProgressTracker,
 	withTaskProgressCapture,
@@ -610,8 +612,28 @@ export class LocalRuntimeHost implements RuntimeHost {
 				initialMessages as readonly { content?: unknown }[] | undefined,
 			),
 		);
+		// The checklist has two halves and this path only ever wired one of them.
+		//
+		// `withTaskProgressCapture` below adds the `task_progress` parameter to
+		// every tool and feeds the tracker, which is why the panel counts the
+		// boxes correctly. The standalone tool -- the name a model calls when it
+		// has no other call to attach the checklist to -- is pushed by
+		// `createDefaultTools`, and only when a tracker was passed *into* it.
+		// Here the tracker is built after the tools, so it never was: the
+		// parameter worked, the tool did not exist, and a model that called it
+		// got `AI_NoSuchToolError: Model tried to call unavailable tool
+		// 'task_progress'` while the panel beside it read "Tasks (7/7)".
+		//
+		// Added by name-check rather than unconditionally, because a caller that
+		// did build its tools through `createDefaultTools` with a tracker already
+		// has one and a duplicate name is its own failure.
+		const mergedToolsWithChecklist =
+			taskProgressTracker &&
+			!mergedTools.some((tool) => tool.name === TASK_PROGRESS_PARAM)
+				? [...mergedTools, createTaskProgressTool()]
+				: mergedTools;
 		const tools = taskProgressTracker
-			? mergedTools.map((tool) =>
+			? mergedToolsWithChecklist.map((tool) =>
 					withTaskProgressCapture(tool, taskProgressTracker),
 				)
 			: mergedTools;

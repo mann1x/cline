@@ -195,6 +195,113 @@ describe("LocalRuntimeHost", () => {
 	});
 
 	it.each([
+		{ enabled: true, expected: true },
+		{ enabled: false, expected: false },
+	] as const)(
+		"offers task_progress as a callable tool when the checklist is on ($enabled)",
+		async ({ enabled, expected }) => {
+			// The checklist has two halves and this path wired only one. The
+			// parameter wrapper fed the tracker -- so the panel counted boxes
+			// correctly -- while the standalone tool, pushed by `createDefaultTools`
+			// and only when a tracker is passed *into* it, was never added, because
+			// here the tracker is built after the tools. Reported live on 4.99.91:
+			// `AI_NoSuchToolError: Model tried to call unavailable tool
+			// 'task_progress'` beside a panel reading "Tasks (7/7)".
+			const runtimeBuilder = {
+				build: vi.fn().mockReturnValue({
+					tools: [],
+					shutdown: vi.fn().mockResolvedValue(undefined),
+				}),
+			};
+			const agent = {
+				run: vi.fn().mockResolvedValue(createResult()),
+				continue: vi.fn().mockResolvedValue(createResult()),
+				getMessages: vi.fn().mockReturnValue([]),
+				getAgentId: vi.fn().mockReturnValue("agent-checklist"),
+				getConversationId: vi.fn().mockReturnValue("conv-checklist"),
+				abort: vi.fn(),
+				subscribeEvents: vi.fn().mockReturnValue(() => {}),
+				canStartRun: vi.fn().mockReturnValue(true),
+				shutdown: vi.fn().mockResolvedValue(undefined),
+			};
+			let agentConfig: { tools?: Array<{ name: string }> } | undefined;
+			const manager = new RuntimeHostUnderTest({
+				distinctId,
+				sessionService: new FileSessionService(
+					join(isolatedHomeDir, "sessions"),
+				),
+				runtimeBuilder: runtimeBuilder as never,
+				createAgent: ((config: { tools?: Array<{ name: string }> }) => {
+					agentConfig = config;
+					return agent;
+				}) as never,
+			});
+
+			await manager.startSession(
+				normalizeStartInput({
+					config: createConfig({ taskProgress: { enabled } }),
+					prompt: "hello",
+				}),
+			);
+
+			const names = (agentConfig?.tools ?? []).map((tool) => tool.name);
+			expect(names.includes("task_progress")).toBe(expected);
+			// Exactly one, whichever way it got there.
+			expect(names.filter((name) => name === "task_progress")).toHaveLength(
+				expected ? 1 : 0,
+			);
+		},
+	);
+
+	it("does not add a second task_progress when the tools already carry one", async () => {
+		// A caller that built its tools through `createDefaultTools` with a tracker
+		// already has the tool, and a duplicate name is its own failure.
+		const runtimeBuilder = {
+			build: vi.fn().mockReturnValue({
+				tools: [
+				{
+					name: "task_progress",
+					inputSchema: { type: "object", properties: {} },
+					execute: vi.fn(),
+				},
+			],
+				shutdown: vi.fn().mockResolvedValue(undefined),
+			}),
+		};
+		const agent = {
+			run: vi.fn().mockResolvedValue(createResult()),
+			continue: vi.fn().mockResolvedValue(createResult()),
+			getMessages: vi.fn().mockReturnValue([]),
+			getAgentId: vi.fn().mockReturnValue("agent-checklist-dup"),
+			getConversationId: vi.fn().mockReturnValue("conv-checklist-dup"),
+			abort: vi.fn(),
+			subscribeEvents: vi.fn().mockReturnValue(() => {}),
+			canStartRun: vi.fn().mockReturnValue(true),
+			shutdown: vi.fn().mockResolvedValue(undefined),
+		};
+		let agentConfig: { tools?: Array<{ name: string }> } | undefined;
+		const manager = new RuntimeHostUnderTest({
+			distinctId,
+			sessionService: new FileSessionService(join(isolatedHomeDir, "sessions")),
+			runtimeBuilder: runtimeBuilder as never,
+			createAgent: ((config: { tools?: Array<{ name: string }> }) => {
+				agentConfig = config;
+				return agent;
+			}) as never,
+		});
+
+		await manager.startSession(
+			normalizeStartInput({
+				config: createConfig({ taskProgress: { enabled: true } }),
+				prompt: "hello",
+			}),
+		);
+
+		const names = (agentConfig?.tools ?? []).map((tool) => tool.name);
+		expect(names.filter((name) => name === "task_progress")).toHaveLength(1);
+	});
+
+	it.each([
 		{ source: "generated", requestedSessionId: undefined },
 		{ source: "requested", requestedSessionId: "session-explicit" },
 	] as const)("resolves an omitted workspace with the $source session ID", async ({
