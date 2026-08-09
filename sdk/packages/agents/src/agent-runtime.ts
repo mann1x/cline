@@ -104,6 +104,44 @@ const IMAGE_DROPPED_NOTICE =
 	"[image omitted — this model does not accept image input; the text above is what the tool reported]";
 
 /**
+ * The base64 payload of an image part, whichever field is carrying it.
+ *
+ * `AgentImagePart.image` is typed `string | Uint8Array | ArrayBuffer | URL`,
+ * and parts also reach the transcript in the llms shape, which carries the
+ * payload under `data`. The describer used to require a *string* under `image`
+ * — one of five possibilities — and silently skipped the rest.
+ *
+ * Measured on a tester's 4.100.24 session: a describer was installed
+ * (`[Vision] Describer installed: provider=ollama model=…`), the transcript
+ * still read `transcriptTail=[user:text+image]` at request time, and no
+ * `[Vision] Described N of M` line was ever logged — the describer was never
+ * called, because nothing matched. The image went to a primary model that
+ * cannot read one, and the turn failed.
+ *
+ * A `URL` is left alone deliberately: there is no payload to hand a describer
+ * that takes base64, and fetching it here is not this function's business.
+ */
+function imagePartPayload(part: {
+	image?: unknown;
+	data?: unknown;
+}): string | undefined {
+	const candidate = typeof part.image === "string" ? part.image : part.data;
+	if (typeof candidate === "string") {
+		return candidate.length > 0 ? candidate : undefined;
+	}
+	const binary =
+		part.image instanceof Uint8Array
+			? part.image
+			: part.image instanceof ArrayBuffer
+				? new Uint8Array(part.image)
+				: undefined;
+	if (!binary || binary.byteLength === 0) {
+		return undefined;
+	}
+	return Buffer.from(binary).toString("base64");
+}
+
+/**
  * The least a retry after a truncated turn may be given.
  *
  * Above the largest turn measured recovering from one of these (5,568 output
@@ -1559,12 +1597,16 @@ export class AgentRuntime {
 				.slice(0, IMAGE_DESCRIPTION_CONTEXT_LIMIT);
 			for (let i = 0; i < message.content.length; i++) {
 				const part = message.content[i];
-				if (part?.type !== "image" || typeof part.image !== "string") {
+				if (part?.type !== "image") {
+					continue;
+				}
+				const payload = imagePartPayload(part);
+				if (payload === undefined) {
 					continue;
 				}
 				targets.push({ message, index: i });
 				images.push({
-					image: part.image,
+					image: payload,
 					mediaType: part.mediaType,
 					context: context.length > 0 ? context : undefined,
 				});

@@ -17,6 +17,7 @@ import { BaseUrlField } from "../common/BaseUrlField"
 import { DebouncedTextArea } from "../common/DebouncedTextArea"
 import { DebouncedTextField } from "../common/DebouncedTextField"
 import OllamaModelPicker from "../OllamaModelPicker"
+import { useApiConfigurationScope } from "../utils/ApiConfigurationScopeContext"
 import { updateSetting } from "../utils/settingsHandlers"
 import { useApiConfigurationHandlers } from "../utils/useApiConfigurationHandlers"
 import { useProviderApiKeyField } from "../utils/useProviderApiKeyField"
@@ -144,13 +145,23 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 	const { apiConfiguration, maxToolResultChars } = useExtensionState()
 	const { handleFieldChange } = useApiConfigurationHandlers()
 	const { config, write, commitSelection } = useProviderConfig("ollama")
+	const scope = useApiConfigurationScope()
 
 	const [ollamaModels, setOllamaModels] = useState<string[]>([])
 
 	const ollamaBaseUrl = config?.baseUrl ?? apiConfiguration?.ollamaBaseUrl
 	// providers.json (config.contextWindow) is the source of truth; the legacy
 	// apiConfiguration string is a migration fallback.
-	const ollamaNumCtx = config?.contextWindow || Number.parseInt(apiConfiguration?.ollamaApiOptionsCtxNum || "", 10)
+	//
+	// For the unscoped panel only. `ollamaApiOptionsCtxNum` is a single global
+	// key, so a scoped panel falling back to it shows — and then carries — the
+	// number belonging to a model on another tab. That is what made the context
+	// window behave like one setting shared by Plan/Act and Vision, reported as
+	// "context window seems to be a global setting, and changing it on the vision
+	// tab doesn't set it only for the vision tab". A scoped panel owns its own
+	// entry, and an empty one means empty rather than "borrow the other model's".
+	const legacyNumCtx = scope ? Number.NaN : Number.parseInt(apiConfiguration?.ollamaApiOptionsCtxNum || "", 10)
+	const ollamaNumCtx = config?.contextWindow || legacyNumCtx
 	const ollamaModelInfo = useMemo(() => {
 		return {
 			...openAiModelInfoSafeDefaults,

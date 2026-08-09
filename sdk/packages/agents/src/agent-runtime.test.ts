@@ -2677,6 +2677,45 @@ describe("a second model that reads the images", () => {
 			.map((p) => (p as { text: string }).text);
 	}
 
+	// `AgentImagePart.image` is `string | Uint8Array | ArrayBuffer | URL`, and
+	// parts also reach the transcript in the llms shape, which carries the
+	// payload under `data`. The collector required a *string* under `image` --
+	// one of five possibilities -- and silently skipped the rest.
+	//
+	// Measured on a tester's 4.100.24 session: a describer was installed, the
+	// transcript still read `transcriptTail=[user:text+image]` at request time,
+	// and no `[Vision] Described N of M` line was ever logged. Nothing matched,
+	// so nothing was described, and the image went to a model that cannot read
+	// one.
+	it.each([
+		["data, the llms shape", { type: "image", data: "iVBORw0KGgo=", mediaType: "image/png" }],
+		["image as bytes", { type: "image", image: new Uint8Array([137, 80, 78, 71]), mediaType: "image/png" }],
+	])("describes an image carried as %s", async (_label, imagePart) => {
+		const describeImages = vi.fn(async () => ["a screenshot of the failing page"]);
+		const model = new ScriptedModel([
+			() => [{ type: "text-delta", text: "ok" }, { type: "finish", reason: "stop" }],
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			initialMessages: [
+				{
+					role: "user",
+					content: [{ type: "text", text: "Console: TypeError on line 3." }, imagePart],
+				} as AgentMessage,
+			],
+			describeImages,
+			alwaysDescribeImages: true,
+		});
+
+		await runtime.run("look at the page");
+
+		expect(describeImages).toHaveBeenCalledTimes(1);
+		expect(typeof describeImages.mock.calls[0][0][0].image).toBe("string");
+		const sent = model.requests[0].messages.flatMap((m) => m.content);
+		expect(sent.some((p) => p.type === "image")).toBe(false);
+		expect(textParts(model.requests[0]).some((t) => t.includes("failing page"))).toBe(true);
+	});
+
 	// The point of configuring a vision model is that the primary one never sees
 	// the image — not that it sees it until something complains.
 	it("describes images before the first attempt, not after a refusal", async () => {
