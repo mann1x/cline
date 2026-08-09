@@ -103,6 +103,16 @@ export function createAgentRuntimeConfig(
 		tools: input.tools,
 		hooks,
 		prepareTurn: input.prepareTurn,
+		// Copied beside `prepareTurn`, because the two are halves of the same
+		// feature and only one of them was arriving. This builder assembles the
+		// runtime config from an explicit list, so a field the host sets on
+		// `agentConfig` and nobody copies here is dropped in silence -- which is
+		// what happened: every capped turn's reasoning went in the bin, `notes=0`
+		// across four sessions, while the prepare-turn half of the same condenser
+		// worked throughout because it *is* on the list. Nine milliseconds between
+		// the truncated turn and the retry's request said the call never happened;
+		// the runtime finally said why: "no condenser is installed".
+		condenseDiscardedReasoning: agentConfig.condenseDiscardedReasoning,
 		onImageInputUnsupported: agentConfig.onImageInputUnsupported,
 		describeImages: agentConfig.describeImages,
 		alwaysDescribeImages: agentConfig.alwaysDescribeImages,

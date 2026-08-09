@@ -268,3 +268,31 @@ describe("createAgentRuntimeConfig", () => {
 		expect(runtimeConfig.initialMessages).toHaveLength(1);
 	});
 });
+
+describe("the discarded-reasoning condenser", () => {
+	it("reaches the runtime, like the prepare-turn half of the same feature", async () => {
+		// This builder assembles the runtime config from an explicit list, so a
+		// field the host sets on `agentConfig` and nobody copies is dropped in
+		// silence. That is what happened: `prepareTurn` is on the list and worked
+		// throughout, `condenseDiscardedReasoning` was not and never arrived, so
+		// every capped turn's reasoning went in the bin -- `notes=0` across four
+		// sessions, and the runtime saying "no condenser is installed" on the
+		// fifth.
+		const condenseDiscardedReasoning = vi.fn(async () => ({ note: "n" }));
+		const config = createAgentRuntimeConfig({
+			agentConfig: makeAgentConfig({ condenseDiscardedReasoning }),
+			model: nullModel,
+		});
+
+		expect(config.condenseDiscardedReasoning).toBe(condenseDiscardedReasoning);
+	});
+
+	it("stays undefined when the host installed none", () => {
+		const config = createAgentRuntimeConfig({
+			agentConfig: makeAgentConfig(),
+			model: nullModel,
+		});
+
+		expect(config.condenseDiscardedReasoning).toBeUndefined();
+	});
+});
