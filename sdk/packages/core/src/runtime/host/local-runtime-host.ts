@@ -27,6 +27,11 @@ import type { ToolExecutors } from "../../extensions/tools";
 import { DefaultToolNames } from "../../extensions/tools";
 import { createTaskProgressTool } from "../../extensions/tools/definitions";
 import {
+	createEditVerificationCompletionGuard,
+	EditVerificationTracker,
+	withEditVerificationCapture,
+} from "../../extensions/tools/edit-verification";
+import {
 	createTaskProgressCompletionGuard,
 	TASK_PROGRESS_PARAM,
 	findLatestTaskProgress,
@@ -632,11 +637,38 @@ export class LocalRuntimeHost implements RuntimeHost {
 			!mergedTools.some((tool) => tool.name === TASK_PROGRESS_PARAM)
 				? [...mergedTools, createTaskProgressTool()]
 				: mergedTools;
-		const tools = taskProgressTracker
-			? mergedToolsWithChecklist.map((tool) =>
+		// The other half of "did this run leave the file in a state anyone looked
+		// at". The checklist says what the model meant to do; this says whether
+		// what it did was checked. Both watch the same merged list, so a host
+		// tool -- VS Code's own terminal-aware `run_commands`, its `check_file`
+		// -- is covered exactly like a builtin.
+		const editVerificationConfig = configWithProvider.editVerification;
+		const editVerificationMode = editVerificationConfig?.mode ?? "off";
+		const editVerificationSettings = {
+			editTools: editVerificationConfig?.editTools ?? [
+				DefaultToolNames.EDITOR,
+				DefaultToolNames.APPLY_PATCH,
+			],
+			checkTools: editVerificationConfig?.checkTools ?? [],
+			// "require" is the same guard given more room to insist.
+			attempts: editVerificationMode === "require" ? 4 : 2,
+		};
+		const editVerificationTracker =
+			editVerificationMode === "off" ||
+			editVerificationSettings.checkTools.length === 0
+				? undefined
+				: new EditVerificationTracker(editVerificationSettings);
+		const toolsToWrap = mergedToolsWithChecklist;
+		const withChecklist = taskProgressTracker
+			? toolsToWrap.map((tool) =>
 					withTaskProgressCapture(tool, taskProgressTracker),
 				)
 			: mergedTools;
+		const tools = editVerificationTracker
+			? withChecklist.map((tool) =>
+					withEditVerificationCapture(tool, editVerificationTracker),
+				)
+			: withChecklist;
 		// Don't let the run end quietly on a checklist with open boxes. Composed
 		// rather than assigned: the runtime may already carry a guard (team
 		// obligations), and that one speaks to work the model cannot simply tick
@@ -644,14 +676,36 @@ export class LocalRuntimeHost implements RuntimeHost {
 		const checklistCloseOutGuard = taskProgressTracker
 			? createTaskProgressCompletionGuard(taskProgressTracker)
 			: undefined;
+		// Same composition, one more link: an unchecked edit is a fact about the
+		// work rather than a box the model can tick, so it speaks before the
+		// checklist and after anything the runtime already carries.
+		const uncheckedEditsGuard = editVerificationTracker
+			? createEditVerificationCompletionGuard(
+					editVerificationTracker,
+					editVerificationSettings,
+				)
+			: undefined;
 		const existingCompletionGuard = runtime.completionPolicy?.completionGuard;
-		const completionPolicyWithChecklistCloseOut = checklistCloseOutGuard
-			? {
-					...runtime.completionPolicy,
-					completionGuard: () =>
-						existingCompletionGuard?.() ?? checklistCloseOutGuard(),
-				}
-			: runtime.completionPolicy;
+		const composedGuards = [
+			existingCompletionGuard,
+			uncheckedEditsGuard,
+			checklistCloseOutGuard,
+		].filter((guard): guard is () => string | undefined => guard !== undefined);
+		const completionPolicyWithChecklistCloseOut =
+			composedGuards.length > 0
+				? {
+						...runtime.completionPolicy,
+						completionGuard: () => {
+							for (const guard of composedGuards) {
+								const message = guard();
+								if (message !== undefined) {
+									return message;
+								}
+							}
+							return undefined;
+						},
+					}
+				: runtime.completionPolicy;
 		const extensions = runtime.extensions ?? bootstrap.extensions;
 		const explicitInitialCompactionState = startInput.initialCompactionState;
 		let activeSessionRef: ActiveSession | undefined;

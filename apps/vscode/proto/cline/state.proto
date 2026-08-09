@@ -298,6 +298,7 @@ message Settings {
   optional string thinking_compaction_prompt = 194;
   optional bool capped_thinking_enabled = 195;
   optional string capped_thinking_prompt = 196;
+  optional string edit_verification_settings = 197;
 }
 
 message State {

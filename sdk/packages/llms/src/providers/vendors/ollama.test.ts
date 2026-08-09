@@ -12,9 +12,12 @@ import {
 	OLLAMA_DEFAULT_NUM_CTX,
 	OLLAMA_DEFAULT_REASONING_EFFORT,
 	OLLAMA_DEFAULT_TIMEOUT_MS,
+	parseDeclaredNumCtx,
+	primeDeclaredNumCtx,
 	readOllamaNumCtx,
 	readOllamaNumPredict,
 	readOllamaTimeoutMs,
+	resetDeclaredNumCtx,
 	setOllamaFetch,
 	setOllamaNoStreamTimeoutDispatcher,
 	withOllamaResponseTimeout,
@@ -87,6 +90,107 @@ describe("readOllamaNumCtx", () => {
 		expect(readOllamaNumCtx(context({ contextWindow: -1 }))).toBe(
 			OLLAMA_DEFAULT_NUM_CTX,
 		);
+	});
+});
+
+describe("the window the model declares for itself", () => {
+	// Measured: a model whose Modelfile says `num_ctx 128000` loaded at
+	// `runner.num_ctx=32768`, because sending the default overrode it.
+	const SHOW_BODY = {
+		parameters: [
+			"num_ctx                        128000",
+			"repeat_penalty                 1.1",
+			'think_budget                   "medium"',
+		].join("\n"),
+	};
+
+	function showFetch(body: unknown, ok = true) {
+		return vi.fn(async () =>
+			({
+				ok,
+				json: async () => body,
+			}) as unknown as Response,
+		) as unknown as typeof fetch;
+	}
+
+	/** A context that names the server it is talking to, as a real one does. */
+	function contextAt(
+		baseUrl: string | undefined,
+		model: Record<string, unknown> = {},
+	): GatewayProviderContext {
+		return {
+			...context(model),
+			config: { baseUrl },
+		} as unknown as GatewayProviderContext;
+	}
+
+	const LOCAL = "http://localhost:11434";
+
+	beforeEach(() => {
+		resetDeclaredNumCtx();
+	});
+
+	it("reads num_ctx out of the parameters block", () => {
+		expect(parseDeclaredNumCtx(SHOW_BODY)).toBe(128000);
+		expect(parseDeclaredNumCtx({ parameters: 'num_ctx "8192"' })).toBe(8192);
+	});
+
+	it("contributes nothing when the model declares no window", () => {
+		expect(parseDeclaredNumCtx({ parameters: "temperature 0.7" })).toBeUndefined();
+		expect(parseDeclaredNumCtx({})).toBeUndefined();
+		expect(parseDeclaredNumCtx(undefined)).toBeUndefined();
+		// `num_ctx` as part of another name must not match.
+		expect(
+			parseDeclaredNumCtx({ parameters: "num_ctx_override 4096" }),
+		).toBeUndefined();
+	});
+
+	it("uses the declared window instead of the default", async () => {
+		await primeDeclaredNumCtx(LOCAL, "minimax-m3:cloud", showFetch(SHOW_BODY));
+		expect(readOllamaNumCtx(contextAt(LOCAL))).toBe(128000);
+	});
+
+	// The user's own setting is an instruction, not a guess, and outranks the
+	// model's default exactly as it did before.
+	it("still lets a configured window win", async () => {
+		await primeDeclaredNumCtx(LOCAL, "minimax-m3:cloud", showFetch(SHOW_BODY));
+		expect(readOllamaNumCtx(contextAt(LOCAL, { contextWindow: 110000 }))).toBe(
+			110000,
+		);
+	});
+
+	it("falls back unchanged when the server will not say", async () => {
+		await primeDeclaredNumCtx(LOCAL, "minimax-m3:cloud", showFetch({}, false));
+		expect(readOllamaNumCtx(contextAt(LOCAL))).toBe(OLLAMA_DEFAULT_NUM_CTX);
+	});
+
+	it("survives a server that is not there at all", async () => {
+		const failing = vi.fn(async () => {
+			throw new Error("ECONNREFUSED");
+		}) as unknown as typeof fetch;
+		await expect(
+			primeDeclaredNumCtx(LOCAL, "minimax-m3:cloud", failing),
+		).resolves.toBeUndefined();
+		expect(readOllamaNumCtx(contextAt(LOCAL))).toBe(OLLAMA_DEFAULT_NUM_CTX);
+	});
+
+	it("asks once per model, however many sessions start", async () => {
+		const fetchImpl = showFetch(SHOW_BODY);
+		await primeDeclaredNumCtx(LOCAL, "a-model", fetchImpl);
+		await primeDeclaredNumCtx(LOCAL, "a-model", fetchImpl);
+		expect(fetchImpl).toHaveBeenCalledTimes(1);
+	});
+
+	// Two servers can serve the same model name with different windows.
+	it("keeps servers apart", async () => {
+		await primeDeclaredNumCtx(LOCAL, "minimax-m3:cloud", showFetch(SHOW_BODY));
+		await primeDeclaredNumCtx(
+			"http://elsewhere:11434",
+			"minimax-m3:cloud",
+			showFetch({ parameters: "num_ctx 4096" }),
+		);
+		expect(readOllamaNumCtx(contextAt(LOCAL))).toBe(128000);
+		expect(readOllamaNumCtx(contextAt("http://elsewhere:11434"))).toBe(4096);
 	});
 });
 

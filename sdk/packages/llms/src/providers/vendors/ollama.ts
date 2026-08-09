@@ -78,7 +78,116 @@ export function readOllamaNumCtx(context: GatewayProviderContext): number {
 	if (typeof value === "number" && Number.isFinite(value) && value > 0) {
 		return Math.floor(value);
 	}
+	const declared = readDeclaredNumCtx(
+		context.config?.baseUrl,
+		context.model?.id,
+	);
+	if (declared !== undefined) {
+		return declared;
+	}
 	return OLLAMA_DEFAULT_NUM_CTX;
+}
+
+/**
+ * The `num_ctx` each model declares for itself, keyed by server and model.
+ *
+ * Local models are discovered from `/api/tags`, which reports names and
+ * nothing else, so `model.contextWindow` is undefined for every one of them
+ * and the default above used to be what they all got. Measured: a model whose
+ * Modelfile says `num_ctx 128000` loaded at `runner.num_ctx=32768`, because
+ * sending a default *overrides* the model's own value — Ollama cannot tell a
+ * considered 32768 from a placeholder one.
+ *
+ * That is the same mistake as writing a temperature from client code. The
+ * window a model was built with belongs to the model, so it is read from the
+ * server rather than guessed, and the constant survives only as the answer for
+ * a model that declares nothing.
+ */
+const declaredNumCtx = new Map<string, number | null>();
+
+function declaredKey(baseUrl: string | undefined, modelId: string): string {
+	return `${normalizeOllamaBaseUrl(baseUrl) ?? "default"}::${modelId}`;
+}
+
+/** The model's own `num_ctx`, if it has been looked up and it has one. */
+export function readDeclaredNumCtx(
+	baseUrl: string | undefined,
+	modelId: string | undefined,
+): number | undefined {
+	if (!modelId) {
+		return undefined;
+	}
+	return declaredNumCtx.get(declaredKey(baseUrl, modelId)) ?? undefined;
+}
+
+/** Parse `num_ctx` out of the `parameters` block `/api/show` returns. */
+export function parseDeclaredNumCtx(payload: unknown): number | undefined {
+	if (!payload || typeof payload !== "object") {
+		return undefined;
+	}
+	const parameters = (payload as { parameters?: unknown }).parameters;
+	if (typeof parameters !== "string") {
+		return undefined;
+	}
+	// One `name value` pair per line; values are sometimes quoted.
+	const found = parameters.match(/^[ \t]*num_ctx[ \t]+"?(\d+)"?[ \t]*$/m);
+	if (!found) {
+		return undefined;
+	}
+	const value = Number(found[1]);
+	return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+/**
+ * Ask the server what the model's own context window is, once per model.
+ *
+ * Awaited by the factory rather than left to the first request: resolving it
+ * late would send turn one at the default and every later turn at the real
+ * value, and a changed `num_ctx` makes Ollama reload the model mid-task.
+ *
+ * Failure is not an error. A server that does not answer, or answers something
+ * this cannot read, leaves the entry null and the caller falls back exactly as
+ * it did before.
+ */
+export async function primeDeclaredNumCtx(
+	baseUrl: string | undefined,
+	modelId: string | undefined,
+	fetchImpl: typeof fetch,
+	logger?: BasicLogger,
+): Promise<void> {
+	if (!modelId) {
+		return;
+	}
+	const key = declaredKey(baseUrl, modelId);
+	if (declaredNumCtx.has(key)) {
+		return;
+	}
+	const root = normalizeOllamaBaseUrl(baseUrl) ?? "http://localhost:11434/api";
+	try {
+		const response = await fetchImpl(`${root}/show`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ model: modelId }),
+		});
+		if (!response.ok) {
+			declaredNumCtx.set(key, null);
+			return;
+		}
+		const value = parseDeclaredNumCtx(await response.json());
+		declaredNumCtx.set(key, value ?? null);
+		if (value !== undefined) {
+			logger?.debug?.(
+				`[ollama] ${modelId} declares num_ctx ${value}; using it rather than the ${OLLAMA_DEFAULT_NUM_CTX} default`,
+			);
+		}
+	} catch {
+		declaredNumCtx.set(key, null);
+	}
+}
+
+/** Test seam: forget every looked-up window. */
+export function resetDeclaredNumCtx(): void {
+	declaredNumCtx.clear();
 }
 
 /**
@@ -526,6 +635,16 @@ export async function createOllamaProviderModule(
 							: "global — the dispatcher may be discarded by it"
 				})`
 			: "[ollama] no stream dispatcher: undici's default bodyTimeout applies to this request",
+	);
+	// Before the first request, so the window the model declares is in hand by
+	// the time `provider.ollama.native-options` builds `num_ctx`. Awaited here
+	// rather than resolved lazily: a `num_ctx` that changes between turns makes
+	// Ollama reload the model mid-task.
+	await primeDeclaredNumCtx(
+		config.baseUrl,
+		context.model?.id,
+		ensureFetch(requestFetch),
+		context.logger,
 	);
 	const provider = createOllama({
 		...(baseURL ? { baseURL } : {}),

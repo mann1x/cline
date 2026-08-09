@@ -164,6 +164,15 @@ function normalizeStartInput(
 	};
 }
 
+/** The slice of the agent config these tests read back. */
+interface TestAgentConfig {
+	tools?: Array<{
+		name: string;
+		execute: (input: unknown, context: unknown) => Promise<unknown>;
+	}>;
+	completionPolicy?: { completionGuard?: () => string | undefined };
+}
+
 describe("LocalRuntimeHost", () => {
 	const envSnapshot = {
 		HOME: process.env.HOME,
@@ -192,6 +201,121 @@ describe("LocalRuntimeHost", () => {
 		setHomeDir(envSnapshot.HOME ?? "~");
 		setClineDir(envSnapshot.CLINE_DIR ?? join("~", ".cline"));
 		rmSync(isolatedHomeDir, { recursive: true, force: true });
+	});
+
+	it.each([
+		{ mode: "off" as const, guarded: false },
+		{ mode: "nudge" as const, guarded: true },
+	] as const)(
+		"holds the run back on an unchecked edit only when asked to ($mode)",
+		async ({ mode, guarded }) => {
+			// The measured failure: `check_file` ran once before anything was
+			// touched, then four edits landed unchecked and the file was left with
+			// sixteen problems. The tool was present and had already been used.
+			const runtimeBuilder = {
+				build: vi.fn().mockReturnValue({
+					tools: [
+						{
+							name: "editor",
+							inputSchema: { type: "object", properties: {} },
+							execute: vi.fn(async () => "edited"),
+						},
+					],
+					shutdown: vi.fn().mockResolvedValue(undefined),
+				}),
+			};
+			const agent = {
+				run: vi.fn().mockResolvedValue(createResult()),
+				continue: vi.fn().mockResolvedValue(createResult()),
+				getMessages: vi.fn().mockReturnValue([]),
+				getAgentId: vi.fn().mockReturnValue("agent-qa"),
+				getConversationId: vi.fn().mockReturnValue("conv-qa"),
+				abort: vi.fn(),
+				subscribeEvents: vi.fn().mockReturnValue(() => {}),
+				canStartRun: vi.fn().mockReturnValue(true),
+				shutdown: vi.fn().mockResolvedValue(undefined),
+			};
+			let agentConfig: TestAgentConfig | undefined;
+			const manager = new RuntimeHostUnderTest({
+				distinctId,
+				sessionService: new FileSessionService(
+					join(isolatedHomeDir, "sessions"),
+				),
+				runtimeBuilder: runtimeBuilder as never,
+				createAgent: ((config: TestAgentConfig) => {
+					agentConfig = config;
+					return agent;
+				}) as never,
+			});
+
+			await manager.startSession(
+				normalizeStartInput({
+					config: createConfig({
+						editVerification: { mode, checkTools: ["check_file"] },
+					}),
+					prompt: "hello",
+				}),
+			);
+
+			const editor = agentConfig?.tools?.find((tool) => tool.name === "editor");
+			await editor?.execute({ path: "manic_miner.html" }, {});
+			const verdict = agentConfig?.completionPolicy?.completionGuard?.();
+
+			if (guarded) {
+				expect(verdict).toContain("manic_miner.html");
+				expect(verdict).toContain("check_file");
+			} else {
+				expect(verdict).toBeUndefined();
+			}
+		},
+	);
+
+	// A host with no linter must not get a guard it can never satisfy.
+	it("stands aside when the host names no checker", async () => {
+		const runtimeBuilder = {
+			build: vi.fn().mockReturnValue({
+				tools: [
+					{
+						name: "editor",
+						inputSchema: { type: "object", properties: {} },
+						execute: vi.fn(async () => "edited"),
+					},
+				],
+				shutdown: vi.fn().mockResolvedValue(undefined),
+			}),
+		};
+		const agent = {
+			run: vi.fn().mockResolvedValue(createResult()),
+			continue: vi.fn().mockResolvedValue(createResult()),
+			getMessages: vi.fn().mockReturnValue([]),
+			getAgentId: vi.fn().mockReturnValue("agent-qa-none"),
+			getConversationId: vi.fn().mockReturnValue("conv-qa-none"),
+			abort: vi.fn(),
+			subscribeEvents: vi.fn().mockReturnValue(() => {}),
+			canStartRun: vi.fn().mockReturnValue(true),
+			shutdown: vi.fn().mockResolvedValue(undefined),
+		};
+		let agentConfig: TestAgentConfig | undefined;
+		const manager = new RuntimeHostUnderTest({
+			distinctId,
+			sessionService: new FileSessionService(join(isolatedHomeDir, "sessions")),
+			runtimeBuilder: runtimeBuilder as never,
+			createAgent: ((config: TestAgentConfig) => {
+				agentConfig = config;
+				return agent;
+			}) as never,
+		});
+
+		await manager.startSession(
+			normalizeStartInput({
+				config: createConfig({ editVerification: { mode: "nudge" } }),
+				prompt: "hello",
+			}),
+		);
+
+		const editor = agentConfig?.tools?.find((tool) => tool.name === "editor");
+		await editor?.execute({ path: "a.ts" }, {});
+		expect(agentConfig?.completionPolicy?.completionGuard?.()).toBeUndefined();
 	});
 
 	it.each([

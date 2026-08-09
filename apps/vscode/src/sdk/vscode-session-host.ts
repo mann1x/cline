@@ -36,6 +36,7 @@ import type { VscodeTerminalManager } from "@/hosts/vscode/terminal/VscodeTermin
 import { getDistinctId } from "@/services/logging/distinctId"
 import type { McpHub } from "@/services/mcp/McpHub"
 import { Logger } from "@/shared/services/Logger"
+import { CHECK_FILE_TOOL_NAME } from "./check-file-tool"
 import type { SdkForegroundCommandCoordinator } from "./sdk-foreground-command-coordinator"
 import type { SdkSessionHost } from "./session-host"
 import { createVscodeExtraTools } from "./vscode-runtime-builder"
@@ -154,6 +155,12 @@ export class VscodeSessionHost implements SdkSessionHost {
 					// nothing read them, because the SDK path had no checklist at
 					// all. This is the wire between that setting and the behaviour.
 					const focusChainSettings = StateManager.get().getGlobalSettingsKey("focusChainSettings")
+					// The checker is named here rather than assumed in core, because
+					// `check_file` is this host's tool: it needs the editor's own
+					// diagnostics and does not exist in the SDK at all. A host that
+					// names none gets no guard, which is the right answer for one
+					// that has no linter to point at.
+					const editVerificationSettings = StateManager.get().getGlobalSettingsKey("editVerificationSettings")
 					return {
 						...inputWithRemoteConfig,
 						source: inputWithRemoteConfig.source ?? "vscode",
@@ -161,6 +168,10 @@ export class VscodeSessionHost implements SdkSessionHost {
 							...inputWithRemoteConfig.config,
 							telemetry: inputWithRemoteConfig.config.telemetry ?? options.telemetry,
 							extraTools: [...(inputWithRemoteConfig.config.extraTools ?? []), ...extraTools],
+							editVerification: {
+								mode: editVerificationSettings?.mode ?? "nudge",
+								checkTools: [CHECK_FILE_TOOL_NAME],
+							},
 							taskProgress: {
 								enabled: focusChainSettings?.enabled ?? true,
 								...(focusChainSettings?.remindClineInterval !== undefined

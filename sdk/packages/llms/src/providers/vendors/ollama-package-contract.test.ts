@@ -91,6 +91,9 @@ describe("ollama-ai-provider-v2 patch contract", () => {
 			// no-op
 		}
 
-		expect(requested[0]).toBe("http://localhost:11434/api/chat")
+		// Not `requested[0]`: the factory asks `/api/show` for the model's own
+		// `num_ctx` before the first completion. What this test pins is the
+		// path the package builds for a chat, not the order of the two.
+		expect(requested).toContain("http://localhost:11434/api/chat")
 	})
 })

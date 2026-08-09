@@ -139,6 +139,10 @@ export {
 	hasOllamaFetch,
 	hasOllamaNoStreamTimeoutDispatcher,
 	OLLAMA_DEFAULT_REASONING_EFFORT,
+	// A host that resolves the context window itself has to be able to ask the
+	// server what the model declares, and to ask before the first request.
+	primeDeclaredNumCtx,
+	readDeclaredNumCtx,
 	// The dispatcher is only honoured by a fetch that reads it, so the host
 	// hands over both or neither.
 	setOllamaFetch,

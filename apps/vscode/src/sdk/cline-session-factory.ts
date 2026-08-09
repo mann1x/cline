@@ -28,6 +28,8 @@ import {
 	MODEL_COLLECTIONS_BY_PROVIDER_ID,
 	OLLAMA_DEFAULT_CONTEXT_WINDOW,
 	OLLAMA_DEFAULT_REASONING_EFFORT,
+	primeDeclaredNumCtx,
+	readDeclaredNumCtx,
 } from "@cline/llms"
 import { type AgentHooks, buildClineSystemPrompt, type RenderedPromptTemplate } from "@cline/shared"
 import type { ApiConfiguration } from "@shared/api"
@@ -795,7 +797,14 @@ export function resolveOllamaProviderConfig(
 	const raw = config.ollamaApiOptionsCtxNum?.trim()
 	const parsed = raw ? Number(raw) : Number.NaN
 	const legacyContextWindow = Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined
-	const contextWindow = settingsContextWindow ?? legacyContextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW
+	// The model's own `num_ctx` sits between the user's setting and the
+	// constant. Without it a model whose Modelfile says 128000 was loaded at
+	// 32768: sending a default overrides the model's own value, and Ollama
+	// cannot tell a considered 32768 from a placeholder one. Primed by
+	// `buildSessionConfig` before this runs, so the first request already has
+	// it — a `num_ctx` that changes between turns reloads the model mid-task.
+	const declaredContextWindow = readDeclaredNumCtx(config.ollamaBaseUrl, modelId)
+	const contextWindow = settingsContextWindow ?? legacyContextWindow ?? declaredContextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW
 	const timeoutMs = config.requestTimeoutMs
 	return {
 		...(typeof timeoutMs === "number" && timeoutMs > 0 ? { timeoutMs } : {}),
@@ -1009,6 +1018,12 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 			}
 
 			if (providerId === "ollama") {
+				// Ask the server what window this model was built with before
+				// resolving one for it. Cached per server and model, so this
+				// costs one request the first time a model is used and nothing
+				// afterwards; a server that will not answer leaves the previous
+				// behaviour exactly as it was.
+				await primeDeclaredNumCtx(apiConfig.ollamaBaseUrl, modelId, fetch)
 				ollamaProviderConfig = resolveOllamaProviderConfig(apiConfig, modelId)
 			}
 

@@ -174,6 +174,29 @@ export interface CoreTaskProgressConfig {
 	onUpdate?: (state: TaskProgressState) => void;
 }
 
+/**
+ * How firmly the session insists an edited file be checked before it finishes.
+ *
+ * Three states rather than a boolean, because "ask the model once" and "do not
+ * let it finish" are different products and the user owns the choice. It lives
+ * in settings rather than in the conversation on purpose: a question asked
+ * after every file change is a round trip per edit, and "always" is not an
+ * answer a model should be giving on the user's behalf.
+ */
+export type CoreEditVerificationMode = "off" | "nudge" | "require";
+
+export interface CoreEditVerificationConfig {
+	mode?: CoreEditVerificationMode;
+	/** Tools whose calls mark a file changed. Defaults to the built-in editors. */
+	editTools?: string[];
+	/**
+	 * Tools whose calls mark a file verified. Named by the host rather than
+	 * assumed: the checker on the VS Code path is `check_file`, which lives in
+	 * the extension. A host that names none gets no guard at all.
+	 */
+	checkTools?: string[];
+}
+
 export type CoreCompactionStrategy = "basic" | "agentic";
 
 export interface CoreCompactionConfig {
@@ -362,6 +385,15 @@ export interface CoreSessionConfig
 	 * coding run as the one tool carrying no checklist.
 	 */
 	taskProgress?: CoreTaskProgressConfig;
+	/**
+	 * Whether the run may end with a file the model changed and never checked.
+	 *
+	 * Measured on a live session: the linter ran once *before* anything was
+	 * touched, then four consecutive edits landed unchecked, and the file was
+	 * left with sixteen problems. The tool was present and already used — what
+	 * was missing was anything that noticed.
+	 */
+	editVerification?: CoreEditVerificationConfig;
 	pluginPaths?: string[];
 	extensions?: AgentConfig["extensions"];
 	execution?: AgentConfig["execution"];
