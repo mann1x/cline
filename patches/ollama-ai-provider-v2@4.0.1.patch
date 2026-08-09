@@ -1,6 +1,9 @@
 diff --git a/node_modules/ollama-ai-provider-v2/.bun-tag-f7e5721b5b5587de b/.bun-tag-f7e5721b5b5587de
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/ollama-ai-provider-v2/.bun-tag-fe71d47a605c3f30 b/.bun-tag-fe71d47a605c3f30
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/index.d.ts b/dist/index.d.ts
 index 78a8fa3d31d67cc20113170e887b39006cdb8df4..360e15c0bb6f847e242a28d0fe66f8dafa2b34bf 100644
 --- a/dist/index.d.ts
@@ -33,7 +36,7 @@ index 78a8fa3d31d67cc20113170e887b39006cdb8df4..360e15c0bb6f847e242a28d0fe66f8da
      suffix: z.ZodOptional<z.ZodString>;
      echo: z.ZodOptional<z.ZodBoolean>;
 diff --git a/dist/index.js b/dist/index.js
-index aafa72c4167302af45db22e41a227cbaf02f792f..02d3e10badeca1ea866e3328232ec3fcff01ae1f 100644
+index aafa72c4167302af45db22e41a227cbaf02f792f..0d18572501575de87503ceba0b0f979b59111c39 100644
 --- a/dist/index.js
 +++ b/dist/index.js
 @@ -146,15 +146,12 @@ function resolveOllamaThinkFlag({
@@ -185,8 +188,33 @@ index aafa72c4167302af45db22e41a227cbaf02f792f..02d3e10badeca1ea866e3328232ec3fc
  });
  
  // src/responses/convert-to-ollama-responses-messages.ts
+@@ -1406,13 +1446,21 @@ var OllamaStreamProcessor = class {
+         ...getResponseMetadata(value)
+       });
+     }
+-    if (value.done) {
+-      this.handleDoneChunk(value, controller);
+-    }
++    // Content before the end markers, always.
++    //
++    // Ollama's final chunk carries `done: true`, and it may carry content with
++    // it -- a build that appends a think-budget message when the allowance runs
++    // out puts that message on exactly this chunk. Handling `done` first closed
++    // the reasoning part and then emitted a `reasoning-delta` for it, which the
++    // AI SDK rejects outright: "reasoning part <id> not found", and the run
++    // dies at the moment the budget is reached. Same hazard for text.
+     const delta = value == null ? void 0 : value.message;
+     if (delta) {
+       this.processDelta(delta, controller);
+     }
++    if (value.done) {
++      this.handleDoneChunk(value, controller);
++    }
+   }
+   handleDoneChunk(value, controller) {
+     this.state.finishReason = mapOllamaFinishReason(value.done_reason);
 diff --git a/dist/index.mjs b/dist/index.mjs
-index 5aa396bef7354dcd523cfeabc69fe7d8ada7d4c6..86a6fff4f37f73ad274c551a349ca8c4fa43c920 100644
+index 5aa396bef7354dcd523cfeabc69fe7d8ada7d4c6..4b7d553d59c6a3fc275e9931c43709ddb0d61021 100644
 --- a/dist/index.mjs
 +++ b/dist/index.mjs
 @@ -135,15 +135,12 @@ function resolveOllamaThinkFlag({
@@ -338,3 +366,28 @@ index 5aa396bef7354dcd523cfeabc69fe7d8ada7d4c6..86a6fff4f37f73ad274c551a349ca8c4
  });
  
  // src/responses/convert-to-ollama-responses-messages.ts
+@@ -1416,13 +1456,21 @@ var OllamaStreamProcessor = class {
+         ...getResponseMetadata(value)
+       });
+     }
+-    if (value.done) {
+-      this.handleDoneChunk(value, controller);
+-    }
++    // Content before the end markers, always.
++    //
++    // Ollama's final chunk carries `done: true`, and it may carry content with
++    // it -- a build that appends a think-budget message when the allowance runs
++    // out puts that message on exactly this chunk. Handling `done` first closed
++    // the reasoning part and then emitted a `reasoning-delta` for it, which the
++    // AI SDK rejects outright: "reasoning part <id> not found", and the run
++    // dies at the moment the budget is reached. Same hazard for text.
+     const delta = value == null ? void 0 : value.message;
+     if (delta) {
+       this.processDelta(delta, controller);
+     }
++    if (value.done) {
++      this.handleDoneChunk(value, controller);
++    }
+   }
+   handleDoneChunk(value, controller) {
+     this.state.finishReason = mapOllamaFinishReason(value.done_reason);
