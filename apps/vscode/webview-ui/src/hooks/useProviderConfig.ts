@@ -113,6 +113,37 @@ function publishConfig(providerId: string, seq: number, response: ProviderConfig
 	}
 }
 
+/**
+ * Writes one provider's entry, named explicitly rather than taken from whatever
+ * a hook is bound to.
+ *
+ * Loading a profile is the case that needs this: `useProviderConfig` binds to
+ * the provider the panel is *currently* showing, and a profile that also
+ * switches provider carries a config for a different one. Sending it through
+ * the bound hook wrote the incoming profile's context window onto the outgoing
+ * provider's entry — corrupting the provider being left, while the profile's
+ * own entry kept the number it already had. Reported as a profile whose context
+ * window "still matches what's in the main profile", which is exactly what it
+ * would look like from the outside.
+ *
+ * `commitModelSelection` on the hook throws when the provider does not match,
+ * for the same reason; the config write had no such guard.
+ */
+export async function writeProviderConfigFor(
+	providerId: string,
+	patch: ProviderConfigWritePatch,
+): Promise<ProviderConfigResponse | undefined> {
+	const seq = issueRequest(providerId)
+	const response = await ModelsServiceClient.writeProviderConfig(
+		WriteProviderConfigRequest.create({
+			providerId,
+			patch: toWriteProviderConfigPatch(patch),
+		}),
+	)
+	publishConfig(providerId, seq, response)
+	return response
+}
+
 /** Test-only: the entries outlive any one hook, which is the point of them. */
 export function __resetProviderConfigEntries(): void {
 	providerConfigEntries.clear()

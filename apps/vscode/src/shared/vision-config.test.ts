@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { resolveVisionModelStatus, visionSnapshotProviderId } from "./vision-config"
+import { resolveVisionModelStatus, visionSnapshotModelId, visionSnapshotProviderId } from "./vision-config"
 
 const snapshot = (value: Record<string, unknown>) => JSON.stringify(value)
 
@@ -35,8 +35,43 @@ describe("resolveVisionModelStatus", () => {
 		expect(visionSnapshotProviderId(configured)).toBe("ollama")
 	})
 
+	// What the tester was actually in when images kept being dropped: the toggle
+	// on, a provider named, and no model anywhere. That counted as "ready", so a
+	// describer was installed with nothing to call, every description came back
+	// empty, and the run carried on without the images -- "it says it removed the
+	// image from the context and then just keeps going".
+	it("is unconfigured when the tab names a provider but no model", () => {
+		const providerOnly = snapshot({
+			global: { ollamaBaseUrl: "http://localhost:11434" },
+			mode: { apiProvider: "ollama" },
+		})
+		expect(resolveVisionModelStatus(true, providerOnly)).toBe("unconfigured")
+		expect(visionSnapshotProviderId(providerOnly)).toBe("ollama")
+		expect(visionSnapshotModelId(providerOnly)).toBeUndefined()
+	})
+
+	// The picker's copy and the settings fields are two places the same fact can
+	// live, and the handler is built from either; a tab holding one is configured.
+	it("counts a model from the picker or from the mode keys", () => {
+		const fromPicker = snapshot({
+			global: {},
+			mode: { apiProvider: "ollama" },
+			providerConfig: { selectedModelId: "qwen3-vl:8b" },
+		})
+		expect(visionSnapshotModelId(fromPicker)).toBe("qwen3-vl:8b")
+		expect(resolveVisionModelStatus(true, fromPicker)).toBe("ready")
+
+		const fromModeKeys = snapshot({
+			global: {},
+			mode: { apiProvider: "ollama", ollamaModelId: "qwen3-vl:8b" },
+		})
+		expect(visionSnapshotModelId(fromModeKeys)).toBe("qwen3-vl:8b")
+		expect(resolveVisionModelStatus(true, fromModeKeys)).toBe("ready")
+	})
+
 	it("is unconfigured rather than throwing on a snapshot that will not parse", () => {
 		expect(resolveVisionModelStatus(true, "{broken")).toBe("unconfigured")
 		expect(visionSnapshotProviderId("{broken")).toBeUndefined()
+		expect(visionSnapshotModelId("{broken")).toBeUndefined()
 	})
 })

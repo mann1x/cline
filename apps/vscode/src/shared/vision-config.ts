@@ -28,6 +28,38 @@ export type VisionModelStatus =
 	/** A describer will be installed for the session. */
 	| "ready"
 
+/**
+ * The model the Vision tab holds, or `undefined` when it holds none.
+ *
+ * The tab stores its model as `providerConfig.selectedModelId`
+ * (`VisionModelTab.commitModelSelection`), and that is the field the describer
+ * is built from. A tab naming a provider and no model names something to call
+ * and nothing to call on it.
+ */
+export function visionSnapshotModelId(storedSnapshot: string | undefined): string | undefined {
+	const snapshot = parseApiConfigurationSnapshot(storedSnapshot)
+	if (!snapshot) {
+		return undefined
+	}
+	const held = snapshot.providerConfig as Record<string, unknown> | undefined
+	const selected = held?.selectedModelId
+	if (typeof selected === "string" && selected) {
+		return selected
+	}
+	// Either place counts. The picker writes `selectedModelId`, but a tab
+	// configured through the settings fields carries its model in the mode keys
+	// instead (`actModeOllamaModelId` and the per-provider rest of them), and the
+	// handler is built from those. Requiring only the picker's copy would call a
+	// working tab unconfigured.
+	const settings = applyApiConfigurationSnapshot(snapshot, ["plan", "act"]) as Record<string, unknown>
+	for (const [key, value] of Object.entries(settings)) {
+		if (key.startsWith("actMode") && key.endsWith("ModelId") && typeof value === "string" && value) {
+			return value
+		}
+	}
+	return undefined
+}
+
 /** The provider the Vision tab holds, or `undefined` when it holds none. */
 export function visionSnapshotProviderId(storedSnapshot: string | undefined): string | undefined {
 	const snapshot = parseApiConfigurationSnapshot(storedSnapshot)
@@ -50,5 +82,14 @@ export function resolveVisionModelStatus(enabled: boolean | undefined, storedSna
 	if (enabled !== true) {
 		return "off"
 	}
-	return visionSnapshotProviderId(storedSnapshot) ? "ready" : "unconfigured"
+	// A provider *and* a model. Naming only the provider was still enough to be
+	// called "ready", which installed a describer with nothing to call: every
+	// description came back empty, the images were dropped, and the run carried
+	// on without them -- reported as "it says it removed the image from the
+	// context and then just keeps going", with the vision model configured.
+	// Same shape as the toggle-versus-tab disagreement above, one level down.
+	if (!visionSnapshotProviderId(storedSnapshot) || !visionSnapshotModelId(storedSnapshot)) {
+		return "unconfigured"
+	}
+	return "ready"
 }

@@ -22,7 +22,7 @@ import type { Mode } from "@shared/storage/types"
 import { useCallback, useMemo } from "react"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { getActiveProviderAndModelId } from "@/hooks/useNormalizedApiConfiguration"
-import { useProviderConfig } from "@/hooks/useProviderConfig"
+import { useProviderConfig, writeProviderConfigFor } from "@/hooks/useProviderConfig"
 import { ModelsServiceClient, StateServiceClient } from "@/services/grpc-client"
 import { useApiConfigurationHandlers } from "./useApiConfigurationHandlers"
 
@@ -183,8 +183,32 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 			// context window into the legacy settings key, and writing it first let
 			// the profile's own (older, or absent) copy of that key overwrite the
 			// mirror on its way past.
+			//
+			// Onto the profile's provider, not the panel's. The hook is bound to
+			// the provider being left, so a profile that also switches provider
+			// wrote its context window onto the wrong entry: the provider being
+			// left got a number that was never meant for it, and the profile's own
+			// entry kept whatever it had — which is a profile that "still matches
+			// the main profile" from the outside.
+			const configTarget = selection.provider ?? activeProviderId
 			if (snapshot.providerConfig) {
-				await writeProviderConfig(snapshot.providerConfig as never)
+				if (configTarget === activeProviderId) {
+					await writeProviderConfig(snapshot.providerConfig as never)
+				} else {
+					await writeProviderConfigFor(configTarget, snapshot.providerConfig as never)
+				}
+			} else {
+				// A profile that carries no context window must not inherit the one
+				// the last profile left behind — that is the same value showing up
+				// under a different name. Cleared, so the window falls back to what
+				// the model itself declares (`/api/show` for Ollama) rather than to
+				// whoever was loaded before.
+				const clearContextWindow = { contextWindow: undefined } as never
+				if (configTarget === activeProviderId) {
+					await writeProviderConfig(clearContextWindow)
+				} else {
+					await writeProviderConfigFor(configTarget, clearContextWindow)
+				}
 			}
 
 			if (!selection.modelId) {

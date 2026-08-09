@@ -31,6 +31,10 @@ const writeProviderConfig = vi.fn().mockResolvedValue(undefined)
 const handleFieldsChange = vi.fn().mockResolvedValue(undefined)
 const updateSettings = vi.fn().mockResolvedValue(undefined)
 const commitModelSelection = vi.fn().mockResolvedValue(undefined)
+// Hoisted, unlike the mocks above it: those are reached lazily from inside a
+// factory function, while this one is named directly in the returned object and
+// so is read while `vi.mock` is still being hoisted past its declaration.
+const writeProviderConfigFor = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
 
 vi.mock("@/hooks/useProviderConfig", () => ({
 	useProviderConfig: () => ({
@@ -38,6 +42,7 @@ vi.mock("@/hooks/useProviderConfig", () => ({
 		write: writeProviderConfig,
 		commitSelection,
 	}),
+	writeProviderConfigFor,
 }))
 
 vi.mock("../useApiConfigurationHandlers", () => ({
@@ -134,6 +139,25 @@ describe("useApiConfigurationProfiles — loading a profile", () => {
 			providerId: "sapaicore",
 			modelId: "sap-sonnet",
 		})
+		// The provider config has to go around the bound hook for the same
+		// reason the model does. It did not: the incoming profile's context
+		// window was written onto the entry of the provider being *left*, while
+		// the profile's own entry kept the number it already had — a profile
+		// whose context window "still matches the main profile" from outside.
+		expect(writeProviderConfig).not.toHaveBeenCalled()
+		expect(writeProviderConfigFor.mock.calls[0][0]).toBe("sapaicore")
+	})
+
+	// A profile that stores no context window must not inherit the one the last
+	// profile left in the shared provider entry. Cleared, so it falls back to
+	// what the model itself declares rather than to whoever was loaded before.
+	it("clears the context window for a profile that carries none", async () => {
+		const { result } = renderHook(() => useApiConfigurationProfiles({ kind: "mode", mode: "act" }))
+
+		await result.current.loadProfile(SWITCHING_PROFILE.name)
+
+		await waitFor(() => expect(writeProviderConfigFor).toHaveBeenCalled())
+		expect(writeProviderConfigFor.mock.calls[0][1]).toMatchObject({ contextWindow: undefined })
 	})
 
 	it("carries the model into the vision snapshot, where that tab's picker reads it", async () => {

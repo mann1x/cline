@@ -1278,7 +1278,15 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	// input" contained no line mentioning vision at all, so there was no way to
 	// tell a describer that failed from one that was never installed.
 	if (visionStatus === "unconfigured") {
-		Logger.warn("[Vision] Vision model is enabled but the Vision tab names no provider; images will not be described")
+		// Which half is missing, not merely that something is. A Vision tab
+		// holding a provider and no model reads as configured to anyone looking
+		// at it, and said so in the log too.
+		const namedProvider = visionSnapshotProviderId(visionSnapshot)
+		Logger.warn(
+			`[Vision] Vision model is enabled but the Vision tab names ${
+				namedProvider ? `no model (provider=${namedProvider})` : "no provider"
+			}; images will not be described`,
+		)
 	} else if (visionApiConfiguration) {
 		Logger.log(
 			`[Vision] Describer installed: provider=${visionSnapshotProviderId(visionSnapshot)} model=${

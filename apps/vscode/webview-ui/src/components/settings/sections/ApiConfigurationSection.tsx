@@ -174,8 +174,9 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 					</p>
 					{visionUnconfigured ? (
 						<p className="text-xs mt-[5px] text-(--vscode-errorForeground)">
-							No model is set on the Vision tab, so nothing will describe images: they go to the main model as they
-							are, and a model that cannot read one fails the turn. Pick a provider and a model on the Vision tab.
+							The Vision tab does not name both a provider and a model, so nothing will describe images: they will
+							not be accepted, and any already in a task are dropped rather than sent to a main model that cannot
+							read them. Pick a provider <em>and</em> a model on the Vision tab.
 						</p>
 					) : null}
 				</div>

@@ -85,6 +85,13 @@ export {
 	getShippedToolCallSignatures,
 	HOST_TOOL_INPUT_SCHEMAS,
 } from "../../../../sdk/packages/core/src/extensions/config/shipped-tool-signatures"
+// Likewise, and for a sharper reason. The delimiter scan moved out of the
+// extension and into core, and the three extension files that call it were
+// repointed at `@cline/core` — which under vitest is this file. Absent here the
+// import was `undefined`, the scan produced nothing, and four tests failed on
+// an empty verdict while the shipped build was fine. It is a pure function over
+// a string with no imports of its own, so a fake would only test the fake.
+export { describeDelimiterBalance } from "../../../../sdk/packages/core/src/extensions/tools/delimiter-balance"
 // Re-exported from source rather than stubbed: the session factory composes
 // its hook layers with it, so a fake would test the fake's composition.
 export { mergeAgentHooks } from "../../../../sdk/packages/core/src/hooks/hook-file-hooks"
