@@ -3177,6 +3177,92 @@ describe("a turn cut off at the output cap", () => {
 		);
 	});
 
+	it("says what a discarded turn was carrying, whether or not it condenses", async () => {
+		// The silence was the whole bug. Four sessions retried at the output cap
+		// and not one attached a note; with no log line the path was
+		// indistinguishable from a condenser that had never been wired, and the
+		// discarded message is the one message the transcript never records. The
+		// gap that settled it was nine milliseconds between the capped turn and
+		// the retry -- far too short for the summariser call a note requires.
+		const lines: string[] = [];
+		const logger = {
+			debug: (message: string) => lines.push(message),
+			log: (message: string) => lines.push(message),
+		};
+		const condenseDiscardedReasoning = vi.fn(async () => ({}));
+		const model = new ScriptedModel([
+			() => [
+				{ type: "reasoning-delta", text: "a long think that hit the cap" },
+				{ type: "finish", reason: "max-tokens" },
+			],
+			() => [
+				{ type: "text-delta", text: "short answer" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			condenseDiscardedReasoning,
+			logger,
+		});
+
+		const result = await runtime.run("Hi");
+
+		expect(result.status).toBe("completed");
+		expect(
+			lines.some((line) =>
+				line.includes(
+					"Discarded a turn cut off at the output limit: parts=[reasoning] reasoning=29 chars",
+				),
+			),
+		).toBe(true);
+		// A condenser that answers with nothing is the case that looked exactly
+		// like a condenser that was never called.
+		expect(
+			lines.some((line) =>
+				line.includes("the condenser returned nothing for 29 chars"),
+			),
+		).toBe(true);
+	});
+
+	it("says so when a discarded turn had nothing to condense", async () => {
+		// Reachable, and not the same as an empty turn: a message with parts in it
+		// but no reasoning and no partial reply gets past the empty-turn recovery
+		// and arrives here, where the only correct answer is to write no note.
+		const lines: string[] = [];
+		const condenseDiscardedReasoning = vi.fn(async () => ({ note: "n" }));
+		const model = new ScriptedModel([
+			() => [
+				{ type: "reasoning-delta", text: "" },
+				{ type: "finish", reason: "max-tokens" },
+			],
+			() => [
+				{ type: "text-delta", text: "short answer" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			condenseDiscardedReasoning,
+			logger: {
+				debug: (message: string) => lines.push(message),
+				log: (message: string) => lines.push(message),
+			},
+		});
+
+		const result = await runtime.run("Hi");
+
+		expect(result.status).toBe("completed");
+		expect(condenseDiscardedReasoning).not.toHaveBeenCalled();
+		expect(
+			lines.some((line) =>
+				line.includes(
+					"Discarded turn had nothing to condense: parts=[reasoning]",
+				),
+			),
+		).toBe(true);
+	});
+
 	it("condenses the reasoning it is about to throw away", async () => {
 		// The turn discarded here is the only one whose thinking reliably ends
 		// at the model's budget message, because a think ends there only when

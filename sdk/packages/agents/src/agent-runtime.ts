@@ -827,6 +827,9 @@ export class AgentRuntime {
 	): Promise<{ note?: string; retrospective?: string } | undefined> {
 		const condense = this.config.condenseDiscardedReasoning;
 		if (!condense) {
+			this.config.logger?.debug?.(
+				"Discarded turn not condensed: no condenser is installed",
+			);
 			return undefined;
 		}
 		const reasoning = message.content
@@ -851,7 +854,34 @@ export class AgentRuntime {
 			.map((part) => part.text)
 			.join("")
 			.trim();
+		// Said on every discarded turn, not only the ones that decline. A turn
+		// that hits the cap and produces no note is indistinguishable, from the
+		// outside, from a condenser that was never wired -- and for four sessions
+		// that is exactly how it read: `outputLimitRetries=1, notes=0`, no note in
+		// the reminder, and nothing in the log at all. The gap that settled it was
+		// nine milliseconds between the capped turn and the retry's request, which
+		// is far too little for the summariser round trip the note requires. What
+		// the discarded message was carrying is the one fact the transcript can
+		// never supply, because that message is the one thing that never enters it.
+		this.config.logger?.log?.(
+			`Discarded a turn cut off at the output limit: parts=[${
+				message.content.map((part) => part.type).join(", ") || "none"
+			}] reasoning=${reasoning.length} chars partialReply=${text.length} chars windowBound=${windowBound}`,
+			{ severity: "info" },
+		);
 		if (!reasoning && !text) {
+			// Said, because the alternative is what this path has been doing:
+			// declining in silence, which reads exactly like a condenser that was
+			// never wired. Measured across four sessions -- six discarded turns,
+			// not one note -- and the transcript cannot say why, since the
+			// discarded message is the one thing that never enters it. The part
+			// types are what settles it.
+			this.config.logger?.log?.(
+				`Discarded turn had nothing to condense: parts=[${
+					message.content.map((part) => part.type).join(", ") || "none"
+				}] contentLength=${message.content.length}`,
+				{ severity: "warn" },
+			);
 			return undefined;
 		}
 		try {
@@ -863,6 +893,10 @@ export class AgentRuntime {
 			const note = condensation?.note?.trim();
 			const retrospective = condensation?.retrospective?.trim();
 			if (!note && !retrospective) {
+				this.config.logger?.log?.(
+					`Discarded turn was not condensed: the condenser returned nothing for ${reasoning.length} chars of reasoning and ${text.length} chars of partial reply`,
+					{ severity: "warn" },
+				);
 				return undefined;
 			}
 			this.config.logger?.log?.(
