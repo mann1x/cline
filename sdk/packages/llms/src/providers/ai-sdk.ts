@@ -514,11 +514,55 @@ export async function repairMalformedToolCall<T extends RepairableToolCall>({
 	} catch {
 		// Not valid JSON — attempt repair below.
 	}
+	// A payload cut off inside a value is not malformed, it is incomplete, and
+	// the two want opposite treatment. Closing the quote makes a *valid* call
+	// carrying a truncated value, and nothing downstream can tell that from one
+	// the model meant — so a whole-file write applies the fragment and the file
+	// is gone.
+	//
+	// Measured: a 14,127-byte file was replaced by 572 bytes ending mid-rule at
+	// `top: 50`, with no `<script>` left in it, after the model's rewrite hit
+	// the output cap. Nothing in the log said so, because repairing is silent.
+	// The synthetic case behaves identically — 98B of a 181B document, `ends
+	// "olute; top: 50"`, `has <script>: false`.
+	//
+	// Refusing here returns the SDK's own error for the call, which the model
+	// sees and retries. That costs a turn. Guessing costs the file.
+	if (endsInsideStringLiteral(toolCall.input)) {
+		return null;
+	}
 	const repaired = parseJsonStream(toolCall.input);
 	if (repaired === toolCall.input || typeof repaired === "string") {
 		return null;
 	}
 	return { ...toolCall, input: JSON.stringify(repaired) };
+}
+
+/**
+ * Whether the text stops in the middle of a JSON string literal.
+ *
+ * Only double quotes are tracked, so the malformed shapes repair exists for
+ * still reach it: single-quoted keys never open a string here, and an
+ * unescaped newline inside one does not close it. What this catches is the
+ * one case where a value is missing its end — the shape truncation makes.
+ */
+function endsInsideStringLiteral(input: string): boolean {
+	let inString = false;
+	let escaped = false;
+	for (const char of input) {
+		if (escaped) {
+			escaped = false;
+			continue;
+		}
+		if (char === "\\") {
+			escaped = inString;
+			continue;
+		}
+		if (char === '"') {
+			inString = !inString;
+		}
+	}
+	return inString;
 }
 
 function normalizeAiSdkToolInputSchema(
