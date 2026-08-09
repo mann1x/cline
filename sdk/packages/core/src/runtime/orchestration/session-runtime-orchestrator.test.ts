@@ -2295,24 +2295,28 @@ describe("SessionRuntime.run — tracker wiring (P1 #3)", () => {
 		expect(events[0].properties.agentId).toMatch(/^agent_/);
 	});
 
-	it("aborts on hard-threshold loop detection of identical tool calls", async () => {
-		const identical = (i: number): AgentRuntimeEvent => ({
-			type: "tool-started",
-			iteration: i,
-			toolCall: {
-				type: "tool-call",
-				toolCallId: `tc${i}`,
-				toolName: "same",
-				input: { a: 1 },
-			},
-			snapshot: makeSnapshot(),
-		});
+	// One hard verdict is a last warning, not a stop. Measured on a 34-iteration
+	// run that had made nine edits and six checks in twenty-four minutes and was
+	// ended by a single repeated `editor` call: every soft warning counted
+	// strikes down, and then the run ended without the model ever being told the
+	// countdown had run out.
+	const identicalCall = (i: number): AgentRuntimeEvent => ({
+		type: "tool-started",
+		iteration: i,
+		toolCall: {
+			type: "tool-call",
+			toolCallId: `tc${i}`,
+			toolName: "same",
+			input: { a: 1 },
+		},
+		snapshot: makeSnapshot(),
+	});
+
+	const runIdenticalCalls = async (count: number) => {
 		const { deps, abortCalls } = makeScriptedRuntime({
 			events: [
 				{ type: "turn-started", iteration: 1, snapshot: makeSnapshot() },
-				identical(1),
-				identical(1),
-				identical(1),
+				...Array.from({ length: count }, (_, i) => identicalCall(i + 1)),
 			],
 		});
 		const session = new SessionRuntime(
@@ -2325,7 +2329,22 @@ describe("SessionRuntime.run — tracker wiring (P1 #3)", () => {
 			deps,
 		);
 		await session.run("loop-me");
+		return abortCalls;
+	};
+
+	it("warns rather than aborting on the first hard loop verdict", async () => {
+		expect(await runIdenticalCalls(3)).toHaveLength(0);
+	});
+
+	it("aborts on the second hard loop verdict, naming the loop", async () => {
+		const abortCalls = await runIdenticalCalls(4);
 		expect(abortCalls.length).toBeGreaterThanOrEqual(1);
+		// The reason has to say a loop stopped it. Reporting a forced stop as
+		// "maximum consecutive mistakes reached (6)" names a limit that was never
+		// approached -- the count here is 2 of 6, and the limit is where a reader
+		// then goes looking.
+		expect(String(abortCalls[0])).toContain("loop");
+		expect(String(abortCalls[0])).not.toContain("(6)");
 	});
 
 	// The warning used to be appended to the conversation store, which the run

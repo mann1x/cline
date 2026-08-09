@@ -22,22 +22,38 @@ export async function resolveMistakeLimitDecision(
 		maxConsecutiveMistakes: number;
 		reason: "api_error" | "invalid_tool_call" | "tool_execution_failed";
 		details?: string;
+		/** The loop guard demanded the stop; the count did not reach the limit. */
+		forced?: boolean;
 	},
 ): Promise<
 	| { action: "continue"; guidance?: string }
 	| { action: "stop"; reason?: string }
 > {
-	const yoloEnabled = config.toolPolicies["*"]?.autoApprove !== false;
-	if (yoloEnabled) {
-		return {
-			action: "stop",
-			reason: `max consecutive mistakes reached (${context.maxConsecutiveMistakes}) in yolo mode`,
-		};
-	}
 	const detail = context.details?.trim();
 	const summary = detail
 		? `${context.reason}: ${detail}`
 		: `${context.reason} at iteration ${context.iteration}`;
+	// Two different things end a run here and they used to read as one. A forced
+	// stop is the loop guard: the count is whatever it happens to be, usually 1,
+	// and reporting it as "max consecutive mistakes reached (6)" describes a
+	// limit that was never approached. Measured: a run stopped by a repeated
+	// `editor` call reported the mistake limit at one recorded mistake, and the
+	// limit is where I went looking.
+	const stopReason = context.forced
+		? `repeated-call loop guard stopped the run at iteration ${context.iteration}${detail ? `: ${detail}` : ""}`
+		: `max consecutive mistakes reached (${context.consecutiveMistakes}/${context.maxConsecutiveMistakes})`;
+	const yoloEnabled = config.toolPolicies["*"]?.autoApprove !== false;
+	if (yoloEnabled) {
+		return {
+			action: "stop",
+			reason: context.forced ? stopReason : `${stopReason} in yolo mode`,
+		};
+	}
+	if (context.forced) {
+		// Not a question. The guard has already spent its warning and the model
+		// sent the same call anyway; there is nothing for an answer to change.
+		return { action: "stop", reason: stopReason };
+	}
 	if (!process.stdin.isTTY || !process.stdout.isTTY) {
 		return {
 			action: "stop",

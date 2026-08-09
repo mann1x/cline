@@ -171,8 +171,14 @@ export function checkRepeatedToolCall(
  * - `"ok"`   — no repeated call detected.
  * - `"soft"` — soft-warning threshold reached; SessionRuntime may surface a
  *              recovery notice but should not block the call.
- * - `"hard"` — hard-escalation threshold reached; SessionRuntime should
- *              stop the run with the provided `message`.
+ * - `"hard"` — hard-escalation threshold reached; SessionRuntime decides what
+ *              follows from it.
+ *
+ * `message` is the diagnosis only, never the consequence. What happens next is
+ * the consumer's to decide and to word: the first hard verdict is delivered to
+ * the model as a last warning and the run continues, so a message that ended
+ * "stopping to avoid a loop" would have described something that did not
+ * happen. See `inspectLoopForToolCall` in the session orchestrator.
  */
 export interface LoopDetectionVerdict {
 	kind: "ok" | "soft" | "hard";
@@ -251,7 +257,7 @@ export class LoopDetectionTracker {
 			}
 			return {
 				kind: "hard",
-				message: `This exact call to \`${call.name}\` was refused ${strike} times because what it sends is character-for-character what the file already holds. The arguments are unchanged, so the result cannot be either. Stopping to avoid a loop — the fix belongs somewhere other than this call: a different range, different text, or a different tool.`,
+				message: `This exact call to \`${call.name}\` was refused ${strike} times because what it sends is character-for-character what the file already holds. The arguments are unchanged, so the result cannot be either — the fix belongs somewhere other than this call: a different range, different text, or a different tool.`,
 			};
 		}
 
@@ -259,7 +265,7 @@ export class LoopDetectionTracker {
 		if (barren >= STRIKE_LIMIT) {
 			return {
 				kind: "hard",
-				message: `This exact call to \`${call.name}\` has already been made ${barren} times and failed every time; stopping to avoid a loop. The arguments have not changed between attempts, so neither will the result — the next attempt needs different arguments or a different tool.`,
+				message: `This exact call to \`${call.name}\` has already been made ${barren} times and failed every time. The arguments have not changed between attempts, so neither will the result — the next attempt needs different arguments or a different tool.`,
 			};
 		}
 		// The same countdown for a call that keeps failing outright. The first
@@ -281,7 +287,7 @@ export class LoopDetectionTracker {
 		if (result.hardEscalation) {
 			return {
 				kind: "hard",
-				message: `Detected ${this.state.consecutiveIdenticalCount} consecutive identical calls to \`${call.name}\`; stopping to avoid a loop.`,
+				message: `Detected ${this.state.consecutiveIdenticalCount} consecutive identical calls to \`${call.name}\`. The arguments have not changed between them, so neither will the result.`,
 			};
 		}
 		if (result.softWarning) {

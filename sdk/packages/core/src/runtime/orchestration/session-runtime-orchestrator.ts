@@ -395,6 +395,26 @@ function mergeRuntimeHooks(
 	};
 }
 
+/**
+ * Hard loop verdicts a session is allowed before the run is stopped. Two: one
+ * warning the model can act on, and then the stop. One is not a warning at all
+ * — it is the stop — and three spends another full strike countdown on a model
+ * that has already ignored one.
+ */
+const LOOP_HARD_ESCALATION_LIMIT = 2;
+
+/**
+ * Appended to the first hard verdict. Deliberately unlike the soft warnings it
+ * follows: those count strikes down, and a model that has ignored the countdown
+ * needs to be told what to do differently, not counted at again.
+ */
+const LOOP_FINAL_WARNING =
+	"This is the last attempt that will be allowed with these arguments — the run stops if the same call comes back. Do not send it again. Change what the call does: a different range, different text, or a different tool. If it is not clear what still needs changing, re-read the file and compare it against what you set out to fix.";
+
+/** Appended to the verdict that stops the run, so the abort names the loop. */
+const LOOP_STOP_NOTICE =
+	"The last warning was already given and the same call came back, so the run is being stopped to avoid a loop.";
+
 // =============================================================================
 // Public types
 // =============================================================================
@@ -446,6 +466,12 @@ export class SessionRuntime {
 	private readonly loopTracker: LoopDetectionTracker;
 	/** Loop-guard warnings awaiting the tool result they belong to. */
 	private readonly pendingLoopWarnings = new Map<string, string>();
+	/**
+	 * Hard loop verdicts seen in this session, counted across tool names rather
+	 * than per call signature. A run that works its way out of one loop and into
+	 * another has not recovered, and the second one gets no second warning.
+	 */
+	private loopHardEscalations = 0;
 	/**
 	 * True when `execution.loopDetection === false` at construction
 	 * time. Loop inspection is skipped entirely — the tracker still
@@ -1520,14 +1546,42 @@ export class SessionRuntime {
 			}
 			return;
 		}
-		// Hard escalation.
+		// Hard escalation. The first one is a last warning, not a stop.
+		//
+		// A hard verdict says the model has ignored the soft warnings, which is
+		// worth acting on but is not the same thing as a run that cannot go
+		// anywhere: measured on a 34-iteration run that had made nine edits and
+		// six checks in twenty-four minutes and was ended by a single repeated
+		// `editor` call, at one recorded mistake out of a limit of six. What that
+		// run never got was an instruction that differed from the ones it had
+		// already ignored — every soft warning counted strikes down, and then the
+		// run ended without the model being told the countdown had run out.
+		//
+		// So the first hard verdict changes what the model is told, rather than
+		// only how the run ends: the diagnosis plus an explicit last warning,
+		// delivered through the tool result, and the call still runs. It costs one
+		// consecutive mistake like any other, so it also counts toward the limit.
+		// The next hard verdict stops the run, and says the loop is why.
+		const diagnosis =
+			verdict.message ?? `Detected repeated tool calls to \`${toolName}\`.`;
+		this.loopHardEscalations += 1;
+		if (this.loopHardEscalations < LOOP_HARD_ESCALATION_LIMIT) {
+			this.pendingLoopWarnings.set(
+				toolCallId,
+				`${diagnosis}\n\n${LOOP_FINAL_WARNING}`,
+			);
+			this.enqueueMistakeRecord({
+				iteration,
+				reason: "tool_execution_failed",
+				details: diagnosis,
+			});
+			return;
+		}
 		this.enqueueMistakeRecord({
 			iteration,
 			reason: "tool_execution_failed",
 			forceAtLimit: true,
-			details:
-				verdict.message ??
-				`Detected repeated tool calls to \`${toolName}\`; stopping to avoid a loop.`,
+			details: `${diagnosis} ${LOOP_STOP_NOTICE}`,
 		});
 	}
 

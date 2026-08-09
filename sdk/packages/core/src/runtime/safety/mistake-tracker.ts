@@ -228,9 +228,13 @@ async function resolveConsecutiveMistakeDecision(
 		| ConsecutiveMistakeLimitDecision,
 ): Promise<ConsecutiveMistakeLimitDecision> {
 	if (!callback) {
+		// A host that names no decision still gets told which of the two happened:
+		// a forced stop is the loop guard, and its count is not the limit.
 		return {
 			action: "stop",
-			reason: `maximum consecutive mistakes reached (${input.maxConsecutiveMistakes})`,
+			reason: input.forced
+				? `repeated-call loop guard stopped the run at iteration ${input.iteration}`
+				: `maximum consecutive mistakes reached (${input.maxConsecutiveMistakes})`,
 		};
 	}
 	try {

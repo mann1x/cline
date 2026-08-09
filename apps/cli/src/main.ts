@@ -1023,6 +1023,13 @@ export async function runCli(): Promise<void> {
 						...(knownModels?.[resolvedModelId] ?? {}),
 						id: resolvedModelId,
 						contextWindow: declared,
+						// Cleared, not set. `resolveEffectiveMaxInputTokens` takes
+						// `min(maxInputTokens, contextWindow)` when it has both, so a
+						// stale catalog figure would quietly cap the window the model
+						// just declared. With only the window it derives the input
+						// budget as `window * 0.9`, which is the intended share —
+						// setting this to the window instead would overstate it.
+						maxInputTokens: undefined,
 					},
 				};
 			}
@@ -1066,7 +1073,10 @@ export async function runCli(): Promise<void> {
 				mode: effectiveMode,
 			}),
 			execution: {
-				maxConsecutiveMistakes: args.retries ?? 3,
+				// 6, which is what `--retries` has always documented. The code said
+				// 3, so every run that did not pass the flag got half the budget the
+				// help text promised.
+				maxConsecutiveMistakes: args.retries ?? 6,
 			},
 			checkpoint: CLI_DEFAULT_CHECKPOINT_CONFIG,
 			compaction: buildCliCompactionConfig(effectiveCompactionMode),
