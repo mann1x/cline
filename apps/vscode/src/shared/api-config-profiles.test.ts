@@ -5,6 +5,7 @@ import {
 	MAX_PROFILE_NAME_LENGTH,
 	parseApiConfigurationProfiles,
 	parseApiConfigurationSnapshot,
+	profileProviderSettingsFor,
 	proposeProfileName,
 	removeApiConfigurationProfile,
 	serializeApiConfigurationProfiles,
@@ -163,5 +164,68 @@ describe("parseApiConfigurationSnapshot", () => {
 		expect(parseApiConfigurationSnapshot("")).toBeUndefined()
 		expect(parseApiConfigurationSnapshot("garbage")).toBeUndefined()
 		expect(parseApiConfigurationSnapshot("[1,2]")).toBeUndefined()
+	})
+})
+
+describe("profileProviderSettingsFor", () => {
+	// `providers.json` keeps one entry per provider, and Plan and Act are in
+	// force at the same time — so two profiles on the *same* provider had one
+	// place between them to hold a context window. Whichever was loaded last
+	// won and the other quietly ran on its number, which is the setting
+	// behaving as a global one however the panel looked.
+	const profiles = JSON.stringify([
+		{
+			name: "big",
+			updatedAt: 2,
+			snapshot: {
+				global: {},
+				mode: { apiProvider: "ollama" },
+				providerConfig: { contextWindow: 128_000 },
+			},
+		},
+		{
+			name: "small",
+			updatedAt: 1,
+			snapshot: {
+				global: {},
+				mode: { apiProvider: "ollama" },
+				providerConfig: { contextWindow: 8_192 },
+			},
+		},
+	])
+
+	it("gives each scope its own window on one provider", () => {
+		const active = JSON.stringify({ plan: "big", act: "small" })
+
+		expect(profileProviderSettingsFor(profiles, active, "plan")).toEqual({
+			contextWindow: 128_000,
+		})
+		expect(profileProviderSettingsFor(profiles, active, "act")).toEqual({
+			contextWindow: 8_192,
+		})
+	})
+
+	it("matches a profile name regardless of case", () => {
+		expect(profileProviderSettingsFor(profiles, JSON.stringify({ act: "BIG" }), "act")).toEqual({
+			contextWindow: 128_000,
+		})
+	})
+
+	// `undefined` rather than `{}`: an empty override tells the resolvers this
+	// scope owns an empty entry, which would stop a user with no profiles at
+	// all from getting the behaviour they have today.
+	it.each([
+		["no profile is active for the scope", profiles, JSON.stringify({ act: "small" }), "plan"],
+		["the named profile is gone", profiles, JSON.stringify({ act: "deleted" }), "act"],
+		[
+			"the profile carries no provider settings",
+			JSON.stringify([{ name: "bare", updatedAt: 1, snapshot: { global: {}, mode: {} } }]),
+			JSON.stringify({ act: "bare" }),
+			"act",
+		],
+		["nothing is stored at all", undefined, undefined, "act"],
+		["the stored value is not JSON", "garbage", "garbage", "act"],
+	])("reports nothing when %s", (_label, profilesRaw, activeRaw, scope) => {
+		expect(profileProviderSettingsFor(profilesRaw, activeRaw, scope)).toBeUndefined()
 	})
 })

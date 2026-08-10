@@ -1353,6 +1353,14 @@ export class AgentRuntime {
 				messages: cloneMessages(this.state.messages),
 				usage: cloneUsage(this.state.usage),
 				error: status === "failed" ? normalized : undefined,
+				// The abort carries its reason in the error it was aborted with, and
+				// dropping it here left the CLI to infer one from two booleans: no
+				// timeout and no local abort, therefore "aborted by another client".
+				// There is no other client in a headless run. Measured: a run stopped
+				// by the mistake limit — `consecutive mistakes reached (6/6) in yolo
+				// mode` in the runtime log — reported `external_abort` on the JSON
+				// stream, which is what anything machine-readable had to go on.
+				abortReason: status === "aborted" ? normalized.message : undefined,
 			};
 			// The name and message go in the text, not only in the metadata below.
 			// Hosts routinely drop structured log arguments — the VS Code host

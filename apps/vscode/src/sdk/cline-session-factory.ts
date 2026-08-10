@@ -33,6 +33,7 @@ import {
 } from "@cline/llms"
 import { type AgentHooks, buildClineSystemPrompt, type RenderedPromptTemplate } from "@cline/shared"
 import type { ApiConfiguration } from "@shared/api"
+import { profileProviderSettingsFor } from "@shared/api-config-profiles"
 import { ClineClient } from "@shared/cline"
 import type { HistoryItem } from "@shared/HistoryItem"
 import { DEFAULT_LANGUAGE_SETTINGS, getLanguageKey, type LanguageDisplay } from "@shared/Languages"
@@ -1035,7 +1036,22 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 				// afterwards; a server that will not answer leaves the previous
 				// behaviour exactly as it was.
 				await primeDeclaredNumCtx(apiConfig.ollamaBaseUrl, modelId, fetch)
-				ollamaProviderConfig = resolveOllamaProviderConfig(apiConfig, modelId)
+				// The window belongs to the profile in force for this mode, not to
+				// the provider. `providers.json` has one entry per provider, and
+				// Plan and Act are in force at the same time — so two profiles on
+				// the same provider had one place between them to keep a context
+				// window, whichever was loaded last won, and the other quietly ran
+				// on that number. A profile already carries these fields in its
+				// snapshot; this is what reads them back per scope.
+				const profileSettings = profileProviderSettingsFor(
+					stateManager.getGlobalSettingsKey("apiConfigurationProfiles"),
+					stateManager.getGlobalSettingsKey("activeApiConfigurationProfile"),
+					mode,
+				)
+				if (profileSettings) {
+					Logger.log(`[SessionFactory] Provider settings for ${mode} came from its profile, not the shared entry`)
+				}
+				ollamaProviderConfig = resolveOllamaProviderConfig(apiConfig, modelId, profileSettings)
 			}
 
 			Logger.log(

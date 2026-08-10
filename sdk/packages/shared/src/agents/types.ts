@@ -650,6 +650,14 @@ export interface AgentResult {
 	iterations: number;
 	/** Why the agent stopped */
 	finishReason: AgentFinishReason;
+	/**
+	 * What aborted the run, when `finishReason` is `aborted` and something said.
+	 *
+	 * A host cannot work this out for itself: the causes it can see locally are
+	 * a timeout and its own abort call, so everything else came out as "another
+	 * client" — including a stop the run itself asked for.
+	 */
+	abortReason?: string;
 	/** Model information used */
 	model: {
 		id: string;

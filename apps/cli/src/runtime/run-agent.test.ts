@@ -323,6 +323,64 @@ describe("runAgent", () => {
 		}
 	});
 
+	// "external" named a second client that cannot exist in a headless run. A
+	// run stopped by its own mistake limit came out as `external_abort` with
+	// "aborted by another client", while the honest reason sat in the runtime
+	// log — so anything reading the JSON stream was sent to the wrong layer.
+	it("reports the reason a run gave for stopping, not a guess", async () => {
+		const startedAt = new Date("2026-03-22T00:00:00.000Z");
+		const endedAt = new Date("2026-03-22T00:00:01.000Z");
+		sessionManagerMocks.start.mockResolvedValue({
+			sessionId: "session-1",
+			manifestPath: "/tmp/manifest.json",
+			messagesPath: "/tmp/messages.json",
+			manifest: { session_id: "session-1" },
+			result: {
+				text: "",
+				usage: {
+					inputTokens: 1,
+					outputTokens: 1,
+					cacheReadTokens: 0,
+					cacheWriteTokens: 0,
+					totalCost: undefined,
+				},
+				messages: [],
+				toolCalls: [],
+				iterations: 6,
+				finishReason: "aborted",
+				abortReason: "max consecutive mistakes reached (6/6) in yolo mode",
+				model: { id: "m", provider: "ollama", info: {} },
+				startedAt,
+				endedAt,
+				durationMs: 1000,
+			},
+		});
+
+		const { runAgent } = await import("./run-agent");
+		await runAgent("prompt", {
+			cwd: process.cwd(),
+			enableTools: [],
+			execution: { maxConsecutiveMistakes: 6 },
+			logger: undefined,
+			mode: "act",
+			modelId: "m",
+			outputMode: "json",
+			providerId: "ollama",
+			systemPrompt: "system",
+			thinking: false,
+			toolPolicies: { "*": { autoApprove: true } },
+			verbose: false,
+			workspaceRoot: process.cwd(),
+		} as never);
+
+		// The wording is `describeAbortSource`'s job and is mocked here; what this
+		// layer decides is the classification, and `external` was the lie.
+		expect(outputMocks.emitJsonLine).toHaveBeenCalledWith(
+			"stdout",
+			expect.objectContaining({ type: "run_aborted", reason: "stopped" }),
+		);
+	});
+
 	it("registers CLI capability factory through the CLI core facade", async () => {
 		const startedAt = new Date("2026-03-22T00:00:00.000Z");
 		const endedAt = new Date("2026-03-22T00:00:01.000Z");

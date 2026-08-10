@@ -701,4 +701,15 @@ export interface AgentRunResult {
 	messages: readonly AgentMessage[];
 	usage: AgentUsage;
 	error?: Error;
+	/**
+	 * Why an aborted run was aborted, when something said so.
+	 *
+	 * Kept apart from `error`, which means the run *failed*: an abort is a stop
+	 * that was asked for, and a consumer treating the two alike would report a
+	 * mistake limit as a crash. Carried because the reason was being thrown away
+	 * exactly when it was the only thing that could explain the stop — the
+	 * runtime aborts with a message, and every host downstream had to infer a
+	 * cause from booleans it happened to hold.
+	 */
+	abortReason?: string;
 }

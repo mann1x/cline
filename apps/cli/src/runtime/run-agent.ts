@@ -403,14 +403,27 @@ export async function runAgent(
 					});
 				}
 			} else if (config.outputMode === "json") {
+				// `external_abort` only when nothing else accounts for the stop. A
+				// run that ended on its own mistake limit is not external to
+				// anything, and calling it that sent every JSON consumer looking
+				// for a second client that does not exist.
+				const abortReason = result?.abortReason;
 				emitJsonLine("stdout", {
 					type: "run_aborted",
-					reason: abortRequested ? "local_abort" : "external_abort",
-					message: describeAbortSource({ abortRequested, timedOut }),
+					reason: abortRequested
+						? "local_abort"
+						: abortReason
+							? "stopped"
+							: "external_abort",
+					message: describeAbortSource({
+						abortRequested,
+						timedOut,
+						abortReason,
+					}),
 				});
 			} else {
 				writeln(
-					`${c.dim}[abort] ${describeAbortSource({ abortRequested, timedOut })}${c.reset}`,
+					`${c.dim}[abort] ${describeAbortSource({ abortRequested, timedOut, abortReason: result?.abortReason })}${c.reset}`,
 				);
 			}
 			writeln();

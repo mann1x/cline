@@ -1678,6 +1678,12 @@ export class SessionRuntime {
 			toolCalls: this.currentRunToolCalls,
 			iterations: runResult?.iterations ?? 0,
 			finishReason,
+			// Carried across so a host has something better than a guess. The stop
+			// reason is set by whatever asked for the abort — the mistake tracker
+			// passes `outcome.reason` into `abort()` — and it stopped here.
+			...(runResult?.abortReason
+				? { abortReason: runResult.abortReason }
+				: {}),
 			model: {
 				id: this.config.modelId,
 				provider: this.config.providerId,

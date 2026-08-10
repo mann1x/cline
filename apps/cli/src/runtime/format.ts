@@ -4,12 +4,23 @@ import type { Config } from "../utils/types";
 export function describeAbortSource(input: {
 	abortRequested: boolean;
 	timedOut: boolean;
+	/** What the run said stopped it, when it said anything. */
+	abortReason?: string;
 }): string {
 	if (input.timedOut) {
 		return "aborted after timeout";
 	}
 	if (input.abortRequested) {
 		return "aborted";
+	}
+	// Whatever the run itself reported beats a guess drawn from the two causes
+	// this process happens to know about. Without it, a run stopped by its own
+	// mistake limit was reported as "aborted by another client" — in a headless
+	// run there is no other client, and the honest reason was sitting in the
+	// runtime log while the machine-readable stream carried the invention.
+	const reason = input.abortReason?.trim();
+	if (reason) {
+		return reason;
 	}
 	return "aborted by another client";
 }

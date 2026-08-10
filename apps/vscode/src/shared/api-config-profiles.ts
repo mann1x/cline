@@ -169,3 +169,64 @@ export function findApiConfigurationProfile(
 ): ApiConfigurationProfile | undefined {
 	return profiles.find((entry) => entry.name.toLowerCase() === name.toLowerCase())
 }
+
+/**
+ * Which profile each scope is showing: `{ plan, act, vision }`.
+ *
+ * Stored as one JSON object rather than a name per scope because loading a
+ * profile into Vision says nothing about what Plan and Act are holding, and a
+ * single name showed the wrong one on two tabs out of three.
+ */
+export function parseActiveProfileNames(raw: string | undefined): Record<string, string> {
+	if (!raw) {
+		return {}
+	}
+	try {
+		const parsed: unknown = JSON.parse(raw)
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+			return {}
+		}
+		const names: Record<string, string> = {}
+		for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+			if (typeof value === "string") {
+				names[key] = value
+			}
+		}
+		return names
+	} catch {
+		return {}
+	}
+}
+
+/**
+ * The provider settings the profile in force for a scope carries.
+ *
+ * `providers.json` holds one entry per provider, so two profiles on the *same*
+ * provider have one place between them to keep a context window — and Plan and
+ * Act are in force at the same time. Whichever was loaded last won, and the
+ * other silently ran on its number: the setting behaved as a global one no
+ * matter what the panel showed.
+ *
+ * A profile already carries these fields in its snapshot, which is what makes
+ * them separable at all. Reading them per scope is what stops one profile's
+ * window standing in for another's. Returns `undefined` — not `{}` — when there
+ * is no profile or it carries nothing, because an empty override means "this
+ * scope owns an empty entry" to the resolvers downstream, and a user with no
+ * profiles at all must keep the behaviour they had.
+ */
+export function profileProviderSettingsFor(
+	profilesRaw: string | undefined,
+	activeRaw: string | undefined,
+	scopeKey: string,
+): Record<string, unknown> | undefined {
+	const name = parseActiveProfileNames(activeRaw)[scopeKey]
+	if (!name) {
+		return undefined
+	}
+	const profile = findApiConfigurationProfile(parseApiConfigurationProfiles(profilesRaw), name)
+	const held = (profile?.snapshot as { providerConfig?: unknown } | undefined)?.providerConfig
+	if (!held || typeof held !== "object" || Object.keys(held as object).length === 0) {
+		return undefined
+	}
+	return held as Record<string, unknown>
+}
