@@ -1,9 +1,10 @@
 import type { AgentImageToDescribe } from "@cline/shared"
 import type { ApiConfiguration } from "@shared/api"
 import { parseApiConfigurationSnapshot } from "@shared/api-config-profiles"
-import { applyApiConfigurationSnapshot } from "@shared/api-config-snapshot"
+import { type ApiConfigurationSnapshot, applyApiConfigurationSnapshot } from "@shared/api-config-snapshot"
 import { snapshotProviderId } from "@shared/model-scope-config"
 import { Logger } from "@shared/services/Logger"
+import { getProviderModelIdKey } from "@shared/storage/provider-keys"
 import { SecretKeys } from "@shared/storage/state-keys"
 import { buildApiHandler } from "./sdk-api-handler"
 
@@ -60,7 +61,45 @@ export function buildScopedApiConfiguration(
 	for (const key of SecretKeys as readonly string[]) {
 		secrets[key] = (primary as Record<string, unknown> | undefined)?.[key]
 	}
+	// The picker's model, written into the keys the handler reads.
+	//
+	// Two fields name the model of a scoped tab: `providerConfig.selectedModelId`,
+	// which the tab's picker writes, and the mode keys, which are what
+	// `buildApiHandler` reads. Nothing kept them in step, and the picker's copy
+	// was passed on separately as provider settings -- where it supplies the
+	// context window and the sampler, and never the model.
+	//
+	// Measured on a snapshot a tester dumped (#43): `selectedModelId` was his
+	// vision model and `mode.ollamaModelId` was the primary one, DeepSeek, which
+	// cannot read images. So the describer was built, logged the picked model's
+	// name -- that line reads `selectedModelId` -- and sent every request to
+	// DeepSeek, which refused it. The image was then dropped and the run carried
+	// on: "it says it removed the image from the context and then just keeps
+	// going", reported against four builds in a row.
+	//
+	// Only when the picker names something. A tab configured through the settings
+	// fields alone has no `selectedModelId`, and its mode keys are the only thing
+	// naming a model.
+	const pickedModelId = snapshotModelIdFromPicker(snapshot)
+	const provider = snapshotProviderId(storedSnapshot)
+	if (pickedModelId && provider) {
+		settings[getProviderModelIdKey(provider, "act")] = pickedModelId
+		settings[getProviderModelIdKey(provider, "plan")] = pickedModelId
+	}
 	return { ...secrets, ...settings } as ApiConfiguration
+}
+
+/**
+ * The model a tab's picker wrote, and only that.
+ *
+ * Deliberately not `snapshotModelId`, which falls back to the mode keys: here
+ * the mode keys are what is being corrected, so a fallback to them would make
+ * this a no-op in exactly the case it exists for.
+ */
+function snapshotModelIdFromPicker(snapshot: ApiConfigurationSnapshot): string | undefined {
+	const held = snapshot.providerConfig as Record<string, unknown> | undefined
+	const selected = held?.selectedModelId
+	return typeof selected === "string" && selected ? selected : undefined
 }
 
 /** The vision model's configuration. See `buildScopedApiConfiguration`. */

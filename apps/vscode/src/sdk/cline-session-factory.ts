@@ -49,6 +49,7 @@ import {
 	snapshotProviderSettings,
 } from "@shared/model-scope-config"
 import { Logger } from "@shared/services/Logger"
+import { getProviderModelIdKey } from "@shared/storage/provider-keys"
 import type { Settings } from "@shared/storage/state-keys"
 import type { Mode } from "@shared/storage/types"
 import { reasoningEffortFromThinkingBudget } from "@shared/utils/reasoning-support"
@@ -1449,10 +1450,22 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 			}; images will not be described`,
 		)
 	} else if (visionApiConfiguration) {
+		// The model *and* the window it will run with. The model line alone read
+		// correct through four builds of #43 while every request went to the
+		// primary model: it printed the tab's picker, and the handler read the
+		// mode keys, and nothing said the two disagreed. They are reconciled in
+		// `buildScopedApiConfiguration` now, and this prints what was resolved
+		// rather than what was picked, so a future disagreement shows here.
+		const visionProvider = visionSnapshotProviderId(visionSnapshot)
+		const resolvedVisionModel = visionProvider
+			? ((visionApiConfiguration as Record<string, unknown>)[getProviderModelIdKey(visionProvider, "act")] as
+					| string
+					| undefined)
+			: undefined
+		const visionContextWindow = visionProviderSettings?.contextWindow
 		Logger.log(
-			`[Vision] Describer installed: provider=${visionSnapshotProviderId(visionSnapshot)} model=${
-				(visionProviderSettings?.selectedModelId as string | undefined) ?? "unset"
-			}`,
+			`[Vision] Describer installed: provider=${visionProvider} model=${resolvedVisionModel ?? "unset"}` +
+				(typeof visionContextWindow === "number" ? ` contextWindow=${visionContextWindow}` : ""),
 		)
 	}
 
