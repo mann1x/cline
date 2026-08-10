@@ -442,6 +442,17 @@ export type RemoteConfigFields = GlobalStateAndSettings & RemoteConfigExtra
 // TYPE ALIASES
 // ============================================================================
 
+/**
+ * Secrets that are not part of any provider's configuration.
+ *
+ * `ApiHandlerSettings` is `ApiHandlerOptionSettings & Secrets`, and the API
+ * configuration is sent to the webview inside `state_json`. So a key added here
+ * for storage alone would travel out with it — which for a QA credential is the
+ * exact leak the feature exists to prevent. These are stored the same way and
+ * left out of the API configuration, because they are not one.
+ */
+export const NonApiHandlerSecretKeys = new Set<string>(["qaCredentials"])
+
 export type Secrets = { [K in (typeof SecretKeys)[number]]: string | undefined }
 export type LocalState = { [K in (typeof LocalStateKeys)[number]]: ClineRulesToggles }
 export type SecretKey = (typeof SecretKeys)[number]

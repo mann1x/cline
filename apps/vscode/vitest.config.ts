@@ -12,6 +12,7 @@ export default defineConfig({
 			"src/shared/vsCodeSelectorUtils.test.ts",
 			"src/shared/services/log-file-sink.test.ts",
 			"src/shared/api-config-snapshot.test.ts",
+			"src/shared/storage/non-api-handler-secrets.test.ts",
 			"src/shared/api-config-profiles.test.ts",
 			"src/shared/vision-config.test.ts",
 			"src/shared/proto-conversions/models/**/*.test.ts",
