@@ -99,6 +99,8 @@ export interface ParsedArgs {
 	agentsModel?: string;
 	/** Context window for that model. A string: it arrives from the flag. */
 	agentsNumCtx?: string;
+	/** Concurrent requests this endpoint serves. A string, from the flag. */
+	parallelSessions?: string;
 	cwd?: string;
 	teamName?: string;
 	defaultToolAutoApprove: boolean;

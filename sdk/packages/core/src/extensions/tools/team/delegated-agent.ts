@@ -10,6 +10,7 @@ import type {
 	ToolApprovalResult,
 } from "@cline/shared";
 import { SessionRuntime } from "../../../runtime/orchestration/session-runtime-orchestrator";
+import type { AgentSlotGate } from "./agent-slot-gate";
 import {
 	buildSubAgentSystemPrompt,
 	buildTeammateSystemPrompt,
@@ -47,6 +48,16 @@ export interface DelegatedAgentRuntimeConfig
 	logger?: BasicLogger;
 	telemetry?: ITelemetryService;
 	workspaceMetadata?: string;
+	/**
+	 * Holds delegated agents to the number of requests their endpoint serves.
+	 *
+	 * Carried here because it is the one thing every spawn path already shares:
+	 * the team runtime, the lead's `spawn_agent`, and a sub-agent spawning its
+	 * own all read this provider, so one gate covers them without any of them
+	 * knowing about the others. Omitted means no gate -- see
+	 * `createAgentSlotGate` for when that is the right answer.
+	 */
+	slotGate?: AgentSlotGate;
 }
 
 export interface DelegatedAgentConfigProvider {

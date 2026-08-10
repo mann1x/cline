@@ -31,6 +31,7 @@ import {
 	OLLAMA_DEFAULT_REASONING_EFFORT,
 	primeDeclaredNumCtx,
 	readDeclaredNumCtx,
+	resolveAgentSlotLimit,
 } from "@cline/llms"
 import { type AgentHooks, buildClineSystemPrompt, type RenderedPromptTemplate } from "@cline/shared"
 import type { ApiConfiguration } from "@shared/api"
@@ -961,6 +962,23 @@ export function composeSessionHooks(
 }
 
 /**
+ * The parallel-session count stored on the shared provider entry.
+ *
+ * Only consulted when no profile is in force for the scope: a profile that
+ * carries the field owns it, in the same way it owns the context window.
+ */
+function readStoredParallelSessions(providerId: string | undefined): unknown {
+	if (!providerId) {
+		return undefined
+	}
+	try {
+		return getProviderSettingsManager().getProviderSettings(providerId)?.parallelSessions
+	} catch {
+		return undefined
+	}
+}
+
+/**
  * The connection subagents and teammates run on, from the Agents tab.
  *
  * Resolved the same way the session's own connection is, from the tab's stored
@@ -1064,6 +1082,11 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	let vertexProviderConfig: Pick<ProviderSettings, "gcp" | "region"> | undefined
 	let sapProviderConfig: SapProviderConfig | undefined
 	let ollamaProviderConfig: ReturnType<typeof resolveOllamaProviderConfig> | undefined
+	// The provider settings the profile in force for this mode carries, or
+	// `undefined` when this mode is running on the shared providers.json entry.
+	// Hoisted because two things read it now: the Ollama context window, and the
+	// parallel-session count, which every provider has.
+	let profileSettings: Record<string, unknown> | undefined
 
 	try {
 		const stateManager = StateManager.get()
@@ -1077,6 +1100,21 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		providerId = modeProvider ? toLegacyApiProvider(modeProvider) : modeProvider
 
 		if (providerId) {
+			// The window and the slot count belong to the profile in force for this
+			// mode, not to the provider. `providers.json` has one entry per provider,
+			// and Plan and Act are in force at the same time — so two profiles on the
+			// same provider had one place between them, whichever was loaded last won,
+			// and the other quietly ran on that number. A profile already carries
+			// these fields in its snapshot; this is what reads them back per scope.
+			profileSettings = profileProviderSettingsFor(
+				stateManager.getGlobalSettingsKey("apiConfigurationProfiles"),
+				stateManager.getGlobalSettingsKey("activeApiConfigurationProfile"),
+				mode,
+			)
+			if (profileSettings) {
+				Logger.log(`[SessionFactory] Provider settings for ${mode} came from its profile, not the shared entry`)
+			}
+
 			// Resolve API key
 			apiKey = resolveApiKey(providerId, apiConfig)
 
@@ -1114,21 +1152,6 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 				// afterwards; a server that will not answer leaves the previous
 				// behaviour exactly as it was.
 				await primeDeclaredNumCtx(apiConfig.ollamaBaseUrl, modelId, fetch)
-				// The window belongs to the profile in force for this mode, not to
-				// the provider. `providers.json` has one entry per provider, and
-				// Plan and Act are in force at the same time — so two profiles on
-				// the same provider had one place between them to keep a context
-				// window, whichever was loaded last won, and the other quietly ran
-				// on that number. A profile already carries these fields in its
-				// snapshot; this is what reads them back per scope.
-				const profileSettings = profileProviderSettingsFor(
-					stateManager.getGlobalSettingsKey("apiConfigurationProfiles"),
-					stateManager.getGlobalSettingsKey("activeApiConfigurationProfile"),
-					mode,
-				)
-				if (profileSettings) {
-					Logger.log(`[SessionFactory] Provider settings for ${mode} came from its profile, not the shared entry`)
-				}
 				ollamaProviderConfig = resolveOllamaProviderConfig(apiConfig, modelId, profileSettings)
 			}
 
@@ -1422,6 +1445,26 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 			`[Agents] Delegated agents configured: provider=${delegatedAgentConnection.providerId} model=${delegatedAgentConnection.modelId}`,
 		)
 	}
+
+	// How many agents this endpoint will actually serve at once. Asked of the
+	// endpoint the *agents* call, which is not always the session's: an Agents
+	// tab pointed at a second server has that server's slots, not the lead's.
+	//
+	// The number is configured rather than discovered because it is not on the
+	// wire — Ollama does not report `OLLAMA_NUM_PARALLEL`, and a hosted plan's
+	// concurrency allowance is not published — and the cost of getting it wrong
+	// is silent: a server with no free slot queues the request instead of
+	// refusing it, so over-spawning reads as a slow run rather than a blocked
+	// one.
+	const agentSlots = await resolveAgentSlotLimit({
+		providerId: delegatedAgentConnection?.providerId ?? toSdkProviderId(providerId ?? ""),
+		baseUrl: delegatedAgentConnection?.baseUrl ?? baseUrl,
+		parallelSessions: delegatedAgentConnection
+			? snapshotProviderSettings(agentsSnapshot)?.parallelSessions
+			: (profileSettings?.parallelSessions ?? readStoredParallelSessions(providerId)),
+		fetch,
+	})
+	Logger.log(`[Agents] Concurrency: ${agentSlots.limit === 0 ? "uncapped" : agentSlots.limit} — ${agentSlots.reason}`)
 	const useAutoCondense = input.taskSettings?.useAutoCondense ?? globalUseAutoCondense
 
 	// Core resolves providers against the SDK registry, which uses the SDK's
@@ -1560,6 +1603,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		// otherwise falls back to a conservative 64k input budget.
 		...(knownModels && Object.keys(knownModels).length > 0 ? { knownModels } : {}),
 		...(delegatedAgentConnection ? { delegatedAgentConnection } : {}),
+		maxConcurrentAgents: agentSlots.limit,
 		cwd,
 		workspaceRoot,
 		systemPrompt,

@@ -411,6 +411,22 @@ export interface CoreSessionConfig
 	 * `DelegatedAgentConnectionOverride`.
 	 */
 	delegatedAgentConnection?: DelegatedAgentConnectionOverride;
+	/**
+	 * Most delegated agents that may run at once against their endpoint.
+	 *
+	 * Resolved by the host, because answering it can mean asking the server: a
+	 * local one has a fixed number of slots (`OLLAMA_NUM_PARALLEL`,
+	 * `--parallel N`) and *queues* the request that finds none free rather than
+	 * refusing it, so over-spawning reads as a slow run rather than a blocked
+	 * one. Hosted providers have the same shape with a plan's allowance in place
+	 * of slots.
+	 *
+	 * `0` means no cap of ours -- not "unlimited", but "something else decides":
+	 * opencoti with PolyKV on, where agents share a slot and admission control
+	 * answers against measured KV headroom. `undefined` means no host resolved
+	 * one at all, which leaves every previous behaviour exactly as it was.
+	 */
+	maxConcurrentAgents?: number;
 	workspaceRoot?: string;
 	systemPrompt: string;
 	teamName?: string;

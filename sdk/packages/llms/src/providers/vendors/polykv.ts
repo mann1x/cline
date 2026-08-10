@@ -180,6 +180,63 @@ export function resetPolykvSessions(): void {
 	POLYKV_SESSIONS.clear();
 }
 
+/** Answered `/polykv/pools` once per server, so a session asks at most once. */
+const POLYKV_AVAILABILITY = new Map<string, Promise<boolean>>();
+
+/**
+ * Whether this server has PolyKV turned on.
+ *
+ * The engine registers the `/polykv/*` routes only when it was launched with
+ * `--polykv-max-pools N`; without the flag the control plane is not there at
+ * all and the status route 404s. So the presence of `GET /polykv/pools` is the
+ * answer, and there is no separate capability endpoint to keep in step with the
+ * launch flags.
+ *
+ * It matters because PolyKV changes what a slot *is*. Without it a server has
+ * `--parallel N` slots and an N+1st request waits; with it agents attach to a
+ * pool and share a slot, and whether one more may start is decided by the
+ * engine's admission control against real KV headroom rather than by counting.
+ * Capping agents at the slot count in that case would refuse work the server
+ * would have taken.
+ *
+ * A server that cannot be reached answers `false`: the fixed slot count is the
+ * safe reading when the question cannot be asked.
+ */
+export function probePolykvEnabled(
+	baseUrl: string | undefined,
+	fetchImpl?: typeof fetch,
+): Promise<boolean> {
+	if (!baseUrl) {
+		return Promise.resolve(false);
+	}
+	const root = polykvRoot(baseUrl);
+	const cached = POLYKV_AVAILABILITY.get(root);
+	if (cached) {
+		return cached;
+	}
+	const doFetch = fetchImpl ?? fetch;
+	const pending = (async () => {
+		try {
+			const response = await doFetch(`${root}/polykv/pools`, {
+				method: "GET",
+			});
+			// 404 is the flag being absent. A 5xx is a server that has the route
+			// and is unhappy, which is not a statement about PolyKV either way --
+			// treated as absent for the same reason as an unreachable server.
+			return response.ok;
+		} catch {
+			return false;
+		}
+	})();
+	POLYKV_AVAILABILITY.set(root, pending);
+	return pending;
+}
+
+/** Test seam, and the way a changed server launch is picked up. */
+export function resetPolykvAvailability(): void {
+	POLYKV_AVAILABILITY.clear();
+}
+
 export function createPolykvClient(
 	options: PolykvClientOptions,
 ): PolykvClient {

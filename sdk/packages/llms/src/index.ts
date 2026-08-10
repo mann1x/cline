@@ -132,9 +132,19 @@ export {
 	PolykvSaturatedError,
 	type PolykvSessionState,
 	polykvRoot,
+	probePolykvEnabled,
+	resetPolykvAvailability,
 	resetPolykvSessions,
 	setPolykvSession,
 } from "./providers/vendors/polykv";
+export {
+	type AgentSlotLimit,
+	DEFAULT_PARALLEL_SESSIONS,
+	MAX_PARALLEL_SESSIONS,
+	MIN_PARALLEL_SESSIONS,
+	normalizeParallelSessions,
+	resolveAgentSlotLimit,
+} from "./providers/agent-slots";
 export {
 	type OpenAICodexRequestHeaderContext,
 	type ProviderRequestHeaderClientContext,

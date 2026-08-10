@@ -69,6 +69,10 @@ export function addRootOptions(cmd: Command): Command {
 				"Context window for the agents model; omit to use whatever that model declares",
 			)
 			.option(
+				"--parallel-sessions <count>",
+				"How many requests this endpoint serves at once (OLLAMA_NUM_PARALLEL, --parallel); bounds concurrent agents (default: 1, max: 10)",
+			)
+			.option(
 				"-t, --timeout <seconds>",
 				"Optional timeout in seconds (default: 0 for no timeout)",
 			)
@@ -238,6 +242,8 @@ export function commanderToParsedArgs(program: Command): ParsedArgs {
 	if (opts.visionModel !== undefined) result.visionModel = opts.visionModel;
 	if (opts.agentsModel !== undefined) result.agentsModel = opts.agentsModel;
 	if (opts.agentsNumCtx !== undefined) result.agentsNumCtx = opts.agentsNumCtx;
+	if (opts.parallelSessions !== undefined)
+		result.parallelSessions = opts.parallelSessions;
 	if (opts.provider !== undefined) result.provider = opts.provider;
 	if (opts.key !== undefined) result.key = opts.key;
 	else if (opts.apiKey !== undefined) result.key = opts.apiKey;

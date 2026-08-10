@@ -33,6 +33,7 @@ import {
 import {
 	AgentTeamsRuntime,
 	bootstrapAgentTeams,
+	createAgentSlotGate,
 	createDelegatedAgentConfigProvider,
 	type DelegatedAgentConnectionConfig,
 	type TeamEvent,
@@ -541,6 +542,10 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 				logger: logger ?? config.logger,
 				telemetry: input.telemetry ?? config.telemetry,
 				workspaceMetadata: config.workspaceMetadata,
+				// One gate for every spawn path in this session -- the team runtime,
+				// the lead's `spawn_agent`, and a sub-agent spawning its own -- because
+				// they all read this provider and none of them can see the others.
+				slotGate: createAgentSlotGate(config.maxConcurrentAgents),
 				...agentsOverrides,
 			},
 			Object.keys(agentsOverrides) as (keyof DelegatedAgentConnectionConfig)[],
@@ -612,6 +617,15 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 				teamRuntime = new AgentTeamsRuntime({
 					teamName: effectiveTeamName,
 					leadAgentId: config.sessionId || "lead",
+					// The team runtime has always had a bound of its own; until now it
+					// was a hardcoded 2 that no caller ever set, which is the wrong
+					// number on a one-slot server and on a ten-slot one alike. `0` is
+					// the host saying admission control decides, so the counting bound
+					// stands down rather than becoming the thing that refuses a run.
+					maxConcurrentRuns:
+						config.maxConcurrentAgents === 0
+							? Number.POSITIVE_INFINITY
+							: config.maxConcurrentAgents,
 					missionLogIntervalSteps: normalized.missionLogIntervalSteps,
 					missionLogIntervalMs: normalized.missionLogIntervalMs,
 					onTeamEvent: (event: TeamEvent) => {

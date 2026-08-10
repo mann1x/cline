@@ -2,6 +2,7 @@ import { fstatSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename } from "node:path";
 import type { ToolPolicy } from "@cline/core";
+import { resolveAgentSlotLimit } from "@cline/llms";
 
 import { registerDisposable } from "@cline/shared";
 import type { Command } from "commander";
@@ -1163,6 +1164,21 @@ export async function runCli(): Promise<void> {
 					(contextWindow ? ` contextWindow=${contextWindow}` : ""),
 			);
 		}
+		// How many agents this endpoint will actually serve at once. A server with
+		// no free slot queues the request rather than refusing it, so spawning
+		// more agents than there are slots makes a run slower, not faster — and
+		// nothing reports the queueing. Asked of the endpoint the agents call.
+		const agentSlots = await resolveAgentSlotLimit({
+			providerId: config.delegatedAgentConnection?.providerId ?? config.providerId,
+			baseUrl: config.delegatedAgentConnection?.baseUrl ?? config.baseUrl,
+			parallelSessions: args.parallelSessions,
+		});
+		config.maxConcurrentAgents = agentSlots.limit;
+		loggerAdapter.core.log(
+			`[Agents] Concurrency: ${
+				agentSlots.limit === 0 ? "uncapped" : agentSlots.limit
+			} — ${agentSlots.reason}`,
+		);
 		try {
 			// For OAuth providers, don't write the resolved key into apiKey;
 			// the token lives in auth.accessToken and apiKey is reserved for
