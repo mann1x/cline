@@ -6,6 +6,7 @@ export {
 	parseConfiguredAgentConfig,
 } from "./configured-agent-config";
 export {
+	type AgentProviderConnection,
 	buildConfiguredAgentToolDescriptors,
 	buildConfiguredAgentToolName,
 	type ConfiguredAgentInput,

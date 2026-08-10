@@ -17,7 +17,10 @@ import type {
 } from "@cline/shared";
 import type { ToolRoutingRule } from "../extensions/tools/model-tool-routing";
 import type { TaskProgressState } from "../extensions/tools/task-progress";
-import type { TeamEvent } from "../extensions/tools/team";
+import type {
+	AgentProviderConnection,
+	TeamEvent,
+} from "../extensions/tools/team";
 import type { ProviderConfig } from "./provider-settings";
 
 export type CoreAgentMode = AgentMode;
@@ -427,6 +430,20 @@ export interface CoreSessionConfig
 	 * one at all, which leaves every previous behaviour exactly as it was.
 	 */
 	maxConcurrentAgents?: number;
+	/**
+	 * Resolves a provider other than the session's, for a configured subagent
+	 * whose frontmatter names one.
+	 *
+	 * Host-supplied because only the host knows where its provider store lives:
+	 * the CLI's follows `--config`, the extension's follows its own data
+	 * directory. Core reaching for a default path would read the wrong file in
+	 * one of them and call the wrong server with the wrong key. Absent means an
+	 * agent on a second provider is refused rather than silently run on the
+	 * session's connection.
+	 */
+	resolveProviderConnection?: (
+		providerId: string,
+	) => AgentProviderConnection | undefined;
 	workspaceRoot?: string;
 	systemPrompt: string;
 	teamName?: string;

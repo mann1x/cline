@@ -1164,6 +1164,15 @@ export async function runCli(): Promise<void> {
 					(contextWindow ? ` contextWindow=${contextWindow}` : ""),
 			);
 		}
+		// A configured subagent may name a provider of its own. Core refuses one
+		// it cannot resolve rather than running it on the session's connection,
+		// so this is what makes a second provider work at all.
+		const { createAgentProviderConnectionResolver } = await import(
+			"./runtime/agent-provider-connection"
+		);
+		config.resolveProviderConnection = createAgentProviderConnectionResolver(
+			providerSettingsManager,
+		);
 		// How many agents this endpoint will actually serve at once. A server with
 		// no free slot queues the request rather than refusing it, so spawning
 		// more agents than there are slots makes a run slower, not faster — and

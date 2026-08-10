@@ -9,6 +9,7 @@
 // The factory does NOT handle UI concerns — that's the SdkController's job.
 
 import {
+	type AgentProviderConnection,
 	type ClineCoreStartInput,
 	type CoreSessionConfig,
 	createPromptTemplateHooks,
@@ -19,6 +20,7 @@ import {
 	readCompactionStrategyGlobally,
 	resolveProviderApiKeyFromSettings,
 	type StartSessionResult,
+	toProviderConfig,
 } from "@cline/core"
 import type { ProviderApiLine, ProviderSamplingOptions, ModelInfo as SdkModelInfo } from "@cline/llms"
 import {
@@ -962,6 +964,37 @@ export function composeSessionHooks(
 }
 
 /**
+ * Resolves a provider other than the session's, for a configured subagent whose
+ * frontmatter names one.
+ *
+ * Core cannot do this itself: it would have to guess where the provider store
+ * lives, and this host's follows its own data directory rather than the default
+ * path. Without it a subagent on a second provider inherited the session's base
+ * URL, key and context window along with the new provider id — a request to the
+ * wrong server, which fails as an auth error or, worse, succeeds against a
+ * model nobody chose.
+ */
+function resolveAgentProviderConnection(providerId: string): AgentProviderConnection | undefined {
+	try {
+		const stored = getProviderSettingsManager(resolveDataDir()).getProviderSettings(providerId)
+		if (!stored) {
+			return undefined
+		}
+		const providerConfig = toProviderConfig(stored)
+		return {
+			apiKey: providerConfig.apiKey,
+			baseUrl: providerConfig.baseUrl,
+			headers: providerConfig.headers,
+			knownModels: providerConfig.knownModels,
+			providerConfig,
+		}
+	} catch (error) {
+		Logger.warn(`[Agents] Failed to resolve provider "${providerId}" for a subagent:`, error)
+		return undefined
+	}
+}
+
+/**
  * The parallel-session count stored on the shared provider entry.
  *
  * Only consulted when no profile is in force for the scope: a profile that
@@ -1604,6 +1637,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		...(knownModels && Object.keys(knownModels).length > 0 ? { knownModels } : {}),
 		...(delegatedAgentConnection ? { delegatedAgentConnection } : {}),
 		maxConcurrentAgents: agentSlots.limit,
+		resolveProviderConnection: resolveAgentProviderConnection,
 		cwd,
 		workspaceRoot,
 		systemPrompt,

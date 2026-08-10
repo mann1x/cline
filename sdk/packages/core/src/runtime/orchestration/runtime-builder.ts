@@ -562,6 +562,10 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 						createConfiguredAgentTools({
 							configProvider: delegatedAgentConfigProvider,
 							agents: configuredAgents.configs,
+							// An agent naming a second provider needs that provider's
+							// own credentials and base URL, and only the host knows
+							// where its provider store is.
+							resolveProviderConnection: config.resolveProviderConnection,
 							createSubAgentTools: (agent) =>
 								normalized.enableTools
 									? filterToolsForConfiguredAgent(

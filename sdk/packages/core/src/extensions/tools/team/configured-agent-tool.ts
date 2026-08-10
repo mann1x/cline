@@ -38,9 +38,37 @@ export interface ConfiguredAgentToolDescriptor {
 	config: ConfiguredAgentConfig;
 }
 
+/**
+ * The connection a provider other than the session's runs on.
+ *
+ * Supplied by the host because only the host knows where its provider store
+ * lives: the CLI's follows `--config`, and the extension's follows its own data
+ * directory, so core reaching for a default path would read the wrong file in
+ * one of them and silently call the wrong server with the wrong key.
+ */
+export interface AgentProviderConnection {
+	apiKey?: string;
+	baseUrl?: string;
+	headers?: Record<string, string>;
+	providerConfig?: unknown;
+	knownModels?: DelegatedAgentRuntimeConfig["knownModels"];
+}
+
 export interface ConfiguredAgentToolConfig {
 	configProvider: DelegatedAgentConfigProvider;
 	agents: ConfiguredAgentConfig[];
+	/**
+	 * Resolves a second provider's own connection, for an agent whose
+	 * frontmatter names one.
+	 *
+	 * Without it an agent on another provider is refused rather than run: it
+	 * used to inherit the lead's base URL, key and context window along with the
+	 * new provider id, which is a request to the wrong server that fails as an
+	 * auth error or, worse, succeeds against a model nobody chose.
+	 */
+	resolveProviderConnection?: (
+		providerId: string,
+	) => AgentProviderConnection | undefined;
 	createSubAgentTools?: (
 		agent: ConfiguredAgentConfig,
 		input: ConfiguredAgentInput,
@@ -137,16 +165,90 @@ export function buildConfiguredAgentToolDescriptors(
 	return descriptors;
 }
 
-function buildAgentRuntimeConfig(
+/**
+ * The connection one configured agent runs on.
+ *
+ * Two cases, and only the first used to work. An agent that names a *model*
+ * inherits the session's connection and swaps the model — including inside
+ * `providerConfig`, which carries its own copy that the gateway reads, and
+ * which left the request naming one model at the top level and another
+ * underneath.
+ *
+ * An agent that names a *provider* needs that provider's own credentials, base
+ * URL, catalog and context window. Inheriting the session's meant a request to
+ * the wrong server with the wrong key, which is what "we have multiple
+ * providers that I would like to create agents to handle specific tasks" ran
+ * into. The host's proxy/CA-aware `fetch` is carried across from the session's
+ * config either way: it belongs to the process, not to the provider.
+ */
+export function buildAgentRuntimeConfig(
 	base: DelegatedAgentRuntimeConfig,
 	agent: ConfiguredAgentConfig,
+	resolveProviderConnection?: (
+		providerId: string,
+	) => AgentProviderConnection | undefined,
 ): DelegatedAgentRuntimeConfig {
-	return {
+	const providerId = agent.providerId ?? base.providerId;
+	const modelId = agent.modelId ?? base.modelId;
+	const shared = {
 		...base,
-		providerId: agent.providerId ?? base.providerId,
-		modelId: agent.modelId ?? base.modelId,
+		providerId,
+		modelId,
 		maxIterations: agent.maxIterations ?? base.maxIterations,
 	};
+
+	if (providerId === base.providerId) {
+		return {
+			...shared,
+			providerConfig: withProviderConfigModelId(base.providerConfig, modelId),
+		};
+	}
+
+	const resolved = resolveProviderConnection?.(providerId);
+	if (!resolved) {
+		throw new Error(
+			`Subagent "${agent.name}" is configured for provider "${providerId}", which this host cannot resolve credentials for. ` +
+				"Configure that provider, or remove the providerId from the agent so it runs on the session's.",
+		);
+	}
+	return {
+		...shared,
+		apiKey: resolved.apiKey,
+		baseUrl: resolved.baseUrl,
+		headers: resolved.headers,
+		knownModels: resolved.knownModels,
+		providerConfig: withSessionFetch(
+			withProviderConfigModelId(resolved.providerConfig, modelId),
+			base.providerConfig,
+		),
+	};
+}
+
+/**
+ * The gateway reads the model from `providerConfig` as well as from the top
+ * level, so an agent that swaps only one of them runs the other's model.
+ */
+function withProviderConfigModelId(
+	providerConfig: unknown,
+	modelId: string,
+): unknown {
+	if (!providerConfig || typeof providerConfig !== "object") {
+		return providerConfig;
+	}
+	return { ...(providerConfig as Record<string, unknown>), modelId };
+}
+
+/**
+ * A second provider's stored settings carry no `fetch`, and dropping the
+ * session's is how a corporate proxy or a self-signed CA stops working for
+ * subagents only.
+ */
+function withSessionFetch(providerConfig: unknown, base: unknown): unknown {
+	const sessionFetch = (base as { fetch?: unknown } | undefined)?.fetch;
+	if (!sessionFetch || !providerConfig || typeof providerConfig !== "object") {
+		return providerConfig;
+	}
+	return { ...(providerConfig as Record<string, unknown>), fetch: sessionFetch };
 }
 
 export function createConfiguredAgentTools(
@@ -161,7 +263,11 @@ export function createConfiguredAgentTools(
 				execute: async (input, context) => {
 					const baseRuntimeConfig = options.configProvider.getRuntimeConfig();
 					const configProvider = createDelegatedAgentConfigProvider(
-						buildAgentRuntimeConfig(baseRuntimeConfig, config),
+						buildAgentRuntimeConfig(
+							baseRuntimeConfig,
+							config,
+							options.resolveProviderConnection,
+						),
 					);
 					const tools = options.createSubAgentTools
 						? await options.createSubAgentTools(config, input, context)
