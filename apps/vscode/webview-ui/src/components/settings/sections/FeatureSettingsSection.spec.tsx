@@ -17,6 +17,7 @@ const mockExtensionState = vi.hoisted(() => ({
 		focusChainSettings: { enabled: false, remindClineInterval: 6 },
 		remoteConfigSettings: {},
 		backgroundEditEnabled: false,
+		editVerificationSettings: { mode: "nudge" },
 	},
 }))
 
@@ -182,5 +183,30 @@ describe("FeatureSettingsSection — capped thinking", () => {
 		fireEvent.click(container.querySelector("#cappedThinkingEnabled") as Element)
 
 		expect(mockUpdateSetting).toHaveBeenCalledWith("cappedThinkingEnabled", false)
+	})
+})
+
+/**
+ * The guard that stops a run finishing with a file it changed and never
+ * checked. It shipped built, wired and defaulting to "nudge", with nothing
+ * anywhere that could change it — the mode was in storage and in the generated
+ * Settings proto, and no request field, no handler and no control ever reached
+ * it. So it could only ever be the value it was born with.
+ */
+describe("FeatureSettingsSection — check edited files", () => {
+	it("shows the mode the guard is running on", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		const labels = Array.from(container.querySelectorAll("label")).map((label) => label.textContent)
+		expect(labels).toContain("Check Edited Files")
+		expect(screen.getByText("Nudge")).toBeTruthy()
+	})
+
+	it("falls back to nudge rather than showing an empty control", () => {
+		mockExtensionState.value = { ...mockExtensionState.value, editVerificationSettings: undefined }
+
+		render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		expect(screen.getByText("Nudge")).toBeTruthy()
 	})
 })

@@ -174,6 +174,7 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		cappedThinkingPrompt,
 		defaultCappedThinkingPrompt,
 		compactionStrategy,
+		editVerificationSettings,
 		subagentsEnabled,
 		worktreesEnabled,
 		remoteConfigSettings,
@@ -251,6 +252,32 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 									<SelectContent>
 										<SelectItem value="basic">Basic</SelectItem>
 										<SelectItem value="agentic">Agentic</SelectItem>
+									</SelectContent>
+								</Select>
+							</div>
+							<div className="space-y-2 py-3">
+								<Label className="text-sm font-medium text-foreground">Check Edited Files</Label>
+								{/* A guard rather than an instruction. Measured on a live
+								    session: list_files → browser → read_files → check_file →
+								    editor → editor → editor → editor. The linter ran once,
+								    before anything was touched, then four edits landed with
+								    nothing checking them and sixteen problems in the file
+								    afterwards. A model that ignores a linter it has already
+								    run will ignore a sentence asking it to run one again. */}
+								<p className="text-xs text-muted-foreground">
+									Whether a task may finish with a file it changed and never checked. Nudge holds the run back
+									twice and then lets it through; Require gives the same guard more room to insist.
+								</p>
+								<Select
+									onValueChange={(value) => updateSetting("editVerificationSettings", { mode: value })}
+									value={editVerificationSettings?.mode ?? "nudge"}>
+									<SelectTrigger className="w-full">
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectItem value="off">Off</SelectItem>
+										<SelectItem value="nudge">Nudge</SelectItem>
+										<SelectItem value="require">Require</SelectItem>
 									</SelectContent>
 								</Select>
 							</div>

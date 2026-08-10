@@ -65,6 +65,7 @@ export async function getStateToPostToWebview(controller: {
 	const visionModeApiConfiguration = stateManager.getGlobalSettingsKey("visionModeApiConfiguration")
 	const agentsModelEnabled = stateManager.getGlobalSettingsKey("agentsModelEnabled")
 	const agentsModeApiConfiguration = stateManager.getGlobalSettingsKey("agentsModeApiConfiguration")
+	const editVerificationSettings = stateManager.getGlobalSettingsKey("editVerificationSettings")
 	const apiConfigurationProfiles = stateManager.getGlobalSettingsKey("apiConfigurationProfiles")
 	const activeApiConfigurationProfile = stateManager.getGlobalSettingsKey("activeApiConfigurationProfile")
 	const enableCheckpointsSetting = stateManager.getGlobalSettingsKey("enableCheckpointsSetting")
@@ -159,6 +160,7 @@ export async function getStateToPostToWebview(controller: {
 		visionModeApiConfiguration,
 		agentsModelEnabled,
 		agentsModeApiConfiguration,
+		editVerificationSettings,
 		apiConfigurationProfiles,
 		activeApiConfigurationProfile,
 		enableCheckpointsSetting: enableCheckpointsSetting ?? true,

@@ -459,6 +459,15 @@ message UpdateSettingsRequest {
   optional string capped_thinking_prompt = 54;
   optional bool agents_model_enabled = 55;
   optional string agents_mode_api_configuration = 56;
+  optional EditVerificationSettings edit_verification_settings = 57;
+}
+
+// Whether a run may finish with a file it changed and never checked.
+// A message rather than a JSON string because it is a closed set of fields the
+// schema can state, unlike the API-configuration snapshots.
+message EditVerificationSettings {
+  // "off", "nudge" or "require".
+  string mode = 1;
 }
 
 message UpdateTerminalConnectionTimeoutRequest {

@@ -325,6 +325,16 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		// wire form as zero — assigning the request wholesale would reset the
 		// reminder interval to 0 (i.e. remind on every message) whenever the
 		// toggle is flipped.
+		// The QA guard's insistence. Stored whole rather than merged: `mode` is
+		// the only field, and an unknown value would leave the guard in a state
+		// nothing downstream knows how to read.
+		if (request.editVerificationSettings !== undefined) {
+			const mode = request.editVerificationSettings.mode
+			if (mode === "off" || mode === "nudge" || mode === "require") {
+				controller.stateManager.setGlobalState("editVerificationSettings", { mode })
+			}
+		}
+
 		if (request.focusChainSettings !== undefined) {
 			const current = controller.stateManager.getGlobalSettingsKey("focusChainSettings")
 			const remindClineInterval = request.focusChainSettings.remindClineInterval

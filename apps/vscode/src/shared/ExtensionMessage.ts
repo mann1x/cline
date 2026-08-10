@@ -9,6 +9,7 @@ import { BrowserSettings } from "./BrowserSettings"
 import { ClineFeatureSetting } from "./ClineFeatureSetting"
 import { BannerCardData } from "./cline/banner"
 import { ClineRulesToggles } from "./cline-rules"
+import type { EditVerificationSettings } from "./EditVerificationSettings"
 import type { FocusChainSettings } from "./FocusChainSettings"
 import { HistoryItem } from "./HistoryItem"
 import { McpDisplayMode } from "./McpDisplayMode"
@@ -89,6 +90,8 @@ export interface ExtensionState {
 	agentsModelEnabled: boolean
 	/** JSON `ApiConfigurationSnapshot` for delegated agents. */
 	agentsModeApiConfiguration: string
+	/** Whether a run may finish with a file it changed and never checked. */
+	editVerificationSettings: EditVerificationSettings
 	/** JSON `ApiConfigurationProfile[]`. */
 	apiConfigurationProfiles: string
 	/** Name of the loaded profile, or "" when the panel matches no profile. */
