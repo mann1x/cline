@@ -368,6 +368,7 @@ export {
 export {
 	type AgentTask,
 	AgentTeam,
+	type AgentProfileConnection,
 	type AgentProviderConnection,
 	AgentTeamsRuntime,
 	type AgentTeamsRuntimeOptions,

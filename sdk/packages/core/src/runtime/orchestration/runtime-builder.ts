@@ -573,6 +573,7 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 							// own credentials and base URL, and only the host knows
 							// where its provider store is.
 							resolveProviderConnection: config.resolveProviderConnection,
+							resolveProfileConnection: config.resolveProfileConnection,
 							createSubAgentTools: (agent) =>
 								normalized.enableTools
 									? filterToolsForConfiguredAgent(

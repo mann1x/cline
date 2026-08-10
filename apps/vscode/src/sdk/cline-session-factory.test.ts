@@ -1165,6 +1165,59 @@ describe("buildSessionConfig", () => {
 		})
 	})
 
+	// The toggle stored a value nothing read. Everything else was already built
+	// -- agent files in `.cline/agents`, a tool per agent, a connection for them
+	// and a slot gate to bound them -- and these two fields were written into the
+	// session config as the literal `false`, so the settings page showed the
+	// feature on and the model was never offered a subagent.
+	it("offers no subagents while the toggle is off", async () => {
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string) =>
+			key === "subagentsEnabled" ? false : undefined,
+		)
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+
+		expect(config.enableSpawnAgent).toBe(false)
+		expect(config.enableAgentTeams).toBe(false)
+	})
+
+	// Both from one setting: a user who turns subagents on wants to delegate,
+	// and which mechanism carries the delegation is not a choice they have any
+	// way to make.
+	it("offers subagents and teams once the toggle is on", async () => {
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string) =>
+			key === "subagentsEnabled" ? true : undefined,
+		)
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+
+		expect(config.enableSpawnAgent).toBe(true)
+		expect(config.enableAgentTeams).toBe(true)
+	})
+
+	// Never written is off. Delegation spends tokens on a second model, so it is
+	// not something to start doing unasked.
+	it("leaves subagents off when the setting has never been written", async () => {
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation(() => undefined)
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+
+		expect(config.enableSpawnAgent).toBe(false)
+	})
+
+	it("lets a task's own subagent setting override the global one", async () => {
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string) =>
+			key === "subagentsEnabled" ? false : undefined,
+		)
+
+		const config = await buildSessionConfig({
+			cwd: "/tmp/workspace",
+			taskSettings: { subagentsEnabled: true },
+		})
+
+		expect(config.enableSpawnAgent).toBe(true)
+	})
+
 	it("emits the shared mode-tag instructions in both act and plan system prompts", async () => {
 		mocks.stateManager.getApiConfiguration.mockReturnValue({} as any)
 

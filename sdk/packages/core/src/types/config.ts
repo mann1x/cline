@@ -19,6 +19,7 @@ import type { ToolRoutingRule } from "../extensions/tools/model-tool-routing";
 import type { QaCredential } from "../extensions/tools/qa-credentials";
 import type { TaskProgressState } from "../extensions/tools/task-progress";
 import type {
+	AgentProfileConnection,
 	AgentProviderConnection,
 	TeamEvent,
 } from "../extensions/tools/team";
@@ -445,6 +446,20 @@ export interface CoreSessionConfig
 	resolveProviderConnection?: (
 		providerId: string,
 	) => AgentProviderConnection | undefined;
+	/**
+	 * Resolves a saved API configuration profile by name, for an agent whose
+	 * frontmatter names one.
+	 *
+	 * Host-supplied for the same reason as the provider resolver, and absent on
+	 * a host that has no profiles at all — the CLI has providers and no named
+	 * configurations over them. An agent naming a profile on such a host is
+	 * refused rather than run on the session's, which is the same rule the
+	 * provider case follows and for the same reason: a subagent silently running
+	 * the wrong model is worse than one that does not run.
+	 */
+	resolveProfileConnection?: (
+		name: string,
+	) => AgentProfileConnection | undefined;
 	workspaceRoot?: string;
 	systemPrompt: string;
 	teamName?: string;

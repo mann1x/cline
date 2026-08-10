@@ -60,6 +60,7 @@ import { HostProvider } from "@/hosts/host-provider"
 import { ExtensionRegistryInfo } from "@/registry"
 import { getDistinctId } from "@/services/logging/distinctId"
 import { fetch } from "@/shared/net"
+import { createAgentProfileConnectionResolver } from "./agent-profile-connection"
 import { type BedrockProviderConfig, buildBedrockProviderConfig } from "./bedrock-config"
 import { createEditorDiagnosticsHooks } from "./editor-diagnostics"
 import { buildAgentHooks } from "./hooks-adapter"
@@ -1512,6 +1513,11 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	})
 	Logger.log(`[Agents] Concurrency: ${agentSlots.limit === 0 ? "uncapped" : agentSlots.limit} — ${agentSlots.reason}`)
 	const useAutoCondense = input.taskSettings?.useAutoCondense ?? globalUseAutoCondense
+	// Whether the model is offered subagents at all. Task settings win over the
+	// global one, the same way every other setting here does.
+	const subagentsEnabled =
+		input.taskSettings?.subagentsEnabled ?? stateManager.getGlobalSettingsKey("subagentsEnabled") ?? false
+	Logger.log(`[Agents] Subagents ${subagentsEnabled ? "enabled" : "disabled"}`)
 
 	// Core resolves providers against the SDK registry, which uses the SDK's
 	// own provider id spelling (e.g. "openai-compatible" rather than the
@@ -1651,6 +1657,13 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		...(delegatedAgentConnection ? { delegatedAgentConnection } : {}),
 		maxConcurrentAgents: agentSlots.limit,
 		resolveProviderConnection: resolveAgentProviderConnection,
+		// An agent file can name a saved profile instead of a provider and a
+		// model. Built from the stored list at session start, which is when the
+		// agent files are read too.
+		resolveProfileConnection: createAgentProfileConnectionResolver({
+			storedProfiles: stateManager.getGlobalSettingsKey("apiConfigurationProfiles"),
+			primary: apiConfig,
+		}),
 		cwd,
 		workspaceRoot,
 		systemPrompt,
@@ -1658,8 +1671,16 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		checkpoint: {
 			enabled: enableCheckpoints,
 		},
-		enableSpawnAgent: false,
-		enableAgentTeams: false,
+		// The Subagents toggle, which until now stored a value nothing read. The
+		// machinery was all here -- agent files in `.cline/agents`, a tool per
+		// agent, a connection and a slot gate for them -- and the model was never
+		// offered any of it, because these two were written as literals.
+		//
+		// Both from one setting rather than two: a user who turns subagents on
+		// wants to delegate, and which mechanism carries the delegation is an
+		// implementation detail they have no way to choose between.
+		enableSpawnAgent: subagentsEnabled,
+		enableAgentTeams: subagentsEnabled,
 		// Sent whether or not auto compaction is on. `enabled` is the only thing
 		// that decides whether the transcript gets compacted — the runtime
 		// returns no compaction pass without it — but this object is also where

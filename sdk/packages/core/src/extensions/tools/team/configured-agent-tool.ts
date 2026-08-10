@@ -54,6 +54,19 @@ export interface AgentProviderConnection {
 	knownModels?: DelegatedAgentRuntimeConfig["knownModels"];
 }
 
+/**
+ * A saved API configuration profile, resolved.
+ *
+ * Carries the provider and the model as well as the connection, because that is
+ * what a profile is: the user picked a provider, a model and the settings around
+ * them and gave the three of them a name. An agent naming a profile is therefore
+ * saying more than an agent naming a provider, and gets the model with it.
+ */
+export interface AgentProfileConnection extends AgentProviderConnection {
+	providerId: string;
+	modelId?: string;
+}
+
 export interface ConfiguredAgentToolConfig {
 	configProvider: DelegatedAgentConfigProvider;
 	agents: ConfiguredAgentConfig[];
@@ -69,6 +82,18 @@ export interface ConfiguredAgentToolConfig {
 	resolveProviderConnection?: (
 		providerId: string,
 	) => AgentProviderConnection | undefined;
+	/**
+	 * Resolves a saved API configuration profile by name, for an agent whose
+	 * frontmatter names one.
+	 *
+	 * Host-supplied for the same reason as the provider resolver: only the host
+	 * knows where its profiles live. A host with no profiles at all supplies
+	 * nothing, and an agent naming one is refused rather than run on the
+	 * session's connection under a name the user chose for something else.
+	 */
+	resolveProfileConnection?: (
+		name: string,
+	) => AgentProfileConnection | undefined;
 	createSubAgentTools?: (
 		agent: ConfiguredAgentConfig,
 		input: ConfiguredAgentInput,
@@ -187,15 +212,41 @@ export function buildAgentRuntimeConfig(
 	resolveProviderConnection?: (
 		providerId: string,
 	) => AgentProviderConnection | undefined,
+	resolveProfileConnection?: (name: string) => AgentProfileConnection | undefined,
 ): DelegatedAgentRuntimeConfig {
-	const providerId = agent.providerId ?? base.providerId;
-	const modelId = agent.modelId ?? base.modelId;
+	// A named profile answers provider, model and connection at once. Resolved
+	// first so the two explicit keys can still override it: `profile` plus
+	// `modelId` is "that configuration, this model", which is the reason to
+	// write both and the only reading under which neither is redundant.
+	const profile = agent.profile
+		? resolveProfile(agent, resolveProfileConnection)
+		: undefined;
+	const providerId = agent.providerId ?? profile?.providerId ?? base.providerId;
+	const modelId = agent.modelId ?? profile?.modelId ?? base.modelId;
 	const shared = {
 		...base,
 		providerId,
 		modelId,
 		maxIterations: agent.maxIterations ?? base.maxIterations,
 	};
+
+	// A profile's own connection wins over the session's even when the two name
+	// the same provider: its point is the settings it carries -- the context
+	// window above all -- and inheriting the session's would discard exactly what
+	// the user named it for.
+	if (profile && providerId === profile.providerId) {
+		return {
+			...shared,
+			apiKey: profile.apiKey,
+			baseUrl: profile.baseUrl,
+			headers: profile.headers,
+			knownModels: profile.knownModels,
+			providerConfig: withSessionFetch(
+				withProviderConfigModelId(profile.providerConfig, modelId),
+				base.providerConfig,
+			),
+		};
+	}
 
 	if (providerId === base.providerId) {
 		return {
@@ -222,6 +273,29 @@ export function buildAgentRuntimeConfig(
 			base.providerConfig,
 		),
 	};
+}
+
+/**
+ * The profile an agent named, or an error naming both.
+ *
+ * Refused rather than quietly ignored: an agent pointed at a profile that no
+ * longer exists would otherwise run on the session's model, which is the same
+ * silent-wrong-model failure that made the provider case worth fixing.
+ */
+function resolveProfile(
+	agent: ConfiguredAgentConfig,
+	resolveProfileConnection?: (name: string) => AgentProfileConnection | undefined,
+): AgentProfileConnection {
+	const resolved = agent.profile
+		? resolveProfileConnection?.(agent.profile)
+		: undefined;
+	if (!resolved) {
+		throw new Error(
+			`Subagent "${agent.name}" names the API configuration profile "${agent.profile}", which this host cannot resolve. ` +
+				"Save a profile under that name, or remove the profile key from the agent so it runs on the session's configuration.",
+		);
+	}
+	return resolved;
 }
 
 /**
@@ -267,6 +341,7 @@ export function createConfiguredAgentTools(
 							baseRuntimeConfig,
 							config,
 							options.resolveProviderConnection,
+							options.resolveProfileConnection,
 						),
 					);
 					const tools = options.createSubAgentTools

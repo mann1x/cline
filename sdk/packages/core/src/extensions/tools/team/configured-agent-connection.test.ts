@@ -113,6 +113,89 @@ describe("a configured agent's connection", () => {
 		).toThrow(/reviewer.*anthropic/s);
 	});
 
+});
+
+describe("an agent that names a saved profile", () => {
+	const PROFILE = {
+		providerId: "anthropic",
+		modelId: "claude-sonnet-4-6",
+		apiKey: "profile-key",
+		baseUrl: "https://api.anthropic.com",
+		providerConfig: { providerId: "anthropic", contextWindow: 200_000 },
+	};
+
+	// One word instead of three keys, and it is the word the user already has in
+	// front of them in Settings. It also carries the context window, which has
+	// nowhere to live in an agent file at all.
+	it("takes the profile's provider, model and connection", () => {
+		const runtime = buildAgentRuntimeConfig(BASE, agent({ profile: "vision-box" }), undefined, () => PROFILE);
+
+		expect(runtime.providerId).toBe("anthropic");
+		expect(runtime.modelId).toBe("claude-sonnet-4-6");
+		expect(runtime.apiKey).toBe("profile-key");
+		expect(runtime.baseUrl).toBe("https://api.anthropic.com");
+	});
+
+	// "That configuration, this model" — the only reading under which writing
+	// both keys is not redundant.
+	it("lets an explicit modelId override the profile's", () => {
+		const runtime = buildAgentRuntimeConfig(
+			BASE,
+			agent({ profile: "vision-box", modelId: "claude-haiku-4-5" }),
+			undefined,
+			() => PROFILE,
+		);
+
+		expect(runtime.modelId).toBe("claude-haiku-4-5");
+		expect(runtime.apiKey).toBe("profile-key");
+		expect((runtime.providerConfig as { modelId?: string }).modelId).toBe("claude-haiku-4-5");
+	});
+
+	// The point of a profile is the settings it carries. Falling back to the
+	// session's connection because the provider happens to match would discard
+	// the context window the user named it for.
+	it("uses the profile's own connection even on the session's provider", () => {
+		const runtime = buildAgentRuntimeConfig(
+			BASE,
+			agent({ profile: "small-ollama" }),
+			undefined,
+			() => ({
+				providerId: "ollama",
+				modelId: "small-model",
+				providerConfig: { providerId: "ollama", contextWindow: 8_192 },
+			}),
+		);
+
+		expect(runtime.modelId).toBe("small-model");
+		expect((runtime.providerConfig as { contextWindow?: number }).contextWindow).toBe(8_192);
+	});
+
+	it("keeps the host's fetch across a profile switch", () => {
+		const runtime = buildAgentRuntimeConfig(BASE, agent({ profile: "vision-box" }), undefined, () => PROFILE);
+
+		expect((runtime.providerConfig as { fetch?: unknown }).fetch).toBe(sessionFetch);
+	});
+
+	// Refused rather than run on the session's model: a profile that was renamed
+	// or deleted would otherwise make the agent silently something else.
+	it.each([
+		["the host has no profiles at all", undefined],
+		["the profile has been renamed or deleted", () => undefined],
+	])("refuses an agent whose profile cannot be resolved because %s", (_label, resolve) => {
+		expect(() =>
+			buildAgentRuntimeConfig(BASE, agent({ profile: "gone" }), undefined, resolve as never),
+		).toThrow(/reviewer.*gone/s);
+	});
+
+	it("leaves an agent naming no profile alone", () => {
+		const runtime = buildAgentRuntimeConfig(BASE, agent(), undefined, () => PROFILE);
+
+		expect(runtime.providerId).toBe("ollama");
+		expect(runtime.modelId).toBe("lead-model");
+	});
+});
+
+describe("the rest of the agent's configuration", () => {
 	it("still applies the agent's iteration cap", () => {
 		expect(
 			buildAgentRuntimeConfig(BASE, agent({ maxIterations: 7 })).maxIterations,
