@@ -404,6 +404,10 @@ const SECRETS_KEYS = [
 	"ocaApiKey",
 	"ocaRefreshToken",
 	"mcpOAuthSecrets",
+	// QA credentials, as a JSON array of {name, value}. A secret rather than a
+	// setting because the settings snapshot travels to the webview as one
+	// `state_json` string, and these must never be in it.
+	"qaCredentials",
 	"openai-codex-oauth-credentials", // JSON blob containing OAuth tokens for OpenAI Codex (ChatGPT subscription)
 	"wandbApiKey",
 ] as const

@@ -1183,6 +1183,19 @@ export async function runCli(): Promise<void> {
 			parallelSessions: args.parallelSessions,
 		});
 		config.maxConcurrentAgents = agentSlots.limit;
+		// QA credentials named on the command line, read from this process's
+		// environment. Names only in the log — the values exist in exactly two
+		// places, this environment and the child of a command that asked.
+		const { resolveQaCredentialsFromEnv } = await import(
+			"./runtime/qa-credentials"
+		);
+		const qaCredentials = resolveQaCredentialsFromEnv(args.qaCredential);
+		if (qaCredentials.credentials.length > 0) {
+			config.qaCredentials = qaCredentials.credentials;
+		}
+		for (const note of qaCredentials.notes) {
+			loggerAdapter.core.log(`[QaCredentials] ${note}`);
+		}
 		loggerAdapter.core.log(
 			`[Agents] Concurrency: ${
 				agentSlots.limit === 0 ? "uncapped" : agentSlots.limit

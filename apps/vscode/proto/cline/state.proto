@@ -107,6 +107,7 @@ message Secrets {
   optional string cline_api_key = 44;
   optional string openai_codex_oauth_credentials = 48;
   optional string wandb_api_key = 50;
+  optional string qa_credentials = 51;
 }
 
 // NOTE: Add new fields under API_HANDLER_SETTINGS_FIELDS or USER_SETTINGS_FIELDS
@@ -460,6 +461,9 @@ message UpdateSettingsRequest {
   optional bool agents_model_enabled = 55;
   optional string agents_mode_api_configuration = 56;
   optional EditVerificationSettings edit_verification_settings = 57;
+  // A change to the stored set. Sent only when the user edits it; values
+  // travel in this direction and never the other.
+  optional QaCredentialsUpdate qa_credentials = 58;
 }
 
 // Whether a run may finish with a file it changed and never checked.
@@ -468,6 +472,27 @@ message UpdateSettingsRequest {
 message EditVerificationSettings {
   // "off", "nudge" or "require".
   string mode = 1;
+}
+
+// Named secrets a QA command may ask for.
+//
+// This message only ever travels webview -> extension. What comes back is the
+// list of names in ExtensionState; a value that has been stored is never read
+// out to the webview, which is why the settings view offers "replace" rather
+// than showing what is there.
+message QaCredential {
+  string name = 1;
+  string value = 2;
+}
+
+// A delta rather than the whole set, because the webview does not have the
+// whole set: it is told the names and never the values, so it has nothing to
+// send back for a credential the user did not touch.
+message QaCredentialsUpdate {
+  // Added, or replaced if the name already exists.
+  repeated QaCredential set = 1;
+  // Removed by name.
+  repeated string remove = 2;
 }
 
 message UpdateTerminalConnectionTimeoutRequest {

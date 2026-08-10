@@ -16,6 +16,7 @@ import type {
 	SessionWorkspaceConfig,
 } from "@cline/shared";
 import type { ToolRoutingRule } from "../extensions/tools/model-tool-routing";
+import type { QaCredential } from "../extensions/tools/qa-credentials";
 import type { TaskProgressState } from "../extensions/tools/task-progress";
 import type {
 	AgentProviderConnection,
@@ -473,6 +474,15 @@ export interface CoreSessionConfig
 	 * was missing was anything that noticed.
 	 */
 	editVerification?: CoreEditVerificationConfig;
+	/**
+	 * Named secrets a QA command can ask for.
+	 *
+	 * Supplied by the host because only the host has a secret store; core never
+	 * reads or writes them anywhere, it only routes a value into the environment
+	 * of the one command that asked and masks it back out of what comes home.
+	 * See `extensions/tools/qa-credentials.ts` for why that is the whole design.
+	 */
+	qaCredentials?: QaCredential[];
 	pluginPaths?: string[];
 	extensions?: AgentConfig["extensions"];
 	execution?: AgentConfig["execution"];

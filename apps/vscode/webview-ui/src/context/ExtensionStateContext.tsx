@@ -286,6 +286,7 @@ export const ExtensionStateContextProvider: React.FC<{
 		agentsModelEnabled: false,
 		agentsModeApiConfiguration: "",
 		editVerificationSettings: DEFAULT_EDIT_VERIFICATION_SETTINGS,
+		qaCredentialNames: [],
 		apiConfigurationProfiles: "",
 		activeApiConfigurationProfile: "",
 		enableCheckpointsSetting: true,

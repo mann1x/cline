@@ -14,6 +14,7 @@ import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
 import type { ExtensionState, Platform } from "@shared/ExtensionMessage"
 import { ClineEnv } from "@/config"
 import { ExtensionRegistryInfo } from "@/registry"
+import { readQaCredentialNames } from "@/sdk/qa-credentials-store"
 import { BannerService } from "@/services/banner/BannerService"
 import { featureFlagsService } from "@/services/feature-flags"
 import { getDistinctId } from "@/services/logging/distinctId"
@@ -161,6 +162,9 @@ export async function getStateToPostToWebview(controller: {
 		agentsModelEnabled,
 		agentsModeApiConfiguration,
 		editVerificationSettings,
+		// Names only. The values live in secret storage and never travel with
+		// the state; the settings view offers "replace" rather than showing one.
+		qaCredentialNames: readQaCredentialNames(),
 		apiConfigurationProfiles,
 		activeApiConfigurationProfile,
 		enableCheckpointsSetting: enableCheckpointsSetting ?? true,

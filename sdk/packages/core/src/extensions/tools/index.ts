@@ -55,6 +55,22 @@ export {
 	resolveToolRoutingConfig,
 	type ToolRoutingRule,
 } from "./model-tool-routing";
+// QA credentials: named secrets a command can ask for, kept out of the model's
+// context and masked back out of everything it reads.
+export {
+	commandText,
+	createSecretRedactor,
+	describeQaCredentials,
+	normalizeQaCredentials,
+	QA_CREDENTIAL_MIN_VALUE_LENGTH,
+	QA_CREDENTIAL_NAME_PATTERN,
+	type QaCredential,
+	qaCredentialNames,
+	type NormalizedQaCredentials,
+	referencedCredentialNames,
+	type RejectedQaCredential,
+	resolveCredentialEnv,
+} from "./qa-credentials";
 // Task progress (the checklist the model keeps while it works)
 export {
 	buildTaskProgressReminder,
@@ -127,6 +143,7 @@ export type {
 	EditorExecutor,
 	FileReadExecutor,
 	SearchExecutor,
+	ShellExecutionOptions,
 	ShellExecutor,
 	SkillsExecutor,
 	SkillsExecutorSkillMetadata,

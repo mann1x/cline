@@ -7,6 +7,7 @@ import { TelemetrySetting } from "@shared/TelemetrySetting"
 import { ClineEnv } from "@/config"
 import { fetchRemoteConfig } from "@/core/storage/remote-config/fetch"
 import { clearRemoteConfig } from "@/core/storage/remote-config/utils"
+import { updateQaCredentials } from "@/sdk/qa-credentials-store"
 import { McpDisplayMode } from "@/shared/McpDisplayMode"
 import { Logger } from "@/shared/services/Logger"
 import { telemetryService } from "../../../services/telemetry"
@@ -333,6 +334,20 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			if (mode === "off" || mode === "nudge" || mode === "require") {
 				controller.stateManager.setGlobalState("editVerificationSettings", { mode })
 			}
+		}
+
+		// QA credentials. A delta, because the settings view knows the names and
+		// never the values, so it has nothing to send back for one the user did
+		// not touch. Rejected entries are logged by name in the store; nothing
+		// here echoes a value anywhere, and none of it reaches `state_json`.
+		if (request.qaCredentials !== undefined) {
+			updateQaCredentials({
+				set: request.qaCredentials.set.map((credential) => ({
+					name: credential.name,
+					value: credential.value,
+				})),
+				remove: request.qaCredentials.remove,
+			})
 		}
 
 		if (request.focusChainSettings !== undefined) {

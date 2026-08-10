@@ -69,6 +69,52 @@ describe("createVscodeRunCommandsTool", () => {
 		expect(results).toEqual([expect.objectContaining({ result: "terminal-default-ok", success: true })])
 	})
 
+	// A visible terminal is a shell that outlives the command. Anything exported
+	// into it is inherited by everything the model runs afterwards, and `env`
+	// prints it — so a command carrying a QA credential has to leave the terminal
+	// even when the user asked for foreground execution.
+	it("runs a command carrying a QA credential in a child process, not the terminal", async () => {
+		const getTerminalManager = vi.fn(() => {
+			throw new Error("A command with a credential must not reach the terminal manager")
+		})
+		const tool = createVscodeRunCommandsTool({
+			cwd: "/workspace",
+			getTerminalManager,
+			vscodeTerminalExecutionMode: "vscodeTerminal",
+			qaCredentials: () => [{ name: "QA_TOKEN", value: "token-value-here" }],
+		})
+
+		// Asserted through the terminal manager rather than through output: this
+		// suite does not spawn real processes, so what the child could read is
+		// covered in core (bash.qa-credentials.test.ts) against an actual one.
+		// What is observable here is the routing, which is the part that is this
+		// file's responsibility.
+		await tool.execute(
+			{ commands: ["printf '%s\\n' \"$QA_TOKEN\""] },
+			{ agentId: "agent-1", conversationId: "conversation-1", iteration: 1 },
+		)
+
+		expect(getTerminalManager).not.toHaveBeenCalled()
+	})
+
+	it("still uses the terminal for a command that asked for no credential", async () => {
+		const process = createFakeTerminalProcess({ lines: ["terminal-ok"] })
+		const getTerminalManager = vi.fn(() => createFakeTerminalManager(process))
+		const tool = createVscodeRunCommandsTool({
+			cwd: "/workspace",
+			getTerminalManager,
+			vscodeTerminalExecutionMode: "vscodeTerminal",
+			qaCredentials: () => [{ name: "QA_TOKEN", value: "token-value-here" }],
+		})
+
+		await tool.execute(
+			{ commands: ["printf 'terminal-ok\\n'"] },
+			{ agentId: "agent-1", conversationId: "conversation-1", iteration: 1 },
+		)
+
+		expect(getTerminalManager).toHaveBeenCalledOnce()
+	})
+
 	it("constructs a cmd tool from the stock array-valued Command Prompt profile", () => {
 		Object.defineProperty(process, "platform", { value: "win32" })
 		process.env.windir = "C:\\Windows"

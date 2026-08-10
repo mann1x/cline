@@ -9,6 +9,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { DebouncedTextArea } from "../common/DebouncedTextArea"
 import PromptTemplatesSection from "../PromptTemplatesSection"
+import QaCredentialsField from "../QaCredentialsField"
 import Section from "../Section"
 import { updateSetting } from "../utils/settingsHandlers"
 
@@ -281,6 +282,7 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 									</SelectContent>
 								</Select>
 							</div>
+							<QaCredentialsField />
 						</div>
 					</div>
 

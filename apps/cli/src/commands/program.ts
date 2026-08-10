@@ -73,6 +73,11 @@ export function addRootOptions(cmd: Command): Command {
 				"How many requests this endpoint serves at once (OLLAMA_NUM_PARALLEL, --parallel); bounds concurrent agents (default: 1, max: 10)",
 			)
 			.option(
+				"--qa-credential <name>",
+				"Name of an environment variable holding a QA secret. It is withheld from every command and given only to the ones that ask for it by name, and is masked out of their output. Repeatable.",
+				(value: string, previous: string[] = []) => [...previous, value],
+			)
+			.option(
 				"-t, --timeout <seconds>",
 				"Optional timeout in seconds (default: 0 for no timeout)",
 			)
@@ -244,6 +249,7 @@ export function commanderToParsedArgs(program: Command): ParsedArgs {
 	if (opts.agentsNumCtx !== undefined) result.agentsNumCtx = opts.agentsNumCtx;
 	if (opts.parallelSessions !== undefined)
 		result.parallelSessions = opts.parallelSessions;
+	if (opts.qaCredential !== undefined) result.qaCredential = opts.qaCredential;
 	if (opts.provider !== undefined) result.provider = opts.provider;
 	if (opts.key !== undefined) result.key = opts.key;
 	else if (opts.apiKey !== undefined) result.key = opts.apiKey;

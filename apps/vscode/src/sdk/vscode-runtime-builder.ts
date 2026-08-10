@@ -12,6 +12,7 @@ import { createBrowserTool } from "./browser-tool"
 import { createCheckFileTool } from "./check-file-tool"
 import { createCodeIntelTool } from "./code-intel-tool"
 import { createListFilesTool } from "./list-files-tool"
+import { readQaCredentials } from "./qa-credentials-store"
 import type { SdkForegroundCommandCoordinator } from "./sdk-foreground-command-coordinator"
 import { createVscodeRunCommandsTool, VSCODE_FOREGROUND_RUN_COMMANDS_TIMEOUT_MS } from "./vscode-run-commands-tool"
 
@@ -159,6 +160,7 @@ export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExt
 				bashTimeoutMs: executionMode === "vscodeTerminal" ? VSCODE_FOREGROUND_RUN_COMMANDS_TIMEOUT_MS : undefined,
 				vscodeTerminalExecutionMode: executionMode,
 				foregroundCommands: options.foregroundCommands,
+				qaCredentials: readQaCredentials,
 			}),
 		)
 		Logger.log(

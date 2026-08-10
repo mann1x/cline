@@ -23,6 +23,7 @@ import {
 import {
 	createBuiltinTools,
 	DEFAULT_MODEL_TOOL_ROUTING_RULES,
+	type QaCredential,
 	resolveToolPresetName,
 	resolveToolRoutingConfig,
 	type SkillsExecutorWithMetadata,
@@ -140,6 +141,7 @@ function createBuiltinToolsList(
 	skillsExecutor?: SkillsExecutorWithMetadata,
 	executorOverrides?: Partial<ToolExecutors>,
 	telemetry?: ITelemetryService,
+	qaCredentials?: QaCredential[],
 ): AgentTool[] {
 	const preset = ToolPresets[resolveToolPresetName({ mode })];
 	const toolRoutingConfig = resolveToolRoutingConfig(
@@ -153,6 +155,7 @@ function createBuiltinToolsList(
 		createBuiltinTools({
 			cwd,
 			telemetry,
+			qaCredentials,
 			...preset,
 			enableSkills: !!skillsExecutor,
 			...toolRoutingConfig,
@@ -187,6 +190,9 @@ function isSkillsToolEnabledForSession(input: {
 		input.toolPolicies,
 		SKILLS_PROBE_EXECUTOR,
 		input.toolExecutors,
+		// No telemetry and no credentials: this builds a throwaway tool list only
+		// to ask whether `skills` is in it. Handing it secrets would put them in a
+		// closure nothing ever calls.
 	).some((tool) => tool.name === "skills");
 }
 
@@ -464,6 +470,7 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 					undefined,
 					toolExecutors,
 					telemetry ?? config.telemetry,
+					config.qaCredentials,
 				),
 			);
 			if (!normalized.disableMcpSettingsTools) {
@@ -584,6 +591,7 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 													: undefined,
 												toolExecutors,
 												telemetry ?? config.telemetry,
+												config.qaCredentials,
 											),
 											agent,
 										)
@@ -698,6 +706,7 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 									undefined,
 									toolExecutors,
 									telemetry ?? config.telemetry,
+									config.qaCredentials,
 								)
 						: undefined,
 					teammateConfigProvider: delegatedAgentConfigProvider,

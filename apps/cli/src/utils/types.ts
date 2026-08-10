@@ -101,6 +101,14 @@ export interface ParsedArgs {
 	agentsNumCtx?: string;
 	/** Concurrent requests this endpoint serves. A string, from the flag. */
 	parallelSessions?: string;
+	/**
+	 * Names of environment variables holding QA secrets.
+	 *
+	 * Names, not values: the CLI reads them out of its own environment, so the
+	 * secret never appears on a command line, in shell history, or in any file
+	 * this program writes.
+	 */
+	qaCredential?: string[];
 	cwd?: string;
 	teamName?: string;
 	defaultToolAutoApprove: boolean;

@@ -92,6 +92,8 @@ export interface ExtensionState {
 	agentsModeApiConfiguration: string
 	/** Whether a run may finish with a file it changed and never checked. */
 	editVerificationSettings: EditVerificationSettings
+	/** Names of the configured QA credentials. Never their values. */
+	qaCredentialNames: string[]
 	/** JSON `ApiConfigurationProfile[]`. */
 	apiConfigurationProfiles: string
 	/** Name of the loaded profile, or "" when the panel matches no profile. */

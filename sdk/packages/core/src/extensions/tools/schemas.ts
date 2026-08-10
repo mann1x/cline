@@ -241,6 +241,16 @@ export const RunCommandsInputSchema = z.object({
 	commands: z
 		.array(CommandInputSchema)
 		.describe("Array of complete shell command strings to execute."),
+	// Only meaningful when the user has configured QA credentials; the tool
+	// description lists the names when there are any and says nothing when
+	// there are none. Optional everywhere, because a command that spells
+	// `$QA_PASSWORD` out is already asking.
+	credentials: z
+		.array(z.string())
+		.optional()
+		.describe(
+			"Names of configured QA credentials these commands need, for a command that does not name them itself (a test runner reading its own environment). Values are set only for this call and are never shown to you.",
+		),
 });
 
 const StructuredCommandsInputSchema = z.object({

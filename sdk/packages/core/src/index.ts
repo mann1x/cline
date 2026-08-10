@@ -900,6 +900,7 @@ export {
 	createEditorExecutor,
 	createFileReadExecutor,
 	createReadReceipts,
+	createSecretRedactor,
 	createShellExecutor,
 	createShellTool,
 	createToolPoliciesWithPreset,
@@ -920,6 +921,7 @@ export {
 	type PatchFileChange,
 	type ReadReceipts,
 	resolveCoreSelectedToolIds,
+	type ShellExecutionOptions,
 	type ShellExecutor,
 	type ShellExecutorOptions,
 	type StructuredCommandInput,
@@ -932,6 +934,19 @@ export {
 	ToolPresets,
 	truncateCommandOutput,
 } from "./extensions/tools";
+export {
+	commandText,
+	describeQaCredentials,
+	type NormalizedQaCredentials,
+	normalizeQaCredentials,
+	QA_CREDENTIAL_MIN_VALUE_LENGTH,
+	QA_CREDENTIAL_NAME_PATTERN,
+	type QaCredential,
+	qaCredentialNames,
+	referencedCredentialNames,
+	type RejectedQaCredential,
+	resolveCredentialEnv,
+} from "./extensions/tools/qa-credentials";
 export {
 	CHECK_FILE_TOOL_DESCRIPTION,
 	CHECK_FILE_TOOL_INPUT_SCHEMA,

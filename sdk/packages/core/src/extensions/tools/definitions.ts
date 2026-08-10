@@ -65,6 +65,13 @@ import {
 	type SubmitInput,
 	SubmitInputSchema,
 } from "./schemas";
+import {
+	createSecretRedactor,
+	describeQaCredentials,
+	type QaCredential,
+	qaCredentialNames,
+	resolveCredentialEnv,
+} from "./qa-credentials";
 import type {
 	ApplyPatchExecutor,
 	AskQuestionExecutor,
@@ -184,6 +191,29 @@ function coalesceAdjacentStringHeredocs(
 	return coalesced;
 }
 
+/**
+ * The credentials a call asked for, off the raw input.
+ *
+ * Read defensively rather than through the schema because `run_commands`
+ * accepts a union of nine input shapes -- a bare string, an argv list, a single
+ * command object -- and only the object form can carry this field at all. A
+ * model that puts it somewhere else gets no credentials rather than a
+ * validation failure that loses the whole call.
+ */
+function readRequestedCredentials(input: unknown): string[] {
+	if (typeof input !== "object" || input === null) {
+		return [];
+	}
+	const requested = (input as { credentials?: unknown }).credentials;
+	if (typeof requested === "string") {
+		return [requested];
+	}
+	if (!Array.isArray(requested)) {
+		return [];
+	}
+	return requested.filter((name): name is string => typeof name === "string");
+}
+
 async function executeShellCommands(
 	commands: Array<string | StructuredCommandInput>,
 	options: {
@@ -193,24 +223,55 @@ async function executeShellCommands(
 		timeoutMs: number;
 		timeoutSource: "default_setting" | "configured_setting";
 		telemetry?: ITelemetryService;
+		/** QA credentials this call may draw on; see `qa-credentials.ts`. */
+		credentials?: readonly QaCredential[];
+		/** Names the call asked for, for a command that references none by text. */
+		requestedCredentials?: readonly string[];
 	},
 ): Promise<ToolOperationResult[]> {
 	const { executor, cwd, context, timeoutMs, timeoutSource, telemetry } =
 		options;
+	const credentials = options.credentials ?? [];
+	// Built once for the call, and applied to every result rather than only to
+	// the commands that received a credential. A command that was given nothing
+	// can still print one -- out of a config file it read, out of a framework
+	// that resolved its own environment -- and that is the leak worth catching.
+	const redact = createSecretRedactor(credentials);
+	const withheldNames = qaCredentialNames([...credentials]);
 
 	return Promise.all(
 		commands.map(async (command): Promise<ToolOperationResult> => {
 			const startedAt = Date.now();
-			const query = formatRunCommandQueryPreview(command);
+			// The command itself is echoed back as `query`, so a value the model
+			// inlined instead of referencing would return in the transcript from
+			// here even if the command printed nothing.
+			const query = redact(formatRunCommandQueryPreview(command));
+			const env = resolveCredentialEnv(credentials, {
+				command,
+				requested: options.requestedCredentials,
+			});
 			try {
 				const output = await withTimeout(
-					executor(command, cwd, context),
+					// Called with three arguments when there is nothing to say, so
+					// an executor that has never heard of per-call options sees the
+					// call it has always seen.
+					//
+					// `withhold` goes on every command once any credential exists,
+					// including the ones that get nothing: its job is to take the
+					// declared names *out* of the inherited environment, which
+					// matters most for the commands that did not ask.
+					credentials.length > 0
+						? executor(command, cwd, context, {
+								...(Object.keys(env).length > 0 ? { env } : {}),
+								withhold: withheldNames,
+							})
+						: executor(command, cwd, context),
 					timeoutMs,
 					`Command timed out after ${timeoutMs}ms`,
 				);
 				return {
 					query,
-					result: output,
+					result: redact(output),
 					success: true,
 				};
 			} catch (error) {
@@ -225,8 +286,8 @@ async function executeShellCommands(
 				if (error instanceof CommandExitError) {
 					return {
 						query,
-						result: error.output,
-						error: error.message,
+						result: redact(error.output),
+						error: redact(error.message),
 						success: false,
 					};
 				}
@@ -234,7 +295,7 @@ async function executeShellCommands(
 				return {
 					query,
 					result: "",
-					error: `Command failed: ${msg}`,
+					error: redact(`Command failed: ${msg}`),
 					success: false,
 				};
 			}
@@ -530,6 +591,14 @@ export function createShellTool(
 	executor: ShellExecutor,
 	config: Pick<DefaultToolsConfig, "cwd" | "bashTimeoutMs" | "telemetry"> & {
 		shell?: string | (() => string);
+		/**
+		 * QA credentials the user configured.
+		 *
+		 * A provider rather than a list because the set is editable while a
+		 * session runs, and because reading it late keeps the values out of this
+		 * closure until a command actually needs one.
+		 */
+		qaCredentials?: readonly QaCredential[] | (() => readonly QaCredential[]);
 	} = {},
 ): AgentTool<unknown, ToolOperationResult[]> {
 	const timeoutMs = config.bashTimeoutMs ?? 30000;
@@ -544,8 +613,14 @@ export function createShellTool(
 		typeof configShell === "function"
 			? configShell
 			: () => configShell ?? getDefaultShell(process.platform);
+	const configCredentials = config.qaCredentials;
+	const resolveCredentials = (): readonly QaCredential[] =>
+		typeof configCredentials === "function"
+			? configCredentials()
+			: (configCredentials ?? []);
 	const describe = () =>
-		buildRunCommandsDescription(getShellKind(resolveShell()), isWindows);
+		buildRunCommandsDescription(getShellKind(resolveShell()), isWindows) +
+		describeQaCredentials(qaCredentialNames([...resolveCredentials()]));
 
 	const tool = createTool<unknown, ToolOperationResult[]>({
 		name: "run_commands",
@@ -566,14 +641,18 @@ export function createShellTool(
 				timeoutMs,
 				timeoutSource,
 				telemetry: config.telemetry,
+				credentials: resolveCredentials(),
+				requestedCredentials: readRequestedCredentials(input),
 			});
 		},
 	});
 
-	if (typeof configShell === "function") {
+	if (typeof configShell === "function" || configCredentials !== undefined) {
 		// The runtime rebuilds tool definitions from this property for every
 		// model request, so a getter re-derives the description at exactly the
 		// send-to-model boundary. AgentTool consumers only read `description`.
+		// Credentials get the same treatment for the same reason: one added
+		// mid-session should be nameable on the next request, not the next run.
 		Object.defineProperty(tool, "description", {
 			get: describe,
 			enumerable: true,
