@@ -85,6 +85,10 @@ export interface ExtensionState {
 	visionModelEnabled: boolean
 	/** JSON `ApiConfigurationSnapshot` for the vision model. */
 	visionModeApiConfiguration: string
+	/** Run delegated agents on a model of their own rather than the session's. */
+	agentsModelEnabled: boolean
+	/** JSON `ApiConfigurationSnapshot` for delegated agents. */
+	agentsModeApiConfiguration: string
 	/** JSON `ApiConfigurationProfile[]`. */
 	apiConfigurationProfiles: string
 	/** Name of the loaded profile, or "" when the panel matches no profile. */

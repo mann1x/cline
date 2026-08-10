@@ -57,6 +57,31 @@ export interface CoreModelConfig {
 	temperature?: number;
 }
 
+/**
+ * A connection for delegated agents that is not the session's own.
+ *
+ * Subagents and teammates inherit the lead's whole connection — provider,
+ * model, sampler, and the context window with it. That is the right default and
+ * the wrong only option: it leaves no way to run a team of small agents under a
+ * strong lead, and no way to give them a window sized for the narrower job.
+ *
+ * Deliberately only the connection: which model to call, where, and with what
+ * provider settings. Everything else about a delegated agent — its tools, its
+ * prompt, its iteration cap — still comes from the session that spawned it. And
+ * only the fields actually set are taken, so an override naming a model and
+ * nothing else keeps the session's sampler and thinking budget.
+ */
+export type DelegatedAgentConnectionOverride = Pick<
+	CoreModelConfig,
+	| "providerId"
+	| "modelId"
+	| "apiKey"
+	| "baseUrl"
+	| "headers"
+	| "providerConfig"
+	| "knownModels"
+>;
+
 export interface CoreRuntimeFeatures {
 	enableTools: boolean;
 	enableSpawnAgent: boolean;
@@ -379,6 +404,13 @@ export interface CoreSessionConfig
 	describeImages?: AgentConfig["describeImages"];
 	/** See `AgentConfig.alwaysDescribeImages`. */
 	alwaysDescribeImages?: boolean;
+	/**
+	 * Run subagents and teammates on this connection instead of the session's.
+	 *
+	 * Omitted means what it always meant: they inherit the lead's. See
+	 * `DelegatedAgentConnectionOverride`.
+	 */
+	delegatedAgentConnection?: DelegatedAgentConnectionOverride;
 	workspaceRoot?: string;
 	systemPrompt: string;
 	teamName?: string;

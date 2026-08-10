@@ -1063,6 +1063,7 @@ export type {
 	CoreModelConfig,
 	CoreRuntimeFeatures,
 	CoreSessionConfig,
+	DelegatedAgentConnectionOverride,
 } from "./types/config";
 export type {
 	CoreSessionEvent,

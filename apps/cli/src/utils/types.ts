@@ -95,6 +95,10 @@ export interface ParsedArgs {
 	retries?: number;
 	invalidRetries?: string;
 	visionModel?: string;
+	/** Model delegated agents run on, instead of the session's. */
+	agentsModel?: string;
+	/** Context window for that model. A string: it arrives from the flag. */
+	agentsNumCtx?: string;
 	cwd?: string;
 	teamName?: string;
 	defaultToolAutoApprove: boolean;

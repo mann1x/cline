@@ -34,6 +34,7 @@ import {
 	AgentTeamsRuntime,
 	bootstrapAgentTeams,
 	createDelegatedAgentConfigProvider,
+	type DelegatedAgentConnectionConfig,
 	type TeamEvent,
 } from "../../extensions/tools/team";
 import type { ConfiguredAgentConfig } from "../../extensions/tools/team/configured-agent-config";
@@ -489,28 +490,66 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 			| undefined;
 		let pendingLeadTeamTools: AgentTool[] = [];
 		let restoredStateHydratedIntoRuntime = false;
-		const delegatedAgentConfigProvider = createDelegatedAgentConfigProvider({
-			providerId: config.providerId,
-			modelId: config.modelId,
-			cwd: config.cwd,
-			apiKey: config.apiKey ?? "",
-			baseUrl: config.baseUrl,
-			headers: config.headers,
-			providerConfig: config.providerConfig,
-			knownModels: config.knownModels,
-			thinking: config.thinking,
-			reasoningEffort: config.reasoningEffort,
-			thinkingBudgetTokens: config.thinkingBudgetTokens,
-			maxTokensPerTurn: config.maxTokensPerTurn,
-			maxToolResultChars: config.maxToolResultChars,
-			temperature: config.temperature,
-			maxIterations: config.maxIterations,
-			hooks,
-			extensions: runtimeExtensions,
-			logger: logger ?? config.logger,
-			telemetry: input.telemetry ?? config.telemetry,
-			workspaceMetadata: config.workspaceMetadata,
-		});
+		// A connection of their own, when the host gave them one. Only the fields
+		// it actually names are taken: an override that says which model to call
+		// and nothing else still inherits the session's sampler and thinking
+		// budget, which is the sensible reading of a tab where those were left
+		// alone. Those same fields are then pinned, so the connection updates the
+		// host pushes for the session's model do not move the agents back onto it.
+		const agentsConnection = config.delegatedAgentConnection;
+		const agentsOverrides: Partial<DelegatedAgentConnectionConfig> =
+			agentsConnection
+				? {
+						providerId: agentsConnection.providerId,
+						modelId: agentsConnection.modelId,
+						...(agentsConnection.apiKey !== undefined
+							? { apiKey: agentsConnection.apiKey }
+							: {}),
+						...(agentsConnection.baseUrl !== undefined
+							? { baseUrl: agentsConnection.baseUrl }
+							: {}),
+						...(agentsConnection.headers !== undefined
+							? { headers: agentsConnection.headers }
+							: {}),
+						...(agentsConnection.knownModels !== undefined
+							? { knownModels: agentsConnection.knownModels }
+							: {}),
+						...(agentsConnection.providerConfig !== undefined
+							? { providerConfig: agentsConnection.providerConfig }
+							: {}),
+					}
+				: {};
+		const delegatedAgentConfigProvider = createDelegatedAgentConfigProvider(
+			{
+				providerId: config.providerId,
+				modelId: config.modelId,
+				cwd: config.cwd,
+				apiKey: config.apiKey ?? "",
+				baseUrl: config.baseUrl,
+				headers: config.headers,
+				providerConfig: config.providerConfig,
+				knownModels: config.knownModels,
+				thinking: config.thinking,
+				reasoningEffort: config.reasoningEffort,
+				thinkingBudgetTokens: config.thinkingBudgetTokens,
+				maxTokensPerTurn: config.maxTokensPerTurn,
+				maxToolResultChars: config.maxToolResultChars,
+				temperature: config.temperature,
+				maxIterations: config.maxIterations,
+				hooks,
+				extensions: runtimeExtensions,
+				logger: logger ?? config.logger,
+				telemetry: input.telemetry ?? config.telemetry,
+				workspaceMetadata: config.workspaceMetadata,
+				...agentsOverrides,
+			},
+			Object.keys(agentsOverrides) as (keyof DelegatedAgentConnectionConfig)[],
+		);
+		if (agentsConnection) {
+			(logger ?? config.logger)?.log(
+				`[Agents] Delegated agents run on provider=${agentsConnection.providerId} model=${agentsConnection.modelId}, not the session's`,
+			);
+		}
 		if (normalized.enableSpawnAgent) {
 			if (configuredAgents.configs.length > 0) {
 				tools.push(

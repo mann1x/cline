@@ -205,6 +205,18 @@ describe("profileProviderSettingsFor", () => {
 		})
 	})
 
+	// Four scopes, one provider, four windows. Plan and Act read their profile
+	// here; Vision and Agents keep theirs in snapshots of their own, and this is
+	// the same question asked of the profile bar on those tabs.
+	it("keeps all four scopes apart on one provider", () => {
+		const active = JSON.stringify({ plan: "big", act: "small", vision: "small", agents: "big" })
+
+		expect(profileProviderSettingsFor(profiles, active, "plan")).toEqual({ contextWindow: 128_000 })
+		expect(profileProviderSettingsFor(profiles, active, "act")).toEqual({ contextWindow: 8_192 })
+		expect(profileProviderSettingsFor(profiles, active, "vision")).toEqual({ contextWindow: 8_192 })
+		expect(profileProviderSettingsFor(profiles, active, "agents")).toEqual({ contextWindow: 128_000 })
+	})
+
 	it("matches a profile name regardless of case", () => {
 		expect(profileProviderSettingsFor(profiles, JSON.stringify({ act: "BIG" }), "act")).toEqual({
 			contextWindow: 128_000,

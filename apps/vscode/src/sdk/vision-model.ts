@@ -2,9 +2,9 @@ import type { AgentImageToDescribe } from "@cline/shared"
 import type { ApiConfiguration } from "@shared/api"
 import { parseApiConfigurationSnapshot } from "@shared/api-config-profiles"
 import { applyApiConfigurationSnapshot } from "@shared/api-config-snapshot"
+import { snapshotProviderId } from "@shared/model-scope-config"
 import { Logger } from "@shared/services/Logger"
 import { SecretKeys } from "@shared/storage/state-keys"
-import { visionSnapshotProviderId } from "@shared/vision-config"
 import { buildApiHandler } from "./sdk-api-handler"
 
 /**
@@ -31,14 +31,17 @@ const VISION_SYSTEM_PROMPT =
 const VISION_REQUEST_TIMEOUT_MS = 120_000
 
 /**
- * Rebuilds the vision model's configuration from its stored snapshot.
+ * Rebuilds a scoped model's configuration from its stored snapshot.
  *
- * Returns `undefined` when no vision model has been configured, which is the
- * signal not to install a describer at all. API keys are not part of a
- * snapshot — they are stored per provider and shared — so they are taken from
- * the primary configuration.
+ * Used by both tabs that name a model other than the session's: Vision and
+ * Agents. Returns `undefined` when the tab names no provider, which is the
+ * signal to leave the session's own arrangement alone — no describer installed,
+ * or delegated agents still inheriting the lead's connection.
+ *
+ * API keys are not part of a snapshot — they are stored per provider and shared
+ * — so they are taken from the primary configuration.
  */
-export function buildVisionApiConfiguration(
+export function buildScopedApiConfiguration(
 	primary: ApiConfiguration | undefined,
 	storedSnapshot: string | undefined,
 ): ApiConfiguration | undefined {
@@ -50,7 +53,7 @@ export function buildVisionApiConfiguration(
 	// The same question the chat UI asks before it lets an image be attached.
 	// Asked here through the shared helper so the two cannot answer differently
 	// — that disagreement is what sent an image to a model that refused it.
-	if (!visionSnapshotProviderId(storedSnapshot)) {
+	if (!snapshotProviderId(storedSnapshot)) {
 		return undefined
 	}
 	const secrets: Record<string, unknown> = {}
@@ -59,6 +62,9 @@ export function buildVisionApiConfiguration(
 	}
 	return { ...secrets, ...settings } as ApiConfiguration
 }
+
+/** The vision model's configuration. See `buildScopedApiConfiguration`. */
+export const buildVisionApiConfiguration = buildScopedApiConfiguration
 
 /**
  * Builds the callback the agent runtime uses to turn images into text.

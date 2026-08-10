@@ -1134,6 +1134,35 @@ export async function runCli(): Promise<void> {
 				`[Vision] Describer installed: provider=${provider} model=${visionModelId}`,
 			);
 		}
+		// Delegated agents on a model of their own. The same shape the extension's
+		// Agents tab produces, read at the same place in core: only the fields
+		// named here replace the session's, so an agents model given without a
+		// window keeps the session's sampler and takes whatever window that model
+		// declares for itself.
+		const agentsModelId = args.agentsModel?.trim();
+		if (agentsModelId) {
+			const requested = Number(args.agentsNumCtx);
+			const contextWindow =
+				Number.isFinite(requested) && requested > 0
+					? Math.floor(requested)
+					: undefined;
+			config.delegatedAgentConnection = {
+				providerId: config.providerId,
+				modelId: agentsModelId,
+				...(config.apiKey ? { apiKey: config.apiKey } : {}),
+				...(config.baseUrl !== undefined ? { baseUrl: config.baseUrl } : {}),
+				providerConfig: {
+					...((config.providerConfig as Record<string, unknown> | undefined) ??
+						{}),
+					modelId: agentsModelId,
+					...(contextWindow ? { contextWindow } : {}),
+				},
+			} as NonNullable<(typeof config)["delegatedAgentConnection"]>;
+			loggerAdapter.core.log(
+				`[Agents] Delegated agents configured: provider=${provider} model=${agentsModelId}` +
+					(contextWindow ? ` contextWindow=${contextWindow}` : ""),
+			);
+		}
 		try {
 			// For OAuth providers, don't write the resolved key into apiKey;
 			// the token lives in auth.accessToken and apiKey is reserved for

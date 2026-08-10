@@ -12,6 +12,7 @@ import {
 	type ClineCoreStartInput,
 	type CoreSessionConfig,
 	createPromptTemplateHooks,
+	type DelegatedAgentConnectionOverride,
 	getProviderAuthHandler,
 	mergeAgentHooks,
 	type ProviderSettings,
@@ -38,6 +39,12 @@ import { ClineClient } from "@shared/cline"
 import type { HistoryItem } from "@shared/HistoryItem"
 import { DEFAULT_LANGUAGE_SETTINGS, getLanguageKey, type LanguageDisplay } from "@shared/Languages"
 import { toLegacyApiProvider } from "@shared/model-catalog/provider-helpers"
+import {
+	resolveScopedModelStatus,
+	snapshotModelId,
+	snapshotProviderId,
+	snapshotProviderSettings,
+} from "@shared/model-scope-config"
 import { Logger } from "@shared/services/Logger"
 import type { Settings } from "@shared/storage/state-keys"
 import type { Mode } from "@shared/storage/types"
@@ -68,7 +75,7 @@ import { resolveSessionPromptTemplate } from "./prompt-templates"
 import { getProviderSettingsManager } from "./provider-migration"
 import { buildSapProviderConfig, type SapProviderConfig } from "./sap-config"
 import type { SdkSessionHost } from "./session-host"
-import { buildVisionApiConfiguration, createVisionImageDescriber } from "./vision-model"
+import { buildScopedApiConfiguration, buildVisionApiConfiguration, createVisionImageDescriber } from "./vision-model"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -954,6 +961,77 @@ export function composeSessionHooks(
 }
 
 /**
+ * The connection subagents and teammates run on, from the Agents tab.
+ *
+ * Resolved the same way the session's own connection is, from the tab's stored
+ * snapshot rather than from `providers.json`: that file holds one entry per
+ * provider, the session's model owns it, and a second configuration on the same
+ * provider would overwrite the first. Reading the agents' context window out of
+ * their own snapshot is what stops Plan, Act, Vision and Agents sharing one.
+ *
+ * `undefined` means the tab named no provider or no model, which is the signal
+ * to leave delegated agents inheriting the session's connection as before.
+ */
+export async function buildDelegatedAgentConnection(
+	primary: ApiConfiguration | undefined,
+	storedSnapshot: string | undefined,
+): Promise<DelegatedAgentConnectionOverride | undefined> {
+	const configuration = buildScopedApiConfiguration(primary, storedSnapshot)
+	const namedProvider = snapshotProviderId(storedSnapshot)
+	const modelId = snapshotModelId(storedSnapshot)
+	if (!configuration || !namedProvider || !modelId) {
+		return undefined
+	}
+	// State written by older builds may carry SDK catalog spellings; the
+	// resolvers below are keyed by the legacy ones.
+	const providerId = toLegacyApiProvider(namedProvider) ?? namedProvider
+	const apiKey = resolveApiKey(providerId, configuration)
+	const baseUrl = resolveBaseUrl(providerId, configuration)
+	const providerSettings = snapshotProviderSettings(storedSnapshot)
+
+	let ollamaConfig: ReturnType<typeof resolveOllamaProviderConfig> | undefined
+	if (providerId === "ollama") {
+		// Same priming as the session's own model: ask the server what window
+		// this one was built with before resolving one for it, so the first
+		// request already carries it rather than reloading the model mid-run.
+		await primeDeclaredNumCtx(configuration.ollamaBaseUrl, modelId, fetch)
+		// The tab's own settings, passed as the override — so an Agents tab that
+		// names no window falls through to what the model itself declares rather
+		// than to the number the session's model was given.
+		ollamaConfig = resolveOllamaProviderConfig(configuration, modelId, providerSettings ?? {})
+	}
+
+	const sdkProviderId = toSdkProviderId(providerId)
+	let knownModels: Awaited<ReturnType<typeof getModelsForProvider>> | undefined
+	try {
+		knownModels = await getModelsForProvider(sdkProviderId)
+	} catch (error) {
+		Logger.warn(`[Agents] Failed to resolve known models for provider=${sdkProviderId}:`, error)
+	}
+	const hasKnownModels = !!knownModels && Object.keys(knownModels).length > 0
+
+	return {
+		providerId: sdkProviderId,
+		modelId,
+		...(apiKey ? { apiKey } : {}),
+		...(baseUrl !== undefined ? { baseUrl } : {}),
+		...(hasKnownModels ? { knownModels } : {}),
+		// The proxy/CA-aware fetch belongs here for the same reason it does on
+		// the session's own config: without it the agents' model calls fall back
+		// to bare global fetch.
+		providerConfig: {
+			...(ollamaConfig ?? {}),
+			providerId: sdkProviderId,
+			modelId,
+			...(apiKey ? { apiKey } : {}),
+			...(baseUrl !== undefined ? { baseUrl } : {}),
+			...(hasKnownModels ? { knownModels } : {}),
+			fetch,
+		},
+	}
+}
+
+/**
  * Build a CoreSessionConfig from the current state.
  *
  * Reads provider settings from the classic StateManager's ApiConfiguration
@@ -1321,6 +1399,29 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 			}`,
 		)
 	}
+
+	// Delegated agents: their own connection, when the Agents tab names one. The
+	// same arrangement as vision, for the same reason — `providers.json` holds
+	// one entry per provider and the session's model owns it, so a second and a
+	// third configuration on that provider have to live in snapshots of their
+	// own. That is what gives Plan, Act, Vision and Agents four context windows
+	// rather than one shared between whichever of them are on one provider.
+	const agentsSnapshot = stateManager.getGlobalSettingsKey("agentsModeApiConfiguration")
+	const agentsStatus = resolveScopedModelStatus(stateManager.getGlobalSettingsKey("agentsModelEnabled"), agentsSnapshot)
+	const delegatedAgentConnection =
+		agentsStatus === "ready" ? await buildDelegatedAgentConnection(apiConfig, agentsSnapshot) : undefined
+	if (agentsStatus === "unconfigured") {
+		const namedProvider = snapshotProviderId(agentsSnapshot)
+		Logger.warn(
+			`[Agents] A separate agents model is enabled but the Agents tab names ${
+				namedProvider ? `no model (provider=${namedProvider})` : "no provider"
+			}; delegated agents will run on the session's model`,
+		)
+	} else if (delegatedAgentConnection) {
+		Logger.log(
+			`[Agents] Delegated agents configured: provider=${delegatedAgentConnection.providerId} model=${delegatedAgentConnection.modelId}`,
+		)
+	}
 	const useAutoCondense = input.taskSettings?.useAutoCondense ?? globalUseAutoCondense
 
 	// Core resolves providers against the SDK registry, which uses the SDK's
@@ -1458,6 +1559,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		// (sdk-compaction.ts) budgets against config.knownModels[modelId] and
 		// otherwise falls back to a conservative 64k input budget.
 		...(knownModels && Object.keys(knownModels).length > 0 ? { knownModels } : {}),
+		...(delegatedAgentConnection ? { delegatedAgentConnection } : {}),
 		cwd,
 		workspaceRoot,
 		systemPrompt,

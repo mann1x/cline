@@ -32,11 +32,23 @@ const EMPTY_SNAPSHOT: ApiConfigurationSnapshot = { global: {}, mode: {} }
  * Which configuration the bar is looking at.
  *
  * There is one list of profiles for the whole panel; this is only about where a
- * load lands and where a save reads from. The Vision tab holds its own
- * configuration, so a bar there that wrote to Plan or Act would save the wrong
- * settings under a name the user chose for the vision model.
+ * load lands and where a save reads from. The Vision and Agents tabs each hold
+ * a configuration of their own, so a bar on either that wrote to Plan or Act
+ * would save the wrong settings under a name the user chose for something else.
  */
-export type ApiConfigurationProfileScope = { kind: "mode"; mode: Mode } | { kind: "vision" }
+export type ApiConfigurationProfileScope = { kind: "mode"; mode: Mode } | { kind: "vision" } | { kind: "agents" }
+
+/**
+ * The scopes that keep their own snapshot rather than reading the live panel.
+ *
+ * `providers.json` holds one entry per provider, and the session's own model
+ * owns it — so a second and a third configuration on that provider cannot live
+ * there without overwriting the first. Each of these keeps its settings, its
+ * model and its context window in a settings string of its own instead
+ * (`visionModeApiConfiguration`, `agentsModeApiConfiguration`), which is what
+ * makes four separate context windows possible at all.
+ */
+type SnapshotScopeKind = "vision" | "agents"
 
 export interface ApiConfigurationProfilesState {
 	profiles: ApiConfigurationProfile[]
@@ -68,42 +80,54 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 		apiConfigurationProfiles,
 		activeApiConfigurationProfile,
 		visionModeApiConfiguration,
+		agentsModeApiConfiguration,
 		planActSeparateModelsSetting,
 	} = useExtensionState()
 	const { handleFieldsChange } = useApiConfigurationHandlers()
 
+	// A tab that keeps its own snapshot, and the snapshot it keeps. `undefined`
+	// on Plan and Act, which read the panel's live configuration instead.
+	const snapshotKind: SnapshotScopeKind | undefined = scope.kind === "mode" ? undefined : scope.kind
+	const storedSnapshot = snapshotKind === "agents" ? agentsModeApiConfiguration : visionModeApiConfiguration
+
 	// The provider whose providers.json entry this bar saves and loads. Read from
 	// the configuration in view rather than the panel's tab, so the Vision bar
 	// carries the vision model's provider and not the one Act happens to be on.
-	const scopeMode: Mode = scope.kind === "vision" ? "act" : scope.mode
+	const scopeMode: Mode = scope.kind === "mode" ? scope.mode : "act"
 	const activeProviderId = useMemo(() => {
-		const configuration =
-			scope.kind === "vision"
-				? (applyApiConfigurationSnapshot(parseApiConfigurationSnapshot(visionModeApiConfiguration) ?? EMPTY_SNAPSHOT, [
-						"act",
-					]) as ApiConfiguration)
-				: apiConfiguration
+		const configuration = snapshotKind
+			? (applyApiConfigurationSnapshot(parseApiConfigurationSnapshot(storedSnapshot) ?? EMPTY_SNAPSHOT, [
+					"act",
+				]) as ApiConfiguration)
+			: apiConfiguration
 		return getActiveProviderAndModelId(configuration, scopeMode).provider
-	}, [scope, apiConfiguration, visionModeApiConfiguration, scopeMode])
+	}, [snapshotKind, apiConfiguration, storedSnapshot, scopeMode])
 	const { config: providerConfig, write: writeProviderConfig, commitSelection } = useProviderConfig(activeProviderId as never)
 
 	const profiles = useMemo(() => parseApiConfigurationProfiles(apiConfigurationProfiles), [apiConfigurationProfiles])
 
 	// What the tab in view currently holds, in the same shape a profile stores.
 	const currentSnapshot = useMemo(() => {
-		const base =
-			scope.kind === "vision"
-				? (parseApiConfigurationSnapshot(visionModeApiConfiguration) ?? EMPTY_SNAPSHOT)
-				: captureApiConfigurationSnapshot(apiConfiguration, scope.mode)
+		if (snapshotKind) {
+			// Provider settings included, straight out of the snapshot. A tab that
+			// owns its own (`ownsProviderSettings` on its scope context) never
+			// writes them to providers.json, so reading them back from there saved
+			// the *session's* context window under a name the user chose for the
+			// vision or agents model — and left the dirty check comparing this tab
+			// against the shared entry, which is a tab that looks unsaved whenever
+			// the main model's window differs from its own.
+			return parseApiConfigurationSnapshot(storedSnapshot) ?? EMPTY_SNAPSHOT
+		}
+		const base = captureApiConfigurationSnapshot(apiConfiguration, scopeMode)
 		const captured = captureProviderConfigSnapshot(providerConfig)
 		return captured === undefined ? base : { ...base, providerConfig: captured }
-	}, [scope, apiConfiguration, visionModeApiConfiguration, providerConfig])
+	}, [snapshotKind, apiConfiguration, scopeMode, storedSnapshot, providerConfig])
 
 	// The active profile is per scope: loading one into Vision says nothing
-	// about what Plan and Act are holding, so a single stored name would show
-	// the wrong one on two tabs out of three.
+	// about what Plan, Act and Agents are holding, so a single stored name would
+	// show the wrong one on three tabs out of four.
 	const activeNames = useMemo(() => parseActiveNames(activeApiConfigurationProfile), [activeApiConfigurationProfile])
-	const scopeKey = scope.kind === "vision" ? "vision" : scope.mode
+	const scopeKey = snapshotKind ?? scopeMode
 	const activeProfile = useMemo(
 		() => findApiConfigurationProfile(profiles, activeNames[scopeKey] ?? ""),
 		[profiles, activeNames, scopeKey],
@@ -120,13 +144,12 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 		if (activeProfile && !isDirty) {
 			return activeProfile.name
 		}
-		const configuration =
-			scope.kind === "vision"
-				? (applyApiConfigurationSnapshot(currentSnapshot, ["act"]) as ApiConfiguration)
-				: apiConfiguration
-		const { provider, modelId } = getActiveProviderAndModelId(configuration, scope.kind === "vision" ? "act" : scope.mode)
+		const configuration = snapshotKind
+			? (applyApiConfigurationSnapshot(currentSnapshot, ["act"]) as ApiConfiguration)
+			: apiConfiguration
+		const { provider, modelId } = getActiveProviderAndModelId(configuration, scopeMode)
 		return proposeProfileName(provider, modelId, profiles)
-	}, [scope, apiConfiguration, currentSnapshot, profiles, activeProfile, isDirty])
+	}, [snapshotKind, scopeMode, apiConfiguration, currentSnapshot, profiles, activeProfile, isDirty])
 
 	const writeActiveNames = useCallback(async (next: Record<string, string>, profileList?: ApiConfigurationProfile[]) => {
 		await StateServiceClient.updateSettings(
@@ -154,27 +177,33 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 				scopeMode,
 			)
 
-			if (scope.kind === "vision") {
-				if (snapshot.providerConfig) {
-					await writeProviderConfig(snapshot.providerConfig as never)
-				}
-				// The vision tab keeps its selection inside its own snapshot, under
-				// the key its picker reads.
+			if (snapshotKind) {
+				// Into this tab's own snapshot and nowhere else. Writing the
+				// profile's provider settings to providers.json as well put its
+				// context window onto the entry the *session's* model reads, so
+				// loading a profile into Vision resized Plan and Act — the one
+				// window between them that having a snapshot per tab exists to end.
 				const providerConfig = {
 					...((snapshot.providerConfig as Record<string, unknown> | undefined) ?? {}),
+					// The tab keeps its selection inside the snapshot, under the key
+					// its picker reads.
 					...(selection.modelId ? { selectedModelId: selection.modelId } : {}),
 				}
+				const stored = JSON.stringify(Object.keys(providerConfig).length > 0 ? { ...snapshot, providerConfig } : snapshot)
+				// Spelled out per scope rather than written under a computed key: a
+				// computed key widens the object to an index signature, and the
+				// request builder then accepts it without checking the field exists.
 				await StateServiceClient.updateSettings(
-					UpdateSettingsRequest.create({
-						visionModeApiConfiguration: JSON.stringify(
-							Object.keys(providerConfig).length > 0 ? { ...snapshot, providerConfig } : snapshot,
-						),
-					}),
+					UpdateSettingsRequest.create(
+						snapshotKind === "agents"
+							? { agentsModeApiConfiguration: stored }
+							: { visionModeApiConfiguration: stored },
+					),
 				)
 				return
 			}
 
-			const targetModes: Mode[] = planActSeparateModelsSetting ? [scope.mode] : ["plan", "act"]
+			const targetModes: Mode[] = planActSeparateModelsSetting ? [scopeMode] : ["plan", "act"]
 			await handleFieldsChange(applyApiConfigurationSnapshot(snapshot, targetModes))
 
 			// providers.json after the settings copy and before the model. It holds
@@ -240,7 +269,7 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 			}
 		},
 		[
-			scope,
+			snapshotKind,
 			scopeMode,
 			planActSeparateModelsSetting,
 			handleFieldsChange,

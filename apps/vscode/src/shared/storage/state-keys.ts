@@ -272,6 +272,13 @@ const USER_SETTINGS_FIELDS = {
 	// Use a second model to turn images into text for a primary model that
 	// cannot read them itself.
 	visionModelEnabled: { default: false as boolean },
+	// Run subagents and teammates on a model of their own, rather than on the
+	// one driving the session. A delegated agent inherits the session's whole
+	// connection config — provider, model, sampler and the context window with
+	// it — so up to now Plan, Act, Vision and Agents had one window between the
+	// three that share a provider entry, and no way at all to give an agent a
+	// smaller model than the lead.
+	agentsModelEnabled: { default: false as boolean },
 	// Both of these hold JSON rather than a proto message. What they carry is a
 	// snapshot of the API configuration panel, and the panel's field list grows
 	// with every provider added — spelling it out here would mean a generated
@@ -284,6 +291,8 @@ const USER_SETTINGS_FIELDS = {
 	activeApiConfigurationProfile: { default: "" as string },
 	/** JSON `ApiConfigurationSnapshot` for the vision model. */
 	visionModeApiConfiguration: { default: "" as string },
+	/** JSON `ApiConfigurationSnapshot` for delegated agents. */
+	agentsModeApiConfiguration: { default: "" as string },
 	enableCheckpointsSetting: { default: true as boolean },
 	shellIntegrationTimeout: { default: 4000 as number },
 	// 0 means "unset": the SDK's own DEFAULT_MAX_TOOL_RESULT_CHARS applies.

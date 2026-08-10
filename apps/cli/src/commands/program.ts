@@ -61,6 +61,14 @@ export function addRootOptions(cmd: Command): Command {
 				"Describe images with this model instead of sending them to the session's model (same provider)",
 			)
 			.option(
+				"--agents-model <model-id>",
+				"Run subagents and teammates on this model instead of the session's (same provider)",
+			)
+			.option(
+				"--agents-num-ctx <tokens>",
+				"Context window for the agents model; omit to use whatever that model declares",
+			)
+			.option(
 				"-t, --timeout <seconds>",
 				"Optional timeout in seconds (default: 0 for no timeout)",
 			)
@@ -228,6 +236,8 @@ export function commanderToParsedArgs(program: Command): ParsedArgs {
 	if (opts.system !== undefined) result.systemPrompt = opts.system;
 	if (opts.model !== undefined) result.model = opts.model;
 	if (opts.visionModel !== undefined) result.visionModel = opts.visionModel;
+	if (opts.agentsModel !== undefined) result.agentsModel = opts.agentsModel;
+	if (opts.agentsNumCtx !== undefined) result.agentsNumCtx = opts.agentsNumCtx;
 	if (opts.provider !== undefined) result.provider = opts.provider;
 	if (opts.key !== undefined) result.key = opts.key;
 	else if (opts.apiKey !== undefined) result.key = opts.apiKey;

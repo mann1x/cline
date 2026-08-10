@@ -8,6 +8,7 @@ import { ApiFormat } from "@shared/proto/cline/models"
 import { Logger } from "@shared/services/Logger"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
+	buildDelegatedAgentConnection,
 	buildOutputBudgetSection,
 	buildResumeSessionInput,
 	buildSessionConfig,
@@ -1450,6 +1451,57 @@ describe("resolveOllamaProviderConfig", () => {
 		})
 
 		expect(resolved.modelInfo?.contextWindow).toBe(8_192)
+	})
+})
+
+describe("buildDelegatedAgentConnection", () => {
+	function snapshot(providerConfig?: Record<string, unknown>): string {
+		return JSON.stringify({
+			global: {},
+			mode: { apiProvider: "ollama", actModeOllamaModelId: "small-agent" },
+			...(providerConfig ? { providerConfig } : {}),
+		})
+	}
+
+	beforeEach(() => {
+		mocks.providerSettingsManager.getProviderSettings.mockReturnValue(undefined)
+	})
+
+	// The whole point of the tab. `providers.json` holds one entry per provider
+	// and the session's model owns it, so agents on that same provider had the
+	// session's window and no way to have another. Their own snapshot is what
+	// makes a fourth window possible.
+	it("takes the agents' context window from their own snapshot", async () => {
+		const connection = await buildDelegatedAgentConnection(
+			{ actModeApiProvider: "ollama", ollamaApiOptionsCtxNum: "128000" } as never,
+			snapshot({ selectedModelId: "small-agent", contextWindow: 8_192 }),
+		)
+
+		expect(connection?.modelId).toBe("small-agent")
+		expect(connection?.providerConfig?.modelInfo?.contextWindow).toBe(8_192)
+	})
+
+	// `ollamaApiOptionsCtxNum` is one global value. A scoped configuration
+	// reaching for it is exactly how the setting behaved as a global one, and it
+	// would put the session's 128k on an agent model that cannot hold it.
+	it("does not borrow the session's global window", async () => {
+		const connection = await buildDelegatedAgentConnection(
+			{ actModeApiProvider: "ollama", ollamaApiOptionsCtxNum: "128000" } as never,
+			snapshot({ selectedModelId: "small-agent" }),
+		)
+
+		expect(connection?.modelId).toBe("small-agent")
+		expect(connection?.providerConfig?.modelInfo?.contextWindow).not.toBe(128_000)
+	})
+
+	// Not configured is not the same as configured badly: agents keep inheriting
+	// the session's connection, which is the behaviour every build has had.
+	it.each([
+		["nothing is stored", undefined],
+		["the tab names no model", JSON.stringify({ global: {}, mode: { apiProvider: "ollama" } })],
+		["the tab names no provider", JSON.stringify({ global: {}, mode: {} })],
+	])("reports no connection when %s", async (_label, stored) => {
+		expect(await buildDelegatedAgentConnection({ actModeApiProvider: "ollama" } as never, stored)).toBeUndefined()
 	})
 })
 

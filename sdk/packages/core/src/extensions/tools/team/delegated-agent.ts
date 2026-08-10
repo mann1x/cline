@@ -77,10 +77,22 @@ export interface BuildDelegatedAgentConfigOptions {
 	cwd?: string;
 }
 
+/**
+ * @param pinned Connection fields the session must not push over.
+ *
+ * Delegated agents normally track the session: the host pushes a model switch
+ * or a refreshed key through `updateConnectionDefaults` and the agents follow,
+ * which is what makes them agents *of* this session. When the agents have been
+ * given a connection of their own, that same push would silently move them back
+ * onto the lead's model — so the fields the override supplied are held, and
+ * everything else still gets through.
+ */
 export function createDelegatedAgentConfigProvider(
 	initialConfig: DelegatedAgentRuntimeConfig,
+	pinned: readonly (keyof DelegatedAgentConnectionConfig)[] = [],
 ): DelegatedAgentConfigProvider {
 	let runtimeConfig: DelegatedAgentRuntimeConfig = { ...initialConfig };
+	const held = new Set<string>(pinned as readonly string[]);
 
 	return {
 		getRuntimeConfig: () => runtimeConfig,
@@ -101,9 +113,15 @@ export function createDelegatedAgentConfigProvider(
 			temperature: runtimeConfig.temperature,
 		}),
 		updateConnectionDefaults: (overrides) => {
+			const accepted =
+				held.size === 0
+					? overrides
+					: Object.fromEntries(
+							Object.entries(overrides).filter(([key]) => !held.has(key)),
+						);
 			runtimeConfig = {
 				...runtimeConfig,
-				...overrides,
+				...accepted,
 			};
 		},
 	};

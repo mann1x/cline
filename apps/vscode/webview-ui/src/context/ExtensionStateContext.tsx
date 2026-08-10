@@ -282,6 +282,8 @@ export const ExtensionStateContextProvider: React.FC<{
 		planActSeparateModelsSetting: true,
 		visionModelEnabled: false,
 		visionModeApiConfiguration: "",
+		agentsModelEnabled: false,
+		agentsModeApiConfiguration: "",
 		apiConfigurationProfiles: "",
 		activeApiConfigurationProfile: "",
 		enableCheckpointsSetting: true,

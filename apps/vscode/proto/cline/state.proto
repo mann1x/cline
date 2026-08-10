@@ -299,6 +299,8 @@ message Settings {
   optional bool capped_thinking_enabled = 195;
   optional string capped_thinking_prompt = 196;
   optional string edit_verification_settings = 197;
+  optional bool agents_model_enabled = 198;
+  optional string agents_mode_api_configuration = 199;
 }
 
 message State {
@@ -455,6 +457,8 @@ message UpdateSettingsRequest {
   optional string thinking_compaction_prompt = 52;
   optional bool capped_thinking_enabled = 53;
   optional string capped_thinking_prompt = 54;
+  optional bool agents_model_enabled = 55;
+  optional string agents_mode_api_configuration = 56;
 }
 
 message UpdateTerminalConnectionTimeoutRequest {

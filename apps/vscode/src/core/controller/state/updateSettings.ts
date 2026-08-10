@@ -81,6 +81,14 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		if (request.visionModeApiConfiguration !== undefined) {
 			controller.stateManager.setGlobalState("visionModeApiConfiguration", request.visionModeApiConfiguration)
 		}
+		// Delegated agents: the same arrangement, for the model subagents and
+		// teammates run on rather than the one driving the session.
+		if (request.agentsModelEnabled !== undefined) {
+			controller.stateManager.setGlobalState("agentsModelEnabled", request.agentsModelEnabled)
+		}
+		if (request.agentsModeApiConfiguration !== undefined) {
+			controller.stateManager.setGlobalState("agentsModeApiConfiguration", request.agentsModeApiConfiguration)
+		}
 		if (request.apiConfigurationProfiles !== undefined) {
 			controller.stateManager.setGlobalState("apiConfigurationProfiles", request.apiConfigurationProfiles)
 		}
