@@ -96,6 +96,14 @@ export interface ParsedArgs {
 	editVerification?: "off" | "nudge" | "require";
 	invalidEditVerification?: string;
 	invalidRetries?: string;
+	/** Whether the model keeps a checklist across the task. */
+	taskProgress?: "on" | "off";
+	/** Tool calls between checklist reminders. 0 reminds never. */
+	taskProgressInterval?: number;
+	invalidTaskProgress?: string;
+	invalidTaskProgressInterval?: string;
+	/** Project checker `check_file` runs on each file it is given. */
+	lintCommand?: string;
 	visionModel?: string;
 	/** Model delegated agents run on, instead of the session's. */
 	agentsModel?: string;

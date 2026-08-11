@@ -20,6 +20,7 @@ import {
 	createSubmitAndExitTool,
 	createWebFetchTool,
 } from "../tools/definitions";
+import { createListFilesTool } from "../tools/list-files";
 import { createSpawnAgentTool } from "../tools/team/spawn-agent-tool";
 import { createAgentTeamsTools } from "../tools/team/team-tools";
 import { parsePromptTemplate } from "./prompt-template-parser";
@@ -64,6 +65,7 @@ const LIVE_TOOLS = [
 	createAskQuestionTool(stubExecutor),
 	createSubmitAndExitTool(stubExecutor, stubConfig),
 	createSpawnAgentTool({ configProvider: {} as never }),
+	createListFilesTool({ cwd: "/workspace", createLister: {} as never }),
 	...createAgentTeamsTools({
 		runtime: {} as never,
 		requesterId: "lead",
@@ -89,7 +91,6 @@ const HOST_TOOL_NAMES = [
 	"code_intel",
 	"switch_to_act_mode",
 	"browser",
-	"list_files",
 ];
 
 const SHIPPED_TOOL_NAMES = [

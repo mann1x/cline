@@ -1,5 +1,5 @@
 import * as vscode from "vscode"
-import type { DirectoryEntry, WorkspaceLister } from "@/sdk/list-files-tool"
+import type { DirectoryEntry, WorkspaceLister } from "@cline/core"
 
 /**
  * The VS Code half of `list_files`.

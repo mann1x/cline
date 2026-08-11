@@ -23,6 +23,7 @@ import {
 	createCompactionStateAwarePrepareTurn,
 	createContextCompactionPrepareTurn,
 } from "../../extensions/context/compaction";
+import { releasePolykvSession } from "../../extensions/context/polykv-session";
 import type { ToolExecutors } from "../../extensions/tools";
 import { DefaultToolNames } from "../../extensions/tools";
 import {
@@ -36,9 +37,14 @@ import {
 	withEditVerificationCapture,
 } from "../../extensions/tools/edit-verification";
 import {
+	createListFilesTool,
+	createLocalWorkspaceLister,
+	LIST_FILES_TOOL_NAME,
+} from "../../extensions/tools/list-files";
+import {
 	createTaskProgressCompletionGuard,
-	TASK_PROGRESS_PARAM,
 	findLatestTaskProgress,
+	TASK_PROGRESS_PARAM,
 	TaskProgressTracker,
 	withTaskProgressCapture,
 } from "../../extensions/tools/task-progress";
@@ -137,7 +143,6 @@ import {
 	createSessionSubAgentLifecycleCallbacks,
 	type SubAgentStartTracker,
 } from "./local/spawn-tool";
-import { releasePolykvSession } from "../../extensions/context/polykv-session";
 import { loadUserFileContent } from "./local/user-files";
 import type {
 	PendingPromptsServiceApi,
@@ -659,7 +664,35 @@ export class LocalRuntimeHost implements RuntimeHost {
 			(tool) => tool.name === CHECK_FILE_TOOL_NAME,
 		)
 			? checklessTools
-			: [...checklessTools, createCheckFileTool({ cwd: configWithProvider.cwd })];
+			: [
+					...checklessTools,
+					createCheckFileTool({
+						cwd: configWithProvider.cwd,
+						...(configWithProvider.checkFile?.lintCommand
+							? { lintCommand: configWithProvider.checkFile.lintCommand }
+							: {}),
+					}),
+				];
+		// And the other thing this host had no answer for: what is here. A model
+		// with no way to look around does not go without -- it runs `ls`, or
+		// `dir /s` from wherever the shell started, which is unbounded, unscoped
+		// and formatted differently on every platform. Added by name-check like
+		// the checker above, so a host that installs its own -- VS Code asks the
+		// editor, which honours the user's own excludes -- keeps it.
+		const mergedToolsWithLister = mergedToolsWithChecker.some(
+			(tool) => tool.name === LIST_FILES_TOOL_NAME,
+		)
+			? mergedToolsWithChecker
+			: [
+					...mergedToolsWithChecker,
+					createListFilesTool({
+						cwd: configWithProvider.cwd,
+						createLister: () =>
+							createLocalWorkspaceLister(
+								configWithProvider.workspaceRoot ?? configWithProvider.cwd,
+							),
+					}),
+				];
 		const editVerificationConfig = configWithProvider.editVerification;
 		// Nudge rather than off, now that this host always has a checker to
 		// name. Off was the honest default while it had none — a guard that can
@@ -681,15 +714,15 @@ export class LocalRuntimeHost implements RuntimeHost {
 			editVerificationSettings.checkTools.length === 0
 				? undefined
 				: new EditVerificationTracker(editVerificationSettings);
-		const toolsToWrap = mergedToolsWithChecker;
+		const toolsToWrap = mergedToolsWithLister;
 		const withChecklist = taskProgressTracker
 			? toolsToWrap.map((tool) =>
 					withTaskProgressCapture(tool, taskProgressTracker),
 				)
-			// `toolsToWrap`, not `mergedTools`: falling back to the pre-checklist
-			// list drops every tool added since, which is how the checker would
-			// have gone missing on exactly the runs that have no checklist.
-			: toolsToWrap;
+			: // `toolsToWrap`, not `mergedTools`: falling back to the pre-checklist
+				// list drops every tool added since, which is how the checker would
+				// have gone missing on exactly the runs that have no checklist.
+				toolsToWrap;
 		const tools = editVerificationTracker
 			? withChecklist.map((tool) =>
 					withEditVerificationCapture(tool, editVerificationTracker),
@@ -772,9 +805,8 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// The transcript is one of the two places a capped think turns up, and
 		// the rarer one. The other is the agent loop's discard path, which is
 		// where the turns that actually end at the budget message go.
-		const condenseDiscardedReasoning = createCappedThinkingNoteWriter(
-			cappedThinkingConfig,
-		);
+		const condenseDiscardedReasoning =
+			createCappedThinkingNoteWriter(cappedThinkingConfig);
 		const prepareTurn = createCappedThinkingPrepareTurn(
 			createCompactionStateAwarePrepareTurn({
 				compact,
