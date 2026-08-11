@@ -93,6 +93,8 @@ export interface ParsedArgs {
 	provider?: string;
 	id?: string;
 	retries?: number;
+	editVerification?: "off" | "nudge" | "require";
+	invalidEditVerification?: string;
 	invalidRetries?: string;
 	visionModel?: string;
 	/** Model delegated agents run on, instead of the session's. */

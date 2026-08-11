@@ -107,4 +107,42 @@ describe("useScrollBehavior", () => {
 
 		expect(result.current.disableAutoScrollRef.current).toBe(false)
 	})
+
+	// The reported symptom (#49): scrolling up stops the chat following, and the
+	// only way back is to land within ten pixels of the bottom -- which a reader
+	// cannot do while a turn is streaming, because each token moves the bottom.
+	it("resumes following, not just scrolls, when jumping to present", () => {
+		const { result } = renderHook(() => useScrollBehavior([], [], [], {}, vi.fn()))
+		const scrollTo = vi.fn()
+		;(result.current.virtuosoRef as MutableRefObject<{ scrollTo: typeof scrollTo } | null>).current = { scrollTo }
+
+		act(() => {
+			result.current.disableAutoScrollRef.current = true
+			result.current.jumpToPresent()
+		})
+
+		expect(result.current.disableAutoScrollRef.current).toBe(false)
+		expect(scrollTo).toHaveBeenCalledWith({ top: Number.MAX_SAFE_INTEGER, behavior: "auto" })
+	})
+
+	// Without the flag cleared, the next appended row reads it and declines to
+	// pin, which is the difference between jumping once and following again.
+	it("lets later content keep pinning after a jump", () => {
+		const { result } = renderHook(() => useScrollBehavior([], [], [], {}, vi.fn()))
+		const scrollTo = vi.fn()
+		act(() => {
+			vi.runOnlyPendingTimers()
+		})
+		;(result.current.virtuosoRef as MutableRefObject<{ scrollTo: typeof scrollTo } | null>).current = { scrollTo }
+
+		act(() => {
+			result.current.disableAutoScrollRef.current = true
+			result.current.jumpToPresent()
+			scrollTo.mockClear()
+			result.current.handleLastRowContentChange()
+			vi.advanceTimersByTime(500)
+		})
+
+		expect(scrollTo).toHaveBeenCalledWith({ top: Number.MAX_SAFE_INTEGER, behavior: "smooth" })
+	})
 })

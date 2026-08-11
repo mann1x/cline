@@ -10,6 +10,7 @@ import { useThinkingLoaderRow } from "../../hooks/useThinkingLoaderRow"
 import type { ChatState, MessageHandlers, ScrollBehavior } from "../../types/chatTypes"
 import { isPendingResponseUnconfirmed } from "../../utils/pendingResponse"
 import { createMessageRenderer } from "../messages/MessageRenderer"
+import { JumpToPresent } from "./JumpToPresent"
 
 // Sentinel ts for the synthetic "Thinking..." placeholder row. Not a real message; ignored when
 // deriving scroll triggers from the tail of the rendered list.
@@ -53,11 +54,13 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		scrollContainerRef,
 		toggleRowExpansion,
 		handleRowHeightChange,
+		isAtBottom,
 		setIsAtBottom,
 		disableAutoScrollRef,
 		handleRangeChanged,
 		scrolledPastUserMessage,
 		scrollToMessage,
+		jumpToPresent,
 		scrollToBottomSmooth,
 		scrollToBottomAuto,
 		handleLastRowContentChange,
@@ -264,6 +267,7 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 						overflowAnchor: "none", // prevent scroll jump when content expands
 					}}
 				/>
+				<JumpToPresent isVisible={!isAtBottom} onJump={jumpToPresent} />
 			</div>
 		</div>
 	)

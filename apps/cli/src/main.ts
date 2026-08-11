@@ -747,6 +747,17 @@ export async function runCli(): Promise<void> {
 		process.exitCode = 1;
 		return;
 	}
+	// Fails the run rather than warning, unlike --retries above. The mode decides
+	// whether the model may finish without checking an edit, so a typo that fell
+	// back to the default would produce a run that looks like the mode was in
+	// force and is not -- and in an unattended loop nobody reads the warning.
+	if (args.invalidEditVerification) {
+		writeln(
+			`invalid --edit-verification "${args.invalidEditVerification}" (expected off, nudge or require)`,
+		);
+		process.exitCode = 1;
+		return;
+	}
 	if (args.invalidRetries) {
 		writeln(
 			`${c.dim}[warn] ignoring invalid --retries value "${args.invalidRetries}" (expected integer >= 1)${c.reset}`,
@@ -1079,6 +1090,10 @@ export async function runCli(): Promise<void> {
 				// help text promised.
 				maxConsecutiveMistakes: args.retries ?? 6,
 			},
+			// Mode only, and only when asked for. The host adds its own checker and
+			// already defaults `checkTools` to it, so naming the tool here would
+			// duplicate a default that can drift out from under this file.
+			...(args.editVerification ? { editVerification: { mode: args.editVerification } } : {}),
 			checkpoint: CLI_DEFAULT_CHECKPOINT_CONFIG,
 			compaction: buildCliCompactionConfig(effectiveCompactionMode),
 			timeoutSeconds: args.timeoutSeconds,

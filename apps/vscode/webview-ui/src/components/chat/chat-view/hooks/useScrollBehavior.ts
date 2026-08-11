@@ -154,6 +154,18 @@ export function useScrollBehavior(
 		})
 	}, [])
 
+	// Return to the newest message and start following again.
+	//
+	// Clearing the flag is the half that matters. Scrolling to the bottom on its
+	// own lands there once and stops following on the next token, because every
+	// pin below reads `disableAutoScrollRef` before it scrolls. The flag is
+	// otherwise only cleared by Virtuoso reporting the list within ten pixels of
+	// the bottom, which a reader cannot reach while a turn is still streaming.
+	const jumpToPresent = useCallback(() => {
+		disableAutoScrollRef.current = false
+		scrollToBottomAuto()
+	}, [scrollToBottomAuto])
+
 	const scrollToMessage = useCallback(
 		(messageIndex: number) => {
 			setPendingScrollToMessage(messageIndex)
@@ -337,6 +349,7 @@ export function useScrollBehavior(
 		scrollToBottomSmooth,
 		scrollToBottomAuto,
 		scrollToMessage,
+		jumpToPresent,
 		toggleRowExpansion,
 		handleRowHeightChange,
 		handleLastRowContentChange,

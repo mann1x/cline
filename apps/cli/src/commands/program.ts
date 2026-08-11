@@ -57,6 +57,10 @@ export function addRootOptions(cmd: Command): Command {
 				"Number of maximum consecutive mistakes (retries) before exiting (default: 6)",
 			)
 			.option(
+				"--edit-verification <mode>",
+				"Require the model to check a file it edited: off | nudge | require (default: nudge)",
+			)
+			.option(
 				"--vision-model <model-id>",
 				"Describe images with this model instead of sending them to the session's model (same provider)",
 			)
@@ -232,6 +236,17 @@ export function commanderToParsedArgs(program: Command): ParsedArgs {
 			result.retries = parsed;
 		} else if (raw) {
 			result.invalidRetries = raw;
+		}
+	}
+
+	// Edit-verification mode. Rejected rather than coerced: a typo silently
+	// falling back to the default would look like the mode was in force.
+	if (opts.editVerification !== undefined) {
+		const raw = String(opts.editVerification).trim();
+		if (raw === "off" || raw === "nudge" || raw === "require") {
+			result.editVerification = raw;
+		} else if (raw) {
+			result.invalidEditVerification = raw;
 		}
 	}
 
