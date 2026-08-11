@@ -61,6 +61,10 @@ export function addRootOptions(cmd: Command): Command {
 				"Require the model to check a file it edited: off | nudge | require (default: nudge)",
 			)
 			.option(
+				"--lint-command <command>",
+				"Project checker `check_file` runs on each file it is given, e.g. \"npx biome check ${file}\". Without ${file} the path is appended. Makes check_file the linter here, as it is in the extension",
+			)
+			.option(
 				"--task-progress <mode>",
 				"Keep a visible checklist across the task: on | off (default: on)",
 			)
@@ -291,6 +295,7 @@ export function commanderToParsedArgs(program: Command): ParsedArgs {
 	if (opts.teamName !== undefined) result.teamName = opts.teamName;
 	if (opts.system !== undefined) result.systemPrompt = opts.system;
 	if (opts.model !== undefined) result.model = opts.model;
+	if (opts.lintCommand !== undefined) result.lintCommand = opts.lintCommand;
 	if (opts.visionModel !== undefined) result.visionModel = opts.visionModel;
 	if (opts.agentsModel !== undefined) result.agentsModel = opts.agentsModel;
 	if (opts.agentsNumCtx !== undefined) result.agentsNumCtx = opts.agentsNumCtx;

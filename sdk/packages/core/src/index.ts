@@ -949,6 +949,8 @@ export {
 	resolveCredentialEnv,
 } from "./extensions/tools/qa-credentials";
 export {
+	buildCheckFileDescription,
+	buildLintCommand,
 	CHECK_FILE_TOOL_DESCRIPTION,
 	CHECK_FILE_TOOL_INPUT_SCHEMA,
 	CHECK_FILE_TOOL_NAME,
@@ -956,6 +958,8 @@ export {
 	compileCheck,
 	createCheckFileTool,
 	extractScripts,
+	LINT_COMMAND_FILE_PLACEHOLDER,
+	type LintCommandResult,
 } from "./extensions/tools/check-file";
 // The bracket scanner is host-independent and two hosts want it: the checker
 // above, and VS Code's own `check_file`, which pairs it with the language

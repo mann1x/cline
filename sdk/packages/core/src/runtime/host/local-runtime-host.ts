@@ -659,7 +659,15 @@ export class LocalRuntimeHost implements RuntimeHost {
 			(tool) => tool.name === CHECK_FILE_TOOL_NAME,
 		)
 			? checklessTools
-			: [...checklessTools, createCheckFileTool({ cwd: configWithProvider.cwd })];
+			: [
+					...checklessTools,
+					createCheckFileTool({
+						cwd: configWithProvider.cwd,
+						...(configWithProvider.checkFile?.lintCommand
+							? { lintCommand: configWithProvider.checkFile.lintCommand }
+							: {}),
+					}),
+				];
 		const editVerificationConfig = configWithProvider.editVerification;
 		// Nudge rather than off, now that this host always has a checker to
 		// name. Off was the honest default while it had none — a guard that can

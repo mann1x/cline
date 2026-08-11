@@ -3,10 +3,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+	buildLintCommand,
+	CHECK_FILE_TOOL_DESCRIPTION,
 	checkSource,
 	compileCheck,
 	createCheckFileTool,
 	extractScripts,
+	LINT_COMMAND_FILE_PLACEHOLDER,
 } from "./check-file";
 
 const made: string[] = [];
@@ -156,5 +159,116 @@ describe("the tool", () => {
 		)) as string;
 		expect(report).toContain("No syntax errors.");
 		expect(report).toContain("error:");
+	});
+});
+
+describe("substituting the file into a lint command", () => {
+	it("replaces the placeholder wherever it appears", () => {
+		expect(
+			buildLintCommand(
+				`biome check ${LINT_COMMAND_FILE_PLACEHOLDER} --write ${LINT_COMMAND_FILE_PLACEHOLDER}`,
+				"/w/a.ts",
+			),
+		).toBe("biome check /w/a.ts --write /w/a.ts");
+	});
+
+	// `eslint` is what a user will actually type, and refusing it would be
+	// pedantry.
+	it("appends the path to a command that names no placeholder", () => {
+		expect(buildLintCommand("eslint", "/w/a.ts")).toBe("eslint /w/a.ts");
+	});
+
+	it("quotes a path a shell would split", () => {
+		expect(buildLintCommand("eslint", "/w/my file.ts")).toBe(
+			'eslint "/w/my file.ts"',
+		);
+	});
+});
+
+describe("the checker with a project checker behind it", () => {
+	// The description is the half of this that changes what the model does:
+	// told it has only a syntax check, it goes and runs the linter through
+	// `run_commands` anyway, which is the reflex the tool exists to displace.
+	it("calls itself the linter only when it has one", () => {
+		const bare = createCheckFileTool({ cwd: "/w" });
+		expect(bare.description).toBe(CHECK_FILE_TOOL_DESCRIPTION);
+
+		const linting = createCheckFileTool({ cwd: "/w", lintCommand: "biome" });
+		expect(linting.description).toContain("**This is the linter.**");
+		expect(linting.description).toContain("biome");
+	});
+
+	it("reports what the checker said alongside the syntax check", async () => {
+		const filePath = await tempFile("a.js", "const a = 1;\n");
+		const tool = createCheckFileTool({
+			cwd: path.dirname(filePath),
+			lintCommand: "biome check",
+			runLintCommand: async () => ({
+				exitCode: 1,
+				output: "a.js:1:7 lint/style/noVar",
+			}),
+		});
+
+		const report = (await tool.execute(
+			{ paths: [filePath] },
+			{} as never,
+		)) as string;
+
+		expect(report).toContain("No syntax errors.");
+		expect(report).toContain("lint/style/noVar");
+		expect(report).toContain("exited 1");
+	});
+
+	it("says a clean checker was clean, so silence is never inferred", async () => {
+		const filePath = await tempFile("a.js", "const a = 1;\n");
+		const tool = createCheckFileTool({
+			cwd: path.dirname(filePath),
+			lintCommand: "biome check",
+			runLintCommand: async () => ({ exitCode: 0, output: "" }),
+		});
+
+		const report = (await tool.execute(
+			{ paths: [filePath] },
+			{} as never,
+		)) as string;
+
+		expect(report).toContain("passed with no output");
+	});
+
+	// A command that could not run at all must not read as a pass: the model
+	// has been told this tool is the linter and would believe it.
+	it("reports a checker that would not run", async () => {
+		const filePath = await tempFile("a.js", "const a = 1;\n");
+		const tool = createCheckFileTool({
+			cwd: path.dirname(filePath),
+			lintCommand: "nope",
+			runLintCommand: async () => {
+				throw new Error("spawn nope ENOENT");
+			},
+		});
+
+		const report = (await tool.execute(
+			{ paths: [filePath] },
+			{} as never,
+		)) as string;
+
+		expect(report).toContain("could not be run");
+		expect(report).toContain("ENOENT");
+	});
+
+	it("runs nothing when no command is configured", async () => {
+		const filePath = await tempFile("a.js", "const a = 1;\n");
+		let called = false;
+		const tool = createCheckFileTool({
+			cwd: path.dirname(filePath),
+			runLintCommand: async () => {
+				called = true;
+				return { exitCode: 0, output: "" };
+			},
+		});
+
+		await tool.execute({ paths: [filePath] }, {} as never);
+
+		expect(called).toBe(false);
 	});
 });

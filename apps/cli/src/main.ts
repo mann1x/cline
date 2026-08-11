@@ -1124,6 +1124,12 @@ export async function runCli(): Promise<void> {
 					? { reminderInterval: args.taskProgressInterval }
 					: {}),
 			},
+			// What the extension gets from the editor's language servers and this
+			// host has no way to ask for. Named, `check_file` runs it and says it
+			// is the linter; unnamed, it stays the syntax check it honestly is.
+			...(args.lintCommand?.trim()
+				? { checkFile: { lintCommand: args.lintCommand.trim() } }
+				: {}),
 			checkpoint: CLI_DEFAULT_CHECKPOINT_CONFIG,
 			compaction: buildCliCompactionConfig(effectiveCompactionMode),
 			timeoutSeconds: args.timeoutSeconds,

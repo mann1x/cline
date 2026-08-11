@@ -102,6 +102,8 @@ export interface ParsedArgs {
 	taskProgressInterval?: number;
 	invalidTaskProgress?: string;
 	invalidTaskProgressInterval?: string;
+	/** Project checker `check_file` runs on each file it is given. */
+	lintCommand?: string;
 	visionModel?: string;
 	/** Model delegated agents run on, instead of the session's. */
 	agentsModel?: string;

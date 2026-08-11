@@ -17,13 +17,25 @@
  *
  * Compilation is `vm.Script`, which parses without running: an HTML page that
  * starts a game must not start one because someone asked whether it parses.
+ *
+ * A host that can name a real checker gets to close the rest of the distance:
+ * pass a lint command and this runs it too, and says so in its description. The
+ * point of that is not convenience — it is that the two hosts stop shipping
+ * different tools under one name. Without it the extension tells the model
+ * `check_file` is the linter and the type checker while the CLI tells it the
+ * same tool is a syntax check, and an edit-verification mode of `require`
+ * therefore forces a much weaker check on the CLI than the words suggest.
  */
 
+import { exec } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { promisify } from "node:util";
 import * as vm from "node:vm";
 import type { AgentTool, AgentToolContext } from "@cline/shared";
 import { describeDelimiterBalance } from "./delimiter-balance";
+
+const execAsync = promisify(exec);
 
 export const CHECK_FILE_TOOL_NAME = "check_file";
 
@@ -54,6 +66,41 @@ Output: plain text, one section per file you named. A file with nothing wrong sa
 
 When a file's brackets do not match, a \`Delimiter scan\` section names the *opening* bracket involved, and one line per place the trouble starts — a file can be broken in several spots at once, so fix every line it lists in one edit rather than one per round trip. A parse error is always reported where the parser gave up, which is the closing bracket; the opener is the one you have to edit, and it is the one the error cannot name.`;
 
+/**
+ * The description when the host has a real checker to point at.
+ *
+ * The bound paragraph above is the whole reason this is a second string rather
+ * than a suffix: with a lint command wired in, "it is not a type checker, it
+ * does not know your project's lint rules" is no longer true, and a model that
+ * believes it will go and run the command through `run_commands` anyway --
+ * which is the reflex this tool exists to displace.
+ *
+ * The command is named rather than described, because a model deciding whether
+ * to trust a result wants to know what produced it.
+ */
+export function buildCheckFileDescription(lintCommand: string): string {
+	return `Check files for errors, using this project's own checker. **This is the linter.** Whichever word the question uses — lint error, type error, parse error, syntax error, "is it valid", "is it clean now", "what is still broken" — this is the tool that answers it, for the files you name.
+
+Two checks run on every file you name. First the file is parsed without being executed, so it is safe on a page that would otherwise start a game or a server. Then \`${lintCommand}\` is run against it and its output is reported here.
+
+Ask this instead of running that command yourself, and instead of \`node --check\`, \`python -m py_compile\`, \`tsc --noEmit\` or a bracket-counting script of your own. Running the checker through \`run_commands\` gets you the same answer more slowly and with none of the bracket analysis below.
+
+When to call it:
+- After editing a file, to confirm the edit is valid before moving on.
+- Before reporting a task finished, on every file you changed. An edit you have not looked at is not a change you can report as done.
+- On a file you are about to change, to see what was already wrong with it.
+
+Pass every file you want checked in one call.
+
+For \`.html\` files each \`<script>\` block is parsed as JavaScript and the line numbers reported are the line numbers in the HTML file, not in the block.
+
+Read the bound: this is as good as the command behind it. A checker that does not cover a language reports nothing for it, and nothing reported is not the same as clean.
+
+Output: plain text, one section per file you named. A file with nothing wrong says so in one line. There is no object to unpack and no \`success\` field — problems being listed is this tool working, not failing.
+
+When a file's brackets do not match, a \`Delimiter scan\` section names the *opening* bracket involved, and one line per place the trouble starts — a file can be broken in several spots at once, so fix every line it lists in one edit rather than one per round trip. A parse error is always reported where the parser gave up, which is the closing bracket; the opener is the one you have to edit, and it is the one the error cannot name.`;
+}
+
 export const CHECK_FILE_TOOL_INPUT_SCHEMA = {
 	type: "object",
 	properties: {
@@ -69,6 +116,82 @@ export const CHECK_FILE_TOOL_INPUT_SCHEMA = {
 
 /** Files checked in one call. A model that wants more wants a build. */
 const MAX_FILES_PER_CALL = 20;
+
+/**
+ * The token a user writes in their lint command to mark where the path goes.
+ *
+ * Escaped rather than written plainly: as a plain literal it reads to the
+ * linter as an unescaped template placeholder, which is exactly what it is not
+ * — it is data the user types, and it has to stay a string to be matched.
+ */
+export const LINT_COMMAND_FILE_PLACEHOLDER = `\${file}`;
+
+/** How long a lint command gets before it is treated as hung. */
+const LINT_COMMAND_TIMEOUT_MS = 60_000;
+
+/** Bytes of output kept. A linter that says more than this is saying it twice. */
+const LINT_COMMAND_MAX_BUFFER = 1_000_000;
+
+/** Characters of lint output shown per file. */
+const LINT_OUTPUT_LIMIT = 8_000;
+
+export interface LintCommandResult {
+	exitCode: number;
+	output: string;
+}
+
+/**
+ * Substitute the file into the configured command.
+ *
+ * A command without the placeholder gets the path appended, because `"eslint"`
+ * is what a user will actually type and refusing it would be pedantry.
+ */
+export function buildLintCommand(template: string, filePath: string): string {
+	const quoted = /[\s"']/.test(filePath) ? JSON.stringify(filePath) : filePath;
+	return template.includes(LINT_COMMAND_FILE_PLACEHOLDER)
+		? template.replaceAll(LINT_COMMAND_FILE_PLACEHOLDER, quoted)
+		: `${template} ${quoted}`;
+}
+
+/**
+ * Run the command and report what it said, whatever it exited with.
+ *
+ * A non-zero exit is the normal outcome for a linter that found something, so
+ * it is not an error here: the output is the answer either way, and both
+ * streams are kept because linters disagree about which one findings belong on.
+ */
+async function runLintCommandInShell(
+	template: string,
+	filePath: string,
+	cwd: string,
+	signal?: AbortSignal,
+): Promise<LintCommandResult> {
+	const command = buildLintCommand(template, filePath);
+	try {
+		const { stdout, stderr } = await execAsync(command, {
+			cwd,
+			timeout: LINT_COMMAND_TIMEOUT_MS,
+			maxBuffer: LINT_COMMAND_MAX_BUFFER,
+			...(signal ? { signal } : {}),
+		});
+		return { exitCode: 0, output: `${stdout}${stderr}` };
+	} catch (error) {
+		const failure = error as {
+			code?: number;
+			stdout?: string;
+			stderr?: string;
+			message?: string;
+		};
+		// A command that never ran -- misspelled, not installed -- has no
+		// streams, and reporting it as a clean pass would be the worst of the
+		// available lies. Its message stands in as the output.
+		const output = `${failure.stdout ?? ""}${failure.stderr ?? ""}`;
+		return {
+			exitCode: typeof failure.code === "number" ? failure.code : 1,
+			output: output.trim() !== "" ? output : (failure.message ?? ""),
+		};
+	}
+}
 
 /** Extensions parsed as JavaScript. */
 const JS_LIKE = new Set([".js", ".mjs", ".cjs"]);
@@ -267,6 +390,46 @@ export function checkSource(filePath: string, text: string): string {
 }
 
 /**
+ * What the configured checker said about one file.
+ *
+ * A run that could not happen at all is reported as such rather than swallowed:
+ * silence here would read as a pass, and a model told this tool is the linter
+ * would believe it.
+ */
+async function describeLint(
+	template: string,
+	run: (
+		template: string,
+		filePath: string,
+		signal?: AbortSignal,
+	) => Promise<LintCommandResult>,
+	absolutePath: string,
+	signal?: AbortSignal,
+): Promise<string> {
+	const command = buildLintCommand(template, absolutePath);
+	let result: LintCommandResult;
+	try {
+		result = await run(template, absolutePath, signal);
+	} catch (error) {
+		return `\`${command}\` could not be run: ${
+			error instanceof Error ? error.message : String(error)
+		}`;
+	}
+	const output = result.output.trim();
+	if (result.exitCode === 0 && output === "") {
+		return `\`${command}\` passed with no output.`;
+	}
+	const shown =
+		output.length > LINT_OUTPUT_LIMIT
+			? `${output.slice(0, LINT_OUTPUT_LIMIT)}\n(truncated at ${LINT_OUTPUT_LIMIT} characters)`
+			: output;
+	return [
+		`\`${command}\` exited ${result.exitCode}.`,
+		shown || "(no output)",
+	].join("\n");
+}
+
+/**
  * The checker as a tool.
  *
  * Reading is plain `fs`: this runs in the same process as the rest of the
@@ -274,14 +437,39 @@ export function checkSource(filePath: string, text: string): string {
  */
 export function createCheckFileTool(options?: {
 	cwd?: string;
+	/** The user's lint command, if they configured one. */
+	lintCommand?: string;
+	/** Runs it. Injected so tests never spawn anything. */
+	runLintCommand?: (
+		template: string,
+		filePath: string,
+		signal?: AbortSignal,
+	) => Promise<LintCommandResult>;
 }): AgentTool<{ paths: string[] }, string> {
+	const lintCommand = options?.lintCommand?.trim() || undefined;
+	// Resolved once, at construction, because the description has to name it and
+	// the description is fixed for the life of the tool. A host that changes the
+	// command mid-session builds a new tool, which is what happens anyway: the
+	// toolset is assembled per session.
+	const runLint = lintCommand
+		? (options?.runLintCommand ??
+			((template: string, filePath: string, signal?: AbortSignal) =>
+				runLintCommandInShell(
+					template,
+					filePath,
+					options?.cwd ?? process.cwd(),
+					signal,
+				)))
+		: undefined;
 	return {
 		name: CHECK_FILE_TOOL_NAME,
-		description: CHECK_FILE_TOOL_DESCRIPTION,
+		description: lintCommand
+			? buildCheckFileDescription(lintCommand)
+			: CHECK_FILE_TOOL_DESCRIPTION,
 		inputSchema: CHECK_FILE_TOOL_INPUT_SCHEMA,
 		execute: async (
 			input: { paths: string[] },
-			_context: AgentToolContext,
+			context: AgentToolContext,
 		): Promise<string> => {
 			const requested = Array.isArray(input?.paths) ? input.paths : [];
 			const paths = requested
@@ -298,7 +486,17 @@ export function createCheckFileTool(options?: {
 					: path.resolve(root, entry);
 				try {
 					const text = await fs.readFile(filePath, "utf-8");
-					sections.push(checkSource(entry, text));
+					const syntax = checkSource(entry, text);
+					sections.push(
+						lintCommand && runLint
+							? `${syntax}\n${await describeLint(
+									lintCommand,
+									runLint,
+									filePath,
+									context?.signal,
+								)}`
+							: syntax,
+					);
 				} catch (error) {
 					sections.push(
 						`## ${entry}\nCould not read this file: ${

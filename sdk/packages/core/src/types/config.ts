@@ -490,6 +490,20 @@ export interface CoreSessionConfig
 	 */
 	editVerification?: CoreEditVerificationConfig;
 	/**
+	 * The project's own checker, for the `check_file` this host supplies.
+	 *
+	 * Without one that tool answers a narrower question than the extension's
+	 * does — syntax and brackets, where VS Code reads its language servers —
+	 * and the two hosts ship measurably different tools under one name. Naming
+	 * a command closes the distance and changes what the tool tells the model
+	 * it is, which is the half that matters: a model that believes it has only
+	 * a syntax check goes and runs the linter through `run_commands` anyway.
+	 *
+	 * `${file}` marks where the path goes; a command without it gets the path
+	 * appended.
+	 */
+	checkFile?: { lintCommand?: string };
+	/**
 	 * Named secrets a QA command can ask for.
 	 *
 	 * Supplied by the host because only the host has a secret store; core never
