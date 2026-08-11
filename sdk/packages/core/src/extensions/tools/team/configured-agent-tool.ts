@@ -11,6 +11,7 @@ import {
 	zodToJsonSchema,
 } from "@cline/shared";
 import { z } from "zod";
+import { agentEndpointKey } from "./agent-slot-gate";
 import type { ConfiguredAgentConfig } from "./configured-agent-config";
 import {
 	createDelegatedAgent,
@@ -212,7 +213,9 @@ export function buildAgentRuntimeConfig(
 	resolveProviderConnection?: (
 		providerId: string,
 	) => AgentProviderConnection | undefined,
-	resolveProfileConnection?: (name: string) => AgentProfileConnection | undefined,
+	resolveProfileConnection?: (
+		name: string,
+	) => AgentProfileConnection | undefined,
 ): DelegatedAgentRuntimeConfig {
 	// A named profile answers provider, model and connection at once. Resolved
 	// first so the two explicit keys can still override it: `profile` plus
@@ -284,7 +287,9 @@ export function buildAgentRuntimeConfig(
  */
 function resolveProfile(
 	agent: ConfiguredAgentConfig,
-	resolveProfileConnection?: (name: string) => AgentProfileConnection | undefined,
+	resolveProfileConnection?: (
+		name: string,
+	) => AgentProfileConnection | undefined,
 ): AgentProfileConnection {
 	const resolved = agent.profile
 		? resolveProfileConnection?.(agent.profile)
@@ -322,7 +327,10 @@ function withSessionFetch(providerConfig: unknown, base: unknown): unknown {
 	if (!sessionFetch || !providerConfig || typeof providerConfig !== "object") {
 		return providerConfig;
 	}
-	return { ...(providerConfig as Record<string, unknown>), fetch: sessionFetch };
+	return {
+		...(providerConfig as Record<string, unknown>),
+		fetch: sessionFetch,
+	};
 }
 
 export function createConfiguredAgentTools(
@@ -336,14 +344,14 @@ export function createConfiguredAgentTools(
 				inputSchema: zodToJsonSchema(ConfiguredAgentInputSchema),
 				execute: async (input, context) => {
 					const baseRuntimeConfig = options.configProvider.getRuntimeConfig();
-					const configProvider = createDelegatedAgentConfigProvider(
-						buildAgentRuntimeConfig(
-							baseRuntimeConfig,
-							config,
-							options.resolveProviderConnection,
-							options.resolveProfileConnection,
-						),
+					const runtimeConfig = buildAgentRuntimeConfig(
+						baseRuntimeConfig,
+						config,
+						options.resolveProviderConnection,
+						options.resolveProfileConnection,
 					);
+					const configProvider =
+						createDelegatedAgentConfigProvider(runtimeConfig);
 					const tools = options.createSubAgentTools
 						? await options.createSubAgentTools(config, input, context)
 						: [];
@@ -382,7 +390,20 @@ export function createConfiguredAgentTools(
 					}
 
 					try {
-						const result: AgentResult = await subAgent.run(input.prompt);
+						// Held to what the endpoint *this* agent resolved to will
+						// serve, which is not necessarily the session's: an agent
+						// naming a provider or a profile has its own. Two agents on
+						// different servers therefore run at once, and two on the same
+						// one queue. Gated around the run alone, like `spawn_agent` --
+						// building the toolset and telling the observers costs the
+						// server nothing, and holding a slot across them would leave
+						// the endpoint idle while a slot was booked.
+						const gate = baseRuntimeConfig.slotGates?.for(
+							agentEndpointKey(runtimeConfig),
+						);
+						const result: AgentResult = gate
+							? await gate.run(() => subAgent.run(input.prompt))
+							: await subAgent.run(input.prompt);
 						const output: SpawnAgentOutput = {
 							text: result.text,
 							iterations: result.iterations,

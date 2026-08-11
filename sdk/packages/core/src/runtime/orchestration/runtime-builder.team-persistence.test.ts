@@ -46,11 +46,20 @@ class MockAgentTeamsRuntime {
 vi.mock("../../extensions/tools/team", () => ({
 	AgentTeamsRuntime: MockAgentTeamsRuntime,
 	bootstrapAgentTeams: bootstrapAgentTeamsMock,
-	// A pass-through: this file is about what the builder persists, and a real
+	// Pass-throughs: this file is about what the builder persists, and a real
 	// gate would make its assertions depend on scheduling. The gate's own
-	// behaviour is covered in `agent-slot-gate.test.ts`.
+	// behaviour, and which endpoint each agent is held to, are covered in
+	// `agent-slot-gate.test.ts` and `configured-agent-tool.test.ts`.
+	agentEndpointKey: () => "endpoint",
 	createAgentSlotGate: () => ({
 		run: <T>(task: () => Promise<T>) => task(),
+		active: () => 0,
+	}),
+	createAgentSlotGateRegistry: () => ({
+		for: () => ({
+			run: <T>(task: () => Promise<T>) => task(),
+			active: () => 0,
+		}),
 		active: () => 0,
 	}),
 	createDelegatedAgentConfigProvider: (config: Record<string, unknown>) => {

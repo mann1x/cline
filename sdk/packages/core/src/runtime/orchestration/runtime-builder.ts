@@ -33,8 +33,9 @@ import {
 } from "../../extensions/tools";
 import {
 	AgentTeamsRuntime,
+	agentEndpointKey,
 	bootstrapAgentTeams,
-	createAgentSlotGate,
+	createAgentSlotGateRegistry,
 	createDelegatedAgentConfigProvider,
 	type DelegatedAgentConnectionConfig,
 	type TeamEvent,
@@ -505,6 +506,11 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 		// alone. Those same fields are then pinned, so the connection updates the
 		// host pushes for the session's model do not move the agents back onto it.
 		const agentsConnection = config.delegatedAgentConnection;
+		// One registry for the session, so every spawn path shares the bound and
+		// agents on one endpoint queue together wherever they were spawned from.
+		const agentSlotGates = createAgentSlotGateRegistry(
+			config.maxConcurrentAgents,
+		);
 		const agentsOverrides: Partial<DelegatedAgentConnectionConfig> =
 			agentsConnection
 				? {
@@ -549,10 +555,19 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 				logger: logger ?? config.logger,
 				telemetry: input.telemetry ?? config.telemetry,
 				workspaceMetadata: config.workspaceMetadata,
-				// One gate for every spawn path in this session -- the team runtime,
-				// the lead's `spawn_agent`, and a sub-agent spawning its own -- because
-				// they all read this provider and none of them can see the others.
-				slotGate: createAgentSlotGate(config.maxConcurrentAgents),
+				// One gate for the spawn paths that do all read this provider -- the
+				// team runtime, the lead's `spawn_agent`, and a sub-agent spawning
+				// its own -- and the registry beside it for the one that does not.
+				// The session's endpoint takes its gate from the same registry, so a
+				// configured agent left on the session's connection queues with the
+				// free-form sub-agents rather than beside them.
+				slotGate: agentSlotGates.for(
+					agentEndpointKey({
+						providerId: agentsOverrides.providerId ?? config.providerId,
+						baseUrl: agentsOverrides.baseUrl ?? config.baseUrl,
+					}),
+				),
+				slotGates: agentSlotGates,
 				...agentsOverrides,
 			},
 			Object.keys(agentsOverrides) as (keyof DelegatedAgentConnectionConfig)[],

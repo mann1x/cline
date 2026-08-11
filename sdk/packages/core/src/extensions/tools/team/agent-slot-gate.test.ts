@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createAgentSlotGate } from "./agent-slot-gate";
+import {
+	agentEndpointKey,
+	createAgentSlotGate,
+	createAgentSlotGateRegistry,
+} from "./agent-slot-gate";
 
 /** A task that finishes only when told to, so overlap is observable. */
 function deferred(): {
@@ -116,5 +120,89 @@ describe("createAgentSlotGate", () => {
 			block.resolve();
 		}
 		await Promise.all(runs);
+	});
+});
+
+describe("agentEndpointKey", () => {
+	it("separates two servers behind one provider id", () => {
+		expect(
+			agentEndpointKey({ providerId: "ollama", baseUrl: "http://a:11434" }),
+		).not.toBe(
+			agentEndpointKey({ providerId: "ollama", baseUrl: "http://b:11434" }),
+		);
+	});
+
+	// Case and a trailing slash are how the same server gets written twice, and
+	// two gates for one endpoint would let it be over-subscribed.
+	it("treats one server written two ways as one endpoint", () => {
+		expect(
+			agentEndpointKey({ providerId: "Ollama", baseUrl: "http://A:11434/" }),
+		).toBe(
+			agentEndpointKey({ providerId: "ollama", baseUrl: "http://a:11434" }),
+		);
+	});
+
+	it("keeps two providers apart when neither names a base URL", () => {
+		expect(agentEndpointKey({ providerId: "anthropic" })).not.toBe(
+			agentEndpointKey({ providerId: "openai" }),
+		);
+	});
+});
+
+describe("createAgentSlotGateRegistry", () => {
+	it("hands back the same gate for one endpoint", () => {
+		const registry = createAgentSlotGateRegistry(1);
+		expect(registry.for("ollama http://a")).toBe(
+			registry.for("ollama http://a"),
+		);
+	});
+
+	// The defect this exists for: a one-slot local server must not serialise an
+	// agent that was never going near it.
+	it("does not queue one endpoint's agents behind another's", async () => {
+		const registry = createAgentSlotGateRegistry(1);
+		const local = deferred();
+		const cloud = deferred();
+		let cloudStarted = false;
+
+		const localRun = registry.for("ollama http://a").run(() => local.promise);
+		const cloudRun = registry.for("anthropic ").run(() => {
+			cloudStarted = true;
+			return cloud.promise;
+		});
+
+		await Promise.resolve();
+		expect(cloudStarted).toBe(true);
+		expect(registry.active()).toBe(2);
+
+		local.resolve();
+		cloud.resolve();
+		await Promise.all([localRun, cloudRun]);
+		expect(registry.active()).toBe(0);
+	});
+
+	it("still holds one endpoint to its own bound", async () => {
+		const registry = createAgentSlotGateRegistry(1);
+		const first = deferred();
+		const second = deferred();
+		let secondStarted = false;
+
+		const firstRun = registry.for("ollama http://a").run(() => first.promise);
+		const secondRun = registry.for("ollama http://a").run(() => {
+			secondStarted = true;
+			return second.promise;
+		});
+
+		await Promise.resolve();
+		expect(secondStarted).toBe(false);
+		expect(registry.active()).toBe(1);
+
+		first.resolve();
+		await firstRun;
+		await Promise.resolve();
+		expect(secondStarted).toBe(true);
+
+		second.resolve();
+		await secondRun;
 	});
 });

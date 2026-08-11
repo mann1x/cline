@@ -1,6 +1,9 @@
 export {
 	type AgentSlotGate,
+	type AgentSlotGateRegistry,
+	agentEndpointKey,
 	createAgentSlotGate,
+	createAgentSlotGateRegistry,
 } from "./agent-slot-gate";
 export {
 	buildDelegatedAgentConfig,

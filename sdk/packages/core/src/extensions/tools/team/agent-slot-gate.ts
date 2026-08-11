@@ -82,3 +82,63 @@ export function createAgentSlotGate(limit: number | undefined): AgentSlotGate {
 		active: () => running,
 	};
 }
+
+/**
+ * The endpoint two agents share, or do not.
+ *
+ * Provider and base URL together, because a provider id alone says nothing
+ * about which server: two profiles both naming `ollama` may point at a machine
+ * each. Lower-cased, and the trailing slash dropped, so a base URL that differs
+ * only in those is one endpoint rather than two.
+ */
+export function agentEndpointKey(connection: {
+	providerId?: string;
+	baseUrl?: string;
+}): string {
+	const provider = (connection.providerId ?? "").toLowerCase();
+	const base = (connection.baseUrl ?? "").toLowerCase().replace(/\/+$/, "");
+	return `${provider} ${base}`;
+}
+
+/**
+ * A gate per endpoint, from one bound.
+ *
+ * The single gate above was written when every delegated agent ran on the
+ * session's connection, and its own comment says so -- "they all read this
+ * provider". That stopped being true when a configured agent gained
+ * `providerId`, and again when it gained `profile:`. Agents on a cloud
+ * provider and agents on a local one would otherwise contend for the same
+ * slots, so a one-slot Ollama serialises work that was never going near it.
+ *
+ * The bound is applied per endpoint rather than shared because that is what it
+ * measures: how many requests *that server* will serve at once. The number is
+ * still the one measured for the session's endpoint, because it is the only
+ * one the host has -- conservative in the right direction, since it never
+ * over-subscribes a server and a second provider gets its own queue rather
+ * than a share of somebody else's.
+ */
+export interface AgentSlotGateRegistry {
+	/** The gate for one endpoint, created on first use and kept. */
+	for(key: string): AgentSlotGate;
+	/** How many are running across every endpoint. Diagnostics only. */
+	active(): number;
+}
+
+export function createAgentSlotGateRegistry(
+	limit: number | undefined,
+): AgentSlotGateRegistry {
+	const gates = new Map<string, AgentSlotGate>();
+	return {
+		for: (key) => {
+			const existing = gates.get(key);
+			if (existing) {
+				return existing;
+			}
+			const created = createAgentSlotGate(limit);
+			gates.set(key, created);
+			return created;
+		},
+		active: () =>
+			[...gates.values()].reduce((total, gate) => total + gate.active(), 0),
+	};
+}

@@ -10,7 +10,7 @@ import type {
 	ToolApprovalResult,
 } from "@cline/shared";
 import { SessionRuntime } from "../../../runtime/orchestration/session-runtime-orchestrator";
-import type { AgentSlotGate } from "./agent-slot-gate";
+import type { AgentSlotGate, AgentSlotGateRegistry } from "./agent-slot-gate";
 import {
 	buildSubAgentSystemPrompt,
 	buildTeammateSystemPrompt,
@@ -58,6 +58,19 @@ export interface DelegatedAgentRuntimeConfig
 	 * `createAgentSlotGate` for when that is the right answer.
 	 */
 	slotGate?: AgentSlotGate;
+	/**
+	 * The same bound, held per endpoint, for the path that does not all run on
+	 * this provider.
+	 *
+	 * `slotGate` above covers `spawn_agent`, whose sub-agents are free-form and
+	 * always on this connection. A *configured* agent is not: its file may name
+	 * a `providerId` or a `profile`, so several in one turn can be spread over a
+	 * local server and a cloud one. Gating those together would queue an
+	 * Anthropic agent behind a one-slot Ollama; not gating them at all -- which
+	 * is what happened until now -- lets four agents pointed at that same Ollama
+	 * be spawned four-wide, which is what the gate exists to prevent.
+	 */
+	slotGates?: AgentSlotGateRegistry;
 }
 
 export interface DelegatedAgentConfigProvider {
