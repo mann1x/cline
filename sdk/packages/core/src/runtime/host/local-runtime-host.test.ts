@@ -321,6 +321,12 @@ describe("LocalRuntimeHost", () => {
 			agentConfig?.tools?.some((tool) => tool.name === "check_file"),
 		).toBe(true);
 
+		// And the lister, for the same reason and by the same route: a model
+		// with no way to ask what exists runs `ls` instead, unscoped.
+		expect(
+			agentConfig?.tools?.some((tool) => tool.name === "list_files"),
+		).toBe(true);
+
 		const editor = agentConfig?.tools?.find((tool) => tool.name === "editor");
 		await editor?.execute({ path: "a.ts" }, {});
 		const verdict = agentConfig?.completionPolicy?.completionGuard?.();

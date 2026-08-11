@@ -366,10 +366,10 @@ export {
 	updateMcpSettingsFileSync,
 } from "./extensions/mcp";
 export {
-	type AgentTask,
-	AgentTeam,
 	type AgentProfileConnection,
 	type AgentProviderConnection,
+	type AgentTask,
+	AgentTeam,
 	AgentTeamsRuntime,
 	type AgentTeamsRuntimeOptions,
 	type BootstrapAgentTeamsOptions,
@@ -867,6 +867,12 @@ export async function loadOpenTelemetryAdapter() {
 }
 export { Agent, createAgentRuntime } from "@cline/agents";
 export {
+	createCappedThinkingNoteWriter,
+	createCappedThinkingPrepareTurn,
+	DEFAULT_CAPPED_THINKING_PROMPT,
+	findCappedThinkingIndex,
+} from "./extensions/context/capped-thinking";
+export {
 	createCompactionStateAwarePrepareTurn,
 	createContextCompactionPrepareTurn,
 } from "./extensions/context/compaction";
@@ -876,12 +882,6 @@ export {
 	DEFAULT_COMPACTION_PROMPT,
 	DEFAULT_THINKING_COMPACTION_PROMPT,
 } from "./extensions/context/compaction-shared";
-export {
-	DEFAULT_CAPPED_THINKING_PROMPT,
-	createCappedThinkingNoteWriter,
-	createCappedThinkingPrepareTurn,
-	findCappedThinkingIndex,
-} from "./extensions/context/capped-thinking";
 export {
 	ALL_DEFAULT_TOOL_NAMES,
 	type ApplyPatchExecutor,
@@ -936,19 +936,6 @@ export {
 	truncateCommandOutput,
 } from "./extensions/tools";
 export {
-	commandText,
-	describeQaCredentials,
-	type NormalizedQaCredentials,
-	normalizeQaCredentials,
-	QA_CREDENTIAL_MIN_VALUE_LENGTH,
-	QA_CREDENTIAL_NAME_PATTERN,
-	type QaCredential,
-	qaCredentialNames,
-	referencedCredentialNames,
-	type RejectedQaCredential,
-	resolveCredentialEnv,
-} from "./extensions/tools/qa-credentials";
-export {
 	buildCheckFileDescription,
 	buildLintCommand,
 	CHECK_FILE_TOOL_DESCRIPTION,
@@ -971,6 +958,37 @@ export {
 	scanDelimiters,
 	scanWithBalance,
 } from "./extensions/tools/delimiter-balance";
+// The workspace lister, and the tool that reads it. Both hosts install this:
+// the reflex it displaces -- `ls`, `dir /s` -- is not VS Code's, it is any
+// model that has no other way to find out what exists.
+export {
+	createListFilesTool,
+	createLocalWorkspaceLister,
+	type DirectoryEntry,
+	globToRegExp,
+	isWithin,
+	LIST_FILES_TOOL_DESCRIPTION,
+	LIST_FILES_TOOL_INPUT_SCHEMA,
+	LIST_FILES_TOOL_NAME,
+	type ListFilesToolOptions,
+	normalizeMaxResults,
+	renderDirectory,
+	renderMatches,
+	type WorkspaceLister,
+} from "./extensions/tools/list-files";
+export {
+	commandText,
+	describeQaCredentials,
+	type NormalizedQaCredentials,
+	normalizeQaCredentials,
+	QA_CREDENTIAL_MIN_VALUE_LENGTH,
+	QA_CREDENTIAL_NAME_PATTERN,
+	type QaCredential,
+	qaCredentialNames,
+	type RejectedQaCredential,
+	referencedCredentialNames,
+	resolveCredentialEnv,
+} from "./extensions/tools/qa-credentials";
 export {
 	type ClineRecommendedModel,
 	type ClineRecommendedModelsData,
@@ -978,6 +996,11 @@ export {
 	type FetchClineRecommendedModelsOptions,
 	fetchClineRecommendedModels,
 } from "./services/llms/cline-recommended-models";
+// Exported so a host can build a *second* model from a session's own settings —
+// a describer that reads images for the session's model. The extension builds
+// one from its own handler; the CLI had no way to reach this at all, which is
+// why the vision path could not be run headlessly.
+export { createAgentModelFromConfig } from "./services/llms/handler-factory";
 export {
 	clearLiveModelsCatalogCache,
 	clearPrivateModelsCatalogCache,
@@ -1032,11 +1055,6 @@ export {
 	safeParseSettings,
 	toProviderConfig,
 } from "./services/llms/provider-settings";
-// Exported so a host can build a *second* model from a session's own settings —
-// a describer that reads images for the session's model. The extension builds
-// one from its own handler; the CLI had no way to reach this at all, which is
-// why the vision path could not be run headlessly.
-export { createAgentModelFromConfig } from "./services/llms/handler-factory";
 export {
 	defineLlmsConfig,
 	loadLlmsConfigFromFile,

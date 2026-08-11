@@ -1,4 +1,10 @@
-import { getBuiltinPromptTemplates, HOST_TOOL_INPUT_SCHEMAS, summarizeToolCallSignatures } from "@cline/core"
+import {
+	getBuiltinPromptTemplates,
+	HOST_TOOL_INPUT_SCHEMAS,
+	LIST_FILES_TOOL_INPUT_SCHEMA,
+	LIST_FILES_TOOL_NAME,
+	summarizeToolCallSignatures,
+} from "@cline/core"
 import { describe, expect, it } from "vitest"
 import { BROWSER_ACTIONS, BROWSER_TOOL_DESCRIPTION, BROWSER_TOOL_INPUT_SCHEMA, BROWSER_TOOL_NAME } from "./browser-tool"
 import { CHECK_FILE_TOOL_DESCRIPTION, CHECK_FILE_TOOL_INPUT_SCHEMA, CHECK_FILE_TOOL_NAME } from "./check-file-tool"
@@ -8,7 +14,7 @@ import {
 	CODE_INTEL_TOOL_INPUT_SCHEMA,
 	CODE_INTEL_TOOL_NAME,
 } from "./code-intel-tool"
-import { LIST_FILES_TOOL_DESCRIPTION, LIST_FILES_TOOL_INPUT_SCHEMA, LIST_FILES_TOOL_NAME } from "./list-files-tool"
+
 import { SWITCH_TO_ACT_MODE_TOOL_DESCRIPTION, SWITCH_TO_ACT_MODE_TOOL_NAME } from "./sdk-session-config-builder"
 
 /**
@@ -42,9 +48,6 @@ describe("host tool descriptions in default.md", () => {
 		expect(shipped?.tools[BROWSER_TOOL_NAME]).toBe(BROWSER_TOOL_DESCRIPTION.trim())
 	})
 
-	it("reproduces list_files verbatim", () => {
-		expect(shipped?.tools[LIST_FILES_TOOL_NAME]).toBe(LIST_FILES_TOOL_DESCRIPTION.trim())
-	})
 })
 
 /**
