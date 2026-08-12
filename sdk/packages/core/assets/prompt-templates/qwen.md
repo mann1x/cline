@@ -209,7 +209,7 @@ Check files for errors and warnings using the IDE's language servers (LSP). Thes
 - **Parallelism**: Pass all files to check in the `paths` array.
 - **Arguments**: `paths` is an array of strings.
 - **Output**: Plain text listing problems per file (`file:line:column severity message`). If no problems are reported, the file is valid according to the IDE. Note: This does not run tests or builds; use `run_commands` for those.
-When a file's brackets do not match, a `Delimiter scan:` section follows the problems and names the *opening* bracket involved. A parse error is always reported where the parser gave up, which is the closing bracket; the opener is the one you have to edit, and it is the one the error cannot name. Trust that line over counting brackets yourself — it skips strings, comments and regex literals.
+When a file's brackets do not match, a `Delimiter scan:` section names the *opening* bracket involved. A parse error is always reported where the parser gave up, which is the closing bracket; the opener is the one you have to edit, and it is the one the error cannot name. Trust that line over counting brackets yourself — it skips strings, comments and regex literals. It runs even when the editor reported nothing, which is the only report you get for script inside an `.html` file.
 
 # tool: code_intel
 Query the IDE's language servers — the LSP — for precise symbol information. This is the LSP: if you are reaching for an LSP tool or an MCP server that wraps one, this is it, already running against this workspace. Use this INSTEAD of `search_codebase` when asking about definitions, references, implementations, or types.

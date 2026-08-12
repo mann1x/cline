@@ -11,6 +11,24 @@ vi.mock("@/hosts/host-provider", () => ({
 	HostProvider: { workspace: { getDiagnostics: async () => ({ fileDiagnostics: [] }) } },
 }))
 
+/**
+ * A disk with only the files a test puts on it.
+ *
+ * The delimiter scan reads the file itself, and every other test in here names
+ * a path that does not exist — which is the shape the scan must survive, so the
+ * default is a miss.
+ */
+const files = new Map<string, string>()
+vi.mock("fs/promises", () => ({
+	readFile: async (filePath: string) => {
+		const text = files.get(filePath)
+		if (text === undefined) {
+			throw Object.assign(new Error(`ENOENT: no such file, open '${filePath}'`), { code: "ENOENT" })
+		}
+		return text
+	},
+}))
+
 // Only `getCwd` is faked: importing the real module also installs
 // `String.prototype.toPosix`, which the diagnostics formatter relies on.
 vi.mock("@/utils/path", async (importOriginal) => ({
@@ -42,6 +60,7 @@ function run(tool: ReturnType<typeof createCheckFileTool>, input: unknown): Prom
 
 beforeEach(() => {
 	vi.clearAllMocks()
+	files.clear()
 })
 
 describe("readRequestedPaths", () => {
@@ -184,6 +203,36 @@ describe("check_file", () => {
 		expect(await run(tool, {})).toContain("No files were named")
 	})
 
+	it("matches the editor's path when only the drive letter's case differs", async () => {
+		// Measured: the workspace was `c:\Users\manni\source\repos\test` and the
+		// model asked about `C:\Users\...`. One capital letter, and six
+		// consecutive calls answered "no problems" for a file `node --check`
+		// rejects. Windows filesystems do not distinguish these; the lookup did.
+		const platform = Object.getOwnPropertyDescriptor(process, "platform") as PropertyDescriptor
+		Object.defineProperty(process, "platform", { value: "win32", configurable: true })
+		try {
+			const tool = createCheckFileTool({
+				cwd: "/repo/src",
+				delay: noDelay,
+				readDiagnostics: async () => [fileDiagnostics("/repo/src/App.ts", diagnostic("Unexpected token"))],
+			})
+
+			expect(await run(tool, { paths: ["/REPO/SRC/app.ts"] })).toContain("Unexpected token")
+		} finally {
+			Object.defineProperty(process, "platform", platform)
+		}
+	})
+
+	it("keeps two paths apart on a case-sensitive platform", async () => {
+		const tool = createCheckFileTool({
+			cwd: CWD,
+			delay: noDelay,
+			readDiagnostics: async () => [fileDiagnostics("/repo/App.ts", diagnostic("Unexpected token"))],
+		})
+
+		expect(await run(tool, { paths: ["app.ts"] })).toContain("no problems reported by the editor")
+	})
+
 	it("reports a broken diagnostics read rather than claiming the file is clean", async () => {
 		const tool = createCheckFileTool({
 			cwd: CWD,
@@ -194,6 +243,52 @@ describe("check_file", () => {
 		})
 
 		expect(await run(tool, { paths: ["a.ts"] })).toContain("host is gone")
+	})
+
+	describe("the delimiter scan", () => {
+		it("names the opener beside the editor's own error", async () => {
+			files.set("/repo/app.ts", "function f(){ if (a) { b(); ) }")
+			const tool = createCheckFileTool({
+				cwd: CWD,
+				delay: noDelay,
+				readDiagnostics: async () => [fileDiagnostics("/repo/app.ts", diagnostic("')' expected"))],
+			})
+
+			const output = await run(tool, { paths: ["app.ts"] })
+
+			expect(output).toContain("')' expected")
+			expect(output).toContain("Delimiter scan")
+			expect(output).toContain("line 1, column 22")
+		})
+
+		it("still runs when the editor reported nothing", async () => {
+			// The case this was built for. VS Code ships no syntax checking for
+			// the script inside an `.html` file, so an unclosed brace there is
+			// reported by nobody — the file comes back "clean" and the model
+			// believes it. Measured: six consecutive calls on a real file that
+			// `node --check` rejects.
+			files.set("/repo/game.html", ["<body>", "<script>", "function f(){ g(); ) }", "</script>"].join("\n"))
+			const tool = createCheckFileTool({ cwd: CWD, delay: noDelay, readDiagnostics: async () => [] })
+
+			const output = await run(tool, { paths: ["game.html"] })
+
+			expect(output).toContain("no problems reported by the editor")
+			expect(output).toContain("Delimiter scan")
+			expect(output).toContain("line 3")
+		})
+
+		it("says nothing extra about a file that balances", async () => {
+			files.set("/repo/app.ts", "export function f(){ return 1 }")
+			const tool = createCheckFileTool({ cwd: CWD, delay: noDelay, readDiagnostics: async () => [] })
+
+			expect(await run(tool, { paths: ["app.ts"] })).not.toContain("Delimiter scan")
+		})
+
+		it("is skipped, not fatal, when the file cannot be read", async () => {
+			const tool = createCheckFileTool({ cwd: CWD, delay: noDelay, readDiagnostics: async () => [] })
+
+			expect(await run(tool, { paths: ["gone.ts"] })).toContain("no problems reported by the editor")
+		})
 	})
 
 	describe("the configured fallback", () => {
