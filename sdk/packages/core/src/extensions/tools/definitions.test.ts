@@ -386,6 +386,75 @@ describe("default search_codebase tool", () => {
 		]);
 	});
 
+	// The tool's own results come back as `{ query, result, success }` and its
+	// description says so, so a model that has read one sends the singular back.
+	// Reported in #52: three consecutive calls shaped `{"query":"…"}` answered
+	// `✖ Invalid input`, which names no field, and the model gave up on the tool.
+	it.each([
+		["singular string", { query: "startPlayerDrag" }, ["startPlayerDrag"]],
+		["singular array", { query: ["a", "b"] }, ["a", "b"]],
+		["plural string", { queries: "startPlayerDrag" }, ["startPlayerDrag"]],
+		["plural array", { queries: ["a", "b"] }, ["a", "b"]],
+		["bare string", "startPlayerDrag", ["startPlayerDrag"]],
+		["bare array", ["a", "b"], ["a", "b"]],
+	])("accepts a %s query", async (_name, input, expected) => {
+		const execute = vi.fn(async () => "match");
+		const tool = createSearchTool(execute);
+
+		await tool.execute(input as never, {
+			agentId: "agent-1",
+			conversationId: "conv-1",
+			iteration: 1,
+		});
+
+		expect(execute.mock.calls.map((call) => call[0])).toEqual(expected);
+	});
+
+	// A `{queries: "x", max_per_file: 10}` used to match the bare
+	// `{queries: string}` branch, which stripped the unknown key: the search ran
+	// at one match per file and nothing said the option had been dropped.
+	it.each([
+		["singular", { query: "drag", max_per_file: 10, context_lines: 0 }],
+		["plural", { queries: "drag", max_per_file: 10, context_lines: 0 }],
+	])("keeps the tuning options alongside a %s query", async (_name, input) => {
+		const execute = vi.fn(async () => "match");
+		const tool = createSearchTool(execute);
+
+		await tool.execute(input as never, {
+			agentId: "agent-1",
+			conversationId: "conv-1",
+			iteration: 1,
+		});
+
+		expect(execute).toHaveBeenCalledWith(
+			"drag",
+			expect.any(String),
+			expect.any(Object),
+			{ contextLines: 0, maxPerFile: 10 },
+		);
+	});
+
+	it("leaves the options undefined when the model sent none", async () => {
+		const execute = vi.fn(async () => "match");
+		const tool = createSearchTool(execute);
+
+		await tool.execute(
+			{ queries: ["drag"] },
+			{
+				agentId: "agent-1",
+				conversationId: "conv-1",
+				iteration: 1,
+			},
+		);
+
+		expect(execute).toHaveBeenCalledWith(
+			"drag",
+			expect.any(String),
+			expect.any(Object),
+			undefined,
+		);
+	});
+
 	it("treats executor errors as failures", async () => {
 		const execute = vi.fn(async () => {
 			throw new Error("bad regex");

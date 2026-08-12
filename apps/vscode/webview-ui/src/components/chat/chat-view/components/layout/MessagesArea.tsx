@@ -56,6 +56,8 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		handleRowHeightChange,
 		isAtBottom,
 		setIsAtBottom,
+		isFollowing,
+		resumeFollowing,
 		disableAutoScrollRef,
 		handleRangeChanged,
 		scrolledPastUserMessage,
@@ -143,6 +145,12 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		if (disableAutoScrollRef.current) {
 			return
 		}
+		// The ref is the older half of this pair and several handlers still clear
+		// it directly on send, approve, resume and compact. Reaching here means it
+		// is clear, so reconcile the state that draws the button rather than
+		// leaving it asserting the reader has scrolled away. A no-op when they
+		// already agree, which is the usual case.
+		resumeFollowing()
 		scrollToBottomSmooth()
 		// Settle with an instant scroll so late layout shifts can't leave us short of the bottom.
 		// No cleanup: a quick follow-up change would cancel the settle scroll.
@@ -151,7 +159,14 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 				scrollToBottomAuto()
 			}
 		}, 50)
-	}, [displayedGroupedMessages.length, lastTailTs, scrollToBottomSmooth, scrollToBottomAuto, disableAutoScrollRef])
+	}, [
+		displayedGroupedMessages.length,
+		lastTailTs,
+		scrollToBottomSmooth,
+		scrollToBottomAuto,
+		disableAutoScrollRef,
+		resumeFollowing,
+	])
 
 	// Re-engage auto scroll when a new turn starts streaming. In the old extension every turn start
 	// came from a webview action (send, approve, resume) whose handler reset disableAutoScrollRef;
@@ -162,10 +177,12 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		const prevPhase = prevTurnPhaseRef.current
 		prevTurnPhaseRef.current = turnState?.phase
 		if (turnState?.phase === "streaming" && prevPhase !== "streaming") {
-			disableAutoScrollRef.current = false
+			// Through the helper, not the ref: this re-engages tailing, so the
+			// button has to go with it or it sits there contradicting the view.
+			resumeFollowing()
 			scrollToBottomSmooth()
 		}
-	}, [turnState?.phase, scrollToBottomSmooth, disableAutoScrollRef])
+	}, [turnState?.phase, scrollToBottomSmooth, resumeFollowing])
 
 	const itemContent = useMemo(
 		() =>
@@ -244,7 +261,7 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 					atBottomStateChange={(isAtBottom) => {
 						setIsAtBottom(isAtBottom)
 						if (isAtBottom) {
-							disableAutoScrollRef.current = false
+							resumeFollowing()
 						}
 					}}
 					atBottomThreshold={10} // trick to make sure virtuoso re-renders when task changes, and we use initialTopMostItemIndex to start at the bottom
@@ -267,7 +284,11 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 						overflowAnchor: "none", // prevent scroll jump when content expands
 					}}
 				/>
-				<JumpToPresent isVisible={!isAtBottom} onJump={jumpToPresent} />
+				{/* Keyed on following rather than on `isAtBottom`: the list leaves the
+				    bottom on its own every time a token extends it, and showing the
+				    button for that told readers tailing had stopped when it had not
+				    (#49). The reader having scrolled away is the thing worth a button. */}
+				<JumpToPresent isVisible={!isFollowing} onJump={jumpToPresent} />
 			</div>
 		</div>
 	)

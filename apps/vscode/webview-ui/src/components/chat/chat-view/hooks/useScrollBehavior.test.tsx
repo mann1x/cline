@@ -145,4 +145,45 @@ describe("useScrollBehavior", () => {
 
 		expect(scrollTo).toHaveBeenCalledWith({ top: Number.MAX_SAFE_INTEGER, behavior: "smooth" })
 	})
+
+	// The follow-up on #49: the button was keyed on Virtuoso's `isAtBottom`,
+	// which starts false before the list has reported anything, so it showed on
+	// a chat that was tailing from the first frame.
+	it("starts out following", () => {
+		const { result } = renderHook(() => useScrollBehavior([], [], [], {}, vi.fn()))
+
+		expect(result.current.isFollowing).toBe(true)
+	})
+
+	it("stops following when the reader expands a row", () => {
+		const { result } = renderHook(() => useScrollBehavior([], [], [], {}, vi.fn()))
+
+		act(() => {
+			result.current.toggleRowExpansion(1)
+		})
+
+		expect(result.current.isFollowing).toBe(false)
+		expect(result.current.disableAutoScrollRef.current).toBe(true)
+	})
+
+	// The state and the ref are read by different halves of the UI -- the button
+	// renders from one, every pin path reads the other -- so a transition that
+	// moved only one of them would show a button that disagrees with the view.
+	it("moves the flag and the follow state together", () => {
+		const { result } = renderHook(() => useScrollBehavior([], [], [], {}, vi.fn()))
+		const scrollTo = vi.fn()
+		;(result.current.virtuosoRef as MutableRefObject<{ scrollTo: typeof scrollTo } | null>).current = { scrollTo }
+
+		act(() => {
+			result.current.stopFollowing()
+		})
+		expect(result.current.isFollowing).toBe(false)
+		expect(result.current.disableAutoScrollRef.current).toBe(true)
+
+		act(() => {
+			result.current.jumpToPresent()
+		})
+		expect(result.current.isFollowing).toBe(true)
+		expect(result.current.disableAutoScrollRef.current).toBe(false)
+	})
 })

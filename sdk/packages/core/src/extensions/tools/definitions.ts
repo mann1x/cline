@@ -468,26 +468,18 @@ export function createSearchTool(
 		retryable: true,
 		maxRetries: 1,
 		execute: async (input, context) => {
-			// Validate input with Zod schema
-			const validate = validateWithZod(SearchCodebaseUnionInputSchema, input);
-			const queries = Array.isArray(validate)
-				? validate
-				: typeof validate === "object"
-					? Array.isArray(validate.queries)
-						? validate.queries
-						: [validate.queries]
-					: [validate];
+			// Validate input with Zod schema. Every branch of the union normalises
+			// to `{ queries: string[] }` with the options alongside it, so which
+			// shape the model chose is no longer this function's problem.
+			const validated = validateWithZod(SearchCodebaseUnionInputSchema, input);
+			const queries = validated.queries;
+			// Left undefined when neither was sent, so the executor keeps applying
+			// its own defaults rather than being handed two explicit undefineds.
 			const queryOptions =
-				!Array.isArray(validate) && typeof validate === "object"
+				validated.context_lines != null || validated.max_per_file != null
 					? {
-							contextLines:
-								"context_lines" in validate
-									? (validate.context_lines ?? undefined)
-									: undefined,
-							maxPerFile:
-								"max_per_file" in validate
-									? (validate.max_per_file ?? undefined)
-									: undefined,
+							contextLines: validated.context_lines ?? undefined,
+							maxPerFile: validated.max_per_file ?? undefined,
 						}
 					: undefined;
 

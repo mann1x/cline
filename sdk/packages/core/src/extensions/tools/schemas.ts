@@ -205,15 +205,50 @@ export const SearchCodebaseInputSchema = z.object({
 		),
 });
 
+/** The two tuning fields, shared by every object shape below. */
+const SearchOptionFields = {
+	context_lines: SearchCodebaseInputSchema.shape.context_lines,
+	max_per_file: SearchCodebaseInputSchema.shape.max_per_file,
+};
+
 /**
- * Union schema for search_codebase tool input, allowing either a single string, an array of strings, or the full object schema
+ * Union schema for search_codebase tool input, allowing either a single string,
+ * an array of strings, or the full object schema.
+ *
+ * `query` is accepted alongside `queries` because the tool teaches the singular
+ * itself: every result comes back as `{ query, result, success }`, and the tool
+ * description says so in as many words. Measured on a live session, a model that
+ * had read its own search results then sent `{"query":"SpectatorSelectionCard"}`
+ * and got `✖ Invalid input` — a union that matches no branch names no field, so
+ * it retried the same shape twice more before giving up on the tool. `read_files`
+ * already takes `path`, `file_path`, `filePath`, `files`, `file_paths` and
+ * `paths`; this one had four branches and none of them singular.
+ *
+ * Every branch normalises to the canonical `{ queries: string[] }`, and the two
+ * option fields ride along on the object branches. They did not before: a
+ * `{queries: "x", max_per_file: 10}` matched the bare `{queries: string}` branch,
+ * which stripped the unknown key, so the search silently ran at the default of
+ * one match per file.
  */
 export const SearchCodebaseUnionInputSchema = z.union([
 	SearchCodebaseInputSchema,
-	z.array(z.string()),
-	z.string(),
-	z.object({ queries: z.string() }),
-]);
+	z.array(z.string()).transform((queries) => ({ queries })),
+	z.string().transform((query) => ({ queries: [query] })),
+	z
+		.object({ queries: z.string(), ...SearchOptionFields })
+		.transform(({ queries, ...rest }) => ({ queries: [queries], ...rest })),
+	z
+		.object({ query: z.array(z.string()), ...SearchOptionFields })
+		.transform(({ query, ...rest }) => ({ queries: query, ...rest })),
+	z
+		.object({ query: z.string(), ...SearchOptionFields })
+		.transform(({ query, ...rest }) => ({ queries: [query], ...rest })),
+])
+	// Piped back through the canonical schema so the caller is handed one shape
+	// rather than a six-way union it has to narrow. Every branch already produces
+	// something this accepts; the pipe is what makes that a type as well as a
+	// convention.
+	.pipe(SearchCodebaseInputSchema);
 
 const CommandInputSchema = z
 	.string()

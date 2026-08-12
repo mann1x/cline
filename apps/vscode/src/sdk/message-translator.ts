@@ -664,15 +664,25 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown): ClineSayTool 
 			// The SDK's SearchCodebaseUnionInputSchema accepts multiple formats:
 			//   1. { queries: string[] }  — standard object (parsedInput handles this)
 			//   2. { queries: string }    — queries as single string
-			//   3. string[]               — bare array (parseToolInput returns undefined for arrays)
-			//   4. string                 — bare string (parseToolInput tries JSON.parse, returns undefined if not an object)
-			// We must handle all four to avoid showing empty regex in the UI.
+			//   3. { query: … }           — the singular the tool's own results use
+			//   4. string[]               — bare array (parseToolInput returns undefined for arrays)
+			//   5. string                 — bare string (parseToolInput tries JSON.parse, returns undefined if not an object)
+			// We must handle all five to avoid showing empty regex in the UI. The
+			// singular was the visible half of the bug in #52: a model that sent
+			// `{"query":"…"}` had the call rejected by the schema *and* rendered
+			// here as `"" in codebase`, so the row named neither what was searched
+			// nor why it failed.
 			let regex = ""
 			if (parsedInput) {
-				// Cases 1 & 2: input was an object with a "queries" field
-				const queries = getArrayField(parsedInput, "queries")
+				// Cases 1-3: input was an object carrying the pattern under one of
+				// the accepted names.
+				const queries = getArrayField(parsedInput, "queries") ?? getArrayField(parsedInput, "query")
 				regex =
-					queries?.join(", ") ?? getStringField(parsedInput, "queries") ?? getStringField(parsedInput, "regex") ?? ""
+					queries?.join(", ") ??
+					getStringField(parsedInput, "queries") ??
+					getStringField(parsedInput, "query") ??
+					getStringField(parsedInput, "regex") ??
+					""
 			} else if (Array.isArray(input)) {
 				// Case 3: bare array of query strings
 				regex = input.map(String).join(", ")
