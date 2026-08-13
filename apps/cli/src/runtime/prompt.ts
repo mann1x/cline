@@ -15,6 +15,14 @@ export async function resolveSystemPrompt(input: {
 	providerId?: string;
 	rules?: string;
 	mode?: AgentMode;
+	/**
+	 * The `# system` section of the prompt template this session matched, when
+	 * one did. Passing it is what makes a local model read the same prompt here
+	 * as it does in the extension: `qwen.md` and `gemma.md` are where "use
+	 * `editor`, never `sed -i`, never `cat`" is written, and a host resolving no
+	 * template sends the built-in prompt, which says none of it.
+	 */
+	basePrompt?: string;
 }): Promise<string> {
 	const metadata = await buildWorkspaceMetadata(input.cwd);
 	// Mode-tag and plan-mode instructions are appended by the shared prompt
@@ -30,6 +38,7 @@ export async function resolveSystemPrompt(input: {
 		mode: input.mode,
 		providerId: input.providerId,
 		overridePrompt: input.explicitSystemPrompt,
+		basePrompt: input.basePrompt,
 		platform:
 			(typeof process !== "undefined" && process?.platform) || "unknown",
 	});

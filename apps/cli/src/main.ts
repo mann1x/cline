@@ -78,14 +78,17 @@ async function createProviderSettingsManager() {
 }
 
 async function loadCliRuntimeModules() {
-	const [coreServer, prompt, runAgentModule] = await Promise.all([
-		import("@cline/core"),
-		import("./runtime/prompt"),
-		import("./runtime/run-agent"),
-	]);
+	const [coreServer, prompt, promptTemplate, runAgentModule] =
+		await Promise.all([
+			import("@cline/core"),
+			import("./runtime/prompt"),
+			import("./runtime/prompt-template"),
+			import("./runtime/run-agent"),
+		]);
 	return {
 		coreServer,
 		resolveSystemPrompt: prompt.resolveSystemPrompt,
+		resolveCliPromptTemplate: promptTemplate.resolveCliPromptTemplate,
 		runAgent: runAgentModule.runAgent,
 	};
 }
@@ -862,8 +865,9 @@ export async function runCli(): Promise<void> {
 	const providerSettingsManager = await createProviderSettingsManager();
 	const {
 		coreServer,
-		coreServer: { createUserInstructionConfigService },
+		coreServer: { createUserInstructionConfigService, createPromptTemplateHooks },
 		resolveSystemPrompt,
+		resolveCliPromptTemplate,
 		runAgent,
 	} = await loadCliRuntimeModules();
 
@@ -1090,6 +1094,24 @@ export async function runCli(): Promise<void> {
 			);
 		}
 
+		// The prompt template this session runs on, resolved once and applied
+		// twice: its `# system` section becomes the base prompt, and its tool
+		// sections replace the descriptions the tools carry in code. The extension
+		// has done both since templates existed and this host did neither, so the
+		// same model read a different prompt, and a different description of every
+		// tool, depending on which host started it.
+		const renderedTemplate = resolveCliPromptTemplate({
+			providerId: provider,
+			modelId: resolvedModelId,
+			workspaceRoot,
+			baseUrl: selectedProviderSettings?.baseUrl as string | undefined,
+			log: (message) => loggerAdapter.core.log(message),
+			// `BasicLogger` folds non-error warnings into `log` by design, and a
+			// template that could not be read is operational rather than fatal: the
+			// session continues on the built-in prompt. The message says which.
+			warn: (message) => loggerAdapter.core.log(message),
+		});
+
 		const config: Config = {
 			providerId: provider,
 			modelId: resolvedModelId,
@@ -1100,6 +1122,7 @@ export async function runCli(): Promise<void> {
 				explicitSystemPrompt: args.systemPrompt,
 				providerId: provider,
 				mode: effectiveMode,
+				basePrompt: renderedTemplate?.system,
 			}),
 			execution: {
 				// 6, which is what `--retries` has always documented. The code said
@@ -1130,6 +1153,12 @@ export async function runCli(): Promise<void> {
 			...(args.lintCommand?.trim()
 				? { checkFile: { lintCommand: args.lintCommand.trim() } }
 				: {}),
+			// The other half of the template: `# tool:` sections replace the
+			// description each tool carries in code. Without this the model is told
+			// what `editor` does by the SDK's own wording while the plugin tells it
+			// the family-tuned one, so the two hosts describe the same tool
+			// differently to the same model.
+			hooks: createPromptTemplateHooks({ rendered: renderedTemplate }),
 			checkpoint: CLI_DEFAULT_CHECKPOINT_CONFIG,
 			compaction: buildCliCompactionConfig(effectiveCompactionMode),
 			timeoutSeconds: args.timeoutSeconds,

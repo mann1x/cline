@@ -12,8 +12,10 @@ import {
 	OLLAMA_DEFAULT_NUM_CTX,
 	OLLAMA_DEFAULT_REASONING_EFFORT,
 	OLLAMA_DEFAULT_TIMEOUT_MS,
+	parseDeclaredFamily,
 	parseDeclaredNumCtx,
 	primeDeclaredNumCtx,
+	readDeclaredFamily,
 	readOllamaNumCtx,
 	readOllamaNumPredict,
 	readOllamaTimeoutMs,
@@ -102,6 +104,9 @@ describe("the window the model declares for itself", () => {
 			"repeat_penalty                 1.1",
 			'think_budget                   "medium"',
 		].join("\n"),
+		// A real answer carries both facts, which is why the family rides on
+		// this lookup rather than making a second one.
+		details: { family: "qwen35moe" },
 	};
 
 	function showFetch(body: unknown, ok = true) {
@@ -179,6 +184,32 @@ describe("the window the model declares for itself", () => {
 		await primeDeclaredNumCtx(LOCAL, "a-model", fetchImpl);
 		await primeDeclaredNumCtx(LOCAL, "a-model", fetchImpl);
 		expect(fetchImpl).toHaveBeenCalledTimes(1);
+	});
+
+	it("reads the family out of the details block", () => {
+		expect(parseDeclaredFamily(SHOW_BODY)).toBe("qwen35moe");
+		expect(parseDeclaredFamily({ details: { family: "gemma4" } })).toBe("gemma4");
+	});
+
+	it("contributes no family when the server names none", () => {
+		expect(parseDeclaredFamily({ details: {} })).toBeUndefined();
+		expect(parseDeclaredFamily({ details: { family: "  " } })).toBeUndefined();
+		expect(parseDeclaredFamily({})).toBeUndefined();
+		expect(parseDeclaredFamily(undefined)).toBeUndefined();
+	});
+
+	// A prompt template matches on family, and a local model's name is not
+	// evidence of one: `a3b-coder_tb:Q4_K_M` says nothing about `qwen35moe`.
+	it("records the family from the same lookup as the window", async () => {
+		const fetchImpl = showFetch(SHOW_BODY);
+		await primeDeclaredNumCtx(LOCAL, "a3b-coder_tb:Q4_K_M", fetchImpl);
+		expect(readDeclaredFamily(LOCAL, "a3b-coder_tb:Q4_K_M")).toBe("qwen35moe");
+		expect(fetchImpl).toHaveBeenCalledTimes(1);
+	});
+
+	it("reports no family when the server will not answer", async () => {
+		await primeDeclaredNumCtx(LOCAL, "minimax-m3:cloud", showFetch({}, false));
+		expect(readDeclaredFamily(LOCAL, "minimax-m3:cloud")).toBeUndefined();
 	});
 
 	// Two servers can serve the same model name with different windows.

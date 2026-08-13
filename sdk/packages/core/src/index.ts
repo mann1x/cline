@@ -29,6 +29,7 @@ export {
 	// otherwise the window the sampler uses and the one compaction sizes itself
 	// against are two different numbers.
 	primeDeclaredNumCtx,
+	readDeclaredFamily,
 	readDeclaredNumCtx,
 } from "@cline/llms";
 // Shared contracts and path helpers re-exported for app consumers.
@@ -278,6 +279,7 @@ export {
 	createUserInstructionConfigService,
 	createWorkflowsConfigDefinition,
 	DEFAULT_REQUIRED_REWRITES,
+	describeResolvedPromptTemplate,
 	type GeneratePromptTemplateArgs,
 	type GeneratePromptTemplateResult,
 	generatePromptTemplate,
@@ -303,9 +305,12 @@ export {
 	RULES_CONFIG_DIRECTORY_NAME,
 	resolvePromptTemplateDirectories,
 	resolveRulesConfigSearchPaths,
+	resolveSessionPromptTemplateFrom,
 	resolveSkillsConfigSearchPaths,
 	resolveWorkflowsConfigSearchPaths,
 	SKILLS_CONFIG_DIRECTORY_NAME,
+	type SessionPromptTemplateRequest,
+	type SessionPromptTemplateResult,
 	summarizeToolCallSignatures,
 	type ToolCallSignature,
 	UnifiedConfigFileWatcher,

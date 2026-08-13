@@ -1,6 +1,7 @@
 import {
 	type AgentEvent,
 	type AgentResult,
+	mergeAgentHooks,
 	type ProviderSettings,
 	prewarmFileIndex,
 	SessionSource,
@@ -320,7 +321,11 @@ export async function runAgent(
 						config.execution?.loopDetection ?? CLI_DEFAULT_LOOP_DETECTION,
 				},
 				checkpoint: config.checkpoint ?? CLI_DEFAULT_CHECKPOINT_CONFIG,
-				hooks: runtimeHooks.hooks,
+				// Merged, not replaced. The config carries the prompt-template hooks
+				// that rewrite tool descriptions, and overwriting the field dropped
+				// them -- silently, and completely in `--yolo`, where the runtime
+				// layer is `undefined` and this assignment erased everything.
+				hooks: mergeAgentHooks([config.hooks, runtimeHooks.hooks]),
 				onTeamEvent: handleTeamEvent,
 				onConsecutiveMistakeLimitReached: async (
 					context: ConsecutiveMistakeLimitContext,

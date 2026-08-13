@@ -82,6 +82,10 @@ export {
 	type ToolCallSignature,
 } from "../../../../sdk/packages/core/src/extensions/config/prompt-template-review"
 export {
+	describeResolvedPromptTemplate,
+	resolveSessionPromptTemplateFrom,
+} from "../../../../sdk/packages/core/src/extensions/config/prompt-template-session"
+export {
 	getShippedToolCallSignatures,
 	HOST_TOOL_INPUT_SCHEMAS,
 } from "../../../../sdk/packages/core/src/extensions/config/shipped-tool-signatures"

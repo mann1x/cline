@@ -98,6 +98,7 @@ export {
 	OLLAMA_DEFAULT_REASONING_EFFORT,
 	primeDeclaredNumCtx,
 	type ProviderApiLine,
+	readDeclaredFamily,
 	readDeclaredNumCtx,
 	registerAsyncHandler,
 	registerHandler,

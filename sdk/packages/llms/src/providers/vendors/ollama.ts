@@ -120,6 +120,49 @@ export function readDeclaredNumCtx(
 	return declaredNumCtx.get(declaredKey(baseUrl, modelId)) ?? undefined;
 }
 
+/**
+ * The architecture each model declares, keyed the same way as its window.
+ *
+ * A prompt template matches on family, and for a local model the name is not
+ * evidence of one: `v7-coder_tb:Q4_K_M` is a Gemma 4 and `ornith:latest` is a
+ * Qwen 3.5, and neither string says so. `/api/show` reports it in
+ * `details.family`, taken from the GGUF's `general.architecture`, which is the
+ * same string across every quant and every rename.
+ *
+ * It rides on the window lookup rather than getting its own call: both facts
+ * arrive in the same response, and a second request would put a second wait on
+ * the session-start path to learn something the first answer already carried.
+ */
+const declaredFamily = new Map<string, string | null>();
+
+/** The architecture the model declares, if it has been looked up. */
+export function readDeclaredFamily(
+	baseUrl: string | undefined,
+	modelId: string | undefined,
+): string | undefined {
+	if (!modelId) {
+		return undefined;
+	}
+	return declaredFamily.get(declaredKey(baseUrl, modelId)) ?? undefined;
+}
+
+/** Parse `details.family` out of what `/api/show` returns. */
+export function parseDeclaredFamily(payload: unknown): string | undefined {
+	if (!payload || typeof payload !== "object") {
+		return undefined;
+	}
+	const details = (payload as { details?: unknown }).details;
+	if (!details || typeof details !== "object") {
+		return undefined;
+	}
+	const family = (details as { family?: unknown }).family;
+	if (typeof family !== "string") {
+		return undefined;
+	}
+	const trimmed = family.trim();
+	return trimmed === "" ? undefined : trimmed;
+}
+
 /** Parse `num_ctx` out of the `parameters` block `/api/show` returns. */
 export function parseDeclaredNumCtx(payload: unknown): number | undefined {
 	if (!payload || typeof payload !== "object") {
@@ -171,23 +214,32 @@ export async function primeDeclaredNumCtx(
 		});
 		if (!response.ok) {
 			declaredNumCtx.set(key, null);
+			declaredFamily.set(key, null);
 			return;
 		}
-		const value = parseDeclaredNumCtx(await response.json());
+		const payload = await response.json();
+		const value = parseDeclaredNumCtx(payload);
 		declaredNumCtx.set(key, value ?? null);
 		if (value !== undefined) {
 			logger?.debug?.(
 				`[ollama] ${modelId} declares num_ctx ${value}; using it rather than the ${OLLAMA_DEFAULT_NUM_CTX} default`,
 			);
 		}
+		const family = parseDeclaredFamily(payload);
+		declaredFamily.set(key, family ?? null);
+		if (family !== undefined) {
+			logger?.debug?.(`[ollama] ${modelId} declares family ${family}`);
+		}
 	} catch {
 		declaredNumCtx.set(key, null);
+		declaredFamily.set(key, null);
 	}
 }
 
-/** Test seam: forget every looked-up window. */
+/** Test seam: forget every looked-up window and family. */
 export function resetDeclaredNumCtx(): void {
 	declaredNumCtx.clear();
+	declaredFamily.clear();
 }
 
 /**

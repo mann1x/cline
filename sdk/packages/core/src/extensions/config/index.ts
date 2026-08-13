@@ -22,6 +22,12 @@ export {
 	parsePromptTemplate,
 } from "./prompt-template-parser";
 export {
+	describeResolvedPromptTemplate,
+	resolveSessionPromptTemplateFrom,
+	type SessionPromptTemplateRequest,
+	type SessionPromptTemplateResult,
+} from "./prompt-template-session";
+export {
 	type AuditPromptTemplateProposalArgs,
 	auditPromptTemplateProposal,
 	DEFAULT_REQUIRED_REWRITES,

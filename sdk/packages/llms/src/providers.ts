@@ -142,6 +142,9 @@ export {
 	// A host that resolves the context window itself has to be able to ask the
 	// server what the model declares, and to ask before the first request.
 	primeDeclaredNumCtx,
+	// Answered by the same `/api/show` as the window: a prompt template matches
+	// on the model's architecture, and a local model's name does not carry one.
+	readDeclaredFamily,
 	readDeclaredNumCtx,
 	// The dispatcher is only honoured by a fetch that reads it, so the host
 	// hands over both or neither.
