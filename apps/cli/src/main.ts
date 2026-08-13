@@ -89,6 +89,7 @@ async function loadCliRuntimeModules() {
 	return {
 		coreServer,
 		resolveSystemPrompt: prompt.resolveSystemPrompt,
+		ideName: prompt.CLI_IDE_NAME,
 		resolveCliPromptTemplate: promptTemplate.resolveCliPromptTemplate,
 		createCliHostTools: hostTools.createCliHostTools,
 		runAgent: runAgentModule.runAgent,
@@ -869,6 +870,7 @@ export async function runCli(): Promise<void> {
 		coreServer,
 		coreServer: { createUserInstructionConfigService, createPromptTemplateHooks },
 		resolveSystemPrompt,
+		ideName,
 		resolveCliPromptTemplate,
 		createCliHostTools,
 		runAgent,
@@ -1161,7 +1163,13 @@ export async function runCli(): Promise<void> {
 			// what `editor` does by the SDK's own wording while the plugin tells it
 			// the family-tuned one, so the two hosts describe the same tool
 			// differently to the same model.
-			hooks: createPromptTemplateHooks({ rendered: renderedTemplate }),
+			// `ideName` is what `{{IDE_NAME}}` resolves to in a `# tool:`
+			// section, so a description that names the host names this one
+			// rather than an IDE that is not here.
+			hooks: createPromptTemplateHooks({
+				rendered: renderedTemplate,
+				ideName,
+			}),
 			// Kept so every later rebuild of the system prompt -- a plan/act
 			// switch, the connector path -- starts from the same template.
 			promptTemplateSystem: renderedTemplate?.system,

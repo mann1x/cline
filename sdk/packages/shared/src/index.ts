@@ -321,6 +321,7 @@ export type {
 	PromptTemplateMatch,
 	PromptTemplateSource,
 	PromptTemplateTarget,
+	PromptTemplateToolFacts,
 	RenderedPromptTemplate,
 } from "./prompt/template-types";
 export {
@@ -329,6 +330,7 @@ export {
 	matchesPromptPattern,
 	PROMPT_TEMPLATE_DEFAULT_MARKER,
 	PROMPT_TEMPLATE_SPECIFICITY,
+	PROMPT_TEMPLATE_TOOL_PLACEHOLDERS,
 	renderPromptTemplate,
 	resolvePromptTemplate,
 	scorePromptTemplate,

@@ -120,9 +120,9 @@ Submit the final answer and exit the conversation. For example, submit a summary
 {{DEFAULT}}
 
 # tool: check_file
-Check files for errors and warnings, using the editor's own language servers (LSP). **This is the linter.** It is also the type checker, the syntax check, and the source of the problems the IDE lists in its Problems panel — whichever of those words the question uses, this is the tool that answers it. The results are live and follow your edits: one is current as of the moment you ask, so if it still reports a problem after an edit, the problem is still there. Restarting a language server is neither possible nor necessary from here.
+Check files for errors and warnings, using the editor's own language servers (LSP). **This is the linter.** It is also the type checker, the syntax check, and the source of the problems that would show in a Problems panel — whichever of those words the question uses, this is the tool that answers it. The results are live and follow your edits: one is current as of the moment you ask, so if it still reports a problem after an edit, the problem is still there. Restarting a language server is neither possible nor necessary from here.
 
-Ask this before running a checker yourself. For a file whose language the IDE understands, it answers the same question as `tsc`, `eslint`, `biome`, `ruff`, `mypy`, `go build` or `cargo check` would — for the files you name, in milliseconds, without building the project.
+Ask this before running a checker yourself. For a file whose language a language server covers, it answers the same question as `tsc`, `eslint`, `biome`, `ruff`, `mypy`, `go build` or `cargo check` would — for the files you name, in milliseconds, without building the project.
 
 When to call it:
 - Whenever the question is about the linter, lint errors, diagnostics, problems, warnings, type errors, syntax errors or compile errors — "how many errors is the linter reporting?", "is it clean now?", "what is still broken?". You have no other way to know, and the report you were shown after an earlier edit does not answer it: that was true then, and you have edited since.
@@ -132,7 +132,7 @@ When to call it:
 
 Pass every file you want checked in one call.
 
-Read a clean result carefully. "No problems reported by the editor" is conclusive only where the IDE has a language server for that file, and it does not for every language on every machine. If this reports nothing and you have reason to expect a problem, or the project has a checker the IDE does not run, run that checker with `run_commands`. Tests and builds are always `run_commands`; this tool does not run them.
+Read a clean result carefully. "No problems reported by the editor" is conclusive only where a language server covers that file, and it does not for every language on every machine. If this reports nothing and you have reason to expect a problem, or the project has a checker the language servers do not run, run that checker with `run_commands`. Tests and builds are always `run_commands`; this tool does not run them.
 
 Output: plain text, one section per file you named, each problem on its own line as `file:line:column` with its severity and message. A file with nothing wrong says so in one line. There is no object to unpack and no `success` field — problems being listed is this tool working, not failing.
 
@@ -168,7 +168,7 @@ A parse error from the browser names no line, because the script never ran. For 
 The browser stays open between calls, so `open` once and then interact. Only one page is open at a time; `open` again to go elsewhere.
 
 # tool: code_intel
-Ask the IDE's language servers — the LSP — about a symbol. If you are reaching for an LSP tool or an MCP server that wraps one, this is it: the same protocol, already running against this workspace and its open files, with no server to start. This answers questions a text search cannot, because it understands the code: it distinguishes a definition from a mention, and this class's method from another class's method of the same name.
+Ask the language servers — the LSP — about a symbol. If you are reaching for an LSP tool or an MCP server that wraps one, this is it: the same protocol, already running against this workspace and its open files, with no server to start. This answers questions a text search cannot, because it understands the code: it distinguishes a definition from a mention, and this class's method from another class's method of the same name.
 
 Use this before falling back to `search_codebase` for anything about a symbol. It is faster, exact, and does not need you to read files to interpret the result.
 
@@ -184,7 +184,7 @@ Operations:
 - `references` — every place it is actually used.
 - `implementations` — the classes or functions implementing an interface or abstract method.
 - `type_definition` — where the type of an expression is defined.
-- `hover` — the signature, type and documentation, as the IDE shows on hover.
+- `hover` — the signature, type and documentation, as an editor shows on hover.
 - `document_symbols` — an outline of one file: its classes, functions and methods.
 - `workspace_symbols` — find a symbol by name across the whole project when you do not know which file it is in.
 - `callers` — what calls this function.

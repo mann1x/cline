@@ -56,6 +56,22 @@ describe("createPromptTemplateHooks", () => {
 		expect(result?.tools?.[1]?.description).toBe("default read");
 	});
 
+	it("names the host wherever a description asks for it", async () => {
+		// The extension and the CLI ship the same descriptions and are not the
+		// same host. This is the seam where "the IDE" stops being written into
+		// a prompt a terminal will read.
+		const hooks = createPromptTemplateHooks({
+			rendered: rendered({ tools: { code_intel: "Ask {{IDE_NAME}}." } }),
+			ideName: "Terminal Shell",
+		});
+
+		const result = await hooks?.beforeModel?.(
+			contextWith([tool("code_intel", "symbols")]),
+		);
+
+		expect(result?.tools?.[0]?.description).toBe("Ask Terminal Shell.");
+	});
+
 	it("leaves a tool no template covers reading what the code built", async () => {
 		const hooks = createPromptTemplateHooks({
 			rendered: rendered({ tools: { editor: "gemma editor" } }),

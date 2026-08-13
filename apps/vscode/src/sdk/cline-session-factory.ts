@@ -553,6 +553,15 @@ const PROVIDER_MODEL_ID_MAP: Record<string, { plan: keyof ApiConfiguration; act:
 const DEFAULT_PROVIDER_ID = "cline"
 
 /**
+ * What this host calls itself, in the prompt.
+ *
+ * One constant because it is now read twice: the system prompt's `IDE:` line
+ * and the `{{IDE_NAME}}` token a tool description may carry. Two spellings of
+ * the same host would be the sort of drift nothing reports.
+ */
+const HOST_IDE_NAME = "VS Code"
+
+/**
  * Providers whose model list comes from a live local endpoint (Ollama's
  * `/api/tags`, LM Studio's `/v1/models`). Their installed models are the only
  * meaningful catalog; a bundled-catalog default would silently select a model
@@ -962,7 +971,11 @@ export function composeSessionHooks(
 	cwd: string,
 	rendered?: RenderedPromptTemplate,
 ): AgentHooks | undefined {
-	return mergeAgentHooks([fileHooks, createEditorDiagnosticsHooks({ cwd }), createPromptTemplateHooks({ rendered })])
+	return mergeAgentHooks([
+		fileHooks,
+		createEditorDiagnosticsHooks({ cwd }),
+		createPromptTemplateHooks({ rendered, ideName: HOST_IDE_NAME }),
+	])
 }
 
 /**
@@ -1285,7 +1298,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	try {
 		const workspaceName = resolveWorkspaceName(cwd)
 		systemPrompt = buildClineSystemPrompt({
-			ide: "VS Code",
+			ide: HOST_IDE_NAME,
 			workspaceRoot,
 			workspaceName,
 			mode: mode === "plan" ? "plan" : "act",

@@ -1360,13 +1360,26 @@ describe("sdk-gateway", () => {
 		expect(JSON.stringify(call?.messages)).not.toContain("reasoning");
 	});
 
-	it("sends the whole reasoning history on Ollama requests", async () => {
-		// Reclaiming thinking is compaction's job, not every request's. Dropping
-		// it per-request looked like a cheap 79.7% cut of a live transcript, but
-		// what it cuts is the model's own record of what it has already ruled
-		// out — and a chat template that replays reasoning from the last user
-		// turn onward makes the loss invisible from the client side. Whatever is
-		// still in the transcript goes out.
+	it("drops the reasoning history on Ollama requests, because the provider does", async () => {
+		// This asserted the opposite until it was measured. The reasoning was
+		// that reclaiming thinking is compaction's job, and that a chat template
+		// replaying reasoning from the last user turn onward makes the loss
+		// invisible from the client side. Both are true; the premise about the
+		// transport was not. `ollama-ai-provider-v2` aliases `provider.chat` to
+		// its responses model, whose converter drops every assistant reasoning
+		// part and pushes a warning for each — 23,695 in one measured
+		// transaction, about 87 per request.
+		//
+		// Sending what is discarded is not free. The estimator measures with
+		// this same mode, so it counted characters that never left: 592,322
+		// estimated against a 265,274-character server-side prompt on adjacent
+		// requests of one run, and the excess is subtracted from the output cap.
+		//
+		// Whether to restore the transport is open, and belongs in a measured
+		// experiment rather than here: ollama's qwen3.5 renderer keeps assistant
+		// think blocks for every message after the last real user turn, so an
+		// agent run with a single user message would render its entire thinking
+		// history into every prompt.
 		streamTextSpy.mockReturnValue({
 			fullStream: makeStreamParts([
 				{ type: "finish", usage: { inputTokens: 1, outputTokens: 1 } },
@@ -1416,9 +1429,10 @@ describe("sdk-gateway", () => {
 		const serialized = JSON.stringify(
 			(streamTextSpy.mock.calls.at(-1)?.[0] as { messages?: unknown })?.messages,
 		);
-		expect(serialized).toContain("stale thinking");
-		expect(serialized).toContain("current thinking");
+		expect(serialized).not.toContain("stale thinking");
+		expect(serialized).not.toContain("current thinking");
 		expect(serialized).toContain("Hello!");
+		expect(serialized).toContain("More.");
 	});
 
 	it("omits Cerebras reasoning-only assistant history instead of sending empty assistant content", async () => {

@@ -9,6 +9,15 @@ import {
 import { type AgentMode, buildClineSystemPrompt } from "@cline/shared";
 import { isImagePath, loadImageAsDataUrl } from "../utils/image-attachments";
 
+/**
+ * What this host calls itself, in the prompt.
+ *
+ * Read twice: the system prompt's `IDE:` line, and the `{{IDE_NAME}}` token a
+ * tool description may carry. One constant because two spellings of the same
+ * host would be drift nothing reports.
+ */
+export const CLI_IDE_NAME = "Terminal Shell";
+
 export async function resolveSystemPrompt(input: {
 	cwd: string;
 	explicitSystemPrompt?: string;
@@ -30,7 +39,7 @@ export async function resolveSystemPrompt(input: {
 	// @cline/shared), so only the caller-specific rules are merged here.
 	const rules = mergeRulesForSystemPrompt(undefined, input.rules);
 	return buildClineSystemPrompt({
-		ide: "Terminal Shell",
+		ide: CLI_IDE_NAME,
 		workspaceRoot: input.cwd,
 		workspaceName: basename(input.cwd),
 		metadata,

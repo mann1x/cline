@@ -130,7 +130,7 @@ Execute shell commands.
 {{DEFAULT}}
 
 # tool: check_file
-Verify file validity using IDE language servers. **This is the linter** — and the type checker, and the IDE's Problems panel. Whatever the question calls it, ask here. Use this instead of running a full project build or a shell-based linter for a single file.
+Verify file validity using the language servers. **This is the linter** — and the type checker, and the problems a Problems panel would list. Whatever the question calls it, ask here. Use this instead of running a full project build or a shell-based linter for a single file.
 - **Arguments:** `paths`: An array of absolute paths to check.
 - **When to use:** After editing a file to ensure it is syntactically correct, or before finishing a task. Whenever the question is about the linter, lint errors, diagnostics, problems, type errors or compile errors — "how many errors is the linter reporting?", "is it clean now?" — call this. You have no other way to know, and the report from an earlier edit is already out of date.
 - **Output:** Plain text listing `file:line:column` with severity and message. "No problems reported" means the file is valid according to the server.
@@ -153,7 +153,7 @@ A parse error from the browser names no line. For a local file a `Delimiter scan
 {{DEFAULT}}
 
 # tool: code_intel
-Query the IDE's language server for semantic information. Use this instead of `search_codebase` for symbol-related questions.
+Query the language servers for semantic information. Use this instead of `search_codebase` for symbol-related questions.
 - **Arguments:** 
     - `operation`: One of `definition`, `references`, `implementations`, `type_definition`, `hover`, `document_symbols`, `workspace_symbols`, `callers`.
     - `path` (Optional): Absolute path to the file.

@@ -1146,7 +1146,19 @@ export function createEditorExecutor(
 		}
 
 		if (!(await fileExists(filePath))) {
-			return createFile(filePath, input.new_text, encoding);
+			const created = await createFile(filePath, input.new_text, encoding);
+			// A file the model just wrote is a file the model has seen: it
+			// supplied every line of it. Without a receipt here, the very next
+			// edit to that file is refused for not having been read, and the
+			// model reads back text it authored one call earlier.
+			//
+			// Measured across one atomic run: 79 edits refused as unread, 68 of
+			// them on files created in the same session — a refused call and the
+			// read that answered it, twice per occurrence, out of 837 turns. The
+			// guard exists for edits aimed at lines nobody has looked at, and
+			// this is the one case where the model wrote them itself.
+			receipts?.noteRead(filePath, 1, Number.POSITIVE_INFINITY);
+			return created;
 		}
 		if (input.old_text == null) {
 			// `new_text` alone against an existing file is a model asking to

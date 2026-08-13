@@ -113,7 +113,7 @@ Executes shell commands. Use this for running tests, builds, or scripts. Do not 
 {{DEFAULT}}
 
 # tool: check_file
-Checks files for errors and warnings using the editor's language servers. **This is the linter** — and the type checker, and the IDE's Problems panel. Whatever the question calls it, ask here. Use this instead of running a linter or compiler via shell to check a single file.
+Checks files for errors and warnings using the editor's language servers. **This is the linter** — and the type checker, and the problems a Problems panel would list. Whatever the question calls it, ask here. Use this instead of running a linter or compiler via shell to check a single file.
 - `paths`: Array of strings (absolute paths). Pass every file you want checked in one call.
 - When to call: After editing a file; before reporting a task finished; before changing a file to see existing errors. Whenever the question is about the linter, lint errors, diagnostics, problems, type errors or compile errors — "how many errors is the linter reporting?", "is it clean now?" — call this. You have no other way to know, and the report from an earlier edit is already out of date.
 - Output: Plain text, one section per file. Problems listed as `file:line:column` with severity and message. A file with no problems says so in one line. No `success` field; problems being listed is the tool working.
@@ -138,7 +138,7 @@ A parse error from the browser names no line. For a local file a `Delimiter scan
 {{DEFAULT}}
 
 # tool: code_intel
-Asks the IDE's language servers about a symbol. Use this instead of `search_codebase` for any question about a symbol (definitions, references, implementations, types, etc.). It is exact and does not require reading files to interpret results.
+Asks the language servers about a symbol. Use this instead of `search_codebase` for any question about a symbol (definitions, references, implementations, types, etc.). It is exact and does not require reading files to interpret results.
 - `operation`: string. One of: `definition`, `references`, `implementations`, `type_definition`, `hover`, `document_symbols`, `workspace_symbols`, `callers`.
 - `path`: string (optional). Use with `symbol` or `line`+`character`.
 - `symbol`: string (optional). The name as it appears in the file.

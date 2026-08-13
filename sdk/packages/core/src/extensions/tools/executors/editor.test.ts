@@ -25,6 +25,16 @@ async function withTempFile(
 	}
 }
 
+/** For the cases about a file that does not exist yet. */
+async function withTempDir(run: (dir: string) => Promise<void>): Promise<void> {
+	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "agents-editor-"));
+	try {
+		await run(dir);
+	} finally {
+		await fs.rm(dir, { recursive: true, force: true });
+	}
+}
+
 describe("createEditorExecutor", () => {
 	it("creates a missing file when edit is used", async () => {
 		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "agents-editor-"));
@@ -1238,6 +1248,48 @@ describe("requiring a read before an edit", () => {
 			);
 
 			expect(result).toContain("Replaced line 2");
+		});
+	});
+
+	// The model supplied every line of a file it just created, so requiring it
+	// to read that file back is a turn spent learning what it wrote. Measured
+	// over one atomic run: 79 edits refused as unread, 68 of them on files
+	// created in the same session.
+	it("counts a file it just created as read", async () => {
+		await withTempDir(async (dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			const filePath = path.join(dir, "scratch.js");
+
+			await editor(
+				{ path: filePath, new_text: "a\nb\nc\nd\n" },
+				dir,
+				context,
+			);
+			const result = await editor(
+				{ path: filePath, new_text: "B", start_line: 2 },
+				dir,
+				context,
+			);
+
+			expect(result).toContain("Replaced line 2");
+		});
+	});
+
+	it("still refuses an edit to a file this session only wrote over", async () => {
+		// The receipt covers what the model authored, not every file it has
+		// touched: an edit to a file that existed first is still sight-unseen.
+		await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+
+			const failure = editor(
+				{ path: filePath, new_text: "B", start_line: 2 },
+				dir,
+				context,
+			);
+
+			await expect(failure).rejects.toThrow("has not been read in this session");
 		});
 	});
 

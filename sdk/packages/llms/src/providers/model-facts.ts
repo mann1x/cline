@@ -389,6 +389,11 @@ export type ReasoningHistoryMode = "all" | "last" | "none";
 export function reasoningHistoryModeForProvider(providerId: string | undefined): ReasoningHistoryMode {
 	switch ((providerId ?? "").toLowerCase()) {
 		case "cerebras":
+		// Ollama's provider drops every reasoning part before the request
+		// leaves; the resolver below carries the measurement. This has to agree
+		// with it or the compaction pipeline measures a request the gateway
+		// will not send, which is the error this pair exists to prevent.
+		case "ollama":
 			return "none";
 		default:
 			return "all";
@@ -402,12 +407,30 @@ export function resolveReasoningHistoryMode(
 	if (isCerebrasProvider(request, context)) {
 		return "none";
 	}
-	// Ollama used to resolve to "last" here, which stripped reasoning from every
-	// request rather than only reclaiming it when the context was full. That is
-	// a different thing from what it was meant to be and it took the model's own
-	// recent reasoning out of its context on turns that had ample room. The
-	// reclamation now happens once, at compaction, on the prefix compaction
-	// freezes -- see `dropStaleReasoningBlocks` in the core compaction pipeline.
+	// Ollama transmits no reasoning history at all, so this says so.
+	//
+	// It used to resolve to "last", then to "all" on the reasoning that a model
+	// should keep its own recent thinking. Neither described what happens on the
+	// wire. `ollama-ai-provider-v2` aliases `provider.chat` to its responses
+	// model, and that converter drops every assistant reasoning part and pushes
+	// a warning per part -- measured at 23,695 warnings in a single transaction,
+	// about 87 per request.
+	//
+	// Saying "all" while sending none is not a cosmetic mismatch: the estimator
+	// measures with this mode (see `resolveReasoningHistoryMode` in
+	// `gateway.ts`), so it counted characters the provider threw away. Measured
+	// on adjacent requests of one run: 592,322 characters estimated against a
+	// server-side prompt of 265,274 -- 2.23x -- and the overstatement is
+	// subtracted from the output cap, which resolved to 32,000 on a 262,144
+	// window.
+	//
+	// Restoring the transport is a separate question and not obviously a win:
+	// ollama's qwen3.5 renderer keeps assistant think blocks for every message
+	// after the last real user turn, so in an agent run with one user message it
+	// would render the entire thinking history into every prompt.
+	if (isOllamaProvider(request, context)) {
+		return "none";
+	}
 	return "all";
 }
 
