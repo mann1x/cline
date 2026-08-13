@@ -1,6 +1,5 @@
-import { type AgentTool, createTool } from "@cline/shared"
-import * as path from "path"
-import { Logger } from "@/shared/services/Logger"
+import { type AgentTool, createTool } from "@cline/shared";
+import * as path from "node:path";
 
 /**
  * Hand the model the IDE's language servers.
@@ -132,8 +131,13 @@ export interface CodeIntelProvider {
 }
 
 export interface CodeIntelToolOptions {
-	cwd: string
-	provider: CodeIntelProvider
+	cwd: string;
+	provider: CodeIntelProvider;
+	/**
+	 * Where a failed request goes. Injected rather than imported: this tool is
+	 * shared by the extension and the CLI, and each has its own logger.
+	 */
+	onError?: (message: string, error: unknown) => void;
 }
 
 interface CodeIntelInput {
@@ -293,7 +297,7 @@ export function createCodeIntelTool(options: CodeIntelToolOptions): AgentTool {
 						return `Unsupported operation: ${request.operation}.`
 				}
 			} catch (error) {
-				Logger.error("[CodeIntel] request failed:", error)
+				options.onError?.("[CodeIntel] request failed", error);
 				return `The language server could not answer: ${error instanceof Error ? error.message : String(error)}`
 			}
 		},

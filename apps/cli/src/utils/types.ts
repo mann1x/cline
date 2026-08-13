@@ -30,6 +30,15 @@ export interface Config extends Omit<CoreSessionConfig, "apiKey" | "mode"> {
 	mode: CliAgentMode;
 	defaultToolAutoApprove: boolean;
 	toolPolicies: Record<string, ToolPolicy>;
+	/**
+	 * The `# system` section of the prompt template this session matched.
+	 *
+	 * Carried on the config because the system prompt is rebuilt more than once
+	 * -- switching between plan and act does it, and so does the connector path
+	 * -- and a rebuild that cannot see the template silently reverts the session
+	 * to the built-in prompt half way through.
+	 */
+	promptTemplateSystem?: string;
 }
 
 export interface ActiveCliSession {

@@ -1,8 +1,21 @@
-import { describeDelimiterBalance } from "@cline/core"
-import { type AgentTool, createTool } from "@cline/shared"
-import * as fs from "fs/promises"
-import type { BrowserActionResult } from "@/shared/ExtensionMessage"
-import { Logger } from "@/shared/services/Logger"
+import { type AgentTool, createTool } from "@cline/shared";
+import * as fs from "node:fs/promises";
+import { describeDelimiterBalance } from "./delimiter-balance";
+
+/**
+ * What a driver reports back from one action.
+ *
+ * Declared here rather than imported from the extension's message types: this
+ * tool is shared, and a host that has no webview should not have to model one
+ * to drive a browser. The extension's `BrowserActionResult` is structurally
+ * this, so its `BrowserSession` still satisfies the driver unchanged.
+ */
+export type BrowserActionResult = {
+	screenshot?: string;
+	logs?: string;
+	currentUrl?: string;
+	currentMousePosition?: string;
+};
 
 /**
  * A tool that answers "does this page actually work?".
@@ -104,11 +117,16 @@ export interface BrowserDriver {
 }
 
 export interface BrowserToolOptions {
-	cwd: string
+	cwd: string;
 	/** Built on first use, so a session that never browses never spawns Chrome. */
-	createDriver: () => BrowserDriver | Promise<BrowserDriver>
+	createDriver: () => BrowserDriver | Promise<BrowserDriver>;
 	/** Injection point for tests; defaults to reading the file off disk. */
-	readFile?: (filePath: string) => Promise<string>
+	readFile?: (filePath: string) => Promise<string>;
+	/**
+	 * Where a failed action goes. Injected rather than imported: this tool is
+	 * shared by the extension and the CLI, and each has its own logger.
+	 */
+	onError?: (message: string, error: unknown) => void;
 }
 
 interface BrowserToolInput {
@@ -231,6 +249,7 @@ async function locateParseError(
 	url: string | undefined,
 	logs: string,
 	readFile: (filePath: string) => Promise<string>,
+	onError?: (message: string, error: unknown) => void,
 ): Promise<string | null> {
 	if (!PARSE_ERROR.test(logs)) {
 		return null
@@ -243,7 +262,7 @@ async function locateParseError(
 		return describeDelimiterBalance(filePath, await readFile(filePath))
 	} catch (error) {
 		// Never mask the console output this is appended to.
-		Logger.error(`[Browser] delimiter scan skipped for ${filePath}:`, error)
+		onError?.(`[Browser] delimiter scan skipped for ${filePath}`, error);
 		return null
 	}
 }
@@ -286,7 +305,7 @@ export function createBrowserTool(options: BrowserToolOptions): AgentTool {
 				try {
 					await driver.closeBrowser()
 				} catch (error) {
-					Logger.error("[Browser] failed to close:", error)
+					options.onError?.("[Browser] failed to close", error);
 				}
 				launched = false
 				driver = undefined
@@ -332,7 +351,7 @@ export function createBrowserTool(options: BrowserToolOptions): AgentTool {
 				}
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error)
-				Logger.error(`[Browser] ${action} failed:`, error)
+				options.onError?.(`[Browser] ${action} failed`, error);
 				return `The browser could not ${action}: ${message}`
 			}
 
@@ -341,6 +360,7 @@ export function createBrowserTool(options: BrowserToolOptions): AgentTool {
 				result.currentUrl ?? target,
 				result.logs ?? "",
 				options.readFile ?? ((filePath) => fs.readFile(filePath, "utf-8")),
+				options.onError,
 			)
 			const text = located ? `${rendered}\n\n${located}` : rendered
 

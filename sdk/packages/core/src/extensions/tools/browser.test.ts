@@ -1,17 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import type { BrowserActionResult } from "@/shared/ExtensionMessage"
 import {
+	type BrowserActionResult,
 	type BrowserDriver,
 	createBrowserTool,
 	localPathOf,
 	renderBrowserResult,
 	splitDataUrl,
 	toNavigableUrl,
-} from "./browser-tool"
-
-vi.mock("@/shared/services/Logger", () => ({
-	Logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
-}))
+} from "./browser"
 
 const CWD = "/repo"
 

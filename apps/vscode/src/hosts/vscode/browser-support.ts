@@ -1,6 +1,6 @@
+import type { BrowserDriver } from "@cline/core"
 import * as vscode from "vscode"
 import { StateManager } from "@/core/storage/StateManager"
-import type { BrowserDriver } from "@/sdk/browser-tool"
 import { BrowserSession } from "@/services/browser/BrowserSession"
 
 /**

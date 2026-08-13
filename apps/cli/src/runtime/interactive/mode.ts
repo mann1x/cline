@@ -121,11 +121,22 @@ export async function applyInteractiveModeConfig(input: {
 	switchToActModeTool: NonNullable<Config["extraTools"]>[number];
 }): Promise<void> {
 	input.config.mode = input.mode;
+	// The host's own tools -- `browser`, `code_intel` -- are on this list too,
+	// and they are not mode-dependent. Replacing the whole list to add or drop
+	// the mode-switch tool took them with it, so a single switch between plan
+	// and act left the session without a browser or a language server for the
+	// rest of its life.
+	const hostTools = (input.config.extraTools ?? []).filter(
+		(tool) => tool.name !== input.switchToActModeTool.name,
+	);
 	input.config.extraTools =
-		input.mode === "plan" ? [input.switchToActModeTool] : [];
+		input.mode === "plan" ? [...hostTools, input.switchToActModeTool] : hostTools;
 	input.config.systemPrompt = await resolveSystemPrompt({
 		cwd: input.config.cwd,
 		providerId: input.config.providerId,
 		mode: input.mode,
+		// Rebuilt from the same template the session started on. Without this the
+		// prompt falls back to the built-in one on the first mode switch.
+		basePrompt: input.config.promptTemplateSystem,
 	});
 }

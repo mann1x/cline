@@ -78,17 +78,19 @@ async function createProviderSettingsManager() {
 }
 
 async function loadCliRuntimeModules() {
-	const [coreServer, prompt, promptTemplate, runAgentModule] =
+	const [coreServer, prompt, promptTemplate, hostTools, runAgentModule] =
 		await Promise.all([
 			import("@cline/core"),
 			import("./runtime/prompt"),
 			import("./runtime/prompt-template"),
+			import("./runtime/host-tools"),
 			import("./runtime/run-agent"),
 		]);
 	return {
 		coreServer,
 		resolveSystemPrompt: prompt.resolveSystemPrompt,
 		resolveCliPromptTemplate: promptTemplate.resolveCliPromptTemplate,
+		createCliHostTools: hostTools.createCliHostTools,
 		runAgent: runAgentModule.runAgent,
 	};
 }
@@ -868,6 +870,7 @@ export async function runCli(): Promise<void> {
 		coreServer: { createUserInstructionConfigService, createPromptTemplateHooks },
 		resolveSystemPrompt,
 		resolveCliPromptTemplate,
+		createCliHostTools,
 		runAgent,
 	} = await loadCliRuntimeModules();
 
@@ -1159,6 +1162,23 @@ export async function runCli(): Promise<void> {
 			// the family-tuned one, so the two hosts describe the same tool
 			// differently to the same model.
 			hooks: createPromptTemplateHooks({ rendered: renderedTemplate }),
+			// Kept so every later rebuild of the system prompt -- a plan/act
+			// switch, the connector path -- starts from the same template.
+			promptTemplateSystem: renderedTemplate?.system,
+			// The two tools this host had no answer for, and the last of the gap
+			// with the extension. `browser` says whether a page actually runs;
+			// `code_intel` asks the language servers what a symbol means. Both
+			// take their host half as an injected interface, and neither starts
+			// anything until the model calls it: Chrome is launched on the first
+			// `open`, a language server on the first question about a file it
+			// serves.
+			extraTools: createCliHostTools({
+				cwd,
+				onError: (message, error) =>
+					loggerAdapter.core.log(
+						`${message}: ${error instanceof Error ? error.message : String(error)}`,
+					),
+			}),
 			checkpoint: CLI_DEFAULT_CHECKPOINT_CONFIG,
 			compaction: buildCliCompactionConfig(effectiveCompactionMode),
 			timeoutSeconds: args.timeoutSeconds,

@@ -89,6 +89,25 @@ export {
 	getShippedToolCallSignatures,
 	HOST_TOOL_INPUT_SCHEMAS,
 } from "../../../../sdk/packages/core/src/extensions/config/shipped-tool-signatures"
+export {
+	BROWSER_ACTIONS,
+	BROWSER_TOOL_DESCRIPTION,
+	BROWSER_TOOL_INPUT_SCHEMA,
+	BROWSER_TOOL_NAME,
+	createBrowserTool,
+	localPathOf,
+	renderBrowserResult,
+	splitDataUrl,
+	toNavigableUrl,
+} from "../../../../sdk/packages/core/src/extensions/tools/browser"
+export {
+	CODE_INTEL_OPERATIONS,
+	CODE_INTEL_TOOL_DESCRIPTION,
+	CODE_INTEL_TOOL_INPUT_SCHEMA,
+	CODE_INTEL_TOOL_NAME,
+	createCodeIntelTool,
+	parseCodeIntelRequest,
+} from "../../../../sdk/packages/core/src/extensions/tools/code-intel"
 // Likewise, and for a sharper reason. The delimiter scan moved out of the
 // extension and into core, and the three extension files that call it were
 // repointed at `@cline/core` — which under vitest is this file. Absent here the

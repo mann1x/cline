@@ -5,11 +5,7 @@ import {
 	type CodeIntelSymbol,
 	createCodeIntelTool,
 	parseCodeIntelRequest,
-} from "./code-intel-tool"
-
-vi.mock("@/shared/services/Logger", () => ({
-	Logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
-}))
+} from "./code-intel"
 
 const CWD = "/repo"
 

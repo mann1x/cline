@@ -940,6 +940,41 @@ export {
 	ToolPresets,
 	truncateCommandOutput,
 } from "./extensions/tools";
+// The browser and the language-server tools. Both were the extension's alone,
+// and that was the difference between the two hosts: the CLI could not check
+// that a page runs, and could not ask what a symbol means. Each takes its host
+// half as an injected interface -- a `BrowserDriver`, a `CodeIntelProvider` --
+// so the definition and the description are shared while VS Code keeps its
+// language servers and the CLI brings its own.
+export {
+	BROWSER_ACTIONS,
+	type BrowserActionResult,
+	type BrowserDriver,
+	BROWSER_TOOL_DESCRIPTION,
+	BROWSER_TOOL_INPUT_SCHEMA,
+	BROWSER_TOOL_NAME,
+	type BrowserToolAction,
+	type BrowserToolOptions,
+	createBrowserTool,
+	localPathOf,
+	renderBrowserResult,
+	splitDataUrl,
+	toNavigableUrl,
+} from "./extensions/tools/browser";
+export {
+	CODE_INTEL_OPERATIONS,
+	CODE_INTEL_TOOL_DESCRIPTION,
+	CODE_INTEL_TOOL_INPUT_SCHEMA,
+	CODE_INTEL_TOOL_NAME,
+	type CodeIntelLocation,
+	type CodeIntelOperation,
+	type CodeIntelProvider,
+	type CodeIntelSymbol,
+	type CodeIntelToolOptions,
+	createCodeIntelTool,
+	parseCodeIntelRequest,
+	type ParsedCodeIntelRequest,
+} from "./extensions/tools/code-intel";
 export {
 	buildCheckFileDescription,
 	buildLintCommand,
