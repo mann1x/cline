@@ -33,7 +33,71 @@ import { isPositiveFiniteNumber } from "./utils";
 
 export type * from "@cline/shared";
 
+/**
+ * The synthesized per-turn cap at the window this default was written for.
+ *
+ * Kept as the anchor of {@link DEFAULT_GATEWAY_OUTPUT_WINDOW_SHARE} rather than
+ * as the answer: 32,000 is the right cap for a 128k model and for no other.
+ */
 export const DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS = 32_000;
+
+/** The window {@link DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS} was chosen against. */
+const DEFAULT_GATEWAY_OUTPUT_WINDOW = 128_000;
+
+/**
+ * The share of the context window a synthesized output cap takes: 32,000 per
+ * 128,000, applied at whatever window the model actually reports.
+ *
+ * A flat cap is wrong at both ends. On a 32,768-token model 32,000 is the whole
+ * window, so filling the cap leaves nothing for the conversation; on a
+ * 262,144-token model it is an eighth of it, and the model is held to a reply
+ * length seven eighths of its room could have covered. The second end is the
+ * costly one on Ollama, which sizes the thinking budget from
+ * `min(num_predict, num_ctx)`: measured on a3b at 262,144 context, effort
+ * `high` (half) came out at 16,000 thinking tokens and 9 turns of one
+ * transaction ended inside a 511-token band at the cap, 147,000 tokens — 39% of
+ * everything the transaction generated — spent on thinking that was cut off and
+ * resumed from a summary. The same session compacted zero times: the window was
+ * never the constraint, the flat cap was.
+ *
+ * This is the share compaction already reserves for output at cold start
+ * ({@link COLD_START_OUTPUT_ROOM_WINDOW_SHARE} in `compaction-shared`), which is
+ * what makes the two agree by construction rather than by coincidence.
+ */
+const DEFAULT_GATEWAY_OUTPUT_WINDOW_SHARE =
+	DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS / DEFAULT_GATEWAY_OUTPUT_WINDOW;
+
+/**
+ * The per-turn cap to synthesize when the caller asked for none.
+ *
+ * Only ever a default: an explicitly requested cap (the `num_predict` in the
+ * provider settings, or a `maxTokensPerTurn` on the session) is used as-is, and
+ * the room left in the window still clamps this.
+ *
+ * The share applies only where the model publishes no output ceiling of its
+ * own, which is where the flat number did the damage: local models declare a
+ * window and nothing else, so 32,000 was the whole answer at every window size.
+ * A model that does publish one already has a bound its own designers set, and
+ * the default's job there is to stay under it rather than to ask for all of it
+ * — on Anthropic, `max_tokens` is charged against the per-minute output limit
+ * whether or not the reply uses it, so raising a 32,000 request to a model's
+ * full 64,000 ceiling would cost throughput and buy nothing.
+ */
+export function resolveDefaultMaxOutputTokens(
+	model: Pick<GatewayModelDefinition, "contextWindow" | "maxOutputTokens"> = {},
+): number {
+	if (
+		isPositiveFiniteNumber(model.maxOutputTokens) ||
+		!isPositiveFiniteNumber(model.contextWindow)
+	) {
+		return DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS;
+	}
+	return Math.max(
+		GATEWAY_MIN_OUTPUT_TOKENS,
+		Math.floor(model.contextWindow * DEFAULT_GATEWAY_OUTPUT_WINDOW_SHARE),
+	);
+}
+
 const GATEWAY_OUTPUT_RESERVE_TOKENS = 1_024;
 
 /**
@@ -325,7 +389,8 @@ export function resolveGatewayOutputCap(
 				(input.outputReserveTokens ?? GATEWAY_OUTPUT_RESERVE_TOKENS)
 			: 0;
 		const defaultMaxOutputTokens = Math.max(
-			input.defaultMaxOutputTokens ?? DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS,
+			input.defaultMaxOutputTokens ??
+				resolveDefaultMaxOutputTokens(input.model),
 			reasoningFloor,
 		);
 		if (

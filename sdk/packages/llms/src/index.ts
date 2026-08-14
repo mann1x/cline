@@ -116,6 +116,7 @@ export {
 	createGateway,
 	DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS,
 	DefaultGateway,
+	resolveDefaultMaxOutputTokens,
 } from "./providers/gateway";
 export {
 	type ReasoningHistoryMode,

@@ -24,7 +24,6 @@ import {
 } from "@cline/core"
 import type { ProviderApiLine, ProviderSamplingOptions, ModelInfo as SdkModelInfo } from "@cline/llms"
 import {
-	DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS,
 	getGeneratedModelsForProvider,
 	getModelsForProvider,
 	isProviderApiLine,
@@ -34,6 +33,7 @@ import {
 	primeDeclaredNumCtx,
 	readDeclaredNumCtx,
 	resolveAgentSlotLimit,
+	resolveDefaultMaxOutputTokens,
 } from "@cline/llms"
 import { type AgentHooks, buildClineSystemPrompt, type RenderedPromptTemplate } from "@cline/shared"
 import type { ApiConfiguration } from "@shared/api"
@@ -1370,7 +1370,17 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	// when nobody has chosen anything. Only the former may overrule a model's own
 	// published cap.
 	const explicitOutputCap = configuredNumPredict ?? maxTokensPerTurn
-	const sessionOutputCap = explicitOutputCap ?? DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS
+	// The same default the gateway will synthesize for this request, asked of it
+	// with the same model facts: it is a share of the window for a model that
+	// publishes no cap of its own, and stating the flat anchor here would put a
+	// smaller number in the prompt than the server enforces on every local model
+	// with a window wider than 128k.
+	const sessionOutputCap =
+		explicitOutputCap ??
+		resolveDefaultMaxOutputTokens({
+			contextWindow: sessionContextWindow,
+			maxOutputTokens: positiveFiniteNumber(committedRuntimeModel?.modelInfo?.maxTokens),
+		})
 
 	// Tell the model about the cap its reply will actually be truncated at.
 	try {

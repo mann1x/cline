@@ -355,6 +355,72 @@ describe("sdk-gateway", () => {
 		expect(uncapped).toMatchObject({ source: "uncapped", windowBound: false });
 	});
 
+	it("scales the synthesized cap with the window it has to fit in", () => {
+		// 32,000 per 128,000, at whatever window the model reports. The flat
+		// 32,000 measured wrong at both ends: on a3b at 262,144 it capped replies
+		// at an eighth of the window and -- because Ollama sizes the thinking
+		// budget from `min(num_predict, num_ctx)` -- held effort `high` to 16,000
+		// thinking tokens, which one transaction hit 9 times while never once
+		// compacting.
+		expect(
+			resolveGatewayOutputCap({
+				requestedMaxTokens: undefined,
+				model: { contextWindow: 262_144 },
+				estimatedInputTokens: 4_000,
+			}),
+		).toMatchObject({ maxTokens: 65_536, source: "default" });
+
+		// The window the anchor was chosen for is unchanged.
+		expect(
+			resolveGatewayOutputCap({
+				requestedMaxTokens: undefined,
+				model: { contextWindow: 128_000 },
+				estimatedInputTokens: 4_000,
+			}),
+		).toMatchObject({ maxTokens: 32_000, source: "default" });
+
+		// And a small window no longer has the whole of itself synthesized as a
+		// cap, leaving nothing for the conversation.
+		expect(
+			resolveGatewayOutputCap({
+				requestedMaxTokens: undefined,
+				model: { contextWindow: 32_768 },
+				estimatedInputTokens: 1_000,
+			}),
+		).toMatchObject({ maxTokens: 8_192, source: "default" });
+
+		// Nothing to take a share of leaves the anchor.
+		expect(
+			resolveGatewayOutputCap({
+				requestedMaxTokens: undefined,
+				model: { maxOutputTokens: 200_000 },
+				estimatedInputTokens: 1_000,
+			}),
+		).toMatchObject({ maxTokens: 32_000, source: "default" });
+
+		// So does a model that publishes an output ceiling of its own: the
+		// default's job there is to stay under a bound that already exists, and
+		// asking for more of it costs throughput on providers that charge
+		// `max_tokens` against a rate limit.
+		expect(
+			resolveGatewayOutputCap({
+				requestedMaxTokens: undefined,
+				model: { maxOutputTokens: 64_000, contextWindow: 1_000_000 },
+				estimatedInputTokens: 1_000,
+			}),
+		).toMatchObject({ maxTokens: 32_000, source: "default" });
+
+		// It is a default and nothing more: a configured cap still wins, in
+		// either direction.
+		expect(
+			resolveGatewayOutputCap({
+				requestedMaxTokens: 8_000,
+				model: { contextWindow: 262_144 },
+				estimatedInputTokens: 4_000,
+			}),
+		).toMatchObject({ maxTokens: 8_000, source: "requested" });
+	});
+
 	it("makes an auxiliary call wait for the conversation's slot", async () => {
 		// A local server runs one request at a time per model. An auxiliary call
 		// issued alongside a turn does not run beside it -- it queues, and if the

@@ -3,6 +3,7 @@ import type {
 	ReasoningHistoryMode,
 	ToolResultContent,
 } from "@cline/llms";
+import { resolveDefaultMaxOutputTokens } from "@cline/llms";
 import {
 	CHARS_PER_TOKEN,
 	estimateThinkingTokens,
@@ -225,14 +226,7 @@ export function resolveThinkingSummaryMaxTokens(input: {
 	);
 }
 
-/**
- * Output room to keep free when the model reports no per-turn cap of its own.
- *
- * Matches the gateway's `DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS`, which is the cap it
- * synthesizes in exactly the same situation. Two different numbers here would
- * put the two back into the disagreement this whole path exists to end.
- */
-export const DEFAULT_OUTPUT_ROOM_TOKENS = 32_000;
+export { resolveDefaultMaxOutputTokens };
 
 /**
  * Floor on the trigger, as a share of the window.
@@ -357,9 +351,15 @@ export function resolveCompactionTriggerTokens(input: {
 	if (!isPositiveFiniteNumber(input.contextWindow)) {
 		return ratioTrigger;
 	}
+	// Output room to keep free when the model reports no per-turn cap of its
+	// own. Asked of the gateway rather than restated here: it synthesizes a cap
+	// in exactly this situation, and a second number here would put the two back
+	// into the disagreement this whole path exists to end. Not hypothetical --
+	// that default is a share of the window, so the flat 32,000 this used to be
+	// under-reserved on every window wider than 128k.
 	const declaredRoom = isPositiveFiniteNumber(input.modelMaxTokens)
 		? input.modelMaxTokens
-		: DEFAULT_OUTPUT_ROOM_TOKENS;
+		: resolveDefaultMaxOutputTokens({ contextWindow: input.contextWindow });
 	const outputRoom = isPositiveFiniteNumber(input.observedOutputTokens)
 		? Math.min(
 				declaredRoom,

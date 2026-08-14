@@ -2,10 +2,10 @@ import type { MessageWithMetadata } from "@cline/shared";
 import { describe, expect, it } from "vitest";
 import {
 	COMPACTION_TRIGGER_RATIO,
-	DEFAULT_OUTPUT_ROOM_TOKENS,
 	DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
 	MAX_SUMMARY_OUTPUT_TOKENS,
 	resolveCompactionTriggerTokens,
+	resolveDefaultMaxOutputTokens,
 	resolveObservedOutputTokens,
 	resolveSummaryMaxOutputTokens,
 	SUMMARY_OUTPUT_WINDOW_SHARE,
@@ -42,12 +42,14 @@ describe("the compaction trigger", () => {
 	});
 
 	it("falls back to the gateway's own default cap", () => {
+		// Which is a share of the window, and the same share this reserves at
+		// cold start: 50,000 of 200,000, not the 32,000 anchor.
 		expect(
 			resolveCompactionTriggerTokens({
 				maxInputTokens: 200_000,
 				contextWindow: 200_000,
 			}),
-		).toBe(200_000 - DEFAULT_OUTPUT_ROOM_TOKENS);
+		).toBe(200_000 - resolveDefaultMaxOutputTokens({ contextWindow: 200_000 }));
 	});
 
 	it("does not let an outsized cap collapse a small window", () => {
