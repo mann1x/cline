@@ -181,6 +181,49 @@ describe("createAgentSlotGateRegistry", () => {
 		expect(registry.active()).toBe(0);
 	});
 
+	it("lets a sub-agent spawn its own without waiting for itself", async () => {
+		// The live failure, and the reason the gate is re-entrant. A
+		// transaction spawned an agent, that agent spawned another, and the run
+		// went silent for one hour and fifty minutes until the harness killed
+		// it: 41,453 tokens in 7,202 seconds, no error, nothing in the log
+		// after `task.subagent_started`. The inner spawn was queued behind an
+		// ancestor that could not release until the inner spawn returned.
+		const registry = createAgentSlotGateRegistry(1);
+		const gate = registry.for("ollama http://a");
+
+		const result = await gate.run(async () => {
+			const inner = await gate.run(async () => "inner");
+			return `outer:${inner}`;
+		});
+
+		expect(result).toBe("outer:inner");
+		expect(gate.active()).toBe(0);
+	});
+
+	it("keeps a second endpoint's bound out of it", async () => {
+		// Re-entering is only sound for the gate the caller already holds. A
+		// sub-agent that spawns onto a different endpoint is a second request
+		// to a second server, and queues there like any other.
+		const registry = createAgentSlotGateRegistry(1);
+		const held = deferred();
+		let innerStarted = false;
+
+		const blocker = registry.for("ollama http://b").run(() => held.promise);
+		const nested = registry.for("ollama http://a").run(async () =>
+			registry.for("ollama http://b").run(async () => {
+				innerStarted = true;
+				return "inner";
+			}),
+		);
+
+		await Promise.resolve();
+		expect(innerStarted).toBe(false);
+
+		held.resolve();
+		await blocker;
+		await expect(nested).resolves.toBe("inner");
+	});
+
 	it("still holds one endpoint to its own bound", async () => {
 		const registry = createAgentSlotGateRegistry(1);
 		const first = deferred();

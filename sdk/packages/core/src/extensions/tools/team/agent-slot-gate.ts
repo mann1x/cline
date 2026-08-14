@@ -1,3 +1,24 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
+/**
+ * The gates whose slot the running async context already holds.
+ *
+ * A sub-agent runs inside its parent's `run`, so a `spawn_agent` it issues
+ * arrives at the same gate with the parent's slot still taken -- and on a
+ * one-slot endpoint it queues behind a holder that cannot release until the
+ * queued task returns. Measured live: a transaction spawned an agent, that
+ * agent spawned another, and the run went silent for one hour and fifty
+ * minutes until the harness killed it. 41,453 tokens in 7,202 seconds, no
+ * error, nothing in the log after `task.subagent_started`.
+ *
+ * Re-entering is not extra concurrency against the server. The holder issues
+ * no requests while its descendant runs -- it is suspended on exactly that
+ * call -- so the endpoint still sees one request at a time, which is what this
+ * bound measures. A descendant therefore reuses the slot its ancestor holds
+ * rather than queueing for it.
+ */
+const heldGates = new AsyncLocalStorage<ReadonlySet<symbol>>();
+
 /**
  * Holds delegated agents to the number of requests their endpoint will serve.
  *
@@ -30,6 +51,11 @@ export interface AgentSlotGate {
  * would have taken.
  */
 export function createAgentSlotGate(limit: number | undefined): AgentSlotGate {
+	// Identity for {@link heldGates}: one gate's slot says nothing about
+	// another's, and two gates in one registry must not be confused for each
+	// other when a sub-agent on a second endpoint spawns its own.
+	const token = Symbol("agent-slot-gate");
+
 	if (limit === undefined || !Number.isFinite(limit) || limit <= 0) {
 		let running = 0;
 		return {
@@ -65,6 +91,12 @@ export function createAgentSlotGate(limit: number | undefined): AgentSlotGate {
 
 	return {
 		run: async (task) => {
+			const held = heldGates.getStore();
+			if (held?.has(token)) {
+				// A descendant of the task holding this slot. Queueing it would
+				// wait on an ancestor that cannot release until this returns.
+				return task();
+			}
 			if (running >= bound) {
 				await new Promise<void>((resolve) => {
 					waiting.push(resolve);
@@ -73,8 +105,10 @@ export function createAgentSlotGate(limit: number | undefined): AgentSlotGate {
 			} else {
 				running += 1;
 			}
+			const nested = new Set(held ?? []);
+			nested.add(token);
 			try {
-				return await task();
+				return await heldGates.run(nested, task);
 			} finally {
 				release();
 			}
