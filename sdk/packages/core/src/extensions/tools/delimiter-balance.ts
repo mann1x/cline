@@ -377,9 +377,9 @@ function surplusNote(line: number, balance: Map<number, LineBalance>): string {
 	}
 
 	if (surplus.length === 0) {
-		return "; this line's own brackets do balance, so one is in the wrong place rather than missing or spare"
+		return "this line's own brackets do balance, so one is in the wrong place rather than missing or spare"
 	}
-	return `; counting only code, this line has ${surplus.join(" and ")} — that is the edit`
+	return `counting only code, this line has ${surplus.join(" and ")} — that is the edit`
 }
 
 /**
@@ -441,18 +441,39 @@ export function describeDelimiterBalance(filePath: string, text: string): string
 	})
 
 	const shown = distinct.slice(0, MAX_REPORTED_LINES)
+
+	// Line number first, then the tally, then the pairing in brackets.
+	//
+	// The order is the whole point. Led by the pairing, a real report read "the
+	// `(` opened at line 90, column 30 is closed by `}` at line 90, column
+	// 382; counting only code, this line has 1 more `}` than `{` — that is the
+	// edit". The model quoted that first clause back and spent the rest of the
+	// turn trying to make sense of a `(` being closed by a `}` — six turns of
+	// it, four of them ending at the thinking budget — while the clause that
+	// told it what to change sat behind a semicolon. A crossing is how the
+	// scanner noticed; the tally is what the model can act on, so the tally
+	// leads and the crossing explains.
 	const lines = shown.map((finding) => {
 		switch (finding.kind) {
 			case "mismatch": {
 				// Only when the crossing opens and closes on the same line: that
 				// span has to balance within itself, so the tally is a verdict.
-				const note = finding.openLine === finding.line ? surplusNote(finding.line, balance) : ""
-				return `  the \`${finding.opener}\` opened at line ${finding.openLine}, column ${finding.openColumn} is closed by \`${finding.found}\` at line ${finding.line}, column ${finding.column}${note}`
+				const sameLine = finding.openLine === finding.line
+				const note = sameLine ? surplusNote(finding.line, balance) : ""
+				const crossing = sameLine
+					? `the \`${finding.opener}\` at column ${finding.openColumn} is closed by \`${finding.found}\` at column ${finding.column}`
+					: `the \`${finding.opener}\` at column ${finding.openColumn} is closed by \`${finding.found}\` at line ${finding.line}, column ${finding.column}`
+				return note
+					? `  line ${finding.openLine}: ${note} (${crossing})`
+					: `  line ${finding.openLine}: ${crossing}`
 			}
-			case "unmatched-close":
-				return `  \`${finding.found}\` at line ${finding.line}, column ${finding.column} closes nothing that is open${surplusNote(finding.line, balance)}`
+			case "unmatched-close": {
+				const note = surplusNote(finding.line, balance)
+				const stray = `the \`${finding.found}\` at column ${finding.column} closes nothing that is open`
+				return note ? `  line ${finding.line}: ${note} (${stray})` : `  line ${finding.line}: ${stray}`
+			}
 			default:
-				return `  the \`${finding.opener}\` opened at line ${finding.openLine}, column ${finding.openColumn} is never closed`
+				return `  line ${finding.openLine}: the \`${finding.opener}\` at column ${finding.openColumn} is never closed`
 		}
 	})
 
@@ -468,8 +489,8 @@ export function describeDelimiterBalance(filePath: string, text: string): string
 	// them together and re-check rather than trusting the list wholesale.
 	const closing =
 		shown.length === 1
-			? "  This scan skips strings, comments and regex literals, so it is counting real code. Fix that opener — it is the one the parse error could not name."
-			: "  This scan skips strings, comments and regex literals, so it is counting real code. The first line is where the parser gave up; the others are scanned past it and may shift once it is fixed. Fix them in one edit, then re-check."
+			? "  This scan skips strings, comments and regex literals, so it is counting real code — edit the line named above rather than re-deriving the balance yourself. It is the line the parse error could not name."
+			: "  This scan skips strings, comments and regex literals, so it is counting real code — edit the lines named above rather than re-deriving the balance yourself. The first is where the parser gave up; the others are scanned past it and may shift once it is fixed. Fix them in one edit, then re-check."
 
 	return [heading, ...lines, closing].join("\n")
 }

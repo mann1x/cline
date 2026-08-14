@@ -74,7 +74,9 @@ describe("describeDelimiterBalance", () => {
 	it("reports the crossing in a .ts file", () => {
 		const report = describeDelimiterBalance("app.ts", "function f(){ if (a) { b(); ) }")
 		expect(report).toContain("Delimiter scan")
-		expect(report).toContain("`{` opened at line 1, column 22 is closed by `)` at line 1, column 29")
+		// The line the edit goes on leads; the crossing that found it follows.
+		expect(report).toContain("line 1: ")
+		expect(report).toContain("`{` at column 22 is closed by `)` at column 29")
 	})
 
 	it("names every line that does not balance, not just the first", () => {
@@ -100,14 +102,29 @@ describe("describeDelimiterBalance", () => {
 
 	it("reports one line once, however many crossings it holds", () => {
 		const report = describeDelimiterBalance("app.ts", "function f(){ if (a) { b(); ) } ) }")
-		const named = (report ?? "").split("\n").filter((line) => line.startsWith("  the ") || line.startsWith("  `"))
+		const named = (report ?? "").split("\n").filter((line) => line.startsWith("  line "))
 		expect(named).toHaveLength(1)
 	})
 
 	it("keeps the singular heading when only one line is at fault", () => {
 		const report = describeDelimiterBalance("app.ts", "function f(){ if (a) { b(); ) }")
 		expect(report).toContain("Delimiter scan:")
-		expect(report).toContain("Fix that opener")
+		expect(report).toContain("edit the line named above")
+	})
+
+	it("leads with the line and the tally, not with the crossing", () => {
+		// Measured, and the reason this order exists. Led by the crossing, the
+		// report read "the `(` opened at line 90, column 30 is closed by `}` at
+		// line 90, column 382; counting only code, this line has 1 more `}`
+		// than `{`". The model quoted that first clause and spent six turns —
+		// four of them ending at the thinking budget — trying to work out how a
+		// `(` could be closed by a `}`, while the half that told it what to
+		// change sat behind a semicolon.
+		const report = describeDelimiterBalance("app.js", "dDec(c,x){this.dc.forEach(d=>{if(d){c.fill();}}});}\n")
+		const named = (report ?? "").split("\n").find((line) => line.startsWith("  line "))
+		expect(named).toBe(
+			"  line 1: counting only code, this line has 1 more `}` than `{` — that is the edit (the `(` at column 26 is closed by `}` at column 48)",
+		)
 	})
 
 	it("scans script bodies in HTML at their real line numbers", () => {

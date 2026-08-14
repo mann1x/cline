@@ -64,7 +64,7 @@ Read the bound carefully. This reports **syntax**, not meaning: a file that pars
 
 Output: plain text, one section per file you named. A file with nothing wrong says so in one line. There is no object to unpack and no \`success\` field — problems being listed is this tool working, not failing.
 
-When a file's brackets do not match, a \`Delimiter scan\` section names the *opening* bracket involved, and one line per place the trouble starts — a file can be broken in several spots at once, so fix every line it lists in one edit rather than one per round trip. A parse error is always reported where the parser gave up, which is the closing bracket; the opener is the one you have to edit, and it is the one the error cannot name.`;
+When a file's brackets do not match, a \`Delimiter scan\` section names the line to edit and how many brackets that line is out by, one line per place the trouble starts — a file can be broken in several spots at once, so fix every line it lists in one edit rather than one per round trip. Edit the lines it names; do not re-derive the balance by hand or with a script you write, which costs more thinking than you have and counts brackets inside strings, comments and regex literals that this scan skips. A parse error is always reported where the parser gave up, which is the closing bracket; the line named here is the one the error cannot name.`;
 
 /**
  * The description when the host has a real checker to point at.
@@ -98,7 +98,7 @@ Read the bound: this is as good as the command behind it. A checker that does no
 
 Output: plain text, one section per file you named. A file with nothing wrong says so in one line. There is no object to unpack and no \`success\` field — problems being listed is this tool working, not failing.
 
-When a file's brackets do not match, a \`Delimiter scan\` section names the *opening* bracket involved, and one line per place the trouble starts — a file can be broken in several spots at once, so fix every line it lists in one edit rather than one per round trip. A parse error is always reported where the parser gave up, which is the closing bracket; the opener is the one you have to edit, and it is the one the error cannot name.`;
+When a file's brackets do not match, a \`Delimiter scan\` section names the line to edit and how many brackets that line is out by, one line per place the trouble starts — a file can be broken in several spots at once, so fix every line it lists in one edit rather than one per round trip. Edit the lines it names; do not re-derive the balance by hand or with a script you write, which costs more thinking than you have and counts brackets inside strings, comments and regex literals that this scan skips. A parse error is always reported where the parser gave up, which is the closing bracket; the line named here is the one the error cannot name.`;
 }
 
 export const CHECK_FILE_TOOL_INPUT_SCHEMA = {
