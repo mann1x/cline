@@ -398,7 +398,10 @@ describe("default search_codebase tool", () => {
 		["bare string", "startPlayerDrag", ["startPlayerDrag"]],
 		["bare array", ["a", "b"], ["a", "b"]],
 	])("accepts a %s query", async (_name, input, expected) => {
-		const execute = vi.fn(async () => "match");
+		// Declares the query parameter it ignores: the assertion below reads
+		// `call[0]`, and a mock inferred from `async () => …` has an empty
+		// argument tuple for that to index into.
+		const execute = vi.fn(async (_query: string) => "match");
 		const tool = createSearchTool(execute);
 
 		await tool.execute(input as never, {
