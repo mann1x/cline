@@ -141,9 +141,16 @@ vi.mock("./session-events", () => ({
 
 describe("runAgent", () => {
 	const originalExitCode = process.exitCode;
+	const originalStdinTTY = process.stdin.isTTY;
+	const originalStdoutTTY = process.stdout.isTTY;
 
 	beforeEach(() => {
 		process.exitCode = undefined;
+		// `ask_question` is only wired where somebody can answer it, and under
+		// vitest neither stream is a terminal. Most of this suite is about the
+		// ordinary interactive run, so it gets one.
+		process.stdin.isTTY = true;
+		process.stdout.isTTY = true;
 		sessionManagerMocks.start.mockReset();
 		sessionManagerMocks.send.mockReset();
 		sessionManagerMocks.stop.mockReset();
@@ -167,6 +174,8 @@ describe("runAgent", () => {
 
 	afterEach(() => {
 		process.exitCode = originalExitCode;
+		process.stdin.isTTY = originalStdinTTY;
+		process.stdout.isTTY = originalStdoutTTY;
 		vi.clearAllMocks();
 	});
 
@@ -453,6 +462,74 @@ describe("runAgent", () => {
 						submit: submitAndExitInTerminal,
 					},
 					requestToolApproval,
+				},
+			}),
+		);
+	});
+
+	it("withholds ask_question when no terminal can answer it", async () => {
+		// Measured on a headless run: with neither stream a TTY,
+		// `askQuestionInTerminal` hands back the model's own first option, so
+		// one turn spent 20,611 tokens asking a question and got its own
+		// suggestion returned to it. A stub answer is not worth a turn.
+		process.stdin.isTTY = false;
+		process.stdout.isTTY = false;
+
+		const startedAt = new Date("2026-03-22T00:00:00.000Z");
+		const endedAt = new Date("2026-03-22T00:00:01.000Z");
+		sessionManagerMocks.start.mockResolvedValue({
+			sessionId: "session-1",
+			manifestPath: "/tmp/manifest.json",
+			messagesPath: "/tmp/messages.json",
+			manifest: { session_id: "session-1" },
+			result: {
+				text: "ok",
+				usage: {
+					inputTokens: 1,
+					outputTokens: 1,
+					cacheReadTokens: 0,
+					cacheWriteTokens: 0,
+					totalCost: undefined,
+				},
+				messages: [],
+				toolCalls: [],
+				iterations: 1,
+				finishReason: "completed",
+				model: { id: "gemini", provider: "openrouter", info: {} },
+				startedAt,
+				endedAt,
+			},
+		} as never);
+
+		const { runAgent } = await import("./run-agent");
+		const { createCliCore } = await import("../session/session");
+		const { submitAndExitInTerminal } = await import("../utils/approval");
+
+		await expect(
+			runAgent("test prompt", {
+				cwd: process.cwd(),
+				enableAgentTeams: false,
+				enableSpawnAgent: false,
+				enableTools: [],
+				execution: { maxConsecutiveMistakes: 3 },
+				logger: undefined,
+				mode: "act",
+				modelId: "google/gemini-3-flash-preview",
+				outputMode: "text",
+				providerId: "openrouter",
+				systemPrompt: "system",
+				thinking: false,
+				toolPolicies: { "*": { autoApprove: true } },
+				verbose: false,
+				workspaceRoot: process.cwd(),
+			} as never),
+		).resolves.toBeUndefined();
+
+		expect(createCliCore).toHaveBeenCalledWith(
+			expect.objectContaining({
+				capabilities: {
+					toolExecutors: { submit: submitAndExitInTerminal },
+					requestToolApproval: expect.anything(),
 				},
 			}),
 		);

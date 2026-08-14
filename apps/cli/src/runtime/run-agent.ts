@@ -162,8 +162,19 @@ export async function runAgent(
 	});
 
 	const isYoloMode = config.mode === "yolo";
+	// A follow-up question needs someone to answer it. With no terminal on
+	// either stream, `askQuestionInTerminal` hands back the model's own first
+	// option unread, which is not an answer -- measured on a headless run, one
+	// such turn spent 20,611 tokens composing a question and got back "Try
+	// extracting and running through node directly", its own suggestion
+	// returned to it; a second got "Yes, proceed". Two turns and roughly 21,000
+	// tokens spent consulting a stub. Withholding the tool where nobody can
+	// answer leaves the model to do the work instead, which is what it did on
+	// the next turn anyway.
+	const canAskFollowUps =
+		process.stdin.isTTY === true && process.stdout.isTTY === true;
 	const toolExecutors = {
-		askQuestion: askQuestionInTerminal,
+		...(canAskFollowUps ? { askQuestion: askQuestionInTerminal } : {}),
 		submit: submitAndExitInTerminal,
 	};
 	const sessionManager = await createCliCore({

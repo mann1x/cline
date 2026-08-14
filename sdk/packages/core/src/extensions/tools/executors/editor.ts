@@ -7,9 +7,19 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentToolContext } from "@cline/shared";
+import { describeDelimiterBalance } from "../delimiter-balance";
 import type { EditFileInput } from "../schemas";
 import type { EditorExecutor } from "../types";
 import type { ReadReceipts } from "./read-receipts";
+
+/**
+ * The largest file worth re-scanning for bracket balance after an edit.
+ *
+ * The scan walks every character. Nothing a model edits line by line is this
+ * big, and a bundle or a data file that is would pay for the whole walk on
+ * every call to say nothing useful.
+ */
+const MAX_SCANNED_BYTES = 2_000_000;
 
 /**
  * Options for the editor executor
@@ -1027,7 +1037,43 @@ export function createEditorExecutor(
 		);
 	};
 
-	return async (
+	/**
+	 * Report what the edit left behind, when it left the file unparseable.
+	 *
+	 * The prompt asks the model to run `check_file` after every edit, and the
+	 * models that need it most are the ones that do not. Measured over one
+	 * transaction: 109 turns, 17 of them edits, and two `check_file` calls --
+	 * the scan that names the line to fix reached the model once, while it ran
+	 * the program seventy times looking for the same answer. Attaching the scan
+	 * to the edit puts it where the model is already looking, at the moment it
+	 * has just changed the file, and asks nothing of it.
+	 *
+	 * Silent unless the file's delimiters do not balance, so a healthy edit
+	 * reads exactly as it did before.
+	 */
+	const withDelimiterScan = async (
+		filePath: string,
+		result: string,
+	): Promise<string> => {
+		let text: string;
+		try {
+			const stat = await fs.stat(filePath);
+			// A scan of a file this size costs more than the answer is worth,
+			// and nothing a model edits by hand is this big.
+			if (stat.size > MAX_SCANNED_BYTES) {
+				return result;
+			}
+			text = await fs.readFile(filePath, encoding);
+		} catch {
+			// The edit's own result is the answer; a file that cannot be read
+			// back has nothing to say about brackets.
+			return result;
+		}
+		const scan = describeDelimiterBalance(filePath, text);
+		return scan ? `${result}\n\n${scan}` : result;
+	};
+
+	const edit = async (
 		input: EditFileInput,
 		cwd: string,
 		_context: AgentToolContext,
@@ -1216,5 +1262,20 @@ export function createEditorExecutor(
 		);
 		await noteWrite();
 		return result;
+	};
+
+	return async (
+		input: EditFileInput,
+		cwd: string,
+		context: AgentToolContext,
+	): Promise<string> => {
+		const result = await edit(input, cwd, context);
+		let filePath: string;
+		try {
+			filePath = resolveFilePath(cwd, input.path, restrictToCwd);
+		} catch {
+			return result;
+		}
+		return withDelimiterScan(filePath, result);
 	};
 }

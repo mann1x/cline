@@ -1599,4 +1599,54 @@ describe("how long the file is", () => {
 			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("a\nB");
 		});
 	});
+
+	describe("the delimiter scan on an edit", () => {
+		// The prompt asks for `check_file` after every edit and the models that
+		// need it most do not call it: 17 edits and 2 checks in one measured
+		// transaction. Attaching the scan to the edit asks nothing of the model.
+		it("names the line to fix when the edit leaves the file unbalanced", async () => {
+			await withTempDir(async (dir) => {
+				const editor = createEditorExecutor();
+				const filePath = path.join(dir, "game.js");
+
+				const result = await editor(
+					{ path: filePath, new_text: "function f(){ if (a) { b(); }}}\n" },
+					dir,
+					context,
+				);
+
+				expect(result).toContain("File created successfully");
+				expect(result).toContain("Delimiter scan");
+				expect(result).toContain("1 more `}` than `{`");
+			});
+		});
+
+		it("says nothing when the edit leaves the file parseable", async () => {
+			await withTempFile("function f(){ return 1; }\n", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+
+				const result = await editor(
+					{ path: filePath, start_line: 1, end_line: 1, new_text: "function f(){ return 2; }" },
+					dir,
+					context,
+				);
+
+				expect(result).not.toContain("Delimiter scan");
+			});
+		});
+
+		it("says nothing about a language it cannot parse", async () => {
+			await withTempDir(async (dir) => {
+				const editor = createEditorExecutor();
+
+				const result = await editor(
+					{ path: path.join(dir, "notes.md"), new_text: "# heading ) ) )\n" },
+					dir,
+					context,
+				);
+
+				expect(result).not.toContain("Delimiter scan");
+			});
+		});
+	});
 });
