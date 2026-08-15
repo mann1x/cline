@@ -52,6 +52,12 @@ export interface DelimiterFinding {
 	openLine?: number
 	openColumn?: number
 	opener?: string
+	/**
+	 * What was still open around this point, innermost first — the chain a
+	 * model otherwise rebuilds by hand. Recorded with the opener this finding
+	 * names already taken off, so it reads as the context the fix sits in.
+	 */
+	enclosing?: Array<{ opener: string; line: number; column: number }>
 }
 
 interface Cursor {
@@ -144,6 +150,19 @@ export function scanWithBalance(text: string, origin: Cursor = { line: 1, column
 	// gets scanned as source, and one stray quote or brace in ordinary prose
 	// corrupts every finding after it.
 	const stack: Array<{ opener: string; line: number; column: number; resumesTemplate?: boolean }> = []
+
+	// The innermost few of what is still open, for a finding to carry. Capped
+	// because the report is read on every edit: the fix sits in the innermost
+	// scopes, and the outer ones are the file's shape rather than the problem.
+	const enclosing = () => {
+		if (stack.length === 0) {
+			return undefined
+		}
+		return stack
+			.slice(-ENCLOSING_REPORTED)
+			.reverse()
+			.map((open) => ({ opener: open.opener, line: open.line, column: open.column }))
+	}
 
 	let line = origin.line
 	let column = origin.column
@@ -276,7 +295,7 @@ export function scanWithBalance(text: string, origin: Cursor = { line: 1, column
 				continue
 			}
 			if (!open) {
-				findings.push({ kind: "unmatched-close", line, column, found: char })
+				findings.push({ kind: "unmatched-close", line, column, found: char, enclosing: enclosing() })
 			} else if (PAIRS[open.opener] !== char) {
 				findings.push({
 					kind: "mismatch",
@@ -286,6 +305,7 @@ export function scanWithBalance(text: string, origin: Cursor = { line: 1, column
 					opener: open.opener,
 					openLine: open.line,
 					openColumn: open.column,
+					enclosing: enclosing(),
 				})
 			}
 			advance(1)
@@ -342,6 +362,9 @@ function scriptSpans(text: string): Array<{ body: string; origin: Cursor }> {
 /** Lines named in one report. Past this it is a rewrite, not a fix. */
 const MAX_REPORTED_LINES = 6
 
+/** How deep the enclosing chain goes. Four covers a method inside a class. */
+const ENCLOSING_REPORTED = 4
+
 /**
  * What the counts on one line say about the fix.
  *
@@ -382,6 +405,119 @@ function surplusNote(line: number, balance: Map<number, LineBalance>): string {
 	return `counting only code, this line has ${surplus.join(" and ")} — that is the edit`
 }
 
+/** How far along the line to look for somewhere a misplaced closer belongs. */
+const MOVE_WINDOW = 12
+
+/** A ceiling on the search, so a pathological line cannot stall an edit. */
+const MAX_CANDIDATES = 24
+
+/**
+ * Past this the search is not worth the wait.
+ *
+ * Every candidate is a full re-scan of the span, and a scan runs at roughly a
+ * megabyte in 70ms. Two dozen candidates against a 2 MB file is three seconds
+ * bolted onto an edit that took 40 — so a large file gets the reading of its
+ * structure and no proposal. Measured: the 14 KB file this exists for takes
+ * 16ms end to end, search included.
+ */
+const MAX_REPAIR_BYTES = 100_000
+
+/** Where a 1-based line and column land inside a scanned span. */
+function offsetIn(body: string, origin: Cursor, line: number, column: number): number {
+	const lines = body.split("\n")
+	const row = line - origin.line
+	if (row < 0 || row >= lines.length) {
+		return -1
+	}
+	let offset = 0
+	for (let index = 0; index < row; index += 1) {
+		offset += lines[index].length + 1
+	}
+	// Only the first line of a span starts anywhere but column 1.
+	return offset + column - (row === 0 ? origin.column : 1)
+}
+
+/**
+ * An edit that makes one crossing go away, found by trying and re-scanning.
+ *
+ * The scan says which brackets cross. It cannot say whether to delete one, add
+ * one or move one, and that is the question the model burns its thinking on:
+ * one measured turn spent 33,350 tokens deciding between a swap and a deletion
+ * on a 500-column line, reached the budget wall, and picked the wrong one. A
+ * parse is microseconds, so the honest answer is to try each single-character
+ * edit and report the one that verifies rather than reason about it.
+ *
+ * A candidate is accepted only when the crossing it targets is gone *and* it
+ * introduced nothing new at or before that point — a repair that merely pushes
+ * the trouble earlier in the file is not a repair. Among those that pass, the
+ * one leaving fewest crossings wins, and simpler edits break the tie.
+ */
+function proposeRepair(body: string, origin: Cursor, finding: DelimiterFinding, baseline: number): string | null {
+	if (body.length > MAX_REPAIR_BYTES) {
+		return null
+	}
+	const at = offsetIn(body, origin, finding.line, finding.column)
+	if (at < 0 || at >= body.length || body[at] !== finding.found) {
+		return null
+	}
+	const expected = finding.opener ? PAIRS[finding.opener] : undefined
+	const cut = body.slice(0, at) + body.slice(at + 1)
+
+	const candidates: Array<{ text: string; say: string }> = [
+		{ text: cut, say: `delete the \`${finding.found}\` at column ${finding.column}` },
+	]
+	if (expected && expected !== finding.found) {
+		candidates.push({
+			text: body.slice(0, at) + expected + body.slice(at + 1),
+			say: `replace the \`${finding.found}\` at column ${finding.column} with \`${expected}\``,
+		})
+		candidates.push({
+			text: body.slice(0, at) + expected + body.slice(at),
+			say: `insert a \`${expected}\` before the \`${finding.found}\` at column ${finding.column}`,
+		})
+	}
+	// A closer in the wrong place, which is neither spare nor missing. Only
+	// bracket positions are tried: nowhere else can a closer belong.
+	for (let column = finding.column - MOVE_WINDOW; column <= finding.column + MOVE_WINDOW; column += 1) {
+		if (column === finding.column || candidates.length >= MAX_CANDIDATES) {
+			continue
+		}
+		const target = offsetIn(body, origin, finding.line, column)
+		if (target < 0 || target >= body.length || (!PAIRS[body[target]] && !CLOSERS[body[target]])) {
+			continue
+		}
+		const into = target - (column > finding.column ? 1 : 0)
+		candidates.push({
+			text: cut.slice(0, into) + finding.found + cut.slice(into),
+			say: `move the \`${finding.found}\` at column ${finding.column} to column ${column}`,
+		})
+	}
+
+	let best: { say: string; left: number } | null = null
+	for (const candidate of candidates) {
+		const after = scanDelimiters(candidate.text, origin)
+		const cleared = !after.some(
+			(other) => other.line === finding.line && Math.abs(other.column - finding.column) <= 3,
+		)
+		const earlier = after.some(
+			(other) =>
+				other.line < finding.line || (other.line === finding.line && other.column <= finding.column),
+		)
+		if (cleared && !earlier && (best === null || after.length < best.left)) {
+			best = { say: candidate.say, left: after.length }
+		}
+	}
+	if (!best) {
+		return null
+	}
+
+	const rest =
+		best.left === 0
+			? "and nothing else in this file crosses after that"
+			: `and leaves ${best.left} of the ${baseline} crossings, all further down the file`
+	return `${best.say} — checked: that clears this line ${rest}.`
+}
+
 /**
  * Render the balance findings for a file, or null when there is nothing
  * useful to say — the file's language is not one this understands, or its
@@ -392,6 +528,9 @@ export function describeDelimiterBalance(filePath: string, text: string): string
 
 	let findings: DelimiterFinding[]
 	const balance = new Map<number, LineBalance>()
+	// Which span each finding came out of, so a repair can be tried against
+	// the same text the scan walked rather than against the whole file.
+	const sources: Array<{ body: string; origin: Cursor; findings: DelimiterFinding[] }> = []
 	const absorb = (scan: DelimiterScan) => {
 		for (const [at, counts] of scan.balance) {
 			const entry = balance.get(at) ?? { round: 0, square: 0, curly: 0 }
@@ -403,12 +542,18 @@ export function describeDelimiterBalance(filePath: string, text: string): string
 		return scan.findings
 	}
 
+	const record = (body: string, origin: Cursor) => {
+		const found = absorb(scanWithBalance(body, origin))
+		sources.push({ body, origin, findings: found })
+		return found
+	}
+
 	if (C_FAMILY.has(extension)) {
-		findings = absorb(scanWithBalance(text))
+		findings = record(text, { line: 1, column: 1 })
 	} else if (EMBEDS_SCRIPT.has(extension)) {
 		// One line can hold the end of one `<script>` and the start of the next,
 		// so the tallies are summed rather than replaced.
-		findings = scriptSpans(text).flatMap((span) => absorb(scanWithBalance(span.body, span.origin)))
+		findings = scriptSpans(text).flatMap((span) => record(span.body, span.origin))
 	} else {
 		return null
 	}
@@ -476,6 +621,50 @@ export function describeDelimiterBalance(filePath: string, text: string): string
 				return `  line ${finding.openLine}: the \`${finding.opener}\` at column ${finding.openColumn} is never closed`
 		}
 	})
+
+	// Everything below goes to the first line only. It is the one the parser
+	// stopped on, so it is the one that is certain; the rest are scanned past a
+	// disturbed stack. Saying this much about all six would cost more of the
+	// model's attention than the five leads are worth.
+	const first = shown[0]
+	if (first) {
+		// One voice or none. An earlier draft said what the parser expected at
+		// the column *and* named the verified edit, and on the real file those
+		// read as contradictory instructions — "a `)` belongs at column 382"
+		// next to "delete the `}` at column 382", when the `)` it wants is
+		// already sitting at 383. Whichever is said, the other has to stay out.
+		const detail: string[] = []
+		const source = sources.find((candidate) => candidate.findings.includes(first))
+		// Whether the search ran at all, which is not the same as it finding
+		// nothing — a file over the size guard is never tried, and a report that
+		// said "no single edit clears it" there would be stating a result it
+		// never measured.
+		const searched = source !== undefined && source.body.length <= MAX_REPAIR_BYTES
+		const repair = source ? proposeRepair(source.body, source.origin, first, findings.length) : null
+		if (repair) {
+			detail.push(`      ${repair}`)
+		} else {
+			const expected = first.opener ? PAIRS[first.opener] : undefined
+			if (first.kind === "mismatch" && expected) {
+				detail.push(
+					`      a \`${expected}\` is what belongs at column ${first.column} — that is what the \`${first.opener}\` from column ${first.openColumn} is waiting for.`,
+				)
+			} else if (first.kind === "unmatched-close") {
+				detail.push(
+					`      nothing was open at column ${first.column}, so the \`${first.found}\` there is spare rather than misplaced.`,
+				)
+			}
+			if (first.enclosing?.length) {
+				// Hand over the chain the model would otherwise rebuild by hand.
+				const chain = first.enclosing
+					.map((open) => `\`${open.opener}\` ${open.line}:${open.column}`)
+					.join(", ")
+				const lead = searched ? "no single-character edit clears it, and s" : "S"
+				detail.push(`      ${lead}till open there, innermost first: ${chain}.`)
+			}
+		}
+		lines.splice(1, 0, ...detail)
+	}
 
 	const hidden = distinct.length - shown.length
 	const heading =

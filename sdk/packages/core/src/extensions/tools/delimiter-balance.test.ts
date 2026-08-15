@@ -22,6 +22,16 @@ describe("scanDelimiters", () => {
 		expect(scanDelimiters("a();)")).toEqual([{ kind: "unmatched-close", line: 1, column: 5, found: ")" }])
 	})
 
+	it("records what was still open around a crossing, innermost first", () => {
+		const [finding] = scanDelimiters("class A {\n  m(){ this.each(d=>{ if(d){ go(); ) } }) }\n}\n")
+		expect(finding?.enclosing).toEqual([
+			{ opener: "{", line: 2, column: 21 },
+			{ opener: "(", line: 2, column: 17 },
+			{ opener: "{", line: 2, column: 6 },
+			{ opener: "{", line: 1, column: 9 },
+		])
+	})
+
 	it("reports an opener that is never closed", () => {
 		const [finding] = scanDelimiters("function f(){\n  if (a) {\n}\n")
 		expect(finding).toMatchObject({ kind: "unclosed", opener: "{", openLine: 1, openColumn: 13 })
@@ -167,6 +177,54 @@ describe("describeDelimiterBalance", () => {
 		it("counts only code, not brackets inside strings", () => {
 			const report = describeDelimiterBalance("app.js", 'function f(){ s = "}}}}"; }}\n')
 			expect(report).toContain("1 more `}` than `{`")
+		})
+	})
+
+	/**
+	 * Which brackets cross is the easy half. Whether to delete one, add one or
+	 * move one is the half the model pays for: one measured turn spent 33,350
+	 * tokens deciding between a swap and a deletion on a 500-column line, hit
+	 * the thinking budget mid-sentence, and had picked the wrong one anyway —
+	 * the run that fixed that file deleted a brace. A scan is microseconds, so
+	 * the edit is tried and re-scanned rather than reasoned about.
+	 */
+	describe("a checked repair", () => {
+		it("names the edit that clears the line", () => {
+			// The shape from the file this was measured on, reduced. The run that
+			// fixed it made exactly this edit.
+			const report = describeDelimiterBalance("app.js", "dDec(c,x){this.dc.forEach(d=>{if(d){c.fill();}}});}\n")
+			expect(report).toContain("delete the `}` at column 48 — checked")
+			expect(report).toContain("nothing else in this file crosses after that")
+		})
+
+		it("proposes a move when the line balances and a closer is misplaced", () => {
+			const report = describeDelimiterBalance("app.js", "const x = ({)};\n")
+			expect(report).toContain("move the `)` at column 13 to column 12 — checked")
+		})
+
+		it("says what is left over when the file has more than one fault", () => {
+			const report = describeDelimiterBalance("app.js", "function f(){ if (a) { b(); ) } ) }\n")
+			expect(report).toContain("replace the `)` at column 29 with `}`")
+			expect(report).toContain("leaves 2 of the 3 crossings, all further down the file")
+		})
+
+		it("gives the enclosing chain when no single edit clears it", () => {
+			const report = describeDelimiterBalance("app.js", "function f(){\n  if (a) {\n    b();\n)\n")
+			expect(report).toContain("a `}` is what belongs at column 1")
+			expect(report).toContain("no single-character edit clears it, and still open there, innermost first: `{` 1:13")
+		})
+
+		it("does not claim a search it never ran on a file too big to search", () => {
+			const big = `function f(){ if (a) { b(); ) }\n${"// filler\n".repeat(20_000)}`
+			const report = describeDelimiterBalance("big.js", big)
+			expect(report).not.toContain("no single-character edit clears it")
+			expect(report).toContain("Still open there, innermost first")
+		})
+
+		it("says it about the first line only, whatever else is broken", () => {
+			const report = describeDelimiterBalance("app.js", "f(){ a(); ) }\ng(){ b(); ) }\nh(){ c(); ) }\n")
+			const checked = (report ?? "").split("\n").filter((line) => line.includes("— checked"))
+			expect(checked).toHaveLength(1)
 		})
 	})
 })
