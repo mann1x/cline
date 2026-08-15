@@ -1,7 +1,7 @@
 import { validateWithZod } from "@cline/shared";
 import {
-	type EditFileInput,
 	EDITOR_ARG_CHAR_LIMIT,
+	type EditFileInput,
 	type ReadFileRequest,
 	RunCommandsInputUnionSchema,
 	type StructuredCommandInput,

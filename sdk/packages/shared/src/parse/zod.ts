@@ -107,9 +107,7 @@ export function validateWithZod<T>(schema: z.ZodType<T>, input: unknown): T {
 			throw new Error(prettified);
 		}
 		const received = describeReceived(input);
-		throw new Error(
-			received ? `${prettified}\n${received}` : prettified,
-		);
+		throw new Error(received ? `${prettified}\n${received}` : prettified);
 	}
 	return result.data;
 }

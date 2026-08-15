@@ -1,4 +1,8 @@
-import { type AgentTool, createBrowserTool, createCodeIntelTool } from "@cline/core";
+import {
+	type AgentTool,
+	createBrowserTool,
+	createCodeIntelTool,
+} from "@cline/core";
 import { createCliBrowserDriver } from "./browser-support";
 import { createCliCodeIntelProvider } from "./code-intel-support";
 

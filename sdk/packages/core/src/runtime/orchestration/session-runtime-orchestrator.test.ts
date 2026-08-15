@@ -2372,7 +2372,12 @@ describe("SessionRuntime.run — tracker wiring (P1 #3)", () => {
 						type: "tool-result",
 						toolCallId: id,
 						toolName: "editor",
-						output: { query: "edit", result: "", error: noChange, success: false },
+						output: {
+							query: "edit",
+							result: "",
+							error: noChange,
+							success: false,
+						},
 						isError: true,
 					},
 				],
@@ -2691,7 +2696,12 @@ describe("declaredNoOp", () => {
 
 	it("recognises the tool refusing an edit that asks for nothing", () => {
 		expect(
-			declaredNoOp({ query: "edit:game.html", result: "", error: noChange, success: false }),
+			declaredNoOp({
+				query: "edit:game.html",
+				result: "",
+				error: noChange,
+				success: false,
+			}),
 		).toBe(true);
 	});
 
@@ -2699,7 +2709,12 @@ describe("declaredNoOp", () => {
 		expect(
 			declaredNoOp([
 				{ query: "edit:a.ts", result: "changed", success: true },
-				{ query: "edit:game.html", result: "", error: noChange, success: false },
+				{
+					query: "edit:game.html",
+					result: "",
+					error: noChange,
+					success: false,
+				},
 			]),
 		).toBe(true);
 	});
@@ -2711,7 +2726,8 @@ describe("declaredNoOp", () => {
 			declaredNoOp({
 				query: "edit:game.html",
 				result: "",
-				error: "Editor operation failed: No replacement performed: text not found in game.html.",
+				error:
+					"Editor operation failed: No replacement performed: text not found in game.html.",
 				success: false,
 			}),
 		).toBe(false);
@@ -2719,7 +2735,11 @@ describe("declaredNoOp", () => {
 
 	it("does not fire on success, whatever the text says", () => {
 		expect(
-			declaredNoOp({ query: "edit:game.html", result: noChange, success: true }),
+			declaredNoOp({
+				query: "edit:game.html",
+				result: noChange,
+				success: true,
+			}),
 		).toBe(false);
 	});
 
@@ -2765,4 +2785,4 @@ describe("a tool result that arrives already serialised", () => {
 		expect(declaredNoOp("{not json")).toBe(false);
 		expect(introducedRegression("regressed")).toBe(false);
 	});
-})
+});

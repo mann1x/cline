@@ -868,7 +868,10 @@ export async function runCli(): Promise<void> {
 	const providerSettingsManager = await createProviderSettingsManager();
 	const {
 		coreServer,
-		coreServer: { createUserInstructionConfigService, createPromptTemplateHooks },
+		coreServer: {
+			createUserInstructionConfigService,
+			createPromptTemplateHooks,
+		},
 		resolveSystemPrompt,
 		ideName,
 		resolveCliPromptTemplate,
@@ -1138,7 +1141,9 @@ export async function runCli(): Promise<void> {
 			// Mode only, and only when asked for. The host adds its own checker and
 			// already defaults `checkTools` to it, so naming the tool here would
 			// duplicate a default that can drift out from under this file.
-			...(args.editVerification ? { editVerification: { mode: args.editVerification } } : {}),
+			...(args.editVerification
+				? { editVerification: { mode: args.editVerification } }
+				: {}),
 			// On unless asked otherwise, which is what the extension does. Left
 			// unset until now, and unset is not "off with the same effect": the
 			// host reads `enabled` to decide whether to build the tracker at
@@ -1286,7 +1291,8 @@ export async function runCli(): Promise<void> {
 		// more agents than there are slots makes a run slower, not faster — and
 		// nothing reports the queueing. Asked of the endpoint the agents call.
 		const agentSlots = await resolveAgentSlotLimit({
-			providerId: config.delegatedAgentConnection?.providerId ?? config.providerId,
+			providerId:
+				config.delegatedAgentConnection?.providerId ?? config.providerId,
 			baseUrl: config.delegatedAgentConnection?.baseUrl ?? config.baseUrl,
 			parallelSessions: args.parallelSessions,
 		});

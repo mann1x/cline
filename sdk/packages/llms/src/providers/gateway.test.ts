@@ -322,7 +322,11 @@ describe("sdk-gateway", () => {
 				model: { maxOutputTokens: 4_096, contextWindow: 200_000 },
 				estimatedInputTokens: 1_000,
 			}),
-		).toMatchObject({ maxTokens: 4_096, source: "model-max-output", windowBound: false });
+		).toMatchObject({
+			maxTokens: 4_096,
+			source: "model-max-output",
+			windowBound: false,
+		});
 
 		// Room left in the window is.
 		expect(
@@ -1493,7 +1497,8 @@ describe("sdk-gateway", () => {
 		);
 
 		const serialized = JSON.stringify(
-			(streamTextSpy.mock.calls.at(-1)?.[0] as { messages?: unknown })?.messages,
+			(streamTextSpy.mock.calls.at(-1)?.[0] as { messages?: unknown })
+				?.messages,
 		);
 		expect(serialized).not.toContain("stale thinking");
 		expect(serialized).not.toContain("current thinking");
@@ -5445,15 +5450,17 @@ describe("the reserve that absorbs the estimate's error", () => {
 			requestedMaxTokens: 200_000,
 			model: { contextWindow: 200_000, maxOutputTokens: undefined },
 			estimatedInputTokens: 1_000,
-		})
+		});
 		const large = resolveGatewayRequestMaxTokens({
 			requestedMaxTokens: 200_000,
 			model: { contextWindow: 200_000, maxOutputTokens: undefined },
 			estimatedInputTokens: 100_000,
-		})
+		});
 
-		expect(200_000 - 1_000 - (small as number)).toBeLessThan(200_000 - 100_000 - (large as number))
-	})
+		expect(200_000 - 1_000 - (small as number)).toBeLessThan(
+			200_000 - 100_000 - (large as number),
+		);
+	});
 
 	// A short prompt's 8% is a handful of tokens; the fixed costs it also has to
 	// cover are not proportional to anything.
@@ -5462,10 +5469,10 @@ describe("the reserve that absorbs the estimate's error", () => {
 			requestedMaxTokens: 8_000,
 			model: { contextWindow: 8_192, maxOutputTokens: undefined },
 			estimatedInputTokens: 100,
-		})
+		});
 
-		expect(maxTokens).toBeLessThanOrEqual(8_192 - 100 - 1_024)
-	})
+		expect(maxTokens).toBeLessThanOrEqual(8_192 - 100 - 1_024);
+	});
 
 	it("still lets an explicit reserve win", () => {
 		const maxTokens = resolveGatewayRequestMaxTokens({
@@ -5473,14 +5480,18 @@ describe("the reserve that absorbs the estimate's error", () => {
 			model,
 			estimatedInputTokens: 95_115,
 			outputReserveTokens: 0,
-		})
+		});
 
-		expect(maxTokens).toBe(110_000 - 95_115)
-	})
+		expect(maxTokens).toBe(110_000 - 95_115);
+	});
 
 	it("does not touch a request the cap already bounds", () => {
 		expect(
-			resolveGatewayRequestMaxTokens({ requestedMaxTokens: 4_000, model, estimatedInputTokens: 1_000 }),
-		).toBe(4_000)
-	})
-})
+			resolveGatewayRequestMaxTokens({
+				requestedMaxTokens: 4_000,
+				model,
+				estimatedInputTokens: 1_000,
+			}),
+		).toBe(4_000);
+	});
+});

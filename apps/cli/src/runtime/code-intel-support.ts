@@ -193,10 +193,32 @@ function toLocations(raw: unknown): CodeIntelLocation[] {
 
 /** LSP `SymbolKind` is a number; the tool wants something a model can read. */
 const SYMBOL_KINDS = [
-	"file", "module", "namespace", "package", "class", "method", "property",
-	"field", "constructor", "enum", "interface", "function", "variable",
-	"constant", "string", "number", "boolean", "array", "object", "key",
-	"null", "enum member", "struct", "event", "operator", "type parameter",
+	"file",
+	"module",
+	"namespace",
+	"package",
+	"class",
+	"method",
+	"property",
+	"field",
+	"constructor",
+	"enum",
+	"interface",
+	"function",
+	"variable",
+	"constant",
+	"string",
+	"number",
+	"boolean",
+	"array",
+	"object",
+	"key",
+	"null",
+	"enum member",
+	"struct",
+	"event",
+	"operator",
+	"type parameter",
 ];
 
 function kindName(kind: unknown): string {
@@ -365,7 +387,9 @@ export function createCliCodeIntelProvider(
 			if (!source) {
 				return undefined;
 			}
-			const pattern = new RegExp(`\\b${symbol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`);
+			const pattern = new RegExp(
+				`\\b${symbol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`,
+			);
 			for (let line = 0; line < source.length; line++) {
 				const match = pattern.exec(source[line]);
 				if (match) {
@@ -424,7 +448,9 @@ export function createCliCodeIntelProvider(
 				try {
 					await connection.ready();
 					results.push(
-						...toSymbols(await connection.request("workspace/symbol", { query })),
+						...toSymbols(
+							await connection.request("workspace/symbol", { query }),
+						),
 					);
 				} catch (error) {
 					options.onError?.("[code_intel] workspace/symbol failed", error);

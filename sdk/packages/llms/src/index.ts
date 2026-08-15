@@ -96,8 +96,8 @@ export {
 	normalizeProviderId,
 	OLLAMA_DEFAULT_CONTEXT_WINDOW,
 	OLLAMA_DEFAULT_REASONING_EFFORT,
-	primeDeclaredNumCtx,
 	type ProviderApiLine,
+	primeDeclaredNumCtx,
 	readDeclaredFamily,
 	readDeclaredNumCtx,
 	registerAsyncHandler,
@@ -106,6 +106,14 @@ export {
 	setOllamaFetch,
 	setOllamaNoStreamTimeoutDispatcher,
 } from "./providers";
+export {
+	type AgentSlotLimit,
+	DEFAULT_PARALLEL_SESSIONS,
+	MAX_PARALLEL_SESSIONS,
+	MIN_PARALLEL_SESSIONS,
+	normalizeParallelSessions,
+	resolveAgentSlotLimit,
+} from "./providers/agent-slots";
 export {
 	type ProviderUsageCostDisplay,
 	resolveProviderUsageCostDisplay,
@@ -124,6 +132,13 @@ export {
 } from "./providers/model-facts";
 export { resolveProviderModelCatalogKeys } from "./providers/provider-keys";
 export {
+	type OpenAICodexRequestHeaderContext,
+	type ProviderRequestHeaderClientContext,
+	type ProviderRequestHeaderLayers,
+	type ResolveProviderRequestHeadersInput,
+	resolveProviderRequestHeaders,
+} from "./providers/request-headers";
+export {
 	clearPolykvSession,
 	createPolykvClient,
 	getPolykvSession,
@@ -139,19 +154,4 @@ export {
 	resetPolykvSessions,
 	setPolykvSession,
 } from "./providers/vendors/polykv";
-export {
-	type AgentSlotLimit,
-	DEFAULT_PARALLEL_SESSIONS,
-	MAX_PARALLEL_SESSIONS,
-	MIN_PARALLEL_SESSIONS,
-	normalizeParallelSessions,
-	resolveAgentSlotLimit,
-} from "./providers/agent-slots";
-export {
-	type OpenAICodexRequestHeaderContext,
-	type ProviderRequestHeaderClientContext,
-	type ProviderRequestHeaderLayers,
-	type ResolveProviderRequestHeadersInput,
-	resolveProviderRequestHeaders,
-} from "./providers/request-headers";
 export { disposeLangfuseTelemetry } from "./services/langfuse-telemetry";

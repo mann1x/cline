@@ -126,8 +126,12 @@ describe("finding the turn that ran out of thinking budget", () => {
 		// for turns that reported nothing; where the provider said how many
 		// tokens it produced, that is the answer, and two turns with identical
 		// text can land on either side of the cap because of it.
-		expect(findCappedThinkingIndex([measuredTurn(45_000, 16_000)], budget)).toBe(0);
-		expect(findCappedThinkingIndex([measuredTurn(45_000, 5_000)], budget)).toBe(-1);
+		expect(
+			findCappedThinkingIndex([measuredTurn(45_000, 16_000)], budget),
+		).toBe(0);
+		expect(findCappedThinkingIndex([measuredTurn(45_000, 5_000)], budget)).toBe(
+			-1,
+		);
 	});
 
 	it("matches a Modelfile message however its line breaks survived the trip", () => {
@@ -137,46 +141,59 @@ describe("finding the turn that ran out of thinking budget", () => {
 		// between the two sentences, the break. Comparing the layouts rather
 		// than the words denied every capped turn in a whole run.
 		const message =
-			"\n\nI have used my thinking budget. I must stop analysing now and act on what I have: make the tool call, or give a short final answer if no call is needed.\nI'll be more terse and concise now and maybe I need to consider a different approach.\n"
-		const thinking =
-			`${"x".repeat(30_000)}\nI have used my thinking budget. I must stop analysing now and act on what I have: make the tool call, or give a short final answer if no call is needed.I'll be more terse and concise now and maybe I need to consider a different approach.`
+			"\n\nI have used my thinking budget. I must stop analysing now and act on what I have: make the tool call, or give a short final answer if no call is needed.\nI'll be more terse and concise now and maybe I need to consider a different approach.\n";
+		const thinking = `${"x".repeat(30_000)}\nI have used my thinking budget. I must stop analysing now and act on what I have: make the tool call, or give a short final answer if no call is needed.I'll be more terse and concise now and maybe I need to consider a different approach.`;
 		const capped = {
 			role: "assistant",
 			content: [
 				{ type: "thinking", thinking },
 				{ type: "tool_use", id: "c", name: "editor", input: {} },
 			],
-		} as MessageWithMetadata
+		} as MessageWithMetadata;
 
 		expect(
-			findCappedThinkingIndex([capped], budget, { budgetMessage: message.trim() }),
-		).toBe(0)
-	})
+			findCappedThinkingIndex([capped], budget, {
+				budgetMessage: message.trim(),
+			}),
+		).toBe(0);
+	});
 
 	it("looks for the longest line of a message, not its first", () => {
 		// A message typed into the settings box can open with anything, and a
 		// short opener is a phrase ordinary reasoning also uses.
-		const message = "Stop.\nYou have spent the thinking budget you were given for this turn."
-		const innocent = turn(45_000)
+		const message =
+			"Stop.\nYou have spent the thinking budget you were given for this turn.";
+		const innocent = turn(45_000);
 
-		expect(findCappedThinkingIndex([innocent], budget, { budgetMessage: message })).toBe(-1)
-	})
+		expect(
+			findCappedThinkingIndex([innocent], budget, { budgetMessage: message }),
+		).toBe(-1);
+	});
 
 	it("says why it found nothing", () => {
-		const message = "You have spent the thinking budget you were given for this turn."
+		const message =
+			"You have spent the thinking budget you were given for this turn.";
 
-		expect(locateCappedThinking([turn(45_000)], budget, { budgetMessage: message })).toMatchObject({
+		expect(
+			locateCappedThinking([turn(45_000)], budget, { budgetMessage: message }),
+		).toMatchObject({
 			index: -1,
 			reason: "budget-message-absent",
 			thinkingChars: 45_000,
-		})
+		});
 		expect(locateCappedThinking([turn(2_000)], budget)).toMatchObject({
 			index: -1,
 			reason: "under-budget",
-		})
-		expect(locateCappedThinking([], budget)).toMatchObject({ index: -1, reason: "no-assistant-turn" })
-		expect(locateCappedThinking([turn(45_000)], undefined)).toMatchObject({ index: -1, reason: "no-budget" })
-	})
+		});
+		expect(locateCappedThinking([], budget)).toMatchObject({
+			index: -1,
+			reason: "no-assistant-turn",
+		});
+		expect(locateCappedThinking([turn(45_000)], undefined)).toMatchObject({
+			index: -1,
+			reason: "no-budget",
+		});
+	});
 
 	it("stands down when no allowance is known", () => {
 		expect(findCappedThinkingIndex([turn(45_000)], undefined)).toBe(-1);
@@ -193,7 +210,9 @@ describe("finding the turn that ran out of thinking budget", () => {
 			content: [{ type: "tool_use", id: "c", name: "editor", input: {} }],
 		} as MessageWithMetadata;
 
-		expect(locateCappedThinking([turn(45_000), callOnly], budget)).toMatchObject({
+		expect(
+			locateCappedThinking([turn(45_000), callOnly], budget),
+		).toMatchObject({
 			index: 0,
 			skippedFragments: 1,
 		});
@@ -207,12 +226,13 @@ describe("finding the turn that ran out of thinking budget", () => {
 			content: [{ type: "text", text: "Done." }],
 		} as MessageWithMetadata;
 
-		expect(locateCappedThinking([turn(45_000), answered], budget)).toMatchObject({
+		expect(
+			locateCappedThinking([turn(45_000), answered], budget),
+		).toMatchObject({
 			index: -1,
 			reason: "turn-did-not-reason",
 		});
 	});
-
 });
 
 describe("the continuation note's request", () => {
@@ -590,7 +610,9 @@ describe("what the condenser asks the summariser for", () => {
 		const call = summarizerCalls()[0];
 		expect(call.messages).toHaveLength(1);
 		expect(call.messages[0].role).toBe("user");
-		expect(call.messages[0].content).toContain("the parser gives up at line 90");
+		expect(call.messages[0].content).toContain(
+			"the parser gives up at line 90",
+		);
 		// The instruction half stays short and says nothing about the reasoning.
 		expect(call.system).not.toContain("the parser gives up at line 90");
 		expect(call.system.length).toBeLessThan(1_000);

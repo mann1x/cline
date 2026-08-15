@@ -227,7 +227,11 @@ export async function repointPolykvAfterCompaction(options: {
 	logger?: BasicLogger;
 }): Promise<string | undefined> {
 	const state = getPolykvSession(options.sessionId);
-	if (!options.sessionId || !state || !isPolykvProvider(options.providerConfig)) {
+	if (
+		!options.sessionId ||
+		!state ||
+		!isPolykvProvider(options.providerConfig)
+	) {
 		return undefined;
 	}
 	const client = clientFor(options.providerConfig);

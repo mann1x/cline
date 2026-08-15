@@ -685,7 +685,9 @@ export async function createOllamaProviderModule(
 	// A supplied fetch that is merely the global is not a routing decision, and
 	// the global is the one that discards `init.dispatcher`.
 	const suppliedFetch =
-		config.fetch && config.fetch !== globalThis.fetch ? config.fetch : undefined;
+		config.fetch && config.fetch !== globalThis.fetch
+			? config.fetch
+			: undefined;
 	// The dispatcher decides the order, not the supplier. `dispatcher` is
 	// undici's own extension to `RequestInit`, so a wrapper that rebuilds the
 	// request from the fields it knows about drops it -- and a caller-supplied

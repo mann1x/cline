@@ -2457,7 +2457,9 @@ describe("AgentRuntime", () => {
 		expect(result.status).toBe("failed");
 		expect(events).toContain("run-failed");
 		expect(logger.log).toHaveBeenCalledWith(
-			expect.stringContaining("Agent loop caught error (failed): Error: model failed"),
+			expect.stringContaining(
+				"Agent loop caught error (failed): Error: model failed",
+			),
 			expect.objectContaining({
 				severity: "error",
 				status: "failed",
@@ -2581,7 +2583,10 @@ describe("a model that will not take an image", () => {
 				{ type: "finish", reason: "stop" },
 			],
 		]);
-		const runtime = new AgentRuntime({ model, initialMessages: withScreenshot() });
+		const runtime = new AgentRuntime({
+			model,
+			initialMessages: withScreenshot(),
+		});
 
 		const result = await runtime.run("look at the page");
 
@@ -2598,14 +2603,22 @@ describe("a model that will not take an image", () => {
 	it("leaves a note where the image was, and keeps the text beside it", async () => {
 		const model = new ScriptedModel([
 			() => [refusal],
-			() => [{ type: "text-delta", text: "ok" }, { type: "finish", reason: "stop" }],
+			() => [
+				{ type: "text-delta", text: "ok" },
+				{ type: "finish", reason: "stop" },
+			],
 		]);
-		const runtime = new AgentRuntime({ model, initialMessages: withScreenshot() });
+		const runtime = new AgentRuntime({
+			model,
+			initialMessages: withScreenshot(),
+		});
 
 		await runtime.run("look at the page");
 
 		const retried = model.requests[1].messages.flatMap((m) => m.content);
-		const texts = retried.filter((p) => p.type === "text").map((p) => (p as { text: string }).text);
+		const texts = retried
+			.filter((p) => p.type === "text")
+			.map((p) => (p as { text: string }).text);
 		expect(texts).toContain("Console: nothing.");
 		expect(texts.some((t) => t.includes("image omitted"))).toBe(true);
 	});
@@ -2614,7 +2627,10 @@ describe("a model that will not take an image", () => {
 		const onImageInputUnsupported = vi.fn();
 		const model = new ScriptedModel([
 			() => [refusal],
-			() => [{ type: "text-delta", text: "ok" }, { type: "finish", reason: "stop" }],
+			() => [
+				{ type: "text-delta", text: "ok" },
+				{ type: "finish", reason: "stop" },
+			],
 		]);
 		const runtime = new AgentRuntime({
 			model,
@@ -2631,7 +2647,10 @@ describe("a model that will not take an image", () => {
 	// caller's to see, unchanged.
 	it("retries once, not repeatedly", async () => {
 		const model = new ScriptedModel([() => [refusal], () => [refusal]]);
-		const runtime = new AgentRuntime({ model, initialMessages: withScreenshot() });
+		const runtime = new AgentRuntime({
+			model,
+			initialMessages: withScreenshot(),
+		});
 
 		const result = await runtime.run("look at the page");
 
@@ -2688,19 +2707,37 @@ describe("a second model that reads the images", () => {
 	// so nothing was described, and the image went to a model that cannot read
 	// one.
 	it.each([
-		["data, the llms shape", { type: "image", data: "iVBORw0KGgo=", mediaType: "image/png" }],
-		["image as bytes", { type: "image", image: new Uint8Array([137, 80, 78, 71]), mediaType: "image/png" }],
+		[
+			"data, the llms shape",
+			{ type: "image", data: "iVBORw0KGgo=", mediaType: "image/png" },
+		],
+		[
+			"image as bytes",
+			{
+				type: "image",
+				image: new Uint8Array([137, 80, 78, 71]),
+				mediaType: "image/png",
+			},
+		],
 	])("describes an image carried as %s", async (_label, imagePart) => {
-		const describeImages = vi.fn(async () => ["a screenshot of the failing page"]);
+		const describeImages = vi.fn(async () => [
+			"a screenshot of the failing page",
+		]);
 		const model = new ScriptedModel([
-			() => [{ type: "text-delta", text: "ok" }, { type: "finish", reason: "stop" }],
+			() => [
+				{ type: "text-delta", text: "ok" },
+				{ type: "finish", reason: "stop" },
+			],
 		]);
 		const runtime = new AgentRuntime({
 			model,
 			initialMessages: [
 				{
 					role: "user",
-					content: [{ type: "text", text: "Console: TypeError on line 3." }, imagePart],
+					content: [
+						{ type: "text", text: "Console: TypeError on line 3." },
+						imagePart,
+					],
 				} as AgentMessage,
 			],
 			describeImages,
@@ -2713,15 +2750,22 @@ describe("a second model that reads the images", () => {
 		expect(typeof describeImages.mock.calls[0][0][0].image).toBe("string");
 		const sent = model.requests[0].messages.flatMap((m) => m.content);
 		expect(sent.some((p) => p.type === "image")).toBe(false);
-		expect(textParts(model.requests[0]).some((t) => t.includes("failing page"))).toBe(true);
+		expect(
+			textParts(model.requests[0]).some((t) => t.includes("failing page")),
+		).toBe(true);
 	});
 
 	// The point of configuring a vision model is that the primary one never sees
 	// the image — not that it sees it until something complains.
 	it("describes images before the first attempt, not after a refusal", async () => {
-		const describeImages = vi.fn(async () => ["A login form with a red error under the password field."]);
+		const describeImages = vi.fn(async () => [
+			"A login form with a red error under the password field.",
+		]);
 		const model = new ScriptedModel([
-			() => [{ type: "text-delta", text: "ok" }, { type: "finish", reason: "stop" }],
+			() => [
+				{ type: "text-delta", text: "ok" },
+				{ type: "finish", reason: "stop" },
+			],
 		]);
 		const runtime = new AgentRuntime({
 			model,
@@ -2736,13 +2780,20 @@ describe("a second model that reads the images", () => {
 		expect(model.requests).toHaveLength(1);
 		const sent = model.requests[0].messages.flatMap((m) => m.content);
 		expect(sent.some((p) => p.type === "image")).toBe(false);
-		expect(textParts(model.requests[0]).some((t) => t.includes("red error under the password field"))).toBe(true);
+		expect(
+			textParts(model.requests[0]).some((t) =>
+				t.includes("red error under the password field"),
+			),
+		).toBe(true);
 	});
 
 	it("passes the text beside the image along as context", async () => {
 		const describeImages = vi.fn(async () => ["described"]);
 		const model = new ScriptedModel([
-			() => [{ type: "text-delta", text: "ok" }, { type: "finish", reason: "stop" }],
+			() => [
+				{ type: "text-delta", text: "ok" },
+				{ type: "finish", reason: "stop" },
+			],
 		]);
 		const runtime = new AgentRuntime({
 			model,
@@ -2753,7 +2804,9 @@ describe("a second model that reads the images", () => {
 
 		await runtime.run("look at the page");
 
-		expect(describeImages.mock.calls[0][0][0].context).toContain("TypeError on line 3");
+		expect(describeImages.mock.calls[0][0][0].context).toContain(
+			"TypeError on line 3",
+		);
 		expect(describeImages.mock.calls[0][0][0].image).toBe("iVBORw0KGgo=");
 	});
 
@@ -2766,12 +2819,18 @@ describe("a second model that reads the images", () => {
 		const describeImages = vi.fn(async () => []);
 		const logger = { log: vi.fn(), error: vi.fn() };
 		const model = new ScriptedModel([
-			() => [{ type: "text-delta", text: "ok" }, { type: "finish", reason: "stop" }],
+			() => [
+				{ type: "text-delta", text: "ok" },
+				{ type: "finish", reason: "stop" },
+			],
 		]);
 		const runtime = new AgentRuntime({
 			model,
 			initialMessages: [
-				{ role: "user", content: [{ type: "text", text: "no image here" }] } as AgentMessage,
+				{
+					role: "user",
+					content: [{ type: "text", text: "no image here" }],
+				} as AgentMessage,
 			],
 			describeImages,
 			alwaysDescribeImages: true,
@@ -2781,7 +2840,9 @@ describe("a second model that reads the images", () => {
 		await runtime.run("look at the page");
 
 		expect(describeImages).not.toHaveBeenCalled();
-		expect(logger.log).toHaveBeenCalledWith(expect.stringContaining("found no images"));
+		expect(logger.log).toHaveBeenCalledWith(
+			expect.stringContaining("found no images"),
+		);
 	});
 
 	// This runs on every turn, including for models that read images perfectly
@@ -2789,7 +2850,10 @@ describe("a second model that reads the images", () => {
 	// screenshot.
 	it("leaves the image in place when the describer fails", async () => {
 		const model = new ScriptedModel([
-			() => [{ type: "text-delta", text: "ok" }, { type: "finish", reason: "stop" }],
+			() => [
+				{ type: "text-delta", text: "ok" },
+				{ type: "finish", reason: "stop" },
+			],
 		]);
 		const runtime = new AgentRuntime({
 			model,
@@ -2809,7 +2873,10 @@ describe("a second model that reads the images", () => {
 
 	it("leaves an image the describer had no answer for", async () => {
 		const model = new ScriptedModel([
-			() => [{ type: "text-delta", text: "ok" }, { type: "finish", reason: "stop" }],
+			() => [
+				{ type: "text-delta", text: "ok" },
+				{ type: "finish", reason: "stop" },
+			],
 		]);
 		const runtime = new AgentRuntime({
 			model,
@@ -2827,14 +2894,25 @@ describe("a second model that reads the images", () => {
 	it("is not used at all unless the user turned it on", async () => {
 		const describeImages = vi.fn(async () => ["described"]);
 		const model = new ScriptedModel([
-			() => [{ type: "text-delta", text: "ok" }, { type: "finish", reason: "stop" }],
+			() => [
+				{ type: "text-delta", text: "ok" },
+				{ type: "finish", reason: "stop" },
+			],
 		]);
-		const runtime = new AgentRuntime({ model, initialMessages: withScreenshot(), describeImages });
+		const runtime = new AgentRuntime({
+			model,
+			initialMessages: withScreenshot(),
+			describeImages,
+		});
 
 		await runtime.run("look at the page");
 
 		expect(describeImages).not.toHaveBeenCalled();
-		expect(model.requests[0].messages.flatMap((m) => m.content).some((p) => p.type === "image")).toBe(true);
+		expect(
+			model.requests[0].messages
+				.flatMap((m) => m.content)
+				.some((p) => p.type === "image"),
+		).toBe(true);
 	});
 
 	// The refusal path already drops images. With a describer available it can
@@ -2842,7 +2920,10 @@ describe("a second model that reads the images", () => {
 	it("describes rather than drops when a model refuses the image", async () => {
 		const model = new ScriptedModel([
 			() => [refusal],
-			() => [{ type: "text-delta", text: "ok" }, { type: "finish", reason: "stop" }],
+			() => [
+				{ type: "text-delta", text: "ok" },
+				{ type: "finish", reason: "stop" },
+			],
 		]);
 		const runtime = new AgentRuntime({
 			model,
@@ -2860,7 +2941,10 @@ describe("a second model that reads the images", () => {
 	it("still drops the image if the describer cannot help either", async () => {
 		const model = new ScriptedModel([
 			() => [refusal],
-			() => [{ type: "text-delta", text: "ok" }, { type: "finish", reason: "stop" }],
+			() => [
+				{ type: "text-delta", text: "ok" },
+				{ type: "finish", reason: "stop" },
+			],
 		]);
 		const runtime = new AgentRuntime({
 			model,
@@ -2871,7 +2955,9 @@ describe("a second model that reads the images", () => {
 		const result = await runtime.run("look at the page");
 
 		expect(result.status).toBe("completed");
-		expect(textParts(model.requests[1]).some((t) => t.includes("image omitted"))).toBe(true);
+		expect(
+			textParts(model.requests[1]).some((t) => t.includes("image omitted")),
+		).toBe(true);
 	});
 });
 
@@ -2903,9 +2989,15 @@ describe("when the model refuses an image", () => {
 	it("retries without the images rather than failing the run", async () => {
 		const model = new ScriptedModel([
 			() => [refusal],
-			() => [{ type: "text-delta", text: "ok" }, { type: "finish", reason: "stop" }],
+			() => [
+				{ type: "text-delta", text: "ok" },
+				{ type: "finish", reason: "stop" },
+			],
 		]);
-		const runtime = new AgentRuntime({ model, initialMessages: withScreenshot() });
+		const runtime = new AgentRuntime({
+			model,
+			initialMessages: withScreenshot(),
+		});
 
 		const result = await runtime.run("look at the page");
 
@@ -2921,14 +3013,16 @@ describe("when the model refuses an image", () => {
 	// Twice is not a recovery, it is a loop with a screenshot in it.
 	it("reports the second refusal as it came", async () => {
 		const model = new ScriptedModel([() => [refusal], () => [refusal]]);
-		const runtime = new AgentRuntime({ model, initialMessages: withScreenshot() });
+		const runtime = new AgentRuntime({
+			model,
+			initialMessages: withScreenshot(),
+		});
 
 		const result = await runtime.run("look at the page");
 
 		expect(result.status).toBe("failed");
 		expect(model.requests).toHaveLength(2);
 	});
-
 });
 
 /**
@@ -2945,7 +3039,10 @@ describe("a turn that produced nothing", () => {
 				{ type: "usage", usage: { inputTokens: 103_591, outputTokens: 6_489 } },
 				{ type: "finish", reason: "stop" },
 			],
-			() => [{ type: "text-delta", text: "recovered" }, { type: "finish", reason: "stop" }],
+			() => [
+				{ type: "text-delta", text: "recovered" },
+				{ type: "finish", reason: "stop" },
+			],
 		]);
 		const runtime = new AgentRuntime({ model });
 
@@ -2964,7 +3061,10 @@ describe("a turn that produced nothing", () => {
 				{ type: "usage", usage: { inputTokens: 103_591, outputTokens: 6_489 } },
 				{ type: "finish", reason: "stop" },
 			],
-			() => [{ type: "text-delta", text: "ok" }, { type: "finish", reason: "stop" }],
+			() => [
+				{ type: "text-delta", text: "ok" },
+				{ type: "finish", reason: "stop" },
+			],
 		]);
 		const runtime = new AgentRuntime({ model });
 
@@ -2975,13 +3075,17 @@ describe("a turn that produced nothing", () => {
 			.filter((p) => p.type === "text")
 			.map((p) => (p as { text: string }).text);
 		expect(retried.some((t) => t.includes("ran out of room"))).toBe(true);
-		expect(retried.some((t) => t.includes("smallest useful next step"))).toBe(true);
+		expect(retried.some((t) => t.includes("smallest useful next step"))).toBe(
+			true,
+		);
 	});
 
 	// A provider handing back empty responses instantly is a different problem,
 	// and retrying it would spin.
 	it("does not retry when the model generated nothing at all", async () => {
-		const model = new ScriptedModel([() => [{ type: "finish", reason: "stop" }]]);
+		const model = new ScriptedModel([
+			() => [{ type: "finish", reason: "stop" }],
+		]);
 		const runtime = new AgentRuntime({ model });
 
 		const result = await runtime.run("fix the game");
@@ -2995,7 +3099,16 @@ describe("a turn that produced nothing", () => {
 			{ type: "usage", usage: { inputTokens: 100, outputTokens: 500 } },
 			{ type: "finish", reason: "stop" },
 		];
-		const model = new ScriptedModel([empty, empty, empty, empty, empty, empty, empty, empty]);
+		const model = new ScriptedModel([
+			empty,
+			empty,
+			empty,
+			empty,
+			empty,
+			empty,
+			empty,
+			empty,
+		]);
 		const runtime = new AgentRuntime({ model });
 
 		const result = await runtime.run("fix the game");
@@ -3031,16 +3144,32 @@ describe("a message sent while the run is going", () => {
 	function scriptedAnswerThenWork() {
 		return new ScriptedModel([
 			() => [
-				{ type: "tool-call-delta", toolCallId: "call_1", toolName: "echo", inputText: '{"text":"hi"}' },
+				{
+					type: "tool-call-delta",
+					toolCallId: "call_1",
+					toolName: "echo",
+					inputText: '{"text":"hi"}',
+				},
 				{ type: "finish", reason: "tool-calls" },
 			],
 			// Answers the interjection, calls nothing.
-			() => [{ type: "text-delta", text: "It is 137 lines." }, { type: "finish", reason: "stop" }],
 			() => [
-				{ type: "tool-call-delta", toolCallId: "call_2", toolName: "echo", inputText: '{"text":"hi"}' },
+				{ type: "text-delta", text: "It is 137 lines." },
+				{ type: "finish", reason: "stop" },
+			],
+			() => [
+				{
+					type: "tool-call-delta",
+					toolCallId: "call_2",
+					toolName: "echo",
+					inputText: '{"text":"hi"}',
+				},
 				{ type: "finish", reason: "tool-calls" },
 			],
-			() => [{ type: "text-delta", text: "done" }, { type: "finish", reason: "stop" }],
+			() => [
+				{ type: "text-delta", text: "done" },
+				{ type: "finish", reason: "stop" },
+			],
 		]);
 	}
 
@@ -3084,7 +3213,9 @@ describe("a message sent while the run is going", () => {
 			.flatMap((m) => m.content)
 			.filter((p) => p.type === "text")
 			.map((p) => (p as { text: string }).text);
-		expect(texts.some((t) => t.includes("Your answer has been passed on"))).toBe(true);
+		expect(
+			texts.some((t) => t.includes("Your answer has been passed on")),
+		).toBe(true);
 		expect(texts.some((t) => t.includes("still unfinished"))).toBe(true);
 	});
 
@@ -3093,11 +3224,22 @@ describe("a message sent while the run is going", () => {
 		let delivered = false;
 		const model = new ScriptedModel([
 			() => [
-				{ type: "tool-call-delta", toolCallId: "call_1", toolName: "echo", inputText: '{"text":"hi"}' },
+				{
+					type: "tool-call-delta",
+					toolCallId: "call_1",
+					toolName: "echo",
+					inputText: '{"text":"hi"}',
+				},
 				{ type: "finish", reason: "tool-calls" },
 			],
-			() => [{ type: "text-delta", text: "answered" }, { type: "finish", reason: "stop" }],
-			() => [{ type: "text-delta", text: "and now I am done" }, { type: "finish", reason: "stop" }],
+			() => [
+				{ type: "text-delta", text: "answered" },
+				{ type: "finish", reason: "stop" },
+			],
+			() => [
+				{ type: "text-delta", text: "and now I am done" },
+				{ type: "finish", reason: "stop" },
+			],
 		]);
 		const runtime = new AgentRuntime({
 			model,
@@ -3118,7 +3260,10 @@ describe("a message sent while the run is going", () => {
 
 	it("leaves an ordinary run alone", async () => {
 		const model = new ScriptedModel([
-			() => [{ type: "text-delta", text: "done" }, { type: "finish", reason: "stop" }],
+			() => [
+				{ type: "text-delta", text: "done" },
+				{ type: "finish", reason: "stop" },
+			],
 		]);
 		const runtime = new AgentRuntime({ model });
 
@@ -3213,7 +3358,11 @@ describe("a turn cut off at the output cap", () => {
 		// cost of the recovery bought a retry against the same ceiling with less
 		// of the work it was doing. The retry and its reminder still happen --
 		// asking for less is the part that can work here.
-		noteOutputCap({ maxTokens: 32_000, source: "requested", windowBound: false });
+		noteOutputCap({
+			maxTokens: 32_000,
+			source: "requested",
+			windowBound: false,
+		});
 		const prepareTurn = vi.fn(
 			(context: { messages: readonly AgentMessage[] }) => ({
 				messages: context.messages.slice(),
@@ -3248,7 +3397,11 @@ describe("a turn cut off at the output cap", () => {
 		// same wait. Measured on one run: four turns ended at exactly 32,000 output
 		// tokens -- 6m15s, 5m13s, 5m39s, 5m30s -- 22m37s of a 31m43s session,
 		// generated and thrown away, none of it window-bound.
-		noteOutputCap({ maxTokens: 32_000, source: "requested", windowBound: false });
+		noteOutputCap({
+			maxTokens: 32_000,
+			source: "requested",
+			windowBound: false,
+		});
 		const model = new ScriptedModel([
 			() => [
 				{ type: "reasoning-delta", text: "thinking past the cap" },
@@ -3292,7 +3445,11 @@ describe("a turn cut off at the output cap", () => {
 	it("leaves the cap alone when the window was what truncated the turn", async () => {
 		// That cap is the room the prompt left, not a budget the model overran, and
 		// compaction is about to change it. Halving it takes room off the retry.
-		noteOutputCap({ maxTokens: 20_000, source: "remaining-context", windowBound: true });
+		noteOutputCap({
+			maxTokens: 20_000,
+			source: "remaining-context",
+			windowBound: true,
+		});
 		const model = new ScriptedModel([
 			() => [
 				{ type: "reasoning-delta", text: "ran out of window" },
@@ -3426,7 +3583,9 @@ describe("a turn cut off at the output cap", () => {
 
 		expect(result.status).toBe("completed");
 		expect(condenseDiscardedReasoning).toHaveBeenCalledWith(
-			expect.objectContaining({ reasoning: "a very long think that hit the cap" }),
+			expect.objectContaining({
+				reasoning: "a very long think that hit the cap",
+			}),
 		);
 		const retryPrompt = JSON.stringify(model.requests[1].messages);
 		expect(retryPrompt).toContain("note about 34 chars");
@@ -3538,7 +3697,11 @@ describe("when the vision model cannot describe an image", () => {
 			role: "user" as const,
 			content: [
 				{ type: "text" as const, text: "what is wrong here?" },
-				{ type: "image" as const, image: "iVBORw0KGgo=", mediaType: "image/png" },
+				{
+					type: "image" as const,
+					image: "iVBORw0KGgo=",
+					mediaType: "image/png",
+				},
 			],
 		},
 	];
@@ -3574,7 +3737,9 @@ describe("when the vision model cannot describe an image", () => {
 		await runtime.run("go");
 
 		expect(sentImageParts(model)).toBe(0);
-		expect(JSON.stringify(model.requests.at(-1))).toContain("could not describe it");
+		expect(JSON.stringify(model.requests.at(-1))).toContain(
+			"could not describe it",
+		);
 	});
 
 	it("leaves the image alone when the model can read it", async () => {

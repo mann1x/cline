@@ -110,11 +110,12 @@ describe("the window the model declares for itself", () => {
 	};
 
 	function showFetch(body: unknown, ok = true) {
-		return vi.fn(async () =>
-			({
-				ok,
-				json: async () => body,
-			}) as unknown as Response,
+		return vi.fn(
+			async () =>
+				({
+					ok,
+					json: async () => body,
+				}) as unknown as Response,
 		) as unknown as typeof fetch;
 	}
 
@@ -141,7 +142,9 @@ describe("the window the model declares for itself", () => {
 	});
 
 	it("contributes nothing when the model declares no window", () => {
-		expect(parseDeclaredNumCtx({ parameters: "temperature 0.7" })).toBeUndefined();
+		expect(
+			parseDeclaredNumCtx({ parameters: "temperature 0.7" }),
+		).toBeUndefined();
 		expect(parseDeclaredNumCtx({})).toBeUndefined();
 		expect(parseDeclaredNumCtx(undefined)).toBeUndefined();
 		// `num_ctx` as part of another name must not match.
@@ -188,7 +191,9 @@ describe("the window the model declares for itself", () => {
 
 	it("reads the family out of the details block", () => {
 		expect(parseDeclaredFamily(SHOW_BODY)).toBe("qwen35moe");
-		expect(parseDeclaredFamily({ details: { family: "gemma4" } })).toBe("gemma4");
+		expect(parseDeclaredFamily({ details: { family: "gemma4" } })).toBe(
+			"gemma4",
+		);
 	});
 
 	it("contributes no family when the server names none", () => {
@@ -242,9 +247,9 @@ describe("readOllamaNumPredict", () => {
 	});
 
 	it("falls back to the model's output cap when the request carries none", () => {
-		expect(
-			readOllamaNumPredict({}, context({ maxOutputTokens: 8192 })),
-		).toBe(8192);
+		expect(readOllamaNumPredict({}, context({ maxOutputTokens: 8192 }))).toBe(
+			8192,
+		);
 	});
 
 	it("returns undefined when neither is a usable number", () => {
@@ -620,9 +625,10 @@ describe("stream timeouts", () => {
 		await withOllamaResponseTimeout(baseFetch, 1000, { marker: true })(
 			"http://localhost:11434/api/chat",
 		);
-		await withOllamaResponseTimeout(baseFetch, 1000)(
-			"http://localhost:11434/api/chat",
-		);
+		await withOllamaResponseTimeout(
+			baseFetch,
+			1000,
+		)("http://localhost:11434/api/chat");
 
 		expect(seen.map((init) => (init as { timeout?: unknown }).timeout)).toEqual(
 			[false, false],

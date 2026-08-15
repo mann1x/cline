@@ -170,7 +170,9 @@ describe("pinning the session's root pool", () => {
 
 describe("what the engine says about its own room", () => {
 	it("asks about the pool, for the turn about to be sent", async () => {
-		const server = engine({ capacity: { can_admit: true, compaction_pressure: 0.92 } });
+		const server = engine({
+			capacity: { can_admit: true, compaction_pressure: 0.92 },
+		});
 		const config = provider(server.fetch);
 		await ensurePolykvPool({
 			sessionId: "s1",

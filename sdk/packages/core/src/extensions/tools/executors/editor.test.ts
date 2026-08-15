@@ -578,7 +578,9 @@ describe("createEditorExecutor", () => {
 				await expect(failure).rejects.toThrow("Duplicated instead of replaced");
 				await expect(failure).rejects.toThrow("appends a second copy");
 				// The file must be left exactly as it was.
-				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("a\nb\nc\nd");
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+					"a\nb\nc\nd",
+				);
 			});
 		});
 
@@ -690,7 +692,9 @@ describe("createEditorExecutor", () => {
 		// it — read-before-edit was satisfied, and "adds more lines than the range
 		// holds" passes because 101 < 105.
 		it("refuses an unanchored replacement that is really a whole-file rewrite", async () => {
-			const file = Array.from({ length: 138 }, (_, i) => `line ${i + 1}`).join("\n");
+			const file = Array.from({ length: 138 }, (_, i) => `line ${i + 1}`).join(
+				"\n",
+			);
 			await withTempFile(file, async (filePath, dir) => {
 				const editor = createEditorExecutor();
 				await expect(
@@ -699,7 +703,9 @@ describe("createEditorExecutor", () => {
 							path: filePath,
 							start_line: 30,
 							end_line: 134,
-							new_text: Array.from({ length: 101 }, (_, i) => `new ${i}`).join("\n"),
+							new_text: Array.from({ length: 101 }, (_, i) => `new ${i}`).join(
+								"\n",
+							),
 						},
 						dir,
 						context,
@@ -715,7 +721,9 @@ describe("createEditorExecutor", () => {
 		// the model bounced between the three for five calls and ~52,000 characters
 		// of generated text before giving up.
 		it("allows a rewrite stated exactly as lines 1 through the line count", async () => {
-			const file = Array.from({ length: 138 }, (_, i) => `line ${i + 1}`).join("\n");
+			const file = Array.from({ length: 138 }, (_, i) => `line ${i + 1}`).join(
+				"\n",
+			);
 			await withTempFile(file, async (filePath, dir) => {
 				const editor = createEditorExecutor();
 				const result = await editor(
@@ -736,11 +744,18 @@ describe("createEditorExecutor", () => {
 		// end_line past EOF already means "to the end of the file", so this is the
 		// same rewrite written by a model that does not know the line count.
 		it("treats lines 1 to past-EOF as the same stated rewrite", async () => {
-			const file = Array.from({ length: 138 }, (_, i) => `line ${i + 1}`).join("\n");
+			const file = Array.from({ length: 138 }, (_, i) => `line ${i + 1}`).join(
+				"\n",
+			);
 			await withTempFile(file, async (filePath, dir) => {
 				const editor = createEditorExecutor();
 				const result = await editor(
-					{ path: filePath, start_line: 1, end_line: 9999, new_text: "rewritten" },
+					{
+						path: filePath,
+						start_line: 1,
+						end_line: 9999,
+						new_text: "rewritten",
+					},
 					dir,
 					context,
 				);
@@ -752,12 +767,19 @@ describe("createEditorExecutor", () => {
 		// line 1 and stops short — that is still a partial edit the model may have
 		// mismeasured.
 		it("still refuses a large unanchored range that starts at line 1 but stops short", async () => {
-			const file = Array.from({ length: 138 }, (_, i) => `line ${i + 1}`).join("\n");
+			const file = Array.from({ length: 138 }, (_, i) => `line ${i + 1}`).join(
+				"\n",
+			);
 			await withTempFile(file, async (filePath, dir) => {
 				const editor = createEditorExecutor();
 				await expect(
 					editor(
-						{ path: filePath, start_line: 1, end_line: 100, new_text: "rewritten" },
+						{
+							path: filePath,
+							start_line: 1,
+							end_line: 100,
+							new_text: "rewritten",
+						},
 						dir,
 						context,
 					),
@@ -767,7 +789,9 @@ describe("createEditorExecutor", () => {
 
 		// Anchored edits are self-verifying, so size is not the objection.
 		it("allows a large range when old_text anchors it", async () => {
-			const file = Array.from({ length: 138 }, (_, i) => `line ${i + 1}`).join("\n");
+			const file = Array.from({ length: 138 }, (_, i) => `line ${i + 1}`).join(
+				"\n",
+			);
 			await withTempFile(file, async (filePath, dir) => {
 				const editor = createEditorExecutor();
 				const result = await editor(
@@ -844,7 +868,11 @@ describe("createEditorExecutor", () => {
 			await withTempFile("a\n12 | pipe row\nb", async (filePath, dir) => {
 				const editor = createEditorExecutor();
 				await editor(
-					{ path: filePath, old_text: "12 | pipe row", new_text: "12 | changed" },
+					{
+						path: filePath,
+						old_text: "12 | pipe row",
+						new_text: "12 | changed",
+					},
 					dir,
 					context,
 				);
@@ -866,7 +894,9 @@ describe("createEditorExecutor", () => {
 				expect(result).toContain("no longer counts as having read it");
 				expect(result).toContain("read_files");
 				// The cost of skipping it is the part that changes behaviour.
-				expect(result).toContain("after you have written the replacement out in full");
+				expect(result).toContain(
+					"after you have written the replacement out in full",
+				);
 			});
 		});
 
@@ -1171,7 +1201,9 @@ describe("createEditorExecutor", () => {
 				// doing it. The order of the two routes is the behaviour.
 				await expect(
 					editor({ path: filePath, new_text: "rewritten" }, dir, context),
-				).rejects.toThrow(/Edit the lines you mean to change[\s\S]*Replacing the file in full/);
+				).rejects.toThrow(
+					/Edit the lines you mean to change[\s\S]*Replacing the file in full/,
+				);
 				await expect(
 					editor({ path: filePath, new_text: "rewritten" }, dir, context),
 				).rejects.toThrow(/only after a targeted edit has failed/);
@@ -1180,7 +1212,9 @@ describe("createEditorExecutor", () => {
 				// named only the line numbers, and dropped `path` three times.
 				await expect(
 					editor({ path: filePath, new_text: "rewritten" }, dir, context),
-				).rejects.toThrow(new RegExp(`path: "${filePath.replace(/\\/g, "\\\\")}"`));
+				).rejects.toThrow(
+					new RegExp(`path: "${filePath.replace(/\\/g, "\\\\")}"`),
+				);
 				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
 					"one\ntwo\nthree",
 				);
@@ -1229,7 +1263,9 @@ describe("requiring a read before an edit", () => {
 			);
 
 			await expect(failure).rejects.toThrow("Read before editing");
-			await expect(failure).rejects.toThrow("has not been read in this session");
+			await expect(failure).rejects.toThrow(
+				"has not been read in this session",
+			);
 			await expect(failure).rejects.toThrow("read_files");
 			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("a\nb\nc\nd");
 		});
@@ -1261,11 +1297,7 @@ describe("requiring a read before an edit", () => {
 			const editor = createEditorExecutor({ receipts });
 			const filePath = path.join(dir, "scratch.js");
 
-			await editor(
-				{ path: filePath, new_text: "a\nb\nc\nd\n" },
-				dir,
-				context,
-			);
+			await editor({ path: filePath, new_text: "a\nb\nc\nd\n" }, dir, context);
 			const result = await editor(
 				{ path: filePath, new_text: "B", start_line: 2 },
 				dir,
@@ -1289,7 +1321,9 @@ describe("requiring a read before an edit", () => {
 				context,
 			);
 
-			await expect(failure).rejects.toThrow("has not been read in this session");
+			await expect(failure).rejects.toThrow(
+				"has not been read in this session",
+			);
 		});
 	});
 
@@ -1385,7 +1419,11 @@ describe("requiring a read before an edit", () => {
 			const editor = createEditorExecutor({ receipts });
 			receipts.noteRead(filePath, 1, 4);
 
-			await editor({ path: filePath, new_text: "B", start_line: 2 }, dir, context);
+			await editor(
+				{ path: filePath, new_text: "B", start_line: 2 },
+				dir,
+				context,
+			);
 			const result = await editor(
 				{ path: filePath, new_text: "C", start_line: 3 },
 				dir,
@@ -1453,26 +1491,29 @@ describe("a range edit carrying the read gutter", () => {
 		// Stripped, the edit asks for what the file already holds, so it is
 		// refused as a no-op — which is the honest answer, and the one the model
 		// can act on. Silently writing the gutter was neither.
-		await withTempFile("<body>\n  <p>hi</p>\n</body>\n</html>", async (filePath, dir) => {
-			const editor = createEditorExecutor();
+		await withTempFile(
+			"<body>\n  <p>hi</p>\n</body>\n</html>",
+			async (filePath, dir) => {
+				const editor = createEditorExecutor();
 
-			await expect(
-				editor(
-					{
-						path: filePath,
-						start_line: 3,
-						end_line: 4,
-						new_text: "  3 | </body>\n  4 | </html>",
-					},
-					dir,
-					context,
-				),
-			).rejects.toThrow("No change");
+				await expect(
+					editor(
+						{
+							path: filePath,
+							start_line: 3,
+							end_line: 4,
+							new_text: "  3 | </body>\n  4 | </html>",
+						},
+						dir,
+						context,
+					),
+				).rejects.toThrow("No change");
 
-			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
-				"<body>\n  <p>hi</p>\n</body>\n</html>",
-			);
-		});
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+					"<body>\n  <p>hi</p>\n</body>\n</html>",
+				);
+			},
+		);
 	});
 
 	it("keeps the source's own indentation", async () => {
@@ -1622,17 +1663,25 @@ describe("how long the file is", () => {
 		});
 
 		it("says nothing when the edit leaves the file parseable", async () => {
-			await withTempFile("function f(){ return 1; }\n", async (filePath, dir) => {
-				const editor = createEditorExecutor();
+			await withTempFile(
+				"function f(){ return 1; }\n",
+				async (filePath, dir) => {
+					const editor = createEditorExecutor();
 
-				const result = await editor(
-					{ path: filePath, start_line: 1, end_line: 1, new_text: "function f(){ return 2; }" },
-					dir,
-					context,
-				);
+					const result = await editor(
+						{
+							path: filePath,
+							start_line: 1,
+							end_line: 1,
+							new_text: "function f(){ return 2; }",
+						},
+						dir,
+						context,
+					);
 
-				expect(result).not.toContain("Delimiter scan");
-			});
+					expect(result).not.toContain("Delimiter scan");
+				},
+			);
 		});
 
 		it("says nothing about a language it cannot parse", async () => {

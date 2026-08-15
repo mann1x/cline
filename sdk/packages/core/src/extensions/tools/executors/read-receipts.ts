@@ -89,7 +89,9 @@ export function createReadReceipts(): ReadReceipts {
 			const span: Span = {
 				first: Math.max(1, Math.floor(first)),
 				// An unbounded read (no end_line) covers the rest of the file.
-				last: Number.isFinite(last) ? Math.floor(last) : Number.POSITIVE_INFINITY,
+				last: Number.isFinite(last)
+					? Math.floor(last)
+					: Number.POSITIVE_INFINITY,
 			};
 			if (span.last < span.first) {
 				return;

@@ -18,11 +18,11 @@ import {
 	createContextCompactionPrepareTurn,
 } from "./compaction";
 import {
+	buildSummaryMessage,
+	buildThinkingSummaryRequest,
 	createTokenEstimator,
 	estimateTokens,
 	findCutPlan,
-	buildSummaryMessage,
-	buildThinkingSummaryRequest,
 	getCompactionSummaryMetadata,
 	resolveCompactionOutputBudgets,
 	resolveEffectiveMaxInputTokens,
@@ -103,7 +103,10 @@ function longOverflowRecoveryTranscript(): MessageWithMetadata[] {
 		older.push({
 			role: "assistant",
 			content: [
-				{ type: "text", text: `Older assistant explanation ${index}. ${"detail ".repeat(200)}` },
+				{
+					type: "text",
+					text: `Older assistant explanation ${index}. ${"detail ".repeat(200)}`,
+				},
 			],
 		});
 		older.push({
@@ -1439,10 +1442,16 @@ describe("createContextCompactionPrepareTurn", () => {
 			},
 		});
 		const activeConfig = resolveSummarizerConfig({
-			activeProviderConfig: { providerId: "anthropic", modelId: "claude-sonnet" },
+			activeProviderConfig: {
+				providerId: "anthropic",
+				modelId: "claude-sonnet",
+			},
 		});
 		const dedicatedConfig = resolveSummarizerConfig({
-			activeProviderConfig: { providerId: "anthropic", modelId: "claude-sonnet" },
+			activeProviderConfig: {
+				providerId: "anthropic",
+				modelId: "claude-sonnet",
+			},
 			summarizer: { providerId: "openai", modelId: "small-summary" },
 		});
 
@@ -1619,7 +1628,8 @@ describe("createContextCompactionPrepareTurn", () => {
 		expect(JSON.stringify(result?.messages[0])).not.toContain('"reasoning"');
 		const summaryBlock = Array.isArray(result?.messages[0]?.content)
 			? result.messages[0].content.find(
-					(block) => block.type === "text" && block.text.startsWith("Context summary:"),
+					(block) =>
+						block.type === "text" && block.text.startsWith("Context summary:"),
 				)
 			: undefined;
 		const summaryContent =
@@ -2248,8 +2258,11 @@ describe("createContextCompactionPrepareTurn", () => {
 
 		// With one the turn stops being exempt, so the cut lands past it.
 		expect(
-			findCutPlan(messages, bounds(1, { lastTurnCeiling: 100 }), estimateJsonTokens)
-				.cutIndex,
+			findCutPlan(
+				messages,
+				bounds(1, { lastTurnCeiling: 100 }),
+				estimateJsonTokens,
+			).cutIndex,
 		).toBeGreaterThan(lastTurnStart);
 	});
 
@@ -5141,7 +5154,9 @@ describe("the output budget ladder", () => {
 
 		// 30% when the summary took its whole share, and capped at 50% when it
 		// came in well under -- not the whole 70% it left behind.
-		expect(afterAFullSummary).toBe(budgets.combinedTokens - budgets.summaryMaxTokens);
+		expect(afterAFullSummary).toBe(
+			budgets.combinedTokens - budgets.summaryMaxTokens,
+		);
 		expect(afterAShortSummary).toBe(Math.floor(budgets.combinedTokens * 0.5));
 	});
 
@@ -5165,8 +5180,12 @@ describe("resolvePreserveRecentTokens", () => {
 	// exactly one window: on 32k it asks to preserve more than the compaction
 	// target, and on 1M it throws away a task with room for forty times that.
 	it("holds its anchors at 128k and 1M", () => {
-		expect(resolvePreserveRecentTokens({ contextWindow: 128_000 })).toBe(20_000);
-		expect(resolvePreserveRecentTokens({ contextWindow: 1_000_000 })).toBe(78_745);
+		expect(resolvePreserveRecentTokens({ contextWindow: 128_000 })).toBe(
+			20_000,
+		);
+		expect(resolvePreserveRecentTokens({ contextWindow: 1_000_000 })).toBe(
+			78_745,
+		);
 	});
 
 	it("grows sub-linearly between them", () => {
@@ -5190,7 +5209,10 @@ describe("resolvePreserveRecentTokens", () => {
 
 	it("yields to an explicit setting", () => {
 		expect(
-			resolvePreserveRecentTokens({ contextWindow: 1_000_000, override: 4_000 }),
+			resolvePreserveRecentTokens({
+				contextWindow: 1_000_000,
+				override: 4_000,
+			}),
 		).toBe(4_000);
 	});
 });
@@ -5229,7 +5251,9 @@ describe("serializeReasoningWithOutcomes", () => {
 		]);
 
 		expect(rendered).toContain("the range must have moved");
-		expect(rendered).toContain("editor -> refused: the change was already in the file");
+		expect(rendered).toContain(
+			"editor -> refused: the change was already in the file",
+		);
 		// The cost, which is the one thing the model cannot read back off its own
 		// thinking: whether the turn that felt thorough was the expensive one.
 		expect(rendered).toContain("17901 output tokens");
@@ -5258,7 +5282,9 @@ describe("serializeReasoningWithOutcomes", () => {
 			} as MessageWithMetadata,
 		]);
 
-		expect(rendered).toContain("refused by the loop guard as an unchanged repeat");
+		expect(rendered).toContain(
+			"refused by the loop guard as an unchanged repeat",
+		);
 	});
 
 	it("has nothing to say about turns that did not reason", () => {
@@ -5314,7 +5340,9 @@ describe("buildSummaryMessage", () => {
 
 		expect(message.role).toBe("user");
 		expect(
-			Array.isArray(message.content) ? message.content.map((block) => block.type) : [],
+			Array.isArray(message.content)
+				? message.content.map((block) => block.type)
+				: [],
 		).toEqual(["text", "text"]);
 	});
 
@@ -5327,9 +5355,13 @@ describe("buildSummaryMessage", () => {
 			thinkingSummary: "## What worked\n- narrowing the range",
 		});
 
-		const first = Array.isArray(message.content) ? message.content[0] : undefined;
+		const first = Array.isArray(message.content)
+			? message.content[0]
+			: undefined;
 		expect(first?.type === "text" ? first.text : "").toContain("Retrospective");
-		expect(first?.type === "text" ? first.text : "").toContain("narrowing the range");
+		expect(first?.type === "text" ? first.text : "").toContain(
+			"narrowing the range",
+		);
 	});
 
 	it("keeps it on the metadata, which is what chains it to the next compaction", () => {
@@ -5342,7 +5374,9 @@ describe("buildSummaryMessage", () => {
 			thinkingSummary: "lessons",
 		});
 
-		expect(getCompactionSummaryMetadata(message)?.thinkingSummary).toBe("lessons");
+		expect(getCompactionSummaryMetadata(message)?.thinkingSummary).toBe(
+			"lessons",
+		);
 		expect(getCompactionSummaryMetadata(message)?.generation).toBe(3);
 	});
 
@@ -5356,4 +5390,4 @@ describe("buildSummaryMessage", () => {
 
 		expect(Array.isArray(message.content) ? message.content.length : 0).toBe(1);
 	});
-})
+});

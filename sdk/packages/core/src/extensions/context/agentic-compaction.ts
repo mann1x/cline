@@ -165,7 +165,8 @@ async function generateThinkingSummary(options: {
 		}
 		options.logger?.debug("Generated thinking compaction", {
 			reasoningInputChars: reasoningText.length,
-			previousThinkingSummaryChars: options.previousThinkingSummary?.length ?? 0,
+			previousThinkingSummaryChars:
+				options.previousThinkingSummary?.length ?? 0,
 			maxOutputTokens: options.maxOutputTokens,
 			outputChars: trimmed.length,
 			providerId: providerConfig.providerId,
@@ -173,10 +174,13 @@ async function generateThinkingSummary(options: {
 		});
 		return trimmed;
 	} catch (error) {
-		options.logger?.log("Thinking compaction failed; keeping the summary alone", {
-			severity: "warn",
-			errorMessage: error instanceof Error ? error.message : String(error),
-		});
+		options.logger?.log(
+			"Thinking compaction failed; keeping the summary alone",
+			{
+				severity: "warn",
+				errorMessage: error instanceof Error ? error.message : String(error),
+			},
+		);
 		return undefined;
 	}
 }

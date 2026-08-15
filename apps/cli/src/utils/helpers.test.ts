@@ -214,7 +214,11 @@ describe("parseArgs", () => {
 		expect(parsed.invalidRetries).toBeUndefined();
 	});
 
-	it.each(["off", "nudge", "require"] as const)("parses --edit-verification %s", (mode) => {
+	it.each([
+		"off",
+		"nudge",
+		"require",
+	] as const)("parses --edit-verification %s", (mode) => {
 		const parsed = parseArgs(["--edit-verification", mode]);
 		expect(parsed.editVerification).toBe(mode);
 		expect(parsed.invalidEditVerification).toBeUndefined();

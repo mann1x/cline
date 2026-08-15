@@ -33,7 +33,12 @@ function readPair(
 					type: "tool_result" as const,
 					tool_use_id: "call-1",
 					content: JSON.stringify([
-						{ path: "app.ts", start_line: 80, end_line: 120, content: earlierText },
+						{
+							path: "app.ts",
+							start_line: 80,
+							end_line: 120,
+							content: earlierText,
+						},
 					]),
 				},
 			],
@@ -94,14 +99,21 @@ describe("duplicate reads", () => {
 	it("keeps a contained read whose content changed", () => {
 		const out = build(readPair(94, 95, " 94 | x\n 95 | CHANGED"));
 		expect(out).toContain("CHANGED");
-		expect(out).not.toContain("duplicate - this range was already read earlier");
+		expect(out).not.toContain(
+			"duplicate - this range was already read earlier",
+		);
 	});
 
 	// Line-number padding differs between reads of different widths; the
 	// witness must not mistake that for a change.
 	it("ignores line-number padding differences", () => {
 		const out = build(
-			readPair(94, 95, "  94 | x\n  95 | y", " 80 | a\n 94 | x\n 95 | y\n120 | b"),
+			readPair(
+				94,
+				95,
+				"  94 | x\n  95 | y",
+				" 80 | a\n 94 | x\n 95 | y\n120 | b",
+			),
 		);
 		expect(out).toContain("duplicate - this range was already read earlier");
 	});
@@ -109,6 +121,8 @@ describe("duplicate reads", () => {
 	it("leaves a read that is not contained alone", () => {
 		const out = build(readPair(200, 201, "200 | p\n201 | q"));
 		expect(out).toContain("200 | p");
-		expect(out).not.toContain("duplicate - this range was already read earlier");
+		expect(out).not.toContain(
+			"duplicate - this range was already read earlier",
+		);
 	});
 });

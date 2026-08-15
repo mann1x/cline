@@ -9,13 +9,18 @@ import { resolveEphemeralPort } from "./hub-websocket-server";
  */
 describe("resolveEphemeralPort", () => {
 	it("returns the first port the OS offers when it is usable", async () => {
-		expect(await resolveEphemeralPort("127.0.0.1", async () => 41234)).toBe(41234);
+		expect(await resolveEphemeralPort("127.0.0.1", async () => 41234)).toBe(
+			41234,
+		);
 	});
 
 	it("asks again when the OS hands back a port fetch will not connect to", async () => {
 		const offered = [6667, 10080, 2049, 45001];
 		let index = 0;
-		const port = await resolveEphemeralPort("127.0.0.1", async () => offered[index++]);
+		const port = await resolveEphemeralPort(
+			"127.0.0.1",
+			async () => offered[index++],
+		);
 		expect(port).toBe(45001);
 		expect(index).toBe(4);
 	});

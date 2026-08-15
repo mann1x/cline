@@ -1,5 +1,5 @@
-import type { AgentImageToDescribe, BasicLogger } from "@cline/shared";
 import { createAgentModelFromConfig } from "@cline/core";
+import type { AgentImageToDescribe, BasicLogger } from "@cline/shared";
 import type { Config } from "../utils/types";
 
 /**
@@ -50,7 +50,9 @@ export function createCliImageDescriber(
 		const described = descriptions.filter(
 			(description) => description !== undefined,
 		).length;
-		logger?.log?.(`[Vision] Described ${described} of ${images.length} image(s)`);
+		logger?.log?.(
+			`[Vision] Described ${described} of ${images.length} image(s)`,
+		);
 		return descriptions;
 	};
 }

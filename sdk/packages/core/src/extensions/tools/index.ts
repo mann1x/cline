@@ -55,38 +55,6 @@ export {
 	resolveToolRoutingConfig,
 	type ToolRoutingRule,
 } from "./model-tool-routing";
-// QA credentials: named secrets a command can ask for, kept out of the model's
-// context and masked back out of everything it reads.
-export {
-	commandText,
-	createSecretRedactor,
-	describeQaCredentials,
-	normalizeQaCredentials,
-	QA_CREDENTIAL_MIN_VALUE_LENGTH,
-	QA_CREDENTIAL_NAME_PATTERN,
-	type QaCredential,
-	qaCredentialNames,
-	type NormalizedQaCredentials,
-	referencedCredentialNames,
-	type RejectedQaCredential,
-	resolveCredentialEnv,
-} from "./qa-credentials";
-// Task progress (the checklist the model keeps while it works)
-export {
-	buildTaskProgressReminder,
-	buildTaskProgressState,
-	DEFAULT_TASK_PROGRESS_REMINDER_INTERVAL,
-	parseTaskProgress,
-	readTaskProgress,
-	TASK_PROGRESS_PARAM,
-	TASK_PROGRESS_PARAM_DESCRIPTION,
-	type TaskProgressItem,
-	type TaskProgressState,
-	TaskProgressTracker,
-	type TaskProgressTrackerOptions,
-	withTaskProgressCapture,
-	withTaskProgressParam,
-} from "./task-progress";
 // Presets
 export {
 	createDefaultToolsWithPreset,
@@ -96,6 +64,22 @@ export {
 	type ToolPresetName,
 	ToolPresets,
 } from "./presets";
+// QA credentials: named secrets a command can ask for, kept out of the model's
+// context and masked back out of everything it reads.
+export {
+	commandText,
+	createSecretRedactor,
+	describeQaCredentials,
+	type NormalizedQaCredentials,
+	normalizeQaCredentials,
+	QA_CREDENTIAL_MIN_VALUE_LENGTH,
+	QA_CREDENTIAL_NAME_PATTERN,
+	type QaCredential,
+	qaCredentialNames,
+	type RejectedQaCredential,
+	referencedCredentialNames,
+	resolveCredentialEnv,
+} from "./qa-credentials";
 export {
 	type BuiltinToolAvailabilityContext,
 	getCoreAcpToolNames,
@@ -132,6 +116,22 @@ export {
 	type WebFetchRequest,
 	WebFetchRequestSchema,
 } from "./schemas";
+// Task progress (the checklist the model keeps while it works)
+export {
+	buildTaskProgressReminder,
+	buildTaskProgressState,
+	DEFAULT_TASK_PROGRESS_REMINDER_INTERVAL,
+	parseTaskProgress,
+	readTaskProgress,
+	TASK_PROGRESS_PARAM,
+	TASK_PROGRESS_PARAM_DESCRIPTION,
+	type TaskProgressItem,
+	type TaskProgressState,
+	TaskProgressTracker,
+	type TaskProgressTrackerOptions,
+	withTaskProgressCapture,
+	withTaskProgressParam,
+} from "./task-progress";
 export { TEAM_TOOL_NAMES } from "./team/team-tools";
 // Types
 export type {

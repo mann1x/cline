@@ -1,5 +1,6 @@
 import type { MessageWithMetadata } from "@cline/shared";
 import { describe, expect, it } from "vitest";
+import { scaleEstimateToObserved } from "./compaction";
 import {
 	COMPACTION_TRIGGER_RATIO,
 	DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
@@ -10,7 +11,6 @@ import {
 	resolveSummaryMaxOutputTokens,
 	SUMMARY_OUTPUT_WINDOW_SHARE,
 } from "./compaction-shared";
-import { scaleEstimateToObserved } from "./compaction";
 
 describe("the compaction trigger", () => {
 	it("keeps a full turn's output inside the window", () => {
@@ -88,7 +88,9 @@ describe("the compaction summary budget", () => {
 	// and the summarizer was given 1,024 tokens to answer in, leaving roughly
 	// 87,000 unused on the one generation every later turn reads.
 	it("buys a full summary when the window can afford one", () => {
-		expect(resolveSummaryMaxOutputTokens(110_000)).toBe(MAX_SUMMARY_OUTPUT_TOKENS);
+		expect(resolveSummaryMaxOutputTokens(110_000)).toBe(
+			MAX_SUMMARY_OUTPUT_TOKENS,
+		);
 	});
 
 	it("scales down with the window rather than filling it", () => {
@@ -100,7 +102,10 @@ describe("the compaction summary budget", () => {
 	it("never spends more than its share", () => {
 		for (const window of [40_000, 128_000, 1_000_000]) {
 			expect(resolveSummaryMaxOutputTokens(window)).toBeLessThanOrEqual(
-				Math.max(MAX_SUMMARY_OUTPUT_TOKENS, window * SUMMARY_OUTPUT_WINDOW_SHARE),
+				Math.max(
+					MAX_SUMMARY_OUTPUT_TOKENS,
+					window * SUMMARY_OUTPUT_WINDOW_SHARE,
+				),
 			);
 			expect(resolveSummaryMaxOutputTokens(window)).toBeLessThanOrEqual(
 				MAX_SUMMARY_OUTPUT_TOKENS,
@@ -119,7 +124,7 @@ describe("the compaction summary budget", () => {
 			DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
 		);
 	});
-})
+});
 
 describe("scaling an estimate onto the provider's ruler", () => {
 	// Measured live: 89,881 observed before, 93,844 estimated after, printed as a
@@ -137,7 +142,7 @@ describe("scaling an estimate onto the provider's ruler", () => {
 	it("scales up as readily as down", () => {
 		expect(scaleEstimateToObserved(100, 100, 130)).toBe(130);
 	});
-})
+});
 
 /**
  * Two models, opposite needs, same window. One answers a tool call in 24 to
@@ -152,29 +157,34 @@ describe("output room sized from what the session actually produces", () => {
 			role: "assistant",
 			content: [{ type: "text", text: "x" }],
 			metrics: { outputTokens },
-		}) as unknown as MessageWithMetadata
+		}) as unknown as MessageWithMetadata;
 
 	it("reads the high-water turn, not the average", () => {
 		expect(
-			resolveObservedOutputTokens([turn(100), turn(17_000), turn(120), turn(90)]),
-		).toBe(17_000)
-	})
+			resolveObservedOutputTokens([
+				turn(100),
+				turn(17_000),
+				turn(120),
+				turn(90),
+			]),
+		).toBe(17_000);
+	});
 
 	it("says nothing until there is a pattern", () => {
 		// The first turn of a session is routinely the smallest it will produce,
 		// and sizing a whole session's budget off it is how the second turn
 		// overflows.
-		expect(resolveObservedOutputTokens([])).toBeUndefined()
-		expect(resolveObservedOutputTokens([turn(500)])).toBeUndefined()
-	})
+		expect(resolveObservedOutputTokens([])).toBeUndefined();
+		expect(resolveObservedOutputTokens([turn(500)])).toBeUndefined();
+	});
 
 	it("follows a model that changes register", () => {
 		// Twelve turns of sample: a run that reasoned in three lines for twenty
 		// turns and then opened a long think has changed what it needs.
-		const quiet = Array.from({ length: 30 }, () => turn(200))
-		expect(resolveObservedOutputTokens([...quiet, turn(40_000)])).toBe(40_000)
-		expect(resolveObservedOutputTokens([turn(40_000), ...quiet])).toBe(200)
-	})
+		const quiet = Array.from({ length: 30 }, () => turn(200));
+		expect(resolveObservedOutputTokens([...quiet, turn(40_000)])).toBe(40_000);
+		expect(resolveObservedOutputTokens([turn(40_000), ...quiet])).toBe(200);
+	});
 
 	it("hands a terse model back the window a big cap was holding", () => {
 		// Measured: turns of 24-2,164 output tokens against a 32,000 num_predict.
@@ -187,8 +197,8 @@ describe("output room sized from what the session actually produces", () => {
 				modelMaxTokens: 32_000,
 				observedOutputTokens: 2_164,
 			}),
-		).toBe(89_100)
-	})
+		).toBe(89_100);
+	});
 
 	it("reserves for a model that really does think that long", () => {
 		// 17,000 tokens of reasoning on most turns: half again on top is 25,500,
@@ -200,8 +210,8 @@ describe("output room sized from what the session actually produces", () => {
 				modelMaxTokens: 32_000,
 				observedOutputTokens: 17_000,
 			}),
-		).toBe(84_500)
-	})
+		).toBe(84_500);
+	});
 
 	it("never reserves past the model's own cap", () => {
 		expect(
@@ -211,6 +221,6 @@ describe("output room sized from what the session actually produces", () => {
 				modelMaxTokens: 8_000,
 				observedOutputTokens: 40_000,
 			}),
-		).toBe(89_100)
-	})
-})
+		).toBe(89_100);
+	});
+});

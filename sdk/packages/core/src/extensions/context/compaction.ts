@@ -1,10 +1,11 @@
 import { appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { reasoningHistoryModeForProvider } from "@cline/llms";
 import {
 	charsPerToken,
-	estimateRequestInputTokens,
 	consumeContextOverflow,
+	estimateRequestInputTokens,
 	lastObservedRequestTokens,
 } from "@cline/shared";
 import {
@@ -30,13 +31,6 @@ import type { ProviderConfig } from "../../types/provider-settings";
 import { runAgenticCompaction } from "./agentic-compaction";
 import { runBasicCompaction } from "./basic-compaction";
 import {
-	ensurePolykvPool,
-	polykvSaysCompact,
-	readPolykvCapacity,
-	repointPolykvAfterCompaction,
-} from "./polykv-session";
-import { reasoningHistoryModeForProvider } from "@cline/llms";
-import {
 	COMPACTION_TRIGGER_RATIO,
 	createTokenEstimator,
 	DEFAULT_MAX_INPUT_TOKENS,
@@ -49,6 +43,12 @@ import {
 	resolveRecencyBounds,
 	seedCalibrationFromTranscript,
 } from "./compaction-shared";
+import {
+	ensurePolykvPool,
+	polykvSaysCompact,
+	readPolykvCapacity,
+	repointPolykvAfterCompaction,
+} from "./polykv-session";
 
 export interface ContextPipelinePrepareTurnInput {
 	agentId: string;

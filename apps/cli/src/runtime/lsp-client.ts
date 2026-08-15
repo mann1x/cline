@@ -99,8 +99,7 @@ export class LspConnection {
 		}
 		if (!this.initializing) {
 			this.initializing = this.start().catch((error: unknown) => {
-				this.failed =
-					error instanceof Error ? error : new Error(String(error));
+				this.failed = error instanceof Error ? error : new Error(String(error));
 				throw this.failed;
 			});
 		}
@@ -141,9 +140,7 @@ export class LspConnection {
 				processId: process.pid,
 				initializationOptions: this.spec.initializationOptions?.(),
 				rootUri: fileUri(this.rootPath),
-				workspaceFolders: [
-					{ uri: fileUri(this.rootPath), name: "workspace" },
-				],
+				workspaceFolders: [{ uri: fileUri(this.rootPath), name: "workspace" }],
 				capabilities: {
 					textDocument: {
 						definition: { linkSupport: true },
@@ -198,7 +195,11 @@ export class LspConnection {
 	}
 
 	private dispatch(body: string): void {
-		let message: { id?: number; result?: unknown; error?: { message?: string } };
+		let message: {
+			id?: number;
+			result?: unknown;
+			error?: { message?: string };
+		};
 		try {
 			message = JSON.parse(body);
 		} catch (error) {
@@ -226,7 +227,9 @@ export class LspConnection {
 	private send(payload: Record<string, unknown>): void {
 		const body = JSON.stringify({ jsonrpc: "2.0", ...payload });
 		const length = Buffer.byteLength(body, "utf8");
-		this.child?.stdin.write(`Content-Length: ${length}${HEADER_SEPARATOR}${body}`);
+		this.child?.stdin.write(
+			`Content-Length: ${length}${HEADER_SEPARATOR}${body}`,
+		);
 	}
 
 	notify(method: string, params: unknown): void {

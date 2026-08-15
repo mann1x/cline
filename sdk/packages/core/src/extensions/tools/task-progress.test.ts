@@ -3,11 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	buildTaskProgressReminder,
 	buildTaskProgressState,
+	createTaskProgressCompletionGuard,
 	DEFAULT_TASK_PROGRESS_REMINDER_INTERVAL,
 	findLatestTaskProgress,
 	parseTaskProgress,
 	readTaskProgress,
-	createTaskProgressCompletionGuard,
 	TASK_PROGRESS_PARAM,
 	TaskProgressTracker,
 	withTaskProgressCapture,
@@ -38,10 +38,12 @@ describe("withTaskProgressParam", () => {
 
 describe("parseTaskProgress", () => {
 	it("reads checked and unchecked items", () => {
-		expect(parseTaskProgress("- [x] read the file\n- [ ] fix the bug")).toEqual([
-			{ text: "read the file", done: true },
-			{ text: "fix the bug", done: false },
-		]);
+		expect(parseTaskProgress("- [x] read the file\n- [ ] fix the bug")).toEqual(
+			[
+				{ text: "read the file", done: true },
+				{ text: "fix the bug", done: false },
+			],
+		);
 	});
 
 	it("accepts an uppercase X", () => {
@@ -75,7 +77,9 @@ describe("readTaskProgress", () => {
 	});
 
 	it("ignores non-strings and blanks", () => {
-		expect(readTaskProgress({ [TASK_PROGRESS_PARAM]: ["- [ ] a"] })).toBeUndefined();
+		expect(
+			readTaskProgress({ [TASK_PROGRESS_PARAM]: ["- [ ] a"] }),
+		).toBeUndefined();
 		expect(readTaskProgress({ [TASK_PROGRESS_PARAM]: "   " })).toBeUndefined();
 		expect(readTaskProgress({})).toBeUndefined();
 		expect(readTaskProgress(undefined)).toBeUndefined();
@@ -270,7 +274,7 @@ describe("withTaskProgressCapture", () => {
 
 describe("createDefaultTools wiring", () => {
 	async function build(taskProgress?: TaskProgressTracker) {
-		const { createDefaultTools } = await import("./definitions")
+		const { createDefaultTools } = await import("./definitions");
 		return createDefaultTools({
 			executors: {
 				readFile: async () => "contents",
@@ -282,120 +286,135 @@ describe("createDefaultTools wiring", () => {
 			enableSkills: false,
 			enableAskQuestion: false,
 			...(taskProgress ? { taskProgress } : {}),
-		} as never)
+		} as never);
 	}
 
 	it("advertises the parameter on every enabled tool", async () => {
-		const tools = await build(new TaskProgressTracker())
+		const tools = await build(new TaskProgressTracker());
 
-		expect(tools.length).toBeGreaterThan(1)
+		expect(tools.length).toBeGreaterThan(1);
 		for (const tool of tools) {
-			const properties = tool.inputSchema.properties as Record<string, unknown>
-			expect(properties?.[TASK_PROGRESS_PARAM], tool.name).toBeDefined()
+			const properties = tool.inputSchema.properties as Record<string, unknown>;
+			expect(properties?.[TASK_PROGRESS_PARAM], tool.name).toBeDefined();
 		}
-	})
+	});
 
 	// Without a tracker there is nowhere to put the checklist, so advertising
 	// the parameter would ask the model to spend tokens on a value that is read
 	// by nothing.
 	it("adds nothing when no tracker is supplied", async () => {
-		const tools = await build()
+		const tools = await build();
 
 		for (const tool of tools) {
-			const properties = tool.inputSchema.properties as Record<string, unknown>
-			expect(properties?.[TASK_PROGRESS_PARAM], tool.name).toBeUndefined()
+			const properties = tool.inputSchema.properties as Record<string, unknown>;
+			expect(properties?.[TASK_PROGRESS_PARAM], tool.name).toBeUndefined();
 		}
-	})
+	});
 
 	it("captures a checklist sent through a real tool call", async () => {
-		const tracker = new TaskProgressTracker()
-		const tools = await build(tracker)
-		const readFiles = tools.find((tool) => tool.name === "read_files")
+		const tracker = new TaskProgressTracker();
+		const tools = await build(tracker);
+		const readFiles = tools.find((tool) => tool.name === "read_files");
 
 		await readFiles?.execute(
 			{ path: "a.ts", [TASK_PROGRESS_PARAM]: "- [x] a\n- [ ] b" } as never,
 			{} as AgentToolContext,
-		)
+		);
 
-		expect(tracker.getState()).toMatchObject({ completed: 1, total: 2 })
-	})
-})
+		expect(tracker.getState()).toMatchObject({ completed: 1, total: 2 });
+	});
+});
 
 describe("wrapping twice", () => {
 	// The toolset can be wrapped at more than one layer: the builtin factory
 	// takes a tracker, and a host wraps the merged list so its own tools are
 	// covered too. Counting one call as two would pull every reminder forward.
 	it("is idempotent", async () => {
-		const tracker = new TaskProgressTracker({ reminderInterval: 2 })
+		const tracker = new TaskProgressTracker({ reminderInterval: 2 });
 		const base = {
 			name: "read_files",
 			description: "reads files",
 			inputSchema: { type: "object", properties: {} },
 			execute: async () => "contents",
-		} as unknown as AgentTool<unknown, unknown>
+		} as unknown as AgentTool<unknown, unknown>;
 
-		const once = withTaskProgressCapture(base, tracker)
-		const twice = withTaskProgressCapture(once, tracker)
-		expect(twice).toBe(once)
+		const once = withTaskProgressCapture(base, tracker);
+		const twice = withTaskProgressCapture(once, tracker);
+		expect(twice).toBe(once);
 
-		await twice.execute({ [TASK_PROGRESS_PARAM]: "- [ ] a" }, {} as AgentToolContext)
+		await twice.execute(
+			{ [TASK_PROGRESS_PARAM]: "- [ ] a" },
+			{} as AgentToolContext,
+		);
 		// One call, not two: the reminder is still one call away.
-		expect(await twice.execute({}, {} as AgentToolContext)).toBe("contents")
-		expect(await twice.execute({}, {} as AgentToolContext)).toContain("<task_progress>")
-	})
-})
+		expect(await twice.execute({}, {} as AgentToolContext)).toBe("contents");
+		expect(await twice.execute({}, {} as AgentToolContext)).toContain(
+			"<task_progress>",
+		);
+	});
+});
 
 describe("surviving a session restore", () => {
 	const transcript = [
 		{ content: "fix the bugs" },
 		{
 			content: [
-				{ type: "tool_use", input: { [TASK_PROGRESS_PARAM]: "- [ ] a\n- [ ] b" } },
+				{
+					type: "tool_use",
+					input: { [TASK_PROGRESS_PARAM]: "- [ ] a\n- [ ] b" },
+				},
 			],
 		},
 		{
 			content: [
 				{ type: "text", text: "thinking" },
-				{ type: "tool_use", input: { [TASK_PROGRESS_PARAM]: "- [x] a\n- [ ] b" } },
+				{
+					type: "tool_use",
+					input: { [TASK_PROGRESS_PARAM]: "- [x] a\n- [ ] b" },
+				},
 			],
 		},
-	]
+	];
 
 	it("finds the newest checklist in the transcript", () => {
-		expect(findLatestTaskProgress(transcript)).toBe("- [x] a\n- [ ] b")
-	})
+		expect(findLatestTaskProgress(transcript)).toBe("- [x] a\n- [ ] b");
+	});
 
 	it("returns nothing when no call ever carried one", () => {
-		expect(findLatestTaskProgress([{ content: "hi" }])).toBeUndefined()
-		expect(findLatestTaskProgress(undefined)).toBeUndefined()
-		expect(findLatestTaskProgress([{ content: [null, "x", { type: "text" }] }])).toBeUndefined()
-	})
+		expect(findLatestTaskProgress([{ content: "hi" }])).toBeUndefined();
+		expect(findLatestTaskProgress(undefined)).toBeUndefined();
+		expect(
+			findLatestTaskProgress([{ content: [null, "x", { type: "text" }] }]),
+		).toBeUndefined();
+	});
 
 	it("restores the checklist so a resumed task still gets reminded", () => {
-		const tracker = new TaskProgressTracker({ reminderInterval: 1 })
-		tracker.hydrate(findLatestTaskProgress(transcript))
+		const tracker = new TaskProgressTracker({ reminderInterval: 1 });
+		tracker.hydrate(findLatestTaskProgress(transcript));
 
-		expect(tracker.getState()).toMatchObject({ completed: 1, total: 2 })
+		expect(tracker.getState()).toMatchObject({ completed: 1, total: 2 });
 		// Without this the resumed session would remind the model of nothing.
-		expect(tracker.recordToolCall({})).toContain("- [ ] b")
-	})
+		expect(tracker.recordToolCall({})).toContain("- [ ] b");
+	});
 
 	// A restore is not the model saying something new; replaying it would
 	// re-emit a checklist the UI already has.
 	it("does not fire onUpdate", () => {
-		const onUpdate = vi.fn()
-		new TaskProgressTracker({ onUpdate }).hydrate("- [ ] a")
-		expect(onUpdate).not.toHaveBeenCalled()
-	})
+		const onUpdate = vi.fn();
+		new TaskProgressTracker({ onUpdate }).hydrate("- [ ] a");
+		expect(onUpdate).not.toHaveBeenCalled();
+	});
 
 	it("never overwrites a live checklist with an older one", () => {
-		const tracker = new TaskProgressTracker()
-		tracker.recordToolCall({ [TASK_PROGRESS_PARAM]: "- [x] a\n- [x] b\n- [ ] c" })
-		tracker.hydrate("- [ ] a\n- [ ] b")
+		const tracker = new TaskProgressTracker();
+		tracker.recordToolCall({
+			[TASK_PROGRESS_PARAM]: "- [x] a\n- [x] b\n- [ ] c",
+		});
+		tracker.hydrate("- [ ] a\n- [ ] b");
 
-		expect(tracker.getState()).toMatchObject({ completed: 2, total: 3 })
-	})
-})
+		expect(tracker.getState()).toMatchObject({ completed: 2, total: 3 });
+	});
+});
 
 describe("createTaskProgressCompletionGuard", () => {
 	function trackerWith(markdown: string): TaskProgressTracker {

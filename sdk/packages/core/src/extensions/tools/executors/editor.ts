@@ -594,7 +594,9 @@ async function replaceLineRange(
 	// a refusal would cost a turn, but a gutter written into a file is a
 	// corruption that reads as success.
 	const hadSequentialGutter =
-		newStr != null && newStr !== "" && hasSequentialGutter(newStr, startLineOneBased);
+		newStr != null &&
+		newStr !== "" &&
+		hasSequentialGutter(newStr, startLineOneBased);
 	const replacementText = hadSequentialGutter
 		? stripLineNumberGutter(normalizeLineEndings(newStr as string, eol))
 		: newStr;
@@ -666,7 +668,9 @@ async function replaceLineRange(
 			range,
 			requestedLines,
 			added,
-			gutterOverrunsRange ? { firstLine: startLineOneBased, lastLine: gutterLastLine as number } : undefined,
+			gutterOverrunsRange
+				? { firstLine: startLineOneBased, lastLine: gutterLastLine as number }
+				: undefined,
 		);
 	}
 
@@ -684,7 +688,6 @@ async function replaceLineRange(
 			: "";
 	return `Replaced ${range} in ${filePath}${note}\n${diff}${lineCountNote(content, updated, effectiveEndLine, filePath)}`;
 }
-
 
 /**
  * How large an unanchored range replacement may be before it is refused.
@@ -744,7 +747,9 @@ function countNonBlankLines(text: string): number {
 function stripLineNumberGutter(text: string): string {
 	return text
 		.split("\n")
-		.map((line) => (line.trim() === "" ? line : line.replace(LINE_NUMBER_GUTTER, "")))
+		.map((line) =>
+			line.trim() === "" ? line : line.replace(LINE_NUMBER_GUTTER, ""),
+		)
 		.join("\n");
 }
 
@@ -1028,7 +1033,8 @@ export function createEditorExecutor(
 		if (receipts.covers(filePath, first, wanted)) {
 			return;
 		}
-		const range = first === wanted ? `line ${first}` : `lines ${first}-${wanted}`;
+		const range =
+			first === wanted ? `line ${first}` : `lines ${first}-${wanted}`;
 		const why = receipts.wasRetired(filePath)
 			? `${range} of ${filePath} has not been read in its current state — either it was never read, or an earlier edit changed the file's length and moved every line below it`
 			: `${filePath} has not been read in this session`;

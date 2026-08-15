@@ -237,9 +237,7 @@ export function resetPolykvAvailability(): void {
 	POLYKV_AVAILABILITY.clear();
 }
 
-export function createPolykvClient(
-	options: PolykvClientOptions,
-): PolykvClient {
+export function createPolykvClient(options: PolykvClientOptions): PolykvClient {
 	const root = polykvRoot(options.baseUrl);
 	const doFetch = options.fetch ?? fetch;
 

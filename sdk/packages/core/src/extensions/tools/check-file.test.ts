@@ -59,9 +59,13 @@ describe("compiling without running", () => {
 
 describe("finding the scripts in a page", () => {
 	it("reads an inline block and the line it starts on", () => {
-		const html = ["<html>", "<body>", "<script>", "let a = 1;", "</script>"].join(
-			"\n",
-		);
+		const html = [
+			"<html>",
+			"<body>",
+			"<script>",
+			"let a = 1;",
+			"</script>",
+		].join("\n");
 		const blocks = extractScripts(html);
 		expect(blocks).toHaveLength(1);
 		expect(blocks[0].startLine).toBe(3);
@@ -70,9 +74,7 @@ describe("finding the scripts in a page", () => {
 	// Three ways a `<script>` is not ours to parse. Reporting a syntax error in
 	// a JSON island would send a model to edit something that was correct.
 	it("leaves alone what it does not own", () => {
-		expect(
-			extractScripts('<script src="game.js"></script>'),
-		).toHaveLength(0);
+		expect(extractScripts('<script src="game.js"></script>')).toHaveLength(0);
 		expect(
 			extractScripts('<script type="application/json">{"a":1}</script>'),
 		).toHaveLength(0);

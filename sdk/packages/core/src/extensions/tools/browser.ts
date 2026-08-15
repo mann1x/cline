@@ -1,5 +1,5 @@
-import { type AgentTool, createTool } from "@cline/shared";
 import * as fs from "node:fs/promises";
+import { type AgentTool, createTool } from "@cline/shared";
 import { describeDelimiterBalance } from "./delimiter-balance";
 
 /**
@@ -38,7 +38,7 @@ export type BrowserActionResult = {
  * menu and its five gRPC handlers in place. This is the wire that was cut.
  */
 
-export const BROWSER_TOOL_NAME = "browser"
+export const BROWSER_TOOL_NAME = "browser";
 
 /**
  * Written at the failure it replaces, the way `check_file`'s is.
@@ -62,7 +62,7 @@ Every action reports the console messages and uncaught errors produced while it 
 
 A parse error from the browser names no line, because the script never ran. For a local file a \`Delimiter scan\` section follows it and names the line to edit and how many brackets that line is out by — one line per place the trouble starts, since a file can be broken in several spots at once. Fix every line it lists in one edit and reload once, rather than one edit and one reload per line. Edit those lines instead of counting brackets yourself: counting a whole file by hand costs more thinking than you have, and the scan skips strings, comments and regex literals, which counting does not.
 
-The browser stays open between calls, so \`open\` once and then interact. Only one page is open at a time; \`open\` again to go elsewhere.`
+The browser stays open between calls, so \`open\` once and then interact. Only one page is open at a time; \`open\` again to go elsewhere.`;
 
 /**
  * Exported so the template generator can state this tool's real call shape.
@@ -81,7 +81,8 @@ export const BROWSER_TOOL_INPUT_SCHEMA = {
 		},
 		url: {
 			type: "string",
-			description: "For `open`: the page to load. An absolute file path is accepted and converted to a file URL.",
+			description:
+				"For `open`: the page to load. An absolute file path is accepted and converted to a file URL.",
 		},
 		coordinate: {
 			type: "string",
@@ -93,10 +94,17 @@ export const BROWSER_TOOL_INPUT_SCHEMA = {
 		},
 	},
 	required: ["action"],
-} as const
+} as const;
 
-export const BROWSER_ACTIONS = ["open", "click", "type", "scroll_down", "scroll_up", "close"] as const
-export type BrowserToolAction = (typeof BROWSER_ACTIONS)[number]
+export const BROWSER_ACTIONS = [
+	"open",
+	"click",
+	"type",
+	"scroll_down",
+	"scroll_up",
+	"close",
+] as const;
+export type BrowserToolAction = (typeof BROWSER_ACTIONS)[number];
 
 /**
  * The subset of `BrowserSession` this tool drives.
@@ -107,13 +115,13 @@ export type BrowserToolAction = (typeof BROWSER_ACTIONS)[number]
  * rendered.
  */
 export interface BrowserDriver {
-	launchBrowser(): Promise<void>
-	navigateToUrl(url: string): Promise<BrowserActionResult>
-	click(coordinate: string): Promise<BrowserActionResult>
-	type(text: string): Promise<BrowserActionResult>
-	scrollDown(): Promise<BrowserActionResult>
-	scrollUp(): Promise<BrowserActionResult>
-	closeBrowser(): Promise<unknown>
+	launchBrowser(): Promise<void>;
+	navigateToUrl(url: string): Promise<BrowserActionResult>;
+	click(coordinate: string): Promise<BrowserActionResult>;
+	type(text: string): Promise<BrowserActionResult>;
+	scrollDown(): Promise<BrowserActionResult>;
+	scrollUp(): Promise<BrowserActionResult>;
+	closeBrowser(): Promise<unknown>;
 }
 
 export interface BrowserToolOptions {
@@ -130,17 +138,24 @@ export interface BrowserToolOptions {
 }
 
 interface BrowserToolInput {
-	action?: unknown
-	url?: unknown
-	coordinate?: unknown
-	text?: unknown
+	action?: unknown;
+	url?: unknown;
+	coordinate?: unknown;
+	text?: unknown;
 }
 
 /** A text part, optionally followed by an image the model can actually see. */
-type ToolOutput = string | Array<{ type: "text"; text: string } | { type: "image"; data: string; mediaType: string }>
+type ToolOutput =
+	| string
+	| Array<
+			| { type: "text"; text: string }
+			| { type: "image"; data: string; mediaType: string }
+	  >;
 
 function readString(value: unknown): string | undefined {
-	return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined
+	return typeof value === "string" && value.trim() !== ""
+		? value.trim()
+		: undefined;
 }
 
 /**
@@ -152,24 +167,28 @@ function readString(value: unknown): string | undefined {
  * the tool rather than to write the third.
  */
 export function toNavigableUrl(raw: string, cwd: string): string {
-	if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) || raw.startsWith("about:") || raw.startsWith("data:")) {
-		return raw
+	if (
+		/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ||
+		raw.startsWith("about:") ||
+		raw.startsWith("data:")
+	) {
+		return raw;
 	}
 	// `localhost:3000` is a host and port, not a scheme and path.
 	if (/^(localhost|\d{1,3}(\.\d{1,3}){3})(:\d+)?(\/|$)/i.test(raw)) {
-		return `http://${raw}`
+		return `http://${raw}`;
 	}
-	const windowsAbsolute = /^[a-zA-Z]:[\\/]/.test(raw)
-	const posixAbsolute = raw.startsWith("/")
-	const absolute = windowsAbsolute || posixAbsolute ? raw : joinPath(cwd, raw)
-	const normalized = absolute.replace(/\\/g, "/")
-	return `file://${normalized.startsWith("/") ? "" : "/"}${encodeURI(normalized)}`
+	const windowsAbsolute = /^[a-zA-Z]:[\\/]/.test(raw);
+	const posixAbsolute = raw.startsWith("/");
+	const absolute = windowsAbsolute || posixAbsolute ? raw : joinPath(cwd, raw);
+	const normalized = absolute.replace(/\\/g, "/");
+	return `file://${normalized.startsWith("/") ? "" : "/"}${encodeURI(normalized)}`;
 }
 
 /** Join without importing `path`, which resolves for the *host* separator. */
 function joinPath(cwd: string, relative: string): string {
-	const base = cwd.replace(/[\\/]+$/, "")
-	return `${base}/${relative}`.replace(/\\/g, "/")
+	const base = cwd.replace(/[\\/]+$/, "");
+	return `${base}/${relative}`.replace(/\\/g, "/");
 }
 
 /**
@@ -180,20 +199,26 @@ function joinPath(cwd: string, relative: string): string {
  * indistinguishable from the tool having failed — and a model that suspects a
  * tool failed goes back to asking the user.
  */
-export function renderBrowserResult(action: string, result: BrowserActionResult, target?: string): string {
-	const where = result.currentUrl ?? target
-	const heading = where ? `${action}: ${where}` : action
-	const logs = (result.logs ?? "").trim()
+export function renderBrowserResult(
+	action: string,
+	result: BrowserActionResult,
+	target?: string,
+): string {
+	const where = result.currentUrl ?? target;
+	const heading = where ? `${action}: ${where}` : action;
+	const logs = (result.logs ?? "").trim();
 	if (logs === "") {
-		return `${heading}\n\nConsole: nothing. The page printed no messages and threw no errors.`
+		return `${heading}\n\nConsole: nothing. The page printed no messages and threw no errors.`;
 	}
-	const lines = logs.split("\n")
-	const failures = lines.filter((line) => /^\[(error|Page Error)/.test(line)).length
+	const lines = logs.split("\n");
+	const failures = lines.filter((line) =>
+		/^\[(error|Page Error)/.test(line),
+	).length;
 	const summary =
 		failures > 0
 			? `Console (${lines.length} message(s), ${failures} of them errors):`
-			: `Console (${lines.length} message(s), no errors):`
-	return `${heading}\n\n${summary}\n${logs}`
+			: `Console (${lines.length} message(s), no errors):`;
+	return `${heading}\n\n${summary}\n${logs}`;
 }
 
 /**
@@ -203,9 +228,11 @@ export function renderBrowserResult(action: string, result: BrowserActionResult,
  * the webview renders. The model's message wants the media type and the
  * payload apart.
  */
-export function splitDataUrl(dataUrl: string): { data: string; mediaType: string } | undefined {
-	const match = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i.exec(dataUrl)
-	return match ? { mediaType: match[1], data: match[2] } : undefined
+export function splitDataUrl(
+	dataUrl: string,
+): { data: string; mediaType: string } | undefined {
+	const match = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i.exec(dataUrl);
+	return match ? { mediaType: match[1], data: match[2] } : undefined;
 }
 
 /**
@@ -215,19 +242,19 @@ export function splitDataUrl(dataUrl: string): { data: string; mediaType: string
  * line, no column, and for a parse failure there is no stack either — the
  * script never ran. That is the whole message the model gets.
  */
-const PARSE_ERROR = /\bSyntaxError\b|\bUnexpected (token|end of input)\b/
+const PARSE_ERROR = /\bSyntaxError\b|\bUnexpected (token|end of input)\b/;
 
 /** The local path behind a `file://` URL, or nothing for anything remote. */
 export function localPathOf(url: string | undefined): string | undefined {
 	if (!url?.startsWith("file://")) {
-		return undefined
+		return undefined;
 	}
 	try {
-		const decoded = decodeURI(url.slice("file://".length))
+		const decoded = decodeURI(url.slice("file://".length));
 		// `file:///C:/x` -> `C:/x`, but `file:///repo/x` -> `/repo/x`.
-		return /^\/[a-zA-Z]:/.test(decoded) ? decoded.slice(1) : decoded
+		return /^\/[a-zA-Z]:/.test(decoded) ? decoded.slice(1) : decoded;
 	} catch {
-		return undefined
+		return undefined;
 	}
 }
 
@@ -252,36 +279,36 @@ async function locateParseError(
 	onError?: (message: string, error: unknown) => void,
 ): Promise<string | null> {
 	if (!PARSE_ERROR.test(logs)) {
-		return null
+		return null;
 	}
-	const filePath = localPathOf(url)
+	const filePath = localPathOf(url);
 	if (!filePath) {
-		return null
+		return null;
 	}
 	try {
-		return describeDelimiterBalance(filePath, await readFile(filePath))
+		return describeDelimiterBalance(filePath, await readFile(filePath));
 	} catch (error) {
 		// Never mask the console output this is appended to.
 		onError?.(`[Browser] delimiter scan skipped for ${filePath}`, error);
-		return null
+		return null;
 	}
 }
 
 export function createBrowserTool(options: BrowserToolOptions): AgentTool {
 	// One browser per session, built on demand and reused: launching Chrome per
 	// call would cost seconds each time and lose the page between them.
-	let driver: BrowserDriver | undefined
-	let launched = false
+	let driver: BrowserDriver | undefined;
+	let launched = false;
 
 	async function ensureLaunched(): Promise<BrowserDriver> {
 		if (!driver) {
-			driver = await options.createDriver()
+			driver = await options.createDriver();
 		}
 		if (!launched) {
-			await driver.launchBrowser()
-			launched = true
+			await driver.launchBrowser();
+			launched = true;
 		}
-		return driver
+		return driver;
 	}
 
 	return createTool({
@@ -289,96 +316,99 @@ export function createBrowserTool(options: BrowserToolOptions): AgentTool {
 		description: BROWSER_TOOL_DESCRIPTION,
 		inputSchema: BROWSER_TOOL_INPUT_SCHEMA,
 		execute: async (input: unknown, context): Promise<ToolOutput> => {
-			const request = (input ?? {}) as BrowserToolInput
-			const action = readString(request.action)
+			const request = (input ?? {}) as BrowserToolInput;
+			const action = readString(request.action);
 			if (!action) {
-				return `No action was given. Pass one of: ${BROWSER_ACTIONS.join(", ")}.`
+				return `No action was given. Pass one of: ${BROWSER_ACTIONS.join(", ")}.`;
 			}
 			if (!(BROWSER_ACTIONS as readonly string[]).includes(action)) {
-				return `\`${action}\` is not a browser action. Use one of: ${BROWSER_ACTIONS.join(", ")}.`
+				return `\`${action}\` is not a browser action. Use one of: ${BROWSER_ACTIONS.join(", ")}.`;
 			}
 
 			if (action === "close") {
 				if (!driver || !launched) {
-					return "The browser was not open."
+					return "The browser was not open.";
 				}
 				try {
-					await driver.closeBrowser()
+					await driver.closeBrowser();
 				} catch (error) {
 					options.onError?.("[Browser] failed to close", error);
 				}
-				launched = false
-				driver = undefined
-				return "Browser closed."
+				launched = false;
+				driver = undefined;
+				return "Browser closed.";
 			}
 
-			let result: BrowserActionResult
-			let target: string | undefined
+			let result: BrowserActionResult;
+			let target: string | undefined;
 			try {
-				const session = await ensureLaunched()
+				const session = await ensureLaunched();
 				switch (action) {
 					case "open": {
-						const url = readString(request.url)
+						const url = readString(request.url);
 						if (!url) {
-							return "`open` needs a `url`. Pass the page to load, or the absolute path of a local file."
+							return "`open` needs a `url`. Pass the page to load, or the absolute path of a local file.";
 						}
-						target = toNavigableUrl(url, options.cwd)
-						result = await session.navigateToUrl(target)
-						break
+						target = toNavigableUrl(url, options.cwd);
+						result = await session.navigateToUrl(target);
+						break;
 					}
 					case "click": {
-						const coordinate = readString(request.coordinate)
+						const coordinate = readString(request.coordinate);
 						if (!coordinate || !/^\s*\d+\s*,\s*\d+\s*$/.test(coordinate)) {
-							return '`click` needs a `coordinate` of the form "x,y" in page pixels.'
+							return '`click` needs a `coordinate` of the form "x,y" in page pixels.';
 						}
-						result = await session.click(coordinate.replace(/\s+/g, ""))
-						break
+						result = await session.click(coordinate.replace(/\s+/g, ""));
+						break;
 					}
 					case "type": {
-						const text = readString(request.text)
+						const text = readString(request.text);
 						if (text === undefined) {
-							return "`type` needs `text` to type."
+							return "`type` needs `text` to type.";
 						}
-						result = await session.type(text)
-						break
+						result = await session.type(text);
+						break;
 					}
 					case "scroll_down":
-						result = await session.scrollDown()
-						break
+						result = await session.scrollDown();
+						break;
 					default:
-						result = await session.scrollUp()
-						break
+						result = await session.scrollUp();
+						break;
 				}
 			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error)
+				const message = error instanceof Error ? error.message : String(error);
 				options.onError?.(`[Browser] ${action} failed`, error);
-				return `The browser could not ${action}: ${message}`
+				return `The browser could not ${action}: ${message}`;
 			}
 
-			const rendered = renderBrowserResult(action, result, target)
+			const rendered = renderBrowserResult(action, result, target);
 			const located = await locateParseError(
 				result.currentUrl ?? target,
 				result.logs ?? "",
 				options.readFile ?? ((filePath) => fs.readFile(filePath, "utf-8")),
 				options.onError,
-			)
-			const text = located ? `${rendered}\n\n${located}` : rendered
+			);
+			const text = located ? `${rendered}\n\n${located}` : rendered;
 
 			// A screenshot is only worth its tokens to a model that can see it.
 			// The metadata defaults to true when a model declares no capabilities
 			// at all, so this asks for an explicit yes: sending an image to a
 			// text-only model spends the context window on nothing it can read.
-			if (context?.metadata?.modelSupportsImages !== true || !result.screenshot) {
-				return text
+			if (
+				context?.metadata?.modelSupportsImages !== true ||
+				!result.screenshot
+			) {
+				return text;
 			}
-			const image = splitDataUrl(result.screenshot)
+			const image = splitDataUrl(result.screenshot);
 			if (!image) {
-				return text
+				return text;
 			}
 			return [
 				{ type: "text", text },
 				{ type: "image", data: image.data, mediaType: image.mediaType },
-			]
+			];
 		},
-	})
+	});
 }

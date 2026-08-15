@@ -11,6 +11,12 @@ import {
 	providerReasoningRouteMatches,
 	resolveGeminiThinkingMode,
 } from "../model-facts";
+import {
+	buildOllamaSamplingOptions,
+	readOllamaNumCtx,
+	readOllamaNumPredict,
+	readOllamaSamplingOptions,
+} from "../vendors/ollama";
 import { buildGatewayReasoningOptions } from "./anthropic-compatible";
 import { buildOpenAINativeProviderOptions } from "./generic-compatible";
 import {
@@ -26,12 +32,6 @@ import type {
 	ProviderOptionSuppression,
 } from "./provider-options-types";
 import { buildOpenRouterReasoningOptions } from "./reasoning-codecs";
-import {
-	buildOllamaSamplingOptions,
-	readOllamaNumCtx,
-	readOllamaNumPredict,
-	readOllamaSamplingOptions,
-} from "../vendors/ollama";
 import {
 	buildProviderAndAliasPatch,
 	buildThinkingPatch,
@@ -568,9 +568,7 @@ const ollamaNativeOptionsRule: ProviderOptionRule = {
 					// Before the sampler, so a `num_predict` the user configured in
 					// the Ollama panel still wins — this only fills in the cap the
 					// session already believes it is sending.
-					...(numPredict !== undefined
-						? { num_predict: numPredict }
-						: {}),
+					...(numPredict !== undefined ? { num_predict: numPredict } : {}),
 					...buildOllamaSamplingOptions(
 						readOllamaSamplingOptions(input.context.config),
 					),

@@ -74,7 +74,9 @@ describe("run_commands with QA credentials configured", () => {
 	it("gives a command the credential it named", async () => {
 		const { tool, calls } = makeTool();
 
-		await run(tool, { commands: ['curl -u "$QA_USER:$QA_PASSWORD" https://staging'] });
+		await run(tool, {
+			commands: ['curl -u "$QA_USER:$QA_PASSWORD" https://staging'],
+		});
 
 		expect(calls[0].options?.env).toEqual({
 			QA_USER: "qa-account@example.test",
@@ -105,7 +107,9 @@ describe("run_commands with QA credentials configured", () => {
 
 		await run(tool, { commands: ["echo $QA_USER", "ls -la"] });
 
-		expect(calls[0].options?.env).toEqual({ QA_USER: "qa-account@example.test" });
+		expect(calls[0].options?.env).toEqual({
+			QA_USER: "qa-account@example.test",
+		});
 		expect(calls[1].options?.env).toBeUndefined();
 	});
 
@@ -172,10 +176,13 @@ describe("run_commands with QA credentials configured", () => {
 	// nameable on the next request rather than the next run.
 	it("picks up a credential added after the tool was built", () => {
 		const credentials: QaCredential[] = [];
-		const tool = createShellTool(vi.fn(async () => "ok"), {
-			cwd: "/workspace",
-			qaCredentials: () => credentials,
-		});
+		const tool = createShellTool(
+			vi.fn(async () => "ok"),
+			{
+				cwd: "/workspace",
+				qaCredentials: () => credentials,
+			},
+		);
 
 		expect(tool.description).not.toContain("QA_TOKEN");
 
@@ -187,7 +194,10 @@ describe("run_commands with QA credentials configured", () => {
 
 describe("run_commands with no QA credentials configured", () => {
 	it("says nothing about credentials in its description", () => {
-		const tool = createShellTool(vi.fn(async () => "ok"), { cwd: "/workspace" });
+		const tool = createShellTool(
+			vi.fn(async () => "ok"),
+			{ cwd: "/workspace" },
+		);
 
 		expect(tool.description).not.toContain("QA credentials");
 	});

@@ -230,20 +230,21 @@ const SearchOptionFields = {
  * which stripped the unknown key, so the search silently ran at the default of
  * one match per file.
  */
-export const SearchCodebaseUnionInputSchema = z.union([
-	SearchCodebaseInputSchema,
-	z.array(z.string()).transform((queries) => ({ queries })),
-	z.string().transform((query) => ({ queries: [query] })),
-	z
-		.object({ queries: z.string(), ...SearchOptionFields })
-		.transform(({ queries, ...rest }) => ({ queries: [queries], ...rest })),
-	z
-		.object({ query: z.array(z.string()), ...SearchOptionFields })
-		.transform(({ query, ...rest }) => ({ queries: query, ...rest })),
-	z
-		.object({ query: z.string(), ...SearchOptionFields })
-		.transform(({ query, ...rest }) => ({ queries: [query], ...rest })),
-])
+export const SearchCodebaseUnionInputSchema = z
+	.union([
+		SearchCodebaseInputSchema,
+		z.array(z.string()).transform((queries) => ({ queries })),
+		z.string().transform((query) => ({ queries: [query] })),
+		z
+			.object({ queries: z.string(), ...SearchOptionFields })
+			.transform(({ queries, ...rest }) => ({ queries: [queries], ...rest })),
+		z
+			.object({ query: z.array(z.string()), ...SearchOptionFields })
+			.transform(({ query, ...rest }) => ({ queries: query, ...rest })),
+		z
+			.object({ query: z.string(), ...SearchOptionFields })
+			.transform(({ query, ...rest }) => ({ queries: [query], ...rest })),
+	])
 	// Piped back through the canonical schema so the caller is handed one shape
 	// rather than a six-way union it has to narrow. Every branch already produces
 	// something this accepts; the pipe is what makes that a type as well as a

@@ -1,5 +1,5 @@
-import { renderPromptTemplate } from "@cline/shared";
 import type { RenderedPromptTemplate } from "@cline/shared";
+import { renderPromptTemplate } from "@cline/shared";
 import { getBuiltinPromptTemplates } from "./builtin-templates";
 import {
 	loadPromptTemplates,

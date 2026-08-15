@@ -22,12 +22,16 @@ describe("normalizeParallelSessions", () => {
 	// `undefined` rather than the default, so a caller can tell "never
 	// configured" from "configured as 1" -- the settings field shows an empty
 	// box for the first and a 1 for the second.
-	it.each([[undefined], [null], [0], [-3], ["" as unknown], ["abc" as unknown]])(
-		"reports nothing for %s",
-		(value) => {
-			expect(normalizeParallelSessions(value)).toBeUndefined();
-		},
-	);
+	it.each([
+		[undefined],
+		[null],
+		[0],
+		[-3],
+		["" as unknown],
+		["abc" as unknown],
+	])("reports nothing for %s", (value) => {
+		expect(normalizeParallelSessions(value)).toBeUndefined();
+	});
 });
 
 describe("resolveAgentSlotLimit", () => {

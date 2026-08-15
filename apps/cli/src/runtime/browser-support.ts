@@ -147,7 +147,9 @@ export function createCliBrowserDriver(options?: {
 		// Imported here rather than at module load: a session that never browses
 		// should not pay puppeteer's start-up cost, and a CLI installed without
 		// it should fail when the tool is used rather than when it starts.
-		const puppeteer = (await import("puppeteer-core")) as unknown as PuppeteerLike;
+		const puppeteer = (await import(
+			"puppeteer-core"
+		)) as unknown as PuppeteerLike;
 		browser = await puppeteer.launch({
 			executablePath,
 			headless: options?.headless ?? true,

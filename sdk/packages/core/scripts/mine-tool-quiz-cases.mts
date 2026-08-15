@@ -101,7 +101,10 @@ function errorTextOf(block: Record<string, unknown>): string | undefined {
 		: undefined;
 }
 
-export function mineSession(sessionId: string, messages: unknown[]): MinedCase[] {
+export function mineSession(
+	sessionId: string,
+	messages: unknown[],
+): MinedCase[] {
 	const calls = new Map<string, ToolCall>();
 	const ordered: ToolCall[] = [];
 	const failures = new Map<string, string>();

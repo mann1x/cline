@@ -14,7 +14,11 @@ describe("what a spawned command can actually read", () => {
 	it("inherits the parent's environment when nothing is withheld", async () => {
 		process.env.CLINE_TEST_SECRET = "inherited-value";
 		try {
-			const output = await shell("echo $CLINE_TEST_SECRET", process.cwd(), CONTEXT);
+			const output = await shell(
+				"echo $CLINE_TEST_SECRET",
+				process.cwd(),
+				CONTEXT,
+			);
 
 			expect(output.trim()).toBe("inherited-value");
 		} finally {
@@ -27,9 +31,14 @@ describe("what a spawned command can actually read", () => {
 	it("cannot read a withheld variable that the parent holds", async () => {
 		process.env.CLINE_TEST_SECRET = "inherited-value";
 		try {
-			const output = await shell("echo [$CLINE_TEST_SECRET]", process.cwd(), CONTEXT, {
-				withhold: ["CLINE_TEST_SECRET"],
-			});
+			const output = await shell(
+				"echo [$CLINE_TEST_SECRET]",
+				process.cwd(),
+				CONTEXT,
+				{
+					withhold: ["CLINE_TEST_SECRET"],
+				},
+			);
 
 			expect(output.trim()).toBe("[]");
 		} finally {
@@ -42,10 +51,15 @@ describe("what a spawned command can actually read", () => {
 	it("reads it again when the same command asked for it", async () => {
 		process.env.CLINE_TEST_SECRET = "inherited-value";
 		try {
-			const output = await shell("echo $CLINE_TEST_SECRET", process.cwd(), CONTEXT, {
-				withhold: ["CLINE_TEST_SECRET"],
-				env: { CLINE_TEST_SECRET: "granted-value" },
-			});
+			const output = await shell(
+				"echo $CLINE_TEST_SECRET",
+				process.cwd(),
+				CONTEXT,
+				{
+					withhold: ["CLINE_TEST_SECRET"],
+					env: { CLINE_TEST_SECRET: "granted-value" },
+				},
+			);
 
 			expect(output.trim()).toBe("granted-value");
 		} finally {

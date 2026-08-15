@@ -3,7 +3,11 @@ import { describeAbortSource } from "./format";
 
 describe("describeAbortSource", () => {
 	it.each([
-		["a timeout", { abortRequested: false, timedOut: true }, "aborted after timeout"],
+		[
+			"a timeout",
+			{ abortRequested: false, timedOut: true },
+			"aborted after timeout",
+		],
 		["a local abort", { abortRequested: true, timedOut: false }, "aborted"],
 	])("names %s from what this process knows", (_label, input, expected) => {
 		expect(describeAbortSource(input)).toBe(expected);

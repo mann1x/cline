@@ -10,13 +10,13 @@ import type {
 	ITelemetryService,
 	TextContent,
 } from "@cline/shared";
+import type { QaCredential } from "./qa-credentials";
 import type {
 	ApplyPatchInput,
 	EditFileInput,
 	ReadFileRequest,
 	StructuredCommandInput,
 } from "./schemas";
-import type { QaCredential } from "./qa-credentials";
 import type { TaskProgressTracker } from "./task-progress";
 
 // =============================================================================

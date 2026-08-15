@@ -195,8 +195,11 @@ export async function createOpencotiProviderModule(
 	// is one to honour, the fetch that honours it goes first.
 	const injected = localStreamFetch();
 	const suppliedFetch =
-		config.fetch && config.fetch !== globalThis.fetch ? config.fetch : undefined;
-	const baseFetch = dispatcher && injected ? injected : (suppliedFetch ?? injected);
+		config.fetch && config.fetch !== globalThis.fetch
+			? config.fetch
+			: undefined;
+	const baseFetch =
+		dispatcher && injected ? injected : (suppliedFetch ?? injected);
 	const request = readOpencotiRequestOptions(context);
 	context.logger?.debug(
 		`[opencoti] pool=${request.poolId ?? "none"} session=${

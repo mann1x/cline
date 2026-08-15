@@ -112,7 +112,6 @@ describe("a configured agent's connection", () => {
 			),
 		).toThrow(/reviewer.*anthropic/s);
 	});
-
 });
 
 describe("an agent that names a saved profile", () => {
@@ -128,7 +127,12 @@ describe("an agent that names a saved profile", () => {
 	// front of them in Settings. It also carries the context window, which has
 	// nowhere to live in an agent file at all.
 	it("takes the profile's provider, model and connection", () => {
-		const runtime = buildAgentRuntimeConfig(BASE, agent({ profile: "vision-box" }), undefined, () => PROFILE);
+		const runtime = buildAgentRuntimeConfig(
+			BASE,
+			agent({ profile: "vision-box" }),
+			undefined,
+			() => PROFILE,
+		);
 
 		expect(runtime.providerId).toBe("anthropic");
 		expect(runtime.modelId).toBe("claude-sonnet-4-6");
@@ -148,7 +152,9 @@ describe("an agent that names a saved profile", () => {
 
 		expect(runtime.modelId).toBe("claude-haiku-4-5");
 		expect(runtime.apiKey).toBe("profile-key");
-		expect((runtime.providerConfig as { modelId?: string }).modelId).toBe("claude-haiku-4-5");
+		expect((runtime.providerConfig as { modelId?: string }).modelId).toBe(
+			"claude-haiku-4-5",
+		);
 	});
 
 	// The point of a profile is the settings it carries. Falling back to the
@@ -167,13 +173,22 @@ describe("an agent that names a saved profile", () => {
 		);
 
 		expect(runtime.modelId).toBe("small-model");
-		expect((runtime.providerConfig as { contextWindow?: number }).contextWindow).toBe(8_192);
+		expect(
+			(runtime.providerConfig as { contextWindow?: number }).contextWindow,
+		).toBe(8_192);
 	});
 
 	it("keeps the host's fetch across a profile switch", () => {
-		const runtime = buildAgentRuntimeConfig(BASE, agent({ profile: "vision-box" }), undefined, () => PROFILE);
+		const runtime = buildAgentRuntimeConfig(
+			BASE,
+			agent({ profile: "vision-box" }),
+			undefined,
+			() => PROFILE,
+		);
 
-		expect((runtime.providerConfig as { fetch?: unknown }).fetch).toBe(sessionFetch);
+		expect((runtime.providerConfig as { fetch?: unknown }).fetch).toBe(
+			sessionFetch,
+		);
 	});
 
 	// Refused rather than run on the session's model: a profile that was renamed
@@ -183,12 +198,22 @@ describe("an agent that names a saved profile", () => {
 		["the profile has been renamed or deleted", () => undefined],
 	])("refuses an agent whose profile cannot be resolved because %s", (_label, resolve) => {
 		expect(() =>
-			buildAgentRuntimeConfig(BASE, agent({ profile: "gone" }), undefined, resolve as never),
+			buildAgentRuntimeConfig(
+				BASE,
+				agent({ profile: "gone" }),
+				undefined,
+				resolve as never,
+			),
 		).toThrow(/reviewer.*gone/s);
 	});
 
 	it("leaves an agent naming no profile alone", () => {
-		const runtime = buildAgentRuntimeConfig(BASE, agent(), undefined, () => PROFILE);
+		const runtime = buildAgentRuntimeConfig(
+			BASE,
+			agent(),
+			undefined,
+			() => PROFILE,
+		);
 
 		expect(runtime.providerId).toBe("ollama");
 		expect(runtime.modelId).toBe("lead-model");

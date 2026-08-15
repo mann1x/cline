@@ -21,11 +21,15 @@ function input(fields: Partial<EditFileInput>): EditFileInput {
  */
 describe("getEditorSizeError", () => {
 	it("passes an ordinary edit", () => {
-		expect(getEditorSizeError(input({ old_text: "a", new_text: "b" }))).toBeNull();
+		expect(
+			getEditorSizeError(input({ old_text: "a", new_text: "b" })),
+		).toBeNull();
 	});
 
 	it("refuses an oversized old_text and points at line numbers instead", () => {
-		const error = getEditorSizeError(input({ old_text: OVERSIZED, new_text: "b" }));
+		const error = getEditorSizeError(
+			input({ old_text: OVERSIZED, new_text: "b" }),
+		);
 		expect(error).toContain("old_text was");
 		expect(error).toContain("start_line");
 	});
@@ -37,7 +41,9 @@ describe("getEditorSizeError", () => {
 	it("exempts a rewrite that starts at line 1, the shape the tool asks for", () => {
 		// The executor's range guard decides this one; it can see the line count.
 		expect(
-			getEditorSizeError(input({ start_line: 1, end_line: 137, new_text: OVERSIZED })),
+			getEditorSizeError(
+				input({ start_line: 1, end_line: 137, new_text: OVERSIZED }),
+			),
 		).toBeNull();
 	});
 
@@ -60,12 +66,16 @@ describe("getEditorSizeError", () => {
 	});
 
 	it("still advises line numbers when there is no range to split", () => {
-		const error = getEditorSizeError(input({ old_text: "a", new_text: OVERSIZED }));
+		const error = getEditorSizeError(
+			input({ old_text: "a", new_text: OVERSIZED }),
+		);
 		expect(error).toContain("start_line");
 	});
 
 	it("states the configured limit so the message matches the tool description", () => {
-		const error = getEditorSizeError(input({ old_text: "a", new_text: OVERSIZED }));
+		const error = getEditorSizeError(
+			input({ old_text: "a", new_text: OVERSIZED }),
+		);
 		expect(error).toContain(String(EDITOR_ARG_CHAR_LIMIT));
 	});
 });
@@ -76,27 +86,45 @@ describe("run_commands input shapes", () => {
 	// "definitively non-functional in this environment". The union took `cmd` at
 	// the top level but not inside `commands`, and `args` only as an array.
 	it("takes the spellings a model actually sends", () => {
-		expect(normalizeRunCommandsInput({ commands: [{ cmd: "echo hi" }] })).toEqual([{ command: "echo hi" }])
-		expect(normalizeRunCommandsInput({ commands: [{ command: "echo", args: "hi" }] })).toEqual([
+		expect(
+			normalizeRunCommandsInput({ commands: [{ cmd: "echo hi" }] }),
+		).toEqual([{ command: "echo hi" }]);
+		expect(
+			normalizeRunCommandsInput({
+				commands: [{ command: "echo", args: "hi" }],
+			}),
+		).toEqual([{ command: "echo", args: ["hi"] }]);
+		expect(normalizeRunCommandsInput({ commands: [["echo", "hi"]] })).toEqual([
 			{ command: "echo", args: ["hi"] },
-		])
-		expect(normalizeRunCommandsInput({ commands: [["echo", "hi"]] })).toEqual([{ command: "echo", args: ["hi"] }])
-		expect(normalizeRunCommandsInput({ shell_command: "echo hi" })).toEqual(["echo hi"])
-		expect(normalizeRunCommandsInput({ script: "echo hi" })).toEqual(["echo hi"])
-	})
+		]);
+		expect(normalizeRunCommandsInput({ shell_command: "echo hi" })).toEqual([
+			"echo hi",
+		]);
+		expect(normalizeRunCommandsInput({ script: "echo hi" })).toEqual([
+			"echo hi",
+		]);
+	});
 
 	// A bare list of strings has always meant a list of shell commands. The
 	// argv branch would read the same value as one command plus arguments, so
 	// only the order of the union keeps them apart.
 	it("still reads a list of strings as a list of commands", () => {
-		expect(normalizeRunCommandsInput(["echo hi"])).toEqual(["echo hi"])
-		expect(normalizeRunCommandsInput(["echo hi", "ls"])).toEqual(["echo hi", "ls"])
-		expect(normalizeRunCommandsInput({ commands: ["echo hi", "ls"] })).toEqual(["echo hi", "ls"])
-	})
+		expect(normalizeRunCommandsInput(["echo hi"])).toEqual(["echo hi"]);
+		expect(normalizeRunCommandsInput(["echo hi", "ls"])).toEqual([
+			"echo hi",
+			"ls",
+		]);
+		expect(normalizeRunCommandsInput({ commands: ["echo hi", "ls"] })).toEqual([
+			"echo hi",
+			"ls",
+		]);
+	});
 
 	// A shape nobody anticipated still has to leave the model something to act
 	// on: a bare "Invalid input" is what it retried identically five times.
 	it("shows the caller what it sent when nothing matches", () => {
-		expect(() => normalizeRunCommandsInput({ nonsense: 1 })).toThrow(/Received: \{"nonsense":1\}/)
-	})
-})
+		expect(() => normalizeRunCommandsInput({ nonsense: 1 })).toThrow(
+			/Received: \{"nonsense":1\}/,
+		);
+	});
+});

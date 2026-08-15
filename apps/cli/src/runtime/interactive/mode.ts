@@ -130,7 +130,9 @@ export async function applyInteractiveModeConfig(input: {
 		(tool) => tool.name !== input.switchToActModeTool.name,
 	);
 	input.config.extraTools =
-		input.mode === "plan" ? [...hostTools, input.switchToActModeTool] : hostTools;
+		input.mode === "plan"
+			? [...hostTools, input.switchToActModeTool]
+			: hostTools;
 	input.config.systemPrompt = await resolveSystemPrompt({
 		cwd: input.config.cwd,
 		providerId: input.config.providerId,

@@ -110,7 +110,9 @@ describe("holding the run back", () => {
 	});
 
 	it("lets a run end when nothing was edited at all", () => {
-		expect(createEditVerificationCompletionGuard(tracker(), config)()).toBeUndefined();
+		expect(
+			createEditVerificationCompletionGuard(tracker(), config)(),
+		).toBeUndefined();
 	});
 
 	// A host with no linter must not get a guard that can never be satisfied.

@@ -12,12 +12,12 @@ import type { AgentToolContext } from "@cline/shared";
 import { resolveExistingFilePath } from "@cline/shared/storage";
 import type { ReadFileRequest } from "../schemas";
 import type { FileReadExecutor } from "../types";
-import type { ReadReceipts } from "./read-receipts";
 import {
 	MAX_LINE_CHARS,
 	MAX_READ_LINES,
 	MAX_READ_OUTPUT_CHARS,
 } from "./output-limits";
+import type { ReadReceipts } from "./read-receipts";
 
 const IMAGE_MEDIA_TYPES = new Map<string, string>([
 	[".gif", "image/gif"],

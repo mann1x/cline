@@ -16,7 +16,10 @@ describe("--qa-credential", () => {
 	// otherwise fail inside a QA command, for a reason nothing connects back to a
 	// missing export.
 	it("says so when a named variable is not set", () => {
-		const { credentials, notes } = resolveQaCredentialsFromEnv(["QA_PASSWORD"], {});
+		const { credentials, notes } = resolveQaCredentialsFromEnv(
+			["QA_PASSWORD"],
+			{},
+		);
 
 		expect(credentials).toEqual([]);
 		expect(notes).toEqual(["QA_PASSWORD is not set in this environment"]);
@@ -24,7 +27,8 @@ describe("--qa-credential", () => {
 
 	it("treats an empty value as not set", () => {
 		expect(
-			resolveQaCredentialsFromEnv(["QA_PASSWORD"], { QA_PASSWORD: "" }).credentials,
+			resolveQaCredentialsFromEnv(["QA_PASSWORD"], { QA_PASSWORD: "" })
+				.credentials,
 		).toEqual([]);
 	});
 

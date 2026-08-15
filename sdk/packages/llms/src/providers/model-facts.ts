@@ -386,7 +386,9 @@ export type ReasoningHistoryMode = "all" | "last" | "none";
  * request the gateway will send -- have only the id, and for the providers this
  * rule names that is enough.
  */
-export function reasoningHistoryModeForProvider(providerId: string | undefined): ReasoningHistoryMode {
+export function reasoningHistoryModeForProvider(
+	providerId: string | undefined,
+): ReasoningHistoryMode {
 	switch ((providerId ?? "").toLowerCase()) {
 		case "cerebras":
 		// Ollama's provider drops every reasoning part before the request
@@ -433,4 +435,3 @@ export function resolveReasoningHistoryMode(
 	}
 	return "all";
 }
-

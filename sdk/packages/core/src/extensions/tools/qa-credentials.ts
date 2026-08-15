@@ -147,7 +147,10 @@ export function normalizeQaCredentials(
 			continue;
 		}
 		if (seen.has(name)) {
-			rejected.push({ name, reason: "a credential with this name is already set" });
+			rejected.push({
+				name,
+				reason: "a credential with this name is already set",
+			});
 			continue;
 		}
 		if (value.length === 0) {
@@ -176,9 +179,7 @@ export function qaCredentialNames(
 }
 
 /** The text of a command, whichever shape `run_commands` delivered it in. */
-export function commandText(
-	command: string | StructuredCommandInput,
-): string {
+export function commandText(command: string | StructuredCommandInput): string {
 	if (typeof command === "string") {
 		return command;
 	}
@@ -271,8 +272,7 @@ export function createSecretRedactor(
 ): (text: string) => string {
 	const maskable = credentials
 		.filter(
-			(credential) =>
-				credential.value.length >= QA_CREDENTIAL_MIN_VALUE_LENGTH,
+			(credential) => credential.value.length >= QA_CREDENTIAL_MIN_VALUE_LENGTH,
 		)
 		.slice()
 		.sort((a, b) => b.value.length - a.value.length);
@@ -285,7 +285,9 @@ export function createSecretRedactor(
 		}
 		let masked = text;
 		for (const credential of maskable) {
-			masked = masked.split(credential.value).join(`[redacted: ${credential.name}]`);
+			masked = masked
+				.split(credential.value)
+				.join(`[redacted: ${credential.name}]`);
 		}
 		return masked;
 	};

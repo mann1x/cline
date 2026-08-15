@@ -5,9 +5,9 @@ import {
 } from "@cline/llms";
 import type {
 	AgentAfterToolResult,
-	AgentImageToDescribe,
 	AgentBeforeModelResult,
 	AgentBeforeToolResult,
+	AgentImageToDescribe,
 	AgentMessage,
 	AgentMessagePart,
 	AgentModel,
@@ -868,7 +868,6 @@ export class AgentRuntime {
 		return this.state.usage.outputTokens > before.outputTokens;
 	}
 
-
 	/**
 	 * Condense a truncated turn's reasoning, if the host asked to be given the
 	 * chance, and never at the cost of the retry it exists to help.
@@ -1371,15 +1370,15 @@ export class AgentRuntime {
 			this.config.logger?.log?.(
 				`Agent loop caught error (${status}): ${normalized.name}: ${normalized.message}`,
 				{
-				severity: status === "failed" ? "error" : "warn",
-				agentId: this.state.agentId,
-				agentRole: this.state.agentRole,
-				runId: result.runId,
-				status,
-				iteration: this.state.iteration,
-				errorName: normalized.name,
-				errorMessage: normalized.message,
-				assistantContentPartCount: lastAssistantMessage?.content.length ?? 0,
+					severity: status === "failed" ? "error" : "warn",
+					agentId: this.state.agentId,
+					agentRole: this.state.agentRole,
+					runId: result.runId,
+					status,
+					iteration: this.state.iteration,
+					errorName: normalized.name,
+					errorMessage: normalized.message,
+					assistantContentPartCount: lastAssistantMessage?.content.length ?? 0,
 				},
 			);
 			await this.callAfterRunHooks(result);
@@ -1728,9 +1727,7 @@ export class AgentRuntime {
 			signal: this.abortController?.signal,
 			options: mergeModelOptions(this.config.modelOptions, {
 				metadata: modelRequestMetadata,
-				...(retryOutputCap !== undefined
-					? { maxTokens: retryOutputCap }
-					: {}),
+				...(retryOutputCap !== undefined ? { maxTokens: retryOutputCap } : {}),
 			}),
 		};
 

@@ -308,9 +308,9 @@ export {
 	resolveSessionPromptTemplateFrom,
 	resolveSkillsConfigSearchPaths,
 	resolveWorkflowsConfigSearchPaths,
-	SKILLS_CONFIG_DIRECTORY_NAME,
 	type SessionPromptTemplateRequest,
 	type SessionPromptTemplateResult,
+	SKILLS_CONFIG_DIRECTORY_NAME,
 	summarizeToolCallSignatures,
 	type ToolCallSignature,
 	UnifiedConfigFileWatcher,
@@ -948,11 +948,11 @@ export {
 // language servers and the CLI brings its own.
 export {
 	BROWSER_ACTIONS,
-	type BrowserActionResult,
-	type BrowserDriver,
 	BROWSER_TOOL_DESCRIPTION,
 	BROWSER_TOOL_INPUT_SCHEMA,
 	BROWSER_TOOL_NAME,
+	type BrowserActionResult,
+	type BrowserDriver,
 	type BrowserToolAction,
 	type BrowserToolOptions,
 	createBrowserTool,
@@ -961,20 +961,6 @@ export {
 	splitDataUrl,
 	toNavigableUrl,
 } from "./extensions/tools/browser";
-export {
-	CODE_INTEL_OPERATIONS,
-	CODE_INTEL_TOOL_DESCRIPTION,
-	CODE_INTEL_TOOL_INPUT_SCHEMA,
-	CODE_INTEL_TOOL_NAME,
-	type CodeIntelLocation,
-	type CodeIntelOperation,
-	type CodeIntelProvider,
-	type CodeIntelSymbol,
-	type CodeIntelToolOptions,
-	createCodeIntelTool,
-	parseCodeIntelRequest,
-	type ParsedCodeIntelRequest,
-} from "./extensions/tools/code-intel";
 export {
 	buildCheckFileDescription,
 	buildLintCommand,
@@ -988,6 +974,20 @@ export {
 	LINT_COMMAND_FILE_PLACEHOLDER,
 	type LintCommandResult,
 } from "./extensions/tools/check-file";
+export {
+	CODE_INTEL_OPERATIONS,
+	CODE_INTEL_TOOL_DESCRIPTION,
+	CODE_INTEL_TOOL_INPUT_SCHEMA,
+	CODE_INTEL_TOOL_NAME,
+	type CodeIntelLocation,
+	type CodeIntelOperation,
+	type CodeIntelProvider,
+	type CodeIntelSymbol,
+	type CodeIntelToolOptions,
+	createCodeIntelTool,
+	type ParsedCodeIntelRequest,
+	parseCodeIntelRequest,
+} from "./extensions/tools/code-intel";
 // The bracket scanner is host-independent and two hosts want it: the checker
 // above, and VS Code's own `check_file`, which pairs it with the language
 // servers this one has no access to.

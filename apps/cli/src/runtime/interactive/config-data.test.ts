@@ -26,7 +26,9 @@ import { createInteractiveConfigDataLoader } from "./config-data";
  * `@cline/core` is aliased to source in `vitest.config.ts`, so this reaches the
  * `writeFileSync` in `plugin-mcp-settings.ts` that the code under test calls.
  */
-const unwritable = vi.hoisted(() => ({ path: undefined as string | undefined }));
+const unwritable = vi.hoisted(() => ({
+	path: undefined as string | undefined,
+}));
 
 vi.mock("node:fs", async (importActual) => {
 	const actual = await importActual<typeof import("node:fs")>();
@@ -1034,7 +1036,9 @@ Review with the bundled skill.`,
 		const linear = data.mcp.find((item) => item.name === "linear");
 		const docs = data.mcp.find((item) => item.name === "docs");
 
-		expect(linear?.description).toBe("streamableHttp, oauth error, timeout 60s");
+		expect(linear?.description).toBe(
+			"streamableHttp, oauth error, timeout 60s",
+		);
 		expect(linear?.loadError).toBe("OAuth authorization failed");
 		expect(docs?.description).toBe("sse, oauth authorized, timeout 60s");
 		expect(docs?.loadError).toBeUndefined();

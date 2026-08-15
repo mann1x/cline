@@ -169,7 +169,10 @@ describe("createAgentModelFromConfig", () => {
 				providerId: "ollama",
 				modelId: "v7-coder_tb:vision-iq4_nl",
 				tools: [],
-				providerConfig: { providerId: "ollama", modelId: "v7-coder_tb:vision-iq4_nl" },
+				providerConfig: {
+					providerId: "ollama",
+					modelId: "v7-coder_tb:vision-iq4_nl",
+				},
 			} as never,
 			undefined,
 		);
@@ -178,7 +181,9 @@ describe("createAgentModelFromConfig", () => {
 			[{ providerConfigs: Array<{ options?: Record<string, unknown> }> }]
 		>;
 		const call = calls[calls.length - 1][0];
-		expect(call.providerConfigs[0].options ?? {}).not.toHaveProperty("sampling");
+		expect(call.providerConfigs[0].options ?? {}).not.toHaveProperty(
+			"sampling",
+		);
 	});
 
 	it("preserves model capabilities and metadata when configuring gateway models", async () => {

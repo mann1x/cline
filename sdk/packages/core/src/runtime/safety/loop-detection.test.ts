@@ -192,7 +192,9 @@ describe("a call the tool has declared a no-op", () => {
 		// after that the countdown carries the message.
 		const second = tracker.inspect(call);
 		expect(second.message).not.toContain("already succeeded");
-		expect(second.message).toContain("unchanged from the one that was just refused");
+		expect(second.message).toContain(
+			"unchanged from the one that was just refused",
+		);
 	});
 
 	// An ordinary failure may stop failing — a range that had moved, a read that

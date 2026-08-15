@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it } from "vitest";
 
 /**
  * What the vendored patch guarantees about `ollama-ai-provider-v2`.
@@ -11,35 +11,36 @@ import { describe, expect, it } from "vitest"
  */
 describe("ollama-ai-provider-v2 patch contract", () => {
 	it("accepts a thinking level, not just a boolean", async () => {
-		const mod = await import("ollama-ai-provider-v2")
-		const schema = (mod as unknown as { ollamaProviderOptions?: unknown }).ollamaProviderOptions
+		const mod = await import("ollama-ai-provider-v2");
+		const schema = (mod as unknown as { ollamaProviderOptions?: unknown })
+			.ollamaProviderOptions;
 
 		// The schema is not exported; assert through the shipped bundle instead.
 		if (!schema) {
-			const { readFileSync } = await import("node:fs")
-			const { createRequire } = await import("node:module")
-			const require = createRequire(import.meta.url)
-			const entry = require.resolve("ollama-ai-provider-v2")
-			const source = readFileSync(entry, "utf8")
+			const { readFileSync } = await import("node:fs");
+			const { createRequire } = await import("node:module");
+			const require = createRequire(import.meta.url);
+			const entry = require.resolve("ollama-ai-provider-v2");
+			const source = readFileSync(entry, "utf8");
 
 			// A level must survive as a level.
-			expect(source).toMatch(/think: \w+(\.\w+)?\.union\(\[/)
+			expect(source).toMatch(/think: \w+(\.\w+)?\.union\(\[/);
 			// ...and must not be collapsed to a boolean on the way to the wire.
-			expect(source).not.toContain("was mapped to think=true")
-			return
+			expect(source).not.toContain("was mapped to think=true");
+			return;
 		}
-		expect(schema).toBeDefined()
-	})
+		expect(schema).toBeDefined();
+	});
 
 	it("keeps options it does not name, so think_budget survives", async () => {
-		const { readFileSync } = await import("node:fs")
-		const { createRequire } = await import("node:module")
-		const require = createRequire(import.meta.url)
-		const entry = require.resolve("ollama-ai-provider-v2")
-		const source = readFileSync(entry, "utf8")
+		const { readFileSync } = await import("node:fs");
+		const { createRequire } = await import("node:module");
+		const require = createRequire(import.meta.url);
+		const entry = require.resolve("ollama-ai-provider-v2");
+		const source = readFileSync(entry, "utf8");
 
-		expect(source).toMatch(/\}\)\.catchall\(/)
-	})
+		expect(source).toMatch(/\}\)\.catchall\(/);
+	});
 
 	/**
 	 * Where the API prefix lives.
@@ -55,11 +56,11 @@ describe("ollama-ai-provider-v2 patch contract", () => {
 	 * real package build the URL and asserts the path it actually requests.
 	 */
 	it("requests /api/chat when given a configured origin", async () => {
-		const { createOllamaProviderModule } = await import("./ollama")
+		const { createOllamaProviderModule } = await import("./ollama");
 
-		const requested: string[] = []
+		const requested: string[] = [];
 		const fetchMock = (async (input: RequestInfo | URL) => {
-			requested.push(typeof input === "string" ? input : input.toString())
+			requested.push(typeof input === "string" ? input : input.toString());
 			return new Response(
 				`${JSON.stringify({
 					model: "m",
@@ -71,22 +72,31 @@ describe("ollama-ai-provider-v2 patch contract", () => {
 					eval_count: 1,
 				})}\n`,
 				{ status: 200, headers: { "content-type": "application/x-ndjson" } },
-			)
-		}) as typeof fetch
+			);
+		}) as typeof fetch;
 
 		const provider = await createOllamaProviderModule(
-			{ providerId: "ollama", baseUrl: "http://localhost:11434", fetch: fetchMock } as never,
 			{
-				provider: { id: "ollama", name: "Ollama", defaultModelId: "", models: [] },
+				providerId: "ollama",
+				baseUrl: "http://localhost:11434",
+				fetch: fetchMock,
+			} as never,
+			{
+				provider: {
+					id: "ollama",
+					name: "Ollama",
+					defaultModelId: "",
+					models: [],
+				},
 				model: { id: "m", name: "m", providerId: "ollama" },
 			} as never,
-		)
+		);
 
 		const stream = await provider.model("m").doStream({
 			prompt: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
-		} as never)
+		} as never);
 		// Drain so the request is actually issued and the mock is not left open.
-		const reader = (stream as { stream: ReadableStream }).stream.getReader()
+		const reader = (stream as { stream: ReadableStream }).stream.getReader();
 		while (!(await reader.read()).done) {
 			// no-op
 		}
@@ -94,6 +104,6 @@ describe("ollama-ai-provider-v2 patch contract", () => {
 		// Not `requested[0]`: the factory asks `/api/show` for the model's own
 		// `num_ctx` before the first completion. What this test pins is the
 		// path the package builds for a chat, not the order of the two.
-		expect(requested).toContain("http://localhost:11434/api/chat")
-	})
-})
+		expect(requested).toContain("http://localhost:11434/api/chat");
+	});
+});

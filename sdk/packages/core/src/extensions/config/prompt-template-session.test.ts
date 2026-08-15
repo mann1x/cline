@@ -89,8 +89,6 @@ describe("describeResolvedPromptTemplate", () => {
 	it("says so when nothing was resolved", () => {
 		expect(
 			describeResolvedPromptTemplate({ modelId: "some-model" }, undefined),
-		).toBe(
-			"[PromptTemplates] some-model → none; the built-in prompt applies",
-		);
+		).toBe("[PromptTemplates] some-model → none; the built-in prompt applies");
 	});
 });

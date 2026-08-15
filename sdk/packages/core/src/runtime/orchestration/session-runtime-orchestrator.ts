@@ -1191,9 +1191,7 @@ export class SessionRuntime {
 			afterTool: async (ctx) => {
 				const after = await hooks.afterTool?.(ctx);
 				const result = after?.result ?? ctx.result;
-				const warning = this.pendingLoopWarnings.get(
-					ctx.toolCall.toolCallId,
-				);
+				const warning = this.pendingLoopWarnings.get(ctx.toolCall.toolCallId);
 				if (warning === undefined) {
 					return after;
 				}
@@ -1681,9 +1679,7 @@ export class SessionRuntime {
 			// Carried across so a host has something better than a guess. The stop
 			// reason is set by whatever asked for the abort — the mistake tracker
 			// passes `outcome.reason` into `abort()` — and it stopped here.
-			...(runResult?.abortReason
-				? { abortReason: runResult.abortReason }
-				: {}),
+			...(runResult?.abortReason ? { abortReason: runResult.abortReason } : {}),
 			model: {
 				id: this.config.modelId,
 				provider: this.config.providerId,

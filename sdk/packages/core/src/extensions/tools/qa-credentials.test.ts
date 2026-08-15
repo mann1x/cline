@@ -24,26 +24,29 @@ describe("what the user is allowed to configure", () => {
 
 	// Setting these is code execution rather than authentication: LD_PRELOAD on a
 	// QA command changes what the command is.
-	it.each(["PATH", "LD_PRELOAD", "NODE_OPTIONS", "ld_preload"])(
-		"refuses %s, which controls how a process runs",
-		(name) => {
-			const { credentials, rejected } = normalizeQaCredentials([
-				{ name, value: "anything-long-enough" },
-			]);
+	it.each([
+		"PATH",
+		"LD_PRELOAD",
+		"NODE_OPTIONS",
+		"ld_preload",
+	])("refuses %s, which controls how a process runs", (name) => {
+		const { credentials, rejected } = normalizeQaCredentials([
+			{ name, value: "anything-long-enough" },
+		]);
 
-			expect(credentials).toEqual([]);
-			expect(rejected[0]?.reason).toMatch(/controls how a process runs/);
-		},
-	);
+		expect(credentials).toEqual([]);
+		expect(rejected[0]?.reason).toMatch(/controls how a process runs/);
+	});
 
 	it.each([
 		["2FA_CODE", /environment variable name/],
 		["QA PASSWORD", /environment variable name/],
 		["QA-PASSWORD", /environment variable name/],
 	])("refuses %s as a name", (name, reason) => {
-		expect(normalizeQaCredentials([{ name, value: "long-enough-value" }]).rejected[0]?.reason).toMatch(
-			reason,
-		);
+		expect(
+			normalizeQaCredentials([{ name, value: "long-enough-value" }]).rejected[0]
+				?.reason,
+		).toMatch(reason);
 	});
 
 	// A value this short appears inside ordinary words, so masking every
@@ -65,24 +68,26 @@ describe("what the user is allowed to configure", () => {
 			{ name: "QA_USER", value: "second-value-here" },
 		]);
 
-		expect(credentials).toEqual([{ name: "QA_USER", value: "first-value-here" }]);
+		expect(credentials).toEqual([
+			{ name: "QA_USER", value: "first-value-here" },
+		]);
 		expect(rejected[0]?.reason).toMatch(/already set/);
 	});
 
 	// Says so rather than dropping it: a credential that silently does not exist
 	// is indistinguishable from a QA run that failed for some other reason.
 	it("reports an empty value instead of ignoring the row", () => {
-		expect(normalizeQaCredentials([{ name: "QA_TOKEN", value: "" }]).rejected).toEqual([
-			{ name: "QA_TOKEN", reason: "has no value" },
-		]);
+		expect(
+			normalizeQaCredentials([{ name: "QA_TOKEN", value: "" }]).rejected,
+		).toEqual([{ name: "QA_TOKEN", reason: "has no value" }]);
 	});
 });
 
 describe("which commands get a credential", () => {
 	it("gives an unrelated command nothing", () => {
-		expect(
-			resolveCredentialEnv(CREDENTIALS, { command: "ls -la" }),
-		).toEqual({});
+		expect(resolveCredentialEnv(CREDENTIALS, { command: "ls -la" })).toEqual(
+			{},
+		);
 	});
 
 	it("gives a command exactly what it named", () => {
@@ -160,13 +165,15 @@ describe("what comes back", () => {
 	it("masks a value a command printed", () => {
 		const redact = createSecretRedactor(CREDENTIALS);
 
-		expect(redact("logging in as qa-account@example.test with hunter2-but-longer")).toBe(
-			"logging in as [redacted: QA_USER] with [redacted: QA_PASSWORD]",
-		);
+		expect(
+			redact("logging in as qa-account@example.test with hunter2-but-longer"),
+		).toBe("logging in as [redacted: QA_USER] with [redacted: QA_PASSWORD]");
 	});
 
 	it("masks every occurrence, not just the first", () => {
-		const redact = createSecretRedactor([{ name: "QA_TOKEN", value: "tok-abcdefgh" }]);
+		const redact = createSecretRedactor([
+			{ name: "QA_TOKEN", value: "tok-abcdefgh" },
+		]);
 
 		expect(redact("tok-abcdefgh and again tok-abcdefgh")).toBe(
 			"[redacted: QA_TOKEN] and again [redacted: QA_TOKEN]",
@@ -213,7 +220,9 @@ describe("what the model is told", () => {
 
 describe("commandText", () => {
 	it("joins a structured command so it can be scanned as one string", () => {
-		expect(commandText({ command: "psql", args: ["-U", "qa"] })).toBe("psql -U qa");
+		expect(commandText({ command: "psql", args: ["-U", "qa"] })).toBe(
+			"psql -U qa",
+		);
 	});
 
 	it("passes a plain command through", () => {

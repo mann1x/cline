@@ -22,12 +22,6 @@ export {
 	parsePromptTemplate,
 } from "./prompt-template-parser";
 export {
-	describeResolvedPromptTemplate,
-	resolveSessionPromptTemplateFrom,
-	type SessionPromptTemplateRequest,
-	type SessionPromptTemplateResult,
-} from "./prompt-template-session";
-export {
 	type AuditPromptTemplateProposalArgs,
 	auditPromptTemplateProposal,
 	DEFAULT_REQUIRED_REWRITES,
@@ -38,6 +32,12 @@ export {
 	summarizeToolCallSignatures,
 	type ToolCallSignature,
 } from "./prompt-template-review";
+export {
+	describeResolvedPromptTemplate,
+	resolveSessionPromptTemplateFrom,
+	type SessionPromptTemplateRequest,
+	type SessionPromptTemplateResult,
+} from "./prompt-template-session";
 export type {
 	AvailableRuntimeCommand,
 	RuntimeCommandKind,

@@ -62,7 +62,7 @@ export function addRootOptions(cmd: Command): Command {
 			)
 			.option(
 				"--lint-command <command>",
-				"Project checker `check_file` runs on each file it is given, e.g. \"npx biome check ${file}\". Without ${file} the path is appended. Makes check_file the linter here, as it is in the extension",
+				'Project checker `check_file` runs on each file it is given, e.g. "npx biome check ${file}". Without ${file} the path is appended. Makes check_file the linter here, as it is in the extension',
 			)
 			.option(
 				"--task-progress <mode>",

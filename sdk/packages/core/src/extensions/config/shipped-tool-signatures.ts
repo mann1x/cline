@@ -112,14 +112,7 @@ export const HOST_TOOL_INPUT_SCHEMAS: readonly {
 			properties: {
 				action: {
 					type: "string",
-					enum: [
-						"open",
-						"click",
-						"type",
-						"scroll_down",
-						"scroll_up",
-						"close",
-					],
+					enum: ["open", "click", "type", "scroll_down", "scroll_up", "close"],
 				},
 				url: { type: "string" },
 				coordinate: { type: "string" },

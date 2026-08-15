@@ -29,8 +29,8 @@ import { extractErrorMessage } from "./format";
 import {
 	isAnthropicCompatibleModel,
 	type ReasoningHistoryMode,
-	resolveReasoningHistoryMode,
 	resolveModelFamily,
+	resolveReasoningHistoryMode,
 } from "./model-facts";
 import {
 	recordProviderRequestCapture,

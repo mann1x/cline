@@ -2,7 +2,10 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createCliCodeIntelProvider, languageIdFor } from "./code-intel-support";
+import {
+	createCliCodeIntelProvider,
+	languageIdFor,
+} from "./code-intel-support";
 import { fileUri, uriToPath } from "./lsp-client";
 
 /**
@@ -193,10 +196,7 @@ describe("createCliCodeIntelProvider", () => {
 		const { cwd, file } = workspaceWith(SOURCE);
 		const provider = providerFor(cwd);
 		expect(await provider.readLine(file, 1)).toBe("  render() {");
-		writeFileSync(
-			file,
-			SOURCE.replace("  render() {", "  paint() {"),
-		);
+		writeFileSync(file, SOURCE.replace("  render() {", "  paint() {"));
 		expect(await provider.readLine(file, 1)).toBe("  paint() {");
 	});
 });
