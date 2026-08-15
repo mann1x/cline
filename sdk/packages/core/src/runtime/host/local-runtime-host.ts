@@ -30,6 +30,7 @@ import {
 	CHECK_FILE_TOOL_NAME,
 	createCheckFileTool,
 } from "../../extensions/tools/check-file";
+import { joinCheckerToShell } from "../../extensions/tools/check-on-failure";
 import { createTaskProgressTool } from "../../extensions/tools/definitions";
 import {
 	createEditVerificationCompletionGuard,
@@ -693,6 +694,23 @@ export class LocalRuntimeHost implements RuntimeHost {
 							),
 					}),
 				];
+		// Having both tools is not the same as using both. A model that runs the
+		// build and is told the file is broken has, measured, gone off and
+		// written its own analyser rather than asking the checker sitting next
+		// to it — three scratch scripts in one transaction, twenty-two edits,
+		// none of them to the broken file. So a failing command now returns the
+		// checker's answer about the file it named, in the same result. Wired
+		// over the merged list, after both halves are in it, so a host's own
+		// terminal-aware shell and its own language-server checker are joined
+		// exactly like the builtins.
+		const mergedToolsWithFailureChecks = joinCheckerToShell(
+			mergedToolsWithLister,
+			{
+				cwd: configWithProvider.cwd ?? process.cwd(),
+				shellName: DefaultToolNames.RUN_COMMANDS,
+				checkerName: CHECK_FILE_TOOL_NAME,
+			},
+		);
 		const editVerificationConfig = configWithProvider.editVerification;
 		// Nudge rather than off, now that this host always has a checker to
 		// name. Off was the honest default while it had none — a guard that can
@@ -714,7 +732,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 			editVerificationSettings.checkTools.length === 0
 				? undefined
 				: new EditVerificationTracker(editVerificationSettings);
-		const toolsToWrap = mergedToolsWithLister;
+		const toolsToWrap = mergedToolsWithFailureChecks;
 		const withChecklist = taskProgressTracker
 			? toolsToWrap.map((tool) =>
 					withTaskProgressCapture(tool, taskProgressTracker),

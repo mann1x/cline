@@ -611,6 +611,19 @@ function proposeRepair(
 }
 
 /**
+ * Whether this scanner reads the given file's language at all.
+ *
+ * `describeDelimiterBalance` returns null for two different reasons — nothing
+ * is wrong, and nothing was looked at — and a caller that reports the result
+ * has to tell them apart. Saying "no problems" about a file no checker opened
+ * is the one output worse than silence.
+ */
+export function canScanDelimiters(filePath: string): boolean {
+	const extension = filePath.slice(filePath.lastIndexOf(".")).toLowerCase();
+	return C_FAMILY.has(extension) || EMBEDS_SCRIPT.has(extension);
+}
+
+/**
  * Render the balance findings for a file, or null when there is nothing
  * useful to say — the file's language is not one this understands, or its
  * delimiters match.

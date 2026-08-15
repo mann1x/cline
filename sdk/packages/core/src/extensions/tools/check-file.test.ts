@@ -121,9 +121,21 @@ describe("what a file check says", () => {
 		expect(report).toContain("error:");
 	});
 
-	it("says nothing about a language it does not know", () => {
+	// This report now travels on its own to whatever file a failing command
+	// blames, in whatever language. "No syntax errors" about a file nothing here
+	// can parse is a clean bill of health signed by a check that never ran — and
+	// the model takes it, because it did not ask for any of this.
+	it("says it did not check a language it does not know", () => {
 		const report = checkSource("notes.rst", "this is (not balanced\n");
-		expect(report).toContain("No syntax errors.");
+		expect(report).toContain("Not checked");
+		expect(report).toContain(".rst");
+		expect(report).not.toContain("No syntax errors.");
+	});
+
+	it("says how far it got on a language it scans but cannot parse", () => {
+		const report = checkSource("app.ts", "export const a: number = 1;\n");
+		expect(report).toContain("Brackets balance");
+		expect(report).toContain("unchecked");
 	});
 });
 
