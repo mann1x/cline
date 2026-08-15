@@ -33,7 +33,10 @@ import * as path from "node:path";
 import { promisify } from "node:util";
 import * as vm from "node:vm";
 import type { AgentTool, AgentToolContext } from "@cline/shared";
-import { describeDelimiterBalance } from "./delimiter-balance";
+import {
+	canScanDelimiters,
+	describeDelimiterBalance,
+} from "./delimiter-balance";
 
 const execAsync = promisify(exec);
 
@@ -362,9 +365,33 @@ export function checkSource(filePath: string, text: string): string {
 		}
 	}
 
+	const parsed =
+		JS_LIKE.has(extension) ||
+		HTML_LIKE.has(extension) ||
+		extension === ".json" ||
+		extension === ".jsonc";
+	const scanned = canScanDelimiters(filePath);
+
 	const lines: string[] = [`## ${filePath}`];
 	if (findings.length === 0) {
-		lines.push("No syntax errors.");
+		// Three different silences, and they must not read alike. A parser ran
+		// and was satisfied; only the bracket scan ran, which is real but
+		// narrow; or nothing here reads this language at all — and calling that
+		// last one "No syntax errors" tells a model its file is sound on the
+		// authority of a check that never happened. That report now travels
+		// automatically to whatever file a failing command blames, in whatever
+		// language, so the difference is no longer academic.
+		if (parsed) {
+			lines.push("No syntax errors.");
+		} else if (scanned) {
+			lines.push(
+				`Brackets balance. Nothing here parses \`${extension}\`, so anything past delimiters is unchecked.`,
+			);
+		} else {
+			lines.push(
+				`Not checked: no syntax checker here reads \`${extension || "this file type"}\`.`,
+			);
+		}
 	}
 	for (const finding of findings) {
 		// A line is only quoted when the runtime named one. Printing `:1:` for
