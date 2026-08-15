@@ -254,6 +254,30 @@ describe("describeDelimiterBalance", () => {
 			expect(report).toContain("nothing else in this file crosses after that");
 		});
 
+		it("gives the edit as arguments the editor takes, not as text to match", () => {
+			// Measured: told to delete the `}` at column 382, the model restated
+			// that correctly and then composed an `old_text` for a 500-column
+			// minified line, which came back "No replacement performed: text not
+			// found". The editor addresses a character directly; so does this.
+			const report = describeDelimiterBalance(
+				"app.js",
+				"dDec(c,x){this.dc.forEach(d=>{if(d){c.fill();}}});}\n",
+			);
+			expect(report).toContain(
+				'`editor` with start_line: 1, start_column: 48, new_text: ""',
+			);
+			expect(report).toContain("there is no text to match on");
+		});
+
+		it("orders a move so the deletion accounts for the insert's shift", () => {
+			// Insert first at column 12, which pushes the `)` from 13 to 14.
+			const report = describeDelimiterBalance("app.js", "const x = ({)};\n");
+			expect(report).toContain(
+				'insert_line: 1, insert_column: 12, new_text: ")"',
+			);
+			expect(report).toContain('start_line: 1, start_column: 14, new_text: ""');
+		});
+
 		it("proposes a move when the line balances and a closer is misplaced", () => {
 			const report = describeDelimiterBalance("app.js", "const x = ({)};\n");
 			expect(report).toContain(

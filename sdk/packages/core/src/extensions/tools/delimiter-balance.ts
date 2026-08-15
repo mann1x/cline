@@ -521,20 +521,32 @@ function proposeRepair(
 	const expected = finding.opener ? PAIRS[finding.opener] : undefined;
 	const cut = body.slice(0, at) + body.slice(at + 1);
 
-	const candidates: Array<{ text: string; say: string }> = [
+	// Each candidate carries the `editor` call that performs it, because naming
+	// the edit in prose was not enough. Measured: the model was told to delete
+	// the `}` at column 382, restated that correctly, and then composed an
+	// `old_text` match for a 500-column minified line and got back "No
+	// replacement performed: text not found". The editor already addresses a
+	// character by line and column; the scan already knows both. Saying it in
+	// the tool's own arguments removes the step that failed.
+	const line = finding.line;
+	const at1 = finding.column;
+	const candidates: Array<{ text: string; say: string; call: string }> = [
 		{
 			text: cut,
-			say: `delete the \`${finding.found}\` at column ${finding.column}`,
+			say: `delete the \`${finding.found}\` at column ${at1}`,
+			call: `start_line: ${line}, start_column: ${at1}, new_text: ""`,
 		},
 	];
 	if (expected && expected !== finding.found) {
 		candidates.push({
 			text: body.slice(0, at) + expected + body.slice(at + 1),
-			say: `replace the \`${finding.found}\` at column ${finding.column} with \`${expected}\``,
+			say: `replace the \`${finding.found}\` at column ${at1} with \`${expected}\``,
+			call: `start_line: ${line}, start_column: ${at1}, new_text: "${expected}"`,
 		});
 		candidates.push({
 			text: body.slice(0, at) + expected + body.slice(at),
-			say: `insert a \`${expected}\` before the \`${finding.found}\` at column ${finding.column}`,
+			say: `insert a \`${expected}\` before the \`${finding.found}\` at column ${at1}`,
+			call: `insert_line: ${line}, insert_column: ${at1}, new_text: "${expected}"`,
 		});
 	}
 	// A closer in the wrong place, which is neither spare nor missing. Only
@@ -556,13 +568,18 @@ function proposeRepair(
 			continue;
 		}
 		const into = target - (column > finding.column ? 1 : 0);
+		// Two calls, and the deletion goes second: doing it first would shift
+		// every column after it, including the one the insert names.
 		candidates.push({
 			text: cut.slice(0, into) + finding.found + cut.slice(into),
-			say: `move the \`${finding.found}\` at column ${finding.column} to column ${column}`,
+			say: `move the \`${finding.found}\` at column ${at1} to column ${column}`,
+			call:
+				`insert_line: ${line}, insert_column: ${column}, new_text: "${finding.found}"` +
+				`, then a second call with start_line: ${line}, start_column: ${at1 > column ? at1 + 1 : at1}, new_text: ""`,
 		});
 	}
 
-	let best: { say: string; left: number } | null = null;
+	let best: { say: string; call: string; left: number } | null = null;
 	for (const candidate of candidates) {
 		const after = scanDelimiters(candidate.text, origin);
 		const cleared = !after.some(
@@ -576,7 +593,7 @@ function proposeRepair(
 				(other.line === finding.line && other.column <= finding.column),
 		);
 		if (cleared && !earlier && (best === null || after.length < best.left)) {
-			best = { say: candidate.say, left: after.length };
+			best = { say: candidate.say, call: candidate.call, left: after.length };
 		}
 	}
 	if (!best) {
@@ -587,7 +604,10 @@ function proposeRepair(
 		best.left === 0
 			? "and nothing else in this file crosses after that"
 			: `and leaves ${best.left} of the ${baseline} crossings, all further down the file`;
-	return `${best.say} — checked: that clears this line ${rest}.`;
+	return (
+		`${best.say} — checked: that clears this line ${rest}.\n` +
+		`      that edit is \`editor\` with ${best.call} — send it as it stands; there is no text to match on.`
+	);
 }
 
 /**
