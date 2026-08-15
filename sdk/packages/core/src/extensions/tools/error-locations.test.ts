@@ -2,7 +2,11 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { findErrorLocations, looksLikeFailure } from "./error-locations";
+import {
+	findCommandFileTargets,
+	findErrorLocations,
+	looksLikeFailure,
+} from "./error-locations";
 
 /** A workspace with the named files in it, so resolution has something real. */
 function workspace(files: Record<string, string>): string {
@@ -149,6 +153,16 @@ describe("the file an error names, whatever printed it", () => {
 		expect(findErrorLocations(output, root)).toHaveLength(2);
 	});
 
+	it("finds nothing when a wrapper script swallowed the error", () => {
+		// The measured shape, and the reason the command line is read too: the
+		// model's own diagnostic script caught the parse error and printed a
+		// summary that names no file.
+		const root = workspace({ "manic_miner.html": "<script>f(</script>\n" });
+		const output =
+			"Script length: 12610\nRuntime/Parse Error: SyntaxError: missing ) after argument list\nConverged to line: 55";
+		expect(findErrorLocations(output, root)).toEqual([]);
+	});
+
 	it("survives being called twice with the same patterns", () => {
 		// The patterns are module-level and carry `g`; a leftover lastIndex
 		// would make the second call of a session find less than the first.
@@ -157,5 +171,50 @@ describe("the file an error names, whatever printed it", () => {
 		expect(findErrorLocations(output, root)).toEqual(
 			findErrorLocations(output, root),
 		);
+	});
+});
+
+describe("the files a command names itself", () => {
+	it("reads the runner and the file it runs, in that order", () => {
+		// Verbatim from the transaction this exists for.
+		const root = workspace({
+			"run_game.js": "1\n",
+			"manic_miner.html": "<script>f(</script>\n",
+		});
+		expect(
+			findCommandFileTargets("node run_game.js manic_miner.html", root),
+		).toEqual([
+			path.join(root, "run_game.js"),
+			path.join(root, "manic_miner.html"),
+		]);
+	});
+
+	it("sees past a cd and quoting", () => {
+		const root = workspace({ "manic_miner.html": "<script>f(</script>\n" });
+		expect(
+			findCommandFileTargets(`cd ${root} && node "manic_miner.html"`, root),
+		).toEqual([path.join(root, "manic_miner.html")]);
+	});
+
+	it("ignores flags, interpreters and anything that is not a file here", () => {
+		const root = workspace({ "a.js": "1\n" });
+		expect(findCommandFileTargets("node -v", root)).toEqual([]);
+		expect(findCommandFileTargets("npm run build --silent", root)).toEqual([]);
+	});
+
+	it("says nothing about a command that names files in bulk", () => {
+		// `grep -rn x a.js b.js ...` is not one run whose failure has a place.
+		const files: Record<string, string> = {};
+		for (let index = 0; index < 10; index++) {
+			files[`f${index}.js`] = "1\n";
+		}
+		const root = workspace(files);
+		const command = `prettier --write ${Object.keys(files).join(" ")}`;
+		expect(findCommandFileTargets(command, root)).toEqual([]);
+	});
+
+	it("does not name a directory", () => {
+		const root = workspace({ "a.js": "1\n" });
+		expect(findCommandFileTargets(`ls ${root}`, root)).toEqual([]);
 	});
 });

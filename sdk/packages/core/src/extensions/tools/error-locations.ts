@@ -20,14 +20,14 @@
  * colon.
  */
 
-import { existsSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 
 /**
  * How an error names a place, across the tools that print one.
  *
  * Each pattern captures the path first. They are deliberately loose: a false
- * match costs one `existsSync` and is dropped, while a missed one costs the
+ * match costs one `stat` and is dropped, while a missed one costs the
  * model the turn this exists to save.
  */
 const LOCATION_PATTERNS: RegExp[] = [
@@ -65,12 +65,87 @@ export interface ErrorLocation {
 	line?: number;
 }
 
+/**
+ * A command that names this many files is doing bulk work, not running one
+ * thing, and its arguments say nothing about where a failure lives.
+ */
+const MAX_COMMAND_TARGETS = 8;
+
 /** Whether this output is worth asking a checker about at all. */
 export function looksLikeFailure(
 	output: string,
 	exitedNonZero: boolean,
 ): boolean {
 	return exitedNonZero || FAILURE_WORDS.test(output);
+}
+
+/**
+ * Resolve one candidate against the workspace, or reject it.
+ *
+ * `seen` records rejections as well as hits, so a path repeated forty times in
+ * one stack trace costs one `stat`.
+ */
+function workspaceFile(
+	candidate: string,
+	root: string,
+	seen: Set<string>,
+): string | undefined {
+	const absolute = isAbsolute(candidate)
+		? resolve(candidate)
+		: resolve(root, candidate);
+	if (seen.has(absolute)) {
+		return undefined;
+	}
+	seen.add(absolute);
+	const within = relative(root, absolute);
+	if (within === "" || within.startsWith("..") || isAbsolute(within)) {
+		return undefined;
+	}
+	try {
+		return statSync(absolute).isFile() ? absolute : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * The workspace files a command names in its own arguments.
+ *
+ * The fallback for the case the output patterns cannot cover, and it is the
+ * common one rather than the exotic one. Measured on the harness arm: of 96
+ * commands in one transaction, exactly one printed a `file:line` — because the
+ * page under repair is HTML, `node` cannot run it directly, and the model's own
+ * wrapper scripts caught the parse error and printed a summary of their own
+ * devising. The file was named on the command line every time: `node
+ * run_game.js manic_miner.html`, `node diagnose8.js manic_miner.html`.
+ *
+ * Argument order is kept, which puts the runner script before the file it runs;
+ * both are checked, and a broken runner is worth hearing about too.
+ */
+export function findCommandFileTargets(
+	command: string,
+	workspace: string,
+): string[] {
+	const root = resolve(workspace);
+	// Shell-ish tokenisation: quotes stripped, operators dropped. This is a
+	// heuristic feeding a filesystem check, not a parser — anything it gets
+	// wrong fails to resolve and is discarded.
+	const tokens = command
+		.split(/[\s;|&]+/)
+		.map((token) => token.replace(/^["']|["']$/g, ""))
+		.filter((token) => token !== "" && !token.startsWith("-"));
+	const seen = new Set<string>();
+	const found: string[] = [];
+	for (const token of tokens) {
+		const absolute = workspaceFile(token, root, seen);
+		if (absolute) {
+			found.push(absolute);
+		}
+		if (found.length > MAX_COMMAND_TARGETS) {
+			return [];
+		}
+	}
+	return found.slice(0, MAX_FILES);
 }
 
 /**
@@ -101,25 +176,11 @@ export function findErrorLocations(
 		while (match) {
 			const candidate = match[1];
 			const line = Number.parseInt(match[2] ?? "", 10);
-			const absolute = isAbsolute(candidate)
-				? resolve(candidate)
-				: resolve(root, candidate);
-			if (!seen.has(absolute)) {
-				const within = relative(root, absolute);
-				const inside =
-					within !== "" && !within.startsWith("..") && !isAbsolute(within);
-				if (inside && existsSync(absolute) && statSync(absolute).isFile()) {
-					seen.add(absolute);
-					found.push(
-						Number.isFinite(line)
-							? { path: absolute, line }
-							: { path: absolute },
-					);
-				} else {
-					// Remember the miss too, so a path repeated forty times in a
-					// stack trace is only resolved once.
-					seen.add(absolute);
-				}
+			const absolute = workspaceFile(candidate, root, seen);
+			if (absolute) {
+				found.push(
+					Number.isFinite(line) ? { path: absolute, line } : { path: absolute },
+				);
 			}
 			if (found.length >= MAX_FILES) {
 				return found;

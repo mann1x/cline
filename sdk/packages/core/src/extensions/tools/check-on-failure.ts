@@ -9,8 +9,10 @@
  * that instead read the checker's report fixed the file in one.
  *
  * Wording did not close that gap, so the join is made here. It is a wrapper
- * around the shell tool that calls the host's own checker on whatever the output
- * pointed at, and appends the answer to the same result. Nothing about it is
+ * around the shell tool that calls the host's own checker on the file the
+ * failure names — in the output where the output names one, and otherwise on
+ * the command line itself, which on the measured transaction was 95 commands
+ * out of 96 — and appends the answer to the same result. Nothing about it is
  * language-specific: the paths are extracted by shape, and the checker is
  * whichever one the host installed — VS Code's language servers know Python and
  * Go, the CLI's built-in knows JavaScript and brackets, and both are asked the
@@ -18,12 +20,19 @@
  */
 
 import type { AgentTool, AgentToolContext } from "@cline/shared";
-import { findErrorLocations, looksLikeFailure } from "./error-locations";
+import {
+	findCommandFileTargets,
+	findErrorLocations,
+	looksLikeFailure,
+} from "./error-locations";
 import type { ToolOperationResult } from "./types";
+
+/** Files checked for one call, however many failures it holds. */
+const MAX_CHECKED_FILES = 3;
 
 /** The heading the appended report arrives under. */
 const ATTACHMENT_HEADING =
-	"--- the checker on the file this command blamed (not run by you; you did not have to ask) ---";
+	"--- the checker, run for you on the file(s) this command names. This is the measurement, not a second opinion: where it disagrees with a count of your own, it is the count that is wrong. ---";
 
 /**
  * What a result looks like once the shell tool is done with it.
@@ -78,15 +87,32 @@ export function withCheckOnFailure<TInput>(
 
 			const paths: string[] = [];
 			const seen = new Set<string>();
+			const take = (candidate: string) => {
+				if (!seen.has(candidate)) {
+					seen.add(candidate);
+					paths.push(candidate);
+				}
+			};
 			for (const result of results) {
 				const text = textOf(result);
-				if (!text || !looksLikeFailure(text, result.success === false)) {
+				if (!looksLikeFailure(text, result.success === false)) {
 					continue;
 				}
-				for (const location of findErrorLocations(text, options.cwd)) {
-					if (!seen.has(location.path)) {
-						seen.add(location.path);
-						paths.push(location.path);
+				const blamed = findErrorLocations(text, options.cwd);
+				for (const location of blamed) {
+					take(location.path);
+				}
+				// Output that blames a file is the good case and not the common
+				// one. A wrapper script, a test runner or a harness that catches
+				// the error and prints its own summary leaves nothing to match —
+				// measured, 95 of 96 commands in one transaction — and the file
+				// is then only ever named on the command line that ran it.
+				if (blamed.length === 0) {
+					for (const target of findCommandFileTargets(
+						result.query ?? "",
+						options.cwd,
+					)) {
+						take(target);
 					}
 				}
 			}
@@ -96,7 +122,14 @@ export function withCheckOnFailure<TInput>(
 
 			let report: string;
 			try {
-				const answer = await options.checker.execute({ paths }, context);
+				const answer = await options.checker.execute(
+					// Capped here as well as per result: three failing commands
+					// naming three files each is a build log, and the model is
+					// owed an answer about the failure it is looking at, not a
+					// survey.
+					{ paths: paths.slice(0, MAX_CHECKED_FILES) },
+					context,
+				);
 				report = typeof answer === "string" ? answer : String(answer);
 			} catch {
 				// The checker is an addition to an answer the model already has.

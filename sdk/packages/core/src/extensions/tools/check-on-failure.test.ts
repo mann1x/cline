@@ -91,7 +91,7 @@ describe("the checker's answer arriving with the failure", () => {
 			{},
 			context,
 		)) as ToolOperationResult[];
-		expect(String(results[0]?.result)).toContain("the checker on the file");
+		expect(String(results[0]?.result)).toContain("the checker, run for you");
 	});
 
 	it("works the same for a language the delimiter scanner never reads", async () => {
@@ -170,6 +170,56 @@ describe("the checker's answer arriving with the failure", () => {
 
 		await wrapped.execute({}, context);
 		expect(spy).not.toHaveBeenCalled();
+	});
+
+	it("falls back to the file the command named when the output names none", async () => {
+		// The measured case this exists for: the page is HTML, `node` cannot run
+		// it, the model's wrapper script caught the parse error and printed a
+		// summary of its own. Nothing in that output is a file — but the command
+		// that produced it named one.
+		const root = workspace({
+			"run_game.js": "1\n",
+			"manic_miner.html": "<script>f(</script>\n",
+		});
+		const seen: { paths?: string[] } = {};
+		const wrapped = withCheckOnFailure(
+			shellReturning([
+				{
+					query: "cd . && node run_game.js manic_miner.html",
+					result:
+						"Script length: 12610\nRuntime/Parse Error: SyntaxError: missing ) after argument list",
+					success: false,
+				},
+			]),
+			{
+				cwd: root,
+				checker: checkerSaying("## manic_miner.html\nreport", seen),
+			},
+		);
+
+		await wrapped.execute({}, context);
+		expect(seen.paths).toEqual([
+			path.join(root, "run_game.js"),
+			path.join(root, "manic_miner.html"),
+		]);
+	});
+
+	it("prefers the file the output blamed over the one the command named", async () => {
+		const root = workspace({ "runner.js": "1\n", "app.js": "1\n" });
+		const seen: { paths?: string[] } = {};
+		const wrapped = withCheckOnFailure(
+			shellReturning([
+				{
+					query: "node runner.js app.js",
+					result: "SyntaxError\n    at app.js:4:1",
+					success: false,
+				},
+			]),
+			{ cwd: root, checker: checkerSaying("## app.js\nreport", seen) },
+		);
+
+		await wrapped.execute({}, context);
+		expect(seen.paths).toEqual([path.join(root, "app.js")]);
 	});
 
 	it("attaches one copy when several commands fail", async () => {
