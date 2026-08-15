@@ -199,7 +199,8 @@ Check files for errors and warnings using the language servers (LSP). **This is 
 - **Parallelism**: Pass all files to check in the `paths` array.
 - **Arguments**: `paths` is an array of strings.
 - **Output**: Plain text listing problems per file (`file:line:column severity message`). If no problems are reported, the file is valid according to the language servers. Note: This does not run tests or builds; use `run_commands` for those.
-When a file's brackets do not match, a `Delimiter scan` section names the line to edit and how many brackets that line is out by, one line per place the trouble starts — fix every line it lists in one edit. A parse error is always reported where the parser gave up, which is the closing bracket; the line named here is the one the error cannot name. Trust it over counting brackets yourself — it skips strings, comments and regex literals. It runs even when the editor reported nothing, which is the only report you get for script inside an `.html` file.
+- **Ask this and the run together**: call this and the thing that executes the code — `run_commands`, or `browser` for a page — in the **same turn**, not one or the other. Running it says *that* something is broken and where the parser gave up; this says *which line* to edit. Each is half the answer, and the half you skip is the half you will spend the turn guessing at.
+When a file's brackets do not match, a `Delimiter scan` section names the line to edit and how many brackets that line is out by, one line per place the trouble starts — fix every line it lists in one edit. A parse error is always reported where the parser gave up, which is the closing bracket; the line named here is the one the error cannot name. Trust it over counting brackets yourself — it skips strings, comments and regex literals. It runs even when the editor reported nothing, which is the only report you get for script inside an `.html` file. Where one edit clears the first crossing, the scan names that edit and says it checked it by re-parsing — make that edit rather than deriving your own.
 
 # tool: list_files
 List files in the workspace. Use this rather than `ls`, `dir` or `find` through `run_commands`.
@@ -219,6 +220,7 @@ Open a page in a real browser and report its console output and uncaught errors.
 - **Output**: The console messages and uncaught errors produced while the action ran. `[error]` and `[Page Error]` lines are real failures. A page that printed nothing is a pass, not a failed call.
 - **Session**: The browser stays open between calls, so `open` once and then interact. `close` when finished.
 A parse error from the browser names no line. For a local file a `Delimiter scan` section follows it and names the *opening* bracket the parser could not match, one line per place the trouble starts — fix every line it lists in one edit rather than one reload per line, and read those lines instead of counting brackets yourself.
+Call this and `check_file` in the **same turn**, not one or the other. The page says whether it actually runs and where the parser gave up; `check_file` names the line to edit. Take one without the other and you are working from half a report.
 {{DEFAULT}}
 
 # tool: code_intel
