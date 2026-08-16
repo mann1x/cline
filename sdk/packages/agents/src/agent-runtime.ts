@@ -209,6 +209,22 @@ const EMPTY_TURN_REMINDER =
 	"Do not try to reproduce it. Take the smallest useful next step instead: make one tool call, or write one short paragraph. " +
 	"If the work you were planning does not fit in one reply, do the part that fits, call the tools it needs, and continue in the next turn.";
 
+const TOOL_CALL_UNPARSABLE_REMINDER =
+	"[SYSTEM] Your last tool call did not parse, so it never ran and nothing was changed by it. " +
+	"The text you wrote before it is still here and still correct — the call around it was malformed, most often because it was cut short. " +
+	"Send that one call again, complete, and nothing else in this reply. " +
+	"If it carries a large argument, make the argument smaller rather than sending the same one again: name a line range instead of a whole file, or split the work across two calls.";
+
+/**
+ * How many times one turn may be asked to resend a call before the run ends.
+ *
+ * Two, and it resets on any turn that parses. A model that cannot produce a
+ * well-formed call twice running is not going to on the third attempt, and the
+ * run has somewhere better to spend the clock; a model that hit a truncated
+ * argument once has been told to make it smaller and usually can.
+ */
+const TOOL_CALL_PARSE_RETRY_BUDGET = 2;
+
 /**
  * The nudge budget for hosts that want it without picking a number.
  *
@@ -668,6 +684,11 @@ export class AgentRuntime {
 	/** Consecutive turns cut off at the output cap; reset by any turn that completes. */
 	private consecutiveMaxTokensRetries = 0;
 	/**
+	 * Consecutive turns whose tool call the provider could not parse; reset by
+	 * any turn that reaches the tool-call stage, malformed or not.
+	 */
+	private toolCallParseRetries = 0;
+	/**
 	 * The cap that truncated the last turn, when the cap was the request's own.
 	 *
 	 * Kept so the retry can ask for less. Unset when the window was what
@@ -1126,6 +1147,14 @@ export class AgentRuntime {
 						await this.addUserReminderMessage(EMPTY_TURN_REMINDER);
 						continue;
 					}
+					// The other way a malformed call arrives: the parser refused it
+					// and emitted nothing at all, so there is no text to sit above
+					// the failure. Same recovery, and it has to be tried here too —
+					// the branch above declines every `error` turn, which is the
+					// whole class this one belongs to.
+					if (await this.recoverUnparsableToolCall()) {
+						continue;
+					}
 					throw new Error(
 						finishReason === "error"
 							? (this.state.lastError ?? "Model stream failed")
@@ -1232,8 +1261,12 @@ export class AgentRuntime {
 					throw new Error(MAX_TOKENS_INCOMPLETE_TURN_MESSAGE);
 				}
 				if (finishReason === "error" && toolCalls.length === 0) {
+					if (await this.recoverUnparsableToolCall()) {
+						continue;
+					}
 					throw new Error(this.state.lastError ?? "Model stream failed");
 				}
+				this.toolCallParseRetries = 0;
 				this.state.pendingToolCalls = toolCalls.map((part) => part.toolCallId);
 
 				if (toolCalls.length === 0) {
@@ -1478,6 +1511,49 @@ export class AgentRuntime {
 			);
 		}
 		return retry;
+	}
+
+	/**
+	 * Ask the model to send a tool call the provider could not parse again.
+	 *
+	 * Returns whether the turn was recovered, so both call sites can `continue`
+	 * on true and fall through to their own error on false.
+	 *
+	 * A call that would not parse is a wasted turn, not a failed run: nothing
+	 * executed, nothing changed, and whatever the model wrote before it is
+	 * still in the transcript — usually the expensive part. Measured: a
+	 * transaction that had already carried a broken file past its syntax error
+	 * ended on `XML syntax error on line 12: element <parameter> closed by
+	 * </function>` at 3,449s of a 7,200s budget. An hour of clock went unused
+	 * because one malformed call was treated as the end of the run.
+	 *
+	 * What this deliberately does not do is repair the payload. A call
+	 * truncated mid-argument, patched up and executed, writes the fragment over
+	 * the file it names and reports success.
+	 */
+	private async recoverUnparsableToolCall(): Promise<boolean> {
+		if (
+			this.state.lastErrorClass !== "tool_call_unparsable" ||
+			this.toolCallParseRetries >= TOOL_CALL_PARSE_RETRY_BUDGET
+		) {
+			return false;
+		}
+		this.toolCallParseRetries += 1;
+		await this.emit({
+			type: "status-notice",
+			snapshot: this.snapshot(),
+			message: "the model's tool call did not parse — asking for it again",
+			metadata: {
+				kind: "tool_call_parse_recovery",
+				reason: "tool_call_parse_recovery",
+				phase: "started",
+				iteration: this.state.iteration,
+				attempt: this.toolCallParseRetries,
+				providerError: this.state.lastError,
+			},
+		});
+		await this.addUserReminderMessage(TOOL_CALL_UNPARSABLE_REMINDER);
+		return true;
 	}
 
 	/**

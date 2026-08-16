@@ -259,6 +259,17 @@ export type ProviderErrorClass =
 	 * the turn resent, where an unknown failure has nowhere to go.
 	 */
 	| "image_input_unsupported"
+	/**
+	 * The provider could not parse a tool call the model emitted. Told apart
+	 * from `unknown` for the same reason as the image case: the model can be
+	 * asked to send the call again, where an unknown failure has nowhere to go.
+	 *
+	 * Note what this is not. The payload is malformed, and repairing it is the
+	 * one response that must never be taken — a call truncated mid-value would
+	 * be "repaired" into writing the fragment, silently, over the file it
+	 * names. Asking for the whole call again is the only safe recovery.
+	 */
+	| "tool_call_unparsable"
 	| "unknown";
 
 export type AgentModelEvent =

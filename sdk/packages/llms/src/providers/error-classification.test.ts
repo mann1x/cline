@@ -364,3 +364,36 @@ describe("image input refusals", () => {
 		);
 	});
 });
+
+describe("tool calls the provider could not parse", () => {
+	// The first of these is verbatim from the transaction that died on it, at
+	// 3,449s of a 7,200s budget with the file already carried past its syntax
+	// error: Go's encoding/xml, inside Ollama's Qwen tool-call parser.
+	it.each([
+		"XML syntax error on line 12: element <parameter> closed by </function>",
+		"failed to parse tool call arguments",
+		"could not parse the function call",
+		"invalid tool_call in response",
+		"malformed function arguments",
+	])("classifies %j as recoverable", (message) => {
+		expect(classifyProviderError(new Error(message))).toBe(
+			"tool_call_unparsable",
+		);
+	});
+
+	// Asking a model to resend a call it never made spends a turn and, worse,
+	// spends it while the real failure goes unreported. Each of these is a
+	// complaint about the request or the transport rather than about something
+	// the model emitted.
+	it.each([
+		"Bad request",
+		"XML syntax error on line 3: unexpected EOF",
+		"failed to parse response body",
+		"invalid JSON in request",
+		"rate limit exceeded",
+	])("leaves %j alone", (message) => {
+		expect(classifyProviderError(new Error(message))).not.toBe(
+			"tool_call_unparsable",
+		);
+	});
+});

@@ -3798,3 +3798,123 @@ describe("when the vision model cannot describe an image", () => {
 		expect(serialized).toContain("could not describe it");
 	});
 });
+
+describe("a tool call the provider could not parse", () => {
+	const unparsable: AgentModelEvent = {
+		type: "finish",
+		reason: "error",
+		error:
+			"XML syntax error on line 12: element <parameter> closed by </function>",
+		errorClass: "tool_call_unparsable",
+	};
+
+	// Measured: a transaction that had already carried a broken file past its
+	// syntax error ended on exactly this, at 3,449s of a 7,200s budget, with an
+	// hour of clock unused. The model had just written out in prose the edit it
+	// meant to make — only the call around it was malformed.
+	it("asks for the call again instead of ending the run", async () => {
+		const model = new ScriptedModel([
+			() => [
+				{ type: "text-delta", text: "I will delete the brace at column 382." },
+				unparsable,
+			],
+			() => [
+				{ type: "text-delta", text: "recovered" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({ model });
+
+		const result = await runtime.run("fix it");
+
+		expect(result.status).toBe("completed");
+		expect(result.outputText).toBe("recovered");
+		expect(model.requests).toHaveLength(2);
+	});
+
+	it("tells the model the call never ran, and to send the whole thing again", async () => {
+		const model = new ScriptedModel([
+			() => [{ type: "text-delta", text: "planning" }, unparsable],
+			() => [
+				{ type: "text-delta", text: "recovered" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({ model });
+
+		await runtime.run("fix it");
+
+		const resent = JSON.stringify(model.requests[1]);
+		expect(resent).toContain("did not parse");
+		expect(resent).toContain("nothing was changed by it");
+		// The reasoning that preceded the malformed call is the expensive part
+		// and is still in the transcript; the model is told not to redo it.
+		expect(resent).toContain("planning");
+	});
+
+	// A model that cannot emit a well-formed call twice running will not on the
+	// third attempt, and the run has somewhere better to spend the clock.
+	it("gives up after the budget and reports the provider's own error", async () => {
+		const model = new ScriptedModel([
+			() => [unparsable],
+			() => [unparsable],
+			() => [unparsable],
+		]);
+		const runtime = new AgentRuntime({ model });
+
+		const result = await runtime.run("fix it");
+
+		expect(result.status).toBe("failed");
+		// Three requests, not four: the original turn plus the two it is allowed.
+		expect(model.requests).toHaveLength(3);
+	});
+
+	// The budget is per run of bad luck, not per session: a truncated argument
+	// early on must not spend the allowance for one an hour later.
+	it("restores the budget after a turn that parses", async () => {
+		const model = new ScriptedModel([
+			() => [unparsable],
+			() => [unparsable],
+			() => [
+				{ type: "text-delta", text: "fine" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({ model });
+		await runtime.run("first");
+
+		const second = new ScriptedModel([
+			() => [unparsable],
+			() => [
+				{ type: "text-delta", text: "fine again" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const resumed = new AgentRuntime({ model: second });
+		const result = await resumed.run("second");
+
+		expect(result.status).toBe("completed");
+	});
+
+	// An error nobody classified is not a malformed call, and treating it as
+	// one would ask the model to resend something it never sent while the real
+	// failure went unreported.
+	it("does not retry an unclassified error", async () => {
+		const model = new ScriptedModel([
+			() => [
+				{
+					type: "finish",
+					reason: "error",
+					error: "connection reset",
+					errorClass: "unknown",
+				},
+			],
+		]);
+		const runtime = new AgentRuntime({ model });
+
+		const result = await runtime.run("go");
+
+		expect(result.status).toBe("failed");
+		expect(model.requests).toHaveLength(1);
+	});
+});

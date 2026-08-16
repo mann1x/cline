@@ -176,7 +176,44 @@ const IMAGE_UNSUPPORTED_PATTERNS = [
 	/\bunsupported\s+(?:content\s+)?type\b.*\bimage\b/i,
 ];
 
+/**
+ * Message shapes providers use when a tool call the model emitted would not
+ * parse.
+ *
+ * Measured: a transaction that had already got a broken file past its syntax
+ * error died at 3,449 seconds of a 7,200-second budget on
+ *
+ *     XML syntax error on line 12: element <parameter> closed by </function>
+ *
+ * — Go's `encoding/xml`, refusing a call inside Ollama's Qwen tool-call
+ * parser. It classified as `unknown`, nothing recovered it, and an hour of
+ * clock went unused on a run that was winning. The model had just written out
+ * in prose the edit it meant to make; only the call around it was malformed.
+ *
+ * Narrow on purpose, and narrower than the error text alone would need to be.
+ * Each pattern has to name a parse failure *and* something from the tool-call
+ * vocabulary — `function`, `tool_call`, `parameter`, `arguments` — so a
+ * provider's generic complaint about the request body can never be read as
+ * the model's own output being malformed.
+ */
+const TOOL_CALL_UNPARSABLE_PATTERNS = [
+	/\bXML syntax error\b[\s\S]*<\/?(?:function|tool_call|parameter|invoke)\b/i,
+	/\b(?:failed to|could not|cannot|unable to)\s+parse\b[\s\S]{0,80}\b(?:tool[_\s-]?call|function[_\s-]?call|tool arguments|function arguments)\b/i,
+	/\b(?:invalid|malformed)\s+(?:tool[_\s-]?call|function[_\s-]?call|tool arguments|function arguments)\b/i,
+];
+
 function verdictFromSignals(signals: ErrorSignals): ProviderErrorClass {
+	// First, and for the same reason as the image check that follows it: this
+	// is a property of what the model emitted, not of the request's HTTP shape,
+	// and providers return it under assorted codes or none at all.
+	if (
+		signals.messages.some((message) =>
+			TOOL_CALL_UNPARSABLE_PATTERNS.some((pattern) => pattern.test(message)),
+		)
+	) {
+		return "tool_call_unparsable";
+	}
+
 	// Checked before the rate-limit and status gates below: a refusal to accept
 	// an image is a property of the request's content, not of its HTTP shape,
 	// and providers return it under assorted 4xx codes.
