@@ -118,6 +118,41 @@ export function createAgentSlotGate(limit: number | undefined): AgentSlotGate {
 }
 
 /**
+ * Whether an endpoint with this bound can run a delegated agent *beside* the
+ * agent that asked for one.
+ *
+ * The gate above makes one-slot delegation safe; it does not make it useful. A
+ * spawned agent on a one-slot server runs after its parent's request rather
+ * than alongside it, so nothing finishes sooner and the model has spent a turn
+ * arranging it. Measured on a live transaction: the model sent
+ * `team_spawn_teammate`, the call was refused on its arguments, the model
+ * answered with `team_cleanup` and went back to editing -- three turns spent
+ * on a capability the endpoint never had.
+ *
+ * So the tools are not offered at all when the count says one. A tool a model
+ * can see is a tool it will try, and one that cannot help it is a distraction
+ * priced in turns.
+ *
+ * `undefined` is not one: it means no host resolved a count, and a host that
+ * has not been taught to ask keeps the behaviour it had. `0` is not one
+ * either -- that is the host saying admission control decides, which is
+ * opencoti with PolyKV, where agents share a KV pool and the server paces
+ * them.
+ */
+export function slotsAllowParallelDelegation(
+	maxConcurrentAgents: number | undefined,
+): boolean {
+	if (
+		maxConcurrentAgents === undefined ||
+		!Number.isFinite(maxConcurrentAgents) ||
+		maxConcurrentAgents <= 0
+	) {
+		return true;
+	}
+	return maxConcurrentAgents > 1;
+}
+
+/**
  * The endpoint two agents share, or do not.
  *
  * Provider and base URL together, because a provider id alone says nothing

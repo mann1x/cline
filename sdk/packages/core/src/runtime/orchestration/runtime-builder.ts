@@ -38,6 +38,7 @@ import {
 	createAgentSlotGateRegistry,
 	createDelegatedAgentConfigProvider,
 	type DelegatedAgentConnectionConfig,
+	slotsAllowParallelDelegation,
 	type TeamEvent,
 } from "../../extensions/tools/team";
 import type { ConfiguredAgentConfig } from "../../extensions/tools/team/configured-agent-config";
@@ -327,8 +328,14 @@ function normalizeConfig(
 		enableTools: config.enableTools !== false,
 		enableSpawnAgent:
 			config.enableSpawnAgent ?? preset.enableSpawnAgent ?? true,
+		// The team tools exist to run agents beside one another. On an endpoint
+		// that serves one request at a time there is no beside, so they are
+		// withheld rather than offered and silently serialised -- see
+		// {@link slotsAllowParallelDelegation}. The host's flag does not turn
+		// them back on: this is what the server does, not what anyone prefers.
 		enableAgentTeams:
-			config.enableAgentTeams ?? preset.enableAgentTeams ?? true,
+			slotsAllowParallelDelegation(config.maxConcurrentAgents) &&
+			(config.enableAgentTeams ?? preset.enableAgentTeams ?? true),
 		disableMcpSettingsTools: config.disableMcpSettingsTools === true,
 		yolo: config.yolo === true,
 		missionLogIntervalSteps:
@@ -577,6 +584,16 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 				`[Agents] Delegated agents run on provider=${agentsConnection.providerId} model=${agentsConnection.modelId}, not the session's`,
 			);
 		}
+		// Tools that are simply absent are their own kind of confusion, so the
+		// one place that knows why says so.
+		if (
+			!slotsAllowParallelDelegation(config.maxConcurrentAgents) &&
+			(config.enableSpawnAgent !== false || config.enableAgentTeams !== false)
+		) {
+			(logger ?? config.logger)?.log(
+				"[Agents] spawn_agent and the team tools are withheld: this endpoint serves 1 request at a time, so a delegated agent would run after the agent that spawned it rather than beside it. Raise the profile's parallel sessions to offer them.",
+			);
+		}
 		if (normalized.enableSpawnAgent) {
 			if (configuredAgents.configs.length > 0) {
 				tools.push(
@@ -741,7 +758,16 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 			return teamRuntime;
 		};
 
-		if (normalized.enableSpawnAgent && createSpawnTool) {
+		// `spawn_agent` goes the same way as the team tools and for the same
+		// reason. The configured agents above do not: one of those exists
+		// because someone wrote a file naming it, with its own model and often
+		// its own provider, and a deliberate hand-off is worth serialising. This
+		// is the open-ended one the model reaches for on its own.
+		if (
+			normalized.enableSpawnAgent &&
+			createSpawnTool &&
+			slotsAllowParallelDelegation(config.maxConcurrentAgents)
+		) {
 			const spawnTool = createSpawnTool();
 			tools.push({
 				...spawnTool,
