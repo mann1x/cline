@@ -48,6 +48,7 @@ import {
 	ApplyPatchInputUnionSchema,
 	type AskQuestionInput,
 	AskQuestionInputSchema,
+	describeEditorArgumentGap,
 	type EditFileInput,
 	EditFileInputSchema,
 	type FetchWebContentInput,
@@ -889,10 +890,18 @@ export function createEditorTool(
 			// JSON Schema the model is shown still advertises exactly one name
 			// for this argument. The alias is a landing net, not a second way
 			// of calling the tool.
-			const validatedInput = validateWithZod(
-				EditFileInputSchema,
-				withNewTextAlias(input),
-			);
+			const aliased = withNewTextAlias(input);
+			// Only on the way out: a call that validates has nothing to be told.
+			const validatedInput = ((): EditFileInput => {
+				try {
+					return validateWithZod(EditFileInputSchema, aliased);
+				} catch (error) {
+					const gap = describeEditorArgumentGap(aliased);
+					throw gap
+						? new Error(`${formatError(error)}\n${gap}`)
+						: (error as Error);
+				}
+			})();
 			const operation = validatedInput.insert_line == null ? "edit" : "insert";
 			const sizeError = getEditorSizeError(validatedInput);
 

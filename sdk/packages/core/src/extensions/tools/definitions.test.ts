@@ -2435,3 +2435,90 @@ describe("an editor call that names new_text something else", () => {
 		).rejects.toThrow("new_text");
 	});
 });
+
+describe("an editor call refused for a missing argument", () => {
+	/** The message the model is handed back, as one string. */
+	async function refusal(input: unknown): Promise<string> {
+		const execute: EditorExecutor = async () => "edited";
+		const tool = createEditorTool(execute, { cwd: "/w" });
+		try {
+			await tool.execute(input as EditFileInput, {} as never);
+		} catch (error) {
+			return (error as Error).message;
+		}
+		throw new Error("the call was not refused");
+	}
+
+	// Five of the six missing-argument refusals in the campaign were this: a
+	// range addressed, no body, and a model deleting text with no reason to
+	// think a deletion needs a replacement spelled out.
+	it("spells out how to delete the range it addressed", async () => {
+		const message = await refusal({
+			path: "/w/game.html",
+			start_line: 95,
+			end_line: 291,
+			old_text: "  dGrid(c,x){",
+		});
+
+		expect(message).toContain("Missing required argument `new_text`");
+		expect(message).toContain('`new_text: ""`');
+	});
+
+	it("says what the call did carry, so the model can tell which one it was", async () => {
+		const message = await refusal({
+			path: "/w/game.html",
+			start_line: 95,
+			end_line: 291,
+		});
+
+		expect(message).toContain("The call carried: `path`");
+		expect(message).toContain("`start_line`");
+		expect(message).toContain("`end_line`");
+	});
+
+	// Measured: an `editor` call carrying `line_numbers` was a `read_files`
+	// call in the wrong envelope, and the refusal named only `new_text`.
+	it("names read_files when the arguments are a read", async () => {
+		const message = await refusal({
+			path: "/w/game.html",
+			start_line: 90,
+			end_line: 90,
+			line_numbers: false,
+		});
+
+		expect(message).toContain("`read_files`");
+		expect(message).toContain("`line_numbers`");
+	});
+
+	// The tool that fills in the file a model forgot to name is the tool that
+	// edits the wrong one.
+	it("proposes no path of its own when path is what is missing", async () => {
+		const message = await refusal({
+			start_line: 96,
+			end_line: 97,
+			new_text: "  sX(){return -1;}",
+		});
+
+		expect(message).toContain("Missing required argument `path`");
+		expect(message).toContain("never inferred");
+		expect(message).not.toContain("/w/");
+	});
+
+	// A call that validates has nothing to be told.
+	it("says none of this when the call is well formed", async () => {
+		const seen: EditFileInput[] = [];
+		const execute: EditorExecutor = async (input) => {
+			seen.push(input);
+			return "Replaced line 95";
+		};
+		const tool = createEditorTool(execute, { cwd: "/w" });
+
+		const result = await tool.execute(
+			{ path: "/w/a.ts", start_line: 3, new_text: "" } as EditFileInput,
+			{} as never,
+		);
+
+		expect((result as { success: boolean }).success).toBe(true);
+		expect(seen).toHaveLength(1);
+	});
+});
