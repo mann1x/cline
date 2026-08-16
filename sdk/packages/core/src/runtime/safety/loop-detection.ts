@@ -55,6 +55,50 @@ function strikeWarning(remaining: number): string {
 	return `Warning: you have only ${remaining} strikes left before the system will stop the session. Sending the same call again spends one for nothing.`;
 }
 
+/**
+ * Somewhere to go, which the countdown alone does not give.
+ *
+ * Measured: one transaction took nine `strikes left` warnings and the
+ * last-strike notice — ten in all — and was still stopped for repeating the
+ * same call. Every one of those told it the run was ending and none told it
+ * what to do instead, so it kept doing the only thing it had. The transcripts
+ * show the model reaching for this by itself: "let me take a fundamentally
+ * different approach" appears fourteen times in one transaction, arrived at
+ * unaided and too late.
+ *
+ * So the warning now carries a different concrete move each time, and they
+ * escalate in scope rather than in volume: check the state, then change how
+ * the call is addressed, then change what is being worked on at all. A model
+ * that has read the same instruction three times has learned nothing from the
+ * third; one that is handed a new thing to try has somewhere to put the turn.
+ *
+ * Kept to one short paragraph each. This rides on a tool result the model is
+ * already reading, and a wall of advice under a failed call is skimmed.
+ */
+function steeringFor(attempt: number, toolName: string): string {
+	if (attempt <= 1) {
+		return `Before sending anything else: look at what this call targets as it is right now, with a tool that reads rather than writes, and compare that against what you meant it to be. If it already says what you wanted, this piece is done — record that and move to the next one.`;
+	}
+	if (attempt === 2) {
+		// The addressing advice is only true for a tool that edits by matching
+		// text, and naming the wrong remedy is worse than naming none: a model
+		// told to "use coordinates" on a shell command will invent something.
+		return EDITING_TOOL_NAMES.has(toolName)
+			? `If it does not say what you wanted, this call is not landing where you think it is. Change how it addresses the file rather than what it writes: give \`start_line\` and \`start_column\` instead of text to match on. Matching text is exactly what fails on a long or minified line, and a position cannot be mistyped into matching nothing.`
+			: `If the answer matters, change what produces it rather than asking again. Nothing about this call has changed, so nothing about its answer can — something has to happen first: make the edit, or use a different tool that answers the same question from the file itself.`;
+	}
+	return `Leave this alone now. Take the next thing that is still wrong and work on that; come back here only with something you have not already tried. If there is nothing else wrong, say in one sentence what is blocking you and stop — that is more use than another attempt.`;
+}
+
+/**
+ * Tools whose calls address a file by matching its text, and can therefore be
+ * redirected to address it by position instead.
+ *
+ * Named rather than inferred: the steering above hands out a specific remedy,
+ * and it has to be one the tool actually takes.
+ */
+const EDITING_TOOL_NAMES = new Set(["editor", "apply_patch"]);
+
 export interface LoopDetectionState {
 	lastToolName: string;
 	lastToolSignature: string;
@@ -252,12 +296,12 @@ export class LoopDetectionTracker {
 				this.state.settledKeys.add(key);
 				return {
 					kind: "soft",
-					message: `${explanation}\n\n${strikeWarning(remaining)}`,
+					message: `${explanation}\n\n${steeringFor(strike, call.name)}\n\n${strikeWarning(remaining)}`,
 				};
 			}
 			return {
 				kind: "hard",
-				message: `This exact call to \`${call.name}\` was refused ${strike} times because what it sends is character-for-character what the file already holds. The arguments are unchanged, so the result cannot be either — the fix belongs somewhere other than this call: a different range, different text, or a different tool.`,
+				message: `This exact call to \`${call.name}\` was refused ${strike} times because what it sends is character-for-character what the file already holds. The arguments are unchanged, so the result cannot be either.\n\n${steeringFor(3, call.name)}`,
 			};
 		}
 
@@ -265,7 +309,7 @@ export class LoopDetectionTracker {
 		if (barren >= STRIKE_LIMIT) {
 			return {
 				kind: "hard",
-				message: `This exact call to \`${call.name}\` has already been made ${barren} times and failed every time. The arguments have not changed between attempts, so neither will the result — the next attempt needs different arguments or a different tool.`,
+				message: `This exact call to \`${call.name}\` has already been made ${barren} times and failed every time. The arguments have not changed between attempts, so neither will the result.\n\n${steeringFor(3, call.name)}`,
 			};
 		}
 		// The same countdown for a call that keeps failing outright. The first
@@ -274,7 +318,7 @@ export class LoopDetectionTracker {
 		if (barren > 0) {
 			return {
 				kind: "soft",
-				message: `This \`${call.name}\` call has now failed ${barren} time${barren === 1 ? "" : "s"} with these exact arguments, and nothing about them has changed between attempts.\n\n${strikeWarning(STRIKE_LIMIT - barren)}`,
+				message: `This \`${call.name}\` call has now failed ${barren} time${barren === 1 ? "" : "s"} with these exact arguments, and nothing about them has changed between attempts.\n\n${steeringFor(barren, call.name)}\n\n${strikeWarning(STRIKE_LIMIT - barren)}`,
 			};
 		}
 
@@ -287,13 +331,13 @@ export class LoopDetectionTracker {
 		if (result.hardEscalation) {
 			return {
 				kind: "hard",
-				message: `Detected ${this.state.consecutiveIdenticalCount} consecutive identical calls to \`${call.name}\`. The arguments have not changed between them, so neither will the result.`,
+				message: `Detected ${this.state.consecutiveIdenticalCount} consecutive identical calls to \`${call.name}\`. The arguments have not changed between them, so neither will the result.\n\n${steeringFor(3, call.name)}`,
 			};
 		}
 		if (result.softWarning) {
 			return {
 				kind: "soft",
-				message: `Detected ${this.state.consecutiveIdenticalCount} consecutive identical calls to \`${call.name}\`; consider trying a different approach.`,
+				message: `Detected ${this.state.consecutiveIdenticalCount} consecutive identical calls to \`${call.name}\`.\n\n${steeringFor(this.state.consecutiveIdenticalCount - 2, call.name)}`,
 			};
 		}
 		return { kind: "ok" };

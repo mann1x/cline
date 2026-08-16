@@ -241,3 +241,109 @@ describe("a call the tool has declared a no-op", () => {
 		expect(tracker.inspect(call).kind).toBe("ok");
 	});
 });
+
+/**
+ * The countdown says the run is ending. It does not say what to do instead,
+ * and measured, that is not enough: one transaction took nine "strikes left"
+ * warnings and the last-strike notice and was still stopped for repeating the
+ * same call.
+ */
+describe("steering a repeated call somewhere else", () => {
+	const edit = {
+		name: "editor",
+		input: { path: "a.js", old_text: "x", new_text: "y" },
+	};
+
+	function warn(tracker: LoopDetectionTracker, times: number): string[] {
+		const seen: string[] = [];
+		for (let i = 0; i < times; i++) {
+			seen.push(tracker.inspect(edit).message ?? "");
+			tracker.noteOutcome(false, true);
+		}
+		return seen;
+	}
+
+	it("says something different each time rather than repeating itself", () => {
+		const tracker = new LoopDetectionTracker();
+		tracker.inspect(edit);
+		tracker.noteOutcome(false, true);
+
+		const [first, second, third] = warn(tracker, 3);
+
+		expect(first).not.toBe(second);
+		expect(second).not.toBe(third);
+	});
+
+	it("asks for the current state before it asks for anything else", () => {
+		const tracker = new LoopDetectionTracker();
+		tracker.inspect(edit);
+		tracker.noteOutcome(false, true);
+
+		expect(warn(tracker, 1)[0]).toContain("reads rather than writes");
+	});
+
+	// The remedy has to be one the tool actually takes. Told to "use
+	// coordinates", a model whose call was a shell command will invent
+	// something that does not exist.
+	it("offers coordinates to an editing tool", () => {
+		const tracker = new LoopDetectionTracker();
+		tracker.inspect(edit);
+		tracker.noteOutcome(false, true);
+
+		expect(warn(tracker, 2)[1]).toContain("start_column");
+	});
+
+	it("offers a command something a command can do", () => {
+		const shell = { name: "run_commands", input: { command: "node app.js" } };
+		const tracker = new LoopDetectionTracker();
+		tracker.inspect(shell);
+		tracker.noteOutcome(false, true);
+
+		const seen: string[] = [];
+		for (let i = 0; i < 2; i++) {
+			seen.push(tracker.inspect(shell).message ?? "");
+			tracker.noteOutcome(false, true);
+		}
+
+		expect(seen[1]).not.toContain("start_column");
+		expect(seen[1]).toContain("change what produces it");
+	});
+
+	it("tells it to work on something else before the run ends", () => {
+		const tracker = new LoopDetectionTracker();
+		tracker.inspect(edit);
+		tracker.noteOutcome(false, true);
+
+		expect(warn(tracker, 3)[2]).toContain("Leave this alone");
+	});
+
+	// The last thing the model reads before the run stops should still hand it
+	// somewhere to go — the first hard verdict is delivered as a warning with
+	// the call still running.
+	it("keeps steering in the verdict that ends it", () => {
+		const tracker = new LoopDetectionTracker();
+		tracker.inspect(edit);
+		tracker.noteOutcome(false, true);
+		let last = "";
+		for (let i = 0; i < 8; i++) {
+			const verdict = tracker.inspect(edit);
+			last = verdict.message ?? "";
+			if (verdict.kind === "hard") {
+				break;
+			}
+			tracker.noteOutcome(false, true);
+		}
+
+		expect(last).toContain("Leave this alone");
+	});
+
+	// The countdown is what makes the stop honest, and it is load-bearing on
+	// its own: the steering is added to it, not swapped for it.
+	it("still counts the strikes out loud", () => {
+		const tracker = new LoopDetectionTracker();
+		tracker.inspect(edit);
+		tracker.noteOutcome(false, true);
+
+		expect(warn(tracker, 1)[0]).toContain("strikes left");
+	});
+});
