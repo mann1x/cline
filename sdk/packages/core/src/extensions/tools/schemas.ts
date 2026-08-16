@@ -403,6 +403,45 @@ export const LooseFetchWebContentInputSchema = z.union([
 ]);
 
 /**
+ * The names a model reaches for when it means `new_text`.
+ *
+ * Measured on two builds: an `editor` call carrying `path`, `start_line`,
+ * `end_line` and the whole replacement body under `text` — every argument
+ * present, complete and correct, and the call refused for a missing one. Eight
+ * such calls in one transaction and ten in another, each a turn spent on a
+ * rename, and one of those transactions was two hours long.
+ *
+ * Accepting the synonym is safe in a way that repairing a payload is not, and
+ * the difference is worth stating. Nothing here reconstructs a value or infers
+ * intent: the schema has no `text`, `content` or `replacement` field of its
+ * own, so a string under one of those names has exactly one thing it can be,
+ * and it arrived whole. A `new_text` that was cut short still fails, as it
+ * must — a call truncated mid-value patched up and executed writes the
+ * fragment over the file it names, and says nothing.
+ *
+ * `new_text` wins wherever both are present: a model that sent the real
+ * argument meant it, and a stray `text` beside it is not a vote.
+ */
+const NEW_TEXT_ALIASES = ["text", "content", "replacement"] as const;
+
+export function withNewTextAlias(value: unknown): unknown {
+	if (value == null || typeof value !== "object" || Array.isArray(value)) {
+		return value;
+	}
+	const input = value as Record<string, unknown>;
+	if (typeof input.new_text === "string") {
+		return value;
+	}
+	for (const alias of NEW_TEXT_ALIASES) {
+		if (typeof input[alias] === "string") {
+			const { [alias]: aliased, ...rest } = input;
+			return { ...rest, new_text: aliased };
+		}
+	}
+	return value;
+}
+
+/**
  * Schema for editor tool input
  */
 export const EditFileInputSchema = z

@@ -13,7 +13,7 @@ import {
 import { CommandExitError } from "./executors/bash";
 import { RUN_COMMAND_QUERY_PREVIEW_LIMIT, TimeoutError } from "./helpers";
 import { EDITOR_ARG_CHAR_LIMIT, type EditFileInput } from "./schemas";
-import type { SkillsExecutorWithMetadata } from "./types";
+import type { EditorExecutor, SkillsExecutorWithMetadata } from "./types";
 
 function hasSchemaKey(value: unknown, key: string): boolean {
 	if (Array.isArray(value)) {
@@ -2325,5 +2325,113 @@ describe("default editor tool", () => {
 		expect(result.error).toContain("old_text was");
 		expect(result.error).toContain("start_line");
 		expect(execute).not.toHaveBeenCalled();
+	});
+});
+
+/**
+ * Measured on two builds: an `editor` call carrying `path`, `start_line`,
+ * `end_line` and the whole replacement body under `text` — everything present
+ * and correct, refused for a missing argument. Eight such calls in one
+ * two-hour transaction, ten in another.
+ */
+describe("an editor call that names new_text something else", () => {
+	/** Captures what the executor was actually handed, typed. */
+	function recordingEditor() {
+		const seen: EditFileInput[] = [];
+		const execute: EditorExecutor = async (input) => {
+			seen.push(input);
+			return "Replaced line 95";
+		};
+		return { seen, tool: createEditorTool(execute, { cwd: "/w" }) };
+	}
+
+	it("takes `text` as the replacement body", async () => {
+		const { seen, tool } = recordingEditor();
+
+		const result = await tool.execute(
+			{
+				path: "/w/game.html",
+				text: "const a = 1;",
+				start_line: 95,
+				end_line: 95,
+			} as unknown as EditFileInput,
+			{} as never,
+		);
+
+		expect((result as { success: boolean }).success).toBe(true);
+		expect(seen[0]).toMatchObject({ new_text: "const a = 1;" });
+	});
+
+	it.each(["content", "replacement"])("takes `%s` too", async (alias) => {
+		const { seen, tool } = recordingEditor();
+
+		await tool.execute(
+			{
+				path: "/w/a.ts",
+				[alias]: "x",
+				start_line: 3,
+			} as unknown as EditFileInput,
+			{} as never,
+		);
+
+		expect(seen[0]).toMatchObject({ new_text: "x" });
+	});
+
+	// A model that sent the real argument meant it; a stray alias beside it is
+	// not a vote.
+	it("prefers new_text wherever both are present", async () => {
+		const { seen, tool } = recordingEditor();
+
+		await tool.execute(
+			{
+				path: "/w/a.ts",
+				new_text: "real",
+				text: "stray",
+				start_line: 3,
+			} as unknown as EditFileInput,
+			{} as never,
+		);
+
+		expect(seen[0]).toMatchObject({ new_text: "real" });
+	});
+
+	// The alias is a landing net, not a second way to call the tool: the model
+	// is still shown exactly one name for this argument.
+	it("does not advertise the aliases in the schema", () => {
+		const { tool } = recordingEditor();
+
+		expect(hasSchemaKey(tool.inputSchema, "new_text")).toBe(true);
+		expect(hasSchemaKey(tool.inputSchema, "text")).toBe(false);
+		expect(hasSchemaKey(tool.inputSchema, "content")).toBe(false);
+	});
+
+	// This is a rename, never a reconstruction. A call with no replacement body
+	// under any name is still missing one, and must fail rather than be
+	// invented into an empty write.
+	it("still refuses a call that carries no body at all", async () => {
+		const { seen, tool } = recordingEditor();
+
+		await expect(
+			tool.execute(
+				{ path: "/w/a.ts", start_line: 3 } as unknown as EditFileInput,
+				{} as never,
+			),
+		).rejects.toThrow("new_text");
+		expect(seen).toHaveLength(0);
+	});
+
+	it("ignores an alias that is not a string", async () => {
+		const { tool } = recordingEditor();
+
+		await expect(
+			tool.execute(
+				{
+					path: "/w/a.ts",
+					text: 42,
+					start_line: 3,
+				} as unknown as EditFileInput,
+				{} as never,
+			),
+		).rejects.toThrow("new_text");
 	});
 });

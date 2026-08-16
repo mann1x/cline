@@ -290,7 +290,12 @@ describe("steering a repeated call somewhere else", () => {
 		tracker.inspect(edit);
 		tracker.noteOutcome(false, true);
 
-		expect(warn(tracker, 2)[1]).toContain("start_column");
+		const message = warn(tracker, 2)[1];
+		expect(message).toContain("start_column");
+		// It must not read as "send only the coordinates". Measured: eight
+		// editor calls in one transaction carried every argument except a
+		// `new_text` by that name, and were refused for it.
+		expect(message).toContain("still called `new_text`");
 	});
 
 	it("offers a command something a command can do", () => {
