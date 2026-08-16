@@ -3,6 +3,7 @@ import {
 	agentEndpointKey,
 	createAgentSlotGate,
 	createAgentSlotGateRegistry,
+	slotsAllowParallelDelegation,
 } from "./agent-slot-gate";
 
 /** A task that finishes only when told to, so overlap is observable. */
@@ -247,5 +248,36 @@ describe("createAgentSlotGateRegistry", () => {
 
 		second.resolve();
 		await secondRun;
+	});
+});
+
+describe("whether delegation is worth offering at all", () => {
+	// One slot means a spawned agent runs after its parent's request, not
+	// beside it. Nothing finishes sooner and the model spent a turn asking.
+	it("says no on a one-slot endpoint", () => {
+		expect(slotsAllowParallelDelegation(1)).toBe(false);
+	});
+
+	it("says yes once the endpoint serves more than one", () => {
+		expect(slotsAllowParallelDelegation(2)).toBe(true);
+		expect(slotsAllowParallelDelegation(10)).toBe(true);
+	});
+
+	// `undefined` is a host that never resolved a count, and `0` is a host
+	// saying admission control decides. Neither is a one-slot server, and
+	// reading either as one would take the tools away from a host that has
+	// them working today.
+	it("leaves a host that resolved no count alone", () => {
+		expect(slotsAllowParallelDelegation(undefined)).toBe(true);
+	});
+
+	it("leaves admission control to decide when the cap is lifted", () => {
+		expect(slotsAllowParallelDelegation(0)).toBe(true);
+	});
+
+	it("treats a number that says nothing as no count at all", () => {
+		expect(slotsAllowParallelDelegation(Number.NaN)).toBe(true);
+		expect(slotsAllowParallelDelegation(Number.POSITIVE_INFINITY)).toBe(true);
+		expect(slotsAllowParallelDelegation(-3)).toBe(true);
 	});
 });

@@ -4,6 +4,7 @@ export {
 	agentEndpointKey,
 	createAgentSlotGate,
 	createAgentSlotGateRegistry,
+	slotsAllowParallelDelegation,
 } from "./agent-slot-gate";
 export {
 	buildDelegatedAgentConfig,
