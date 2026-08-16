@@ -84,7 +84,7 @@ function steeringFor(attempt: number, toolName: string): string {
 		// text, and naming the wrong remedy is worse than naming none: a model
 		// told to "use coordinates" on a shell command will invent something.
 		return EDITING_TOOL_NAMES.has(toolName)
-			? `If it does not say what you wanted, this call is not landing where you think it is. Change how it addresses the file rather than what it writes: give \`start_line\` and \`start_column\` instead of text to match on. Matching text is exactly what fails on a long or minified line, and a position cannot be mistyped into matching nothing.`
+			? `If it does not say what you wanted, this call is not landing where you think it is. Change how it addresses the file rather than what it writes: give \`start_line\` and \`start_column\` in place of \`old_text\`, keeping \`new_text\` — the replacement body is still required and is still called \`new_text\`. Matching text is exactly what fails on a long or minified line, and a position cannot be mistyped into matching nothing.`
 			: `If the answer matters, change what produces it rather than asking again. Nothing about this call has changed, so nothing about its answer can — something has to happen first: make the edit, or use a different tool that answers the same question from the file itself.`;
 	}
 	return `Leave this alone now. Take the next thing that is still wrong and work on that; come back here only with something you have not already tried. If there is nothing else wrong, say in one sentence what is blocking you and stop — that is more use than another attempt.`;

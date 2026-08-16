@@ -66,6 +66,7 @@ import {
 	type StructuredCommandInput,
 	type SubmitInput,
 	SubmitInputSchema,
+	withNewTextAlias,
 } from "./schemas";
 import {
 	TASK_PROGRESS_PARAM,
@@ -884,7 +885,14 @@ export function createEditorTool(
 		retryable: false, // Editing operations are stateful and should not auto-retry
 		maxRetries: 0,
 		execute: async (input, context) => {
-			const validatedInput = validateWithZod(EditFileInputSchema, input);
+			// Applied before validation rather than inside the schema, so the
+			// JSON Schema the model is shown still advertises exactly one name
+			// for this argument. The alias is a landing net, not a second way
+			// of calling the tool.
+			const validatedInput = validateWithZod(
+				EditFileInputSchema,
+				withNewTextAlias(input),
+			);
 			const operation = validatedInput.insert_line == null ? "edit" : "insert";
 			const sizeError = getEditorSizeError(validatedInput);
 
