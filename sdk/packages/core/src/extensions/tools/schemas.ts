@@ -405,11 +405,12 @@ export const LooseFetchWebContentInputSchema = z.union([
 /**
  * The names a model reaches for when it means `new_text`.
  *
- * Measured on two builds: an `editor` call carrying `path`, `start_line`,
- * `end_line` and the whole replacement body under `text` — every argument
- * present, complete and correct, and the call refused for a missing one. Eight
- * such calls in one transaction and ten in another, each a turn spent on a
- * rename, and one of those transactions was two hours long.
+ * This is a landing net kept on judgement, not on evidence: every refused
+ * `editor` call in the campaign that measured it was missing its body outright
+ * rather than sending it under another name. A first reading of that data said
+ * otherwise and it was wrong. It stays because the cost of catching a synonym
+ * is one rename and the cost of missing one is a spent turn, and a smaller
+ * model is likelier to reach for the ordinary word.
  *
  * Accepting the synonym is safe in a way that repairing a payload is not, and
  * the difference is worth stating. Nothing here reconstructs a value or infers
@@ -439,6 +440,65 @@ export function withNewTextAlias(value: unknown): unknown {
 		}
 	}
 	return value;
+}
+
+/** Arguments that address a region without saying what belongs in it. */
+const EDITOR_ADDRESSING_ARGS = [
+	"old_text",
+	"start_line",
+	"end_line",
+	"start_column",
+	"end_column",
+	"insert_line",
+	"insert_column",
+	"occurrence",
+	"replace_all",
+] as const;
+
+/** Arguments that belong to `read_files`, which the editor's schema drops. */
+const READ_FILES_ARGS = ["files", "line_numbers"] as const;
+
+/**
+ * Say what an incomplete `editor` call was trying to be.
+ *
+ * "Missing required argument `new_text`" is accurate and, on the calls that
+ * earn it, not enough. Measured across eleven runs, six `editor` calls were
+ * refused for a missing argument and five of them had addressed a region and
+ * sent no body: the model was deleting a range and had no reason to think a
+ * deletion needed a replacement to be spelled out. The sixth carried
+ * `line_numbers` — a `read_files` argument — and was a read wearing the wrong
+ * envelope, which the refusal, complaining only about `new_text`, hid.
+ *
+ * Every line here is read off the arguments that arrived. Nothing is guessed,
+ * and in particular no path is ever proposed: the tool that fills in the file
+ * a model forgot to name is the tool that edits the wrong one.
+ */
+export function describeEditorArgumentGap(value: unknown): string | null {
+	if (value == null || typeof value !== "object" || Array.isArray(value)) {
+		return null;
+	}
+	const input = value as Record<string, unknown>;
+	const has = (key: string) => input[key] !== undefined && input[key] !== null;
+	const notes: string[] = [];
+
+	if (!has("new_text") && EDITOR_ADDRESSING_ARGS.some(has)) {
+		notes.push(
+			'`new_text` is what goes into the region you addressed, and every form of this call needs it — a deletion included. To delete that region rather than replace it, send `new_text: ""`.',
+		);
+	}
+	if (!has("path")) {
+		notes.push(
+			"`path` is the one file this call edits. It is not carried over from an earlier call and is never inferred, so a call without it is not aimed at anything.",
+		);
+	}
+	const readArgs = READ_FILES_ARGS.filter(has);
+	if (readArgs.length > 0) {
+		const names = readArgs.map((arg) => `\`${arg}\``).join(" and ");
+		notes.push(
+			`${names} ${readArgs.length === 1 ? "is an argument" : "are arguments"} of \`read_files\`, not of \`editor\`, and ${readArgs.length === 1 ? "was" : "were"} dropped here. If you meant to look at that range rather than change it, call \`read_files\`.`,
+		);
+	}
+	return notes.length > 0 ? notes.join("\n") : null;
 }
 
 /**

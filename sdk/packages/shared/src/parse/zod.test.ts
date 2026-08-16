@@ -25,6 +25,33 @@ describe("validateWithZod", () => {
 		);
 	});
 
+	// A transcript holds dozens of edits to one file, and "send `path` and call
+	// again" identifies none of them. The names it did send do.
+	it("lists the arguments the call did carry", () => {
+		expect(() =>
+			validateWithZod(EditorLike, { start_line: 87, new_text: "x" }),
+		).toThrow("The call carried: `start_line`, `new_text`.");
+	});
+
+	it("says nothing about what was carried when nothing was", () => {
+		expect(() => validateWithZod(EditorLike, {})).toThrow(
+			/Send them and call again\.$/,
+		);
+	});
+
+	// Names only: a rejected call's values are the model's own text, often the
+	// whole file, and echoing them back buys nothing.
+	it("never echoes the values back", () => {
+		let message = "";
+		try {
+			validateWithZod(EditorLike, { new_text: "the whole file" });
+		} catch (error) {
+			message = (error as Error).message;
+		}
+		expect(message).toContain("The call carried: `new_text`.");
+		expect(message).not.toContain("the whole file");
+	});
+
 	it("names a nested path", () => {
 		const schema = z.object({ files: z.object({ path: z.string() }) });
 		expect(() => validateWithZod(schema, { files: {} })).toThrow(

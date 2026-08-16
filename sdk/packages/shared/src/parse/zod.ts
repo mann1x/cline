@@ -29,6 +29,35 @@ function valueAtPath(input: unknown, path: PropertyKey[]): unknown {
 	return current;
 }
 
+/**
+ * Say what the call did carry, alongside what it did not.
+ *
+ * The names it sent are the part of the call the model can recognise. A
+ * transcript holds dozens of edits to one file, and "send `new_text` and call
+ * again" identifies none of them; the arguments it did send do. It also shows
+ * an argument that belongs to another tool sitting in this one — measured, an
+ * `editor` call carrying `line_numbers` was a `read_files` call in the wrong
+ * envelope, and nothing in the refusal said so.
+ *
+ * Names only, never values: a rejected call's values are the model's own text,
+ * often the whole file, and echoing them back buys nothing.
+ */
+function describeCarriedFields(input: unknown, missing: Set<string>): string {
+	if (input === null || typeof input !== "object" || Array.isArray(input)) {
+		return "";
+	}
+	const carried = Object.keys(input as Record<string, unknown>).filter(
+		(key) =>
+			!missing.has(key) &&
+			(input as Record<string, unknown>)[key] !== undefined,
+	);
+	if (carried.length === 0) {
+		return "";
+	}
+	const names = carried.map((field) => `\`${field}\``).join(", ");
+	return `\nThe call carried: ${names}.`;
+}
+
 function describeMissingFields(
 	error: z.ZodError,
 	input: unknown,
@@ -51,9 +80,10 @@ function describeMissingFields(
 	}
 	const fields = [...missing];
 	const names = fields.map((field) => `\`${field}\``).join(", ");
+	const carried = describeCarriedFields(input, missing);
 	return fields.length === 1
-		? `Missing required argument ${names}. Send it and call again.`
-		: `Missing required arguments: ${names}. Send them and call again.`;
+		? `Missing required argument ${names}. Send it and call again.${carried}`
+		: `Missing required arguments: ${names}. Send them and call again.${carried}`;
 }
 
 /** Longest preview of the offending input included in an error. */
