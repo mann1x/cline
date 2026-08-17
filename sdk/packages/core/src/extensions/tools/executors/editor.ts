@@ -585,6 +585,18 @@ function quoteCurrentLines(
  */
 export const NO_CHANGE_ERROR_PREFIX = "No change: ";
 
+/**
+ * Marker that opens every "this replacement would duplicate" refusal.
+ *
+ * The same kind of outcome as `NO_CHANGE_ERROR_PREFIX` and recognised the same
+ * way: both are reached by comparing the payload against the file, so both are
+ * answerable in advance for an identical retry. Only the no-op one was marked,
+ * which is why a duplicating edit took the ordinary six-strike ladder --
+ * measured live, the same 4,991-character replacement at line 84 seven times
+ * before the run was stopped.
+ */
+export const DUPLICATED_RANGE_ERROR_PREFIX = "Duplicated instead of replaced: ";
+
 function noChangeMessage(
 	filePath: string,
 	why: string,
@@ -654,7 +666,7 @@ function duplicatedRangeMessage(
 			? ` You have now sent this identical edit ${repeats} times and it has been refused ${repeats} times for the same reason, so sending it again will not apply it either.`
 			: "";
 	throw new Error(
-		`Duplicated instead of replaced: the edit to ${range} in ${filePath} was not applied.${history} None of the ${requestedLines} line(s) you named were removed, yet ${added} new line(s) were added — so what you sent as \`new_text\` opens with the text already at ${range} and then continues, which appends a second copy rather than replacing anything.${gutterHint} If you meant to rewrite that range, send only the text that should end up there, without restating the lines that are already at ${range}. If you meant to add code, insert it at the line it belongs on instead. Re-read the file first: after earlier edits the line numbers you are working from may no longer point at what you think.`,
+		`${DUPLICATED_RANGE_ERROR_PREFIX}the edit to ${range} in ${filePath} was not applied.${history} None of the ${requestedLines} line(s) you named were removed, yet ${added} new line(s) were added — so what you sent as \`new_text\` opens with the text already at ${range} and then continues, which appends a second copy rather than replacing anything.${gutterHint} If you meant to rewrite that range, send only the text that should end up there, without restating the lines that are already at ${range}. If you meant to add code, insert it at the line it belongs on instead. Re-read the file first: after earlier edits the line numbers you are working from may no longer point at what you think.`,
 	);
 }
 

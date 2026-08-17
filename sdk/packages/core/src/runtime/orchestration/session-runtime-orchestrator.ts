@@ -48,7 +48,10 @@ import {
 	mergeModelOptions,
 	type ToolCallRecord,
 } from "@cline/shared";
-import { NO_CHANGE_ERROR_PREFIX } from "../../extensions/tools/executors/editor";
+import {
+	DUPLICATED_RANGE_ERROR_PREFIX,
+	NO_CHANGE_ERROR_PREFIX,
+} from "../../extensions/tools/executors/editor";
 import { filterDisabledTools } from "../../services/global-settings";
 import {
 	createAgentModelFromConfig,
@@ -213,10 +216,19 @@ export function declaredNoOp(output: unknown): boolean {
 			return false;
 		}
 		const record = entry as { success?: unknown; error?: unknown };
+		if (record.success !== false || typeof record.error !== "string") {
+			return false;
+		}
+		// Two markers, one class: a refusal the tool reached by comparing what
+		// was sent against what the file holds. Neither can come out differently
+		// for identical arguments, which is what puts them on the short ladder
+		// rather than the ordinary one. The duplicating refusal was missing from
+		// here, and that omission is the whole of why it took seven attempts to
+		// stop: measured live, one 4,991-character replacement at line 84, sent
+		// seven times, refused identically every time.
 		return (
-			record.success === false &&
-			typeof record.error === "string" &&
-			record.error.includes(NO_CHANGE_ERROR_PREFIX)
+			record.error.includes(NO_CHANGE_ERROR_PREFIX) ||
+			record.error.includes(DUPLICATED_RANGE_ERROR_PREFIX)
 		);
 	});
 }

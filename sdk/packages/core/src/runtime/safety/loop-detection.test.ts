@@ -127,28 +127,36 @@ describe("a call the tool has declared a no-op", () => {
 		expect(tracker.inspect(call).kind).toBe("ok");
 		tracker.noteOutcome(false, true);
 
+		// Four, not six. A refusal the tool reached by comparing the payload
+		// against the file cannot come out differently for identical arguments,
+		// so the budget is the advice: three distinct warnings, then the stop.
+		// At six, measured live, the extra strikes bought three more identical
+		// calls at ~5,000 output tokens each and the run stopped anyway.
 		const warned = tracker.inspect(call);
 		expect(warned.kind).toBe("soft");
 		expect(warned.message).toContain("refused as a no-op");
 		expect(warned.message).toContain("already in place");
-		expect(warned.message).toContain("only 5 strikes left");
+		expect(warned.message).toContain("only 3 strikes left");
 		tracker.noteOutcome(false, true);
 
 		const later: string[] = [];
-		for (let strike = 2; strike < 6; strike += 1) {
+		for (let strike = 2; strike < 4; strike += 1) {
 			const verdict = tracker.inspect(call);
 			expect(verdict.kind).toBe("soft");
 			later.push(verdict.message ?? "");
 			tracker.noteOutcome(false, true);
 		}
 
-		expect(later[0]).toContain("only 4 strikes left");
-		expect(later[3]).toContain("this is the LAST strike");
+		expect(later[0]).toContain("only 2 strikes left");
+		expect(later[1]).toContain("this is the LAST strike");
+		// The last warning is the last rung of the ladder, so the attempt after
+		// it is one taken with nothing left to say.
+		expect(later[1]).toContain("Leave this alone now");
 
 		const verdict = tracker.inspect(call);
 		expect(verdict.kind).toBe("hard");
-		expect(verdict.message).toContain("character-for-character");
-		expect(verdict.message).toContain("refused 6 times");
+		expect(verdict.message).toContain("answered it in advance");
+		expect(verdict.message).toContain("refused 4 times");
 	});
 
 	it("gives a payload that goes futile again its own warning", () => {
@@ -166,7 +174,7 @@ describe("a call the tool has declared a no-op", () => {
 		const fresh = tracker.inspect(call);
 		expect(fresh.kind).toBe("soft");
 		// The strikes go with it: the new episode gets the whole budget.
-		expect(fresh.message).toContain("only 5 strikes left");
+		expect(fresh.message).toContain("only 3 strikes left");
 	});
 
 	// Measured: `editor` applied lines 94-97, then the identical call was sent
@@ -322,10 +330,15 @@ describe("steering a repeated call somewhere else", () => {
 		expect(warn(tracker, 3)[2]).toContain("Leave this alone");
 	});
 
-	// The last thing the model reads before the run stops should still hand it
-	// somewhere to go — the first hard verdict is delivered as a warning with
-	// the call still running.
-	it("keeps steering in the verdict that ends it", () => {
+	// The verdict that ends the run reports; it does not steer. The steering
+	// used to be repeated here, and it reached the person rather than the model
+	// -- under a red row offering Retry and Start New Task, telling them to
+	// "take the next thing that is still wrong and work on that". Reported as
+	// "not useful, the 'leave this alone now' when it ends in retry/new task and
+	// it stops". What the reader needs there is what was repeated, how often,
+	// and that it had already been said, which is what decides between retrying
+	// as-is and steering by hand.
+	it("reports rather than advises in the verdict that ends it", () => {
 		const tracker = new LoopDetectionTracker();
 		tracker.inspect(edit);
 		tracker.noteOutcome(false, true);
@@ -339,7 +352,10 @@ describe("steering a repeated call somewhere else", () => {
 			tracker.noteOutcome(false, true);
 		}
 
-		expect(last).toContain("Leave this alone");
+		expect(last).not.toContain("Leave this alone");
+		expect(last).toContain("The run is being stopped here");
+		expect(last).toContain("warned about this call");
+		expect(last).toContain("Retry");
 	});
 
 	// The countdown is what makes the stop honest, and it is load-bearing on

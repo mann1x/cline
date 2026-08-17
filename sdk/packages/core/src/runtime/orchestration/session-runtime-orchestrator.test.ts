@@ -2719,6 +2719,23 @@ describe("declaredNoOp", () => {
 		).toBe(true);
 	});
 
+	// The other refusal reached the same way, and the one that was missing.
+	// Measured live on pandorum: one 4,991-character whole-class replacement at
+	// line 84, sent seven times, refused identically every time -- seven because
+	// this fell through to the ordinary six-strike ladder instead of the short
+	// one, for want of the marker being recognised here.
+	it("recognises the tool refusing an edit that would duplicate the range", () => {
+		expect(
+			declaredNoOp({
+				query: "edit:game.html",
+				result: "",
+				error:
+					"Editor operation failed: Duplicated instead of replaced: the edit to lines 84-98 in game.html was not applied.",
+				success: false,
+			}),
+		).toBe(true);
+	});
+
 	// An ordinary failure may stop failing next time; this one cannot, which is
 	// the whole distinction the loop tracker acts on.
 	it("does not fire on an ordinary failure", () => {

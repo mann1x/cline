@@ -43,6 +43,26 @@ import type { LoopDetectionConfig } from "@cline/shared";
 const STRIKE_LIMIT = 6;
 
 /**
+ * The same countdown, for a call the tool has already answered in advance.
+ *
+ * Six strikes is a budget for failures that might come out differently -- a
+ * locked file, a range that has since moved. A refusal the tool reached by
+ * comparing the payload against the file is not one of those: identical
+ * arguments give an identical answer, provably, and every strike after the
+ * advice runs out buys another turn of the same thing. Measured live, at six:
+ * one 4,991-character replacement sent seven times, ~5,000 output tokens each,
+ * and the run stopped anyway.
+ *
+ * Four, so the ladder finishes rather than repeats. The three warnings are
+ * distinct moves -- look at what is there, address it differently, leave it and
+ * work on something else -- and the fourth attempt is the one taken after all
+ * three were read. Stopping there is stopping when the advice is spent, which
+ * is the last moment the stop can still be about the model's behaviour rather
+ * than about the budget.
+ */
+const FUTILE_STRIKE_LIMIT = 4;
+
+/**
  * The countdown itself, in the model's own second person.
  *
  * Escalating rather than uniform because a repeated identical warning reads as
@@ -88,6 +108,25 @@ function steeringFor(attempt: number, toolName: string): string {
 			: `If the answer matters, change what produces it rather than asking again. Nothing about this call has changed, so nothing about its answer can — something has to happen first: make the edit, or use a different tool that answers the same question from the file itself.`;
 	}
 	return `Leave this alone now. Take the next thing that is still wrong and work on that; come back here only with something you have not already tried. If there is nothing else wrong, say in one sentence what is blocking you and stop — that is more use than another attempt.`;
+}
+
+/**
+ * What a stop says, which is not what a warning says.
+ *
+ * The terminal message used to end with `steeringFor(3, ...)` -- "leave this
+ * alone now, take the next thing that is still wrong" -- addressed to a model
+ * that has just been stopped and will not take anything. It reached the person
+ * instead, under a red row offering Retry and Start New Task, as advice nobody
+ * could act on: reported as "not useful, the 'leave this alone now' when it
+ * ends in retry/new task and it stops".
+ *
+ * So the stop reports. The reader needs to know what was repeated, how many
+ * times, and that the run had already said so before ending -- everything that
+ * decides whether to retry as-is or steer by hand. The advice keeps its place
+ * in the warnings, where there are still turns left to use it.
+ */
+function stoppedNotAdvised(attempts: number): string {
+	return `The run is being stopped here. It was warned about this call ${attempts > 3 ? "three times" : "on each earlier attempt"} and the same arguments came back, so further attempts would spend turns without changing anything. Retry to run it again as it stands, or send a message saying what to do differently.`;
 }
 
 /**
@@ -278,7 +317,7 @@ export class LoopDetectionTracker {
 		if (this.state.futileKeys.has(key)) {
 			const strike = (this.state.futileStrikes.get(key) ?? 0) + 1;
 			this.state.futileStrikes.set(key, strike);
-			const remaining = STRIKE_LIMIT - strike;
+			const remaining = FUTILE_STRIKE_LIMIT - strike;
 			if (remaining > 0) {
 				// One case is not a loop: the same call already *worked*, and what is
 				// being repeated is a success the model did not register. Measured: an
@@ -301,7 +340,7 @@ export class LoopDetectionTracker {
 			}
 			return {
 				kind: "hard",
-				message: `This exact call to \`${call.name}\` was refused ${strike} times because what it sends is character-for-character what the file already holds. The arguments are unchanged, so the result cannot be either.\n\n${steeringFor(3, call.name)}`,
+				message: `This exact call to \`${call.name}\` was refused ${strike} times because the tool compared it against the file and answered it in advance. The arguments are unchanged, so the result cannot be either.\n\n${stoppedNotAdvised(strike)}`,
 			};
 		}
 
@@ -309,7 +348,7 @@ export class LoopDetectionTracker {
 		if (barren >= STRIKE_LIMIT) {
 			return {
 				kind: "hard",
-				message: `This exact call to \`${call.name}\` has already been made ${barren} times and failed every time. The arguments have not changed between attempts, so neither will the result.\n\n${steeringFor(3, call.name)}`,
+				message: `This exact call to \`${call.name}\` has already been made ${barren} times and failed every time. The arguments have not changed between attempts, so neither will the result.\n\n${stoppedNotAdvised(barren)}`,
 			};
 		}
 		// The same countdown for a call that keeps failing outright. The first
@@ -331,7 +370,7 @@ export class LoopDetectionTracker {
 		if (result.hardEscalation) {
 			return {
 				kind: "hard",
-				message: `Detected ${this.state.consecutiveIdenticalCount} consecutive identical calls to \`${call.name}\`. The arguments have not changed between them, so neither will the result.\n\n${steeringFor(3, call.name)}`,
+				message: `Detected ${this.state.consecutiveIdenticalCount} consecutive identical calls to \`${call.name}\`. The arguments have not changed between them, so neither will the result.\n\n${stoppedNotAdvised(this.state.consecutiveIdenticalCount)}`,
 			};
 		}
 		if (result.softWarning) {
