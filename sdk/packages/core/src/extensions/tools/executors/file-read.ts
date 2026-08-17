@@ -50,17 +50,41 @@ export interface FileReadExecutorOptions {
 	includeLineNumbers?: boolean;
 
 	/**
+	 * The directory a relative path is resolved against.
+	 *
+	 * The workspace, not the process. These are the same thing only when the
+	 * agent was launched from the directory it is working in, and in the two
+	 * hosts that matter they are not: the extension host's `process.cwd()` is
+	 * wherever VS Code was started, and the CLI takes its workspace as `--cwd`
+	 * while running from wherever the shell was.
+	 *
+	 * Measured on a harness run started one directory above its workspace: a
+	 * model that sends bare filenames -- `manic_miner.html` rather than the
+	 * full path -- had 56 reads land in the parent and fail with ENOENT, then
+	 * 19 edits refused because the file it was editing had never been read,
+	 * then the loop guard stopped the run six times over. Three hours, four
+	 * applied edits. Five earlier runs on a different model never saw it, for
+	 * the single reason that that model always sent absolute paths.
+	 *
+	 * Falls back to `process.cwd()`, which is what this did unconditionally
+	 * before, so an embedder that wires the executor up alone is unaffected.
+	 */
+	cwd?: string;
+
+	/**
 	 * Shared record of what has been read. Paired with the same object on the
 	 * editor executor, this is what lets an edit require a prior read.
 	 */
 	receipts?: ReadReceipts;
 }
 
-// `receipts` is deliberately outside the defaults: there is no sensible
-// default registry, and its absence is what turns the read-before-edit guard
-// off for a standalone executor.
+// `receipts` and `cwd` are deliberately outside the defaults: there is no
+// sensible default registry, and its absence is what turns the read-before-edit
+// guard off for a standalone executor. `cwd` is absent rather than defaulted so
+// that "nobody told us the workspace" stays distinguishable from "the workspace
+// is the process's directory", which is the distinction the fix rests on.
 const DEFAULT_FILE_READ_OPTIONS: Required<
-	Omit<FileReadExecutorOptions, "receipts">
+	Omit<FileReadExecutorOptions, "receipts" | "cwd">
 > = {
 	maxFileSizeBytes: 10_000_000, // 10MB default limit
 	encoding: "utf-8", // Default to UTF-8 encoding
@@ -284,7 +308,7 @@ async function readTextWindow(
 export function createFileReadExecutor(
 	options: FileReadExecutorOptions = {},
 ): FileReadExecutor {
-	const { receipts } = options;
+	const { receipts, cwd } = options;
 	const { maxFileSizeBytes, encoding, includeLineNumbers } = {
 		...DEFAULT_FILE_READ_OPTIONS,
 		...options,
@@ -298,7 +322,7 @@ export function createFileReadExecutor(
 		const withLineNumbers = request.line_numbers ?? includeLineNumbers;
 		const initialPath = path.isAbsolute(filePath)
 			? path.normalize(filePath)
-			: path.resolve(process.cwd(), filePath);
+			: path.resolve(cwd ?? process.cwd(), filePath);
 		// Tolerate Unicode-whitespace mismatches (e.g. macOS Sonoma+
 		// screenshot paths where the on-disk filename contains U+202F but
 		// the caller's string has a regular space).

@@ -234,6 +234,15 @@ export function createBuiltinTools(
 			...executorOptions.bash,
 			shell,
 		},
+		// The reader resolves a relative path against the workspace, like every
+		// other tool here, rather than against wherever the process happens to
+		// have been started. Threaded here because this is the one place that
+		// knows both: an explicit `fileRead.cwd` still wins, for an embedder
+		// pointing the reader somewhere of its own.
+		fileRead: {
+			...(toolsConfig.cwd ? { cwd: toolsConfig.cwd } : {}),
+			...executorOptions.fileRead,
+		},
 	};
 
 	const executors = {

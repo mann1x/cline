@@ -10,6 +10,51 @@ describe("createFileReadExecutor", () => {
 		expect(result).toBe("1 | hello absolute path\n\n[1 lines, shown in full.]");
 	});
 
+	// The workspace, not the process. Measured on a harness run started one
+	// directory above the workspace it was given: a model that sends bare
+	// filenames had 56 reads land in the parent and fail with ENOENT, then 19
+	// edits refused for want of a read, then six loop stops in three hours.
+	it("resolves a relative path against the workspace it was given", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "agents-file-read-"));
+		try {
+			await fs.writeFile(
+				path.join(dir, "example.txt"),
+				"in the workspace",
+				"utf-8",
+			);
+			const readFile = createFileReadExecutor({ cwd: dir });
+			const result = (await readFile(
+				{ path: "example.txt" },
+				{ agentId: "agent-1", conversationId: "conv-1", iteration: 1 },
+			)) as string;
+			expect(result).toContain("in the workspace");
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	// Without one it keeps the old behaviour, so a standalone executor an
+	// embedder wired up on its own reads exactly what it used to.
+	it("falls back to the process directory when no workspace is given", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "agents-file-read-"));
+		try {
+			await fs.writeFile(
+				path.join(dir, "example.txt"),
+				"in the workspace",
+				"utf-8",
+			);
+			const readFile = createFileReadExecutor();
+			await expect(
+				readFile(
+					{ path: "example.txt" },
+					{ agentId: "agent-1", conversationId: "conv-1", iteration: 1 },
+				),
+			).rejects.toThrow();
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("returns only the requested inclusive line range", async () => {
 		const result = await readTempFile("alpha\nbeta\ngamma\ndelta", {
 			start_line: 2,
