@@ -121,6 +121,35 @@ const SCRIPT_PREFERENCE = [
 ] as const;
 
 /**
+ * Where an oracle may come from, strongest claim first.
+ *
+ * `manual` is the one the user writes for the task in front of them, and it is
+ * the answer to a failure mode the rest of the ladder cannot reach: an oracle
+ * chosen by detection judges whether the workspace still holds together, not
+ * whether the thing the user asked for now works. A model can leave a
+ * typecheck green and the feature broken, and detection would keep that
+ * transaction.
+ */
+export interface OracleSources {
+	/** Written by the user for this task. Beats everything below it. */
+	manual?: string;
+	/** A default the user set once, in settings, for every task. */
+	explicit?: string;
+}
+
+function shellOracle(line: string, cwd: string, reason: string): Oracle {
+	// Taken as written, through the shell, because a user who names an oracle
+	// means that exact line — pipes, environment and all.
+	return {
+		label: line,
+		command: process.platform === "win32" ? "cmd" : "sh",
+		args: process.platform === "win32" ? ["/c", line] : ["-c", line],
+		cwd,
+		reason,
+	};
+}
+
+/**
  * Find something in this workspace that can say whether a change is good.
  *
  * Returns `undefined` when nothing does — a documentation edit, a config file,
@@ -130,21 +159,20 @@ const SCRIPT_PREFERENCE = [
  */
 export async function discoverOracle(
 	workspaceRoot: string,
-	options: { explicit?: string } = {},
+	options: OracleSources = {},
 ): Promise<Oracle | undefined> {
-	if (options.explicit?.trim()) {
-		// Taken as written, through the shell, because a user who names an
-		// oracle means that exact line — pipes, environment and all.
-		return {
-			label: options.explicit.trim(),
-			command: process.platform === "win32" ? "cmd" : "sh",
-			args:
-				process.platform === "win32"
-					? ["/c", options.explicit.trim()]
-					: ["-c", options.explicit.trim()],
-			cwd: workspaceRoot,
-			reason: "named in settings",
-		};
+	// A command the user wrote for this task beats one they set once for every
+	// task, and both beat anything found by looking at the tree. Detection
+	// answers "does this workspace still build"; the user's line answers the
+	// question they actually care about, which is often narrower and is
+	// sometimes the only thing that can tell success from a plausible edit.
+	const manual = options.manual?.trim();
+	if (manual) {
+		return shellOracle(manual, workspaceRoot, "named for this task");
+	}
+	const configured = options.explicit?.trim();
+	if (configured) {
+		return shellOracle(configured, workspaceRoot, "named in settings");
 	}
 
 	const pkg = (await readJson(path.join(workspaceRoot, "package.json"))) as

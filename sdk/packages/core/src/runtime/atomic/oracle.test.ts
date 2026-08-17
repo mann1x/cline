@@ -94,6 +94,33 @@ describe("finding something that can judge a change", () => {
 			expect(oracle?.reason).toBe("named in settings");
 		});
 	});
+
+	// Detection answers "does this workspace still hold together", which a model
+	// can leave green with the asked-for feature still broken. A command written
+	// for the task in front of the user is the narrower question, so it wins.
+	it("prefers the command written for this task to a detected one", async () => {
+		await withWorkspace(
+			{ "package.json": JSON.stringify({ scripts: { test: "vitest run" } }) },
+			async (root) => {
+				const oracle = await discoverOracle(root, {
+					manual: "node run_game.js manic_miner.html",
+					explicit: "bun run typecheck",
+				});
+				expect(oracle?.label).toBe("node run_game.js manic_miner.html");
+				expect(oracle?.reason).toBe("named for this task");
+			},
+		);
+	});
+
+	it("ignores a blank command rather than running an empty shell", async () => {
+		await withWorkspace(
+			{ "package.json": JSON.stringify({ scripts: { test: "vitest run" } }) },
+			async (root) => {
+				const oracle = await discoverOracle(root, { manual: "   " });
+				expect(oracle?.args).toEqual(["run", "test"]);
+			},
+		);
+	});
 });
 
 describe("reading the oracle's verdict", () => {
