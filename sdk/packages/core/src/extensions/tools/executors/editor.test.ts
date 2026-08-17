@@ -609,6 +609,41 @@ describe("createEditorExecutor", () => {
 			});
 		});
 
+		// The same session as the no-op count, immediately after its turn was
+		// discarded at the output cap: one 4,991-character whole-class
+		// replacement at line 84, sent seven times in a row, refused identically
+		// every time with the paragraph explaining what to send instead in front
+		// of it on all seven.
+		it("says how many times the same duplicating edit has been refused", async () => {
+			await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const send = () =>
+					editor(
+						{
+							path: filePath,
+							new_text: "b\nc\nEXTRA1\nEXTRA2\nEXTRA3",
+							start_line: 2,
+							end_line: 3,
+						},
+						dir,
+						context,
+					);
+
+				await expect(send()).rejects.not.toThrow("identical edit");
+				await expect(send()).rejects.toThrow(
+					"You have now sent this identical edit 2 times",
+				);
+				await expect(send()).rejects.toThrow(
+					"sending it again will not apply it either",
+				);
+				// The advice it needs is still there behind the count.
+				await expect(send()).rejects.toThrow("appends a second copy");
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+					"a\nb\nc\nd",
+				);
+			});
+		});
+
 		it("refuses a replacement that duplicates the range instead of replacing it", async () => {
 			// Measured on a live session repairing a dense single-file game: the
 			// model asked to replace a fifteen-line range with a block that opened

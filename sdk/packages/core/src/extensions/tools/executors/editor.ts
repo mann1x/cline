@@ -638,12 +638,23 @@ function duplicatedRangeMessage(
 	added: number,
 	/** Set when the stripped gutter numbered past `end_line` — the cause, named. */
 	gutterSpan?: { firstLine: number; lastLine: number },
+	/** How many times this exact call has now been refused this way. */
+	repeats?: number,
 ): never {
 	const gutterHint = gutterSpan
 		? ` The gutter on your \`new_text\` covers lines ${gutterSpan.firstLine}-${gutterSpan.lastLine}, but the call names only ${range}: if you meant to replace ${gutterSpan.firstLine}-${gutterSpan.lastLine}, send \`end_line: ${gutterSpan.lastLine}\`.`
 		: "";
+	// Counted for the same reason the no-op refusal is, and measured in the same
+	// session: after the model's turn was discarded at the output cap it sent
+	// one 4,991-character whole-class replacement at line 84 seven times in a
+	// row, refused identically every time. The paragraph explaining what to send
+	// instead was in front of it on all seven.
+	const history =
+		repeats && repeats > 1
+			? ` You have now sent this identical edit ${repeats} times and it has been refused ${repeats} times for the same reason, so sending it again will not apply it either.`
+			: "";
 	throw new Error(
-		`Duplicated instead of replaced: the edit to ${range} in ${filePath} was not applied. None of the ${requestedLines} line(s) you named were removed, yet ${added} new line(s) were added — so what you sent as \`new_text\` opens with the text already at ${range} and then continues, which appends a second copy rather than replacing anything.${gutterHint} If you meant to rewrite that range, send only the text that should end up there, without restating the lines that are already at ${range}. If you meant to add code, insert it at the line it belongs on instead. Re-read the file first: after earlier edits the line numbers you are working from may no longer point at what you think.`,
+		`Duplicated instead of replaced: the edit to ${range} in ${filePath} was not applied.${history} None of the ${requestedLines} line(s) you named were removed, yet ${added} new line(s) were added — so what you sent as \`new_text\` opens with the text already at ${range} and then continues, which appends a second copy rather than replacing anything.${gutterHint} If you meant to rewrite that range, send only the text that should end up there, without restating the lines that are already at ${range}. If you meant to add code, insert it at the line it belongs on instead. Re-read the file first: after earlier edits the line numbers you are working from may no longer point at what you think.`,
 	);
 }
 
@@ -847,6 +858,9 @@ async function replaceLineRange(
 			gutterOverrunsRange
 				? { firstLine: startLineOneBased, lastLine: gutterLastLine as number }
 				: undefined,
+			noteNoOp?.(
+				`duplicated\u0000${filePath}\u0000${range}\u0000${newStr ?? ""}`,
+			),
 		);
 	}
 
