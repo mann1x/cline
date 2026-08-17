@@ -169,6 +169,62 @@ function createLineDiff(
 	return out.join("\n");
 }
 
+/**
+ * Which line an insert is anchored to, or nothing when the call is not one.
+ *
+ * Two shapes of the same mistake, both measured on one transaction of the
+ * change protocol, both wanting a single character put at a column of one
+ * line:
+ *
+ *   { start_line: 111, insert_column: 386 }                    — no insert_line
+ *   { start_line: 111, insert_line: 111, insert_column: 393 }  — the line twice
+ *
+ * Refusing them cost four calls out of twelve failures, and the model's way
+ * out was to rewrite the whole 400-character minified line instead — nine
+ * times, each a replacement large enough that nothing could tell whether it
+ * had changed one character or twenty.
+ *
+ * Only unambiguous cases are read. A `start_line` with an `end_line` is a
+ * replacement of a range and stays one, and two different line numbers still
+ * refuse: the point is to accept an address that means one thing, not to guess
+ * between two.
+ */
+function resolveInsertLine(input: EditFileInput): number | null {
+	if (input.insert_line != null) {
+		if (input.start_line == null) {
+			return input.insert_line;
+		}
+		// Only with a column. `insert_line` and `start_line` naming the same
+		// line is ambiguous on its own -- insert before it, or overwrite it --
+		// and the two land differently, so that pair keeps its refusal. A
+		// column resolves it: a position inside a line is not a line to
+		// replace.
+		if (
+			input.start_line === input.insert_line &&
+			input.end_line == null &&
+			input.insert_column != null
+		) {
+			return input.insert_line;
+		}
+		throw new Error(
+			`\`insert_line\` adds text at a boundary and \`start_line\` replaces existing lines, and these name different edits (insert_line ${input.insert_line}, start_line ${input.start_line}${
+				input.end_line != null ? `-${input.end_line}` : ""
+			}). Send one or the other.`,
+		);
+	}
+	// A column with no line of its own: `start_line` is the only line named,
+	// and with no `end_line` and no `old_text` it cannot be a replacement.
+	if (
+		input.insert_column != null &&
+		input.start_line != null &&
+		input.end_line == null &&
+		input.old_text == null
+	) {
+		return input.start_line;
+	}
+	return null;
+}
+
 async function createFile(
 	filePath: string,
 	fileText: string,
@@ -264,6 +320,37 @@ async function replaceInFile(
 			occurrences = strippedOccurrences;
 			if (hasLineNumberGutter(normalizedNewStr)) {
 				normalizedNewStr = stripLineNumberGutter(normalizedNewStr);
+			}
+		}
+	}
+
+	// The same recovery for the same reason, on a different mistake: the model
+	// escapes its own escapes, so `old_text` ends in a backslash and an `n`
+	// where the file has a newline. Measured on one transaction of the change
+	// protocol: four of its twelve failed edits, three of which match the file
+	// exactly once as soon as the two characters are read as the one they stand
+	// for -- and every one of them cost a full regeneration of the replacement.
+	//
+	// The file decides here too. The decoded text is only used when it actually
+	// occurs, so a file that genuinely contains a backslash-n -- a regex, a
+	// string literal, this comment -- goes on matching what it holds.
+	if (occurrences === 0 && LITERAL_ESCAPE.test(normalizedOldStr)) {
+		const decodedOld = normalizeLineEndings(
+			decodeLiteralEscapes(normalizedOldStr),
+			eol,
+		);
+		const decodedOccurrences = countOccurrences(content, decodedOld);
+		if (decodedOccurrences > 0) {
+			normalizedOldStr = decodedOld;
+			occurrences = decodedOccurrences;
+			// Decoded on the same condition it was detected on: a model that
+			// escaped one side escaped both, and writing a literal `\n` into the
+			// file is the worse of the two failures.
+			if (LITERAL_ESCAPE.test(normalizedNewStr)) {
+				normalizedNewStr = normalizeLineEndings(
+					decodeLiteralEscapes(normalizedNewStr),
+					eol,
+				);
 			}
 		}
 	}
@@ -744,6 +831,29 @@ function countNonBlankLines(text: string): number {
 	return text.split(/\r\n|\n/).filter((line) => line.trim() !== "").length;
 }
 
+/** `\n`, `\t`, `\r` or `\\` written as two characters rather than one. */
+const LITERAL_ESCAPE = /\\[nrt\\]/;
+
+const LITERAL_ESCAPE_VALUES: Record<string, string> = {
+	n: "\n",
+	r: "\r",
+	t: "\t",
+	"\\": "\\",
+};
+
+/**
+ * Turn two-character escapes back into the characters they stand for.
+ *
+ * One pass, so a decoded backslash cannot be read again as the start of the
+ * next escape: `\\n` is a backslash followed by an n, not a newline.
+ */
+function decodeLiteralEscapes(text: string): string {
+	return text.replace(
+		/\\([nrt\\])/g,
+		(_match, code: string) => LITERAL_ESCAPE_VALUES[code] ?? _match,
+	);
+}
+
 function stripLineNumberGutter(text: string): string {
 	return text
 		.split("\n")
@@ -1096,12 +1206,9 @@ export function createEditorExecutor(
 			}
 		};
 
-		if (input.insert_line != null) {
-			if (input.start_line != null) {
-				throw new Error(
-					"`insert_line` adds text at a boundary and `start_line` replaces existing lines. Send one or the other.",
-				);
-			}
+		const insertLine = resolveInsertLine(input);
+
+		if (insertLine != null) {
 			// A column turns the boundary insert into an in-line one: the same
 			// verb, addressed one level finer.
 			if (input.insert_column != null) {
@@ -1110,10 +1217,10 @@ export function createEditorExecutor(
 						`Cannot insert into ${filePath}: the file does not exist. Omit insert_line and insert_column to create it.`,
 					);
 				}
-				await requireRead(filePath, input.insert_line, input.insert_line);
+				await requireRead(filePath, insertLine, insertLine);
 				const result = await insertAtColumn(
 					filePath,
-					input.insert_line,
+					insertLine,
 					input.insert_column,
 					input.new_text,
 					encoding,
@@ -1126,11 +1233,11 @@ export function createEditorExecutor(
 			// line it is anchored to still has to have been seen, or the text
 			// lands next to something other than what the model thinks.
 			if (linesBefore != null) {
-				await requireRead(filePath, input.insert_line, input.insert_line);
+				await requireRead(filePath, insertLine, insertLine);
 			}
 			const result = await insertInFile(
 				filePath,
-				input.insert_line, // One-based index
+				insertLine, // One-based index
 				input.new_text,
 				encoding,
 			);
@@ -1140,7 +1247,7 @@ export function createEditorExecutor(
 
 		if (input.insert_column != null) {
 			throw new Error(
-				"`insert_column` needs `insert_line` to say which line it is a column of.",
+				"`insert_column` needs a line to be a column of: send `insert_line`, or `start_line` on its own with no `end_line`.",
 			);
 		}
 
@@ -1275,7 +1382,12 @@ export function createEditorExecutor(
 		// insist on — but editing a file sight-unseen is the same mistake at a
 		// coarser grain, and the match itself can land on a repeat the model
 		// never saw.
-		if (receipts && !receipts.hasAny(filePath)) {
+		//
+		// `hasEverRead`, so a read the model's own edit retired still counts.
+		// Retirement means line numbers moved, which is nothing to an edit that
+		// names no line: the text is matched against the file as it is now, and
+		// if the edit moved it, the match fails on its own terms and says so.
+		if (receipts && !receipts.hasEverRead(filePath)) {
 			throw new Error(
 				`Read before editing: ${filePath} has not been read in this session. The file was not modified. Call \`read_files\` for it first — narrow it with \`start_line\`/\`end_line\` around the text you mean to change — then send this edit again.`,
 			);

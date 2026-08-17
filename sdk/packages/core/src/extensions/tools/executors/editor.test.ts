@@ -1748,3 +1748,204 @@ describe("how long the file is", () => {
 		});
 	});
 });
+
+/**
+ * The three ways a change-protocol transaction lost edits to the tool rather
+ * than to the model's judgement.
+ *
+ * Census of one run: twenty-six editor calls, twelve refused. Four of the
+ * twelve are the escaped newline, four are a column addressed with the wrong
+ * line key, and two are a file the model had read and just edited. Each case
+ * below is a call taken from that transcript.
+ */
+describe("recovering the calls a transaction used to lose", () => {
+	it("matches text whose newline arrived as a backslash and an n", async () => {
+		await withTempFile("first\nsecond\nthird\n", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 3);
+
+			const result = await editor(
+				{ path: filePath, old_text: "second\\n", new_text: "SECOND\\n" },
+				dir,
+				context,
+			);
+
+			expect(result).toContain("Edited");
+			// Decoded on both sides: a literal backslash-n written into the file
+			// would be the worse half of the same mistake.
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+				"first\nSECOND\nthird\n",
+			);
+		});
+	});
+
+	it("leaves a file that really contains a backslash and an n alone", async () => {
+		await withTempFile("const nl = '\\n';\nrest\n", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 2);
+
+			const result = await editor(
+				{
+					path: filePath,
+					old_text: "const nl = '\\n';",
+					new_text: "const nl = EOL;",
+				},
+				dir,
+				context,
+			);
+
+			expect(result).toContain("Edited");
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+				"const nl = EOL;\nrest\n",
+			);
+		});
+	});
+
+	it("still refuses text that matches neither way", async () => {
+		await withTempFile("first\nsecond\n", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 2);
+
+			const failure = editor(
+				{ path: filePath, old_text: "absent\\n", new_text: "x" },
+				dir,
+				context,
+			);
+
+			await expect(failure).rejects.toThrow("text not found");
+		});
+	});
+
+	// { start_line: 111, insert_column: 386, new_text: "}" }
+	it("inserts at a column when start_line is the only line named", async () => {
+		await withTempFile("abcdef\nsecond\n", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 2);
+
+			const result = await editor(
+				{ path: filePath, start_line: 1, insert_column: 4, new_text: "}" },
+				dir,
+				context,
+			);
+
+			expect(result).toContain("Inserted");
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+				"abc}def\nsecond\n",
+			);
+		});
+	});
+
+	// { start_line: 111, insert_line: 111, insert_column: 393, new_text: ")" }
+	it("accepts the same line named twice", async () => {
+		await withTempFile("abcdef\nsecond\n", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 2);
+
+			const result = await editor(
+				{
+					path: filePath,
+					start_line: 1,
+					insert_line: 1,
+					insert_column: 4,
+					new_text: ")",
+				},
+				dir,
+				context,
+			);
+
+			expect(result).toContain("Inserted");
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+				"abc)def\nsecond\n",
+			);
+		});
+	});
+
+	it("still refuses two line numbers that disagree", async () => {
+		await withTempFile("abcdef\nsecond\n", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 2);
+
+			const failure = editor(
+				{ path: filePath, start_line: 2, insert_line: 1, new_text: "x" },
+				dir,
+				context,
+			);
+
+			await expect(failure).rejects.toThrow("Send one or the other");
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+				"abcdef\nsecond\n",
+			);
+		});
+	});
+
+	it("keeps a line range a replacement, not an insert", async () => {
+		await withTempFile("abcdef\nsecond\n", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 2);
+
+			const result = await editor(
+				{ path: filePath, start_line: 1, end_line: 1, new_text: "replaced" },
+				dir,
+				context,
+			);
+
+			expect(result).toContain("Replaced");
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+				"replaced\nsecond\n",
+			);
+		});
+	});
+
+	it("lets a text-anchored edit follow the model's own length change", async () => {
+		await withTempFile("one\ntwo\nthree\n", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 3);
+
+			// An insert of its own, which moves every line below it and retires
+			// the receipts for the file.
+			await editor(
+				{ path: filePath, insert_line: 1, new_text: "zero\n" },
+				dir,
+				context,
+			);
+			expect(receipts.hasAny(filePath)).toBe(false);
+
+			const result = await editor(
+				{ path: filePath, old_text: "three", new_text: "THREE" },
+				dir,
+				context,
+			);
+
+			expect(result).toContain("Edited");
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+				"zero\none\ntwo\nTHREE\n",
+			);
+		});
+	});
+
+	it("still refuses a text-anchored edit to a file never read", async () => {
+		await withTempFile("one\ntwo\n", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+
+			const failure = editor(
+				{ path: filePath, old_text: "two", new_text: "TWO" },
+				dir,
+				context,
+			);
+
+			await expect(failure).rejects.toThrow(
+				"has not been read in this session",
+			);
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("one\ntwo\n");
+		});
+	});
+});

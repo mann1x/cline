@@ -36,6 +36,19 @@ export interface ReadReceipts {
 	/** Whether the file has been read at all in this session. */
 	hasAny(filePath: string): boolean;
 	/**
+	 * Whether the file was ever read, counting reads a write has since retired.
+	 *
+	 * For an edit anchored to text rather than to line numbers. Retirement is
+	 * about line numbers having moved, and a text match does not use them: the
+	 * file itself is checked for the text at the moment of the edit, so a read
+	 * whose line numbers went stale is still a model that has seen this file.
+	 *
+	 * Measured: a model read the file, made two edits that changed its length,
+	 * and its next text-anchored edit was refused with "has not been read in
+	 * this session" -- of a file it had read and just successfully edited.
+	 */
+	hasEverRead(filePath: string): boolean;
+	/**
 	 * Whether reads of this file were retired by a later write.
 	 *
 	 * Told apart from "never read" because the two need different advice: one
@@ -117,6 +130,11 @@ export function createReadReceipts(): ReadReceipts {
 
 		hasAny(filePath) {
 			return (seen.get(receiptKey(filePath))?.length ?? 0) > 0;
+		},
+
+		hasEverRead(filePath) {
+			const key = receiptKey(filePath);
+			return (seen.get(key)?.length ?? 0) > 0 || retired.has(key);
 		},
 
 		wasRetired(filePath) {
