@@ -1931,6 +1931,56 @@ describe("recovering the calls a transaction used to lose", () => {
 		});
 	});
 
+	// Three identical retries of the same 388-character line, measured against
+	// the old message, which said the text was not found and nothing else.
+	it("says where a near-miss old_text stops matching", async () => {
+		await withTempFile(
+			"alpha\nconst wideLine = one + two + three + four + five + six;\nomega\n",
+			async (filePath, dir) => {
+				const receipts = createReadReceipts();
+				const editor = createEditorExecutor({ receipts });
+				receipts.noteRead(filePath, 1, 3);
+
+				const failure = editor(
+					{
+						path: filePath,
+						old_text: "const wideLine = one + two + three + FOUR + five + six;",
+						new_text: "x",
+					},
+					dir,
+					context,
+				);
+
+				await expect(failure).rejects.toThrow(
+					"character(s) do match, on line 2",
+				);
+				await expect(failure).rejects.toThrow('the file has "four');
+			},
+		);
+	});
+
+	it("says nothing clever when the text shares no real prefix", async () => {
+		await withTempFile("alpha\nbeta\n", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 2);
+
+			const failure = editor(
+				{
+					path: filePath,
+					old_text: "nothing like this at all in here",
+					new_text: "x",
+				},
+				dir,
+				context,
+			);
+
+			await expect(failure).rejects.toThrow(
+				"Re-read the region and copy the text exactly",
+			);
+		});
+	});
+
 	it("still refuses a text-anchored edit to a file never read", async () => {
 		await withTempFile("one\ntwo\n", async (filePath, dir) => {
 			const receipts = createReadReceipts();

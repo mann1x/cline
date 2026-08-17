@@ -280,6 +280,51 @@ function occurrenceLines(content: string, needle: string): number[] {
 	return lines;
 }
 
+/** Past this, the prefix search costs more than the hint is worth. */
+const MAX_DIVERGENCE_SEARCH_BYTES = 2_000_000;
+
+/**
+ * Where a near-miss `old_text` stops matching the file, in the file's words.
+ *
+ * "Text not found" is true and useless on a long string: measured on a change
+ * protocol run, a model sent the same 388-character minified line three times
+ * against that message, each time regenerating all 388 characters. The text
+ * was right for the first few hundred and wrong after, and nothing said so.
+ *
+ * The prefix test is monotone — if the first k characters are absent, so are
+ * the first k+1 — so a binary search finds the longest matching prefix in a
+ * handful of scans, and its end is the divergence.
+ */
+function describeFirstDivergence(
+	content: string,
+	needle: string,
+): string | undefined {
+	if (needle.length < 24 || content.length > MAX_DIVERGENCE_SEARCH_BYTES) {
+		return undefined;
+	}
+	let low = 0;
+	let high = needle.length;
+	while (low < high) {
+		const mid = Math.ceil((low + high) / 2);
+		if (content.includes(needle.slice(0, mid))) {
+			low = mid;
+		} else {
+			high = mid - 1;
+		}
+	}
+	// A short common prefix is coincidence — most files contain some
+	// two-character run — and pointing at it would send the model to the wrong
+	// place with confidence.
+	if (low < 24) {
+		return undefined;
+	}
+	const index = content.indexOf(needle.slice(0, low));
+	const line = content.slice(0, index).split(/\r\n|\n/).length;
+	return ` The first ${low} character(s) do match, on line ${line}, and diverge there: the file has ${JSON.stringify(
+		content.slice(index + low, index + low + 48),
+	)} where \`old_text\` has ${JSON.stringify(needle.slice(low, low + 48))}. Send the edit again with the file's own text from that point, or replace line ${line} by number with \`start_line\`/\`end_line\`.`;
+}
+
 async function replaceInFile(
 	filePath: string,
 	oldStr: string,
@@ -357,11 +402,15 @@ async function replaceInFile(
 
 	if (occurrences === 0) {
 		const looksNumbered = hasLineNumberGutter(normalizedOldStr);
+		const divergence = looksNumbered
+			? undefined
+			: describeFirstDivergence(content, normalizedOldStr);
 		throw new Error(
 			`No replacement performed: text not found in ${filePath}.${
 				looksNumbered
 					? " `old_text` still carries the `123 | ` line-number gutter from the read output; send the file's own text without it."
-					: " Re-read the region and copy the text exactly, or replace by line number with `start_line`/`end_line` instead."
+					: (divergence ??
+						" Re-read the region and copy the text exactly, or replace by line number with `start_line`/`end_line` instead.")
 			}`,
 		);
 	}
