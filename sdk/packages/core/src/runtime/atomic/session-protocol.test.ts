@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import {
 	createAtomicProtocolSession,
 	readSelfReport,
-	withAtomicProtocolRules,
 } from "./session-protocol";
 
 async function withWorkspace(
@@ -64,7 +63,7 @@ describe("arming the protocol for a session", () => {
 			});
 
 			expect(session?.oracle).toBeUndefined();
-			expect(session?.rules()).toContain("you are the check");
+			expect(session?.takeOpeningRules()).toContain("you are the check");
 		});
 	});
 
@@ -78,7 +77,7 @@ describe("arming the protocol for a session", () => {
 				});
 
 				expect(session?.oracle?.label).toBe("node run_game.js");
-				expect(session?.rules()).toContain("node run_game.js");
+				expect(session?.takeOpeningRules()).toContain("node run_game.js");
 			},
 		);
 	});
@@ -130,11 +129,12 @@ describe("the boundary", () => {
 			const message = await session?.onCompletionAttempt({ text: "Fixed." });
 
 			expect(message).toContain("TX-01 discarded");
-			expect(message).toContain("TX-02 is now open");
+			// The reopened transaction's rules, in full, on this message.
+			expect(message).toContain("This one is TX-02");
+			expect(message).toContain("TX-01 — discarded");
 			await expect(
 				fs.readFile(path.join(root, "game.js"), "utf8"),
 			).resolves.toBe("broken");
-			expect(session?.rules()).toContain("TX-01 — discarded");
 		});
 	});
 
@@ -153,7 +153,7 @@ describe("the boundary", () => {
 
 			await fs.writeFile(path.join(root, "game.js"), "no", "utf8");
 			expect(await session?.onCompletionAttempt({})).toContain(
-				"TX-02 is now open",
+				"This one is TX-02",
 			);
 			await fs.writeFile(path.join(root, "game.js"), "no again", "utf8");
 			expect(await session?.onCompletionAttempt({})).toBeUndefined();
@@ -184,55 +184,42 @@ describe("the boundary", () => {
 	});
 });
 
-describe("keeping the rules where the model can see them", () => {
-	// A rule that scrolled out of the window is a rule that is not followed, and
-	// the rules are not part of the conversation for compaction to weigh.
-	it("appends the open transaction's rules to the system prompt", async () => {
+describe("where the rules are put", () => {
+	// Measured, and the reason this moved: from the system prompt the same model
+	// on the same file made eight edits in one transaction against a limit of
+	// three and never wrote the plan. The harness that puts the identical text
+	// in the opening message gets the plan.
+	it("hands the opening rules over once, for the user's own message", async () => {
 		await withWorkspace({ "game.js": "broken" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
 				config: { mode: "always" },
 			});
-			const prepare = withAtomicProtocolRules(undefined, session);
 
-			const result = await prepare?.({
-				systemPrompt: "You are Cline.",
-				messages: [],
-			} as never);
-
-			expect(result?.systemPrompt).toContain("You are Cline.");
-			expect(result?.systemPrompt).toContain("CHANGE PROTOCOL");
+			expect(session?.takeOpeningRules()).toContain("CHANGE PROTOCOL");
+			expect(session?.takeOpeningRules()).toBeUndefined();
 		});
 	});
 
-	it("keeps whatever the rest of the pipeline decided", async () => {
+	// The message that reopens a transaction is the only thing that opens it, so
+	// it carries the rules in full — exactly as a fresh session's opening prompt
+	// does in the harness this comes from.
+	it("restates the whole of the next transaction's rules when one is discarded", async () => {
 		await withWorkspace({ "game.js": "broken" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "always" },
+				config: { mode: "auto", oracleCommand: shellCheck(root, "fixed") },
 			});
-			const prepare = withAtomicProtocolRules(
-				async () => ({
-					messages: ["compacted"] as never,
-					systemPrompt: "Rewritten.",
-				}),
-				session,
-			);
+			session?.takeOpeningRules();
+			await fs.writeFile(path.join(root, "game.js"), "still broken", "utf8");
 
-			const result = await prepare?.({
-				systemPrompt: "You are Cline.",
-				messages: [],
-			} as never);
+			const message = await session?.onCompletionAttempt({ text: "Fixed." });
 
-			expect(result?.systemPrompt).toContain("Rewritten.");
-			expect(result?.systemPrompt).not.toContain("You are Cline.");
-			expect(result?.messages).toEqual(["compacted"]);
+			expect(message).toContain("TX-01 discarded");
+			expect(message).toContain("CHANGE PROTOCOL");
+			expect(message).toContain("AT MOST 3 changes");
+			expect(message).toContain("TX-01 — discarded");
 		});
-	});
-
-	it("is not installed at all when the protocol is off", () => {
-		const inner = async () => ({ messages: [] as never });
-		expect(withAtomicProtocolRules(inner, undefined)).toBe(inner);
 	});
 });
 

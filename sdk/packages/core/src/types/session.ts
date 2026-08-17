@@ -1,5 +1,6 @@
 import type * as LlmsProviders from "@cline/llms";
 import type { AgentFinishReason } from "@cline/shared";
+import type { AtomicProtocolSession } from "../runtime/atomic/session-protocol";
 import type { SessionAccumulatedUsage } from "../runtime/host/runtime-host";
 import type { BuiltRuntime } from "../runtime/orchestration/session-runtime";
 import type { SessionRuntime } from "../runtime/orchestration/session-runtime-orchestrator";
@@ -33,6 +34,13 @@ export type ActiveSession = {
 	pendingTeamRunUpdates: TeamRunUpdate[];
 	teamRunWaiters: Array<() => void>;
 	pendingPrompts: PendingPrompt[];
+	/**
+	 * The change protocol this session is running under, when it is armed.
+	 *
+	 * Held on the session because the rules go out with the user's own message:
+	 * the turn that delivers them is prepared long after the session was built.
+	 */
+	atomicProtocol?: AtomicProtocolSession;
 	drainingPendingPrompts: boolean;
 	pluginSandboxShutdown?: () => Promise<void>;
 	turnUsageBaseline?: SessionAccumulatedUsage;

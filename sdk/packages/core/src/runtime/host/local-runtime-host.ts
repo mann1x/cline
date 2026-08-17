@@ -116,10 +116,7 @@ import type { CoreSessionConfig } from "../../types/config";
 import type { CoreSessionEvent } from "../../types/events";
 import type { ActiveSession, PreparedTurnInput } from "../../types/session";
 import type { SessionRecord } from "../../types/sessions";
-import {
-	createAtomicProtocolSession,
-	withAtomicProtocolRules,
-} from "../atomic/session-protocol";
+import { createAtomicProtocolSession } from "../atomic/session-protocol";
 import type { RuntimeCapabilities } from "../capabilities";
 import { normalizeRuntimeCapabilities } from "../capabilities";
 import { normalizeConnectionUpdate } from "../config/connection-update";
@@ -884,61 +881,58 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// where the turns that actually end at the budget message go.
 		const condenseDiscardedReasoning =
 			createCappedThinkingNoteWriter(cappedThinkingConfig);
-		const prepareTurn = withAtomicProtocolRules(
-			createCappedThinkingPrepareTurn(
-				createCompactionStateAwarePrepareTurn({
-					compact,
-					getState: () => activeSessionRef?.compactionState,
-					saveState: async (state, sourceMessages) => {
-						const activeSession = activeSessionRef;
-						if (!activeSession) return;
-						const stateForSession = {
-							...state,
-							conversation_id: activeSession.sessionId,
-						};
-						try {
-							// Validate against the exact messages the state's hash was
-							// computed from. Mid-turn, `agent.getMessages()` (the
-							// conversation store) can legally differ from the runtime's
-							// working transcript, so validating against the store would
-							// spuriously reject the write.
-							const result = await this.persistActiveSessionCompactionState(
-								activeSession,
-								stateForSession,
-								sourceMessages,
-							);
-							if (!result.updated) {
-								configWithProvider.logger?.debug?.(
-									"Skipped stale session compaction state",
-									{
-										sessionId: activeSession.sessionId,
-										sourceMessageCount: stateForSession.source_message_count,
-									},
-								);
-							}
-						} catch (error) {
-							configWithProvider.logger?.error?.(
-								"Failed to persist session compaction state",
-								{ sessionId: activeSession.sessionId, error },
-							);
-							captureSdkError(configWithProvider.telemetry, {
-								component: "core",
-								operation: "session.persist_compaction_state",
-								severity: "warn",
-								handled: true,
-								error,
-								context: {
+		const prepareTurn = createCappedThinkingPrepareTurn(
+			createCompactionStateAwarePrepareTurn({
+				compact,
+				getState: () => activeSessionRef?.compactionState,
+				saveState: async (state, sourceMessages) => {
+					const activeSession = activeSessionRef;
+					if (!activeSession) return;
+					const stateForSession = {
+						...state,
+						conversation_id: activeSession.sessionId,
+					};
+					try {
+						// Validate against the exact messages the state's hash was
+						// computed from. Mid-turn, `agent.getMessages()` (the
+						// conversation store) can legally differ from the runtime's
+						// working transcript, so validating against the store would
+						// spuriously reject the write.
+						const result = await this.persistActiveSessionCompactionState(
+							activeSession,
+							stateForSession,
+							sourceMessages,
+						);
+						if (!result.updated) {
+							configWithProvider.logger?.debug?.(
+								"Skipped stale session compaction state",
+								{
 									sessionId: activeSession.sessionId,
-									providerId: configWithProvider.providerId,
-									modelId: configWithProvider.modelId,
+									sourceMessageCount: stateForSession.source_message_count,
 								},
-							});
+							);
 						}
-					},
-				}),
-				cappedThinkingConfig,
-			),
-			atomicProtocol,
+					} catch (error) {
+						configWithProvider.logger?.error?.(
+							"Failed to persist session compaction state",
+							{ sessionId: activeSession.sessionId, error },
+						);
+						captureSdkError(configWithProvider.telemetry, {
+							component: "core",
+							operation: "session.persist_compaction_state",
+							severity: "warn",
+							handled: true,
+							error,
+							context: {
+								sessionId: activeSession.sessionId,
+								providerId: configWithProvider.providerId,
+								modelId: configWithProvider.modelId,
+							},
+						});
+					}
+				},
+			}),
+			cappedThinkingConfig,
 		);
 
 		const agentConfig = {
@@ -1126,6 +1120,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 			teamRunWaiters: [],
 			pendingPrompts: [],
 			drainingPendingPrompts: false,
+			...(atomicProtocol ? { atomicProtocol } : {}),
 			pluginSandboxShutdown: bootstrap.pluginSandboxShutdown,
 			submitAndExitObserved: false,
 			lastInteractiveTurnFinishReason: undefined,
@@ -2156,8 +2151,13 @@ export class LocalRuntimeHost implements RuntimeHost {
 		);
 		emitMentionTelemetry(session.config.telemetry, enriched);
 
+		// The change protocol's opening rules, on the user's own message and
+		// only once. Ahead of the task text rather than after it: the rules say
+		// what to do before touching anything, and a model that has already read
+		// the request has already started planning against it.
+		const openingRules = session.atomicProtocol?.takeOpeningRules();
 		const prompt = formatModePrompt(
-			enriched.prompt,
+			openingRules ? `${openingRules}\n\n${enriched.prompt}` : enriched.prompt,
 			input.mode ?? session.config.mode,
 		);
 		const explicitUserFiles = this.resolveAbsoluteFilePaths(

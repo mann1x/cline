@@ -1,4 +1,3 @@
-import type { ContextPipelinePrepareTurn } from "../../extensions/context/compaction";
 import type { CoreAtomicProtocolConfig } from "../../types/config";
 import { discoverOracle, type Oracle } from "./oracle";
 import {
@@ -35,15 +34,20 @@ export interface AtomicProtocolSession {
 	/** The check this task is judged by, or nothing when it has none. */
 	readonly oracle: Oracle | undefined;
 	/**
-	 * The open transaction's rules, to append to the system prompt.
+	 * The first transaction's rules, to go out with the task itself, once.
 	 *
-	 * Read on every request rather than fixed at session start: the rules carry
-	 * the record of what earlier transactions tried, and that record is the only
-	 * thing that makes a second attempt different from a first. In the system
-	 * prompt rather than in a message so it cannot scroll out of the window — a
-	 * rule the model can no longer see is a rule it does not follow.
+	 * In the user's message rather than the system prompt, which is where this
+	 * started and where it measurably did not work. Same model, same rules, same
+	 * file: from the system prompt it made eight edits in one transaction
+	 * against a limit of three and never wrote the plan the rules ask for, while
+	 * the harness that puts the identical text in the opening message gets the
+	 * plan. A rule the model reads as part of the request it is answering is a
+	 * rule it follows; the same words as standing configuration are furniture.
+	 *
+	 * Returns the text once and nothing after. Every later transaction's rules
+	 * arrive the same way, on the message that reopens it.
 	 */
-	rules(): string;
+	takeOpeningRules(): string | undefined;
 	/** The boundary. Judges the open transaction and keeps it or puts it back. */
 	onCompletionAttempt(context: { text?: string }): Promise<string | undefined>;
 }
@@ -94,13 +98,17 @@ export async function createAtomicProtocolSession(
 		onEvent: options.onEvent,
 	});
 
-	let rules = await controller.open();
+	let rules: string | undefined = await controller.open();
 	let finished = false;
 
 	return {
 		controller,
 		oracle,
-		rules: () => rules,
+		takeOpeningRules: () => {
+			const opening = rules;
+			rules = undefined;
+			return opening;
+		},
 		async onCompletionAttempt({ text }) {
 			// Once the transactions are spent there is nothing left to judge with,
 			// and asking again would settle a transaction that was never opened.
@@ -132,43 +140,21 @@ export async function createAtomicProtocolSession(
 				finished = true;
 				return undefined;
 			}
-			rules = settlement.nextPrompt;
+			// The whole of the next transaction's rules, not a pointer to them.
+			// This message is the only thing that opens TX-02, exactly as a fresh
+			// session's opening prompt is in the harness this comes from: the
+			// rules, the limit and the record of what was already tried, restated
+			// in full rather than referred back to.
 			return [
 				settlement.message,
 				settlement.verdict?.output
 					? `The check said:\n${settlement.verdict.output}`
 					: undefined,
-				`TX-${String(controller.transaction).padStart(2, "0")} is now open. Read the record in the change protocol before you plan: what that transaction tried is there, and it did not work.`,
+				settlement.nextPrompt,
 			]
 				.filter((line): line is string => line !== undefined)
 				.join("\n\n");
 		},
-	};
-}
-
-/**
- * Put the open transaction's rules in the system prompt of every request.
- *
- * Last in the pipeline, after compaction has decided what the transcript is:
- * the rules are not part of the conversation and must survive a compaction that
- * throws most of it away. A model working to rules it can no longer see is the
- * failure this exists to prevent — measured on the harness, a transaction whose
- * rules had scrolled out declared eleven changes against a limit of three.
- */
-export function withAtomicProtocolRules(
-	inner: ContextPipelinePrepareTurn | undefined,
-	session: AtomicProtocolSession | undefined,
-): ContextPipelinePrepareTurn | undefined {
-	if (!session) {
-		return inner;
-	}
-	return async (context) => {
-		const result = await inner?.(context);
-		const systemPrompt = result?.systemPrompt ?? context.systemPrompt;
-		return {
-			messages: result?.messages ?? context.messages,
-			systemPrompt: `${systemPrompt}\n\n${session.rules()}`,
-		};
 	};
 }
 

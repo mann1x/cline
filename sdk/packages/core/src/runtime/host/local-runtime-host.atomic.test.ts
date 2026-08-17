@@ -42,13 +42,17 @@ function sessionServiceStub(): Record<string, unknown> {
 				sessionId,
 				manifestPath: join(tmpdir(), `${sessionId}.json`),
 				messagesPath: join(tmpdir(), `${sessionId}.messages.json`),
+				manifest: { version: 1, session_id: sessionId, status: "running" },
 			};
 		},
-		updateSessionStatus: () => {},
+		updateSessionStatus: () => ({ updated: false }),
 		appendSessionMessages: () => {},
 		writeSessionMessages: () => {},
 		readSessionManifest: () => undefined,
 		listSessions: () => [],
+		persistSessionMessages: () => {},
+		readSessionMessages: () => [],
+		mutateSessionManifest: () => undefined,
 	};
 }
 
@@ -74,21 +78,25 @@ function findTransactionNotice(
 	return undefined;
 }
 
-function stubAgent(): Record<string, unknown> {
+function stubAgent() {
+	const result = {
+		text: "ok",
+		iterations: 1,
+		finishReason: "completed",
+		usage: { inputTokens: 1, outputTokens: 1, totalCost: 0 },
+		messages: [],
+		toolCalls: [],
+		durationMs: 1,
+		model: { id: "mock-model", provider: "mock-provider" },
+		startedAt: new Date(),
+		endedAt: new Date(),
+	};
 	return {
-		run: vi.fn().mockResolvedValue({
-			text: "ok",
-			iterations: 1,
-			finishReason: "completed",
-			usage: { inputTokens: 1, outputTokens: 1, totalCost: 0 },
-			messages: [],
-			toolCalls: [],
-			durationMs: 1,
-			model: { id: "mock-model", provider: "mock-provider" },
-			startedAt: new Date(),
-			endedAt: new Date(),
-		}),
-		continue: vi.fn(),
+		run: vi.fn().mockResolvedValue(result),
+		// An interactive session's second turn goes through `continue`, not
+		// `run`, so a stub that only answers `run` fails on the turn this file
+		// most needs to look at.
+		continue: vi.fn().mockResolvedValue(result),
 		abort: vi.fn(),
 		canStartRun: vi.fn().mockReturnValue(true),
 		getAgentId: vi.fn().mockReturnValue("agent-atomic-1"),
@@ -121,23 +129,27 @@ describe("the change protocol, as the host wires it", () => {
 	async function startProtocolSession(
 		oracleCommand: string,
 		oracleExpect?: string,
+		// A non-interactive session shuts down when its turn ends, so a test that
+		// sends two turns has to keep it open.
+		interactive = false,
 	) {
 		let agentConfig: AgentConfig | undefined;
 		const events: CoreSessionEvent[] = [];
+		const agent = stubAgent();
 		const host = new LocalRuntimeHost({
 			distinctId: `test-${nanoid(5)}`,
 			sessionService: sessionServiceStub() as never,
 			createAgent: (config: AgentConfig) => {
 				agentConfig = config;
-				return stubAgent() as never;
+				return agent as never;
 			},
 		});
 		host.subscribe((event) => {
 			events.push(event);
 		});
 
-		await host.startSession({
-			interactive: false,
+		const started = await host.startSession({
+			interactive,
 			...splitCoreSessionConfig({
 				providerId: "anthropic",
 				modelId: "claude-sonnet-4-6",
@@ -157,7 +169,7 @@ describe("the change protocol, as the host wires it", () => {
 			}),
 		});
 
-		return { agentConfig, events, host };
+		return { agentConfig, events, host, agent, sessionId: started.sessionId };
 	}
 
 	it("puts the workspace back when the check fails, and says so on the session's stream", async () => {
@@ -223,6 +235,33 @@ describe("the change protocol, as the host wires it", () => {
 			}),
 		).resolves.toBeUndefined();
 		expect(findTransactionNotice(events)).toBeUndefined();
+	});
+
+	// The rules go where the harness this comes from puts them. Measured: from
+	// the system prompt the same model made eight edits against a limit of three
+	// and never wrote the plan; the harness puts the identical text in the
+	// opening message and gets the plan.
+	it("sends the opening rules with the user's first message, once", async () => {
+		writeFileSync(join(workspace, "game.js"), "original", "utf8");
+		const { agent, host, sessionId } = await startProtocolSession(
+			"exit 0",
+			undefined,
+			true,
+		);
+
+		await host.runTurn({ sessionId, prompt: "fix manic_miner.html" });
+		await host.runTurn({ sessionId, prompt: "carry on" });
+
+		const first = String(agent.run.mock.calls[0]?.[0] ?? "");
+		const second = String(agent.continue.mock.calls[0]?.[0] ?? "");
+		expect(first).toContain("CHANGE PROTOCOL");
+		expect(first).toContain("AT MOST 3 changes");
+		// Rules first: a model that has read the request has already started
+		// planning against it.
+		expect(first.indexOf("CHANGE PROTOCOL")).toBeLessThan(
+			first.indexOf("fix manic_miner.html"),
+		);
+		expect(second).not.toContain("CHANGE PROTOCOL");
 	});
 
 	it("leaves the completion boundary alone when the protocol is off", async () => {
