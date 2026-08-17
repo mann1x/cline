@@ -37,12 +37,13 @@ export interface AtomicProtocolSession {
 	 * The first transaction's rules, to go out with the task itself, once.
 	 *
 	 * In the user's message rather than the system prompt, which is where this
-	 * started and where it measurably did not work. Same model, same rules, same
-	 * file: from the system prompt it made eight edits in one transaction
-	 * against a limit of three and never wrote the plan the rules ask for, while
-	 * the harness that puts the identical text in the opening message gets the
-	 * plan. A rule the model reads as part of the request it is answering is a
-	 * rule it follows; the same words as standing configuration are furniture.
+	 * started. The harness this protocol comes from puts the identical text in
+	 * the opening message and its runs declare the plan the rules ask for; from
+	 * the system prompt, two runs on the same model and the same file made eight
+	 * and twenty-six edits against a limit of three, and the second declared no
+	 * plan at all. Which of those the placement caused is not settled — the
+	 * first run did write one — so this is the arm the campaign was measured on
+	 * rather than a proven fix, and the edit counts are what to watch.
 	 *
 	 * Returns the text once and nothing after. Every later transaction's rules
 	 * arrive the same way, on the message that reopens it.
