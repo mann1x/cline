@@ -1,7 +1,9 @@
+import { DEFAULT_ATOMIC_PROTOCOL_SETTINGS } from "@shared/AtomicProtocolSettings"
 import { DEFAULT_FOCUS_CHAIN_SETTINGS } from "@shared/FocusChainSettings"
 import { UpdateSettingsRequest } from "@shared/proto/cline/state"
 import { VSCodeButton } from "@vscode/webview-ui-toolkit/react"
 import { memo, type ReactNode } from "react"
+import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
@@ -293,9 +295,9 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 								    left its half-fix behind for the next attempt to build
 								    on. */}
 								<p className="text-xs text-muted-foreground">
-									Runs a task as transactions: at most three declared changes, then a check. If the check fails,
-									every file goes back to what it was and the next attempt starts fresh with a record of what
-									was already tried. Auto engages only where something can be run to judge the change; Always
+									Runs a task as transactions: a few declared changes, then a check. If the check fails, every
+									file goes back to what it was and the next attempt starts fresh with a record of what was
+									already tried. Auto engages only where something can be run to judge the change; Always
 									engages anyway and asks the model to judge its own work, which is the weaker of the two.
 								</p>
 								<Select
@@ -345,6 +347,38 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 											minRows={1}
 											onChange={(value) => updateSetting("atomicProtocolSettings", { oracleExpect: value })}
 											placeholder={'"ok":\\s*true'}
+										/>
+										{/* A target rather than a cap: nothing stops the model
+										    mid-edit, and it does not obey this number — measured
+										    on the campaign this comes from, an attempt asked for
+										    three made twenty-six. What the number does control is
+										    how much unjudged work a rollback throws away, which
+										    is the reason to keep it small. */}
+										<p className="text-xs text-muted-foreground">
+											How many changes an attempt should declare before the check runs. Smaller means the
+											check runs sooner and a failed attempt loses less; larger lets one attempt carry a
+											wider repair, at the cost of reverting all of it at once.
+										</p>
+										<Input
+											aria-label="Changes per attempt"
+											defaultValue={
+												atomicProtocolSettings?.maxChanges ?? DEFAULT_ATOMIC_PROTOCOL_SETTINGS.maxChanges
+											}
+											min={1}
+											onChange={(event) => {
+												// Only a usable number is sent. proto3 puts an
+												// absent number and a zero on the wire the same
+												// way, so a cleared field would arrive as "reset
+												// to the default" rather than as "unchanged" —
+												// and a half-typed value must not be stored while
+												// the user is still typing it.
+												const changes = Number.parseInt(event.target.value, 10)
+												if (Number.isFinite(changes) && changes > 0) {
+													updateSetting("atomicProtocolSettings", { maxChanges: changes })
+												}
+											}}
+											step={1}
+											type="number"
 										/>
 									</>
 								) : null}

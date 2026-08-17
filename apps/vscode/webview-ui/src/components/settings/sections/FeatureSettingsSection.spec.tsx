@@ -249,6 +249,61 @@ describe("FeatureSettingsSection — change protocol", () => {
 		expect(screen.getByDisplayValue("node run_game.js manic_miner.html")).toBeTruthy()
 	})
 
+	it("shows the changes-per-attempt target once the protocol is on", () => {
+		mockExtensionState.value = {
+			...mockExtensionState.value,
+			atomicProtocolSettings: { mode: "auto", oracleCommand: "", oracleExpect: "", maxChanges: 7, maxTransactions: 6 },
+		}
+
+		render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		expect((screen.getByLabelText("Changes per attempt") as HTMLInputElement).value).toBe("7")
+	})
+
+	it("keeps the changes-per-attempt target out of sight while the protocol is off", () => {
+		mockExtensionState.value = {
+			...mockExtensionState.value,
+			atomicProtocolSettings: { mode: "off", oracleCommand: "", oracleExpect: "", maxChanges: 3, maxTransactions: 6 },
+		}
+
+		render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		expect(screen.queryByLabelText("Changes per attempt")).toBeNull()
+	})
+
+	it("sends a new changes-per-attempt target", () => {
+		mockExtensionState.value = {
+			...mockExtensionState.value,
+			atomicProtocolSettings: { mode: "auto", oracleCommand: "", oracleExpect: "", maxChanges: 3, maxTransactions: 6 },
+		}
+
+		render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+		fireEvent.change(screen.getByLabelText("Changes per attempt"), { target: { value: "10" } })
+
+		expect(mockUpdateSetting).toHaveBeenCalledWith("atomicProtocolSettings", { maxChanges: 10 })
+	})
+
+	// The stored value would otherwise be overwritten mid-keystroke, and a zero
+	// is indistinguishable on the wire from a field nobody set — so an emptied
+	// box would arrive as "put it back to three" rather than as "unchanged".
+	it("sends nothing for an emptied or zeroed target", () => {
+		mockExtensionState.value = {
+			...mockExtensionState.value,
+			atomicProtocolSettings: { mode: "auto", oracleCommand: "", oracleExpect: "", maxChanges: 3, maxTransactions: 6 },
+		}
+
+		// This describe block has no shared reset, and the test before it sends a
+		// target of its own.
+		mockUpdateSetting.mockClear()
+
+		render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+		const field = screen.getByLabelText("Changes per attempt")
+		fireEvent.change(field, { target: { value: "" } })
+		fireEvent.change(field, { target: { value: "0" } })
+
+		expect(mockUpdateSetting).not.toHaveBeenCalled()
+	})
+
 	// proto3 gives an absent number the same wire form as zero, so the mode is
 	// sent on its own and the limits are merged onto what is stored.
 	it("sends only the mode when the mode is what changed", () => {
