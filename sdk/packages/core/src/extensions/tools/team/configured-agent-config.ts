@@ -42,6 +42,15 @@ export interface ConfiguredAgentReadError {
 export interface ConfiguredAgentLoadResult {
 	configs: ConfiguredAgentConfig[];
 	errors: ConfiguredAgentReadError[];
+	/**
+	 * The directories that were looked in, whether or not they exist.
+	 *
+	 * Returned so the caller can say where it looked. A user who has turned
+	 * subagents on and written no agent file gets no tool and no error -- there
+	 * is nothing wrong to report -- and "none found, looked in these two places"
+	 * is the difference between that and a feature that appears broken.
+	 */
+	searchPaths: string[];
 }
 
 function splitFrontmatter(content: string): {
@@ -208,5 +217,5 @@ export function loadConfiguredAgentConfigs(input: {
 			b.path ? basename(b.path) : b.name,
 		),
 	);
-	return { configs, errors };
+	return { configs, errors, searchPaths: searchPaths.filter(Boolean) };
 }

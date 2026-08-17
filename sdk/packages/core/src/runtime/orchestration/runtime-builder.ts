@@ -387,7 +387,7 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 			? loadConfiguredAgentConfigs({
 					workspaceRoot: workspaceConfigRoot,
 				})
-			: { configs: [], errors: [] };
+			: { configs: [], errors: [], searchPaths: [] };
 		const configuredAgentsNeedSkills = configuredAgents.configs.some(
 			(agent) => agent.skills !== undefined,
 		);
@@ -409,6 +409,20 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 		for (const error of configuredAgents.errors) {
 			(logger ?? config.logger)?.log?.(
 				`[agents] Failed to load agent config at ${error.path}: ${error.error.message}`,
+			);
+		}
+
+		// Said whichever way it went, and said only when subagents are on. Zero
+		// agent files is not an error -- nothing is wrong, there is just nothing
+		// to offer -- so without this the feature is silent in exactly the case
+		// where a user is wondering why nothing happens.
+		if (normalized.enableSpawnAgent) {
+			(logger ?? config.logger)?.log?.(
+				configuredAgents.configs.length > 0
+					? `[agents] ${configuredAgents.configs.length} configured agent(s): ${configuredAgents.configs
+							.map((agent) => agent.name)
+							.join(", ")}`
+					: `[agents] No configured agents found. Looked in: ${configuredAgents.searchPaths.join(", ") || "(no search path)"}`,
 			);
 		}
 

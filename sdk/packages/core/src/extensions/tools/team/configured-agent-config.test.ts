@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { parseConfiguredAgentConfig } from "./configured-agent-config";
+import {
+	loadConfiguredAgentConfigs,
+	parseConfiguredAgentConfig,
+} from "./configured-agent-config";
 
 describe("configured agent config parser", () => {
 	it("parses YAML frontmatter and system prompt body", () => {
@@ -64,5 +67,25 @@ ${yaml}
 ---
 You are a code reviewer.`),
 		).toThrow("Missing closing YAML frontmatter delimiter");
+	});
+});
+
+/**
+ * A user who turns subagents on and has written no agent file gets no tool and
+ * no error, because nothing is wrong. The loader therefore has to hand back
+ * where it looked, so the caller can say that instead of saying nothing.
+ */
+describe("configured agent config loader", () => {
+	it("reports the directories it looked in when it finds nothing", () => {
+		const result = loadConfiguredAgentConfigs({
+			searchPaths: ["/nonexistent/one", "/nonexistent/two", ""],
+		});
+
+		expect(result.configs).toEqual([]);
+		expect(result.errors).toEqual([]);
+		expect(result.searchPaths).toEqual([
+			"/nonexistent/one",
+			"/nonexistent/two",
+		]);
 	});
 });
