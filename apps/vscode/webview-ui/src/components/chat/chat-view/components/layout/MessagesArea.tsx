@@ -56,7 +56,7 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		handleRowHeightChange,
 		isAtBottom,
 		setIsAtBottom,
-		isFollowing,
+		showJumpToPresent,
 		resumeFollowing,
 		disableAutoScrollRef,
 		handleRangeChanged,
@@ -284,11 +284,12 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 						overflowAnchor: "none", // prevent scroll jump when content expands
 					}}
 				/>
-				{/* Keyed on following rather than on `isAtBottom`: the list leaves the
-				    bottom on its own every time a token extends it, and showing the
-				    button for that told readers tailing had stopped when it had not
-				    (#49). The reader having scrolled away is the thing worth a button. */}
-				<JumpToPresent isVisible={!isFollowing} onJump={jumpToPresent} />
+				{/* Neither signal alone is the question this button answers, and #49 came
+				    back once on each of them: the list leaves the bottom on its own every
+				    time a token extends it, and a reader who expanded a row has stopped
+				    following while looking straight at the newest message. The predicate
+				    lives in the hook, next to what each half is worth. */}
+				<JumpToPresent isVisible={showJumpToPresent} onJump={jumpToPresent} />
 			</div>
 		</div>
 	)

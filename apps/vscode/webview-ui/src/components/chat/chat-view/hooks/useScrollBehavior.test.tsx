@@ -166,6 +166,53 @@ describe("useScrollBehavior", () => {
 		expect(result.current.disableAutoScrollRef.current).toBe(true)
 	})
 
+	// The report this pair of tests comes from: "I keep seeing the jump to present
+	// button even if it's not necessary as I never scrolled up and the chat window
+	// is just scrolling down by itself". Expanding a row is not scrolling, and a
+	// row that expands below the fold leaves the list where it was, so nothing
+	// tells the view to start following again and the button never left.
+	it("does not offer to jump while the view is already at the bottom", () => {
+		const { result } = renderHook(() => useScrollBehavior([], [], [], {}, vi.fn()))
+
+		act(() => {
+			result.current.setIsAtBottom(true)
+		})
+		act(() => {
+			result.current.toggleRowExpansion(1)
+		})
+
+		expect(result.current.isFollowing).toBe(false)
+		expect(result.current.showJumpToPresent).toBe(false)
+	})
+
+	it("offers to jump once new content has pushed the bottom out of reach", () => {
+		const { result } = renderHook(() => useScrollBehavior([], [], [], {}, vi.fn()))
+
+		act(() => {
+			result.current.setIsAtBottom(true)
+			result.current.toggleRowExpansion(1)
+		})
+		expect(result.current.showJumpToPresent).toBe(false)
+
+		act(() => {
+			result.current.setIsAtBottom(false)
+		})
+		expect(result.current.showJumpToPresent).toBe(true)
+	})
+
+	// The other half of #49: a tailing chat leaves the bottom on its own between
+	// the appended token and the pin scroll, and that is not the reader leaving.
+	it("does not offer to jump while it is still following", () => {
+		const { result } = renderHook(() => useScrollBehavior([], [], [], {}, vi.fn()))
+
+		act(() => {
+			result.current.setIsAtBottom(false)
+		})
+
+		expect(result.current.isFollowing).toBe(true)
+		expect(result.current.showJumpToPresent).toBe(false)
+	})
+
 	// The state and the ref are read by different halves of the UI -- the button
 	// renders from one, every pin path reads the other -- so a transition that
 	// moved only one of them would show a button that disagrees with the view.

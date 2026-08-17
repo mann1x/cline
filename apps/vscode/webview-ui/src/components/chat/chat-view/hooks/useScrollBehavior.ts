@@ -22,6 +22,7 @@ export function useScrollBehavior(
 	isAtBottom: boolean
 	setIsAtBottom: React.Dispatch<React.SetStateAction<boolean>>
 	isFollowing: boolean
+	showJumpToPresent: boolean
 	stopFollowing: () => void
 	resumeFollowing: () => void
 	pendingScrollToMessage: number | null
@@ -69,6 +70,29 @@ export function useScrollBehavior(
 		disableAutoScrollRef.current = false
 		setIsFollowing(true)
 	}, [])
+
+	/**
+	 * Whether there is anything to jump to.
+	 *
+	 * Both halves are needed and #49 has now been round-tripped on each of them
+	 * separately. Keyed on `isAtBottom` alone the button appeared while the chat
+	 * was tailing perfectly well, because a growing list is legitimately not at
+	 * the bottom between the token and the pin. Keyed on following alone it
+	 * appeared while the reader was looking straight at the newest message: the
+	 * reader stops following by expanding a row as well as by scrolling, and a
+	 * row that expands below the fold leaves the list exactly where it was, so
+	 * Virtuoso reports no change in bottom-ness and nothing resumes following.
+	 * The button then sat there for the rest of the task offering to take them
+	 * somewhere they already were -- reported as "I keep seeing the jump to
+	 * present button even if it's not necessary as I never scrolled up".
+	 *
+	 * So: the reader has to have stopped following *and* the view has to be away
+	 * from the bottom. Following stays off in that case, which is the point of
+	 * expanding a row -- the view holds still while they read it -- and the
+	 * button comes back on its own as soon as new content pushes the bottom out
+	 * of reach, which is the first moment it is any use.
+	 */
+	const showJumpToPresent = !isFollowing && !isAtBottom
 
 	// Find all user feedback messages
 	const userFeedbackMessages = useMemo(() => {
@@ -392,6 +416,7 @@ export function useScrollBehavior(
 		isAtBottom,
 		setIsAtBottom,
 		isFollowing,
+		showJumpToPresent,
 		stopFollowing,
 		resumeFollowing,
 		pendingScrollToMessage,

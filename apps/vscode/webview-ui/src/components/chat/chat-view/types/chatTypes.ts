@@ -104,6 +104,8 @@ export interface ScrollBehavior {
 	 * button asks. Always moved through the two helpers below, never on its own.
 	 */
 	isFollowing: boolean
+	/** Whether the jump-to-present button has anywhere to take the reader. */
+	showJumpToPresent: boolean
 	stopFollowing: () => void
 	resumeFollowing: () => void
 	pendingScrollToMessage: number | null
