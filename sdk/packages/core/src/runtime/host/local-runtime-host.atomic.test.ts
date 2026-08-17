@@ -78,6 +78,20 @@ function findTransactionNotice(
 	return undefined;
 }
 
+/** Whether the protocol engaged, on the same stream the verdicts use. */
+function findStatusNotice(
+	events: CoreSessionEvent[],
+): TransactionNotice | undefined {
+	for (const event of events) {
+		const payload = (event as { payload?: { event?: TransactionNotice } })
+			.payload?.event;
+		if (payload?.metadata?.kind === "atomic_status") {
+			return payload;
+		}
+	}
+	return undefined;
+}
+
 function stubAgent() {
 	const result = {
 		text: "ok",
@@ -171,6 +185,31 @@ describe("the change protocol, as the host wires it", () => {
 
 		return { agentConfig, events, host, agent, sessionId: started.sessionId };
 	}
+
+	// The user's words on first live use: "I don't see any engagement of the
+	// atomic transaction even if it's enabled". The mode was Auto, the
+	// workspace held one HTML file, and standing down was correct -- but
+	// nothing said so anywhere the user was looking.
+	it("says out loud when it stands down for want of a check", async () => {
+		writeFileSync(join(workspace, "game.js"), "original", "utf8");
+		const { agentConfig, events } = await startProtocolSession("");
+
+		const notice = findStatusNotice(events);
+		expect(notice?.metadata.armed).toBe(false);
+		expect(notice?.message).toContain("nothing in this workspace can be run");
+		expect(notice?.message).toContain("Always");
+		// And it really did stand down, rather than merely saying so.
+		expect(agentConfig?.completionPolicy?.onCompletionAttempt).toBeUndefined();
+	});
+
+	it("names the check when it does engage", async () => {
+		writeFileSync(join(workspace, "game.js"), "original", "utf8");
+		const { events } = await startProtocolSession("exit 0");
+
+		const notice = findStatusNotice(events);
+		expect(notice?.metadata.armed).toBe(true);
+		expect(notice?.message).toContain("exit 0");
+	});
 
 	it("puts the workspace back when the check fails, and says so on the session's stream", async () => {
 		writeFileSync(join(workspace, "game.js"), "original", "utf8");

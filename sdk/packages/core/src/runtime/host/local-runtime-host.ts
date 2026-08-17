@@ -800,6 +800,19 @@ export class LocalRuntimeHost implements RuntimeHost {
 			logger: {
 				log: (message) => configWithProvider.logger?.log?.(message),
 			},
+			// Whether it engaged, in the same place the verdicts go. A protocol
+			// that stood down because nothing in the workspace can judge a
+			// change is doing what it was asked to; from the chat it is
+			// indistinguishable from one that is broken.
+			onStatus: ({ armed, message }) => {
+				this.eventBridge.dispatchAgentEvent(sessionId, configWithProvider, {
+					type: "notice",
+					noticeType: "status",
+					displayRole: "status",
+					message,
+					metadata: { kind: "atomic_status", armed },
+				});
+			},
 			// The verdict goes to the user, not only to the log. A transaction
 			// that was discarded put every file back, and a run where that
 			// happened three times and finished looks — in the transcript alone —

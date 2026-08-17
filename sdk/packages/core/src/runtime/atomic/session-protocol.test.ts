@@ -44,14 +44,20 @@ describe("arming the protocol for a session", () => {
 	it("declines auto in a workspace with nothing to run, and says why", async () => {
 		await withWorkspace({ "notes.md": "# hello" }, async (root) => {
 			const logged: string[] = [];
+			const status: { armed: boolean; message: string }[] = [];
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
 				config: { mode: "auto" },
 				logger: { log: (message) => logged.push(message) },
+				onStatus: (update) => status.push(update),
 			});
 
 			expect(session).toBeUndefined();
-			expect(logged[0]).toContain("Stood down");
+			expect(logged[0]).toContain("stood down");
+			// To the user as well as the log: standing down is invisible from the
+			// chat, and looks exactly like a feature that is not working.
+			expect(status[0]?.armed).toBe(false);
+			expect(status[0]?.message).toContain("Settings");
 		});
 	});
 
