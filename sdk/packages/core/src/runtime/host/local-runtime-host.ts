@@ -792,7 +792,13 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// command, and because a transaction has to be judged on the deliberate
 		// way a run ends as well as the silent one.
 		const atomicProtocol = await createAtomicProtocolSession({
-			workspaceRoot: configWithProvider.cwd ?? process.cwd(),
+			// The workspace before the working directory, unlike the shell: a
+			// rollback that covers less than the model can reach is not a rollback,
+			// and the workspace is the wider of the two wherever they differ.
+			workspaceRoot:
+				configWithProvider.workspaceRoot ??
+				configWithProvider.cwd ??
+				process.cwd(),
 			config: configWithProvider.atomicProtocol,
 			logger: {
 				debug: (message) => configWithProvider.logger?.debug?.(message),
