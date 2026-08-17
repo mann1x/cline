@@ -302,6 +302,7 @@ message Settings {
   optional string edit_verification_settings = 197;
   optional bool agents_model_enabled = 198;
   optional string agents_mode_api_configuration = 199;
+  optional string atomic_protocol_settings = 200;
 }
 
 message State {
@@ -464,6 +465,7 @@ message UpdateSettingsRequest {
   // A change to the stored set. Sent only when the user edits it; values
   // travel in this direction and never the other.
   optional QaCredentialsUpdate qa_credentials = 58;
+  optional AtomicProtocolSettings atomic_protocol_settings = 59;
 }
 
 // Whether a run may finish with a file it changed and never checked.
@@ -472,6 +474,23 @@ message UpdateSettingsRequest {
 message EditVerificationSettings {
   // "off", "nudge" or "require".
   string mode = 1;
+}
+
+// Whether a task runs as judged, revertible transactions.
+//
+// Sent whole rather than as a delta: the four fields are read together when a
+// session arms the protocol, and a half-applied change would arm it to a
+// combination the user never chose.
+message AtomicProtocolSettings {
+  // "off", "auto" or "always".
+  string mode = 1;
+  // The shell line that decides whether the task is done. Empty means the
+  // workspace is inspected for something to run instead.
+  string oracle_command = 2;
+  // Changes the model may declare per transaction.
+  int32 max_changes = 3;
+  // Attempts before the task stops.
+  int32 max_transactions = 4;
 }
 
 // Named secrets a QA command may ask for.

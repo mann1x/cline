@@ -1,3 +1,4 @@
+import { AtomicProtocolSettings, DEFAULT_ATOMIC_PROTOCOL_SETTINGS } from "@shared/AtomicProtocolSettings"
 import { AutoApprovalSettings, DEFAULT_AUTO_APPROVAL_SETTINGS } from "@shared/AutoApprovalSettings"
 import {
 	ApiProvider,
@@ -329,6 +330,7 @@ const USER_SETTINGS_FIELDS = {
 	mode: { default: "act" as Mode },
 	focusChainSettings: { default: DEFAULT_FOCUS_CHAIN_SETTINGS as FocusChainSettings },
 	editVerificationSettings: { default: DEFAULT_EDIT_VERIFICATION_SETTINGS as EditVerificationSettings },
+	atomicProtocolSettings: { default: DEFAULT_ATOMIC_PROTOCOL_SETTINGS as AtomicProtocolSettings },
 	backgroundEditEnabled: { default: false as boolean },
 	optOutOfRemoteConfig: { default: false as boolean },
 	showFeatureTips: { default: false as boolean },

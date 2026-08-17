@@ -176,6 +176,7 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		defaultCappedThinkingPrompt,
 		compactionStrategy,
 		editVerificationSettings,
+		atomicProtocolSettings,
 		subagentsEnabled,
 		worktreesEnabled,
 		remoteConfigSettings,
@@ -281,6 +282,56 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 										<SelectItem value="require">Require</SelectItem>
 									</SelectContent>
 								</Select>
+							</div>
+							<div className="space-y-2 py-3">
+								<Label className="text-sm font-medium text-foreground">Change Protocol</Label>
+								{/* The rollback is the feature. Measured across the campaign
+								    this comes from, transactions that reported success and
+								    failed the check were the normal case — the model had
+								    fixed the error it was looking at and not the one the
+								    program still had — and without a revert each of those
+								    left its half-fix behind for the next attempt to build
+								    on. */}
+								<p className="text-xs text-muted-foreground">
+									Runs a task as transactions: at most three declared changes, then a check. If the check fails,
+									every file goes back to what it was and the next attempt starts fresh with a record of what
+									was already tried. Auto engages only where something can be run to judge the change; Always
+									engages anyway and asks the model to judge its own work, which is the weaker of the two.
+								</p>
+								<Select
+									onValueChange={(value) => updateSetting("atomicProtocolSettings", { mode: value })}
+									value={atomicProtocolSettings?.mode ?? "off"}>
+									<SelectTrigger className="w-full">
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectItem value="off">Off</SelectItem>
+										<SelectItem value="auto">Auto</SelectItem>
+										<SelectItem value="always">Always</SelectItem>
+									</SelectContent>
+								</Select>
+								{atomicProtocolSettings?.mode !== "off" ? (
+									<>
+										{/* Detection answers "does this workspace still hold
+										    together", which a model can leave green with the
+										    asked-for thing still broken: a typecheck passes
+										    over a game that no longer starts. */}
+										<p className="text-xs text-muted-foreground">
+											What to run to decide whether the task worked. Yours outranks anything found by
+											looking at the workspace — leave it empty and the project's own test, typecheck or
+											build is used instead.
+										</p>
+										<DebouncedTextArea
+											initialValue={atomicProtocolSettings?.oracleCommand ?? ""}
+											maxRows={3}
+											minRows={1}
+											onChange={(value) =>
+												updateSetting("atomicProtocolSettings", { oracleCommand: value })
+											}
+											placeholder="node run_game.js index.html"
+										/>
+									</>
+								) : null}
 							</div>
 							<QaCredentialsField />
 						</div>

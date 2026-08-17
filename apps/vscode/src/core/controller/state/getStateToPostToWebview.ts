@@ -67,6 +67,7 @@ export async function getStateToPostToWebview(controller: {
 	const agentsModelEnabled = stateManager.getGlobalSettingsKey("agentsModelEnabled")
 	const agentsModeApiConfiguration = stateManager.getGlobalSettingsKey("agentsModeApiConfiguration")
 	const editVerificationSettings = stateManager.getGlobalSettingsKey("editVerificationSettings")
+	const atomicProtocolSettings = stateManager.getGlobalSettingsKey("atomicProtocolSettings")
 	const apiConfigurationProfiles = stateManager.getGlobalSettingsKey("apiConfigurationProfiles")
 	const activeApiConfigurationProfile = stateManager.getGlobalSettingsKey("activeApiConfigurationProfile")
 	const enableCheckpointsSetting = stateManager.getGlobalSettingsKey("enableCheckpointsSetting")
@@ -162,6 +163,7 @@ export async function getStateToPostToWebview(controller: {
 		agentsModelEnabled,
 		agentsModeApiConfiguration,
 		editVerificationSettings,
+		atomicProtocolSettings,
 		// Names only. The values live in secret storage and never travel with
 		// the state; the settings view offers "replace" rather than showing one.
 		qaCredentialNames: readQaCredentialNames(),

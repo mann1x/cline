@@ -336,6 +336,26 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			}
 		}
 
+		// The change protocol. Merged onto what is stored rather than assigned:
+		// proto3 gives an absent number the same wire form as zero, so a request
+		// that carries only the mode would otherwise set the change limit to zero
+		// and arm the protocol to a combination the user never chose.
+		if (request.atomicProtocolSettings !== undefined) {
+			const stored = controller.stateManager.getGlobalSettingsKey("atomicProtocolSettings")
+			const mode = request.atomicProtocolSettings.mode
+			const maxChanges = request.atomicProtocolSettings.maxChanges
+			const maxTransactions = request.atomicProtocolSettings.maxTransactions
+			controller.stateManager.setGlobalState("atomicProtocolSettings", {
+				...stored,
+				...(mode === "off" || mode === "auto" || mode === "always" ? { mode } : {}),
+				...(request.atomicProtocolSettings.oracleCommand !== undefined
+					? { oracleCommand: request.atomicProtocolSettings.oracleCommand }
+					: {}),
+				...(maxChanges > 0 ? { maxChanges } : {}),
+				...(maxTransactions > 0 ? { maxTransactions } : {}),
+			})
+		}
+
 		// QA credentials. A delta, because the settings view knows the names and
 		// never the values, so it has nothing to send back for one the user did
 		// not touch. Rejected entries are logged by name in the store; nothing

@@ -3,6 +3,7 @@
 import { WorkspaceRoot } from "@shared/multi-root/types"
 import { RemoteConfigFields } from "@shared/storage/state-keys"
 import type { Environment } from "../config"
+import type { AtomicProtocolSettings } from "./AtomicProtocolSettings"
 import { AutoApprovalSettings } from "./AutoApprovalSettings"
 import { ApiConfiguration } from "./api"
 import { BrowserSettings } from "./BrowserSettings"
@@ -92,6 +93,8 @@ export interface ExtensionState {
 	agentsModeApiConfiguration: string
 	/** Whether a run may finish with a file it changed and never checked. */
 	editVerificationSettings: EditVerificationSettings
+	/** Whether a task runs as judged, revertible transactions. */
+	atomicProtocolSettings: AtomicProtocolSettings
 	/** Names of the configured QA credentials. Never their values. */
 	qaCredentialNames: string[]
 	/** JSON `ApiConfigurationProfile[]`. */

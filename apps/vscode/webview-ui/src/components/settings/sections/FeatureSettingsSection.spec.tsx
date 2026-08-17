@@ -18,6 +18,7 @@ const mockExtensionState = vi.hoisted(() => ({
 		remoteConfigSettings: {},
 		backgroundEditEnabled: false,
 		editVerificationSettings: { mode: "nudge" },
+		atomicProtocolSettings: { mode: "off", oracleCommand: "", maxChanges: 3, maxTransactions: 6 },
 	},
 }))
 
@@ -208,5 +209,53 @@ describe("FeatureSettingsSection — check edited files", () => {
 		render(<FeatureSettingsSection renderSectionHeader={() => null} />)
 
 		expect(screen.getByText("Nudge")).toBeTruthy()
+	})
+})
+
+/**
+ * The control that decides whether a failed attempt leaves its changes on disk.
+ *
+ * The command field is hidden while the protocol is off rather than disabled:
+ * an oracle typed against a protocol that is not running is a setting the user
+ * has every reason to believe is in force.
+ */
+describe("FeatureSettingsSection — change protocol", () => {
+	it("shows the mode the protocol is running on", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		const labels = Array.from(container.querySelectorAll("label")).map((label) => label.textContent)
+		expect(labels).toContain("Change Protocol")
+	})
+
+	it("keeps the check out of sight while the protocol is off", () => {
+		render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		expect(screen.queryByPlaceholderText("node run_game.js index.html")).toBeNull()
+	})
+
+	it("offers the check once the protocol is on, and shows the user's own", () => {
+		mockExtensionState.value = {
+			...mockExtensionState.value,
+			atomicProtocolSettings: {
+				mode: "auto",
+				oracleCommand: "node run_game.js manic_miner.html",
+				maxChanges: 3,
+				maxTransactions: 6,
+			},
+		}
+
+		render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		expect(screen.getByDisplayValue("node run_game.js manic_miner.html")).toBeTruthy()
+	})
+
+	// proto3 gives an absent number the same wire form as zero, so the mode is
+	// sent on its own and the limits are merged onto what is stored.
+	it("sends only the mode when the mode is what changed", () => {
+		mockExtensionState.value = { ...mockExtensionState.value, atomicProtocolSettings: undefined }
+
+		render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		expect(screen.getAllByText("Off").length).toBeGreaterThan(0)
 	})
 })

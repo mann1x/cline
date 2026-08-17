@@ -161,6 +161,11 @@ export class VscodeSessionHost implements SdkSessionHost {
 					// names none gets no guard, which is the right answer for one
 					// that has no linter to point at.
 					const editVerificationSettings = StateManager.get().getGlobalSettingsKey("editVerificationSettings")
+					// The change protocol. The oracle is resolved in core against
+					// the workspace, so all this hands over is what the user chose:
+					// the mode, their own check if they wrote one, and the two
+					// limits. An empty command means "find something to run".
+					const atomicProtocolSettings = StateManager.get().getGlobalSettingsKey("atomicProtocolSettings")
 					return {
 						...inputWithRemoteConfig,
 						source: inputWithRemoteConfig.source ?? "vscode",
@@ -171,6 +176,12 @@ export class VscodeSessionHost implements SdkSessionHost {
 							editVerification: {
 								mode: editVerificationSettings?.mode ?? "nudge",
 								checkTools: [CHECK_FILE_TOOL_NAME],
+							},
+							atomicProtocol: {
+								mode: atomicProtocolSettings?.mode ?? "off",
+								oracleCommand: atomicProtocolSettings?.oracleCommand || undefined,
+								maxChanges: atomicProtocolSettings?.maxChanges,
+								maxTransactions: atomicProtocolSettings?.maxTransactions,
 							},
 							taskProgress: {
 								enabled: focusChainSettings?.enabled ?? true,
