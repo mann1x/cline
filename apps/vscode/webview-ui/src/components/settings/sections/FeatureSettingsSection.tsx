@@ -157,6 +157,19 @@ const FeatureRow = memo(
 	},
 )
 
+/**
+ * A change-protocol limit, or nothing when the box does not hold one yet.
+ *
+ * proto3 puts an absent number and a zero on the wire the same way, so a
+ * cleared field would arrive at the merge as "reset it to the default" rather
+ * than as "leave it alone" — and a half-typed value must not be stored while it
+ * is still being typed.
+ */
+function readLimit(value: string): number | undefined {
+	const limit = Number.parseInt(value, 10)
+	return Number.isFinite(limit) && limit > 0 ? limit : undefined
+}
+
 interface FeatureSettingsSectionProps {
 	renderSectionHeader: (tabId: string) => JSX.Element | null
 }
@@ -348,38 +361,67 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 											onChange={(value) => updateSetting("atomicProtocolSettings", { oracleExpect: value })}
 											placeholder={'"ok":\\s*true'}
 										/>
-										{/* A target rather than a cap: nothing stops the model
-										    mid-edit, and it does not obey this number — measured
-										    on the campaign this comes from, an attempt asked for
-										    three made twenty-six. What the number does control is
-										    how much unjudged work a rollback throws away, which
-										    is the reason to keep it small. */}
+										{/* Targets rather than caps: nothing stops the model
+										    mid-edit, and it does not obey the change count —
+										    measured on the campaign this comes from, an attempt
+										    asked for three made twenty-six. The attempt count is
+										    the one that binds, because the protocol enforces it.
+										    What the change count controls is how much unjudged
+										    work a rollback throws away. */}
 										<p className="text-xs text-muted-foreground">
-											How many changes an attempt should declare before the check runs. Smaller means the
-											check runs sooner and a failed attempt loses less; larger lets one attempt carry a
-											wider repair, at the cost of reverting all of it at once.
+											How much one attempt should take on before the check runs, and how many attempts the
+											task gets. A smaller change count means the check runs sooner and a failed attempt
+											loses less; when the attempts run out the task stops, having put back everything the
+											check never passed.
 										</p>
-										<Input
-											aria-label="Changes per attempt"
-											defaultValue={
-												atomicProtocolSettings?.maxChanges ?? DEFAULT_ATOMIC_PROTOCOL_SETTINGS.maxChanges
-											}
-											min={1}
-											onChange={(event) => {
-												// Only a usable number is sent. proto3 puts an
-												// absent number and a zero on the wire the same
-												// way, so a cleared field would arrive as "reset
-												// to the default" rather than as "unchanged" —
-												// and a half-typed value must not be stored while
-												// the user is still typing it.
-												const changes = Number.parseInt(event.target.value, 10)
-												if (Number.isFinite(changes) && changes > 0) {
-													updateSetting("atomicProtocolSettings", { maxChanges: changes })
-												}
-											}}
-											step={1}
-											type="number"
-										/>
+										<div className="grid grid-cols-2 gap-2">
+											<div className="space-y-1">
+												<Label className="text-xs text-muted-foreground" htmlFor="atomic-max-changes">
+													Changes per attempt
+												</Label>
+												<Input
+													defaultValue={
+														atomicProtocolSettings?.maxChanges ??
+														DEFAULT_ATOMIC_PROTOCOL_SETTINGS.maxChanges
+													}
+													id="atomic-max-changes"
+													min={1}
+													onChange={(event) => {
+														const changes = readLimit(event.target.value)
+														if (changes !== undefined) {
+															updateSetting("atomicProtocolSettings", { maxChanges: changes })
+														}
+													}}
+													step={1}
+													type="number"
+												/>
+											</div>
+											<div className="space-y-1">
+												<Label
+													className="text-xs text-muted-foreground"
+													htmlFor="atomic-max-transactions">
+													Attempts per task
+												</Label>
+												<Input
+													defaultValue={
+														atomicProtocolSettings?.maxTransactions ??
+														DEFAULT_ATOMIC_PROTOCOL_SETTINGS.maxTransactions
+													}
+													id="atomic-max-transactions"
+													min={1}
+													onChange={(event) => {
+														const transactions = readLimit(event.target.value)
+														if (transactions !== undefined) {
+															updateSetting("atomicProtocolSettings", {
+																maxTransactions: transactions,
+															})
+														}
+													}}
+													step={1}
+													type="number"
+												/>
+											</div>
+										</div>
 									</>
 								) : null}
 							</div>

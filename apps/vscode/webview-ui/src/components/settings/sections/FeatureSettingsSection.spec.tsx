@@ -249,18 +249,19 @@ describe("FeatureSettingsSection — change protocol", () => {
 		expect(screen.getByDisplayValue("node run_game.js manic_miner.html")).toBeTruthy()
 	})
 
-	it("shows the changes-per-attempt target once the protocol is on", () => {
+	it("shows both limits once the protocol is on", () => {
 		mockExtensionState.value = {
 			...mockExtensionState.value,
-			atomicProtocolSettings: { mode: "auto", oracleCommand: "", oracleExpect: "", maxChanges: 7, maxTransactions: 6 },
+			atomicProtocolSettings: { mode: "auto", oracleCommand: "", oracleExpect: "", maxChanges: 7, maxTransactions: 4 },
 		}
 
 		render(<FeatureSettingsSection renderSectionHeader={() => null} />)
 
 		expect((screen.getByLabelText("Changes per attempt") as HTMLInputElement).value).toBe("7")
+		expect((screen.getByLabelText("Attempts per task") as HTMLInputElement).value).toBe("4")
 	})
 
-	it("keeps the changes-per-attempt target out of sight while the protocol is off", () => {
+	it("keeps both limits out of sight while the protocol is off", () => {
 		mockExtensionState.value = {
 			...mockExtensionState.value,
 			atomicProtocolSettings: { mode: "off", oracleCommand: "", oracleExpect: "", maxChanges: 3, maxTransactions: 6 },
@@ -269,9 +270,12 @@ describe("FeatureSettingsSection — change protocol", () => {
 		render(<FeatureSettingsSection renderSectionHeader={() => null} />)
 
 		expect(screen.queryByLabelText("Changes per attempt")).toBeNull()
+		expect(screen.queryByLabelText("Attempts per task")).toBeNull()
 	})
 
-	it("sends a new changes-per-attempt target", () => {
+	// One at a time, and merged onto what is stored: sending both would make
+	// every edit of one an assertion about the other.
+	it("sends a new changes-per-attempt target on its own", () => {
 		mockExtensionState.value = {
 			...mockExtensionState.value,
 			atomicProtocolSettings: { mode: "auto", oracleCommand: "", oracleExpect: "", maxChanges: 3, maxTransactions: 6 },
@@ -281,6 +285,18 @@ describe("FeatureSettingsSection — change protocol", () => {
 		fireEvent.change(screen.getByLabelText("Changes per attempt"), { target: { value: "10" } })
 
 		expect(mockUpdateSetting).toHaveBeenCalledWith("atomicProtocolSettings", { maxChanges: 10 })
+	})
+
+	it("sends a new attempts-per-task target on its own", () => {
+		mockExtensionState.value = {
+			...mockExtensionState.value,
+			atomicProtocolSettings: { mode: "auto", oracleCommand: "", oracleExpect: "", maxChanges: 3, maxTransactions: 6 },
+		}
+
+		render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+		fireEvent.change(screen.getByLabelText("Attempts per task"), { target: { value: "2" } })
+
+		expect(mockUpdateSetting).toHaveBeenCalledWith("atomicProtocolSettings", { maxTransactions: 2 })
 	})
 
 	// The stored value would otherwise be overwritten mid-keystroke, and a zero
@@ -297,9 +313,11 @@ describe("FeatureSettingsSection — change protocol", () => {
 		mockUpdateSetting.mockClear()
 
 		render(<FeatureSettingsSection renderSectionHeader={() => null} />)
-		const field = screen.getByLabelText("Changes per attempt")
-		fireEvent.change(field, { target: { value: "" } })
-		fireEvent.change(field, { target: { value: "0" } })
+		for (const label of ["Changes per attempt", "Attempts per task"]) {
+			const field = screen.getByLabelText(label)
+			fireEvent.change(field, { target: { value: "" } })
+			fireEvent.change(field, { target: { value: "0" } })
+		}
 
 		expect(mockUpdateSetting).not.toHaveBeenCalled()
 	})
