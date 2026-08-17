@@ -38,6 +38,25 @@ interface FeatureToggle {
 
 const agentFeatures: FeatureToggle[] = [
 	{
+		// Upstream c3671de7d ("fix(vscode): disable subagents") deleted this row
+		// and hardcoded `enableSpawnAgent: false` in the session factory. The
+		// factory reads the setting again, but the row was never put back, so
+		// `subagentsEnabled` has been resolving to its `?? false` default with no
+		// control anywhere that could change it — the machinery is all present and
+		// the model is offered none of it.
+		//
+		// The description says what the toggle alone buys, because it is not all
+		// of it: the open-ended spawn and the team tools are additionally withheld
+		// on a one-slot endpoint (see slotsAllowParallelDelegation), and that
+		// withholding is otherwise visible only in the extension log.
+		id: "subagents",
+		label: "Subagents",
+		description:
+			"Let the model hand a piece of work to a subagent. Agents defined in .cline/agents are offered as soon as this is on; the open-ended spawn and the team tools also need the profile's parallel sessions above 1, because an endpoint that serves one request at a time would run them one after another rather than beside each other.",
+		stateKey: "subagentsEnabled",
+		settingKey: "subagentsEnabled",
+	},
+	{
 		id: "auto-compact",
 		label: "Auto Compact",
 		description: "Automatically compress conversation history.",

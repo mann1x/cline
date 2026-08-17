@@ -114,6 +114,31 @@ describe("FeatureSettingsSection", () => {
 		expect(mockUpdateSetting).toHaveBeenCalledWith("focusChainSettings", { enabled: true, remindClineInterval: 11 })
 	})
 
+	// Deleted upstream in c3671de7d and never restored, so the session factory's
+	// read of `subagentsEnabled` could only ever see the default.
+	it("renders the Subagents toggle in the Agent section", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		const agentSection = container.querySelector("#agent-features")
+		expect(agentSection?.querySelector("#Subagents")).toBeTruthy()
+	})
+
+	it("calls updateSetting with subagentsEnabled when toggled", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		fireEvent.click(container.querySelector("#Subagents") as Element)
+
+		expect(mockUpdateSetting).toHaveBeenCalledWith("subagentsEnabled", true)
+	})
+
+	// The toggle is not the whole gate, and the other half is otherwise only in
+	// the extension log.
+	it("says that the open-ended spawn also needs parallel sessions above 1", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		expect(container.querySelector("#agent-features")?.textContent).toContain("parallel sessions above 1")
+	})
+
 	it("calls updateSetting with showFeatureTips when toggled", () => {
 		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
 
