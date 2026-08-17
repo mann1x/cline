@@ -33,10 +33,18 @@ import { splitCoreSessionConfig } from "./runtime-host";
  * has its own coverage next door; what this file is about is what happens at
  * the completion boundary.
  */
-function sessionServiceStub(): Record<string, unknown> {
+function sessionServiceStub(recorded?: {
+	prompt?: string;
+}): Record<string, unknown> {
 	return {
 		ensureSessionsDir: () => tmpdir(),
-		createRootSessionWithArtifacts: (input: { sessionId?: string }) => {
+		createRootSessionWithArtifacts: (input: {
+			sessionId?: string;
+			prompt?: string;
+		}) => {
+			if (recorded) {
+				recorded.prompt = input.prompt;
+			}
 			const sessionId = input.sessionId?.trim() || `session-${nanoid(5)}`;
 			return {
 				sessionId,
@@ -149,10 +157,11 @@ describe("the change protocol, as the host wires it", () => {
 	) {
 		let agentConfig: AgentConfig | undefined;
 		const events: CoreSessionEvent[] = [];
+		const recordedSession: { prompt?: string } = {};
 		const agent = stubAgent();
 		const host = new LocalRuntimeHost({
 			distinctId: `test-${nanoid(5)}`,
-			sessionService: sessionServiceStub() as never,
+			sessionService: sessionServiceStub(recordedSession) as never,
 			createAgent: (config: AgentConfig) => {
 				agentConfig = config;
 				return agent as never;
@@ -183,7 +192,14 @@ describe("the change protocol, as the host wires it", () => {
 			}),
 		});
 
-		return { agentConfig, events, host, agent, sessionId: started.sessionId };
+		return {
+			agentConfig,
+			events,
+			host,
+			agent,
+			recordedSession,
+			sessionId: started.sessionId,
+		};
 	}
 
 	// The user's words on first live use: "I don't see any engagement of the
@@ -209,6 +225,22 @@ describe("the change protocol, as the host wires it", () => {
 		const notice = findStatusNotice(events);
 		expect(notice?.metadata.armed).toBe(true);
 		expect(notice?.message).toContain("exit 0");
+	});
+
+	// The record is what the history list and the task title are read from, and
+	// it is the user's, not the model's. Measured on first live use: every task
+	// started with the protocol armed was titled "== CHANGE PROTOCOL ==".
+	it("keeps the user's own words as the session's prompt", async () => {
+		writeFileSync(join(workspace, "game.js"), "original", "utf8");
+		const { recordedSession, host, sessionId } = await startProtocolSession(
+			"exit 0",
+			undefined,
+			true,
+		);
+		await host.runTurn({ sessionId, prompt: "Fix the sprite" });
+
+		expect(recordedSession.prompt).toBe("Fix the sprite");
+		expect(recordedSession.prompt).not.toContain("CHANGE PROTOCOL");
 	});
 
 	it("puts the workspace back when the check fails, and says so on the session's stream", async () => {

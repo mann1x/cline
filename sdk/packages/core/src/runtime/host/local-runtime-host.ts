@@ -1891,7 +1891,13 @@ export class LocalRuntimeHost implements RuntimeHost {
 		if (!prompt && !images && !files) throw new Error("prompt cannot be empty");
 
 		if (!session.artifacts && !session.pendingPrompt) {
-			session.pendingPrompt = prompt;
+			// The user's own words, not what the model was sent. The two used to
+			// be near enough the same thing; they are not once the change
+			// protocol puts its rules on the front of the first message, and the
+			// session's record is what the history list and the task's title are
+			// read from. Measured on the first live use: every task started with
+			// the protocol armed was titled "== CHANGE PROTOCOL ==".
+			session.pendingPrompt = input.prompt.trim() || prompt;
 		}
 		await this.ensureSessionPersisted(session);
 		await this.refreshActiveSessionGitMetadata(session);
