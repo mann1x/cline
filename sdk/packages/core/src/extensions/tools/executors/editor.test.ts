@@ -1171,53 +1171,102 @@ describe("createEditorExecutor", () => {
 			});
 		});
 
-		// A file that ends with a newline is the common case, and this message
-		// used to count one line more than `read_files` reports for it — so the
-		// two numbers a model saw for the same file disagreed, which is the pair
-		// it was measured alternating between looking for "the whole file".
-		it("counts the file the way read_files counts it", async () => {
+		// A whole-file write over a file that exists used to be refused, and
+		// the refusal was routed around: measured on one transaction, the model
+		// deleted the file with `run_commands` twelve times and recreated it
+		// from `new_text` alone, because a file that does not exist is one this
+		// call will write. The twelfth delete landed twelve seconds before the
+		// clock ran out and the run ended with no file at all.
+		it("replaces a file it has read, without needing it deleted first", async () => {
 			await withTempFile("one\ntwo\nthree\n", async (filePath, dir) => {
-				const editor = createEditorExecutor();
+				const receipts = createReadReceipts();
+				const editor = createEditorExecutor({ receipts });
+				receipts.noteRead(filePath, 1, 3);
 
-				await expect(
-					editor({ path: filePath, new_text: "rewritten" }, dir, context),
-				).rejects.toThrow(/`start_line: 1` and `end_line: 3`/);
+				const result = await editor(
+					{ path: filePath, new_text: "rewritten\n" },
+					dir,
+					context,
+				);
+
+				expect(result).toContain("Replaced lines 1-3");
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+					"rewritten\n",
+				);
 			});
 		});
 
-		it("names the whole-file replace route when new_text arrives without old_text", async () => {
-			// A model that has failed to patch a file incrementally sends the
-			// whole file back with no `old_text`. Saying only that `old_text` is
-			// missing leaves it with no way to do what it asked for.
-			await withTempFile("one\ntwo\nthree", async (filePath, dir) => {
-				const editor = createEditorExecutor();
+		// The condition the deletion route silently discarded. Reading is what
+		// tells the model what it is about to overwrite.
+		it("refuses to replace a file it has not read", async () => {
+			await withTempFile("one\ntwo\nthree\n", async (filePath, dir) => {
+				const receipts = createReadReceipts();
+				const editor = createEditorExecutor({ receipts });
 
 				await expect(
 					editor({ path: filePath, new_text: "rewritten" }, dir, context),
-				).rejects.toThrow(/`start_line: 1` and `end_line: 3`/);
-				// ...but named as the fallback, after the targeted edit. Live: a
-				// model quoted this sentence back as its reason for rewriting a
-				// 138-line file whole on every retry, and triplicated a class
-				// doing it. The order of the two routes is the behaviour.
+				).rejects.toThrow("Read before replacing");
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+					"one\ntwo\nthree\n",
+				);
+			});
+		});
+
+		// A file that ends with a newline is the common case, and this count
+		// used to be one more than `read_files` reports for the same file — the
+		// pair of numbers a model was measured alternating between, looking for
+		// the one that meant "the whole file".
+		it("counts the file the way read_files counts it", async () => {
+			await withTempFile("one\ntwo\nthree\n", async (filePath, dir) => {
+				const receipts = createReadReceipts();
+				const editor = createEditorExecutor({ receipts });
+
+				await expect(
+					editor({ path: filePath, new_text: "rewritten" }, dir, context),
+				).rejects.toThrow(/every one of the 3 line\(s\)/);
+			});
+		});
+
+		// `requireRead` tells the model to read a range "not the whole file",
+		// which is the wrong instruction for a call that replaces every line:
+		// following it would satisfy no receipt.
+		it("asks for the whole file rather than a range", async () => {
+			await withTempFile("one\ntwo\nthree\n", async (filePath, dir) => {
+				const receipts = createReadReceipts();
+				const editor = createEditorExecutor({ receipts });
+
 				await expect(
 					editor({ path: filePath, new_text: "rewritten" }, dir, context),
 				).rejects.toThrow(
-					/Edit the lines you mean to change[\s\S]*Replacing the file in full/,
+					/all of it, since all of it is what you are replacing/,
 				);
-				await expect(
-					editor({ path: filePath, new_text: "rewritten" }, dir, context),
-				).rejects.toThrow(/only after a targeted edit has failed/);
-				// The message must name `path` too. Measured: a model rebuilt
-				// the call from an earlier version of this sentence, which
-				// named only the line numbers, and dropped `path` three times.
 				await expect(
 					editor({ path: filePath, new_text: "rewritten" }, dir, context),
 				).rejects.toThrow(
 					new RegExp(`path: "${filePath.replace(/\\/g, "\\\\")}"`),
 				);
-				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
-					"one\ntwo\nthree",
-				);
+			});
+		});
+
+		// The guard that made refusing this write look necessary: a rewrite that
+		// restates the file and then continues appends a second copy. It applies
+		// to this route exactly as it does to `start_line: 1`.
+		it("still catches a rewrite that duplicates instead of replacing", async () => {
+			await withTempFile("one\ntwo\nthree\n", async (filePath, dir) => {
+				const receipts = createReadReceipts();
+				const editor = createEditorExecutor({ receipts });
+				receipts.noteRead(filePath, 1, 3);
+
+				await expect(
+					editor(
+						{
+							path: filePath,
+							new_text: "one\ntwo\nthree\nfour\nfive\nsix\nseven\n",
+						},
+						dir,
+						context,
+					),
+				).rejects.toThrow("Duplicated instead of replaced");
 			});
 		});
 

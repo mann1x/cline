@@ -1214,22 +1214,26 @@ export function createEditorExecutor(
 		}
 		if (input.old_text == null) {
 			// `new_text` alone against an existing file is a model asking to
-			// rewrite it wholesale. The route exists and has to be named, but
-			// naming it *first* turned it into the instruction: a model that
-			// could not get `old_text` to match read this message as sanctioning
-			// a full rewrite, took it on every retry, and grew a 138-line file
-			// to 440 lines carrying three copies of the same class. It quoted
-			// this sentence back while doing it. So the targeted route leads,
-			// and the wholesale one is named as what it is — the fallback, with
-			// the reason it is a fallback attached.
+			// rewrite it wholesale.
 			//
-			// Every argument of the working call is spelled out, `path`
-			// included, on both routes. An earlier version of this message named
-			// only the two line numbers to add, and a model rebuilt the call
-			// from the sentence instead of amending its own: it sent
-			// `start_line`, `end_line` and `new_text` with no `path` at all,
-			// three times in a row. A message that lists some of the arguments
-			// will be read as listing all of them.
+			// This was refused outright, and the refusal was routed around. On
+			// one transaction the model deleted the file with `run_commands`
+			// twelve times and recreated it from `new_text` alone each time,
+			// because a file that does not exist is one this call will write.
+			// The twelfth delete landed twelve seconds before the transaction's
+			// clock ran out, so the run ended with no file at all and the
+			// oracle reported `ENOENT` instead of whatever was actually wrong.
+			//
+			// `rm` is strictly worse than the write it stands in for: it takes
+			// the file out of existence between two turns, it drops the read
+			// receipts rather than satisfying them, and nothing checks what
+			// comes back. Refusing the honest spelling of an operation the
+			// model can perform anyway only decides how it performs it. So the
+			// write is allowed here, through the same range replacement
+			// `start_line: 1` would use — the duplication guard included — on
+			// the one condition the deletion route silently discarded: that the
+			// model has read what it is about to replace.
+			//
 			// Counted the way every other message in this tool counts, and the
 			// way `read_files` does. Splitting on newlines here yielded one more
 			// line than the file has whenever it ends with a newline, so this
@@ -1241,11 +1245,30 @@ export function createEditorExecutor(
 				await fs.readFile(filePath, encoding),
 			);
 			const lineCount = fileLines.length;
-			throw new Error(
-				`Parameter \`old_text\` is required when editing an existing file without \`insert_line\` or \`start_line\`. ` +
-					`Edit the lines you mean to change: call \`read_files\` for ${filePath} around them, then send this call again with \`path: "${filePath}"\`, the \`new_text\` for just those lines, and the \`start_line\`/\`end_line\` that read reports. ` +
-					`Replacing the file in full is the same call with \`start_line: 1\` and \`end_line: ${lineCount}\` — or any larger number, since an \`end_line\` past the end of the file means "to the end of the file" — but it rewrites every line, and a whole-file rewrite that is slightly wrong duplicates the parts it did not mean to touch, so reach for it only after a targeted edit has failed.`,
+			// Checked here rather than through `requireRead`, whose message
+			// tells the model to read a range "not the whole file". That is the
+			// right advice for a targeted edit and the wrong advice for this
+			// call, which replaces every line: following it would satisfy no
+			// receipt and send the model round again.
+			if (receipts && !receipts.covers(filePath, 1, lineCount)) {
+				const why = receipts.wasRetired(filePath)
+					? "an earlier edit changed the file's length, so what you read is no longer where you read it"
+					: "not all of it has been read in this session";
+				throw new Error(
+					`Read before replacing: this call replaces every one of the ${lineCount} line(s) in ${filePath}, and ${why}. The file was not modified. Call \`read_files\` for ${filePath} — all of it, since all of it is what you are replacing — then send this call again with \`path: "${filePath}"\` and the \`new_text\` the whole file should end up as. ` +
+						`Changing part of it is cheaper and safer: read around the lines you mean to change, then send \`path\`, \`start_line\`, \`end_line\` and the \`new_text\` for just those lines.`,
+				);
+			}
+			const result = await replaceLineRange(
+				filePath,
+				1,
+				lineCount,
+				input.new_text,
+				encoding,
+				maxDiffLines,
 			);
+			await noteWrite();
+			return result;
 		}
 
 		// A text-matched edit does not name a line, so there is no range to
