@@ -227,6 +227,37 @@ export interface CoreEditVerificationConfig {
 	checkTools?: string[];
 }
 
+/**
+ * When a task is run as a sequence of judged, revertible transactions.
+ *
+ * `auto` engages the protocol only where it can pay for itself — a task that
+ * changes files, in a workspace something can be run in. `always` engages it on
+ * every task, including the ones whose verdict can only come from the model
+ * itself. Off is the default: the protocol costs a check per attempt and holds
+ * a copy of the workspace in memory, which is not a bargain for a one-line edit.
+ */
+export type CoreAtomicProtocolMode = "off" | "auto" | "always";
+
+export interface CoreAtomicProtocolConfig {
+	mode?: CoreAtomicProtocolMode;
+	/**
+	 * What the model must run for this task to count as done, as a shell line.
+	 *
+	 * The user's own check, and it outranks anything detection finds. Detection
+	 * answers "does this workspace still hold together", which a model can leave
+	 * green with the asked-for thing still broken — a typecheck passes over a
+	 * game that no longer starts. A line written for the task in front of the
+	 * user is the narrower question and the one worth judging on.
+	 */
+	oracleCommand?: string;
+	/** Longest that command may run before the transaction is judged on nothing. */
+	oracleTimeoutMs?: number;
+	/** Changes the model may declare per transaction. Three by default. */
+	maxChanges?: number;
+	/** Attempts before the task stops. Six by default, as the harness runs it. */
+	maxTransactions?: number;
+}
+
 export type CoreCompactionStrategy = "basic" | "agentic";
 
 export interface CoreCompactionConfig {
@@ -489,6 +520,17 @@ export interface CoreSessionConfig
 	 * was missing was anything that noticed.
 	 */
 	editVerification?: CoreEditVerificationConfig;
+	/**
+	 * Whether the task runs as judged, revertible transactions.
+	 *
+	 * A stronger claim than edit verification and a different one: verification
+	 * asks that a changed file be checked, while this decides what happens when
+	 * the check says no. A transaction that fails is not reported and left on
+	 * disk — every file it touched goes back to what it was, and the next
+	 * attempt starts from the same place this one did, carrying the record of
+	 * what was already tried.
+	 */
+	atomicProtocol?: CoreAtomicProtocolConfig;
 	/**
 	 * The project's own checker, for the `check_file` this host supplies.
 	 *

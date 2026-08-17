@@ -116,6 +116,10 @@ import type { CoreSessionConfig } from "../../types/config";
 import type { CoreSessionEvent } from "../../types/events";
 import type { ActiveSession, PreparedTurnInput } from "../../types/session";
 import type { SessionRecord } from "../../types/sessions";
+import {
+	createAtomicProtocolSession,
+	withAtomicProtocolRules,
+} from "../atomic/session-protocol";
 import type { RuntimeCapabilities } from "../capabilities";
 import { normalizeRuntimeCapabilities } from "../capabilities";
 import { normalizeConnectionUpdate } from "../config/connection-update";
@@ -783,6 +787,29 @@ export class LocalRuntimeHost implements RuntimeHost {
 						},
 					}
 				: runtime.completionPolicy;
+		// The change protocol, where the user has asked for it. It settles at the
+		// boundary rather than through a guard because it decides by running a
+		// command, and because a transaction has to be judged on the deliberate
+		// way a run ends as well as the silent one.
+		const atomicProtocol = await createAtomicProtocolSession({
+			workspaceRoot: configWithProvider.cwd ?? process.cwd(),
+			config: configWithProvider.atomicProtocol,
+			logger: {
+				debug: (message) => configWithProvider.logger?.debug?.(message),
+			},
+			onEvent: (event) => {
+				if (event.type === "settled") {
+					configWithProvider.logger?.debug?.(event.message);
+				}
+			},
+		});
+		const completionPolicyWithProtocol = atomicProtocol
+			? {
+					...completionPolicyWithChecklistCloseOut,
+					onCompletionAttempt: (context: { text?: string }) =>
+						atomicProtocol.onCompletionAttempt(context),
+				}
+			: completionPolicyWithChecklistCloseOut;
 		const extensions = runtime.extensions ?? bootstrap.extensions;
 		const explicitInitialCompactionState = startInput.initialCompactionState;
 		let activeSessionRef: ActiveSession | undefined;
@@ -825,58 +852,61 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// where the turns that actually end at the budget message go.
 		const condenseDiscardedReasoning =
 			createCappedThinkingNoteWriter(cappedThinkingConfig);
-		const prepareTurn = createCappedThinkingPrepareTurn(
-			createCompactionStateAwarePrepareTurn({
-				compact,
-				getState: () => activeSessionRef?.compactionState,
-				saveState: async (state, sourceMessages) => {
-					const activeSession = activeSessionRef;
-					if (!activeSession) return;
-					const stateForSession = {
-						...state,
-						conversation_id: activeSession.sessionId,
-					};
-					try {
-						// Validate against the exact messages the state's hash was
-						// computed from. Mid-turn, `agent.getMessages()` (the
-						// conversation store) can legally differ from the runtime's
-						// working transcript, so validating against the store would
-						// spuriously reject the write.
-						const result = await this.persistActiveSessionCompactionState(
-							activeSession,
-							stateForSession,
-							sourceMessages,
-						);
-						if (!result.updated) {
-							configWithProvider.logger?.debug?.(
-								"Skipped stale session compaction state",
-								{
-									sessionId: activeSession.sessionId,
-									sourceMessageCount: stateForSession.source_message_count,
-								},
+		const prepareTurn = withAtomicProtocolRules(
+			createCappedThinkingPrepareTurn(
+				createCompactionStateAwarePrepareTurn({
+					compact,
+					getState: () => activeSessionRef?.compactionState,
+					saveState: async (state, sourceMessages) => {
+						const activeSession = activeSessionRef;
+						if (!activeSession) return;
+						const stateForSession = {
+							...state,
+							conversation_id: activeSession.sessionId,
+						};
+						try {
+							// Validate against the exact messages the state's hash was
+							// computed from. Mid-turn, `agent.getMessages()` (the
+							// conversation store) can legally differ from the runtime's
+							// working transcript, so validating against the store would
+							// spuriously reject the write.
+							const result = await this.persistActiveSessionCompactionState(
+								activeSession,
+								stateForSession,
+								sourceMessages,
 							);
+							if (!result.updated) {
+								configWithProvider.logger?.debug?.(
+									"Skipped stale session compaction state",
+									{
+										sessionId: activeSession.sessionId,
+										sourceMessageCount: stateForSession.source_message_count,
+									},
+								);
+							}
+						} catch (error) {
+							configWithProvider.logger?.error?.(
+								"Failed to persist session compaction state",
+								{ sessionId: activeSession.sessionId, error },
+							);
+							captureSdkError(configWithProvider.telemetry, {
+								component: "core",
+								operation: "session.persist_compaction_state",
+								severity: "warn",
+								handled: true,
+								error,
+								context: {
+									sessionId: activeSession.sessionId,
+									providerId: configWithProvider.providerId,
+									modelId: configWithProvider.modelId,
+								},
+							});
 						}
-					} catch (error) {
-						configWithProvider.logger?.error?.(
-							"Failed to persist session compaction state",
-							{ sessionId: activeSession.sessionId, error },
-						);
-						captureSdkError(configWithProvider.telemetry, {
-							component: "core",
-							operation: "session.persist_compaction_state",
-							severity: "warn",
-							handled: true,
-							error,
-							context: {
-								sessionId: activeSession.sessionId,
-								providerId: configWithProvider.providerId,
-								modelId: configWithProvider.modelId,
-							},
-						});
-					}
-				},
-			}),
-			cappedThinkingConfig,
+					},
+				}),
+				cappedThinkingConfig,
+			),
+			atomicProtocol,
 		);
 
 		const agentConfig = {
@@ -934,7 +964,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 			telemetry: configWithProvider.telemetry,
 			onConsecutiveMistakeLimitReached:
 				configWithProvider.onConsecutiveMistakeLimitReached,
-			completionPolicy: completionPolicyWithChecklistCloseOut,
+			completionPolicy: completionPolicyWithProtocol,
 			consumePendingUserMessage: () => {
 				const entry = this.pendingPromptsController.consumeSteer(sessionId);
 				return entry
