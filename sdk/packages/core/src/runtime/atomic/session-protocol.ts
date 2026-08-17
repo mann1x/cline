@@ -38,12 +38,17 @@ export interface AtomicProtocolSession {
 	 *
 	 * In the user's message rather than the system prompt, which is where this
 	 * started. The harness this protocol comes from puts the identical text in
-	 * the opening message and its runs declare the plan the rules ask for; from
-	 * the system prompt, two runs on the same model and the same file made eight
-	 * and twenty-six edits against a limit of three, and the second declared no
-	 * plan at all. Which of those the placement caused is not settled — the
-	 * first run did write one — so this is the arm the campaign was measured on
-	 * rather than a proven fix, and the edit counts are what to watch.
+	 * the opening message, and this matches the arm the campaign was measured
+	 * on; it is not a demonstrated improvement, and nothing here should be read
+	 * as one.
+	 *
+	 * A warning for anyone measuring this, learned by getting it wrong: count
+	 * applied edits, not editor calls. Two system-prompt runs looked like eight
+	 * and twenty-six changes against a limit of three, which reads as a limit
+	 * nobody honours. Read against the tool results, they applied seven and
+	 * three: the twenty-six was twenty-three failed calls -- no-match, read
+	 * before edit, wrong insert mode -- around three changes that landed, which
+	 * is the limit exactly.
 	 *
 	 * Returns the text once and nothing after. Every later transaction's rules
 	 * arrive the same way, on the message that reopens it.
