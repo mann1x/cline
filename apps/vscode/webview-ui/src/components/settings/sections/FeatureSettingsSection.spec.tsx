@@ -18,7 +18,7 @@ const mockExtensionState = vi.hoisted(() => ({
 		remoteConfigSettings: {},
 		backgroundEditEnabled: false,
 		editVerificationSettings: { mode: "nudge" },
-		atomicProtocolSettings: { mode: "off", oracleCommand: "", maxChanges: 3, maxTransactions: 6 },
+		atomicProtocolSettings: { mode: "off", oracleCommand: "", oracleExpect: "", maxChanges: 3, maxTransactions: 6 },
 	},
 }))
 

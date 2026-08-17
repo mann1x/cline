@@ -309,6 +309,7 @@ export type ClineSay =
 	| "conditional_rules_applied"
 	| "compaction" // context compaction progress/result divider
 	| "thinking_condensed" // a capped turn's reasoning, replaced by the note it left itself
+	| "transaction" // a change transaction kept, or discarded and put back
 
 export interface ClineSayTool {
 	tool:
@@ -465,6 +466,27 @@ export interface ClineThinkingCondensedInfo {
 	/** The allowance the turn ran out of. */
 	budgetTokens?: number
 	note: string
+}
+
+/**
+ * JSON payload of a say:"transaction" message.
+ *
+ * The verdict on one transaction under the change protocol. It gets a row of
+ * its own rather than an info line because of what a discarded one means: every
+ * file that transaction touched went back to what it was. A run where that
+ * happened three times and then finished looks, in the transcript alone,
+ * exactly like a run that got it right the first time.
+ */
+export interface ClineTransactionInfo {
+	/** One-based, in the order they were opened. */
+	transaction: number
+	kept: boolean
+	/** What the check said, when there was one to run. */
+	output?: string
+	/** Files put back, created ones removed, deleted ones recreated. */
+	filesPutBack?: number
+	/** The one-line verdict, already written for a human. */
+	message: string
 }
 
 export interface ClineSubagentUsageInfo {

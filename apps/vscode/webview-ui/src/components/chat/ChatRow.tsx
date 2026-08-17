@@ -62,6 +62,7 @@ import SearchResultsDisplay from "./SearchResultsDisplay"
 import SubagentStatusRow from "./SubagentStatusRow"
 import ThinkingCondensedRow from "./ThinkingCondensedRow"
 import { ThinkingRow } from "./ThinkingRow"
+import TransactionRow from "./TransactionRow"
 import UserMessage from "./UserMessage"
 
 const HEADER_CLASSNAMES = "flex items-center gap-2.5 mb-3"
@@ -1026,6 +1027,8 @@ export const ChatRowContent = memo(
 						return <CompactionRow message={message} />
 					case "thinking_condensed":
 						return <ThinkingCondensedRow message={message} />
+					case "transaction":
+						return <TransactionRow message={message} />
 					default:
 						return (
 							<div>

@@ -61,6 +61,33 @@ export function resolveNonCompactionStatusLabel(
 	return event.message.trim() || undefined;
 }
 
+/**
+ * The line a transaction ends on, or nothing when the notice is not one.
+ *
+ * The output the check produced is not printed here: on a failed transaction it
+ * is the thing the model has just been handed and is about to work from, and
+ * repeating a stack trace the user already saw scroll past buys nothing. The
+ * count of files put back is the part that is not visible anywhere else.
+ */
+export function formatTransactionNoticeLine(
+	event: AgentEvent,
+): string | undefined {
+	if (
+		event.type !== "notice" ||
+		event.metadata?.kind !== "atomic_transaction"
+	) {
+		return undefined;
+	}
+	const kept = event.metadata.kept === true;
+	const putBack =
+		typeof event.metadata.filesPutBack === "number" &&
+		event.metadata.filesPutBack > 0
+			? ` (${event.metadata.filesPutBack} file${event.metadata.filesPutBack === 1 ? "" : "s"} put back)`
+			: "";
+	const colour = kept ? c.dim : c.yellow;
+	return `\n${colour}${kept ? "✓" : "⏮"} ${event.message}${putBack}${c.reset}\n`;
+}
+
 export function closeInlineStreamIfNeeded(): void {
 	if (!inlineStreamHasOutput) {
 		return;
@@ -212,6 +239,16 @@ export function handleEvent(event: AgentEvent, config: Config): void {
 		case "notice":
 			if (event.displayRole === "status") {
 				closeInlineStreamIfNeeded();
+				// A transaction's verdict gets a line of its own rather than the
+				// `[status]` gutter it would otherwise share with compaction. A
+				// discarded one means every file it touched went back to what it
+				// was, and the model's own account of those edits is still on
+				// screen directly above it, describing changes that are gone.
+				const transaction = formatTransactionNoticeLine(event);
+				if (transaction) {
+					write(transaction);
+					break;
+				}
 				const label = resolveStatusNoticeLabel(event);
 				if (label) {
 					write(`\n${c.dim}[status]${c.reset} ${label}\n`);

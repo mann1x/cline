@@ -28,6 +28,17 @@ export interface Oracle {
 	cwd: string;
 	/** Why this one was chosen, for the log. */
 	reason: string;
+	/**
+	 * A pattern the output must match, on top of exiting zero.
+	 *
+	 * For the large class of checks that report their verdict and exit zero
+	 * anyway. The harness's own oracle is one: `run_game.js` prints
+	 * `{"ok":false,"error":"…"}` and exits 0 whether the game runs or not, so a
+	 * protocol reading only the exit status would keep every transaction it was
+	 * ever pointed at. Read as a regular expression against stdout and stderr
+	 * together.
+	 */
+	expect?: string;
 }
 
 export interface OracleVerdict {
@@ -38,6 +49,12 @@ export interface OracleVerdict {
 	output: string;
 	/** Set when the oracle exceeded its budget: an unfinished run is not a pass. */
 	timedOut: boolean;
+	/**
+	 * Set when the command succeeded but its output did not say the change did.
+	 * A different failure from a non-zero exit and reported as one, because "it
+	 * ran and reported a problem" reads nothing like "it crashed".
+	 */
+	unmatched?: boolean;
 }
 
 /** Longest an oracle may run before the transaction is judged on nothing. */
@@ -135,9 +152,22 @@ export interface OracleSources {
 	manual?: string;
 	/** A default the user set once, in settings, for every task. */
 	explicit?: string;
+	/**
+	 * What the output must say for a user-named check to count as passed.
+	 *
+	 * Applies to a named command only. A check found by looking at the
+	 * workspace is a test runner or a compiler, and those already answer with
+	 * their exit status; a command the user wrote may be neither.
+	 */
+	expect?: string;
 }
 
-function shellOracle(line: string, cwd: string, reason: string): Oracle {
+function shellOracle(
+	line: string,
+	cwd: string,
+	reason: string,
+	expect?: string,
+): Oracle {
 	// Taken as written, through the shell, because a user who names an oracle
 	// means that exact line — pipes, environment and all.
 	return {
@@ -146,6 +176,7 @@ function shellOracle(line: string, cwd: string, reason: string): Oracle {
 		args: process.platform === "win32" ? ["/c", line] : ["-c", line],
 		cwd,
 		reason,
+		...(expect?.trim() ? { expect: expect.trim() } : {}),
 	};
 }
 
@@ -168,11 +199,21 @@ export async function discoverOracle(
 	// sometimes the only thing that can tell success from a plausible edit.
 	const manual = options.manual?.trim();
 	if (manual) {
-		return shellOracle(manual, workspaceRoot, "named for this task");
+		return shellOracle(
+			manual,
+			workspaceRoot,
+			"named for this task",
+			options.expect,
+		);
 	}
 	const configured = options.explicit?.trim();
 	if (configured) {
-		return shellOracle(configured, workspaceRoot, "named in settings");
+		return shellOracle(
+			configured,
+			workspaceRoot,
+			"named in settings",
+			options.expect,
+		);
 	}
 
 	const pkg = (await readJson(path.join(workspaceRoot, "package.json"))) as
@@ -275,11 +316,16 @@ export async function runOracle(
 			maxBuffer: 16 * 1024 * 1024,
 			env: options.env ?? process.env,
 		});
+		const combined = `${stdout}${stderr}`;
+		const matched = outputSaysItPassed(oracle, combined);
 		return {
-			passed: true,
+			passed: matched,
 			exitCode: 0,
-			output: truncate(`${stdout}${stderr}`),
+			output: matched
+				? truncate(combined)
+				: `${truncate(combined)}\n\nThe check ran and finished cleanly, but its output does not match /${oracle.expect}/, which is what this task counts as working.`,
 			timedOut: false,
+			...(matched ? {} : { unmatched: true }),
 		};
 	} catch (error) {
 		const failure = error as Omit<NodeJS.ErrnoException, "code"> & {
@@ -303,6 +349,25 @@ export async function runOracle(
 				: output,
 			timedOut,
 		};
+	}
+}
+
+/**
+ * Whether a clean exit is enough, or the output has to say so as well.
+ *
+ * A pattern that will not compile fails the check rather than being ignored.
+ * The alternative is worse in exactly the case it matters: a typo in the
+ * pattern would silently return the protocol to judging on exit status, which
+ * for this class of check means keeping everything.
+ */
+function outputSaysItPassed(oracle: Oracle, output: string): boolean {
+	if (!oracle.expect) {
+		return true;
+	}
+	try {
+		return new RegExp(oracle.expect).test(output);
+	} catch {
+		return false;
 	}
 }
 

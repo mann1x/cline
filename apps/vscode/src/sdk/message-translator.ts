@@ -42,6 +42,7 @@ import type {
 	ClineSayTool,
 	ClineSubagentUsageInfo,
 	ClineThinkingCondensedInfo,
+	ClineTransactionInfo,
 	SubagentStatusItem,
 } from "@shared/ExtensionMessage"
 import { Logger } from "@shared/services/Logger"
@@ -1224,6 +1225,34 @@ export function parseThinkingCondensedNoticeMetadata(
 }
 
 /**
+ * Read a transaction's verdict off a status notice.
+ *
+ * Keyed on `kind` like the others rather than on the message text: the verdict
+ * line is written for a human and will be reworded, and a row that stops
+ * appearing because someone improved a sentence is worse than no row at all.
+ */
+export function parseAtomicTransactionNoticeMetadata(
+	metadata: Record<string, unknown> | undefined,
+	message: string,
+): ClineTransactionInfo | undefined {
+	if (!metadata || metadata.kind !== "atomic_transaction") {
+		return undefined
+	}
+	const transaction = asFiniteNumber(metadata.transaction)
+	if (transaction === undefined || typeof metadata.kept !== "boolean") {
+		return undefined
+	}
+	const filesPutBack = asFiniteNumber(metadata.filesPutBack)
+	return {
+		transaction,
+		kept: metadata.kept,
+		message,
+		...(typeof metadata.output === "string" && metadata.output.trim() !== "" ? { output: metadata.output } : {}),
+		...(filesPutBack !== undefined ? { filesPutBack } : {}),
+	}
+}
+
+/**
  * Read the task checklist off a tool call's input.
  *
  * The parameter is optional on every tool, so most calls carry nothing. A
@@ -1844,6 +1873,17 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 							? state.beginCompaction()
 							: (state.takeOpenCompactionTs() ?? state.nextTs())
 					messages.push(buildCompactionMessage(compaction, ts))
+					break
+				}
+				const transaction = parseAtomicTransactionNoticeMetadata(event.metadata, event.message ?? "")
+				if (transaction) {
+					messages.push({
+						ts: state.nextTs(),
+						type: "say",
+						say: "transaction",
+						text: JSON.stringify(transaction),
+						partial: false,
+					})
 					break
 				}
 				const condensed = parseThinkingCondensedNoticeMetadata(event.metadata)

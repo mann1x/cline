@@ -250,6 +250,15 @@ export interface CoreAtomicProtocolConfig {
 	 * user is the narrower question and the one worth judging on.
 	 */
 	oracleCommand?: string;
+	/**
+	 * A pattern that command's output must match, on top of a clean exit.
+	 *
+	 * For the large class of checks that report a verdict and exit zero anyway.
+	 * Without it, such a check keeps every transaction it is ever pointed at:
+	 * the harness's own oracle prints `{"ok":false,"error":"…"}` and exits 0
+	 * whether the game runs or not.
+	 */
+	oracleExpect?: string;
 	/** Longest that command may run before the transaction is judged on nothing. */
 	oracleTimeoutMs?: number;
 	/** Changes the model may declare per transaction. Three by default. */

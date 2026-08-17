@@ -80,6 +80,7 @@ enum ClineSay {
   BROWSER_SCREENSHOT = 39;
   // A capped turn's reasoning, replaced by the note it left itself.
   THINKING_CONDENSED = 40;
+  TRANSACTION = 41;
 }
 
 // Enum for ClineSayTool tool types

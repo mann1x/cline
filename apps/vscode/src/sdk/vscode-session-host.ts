@@ -180,6 +180,7 @@ export class VscodeSessionHost implements SdkSessionHost {
 							atomicProtocol: {
 								mode: atomicProtocolSettings?.mode ?? "off",
 								oracleCommand: atomicProtocolSettings?.oracleCommand || undefined,
+								oracleExpect: atomicProtocolSettings?.oracleExpect || undefined,
 								maxChanges: atomicProtocolSettings?.maxChanges,
 								maxTransactions: atomicProtocolSettings?.maxTransactions,
 							},

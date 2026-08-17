@@ -238,6 +238,56 @@ describe("parseArgs", () => {
 		expect(parsed.invalidEditVerification).toBeUndefined();
 	});
 
+	it.each(["off", "auto", "always"] as const)("parses --atomic %s", (mode) => {
+		const parsed = parseArgs(["--atomic", mode]);
+		expect(parsed.atomic).toBe(mode);
+		expect(parsed.invalidAtomic).toBeUndefined();
+	});
+
+	// A run the user believes is transactional and is not leaves a failed
+	// attempt's edits on disk under a report saying they were put back.
+	it("refuses an --atomic mode it does not know", () => {
+		const parsed = parseArgs(["--atomic", "on"]);
+		expect(parsed.atomic).toBeUndefined();
+		expect(parsed.invalidAtomic).toBe("on");
+	});
+
+	it("takes the oracle command as written", () => {
+		const parsed = parseArgs(["--oracle", "node run_game.js manic_miner.html"]);
+		expect(parsed.oracle).toBe("node run_game.js manic_miner.html");
+	});
+
+	// Checked here rather than at the first transaction's end: a pattern that
+	// will not compile fails every check, so the run would do all of its work
+	// and then throw it away.
+	it("refuses an --oracle-expect that is not a regular expression", () => {
+		const parsed = parseArgs(["--oracle-expect", "(unclosed"]);
+		expect(parsed.oracleExpect).toBeUndefined();
+		expect(parsed.invalidOracleExpect).toBe("(unclosed");
+	});
+
+	it("keeps a valid --oracle-expect", () => {
+		const parsed = parseArgs(["--oracle-expect", '"ok":\\s*true']);
+		expect(parsed.oracleExpect).toBe('"ok":\\s*true');
+	});
+
+	it.each([
+		["--max-changes", "maxChanges", "invalidMaxChanges"],
+		["--max-transactions", "maxTransactions", "invalidMaxTransactions"],
+	] as const)("parses %s", (flag, key, invalid) => {
+		const parsed = parseArgs([flag, "4"]);
+		expect(parsed[key]).toBe(4);
+		expect(parsed[invalid]).toBeUndefined();
+	});
+
+	// Zero transactions is a protocol that can never keep anything, and zero
+	// changes is one that can never do anything.
+	it.each(["0", "-1", "two"])("refuses --max-changes %s", (value) => {
+		const parsed = parseArgs(["--max-changes", value]);
+		expect(parsed.maxChanges).toBeUndefined();
+		expect(parsed.invalidMaxChanges).toBe(value);
+	});
+
 	it.each(["on", "off"] as const)("parses --task-progress %s", (mode) => {
 		const parsed = parseArgs(["--task-progress", mode]);
 		expect(parsed.taskProgress).toBe(mode);

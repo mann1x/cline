@@ -487,6 +487,9 @@ message AtomicProtocolSettings {
   // The shell line that decides whether the task is done. Empty means the
   // workspace is inspected for something to run instead.
   string oracle_command = 2;
+  // A regular expression that line's output must match, on top of exiting
+  // cleanly. For a check that reports its verdict and exits zero regardless.
+  string oracle_expect = 5;
   // Changes the model may declare per transaction.
   int32 max_changes = 3;
   // Attempts before the task stops.

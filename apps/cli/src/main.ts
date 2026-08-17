@@ -764,6 +764,37 @@ export async function runCli(): Promise<void> {
 		process.exitCode = 1;
 		return;
 	}
+	// Fails hardest of these. A run the user believes is transactional and is
+	// not leaves a failed attempt's edits on disk under a report that says they
+	// were put back, which is worse than either doing it or not doing it.
+	if (args.invalidAtomic) {
+		writeln(
+			`invalid --atomic "${args.invalidAtomic}" (expected off, auto or always)`,
+		);
+		process.exitCode = 1;
+		return;
+	}
+	// A pattern that will not compile fails every check it is given, so the run
+	// would do all of its work and then throw it away.
+	if (args.invalidOracleExpect) {
+		writeln(
+			`invalid --oracle-expect "${args.invalidOracleExpect}" (not a regular expression)`,
+		);
+		process.exitCode = 1;
+		return;
+	}
+	for (const [flag, value] of [
+		["--max-changes", args.invalidMaxChanges],
+		["--max-transactions", args.invalidMaxTransactions],
+	] as const) {
+		if (value) {
+			writeln(
+				`invalid ${flag} "${value}" (expected a whole number, 1 or more)`,
+			);
+			process.exitCode = 1;
+			return;
+		}
+	}
 	// Fails for the same reason: a run that keeps no checklist because the switch
 	// was misspelled is indistinguishable from one that keeps none because it was
 	// asked not to.
@@ -1143,6 +1174,23 @@ export async function runCli(): Promise<void> {
 			// duplicate a default that can drift out from under this file.
 			...(args.editVerification
 				? { editVerification: { mode: args.editVerification } }
+				: {}),
+			// Sent whenever any of it was asked for, not only on `--atomic`: an
+			// oracle named without a mode is a user who wants the check and has
+			// not said how hard, and `auto` is the answer to that. Naming one and
+			// getting nothing would be the quiet failure again.
+			...(args.atomic || args.oracle
+				? {
+						atomicProtocol: {
+							mode: args.atomic ?? "auto",
+							...(args.oracle ? { oracleCommand: args.oracle } : {}),
+							...(args.oracleExpect ? { oracleExpect: args.oracleExpect } : {}),
+							...(args.maxChanges ? { maxChanges: args.maxChanges } : {}),
+							...(args.maxTransactions
+								? { maxTransactions: args.maxTransactions }
+								: {}),
+						},
+					}
 				: {}),
 			// On unless asked otherwise, which is what the extension does. Left
 			// unset until now, and unset is not "off with the same effect": the

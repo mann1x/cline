@@ -351,6 +351,9 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 				...(request.atomicProtocolSettings.oracleCommand !== undefined
 					? { oracleCommand: request.atomicProtocolSettings.oracleCommand }
 					: {}),
+				...(request.atomicProtocolSettings.oracleExpect !== undefined
+					? { oracleExpect: request.atomicProtocolSettings.oracleExpect }
+					: {}),
 				...(maxChanges > 0 ? { maxChanges } : {}),
 				...(maxTransactions > 0 ? { maxTransactions } : {}),
 			})

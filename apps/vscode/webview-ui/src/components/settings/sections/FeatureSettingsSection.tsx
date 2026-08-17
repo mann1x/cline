@@ -330,6 +330,22 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 											}
 											placeholder="node run_game.js index.html"
 										/>
+										{/* Plenty of check scripts report a verdict and
+										    exit zero regardless. Without this, one of
+										    those keeps every transaction it is pointed
+										    at — including the one this protocol was
+										    measured against. */}
+										<p className="text-xs text-muted-foreground">
+											Optional: a regular expression the output must match as well. For a check that prints
+											whether it worked and exits cleanly either way.
+										</p>
+										<DebouncedTextArea
+											initialValue={atomicProtocolSettings?.oracleExpect ?? ""}
+											maxRows={2}
+											minRows={1}
+											onChange={(value) => updateSetting("atomicProtocolSettings", { oracleExpect: value })}
+											placeholder={'"ok":\\s*true'}
+										/>
 									</>
 								) : null}
 							</div>

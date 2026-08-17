@@ -105,6 +105,20 @@ export interface ParsedArgs {
 	editVerification?: "off" | "nudge" | "require";
 	invalidEditVerification?: string;
 	invalidRetries?: string;
+	/** Whether the task runs as judged, revertible transactions. */
+	atomic?: "off" | "auto" | "always";
+	invalidAtomic?: string;
+	/** The shell line that decides whether the task worked. */
+	oracle?: string;
+	/** What that line's output must say, on top of exiting cleanly. */
+	oracleExpect?: string;
+	invalidOracleExpect?: string;
+	/** Changes the model may declare per transaction. */
+	maxChanges?: number;
+	invalidMaxChanges?: string;
+	/** Attempts before the task stops. */
+	maxTransactions?: number;
+	invalidMaxTransactions?: string;
 	/** Whether the model keeps a checklist across the task. */
 	taskProgress?: "on" | "off";
 	/** Tool calls between checklist reminders. 0 reminds never. */

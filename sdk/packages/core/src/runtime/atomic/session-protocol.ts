@@ -61,6 +61,7 @@ export async function createAtomicProtocolSession(
 
 	const oracle = await discoverOracle(options.workspaceRoot, {
 		manual: options.config?.oracleCommand,
+		expect: options.config?.oracleExpect,
 	});
 	if (!oracle && mode === "auto") {
 		// Said out loud. A feature that silently does nothing looks exactly like

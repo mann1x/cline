@@ -803,10 +803,36 @@ export class LocalRuntimeHost implements RuntimeHost {
 			logger: {
 				debug: (message) => configWithProvider.logger?.debug?.(message),
 			},
+			// The verdict goes to the user, not only to the log. A transaction
+			// that was discarded put every file back, and a run where that
+			// happened three times and finished looks — in the transcript alone —
+			// exactly like one that got it right first time.
 			onEvent: (event) => {
-				if (event.type === "settled") {
-					configWithProvider.logger?.debug?.(event.message);
+				if (event.type !== "settled") {
+					return;
 				}
+				configWithProvider.logger?.debug?.(event.message);
+				const restore = event.restore;
+				this.eventBridge.dispatchAgentEvent(sessionId, configWithProvider, {
+					type: "notice",
+					noticeType: "status",
+					displayRole: "status",
+					message: event.message,
+					metadata: {
+						kind: "atomic_transaction",
+						transaction: event.transaction,
+						kept: event.kept,
+						...(event.verdict?.output ? { output: event.verdict.output } : {}),
+						...(restore
+							? {
+									filesPutBack:
+										restore.restored.length +
+										restore.recreated.length +
+										restore.removed.length,
+								}
+							: {}),
+					},
+				});
 			},
 		});
 		const completionPolicyWithProtocol = atomicProtocol

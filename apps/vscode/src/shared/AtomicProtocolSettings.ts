@@ -34,6 +34,14 @@ export interface AtomicProtocolSettings {
 	 * narrower question and the one worth judging on.
 	 */
 	oracleCommand: string
+	/**
+	 * A regular expression that command's output must match, on top of a clean
+	 * exit.
+	 *
+	 * For the large class of checks that report a verdict and exit zero anyway.
+	 * Without it such a check keeps every transaction it is pointed at.
+	 */
+	oracleExpect: string
 	/** Changes the model may declare per transaction. */
 	maxChanges: number
 	/** Attempts before the task stops. */
@@ -53,6 +61,7 @@ export interface AtomicProtocolSettings {
 export const DEFAULT_ATOMIC_PROTOCOL_SETTINGS: AtomicProtocolSettings = {
 	mode: "off",
 	oracleCommand: "",
+	oracleExpect: "",
 	maxChanges: 3,
 	maxTransactions: 6,
 }

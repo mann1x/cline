@@ -67,7 +67,7 @@ export function buildProtocolPrompt(input: ProtocolPromptInput): string {
 		lines.push(
 			`When you are done, run \`${input.oracle.label}\` and read what it says.`,
 			"",
-			`That command is what decides. It is run again when your turn ends, and its exit status is the verdict — not your account of the change, and not the fact that the edit applied. ${describeOracleChoice(input.oracle)}`,
+			`That command is what decides. It is run again when your turn ends, and ${describeOracleStandard(input.oracle)} — not your account of the change, and not the fact that the edit applied. ${describeOracleChoice(input.oracle)}`,
 			"",
 			`If it passes, ${label} is kept and the task is finished.`,
 			"",
@@ -93,6 +93,19 @@ export function buildProtocolPrompt(input: ProtocolPromptInput): string {
 	}
 
 	return lines.join("\n");
+}
+
+/**
+ * What the command has to do for the transaction to be kept.
+ *
+ * Said explicitly when a pattern is set, because the two standards lead to
+ * different work: a model told only "make it exit zero" against a check that
+ * always exits zero has been told nothing at all.
+ */
+function describeOracleStandard(oracle: Oracle): string {
+	return oracle.expect
+		? `the verdict is that it finishes cleanly AND its output matches /${oracle.expect}/`
+		: "its exit status is the verdict";
 }
 
 function describeOracleChoice(oracle: Oracle): string {
@@ -159,6 +172,11 @@ export function describeVerdict(
 	}
 	if (verdict?.timedOut) {
 		return `${label} discarded — the check did not finish. Your files are back as they were.`;
+	}
+	// Named apart from a crash: "it ran and reported a problem" reads nothing
+	// like "it fell over", and the model's next move differs between the two.
+	if (verdict?.unmatched) {
+		return `${label} discarded — the check ran, and what it reported is not what this task counts as working. Your files are back as they were.`;
 	}
 	if (verdict?.exitCode == null) {
 		return `${label} discarded — the check could not be run at all, so nothing was verified. Your files are back as they were.`;

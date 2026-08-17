@@ -61,6 +61,26 @@ export function addRootOptions(cmd: Command): Command {
 				"Require the model to check a file it edited: off | nudge | require (default: nudge)",
 			)
 			.option(
+				"--atomic <mode>",
+				"Run the task as judged, revertible transactions: off | auto | always (default: off)",
+			)
+			.option(
+				"--oracle <command>",
+				'What decides whether the task worked, e.g. "node run_game.js index.html". Outranks anything found by looking at the workspace',
+			)
+			.option(
+				"--oracle-expect <pattern>",
+				"Regular expression the oracle's output must match on top of exiting cleanly, e.g. '\"ok\":\\s*true'. For a check that reports its verdict and exits zero regardless",
+			)
+			.option(
+				"--max-changes <n>",
+				"Changes the model may declare per transaction (default: 3)",
+			)
+			.option(
+				"--max-transactions <n>",
+				"Attempts before the task stops (default: 6)",
+			)
+			.option(
 				"--lint-command <command>",
 				'Project checker `check_file` runs on each file it is given, e.g. "npx biome check ${file}". Without ${file} the path is appended. Makes check_file the linter here, as it is in the extension',
 			)
@@ -259,6 +279,46 @@ export function commanderToParsedArgs(program: Command): ParsedArgs {
 			result.editVerification = raw;
 		} else if (raw) {
 			result.invalidEditVerification = raw;
+		}
+	}
+
+	// The change protocol, rejected rather than coerced for the same reason as
+	// the mode above — and more so here, because a run the user believes is
+	// transactional and is not will leave a failed attempt's edits on disk.
+	if (opts.atomic !== undefined) {
+		const raw = String(opts.atomic).trim();
+		if (raw === "off" || raw === "auto" || raw === "always") {
+			result.atomic = raw;
+		} else if (raw) {
+			result.invalidAtomic = raw;
+		}
+	}
+
+	if (opts.oracle !== undefined) result.oracle = String(opts.oracle);
+	// Validated here rather than at the first transaction's end: a pattern that
+	// will not compile fails every check it is given, so the run would do all
+	// its work and then discard it.
+	if (opts.oracleExpect !== undefined) {
+		const raw = String(opts.oracleExpect);
+		try {
+			new RegExp(raw);
+			result.oracleExpect = raw;
+		} catch {
+			result.invalidOracleExpect = raw;
+		}
+	}
+
+	for (const [flag, key, invalid] of [
+		["maxChanges", "maxChanges", "invalidMaxChanges"],
+		["maxTransactions", "maxTransactions", "invalidMaxTransactions"],
+	] as const) {
+		if (opts[flag] === undefined) continue;
+		const raw = String(opts[flag]).trim();
+		const parsed = Number.parseInt(raw, 10);
+		if (raw && Number.isInteger(parsed) && parsed >= 1) {
+			result[key] = parsed;
+		} else if (raw) {
+			result[invalid] = raw;
 		}
 	}
 

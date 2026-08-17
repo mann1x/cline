@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { discoverOracle, runOracle } from "./oracle";
+import { discoverOracle, type Oracle, runOracle } from "./oracle";
 
 async function withWorkspace(
 	files: Record<string, string>,
@@ -120,6 +120,61 @@ describe("finding something that can judge a change", () => {
 				expect(oracle?.args).toEqual(["run", "test"]);
 			},
 		);
+	});
+});
+
+describe("a check that reports its verdict and exits zero anyway", () => {
+	// The harness's own oracle is one of these: `run_game.js` prints
+	// {"ok":false,"error":"…"} and exits 0 whether the game runs or not, so a
+	// protocol reading only the exit status keeps every transaction.
+	it("fails a clean exit whose output does not match", async () => {
+		await withWorkspace({}, async (root) => {
+			const oracle = await discoverOracle(root, {
+				manual: `${process.execPath} -e "console.log('{\\"ok\\":false}')"`,
+				expect: '"ok":\\s*true',
+			});
+			const verdict = await runOracle(oracle as Oracle);
+
+			expect(verdict.passed).toBe(false);
+			expect(verdict.exitCode).toBe(0);
+			expect(verdict.unmatched).toBe(true);
+			expect(verdict.output).toContain("does not match");
+		});
+	});
+
+	it("passes the same command once the output says so", async () => {
+		await withWorkspace({}, async (root) => {
+			const oracle = await discoverOracle(root, {
+				manual: `${process.execPath} -e "console.log('{\\"ok\\":true}')"`,
+				expect: '"ok":\\s*true',
+			});
+
+			expect((await runOracle(oracle as Oracle)).passed).toBe(true);
+		});
+	});
+
+	// Silently returning to exit-status judging is the worst of the three
+	// outcomes: for this class of check it means keeping everything.
+	it("fails rather than ignores a pattern that will not compile", async () => {
+		await withWorkspace({}, async (root) => {
+			const oracle = await discoverOracle(root, {
+				manual: `${process.execPath} -e "process.exit(0)"`,
+				expect: "(unclosed",
+			});
+
+			expect((await runOracle(oracle as Oracle)).passed).toBe(false);
+		});
+	});
+
+	// A test runner or a compiler already answers with its exit status, and a
+	// pattern the user wrote for their own command should not be held against
+	// one that was found by looking at the tree.
+	it("does not apply the pattern to a check found in the workspace", async () => {
+		await withWorkspace({ "tsconfig.json": "{}" }, async (root) => {
+			const oracle = await discoverOracle(root, { expect: "never appears" });
+
+			expect(oracle?.expect).toBeUndefined();
+		});
 	});
 });
 
