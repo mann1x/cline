@@ -55,6 +55,23 @@ export interface EditorExecutorOptions {
 	receipts?: ReadReceipts;
 }
 
+/**
+ * How many times this exact no-op edit has now been refused.
+ *
+ * The refusal text has been rewritten three times to say more clearly that
+ * resending cannot help -- it quotes the lines back, it names the file, it says
+ * in words that the edit asks for nothing -- and a model that has decided the
+ * change is still missing sends it again anyway: measured live, the identical
+ * `editor` call to line 90 three times running before it varied a character and
+ * the edit landed. Prose about what the tool will do next time is a prediction;
+ * a count of what it has already done is a fact, and the one thing the message
+ * could not carry before was that this has all happened already.
+ *
+ * Keyed per executor, which is per session, so a count is this task's history
+ * and not the process's.
+ */
+type NoOpLedger = (key: string) => number;
+
 function resolveFilePath(
 	cwd: string,
 	inputPath: string,
@@ -331,7 +348,11 @@ async function replaceInFile(
 	newStr: string | null | undefined,
 	encoding: BufferEncoding,
 	maxDiffLines: number,
-	options: { occurrence?: number | null; replaceAll?: boolean | null } = {},
+	options: {
+		occurrence?: number | null;
+		replaceAll?: boolean | null;
+		noteNoOp?: NoOpLedger;
+	} = {},
 ): Promise<string> {
 	if (options.occurrence != null && options.replaceAll) {
 		throw new Error(
@@ -444,7 +465,14 @@ async function replaceInFile(
 	}
 
 	if (updated === content) {
-		return noChangeMessage(filePath, "the text already reads exactly this way");
+		return noChangeMessage(
+			filePath,
+			"the text already reads exactly this way",
+			undefined,
+			options.noteNoOp?.(
+				`text\u0000${filePath}\u0000${oldStr}\u0000${newStr ?? ""}`,
+			),
+		);
 	}
 
 	await fs.writeFile(filePath, updated, { encoding });
@@ -561,6 +589,7 @@ function noChangeMessage(
 	filePath: string,
 	why: string,
 	quoted?: string,
+	repeats?: number,
 ): never {
 	// The instruction to compare used to end "differs from the text quoted back
 	// to you" while quoting nothing at all. Measured on a live session: the
@@ -571,8 +600,17 @@ function noChangeMessage(
 	const comparison = quoted
 		? ` If you meant to change something there, work out how the text you want differs from what those lines hold now — shown below — and send that; if the fix belongs on a different line, edit that line instead.\n\n${quoted}`
 		: ` If you meant to change something there, work out how the text you want differs from what is already in the file at that spot and send that; if the fix belongs on a different line, edit that line instead.`;
+	// The count goes first, before the explanation the model has already read
+	// and acted against. A second identical refusal is not a second chance to
+	// re-read the same paragraph: it is evidence that the paragraph did not
+	// land, so what it needs is the fact it does not have -- that this exact
+	// call has already been answered this way, and what that leaves it to do.
+	const history =
+		repeats && repeats > 1
+			? `You have now sent this identical edit ${repeats} times and it has been refused ${repeats} times for the same reason, so nothing about the file, the tool or this call is going to change on the next one. Either the change you meant is already in the file -- in which case it is done, and the next thing to do is the next change or the answer -- or the text you want is somewhere else in the file, and only re-reading around it will find it. `
+			: "";
 	throw new Error(
-		`${NO_CHANGE_ERROR_PREFIX}${why} in ${filePath}. The file was not modified. What you sent as \`new_text\` is character-for-character what that part of the file already holds, so this edit asks for nothing and sending it again cannot help.${comparison}`,
+		`${NO_CHANGE_ERROR_PREFIX}${why} in ${filePath}. The file was not modified. ${history}What you sent as \`new_text\` is character-for-character what that part of the file already holds, so this edit asks for nothing and sending it again cannot help.${comparison}`,
 	);
 }
 
@@ -656,6 +694,7 @@ async function replaceLineRange(
 	newStr: string | null | undefined,
 	encoding: BufferEncoding,
 	maxDiffLines: number,
+	noteNoOp?: NoOpLedger,
 ): Promise<string> {
 	const content = await fs.readFile(filePath, encoding);
 	const eol = detectLineEnding(content);
@@ -791,6 +830,7 @@ async function replaceLineRange(
 			filePath,
 			`${range} already reads exactly this way`,
 			quoteCurrentLines(content, startLineOneBased, effectiveEndLine),
+			noteNoOp?.(`lines\u0000${filePath}\u0000${range}\u0000${newStr ?? ""}`),
 		);
 	}
 
@@ -1006,6 +1046,7 @@ async function replaceColumnRange(
 	newStr: string | null | undefined,
 	encoding: BufferEncoding,
 	maxDiffLines: number,
+	noteNoOp?: NoOpLedger,
 ): Promise<string> {
 	const content = await fs.readFile(filePath, encoding);
 	const eol = detectLineEnding(content);
@@ -1062,6 +1103,7 @@ async function replaceColumnRange(
 			filePath,
 			`${span} already reads exactly this way`,
 			quoteCurrentLines(content, startLineOneBased, endLineOneBased),
+			noteNoOp?.(`columns\u0000${filePath}\u0000${span}\u0000${newStr ?? ""}`),
 		);
 	}
 
@@ -1152,6 +1194,21 @@ export function createEditorExecutor(
 		maxDiffLines = 200,
 		receipts,
 	} = options;
+
+	/**
+	 * Every no-op edit this session has been refused, and how often.
+	 *
+	 * Unbounded on purpose: an entry is one refused call's key, a session that
+	 * accumulates thousands of them has a bigger problem than the memory, and
+	 * evicting the entry that would have proved the repeat is the one failure
+	 * this cannot afford.
+	 */
+	const refusedNoOps = new Map<string, number>();
+	const noteNoOp: NoOpLedger = (key) => {
+		const seen = (refusedNoOps.get(key) ?? 0) + 1;
+		refusedNoOps.set(key, seen);
+		return seen;
+	};
 
 	/** How many lines the file holds right now, or null if it has none to count. */
 	const countLines = async (filePath: string): Promise<number | null> => {
@@ -1321,6 +1378,7 @@ export function createEditorExecutor(
 					input.new_text,
 					encoding,
 					maxDiffLines,
+					noteNoOp,
 				);
 				await noteWrite();
 				return result;
@@ -1342,6 +1400,7 @@ export function createEditorExecutor(
 				input.new_text,
 				encoding,
 				maxDiffLines,
+				noteNoOp,
 			);
 			await noteWrite();
 			return result;
@@ -1422,6 +1481,7 @@ export function createEditorExecutor(
 				input.new_text,
 				encoding,
 				maxDiffLines,
+				noteNoOp,
 			);
 			await noteWrite();
 			return result;
@@ -1448,7 +1508,11 @@ export function createEditorExecutor(
 			input.new_text,
 			encoding,
 			maxDiffLines,
-			{ occurrence: input.occurrence, replaceAll: input.replace_all },
+			{
+				occurrence: input.occurrence,
+				replaceAll: input.replace_all,
+				noteNoOp,
+			},
 		);
 		await noteWrite();
 		return result;

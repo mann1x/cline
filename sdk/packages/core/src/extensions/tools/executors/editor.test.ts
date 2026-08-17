@@ -502,6 +502,61 @@ describe("createEditorExecutor", () => {
 			});
 		});
 
+		// The live sequence this came from, on pandorum under the change
+		// protocol: the identical call to line 90 of `manic_miner.html` three
+		// times running, refused three times, before the model varied a
+		// character and the edit landed. Five of that session's seven editor
+		// calls were spent this way. The refusal already said resending could
+		// not help; what it could not say was that this had already happened.
+		it("says how many times the same no-op has been refused", async () => {
+			await withTempFile("one\ntwo\nthree", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const send = () =>
+					editor(
+						{ path: filePath, new_text: "two", start_line: 2 },
+						dir,
+						context,
+					);
+
+				// The first refusal is the explanation, with nothing to count yet.
+				await expect(send()).rejects.not.toThrow("identical edit");
+
+				await expect(send()).rejects.toThrow(
+					"You have now sent this identical edit 2 times",
+				);
+				await expect(send()).rejects.toThrow(
+					"You have now sent this identical edit 3 times",
+				);
+				// And it still says what to do about it, both ways round.
+				await expect(send()).rejects.toThrow("already in the file");
+				await expect(send()).rejects.toThrow("only re-reading around it");
+			});
+		});
+
+		// The count belongs to the session, not to the process: two tasks
+		// editing the same file are not one model repeating itself.
+		it("counts per executor, not globally", async () => {
+			await withTempFile("one\ntwo\nthree", async (filePath, dir) => {
+				const first = createEditorExecutor();
+				await expect(
+					first(
+						{ path: filePath, new_text: "two", start_line: 2 },
+						dir,
+						context,
+					),
+				).rejects.toThrow("No change");
+
+				const second = createEditorExecutor();
+				await expect(
+					second(
+						{ path: filePath, new_text: "two", start_line: 2 },
+						dir,
+						context,
+					),
+				).rejects.not.toThrow("identical edit");
+			});
+		});
+
 		it("fails instead of reporting an empty diff", async () => {
 			// Measured: 24 of 45 successful editor results carried an empty diff
 			// fence. The model read the absence as "already correct", re-sent the
