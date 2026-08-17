@@ -41,6 +41,19 @@ export type ActiveSession = {
 	 * the turn that delivers them is prepared long after the session was built.
 	 */
 	atomicProtocol?: AtomicProtocolSession;
+	/**
+	 * Whether the protocol engaged, waiting for a turn to be said on.
+	 *
+	 * Not said when it is decided, which is inside `startSession`. A host that
+	 * routes events to the session it currently has open has no such session at
+	 * that moment: the VS Code extension compares the event's id against its
+	 * active session, finds none, and drops it as stale one line before it
+	 * would have become a chat row. Measured that way on first live use — the
+	 * protocol was running, the rules were in the prompt, and the chat said
+	 * nothing at all. So the message waits for the first turn, where every
+	 * other event of the session is delivered, and goes out once.
+	 */
+	pendingAtomicStatus?: { armed: boolean; message: string };
 	drainingPendingPrompts: boolean;
 	pluginSandboxShutdown?: () => Promise<void>;
 	turnUsageBaseline?: SessionAccumulatedUsage;

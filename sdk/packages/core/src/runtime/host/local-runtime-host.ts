@@ -788,6 +788,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// boundary rather than through a guard because it decides by running a
 		// command, and because a transaction has to be judged on the deliberate
 		// way a run ends as well as the silent one.
+		let pendingAtomicStatus: { armed: boolean; message: string } | undefined;
 		const atomicProtocol = await createAtomicProtocolSession({
 			// The workspace before the working directory, unlike the shell: a
 			// rollback that covers less than the model can reach is not a rollback,
@@ -804,14 +805,12 @@ export class LocalRuntimeHost implements RuntimeHost {
 			// that stood down because nothing in the workspace can judge a
 			// change is doing what it was asked to; from the chat it is
 			// indistinguishable from one that is broken.
-			onStatus: ({ armed, message }) => {
-				this.eventBridge.dispatchAgentEvent(sessionId, configWithProvider, {
-					type: "notice",
-					noticeType: "status",
-					displayRole: "status",
-					message,
-					metadata: { kind: "atomic_status", armed },
-				});
+			//
+			// Held, not dispatched: this runs inside `startSession`, and a host
+			// that routes events to its current session has none yet. Sent on
+			// the first turn instead.
+			onStatus: (status) => {
+				pendingAtomicStatus = status;
 			},
 			// The verdict goes to the user, not only to the log. A transaction
 			// that was discarded put every file back, and a run where that
@@ -1134,6 +1133,9 @@ export class LocalRuntimeHost implements RuntimeHost {
 			pendingPrompts: [],
 			drainingPendingPrompts: false,
 			...(atomicProtocol ? { atomicProtocol } : {}),
+			// Set whether or not the protocol armed: standing down is the case
+			// the user most needs told, and it leaves no session behind.
+			...(pendingAtomicStatus ? { pendingAtomicStatus } : {}),
 			pluginSandboxShutdown: bootstrap.pluginSandboxShutdown,
 			submitAndExitObserved: false,
 			lastInteractiveTurnFinishReason: undefined,
@@ -1900,6 +1902,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 			session.pendingPrompt = input.prompt.trim() || prompt;
 		}
 		await this.ensureSessionPersisted(session);
+		this.emitPendingAtomicStatus(session);
 		await this.refreshActiveSessionGitMetadata(session);
 		await this.syncOAuthCredentials(session);
 		await this.markTurnRunning(session);
@@ -2199,6 +2202,27 @@ export class LocalRuntimeHost implements RuntimeHost {
 	}
 
 	// ── Session lifecycle ───────────────────────────────────────────────
+
+	/**
+	 * Say whether the change protocol engaged, once, on the session's stream.
+	 *
+	 * Deferred from `startSession` deliberately: see `pendingAtomicStatus`. By
+	 * here the session is persisted and every host has it on record, so the
+	 * notice lands in the same channel as the verdicts rather than being
+	 * dropped as an event for a session nobody has heard of.
+	 */
+	private emitPendingAtomicStatus(session: ActiveSession): void {
+		const status = session.pendingAtomicStatus;
+		if (!status) return;
+		session.pendingAtomicStatus = undefined;
+		this.eventBridge.dispatchAgentEvent(session.sessionId, session.config, {
+			type: "notice",
+			noticeType: "status",
+			displayRole: "status",
+			message: status.message,
+			metadata: { kind: "atomic_status", armed: status.armed },
+		});
+	}
 
 	private async ensureSessionPersisted(session: ActiveSession): Promise<void> {
 		if (session.artifacts) return;

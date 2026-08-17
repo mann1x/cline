@@ -208,7 +208,17 @@ describe("the change protocol, as the host wires it", () => {
 	// nothing said so anywhere the user was looking.
 	it("says out loud when it stands down for want of a check", async () => {
 		writeFileSync(join(workspace, "game.js"), "original", "utf8");
-		const { agentConfig, events } = await startProtocolSession("");
+		const { agentConfig, events, host, sessionId } = await startProtocolSession(
+			"",
+			undefined,
+			true,
+		);
+
+		// Nothing yet: at session start the extension has no active session to
+		// match the event against and drops it, which is how this shipped
+		// invisible the first time.
+		expect(findStatusNotice(events)).toBeUndefined();
+		await host.runTurn({ sessionId, prompt: "Fix the sprite" });
 
 		const notice = findStatusNotice(events);
 		expect(notice?.metadata.armed).toBe(false);
@@ -218,13 +228,30 @@ describe("the change protocol, as the host wires it", () => {
 		expect(agentConfig?.completionPolicy?.onCompletionAttempt).toBeUndefined();
 	});
 
-	it("names the check when it does engage", async () => {
+	it("names the check when it does engage, on the first turn", async () => {
 		writeFileSync(join(workspace, "game.js"), "original", "utf8");
-		const { events } = await startProtocolSession("exit 0");
+		const { events, host, sessionId } = await startProtocolSession(
+			"exit 0",
+			undefined,
+			true,
+		);
+		await host.runTurn({ sessionId, prompt: "Fix the sprite" });
 
 		const notice = findStatusNotice(events);
 		expect(notice?.metadata.armed).toBe(true);
 		expect(notice?.message).toContain("exit 0");
+
+		// Once. A second turn is not a second arming.
+		const before = events.length;
+		await host.runTurn({ sessionId, prompt: "carry on" });
+		const later = events
+			.slice(before)
+			.filter(
+				(event) =>
+					(event as { payload?: { event?: TransactionNotice } }).payload?.event
+						?.metadata?.kind === "atomic_status",
+			);
+		expect(later).toHaveLength(0);
 	});
 
 	// The record is what the history list and the task title are read from, and
