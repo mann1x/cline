@@ -922,6 +922,28 @@ export interface AgentConfig {
 		requireCompletionTool?: boolean;
 		completionGuard?: () => string | undefined;
 		/**
+		 * Runs at every attempt to end the run — a completion tool, or a turn with
+		 * nothing left to call — and may do work before it answers. Returning a
+		 * string keeps the run going with that string put to the model, exactly
+		 * like `completionGuard`.
+		 *
+		 * Two differences, and both are why it exists. It may await, which is what
+		 * a guard that decides by running a command needs. And it fires on the
+		 * completion-tool path as well: a model that ends a run by calling a tool
+		 * has still ended it, and a guard watching only the silent path never sees
+		 * that happen.
+		 *
+		 * Whatever a host puts here owns its own bound — the runtime keeps going
+		 * for as long as this keeps returning a string.
+		 *
+		 * `text` is what the model said as it ended: its closing message, or the
+		 * text the completion tool carried. A guard that has to weigh the model's
+		 * own account of its work cannot get that from anywhere else.
+		 */
+		onCompletionAttempt?: (context: {
+			text?: string;
+		}) => Promise<string | undefined>;
+		/**
 		 * How many consecutive turns that produce no tool calls may be nudged to
 		 * continue before the run is allowed to end. Zero (the default) keeps the
 		 * standard contract: a turn with no tool calls completes the run.

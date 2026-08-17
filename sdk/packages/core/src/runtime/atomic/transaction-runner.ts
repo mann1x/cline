@@ -1,25 +1,11 @@
+import type { Oracle } from "./oracle";
+import type { TransactionOutcome } from "./protocol";
+import type { Snapshot, SnapshotLimits } from "./snapshot";
 import {
-	DEFAULT_ORACLE_TIMEOUT_MS,
-	type Oracle,
-	type OracleVerdict,
-	runOracle,
-} from "./oracle";
-import {
-	buildProtocolPrompt,
-	describeVerdict,
-	type TransactionOutcome,
-} from "./protocol";
-import {
-	type RestoreReport,
-	restoreSnapshot,
-	type Snapshot,
-	type SnapshotLimits,
-	snapshotIsClean,
-	takeSnapshot,
-} from "./snapshot";
-
-/** What the model said about its own change, where nothing else could say it. */
-export type SelfReport = "success" | "failure" | "unsure";
+	type SelfReport,
+	TransactionController,
+	type TransactionEvent,
+} from "./transaction-controller";
 
 export interface AttemptContext {
 	/** One-based number of the transaction being attempted. */
@@ -33,13 +19,13 @@ export interface AttemptContext {
 export interface AttemptResult {
 	/** The plan as the model declared it, carried forward if this one fails. */
 	plan?: string;
+	/** What the model said about the change when its turn ended. */
+	account?: string;
 	/**
 	 * The model's own verdict, where there is no oracle. `undefined` means it
-	 * never gave one — which is different from saying it could not tell.
+	 * never gave one — which is not the same as saying it could not tell.
 	 */
 	selfReport?: SelfReport;
-	/** The model's closing account, kept as the record when there is no oracle. */
-	summary?: string;
 	/** The turn ended without the model finishing: cancelled, or out of budget. */
 	aborted?: boolean;
 }
@@ -47,11 +33,10 @@ export interface AttemptResult {
 /**
  * Run one transaction's worth of work and return when the turn ends.
  *
- * The turn ending IS the transaction boundary. There is deliberately no tool
- * the model calls to close a transaction: a model that forgets to call it would
- * leave the transaction open and every change in it unjudged, which turns a
- * forgotten tool call into silently discarded work. A boundary the host owns
- * cannot be forgotten.
+ * The turn ending IS the transaction boundary, and the host owns it. There is
+ * deliberately no tool the model calls to close a transaction: one it forgot to
+ * call would leave every change in that transaction unjudged, which turns a
+ * forgotten tool call into silently discarded work.
  */
 export type RunAttempt = (context: AttemptContext) => Promise<AttemptResult>;
 
@@ -73,18 +58,6 @@ export interface AtomicTaskOptions {
 	onEvent?: (event: TransactionEvent) => void;
 }
 
-export type TransactionEvent =
-	| { type: "opened"; transaction: number; oracle?: Oracle }
-	| { type: "judging"; transaction: number; oracle?: Oracle }
-	| {
-			type: "settled";
-			transaction: number;
-			kept: boolean;
-			message: string;
-			verdict?: OracleVerdict;
-			restore?: RestoreReport;
-	  };
-
 export interface AtomicTaskResult {
 	/** Whether a transaction was kept. */
 	succeeded: boolean;
@@ -94,8 +67,8 @@ export interface AtomicTaskResult {
 	stopped: "kept" | "exhausted" | "aborted";
 	/**
 	 * Set when the task was cut short mid-transaction. The changes are still on
-	 * disk and this is what puts them back, so the host can offer that as a
-	 * choice rather than the runner making it.
+	 * disk and this puts them back, so the host can offer that as a choice
+	 * rather than the runner making it.
 	 */
 	pending?: Snapshot;
 	/** Files no snapshot could cover, so nobody assumes they were protected. */
@@ -103,149 +76,74 @@ export interface AtomicTaskResult {
 }
 
 /**
- * The protocol: snapshot, change, judge, keep or put back — bounded.
+ * Drive a whole task through the protocol, for a host that owns the loop.
  *
- * The rollback is the part that has to be right. Cline's checkpoints cannot
- * serve it (they require a git work tree and throw without one), so this uses
- * the copy-and-checksum snapshot next door, and no transaction is judged on
- * anything but a command's exit status wherever a command can be found.
+ * The CLI and the tests are such hosts. The extension is not: there the agent
+ * runtime owns the loop and calls {@link TransactionController} at the boundary
+ * instead. Both go through the same controller, so the rules a change is held
+ * to do not depend on which host is running it.
  */
 export async function runAtomicTask(
 	options: AtomicTaskOptions,
 	attempt: RunAttempt,
 ): Promise<AtomicTaskResult> {
-	const history: TransactionOutcome[] = [];
-	const uncovered = new Set<string>();
-	const emit = options.onEvent ?? (() => {});
+	const controller = new TransactionController(options);
+	let prompt = await controller.open();
 
-	for (
-		let transaction = 1;
-		transaction <= options.maxTransactions;
-		transaction++
-	) {
-		const snapshot = await takeSnapshot(
-			options.workspaceRoot,
-			options.snapshotLimits,
-		);
-		for (const skipped of snapshot.skipped) {
-			uncovered.add(skipped);
-		}
-		emit({ type: "opened", transaction, oracle: options.oracle });
-
+	for (;;) {
+		const transaction = controller.transaction;
 		const result = await attempt({
 			transaction,
-			protocolPrompt: buildProtocolPrompt({
-				transaction,
-				maxChanges: options.maxChanges,
-				maxTransactions: options.maxTransactions,
-				oracle: options.oracle,
-				history,
-			}),
+			protocolPrompt: prompt,
 			oracle: options.oracle,
 		});
 
 		// A cancelled turn is not a failed transaction. Rolling back here would
 		// destroy work the user interrupted for their own reasons, so the changes
-		// stay and the snapshot goes back to the host to offer as a choice.
+		// stay and the undo goes back to the host to offer as a choice.
 		if (result.aborted) {
 			return {
 				succeeded: false,
-				transactions: history,
+				transactions: [...controller.outcomes],
 				stopped: "aborted",
-				pending: snapshot,
-				uncovered: [...uncovered],
+				pending: controller.pending,
+				uncovered: controller.uncovered,
 			};
 		}
 
-		emit({ type: "judging", transaction, oracle: options.oracle });
+		const selfReport =
+			options.oracle || result.selfReport !== undefined
+				? result.selfReport
+				: await options.confirm?.(transaction);
 
-		let kept: boolean;
-		let verdict: OracleVerdict | undefined;
-		let evidence: string;
-		const source = options.oracle ? "oracle" : "self-declared";
-
-		if (options.oracle) {
-			verdict = await runOracle(options.oracle, {
-				timeoutMs: options.oracleTimeoutMs ?? DEFAULT_ORACLE_TIMEOUT_MS,
-			});
-			kept = verdict.passed;
-			evidence = verdict.output;
-		} else {
-			const report =
-				result.selfReport ??
-				(await options.confirm?.(transaction)) ??
-				undefined;
-			kept = judgeSelfReport(report);
-			evidence =
-				report === undefined
-					? `${result.summary ?? ""}\n\nThe change was never stated to work or not, and nothing here could check it.`.trim()
-					: (result.summary ?? "");
-		}
-
-		// Nothing changed and the check passes: the task was already done, or the
-		// model did nothing. Either way it is kept, and the caller is told which.
-		const untouched = kept ? await snapshotIsClean(snapshot) : false;
-
-		let restore: RestoreReport | undefined;
-		if (!kept) {
-			restore = await restoreSnapshot(snapshot, options.snapshotLimits);
-			for (const path of restore.uncovered) {
-				uncovered.add(path);
-			}
-		}
-
-		const outcome: TransactionOutcome = {
-			transaction,
-			kept,
-			source,
+		const settlement = await controller.settle({
 			plan: result.plan,
-			evidence,
-		};
-		history.push(outcome);
-
-		emit({
-			type: "settled",
-			transaction,
-			kept,
-			message: untouched
-				? `${describeVerdict(transaction, kept, source, verdict)} No files were changed.`
-				: describeVerdict(transaction, kept, source, verdict),
-			verdict,
-			restore,
+			account: result.account,
+			selfReport,
 		});
 
-		if (kept) {
+		if (settlement.kept) {
 			return {
 				succeeded: true,
-				transactions: history,
+				transactions: [...controller.outcomes],
 				stopped: "kept",
-				uncovered: [...uncovered],
+				uncovered: controller.uncovered,
 			};
 		}
+		if (!settlement.nextPrompt) {
+			return {
+				succeeded: false,
+				transactions: [...controller.outcomes],
+				stopped: "exhausted",
+				uncovered: controller.uncovered,
+			};
+		}
+		prompt = settlement.nextPrompt;
 	}
-
-	return {
-		succeeded: false,
-		transactions: history,
-		stopped: "exhausted",
-		uncovered: [...uncovered],
-	};
 }
 
-/**
- * Whether a model's own account of its change is enough to keep it.
- *
- * The three answers are not symmetric. "It worked" keeps; "it did not" and "I
- * cannot tell" both discard, because a model that reports its own doubt has
- * given real evidence about the change.
- *
- * Saying nothing at all is a fourth thing and is treated as none of them. It is
- * a reporting failure, not a statement about the change, and discarding real
- * work over a line the model forgot to write is precisely the failure a host
- * owned boundary exists to avoid. So silence keeps the change and labels it
- * unverified, where the user can see the diff and decide.
- */
-export function judgeSelfReport(report: SelfReport | undefined): boolean {
-	if (report === undefined) return true;
-	return report === "success";
-}
+export type { SelfReport, TransactionEvent };
+export {
+	judgeSelfReport,
+	TransactionController,
+} from "./transaction-controller";

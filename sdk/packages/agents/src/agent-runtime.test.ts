@@ -751,6 +751,85 @@ describe("AgentRuntime", () => {
 		expect(model.requests).toHaveLength(2);
 	});
 
+	// The boundary an atomic transaction is judged at. It has to fire on the
+	// deliberate way to stop as well as the silent one: a guard watching only a
+	// turn with no tool calls never sees a model that ends by calling submit.
+	it("asks the completion boundary before a completion tool ends the run", async () => {
+		const submitTool: AgentTool<{ summary: string }, string> = {
+			name: "submit",
+			description: "Submit final answer",
+			inputSchema: { type: "object" },
+			lifecycle: { completesRun: true },
+			async execute(input) {
+				return `submitted: ${input.summary}`;
+			},
+		};
+		const submit = () => [
+			{
+				type: "tool-call-delta" as const,
+				toolCallId: "call_submit",
+				toolName: "submit",
+				inputText: '{"summary":"done"}',
+			},
+			{ type: "finish" as const, reason: "tool-calls" as const },
+		];
+		const model = new ScriptedModel([submit, submit]);
+		const seen: (string | undefined)[] = [];
+		let attempts = 0;
+		const runtime = new AgentRuntime({
+			model,
+			tools: [submitTool],
+			completionPolicy: {
+				onCompletionAttempt: async ({ text }) => {
+					seen.push(text);
+					attempts += 1;
+					return attempts === 1
+						? "TX-01 discarded — the check failed."
+						: undefined;
+				},
+			},
+		});
+
+		const result = await runtime.run("Start");
+
+		expect(result.status).toBe("completed");
+		expect(attempts).toBe(2);
+		expect(seen[0]).toBe("submitted: done");
+		expect(model.requests).toHaveLength(2);
+	});
+
+	it("asks the completion boundary before a silent turn ends the run", async () => {
+		const model = new ScriptedModel([
+			() => [
+				{ type: "text-delta", text: "Fixed the collision check." },
+				{ type: "finish", reason: "stop" },
+			],
+			() => [
+				{ type: "text-delta", text: "Fixed it properly this time." },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const seen: (string | undefined)[] = [];
+		const runtime = new AgentRuntime({
+			model,
+			tools: [],
+			completionPolicy: {
+				onCompletionAttempt: async ({ text }) => {
+					seen.push(text);
+					return seen.length === 1 ? "TX-01 discarded." : undefined;
+				},
+			},
+		});
+
+		const result = await runtime.run("Start");
+
+		expect(result.status).toBe("completed");
+		expect(seen).toEqual([
+			"Fixed the collision check.",
+			"Fixed it properly this time.",
+		]);
+	});
+
 	it("ends a no-tool turn when the nudge budget is unset", async () => {
 		// The default contract: a turn with no tool calls completes the run.
 		const model = new ScriptedModel([

@@ -505,6 +505,13 @@ export interface AgentRuntimeConfig {
 		requireCompletionTool?: boolean;
 		completionGuard?: () => string | undefined;
 		/**
+		 * The awaitable boundary hook. Fires on both ways a run can end, unlike
+		 * `completionGuard`; see the full note on the runtime config type.
+		 */
+		onCompletionAttempt?: (context: {
+			text?: string;
+		}) => Promise<string | undefined>;
+		/**
 		 * How many consecutive turns that produce no tool calls may be nudged to
 		 * continue before the run is allowed to end. Zero (the default) keeps the
 		 * standard contract: a turn with no tool calls completes the run.

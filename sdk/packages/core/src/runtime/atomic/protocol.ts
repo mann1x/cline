@@ -19,6 +19,8 @@ export interface TransactionOutcome {
 	source: TransactionVerdictSource;
 	/** What the model said it would change, as it declared it. */
 	plan?: string;
+	/** What the model said about the change when it tried to end the turn. */
+	account?: string;
 	/** The oracle's output, or the model's own account when there was none. */
 	evidence: string;
 }
@@ -119,6 +121,9 @@ function describeHistory(history: readonly TransactionOutcome[]): string {
 		);
 		if (outcome.plan?.trim()) {
 			lines.push("plan:", outcome.plan.trim());
+		}
+		if (outcome.account?.trim()) {
+			lines.push("you said:", outcome.account.trim());
 		}
 		if (outcome.evidence.trim()) {
 			lines.push("result:", outcome.evidence.trim());

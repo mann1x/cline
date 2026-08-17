@@ -852,6 +852,25 @@ export class AgentRuntime {
 		)}. Continue working if requirements are not met. If the task is complete, call the appropriate terminal completion tool now.`;
 	}
 
+	/**
+	 * Ask the host's boundary hook whether this run may end.
+	 *
+	 * Kept apart from `getCompletionReminderMessages` because it is a different
+	 * kind of question and is allowed to take time over it: the reminders are
+	 * strings a host computed in advance, while this may run a command before it
+	 * answers. Both ways a run can end come through here.
+	 */
+	private async runCompletionBoundary(
+		text: string,
+	): Promise<string | undefined> {
+		const hook = this.config.completionPolicy?.onCompletionAttempt;
+		if (!hook) {
+			return undefined;
+		}
+		const message = await hook({ text: text || undefined });
+		return message && message.length > 0 ? message : undefined;
+	}
+
 	private getCompletionReminderMessages(): string[] {
 		return [
 			this.getCompletionToolReminderMessage(),
@@ -1301,6 +1320,17 @@ export class AgentRuntime {
 						await this.addUserReminderMessage(noToolCallNudge);
 						continue;
 					}
+					// Last, and only once nothing else wants the turn: everything above
+					// asks the model to keep working, while this asks whether the work
+					// it has already done is good, and that question is only worth the
+					// cost when the run is otherwise over.
+					const boundaryMessage = await this.runCompletionBoundary(
+						textFromMessage(finalAssistantMessage),
+					);
+					if (boundaryMessage) {
+						await this.addUserReminderMessage(boundaryMessage);
+						continue;
+					}
 					const result = this.finishRun("completed", finalAssistantMessage);
 					await this.callAfterRunHooks(result);
 					await this.emit({
@@ -1339,6 +1369,17 @@ export class AgentRuntime {
 					toolMessages,
 				);
 				if (terminalToolMessage) {
+					// Same boundary as the silent path: a model that ends a run by
+					// calling a tool has still ended it, and a guard that watched only
+					// the silent path would never see the most deliberate way to stop.
+					const boundaryMessage = await this.runCompletionBoundary(
+						textFromToolMessage(terminalToolMessage) ||
+							textFromMessage(finalAssistantMessage),
+					);
+					if (boundaryMessage) {
+						await this.addUserReminderMessage(boundaryMessage);
+						continue;
+					}
 					const result = this.finishRun(
 						"completed",
 						finalAssistantMessage,
