@@ -850,6 +850,17 @@ export function createCappedThinkingPrepareTurn<T extends PrepareTurn>(
 	const condensed = new Map<string, string>();
 	/** Stand-downs already reported, so the log carries each one once. */
 	const reportedStandDowns = new Set<string>();
+	/**
+	 * Notes already said in the chat, so each one is a row once.
+	 *
+	 * This runs on every turn, and the capped think stays in the transcript
+	 * until something compacts it away -- so the note is found again, reused
+	 * from the cache, and was announced again each time. Three identical
+	 * `thinking-condensed` rows for one condensation, then two for the next,
+	 * which is what the reader saw and reasonably read as the condenser firing
+	 * over and over. The log line already told the two apart; the chat did not.
+	 */
+	const announced = new Set<string>();
 
 	const condense = async (
 		messages: MessageWithMetadata[],
@@ -921,17 +932,21 @@ export function createCappedThinkingPrepareTurn<T extends PrepareTurn>(
 				reused,
 			},
 		);
-		// On screen as well as in the log. This note is the only record of what a
-		// capped turn concluded — the reasoning it replaces is not sent again —
-		// and a summary nobody can read is a summary nobody can judge.
-		emitStatusNotice?.("thinking-condensed", {
-			kind: "capped_thinking",
-			phase: "completed",
-			thinkingChars: thinking.length,
-			noteChars: note.length,
-			budgetTokens: config.budgetTokens,
-			note,
-		});
+		// On screen as well as in the log, once. This note is the only record of
+		// what a capped turn concluded — the reasoning it replaces is not sent
+		// again — and a summary nobody can read is a summary nobody can judge;
+		// the same summary said five times is a different kind of unreadable.
+		if (!announced.has(thinking)) {
+			announced.add(thinking);
+			emitStatusNotice?.("thinking-condensed", {
+				kind: "capped_thinking",
+				phase: "completed",
+				thinkingChars: thinking.length,
+				noteChars: note.length,
+				budgetTokens: config.budgetTokens,
+				note,
+			});
+		}
 		const next = [...messages];
 		const target = next[index];
 		next[index] = {

@@ -518,6 +518,47 @@ describe("reporting the note", () => {
 			expect(notice.metadata?.kind).toBe("capped_thinking");
 		}
 	});
+
+	// Once per condensation, not once per turn. The capped think stays in the
+	// transcript until something compacts it away, so every later turn finds it
+	// again and reuses the cached note -- and used to announce it again with it.
+	// Reported from a live session as the last two condensations appearing three
+	// times and twice, consecutively, with nothing between them.
+	it("says it once, however many turns still carry the capped think", async () => {
+		const notices: { message: string; metadata?: Record<string, unknown> }[] =
+			[];
+		const messages = [
+			{
+				role: "assistant",
+				content: [{ type: "thinking", thinking: "y".repeat(43_000) }],
+				metrics: { outputTokens: 16_400 },
+			},
+		] as never[];
+
+		const prepareTurn = createCappedThinkingPrepareTurn(undefined, {
+			budgetTokens: 16_000,
+			providerConfig: { providerId: "ollama", modelId: "m" } as never,
+			summarizer: { maxOutputTokens: 700 } as never,
+		}) as unknown as (input: {
+			messages: unknown[];
+			emitStatusNotice: (
+				message: string,
+				metadata?: Record<string, unknown>,
+			) => void;
+		}) => Promise<unknown>;
+
+		const emitStatusNotice = (
+			message: string,
+			metadata?: Record<string, unknown>,
+		) => {
+			notices.push({ message, metadata });
+		};
+		await prepareTurn({ messages, emitStatusNotice });
+		await prepareTurn({ messages, emitStatusNotice });
+		await prepareTurn({ messages, emitStatusNotice });
+
+		expect(notices).toHaveLength(1);
+	});
 });
 
 describe("what the condenser asks the summariser for", () => {
