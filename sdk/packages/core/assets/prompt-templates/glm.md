@@ -58,7 +58,7 @@ Fetches content from URLs and analyzes it.
 Edits a text file at the provided absolute path. Use this instead of shell commands like `sed -i` or `echo >`.
 - `path`: string (absolute path).
 - `insert_line`: integer (optional). If provided, inserts `new_text` at that line.
-- If `insert_line` is omitted: replaces `old_text` with `new_text`. If file does not exist, creates it with `new_text`.
+- If `insert_line` is omitted: replaces `old_text` with `new_text`. With no `old_text` either, `new_text` is the whole file — created if it does not exist, every line replaced if it does (read it first). Never `rm` a file to rewrite it.
 - `old_text`: string (optional, required for replacement). Must match exactly, including indentation.
 - `new_text`: string (required).
 - `start_line`: integer (optional). Use with `new_text` to replace lines (inclusive, defaults to `start_line` if `end_line` omitted). No `old_text` needed. Prefer this when the text is long, minified or repeated: a diagnostic already gives you the line number, and a line number cannot be ambiguous. An empty `new_text` deletes the range.

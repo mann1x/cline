@@ -129,7 +129,7 @@ Call shape: `editor(path: string, new_text: string, old_text?: string, insert_li
 - Replace characters: `path`, `start_line`, `start_column`, `new_text`, with optional `end_line`/`end_column` (both inclusive, each defaulting to its start). A diagnostic reports `Line 108, column 385`; this is the edit that spends that column. On a minified line it is the only form that leaves the other 400 characters untouched. `start_column` alone replaces exactly one character.
 - Insert at a column: `path`, `insert_line`, `insert_column`, `new_text` — inserts before that character without replacing anything. This is how you add one missing bracket. `line_length + 1` appends at the end of the line.
 - Insert: `path`, `insert_line`, `new_text` — inserts before that line, replacing nothing.
-- Create: `path`, `new_text`, with the file not existing yet. No size limit on this one — a file written whole cannot be split. To rewrite a file that already exists, replace lines 1 through its line count.
+- Create or replace whole: `path`, `new_text`. Creates the file when it does not exist; replaces every line when it does, which requires having read it. No size limit on this one — a file written whole cannot be split.
 
 Use this rather than a shell command for writing files. `sed -i`, `echo >` and `cat > file <<EOF` do the same job without telling you whether the edit landed where you meant.
 
