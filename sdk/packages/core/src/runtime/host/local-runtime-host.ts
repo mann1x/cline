@@ -801,7 +801,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 				process.cwd(),
 			config: configWithProvider.atomicProtocol,
 			logger: {
-				debug: (message) => configWithProvider.logger?.debug?.(message),
+				log: (message) => configWithProvider.logger?.log?.(message),
 			},
 			// The verdict goes to the user, not only to the log. A transaction
 			// that was discarded put every file back, and a run where that

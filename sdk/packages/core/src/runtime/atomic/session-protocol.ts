@@ -21,7 +21,13 @@ export interface AtomicProtocolSessionOptions {
 	workspaceRoot: string;
 	config: CoreAtomicProtocolConfig | undefined;
 	onEvent?: (event: TransactionEvent) => void;
-	logger?: { debug?: (message: string) => void };
+	/**
+	 * `log`, not `debug`. Which check a change will be judged by — and whether
+	 * there is one at all — is operational rather than diagnostic, and on the
+	 * CLI a debug line is below the default level: the first live check of this
+	 * feature read as "the config never arrived" for exactly that reason.
+	 */
+	logger?: { log?: (message: string) => void };
 }
 
 export interface AtomicProtocolSession {
@@ -67,12 +73,12 @@ export async function createAtomicProtocolSession(
 		// Said out loud. A feature that silently does nothing looks exactly like
 		// one that is working and has nothing to do, and there is no other line
 		// to tell them apart.
-		options.logger?.debug?.(
+		options.logger?.log?.(
 			"[Atomic] Stood down: nothing in this workspace can judge a change, and the mode is auto. Name a check in settings, or set the mode to always to have the model judge its own work.",
 		);
 		return undefined;
 	}
-	options.logger?.debug?.(
+	options.logger?.log?.(
 		oracle
 			? `[Atomic] Armed: transactions are judged by \`${oracle.label}\` (${oracle.reason})`
 			: "[Atomic] Armed with no check to run: the model judges its own work, which is the weaker of the two and is labelled as such",

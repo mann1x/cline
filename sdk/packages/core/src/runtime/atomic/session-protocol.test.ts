@@ -48,7 +48,7 @@ describe("arming the protocol for a session", () => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
 				config: { mode: "auto" },
-				logger: { debug: (message) => logged.push(message) },
+				logger: { log: (message) => logged.push(message) },
 			});
 
 			expect(session).toBeUndefined();
