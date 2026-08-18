@@ -21,6 +21,7 @@ import { useExtensionState } from "@/context/ExtensionStateContext"
 import useRemoteConfigSettings from "@/hooks/useRemoteConfigSettings"
 import { FileServiceClient } from "@/services/grpc-client"
 import { isMacOSOrLinux } from "@/utils/platformUtils"
+import AgentsTab from "./AgentsTab"
 import HookRow from "./HookRow"
 import NewRuleRow from "./NewRuleRow"
 import RuleRow from "./RuleRow"
@@ -61,7 +62,11 @@ const ClineRulesToggleModal: React.FC = () => {
 	const { width: viewportWidth, height: viewportHeight } = useWindowSize()
 	const [arrowPosition, setArrowPosition] = useState(0)
 	const [menuPosition, setMenuPosition] = useState(0)
-	const [currentView, setCurrentView] = useState<"rules" | "workflows" | "hooks" | "skills">("rules")
+	const [currentView, setCurrentView] = useState<"rules" | "workflows" | "hooks" | "skills" | "agents">("rules")
+	// Where the Agents tab portals its dropdowns. A popup rendered to
+	// document.body is outside this modal, and the click-away above would
+	// close the whole thing the moment a select is opened.
+	const [contentContainer, setContentContainer] = useState<HTMLDivElement | null>(null)
 
 	// Auto-switch to rules tab if hooks become disabled while viewing hooks tab
 	useEffect(() => {
@@ -437,6 +442,9 @@ const ClineRulesToggleModal: React.FC = () => {
 								<TabButton isActive={currentView === "skills"} onClick={() => setCurrentView("skills")}>
 									Skills
 								</TabButton>
+								<TabButton isActive={currentView === "agents"} onClick={() => setCurrentView("agents")}>
+									Agents
+								</TabButton>
 								<TabButton isActive={currentView === "workflows"} onClick={() => setCurrentView("workflows")}>
 									Workflows
 								</TabButton>
@@ -489,6 +497,12 @@ const ClineRulesToggleModal: React.FC = () => {
 									skill's description, Cline uses the <span className="font-bold">use_skill</span> tool to load
 									the full instructions.
 								</p>
+							) : currentView === "agents" ? (
+								<p>
+									Agents are helpers the model can hand a piece of work to, each with its own prompt, its own
+									tools and its own model. Turn on <span className="font-bold">Subagents</span> in Settings to
+									offer them, and start a new task for the change to take effect.
+								</p>
 							) : (
 								<p>
 									Hooks allow you to execute custom scripts at specific points in Cline's execution lifecycle,
@@ -499,8 +513,10 @@ const ClineRulesToggleModal: React.FC = () => {
 					</div>
 
 					{/* Scrollable content area */}
-					<div className="flex-1 overflow-y-auto px-3 pb-3" style={{ minHeight: 0 }}>
-						{currentView === "rules" ? (
+					<div className="flex-1 overflow-y-auto px-3 pb-3" ref={setContentContainer} style={{ minHeight: 0 }}>
+						{currentView === "agents" ? (
+							<AgentsTab dropdownContainer={contentContainer} />
+						) : currentView === "rules" ? (
 							<>
 								{/* Remote Rules Section */}
 								{hasRemoteRules && (

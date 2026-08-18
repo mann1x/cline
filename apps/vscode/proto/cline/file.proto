@@ -102,6 +102,65 @@ service FileService {
 
   // Asks the selected model to write a prompt template for itself
   rpc generatePromptTemplate(EmptyRequest) returns (GeneratedPromptTemplate);
+
+  // Lists the subagents defined on disk, with what a form needs to edit one
+  rpc refreshAgents(EmptyRequest) returns (AgentsResponse);
+
+  // Writes one agent's file, creating or replacing it
+  rpc saveAgentFile(SaveAgentRequest) returns (AgentsResponse);
+
+  // Removes one agent's file
+  rpc deleteAgentFile(DeleteAgentRequest) returns (AgentsResponse);
+}
+
+// One subagent, as its file defines it.
+//
+// The file stays the artifact: this is a projection of the frontmatter plus
+// the body, and saving writes it straight back out. Both hosts read the same
+// directories, so an agent authored here is one the CLI sees too.
+message AgentInfo {
+  string name = 1; // Required. Also the file's basename.
+  string description = 2; // Required. What the lead reads when choosing.
+  string path = 3; // Absolute path of the file it came from
+  bool is_global = 4; // ~/.cline/agents rather than <workspace>/.cline/agents
+  repeated string tools = 5; // Empty means every tool the session has
+  repeated string skills = 6;
+  string provider_id = 7;
+  string model_id = 8;
+  string profile = 9; // A saved API configuration profile, by name
+  int32 max_iterations = 10; // 0 when unset
+  string system_prompt = 11; // The file's body
+}
+
+// What the Agents tab needs to render itself
+message AgentsResponse {
+  repeated AgentInfo agents = 1;
+  // Tool names an agent may be restricted to, from the same source the runtime
+  // builds its tools from, so the picker cannot drift from what is offered.
+  repeated string available_tools = 2;
+  // The directories that were read, so the tab can say where an agent lives
+  // and where a new one would go.
+  repeated string search_paths = 3;
+  // Files that failed to parse, as "<path>: <reason>". Never fatal: the rest
+  // of the list is still worth showing.
+  repeated string errors = 4;
+  bool has_workspace = 5; // False when no folder is open, so only global works
+}
+
+// Request to write one agent file
+message SaveAgentRequest {
+  Metadata metadata = 1;
+  AgentInfo agent = 2;
+  // The file this edit came from, when it is an edit. Sent so a rename, or a
+  // move between global and workspace, removes the old file rather than
+  // leaving two agents where the user edited one.
+  string original_path = 3;
+}
+
+// Request to delete one agent file
+message DeleteAgentRequest {
+  Metadata metadata = 1;
+  string path = 2;
 }
 
 // The outcome of asking a model to write its own template
