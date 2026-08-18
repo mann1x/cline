@@ -126,9 +126,24 @@ function normalizeAgentName(name: string): string {
 	return name.trim().toLowerCase();
 }
 
-function isYamlFile(fileName: string): boolean {
+/**
+ * An agent file is markdown with YAML frontmatter, so `.md` is the format.
+ *
+ * This accepted `.yml` and `.yaml` only, which meant the documented shape --
+ * `.cline/agents/*.md`, what the Agents tab writes and what every reply about
+ * this feature describes -- was skipped by the reader. Silently: an extension
+ * it does not recognise is not an error, so a user got no agent, no error, and
+ * nothing saying why (mann1x/cline#55). The two YAML extensions stay accepted
+ * so a file already written under one of them keeps working.
+ */
+function isAgentFile(fileName: string): boolean {
 	const extension = extname(fileName).toLowerCase();
-	return extension === ".yml" || extension === ".yaml";
+	return (
+		extension === ".md" ||
+		extension === ".markdown" ||
+		extension === ".yml" ||
+		extension === ".yaml"
+	);
 }
 
 export function parseConfiguredAgentConfig(
@@ -191,7 +206,7 @@ export function loadConfiguredAgentConfigs(input: {
 		}
 
 		for (const entry of entries) {
-			if (!entry.isFile() || !isYamlFile(entry.name)) {
+			if (!entry.isFile() || !isAgentFile(entry.name)) {
 				continue;
 			}
 

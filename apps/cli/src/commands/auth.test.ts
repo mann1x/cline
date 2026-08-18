@@ -103,6 +103,84 @@ describe("normalizeAuthProviderId", () => {
 	});
 });
 
+/**
+ * Quick setup used to hold a second opinion about what a provider takes: a key
+ * was demanded from every provider, and a base URL was allowed for two named
+ * ones. The registry already answers both questions, and it disagreed --
+ * Ollama has no key and does have a base URL, and it is the provider most
+ * likely of all of them to be running somewhere other than the default host.
+ */
+describe("ensureQuickSetupInputValid", () => {
+	const catalog = {
+		providers: [
+			{
+				id: "ollama",
+				name: "Ollama",
+				configFields: [{ path: "baseUrl" }, { path: "modelId" }],
+			},
+			{
+				id: "anthropic",
+				name: "Anthropic",
+				configFields: [{ path: "apiKey" }, { path: "modelId" }],
+			},
+		],
+	};
+
+	async function validate(input: {
+		provider: string;
+		apikey?: string;
+		baseurl?: string;
+	}): Promise<string | undefined> {
+		vi.doMock("../utils/provider-catalog", () => ({
+			listLocalProviders: async () => catalog,
+		}));
+		vi.doMock("@cline/core", async (importOriginal) => ({
+			...((await importOriginal()) as object),
+			ensureCustomProvidersLoaded: async () => {},
+		}));
+		vi.resetModules();
+		const { ensureQuickSetupInputValid } = await import("./auth");
+		return await ensureQuickSetupInputValid(
+			{
+				provider: input.provider,
+				apikey: input.apikey ?? "",
+				modelid: "some-model",
+				baseurl: input.baseurl,
+			},
+			{} as unknown as ProviderSettingsManager,
+		);
+	}
+
+	it("accepts a base URL for a provider whose registry entry has one", async () => {
+		expect(
+			await validate({
+				provider: "ollama",
+				baseurl: "http://127.0.0.1:11439",
+			}),
+		).toBeUndefined();
+	});
+
+	it("does not demand a key from a provider that has none", async () => {
+		expect(await validate({ provider: "ollama" })).toBeUndefined();
+	});
+
+	it("still demands a key from a provider that has one", async () => {
+		expect(await validate({ provider: "anthropic" })).toBe(
+			"auth quick setup requires --apikey <key>",
+		);
+	});
+
+	it("refuses a base URL for a provider that takes none", async () => {
+		expect(
+			await validate({
+				provider: "anthropic",
+				apikey: "key",
+				baseurl: "http://example.invalid",
+			}),
+		).toBe('base URL is not supported for provider "anthropic"');
+	});
+});
+
 describe("loadAuthTuiRuntime", () => {
 	it("loads OpenTUI React after provider catalog initialization", async () => {
 		const cliRoot = fileURLToPath(new URL("../..", import.meta.url));
