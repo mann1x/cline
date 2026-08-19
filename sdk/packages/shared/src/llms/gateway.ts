@@ -179,6 +179,22 @@ export interface GatewayStreamRequest {
 	 * ones that reach the provider without going through the gateway.
 	 */
 	defaultedMaxTokens?: boolean;
+	/**
+	 * Set when this request is the machinery's own, not the conversation's.
+	 *
+	 * Summarisers, condensers and title writers go out through the same gateway
+	 * as the turn they serve, and the request path keeps one process-wide record
+	 * of "the last request" -- its token count, its measured chars-per-token,
+	 * what capped it. An auxiliary request writing to those makes the next
+	 * compaction pass reason about the wrong request entirely. Measured: a
+	 * 25,969-token condenser prompt overwrote a 67,572-token conversation, and
+	 * compaction stood down at `triggerInputTokens: 25969` on a transcript of
+	 * 262,915 characters.
+	 *
+	 * The request is served identically. It just does not get to speak for the
+	 * session.
+	 */
+	auxiliary?: boolean;
 	metadata?: Record<string, unknown>;
 	reasoning?: {
 		enabled?: boolean;
@@ -212,6 +228,8 @@ export interface GatewayModelHandleOptions {
 	tools?: readonly AgentToolDefinition[];
 	temperature?: number;
 	maxTokens?: number;
+	/** See `GatewayStreamRequest.auxiliary`. */
+	auxiliary?: boolean;
 	metadata?: Record<string, unknown>;
 	reasoning?: {
 		enabled?: boolean;

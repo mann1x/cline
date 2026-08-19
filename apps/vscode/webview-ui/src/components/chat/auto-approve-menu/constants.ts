@@ -26,6 +26,12 @@ export const ACTION_METADATA: ActionMetadata[] = [
 		icon: "codicon-globe",
 	},
 	{
+		id: "useBrowserTool",
+		label: "Use the browser",
+		shortName: "Browser",
+		icon: "codicon-browser",
+	},
+	{
 		id: "useMcp",
 		label: "Use MCP servers",
 		shortName: "MCP",

@@ -73,7 +73,13 @@ export class SdkInteractionCoordinator {
 			ts: this.nextMessageTs(),
 			type: "say",
 			say: "error",
-			text: `Cline ran into ${context.consecutiveMistakes} errors in a row and stopped the task.\n\nLatest: ${latest}\n\nSend a message to give Cline guidance and continue the task.`,
+			// A forced stop is not a count. Reporting one as "ran into N errors in
+			// a row" described a run that had two failures and two successful edits
+			// behind it as six consecutive errors, which sent the reader looking
+			// for four failures that were never there.
+			text: context.forced
+				? `Cline stopped the task: ${latest}\n\nSend a message to give Cline guidance and continue the task.`
+				: `Cline ran into ${context.consecutiveMistakes} errors in a row and stopped the task.\n\nLatest: ${latest}\n\nSend a message to give Cline guidance and continue the task.`,
 			partial: false,
 		}
 

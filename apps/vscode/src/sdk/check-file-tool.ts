@@ -1,10 +1,10 @@
+import { describeDelimiterBalance } from "@cline/core"
 import { type AgentTool, createTool } from "@cline/shared"
 import * as fs from "fs/promises"
 import * as path from "path"
 import type { FileDiagnostics } from "@/shared/proto/index.cline"
 import { Logger } from "@/shared/services/Logger"
-import { describeDelimiterBalance } from "./delimiter-balance"
-import { readHostDiagnostics, readSettledDiagnostics, renderFileDiagnostics, sleep } from "./editor-diagnostics"
+import { readHostDiagnostics, readSettledDiagnostics, renderFileDiagnostics, samePath, sleep } from "./editor-diagnostics"
 
 /**
  * A tool that answers "is this file broken?".
@@ -38,23 +38,33 @@ export const CHECK_FILE_TOOL_NAME = "check_file"
  * would otherwise type are named here, in the description of the tool that
  * replaces them, which is where a model is standing when it is about to make
  * the mistake.
+ *
+ * The second failure is naming. Asked "how many errors is the linter
+ * reporting?", a model answered that it could not count them and recited the
+ * problems from its last edit report instead — with this tool in front of it.
+ * The description said "check files for errors" and named `eslint` and `ruff`,
+ * but never the word the question used, and `check_file` does not read as a
+ * linter either. So the vocabulary is stated outright: this is the linter, the
+ * type checker, the diagnostics, the Problems panel. A tool the model cannot
+ * name is a tool it does not have.
  */
-export const CHECK_FILE_TOOL_DESCRIPTION = `Check files for errors and warnings, using the editor's own language servers (LSP). These are live and follow your edits — a result is current as of the moment you ask, so if it still reports a problem after an edit, the problem is still there. Restarting a language server is neither possible nor necessary from here.
+export const CHECK_FILE_TOOL_DESCRIPTION = `Check files for errors and warnings, using the editor's own language servers (LSP). **This is the linter.** It is also the type checker, the syntax check, and the source of the problems that would show in a Problems panel — whichever of those words the question uses, this is the tool that answers it. The results are live and follow your edits: one is current as of the moment you ask, so if it still reports a problem after an edit, the problem is still there. Restarting a language server is neither possible nor necessary from here.
 
-Ask this before running a checker yourself. For a file whose language the IDE understands, it answers the same question as \`tsc\`, \`eslint\`, \`biome\`, \`ruff\`, \`mypy\`, \`go build\` or \`cargo check\` would — for the files you name, in milliseconds, without building the project.
+Ask this before running a checker yourself. For a file whose language a language server covers, it answers the same question as \`tsc\`, \`eslint\`, \`biome\`, \`ruff\`, \`mypy\`, \`go build\` or \`cargo check\` would — for the files you name, in milliseconds, without building the project.
 
 When to call it:
+- Whenever the question is about the linter, lint errors, diagnostics, problems, warnings, type errors, syntax errors or compile errors — "how many errors is the linter reporting?", "is it clean now?", "what is still broken?". You have no other way to know, and the report you were shown after an earlier edit does not answer it: that was true then, and you have edited since.
 - After editing a file, to confirm the edit is valid before moving on.
 - Before reporting a task finished, on every file you changed.
 - On a file you are about to change, when you want to know what was already wrong with it.
 
 Pass every file you want checked in one call.
 
-Read a clean result carefully. "No problems reported by the editor" is conclusive only where the IDE has a language server for that file, and it does not for every language on every machine. If this reports nothing and you have reason to expect a problem, or the project has a checker the IDE does not run, run that checker with \`run_commands\`. Tests and builds are always \`run_commands\`; this tool does not run them.
+Read a clean result carefully. "No problems reported by the editor" is conclusive only where a language server covers that file, and it does not for every language on every machine. If this reports nothing and you have reason to expect a problem, or the project has a checker the language servers do not run, run that checker with \`run_commands\`. Tests and builds are always \`run_commands\`; this tool does not run them.
 
 Output: plain text, one section per file you named, each problem on its own line as \`file:line:column\` with its severity and message. A file with nothing wrong says so in one line. There is no object to unpack and no \`success\` field — problems being listed is this tool working, not failing.
 
-When a file's brackets do not match, a \`Delimiter scan:\` section follows the problems and names the *opening* bracket involved. A parse error is always reported where the parser gave up, which is the closing bracket; the opener is the one you have to edit, and it is the one the error cannot name. Trust that line over counting brackets yourself — it skips strings, comments and regex literals, which counting characters does not.`
+When a file's brackets do not match, a \`Delimiter scan\` section names the *opening* bracket involved, and one line per place the trouble starts — a file can be broken in several spots at once, so fix every line it lists in one edit rather than one per round trip. A parse error is always reported where the parser gave up, which is the closing bracket; the opener is the one you have to edit, and it is the one the error cannot name. Trust those lines over counting brackets yourself — the scan skips strings, comments and regex literals, which counting characters does not. It runs whether or not the editor reported anything, so it can appear beneath a file the editor called clean — no language server checks the script inside an \`.html\` file, and there this is the only report you will get.`
 
 /**
  * Exported so the template generator can state this tool's real call shape.
@@ -231,19 +241,26 @@ async function describeFile(args: {
 	signal?: AbortSignal
 }): Promise<string> {
 	const { displayPath, absolutePath, diagnostics, options, signal } = args
-	const file = diagnostics.find((entry) => path.resolve(entry.filePath) === absolutePath)
+	const file = diagnostics.find((entry) => samePath(entry.filePath, absolutePath))
+
+	// A parse error is reported where the parser gave up, which is the closing
+	// bracket — never the opening one it failed to match. Say which opener it
+	// belongs to, since that is the edit to make and the language server
+	// structurally cannot tell you.
+	//
+	// Scanned whatever the editor said, including when it said nothing. A file
+	// with no language server behind it is exactly where this is the only
+	// answer available: VS Code ships no syntax checking for the script inside
+	// an `.html` file, so an unclosed brace there is reported by nobody.
+	const balance = await describeBalance(absolutePath)
+	const withBalance = (text: string) => (balance ? `${text}\n${balance}` : text)
 
 	// Same cap, same severity filter, same rendering as the post-edit report:
 	// two different answers to "what is wrong with this file" would be worse
 	// than either.
 	const rendered = file ? await renderFileDiagnostics(file.filePath, file.diagnostics) : ""
 	if (rendered !== "") {
-		// A parse error is reported where the parser gave up, which is the
-		// closing bracket — never the opening one it failed to match. Say
-		// which opener it belongs to, since that is the edit to make and the
-		// language server structurally cannot tell you.
-		const balance = await describeBalance(absolutePath)
-		return balance ? `${rendered}\n${balance}` : rendered
+		return withBalance(rendered)
 	}
 
 	// The editor said nothing, which is not the same as "this file is fine".
@@ -253,18 +270,24 @@ async function describeFile(args: {
 		try {
 			const result = await options.runLintCommand(template, absolutePath, signal)
 			if (result.exitCode !== 0 || result.output.trim() !== "") {
-				return [
-					`${displayPath}: the editor reported nothing, so \`${command}\` was run.`,
-					result.output.trim() || `(no output; exit code ${result.exitCode})`,
-				].join("\n")
+				return withBalance(
+					[
+						`${displayPath}: the editor reported nothing, so \`${command}\` was run.`,
+						result.output.trim() || `(no output; exit code ${result.exitCode})`,
+					].join("\n"),
+				)
 			}
-			return `${displayPath}: no problems. The editor reported none and \`${command}\` passed.`
+			return withBalance(`${displayPath}: no problems. The editor reported none and \`${command}\` passed.`)
 		} catch (error) {
-			return `${displayPath}: the editor reported nothing, and \`${command}\` failed to run: ${
-				error instanceof Error ? error.message : String(error)
-			}`
+			return withBalance(
+				`${displayPath}: the editor reported nothing, and \`${command}\` failed to run: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+			)
 		}
 	}
 
-	return `${displayPath}: no problems reported by the editor. If no language server handles this file type, that is not the same as clean.`
+	return withBalance(
+		`${displayPath}: no problems reported by the editor. If no language server handles this file type, that is not the same as clean.`,
+	)
 }

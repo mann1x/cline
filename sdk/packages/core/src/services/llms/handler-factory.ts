@@ -34,12 +34,25 @@ function usesOpenAICompatibleClient(config: ProviderConfig): boolean {
 
 function buildGatewayProviderOptions(
 	config: ProviderConfig,
+	sessionId?: string,
 ): Record<string, unknown> | undefined {
 	const options: Record<string, unknown> = {
 		region: config.region,
 		apiLine: config.apiLine,
 		openRouterProviderSorting: config.openRouterProviderSorting,
 		modelCatalog: config.modelCatalog,
+		// The configured sampler. `ProviderConfig` carries it at the top level —
+		// `toProviderConfig` reads it straight off providers.json — but vendors
+		// read their settings out of this bag, so a field that is never lifted
+		// into it reaches nothing.
+		//
+		// Measured on a live box: `temperature: 0.6` and `frequencyPenalty: 0.3`
+		// sat in providers.json for days and never once appeared on the wire.
+		// Every request carried exactly `num_ctx` and `num_predict`, which arrive
+		// by other routes, so the payload looked well-formed while the model ran
+		// on its Modelfile defaults. Both hosts were affected: this is the only
+		// place the lift can happen for either.
+		sampling: config.sampling,
 	};
 
 	if (usesOpenAICompatibleClient(config)) {
@@ -47,6 +60,13 @@ function buildGatewayProviderOptions(
 			apiVersion: config.azure?.apiVersion,
 			useIdentity: config.azure?.useIdentity,
 		});
+	}
+
+	// The pool a request attaches to is not in the config -- it changes every
+	// time a compaction re-roots the conversation -- so what travels here is the
+	// key the vendor looks the live pool up under. See `polykv-session.ts`.
+	if (normalizeProviderId(config.providerId) === "opencoti" && sessionId) {
+		options.polykvSessionId = sessionId;
 	}
 
 	if (config.providerId === "bedrock") {
@@ -235,7 +255,10 @@ export function createAgentModelFromConfig(
 				headers: normalizedProviderConfig.headers,
 				timeoutMs: normalizedProviderConfig.timeoutMs,
 				fetch: normalizedProviderConfig.fetch,
-				options: buildGatewayProviderOptions(normalizedProviderConfig),
+				options: buildGatewayProviderOptions(
+					normalizedProviderConfig,
+					config.sessionId,
+				),
 				models: normalizedProviderConfig.knownModels
 					? Object.entries(normalizedProviderConfig.knownModels).map(
 							([id, model]) => toGatewayConfiguredModel(id, model),
@@ -254,6 +277,7 @@ export function createAgentModelFromConfig(
 		{
 			maxTokens: normalizedProviderConfig.maxOutputTokens,
 			temperature: normalizedProviderConfig.temperature,
+			auxiliary: normalizedProviderConfig.auxiliary,
 		},
 	);
 }

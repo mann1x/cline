@@ -7,5 +7,16 @@ fi
 
 gitleaks git --pre-commit --redact --staged --verbose || exit 1
 
-cd apps/vscode && bunx lint-staged
+# lint-staged reads the config of the directory it runs in and only sees the
+# staged files below it. Running it solely from apps/vscode meant the root
+# config -- the one covering sdk/ and apps/{cli,cline-hub,examples} -- never
+# ran at all: every commit touching them printed "could not find any staged
+# files matching configured tasks" and went through ungated. Measured when this
+# was found: 53 files under sdk/ and 15 under apps/cli had drifted out of the
+# formatting `bun run check` demands of them.
+#
+# Two invocations rather than one merged config, because the vscode tasks
+# regenerate a proto from a path relative to that directory.
+bunx lint-staged || exit 1
+(cd apps/vscode && bunx lint-staged) || exit 1
 

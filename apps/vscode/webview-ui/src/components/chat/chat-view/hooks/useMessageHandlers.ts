@@ -507,10 +507,30 @@ export function useMessageHandlers(messages: ClineMessage[], chatState: ChatStat
 		startNewTask()
 	}, [startNewTask])
 
+	/**
+	 * Attach an image from the transcript to the message being composed.
+	 *
+	 * This is how "in the preview I don't see the top menu" becomes something the
+	 * model can act on: the sentence alone is ambiguous across a run with several
+	 * screenshots, so the picture goes with it. Attaching rather than quoting also
+	 * means the plumbing already exists — a composed message's images are sent as
+	 * image blocks — so no new mention syntax has to be resolved anywhere.
+	 *
+	 * Re-attaching the same image is a no-op: double-clicking the menu entry
+	 * should not send the same screenshot twice.
+	 */
+	const handleReferenceImage = useCallback(
+		(image: string) => {
+			setSelectedImages((current) => (current.includes(image) ? current : [...current, image]))
+		},
+		[setSelectedImages],
+	)
+
 	return {
 		handleSendMessage,
 		executeButtonAction,
 		handleTaskCloseButtonClick,
+		handleReferenceImage,
 		startNewTask,
 	}
 }

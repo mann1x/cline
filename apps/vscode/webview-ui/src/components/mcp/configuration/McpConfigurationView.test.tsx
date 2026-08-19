@@ -30,6 +30,10 @@ vi.mock("./tabs/add-server/AddRemoteServerForm", () => ({
 	default: () => <div>Add Remote Server Form</div>,
 }))
 
+vi.mock("./tabs/add-server/AddLocalServerForm", () => ({
+	default: () => <div>Add Local Server Form</div>,
+}))
+
 vi.mock("./tabs/installed/ConfigureServersView", () => ({
 	default: () => <div>Configure Servers View</div>,
 }))
@@ -55,6 +59,32 @@ describe("McpConfigurationView", () => {
 		expect(screen.getByText("Configure Servers View")).toBeInTheDocument()
 
 		await waitFor(() => expect(mocks.getLatestMcpServers).toHaveBeenCalledTimes(1))
+	})
+
+	// A local server was always supported by the settings file and never
+	// reachable from the UI — the only way to add one was to open the JSON.
+	it("offers local servers alongside remote ones", async () => {
+		render(<McpConfigurationView onDone={vi.fn()} />)
+
+		const localTab = screen.getByRole("button", { name: "Local Servers" })
+		expect(localTab).toBeInTheDocument()
+
+		localTab.click()
+
+		await waitFor(() => expect(screen.getByText("Add Local Server Form")).toBeInTheDocument())
+	})
+
+	it("keeps local servers available when remote ones are blocked", () => {
+		// Blocking personal *remote* servers says nothing about a server running
+		// on this machine.
+		mocks.remoteConfigSettings = {
+			blockPersonalRemoteMCPServers: true,
+		}
+
+		render(<McpConfigurationView onDone={vi.fn()} />)
+
+		expect(screen.queryByRole("button", { name: "Remote Servers" })).not.toBeInTheDocument()
+		expect(screen.getByRole("button", { name: "Local Servers" })).toBeInTheDocument()
 	})
 
 	it("hides remote servers only when personal remote MCP servers are blocked", () => {

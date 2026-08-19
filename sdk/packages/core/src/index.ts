@@ -24,6 +24,13 @@ export {
 	isClineOrgIndividualInferenceSubscriptionMessage,
 	isClinePassLimitError,
 	isClinePassLimitMessage,
+	// A host that resolves the context window itself has to be able to ask the
+	// server what the model declares, and to ask before the first request —
+	// otherwise the window the sampler uses and the one compaction sizes itself
+	// against are two different numbers.
+	primeDeclaredNumCtx,
+	readDeclaredFamily,
+	readDeclaredNumCtx,
 } from "@cline/llms";
 // Shared contracts and path helpers re-exported for app consumers.
 export type {
@@ -272,6 +279,7 @@ export {
 	createUserInstructionConfigService,
 	createWorkflowsConfigDefinition,
 	DEFAULT_REQUIRED_REWRITES,
+	describeResolvedPromptTemplate,
 	type GeneratePromptTemplateArgs,
 	type GeneratePromptTemplateResult,
 	generatePromptTemplate,
@@ -297,8 +305,11 @@ export {
 	RULES_CONFIG_DIRECTORY_NAME,
 	resolvePromptTemplateDirectories,
 	resolveRulesConfigSearchPaths,
+	resolveSessionPromptTemplateFrom,
 	resolveSkillsConfigSearchPaths,
 	resolveWorkflowsConfigSearchPaths,
+	type SessionPromptTemplateRequest,
+	type SessionPromptTemplateResult,
 	SKILLS_CONFIG_DIRECTORY_NAME,
 	summarizeToolCallSignatures,
 	type ToolCallSignature,
@@ -360,6 +371,8 @@ export {
 	updateMcpSettingsFileSync,
 } from "./extensions/mcp";
 export {
+	type AgentProfileConnection,
+	type AgentProviderConnection,
 	type AgentTask,
 	AgentTeam,
 	AgentTeamsRuntime,
@@ -859,9 +872,21 @@ export async function loadOpenTelemetryAdapter() {
 }
 export { Agent, createAgentRuntime } from "@cline/agents";
 export {
+	createCappedThinkingNoteWriter,
+	createCappedThinkingPrepareTurn,
+	DEFAULT_CAPPED_THINKING_PROMPT,
+	findCappedThinkingIndex,
+} from "./extensions/context/capped-thinking";
+export {
 	createCompactionStateAwarePrepareTurn,
 	createContextCompactionPrepareTurn,
 } from "./extensions/context/compaction";
+// Exported so the settings panel can show the built-in prompt as the
+// placeholder for the field that replaces it.
+export {
+	DEFAULT_COMPACTION_PROMPT,
+	DEFAULT_THINKING_COMPACTION_PROMPT,
+} from "./extensions/context/compaction-shared";
 export {
 	ALL_DEFAULT_TOOL_NAMES,
 	type ApplyPatchExecutor,
@@ -879,6 +904,9 @@ export {
 	createDefaultTools,
 	createDefaultToolsWithPreset,
 	createEditorExecutor,
+	createFileReadExecutor,
+	createReadReceipts,
+	createSecretRedactor,
 	createShellExecutor,
 	createShellTool,
 	createToolPoliciesWithPreset,
@@ -897,7 +925,9 @@ export {
 	PATCH_MARKERS,
 	PatchActionType,
 	type PatchFileChange,
+	type ReadReceipts,
 	resolveCoreSelectedToolIds,
+	type ShellExecutionOptions,
 	type ShellExecutor,
 	type ShellExecutorOptions,
 	type StructuredCommandInput,
@@ -910,6 +940,95 @@ export {
 	ToolPresets,
 	truncateCommandOutput,
 } from "./extensions/tools";
+// The browser and the language-server tools. Both were the extension's alone,
+// and that was the difference between the two hosts: the CLI could not check
+// that a page runs, and could not ask what a symbol means. Each takes its host
+// half as an injected interface -- a `BrowserDriver`, a `CodeIntelProvider` --
+// so the definition and the description are shared while VS Code keeps its
+// language servers and the CLI brings its own.
+export {
+	BROWSER_ACTIONS,
+	BROWSER_TOOL_DESCRIPTION,
+	BROWSER_TOOL_INPUT_SCHEMA,
+	BROWSER_TOOL_NAME,
+	type BrowserActionResult,
+	type BrowserDriver,
+	type BrowserToolAction,
+	type BrowserToolOptions,
+	createBrowserTool,
+	localPathOf,
+	renderBrowserResult,
+	splitDataUrl,
+	toNavigableUrl,
+} from "./extensions/tools/browser";
+export {
+	buildCheckFileDescription,
+	buildLintCommand,
+	CHECK_FILE_TOOL_DESCRIPTION,
+	CHECK_FILE_TOOL_INPUT_SCHEMA,
+	CHECK_FILE_TOOL_NAME,
+	checkSource,
+	compileCheck,
+	createCheckFileTool,
+	extractScripts,
+	LINT_COMMAND_FILE_PLACEHOLDER,
+	type LintCommandResult,
+} from "./extensions/tools/check-file";
+export {
+	CODE_INTEL_OPERATIONS,
+	CODE_INTEL_TOOL_DESCRIPTION,
+	CODE_INTEL_TOOL_INPUT_SCHEMA,
+	CODE_INTEL_TOOL_NAME,
+	type CodeIntelLocation,
+	type CodeIntelOperation,
+	type CodeIntelProvider,
+	type CodeIntelSymbol,
+	type CodeIntelToolOptions,
+	createCodeIntelTool,
+	type ParsedCodeIntelRequest,
+	parseCodeIntelRequest,
+} from "./extensions/tools/code-intel";
+// The bracket scanner is host-independent and two hosts want it: the checker
+// above, and VS Code's own `check_file`, which pairs it with the language
+// servers this one has no access to.
+export {
+	type DelimiterFinding,
+	type DelimiterScan,
+	describeDelimiterBalance,
+	scanDelimiters,
+	scanWithBalance,
+} from "./extensions/tools/delimiter-balance";
+// The workspace lister, and the tool that reads it. Both hosts install this:
+// the reflex it displaces -- `ls`, `dir /s` -- is not VS Code's, it is any
+// model that has no other way to find out what exists.
+export {
+	createListFilesTool,
+	createLocalWorkspaceLister,
+	type DirectoryEntry,
+	globToRegExp,
+	isWithin,
+	LIST_FILES_TOOL_DESCRIPTION,
+	LIST_FILES_TOOL_INPUT_SCHEMA,
+	LIST_FILES_TOOL_NAME,
+	type ListFilesToolOptions,
+	normalizeMaxResults,
+	renderDirectory,
+	renderMatches,
+	type WorkspaceLister,
+} from "./extensions/tools/list-files";
+export {
+	commandText,
+	describeQaCredentials,
+	type NormalizedQaCredentials,
+	normalizeQaCredentials,
+	QA_CREDENTIAL_MIN_VALUE_LENGTH,
+	QA_CREDENTIAL_NAME_PATTERN,
+	type QaCredential,
+	qaCredentialNames,
+	type RejectedQaCredential,
+	referencedCredentialNames,
+	resolveCredentialEnv,
+} from "./extensions/tools/qa-credentials";
 export {
 	type ClineRecommendedModel,
 	type ClineRecommendedModelsData,
@@ -917,6 +1036,11 @@ export {
 	type FetchClineRecommendedModelsOptions,
 	fetchClineRecommendedModels,
 } from "./services/llms/cline-recommended-models";
+// Exported so a host can build a *second* model from a session's own settings —
+// a describer that reads images for the session's model. The extension builds
+// one from its own handler; the CLI had no way to reach this at all, which is
+// why the vision path could not be run headlessly.
+export { createAgentModelFromConfig } from "./services/llms/handler-factory";
 export {
 	clearLiveModelsCatalogCache,
 	clearPrivateModelsCatalogCache,
@@ -1018,6 +1142,7 @@ export type {
 	CoreModelConfig,
 	CoreRuntimeFeatures,
 	CoreSessionConfig,
+	DelegatedAgentConnectionOverride,
 } from "./types/config";
 export type {
 	CoreSessionEvent,

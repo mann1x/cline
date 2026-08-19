@@ -12,6 +12,7 @@ service McpService {
   rpc toggleMcpServer(ToggleMcpServerRequest) returns (McpServers);
   rpc updateMcpTimeout(UpdateMcpTimeoutRequest) returns (McpServers);
   rpc addRemoteMcpServer(AddRemoteMcpServerRequest) returns (McpServers);
+  rpc addLocalMcpServer(AddLocalMcpServerRequest) returns (McpServers);
   rpc restartMcpServer(StringRequest) returns (McpServers);
   rpc deleteMcpServer(StringRequest) returns (McpServers);
   rpc toggleToolAutoApprove(ToggleToolAutoApproveRequest) returns (McpServers);
@@ -40,6 +41,19 @@ message AddRemoteMcpServerRequest {
   string server_name = 2;
   string server_url = 3;
   optional string transport_type = 4;
+}
+
+// A server Cline starts itself and talks to over stdio, rather than one it
+// connects to over the network. `command` plus `args` is the same shape the
+// settings file already takes, so anything expressible by hand is expressible
+// here.
+message AddLocalMcpServerRequest {
+  Metadata metadata = 1;
+  string server_name = 2;
+  string command = 3;
+  repeated string args = 4;
+  map<string, string> env = 5;
+  optional string cwd = 6;
 }
 
 message ToggleToolAutoApproveRequest {

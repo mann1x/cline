@@ -30,6 +30,15 @@ export interface Config extends Omit<CoreSessionConfig, "apiKey" | "mode"> {
 	mode: CliAgentMode;
 	defaultToolAutoApprove: boolean;
 	toolPolicies: Record<string, ToolPolicy>;
+	/**
+	 * The `# system` section of the prompt template this session matched.
+	 *
+	 * Carried on the config because the system prompt is rebuilt more than once
+	 * -- switching between plan and act does it, and so does the connector path
+	 * -- and a rebuild that cannot see the template silently reverts the session
+	 * to the built-in prompt half way through.
+	 */
+	promptTemplateSystem?: string;
 }
 
 export interface ActiveCliSession {
@@ -93,7 +102,32 @@ export interface ParsedArgs {
 	provider?: string;
 	id?: string;
 	retries?: number;
+	editVerification?: "off" | "nudge" | "require";
+	invalidEditVerification?: string;
 	invalidRetries?: string;
+	/** Whether the model keeps a checklist across the task. */
+	taskProgress?: "on" | "off";
+	/** Tool calls between checklist reminders. 0 reminds never. */
+	taskProgressInterval?: number;
+	invalidTaskProgress?: string;
+	invalidTaskProgressInterval?: string;
+	/** Project checker `check_file` runs on each file it is given. */
+	lintCommand?: string;
+	visionModel?: string;
+	/** Model delegated agents run on, instead of the session's. */
+	agentsModel?: string;
+	/** Context window for that model. A string: it arrives from the flag. */
+	agentsNumCtx?: string;
+	/** Concurrent requests this endpoint serves. A string, from the flag. */
+	parallelSessions?: string;
+	/**
+	 * Names of environment variables holding QA secrets.
+	 *
+	 * Names, not values: the CLI reads them out of its own environment, so the
+	 * secret never appears on a command line, in shell history, or in any file
+	 * this program writes.
+	 */
+	qaCredential?: string[];
 	cwd?: string;
 	teamName?: string;
 	defaultToolAutoApprove: boolean;

@@ -20,6 +20,7 @@ import {
 	createSubmitAndExitTool,
 	createWebFetchTool,
 } from "../tools/definitions";
+import { createListFilesTool } from "../tools/list-files";
 import { createSpawnAgentTool } from "../tools/team/spawn-agent-tool";
 import { createAgentTeamsTools } from "../tools/team/team-tools";
 import { parsePromptTemplate } from "./prompt-template-parser";
@@ -64,6 +65,7 @@ const LIVE_TOOLS = [
 	createAskQuestionTool(stubExecutor),
 	createSubmitAndExitTool(stubExecutor, stubConfig),
 	createSpawnAgentTool({ configProvider: {} as never }),
+	createListFilesTool({ cwd: "/workspace", createLister: {} as never }),
 	...createAgentTeamsTools({
 		runtime: {} as never,
 		requesterId: "lead",
@@ -84,7 +86,12 @@ const COMPUTED_TOOL_NAMES = ["run_commands", "skills"];
  * constants it has to match. Listed because a template may override them and
  * the validator must not call such a section "a tool that does not exist".
  */
-const HOST_TOOL_NAMES = ["check_file", "code_intel", "switch_to_act_mode"];
+const HOST_TOOL_NAMES = [
+	"check_file",
+	"code_intel",
+	"switch_to_act_mode",
+	"browser",
+];
 
 const SHIPPED_TOOL_NAMES = [
 	...LIVE_TOOLS.map((tool) => tool.name),

@@ -11,9 +11,11 @@ import { join } from "node:path";
 import {
 	type AgentMessage,
 	type AgentModelEvent,
+	consumeContextOverflow,
 	estimateRequestInputTokens,
 	type GatewayModelHandleOptions,
 	type ITelemetryService,
+	resetTokenCalibration,
 } from "@cline/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeModelsDevProviderModels } from "../catalog/catalog-live";
@@ -21,6 +23,7 @@ import {
 	createGateway,
 	DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS,
 	GATEWAY_MIN_OUTPUT_TOKENS,
+	resolveGatewayOutputCap,
 	resolveGatewayRequestMaxTokens,
 } from "./gateway";
 
@@ -295,6 +298,242 @@ describe("sdk-gateway", () => {
 		}
 	});
 
+	it("names the term that set the cap, not just the cap", () => {
+		// The cap alone cannot answer the only question a truncated turn asks:
+		// whether compacting the transcript would raise it. A caller's own limit
+		// and a window with no room left produce the same number and the same
+		// finish reason, and only one of them is compaction's to fix.
+		expect(
+			resolveGatewayOutputCap({
+				requestedMaxTokens: 32_000,
+				model: { maxOutputTokens: 202_800, contextWindow: 110_000 },
+				estimatedInputTokens: 48_508,
+			}),
+		).toMatchObject({
+			maxTokens: 32_000,
+			source: "requested",
+			windowBound: false,
+		});
+
+		// The model's declared ceiling is no more compactable than the caller's.
+		expect(
+			resolveGatewayOutputCap({
+				requestedMaxTokens: undefined,
+				model: { maxOutputTokens: 4_096, contextWindow: 200_000 },
+				estimatedInputTokens: 1_000,
+			}),
+		).toMatchObject({
+			maxTokens: 4_096,
+			source: "model-max-output",
+			windowBound: false,
+		});
+
+		// Room left in the window is.
+		expect(
+			resolveGatewayOutputCap({
+				requestedMaxTokens: 32_000,
+				model: { maxOutputTokens: 32_000, contextWindow: 60_000 },
+				estimatedInputTokens: 50_000,
+			}),
+		).toMatchObject({ source: "remaining-context", windowBound: true });
+
+		// So is having no room at all, even though no cap goes out.
+		const overflowed = resolveGatewayOutputCap({
+			requestedMaxTokens: 32_000,
+			model: { maxOutputTokens: 32_000, contextWindow: 60_000 },
+			estimatedInputTokens: 59_990,
+		});
+		expect(overflowed.maxTokens).toBeUndefined();
+		expect(overflowed).toMatchObject({
+			source: "context-overflow",
+			windowBound: true,
+		});
+
+		// A model with neither term declares nothing to attribute a cap to.
+		const uncapped = resolveGatewayOutputCap({
+			requestedMaxTokens: undefined,
+			model: {},
+			estimatedInputTokens: 1_000,
+		});
+		expect(uncapped.maxTokens).toBeUndefined();
+		expect(uncapped).toMatchObject({ source: "uncapped", windowBound: false });
+	});
+
+	it("scales the synthesized cap with the window it has to fit in", () => {
+		// 32,000 per 128,000, at whatever window the model reports. The flat
+		// 32,000 measured wrong at both ends: on a3b at 262,144 it capped replies
+		// at an eighth of the window and -- because Ollama sizes the thinking
+		// budget from `min(num_predict, num_ctx)` -- held effort `high` to 16,000
+		// thinking tokens, which one transaction hit 9 times while never once
+		// compacting.
+		expect(
+			resolveGatewayOutputCap({
+				requestedMaxTokens: undefined,
+				model: { contextWindow: 262_144 },
+				estimatedInputTokens: 4_000,
+			}),
+		).toMatchObject({ maxTokens: 65_536, source: "default" });
+
+		// The window the anchor was chosen for is unchanged.
+		expect(
+			resolveGatewayOutputCap({
+				requestedMaxTokens: undefined,
+				model: { contextWindow: 128_000 },
+				estimatedInputTokens: 4_000,
+			}),
+		).toMatchObject({ maxTokens: 32_000, source: "default" });
+
+		// And a small window no longer has the whole of itself synthesized as a
+		// cap, leaving nothing for the conversation.
+		expect(
+			resolveGatewayOutputCap({
+				requestedMaxTokens: undefined,
+				model: { contextWindow: 32_768 },
+				estimatedInputTokens: 1_000,
+			}),
+		).toMatchObject({ maxTokens: 8_192, source: "default" });
+
+		// Nothing to take a share of leaves the anchor.
+		expect(
+			resolveGatewayOutputCap({
+				requestedMaxTokens: undefined,
+				model: { maxOutputTokens: 200_000 },
+				estimatedInputTokens: 1_000,
+			}),
+		).toMatchObject({ maxTokens: 32_000, source: "default" });
+
+		// So does a model that publishes an output ceiling of its own: the
+		// default's job there is to stay under a bound that already exists, and
+		// asking for more of it costs throughput on providers that charge
+		// `max_tokens` against a rate limit.
+		expect(
+			resolveGatewayOutputCap({
+				requestedMaxTokens: undefined,
+				model: { maxOutputTokens: 64_000, contextWindow: 1_000_000 },
+				estimatedInputTokens: 1_000,
+			}),
+		).toMatchObject({ maxTokens: 32_000, source: "default" });
+
+		// It is a default and nothing more: a configured cap still wins, in
+		// either direction.
+		expect(
+			resolveGatewayOutputCap({
+				requestedMaxTokens: 8_000,
+				model: { contextWindow: 262_144 },
+				estimatedInputTokens: 4_000,
+			}),
+		).toMatchObject({ maxTokens: 8_000, source: "requested" });
+	});
+
+	it("makes an auxiliary call wait for the conversation's slot", async () => {
+		// A local server runs one request at a time per model. An auxiliary call
+		// issued alongside a turn does not run beside it -- it queues, and if the
+		// turn moves on before the slot frees, it is abandoned with no response
+		// and no error. That is what an empty condensation looked like from
+		// inside: a stream that opened and yielded nothing.
+		const createProvider = () => ({
+			async *stream() {
+				yield { type: "text-delta", text: "ok" } satisfies AgentModelEvent;
+				yield { type: "finish", reason: "stop" } satisfies AgentModelEvent;
+			},
+		});
+		const gateway = createGateway({
+			builtins: false,
+			providers: [
+				{
+					manifest: {
+						id: "scripted",
+						name: "Scripted",
+						defaultModelId: "scripted-model",
+						models: [
+							{
+								id: "scripted-model",
+								name: "Scripted Model",
+								providerId: "scripted",
+							},
+						],
+					},
+					createProvider,
+				},
+			],
+		});
+		const order: string[] = [];
+
+		const conversation = await gateway.stream({
+			providerId: "scripted",
+			modelId: "scripted-model",
+			messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+		});
+
+		let auxiliaryIssued = false;
+		const auxiliary = gateway
+			.stream({
+				providerId: "scripted",
+				modelId: "scripted-model",
+				auxiliary: true,
+				messages: [{ role: "user", content: [{ type: "text", text: "sum" }] }],
+			})
+			.then((stream) => {
+				auxiliaryIssued = true;
+				order.push("auxiliary");
+				return stream;
+			});
+
+		// The conversation holds the slot until its stream is drained.
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(auxiliaryIssued).toBe(false);
+
+		for await (const _event of conversation) {
+			// drain
+		}
+		order.push("conversation-done");
+
+		await auxiliary;
+		expect(order).toEqual(["conversation-done", "auxiliary"]);
+	});
+
+	it("keeps an auxiliary call out of the process-wide overflow record", () => {
+		// A summariser running out of room is its own problem. Left in the
+		// record, it forces a compaction of the conversation it was summarising,
+		// on the strength of arithmetic about a different request entirely.
+		resetTokenCalibration();
+		const overflowing = {
+			requestedMaxTokens: 32_000,
+			model: { maxOutputTokens: 32_000, contextWindow: 60_000 },
+			estimatedInputTokens: 59_990,
+		};
+
+		expect(
+			resolveGatewayOutputCap({ ...overflowing, suppressGlobalNotes: true })
+				.source,
+		).toBe("context-overflow");
+		expect(consumeContextOverflow()).toBeUndefined();
+
+		// The conversation's own overflow is still recorded.
+		expect(resolveGatewayOutputCap(overflowing).source).toBe(
+			"context-overflow",
+		);
+		expect(consumeContextOverflow()).toMatchObject({ contextWindow: 60_000 });
+	});
+
+	it("credits a tie to the window", () => {
+		// Two terms landing on the same number leave no evidence which one
+		// truncated the reply. Withholding a compaction the window did need
+		// costs more than one that turns out to be unnecessary.
+		expect(
+			resolveGatewayOutputCap({
+				requestedMaxTokens: 8_000,
+				model: { maxOutputTokens: 8_000, contextWindow: 9_500 },
+				estimatedInputTokens: 500,
+				outputReserveTokens: 1_000,
+			}),
+		).toMatchObject({
+			maxTokens: 8_000,
+			source: "remaining-context",
+			windowBound: true,
+		});
+	});
+
 	it("uses the old default output cap when request max tokens are omitted", () => {
 		expect(
 			resolveGatewayRequestMaxTokens({
@@ -383,6 +622,38 @@ describe("sdk-gateway", () => {
 			remainingContext: -524,
 			minOutputTokens: GATEWAY_MIN_OUTPUT_TOKENS,
 		});
+	});
+
+	it("records the overflow for compaction, not only for the caller", () => {
+		// The callback is optional and its one real caller only logged. Compaction
+		// runs before the next request and is the thing that can make room, so the
+		// finding has to be left somewhere it will look -- whether or not anyone
+		// passed a callback.
+		resetTokenCalibration();
+		expect(
+			resolveGatewayRequestMaxTokens({
+				requestedMaxTokens: 8_192,
+				model: { maxOutputTokens: 202_800, contextWindow: 10_000 },
+				estimatedInputTokens: 9_500,
+				outputReserveTokens: 1_024,
+			}),
+		).toBeUndefined();
+		expect(consumeContextOverflow()).toMatchObject({
+			contextWindow: 10_000,
+			remainingContext: -524,
+		});
+	});
+
+	it("leaves nothing behind when the budget is fine", () => {
+		resetTokenCalibration();
+		expect(
+			resolveGatewayRequestMaxTokens({
+				requestedMaxTokens: 8_192,
+				model: { maxOutputTokens: 202_800, contextWindow: 200_000 },
+				estimatedInputTokens: 9_500,
+			}),
+		).toBe(8_192);
+		expect(consumeContextOverflow()).toBeUndefined();
 	});
 
 	it("sends no output cap rather than a cap too small to answer with", () => {
@@ -1157,6 +1428,82 @@ describe("sdk-gateway", () => {
 			{ role: "user", content: [{ type: "text", text: "tell me more" }] },
 		]);
 		expect(JSON.stringify(call?.messages)).not.toContain("reasoning");
+	});
+
+	it("drops the reasoning history on Ollama requests, because the provider does", async () => {
+		// This asserted the opposite until it was measured. The reasoning was
+		// that reclaiming thinking is compaction's job, and that a chat template
+		// replaying reasoning from the last user turn onward makes the loss
+		// invisible from the client side. Both are true; the premise about the
+		// transport was not. `ollama-ai-provider-v2` aliases `provider.chat` to
+		// its responses model, whose converter drops every assistant reasoning
+		// part and pushes a warning for each — 23,695 in one measured
+		// transaction, about 87 per request.
+		//
+		// Sending what is discarded is not free. The estimator measures with
+		// this same mode, so it counted characters that never left: 592,322
+		// estimated against a 265,274-character server-side prompt on adjacent
+		// requests of one run, and the excess is subtracted from the output cap.
+		//
+		// Whether to restore the transport is open, and belongs in a measured
+		// experiment rather than here: ollama's qwen3.5 renderer keeps assistant
+		// think blocks for every message after the last real user turn, so an
+		// agent run with a single user message would render its entire thinking
+		// history into every prompt.
+		streamTextSpy.mockReturnValue({
+			fullStream: makeStreamParts([
+				{ type: "finish", usage: { inputTokens: 1, outputTokens: 1 } },
+			]),
+		});
+
+		const gateway = createGateway({
+			providerConfigs: [
+				{ providerId: "ollama", baseUrl: "http://localhost:11434" },
+			],
+		});
+
+		await collect(
+			await gateway.stream({
+				providerId: "ollama",
+				modelId: "v7-coder",
+				messages: [
+					baseMessages[0],
+					{
+						id: "assistant_1",
+						role: "assistant",
+						content: [
+							{ type: "reasoning", text: "stale thinking" },
+							{ type: "text", text: "Hello!" },
+						],
+						createdAt: Date.now(),
+					},
+					{
+						id: "user_2",
+						role: "user",
+						content: [{ type: "text", text: "tell me more" }],
+						createdAt: Date.now(),
+					},
+					{
+						id: "assistant_2",
+						role: "assistant",
+						content: [
+							{ type: "reasoning", text: "current thinking" },
+							{ type: "text", text: "More." },
+						],
+						createdAt: Date.now(),
+					},
+				],
+			}),
+		);
+
+		const serialized = JSON.stringify(
+			(streamTextSpy.mock.calls.at(-1)?.[0] as { messages?: unknown })
+				?.messages,
+		);
+		expect(serialized).not.toContain("stale thinking");
+		expect(serialized).not.toContain("current thinking");
+		expect(serialized).toContain("Hello!");
+		expect(serialized).toContain("More.");
 	});
 
 	it("omits Cerebras reasoning-only assistant history instead of sending empty assistant content", async () => {
@@ -5074,5 +5421,77 @@ describe("sdk-gateway", () => {
 		expect(readdirSync(keepDir)).toContain(
 			"old.ai_sdk_prompt.1.provider-request.json",
 		);
+	});
+});
+
+/**
+ * From the session this was written for: a 110,000-token window, an estimate of
+ * 95,115 against a real 103,591, and a model that reasoned past the end of the
+ * window and returned nothing.
+ */
+describe("the reserve that absorbs the estimate's error", () => {
+	const model = { contextWindow: 110_000, maxOutputTokens: undefined };
+
+	it("leaves room the estimate could have got wrong", () => {
+		const maxTokens = resolveGatewayRequestMaxTokens({
+			requestedMaxTokens: 32_000,
+			model,
+			estimatedInputTokens: 95_115,
+		});
+
+		// The real prompt was 103,591; the reply has to fit in what is left of
+		// the window after it, not after the estimate.
+		expect(maxTokens).toBeDefined();
+		expect(103_591 + (maxTokens as number)).toBeLessThan(110_000);
+	});
+
+	it("scales with the prompt rather than staying flat", () => {
+		const small = resolveGatewayRequestMaxTokens({
+			requestedMaxTokens: 200_000,
+			model: { contextWindow: 200_000, maxOutputTokens: undefined },
+			estimatedInputTokens: 1_000,
+		});
+		const large = resolveGatewayRequestMaxTokens({
+			requestedMaxTokens: 200_000,
+			model: { contextWindow: 200_000, maxOutputTokens: undefined },
+			estimatedInputTokens: 100_000,
+		});
+
+		expect(200_000 - 1_000 - (small as number)).toBeLessThan(
+			200_000 - 100_000 - (large as number),
+		);
+	});
+
+	// A short prompt's 8% is a handful of tokens; the fixed costs it also has to
+	// cover are not proportional to anything.
+	it("never drops below the flat floor", () => {
+		const maxTokens = resolveGatewayRequestMaxTokens({
+			requestedMaxTokens: 8_000,
+			model: { contextWindow: 8_192, maxOutputTokens: undefined },
+			estimatedInputTokens: 100,
+		});
+
+		expect(maxTokens).toBeLessThanOrEqual(8_192 - 100 - 1_024);
+	});
+
+	it("still lets an explicit reserve win", () => {
+		const maxTokens = resolveGatewayRequestMaxTokens({
+			requestedMaxTokens: 32_000,
+			model,
+			estimatedInputTokens: 95_115,
+			outputReserveTokens: 0,
+		});
+
+		expect(maxTokens).toBe(110_000 - 95_115);
+	});
+
+	it("does not touch a request the cap already bounds", () => {
+		expect(
+			resolveGatewayRequestMaxTokens({
+				requestedMaxTokens: 4_000,
+				model,
+				estimatedInputTokens: 1_000,
+			}),
+		).toBe(4_000);
 	});
 });

@@ -11,6 +11,7 @@ import {
 	zodToJsonSchema,
 } from "@cline/shared";
 import { z } from "zod";
+import { agentEndpointKey } from "./agent-slot-gate";
 import type { ConfiguredAgentConfig } from "./configured-agent-config";
 import {
 	createDelegatedAgent,
@@ -38,9 +39,62 @@ export interface ConfiguredAgentToolDescriptor {
 	config: ConfiguredAgentConfig;
 }
 
+/**
+ * The connection a provider other than the session's runs on.
+ *
+ * Supplied by the host because only the host knows where its provider store
+ * lives: the CLI's follows `--config`, and the extension's follows its own data
+ * directory, so core reaching for a default path would read the wrong file in
+ * one of them and silently call the wrong server with the wrong key.
+ */
+export interface AgentProviderConnection {
+	apiKey?: string;
+	baseUrl?: string;
+	headers?: Record<string, string>;
+	providerConfig?: unknown;
+	knownModels?: DelegatedAgentRuntimeConfig["knownModels"];
+}
+
+/**
+ * A saved API configuration profile, resolved.
+ *
+ * Carries the provider and the model as well as the connection, because that is
+ * what a profile is: the user picked a provider, a model and the settings around
+ * them and gave the three of them a name. An agent naming a profile is therefore
+ * saying more than an agent naming a provider, and gets the model with it.
+ */
+export interface AgentProfileConnection extends AgentProviderConnection {
+	providerId: string;
+	modelId?: string;
+}
+
 export interface ConfiguredAgentToolConfig {
 	configProvider: DelegatedAgentConfigProvider;
 	agents: ConfiguredAgentConfig[];
+	/**
+	 * Resolves a second provider's own connection, for an agent whose
+	 * frontmatter names one.
+	 *
+	 * Without it an agent on another provider is refused rather than run: it
+	 * used to inherit the lead's base URL, key and context window along with the
+	 * new provider id, which is a request to the wrong server that fails as an
+	 * auth error or, worse, succeeds against a model nobody chose.
+	 */
+	resolveProviderConnection?: (
+		providerId: string,
+	) => AgentProviderConnection | undefined;
+	/**
+	 * Resolves a saved API configuration profile by name, for an agent whose
+	 * frontmatter names one.
+	 *
+	 * Host-supplied for the same reason as the provider resolver: only the host
+	 * knows where its profiles live. A host with no profiles at all supplies
+	 * nothing, and an agent naming one is refused rather than run on the
+	 * session's connection under a name the user chose for something else.
+	 */
+	resolveProfileConnection?: (
+		name: string,
+	) => AgentProfileConnection | undefined;
 	createSubAgentTools?: (
 		agent: ConfiguredAgentConfig,
 		input: ConfiguredAgentInput,
@@ -137,15 +191,145 @@ export function buildConfiguredAgentToolDescriptors(
 	return descriptors;
 }
 
-function buildAgentRuntimeConfig(
+/**
+ * The connection one configured agent runs on.
+ *
+ * Two cases, and only the first used to work. An agent that names a *model*
+ * inherits the session's connection and swaps the model — including inside
+ * `providerConfig`, which carries its own copy that the gateway reads, and
+ * which left the request naming one model at the top level and another
+ * underneath.
+ *
+ * An agent that names a *provider* needs that provider's own credentials, base
+ * URL, catalog and context window. Inheriting the session's meant a request to
+ * the wrong server with the wrong key, which is what "we have multiple
+ * providers that I would like to create agents to handle specific tasks" ran
+ * into. The host's proxy/CA-aware `fetch` is carried across from the session's
+ * config either way: it belongs to the process, not to the provider.
+ */
+export function buildAgentRuntimeConfig(
 	base: DelegatedAgentRuntimeConfig,
 	agent: ConfiguredAgentConfig,
+	resolveProviderConnection?: (
+		providerId: string,
+	) => AgentProviderConnection | undefined,
+	resolveProfileConnection?: (
+		name: string,
+	) => AgentProfileConnection | undefined,
 ): DelegatedAgentRuntimeConfig {
-	return {
+	// A named profile answers provider, model and connection at once. Resolved
+	// first so the two explicit keys can still override it: `profile` plus
+	// `modelId` is "that configuration, this model", which is the reason to
+	// write both and the only reading under which neither is redundant.
+	const profile = agent.profile
+		? resolveProfile(agent, resolveProfileConnection)
+		: undefined;
+	const providerId = agent.providerId ?? profile?.providerId ?? base.providerId;
+	const modelId = agent.modelId ?? profile?.modelId ?? base.modelId;
+	const shared = {
 		...base,
-		providerId: agent.providerId ?? base.providerId,
-		modelId: agent.modelId ?? base.modelId,
+		providerId,
+		modelId,
 		maxIterations: agent.maxIterations ?? base.maxIterations,
+	};
+
+	// A profile's own connection wins over the session's even when the two name
+	// the same provider: its point is the settings it carries -- the context
+	// window above all -- and inheriting the session's would discard exactly what
+	// the user named it for.
+	if (profile && providerId === profile.providerId) {
+		return {
+			...shared,
+			apiKey: profile.apiKey,
+			baseUrl: profile.baseUrl,
+			headers: profile.headers,
+			knownModels: profile.knownModels,
+			providerConfig: withSessionFetch(
+				withProviderConfigModelId(profile.providerConfig, modelId),
+				base.providerConfig,
+			),
+		};
+	}
+
+	if (providerId === base.providerId) {
+		return {
+			...shared,
+			providerConfig: withProviderConfigModelId(base.providerConfig, modelId),
+		};
+	}
+
+	const resolved = resolveProviderConnection?.(providerId);
+	if (!resolved) {
+		throw new Error(
+			`Subagent "${agent.name}" is configured for provider "${providerId}", which this host cannot resolve credentials for. ` +
+				"Configure that provider, or remove the providerId from the agent so it runs on the session's.",
+		);
+	}
+	return {
+		...shared,
+		apiKey: resolved.apiKey,
+		baseUrl: resolved.baseUrl,
+		headers: resolved.headers,
+		knownModels: resolved.knownModels,
+		providerConfig: withSessionFetch(
+			withProviderConfigModelId(resolved.providerConfig, modelId),
+			base.providerConfig,
+		),
+	};
+}
+
+/**
+ * The profile an agent named, or an error naming both.
+ *
+ * Refused rather than quietly ignored: an agent pointed at a profile that no
+ * longer exists would otherwise run on the session's model, which is the same
+ * silent-wrong-model failure that made the provider case worth fixing.
+ */
+function resolveProfile(
+	agent: ConfiguredAgentConfig,
+	resolveProfileConnection?: (
+		name: string,
+	) => AgentProfileConnection | undefined,
+): AgentProfileConnection {
+	const resolved = agent.profile
+		? resolveProfileConnection?.(agent.profile)
+		: undefined;
+	if (!resolved) {
+		throw new Error(
+			`Subagent "${agent.name}" names the API configuration profile "${agent.profile}", which this host cannot resolve. ` +
+				"Save a profile under that name, or remove the profile key from the agent so it runs on the session's configuration.",
+		);
+	}
+	return resolved;
+}
+
+/**
+ * The gateway reads the model from `providerConfig` as well as from the top
+ * level, so an agent that swaps only one of them runs the other's model.
+ */
+function withProviderConfigModelId(
+	providerConfig: unknown,
+	modelId: string,
+): unknown {
+	if (!providerConfig || typeof providerConfig !== "object") {
+		return providerConfig;
+	}
+	return { ...(providerConfig as Record<string, unknown>), modelId };
+}
+
+/**
+ * A second provider's stored settings carry no `fetch`, and dropping the
+ * session's is how a corporate proxy or a self-signed CA stops working for
+ * subagents only.
+ */
+function withSessionFetch(providerConfig: unknown, base: unknown): unknown {
+	const sessionFetch = (base as { fetch?: unknown } | undefined)?.fetch;
+	if (!sessionFetch || !providerConfig || typeof providerConfig !== "object") {
+		return providerConfig;
+	}
+	return {
+		...(providerConfig as Record<string, unknown>),
+		fetch: sessionFetch,
 	};
 }
 
@@ -160,9 +344,14 @@ export function createConfiguredAgentTools(
 				inputSchema: zodToJsonSchema(ConfiguredAgentInputSchema),
 				execute: async (input, context) => {
 					const baseRuntimeConfig = options.configProvider.getRuntimeConfig();
-					const configProvider = createDelegatedAgentConfigProvider(
-						buildAgentRuntimeConfig(baseRuntimeConfig, config),
+					const runtimeConfig = buildAgentRuntimeConfig(
+						baseRuntimeConfig,
+						config,
+						options.resolveProviderConnection,
+						options.resolveProfileConnection,
 					);
+					const configProvider =
+						createDelegatedAgentConfigProvider(runtimeConfig);
 					const tools = options.createSubAgentTools
 						? await options.createSubAgentTools(config, input, context)
 						: [];
@@ -201,7 +390,20 @@ export function createConfiguredAgentTools(
 					}
 
 					try {
-						const result: AgentResult = await subAgent.run(input.prompt);
+						// Held to what the endpoint *this* agent resolved to will
+						// serve, which is not necessarily the session's: an agent
+						// naming a provider or a profile has its own. Two agents on
+						// different servers therefore run at once, and two on the same
+						// one queue. Gated around the run alone, like `spawn_agent` --
+						// building the toolset and telling the observers costs the
+						// server nothing, and holding a slot across them would leave
+						// the endpoint idle while a slot was booked.
+						const gate = baseRuntimeConfig.slotGates?.for(
+							agentEndpointKey(runtimeConfig),
+						);
+						const result: AgentResult = gate
+							? await gate.run(() => subAgent.run(input.prompt))
+							: await subAgent.run(input.prompt);
 						const output: SpawnAgentOutput = {
 							text: result.text,
 							iterations: result.iterations,

@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createEditorExecutor } from "./editor";
+import { createReadReceipts } from "./read-receipts";
 
 const context = {
 	agentId: "agent-1",
@@ -19,6 +20,16 @@ async function withTempFile(
 	await fs.writeFile(filePath, content, "utf-8");
 	try {
 		await run(filePath, dir);
+	} finally {
+		await fs.rm(dir, { recursive: true, force: true });
+	}
+}
+
+/** For the cases about a file that does not exist yet. */
+async function withTempDir(run: (dir: string) => Promise<void>): Promise<void> {
+	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "agents-editor-"));
+	try {
+		await run(dir);
 	} finally {
 		await fs.rm(dir, { recursive: true, force: true });
 	}
@@ -443,17 +454,17 @@ describe("createEditorExecutor", () => {
 			});
 		});
 
-		it("reports a column edit that changed nothing", async () => {
+		it("fails a column edit that changed nothing", async () => {
 			await withTempFile(MINIFIED, async (filePath, dir) => {
 				const editor = createEditorExecutor();
-				const result = await editor(
-					{ path: filePath, start_line: 2, start_column: 14, new_text: "}" },
-					dir,
-					context,
-				);
 
-				expect(result).toContain("No change");
-				expect(result).not.toContain("Replaced");
+				await expect(
+					editor(
+						{ path: filePath, start_line: 2, start_column: 14, new_text: "}" },
+						dir,
+						context,
+					),
+				).rejects.toThrow("No change");
 			});
 		});
 	});
@@ -491,22 +502,33 @@ describe("createEditorExecutor", () => {
 			});
 		});
 
-		it("says nothing changed instead of reporting an empty diff", async () => {
+		it("fails instead of reporting an empty diff", async () => {
 			// Measured: 24 of 45 successful editor results carried an empty diff
 			// fence. The model read the absence as "already correct", re-sent the
 			// edit, then sent six identical inserts at the same line.
+			//
+			// Saying so in the result text was not enough on its own — a later
+			// session sent one identical call twelve times, because the envelope
+			// around that text still reported success. It has to fail.
 			await withTempFile("one\ntwo\nthree", async (filePath, dir) => {
 				const editor = createEditorExecutor();
-				const result = await editor(
+				const failure = editor(
 					{ path: filePath, new_text: "two", start_line: 2 },
 					dir,
 					context,
 				);
 
-				expect(result).toContain("No change");
-				expect(result).toContain("line 2 already reads exactly this way");
-				expect(result).toContain("do not retry");
-				expect(result).not.toContain("Replaced");
+				await expect(failure).rejects.toThrow("No change");
+				await expect(failure).rejects.toThrow(
+					"line 2 already reads exactly this way",
+				);
+				await expect(failure).rejects.toThrow("character-for-character");
+				// The message tells the model to work out how its text differs from
+				// what is there, so it has to show what is there. It used to say
+				// "differs from the text quoted back to you" and quote nothing;
+				// measured live, the model went looking for the quote and fell back
+				// to re-reading the file.
+				await expect(failure).rejects.toThrow("2 | two");
 				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
 					"one\ntwo\nthree",
 				);
@@ -532,17 +554,376 @@ describe("createEditorExecutor", () => {
 			});
 		});
 
-		it("says nothing changed when old_text and new_text are the same", async () => {
-			await withTempFile("alpha beta", async (filePath, dir) => {
+		it("refuses a replacement that duplicates the range instead of replacing it", async () => {
+			// Measured on a live session repairing a dense single-file game: the
+			// model asked to replace a fifteen-line range with a block that opened
+			// with those same fifteen lines and then restated the rest of the
+			// class. Nothing was removed, ~140 lines were added, and the class
+			// ended up in the file three times. The old result said
+			// `success: true` and "15 of the 15 line(s) were already identical",
+			// which reads as reassurance while the file is being corrupted.
+			await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
 				const editor = createEditorExecutor();
-				const result = await editor(
-					{ path: filePath, old_text: "beta", new_text: "beta" },
+				const failure = editor(
+					{
+						path: filePath,
+						new_text: "b\nc\nEXTRA1\nEXTRA2\nEXTRA3",
+						start_line: 2,
+						end_line: 3,
+					},
 					dir,
 					context,
 				);
 
-				expect(result).toContain("No change");
-				expect(result).not.toContain("Edited");
+				await expect(failure).rejects.toThrow("Duplicated instead of replaced");
+				await expect(failure).rejects.toThrow("appends a second copy");
+				// The file must be left exactly as it was.
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+					"a\nb\nc\nd",
+				);
+			});
+		});
+
+		it("names the gutter when it numbers past end_line", async () => {
+			// The two mistakes arrive together: a model in "gutter mode" pastes the
+			// read output back, and the gutter it pastes runs further than the range
+			// the call names. Stripped, that is a duplication — but the refusal used
+			// to describe the symptom only, and the model has the answer in its own
+			// hand: the last number it wrote is the `end_line` it meant.
+			await withTempFile("a\nb\nc\nd\ne\nf\ng\nh", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const failure = editor(
+					{
+						path: filePath,
+						start_line: 2,
+						end_line: 3,
+						new_text:
+							"  2 | b\n  3 | c\n  4 | d\n  5 | e\n  6 | f\n  7 | g\n  8 | h",
+					},
+					dir,
+					context,
+				);
+
+				await expect(failure).rejects.toThrow("Duplicated instead of replaced");
+				await expect(failure).rejects.toThrow(
+					"gutter on your `new_text` covers lines 2-8",
+				);
+				await expect(failure).rejects.toThrow("send `end_line: 8`");
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+					"a\nb\nc\nd\ne\nf\ng\nh",
+				);
+			});
+		});
+
+		it("does not blame the gutter when the range covers it", async () => {
+			// A gutter that stops inside `end_line` is not what went wrong, and
+			// pointing at it would send the model to change the one thing that was
+			// already right.
+			await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
+				const message = await createEditorExecutor()(
+					{
+						path: filePath,
+						new_text: "b\nc\nEXTRA1\nEXTRA2\nEXTRA3",
+						start_line: 2,
+						end_line: 3,
+					},
+					dir,
+					context,
+				).then(
+					() => "resolved",
+					(error: unknown) => (error as Error).message,
+				);
+
+				expect(message).toContain("Duplicated instead of replaced");
+				expect(message).not.toContain("gutter on your");
+			});
+		});
+
+		it("still allows growing a range when it actually replaces something", async () => {
+			// The guard keys on removing nothing. Wrapping or expanding a range
+			// that genuinely changes still has to work, or every refactor breaks.
+			await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const result = await editor(
+					{
+						path: filePath,
+						new_text: "B1\nB2\nB3\nB4\nB5",
+						start_line: 2,
+						end_line: 3,
+					},
+					dir,
+					context,
+				);
+
+				expect(result).toContain("Replaced lines 2-3");
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+					"a\nB1\nB2\nB3\nB4\nB5\nd",
+				);
+			});
+		});
+
+		it("says how far the lines below an edit have moved", async () => {
+			// Eight consecutive edits in the measured session addressed lines
+			// 84-98 of a file that had meanwhile grown from ~120 lines to 440, so
+			// the range named unrelated code by the end.
+			await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const result = await editor(
+					{ path: filePath, new_text: "B1\nB2\nB3", start_line: 2 },
+					dir,
+					context,
+				);
+
+				expect(result).toContain("The file is now 6 lines (was 4)");
+				expect(result).toContain("Every line after 2 has moved by +2");
+			});
+		});
+
+		// Stating the fact was not enough. Measured: a model read this note,
+		// composed a large replacement anyway, and had it refused for editing
+		// from a retired read — minutes of generation thrown away because the
+		// refusal comes only after the whole payload has been written.
+		// Mined from real sessions: one model pasted the `read_files` gutter into
+		// `old_text` ten times in a row against an error message that explains
+		// the mistake precisely, burning a full generation each time. Naming it
+		// was not enough, so the editor recovers.
+		// Measured: start_line 30 / end_line 134 with 101 replacement lines in a
+		// 138-line file left 278 problems behind, and every existing guard passed
+		// it — read-before-edit was satisfied, and "adds more lines than the range
+		// holds" passes because 101 < 105.
+		it("refuses an unanchored replacement that is really a whole-file rewrite", async () => {
+			const file = Array.from({ length: 138 }, (_, i) => `line ${i + 1}`).join(
+				"\n",
+			);
+			await withTempFile(file, async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				await expect(
+					editor(
+						{
+							path: filePath,
+							start_line: 30,
+							end_line: 134,
+							new_text: Array.from({ length: 101 }, (_, i) => `new ${i}`).join(
+								"\n",
+							),
+						},
+						dir,
+						context,
+					),
+				).rejects.toThrow("whole-file rewrite");
+			});
+		});
+
+		// The refusal above names `start_line: 1, end_line: <count>` as the way to
+		// rewrite a file on purpose, and the create form's refusal on an existing
+		// file names the same call. Measured: both routes then hit this guard and
+		// the size guard, so there was no reachable way to rewrite a file at all —
+		// the model bounced between the three for five calls and ~52,000 characters
+		// of generated text before giving up.
+		it("allows a rewrite stated exactly as lines 1 through the line count", async () => {
+			const file = Array.from({ length: 138 }, (_, i) => `line ${i + 1}`).join(
+				"\n",
+			);
+			await withTempFile(file, async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const result = await editor(
+					{
+						path: filePath,
+						start_line: 1,
+						end_line: 138,
+						new_text: "rewritten",
+					},
+					dir,
+					context,
+				);
+				expect(result).not.toContain("No replacement performed");
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("rewritten");
+			});
+		});
+
+		// end_line past EOF already means "to the end of the file", so this is the
+		// same rewrite written by a model that does not know the line count.
+		it("treats lines 1 to past-EOF as the same stated rewrite", async () => {
+			const file = Array.from({ length: 138 }, (_, i) => `line ${i + 1}`).join(
+				"\n",
+			);
+			await withTempFile(file, async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const result = await editor(
+					{
+						path: filePath,
+						start_line: 1,
+						end_line: 9999,
+						new_text: "rewritten",
+					},
+					dir,
+					context,
+				);
+				expect(result).not.toContain("No replacement performed");
+			});
+		});
+
+		// The exemption is for a rewrite that says so, not for one that starts at
+		// line 1 and stops short — that is still a partial edit the model may have
+		// mismeasured.
+		it("still refuses a large unanchored range that starts at line 1 but stops short", async () => {
+			const file = Array.from({ length: 138 }, (_, i) => `line ${i + 1}`).join(
+				"\n",
+			);
+			await withTempFile(file, async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				await expect(
+					editor(
+						{
+							path: filePath,
+							start_line: 1,
+							end_line: 100,
+							new_text: "rewritten",
+						},
+						dir,
+						context,
+					),
+				).rejects.toThrow("whole-file rewrite");
+			});
+		});
+
+		// Anchored edits are self-verifying, so size is not the objection.
+		it("allows a large range when old_text anchors it", async () => {
+			const file = Array.from({ length: 138 }, (_, i) => `line ${i + 1}`).join(
+				"\n",
+			);
+			await withTempFile(file, async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const result = await editor(
+					{ path: filePath, old_text: "line 30", new_text: "changed" },
+					dir,
+					context,
+				);
+				expect(result).not.toContain("No replacement performed");
+			});
+		});
+
+		// Small files must stay editable: replacing most of something tiny is a
+		// normal edit, not a rewrite in disguise.
+		it("allows replacing most of a small file", async () => {
+			await withTempFile("a\nb\nc\nd\ne", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const result = await editor(
+					{ path: filePath, start_line: 1, end_line: 5, new_text: "x\ny" },
+					dir,
+					context,
+				);
+				expect(result).not.toContain("No replacement performed");
+			});
+		});
+
+		it("recovers when old_text carries the read gutter", async () => {
+			await withTempFile("alpha\nbeta\ngamma", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const result = await editor(
+					{ path: filePath, old_text: "  2 | beta", new_text: "BETA" },
+					dir,
+					context,
+				);
+
+				expect(result).not.toContain("No replacement performed");
+				const { readFile } = await import("node:fs/promises");
+				expect(await readFile(filePath, "utf8")).toBe("alpha\nBETA\ngamma");
+			});
+		});
+
+		// A model in "gutter mode" numbers both sides; writing the gutter into
+		// the file is the worse of the two failures.
+		it("strips the gutter from new_text too", async () => {
+			await withTempFile("alpha\nbeta\ngamma", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				await editor(
+					{ path: filePath, old_text: "  2 | beta", new_text: "  2 | BETA" },
+					dir,
+					context,
+				);
+
+				const { readFile } = await import("node:fs/promises");
+				expect(await readFile(filePath, "utf8")).toBe("alpha\nBETA\ngamma");
+			});
+		});
+
+		// The file decides, not the shape of the input: text that genuinely
+		// looks like a gutter and does not match must still fail.
+		it("still refuses when stripping does not produce a match", async () => {
+			await withTempFile("alpha\nbeta", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				await expect(
+					editor(
+						{ path: filePath, old_text: "  9 | nowhere", new_text: "x" },
+						dir,
+						context,
+					),
+				).rejects.toThrow("No replacement performed");
+			});
+		});
+
+		// A single line starting with a number and a pipe is ordinary source.
+		it("leaves real content that looks like a gutter alone", async () => {
+			await withTempFile("a\n12 | pipe row\nb", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				await editor(
+					{
+						path: filePath,
+						old_text: "12 | pipe row",
+						new_text: "12 | changed",
+					},
+					dir,
+					context,
+				);
+
+				const { readFile } = await import("node:fs/promises");
+				expect(await readFile(filePath, "utf8")).toBe("a\n12 | changed\nb");
+			});
+		});
+
+		it("tells the model to read again before its next edit, and why", async () => {
+			await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const result = await editor(
+					{ path: filePath, new_text: "B1\nB2\nB3", start_line: 2 },
+					dir,
+					context,
+				);
+
+				expect(result).toContain("no longer counts as having read it");
+				expect(result).toContain("read_files");
+				// The cost of skipping it is the part that changes behaviour.
+				expect(result).toContain(
+					"after you have written the replacement out in full",
+				);
+			});
+		});
+
+		it("says nothing about line numbers when the count did not change", async () => {
+			await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const result = await editor(
+					{ path: filePath, new_text: "B", start_line: 2 },
+					dir,
+					context,
+				);
+
+				expect(result).not.toContain("The file is now");
+			});
+		});
+
+		it("fails when old_text and new_text are the same", async () => {
+			await withTempFile("alpha beta", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+
+				await expect(
+					editor(
+						{ path: filePath, old_text: "beta", new_text: "beta" },
+						dir,
+						context,
+					),
+				).rejects.toThrow("No change");
 			});
 		});
 
@@ -738,41 +1119,631 @@ describe("createEditorExecutor", () => {
 			});
 		});
 
-		it("names the whole-file replace route when new_text arrives without old_text", async () => {
-			// A model that has failed to patch a file incrementally sends the
-			// whole file back with no `old_text`. Saying only that `old_text` is
-			// missing leaves it with no way to do what it asked for.
-			await withTempFile("one\ntwo\nthree", async (filePath, dir) => {
+		// The failure that made the editor look unusable: a whole-file rewrite
+		// whose `new_text` ended in a newline -- the normal way to terminate a
+		// block of text -- appended a blank line, so the file grew by one on
+		// every attempt and the model's `end_line`, taken from its own read, was
+		// permanently one short. Six rewrites in a row were refused this way:
+		// 136 of 137, 125 of 126, 186 of 187, 190 of 191.
+		it("does not grow a line when new_text ends with a newline", async () => {
+			await withTempFile("one\ntwo\nthree\n", async (filePath, dir) => {
 				const editor = createEditorExecutor();
 
-				await expect(
-					editor({ path: filePath, new_text: "rewritten" }, dir, context),
-				).rejects.toThrow(/`start_line: 1` and `end_line: 3`/);
-				// The message must name `path` too. Measured: a model rebuilt
-				// the call from an earlier version of this sentence, which
-				// named only the line numbers, and dropped `path` three times.
-				await expect(
-					editor({ path: filePath, new_text: "rewritten" }, dir, context),
-				).rejects.toThrow(new RegExp(`path: "${filePath.replace(/\\/g, "\\\\")}"`));
+				await editor(
+					{ path: filePath, start_line: 1, end_line: 3, new_text: "a\nb\nc\n" },
+					dir,
+					context,
+				);
+
+				const after = await fs.readFile(filePath, "utf8");
+				expect(after).toBe("a\nb\nc\n");
+			});
+		});
+
+		it("inserts one line for text that ends with a newline", async () => {
+			await withTempFile("one\ntwo\n", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+
+				await editor(
+					{ path: filePath, insert_line: 2, new_text: "middle\n" },
+					dir,
+					context,
+				);
+
+				expect(await fs.readFile(filePath, "utf8")).toBe("one\nmiddle\ntwo\n");
+			});
+		});
+
+		it("repeated whole-file rewrites keep the same line count", async () => {
+			await withTempFile("one\ntwo\nthree\n", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+
+				for (const text of ["a\nb\nc\n", "d\ne\nf\n", "g\nh\ni\n"]) {
+					await editor(
+						{ path: filePath, start_line: 1, end_line: 3, new_text: text },
+						dir,
+						context,
+					);
+				}
+
+				const after = await fs.readFile(filePath, "utf8");
+				expect(after.split("\n").filter((l) => l !== "").length).toBe(3);
+			});
+		});
+
+		// A whole-file write over a file that exists used to be refused, and
+		// the refusal was routed around: measured on one transaction, the model
+		// deleted the file with `run_commands` twelve times and recreated it
+		// from `new_text` alone, because a file that does not exist is one this
+		// call will write. The twelfth delete landed twelve seconds before the
+		// clock ran out and the run ended with no file at all.
+		it("replaces a file it has read, without needing it deleted first", async () => {
+			await withTempFile("one\ntwo\nthree\n", async (filePath, dir) => {
+				const receipts = createReadReceipts();
+				const editor = createEditorExecutor({ receipts });
+				receipts.noteRead(filePath, 1, 3);
+
+				const result = await editor(
+					{ path: filePath, new_text: "rewritten\n" },
+					dir,
+					context,
+				);
+
+				expect(result).toContain("Replaced lines 1-3");
 				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
-					"one\ntwo\nthree",
+					"rewritten\n",
 				);
 			});
 		});
 
-		it("points at the line-number gutter when that is why nothing matched", async () => {
+		// The condition the deletion route silently discarded. Reading is what
+		// tells the model what it is about to overwrite.
+		it("refuses to replace a file it has not read", async () => {
+			await withTempFile("one\ntwo\nthree\n", async (filePath, dir) => {
+				const receipts = createReadReceipts();
+				const editor = createEditorExecutor({ receipts });
+
+				await expect(
+					editor({ path: filePath, new_text: "rewritten" }, dir, context),
+				).rejects.toThrow("Read before replacing");
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+					"one\ntwo\nthree\n",
+				);
+			});
+		});
+
+		// A file that ends with a newline is the common case, and this count
+		// used to be one more than `read_files` reports for the same file — the
+		// pair of numbers a model was measured alternating between, looking for
+		// the one that meant "the whole file".
+		it("counts the file the way read_files counts it", async () => {
+			await withTempFile("one\ntwo\nthree\n", async (filePath, dir) => {
+				const receipts = createReadReceipts();
+				const editor = createEditorExecutor({ receipts });
+
+				await expect(
+					editor({ path: filePath, new_text: "rewritten" }, dir, context),
+				).rejects.toThrow(/every one of the 3 line\(s\)/);
+			});
+		});
+
+		// `requireRead` tells the model to read a range "not the whole file",
+		// which is the wrong instruction for a call that replaces every line:
+		// following it would satisfy no receipt.
+		it("asks for the whole file rather than a range", async () => {
+			await withTempFile("one\ntwo\nthree\n", async (filePath, dir) => {
+				const receipts = createReadReceipts();
+				const editor = createEditorExecutor({ receipts });
+
+				await expect(
+					editor({ path: filePath, new_text: "rewritten" }, dir, context),
+				).rejects.toThrow(
+					/all of it, since all of it is what you are replacing/,
+				);
+				await expect(
+					editor({ path: filePath, new_text: "rewritten" }, dir, context),
+				).rejects.toThrow(
+					new RegExp(`path: "${filePath.replace(/\\/g, "\\\\")}"`),
+				);
+			});
+		});
+
+		// The guard that made refusing this write look necessary: a rewrite that
+		// restates the file and then continues appends a second copy. It applies
+		// to this route exactly as it does to `start_line: 1`.
+		it("still catches a rewrite that duplicates instead of replacing", async () => {
+			await withTempFile("one\ntwo\nthree\n", async (filePath, dir) => {
+				const receipts = createReadReceipts();
+				const editor = createEditorExecutor({ receipts });
+				receipts.noteRead(filePath, 1, 3);
+
+				await expect(
+					editor(
+						{
+							path: filePath,
+							new_text: "one\ntwo\nthree\nfour\nfive\nsix\nseven\n",
+						},
+						dir,
+						context,
+					),
+				).rejects.toThrow("Duplicated instead of replaced");
+			});
+		});
+
+		it("recovers from the line-number gutter rather than pointing at it", async () => {
 			// Measured: the model pasted `fill();}});}\n93 | ` straight out of a
-			// read_files result, and "text not found" told it nothing.
+			// read_files result, and "text not found" told it nothing. Naming the
+			// gutter came next — and mining the sessions showed a model repeating
+			// the mistake ten times against that explanation, so the edit now
+			// succeeds instead. The message still exists for the case where
+			// stripping does not produce a match.
 			await withTempFile("real content", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+
+				const result = await editor(
+					{ path: filePath, old_text: "  92 | real content", new_text: "x" },
+					dir,
+					context,
+				);
+
+				expect(result).not.toContain("No replacement performed");
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("x");
+			});
+		});
+	});
+});
+
+describe("requiring a read before an edit", () => {
+	// Measured on a live session repairing a dense single-file game: eight
+	// consecutive `editor` calls and not one `read_files` call. The model was
+	// working from line numbers in a context summary written several turns
+	// earlier; its own edits then grew the file from ~120 lines to 440, so the
+	// range it kept naming stopped pointing at the code it meant. Diagnostics
+	// went 2 → 20. Every one of those edits was refusable at the first.
+	it("refuses a line-addressed edit when the file was never read", async () => {
+		await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+
+			const failure = editor(
+				{ path: filePath, new_text: "B", start_line: 2 },
+				dir,
+				context,
+			);
+
+			await expect(failure).rejects.toThrow("Read before editing");
+			await expect(failure).rejects.toThrow(
+				"has not been read in this session",
+			);
+			await expect(failure).rejects.toThrow("read_files");
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("a\nb\nc\nd");
+		});
+	});
+
+	it("allows the edit once the range has been read", async () => {
+		await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 4);
+
+			const result = await editor(
+				{ path: filePath, new_text: "B", start_line: 2 },
+				dir,
+				context,
+			);
+
+			expect(result).toContain("Replaced line 2");
+		});
+	});
+
+	// The model supplied every line of a file it just created, so requiring it
+	// to read that file back is a turn spent learning what it wrote. Measured
+	// over one atomic run: 79 edits refused as unread, 68 of them on files
+	// created in the same session.
+	it("counts a file it just created as read", async () => {
+		await withTempDir(async (dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			const filePath = path.join(dir, "scratch.js");
+
+			await editor({ path: filePath, new_text: "a\nb\nc\nd\n" }, dir, context);
+			const result = await editor(
+				{ path: filePath, new_text: "B", start_line: 2 },
+				dir,
+				context,
+			);
+
+			expect(result).toContain("Replaced line 2");
+		});
+	});
+
+	it("still refuses an edit to a file this session only wrote over", async () => {
+		// The receipt covers what the model authored, not every file it has
+		// touched: an edit to a file that existed first is still sight-unseen.
+		await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+
+			const failure = editor(
+				{ path: filePath, new_text: "B", start_line: 2 },
+				dir,
+				context,
+			);
+
+			await expect(failure).rejects.toThrow(
+				"has not been read in this session",
+			);
+		});
+	});
+
+	it("accepts an edit whose range runs past the end of the file", async () => {
+		// Measured live, three identical cycles before the run was stopped: the
+		// file was 198 lines, the model aimed at lines 101-200, `read_files`
+		// 101-200 returned what existed and recorded a receipt for 101-198, and
+		// the guard demanded coverage of 101-200 — then told the model to go and
+		// read 101-200, which it did, correctly, every time. Two lines that do
+		// not exist cannot be read, so requiring them is a demand with no
+		// satisfying answer, and the instruction to satisfy it is the loop.
+		await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			// What `read_files` records for a request that overshoots: the file.
+			receipts.noteRead(filePath, 3, 4);
+
+			const result = await editor(
+				{ path: filePath, new_text: "C\nD", start_line: 3, end_line: 99 },
+				dir,
+				context,
+			);
+
+			expect(result).toContain("Replaced lines 3-4");
+		});
+	});
+
+	it("still refuses when the read stops short inside the file", async () => {
+		// The clamp is to the end of the file, not to whatever was read. A range
+		// that ends inside the file and was only partly read is the case the
+		// guard exists for, and it has to keep failing.
+		await withTempFile("a\nb\nc\nd\ne\nf", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 3);
+
+			const failure = editor(
+				{ path: filePath, new_text: "X", start_line: 2, end_line: 5 },
+				dir,
+				context,
+			);
+
+			await expect(failure).rejects.toThrow("Read before editing");
+		});
+	});
+
+	it("refuses an edit outside the range that was read", async () => {
+		await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 2);
+
+			const failure = editor(
+				{ path: filePath, new_text: "D", start_line: 4 },
+				dir,
+				context,
+			);
+
+			await expect(failure).rejects.toThrow("Read before editing");
+		});
+	});
+
+	it("requires a fresh read after an edit that changed the file's length", async () => {
+		// The second edit is aimed at a line number from before the first one
+		// moved it. This is the exact shape of the measured failure.
+		await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 4);
+
+			await editor(
+				{ path: filePath, new_text: "B1\nB2\nB3", start_line: 2 },
+				dir,
+				context,
+			);
+
+			const failure = editor(
+				{ path: filePath, new_text: "X", start_line: 3 },
+				dir,
+				context,
+			);
+
+			await expect(failure).rejects.toThrow("Read before editing");
+			await expect(failure).rejects.toThrow(
+				"an earlier edit changed the file's length",
+			);
+		});
+	});
+
+	it("keeps the receipt when an edit left the line count alone", async () => {
+		await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 4);
+
+			await editor(
+				{ path: filePath, new_text: "B", start_line: 2 },
+				dir,
+				context,
+			);
+			const result = await editor(
+				{ path: filePath, new_text: "C", start_line: 3 },
+				dir,
+				context,
+			);
+
+			expect(result).toContain("Replaced line 3");
+		});
+	});
+
+	it("refuses a text-matched edit on a file that was never read", async () => {
+		await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+
+			const failure = editor(
+				{ path: filePath, old_text: "b", new_text: "B" },
+				dir,
+				context,
+			);
+
+			await expect(failure).rejects.toThrow("Read before editing");
+		});
+	});
+
+	it("still creates a new file without a read", async () => {
+		// There is nothing to have read, and refusing here would make the guard
+		// break file creation.
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "agents-editor-"));
+		try {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			const filePath = path.join(dir, "fresh.txt");
+
+			await editor({ path: filePath, new_text: "hello" }, dir, context);
+
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("hello");
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("is off when no registry is supplied", async () => {
+		// A standalone executor has no reader to pair with; failing every edit
+		// would be the wrong default for an embedder wiring tools up piecemeal.
+		await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
+			const editor = createEditorExecutor();
+
+			const result = await editor(
+				{ path: filePath, new_text: "B", start_line: 2 },
+				dir,
+				context,
+			);
+
+			expect(result).toContain("Replaced line 2");
+		});
+	});
+});
+
+describe("a range edit carrying the read gutter", () => {
+	it("does not write the gutter into the file", async () => {
+		// Measured live: this exact call was accepted verbatim and the file's
+		// last two lines became the read output that described them.
+		//
+		// Stripped, the edit asks for what the file already holds, so it is
+		// refused as a no-op — which is the honest answer, and the one the model
+		// can act on. Silently writing the gutter was neither.
+		await withTempFile(
+			"<body>\n  <p>hi</p>\n</body>\n</html>",
+			async (filePath, dir) => {
 				const editor = createEditorExecutor();
 
 				await expect(
 					editor(
-						{ path: filePath, old_text: "  92 | real content", new_text: "x" },
+						{
+							path: filePath,
+							start_line: 3,
+							end_line: 4,
+							new_text: "  3 | </body>\n  4 | </html>",
+						},
 						dir,
 						context,
 					),
-				).rejects.toThrow("line-number gutter");
+				).rejects.toThrow("No change");
+
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+					"<body>\n  <p>hi</p>\n</body>\n</html>",
+				);
+			},
+		);
+	});
+
+	it("keeps the source's own indentation", async () => {
+		await withTempFile("a\nb", async (filePath, dir) => {
+			const editor = createEditorExecutor();
+			await editor(
+				{
+					path: filePath,
+					start_line: 1,
+					end_line: 2,
+					new_text: "  1 |     indented\n  2 | plain",
+				},
+				dir,
+				context,
+			);
+
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+				"    indented\nplain",
+			);
+		});
+	});
+
+	it("leaves content alone when the numbers do not match the range", async () => {
+		// Real text that merely looks like a gutter. The numbers are the
+		// evidence: these do not count up from start_line, so nothing is
+		// stripped.
+		await withTempFile("x\ny", async (filePath, dir) => {
+			const editor = createEditorExecutor();
+			await editor(
+				{
+					path: filePath,
+					start_line: 1,
+					end_line: 2,
+					new_text: "  42 | first\n  99 | second",
+				},
+				dir,
+				context,
+			);
+
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+				"  42 | first\n  99 | second",
+			);
+		});
+	});
+
+	it("strips only when every line is numbered in sequence", async () => {
+		await withTempFile("x\ny", async (filePath, dir) => {
+			const editor = createEditorExecutor();
+			await editor(
+				{
+					path: filePath,
+					start_line: 1,
+					end_line: 2,
+					new_text: "  1 | first\nplain second",
+				},
+				dir,
+				context,
+			);
+
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+				"  1 | first\nplain second",
+			);
+		});
+	});
+});
+
+describe("how long the file is", () => {
+	it("agrees with what the read output showed", async () => {
+		// Measured live: `read_files` said "[270 lines, shown in full.]" while
+		// the editor said "the file's 271 lines", and the model spent its turns
+		// alternating between the two looking for the one that meant "all of it".
+		// The extra one is the empty string after the final newline.
+		await withTempFile("a\nb\nc\n", async (filePath, dir) => {
+			const editor = createEditorExecutor();
+
+			await expect(
+				editor(
+					{ path: filePath, start_line: 4, end_line: 4, new_text: "d" },
+					dir,
+					context,
+				),
+			).rejects.toThrow("The file has 3 line(s)");
+		});
+	});
+
+	it("takes the whole file at its last real line", async () => {
+		await withTempFile("a\nb\nc\n", async (filePath, dir) => {
+			const editor = createEditorExecutor();
+
+			await editor(
+				{ path: filePath, start_line: 1, end_line: 3, new_text: "only" },
+				dir,
+				context,
+			);
+
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("only\n");
+		});
+	});
+
+	it("keeps the trailing newline it did not count", async () => {
+		await withTempFile("a\nb\n", async (filePath, dir) => {
+			const editor = createEditorExecutor();
+
+			await editor(
+				{ path: filePath, start_line: 2, end_line: 2, new_text: "B" },
+				dir,
+				context,
+			);
+
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("a\nB\n");
+		});
+	});
+
+	it("leaves a file with no trailing newline without one", async () => {
+		await withTempFile("a\nb", async (filePath, dir) => {
+			const editor = createEditorExecutor();
+
+			await editor(
+				{ path: filePath, start_line: 2, end_line: 2, new_text: "B" },
+				dir,
+				context,
+			);
+
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("a\nB");
+		});
+	});
+
+	describe("the delimiter scan on an edit", () => {
+		// The prompt asks for `check_file` after every edit and the models that
+		// need it most do not call it: 17 edits and 2 checks in one measured
+		// transaction. Attaching the scan to the edit asks nothing of the model.
+		it("names the line to fix when the edit leaves the file unbalanced", async () => {
+			await withTempDir(async (dir) => {
+				const editor = createEditorExecutor();
+				const filePath = path.join(dir, "game.js");
+
+				const result = await editor(
+					{ path: filePath, new_text: "function f(){ if (a) { b(); }}}\n" },
+					dir,
+					context,
+				);
+
+				expect(result).toContain("File created successfully");
+				expect(result).toContain("Delimiter scan");
+				expect(result).toContain("1 more `}` than `{`");
+			});
+		});
+
+		it("says nothing when the edit leaves the file parseable", async () => {
+			await withTempFile(
+				"function f(){ return 1; }\n",
+				async (filePath, dir) => {
+					const editor = createEditorExecutor();
+
+					const result = await editor(
+						{
+							path: filePath,
+							start_line: 1,
+							end_line: 1,
+							new_text: "function f(){ return 2; }",
+						},
+						dir,
+						context,
+					);
+
+					expect(result).not.toContain("Delimiter scan");
+				},
+			);
+		});
+
+		it("says nothing about a language it cannot parse", async () => {
+			await withTempDir(async (dir) => {
+				const editor = createEditorExecutor();
+
+				const result = await editor(
+					{ path: path.join(dir, "notes.md"), new_text: "# heading ) ) )\n" },
+					dir,
+					context,
+				);
+
+				expect(result).not.toContain("Delimiter scan");
 			});
 		});
 	});

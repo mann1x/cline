@@ -133,6 +133,17 @@ export interface EffectiveProviderConfig {
 	 */
 	readonly contextWindow?: number
 	/**
+	 * How many requests this endpoint serves at once (providers.json
+	 * `parallelSessions`).
+	 *
+	 * Not discoverable in general -- a plan's concurrency allowance is not on
+	 * the wire and Ollama does not report `OLLAMA_NUM_PARALLEL` -- so it is
+	 * configured. It bounds how many delegated agents may run together, because
+	 * a server with no free slot queues the request rather than refusing it and
+	 * says nothing while it does.
+	 */
+	readonly parallelSessions?: number
+	/**
 	 * Provider-level reasoning settings (providers.json `reasoning`). Read as
 	 * well as written so a settings UI can show the state it is about to
 	 * change; an absent value means the provider was never asked, which is not
@@ -192,6 +203,7 @@ export interface ProviderConfigPatch {
 	readonly aws?: AwsProviderConfig | null
 	readonly gcp?: GcpProviderConfig | null
 	readonly contextWindow?: number | null
+	readonly parallelSessions?: number | null
 	readonly auth?: {
 		readonly accessToken?: string
 		readonly refreshToken?: string

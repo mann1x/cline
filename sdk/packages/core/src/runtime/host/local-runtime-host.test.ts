@@ -164,6 +164,15 @@ function normalizeStartInput(
 	};
 }
 
+/** The slice of the agent config these tests read back. */
+interface TestAgentConfig {
+	tools?: Array<{
+		name: string;
+		execute: (input: unknown, context: unknown) => Promise<unknown>;
+	}>;
+	completionPolicy?: { completionGuard?: () => string | undefined };
+}
+
 describe("LocalRuntimeHost", () => {
 	const envSnapshot = {
 		HOME: process.env.HOME,
@@ -192,6 +201,293 @@ describe("LocalRuntimeHost", () => {
 		setHomeDir(envSnapshot.HOME ?? "~");
 		setClineDir(envSnapshot.CLINE_DIR ?? join("~", ".cline"));
 		rmSync(isolatedHomeDir, { recursive: true, force: true });
+	});
+
+	it.each([
+		{ mode: "off" as const, guarded: false },
+		{ mode: "nudge" as const, guarded: true },
+	] as const)("holds the run back on an unchecked edit only when asked to ($mode)", async ({
+		mode,
+		guarded,
+	}) => {
+		// The measured failure: `check_file` ran once before anything was
+		// touched, then four edits landed unchecked and the file was left with
+		// sixteen problems. The tool was present and had already been used.
+		const runtimeBuilder = {
+			build: vi.fn().mockReturnValue({
+				tools: [
+					{
+						name: "editor",
+						inputSchema: { type: "object", properties: {} },
+						execute: vi.fn(async () => "edited"),
+					},
+				],
+				shutdown: vi.fn().mockResolvedValue(undefined),
+			}),
+		};
+		const agent = {
+			run: vi.fn().mockResolvedValue(createResult()),
+			continue: vi.fn().mockResolvedValue(createResult()),
+			getMessages: vi.fn().mockReturnValue([]),
+			getAgentId: vi.fn().mockReturnValue("agent-qa"),
+			getConversationId: vi.fn().mockReturnValue("conv-qa"),
+			abort: vi.fn(),
+			subscribeEvents: vi.fn().mockReturnValue(() => {}),
+			canStartRun: vi.fn().mockReturnValue(true),
+			shutdown: vi.fn().mockResolvedValue(undefined),
+		};
+		let agentConfig: TestAgentConfig | undefined;
+		const manager = new RuntimeHostUnderTest({
+			distinctId,
+			sessionService: new FileSessionService(join(isolatedHomeDir, "sessions")),
+			runtimeBuilder: runtimeBuilder as never,
+			createAgent: ((config: TestAgentConfig) => {
+				agentConfig = config;
+				return agent;
+			}) as never,
+		});
+
+		await manager.startSession(
+			normalizeStartInput({
+				config: createConfig({
+					editVerification: { mode, checkTools: ["check_file"] },
+				}),
+				prompt: "hello",
+			}),
+		);
+
+		const editor = agentConfig?.tools?.find((tool) => tool.name === "editor");
+		await editor?.execute({ path: "manic_miner.html" }, {});
+		const verdict = agentConfig?.completionPolicy?.completionGuard?.();
+
+		if (guarded) {
+			expect(verdict).toContain("manic_miner.html");
+			expect(verdict).toContain("check_file");
+		} else {
+			expect(verdict).toBeUndefined();
+		}
+	});
+
+	// This host used to have no checker of its own, and a guard nothing can
+	// satisfy is worse than no guard, so it stood aside. It supplies one now, so
+	// the same setup has to produce the opposite result: the run is held back,
+	// and the tool named is the one that can clear it.
+	it("guards the run now that it supplies its own checker", async () => {
+		const runtimeBuilder = {
+			build: vi.fn().mockReturnValue({
+				tools: [
+					{
+						name: "editor",
+						inputSchema: { type: "object", properties: {} },
+						execute: vi.fn(async () => "edited"),
+					},
+				],
+				shutdown: vi.fn().mockResolvedValue(undefined),
+			}),
+		};
+		const agent = {
+			run: vi.fn().mockResolvedValue(createResult()),
+			continue: vi.fn().mockResolvedValue(createResult()),
+			getMessages: vi.fn().mockReturnValue([]),
+			getAgentId: vi.fn().mockReturnValue("agent-qa-none"),
+			getConversationId: vi.fn().mockReturnValue("conv-qa-none"),
+			abort: vi.fn(),
+			subscribeEvents: vi.fn().mockReturnValue(() => {}),
+			canStartRun: vi.fn().mockReturnValue(true),
+			shutdown: vi.fn().mockResolvedValue(undefined),
+		};
+		let agentConfig: TestAgentConfig | undefined;
+		const manager = new RuntimeHostUnderTest({
+			distinctId,
+			sessionService: new FileSessionService(join(isolatedHomeDir, "sessions")),
+			runtimeBuilder: runtimeBuilder as never,
+			createAgent: ((config: TestAgentConfig) => {
+				agentConfig = config;
+				return agent;
+			}) as never,
+		});
+
+		await manager.startSession(
+			normalizeStartInput({
+				config: createConfig({ editVerification: { mode: "nudge" } }),
+				prompt: "hello",
+			}),
+		);
+
+		// The checker is added by the host, not by the runtime builder above.
+		expect(agentConfig?.tools?.some((tool) => tool.name === "check_file")).toBe(
+			true,
+		);
+
+		// And the lister, for the same reason and by the same route: a model
+		// with no way to ask what exists runs `ls` instead, unscoped.
+		expect(agentConfig?.tools?.some((tool) => tool.name === "list_files")).toBe(
+			true,
+		);
+
+		const editor = agentConfig?.tools?.find((tool) => tool.name === "editor");
+		await editor?.execute({ path: "a.ts" }, {});
+		const verdict = agentConfig?.completionPolicy?.completionGuard?.();
+		expect(verdict).toContain("a.ts");
+		expect(verdict).toContain("check_file");
+	});
+
+	it.each([
+		{ enabled: true, expected: true },
+		{ enabled: false, expected: false },
+	] as const)("offers task_progress as a callable tool when the checklist is on ($enabled)", async ({
+		enabled,
+		expected,
+	}) => {
+		// The checklist has two halves and this path wired only one. The
+		// parameter wrapper fed the tracker -- so the panel counted boxes
+		// correctly -- while the standalone tool, pushed by `createDefaultTools`
+		// and only when a tracker is passed *into* it, was never added, because
+		// here the tracker is built after the tools. Reported live on 4.99.91:
+		// `AI_NoSuchToolError: Model tried to call unavailable tool
+		// 'task_progress'` beside a panel reading "Tasks (7/7)".
+		const runtimeBuilder = {
+			build: vi.fn().mockReturnValue({
+				tools: [],
+				shutdown: vi.fn().mockResolvedValue(undefined),
+			}),
+		};
+		const agent = {
+			run: vi.fn().mockResolvedValue(createResult()),
+			continue: vi.fn().mockResolvedValue(createResult()),
+			getMessages: vi.fn().mockReturnValue([]),
+			getAgentId: vi.fn().mockReturnValue("agent-checklist"),
+			getConversationId: vi.fn().mockReturnValue("conv-checklist"),
+			abort: vi.fn(),
+			subscribeEvents: vi.fn().mockReturnValue(() => {}),
+			canStartRun: vi.fn().mockReturnValue(true),
+			shutdown: vi.fn().mockResolvedValue(undefined),
+		};
+		let agentConfig: { tools?: Array<{ name: string }> } | undefined;
+		const manager = new RuntimeHostUnderTest({
+			distinctId,
+			sessionService: new FileSessionService(join(isolatedHomeDir, "sessions")),
+			runtimeBuilder: runtimeBuilder as never,
+			createAgent: ((config: { tools?: Array<{ name: string }> }) => {
+				agentConfig = config;
+				return agent;
+			}) as never,
+		});
+
+		await manager.startSession(
+			normalizeStartInput({
+				config: createConfig({ taskProgress: { enabled } }),
+				prompt: "hello",
+			}),
+		);
+
+		const names = (agentConfig?.tools ?? []).map((tool) => tool.name);
+		expect(names.includes("task_progress")).toBe(expected);
+		// Exactly one, whichever way it got there.
+		expect(names.filter((name) => name === "task_progress")).toHaveLength(
+			expected ? 1 : 0,
+		);
+	});
+
+	it("does not add a second task_progress when the tools already carry one", async () => {
+		// A caller that built its tools through `createDefaultTools` with a tracker
+		// already has the tool, and a duplicate name is its own failure.
+		const runtimeBuilder = {
+			build: vi.fn().mockReturnValue({
+				tools: [
+					{
+						name: "task_progress",
+						inputSchema: { type: "object", properties: {} },
+						execute: vi.fn(),
+					},
+				],
+				shutdown: vi.fn().mockResolvedValue(undefined),
+			}),
+		};
+		const agent = {
+			run: vi.fn().mockResolvedValue(createResult()),
+			continue: vi.fn().mockResolvedValue(createResult()),
+			getMessages: vi.fn().mockReturnValue([]),
+			getAgentId: vi.fn().mockReturnValue("agent-checklist-dup"),
+			getConversationId: vi.fn().mockReturnValue("conv-checklist-dup"),
+			abort: vi.fn(),
+			subscribeEvents: vi.fn().mockReturnValue(() => {}),
+			canStartRun: vi.fn().mockReturnValue(true),
+			shutdown: vi.fn().mockResolvedValue(undefined),
+		};
+		let agentConfig: { tools?: Array<{ name: string }> } | undefined;
+		const manager = new RuntimeHostUnderTest({
+			distinctId,
+			sessionService: new FileSessionService(join(isolatedHomeDir, "sessions")),
+			runtimeBuilder: runtimeBuilder as never,
+			createAgent: ((config: { tools?: Array<{ name: string }> }) => {
+				agentConfig = config;
+				return agent;
+			}) as never,
+		});
+
+		await manager.startSession(
+			normalizeStartInput({
+				config: createConfig({ taskProgress: { enabled: true } }),
+				prompt: "hello",
+			}),
+		);
+
+		const names = (agentConfig?.tools ?? []).map((tool) => tool.name);
+		expect(names.filter((name) => name === "task_progress")).toHaveLength(1);
+	});
+
+	// This object is an explicit list with no spread, so a field a host sets on
+	// the session config and nobody copies is dropped in silence. Both halves of
+	// the vision model were: the describer was built, logged as installed, and
+	// never called once, so the image went to the model that configuring a
+	// vision model exists to keep it away from. Measured through the CLI with a
+	// real image and a real vision model — `Describer installed`, no describe
+	// call, and the image still in the transcript at request time.
+	it("hands the image describer to the agent", async () => {
+		const runtimeBuilder = {
+			build: vi.fn().mockReturnValue({
+				tools: [],
+				shutdown: vi.fn().mockResolvedValue(undefined),
+			}),
+		};
+		const agent = {
+			run: vi.fn().mockResolvedValue(createResult()),
+			continue: vi.fn().mockResolvedValue(createResult()),
+			getMessages: vi.fn().mockReturnValue([]),
+			getAgentId: vi.fn().mockReturnValue("agent-vision"),
+			getConversationId: vi.fn().mockReturnValue("conv-vision"),
+			abort: vi.fn(),
+			subscribeEvents: vi.fn().mockReturnValue(() => {}),
+			canStartRun: vi.fn().mockReturnValue(true),
+			shutdown: vi.fn().mockResolvedValue(undefined),
+		};
+		let agentConfig:
+			| { describeImages?: unknown; alwaysDescribeImages?: unknown }
+			| undefined;
+		const describeImages = vi.fn(async () => ["a screenshot"]);
+		const manager = new RuntimeHostUnderTest({
+			distinctId,
+			sessionService: new FileSessionService(join(isolatedHomeDir, "sessions")),
+			runtimeBuilder: runtimeBuilder as never,
+			createAgent: ((config: typeof agentConfig) => {
+				agentConfig = config;
+				return agent;
+			}) as never,
+		});
+
+		await manager.startSession(
+			normalizeStartInput({
+				config: createConfig({
+					describeImages,
+					alwaysDescribeImages: true,
+				} as never),
+				prompt: "hello",
+			}),
+		);
+
+		expect(agentConfig?.describeImages).toBe(describeImages);
+		expect(agentConfig?.alwaysDescribeImages).toBe(true);
 	});
 
 	it.each([

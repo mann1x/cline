@@ -1,9 +1,12 @@
+import path from "node:path"
 import { WebviewProvider } from "./core/webview"
 import "./utils/path" // necessary to have access to String.prototype.toPosix
 
 import { setSdkLogger } from "@cline/core"
 import { HostProvider } from "@/hosts/host-provider"
+import { resolveDataDir } from "@/sdk/legacy-state-reader"
 import { Logger } from "@/shared/services/Logger"
+import { createLogFileSink, type LogFileSink } from "@/shared/services/log-file-sink"
 import type { StorageContext } from "@/shared/storage/storage-context"
 import { clearOnboardingModelsCache } from "./core/controller/models/getClineOnboardingModels"
 import { HookDiscoveryCache } from "./core/hooks/HookDiscoveryCache"
@@ -24,6 +27,8 @@ import { getBlobStoreSettingsFromEnv } from "./shared/services/worker/worker"
 import { getLatestAnnouncementId } from "./utils/announcements"
 import { arePathsEqual } from "./utils/path"
 
+let logFileSink: LogFileSink | undefined
+
 /**
  * Performs intialization for Cline that is common to all platforms.
  *
@@ -35,6 +40,12 @@ export async function initialize(storageContext: StorageContext): Promise<Webvie
 	// Configure the shared Logging class to use HostProvider's output channels and debug logger
 	Logger.subscribe((msg: string) => HostProvider.get().logToChannel(msg)) // File system logging
 	Logger.subscribe((msg: string) => HostProvider.env.debugLog({ value: msg })) // Host debug logging
+	// The output channel above is only written to disk when the extension host
+	// restarts, so the running window's log cannot be read without reloading it
+	// — which ends the session you were trying to diagnose. Mirror it to
+	// `<dataDir>/logs/extension.log`, flushed once logging goes idle.
+	logFileSink = createLogFileSink({ directory: path.join(resolveDataDir(), "logs") })
+	Logger.subscribe((msg: string) => logFileSink?.write(msg))
 
 	// Register the SDK early logger so diagnostic events from
 	// ProviderSettingsManager, RuntimeOAuthTokenManager, and Cline auth
@@ -188,5 +199,9 @@ export async function tearDown(): Promise<void> {
 		} catch (error) {
 			Logger.error("[Cline] Failed to flush pending state during teardown:", error)
 		}
+		// Last, so it captures the errors above: whatever was logged during
+		// teardown is exactly what you want on disk after a crash.
+		await logFileSink?.dispose()
+		logFileSink = undefined
 	}
 }

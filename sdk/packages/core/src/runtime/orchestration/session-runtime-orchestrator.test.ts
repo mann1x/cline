@@ -28,6 +28,7 @@ import {
 	type AgentModel,
 	type AgentRunResult,
 	type AgentRuntimeEvent,
+	type AgentRuntimeHooks,
 	type AgentTool,
 	type AgentToolContext,
 	EMPTY_CONTENT_TEXT,
@@ -35,6 +36,8 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { MESSAGE_BUILDER_LIMIT_ENV } from "../../session/services/message-builder";
 import {
+	declaredNoOp,
+	introducedRegression,
 	SessionRuntime,
 	type SessionRuntimeOrchestratorDeps,
 } from "./session-runtime-orchestrator";
@@ -2292,24 +2295,28 @@ describe("SessionRuntime.run — tracker wiring (P1 #3)", () => {
 		expect(events[0].properties.agentId).toMatch(/^agent_/);
 	});
 
-	it("aborts on hard-threshold loop detection of identical tool calls", async () => {
-		const identical = (i: number): AgentRuntimeEvent => ({
-			type: "tool-started",
-			iteration: i,
-			toolCall: {
-				type: "tool-call",
-				toolCallId: `tc${i}`,
-				toolName: "same",
-				input: { a: 1 },
-			},
-			snapshot: makeSnapshot(),
-		});
+	// One hard verdict is a last warning, not a stop. Measured on a 34-iteration
+	// run that had made nine edits and six checks in twenty-four minutes and was
+	// ended by a single repeated `editor` call: every soft warning counted
+	// strikes down, and then the run ended without the model ever being told the
+	// countdown had run out.
+	const identicalCall = (i: number): AgentRuntimeEvent => ({
+		type: "tool-started",
+		iteration: i,
+		toolCall: {
+			type: "tool-call",
+			toolCallId: `tc${i}`,
+			toolName: "same",
+			input: { a: 1 },
+		},
+		snapshot: makeSnapshot(),
+	});
+
+	const runIdenticalCalls = async (count: number) => {
 		const { deps, abortCalls } = makeScriptedRuntime({
 			events: [
 				{ type: "turn-started", iteration: 1, snapshot: makeSnapshot() },
-				identical(1),
-				identical(1),
-				identical(1),
+				...Array.from({ length: count }, (_, i) => identicalCall(i + 1)),
 			],
 		});
 		const session = new SessionRuntime(
@@ -2322,7 +2329,111 @@ describe("SessionRuntime.run — tracker wiring (P1 #3)", () => {
 			deps,
 		);
 		await session.run("loop-me");
+		return abortCalls;
+	};
+
+	it("warns rather than aborting on the first hard loop verdict", async () => {
+		expect(await runIdenticalCalls(3)).toHaveLength(0);
+	});
+
+	it("aborts on the second hard loop verdict, naming the loop", async () => {
+		const abortCalls = await runIdenticalCalls(4);
 		expect(abortCalls.length).toBeGreaterThanOrEqual(1);
+		// The reason has to say a loop stopped it. Reporting a forced stop as
+		// "maximum consecutive mistakes reached (6)" names a limit that was never
+		// approached -- the count here is 2 of 6, and the limit is where a reader
+		// then goes looking.
+		expect(String(abortCalls[0])).toContain("loop");
+		expect(String(abortCalls[0])).not.toContain("(6)");
+	});
+
+	// The warning used to be appended to the conversation store, which the run
+	// had already snapshotted and would overwrite when it finished. Measured on
+	// a live session: the guard counted six refusals of one `editor` call, and
+	// not one of the twenty-six requests on the wire carried a word of it.
+	it("puts the strike countdown into the tool result the model reads", async () => {
+		const noChange =
+			"Editor operation failed: No change: lines 94-98 already reads exactly this way in game.html.";
+		const call = (id: string) => ({
+			type: "tool-call" as const,
+			toolCallId: id,
+			toolName: "editor",
+			input: { path: "game.html", start_line: 94 },
+		});
+		const refusal = (id: string): AgentRuntimeEvent => ({
+			type: "tool-finished",
+			iteration: 1,
+			toolCall: call(id),
+			message: {
+				id: `m${id}`,
+				role: "tool",
+				content: [
+					{
+						type: "tool-result",
+						toolCallId: id,
+						toolName: "editor",
+						output: {
+							query: "edit",
+							result: "",
+							error: noChange,
+							success: false,
+						},
+						isError: true,
+					},
+				],
+				createdAt: 1,
+			},
+			snapshot: makeSnapshot(),
+		});
+		const { deps } = makeScriptedRuntime({
+			events: [
+				{ type: "turn-started", iteration: 1, snapshot: makeSnapshot() },
+				{
+					type: "tool-started",
+					iteration: 1,
+					toolCall: call("tc1"),
+					snapshot: makeSnapshot(),
+				},
+				refusal("tc1"),
+				// The repeat. This is the one the guard has something to say about.
+				{
+					type: "tool-started",
+					iteration: 2,
+					toolCall: call("tc2"),
+					snapshot: makeSnapshot(),
+				},
+			],
+		});
+		let capturedHooks: Partial<AgentRuntimeHooks> | undefined;
+		const createRuntime = deps.createAgentRuntimeImpl as (
+			config: AgentRuntimeConfig,
+		) => AgentRuntime;
+		const session = new SessionRuntime(makeAgentConfig({}), {
+			createAgentRuntimeImpl: (config: AgentRuntimeConfig) => {
+				capturedHooks = config.hooks as Partial<AgentRuntimeHooks>;
+				return createRuntime(config);
+			},
+		});
+
+		await session.run("fix the game");
+
+		const after = await capturedHooks?.afterTool?.({
+			snapshot: makeSnapshot(),
+			tool: { name: "editor" },
+			toolCall: call("tc2"),
+			input: {},
+			result: {
+				output: { query: "edit", result: "", error: noChange, success: false },
+				isError: true,
+			},
+			startedAt: new Date(),
+			endedAt: new Date(),
+			durationMs: 1,
+		} as never);
+
+		const error = (after?.result?.output as { error: string }).error;
+		expect(error).toContain("No change");
+		expect(error).toContain("strikes left");
 	});
 
 	it("resets loop detection when run() starts a fresh conversation", async () => {
@@ -2530,5 +2641,148 @@ describe("SessionRuntime auth retry", () => {
 		expect(onAuthError).not.toHaveBeenCalled();
 		expect(createdCount()).toBe(1);
 		expect(result.finishReason).toBe("error");
+	});
+});
+
+describe("introducedRegression", () => {
+	// The measured failure this exists for: eight consecutive `editor` calls,
+	// every one `success: true`, the file's diagnostics going 2 -> 20 and the
+	// class under repair written into the file three times. Judged on failure
+	// alone all eight looked productive, so the barren-repeat counter reset on
+	// each and the loop stop could never fire.
+	it("sees the mark the host puts on an edit that broke the file", () => {
+		expect(
+			introducedRegression({
+				query: "edit:game.html",
+				result: "Replaced lines 84-98",
+				success: true,
+				regressed: true,
+			}),
+		).toBe(true);
+	});
+
+	it("leaves a successful, clean edit alone", () => {
+		expect(
+			introducedRegression({
+				query: "edit:game.html",
+				result: "Replaced lines 84-98",
+				success: true,
+			}),
+		).toBe(false);
+	});
+
+	it("finds the mark on any entry of a batched result", () => {
+		expect(
+			introducedRegression([
+				{ query: "edit:a.ts", result: "ok", success: true },
+				{ query: "edit:b.ts", result: "ok", success: true, regressed: true },
+			]),
+		).toBe(true);
+	});
+
+	it("reads anything unrecognised as no regression", () => {
+		// Same conservative rule as `allOperationsFailed`: this feeds a loop
+		// stop, and the cost of guessing wrong is ending a task that worked.
+		expect(introducedRegression(undefined)).toBe(false);
+		expect(introducedRegression("edited")).toBe(false);
+		expect(introducedRegression({ regressed: "yes" })).toBe(false);
+		expect(introducedRegression([])).toBe(false);
+	});
+});
+
+describe("declaredNoOp", () => {
+	const noChange =
+		"Editor operation failed: No change: lines 94-96 already reads exactly this way in game.html. The file was not modified.";
+
+	it("recognises the tool refusing an edit that asks for nothing", () => {
+		expect(
+			declaredNoOp({
+				query: "edit:game.html",
+				result: "",
+				error: noChange,
+				success: false,
+			}),
+		).toBe(true);
+	});
+
+	it("recognises it inside a multi-operation result", () => {
+		expect(
+			declaredNoOp([
+				{ query: "edit:a.ts", result: "changed", success: true },
+				{
+					query: "edit:game.html",
+					result: "",
+					error: noChange,
+					success: false,
+				},
+			]),
+		).toBe(true);
+	});
+
+	// An ordinary failure may stop failing next time; this one cannot, which is
+	// the whole distinction the loop tracker acts on.
+	it("does not fire on an ordinary failure", () => {
+		expect(
+			declaredNoOp({
+				query: "edit:game.html",
+				result: "",
+				error:
+					"Editor operation failed: No replacement performed: text not found in game.html.",
+				success: false,
+			}),
+		).toBe(false);
+	});
+
+	it("does not fire on success, whatever the text says", () => {
+		expect(
+			declaredNoOp({
+				query: "edit:game.html",
+				result: noChange,
+				success: true,
+			}),
+		).toBe(false);
+	});
+
+	it("ignores shapes it does not recognise", () => {
+		expect(declaredNoOp(undefined)).toBe(false);
+		expect(declaredNoOp("No change: something")).toBe(false);
+		expect(declaredNoOp([{ success: false }])).toBe(false);
+	});
+});
+
+describe("a tool result that arrives already serialised", () => {
+	// `editor` sends the `{query, result, success, error}` envelope as a JSON
+	// string, not an object. Every predicate here used to fall through the
+	// `typeof entry === "object"` test to its safe answer, and the safe answer
+	// is "productive" -- which clears the loop tally. Measured live: the
+	// identical `editor` call six times against six `No change` refusals, each
+	// recorded as a productive call, so neither the warning nor the stop fired.
+	const noChange = JSON.stringify({
+		query: "edit:manic_miner.html",
+		result: "",
+		success: false,
+		error:
+			"Editor operation failed: No change: lines 89-97 already reads exactly this way in c:\\src\\manic_miner.html",
+	});
+
+	it("is read as a no-op when it says so", () => {
+		expect(declaredNoOp(noChange)).toBe(true);
+	});
+
+	it("is read as a regression when it says so", () => {
+		expect(
+			introducedRegression(
+				JSON.stringify({ query: "edit:x", success: true, regressed: true }),
+			),
+		).toBe(true);
+	});
+
+	// The conservative half: an unrecognised string must never be taken for
+	// failure, because this feeds a loop stop and the cost of guessing wrong is
+	// ending a task that was working.
+	it("is left alone when it is not the envelope", () => {
+		expect(declaredNoOp("No change: just some file text")).toBe(false);
+		expect(declaredNoOp("{not json")).toBe(false);
+		expect(introducedRegression("regressed")).toBe(false);
 	});
 });

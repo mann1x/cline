@@ -89,6 +89,7 @@ function convertClineSayToProtoEnum(say: AppClineSay | undefined): ClineSay | un
 		browser_action_launch: ClineSay.BROWSER_ACTION_LAUNCH_SAY,
 		browser_action: ClineSay.BROWSER_ACTION,
 		browser_action_result: ClineSay.BROWSER_ACTION_RESULT,
+		browser_screenshot: ClineSay.BROWSER_SCREENSHOT,
 		mcp_server_request_started: ClineSay.MCP_SERVER_REQUEST_STARTED,
 		mcp_server_response: ClineSay.MCP_SERVER_RESPONSE,
 		mcp_notification: ClineSay.MCP_NOTIFICATION,
@@ -108,6 +109,7 @@ function convertClineSayToProtoEnum(say: AppClineSay | undefined): ClineSay | un
 		use_subagents: ClineSay.USE_SUBAGENTS_SAY,
 		subagent_usage: ClineSay.SUBAGENT_USAGE,
 		compaction: ClineSay.COMPACTION,
+		thinking_condensed: ClineSay.THINKING_CONDENSED,
 	}
 
 	const result = mapping[say]
@@ -139,6 +141,7 @@ function convertProtoEnumToClineSay(say: ClineSay): AppClineSay | undefined {
 		[ClineSay.BROWSER_ACTION_LAUNCH_SAY]: "browser_action_launch",
 		[ClineSay.BROWSER_ACTION]: "browser_action",
 		[ClineSay.BROWSER_ACTION_RESULT]: "browser_action_result",
+		[ClineSay.BROWSER_SCREENSHOT]: "browser_screenshot",
 		[ClineSay.MCP_SERVER_REQUEST_STARTED]: "mcp_server_request_started",
 		[ClineSay.MCP_SERVER_RESPONSE]: "mcp_server_response",
 		[ClineSay.MCP_NOTIFICATION]: "mcp_notification",
@@ -158,6 +161,7 @@ function convertProtoEnumToClineSay(say: ClineSay): AppClineSay | undefined {
 		[ClineSay.USE_SUBAGENTS_SAY]: "use_subagents",
 		[ClineSay.SUBAGENT_USAGE]: "subagent_usage",
 		[ClineSay.COMPACTION]: "compaction",
+		[ClineSay.THINKING_CONDENSED]: "thinking_condensed",
 	}
 
 	return mapping[say]

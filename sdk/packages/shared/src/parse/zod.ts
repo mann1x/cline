@@ -29,6 +29,35 @@ function valueAtPath(input: unknown, path: PropertyKey[]): unknown {
 	return current;
 }
 
+/**
+ * Say what the call did carry, alongside what it did not.
+ *
+ * The names it sent are the part of the call the model can recognise. A
+ * transcript holds dozens of edits to one file, and "send `new_text` and call
+ * again" identifies none of them; the arguments it did send do. It also shows
+ * an argument that belongs to another tool sitting in this one — measured, an
+ * `editor` call carrying `line_numbers` was a `read_files` call in the wrong
+ * envelope, and nothing in the refusal said so.
+ *
+ * Names only, never values: a rejected call's values are the model's own text,
+ * often the whole file, and echoing them back buys nothing.
+ */
+function describeCarriedFields(input: unknown, missing: Set<string>): string {
+	if (input === null || typeof input !== "object" || Array.isArray(input)) {
+		return "";
+	}
+	const carried = Object.keys(input as Record<string, unknown>).filter(
+		(key) =>
+			!missing.has(key) &&
+			(input as Record<string, unknown>)[key] !== undefined,
+	);
+	if (carried.length === 0) {
+		return "";
+	}
+	const names = carried.map((field) => `\`${field}\``).join(", ");
+	return `\nThe call carried: ${names}.`;
+}
+
 function describeMissingFields(
 	error: z.ZodError,
 	input: unknown,
@@ -51,9 +80,45 @@ function describeMissingFields(
 	}
 	const fields = [...missing];
 	const names = fields.map((field) => `\`${field}\``).join(", ");
+	const carried = describeCarriedFields(input, missing);
 	return fields.length === 1
-		? `Missing required argument ${names}. Send it and call again.`
-		: `Missing required arguments: ${names}. Send them and call again.`;
+		? `Missing required argument ${names}. Send it and call again.${carried}`
+		: `Missing required arguments: ${names}. Send them and call again.${carried}`;
+}
+
+/** Longest preview of the offending input included in an error. */
+const RECEIVED_PREVIEW_LIMIT = 300;
+
+/**
+ * Say what was actually sent, when nothing else in the error does.
+ *
+ * A union that matches no branch prettifies to bare `✖ Invalid input`: no
+ * path, no field, no type. Measured on a live session, `run_commands` answered
+ * exactly that to every call, the model could not tell what to change, sent the
+ * identical arguments five times, and the loop guard stopped the task. A model
+ * cannot fix what it is not told, so at minimum it is shown its own arguments
+ * back and can compare them against the schema in the tool description.
+ */
+function describeReceived(input: unknown): string | null {
+	let rendered: string;
+	try {
+		rendered = JSON.stringify(input);
+	} catch {
+		return null;
+	}
+	if (rendered === undefined) {
+		return `Received: ${String(input)}`;
+	}
+	const preview =
+		rendered.length > RECEIVED_PREVIEW_LIMIT
+			? `${rendered.slice(0, RECEIVED_PREVIEW_LIMIT)}…`
+			: rendered;
+	return `Received: ${preview}`;
+}
+
+/** Whether the message already points at a field the caller can act on. */
+function namesAField(message: string): boolean {
+	return message.includes("→ at ");
 }
 
 /**
@@ -63,10 +128,16 @@ function describeMissingFields(
 export function validateWithZod<T>(schema: z.ZodType<T>, input: unknown): T {
 	const result = schema.safeParse(input);
 	if (!result.success) {
-		throw new Error(
-			describeMissingFields(result.error, input) ??
-				z.prettifyError(result.error),
-		);
+		const missing = describeMissingFields(result.error, input);
+		if (missing) {
+			throw new Error(missing);
+		}
+		const prettified = z.prettifyError(result.error);
+		if (namesAField(prettified)) {
+			throw new Error(prettified);
+		}
+		const received = describeReceived(input);
+		throw new Error(received ? `${prettified}\n${received}` : prettified);
 	}
 	return result.data;
 }

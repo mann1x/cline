@@ -77,7 +77,28 @@ interface SpawnConfig {
 	args: string[];
 	cwd: string;
 	env: Record<string, string>;
+	/** Names removed from the inherited environment; see ShellExecutionOptions. */
+	withhold?: readonly string[];
 	input?: string;
+}
+
+/**
+ * The child's environment: the parent's, minus what is withheld, plus what this
+ * command was given.
+ *
+ * The order matters. Withholding is applied to the *inherited* names only, so a
+ * command that asked for a credential still gets it even though the same name
+ * was stripped a line earlier -- that is the whole point of asking.
+ */
+function buildChildEnv(config: SpawnConfig): NodeJS.ProcessEnv {
+	if (!config.withhold || config.withhold.length === 0) {
+		return { ...process.env, ...config.env };
+	}
+	const inherited: NodeJS.ProcessEnv = { ...process.env };
+	for (const name of config.withhold) {
+		delete inherited[name];
+	}
+	return { ...inherited, ...config.env };
 }
 
 /**
@@ -139,7 +160,7 @@ function spawnAndCollect(
 
 		const child = spawn(config.executable, config.args, {
 			cwd: config.cwd,
-			env: { ...process.env, ...config.env },
+			env: buildChildEnv(config),
 			stdio: ["pipe", "pipe", "pipe"],
 			detached: !isWindows,
 			// Prevent a console window from flashing on Windows when the
@@ -330,7 +351,7 @@ export function createShellExecutor(
 		options.maxOutputBytes ??
 		MAX_COMMAND_OUTPUT_CHARS;
 
-	return (command, cwd, context) => {
+	return (command, cwd, context, callOptions) => {
 		const isStructured = typeof command !== "string";
 		const invocation = isStructured
 			? { args: command.args ?? [] }
@@ -340,7 +361,12 @@ export function createShellExecutor(
 				executable: isStructured ? command.command : shell,
 				args: invocation.args,
 				cwd,
-				env,
+				// The per-call environment wins over the executor's own: it is the
+				// caller saying "this command, and only this one, needs these".
+				// Both are merged over `process.env` at spawn, so the child is the
+				// only place either exists.
+				env: callOptions?.env ? { ...env, ...callOptions.env } : env,
+				withhold: callOptions?.withhold,
 				input: invocation.input,
 			},
 			context,

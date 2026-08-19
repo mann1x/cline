@@ -16,7 +16,13 @@ import type {
 	SessionWorkspaceConfig,
 } from "@cline/shared";
 import type { ToolRoutingRule } from "../extensions/tools/model-tool-routing";
-import type { TeamEvent } from "../extensions/tools/team";
+import type { QaCredential } from "../extensions/tools/qa-credentials";
+import type { TaskProgressState } from "../extensions/tools/task-progress";
+import type {
+	AgentProfileConnection,
+	AgentProviderConnection,
+	TeamEvent,
+} from "../extensions/tools/team";
 import type { ProviderConfig } from "./provider-settings";
 
 export type CoreAgentMode = AgentMode;
@@ -55,6 +61,31 @@ export interface CoreModelConfig {
 	 */
 	temperature?: number;
 }
+
+/**
+ * A connection for delegated agents that is not the session's own.
+ *
+ * Subagents and teammates inherit the lead's whole connection — provider,
+ * model, sampler, and the context window with it. That is the right default and
+ * the wrong only option: it leaves no way to run a team of small agents under a
+ * strong lead, and no way to give them a window sized for the narrower job.
+ *
+ * Deliberately only the connection: which model to call, where, and with what
+ * provider settings. Everything else about a delegated agent — its tools, its
+ * prompt, its iteration cap — still comes from the session that spawned it. And
+ * only the fields actually set are taken, so an override naming a model and
+ * nothing else keeps the session's sampler and thinking budget.
+ */
+export type DelegatedAgentConnectionOverride = Pick<
+	CoreModelConfig,
+	| "providerId"
+	| "modelId"
+	| "apiKey"
+	| "baseUrl"
+	| "headers"
+	| "providerConfig"
+	| "knownModels"
+>;
 
 export interface CoreRuntimeFeatures {
 	enableTools: boolean;
@@ -158,6 +189,44 @@ export interface CoreCompactionSummarizerConfig {
 	maxOutputTokens?: number;
 }
 
+/**
+ * Session settings for the model's task checklist.
+ *
+ * Off unless a host asks for it: the checklist costs a parameter on every tool
+ * description and re-sent text every few calls, which is a trade a host makes
+ * knowingly rather than inherits.
+ */
+export interface CoreTaskProgressConfig {
+	enabled: boolean;
+	/** Tool calls between reminders. Non-positive disables reminding only. */
+	reminderInterval?: number;
+	/** Called whenever the model sends a new checklist. */
+	onUpdate?: (state: TaskProgressState) => void;
+}
+
+/**
+ * How firmly the session insists an edited file be checked before it finishes.
+ *
+ * Three states rather than a boolean, because "ask the model once" and "do not
+ * let it finish" are different products and the user owns the choice. It lives
+ * in settings rather than in the conversation on purpose: a question asked
+ * after every file change is a round trip per edit, and "always" is not an
+ * answer a model should be giving on the user's behalf.
+ */
+export type CoreEditVerificationMode = "off" | "nudge" | "require";
+
+export interface CoreEditVerificationConfig {
+	mode?: CoreEditVerificationMode;
+	/** Tools whose calls mark a file changed. Defaults to the built-in editors. */
+	editTools?: string[];
+	/**
+	 * Tools whose calls mark a file verified. Named by the host rather than
+	 * assumed: the checker on the VS Code path is `check_file`, which lives in
+	 * the extension. A host that names none gets no guard at all.
+	 */
+	checkTools?: string[];
+}
+
 export type CoreCompactionStrategy = "basic" | "agentic";
 
 export interface CoreCompactionConfig {
@@ -176,6 +245,56 @@ export interface CoreCompactionConfig {
 	 * compacted request still caps it, so this can only ask, never overrun.
 	 */
 	preserveRecentMessagesRatio?: number;
+	/**
+	 * Replaces the built-in instruction the summarizer is given.
+	 *
+	 * The summary is all that survives the turns it stands for, and what a good
+	 * one contains depends on the work and on the model writing it, so this is
+	 * worth being able to change without a rebuild. `{{files_read}}` and
+	 * `{{files_edited}}` are substituted; the transcript is appended by the
+	 * caller either way. Blank or unset uses the default.
+	 */
+	summaryPrompt?: string;
+	/**
+	 * Whether compaction also writes a retrospective over the reasoning it is
+	 * discarding, prepended to the summary as its own thinking block.
+	 *
+	 * The summary records what happened; the reasoning that produced it is
+	 * thrown away with the turns, and with it every wrong approach the model
+	 * already ruled out. A model that resumes from a summary alone has no memory
+	 * of having been wrong, which is how a long task repeats its own mistakes.
+	 *
+	 * Costs one extra model call per compaction. Defaults to on.
+	 */
+	thinkingSummaryEnabled?: boolean;
+	/**
+	 * Replaces the built-in retrospective instruction.
+	 *
+	 * Worth changing per model for the same reason as `summaryPrompt`, and more
+	 * so: a model that habitually reasons to its cap needs a firmer hand about
+	 * terseness than one that thinks in three lines. Blank or unset uses the
+	 * default.
+	 */
+	thinkingSummaryPrompt?: string;
+	/**
+	 * Whether a turn whose reasoning hit the thinking cap has that reasoning
+	 * replaced, for the next request, with a note of what it settled.
+	 *
+	 * A capped turn is cut mid-sentence, and the next turn re-derives the same
+	 * reasoning from the beginning rather than continuing from it. Defaults on
+	 * where a thinking budget is known; without one there is nothing to detect.
+	 */
+	cappedThinkingEnabled?: boolean;
+	/** Replaces the built-in continuation-note instruction. */
+	cappedThinkingPrompt?: string;
+	/**
+	 * What the server appends to reasoning it cut at the budget, when the
+	 * session knows the wording. Confirms or denies a capped turn outright;
+	 * without one the condenser measures instead.
+	 */
+	cappedThinkingBudgetMessage?: string;
+	/** The per-turn thinking allowance this session sends, when one is known. */
+	thinkingBudgetTokens?: number;
 	summarizer?: CoreCompactionSummarizerConfig;
 	compact?: (
 		context: CoreCompactionContext,
@@ -276,6 +395,71 @@ export interface CoreSessionConfig
 	 * transcript/tool/hook context.
 	 */
 	sessionId?: string;
+	/**
+	 * Turn images into text with a second model, so the session's model never
+	 * sees one. See `AgentConfig.describeImages`.
+	 *
+	 * Declared here because it is a session-level setting that hosts already
+	 * pass: the VS Code host has set both of these since the vision model
+	 * shipped, and only got away with it because it adds them through a
+	 * conditional spread, which excess-property checking does not inspect. A
+	 * host assigning them directly — the CLI — was rejected for setting a field
+	 * that has always been read.
+	 */
+	describeImages?: AgentConfig["describeImages"];
+	/** See `AgentConfig.alwaysDescribeImages`. */
+	alwaysDescribeImages?: boolean;
+	/**
+	 * Run subagents and teammates on this connection instead of the session's.
+	 *
+	 * Omitted means what it always meant: they inherit the lead's. See
+	 * `DelegatedAgentConnectionOverride`.
+	 */
+	delegatedAgentConnection?: DelegatedAgentConnectionOverride;
+	/**
+	 * Most delegated agents that may run at once against their endpoint.
+	 *
+	 * Resolved by the host, because answering it can mean asking the server: a
+	 * local one has a fixed number of slots (`OLLAMA_NUM_PARALLEL`,
+	 * `--parallel N`) and *queues* the request that finds none free rather than
+	 * refusing it, so over-spawning reads as a slow run rather than a blocked
+	 * one. Hosted providers have the same shape with a plan's allowance in place
+	 * of slots.
+	 *
+	 * `0` means no cap of ours -- not "unlimited", but "something else decides":
+	 * opencoti with PolyKV on, where agents share a slot and admission control
+	 * answers against measured KV headroom. `undefined` means no host resolved
+	 * one at all, which leaves every previous behaviour exactly as it was.
+	 */
+	maxConcurrentAgents?: number;
+	/**
+	 * Resolves a provider other than the session's, for a configured subagent
+	 * whose frontmatter names one.
+	 *
+	 * Host-supplied because only the host knows where its provider store lives:
+	 * the CLI's follows `--config`, the extension's follows its own data
+	 * directory. Core reaching for a default path would read the wrong file in
+	 * one of them and call the wrong server with the wrong key. Absent means an
+	 * agent on a second provider is refused rather than silently run on the
+	 * session's connection.
+	 */
+	resolveProviderConnection?: (
+		providerId: string,
+	) => AgentProviderConnection | undefined;
+	/**
+	 * Resolves a saved API configuration profile by name, for an agent whose
+	 * frontmatter names one.
+	 *
+	 * Host-supplied for the same reason as the provider resolver, and absent on
+	 * a host that has no profiles at all — the CLI has providers and no named
+	 * configurations over them. An agent naming a profile on such a host is
+	 * refused rather than run on the session's, which is the same rule the
+	 * provider case follows and for the same reason: a subagent silently running
+	 * the wrong model is worse than one that does not run.
+	 */
+	resolveProfileConnection?: (
+		name: string,
+	) => AgentProfileConnection | undefined;
 	workspaceRoot?: string;
 	systemPrompt: string;
 	teamName?: string;
@@ -287,6 +471,47 @@ export interface CoreSessionConfig
 	telemetry?: ITelemetryService;
 	extensionContext?: ExtensionContext;
 	extraTools?: AgentTool[];
+	/**
+	 * The checklist the model keeps while it works.
+	 *
+	 * Applied to the whole session toolset — builtins and `extraTools` alike.
+	 * A host that replaces a builtin (VS Code swaps `run_commands` for its own
+	 * terminal-aware version) would otherwise leave the most-used tool in a
+	 * coding run as the one tool carrying no checklist.
+	 */
+	taskProgress?: CoreTaskProgressConfig;
+	/**
+	 * Whether the run may end with a file the model changed and never checked.
+	 *
+	 * Measured on a live session: the linter ran once *before* anything was
+	 * touched, then four consecutive edits landed unchecked, and the file was
+	 * left with sixteen problems. The tool was present and already used — what
+	 * was missing was anything that noticed.
+	 */
+	editVerification?: CoreEditVerificationConfig;
+	/**
+	 * The project's own checker, for the `check_file` this host supplies.
+	 *
+	 * Without one that tool answers a narrower question than the extension's
+	 * does — syntax and brackets, where VS Code reads its language servers —
+	 * and the two hosts ship measurably different tools under one name. Naming
+	 * a command closes the distance and changes what the tool tells the model
+	 * it is, which is the half that matters: a model that believes it has only
+	 * a syntax check goes and runs the linter through `run_commands` anyway.
+	 *
+	 * `${file}` marks where the path goes; a command without it gets the path
+	 * appended.
+	 */
+	checkFile?: { lintCommand?: string };
+	/**
+	 * Named secrets a QA command can ask for.
+	 *
+	 * Supplied by the host because only the host has a secret store; core never
+	 * reads or writes them anywhere, it only routes a value into the environment
+	 * of the one command that asked and masks it back out of what comes home.
+	 * See `extensions/tools/qa-credentials.ts` for why that is the whole design.
+	 */
+	qaCredentials?: QaCredential[];
 	pluginPaths?: string[];
 	extensions?: AgentConfig["extensions"];
 	execution?: AgentConfig["execution"];

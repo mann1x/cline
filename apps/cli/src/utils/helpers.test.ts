@@ -214,6 +214,56 @@ describe("parseArgs", () => {
 		expect(parsed.invalidRetries).toBeUndefined();
 	});
 
+	it.each([
+		"off",
+		"nudge",
+		"require",
+	] as const)("parses --edit-verification %s", (mode) => {
+		const parsed = parseArgs(["--edit-verification", mode]);
+		expect(parsed.editVerification).toBe(mode);
+		expect(parsed.invalidEditVerification).toBeUndefined();
+	});
+
+	// Kept out of `editVerification` rather than coerced to the default: the run
+	// fails on this rather than pretending the mode was in force.
+	it("refuses an --edit-verification mode it does not know", () => {
+		const parsed = parseArgs(["--edit-verification", "strict"]);
+		expect(parsed.editVerification).toBeUndefined();
+		expect(parsed.invalidEditVerification).toBe("strict");
+	});
+
+	it("leaves the mode unset when the flag is absent, so the host keeps its default", () => {
+		const parsed = parseArgs(["Audit the repo"]);
+		expect(parsed.editVerification).toBeUndefined();
+		expect(parsed.invalidEditVerification).toBeUndefined();
+	});
+
+	it.each(["on", "off"] as const)("parses --task-progress %s", (mode) => {
+		const parsed = parseArgs(["--task-progress", mode]);
+		expect(parsed.taskProgress).toBe(mode);
+		expect(parsed.invalidTaskProgress).toBeUndefined();
+	});
+
+	it("refuses a --task-progress value it does not know", () => {
+		const parsed = parseArgs(["--task-progress", "yes"]);
+		expect(parsed.taskProgress).toBeUndefined();
+		expect(parsed.invalidTaskProgress).toBe("yes");
+	});
+
+	// Zero is a value, not an absence: it leaves the checklist in place and stops
+	// only the reminding, so it has to survive parsing rather than read as unset.
+	it("keeps a --task-progress-interval of zero", () => {
+		const parsed = parseArgs(["--task-progress-interval", "0"]);
+		expect(parsed.taskProgressInterval).toBe(0);
+		expect(parsed.invalidTaskProgressInterval).toBeUndefined();
+	});
+
+	it("refuses a negative --task-progress-interval", () => {
+		const parsed = parseArgs(["--task-progress-interval", "-1"]);
+		expect(parsed.taskProgressInterval).toBeUndefined();
+		expect(parsed.invalidTaskProgressInterval).toBe("-1");
+	});
+
 	it("supports yolo as an auto-approval shortcut", () => {
 		const parsedYolo = parseArgs(["--yolo"]);
 		expect(parsedYolo.mode).toBe("yolo");

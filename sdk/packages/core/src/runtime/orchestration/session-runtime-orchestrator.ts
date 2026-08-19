@@ -48,6 +48,7 @@ import {
 	mergeModelOptions,
 	type ToolCallRecord,
 } from "@cline/shared";
+import { NO_CHANGE_ERROR_PREFIX } from "../../extensions/tools/executors/editor";
 import { filterDisabledTools } from "../../services/global-settings";
 import {
 	createAgentModelFromConfig,
@@ -88,6 +89,161 @@ function formatToolResultError(output: unknown): string {
 	} catch {
 		return String(output);
 	}
+}
+
+/**
+ * The envelope entries in a tool result, whatever wrapper it arrived in.
+ *
+ * The three predicates below all read `{query, result, success, error?}`, and
+ * all three used to require it to arrive as an object. Not every tool sends it
+ * that way: `editor` returns the envelope already serialised, so its results
+ * reach here as a JSON *string* and every predicate fell through the
+ * `typeof entry === "object"` test to its safe answer -- "not a failure, not a
+ * no-op, no regression". The safe answer is `productive`, which clears the
+ * loop tally.
+ *
+ * Measured live: the identical `editor` call, one signature, six times against
+ * six `No change: lines 89-97 already reads exactly this way` refusals, with a
+ * re-read of the file between each. Every one was recorded as a productive
+ * call, so the counter never reached one, and neither the warning nor the stop
+ * could fire.
+ *
+ * Parsing is best-effort and failure is silent: a string that is not the
+ * envelope is left exactly as it was, so an unrecognised shape still reads as
+ * productive rather than ending a task that was working.
+ */
+function toResultEntries(output: unknown): unknown[] {
+	const raw = Array.isArray(output) ? output : [output];
+	return raw.map((entry) => {
+		if (typeof entry !== "string") {
+			return entry;
+		}
+		try {
+			const parsed = JSON.parse(entry);
+			return parsed != null && typeof parsed === "object" ? parsed : entry;
+		} catch {
+			return entry;
+		}
+	});
+}
+
+/**
+ * Whether every operation in a tool result reported failure.
+ *
+ * Tools answer with the `{query, result, success, error?}` envelope — one
+ * object, or one per request when the call was batched. A partial failure is
+ * still progress, so only a result whose every entry failed counts as having
+ * got nowhere.
+ *
+ * Anything that is not that envelope is read as productive. An unrecognised
+ * shape must never be taken for failure: this feeds a loop stop, and the cost
+ * of guessing wrong is ending a task that was working.
+ */
+function allOperationsFailed(output: unknown): boolean {
+	const entries = toResultEntries(output);
+	if (entries.length === 0) {
+		return false;
+	}
+	for (const entry of entries) {
+		if (entry == null || typeof entry !== "object") {
+			return false;
+		}
+		if (!("success" in entry)) {
+			return false;
+		}
+		if ((entry as { success?: unknown }).success !== false) {
+			return false;
+		}
+	}
+	return true;
+}
+
+/**
+ * Whether a tool result reports that it made things worse.
+ *
+ * Failure is not the only way a call gets nowhere. An edit can land, report
+ * `success: true`, and leave the file with diagnostics it did not have before —
+ * which the host marks on the result as `regressed`. Measured on a live
+ * session: eight consecutive `editor` calls, every one successful, the file's
+ * diagnostics 2 → 20, and the class under repair written into the file three
+ * times over. Read as eight productive calls, the barren-repeat counter was
+ * reset on each and the loop stop could never fire.
+ *
+ * Same conservative reading as `allOperationsFailed`: only an explicit `true`
+ * counts, so an unrecognised shape can never end a task that was working.
+ *
+ * Exported for tests: it is the whole of the new loop signal, and driving a
+ * full runtime to assert one boolean would test the harness instead.
+ */
+export function introducedRegression(output: unknown): boolean {
+	const entries = toResultEntries(output);
+	return entries.some(
+		(entry) =>
+			entry != null &&
+			typeof entry === "object" &&
+			(entry as { regressed?: unknown }).regressed === true,
+	);
+}
+
+/**
+ * Whether a tool result says the call asked for nothing.
+ *
+ * This is a different animal from ordinary failure. An edit can fail for a
+ * reason that will not hold next time — a range that had moved, a read that had
+ * gone stale — and retrying it is reasonable. A "No change" refusal is the
+ * tool reporting that it compared the payload against the file and they were
+ * already identical, so an identical retry is answerable in advance.
+ *
+ * Measured: the same `editor` call, lines 94-96 and the same 1,336 characters,
+ * sent seven times against six of these refusals, with the whole file re-read
+ * between four of them. Twenty-four minutes, no edit, and the run ended on the
+ * loop stop regardless.
+ *
+ * Matches on the marker the message is built from rather than a copied string,
+ * and only where the envelope reports failure — a file whose contents happen to
+ * mention "No change" cannot trip it.
+ *
+ * Exported for tests, like `introducedRegression`: it is one boolean, and
+ * driving a full runtime to assert it would test the harness instead.
+ */
+export function declaredNoOp(output: unknown): boolean {
+	const entries = toResultEntries(output);
+	return entries.some((entry) => {
+		if (entry == null || typeof entry !== "object") {
+			return false;
+		}
+		const record = entry as { success?: unknown; error?: unknown };
+		return (
+			record.success === false &&
+			typeof record.error === "string" &&
+			record.error.includes(NO_CHANGE_ERROR_PREFIX)
+		);
+	});
+}
+
+/**
+ * Put the loop guard's warning where the model cannot miss it.
+ *
+ * Onto the failure text itself when there is one, because that is the sentence
+ * the model is reading to decide what to do next, and a countdown filed beside
+ * it in a field of its own is a footnote. The `No change` marker other
+ * predicates match on is at the front of that string and stays there.
+ */
+function attachLoopWarning(output: unknown, warning: string): unknown {
+	if (typeof output === "string") {
+		return `${output}\n\n${warning}`;
+	}
+	if (Array.isArray(output)) {
+		return [...output, { type: "text", text: warning }];
+	}
+	if (output != null && typeof output === "object") {
+		const record = output as Record<string, unknown>;
+		if (typeof record.error === "string" && record.error) {
+			return { ...record, error: `${record.error}\n\n${warning}` };
+		}
+		return { ...record, loop_guard: warning };
+	}
+	return warning;
 }
 
 async function resolveRuleContent(
@@ -239,6 +395,26 @@ function mergeRuntimeHooks(
 	};
 }
 
+/**
+ * Hard loop verdicts a session is allowed before the run is stopped. Two: one
+ * warning the model can act on, and then the stop. One is not a warning at all
+ * — it is the stop — and three spends another full strike countdown on a model
+ * that has already ignored one.
+ */
+const LOOP_HARD_ESCALATION_LIMIT = 2;
+
+/**
+ * Appended to the first hard verdict. Deliberately unlike the soft warnings it
+ * follows: those count strikes down, and a model that has ignored the countdown
+ * needs to be told what to do differently, not counted at again.
+ */
+const LOOP_FINAL_WARNING =
+	"This is the last attempt that will be allowed with these arguments — the run stops if the same call comes back. Do not send it again. Change what the call does: a different range, different text, or a different tool. If it is not clear what still needs changing, re-read the file and compare it against what you set out to fix.";
+
+/** Appended to the verdict that stops the run, so the abort names the loop. */
+const LOOP_STOP_NOTICE =
+	"The last warning was already given and the same call came back, so the run is being stopped to avoid a loop.";
+
 // =============================================================================
 // Public types
 // =============================================================================
@@ -288,6 +464,14 @@ export class SessionRuntime {
 	private readonly conversation: ConversationStore;
 	private readonly mistakeTracker: MistakeTracker;
 	private readonly loopTracker: LoopDetectionTracker;
+	/** Loop-guard warnings awaiting the tool result they belong to. */
+	private readonly pendingLoopWarnings = new Map<string, string>();
+	/**
+	 * Hard loop verdicts seen in this session, counted across tool names rather
+	 * than per call signature. A run that works its way out of one loop and into
+	 * another has not recovered, and the second one gets no second warning.
+	 */
+	private loopHardEscalations = 0;
 	/**
 	 * True when `execution.loopDetection === false` at construction
 	 * time. Loop inspection is skipped entirely — the tracker still
@@ -361,6 +545,11 @@ export class SessionRuntime {
 	 */
 	private activeTrackerWork: Promise<void> = Promise.resolve();
 	/** True when tracker logic has issued an abort for the active run. */
+	/**
+	 * Set once a model has refused an image. Session-scoped: capabilities do not
+	 * change mid-run, and re-attaching after a refusal only repeats it.
+	 */
+	private imageInputRefused = false;
 	private trackerAbortInFlight = false;
 
 	constructor(config: AgentConfig, deps: SessionRuntimeOrchestratorDeps = {}) {
@@ -377,7 +566,13 @@ export class SessionRuntime {
 		this.conversation = new ConversationStore(config.initialMessages);
 		// A host-configured cap wins over the environment: the env vars are the
 		// rollback lever, the setting is a choice someone actually made.
+		// The context window scales the stale-read rewrite threshold. Without it
+		// the builder falls back to a fixed 64KB, which on a measured 110k-token
+		// session left 13,801 bytes of correctly-detected superseded reads
+		// unreclaimed on every build.
+		const contextWindowTokens = tryGetModelInfo(config)?.contextWindow;
 		this.messageBuilder = new MessageBuilder({
+			...(contextWindowTokens !== undefined ? { contextWindowTokens } : {}),
 			...getMessageBuilderOptionsFromEnv(),
 			...(config.maxToolResultChars !== undefined
 				? { maxToolResultChars: config.maxToolResultChars }
@@ -841,7 +1036,18 @@ export class SessionRuntime {
 			this.conversation.getMessages(),
 		);
 		const runtimeConfig = createAgentRuntimeConfig({
-			agentConfig: this.config,
+			agentConfig: {
+				...this.config,
+				onImageInputUnsupported: () => {
+					this.imageInputRefused = true;
+				},
+				// The same answer the tools guard on, so a description that could
+				// not be produced is judged against what this model can actually
+				// do rather than against a second opinion.
+				modelSupportsImages:
+					!this.imageInputRefused &&
+					(modelInfo?.capabilities?.includes("images") ?? true),
+			},
 			sessionId: this.config.sessionId,
 			agentId: this.agentId,
 			conversationId,
@@ -851,8 +1057,15 @@ export class SessionRuntime {
 			telemetry: this.telemetry,
 			tools,
 			toolContextMetadata: {
+				// Optimistic when a model declares no capabilities, which is every
+				// model outside the shipped catalog — including the local ones this
+				// fork runs, where screenshots do work. A model that refuses an
+				// image says so, and `onImageInputUnsupported` flips this for the
+				// rest of the session, so the wrong guess costs one turn instead of
+				// one per tool call.
 				modelSupportsImages:
-					modelInfo?.capabilities?.includes("images") ?? true,
+					!this.imageInputRefused &&
+					(modelInfo?.capabilities?.includes("images") ?? true),
 				...this.config.toolContextMetadata,
 			},
 			hooks: this.createRuntimeHooks(),
@@ -975,6 +1188,34 @@ export class SessionRuntime {
 		]);
 		return {
 			...hooks,
+			afterTool: async (ctx) => {
+				const after = await hooks.afterTool?.(ctx);
+				const result = after?.result ?? ctx.result;
+				const warning = this.pendingLoopWarnings.get(ctx.toolCall.toolCallId);
+				if (warning === undefined) {
+					return after;
+				}
+				this.pendingLoopWarnings.delete(ctx.toolCall.toolCallId);
+				// Only onto a failure. The verdict is formed before the call runs,
+				// and a repeat that finally works is the outcome the guard wants —
+				// telling it how many strikes are left would be counting down a
+				// success.
+				const failed =
+					result.isError === true ||
+					allOperationsFailed(result.output) ||
+					introducedRegression(result.output) ||
+					declaredNoOp(result.output);
+				if (!failed) {
+					return after;
+				}
+				return {
+					...after,
+					result: {
+						...result,
+						output: attachLoopWarning(result.output, warning),
+					},
+				};
+			},
 			beforeModel: async (ctx) => {
 				const control = await hooks.beforeModel?.(ctx);
 				if (control?.stop) {
@@ -1100,6 +1341,7 @@ export class SessionRuntime {
 					event.toolCall.toolName,
 					event.toolCall.input,
 					event.iteration,
+					event.toolCall.toolCallId,
 				);
 				break;
 			}
@@ -1114,12 +1356,23 @@ export class SessionRuntime {
 				);
 				const isError =
 					resultPart?.type === "tool-result" && resultPart.isError === true;
+				// Tell the loop tracker whether this call got anywhere. A tool
+				// that returns the `{query, result, success}` envelope reports
+				// its own failure there rather than by throwing, so a thrown
+				// error is not the whole story: an edit that changed nothing
+				// comes back as a normal return with `success: false`, and an
+				// edit that broke the file comes back successful but marked
+				// `regressed`.
+				const finishedOutput =
+					resultPart?.type === "tool-result" ? resultPart.output : undefined;
+				this.noteLoopOutcome(
+					!isError &&
+						!allOperationsFailed(finishedOutput) &&
+						!introducedRegression(finishedOutput),
+					declaredNoOp(finishedOutput),
+				);
 				const errorText = isError
-					? formatToolResultError(
-							resultPart?.type === "tool-result"
-								? resultPart.output
-								: undefined,
-						)
+					? formatToolResultError(finishedOutput)
 					: undefined;
 				const record: ToolCallRecord = {
 					id: event.toolCall.toolCallId,
@@ -1168,7 +1421,13 @@ export class SessionRuntime {
 				} else if (succeeded > 0) {
 					// Productive turn — reset the tracker so transient
 					// failures don't accumulate across unrelated turns.
-					this.mistakeTracker.reset();
+					//
+					// Through the same queue the records go through. Resetting
+					// synchronously raced them: a record already queued applied
+					// after the reset had run and restored the count, so a run
+					// that alternated failures with successful edits still
+					// stopped on "6 errors in a row" having never had six.
+					this.enqueueMistakeReset();
 				}
 				break;
 			}
@@ -1247,10 +1506,22 @@ export class SessionRuntime {
 	 *                 `action: "stop"`, append the stop notice and
 	 *                 abort the active runtime.
 	 */
+	/**
+	 * Report a finished tool call's outcome to the loop tracker, so a repeat
+	 * that keeps failing can be told apart from one that keeps working.
+	 */
+	private noteLoopOutcome(productive: boolean, futile = false): void {
+		if (this.loopDetectionDisabled) {
+			return;
+		}
+		this.loopTracker.noteOutcome(productive, futile);
+	}
+
 	private inspectLoopForToolCall(
 		toolName: string,
 		input: unknown,
 		iteration: number,
+		toolCallId: string,
 	): void {
 		if (this.trackerAbortInFlight || this.loopDetectionDisabled) {
 			return;
@@ -1261,21 +1532,54 @@ export class SessionRuntime {
 		}
 		if (verdict.kind === "soft") {
 			if (verdict.message) {
-				this.conversation.appendMessage({
-					role: "user",
-					content: [{ type: "text", text: verdict.message }],
-				});
+				// Held for `afterTool` rather than appended to the conversation
+				// store. The store is snapshotted into `initialMessages` when the
+				// run starts and overwritten from `runResult.messages` when it
+				// ends, so a message appended to it mid-run reaches nothing:
+				// verified on a live session where the guard counted six refusals
+				// and not one of the twenty-six requests on the wire contained a
+				// word of the warning. A tool result is the one channel that is
+				// certain to be read.
+				this.pendingLoopWarnings.set(toolCallId, verdict.message);
 			}
 			return;
 		}
-		// Hard escalation.
+		// Hard escalation. The first one is a last warning, not a stop.
+		//
+		// A hard verdict says the model has ignored the soft warnings, which is
+		// worth acting on but is not the same thing as a run that cannot go
+		// anywhere: measured on a 34-iteration run that had made nine edits and
+		// six checks in twenty-four minutes and was ended by a single repeated
+		// `editor` call, at one recorded mistake out of a limit of six. What that
+		// run never got was an instruction that differed from the ones it had
+		// already ignored — every soft warning counted strikes down, and then the
+		// run ended without the model being told the countdown had run out.
+		//
+		// So the first hard verdict changes what the model is told, rather than
+		// only how the run ends: the diagnosis plus an explicit last warning,
+		// delivered through the tool result, and the call still runs. It costs one
+		// consecutive mistake like any other, so it also counts toward the limit.
+		// The next hard verdict stops the run, and says the loop is why.
+		const diagnosis =
+			verdict.message ?? `Detected repeated tool calls to \`${toolName}\`.`;
+		this.loopHardEscalations += 1;
+		if (this.loopHardEscalations < LOOP_HARD_ESCALATION_LIMIT) {
+			this.pendingLoopWarnings.set(
+				toolCallId,
+				`${diagnosis}\n\n${LOOP_FINAL_WARNING}`,
+			);
+			this.enqueueMistakeRecord({
+				iteration,
+				reason: "tool_execution_failed",
+				details: diagnosis,
+			});
+			return;
+		}
 		this.enqueueMistakeRecord({
 			iteration,
 			reason: "tool_execution_failed",
 			forceAtLimit: true,
-			details:
-				verdict.message ??
-				`Detected repeated tool calls to \`${toolName}\`; stopping to avoid a loop.`,
+			details: `${diagnosis} ${LOOP_STOP_NOTICE}`,
 		});
 	}
 
@@ -1290,6 +1594,19 @@ export class SessionRuntime {
 	 * to the conversation and abort the active runtime so the run ends
 	 * with `finishReason: "aborted"`.
 	 */
+	/** Clear the tracker in order with any records already queued. */
+	private enqueueMistakeReset(): void {
+		if (this.trackerAbortInFlight) {
+			return;
+		}
+		this.activeTrackerWork = this.activeTrackerWork.then(() => {
+			if (this.trackerAbortInFlight) {
+				return;
+			}
+			this.mistakeTracker.reset();
+		});
+	}
+
 	private enqueueMistakeRecord(input: {
 		iteration: number;
 		reason: "api_error" | "invalid_tool_call" | "tool_execution_failed";
@@ -1359,6 +1676,10 @@ export class SessionRuntime {
 			toolCalls: this.currentRunToolCalls,
 			iterations: runResult?.iterations ?? 0,
 			finishReason,
+			// Carried across so a host has something better than a guess. The stop
+			// reason is set by whatever asked for the abort — the mistake tracker
+			// passes `outcome.reason` into `abort()` — and it stopped here.
+			...(runResult?.abortReason ? { abortReason: runResult.abortReason } : {}),
 			model: {
 				id: this.config.modelId,
 				provider: this.config.providerId,

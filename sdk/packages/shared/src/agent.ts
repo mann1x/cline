@@ -243,7 +243,34 @@ export type AgentModelFinishReason =
  * runtime's recovery policy and telemetry (`error_class`). Extend with new
  * classes (auth, rate_limit, billing, ...) as consumers need them.
  */
-export type ProviderErrorClass = "context_window_exceeded" | "unknown";
+export interface AgentImageToDescribe {
+	/** Base64 image data, as carried on an `AgentMessagePart` of type `image`. */
+	image: string;
+	mediaType?: string;
+	/** Text that accompanied the image, e.g. the tool's console output. */
+	context?: string;
+}
+
+export type ProviderErrorClass =
+	| "context_window_exceeded"
+	/**
+	 * The model refused an image in the request. Told apart from `unknown`
+	 * because it is recoverable without the user: the images can be dropped and
+	 * the turn resent, where an unknown failure has nowhere to go.
+	 */
+	| "image_input_unsupported"
+	/**
+	 * The provider could not parse a tool call the model emitted. Told apart
+	 * from `unknown` for the same reason as the image case: the model can be
+	 * asked to send the call again, where an unknown failure has nowhere to go.
+	 *
+	 * Note what this is not. The payload is malformed, and repairing it is the
+	 * one response that must never be taken — a call truncated mid-value would
+	 * be "repaired" into writing the fragment, silently, over the file it
+	 * names. Asking for the whole call again is the only safe recovery.
+	 */
+	| "tool_call_unparsable"
+	| "unknown";
 
 export type AgentModelEvent =
 	| { type: "text-delta"; text: string }
@@ -346,6 +373,36 @@ export interface AgentRunLifecycleContext {
 // =============================================================================
 // Runtime hook bag
 // =============================================================================
+
+/**
+ * Everything a turn discarded at the output cap was carrying.
+ *
+ * Not just the reasoning. The answer it had begun writing and the call it had
+ * begun making are the most concrete statements of what it decided, and both
+ * went into the bin with the rest.
+ */
+export interface DiscardedTurnInput {
+	reasoning: string;
+	/** The reply as far as it got before the cap cut it off. */
+	text?: string;
+	/**
+	 * Whether the cap that cut this turn off was the context window.
+	 *
+	 * The distinction decides how much may be spent salvaging it. A turn cut off
+	 * by `num_predict` with two thirds of the window free can afford the same
+	 * two passes a compaction makes; one cut off because there was no room left
+	 * to answer in cannot, and gets the cheap single pass.
+	 */
+	windowBound?: boolean;
+}
+
+/** What a host makes of a discarded turn. Both halves are optional. */
+export interface DiscardedTurnCondensation {
+	/** Where the turn had got to, in its own voice. */
+	note?: string;
+	/** What the reasoning learned, which the note does not carry. */
+	retrospective?: string;
+}
 
 /**
  * 7-callback hook bag consumed by `AgentRuntime`.
@@ -458,6 +515,18 @@ export interface AgentRuntimeConfig {
 		 * the bound is on consecutive silence rather than on the run.
 		 */
 		maxNoToolCallNudges?: number;
+		/**
+		 * How many consecutive turns cut off at the per-turn output cap are
+		 * retried before the run ends. Defaults to 2; zero restores the older
+		 * behaviour where a truncated turn ends the run.
+		 *
+		 * A turn that hits the cap with no tool calls in it produced nothing the
+		 * run can use, and the model cannot see that it was cut off. Retrying
+		 * discards the truncated reply — it never enters the history — and tells
+		 * the model what happened, so the retry differs instead of reproducing
+		 * the same overlong output. The counter resets on any turn that finishes.
+		 */
+		maxTruncatedTurnRetries?: number;
 	};
 	toolExecution?: "sequential" | "parallel";
 	toolPolicies?: Record<string, ToolPolicy>;
@@ -478,9 +547,59 @@ export interface AgentRuntimeConfig {
 		| Promise<AgentRuntimePrepareTurnResult | undefined>
 		| AgentRuntimePrepareTurnResult
 		| undefined;
+	/**
+	 * Optional last look at reasoning that is about to be discarded.
+	 *
+	 * A turn cut off at the output cap with no tool call is thrown away whole --
+	 * the reply was never finished, and resending it would spend the same budget
+	 * on output already abandoned. But that turn's reasoning is the only one
+	 * that reliably ends at the model's thinking budget, and it is exactly the
+	 * work the retry is about to redo from nothing.
+	 *
+	 * Called with that reasoning before it is dropped. Whatever comes back is
+	 * given to the model as a note it left itself; the discarded message still
+	 * never re-enters the transcript. Returning nothing discards as before.
+	 */
+	condenseDiscardedReasoning?: (
+		input: DiscardedTurnInput,
+	) =>
+		| Promise<DiscardedTurnCondensation | undefined>
+		| DiscardedTurnCondensation
+		| undefined;
 	// Optional host callback used by interactive sessions to inject a queued
 	// user steering message between agent loop iterations, before the next
 	// model request.
+	/**
+	 * Called once when a model refuses a request for carrying an image, after
+	 * the runtime has dropped the images and before it retries. Lets the host
+	 * stop attaching them for the rest of the session, so the refusal costs one
+	 * turn rather than one per tool call.
+	 */
+	onImageInputUnsupported?: () => void;
+	/**
+	 * Turns images into text using a second model, for a primary model that
+	 * cannot read them (or reads them poorly).
+	 *
+	 * Returns one entry per image, in order; `undefined` for any the second
+	 * model could not describe, so the caller can decide what to do with that
+	 * one rather than losing the whole batch.
+	 */
+	describeImages?: (
+		images: readonly AgentImageToDescribe[],
+	) => Promise<readonly (string | undefined)[]>;
+	/**
+	 * Describe images on every turn rather than only after a refusal. Set when
+	 * the user has configured a separate vision model: the point of doing so is
+	 * that the primary model never sees the image.
+	 */
+	alwaysDescribeImages?: boolean;
+	/**
+	 * Whether the primary model can read an image itself.
+	 *
+	 * Only consulted when a description could not be produced: it decides
+	 * between leaving the image and replacing it with a note.
+	 */
+	modelSupportsImages?: boolean;
 	consumePendingUserMessage?: () =>
 		| string
 		| undefined
@@ -593,4 +712,15 @@ export interface AgentRunResult {
 	messages: readonly AgentMessage[];
 	usage: AgentUsage;
 	error?: Error;
+	/**
+	 * Why an aborted run was aborted, when something said so.
+	 *
+	 * Kept apart from `error`, which means the run *failed*: an abort is a stop
+	 * that was asked for, and a consumer treating the two alike would report a
+	 * mistake limit as a crash. Carried because the reason was being thrown away
+	 * exactly when it was the only thing that could explain the stop — the
+	 * runtime aborts with a message, and every host downstream had to infer a
+	 * cause from booleans it happened to hold.
+	 */
+	abortReason?: string;
 }

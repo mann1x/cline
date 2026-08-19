@@ -7,7 +7,10 @@ import {
 	lastObservedRequestTokens,
 	measureRequestInputChars,
 	observeRequestTokens,
+	observeThinkingTokens,
 	resetTokenCalibration,
+	THINKING_CHARS_PER_TOKEN,
+	thinkingCharsPerToken,
 } from "./tokens";
 
 afterEach(() => {
@@ -175,5 +178,74 @@ describe("calibration state across module copies", () => {
 		expect(lastObservedRequestTokens()).toBe(128_000);
 		expect(charsPerToken()).toBeCloseTo(5.9, 5);
 		resetTokenCalibration();
+	});
+});
+
+/**
+ * One ratio for a whole request is an average over two populations that do not
+ * tokenize alike, and the mix moves every turn. The consequence is not
+ * symmetric: a reasoning-heavy request is *under*counted, which is the
+ * direction that lets one be built too large. Measured live at 71,610
+ * estimated tokens for a request the server rejected against a 110,000 window.
+ */
+describe("counting reasoning apart from the rest", () => {
+	afterEach(() => {
+		resetTokenCalibration();
+	});
+
+	const request = (reasoningChars: number, otherChars: number) => ({
+		messages: [
+			{
+				role: "assistant",
+				content: [
+					{ type: "thinking", thinking: "x".repeat(reasoningChars) },
+					{ type: "text", text: "y".repeat(otherChars) },
+				],
+			},
+		],
+	});
+
+	it("charges reasoning at its own rate", () => {
+		// Calibrated on a request that is mostly JSON and code.
+		observeRequestTokens(420_000, 100_000);
+
+		const heavy = estimateRequestInputTokens(request(40_000, 1_000));
+		const light = estimateRequestInputTokens(request(1_000, 40_000));
+
+		// Same total characters, very different token cost — which is the whole
+		// point, and is invisible to a single ratio.
+		expect(heavy).toBeGreaterThan(light * 1.3);
+	});
+
+	it("does not let both halves account for the same characters", () => {
+		// The general ratio is calibrated on what is left once reasoning has
+		// been charged, so the split does not silently inflate every estimate.
+		observeRequestTokens(100_000, 25_000, 40_000);
+
+		expect(charsPerToken()).toBeGreaterThan(0);
+		expect(charsPerToken()).toBeLessThan(16);
+	});
+
+	it("keeps its old behaviour for a request with no reasoning in it", () => {
+		observeRequestTokens(400_000, 100_000);
+		const chars = measureRequestInputChars({
+			messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
+		});
+
+		expect(
+			estimateRequestInputTokens({
+				messages: [
+					{ role: "user", content: [{ type: "text", text: "hello" }] },
+				],
+			}),
+		).toBe(estimateTokens(chars));
+	});
+
+	it("learns the reasoning ratio from a turn that reported its own cost", () => {
+		expect(thinkingCharsPerToken()).toBe(THINKING_CHARS_PER_TOKEN);
+
+		observeThinkingTokens(43_000, 16_000);
+
+		expect(thinkingCharsPerToken()).toBeCloseTo(43_000 / 16_000, 5);
 	});
 });

@@ -346,6 +346,25 @@ export function isCerebrasProvider(
 	);
 }
 
+/**
+ * Whether this request is going to an Ollama server.
+ *
+ * Checks the same three identifiers as {@link isCerebrasProvider}: a provider
+ * can be named at the request, at the resolved config, or by the manifest, and
+ * a custom entry pointed at a local Ollama carries the name in only one of
+ * them.
+ */
+export function isOllamaProvider(
+	request: Pick<GatewayStreamRequest, "providerId">,
+	context: GatewayProviderContext,
+): boolean {
+	return [
+		request.providerId,
+		context.config.providerId,
+		context.provider.id,
+	].some((id) => id.toLowerCase() === "ollama");
+}
+
 export function modelReasoningDefaultsOn(options: {
 	request: Pick<GatewayStreamRequest, "providerId" | "modelId">;
 	context: GatewayProviderContext;
@@ -354,4 +373,65 @@ export function modelReasoningDefaultsOn(options: {
 		getReasoningDefaultOnMetadata(options.context) ??
 		isOllamaQwen3ModelIdFallback(options.request)
 	);
+}
+
+export type ReasoningHistoryMode = "all" | "last" | "none";
+
+/**
+ * The mode for a provider named only by its id.
+ *
+ * The context-aware resolver below is the one the request path uses, because a
+ * custom entry can carry the provider's name in any of three places. Callers
+ * outside that path -- the compaction pipeline, which must measure the same
+ * request the gateway will send -- have only the id, and for the providers this
+ * rule names that is enough.
+ */
+export function reasoningHistoryModeForProvider(
+	providerId: string | undefined,
+): ReasoningHistoryMode {
+	switch ((providerId ?? "").toLowerCase()) {
+		case "cerebras":
+		// Ollama's provider drops every reasoning part before the request
+		// leaves; the resolver below carries the measurement. This has to agree
+		// with it or the compaction pipeline measures a request the gateway
+		// will not send, which is the error this pair exists to prevent.
+		case "ollama":
+			return "none";
+		default:
+			return "all";
+	}
+}
+
+export function resolveReasoningHistoryMode(
+	request: GatewayStreamRequest,
+	context: GatewayProviderContext,
+): ReasoningHistoryMode {
+	if (isCerebrasProvider(request, context)) {
+		return "none";
+	}
+	// Ollama transmits no reasoning history at all, so this says so.
+	//
+	// It used to resolve to "last", then to "all" on the reasoning that a model
+	// should keep its own recent thinking. Neither described what happens on the
+	// wire. `ollama-ai-provider-v2` aliases `provider.chat` to its responses
+	// model, and that converter drops every assistant reasoning part and pushes
+	// a warning per part -- measured at 23,695 warnings in a single transaction,
+	// about 87 per request.
+	//
+	// Saying "all" while sending none is not a cosmetic mismatch: the estimator
+	// measures with this mode (see `resolveReasoningHistoryMode` in
+	// `gateway.ts`), so it counted characters the provider threw away. Measured
+	// on adjacent requests of one run: 592,322 characters estimated against a
+	// server-side prompt of 265,274 -- 2.23x -- and the overstatement is
+	// subtracted from the output cap, which resolved to 32,000 on a 262,144
+	// window.
+	//
+	// Restoring the transport is a separate question and not obviously a win:
+	// ollama's qwen3.5 renderer keeps assistant think blocks for every message
+	// after the last real user turn, so in an agent run with one user message it
+	// would render the entire thinking history into every prompt.
+	if (isOllamaProvider(request, context)) {
+		return "none";
+	}
+	return "all";
 }

@@ -3,6 +3,7 @@ import { combineCommandSequences } from "@shared/combineCommandSequences"
 import { combineHookSequences } from "@shared/combineHookSequences"
 import { getApiMetrics, getLastApiReqTotalTokens } from "@shared/getApiMetrics"
 import { BooleanRequest, StringRequest } from "@shared/proto/cline/common"
+import { resolveVisionModelStatus } from "@shared/vision-config"
 import { useCallback, useEffect, useMemo, useRef } from "react"
 import { useMount } from "react-use"
 import { useExtensionState } from "@/context/ExtensionStateContext"
@@ -59,6 +60,8 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 		checkpointRestoreInput,
 		queuedPrompts,
 		turnState,
+		visionModelEnabled,
+		visionModeApiConfiguration,
 	} = useExtensionState()
 	const isProdHostedApp = userInfo?.apiBaseUrl === "https://app.cline.bot"
 	const shouldShowQuickWins = isProdHostedApp && (!taskHistory || taskHistory.length < QUICK_WINS_HISTORY_THRESHOLD)
@@ -219,11 +222,24 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 
 	const { selectedModelInfo } = useNormalizedApiConfiguration(mode)
 
+	// A second model configured to read images makes them usable here whatever
+	// the primary model can do — the description goes in the image's place
+	// before the primary ever sees it. Asking only the primary is how the file
+	// picker came to refuse an image for a session that was set up to handle
+	// one.
+	//
+	// The toggle alone is not that question, though. With it on and the Vision
+	// tab empty no describer is installed, and trusting the toggle here let an
+	// image reach a model that answered "this model does not support image
+	// input" and failed the run. The session resolves it the same way.
+	const imagesAccepted =
+		selectedModelInfo.supportsImages || resolveVisionModelStatus(visionModelEnabled, visionModeApiConfiguration) === "ready"
+
 	const selectFilesAndImages = useCallback(async () => {
 		try {
 			const response = await FileServiceClient.selectFiles(
 				BooleanRequest.create({
-					value: selectedModelInfo.supportsImages,
+					value: imagesAccepted,
 				}),
 			)
 			if (
@@ -252,7 +268,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 		} catch (error) {
 			console.error("Error selecting images & files:", error)
 		}
-	}, [selectedModelInfo.supportsImages])
+	}, [imagesAccepted])
 
 	const shouldDisableFilesAndImages = selectedImages.length + selectedFiles.length >= MAX_IMAGES_AND_FILES_PER_MESSAGE
 
@@ -339,7 +355,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 
 	// Use scroll behavior hook
 	const scrollBehavior = useScrollBehavior(displayMessages, visibleMessages, groupedMessages, expandedRows, setExpandedRows)
-	const { scrollToBottomSmooth, scrollToBottomAuto, disableAutoScrollRef } = scrollBehavior
+	const { scrollToBottomSmooth, scrollToBottomAuto, disableAutoScrollRef, resumeFollowing } = scrollBehavior
 
 	// When a prompt gets queued, the queue banner mounts (or grows) in the footer, which
 	// shrinks the messages area and visually covers the bottom of the conversation. No new
@@ -360,7 +376,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 			return
 		}
 		// Queueing is a deliberate send, so re-engage bottom pinning like handleSendMessage does.
-		disableAutoScrollRef.current = false
+		resumeFollowing()
 		scrollToBottomSmooth()
 		// Settle with an instant scroll once the footer's layout change has landed.
 		setTimeout(() => {
@@ -368,7 +384,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 				scrollToBottomAuto()
 			}
 		}, 50)
-	}, [queuedPromptCount, taskTs, scrollToBottomSmooth, scrollToBottomAuto, disableAutoScrollRef])
+	}, [queuedPromptCount, taskTs, scrollToBottomSmooth, scrollToBottomAuto, disableAutoScrollRef, resumeFollowing])
 
 	const placeholderText = useMemo(() => {
 		const text = task ? "Type a message..." : "Type your task here..."

@@ -32,6 +32,12 @@ export {
 	summarizeToolCallSignatures,
 	type ToolCallSignature,
 } from "./prompt-template-review";
+export {
+	describeResolvedPromptTemplate,
+	resolveSessionPromptTemplateFrom,
+	type SessionPromptTemplateRequest,
+	type SessionPromptTemplateResult,
+} from "./prompt-template-session";
 export type {
 	AvailableRuntimeCommand,
 	RuntimeCommandKind,

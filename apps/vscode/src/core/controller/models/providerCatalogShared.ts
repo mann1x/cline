@@ -227,6 +227,7 @@ export function toRedactedProviderConfigResponse(
 		aws: toRedactedAwsProviderConfigProto(config.aws),
 		gcp: toRedactedGcpProviderConfigProto(config.gcp),
 		contextWindow: config.contextWindow,
+		parallelSessions: config.parallelSessions,
 		reasoning: config.reasoning
 			? {
 					enabled: config.reasoning.enabled,
@@ -257,6 +258,11 @@ export function toProviderConfigPatch(protoPatch: WriteProviderConfigPatch | und
 		// A zero context window over the wire means "clear the setting".
 		...(protoPatch.contextWindow !== undefined
 			? { contextWindow: protoPatch.contextWindow > 0 ? protoPatch.contextWindow : null }
+			: {}),
+		// And a zero parallel-session count means the same. Cleared falls back to
+		// one, which is what `--parallel` and a basic plan give you.
+		...(protoPatch.parallelSessions !== undefined
+			? { parallelSessions: protoPatch.parallelSessions > 0 ? protoPatch.parallelSessions : null }
 			: {}),
 		...(protoPatch.accessToken !== undefined || protoPatch.refreshToken !== undefined || protoPatch.accountId !== undefined
 			? {

@@ -36,11 +36,19 @@ import {
 	withTimeout,
 } from "./helpers";
 import {
+	createSecretRedactor,
+	describeQaCredentials,
+	type QaCredential,
+	qaCredentialNames,
+	resolveCredentialEnv,
+} from "./qa-credentials";
+import {
 	type ApplyPatchInput,
 	ApplyPatchInputSchema,
 	ApplyPatchInputUnionSchema,
 	type AskQuestionInput,
 	AskQuestionInputSchema,
+	describeEditorArgumentGap,
 	type EditFileInput,
 	EditFileInputSchema,
 	type FetchWebContentInput,
@@ -59,7 +67,13 @@ import {
 	type StructuredCommandInput,
 	type SubmitInput,
 	SubmitInputSchema,
+	withNewTextAlias,
 } from "./schemas";
+import {
+	TASK_PROGRESS_PARAM,
+	TASK_PROGRESS_PARAM_DESCRIPTION,
+	withTaskProgressCapture,
+} from "./task-progress";
 import type {
 	ApplyPatchExecutor,
 	AskQuestionExecutor,
@@ -179,6 +193,29 @@ function coalesceAdjacentStringHeredocs(
 	return coalesced;
 }
 
+/**
+ * The credentials a call asked for, off the raw input.
+ *
+ * Read defensively rather than through the schema because `run_commands`
+ * accepts a union of nine input shapes -- a bare string, an argv list, a single
+ * command object -- and only the object form can carry this field at all. A
+ * model that puts it somewhere else gets no credentials rather than a
+ * validation failure that loses the whole call.
+ */
+function readRequestedCredentials(input: unknown): string[] {
+	if (typeof input !== "object" || input === null) {
+		return [];
+	}
+	const requested = (input as { credentials?: unknown }).credentials;
+	if (typeof requested === "string") {
+		return [requested];
+	}
+	if (!Array.isArray(requested)) {
+		return [];
+	}
+	return requested.filter((name): name is string => typeof name === "string");
+}
+
 async function executeShellCommands(
 	commands: Array<string | StructuredCommandInput>,
 	options: {
@@ -188,24 +225,55 @@ async function executeShellCommands(
 		timeoutMs: number;
 		timeoutSource: "default_setting" | "configured_setting";
 		telemetry?: ITelemetryService;
+		/** QA credentials this call may draw on; see `qa-credentials.ts`. */
+		credentials?: readonly QaCredential[];
+		/** Names the call asked for, for a command that references none by text. */
+		requestedCredentials?: readonly string[];
 	},
 ): Promise<ToolOperationResult[]> {
 	const { executor, cwd, context, timeoutMs, timeoutSource, telemetry } =
 		options;
+	const credentials = options.credentials ?? [];
+	// Built once for the call, and applied to every result rather than only to
+	// the commands that received a credential. A command that was given nothing
+	// can still print one -- out of a config file it read, out of a framework
+	// that resolved its own environment -- and that is the leak worth catching.
+	const redact = createSecretRedactor(credentials);
+	const withheldNames = qaCredentialNames([...credentials]);
 
 	return Promise.all(
 		commands.map(async (command): Promise<ToolOperationResult> => {
 			const startedAt = Date.now();
-			const query = formatRunCommandQueryPreview(command);
+			// The command itself is echoed back as `query`, so a value the model
+			// inlined instead of referencing would return in the transcript from
+			// here even if the command printed nothing.
+			const query = redact(formatRunCommandQueryPreview(command));
+			const env = resolveCredentialEnv(credentials, {
+				command,
+				requested: options.requestedCredentials,
+			});
 			try {
 				const output = await withTimeout(
-					executor(command, cwd, context),
+					// Called with three arguments when there is nothing to say, so
+					// an executor that has never heard of per-call options sees the
+					// call it has always seen.
+					//
+					// `withhold` goes on every command once any credential exists,
+					// including the ones that get nothing: its job is to take the
+					// declared names *out* of the inherited environment, which
+					// matters most for the commands that did not ask.
+					credentials.length > 0
+						? executor(command, cwd, context, {
+								...(Object.keys(env).length > 0 ? { env } : {}),
+								withhold: withheldNames,
+							})
+						: executor(command, cwd, context),
 					timeoutMs,
 					`Command timed out after ${timeoutMs}ms`,
 				);
 				return {
 					query,
-					result: output,
+					result: redact(output),
 					success: true,
 				};
 			} catch (error) {
@@ -220,8 +288,8 @@ async function executeShellCommands(
 				if (error instanceof CommandExitError) {
 					return {
 						query,
-						result: error.output,
-						error: error.message,
+						result: redact(error.output),
+						error: redact(error.message),
 						success: false,
 					};
 				}
@@ -229,7 +297,7 @@ async function executeShellCommands(
 				return {
 					query,
 					result: "",
-					error: `Command failed: ${msg}`,
+					error: redact(`Command failed: ${msg}`),
 					success: false,
 				};
 			}
@@ -290,6 +358,9 @@ export function createReadFilesTool(
 			"Read the content of text or image files at the provided absolute paths, or return only an inclusive one-based line range when start_line/end_line are provided on the same file entry as its path. " +
 			"When you already know multiple files you need, read them together in one call, and call this tool in the same response as other independent tool calls. " +
 			`Each read returns at most ${MAX_READ_LINES} lines / ~${Math.round(MAX_READ_OUTPUT_CHARS / 1024)}k characters; longer files report their total line count, page through them with start_line/end_line on that file's entry. ` +
+			"Reading a range is the normal case; reading a file whole is the exception. Locate first, then read: a diagnostic or a stack trace already names the line, `search_codebase` reports the line every match is on, and `code_intel` resolves a symbol to where it is defined. " +
+			"Any of those hands you a line number to read around — take roughly 30 lines either side of it, and widen only if what you needed turned out to fall outside that. Read a file entire only when you have no line to start from and it is genuinely small. " +
+			"The cost of reading more than you need is not the tool call: every line returned stays in the conversation for the rest of the task, crowding out the room left to reason about it. " +
 			"Binary files that are not image and large files are not supported. " +
 			`Output: one object per requested file, in the order requested — ${TOOL_RESULT_ENVELOPE} \`query\` echoes the path you asked for (as \`path:start-end\` when you gave a range), and \`result\` is that file's content, with every line prefixed by its number as \`  92 | text\`. ` +
 			"Those numbers are how you address an edit, and they are not in the file. Never paste them into another tool: text carrying a `92 | ` prefix will not match anything. When you are reading in order to copy text into `editor`, set `line_numbers: false` on that file's entry and get it clean. ",
@@ -399,26 +470,18 @@ export function createSearchTool(
 		retryable: true,
 		maxRetries: 1,
 		execute: async (input, context) => {
-			// Validate input with Zod schema
-			const validate = validateWithZod(SearchCodebaseUnionInputSchema, input);
-			const queries = Array.isArray(validate)
-				? validate
-				: typeof validate === "object"
-					? Array.isArray(validate.queries)
-						? validate.queries
-						: [validate.queries]
-					: [validate];
+			// Validate input with Zod schema. Every branch of the union normalises
+			// to `{ queries: string[] }` with the options alongside it, so which
+			// shape the model chose is no longer this function's problem.
+			const validated = validateWithZod(SearchCodebaseUnionInputSchema, input);
+			const queries = validated.queries;
+			// Left undefined when neither was sent, so the executor keeps applying
+			// its own defaults rather than being handed two explicit undefineds.
 			const queryOptions =
-				!Array.isArray(validate) && typeof validate === "object"
+				validated.context_lines != null || validated.max_per_file != null
 					? {
-							contextLines:
-								"context_lines" in validate
-									? (validate.context_lines ?? undefined)
-									: undefined,
-							maxPerFile:
-								"max_per_file" in validate
-									? (validate.max_per_file ?? undefined)
-									: undefined,
+							contextLines: validated.context_lines ?? undefined,
+							maxPerFile: validated.max_per_file ?? undefined,
 						}
 					: undefined;
 
@@ -522,6 +585,14 @@ export function createShellTool(
 	executor: ShellExecutor,
 	config: Pick<DefaultToolsConfig, "cwd" | "bashTimeoutMs" | "telemetry"> & {
 		shell?: string | (() => string);
+		/**
+		 * QA credentials the user configured.
+		 *
+		 * A provider rather than a list because the set is editable while a
+		 * session runs, and because reading it late keeps the values out of this
+		 * closure until a command actually needs one.
+		 */
+		qaCredentials?: readonly QaCredential[] | (() => readonly QaCredential[]);
 	} = {},
 ): AgentTool<unknown, ToolOperationResult[]> {
 	const timeoutMs = config.bashTimeoutMs ?? 30000;
@@ -536,8 +607,14 @@ export function createShellTool(
 		typeof configShell === "function"
 			? configShell
 			: () => configShell ?? getDefaultShell(process.platform);
+	const configCredentials = config.qaCredentials;
+	const resolveCredentials = (): readonly QaCredential[] =>
+		typeof configCredentials === "function"
+			? configCredentials()
+			: (configCredentials ?? []);
 	const describe = () =>
-		buildRunCommandsDescription(getShellKind(resolveShell()), isWindows);
+		buildRunCommandsDescription(getShellKind(resolveShell()), isWindows) +
+		describeQaCredentials(qaCredentialNames([...resolveCredentials()]));
 
 	const tool = createTool<unknown, ToolOperationResult[]>({
 		name: "run_commands",
@@ -558,20 +635,73 @@ export function createShellTool(
 				timeoutMs,
 				timeoutSource,
 				telemetry: config.telemetry,
+				credentials: resolveCredentials(),
+				requestedCredentials: readRequestedCredentials(input),
 			});
 		},
 	});
 
-	if (typeof configShell === "function") {
+	if (typeof configShell === "function" || configCredentials !== undefined) {
 		// The runtime rebuilds tool definitions from this property for every
 		// model request, so a getter re-derives the description at exactly the
 		// send-to-model boundary. AgentTool consumers only read `description`.
+		// Credentials get the same treatment for the same reason: one added
+		// mid-session should be nameable on the next request, not the next run.
 		Object.defineProperty(tool, "description", {
 			get: describe,
 			enumerable: true,
 		});
 	}
 	return tool;
+}
+
+/**
+ * The checklist as a tool in its own right.
+ *
+ * It carries no behaviour: `withTaskProgressCapture` reads the checklist off
+ * the raw input of every tool call, this one included, so the work is already
+ * done by the time `execute` runs. What it adds is a name the model can call
+ * when it has nothing else to do at that moment -- which is exactly when a
+ * plan is usually written, and exactly when there is no other call to attach
+ * it to.
+ */
+export function createTaskProgressTool(): AgentTool<
+	Record<string, unknown>,
+	ToolOperationResult[]
+> {
+	return createTool<Record<string, unknown>, ToolOperationResult[]>({
+		name: TASK_PROGRESS_PARAM,
+		description:
+			"Record the checklist for this task without doing anything else. " +
+			"Prefer sending `task_progress` alongside a tool call you are already making — it costs no extra step. " +
+			"Use this tool when you have no such call to make: writing the plan before starting, or ticking the last box at the end. " +
+			`Format: one item per line, "- [ ] pending" or "- [x] done".`,
+		inputSchema: {
+			type: "object",
+			properties: {
+				[TASK_PROGRESS_PARAM]: {
+					type: "string",
+					description: TASK_PROGRESS_PARAM_DESCRIPTION,
+				},
+			},
+			required: [TASK_PROGRESS_PARAM],
+		},
+		retryable: false,
+		maxRetries: 0,
+		execute: async (input) => {
+			const checklist = input?.[TASK_PROGRESS_PARAM];
+			const recorded = typeof checklist === "string" && checklist.trim() !== "";
+			return [
+				{
+					query: "task_progress",
+					result: recorded
+						? "Checklist recorded."
+						: "No checklist sent, so nothing changed. Send the list as the `task_progress` argument.",
+					success: recorded,
+				},
+			];
+		},
+	});
 }
 
 /**
@@ -744,8 +874,10 @@ export function createEditorTool(
 			"- Replace lines: `start_line` plus `new_text`, with optional `end_line` (inclusive, defaults to `start_line`). No `old_text` needed. Prefer this when the text is long, minified or repeated: a diagnostic already gives you the line number, and a line number cannot be ambiguous. An empty `new_text` deletes the range.\n" +
 			"- Replace characters: `start_line` and `start_column` plus `new_text`, with optional `end_line`/`end_column` (both inclusive; each defaults to its start). This is the unit a diagnostic speaks in — `Line 108, column 385` — and on a long or minified line it is the only edit that leaves the other 400 characters untouched. `start_column` on its own replaces exactly one character.\n" +
 			"- Insert: `insert_line` plus `new_text`, which adds text before that line without replacing anything. Use `line_count + 1` to append at EOF. Add `insert_column` to insert *within* that line instead, before the character at that column — this is how you add one missing bracket. Use `line_length + 1` to append at the end of the line.\n" +
-			"- Create: `new_text` alone, when the file does not exist. This one has no size limit, because a file being written whole cannot be split. To rewrite a file that already exists, replace lines 1 through its line count.\n" +
+			"- Create, or replace a file whole: `new_text` alone. When the file does not exist this creates it; when it exists this replaces every line, which is allowed once you have read the file, since reading it is what tells you what you are overwriting. `start_line: 1` with `end_line: <line count>` is the same write by another name. Neither has a size limit, because a file written whole cannot be split — but reach for a whole-file write only once a targeted edit has failed, since a rewrite that is slightly wrong quietly loses the parts you did not mean to touch. Never delete a file to get a clean slate: this call already is one, and a deleted file is simply gone if the turn ends before you write it back.\n" +
 			"Use this rather than a shell command for anything that changes a file. If several edits to different files or non-overlapping regions are already known, emit multiple editor tool calls in the same response instead of serializing them across turns. " +
+			"Read the lines you are about to change before you change them: an edit aimed at a range you have not read in its current state is refused. Your own edits count — one that changes the file's length moves every line below it, so read that region again before editing it a second time. Line numbers taken from an earlier turn, from a task summary, or from a diagnostic issued before your last edit are the ones that go stale. " +
+			"Replace means replace. If `new_text` repeats the lines already in the range and then continues, the edit appends a second copy of them rather than replacing anything, and it is refused. Send only the text that should end up in that range. " +
 			"Output: a single `{query, result, success, error?}` object for this one edit, where `query` is `edit:<path>` or `insert:<path>` and `result` describes what changed. " +
 			"A failed edit changes nothing: `success` is false, `error` says why, and the file is exactly as it was. Do not resend the same call — `error` names the fix. In particular, text copied out of a `read_files` result must have its `123 | ` line-number gutter removed first.",
 
@@ -754,7 +886,22 @@ export function createEditorTool(
 		retryable: false, // Editing operations are stateful and should not auto-retry
 		maxRetries: 0,
 		execute: async (input, context) => {
-			const validatedInput = validateWithZod(EditFileInputSchema, input);
+			// Applied before validation rather than inside the schema, so the
+			// JSON Schema the model is shown still advertises exactly one name
+			// for this argument. The alias is a landing net, not a second way
+			// of calling the tool.
+			const aliased = withNewTextAlias(input);
+			// Only on the way out: a call that validates has nothing to be told.
+			const validatedInput = ((): EditFileInput => {
+				try {
+					return validateWithZod(EditFileInputSchema, aliased);
+				} catch (error) {
+					const gap = describeEditorArgumentGap(aliased);
+					throw gap
+						? new Error(`${formatError(error)}\n${gap}`)
+						: (error as Error);
+				}
+			})();
 			const operation = validatedInput.insert_line == null ? "edit" : "insert";
 			const sizeError = getEditorSizeError(validatedInput);
 
@@ -966,6 +1113,7 @@ export function createDefaultTools(
 		enableSkills = true,
 		enableAskQuestion = true,
 		enableSubmitAndExit = false,
+		taskProgress,
 		...config
 	} = options;
 
@@ -1015,6 +1163,25 @@ export function createDefaultTools(
 	// Add submit_and_exit tool if enabled and executor provided
 	if (submitExecutor) {
 		tools.push(createSubmitAndExitTool(submitExecutor, config));
+	}
+
+	// The checklist rides along on other tools, but models call it as a tool
+	// anyway -- reported live as `Model tried to call unavailable tool
+	// 'task_progress'`, twice in a row, while the panel showed "Tasks (2/6)".
+	// Being told a tool does not exist, while the prompt keeps asking for a
+	// checklist, costs a turn every time and teaches the model nothing. Calling
+	// it directly now works and means the same thing.
+	if (taskProgress) {
+		tools.push(createTaskProgressTool());
+	}
+
+	// Applied last, so every tool the caller enabled carries the checklist —
+	// including any added above after this line was written. The wrapper only
+	// adds a parameter and observes it; a tool's own behaviour is unchanged.
+	if (taskProgress) {
+		return tools.map((tool) =>
+			withTaskProgressCapture(tool, taskProgress),
+		) as unknown as AgentTool[];
 	}
 
 	return tools as unknown as AgentTool[];
