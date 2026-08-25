@@ -150,6 +150,49 @@ function describeHistory(history: readonly TransactionOutcome[]): string {
 }
 
 /**
+ * What the model is told when it ends a transaction it never changed.
+ *
+ * Not the protocol rules again. The rules are already in the window — it read
+ * them when the transaction opened and followed none of them — so restating
+ * them buys another few hundred tokens of the same. What it has not been told
+ * is the only thing that is new: that the submission was empty, that this cost
+ * it nothing, and that giving up out loud is a better end than five more of
+ * these.
+ */
+export function buildEmptyAttemptPrompt(input: {
+	transaction: number;
+	maxChanges: number;
+}): string {
+	const label = `TX-${String(input.transaction).padStart(2, "0")}`;
+	return [
+		"== NOTHING WAS CHANGED ==",
+		"",
+		`You ended ${label} without editing a single file, so there was nothing to judge. The transaction was not spent and is still open.`,
+		"",
+		`If you know what to change, state the plan as before — AT MOST ${input.maxChanges} changes, each with WHERE, WHAT and WHY — and then make it.`,
+		"",
+		"If you have run out of ideas, say so plainly in one sentence and stop. Ending the run and saying why is worth more than another empty transaction, and it is not counted against you.",
+	].join("\n");
+}
+
+/**
+ * The line an empty submission ends on, for the user and for the log.
+ *
+ * Worth a line of its own precisely because it is not a verdict: no check ran,
+ * nothing was put back, and a run where this happened reads — from the
+ * transcript alone — like a transaction that quietly went missing.
+ */
+export function describeEmptyAttempt(
+	transaction: number,
+	continued: boolean,
+): string {
+	const label = `TX-${String(transaction).padStart(2, "0")}`;
+	return continued
+		? `${label} was submitted with nothing changed, so it was not spent and is still open.`
+		: `${label} was submitted with nothing changed again, so the run is stopping rather than spending the transactions it has left.`;
+}
+
+/**
  * The line a transaction ends on, for the user and for the log.
  *
  * Says which of the two things happened to their files, because "discarded" is

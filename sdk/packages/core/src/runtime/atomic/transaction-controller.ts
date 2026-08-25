@@ -47,6 +47,19 @@ export type TransactionSettlement =
 export type TransactionEvent =
 	| { type: "opened"; transaction: number; oracle?: Oracle }
 	| { type: "judging"; transaction: number; oracle?: Oracle }
+	/**
+	 * A transaction the model tried to end without changing anything.
+	 *
+	 * Not a settlement: nothing was judged and nothing was put back, so it
+	 * carries no verdict. `continued` says which of the two things happened —
+	 * the transaction was handed back to the model, or the run was let go.
+	 */
+	| {
+			type: "empty";
+			transaction: number;
+			message: string;
+			continued: boolean;
+	  }
 	| {
 			type: "settled";
 			transaction: number;

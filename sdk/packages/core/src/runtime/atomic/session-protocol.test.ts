@@ -170,6 +170,93 @@ describe("the boundary", () => {
 		});
 	});
 
+	// Measured on the harness: a run whose first transaction was discarded closed
+	// the remaining five in nine minutes with no edit in any of them, and read as
+	// six failed attempts when it had made one.
+	it("does not spend a transaction on a submission that changed nothing", async () => {
+		await withWorkspace({ "game.js": "broken" }, async (root) => {
+			const events: string[] = [];
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "auto", oracleCommand: shellCheck(root, "fixed") },
+				onEvent: (event) =>
+					events.push(
+						event.type === "empty"
+							? `empty:${event.transaction}:${event.continued}`
+							: `${event.type}:${event.transaction}`,
+					),
+			});
+
+			await fs.writeFile(path.join(root, "game.js"), "still broken", "utf8");
+			expect(await session?.onCompletionAttempt({ text: "Fixed." })).toContain(
+				"TX-01 discarded",
+			);
+
+			// TX-02 is open and the model changes nothing in it.
+			const message = await session?.onCompletionAttempt({ text: "Done." });
+
+			expect(message).toContain("NOTHING WAS CHANGED");
+			expect(message).toContain("was not spent");
+			expect(session?.controller.transaction).toBe(2);
+			expect(session?.controller.outcomes).toHaveLength(1);
+			expect(events).toContain("empty:2:true");
+			// Nothing was judged, so nothing was put back either.
+			expect(events.filter((event) => event.startsWith("judging"))).toEqual([
+				"judging:1",
+			]);
+		});
+	});
+
+	// Bounded like the runtime's own no-tool-call nudge. Asking a model that has
+	// stopped working to carry on is worth one turn; asking forever is a spin
+	// against the run's wall clock.
+	it("lets the run end rather than nudging an empty submission twice", async () => {
+		await withWorkspace({ "game.js": "broken" }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "auto", oracleCommand: shellCheck(root, "fixed") },
+			});
+
+			await fs.writeFile(path.join(root, "game.js"), "still broken", "utf8");
+			await session?.onCompletionAttempt({ text: "Fixed." });
+
+			expect(await session?.onCompletionAttempt({})).toContain(
+				"NOTHING WAS CHANGED",
+			);
+			await expect(session?.onCompletionAttempt({})).resolves.toBeUndefined();
+			// Four of the six transactions are still unspent, and the run stopped
+			// instead of feeding them empty submissions.
+			expect(session?.controller.outcomes).toHaveLength(1);
+		});
+	});
+
+	it("gives the next transaction its own budget once a real change lands", async () => {
+		await withWorkspace({ "game.js": "broken" }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "auto", oracleCommand: shellCheck(root, "fixed") },
+			});
+
+			await fs.writeFile(path.join(root, "game.js"), "still broken", "utf8");
+			await session?.onCompletionAttempt({ text: "Fixed." });
+			expect(await session?.onCompletionAttempt({})).toContain(
+				"NOTHING WAS CHANGED",
+			);
+
+			// A real change in the same transaction: the strike is forgotten, and
+			// the empty submission that follows it in TX-03 is nudged rather than
+			// treated as the second in a row.
+			await fs.writeFile(path.join(root, "game.js"), "broken again", "utf8");
+			expect(await session?.onCompletionAttempt({})).toContain(
+				"This one is TX-03",
+			);
+			expect(await session?.onCompletionAttempt({})).toContain(
+				"NOTHING WAS CHANGED",
+			);
+			expect(session?.controller.outcomes).toHaveLength(2);
+		});
+	});
+
 	it("discards a change the model says it could not verify", async () => {
 		await withWorkspace({ "notes.md": "before" }, async (root) => {
 			const session = await createAtomicProtocolSession({

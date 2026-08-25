@@ -817,6 +817,25 @@ export class LocalRuntimeHost implements RuntimeHost {
 			// happened three times and finished looks — in the transcript alone —
 			// exactly like one that got it right first time.
 			onEvent: (event) => {
+				// An empty submission is not a verdict and is not presented as one:
+				// nothing ran and nothing was put back. It still goes to the user,
+				// because a transaction that absorbed one and a transaction that
+				// never happened are otherwise indistinguishable in the transcript.
+				if (event.type === "empty") {
+					configWithProvider.logger?.debug?.(event.message);
+					this.eventBridge.dispatchAgentEvent(sessionId, configWithProvider, {
+						type: "notice",
+						noticeType: "status",
+						displayRole: "status",
+						message: event.message,
+						metadata: {
+							kind: "atomic_empty_attempt",
+							transaction: event.transaction,
+							continued: event.continued,
+						},
+					});
+					return;
+				}
 				if (event.type !== "settled") {
 					return;
 				}

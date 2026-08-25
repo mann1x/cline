@@ -1,5 +1,6 @@
 import type { CoreAtomicProtocolConfig } from "../../types/config";
 import { discoverOracle, type Oracle } from "./oracle";
+import { buildEmptyAttemptPrompt, describeEmptyAttempt } from "./protocol";
 import {
 	type SelfReport,
 	TransactionController,
@@ -15,6 +16,21 @@ export const DEFAULT_MAX_CHANGES = 3;
  * all, and the later ones bought re-readings of the same symptom.
  */
 export const DEFAULT_MAX_TRANSACTIONS = 6;
+
+/**
+ * Empty submissions a transaction absorbs before the run is let go.
+ *
+ * One, and bounded for the same reason the runtime bounds its no-tool-call
+ * nudge: asking a model that has stopped working to carry on is worth a turn,
+ * and asking a third time is a spin with a wall clock on it.
+ *
+ * Measured on the harness this protocol comes from. A run whose first
+ * transaction was discarded closed the remaining five in about nine minutes
+ * without a single edit between them — one iteration each, no tool calls, and
+ * the work file byte-identical to the seeded source at the end. It read as six
+ * failed attempts and it was one.
+ */
+export const DEFAULT_MAX_EMPTY_ATTEMPTS = 1;
 
 export interface AtomicProtocolSessionOptions {
 	workspaceRoot: string;
@@ -119,6 +135,7 @@ export async function createAtomicProtocolSession(
 
 	let rules: string | undefined = await controller.open();
 	let finished = false;
+	let emptyAttempts = 0;
 
 	return {
 		controller,
@@ -135,17 +152,50 @@ export async function createAtomicProtocolSession(
 				return undefined;
 			}
 
+			const untouched = await controller.isUntouched();
+
 			// A task that changed nothing is not a transaction. Answering a
 			// question about the code is a legitimate way for a run to end, and
 			// running a typecheck to confirm that nobody edited anything is a cost
 			// with no verdict in it.
-			if (
-				controller.outcomes.length === 0 &&
-				(await controller.isUntouched())
-			) {
+			if (controller.outcomes.length === 0 && untouched) {
 				finished = true;
 				return undefined;
 			}
+
+			// Once a transaction has been judged, an empty submission means
+			// something else: the model has given up, and settling this would
+			// spend a transaction on nothing. So it is not settled. The
+			// transaction stays open, the model is told what it just did, and the
+			// budget is spent only on attempts that contained an attempt.
+			if (untouched) {
+				emptyAttempts += 1;
+				const continued = emptyAttempts <= DEFAULT_MAX_EMPTY_ATTEMPTS;
+				const notice = describeEmptyAttempt(controller.transaction, continued);
+				options.logger?.log?.(`[Atomic] ${notice}`);
+				options.onEvent?.({
+					type: "empty",
+					transaction: controller.transaction,
+					message: notice,
+					continued,
+				});
+				if (!continued) {
+					finished = true;
+					return undefined;
+				}
+				return [
+					notice,
+					buildEmptyAttemptPrompt({
+						transaction: controller.transaction,
+						maxChanges: options.config?.maxChanges ?? DEFAULT_MAX_CHANGES,
+					}),
+				].join("\n\n");
+			}
+
+			// Each transaction gets its own budget: a model that submitted nothing,
+			// was asked again and then made a real change has recovered, and the
+			// next transaction should not start one strike down.
+			emptyAttempts = 0;
 
 			const settlement = await controller.settle({
 				account: text,
