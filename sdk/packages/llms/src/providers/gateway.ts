@@ -98,6 +98,138 @@ export function resolveDefaultMaxOutputTokens(
 	);
 }
 
+/**
+ * The output ceiling a provider named while refusing the cap we sent.
+ *
+ * A synthesized cap is a guess -- {@link resolveDefaultMaxOutputTokens} takes a
+ * share of the window because a model that publishes no ceiling gives it
+ * nothing better to go on -- and on a large window that guess can exceed every
+ * ceiling that exists. Measured: a 1,048,576-token window resolved to 262,144
+ * (mann1x/cline#59), and the model behind it accepts 131,072, so every request
+ * of the session was refused before it started.
+ *
+ * The refusal carries the number the guess should have been. Reading it back
+ * turns a hard failure into one wasted round trip, and only for models the
+ * catalog does not know -- which is the same set the guess was for.
+ */
+const OUTPUT_CEILING_PATTERNS: RegExp[] = [
+	// Ollama Cloud / Z.ai: "max_tokens (262144) exceeds model's maximum output
+	// tokens (131072) for model glm-5.2". The one shape measured from a report.
+	/maximum output tokens\s*\((\d+)\)/i,
+	// Anthropic: "max_tokens: 200000 > 64000, which is the maximum allowed
+	// number of output tokens for ...".
+	/max_tokens:\s*\d+\s*>\s*(\d+)/i,
+	// OpenAI: "max_tokens is too large: 262144. This model supports at most
+	// 128000 completion tokens".
+	/supports at most\s*(\d+)\s*completion tokens/i,
+];
+
+/**
+ * The ceiling a provider named, if the failure was about the output cap.
+ *
+ * Deliberately narrow: it matches only messages that state a number, so a
+ * refusal for any other reason returns undefined and is rethrown untouched.
+ */
+export function extractRejectedOutputCeiling(
+	error: unknown,
+): number | undefined {
+	const text =
+		error instanceof Error
+			? `${error.message} ${describeErrorBody(error)}`
+			: typeof error === "string"
+				? error
+				: "";
+	if (!text) {
+		return undefined;
+	}
+	for (const pattern of OUTPUT_CEILING_PATTERNS) {
+		const found = text.match(pattern);
+		if (found) {
+			const ceiling = Number.parseInt(found[1], 10);
+			if (isPositiveFiniteNumber(ceiling)) {
+				return ceiling;
+			}
+		}
+	}
+	return undefined;
+}
+
+/**
+ * AI SDK errors carry the provider's JSON on the error rather than in
+ * `message`, and that is where the ceiling usually is.
+ */
+function describeErrorBody(error: Error): string {
+	const candidate = error as Error & {
+		responseBody?: unknown;
+		data?: unknown;
+		cause?: unknown;
+	};
+	const parts: string[] = [];
+	for (const value of [
+		candidate.responseBody,
+		candidate.data,
+		candidate.cause instanceof Error ? candidate.cause.message : undefined,
+	]) {
+		if (typeof value === "string") {
+			parts.push(value);
+		} else if (value && typeof value === "object") {
+			try {
+				parts.push(JSON.stringify(value));
+			} catch {
+				// A body that will not serialize tells us nothing; skip it.
+			}
+		}
+	}
+	return parts.join(" ");
+}
+
+/**
+ * Ceilings learned from refusals, keyed by provider and model.
+ *
+ * Per process rather than persisted: it costs one refused request to relearn
+ * after a restart, and a stale ceiling written to disk would outlive the model
+ * revision that set it.
+ */
+const learnedOutputCeilings = new Map<string, number>();
+
+function outputCeilingKey(providerId: string, modelId: string): string {
+	return `${providerId}::${modelId}`;
+}
+
+/**
+ * Start the stream and hold its first event.
+ *
+ * A refused request does not fail where it is issued. Providers return an async
+ * generator, so the HTTP call and the error it raises both happen on the first
+ * `next()` -- and a `try` around `provider.stream(...)` catches nothing at all.
+ * Pulling one event here is what makes the refusal catchable, and it also draws
+ * the line the retry needs: nothing has reached the caller yet, so re-issuing
+ * the request cannot duplicate output it has already seen.
+ */
+async function primeStream<T>(
+	stream: AsyncIterable<T> | Iterable<T>,
+): Promise<{ first: IteratorResult<T>; rest: AsyncIterable<T> }> {
+	const iterator = toAsyncIterable(stream)[Symbol.asyncIterator]();
+	const first = await iterator.next();
+	return {
+		first,
+		rest: {
+			async *[Symbol.asyncIterator]() {
+				let next = first;
+				while (!next.done) {
+					yield next.value;
+					next = await iterator.next();
+				}
+			},
+		},
+	};
+}
+
+/** Test seam; also lets a host drop what it learned when settings change. */
+export function resetLearnedOutputCeilings(): void {
+	learnedOutputCeilings.clear();
+}
+
 const GATEWAY_OUTPUT_RESERVE_TOKENS = 1_024;
 
 /**
@@ -342,6 +474,18 @@ interface GatewayOutputCapInput {
 	suppressGlobalNotes?: boolean;
 	requestedMaxTokens?: number;
 	model: Pick<GatewayModelDefinition, "contextWindow" | "maxOutputTokens">;
+	/**
+	 * A ceiling the provider named while refusing a cap, for a model whose
+	 * catalog entry publishes none.
+	 *
+	 * A clamp and not a published ceiling, which is why it is its own term
+	 * rather than a `maxOutputTokens` written onto the model. Writing it there
+	 * would also tell {@link resolveDefaultMaxOutputTokens} the model declares
+	 * its own limit, and it would fall back to the flat 32,000 default -- so a
+	 * model that had just said it accepts 131,072 would be held to a quarter of
+	 * that. As a clamp the share still sets the number and this only bounds it.
+	 */
+	outputCeilingTokens?: number;
 	estimatedInputTokens: number;
 	defaultMaxOutputTokens?: number;
 	outputReserveTokens?: number;
@@ -404,6 +548,13 @@ export function resolveGatewayOutputCap(
 	if (isPositiveFiniteNumber(input.model.maxOutputTokens)) {
 		caps.push({
 			tokens: Math.floor(input.model.maxOutputTokens),
+			source: "model-max-output",
+		});
+	}
+
+	if (isPositiveFiniteNumber(input.outputCeilingTokens)) {
+		caps.push({
+			tokens: Math.floor(input.outputCeilingTokens),
 			source: "model-max-output",
 		});
 	}
@@ -639,68 +790,124 @@ export class DefaultGateway implements Gateway {
 				? estimateTokens(inputChars - reasoningChars) +
 					estimateThinkingTokens(reasoningChars)
 				: estimateTokens(inputChars);
-		const outputCap = resolveGatewayOutputCap({
-			// An auxiliary call running out of room is its own problem, not a
-			// reason to compact the conversation it was summarising.
-			suppressGlobalNotes: request.auxiliary,
-			requestedMaxTokens: request.maxTokens,
-			model: resolved.model,
-			estimatedInputTokens,
-			reasoningBudgetTokens: request.reasoning?.budgetTokens,
-			onContextOverflow: (details) => {
-				this.logger?.log(
-					"Estimated remaining context leaves no usable output budget; sending no output cap" +
-						` (${describeOutputBudget(details)})`,
+		const ceilingKey = outputCeilingKey(
+			resolved.provider.id,
+			resolved.model.id,
+		);
+		const resolveCap = (ceiling: number | undefined): OutputCapReport =>
+			resolveGatewayOutputCap({
+				// An auxiliary call running out of room is its own problem, not a
+				// reason to compact the conversation it was summarising.
+				suppressGlobalNotes: request.auxiliary,
+				requestedMaxTokens: request.maxTokens,
+				model: resolved.model,
+				// A model that publishes its own ceiling needs nothing learned; the
+				// resolver already clamps to it. This only stands in where the
+				// catalog is silent, which is where a synthesized cap can be
+				// impossible.
+				outputCeilingTokens: ceiling,
+				estimatedInputTokens,
+				reasoningBudgetTokens: request.reasoning?.budgetTokens,
+				onContextOverflow: (details) => {
+					this.logger?.log(
+						"Estimated remaining context leaves no usable output budget; sending no output cap" +
+							` (${describeOutputBudget(details)})`,
+						{
+							severity: "warn",
+							providerId: resolved.provider.id,
+							modelId: resolved.model.id,
+							...details,
+						},
+					);
+				},
+			});
+
+		const send = async (ceiling: number | undefined) => {
+			const outputCap = resolveCap(ceiling);
+			const maxTokens = outputCap.maxTokens;
+			// The terms behind the cap, not just the cap. A session was watched
+			// ratchet from 20,547 down to no cap at all over six turns while
+			// compaction sat below its trigger the whole way, and the logs could
+			// not say which term moved: the window, the estimate, or the reserve.
+			// The structured fields above are dropped by the logger, so they go in
+			// the message.
+			this.logger?.log(
+				`Resolved output cap ${maxTokens ?? "none"} from ${outputCap.source} (${describeOutputBudget(
 					{
-						severity: "warn",
-						providerId: resolved.provider.id,
-						modelId: resolved.model.id,
-						...details,
+						contextWindow: resolved.model.contextWindow,
+						estimatedInputTokens,
+						inputChars,
 					},
-				);
-			},
-		});
-		const maxTokens = outputCap.maxTokens;
+				)})`,
+				{ severity: "info" },
+			);
+			const stream = await provider.stream(
+				{
+					...request,
+					modelId: resolved.model.id,
+					providerId: resolved.provider.id,
+					maxTokens,
+					defaultedMaxTokens:
+						maxTokens !== undefined &&
+						!isPositiveFiniteNumber(request.maxTokens),
+				},
+				{
+					provider: resolved.provider,
+					model: resolved.model,
+					config: providerRecord.config,
+					signal: request.signal,
+					logger: this.logger,
+					telemetry: this.telemetry,
+				},
+			);
+			return { stream, outputCap };
+		};
+
+		let sent: {
+			stream: AsyncIterable<AgentModelEvent>;
+			outputCap: OutputCapReport;
+		};
+		try {
+			const attempt = await send(learnedOutputCeilings.get(ceilingKey));
+			sent = {
+				stream: (await primeStream(attempt.stream)).rest,
+				outputCap: attempt.outputCap,
+			};
+		} catch (error) {
+			const ceiling = extractRejectedOutputCeiling(error);
+			// Only a cap this gateway invented is ours to correct. One the caller
+			// asked for is a setting, and quietly sending a different number would
+			// hide the thing they need to change.
+			if (
+				ceiling === undefined ||
+				isPositiveFiniteNumber(request.maxTokens) ||
+				learnedOutputCeilings.get(ceilingKey) === ceiling
+			) {
+				throw error;
+			}
+			learnedOutputCeilings.set(ceilingKey, ceiling);
+			this.logger?.log(
+				`${resolved.provider.id}/${resolved.model.id} refused the output cap and named ${ceiling}` +
+					" as its maximum; retrying once at that ceiling and remembering it for this session",
+				{
+					severity: "warn",
+					providerId: resolved.provider.id,
+					modelId: resolved.model.id,
+				},
+			);
+			const retry = await send(ceiling);
+			sent = {
+				stream: (await primeStream(retry.stream)).rest,
+				outputCap: retry.outputCap,
+			};
+		}
+		const { stream, outputCap } = sent;
 		if (!request.auxiliary) {
 			// Left for the agent loop, which sees the truncation but not the terms
 			// that caused it. Not from an auxiliary call: its cap is its own, and
 			// a conversation turn truncating afterwards would be attributed to it.
 			noteOutputCap(outputCap);
 		}
-		// The terms behind the cap, not just the cap. A session was watched
-		// ratchet from 20,547 down to no cap at all over six turns while
-		// compaction sat below its trigger the whole way, and the logs could not
-		// say which term moved: the window, the estimate, or the reserve. The
-		// structured fields above are dropped by the logger, so they go in the
-		// message.
-		this.logger?.log(
-			`Resolved output cap ${maxTokens ?? "none"} from ${outputCap.source} (${describeOutputBudget(
-				{
-					contextWindow: resolved.model.contextWindow,
-					estimatedInputTokens,
-					inputChars,
-				},
-			)})`,
-			{ severity: "info" },
-		);
-		const stream = await provider.stream(
-			{
-				...request,
-				modelId: resolved.model.id,
-				providerId: resolved.provider.id,
-				maxTokens,
-				defaultedMaxTokens:
-					maxTokens !== undefined && !isPositiveFiniteNumber(request.maxTokens),
-			},
-			{
-				provider: resolved.provider,
-				model: resolved.model,
-				config: providerRecord.config,
-				signal: request.signal,
-				logger: this.logger,
-				telemetry: this.telemetry,
-			},
-		);
 
 		if (request.auxiliary) {
 			// Served identically, but it does not get to speak for the session:

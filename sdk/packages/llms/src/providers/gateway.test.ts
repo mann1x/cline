@@ -22,7 +22,9 @@ import { normalizeModelsDevProviderModels } from "../catalog/catalog-live";
 import {
 	createGateway,
 	DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS,
+	extractRejectedOutputCeiling,
 	GATEWAY_MIN_OUTPUT_TOKENS,
+	resetLearnedOutputCeilings,
 	resolveGatewayOutputCap,
 	resolveGatewayRequestMaxTokens,
 } from "./gateway";
@@ -5493,5 +5495,134 @@ describe("the reserve that absorbs the estimate's error", () => {
 				estimatedInputTokens: 1_000,
 			}),
 		).toBe(4_000);
+	});
+});
+
+describe("a synthesized output cap the model cannot honour", () => {
+	// mann1x/cline#59: GLM 5.3-Flash through Ollama Cloud, configured at a
+	// 1,048,576-token window. The model publishes no output ceiling the catalog
+	// knows, so the cap was synthesized as a quarter of the window -- 262,144,
+	// exactly the number the refusal quoted -- and the backend accepts 131,072.
+	// Every request of the session was refused before it started.
+	const REFUSAL =
+		"max_tokens (262144) exceeds model's maximum output tokens (131072)" +
+		" for model glm-5.2 (ref: c4312f28-6bac-4187-bcea-c94be62ae7f7)";
+
+	beforeEach(() => {
+		resetLearnedOutputCeilings();
+	});
+
+	function gatewayWithCeiling(ceiling: number, seen: (number | undefined)[]) {
+		return createGateway({
+			builtins: false,
+			providers: [
+				{
+					manifest: {
+						id: "cloud-provider",
+						name: "CloudProvider",
+						defaultModelId: "unknown-model",
+						models: [
+							{
+								id: "unknown-model",
+								name: "Unknown Model",
+								providerId: "cloud-provider",
+								contextWindow: 1_048_576,
+								maxInputTokens: 1_048_576,
+							},
+						],
+					},
+					createProvider: () => ({
+						async *stream(request: { maxTokens?: number }) {
+							seen.push(request.maxTokens);
+							if ((request.maxTokens ?? 0) > ceiling) {
+								throw new Error(REFUSAL);
+							}
+							yield {
+								type: "finish",
+								reason: "stop",
+							} satisfies AgentModelEvent;
+						},
+					}),
+				},
+			],
+		});
+	}
+
+	it("reads the ceiling the provider named", () => {
+		expect(extractRejectedOutputCeiling(new Error(REFUSAL))).toBe(131_072);
+		expect(
+			extractRejectedOutputCeiling(
+				new Error(
+					"max_tokens: 200000 > 64000, which is the maximum allowed number" +
+						" of output tokens for claude-sonnet-4-5",
+				),
+			),
+		).toBe(64_000);
+		expect(
+			extractRejectedOutputCeiling(
+				new Error(
+					"max_tokens is too large: 262144. This model supports at most" +
+						" 128000 completion tokens",
+				),
+			),
+		).toBe(128_000);
+	});
+
+	it("leaves a refusal that names no ceiling alone", () => {
+		expect(
+			extractRejectedOutputCeiling(new Error("model is currently loading")),
+		).toBeUndefined();
+	});
+
+	it("retries once at the ceiling instead of failing the request", async () => {
+		const seen: (number | undefined)[] = [];
+		const gateway = gatewayWithCeiling(131_072, seen);
+
+		await collect(
+			await gateway.stream({
+				providerId: "cloud-provider",
+				modelId: "unknown-model",
+				messages: baseMessages,
+			}),
+		);
+
+		// The first number is the bug as reported; the second is the fix.
+		expect(seen).toEqual([262_144, 131_072]);
+	});
+
+	it("remembers the ceiling so the next turn does not pay the round trip", async () => {
+		const seen: (number | undefined)[] = [];
+		const gateway = gatewayWithCeiling(131_072, seen);
+		const request = {
+			providerId: "cloud-provider",
+			modelId: "unknown-model",
+			messages: baseMessages,
+		};
+
+		await collect(await gateway.stream(request));
+		seen.length = 0;
+		await collect(await gateway.stream(request));
+
+		expect(seen).toEqual([131_072]);
+	});
+
+	// A cap the caller asked for is a setting. Quietly sending a different
+	// number would hide the field they have to change.
+	it("does not rewrite a cap the caller asked for", async () => {
+		const seen: (number | undefined)[] = [];
+		const gateway = gatewayWithCeiling(131_072, seen);
+
+		await expect(
+			(async () =>
+				collect(
+					await gateway.stream({
+						providerId: "cloud-provider",
+						modelId: "unknown-model",
+						messages: baseMessages,
+						maxTokens: 262_144,
+					}),
+				))(),
+		).rejects.toThrow(/maximum output tokens/);
+		expect(seen).toEqual([262_144]);
 	});
 });
