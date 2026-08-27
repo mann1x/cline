@@ -486,21 +486,116 @@ interface RepairableToolCall {
 }
 
 /**
+ * Markers a provider's own parser uses to open a tool call.
+ *
+ * Present here because they can arrive *inside* the tool name: when the
+ * provider mis-slices the model's output, everything from the start of the
+ * turn up to the marker is handed over as the name, and the name the model
+ * actually wrote is what follows it.
+ */
+const TOOL_CALL_NAME_MARKERS = [
+	"<tool_call>",
+	"<|tool_call|>",
+	"<function_call>",
+];
+
+/**
+ * The tool name hiding at the end of a name the provider mis-sliced.
+ *
+ * Measured (mann1x/cline#60, GLM 5.3-Flash through Ollama Cloud): a ~2,000
+ * character "tool name" consisting of a code block the model had written,
+ * then the sentence `Let me re-read the current state of modifySkill and the
+ * rest:`, then `<tool_call>`, then `read_files` — a real tool, called
+ * correctly, that the turn was failed over.
+ *
+ * Only the tail after the last marker is considered, and only when it is a
+ * bare identifier that names a tool this run actually has. Anything else and
+ * we have not found the call, we have found more of the same text.
+ */
+export function recoverToolNameFromMarker(
+	toolName: string,
+	isAvailable: (name: string) => boolean,
+): string | undefined {
+	let afterMarker: number | undefined;
+	for (const marker of TOOL_CALL_NAME_MARKERS) {
+		const at = toolName.lastIndexOf(marker);
+		if (at >= 0) {
+			const end = at + marker.length;
+			if (afterMarker === undefined || end > afterMarker) {
+				afterMarker = end;
+			}
+		}
+	}
+	if (afterMarker === undefined) {
+		return undefined;
+	}
+	const tail = toolName.slice(afterMarker).trim();
+	if (!/^[A-Za-z0-9_.-]+$/.test(tail)) {
+		return undefined;
+	}
+	return isAvailable(tail) ? tail : undefined;
+}
+
+/**
+ * Recover a call whose *name* the provider mangled, leaving the rest intact.
+ *
+ * Distinct from the argument repair below, and safe where that one is not.
+ * Repairing a truncated value invents content nothing downstream can tell
+ * from content the model meant; this changes no value at all -- it takes a
+ * name the model wrote, that this run has a tool for, out of text the
+ * provider wrongly prepended to it.
+ *
+ * The arguments still have to parse. A mangled name *and* unparseable
+ * arguments means nothing about the call is understood, and two guesses do
+ * not make an answer.
+ */
+function repairLeakedToolName<T extends RepairableToolCall>(
+	toolCall: T,
+	tools: Record<string, unknown> | undefined,
+): T | null {
+	if (!tools) {
+		return null;
+	}
+	const recovered = recoverToolNameFromMarker(toolCall.toolName, (name) =>
+		Object.hasOwn(tools, name),
+	);
+	if (recovered === undefined) {
+		return null;
+	}
+	if (typeof toolCall.input !== "string") {
+		return null;
+	}
+	if (toolCall.input.trim() !== "") {
+		try {
+			JSON.parse(toolCall.input);
+		} catch {
+			return null;
+		}
+	}
+	return { ...toolCall, toolName: recovered };
+}
+
+/**
  * Last-chance repair for tool calls whose arguments are not valid JSON
  * (truncated payloads, single quotes, unescaped newlines — common with
  * weaker models). Runs the raw argument text through the shared jsonrepair
- * strategies; unknown tool names and already-valid JSON are not repairable
- * here, and returning null preserves the AI SDK's original error behavior.
+ * strategies; already-valid JSON is not repairable here, and returning null
+ * preserves the AI SDK's original error behavior.
+ *
+ * An unknown tool name gets one narrower treatment first — see
+ * {@link repairLeakedToolName} — and is otherwise still left to fail.
  */
 export async function repairMalformedToolCall<T extends RepairableToolCall>({
 	toolCall,
+	tools,
 	error,
 }: {
 	toolCall: T;
+	tools?: Record<string, unknown>;
 	error: unknown;
 }): Promise<T | null> {
 	if (NoSuchToolError.isInstance(error)) {
-		return null;
+		return repairLeakedToolName(toolCall, tools);
 	}
 	if (typeof toolCall.input !== "string" || toolCall.input.trim() === "") {
 		return null;
@@ -613,6 +708,22 @@ function buildToolCallMetadata(input: {
 	});
 }
 
+/**
+ * A diagnostic field, bounded.
+ *
+ * A mis-sliced tool name is not a name, it is the turn's transcript: one
+ * report carried ~2,000 characters of the model's own code and prose as the
+ * "tool name", and this metadata reproduced it three times over. Diagnostics
+ * do not carry transcript content, and a reader who needs the rest has the
+ * conversation itself.
+ */
+function boundDiagnosticText(text: string, limit: number): string {
+	const collapsed = text.replace(/\s+/g, " ").trim();
+	return collapsed.length > limit
+		? `${collapsed.slice(0, limit)}… (${collapsed.length} chars)`
+		: collapsed;
+}
+
 function buildRecoverableToolErrorMetadata(input: {
 	part: AiSdkStreamPart;
 	errorMessage: string;
@@ -622,8 +733,8 @@ function buildRecoverableToolErrorMetadata(input: {
 }): Record<string, unknown> {
 	return buildToolCallMetadata({
 		metadata: mergeToolCallMetadata(extractGoogleThoughtMetadata(input.part), {
-			inputParseError: `Tool call ${input.toolName} was rejected before execution: ${input.errorMessage}`,
-			aiSdkToolError: input.errorMessage,
+			inputParseError: `Tool call ${boundDiagnosticText(input.toolName, 80)} was rejected before execution: ${boundDiagnosticText(input.errorMessage, 600)}`,
+			aiSdkToolError: boundDiagnosticText(input.errorMessage, 600),
 		}),
 		request: input.request,
 		context: input.context,

@@ -8,6 +8,7 @@ import { NoSuchToolError } from "ai";
 import { describe, expect, it } from "vitest";
 import {
 	createOpenAICompatibleProvider,
+	recoverToolNameFromMarker,
 	repairMalformedToolCall,
 } from "./ai-sdk";
 
@@ -289,5 +290,98 @@ describe("repairMalformedToolCall", () => {
 			error: new Error("JSON parsing failed"),
 		});
 		expect(repaired?.input).toBe('{"commands":["ls"]}');
+	});
+});
+
+describe("a tool name the provider mis-sliced", () => {
+	// mann1x/cline#60, GLM 5.3-Flash through Ollama Cloud. The provider handed
+	// over everything from the start of the turn as the "tool name": a code
+	// block the model had written, a sentence of prose, then `<tool_call>`,
+	// then the name it actually called. The call itself was well formed and
+	// the turn was failed over it.
+	const LEAKED_NAME =
+		"read_text = `/**\n * Modify a skill\n */\nexport async function" +
+		" modifySkill(opts: { orgId: string }) { return { version: 1 }; }`" +
+		"\n\nLet me re-read the current state of modifySkill and the rest:" +
+		"<tool_call>read_files";
+
+	const available = new Set(["read_files", "editor", "search_codebase"]);
+	const isAvailable = (name: string) => available.has(name);
+	const tools = { read_files: {}, editor: {}, search_codebase: {} };
+
+	it("finds the name after the marker", () => {
+		expect(recoverToolNameFromMarker(LEAKED_NAME, isAvailable)).toBe(
+			"read_files",
+		);
+	});
+
+	it("ignores a tail that is not a tool this run has", () => {
+		expect(
+			recoverToolNameFromMarker("prose<tool_call>read_text", isAvailable),
+		).toBeUndefined();
+	});
+
+	// Without a marker there is no evidence of where the name starts, and a
+	// name that merely ends in one is not the same as a name that follows a
+	// tool-call boundary.
+	it("ignores a name with no marker in it", () => {
+		expect(
+			recoverToolNameFromMarker("please_read_files", isAvailable),
+		).toBeUndefined();
+	});
+
+	it("ignores a tail that is not a bare identifier", () => {
+		expect(
+			recoverToolNameFromMarker(
+				"prose<tool_call>read_files and then editor",
+				isAvailable,
+			),
+		).toBeUndefined();
+	});
+
+	it("recovers the call rather than failing the turn", async () => {
+		const repaired = await repairMalformedToolCall({
+			toolCall: {
+				toolCallId: "call_1",
+				toolName: LEAKED_NAME,
+				input: '{"paths": ["src/skills.ts"]}',
+			},
+			tools,
+			error: new NoSuchToolError({ toolName: LEAKED_NAME }),
+		});
+
+		expect(repaired?.toolName).toBe("read_files");
+		// The arguments are the model's and are not touched.
+		expect(repaired?.input).toBe('{"paths": ["src/skills.ts"]}');
+	});
+
+	// A mangled name and unparseable arguments means nothing about the call is
+	// understood; two guesses do not make an answer.
+	it("refuses when the arguments do not parse either", async () => {
+		const repaired = await repairMalformedToolCall({
+			toolCall: {
+				toolCallId: "call_1",
+				toolName: LEAKED_NAME,
+				input: '{"paths": ["src/skills.ts"',
+			},
+			tools,
+			error: new NoSuchToolError({ toolName: LEAKED_NAME }),
+		});
+
+		expect(repaired).toBeNull();
+	});
+
+	it("refuses when the run has no tool by that name", async () => {
+		const repaired = await repairMalformedToolCall({
+			toolCall: {
+				toolCallId: "call_1",
+				toolName: LEAKED_NAME,
+				input: "{}",
+			},
+			tools: { editor: {} },
+			error: new NoSuchToolError({ toolName: LEAKED_NAME }),
+		});
+
+		expect(repaired).toBeNull();
 	});
 });
