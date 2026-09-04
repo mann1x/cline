@@ -274,11 +274,7 @@ describe("Hub app-server upgrades", () => {
 					metadata: { interactive: true },
 				},
 			});
-			const ctx = (
-				transport as unknown as {
-					ctx: import("./handlers/context").HubTransportContext;
-				}
-			).ctx;
+			const ctx = (transport as unknown as { ctx: HubTransportContext }).ctx;
 			const { requestToolApproval } = await import(
 				"./handlers/approval-handlers"
 			);
