@@ -5,7 +5,6 @@ import { convertProtoToApiProvider } from "@shared/proto-conversions/models/api-
 import { OpenaiReasoningEffort } from "@shared/storage/types"
 import { TelemetrySetting } from "@shared/TelemetrySetting"
 import { ClineEnv } from "@/config"
-import { clearRemoteConfig } from "@/core/storage/remote-config/utils"
 import { updateQaCredentials } from "@/sdk/qa-credentials-store"
 import { McpDisplayMode } from "@/shared/McpDisplayMode"
 import { Logger } from "@/shared/services/Logger"
