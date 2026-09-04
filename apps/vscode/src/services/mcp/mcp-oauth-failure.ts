@@ -79,13 +79,21 @@ export function watchMcpOAuthFetch(resourceUrl: string, baseFetch: typeof fetch 
  * only talk to clients it issued itself, so no credential of the user's was
  * ever sent and checking their credentials -- the obvious first move on a 403
  * -- cannot help.
+ *
+ * It also names the button rather than the settings file. Measured against
+ * Figma's server, the one this was reported on: it advertises a registration
+ * endpoint and answers every anonymous registration with a bare `403
+ * Forbidden` -- any body, any client name, with or without credentials -- so
+ * the client the user creates themselves is not a workaround, it is the only
+ * way this server is ever reached. Telling them to hand-edit a JSON file for
+ * that is telling them to give up.
  */
 export function describeMcpOAuthFailure(serverName: string, failure: McpOAuthRequestFailure): string {
 	if (failure.registration) {
 		return (
 			`MCP server "${serverName}" refused to register Cline as an OAuth client (HTTP ${failure.status} from ${failure.url}). ` +
-			"This server only accepts clients it issued itself, so no credentials were sent. " +
-			'Add an "oauthClient" entry with the client ID the server gave you (and its secret, if there is one) to this server in the MCP settings file, then authenticate again.'
+			"This server only accepts clients it issued itself, so no credentials were sent and this will not start working on its own. " +
+			'Register Cline in the provider\'s own developer settings, then use "Use an OAuth client I already have" below to paste the client ID it gave you.'
 		)
 	}
 	return (

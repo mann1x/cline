@@ -2146,6 +2146,75 @@ export class McpHub {
 	}
 
 	/**
+	 * Set, or clear, the OAuth client a server was issued.
+	 *
+	 * For a server that refuses to register one for us. Figma's advertises a
+	 * registration endpoint and answers every anonymous registration with a
+	 * bare `403 Forbidden` -- for any body, any client name, with or without
+	 * credentials -- so a client the user created in the provider's own console
+	 * is the only way in. Until this existed the only way to supply one was
+	 * editing the settings file by hand, which is not a thing to ask of someone
+	 * whose server simply will not connect.
+	 *
+	 * Clearing it returns the server to dynamic registration, so a user who
+	 * pasted the wrong id is not stuck with it.
+	 */
+	public async updateServerOAuthClientRPC(
+		serverName: string,
+		client: { clientId?: string; clientSecret?: string },
+	): Promise<McpServer[]> {
+		try {
+			const clientId = client.clientId?.trim()
+			const clientSecret = client.clientSecret?.trim()
+			if (clientSecret && !clientId) {
+				throw new Error("A client secret needs the client ID it belongs to.")
+			}
+
+			const settingsPath = await getMcpSettingsFilePathHelper(await this.getSettingsDirectoryPath())
+			await updateMcpSettingsFile(settingsPath, (parsed) => {
+				const servers = parsed.mcpServers as Record<string, any>
+				if (!servers[serverName]) {
+					throw new Error(`Server "${serverName}" not found in settings`)
+				}
+				const { oauthClient: _dropped, ...rest } = servers[serverName]
+				const next: Record<string, unknown> = clientId
+					? { ...rest, oauthClient: { clientId, ...(clientSecret ? { clientSecret } : {}) } }
+					: rest
+
+				// Whatever a previous attempt registered or was issued belongs
+				// to the old client. Left in place it sends the next connection
+				// back to the client the user has just replaced, and a token
+				// minted for that client fails in a way that reads like the new
+				// one is wrong. Cleared in the same write as the client itself,
+				// so the two can never disagree on disk. The redirect URL stays:
+				// it is ours, not the client's.
+				const state = next.oauth as Record<string, unknown> | undefined
+				if (state) {
+					const { tokens: _t, clientInformation: _c, codeVerifier: _v, lastAuthenticatedAt: _a, ...keep } = state
+					next.oauth = keep
+				}
+
+				servers[serverName] = next
+				parsed.mcpServers = servers
+				return parsed
+			})
+
+			const config = await this.readPostWriteMcpSettings()
+			await this.updateServerConnectionsRPC(config.mcpServers as Record<string, McpServerConfig>)
+
+			const serverOrder = Object.keys(config.mcpServers || {})
+			return this.getSortedMcpServers(serverOrder)
+		} catch (error) {
+			Logger.error("Failed to update the OAuth client:", error)
+			HostProvider.window.showMessage({
+				type: ShowMessageType.ERROR,
+				message: `Failed to set the OAuth client: ${error instanceof Error ? error.message : String(error)}`,
+			})
+			throw error
+		}
+	}
+
+	/**
 	 * Get and clear pending notifications
 	 * @returns Array of pending notifications
 	 */

@@ -84,7 +84,10 @@ describe("describeMcpOAuthFailure", () => {
 
 		expect(message).toContain("refused to register Cline")
 		expect(message).toContain("no credentials were sent")
-		expect(message).toContain("oauthClient")
+		// The button, not the settings file: for the server this was reported
+		// on, a client the user registers themselves is the only way in, and
+		// "edit this JSON" is where that ends.
+		expect(message).toContain("Use an OAuth client I already have")
 	})
 
 	// Any other endpoint: name it and its status rather than guess, because

@@ -24,6 +24,7 @@ import { useExtensionState } from "@/context/ExtensionStateContext"
 import { cn } from "@/lib/utils"
 import { McpServiceClient } from "@/services/grpc-client"
 import type { MarketplaceMcpMetadata } from "../ServersToggleList"
+import McpOAuthClientEditor from "./McpOAuthClientEditor"
 import McpPromptRow from "./McpPromptRow"
 import McpResourceRow from "./McpResourceRow"
 import McpToolRow, { SHOW_MCP_PER_TOOL_AUTO_APPROVE } from "./McpToolRow"
@@ -72,6 +73,16 @@ const ServerRow = ({
 			return remoteMCPServers.some(
 				(remoteServer: { url: string }) => serverConfig.url && serverConfig.url === remoteServer.url,
 			)
+		} catch {
+			return false
+		}
+	})()
+
+	// OAuth only applies to a server Cline connects to over the network; a
+	// stdio server it starts itself has nothing to authenticate against.
+	const isRemoteServer = (() => {
+		try {
+			return typeof (JSON.parse(server.config) as { url?: unknown }).url === "string"
 		} catch {
 			return false
 		}
@@ -304,6 +315,11 @@ const ServerRow = ({
 							{server.status === "connecting" || isRestarting ? "Retrying..." : "Retry Connection"}
 						</Button>
 					)}
+
+					{/* A server that refuses to register a client for us leaves
+					    exactly one way in, and it belongs next to the failure
+					    rather than in the settings file (mann1x/cline#63). */}
+					{isRemoteServer && !isRemoteManagedServer && <McpOAuthClientEditor server={server} />}
 
 					{!isRemoteManagedServer && (
 						<Button
