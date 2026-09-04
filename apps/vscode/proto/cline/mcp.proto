@@ -11,7 +11,7 @@ option java_package = "bot.cline.proto";
 service McpService {
   rpc toggleMcpServer(ToggleMcpServerRequest) returns (McpServers);
   rpc updateMcpTimeout(UpdateMcpTimeoutRequest) returns (McpServers);
-  rpc updateMcpServerOAuthClient(UpdateMcpOAuthClientRequest) returns (McpServers);
+  rpc updateMcpServerOauthClient(UpdateMcpOauthClientRequest) returns (McpServers);
   rpc addRemoteMcpServer(AddRemoteMcpServerRequest) returns (McpServers);
   rpc addLocalMcpServer(AddLocalMcpServerRequest) returns (McpServers);
   rpc restartMcpServer(StringRequest) returns (McpServers);
@@ -43,7 +43,7 @@ message UpdateMcpTimeoutRequest {
 // anonymous registration with a bare 403, so a client the user created in the
 // provider's own console is the only way in -- and until this existed, the only
 // way to supply one was editing the settings file by hand.
-message UpdateMcpOAuthClientRequest {
+message UpdateMcpOauthClientRequest {
   Metadata metadata = 1;
   string server_name = 2;
   // Absent or empty clears the entry and returns the server to dynamic

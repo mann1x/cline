@@ -61,7 +61,7 @@ export function McpOAuthClientEditor({ server }: OAuthClientEditorProps) {
 		setIsSaving(true)
 		setError("")
 		try {
-			const response: McpServers = await McpServiceClient.updateMcpServerOAuthClient({
+			const response: McpServers = await McpServiceClient.updateMcpServerOauthClient({
 				serverName: server.name,
 				clientId: next.clientId,
 				clientSecret: next.clientSecret,

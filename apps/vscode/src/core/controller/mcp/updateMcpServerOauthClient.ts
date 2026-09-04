@@ -1,4 +1,4 @@
-import { McpServers, type UpdateMcpOAuthClientRequest } from "@shared/proto/cline/mcp"
+import { McpServers, type UpdateMcpOauthClientRequest } from "@shared/proto/cline/mcp"
 import { convertMcpServersToProtoMcpServers } from "@/shared/proto-conversions/mcp/mcp-server-conversion"
 import { Logger } from "@/shared/services/Logger"
 import type { Controller } from ".."
@@ -16,9 +16,9 @@ import type { Controller } from ".."
  * An empty `clientId` clears the entry and returns the server to dynamic
  * registration.
  */
-export async function updateMcpServerOAuthClient(
+export async function updateMcpServerOauthClient(
 	controller: Controller,
-	request: UpdateMcpOAuthClientRequest,
+	request: UpdateMcpOauthClientRequest,
 ): Promise<McpServers> {
 	if (!request.serverName?.trim()) {
 		throw new Error("A server name is required")
