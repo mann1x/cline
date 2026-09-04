@@ -19,7 +19,7 @@
     },
     "apps/cli": {
       "name": "@cline/cli",
-      "version": "3.0.60",
+      "version": "3.0.61",
       "bin": {
         "cline": "src/index.ts",
       },
@@ -46,6 +46,7 @@
         "opentui-spinner": "^0.0.7",
         "pino": "^10.3.1",
         "posthog-node": "^5.8.0",
+        "puppeteer-core": "^23.4.0",
         "react": "19.2.4",
         "react-devtools-core": "^7.0.1",
         "react-reconciler": "0.33.0",
@@ -165,7 +166,7 @@
     },
     "apps/examples/desktop-app": {
       "name": "@cline/code",
-      "version": "0.0.21",
+      "version": "0.0.23",
       "dependencies": {
         "@base-ui/react": "^1.2.0",
         "@cline/core": "workspace:*",
@@ -360,7 +361,7 @@
     },
     "apps/vscode": {
       "name": "claude-dev",
-      "version": "4.1.16",
+      "version": "4.100.57",
       "dependencies": {
         "@anthropic-ai/sdk": "^0.37.0",
         "@bufbuild/protobuf": "^2.2.5",
