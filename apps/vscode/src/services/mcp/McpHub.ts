@@ -42,6 +42,7 @@ import { Logger } from "@/shared/services/Logger"
 import { expandEnvironmentVariables } from "@/utils/envExpansion"
 import type { TelemetryService } from "../telemetry/TelemetryService"
 import { McpOAuthManager } from "./McpOAuthManager"
+import { describeMcpOAuthFailure, type WatchedMcpFetch, watchMcpOAuthFetch } from "./mcp-oauth-failure"
 import { StreamableHttpReconnectHandler } from "./StreamableHttpReconnectHandler"
 import { McpSettingsSchema, McpTimeoutSecondsSchema, ServerConfigSchema } from "./schemas"
 import { updateMcpSettingsFile } from "./settingsLock"
@@ -482,6 +483,9 @@ export class McpHub {
 			)
 
 			let transport: StdioClientTransport | SSEClientTransport | StreamableHTTPClientTransport
+			// Set for the remote transports, so a connection that dies inside the
+			// OAuth handshake can name the request that answered.
+			let oauthWatch: WatchedMcpFetch | undefined
 
 			// Create OAuth provider for remote transports (SSE and HTTP)
 			const authProvider =
@@ -551,6 +555,8 @@ export class McpHub {
 					break
 				}
 				case "sse": {
+					oauthWatch = watchMcpOAuthFetch(expandedConfig.url)
+					const sseWatch = oauthWatch
 					const sseOptions = {
 						authProvider,
 						requestInit: {
@@ -575,7 +581,7 @@ export class McpHub {
 									if (tokens?.access_token) {
 										headers.set("Authorization", `Bearer ${tokens.access_token}`)
 									}
-									return fetch(url.toString(), { ...init, headers })
+									return sseWatch.fetch(url.toString(), { ...init, headers })
 								}
 							: undefined,
 					}
@@ -611,8 +617,14 @@ export class McpHub {
 					// but many servers (incorrectly) return 404. The SDK only handles 405
 					// gracefully, so we normalize 404 -> 405 to fix compatibility.
 					// See: https://github.com/modelcontextprotocol/typescript-sdk/issues/1150
+					// Records which request in the OAuth handshake failed, so a
+					// connection that dies during sign-in can say what answered
+					// instead of surfacing the SDK's parse error for a plain-text
+					// body (mann1x/cline#63).
+					oauthWatch = watchMcpOAuthFetch(expandedConfig.url)
+					const watchedFetch = oauthWatch.fetch
 					const streamableHttpFetch = (async (url, init) => {
-						const response = await fetch(url, init)
+						const response = await watchedFetch(url, init)
 						if (init?.method === "GET" && response.status === 404) {
 							return new Response(response.body, {
 								status: 405,
@@ -686,7 +698,14 @@ export class McpHub {
 				const timeout = resolveMcpServerTimeoutMs(connection.server.config)
 				await client.connect(transport, { timeout })
 			} catch (error) {
-				if (error instanceof UnauthorizedError) {
+				// A handshake that got as far as a failing OAuth endpoint is a
+				// server asking to be authenticated, not a broken connection.
+				// Without this it was thrown as an ordinary failure -- the user
+				// saw the SDK's JSON parse error for a plain-text body and got no
+				// Authenticate button at all, because the button only appears on
+				// a connection marked as needing one (mann1x/cline#63).
+				const oauthFailure = oauthWatch?.lastFailure()
+				if (error instanceof UnauthorizedError || oauthFailure) {
 					// Server requires OAuth authentication
 					Logger.log(`Server "${name}" requires OAuth authentication`)
 					const unauthConnection: McpConnection = {
@@ -697,7 +716,9 @@ export class McpHub {
 							disabled: false,
 							oauthRequired: true,
 							oauthAuthStatus: "unauthenticated",
-							error: "This MCP server requires authentication to get started.",
+							error: oauthFailure
+								? describeMcpOAuthFailure(name, oauthFailure)
+								: "This MCP server requires authentication to get started.",
 						},
 						client,
 						transport,
