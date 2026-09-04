@@ -2,7 +2,25 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { discoverOracle, type Oracle, runOracle } from "./oracle";
+import {
+	type CommandOracle,
+	discoverOracle,
+	type Oracle,
+	type OracleSources,
+	runOracle,
+} from "./oracle";
+
+/** Every case below expects a command; a page check is its own describe. */
+async function discoverCommandOracle(
+	root: string,
+	options?: OracleSources,
+): Promise<CommandOracle | undefined> {
+	const oracle = await discoverOracle(root, options);
+	if (oracle?.kind === "page") {
+		throw new Error("expected a command oracle");
+	}
+	return oracle;
+}
 
 async function withWorkspace(
 	files: Record<string, string>,
@@ -30,7 +48,7 @@ describe("finding something that can judge a change", () => {
 				}),
 			},
 			async (root) => {
-				const oracle = await discoverOracle(root);
+				const oracle = await discoverCommandOracle(root);
 				expect(oracle?.args).toEqual(["run", "typecheck"]);
 			},
 		);
@@ -46,7 +64,7 @@ describe("finding something that can judge a change", () => {
 				"bun.lock": "",
 			},
 			async (root) => {
-				const oracle = await discoverOracle(root);
+				const oracle = await discoverCommandOracle(root);
 				expect(oracle?.command).toBe("bun");
 			},
 		);
@@ -58,13 +76,13 @@ describe("finding something that can judge a change", () => {
 		{ marker: "pyproject.toml", body: "[project]", command: "python3" },
 	])("recognises a $marker workspace", async ({ marker, body, command }) => {
 		await withWorkspace({ [marker]: body }, async (root) => {
-			expect((await discoverOracle(root))?.command).toBe(command);
+			expect((await discoverCommandOracle(root))?.command).toBe(command);
 		});
 	});
 
 	it("falls back to a typecheck when only a tsconfig is there", async () => {
 		await withWorkspace({ "tsconfig.json": "{}" }, async (root) => {
-			expect((await discoverOracle(root))?.label).toBe("tsc --noEmit");
+			expect((await discoverCommandOracle(root))?.label).toBe("tsc --noEmit");
 		});
 	});
 
@@ -72,7 +90,7 @@ describe("finding something that can judge a change", () => {
 		await withWorkspace(
 			{ Makefile: "all:\n\techo hi\ncheck:\n\techo ok\n" },
 			async (root) => {
-				expect((await discoverOracle(root))?.args).toEqual(["check"]);
+				expect((await discoverCommandOracle(root))?.args).toEqual(["check"]);
 			},
 		);
 	});
@@ -81,13 +99,13 @@ describe("finding something that can judge a change", () => {
 	// the caller has to say so rather than pretend a check happened.
 	it("finds nothing in a workspace that runs nothing", async () => {
 		await withWorkspace({ "notes.md": "# hello" }, async (root) => {
-			expect(await discoverOracle(root)).toBeUndefined();
+			expect(await discoverCommandOracle(root)).toBeUndefined();
 		});
 	});
 
 	it("takes an explicitly configured command as written", async () => {
 		await withWorkspace({ "package.json": "{}" }, async (root) => {
-			const oracle = await discoverOracle(root, {
+			const oracle = await discoverCommandOracle(root, {
 				explicit: "node run_game.js manic_miner.html",
 			});
 			expect(oracle?.label).toBe("node run_game.js manic_miner.html");
@@ -102,7 +120,7 @@ describe("finding something that can judge a change", () => {
 		await withWorkspace(
 			{ "package.json": JSON.stringify({ scripts: { test: "vitest run" } }) },
 			async (root) => {
-				const oracle = await discoverOracle(root, {
+				const oracle = await discoverCommandOracle(root, {
 					manual: "node run_game.js manic_miner.html",
 					explicit: "bun run typecheck",
 				});
@@ -116,7 +134,7 @@ describe("finding something that can judge a change", () => {
 		await withWorkspace(
 			{ "package.json": JSON.stringify({ scripts: { test: "vitest run" } }) },
 			async (root) => {
-				const oracle = await discoverOracle(root, { manual: "   " });
+				const oracle = await discoverCommandOracle(root, { manual: "   " });
 				expect(oracle?.args).toEqual(["run", "test"]);
 			},
 		);
@@ -129,7 +147,7 @@ describe("a check that reports its verdict and exits zero anyway", () => {
 	// protocol reading only the exit status keeps every transaction.
 	it("fails a clean exit whose output does not match", async () => {
 		await withWorkspace({}, async (root) => {
-			const oracle = await discoverOracle(root, {
+			const oracle = await discoverCommandOracle(root, {
 				manual: `${process.execPath} -e "console.log('{\\"ok\\":false}')"`,
 				expect: '"ok":\\s*true',
 			});
@@ -144,7 +162,7 @@ describe("a check that reports its verdict and exits zero anyway", () => {
 
 	it("passes the same command once the output says so", async () => {
 		await withWorkspace({}, async (root) => {
-			const oracle = await discoverOracle(root, {
+			const oracle = await discoverCommandOracle(root, {
 				manual: `${process.execPath} -e "console.log('{\\"ok\\":true}')"`,
 				expect: '"ok":\\s*true',
 			});
@@ -157,7 +175,7 @@ describe("a check that reports its verdict and exits zero anyway", () => {
 	// outcomes: for this class of check it means keeping everything.
 	it("fails rather than ignores a pattern that will not compile", async () => {
 		await withWorkspace({}, async (root) => {
-			const oracle = await discoverOracle(root, {
+			const oracle = await discoverCommandOracle(root, {
 				manual: `${process.execPath} -e "process.exit(0)"`,
 				expect: "(unclosed",
 			});
@@ -171,7 +189,9 @@ describe("a check that reports its verdict and exits zero anyway", () => {
 	// one that was found by looking at the tree.
 	it("does not apply the pattern to a check found in the workspace", async () => {
 		await withWorkspace({ "tsconfig.json": "{}" }, async (root) => {
-			const oracle = await discoverOracle(root, { expect: "never appears" });
+			const oracle = await discoverCommandOracle(root, {
+				expect: "never appears",
+			});
 
 			expect(oracle?.expect).toBeUndefined();
 		});
@@ -299,6 +319,53 @@ describe("a page oracle", () => {
 			expect(verdict.passed).toBe(false);
 			expect(verdict.exitCode).toBeNull();
 			expect(verdict.summary).toContain("could not read");
+		});
+	});
+});
+
+describe("a page check named in the settings", () => {
+	// Approval is once per run, and a user running the same task repeatedly
+	// said -- correctly -- that being asked every time is not workable. This is
+	// the same check, named once in the settings, never asked about again.
+	it("reads `cline:page <file>` as Cline's own check", async () => {
+		await withWorkspace({ "game.html": "<script>1</script>" }, async (root) => {
+			const oracle = await discoverOracle(root, {
+				manual: "cline:page game.html",
+			});
+
+			expect(oracle?.kind).toBe("page");
+			expect(oracle?.label).toContain("game.html");
+			expect(oracle?.reason).toBe("named for this task");
+		});
+	});
+
+	it("reads it from the settings default too", async () => {
+		await withWorkspace({ "game.html": "<script>1</script>" }, async (root) => {
+			const oracle = await discoverOracle(root, {
+				explicit: "cline:page game.html",
+			});
+
+			expect(oracle?.kind).toBe("page");
+			expect(oracle?.reason).toBe("named in settings");
+		});
+	});
+
+	// Everything that is not the prefix is still a shell line, exactly as
+	// written -- a user who names a command means that command.
+	it("leaves an ordinary command alone", async () => {
+		await withWorkspace({}, async (root) => {
+			const oracle = await discoverOracle(root, { manual: "npm test" });
+
+			expect(oracle?.kind).toBeUndefined();
+			expect(oracle?.label).toBe("npm test");
+		});
+	});
+
+	it("falls back to the shell when the prefix names no file", async () => {
+		await withWorkspace({}, async (root) => {
+			const oracle = await discoverOracle(root, { manual: "cline:page   " });
+
+			expect(oracle?.kind).toBeUndefined();
 		});
 	});
 });

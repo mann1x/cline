@@ -162,24 +162,40 @@ export function readCheckProposal(
 /**
  * The proposal as the user reads it before approving.
  *
- * The exact text that will run, on its own line, because that is the thing
- * being approved. Everything else is context for the decision.
+ * Who runs it comes first, and this is not a style point. Measured on the
+ * first live use: the model proposed the page check — headless, in this
+ * process, no browser window and no human — and the dialog opened "Load and
+ * run `manic_miner.html`", which reads as an instruction to the person
+ * reading it. The model's own reason said "loading the page in a browser will
+ * confirm…", and the one line saying it runs inside Cline came last. The user
+ * declined it as manual work they would have to repeat every attempt. It was
+ * never manual, and this now says so before anything else.
+ *
+ * The exact text that will run still goes on its own line, because for a
+ * command that is the thing being approved.
  */
 export function describeCheckProposal(proposal: CheckProposal): string {
+	const lead =
+		"Cline runs this itself after every attempt, start to finish. You are not asked to test anything, now or later.";
 	if (proposal.kind === "page") {
 		return [
-			`Load and run \`${proposal.path}\`, and fail if it throws or never draws a frame.`,
-			`Why: ${proposal.reason}`,
-			"This one runs inside Cline — nothing is installed and no shell command is used.",
+			lead,
+			"",
+			`It loads \`${proposal.path}\` here in Cline — no browser window opens — runs its scripts, and fails if the file does not parse, throws, or never draws a frame.`,
+			"",
+			`Cline's reason for choosing it: ${proposal.reason}`,
 		].join("\n");
 	}
 	return [
-		`Run this command after every attempt, and judge the change by it:`,
+		lead,
+		"",
+		"It runs this command, unattended, and judges the change by it:",
 		`    ${proposal.command}`,
 		proposal.expect
 			? `It has to finish cleanly AND its output has to match /${proposal.expect}/.`
 			: "It has to finish cleanly.",
-		`Why: ${proposal.reason}`,
+		"",
+		`Cline's reason for choosing it: ${proposal.reason}`,
 	].join("\n");
 }
 

@@ -103,15 +103,31 @@ describe("describeCheckProposal", () => {
 		expect(text).toContain("the suite covers it");
 	});
 
-	it("says a page check installs nothing", () => {
+	// The failure this wording exists for: the first user to see this dialog
+	// read "Load and run `manic_miner.html`" as a job for them, and declined a
+	// check that never involved them at all.
+	it("says who runs it before it says what it is", () => {
 		const text = describeCheckProposal({
 			kind: "page",
 			path: "game.html",
 			reason: "the task is this page",
 		});
 
+		expect(text.split("\n")[0]).toContain("Cline runs this itself");
+		expect(text).toContain("You are not asked to test anything");
+		expect(text).toContain("no browser window opens");
 		expect(text).toContain("game.html");
-		expect(text).toContain("nothing is installed");
+	});
+
+	it("attributes the reason to the model, not to the reader", () => {
+		const text = describeCheckProposal({
+			kind: "command",
+			command: "node run.js",
+			reason: "it exits non-zero while the level data is missing",
+		});
+
+		expect(text).toContain("Cline's reason for choosing it:");
+		expect(text).toContain("unattended");
 	});
 });
 

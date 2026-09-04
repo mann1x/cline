@@ -28,15 +28,17 @@ import {
 
 export { PROPOSE_CHECK_TOOL_NAME };
 
-export const PROPOSE_CHECK_TOOL_DESCRIPTION = `Propose the check that will decide whether your change worked, and ask the user to approve it.
+export const PROPOSE_CHECK_TOOL_DESCRIPTION = `Propose the check that will decide whether your change worked, and ask the user to approve it once.
 
 Nothing in this workspace can be run to judge a change, so without a check your own account of the work is the verdict — and that is the weakest evidence there is. Propose one instead. You have read the code; name the thing that would show the fix.
 
-Two kinds:
-- \`kind: "page"\` — Cline loads \`path\` itself, runs its scripts and pumps animation frames. It fails if the file does not parse, throws, or never draws. Nothing has to be installed, so prefer this for a page, a game or a script.
-- \`kind: "command"\` — a line for the shell. Only worth proposing when you know it exists on this machine; a check that cannot run judges nothing. Add \`expect\` when the command reports its verdict in its output and exits cleanly either way.
+**It must run without a person.** The check is your feedback loop: it is run for you, unattended, every time your turn ends, and its result comes back to you. Never propose something a human performs — "open it in a browser and see", "confirm the layout looks right", "check that it feels responsive". Propose the mechanical thing that would catch the bug: running the file, a parse, a test, a linter, a script that exits non-zero when it is still broken.
 
-Give a \`reason\` in one sentence: what passing this check proves about the task. The user reads it to decide.
+Two kinds:
+- \`kind: "page"\` — Cline loads \`path\` in this process, runs its scripts and pumps animation frames. No browser window opens and nobody looks at it. It fails if the file does not parse, throws while loading, throws in a frame, or never draws. Nothing has to be installed, so prefer this for a page, a game or a script.
+- \`kind: "command"\` — a line for the shell, run unattended. Only worth proposing when you know it exists on this machine; a check that cannot run judges nothing. Add \`expect\` when the command reports its verdict in its output and exits cleanly either way.
+
+Give a \`reason\` in one sentence: what passing this check proves about the task. Write it about the code, not about how a person would test it — "the level data is built before the first frame draws", not "loading it in a browser will confirm it works". The user reads that sentence to decide.
 
 Propose once, early — as soon as you know what you are fixing. What is approved judges every attempt for the rest of the run and cannot be changed, so do not propose something you can already make pass.
 

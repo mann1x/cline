@@ -340,6 +340,16 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 											looking at the workspace — leave it empty and the project's own test, typecheck or
 											build is used instead.
 										</p>
+										{/* Naming it here is the way out of being asked
+										    once per run. A page check is otherwise
+										    reachable only by approving a proposal, and a
+										    user running the same task repeatedly is then
+										    approving the same check over and over. */}
+										<p className="text-xs text-muted-foreground">
+											For a page or a script with nothing to run it, write{" "}
+											<code>cline:page index.html</code>: Cline loads the file itself, runs it, and fails if
+											it does not parse, throws, or never draws a frame. No browser and no shell.
+										</p>
 										<DebouncedTextArea
 											initialValue={atomicProtocolSettings?.oracleCommand ?? ""}
 											maxRows={3}

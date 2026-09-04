@@ -219,6 +219,39 @@ function shellOracle(
 }
 
 /**
+ * The prefix that names Cline's own page check in a settings field.
+ *
+ * The settings hold one string, and until now it could only be a shell line.
+ * That left the page check reachable only by approving a proposal, which is
+ * once per run — and a user running the same task repeatedly said, correctly,
+ * that being asked every time is not workable. `cline:page game.html` in the
+ * check field is the same check, named once, never asked about again.
+ */
+const PAGE_ORACLE_PREFIX = "cline:page ";
+
+/** A page check written by hand in the settings, or nothing. */
+function namedPageOracle(
+	line: string,
+	cwd: string,
+	reason: string,
+): PageOracle | undefined {
+	if (!line.toLowerCase().startsWith(PAGE_ORACLE_PREFIX)) {
+		return undefined;
+	}
+	const file = line.slice(PAGE_ORACLE_PREFIX.length).trim();
+	if (!file) {
+		return undefined;
+	}
+	return {
+		kind: "page",
+		label: `load \`${file}\` and check that it runs`,
+		path: file,
+		cwd,
+		reason,
+	};
+}
+
+/**
  * Find something in this workspace that can say whether a change is good.
  *
  * Returns `undefined` when nothing does — a documentation edit, a config file,
@@ -229,7 +262,7 @@ function shellOracle(
 export async function discoverOracle(
 	workspaceRoot: string,
 	options: OracleSources = {},
-): Promise<CommandOracle | undefined> {
+): Promise<Oracle | undefined> {
 	// A command the user wrote for this task beats one they set once for every
 	// task, and both beat anything found by looking at the tree. Detection
 	// answers "does this workspace still build"; the user's line answers the
@@ -237,20 +270,21 @@ export async function discoverOracle(
 	// sometimes the only thing that can tell success from a plausible edit.
 	const manual = options.manual?.trim();
 	if (manual) {
-		return shellOracle(
-			manual,
-			workspaceRoot,
-			"named for this task",
-			options.expect,
+		return (
+			namedPageOracle(manual, workspaceRoot, "named for this task") ??
+			shellOracle(manual, workspaceRoot, "named for this task", options.expect)
 		);
 	}
 	const configured = options.explicit?.trim();
 	if (configured) {
-		return shellOracle(
-			configured,
-			workspaceRoot,
-			"named in settings",
-			options.expect,
+		return (
+			namedPageOracle(configured, workspaceRoot, "named in settings") ??
+			shellOracle(
+				configured,
+				workspaceRoot,
+				"named in settings",
+				options.expect,
+			)
 		);
 	}
 
