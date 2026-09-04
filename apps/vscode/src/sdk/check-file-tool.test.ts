@@ -258,7 +258,7 @@ describe("check_file", () => {
 
 			expect(output).toContain("')' expected")
 			expect(output).toContain("Delimiter scan")
-			expect(output).toContain("line 1, column 22")
+			expect(output).toContain("the `{` at column 22")
 		})
 
 		it("still runs when the editor reported nothing", async () => {
