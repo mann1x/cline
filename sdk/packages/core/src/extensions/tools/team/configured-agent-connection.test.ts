@@ -207,6 +207,36 @@ describe("an agent that names a saved profile", () => {
 		).toThrow(/reviewer.*gone/s);
 	});
 
+	/**
+	 * Being told the name is unresolvable answers what went wrong, not what to
+	 * do about it. A profile is usually deleted long after the agent naming it
+	 * was written, so the user is looking at a name they no longer recognise
+	 * with no list of what replaced it.
+	 */
+	it("names the profiles that do exist", () => {
+		expect(() =>
+			buildAgentRuntimeConfig(
+				BASE,
+				agent({ profile: "gone" }),
+				undefined,
+				() => undefined,
+				() => ["vision-box", "cheap-and-fast"],
+			),
+		).toThrow(/vision-box, cheap-and-fast/);
+	});
+
+	it("says so plainly when the host has no profiles at all", () => {
+		expect(() =>
+			buildAgentRuntimeConfig(
+				BASE,
+				agent({ profile: "gone" }),
+				undefined,
+				() => undefined,
+				() => [],
+			),
+		).toThrow(/no saved profiles/);
+	});
+
 	it("leaves an agent naming no profile alone", () => {
 		const runtime = buildAgentRuntimeConfig(
 			BASE,

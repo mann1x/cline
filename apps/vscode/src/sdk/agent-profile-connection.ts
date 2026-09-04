@@ -23,6 +23,16 @@ import { SecretKeys } from "@shared/storage/state-keys"
  * into a refusal naming the agent and the profile rather than a silent fallback
  * to the session's model.
  */
+/**
+ * The names of the saved profiles, for the message an agent gets when the one
+ * it names is gone. Read from the same stored list the resolver uses, so the
+ * two can never disagree about what exists.
+ */
+export function createAgentProfileNameLister(storedProfiles: string | undefined): () => string[] {
+	const names = parseApiConfigurationProfiles(storedProfiles).map((profile) => profile.name)
+	return () => names
+}
+
 export function createAgentProfileConnectionResolver(input: {
 	storedProfiles: string | undefined
 	primary: ApiConfiguration | undefined

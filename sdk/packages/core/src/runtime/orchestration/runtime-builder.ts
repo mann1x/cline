@@ -497,6 +497,27 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 							.join(", ")}`
 					: `[agents] No configured agents found. Looked in: ${configuredAgents.searchPaths.join(", ") || "(no search path)"}`,
 			);
+
+			// A profile is usually deleted long after the agent naming it was
+			// written, and nothing rewrites the agent file. Left to itself that
+			// surfaces as a failed delegation halfway through a task, which
+			// reads as the subagent being broken rather than as configuration
+			// that went stale. Said here instead, before anything calls it.
+			const danglingProfiles = configuredAgents.configs.filter(
+				(agent) =>
+					agent.profile !== undefined &&
+					config.resolveProfileConnection?.(agent.profile) === undefined,
+			);
+			for (const agent of danglingProfiles) {
+				const available = config.listProfileNames?.() ?? [];
+				(logger ?? config.logger)?.log?.(
+					`[agents] "${agent.name}" names the API configuration profile "${agent.profile}", which no longer exists, and will fail when called. ` +
+						(available.length > 0
+							? `Available profiles: ${available.join(", ")}.`
+							: "This host has no saved profiles."),
+					{ severity: "warn" },
+				);
+			}
 		}
 
 		if (
@@ -747,6 +768,7 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 							// where its provider store is.
 							resolveProviderConnection: config.resolveProviderConnection,
 							resolveProfileConnection: config.resolveProfileConnection,
+							listProfileNames: config.listProfileNames,
 							createSubAgentTools: (agent) =>
 								normalized.enableTools
 									? filterToolsForConfiguredAgent(

@@ -61,7 +61,7 @@ import { HostProvider } from "@/hosts/host-provider"
 import { ExtensionRegistryInfo } from "@/registry"
 import { getDistinctId } from "@/services/logging/distinctId"
 import { fetch } from "@/shared/net"
-import { createAgentProfileConnectionResolver } from "./agent-profile-connection"
+import { createAgentProfileConnectionResolver, createAgentProfileNameLister } from "./agent-profile-connection"
 import { type BedrockProviderConfig, buildBedrockProviderConfig } from "./bedrock-config"
 import { createEditorDiagnosticsHooks } from "./editor-diagnostics"
 import { buildAgentHooks } from "./hooks-adapter"
@@ -1758,6 +1758,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 			storedProfiles: stateManager.getGlobalSettingsKey("apiConfigurationProfiles"),
 			primary: apiConfig,
 		}),
+		listProfileNames: createAgentProfileNameLister(stateManager.getGlobalSettingsKey("apiConfigurationProfiles")),
 		cwd,
 		workspaceRoot,
 		systemPrompt,

@@ -180,6 +180,99 @@ You are a code reviewer.`,
 		expect(runtime.tools.map((tool) => tool.name)).toContain("spawn_agent");
 	});
 
+	/**
+	 * A profile is deleted in Settings; the agent file naming it is not
+	 * rewritten. Without this the first sign is a failed delegation partway
+	 * through a task, which reads as the subagent being broken rather than as
+	 * configuration that went stale.
+	 */
+	it("warns at load about an agent naming a profile that no longer exists", async () => {
+		const tempHome = mkdtempSync(join(tmpdir(), "cline-agent-home-"));
+		const workspaceRoot = mkdtempSync(join(tmpdir(), "cline-agent-workspace-"));
+		tempDirs.push(tempHome, workspaceRoot);
+		setHomeDir(tempHome);
+
+		const agentsDir = join(workspaceRoot, ".cline", "agents");
+		mkdirSync(agentsDir, { recursive: true });
+		writeFileSync(
+			join(agentsDir, "code-reviewer.yml"),
+			`---
+name: code-reviewer
+description: Reviews code
+profile: vision-box
+---
+You are a code reviewer.`,
+			"utf8",
+		);
+
+		const lines: string[] = [];
+		const runtime = await new DefaultRuntimeBuilder().build({
+			config: makeBaseConfig({
+				cwd: workspaceRoot,
+				workspaceRoot,
+				enableSpawnAgent: true,
+				logger: {
+					log: (message: string) => {
+						lines.push(message);
+					},
+					debug: () => undefined,
+				},
+				resolveProfileConnection: () => undefined,
+				listProfileNames: () => ["cheap-and-fast"],
+			}),
+			createSpawnTool: makeSpawnTool,
+		});
+
+		const warning = lines.find((line) => line.includes("no longer exists"));
+		expect(warning).toContain("code-reviewer");
+		expect(warning).toContain("vision-box");
+		expect(warning).toContain("cheap-and-fast");
+		await runtime.shutdown("test");
+	});
+
+	it("says nothing when the profile an agent names resolves", async () => {
+		const tempHome = mkdtempSync(join(tmpdir(), "cline-agent-home-"));
+		const workspaceRoot = mkdtempSync(join(tmpdir(), "cline-agent-workspace-"));
+		tempDirs.push(tempHome, workspaceRoot);
+		setHomeDir(tempHome);
+
+		const agentsDir = join(workspaceRoot, ".cline", "agents");
+		mkdirSync(agentsDir, { recursive: true });
+		writeFileSync(
+			join(agentsDir, "code-reviewer.yml"),
+			`---
+name: code-reviewer
+description: Reviews code
+profile: vision-box
+---
+You are a code reviewer.`,
+			"utf8",
+		);
+
+		const lines: string[] = [];
+		const runtime = await new DefaultRuntimeBuilder().build({
+			config: makeBaseConfig({
+				cwd: workspaceRoot,
+				workspaceRoot,
+				enableSpawnAgent: true,
+				logger: {
+					log: (message: string) => {
+						lines.push(message);
+					},
+					debug: () => undefined,
+				},
+				resolveProfileConnection: () => ({ providerId: "anthropic" }),
+				listProfileNames: () => ["vision-box"],
+			}),
+			createSpawnTool: makeSpawnTool,
+		});
+
+		expect(
+			lines.find((line) => line.includes("no longer exists")),
+		).toBeUndefined();
+		await runtime.shutdown("test");
+	});
+
 	it("does not register root skills when only configured agents declare skills", async () => {
 		const tempHome = mkdtempSync(join(tmpdir(), "cline-agent-home-"));
 		const workspaceRoot = mkdtempSync(join(tmpdir(), "cline-agent-workspace-"));

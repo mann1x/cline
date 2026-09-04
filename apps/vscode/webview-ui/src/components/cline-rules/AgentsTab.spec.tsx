@@ -22,8 +22,10 @@ vi.mock("@/services/grpc-client", () => ({
 	},
 }))
 
+const extensionState = vi.hoisted(() => ({ current: { apiConfigurationProfiles: "" } }))
+
 vi.mock("@/context/ExtensionStateContext", () => ({
-	useExtensionState: vi.fn(() => ({ apiConfigurationProfiles: "" })),
+	useExtensionState: vi.fn(() => extensionState.current),
 }))
 
 describe("AgentsTab", () => {
@@ -31,6 +33,57 @@ describe("AgentsTab", () => {
 		refreshAgents.mockReset().mockResolvedValue({ ...EMPTY })
 		saveAgentFile.mockReset().mockResolvedValue({ ...EMPTY })
 		deleteAgentFile.mockReset().mockResolvedValue({ ...EMPTY })
+		extensionState.current = { apiConfigurationProfiles: "" }
+	})
+
+	/**
+	 * A profile is usually deleted long after the agent naming it was written,
+	 * and nothing rewrites the agent file. The agent then fails on its first
+	 * call, so the list has to say so before that call happens rather than
+	 * showing the dead name as though it were fine.
+	 */
+	describe("an agent whose profile no longer exists", () => {
+		const AGENT = {
+			name: "reviewer",
+			description: "Reviews a change",
+			path: "/work/.cline/agents/reviewer.md",
+			isGlobal: false,
+			tools: [],
+			skills: [],
+			providerId: "",
+			modelId: "",
+			profile: "vision-box",
+			maxIterations: 0,
+			systemPrompt: "You review code",
+		}
+
+		it("marks the dead profile in the list", async () => {
+			refreshAgents.mockResolvedValue({ ...EMPTY, agents: [AGENT] })
+
+			render(<AgentsTab />)
+
+			expect(await screen.findByText("Workspace · vision-box (missing)")).toBeTruthy()
+		})
+
+		it("leaves a profile that still exists unmarked", async () => {
+			extensionState.current = {
+				apiConfigurationProfiles: JSON.stringify([{ name: "vision-box", snapshot: {} }]),
+			}
+			refreshAgents.mockResolvedValue({ ...EMPTY, agents: [AGENT] })
+
+			render(<AgentsTab />)
+
+			expect(await screen.findByText("Workspace · vision-box")).toBeTruthy()
+		})
+
+		it("says what to do when the agent is opened", async () => {
+			refreshAgents.mockResolvedValue({ ...EMPTY, agents: [AGENT] })
+
+			render(<AgentsTab />)
+			fireEvent.click(await screen.findByLabelText("Edit reviewer"))
+
+			expect(await screen.findByText(/no longer exists, so this agent fails when it is called/)).toBeTruthy()
+		})
 	})
 
 	// The empty state is where the feature is won or lost: someone who has never

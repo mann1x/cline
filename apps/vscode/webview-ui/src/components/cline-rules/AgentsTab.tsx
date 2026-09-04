@@ -91,11 +91,19 @@ function emptyAgent(isGlobal: boolean): AgentInfo {
 	})
 }
 
-/** One line saying where an agent lives and what it runs on. */
-function agentSubtitle(agent: AgentInfo): string {
+/**
+ * One line saying where an agent lives and what it runs on.
+ *
+ * A profile can be deleted long after an agent was written to name it, and
+ * nothing rewrites the agent file when that happens. The agent then fails on
+ * its first call with an error the list gave no warning of, so a name that no
+ * longer resolves is called out here rather than shown as if it were fine.
+ */
+function agentSubtitle(agent: AgentInfo, profileNames: string[]): string {
 	const where = agent.isGlobal ? "Global" : "Workspace"
 	if (agent.profile) {
-		return `${where} · ${agent.profile}`
+		const missing = !profileNames.includes(agent.profile)
+		return `${where} · ${agent.profile}${missing ? " (missing)" : ""}`
 	}
 	if (agent.modelId) {
 		return `${where} · ${agent.modelId}`
@@ -231,6 +239,16 @@ const AgentsTab: React.FC<AgentsTabProps> = ({ dropdownContainer }) => {
 						</SelectTrigger>
 						<SelectContent container={dropdownContainer ?? undefined}>
 							<SelectItem value={SESSION_PROFILE}>The session's own model</SelectItem>
+							{/*
+							 * A profile the agent names but that no longer exists is
+							 * offered as an item of its own. Without it the trigger
+							 * renders empty -- the agent looks like it runs on the
+							 * session's model, when in fact it fails on its first
+							 * call -- and there is nothing to replace.
+							 */}
+							{draft.profile && !profileNames.includes(draft.profile) && (
+								<SelectItem value={draft.profile}>{draft.profile} (missing)</SelectItem>
+							)}
 							{profileNames.map((name) => (
 								<SelectItem key={name} value={name}>
 									{name}
@@ -238,6 +256,12 @@ const AgentsTab: React.FC<AgentsTabProps> = ({ dropdownContainer }) => {
 							))}
 						</SelectContent>
 					</Select>
+					{draft.profile && !profileNames.includes(draft.profile) ? (
+						<p className="text-xs text-error">
+							The profile “{draft.profile}” no longer exists, so this agent fails when it is called. Pick another
+							one, or the session's own model, and save.
+						</p>
+					) : null}
 					<p className="text-xs text-description">
 						A saved configuration profile carries the provider, the model and the context window together, so this is
 						also how an agent runs on a different provider than the session.
@@ -342,7 +366,7 @@ const AgentsTab: React.FC<AgentsTabProps> = ({ dropdownContainer }) => {
 							key={agent.path || agent.name}>
 							<div className="flex-1 min-w-0">
 								<div className="text-sm truncate">{agent.name}</div>
-								<div className="text-xs text-description truncate">{agentSubtitle(agent)}</div>
+								<div className="text-xs text-description truncate">{agentSubtitle(agent, profileNames)}</div>
 							</div>
 							<Button
 								aria-label={`Edit ${agent.name}`}

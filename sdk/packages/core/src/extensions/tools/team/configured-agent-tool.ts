@@ -95,6 +95,15 @@ export interface ConfiguredAgentToolConfig {
 	resolveProfileConnection?: (
 		name: string,
 	) => AgentProfileConnection | undefined;
+	/**
+	 * The profile names this host currently has, for the refusal message.
+	 *
+	 * A profile can be deleted long after an agent was written to name it, and
+	 * the agent file is not rewritten when that happens. Being told the name is
+	 * unresolvable answers "what went wrong" and not "what do I put instead",
+	 * which is the question the user is actually left holding.
+	 */
+	listProfileNames?: () => string[];
 	createSubAgentTools?: (
 		agent: ConfiguredAgentConfig,
 		input: ConfiguredAgentInput,
@@ -216,13 +225,14 @@ export function buildAgentRuntimeConfig(
 	resolveProfileConnection?: (
 		name: string,
 	) => AgentProfileConnection | undefined,
+	listProfileNames?: () => string[],
 ): DelegatedAgentRuntimeConfig {
 	// A named profile answers provider, model and connection at once. Resolved
 	// first so the two explicit keys can still override it: `profile` plus
 	// `modelId` is "that configuration, this model", which is the reason to
 	// write both and the only reading under which neither is redundant.
 	const profile = agent.profile
-		? resolveProfile(agent, resolveProfileConnection)
+		? resolveProfile(agent, resolveProfileConnection, listProfileNames)
 		: undefined;
 	const providerId = agent.providerId ?? profile?.providerId ?? base.providerId;
 	const modelId = agent.modelId ?? profile?.modelId ?? base.modelId;
@@ -290,14 +300,19 @@ function resolveProfile(
 	resolveProfileConnection?: (
 		name: string,
 	) => AgentProfileConnection | undefined,
+	listProfileNames?: () => string[],
 ): AgentProfileConnection {
 	const resolved = agent.profile
 		? resolveProfileConnection?.(agent.profile)
 		: undefined;
 	if (!resolved) {
+		const available = listProfileNames?.() ?? [];
 		throw new Error(
-			`Subagent "${agent.name}" names the API configuration profile "${agent.profile}", which this host cannot resolve. ` +
-				"Save a profile under that name, or remove the profile key from the agent so it runs on the session's configuration.",
+			`Subagent "${agent.name}" names the API configuration profile "${agent.profile}", which no longer exists. ` +
+				(available.length > 0
+					? `Open Agents in settings and set "Runs on" to one of: ${available.join(", ")}. `
+					: "This host has no saved profiles. ") +
+				"Removing the profile key from the agent runs it on the session's configuration instead.",
 		);
 	}
 	return resolved;
@@ -349,6 +364,7 @@ export function createConfiguredAgentTools(
 						config,
 						options.resolveProviderConnection,
 						options.resolveProfileConnection,
+						options.listProfileNames,
 					);
 					const configProvider =
 						createDelegatedAgentConfigProvider(runtimeConfig);

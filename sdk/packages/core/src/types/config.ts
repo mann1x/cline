@@ -500,6 +500,12 @@ export interface CoreSessionConfig
 	resolveProfileConnection?: (
 		name: string,
 	) => AgentProfileConnection | undefined;
+	/**
+	 * The profile names this host currently has, so a refusal can say what to
+	 * pick instead of only what is missing. Profiles are deleted long after the
+	 * agent files that name them were written.
+	 */
+	listProfileNames?: () => string[];
 	workspaceRoot?: string;
 	systemPrompt: string;
 	teamName?: string;
