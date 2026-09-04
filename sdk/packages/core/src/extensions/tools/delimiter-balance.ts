@@ -376,8 +376,10 @@ export function scanWithBalance(
 }
 
 /** Every `<script>` body in an HTML-ish file, with where each one starts. */
-function scriptSpans(text: string): Array<{ body: string; origin: Cursor }> {
-	const spans: Array<{ body: string; origin: Cursor }> = [];
+function scriptSpans(
+	text: string,
+): Array<{ body: string; origin: Cursor; module: boolean }> {
+	const spans: Array<{ body: string; origin: Cursor; module: boolean }> = [];
 	const opening = /<script\b([^>]*)>/gi;
 	let match = opening.exec(text);
 	while (match) {
@@ -399,6 +401,7 @@ function scriptSpans(text: string): Array<{ body: string; origin: Cursor }> {
 			spans.push({
 				body: text.slice(bodyStart, bodyEnd),
 				origin: { line: lineIndex, column: bodyStart - lastNewline },
+				module: /\btype\s*=\s*["']?module\b/i.test(attributes),
 			});
 		}
 		opening.lastIndex = bodyEnd;
@@ -621,6 +624,58 @@ function proposeRepair(
 export function canScanDelimiters(filePath: string): boolean {
 	const extension = filePath.slice(filePath.lastIndexOf(".")).toLowerCase();
 	return C_FAMILY.has(extension) || EMBEDS_SCRIPT.has(extension);
+}
+
+/** Classic scripts only: a module body is parsed under different rules. */
+const PARSE_CHECKED = new Set([".js", ".cjs", ".html", ".htm"]);
+
+/**
+ * Whether a file's scripts parse at all, asked of a real parser.
+ *
+ * Not a second delimiter scan. The scan is a heuristic and is here to *place*
+ * a parse error the browser could only name; this answers the prior question —
+ * is there one — with the engine's own answer, so it can be trusted where a
+ * heuristic cannot: to contradict a browser that reported a clean page.
+ *
+ * Measured, and this is why it exists: a run edited a 14 KB page into a state
+ * where `forEach(e=>{…};` left a `;` inside an argument list, opened it in the
+ * browser, and was told "Console: nothing. The page printed no messages and
+ * threw no errors." The page had never run. The model reported the task
+ * finished on that evidence, and the transaction was kept over a file that
+ * does not parse.
+ *
+ * `new Function` rather than `vm.Script`, which parses lazily under Bun and
+ * throws nothing at all on broken source. The body is wrapped in a function,
+ * so a `return` at the top level passes here and would not in a real script —
+ * a miss, which is the safe direction: this only ever speaks up when a parser
+ * has actually refused the source.
+ */
+export function findScriptSyntaxError(
+	filePath: string,
+	text: string,
+): string | undefined {
+	const extension = filePath.slice(filePath.lastIndexOf(".")).toLowerCase();
+	if (!PARSE_CHECKED.has(extension)) {
+		return undefined;
+	}
+	const bodies = EMBEDS_SCRIPT.has(extension)
+		? scriptSpans(text)
+				.filter((span) => !span.module)
+				.map((span) => span.body)
+		: [text];
+	for (const body of bodies) {
+		if (body.trim() === "") {
+			continue;
+		}
+		try {
+			new Function(body);
+		} catch (error) {
+			if (error instanceof SyntaxError) {
+				return `SyntaxError: ${error.message}`;
+			}
+		}
+	}
+	return undefined;
 }
 
 /**

@@ -417,6 +417,13 @@ export class BrowserSession {
 						action: this.browserActions[this.browserActions.length - 1],
 					})
 				}
+			} else if (logs.length === 0) {
+				// A timeout is deliberately not an error: a page that polls never
+				// reaches networkidle2 and is working fine. But when it is also
+				// the only thing that happened, staying quiet reports "the page
+				// printed nothing", which the caller reads as a pass -- over a
+				// page that may not have loaded at all.
+				logs.push(`[Timeout] ${errorMessage}`)
 			}
 		}
 

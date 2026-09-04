@@ -1,6 +1,9 @@
 import * as fs from "node:fs/promises";
 import { type AgentTool, createTool } from "@cline/shared";
-import { describeDelimiterBalance } from "./delimiter-balance";
+import {
+	describeDelimiterBalance,
+	findScriptSyntaxError,
+} from "./delimiter-balance";
 
 /**
  * What a driver reports back from one action.
@@ -58,7 +61,7 @@ Actions:
 - \`scroll_down\`, \`scroll_up\` — one viewport.
 - \`close\` — shut the browser down. Do this when finished with it.
 
-Every action reports the console messages and uncaught errors produced while it ran, so a syntax error, a failed fetch or a null dereference comes back as text you can act on. \`[error]\` and \`[Page Error]\` lines are real failures. A page that says nothing printed nothing — that is a pass, not a failed call.
+Every action reports the console messages and uncaught errors produced while it ran, so a syntax error, a failed fetch or a null dereference comes back as text you can act on. \`[error]\` and \`[Page Error]\` lines are real failures. A page that says nothing printed nothing — that is a pass, not a failed call, and for a local file it is checked: a silent console over a file that does not parse is reported as the failure it is, not as a pass.
 
 A parse error from the browser names no line, because the script never ran. For a local file a \`Delimiter scan\` section follows it and names the line to edit and how many brackets that line is out by — one line per place the trouble starts, since a file can be broken in several spots at once. Fix every line it lists in one edit and reload once, rather than one edit and one reload per line. Edit those lines instead of counting brackets yourself: counting a whole file by hand costs more thinking than you have, and the scan skips strings, comments and regex literals, which counting does not.
 
@@ -259,6 +262,22 @@ export function localPathOf(url: string | undefined): string | undefined {
 }
 
 /**
+ * What an empty console means when the file itself does not parse.
+ *
+ * Said in the tool's own terms, because the model has just been told the page
+ * printed nothing and read that as a pass — which is what the description says
+ * it means. Contradicting that has to be explicit, and has to name why the
+ * console was empty: the scripts never ran, so there was nothing to print.
+ */
+function silentNote(filePath: string, syntaxError: string): string {
+	return (
+		`That silence is not a pass: ${filePath} does not parse — ${syntaxError.replace(/\.+$/, "")}. ` +
+		"The script never ran, which is why there was nothing to print. " +
+		"Fix the file and open it again: silence only counts once the page parses."
+	);
+}
+
+/**
  * Locate a parse error the browser could only name.
  *
  * Measured, and this is why the tool exists in this shape: the browser
@@ -269,6 +288,13 @@ export function localPathOf(url: string | undefined): string | undefined {
  * question in milliseconds and it was already in this extension, one import
  * away, answering it for `check_file`.
  *
+ * It also answers the case the browser did not name at all. Measured on a run
+ * that ended "Task is finished — the game HTML file loads with zero JavaScript
+ * errors": the last `open` came back "Console: nothing", the file on disk did
+ * not parse, and the transaction was kept on that evidence. A silent console
+ * and a page that never ran look identical from here, so for a local file the
+ * silence is checked against the file rather than trusted.
+ *
  * Only for local files: a remote page's source is not ours to scan, and the
  * error may come from a script on another host entirely.
  */
@@ -278,15 +304,30 @@ async function locateParseError(
 	readFile: (filePath: string) => Promise<string>,
 	onError?: (message: string, error: unknown) => void,
 ): Promise<string | null> {
-	if (!PARSE_ERROR.test(logs)) {
-		return null;
-	}
 	const filePath = localPathOf(url);
 	if (!filePath) {
 		return null;
 	}
+	const reported = PARSE_ERROR.test(logs);
+	// A console that printed nothing is the tool's own definition of a pass, so
+	// it is the one result worth checking against the file itself. Anything the
+	// page did print means it ran.
+	const silent = logs.trim() === "";
+	if (!reported && !silent) {
+		return null;
+	}
 	try {
-		return describeDelimiterBalance(filePath, await readFile(filePath));
+		const source = await readFile(filePath);
+		const missed = reported
+			? undefined
+			: findScriptSyntaxError(filePath, source);
+		if (!reported && !missed) {
+			return null;
+		}
+		const scan = describeDelimiterBalance(filePath, source);
+		return missed
+			? [silentNote(filePath, missed), scan].filter(Boolean).join("\n\n")
+			: scan;
 	} catch (error) {
 		// Never mask the console output this is appended to.
 		onError?.(`[Browser] delimiter scan skipped for ${filePath}`, error);

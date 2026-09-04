@@ -231,6 +231,51 @@ describe("the delimiter scan on a parse error", () => {
 			await run(tool, { action: "open", url: "/repo/gone.html" }),
 		).toContain("SyntaxError");
 	});
+
+	// The run this exists for: the browser reported nothing at all on a page
+	// whose scripts do not parse, and the model read "nothing printed" as the
+	// pass this tool's own description says it is.
+	it("contradicts a silent console when the file does not parse", async () => {
+		const tool = toolFor("", {
+			"/repo/game.html":
+				"<body><script>\nfoo.forEach(e=>{if(e){bar();}};\n});\n</script></body>",
+		});
+
+		const output = await run(tool, { action: "open", url: "/repo/game.html" });
+
+		expect(output).toContain("That silence is not a pass");
+		expect(output).toContain("does not parse");
+		expect(output).toContain("Delimiter scan");
+	});
+
+	it("leaves a silent console alone when the file does parse", async () => {
+		const tool = toolFor("", { "/repo/game.html": BROKEN });
+
+		const output = await run(tool, { action: "open", url: "/repo/game.html" });
+
+		expect(output).toContain("The page printed no messages");
+		expect(output).not.toContain("That silence is not a pass");
+	});
+
+	// Anything printed is proof the scripts ran, so the file is not re-judged.
+	it("leaves a console that printed something alone", async () => {
+		const tool = toolFor("[console] ready", {
+			"/repo/game.html":
+				"<body><script>\nfoo.forEach(e=>{if(e){bar();}};\n});\n</script></body>",
+		});
+
+		expect(
+			await run(tool, { action: "open", url: "/repo/game.html" }),
+		).not.toContain("That silence is not a pass");
+	});
+
+	it("says nothing about a silent remote page", async () => {
+		const tool = toolFor("");
+
+		expect(
+			await run(tool, { action: "open", url: "http://localhost:3000" }),
+		).not.toContain("That silence is not a pass");
+	});
 });
 
 describe("browser", () => {

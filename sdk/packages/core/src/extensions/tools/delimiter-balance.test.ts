@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { describeDelimiterBalance, scanDelimiters } from "./delimiter-balance";
+import {
+	describeDelimiterBalance,
+	findScriptSyntaxError,
+	scanDelimiters,
+} from "./delimiter-balance";
 
 describe("scanDelimiters", () => {
 	it("says nothing about balanced code", () => {
@@ -324,5 +328,57 @@ describe("describeDelimiterBalance", () => {
 				.filter((line) => line.includes("— checked"));
 			expect(checked).toHaveLength(1);
 		});
+	});
+});
+
+describe("findScriptSyntaxError", () => {
+	// The exact shape a run left on disk: a `;` where the argument list wanted
+	// its `)`. The browser said nothing about it, so a parser has to.
+	it("finds a broken script inside a page", () => {
+		const html =
+			"<body><script>\nfoo.forEach(e=>{if(e){bar();}};\n});\n</script></body>";
+
+		expect(findScriptSyntaxError("game.html", html)).toContain("SyntaxError");
+	});
+
+	it("says nothing about a page whose scripts parse", () => {
+		const html =
+			"<body><script>\nfoo.forEach(e=>{if(e){bar();}});\n</script></body>";
+
+		expect(findScriptSyntaxError("game.html", html)).toBeUndefined();
+	});
+
+	it("says nothing about a page with no script at all", () => {
+		expect(
+			findScriptSyntaxError("page.html", "<body><p>hi</p></body>"),
+		).toBeUndefined();
+	});
+
+	// A module body is parsed under different rules -- `import` is a syntax
+	// error in a function body -- so reporting on one would be reporting the
+	// checker's own limitation as the page's fault.
+	it("leaves module scripts to the browser", () => {
+		const html =
+			'<body><script type="module">\nimport x from "./x.js";\n</script></body>';
+
+		expect(findScriptSyntaxError("page.html", html)).toBeUndefined();
+	});
+
+	it("checks a plain script file directly", () => {
+		expect(
+			findScriptSyntaxError("app.js", "function f(){ return 1; }"),
+		).toBeUndefined();
+		expect(
+			findScriptSyntaxError("app.js", "function f({ return 1; }"),
+		).toContain("SyntaxError");
+	});
+
+	// Only where a classic-script parse is the right question. A .ts file is
+	// not JavaScript, and a report on one would be noise.
+	it("declines a language it does not parse", () => {
+		expect(
+			findScriptSyntaxError("app.ts", "const x: number = ;"),
+		).toBeUndefined();
+		expect(findScriptSyntaxError("styles.css", "a { color")).toBeUndefined();
 	});
 });
