@@ -167,6 +167,47 @@ export class TransactionController {
 		this.emit({ type: "adopted", transaction: this.current, oracle });
 	}
 
+	/**
+	 * Run a candidate check against the files as this transaction found them.
+	 *
+	 * The question a proposed check has to answer before it is trusted: does it
+	 * fail on the unmodified files? A check that already passes there is not a
+	 * check of anything — `echo ok`, `node --version`, a test that never
+	 * touches the bug — and approving one produces `self-declared` with a
+	 * ceremony around it. Failing first and passing after is the definition of
+	 * a regression test, and it is the property this enforces.
+	 *
+	 * Where nothing has been edited yet, the working tree *is* the base and it
+	 * is simply run. Where something has, the base is put back for the length
+	 * of the run and the edits are put back after it — the same restore the
+	 * protocol performs on a discarded transaction, in both directions, with
+	 * the return leg in a `finally` so a check that throws cannot cost the
+	 * model its work.
+	 */
+	async judgeAgainstBase(oracle: Oracle): Promise<OracleVerdict> {
+		const base = this.snapshot;
+		if (!base) {
+			throw new Error(
+				"judgeAgainstBase() was called before a transaction was opened",
+			);
+		}
+		const timeoutMs = this.options.oracleTimeoutMs ?? DEFAULT_ORACLE_TIMEOUT_MS;
+		if (await snapshotIsClean(base, this.options.snapshotLimits)) {
+			return await runOracle(oracle, { timeoutMs });
+		}
+
+		const edited = await takeSnapshot(
+			this.options.workspaceRoot,
+			this.options.snapshotLimits,
+		);
+		await restoreSnapshot(base, this.options.snapshotLimits);
+		try {
+			return await runOracle(oracle, { timeoutMs });
+		} finally {
+			await restoreSnapshot(edited, this.options.snapshotLimits);
+		}
+	}
+
 	/** Every transaction so far, in order, kept or not. */
 	get outcomes(): readonly TransactionOutcome[] {
 		return this.history;

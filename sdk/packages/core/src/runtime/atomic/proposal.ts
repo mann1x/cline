@@ -20,7 +20,12 @@
  */
 
 import * as path from "node:path";
-import type { CommandOracle, Oracle, PageOracle } from "./oracle";
+import type {
+	CommandOracle,
+	Oracle,
+	OracleVerdict,
+	PageOracle,
+} from "./oracle";
 
 /** What the model asks for, before anything has agreed to it. */
 export interface CheckProposal {
@@ -216,4 +221,44 @@ export function sameProposal(a: CheckProposal, b: CheckProposal): boolean {
 		a.command === b.command &&
 		a.expect === b.expect
 	);
+}
+
+/**
+ * What a candidate check's verdict on the *unmodified* files means.
+ *
+ * Three outcomes, and only one of them is a usable check:
+ *
+ * - It passed. Then it says nothing about the task: it would have kept the
+ *   transaction before a line was edited. Rejected.
+ * - It could not run at all — a command that is not installed, a file that is
+ *   not there. Rejected, and named as that rather than as a failure, because
+ *   "not found" and "found a problem" arrive here looking the same and only
+ *   one of them is the check working.
+ * - It ran and reported a problem. That is the check doing its job on a
+ *   broken tree, and it is the only one accepted.
+ */
+export function judgeCandidateCheck(
+	verdict: OracleVerdict,
+): { usable: true } | { usable: false; problem: string } {
+	if (verdict.passed) {
+		return {
+			usable: false,
+			problem:
+				"That check already passes on the files as they were before any edit, so it cannot tell a fix from no fix at all. Propose one that fails right now and passes once the change lands.",
+		};
+	}
+	if (verdict.timedOut) {
+		return {
+			usable: false,
+			problem:
+				"That check did not finish in the time it is given, so it cannot judge an attempt. Propose something faster.",
+		};
+	}
+	if (verdict.exitCode === null) {
+		return {
+			usable: false,
+			problem: `That check could not be run here at all, so it would judge nothing: ${verdict.output.trim() || "no output"}. Propose something that exists on this machine — \`kind: "page"\` needs nothing installed.`,
+		};
+	}
+	return { usable: true };
 }

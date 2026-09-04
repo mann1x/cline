@@ -14,11 +14,12 @@
  */
 
 import { type AgentTool, createTool } from "@cline/shared";
-import type { Oracle } from "./oracle";
+import type { Oracle, OracleVerdict } from "./oracle";
 import {
 	type CheckApprover,
 	type CheckProposal,
 	describeCheckProposal,
+	judgeCandidateCheck,
 	MAX_CHECK_PROPOSALS,
 	PROPOSE_CHECK_TOOL_NAME,
 	proposalToOracle,
@@ -37,7 +38,9 @@ Two kinds:
 
 Give a \`reason\` in one sentence: what passing this check proves about the task. The user reads it to decide.
 
-Propose once, early — as soon as you know what you are fixing. What is approved judges every attempt for the rest of the run and cannot be changed, so do not propose something you can already make pass.`;
+Propose once, early — as soon as you know what you are fixing. What is approved judges every attempt for the rest of the run and cannot be changed, so do not propose something you can already make pass.
+
+Once the user approves it, it is tried against the files as they were before your changes, and it has to FAIL there. A check that already passes on the unmodified files cannot tell a fix from no fix, and is refused.`;
 
 export const PROPOSE_CHECK_TOOL_INPUT_SCHEMA = {
 	type: "object",
@@ -74,6 +77,8 @@ export const PROPOSE_CHECK_TOOL_INPUT_SCHEMA = {
 export interface CheckAdopter {
 	readonly canAdoptOracle: boolean;
 	adoptOracle(oracle: Oracle): void;
+	/** Runs a candidate against the files this transaction opened on. */
+	judgeAgainstBase(oracle: Oracle): Promise<OracleVerdict>;
 }
 
 export interface ProposeCheckToolOptions {
@@ -90,8 +95,10 @@ export function createProposeCheckTool(
 	options: ProposeCheckToolOptions,
 ): AgentTool {
 	// Rounds, not calls: a proposal the model got wrong in shape has not spent
-	// one, because nobody was asked anything. Only the user declining does.
-	let declined = 0;
+	// one, because nobody was asked anything. A round is spent by anything that
+	// cost the user an interaction -- a decline, or a check they approved that
+	// then turned out to judge nothing.
+	let spent = 0;
 
 	return createTool({
 		name: PROPOSE_CHECK_TOOL_NAME,
@@ -104,8 +111,8 @@ export function createProposeCheckTool(
 			if (!options.controller.canAdoptOracle) {
 				return "This run already has a check and it is frozen for the rest of the run. Make your change and let the check judge it.";
 			}
-			if (declined >= MAX_CHECK_PROPOSALS) {
-				return "The user has declined twice, so this run has no check and your own account of the work is the verdict. Do not propose again — say plainly whether the change worked and how you know.";
+			if (spent >= MAX_CHECK_PROPOSALS) {
+				return "Two proposals have already been put to the user without one being taken on, so this run has no check and your own account of the work is the verdict. Do not propose again — say plainly whether the change worked and how you know.";
 			}
 
 			const proposal = readCheckProposal(input, options.workspaceRoot);
@@ -127,9 +134,9 @@ export function createProposeCheckTool(
 			}
 
 			if (!approval.approved) {
-				declined += 1;
+				spent += 1;
 				const said = approval.feedback?.trim();
-				const left = MAX_CHECK_PROPOSALS - declined;
+				const left = MAX_CHECK_PROPOSALS - spent;
 				return [
 					"The user did not approve that check.",
 					said ? `They said: ${said}` : undefined,
@@ -142,6 +149,36 @@ export function createProposeCheckTool(
 			}
 
 			const oracle = proposalToOracle(proposal, options.workspaceRoot);
+
+			// Approved is not the same as usable. A check that already passes on
+			// the unmodified files would have kept the transaction before a line
+			// was edited, and one that cannot run at all judges nothing -- both
+			// arrive as an approved proposal and neither is a check. This is the
+			// property that separates the feature from theatre, and the snapshot
+			// it needs is already sitting there.
+			try {
+				const candidate = await options.controller.judgeAgainstBase(oracle);
+				const judged = judgeCandidateCheck(candidate);
+				if (!judged.usable) {
+					spent += 1;
+					const left = MAX_CHECK_PROPOSALS - spent;
+					return [
+						`The user approved that check, but it was tried against the files as they were before your changes and it does not work as a check. ${judged.problem}`,
+						left > 0
+							? "Propose one more."
+							: "That was the last round, so this run has no check and your own account of the work is the verdict.",
+					].join(" ");
+				}
+			} catch (error) {
+				// Never fatal: the user has approved it, and a validation that
+				// could not be performed is a weaker guarantee rather than a
+				// reason to refuse the check they asked for.
+				options.onError?.(
+					"[Atomic] the proposed check could not be tried against the base",
+					error,
+				);
+			}
+
 			try {
 				options.controller.adoptOracle(oracle);
 			} catch (error) {

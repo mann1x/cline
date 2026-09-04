@@ -493,4 +493,28 @@ describe("a check the model proposes", () => {
 			},
 		);
 	});
+
+	// End to end, through the session the host builds: a check that already
+	// passes on the page as the run found it is refused before it is frozen.
+	it("refuses a check the unbroken page already passes", async () => {
+		await withWorkspace({ "game.html": WORKING }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "always" },
+				approveCheck: async () => ({ approved: true }),
+			});
+			if (!session) {
+				throw new Error("expected a session");
+			}
+
+			const output = await propose(session, {
+				kind: "page",
+				path: "game.html",
+				reason: "the task is this page",
+			});
+
+			expect(output).toContain("already passes");
+			expect(session.oracle).toBeUndefined();
+		});
+	});
 });

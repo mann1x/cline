@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { Oracle } from "./oracle";
+import { TransactionController } from "./transaction-controller";
 import {
 	type AttemptContext,
 	type AttemptResult,
@@ -384,6 +385,71 @@ describe("a turn that was cut short", () => {
 			await expect(
 				fs.readFile(path.join(root, "game.js"), "utf8"),
 			).resolves.toBe("half done");
+		});
+	});
+});
+
+describe("trying a candidate check against the base", () => {
+	function controllerOn(root: string): TransactionController {
+		return new TransactionController({
+			workspaceRoot: root,
+			maxChanges: 3,
+			maxTransactions: 6,
+		});
+	}
+
+	it("runs it against the working tree while nothing has been edited", async () => {
+		await withWorkspace({ "game.js": "broken" }, async (root) => {
+			const controller = controllerOn(root);
+			await controller.open();
+
+			const verdict = await controller.judgeAgainstBase(
+				fileSaysOracle(root, "fixed"),
+			);
+
+			expect(verdict.passed).toBe(false);
+		});
+	});
+
+	// The edits have to survive it. A check tried against the base is a
+	// round trip through the same restore a discarded transaction performs,
+	// and losing the model's work to a validation step would be worse than
+	// not validating at all.
+	it("puts the edits back after running against the base", async () => {
+		await withWorkspace({ "game.js": "broken" }, async (root) => {
+			const controller = controllerOn(root);
+			await controller.open();
+			await fs.writeFile(path.join(root, "game.js"), "fixed", "utf8");
+
+			const verdict = await controller.judgeAgainstBase(
+				fileSaysOracle(root, "fixed"),
+			);
+
+			// Failed on the base -- which is the whole point, since it passes now.
+			expect(verdict.passed).toBe(false);
+			expect(await fs.readFile(path.join(root, "game.js"), "utf8")).toBe(
+				"fixed",
+			);
+		});
+	});
+
+	it("puts the edits back even when the check throws", async () => {
+		await withWorkspace({ "game.js": "broken" }, async (root) => {
+			const controller = controllerOn(root);
+			await controller.open();
+			await fs.writeFile(path.join(root, "game.js"), "fixed", "utf8");
+
+			await controller.judgeAgainstBase({
+				label: "not a program",
+				command: path.join(root, "nothing-here"),
+				args: [],
+				cwd: root,
+				reason: "test",
+			});
+
+			expect(await fs.readFile(path.join(root, "game.js"), "utf8")).toBe(
+				"fixed",
+			);
 		});
 	});
 });

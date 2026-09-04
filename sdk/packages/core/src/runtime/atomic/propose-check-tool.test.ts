@@ -1,14 +1,28 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Oracle } from "./oracle";
+import type { Oracle, OracleVerdict } from "./oracle";
 import type { CheckApprover } from "./proposal";
 import { createProposeCheckTool } from "./propose-check-tool";
 
 const ROOT = "/work";
 
-function adopter(existing?: Oracle) {
+/** A base the candidate check fails on, which is what makes it a check. */
+const FAILS_ON_BASE: OracleVerdict = {
+	passed: false,
+	exitCode: 1,
+	output: "still broken",
+	timedOut: false,
+};
+
+function adopter(existing?: Oracle, base: OracleVerdict = FAILS_ON_BASE) {
 	const adopted: Oracle[] = [];
+	const tried: Oracle[] = [];
 	return {
 		adopted,
+		tried,
+		async judgeAgainstBase(oracle: Oracle) {
+			tried.push(oracle);
+			return base;
+		},
 		get canAdoptOracle() {
 			return existing === undefined && adopted.length === 0;
 		},
@@ -136,5 +150,70 @@ describe("propose_check", () => {
 
 		expect(controller.adopted).toHaveLength(0);
 		expect(output).toContain("continues without one");
+	});
+
+	// The property that separates this from theatre: a check that already
+	// passes on the unmodified files would have kept the transaction before a
+	// line was edited.
+	it("refuses a check that already passes before the change", async () => {
+		const controller = adopter(undefined, {
+			passed: true,
+			exitCode: 0,
+			output: "ok",
+			timedOut: false,
+		});
+		const { run } = toolWith(async () => ({ approved: true }), controller);
+
+		const output = await run(PAGE);
+
+		expect(controller.adopted).toHaveLength(0);
+		expect(output).toContain("already passes");
+		expect(output).toContain("Propose one more");
+	});
+
+	// "Not installed" and "found a problem" arrive here looking the same, and
+	// only one of them is the check working.
+	it("refuses a check that could not be run at all", async () => {
+		const controller = adopter(undefined, {
+			passed: false,
+			exitCode: null,
+			output: "spawn pytest ENOENT",
+			timedOut: false,
+		});
+		const { run } = toolWith(async () => ({ approved: true }), controller);
+
+		const output = await run({
+			kind: "command",
+			command: "pytest",
+			reason: "the suite covers it",
+		});
+
+		expect(controller.adopted).toHaveLength(0);
+		expect(output).toContain("could not be run here");
+	});
+
+	it("tries the candidate before taking it on, never after", async () => {
+		const controller = adopter();
+		const { run } = toolWith(async () => ({ approved: true }), controller);
+
+		await run(PAGE);
+
+		expect(controller.tried).toHaveLength(1);
+		expect(controller.adopted).toHaveLength(1);
+	});
+
+	// The user approved it. A validation that could not be performed is a
+	// weaker guarantee, not a reason to refuse what they asked for.
+	it("takes the check on anyway when it cannot be tried", async () => {
+		const controller = {
+			...adopter(),
+			judgeAgainstBase: async () => {
+				throw new Error("no snapshot");
+			},
+		};
+		const { run } = toolWith(async () => ({ approved: true }), controller);
+
+		expect(await run(PAGE)).toContain("Approved");
+		expect(controller.adopted).toHaveLength(1);
 	});
 });
