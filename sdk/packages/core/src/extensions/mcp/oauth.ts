@@ -275,6 +275,29 @@ function buildClient(input: {
 	});
 }
 
+/**
+ * A pre-registered client is configuration, not state. The SDK skips
+ * registration whenever `clientInformation()` answers, and so never calls
+ * `saveClientInformation` -- nothing persists it. Every path that builds a
+ * provider context therefore has to supply it again, or a reconnect and a
+ * token refresh fall back to dynamic registration, which is the one thing
+ * these servers refuse.
+ */
+export function toOAuthClientInformation(
+	registration: McpServerRegistration,
+): OAuthClientInformationMixed | undefined {
+	const configured = registration.oauthClient;
+	if (!configured) {
+		return undefined;
+	}
+	return {
+		client_id: configured.clientId,
+		...(configured.clientSecret
+			? { client_secret: configured.clientSecret }
+			: {}),
+	};
+}
+
 export async function authorizeMcpServerOAuth(
 	options: AuthorizeMcpServerOAuthOptions,
 ): Promise<AuthorizeMcpServerOAuthResult> {
@@ -323,14 +346,7 @@ export async function authorizeMcpServerOAuth(
 		settingsPath: options.filePath,
 		serverName,
 		redirectUrl: callbackServer.callbackUrl,
-		clientInformation: registration.oauthClient
-			? {
-					client_id: registration.oauthClient.clientId,
-					...(registration.oauthClient.clientSecret
-						? { client_secret: registration.oauthClient.clientSecret }
-						: {}),
-				}
-			: undefined,
+		clientInformation: toOAuthClientInformation(registration),
 		onAuthorizationUrl: async (url) => {
 			await options.openUrl?.(url);
 		},

@@ -12,6 +12,7 @@ import {
 	createMcpOAuthProviderContext,
 	createMcpSdkTransport,
 	type McpOAuthProviderContext,
+	toOAuthClientInformation,
 } from "./oauth";
 import { augmentMcpTimeoutError, resolveMcpRequestTimeoutMs } from "./timeout";
 import type {
@@ -568,6 +569,7 @@ class SdkUrlMcpClient implements McpServerClient {
 			serverName: this.registration.name,
 			redirectUrl:
 				this.registration.oauth?.redirectUrl ?? DEFAULT_HTTP_MCP_REDIRECT_URL,
+			clientInformation: toOAuthClientInformation(this.registration),
 		});
 		this.authContext = authContext;
 		let client: Client | undefined;
@@ -680,6 +682,7 @@ class SdkUrlMcpClient implements McpServerClient {
 				serverName: this.registration.name,
 				redirectUrl:
 					this.registration.oauth?.redirectUrl ?? DEFAULT_HTTP_MCP_REDIRECT_URL,
+				clientInformation: toOAuthClientInformation(this.registration),
 			});
 		const effectiveError = augmentMcpTimeoutError(
 			error,
