@@ -263,6 +263,44 @@ describe("a workspace with nothing to run", () => {
 		});
 	});
 
+	/**
+	 * The nudge that produced this stop says, in as many words, "If the task
+	 * really is finished, say so in one short sentence." A model that answers
+	 * it has declared. Reported 2026-09-04 on 4.100.61, where a run closing
+	 * "Task is finished - the file loads with zero JavaScript errors" was told
+	 * it had been cut short before saying whether the change worked.
+	 */
+	it("treats a closing statement as a declaration even after a nudge", async () => {
+		await withWorkspace({ "notes.md": "before" }, async (root) => {
+			const messages: string[] = [];
+			const sources: string[] = [];
+			await runAtomicTask(
+				{
+					workspaceRoot: root,
+					maxChanges: 3,
+					maxTransactions: 1,
+					onEvent: (event: TransactionEvent) => {
+						if (event.type === "settled") {
+							messages.push(event.message);
+							sources.push(event.source);
+						}
+					},
+				},
+				async () => {
+					await fs.writeFile(path.join(root, "notes.md"), "after", "utf8");
+					return {
+						account: "Task is finished - the file loads with zero errors.",
+						forced: true,
+					};
+				},
+			);
+
+			expect(sources).toEqual(["self-declared"]);
+			expect(messages[0]).not.toContain("cut short");
+			expect(messages[0]).not.toContain("UNVERIFIED");
+		});
+	});
+
 	it("says the run was cut short when that is why nothing was declared", async () => {
 		await withWorkspace({ "notes.md": "before" }, async (root) => {
 			const messages: string[] = [];

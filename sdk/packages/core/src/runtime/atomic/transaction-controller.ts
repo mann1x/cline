@@ -198,11 +198,21 @@ export class TransactionController {
 		// Three sources, not two. Silence still keeps the files -- see
 		// judgeSelfReport -- but it is not a judgement, and reporting it as one
 		// is what sends a user hunting the transcript for a claim nobody made.
+		//
+		// "Declared" is having said anything at all, not having said a phrase
+		// this recognises. readSelfReport only looks for *doubt*, on the
+		// grounds that a model ending a run is already asserting it is done, so
+		// a confident closing line comes back as `undefined` exactly like
+		// silence does. Reading those two the same way is what made a run that
+		// ended "Task is finished - the file loads with zero errors" report
+		// itself as never having said whether the change worked.
+		const declared =
+			report.selfReport !== undefined || Boolean(report.account?.trim());
 		const source: TransactionVerdictSource = this.options.oracle
 			? "oracle"
-			: report.selfReport === undefined
-				? "undeclared"
-				: "self-declared";
+			: declared
+				? "self-declared"
+				: "undeclared";
 		let kept: boolean;
 		let verdict: OracleVerdict | undefined;
 		let evidence: string;
