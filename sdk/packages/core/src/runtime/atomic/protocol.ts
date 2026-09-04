@@ -9,8 +9,17 @@ import type { Oracle, OracleVerdict } from "./oracle";
  * routinely — transactions that reported success and failed the oracle were
  * the normal case, because the model had fixed the error it was looking at and
  * not the one the program still had.
+ *
+ * `undeclared` is a third thing and the weakest of the three: nothing could
+ * check the change and the model never said whether it worked. The files are
+ * kept, because discarding real work over a sentence nobody wrote is the
+ * failure this boundary exists to avoid -- but calling that `self-declared`
+ * would report a judgement that was never made.
  */
-export type TransactionVerdictSource = "oracle" | "self-declared";
+export type TransactionVerdictSource =
+	| "oracle"
+	| "self-declared"
+	| "undeclared";
 
 export interface TransactionOutcome {
 	/** One-based, in the order they were opened. */
@@ -129,7 +138,11 @@ function describeHistory(history: readonly TransactionOutcome[]): string {
 		lines.push(
 			"",
 			`${label} — ${outcome.kept ? "kept" : "discarded"}${
-				outcome.source === "self-declared" ? " (no check available)" : ""
+				outcome.source === "self-declared"
+					? " (no check available)"
+					: outcome.source === "undeclared"
+						? " (no check available, and you never said whether it worked)"
+						: ""
 			}`,
 		);
 		if (outcome.plan?.trim()) {
@@ -203,14 +216,24 @@ export function describeVerdict(
 	kept: boolean,
 	source: TransactionVerdictSource,
 	verdict?: OracleVerdict,
+	forced = false,
 ): string {
 	const label = `TX-${String(transaction).padStart(2, "0")}`;
 	if (kept) {
-		return source === "oracle"
-			? `${label} kept — the check passed.`
-			: `${label} kept — self-declared, nothing here could check it.`;
+		if (source === "oracle") {
+			return `${label} kept — the check passed.`;
+		}
+		if (source === "self-declared") {
+			return `${label} kept — self-declared, nothing here could check it.`;
+		}
+		// Nothing judged this. Saying so is the whole point: a line reading
+		// "self-declared" over a change the model never spoke about sends the
+		// user looking through the transcript for a claim that is not there.
+		return forced
+			? `${label} kept but UNVERIFIED — the run was cut short before you said whether the change worked, and nothing here could check it. The changes are on disk; check them before relying on them.`
+			: `${label} kept but UNVERIFIED — nothing here could check the change and it was never stated to work. The changes are on disk; check them before relying on them.`;
 	}
-	if (source === "self-declared") {
+	if (source === "self-declared" || source === "undeclared") {
 		return `${label} discarded — the change was not verified. Your files are back as they were.`;
 	}
 	if (verdict?.timedOut) {

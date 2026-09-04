@@ -83,7 +83,10 @@ export interface AtomicProtocolSession {
 	 */
 	takeOpeningRules(): string | undefined;
 	/** The boundary. Judges the open transaction and keeps it or puts it back. */
-	onCompletionAttempt(context: { text?: string }): Promise<string | undefined>;
+	onCompletionAttempt(context: {
+		text?: string;
+		forced?: boolean;
+	}): Promise<string | undefined>;
 }
 
 /**
@@ -145,7 +148,7 @@ export async function createAtomicProtocolSession(
 			rules = undefined;
 			return opening;
 		},
-		async onCompletionAttempt({ text }) {
+		async onCompletionAttempt({ text, forced }) {
 			// Once the transactions are spent there is nothing left to judge with,
 			// and asking again would settle a transaction that was never opened.
 			if (finished) {
@@ -200,6 +203,7 @@ export async function createAtomicProtocolSession(
 			const settlement = await controller.settle({
 				account: text,
 				selfReport: oracle ? undefined : readSelfReport(text),
+				forced,
 			});
 			if (settlement.kept) {
 				finished = true;

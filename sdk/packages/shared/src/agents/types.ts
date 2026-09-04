@@ -951,9 +951,15 @@ export interface AgentConfig {
 		 * `text` is what the model said as it ended: its closing message, or the
 		 * text the completion tool carried. A guard that has to weigh the model's
 		 * own account of its work cannot get that from anywhere else.
+		 *
+		 * `forced` says the run is ending because the no-tool-call nudges ran
+		 * out, not because the model chose to stop. Silence from a model that
+		 * was cut off mid-work is not an account of its work, and a guard that
+		 * cannot tell the two apart reads it as one.
 		 */
 		onCompletionAttempt?: (context: {
 			text?: string;
+			forced?: boolean;
 		}) => Promise<string | undefined>;
 		/**
 		 * How many consecutive turns that produce no tool calls may be nudged to

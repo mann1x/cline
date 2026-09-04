@@ -589,9 +589,15 @@ export interface AgentRuntimeConfig {
 		/**
 		 * The awaitable boundary hook. Fires on both ways a run can end, unlike
 		 * `completionGuard`; see the full note on the runtime config type.
+		 *
+		 * `forced` says the run is ending because the no-tool-call nudges ran
+		 * out, not because the model chose to stop. Silence from a model that
+		 * was cut off mid-work is not an account of its work, and a guard that
+		 * cannot tell the two apart reads it as one.
 		 */
 		onCompletionAttempt?: (context: {
 			text?: string;
+			forced?: boolean;
 		}) => Promise<string | undefined>;
 		/**
 		 * How many consecutive turns that produce no tool calls may be nudged to

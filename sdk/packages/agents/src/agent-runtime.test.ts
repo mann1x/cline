@@ -1243,6 +1243,63 @@ describe("AgentRuntime", () => {
 		expect(model.requests).toHaveLength(3);
 	});
 
+	/**
+	 * The boundary is the atomic protocol's, and it reads silence as the model's
+	 * account of its own work. A model that went quiet, was asked to carry on,
+	 * went quiet again and ran out of asking has given no account of anything --
+	 * measured 2026-09-04, where that path recorded "TX-01 kept, self-declared"
+	 * over a file that did not parse.
+	 */
+	it("tells the boundary when a stop was forced rather than chosen", async () => {
+		const model = new ScriptedModel(
+			Array.from({ length: 6 }, () => () => [
+				{ type: "text-delta" as const, text: "still thinking" },
+				{ type: "finish" as const, reason: "stop" as const },
+			]),
+		);
+		const seen: Array<boolean | undefined> = [];
+		const runtime = new AgentRuntime({
+			model,
+			tools: [],
+			completionPolicy: {
+				maxNoToolCallNudges: 1,
+				onCompletionAttempt: async ({ forced }) => {
+					seen.push(forced);
+					return undefined;
+				},
+			},
+		});
+
+		await runtime.run("Start");
+
+		expect(seen).toEqual([true]);
+	});
+
+	it("does not call a stop forced when the model simply finished", async () => {
+		const model = new ScriptedModel([
+			() => [
+				{ type: "text-delta", text: "All done." },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const seen: Array<boolean | undefined> = [];
+		const runtime = new AgentRuntime({
+			model,
+			tools: [],
+			completionPolicy: {
+				maxNoToolCallNudges: 0,
+				onCompletionAttempt: async ({ forced }) => {
+					seen.push(forced);
+					return undefined;
+				},
+			},
+		});
+
+		await runtime.run("Start");
+
+		expect(seen).toEqual([false]);
+	});
+
 	it("does not ask again once the model has answered the nudge", async () => {
 		// The nudge asks a question with two branches — keep working, or say you
 		// are finished in one short sentence. Both are answered in one turn.

@@ -911,12 +911,13 @@ export class AgentRuntime {
 	 */
 	private async runCompletionBoundary(
 		text: string,
+		forced = false,
 	): Promise<string | undefined> {
 		const hook = this.config.completionPolicy?.onCompletionAttempt;
 		if (!hook) {
 			return undefined;
 		}
-		const message = await hook({ text: text || undefined });
+		const message = await hook({ text: text || undefined, forced });
 		return message && message.length > 0 ? message : undefined;
 	}
 
@@ -1385,8 +1386,14 @@ export class AgentRuntime {
 					// asks the model to keep working, while this asks whether the work
 					// it has already done is good, and that question is only worth the
 					// cost when the run is otherwise over.
+					// Reaching here with nudges already spent is not the model
+					// deciding it is done: it is a model that went quiet, was asked
+					// to carry on, went quiet again, and has now run out of asking.
+					// A boundary told nothing about that reads the silence as an
+					// answer.
 					const boundaryMessage = await this.runCompletionBoundary(
 						textFromMessage(finalAssistantMessage),
+						this.consecutiveNoToolCallNudges > 0,
 					);
 					if (boundaryMessage) {
 						await this.addUserReminderMessage(boundaryMessage);

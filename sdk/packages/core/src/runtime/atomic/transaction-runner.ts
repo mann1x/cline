@@ -28,6 +28,12 @@ export interface AttemptResult {
 	selfReport?: SelfReport;
 	/** The turn ended without the model finishing: cancelled, or out of budget. */
 	aborted?: boolean;
+	/**
+	 * The turn ended because the runtime stopped asking, not because the model
+	 * decided it was done. Silence from a model that was cut off mid-work is
+	 * not an account of that work.
+	 */
+	forced?: boolean;
 }
 
 /**
@@ -120,6 +126,7 @@ export async function runAtomicTask(
 			plan: result.plan,
 			account: result.account,
 			selfReport,
+			forced: result.forced,
 		});
 
 		if (settlement.kept) {

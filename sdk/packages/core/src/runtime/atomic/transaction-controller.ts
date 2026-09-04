@@ -8,6 +8,7 @@ import {
 	buildProtocolPrompt,
 	describeVerdict,
 	type TransactionOutcome,
+	type TransactionVerdictSource,
 } from "./protocol";
 import {
 	type RestoreReport,
@@ -31,6 +32,12 @@ export interface TransactionReport {
 	 * never gave one — which is not the same as saying it could not tell.
 	 */
 	selfReport?: SelfReport;
+	/**
+	 * The run is ending because the no-tool-call nudges ran out, not because the
+	 * model chose to stop. It changes what silence means: a model cut off
+	 * mid-work has not declined to report, it never got to.
+	 */
+	forced?: boolean;
 }
 
 export type TransactionSettlement =
@@ -64,6 +71,12 @@ export type TransactionEvent =
 			type: "settled";
 			transaction: number;
 			kept: boolean;
+			/**
+			 * Who judged it. A consumer counting successes has to be able to
+			 * separate "the check passed" from "nothing checked and nobody
+			 * said" -- both arrive here as `kept: true`.
+			 */
+			source: TransactionVerdictSource;
 			message: string;
 			verdict?: OracleVerdict;
 			restore?: RestoreReport;
@@ -182,7 +195,14 @@ export class TransactionController {
 		const transaction = this.current;
 		this.emit({ type: "judging", transaction, oracle: this.options.oracle });
 
-		const source = this.options.oracle ? "oracle" : "self-declared";
+		// Three sources, not two. Silence still keeps the files -- see
+		// judgeSelfReport -- but it is not a judgement, and reporting it as one
+		// is what sends a user hunting the transcript for a claim nobody made.
+		const source: TransactionVerdictSource = this.options.oracle
+			? "oracle"
+			: report.selfReport === undefined
+				? "undeclared"
+				: "self-declared";
 		let kept: boolean;
 		let verdict: OracleVerdict | undefined;
 		let evidence: string;
@@ -204,7 +224,13 @@ export class TransactionController {
 		const untouched = kept
 			? await snapshotIsClean(snapshot, this.options.snapshotLimits)
 			: false;
-		const line = describeVerdict(transaction, kept, source, verdict);
+		const line = describeVerdict(
+			transaction,
+			kept,
+			source,
+			verdict,
+			report.forced === true,
+		);
 		const message = untouched ? `${line} No files were changed.` : line;
 
 		if (kept) {
@@ -216,7 +242,14 @@ export class TransactionController {
 				account: report.account,
 				evidence,
 			});
-			this.emit({ type: "settled", transaction, kept, message, verdict });
+			this.emit({
+				type: "settled",
+				transaction,
+				kept,
+				source,
+				message,
+				verdict,
+			});
 			return { kept: true, message, verdict };
 		}
 
@@ -239,6 +272,7 @@ export class TransactionController {
 			type: "settled",
 			transaction,
 			kept,
+			source,
 			message,
 			verdict,
 			restore,

@@ -235,6 +235,63 @@ describe("a workspace with nothing to run", () => {
 		});
 	});
 
+	/**
+	 * The report this came from (2026-09-04): a run ended "TX-01 kept
+	 * self-declared" and the model had declared nothing anywhere in the
+	 * transcript. It had been cut off after the no-tool-call nudges ran out,
+	 * mid-edit, and the file it left behind did not parse.
+	 */
+	it("does not call an unspoken verdict self-declared", async () => {
+		await withWorkspace({ "notes.md": "before" }, async (root) => {
+			const sources: string[] = [];
+			await runAtomicTask(
+				{
+					workspaceRoot: root,
+					maxChanges: 3,
+					maxTransactions: 1,
+					onEvent: (event: TransactionEvent) => {
+						if (event.type === "settled") sources.push(event.source);
+					},
+				},
+				async () => {
+					await fs.writeFile(path.join(root, "notes.md"), "after", "utf8");
+					return {};
+				},
+			);
+
+			expect(sources).toEqual(["undeclared"]);
+		});
+	});
+
+	it("says the run was cut short when that is why nothing was declared", async () => {
+		await withWorkspace({ "notes.md": "before" }, async (root) => {
+			const messages: string[] = [];
+			const result = await runAtomicTask(
+				{
+					workspaceRoot: root,
+					maxChanges: 3,
+					maxTransactions: 1,
+					onEvent: (event: TransactionEvent) => {
+						if (event.type === "settled") messages.push(event.message);
+					},
+				},
+				async () => {
+					await fs.writeFile(path.join(root, "notes.md"), "after", "utf8");
+					return { forced: true };
+				},
+			);
+
+			expect(result.succeeded).toBe(true);
+			expect(messages[0]).toContain("cut short");
+			expect(messages[0]).toContain("UNVERIFIED");
+			// The work still survives: destroying it because the runtime gave up
+			// on the model would be the worse of the two failures.
+			await expect(
+				fs.readFile(path.join(root, "notes.md"), "utf8"),
+			).resolves.toBe("after");
+		});
+	});
+
 	// Silence is a reporting failure, not a statement about the change.
 	// Discarding real work over a line the model forgot to write is the failure
 	// a host-owned boundary exists to avoid.
@@ -257,7 +314,13 @@ describe("a workspace with nothing to run", () => {
 			);
 
 			expect(result.succeeded).toBe(true);
-			expect(messages[0]).toContain("nothing here could check it");
+			// Kept, and said to be unverified rather than said to be declared:
+			// a line reading "self-declared" over a change the model never
+			// spoke about sends the reader hunting the transcript for a claim
+			// that is not in it.
+			expect(messages[0]).toContain("UNVERIFIED");
+			expect(messages[0]).toContain("never stated to work");
+			expect(messages[0]).not.toContain("self-declared");
 			await expect(
 				fs.readFile(path.join(root, "notes.md"), "utf8"),
 			).resolves.toBe("after");

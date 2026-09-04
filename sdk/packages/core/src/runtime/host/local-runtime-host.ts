@@ -926,6 +926,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 						kind: "atomic_transaction",
 						transaction: event.transaction,
 						kept: event.kept,
+						source: event.source,
 						...(event.verdict?.output ? { output: event.verdict.output } : {}),
 						...(restore
 							? {
@@ -942,7 +943,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 		const completionPolicyWithProtocol = atomicProtocol
 			? {
 					...completionPolicyWithChecklistCloseOut,
-					onCompletionAttempt: (context: { text?: string }) =>
+					onCompletionAttempt: (context: { text?: string; forced?: boolean }) =>
 						atomicProtocol.onCompletionAttempt(context),
 				}
 			: completionPolicyWithChecklistCloseOut;
