@@ -8,6 +8,7 @@ import { wrapLanguageModel } from "ai";
 import { splitToolImagesMiddleware } from "../middleware/split-tool-images";
 import { localStreamFetch, resolveLocalStreamDispatcher } from "./ollama";
 import { getPolykvSession, PolykvSaturatedError } from "./polykv";
+import type { ProviderFactoryResult } from "./types";
 
 /**
  * opencoti-llamafile: llama.cpp's wire format with a KV control plane attached.
@@ -187,7 +188,7 @@ export function normalizeOpencotiBaseUrl(
 export async function createOpencotiProviderModule(
 	config: GatewayResolvedProviderConfig,
 	context: GatewayProviderContext,
-): Promise<{ model: (modelId: string) => LanguageModelV4 }> {
+): Promise<ProviderFactoryResult> {
 	const baseURL = normalizeOpencotiBaseUrl(config.baseUrl);
 	const dispatcher = await resolveLocalStreamDispatcher();
 	// Same precedence as Ollama's, and for the same measured reason: the
@@ -229,10 +230,12 @@ export async function createOpencotiProviderModule(
 		includeUsage: true,
 	} as never);
 	return {
-		model: (modelId) =>
-			wrapLanguageModel({
-				model: provider(modelId) as LanguageModelV4,
-				middleware: splitToolImagesMiddleware,
-			}) as LanguageModelV4,
+		operations: {
+			language: (modelId: string) =>
+				wrapLanguageModel({
+					model: provider(modelId) as LanguageModelV4,
+					middleware: splitToolImagesMiddleware,
+				}) as LanguageModelV4,
+		},
 	};
 }

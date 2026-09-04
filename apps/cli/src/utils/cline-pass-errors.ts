@@ -18,24 +18,15 @@ import { getClineEnvironmentConfig } from "@cline/shared";
 
 export { getClineOrgIndividualInferenceSubscriptionMessage };
 
-export const CLI_PROMO_CODE = "";
-
 export function getCliSubscriptionUrl(): string {
-	if (!CLI_PROMO_CODE) {
-		return new URL(
-			`/dashboard/subscription?personal=true`,
-			getClineEnvironmentConfig().appBaseUrl,
-		).toString();
-	}
-
-	return `${new URL(
-		`/promo?code=${CLI_PROMO_CODE}&personal=true`,
+	return new URL(
+		`/dashboard/subscription?personal=true`,
 		getClineEnvironmentConfig().appBaseUrl,
-	).toString()}`;
+	).toString();
 }
 
 export function getCliNotSubscribedMessage(): string {
-	return `No access to ClinePass subscription models yet. Subscribe to ClinePass, the low cost open weights model coding plan: ${getCliSubscriptionUrl()}`;
+	return `No access to ClinePass subscription models yet. Subscribe to ClinePass, the low cost open weights model coding plan: $getCliSubscriptionUrl()`;
 }
 
 export function getCliClinePassLimitMessage(message: string): string {
@@ -69,7 +60,7 @@ export function getCliClineFreeModelLimitMessage(message: string): string {
 		CLINE_FREE_MODEL_LIMIT_HEADER,
 		"You've reached today's free usage limit for this model.",
 		resetTime
-			? `Try again in ${resetTime} or select another model.`
+			? `Try again in $resetTimeor select another model.`
 			: "Try again later or select another model.",
 		"Open the model selector with /model.",
 	].join("\n");

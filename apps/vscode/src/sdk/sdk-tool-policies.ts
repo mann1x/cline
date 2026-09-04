@@ -5,7 +5,7 @@ import type { McpHub } from "@/services/mcp/McpHub"
  * Build SDK `toolPolicies` for tools governed by Cline's auto-approval UI.
  *
  * The SDK defaults unlisted tools to auto-approved. For tools controlled by
- * AutoApproveBar/MCP per-tool settings, force the SDK to call
+ * the AutoApproveBar toggles (including all MCP tools), force the SDK to call
  * `requestToolApproval`; the approval callback then evaluates the latest
  * settings and either silently approves or shows the approval UI. This keeps
  * active sessions in sync when the user toggles auto-approval mid-task.
@@ -67,6 +67,8 @@ export function isToolAutoApproved(toolName: string, settings: AutoApprovalSetti
 
 	const mcpTool = parseMcpToolName(toolName)
 	if (mcpTool) {
+		// `useMcp` is the gate, not the grant: a tool is auto-approved only when
+		// the user marked that tool auto-approve on its server.
 		if (!settings.actions.useMcp || !mcpHub) {
 			return false
 		}
@@ -109,6 +111,7 @@ function isBrowserTool(toolName: string): boolean {
 	return toolName === "browser" || toolName === "browser_action"
 }
 
+/** MCP tools are registered by `createMcpTools` under `serverName__toolName`. */
 function parseMcpToolName(toolName: string): { serverName: string; toolName: string } | undefined {
 	const separatorIndex = toolName.indexOf("__")
 	if (separatorIndex <= 0) return undefined

@@ -218,11 +218,26 @@ describe("ai-sdk usage normalization", () => {
 	});
 
 	describe("cost extraction with pricing fallback", () => {
-		it("uses market_cost when available (Vercel)", () => {
-			const vercelUsage = (fixtures as Record<string, unknown>)
-				.vercel_stream_usage as Record<string, unknown>;
-			const normalized = normalizeUsage(vercelUsage);
-			expect(normalized.totalCost).toBe(0.000641);
+		it("prefers billed cost over market_cost when Vercel applies a discount", () => {
+			const normalized = normalizeUsage({
+				inputTokens: 11,
+				outputTokens: 5,
+				raw: {
+					cost: 0.0001025,
+					market_cost: 0.000205,
+					cost_details: { upstream_inference_cost: null },
+				},
+			});
+			expect(normalized.totalCost).toBe(0.0001025);
+		});
+
+		it("uses market_cost when billed cost is unavailable", () => {
+			const normalized = normalizeUsage({
+				inputTokens: 11,
+				outputTokens: 5,
+				raw: { market_cost: 0.000205 },
+			});
+			expect(normalized.totalCost).toBe(0.000205);
 		});
 
 		it("sums BYOK fee + upstream provider cost when OpenRouter marks the request as BYOK", () => {
@@ -456,10 +471,13 @@ describe("reasoning passthrough", () => {
 		expect(config({ enabled: false, effort: "high" }).reasoning).toBe("none");
 	});
 
-	it("leaves an enabled request with no effort on provider-default", () => {
-		// The SDK vocabulary has no plain "on": the levels are efforts, and
-		// provider-default defers to whatever the model was constructed with.
-		expect(config({ enabled: true }).reasoning).toBeUndefined();
+	it("reads an enabled request with no effort as the middle level", () => {
+		// The SDK vocabulary has no plain "on", so an enabled request without an
+		// effort resolves to the middle of the scale. This used to resolve to
+		// undefined here and be filled in by `buildOllamaStreamConfig`, whose
+		// default is the same "medium" -- the wire result is unchanged, only the
+		// layer that decides it.
+		expect(config({ enabled: true }).reasoning).toBe("medium");
 	});
 
 	it("does not disturb the other call settings", () => {

@@ -28,6 +28,8 @@ import {
 import { toAsyncIterable } from "./async";
 import { BUILTIN_PROVIDER_REGISTRATIONS } from "./builtins-runtime";
 import { resolveReasoningHistoryMode } from "./model-facts";
+import { providerManifestSupportsModelOperation } from "./model-operations";
+import { providerManifestSupportsModelTool } from "./model-tools";
 import { GatewayRegistry } from "./registry";
 import { isPositiveFiniteNumber } from "./utils";
 
@@ -388,6 +390,7 @@ class GatewayModelAdapter implements AgentModel {
 			systemPrompt: request.systemPrompt,
 			messages: request.messages,
 			tools: this.defaults?.tools ?? request.tools,
+			modelTools: this.defaults?.modelTools ?? request.modelTools,
 			temperature:
 				(request.options?.temperature as number | undefined) ??
 				this.defaults?.temperature,
@@ -758,6 +761,32 @@ export class DefaultGateway implements Gateway {
 			providerId: request.providerId,
 			modelId: request.modelId || undefined,
 		});
+		if (
+			!providerManifestSupportsModelOperation(resolved.provider, resolved.model)
+		) {
+			throw new Error(
+				`Provider "${resolved.provider.id}" does not support model "${resolved.model.id}" operation "${resolved.model.operation ?? "language"}" with its declared modalities.`,
+			);
+		}
+		const unsupportedModelTools = [
+			...new Set(
+				(request.modelTools ?? [])
+					.filter(
+						(tool) =>
+							!providerManifestSupportsModelTool(
+								resolved.provider,
+								resolved.model.id,
+								tool.name,
+							),
+					)
+					.map((tool) => tool.name),
+			),
+		];
+		if (unsupportedModelTools.length > 0) {
+			throw new Error(
+				`Provider "${resolved.provider.id}" model "${resolved.model.id}" does not support model tool(s): ${unsupportedModelTools.join(", ")}.`,
+			);
+		}
 		const providerRecord = await this.registry.createProvider(
 			request.providerId,
 		);

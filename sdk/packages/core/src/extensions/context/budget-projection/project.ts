@@ -217,7 +217,11 @@ function collectMessageClosure(
 }
 
 function isUnsafeBlock(block: ContentBlock): boolean {
-	return block.type === "image" || block.type === "redacted_thinking";
+	return (
+		block.type === "image" ||
+		block.type === "media" ||
+		block.type === "redacted_thinking"
+	);
 }
 
 function isNestedUnsafeToolResultBlock(

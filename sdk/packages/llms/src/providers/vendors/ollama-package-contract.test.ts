@@ -92,7 +92,7 @@ describe("ollama-ai-provider-v2 patch contract", () => {
 			} as never,
 		);
 
-		const stream = await provider.model("m").doStream({
+		const stream = await provider.operations.language("m").doStream({
 			prompt: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
 		} as never);
 		// Drain so the request is actually issued and the mock is not left open.

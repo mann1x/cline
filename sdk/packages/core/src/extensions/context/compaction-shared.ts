@@ -95,7 +95,18 @@ export function resolvePreserveRecentTokens(input: {
 	);
 }
 /** Floor for a compaction summary, and the cap when no window is known. */
-export const DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS = 1_024;
+export const DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS = 4_096;
+
+/**
+ * The floor the window-derived ladder may not go below.
+ *
+ * Distinct from the default above, which answers a different question: that one
+ * is what to ask for when the window is unknown, and it is generous because a
+ * reasoning model that gets too small a budget spends all of it thinking and
+ * returns no summary at all. This one is the bottom of a ladder that has a
+ * window to scale against, where scaling down is the whole point.
+ */
+const MIN_SUMMARY_OUTPUT_TOKENS = 1_024;
 /**
  * Ceiling for a compaction summary, however much window is free.
  *
@@ -121,6 +132,26 @@ export const MIN_TRUNCATED_MESSAGE_TOKENS = 8;
  * turn after it depends on. Sizing from the window keeps a small model's
  * summary small and lets a large window buy a complete one.
  */
+/**
+ * Lower a derived summary budget to what the model says it can emit.
+ *
+ * The ladder sizes the budget from the window, which is the right question to
+ * ask of the *context*; it is not a statement about the model's output limit.
+ * Reported capability only ever lowers the number -- it is a ceiling, not a
+ * product default, so it never raises a budget the ladder set lower.
+ */
+function clampToModelOutputCapability(
+	config: ProviderConfig,
+	tokens: number,
+): number {
+	const modelMaxTokens =
+		config.modelInfo?.maxTokens ??
+		config.knownModels?.[config.modelId]?.maxTokens;
+	return isPositiveFiniteNumber(modelMaxTokens)
+		? Math.min(tokens, Math.floor(modelMaxTokens))
+		: tokens;
+}
+
 export function resolveSummaryMaxOutputTokens(
 	maxInputTokens: number | undefined,
 ): number {
@@ -130,7 +161,7 @@ export function resolveSummaryMaxOutputTokens(
 	return Math.min(
 		MAX_SUMMARY_OUTPUT_TOKENS,
 		Math.max(
-			DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
+			MIN_SUMMARY_OUTPUT_TOKENS,
 			Math.floor(maxInputTokens * SUMMARY_OUTPUT_WINDOW_SHARE),
 		),
 	);
@@ -533,6 +564,11 @@ export function serializeMessage(message: MessageWithMetadata): string {
 			case "image":
 				lines.push(
 					`[${message.role === "user" ? "User" : "Bot"} image]: ${block.mediaType}`,
+				);
+				break;
+			case "media":
+				lines.push(
+					`[Bot generated ${block.media.modality}]: ${block.media.mediaType}`,
 				);
 				break;
 		}
@@ -1641,7 +1677,10 @@ export function resolveSummarizerConfig(options: {
 			isPositiveFiniteNumber(options.outputTokenCap)
 				? options.outputTokenCap
 				: (options.activeProviderConfig.maxOutputTokens ??
-						summaryMaxOutputTokens),
+						clampToModelOutputCapability(
+							options.activeProviderConfig,
+							summaryMaxOutputTokens,
+						)),
 		);
 	}
 	const baseProviderConfig =
@@ -1651,21 +1690,25 @@ export function resolveSummarizerConfig(options: {
 	// A summarizer configured with its own cap keeps it: unlike the active
 	// provider's, that number was chosen to size a summary, so it is a decision
 	// the ladder has no business overruling.
+	const summarizerConfig: ProviderConfig = {
+		...(baseProviderConfig ?? {}),
+		providerId: summarizer.providerId,
+		modelId: summarizer.modelId,
+		apiKey: summarizer.apiKey ?? baseProviderConfig?.apiKey,
+		baseUrl: summarizer.baseUrl ?? baseProviderConfig?.baseUrl,
+		headers: summarizer.headers ?? baseProviderConfig?.headers,
+		modelInfo: summarizer.modelInfo ?? baseProviderConfig?.modelInfo,
+		knownModels: summarizer.knownModels ?? baseProviderConfig?.knownModels,
+	};
 	return withSummarizerDefaults(
-		{
-			...(baseProviderConfig ?? {}),
-			providerId: summarizer.providerId,
-			modelId: summarizer.modelId,
-			apiKey: summarizer.apiKey ?? baseProviderConfig?.apiKey,
-			baseUrl: summarizer.baseUrl ?? baseProviderConfig?.baseUrl,
-			headers: summarizer.headers ?? baseProviderConfig?.headers,
-			modelInfo: summarizer.modelInfo ?? baseProviderConfig?.modelInfo,
-			knownModels: summarizer.knownModels ?? baseProviderConfig?.knownModels,
-		},
+		summarizerConfig,
 		summarizer.maxOutputTokens ??
 			(isPositiveFiniteNumber(options.outputTokenCap)
 				? options.outputTokenCap
-				: summaryMaxOutputTokens),
+				: clampToModelOutputCapability(
+						summarizerConfig,
+						summaryMaxOutputTokens,
+					)),
 	);
 }
 

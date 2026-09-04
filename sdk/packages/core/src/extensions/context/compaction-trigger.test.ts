@@ -113,10 +113,13 @@ describe("the compaction summary budget", () => {
 		}
 	});
 
-	it("keeps the old default as a floor, and when nothing is known", () => {
-		expect(resolveSummaryMaxOutputTokens(8_000)).toBe(
-			DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
-		);
+	// The floor and the no-information default are different numbers now. A
+	// window small enough to scale below the floor still gets the floor; a
+	// caller with no window at all gets the larger default, because a reasoning
+	// model given too small a budget spends it all thinking and returns no
+	// summary text at all.
+	it("keeps a floor for a small window, and asks for more when nothing is known", () => {
+		expect(resolveSummaryMaxOutputTokens(8_000)).toBe(1_024);
 		expect(resolveSummaryMaxOutputTokens(undefined)).toBe(
 			DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
 		);

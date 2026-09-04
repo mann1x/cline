@@ -10,6 +10,7 @@
 
 import {
 	type AgentProviderConnection,
+	buildWorkspaceMetadata,
 	type ClineCoreStartInput,
 	type CoreSessionConfig,
 	createPromptTemplateHooks,
@@ -35,7 +36,7 @@ import {
 	resolveAgentSlotLimit,
 	resolveDefaultMaxOutputTokens,
 } from "@cline/llms"
-import { type AgentHooks, buildClineSystemPrompt, type RenderedPromptTemplate } from "@cline/shared"
+import { type AgentHooks, buildClineSystemPrompt, isClineProvider, type RenderedPromptTemplate } from "@cline/shared"
 import type { ApiConfiguration } from "@shared/api"
 import { profileProviderSettingsFor } from "@shared/api-config-profiles"
 import { ClineClient } from "@shared/cline"
@@ -288,9 +289,17 @@ function resolveOpenAiCompatibleMaxTokens(config: ApiConfiguration | undefined, 
 
 function toSdkModelInfo(selection: ResolvedModelSelection): SdkModelInfo {
 	const modelInfo = selection.modelInfo
-	const capabilities = new Set<NonNullable<SdkModelInfo["capabilities"]>[number]>(
-		(selection.overrides?.capabilities ?? []) as NonNullable<SdkModelInfo["capabilities"]>,
-	)
+	// Seed from the SDK capability list preserved at the catalog boundary
+	// (`adaptSdkModelInfo`), then layer user overrides and the legacy boolean
+	// projections on top. The preserved list is the only source that carries
+	// capabilities without a legacy boolean (e.g. `tools`), and the SDK treats
+	// a populated capabilities array as authoritative — reconstructing one
+	// purely from the booleans silently disables everything they don't cover.
+	const preservedCapabilities = modelInfo.capabilities as NonNullable<SdkModelInfo["capabilities"]> | undefined
+	const capabilities = new Set<NonNullable<SdkModelInfo["capabilities"]>[number]>([
+		...(preservedCapabilities ?? []),
+		...((selection.overrides?.capabilities ?? []) as NonNullable<SdkModelInfo["capabilities"]>),
+	])
 	const setCapability = (capability: NonNullable<SdkModelInfo["capabilities"]>[number], enabled: boolean): void => {
 		if (enabled) capabilities.add(capability)
 		else capabilities.delete(capability)
@@ -299,10 +308,29 @@ function toSdkModelInfo(selection: ResolvedModelSelection): SdkModelInfo {
 	setCapability("prompt-cache", modelInfo.supportsPromptCache)
 	if (modelInfo.supportsReasoning !== undefined) setCapability("reasoning", modelInfo.supportsReasoning)
 	if (selection.overrides?.supportsAttachments !== undefined) setCapability("files", selection.overrides.supportsAttachments)
+	if (preservedCapabilities === undefined || preservedCapabilities.length === 0) {
+		// No authoritative SDK list survived to here (dynamic-list snapshot,
+		// fallback metadata, or a custom model). The array we are rebuilding
+		// from booleans must still carry a definitive tool-calling signal,
+		// because a non-empty capabilities array without "tools" reads as
+		// "cannot call tools" to the SDK runtime. Legacy metadata only models
+		// tool support for OpenAI-compatible entries via `supportsTools`.
+		//
+		// An EMPTY array is the same "no signal" state as an absent one —
+		// modelHasCapability treats both as unspecified — and configs carried
+		// over from before the field existed (or round-tripped through a
+		// boundary that defaults it to []) land exactly here. Guarding only
+		// `undefined` let those custom models keep a non-empty, tool-less
+		// array once any boolean projection (e.g. reasoning) populated it,
+		// silently disabling tool calling at the runtime gate (#13463).
+		const supportsTools = (modelInfo as { supportsTools?: boolean }).supportsTools
+		setCapability("tools", supportsTools !== false)
+	}
 
 	const maxTokens = positiveFiniteNumber(modelInfo.maxTokens)
 	const contextWindow = positiveFiniteNumber(modelInfo.contextWindow)
-	const maxInputTokens = positiveFiniteNumber(selection.overrides?.maxInputTokens)
+	const maxInputTokens =
+		positiveFiniteNumber(selection.overrides?.maxInputTokens) ?? positiveFiniteNumber(modelInfo.maxInputTokens)
 	const temperature = nonNegativeFiniteNumber(modelInfo.temperature)
 	const inputPrice = nonNegativeFiniteNumber(modelInfo.inputPrice)
 	const outputPrice = nonNegativeFiniteNumber(modelInfo.outputPrice)
@@ -319,6 +347,9 @@ function toSdkModelInfo(selection: ResolvedModelSelection): SdkModelInfo {
 		...(contextWindow !== undefined ? { contextWindow } : {}),
 		...(maxInputTokens !== undefined ? { maxInputTokens } : {}),
 		...(capabilities.size > 0 ? { capabilities: [...capabilities] } : {}),
+		...(modelInfo.operation !== undefined ? { operation: modelInfo.operation } : {}),
+		...(modelInfo.operationModes !== undefined ? { operationModes: [...modelInfo.operationModes] } : {}),
+		...(modelInfo.modalities !== undefined ? { modalities: modelInfo.modalities } : {}),
 		...(apiFormat !== undefined ? { apiFormat } : {}),
 		...(temperature !== undefined ? { temperature } : {}),
 		...(hasPricing
@@ -1293,6 +1324,16 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	} catch (error) {
 		Logger.warn("[SessionFactory] Failed to resolve a prompt template:", error)
 	}
+	// Include rich workspace metadata so Cline API observability can extract
+	// git remotes and the latest commit hash from the system message.
+	let workspaceMetadata: string | undefined
+	if (isClineProvider(providerId)) {
+		try {
+			workspaceMetadata = await buildWorkspaceMetadata(workspaceRoot)
+		} catch (error) {
+			Logger.warn("[SessionFactory] Failed to build workspace metadata:", error)
+		}
+	}
 
 	let systemPrompt = ""
 	try {
@@ -1301,6 +1342,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 			ide: HOST_IDE_NAME,
 			workspaceRoot,
 			workspaceName,
+			metadata: workspaceMetadata,
 			mode: mode === "plan" ? "plan" : "act",
 			providerId,
 			platform: process.platform,
@@ -1664,6 +1706,10 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		...(baseUrl !== undefined ? { baseUrl } : {}),
 		...(apiLine !== undefined ? { apiLine } : {}),
 		...(knownModels && Object.keys(knownModels).length > 0 ? { knownModels } : {}),
+		// Mirror the user's Max Output Tokens for consumers that build handlers
+		// straight from providerConfig — notably the compaction summarizer, which
+		// otherwise falls back to a small default output cap (CLINE-2911).
+		...(maxTokensPerTurn !== undefined ? { maxOutputTokens: maxTokensPerTurn } : {}),
 		fetch,
 	}
 
@@ -1794,12 +1840,12 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 /**
  * Build the StartSessionInput for a new task.
  *
- * IMPORTANT: We pass `interactive: true` but NO `prompt`. This creates the
- * session and returns immediately — the runtime host only executes a turn when
- * a prompt is sent. The caller should then call `core.send({ sessionId, prompt })`
- * to run the first turn. This cleanly separates session creation from
- * inference, preventing the gRPC handler from blocking until the first
- * agent turn completes.
+ * IMPORTANT: We pass `interactive: true` but NO `prompt`. This allocates the
+ * session in memory and returns immediately; no persisted session row or
+ * artifacts are created yet. The caller then uses
+ * `core.send({ sessionId, prompt })` for the first user turn, which persists
+ * that same session ID before inference. This keeps initialization responsive
+ * without leaving empty history entries when the user never sends a message.
  */
 export function buildStartSessionInput(config: CoreSessionConfig, input: SessionConfigInput): ClineCoreStartInput {
 	return {

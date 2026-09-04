@@ -27,14 +27,15 @@ vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
 import { createDefaultMcpServerClientFactory } from "./client";
 import type { McpServerRegistration } from "./types";
 
-// The pre-registered client has to reach the *runtime* connection, not just the
+// A pre-registered client has to reach the *runtime* connection, not only the
 // interactive authorize. The SDK skips registration whenever clientInformation()
 // answers, so it never calls saveClientInformation and nothing persists the
-// client -- if connect builds its provider context without it, every reconnect
-// and every token refresh falls back to dynamic registration, which is the one
+// client. If connect built its provider context without it, the reconnect that
+// refreshes a token would fall back to dynamic client registration -- the one
 // thing a server like Figma or Slack refuses.
 describe("mcp client pre-registered OAuth client", () => {
 	const tempRoots: string[] = [];
+	const url = "https://mcp.figma.example/mcp";
 
 	afterEach(async () => {
 		transportState.authProviders.length = 0;
@@ -46,11 +47,42 @@ describe("mcp client pre-registered OAuth client", () => {
 		tempRoots.length = 0;
 	});
 
-	async function settingsFile(): Promise<string> {
+	// The state a server is in after a successful authorize: tokens, plus the
+	// client they were issued to. tokens() only answers when the persisted client
+	// matches the configured one, so both have to be present for a reconnect to
+	// attach a provider at all.
+	async function settingsFile(options: {
+		oauthClient?: McpServerRegistration["oauthClient"];
+		clientInformation?: Record<string, unknown>;
+	}): Promise<string> {
 		const tempRoot = await mkdtemp(join(tmpdir(), "core-mcp-client-oauth-"));
 		tempRoots.push(tempRoot);
 		const filePath = join(tempRoot, "cline_mcp_settings.json");
-		await writeFile(filePath, JSON.stringify({ mcpServers: {} }), "utf8");
+		await writeFile(
+			filePath,
+			JSON.stringify({
+				mcpServers: {
+					figma: {
+						transport: { type: "streamableHttp", url },
+						...(options.oauthClient
+							? { oauthClient: options.oauthClient }
+							: {}),
+						...(options.clientInformation
+							? {
+									oauth: {
+										clientInformation: options.clientInformation,
+										tokens: {
+											access_token: "seeded",
+											token_type: "Bearer",
+										},
+									},
+								}
+							: {}),
+					},
+				},
+			}),
+			"utf8",
+		);
 		return filePath;
 	}
 
@@ -59,40 +91,58 @@ describe("mcp client pre-registered OAuth client", () => {
 	): McpServerRegistration {
 		return {
 			name: "figma",
-			transport: {
-				type: "streamableHttp",
-				url: "https://mcp.figma.example/mcp",
-			},
+			transport: { type: "streamableHttp", url },
 			...(oauthClient ? { oauthClient } : {}),
 		};
 	}
 
-	it("hands the configured client to the connecting transport", async () => {
-		const settingsPath = await settingsFile();
+	async function connect(settingsPath: string, reg: McpServerRegistration) {
 		const factory = createDefaultMcpServerClientFactory({ settingsPath });
-
-		const client = await factory(
-			registration({ clientId: "pre-registered", clientSecret: "shh" }),
-		);
+		const client = await factory(reg);
 		await client.connect();
+	}
 
-		expect(transportState.authProviders).toHaveLength(1);
+	it("hands the configured client to a reconnecting transport", async () => {
+		const oauthClient = { clientId: "pre-registered", clientSecret: "shh" };
+		const settingsPath = await settingsFile({
+			oauthClient,
+			clientInformation: {
+				client_id: "pre-registered",
+				client_secret: "shh",
+			},
+		});
+
+		await connect(settingsPath, registration(oauthClient));
+
+		expect(transportState.authProviders[0]).toBeDefined();
 		expect(transportState.authProviders[0]?.clientInformation()).toEqual({
 			client_id: "pre-registered",
 			client_secret: "shh",
 		});
 	});
 
-	it("leaves the client undiscovered when none is configured", async () => {
-		const settingsPath = await settingsFile();
-		const factory = createDefaultMcpServerClientFactory({ settingsPath });
+	it("still reconnects on a client saved by dynamic registration", async () => {
+		const settingsPath = await settingsFile({
+			clientInformation: { client_id: "from-dynamic-registration" },
+		});
 
-		const client = await factory(registration());
-		await client.connect();
+		await connect(settingsPath, registration());
 
-		expect(transportState.authProviders).toHaveLength(1);
-		expect(
-			transportState.authProviders[0]?.clientInformation(),
-		).toBeUndefined();
+		expect(transportState.authProviders[0]).toBeDefined();
+		expect(transportState.authProviders[0]?.clientInformation()).toEqual({
+			client_id: "from-dynamic-registration",
+		});
+	});
+
+	// Guards the gate the two above rely on: a first connection with nothing
+	// stored must not attach a provider, so it cannot start an interactive flow
+	// on its own.
+	it("attaches no provider at all when nothing is stored", async () => {
+		const oauthClient = { clientId: "pre-registered" };
+		const settingsPath = await settingsFile({ oauthClient });
+
+		await connect(settingsPath, registration(oauthClient));
+
+		expect(transportState.authProviders).toEqual([undefined]);
 	});
 });

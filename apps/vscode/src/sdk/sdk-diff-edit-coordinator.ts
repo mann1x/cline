@@ -453,6 +453,12 @@ function assertColumnInRange(column: number, lineText: string, line: number, fie
  * now the common shape, which is exactly the shape that was missing. `editor-preview-
  * mirror.test.ts` runs both implementations over the same inputs so the next divergence
  * fails a test instead of silently costing the preview.
+ *
+ * Like the executor, old/new text are normalized to the file's own line endings
+ * before matching: reads strip "\r", so models emit LF-only text even for CRLF
+ * files, and an exact match would fail on every multi-line old_text in a CRLF
+ * file — silently skipping the preview while the executor applies the edit
+ * (github.com/cline/cline/issues/13296).
  */
 export function computeNewEditorContent(
 	originalContent: string,

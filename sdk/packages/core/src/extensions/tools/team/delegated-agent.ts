@@ -71,6 +71,16 @@ export interface DelegatedAgentRuntimeConfig
 	 * be spawned four-wide, which is what the gate exists to prevent.
 	 */
 	slotGates?: AgentSlotGateRegistry;
+	/**
+	 * Stable end-user identity inherited from the parent session so
+	 * delegated-agent telemetry (Langfuse `userId`) groups with the user.
+	 */
+	distinctId?: string;
+	/**
+	 * Root core session id inherited from the parent session so
+	 * delegated-agent telemetry (Langfuse `sessionId`) groups with it.
+	 */
+	sessionId?: string;
 }
 
 export interface DelegatedAgentConfigProvider {
@@ -162,6 +172,8 @@ export function buildDelegatedAgentConfig(
 
 	return {
 		...options.configProvider.getConnectionConfig(),
+		distinctId: runtimeConfig.distinctId,
+		sessionId: runtimeConfig.sessionId,
 		systemPrompt,
 		tools: options.tools,
 		maxIterations: options.maxIterations ?? runtimeConfig.maxIterations,

@@ -8,6 +8,7 @@ import {
 	DEFAULT_CAPPED_THINKING_PROMPT,
 	DEFAULT_COMPACTION_PROMPT,
 	DEFAULT_THINKING_COMPACTION_PROMPT,
+	isModelToolEnabledGlobally,
 	readCompactionStrategyGlobally,
 } from "@cline/core"
 import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
@@ -35,6 +36,8 @@ export async function getStateToPostToWebview(controller: {
 	foregroundCommandRunning?: boolean
 	workspaceManager?: any
 	checkpointRestoreInput?: ExtensionState["checkpointRestoreInput"]
+	isRemoteConfigAvailable?: boolean
+	currentRemoteConfigRevision?: number
 }): Promise<ExtensionState> {
 	const stateManager = controller.stateManager
 
@@ -47,7 +50,6 @@ export async function getStateToPostToWebview(controller: {
 	const browserSettings = stateManager.getGlobalSettingsKey("browserSettings")
 	const preferredLanguage = stateManager.getGlobalSettingsKey("preferredLanguage")
 	const mode = stateManager.getGlobalSettingsKey("mode")
-	const yoloModeToggled = stateManager.getGlobalSettingsKey("yoloModeToggled")
 	const useAutoCondense = stateManager.getGlobalSettingsKey("useAutoCondense")
 	const compactionPrompt = stateManager.getGlobalSettingsKey("compactionPrompt")
 	const thinkingCompactionEnabled = stateManager.getGlobalSettingsKey("thinkingCompactionEnabled")
@@ -56,6 +58,7 @@ export async function getStateToPostToWebview(controller: {
 	const cappedThinkingPrompt = stateManager.getGlobalSettingsKey("cappedThinkingPrompt")
 	const focusChainSettings = stateManager.getGlobalSettingsKey("focusChainSettings")
 	const compactionStrategy = readCompactionStrategyGlobally()
+	const webSearchEnabled = isModelToolEnabledGlobally("web_search")
 	const subagentsEnabled = stateManager.getGlobalSettingsKey("subagentsEnabled")
 	const userInfo = stateManager.getGlobalStateKey("userInfo")
 	const mcpMarketplaceEnabled = stateManager.getGlobalStateKey("mcpMarketplaceEnabled")
@@ -140,7 +143,6 @@ export async function getStateToPostToWebview(controller: {
 		browserSettings,
 		preferredLanguage,
 		mode,
-		yoloModeToggled,
 		useAutoCondense,
 		compactionPrompt,
 		defaultCompactionPrompt: DEFAULT_COMPACTION_PROMPT,
@@ -152,6 +154,7 @@ export async function getStateToPostToWebview(controller: {
 		defaultCappedThinkingPrompt: DEFAULT_CAPPED_THINKING_PROMPT,
 		focusChainSettings,
 		compactionStrategy,
+		webSearchEnabled,
 		subagentsEnabled,
 		userInfo,
 		mcpMarketplaceEnabled,
@@ -214,10 +217,12 @@ export async function getStateToPostToWebview(controller: {
 		lastDismissedInfoBannerVersion,
 		lastDismissedModelBannerVersion,
 		remoteConfigSettings: stateManager.getRemoteConfigSettings?.(),
+		remoteConfigRevision: controller.currentRemoteConfigRevision ?? 0,
 		lastDismissedCliBannerVersion,
 		dismissedBanners,
 		backgroundEditEnabled: stateManager.getGlobalSettingsKey("backgroundEditEnabled"),
 		optOutOfRemoteConfig: stateManager.getGlobalSettingsKey("optOutOfRemoteConfig"),
+		remoteConfigAvailable: controller.isRemoteConfigAvailable ?? false,
 		showFeatureTips,
 		banners,
 		welcomeBanners,

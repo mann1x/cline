@@ -43,6 +43,10 @@ export {
 	type FileReadExecutorOptions,
 } from "./file-read";
 export { createReadReceipts, type ReadReceipts } from "./read-receipts";
+export {
+	RunCommandExecutionController,
+	type RunningCommandRegistration,
+} from "./run-command-execution-controller";
 export { createSearchExecutor, type SearchExecutorOptions } from "./search";
 export {
 	createWebFetchExecutor,

@@ -25,11 +25,10 @@ import type {
 } from "@cline/shared";
 import { type CallSettings, wrapLanguageModel } from "ai";
 import { createOllama } from "ollama-ai-provider-v2";
-import { buildAiSdkStreamConfig } from "../ai-sdk";
+import { buildAiSdkStreamConfig, toAiSdkReasoning } from "../ai-sdk";
 import { OLLAMA_DEFAULT_CONTEXT_WINDOW } from "../builtins";
 import type { ProviderSamplingOptions } from "../config";
 import { ensureFetch, resolveApiKey } from "../http";
-import { createRetryEmptyResponseMiddleware } from "../middleware/retry-empty-response";
 import { keepToolImagesMiddleware } from "../middleware/split-tool-images";
 import {
 	createOllamaHealthProbe,
@@ -741,10 +740,15 @@ export async function createOllamaProviderModule(
 	// provider options built by `provider.ollama.native-options`. That rule is
 	// also the only place they can be merged rather than replace what the
 	// option-rule pipeline already composed.
-	// Retry empty responses (a common local-backend glitch that otherwise
-	// hard-fails the task). Outermost so each retry re-runs the whole request.
+	// Empty-response retries (a common local-backend glitch that otherwise
+	// hard-fails the task) are no longer attached here. `ai-sdk.ts` wraps every
+	// provider's model in them, outside whatever the vendor attaches, which is
+	// the placement this vendor wanted anyway -- a retry has to re-run the whole
+	// request. Attaching them here as well would retry twice; opting out through
+	// `retryEmptyResponses: false` would lose them. The shared defaults are the
+	// ones this vendor was already passing.
 	//
-	// `keepToolImagesMiddleware` is inner, and is the half of the shared media
+	// `keepToolImagesMiddleware` is the half of the shared media
 	// handling that this vendor wants: the budget checks and base64 validation,
 	// without the relocation to a synthetic user message. The native API carries
 	// `images` on a tool message — the vendored converter is patched to fill it
@@ -752,15 +756,14 @@ export async function createOllamaProviderModule(
 	// because a chat template replays thinking only from the last user turn
 	// onward. See `ollama-tool-images.ts`, which folds the relocation back at
 	// the wire layer if it ever reappears.
-	const retryEmptyResponseMiddleware = createRetryEmptyResponseMiddleware({
-		logger: context.logger,
-	});
 	return {
-		model: (modelId) =>
-			wrapLanguageModel({
-				model: provider.chat(modelId) as LanguageModelV4,
-				middleware: [retryEmptyResponseMiddleware, keepToolImagesMiddleware],
-			}),
+		operations: {
+			language: (modelId: string) =>
+				wrapLanguageModel({
+					model: provider.chat(modelId) as LanguageModelV4,
+					middleware: [keepToolImagesMiddleware],
+				}),
+		},
 		buildStreamConfig: buildOllamaStreamConfig,
 	};
 }
@@ -815,5 +818,13 @@ export function buildOllamaStreamConfig(
 	if (config.reasoning !== undefined) {
 		return config;
 	}
-	return { ...config, reasoning: OLLAMA_DEFAULT_REASONING_EFFORT };
+	// The generic builder declines to send a portable reasoning once a thinking
+	// budget is set, because most providers cannot carry both. Ollama can: its
+	// `think` level is *how* a budget is bounded, so falling straight through to
+	// the default here would silently downgrade the effort the user asked for.
+	return {
+		...config,
+		reasoning:
+			toAiSdkReasoning(request.reasoning) ?? OLLAMA_DEFAULT_REASONING_EFFORT,
+	};
 }

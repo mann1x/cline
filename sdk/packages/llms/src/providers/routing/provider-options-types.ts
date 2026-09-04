@@ -2,10 +2,10 @@ import type {
 	GatewayProviderContext,
 	GatewayStreamRequest,
 } from "@cline/shared";
-import type { AnthropicReasoningRequestPolicy } from "./anthropic-compatible";
 import type { ProviderOptionsPatch } from "./utils";
 
 export type AiSdkProviderOptionsTarget =
+	| "cline"
 	| "openai"
 	| "openai-compatible"
 	| "anthropic"
@@ -23,7 +23,6 @@ export type AiSdkProviderOptionsTarget =
 
 export type ProviderOptionSuppression = {
 	genericThinking?: boolean;
-	genericEffort?: boolean;
 	genericFanout?: boolean;
 };
 
@@ -32,8 +31,6 @@ export type ProviderOptionMatchInput = {
 	context: GatewayProviderContext;
 	providerOptionsKey: string;
 	target: AiSdkProviderOptionsTarget;
-	isAnthropicCompatibleModelId: boolean;
-	anthropicReasoningPolicyKind?: AnthropicReasoningRequestPolicy["kind"];
 };
 
 export type ProviderOptionBuildInput = ProviderOptionMatchInput & {
@@ -65,6 +62,9 @@ export function inferProviderOptionsTarget(
 	providerId: string,
 ): AiSdkProviderOptionsTarget {
 	switch (providerId) {
+		case "cline":
+		case "cline-pass":
+			return "cline";
 		case "openai-native":
 			return "openai";
 		case "anthropic":

@@ -393,7 +393,7 @@ describe("createOllamaProviderModule", () => {
 			config({ baseUrl: "https://ollama.com/v1", apiKey: "ollama-key" }),
 			context({}),
 		);
-		provider.model("minimax-m3:cloud");
+		provider.operations.language("minimax-m3:cloud");
 
 		// This package takes auth through headers rather than an `apiKey` field.
 		expect(createOllamaMock).toHaveBeenCalledWith(
@@ -416,7 +416,7 @@ describe("createOllamaProviderModule", () => {
 			config({}),
 			context({ contextWindow: 65536 }),
 		);
-		provider.model("qwen3-coder:30b");
+		provider.operations.language("qwen3-coder:30b");
 
 		expect(ollamaModelMock).toHaveBeenCalledWith("qwen3-coder:30b");
 	});

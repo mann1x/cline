@@ -69,6 +69,12 @@ export interface McpServerOAuthState {
 	redirectUrl?: string;
 	lastError?: string;
 	lastAuthenticatedAt?: number;
+	authorizationRequired?: boolean;
+}
+
+export interface McpServerOAuthClientConfig {
+	clientId: string;
+	clientSecret?: string;
 }
 
 export interface McpServerOAuthClientConfig {
@@ -83,7 +89,7 @@ export interface McpServerRegistration {
 	/**
 	 * Per-server request timeout in seconds, from the `timeout` field in
 	 * cline_mcp_settings.json. Undefined means the shared default for ordinary
-	 * requests; the stdio client preserves its fast compatibility probe for
+	 * requests; the stdio client uses its default connect budget for
 	 * initialize until a finite timeout is explicitly configured. Registrations are
 	 * resolved when the runtime is built, so changes take effect on the next
 	 * session.
@@ -123,6 +129,7 @@ export interface McpServerOAuthStatus {
 	serverName: string;
 	oauthSupported: boolean;
 	oauthConfigured: boolean;
+	authorizationRequired: boolean;
 	lastError?: string;
 	lastAuthenticatedAt?: number;
 }

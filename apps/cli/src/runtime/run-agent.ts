@@ -289,7 +289,9 @@ export async function runAgent(
 			prompt: userInput,
 			userImages,
 			userFiles,
-		} = await buildUserInputMessage(prompt, userInstructionService);
+		} = await buildUserInputMessage(prompt, userInstructionService, {
+			mode: config.mode,
+		});
 
 		// Both of these are armed before `start()`, because `start()` is what runs
 		// the task. In non-interactive mode with a prompt it does not resolve until

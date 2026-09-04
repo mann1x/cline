@@ -242,66 +242,84 @@ async function executeShellCommands(
 	const withheldNames = qaCredentialNames([...credentials]);
 
 	return Promise.all(
-		commands.map(async (command): Promise<ToolOperationResult> => {
-			const startedAt = Date.now();
-			// The command itself is echoed back as `query`, so a value the model
-			// inlined instead of referencing would return in the transcript from
-			// here even if the command printed nothing.
-			const query = redact(formatRunCommandQueryPreview(command));
-			const env = resolveCredentialEnv(credentials, {
-				command,
-				requested: options.requestedCredentials,
-			});
-			try {
-				const output = await withTimeout(
-					// Called with three arguments when there is nothing to say, so
-					// an executor that has never heard of per-call options sees the
-					// call it has always seen.
-					//
-					// `withhold` goes on every command once any credential exists,
-					// including the ones that get nothing: its job is to take the
-					// declared names *out* of the inherited environment, which
-					// matters most for the commands that did not ask.
-					credentials.length > 0
-						? executor(command, cwd, context, {
-								...(Object.keys(env).length > 0 ? { env } : {}),
-								withhold: withheldNames,
-							})
-						: executor(command, cwd, context),
-					timeoutMs,
-					`Command timed out after ${timeoutMs}ms`,
-				);
-				return {
-					query,
-					result: redact(output),
-					success: true,
-				};
-			} catch (error) {
-				if (error instanceof TimeoutError) {
-					captureRunCommandsTimeoutFromContext(telemetry, context, {
-						effectiveTimeoutMs: error.timeoutMs,
-						timeoutSource,
-						commandCount: commands.length,
-						durationMs: Date.now() - startedAt,
-					});
-				}
-				if (error instanceof CommandExitError) {
+		commands.map(
+			async (command, commandIndex): Promise<ToolOperationResult> => {
+				const startedAt = Date.now();
+				// The command itself is echoed back as `query`, so a value the model
+				// inlined instead of referencing would return in the transcript from
+				// here even if the command printed nothing.
+				const query = redact(formatRunCommandQueryPreview(command));
+				const env = resolveCredentialEnv(credentials, {
+					command,
+					requested: options.requestedCredentials,
+				});
+				const commandContext: AgentToolContext = context.emitUpdate
+					? {
+							...context,
+							emitUpdate: (update) => {
+								const payload =
+									update && typeof update === "object" && !Array.isArray(update)
+										? (update as Record<string, unknown>)
+										: { update };
+								context.emitUpdate?.({
+									...payload,
+									commandIndex,
+									query,
+								});
+							},
+						}
+					: context;
+				try {
+					const output = await withTimeout(
+						// Called with three arguments when there is nothing to say, so
+						// an executor that has never heard of per-call options sees the
+						// call it has always seen.
+						//
+						// `withhold` goes on every command once any credential exists,
+						// including the ones that get nothing: its job is to take the
+						// declared names *out* of the inherited environment, which
+						// matters most for the commands that did not ask.
+						credentials.length > 0
+							? executor(command, cwd, commandContext, {
+									...(Object.keys(env).length > 0 ? { env } : {}),
+									withhold: withheldNames,
+								})
+							: executor(command, cwd, commandContext),
+						timeoutMs,
+						`Command timed out after ${timeoutMs}ms`,
+					);
 					return {
 						query,
-						result: redact(error.output),
-						error: redact(error.message),
+						result: redact(output),
+						success: true,
+					};
+				} catch (error) {
+					if (error instanceof TimeoutError) {
+						captureRunCommandsTimeoutFromContext(telemetry, context, {
+							effectiveTimeoutMs: error.timeoutMs,
+							timeoutSource,
+							commandCount: commands.length,
+							durationMs: Date.now() - startedAt,
+						});
+					}
+					if (error instanceof CommandExitError) {
+						return {
+							query,
+							result: redact(error.output),
+							error: redact(error.message),
+							success: false,
+						};
+					}
+					const msg = formatError(error);
+					return {
+						query,
+						result: "",
+						error: redact(`Command failed: ${msg}`),
 						success: false,
 					};
 				}
-				const msg = formatError(error);
-				return {
-					query,
-					result: "",
-					error: redact(`Command failed: ${msg}`),
-					success: false,
-				};
-			}
-		}),
+			},
+		),
 	);
 }
 
@@ -984,7 +1002,7 @@ export function createSkillsTool(
 		get() {
 			const skills = executor.configuredSkills
 				?.filter((s) => !s.disabled)
-				.map((s) => s.name);
+				.map((s) => (s.id.includes(":") ? s.id : s.name));
 			if (skills && skills.length > 0) {
 				return `${baseDescription} Available skills: ${skills.join(", ")}.`;
 			}

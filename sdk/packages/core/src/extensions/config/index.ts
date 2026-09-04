@@ -40,6 +40,7 @@ export {
 } from "./prompt-template-session";
 export type {
 	AvailableRuntimeCommand,
+	ResolveRuntimeSlashCommandOptions,
 	RuntimeCommandKind,
 } from "./runtime-commands";
 export {
@@ -87,4 +88,7 @@ export type {
 	UserInstructionConfigRecord,
 	UserInstructionConfigService,
 } from "./user-instruction-service";
-export { createUserInstructionConfigService } from "./user-instruction-service";
+export {
+	combineUserInstructionConfigServices,
+	createUserInstructionConfigService,
+} from "./user-instruction-service";
