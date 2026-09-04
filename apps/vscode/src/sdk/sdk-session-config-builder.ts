@@ -1,6 +1,7 @@
 import type { CoreSessionConfig } from "@cline/core"
 import { type AgentHooks, type AgentTool, createTool } from "@cline/shared"
 import type { StateManager } from "@/core/storage/StateManager"
+import { offerAgentProfileRepair } from "./agent-profile-repair"
 import { buildSessionConfig, composeSessionHooks, type SessionConfigInput } from "./cline-session-factory"
 import { buildAgentHooks, type HookMessageEmitter } from "./hooks-adapter"
 
@@ -38,6 +39,14 @@ export class SdkSessionConfigBuilder {
 
 	async build(input: SessionConfigInput): Promise<Awaited<ReturnType<typeof buildSessionConfig>>> {
 		const config = await buildSessionConfig(input)
+
+		// An agent naming a deleted profile fails on its first call, which is
+		// well into a task. Checked as the session is built so the offer to
+		// repoint it arrives before anything delegates. Deliberately not
+		// awaited: a session must start whether or not the agent directory can
+		// be read, and the prompt waits on the user.
+		void offerAgentProfileRepair(this.options.stateManager.getGlobalSettingsKey("apiConfigurationProfiles"))
+
 		if (this.options.onConsecutiveMistakeLimitReached) {
 			config.onConsecutiveMistakeLimitReached = this.options.onConsecutiveMistakeLimitReached
 		}
