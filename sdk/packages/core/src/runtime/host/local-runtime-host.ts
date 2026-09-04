@@ -940,6 +940,15 @@ export class LocalRuntimeHost implements RuntimeHost {
 				});
 			},
 		});
+		// The protocol's own tools, added after it is built because whether
+		// there are any depends on what the workspace turned out to hold. They
+		// go on last deliberately: `propose_check` carries no checklist and is
+		// not wrapped, because it is a question to the user rather than a step
+		// in the work.
+		const toolsWithProtocol =
+			atomicProtocol && atomicProtocol.tools.length > 0
+				? [...tools, ...atomicProtocol.tools]
+				: tools;
 		const completionPolicyWithProtocol = atomicProtocol
 			? {
 					...completionPolicyWithChecklistCloseOut,
@@ -1066,7 +1075,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 			execution: configWithProvider.execution,
 			prepareTurn,
 			condenseDiscardedReasoning,
-			tools,
+			tools: toolsWithProtocol,
 			modelTools: runtime.modelTools,
 			hooks: bootstrap.hooks,
 			extensions,

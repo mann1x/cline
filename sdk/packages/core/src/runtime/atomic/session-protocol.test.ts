@@ -326,3 +326,171 @@ describe("reading a model's account of its own change", () => {
 		expect(readSelfReport(text)).toBe(expected);
 	});
 });
+
+describe("a check the model proposes", () => {
+	const WORKING =
+		"<script>requestAnimationFrame(function loop(){ requestAnimationFrame(loop); });</script>";
+	const BROKEN = "<script>gone();</script>";
+
+	/** Runs the propose_check tool off a session, the way the agent would. */
+	async function propose(
+		session: { tools: readonly { name: string; execute: unknown }[] },
+		input: unknown,
+	): Promise<string> {
+		const tool = session.tools.find((entry) => entry.name === "propose_check");
+		if (!tool) {
+			throw new Error("no propose_check tool on this session");
+		}
+		return (
+			tool.execute as (input: unknown, context: unknown) => Promise<string>
+		)(input, {} as never);
+	}
+
+	// Auto used to stand down here, and standing down means the model judges
+	// its own work. With someone to ask there is a better answer available.
+	it("arms in auto where there is nothing to run but someone to ask", async () => {
+		await withWorkspace({ "game.html": WORKING }, async (root) => {
+			const statuses: string[] = [];
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "auto" },
+				approveCheck: async () => ({ approved: true }),
+				onStatus: (status) => statuses.push(status.message),
+			});
+
+			expect(session).toBeDefined();
+			expect(statuses[0]).toContain("propose a check");
+		});
+	});
+
+	it("still stands down in auto when there is nobody to ask", async () => {
+		await withWorkspace({ "game.html": WORKING }, async (root) => {
+			expect(
+				await createAtomicProtocolSession({
+					workspaceRoot: root,
+					config: { mode: "auto" },
+				}),
+			).toBeUndefined();
+		});
+	});
+
+	it("tells the model to propose one, in the opening rules", async () => {
+		await withWorkspace({ "game.html": WORKING }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "auto" },
+				approveCheck: async () => ({ approved: true }),
+			});
+
+			expect(session?.takeOpeningRules()).toContain("propose_check");
+		});
+	});
+
+	// The whole point: what the user approved decides, and the model's account
+	// of its own work stops being the verdict.
+	it("judges the transaction by the approved check", async () => {
+		await withWorkspace({ "game.html": BROKEN }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "always" },
+				approveCheck: async () => ({ approved: true }),
+			});
+			if (!session) {
+				throw new Error("expected a session");
+			}
+			session.takeOpeningRules();
+
+			await propose(session, {
+				kind: "page",
+				path: "game.html",
+				reason: "the task is this page",
+			});
+			// An edit that leaves the page still broken, declared a success.
+			await fs.writeFile(
+				path.join(root, "game.html"),
+				"<script>stillGone();</script>",
+				"utf8",
+			);
+
+			const message = await session.onCompletionAttempt({
+				text: "Fixed — the page loads cleanly now.",
+			});
+
+			expect(message).toContain("discarded");
+			expect(message).toContain("the page did not run");
+			// Put back, exactly as it was when the transaction opened.
+			expect(await fs.readFile(path.join(root, "game.html"), "utf8")).toBe(
+				BROKEN,
+			);
+		});
+	});
+
+	it("keeps the transaction when the approved check passes", async () => {
+		await withWorkspace({ "game.html": BROKEN }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "always" },
+				approveCheck: async () => ({ approved: true }),
+			});
+			if (!session) {
+				throw new Error("expected a session");
+			}
+			session.takeOpeningRules();
+			await propose(session, {
+				kind: "page",
+				path: "game.html",
+				reason: "the task is this page",
+			});
+			await fs.writeFile(path.join(root, "game.html"), WORKING, "utf8");
+
+			expect(
+				await session.onCompletionAttempt({ text: "fixed" }),
+			).toBeUndefined();
+			expect(session.oracle?.kind).toBe("page");
+		});
+	});
+
+	// A model that may re-propose after a failed transaction will weaken the
+	// check until one passes, which is self-declaration with extra steps.
+	it("freezes the check for the rest of the run", async () => {
+		await withWorkspace({ "game.html": BROKEN }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "always" },
+				approveCheck: async () => ({ approved: true }),
+			});
+			if (!session) {
+				throw new Error("expected a session");
+			}
+
+			await propose(session, {
+				kind: "page",
+				path: "game.html",
+				reason: "the task is this page",
+			});
+			const second = await propose(session, {
+				kind: "command",
+				command: "true",
+				reason: "something easier",
+			});
+
+			expect(second).toContain("frozen for the rest of the run");
+			expect(session.oracle?.kind).toBe("page");
+		});
+	});
+
+	it("offers no proposal tool once the workspace has its own check", async () => {
+		await withWorkspace(
+			{ "package.json": JSON.stringify({ scripts: { test: "true" } }) },
+			async (root) => {
+				const session = await createAtomicProtocolSession({
+					workspaceRoot: root,
+					config: { mode: "auto" },
+					approveCheck: async () => ({ approved: true }),
+				});
+
+				expect(session?.tools).toHaveLength(0);
+			},
+		);
+	});
+});

@@ -1,4 +1,5 @@
-import type { Oracle, OracleVerdict } from "./oracle";
+import { isPageOracle, type Oracle, type OracleVerdict } from "./oracle";
+import { PROPOSE_CHECK_TOOL_NAME } from "./proposal";
 
 /**
  * How a transaction was judged, and by whom.
@@ -43,6 +44,14 @@ export interface ProtocolPromptInput {
 	maxTransactions: number;
 	/** The check that will decide, when there is one. */
 	oracle?: Oracle;
+	/**
+	 * Whether the model may name its own check, for a workspace with none.
+	 *
+	 * Only ever true where `oracle` is absent and there is a user to approve
+	 * one: the alternative in that case is the model's own account of its work,
+	 * which is the verdict every wrong outcome measured so far came from.
+	 */
+	canProposeCheck?: boolean;
 	/** What earlier transactions tried, in order. */
 	history: readonly TransactionOutcome[];
 }
@@ -74,13 +83,23 @@ export function buildProtocolPrompt(input: ProtocolPromptInput): string {
 
 	if (input.oracle) {
 		lines.push(
-			`When you are done, run \`${input.oracle.label}\` and read what it says.`,
+			isPageOracle(input.oracle)
+				? `When you are done, ${input.oracle.label}.`
+				: `When you are done, run \`${input.oracle.label}\` and read what it says.`,
 			"",
-			`That command is what decides. It is run again when your turn ends, and ${describeOracleStandard(input.oracle)} — not your account of the change, and not the fact that the edit applied. ${describeOracleChoice(input.oracle)}`,
+			`That check is what decides. It is run again when your turn ends, and ${describeOracleStandard(input.oracle)} — not your account of the change, and not the fact that the edit applied. ${describeOracleChoice(input.oracle)}`,
 			"",
 			`If it passes, ${label} is kept and the task is finished.`,
 			"",
 			`If it does not, every change in ${label} is discarded. The files go back to exactly what they were when ${label} opened, and you get a new transaction with a record of what this one tried. You will never be asked to undo an edit yourself — that is done for you, mechanically, before the next transaction starts.`,
+		);
+	} else if (input.canProposeCheck) {
+		lines.push(
+			`Nothing in this workspace can be run to check the change, so as it stands you are the check — and your own account of your work is the weakest evidence there is. Name a better one: call \`${PROPOSE_CHECK_TOOL_NAME}\` with the check that would show this task is done, and the user approves it or says what they want instead.`,
+			"",
+			"Propose it as soon as you know what you are fixing, before you make the change. What is approved judges every attempt for the rest of the run and cannot be changed afterwards, so name the thing that would fail right now and pass once the fix lands.",
+			"",
+			`If no check is agreed, say plainly when you are done whether the change achieved what was asked and how you know. Answering "yes" because the edit applied is not knowing. If you cannot tell, say that instead — ${label} is then discarded and you get another transaction rather than a change nobody verified.`,
 		);
 	} else {
 		lines.push(
@@ -112,6 +131,12 @@ export function buildProtocolPrompt(input: ProtocolPromptInput): string {
  * always exits zero has been told nothing at all.
  */
 function describeOracleStandard(oracle: Oracle): string {
+	// A check the harness runs itself has one standard and states it plainly:
+	// the page loads, runs, and throws nothing. There is no exit code to
+	// explain and no pattern to match.
+	if (isPageOracle(oracle)) {
+		return "the verdict is that the page loads, runs its frames and throws nothing";
+	}
 	return oracle.expect
 		? `the verdict is that it finishes cleanly AND its output matches /${oracle.expect}/`
 		: "its exit status is the verdict";
@@ -243,6 +268,12 @@ export function describeVerdict(
 	// like "it fell over", and the model's next move differs between the two.
 	if (verdict?.unmatched) {
 		return `${label} discarded — the check ran, and what it reported is not what this task counts as working. Your files are back as they were.`;
+	}
+	// A check that can say what went wrong says it. "The check failed (exit 1)"
+	// is the least informative true thing available about a page that threw a
+	// ReferenceError on frame 2.
+	if (verdict?.summary) {
+		return `${label} discarded — ${verdict.summary} Your files are back as they were.`;
 	}
 	if (verdict?.exitCode == null) {
 		return `${label} discarded — the check could not be run at all, so nothing was verified. Your files are back as they were.`;

@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { promisify } from "node:util";
+import { checkPage } from "./page-check";
 
 const run = promisify(execFile);
 
@@ -18,16 +19,20 @@ const run = promisify(execFile);
  * So the verdict is a command's exit status wherever a command can be found,
  * and the model's own word only where none can.
  */
-export interface Oracle {
+interface OracleCommon {
 	/** Shown to the model, and to the user, as what will judge the change. */
 	label: string;
-	/** The executable and its arguments. Never a shell string. */
-	command: string;
-	args: string[];
 	/** Where it runs. */
 	cwd: string;
 	/** Why this one was chosen, for the log. */
 	reason: string;
+}
+
+export interface CommandOracle extends OracleCommon {
+	kind?: "command";
+	/** The executable and its arguments. Never a shell string. */
+	command: string;
+	args: string[];
 	/**
 	 * A pattern the output must match, on top of exiting zero.
 	 *
@@ -36,9 +41,34 @@ export interface Oracle {
 	 * `{"ok":false,"error":"…"}` and exits 0 whether the game runs or not, so a
 	 * protocol reading only the exit status would keep every transaction it was
 	 * ever pointed at. Read as a regular expression against stdout and stderr
-	 * together.
+	 * together, in this process — never through a shell.
 	 */
 	expect?: string;
+}
+
+/**
+ * A check the harness runs itself, with no external program involved.
+ *
+ * The reason this kind exists: every other oracle is a command, and a command
+ * only judges anything where one is installed. The workspaces this protocol
+ * falls back to self-declaration on are exactly the ones with no test runner
+ * and no build — a single page, a script, a game — and telling the model to
+ * name a command there produces one that may not exist on the machine. This
+ * one always does. See `page-check.ts`.
+ */
+export interface PageOracle extends OracleCommon {
+	kind: "page";
+	/** The file to load, absolute or relative to `cwd`. */
+	path: string;
+	/** How many animation frames to pump before calling it working. */
+	frames?: number;
+}
+
+export type Oracle = CommandOracle | PageOracle;
+
+/** Whether this oracle is one the harness runs itself. */
+export function isPageOracle(oracle: Oracle): oracle is PageOracle {
+	return oracle.kind === "page";
 }
 
 export interface OracleVerdict {
@@ -55,6 +85,14 @@ export interface OracleVerdict {
 	 * ran and reported a problem" reads nothing like "it crashed".
 	 */
 	unmatched?: boolean;
+	/**
+	 * What went wrong, where the check can say it better than an exit code can.
+	 *
+	 * A check the harness runs itself has no exit status worth reporting, and
+	 * "the check failed (exit 1)" would be the least informative true thing
+	 * available about a page that threw a ReferenceError on frame 2.
+	 */
+	summary?: string;
 }
 
 /** Longest an oracle may run before the transaction is judged on nothing. */
@@ -167,7 +205,7 @@ function shellOracle(
 	cwd: string,
 	reason: string,
 	expect?: string,
-): Oracle {
+): CommandOracle {
 	// Taken as written, through the shell, because a user who names an oracle
 	// means that exact line — pipes, environment and all.
 	return {
@@ -191,7 +229,7 @@ function shellOracle(
 export async function discoverOracle(
 	workspaceRoot: string,
 	options: OracleSources = {},
-): Promise<Oracle | undefined> {
+): Promise<CommandOracle | undefined> {
 	// A command the user wrote for this task beats one they set once for every
 	// task, and both beat anything found by looking at the tree. Detection
 	// answers "does this workspace still build"; the user's line answers the
@@ -297,6 +335,47 @@ export async function discoverOracle(
 }
 
 /**
+ * Load the page and say whether it ran, without leaving this process.
+ *
+ * A file that cannot be read is a failure with no exit code, for the same
+ * reason a command that cannot be started is: nothing was judged, and calling
+ * that a pass would keep every transaction it was pointed at.
+ */
+async function runPageOracle(oracle: PageOracle): Promise<OracleVerdict> {
+	const filePath = path.resolve(oracle.cwd, oracle.path);
+	let source: string;
+	try {
+		source = await fs.readFile(filePath, "utf8");
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		return {
+			passed: false,
+			exitCode: null,
+			output: message,
+			timedOut: false,
+			summary: `the check could not read ${oracle.path}, so nothing was verified.`,
+		};
+	}
+
+	const result = checkPage(filePath, source, { frames: oracle.frames });
+	if (result.ok) {
+		return {
+			passed: true,
+			exitCode: 0,
+			output: `${oracle.path} loaded and ran ${result.framesRun} frame(s) with no errors.`,
+			timedOut: false,
+		};
+	}
+	return {
+		passed: false,
+		exitCode: 1,
+		output: `${oracle.path}: ${result.error}${result.framesRun > 0 ? ` (after ${result.framesRun} frame(s))` : ""}`,
+		timedOut: false,
+		summary: `the page did not run: ${result.error}`,
+	};
+}
+
+/**
  * Run the oracle and read its exit status.
  *
  * A non-zero exit, a signal, a timeout and a command that could not be started
@@ -308,6 +387,9 @@ export async function runOracle(
 	oracle: Oracle,
 	options: { timeoutMs?: number; env?: NodeJS.ProcessEnv } = {},
 ): Promise<OracleVerdict> {
+	if (isPageOracle(oracle)) {
+		return runPageOracle(oracle);
+	}
 	const timeoutMs = options.timeoutMs ?? DEFAULT_ORACLE_TIMEOUT_MS;
 	try {
 		const { stdout, stderr } = await run(oracle.command, oracle.args, {
@@ -360,7 +442,7 @@ export async function runOracle(
  * pattern would silently return the protocol to judging on exit status, which
  * for this class of check means keeping everything.
  */
-function outputSaysItPassed(oracle: Oracle, output: string): boolean {
+function outputSaysItPassed(oracle: CommandOracle, output: string): boolean {
 	if (!oracle.expect) {
 		return true;
 	}

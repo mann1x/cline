@@ -161,7 +161,7 @@ Actions:
 - `scroll_down`, `scroll_up` — one viewport.
 - `close` — shut the browser down. Do this when finished with it.
 
-Every action reports the console messages and uncaught errors produced while it ran, so a syntax error, a failed fetch or a null dereference comes back as text you can act on. `[error]` and `[Page Error]` lines are real failures. A page that says nothing printed nothing — that is a pass, not a failed call.
+Every action reports the console messages and uncaught errors produced while it ran, so a syntax error, a failed fetch or a null dereference comes back as text you can act on. `[error]` and `[Page Error]` lines are real failures. A page that says nothing printed nothing — that is a pass, not a failed call, and for a local file it is checked: a silent console over a file that does not parse is reported as the failure it is, not as a pass.
 
 A parse error from the browser names no line, because the script never ran. For a local file a `Delimiter scan` section follows it and names the line to edit and how many brackets that line is out by — one line per place the trouble starts, since a file can be broken in several spots at once. Fix every line it lists in one edit and reload once, rather than one edit and one reload per line. Edit those lines instead of counting brackets yourself: counting a whole file by hand costs more thinking than you have, and the scan skips strings, comments and regex literals, which counting does not.
 

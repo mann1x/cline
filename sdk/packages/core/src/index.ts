@@ -1118,6 +1118,13 @@ export {
 	referencedCredentialNames,
 	resolveCredentialEnv,
 } from "./extensions/tools/qa-credentials";
+// The check a model proposes and a host puts to the user. A host that has
+// somewhere to ask supplies `approveCheck`; one that has not leaves it out.
+export type {
+	CheckApproval,
+	CheckApprover,
+	CheckProposal,
+} from "./runtime/atomic/proposal";
 export {
 	applyClineFeaturedModels,
 	type ClineRecommendedModel,

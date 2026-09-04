@@ -1,5 +1,8 @@
+import type { AgentTool } from "@cline/shared";
 import type { CoreAtomicProtocolConfig } from "../../types/config";
 import { discoverOracle, type Oracle } from "./oracle";
+import type { CheckApprover } from "./proposal";
+import { createProposeCheckTool } from "./propose-check-tool";
 import { buildEmptyAttemptPrompt, describeEmptyAttempt } from "./protocol";
 import {
 	type SelfReport,
@@ -55,12 +58,33 @@ export interface AtomicProtocolSessionOptions {
 	 * it's enabled", which is the only thing they could have concluded.
 	 */
 	onStatus?: (status: { armed: boolean; message: string }) => void;
+	/**
+	 * Asks the user to approve a check the model proposed.
+	 *
+	 * Its presence is what makes a workspace with nothing to run worth arming
+	 * in `auto`: the alternative there is the model judging its own work, and
+	 * a host with nobody to ask -- cron, automation, a CLI with no terminal --
+	 * leaves this out and gets the old behaviour.
+	 */
+	approveCheck?: CheckApprover;
 }
 
 export interface AtomicProtocolSession {
 	readonly controller: TransactionController;
-	/** The check this task is judged by, or nothing when it has none. */
+	/**
+	 * The check this task is judged by, or nothing when it has none.
+	 *
+	 * Read through the controller rather than captured, because a check the
+	 * user approves mid-run arrives after this session was built.
+	 */
 	readonly oracle: Oracle | undefined;
+	/**
+	 * Tools this protocol adds to the session, if any.
+	 *
+	 * Only `propose_check`, and only where there is nothing to run and someone
+	 * to ask. A tool the model cannot usefully call is a tool that gets called.
+	 */
+	readonly tools: AgentTool[];
 	/**
 	 * The first transaction's rules, to go out with the task itself, once.
 	 *
@@ -110,7 +134,12 @@ export async function createAtomicProtocolSession(
 		manual: options.config?.oracleCommand,
 		expect: options.config?.oracleExpect,
 	});
-	if (!oracle && mode === "auto") {
+	// Nothing to run, but someone to ask: the model names a check and the user
+	// approves it, which is a real verdict where the alternative was the
+	// model's own account of its work.
+	const approveCheck = options.approveCheck ?? options.config?.approveCheck;
+	const canProposeCheck = !oracle && approveCheck !== undefined;
+	if (!oracle && !canProposeCheck && mode === "auto") {
 		// Said out loud, and to the user rather than to a log file. A feature
 		// that silently does nothing looks exactly like one that is working and
 		// has nothing to do, and there is no other line to tell them apart.
@@ -122,7 +151,9 @@ export async function createAtomicProtocolSession(
 	}
 	const armedMessage = oracle
 		? `Change protocol armed: each attempt is judged by \`${oracle.label}\` (${oracle.reason}), and an attempt that fails it is put back.`
-		: "Change protocol armed with no check to run: the model judges its own work, which is the weaker of the two and is labelled as such on every attempt.";
+		: canProposeCheck
+			? "Change protocol armed with nothing to run: the model will propose a check and ask you to approve it. Until one is approved it judges its own work, which is labelled as such on every attempt."
+			: "Change protocol armed with no check to run: the model judges its own work, which is the weaker of the two and is labelled as such on every attempt.";
 	options.logger?.log?.(`[Atomic] ${armedMessage}`);
 	options.onStatus?.({ armed: true, message: armedMessage });
 
@@ -132,9 +163,28 @@ export async function createAtomicProtocolSession(
 		maxTransactions:
 			options.config?.maxTransactions ?? DEFAULT_MAX_TRANSACTIONS,
 		oracle,
+		allowCheckProposal: canProposeCheck,
 		oracleTimeoutMs: options.config?.oracleTimeoutMs,
 		onEvent: options.onEvent,
 	});
+
+	const tools: AgentTool[] = [];
+	if (canProposeCheck && approveCheck) {
+		tools.push(
+			createProposeCheckTool({
+				workspaceRoot: options.workspaceRoot,
+				controller,
+				approve: approveCheck,
+				onAdopted: (adopted) => {
+					const message = `Change protocol: you approved \`${adopted.label}\`, and every attempt from here is judged by it.`;
+					options.logger?.log?.(`[Atomic] ${message}`);
+					options.onStatus?.({ armed: true, message });
+				},
+				onError: (message, error) =>
+					options.logger?.log?.(`${message}: ${String(error)}`),
+			}),
+		);
+	}
 
 	let rules: string | undefined = await controller.open();
 	let finished = false;
@@ -142,7 +192,10 @@ export async function createAtomicProtocolSession(
 
 	return {
 		controller,
-		oracle,
+		get oracle() {
+			return controller.oracle;
+		},
+		tools,
 		takeOpeningRules: () => {
 			const opening = rules;
 			rules = undefined;

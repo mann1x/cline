@@ -53,6 +53,8 @@ export type TransactionSettlement =
 
 export type TransactionEvent =
 	| { type: "opened"; transaction: number; oracle?: Oracle }
+	/** A check was proposed, approved and taken on for the rest of the run. */
+	| { type: "adopted"; transaction: number; oracle: Oracle }
 	| { type: "judging"; transaction: number; oracle?: Oracle }
 	/**
 	 * A transaction the model tried to end without changing anything.
@@ -90,6 +92,13 @@ export interface TransactionControllerOptions {
 	maxTransactions: number;
 	/** The check that decides, or nothing when the workspace has none. */
 	oracle?: Oracle;
+	/**
+	 * Whether the model may name its own check while there is none.
+	 *
+	 * Set by the host that has somewhere to ask the user. It stops mattering
+	 * the moment a check exists, since one is frozen once taken on.
+	 */
+	allowCheckProposal?: boolean;
 	oracleTimeoutMs?: number;
 	snapshotLimits?: SnapshotLimits;
 	onEvent?: (event: TransactionEvent) => void;
@@ -116,12 +125,46 @@ export class TransactionController {
 	private readonly uncoveredPaths = new Set<string>();
 	private snapshot?: Snapshot;
 	private current = 0;
+	private adopted?: Oracle;
 
 	constructor(private readonly options: TransactionControllerOptions) {}
 
 	/** One-based number of the open transaction, or 0 before the first opens. */
 	get transaction(): number {
 		return this.current;
+	}
+
+	/** The check that judges this run, however it came by one. */
+	get oracle(): Oracle | undefined {
+		return this.adopted ?? this.options.oracle;
+	}
+
+	/**
+	 * Whether a check can still be taken on — which is only ever while there is
+	 * none. See `adoptOracle`.
+	 */
+	get canAdoptOracle(): boolean {
+		return this.oracle === undefined;
+	}
+
+	/**
+	 * Take a check for the rest of the run, once.
+	 *
+	 * For a check the model proposed and the user approved, in a workspace
+	 * where discovery found nothing. It can only ever be set while there is no
+	 * check at all, and that is the freeze: a model allowed to re-propose after
+	 * a transaction fails will weaken the check until one passes, which is an
+	 * elaborate way of arriving back at `self-declared`. Replacing it costs a
+	 * new session, not a tool call.
+	 */
+	adoptOracle(oracle: Oracle): void {
+		if (!this.canAdoptOracle) {
+			throw new Error(
+				"This run already has a check, and it is frozen for the rest of the run.",
+			);
+		}
+		this.adopted = oracle;
+		this.emit({ type: "adopted", transaction: this.current, oracle });
 	}
 
 	/** Every transaction so far, in order, kept or not. */
@@ -169,13 +212,15 @@ export class TransactionController {
 		this.emit({
 			type: "opened",
 			transaction: this.current,
-			oracle: this.options.oracle,
+			oracle: this.oracle,
 		});
 		return buildProtocolPrompt({
 			transaction: this.current,
 			maxChanges: this.options.maxChanges,
 			maxTransactions: this.options.maxTransactions,
-			oracle: this.options.oracle,
+			oracle: this.oracle,
+			canProposeCheck:
+				this.options.allowCheckProposal === true && this.canAdoptOracle,
 			history: this.history,
 		});
 	}
@@ -193,7 +238,7 @@ export class TransactionController {
 			throw new Error("settle() was called before a transaction was opened");
 		}
 		const transaction = this.current;
-		this.emit({ type: "judging", transaction, oracle: this.options.oracle });
+		this.emit({ type: "judging", transaction, oracle: this.oracle });
 
 		// Three sources, not two. Silence still keeps the files -- see
 		// judgeSelfReport -- but it is not a judgement, and reporting it as one
@@ -208,7 +253,7 @@ export class TransactionController {
 		// itself as never having said whether the change worked.
 		const declared =
 			report.selfReport !== undefined || Boolean(report.account?.trim());
-		const source: TransactionVerdictSource = this.options.oracle
+		const source: TransactionVerdictSource = this.oracle
 			? "oracle"
 			: declared
 				? "self-declared"
@@ -217,8 +262,8 @@ export class TransactionController {
 		let verdict: OracleVerdict | undefined;
 		let evidence: string;
 
-		if (this.options.oracle) {
-			verdict = await runOracle(this.options.oracle, {
+		if (this.oracle) {
+			verdict = await runOracle(this.oracle, {
 				timeoutMs: this.options.oracleTimeoutMs ?? DEFAULT_ORACLE_TIMEOUT_MS,
 			});
 			kept = verdict.passed;

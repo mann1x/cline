@@ -242,3 +242,63 @@ describe("reading the oracle's verdict", () => {
 		});
 	});
 });
+
+describe("a page oracle", () => {
+	const WORKING =
+		"<script>requestAnimationFrame(function loop(){ requestAnimationFrame(loop); });</script>";
+
+	// The point of this kind: it needs nothing installed, so it is a real
+	// verdict in exactly the workspaces where `discoverOracle` finds none.
+	it("passes a page that loads and runs", async () => {
+		await withWorkspace({ "game.html": WORKING }, async (root) => {
+			const verdict = await runOracle({
+				kind: "page",
+				label: "load game.html",
+				path: "game.html",
+				cwd: root,
+				reason: "the task is about this page",
+				frames: 3,
+			});
+
+			expect(verdict.passed).toBe(true);
+			expect(verdict.output).toContain("3 frame(s)");
+		});
+	});
+
+	it("fails a page that does not parse, and says so in one line", async () => {
+		await withWorkspace(
+			{ "game.html": "<script>foo.forEach(e=>{bar();}};\n});</script>" },
+			async (root) => {
+				const verdict = await runOracle({
+					kind: "page",
+					label: "load game.html",
+					path: "game.html",
+					cwd: root,
+					reason: "the task is about this page",
+				});
+
+				expect(verdict.passed).toBe(false);
+				expect(verdict.summary).toContain("the page did not run");
+				expect(verdict.output).toContain("SyntaxError");
+			},
+		);
+	});
+
+	// A check that cannot read its file has judged nothing, and that is not a
+	// pass -- the same rule a command that cannot be started is held to.
+	it("fails with no exit code when the file is gone", async () => {
+		await withWorkspace({}, async (root) => {
+			const verdict = await runOracle({
+				kind: "page",
+				label: "load game.html",
+				path: "game.html",
+				cwd: root,
+				reason: "the task is about this page",
+			});
+
+			expect(verdict.passed).toBe(false);
+			expect(verdict.exitCode).toBeNull();
+			expect(verdict.summary).toContain("could not read");
+		});
+	});
+});

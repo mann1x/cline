@@ -44,6 +44,7 @@ import type { VscodeTerminalManager } from "@/hosts/vscode/terminal/VscodeTermin
 import { getDistinctId } from "@/services/logging/distinctId"
 import type { McpHub } from "@/services/mcp/McpHub"
 import { Logger } from "@/shared/services/Logger"
+import { approveProposedCheck } from "./check-approval"
 import { CHECK_FILE_TOOL_NAME } from "./check-file-tool"
 import type { SdkForegroundCommandCoordinator } from "./sdk-foreground-command-coordinator"
 import type { SdkSessionHost } from "./session-host"
@@ -204,6 +205,10 @@ export class VscodeSessionHost implements SdkSessionHost {
 						oracleExpect: atomicProtocolSettings?.oracleExpect || undefined,
 						maxChanges: atomicProtocolSettings?.maxChanges,
 						maxTransactions: atomicProtocolSettings?.maxTransactions,
+						// There is a user here to ask, so a workspace with nothing
+						// runnable is not automatically a workspace with no verdict:
+						// the model proposes a check and this puts it to them.
+						approveCheck: approveProposedCheck,
 					},
 					taskProgress: {
 						enabled: focusChainSettings?.enabled ?? true,

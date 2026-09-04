@@ -23,6 +23,7 @@ import type {
 	AgentProviderConnection,
 	TeamEvent,
 } from "../extensions/tools/team";
+import type { CheckApprover } from "../runtime/atomic/proposal";
 import type { ProviderConfig } from "./provider-settings";
 
 export type CoreAgentMode = AgentMode;
@@ -265,6 +266,17 @@ export interface CoreAtomicProtocolConfig {
 	maxChanges?: number;
 	/** Attempts before the task stops. Six by default, as the harness runs it. */
 	maxTransactions?: number;
+	/**
+	 * Asks the user to approve a check the model proposed for this task.
+	 *
+	 * Supplied by hosts that have somewhere to ask. Where a workspace holds
+	 * nothing runnable, this is the difference between a real verdict and the
+	 * model's own account of its work — and the approval is a boundary rather
+	 * than a formality, since an approved command is then run repeatedly and
+	 * trusted as the judge. A host without a user leaves it out and gets the
+	 * behaviour it had before.
+	 */
+	approveCheck?: CheckApprover;
 }
 
 export type CoreCompactionStrategy = "basic" | "agentic";
