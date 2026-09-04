@@ -15,6 +15,7 @@ import {
 	resolveOllamaImageSupport,
 	resolveOllamaModelFamily,
 	resolveOllamaModelParameters,
+	resolveOllamaToolSupport,
 } from "./ollama-model-family"
 
 const post = mocks.fetch
@@ -179,6 +180,33 @@ describe("resolveOllamaModelFamily", () => {
 		post.mockResolvedValueOnce(ok({ details: { family: "  " } }) as never)
 
 		await expect(resolveOllamaModelFamily("http://localhost:11434", "m")).resolves.toBeUndefined()
+	})
+})
+
+/**
+ * Read for the same reason as image support, but the cost of getting it wrong
+ * is higher: the runtime reads a populated capability list without "tools" as
+ * an authoritative "cannot" and hands the model no tools at all.
+ */
+describe("resolveOllamaToolSupport", () => {
+	it("reports a tool-calling model as one", async () => {
+		post.mockResolvedValueOnce(ok({ capabilities: ["completion", "tools", "vision"] }) as never)
+
+		await expect(resolveOllamaToolSupport("http://localhost:11434", "qwen3:8b")).resolves.toBe(true)
+	})
+
+	it("reports a model that lists capabilities without tools as one that cannot", async () => {
+		post.mockResolvedValueOnce(ok({ capabilities: ["completion", "vision"] }) as never)
+
+		await expect(resolveOllamaToolSupport("http://localhost:11434", "llava")).resolves.toBe(false)
+	})
+
+	// Absent is not "no": every other capability check in the codebase assumes
+	// tool calling for a model that never declared otherwise.
+	it("says nothing when the server does not report capabilities", async () => {
+		post.mockResolvedValueOnce(ok({ details: { family: "llama" } }) as never)
+
+		await expect(resolveOllamaToolSupport("http://localhost:11434", "llama3")).resolves.toBeUndefined()
 	})
 })
 

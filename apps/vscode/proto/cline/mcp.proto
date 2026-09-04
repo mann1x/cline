@@ -41,6 +41,10 @@ message AddRemoteMcpServerRequest {
   string server_name = 2;
   string server_url = 3;
   optional string transport_type = 4;
+  // A client the server issued itself. Servers that refuse dynamic client
+  // registration have no other way to be reached.
+  optional string oauth_client_id = 5;
+  optional string oauth_client_secret = 6;
 }
 
 // A server Cline starts itself and talks to over stdio, rather than one it

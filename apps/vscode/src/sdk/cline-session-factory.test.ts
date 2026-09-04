@@ -39,6 +39,8 @@ const mocks = vi.hoisted(() => {
 		getDistinctId: vi.fn(() => "test-distinct-id"),
 		getProviderSettingsManager: vi.fn(() => providerSettingsManager),
 		resolveOllamaThinkBudget: vi.fn(async (): Promise<{ level: string; budgetTokens: number } | undefined> => undefined),
+		resolveOllamaImageSupport: vi.fn(async (): Promise<boolean | undefined> => undefined),
+		resolveOllamaToolSupport: vi.fn(async (): Promise<boolean | undefined> => undefined),
 		providerSettingsManager,
 		stateManager: {
 			getApiConfiguration: vi.fn(() => ({
@@ -76,6 +78,8 @@ vi.mock("./provider-migration", () => ({
 vi.mock("./ollama-model-family", async (importOriginal) => ({
 	...(await importOriginal<typeof import("./ollama-model-family")>()),
 	resolveOllamaThinkBudget: mocks.resolveOllamaThinkBudget,
+	resolveOllamaImageSupport: mocks.resolveOllamaImageSupport,
+	resolveOllamaToolSupport: mocks.resolveOllamaToolSupport,
 }))
 
 vi.mock("@shared/services/Logger", () => ({
@@ -964,6 +968,57 @@ describe("buildSessionConfig", () => {
 		const knownModel = (config.providerConfig as any).knownModels["mock/empty-capabilities-model"]
 
 		expect(knownModel.capabilities).toEqual(expect.arrayContaining(["reasoning", "tools"]))
+	})
+
+	/**
+	 * Asking Ollama about images is what turns an unspecified capability list
+	 * into a populated one, and a populated list answers every other capability
+	 * too. A local vision model whose list said only "images" was declaring
+	 * itself unable to call tools, and .58's runtime gate believed it: every
+	 * call came back "No tools are available" while the system prompt still
+	 * described the tools (mann1x/cline#63).
+	 */
+	describe("ollama capability probe", () => {
+		const ollamaConfig = {
+			actModeApiProvider: "ollama",
+			actModeOllamaModelId: "local-vision-model",
+			actModeOllamaBaseUrl: "http://localhost:11434",
+		}
+
+		it("keeps tool calling when the server reports vision but says nothing about tools", async () => {
+			mocks.stateManager.getApiConfiguration.mockReturnValue(ollamaConfig as any)
+			mocks.resolveOllamaImageSupport.mockResolvedValue(true)
+			mocks.resolveOllamaToolSupport.mockResolvedValue(undefined)
+
+			const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+			const knownModel = (config.providerConfig as any).knownModels["local-vision-model"]
+
+			expect(knownModel.capabilities).toEqual(expect.arrayContaining(["images", "tools"]))
+		})
+
+		it("records what the server does report", async () => {
+			mocks.stateManager.getApiConfiguration.mockReturnValue(ollamaConfig as any)
+			mocks.resolveOllamaImageSupport.mockResolvedValue(true)
+			mocks.resolveOllamaToolSupport.mockResolvedValue(true)
+
+			const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+			const knownModel = (config.providerConfig as any).knownModels["local-vision-model"]
+
+			expect(knownModel.capabilities).toEqual(expect.arrayContaining(["images", "tools"]))
+		})
+
+		// A server that says "no tools" is answering, not staying silent.
+		it("keeps a reported absence of tool calling authoritative", async () => {
+			mocks.stateManager.getApiConfiguration.mockReturnValue(ollamaConfig as any)
+			mocks.resolveOllamaImageSupport.mockResolvedValue(true)
+			mocks.resolveOllamaToolSupport.mockResolvedValue(false)
+
+			const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+			const knownModel = (config.providerConfig as any).knownModels["local-vision-model"]
+
+			expect(knownModel.capabilities).toContain("images")
+			expect(knownModel.capabilities).not.toContain("tools")
+		})
 	})
 
 	it("keeps legacy supportsTools=false authoritative for dynamic-list models", async () => {

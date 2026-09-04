@@ -9,6 +9,17 @@ import { TYPE_ERROR_MESSAGE } from "./constants"
 
 const AutoApproveSchema = z.array(z.string()).default([])
 
+// A client the server issued itself, for servers that refuse dynamic client
+// registration. Kept in the settings entry rather than in the `oauth` state
+// block: the SDK only writes that block after a dynamic registration, so a
+// pre-registered client would otherwise have nowhere to live.
+const OAuthClientSchema = z
+	.object({
+		clientId: z.string().min(1),
+		clientSecret: z.string().min(1).optional(),
+	})
+	.optional()
+
 // Settings reads are tolerant: a malformed optional timeout must not reject
 // every MCP server. Writes use the strict schema exported below.
 const ReadTimeoutSchema = z.preprocess(resolveMcpTimeoutSeconds, z.number()).optional().default(DEFAULT_MCP_TIMEOUT_SECONDS)
@@ -23,6 +34,7 @@ export const BaseConfigSchema = z.object({
 	remoteConfigured: z.boolean().optional(),
 	// OAuth state written by the CLI — preserved as-is (VSCode doesn't implement OAuth flows yet)
 	oauth: z.unknown().optional(),
+	oauthClient: OAuthClientSchema,
 	// Arbitrary metadata written by the CLI — preserved as-is
 	metadata: z.unknown().optional(),
 })
@@ -75,6 +87,7 @@ const nestedTransportConfigSchema = z
 		timeout: ReadTimeoutSchema,
 		remoteConfigured: z.boolean().optional(),
 		oauth: z.unknown().optional(),
+		oauthClient: OAuthClientSchema,
 		metadata: z.unknown().optional(),
 	})
 	.transform((data) => {

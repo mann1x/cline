@@ -21,6 +21,7 @@ import {
 	authorizeMcpServerOAuth,
 	getMcpServerOAuthState,
 	type McpServerOAuthState,
+	resolveMcpServerRegistration,
 	updateMcpServerOAuthStateAsync,
 } from "@cline/core"
 import { StateManager } from "@core/storage/StateManager"
@@ -59,6 +60,33 @@ function readOAuthState(serverName: string, settingsPath: string): McpServerOAut
 		return getMcpServerOAuthState(serverName, { filePath: settingsPath }) ?? {}
 	} catch {
 		return {}
+	}
+}
+
+/**
+ * The OAuth client the user configured for a server, if any.
+ *
+ * A pre-registered client lives in the server's own `oauthClient` setting, not
+ * in the `oauth` state block: the MCP SDK only calls `saveClientInformation`
+ * after a *dynamic* registration, so with a pre-registered client nothing ever
+ * writes that block. Reading state alone would therefore answer "no client" on
+ * every connection before the first interactive authorize, and the SDK would
+ * fall back to dynamic registration — the one thing a server that requires
+ * pre-registration refuses. Never throws: an unreadable file means "none".
+ */
+function readConfiguredOAuthClient(serverName: string, settingsPath: string): OAuthClientInformationMixed | undefined {
+	try {
+		const registration = resolveMcpServerRegistration(serverName, { filePath: settingsPath })
+		const configured = registration?.oauthClient
+		if (!configured) {
+			return undefined
+		}
+		return {
+			client_id: configured.clientId,
+			...(configured.clientSecret ? { client_secret: configured.clientSecret } : {}),
+		}
+	} catch {
+		return undefined
 	}
 }
 
@@ -106,9 +134,13 @@ class ClineOAuthClientProvider implements OAuthClientProvider {
 	}
 
 	get clientMetadata(): OAuthClientMetadata {
+		// Only consulted for dynamic registration, which a configured
+		// confidential client never reaches — but claiming "none" while holding
+		// a secret would misdescribe us if it ever did.
+		const configured = readConfiguredOAuthClient(this.serverName, this.settingsPath)
 		return {
 			redirect_uris: [this.redirectUrl],
-			token_endpoint_auth_method: "none",
+			token_endpoint_auth_method: configured?.client_secret ? "client_secret_basic" : "none",
 			grant_types: ["authorization_code", "refresh_token"],
 			response_types: ["code"],
 			client_name: "Cline",
@@ -120,6 +152,13 @@ class ClineOAuthClientProvider implements OAuthClientProvider {
 	}
 
 	async clientInformation(): Promise<OAuthClientInformationMixed | undefined> {
+		// The configured client wins: it is what the user told us to be, and a
+		// stale dynamically-registered one in state would send us back to a
+		// registration the server has already refused.
+		const configured = readConfiguredOAuthClient(this.serverName, this.settingsPath)
+		if (configured) {
+			return configured
+		}
 		const state = readOAuthState(this.serverName, this.settingsPath)
 		return state.clientInformation as OAuthClientInformationMixed | undefined
 	}
@@ -195,7 +234,7 @@ class ClineOAuthClientProvider implements OAuthClientProvider {
 	 */
 	async isAuthenticated(): Promise<boolean> {
 		const tokens = await this.tokens()
-		return Boolean(tokens && tokens.access_token)
+		return Boolean(tokens?.access_token)
 	}
 }
 

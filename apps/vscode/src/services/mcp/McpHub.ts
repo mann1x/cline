@@ -1924,7 +1924,19 @@ export class McpHub {
 		}
 	}
 
-	public async addRemoteServer(serverName: string, serverUrl: string, transportType = "streamableHttp"): Promise<McpServer[]> {
+	/**
+	 * @param options.oauthClient a client the server issued itself. Servers that
+	 * refuse dynamic client registration (GitHub, Slack, Entra publish no
+	 * registration endpoint; Figma answers 403) can be reached no other way, and
+	 * the failure without it reads as rejected credentials rather than as a
+	 * refused registration.
+	 */
+	public async addRemoteServer(
+		serverName: string,
+		serverUrl: string,
+		transportType = "streamableHttp",
+		options: { oauthClient?: { clientId: string; clientSecret?: string } } = {},
+	): Promise<McpServer[]> {
 		try {
 			const settingsPath = await getMcpSettingsFilePathHelper(await this.getSettingsDirectoryPath())
 			await updateMcpSettingsFile(settingsPath, (current) => {
@@ -1938,6 +1950,7 @@ export class McpHub {
 					type: transportType,
 					disabled: false,
 					autoApprove: [],
+					...(options.oauthClient ? { oauthClient: options.oauthClient } : {}),
 				}
 
 				// Expand environment variables for validation

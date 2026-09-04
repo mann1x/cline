@@ -76,6 +76,7 @@ import {
 	resolveOllamaImageSupport,
 	resolveOllamaModelParameters,
 	resolveOllamaThinkBudget,
+	resolveOllamaToolSupport,
 } from "./ollama-model-family"
 import { resolveSessionPromptTemplate } from "./prompt-templates"
 import { getProviderSettingsManager } from "./provider-migration"
@@ -1612,7 +1613,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		Logger.warn(`[SessionFactory] Failed to resolve known models for provider=${sdkProviderId}:`, error)
 	}
 
-	// Ask Ollama whether this model reads images, rather than guessing.
+	// Ask Ollama what this model can do, rather than guessing.
 	//
 	// The catalog is silent for every model it has never heard of — all the
 	// local ones, and anything published since the last catalog build — and the
@@ -1620,15 +1621,39 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	// model that could not read one. Ollama reports the answer, so for this
 	// provider the tools that attach images can be told before they attach one,
 	// instead of the model refusing the turn after the fact.
-	const ollamaImageSupport =
-		sdkProviderId === "ollama" && modelId ? await resolveOllamaImageSupport(baseUrl, modelId) : undefined
-	if (ollamaImageSupport !== undefined) {
+	//
+	// Tool calling is read from the same cached `/api/show` response, and it is
+	// not optional to read it. A capability list is only unspecified while it is
+	// empty: the moment this writes one, every capability it leaves out reads as
+	// an authoritative "cannot". Writing `["images"]` for a local vision model
+	// therefore used to declare it unable to call tools, and the runtime handed
+	// it an empty tool set — every call coming back "No tools are available"
+	// while the system prompt still described them (mann1x/cline#63).
+	const ollamaCapabilities =
+		sdkProviderId === "ollama" && modelId
+			? {
+					images: await resolveOllamaImageSupport(baseUrl, modelId),
+					tools: await resolveOllamaToolSupport(baseUrl, modelId),
+				}
+			: undefined
+	if (ollamaCapabilities?.images !== undefined || ollamaCapabilities?.tools !== undefined) {
 		const existing = knownModels?.[modelId]
 		const capabilities = new Set<string>(existing?.capabilities ?? [])
-		if (ollamaImageSupport) {
-			capabilities.add("images")
-		} else {
-			capabilities.delete("images")
+		const apply = (name: string, supported: boolean | undefined) => {
+			if (supported === true) {
+				capabilities.add(name)
+			} else if (supported === false) {
+				capabilities.delete(name)
+			}
+		}
+		apply("images", ollamaCapabilities.images)
+		apply("tools", ollamaCapabilities.tools)
+		// Ollama did not say, and this list is about to stop being unspecified.
+		// Everything else in the codebase assumes tool calling for a model that
+		// never declared otherwise; a list written here must not quietly say the
+		// opposite.
+		if (ollamaCapabilities.tools === undefined && capabilities.size > 0) {
+			capabilities.add("tools")
 		}
 		knownModels = {
 			...(knownModels ?? {}),
