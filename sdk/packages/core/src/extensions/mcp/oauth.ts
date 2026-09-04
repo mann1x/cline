@@ -600,6 +600,29 @@ export function isMcpUnauthorizedError(error: unknown): boolean {
 	);
 }
 
+// The SDK reports a refused registration with the same shaped message as any
+// other OAuth failure -- "Invalid OAuth error response ... Raw body: Forbidden"
+// -- which reads as a credentials problem even though no credential was ever
+// sent. The registration POST is the only request in the flow that carries
+// redirect_uris in a JSON body, so watching for it identifies the step exactly.
+const CLIENT_REGISTRATION_BODY_MARKER = '"redirect_uris"';
+
+interface RegistrationRefusal {
+	status: number;
+	url: string;
+}
+
+function describeRegistrationRefusal(
+	serverName: string,
+	refusal: RegistrationRefusal,
+	hasConfiguredClient: boolean,
+): string {
+	const refused = `MCP server "${serverName}" refused dynamic client registration (HTTP ${refusal.status} from ${refusal.url}).`;
+	return hasConfiguredClient
+		? `${refused} The configured OAuth client was not used because registration failed first.`
+		: `${refused} This server only accepts OAuth clients it issued itself, so no credentials were sent. Add an "oauthClient" entry with the client ID the server gave you (and its secret, if there is one) to this server in the MCP settings file, then start the flow again.`;
+}
+
 function buildClient(input: {
 	clientName?: string;
 	clientVersion?: string;
@@ -684,11 +707,27 @@ export async function authorizeMcpServerOAuth(
 
 	const client = buildClient(options);
 	let retryClient: Client | undefined;
+	let registrationRefusal: RegistrationRefusal | undefined;
+	const baseFetch = options.fetch;
+	const watchedFetch: FetchLike = async (input, init) => {
+		const response = await (baseFetch ?? fetch)(input, init);
+		if (
+			!response.ok &&
+			typeof init?.body === "string" &&
+			init.body.includes(CLIENT_REGISTRATION_BODY_MARKER)
+		) {
+			registrationRefusal = {
+				status: response.status,
+				url: input.toString(),
+			};
+		}
+		return response;
+	};
 	try {
 		const transport = createMcpSdkTransport({
 			registration,
 			oauthProvider: oauthContext.provider,
-			fetch: options.fetch,
+			fetch: watchedFetch,
 		});
 		try {
 			await client.connect(transport, {
@@ -752,7 +791,7 @@ export async function authorizeMcpServerOAuth(
 			const retryTransport = createMcpSdkTransport({
 				registration,
 				oauthProvider: oauthContext.provider,
-				fetch: options.fetch,
+				fetch: watchedFetch,
 			});
 			await retryClient.connect(retryTransport, {
 				timeout: requestTimeoutMs,
@@ -773,9 +812,15 @@ export async function authorizeMcpServerOAuth(
 		const cancelled = options.signal?.aborted === true;
 		const message = cancelled
 			? `MCP server "${serverName}" OAuth authorization was cancelled.`
-			: toErrorMessage(
-					augmentMcpTimeoutError(error, serverName, requestTimeoutMs),
-				);
+			: registrationRefusal
+				? describeRegistrationRefusal(
+						serverName,
+						registrationRefusal,
+						registration.oauthClient !== undefined,
+					)
+				: toErrorMessage(
+						augmentMcpTimeoutError(error, serverName, requestTimeoutMs),
+					);
 		if (!cancelled) {
 			await oauthContext.markError(message);
 		}
