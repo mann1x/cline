@@ -1507,15 +1507,17 @@ describe("sdk-gateway", () => {
 				},
 			},
 		});
-		expect(events).toContainEqual({
-			type: "usage",
-			usage: expect.objectContaining({
-				inputTokens: 10,
-				outputTokens: 4,
-				cacheReadTokens: 2,
-				cacheWriteTokens: 0,
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				type: "usage",
+				usage: expect.objectContaining({
+					inputTokens: 10,
+					outputTokens: 4,
+					cacheReadTokens: 2,
+					cacheWriteTokens: 0,
+				}),
 			}),
-		});
+		);
 		expect(events.at(-1)).toEqual({ type: "finish", reason: "tool-calls" });
 		const call = streamTextSpy.mock.calls.at(-1)?.[0] as
 			| { maxOutputTokens?: unknown }
@@ -3776,15 +3778,17 @@ describe("sdk-gateway", () => {
 			}),
 		);
 
-		expect(events).toContainEqual({
-			type: "usage",
-			usage: expect.objectContaining({
-				inputTokens: 10091,
-				outputTokens: 87,
-				cacheReadTokens: 7318,
-				cacheWriteTokens: 2770,
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				type: "usage",
+				usage: expect.objectContaining({
+					inputTokens: 10091,
+					outputTokens: 87,
+					cacheReadTokens: 7318,
+					cacheWriteTokens: 2770,
+				}),
 			}),
-		});
+		);
 		expect(events.at(-1)).toEqual({ type: "finish", reason: "tool-calls" });
 	});
 
@@ -3822,15 +3826,17 @@ describe("sdk-gateway", () => {
 			}),
 		);
 
-		expect(events).toContainEqual({
-			type: "usage",
-			usage: expect.objectContaining({
-				inputTokens: 9125,
-				outputTokens: 96,
-				cacheReadTokens: 8885,
-				cacheWriteTokens: 237,
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				type: "usage",
+				usage: expect.objectContaining({
+					inputTokens: 9125,
+					outputTokens: 96,
+					cacheReadTokens: 8885,
+					cacheWriteTokens: 237,
+				}),
 			}),
-		});
+		);
 		expect(events.at(-1)).toEqual({ type: "finish", reason: "stop" });
 	});
 
@@ -3881,16 +3887,18 @@ describe("sdk-gateway", () => {
 			}),
 		);
 
-		expect(events).toContainEqual({
-			type: "usage",
-			usage: {
-				inputTokens: 3793,
-				outputTokens: 1250,
-				cacheReadTokens: 0,
-				cacheWriteTokens: 0,
-				totalCost: 0.009145675,
-			},
-		});
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				type: "usage",
+				usage: {
+					inputTokens: 3793,
+					outputTokens: 1250,
+					cacheReadTokens: 0,
+					cacheWriteTokens: 0,
+					totalCost: 0.009145675,
+				},
+			}),
+		);
 	});
 
 	it("preserves explicit zero cost instead of falling back to catalog pricing", async () => {
@@ -3937,12 +3945,14 @@ describe("sdk-gateway", () => {
 			}),
 		);
 
-		expect(events).toContainEqual({
-			type: "usage",
-			usage: expect.objectContaining({
-				totalCost: 0,
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				type: "usage",
+				usage: expect.objectContaining({
+					totalCost: 0,
+				}),
 			}),
-		});
+		);
 	});
 
 	it("falls back to catalog pricing when upstream cost is missing", async () => {
@@ -3991,15 +4001,17 @@ describe("sdk-gateway", () => {
 			}),
 		);
 
-		expect(events).toContainEqual({
-			type: "usage",
-			usage: expect.objectContaining({
-				inputTokens: 1000,
-				outputTokens: 200,
-				cacheReadTokens: 100,
-				cacheWriteTokens: 50,
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				type: "usage",
+				usage: expect.objectContaining({
+					inputTokens: 1000,
+					outputTokens: 200,
+					cacheReadTokens: 100,
+					cacheWriteTokens: 50,
+				}),
 			}),
-		});
+		);
 		const usageEvent = events.find(
 			(event): event is Extract<AgentModelEvent, { type: "usage" }> =>
 				event.type === "usage",
@@ -4050,12 +4062,14 @@ describe("sdk-gateway", () => {
 			}),
 		);
 
-		expect(events).toContainEqual({
-			type: "usage",
-			usage: expect.objectContaining({
-				totalCost: 0.01829135,
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				type: "usage",
+				usage: expect.objectContaining({
+					totalCost: 0.01829135,
+				}),
 			}),
-		});
+		);
 	});
 
 	it("uses nested raw upstream inference cost for vercel ai gateway", async () => {
@@ -4103,12 +4117,14 @@ describe("sdk-gateway", () => {
 			}),
 		);
 
-		expect(events).toContainEqual({
-			type: "usage",
-			usage: expect.objectContaining({
-				totalCost: 0.0123725,
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				type: "usage",
+				usage: expect.objectContaining({
+					totalCost: 0.0123725,
+				}),
 			}),
-		});
+		);
 	});
 
 	it("adds OpenRouter BYOK account fee and upstream provider cost from nested raw usage", async () => {
@@ -4259,14 +4275,16 @@ describe("sdk-gateway", () => {
 			}),
 		);
 
-		expect(events).toContainEqual({
-			type: "usage",
-			usage: expect.objectContaining({
-				inputTokens: 24553,
-				outputTokens: 32,
-				totalCost: 0.0123725,
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				type: "usage",
+				usage: expect.objectContaining({
+					inputTokens: 24553,
+					outputTokens: 32,
+					totalCost: 0.0123725,
+				}),
 			}),
-		});
+		);
 	});
 
 	it("does not emit duplicate usage when finish parts already carry totals", async () => {
@@ -4315,7 +4333,10 @@ describe("sdk-gateway", () => {
 				event.type === "usage",
 		);
 		expect(usageEvents).toHaveLength(1);
-		expect(usageEvents[0]).toEqual({
+		// `toMatchObject` rather than `toEqual`: every usage event also carries
+		// the request's timings, which are a wall clock and are therefore not a
+		// fixed value this assertion can name.
+		expect(usageEvents[0]).toMatchObject({
 			type: "usage",
 			usage: {
 				inputTokens: 1000,
@@ -4364,15 +4385,17 @@ describe("sdk-gateway", () => {
 			}),
 		);
 
-		expect(events).toContainEqual({
-			type: "usage",
-			usage: expect.objectContaining({
-				inputTokens: 15997,
-				outputTokens: 4,
-				cacheWriteTokens: 22,
-				totalCost: 0.0082385,
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				type: "usage",
+				usage: expect.objectContaining({
+					inputTokens: 15997,
+					outputTokens: 4,
+					cacheWriteTokens: 22,
+					totalCost: 0.0082385,
+				}),
 			}),
-		});
+		);
 	});
 
 	it("reads compatible-provider cache usage from nested provider metadata", async () => {
@@ -4416,15 +4439,17 @@ describe("sdk-gateway", () => {
 			}),
 		);
 
-		expect(events).toContainEqual({
-			type: "usage",
-			usage: expect.objectContaining({
-				inputTokens: 10091,
-				outputTokens: 87,
-				cacheReadTokens: 7318,
-				cacheWriteTokens: 2770,
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				type: "usage",
+				usage: expect.objectContaining({
+					inputTokens: 10091,
+					outputTokens: 87,
+					cacheReadTokens: 7318,
+					cacheWriteTokens: 2770,
+				}),
 			}),
-		});
+		);
 	});
 
 	it("prefers LanguageModelUsage inputTokenDetails cache reads", async () => {
@@ -4461,15 +4486,17 @@ describe("sdk-gateway", () => {
 			}),
 		);
 
-		expect(events).toContainEqual({
-			type: "usage",
-			usage: expect.objectContaining({
-				inputTokens: 50,
-				outputTokens: 10,
-				cacheReadTokens: 12,
-				cacheWriteTokens: 0,
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				type: "usage",
+				usage: expect.objectContaining({
+					inputTokens: 50,
+					outputTokens: 10,
+					cacheReadTokens: 12,
+					cacheWriteTokens: 0,
+				}),
 			}),
-		});
+		);
 	});
 
 	it("formats assistant tool calls and tool results into valid AI SDK messages", async () => {
@@ -6049,13 +6076,15 @@ describe("sdk-gateway", () => {
 				cache_control: { type: "ephemeral" },
 			}),
 		);
-		expect(events).toContainEqual({
-			type: "usage",
-			usage: expect.objectContaining({
-				cacheReadTokens: 0,
-				cacheWriteTokens: 10106,
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				type: "usage",
+				usage: expect.objectContaining({
+					cacheReadTokens: 0,
+					cacheWriteTokens: 10106,
+				}),
 			}),
-		});
+		);
 	});
 
 	it.each([

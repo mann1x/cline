@@ -34,7 +34,7 @@ import {
 } from "lucide-react"
 import { MouseEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useSize } from "react-use"
-import { canRestoreWorkspaceFromMessage } from "@/components/chat/chat-view/utils/messageUtils"
+import { canRestoreWorkspaceFromMessage, isTimingsOnlyApiReq } from "@/components/chat/chat-view/utils/messageUtils"
 import { OptionsButtons } from "@/components/chat/OptionsButtons"
 import { WithCopyButton } from "@/components/common/CopyButton"
 import Thumbnails from "@/components/common/Thumbnails"
@@ -60,6 +60,7 @@ import PlanCompletionOutputRow from "./PlanCompletionOutputRow"
 import QuoteButton from "./QuoteButton"
 import ReportBugPreview from "./ReportBugPreview"
 import { RequestStartRow } from "./RequestStartRow"
+import { RequestTimingsRow } from "./RequestTimingsRow"
 import SearchResultsDisplay from "./SearchResultsDisplay"
 import SubagentStatusRow from "./SubagentStatusRow"
 import ThinkingCondensedRow from "./ThinkingCondensedRow"
@@ -828,6 +829,13 @@ export const ChatRowContent = memo(
 			case "say":
 				switch (message.say) {
 					case "api_req_started":
+						// Kept in the list only to carry its timings (see
+						// `isTimingsOnlyApiReq`): render the line and nothing
+						// else, or the reasoning that has its own rows is drawn
+						// a second time here.
+						if (isTimingsOnlyApiReq(message)) {
+							return <RequestTimingsRow message={message} />
+						}
 						return (
 							<RequestStartRow
 								apiReqStreamingFailedMessage={apiReqStreamingFailedMessage}

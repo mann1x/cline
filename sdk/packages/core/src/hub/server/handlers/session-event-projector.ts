@@ -328,6 +328,14 @@ async function projectAgentEvent(
 						cacheReadTokens: agentEvent.cacheReadTokens ?? 0,
 						cacheWriteTokens: agentEvent.cacheWriteTokens ?? 0,
 						totalCost: agentEvent.cost ?? 0,
+						// Named explicitly like everything else in this payload,
+						// which is the trap it is: a field the projector does not
+						// list is a field the hub silently drops, and the display
+						// then works in-process and is empty over the hub.
+						...(agentEvent.reasoningTokens !== undefined
+							? { reasoningTokens: agentEvent.reasoningTokens }
+							: {}),
+						...(agentEvent.timings ? { timings: agentEvent.timings } : {}),
 					},
 					totals: {
 						inputTokens: agentEvent.totalInputTokens,

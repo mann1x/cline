@@ -57,6 +57,7 @@ import {
 	recordProviderRequestCapture,
 	wrapFetchForProviderRequestCapture,
 } from "./provider-request-capture";
+import { mergeRequestTimings, readEngineTimings } from "./request-timings";
 import {
 	applyPromptCacheToLastTextPart,
 	shouldApplyPromptCache,
@@ -1615,6 +1616,12 @@ async function* emitAiSdkEvents(
 ): AsyncIterable<AgentModelEvent> {
 	let sawToolCalls = false;
 	const emittedToolCallIds = new Set<string>();
+	// Timed here rather than around the whole call because this is the span the
+	// user actually waits through: the stream opening to the stream closing.
+	// Every provider gets these two numbers, including the ones that report
+	// nothing of their own.
+	const startedAt = Date.now();
+	let firstContentAt: number | undefined;
 	let finishReason: unknown;
 	let streamError: CapturedStreamError | undefined;
 	let finishUsage: unknown;
@@ -1647,6 +1654,7 @@ async function* emitAiSdkEvents(
 						(part.delta as string | undefined);
 					if (text) {
 						sawVisibleContent = true;
+						firstContentAt ??= Date.now();
 						yield { type: "text-delta", text };
 					}
 					continue;
@@ -1659,6 +1667,7 @@ async function* emitAiSdkEvents(
 						(part.reasoning as string | undefined);
 					if (text) {
 						sawVisibleContent = true;
+						firstContentAt ??= Date.now();
 						yield {
 							type: "reasoning-delta",
 							text,
@@ -1672,6 +1681,7 @@ async function* emitAiSdkEvents(
 					const extracted = extractGeneratedImage(part.file, mediaBudget);
 					if (extracted.kind === "accepted") {
 						sawVisibleContent = true;
+						firstContentAt ??= Date.now();
 						yield {
 							type: "media",
 							media: toGeneratedImageMedia(extracted.image),
@@ -1699,6 +1709,7 @@ async function* emitAiSdkEvents(
 							continue;
 						}
 						sawVisibleContent = true;
+						firstContentAt ??= Date.now();
 						yield {
 							type: "media",
 							media: {
@@ -1761,6 +1772,7 @@ async function* emitAiSdkEvents(
 							`provider_tool_${nanoid()}`;
 						observationalProviderToolCallIds.add(toolCallId);
 						sawVisibleContent = true;
+						firstContentAt ??= Date.now();
 						yield {
 							type: "tool-call-delta",
 							toolCallId,
@@ -1772,6 +1784,7 @@ async function* emitAiSdkEvents(
 					}
 					sawToolCalls = true;
 					sawVisibleContent = true;
+					firstContentAt ??= Date.now();
 					const toolCallId =
 						(part.toolCallId as string | undefined) ??
 						(part.id as string | undefined) ??
@@ -1854,6 +1867,7 @@ async function* emitAiSdkEvents(
 					) {
 						if (part.preliminary !== true) {
 							sawVisibleContent = true;
+							firstContentAt ??= Date.now();
 							yield {
 								type: "tool-result",
 								toolCallId: toolCallId ?? `provider_tool_${nanoid()}`,
@@ -2047,6 +2061,7 @@ async function* emitAiSdkEvents(
 			const active = activeProjectedModelToolCalls.get(toolCallId);
 			if (!active) continue;
 			sawVisibleContent = true;
+			firstContentAt ??= Date.now();
 			for (const media of projection.media) {
 				yield { type: "media", media };
 			}
@@ -2109,9 +2124,24 @@ async function* emitAiSdkEvents(
 	}
 
 	if (usageToEmit) {
+		// Read from the finish part's metadata directly rather than from
+		// `metadataToUse`, which is only populated on the fallback paths above
+		// and is deliberately left alone here: it feeds cost extraction, and a
+		// timing display is not a reason to change how anything is billed.
+		const engineTimings = readEngineTimings(finishProviderMetadata);
+		const completedAt = Date.now();
 		yield {
 			type: "usage",
 			usage: normalizeUsage(usageToEmit, metadataToUse, pricingValue),
+			timings: mergeRequestTimings(
+				{
+					requestMs: completedAt - startedAt,
+					...(firstContentAt !== undefined
+						? { firstTokenMs: firstContentAt - startedAt }
+						: {}),
+				},
+				engineTimings,
+			),
 		};
 	}
 

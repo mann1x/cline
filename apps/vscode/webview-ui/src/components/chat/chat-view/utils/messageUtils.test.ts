@@ -231,3 +231,66 @@ describe("reasoning that arrives while a tool group is open", () => {
 		expect(grouped.some((item) => isToolGroup(item))).toBe(true)
 	})
 })
+
+/**
+ * An `api_req_started` row is invisible padding by default and is filtered
+ * out, which is why the timing line needed the filter and the grouper changed
+ * as well as a component: a row that is dropped or folded into a tool group is
+ * a row nobody ever sees (mann1x/cline#64).
+ */
+describe("request timing rows", () => {
+	const createApiReqMessage = (ts: number, extra: Record<string, unknown> = {}): ClineMessage => ({
+		type: "say",
+		say: "api_req_started",
+		text: JSON.stringify({ tokensIn: 900, tokensOut: 120, cost: 0.01, ...extra }),
+		ts,
+	})
+
+	it("stays filtered out when the display is off", () => {
+		const messages = [createApiReqMessage(1, { timings: { requestMs: 4321 } }), createTextMessage(2, "done")]
+
+		expect(filterVisibleMessages(messages)).toHaveLength(1)
+		expect(filterVisibleMessages(messages, { showRequestTimings: false })).toHaveLength(1)
+	})
+
+	it("is kept when the display is on and the row has timings", () => {
+		const messages = [createApiReqMessage(1, { timings: { requestMs: 4321 } }), createTextMessage(2, "done")]
+
+		const visible = filterVisibleMessages(messages, { showRequestTimings: true })
+		expect(visible).toHaveLength(2)
+		expect(visible[0].say).toBe("api_req_started")
+	})
+
+	it("is still filtered out when the request reported no timings", () => {
+		// Every hosted provider before this shipped, and any request that failed
+		// before usage arrived. An empty row would be worse than no row.
+		const messages = [createApiReqMessage(1), createTextMessage(2, "done")]
+
+		expect(filterVisibleMessages(messages, { showRequestTimings: true })).toHaveLength(1)
+	})
+
+	it("is never absorbed into a tool group", () => {
+		// ToolGroupRenderer reads an api_req row for its cost and renders none
+		// of the row itself, so absorbing it is hiding it.
+		const grouped = groupLowStakesTools([
+			createApiReqMessage(1, { timings: { requestMs: 4321 } }),
+			createToolMessage(2, "readFile"),
+			createToolMessage(3, "listFilesTopLevel"),
+		])
+
+		expect(isToolGroup(grouped[0])).toBe(false)
+		expect((grouped[0] as ClineMessage).say).toBe("api_req_started")
+		expect(grouped.some((item) => isToolGroup(item))).toBe(true)
+	})
+
+	it("keeps absorbing an ordinary api_req row", () => {
+		const grouped = groupLowStakesTools([
+			createApiReqMessage(1),
+			createToolMessage(2, "readFile"),
+			createToolMessage(3, "listFilesTopLevel"),
+		])
+
+		expect(grouped).toHaveLength(1)
+		expect(isToolGroup(grouped[0])).toBe(true)
+	})
+})

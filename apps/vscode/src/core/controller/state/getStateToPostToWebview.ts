@@ -55,6 +55,7 @@ export async function getStateToPostToWebview(controller: {
 	const thinkingCompactionEnabled = stateManager.getGlobalSettingsKey("thinkingCompactionEnabled")
 	const thinkingCompactionPrompt = stateManager.getGlobalSettingsKey("thinkingCompactionPrompt")
 	const cappedThinkingEnabled = stateManager.getGlobalSettingsKey("cappedThinkingEnabled")
+	const showRequestTimings = stateManager.getGlobalSettingsKey("showRequestTimings")
 	const cappedThinkingPrompt = stateManager.getGlobalSettingsKey("cappedThinkingPrompt")
 	const focusChainSettings = stateManager.getGlobalSettingsKey("focusChainSettings")
 	const compactionStrategy = readCompactionStrategyGlobally()
@@ -150,6 +151,7 @@ export async function getStateToPostToWebview(controller: {
 		thinkingCompactionPrompt,
 		defaultThinkingCompactionPrompt: DEFAULT_THINKING_COMPACTION_PROMPT,
 		cappedThinkingEnabled,
+		showRequestTimings,
 		cappedThinkingPrompt,
 		defaultCappedThinkingPrompt: DEFAULT_CAPPED_THINKING_PROMPT,
 		focusChainSettings,

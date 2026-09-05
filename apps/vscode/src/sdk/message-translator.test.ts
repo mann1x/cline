@@ -2346,6 +2346,69 @@ describe("translateSessionEvent — agent_event usage", () => {
 			totalCost: 0.0112674,
 		})
 	})
+
+	// Written to the row whatever the display setting says: the setting decides
+	// what is shown, and recording only while it is on would mean switching it
+	// on showed an empty history (mann1x/cline#64).
+	it("writes the request's timings and reasoning tokens onto the row", () => {
+		const state = new MessageTranslatorState()
+		const event: CoreSessionEvent = {
+			type: "agent_event",
+			payload: {
+				sessionId: "session-1",
+				event: {
+					type: "usage",
+					inputTokens: 900,
+					outputTokens: 120,
+					cacheReadTokens: 0,
+					cacheWriteTokens: 0,
+					cost: 0,
+					reasoningTokens: 64,
+					timings: {
+						requestMs: 17_300,
+						firstTokenMs: 1200,
+						engine: "ollama",
+						generateTokens: 120,
+						generatePerSecond: 77.1,
+					},
+					totalInputTokens: 900,
+					totalOutputTokens: 120,
+					totalCost: 0,
+				} as AgentEvent,
+			},
+		}
+
+		const result = translateSessionEvent(event, state)
+		expect(JSON.parse(result.messages[0].text ?? "{}")).toMatchObject({
+			reasoningTokens: 64,
+			timings: { requestMs: 17_300, engine: "ollama", generatePerSecond: 77.1 },
+		})
+	})
+
+	it("leaves the row exactly as it was for a provider that reports no timings", () => {
+		const state = new MessageTranslatorState()
+		const event: CoreSessionEvent = {
+			type: "agent_event",
+			payload: {
+				sessionId: "session-1",
+				event: {
+					type: "usage",
+					inputTokens: 900,
+					outputTokens: 120,
+					cacheReadTokens: 0,
+					cacheWriteTokens: 0,
+					cost: 0.01,
+					totalInputTokens: 900,
+					totalOutputTokens: 120,
+					totalCost: 0.01,
+				} as AgentEvent,
+			},
+		}
+
+		const row = JSON.parse(translateSessionEvent(event, state).messages[0].text ?? "{}")
+		expect(Object.hasOwn(row, "timings")).toBe(false)
+		expect(Object.hasOwn(row, "reasoningTokens")).toBe(false)
+	})
 })
 
 // ---------------------------------------------------------------------------

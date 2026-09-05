@@ -29,7 +29,7 @@
 import type { CoreSessionEvent } from "@cline/core"
 import { PATCH_MARKERS, projectSessionMessagesForDisplay } from "@cline/core"
 import type { MessageWithMetadata as SdkMessage } from "@cline/llms"
-import { type AgentEvent, formatDisplayUserInput, type ProviderErrorClass } from "@cline/shared"
+import { type AgentEvent, formatDisplayUserInput, type ProviderErrorClass, type RequestTimings } from "@cline/shared"
 import { COMMAND_OUTPUT_STRING } from "@shared/combineCommandSequences"
 import type {
 	ClineApiReqInfo,
@@ -81,6 +81,8 @@ export interface TranslationResult {
 		cacheWrites?: number
 		cacheReads?: number
 		totalCost?: number
+		reasoningTokens?: number
+		timings?: RequestTimings
 	}
 }
 
@@ -93,6 +95,8 @@ function normalizeUsageEvent(usageEvent: {
 	cacheWriteTokens?: number
 	cost?: number
 	totalCost?: number
+	reasoningTokens?: number
+	timings?: RequestTimings
 }): NormalizedUsage {
 	const inputTokens = usageEvent.inputTokens ?? 0
 	const cacheReads = usageEvent.cacheReadTokens ?? 0
@@ -109,6 +113,8 @@ function normalizeUsageEvent(usageEvent: {
 		cacheWrites,
 		cacheReads,
 		totalCost: usageEvent.cost ?? usageEvent.totalCost ?? 0,
+		...(usageEvent.reasoningTokens ? { reasoningTokens: usageEvent.reasoningTokens } : {}),
+		...(usageEvent.timings ? { timings: usageEvent.timings } : {}),
 	}
 }
 
@@ -2061,6 +2067,8 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 				cacheWrites: usageEvent.cacheWrites,
 				cacheReads: usageEvent.cacheReads,
 				cost: usageEvent.totalCost,
+				...(usageEvent.reasoningTokens ? { reasoningTokens: usageEvent.reasoningTokens } : {}),
+				...(usageEvent.timings ? { timings: usageEvent.timings } : {}),
 			}
 			messages.push({
 				ts: state.nextTs(),
@@ -2453,6 +2461,8 @@ function appendPersistedMetricsMessage(
 		cacheReadTokens: message.metrics.cacheReadTokens,
 		cacheWriteTokens: message.metrics.cacheWriteTokens,
 		cost: message.metrics.cost,
+		reasoningTokens: message.metrics.reasoningTokenCount,
+		timings: message.metrics.timings,
 	})
 
 	if (
@@ -2475,6 +2485,8 @@ function appendPersistedMetricsMessage(
 			cacheWrites: usage.cacheWrites,
 			cacheReads: usage.cacheReads,
 			cost: usage.totalCost,
+			...(usage.reasoningTokens ? { reasoningTokens: usage.reasoningTokens } : {}),
+			...(usage.timings ? { timings: usage.timings } : {}),
 		} satisfies ClineApiReqInfo),
 		partial: false,
 	})

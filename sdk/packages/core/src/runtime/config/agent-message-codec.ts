@@ -313,6 +313,10 @@ function metricsToAgentMetrics(
 		cacheReadTokens: metrics.cacheReadTokens ?? 0,
 		cacheWriteTokens: metrics.cacheWriteTokens ?? 0,
 		cost: metrics.cost,
+		// Both directions, or reopening a task shows the token half of the
+		// per-request numbers and nothing where the timings were.
+		reasoningTokenCount: metrics.reasoningTokenCount,
+		timings: metrics.timings,
 	};
 }
 
@@ -326,6 +330,8 @@ function agentMetricsToMetrics(
 		cacheReadTokens: metrics.cacheReadTokens,
 		cacheWriteTokens: metrics.cacheWriteTokens,
 		cost: metrics.cost,
+		reasoningTokenCount: metrics.reasoningTokenCount,
+		timings: metrics.timings,
 	};
 }
 

@@ -528,6 +528,11 @@ function usageEventFromPayload(payload: Record<string, unknown> | undefined): {
 			cacheReadTokens: usageMetric(delta, "cacheReadTokens"),
 			cacheWriteTokens: usageMetric(delta, "cacheWriteTokens"),
 			cost: finiteNumber(delta?.totalCost),
+			reasoningTokens: finiteNumber(delta?.reasoningTokens),
+			timings:
+				delta?.timings && typeof delta.timings === "object"
+					? (delta.timings as Extract<AgentEvent, { type: "usage" }>["timings"])
+					: undefined,
 			totalInputTokens: usageMetric(totals, "inputTokens"),
 			totalOutputTokens: usageMetric(totals, "outputTokens"),
 			totalCacheReadTokens: usageMetric(totals, "cacheReadTokens"),

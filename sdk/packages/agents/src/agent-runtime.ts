@@ -28,6 +28,7 @@ import type {
 	AgentRuntimeConfig as BaseAgentRuntimeConfig,
 	CaptureTaskLifecycleEventInput,
 	ProviderErrorClass,
+	RequestTimings,
 	TelemetryProperties,
 	ToolApprovalResult,
 	ToolPolicy,
@@ -693,6 +694,12 @@ export class AgentRuntime {
 		messages: [] as AgentMessage[],
 		pendingToolCalls: [] as string[],
 		usage: cloneUsage(DEFAULT_USAGE),
+		/**
+		 * Timings for the most recent model request, kept apart from `usage`
+		 * because they replace rather than accumulate: a duration is a property
+		 * of one request, and two of them do not sum to anything meaningful.
+		 */
+		lastRequestTimings: undefined as RequestTimings | undefined,
 		lastError: undefined as string | undefined,
 		lastErrorClass: undefined as ProviderErrorClass | undefined,
 		/**
@@ -1911,6 +1918,9 @@ export class AgentRuntime {
 		finishReason: AgentModelFinishReason;
 	}> {
 		const usageBeforeModel = cloneUsage(this.state.usage);
+		// Cleared, not carried: a request that reports no timings must show
+		// none, rather than the previous request's stamped onto it.
+		this.state.lastRequestTimings = undefined;
 		const modelRequestMetadata = omitUndefinedValues({
 			distinctId: trimNonEmpty(this.config.distinctId),
 			clientName: trimNonEmpty(this.config.clientName),
@@ -2189,7 +2199,7 @@ export class AgentRuntime {
 					break;
 				}
 				case "usage": {
-					await this.updateUsage(event.usage);
+					await this.updateUsage(event.usage, event.timings);
 					break;
 				}
 				case "finish": {
@@ -2261,6 +2271,13 @@ export class AgentRuntime {
 		);
 		const metrics = usageDelta(usageBeforeModel, this.state.usage);
 		if (metrics) {
+			// The timings belong to the request that produced this message, so
+			// they travel with it. Without that, reopening a task from history
+			// shows the token half of the numbers and an empty space where the
+			// timing half was.
+			if (this.state.lastRequestTimings) {
+				metrics.timings = this.state.lastRequestTimings;
+			}
 			message.metrics = metrics;
 			this.captureUnexpectedReasoningTokens(request, metrics);
 		}
@@ -2512,7 +2529,10 @@ export class AgentRuntime {
 		return message;
 	}
 
-	private async updateUsage(usage: Partial<AgentUsage>): Promise<void> {
+	private async updateUsage(
+		usage: Partial<AgentUsage>,
+		timings?: RequestTimings,
+	): Promise<void> {
 		this.state.usage = {
 			inputTokens: this.state.usage.inputTokens + (usage.inputTokens ?? 0),
 			outputTokens: this.state.usage.outputTokens + (usage.outputTokens ?? 0),
@@ -2525,10 +2545,17 @@ export class AgentRuntime {
 				(usage.reasoningTokenCount ?? 0),
 			totalCost: (this.state.usage.totalCost ?? 0) + (usage.totalCost ?? 0),
 		};
+		// Not accumulated with the totals above, and deliberately: durations and
+		// rates do not add up across requests, so this describes the single
+		// request this update came from and is replaced by the next one.
+		if (timings) {
+			this.state.lastRequestTimings = timings;
+		}
 		await this.emit({
 			type: "usage-updated",
 			snapshot: this.snapshot(),
 			usage: cloneUsage(this.state.usage),
+			...(timings ? { timings } : {}),
 		});
 	}
 

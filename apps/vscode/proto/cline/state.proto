@@ -302,6 +302,7 @@ message Settings {
   optional bool agents_model_enabled = 198;
   optional string agents_mode_api_configuration = 199;
   optional string atomic_protocol_settings = 200;
+  optional bool show_request_timings = 201;
 }
 
 message State {
@@ -466,6 +467,7 @@ message UpdateSettingsRequest {
   optional QaCredentialsUpdate qa_credentials = 58;
   optional AtomicProtocolSettings atomic_protocol_settings = 59;
   optional bool web_search_enabled = 60;
+  optional bool show_request_timings = 61;
 }
 
 // Whether a run may finish with a file it changed and never checked.

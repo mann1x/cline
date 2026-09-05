@@ -201,6 +201,10 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			controller.stateManager.setGlobalState("thinkingCompactionPrompt", request.thinkingCompactionPrompt)
 		}
 
+		if (request.showRequestTimings !== undefined) {
+			controller.stateManager.setGlobalState("showRequestTimings", request.showRequestTimings)
+		}
+
 		if (request.cappedThinkingEnabled !== undefined) {
 			controller.stateManager.setGlobalState("cappedThinkingEnabled", request.cappedThinkingEnabled)
 		}

@@ -11,6 +11,7 @@ import { wrapLanguageModel } from "ai";
 import { ensureFetch, resolveApiKey } from "../http";
 import { splitToolImagesMiddleware } from "../middleware/split-tool-images";
 import { isOpenAIReasoningEraModelId } from "../model-facts";
+import { llamaCppTimingsMetadataExtractor } from "./llamacpp-timings";
 import type { ProviderFactoryResult } from "./types";
 
 type FetchInput = Parameters<typeof fetch>[0];
@@ -248,6 +249,11 @@ export async function createOpenAICompatibleProviderModule(
 		...(providerFetch ? { fetch: providerFetch } : {}),
 		includeUsage: true,
 		transformRequestBody: withMaxCompletionTokensForReasoningModels,
+		// A llama.cpp server reached through this generic form is still a
+		// llama.cpp server, and it puts `timings` on its final frame like any
+		// other. The extractor looks for one field and returns nothing when it
+		// is absent, which is every hosted provider on this path.
+		metadataExtractor: llamaCppTimingsMetadataExtractor,
 	} as never);
 	const useOpenRouterImageTransport =
 		context.provider.metadata?.imageTransport === "openrouter" &&

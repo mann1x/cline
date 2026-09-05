@@ -6,6 +6,7 @@ import type {
 } from "@cline/shared";
 import { wrapLanguageModel } from "ai";
 import { splitToolImagesMiddleware } from "../middleware/split-tool-images";
+import { llamaCppTimingsMetadataExtractor } from "./llamacpp-timings";
 import { localStreamFetch, resolveLocalStreamDispatcher } from "./ollama";
 import { getPolykvSession, PolykvSaturatedError } from "./polykv";
 import type { ProviderFactoryResult } from "./types";
@@ -228,6 +229,7 @@ export async function createOpencotiProviderModule(
 		...(config.headers ? { headers: config.headers } : {}),
 		fetch: providerFetch,
 		includeUsage: true,
+		metadataExtractor: llamaCppTimingsMetadataExtractor,
 	} as never);
 	return {
 		operations: {

@@ -97,7 +97,6 @@ function makeContext(options?: ContextOverrides): GatewayProviderContext {
 			providerId,
 			contextWindow: options?.contextWindow,
 			maxOutputTokens: options?.maxOutputTokens,
-			contextWindow: options?.contextWindow,
 			reasoningOptions: options?.reasoningOptions,
 			capabilities: options?.capabilities,
 			metadata: modelMetadata,

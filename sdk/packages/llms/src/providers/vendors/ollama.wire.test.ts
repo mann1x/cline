@@ -24,6 +24,7 @@ import type {
 	GatewayResolvedProviderConfig,
 } from "@cline/shared";
 import { describe, expect, it } from "vitest";
+import { readEngineTimings } from "../request-timings";
 import { createOllamaProviderModule } from "./ollama";
 
 interface OllamaChatRequest {
@@ -151,6 +152,39 @@ describe("ollama wire contract (real provider package)", () => {
 			providerOptions: { ollama: { think: false } },
 		});
 		expect(disabled.requests[0].think).toBe(false);
+	});
+
+	// The package parses these fields into its own zod schemas and then drops
+	// every one of them, forwarding a response id as the whole of its provider
+	// metadata. `patches/ollama-ai-provider-v2@4.0.1.patch` puts them back.
+	// Driven through the real package on purpose: a reinstall that loses the
+	// patch would leave the timing display silently empty, and only a test
+	// against the dependency itself catches that.
+	it("forwards the timings Ollama reports on its done chunk", async () => {
+		const { parts } = await streamThroughVendor({
+			responseLines: [
+				textChunk("hi"),
+				{
+					...DONE_CHUNK,
+					total_duration: 46_322_892_038,
+					load_duration: 672_995_263,
+					prompt_eval_count: 15_696,
+					prompt_eval_duration: 17_799_125_000,
+					eval_count: 2141,
+					eval_duration: 27_776_027_000,
+				},
+			],
+			prompt: userText("hello"),
+		});
+
+		const finish = parts.find((part) => part.type === "finish");
+		const metadata = (finish as { providerMetadata?: Record<string, unknown> })
+			?.providerMetadata;
+		const timings = readEngineTimings(metadata);
+		expect(timings?.engine).toBe("ollama");
+		expect(timings?.promptTokens).toBe(15_696);
+		expect(timings?.generateTokens).toBe(2141);
+		expect(timings?.generatePerSecond).toBeCloseTo(77.1, 0);
 	});
 
 	it("routes options.num_ctx through the provider bucket", async () => {

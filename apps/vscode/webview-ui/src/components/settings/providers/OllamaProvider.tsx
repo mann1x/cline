@@ -16,6 +16,7 @@ import { ApiKeyField } from "../common/ApiKeyField"
 import { BaseUrlField } from "../common/BaseUrlField"
 import { DebouncedTextArea } from "../common/DebouncedTextArea"
 import { DebouncedTextField } from "../common/DebouncedTextField"
+import { RequestTimingsToggle } from "../common/RequestTimingsToggle"
 import OllamaModelPicker from "../OllamaModelPicker"
 import { useApiConfigurationScope } from "../utils/ApiConfigurationScopeContext"
 import { updateSetting } from "../utils/settingsHandlers"
@@ -756,6 +757,11 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 									Clear all sampling parameters
 								</VSCodeLink>
 							)}
+							{/* Ollama is one of the two engines that reports its own
+							    timings, so the switch is offered where those numbers
+							    come from -- it is a single global setting, not a
+							    per-provider one. */}
+							<RequestTimingsToggle engineNote="Ollama also reports its own model load time and the split between reading the prompt and generating the answer, which are shown when you expand the line." />
 						</div>
 					)}
 				</div>

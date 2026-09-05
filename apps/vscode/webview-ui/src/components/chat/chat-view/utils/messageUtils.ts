@@ -111,9 +111,30 @@ export function canRestoreWorkspaceFromMessage(messages: ClineMessage[], message
 }
 
 /**
+ * Whether an `api_req_started` row is being kept only to show its timings.
+ *
+ * True for a completed request with nothing else to say: no cancellation, no
+ * streaming failure. Everything else such a row could render -- the model's
+ * reasoning, the tools in flight -- already has its own rows, so it must be
+ * rendered as the timing line alone and not through `RequestStartRow`, which
+ * would draw the reasoning a second time.
+ */
+export function isTimingsOnlyApiReq(message: ClineMessage): boolean {
+	if (message.say !== "api_req_started") {
+		return false
+	}
+	try {
+		const info = JSON.parse(message.text || "{}")
+		return !info.cancelReason && !info.streamingFailedMessage && Boolean(info.timings)
+	} catch {
+		return false
+	}
+}
+
+/**
  * Filter messages that should be visible in the chat
  */
-export function filterVisibleMessages(messages: ClineMessage[]): ClineMessage[] {
+export function filterVisibleMessages(messages: ClineMessage[], options?: { showRequestTimings?: boolean }): ClineMessage[] {
 	return messages.filter((message, index, arr) => {
 		if (isDuplicateAskOptionEcho(message, arr[index - 1])) {
 			return false
@@ -148,11 +169,16 @@ export function filterVisibleMessages(messages: ClineMessage[]): ClineMessage[] 
 			case "api_req_started": {
 				// api_req_started rows only render visible content for errors/cancels.
 				// Reasoning has its own standalone ChatRows. Everything else renders
-				// as invisible padding. Filter out unless there's an error.
+				// as invisible padding. Filter out unless there's an error -- or
+				// unless the user asked to see what each request cost in time, which
+				// is the one thing only this row knows.
 				try {
 					const info = JSON.parse(message.text || "{}")
 					if (info.cancelReason || info.streamingFailedMessage) {
 						break // keep - has error content
+					}
+					if (options?.showRequestTimings && info.timings) {
+						break // keep - carries the timing line
 					}
 				} catch {
 					break // keep on parse error to be safe
@@ -615,6 +641,17 @@ export function groupLowStakesTools(groupedMessages: (ClineMessage | ClineMessag
 
 		// API request - absorb if followed by low-stakes tools, otherwise render
 		if (messageType === "api_req_started") {
+			// A row kept for its timings is never absorbed, for the same reason
+			// reasoning is not: `ToolGroupRenderer` reads an api_req row for its
+			// cost and renders nothing of the row itself, so absorbing it is
+			// hiding it. It survived the filter precisely because it has
+			// something to show.
+			if (isTimingsOnlyApiReq(message)) {
+				commitToolGroup()
+				flushPending()
+				result.push(message)
+				continue
+			}
 			if (isApiReqFollowedOnlyByLowStakesTools(i, groupedMessages)) {
 				absorbPending()
 				pendingApiReq.push(message)

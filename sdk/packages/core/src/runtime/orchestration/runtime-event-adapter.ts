@@ -62,6 +62,7 @@ import type {
 	AgentToolResultPart,
 	AgentUsage,
 	LegacyAgentUsage,
+	RequestTimings,
 } from "@cline/shared";
 
 // =============================================================================
@@ -242,7 +243,7 @@ export class RuntimeEventAdapter {
 			case "tool-finished":
 				return this.translateToolFinished(event);
 			case "usage-updated":
-				return this.translateUsage(event.usage);
+				return this.translateUsage(event.usage, event.timings);
 			case "status-notice":
 				return [
 					{
@@ -353,13 +354,19 @@ export class RuntimeEventAdapter {
 		];
 	}
 
-	private translateUsage(next: AgentUsage): AgentEvent[] {
+	private translateUsage(
+		next: AgentUsage,
+		timings?: RequestTimings,
+	): AgentEvent[] {
 		const deltaInput = next.inputTokens - this.lastUsage.inputTokens;
 		const deltaOutput = next.outputTokens - this.lastUsage.outputTokens;
 		const deltaCacheRead =
 			next.cacheReadTokens - this.lastUsage.cacheReadTokens;
 		const deltaCacheWrite =
 			next.cacheWriteTokens - this.lastUsage.cacheWriteTokens;
+		const deltaReasoning =
+			(next.reasoningTokenCount ?? 0) -
+			(this.lastUsage.reasoningTokenCount ?? 0);
 		const prevCost = this.lastUsage.totalCost ?? 0;
 		const nextCost = next.totalCost ?? 0;
 		const deltaCost = nextCost - prevCost;
@@ -368,6 +375,7 @@ export class RuntimeEventAdapter {
 			outputTokens: next.outputTokens,
 			cacheReadTokens: next.cacheReadTokens,
 			cacheWriteTokens: next.cacheWriteTokens,
+			reasoningTokenCount: next.reasoningTokenCount,
 			totalCost: next.totalCost,
 		};
 		return [
@@ -380,6 +388,15 @@ export class RuntimeEventAdapter {
 				cacheWriteTokens:
 					deltaCacheWrite === 0 ? undefined : Math.max(0, deltaCacheWrite),
 				cost: deltaCost === 0 ? undefined : deltaCost,
+				// Reported where the provider reports it -- OpenAI's
+				// `reasoning_tokens`, Anthropic's extended thinking, Ollama on a
+				// thinking model. It has been extracted this far for a while and
+				// then dropped here, which is why a thinking model's output
+				// token count never explained itself.
+				reasoningTokens:
+					deltaReasoning === 0 ? undefined : Math.max(0, deltaReasoning),
+				// Not a delta: this update carries exactly one request's timings.
+				...(timings ? { timings } : {}),
 				totalInputTokens: next.inputTokens,
 				totalOutputTokens: next.outputTokens,
 				totalCacheReadTokens:

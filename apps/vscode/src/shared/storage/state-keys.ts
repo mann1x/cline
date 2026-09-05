@@ -323,6 +323,10 @@ const USER_SETTINGS_FIELDS = {
 	 * reasoning it replaces.
 	 */
 	cappedThinkingEnabled: { default: true as boolean },
+	// Off by default: for anyone not chasing a slow local model the timing
+	// panel is a row of numbers under every request that answers a question
+	// they never asked.
+	showRequestTimings: { default: false as boolean },
 	cappedThinkingPrompt: { default: "" as string },
 	subagentsEnabled: { default: false as boolean },
 	worktreesEnabled: { default: false as boolean },

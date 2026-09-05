@@ -18,6 +18,7 @@ import type {
 	DiscardedTurnCondensation,
 	DiscardedTurnInput,
 	ProviderErrorClass,
+	RequestTimings,
 } from "../agent";
 import type { ExtensionContext } from "../extensions/context";
 import type {
@@ -170,6 +171,10 @@ export interface AgentUsageEvent extends AgentEventMetadata {
 	cacheWriteTokens?: number;
 	/** Cost for this turn */
 	cost?: number;
+	/** Hidden reasoning tokens for this turn, where the provider reports them. */
+	reasoningTokens?: number;
+	/** What this turn's request cost in time. See `RequestTimings`. */
+	timings?: RequestTimings;
 
 	/** Accumulated totals */
 	totalInputTokens: number;

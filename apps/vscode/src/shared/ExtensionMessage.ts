@@ -1,6 +1,6 @@
 // type that represents json data that is sent from extension to webview, called ExtensionMessage and has 'type' enum which can be 'plusButtonClicked' or 'settingsButtonClicked' or 'hello'
 
-import type { GeneratedMedia } from "@cline/shared"
+import type { GeneratedMedia, RequestTimings } from "@cline/shared"
 import { WorkspaceRoot } from "@shared/multi-root/types"
 import { RemoteConfigFields } from "@shared/storage/state-keys"
 import type { Environment } from "../config"
@@ -158,6 +158,7 @@ export interface ExtensionState {
 	defaultThinkingCompactionPrompt?: string
 	/** Whether a turn that ran out of thinking budget has its reasoning condensed. */
 	cappedThinkingEnabled?: boolean
+	showRequestTimings?: boolean
 	/** Replaces the built-in continuation-note instruction; empty means default. */
 	cappedThinkingPrompt?: string
 	/** The built-in continuation-note instruction, so the field can show what it replaces. */
@@ -431,6 +432,17 @@ export interface ClineApiReqInfo {
 	cacheWrites?: number
 	cacheReads?: number
 	cost?: number
+	/** Hidden reasoning tokens, where the provider reports them separately. */
+	reasoningTokens?: number
+	/**
+	 * What this request cost in time.
+	 *
+	 * Always written when the request produced usage, whether or not the user
+	 * has the display switched on: the switch decides what is shown, not what
+	 * is recorded, so turning it on shows the history that was already there
+	 * rather than only requests made from that moment on.
+	 */
+	timings?: RequestTimings
 	cancelReason?: ClineApiReqCancelReason
 	streamingFailedMessage?: string
 }

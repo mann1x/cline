@@ -6,6 +6,7 @@
  * converted to any provider's native format.
  */
 
+import type { RequestTimings } from "../agent";
 import type { GeneratedMedia } from "./media";
 
 /**
@@ -159,6 +160,10 @@ export interface MessageWithMetadata extends Message {
 		cacheReadTokens?: number;
 		cacheWriteTokens?: number;
 		cost?: number;
+		/** Hidden reasoning tokens, where the provider reports them. */
+		reasoningTokenCount?: number;
+		/** What the request that produced this message cost in time. */
+		timings?: RequestTimings;
 	};
 	/** Timestamp of when the message was created */
 	ts?: number;

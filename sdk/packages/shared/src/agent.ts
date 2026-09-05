@@ -109,6 +109,51 @@ export interface AgentTokenUsage {
 }
 
 /**
+ * What one provider request cost in time, next to what it cost in tokens.
+ *
+ * Two independent sources, and the difference between them is the point.
+ * `requestMs` and `firstTokenMs` are measured by Cline around its own stream,
+ * so every provider has them. Everything below `engine` is the engine's own
+ * accounting, reported by the two that publish it -- Ollama on its final
+ * `done` chunk, llama.cpp in the `timings` object on its last SSE frame -- and
+ * is absent everywhere else rather than guessed at.
+ *
+ * Keeping both is what makes either readable: a request whose `requestMs` far
+ * exceeds `engineTotalMs` spent the difference queueing, and one whose
+ * `promptMs` dwarfs `generateMs` is re-reading a prompt the cache should have
+ * held. Neither question can be asked of a single number.
+ *
+ * Durations are milliseconds throughout. Ollama reports nanoseconds and
+ * llama.cpp milliseconds; both are converted at the edge so nothing
+ * downstream has to know which engine answered.
+ */
+export interface RequestTimings {
+	/** Wall time Cline measured for the request, start of stream to end. */
+	requestMs?: number;
+	/** Time from the start of the request to its first content of any kind. */
+	firstTokenMs?: number;
+	/** Which engine reported the fields below; absent when only Cline timed it. */
+	engine?: "ollama" | "llamacpp";
+	/** Time spent loading the model before any work began (Ollama). */
+	loadMs?: number;
+	/** Prompt evaluation. */
+	promptTokens?: number;
+	promptMs?: number;
+	promptPerSecond?: number;
+	/** Generation. */
+	generateTokens?: number;
+	generateMs?: number;
+	generatePerSecond?: number;
+	/** The engine's own total, which includes admission Cline cannot see. */
+	engineTotalMs?: number;
+	/** Prompt tokens served from the engine's KV cache instead of recomputed. */
+	cachedTokens?: number;
+	/** Speculative decoding: tokens drafted, and how many survived (llama.cpp). */
+	draftTokens?: number;
+	draftAcceptedTokens?: number;
+}
+
+/**
  * Canonical `AgentUsage` shape for the new runtime.
  *
  * This supersedes the legacy `AgentUsage` (now `LegacyAgentUsage` in
@@ -132,6 +177,12 @@ export interface AgentMessage {
 	};
 	metrics?: AgentTokenUsage & {
 		cost?: number;
+		/**
+		 * What the request that produced this message cost in time. Carried on
+		 * the message rather than only on the live event so a task reopened
+		 * from history shows the same numbers it showed while it ran.
+		 */
+		timings?: RequestTimings;
 	};
 }
 
@@ -338,6 +389,8 @@ export type AgentModelEvent =
 	| {
 			type: "usage";
 			usage: Partial<AgentUsage>;
+			/** What this one request cost in time. See `RequestTimings`. */
+			timings?: RequestTimings;
 	  }
 	| {
 			type: "finish";
@@ -773,6 +826,16 @@ export type AgentRuntimeEvent =
 			type: "usage-updated";
 			snapshot: AgentRuntimeStateSnapshot;
 			usage: AgentUsage;
+			/**
+			 * The one request whose usage this update carries, timed.
+			 *
+			 * Separate from `usage` because `usage` is the running total and
+			 * these are not addable: two requests do not have a duration
+			 * between them, and a rate is not the sum of two rates. Each
+			 * update describes exactly one request, so this replaces rather
+			 * than accumulates.
+			 */
+			timings?: RequestTimings;
 	  }
 	| {
 			type: "turn-finished";
