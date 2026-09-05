@@ -8,6 +8,7 @@ import { createReadStream } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { createInterface } from "node:readline";
+import { Readable } from "node:stream";
 import type { AgentToolContext } from "@cline/shared";
 import { resolveExistingFilePath } from "@cline/shared/storage";
 import type { ReadFileRequest } from "../schemas";
@@ -109,7 +110,21 @@ const MAX_UNRANGED_LINE_SCAN = 50_000;
 const MAX_LINE_COUNT_SCAN = 500_000;
 
 /** A read's text together with the line span it actually returned. */
-interface ReadWindow {
+/**
+ * Where a read's lines come from.
+ *
+ * A path, for every read but one: the change protocol serves `revision:
+ * "base"` out of the transaction's snapshot, which is held in memory and has
+ * no path to stream from. Both go through the same windowing, so a base read
+ * is capped, numbered and reported exactly like the working read it exists to
+ * be compared against — a base revision that paginated differently would be
+ * unreadable next to the file it is a revision of.
+ */
+export type ReadTextSource =
+	| { readonly kind: "file"; readonly path: string }
+	| { readonly kind: "text"; readonly text: string };
+
+export interface ReadWindow {
 	text: string;
 	firstLine: number;
 	lastLine: number;
@@ -132,7 +147,7 @@ function getAbortError(signal: AbortSignal): Error {
 }
 
 async function readTextWindow(
-	filePath: string,
+	source: ReadTextSource,
 	encoding: BufferEncoding,
 	includeLineNumbers: boolean,
 	startLine: number | null | undefined,
@@ -164,7 +179,13 @@ async function readTextWindow(
 		? String(maxCapturedLineNumber).length + 3
 		: 0;
 
-	const stream = createReadStream(filePath, { encoding });
+	// `Readable.from([text])`, with the array: handed the string bare it is
+	// iterated as an iterable of characters, and every line arrives one letter
+	// at a time.
+	const stream =
+		source.kind === "file"
+			? createReadStream(source.path, { encoding })
+			: Readable.from([source.text]);
 	const reader = createInterface({
 		input: stream,
 		crlfDelay: Number.POSITIVE_INFINITY,
@@ -367,7 +388,7 @@ export function createFileReadExecutor(
 		}
 
 		const window = await readTextWindow(
-			resolvedPath,
+			{ kind: "file", path: resolvedPath },
 			encoding,
 			withLineNumbers,
 			start_line,
@@ -385,4 +406,30 @@ export function createFileReadExecutor(
 		}
 		return window.text;
 	};
+}
+
+/**
+ * Window a string exactly as a read of the same file on disk would.
+ *
+ * For content that has no path to stream from — the change protocol's
+ * transaction snapshot, which holds what each file said when the transaction
+ * opened. Sharing the windowing with the disk path is the whole point: a base
+ * revision that numbered or truncated its lines differently could not be laid
+ * next to the working file, which is the only reason to read one.
+ */
+export async function readTextWindowFromText(options: {
+	text: string;
+	includeLineNumbers?: boolean;
+	startLine?: number | null;
+	endLine?: number | null;
+	signal?: AbortSignal;
+}): Promise<ReadWindow> {
+	return readTextWindow(
+		{ kind: "text", text: options.text },
+		"utf8",
+		options.includeLineNumbers ?? true,
+		options.startLine,
+		options.endLine,
+		options.signal,
+	);
 }

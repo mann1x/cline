@@ -364,6 +364,52 @@ export const EMPTY_READ_EXPLANATION =
  *
  * Reads the content of one or more files from the filesystem.
  */
+/**
+ * Every shape `read_files` accepts, reduced to the list of reads it means.
+ *
+ * Exported because the change protocol serves `revision: "base"` from the
+ * transaction's snapshot rather than from disk, and it has to understand a
+ * call exactly as the tool itself does. A second parser would drift, and it
+ * would drift silently: the two only disagree on the odd shapes -- a bare
+ * string, a bracketed path list, a range that arrived detached from its path
+ * -- which are the calls a smaller model actually makes.
+ */
+export function readFileRequestsFrom(input: unknown): ReadFileRequest[] {
+	const validate = validateWithZod(
+		ReadFilesInputUnionSchema,
+		coalesceOrphanReadRanges(expandBracketedPathLists(input)),
+	);
+	if (typeof validate === "string") {
+		return [{ path: validate }];
+	}
+	if (Array.isArray(validate)) {
+		return validate.map((value) =>
+			typeof value === "string" ? { path: value } : value,
+		);
+	}
+	if ("files" in validate) {
+		const files = Array.isArray(validate.files)
+			? validate.files
+			: [validate.files];
+		return files.map((file) =>
+			typeof file === "string" ? { path: file } : file,
+		);
+	}
+	if ("file_paths" in validate) {
+		const filePaths = Array.isArray(validate.file_paths)
+			? validate.file_paths
+			: [validate.file_paths];
+		return filePaths.map((path) => ({ path }));
+	}
+	if ("paths" in validate) {
+		const paths = Array.isArray(validate.paths)
+			? validate.paths
+			: [validate.paths];
+		return paths.map((path) => (typeof path === "string" ? { path } : path));
+	}
+	return [validate];
+}
+
 export function createReadFilesTool(
 	executor: FileReadExecutor,
 	config: Pick<DefaultToolsConfig, "fileReadTimeoutMs"> = {},
@@ -387,39 +433,7 @@ export function createReadFilesTool(
 		retryable: true,
 		maxRetries: 1,
 		execute: async (input, context) => {
-			const validate = validateWithZod(
-				ReadFilesInputUnionSchema,
-				coalesceOrphanReadRanges(expandBracketedPathLists(input)),
-			);
-			let requests: ReadFileRequest[];
-			if (typeof validate === "string") {
-				requests = [{ path: validate }];
-			} else if (Array.isArray(validate)) {
-				requests = validate.map((value) =>
-					typeof value === "string" ? { path: value } : value,
-				);
-			} else if ("files" in validate) {
-				const files = Array.isArray(validate.files)
-					? validate.files
-					: [validate.files];
-				requests = files.map((file) =>
-					typeof file === "string" ? { path: file } : file,
-				);
-			} else if ("file_paths" in validate) {
-				const filePaths = Array.isArray(validate.file_paths)
-					? validate.file_paths
-					: [validate.file_paths];
-				requests = filePaths.map((path) => ({ path }));
-			} else if ("paths" in validate) {
-				const paths = Array.isArray(validate.paths)
-					? validate.paths
-					: [validate.paths];
-				requests = paths.map((path) =>
-					typeof path === "string" ? { path } : path,
-				);
-			} else {
-				requests = [validate];
-			}
+			const requests = readFileRequestsFrom(input);
 
 			return Promise.all(
 				requests.map(async (request): Promise<ToolOperationResult> => {

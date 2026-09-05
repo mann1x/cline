@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { createFileReadExecutor } from "./file-read";
+import { createFileReadExecutor, readTextWindowFromText } from "./file-read";
 
 describe("createFileReadExecutor", () => {
 	it("reads a file from an absolute path", async () => {
@@ -369,5 +369,43 @@ describe("createFileReadExecutor", () => {
 		} finally {
 			await fs.rm(dir, { recursive: true, force: true });
 		}
+	});
+});
+
+describe("windowing text that has no file to stream from", () => {
+	// The change protocol reads a file as its transaction found it, and that
+	// copy lives in memory. It goes through the same windowing as a read from
+	// disk, so the two can be laid side by side.
+	it("numbers and ranges a string exactly as a file", async () => {
+		const window = await readTextWindowFromText({
+			text: "alpha\nbravo\ncharlie\ndelta\n",
+			startLine: 2,
+			endLine: 3,
+		});
+
+		expect(window.text).toContain("2 | bravo");
+		expect(window.text).toContain("3 | charlie");
+		expect(window.text).not.toContain("alpha");
+		expect(window).toMatchObject({ firstLine: 2, lastLine: 3 });
+	});
+
+	// `Readable.from(text)` iterates a bare string one character at a time, so
+	// every line would arrive as a single letter and the whole window would be
+	// one character per line. The array wrapper is what stops that, and this is
+	// the test that would catch losing it.
+	it("keeps whole lines rather than one character each", async () => {
+		const window = await readTextWindowFromText({
+			text: "alpha\nbravo\n",
+			includeLineNumbers: false,
+		});
+
+		expect(window.text.split("\n")[0]).toBe("alpha");
+		expect(window.lastLine).toBe(2);
+	});
+
+	it("says how long the text is, as a file read does", async () => {
+		const window = await readTextWindowFromText({ text: "one\ntwo\n" });
+
+		expect(window.text).toContain("shown in full");
 	});
 });
