@@ -91,6 +91,15 @@ export function buildSdkProviderConfig(
 		// ignore an explicit Request Timeout setting and load models with
 		// Ollama's 4096-token server default.
 		...(providerId === "ollama" ? resolveOllamaProviderConfig(configuration, modelId, options?.visionProviderSettings) : {}),
+		// Everything built here is a standalone utility call — the image
+		// describer, the commit-message writer, the prompt-template generator.
+		// The task loop does not come through this function; it goes through
+		// ClineCore (cline-session-factory.ts). So the flag belongs on the shape
+		// rather than on each caller: a local server serves one request at a
+		// time, and these queue behind the turn they interrupt instead of racing
+		// it. They also never speak for the session — see
+		// `GatewayStreamRequest.conversation`, which they do not set.
+		auxiliary: true,
 	}
 
 	if (options?.disableReasoning) {

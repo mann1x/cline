@@ -105,5 +105,11 @@ describe("ollama-ai-provider-v2 patch contract", () => {
 		// `num_ctx` before the first completion. What this test pins is the
 		// path the package builds for a chat, not the order of the two.
 		expect(requested).toContain("http://localhost:11434/api/chat");
-	});
+		// The 5s default is not enough for this one. It is the only test here
+		// that dynamically imports the vendor module and lets the real package
+		// run, and `bun run test:unit` starts six vitest processes at once: on a
+		// loaded machine that import alone has taken past the deadline, failing
+		// a test that passes in isolation every time. The assertion is the same
+		// either way; the deadline is about the machine, not the contract.
+	}, 30_000);
 });

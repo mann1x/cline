@@ -408,6 +408,8 @@ class GatewayModelAdapter implements AgentModel {
 			),
 			signal: request.signal ?? this.defaults?.signal,
 			auxiliary: this.defaults?.auxiliary,
+			conversation: this.defaults?.conversation,
+			sessionId: this.defaults?.sessionId,
 		});
 	}
 }
@@ -471,10 +473,13 @@ function describeOutputBudget(details: {
 
 interface GatewayOutputCapInput {
 	/**
-	 * Skip the process-wide overflow record. Set for calls the machinery makes
-	 * for itself, whose budget arithmetic says nothing about the conversation's.
+	 * Skip the process-wide overflow record. Set for every request that is not
+	 * the conversation's own, whose budget arithmetic says nothing about the
+	 * conversation's.
 	 */
 	suppressGlobalNotes?: boolean;
+	/** The session the overflow record would describe. */
+	sessionId?: string;
 	requestedMaxTokens?: number;
 	model: Pick<GatewayModelDefinition, "contextWindow" | "maxOutputTokens">;
 	/**
@@ -586,7 +591,7 @@ export function resolveGatewayOutputCap(
 			// below a trigger computed from a different window. Recording it here
 			// means finding the overflow and reporting it are the same act.
 			if (!input.suppressGlobalNotes) {
-				noteContextOverflow(report);
+				noteContextOverflow(report, input.sessionId);
 			}
 			input.onContextOverflow?.(report);
 			// No cap goes out, but the window is still what decided that, and the
@@ -825,9 +830,10 @@ export class DefaultGateway implements Gateway {
 		);
 		const resolveCap = (ceiling: number | undefined): OutputCapReport =>
 			resolveGatewayOutputCap({
-				// An auxiliary call running out of room is its own problem, not a
-				// reason to compact the conversation it was summarising.
-				suppressGlobalNotes: request.auxiliary,
+				// A call that is not the conversation running out of room is its own
+				// problem, not a reason to compact the conversation it was serving.
+				suppressGlobalNotes: !request.conversation,
+				sessionId: request.sessionId,
 				requestedMaxTokens: request.maxTokens,
 				model: resolved.model,
 				// A model that publishes its own ceiling needs nothing learned; the
@@ -931,21 +937,29 @@ export class DefaultGateway implements Gateway {
 			};
 		}
 		const { stream, outputCap } = sent;
-		if (!request.auxiliary) {
+		if (request.conversation) {
 			// Left for the agent loop, which sees the truncation but not the terms
-			// that caused it. Not from an auxiliary call: its cap is its own, and
-			// a conversation turn truncating afterwards would be attributed to it.
-			noteOutputCap(outputCap);
+			// that caused it. Only from the conversation's own request: another
+			// call's cap is its own, and a conversation turn truncating afterwards
+			// would be attributed to it.
+			noteOutputCap(outputCap, request.sessionId);
 		}
 
 		if (request.auxiliary) {
-			// Served identically, but it does not get to speak for the session:
-			// a condenser prompt is not the conversation, and the ratio measured
-			// from one is not the ratio the conversation tokenizes at.
+			// Served identically, but it does not hold the conversation's slot:
+			// a local server runs one request at a time, and a condenser that took
+			// the slot would make the turn it serves wait for it.
 			return toAsyncIterable(stream);
 		}
 		return holdingSlot(
-			calibrateFromUsage(toAsyncIterable(stream), inputChars, reasoningChars),
+			request.conversation
+				? calibrateFromUsage(
+						toAsyncIterable(stream),
+						inputChars,
+						reasoningChars,
+						request.sessionId,
+					)
+				: toAsyncIterable(stream),
 			this.#takeSlot(),
 		);
 	}
@@ -982,13 +996,19 @@ async function* calibrateFromUsage(
 	events: AsyncIterable<AgentModelEvent>,
 	inputChars: number,
 	reasoningChars?: number,
+	sessionId?: string,
 ): AsyncIterable<AgentModelEvent> {
 	for await (const event of events) {
 		if (
 			event.type === "usage" &&
 			isPositiveFiniteNumber(event.usage.inputTokens)
 		) {
-			observeRequestTokens(inputChars, event.usage.inputTokens, reasoningChars);
+			observeRequestTokens(
+				inputChars,
+				event.usage.inputTokens,
+				reasoningChars,
+				sessionId,
+			);
 		}
 		yield event;
 	}

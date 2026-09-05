@@ -1044,6 +1044,9 @@ export class SessionRuntime {
 			this.config,
 			this.logger,
 			this.telemetry,
+			// This is the conversation, so this is the request whose token count
+			// and output cap the compaction pass is entitled to read back.
+			{ conversation: true },
 		);
 		// Merge extension-contributed tools with the config-declared
 		// tools for this turn. Extensions register tools via

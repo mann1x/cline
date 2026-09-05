@@ -39,6 +39,12 @@ export function createCliImageDescriber(
 		const model = createAgentModelFromConfig(
 			{ ...config, modelId: visionModelId } as never,
 			logger,
+			undefined,
+			// Not the conversation: it queues behind the turn it serves instead of
+			// racing it for a local server's single slot, and the omitted
+			// `conversation` flag keeps its token count from standing as the
+			// session's.
+			{ auxiliary: true },
 		);
 		const descriptions: (string | undefined)[] = [];
 		for (const image of images) {

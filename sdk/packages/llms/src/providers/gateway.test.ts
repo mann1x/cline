@@ -18,6 +18,8 @@ import {
 	type GatewayModelHandleOptions,
 	IMAGE_UNSUPPORTED_PLACEHOLDER,
 	type ITelemetryService,
+	lastObservedRequestTokens,
+	lastOutputCap,
 	resetSdkErrorRateLimiterForTests,
 	resetTokenCalibration,
 } from "@cline/shared";
@@ -617,6 +619,73 @@ describe("sdk-gateway", () => {
 
 		await auxiliary;
 		expect(order).toEqual(["conversation-done", "auxiliary"]);
+	});
+
+	it("lets only the conversation's own request speak for the session", async () => {
+		// The process-wide record of "what the last request cost" is what the
+		// compaction trigger reads to decide whether the transcript has room.
+		// Everything that streams shares one slot, and for two releases the flag
+		// that opted a call out was set nowhere in either host: an image
+		// description or a commit message left its own small count standing as
+		// the session's, and auto-compaction stood down on a full transcript
+		// (mann1x/cline#68). Measured on the reporter's own diagnostics, 302
+		// decisions across twelve days had the estimate over the trigger and a
+		// foreign count below it.
+		resetTokenCalibration();
+		const createProvider = () => ({
+			async *stream() {
+				yield {
+					type: "usage",
+					usage: { inputTokens: 4_000, outputTokens: 10 },
+				} satisfies AgentModelEvent;
+				yield { type: "finish", reason: "stop" } satisfies AgentModelEvent;
+			},
+		});
+		const gateway = createGateway({
+			builtins: false,
+			providers: [
+				{
+					manifest: {
+						id: "scripted",
+						name: "Scripted",
+						defaultModelId: "scripted-model",
+						models: [
+							{
+								id: "scripted-model",
+								name: "Scripted Model",
+								providerId: "scripted",
+							},
+						],
+					},
+					createProvider,
+				},
+			],
+		});
+		const drain = async (request: Parameters<typeof gateway.stream>[0]) => {
+			for await (const _event of await gateway.stream(request)) {
+				// drain
+			}
+		};
+		const base = {
+			providerId: "scripted",
+			modelId: "scripted-model",
+			messages: [
+				{ role: "user", content: [{ type: "text", text: "hi" }] },
+			] as readonly AgentMessage[],
+		};
+
+		// A utility call that never said it was one. It still must not be
+		// mistaken for the turn.
+		await drain(base);
+		expect(lastObservedRequestTokens()).toBeUndefined();
+		expect(lastOutputCap()).toBeUndefined();
+
+		await drain({ ...base, conversation: true, sessionId: "session-a" });
+		expect(lastObservedRequestTokens("session-a")).toBe(4_000);
+		expect(lastOutputCap("session-a")).toBeDefined();
+
+		// And a second conversation in the same process does not answer for it.
+		expect(lastObservedRequestTokens("session-b")).toBeUndefined();
 	});
 
 	it("keeps an auxiliary call out of the process-wide overflow record", () => {

@@ -2,10 +2,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
 	CHARS_PER_TOKEN,
 	charsPerToken,
+	consumeContextOverflow,
 	estimateRequestInputTokens,
 	estimateTokens,
 	lastObservedRequestTokens,
+	lastOutputCap,
 	measureRequestInputChars,
+	noteContextOverflow,
+	noteOutputCap,
 	observeRequestTokens,
 	observeThinkingTokens,
 	resetTokenCalibration,
@@ -239,6 +243,58 @@ describe("counting reasoning apart from the rest", () => {
 				],
 			}),
 		).toBe(estimateTokens(chars));
+	});
+
+	it("answers a session only with counts from that session's own requests", () => {
+		// The slot is process-wide and everything that streams shares it. A count
+		// left by another session -- a delegated agent, a second task -- is a
+		// true measurement of the wrong request, and the compaction trigger reads
+		// it as "how full am I".
+		observeRequestTokens(360_000, 100_000, undefined, "session-a");
+
+		expect(lastObservedRequestTokens("session-a")).toBe(100_000);
+		expect(lastObservedRequestTokens("session-b")).toBeUndefined();
+	});
+
+	it("keeps answering a caller that cannot name its session", () => {
+		// A missing id must cost an estimate at worst, never a measurement that
+		// was already in hand: the trigger falls back to a character count that
+		// runs roughly double, which compacts transcripts with room to spare.
+		observeRequestTokens(360_000, 100_000, undefined, "session-a");
+		expect(lastObservedRequestTokens()).toBe(100_000);
+
+		resetTokenCalibration();
+		observeRequestTokens(360_000, 100_000);
+		expect(lastObservedRequestTokens("session-a")).toBe(100_000);
+	});
+
+	it("scopes the output cap and the overflow report the same way", () => {
+		// Both are read to decide whether the *window* is what truncated a turn.
+		// Another request's answer to that question suppresses the compaction the
+		// retry needs (mann1x/cline#68).
+		noteOutputCap(
+			{ maxTokens: 4_000, source: "remaining-context", windowBound: true },
+			"session-a",
+		);
+		expect(lastOutputCap("session-a")).toMatchObject({ windowBound: true });
+		expect(lastOutputCap("session-b")).toBeUndefined();
+
+		noteContextOverflow(
+			{
+				contextWindow: 262_144,
+				estimatedInputTokens: 262_000,
+				reserveTokens: 0,
+				remainingContext: 144,
+				minOutputTokens: 1_024,
+			},
+			"session-a",
+		);
+		expect(consumeContextOverflow("session-b")).toBeUndefined();
+		// Not consumed by the session it did not belong to, so it is still there
+		// for the one it did.
+		expect(consumeContextOverflow("session-a")).toMatchObject({
+			contextWindow: 262_144,
+		});
 	});
 
 	it("learns the reasoning ratio from a turn that reported its own cost", () => {

@@ -185,10 +185,32 @@ function toGatewayConfiguredModel(
 	};
 }
 
+export interface CreateAgentModelOptions {
+	/**
+	 * Set by the caller that is running the conversation itself.
+	 *
+	 * The request path keeps process-wide records of what the last request cost
+	 * and what capped it, and compaction reads them back; only the conversation
+	 * may write them. This factory serves the agent loop *and* the machinery
+	 * around it -- the CLI builds its image describer from the same call -- so
+	 * the loop has to say so rather than the describer having to say it is not.
+	 */
+	conversation?: boolean;
+	/**
+	 * Force the auxiliary scheduling this config did not carry.
+	 *
+	 * A caller that builds its model from a session's config inherits that
+	 * config's `providerConfig`, which is the conversation's; there is no place
+	 * on it to say "but this call is not". This is that place.
+	 */
+	auxiliary?: boolean;
+}
+
 export function createAgentModelFromConfig(
 	config: AgentConfig,
 	logger: BasicLogger | undefined,
 	telemetry?: ITelemetryService,
+	options?: CreateAgentModelOptions,
 ): AgentModel {
 	const pc = config.providerConfig as ProviderConfig | undefined;
 	const baseProviderConfig =
@@ -262,7 +284,9 @@ export function createAgentModelFromConfig(
 		{
 			maxTokens: normalizedProviderConfig.maxOutputTokens,
 			temperature: normalizedProviderConfig.temperature,
-			auxiliary: normalizedProviderConfig.auxiliary,
+			auxiliary: options?.auxiliary ?? normalizedProviderConfig.auxiliary,
+			conversation: options?.conversation === true,
+			sessionId: config.sessionId,
 		},
 	);
 }

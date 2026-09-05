@@ -257,8 +257,40 @@ export interface GatewayStreamRequest {
 	 *
 	 * The request is served identically. It just does not get to speak for the
 	 * session.
+	 *
+	 * Note that this flag no longer decides who writes those records --
+	 * `conversation` does, and it is the positive form of the same question.
+	 * `auxiliary` still says how the request is scheduled: it queues behind the
+	 * conversation instead of racing it for a local server's single slot.
 	 */
 	auxiliary?: boolean;
+	/**
+	 * Set when this request *is* the conversation, and so may speak for it.
+	 *
+	 * The request path keeps one process-wide record of "the last request" --
+	 * its token count, what capped its reply, whether it found room at all --
+	 * and the compaction pass reads all three back. Only the turn those records
+	 * describe may write them.
+	 *
+	 * Stated positively on purpose. It was stated negatively (`auxiliary`), and
+	 * the two things that had to remember to say "not me" were a whole host each:
+	 * neither `apps/vscode` nor `apps/cli` set the flag anywhere, so a vision
+	 * description or a commit message left its own small count standing as the
+	 * session's, and auto-compaction stood down on a transcript that was full
+	 * (mann1x/cline#68). Forgetting this one costs an estimate instead of a
+	 * measurement, which is a bad turn rather than a dead run.
+	 */
+	conversation?: boolean;
+	/**
+	 * Which session this request belongs to, when the caller knows.
+	 *
+	 * Two conversations can share a process -- a delegated agent and the lead
+	 * that spawned it, most of all -- and both are entitled to write the records
+	 * above. The id is what keeps them from answering each other's questions.
+	 * Unknown on either side reads as a match, so a caller that cannot name its
+	 * session keeps the behaviour it had.
+	 */
+	sessionId?: string;
 	metadata?: Record<string, unknown>;
 	reasoning?: {
 		enabled?: boolean;
@@ -295,6 +327,10 @@ export interface GatewayModelHandleOptions {
 	maxTokens?: number;
 	/** See `GatewayStreamRequest.auxiliary`. */
 	auxiliary?: boolean;
+	/** See `GatewayStreamRequest.conversation`. */
+	conversation?: boolean;
+	/** See `GatewayStreamRequest.sessionId`. */
+	sessionId?: string;
 	metadata?: Record<string, unknown>;
 	reasoning?: {
 		enabled?: boolean;

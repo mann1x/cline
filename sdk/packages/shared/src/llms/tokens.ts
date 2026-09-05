@@ -95,8 +95,37 @@ interface TokenCalibrationState {
 	charsPerToken?: number;
 	thinkingCharsPerToken?: number;
 	requestTokens?: number;
+	requestTokensOwner?: string;
 	contextOverflow?: ContextOverflowReport;
+	contextOverflowOwner?: string;
 	outputCap?: OutputCapReport;
+	outputCapOwner?: string;
+}
+
+/**
+ * Who a record in this slot describes, and who may read it back.
+ *
+ * The three records below -- what the last request cost, what capped it, and
+ * whether it found room at all -- are statements about one conversation, held
+ * in one process-wide slot. Everything that streams through the gateway used to
+ * be able to write them, and one of the two hosts never set the flag that opts
+ * out: a vision description or a commit message could leave its own small count
+ * standing as "the last request", and the compaction pass that read it next
+ * concluded the transcript had room it did not have (mann1x/cline#68).
+ *
+ * So a write says whose it is and a read says who is asking. Unknown on either
+ * side answers yes -- a caller that cannot name itself gets the old behaviour
+ * rather than nothing, which keeps a missing id costing an estimate instead of
+ * a measurement.
+ */
+function ownerAnswersFor(
+	owner: string | undefined,
+	reader: string | undefined,
+): boolean {
+	if (owner === undefined || reader === undefined) {
+		return true;
+	}
+	return owner === reader;
 }
 
 /**
@@ -229,6 +258,7 @@ export function observeRequestTokens(
 	chars: number,
 	tokens: number,
 	reasoningChars?: number,
+	owner?: string,
 ): void {
 	if (!Number.isFinite(chars) || !Number.isFinite(tokens)) {
 		return;
@@ -238,6 +268,7 @@ export function observeRequestTokens(
 	}
 	const state = calibration();
 	state.requestTokens = tokens;
+	state.requestTokensOwner = owner;
 	// With the reasoning share known, this ratio describes the rest of the
 	// request rather than a blend of two populations. Charging reasoning at its
 	// own rate first and calibrating on what is left is what keeps the two
@@ -290,11 +321,12 @@ export function observeRequestTokens(
 export function seedRequestTokenCalibration(
 	chars: number,
 	tokens: number,
+	owner?: string,
 ): void {
 	if (calibration().charsPerToken !== undefined) {
 		return;
 	}
-	observeRequestTokens(chars, tokens);
+	observeRequestTokens(chars, tokens, undefined, owner);
 }
 
 /**
@@ -305,8 +337,11 @@ export function seedRequestTokenCalibration(
  * describes the previous request rather than the next one, so a caller trades
  * exactness for being one turn behind.
  */
-export function lastObservedRequestTokens(): number | undefined {
-	return calibration().requestTokens;
+export function lastObservedRequestTokens(reader?: string): number | undefined {
+	const state = calibration();
+	return ownerAnswersFor(state.requestTokensOwner, reader)
+		? state.requestTokens
+		: undefined;
 }
 
 /**
@@ -322,8 +357,13 @@ export function lastObservedRequestTokens(): number | undefined {
  * property that makes it worth having alongside the estimate-driven trigger
  * rather than instead of it.
  */
-export function noteContextOverflow(report: ContextOverflowReport): void {
-	calibration().contextOverflow = report;
+export function noteContextOverflow(
+	report: ContextOverflowReport,
+	owner?: string,
+): void {
+	const state = calibration();
+	state.contextOverflow = report;
+	state.contextOverflowOwner = owner;
 }
 
 /**
@@ -333,10 +373,16 @@ export function noteContextOverflow(report: ContextOverflowReport): void {
  * left set, it would force one on every following turn, including the ones the
  * compaction it triggered had already made room for.
  */
-export function consumeContextOverflow(): ContextOverflowReport | undefined {
+export function consumeContextOverflow(
+	reader?: string,
+): ContextOverflowReport | undefined {
 	const state = calibration();
+	if (!ownerAnswersFor(state.contextOverflowOwner, reader)) {
+		return undefined;
+	}
 	const report = state.contextOverflow;
 	state.contextOverflow = undefined;
+	state.contextOverflowOwner = undefined;
 	return report;
 }
 
@@ -349,13 +395,18 @@ export function consumeContextOverflow(): ContextOverflowReport | undefined {
  * that just truncated this turn the window's?" wants the answer to survive
  * being asked, and every request rewrites it before the question can go stale.
  */
-export function noteOutputCap(report: OutputCapReport): void {
-	calibration().outputCap = report;
+export function noteOutputCap(report: OutputCapReport, owner?: string): void {
+	const state = calibration();
+	state.outputCap = report;
+	state.outputCapOwner = owner;
 }
 
 /** What capped the last request, or `undefined` before the first one. */
-export function lastOutputCap(): OutputCapReport | undefined {
-	return calibration().outputCap;
+export function lastOutputCap(reader?: string): OutputCapReport | undefined {
+	const state = calibration();
+	return ownerAnswersFor(state.outputCapOwner, reader)
+		? state.outputCap
+		: undefined;
 }
 
 /** Drop any measured ratio and fall back to `CHARS_PER_TOKEN`. */
@@ -364,8 +415,11 @@ export function resetTokenCalibration(): void {
 	state.charsPerToken = undefined;
 	state.thinkingCharsPerToken = undefined;
 	state.requestTokens = undefined;
+	state.requestTokensOwner = undefined;
 	state.contextOverflow = undefined;
+	state.contextOverflowOwner = undefined;
 	state.outputCap = undefined;
+	state.outputCapOwner = undefined;
 }
 
 export function estimateTokens(chars: number): number {

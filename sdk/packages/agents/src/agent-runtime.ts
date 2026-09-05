@@ -1314,7 +1314,11 @@ export class AgentRuntime {
 					// the gateway -- compaction is kept: a runtime that cannot say what
 					// capped it is likelier to be near a window it never declared than
 					// to be held by a limit nobody set.
-					const outputCap = lastOutputCap();
+					// This session's own last request. A cap another call ran into --
+					// an image describer, a commit message -- says nothing about
+					// whether the window is what truncated this turn, and reading it
+					// as if it did suppresses the compaction the retry needs.
+					const outputCap = lastOutputCap(this.config.sessionId);
 					this.compactBeforeNextTurn = outputCap?.windowBound ?? true;
 					this.truncatedOutputCapTokens = this.compactBeforeNextTurn
 						? undefined

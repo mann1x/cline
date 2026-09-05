@@ -1797,6 +1797,8 @@ export function seedCalibrationFromTranscript(request: {
 	messages: MessageWithMetadata[];
 	tools?: unknown[];
 	reasoningHistory?: ReasoningHistoryMode;
+	/** Whose transcript this is, so the seeded count answers only to it. */
+	sessionId?: string;
 }): void {
 	for (let index = request.messages.length - 1; index >= 0; index -= 1) {
 		const message = request.messages[index];
@@ -1817,6 +1819,7 @@ export function seedCalibrationFromTranscript(request: {
 				{ reasoningHistory: request.reasoningHistory },
 			),
 			tokens,
+			request.sessionId,
 		);
 		return;
 	}

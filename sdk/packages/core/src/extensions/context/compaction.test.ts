@@ -1117,10 +1117,10 @@ describe("createContextCompactionPrepareTurn", () => {
 	it("budgets the complete basic compaction output including the latest turn", () => {
 		const messages: LlmsProviders.Message[] = [
 			{ role: "user", content: "original task" },
-			{ role: "assistant", content: "old assistant " + "x".repeat(10_000) },
+			{ role: "assistant", content: `old assistant ${"x".repeat(10_000)}` },
 			{ role: "user", content: "latest typed prompt" },
 			assistantToolUseMessage("tool-live"),
-			toolResultMessage("tool-live", "live result " + "y".repeat(10_000)),
+			toolResultMessage("tool-live", `live result ${"y".repeat(10_000)}`),
 		];
 
 		const compacted = runForcedBasicCompaction(messages, 700);
@@ -1209,7 +1209,7 @@ describe("createContextCompactionPrepareTurn", () => {
 			{ role: "user", content: "continue" },
 		];
 
-		function prepare(messages: LlmsProviders.Message[]) {
+		function prepare(messages: LlmsProviders.Message[], sessionId?: string) {
 			const prepareTurn = createContextCompactionPrepareTurn({
 				providerId: "ollama",
 				modelId: "local-model",
@@ -1219,6 +1219,7 @@ describe("createContextCompactionPrepareTurn", () => {
 				} as LlmsProviders.ProviderConfig,
 				compaction: { enabled: true, strategy: "basic" },
 				logger: undefined,
+				...(sessionId ? { sessionId } : {}),
 			});
 			return prepareTurn?.({
 				agentId: "agent-1",
@@ -1314,6 +1315,23 @@ describe("createContextCompactionPrepareTurn", () => {
 			observeRequestTokens(420_000, 117_000);
 			const result = await prepare(bloatedApiMessages);
 			expect(result?.messages).toBeDefined();
+		});
+
+		it("ignores a count another session's request left behind", async () => {
+			// The count is real and the request it describes is real; it is just
+			// not this conversation's. Reported as auto-compaction never firing
+			// while the bar sat at 262.1k of a 262,144-token window
+			// (mann1x/cline#68), and visible in the reporter's own diagnostics as
+			// an 18,875-token observation vetoing a 436,717-token estimate.
+			observeRequestTokens(163_772, 40_000, undefined, "someone-else");
+			const result = await prepare(bloatedApiMessages, "my-session");
+			expect(result?.messages).toBeDefined();
+		});
+
+		it("still trusts the count its own session's request left", async () => {
+			observeRequestTokens(163_772, 40_000, undefined, "my-session");
+			const result = await prepare(bloatedApiMessages, "my-session");
+			expect(result?.messages).toBeUndefined();
 		});
 
 		it("stops compacting once the counted context comes back down", async () => {

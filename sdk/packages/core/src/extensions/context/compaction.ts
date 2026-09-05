@@ -535,14 +535,21 @@ export function createContextCompactionPrepareTurn(
 			messages: context.messages,
 			tools: context.tools,
 			reasoningHistory,
+			sessionId: config.sessionId,
 		});
-		const observedRequestTokens = lastObservedRequestTokens();
+		// Asked in this session's name. The record is process-wide and a request
+		// that is not this conversation's says nothing about how full it is:
+		// measured on a reporter's own diagnostics, 302 decisions across twelve
+		// days had the estimate over the trigger and a foreign count below it,
+		// the worst vetoing a 436,717-token estimate with 18,875 observed tokens
+		// against a 262,144 window (mann1x/cline#68).
+		const observedRequestTokens = lastObservedRequestTokens(config.sessionId);
 		const triggerInputTokens = observedRequestTokens ?? requestInputTokens;
 		// The request path found no room for a reply on the last turn. That is
 		// not a projection that could be miscalibrated -- it is the budget
 		// arithmetic having already failed -- so it compacts whatever the ratio
 		// above concludes, and covers the case where the two disagree.
-		const contextOverflow = consumeContextOverflow();
+		const contextOverflow = consumeContextOverflow(config.sessionId);
 		// The one signal here that is not an estimate.
 		//
 		// On an engine with a KV pool tree, the pool knows what it holds and

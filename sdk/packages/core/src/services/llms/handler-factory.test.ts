@@ -297,7 +297,51 @@ describe("createAgentModelFromConfig", () => {
 
 		expect(gatewayMock.createAgentModel).toHaveBeenLastCalledWith(
 			{ providerId: "openai-compatible", modelId: "custom-model" },
-			{ maxTokens: 4_096, temperature: 0 },
+			{
+				maxTokens: 4_096,
+				temperature: 0,
+				auxiliary: undefined,
+				// Not claimed unless the caller says so. The image describer and
+				// the commit-message writer build their models from this same
+				// function, and a model that says it is the conversation gets to
+				// overwrite the record compaction reads (mann1x/cline#68).
+				conversation: false,
+				sessionId: undefined,
+			},
+		);
+	});
+
+	it("only marks the model as the conversation when the caller says so", async () => {
+		const { createAgentModelFromConfig } = await import("./handler-factory");
+		const config = {
+			providerId: "openai-compatible",
+			modelId: "custom-model",
+			apiKey: "key",
+			systemPrompt: "",
+			tools: [],
+			sessionId: "session-a",
+			providerConfig: {
+				providerId: "openai-compatible",
+				modelId: "custom-model",
+			},
+		};
+
+		createAgentModelFromConfig(config, undefined, undefined, {
+			conversation: true,
+		});
+		expect(gatewayMock.createAgentModel).toHaveBeenLastCalledWith(
+			expect.anything(),
+			expect.objectContaining({ conversation: true, sessionId: "session-a" }),
+		);
+
+		// The same config, built by something that is not the turn: it queues
+		// behind the turn rather than racing it, and speaks for nobody.
+		createAgentModelFromConfig(config, undefined, undefined, {
+			auxiliary: true,
+		});
+		expect(gatewayMock.createAgentModel).toHaveBeenLastCalledWith(
+			expect.anything(),
+			expect.objectContaining({ conversation: false, auxiliary: true }),
 		);
 	});
 
