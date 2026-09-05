@@ -174,6 +174,14 @@ const TOOL_CALL_OPEN_TAG = "<tool_call>";
  */
 const TOOL_CALL_TAG_PATTERN = /<tool_call>|<parameter=[^>]*>|<\/parameter>/g;
 
+/**
+ * The tag that separates an attempted call from a sentence about one.
+ *
+ * Not global: `test` on a global regex carries `lastIndex` between calls and
+ * would answer differently on the same input every other time.
+ */
+const FUNCTION_OPEN_PATTERN = /<function=[^\s>]+\s*>/;
+
 export const NO_TOOL_CALL_NUDGE_MESSAGE =
 	"[SYSTEM] Your last message contained no tool calls, so the run was about to end. " +
 	"If the task is not finished, continue now by emitting the tool calls it needs - do not " +
@@ -251,7 +259,14 @@ export interface UnparsedToolCall {
 export function unparsedToolCallInText(
 	text: string | undefined,
 ): UnparsedToolCall | undefined {
-	if (!text || !text.includes(TOOL_CALL_OPEN_TAG)) {
+	// Both tags, not just the opening one: a model asked how tool calls work
+	// writes `<tool_call>` in a sentence, and that is prose about a call rather
+	// than an attempt at one. An attempt names a function.
+	if (
+		!text ||
+		!text.includes(TOOL_CALL_OPEN_TAG) ||
+		!FUNCTION_OPEN_PATTERN.test(text)
+	) {
 		return undefined;
 	}
 	let blocks = 0;

@@ -60,6 +60,17 @@ describe("a tool call the provider handed back as text", () => {
 		expect(unparsedToolCallInText("")).toBeUndefined();
 	});
 
+	it("says nothing about prose that merely mentions the tag", () => {
+		// A model asked how tool calls work writes the opening tag in a
+		// sentence. Nudging it about a call it never attempted is the same class
+		// of false message this exists to remove.
+		expect(
+			unparsedToolCallInText(
+				"A call is wrapped in <tool_call> and </tool_call> tags, like XML.",
+			),
+		).toBeUndefined();
+	});
+
 	it("does not mistake a closed parameter that quotes the syntax for a restart", () => {
 		// A model editing a file about tool calls writes this legitimately. The
 		// parameter is closed, so nothing was abandoned.
