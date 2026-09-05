@@ -5,6 +5,7 @@ import {
 	readFileSync,
 	renameSync,
 	rmSync,
+	statSync,
 	writeFileSync,
 } from "node:fs";
 import { basename, dirname } from "node:path";
@@ -49,6 +50,23 @@ export interface ResolveLastUsedProviderSettingsOptions {
 	isClinePassEnabled?: boolean;
 }
 
+/**
+ * The last parse of the settings file, and what the file looked like then.
+ *
+ * `read()` is called far more often than the file changes: the extension's
+ * webview state post reads it, and that post is debounced at 50ms and fired on
+ * every streamed chunk. Measured on a report from a user running 4.100.69,
+ * that was 21,556 reads across two sessions -- a `readFileSync`, a
+ * `JSON.parse` and a full zod validation each time, synchronously, on the
+ * thread that also has to keep the webview fed.
+ */
+interface ParsedSettingsCache {
+	/** From the stat at the time of the parse, not from the parse. */
+	mtimeMs: number;
+	size: number;
+	value: StoredProviderSettings;
+}
+
 const CLINE_PROVIDER_ID = "cline";
 const CLINE_PASS_PROVIDER_ID = "cline-pass";
 
@@ -66,6 +84,7 @@ function inferLegacyDataDir(filePath: string): string | undefined {
 export class ProviderSettingsManager {
 	private readonly filePath: string;
 	private readonly dataDir?: string;
+	private cache: ParsedSettingsCache | undefined;
 
 	constructor(options: ProviderSettingsManagerOptions = {}) {
 		this.filePath = options.filePath ?? resolveProviderSettingsPath();
@@ -94,8 +113,31 @@ export class ProviderSettingsManager {
 	}
 
 	read(): StoredProviderSettings {
-		if (!existsSync(this.filePath)) {
+		// One `stat` in place of the `existsSync` that was here anyway, so the
+		// hot path costs the same syscall it always did and skips everything
+		// after it.
+		let mtimeMs: number;
+		let size: number;
+		try {
+			const stats = statSync(this.filePath);
+			mtimeMs = stats.mtimeMs;
+			size = stats.size;
+		} catch {
+			this.cache = undefined;
 			return emptyStoredProviderSettings();
+		}
+
+		// The file is shared with the CLI and the hub, so the cache is keyed on
+		// what is on disk rather than on this process having written last. Both
+		// fields matter: mtime alone would miss an edit inside the same
+		// millisecond, and size alone would miss one that keeps the length.
+		const cached = this.cache;
+		if (cached && cached.mtimeMs === mtimeMs && cached.size === size) {
+			// A copy, because callers mutate what they are given -- readers here
+			// go on to assign into `.modes` and to spread `.providers` -- and a
+			// cache that handed out its own object would be edited from under
+			// itself and then written back as though it had been read.
+			return structuredClone(cached.value);
 		}
 
 		try {
@@ -103,17 +145,32 @@ export class ProviderSettingsManager {
 			const parsed = JSON.parse(raw) as unknown;
 			const result = StoredProviderSettingsSchema.safeParse(parsed);
 			if (result.success) {
+				// Both of these stay on the miss path only. Registration derives
+				// from the file's content, so repeating it for content that has
+				// not changed is the same work with the same outcome -- and the
+				// debug line is what made this loop visible in the first place,
+				// which it can no longer do if it prints on every state post.
 				registerConfiguredProvidersFromSettings(result.data);
 				const clineAuth = result.data.providers["cline"]?.settings?.auth;
 				sdkDebug(
 					`providers.read providers=[${Object.keys(result.data.providers).join(",")}] lastUsed=${result.data.lastUsedProvider ?? "none"} clineAuthPresent=${!!clineAuth?.accessToken} clineAccessTokenHash=${hashSecret(clineAuth?.accessToken)} clineRefreshTokenHash=${hashSecret(clineAuth?.refreshToken)}`,
 				);
+				this.cache = {
+					mtimeMs,
+					size,
+					value: structuredClone(result.data),
+				};
 				return result.data;
 			}
 		} catch {
 			// Invalid content falls back to a clean state.
 		}
 
+		// Unparseable, or gone between the stat and the read. Nothing is cached
+		// for it: the empty state this returns is a fallback and not a reading
+		// of the file, and caching it would keep answering with it after the
+		// file was fixed.
+		this.cache = undefined;
 		return emptyStoredProviderSettings();
 	}
 
@@ -138,6 +195,11 @@ export class ProviderSettingsManager {
 			rmSync(tempPath, { force: true });
 			throw error;
 		}
+		// Dropped rather than replaced with `normalized`: the next `read()` is
+		// the cheap path anyway, and a rename that lands in the same
+		// millisecond as the cached stat is exactly the case the key cannot
+		// tell apart. Writes are rare; a stale one here would not be.
+		this.cache = undefined;
 		// Restrict file to owner-only read/write (best-effort; no-op on Windows).
 		try {
 			chmodSync(this.filePath, 0o600);

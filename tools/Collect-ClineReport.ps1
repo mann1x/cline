@@ -4,7 +4,8 @@
 
 .DESCRIPTION
     Gathers the transcript of one or more Cline tasks, the extension's own
-    output log, and a short description of the machine, into a single zip.
+    output log, VS Code's extension-host and renderer logs for the same
+    windows, and a short description of the machine, into a single zip.
 
     Run with no arguments it lists the sessions on this machine - when each
     ran, which model, how it ended, how large the transcript is and the task
@@ -105,6 +106,39 @@ function Add-Missing {
 # Field names whose values are replaced before anything is written out. Matched
 # against the property name, case-insensitively, anywhere in the name.
 $SecretPattern = 'key|token|secret|password|passwd|credential|authorization|bearer|cookie|session_?id_?token'
+
+# Copies one log into the report, keeping only the tail of a large one.
+# Returns $false, without a manifest line, when there is nothing to copy: the
+# VS Code logs asked for below are absent on plenty of healthy installs.
+function Copy-LogTail {
+    param(
+        [string] $Source,
+        [string] $Destination,
+        [string] $Label
+    )
+
+    # These logs are cumulative across every task in a window, not
+    # per-task, so they grow without bound. Keep the tail, which is the part
+    # covering the session being reported.
+    $maxLogBytes = 8MB
+
+    if (-not (Test-Path -LiteralPath $Source)) { return $false }
+    $item = Get-Item -LiteralPath $Source -ErrorAction SilentlyContinue
+    if (-not $item -or $item.Length -le 0) { return $false }
+
+    $kb = [math]::Round($item.Length / 1KB, 1)
+    if ($item.Length -gt $maxLogBytes) {
+        # -Tail counts lines, not bytes; 40k lines comfortably exceeds 8MB of
+        # this log's line length, so read back from the end and trim.
+        $tail = Get-Content -LiteralPath $Source -Tail 40000
+        Set-Content -LiteralPath $Destination -Value $tail -Encoding UTF8
+        Add-Item 'logs' "$Label <- $($item.LastWriteTime.ToString('s')) (tail of ${kb} KB)"
+    } else {
+        Copy-Item -LiteralPath $Source -Destination $Destination
+        Add-Item 'logs' "$Label <- $($item.LastWriteTime.ToString('s')) (${kb} KB)"
+    }
+    return $true
+}
 
 function Protect-Secrets {
     param($Node)
@@ -563,11 +597,25 @@ foreach ($dir in $sessionDirs) {
     }
 }
 
-# ------------------------------------------------------------ Cline's log ---
+# ------------------------------------------------------ Cline's log, and ---
+# ------------------------------------------------------ VS Code's own ------
 #
 # The extension writes its output channel to
 #   %APPDATA%\Code\logs\<stamp>\window<N>\exthost\output_logging_<stamp>\1-Cline.log
-# One directory per window per launch, so take the newest that actually exists.
+# One directory per window per launch.
+#
+# Picking the newest by LastWriteTime alone is how a report collected on
+# 2026-09-05 came without the log covering the incident it was about: Windows
+# does not update a file's directory entry while a handle is open on it, so the
+# log of the window running right now can look hours older than one that was
+# closed. The <stamp> in the path is written when the window starts and does
+# not lie, and it sorts chronologically as text, so the newest paths are taken
+# as well as the newest mtimes and the two lists are merged.
+#
+# Cline's own log also cannot see the two failures most likely to end with an
+# empty panel: the extension host dying, and the webview's renderer crashing.
+# Those are recorded by VS Code, next door - exthost.log beside the output
+# channel, renderer.log in the window folder above it - so they come too.
 
 $logRoots = @(
     (Join-Path $env:APPDATA 'Code\logs'),
@@ -580,45 +628,57 @@ foreach ($root in $logRoots) {
     $clineLogs += Get-ChildItem -LiteralPath $root -Recurse -Filter '*-Cline.log' -ErrorAction SilentlyContinue
 }
 
-if ($clineLogs.Count -gt 0) {
+# Empty logs are skipped - launching VS Code creates one before anything is
+# written to it.
+$nonEmpty = @($clineLogs | Where-Object { $_.Length -gt 0 })
+
+if ($nonEmpty.Count -gt 0) {
     $logTarget = Join-Path $staging 'logs'
     New-Item -ItemType Directory -Path $logTarget -Force | Out-Null
 
-    # Newest three windows' worth: a reload mid-task splits the log in two, and
-    # the interesting half is often the earlier one. Empty logs are skipped —
-    # launching VS Code creates one before anything is written to it.
-    $picked = $clineLogs |
-        Where-Object { $_.Length -gt 0 } |
-        Sort-Object LastWriteTime -Descending |
-        Select-Object -First 3
-
-    # These logs are cumulative across every task in that window, not per-task,
-    # so they grow without bound. Keep the tail, which is the part covering the
-    # session being reported.
-    $maxLogBytes = 8MB
+    # Three windows' worth by path, because a reload mid-task splits the log in
+    # two and the interesting half is often the earlier one; then one more by
+    # mtime, which catches a window whose folder stamp is older but which has
+    # been written to more recently than the rest.
+    $picked = @()
+    foreach ($log in @($nonEmpty | Sort-Object FullName -Descending)) {
+        if ($picked.Count -ge 3) { break }
+        $picked += $log
+    }
+    foreach ($log in @($nonEmpty | Sort-Object LastWriteTime -Descending)) {
+        if ($picked.Count -ge 4) { break }
+        if (@($picked | ForEach-Object { $_.FullName }) -contains $log.FullName) { continue }
+        $picked += $log
+    }
 
     $index = 0
     foreach ($log in $picked) {
         $index += 1
-        $name = "cline-output-$index.log"
-        $dest = Join-Path $logTarget $name
-        $kb = [math]::Round($log.Length / 1KB, 1)
+        [void] (Copy-LogTail $log.FullName (Join-Path $logTarget "cline-output-$index.log") "cline-output-$index.log")
 
-        if ($log.Length -gt $maxLogBytes) {
-            # -Tail counts lines, not bytes; 40k lines comfortably exceeds 8MB
-            # of this log's line length, so read back from the end and trim.
-            $tail = Get-Content -LiteralPath $log.FullName -Tail 40000
-            Set-Content -LiteralPath $dest -Value $tail -Encoding UTF8
-            Add-Item 'logs' "$name <- $($log.LastWriteTime.ToString('s')) (tail of ${kb} KB)"
-        } else {
-            Copy-Item -LiteralPath $log.FullName -Destination $dest
-            Add-Item 'logs' "$name <- $($log.LastWriteTime.ToString('s')) (${kb} KB)"
-        }
+        # ...\window<N>\exthost\output_logging_<stamp>\1-Cline.log
+        $exthostDir = Split-Path (Split-Path $log.FullName -Parent) -Parent
+        $windowDir  = Split-Path $exthostDir -Parent
+
+        # Where "Extension host terminated unexpectedly" is written. Cline's
+        # own log simply stops mid-line when that happens, which is what it
+        # looks like from the inside and is not enough to tell it from a
+        # window the user closed.
+        [void] (Copy-LogTail (Join-Path $exthostDir 'exthost.log') (Join-Path $logTarget "vscode-exthost-$index.log") "vscode-exthost-$index.log")
+
+        # And where a webview renderer crash is. An empty Cline panel with a
+        # healthy extension host leaves its only trace here.
+        [void] (Copy-LogTail (Join-Path $windowDir 'renderer.log') (Join-Path $logTarget "vscode-renderer-$index.log") "vscode-renderer-$index.log")
     }
 
-    if ($picked.Count -eq 0) {
-        Add-Missing 'logs' 'every *-Cline.log found was empty'
+    # One per launch rather than per window, so it is taken from the newest
+    # path only: it carries the window and extension-host lifecycle.
+    if ($picked.Count -gt 0) {
+        $stampDir = Split-Path (Split-Path (Split-Path (Split-Path $picked[0].FullName -Parent) -Parent) -Parent) -Parent
+        [void] (Copy-LogTail (Join-Path $stampDir 'main.log') (Join-Path $logTarget 'vscode-main.log') 'vscode-main.log')
     }
+} elseif ($clineLogs.Count -gt 0) {
+    Add-Missing 'logs' 'every *-Cline.log found was empty'
 } else {
     Add-Missing 'logs' 'no *-Cline.log found under any VS Code logs directory'
 }
@@ -778,6 +838,12 @@ sessions/<id>/<id>.compaction.json  The compacted summary, if the task ran long
 sessions/<id>/<id>.json             Task metadata: timestamps, token counts.
 logs/cline-output-N.log             The extension's own log, newest first. A
                                     window reload splits one task across two.
+logs/vscode-exthost-N.log           VS Code's extension-host log for the same
+                                    window: where a host that died says so.
+logs/vscode-renderer-N.log          VS Code's renderer log for that window:
+                                    where a webview crash says so.
+logs/vscode-main.log                VS Code's window and extension-host
+                                    lifecycle for the newest launch.
 logs/hooks.jsonl                    Hook activity, if hooks are configured.
 settings/*.json                     Provider and MCP settings. Values under
                                     field names matching key/token/secret/

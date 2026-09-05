@@ -4,6 +4,7 @@ import {
 	readdirSync,
 	readFileSync,
 	rmSync,
+	utimesSync,
 	writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -589,6 +590,138 @@ describe("ProviderSettingsManager", () => {
 			version: 1,
 			modes: {},
 			providers: {},
+		});
+	});
+
+	describe("read() caching", () => {
+		/** A manager over a file that already holds one saved provider. */
+		function seeded(): { manager: ProviderSettingsManager; filePath: string } {
+			const tempDir = mkdtempSync(
+				path.join(os.tmpdir(), "core-provider-settings-cache-"),
+			);
+			tempDirs.push(tempDir);
+			const filePath = path.join(tempDir, "provider-settings.json");
+			const manager = new ProviderSettingsManager({ filePath });
+			manager.saveProviderSettings({
+				provider: "anthropic",
+				model: "claude-sonnet-4-6",
+				apiKey: "test-key",
+			});
+			return { manager, filePath };
+		}
+
+		/**
+		 * Swap the file's contents for something the same length.
+		 *
+		 * The point of the pair of tests below is what the manager does when the
+		 * file's stat has not moved, so the timestamp is pinned on both sides of
+		 * the swap rather than left to the clock. `utimesSync` truncates to the
+		 * millisecond and `mtimeMs` carries sub-millisecond digits, so the pin
+		 * has to be applied before the first read as well as after the swap --
+		 * restoring a captured mtime afterwards does not reproduce it.
+		 */
+		function swapKeepingSize(
+			filePath: string,
+			from: string,
+			to: string,
+			stamp: Date,
+		): void {
+			expect(to).toHaveLength(from.length);
+			const raw = readFileSync(filePath, "utf8");
+			expect(raw).toContain(from);
+			writeFileSync(filePath, raw.replace(from, to), "utf8");
+			utimesSync(filePath, stamp, stamp);
+		}
+
+		it("does not read the file again while its stat has not moved", () => {
+			const { manager, filePath } = seeded();
+			const stamp = new Date(1_700_000_000_000);
+			utimesSync(filePath, stamp, stamp);
+			expect(manager.getProviderSettings("anthropic")?.apiKey).toBe("test-key");
+
+			// The extension calls read() on every webview state post, which is
+			// every streamed chunk: a readFileSync, a JSON.parse and a full
+			// schema validation each time. Content the manager cannot have seen
+			// is how that is detected from outside the class -- if it comes back,
+			// the file was read again.
+			swapKeepingSize(filePath, "test-key", "gone-key", stamp);
+			for (let i = 0; i < 20; i += 1) {
+				manager.read();
+			}
+			expect(manager.getProviderSettings("anthropic")?.apiKey).toBe("test-key");
+		});
+
+		it("reads again once the file's stat moves", () => {
+			const { manager, filePath } = seeded();
+			const stamp = new Date(1_700_000_000_000);
+			utimesSync(filePath, stamp, stamp);
+			expect(manager.getProviderSettings("anthropic")?.apiKey).toBe("test-key");
+
+			swapKeepingSize(
+				filePath,
+				"test-key",
+				"gone-key",
+				new Date(1_700_000_001_000),
+			);
+			expect(manager.getProviderSettings("anthropic")?.apiKey).toBe("gone-key");
+		});
+
+		it("sees a write made by another process", () => {
+			const { manager, filePath } = seeded();
+			expect(manager.read().lastUsedProvider).toBe("anthropic");
+
+			// What the CLI or the hub doing its own save looks like from here:
+			// this manager never wrote, so only the file can say it changed.
+			const other = new ProviderSettingsManager({ filePath });
+			other.saveProviderSettings(
+				{ provider: "openai", model: "gpt-5", apiKey: "other-key" },
+				{ setLastUsed: true },
+			);
+
+			expect(manager.read().lastUsedProvider).toBe("openai");
+			expect(manager.getProviderSettings("openai")?.apiKey).toBe("other-key");
+		});
+
+		it("hands out a copy, not the cached object", () => {
+			const { manager } = seeded();
+
+			// Callers here do mutate what they are given -- setVoiceInputSettings
+			// assigns into `.modes` and writes the same object back -- so a cache
+			// that returned its own value would be edited from under itself.
+			const first = manager.read();
+			first.lastUsedProvider = "tampered";
+			delete first.providers["anthropic"];
+
+			const second = manager.read();
+			expect(second.lastUsedProvider).toBe("anthropic");
+			expect(second.providers["anthropic"]).toBeDefined();
+		});
+
+		it("does not cache the empty fallback for an unparseable file", () => {
+			const { manager, filePath } = seeded();
+			writeFileSync(filePath, "{ not json", "utf8");
+			expect(manager.read().providers).toEqual({});
+
+			// Fixed up underneath it. The empty state was a fallback, not a
+			// reading of the file, and caching it would outlive the problem.
+			const repaired = new ProviderSettingsManager({
+				filePath: path.join(path.dirname(filePath), "repaired.json"),
+			});
+			repaired.saveProviderSettings({
+				provider: "anthropic",
+				model: "claude-sonnet-4-6",
+				apiKey: "test-key",
+			});
+			writeFileSync(
+				filePath,
+				readFileSync(
+					path.join(path.dirname(filePath), "repaired.json"),
+					"utf8",
+				),
+				"utf8",
+			);
+
+			expect(manager.read().providers["anthropic"]).toBeDefined();
 		});
 	});
 });
