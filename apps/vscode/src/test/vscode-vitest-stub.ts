@@ -82,7 +82,28 @@ export class Uri {
 	}
 }
 export class CancellationTokenSource {
+	// Enough of a token for code that only passes it on: a flag the canceller
+	// sets and a subscribe that never fires. Anything reading the flag after
+	// cancel() sees the truth.
+	token = { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: noop }) }
+	cancel(): void {
+		this.token.isCancellationRequested = true
+	}
 	dispose(): void {}
+}
+export class LanguageModelTextPart {
+	constructor(public value: string) {}
+}
+export class LanguageModelPromptTsxPart {
+	constructor(public value: unknown) {}
+}
+/**
+ * Mutable so a test can put tools in front of the code under test. Reassign
+ * `lm.tools` / `lm.invokeTool` in the test and put them back afterwards.
+ */
+export const lm = {
+	tools: [] as { name: string; description: string; inputSchema?: unknown; tags: readonly string[] }[],
+	invokeTool: async (_name: string, _options: unknown, _token?: unknown): Promise<{ content: unknown[] }> => ({ content: [] }),
 }
 export class CancellationError extends Error {}
 export class Disposable {
@@ -134,6 +155,9 @@ export default {
 	Uri,
 	CancellationTokenSource,
 	CancellationError,
+	LanguageModelTextPart,
+	LanguageModelPromptTsxPart,
+	lm,
 	Disposable,
 	EventEmitter,
 	RelativePattern,

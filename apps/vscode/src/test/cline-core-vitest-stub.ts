@@ -191,6 +191,11 @@ export function createShellExecutor() {
 }
 
 export { augmentMcpTimeoutError } from "../../../../sdk/packages/core/src/extensions/mcp/timeout"
+// The real createMcpTools, so a test of the VS Code bridge exercises the
+// actual name transform and description building rather than a stub that
+// would have to restate them -- the whole point of routing the borrowed
+// tools through it is that they come out named like every other MCP tool.
+export { createMcpTools } from "../../../../sdk/packages/core/src/extensions/mcp/tools"
 // The real createShellTool, so tests exercise the actual description
 // building and shell classification (getShellKind) rather than a stub that
 // would have to duplicate those invariants.

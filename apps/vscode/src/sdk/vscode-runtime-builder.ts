@@ -11,6 +11,7 @@ import { Logger } from "@/shared/services/Logger"
 import { createCheckFileTool } from "./check-file-tool"
 import { readQaCredentials } from "./qa-credentials-store"
 import type { SdkForegroundCommandCoordinator } from "./sdk-foreground-command-coordinator"
+import { createVscodeLmMcpTools } from "./vscode-lm-mcp-tools"
 import { createVscodeRunCommandsTool, VSCODE_FOREGROUND_RUN_COMMANDS_TIMEOUT_MS } from "./vscode-run-commands-tool"
 
 interface McpToolDescriptor {
@@ -90,10 +91,22 @@ export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExt
 		}),
 	)
 
+	// The MCP servers VS Code is running, which Cline did not start and in one
+	// important case could not: a server that refuses dynamic client
+	// registration cannot be authenticated from here at all, and VS Code
+	// already holds a token for it. Failure to read them is not failure to
+	// build a session, so this never throws.
+	const vscodeLmTools = await createVscodeLmMcpTools().catch((error) => {
+		Logger.warn(
+			`[VscodeRuntimeTools] Failed to adopt VS Code's MCP tools: ${error instanceof Error ? error.message : String(error)}`,
+		)
+		return [] as AgentTool[]
+	})
+
 	// No completion tool is exposed: the agent simply ends its turn with a text
 	// response, and the turn-end inference in message-translator.ts styles that
 	// final text as the completion feedback row.
-	const tools: AgentTool[] = [...mcpTools.flat()]
+	const tools: AgentTool[] = [...mcpTools.flat(), ...vscodeLmTools]
 
 	// `check_file` needs no configuration and no terminal, so it is always
 	// present: the shell commands it exists to displace are always available

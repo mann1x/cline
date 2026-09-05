@@ -352,6 +352,11 @@
 					"type": "boolean",
 					"default": true,
 					"markdownDescription": "Offer the `browser` tool, which opens a page in a real browser and reports its console output and uncaught errors. Turn this off to remove it from the model's tools; Chrome is only launched if the model actually calls it."
+				},
+				"cline.vscodeMcpTools": {
+					"type": "boolean",
+					"default": true,
+					"markdownDescription": "Offer the tools of the MCP servers configured in **VS Code**, alongside the ones configured in Cline. VS Code has already started and authenticated those servers, so this reaches ones Cline cannot connect to on its own \u2014 a server that refuses dynamic client registration has no way to issue Cline a client id, and VS Code already holds a token for it. Their names are prefixed `vscode__`. Turn this off to offer only the servers in Cline's own MCP settings."
 				}
 			}
 		}
