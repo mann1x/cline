@@ -66,6 +66,7 @@ export const PROVIDER_CONFIG_PROFILE_KEYS = [
 	"baseUrl",
 	"apiLine",
 	"contextWindow",
+	"maxToolResultChars",
 	"reasoning",
 	"sampling",
 	"headers",

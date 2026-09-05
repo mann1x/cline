@@ -19,7 +19,6 @@ import { DebouncedTextField } from "../common/DebouncedTextField"
 import { RequestTimingsToggle } from "../common/RequestTimingsToggle"
 import OllamaModelPicker from "../OllamaModelPicker"
 import { useApiConfigurationScope } from "../utils/ApiConfigurationScopeContext"
-import { updateSetting } from "../utils/settingsHandlers"
 import { useApiConfigurationHandlers } from "../utils/useApiConfigurationHandlers"
 import { useProviderApiKeyField } from "../utils/useProviderApiKeyField"
 
@@ -163,6 +162,11 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 	// entry, and an empty one means empty rather than "borrow the other model's".
 	const legacyNumCtx = scope ? Number.NaN : Number.parseInt(apiConfiguration?.ollamaApiOptionsCtxNum || "", 10)
 	const ollamaNumCtx = config?.contextWindow || legacyNumCtx
+	// This configuration's tool-result cap. A scoped tab shows only its own —
+	// falling back to the global one there would display, and then save, a
+	// number belonging to the session's model, which is the bug the context
+	// window had.
+	const scopedToolResultChars = config?.maxToolResultChars ?? (scope ? undefined : maxToolResultChars)
 	const ollamaModelInfo = useMemo(() => {
 		return {
 			...openAiModelInfoSafeDefaults,
@@ -591,15 +595,23 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 			{config !== undefined && (
 				<>
 					<DebouncedTextField
-						initialValue={maxToolResultChars ? String(maxToolResultChars) : ""}
+						initialValue={scopedToolResultChars ? String(scopedToolResultChars) : ""}
 						onChange={(v) => {
 							const parsed = Number.parseInt(v, 10)
 							const next = Number.isFinite(parsed) && parsed > 0 ? parsed : 0
 							// The debounced input also fires for its initial value.
-							if (next === (maxToolResultChars ?? 0)) {
+							if (next === (scopedToolResultChars ?? 0)) {
 								return
 							}
-							updateSetting("maxToolResultChars", next)
+							// Written to this configuration rather than to the one
+							// global setting. The cap is read against a context
+							// window, and Plan, Act, Vision and Agents each have a
+							// window of their own; one shared number meant a profile
+							// with a 256k window and one with 8k had to agree. Zero
+							// clears it, and the global setting decides again.
+							void write({ maxToolResultChars: next }).catch((error) =>
+								console.error("Failed to update tool result cap:", error),
+							)
 						}}
 						placeholder={`Default: ${DEFAULT_TOOL_RESULT_CHARS_HINT}`}
 						style={{ width: "100%" }}>
@@ -607,7 +619,8 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 					</DebouncedTextField>
 					<p className="text-xs mt-0 text-description">
 						How much of a single tool result reaches the model. Anything longer keeps its start and its end and loses
-						the middle, with a note saying Cline removed it. Applies to every provider. Blank restores the default.
+						the middle, with a note saying Cline removed it. Belongs to this configuration, so a profile carries it
+						and the Vision and Agents tabs each have their own. Blank falls back to the global setting.
 					</p>
 
 					<DebouncedTextField

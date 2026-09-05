@@ -86,6 +86,10 @@ export type DelegatedAgentConnectionOverride = Pick<
 	| "headers"
 	| "providerConfig"
 	| "knownModels"
+	// Not a connection field, and taken anyway: the cap is read against a
+	// context window, and an Agents tab that names a window of its own has
+	// named a different budget with it. Absent, agents keep the session's.
+	| "maxToolResultChars"
 >;
 
 export interface CoreRuntimeFeatures {

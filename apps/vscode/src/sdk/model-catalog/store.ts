@@ -631,6 +631,19 @@ function writeProviderSettingsFields(providerId: ProviderId, patch: ProviderConf
 		}
 	}
 
+	if ("maxToolResultChars" in patch) {
+		const maxToolResultChars = patch.maxToolResultChars
+		if (typeof maxToolResultChars === "number" && Number.isFinite(maxToolResultChars) && maxToolResultChars > 0) {
+			next.maxToolResultChars = Math.floor(maxToolResultChars)
+		} else {
+			// Cleared rather than stored as 0. An absent value means "the global
+			// setting decides", which is what every entry written before this
+			// field means too -- storing a zero would instead say "no tool result
+			// may be sent", and nothing would explain why results went empty.
+			delete next.maxToolResultChars
+		}
+	}
+
 	// Clamped on the way in rather than trusted: this number decides how many
 	// agents are allowed at a server at once, and a stored 500 would be a
 	// self-inflicted queue that nothing reports.

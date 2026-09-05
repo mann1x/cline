@@ -269,6 +269,11 @@ message ProviderConfigResponse {
   // `parallelSessions`). Bounds how many delegated agents may run together; a
   // server with fewer free slots queues the rest rather than refusing them.
   optional int32 parallel_sessions = 17;
+  // Largest tool result this configuration sends to its model, in characters
+  // (providers.json `maxToolResultChars`). Held per configuration rather than
+  // globally because it is read against a context window, and Plan, Act,
+  // Vision and Agents each have one of their own.
+  optional int32 max_tool_result_chars = 18;
 }
 
 message CommittedModelSelection {
@@ -326,6 +331,9 @@ message WriteProviderConfigPatch {
   optional ProviderSamplingPatch sampling = 14;
   // Concurrent sessions this endpoint serves; 0 clears the setting.
   optional int32 parallel_sessions = 15;
+  // Largest tool result sent to the model, in characters; 0 clears the
+  // setting, which falls back to the global one.
+  optional int32 max_tool_result_chars = 16;
 }
 
 message WriteProviderConfigRequest {

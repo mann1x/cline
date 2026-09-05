@@ -192,6 +192,14 @@ export const ProviderSettingsSchema = z.object({
 	 * describing a server.
 	 */
 	parallelSessions: z.number().int().min(1).max(10).optional(),
+	/**
+	 * Largest tool result this configuration sends to its model, in characters.
+	 *
+	 * Per configuration rather than global because it is read against a context
+	 * window: the same cap that keeps a result useful at 256k throws most of it
+	 * away at 8k. Absent means the global setting still decides.
+	 */
+	maxToolResultChars: z.number().int().positive().optional(),
 	baseUrl: z.string().url().optional(),
 	headers: z.record(z.string(), z.string()).optional(),
 	timeout: z.number().int().positive().optional(),

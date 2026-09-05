@@ -19,6 +19,8 @@ type ProviderSettingsLike = {
 	readonly aws?: AwsProviderConfig
 	readonly gcp?: GcpProviderConfig
 	readonly contextWindow?: number
+	readonly parallelSessions?: number
+	readonly maxToolResultChars?: number
 	readonly reasoning?: ReasoningConfig
 	readonly sampling?: SamplingConfig
 	readonly auth?: AuthConfig
@@ -300,6 +302,8 @@ function readProviderSettings(providerId: ProviderId): ConfigParts {
 			aws: readAws(settings),
 			gcp: readGcp(settings),
 			contextWindow: readPositiveInteger(settings.contextWindow),
+			parallelSessions: readPositiveInteger(settings.parallelSessions),
+			maxToolResultChars: readPositiveInteger(settings.maxToolResultChars),
 			reasoning: readReasoning(settings),
 			sampling: readSampling(settings),
 			auth: readAuth(settings),
@@ -483,6 +487,12 @@ export function buildEffectiveProviderConfig(providerId: ProviderId): EffectiveP
 	// Ollama StateManager key is a migration fallback (the store mirrors writes
 	// to both).
 	assignIfDefined(merged, "contextWindow", providerSettings.contextWindow ?? stateConfig.contextWindow)
+	// Written by providers.json only, and read back here so the settings panel
+	// shows what is stored. Both were write-only before: the store wrote them
+	// and nothing put them back on the config, so the fields rendered blank
+	// after a reload and looked as though the value had not been kept.
+	assignIfDefined(merged, "parallelSessions", providerSettings.parallelSessions)
+	assignIfDefined(merged, "maxToolResultChars", providerSettings.maxToolResultChars)
 	// providers.json is the only writer of reasoning; there is no legacy key.
 	assignIfDefined(merged, "reasoning", providerSettings.reasoning)
 	// Same as reasoning: providers.json is the only writer.

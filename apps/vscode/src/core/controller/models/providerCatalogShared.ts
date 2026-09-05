@@ -243,6 +243,7 @@ export function toRedactedProviderConfigResponse(
 		gcp: toRedactedGcpProviderConfigProto(config.gcp),
 		contextWindow: config.contextWindow,
 		parallelSessions: config.parallelSessions,
+		maxToolResultChars: config.maxToolResultChars,
 		reasoning: config.reasoning
 			? {
 					enabled: config.reasoning.enabled,
@@ -278,6 +279,11 @@ export function toProviderConfigPatch(protoPatch: WriteProviderConfigPatch | und
 		// one, which is what `--parallel` and a basic plan give you.
 		...(protoPatch.parallelSessions !== undefined
 			? { parallelSessions: protoPatch.parallelSessions > 0 ? protoPatch.parallelSessions : null }
+			: {}),
+		// A zero cap clears it, falling back to the global setting rather than
+		// meaning "send no tool results at all".
+		...(protoPatch.maxToolResultChars !== undefined
+			? { maxToolResultChars: protoPatch.maxToolResultChars > 0 ? protoPatch.maxToolResultChars : null }
 			: {}),
 		...(protoPatch.accessToken !== undefined || protoPatch.refreshToken !== undefined || protoPatch.accountId !== undefined
 			? {

@@ -144,6 +144,16 @@ export interface EffectiveProviderConfig {
 	 */
 	readonly parallelSessions?: number
 	/**
+	 * Largest tool result sent to this configuration's model, in characters
+	 * (providers.json `maxToolResultChars`).
+	 *
+	 * Held per configuration rather than globally because it is a fraction of
+	 * a context window, and Plan, Act, Vision and Agents each have a window of
+	 * their own. Absent means the global setting still decides, which is what
+	 * every configuration written before this field does.
+	 */
+	readonly maxToolResultChars?: number
+	/**
 	 * Provider-level reasoning settings (providers.json `reasoning`). Read as
 	 * well as written so a settings UI can show the state it is about to
 	 * change; an absent value means the provider was never asked, which is not
@@ -204,6 +214,7 @@ export interface ProviderConfigPatch {
 	readonly gcp?: GcpProviderConfig | null
 	readonly contextWindow?: number | null
 	readonly parallelSessions?: number | null
+	readonly maxToolResultChars?: number | null
 	readonly auth?: {
 		readonly accessToken?: string
 		readonly refreshToken?: string

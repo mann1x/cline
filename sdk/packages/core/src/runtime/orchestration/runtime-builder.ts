@@ -698,6 +698,9 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 						...(agentsConnection.providerConfig !== undefined
 							? { providerConfig: agentsConnection.providerConfig }
 							: {}),
+						...(agentsConnection.maxToolResultChars !== undefined
+							? { maxToolResultChars: agentsConnection.maxToolResultChars }
+							: {}),
 					}
 				: {};
 		const delegatedAgentConfigProvider = createDelegatedAgentConfigProvider(

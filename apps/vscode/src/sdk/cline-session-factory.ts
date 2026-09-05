@@ -1059,6 +1059,25 @@ function readStoredParallelSessions(providerId: string | undefined): unknown {
 }
 
 /**
+ * The tool-result cap stored on the shared provider entry.
+ *
+ * Read the same way as the parallel-session count, and for the same reason: a
+ * profile that carries the field owns it, and the shared entry answers only
+ * when no profile is in force. The global setting is the last word, so a
+ * configuration written before this field existed behaves exactly as it did.
+ */
+function readStoredMaxToolResultChars(providerId: string | undefined): unknown {
+	if (!providerId) {
+		return undefined
+	}
+	try {
+		return getProviderSettingsManager().getProviderSettings(providerId)?.maxToolResultChars
+	} catch {
+		return undefined
+	}
+}
+
+/**
  * The connection subagents and teammates run on, from the Agents tab.
  *
  * Resolved the same way the session's own connection is, from the tab's stored
@@ -1108,12 +1127,18 @@ export async function buildDelegatedAgentConnection(
 	}
 	const hasKnownModels = !!knownModels && Object.keys(knownModels).length > 0
 
+	// The tab's own tool-result cap, when it names one. Absent, the delegated
+	// agents keep the session's — the same rule the rest of this override
+	// follows, and the reason a tab that changes nothing changes nothing.
+	const scopedMaxToolResultChars = positiveFiniteNumber(providerSettings?.maxToolResultChars)
+
 	return {
 		providerId: sdkProviderId,
 		modelId,
 		...(apiKey ? { apiKey } : {}),
 		...(baseUrl !== undefined ? { baseUrl } : {}),
 		...(hasKnownModels ? { knownModels } : {}),
+		...(scopedMaxToolResultChars !== undefined ? { maxToolResultChars: scopedMaxToolResultChars } : {}),
 		// The proxy/CA-aware fetch belongs here for the same reason it does on
 		// the session's own config: without it the agents' model calls fall back
 		// to bare global fetch.
@@ -1481,7 +1506,16 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	const cappedThinkingPrompt = (stateManager.getGlobalSettingsKey("cappedThinkingPrompt") ?? "").trim()
 	// Per-tool-result cap. Stored as 0 when unset, which is not "keep nothing":
 	// it hands the decision back to the SDK default.
-	const maxToolResultChars = positiveFiniteNumber(stateManager.getGlobalSettingsKey("maxToolResultChars"))
+	//
+	// Resolved per configuration before falling back to the global setting: the
+	// cap is a fraction of a context window, and Plan, Act, Vision and Agents
+	// each have a window of their own. It was global on both sides, so a profile
+	// carrying a 256k window shared its cap with one carrying 8k.
+	const globalMaxToolResultChars = positiveFiniteNumber(stateManager.getGlobalSettingsKey("maxToolResultChars"))
+	const maxToolResultChars =
+		positiveFiniteNumber(profileSettings?.maxToolResultChars) ??
+		positiveFiniteNumber(readStoredMaxToolResultChars(providerId)) ??
+		globalMaxToolResultChars
 	const enableCheckpoints = stateManager.getGlobalSettingsKey("enableCheckpointsSetting") ?? true
 	// A second model that reads images for the primary one. Only installed when
 	// the user has both enabled it and picked a model for it: without a
