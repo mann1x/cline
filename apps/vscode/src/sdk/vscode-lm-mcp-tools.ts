@@ -1,5 +1,6 @@
 import { createMcpTools } from "@cline/core"
 import type { AgentTool, AgentToolContext } from "@cline/shared"
+import type { McpServer } from "@shared/mcp"
 import * as vscode from "vscode"
 import { Logger } from "@/shared/services/Logger"
 
@@ -47,10 +48,46 @@ const VSCODE_MCP_ID_PREFIX = "mcp_"
  * `figma__get_code` and `vscode__figma_get_code`, which is confusing only if
  * they were the same tool, and they are not.
  */
-const VSCODE_MCP_SERVER_NAME = "vscode"
+export const VSCODE_MCP_SERVER_NAME = "vscode"
 
 export function areVscodeMcpToolsEnabled(): boolean {
 	return vscode.workspace.getConfiguration("cline").get<boolean>("vscodeMcpTools") !== false
+}
+
+/**
+ * Auto-approved tool names, by the name the model is given without the
+ * `vscode__` prefix -- the same string the MCP settings file stores for a
+ * server Cline runs itself, so `isToolAutoApproved` needs no special case.
+ */
+function autoApprovedToolNames(): string[] {
+	const stored = vscode.workspace.getConfiguration("cline").get<string[]>("vscodeMcpAutoApprove")
+	return Array.isArray(stored) ? stored : []
+}
+
+/**
+ * The server toggle in the MCP panel.
+ *
+ * Writes the same setting the panel-less path reads, rather than a second one:
+ * two switches for one thing is how a feature ends up on in one place and off
+ * in the other with nothing to say which won.
+ */
+export async function setVscodeMcpServerDisabled(disabled: boolean): Promise<void> {
+	await vscode.workspace.getConfiguration("cline").update("vscodeMcpTools", !disabled, vscode.ConfigurationTarget.Global)
+}
+
+/** The per-tool auto-approve tick boxes in the MCP panel. */
+export async function setVscodeMcpToolsAutoApproved(toolNames: string[], shouldAllow: boolean): Promise<void> {
+	const approved = new Set(autoApprovedToolNames())
+	for (const toolName of toolNames) {
+		if (shouldAllow) {
+			approved.add(toolName)
+		} else {
+			approved.delete(toolName)
+		}
+	}
+	await vscode.workspace
+		.getConfiguration("cline")
+		.update("vscodeMcpAutoApprove", [...approved], vscode.ConfigurationTarget.Global)
 }
 
 /** What `lm.tools` reports for one MCP tool, reduced to what is used here. */
@@ -229,4 +266,51 @@ export async function createVscodeLmMcpTools(options?: { timeoutMs?: number }): 
 		`[VscodeLmMcpTools] Adopted ${tools.length} MCP tool(s) from VS Code: ${discovered.map((tool) => tool.id).join(", ")}`,
 	)
 	return tools
+}
+
+/**
+ * The borrowed tools as a server the MCP panel can render.
+ *
+ * Not a connection: there is nothing to connect to from here, and the entry
+ * exists so the panel's own controls work on these tools the way they work on
+ * every other MCP tool -- one tick box to stop offering them, and one per tool
+ * for auto-approval. `isToolAutoApproved` already resolves a tool by splitting
+ * `server__tool` and looking the server up in `getServers()`, so putting this
+ * in that list is the whole of what makes the auto-approve boxes take effect.
+ *
+ * They are grouped under one entry rather than one per originating server
+ * because VS Code does not say which server a tool came from: it flattens that
+ * into the id (`mcp_` + a truncated server prefix + the name) and the
+ * `source` field that would answer it is behind a proposed API.
+ */
+export function buildVscodeMcpServerEntry(): McpServer | undefined {
+	let discovered: VscodeMcpTool[]
+	try {
+		discovered = listVscodeMcpTools()
+	} catch {
+		return undefined
+	}
+	if (discovered.length === 0) {
+		return undefined
+	}
+
+	const approved = new Set(autoApprovedToolNames())
+	return {
+		name: VSCODE_MCP_SERVER_NAME,
+		// Shown in the panel's config view. There is no config file behind
+		// these, and saying so is better than an empty object that looks like
+		// one failed to load.
+		config: JSON.stringify({ source: "VS Code", tools: discovered.length }, null, 2),
+		status: "connected",
+		tools: discovered.map((tool) => ({
+			name: tool.exposedName,
+			description: tool.description,
+			inputSchema: tool.inputSchema,
+			autoApprove: approved.has(tool.exposedName),
+		})),
+		resources: [],
+		resourceTemplates: [],
+		prompts: [],
+		disabled: !areVscodeMcpToolsEnabled(),
+	}
 }

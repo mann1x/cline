@@ -36,6 +36,12 @@ import * as fs from "fs/promises"
 import ReconnectingEventSource from "reconnecting-eventsource"
 import { z } from "zod"
 import { HostProvider } from "@/hosts/host-provider"
+import {
+	buildVscodeMcpServerEntry,
+	setVscodeMcpServerDisabled,
+	setVscodeMcpToolsAutoApproved,
+	VSCODE_MCP_SERVER_NAME,
+} from "@/sdk/vscode-lm-mcp-tools"
 import { fetch } from "@/shared/net"
 import { ShowMessageType } from "@/shared/proto/host/window"
 import { Logger } from "@/shared/services/Logger"
@@ -178,7 +184,24 @@ export class McpHub {
 	getServers(): McpServer[] {
 		// Only return enabled servers
 
-		return this.connections.filter((conn) => !conn.server.disabled).map((conn) => conn.server)
+		return [
+			...this.connections.filter((conn) => !conn.server.disabled).map((conn) => conn.server),
+			...this.vscodeMcpServers().filter((server) => !server.disabled),
+		]
+	}
+
+	/**
+	 * The MCP servers VS Code is running, which this hub did not start.
+	 *
+	 * They have no connection here -- they are invoked through
+	 * `vscode.lm.invokeTool` -- but they are servers as far as the panel and
+	 * the auto-approval lookup are concerned, and both find them by asking
+	 * this hub for its servers. Nothing else about them belongs in
+	 * `connections`: there is no transport to open, close or restart.
+	 */
+	private vscodeMcpServers(): McpServer[] {
+		const entry = buildVscodeMcpServerEntry()
+		return entry ? [entry] : []
 	}
 
 	/**
@@ -1592,14 +1615,40 @@ export class McpHub {
 	 * @param serverOrder Array of server names in the order they appear in settings
 	 * @returns Array of McpServer objects sorted according to settings order
 	 */
+	/**
+	 * Every server the panel should draw, in settings-file order.
+	 *
+	 * The settings file is read for the order alone; a failure to read it is
+	 * not a reason to return nothing, which is what a toggle on a borrowed
+	 * server would otherwise do the first time someone ran without one.
+	 */
+	private async getServersForPanel(): Promise<McpServer[]> {
+		let serverOrder: string[] = []
+		try {
+			const settingsPath = await getMcpSettingsFilePathHelper(await this.getSettingsDirectoryPath())
+			const content = await fs.readFile(settingsPath, "utf-8")
+			serverOrder = Object.keys(JSON.parse(content).mcpServers || {})
+		} catch {
+			// Order only; the servers themselves come from memory.
+		}
+		return this.getSortedMcpServers(serverOrder)
+	}
+
 	private getSortedMcpServers(serverOrder: string[]): McpServer[] {
-		return [...this.connections]
-			.sort((a, b) => {
-				const indexA = serverOrder.indexOf(a.server.name)
-				const indexB = serverOrder.indexOf(b.server.name)
-				return indexA - indexB
-			})
-			.map((connection) => connection.server)
+		return [
+			...[...this.connections]
+				.sort((a, b) => {
+					const indexA = serverOrder.indexOf(a.server.name)
+					const indexB = serverOrder.indexOf(b.server.name)
+					return indexA - indexB
+				})
+				.map((connection) => connection.server),
+			// Last, and unsorted: the order the others are in is the order they
+			// appear in the settings file, and these are not in it. Disabled
+			// ones are kept here, unlike in getServers(), because the panel has
+			// to draw the tick box that turns them back on.
+			...this.vscodeMcpServers(),
+		]
 	}
 
 	private async notifyWebviewOfServerChanges(): Promise<void> {
@@ -1650,6 +1699,14 @@ export class McpHub {
 	// Public methods for server management
 
 	public async toggleServerDisabledRPC(serverName: string, disabled: boolean): Promise<McpServer[]> {
+		// Borrowed from VS Code: there is no entry in the settings file to
+		// write and no connection to rebuild, so this is a setting and a
+		// redraw. Handled before the lock is taken, not inside it.
+		if (serverName === VSCODE_MCP_SERVER_NAME) {
+			await setVscodeMcpServerDisabled(disabled)
+			await this.notifyWebviewOfServerChanges()
+			return this.getServersForPanel()
+		}
 		this.isConnecting = true
 		try {
 			// Hold the cross-process lock across read-modify-write so a concurrent
@@ -1855,6 +1912,10 @@ export class McpHub {
 	 * @returns Array of updated MCP servers
 	 */
 	async toggleToolAutoApproveRPC(serverName: string, toolNames: string[], shouldAllow: boolean): Promise<McpServer[]> {
+		if (serverName === VSCODE_MCP_SERVER_NAME) {
+			await setVscodeMcpToolsAutoApproved(toolNames, shouldAllow)
+			return this.getServersForPanel()
+		}
 		try {
 			const settingsPath = await getMcpSettingsFilePathHelper(await this.getSettingsDirectoryPath())
 			const { config, autoApprove } = await updateMcpSettingsFile(settingsPath, (parsed) => {
@@ -2070,6 +2131,14 @@ export class McpHub {
 	 * @returns Array of remaining MCP servers
 	 */
 	public async deleteServerRPC(serverName: string): Promise<McpServer[]> {
+		// Borrowed from VS Code, so there is nothing here to delete. Said
+		// plainly: the generic path would report it as missing from the MCP
+		// configuration, which is true and sounds like something is broken.
+		if (serverName === VSCODE_MCP_SERVER_NAME) {
+			throw new Error(
+				"These tools come from the MCP servers configured in VS Code. Remove the server there, or use the toggle to stop offering them to the model.",
+			)
+		}
 		try {
 			// Clear OAuth data BEFORE removing from config (while we still have the connection/URL)
 			await this.clearOAuthForConnection(serverName)

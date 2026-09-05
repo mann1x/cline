@@ -357,6 +357,14 @@
 					"type": "boolean",
 					"default": true,
 					"markdownDescription": "Offer the tools of the MCP servers configured in **VS Code**, alongside the ones configured in Cline. VS Code has already started and authenticated those servers, so this reaches ones Cline cannot connect to on its own \u2014 a server that refuses dynamic client registration has no way to issue Cline a client id, and VS Code already holds a token for it. Their names are prefixed `vscode__`. Turn this off to offer only the servers in Cline's own MCP settings."
+				},
+				"cline.vscodeMcpAutoApprove": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"default": [],
+					"markdownDescription": "Tools borrowed from VS Code's MCP servers that run without asking, by the name Cline shows them under minus the `vscode__` prefix. Set from the tick boxes in Manage MCP Servers; the servers' own approval settings live in VS Code, where Cline cannot read them, so this is Cline's own list."
 				}
 			}
 		}

@@ -1,7 +1,7 @@
 import type { AgentTool } from "@cline/shared"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import * as vscode from "vscode"
-import { createVscodeLmMcpTools } from "./vscode-lm-mcp-tools"
+import { buildVscodeMcpServerEntry, createVscodeLmMcpTools } from "./vscode-lm-mcp-tools"
 
 type StubTool = { name: string; description: string; inputSchema?: unknown; tags: readonly string[] }
 
@@ -99,6 +99,55 @@ describe("createVscodeLmMcpTools", () => {
 		const configuration = vi.spyOn(vscode.workspace, "getConfiguration").mockReturnValue({ get: () => false } as never)
 		try {
 			expect(await createVscodeLmMcpTools()).toEqual([])
+		} finally {
+			configuration.mockRestore()
+		}
+	})
+})
+
+describe("buildVscodeMcpServerEntry", () => {
+	afterEach(() => {
+		lm.tools = []
+	})
+
+	it("presents the borrowed tools as a server the panel can draw", async () => {
+		offer([figmaGetCode])
+		const entry = buildVscodeMcpServerEntry()
+
+		expect(entry?.name).toBe("vscode")
+		expect(entry?.disabled).toBe(false)
+		// The tool name here is the one `isToolAutoApproved` recovers by
+		// splitting `vscode__figma_get_code`, so it must not carry the prefix.
+		expect(entry?.tools?.map((tool) => tool.name)).toEqual(["figma_get_code"])
+		expect(entry?.tools?.[0]?.autoApprove).toBe(false)
+	})
+
+	it("marks the tools the user ticked", () => {
+		offer([figmaGetCode])
+		const configuration = vi.spyOn(vscode.workspace, "getConfiguration").mockReturnValue({
+			get: (key: string) => (key === "vscodeMcpAutoApprove" ? ["figma_get_code"] : undefined),
+		} as never)
+		try {
+			expect(buildVscodeMcpServerEntry()?.tools?.[0]?.autoApprove).toBe(true)
+		} finally {
+			configuration.mockRestore()
+		}
+	})
+
+	it("is nothing at all when VS Code has no MCP servers", () => {
+		offer([])
+		expect(buildVscodeMcpServerEntry()).toBeUndefined()
+	})
+
+	it("still describes itself when switched off, so the tick box can be drawn", () => {
+		offer([figmaGetCode])
+		const configuration = vi.spyOn(vscode.workspace, "getConfiguration").mockReturnValue({
+			get: (key: string) => (key === "vscodeMcpTools" ? false : undefined),
+		} as never)
+		try {
+			const entry = buildVscodeMcpServerEntry()
+			expect(entry?.disabled).toBe(true)
+			expect(entry?.tools).toHaveLength(1)
 		} finally {
 			configuration.mockRestore()
 		}
