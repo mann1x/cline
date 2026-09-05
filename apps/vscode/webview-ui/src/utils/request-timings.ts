@@ -53,15 +53,48 @@ export function formatTokens(tokens: number | undefined): string | undefined {
 	return tokens.toLocaleString()
 }
 
+/** The engine's own prefill rate, or one derived from its tokens and time. */
+export function prefillRate(timings: RequestTimings | undefined): number | undefined {
+	return timings?.promptPerSecond ?? rateFrom(timings?.promptTokens, timings?.promptMs)
+}
+
+/**
+ * The generation rate, and where it can come from.
+ *
+ * The engine's own is preferred over anything derived, because it counts
+ * decode steps rather than tokens -- the first token comes free with the
+ * prompt batch -- and with speculative decoding those two are different
+ * numbers. Only when no engine reported does this fall back to the output
+ * tokens the provider billed over the time Cline measured after the first
+ * token arrived, which is a real measurement of two reported quantities
+ * rather than a guess, and is marked as derived wherever it is shown.
+ */
+export function generationRate(
+	timings: RequestTimings | undefined,
+	outputTokens?: number,
+): { perSecond: number; derived: boolean } | undefined {
+	const reported = timings?.generatePerSecond ?? rateFrom(timings?.generateTokens, timings?.generateMs)
+	if (reported !== undefined) {
+		return { perSecond: reported, derived: false }
+	}
+	if (timings?.requestMs === undefined || timings.firstTokenMs === undefined) {
+		return undefined
+	}
+	// The span after the first token is the one spent generating the rest. A
+	// request that produced a single token has no such span and no rate.
+	const generatingMs = timings.requestMs - timings.firstTokenMs
+	const derived = rateFrom(outputTokens, generatingMs)
+	return derived === undefined ? undefined : { perSecond: derived, derived: true }
+}
+
 /**
  * The one line shown when the panel is collapsed.
  *
  * Wall time first because it is the question actually being asked, then the
- * generation rate, which is the number that explains it. Prefers the engine's
- * own rate over anything derived: it counts decode steps rather than tokens,
- * and with speculative decoding those differ.
+ * two throughputs that explain it -- prefill and generation are separate
+ * numbers and a single "tok/s" hides which of them moved.
  */
-export function summarizeTimings(timings: RequestTimings | undefined): string | undefined {
+export function summarizeTimings(timings: RequestTimings | undefined, outputTokens?: number): string | undefined {
 	if (!timings) {
 		return undefined
 	}
@@ -70,9 +103,14 @@ export function summarizeTimings(timings: RequestTimings | undefined): string | 
 	if (wall) {
 		parts.push(wall)
 	}
-	const rate = formatRate(timings.generatePerSecond) ?? formatRate(rateFrom(timings.generateTokens, timings.generateMs))
-	if (rate) {
-		parts.push(rate)
+	const prefill = formatRate(prefillRate(timings))
+	if (prefill) {
+		parts.push(`${prefill} prefill`)
+	}
+	const generation = generationRate(timings, outputTokens)
+	const generationText = formatRate(generation?.perSecond)
+	if (generationText) {
+		parts.push(`${generationText} gen${generation?.derived ? "*" : ""}`)
 	}
 	const firstToken = formatDuration(timings.firstTokenMs)
 	if (firstToken) {
@@ -82,7 +120,7 @@ export function summarizeTimings(timings: RequestTimings | undefined): string | 
 }
 
 function rateFrom(tokens: number | undefined, ms: number | undefined): number | undefined {
-	if (tokens === undefined || tokens <= 0 || !ms) {
+	if (tokens === undefined || tokens <= 0 || !ms || ms <= 0) {
 		return undefined
 	}
 	return (tokens * 1000) / ms
@@ -104,7 +142,7 @@ export function engineName(timings: RequestTimings | undefined): string | undefi
  * for every provider, and the engine's follow as the explanation. A row is
  * omitted rather than zeroed when its field is missing — see the module note.
  */
-export function timingRows(timings: RequestTimings | undefined): TimingRow[] {
+export function timingRows(timings: RequestTimings | undefined, outputTokens?: number): TimingRow[] {
 	if (!timings) {
 		return []
 	}
@@ -118,6 +156,16 @@ export function timingRows(timings: RequestTimings | undefined): TimingRow[] {
 	push("Total", formatDuration(timings.requestMs), "measured by Cline")
 	push("First token", formatDuration(timings.firstTokenMs))
 
+	// A provider that reports nothing still has a generation rate worth
+	// showing, from tokens it did report over time Cline did measure. Said to
+	// be derived, because it is not the engine's own count of decode steps.
+	if (!timings.engine) {
+		const generation = generationRate(timings, outputTokens)
+		if (generation) {
+			push("Generation rate", formatRate(generation.perSecond), "derived from output tokens and Cline's timing")
+		}
+	}
+
 	const name = engineName(timings)
 	if (name) {
 		// The engine's own total sits next to Cline's on purpose: the gap
@@ -127,11 +175,11 @@ export function timingRows(timings: RequestTimings | undefined): TimingRow[] {
 		push("Model load", formatDuration(timings.loadMs))
 		push("Prompt tokens", formatTokens(timings.promptTokens))
 		push("Prompt time", formatDuration(timings.promptMs))
-		push("Prompt rate", formatRate(timings.promptPerSecond ?? rateFrom(timings.promptTokens, timings.promptMs)))
+		push("Prompt rate", formatRate(prefillRate(timings)))
 		push("Cached prompt", formatTokens(timings.cachedTokens), "served from the KV cache")
 		push("Generated tokens", formatTokens(timings.generateTokens))
 		push("Generation time", formatDuration(timings.generateMs))
-		push("Generation rate", formatRate(timings.generatePerSecond ?? rateFrom(timings.generateTokens, timings.generateMs)))
+		push("Generation rate", formatRate(generationRate(timings, outputTokens)?.perSecond))
 		if (timings.draftTokens !== undefined && timings.draftTokens > 0) {
 			const accepted = timings.draftAcceptedTokens ?? 0
 			push(

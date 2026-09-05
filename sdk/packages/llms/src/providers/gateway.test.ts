@@ -4348,6 +4348,97 @@ describe("sdk-gateway", () => {
 		});
 	});
 
+	// The bug this exists to prevent: provider metadata rides `finish-step`,
+	// and reading it off `finish` silently produced `undefined` for every
+	// streamed request. It was verified against a live Ollama server by calling
+	// `doStream` directly -- one layer below `streamText`, where the raw model
+	// does put it on `finish` -- so the check passed while the shipped path was
+	// always empty. This drives the layer that broke.
+	it("reads engine timings from the finish-step part, where the AI SDK puts them", async () => {
+		streamTextSpy.mockReturnValue({
+			fullStream: makeStreamParts([
+				{ type: "text-delta", text: "hi" },
+				{
+					type: "finish-step",
+					providerMetadata: {
+						ollama: {
+							responseId: "resp_1",
+							total_duration: 46_322_892_038,
+							load_duration: 672_995_263,
+							prompt_eval_count: 15_696,
+							prompt_eval_duration: 17_799_125_000,
+							eval_count: 2141,
+							eval_duration: 27_776_027_000,
+						},
+					},
+				},
+				{ type: "finish", usage: { inputTokens: 15_696, outputTokens: 2141 } },
+			]),
+		});
+
+		const gateway = createGateway({
+			providerConfigs: [
+				{
+					providerId: "ollama",
+					baseUrl: "http://127.0.0.1:11434",
+					models: [{ id: "test-model", name: "test-model" }],
+				},
+			],
+		});
+
+		const events = await collect(
+			await gateway.stream({
+				providerId: "ollama",
+				modelId: "test-model",
+				messages: baseMessages,
+			}),
+		);
+
+		const usage = events.find((event) => event.type === "usage");
+		expect(usage).toMatchObject({
+			timings: {
+				engine: "ollama",
+				promptTokens: 15_696,
+				generateTokens: 2141,
+			},
+		});
+		// Cline's own measurement stands alongside the engine's, never replaced
+		// by it.
+		const timings = (usage as Extract<AgentModelEvent, { type: "usage" }>)
+			.timings;
+		expect(typeof timings?.requestMs).toBe("number");
+		expect(timings?.engineTotalMs).toBeCloseTo(46_322.892, 1);
+	});
+
+	it("reports no engine timings for a provider that sends none", async () => {
+		mockSuccessfulStream();
+
+		const gateway = createGateway({
+			providerConfigs: [
+				{
+					providerId: "anthropic",
+					apiKey: "anthropic-key",
+					models: [{ id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" }],
+				},
+			],
+		});
+
+		const events = await collect(
+			await gateway.stream({
+				providerId: "anthropic",
+				modelId: "claude-sonnet-4-5",
+				messages: baseMessages,
+			}),
+		);
+
+		const usage = events.find((event) => event.type === "usage") as Extract<
+			AgentModelEvent,
+			{ type: "usage" }
+		>;
+		expect(usage.timings?.engine).toBeUndefined();
+		expect(typeof usage.timings?.requestMs).toBe("number");
+	});
+
 	it("reads cache write tokens from nested raw usage", async () => {
 		streamTextSpy.mockReturnValue({
 			usage: Promise.resolve({

@@ -1975,9 +1975,29 @@ async function* emitAiSdkEvents(
 					continue;
 				}
 
+				// Provider metadata rides `finish-step`, not `finish`.
+				//
+				// `streamText`'s terminal part carries only `finishReason`,
+				// `rawFinishReason` and `totalUsage` -- no `providerMetadata` --
+				// while each step's own end carries it. Reading it off `finish`
+				// therefore yielded `undefined` for every streamed request, and
+				// nothing said so: the field is optional, so an empty one looks
+				// exactly like a provider that reports nothing.
+				//
+				// The last step wins. A run with tool calls has several, and it
+				// is the final one that describes the request whose usage is
+				// emitted below.
+				if (part.type === "finish-step" && part.providerMetadata) {
+					finishProviderMetadata = part.providerMetadata;
+				}
+
 				if (part.type === "finish") {
 					finishUsage = part.usage ?? part.totalUsage;
-					finishProviderMetadata = part.providerMetadata;
+					// Kept as a fallback rather than removed: a model
+					// implementation that is not `streamText` -- and the mocked
+					// streams in these tests -- may put it here instead.
+					finishProviderMetadata =
+						part.providerMetadata ?? finishProviderMetadata;
 					finishReason =
 						part.finishReason ?? part.rawFinishReason ?? part.reason;
 				}

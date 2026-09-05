@@ -44,8 +44,8 @@ export const RequestTimingsRow = memo<RequestTimingsRowProps>(({ message }) => {
 		}
 	}, [message.text])
 
-	const rows = useMemo(() => timingRows(info?.timings), [info?.timings])
-	const summary = useMemo(() => summarizeTimings(info?.timings), [info?.timings])
+	const rows = useMemo(() => timingRows(info?.timings, info?.tokensOut), [info?.timings, info?.tokensOut])
+	const summary = useMemo(() => summarizeTimings(info?.timings, info?.tokensOut), [info?.timings, info?.tokensOut])
 
 	if (!showRequestTimings || !info?.timings || !summary) {
 		return null
@@ -68,6 +68,13 @@ export const RequestTimingsRow = memo<RequestTimingsRowProps>(({ message }) => {
 				<span>{summary}</span>
 				{engine && <span className="opacity-60">· {engine}</span>}
 			</button>
+			{/* The asterisk in the summary needs saying once, where it appears,
+			    rather than being a mark the reader has to guess at. */}
+			{isExpanded && summary.includes("gen*") && (
+				<div className="ml-4 mt-1 opacity-60">
+					* generation rate derived from Cline's timing, not reported by the provider
+				</div>
+			)}
 			{isExpanded && (
 				<div className="ml-4 mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5">
 					{rows.map((row) => (

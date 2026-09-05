@@ -31,17 +31,29 @@ describe("formatRate", () => {
 })
 
 describe("summarizeTimings", () => {
-	it("leads with the wall time, then what explains it", () => {
+	it("leads with the wall time, then both throughputs", () => {
+		// Prefill and generation are separate numbers and a single "tok/s"
+		// hides which of them moved between two runs.
 		expect(
 			summarizeTimings({
 				requestMs: 17_300,
 				firstTokenMs: 1200,
 				engine: "ollama",
+				promptTokens: 15_696,
+				promptMs: 17_799,
+				promptPerSecond: 881.8,
 				generateTokens: 2141,
 				generateMs: 27_776,
 				generatePerSecond: 77.08,
 			}),
-		).toBe("17.3s · 77.1 tok/s · 1.20s to first token")
+		).toBe("17.3s · 882 tok/s prefill · 77.1 tok/s gen · 1.20s to first token")
+	})
+
+	it("derives a generation rate for a provider that reports none, and marks it", () => {
+		// 240 tokens over the 12s that followed the first token.
+		expect(summarizeTimings({ requestMs: 14_000, firstTokenMs: 2000 }, 240)).toBe(
+			"14.0s · 20.0 tok/s gen* · 2.00s to first token",
+		)
 	})
 
 	it("says what it can for a provider that reports nothing of its own", () => {
@@ -58,6 +70,33 @@ describe("timingRows", () => {
 	it("shows only Cline's own measurements when no engine reported", () => {
 		const rows = timingRows({ requestMs: 4321, firstTokenMs: 800 })
 		expect(rows.map((row) => row.label)).toEqual(["Total", "First token"])
+	})
+
+	it("adds a derived generation rate when the token count allows one", () => {
+		const rows = timingRows({ requestMs: 14_000, firstTokenMs: 2000 }, 240)
+		const rate = rows.find((row) => row.label === "Generation rate")
+
+		expect(rate?.value).toBe("20.0 tok/s")
+		// Never presented as the engine's own count of decode steps.
+		expect(rate?.note).toBe("derived from output tokens and Cline's timing")
+	})
+
+	it("prefers the engine's generation rate over the derived one", () => {
+		const rows = timingRows(
+			{
+				requestMs: 14_000,
+				firstTokenMs: 2000,
+				engine: "ollama",
+				generateTokens: 2141,
+				generateMs: 27_776,
+				generatePerSecond: 77.08,
+			},
+			240,
+		)
+		const rate = rows.find((row) => row.label === "Generation rate")
+
+		expect(rate?.value).toBe("77.1 tok/s")
+		expect(rate?.note).toBeUndefined()
 	})
 
 	it("adds the engine's split, and never a row for a field it did not send", () => {
