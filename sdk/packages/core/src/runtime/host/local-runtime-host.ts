@@ -944,11 +944,13 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// there are any depends on what the workspace turned out to hold. They
 		// go on last deliberately: `propose_check` carries no checklist and is
 		// not wrapped, because it is a question to the user rather than a step
-		// in the work.
-		const toolsWithProtocol =
-			atomicProtocol && atomicProtocol.tools.length > 0
-				? [...tools, ...atomicProtocol.tools]
-				: tools;
+		// in the work, and `restore_file` undoes work rather than doing any.
+		// `decorateTools` then goes over the whole list, because the one thing
+		// the protocol adds to an existing tool -- reading a file as the open
+		// transaction found it -- has to reach the built-ins as well as these.
+		const toolsWithProtocol = atomicProtocol
+			? atomicProtocol.decorateTools([...tools, ...atomicProtocol.tools])
+			: tools;
 		const completionPolicyWithProtocol = atomicProtocol
 			? {
 					...completionPolicyWithChecklistCloseOut,

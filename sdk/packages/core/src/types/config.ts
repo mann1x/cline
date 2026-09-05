@@ -277,6 +277,17 @@ export interface CoreAtomicProtocolConfig {
 	 * behaviour it had before.
 	 */
 	approveCheck?: CheckApprover;
+	/**
+	 * Retires what the model had read about a file the protocol put back.
+	 *
+	 * Supplied by hosts that own the read receipts, for the same reason
+	 * `approveCheck` is supplied by hosts that have somewhere to ask. The
+	 * protocol's `restore_file` moves every line in the file it restores, so
+	 * reads taken before it no longer describe it, and the editor's
+	 * read-before-edit guard would otherwise accept an edit aimed at code that
+	 * has since moved. A host that leaves this out still gets the restore.
+	 */
+	forgetReads?: (absolutePath: string) => void;
 }
 
 export type CoreCompactionStrategy = "basic" | "agentic";

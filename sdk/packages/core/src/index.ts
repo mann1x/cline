@@ -1118,6 +1118,14 @@ export {
 	referencedCredentialNames,
 	resolveCredentialEnv,
 } from "./extensions/tools/qa-credentials";
+// The transaction's base revision: what every file said when the open
+// transaction started. Read through `read_files` with `revision: "base"`, and
+// written back over one file by `restore_file`. Both exist only while the
+// change protocol is armed.
+export {
+	BASE_REVISION,
+	withBaseRevisionReads,
+} from "./runtime/atomic/base-revision-reads";
 // The check a model proposes and a host puts to the user. A host that has
 // somewhere to ask supplies `approveCheck`; one that has not leaves it out.
 export type {
@@ -1125,6 +1133,12 @@ export type {
 	CheckApprover,
 	CheckProposal,
 } from "./runtime/atomic/proposal";
+export {
+	createRestoreFileTool,
+	MAX_RESTORES_PER_TRANSACTION,
+	RESTORE_FILE_TOOL_DESCRIPTION,
+	RESTORE_FILE_TOOL_NAME,
+} from "./runtime/atomic/restore-file-tool";
 export {
 	applyClineFeaturedModels,
 	type ClineRecommendedModel,

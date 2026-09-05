@@ -1,9 +1,11 @@
-import type { AgentTool } from "@cline/shared";
+import type { AgentTool, AgentToolDefinition } from "@cline/shared";
 import type { CoreAtomicProtocolConfig } from "../../types/config";
+import { withBaseRevisionReads } from "./base-revision-reads";
 import { discoverOracle, type Oracle } from "./oracle";
 import type { CheckApprover } from "./proposal";
 import { createProposeCheckTool } from "./propose-check-tool";
 import { buildEmptyAttemptPrompt, describeEmptyAttempt } from "./protocol";
+import { createRestoreFileTool } from "./restore-file-tool";
 import {
 	type SelfReport,
 	TransactionController,
@@ -67,6 +69,17 @@ export interface AtomicProtocolSessionOptions {
 	 * leaves this out and gets the old behaviour.
 	 */
 	approveCheck?: CheckApprover;
+	/**
+	 * Retires what the model had read about a file the protocol put back.
+	 *
+	 * Supplied by hosts that own the read receipts. `restore_file` moves every
+	 * line in the file it restores, so a read taken before it no longer
+	 * describes the file — and the editor's read-before-edit guard is the only
+	 * thing between a stale line number and the file on disk. A host that
+	 * leaves this out still gets the restore; what it loses is the guard
+	 * noticing.
+	 */
+	forgetReads?: (absolutePath: string) => void;
 }
 
 export interface AtomicProtocolSession {
@@ -85,6 +98,17 @@ export interface AtomicProtocolSession {
 	 * to ask. A tool the model cannot usefully call is a tool that gets called.
 	 */
 	readonly tools: AgentTool[];
+	/**
+	 * The session's other tools, with what the protocol adds to them.
+	 *
+	 * Only `read_files`, which gains a `revision` for reading the file as this
+	 * transaction found it. A decoration rather than a tool of its own, and
+	 * applied here rather than at the tool's definition, so that a host running
+	 * without the protocol keeps byte-for-byte the schema it had: there is no
+	 * base revision without an open transaction, and advertising one anyway
+	 * teaches a call that can only be refused.
+	 */
+	decorateTools<T extends AgentToolDefinition>(tools: readonly T[]): T[];
 	/**
 	 * The first transaction's rules, to go out with the task itself, once.
 	 *
@@ -168,7 +192,23 @@ export async function createAtomicProtocolSession(
 		onEvent: options.onEvent,
 	});
 
-	const tools: AgentTool[] = [];
+	// The transaction already holds what every file said when it opened, and
+	// until now only the rollback could reach it. A model that has damaged a
+	// file can undo exactly that file and keep the rest of its work, instead of
+	// retyping the original from memory — measured, that reconstruction is
+	// where a run's hours go, and on a minified line it rarely converges.
+	const tools: AgentTool[] = [
+		createRestoreFileTool({
+			controller,
+			forgetReads: options.forgetReads ?? options.config?.forgetReads,
+			onRestored: ({ path: restored, deleted }) =>
+				options.logger?.log?.(
+					`[Atomic] ${restored} ${deleted ? "deleted" : "put back"} at the model's request.`,
+				),
+			onError: (message, error) =>
+				options.logger?.log?.(`${message}: ${String(error)}`),
+		}),
+	];
 	if (canProposeCheck && approveCheck) {
 		tools.push(
 			createProposeCheckTool({
@@ -196,6 +236,7 @@ export async function createAtomicProtocolSession(
 			return controller.oracle;
 		},
 		tools,
+		decorateTools: (given) => withBaseRevisionReads(given, controller),
 		takeOpeningRules: () => {
 			const opening = rules;
 			rules = undefined;

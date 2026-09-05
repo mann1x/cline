@@ -35,6 +35,8 @@ export interface SdkSessionLifecycleOptions {
 	readFileExecutor?: ReadFileExecutorHandler
 	/** Files read this session; see `ListFilesToolOptions.getReadPaths`. */
 	getReadPaths?: () => string[]
+	/** Retires a file's reads after the change protocol put that file back. */
+	forgetReads?: (absolutePath: string) => void
 	onSessionEvent: (event: CoreSessionEvent) => void
 	/** Lazy factory for the VscodeTerminalManager (foreground terminal support). */
 	getTerminalManager?: () => VscodeTerminalManager
@@ -348,6 +350,7 @@ export class SdkSessionLifecycle {
 				applyPatchExecutor: this.options.applyPatchExecutor,
 				readFileExecutor: this.options.readFileExecutor,
 				getReadPaths: this.options.getReadPaths,
+				forgetReads: this.options.forgetReads,
 				getTerminalManager: this.options.getTerminalManager,
 				foregroundCommands: this.options.foregroundCommands,
 				beforeStartSession: this.options.beforeStartSession,

@@ -411,6 +411,10 @@ export class Controller {
 			// so it can say what it could not have covered, rather than reporting
 			// that a file the model just edited does not exist.
 			getReadPaths: () => this.readReceipts.paths(),
+			// The change protocol can put a file back mid-transaction. That
+			// moves every line in it, so the reads that would justify an edit
+			// by line number have to go with it.
+			forgetReads: (absolutePath) => this.readReceipts.forget(absolutePath),
 			onSessionEvent: (event) => {
 				this.sessionEvents.handleSessionEvent(event).catch((err) => {
 					Logger.error("[SdkController] Failed to handle session event:", err)

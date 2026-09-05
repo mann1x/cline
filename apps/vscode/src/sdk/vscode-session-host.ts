@@ -55,6 +55,14 @@ export interface VscodeSessionHostOptions {
 	mcpHub: McpHub
 	/** Files read this session; see `ListFilesToolOptions.getReadPaths`. */
 	getReadPaths?: () => string[]
+	/**
+	 * Retires the reads recorded for one file, after the change protocol has
+	 * put that file back. Every line in it has moved, so a read taken before
+	 * the restore no longer describes it, and the editor's read-before-edit
+	 * guard would otherwise accept an edit aimed at code that is no longer
+	 * there.
+	 */
+	forgetReads?: (absolutePath: string) => void
 	requestToolApproval?: (request: {
 		agentId: string
 		conversationId: string
@@ -209,6 +217,10 @@ export class VscodeSessionHost implements SdkSessionHost {
 						// runnable is not automatically a workspace with no verdict:
 						// the model proposes a check and this puts it to them.
 						approveCheck: approveProposedCheck,
+						// `restore_file` rewrites the whole file, so what the
+						// model had read of it no longer holds. This host owns
+						// the receipts, so it is the one that can say so.
+						forgetReads: options.forgetReads,
 					},
 					taskProgress: {
 						enabled: focusChainSettings?.enabled ?? true,

@@ -29,6 +29,63 @@ function shellCheck(root: string, needle: string): string {
 	return `grep -q ${needle} ${path.join(root, "game.js")}`;
 }
 
+describe("the undo the protocol hands the model", () => {
+	// The transaction has held every file's opening state all along, and until
+	// now only the rollback could read it. Both halves are gated on the
+	// protocol being armed, because without an open transaction there is no
+	// base revision to read or restore to.
+	it("offers restore_file whenever the protocol is armed", async () => {
+		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "always", oracleCommand: shellCheck(root, "fixed") },
+			});
+
+			expect(session?.tools.map((tool) => tool.name)).toContain("restore_file");
+		});
+	});
+
+	it("adds the base revision to read_files, and nothing to any other tool", async () => {
+		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "always", oracleCommand: shellCheck(root, "fixed") },
+			});
+			const plainRead = {
+				name: "read_files",
+				description: "Read files.",
+				inputSchema: { type: "object", properties: {} },
+			};
+			const plainSearch = {
+				name: "search_codebase",
+				description: "Search.",
+				inputSchema: { type: "object", properties: {} },
+			};
+
+			const decorated = session?.decorateTools([plainRead, plainSearch]) ?? [];
+
+			expect(
+				(decorated[0]?.inputSchema.properties as Record<string, unknown>)
+					.revision,
+			).toBeDefined();
+			expect(decorated[1]).toBe(plainSearch);
+		});
+	});
+
+	it("hands no such tools to a session the protocol declined to arm", async () => {
+		// A host running without the protocol keeps byte-for-byte the tools it
+		// had: there is nothing to restore to and nothing to read.
+		await withWorkspace({ "notes.md": "# hello" }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "auto" },
+			});
+
+			expect(session).toBeUndefined();
+		});
+	});
+});
+
 describe("arming the protocol for a session", () => {
 	it("stays out of the way when it is off", async () => {
 		await withWorkspace({}, async (root) => {
@@ -489,7 +546,12 @@ describe("a check the model proposes", () => {
 					approveCheck: async () => ({ approved: true }),
 				});
 
-				expect(session?.tools).toHaveLength(0);
+				// The proposal tool specifically, not the tool list: the protocol
+				// also carries `restore_file` whenever it is armed, and a model
+				// that can run the workspace's own check still needs an undo.
+				expect(session?.tools.map((tool) => tool.name)).not.toContain(
+					"propose_check",
+				);
 			},
 		);
 	});
