@@ -694,6 +694,43 @@ function changedLineCounts(
 }
 
 /**
+ * Strip the line breaks a model wraps an anchor in.
+ *
+ * `old_text` arrives bracketed by the newlines either side of the lines it
+ * names about as often as it arrives bare, and refusing over one of them would
+ * be refusing over punctuation. At most one is taken from each end, so a
+ * genuinely blank first or last line still counts as content.
+ */
+function anchorText(text: string): string {
+	let normalized = text.split(/\r\n|\n/).join("\n");
+	if (normalized.startsWith("\n")) {
+		normalized = normalized.slice(1);
+	}
+	if (normalized.endsWith("\n")) {
+		normalized = normalized.slice(0, -1);
+	}
+	return normalized;
+}
+
+/**
+ * Whether `old_text` describes exactly the lines the range names.
+ *
+ * The gutter is tried as a fallback for the same reason the `old_text` path
+ * strips it: text pasted back from a read is the common way an anchor arrives,
+ * and it is still an accurate anchor.
+ */
+function anchorDescribesRange(rangeText: string, oldStr: string): boolean {
+	const target = anchorText(rangeText);
+	const supplied = anchorText(oldStr);
+	if (supplied === target) {
+		return true;
+	}
+	return hasLineNumberGutter(supplied)
+		? anchorText(stripLineNumberGutter(supplied)) === target
+		: false;
+}
+
+/**
  * Replace a whole line range — the operation that had no tool.
  *
  * Measured on a live session: twelve shell commands existed only to do
@@ -707,6 +744,7 @@ async function replaceLineRange(
 	startLineOneBased: number,
 	endLineOneBased: number,
 	newStr: string | null | undefined,
+	oldStr: string | null | undefined,
 	encoding: BufferEncoding,
 	maxDiffLines: number,
 	noteNoOp?: NoOpLedger,
@@ -746,6 +784,38 @@ async function replaceLineRange(
 	// the range holds" check passes because 101 < 105. Telling the model in
 	// prose that whole-file rewrites are a last resort did not stop it either,
 	// so this is the enforcement.
+	// `old_text` alongside a range is the model checking its own line numbers.
+	// Honour it or refuse: what must never happen is what used to, which is that
+	// `start_line` took this path and the anchor was dropped on the floor.
+	//
+	// Measured live: `{start_line: 100, end_line: 102, old_text: "\n"}` — one
+	// blank line named, three lines replaced. It deleted a class's closing brace
+	// and a function declaration, reported "Replaced lines 100-102", and the
+	// model spent its next two calls and a restore working out what had eaten
+	// its code. Across six sessions, 26 calls carried both and 13 of those had an
+	// anchor that could not fit the span it named.
+	//
+	// A mismatch is refused rather than re-anchored to `old_text`, because a call
+	// whose two halves disagree is a call whose author is wrong about the file,
+	// and the cheap repair is to read it again.
+	const rangeText = lines
+		.slice(startLineOneBased - 1, effectiveEndLine)
+		.join(eol);
+	const anchored = oldStr != null && oldStr !== "";
+	if (anchored && !anchorDescribesRange(rangeText, oldStr as string)) {
+		const suppliedLines = anchorText(oldStr as string).split("\n").length;
+		const namedLines = effectiveEndLine - startLineOneBased + 1;
+		throw new Error(
+			`No replacement performed: the call names ${
+				startLineOneBased === effectiveEndLine
+					? `line ${startLineOneBased}`
+					: `lines ${startLineOneBased}-${effectiveEndLine}`
+			} (${namedLines} line(s)) but its \`old_text\` is ${suppliedLines} line(s) that do not match them, so the two halves of the edit describe different code. ${filePath} currently holds:\n${
+				quoteCurrentLines(content, startLineOneBased, effectiveEndLine) ?? ""
+			}\nReplacing the range would have changed lines your \`old_text\` never named. Send \`old_text\` on its own and let the file find it, or send the range on its own with \`new_text\` for exactly those lines — after re-reading them, because an anchor that misses usually means the line numbers have moved.`,
+		);
+	}
+
 	const spanned = effectiveEndLine - startLineOneBased + 1;
 	// Lines 1..count is not a range wearing a rewrite's clothing — it *is* the
 	// rewrite, stated plainly, and it is the shape this tool's own errors send
@@ -759,6 +829,7 @@ async function replaceLineRange(
 	const isFullSpanRewrite =
 		startLineOneBased === 1 && effectiveEndLine === lines.length;
 	if (
+		!anchored &&
 		!isFullSpanRewrite &&
 		spanned > MAX_UNANCHORED_RANGE_LINES &&
 		spanned > lines.length * MAX_UNANCHORED_RANGE_SHARE
@@ -1416,6 +1487,7 @@ export function createEditorExecutor(
 				input.start_line,
 				input.end_line ?? input.start_line,
 				input.new_text,
+				input.old_text,
 				encoding,
 				maxDiffLines,
 				noteNoOp,
@@ -1497,6 +1569,9 @@ export function createEditorExecutor(
 				1,
 				lineCount,
 				input.new_text,
+				// The create form, which carries no `old_text`: a call that had one
+				// took the text-matched path long before here.
+				undefined,
 				encoding,
 				maxDiffLines,
 				noteNoOp,

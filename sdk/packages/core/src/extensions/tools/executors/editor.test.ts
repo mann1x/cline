@@ -899,6 +899,99 @@ describe("createEditorExecutor", () => {
 			});
 		});
 
+		// The live failure this guard was written for. `old_text` naming one
+		// blank line while the range named three: the range used to win in
+		// silence, taking a closing brace and a function declaration with it.
+		it("refuses a range whose old_text names different lines", async () => {
+			await withTempFile(
+				"a\n}\n\nfunction update(){\ne",
+				async (filePath, dir) => {
+					const editor = createEditorExecutor();
+					await expect(
+						editor(
+							{
+								path: filePath,
+								start_line: 2,
+								end_line: 4,
+								old_text: "\n",
+								new_text: "\n",
+							},
+							dir,
+							context,
+						),
+					).rejects.toThrow("describe different code");
+					// The point of the refusal: the file is untouched.
+					await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+						"a\n}\n\nfunction update(){\ne",
+					);
+				},
+			);
+		});
+
+		it("applies a range whose old_text matches it", async () => {
+			await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const result = await editor(
+					{
+						path: filePath,
+						start_line: 2,
+						end_line: 3,
+						old_text: "b\nc",
+						new_text: "B",
+					},
+					dir,
+					context,
+				);
+				expect(result).not.toContain("No replacement performed");
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("a\nB\nd");
+			});
+		});
+
+		// The line breaks either side of an anchor are punctuation, not content.
+		it("accepts an old_text wrapped in the range's own newlines", async () => {
+			await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const result = await editor(
+					{
+						path: filePath,
+						start_line: 2,
+						end_line: 3,
+						old_text: "\nb\nc\n",
+						new_text: "B",
+					},
+					dir,
+					context,
+				);
+				expect(result).not.toContain("No replacement performed");
+			});
+		});
+
+		// A matching anchor makes the range self-verifying, so the size objection
+		// no longer applies to it.
+		it("allows a large range that its old_text does anchor", async () => {
+			const file = Array.from({ length: 138 }, (_, i) => `line ${i + 1}`).join(
+				"\n",
+			);
+			await withTempFile(file, async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const old = Array.from({ length: 100 }, (_, i) => `line ${i + 1}`).join(
+					"\n",
+				);
+				const result = await editor(
+					{
+						path: filePath,
+						start_line: 1,
+						end_line: 100,
+						old_text: old,
+						new_text: "rewritten",
+					},
+					dir,
+					context,
+				);
+				expect(result).not.toContain("No replacement performed");
+			});
+		});
+
 		// Anchored edits are self-verifying, so size is not the objection.
 		it("allows a large range when old_text anchors it", async () => {
 			const file = Array.from({ length: 138 }, (_, i) => `line ${i + 1}`).join(
