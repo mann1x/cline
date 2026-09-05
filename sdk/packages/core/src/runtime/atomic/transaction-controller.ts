@@ -208,6 +208,33 @@ export class TransactionController {
 		}
 	}
 
+	/**
+	 * Run the check against the working tree, and settle nothing.
+	 *
+	 * The check the transaction is judged by was reachable from exactly one
+	 * place -- `settle`, at the completion attempt -- so a model working under
+	 * it got no verdict until the transaction was over, and a failing one threw
+	 * the whole transaction away. Measured on a live run: 341 messages and 65
+	 * edits with no check result, then one `SyntaxError` and a full rollback,
+	 * after which the model restored the original file and started again.
+	 *
+	 * The arm that works never had this problem, because there the check is a
+	 * shell line named in the prompt and the model simply reruns it -- 88 times
+	 * in one successful run. This is that, for a check the model cannot type.
+	 */
+	async runCheck(): Promise<OracleVerdict> {
+		if (!this.snapshot) {
+			throw new Error("runCheck() was called before a transaction was opened");
+		}
+		const oracle = this.oracle;
+		if (!oracle) {
+			throw new Error("runCheck() was called with no check to run");
+		}
+		return await runOracle(oracle, {
+			timeoutMs: this.options.oracleTimeoutMs ?? DEFAULT_ORACLE_TIMEOUT_MS,
+		});
+	}
+
 	/** Every transaction so far, in order, kept or not. */
 	get outcomes(): readonly TransactionOutcome[] {
 		return this.history;

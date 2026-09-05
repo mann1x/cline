@@ -282,6 +282,16 @@ export interface CoreAtomicProtocolConfig {
 	 */
 	approveCheck?: CheckApprover;
 	/**
+	 * Whether the model may propose its own check where nothing can be run.
+	 *
+	 * Defaults on. Off restores the verdict that preceded it -- the model's own
+	 * account of its work -- which is weaker evidence and measurably faster:
+	 * across one workspace the proposed-check runs took four to six times the
+	 * model time of the self-declared ones and closed nothing. This is here so
+	 * the two can be compared on the same task rather than across releases.
+	 */
+	proposeCheck?: boolean;
+	/**
 	 * Retires what the model had read about a file the protocol put back.
 	 *
 	 * Supplied by hosts that own the read receipts, for the same reason

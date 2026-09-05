@@ -1,5 +1,6 @@
 import { isPageOracle, type Oracle, type OracleVerdict } from "./oracle";
 import { PROPOSE_CHECK_TOOL_NAME } from "./proposal";
+import { RUN_CHECK_TOOL_NAME } from "./run-check-tool";
 
 /**
  * How a transaction was judged, and by whom.
@@ -84,8 +85,8 @@ export function buildProtocolPrompt(input: ProtocolPromptInput): string {
 	if (input.oracle) {
 		lines.push(
 			isPageOracle(input.oracle)
-				? `When you are done, ${input.oracle.label}.`
-				: `When you are done, run \`${input.oracle.label}\` and read what it says.`,
+				? `Run \`${RUN_CHECK_TOOL_NAME}\` to ${input.oracle.label} — before you edit anything, so you see the failure in its own words, and again after each change.`
+				: `Run \`${input.oracle.label}\` and read what it says — before you edit anything, so you see the failure in its own words, and again after each change. \`${RUN_CHECK_TOOL_NAME}\` runs the same check if you would rather not retype it.`,
 			"",
 			`That check is what decides. It is run again when your turn ends, and ${describeOracleStandard(input.oracle)} — not your account of the change, and not the fact that the edit applied. ${describeOracleChoice(input.oracle)}`,
 			"",
@@ -98,6 +99,8 @@ export function buildProtocolPrompt(input: ProtocolPromptInput): string {
 			`Nothing in this workspace can be run to check the change, so as it stands you are the check — and your own account of your work is the weakest evidence there is. Name a better one: call \`${PROPOSE_CHECK_TOOL_NAME}\` with the check that would show this task is done, and the user approves it or says what they want instead.`,
 			"",
 			"Propose it as soon as you know what you are fixing, before you make the change. What is approved judges every attempt for the rest of the run and cannot be changed afterwards, so name the thing that would fail right now and pass once the fix lands.",
+			"",
+			`Once it is approved, \`${RUN_CHECK_TOOL_NAME}\` runs it against the files as they stand, as often as you want. It settles nothing and rolls nothing back. Run it before you edit and after each change: a check you only meet at the end is one that can only throw the transaction away.`,
 			"",
 			`If no check is agreed, say plainly when you are done whether the change achieved what was asked and how you know. Answering "yes" because the edit applied is not knowing. If you cannot tell, say that instead — ${label} is then discarded and you get another transaction rather than a change nobody verified.`,
 		);

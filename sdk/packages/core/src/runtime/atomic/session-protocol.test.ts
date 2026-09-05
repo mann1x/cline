@@ -580,3 +580,107 @@ describe("a check the model proposes", () => {
 		});
 	});
 });
+
+describe("the check the model can reach", () => {
+	// The check used to be readable from exactly one place -- `settle`, at the
+	// completion attempt -- while the tool that proposes one told the model it
+	// ran every turn. Measured under that arrangement: 341 messages and 65 edits
+	// with no verdict, then one failure and a full rollback.
+	it("offers run_check whenever the protocol is armed", async () => {
+		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "always", oracleCommand: shellCheck(root, "fixed") },
+			});
+
+			expect(session?.tools.map((tool) => tool.name)).toContain("run_check");
+		});
+	});
+
+	it("runs the check without settling the transaction", async () => {
+		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "always", oracleCommand: shellCheck(root, "fixed") },
+			});
+			const runCheck = session?.tools.find((tool) => tool.name === "run_check");
+			const before = await runCheck?.execute?.({}, {} as never);
+			expect(String(before)).toContain("The check failed");
+
+			await fs.writeFile(path.join(root, "game.js"), "let fixed = 1", "utf8");
+			const after = await runCheck?.execute?.({}, {} as never);
+			expect(String(after)).toContain("The check passed");
+
+			// Nothing was judged and nothing was put back: the file the model
+			// wrote is still the file on disk, and the transaction is still open.
+			expect(await fs.readFile(path.join(root, "game.js"), "utf8")).toBe(
+				"let fixed = 1",
+			);
+			expect(session?.controller.outcomes).toHaveLength(0);
+		});
+	});
+
+	it("says there is no check rather than nothing", async () => {
+		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "always" },
+			});
+			const runCheck = session?.tools.find((tool) => tool.name === "run_check");
+
+			expect(String(await runCheck?.execute?.({}, {} as never))).toContain(
+				"no check to run",
+			);
+		});
+	});
+});
+
+describe("the switch on model-proposed checks", () => {
+	// The comparison this exists for: the proposed check against the
+	// self-declared verdict it replaced, on one workspace rather than across
+	// two releases.
+	it("offers propose_check where nothing runs and someone can be asked", async () => {
+		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "always" },
+				approveCheck: async () => ({ approved: true }),
+			});
+
+			expect(session?.tools.map((tool) => tool.name)).toContain(
+				"propose_check",
+			);
+		});
+	});
+
+	it("withholds it when the setting is off, and says the model judges itself", async () => {
+		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
+			const messages: string[] = [];
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "always" },
+				approveCheck: async () => ({ approved: true }),
+				proposeCheck: false,
+				onStatus: ({ message }) => messages.push(message),
+			});
+
+			expect(session?.tools.map((tool) => tool.name)).not.toContain(
+				"propose_check",
+			);
+			expect(messages.join(" ")).toContain("judges its own work");
+		});
+	});
+
+	it("stands down in auto with the switch off, as it did before the feature", async () => {
+		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "auto" },
+				approveCheck: async () => ({ approved: true }),
+				proposeCheck: false,
+			});
+
+			expect(session).toBeUndefined();
+		});
+	});
+});

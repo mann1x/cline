@@ -436,6 +436,17 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 												/>
 											</div>
 										</div>
+										{/* Only about the case with nothing to run. With a
+										    check configured or detected there is nothing to
+										    propose, and this changes nothing. */}
+										<FeatureRow
+											checked={atomicProtocolSettings?.proposeCheck !== false}
+											description="Where nothing can be run, let the model name the check that should decide and ask you to approve it once; it can then run that check itself at any point. Off, the model's own account of its work is the verdict — weaker evidence, and measurably faster."
+											label="Model proposes the check"
+											onChange={(checked) =>
+												updateSetting("atomicProtocolSettings", { proposeCheck: checked })
+											}
+										/>
 									</>
 								) : null}
 							</div>

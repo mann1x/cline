@@ -217,6 +217,10 @@ export class VscodeSessionHost implements SdkSessionHost {
 						// runnable is not automatically a workspace with no verdict:
 						// the model proposes a check and this puts it to them.
 						approveCheck: approveProposedCheck,
+						// Unless it is switched off, which is a setting rather than a
+						// release: the proposed check and the self-declared verdict it
+						// replaced have to be comparable on the same workspace.
+						proposeCheck: atomicProtocolSettings?.proposeCheck !== false,
 						// `restore_file` rewrites the whole file, so what the
 						// model had read of it no longer holds. This host owns
 						// the receipts, so it is the one that can say so.

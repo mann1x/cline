@@ -6,6 +6,7 @@ import type { CheckApprover } from "./proposal";
 import { createProposeCheckTool } from "./propose-check-tool";
 import { buildEmptyAttemptPrompt, describeEmptyAttempt } from "./protocol";
 import { createRestoreFileTool } from "./restore-file-tool";
+import { createRunCheckTool } from "./run-check-tool";
 import {
 	type SelfReport,
 	TransactionController,
@@ -69,6 +70,16 @@ export interface AtomicProtocolSessionOptions {
 	 * leaves this out and gets the old behaviour.
 	 */
 	approveCheck?: CheckApprover;
+	/**
+	 * Whether the model may propose its own check where nothing can be run.
+	 *
+	 * Defaults on. Off restores the verdict that preceded it -- the model's own
+	 * account of its work -- which is weaker evidence and measurably faster:
+	 * across one workspace the proposed-check runs took four to six times the
+	 * model time of the self-declared ones and closed nothing. This is here so
+	 * the two can be compared on the same task rather than across releases.
+	 */
+	proposeCheck?: boolean;
 	/**
 	 * Retires what the model had read about a file the protocol put back.
 	 *
@@ -162,7 +173,14 @@ export async function createAtomicProtocolSession(
 	// approves it, which is a real verdict where the alternative was the
 	// model's own account of its work.
 	const approveCheck = options.approveCheck ?? options.config?.approveCheck;
-	const canProposeCheck = !oracle && approveCheck !== undefined;
+	// The switch exists to be turned off. Model-proposed checks were measured
+	// making runs four to six times longer than the self-declared verdict they
+	// replaced, and a comparison needs both arms on the same workspace rather
+	// than an argument about which release was better.
+	const proposeCheckAllowed =
+		(options.proposeCheck ?? options.config?.proposeCheck) !== false;
+	const canProposeCheck =
+		!oracle && approveCheck !== undefined && proposeCheckAllowed;
 	if (!oracle && !canProposeCheck && mode === "auto") {
 		// Said out loud, and to the user rather than to a log file. A feature
 		// that silently does nothing looks exactly like one that is working and
@@ -209,6 +227,22 @@ export async function createAtomicProtocolSession(
 				options.logger?.log?.(`${message}: ${String(error)}`),
 		}),
 	];
+	// Offered whenever the protocol is armed, including before a check exists:
+	// the model has to be able to ask, and the answer "there is none" is a
+	// better one than silence. It is also the only way to reach a `page` check,
+	// which runs inside Cline and cannot be typed into a shell.
+	tools.push(
+		createRunCheckTool({
+			controller,
+			canProposeCheck,
+			onRun: (verdict, ran) =>
+				options.logger?.log?.(
+					`[Atomic] ${ran.label} run on request: ${verdict.passed ? "passed" : "failed"}.`,
+				),
+			onError: (message, error) =>
+				options.logger?.log?.(`${message}: ${String(error)}`),
+		}),
+	);
 	if (canProposeCheck && approveCheck) {
 		tools.push(
 			createProposeCheckTool({

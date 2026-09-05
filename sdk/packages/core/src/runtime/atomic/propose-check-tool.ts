@@ -8,6 +8,11 @@
  * nonetheless the only party that has read the code and knows what would
  * demonstrate the fix. So it proposes, and the user decides.
  *
+ * The check it adopts is reachable from `run_check` for the rest of the run.
+ * That is not decoration: this tool used to promise a feedback loop that did
+ * not exist -- the check ran once, at the completion attempt -- and a model
+ * that believes it is being checked stops checking itself.
+ *
  * A tool rather than a sentence in the closing message. `readSelfReport` is
  * already a phrase-matching heuristic and it is the weakest thing here; a
  * second one deciding what the check *is* would compound it.
@@ -32,7 +37,7 @@ export const PROPOSE_CHECK_TOOL_DESCRIPTION = `Propose the check that will decid
 
 Nothing in this workspace can be run to judge a change, so without a check your own account of the work is the verdict — and that is the weakest evidence there is. Propose one instead. You have read the code; name the thing that would show the fix.
 
-**It must run without a person.** The check is your feedback loop: it is run for you, unattended, every time your turn ends, and its result comes back to you. Never propose something a human performs — "open it in a browser and see", "confirm the layout looks right", "check that it feels responsive". Propose the mechanical thing that would catch the bug: running the file, a parse, a test, a linter, a script that exits non-zero when it is still broken.
+**It must run without a person.** Once it is approved you run it yourself with \`run_check\`, as often as you like, and it is also run once when you finish. Never propose something a human performs — "open it in a browser and see", "confirm the layout looks right", "check that it feels responsive". Propose the mechanical thing that would catch the bug: running the file, a parse, a test, a linter, a script that exits non-zero when it is still broken.
 
 Two kinds:
 - \`kind: "page"\` — Cline loads \`path\` in this process, runs its scripts and pumps animation frames. No browser window opens and nobody looks at it. It fails if the file does not parse, throws while loading, throws in a frame, or never draws. Nothing has to be installed, so prefer this for a page, a game or a script.
@@ -41,6 +46,8 @@ Two kinds:
 Give a \`reason\` in one sentence: what passing this check proves about the task. Write it about the code, not about how a person would test it — "the level data is built before the first frame draws", not "loading it in a browser will confirm it works". The user reads that sentence to decide.
 
 Propose once, early — as soon as you know what you are fixing. What is approved judges every attempt for the rest of the run and cannot be changed, so do not propose something you can already make pass.
+
+Then use it. \`run_check\` runs it against the files as they stand, settles nothing and rolls nothing back. Run it before you edit, to see the failure in the check's own words, and after each change. A check you only meet when you finish is a check that can only ever throw the transaction away.
 
 Once the user approves it, it is tried against the files as they were before your changes, and it has to FAIL there. A check that already passes on the unmodified files cannot tell a fix from no fix, and is refused.`;
 
@@ -191,7 +198,7 @@ export function createProposeCheckTool(
 
 			return [
 				`Approved. Every attempt from here is judged by: ${oracle.label}.`,
-				"It runs when your turn ends, and it decides — not your account of the change.",
+				"Run it whenever you want with `run_check` — it settles nothing and rolls nothing back — and it is run once more when you finish, where it decides rather than your account of the change.",
 				"It is fixed for the rest of the run, so make the change work rather than proposing something easier.",
 			].join(" ");
 		},

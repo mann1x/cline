@@ -1140,6 +1140,13 @@ export {
 	RESTORE_FILE_TOOL_NAME,
 } from "./runtime/atomic/restore-file-tool";
 export {
+	createRunCheckTool,
+	describeCheckRun,
+	MAX_CHECKS_PER_TRANSACTION,
+	RUN_CHECK_TOOL_DESCRIPTION,
+	RUN_CHECK_TOOL_NAME,
+} from "./runtime/atomic/run-check-tool";
+export {
 	applyClineFeaturedModels,
 	type ClineRecommendedModel,
 	type ClineRecommendedModelsData,

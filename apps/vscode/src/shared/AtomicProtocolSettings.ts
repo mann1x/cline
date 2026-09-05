@@ -46,6 +46,17 @@ export interface AtomicProtocolSettings {
 	maxChanges: number
 	/** Attempts before the task stops. */
 	maxTransactions: number
+	/**
+	 * Whether the model may propose its own check where nothing can be run.
+	 *
+	 * On by default. Off returns the no-oracle case to the verdict that
+	 * preceded it — the model's own account of its work, labelled as such.
+	 * Measured on one workspace across a dozen runs, the proposed-check arm
+	 * took four to six times the model time of the self-declared arm and closed
+	 * nothing, so this exists to compare them on the same task rather than
+	 * across releases. It does nothing when there is a check to run.
+	 */
+	proposeCheck: boolean
 }
 
 /**
@@ -64,4 +75,5 @@ export const DEFAULT_ATOMIC_PROTOCOL_SETTINGS: AtomicProtocolSettings = {
 	oracleExpect: "",
 	maxChanges: 3,
 	maxTransactions: 6,
+	proposeCheck: true,
 }

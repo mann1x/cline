@@ -496,6 +496,10 @@ message AtomicProtocolSettings {
   int32 max_changes = 3;
   // Attempts before the task stops.
   int32 max_transactions = 4;
+  // Whether the model may propose its own check where nothing can be run.
+  // Absent means on; false returns that case to the model's self-declared
+  // verdict, so the two can be compared on the same workspace.
+  optional bool propose_check = 6;
 }
 
 // Named secrets a QA command may ask for.

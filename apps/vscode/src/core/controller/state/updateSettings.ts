@@ -349,6 +349,12 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 					: {}),
 				...(maxChanges > 0 ? { maxChanges } : {}),
 				...(maxTransactions > 0 ? { maxTransactions } : {}),
+				// Optional on the wire for the same reason the numbers are merged:
+				// absent has to mean "not touched", and for a boolean proto3 would
+				// otherwise send `false` for both.
+				...(request.atomicProtocolSettings.proposeCheck !== undefined
+					? { proposeCheck: request.atomicProtocolSettings.proposeCheck }
+					: {}),
 			})
 		}
 
