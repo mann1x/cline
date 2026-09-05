@@ -1,7 +1,7 @@
 import { fstatSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename } from "node:path";
-import type { ToolPolicy } from "@cline/core";
+import type { CheckApprover, ToolPolicy } from "@cline/core";
 import { resolveAgentSlotLimit } from "@cline/llms";
 
 import { registerDisposable } from "@cline/shared";
@@ -17,6 +17,7 @@ import {
 	getPreferredKanbanInstaller,
 } from "./commands/update";
 import { CLI_DEFAULT_CHECKPOINT_CONFIG } from "./runtime/defaults";
+
 import type { TuiStartupTarget } from "./tui/types";
 import { filterChatModels } from "./utils/chat-models";
 import { getCliBuildInfo } from "./utils/common";
@@ -62,6 +63,19 @@ import type { Config } from "./utils/types";
 import { runConnectWizard } from "./wizards/connect";
 import { runMcpWizard } from "./wizards/mcp";
 import { runScheduleWizard } from "./wizards/schedule";
+
+/**
+ * Approves whatever check the model proposed, without asking.
+ *
+ * The extension puts the proposal to the user because there is one. Here there
+ * is not, so the choice is between no verdict at all and one nobody vetted --
+ * and for an unattended batch the second is the point, which is why it is a
+ * flag and not the default. The proposal has already been validated by then:
+ * it must be mechanical, and a path it names must stay inside the workspace.
+ */
+const approveAnyProposedCheck: CheckApprover = async () => ({
+	approved: true,
+});
 
 export function stdinHasPipedInput(): boolean {
 	if (process.stdin.isTTY) return false;
@@ -825,6 +839,16 @@ export async function runCli(): Promise<void> {
 		process.exitCode = 1;
 		return;
 	}
+	// Fails for the same reason as `--atomic`: the two verdicts this chooses
+	// between are not close, and a run that silently used the other one is a
+	// measurement of the wrong thing that reads exactly like the right one.
+	if (args.invalidProposeCheck) {
+		writeln(
+			`invalid --propose-check "${args.invalidProposeCheck}" (expected off or auto)`,
+		);
+		process.exitCode = 1;
+		return;
+	}
 	for (const [flag, value] of [
 		["--max-changes", args.invalidMaxChanges],
 		["--max-transactions", args.invalidMaxTransactions],
@@ -1226,7 +1250,7 @@ export async function runCli(): Promise<void> {
 			// oracle named without a mode is a user who wants the check and has
 			// not said how hard, and `auto` is the answer to that. Naming one and
 			// getting nothing would be the quiet failure again.
-			...(args.atomic || args.oracle
+			...(args.atomic || args.oracle || args.proposeCheck
 				? {
 						atomicProtocol: {
 							mode: args.atomic ?? "auto",
@@ -1235,6 +1259,17 @@ export async function runCli(): Promise<void> {
 							...(args.maxChanges ? { maxChanges: args.maxChanges } : {}),
 							...(args.maxTransactions
 								? { maxTransactions: args.maxTransactions }
+								: {}),
+							// There is nobody here to ask, so the default is the
+							// verdict a host without a user has always had: the
+							// model's own account of its work. `auto` is the other
+							// one, and it says so -- an approved check is run
+							// repeatedly and unattended, and this approves it
+							// sight unseen, which only an operator running a
+							// batch can reasonably ask for.
+							proposeCheck: args.proposeCheck === "auto",
+							...(args.proposeCheck === "auto"
+								? { approveCheck: approveAnyProposedCheck }
 								: {}),
 						},
 					}

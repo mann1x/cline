@@ -5,7 +5,7 @@ import {
 	setHomeDir,
 } from "@cline/shared/storage";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createProgram } from "./program";
+import { commanderToParsedArgs, createProgram } from "./program";
 
 /** Render an absolute path under `home` the way help text does: `~/...`. */
 function tildePath(absolutePath: string, home: string): string {
@@ -57,5 +57,30 @@ describe("root option help text", () => {
 		expect(help).toContain(
 			`Use isolated local state at this directory path (default: ${dataDirDefault})`,
 		);
+	});
+});
+
+describe("--propose-check", () => {
+	function parse(argv: string[]) {
+		const program = createProgram();
+		program.exitOverride();
+		program.parse(["node", "cline", ...argv]);
+		return commanderToParsedArgs(program);
+	}
+
+	it("accepts the two modes and rejects anything else", () => {
+		expect(parse(["--propose-check", "auto"]).proposeCheck).toBe("auto");
+		expect(parse(["--propose-check", "off"]).proposeCheck).toBe("off");
+
+		// Coercing a typo to the default would run the whole batch on the
+		// verdict the operator believed they had switched away from.
+		const bad = parse(["--propose-check", "on"]);
+		expect(bad.proposeCheck).toBeUndefined();
+		expect(bad.invalidProposeCheck).toBe("on");
+	});
+
+	it("is absent when the flag is not passed", () => {
+		expect(parse([]).proposeCheck).toBeUndefined();
+		expect(parse([]).invalidProposeCheck).toBeUndefined();
 	});
 });

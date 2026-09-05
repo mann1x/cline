@@ -81,6 +81,10 @@ export function addRootOptions(cmd: Command): Command {
 				"Attempts before the task stops (default: 6)",
 			)
 			.option(
+				"--propose-check <mode>",
+				"Where the workspace holds nothing runnable: off leaves the model's own account of its work as the verdict, auto lets it propose a check and approves it without asking (default: off, since there is nobody here to ask)",
+			)
+			.option(
 				"--lint-command <command>",
 				'Project checker `check_file` runs on each file it is given, e.g. "npx biome check ${file}". Without ${file} the path is appended. Makes check_file the linter here, as it is in the extension',
 			)
@@ -305,6 +309,18 @@ export function commanderToParsedArgs(program: Command): ParsedArgs {
 			result.oracleExpect = raw;
 		} catch {
 			result.invalidOracleExpect = raw;
+		}
+	}
+
+	// Rejected rather than coerced, like the mode above: a typo that fell back
+	// to the default would run the whole arm on the verdict the user believed
+	// they had switched away from, and nothing in the output would say so.
+	if (opts.proposeCheck !== undefined) {
+		const raw = String(opts.proposeCheck).trim();
+		if (raw === "off" || raw === "auto") {
+			result.proposeCheck = raw;
+		} else if (raw) {
+			result.invalidProposeCheck = raw;
 		}
 	}
 

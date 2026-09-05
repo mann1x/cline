@@ -119,6 +119,15 @@ export interface ParsedArgs {
 	/** Attempts before the task stops. */
 	maxTransactions?: number;
 	invalidMaxTransactions?: string;
+	/**
+	 * What happens where the workspace holds nothing to run.
+	 *
+	 * `off` leaves the model's own account of its work as the verdict;
+	 * `auto` lets it propose a check and approves it without asking, which is
+	 * the only way an unattended run can have one at all.
+	 */
+	proposeCheck?: "off" | "auto";
+	invalidProposeCheck?: string;
 	/** Whether the model keeps a checklist across the task. */
 	taskProgress?: "on" | "off";
 	/** Tool calls between checklist reminders. 0 reminds never. */
