@@ -169,6 +169,80 @@ export const NO_TOOL_CALL_NUDGE_MESSAGE =
 	"say so in one short sentence.";
 
 /**
+ * The second nudge, for the model that answered the first by announcing again.
+ *
+ * The budget for the message above is one, and rightly: it asks a question
+ * with two branches -- keep working, or say you are finished -- and a model
+ * that answers "the task is fully complete" answers it. Sending that model the
+ * identical text a second time has never changed an outcome.
+ *
+ * But a model that answers by announcing *more* work has not answered it. It
+ * has restated the plan, which is the very behaviour the first nudge exists to
+ * catch, and the counter cannot tell the two apart because it counts turns
+ * rather than what they said. Measured on a live run: "Let me propose a check,
+ * then fix them" -- twice, once either side of the nudge -- and the run was
+ * reported Completed with the file untouched and no check ever proposed.
+ *
+ * So this is not the same message again. It quotes the model its own sentence
+ * and names the gap between saying and calling, and it is allowed once per
+ * run, which keeps the bound that stops a nudge from making a run immortal.
+ *
+ * @see ANNOUNCED_INTENT_NUDGE_PREFIX
+ */
+
+/**
+ * The fixed opening of the intent nudge.
+ *
+ * It quotes the model, so the message is not a constant and cannot be
+ * recognised by equality the way the generic nudge is. The display layer has
+ * to keep it out of the transcript all the same -- a nudge rendered as a user
+ * bubble is a message the user never sent -- so the stable prefix is exported
+ * rather than left for someone to re-type as a literal.
+ */
+export const ANNOUNCED_INTENT_NUDGE_PREFIX = "[SYSTEM] You wrote ";
+
+export function buildAnnouncedIntentNudge(announcement: string): string {
+	const quoted = announcement.trim().replace(/\s+/g, " ").slice(0, 200);
+	return (
+		ANNOUNCED_INTENT_NUDGE_PREFIX +
+		`"${quoted}" ` +
+		"and then called nothing, for the second turn running. Saying what you " +
+		"are about to do is not doing it, and the run ends on the next silent " +
+		"turn with the work undone. Emit the tool call itself now - the first " +
+		"one, not a description of it. If you cannot, say plainly what is " +
+		"stopping you in one sentence."
+	);
+}
+
+/**
+ * Whether a turn that called nothing announced an action rather than finishing.
+ *
+ * Deliberately narrow: a first-person statement of imminent action, in the
+ * last part of the message, and no claim of completion anywhere in it. A
+ * model that says it is done gets no second nudge no matter how it phrases
+ * that, because the whole point of the one-nudge budget is that such a model
+ * has already answered.
+ */
+const ANNOUNCED_INTENT =
+	/\b(?:let me|i'?ll|i will|i'?m going to|i am going to|now i(?:'?ll| will)|next,? i(?:'?ll| will)|let'?s)\b/i;
+const CLAIMS_COMPLETION =
+	/\b(?:task (?:is )?(?:complete|finished|done)|all done|is now (?:complete|finished|fixed|working)|i(?:'?m| am) (?:done|finished)|nothing (?:else|more) to do|no further changes)\b/i;
+
+export function announcedIntentWithoutActing(
+	text: string | undefined,
+): string | undefined {
+	const trimmed = text?.trim();
+	if (!trimmed || CLAIMS_COMPLETION.test(trimmed)) {
+		return undefined;
+	}
+	// The announcement has to be how the message *ends*. A turn that did work,
+	// described it, and closed with a summary is not this; a turn whose last
+	// word is a promise is.
+	const tail = trimmed.slice(-400);
+	return ANNOUNCED_INTENT.test(tail) ? trimmed : undefined;
+}
+
+/**
  * Removes runtime-generated <mode_notice> elements (content included): they
  * are not user-typed text and must not render as such. Deliberately NOT part
  * of normalizeUserInput -- that function also sanitizes outbound prompts

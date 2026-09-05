@@ -1222,6 +1222,123 @@ describe("AgentRuntime", () => {
 		expect(model.requests.length).toBeGreaterThanOrEqual(3);
 	});
 
+	/**
+	 * The budget of one is measured against a model that answers the nudge by
+	 * claiming it is done -- asking that model again has never changed an
+	 * outcome. A model that answers by announcing more work has not answered at
+	 * all, and the counter cannot tell them apart because it counts turns.
+	 *
+	 * From a live run: "Let me propose a check, then fix them", twice, either
+	 * side of the nudge, and the run was reported Completed with the file
+	 * untouched and no check ever proposed.
+	 */
+	it("asks once more when the model answers the nudge by announcing again", async () => {
+		const model = new ScriptedModel([
+			() => [
+				{
+					type: "text-delta" as const,
+					text: "Let me propose a check, then fix them.",
+				},
+				{ type: "finish" as const, reason: "stop" as const },
+			],
+			() => [
+				{
+					type: "text-delta" as const,
+					text: "I'll start by reading the file.",
+				},
+				{ type: "finish" as const, reason: "stop" as const },
+			],
+			() => [
+				{ type: "text-delta" as const, text: "Done" },
+				{ type: "finish" as const, reason: "stop" as const },
+			],
+			() => [
+				{ type: "text-delta" as const, text: "Done" },
+				{ type: "finish" as const, reason: "stop" as const },
+			],
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			tools: [],
+			completionPolicy: {
+				maxNoToolCallNudges: DEFAULT_MAX_NO_TOOL_CALL_NUDGES,
+			},
+		});
+
+		await runtime.run("Fix the file");
+
+		// Three: the original turn, the generic nudge, and the intent nudge.
+		expect(model.requests).toHaveLength(3);
+		const lastPrompt = JSON.stringify(model.requests.at(-1)?.messages ?? []);
+		// It quotes the model its own sentence rather than repeating the text
+		// it has already ignored once.
+		expect(lastPrompt).toContain("I'll start by reading the file.");
+		expect(lastPrompt).toContain("called nothing");
+	});
+
+	it("never sends the intent nudge to a model that says it is finished", async () => {
+		const model = new ScriptedModel(
+			Array.from({ length: 8 }, () => () => [
+				{
+					type: "text-delta" as const,
+					text: "The task is complete - all syntax errors have been resolved.",
+				},
+				{ type: "finish" as const, reason: "stop" as const },
+			]),
+		);
+		const runtime = new AgentRuntime({
+			model,
+			tools: [],
+			completionPolicy: {
+				maxNoToolCallNudges: DEFAULT_MAX_NO_TOOL_CALL_NUDGES,
+			},
+		});
+
+		await runtime.run("Fix the file");
+
+		// The original turn and the one nudge, and no more: that model answered.
+		expect(model.requests).toHaveLength(2);
+	});
+
+	it("spends the intent nudge once per run, not once per silent turn", async () => {
+		const model = new ScriptedModel(
+			Array.from({ length: 8 }, () => () => [
+				{ type: "text-delta" as const, text: "Let me fix that now." },
+				{ type: "finish" as const, reason: "stop" as const },
+			]),
+		);
+		const runtime = new AgentRuntime({
+			model,
+			tools: [],
+			completionPolicy: {
+				maxNoToolCallNudges: DEFAULT_MAX_NO_TOOL_CALL_NUDGES,
+			},
+		});
+
+		await runtime.run("Fix the file");
+
+		// A model that announces forever still ends: original, generic nudge,
+		// intent nudge, stop.
+		expect(model.requests).toHaveLength(3);
+	});
+
+	it("sends no intent nudge when the host has nudging switched off", async () => {
+		// The budget at zero is a host saying a silent turn ends the run. This
+		// is an extension of that policy, never a second door into the room.
+		const model = new ScriptedModel([
+			() => [
+				{ type: "text-delta" as const, text: "Let me fix the file." },
+				{ type: "finish" as const, reason: "stop" as const },
+			],
+		]);
+		const runtime = new AgentRuntime({ model, tools: [] });
+
+		const result = await runtime.run("Start");
+
+		expect(result.status).toBe("completed");
+		expect(model.requests).toHaveLength(1);
+	});
+
 	it("stops nudging after the consecutive budget is spent", async () => {
 		// The bound is what keeps the nudge from making a run immortal.
 		const model = new ScriptedModel(

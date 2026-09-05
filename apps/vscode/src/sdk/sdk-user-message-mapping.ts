@@ -1,4 +1,4 @@
-import { NO_TOOL_CALL_NUDGE_MESSAGE, normalizeUserInput, stripModeNotices } from "@cline/shared"
+import { ANNOUNCED_INTENT_NUDGE_PREFIX, NO_TOOL_CALL_NUDGE_MESSAGE, normalizeUserInput, stripModeNotices } from "@cline/shared"
 
 /**
  * Canned prompt SdkModeCoordinator sends to drive the plan -> act
@@ -64,6 +64,10 @@ export function isSyntheticUserPrompt(text: string): boolean {
 		// bubble it reads as an instruction they never typed, and it splits the
 		// turn it was meant to continue into two.
 		normalized === NO_TOOL_CALL_NUDGE_MESSAGE ||
+		// The second nudge quotes the model its own sentence, so it is not a
+		// constant and cannot be matched by equality -- but it is the same kind
+		// of message and must be hidden the same way.
+		normalized.startsWith(ANNOUNCED_INTENT_NUDGE_PREFIX) ||
 		// Hook-injected context is model-facing only; the runtime stamps these
 		// messages displayRole "system", and this text guard keeps transcripts
 		// clean on paths where that metadata is unavailable.

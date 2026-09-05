@@ -34,6 +34,8 @@ import type {
 	ToolPolicy,
 } from "@cline/shared";
 import {
+	announcedIntentWithoutActing,
+	buildAnnouncedIntentNudge,
 	captureAgentUnexpectedReasoningTokens,
 	captureSdkError,
 	captureTaskLifecycleEvent,
@@ -730,6 +732,14 @@ export class AgentRuntime {
 	/** Consecutive turns nudged for producing no tool calls; reset by any turn that does. */
 	private consecutiveNoToolCallNudges = 0;
 	/**
+	 * Whether the one intent-specific nudge has been used.
+	 *
+	 * Not a consecutive counter like the one above, and not reset by a turn
+	 * that calls tools: this is the last word before a run that keeps
+	 * announcing is allowed to end, and it is worth exactly once.
+	 */
+	private intentNudgeSpent = false;
+	/**
 	 * A message arrived mid-run and the model has not been asked to resume yet.
 	 *
 	 * Cleared as soon as the resume nudge is sent, so an interjection costs one
@@ -944,6 +954,11 @@ export class AgentRuntime {
 		return this.consecutiveNoToolCallNudges < budget
 			? NO_TOOL_CALL_NUDGE_MESSAGE
 			: undefined;
+	}
+
+	/** Whether this host asks a silent turn to continue at all. */
+	private nudgesEnabled(): boolean {
+		return (this.config.completionPolicy?.maxNoToolCallNudges ?? 0) > 0;
 	}
 
 	/**
@@ -1387,6 +1402,29 @@ export class AgentRuntime {
 					if (noToolCallNudge) {
 						this.consecutiveNoToolCallNudges += 1;
 						await this.addUserReminderMessage(noToolCallNudge);
+						continue;
+					}
+					// The nudge budget is spent, but a model that answered it by
+					// announcing more work has not answered it -- it restated the
+					// plan, which is the behaviour the nudge exists to catch. Once
+					// per run, and never for a model that says it is done: that one
+					// has answered, and repeating the question at it is the waste
+					// the budget of one was measured to prevent.
+					//
+					// An extension of the nudge policy, never a way around it: a
+					// host with the budget at zero has said a silent turn ends the
+					// run, and this must not be a second door into the same room.
+					const announcement =
+						this.intentNudgeSpent || !this.nudgesEnabled()
+							? undefined
+							: announcedIntentWithoutActing(
+									textFromMessage(finalAssistantMessage),
+								);
+					if (announcement) {
+						this.intentNudgeSpent = true;
+						await this.addUserReminderMessage(
+							buildAnnouncedIntentNudge(announcement),
+						);
 						continue;
 					}
 					// Last, and only once nothing else wants the turn: everything above

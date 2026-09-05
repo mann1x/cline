@@ -345,6 +345,9 @@ export type {
 	ModeSwitchNoticeTracker,
 } from "./prompt/format";
 export {
+	ANNOUNCED_INTENT_NUDGE_PREFIX,
+	announcedIntentWithoutActing,
+	buildAnnouncedIntentNudge,
 	createModeSwitchNoticeTracker,
 	formatDisplayUserInput,
 	formatFileContentBlock,
