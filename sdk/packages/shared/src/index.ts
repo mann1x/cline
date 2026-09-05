@@ -343,11 +343,13 @@ export {
 export type {
 	ModeSwitchNotice,
 	ModeSwitchNoticeTracker,
+	UnparsedToolCall,
 } from "./prompt/format";
 export {
 	ANNOUNCED_INTENT_NUDGE_PREFIX,
 	announcedIntentWithoutActing,
 	buildAnnouncedIntentNudge,
+	buildUnparsedToolCallNudge,
 	createModeSwitchNoticeTracker,
 	formatDisplayUserInput,
 	formatFileContentBlock,
@@ -363,6 +365,8 @@ export {
 	SESSION_SEARCH_PREVIEW_MAX_LENGTH,
 	SESSION_SEARCH_TITLE_MAX_LENGTH,
 	stripModeNotices,
+	UNPARSED_TOOL_CALL_NUDGE_PREFIX,
+	unparsedToolCallInText,
 	xmlTagsRemoval,
 } from "./prompt/format";
 export {

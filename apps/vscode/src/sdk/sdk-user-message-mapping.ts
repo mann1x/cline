@@ -1,4 +1,10 @@
-import { ANNOUNCED_INTENT_NUDGE_PREFIX, NO_TOOL_CALL_NUDGE_MESSAGE, normalizeUserInput, stripModeNotices } from "@cline/shared"
+import {
+	ANNOUNCED_INTENT_NUDGE_PREFIX,
+	NO_TOOL_CALL_NUDGE_MESSAGE,
+	normalizeUserInput,
+	stripModeNotices,
+	UNPARSED_TOOL_CALL_NUDGE_PREFIX,
+} from "@cline/shared"
 
 /**
  * Canned prompt SdkModeCoordinator sends to drive the plan -> act
@@ -68,6 +74,10 @@ export function isSyntheticUserPrompt(text: string): boolean {
 		// constant and cannot be matched by equality -- but it is the same kind
 		// of message and must be hidden the same way.
 		normalized.startsWith(ANNOUNCED_INTENT_NUDGE_PREFIX) ||
+		// Same for the nudge that answers a tool call the provider could not
+		// read: it quotes what the model named, so it is a prefix rather than a
+		// constant, and it is no more a message from the user than the others.
+		normalized.startsWith(UNPARSED_TOOL_CALL_NUDGE_PREFIX) ||
 		// Hook-injected context is model-facing only; the runtime stamps these
 		// messages displayRole "system", and this text guard keeps transcripts
 		// clean on paths where that metadata is unavailable.

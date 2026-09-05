@@ -1153,6 +1153,119 @@ describe("AgentRuntime", () => {
 		expect(model.requests).toHaveLength(1);
 	});
 
+	it("tells a model whose tool call could not be read what actually happened", async () => {
+		// Measured on pandorum, 2026-09-05: ollama's qwen parser hands a block it
+		// cannot read back as content, so the turn looks like a model that called
+		// nothing. It is not, and "your last message contained no tool calls" is
+		// false in the one way most likely to make it repeat itself -- eight
+		// times, in that run.
+		const garbled =
+			"<tool_call>\n<function=editor>\n<parameter=new_text>\nhalf a line\n" +
+			"<tool_call>\n<function=editor>\n<parameter=path>\n/tmp/x.ts\n" +
+			"</parameter>\n</function>\n</tool_call>";
+		// Captured and asserted after the run, never inside the callback: an
+		// expectation that throws in there is swallowed by the model harness,
+		// and the test passes while the runtime does the opposite.
+		let reminderText = "";
+		const model = new ScriptedModel([
+			() => [
+				{ type: "text-delta", text: garbled },
+				{ type: "finish", reason: "stop" },
+			],
+			(request) => {
+				reminderText =
+					request.messages
+						.at(-1)
+						?.content.map((part) => (part.type === "text" ? part.text : ""))
+						.join("") ?? "";
+				return [
+					{ type: "text-delta", text: "Done" },
+					{ type: "finish", reason: "stop" },
+				];
+			},
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			tools: [],
+			completionPolicy: {
+				maxNoToolCallNudges: DEFAULT_MAX_NO_TOOL_CALL_NUDGES,
+			},
+		});
+
+		await runtime.run("Start");
+
+		expect(model.requests).toHaveLength(2);
+		expect(reminderText).toContain("could not be read");
+		expect(reminderText).toContain("`editor`");
+		expect(reminderText).not.toContain("contained no tool calls");
+	});
+
+	it("does not let a garbled call end the run once the silence budget is spent", async () => {
+		// What happened in that run: the nudge was spent, the next turn was
+		// another unreadable block, and the run ended reporting as its answer a
+		// raw `<tool_call>` that never ran.
+		const garbled =
+			"<tool_call>\n<function=editor>\n<parameter=new_text>\nhalf a line\n" +
+			"<tool_call>\n<function=editor>\n<parameter=path>\n/tmp/x.ts\n" +
+			"</parameter>\n</function>\n</tool_call>";
+		let lastReminder = "";
+		const model = new ScriptedModel([
+			() => [
+				{ type: "text-delta", text: "thinking about it" },
+				{ type: "finish", reason: "stop" },
+			],
+			() => [
+				{ type: "text-delta", text: garbled },
+				{ type: "finish", reason: "stop" },
+			],
+			(request) => {
+				lastReminder =
+					request.messages
+						.at(-1)
+						?.content.map((part) => (part.type === "text" ? part.text : ""))
+						.join("") ?? "";
+				return [
+					{ type: "text-delta", text: "Done" },
+					{ type: "finish", reason: "stop" },
+				];
+			},
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			tools: [],
+			completionPolicy: { maxNoToolCallNudges: 1 },
+		});
+
+		const result = await runtime.run("Start");
+
+		// Three requests: the silent turn, the garbled one, and the recovery.
+		expect(model.requests).toHaveLength(3);
+		expect(result.status).toBe("completed");
+		expect(lastReminder).toContain("could not be read");
+	});
+
+	it("stays out of the way of a host that has turned nudging off", async () => {
+		// The gate every extension of the nudge policy has to pass: a budget of
+		// zero means a silent turn ends the run, and this must not be a second
+		// door into the same room.
+		const garbled =
+			"<tool_call>\n<function=editor>\n<parameter=new_text>\nhalf a line\n" +
+			"<tool_call>\n<function=editor>\n<parameter=path>\n/tmp/x.ts\n" +
+			"</parameter>\n</function>\n</tool_call>";
+		const model = new ScriptedModel([
+			() => [
+				{ type: "text-delta", text: garbled },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({ model, tools: [] });
+
+		const result = await runtime.run("Start");
+
+		expect(result.status).toBe("completed");
+		expect(model.requests).toHaveLength(1);
+	});
+
 	it("nudges a no-tool turn to continue when a budget is set", async () => {
 		// Repro for a run ending with none of the work done: gemma4 announces
 		// its plan and stops, 7 of 7 replays of one captured request. The

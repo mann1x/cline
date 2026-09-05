@@ -36,6 +36,7 @@ import type {
 import {
 	announcedIntentWithoutActing,
 	buildAnnouncedIntentNudge,
+	buildUnparsedToolCallNudge,
 	captureAgentUnexpectedReasoningTokens,
 	captureSdkError,
 	captureTaskLifecycleEvent,
@@ -52,6 +53,7 @@ import {
 	TASK_PROVIDER_STREAM_STARTED_EVENT,
 	TOOL_REJECTION_SUFFIX,
 	trimNonEmpty,
+	unparsedToolCallInText,
 } from "@cline/shared";
 import { nanoid } from "nanoid";
 
@@ -732,6 +734,13 @@ export class AgentRuntime {
 	/** Consecutive turns nudged for producing no tool calls; reset by any turn that does. */
 	private consecutiveNoToolCallNudges = 0;
 	/**
+	 * Whether the run has already spent its one nudge for a tool call the
+	 * provider could not read. Bounded for the reason every nudge here is: a
+	 * model that cannot emit a clean block twice will not on the third ask, and
+	 * an unbounded nudge makes a run immortal.
+	 */
+	private unparsedCallNudgeSpent = false;
+	/**
 	 * Whether the one intent-specific nudge has been used.
 	 *
 	 * Not a consecutive counter like the one above, and not reset by a turn
@@ -949,11 +958,19 @@ export class AgentRuntime {
 	 * The nudge for a turn that produced no tool calls, or undefined once the
 	 * consecutive limit is reached and the run should be allowed to end.
 	 */
-	private getNoToolCallNudgeMessage(): string | undefined {
+	private getNoToolCallNudgeMessage(text?: string): string | undefined {
 		const budget = this.config.completionPolicy?.maxNoToolCallNudges ?? 0;
-		return this.consecutiveNoToolCallNudges < budget
-			? NO_TOOL_CALL_NUDGE_MESSAGE
-			: undefined;
+		if (this.consecutiveNoToolCallNudges >= budget) {
+			return undefined;
+		}
+		// A provider that could not read a tool call hands the block back as
+		// content, so the turn arrives here looking exactly like a model that
+		// called nothing. It is not, and the generic message is false in the one
+		// way most likely to make it repeat itself: it tried to act.
+		const unparsed = unparsedToolCallInText(text);
+		return unparsed
+			? buildUnparsedToolCallNudge(unparsed)
+			: NO_TOOL_CALL_NUDGE_MESSAGE;
 	}
 
 	/** Whether this host asks a silent turn to continue at all. */
@@ -1398,7 +1415,8 @@ export class AgentRuntime {
 						await this.addUserReminderMessage(STEER_RESUME_REMINDER);
 						continue;
 					}
-					const noToolCallNudge = this.getNoToolCallNudgeMessage();
+					const finalText = textFromMessage(finalAssistantMessage);
+					const noToolCallNudge = this.getNoToolCallNudgeMessage(finalText);
 					if (noToolCallNudge) {
 						this.consecutiveNoToolCallNudges += 1;
 						await this.addUserReminderMessage(noToolCallNudge);
@@ -1414,12 +1432,29 @@ export class AgentRuntime {
 					// An extension of the nudge policy, never a way around it: a
 					// host with the budget at zero has said a silent turn ends the
 					// run, and this must not be a second door into the same room.
+					// The silence budget is spent, but this turn was not silence: the
+					// model emitted a call and the provider could not read it. Ending
+					// here reports as the run's answer a block that never ran, which
+					// is how a raw `<tool_call>` came to stand as a Completed
+					// message. Once per run, and gated like every other extension of
+					// the nudge policy -- a host with the budget at zero has said a
+					// silent turn ends the run, and this must not be a second door
+					// into the same room.
+					const unparsedCall =
+						this.unparsedCallNudgeSpent || !this.nudgesEnabled()
+							? undefined
+							: unparsedToolCallInText(finalText);
+					if (unparsedCall) {
+						this.unparsedCallNudgeSpent = true;
+						await this.addUserReminderMessage(
+							buildUnparsedToolCallNudge(unparsedCall),
+						);
+						continue;
+					}
 					const announcement =
 						this.intentNudgeSpent || !this.nudgesEnabled()
 							? undefined
-							: announcedIntentWithoutActing(
-									textFromMessage(finalAssistantMessage),
-								);
+							: announcedIntentWithoutActing(finalText);
 					if (announcement) {
 						this.intentNudgeSpent = true;
 						await this.addUserReminderMessage(

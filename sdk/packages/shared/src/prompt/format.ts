@@ -162,6 +162,18 @@ export function normalizeUserInput(input?: string): string {
  * sent, and it makes the turn it interrupts look like it ended on a question
  * from them.
  */
+/** The opening the qwen dialects share, and the one this scans for. */
+const TOOL_CALL_OPEN_TAG = "<tool_call>";
+
+/**
+ * The tags whose order decides whether a call was restarted.
+ *
+ * Only the four that matter: a parameter opening or closing, and a call
+ * opening. Scanning for anything else would make this a parser, and it is not
+ * one -- it never reads a value, only where the boundaries fall.
+ */
+const TOOL_CALL_TAG_PATTERN = /<tool_call>|<parameter=[^>]*>|<\/parameter>/g;
+
 export const NO_TOOL_CALL_NUDGE_MESSAGE =
 	"[SYSTEM] Your last message contained no tool calls, so the run was about to end. " +
 	"If the task is not finished, continue now by emitting the tool calls it needs - do not " +
@@ -189,6 +201,102 @@ export const NO_TOOL_CALL_NUDGE_MESSAGE =
  *
  * @see ANNOUNCED_INTENT_NUDGE_PREFIX
  */
+
+/**
+ * The fixed opening of the nudge for a tool call nothing could parse.
+ *
+ * Same argument as the prefix below: the message quotes the model, so it
+ * cannot be recognised by equality, and the display layer still has to keep it
+ * out of the transcript.
+ */
+export const UNPARSED_TOOL_CALL_NUDGE_PREFIX =
+	"[SYSTEM] Your last message contained a tool call that could not be read.";
+
+/** What a turn's text says about a tool call the provider did not parse. */
+export interface UnparsedToolCall {
+	/** The function the last block names, when it names one. */
+	readonly name?: string;
+	/** `<tool_call>` openings found, including the restarts. */
+	readonly blocks: number;
+	/**
+	 * How many times the model abandoned a call mid-parameter and began again.
+	 *
+	 * The signature that makes this diagnosable rather than a guess: a
+	 * `<tool_call>` opening while a `<parameter=` is still unterminated is not
+	 * data inside that parameter, it is the model starting over.
+	 */
+	readonly restarts: number;
+}
+
+/**
+ * A tool call the provider handed back as text, if this turn contains one.
+ *
+ * Ollama's qwen parser returns a block it cannot parse as content rather than
+ * failing the request, which is right -- a turn may already have run commands,
+ * so there is no safe automatic retry. What it leaves behind is a turn that
+ * looks, to everything downstream, like a model that called nothing. It is
+ * not: the model tried to act, and telling it "your last message contained no
+ * tool calls" is false in the one way most likely to make it repeat itself.
+ *
+ * Measured on the run this was built from (pandorum, 2026-09-05): eight such
+ * turns, 526s and 16.5k output tokens, one discarded transaction, and the raw
+ * block left standing as the run's completion message. Every one of the eight
+ * ended in a complete, well-balanced call -- the model got it right on its
+ * final attempt each time and was told it had emitted nothing.
+ *
+ * Detection is deliberately narrow. Only a turn that produced no tool calls
+ * reaches here, which already excludes the ordinary case of an edit payload
+ * that happens to quote this syntax.
+ */
+export function unparsedToolCallInText(
+	text: string | undefined,
+): UnparsedToolCall | undefined {
+	if (!text || !text.includes(TOOL_CALL_OPEN_TAG)) {
+		return undefined;
+	}
+	let blocks = 0;
+	let opened = 0;
+	let closed = 0;
+	for (const match of text.matchAll(TOOL_CALL_TAG_PATTERN)) {
+		const tag = match[0];
+		if (tag === TOOL_CALL_OPEN_TAG) {
+			blocks += 1;
+		} else if (tag === "</parameter>") {
+			closed += 1;
+		} else {
+			opened += 1;
+		}
+	}
+	if (blocks === 0) {
+		return undefined;
+	}
+	// A parameter that is never closed is the evidence, and a nested
+	// `<tool_call>` alone is not: a model editing a file *about* tool calls
+	// writes the opening tag inside a parameter it then closes properly, and
+	// that call parses. Measured across the eight turns this was built from,
+	// the count of unterminated parameters matched the count of extra
+	// `<tool_call>` openings exactly, every time.
+	const unterminated = Math.max(opened - closed, 0);
+	const restarts = Math.min(Math.max(blocks - 1, 0), unterminated);
+	const named = [...text.matchAll(/<function=([^\s>]+)\s*>/g)];
+	const name = named[named.length - 1]?.[1];
+	return { blocks, restarts, ...(name ? { name } : {}) };
+}
+
+export function buildUnparsedToolCallNudge(found: UnparsedToolCall): string {
+	const called = found.name ? `\`${found.name}\`` : "a tool";
+	const restarted =
+		found.restarts > 0
+			? ` You began ${called} and then, part-way through a parameter you never closed, started the whole call again${found.restarts > 1 ? `, ${found.restarts} times over` : ""}. The reader cannot tell an abandoned call from the value of the parameter it was abandoned inside, so all of it came back as text.`
+			: ` It named ${called}, but the block was not well formed and could not be read.`;
+	return (
+		UNPARSED_TOOL_CALL_NUDGE_PREFIX +
+		restarted +
+		" Nothing ran, so nothing has changed on disk." +
+		" Emit the call once, in one clean block: open it, give each parameter and close each parameter, then close the function and the call." +
+		" Do not restart a call once you have begun it - finish it, or send nothing and start the next turn fresh."
+	);
+}
 
 /**
  * The fixed opening of the intent nudge.
