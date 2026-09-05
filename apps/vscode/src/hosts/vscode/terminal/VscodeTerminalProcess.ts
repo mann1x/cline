@@ -25,6 +25,7 @@ import type { MarkerlessCompletionCause } from "@/services/telemetry/TelemetrySe
 import { Logger } from "@/shared/services/Logger"
 import { Osc633EventType, Osc633Parser } from "./osc633Parser"
 import { classifyShellPrompt, getLastLine } from "./shellPromptHeuristics"
+import { shouldFallBackToTerminalSnapshot, terminalSnapshotFallbackMessage } from "./terminal-output-fallback"
 
 /** Outcome of racing one stream read against command-completion signals. */
 type StreamReadOutcome =
@@ -85,8 +86,7 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 			try {
 				const terminalSnapshot = await getLatestTerminalOutput()
 				if (terminalSnapshot && terminalSnapshot.trim()) {
-					const fallbackMessage = `The command's output could not be captured through shell integration. Here is the current terminal's content, which may include the command's output:\n\n${terminalSnapshot}`
-					this.emit("line", fallbackMessage)
+					this.emit("line", terminalSnapshotFallbackMessage(terminalSnapshot))
 				}
 			} catch (error) {
 				Logger.error("Error capturing terminal output:", error)
@@ -404,8 +404,23 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 				}
 			}
 
+			// "No output" is not "no capture". A silent success -- `Copy-Item`,
+			// `Set-Content`, `mkdir`, `cd`, `git add` -- prints nothing by design,
+			// and shell integration reported that faithfully. Treating it as a
+			// failed read substituted the terminal's visible contents, handing the
+			// model an *earlier* command's output as this one's, which it then
+			// acted on; see `terminal-output-fallback` for the measurement. It is
+			// a successful execution that happens to have nothing to say, and is
+			// counted as one.
+			const captureFailed = shouldFallBackToTerminalSnapshot({
+				capturedOutput: Boolean(this.fullOutput.trim()),
+				sawCommandExecuted: didSeeCommandExecuted,
+				sawExecutionEnd: !exitCodeEventTimedOut,
+				terminalClosed,
+			})
+
 			// the command process is finished, let's check the output to see if we need to use the terminal capture fallback
-			if (!this.fullOutput.trim()) {
+			if (!this.fullOutput.trim() && captureFailed) {
 				// No output captured via shell integration, trying fallback
 				telemetryService.captureTerminalOutputFailure(
 					terminalClosed ? TerminalOutputFailureReason.TERMINAL_CLOSED : TerminalOutputFailureReason.TIMEOUT,
@@ -468,6 +483,13 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 					"line",
 					"[Shell integration did not report command completion (this happens e.g. inside ssh or nested shells); output was captured with a timing heuristic, may be incomplete or include the shell prompt, and the command may still be running.]",
 				)
+			} else if (!this.fullOutput.trim() && !captureFailed) {
+				// Said rather than left blank. This is the case that used to be
+				// filled with the terminal's visible contents, and an empty result
+				// with no explanation invites the same wrong conclusion by a
+				// different route -- that something went unrecorded, and the state
+				// of the file is anyone's guess.
+				this.emit("line", "[The command produced no output. It ran to completion and printed nothing.]")
 			}
 
 			// A terminal whose shell isn't emitting completion markers (e.g. it
