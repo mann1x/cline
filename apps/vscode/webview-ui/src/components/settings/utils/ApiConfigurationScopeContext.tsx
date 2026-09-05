@@ -37,7 +37,22 @@ export interface ApiConfigurationScope {
 	 */
 	providerSettings?: Record<string, unknown>
 	writeProviderSettings?: (patch: Record<string, unknown>) => Promise<void>
-	commitModelSelection?: (modelId: string) => Promise<void>
+	/**
+	 * The whole selection, not just its model id.
+	 *
+	 * This took `modelId: string` and dropped everything else on the floor,
+	 * which is where Per-Turn Max Output Tokens went: that field writes through
+	 * `commitModelSelection` with `overrides.maxTokens`, so on Vision and Agents
+	 * it could not be saved at all — the value was discarded before it reached
+	 * the snapshot, and the panel showed the old one back.
+	 */
+	commitModelSelection?: (selection: ScopedModelSelection) => Promise<void>
+}
+
+/** What a scoped tab stores when a model is committed on it. */
+export interface ScopedModelSelection {
+	modelId: string
+	overrides?: Record<string, unknown>
 }
 
 export const ApiConfigurationScopeContext = createContext<ApiConfigurationScope | undefined>(undefined)

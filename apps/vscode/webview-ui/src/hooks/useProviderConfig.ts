@@ -172,15 +172,24 @@ export function useProviderConfig(requestedProviderId: ProviderId) {
 	// the picker shows what it just committed instead of falling back to the
 	// first model in the list.
 	const scopedConfig = scope?.ownsProviderSettings
-		? ({
-				...(scope.providerSettings ?? {}),
-				actSelection: scope.providerSettings?.selectedModelId
-					? { modelId: scope.providerSettings.selectedModelId }
-					: undefined,
-				planSelection: scope.providerSettings?.selectedModelId
-					? { modelId: scope.providerSettings.selectedModelId }
-					: undefined,
-			} as unknown as ProviderConfigResponse)
+		? (() => {
+				const held = scope.providerSettings ?? {}
+				// The overrides are read back with the selection, not just
+				// stored with it. Without this the panel saved Per-Turn Max
+				// Output Tokens and then showed the field empty, because the
+				// committed selection it renders from carried no overrides.
+				const selection = held.selectedModelId
+					? {
+							modelId: held.selectedModelId,
+							...(held.selectedModelOverrides ? { overrides: held.selectedModelOverrides } : {}),
+						}
+					: undefined
+				return {
+					...held,
+					actSelection: selection,
+					planSelection: selection,
+				} as unknown as ProviderConfigResponse
+			})()
 		: undefined
 
 	const read = useCallback(async () => {
@@ -239,7 +248,13 @@ export function useProviderConfig(requestedProviderId: ProviderId) {
 			// providers.json, so routing a second configuration through it
 			// overwrites the one it is meant to sit beside.
 			if (scope?.commitModelSelection) {
-				await scope.commitModelSelection(selection.modelId)
+				// The overrides travel with the selection: Per-Turn Max Output
+				// Tokens is written this way, and passing the id alone silently
+				// dropped it on every scoped tab.
+				await scope.commitModelSelection({
+					modelId: selection.modelId,
+					overrides: selection.overrides as Record<string, unknown> | undefined,
+				})
 				return
 			}
 
