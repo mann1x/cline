@@ -56,6 +56,120 @@ const PAGE = {
 };
 
 describe("propose_check", () => {
+	// Four proposals across one ten-run arm named `path` or `command` and no
+	// `kind`. Each was rejected for saying nothing the proposal had not
+	// already said, and in the run that failed outright the rejection is what
+	// pushed the model on to the check that could never pass.
+	describe("kind it did not name", () => {
+		it("reads a page from `path` alone", async () => {
+			const { run, controller } = toolWith(async () => ({ approved: true }));
+
+			const output = await run({
+				path: "game.html",
+				reason: "the task is this page",
+			});
+
+			expect(output).toContain("Approved");
+			expect(controller.adopted[0].kind).toBe("page");
+		});
+
+		it("reads a command from `command` alone", async () => {
+			const { run, controller } = toolWith(async () => ({ approved: true }));
+
+			const output = await run({
+				command: "node run.js",
+				expect: '"ok":true',
+				reason: "it prints the verdict",
+			});
+
+			expect(output).toContain("Approved");
+			expect(controller.adopted[0].kind).toBeUndefined();
+			expect(controller.adopted[0].label).toBe("node run.js");
+		});
+
+		// Both fields and no `kind` is two different checks, and it used to
+		// take the command and drop the path without saying so.
+		it("asks which one, rather than dropping a field", async () => {
+			const approve = vi.fn(async () => ({ approved: true as const }));
+			const { run, controller } = toolWith(approve);
+
+			const output = await run({
+				path: "game.html",
+				command: "node run.js",
+				reason: "both, somehow",
+			});
+
+			expect(output).toContain("both `path` and `command`");
+			expect(controller.adopted).toHaveLength(0);
+			// Not a spent round: the user was never asked anything.
+			expect(approve).not.toHaveBeenCalled();
+		});
+
+		it("still refuses a `kind` that is neither", async () => {
+			const { run, controller } = toolWith(async () => ({ approved: true }));
+
+			const output = await run({
+				kind: "browser",
+				path: "game.html",
+				reason: "the task is this page",
+			});
+
+			expect(output).toContain("`browser` is neither");
+			expect(controller.adopted).toHaveLength(0);
+		});
+	});
+
+	// A command with no `expect` is judged on its exit code alone. Three
+	// proposals in the same arm were that, against a runner that prints its
+	// verdict and exits zero either way, and all three were told only that the
+	// check "already passes" -- true, and not the thing to fix.
+	it("names the missing `expect` when the check passed on the base", async () => {
+		const passesOnBase: OracleVerdict = {
+			passed: true,
+			exitCode: 0,
+			output: '{"ok":false,"error":"SyntaxError"}',
+			timedOut: false,
+		};
+		const { run } = toolWith(
+			async () => ({ approved: true }),
+			adopter(undefined, passesOnBase),
+		);
+
+		const output = await run({
+			kind: "command",
+			command: "node run_game.js game.html",
+			reason: "it runs the game",
+		});
+
+		expect(output).toContain("`expect`");
+		expect(output).toContain("exit code is the whole verdict");
+		expect(output).toContain('{"ok":false,"error":"SyntaxError"}');
+	});
+
+	// With an `expect` set, passing on the base is the plain problem it always
+	// was and the message should not start guessing.
+	it("keeps the plain message when `expect` was given", async () => {
+		const passesOnBase: OracleVerdict = {
+			passed: true,
+			exitCode: 0,
+			output: "ok",
+			timedOut: false,
+		};
+		const { run } = toolWith(
+			async () => ({ approved: true }),
+			adopter(undefined, passesOnBase),
+		);
+
+		const output = await run({
+			kind: "command",
+			command: "node run_game.js game.html",
+			expect: "ok",
+			reason: "it runs the game",
+		});
+
+		expect(output).toContain("cannot tell a fix from no fix");
+		expect(output).not.toContain("exit code is the whole verdict");
+	});
 	it("adopts a check the user approves", async () => {
 		const { run, controller } = toolWith(async () => ({ approved: true }));
 

@@ -109,11 +109,36 @@ export function readCheckProposal(
 		};
 	}
 
-	const kind = fieldOf(raw.kind);
-	if (kind !== "page" && kind !== "command") {
+	// `kind` is required by the schema and left out anyway: four proposals
+	// across one ten-run arm named `path` or `command` and no `kind`, and each
+	// spent a round trip being told something the proposal had already said.
+	// Where exactly one of the two fields is present there is nothing to
+	// disambiguate, so read it rather than asking. An explicit `kind` still
+	// wins, and still decides which field is used when both are given -- that
+	// pair used to drop one of them without saying so.
+	const declared = fieldOf(raw.kind);
+	const namesPath = fieldOf(raw.path) !== undefined;
+	const namesCommand = fieldOf(raw.command) !== undefined;
+	let kind: "page" | "command";
+	if (declared === "page" || declared === "command") {
+		kind = declared;
+	} else if (declared !== undefined) {
+		return {
+			problem: `\`kind\` must be "page" (load a file and run it — needs nothing installed) or "command" (a line for the shell). \`${declared}\` is neither.`,
+		};
+	} else if (namesPath && !namesCommand) {
+		kind = "page";
+	} else if (namesCommand && !namesPath) {
+		kind = "command";
+	} else if (namesPath && namesCommand) {
 		return {
 			problem:
-				'`kind` must be "page" (load a file and run it — needs nothing installed) or "command" (a line for the shell).',
+				'This proposal gives both `path` and `command`, so it is two different checks. Set `kind` to "page" or "command" to say which one you mean.',
+		};
+	} else {
+		return {
+			problem:
+				'`kind` must be "page" (load a file and run it — needs nothing installed) or "command" (a line for the shell), and the proposal needs the matching `path` or `command` with it.',
 		};
 	}
 
@@ -255,8 +280,21 @@ export function sameProposal(a: CheckProposal, b: CheckProposal): boolean {
  */
 export function judgeCandidateCheck(
 	verdict: OracleVerdict,
+	proposal?: CheckProposal,
 ): { usable: true } | { usable: false; problem: string } {
 	if (verdict.passed) {
+		// A command with no `expect` is judged on its exit code alone, and the
+		// large class of checks that report a verdict in their output and exit
+		// zero regardless will pass here on a broken tree every time. Three
+		// proposals in one ten-run arm were exactly this, and all three were
+		// told only that the check "already passes" -- true, and not the thing
+		// that was wrong with it. Name the cause, since it is known here.
+		if (proposal?.kind === "command" && !proposal.expect) {
+			return {
+				usable: false,
+				problem: `That check exited cleanly on the files as they were before any edit, and with no \`expect\` its exit code is the whole verdict — so it would keep any change at all. It printed: ${verdict.output.trim() || "no output"}. Propose it again with an \`expect\` that matches only the output of a working state.`,
+			};
+		}
 		return {
 			usable: false,
 			problem:

@@ -41,7 +41,7 @@ Nothing in this workspace can be run to judge a change, so without a check your 
 
 Two kinds:
 - \`kind: "page"\` — Cline loads \`path\` in this process, runs its scripts and pumps animation frames. No browser window opens and nobody looks at it. It fails if the file does not parse, throws while loading, throws in a frame, or never draws. Nothing has to be installed, so prefer this for a page, a game or a script.
-- \`kind: "command"\` — a line for the shell, run unattended. Only worth proposing when you know it exists on this machine; a check that cannot run judges nothing. Add \`expect\` when the command reports its verdict in its output and exits cleanly either way.
+- \`kind: "command"\` — a line for the shell, run unattended, with the workspace root as its working directory: write paths relative to it and do not \`cd\` anywhere first. Only worth proposing when you know it exists on this machine; a check that cannot run judges nothing. Add \`expect\` when the command reports its verdict in its output and exits cleanly either way — without one its exit code is the whole verdict, and a command that exits zero on a broken tree would keep every change you make.
 
 Give a \`reason\` in one sentence: what passing this check proves about the task. Write it about the code, not about how a person would test it — "the level data is built before the first frame draws", not "loading it in a browser will confirm it works". The user reads that sentence to decide.
 
@@ -167,7 +167,7 @@ export function createProposeCheckTool(
 			// it needs is already sitting there.
 			try {
 				const candidate = await options.controller.judgeAgainstBase(oracle);
-				const judged = judgeCandidateCheck(candidate);
+				const judged = judgeCandidateCheck(candidate, proposal);
 				if (!judged.usable) {
 					spent += 1;
 					const left = MAX_CHECK_PROPOSALS - spent;
