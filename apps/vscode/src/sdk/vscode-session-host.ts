@@ -221,6 +221,10 @@ export class VscodeSessionHost implements SdkSessionHost {
 						// release: the proposed check and the self-declared verdict it
 						// replaced have to be comparable on the same workspace.
 						proposeCheck: atomicProtocolSettings?.proposeCheck !== false,
+						maxCheckProposals: atomicProtocolSettings?.maxCheckProposals,
+						// Zero is off and has to survive as zero, so `??` rather
+						// than `||`.
+						checkReconsideredAfter: atomicProtocolSettings?.checkReconsideredAfter,
 						// `restore_file` rewrites the whole file, so what the
 						// model had read of it no longer holds. This host owns
 						// the receipts, so it is the one that can say so.

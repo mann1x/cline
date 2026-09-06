@@ -292,6 +292,27 @@ export interface CoreAtomicProtocolConfig {
 	 */
 	proposeCheck?: boolean;
 	/**
+	 * Proposals put to the user before the run gives up on having a check.
+	 *
+	 * Two by default. A host that approves everything automatically wants a
+	 * different number from one where a person answers each time.
+	 */
+	maxCheckProposals?: number;
+	/**
+	 * Discarded attempts before a check that has never passed may be replaced.
+	 *
+	 * Two by default, and zero turns it off. The freeze on a proposed check is
+	 * what stops a model weakening it until one passes; this is the one crack
+	 * in it, for the case the freeze cannot survive — a check that cannot pass
+	 * at all, which freezes the run into failure. Measured over ten runs on one
+	 * workspace, that cost two of them outright, and in the second the model
+	 * proposed the correct check twice and was refused both times.
+	 *
+	 * Only ever applies to a check the model proposed. A check the user wrote,
+	 * or one detected in the tree, is the specification and is never revisited.
+	 */
+	checkReconsideredAfter?: number;
+	/**
 	 * Retires what the model had read about a file the protocol put back.
 	 *
 	 * Supplied by hosts that own the read receipts, for the same reason

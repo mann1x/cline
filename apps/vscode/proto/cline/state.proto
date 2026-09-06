@@ -500,6 +500,12 @@ message AtomicProtocolSettings {
   // Absent means on; false returns that case to the model's self-declared
   // verdict, so the two can be compared on the same workspace.
   optional bool propose_check = 6;
+  // Proposals put to the user before the run gives up on having a check.
+  int32 max_check_proposals = 7;
+  // Discarded attempts before a check the model proposed, and that has never
+  // passed once, may be replaced. Optional because zero is meaningful here --
+  // it turns reconsideration off -- and proto3 cannot tell that from unset.
+  optional int32 check_reconsidered_after = 8;
 }
 
 // Named secrets a QA command may ask for.

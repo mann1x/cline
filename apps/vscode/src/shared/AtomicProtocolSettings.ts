@@ -57,6 +57,31 @@ export interface AtomicProtocolSettings {
 	 * across releases. It does nothing when there is a check to run.
 	 */
 	proposeCheck: boolean
+	/**
+	 * Proposals put to you before the run gives up on having a check.
+	 *
+	 * Two, which is what it was before it could be changed. A run where every
+	 * proposal is approved without asking wants a different number from one
+	 * where you answer each time.
+	 */
+	maxCheckProposals: number
+	/**
+	 * Discarded attempts before a check that has never passed may be replaced.
+	 *
+	 * A check the model proposed is frozen once approved, and that is what
+	 * stops it weakening the check until one passes. It also freezes a check
+	 * that cannot pass at all, and measured over ten runs on one workspace that
+	 * cost two of them outright — one keyed on a condition no correct fix
+	 * produces, one whose command was not valid JavaScript and so failed on any
+	 * files at all. The second worked that out and proposed the right check
+	 * twice, and was refused both times.
+	 *
+	 * So: after this many attempts thrown away with the check never once
+	 * passing, it may be replaced, once. Zero turns that off and restores the
+	 * freeze exactly as it was. A check you wrote yourself, or one found in the
+	 * workspace, is never reconsidered — it is the specification.
+	 */
+	checkReconsideredAfter: number
 }
 
 /**
@@ -76,4 +101,6 @@ export const DEFAULT_ATOMIC_PROTOCOL_SETTINGS: AtomicProtocolSettings = {
 	maxChanges: 3,
 	maxTransactions: 6,
 	proposeCheck: true,
+	maxCheckProposals: 2,
+	checkReconsideredAfter: 2,
 }

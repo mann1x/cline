@@ -29,6 +29,7 @@ import {
 	PROPOSE_CHECK_TOOL_NAME,
 	proposalToOracle,
 	readCheckProposal,
+	sameProposal,
 } from "./proposal";
 
 export { PROPOSE_CHECK_TOOL_NAME };
@@ -85,6 +86,12 @@ export const PROPOSE_CHECK_TOOL_INPUT_SCHEMA = {
 /** The part of the controller this tool drives. */
 export interface CheckAdopter {
 	readonly canAdoptOracle: boolean;
+	/**
+	 * Whether the check in force is up for replacement, this transaction.
+	 *
+	 * Absent on a controller that does not offer it, which reads as never.
+	 */
+	readonly checkIsUnderReconsideration?: boolean;
 	adoptOracle(oracle: Oracle): void;
 	/** Runs a candidate against the files this transaction opened on. */
 	judgeAgainstBase(oracle: Oracle): Promise<OracleVerdict>;
@@ -93,6 +100,8 @@ export interface CheckAdopter {
 export interface ProposeCheckToolOptions {
 	workspaceRoot: string;
 	controller: CheckAdopter;
+	/** Rounds put to the user before the run gives up on having a check. */
+	maxProposals?: number;
 	/** Asks the user. The security boundary, and never auto-approved. */
 	approve: CheckApprover;
 	/** For the host to say, in its own voice, what now judges the run. */
@@ -108,6 +117,15 @@ export function createProposeCheckTool(
 	// cost the user an interaction -- a decline, or a check they approved that
 	// then turned out to judge nothing.
 	let spent = 0;
+	// What the model last got approved, so a replacement that is the same check
+	// again can be told so rather than re-approved and re-frozen.
+	let inForce: CheckProposal | undefined;
+	// Reconsideration brings its own round. Drawing on the budget above would
+	// mean a run that spent it on a shape the user declined has no way back
+	// from a check that cannot pass -- and the measured run that needed this
+	// had exactly one round left, by luck.
+	let granted = 0;
+	let grantedFor = false;
 
 	return createTool({
 		name: PROPOSE_CHECK_TOOL_NAME,
@@ -117,17 +135,32 @@ export function createProposeCheckTool(
 			unknown
 		>,
 		execute: async (input: unknown): Promise<string> => {
+			const replacing = options.controller.checkIsUnderReconsideration === true;
+			if (replacing && !grantedFor) {
+				granted += 1;
+				grantedFor = true;
+			}
+			if (!replacing) {
+				grantedFor = false;
+			}
 			if (!options.controller.canAdoptOracle) {
 				return "This run already has a check and it is frozen for the rest of the run. Make your change and let the check judge it.";
 			}
-			if (spent >= MAX_CHECK_PROPOSALS) {
-				return "Two proposals have already been put to the user without one being taken on, so this run has no check and your own account of the work is the verdict. Do not propose again — say plainly whether the change worked and how you know.";
+			const maxProposals = options.maxProposals ?? MAX_CHECK_PROPOSALS;
+			if (spent >= maxProposals + granted) {
+				return "Every proposal this run allows has been put to the user without one being taken on, so it has no check and your own account of the work is the verdict. Do not propose again — say plainly whether the change worked and how you know.";
 			}
 
 			const proposal = readCheckProposal(input, options.workspaceRoot);
 			if ("problem" in proposal) {
 				// Not a declined round: nobody was asked anything.
 				return `That proposal cannot be used. ${proposal.problem}`;
+			}
+
+			// Offering the same check back is not a replacement, and spending
+			// the one round on it would leave the run exactly where it was.
+			if (replacing && inForce && sameProposal(inForce, proposal)) {
+				return "That is the check this run already has. It is being reconsidered because it has never passed — propose a different one, or say the check is right and carry on fixing the change.";
 			}
 
 			const described = describeCheckProposal(proposal);
@@ -194,12 +227,13 @@ export function createProposeCheckTool(
 				options.onError?.("[Atomic] the approved check was not adopted", error);
 				return "That check was approved but could not be taken on, so the run keeps the check it already had.";
 			}
+			inForce = proposal;
 			options.onAdopted?.(oracle, proposal);
 
 			return [
 				`Approved. Every attempt from here is judged by: ${oracle.label}.`,
 				"Run it whenever you want with `run_check` — it settles nothing and rolls nothing back — and it is run once more when you finish, where it decides rather than your account of the change.",
-				"It is fixed for the rest of the run, so make the change work rather than proposing something easier.",
+				"It is fixed for the rest of the run, so make the change work rather than proposing something easier — if it turns out never to pass at all, you will be asked about it rather than getting to swap it now.",
 			].join(" ");
 		},
 	});

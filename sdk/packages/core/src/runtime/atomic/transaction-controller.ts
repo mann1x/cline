@@ -99,6 +99,13 @@ export interface TransactionControllerOptions {
 	 * the moment a check exists, since one is frozen once taken on.
 	 */
 	allowCheckProposal?: boolean;
+	/**
+	 * Discarded attempts before a check that has never passed may be replaced.
+	 *
+	 * Zero, or absent, is the freeze as it was. See `checkIsUnderReconsideration`
+	 * for the condition and why it is scoped the way it is.
+	 */
+	checkReconsideredAfter?: number;
 	oracleTimeoutMs?: number;
 	snapshotLimits?: SnapshotLimits;
 	onEvent?: (event: TransactionEvent) => void;
@@ -126,6 +133,13 @@ export class TransactionController {
 	private snapshot?: Snapshot;
 	private current = 0;
 	private adopted?: Oracle;
+	/** Whether the adopted check has ever passed, on any files, since adoption. */
+	private adoptedEverPassed = false;
+	/** Attempts that changed something and were thrown away, since adoption. */
+	private discardedSinceAdoption = 0;
+	/** Open while the model may replace a check that has never passed. Once. */
+	private reconsidering = false;
+	private reconsiderationsUsed = 0;
 
 	constructor(private readonly options: TransactionControllerOptions) {}
 
@@ -144,7 +158,25 @@ export class TransactionController {
 	 * none. See `adoptOracle`.
 	 */
 	get canAdoptOracle(): boolean {
-		return this.oracle === undefined;
+		return this.oracle === undefined || this.reconsidering;
+	}
+
+	/**
+	 * Whether the check the model named is currently up for replacement.
+	 *
+	 * Scoped to a check the model proposed and nothing else: `adopted` is set
+	 * only by `adoptOracle`, and `options.oracle` being absent is what says
+	 * discovery found nothing to run. A check the user wrote, or one detected
+	 * in the tree, is the specification and is never reconsidered — it is not
+	 * the model's to disagree with.
+	 *
+	 * The condition is "it has never passed once, across attempts that really
+	 * changed something". That is the only observable separating a check that
+	 * cannot pass from a task that is hard, and measured over ten runs the two
+	 * that died looked like this from the first transaction onward.
+	 */
+	get checkIsUnderReconsideration(): boolean {
+		return this.reconsidering;
 	}
 
 	/**
@@ -164,6 +196,14 @@ export class TransactionController {
 			);
 		}
 		this.adopted = oracle;
+		// A replacement starts its own record. Carrying the old check's failures
+		// forward would arm reconsideration again immediately, and it gets one.
+		this.adoptedEverPassed = false;
+		this.discardedSinceAdoption = 0;
+		if (this.reconsidering) {
+			this.reconsidering = false;
+			this.reconsiderationsUsed += 1;
+		}
 		this.emit({ type: "adopted", transaction: this.current, oracle });
 	}
 
@@ -230,9 +270,16 @@ export class TransactionController {
 		if (!oracle) {
 			throw new Error("runCheck() was called with no check to run");
 		}
-		return await runOracle(oracle, {
+		const verdict = await runOracle(oracle, {
 			timeoutMs: this.options.oracleTimeoutMs ?? DEFAULT_ORACLE_TIMEOUT_MS,
 		});
+		// A pass here is the whole answer to "can this check ever pass", and it
+		// counts wherever it happened -- a check the model satisfied once and
+		// then broke again is not a check that cannot be satisfied.
+		if (verdict.passed) {
+			this.adoptedEverPassed = true;
+		}
+		return verdict;
 	}
 
 	/** Every transaction so far, in order, kept or not. */
@@ -268,8 +315,42 @@ export class TransactionController {
 	 * transaction becomes the base the next one rolls back to, which is what
 	 * makes a sequence of them additive rather than a single undo point.
 	 */
+	/**
+	 * Whether this transaction should offer the model its check back.
+	 *
+	 * Every clause earns its place. The check must be the model's own; it must
+	 * never have passed; enough attempts must have really been thrown away to
+	 * rule out an unlucky one; it can happen once; and there has to be a
+	 * transaction left after this one, or a replacement judges nothing.
+	 *
+	 * The threshold is bounded by `maxTransactions` because that is a setting:
+	 * a fixed two would fire on the last attempt of a three-attempt task and be
+	 * useless there.
+	 */
+	private shouldReconsiderCheck(): boolean {
+		const after = this.options.checkReconsideredAfter ?? 0;
+		if (after <= 0) {
+			return false;
+		}
+		if (this.adopted === undefined || this.options.oracle !== undefined) {
+			return false;
+		}
+		if (this.adoptedEverPassed || this.reconsiderationsUsed > 0) {
+			return false;
+		}
+		if (this.current >= this.options.maxTransactions) {
+			return false;
+		}
+		const threshold = Math.max(
+			1,
+			Math.min(after, this.options.maxTransactions - 1),
+		);
+		return this.discardedSinceAdoption >= threshold;
+	}
+
 	async open(): Promise<string> {
 		this.current += 1;
+		this.reconsidering = this.shouldReconsiderCheck();
 		this.snapshot = await takeSnapshot(
 			this.options.workspaceRoot,
 			this.options.snapshotLimits,
@@ -289,6 +370,9 @@ export class TransactionController {
 			oracle: this.oracle,
 			canProposeCheck:
 				this.options.allowCheckProposal === true && this.canAdoptOracle,
+			checkNeverPassed: this.adopted !== undefined && !this.adoptedEverPassed,
+			canReplaceCheck:
+				this.options.allowCheckProposal === true && this.reconsidering,
 			history: this.history,
 		});
 	}
@@ -336,6 +420,9 @@ export class TransactionController {
 			});
 			kept = verdict.passed;
 			evidence = verdict.output;
+			if (verdict.passed) {
+				this.adoptedEverPassed = true;
+			}
 		} else {
 			kept = judgeSelfReport(report.selfReport);
 			evidence =
@@ -374,6 +461,17 @@ export class TransactionController {
 				verdict,
 			});
 			return { kept: true, message, verdict };
+		}
+
+		// Only an attempt that changed something is evidence about the check.
+		// Counting an empty transaction would let a model that edits nothing
+		// buy its way back to a fresh proposal, which is the weakening this
+		// protocol exists to prevent.
+		if (
+			this.adopted !== undefined &&
+			!(await snapshotIsClean(snapshot, this.options.snapshotLimits))
+		) {
+			this.discardedSinceAdoption += 1;
 		}
 
 		const restore = await restoreSnapshot(

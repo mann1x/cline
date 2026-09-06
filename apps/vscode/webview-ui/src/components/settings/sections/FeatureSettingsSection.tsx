@@ -447,6 +447,78 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 												updateSetting("atomicProtocolSettings", { proposeCheck: checked })
 											}
 										/>
+										{/* Both are only about a check the model named, so
+										    they are hidden with the switch that produces
+										    one. A check you wrote is never reconsidered and
+										    was never proposed. */}
+										{atomicProtocolSettings?.proposeCheck !== false ? (
+											<>
+												<p className="text-xs text-muted-foreground">
+													How many checks you are asked to judge, and when a check that has never passed
+													may be replaced. A proposed check is frozen once approved, which stops the
+													model weakening it until one passes — but a check that cannot pass at all then
+													freezes the task into failure, so after this many discarded attempts with no
+													pass at all the model may propose one replacement. Zero leaves it frozen for
+													good.
+												</p>
+												<div className="grid grid-cols-2 gap-2">
+													<div className="space-y-1">
+														<Label
+															className="text-xs text-muted-foreground"
+															htmlFor="atomic-max-check-proposals">
+															Proposals you judge
+														</Label>
+														<Input
+															defaultValue={
+																atomicProtocolSettings?.maxCheckProposals ??
+																DEFAULT_ATOMIC_PROTOCOL_SETTINGS.maxCheckProposals
+															}
+															id="atomic-max-check-proposals"
+															min={1}
+															onChange={(event) => {
+																const proposals = readLimit(event.target.value)
+																if (proposals !== undefined) {
+																	updateSetting("atomicProtocolSettings", {
+																		maxCheckProposals: proposals,
+																	})
+																}
+															}}
+															step={1}
+															type="number"
+														/>
+													</div>
+													<div className="space-y-1">
+														<Label
+															className="text-xs text-muted-foreground"
+															htmlFor="atomic-check-reconsidered-after">
+															Attempts before a rethink
+														</Label>
+														<Input
+															defaultValue={
+																atomicProtocolSettings?.checkReconsideredAfter ??
+																DEFAULT_ATOMIC_PROTOCOL_SETTINGS.checkReconsideredAfter
+															}
+															id="atomic-check-reconsidered-after"
+															min={0}
+															onChange={(event) => {
+																// Zero is the off switch here, so it is read
+																// directly rather than through `readLimit`,
+																// which treats it as no answer.
+																const raw = event.target.value.trim()
+																const parsed = Number.parseInt(raw, 10)
+																if (raw !== "" && Number.isInteger(parsed) && parsed >= 0) {
+																	updateSetting("atomicProtocolSettings", {
+																		checkReconsideredAfter: parsed,
+																	})
+																}
+															}}
+															step={1}
+															type="number"
+														/>
+													</div>
+												</div>
+											</>
+										) : null}
 									</>
 								) : null}
 							</div>

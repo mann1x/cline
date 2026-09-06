@@ -85,6 +85,14 @@ export function addRootOptions(cmd: Command): Command {
 				"Where the workspace holds nothing runnable: off leaves the model's own account of its work as the verdict, auto lets it propose a check and approves it without asking (default: off, since there is nobody here to ask)",
 			)
 			.option(
+				"--check-reconsider-after <count>",
+				"Discarded attempts before a check the model proposed, and that has never passed once, may be replaced (default: 2, 0 turns it off)",
+			)
+			.option(
+				"--max-check-proposals <count>",
+				"Proposals put to the approver before the run gives up on having a check (default: 2)",
+			)
+			.option(
 				"--lint-command <command>",
 				'Project checker `check_file` runs on each file it is given, e.g. "npx biome check ${file}". Without ${file} the path is appended. Makes check_file the linter here, as it is in the extension',
 			)
@@ -327,6 +335,7 @@ export function commanderToParsedArgs(program: Command): ParsedArgs {
 	for (const [flag, key, invalid] of [
 		["maxChanges", "maxChanges", "invalidMaxChanges"],
 		["maxTransactions", "maxTransactions", "invalidMaxTransactions"],
+		["maxCheckProposals", "maxCheckProposals", "invalidMaxCheckProposals"],
 	] as const) {
 		if (opts[flag] === undefined) continue;
 		const raw = String(opts[flag]).trim();
@@ -335,6 +344,19 @@ export function commanderToParsedArgs(program: Command): ParsedArgs {
 			result[key] = parsed;
 		} else if (raw) {
 			result[invalid] = raw;
+		}
+	}
+
+	// Its own block because zero is meaningful here and the loop above rejects
+	// it: zero turns reconsideration off, which is the arm this is measured
+	// against, and coercing it to the default would run that arm switched on.
+	if (opts.checkReconsiderAfter !== undefined) {
+		const raw = String(opts.checkReconsiderAfter).trim();
+		const parsed = Number.parseInt(raw, 10);
+		if (raw && Number.isInteger(parsed) && parsed >= 0) {
+			result.checkReconsiderAfter = parsed;
+		} else if (raw) {
+			result.invalidCheckReconsiderAfter = raw;
 		}
 	}
 

@@ -53,6 +53,14 @@ export interface ProtocolPromptInput {
 	 * which is the verdict every wrong outcome measured so far came from.
 	 */
 	canProposeCheck?: boolean;
+	/**
+	 * Whether the check this run adopted has yet to pass on any files at all.
+	 *
+	 * Changes what the record of earlier transactions is allowed to conclude.
+	 */
+	checkNeverPassed?: boolean;
+	/** Whether the model may replace that check, this transaction, once. */
+	canReplaceCheck?: boolean;
 	/** What earlier transactions tried, in order. */
 	history: readonly TransactionOutcome[];
 }
@@ -114,13 +122,32 @@ export function buildProtocolPrompt(input: ProtocolPromptInput): string {
 		);
 	}
 
+	// Offered only where the check is the model's own and has never once
+	// passed. Two runs in ten died frozen to a check that could not pass --
+	// one keyed on a field no correct fix produces, one whose `node -e`
+	// program was not valid JavaScript -- and the second worked that out and
+	// proposed the right check twice, and was refused both times.
+	if (input.canReplaceCheck) {
+		lines.push(
+			"",
+			"== THE CHECK HAS NEVER PASSED ==",
+			"",
+			`The check this run adopted has judged every attempt so far and has not passed once, on any files. Usually that means the change is not landing. It can also mean the check is wrong — that it asks for something no correct fix would produce, or that it never ran properly in the first place.`,
+			"",
+			`Decide which. Read what the check actually reports, with \`${RUN_CHECK_TOOL_NAME}\`, and look at it as a program rather than as a verdict. If it is wrong, call \`${PROPOSE_CHECK_TOOL_NAME}\` once more with a replacement — this is the only chance to change it, and the replacement is held to the same standard: it must fail on the unmodified files. If the check is right and the change simply has not worked yet, say so and carry on fixing.`,
+		);
+	}
+
 	lines.push(
 		"",
 		`${input.maxChanges} is a hard limit and not a target. One change that removes one symptom is a better transaction than ${input.maxChanges} that might.`,
 	);
 
 	if (input.history.length > 0) {
-		lines.push("", describeHistory(input.history));
+		lines.push(
+			"",
+			describeHistory(input.history, input.checkNeverPassed === true),
+		);
 	}
 
 	return lines.join("\n");
@@ -159,7 +186,10 @@ function describeOracleChoice(oracle: Oracle): string {
  * having happened, and the model re-derives the same plan from the same
  * starting file — measured on the harness before the record was added.
  */
-function describeHistory(history: readonly TransactionOutcome[]): string {
+function describeHistory(
+	history: readonly TransactionOutcome[],
+	checkNeverPassed: boolean,
+): string {
 	const lines = ["== WHAT EARLIER TRANSACTIONS TRIED =="];
 	for (const outcome of history) {
 		const label = `TX-${String(outcome.transaction).padStart(2, "0")}`;
@@ -183,9 +213,15 @@ function describeHistory(history: readonly TransactionOutcome[]): string {
 			lines.push("result:", outcome.evidence.trim());
 		}
 	}
+	// "The previous reading was wrong" is the right thing to say about a check
+	// that has ever passed, and the wrong thing about one that has not: it told
+	// two runs, six times each, that the fault was their diagnosis when the
+	// fault was the check they were frozen to.
 	lines.push(
 		"",
-		"Those changes are gone: the files are as they were before that transaction. Do not repeat a plan that has already been discarded — if the same symptom is still there, the previous reading of it was wrong.",
+		checkNeverPassed
+			? "Those changes are gone: the files are as they were before that transaction. Do not repeat a plan that has already been discarded. The check has not passed once across any of them, so either the same reading of the symptom keeps coming back wrong, or the check itself is not asking for what a fix would produce — the second is worth considering by now."
+			: "Those changes are gone: the files are as they were before that transaction. Do not repeat a plan that has already been discarded — if the same symptom is still there, the previous reading of it was wrong.",
 	);
 	return lines.join("\n");
 }

@@ -3,6 +3,7 @@ import type { CoreAtomicProtocolConfig } from "../../types/config";
 import { withBaseRevisionReads } from "./base-revision-reads";
 import { discoverOracle, type Oracle } from "./oracle";
 import type { CheckApprover } from "./proposal";
+import { DEFAULT_CHECK_RECONSIDERED_AFTER } from "./proposal";
 import { createProposeCheckTool } from "./propose-check-tool";
 import { buildEmptyAttemptPrompt, describeEmptyAttempt } from "./protocol";
 import { createRestoreFileTool } from "./restore-file-tool";
@@ -80,6 +81,15 @@ export interface AtomicProtocolSessionOptions {
 	 * the two can be compared on the same task rather than across releases.
 	 */
 	proposeCheck?: boolean;
+	/** Proposals put to the user before the run gives up on having a check. */
+	maxCheckProposals?: number;
+	/**
+	 * Discarded attempts before a check that has never passed may be replaced.
+	 *
+	 * Zero is off, and off is the freeze exactly as it was. See
+	 * `TransactionController.checkIsUnderReconsideration`.
+	 */
+	checkReconsideredAfter?: number;
 	/**
 	 * Retires what the model had read about a file the protocol put back.
 	 *
@@ -206,6 +216,10 @@ export async function createAtomicProtocolSession(
 			options.config?.maxTransactions ?? DEFAULT_MAX_TRANSACTIONS,
 		oracle,
 		allowCheckProposal: canProposeCheck,
+		checkReconsideredAfter:
+			options.checkReconsideredAfter ??
+			options.config?.checkReconsideredAfter ??
+			DEFAULT_CHECK_RECONSIDERED_AFTER,
 		oracleTimeoutMs: options.config?.oracleTimeoutMs,
 		onEvent: options.onEvent,
 	});
@@ -249,6 +263,8 @@ export async function createAtomicProtocolSession(
 				workspaceRoot: options.workspaceRoot,
 				controller,
 				approve: approveCheck,
+				maxProposals:
+					options.maxCheckProposals ?? options.config?.maxCheckProposals,
 				onAdopted: (adopted) => {
 					const message = `Change protocol: you approved \`${adopted.label}\`, and every attempt from here is judged by it.`;
 					options.logger?.log?.(`[Atomic] ${message}`);

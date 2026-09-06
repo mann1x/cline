@@ -56,6 +56,16 @@ const PAGE = {
 };
 
 describe("propose_check", () => {
+	it("adopts a check the user approves", async () => {
+		const { run, controller } = toolWith(async () => ({ approved: true }));
+
+		const output = await run(PAGE);
+
+		expect(controller.adopted).toHaveLength(1);
+		expect(controller.adopted[0].kind).toBe("page");
+		expect(output).toContain("Approved");
+	});
+
 	// Four proposals across one ten-run arm named `path` or `command` and no
 	// `kind`. Each was rejected for saying nothing the proposal had not
 	// already said, and in the run that failed outright the rejection is what
@@ -170,14 +180,192 @@ describe("propose_check", () => {
 		expect(output).toContain("cannot tell a fix from no fix");
 		expect(output).not.toContain("exit code is the whole verdict");
 	});
-	it("adopts a check the user approves", async () => {
-		const { run, controller } = toolWith(async () => ({ approved: true }));
 
-		const output = await run(PAGE);
+	// "The command found a problem" and "the command is itself broken" both
+	// arrive as ran-and-failed, and one of them is not a check. Measured: a run
+	// froze `node -e "try{...}catch(e){...}&&node run_game.js ..."`, which is
+	// not JavaScript, so node died on its own argument identically whatever the
+	// workspace held -- and then failed every attempt for six transactions.
+	describe("a check that is itself broken", () => {
+		const nodeSyntaxError: OracleVerdict = {
+			passed: false,
+			exitCode: 1,
+			output: [
+				"[eval]:1",
+				"try{readFileSync('x')}catch(e){process.exit(1)}&&node run_game.js",
+				"                                               ^^",
+				"",
+				"SyntaxError: Unexpected token '&&'",
+			].join("\n"),
+			timedOut: false,
+		};
 
-		expect(controller.adopted).toHaveLength(1);
-		expect(controller.adopted[0].kind).toBe("page");
-		expect(output).toContain("Approved");
+		it("refuses a program the interpreter could not parse", async () => {
+			const { run, controller } = toolWith(
+				async () => ({ approved: true }),
+				adopter(undefined, nodeSyntaxError),
+			);
+
+			const output = await run({
+				kind: "command",
+				command: 'node -e "try{}catch(e){}&&node run_game.js"',
+				reason: "it parses and runs the game",
+			});
+
+			expect(output).toContain("did not run");
+			expect(output).toContain("fail on any files at all");
+			expect(controller.adopted).toHaveLength(0);
+		});
+
+		// 127 is the shell saying it never found the program. Same class as a
+		// spawn that failed, and it used to read as a check that found a bug.
+		it("refuses a command that was never found", async () => {
+			const notFound: OracleVerdict = {
+				passed: false,
+				exitCode: 127,
+				output: "sh: 1: pytest: not found",
+				timedOut: false,
+			};
+			const { run, controller } = toolWith(
+				async () => ({ approved: true }),
+				adopter(undefined, notFound),
+			);
+
+			const output = await run({
+				kind: "command",
+				command: "pytest -q",
+				reason: "the suite passes",
+			});
+
+			expect(output).toContain("not found on this machine");
+			expect(controller.adopted).toHaveLength(0);
+		});
+
+		// The check reporting a SyntaxError *in a workspace file* is the check
+		// working. Node prints that file's path where `[eval]` would be, which
+		// is the whole reason the signature matches on the location.
+		it("adopts a check that found a syntax error in the code", async () => {
+			const foundIt: OracleVerdict = {
+				passed: false,
+				exitCode: 1,
+				output: [
+					"/work/game.js:12",
+					"  function draw( {",
+					"                 ^",
+					"",
+					"SyntaxError: Unexpected token '{'",
+				].join("\n"),
+				timedOut: false,
+			};
+			const { run, controller } = toolWith(
+				async () => ({ approved: true }),
+				adopter(undefined, foundIt),
+			);
+
+			const output = await run({
+				kind: "command",
+				command: "node --check game.js",
+				reason: "the file parses",
+			});
+
+			expect(output).toContain("Approved");
+			expect(controller.adopted).toHaveLength(1);
+		});
+	});
+
+	// The one crack in the freeze, and it brings its own round: the measured
+	// run that needed it had a single proposal left by luck, and a user who
+	// declines once would have closed it.
+	describe("replacing a check that has never passed", () => {
+		/** A controller that freezes on adoption and can be reopened once. */
+		function reconsiderable() {
+			const adopted: Oracle[] = [];
+			const tried: Oracle[] = [];
+			let reopened = false;
+			return {
+				adopted,
+				tried,
+				reopen(): void {
+					reopened = true;
+				},
+				async judgeAgainstBase(oracle: Oracle) {
+					tried.push(oracle);
+					return FAILS_ON_BASE;
+				},
+				get canAdoptOracle() {
+					return adopted.length === 0 || reopened;
+				},
+				get checkIsUnderReconsideration() {
+					return reopened;
+				},
+				adoptOracle(oracle: Oracle) {
+					adopted.push(oracle);
+					reopened = false;
+				},
+			};
+		}
+
+		it("grants a round the proposal budget had already spent", async () => {
+			const controller = reconsiderable();
+			let approves = false;
+			const { run } = toolWith(
+				async () => (approves ? { approved: true } : { approved: false }),
+				controller,
+			);
+
+			// Both ordinary rounds gone, and nothing adopted.
+			await run({ kind: "page", path: "a.html", reason: "one" });
+			await run({ kind: "page", path: "b.html", reason: "two" });
+			expect(
+				await run({ kind: "page", path: "c.html", reason: "three" }),
+			).toContain("Do not propose again");
+
+			// Nothing was ever adopted, so this is the budget being reopened by
+			// reconsideration rather than by a fresh check.
+			controller.reopen();
+			approves = true;
+			const output = await run({
+				kind: "page",
+				path: "d.html",
+				reason: "the old one never passed",
+			});
+
+			expect(output).toContain("Approved");
+			expect(controller.adopted).toHaveLength(1);
+		});
+
+		it("refuses the same check offered back unchanged", async () => {
+			const controller = reconsiderable();
+			const { run } = toolWith(async () => ({ approved: true }), controller);
+			await run({ kind: "page", path: "game.html", reason: "the page" });
+			expect(controller.adopted).toHaveLength(1);
+
+			controller.reopen();
+			const output = await run({
+				kind: "page",
+				path: "game.html",
+				reason: "the page, again",
+			});
+
+			expect(output).toContain("the check this run already has");
+			expect(controller.adopted).toHaveLength(1);
+		});
+
+		// Without reconsideration open, the freeze says what it always said.
+		it("still refuses a second check while frozen", async () => {
+			const controller = reconsiderable();
+			const { run } = toolWith(async () => ({ approved: true }), controller);
+			await run({ kind: "page", path: "game.html", reason: "the page" });
+
+			const output = await run({
+				kind: "page",
+				path: "other.html",
+				reason: "something easier",
+			});
+
+			expect(output).toContain("frozen for the rest of the run");
+			expect(controller.adopted).toHaveLength(1);
+		});
 	});
 
 	// The user is shown the exact thing that will run, because that is what

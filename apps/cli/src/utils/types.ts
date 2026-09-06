@@ -128,6 +128,17 @@ export interface ParsedArgs {
 	 */
 	proposeCheck?: "off" | "auto";
 	invalidProposeCheck?: string;
+	/**
+	 * Discarded attempts before a check that has never passed may be replaced.
+	 *
+	 * Zero is off, and off is the freeze as it shipped. Only ever applies to a
+	 * check the model proposed for itself.
+	 */
+	checkReconsiderAfter?: number;
+	invalidCheckReconsiderAfter?: string;
+	/** Proposals put to the approver before the run gives up on a check. */
+	maxCheckProposals?: number;
+	invalidMaxCheckProposals?: string;
 	/** Whether the model keeps a checklist across the task. */
 	taskProgress?: "on" | "off";
 	/** Tool calls between checklist reminders. 0 reminds never. */

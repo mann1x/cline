@@ -338,6 +338,7 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			const mode = request.atomicProtocolSettings.mode
 			const maxChanges = request.atomicProtocolSettings.maxChanges
 			const maxTransactions = request.atomicProtocolSettings.maxTransactions
+			const maxCheckProposals = request.atomicProtocolSettings.maxCheckProposals
 			controller.stateManager.setGlobalState("atomicProtocolSettings", {
 				...stored,
 				...(mode === "off" || mode === "auto" || mode === "always" ? { mode } : {}),
@@ -354,6 +355,15 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 				// otherwise send `false` for both.
 				...(request.atomicProtocolSettings.proposeCheck !== undefined
 					? { proposeCheck: request.atomicProtocolSettings.proposeCheck }
+					: {}),
+				...(maxCheckProposals > 0 ? { maxCheckProposals } : {}),
+				// Optional on the wire because zero is a value here and not an
+				// absence: it turns reconsideration off, and a merge that read
+				// it as "not touched" would leave it on.
+				...(request.atomicProtocolSettings.checkReconsideredAfter !== undefined
+					? {
+							checkReconsideredAfter: request.atomicProtocolSettings.checkReconsideredAfter,
+						}
 					: {}),
 			})
 		}

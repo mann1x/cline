@@ -842,6 +842,14 @@ export async function runCli(): Promise<void> {
 	// Fails for the same reason as `--atomic`: the two verdicts this chooses
 	// between are not close, and a run that silently used the other one is a
 	// measurement of the wrong thing that reads exactly like the right one.
+	// Zero is a value here rather than an absence, so this one says so.
+	if (args.invalidCheckReconsiderAfter) {
+		writeln(
+			`invalid --check-reconsider-after "${args.invalidCheckReconsiderAfter}" (expected a whole number, 0 or more; 0 turns it off)`,
+		);
+		process.exitCode = 1;
+		return;
+	}
 	if (args.invalidProposeCheck) {
 		writeln(
 			`invalid --propose-check "${args.invalidProposeCheck}" (expected off or auto)`,
@@ -852,6 +860,7 @@ export async function runCli(): Promise<void> {
 	for (const [flag, value] of [
 		["--max-changes", args.invalidMaxChanges],
 		["--max-transactions", args.invalidMaxTransactions],
+		["--max-check-proposals", args.invalidMaxCheckProposals],
 	] as const) {
 		if (value) {
 			writeln(
@@ -1270,6 +1279,14 @@ export async function runCli(): Promise<void> {
 							proposeCheck: args.proposeCheck === "auto",
 							...(args.proposeCheck === "auto"
 								? { approveCheck: approveAnyProposedCheck }
+								: {}),
+							// Zero is a value here and not an absence, so it is
+							// passed through as written rather than defaulted.
+							...(args.checkReconsiderAfter !== undefined
+								? { checkReconsideredAfter: args.checkReconsiderAfter }
+								: {}),
+							...(args.maxCheckProposals
+								? { maxCheckProposals: args.maxCheckProposals }
 								: {}),
 						},
 					}

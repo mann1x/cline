@@ -51,6 +51,20 @@ export const PROPOSE_CHECK_TOOL_NAME = "propose_check";
 /** How many rounds of proposing the model gets before the protocol moves on. */
 export const MAX_CHECK_PROPOSALS = 2;
 
+/**
+ * Discarded attempts before a check that has never passed may be replaced.
+ *
+ * The freeze is what stops a model weakening its check until one passes, so it
+ * is not lifted lightly — but a check that cannot pass at all freezes the run
+ * into failure, and measured over ten runs that cost two of them outright.
+ * Both spent every transaction they had. See `TransactionController`, which
+ * owns the condition; this is only the number of attempts of evidence needed
+ * before the check itself is allowed to be the suspect.
+ *
+ * Zero turns it off, which is the behaviour that preceded it.
+ */
+export const DEFAULT_CHECK_RECONSIDERED_AFTER = 2;
+
 export type CheckApproval =
 	| { approved: true }
 	/** Declined, with what the user wants instead — the model's next round. */
@@ -278,6 +292,69 @@ export function sameProposal(a: CheckProposal, b: CheckProposal): boolean {
  * - It ran and reported a problem. That is the check doing its job on a
  *   broken tree, and it is the only one accepted.
  */
+/**
+ * Signatures of an interpreter refusing the check's own program.
+ *
+ * "The command found a problem" and "the command is itself broken" both arrive
+ * as ran-and-failed, and only one of them is a check. Measured: a run froze
+ * `node -e "try{...}catch(e){...}&&node run_game.js ..."`, which is not
+ * JavaScript — a `try` statement cannot be followed by `&&` — so node died on
+ * its own argument before reading anything, identically whatever the workspace
+ * held. It failed on the base, which is all the guard asked, and then failed
+ * every attempt for six transactions.
+ *
+ * A closed list over the check's own output, and deliberately a short one.
+ * Each entry names a location that can only be the check itself: node's
+ * `[eval]`, the shell's `-c`, python's `<string>`. A check reporting a
+ * SyntaxError *in a workspace file* is the check working, and says the file's
+ * name instead — which is why these match on where the error is, not on the
+ * word "SyntaxError".
+ */
+const CHECK_IS_BROKEN: readonly { pattern: RegExp; what: string }[] = [
+	// `[eval]:1` is node naming the string it was handed. A SyntaxError in a
+	// workspace file prints that file's path there instead, which is the check
+	// working and must not match.
+	{
+		pattern: /\[(?:eval|stdin|worker eval)\]:\d+[\s\S]{0,2000}?SyntaxError/,
+		what: "node could not parse the program given to `-e`",
+	},
+	{
+		pattern: /(?:^|\n)(?:sh|bash|dash|zsh):(?: -c:)? line \d+: syntax error/,
+		what: "the shell could not parse the line",
+	},
+	{
+		pattern:
+			/syntax error near unexpected token|unexpected EOF while looking for matching/,
+		what: "the shell could not parse the line",
+	},
+	{
+		pattern: /File "<string>"[\s\S]{0,2000}?SyntaxError/,
+		what: "python could not parse the program given to `-c`",
+	},
+];
+
+/**
+ * Whether the output is an interpreter rejecting the check, not a verdict.
+ *
+ * Exported for the tests that pin each signature to the run that produced it.
+ */
+export function readBrokenCheck(
+	verdict: OracleVerdict,
+): { what: string } | undefined {
+	// 127 is the shell saying it never found the program. That is the same
+	// class as `exitCode === null` -- nothing was judged -- and it used to read
+	// as a check that ran and found a problem.
+	if (verdict.exitCode === 127) {
+		return { what: "the command was not found on this machine" };
+	}
+	for (const { pattern, what } of CHECK_IS_BROKEN) {
+		if (pattern.test(verdict.output)) {
+			return { what };
+		}
+	}
+	return undefined;
+}
+
 export function judgeCandidateCheck(
 	verdict: OracleVerdict,
 	proposal?: CheckProposal,
@@ -312,6 +389,16 @@ export function judgeCandidateCheck(
 		return {
 			usable: false,
 			problem: `That check could not be run here at all, so it would judge nothing: ${verdict.output.trim() || "no output"}. Propose something that exists on this machine — \`kind: "page"\` needs nothing installed.`,
+		};
+	}
+	// Failing is what a check is supposed to do here, so this is the last
+	// question asked and the one that separates a check that found the bug from
+	// a check that is broken. Both exit non-zero.
+	const broken = readBrokenCheck(verdict);
+	if (broken) {
+		return {
+			usable: false,
+			problem: `That check did not run: ${broken.what}, so it would fail on any files at all, fixed or not. It said: ${verdict.output.trim() || "no output"}. Fix the check itself, or propose a simpler one — \`kind: "page"\` needs nothing quoted or escaped.`,
 		};
 	}
 	return { usable: true };
