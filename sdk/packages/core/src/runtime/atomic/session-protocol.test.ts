@@ -684,3 +684,69 @@ describe("the switch on model-proposed checks", () => {
 		});
 	});
 });
+
+// A setting that is written, sent and stored but never read back reaches the
+// model as the default and nothing says so. This one has an off position that
+// is the arm it is measured against, so a silent default would run both arms
+// switched on.
+describe("the reconsideration setting reaching the controller", () => {
+	it("carries a zero through as off rather than as unset", async () => {
+		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				approveCheck: async () => ({ approved: true }),
+				config: { mode: "always", checkReconsideredAfter: 0 },
+			});
+			const controller = session?.controller;
+			expect(controller).toBeDefined();
+			if (!controller) return;
+
+			await controller.open();
+			controller.adoptOracle({
+				label: "never",
+				command: "sh",
+				args: ["-c", "exit 1"],
+				cwd: root,
+				reason: "proposed for this task and approved by you",
+			});
+			await fs.writeFile(path.join(root, "game.js"), "one", "utf8");
+			await controller.settle({ account: "tried it" });
+			await fs.writeFile(path.join(root, "game.js"), "two", "utf8");
+			await controller.settle({ account: "tried it" });
+
+			expect(controller.checkIsUnderReconsideration).toBe(false);
+		});
+	});
+
+	it("arms on the configured count", async () => {
+		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				approveCheck: async () => ({ approved: true }),
+				config: { mode: "always", checkReconsideredAfter: 2 },
+			});
+			const controller = session?.controller;
+			expect(controller).toBeDefined();
+			if (!controller) return;
+
+			await controller.open();
+			controller.adoptOracle({
+				label: "never",
+				command: "sh",
+				args: ["-c", "exit 1"],
+				cwd: root,
+				reason: "proposed for this task and approved by you",
+			});
+			await fs.writeFile(path.join(root, "game.js"), "one", "utf8");
+			await controller.settle({ account: "tried it" });
+			await fs.writeFile(path.join(root, "game.js"), "two", "utf8");
+			const settled = await controller.settle({ account: "tried it" });
+
+			expect(controller.checkIsUnderReconsideration).toBe(true);
+			expect(settled.kept).toBe(false);
+			if (!settled.kept) {
+				expect(settled.nextPrompt).toContain("THE CHECK HAS NEVER PASSED");
+			}
+		});
+	});
+});
