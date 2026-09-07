@@ -129,6 +129,37 @@ describe("resolveToolExecution", () => {
 // ---------------------------------------------------------------------------
 
 describe("createAgentRuntimeConfig", () => {
+	it("carries execution.reasoningLoopDetection through to the runtime", () => {
+		// The guard runs inside the model stream, so unlike its neighbours under
+		// `execution` it has to reach AgentRuntimeConfig. A builder that drops it
+		// leaves the feature unreachable and says nothing.
+		const off = createAgentRuntimeConfig({
+			agentConfig: makeAgentConfig({
+				execution: { reasoningLoopDetection: false },
+			}),
+			agentId: "a",
+			model: nullModel,
+		});
+		expect(off.reasoningLoopDetection).toBe(false);
+
+		const tuned = createAgentRuntimeConfig({
+			agentConfig: makeAgentConfig({
+				execution: { reasoningLoopDetection: { minChars: 100 } },
+			}),
+			agentId: "a",
+			model: nullModel,
+		});
+		expect(tuned.reasoningLoopDetection).toEqual({ minChars: 100 });
+
+		// Absent means absent, which the runtime reads as "on with defaults".
+		const bare = createAgentRuntimeConfig({
+			agentConfig: makeAgentConfig({}),
+			agentId: "a",
+			model: nullModel,
+		});
+		expect(bare.reasoningLoopDetection).toBeUndefined();
+	});
+
 	it("produces a config with the PLAN §3.2.1 field mapping", () => {
 		const agentConfig = makeAgentConfig({
 			systemPrompt: "sp",

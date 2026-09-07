@@ -294,6 +294,52 @@ export interface AgentExecutionConfig {
 	 * The CLI enables this by default with `{ softThreshold: 3, hardThreshold: 5 }`.
 	 */
 	loopDetection?: false | Partial<LoopDetectionConfig>;
+	/**
+	 * Repetition guard on the model's reasoning channel. A model that collapses
+	 * into a repetition cycle mid-thought keeps generating until something stops
+	 * it, and a provider with no thinking budget (Ollama Cloud, today) leaves
+	 * nothing between a degenerate draw and the context window.
+	 *
+	 * Unlike `loopDetection`, this is **on by default**: it guards spend, and a
+	 * guard nobody enabled protects nobody. Set to `false` to turn it off, or
+	 * pass a partial config to retune it.
+	 */
+	reasoningLoopDetection?: false | Partial<ReasoningLoopDetectionConfig>;
+}
+
+/**
+ * Thresholds for the reasoning-channel repetition guard.
+ *
+ * The defaults live with the detector (`ReasoningLoopGuard` in `@cline/agents`)
+ * and were set against 1,556 recorded reasoning blocks plus 196k characters of
+ * reasoning from a run that completed its task successfully. Length is never
+ * the signal -- healthy agentic reasoning runs to six figures per turn -- so
+ * every threshold here describes periodicity, not volume.
+ */
+export interface ReasoningLoopDetectionConfig {
+	/** Never judge a reasoning block shorter than this many characters. */
+	minChars: number;
+	/** Completed lines kept for the uniqueness and period tests. */
+	window: number;
+	/** Longest cycle looked for, in lines. */
+	maxPeriod: number;
+	/** How many times a period must repeat before it counts as a cycle. */
+	minCycles: number;
+	/** A full window carrying at most this many distinct lines is degenerate. */
+	maxUniqueInWindow: number;
+	/** A single unbroken line this long is checked for a repeating phrase. */
+	minLineChars: number;
+	/** Longest repeating phrase looked for inside one unbroken line. */
+	phraseMaxPeriod: number;
+	/** How many times a phrase must repeat before it counts as a cycle. */
+	phraseMinCycles: number;
+	/**
+	 * How many turns in a row may be cut for looping before the run is ended.
+	 * Cutting the request stops one degenerate draw; a model that redraws the
+	 * same collapse every turn is not making progress, and something has to
+	 * bound that too.
+	 */
+	maxConsecutiveTrips: number;
 }
 
 // =============================================================================
@@ -1069,6 +1115,22 @@ export const AgentConfigSchema = z.object({
 					z.object({
 						softThreshold: z.number().int().positive().optional(),
 						hardThreshold: z.number().int().positive().optional(),
+					}),
+				])
+				.optional(),
+			reasoningLoopDetection: z
+				.union([
+					z.literal(false),
+					z.object({
+						minChars: z.number().int().positive().optional(),
+						window: z.number().int().positive().optional(),
+						maxPeriod: z.number().int().positive().optional(),
+						minCycles: z.number().int().positive().optional(),
+						maxUniqueInWindow: z.number().int().positive().optional(),
+						minLineChars: z.number().int().positive().optional(),
+						phraseMaxPeriod: z.number().int().positive().optional(),
+						phraseMinCycles: z.number().int().positive().optional(),
+						maxConsecutiveTrips: z.number().int().positive().optional(),
 					}),
 				])
 				.optional(),

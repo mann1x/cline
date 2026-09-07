@@ -676,6 +676,13 @@ export interface AgentRuntimeConfig {
 		 */
 		maxTruncatedTurnRetries?: number;
 	};
+	/**
+	 * Repetition guard on the model's reasoning channel; see
+	 * `ReasoningLoopDetectionConfig`. On by default, `false` disables it.
+	 */
+	reasoningLoopDetection?:
+		| false
+		| Partial<import("./agents/types").ReasoningLoopDetectionConfig>;
 	toolExecution?: "sequential" | "parallel";
 	toolPolicies?: Record<string, ToolPolicy>;
 	toolContextMetadata?: Record<string, unknown>;

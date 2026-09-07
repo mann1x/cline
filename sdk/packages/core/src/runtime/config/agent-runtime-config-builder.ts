@@ -10,6 +10,8 @@
  * (e.g. `execution.maxConsecutiveMistakes`, `execution.loopDetection`) are
  * consumed by `SessionRuntime` / `MistakeTracker` /
  * `LoopDetectionTracker` — not passed through here.
+ * `execution.reasoningLoopDetection` is the exception: it is enforced inside
+ * the model stream, so it does round-trip.
  */
 
 import type {
@@ -138,6 +140,10 @@ export function createAgentRuntimeConfig(
 				? undefined
 				: (input.completionPolicy ?? agentConfig.completionPolicy),
 		maxIterations: agentConfig.maxIterations,
+		// One of the few `execution.*` fields that does round-trip: the guard runs
+		// inside the model stream, which is the only place that can cut a request
+		// mid-draw, so the runtime has to carry the setting itself.
+		reasoningLoopDetection: agentConfig.execution?.reasoningLoopDetection,
 		toolExecution,
 		toolPolicies: agentConfig.toolPolicies,
 		toolContextMetadata: input.toolContextMetadata,

@@ -56,6 +56,12 @@ import {
 	unparsedToolCallInText,
 } from "@cline/shared";
 import { nanoid } from "nanoid";
+import {
+	DEFAULT_REASONING_LOOP_GUARD,
+	describeReasoningLoop,
+	ReasoningLoopGuard,
+	type ReasoningLoopVerdict,
+} from "./reasoning-loop-guard";
 
 const MAX_TOKENS_INCOMPLETE_TURN_MESSAGE =
 	"Model reached the maximum output token limit before completing the turn";
@@ -772,6 +778,12 @@ export class AgentRuntime {
 	private truncatedOutputCapTokens: number | undefined;
 	private initialization?: Promise<void>;
 	private abortController?: AbortController;
+	/**
+	 * Turns cut in a row because the reasoning channel collapsed. Cutting the
+	 * request stops one degenerate draw; this bounds a model that redraws the
+	 * same collapse every turn. Reset by any turn that streams cleanly.
+	 */
+	private reasoningLoopStreak = 0;
 	private readonly telemetryProviderId?: string;
 	private readonly telemetryModelId?: string;
 
@@ -2108,6 +2120,14 @@ export class AgentRuntime {
 		let finishReason: AgentModelFinishReason = "stop";
 		let accumulatedText = "";
 		let accumulatedReasoning = "";
+		const reasoningLoopConfig = this.config.reasoningLoopDetection;
+		// Undefined means on, unlike `execution.loopDetection` next to it: this
+		// one guards spend, and a guard nobody enabled protects nobody.
+		const reasoningLoopGuard =
+			reasoningLoopConfig === false
+				? undefined
+				: new ReasoningLoopGuard(reasoningLoopConfig);
+		let reasoningLoop: ReasoningLoopVerdict | undefined;
 
 		for await (const event of stream) {
 			this.throwIfAborted();
@@ -2175,6 +2195,7 @@ export class AgentRuntime {
 						redacted: event.redacted,
 						metadata: event.metadata,
 					});
+					reasoningLoop = reasoningLoopGuard?.push(event.text) ?? undefined;
 					break;
 				}
 				case "tool-call-delta": {
@@ -2295,6 +2316,17 @@ export class AgentRuntime {
 					break;
 				}
 			}
+			if (reasoningLoop) {
+				// Leaving the loop closes the iterator, which cancels the provider
+				// request. That is the whole point: the tokens stop being billed
+				// now, not when the model finally reaches the context window.
+				break;
+			}
+		}
+		if (reasoningLoop) {
+			await this.onReasoningLoopCut(reasoningLoop);
+		} else if (reasoningLoopGuard) {
+			this.reasoningLoopStreak = 0;
 		}
 
 		for (const item of sequence) {
@@ -2335,6 +2367,9 @@ export class AgentRuntime {
 		}
 
 		const messageMetadata: Record<string, unknown> = {};
+		if (reasoningLoop) {
+			messageMetadata.reasoningLoop = reasoningLoop;
+		}
 		if (invalidToolCalls.length > 0) {
 			messageMetadata.invalidToolCalls = invalidToolCalls;
 		}
@@ -2950,6 +2985,45 @@ export class AgentRuntime {
 		return [...this.state.messages]
 			.reverse()
 			.find((message) => message.role === "assistant");
+	}
+
+	/**
+	 * A reasoning block collapsed into repetition and the request was cut.
+	 *
+	 * The turn keeps whatever it produced before the cut and continues, so the
+	 * model gets a chance to recover -- but a model that collapses the same way
+	 * every turn is not recovering, and the streak ends the run.
+	 */
+	private async onReasoningLoopCut(
+		verdict: ReasoningLoopVerdict,
+	): Promise<void> {
+		this.reasoningLoopStreak += 1;
+		const limit =
+			(this.config.reasoningLoopDetection === false
+				? undefined
+				: this.config.reasoningLoopDetection?.maxConsecutiveTrips) ??
+			DEFAULT_REASONING_LOOP_GUARD.maxConsecutiveTrips;
+		const diagnosis = describeReasoningLoop(verdict);
+		const giveUp = this.reasoningLoopStreak >= limit;
+		await this.emit({
+			type: "status-notice",
+			snapshot: this.snapshot(),
+			message: giveUp
+				? `${diagnosis} Ending the run after ${this.reasoningLoopStreak} turns cut for this.`
+				: `${diagnosis} Cutting the request and continuing.`,
+			metadata: {
+				kind: "reasoning_loop",
+				reason: "reasoning_loop",
+				phase: giveUp ? "aborted" : "cut",
+				iteration: this.state.iteration,
+				consecutiveTrips: this.reasoningLoopStreak,
+				verdict,
+			},
+		});
+		if (giveUp) {
+			this.abort(new AgentRuntimeAbortError(diagnosis));
+			this.throwIfAborted();
+		}
 	}
 
 	private throwIfAborted(): void {
