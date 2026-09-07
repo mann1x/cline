@@ -312,4 +312,13 @@ service UiService {
 
   // Tracks intent signals before task creation or first model activity
   rpc trackIntent(IntentEvent) returns (Empty);
+
+  // Reports a failure inside the webview to the extension's log.
+  //
+  // A render that throws unmounts the whole tree and leaves an empty panel.
+  // From the extension host that is indistinguishable from a panel nobody
+  // opened: the host is fine, the task keeps running, and nothing is written
+  // anywhere. This is how the webview says what happened, so a report collected
+  // afterwards carries it.
+  rpc reportWebviewError(StringRequest) returns (Empty);
 }

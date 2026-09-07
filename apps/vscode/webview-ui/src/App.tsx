@@ -2,6 +2,8 @@ import type { Boolean, EmptyRequest } from "@shared/proto/cline/common"
 import { useCallback, useEffect } from "react"
 import AccountView from "./components/account/AccountView"
 import ChatView from "./components/chat/ChatView"
+import { RootErrorBoundary } from "./components/common/RootErrorBoundary"
+import { WaitingForCline } from "./components/common/WaitingForCline"
 import HistoryView from "./components/history/HistoryView"
 import MarketplaceView from "./components/marketplace/MarketplaceView"
 import McpView from "./components/mcp/configuration/McpConfigurationView"
@@ -17,6 +19,7 @@ import { UiServiceClient } from "./services/grpc-client"
 const AppContent = () => {
 	const {
 		didHydrateState,
+		hydrationStalled,
 		showWelcome,
 		shouldShowAnnouncement,
 		showMarketplace,
@@ -69,7 +72,10 @@ const AppContent = () => {
 	}, [clineUser?.uid, clineUser?.appBaseUrl])
 
 	if (!didHydrateState) {
-		return null
+		// Blank until the first state arrives, which is normal for a moment and
+		// a silent failure after that. `hydrationStalled` is the context saying
+		// the wait has stopped being normal.
+		return hydrationStalled ? <WaitingForCline /> : null
 	}
 
 	if (showWelcome) {
@@ -104,9 +110,14 @@ const AppContent = () => {
 
 const App = () => {
 	return (
-		<Providers>
-			<AppContent />
-		</Providers>
+		// Outside the providers on purpose: a provider that throws on a piece of
+		// state it cannot read is the failure this exists for, and a boundary
+		// inside would be unmounted along with it.
+		<RootErrorBoundary>
+			<Providers>
+				<AppContent />
+			</Providers>
+		</RootErrorBoundary>
 	)
 }
 
