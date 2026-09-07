@@ -866,7 +866,29 @@ export class AgentRuntime {
 		};
 	}
 
+	/**
+	 * The run's state as an event carries it.
+	 *
+	 * `messages` is deep-copied when somebody reads it, not when the snapshot is
+	 * made. Every emitted event carries a snapshot and a delta event arrives per
+	 * token, so cloning the transcript here meant copying the whole conversation
+	 * -- every message, every content part -- thousands of times a turn, for a
+	 * field the delta events' consumers never read. Only `message-added` and
+	 * `assistant-message` read it, and those arrive once each.
+	 *
+	 * Measured in a user's extension log: 165,195 events in one window against a
+	 * conversation of 554,681 characters. The work is quadratic in the same
+	 * shape as the `accumulated` string that used to be logged per delta, and it
+	 * lands on the extension host's only thread -- which is where a Cline panel
+	 * that has gone blank while the task keeps running is looked for.
+	 *
+	 * The array is copied eagerly, so a message appended after the event was
+	 * emitted cannot appear in a clone taken later; the messages already in it
+	 * are never mutated in place, so their copy can wait for a reader.
+	 */
 	snapshot(): AgentRuntimeStateSnapshot {
+		const messages = [...this.state.messages];
+		let cloned: AgentMessage[] | undefined;
 		return {
 			agentId: this.state.agentId,
 			agentRole: this.state.agentRole,
@@ -875,7 +897,10 @@ export class AgentRuntime {
 			runId: this.state.runId,
 			status: this.state.status,
 			iteration: this.state.iteration,
-			messages: cloneMessages(this.state.messages),
+			get messages(): AgentMessage[] {
+				cloned ??= cloneMessages(messages);
+				return cloned;
+			},
 			pendingToolCalls: [...this.state.pendingToolCalls],
 			usage: cloneUsage(this.state.usage),
 			lastError: this.state.lastError,
