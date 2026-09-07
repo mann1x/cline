@@ -16,6 +16,7 @@ export interface LocalSlashCommandActionInput {
 	queueCompact: () => void;
 	runDelegate: (invocation?: LocalSlashCommandInvocation) => void;
 	runDelegateBackground: (invocation?: LocalSlashCommandInvocation) => void;
+	openBackgroundAgents: () => void;
 	runFork: () => void;
 	runUndo: () => Promise<void>;
 	clearConversation: () => Promise<void>;
@@ -45,6 +46,10 @@ export function runLocalSlashCommandAction(
 		// touch the conversation until the delegated agent has finished, and the
 		// host refuses it there if a turn is still in flight.
 		input.runDelegate(input.invocation);
+		return true;
+	}
+	if (normalized === "agents") {
+		input.openBackgroundAgents();
 		return true;
 	}
 	if (normalized === "delegate-background") {

@@ -228,6 +228,13 @@ export interface TuiProps {
 		agentName: string,
 		prompt: string,
 	) => Promise<BackgroundDelegationView>;
+	/** The background delegations of this session, for the panel. */
+	onListBackgroundDelegations: () => Promise<BackgroundDelegationView[]>;
+	/** Pause, resume or stop one of them. */
+	onControlBackgroundDelegation: (
+		id: string,
+		action: "pause" | "resume" | "stop",
+	) => Promise<boolean>;
 	onFork: () => Promise<
 		| {
 				forkedFromSessionId: string;

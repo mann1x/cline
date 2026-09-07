@@ -15,6 +15,7 @@ import AutoApproveBar from "./auto-approve-menu/AutoApproveBar"
 // Import utilities and hooks from the new structure
 import {
 	ActionButtons,
+	BackgroundAgents,
 	CHAT_CONSTANTS,
 	ChatLayout,
 	convertHtmlToMarkdown,
@@ -438,6 +439,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 					mode={mode}
 					task={task}
 				/>
+				<BackgroundAgents />
 				<QueuedPrompts items={queuedPrompts} />
 				<InputSection
 					chatState={chatState}

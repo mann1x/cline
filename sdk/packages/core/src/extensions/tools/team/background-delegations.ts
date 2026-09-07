@@ -18,7 +18,7 @@
  * path already uses, instead of a second copy of it that drifts.
  */
 
-import type { AgentHooks } from "@cline/shared";
+import type { AgentHooks, AgentRuntimeEvent } from "@cline/shared";
 import {
 	type ConfiguredAgentDelegationResult,
 	type DelegateToConfiguredAgentInput,
@@ -45,6 +45,8 @@ export interface BackgroundDelegationView {
 	endedAt?: number;
 	/** The last thing worth putting on a one-line row. */
 	activity?: string;
+	/** Turns taken so far, so a row can show progress and not just elapsed time. */
+	iterations?: number;
 	result?: ConfiguredAgentDelegationResult;
 	error?: string;
 }
@@ -104,6 +106,34 @@ interface BackgroundRun {
 	controller: AbortController;
 	/** Resolves when the run is let go again. Absent while it is not paused. */
 	resume?: () => void;
+}
+
+/**
+ * What a one-line row says the run is doing.
+ *
+ * Delta events are ignored on purpose. They arrive per token, and a panel that
+ * redrew on each of them would be the most expensive thing in the session --
+ * the same mistake as logging the accumulated text on every delta. A turn
+ * beginning and a tool starting are the two things that actually change what a
+ * row should read, and there are a handful of those per iteration.
+ */
+function describeActivity(
+	run: BackgroundRun,
+	event: AgentRuntimeEvent,
+	announce?: () => void,
+): void {
+	if (!isLive(run.view.status)) {
+		return;
+	}
+	if (event.type === "turn-started") {
+		run.view.iterations = event.iteration;
+		run.view.activity = "thinking";
+	} else if (event.type === "tool-started") {
+		run.view.activity = event.toolCall.toolName;
+	} else {
+		return;
+	}
+	announce?.();
 }
 
 /** Live means the user can still act on it. */
@@ -182,6 +212,12 @@ export function createBackgroundDelegationRegistry(options?: {
 						});
 					}
 					return undefined;
+				},
+				// The same per-run channel the barrier uses, which is what makes
+				// this attributable at all: the session's event stream carries
+				// every delegated run at once and nothing in an event says which.
+				onEvent: (event) => {
+					describeActivity(run, event, announce);
 				},
 			};
 

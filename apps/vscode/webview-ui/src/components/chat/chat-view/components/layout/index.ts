@@ -3,6 +3,7 @@
  */
 
 export { ActionButtons } from "./ActionButtons"
+export { BackgroundAgents } from "./BackgroundAgents"
 export { ChatLayout } from "./ChatLayout"
 export { InputSection } from "./InputSection"
 export { MessagesArea } from "./MessagesArea"

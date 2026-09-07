@@ -854,6 +854,10 @@ export async function runInteractive(
 				prompt,
 			);
 		},
+		onListBackgroundDelegations: async () =>
+			await sessionRuntime.listBackgroundDelegations(),
+		onControlBackgroundDelegation: async (id, action) =>
+			await sessionRuntime.controlBackgroundDelegation(id, action),
 		onFork: async () => {
 			await sessionRuntime.ensureReady();
 			return await sessionRuntime.forkCurrentSession();

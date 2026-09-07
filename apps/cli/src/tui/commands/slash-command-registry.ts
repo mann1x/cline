@@ -21,6 +21,7 @@ export type LocalSlashCommandName =
 	| "compact"
 	| "delegate"
 	| "delegate-background"
+	| "agents"
 	| "skills"
 	| "fork"
 	| "undo"
@@ -101,6 +102,10 @@ const TUI_LOCAL_COMMANDS: Array<{
 		preserveInput: true,
 	},
 	{
+		name: "agents",
+		description: "Pause, resume or stop the agents running in the background",
+	},
+	{
 		name: "fork",
 		description: "Create a named fork of the current session",
 	},
@@ -137,6 +142,7 @@ const SYSTEM_COMMAND_ORDER = [
 	"skills",
 	"delegate",
 	"delegate-background",
+	"agents",
 	"fork",
 	"undo",
 	"clear",

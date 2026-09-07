@@ -1,7 +1,9 @@
+import type { BackgroundDelegationView } from "@cline/core";
 import {
 	AutocompleteDropdown,
 	type AutocompleteDropdownProps,
 } from "../components/autocomplete-dropdown";
+import { BackgroundAgents } from "../components/background-agents";
 import {
 	ChatMessageList,
 	type TranscriptScrollHandle,
@@ -51,6 +53,7 @@ export function ChatView(props: {
 	loadIndividualSubscriptionPlans?: TuiProps["loadIndividualSubscriptionPlans"];
 	autocomplete?: AutocompleteDropdownProps;
 	queuedPrompts?: QueuedPromptItem[];
+	backgroundRuns?: BackgroundDelegationView[];
 	selectedQueuedPromptId?: string | null;
 	editingQueuedPrompt?: QueuedPromptItem;
 	onQueuedPromptEditConfirm: (id: string, prompt: string) => void;
@@ -111,6 +114,10 @@ export function ChatView(props: {
 					<>
 						{props.autocomplete && (
 							<AutocompleteDropdown {...props.autocomplete} accent={accent} />
+						)}
+
+						{props.backgroundRuns && props.backgroundRuns.length > 0 && (
+							<BackgroundAgents runs={props.backgroundRuns} />
 						)}
 
 						{props.queuedPrompts && props.queuedPrompts.length > 0 && (

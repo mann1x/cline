@@ -163,6 +163,65 @@ describe("stopping one", () => {
 	});
 });
 
+describe("what the row says the run is doing", () => {
+	function emit(controls: BackgroundDelegationControls, event: unknown): void {
+		void controls.hooks.onEvent?.(event as never);
+	}
+
+	it("follows the turns and the tools", () => {
+		const { registry, view, controls } = harness();
+
+		emit(controls(), { type: "turn-started", iteration: 3 });
+		expect(registry.get(view.id)?.activity).toBe("thinking");
+		expect(registry.get(view.id)?.iterations).toBe(3);
+
+		emit(controls(), {
+			type: "tool-started",
+			toolCall: { toolName: "read_files" },
+		});
+		expect(registry.get(view.id)?.activity).toBe("read_files");
+	});
+
+	// Deltas arrive per token. A panel redrawing on each of them would be the
+	// most expensive thing in the session.
+	it("ignores the per-token events entirely", () => {
+		const registry = createBackgroundDelegationRegistry();
+		let controls!: BackgroundDelegationControls;
+		const draws: number[] = [];
+		registry.subscribe(() => draws.push(1));
+		registry.start({
+			agentName: "reviewer",
+			prompt: "review",
+			run: (given) => {
+				controls = given;
+				return new Promise(() => undefined);
+			},
+		});
+		const drawsAfterStart = draws.length;
+
+		for (let i = 0; i < 500; i++) {
+			void controls.hooks.onEvent?.({
+				type: "assistant-text-delta",
+				text: "x",
+			} as never);
+		}
+
+		expect(draws.length).toBe(drawsAfterStart);
+	});
+
+	it("says nothing more once the run is over", () => {
+		const { registry, view, controls } = harness();
+		registry.stop(view.id);
+
+		emit(controls(), {
+			type: "tool-started",
+			toolCall: { toolName: "write_file" },
+		});
+
+		expect(registry.get(view.id)?.activity).toBeUndefined();
+	});
+});
+
 describe("what a panel sees", () => {
 	it("hears about every change", () => {
 		const registry = createBackgroundDelegationRegistry();

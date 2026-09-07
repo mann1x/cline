@@ -86,6 +86,8 @@ message BackgroundDelegation {
   // The last thing worth putting on a one-line row, when there is one.
   string activity = 7;
   string error = 8;
+  // Turns taken so far, so a row can show progress and not only elapsed time.
+  int32 iterations = 9;
 }
 
 message BackgroundDelegationList {

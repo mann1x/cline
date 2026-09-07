@@ -19,6 +19,7 @@ function makeActions(
 		runCompact: vi.fn(),
 		queueCompact: vi.fn(),
 		runDelegateBackground: vi.fn(),
+		openBackgroundAgents: vi.fn(),
 		runDelegate: vi.fn(),
 		runFork: vi.fn(),
 		runUndo: vi.fn(async () => {}),
@@ -111,6 +112,19 @@ describe("runLocalSlashCommandAction", () => {
 			// one would quietly become the other.
 			expect(runDelegate).not.toHaveBeenCalled();
 		}
+	});
+
+	it("routes /agents to the background-agent controls", () => {
+		const openBackgroundAgents = vi.fn();
+		const actions = makeActions({ isRunning: true, openBackgroundAgents });
+
+		const handled = runLocalSlashCommandAction({
+			name: "agents",
+			...actions,
+		});
+
+		expect(handled).toBe(true);
+		expect(openBackgroundAgents).toHaveBeenCalledTimes(1);
 	});
 
 	it("queues compaction instead of starting it mid-turn", () => {

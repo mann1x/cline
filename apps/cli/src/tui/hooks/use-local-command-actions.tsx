@@ -1,9 +1,14 @@
+import type { BackgroundDelegationView } from "@cline/core";
 import { useTerminalDimensions } from "@opentui/react";
 import type { ChoiceContext } from "@opentui-ui/dialog";
 import { useDialog } from "@opentui-ui/dialog/react";
 import { useCallback, useEffect, useRef } from "react";
 import type { SlashCommandRegistry } from "../commands/slash-command-registry";
 import { resolveSlashCommand } from "../commands/slash-command-registry";
+import {
+	type BackgroundAgentAction,
+	BackgroundAgentsControlContent,
+} from "../components/dialogs/background-agents-control";
 import { ForkConfirmContent } from "../components/dialogs/fork-confirm";
 import { HelpDialogContent } from "../components/dialogs/help-dialog";
 import { withLoadingDialog } from "../components/dialogs/loading-dialog";
@@ -33,6 +38,10 @@ export function useLocalCommandActions(input: {
 	onCompact: TuiProps["onCompact"];
 	onDelegate: TuiProps["onDelegate"];
 	onDelegateBackground: TuiProps["onDelegateBackground"];
+	onListBackgroundDelegations: TuiProps["onListBackgroundDelegations"];
+	onControlBackgroundDelegation: TuiProps["onControlBackgroundDelegation"];
+	/** Draws the panel now rather than at the next poll. */
+	onBackgroundDelegationStarted?: () => void;
 	onListAgents: TuiProps["onListAgents"];
 	onFork: TuiProps["onFork"];
 	onUndo: () => Promise<void>;
@@ -59,6 +68,9 @@ export function useLocalCommandActions(input: {
 		onCompact,
 		onDelegate,
 		onDelegateBackground,
+		onListBackgroundDelegations,
+		onControlBackgroundDelegation,
+		onBackgroundDelegationStarted,
 		onListAgents,
 		onFork,
 		onUndo,
@@ -308,6 +320,7 @@ export function useLocalCommandActions(input: {
 
 			try {
 				const run = await onDelegateBackground(agentName, task);
+				onBackgroundDelegationStarted?.();
 				session.appendEntry({
 					kind: "status",
 					text: `"${run.agentName}" is running in the background (${run.id}). It will report back here when it is done.`,
@@ -321,8 +334,59 @@ export function useLocalCommandActions(input: {
 				});
 			}
 		},
-		[onDelegateBackground, onListAgents, session],
+		[
+			onBackgroundDelegationStarted,
+			onDelegateBackground,
+			onListAgents,
+			session,
+		],
 	);
+
+	/**
+	 * Act on the agents running in the background.
+	 *
+	 * Reads the list at open rather than holding one: a background run changes
+	 * several times a second, and a dialog built on a stale copy would offer to
+	 * pause something that finished while the user was reading it. The registry
+	 * answers `false` for exactly that case, and false here is not an error.
+	 */
+	const openBackgroundAgents = useCallback(async () => {
+		let runs: BackgroundDelegationView[] = [];
+		try {
+			runs = (await onListBackgroundDelegations()).filter(
+				(run) => run.status === "running" || run.status === "paused",
+			);
+		} catch {
+			// An unstarted session has none, which is what an empty list says.
+		}
+		const chosen = await dialog.choice<BackgroundAgentAction>({
+			closeOnEscape: true,
+			content: (ctx: ChoiceContext<BackgroundAgentAction>) => (
+				<BackgroundAgentsControlContent {...ctx} runs={runs} />
+			),
+		});
+		refocusTextarea();
+		if (!chosen) return;
+		const applied = await onControlBackgroundDelegation(
+			chosen.id,
+			chosen.action,
+		);
+		const run = runs.find((entry) => entry.id === chosen.id);
+		session.appendEntry({
+			kind: "status",
+			text: applied
+				? `${chosen.action === "stop" ? "Stopped" : chosen.action === "pause" ? "Paused" : "Resumed"} "${run?.agentName ?? chosen.id}".`
+				: `"${run?.agentName ?? chosen.id}" was no longer in a state to be ${chosen.action}d.`,
+		});
+		onBackgroundDelegationStarted?.();
+	}, [
+		dialog,
+		onBackgroundDelegationStarted,
+		onControlBackgroundDelegation,
+		onListBackgroundDelegations,
+		refocusTextarea,
+		session,
+	]);
 
 	const runFork = useCallback(async () => {
 		if (!canForkSession) {
@@ -392,6 +456,7 @@ export function useLocalCommandActions(input: {
 				queueCompact,
 				runDelegate,
 				runDelegateBackground,
+				openBackgroundAgents,
 				runFork,
 				runUndo: onUndo,
 				clearConversation: onClearConversation,
@@ -416,6 +481,7 @@ export function useLocalCommandActions(input: {
 			queueCompact,
 			runDelegate,
 			runDelegateBackground,
+			openBackgroundAgents,
 			runFork,
 			session.isRunning,
 			slashCommandRegistry,

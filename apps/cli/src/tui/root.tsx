@@ -59,6 +59,7 @@ import { ThemeProvider } from "./hooks/theme-provider";
 import { useAccountDialog } from "./hooks/use-account-dialog";
 import { useAgentEventHandlers } from "./hooks/use-agent-events";
 import { useAutocomplete } from "./hooks/use-autocomplete";
+import { useBackgroundDelegations } from "./hooks/use-background-delegations";
 import { useConfigPanel } from "./hooks/use-config-panel";
 import { useLocalCommandActions } from "./hooks/use-local-command-actions";
 import { useMcpManager } from "./hooks/use-mcp-manager";
@@ -98,6 +99,8 @@ function App(props: TuiProps) {
 		props.initialRepoStatus ?? { branch: null, diffStats: null },
 	);
 	const { queuedPrompts, handlePendingPrompts } = useQueuedPrompts();
+	const { runs: backgroundRuns, refresh: refreshBackgroundRuns } =
+		useBackgroundDelegations(props.onListBackgroundDelegations);
 	const [selectedQueuedPromptId, setSelectedQueuedPromptId] = useState<
 		string | null
 	>(null);
@@ -772,6 +775,9 @@ function App(props: TuiProps) {
 		onCompact: props.onCompact,
 		onDelegate: props.onDelegate,
 		onDelegateBackground: props.onDelegateBackground,
+		onListBackgroundDelegations: props.onListBackgroundDelegations,
+		onControlBackgroundDelegation: props.onControlBackgroundDelegation,
+		onBackgroundDelegationStarted: refreshBackgroundRuns,
 		onListAgents: props.onListAgents,
 		onFork: props.onFork,
 		onUndo: openCheckpointRestore,
@@ -1021,6 +1027,7 @@ function App(props: TuiProps) {
 		transcriptScrollRef,
 		loadIndividualSubscriptionPlans: props.loadIndividualSubscriptionPlans,
 		queuedPrompts,
+		backgroundRuns,
 		selectedQueuedPromptId,
 		editingQueuedPrompt,
 		onQueuedPromptEditConfirm: (id: string, prompt: string) => {

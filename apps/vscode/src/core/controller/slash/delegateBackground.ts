@@ -19,5 +19,6 @@ export async function delegateBackground(controller: Controller, request: Delega
 		endedAt: run.endedAt ?? 0,
 		activity: run.activity ?? "",
 		error: run.error ?? "",
+		iterations: run.iterations ?? 0,
 	})
 }
