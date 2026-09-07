@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Collects Cline session transcripts and logs into a zip for analysis.
 
@@ -775,7 +775,13 @@ if ($gpuDetail -like '*not found*' -or [string]::IsNullOrWhiteSpace($gpuDetail))
 
 $environment = [ordered]@{
     collectedAt       = (Get-Date).ToString('o')
-    scriptVersion     = '1.0.0'
+    # Bumped whenever what the report *contains* changes, so a report that
+    # arrives without the logs an incident needs can be told from one where
+    # those logs were collected and empty. 1.0.0 predates the VS Code
+    # exthost/renderer logs, which are the only record of the two failures
+    # that end with a blank panel -- a report at 1.0.0 cannot answer that
+    # question no matter how carefully it is read.
+    scriptVersion     = '1.1.0'
     computerName      = $env:COMPUTERNAME
     powerShell        = $PSVersionTable.PSVersion.ToString()
     os                = "$($os.Caption) $($os.Version)"
