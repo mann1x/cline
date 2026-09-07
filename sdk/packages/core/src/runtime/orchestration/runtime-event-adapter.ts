@@ -201,12 +201,17 @@ export class RuntimeEventAdapter {
 					},
 				];
 			case "assistant-text-delta":
+				// The delta only. Carrying the whole block so far on every delta
+				// makes the event stream quadratic in the length of the block --
+				// one 45k-character answer costs 830 MB of transcript, against
+				// 12 MB for the same content sent as deltas. Consumers that render
+				// a growing message accumulate on their side, the way the reasoning
+				// channel below has always done.
 				return [
 					{
 						type: "content_start",
 						contentType: "text",
 						text: event.text,
-						accumulated: event.accumulatedText,
 					},
 				];
 			case "assistant-reasoning-delta":

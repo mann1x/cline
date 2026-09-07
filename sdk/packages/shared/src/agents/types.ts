@@ -93,7 +93,15 @@ export interface AgentContentStartEvent extends AgentEventMetadata {
 	contentType: AgentContentType;
 	/** The text chunk received from the model */
 	text?: string;
-	/** Accumulated text so far in this turn */
+	/**
+	 * Accumulated text so far in this turn.
+	 *
+	 * @deprecated No longer sent. Repeating the whole block on every delta made
+	 * the event stream quadratic in the length of the block. Consumers that
+	 * render a growing message accumulate `text` themselves, as the reasoning
+	 * channel always has. The field stays declared so a client can still read a
+	 * stream produced by an older core.
+	 */
 	accumulated?: string;
 	/** The reasoning/thinking text from the model */
 	reasoning?: string;

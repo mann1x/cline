@@ -321,21 +321,14 @@ describe("RuntimeEventAdapter — streaming content deltas", () => {
 			text: "llo",
 			accumulatedText: "Hello",
 		});
+		// The delta alone. The runtime still tracks the whole block so far, but
+		// repeating it on every delta made the stream quadratic in block length;
+		// consumers that render a growing message accumulate on their side.
 		expect(first).toEqual([
-			{
-				type: "content_start",
-				contentType: "text",
-				text: "He",
-				accumulated: "He",
-			},
+			{ type: "content_start", contentType: "text", text: "He" },
 		]);
 		expect(second).toEqual([
-			{
-				type: "content_start",
-				contentType: "text",
-				text: "llo",
-				accumulated: "Hello",
-			},
+			{ type: "content_start", contentType: "text", text: "llo" },
 		]);
 	});
 

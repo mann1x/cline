@@ -2451,11 +2451,11 @@ describe("historyItemToSessionFields", () => {
 	})
 })
 
-describe("translateSessionEvent — accumulated text streaming (S6-21 fix)", () => {
-	it("uses accumulated text for smooth streaming instead of delta", () => {
+describe("translateSessionEvent — text streaming", () => {
+	it("accumulates text deltas for smooth streaming instead of rendering each one alone", () => {
 		const state = new MessageTranslatorState()
 
-		// First chunk: text="Hello ", accumulated="Hello "
+		// First delta
 		const chunk1 = translateSessionEvent(
 			{
 				type: "agent_event",
@@ -2465,7 +2465,6 @@ describe("translateSessionEvent — accumulated text streaming (S6-21 fix)", () 
 						type: "content_start",
 						contentType: "text",
 						text: "Hello ",
-						accumulated: "Hello ",
 					} as AgentEvent,
 				},
 			},
@@ -2476,8 +2475,8 @@ describe("translateSessionEvent — accumulated text streaming (S6-21 fix)", () 
 		expect(chunk1.messages[0].partial).toBe(true)
 		const streamingTs = chunk1.messages[0].ts
 
-		// Second chunk: text="world" (delta), accumulated="Hello world" (full)
-		// The message should use accumulated, NOT text (delta)
+		// Second delta. The message must carry the whole text so far, not just
+		// this chunk -- rendering the delta alone gives a "flip book".
 		const chunk2 = translateSessionEvent(
 			{
 				type: "agent_event",
@@ -2487,15 +2486,12 @@ describe("translateSessionEvent — accumulated text streaming (S6-21 fix)", () 
 						type: "content_start",
 						contentType: "text",
 						text: "world",
-						accumulated: "Hello world",
 					} as AgentEvent,
 				},
 			},
 			state,
 		)
 		expect(chunk2.messages).toHaveLength(1)
-		// CRITICAL: Must be "Hello world" (accumulated), NOT "world" (delta)
-		// Using delta would cause "flip book" effect in the webview
 		expect(chunk2.messages[0].text).toBe("Hello world")
 		expect(chunk2.messages[0].partial).toBe(true)
 		// Same timestamp — webview updates in-place
@@ -2511,7 +2507,6 @@ describe("translateSessionEvent — accumulated text streaming (S6-21 fix)", () 
 						type: "content_start",
 						contentType: "text",
 						text: "!",
-						accumulated: "Hello world!",
 					} as AgentEvent,
 				},
 			},
@@ -2600,10 +2595,50 @@ describe("translateSessionEvent — accumulated text streaming (S6-21 fix)", () 
 		expect(end.messages[0].partial).toBe(false)
 	})
 
-	it("falls back to text when accumulated is not provided", () => {
+	it("starts a new block from empty after the previous one ended", () => {
+		const state = new MessageTranslatorState()
+		const send = (event: Record<string, unknown>) =>
+			translateSessionEvent(
+				{
+					type: "agent_event",
+					payload: { sessionId: "s1", event: event as unknown as AgentEvent },
+				},
+				state,
+			)
+
+		send({ type: "content_start", contentType: "text", text: "first" })
+		send({ type: "content_end", contentType: "text", text: "first" })
+		const next = send({ type: "content_start", contentType: "text", text: "second" })
+
+		// Client-side accumulation only works if it is reset at content_end;
+		// otherwise every block after the first opens with the one before it.
+		expect(next.messages[0].text).toBe("second")
+	})
+
+	it("ignores a stale accumulated field from an older core", () => {
 		const state = new MessageTranslatorState()
 
-		// Some SDK events may not have accumulated (e.g., first chunk)
+		const result = translateSessionEvent(
+			{
+				type: "agent_event",
+				payload: {
+					sessionId: "s1",
+					event: {
+						type: "content_start",
+						contentType: "text",
+						text: "Hello",
+						accumulated: "something else entirely",
+					} as AgentEvent,
+				},
+			},
+			state,
+		)
+		expect(result.messages[0].text).toBe("Hello")
+	})
+
+	it("renders a single delta as itself", () => {
+		const state = new MessageTranslatorState()
+
 		const result = translateSessionEvent(
 			{
 				type: "agent_event",
@@ -2636,7 +2671,6 @@ describe("translateSessionEvent — accumulated text streaming (S6-21 fix)", () 
 							type: "content_start",
 							contentType: "text",
 							text: `chunk${i}`,
-							accumulated: `accumulated${i}`,
 						} as AgentEvent,
 					},
 				},

@@ -129,6 +129,8 @@ function normalizeUsageEvent(usageEvent: {
 export class MessageTranslatorState {
 	/** Current streaming text message timestamp (used for dedup) */
 	private streamingTextTs: number | undefined
+	/** Accumulated streaming text (SDK text events are deltas) */
+	private streamingText = ""
 	/** Current streaming reasoning message timestamp */
 	private streamingReasoningTs: number | undefined
 	/** Accumulated streaming reasoning text (SDK reasoning events are deltas) */
@@ -226,10 +228,17 @@ export class MessageTranslatorState {
 		return this.streamingTextTs
 	}
 
+	/** Append a text delta and return the accumulated text */
+	appendStreamingText(textDelta: string): string {
+		this.streamingText += textDelta
+		return this.streamingText
+	}
+
 	/** Clear streaming text (content ended) */
 	clearStreamingText(): number {
 		const ts = this.streamingTextTs ?? this.nextTs()
 		this.streamingTextTs = undefined
+		this.streamingText = ""
 		return ts
 	}
 
@@ -1436,18 +1445,22 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 		case "content_start": {
 			switch (event.contentType) {
 				case "text": {
-					// The SDK emits MULTIPLE content_start events for streaming text.
-					// Each has `text` (the delta) and `accumulated` (full text so far).
-					// We use `accumulated` so the webview can update the message in-place
-					// with the growing text, giving smooth streaming. Using `text` (delta)
-					// would cause a "flip book" effect where each update replaces the
+					// The SDK emits MULTIPLE content_start events for streaming text,
+					// each carrying one delta. The webview updates the message in-place
+					// with the whole text so far, so we accumulate here -- rendering the
+					// delta alone would give a "flip book" where each update replaces the
 					// previous content with just the new chunk.
+					//
+					// The accumulation is ours rather than the SDK's on purpose: an
+					// `accumulated` field on every delta makes the stream quadratic in
+					// the length of the block, which is fine for a few hundred tokens
+					// and ruinous for a long one.
 					const ts = state.getStreamingTextTs()
 					messages.push({
 						ts,
 						type: "say",
 						say: "text",
-						text: event.accumulated ?? event.text ?? "",
+						text: state.appendStreamingText(event.text ?? ""),
 						partial: true,
 					})
 					break
