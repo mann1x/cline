@@ -1,6 +1,10 @@
 import type { AgentProfileConnection } from "@cline/core"
 import type { ApiConfiguration } from "@shared/api"
-import { findApiConfigurationProfile, parseApiConfigurationProfiles } from "@shared/api-config-profiles"
+import {
+	type ApiConfigurationProfile,
+	findApiConfigurationProfile,
+	parseApiConfigurationProfiles,
+} from "@shared/api-config-profiles"
 import { applyApiConfigurationSnapshot } from "@shared/api-config-snapshot"
 import { getProviderModelIdKey } from "@shared/storage/provider-keys"
 import { SecretKeys } from "@shared/storage/state-keys"
@@ -41,34 +45,75 @@ export function createAgentProfileConnectionResolver(input: {
 
 	return (name) => {
 		const profile = findApiConfigurationProfile(profiles, name)
-		if (!profile) {
-			return undefined
-		}
-		const settings = applyApiConfigurationSnapshot(profile.snapshot, ["plan", "act"]) as Record<string, unknown>
-		const providerId = settings.actModeApiProvider
-		if (typeof providerId !== "string" || !providerId) {
-			return undefined
-		}
+		return profile ? buildProfileConnection(profile, input.primary) : undefined
+	}
+}
 
-		// The picker's copy first, for the same reason the Vision tab reads it
-		// first: it is what the user last chose, and the mode keys can be left
-		// holding another model entirely (#43).
+/**
+ * The endpoint each saved profile points at, and the parallel-session count
+ * stored beside it.
+ *
+ * For the slot bounds: an agent naming a profile runs on that profile's server,
+ * and how many requests *that* server serves at once is not the lead's number.
+ * Built from {@link buildProfileConnection}, the same function the resolver
+ * hands core, so the endpoint the bound is filed under is by construction the
+ * endpoint the agent will call. Deriving it separately is how the two would
+ * come to disagree about a trailing slash and the bound would sit on a key
+ * nothing ever looks up.
+ *
+ * A profile carries its own count when the user set one on it; otherwise the
+ * shared provider entry answers, which is the precedence the session itself
+ * uses.
+ */
+export function listAgentProfileEndpoints(input: {
+	storedProfiles: string | undefined
+	primary: ApiConfiguration | undefined
+	storedParallelSessions?: (providerId: string) => unknown
+}): Array<{ providerId: string; baseUrl?: string; parallelSessions: unknown }> {
+	const endpoints: Array<{ providerId: string; baseUrl?: string; parallelSessions: unknown }> = []
+	for (const profile of parseApiConfigurationProfiles(input.storedProfiles)) {
+		const connection = buildProfileConnection(profile, input.primary)
+		if (!connection) {
+			continue
+		}
 		const held = profile.snapshot.providerConfig as Record<string, unknown> | undefined
-		const selected = held?.selectedModelId
-		const modelId =
-			typeof selected === "string" && selected
-				? selected
-				: (settings[getProviderModelIdKey(providerId, "act")] as string | undefined)
+		endpoints.push({
+			providerId: connection.providerId,
+			...(connection.baseUrl ? { baseUrl: connection.baseUrl } : {}),
+			parallelSessions: held?.parallelSessions ?? input.storedParallelSessions?.(connection.providerId),
+		})
+	}
+	return endpoints
+}
 
-		return {
-			providerId,
-			...(modelId ? { modelId } : {}),
-			...(resolveApiKeyForProvider(providerId, input.primary) ?? {}),
-			...(typeof settings.ollamaBaseUrl === "string" && settings.ollamaBaseUrl ? { baseUrl: settings.ollamaBaseUrl } : {}),
-			// The settings the profile exists to carry: the context window above
-			// all, which is the field with no home in an agent file.
-			...(held && Object.keys(held).length > 0 ? { providerConfig: held } : {}),
-		}
+function buildProfileConnection(
+	profile: ApiConfigurationProfile,
+	primary: ApiConfiguration | undefined,
+): AgentProfileConnection | undefined {
+	const settings = applyApiConfigurationSnapshot(profile.snapshot, ["plan", "act"]) as Record<string, unknown>
+	const providerId = settings.actModeApiProvider
+	if (typeof providerId !== "string" || !providerId) {
+		return undefined
+	}
+
+	// The picker's copy first, for the same reason the Vision tab reads it
+	// first: it is what the user last chose, and the mode keys can be left
+	// holding another model entirely (#43).
+	const held = profile.snapshot.providerConfig as Record<string, unknown> | undefined
+	const selected = held?.selectedModelId
+	const modelId =
+		typeof selected === "string" && selected
+			? selected
+			: (settings[getProviderModelIdKey(providerId, "act")] as string | undefined)
+
+	return {
+		providerId,
+		...(modelId ? { modelId } : {}),
+		...(resolveApiKeyForProvider(providerId, primary) ?? {}),
+		...(typeof settings.ollamaBaseUrl === "string" && settings.ollamaBaseUrl ? { baseUrl: settings.ollamaBaseUrl } : {}),
+		// The settings the profile exists to carry: the context window above
+		// all, which is the field with no home in an agent file.
+		...(held && Object.keys(held).length > 0 ? { providerConfig: held } : {}),
 	}
 }
 

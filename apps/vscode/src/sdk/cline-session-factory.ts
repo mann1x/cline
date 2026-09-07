@@ -29,6 +29,7 @@ import {
 	getModelsForProvider,
 	isProviderApiLine,
 	MODEL_COLLECTIONS_BY_PROVIDER_ID,
+	normalizeParallelSessions,
 	OLLAMA_DEFAULT_CONTEXT_WINDOW,
 	OLLAMA_DEFAULT_REASONING_EFFORT,
 	primeDeclaredNumCtx,
@@ -61,7 +62,11 @@ import { HostProvider } from "@/hosts/host-provider"
 import { ExtensionRegistryInfo } from "@/registry"
 import { getDistinctId } from "@/services/logging/distinctId"
 import { fetch } from "@/shared/net"
-import { createAgentProfileConnectionResolver, createAgentProfileNameLister } from "./agent-profile-connection"
+import {
+	createAgentProfileConnectionResolver,
+	createAgentProfileNameLister,
+	listAgentProfileEndpoints,
+} from "./agent-profile-connection"
 import { type BedrockProviderConfig, buildBedrockProviderConfig } from "./bedrock-config"
 import { createEditorDiagnosticsHooks } from "./editor-diagnostics"
 import { buildAgentHooks } from "./hooks-adapter"
@@ -1059,6 +1064,61 @@ function readStoredParallelSessions(providerId: string | undefined): unknown {
 }
 
 /**
+ * How many agents each endpoint that is *not* the session's will serve at once.
+ *
+ * The session's own count is `maxConcurrentAgents`, and until now it was the
+ * only one: every endpoint's gate was built from it, so an agent whose profile
+ * named a four-slot server was still held to the lead's one and queued behind
+ * its own siblings for slots that server had free.
+ *
+ * Only endpoints with a count actually configured are listed. An endpoint
+ * nobody has answered for keeps inheriting the session's, which is exactly what
+ * it did before this existed — the alternative, filing everything unanswered
+ * under the honest default of one, would quietly serialise an agent on a cloud
+ * provider that had been fanning out.
+ *
+ * Profiles first, because core takes the first entry naming an endpoint and a
+ * profile's own count is the more specific answer; the shared provider entries
+ * follow, for the agents that name a `providerId` and no profile.
+ */
+function collectAgentSlotLimits(
+	storedProfiles: string | undefined,
+	primary: ApiConfiguration | undefined,
+): CoreSessionConfig["agentSlotLimits"] {
+	const entries: Array<{ providerId?: string; baseUrl?: string; limit: number }> = []
+	const add = (providerId: string, baseUrl: string | undefined, parallelSessions: unknown): void => {
+		const limit = normalizeParallelSessions(parallelSessions)
+		if (limit === undefined) {
+			return
+		}
+		entries.push({ providerId, ...(baseUrl ? { baseUrl } : {}), limit })
+	}
+
+	for (const endpoint of listAgentProfileEndpoints({
+		storedProfiles,
+		primary,
+		storedParallelSessions: readStoredParallelSessions,
+	})) {
+		add(endpoint.providerId, endpoint.baseUrl, endpoint.parallelSessions)
+	}
+
+	try {
+		const manager = getProviderSettingsManager(resolveDataDir())
+		for (const providerId of Object.keys(manager.read().providers ?? {})) {
+			add(
+				providerId,
+				manager.getProviderConfig(providerId)?.baseUrl,
+				manager.getProviderSettings(providerId)?.parallelSessions,
+			)
+		}
+	} catch (error) {
+		Logger.warn("[Agents] Failed to read stored providers for per-endpoint agent slots:", error)
+	}
+
+	return entries.length > 0 ? entries : undefined
+}
+
+/**
  * The tool-result cap stored on the shared provider entry.
  *
  * Read the same way as the parallel-session count, and for the same reason: a
@@ -1612,6 +1672,16 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		fetch,
 	})
 	Logger.log(`[Agents] Concurrency: ${agentSlots.limit === 0 ? "uncapped" : agentSlots.limit} — ${agentSlots.reason}`)
+	// And the other endpoints an agent can name, which the session's count has
+	// nothing to say about.
+	const agentSlotLimits = collectAgentSlotLimits(stateManager.getGlobalSettingsKey("apiConfigurationProfiles"), apiConfig)
+	if (agentSlotLimits) {
+		Logger.log(
+			`[Agents] Per-endpoint concurrency: ${agentSlotLimits
+				.map((entry) => `${entry.providerId}${entry.baseUrl ? ` @ ${entry.baseUrl}` : ""}=${entry.limit}`)
+				.join(", ")}`,
+		)
+	}
 	const useAutoCondense = input.taskSettings?.useAutoCondense ?? globalUseAutoCondense
 	// Whether the model is offered subagents at all. Task settings win over the
 	// global one, the same way every other setting here does.
@@ -1784,6 +1854,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		...(knownModels && Object.keys(knownModels).length > 0 ? { knownModels } : {}),
 		...(delegatedAgentConnection ? { delegatedAgentConnection } : {}),
 		maxConcurrentAgents: agentSlots.limit,
+		...(agentSlotLimits ? { agentSlotLimits } : {}),
 		resolveProviderConnection: resolveAgentProviderConnection,
 		// An agent file can name a saved profile instead of a provider and a
 		// model. Built from the stored list at session start, which is when the

@@ -531,6 +531,38 @@ export interface CoreSessionConfig
 	 */
 	maxConcurrentAgents?: number;
 	/**
+	 * The same bound, per endpoint, for the endpoints that are not the
+	 * session's.
+	 *
+	 * An agent that names a `profile:` or a `providerId:` runs somewhere else,
+	 * and how many requests *that* server serves at once is its own number. Held
+	 * to the lead's, a four-slot server ran one agent while its siblings queued
+	 * for slots it had free.
+	 *
+	 * Given as connections rather than as keys so the host never has to spell an
+	 * endpoint key: two spellings of one server -- a trailing slash, a capital
+	 * letter -- are the same endpoint, and only `agentEndpointKey` knows that.
+	 * The first entry naming an endpoint wins, so a host may list the specific
+	 * answers (a profile's own count) ahead of the general ones (the shared
+	 * provider entry's).
+	 *
+	 * Host-resolved like `maxConcurrentAgents`, but from configuration alone:
+	 * the one thing that can only be answered by asking a server -- opencoti
+	 * with PolyKV, where the cap is lifted because admission control decides --
+	 * is not asked here, because that probe is unbounded and these endpoints are
+	 * merely configured, not necessarily running. A server that is switched off
+	 * would otherwise hold up starting a session that was never going near it.
+	 *
+	 * An endpoint nobody named takes `maxConcurrentAgents`, which is what every
+	 * endpoint took before this existed.
+	 */
+	agentSlotLimits?: ReadonlyArray<{
+		providerId?: string;
+		baseUrl?: string;
+		/** As `maxConcurrentAgents`: `0` means admission control decides. */
+		limit: number;
+	}>;
+	/**
 	 * Resolves a provider other than the session's, for a configured subagent
 	 * whose frontmatter names one.
 	 *

@@ -170,6 +170,40 @@ export function agentEndpointKey(connection: {
 }
 
 /**
+ * Host-supplied bounds, keyed the way the gates are keyed.
+ *
+ * The host names connections; only this file knows that a trailing slash and a
+ * capital letter do not make a second server. First entry wins, so a caller may
+ * put the specific answers first -- a profile carries its own count, and the
+ * shared provider entry answers for every profile that does not.
+ */
+export function agentSlotLimitsByEndpoint(
+	entries:
+		| ReadonlyArray<{
+				providerId?: string;
+				baseUrl?: string;
+				limit: number;
+		  }>
+		| undefined,
+): Record<string, number> | undefined {
+	if (!entries || entries.length === 0) {
+		return undefined;
+	}
+	const limits: Record<string, number> = {};
+	for (const entry of entries) {
+		if (!Number.isFinite(entry.limit) || entry.limit < 0) {
+			continue;
+		}
+		const key = agentEndpointKey(entry);
+		if (key in limits) {
+			continue;
+		}
+		limits[key] = Math.floor(entry.limit);
+	}
+	return Object.keys(limits).length > 0 ? limits : undefined;
+}
+
+/**
  * A gate per endpoint, from one bound.
  *
  * The single gate above was written when every delegated agent ran on the
@@ -180,33 +214,48 @@ export function agentEndpointKey(connection: {
  * slots, so a one-slot Ollama serialises work that was never going near it.
  *
  * The bound is applied per endpoint rather than shared because that is what it
- * measures: how many requests *that server* will serve at once. The number is
- * still the one measured for the session's endpoint, because it is the only
- * one the host has -- conservative in the right direction, since it never
- * over-subscribes a server and a second provider gets its own queue rather
- * than a share of somebody else's.
+ * measures: how many requests *that server* will serve at once. Which also
+ * means one number cannot answer for all of them: an agent whose profile names
+ * a four-slot server was held to the lead's one, and the three slots it was
+ * entitled to went unused while its siblings queued. So the host may hand over
+ * a bound per endpoint as well, and the session's stays the answer for every
+ * endpoint it did not name -- conservative in the right direction, since it
+ * never over-subscribes a server it knows nothing about.
  */
 export interface AgentSlotGateRegistry {
 	/** The gate for one endpoint, created on first use and kept. */
 	for(key: string): AgentSlotGate;
+	/** The bound this endpoint's gate was built with. Diagnostics only. */
+	limitFor(key: string): number | undefined;
 	/** How many are running across every endpoint. Diagnostics only. */
 	active(): number;
 }
 
+/**
+ * @param limit The bound for an endpoint the host said nothing about.
+ * @param limits A bound per {@link agentEndpointKey}, from the host.
+ *
+ * `limits` is consulted before `limit`, and `0` in it is honoured rather than
+ * treated as absent: zero is the host saying admission control decides for that
+ * endpoint, which is a different statement from having no answer for it.
+ */
 export function createAgentSlotGateRegistry(
 	limit: number | undefined,
+	limits?: Readonly<Record<string, number>>,
 ): AgentSlotGateRegistry {
 	const gates = new Map<string, AgentSlotGate>();
+	const boundFor = (key: string): number | undefined => limits?.[key] ?? limit;
 	return {
 		for: (key) => {
 			const existing = gates.get(key);
 			if (existing) {
 				return existing;
 			}
-			const created = createAgentSlotGate(limit);
+			const created = createAgentSlotGate(boundFor(key));
 			gates.set(key, created);
 			return created;
 		},
+		limitFor: boundFor,
 		active: () =>
 			[...gates.values()].reduce((total, gate) => total + gate.active(), 0),
 	};

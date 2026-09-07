@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	agentEndpointKey,
+	agentSlotLimitsByEndpoint,
 	createAgentSlotGate,
 	createAgentSlotGateRegistry,
 	slotsAllowParallelDelegation,
@@ -248,6 +249,89 @@ describe("createAgentSlotGateRegistry", () => {
 
 		second.resolve();
 		await secondRun;
+	});
+});
+
+describe("a bound per endpoint", () => {
+	it("holds an endpoint to its own count rather than the session's", async () => {
+		const registry = createAgentSlotGateRegistry(1, {
+			[agentEndpointKey({
+				providerId: "ollama",
+				baseUrl: "http://box:11434",
+			})]: 2,
+		});
+		const gate = registry.for(
+			agentEndpointKey({ providerId: "ollama", baseUrl: "http://box:11434" }),
+		);
+		const first = deferred();
+		const second = deferred();
+		void gate.run(() => first.promise);
+		void gate.run(() => second.promise);
+		await Promise.resolve();
+		await Promise.resolve();
+
+		// Both run: the session's one slot is not this server's answer.
+		expect(gate.active()).toBe(2);
+		first.resolve();
+		second.resolve();
+	});
+
+	it("leaves an endpoint nobody named on the session's count", () => {
+		const registry = createAgentSlotGateRegistry(3, {
+			[agentEndpointKey({ providerId: "ollama" })]: 1,
+		});
+		expect(registry.limitFor(agentEndpointKey({ providerId: "openai" }))).toBe(
+			3,
+		);
+	});
+
+	it("keeps a zero, because zero is an answer and not a gap", () => {
+		const registry = createAgentSlotGateRegistry(2, {
+			[agentEndpointKey({ providerId: "opencoti" })]: 0,
+		});
+		expect(
+			registry.limitFor(agentEndpointKey({ providerId: "opencoti" })),
+		).toBe(0);
+	});
+
+	it("keeps the gate it built for a key, bound and all", () => {
+		const registry = createAgentSlotGateRegistry(1, {
+			[agentEndpointKey({ providerId: "ollama" })]: 4,
+		});
+		const key = agentEndpointKey({ providerId: "ollama" });
+		expect(registry.for(key)).toBe(registry.for(key));
+	});
+});
+
+describe("agentSlotLimitsByEndpoint", () => {
+	it("keys the host's connections the way the gates are keyed", () => {
+		expect(
+			agentSlotLimitsByEndpoint([
+				{ providerId: "Ollama", baseUrl: "http://box:11434/", limit: 4 },
+			]),
+		).toEqual({
+			[agentEndpointKey({
+				providerId: "ollama",
+				baseUrl: "http://box:11434",
+			})]: 4,
+		});
+	});
+
+	it("takes the first answer for an endpoint, not the last", () => {
+		expect(
+			agentSlotLimitsByEndpoint([
+				{ providerId: "ollama", limit: 4 },
+				{ providerId: "ollama", limit: 1 },
+			]),
+		).toEqual({ [agentEndpointKey({ providerId: "ollama" })]: 4 });
+	});
+
+	it("is undefined when the host named nothing usable", () => {
+		expect(agentSlotLimitsByEndpoint(undefined)).toBeUndefined();
+		expect(agentSlotLimitsByEndpoint([])).toBeUndefined();
+		expect(
+			agentSlotLimitsByEndpoint([{ providerId: "ollama", limit: -1 }]),
+		).toBeUndefined();
 	});
 });
 

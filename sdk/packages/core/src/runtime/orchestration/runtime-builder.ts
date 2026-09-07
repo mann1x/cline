@@ -43,6 +43,7 @@ import { createPlanModeCommandGuardExtension } from "../../extensions/tools/comm
 import {
 	AgentTeamsRuntime,
 	agentEndpointKey,
+	agentSlotLimitsByEndpoint,
 	bootstrapAgentTeams,
 	createAgentSlotGateRegistry,
 	createDelegatedAgentConfigProvider,
@@ -676,8 +677,12 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 		const agentsConnection = config.delegatedAgentConnection;
 		// One registry for the session, so every spawn path shares the bound and
 		// agents on one endpoint queue together wherever they were spawned from.
+		// The host's per-endpoint bounds ride along, so an agent whose profile
+		// points at another server is held to that server's count and not to the
+		// lead's.
 		const agentSlotGates = createAgentSlotGateRegistry(
 			config.maxConcurrentAgents,
+			agentSlotLimitsByEndpoint(config.agentSlotLimits),
 		);
 		const agentsOverrides: Partial<DelegatedAgentConnectionConfig> =
 			agentsConnection

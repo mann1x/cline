@@ -1,6 +1,6 @@
 import type { ApiConfiguration } from "@shared/api"
 import { describe, expect, it } from "vitest"
-import { createAgentProfileConnectionResolver } from "./agent-profile-connection"
+import { createAgentProfileConnectionResolver, listAgentProfileEndpoints } from "./agent-profile-connection"
 
 const PROFILES = JSON.stringify([
 	{
@@ -78,5 +78,51 @@ describe("an agent file naming a saved profile", () => {
 
 	it("resolves nothing when no profiles have ever been saved", () => {
 		expect(createAgentProfileConnectionResolver({ storedProfiles: undefined, primary: PRIMARY })("any")).toBeUndefined()
+	})
+})
+
+describe("the endpoints the saved profiles point at", () => {
+	// Same base URL the resolver hands core, because the bound is filed under
+	// the endpoint key built from it: derive it twice and the two spellings
+	// diverge, and the bound sits on a key nothing looks up.
+	it("reports each profile's provider and base URL", () => {
+		const endpoints = listAgentProfileEndpoints({ storedProfiles: PROFILES, primary: PRIMARY })
+
+		expect(endpoints).toEqual([
+			{ providerId: "ollama", baseUrl: "http://192.168.1.100:30068/", parallelSessions: undefined },
+			{ providerId: "anthropic", parallelSessions: undefined },
+		])
+	})
+
+	it("prefers the count the profile carries over the shared provider entry", () => {
+		const profiles = JSON.stringify([
+			{
+				name: "four-slot",
+				updatedAt: 1,
+				snapshot: {
+					global: {},
+					mode: { apiProvider: "ollama" },
+					providerConfig: { parallelSessions: 4 },
+				},
+			},
+		])
+
+		expect(
+			listAgentProfileEndpoints({
+				storedProfiles: profiles,
+				primary: PRIMARY,
+				storedParallelSessions: () => 1,
+			})[0].parallelSessions,
+		).toBe(4)
+	})
+
+	it("falls back to the shared provider entry when the profile carries none", () => {
+		expect(
+			listAgentProfileEndpoints({
+				storedProfiles: PROFILES,
+				primary: PRIMARY,
+				storedParallelSessions: () => 2,
+			})[0].parallelSessions,
+		).toBe(2)
 	})
 })
