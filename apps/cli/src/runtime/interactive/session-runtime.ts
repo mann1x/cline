@@ -1,4 +1,5 @@
 import type {
+	BackgroundDelegationView,
 	ConfiguredAgentDelegationResult,
 	ConfiguredAgentSummary,
 } from "@cline/core";
@@ -728,6 +729,55 @@ export function createInteractiveSessionRuntime(input: {
 		});
 	};
 
+	/**
+	 * The same delegation, started beside the turn instead of in place of it.
+	 *
+	 * No wait, and no refusal while a turn is running: that is the difference.
+	 * The report is delivered into the conversation by core when the agent is
+	 * done, as a steer if the lead is still working.
+	 */
+	const delegateToAgentInBackground = async (
+		agentName: string,
+		prompt: string,
+	): Promise<BackgroundDelegationView> => {
+		const manager = sessionManager;
+		if (!manager || !activeSessionId) {
+			throw new Error("Start a task before delegating to an agent.");
+		}
+		return manager.startBackgroundDelegation({
+			sessionId: activeSessionId,
+			agentName,
+			prompt,
+		});
+	};
+
+	/** The background delegations of this session, for the panel. */
+	const listBackgroundDelegations = async (): Promise<
+		BackgroundDelegationView[]
+	> => {
+		const manager = sessionManager;
+		if (!manager || !activeSessionId) {
+			return [];
+		}
+		return manager.listBackgroundDelegations(activeSessionId);
+	};
+
+	/** Pause, resume or stop one of them. */
+	const controlBackgroundDelegation = async (
+		id: string,
+		action: "pause" | "resume" | "stop",
+	): Promise<boolean> => {
+		const manager = sessionManager;
+		if (!manager || !activeSessionId) {
+			return false;
+		}
+		return manager.controlBackgroundDelegation({
+			sessionId: activeSessionId,
+			id,
+			action,
+		});
+	};
+
 	const compactCurrentSession = async (): Promise<{
 		messagesBefore: number;
 		messagesAfter: number;
@@ -951,6 +1001,9 @@ export function createInteractiveSessionRuntime(input: {
 		compactCurrentSession,
 		listConfiguredAgents,
 		delegateToAgent,
+		delegateToAgentInBackground,
+		listBackgroundDelegations,
+		controlBackgroundDelegation,
 		getCheckpointData,
 		restoreCheckpoint,
 		applyMode,

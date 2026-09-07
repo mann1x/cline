@@ -8,6 +8,7 @@ export type CommandPaletteAction =
 	| "plugins"
 	| "compact"
 	| "delegate"
+	| "delegate-background"
 	| "skills"
 	| "fork"
 	| "undo"
@@ -100,6 +101,13 @@ const ACTION_ITEMS: Array<{
 		shortcut: "Opt+D",
 		description: "Hand a task to a configured agent",
 		keywords: ["delegate", "agent", "subagent", "handoff"],
+	},
+	{
+		action: "delegate-background",
+		label: "Delegate in the Background",
+		shortcut: "Opt+B",
+		description: "Hand a task to an agent and keep working",
+		keywords: ["delegate", "background", "agent", "subagent", "async"],
 	},
 	{
 		action: "skills",

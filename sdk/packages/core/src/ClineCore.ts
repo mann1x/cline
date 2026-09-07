@@ -85,6 +85,7 @@ export type {
 	StartSessionBootstrap,
 } from "./cline-core/types";
 
+import type { BackgroundDelegationView } from "./extensions/tools/team/background-delegations";
 import type {
 	ConfiguredAgentDelegationResult,
 	ConfiguredAgentSummary,
@@ -526,6 +527,40 @@ export class ClineCore {
 		}
 		return this.host.delegateToConfiguredAgent(input);
 	};
+
+	/**
+	 * Starts a configured agent beside the current turn rather than in place of
+	 * it. Returns as soon as the run exists; the report arrives in the
+	 * conversation whenever the agent is done.
+	 */
+	startBackgroundDelegation = (input: {
+		sessionId: string;
+		agentName: string;
+		prompt: string;
+	}): Promise<BackgroundDelegationView> => {
+		if (!this.host.startBackgroundDelegation) {
+			return Promise.reject(
+				new Error(
+					"This runtime host cannot run a delegation in the background.",
+				),
+			);
+		}
+		return this.host.startBackgroundDelegation(input);
+	};
+
+	/** The background delegations of one session, for a host drawing them. */
+	listBackgroundDelegations = (
+		sessionId: string,
+	): Promise<BackgroundDelegationView[]> =>
+		this.host.listBackgroundDelegations?.(sessionId) ?? Promise.resolve([]);
+
+	/** Pause, resume or stop one. False when no run was in a state to take it. */
+	controlBackgroundDelegation = (input: {
+		sessionId: string;
+		id: string;
+		action: "pause" | "resume" | "stop";
+	}): Promise<boolean> =>
+		this.host.controlBackgroundDelegation?.(input) ?? Promise.resolve(false);
 
 	/**
 	 * Stores the compacted working-context state for an existing session.

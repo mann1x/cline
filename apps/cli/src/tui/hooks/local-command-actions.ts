@@ -15,6 +15,7 @@ export interface LocalSlashCommandActionInput {
 	/** Hold a `/compact` asked for mid-turn until the turn finishes. */
 	queueCompact: () => void;
 	runDelegate: (invocation?: LocalSlashCommandInvocation) => void;
+	runDelegateBackground: (invocation?: LocalSlashCommandInvocation) => void;
 	runFork: () => void;
 	runUndo: () => Promise<void>;
 	clearConversation: () => Promise<void>;
@@ -44,6 +45,13 @@ export function runLocalSlashCommandAction(
 		// touch the conversation until the delegated agent has finished, and the
 		// host refuses it there if a turn is still in flight.
 		input.runDelegate(input.invocation);
+		return true;
+	}
+	if (normalized === "delegate-background") {
+		// The one that is meant to be used mid-turn: it starts the agent beside
+		// the lead and returns, and the report is delivered into the
+		// conversation whenever the agent is done with it.
+		input.runDelegateBackground(input.invocation);
 		return true;
 	}
 	if (normalized === "mcp") {

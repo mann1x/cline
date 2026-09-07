@@ -6,7 +6,7 @@
 // the webview's gRPC streams.
 import * as fs from "node:fs/promises"
 import * as path from "node:path"
-import type { ConfiguredAgentDelegationResult, ConfiguredAgentSummary } from "@cline/core"
+import type { BackgroundDelegationView, ConfiguredAgentDelegationResult, ConfiguredAgentSummary } from "@cline/core"
 import {
 	type CompareCheckpointResult,
 	createReadReceipts,
@@ -1516,6 +1516,51 @@ export class Controller {
 			return []
 		}
 		return activeSession.sdkHost.listConfiguredAgents(activeSession.sessionId)
+	}
+
+	/**
+	 * The same, except it runs beside the turn and the caller does not wait.
+	 *
+	 * Allowed while a response is in progress, unlike the foreground call: that
+	 * is the whole point of it. What that costs is a report that can land
+	 * mid-turn, and core answers that by queueing it as a steer rather than
+	 * writing into a transcript the agent loop is holding.
+	 */
+	async startBackgroundDelegation(agentName: string, prompt: string): Promise<BackgroundDelegationView> {
+		const activeSession = this.sessions.getActiveSession()
+		if (!activeSession) {
+			throw new Error("There is no active task to delegate from. Start one first.")
+		}
+		if (!activeSession.sdkHost.startBackgroundDelegation) {
+			throw new Error("This runtime cannot run a delegation in the background. Please update Cline and try again.")
+		}
+		return activeSession.sdkHost.startBackgroundDelegation({
+			sessionId: activeSession.sessionId,
+			agentName,
+			prompt,
+		})
+	}
+
+	/** The background delegations of the active session, for the panel. */
+	async listBackgroundDelegations(): Promise<BackgroundDelegationView[]> {
+		const activeSession = this.sessions.getActiveSession()
+		if (!activeSession?.sdkHost.listBackgroundDelegations) {
+			return []
+		}
+		return activeSession.sdkHost.listBackgroundDelegations(activeSession.sessionId)
+	}
+
+	/** Pause, resume or stop one. False when no run was in a state to take it. */
+	async controlBackgroundDelegation(id: string, action: "pause" | "resume" | "stop"): Promise<boolean> {
+		const activeSession = this.sessions.getActiveSession()
+		if (!activeSession?.sdkHost.controlBackgroundDelegation) {
+			return false
+		}
+		return activeSession.sdkHost.controlBackgroundDelegation({
+			sessionId: activeSession.sessionId,
+			id,
+			action,
+		})
 	}
 
 	/**

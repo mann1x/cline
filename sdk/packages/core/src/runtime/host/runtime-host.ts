@@ -4,6 +4,7 @@ import type {
 	AgentResult,
 	RuntimeConfigExtensionKind,
 } from "@cline/shared";
+import type { BackgroundDelegationView } from "../../extensions/tools/team/background-delegations";
 import type {
 	ConfiguredAgentDelegationResult,
 	ConfiguredAgentSummary,
@@ -434,6 +435,31 @@ export interface RuntimeHost {
 		prompt: string;
 		signal?: AbortSignal;
 	}): Promise<ConfiguredAgentDelegationResult>;
+	/**
+	 * The same, except the caller does not wait and the lead is not blocked.
+	 *
+	 * Unlike the foreground call this is allowed while a turn is running --
+	 * that is the whole point of it -- and the report is delivered whenever the
+	 * run finishes, into whatever the conversation is doing by then.
+	 */
+	startBackgroundDelegation?(input: {
+		sessionId: string;
+		agentName: string;
+		prompt: string;
+	}): Promise<BackgroundDelegationView>;
+	/** The background runs of one session, for a host drawing them. */
+	listBackgroundDelegations?(
+		sessionId: string,
+	): Promise<BackgroundDelegationView[]>;
+	/**
+	 * @param action What the user pressed.
+	 * @returns whether there was a run in a state that could take it.
+	 */
+	controlBackgroundDelegation?(input: {
+		sessionId: string;
+		id: string;
+		action: "pause" | "resume" | "stop";
+	}): Promise<boolean>;
 	dispatchHookEvent(payload: HookEventPayload): Promise<void>;
 	subscribe(
 		listener: (event: CoreSessionEvent) => void,

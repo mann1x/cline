@@ -32,6 +32,7 @@ export function useLocalCommandActions(input: {
 	onDeleteHistorySession: TuiProps["onDeleteHistorySession"];
 	onCompact: TuiProps["onCompact"];
 	onDelegate: TuiProps["onDelegate"];
+	onDelegateBackground: TuiProps["onDelegateBackground"];
 	onListAgents: TuiProps["onListAgents"];
 	onFork: TuiProps["onFork"];
 	onUndo: () => Promise<void>;
@@ -57,6 +58,7 @@ export function useLocalCommandActions(input: {
 		onDeleteHistorySession,
 		onCompact,
 		onDelegate,
+		onDelegateBackground,
 		onListAgents,
 		onFork,
 		onUndo,
@@ -268,6 +270,60 @@ export function useLocalCommandActions(input: {
 		[onDelegate, onListAgents, session],
 	);
 
+	/**
+	 * The same delegation, except the user goes back to work.
+	 *
+	 * The lead is not blocked and is not even paused: the agent runs beside it
+	 * and its report is delivered into the conversation whenever it lands. That
+	 * is the only real difference, and the reason it is a second command rather
+	 * than a flag on the first -- "and I am not waiting for this" is a different
+	 * intention, not a different option.
+	 */
+	const runDelegateBackground = useCallback(
+		async (invocation?: LocalSlashCommandInvocation) => {
+			const rest = (invocation?.text ?? "")
+				.replace(/^\s*\/delegate-background\b/, "")
+				.trim();
+			const [agentName, ...taskWords] = rest.split(/\s+/);
+			const task = taskWords.join(" ").trim();
+
+			if (!agentName || !task) {
+				let available: Awaited<ReturnType<typeof onListAgents>> = [];
+				try {
+					available = await onListAgents();
+				} catch {
+					// Listing is best-effort; the usage line is the point.
+				}
+				session.appendEntry({
+					kind: "status",
+					text:
+						available.length > 0
+							? `Usage: /delegate-background <agent> <task>. Agents: ${available
+									.map((agent) => agent.name)
+									.join(", ")}`
+							: "No agents are configured. Agent files live in .cline/agents in this workspace, or in the Cline data directory.",
+				});
+				return;
+			}
+
+			try {
+				const run = await onDelegateBackground(agentName, task);
+				session.appendEntry({
+					kind: "status",
+					text: `"${run.agentName}" is running in the background (${run.id}). It will report back here when it is done.`,
+				});
+			} catch (error) {
+				session.appendEntry({
+					kind: "error",
+					text: `Delegation failed: ${
+						error instanceof Error ? error.message : String(error)
+					}`,
+				});
+			}
+		},
+		[onDelegateBackground, onListAgents, session],
+	);
+
 	const runFork = useCallback(async () => {
 		if (!canForkSession) {
 			session.appendEntry({
@@ -335,6 +391,7 @@ export function useLocalCommandActions(input: {
 				runCompact,
 				queueCompact,
 				runDelegate,
+				runDelegateBackground,
 				runFork,
 				runUndo: onUndo,
 				clearConversation: onClearConversation,
@@ -358,6 +415,7 @@ export function useLocalCommandActions(input: {
 			runCompact,
 			queueCompact,
 			runDelegate,
+			runDelegateBackground,
 			runFork,
 			session.isRunning,
 			slashCommandRegistry,

@@ -74,6 +74,24 @@ export function useMessageHandlers(messages: ClineMessage[], chatState: ChatStat
 				return
 			}
 
+			// `/delegate-background <agent> <task>` is the same delegation with
+			// the waiting removed: the agent runs beside the turn and reports
+			// back into the conversation when it is done. Matched before
+			// `/delegate` only for the reader's sake -- the `\s+` in that
+			// pattern already means it cannot swallow this one.
+			const delegateBackgroundMatch = messageToSend.match(/^\/delegate-background\s+(\S+)\s+([\s\S]+)$/)
+			if (messages.length > 0 && delegateBackgroundMatch) {
+				setInputValue("")
+				setActiveQuote(null)
+				await SlashServiceClient.delegateBackground(
+					DelegateRequest.create({ agentName: delegateBackgroundMatch[1], prompt: delegateBackgroundMatch[2] }),
+				).catch((err) => console.error("Failed to start a background delegation:", err))
+				if ("disableAutoScrollRef" in chatState) {
+					;(chatState as any).disableAutoScrollRef.current = false
+				}
+				return
+			}
+
 			// `/delegate <agent> <task>` runs a configured agent directly. The
 			// lead model is not asked whether to delegate: an instruction that
 			// the model can decline is a suggestion, which is not what the user

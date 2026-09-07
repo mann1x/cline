@@ -55,6 +55,12 @@ import {
 } from "../../extensions/tools/task-progress";
 import type { TeamEvent } from "../../extensions/tools/team";
 import {
+	type BackgroundDelegationRegistry,
+	type BackgroundDelegationView,
+	createBackgroundDelegationRegistry,
+	startBackgroundDelegation,
+} from "../../extensions/tools/team/background-delegations";
+import {
 	type ConfiguredAgentDelegationResult,
 	type ConfiguredAgentSummary,
 	delegateToConfiguredAgent,
@@ -315,6 +321,14 @@ export class LocalRuntimeHost implements RuntimeHost {
 	>();
 	private readonly subAgentStarts: SubAgentStartTracker = new Map();
 	private readonly pendingPromptsController: PendingPromptsController;
+	/**
+	 * One registry per session, because a background run belongs to the
+	 * conversation it was started from and its report has nowhere else to go.
+	 */
+	private readonly backgroundDelegations = new Map<
+		string,
+		BackgroundDelegationRegistry
+	>();
 	private readonly eventBridge: AgentEventBridge;
 	private readonly sessionVersioning = new SessionVersioningService();
 	private readonly runCommandExecutionController =
@@ -1901,6 +1915,118 @@ export class LocalRuntimeHost implements RuntimeHost {
 		return result;
 	}
 
+	/**
+	 * Start a configured agent beside the turn instead of in place of it.
+	 *
+	 * No `canStartRun()` check, unlike the foreground call: running while the
+	 * lead is working is the reason this exists. What that costs is a report
+	 * that can arrive mid-turn, which {@link deliverBackgroundDelegation}
+	 * answers.
+	 */
+	async startBackgroundDelegation(input: {
+		sessionId: string;
+		agentName: string;
+		prompt: string;
+	}): Promise<BackgroundDelegationView> {
+		const sessionId = input.sessionId.trim();
+		const live = this.sessions.get(sessionId);
+		if (!live) {
+			throw new Error(
+				"There is no running session to delegate from. Start a task first.",
+			);
+		}
+		return startBackgroundDelegation(this.backgroundDelegationsFor(sessionId), {
+			agents: live.runtime.configuredAgents,
+			tools: live.runtime.tools,
+			agentName: input.agentName,
+			prompt: input.prompt,
+			sessionId,
+			parentAgentId: live.agent.getAgentId(),
+			conversationId: live.agent.getConversationId(),
+			onSettled: (view) => {
+				this.deliverBackgroundDelegation(sessionId, view);
+			},
+		});
+	}
+
+	async listBackgroundDelegations(
+		sessionId: string,
+	): Promise<BackgroundDelegationView[]> {
+		return this.backgroundDelegations.get(sessionId.trim())?.list() ?? [];
+	}
+
+	async controlBackgroundDelegation(input: {
+		sessionId: string;
+		id: string;
+		action: "pause" | "resume" | "stop";
+	}): Promise<boolean> {
+		const registry = this.backgroundDelegations.get(input.sessionId.trim());
+		if (!registry) {
+			return false;
+		}
+		if (input.action === "pause") {
+			return registry.pause(input.id);
+		}
+		if (input.action === "resume") {
+			return registry.resume(input.id);
+		}
+		return registry.stop(input.id);
+	}
+
+	private backgroundDelegationsFor(
+		sessionId: string,
+	): BackgroundDelegationRegistry {
+		const existing = this.backgroundDelegations.get(sessionId);
+		if (existing) {
+			return existing;
+		}
+		const created = createBackgroundDelegationRegistry();
+		this.backgroundDelegations.set(sessionId, created);
+		return created;
+	}
+
+	/**
+	 * Put a finished background run into the conversation it was started from.
+	 *
+	 * Two ways in, because a background run finishes whenever it finishes. With
+	 * the session idle it is appended directly, exactly as the foreground call
+	 * does. With a turn in flight, appending would race the agent loop over the
+	 * message list, so it is queued as a steer and the runtime picks it up at
+	 * the top of its next iteration.
+	 *
+	 * A failure is reported too. A delegation the user asked for and that did
+	 * not work is something both they and the lead need to know; only a run the
+	 * user stopped says nothing, and that one never reaches here.
+	 */
+	private deliverBackgroundDelegation(
+		sessionId: string,
+		view: BackgroundDelegationView,
+	): void {
+		const text = view.result
+			? renderDelegationForTranscript(view.result, view.prompt)
+			: `The background delegation to "${view.agentName}" failed: ${
+					view.error ?? "no reason given"
+				}\n\nThe task was: ${view.prompt}`;
+		const live = this.sessions.get(sessionId);
+		if (!live) {
+			return;
+		}
+		if (live.agent.canStartRun()) {
+			live.agent.restore([
+				...live.agent.getMessages(),
+				{
+					role: "user",
+					content: text,
+				} as LlmsProviders.MessageWithMetadata,
+			]);
+			return;
+		}
+		this.pendingPromptsController.enqueue(sessionId, {
+			prompt: text,
+			delivery: "steer",
+		});
+	}
+
 	async readLiveSessionMessages(
 		sessionId: string,
 	): Promise<LlmsProviders.MessageWithMetadata[]> {
@@ -2800,6 +2926,10 @@ export class LocalRuntimeHost implements RuntimeHost {
 		} catch (error) {
 			recordCleanupError("plugin_sandbox_shutdown", error);
 		}
+		// A background run outlives the turn it was started in, not the session
+		// it was started from: the conversation it would report into is gone.
+		this.backgroundDelegations.get(session.sessionId)?.stopAll();
+		this.backgroundDelegations.delete(session.sessionId);
 		this.sessions.delete(session.sessionId);
 		this.emit({
 			type: "ended",
@@ -2877,6 +3007,10 @@ export class LocalRuntimeHost implements RuntimeHost {
 		} catch (error) {
 			recordCleanupError("plugin_sandbox_shutdown", error);
 		}
+		// A background run outlives the turn it was started in, not the session
+		// it was started from: the conversation it would report into is gone.
+		this.backgroundDelegations.get(session.sessionId)?.stopAll();
+		this.backgroundDelegations.delete(session.sessionId);
 		this.sessions.delete(session.sessionId);
 		if (cleanupErrors.length > 0) {
 			throw cleanupErrors[0];

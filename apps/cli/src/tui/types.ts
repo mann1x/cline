@@ -1,6 +1,7 @@
 import type {
 	AgentEvent,
 	AgentMode,
+	BackgroundDelegationView,
 	CheckpointEntry,
 	ClineSubscriptionPlan,
 	ConfiguredAgentDelegationResult,
@@ -222,6 +223,11 @@ export interface TuiProps {
 		agentName: string,
 		prompt: string,
 	) => Promise<ConfiguredAgentDelegationResult>;
+	/** The same, except it runs beside the turn and reports back when done. */
+	onDelegateBackground: (
+		agentName: string,
+		prompt: string,
+	) => Promise<BackgroundDelegationView>;
 	onFork: () => Promise<
 		| {
 				forkedFromSessionId: string;

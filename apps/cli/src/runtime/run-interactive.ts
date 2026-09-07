@@ -847,6 +847,13 @@ export async function runInteractive(
 			await sessionRuntime.ensureReady();
 			return await sessionRuntime.delegateToAgent(agentName, prompt);
 		},
+		onDelegateBackground: async (agentName: string, prompt: string) => {
+			await sessionRuntime.ensureReady();
+			return await sessionRuntime.delegateToAgentInBackground(
+				agentName,
+				prompt,
+			);
+		},
 		onFork: async () => {
 			await sessionRuntime.ensureReady();
 			return await sessionRuntime.forkCurrentSession();

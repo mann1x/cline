@@ -18,6 +18,16 @@ service SlashService {
   // model's. Returns what the agent reported back.
   rpc delegate(DelegateRequest) returns (DelegateResponse);
 
+  // The same, except it runs beside the current turn and the caller does not
+  // wait. The agent's report reaches the conversation when the run finishes.
+  rpc delegateBackground(DelegateRequest) returns (BackgroundDelegation);
+
+  // The background delegations of the current session, for the panel.
+  rpc listBackgroundDelegations(EmptyRequest) returns (BackgroundDelegationList);
+
+  // Pause, resume or stop one of them.
+  rpc controlBackgroundDelegation(BackgroundDelegationControl) returns (Boolean);
+
   // The agents this session can hand work to, for autocomplete and pickers.
   rpc listAgents(EmptyRequest) returns (AgentListResponse);
 
@@ -62,4 +72,28 @@ message AgentSummary {
 
 message AgentListResponse {
   repeated AgentSummary agents = 1;
+}
+
+// A delegation the user started and left running.
+message BackgroundDelegation {
+  string id = 1;
+  string agent_name = 2;
+  string prompt = 3;
+  // "running", "paused", "completed", "failed" or "stopped".
+  string status = 4;
+  int64 started_at = 5;
+  int64 ended_at = 6;
+  // The last thing worth putting on a one-line row, when there is one.
+  string activity = 7;
+  string error = 8;
+}
+
+message BackgroundDelegationList {
+  repeated BackgroundDelegation runs = 1;
+}
+
+message BackgroundDelegationControl {
+  string id = 1;
+  // "pause", "resume" or "stop".
+  string action = 2;
 }

@@ -38,6 +38,12 @@ export const BASE_SLASH_COMMANDS: SlashCommand[] = [
 		cliCompatible: true,
 	},
 	{
+		name: "delegate-background",
+		description: "Hand a task to an agent and keep working: /delegate-background <agent> <task>",
+		section: "default",
+		cliCompatible: true,
+	},
+	{
 		name: "smol",
 		description: "Alias for /compact",
 		section: "default",

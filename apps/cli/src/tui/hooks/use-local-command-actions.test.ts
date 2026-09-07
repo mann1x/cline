@@ -18,6 +18,7 @@ function makeActions(
 		openThemePicker: vi.fn(),
 		runCompact: vi.fn(),
 		queueCompact: vi.fn(),
+		runDelegateBackground: vi.fn(),
 		runDelegate: vi.fn(),
 		runFork: vi.fn(),
 		runUndo: vi.fn(async () => {}),
@@ -81,6 +82,34 @@ describe("runLocalSlashCommandAction", () => {
 			// Unlike /compact, delegation does not touch the conversation until
 			// the agent has finished, so a running turn is not a reason to defer.
 			expect(runDelegate).toHaveBeenCalledWith(invocation);
+		}
+	});
+
+	it("routes /delegate-background to its own action, mid-turn included", () => {
+		for (const isRunning of [false, true]) {
+			const runDelegate = vi.fn();
+			const runDelegateBackground = vi.fn();
+			const actions = makeActions({
+				isRunning,
+				runDelegate,
+				runDelegateBackground,
+			});
+			const invocation = {
+				text: "/delegate-background qa run the suite",
+				cursorOffset: 0,
+			};
+
+			const handled = runLocalSlashCommandAction({
+				name: "delegate-background",
+				invocation,
+				...actions,
+			});
+
+			expect(handled).toBe(true);
+			expect(runDelegateBackground).toHaveBeenCalledWith(invocation);
+			// The two are different intentions, and the prefix they share is how
+			// one would quietly become the other.
+			expect(runDelegate).not.toHaveBeenCalled();
 		}
 	});
 

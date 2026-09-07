@@ -1,4 +1,5 @@
 import type {
+	BackgroundDelegationView,
 	ClineCoreListHistoryOptions,
 	ClineCoreStartInput,
 	CompareCheckpointInput,
@@ -53,6 +54,12 @@ export interface SdkSessionHost {
 		agentName: string
 		prompt: string
 	}): Promise<ConfiguredAgentDelegationResult>
+	/** The same, run beside the turn rather than in place of it. */
+	startBackgroundDelegation?(input: { sessionId: string; agentName: string; prompt: string }): Promise<BackgroundDelegationView>
+	/** The background delegations of one session, for the panel. */
+	listBackgroundDelegations?(sessionId: string): Promise<BackgroundDelegationView[]>
+	/** Pause, resume or stop one of them. */
+	controlBackgroundDelegation?(input: { sessionId: string; id: string; action: "pause" | "resume" | "stop" }): Promise<boolean>
 	restore(input: RestoreInput): Promise<RestoreResult>
 	/** Diffs a checkpoint snapshot against the current working tree. */
 	compareCheckpoint?(input: CompareCheckpointInput): Promise<CompareCheckpointResult>
