@@ -1,0 +1,78 @@
+name: 🔧 Enhancement
+description: Something that already works, but should work better
+labels: ['enhancement']
+body:
+    - type: markdown
+      attributes:
+          value: |
+              For a change to behaviour that **already exists** — it works, but it should work differently, or better, or in more cases.
+
+              If the thing does not exist at all, use ✨ Feature Request instead. If it is broken rather than limited, use 🐛 Bug Report — a wrong result is a bug even when the fix looks like an improvement.
+
+    - type: input
+      id: version
+      attributes:
+          label: Build
+          description: The version shown in the VS Code extensions list, e.g. `4.100.73`.
+          placeholder: '4.100.73'
+      validations:
+          required: true
+
+    - type: textarea
+      id: model
+      attributes:
+          label: Model and provider
+          description: |
+              Only if the behaviour depends on the model or provider — a limit that bites on a cloud model may not exist on a local one. Leave blank if it applies everywhere.
+          placeholder: |
+              Provider: Ollama Cloud
+              Model: GLM-5.3-Flash
+              Context: 1m
+          render: text
+      validations:
+          required: false
+
+    - type: textarea
+      id: current
+      attributes:
+          label: What does it do today?
+          description: The current behaviour, as precisely as you can put it. A screenshot or the exact message you get is ideal.
+          placeholder: |
+              Asking to compact mid-turn refuses with "cannot compact while a prompt is being processed"…
+      validations:
+          required: true
+
+    - type: textarea
+      id: desired
+      attributes:
+          label: What should it do instead?
+          description: The changed behaviour you want. Say what should happen in the case that bothers you, rather than how to implement it.
+          placeholder: |
+              Queue the compaction and run it at the end of the current turn…
+      validations:
+          required: true
+
+    - type: textarea
+      id: why
+      attributes:
+          label: Why does the current behaviour get in the way?
+          description: What it costs you today — a lost session, a workaround you repeat, a limit you keep hitting. This is usually what decides whether it gets done.
+      validations:
+          required: false
+
+    - type: dropdown
+      id: area
+      attributes:
+          label: Which part of Cline?
+          multiple: true
+          options:
+              - Context / auto-compaction
+              - Tools (editor, read_files, browser, …)
+              - Ollama provider and model settings
+              - Prompt templates
+              - Settings UI / profiles
+              - Subagents / teams
+              - MCP
+              - Something else
+      validations:
+          required: false
