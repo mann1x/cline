@@ -36,6 +36,9 @@ vi.mock("@shared/proto/cline/ui", () => ({
 vi.mock("@shared/proto/cline/common", () => ({
 	EmptyRequest: { create: (x: unknown) => x },
 	StringRequest: { create: (x: unknown) => x },
+	// The slash service's definitions read this at module load, so a mock
+	// without it fails the whole file on import rather than on a call.
+	Empty: { create: (x: unknown) => x },
 }))
 
 // useExtensionState supplies turnState (+ backgroundCommandRunning) to the hook.
