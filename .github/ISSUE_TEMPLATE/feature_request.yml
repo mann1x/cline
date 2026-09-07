@@ -1,6 +1,6 @@
 name: ✨ Feature Request
 description: Suggest something this build should do
-labels: ['enhancement']
+labels: ['feature request']
 body:
     - type: markdown
       attributes:
