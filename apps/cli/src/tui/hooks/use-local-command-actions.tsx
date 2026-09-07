@@ -31,6 +31,8 @@ export function useLocalCommandActions(input: {
 	onExportHistorySession: TuiProps["onExportHistorySession"];
 	onDeleteHistorySession: TuiProps["onDeleteHistorySession"];
 	onCompact: TuiProps["onCompact"];
+	onDelegate: TuiProps["onDelegate"];
+	onListAgents: TuiProps["onListAgents"];
 	onFork: TuiProps["onFork"];
 	onUndo: () => Promise<void>;
 	onExit: TuiProps["onExit"];
@@ -54,6 +56,8 @@ export function useLocalCommandActions(input: {
 		onExportHistorySession,
 		onDeleteHistorySession,
 		onCompact,
+		onDelegate,
+		onListAgents,
 		onFork,
 		onUndo,
 		onExit,
@@ -193,6 +197,77 @@ export function useLocalCommandActions(input: {
 		void runCompact();
 	}, [session.isRunning, runCompact]);
 
+	/**
+	 * `/delegate <agent> <task>` -- hand work to a configured agent directly.
+	 *
+	 * The lead model is not asked whether to delegate and does not get a turn
+	 * until the agent has reported back. With no task, this lists the agents
+	 * rather than guessing at one: picking for the user is how the wrong agent
+	 * gets a task that reads plausibly for either.
+	 */
+	const runDelegate = useCallback(
+		async (invocation?: LocalSlashCommandInvocation) => {
+			const rest = (invocation?.text ?? "")
+				.replace(/^\s*\/delegate\b/, "")
+				.trim();
+			const [agentName, ...taskWords] = rest.split(/\s+/);
+			const task = taskWords.join(" ").trim();
+
+			if (!agentName || !task) {
+				let available: Awaited<ReturnType<typeof onListAgents>> = [];
+				try {
+					available = await onListAgents();
+				} catch {
+					// Listing is best-effort; the usage line is the point.
+				}
+				session.appendEntry({
+					kind: "status",
+					text:
+						available.length > 0
+							? `Usage: /delegate <agent> <task>. Agents: ${available
+									.map((agent) =>
+										agent.profile || agent.modelId
+											? `${agent.name} (${agent.profile ?? agent.modelId})`
+											: agent.name,
+									)
+									.join(", ")}`
+							: "No agents are configured. Agent files live in .cline/agents in this workspace, or in the Cline data directory.",
+				});
+				return;
+			}
+
+			session.setIsRunning(true);
+			session.appendEntry({
+				kind: "status",
+				text: `Delegating to "${agentName}": ${task}`,
+			});
+			try {
+				const result = await onDelegate(agentName, task);
+				if (result.text.trim()) {
+					session.appendEntry({ kind: "team", text: result.text.trim() });
+				}
+				session.appendEntry({
+					kind: "status",
+					text: `"${result.agentName}" finished in ${Math.round(
+						result.durationMs / 1000,
+					)}s over ${result.iterations} ${
+						result.iterations === 1 ? "iteration" : "iterations"
+					}.`,
+				});
+			} catch (error) {
+				session.appendEntry({
+					kind: "error",
+					text: `Delegation failed: ${
+						error instanceof Error ? error.message : String(error)
+					}`,
+				});
+			} finally {
+				session.setIsRunning(false);
+			}
+		},
+		[onDelegate, onListAgents, session],
+	);
+
 	const runFork = useCallback(async () => {
 		if (!canForkSession) {
 			session.appendEntry({
@@ -259,6 +334,7 @@ export function useLocalCommandActions(input: {
 				openThemePicker,
 				runCompact,
 				queueCompact,
+				runDelegate,
 				runFork,
 				runUndo: onUndo,
 				clearConversation: onClearConversation,
@@ -281,6 +357,7 @@ export function useLocalCommandActions(input: {
 			openThemePicker,
 			runCompact,
 			queueCompact,
+			runDelegate,
 			runFork,
 			session.isRunning,
 			slashCommandRegistry,

@@ -339,6 +339,14 @@ export class VscodeSessionHost implements SdkSessionHost {
 		return this.inner.updateSessionCompactionState(sessionId, state)
 	}
 
+	async listConfiguredAgents(sessionId: string) {
+		return this.inner.listConfiguredAgents(sessionId)
+	}
+
+	async delegateToConfiguredAgent(input: { sessionId: string; agentName: string; prompt: string }) {
+		return this.inner.delegateToConfiguredAgent(input)
+	}
+
 	async restore(input: RestoreInput): Promise<RestoreResult> {
 		// ClineCore.restore starts the checkpoint-restore replacement session
 		// WITHOUT running the prepare hook, which would bypass the remote-config

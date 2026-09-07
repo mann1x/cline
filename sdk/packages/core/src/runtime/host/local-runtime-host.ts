@@ -54,6 +54,13 @@ import {
 	withTaskProgressCapture,
 } from "../../extensions/tools/task-progress";
 import type { TeamEvent } from "../../extensions/tools/team";
+import {
+	type ConfiguredAgentDelegationResult,
+	type ConfiguredAgentSummary,
+	delegateToConfiguredAgent,
+	listConfiguredAgentSummaries,
+	renderDelegationForTranscript,
+} from "../../extensions/tools/team/delegate-to-agent";
 import type { HookEventPayload } from "../../hooks";
 import { buildTelemetryAgentIdentity } from "../../services/agent-events";
 import { resolveWorkspacePath } from "../../services/config";
@@ -1837,6 +1844,61 @@ export class LocalRuntimeHost implements RuntimeHost {
 				session.compactionStateWriteQueue = undefined;
 			}
 		}
+	}
+
+	async listConfiguredAgents(
+		sessionId: string,
+	): Promise<ConfiguredAgentSummary[]> {
+		const live = this.sessions.get(sessionId.trim());
+		return listConfiguredAgentSummaries(live?.runtime.configuredAgents);
+	}
+
+	/**
+	 * Run a configured agent because the user asked for it.
+	 *
+	 * Refused while a turn is in flight, for the reason manual compaction is:
+	 * the report is appended to the conversation, and appending to a transcript
+	 * the agent loop is currently writing to would race it.
+	 */
+	async delegateToConfiguredAgent(input: {
+		sessionId: string;
+		agentName: string;
+		prompt: string;
+		signal?: AbortSignal;
+	}): Promise<ConfiguredAgentDelegationResult> {
+		const sessionId = input.sessionId.trim();
+		const live = this.sessions.get(sessionId);
+		if (!live) {
+			throw new Error(
+				"There is no running session to delegate from. Start a task first.",
+			);
+		}
+		if (!live.agent.canStartRun()) {
+			throw new Error(
+				"Cannot delegate while a response is in progress. Wait for the current turn to finish, or abort it.",
+			);
+		}
+		const result = await delegateToConfiguredAgent({
+			agents: live.runtime.configuredAgents,
+			tools: live.runtime.tools,
+			agentName: input.agentName,
+			prompt: input.prompt,
+			sessionId,
+			parentAgentId: live.agent.getAgentId(),
+			conversationId: live.agent.getConversationId(),
+			signal: input.signal,
+		});
+		// The lead model never made a call, so the run enters the conversation as
+		// what it was: something the user had done on their behalf.
+		const messages = live.agent.getMessages();
+		live.agent.restore([
+			...messages,
+			{
+				role: "user",
+				content: renderDelegationForTranscript(result, input.prompt),
+			} as LlmsProviders.MessageWithMetadata,
+		]);
+		return result;
 	}
 
 	async readLiveSessionMessages(

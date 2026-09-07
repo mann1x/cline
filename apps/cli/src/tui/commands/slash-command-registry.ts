@@ -19,6 +19,7 @@ export type LocalSlashCommandName =
 	| "model"
 	| "theme"
 	| "compact"
+	| "delegate"
 	| "skills"
 	| "fork"
 	| "undo"
@@ -89,6 +90,11 @@ const TUI_LOCAL_COMMANDS: Array<{
 		preserveInput: true,
 	},
 	{
+		name: "delegate",
+		description: "Hand a task to a configured agent",
+		preserveInput: true,
+	},
+	{
 		name: "fork",
 		description: "Create a named fork of the current session",
 	},
@@ -123,6 +129,7 @@ const SYSTEM_COMMAND_ORDER = [
 	"plugins",
 	"compact",
 	"skills",
+	"delegate",
 	"fork",
 	"undo",
 	"clear",

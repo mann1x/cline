@@ -18,6 +18,7 @@ function makeActions(
 		openThemePicker: vi.fn(),
 		runCompact: vi.fn(),
 		queueCompact: vi.fn(),
+		runDelegate: vi.fn(),
 		runFork: vi.fn(),
 		runUndo: vi.fn(async () => {}),
 		clearConversation: vi.fn(async () => {}),
@@ -59,6 +60,28 @@ describe("runLocalSlashCommandAction", () => {
 
 		expect(handled).toBe(true);
 		expect(openConfig).toHaveBeenCalledWith({ initialTab: "plugins" });
+	});
+
+	it("routes /delegate to the delegate action, running or not", () => {
+		for (const isRunning of [false, true]) {
+			const runDelegate = vi.fn();
+			const actions = makeActions({ isRunning, runDelegate });
+			const invocation = {
+				text: "/delegate qa run the suite",
+				cursorOffset: 0,
+			};
+
+			const handled = runLocalSlashCommandAction({
+				name: "delegate",
+				invocation,
+				...actions,
+			});
+
+			expect(handled).toBe(true);
+			// Unlike /compact, delegation does not touch the conversation until
+			// the agent has finished, so a running turn is not a reason to defer.
+			expect(runDelegate).toHaveBeenCalledWith(invocation);
+		}
 	});
 
 	it("queues compaction instead of starting it mid-turn", () => {

@@ -1,4 +1,5 @@
 import { getShippedToolCallSignatures, loadConfiguredAgentConfigs } from "@cline/core"
+import { agentFileName, renderAgentFile } from "@cline/shared"
 import { resolveAgentConfigSearchPaths, resolveAgentsConfigDirPath } from "@cline/shared/storage"
 import { AgentInfo, AgentsResponse } from "@shared/proto/cline/file"
 import fs from "fs/promises"
@@ -25,34 +26,11 @@ import { HostProvider } from "@/hosts/host-provider"
 const TOOLS_NOT_OFFERED = new Set(["spawn_agent", "submit_and_exit"])
 
 /** Frontmatter keys, in the order they are written. */
-const FRONTMATTER_ORDER = ["name", "description", "profile", "providerId", "modelId", "tools", "skills", "maxIterations"]
-
-/**
- * A YAML scalar that cannot be read as anything but the string it is.
- *
- * Always quoted rather than quoted-when-necessary. A description is free text
- * a user typed, and the shapes that change meaning unquoted are the ordinary
- * ones — `Reviews code: carefully` is a mapping, `yes` is a boolean, `1.0` is
- * a number — so guessing which need it is a bug waiting for the right
- * sentence. Double quotes with the two escapes YAML defines for them.
- */
-function yamlString(value: string): string {
-	return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`
-}
-
-/**
- * A file name that cannot escape the agents directory or collide with the
- * shell. The agent's `name` is the identity the model sees; this is only where
- * it is kept.
- */
-export function agentFileName(name: string): string {
-	const slug = name
-		.trim()
-		.toLowerCase()
-		.replace(/[^a-z0-9_-]+/g, "-")
-		.replace(/^-+|-+$/g, "")
-	return `${slug || "agent"}.md`
-}
+// One renderer for the format, in @cline/shared: the `create_agent` tool
+// writes these files too, and two writers for one format is two things to keep
+// in step. Shared rather than core because this test harness stubs @cline/core,
+// so a renderer there could only be tested against the stub.
+export { agentFileName, renderAgentFile }
 
 async function primaryWorkspacePath(): Promise<string | undefined> {
 	const workspacePaths = await HostProvider.workspace.getWorkspacePaths({})
@@ -127,40 +105,6 @@ export async function listAgents(): Promise<AgentsResponse> {
  * the session has", and a file that pinned an empty list would produce an
  * agent that can do nothing at all.
  */
-export function renderAgentFile(agent: AgentInfo): string {
-	const frontmatter: Record<string, unknown> = {
-		name: agent.name.trim(),
-		description: agent.description.trim(),
-	}
-	if (agent.profile) {
-		frontmatter.profile = agent.profile
-	}
-	if (agent.providerId) {
-		frontmatter.providerId = agent.providerId
-	}
-	if (agent.modelId) {
-		frontmatter.modelId = agent.modelId
-	}
-	if (agent.tools.length > 0) {
-		frontmatter.tools = agent.tools
-	}
-	if (agent.skills.length > 0) {
-		frontmatter.skills = agent.skills
-	}
-	if (agent.maxIterations > 0) {
-		frontmatter.maxIterations = agent.maxIterations
-	}
-
-	const lines = FRONTMATTER_ORDER.filter((key) => key in frontmatter).map((key) => {
-		const value = frontmatter[key]
-		if (Array.isArray(value)) {
-			return [`${key}:`, ...value.map((entry) => `  - ${yamlString(String(entry))}`)].join("\n")
-		}
-		return typeof value === "number" ? `${key}: ${value}` : `${key}: ${yamlString(String(value))}`
-	})
-	return `---\n${lines.join("\n")}\n---\n\n${agent.systemPrompt.trim()}\n`
-}
-
 /**
  * Writes one agent, and removes the file it used to be in.
  *

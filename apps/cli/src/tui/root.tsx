@@ -770,6 +770,8 @@ function App(props: TuiProps) {
 		onExportHistorySession: props.onExportHistorySession,
 		onDeleteHistorySession: props.onDeleteHistorySession,
 		onCompact: props.onCompact,
+		onDelegate: props.onDelegate,
+		onListAgents: props.onListAgents,
 		onFork: props.onFork,
 		onUndo: openCheckpointRestore,
 		onExit: exitCline,

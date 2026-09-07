@@ -4,6 +4,10 @@ import type {
 	AgentResult,
 	RuntimeConfigExtensionKind,
 } from "@cline/shared";
+import type {
+	ConfiguredAgentDelegationResult,
+	ConfiguredAgentSummary,
+} from "../../extensions/tools/team/delegate-to-agent";
 import type { HookEventPayload } from "../../hooks";
 import type { CheckpointEntry } from "../../hooks/checkpoint-hooks";
 import type { ProviderSettings } from "../../services/llms/provider-settings";
@@ -412,6 +416,24 @@ export interface RuntimeHost {
 	readLiveSessionMessages?(
 		sessionId: string,
 	): Promise<LlmsProviders.MessageWithMetadata[]>;
+	/**
+	 * The configured agents this session loaded, for a host that offers a
+	 * picker. Optional: a host with no live-session access has nothing to list.
+	 */
+	listConfiguredAgents?(sessionId: string): Promise<ConfiguredAgentSummary[]>;
+	/**
+	 * Run one configured agent on a task, because the user said to.
+	 *
+	 * Distinct from the model calling `subagent_<name>` itself: this does not
+	 * consult the lead model at all. The agent's report is appended to the
+	 * conversation, so the next turn sees what was done on its behalf.
+	 */
+	delegateToConfiguredAgent?(input: {
+		sessionId: string;
+		agentName: string;
+		prompt: string;
+		signal?: AbortSignal;
+	}): Promise<ConfiguredAgentDelegationResult>;
 	dispatchHookEvent(payload: HookEventPayload): Promise<void>;
 	subscribe(
 		listener: (event: CoreSessionEvent) => void,

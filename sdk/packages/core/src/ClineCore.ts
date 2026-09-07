@@ -85,6 +85,11 @@ export type {
 	StartSessionBootstrap,
 } from "./cline-core/types";
 
+import type {
+	ConfiguredAgentDelegationResult,
+	ConfiguredAgentSummary,
+} from "./extensions/tools/team/delegate-to-agent";
+
 /**
  * The primary entry point for the Cline Core SDK.
  *
@@ -496,6 +501,32 @@ export class ClineCore {
 	 */
 	update: RuntimeHost["updateSession"] = (...args) =>
 		this.host.updateSession(...args);
+	/**
+	 * The configured agents this session loaded, for a host offering a picker.
+	 */
+	listConfiguredAgents = (
+		sessionId: string,
+	): Promise<ConfiguredAgentSummary[]> =>
+		this.host.listConfiguredAgents?.(sessionId) ?? Promise.resolve([]);
+
+	/**
+	 * Runs one configured agent on a task, on the user's say-so rather than the
+	 * model's. The agent's report is appended to the conversation.
+	 */
+	delegateToConfiguredAgent = (input: {
+		sessionId: string;
+		agentName: string;
+		prompt: string;
+		signal?: AbortSignal;
+	}): Promise<ConfiguredAgentDelegationResult> => {
+		if (!this.host.delegateToConfiguredAgent) {
+			return Promise.reject(
+				new Error("This runtime host cannot delegate to an agent."),
+			);
+		}
+		return this.host.delegateToConfiguredAgent(input);
+	};
+
 	/**
 	 * Stores the compacted working-context state for an existing session.
 	 */

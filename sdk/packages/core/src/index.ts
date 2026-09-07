@@ -427,8 +427,12 @@ export {
 	type DelegatedAgentConnectionConfig,
 	type DelegatedAgentKind,
 	type DelegatedAgentRuntimeConfig,
+	delegateToConfiguredAgent,
+	findConfiguredAgent,
+	listConfiguredAgentSummaries,
 	loadConfiguredAgentConfigs,
 	parseConfiguredAgentConfig,
+	renderDelegationForTranscript,
 	reviveTeamStateDates,
 	type SpawnTeammateOptions,
 	type SubAgentEndContext,
@@ -438,6 +442,7 @@ export {
 	type TeamMemberConfig,
 	type TeamTeammateRuntimeConfig,
 	toTeamProgressLifecycleEvent,
+	UnknownConfiguredAgentError,
 } from "./extensions/tools/team";
 export {
 	createAgentHooksExtension,
@@ -1118,6 +1123,23 @@ export {
 	referencedCredentialNames,
 	resolveCredentialEnv,
 } from "./extensions/tools/qa-credentials";
+export {
+	type AgentFileFields,
+	agentFileName,
+	renderAgentFile,
+	validateAgentFields,
+	writeAgentFile,
+} from "./extensions/tools/team/agent-file";
+export {
+	type CreateAgentInput,
+	type CreateAgentOutput,
+	createCreateAgentTool,
+} from "./extensions/tools/team/create-agent-tool";
+export type {
+	ConfiguredAgentDelegationResult,
+	ConfiguredAgentSummary,
+	DelegateToConfiguredAgentInput,
+} from "./extensions/tools/team/delegate-to-agent";
 // The transaction's base revision: what every file said when the open
 // transaction started. Read through `read_files` with `revision: "base"`, and
 // written back over one file by `restore_file`. Both exist only while the

@@ -1,5 +1,6 @@
 import type { ClineMessage } from "@shared/ExtensionMessage"
 import { EmptyRequest, StringRequest } from "@shared/proto/cline/common"
+import { DelegateRequest } from "@shared/proto/cline/slash"
 import { AskResponseRequest, NewTaskRequest } from "@shared/proto/cline/task"
 import { IntentEvent } from "@shared/proto/cline/ui"
 import { useCallback, useRef } from "react"
@@ -67,6 +68,24 @@ export function useMessageHandlers(messages: ClineMessage[], chatState: ChatStat
 				await SlashServiceClient.condense(StringRequest.create({ value: "compact" })).catch((err) =>
 					console.error("Failed to compact task:", err),
 				)
+				if ("disableAutoScrollRef" in chatState) {
+					;(chatState as any).disableAutoScrollRef.current = false
+				}
+				return
+			}
+
+			// `/delegate <agent> <task>` runs a configured agent directly. The
+			// lead model is not asked whether to delegate: an instruction that
+			// the model can decline is a suggestion, which is not what the user
+			// typed. With no task, the command falls through to the model, which
+			// can answer the "what can I delegate to" question in words.
+			const delegateMatch = messageToSend.match(/^\/delegate\s+(\S+)\s+([\s\S]+)$/)
+			if (messages.length > 0 && delegateMatch) {
+				setInputValue("")
+				setActiveQuote(null)
+				await SlashServiceClient.delegate(
+					DelegateRequest.create({ agentName: delegateMatch[1], prompt: delegateMatch[2] }),
+				).catch((err) => console.error("Failed to delegate to agent:", err))
 				if ("disableAutoScrollRef" in chatState) {
 					;(chatState as any).disableAutoScrollRef.current = false
 				}

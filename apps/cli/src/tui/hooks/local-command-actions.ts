@@ -14,6 +14,7 @@ export interface LocalSlashCommandActionInput {
 	runCompact: () => void;
 	/** Hold a `/compact` asked for mid-turn until the turn finishes. */
 	queueCompact: () => void;
+	runDelegate: (invocation?: LocalSlashCommandInvocation) => void;
 	runFork: () => void;
 	runUndo: () => Promise<void>;
 	clearConversation: () => Promise<void>;
@@ -36,6 +37,13 @@ export function runLocalSlashCommandAction(
 	}
 	if (normalized === "skills") {
 		input.openSkills(input.invocation);
+		return true;
+	}
+	if (normalized === "delegate") {
+		// Handled whether or not a turn is running: unlike /compact this does not
+		// touch the conversation until the delegated agent has finished, and the
+		// host refuses it there if a turn is still in flight.
+		input.runDelegate(input.invocation);
 		return true;
 	}
 	if (normalized === "mcp") {

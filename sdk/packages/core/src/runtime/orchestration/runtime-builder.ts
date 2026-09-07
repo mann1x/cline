@@ -53,6 +53,7 @@ import {
 import type { ConfiguredAgentConfig } from "../../extensions/tools/team/configured-agent-config";
 import { loadConfiguredAgentConfigs } from "../../extensions/tools/team/configured-agent-config";
 import { createConfiguredAgentTools } from "../../extensions/tools/team/configured-agent-tool";
+import { createCreateAgentTool } from "../../extensions/tools/team/create-agent-tool";
 import {
 	filterDisabledTools,
 	isModelToolEnabledGlobally,
@@ -760,6 +761,16 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 			);
 		}
 		if (normalized.enableSpawnAgent) {
+			// Offered to the lead only, and gated with the subagents it creates:
+			// writing an agent file is pointless in a session that cannot run one,
+			// and a subagent that could write agents is a recursion nobody asked
+			// for.
+			tools.push(
+				...filterAvailableTools(
+					[createCreateAgentTool({ workspaceRoot: workspaceConfigRoot })],
+					effectiveToolPolicies,
+				),
+			);
 			if (configuredAgents.configs.length > 0) {
 				tools.push(
 					...filterAvailableTools(
@@ -1002,6 +1013,9 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 		return {
 			tools: finalTools,
 			modelTools,
+			// Carried out so a host can delegate to one by name. The tools above
+			// are what the model sees; this is what the user wrote.
+			configuredAgents: configuredAgents.configs,
 			logger: logger ?? config.logger,
 			telemetry: telemetry ?? config.telemetry,
 			teamRuntime,

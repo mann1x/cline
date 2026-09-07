@@ -839,6 +839,14 @@ export async function runInteractive(
 			await sessionRuntime.ensureReady();
 			return await sessionRuntime.compactCurrentSession();
 		},
+		onListAgents: async () => {
+			await sessionRuntime.ensureReady();
+			return await sessionRuntime.listConfiguredAgents();
+		},
+		onDelegate: async (agentName: string, prompt: string) => {
+			await sessionRuntime.ensureReady();
+			return await sessionRuntime.delegateToAgent(agentName, prompt);
+		},
 		onFork: async () => {
 			await sessionRuntime.ensureReady();
 			return await sessionRuntime.forkCurrentSession();

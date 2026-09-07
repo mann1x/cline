@@ -6,6 +6,7 @@
 // the webview's gRPC streams.
 import * as fs from "node:fs/promises"
 import * as path from "node:path"
+import type { ConfiguredAgentDelegationResult, ConfiguredAgentSummary } from "@cline/core"
 import {
 	type CompareCheckpointResult,
 	createReadReceipts,
@@ -1508,6 +1509,40 @@ export class Controller {
 	 * and persists the compaction sidecar so the model's working context is
 	 * reduced on the next turn and later resumes.
 	 */
+	/** The agents the active session can hand work to. */
+	async listConfiguredAgents(): Promise<ConfiguredAgentSummary[]> {
+		const activeSession = this.sessions.getActiveSession()
+		if (!activeSession?.sdkHost.listConfiguredAgents) {
+			return []
+		}
+		return activeSession.sdkHost.listConfiguredAgents(activeSession.sessionId)
+	}
+
+	/**
+	 * Hand a task to a configured agent, on the user's say-so.
+	 *
+	 * Refused while a turn is running for the same reason compaction is: the
+	 * agent's report is appended to the conversation, and appending to a
+	 * transcript the agent loop is writing to would race it.
+	 */
+	async delegateToAgent(agentName: string, prompt: string): Promise<ConfiguredAgentDelegationResult> {
+		const activeSession = this.sessions.getActiveSession()
+		if (!activeSession) {
+			throw new Error("There is no active task to delegate from. Start one first.")
+		}
+		if (!activeSession.sdkHost.delegateToConfiguredAgent) {
+			throw new Error("This runtime cannot delegate to an agent. Please update Cline and try again.")
+		}
+		if (activeSession.isRunning) {
+			throw new Error("Cannot delegate while a response is in progress. Wait for the current turn to finish.")
+		}
+		return activeSession.sdkHost.delegateToConfiguredAgent({
+			sessionId: activeSession.sessionId,
+			agentName,
+			prompt,
+		})
+	}
+
 	async compactTask(): Promise<void> {
 		await this.compaction.compactTask()
 	}

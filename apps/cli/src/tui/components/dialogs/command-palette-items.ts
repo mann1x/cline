@@ -7,6 +7,7 @@ export type CommandPaletteAction =
 	| "mcp"
 	| "plugins"
 	| "compact"
+	| "delegate"
 	| "skills"
 	| "fork"
 	| "undo"
@@ -92,6 +93,13 @@ const ACTION_ITEMS: Array<{
 		shortcut: "Opt+X",
 		description: "Compact context",
 		keywords: ["compact", "context", "compress"],
+	},
+	{
+		action: "delegate",
+		label: "Delegate to Agent",
+		shortcut: "Opt+D",
+		description: "Hand a task to a configured agent",
+		keywords: ["delegate", "agent", "subagent", "handoff"],
 	},
 	{
 		action: "skills",

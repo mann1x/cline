@@ -16,6 +16,16 @@ export {
 	createConfiguredAgentTools,
 } from "./configured-agent-tool";
 export {
+	type ConfiguredAgentDelegationResult,
+	type ConfiguredAgentSummary,
+	type DelegateToConfiguredAgentInput,
+	delegateToConfiguredAgent,
+	findConfiguredAgent,
+	listConfiguredAgentSummaries,
+	renderDelegationForTranscript,
+	UnknownConfiguredAgentError,
+} from "./delegate-to-agent";
+export {
 	buildTeamProgressSummary,
 	toTeamProgressLifecycleEvent,
 } from "./projections";

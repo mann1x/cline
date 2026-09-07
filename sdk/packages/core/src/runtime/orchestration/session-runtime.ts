@@ -27,6 +27,7 @@ import type {
 	SubAgentStartContext,
 	TeamEvent,
 } from "../../extensions/tools/team";
+import type { ConfiguredAgentConfig } from "../../extensions/tools/team/configured-agent-config";
 import type { WorkspaceManager } from "../../services/workspace/workspace-manager";
 import type { CoreSessionConfig } from "../../types/config";
 
@@ -52,6 +53,13 @@ export interface BuiltRuntime {
 	teamRuntime?: AgentTeamsRuntime;
 	teamRestoredFromPersistence?: boolean;
 	delegatedAgentConfigProvider?: DelegatedAgentConfigProvider;
+	/**
+	 * The agent files this session loaded, kept so a host can list them and
+	 * delegate to one on the user's say-so rather than the model's. The tools
+	 * built from them are in `tools`; this is the mapping back to what the user
+	 * wrote and named.
+	 */
+	configuredAgents?: readonly ConfiguredAgentConfig[];
 	extensions?: AgentConfig["extensions"];
 	completionPolicy?: AgentConfig["completionPolicy"];
 	registerLeadAgent?: (agent: LeadAgentHandle) => void;

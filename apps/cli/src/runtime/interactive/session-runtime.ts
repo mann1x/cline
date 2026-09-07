@@ -1,3 +1,7 @@
+import type {
+	ConfiguredAgentDelegationResult,
+	ConfiguredAgentSummary,
+} from "@cline/core";
 import {
 	type AgentEvent,
 	type AgentHooks,
@@ -693,6 +697,37 @@ export function createInteractiveSessionRuntime(input: {
 		return messages;
 	};
 
+	/** The agents this session can hand work to, for the /delegate picker. */
+	const listConfiguredAgents = async (): Promise<ConfiguredAgentSummary[]> => {
+		const manager = sessionManager;
+		if (!manager || !activeSessionId) {
+			return [];
+		}
+		return manager.listConfiguredAgents(activeSessionId);
+	};
+
+	/**
+	 * Hand a task to a configured agent, because the user asked for it.
+	 *
+	 * The lead model is not consulted: it does not choose whether to delegate,
+	 * and it does not get a turn until the agent has reported back. The report
+	 * is appended to the conversation by core, so the next turn sees it.
+	 */
+	const delegateToAgent = async (
+		agentName: string,
+		prompt: string,
+	): Promise<ConfiguredAgentDelegationResult> => {
+		const manager = sessionManager;
+		if (!manager || !activeSessionId) {
+			throw new Error("Start a task before delegating to an agent.");
+		}
+		return manager.delegateToConfiguredAgent({
+			sessionId: activeSessionId,
+			agentName,
+			prompt,
+		});
+	};
+
 	const compactCurrentSession = async (): Promise<{
 		messagesBefore: number;
 		messagesAfter: number;
@@ -914,6 +949,8 @@ export function createInteractiveSessionRuntime(input: {
 		resumeSession,
 		forkCurrentSession,
 		compactCurrentSession,
+		listConfiguredAgents,
+		delegateToAgent,
 		getCheckpointData,
 		restoreCheckpoint,
 		applyMode,

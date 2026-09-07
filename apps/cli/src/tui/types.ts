@@ -3,6 +3,8 @@ import type {
 	AgentMode,
 	CheckpointEntry,
 	ClineSubscriptionPlan,
+	ConfiguredAgentDelegationResult,
+	ConfiguredAgentSummary,
 	TeamEvent,
 } from "@cline/core";
 import type {
@@ -213,6 +215,13 @@ export interface TuiProps {
 	) => Promise<string>;
 	onDeleteHistorySession: (sessionId: string) => Promise<boolean>;
 	onCompact: () => Promise<InteractiveCompactionResult>;
+	/** The agents this session can hand work to. */
+	onListAgents: () => Promise<ConfiguredAgentSummary[]>;
+	/** Hand a task to one of them, without asking the lead model first. */
+	onDelegate: (
+		agentName: string,
+		prompt: string,
+	) => Promise<ConfiguredAgentDelegationResult>;
 	onFork: () => Promise<
 		| {
 				forkedFromSessionId: string;
