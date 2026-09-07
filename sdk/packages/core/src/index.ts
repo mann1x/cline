@@ -443,6 +443,7 @@ export {
 	type StartBackgroundDelegationInput,
 	type SubAgentEndContext,
 	type SubAgentStartContext,
+	startBackgroundDelegation,
 	type TaskResult,
 	type TeamEvent,
 	type TeamMemberConfig,

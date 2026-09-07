@@ -19,7 +19,14 @@
  */
 
 import type { AgentHooks } from "@cline/shared";
-import type { ConfiguredAgentDelegationResult } from "./delegate-to-agent";
+import {
+	type ConfiguredAgentDelegationResult,
+	type DelegateToConfiguredAgentInput,
+	delegateToConfiguredAgent,
+	findConfiguredAgent,
+	listConfiguredAgentSummaries,
+	UnknownConfiguredAgentError,
+} from "./delegate-to-agent";
 
 export type BackgroundDelegationStatus =
 	| "running"
@@ -285,4 +292,35 @@ export function createBackgroundDelegationRegistry(options?: {
 			announce();
 		},
 	};
+}
+
+/**
+ * Start a configured agent in the background, on the same path the foreground
+ * one runs down.
+ *
+ * The agent name is checked here rather than inside the run, so a typo is an
+ * error at the prompt where it was typed instead of a background run that
+ * appears in the panel and immediately fails. Every other failure belongs to
+ * the run and is reported there.
+ */
+export function startBackgroundDelegation(
+	registry: BackgroundDelegationRegistry,
+	input: Omit<DelegateToConfiguredAgentInput, "signal" | "hooks"> & {
+		onSettled?: (view: BackgroundDelegationView) => void;
+	},
+): BackgroundDelegationView {
+	const agent = findConfiguredAgent(input.agents, input.agentName);
+	if (!agent) {
+		throw new UnknownConfiguredAgentError(
+			input.agentName,
+			listConfiguredAgentSummaries(input.agents).map((entry) => entry.name),
+		);
+	}
+	return registry.start({
+		agentName: agent.name,
+		prompt: input.prompt,
+		run: ({ signal, hooks }) =>
+			delegateToConfiguredAgent({ ...input, signal, hooks }),
+		onSettled: input.onSettled,
+	});
 }

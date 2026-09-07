@@ -3,7 +3,10 @@ import {
 	type BackgroundDelegationControls,
 	type BackgroundDelegationView,
 	createBackgroundDelegationRegistry,
+	startBackgroundDelegation,
 } from "./background-delegations";
+import { UnknownConfiguredAgentError } from "./delegate-to-agent";
+import { readDelegationHooks } from "./delegation-call-hooks";
 
 function deferred<T>(): {
 	promise: Promise<T>;
@@ -212,5 +215,60 @@ describe("what a panel sees", () => {
 				run: () => new Promise(() => undefined),
 			}),
 		).not.toThrow();
+	});
+});
+
+describe("starting one on the delegation path", () => {
+	const agents = [
+		{ name: "reviewer", description: "reviews", systemPrompt: "you review" },
+	] as never;
+
+	it("refuses a name nobody has, at the prompt rather than in the panel", () => {
+		const registry = createBackgroundDelegationRegistry();
+
+		expect(() =>
+			startBackgroundDelegation(registry, {
+				agents,
+				tools: [],
+				agentName: "revewier",
+				prompt: "review the diff",
+				parentAgentId: "lead",
+			}),
+		).toThrow(UnknownConfiguredAgentError);
+		expect(registry.list()).toHaveLength(0);
+	});
+
+	// The barrier has to reach the agent, and the only channel a tool has is its
+	// context. If this stops arriving, pause silently does nothing.
+	it("hands the run's own hooks to the tool it executes", async () => {
+		const registry = createBackgroundDelegationRegistry();
+		const seen: Array<Record<string, unknown> | undefined> = [];
+		const tools = [
+			{
+				name: "subagent_reviewer",
+				description: "",
+				inputSchema: {},
+				execute: async (
+					_input: unknown,
+					context: { metadata?: Record<string, unknown> },
+				) => {
+					seen.push(context.metadata);
+					return { text: "done", iterations: 1 };
+				},
+			},
+		] as never;
+
+		startBackgroundDelegation(registry, {
+			agents,
+			tools,
+			agentName: "reviewer",
+			prompt: "review the diff",
+			parentAgentId: "lead",
+		});
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(seen).toHaveLength(1);
+		expect(readDelegationHooks(seen[0])?.beforeModel).toBeTypeOf("function");
+		expect(seen[0]?.delegatedByUser).toBe(true);
 	});
 });

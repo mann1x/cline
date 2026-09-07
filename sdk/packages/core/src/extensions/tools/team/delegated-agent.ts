@@ -9,6 +9,7 @@ import type {
 	ToolApprovalRequest,
 	ToolApprovalResult,
 } from "@cline/shared";
+import { mergeAgentHooks } from "../../../hooks/hook-file-hooks";
 import { SessionRuntime } from "../../../runtime/orchestration/session-runtime-orchestrator";
 import type { AgentSlotGate, AgentSlotGateRegistry } from "./agent-slot-gate";
 import {
@@ -109,6 +110,15 @@ export interface BuildDelegatedAgentConfigOptions {
 	) => Promise<ToolApprovalResult> | ToolApprovalResult;
 	role?: string;
 	cwd?: string;
+	/**
+	 * Hooks for this run alone, on top of the session's.
+	 *
+	 * The session's hooks belong to the session and are shared by every
+	 * delegated run it starts. A background delegation needs one of its own --
+	 * the barrier that holds it while the user has it paused -- and that barrier
+	 * belongs to that run and no other.
+	 */
+	hooks?: AgentHooks;
 }
 
 /**
@@ -180,7 +190,7 @@ export function buildDelegatedAgentConfig(
 		parentAgentId: options.parentAgentId,
 		abortSignal: options.abortSignal,
 		onEvent: options.onEvent,
-		hooks: runtimeConfig.hooks,
+		hooks: mergeAgentHooks([runtimeConfig.hooks, options.hooks]),
 		extensions: runtimeConfig.extensions,
 		hookErrorMode: options.hookErrorMode,
 		toolPolicies: options.toolPolicies,

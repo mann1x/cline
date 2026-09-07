@@ -5,6 +5,7 @@ export {
 	type BackgroundDelegationView,
 	createBackgroundDelegationRegistry,
 	type StartBackgroundDelegationInput,
+	startBackgroundDelegation,
 } from "./background-delegations";
 export {
 	type ConfiguredAgentConfig,

@@ -19,6 +19,7 @@ import {
 	type DelegatedAgentConfigProvider,
 	type DelegatedAgentRuntimeConfig,
 } from "./delegated-agent";
+import { readDelegationHooks } from "./delegation-call-hooks";
 import type {
 	SpawnAgentOutput,
 	SubAgentEndContext,
@@ -379,6 +380,10 @@ export function createConfiguredAgentTools(
 						maxIterations: config.maxIterations,
 						parentAgentId: context.agentId,
 						abortSignal: context.signal,
+						// The caller's hooks for this run alone -- the pause barrier
+						// of a background delegation, and nothing in an ordinary
+						// call the model makes.
+						hooks: readDelegationHooks(context.metadata),
 						onEvent: options.onSubAgentEvent,
 						hookErrorMode: options.hookErrorMode,
 						toolPolicies: options.toolPolicies,

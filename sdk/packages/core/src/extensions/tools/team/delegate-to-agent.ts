@@ -14,9 +14,10 @@
  * implementation of any of them would be a second thing to keep correct.
  */
 
-import type { AgentTool, AgentToolContext } from "@cline/shared";
+import type { AgentHooks, AgentTool, AgentToolContext } from "@cline/shared";
 import type { ConfiguredAgentConfig } from "./configured-agent-config";
 import { buildConfiguredAgentToolDescriptors } from "./configured-agent-tool";
+import { withDelegationHooks } from "./delegation-call-hooks";
 import type { SpawnAgentOutput } from "./spawn-agent-tool";
 
 /** One configured agent, as a host needs to show it in a picker. */
@@ -112,6 +113,14 @@ export interface DelegateToConfiguredAgentInput {
 	parentAgentId: string;
 	conversationId?: string;
 	signal?: AbortSignal;
+	/**
+	 * Hooks for this run alone, on top of the session's.
+	 *
+	 * How a background delegation gets its pause barrier: the run is otherwise
+	 * identical to a foreground one, and giving it a second code path to run
+	 * down would be a second path to keep correct.
+	 */
+	hooks?: AgentHooks;
 }
 
 /**
@@ -153,7 +162,7 @@ export async function delegateToConfiguredAgent(
 		conversationId: input.conversationId,
 		iteration: 0,
 		signal: input.signal,
-		metadata: { delegatedByUser: true },
+		metadata: withDelegationHooks({ delegatedByUser: true }, input.hooks),
 	};
 
 	const startedAt = Date.now();
