@@ -1,4 +1,12 @@
 export {
+	type BackgroundDelegationControls,
+	type BackgroundDelegationRegistry,
+	type BackgroundDelegationStatus,
+	type BackgroundDelegationView,
+	createBackgroundDelegationRegistry,
+	type StartBackgroundDelegationInput,
+} from "./background-delegations";
+export {
 	type ConfiguredAgentConfig,
 	type ConfiguredAgentLoadResult,
 	type ConfiguredAgentReadError,
