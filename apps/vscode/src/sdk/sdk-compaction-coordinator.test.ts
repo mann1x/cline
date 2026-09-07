@@ -40,18 +40,63 @@ describe("SdkCompactionCoordinator", () => {
 		)
 	})
 
-	it("refuses to compact while a turn is running", async () => {
+	it("queues a compaction asked for mid-turn instead of refusing it", async () => {
 		const activeSession = makeActiveSession({ isRunning: true })
 		const { coordinator, options } = makeCoordinator({ activeSession })
 
 		await coordinator.compactTask()
 
+		// Nothing runs under the live agent loop...
 		expect(mockCreateContextCompactionPrepareTurn).not.toHaveBeenCalled()
 		expect(options.sessions.startNewSession).not.toHaveBeenCalled()
 		expect(options.messages.appendAndEmit).toHaveBeenCalledWith(
-			[expect.objectContaining({ say: "info", text: expect.stringContaining("Cannot compact while a response") })],
+			[expect.objectContaining({ say: "info", text: expect.stringContaining("Compaction queued") })],
 			expect.anything(),
 		)
+		expect(coordinator.hasQueuedCompaction()).toBe(true)
+
+		// ...and it runs on the turn's own terms, once the turn is over.
+		activeSession.isRunning = false
+		await coordinator.runQueuedCompaction()
+
+		expect(mockCreateContextCompactionPrepareTurn).toHaveBeenCalledOnce()
+		expect(coordinator.hasQueuedCompaction()).toBe(false)
+	})
+
+	it("says so rather than queuing twice", async () => {
+		const activeSession = makeActiveSession({ isRunning: true })
+		const { coordinator, options } = makeCoordinator({ activeSession })
+
+		await coordinator.compactTask()
+		await coordinator.compactTask()
+
+		const texts = options.messages.appendAndEmit.mock.calls.map(([rows]) => (rows as Array<{ text?: string }>)[0]?.text)
+		expect(texts).toEqual([expect.stringContaining("Compaction queued"), expect.stringContaining("already queued")])
+	})
+
+	it("drops a queued compaction when its conversation is no longer active", async () => {
+		const activeSession = makeActiveSession({ isRunning: true, sessionId: "the-one-asked-for" })
+		const { coordinator, options } = makeCoordinator({ activeSession })
+
+		await coordinator.compactTask()
+		// A different conversation took over while the turn was finishing.
+		options.sessions.getActiveSession.mockReturnValue(makeActiveSession({ sessionId: "someone-else" }))
+		await coordinator.runQueuedCompaction()
+
+		expect(mockCreateContextCompactionPrepareTurn).not.toHaveBeenCalled()
+		expect(coordinator.hasQueuedCompaction()).toBe(false)
+	})
+
+	it("keeps waiting when another turn started before the queue was drained", async () => {
+		const activeSession = makeActiveSession({ isRunning: true })
+		const { coordinator } = makeCoordinator({ activeSession })
+
+		await coordinator.compactTask()
+		await coordinator.runQueuedCompaction()
+
+		expect(mockCreateContextCompactionPrepareTurn).not.toHaveBeenCalled()
+		// Still queued: the next idle edge tries again rather than losing it.
+		expect(coordinator.hasQueuedCompaction()).toBe(true)
 	})
 
 	it("reports when there are no messages to compact", async () => {

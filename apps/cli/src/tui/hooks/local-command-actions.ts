@@ -12,6 +12,8 @@ export interface LocalSlashCommandActionInput {
 	openThemePicker: () => void;
 	invocation?: LocalSlashCommandInvocation;
 	runCompact: () => void;
+	/** Hold a `/compact` asked for mid-turn until the turn finishes. */
+	queueCompact: () => void;
 	runFork: () => void;
 	runUndo: () => Promise<void>;
 	clearConversation: () => Promise<void>;
@@ -52,10 +54,14 @@ export function runLocalSlashCommandAction(
 		return true;
 	}
 	if (normalized === "compact") {
-		// Autocomplete can invoke local commands while a turn is running. Keep
-		// /compact handled, but do not let it take ownership of the active turn's
-		// shared running state.
-		if (!input.isRunning) {
+		// Compacting mid-turn would race the live agent loop, and /compact owns
+		// the shared running state, which the active turn is using. So it waits
+		// for the turn instead -- waiting is ours to do, not the user's
+		// (mann1x/cline#70). Autocomplete can invoke local commands while a turn
+		// is running, which is the other way to arrive here.
+		if (input.isRunning) {
+			input.queueCompact();
+		} else {
 			input.runCompact();
 		}
 		return true;

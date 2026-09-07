@@ -17,6 +17,7 @@ function makeActions(
 		openSkills: vi.fn(),
 		openThemePicker: vi.fn(),
 		runCompact: vi.fn(),
+		queueCompact: vi.fn(),
 		runFork: vi.fn(),
 		runUndo: vi.fn(async () => {}),
 		clearConversation: vi.fn(async () => {}),
@@ -60,9 +61,10 @@ describe("runLocalSlashCommandAction", () => {
 		expect(openConfig).toHaveBeenCalledWith({ initialTab: "plugins" });
 	});
 
-	it("does not start compaction while a turn is running", () => {
+	it("queues compaction instead of starting it mid-turn", () => {
 		const runCompact = vi.fn();
-		const actions = makeActions({ isRunning: true, runCompact });
+		const queueCompact = vi.fn();
+		const actions = makeActions({ isRunning: true, runCompact, queueCompact });
 
 		const handled = runLocalSlashCommandAction({
 			name: "compact",
@@ -70,7 +72,10 @@ describe("runLocalSlashCommandAction", () => {
 		});
 
 		expect(handled).toBe(true);
+		// Compacting under the live agent loop races it, so the request waits --
+		// but it is not dropped, which is what the user saw before.
 		expect(runCompact).not.toHaveBeenCalled();
+		expect(queueCompact).toHaveBeenCalledOnce();
 	});
 
 	it("starts compaction while the session is idle", () => {
@@ -84,6 +89,7 @@ describe("runLocalSlashCommandAction", () => {
 
 		expect(handled).toBe(true);
 		expect(runCompact).toHaveBeenCalledOnce();
+		expect(actions.queueCompact).not.toHaveBeenCalled();
 	});
 
 	it("waits for clear to reset the runtime session", async () => {

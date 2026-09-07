@@ -757,6 +757,14 @@ export class Controller {
 	}
 
 	private handleSessionBecameIdle(): void {
+		// A compaction the user asked for mid-turn has been waiting for exactly
+		// this edge. It takes the session-rebuild mutex itself, so it serializes
+		// against whatever rebuild this idle edge also kicks off.
+		if (this.compaction?.hasQueuedCompaction()) {
+			this.compaction.runQueuedCompaction().catch((error) => {
+				Logger.error("[SdkController] Failed to run the queued compaction:", error)
+			})
+		}
 		if (this.mode?.hasPendingModeChange()) {
 			// The mode rebuild reads the latest provider and tool configuration, so
 			// it supersedes any passive rebuild that was queued for the old mode.

@@ -41,8 +41,8 @@ import type { SdkSessionHost } from "./session-host"
 
 const COMPACTION_FAILURE_MESSAGE = "Couldn't compact the conversation. Please try again."
 const COMPACTION_UNSUPPORTED_MESSAGE = "Compaction is not supported by this runtime yet. Please update Cline and try again."
-const COMPACTION_TURN_RUNNING_MESSAGE =
-	"Cannot compact while a response is in progress. Try again once the current turn finishes."
+const COMPACTION_QUEUED_MESSAGE = "Compaction queued. It will run as soon as this turn finishes."
+const COMPACTION_ALREADY_QUEUED_MESSAGE = "Compaction is already queued for the end of this turn."
 
 export interface SdkCompactionCoordinatorOptions {
 	stateManager: StateManager
@@ -61,6 +61,15 @@ export interface SdkCompactionCoordinatorOptions {
 
 export class SdkCompactionCoordinator {
 	private compactInFlight = false
+	/**
+	 * A compaction asked for mid-turn, held until the turn ends.
+	 *
+	 * Compacting under a live agent loop would race its own message
+	 * persistence, so the request waits -- but waiting is the coordinator's job,
+	 * not the user's. Keyed by session so a request for one conversation cannot
+	 * fire against whatever happens to be active later (mann1x/cline#70).
+	 */
+	private queuedSessionId: string | undefined
 
 	constructor(private readonly options: SdkCompactionCoordinatorOptions) {}
 
@@ -80,8 +89,7 @@ export class SdkCompactionCoordinator {
 			// A turn is still running; compacting mid-turn would race the live agent
 			// loop's own message persistence. Ask the user to wait until it finishes.
 			if (activeSession.isRunning) {
-				this.emitInfo(COMPACTION_TURN_RUNNING_MESSAGE, activeSession.sessionId)
-				await this.options.postStateToWebview()
+				await this.queueForIdle(activeSession.sessionId)
 				return
 			}
 
@@ -101,8 +109,8 @@ export class SdkCompactionCoordinator {
 						return
 					}
 					if (current.isRunning) {
-						this.emitInfo(COMPACTION_TURN_RUNNING_MESSAGE, current.sessionId)
-						await this.options.postStateToWebview()
+						// A send landed while we waited for the mutex.
+						await this.queueForIdle(current.sessionId)
 						return
 					}
 					await this.runCompaction(current.sdkHost, current.sessionId)
@@ -138,6 +146,46 @@ export class SdkCompactionCoordinator {
 	}
 
 	/**
+	 * Hold a mid-turn compaction request until the turn finishes, and say so.
+	 */
+	private async queueForIdle(sessionId: string): Promise<void> {
+		const alreadyQueued = this.queuedSessionId === sessionId
+		this.queuedSessionId = sessionId
+		this.emitInfo(alreadyQueued ? COMPACTION_ALREADY_QUEUED_MESSAGE : COMPACTION_QUEUED_MESSAGE, sessionId)
+		await this.options.postStateToWebview()
+	}
+
+	/** Whether a compaction is waiting for the current turn to finish. */
+	hasQueuedCompaction(): boolean {
+		return this.queuedSessionId !== undefined
+	}
+
+	/**
+	 * Run a compaction that was queued mid-turn. Called on the running→idle
+	 * edge; a no-op when nothing is queued, and it drops the request if the
+	 * conversation it was queued for is no longer the active one.
+	 */
+	async runQueuedCompaction(): Promise<void> {
+		const queuedSessionId = this.queuedSessionId
+		if (!queuedSessionId) {
+			return
+		}
+		const activeSession = this.options.sessions.getActiveSession()
+		if (activeSession?.sessionId !== queuedSessionId) {
+			Logger.log("[SdkController] runQueuedCompaction: the queued conversation is no longer active; dropping")
+			this.queuedSessionId = undefined
+			return
+		}
+		if (activeSession.isRunning) {
+			// Another turn started before we got here. Keep waiting rather than
+			// compacting under it; the next idle edge tries again.
+			return
+		}
+		this.queuedSessionId = undefined
+		await this.compactTask()
+	}
+
+	/**
 	 * Resume a displayed history task in an isolated host, compact it, then
 	 * dispose the owned host so the task stays "displayed only". Runs inside the
 	 * session-rebuild mutex so a concurrent follow-up cannot resume the same task
@@ -154,8 +202,7 @@ export class SdkCompactionCoordinator {
 					return
 				}
 				if (active.isRunning) {
-					this.emitInfo(COMPACTION_TURN_RUNNING_MESSAGE, taskId)
-					await this.options.postStateToWebview()
+					await this.queueForIdle(taskId)
 					return
 				}
 				await this.runCompaction(active.sdkHost, taskId)

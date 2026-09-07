@@ -1,7 +1,7 @@
 import { useTerminalDimensions } from "@opentui/react";
 import type { ChoiceContext } from "@opentui-ui/dialog";
 import { useDialog } from "@opentui-ui/dialog/react";
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import type { SlashCommandRegistry } from "../commands/slash-command-registry";
 import { resolveSlashCommand } from "../commands/slash-command-registry";
 import { ForkConfirmContent } from "../components/dialogs/fork-confirm";
@@ -166,6 +166,33 @@ export function useLocalCommandActions(input: {
 		}
 	}, [onCompact, session]);
 
+	// A /compact asked for mid-turn, held until the turn finishes
+	// (mann1x/cline#70). A ref, not state: the queue is read by an effect on the
+	// running edge, and re-rendering for it would buy nothing.
+	const compactQueued = useRef(false);
+	const queueCompact = useCallback(() => {
+		if (compactQueued.current) {
+			session.appendEntry({
+				kind: "status",
+				text: "Compaction is already queued for the end of this turn.",
+			});
+			return;
+		}
+		compactQueued.current = true;
+		session.appendEntry({
+			kind: "status",
+			text: "Compaction queued. It will run as soon as this turn finishes.",
+		});
+	}, [session]);
+
+	useEffect(() => {
+		if (session.isRunning || !compactQueued.current) {
+			return;
+		}
+		compactQueued.current = false;
+		void runCompact();
+	}, [session.isRunning, runCompact]);
+
 	const runFork = useCallback(async () => {
 		if (!canForkSession) {
 			session.appendEntry({
@@ -231,6 +258,7 @@ export function useLocalCommandActions(input: {
 				openSkills,
 				openThemePicker,
 				runCompact,
+				queueCompact,
 				runFork,
 				runUndo: onUndo,
 				clearConversation: onClearConversation,
@@ -252,6 +280,7 @@ export function useLocalCommandActions(input: {
 			openSkills,
 			openThemePicker,
 			runCompact,
+			queueCompact,
 			runFork,
 			session.isRunning,
 			slashCommandRegistry,
