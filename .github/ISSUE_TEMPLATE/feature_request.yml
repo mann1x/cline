@@ -9,6 +9,31 @@ body:
 
               If you are asking for something that would equally suit official Cline, it is worth [asking upstream](https://github.com/cline/cline/discussions/categories/feature-requests) too — they reach far more people than this fork does.
 
+              **Use this form for a change to existing behaviour as well as for something new.** "This works, but it should work differently" is a request, not a bug, and filing it here labels it `enhancement` instead of `bug`.
+
+    - type: input
+      id: version
+      attributes:
+          label: Build
+          description: The version shown in the VS Code extensions list, e.g. `4.100.73`. Leave blank if the request is not tied to a particular build.
+          placeholder: '4.100.73'
+      validations:
+          required: false
+
+    - type: textarea
+      id: model
+      attributes:
+          label: Model and provider
+          description: |
+              Only if the request is specific to a model or provider — a request about how a cloud model behaves is a different request from the same thing on a local one. Leave blank if it applies everywhere.
+          placeholder: |
+              Provider: Ollama Cloud
+              Model: GLM-5.3-Flash
+              Context: 1m
+          render: text
+      validations:
+          required: false
+
     - type: textarea
       id: problem
       attributes:
