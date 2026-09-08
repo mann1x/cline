@@ -211,6 +211,55 @@ export const NO_TOOL_CALL_NUDGE_MESSAGE =
  */
 
 /**
+ * The fixed opening of the nudge for a run that is thinking and not acting.
+ *
+ * A different failure from the two nudges above, and invisible to both. Those
+ * ask a model that went quiet whether it is finished; this one is for a model
+ * that never stops working and never calls anything -- it reasons at length,
+ * emits no call, is answered by whatever the host injects next, and reasons at
+ * length again. Measured on a run of the manic_miner harness: six consecutive
+ * turns and roughly 226,000 characters of reasoning that produced not one tool
+ * call, while `consecutiveNoToolCallNudges` sat at 1, because every turn in
+ * between was answered by a transaction message rather than by a nudge.
+ *
+ * It counts turns, not text. The same corpus says text cannot tell the two
+ * apart: across 106 blocks from one model, the longest (51,141 characters) and
+ * the most repetitive (57% of it in repeated lines) were both turns that did
+ * call a tool. Any threshold on length or repetition that caught the bad turns
+ * fired on at least a third of the good ones.
+ *
+ * It nudges and never ends the run. A false positive costs one message on a
+ * run that was working, which is recoverable; ending that run is not. The
+ * bound that keeps a nudge from making a run immortal is that this one is
+ * allowed once.
+ */
+export const NON_CONVERGENCE_NUDGE_PREFIX = "[SYSTEM] You have now taken ";
+
+export function buildNonConvergenceNudge(
+	turns: number,
+	reasoningChars: number,
+): string {
+	// Rounded to thousands, because the point is the order of magnitude and a
+	// figure like "226,431" invites the model to check it rather than act.
+	const thousands = Math.round(reasoningChars / 1000);
+	const spent =
+		thousands >= 1
+			? `about ${thousands.toLocaleString("en-US")},000 characters of reasoning`
+			: "a full turn of reasoning";
+	return (
+		NON_CONVERGENCE_NUDGE_PREFIX +
+		`${turns} turns in a row without calling a single tool, spending ${spent} ` +
+		"on them. Thinking further has not moved this task, and it will not: you " +
+		"have already reasoned past the point where more of it helps. Stop " +
+		"analysing and make one tool call now - the smallest one that makes any " +
+		"progress at all, even if you are not certain it is the right one, " +
+		"because a call you can check beats an analysis you cannot. If you " +
+		"genuinely cannot make one, say what is blocking you in a single " +
+		"sentence and stop."
+	);
+}
+
+/**
  * The fixed opening of the nudge for a tool call nothing could parse.
  *
  * Same argument as the prefix below: the message quotes the model, so it

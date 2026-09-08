@@ -664,6 +664,19 @@ export interface AgentRuntimeConfig {
 		 */
 		maxNoToolCallNudges?: number;
 		/**
+		 * How many consecutive turns may produce no tool call before the run is
+		 * nudged that thinking has stopped paying. Defaults to 3; zero disables
+		 * the nudge entirely.
+		 *
+		 * Distinct from `maxNoToolCallNudges`, which counts nudges sent and so
+		 * cannot see a run whose silent turns are answered by something else --
+		 * a completion-boundary message, a transaction result, a reminder. This
+		 * counts the turns themselves, resets only on a turn that calls a tool,
+		 * and is spent at most once per run. It never ends the run: a false
+		 * positive costs one message on a run that was working.
+		 */
+		noToolCallTurnStreakLimit?: number;
+		/**
 		 * How many consecutive turns cut off at the per-turn output cap are
 		 * retried before the run ends. Defaults to 2; zero restores the older
 		 * behaviour where a truncated turn ends the run.
