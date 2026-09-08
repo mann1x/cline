@@ -66,7 +66,15 @@ export function fromProtobufModelOverrides(overrides: ModelOverrides | undefined
 		...(overrides.maxTokens !== undefined ? { maxTokens: overrides.maxTokens } : {}),
 		...(overrides.contextWindow !== undefined ? { contextWindow: overrides.contextWindow } : {}),
 		...(overrides.maxInputTokens !== undefined ? { maxInputTokens: overrides.maxInputTokens } : {}),
-		...(overrides.capabilities.length > 0 ? { capabilities: [...overrides.capabilities] } : {}),
+		// Guarded like every other field, because not every caller hands this a
+		// message built by `ModelOverrides.create()`. The scoped tabs store the
+		// *domain* overrides they were committed with and read them back through
+		// here, so a saved override with no capabilities arrives as a plain
+		// object with the field absent — and `.length` on it threw
+		// `Cannot read properties of undefined`, which took the whole webview
+		// down: the Ollama panel's `useMemo` runs during render, so React
+		// unmounted the tree and the panel went blank.
+		...((overrides.capabilities?.length ?? 0) > 0 ? { capabilities: [...overrides.capabilities] } : {}),
 		...(overrides.supportsVision !== undefined ? { supportsVision: overrides.supportsVision } : {}),
 		...(overrides.supportsAttachments !== undefined ? { supportsAttachments: overrides.supportsAttachments } : {}),
 		...(overrides.supportsReasoning !== undefined ? { supportsReasoning: overrides.supportsReasoning } : {}),

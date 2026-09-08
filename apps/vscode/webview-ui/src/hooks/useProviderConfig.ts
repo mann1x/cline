@@ -178,10 +178,16 @@ export function useProviderConfig(requestedProviderId: ProviderId) {
 				// stored with it. Without this the panel saved Per-Turn Max
 				// Output Tokens and then showed the field empty, because the
 				// committed selection it renders from carried no overrides.
+				// The scope stores the *domain* overrides it was committed with,
+				// but this object is read back as a `ProviderConfigResponse` --
+				// panels run `fromProtobufModelOverrides` over its selection.
+				// Handing that a plain object left `capabilities` undefined and
+				// the read threw during render, blanking the whole webview.
+				const heldOverrides = held.selectedModelOverrides as ProviderModelOverrides | undefined
 				const selection = held.selectedModelId
 					? {
 							modelId: held.selectedModelId,
-							...(held.selectedModelOverrides ? { overrides: held.selectedModelOverrides } : {}),
+							...(heldOverrides ? { overrides: toProtobufProviderModelOverrides(heldOverrides) } : {}),
 						}
 					: undefined
 				return {

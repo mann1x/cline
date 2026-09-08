@@ -1,7 +1,9 @@
 import { StringRequest } from "@shared/proto/cline/common"
 import { ApiFormat, ModelOverrides, ProviderConfigResponse } from "@shared/proto/cline/models"
 import { act, renderHook, waitFor } from "@testing-library/react"
+import { createElement, type ReactNode } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import { ApiConfigurationScopeContext } from "@/components/settings/utils/ApiConfigurationScopeContext"
 import { ModelsServiceClient } from "@/services/grpc-client"
 import {
 	__resetProviderConfigEntries,
@@ -142,6 +144,45 @@ describe("useProviderConfig", () => {
 
 		expect(fromProtobufProviderModelOverrides(toProtobufProviderModelOverrides(overrides))).toEqual(overrides)
 		expect(toProtobufProviderModelOverrides({})).toEqual(ModelOverrides.create({}))
+	})
+
+	it("reads back overrides that carry no capabilities field at all", () => {
+		// Not every object that reaches this reader was built by
+		// `ModelOverrides.create()`. A scoped tab stores the domain overrides it
+		// was committed with, so `capabilities` is simply absent, and reading
+		// `.length` off it threw `Cannot read properties of undefined` from
+		// inside a render-time `useMemo` -- which unmounted the webview and left
+		// the panel blank with no message anywhere.
+		const stored = { maxTokens: 4_096 } as unknown as ModelOverrides
+
+		expect(() => fromProtobufProviderModelOverrides(stored)).not.toThrow()
+		expect(fromProtobufProviderModelOverrides(stored)).toEqual({ maxTokens: 4_096 })
+	})
+
+	it("gives a scoped tab's held selection a real override message", async () => {
+		const scope = {
+			save: vi.fn(),
+			ownsProviderSettings: true,
+			providerSettings: {
+				baseUrl: "http://127.0.0.1:11434",
+				selectedModelId: "qwen3-coder",
+				// What `scopedSnapshotPatches.modelSelection` stores: the domain
+				// overrides, with no proto defaults filled in.
+				selectedModelOverrides: { maxTokens: 4_096 },
+			},
+			writeProviderSettings: vi.fn(),
+			commitModelSelection: vi.fn(),
+		}
+		const wrapper = ({ children }: { children: ReactNode }) =>
+			createElement(ApiConfigurationScopeContext.Provider, { value: scope }, children)
+		vi.mocked(ModelsServiceClient.readProviderConfig).mockResolvedValue(config("ollama", "http://127.0.0.1:11434"))
+
+		const { result } = renderHook(() => useProviderConfig("ollama"), { wrapper })
+		await waitFor(() => expect(result.current.config).toBeDefined())
+
+		const overrides = result.current.config?.actSelection?.overrides
+		expect(overrides?.capabilities).toEqual([])
+		expect(fromProtobufProviderModelOverrides(overrides)).toEqual({ maxTokens: 4_096 })
 	})
 
 	it("sends an explicit empty override message so the host can clear stored overrides", async () => {
