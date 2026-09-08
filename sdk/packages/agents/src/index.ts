@@ -55,6 +55,8 @@ export {
 	createAgent,
 	createAgentRuntime,
 	DEFAULT_MAX_NO_TOOL_CALL_NUDGES,
+	DEFAULT_NO_TOOL_CALL_TURN_STREAK_LIMIT,
+	NON_CONVERGENCE_MIN_REASONING_CHARS,
 } from "./agent-runtime";
 export type {
 	ReasoningLoopGuardConfig,

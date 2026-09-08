@@ -36,6 +36,7 @@ import type {
 import {
 	announcedIntentWithoutActing,
 	buildAnnouncedIntentNudge,
+	buildNonConvergenceNudge,
 	buildUnparsedToolCallNudge,
 	captureAgentUnexpectedReasoningTokens,
 	captureSdkError,
@@ -257,6 +258,49 @@ const TOOL_CALL_PARSE_RETRY_BUDGET = 2;
  * sentence. The second nudge has never once changed an outcome.
  */
 export const DEFAULT_MAX_NO_TOOL_CALL_NUDGES = 1;
+
+/**
+ * Consecutive turns without a tool call before the run is told so.
+ *
+ * The counter above is spent by the *first* silent turn and reset by the first
+ * working one, which makes it blind to the run that alternates: think at
+ * length, call nothing, be answered by a transaction message or a reminder,
+ * think at length again. `consecutiveNoToolCallNudges` reads that as one
+ * silent turn repeatedly, because nothing between them was a nudge.
+ *
+ * Three, from the corpus this was measured on: 106 assistant turns across
+ * eight runs of one model, where a threshold of three fired exactly once, on
+ * the run that spent six turns and ~226,000 characters of reasoning producing
+ * nothing. Two would have fired twice; four also fires once. Three is the
+ * conservative end of the range that still catches the case.
+ *
+ * The sample is small and the bound is honest about it: zero false triggers in
+ * 105 turns puts the 95% ceiling near 3%, not at zero. That is affordable only
+ * because this nudges and never ends a run.
+ */
+export const DEFAULT_NO_TOOL_CALL_TURN_STREAK_LIMIT = 3;
+
+/**
+ * Reasoning a silent turn must carry to count toward the streak.
+ *
+ * Without this the guard fires on the opposite failure: a model that has
+ * finished, answers a completion boundary in one terse sentence, is asked
+ * again, and answers again. Three short replies are not a run that has stopped
+ * converging -- they are a run being nagged, and telling it to "stop analysing
+ * and make one tool call" is exactly wrong.
+ *
+ * Found by the test for it, not by inspection. On the measured corpus the
+ * separation is not close: the silent turns of the run that failed carried
+ * 26,000 to 41,000 characters of reasoning each, while every barren turn under
+ * 4,000 characters was a final answer (270, 420, 755, 800). Two thousand sits
+ * in the empty middle, and adding it removed five of the seven turn-pairs a
+ * threshold of two would have fired on while leaving the real one untouched.
+ *
+ * A turn below the floor resets the streak rather than being skipped. Both
+ * behave identically on the corpus, so the guard takes the one that fires
+ * less.
+ */
+export const NON_CONVERGENCE_MIN_REASONING_CHARS = 2000;
 
 /**
  * Terminal message when a context-window overflow cannot be recovered because
@@ -644,6 +688,20 @@ function textFromMessage(message: AgentMessage | undefined): string {
 		.join("");
 }
 
+/** How much reasoning a turn produced, for the streak the run is measured on. */
+function reasoningCharsInMessage(message: AgentMessage | undefined): number {
+	if (!message) {
+		return 0;
+	}
+	return message.content.reduce((total: number, part: AgentMessagePart) => {
+		if (part.type !== "reasoning") {
+			return total;
+		}
+		const text = (part as { text?: unknown }).text;
+		return total + (typeof text === "string" ? text.length : 0);
+	}, 0);
+}
+
 function textFromToolMessage(message: AgentMessage | undefined): string {
 	const result = message?.content.find(
 		(part): part is Extract<AgentMessagePart, { type: "tool-result" }> =>
@@ -739,6 +797,19 @@ export class AgentRuntime {
 	private imageRecoveryAttempted = false;
 	/** Consecutive turns nudged for producing no tool calls; reset by any turn that does. */
 	private consecutiveNoToolCallNudges = 0;
+	/**
+	 * Consecutive turns that produced no tool call, whatever answered them.
+	 *
+	 * Counted separately from the nudges above because the two ask different
+	 * questions: that one is "how many times have we asked", this one is "how
+	 * long has this run gone without doing anything". Reset at the same place,
+	 * by the same event -- a turn that calls tools.
+	 */
+	private consecutiveNoToolCallTurns = 0;
+	/** Reasoning characters accumulated over the current silent streak. */
+	private noToolCallStreakReasoningChars = 0;
+	/** Whether the run has spent its one non-convergence nudge. */
+	private nonConvergenceNudgeSpent = false;
 	/**
 	 * Whether the run has already spent its one nudge for a tool call the
 	 * provider could not read. Bounded for the reason every nudge here is: a
@@ -1013,6 +1084,24 @@ export class AgentRuntime {
 	/** Whether this host asks a silent turn to continue at all. */
 	private nudgesEnabled(): boolean {
 		return (this.config.completionPolicy?.maxNoToolCallNudges ?? 0) > 0;
+	}
+
+	/**
+	 * Whether the run has gone long enough without acting to be told so.
+	 *
+	 * Gated on `nudgesEnabled` like every other extension of the nudge policy:
+	 * a host that set the budget to zero has said a silent turn ends the run,
+	 * and this must not be a second door into the same room. Once per run, and
+	 * only while the run could still act on being told.
+	 */
+	private shouldNudgeNonConvergence(): boolean {
+		if (this.nonConvergenceNudgeSpent || !this.nudgesEnabled()) {
+			return false;
+		}
+		const limit =
+			this.config.completionPolicy?.noToolCallTurnStreakLimit ??
+			DEFAULT_NO_TOOL_CALL_TURN_STREAK_LIMIT;
+		return limit > 0 && this.consecutiveNoToolCallTurns >= limit;
 	}
 
 	/**
@@ -1437,6 +1526,23 @@ export class AgentRuntime {
 						iteration: this.state.iteration,
 						toolCallCount: 0,
 					});
+					// Counted here, before any handler claims the turn, because the
+					// streak this guards against is built out of turns that every one
+					// of them answers: a reminder, a steer, a nudge, a transaction
+					// result. Counting inside a branch would miss exactly the run
+					// that needs catching.
+					//
+					// Only turns that actually reasoned count. A silent turn that
+					// thought little is a model answering, however many times it is
+					// asked again, and the streak starts over on it.
+					const turnReasoningChars = reasoningCharsInMessage(message);
+					if (turnReasoningChars >= NON_CONVERGENCE_MIN_REASONING_CHARS) {
+						this.consecutiveNoToolCallTurns += 1;
+						this.noToolCallStreakReasoningChars += turnReasoningChars;
+					} else {
+						this.consecutiveNoToolCallTurns = 0;
+						this.noToolCallStreakReasoningChars = 0;
+					}
 					const completionReminderMessages =
 						this.getCompletionReminderMessages();
 					if (completionReminderMessages.length > 0) {
@@ -1503,6 +1609,22 @@ export class AgentRuntime {
 						);
 						continue;
 					}
+					// The run has thought for several turns and done nothing, and
+					// none of the handlers above saw it: each one looks at the last
+					// turn, and this failure is only visible across turns. Nudged,
+					// never ended -- a false positive here costs one message on a
+					// run that was working, and the streak is not proof of anything
+					// beyond "no work has come out of this for a while".
+					if (this.shouldNudgeNonConvergence()) {
+						this.nonConvergenceNudgeSpent = true;
+						await this.addUserReminderMessage(
+							buildNonConvergenceNudge(
+								this.consecutiveNoToolCallTurns,
+								this.noToolCallStreakReasoningChars,
+							),
+						);
+						continue;
+					}
 					// Last, and only once nothing else wants the turn: everything above
 					// asks the model to keep working, while this asks whether the work
 					// it has already done is good, and that question is only worth the
@@ -1533,6 +1655,8 @@ export class AgentRuntime {
 				// A turn that calls tools is a turn that is working, so the
 				// consecutive-silence budget starts over.
 				this.consecutiveNoToolCallNudges = 0;
+				this.consecutiveNoToolCallTurns = 0;
+				this.noToolCallStreakReasoningChars = 0;
 				// Same for truncation: a turn that reached its tool calls did not
 				// run out of room, so a later one gets the full allowance again.
 				this.consecutiveMaxTokensRetries = 0;
