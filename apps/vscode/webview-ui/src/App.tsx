@@ -3,6 +3,7 @@ import { useCallback, useEffect } from "react"
 import AccountView from "./components/account/AccountView"
 import ChatView from "./components/chat/ChatView"
 import { RootErrorBoundary } from "./components/common/RootErrorBoundary"
+import { ViewErrorBoundary } from "./components/common/ViewErrorBoundary"
 import { WaitingForCline } from "./components/common/WaitingForCline"
 import HistoryView from "./components/history/HistoryView"
 import MarketplaceView from "./components/marketplace/MarketplaceView"
@@ -84,19 +85,47 @@ const AppContent = () => {
 
 	return (
 		<div className="flex h-screen w-full flex-col">
-			{showSettings && <SettingsView onDone={hideSettings} targetSection={settingsTargetSection} />}
-			{showHistory && <HistoryView onDone={hideHistory} />}
-			{showMarketplace && <MarketplaceView initialType={mcpTab ? "mcp" : undefined} onDone={closeMarketplaceView} />}
-			{showMcp && <McpView initialTab={mcpTab} onDone={closeMcpView} />}
-			{showAccount && (
-				<AccountView
-					activeOrganization={activeOrganization}
-					clineUser={clineUser}
-					onDone={hideAccount}
-					organizations={organizations}
-				/>
+			{/*
+			 * Each overlay view carries its own boundary. They sit above a
+			 * ChatView that is never unmounted, so a view that throws during
+			 * render stops at itself instead of taking the session's panel
+			 * down with it -- which is what a provider settings panel did.
+			 */}
+			{showSettings && (
+				<ViewErrorBoundary onDone={hideSettings} viewName="Settings">
+					<SettingsView onDone={hideSettings} targetSection={settingsTargetSection} />
+				</ViewErrorBoundary>
 			)}
-			{showWorktrees && <WorktreesView onDone={hideWorktrees} />}
+			{showHistory && (
+				<ViewErrorBoundary onDone={hideHistory} viewName="History">
+					<HistoryView onDone={hideHistory} />
+				</ViewErrorBoundary>
+			)}
+			{showMarketplace && (
+				<ViewErrorBoundary onDone={closeMarketplaceView} viewName="Marketplace">
+					<MarketplaceView initialType={mcpTab ? "mcp" : undefined} onDone={closeMarketplaceView} />
+				</ViewErrorBoundary>
+			)}
+			{showMcp && (
+				<ViewErrorBoundary onDone={closeMcpView} viewName="MCP servers">
+					<McpView initialTab={mcpTab} onDone={closeMcpView} />
+				</ViewErrorBoundary>
+			)}
+			{showAccount && (
+				<ViewErrorBoundary onDone={hideAccount} viewName="Account">
+					<AccountView
+						activeOrganization={activeOrganization}
+						clineUser={clineUser}
+						onDone={hideAccount}
+						organizations={organizations}
+					/>
+				</ViewErrorBoundary>
+			)}
+			{showWorktrees && (
+				<ViewErrorBoundary onDone={hideWorktrees} viewName="Worktrees">
+					<WorktreesView onDone={hideWorktrees} />
+				</ViewErrorBoundary>
+			)}
 			{/* Do not conditionally load ChatView, it's expensive and there's state we don't want to lose (user input, disableInput, askResponse promise, etc.) */}
 			<ChatView
 				hideAnnouncement={hideAnnouncement}
