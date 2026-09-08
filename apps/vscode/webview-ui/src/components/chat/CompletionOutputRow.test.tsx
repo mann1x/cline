@@ -66,6 +66,30 @@ describe("CompletionOutputRow", () => {
 
 		await waitFor(() => expect(writeText).toHaveBeenCalledWith("All done!"))
 	})
+
+	// The question the box is read to answer, once the run is over.
+	it("says how long the run took, beside the label", () => {
+		render(
+			<CompletionOutputRow
+				duration="28m"
+				handleQuoteClick={vi.fn()}
+				quoteButtonState={hiddenQuoteButton}
+				text="All done!"
+			/>,
+		)
+
+		expect(screen.getByText("Completed")).toBeInTheDocument()
+		expect(screen.getByText("in 28m")).toBeInTheDocument()
+	})
+
+	// A run from before this shipped, or one the host could not time, must not
+	// leave a dangling "in" behind the label.
+	it("says nothing about time when there is none to report", () => {
+		render(<CompletionOutputRow handleQuoteClick={vi.fn()} quoteButtonState={hiddenQuoteButton} text="All done!" />)
+
+		expect(screen.getByText("Completed")).toBeInTheDocument()
+		expect(screen.queryByText(/^in /)).not.toBeInTheDocument()
+	})
 })
 
 describe("CompletionOutputRow View Changes", () => {

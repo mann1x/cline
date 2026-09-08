@@ -238,6 +238,11 @@ message ClineMessage {
   // epoch = conversation/replica fence (older epoch is dropped by the webview)
   int64 seq = 24;
   int64 epoch = 25;
+
+  // How long the run that produced this message took, in milliseconds. Set
+  // only on the completion row, so the green box can say what the work cost
+  // without editing the model's own sentence to say it.
+  int64 run_duration_ms = 26;
 }
 
 message ShowWebviewEvent {
