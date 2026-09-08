@@ -252,6 +252,14 @@ export interface ClineMessage {
 	conversationHistoryIndex?: number
 	conversationHistoryDeletedRange?: [number, number] // for when conversation history is truncated for API requests
 	modelInfo?: ClineMessageModelInfo
+	/**
+	 * How long the run that produced this message took, in milliseconds.
+	 *
+	 * Set only on the completion row. The duration is chrome, not transcript:
+	 * putting it in the model's own sentence would send our annotation back to
+	 * it on the next turn as something it had written.
+	 */
+	runDurationMs?: number
 }
 
 export type ClineAsk =

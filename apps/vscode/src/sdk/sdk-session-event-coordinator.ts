@@ -104,15 +104,31 @@ export class SdkSessionEventCoordinator {
 		// of work does.
 		if ((result.sessionEnded || result.turnComplete) && activeSession?.runStartedAt) {
 			const elapsedMs = Date.now() - activeSession.runStartedAt
-			const spent = formatRequestDuration(elapsedMs)
-			if (spent) {
-				result.messages.push({
-					ts: Date.now(),
-					type: "say",
-					say: "info",
-					text: `(${spent})`,
-					partial: false,
-				})
+			// When the turn ended on a completion, the green box says it. That is
+			// where the question is actually asked -- a user reading "Completed"
+			// wants to know what it cost -- and a label on the box cannot be
+			// missed the way a grey row after it can.
+			//
+			// The completion row is pushed by the translator in this same batch
+			// when the turn ended with text. A turn that completed through the
+			// completion tool emitted its row earlier, and there is nothing here
+			// to stamp; that one still gets the row below.
+			const completionRow = [...result.messages]
+				.reverse()
+				.find((m) => m.type === "say" && (m.say === "completion_result" || m.say === "plan_completion_result"))
+			if (completionRow) {
+				completionRow.runDurationMs = elapsedMs
+			} else {
+				const spent = formatRequestDuration(elapsedMs)
+				if (spent) {
+					result.messages.push({
+						ts: Date.now(),
+						type: "say",
+						say: "info",
+						text: `(${spent})`,
+						partial: false,
+					})
+				}
 			}
 			activeSession.runStartedAt = undefined
 		}

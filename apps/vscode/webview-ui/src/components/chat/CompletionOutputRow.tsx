@@ -22,6 +22,13 @@ interface CompletionOutputRowProps {
 	 * simply renders no button.
 	 */
 	showViewChanges?: boolean
+	/**
+	 * How long the run took, already formatted (`45s`, `28m`, `1h2m`).
+	 *
+	 * Rendered beside the "Completed" label rather than inside the response,
+	 * because the response is the model's text and this is ours.
+	 */
+	duration?: string
 }
 
 /**
@@ -32,7 +39,7 @@ interface CompletionOutputRowProps {
  * rather than a definitive task completion.
  */
 export const CompletionOutputRow = memo(
-	({ text, quoteButtonState, handleQuoteClick, showViewChanges }: CompletionOutputRowProps) => {
+	({ text, quoteButtonState, handleQuoteClick, showViewChanges, duration }: CompletionOutputRowProps) => {
 		const [viewChangesPending, setViewChangesPending] = useState(false)
 		// undefined = still checking; the button stays hidden until the host
 		// confirms the latest run actually changed files. A count of 0 also
@@ -70,7 +77,12 @@ export const CompletionOutputRow = memo(
 		return (
 			<div className="rounded-sm border border-success/20 overflow-visible bg-success/10">
 				<div className="flex items-center justify-between gap-2 pl-2 pr-1 pt-1 -mb-1.5">
-					<span className="text-xs font-medium uppercase tracking-wider text-success/70">Completed</span>
+					<span className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-success/70">
+						{/* Kept as its own element so the label stays addressable
+						    whether or not a duration sits beside it. */}
+						<span>Completed</span>
+						{duration && <span className="font-normal normal-case tracking-normal opacity-80">in {duration}</span>}
+					</span>
 					<CopyButton ariaLabel="Copy response" className="text-success/70" textToCopy={text} />
 				</div>
 				<div className="completion-output-content relative p-2 w-full [&_hr]:opacity-20 [&_p:last-child]:mb-0 rounded-sm">

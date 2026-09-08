@@ -10,6 +10,7 @@ import {
 	COMPLETION_RESULT_CHANGES_FLAG,
 } from "@shared/ExtensionMessage"
 import { BooleanRequest, StringRequest } from "@shared/proto/cline/common"
+import { formatRunDuration } from "@shared/run-duration"
 import { Mode } from "@shared/storage/types"
 import deepEqual from "fast-deep-equal"
 import {
@@ -970,6 +971,7 @@ export const ChatRowContent = memo(
 
 						return (
 							<CompletionOutputRow
+								duration={message.runDurationMs ? formatRunDuration(message.runDurationMs) : undefined}
 								handleQuoteClick={handleQuoteClick}
 								quoteButtonState={quoteButtonState}
 								showViewChanges={isLast && message.partial !== true && enableCheckpointsSetting}
@@ -1083,6 +1085,7 @@ export const ChatRowContent = memo(
 							const text = hasChanges ? message.text.slice(0, -COMPLETION_RESULT_CHANGES_FLAG.length) : message.text
 							return (
 								<CompletionOutputRow
+									duration={message.runDurationMs ? formatRunDuration(message.runDurationMs) : undefined}
 									handleQuoteClick={handleQuoteClick}
 									quoteButtonState={quoteButtonState}
 									text={text || ""}

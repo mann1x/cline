@@ -220,6 +220,8 @@ export function convertClineMessageToProto(message: AppClineMessage): ProtoCline
 		askNewTask: undefined,
 		apiReqInfo: undefined,
 		modelInfo: message.modelInfo ?? undefined,
+		// 0 means "not timed", which is every row but the completion one.
+		runDurationMs: message.runDurationMs ?? 0,
 	}
 
 	return protoMessage
@@ -294,6 +296,12 @@ export function convertProtoToClineMessage(protoMessage: ProtoClineMessage): App
 	}
 	if (protoMessage.epoch && protoMessage.epoch !== 0) {
 		message.epoch = protoMessage.epoch
+	}
+
+	// Same convention as the fields above: 0 is the proto default for a row
+	// that was never timed, and it must not read back as a zero-length run.
+	if (protoMessage.runDurationMs && protoMessage.runDurationMs !== 0) {
+		message.runDurationMs = protoMessage.runDurationMs
 	}
 
 	return message
