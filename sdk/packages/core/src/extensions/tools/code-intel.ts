@@ -155,6 +155,14 @@ interface CodeIntelInput {
 	operation?: unknown;
 	path?: unknown;
 	symbol?: unknown;
+	/**
+	 * Accepted as a spelling of `symbol`. `search_codebase` sits next to this
+	 * tool and takes `queries`, so a model reaching for a name-search here
+	 * reasonably guesses `query` -- observed doing exactly that, which cost a
+	 * turn and a fall back to a text search for a question the language server
+	 * had already been asked.
+	 */
+	query?: unknown;
 	line?: unknown;
 	character?: unknown;
 }
@@ -208,7 +216,7 @@ export function parseCodeIntelRequest(
 	}
 
 	const filePath = readString(input?.path);
-	const symbol = readString(input?.symbol);
+	const symbol = readString(input?.symbol) ?? readString(input?.query);
 	const line = readIndex(input?.line);
 	const character = readIndex(input?.character);
 
@@ -296,7 +304,11 @@ export function createCodeIntelTool(options: CodeIntelToolOptions): AgentTool {
 			try {
 				if (request.operation === "workspace_symbols") {
 					if (!request.symbol) {
-						return "`workspace_symbols` needs a `symbol` to search for.";
+						// Name every spelling that works. The old message named
+						// only `symbol`, so a call that sent something else was
+						// told what was missing but not that its own field had
+						// been ignored.
+						return "`workspace_symbols` needs the name to search for, as `symbol` (or `query`).";
 					}
 					return renderSymbols(
 						await provider.workspaceSymbols(request.symbol),
