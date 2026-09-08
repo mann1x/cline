@@ -94,6 +94,21 @@ describe("parseCodeIntelRequest", () => {
 		expect(
 			parseCodeIntelRequest({ operation: "workspace_symbols", path: "Foo" }),
 		).toMatchObject({ symbol: "Foo" });
+		// `search_codebase` sits beside this tool and takes `queries`, and a
+		// model searching for a name here sent `query` -- which was silently
+		// ignored, so it was told a `symbol` was missing while its own value
+		// sat unread in the call.
+		expect(
+			parseCodeIntelRequest({ operation: "workspace_symbols", query: "Foo" }),
+		).toMatchObject({ symbol: "Foo" });
+		// An explicit `symbol` still wins over the alias.
+		expect(
+			parseCodeIntelRequest({
+				operation: "workspace_symbols",
+				symbol: "Foo",
+				query: "Bar",
+			}),
+		).toMatchObject({ symbol: "Foo" });
 	});
 });
 

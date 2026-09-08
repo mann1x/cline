@@ -10,6 +10,7 @@ export default defineConfig({
 			"src/sdk/**/*.test.ts",
 			"src/hosts/vscode/VscodeEditPreview.test.ts",
 			"src/hosts/vscode/terminal/terminal-output-fallback.test.ts",
+			"src/hosts/vscode/terminal/ansiUtils.test.ts",
 			"src/shared/vsCodeSelectorUtils.test.ts",
 			"src/shared/services/log-file-sink.test.ts",
 			"src/shared/api-config-snapshot.test.ts",
