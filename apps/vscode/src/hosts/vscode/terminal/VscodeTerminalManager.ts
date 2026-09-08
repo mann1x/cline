@@ -386,13 +386,13 @@ export class VscodeTerminalManager {
 						cwdChangeResult = await this.runCwdChangeCommand(availableTerminal, cwd)
 					} catch (error) {
 						// The user's command has not started. The failed setup command may
-						// still change this terminal later, so evict it and continue with a
-						// fresh terminal rooted at the requested cwd.
+						// still change this terminal later, so discard it and continue with
+						// a fresh terminal rooted at the requested cwd.
 						Logger.warn(
 							`[TerminalManager] Failed to prepare terminal ${availableTerminal.id} for "${cwd}"; creating a new terminal`,
 							error,
 						)
-						this.evictTerminal(availableTerminal)
+						this.discardTerminal(availableTerminal)
 					}
 
 					// Add a small delay to ensure terminal is ready after cd
@@ -423,11 +423,12 @@ export class VscodeTerminalManager {
 
 					// Never run a command in a terminal whose working directory could
 					// not be confirmed. The setup command may still take effect later,
-					// so evict this terminal and create a fresh one at the requested cwd.
+					// so discard this terminal and create a fresh one at the requested
+					// cwd rather than leaving it open for nobody.
 					Logger.warn(
 						`[TerminalManager] Could not confirm terminal ${availableTerminal.id} changed to "${cwd}"; creating a new terminal`,
 					)
-					this.evictTerminal(availableTerminal)
+					this.discardTerminal(availableTerminal)
 				} finally {
 					availableTerminal.pendingCwdChange = undefined
 					availableTerminal.cwdResolved = undefined
@@ -497,5 +498,31 @@ export class VscodeTerminalManager {
 		this.terminalIds.delete(terminalInfo.id)
 		this.processes.delete(terminalInfo.id)
 		TerminalRegistry.removeTerminal(terminalInfo.id)
+	}
+
+	/**
+	 * Abandon a terminal that could not be prepared for a command, and close it.
+	 *
+	 * Eviction alone only stops Cline tracking it. The window stays open with
+	 * nothing able to reuse it -- it is out of the registry -- and nothing that
+	 * will ever close it. That is invisible when the cwd can be confirmed,
+	 * because preparation succeeds and the terminal is reused; where a shell has
+	 * no integration `isCwdMatchingExpected` can never return true, so
+	 * preparation fails every single time and the session opens one terminal per
+	 * command and leaks all of them (mann1x/cline#56).
+	 *
+	 * Disposal goes through the registry's existing cleanup queue rather than
+	 * calling `dispose()` here: it runs at the next acquisition boundary, where
+	 * the close listeners it can trigger cannot re-enter the acquisition already
+	 * in progress. It also leaves the terminal readable until the next command
+	 * actually needs one.
+	 *
+	 * Only for terminals that received nothing but Cline's own `cd`. A terminal
+	 * running a command Cline no longer observes is left alone by the caller
+	 * that evicts it, since it may be a user's session.
+	 */
+	private discardTerminal(terminalInfo: TerminalInfo): void {
+		this.evictTerminal(terminalInfo)
+		TerminalRegistry.queueTerminalForCleanup(terminalInfo)
 	}
 }

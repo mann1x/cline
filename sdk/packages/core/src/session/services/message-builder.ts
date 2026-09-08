@@ -9,6 +9,9 @@
  * Per-instance caches make this host state.
  */
 
+import { appendFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
 	type ContentBlock,
 	createMediaBudgetState,
@@ -24,6 +27,7 @@ import {
 	type ToolResultContent,
 	validateAndReserveImageMedia,
 } from "@cline/shared";
+import { readOverlapUnchanged } from "./read-overlap";
 
 // 8k held one search result comfortably and cut a real file read in half.
 // Reads are the tool whose output the model is asked to reason about line by
@@ -40,9 +44,66 @@ export const DEFAULT_MAX_FILE_CONTENT_CHARS = 50_000;
 export const DEFAULT_MAX_TOTAL_TEXT_BYTES = 6_000_000;
 export const DEFAULT_MAX_ASSISTANT_TEXT_CHARS = 200_000;
 export const DEFAULT_MAX_ASSISTANT_TOOL_MARKUP_CHARS = 12_000;
-// Batch stale-read rewrites to avoid breaking provider prefix caches on every re-read.
-// 64KB is roughly 8 provider-capped read results; set to 0 for eager rewriting.
+// Batch stale-read rewrites to avoid breaking provider prefix caches on every
+// re-read. Set to 0 for eager rewriting.
+//
+// This fixed value is now only the fallback for an unknown context window;
+// production scales it — see `resolveMinOutdatedRewriteBytes`. A static 64KB
+// was the whole bug. Measured on a live 110k-token session: the builder
+// correctly identified two superseded reads with 13,801 bytes to reclaim, and
+// declined to act because 13,801 < 65,536. Nothing was ever reclaimed, the
+// transcript kept growing, and the run died on the max-output-token error that
+// context growth produces.
 export const DEFAULT_MIN_OUTDATED_REWRITE_BYTES = 65_536;
+/**
+ * Bytes of transcript text one token stands for, near enough for a threshold.
+ * Deliberately crude: this decides whether a cleanup is worth a cache break,
+ * not whether a request fits.
+ */
+const APPROX_BYTES_PER_TOKEN = 4;
+/**
+ * Share of the context window that must be reclaimable before stale reads are
+ * rewritten.
+ *
+ * A rewrite invalidates the provider's prefix cache from that point onward, so
+ * it has to buy back enough to be worth the break. Expressing that as a share
+ * of the window is the only way it can be right at both ends of the range:
+ * 64KB is a rounding error in a 1M-token context and more than a 32k context
+ * can hold at all.
+ */
+const OUTDATED_REWRITE_CONTEXT_SHARE = 0.02;
+/** Never churn the prefix cache for less than this. */
+const MIN_OUTDATED_REWRITE_FLOOR_BYTES = 4_096;
+/** Never let stale content grow past this, however large the window. */
+const MIN_OUTDATED_REWRITE_CEILING_BYTES = 65_536;
+
+/**
+ * Scale the stale-read rewrite threshold to the model's context window.
+ *
+ * Falls back to the fixed default when the window is unknown, so a caller that
+ * cannot say keeps the previous behaviour rather than guessing.
+ */
+export function resolveMinOutdatedRewriteBytes(
+	contextWindowTokens: number | undefined,
+): number {
+	if (
+		typeof contextWindowTokens !== "number" ||
+		!Number.isFinite(contextWindowTokens) ||
+		contextWindowTokens <= 0
+	) {
+		return DEFAULT_MIN_OUTDATED_REWRITE_BYTES;
+	}
+	const scaled =
+		contextWindowTokens *
+		APPROX_BYTES_PER_TOKEN *
+		OUTDATED_REWRITE_CONTEXT_SHARE;
+	return Math.round(
+		Math.min(
+			MIN_OUTDATED_REWRITE_CEILING_BYTES,
+			Math.max(MIN_OUTDATED_REWRITE_FLOOR_BYTES, scaled),
+		),
+	);
+}
 const MIN_TOTAL_BUDGET_TOOL_RESULT_BYTES = 2_000;
 const MIN_TOTAL_BUDGET_ASSISTANT_TEXT_BYTES = 40_000;
 const REPEATED_TOOL_CALL_MARKUP_THRESHOLD = 8;
@@ -52,7 +113,41 @@ export const MESSAGE_BUILDER_LIMIT_ENV = {
 	minOutdatedRewriteBytes: "CLINE_MESSAGE_BUILDER_MIN_OUTDATED_REWRITE_BYTES",
 } as const;
 const READ_TOOL_NAMES = new Set(["read", "read_files"]);
+
+/**
+ * Append one line per API build to `<tmpdir>/cline-message-builder.jsonl`.
+ *
+ * Measured on a live session: twelve full copies of one file, 82% of a 128k
+ * context, and not a single stale-read placeholder — while every reconstruction
+ * of that session in a test collapses them correctly. Silence is ambiguous
+ * here; this makes the difference visible from the running extension.
+ *
+ * Best-effort and never throws: a diagnostic about message building must not
+ * be able to break message building.
+ */
+function appendMessageBuilderTrace(entry: Record<string, unknown>): void {
+	try {
+		appendFileSync(
+			join(tmpdir(), "cline-message-builder.jsonl"),
+			`${JSON.stringify({ at: new Date().toISOString(), ...entry })}\n`,
+			"utf8",
+		);
+	} catch {
+		// ignored
+	}
+}
 const OUTDATED_FILE_CONTENT = "[outdated - see the latest file content]";
+/**
+ * The placeholder for a read that is *duplicated*, not superseded.
+ *
+ * A later read fully contained in an earlier one saw content the transcript
+ * already holds. Telling the model that copy is "outdated - see the latest"
+ * would be false in a way it acts on: its newest copy is not stale, and being
+ * told to look for a newer one sends it to re-read a range it just read. The
+ * placeholder has to point backwards instead.
+ */
+const DUPLICATE_FILE_CONTENT =
+	"[duplicate - this range was already read earlier in this conversation; that copy is still current]";
 const MISSING_TOOL_RESULT_TEXT =
 	"Tool execution was interrupted before a result was produced.";
 // A middle-truncation marker has a second job beyond bookkeeping: it has to
@@ -88,6 +183,34 @@ interface ReadLocator {
 	endLine: number | null;
 }
 
+/** One read of one path, positioned in the transcript. */
+interface IndexedRead {
+	order: number;
+	toolUseId: string;
+	startLine: number | null;
+	endLine: number | null;
+	/**
+	 * The rendered text this read produced, when it could be recovered.
+	 *
+	 * Held for the equality witness: deciding whether a contained read is a
+	 * duplicate means comparing what the two reads actually saw. The string is
+	 * the same object the transcript already holds, so this reference costs
+	 * nothing beyond the pointer.
+	 */
+	text: string | null;
+}
+
+/**
+ * Separates a path from the range read out of it.
+ *
+ * A colon cannot do this job: these paths are frequently Windows paths, so
+ * `C:\src\app.ts` already contains one and `path:29-136` is ambiguous about
+ * where the path stops. A ranged key is the whole-file key plus this suffix,
+ * which is what makes "is this a range of that file" a prefix test rather than
+ * a parse.
+ */
+const READ_LOCATOR_RANGE_SEPARATOR = "\u0000#";
+
 interface TruncationCandidate {
 	byteLength: number;
 	minBytes: number;
@@ -104,6 +227,11 @@ export interface MessageBuilderOptions {
 	maxAssistantTextChars?: number;
 	maxAssistantToolMarkupChars?: number;
 	minOutdatedRewriteBytes?: number;
+	/**
+	 * The model's context window, in tokens. Scales the stale-read rewrite
+	 * threshold; ignored when `minOutdatedRewriteBytes` is given explicitly.
+	 */
+	contextWindowTokens?: number;
 }
 
 export function getMessageBuilderOptionsFromEnv(
@@ -135,11 +263,11 @@ export class MessageBuilder {
 		string,
 		ReadLocator[]
 	>();
-	private readonly latestReadToolUseByLocatorCache = new Map<string, string>();
-	private readonly latestFullContentOwnerByPathCache = new Map<
-		string,
-		string
-	>();
+	// Every read of a path, in transcript order. Staleness is a question about
+	// two reads — which came later, and does the later one contain the earlier
+	// — so neither half can be a "latest wins" map keyed by locator.
+	private readonly readsByPathCache = new Map<string, IndexedRead[]>();
+	private readOrderCounter = 0;
 	private readResultLocatorCache = new WeakMap<object, ReadLocator[]>();
 	private readonly maxToolResultChars: number;
 	private readonly maxFileContentChars: number;
@@ -151,6 +279,8 @@ export class MessageBuilder {
 	// Sticky rewrite decisions. Kept across resetIndexes because production
 	// rebuilds fresh Message objects; entries are revalidated/pruned per build.
 	private readonly committedOutdatedRewrites = new Map<string, Set<string>>();
+	// Keys classified as duplicates rather than superseded, for this build.
+	private readonly duplicateReadKeys = new Set<string>();
 
 	constructor(options: MessageBuilderOptions = {}) {
 		this.maxToolResultChars = normalizePositiveLimit(
@@ -174,15 +304,18 @@ export class MessageBuilder {
 			options.maxAssistantToolMarkupChars,
 			DEFAULT_MAX_ASSISTANT_TOOL_MARKUP_CHARS,
 		);
+		// An explicit value still wins — the env var is the rollback lever, and a
+		// host that names a number meant it. Only the fallback is scaled.
 		this.minOutdatedRewriteBytes = normalizeNonNegativeLimit(
 			options.minOutdatedRewriteBytes,
-			DEFAULT_MIN_OUTDATED_REWRITE_BYTES,
+			resolveMinOutdatedRewriteBytes(options.contextWindowTokens),
 		);
 	}
 
 	resetConversationState(): void {
 		this.resetIndexes();
 		this.committedOutdatedRewrites.clear();
+		this.duplicateReadKeys.clear();
 	}
 
 	buildForApi(messages: Message[]): Message[] {
@@ -276,11 +409,21 @@ export class MessageBuilder {
 			const committed = this.committedOutdatedRewrites.get(block.tool_use_id);
 			if (committed && committed.size > 0) {
 				const locators = this.getReadLocators(block);
-				const outdated = locators.filter(
-					(locator) =>
-						committed.has(this.toReadLocatorKey(locator)) &&
-						this.isOutdatedReadLocator(locator, block.tool_use_id),
-				);
+				// Re-validated against both classifications. Checking only
+				// `isOutdatedReadLocator` here silently discards every committed
+				// duplicate — a duplicate is by definition *not* superseded, so
+				// the guard that protects against a stale commit also threw away
+				// the entire reverse case.
+				const outdated = locators.filter((locator) => {
+					const key = this.toReadLocatorKey(locator);
+					if (!committed.has(key)) {
+						return false;
+					}
+					return (
+						this.duplicateReadKeys.has(key) ||
+						this.isOutdatedReadLocator(locator, block.tool_use_id)
+					);
+				});
 				if (outdated.length > 0) {
 					nextContent = this.replaceOutdatedReadContent(nextContent, outdated);
 				}
@@ -315,10 +458,10 @@ export class MessageBuilder {
 			for (let j = 0; j < message.content.length; j++) {
 				const block = message.content[j];
 				if (block.type === "file") {
-					this.latestFullContentOwnerByPathCache.set(
-						block.path,
-						`file:${i}:${j}`,
-					);
+					// An attached file is whole-file content, and its own owner:
+					// no tool_use_id can collide with this synthetic one, so it
+					// supersedes earlier reads and is never superseded by itself.
+					this.noteIndexedRead(block.path, `file:${i}:${j}`, null, null);
 				} else if (block.type === "tool_use") {
 					const normalizedName = block.name.toLowerCase();
 					this.toolNameByIdCache.set(block.id, normalizedName);
@@ -333,18 +476,15 @@ export class MessageBuilder {
 					if (!this.isReadTool(toolName) || block.is_error === true) {
 						continue;
 					}
-					const locators = this.getReadLocators(block);
-					for (const locator of locators) {
-						this.latestReadToolUseByLocatorCache.set(
-							this.toReadLocatorKey(locator),
+					const textByKey = this.extractReadTextByLocator(block.content);
+					for (const locator of this.getReadLocators(block)) {
+						this.noteIndexedRead(
+							locator.path,
 							block.tool_use_id,
+							locator.startLine,
+							locator.endLine,
+							textByKey.get(this.toReadLocatorKey(locator)) ?? null,
 						);
-						if (this.isFullFileRead(locator)) {
-							this.latestFullContentOwnerByPathCache.set(
-								locator.path,
-								block.tool_use_id,
-							);
-						}
 					}
 				}
 			}
@@ -359,6 +499,20 @@ export class MessageBuilder {
 		const pending = new Map<string, Set<string>>();
 		const seenToolUseIds = new Set<string>();
 		let pendingBytes = 0;
+		// Diagnostic counters. A live session sent twelve full copies of one
+		// file — 82% of a 128k context — while this rewrite produced not a
+		// single placeholder, and every reconstruction of that session in a
+		// test collapses it correctly. The difference has to be observable
+		// from the running extension, so each decision here is recorded.
+		const seen = {
+			toolResults: 0,
+			readResults: 0,
+			locators: 0,
+			outdated: 0,
+			duplicates: 0,
+			otherToolNames: new Set<string>(),
+			keys: [] as string[],
+		};
 
 		for (const message of messages) {
 			if (!Array.isArray(message.content)) {
@@ -368,19 +522,41 @@ export class MessageBuilder {
 				if (block.type !== "tool_result" || block.is_error === true) {
 					continue;
 				}
+				seen.toolResults += 1;
 				const toolName = this.resolveToolName(block);
 				if (!this.isReadTool(toolName)) {
+					seen.otherToolNames.add(toolName ?? "<unresolved>");
 					continue;
 				}
+				seen.readResults += 1;
 				seenToolUseIds.add(block.tool_use_id);
 				const committed = this.committedOutdatedRewrites.get(block.tool_use_id);
 				const newKeys = new Set<string>();
 				const validKeys = new Set<string>();
 				for (const locator of this.getReadLocators(block)) {
 					const key = this.toReadLocatorKey(locator);
-					if (!this.isOutdatedReadLocator(locator, block.tool_use_id)) {
-						continue;
+					seen.locators += 1;
+					if (seen.keys.length < 20) {
+						seen.keys.push(key);
 					}
+					// Superseded is checked first: a read can be both contained in an
+					// older one and replaced by a newer one, and "outdated" is the
+					// stronger statement — it is the one the model must act on.
+					const outdated = this.isOutdatedReadLocator(
+						locator,
+						block.tool_use_id,
+					);
+					if (!outdated) {
+						if (this.isDuplicateReadLocator(locator, block.tool_use_id)) {
+							this.duplicateReadKeys.add(key);
+							seen.duplicates += 1;
+						} else {
+							continue;
+						}
+					} else {
+						this.duplicateReadKeys.delete(key);
+					}
+					seen.outdated += 1;
 					validKeys.add(key);
 					if (!committed?.has(key)) {
 						newKeys.add(key);
@@ -423,7 +599,26 @@ export class MessageBuilder {
 			}
 		}
 
-		if (pending.size === 0 || pendingBytes < this.minOutdatedRewriteBytes) {
+		const committing =
+			pending.size > 0 && pendingBytes >= this.minOutdatedRewriteBytes;
+		appendMessageBuilderTrace({
+			toolResults: seen.toolResults,
+			readResults: seen.readResults,
+			// Non-read tool results, by resolved name. If `read_files` shows up
+			// here, the name never reached `READ_TOOL_NAMES` and nothing else
+			// below can fire.
+			otherTools: [...seen.otherToolNames].slice(0, 8),
+			locators: seen.locators,
+			outdated: seen.outdated,
+			duplicates: seen.duplicates,
+			keys: seen.keys,
+			pendingBlocks: pending.size,
+			pendingBytes,
+			threshold: this.minOutdatedRewriteBytes,
+			committing,
+			alreadyCommitted: this.committedOutdatedRewrites.size,
+		});
+		if (!committing) {
 			return;
 		}
 
@@ -737,8 +932,8 @@ export class MessageBuilder {
 		this.indexedTailRef = undefined;
 		this.toolNameByIdCache.clear();
 		this.readLocatorsByToolUseIdCache.clear();
-		this.latestReadToolUseByLocatorCache.clear();
-		this.latestFullContentOwnerByPathCache.clear();
+		this.readsByPathCache.clear();
+		this.readOrderCounter = 0;
 		this.readResultLocatorCache = new WeakMap<object, ReadLocator[]>();
 	}
 
@@ -909,26 +1104,220 @@ export class MessageBuilder {
 		if (this.isFullFileRead(locator)) {
 			return locator.path;
 		}
-		return `${locator.path}:${locator.startLine ?? 1}-${locator.endLine ?? "EOF"}`;
+		const start = locator.startLine ?? 1;
+		const end = locator.endLine ?? "EOF";
+		return `${locator.path}${READ_LOCATOR_RANGE_SEPARATOR}${start}-${end}`;
 	}
 
 	private isFullFileRead(locator: ReadLocator): boolean {
 		return locator.startLine == null && locator.endLine == null;
 	}
 
+	/**
+	 * Whether a later read makes an earlier one redundant.
+	 *
+	 * A whole-file read covers every range of that file. A range covers another
+	 * range only when it contains it, and never covers a whole-file read: the
+	 * file has lines the range does not, and dropping the only copy of them to
+	 * save bytes trades a correct transcript for a smaller one.
+	 */
+	private readCovers(candidate: IndexedRead, locator: ReadLocator): boolean {
+		if (candidate.startLine == null && candidate.endLine == null) {
+			return true;
+		}
+		if (this.isFullFileRead(locator)) {
+			return false;
+		}
+		const candidateStart = candidate.startLine ?? 1;
+		const candidateEnd = candidate.endLine ?? Number.MAX_SAFE_INTEGER;
+		const locatorStart = locator.startLine ?? 1;
+		const locatorEnd = locator.endLine ?? Number.MAX_SAFE_INTEGER;
+		return candidateStart <= locatorStart && candidateEnd >= locatorEnd;
+	}
+
+	/**
+	 * A read is outdated when a *later* read covers it.
+	 *
+	 * The recency half is what the previous "latest full read owns the path"
+	 * check got wrong: it compared owners by identity, so a whole-file read at
+	 * turn 5 marked a ranged read at turn 20 as outdated — the newest content
+	 * in the transcript was replaced by a placeholder pointing at an older
+	 * copy, and the model was left reading the file it had already superseded.
+	 */
 	private isOutdatedReadLocator(
 		locator: ReadLocator,
 		toolUseId: string,
 	): boolean {
-		const fullOwner = this.latestFullContentOwnerByPathCache.get(locator.path);
-		if (fullOwner && fullOwner !== toolUseId) {
-			return true;
+		const reads = this.readsByPathCache.get(locator.path);
+		if (!reads) {
+			return false;
 		}
-		return (
-			this.latestReadToolUseByLocatorCache.get(
-				this.toReadLocatorKey(locator),
-			) !== toolUseId
+		let selfOrder = -1;
+		for (const read of reads) {
+			if (
+				read.toolUseId === toolUseId &&
+				read.startLine === locator.startLine &&
+				read.endLine === locator.endLine
+			) {
+				selfOrder = read.order;
+			}
+		}
+		if (selfOrder < 0) {
+			return false;
+		}
+		return reads.some(
+			(read) =>
+				read.order > selfOrder &&
+				read.toolUseId !== toolUseId &&
+				this.readCovers(read, locator),
 		);
+	}
+
+	/** Records one read of one path at the next transcript position. */
+	private noteIndexedRead(
+		path: string,
+		toolUseId: string,
+		startLine: number | null,
+		endLine: number | null,
+		text: string | null = null,
+	): void {
+		let reads = this.readsByPathCache.get(path);
+		if (!reads) {
+			reads = [];
+			this.readsByPathCache.set(path, reads);
+		}
+		reads.push({
+			order: this.readOrderCounter++,
+			toolUseId,
+			startLine,
+			endLine,
+			text,
+		});
+	}
+
+	/**
+	 * Whether a read only repeats a range an earlier read already covers.
+	 *
+	 * The mirror of `isOutdatedReadLocator`: that one asks whether something
+	 * newer replaced this read, this one asks whether something older already
+	 * contains it. Both describe redundancy, but they are not interchangeable —
+	 * the newest copy of a range is never stale, so a duplicate must be labelled
+	 * as such rather than sent to look for a newer version that does not exist.
+	 *
+	 * Requires the equality witness to pass. Without proof that the overlapping
+	 * lines are unchanged, an edit may have landed between the two reads, and
+	 * then the contained read is the only fresh copy in the transcript —
+	 * collapsing it would hand the model source that no longer exists. A read
+	 * whose text could not be recovered is therefore never treated as a
+	 * duplicate.
+	 */
+	/**
+	 * Which placeholder a rewritten read should carry.
+	 *
+	 * Duplicates are recorded during the same pass that decides staleness, so by
+	 * rewrite time the classification is already made; anything not recorded as
+	 * a duplicate is superseded.
+	 */
+	private placeholderForKey(key: string): string {
+		return this.duplicateReadKeys.has(key)
+			? DUPLICATE_FILE_CONTENT
+			: OUTDATED_FILE_CONTENT;
+	}
+
+	/**
+	 * Recover each read's rendered text, keyed by locator.
+	 *
+	 * Best-effort: a result that is not the JSON-entry shape yields nothing, and
+	 * a read with no recoverable text is simply never eligible to be called a
+	 * duplicate. Failing to find the text has to mean "cannot prove", never
+	 * "assume equal".
+	 */
+	private extractReadTextByLocator(
+		content: ToolResultContent["content"],
+	): Map<string, string> {
+		const byKey = new Map<string, string>();
+		const collect = (text: string): void => {
+			let parsed: unknown;
+			try {
+				parsed = JSON.parse(text);
+			} catch {
+				return;
+			}
+			for (const entry of Array.isArray(parsed) ? parsed : [parsed]) {
+				const locator = this.extractLocatorFromResultEntry(entry);
+				if (!locator || !entry || typeof entry !== "object") {
+					continue;
+				}
+				const record = entry as Record<string, unknown>;
+				const value =
+					typeof record.content === "string"
+						? record.content
+						: typeof record.result === "string"
+							? record.result
+							: undefined;
+				if (value !== undefined) {
+					byKey.set(this.toReadLocatorKey(locator), value);
+				}
+			}
+		};
+		if (typeof content === "string") {
+			collect(content);
+			return byKey;
+		}
+		for (const entry of content) {
+			if (entry.type === "text" && typeof entry.text === "string") {
+				collect(entry.text);
+			}
+		}
+		return byKey;
+	}
+
+	private isDuplicateReadLocator(
+		locator: ReadLocator,
+		toolUseId: string,
+	): boolean {
+		// A whole-file read is never a duplicate of a range: it carries lines no
+		// range holds.
+		if (this.isFullFileRead(locator)) {
+			return false;
+		}
+		const reads = this.readsByPathCache.get(locator.path);
+		if (!reads) {
+			return false;
+		}
+		let self: IndexedRead | undefined;
+		for (const read of reads) {
+			if (
+				read.toolUseId === toolUseId &&
+				read.startLine === locator.startLine &&
+				read.endLine === locator.endLine
+			) {
+				self = read;
+			}
+		}
+		if (!self?.text) {
+			return false;
+		}
+		const start = locator.startLine ?? 1;
+		const end = locator.endLine ?? Number.MAX_SAFE_INTEGER;
+		return reads.some((earlier) => {
+			if (
+				earlier.order >= (self as IndexedRead).order ||
+				earlier.toolUseId === toolUseId ||
+				!earlier.text
+			) {
+				return false;
+			}
+			if (!this.readCovers(earlier, locator)) {
+				return false;
+			}
+			return readOverlapUnchanged(
+				earlier.text,
+				(self as IndexedRead).text as string,
+				start,
+				end,
+			);
+		});
 	}
 
 	private replaceOutdatedReadContent(
@@ -1053,13 +1442,14 @@ export class MessageBuilder {
 		if (!locator || !outdatedKeys.has(this.toReadLocatorKey(locator))) {
 			return entry;
 		}
+		const placeholder = this.placeholderForKey(this.toReadLocatorKey(locator));
 		const record = { ...(entry as Record<string, unknown>) };
 		if (typeof record.result === "string") {
-			record.result = OUTDATED_FILE_CONTENT;
+			record.result = placeholder;
 		} else if (typeof record.content === "string") {
-			record.content = OUTDATED_FILE_CONTENT;
+			record.content = placeholder;
 		} else {
-			record.result = OUTDATED_FILE_CONTENT;
+			record.result = placeholder;
 		}
 		return record;
 	}

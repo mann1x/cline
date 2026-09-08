@@ -4,6 +4,7 @@ import {
 	hasRegisteredHandler,
 	MODEL_COLLECTIONS_BY_PROVIDER_ID,
 	normalizeProviderId,
+	toGatewayModelCapabilities,
 } from "@cline/llms";
 import type {
 	AgentConfig,
@@ -34,12 +35,25 @@ function usesOpenAICompatibleClient(config: ProviderConfig): boolean {
 
 function buildGatewayProviderOptions(
 	config: ProviderConfig,
+	sessionId?: string,
 ): Record<string, unknown> | undefined {
 	const options: Record<string, unknown> = {
 		region: config.region,
 		apiLine: config.apiLine,
 		openRouterProviderSorting: config.openRouterProviderSorting,
 		modelCatalog: config.modelCatalog,
+		// The configured sampler. `ProviderConfig` carries it at the top level —
+		// `toProviderConfig` reads it straight off providers.json — but vendors
+		// read their settings out of this bag, so a field that is never lifted
+		// into it reaches nothing.
+		//
+		// Measured on a live box: `temperature: 0.6` and `frequencyPenalty: 0.3`
+		// sat in providers.json for days and never once appeared on the wire.
+		// Every request carried exactly `num_ctx` and `num_predict`, which arrive
+		// by other routes, so the payload looked well-formed while the model ran
+		// on its Modelfile defaults. Both hosts were affected: this is the only
+		// place the lift can happen for either.
+		sampling: config.sampling,
 	};
 
 	if (usesOpenAICompatibleClient(config)) {
@@ -47,6 +61,13 @@ function buildGatewayProviderOptions(
 			apiVersion: config.azure?.apiVersion,
 			useIdentity: config.azure?.useIdentity,
 		});
+	}
+
+	// The pool a request attaches to is not in the config -- it changes every
+	// time a compaction re-roots the conversation -- so what travels here is the
+	// key the vendor looks the live pool up under. See `polykv-session.ts`.
+	if (normalizeProviderId(config.providerId) === "opencoti" && sessionId) {
+		options.polykvSessionId = sessionId;
 	}
 
 	if (config.providerId === "bedrock") {
@@ -71,6 +92,17 @@ function buildGatewayProviderOptions(
 			projectId: config.gcp?.projectId,
 			location: gcpRegion,
 			region: gcpRegion,
+		});
+	}
+
+	if (config.providerId === "claude-code") {
+		// The Claude Code CLI executes its own tools, so its session must be
+		// anchored on the workspace. Without an explicit cwd the spawned CLI
+		// inherits the host process cwd — `/` in GUI extension hosts — and
+		// then refuses writes outside its allowed working directories.
+		const workspace = config.extensionContext?.workspace;
+		Object.assign(options, {
+			cwd: workspace?.cwd ?? workspace?.rootPath,
 		});
 	}
 
@@ -128,36 +160,6 @@ export function resolveKnownModelsFromConfig(
 	};
 }
 
-function toGatewayCapabilities(
-	capabilities: ModelInfo["capabilities"],
-): GatewayModelDefinition["capabilities"] {
-	if (!capabilities?.length) {
-		return undefined;
-	}
-
-	const mapped = new Set<
-		NonNullable<GatewayModelDefinition["capabilities"]>[number]
-	>();
-	for (const capability of capabilities) {
-		switch (capability) {
-			case "tools":
-			case "reasoning":
-			case "prompt-cache":
-			case "images":
-				mapped.add(capability);
-				break;
-			case "structured_output":
-				mapped.add("structured-output");
-				break;
-			default:
-				mapped.add("text");
-		}
-	}
-
-	mapped.add("text");
-	return [...mapped];
-}
-
 function toGatewayConfiguredModel(
 	id: string,
 	model: ModelInfo,
@@ -169,7 +171,10 @@ function toGatewayConfiguredModel(
 		contextWindow: model.contextWindow,
 		maxInputTokens: model.maxInputTokens,
 		maxOutputTokens: model.maxTokens,
-		capabilities: toGatewayCapabilities(model.capabilities),
+		operation: model.operation,
+		operationModes: model.operationModes,
+		modalities: model.modalities,
+		capabilities: toGatewayModelCapabilities(model.capabilities),
 		reasoningOptions: model.reasoningOptions,
 		metadata: {
 			family: model.family,
@@ -180,10 +185,32 @@ function toGatewayConfiguredModel(
 	};
 }
 
+export interface CreateAgentModelOptions {
+	/**
+	 * Set by the caller that is running the conversation itself.
+	 *
+	 * The request path keeps process-wide records of what the last request cost
+	 * and what capped it, and compaction reads them back; only the conversation
+	 * may write them. This factory serves the agent loop *and* the machinery
+	 * around it -- the CLI builds its image describer from the same call -- so
+	 * the loop has to say so rather than the describer having to say it is not.
+	 */
+	conversation?: boolean;
+	/**
+	 * Force the auxiliary scheduling this config did not carry.
+	 *
+	 * A caller that builds its model from a session's config inherits that
+	 * config's `providerConfig`, which is the conversation's; there is no place
+	 * on it to say "but this call is not". This is that place.
+	 */
+	auxiliary?: boolean;
+}
+
 export function createAgentModelFromConfig(
 	config: AgentConfig,
 	logger: BasicLogger | undefined,
 	telemetry?: ITelemetryService,
+	options?: CreateAgentModelOptions,
 ): AgentModel {
 	const pc = config.providerConfig as ProviderConfig | undefined;
 	const baseProviderConfig =
@@ -235,7 +262,10 @@ export function createAgentModelFromConfig(
 				headers: normalizedProviderConfig.headers,
 				timeoutMs: normalizedProviderConfig.timeoutMs,
 				fetch: normalizedProviderConfig.fetch,
-				options: buildGatewayProviderOptions(normalizedProviderConfig),
+				options: buildGatewayProviderOptions(
+					normalizedProviderConfig,
+					config.sessionId,
+				),
 				models: normalizedProviderConfig.knownModels
 					? Object.entries(normalizedProviderConfig.knownModels).map(
 							([id, model]) => toGatewayConfiguredModel(id, model),
@@ -254,6 +284,9 @@ export function createAgentModelFromConfig(
 		{
 			maxTokens: normalizedProviderConfig.maxOutputTokens,
 			temperature: normalizedProviderConfig.temperature,
+			auxiliary: options?.auxiliary ?? normalizedProviderConfig.auxiliary,
+			conversation: options?.conversation === true,
+			sessionId: config.sessionId,
 		},
 	);
 }

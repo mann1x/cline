@@ -56,3 +56,13 @@ export {
 	createAgentRuntime,
 	DEFAULT_MAX_NO_TOOL_CALL_NUDGES,
 } from "./agent-runtime";
+export type {
+	ReasoningLoopGuardConfig,
+	ReasoningLoopKind,
+	ReasoningLoopVerdict,
+} from "./reasoning-loop-guard";
+export {
+	DEFAULT_REASONING_LOOP_GUARD,
+	describeReasoningLoop,
+	ReasoningLoopGuard,
+} from "./reasoning-loop-guard";

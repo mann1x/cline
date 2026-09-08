@@ -20,8 +20,20 @@ export async function addRemoteMcpServer(controller: Controller, request: AddRem
 			throw new Error("Server URL is required")
 		}
 
+		const oauthClientId = request.oauthClientId?.trim()
+		const oauthClientSecret = request.oauthClientSecret?.trim()
+
 		// Call the McpHub method to add the remote server
-		const servers = await controller.mcpHub?.addRemoteServer(request.serverName, request.serverUrl, request.transportType)
+		const servers = await controller.mcpHub?.addRemoteServer(request.serverName, request.serverUrl, request.transportType, {
+			...(oauthClientId
+				? {
+						oauthClient: {
+							clientId: oauthClientId,
+							...(oauthClientSecret ? { clientSecret: oauthClientSecret } : {}),
+						},
+					}
+				: {}),
+		})
 
 		const protoServers = convertMcpServersToProtoMcpServers(servers)
 

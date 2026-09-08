@@ -51,6 +51,10 @@ import {
 } from "./services/feature-flags";
 import { resolveCoreDistinctId } from "./services/telemetry/distinct-id";
 import { compareCheckpointToWorkspace } from "./session/checkpoint-diff";
+import {
+	projectSessionMessagesForDisplay,
+	type SessionDisplayMessage,
+} from "./session/display-messages";
 import type { CoreSessionEvent } from "./types/events";
 import type { SessionHistoryRecord } from "./types/sessions";
 
@@ -80,6 +84,12 @@ export type {
 	RuntimeHostMode,
 	StartSessionBootstrap,
 } from "./cline-core/types";
+
+import type { BackgroundDelegationView } from "./extensions/tools/team/background-delegations";
+import type {
+	ConfiguredAgentDelegationResult,
+	ConfiguredAgentSummary,
+} from "./extensions/tools/team/delegate-to-agent";
 
 /**
  * The primary entry point for the Cline Core SDK.
@@ -493,6 +503,66 @@ export class ClineCore {
 	update: RuntimeHost["updateSession"] = (...args) =>
 		this.host.updateSession(...args);
 	/**
+	 * The configured agents this session loaded, for a host offering a picker.
+	 */
+	listConfiguredAgents = (
+		sessionId: string,
+	): Promise<ConfiguredAgentSummary[]> =>
+		this.host.listConfiguredAgents?.(sessionId) ?? Promise.resolve([]);
+
+	/**
+	 * Runs one configured agent on a task, on the user's say-so rather than the
+	 * model's. The agent's report is appended to the conversation.
+	 */
+	delegateToConfiguredAgent = (input: {
+		sessionId: string;
+		agentName: string;
+		prompt: string;
+		signal?: AbortSignal;
+	}): Promise<ConfiguredAgentDelegationResult> => {
+		if (!this.host.delegateToConfiguredAgent) {
+			return Promise.reject(
+				new Error("This runtime host cannot delegate to an agent."),
+			);
+		}
+		return this.host.delegateToConfiguredAgent(input);
+	};
+
+	/**
+	 * Starts a configured agent beside the current turn rather than in place of
+	 * it. Returns as soon as the run exists; the report arrives in the
+	 * conversation whenever the agent is done.
+	 */
+	startBackgroundDelegation = (input: {
+		sessionId: string;
+		agentName: string;
+		prompt: string;
+	}): Promise<BackgroundDelegationView> => {
+		if (!this.host.startBackgroundDelegation) {
+			return Promise.reject(
+				new Error(
+					"This runtime host cannot run a delegation in the background.",
+				),
+			);
+		}
+		return this.host.startBackgroundDelegation(input);
+	};
+
+	/** The background delegations of one session, for a host drawing them. */
+	listBackgroundDelegations = (
+		sessionId: string,
+	): Promise<BackgroundDelegationView[]> =>
+		this.host.listBackgroundDelegations?.(sessionId) ?? Promise.resolve([]);
+
+	/** Pause, resume or stop one. False when no run was in a state to take it. */
+	controlBackgroundDelegation = (input: {
+		sessionId: string;
+		id: string;
+		action: "pause" | "resume" | "stop";
+	}): Promise<boolean> =>
+		this.host.controlBackgroundDelegation?.(input) ?? Promise.resolve(false);
+
+	/**
 	 * Stores the compacted working-context state for an existing session.
 	 */
 	updateSessionCompactionState: RuntimeHost["updateSessionCompactionState"] = (
@@ -505,10 +575,12 @@ export class ClineCore {
 		...args
 	) => this.host.readSessionCompactionState(...args);
 	/**
-	 * Reads message history for a session.
+	 * Reads the canonical message history for a session.
 	 *
-	 * Retrieves the full message transcript for a specific session, including all
-	 * user messages, agent responses, and tool interactions.
+	 * This is the model/replay representation used by resume, fork, and
+	 * compaction. Provider-owned model-tool activity remains observational
+	 * metadata here. Use {@link readDisplayMessages} for a UI transcript with
+	 * that activity projected into ordinary tool blocks.
 	 *
 	 * @example
 	 * ```ts
@@ -520,6 +592,20 @@ export class ClineCore {
 	 */
 	readMessages: RuntimeHost["readSessionMessages"] = (...args) =>
 		this.host.readSessionMessages(...args);
+
+	/**
+	 * Reads a transcript projected for presentation. Observational model-tool
+	 * activity is represented with the same tool blocks as ordinary local tools.
+	 *
+	 * Use {@link readMessages} for resume, fork, compaction, or model replay.
+	 */
+	async readDisplayMessages(
+		sessionId: string,
+	): Promise<SessionDisplayMessage[]> {
+		return projectSessionMessagesForDisplay(
+			await this.host.readSessionMessages(sessionId),
+		);
+	}
 
 	/**
 	 * Reads message history for a session, preferring the live in-memory

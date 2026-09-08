@@ -1,9 +1,14 @@
+import type { BackgroundDelegationView } from "@cline/core";
 import { useTerminalDimensions } from "@opentui/react";
 import type { ChoiceContext } from "@opentui-ui/dialog";
 import { useDialog } from "@opentui-ui/dialog/react";
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import type { SlashCommandRegistry } from "../commands/slash-command-registry";
 import { resolveSlashCommand } from "../commands/slash-command-registry";
+import {
+	type BackgroundAgentAction,
+	BackgroundAgentsControlContent,
+} from "../components/dialogs/background-agents-control";
 import { ForkConfirmContent } from "../components/dialogs/fork-confirm";
 import { HelpDialogContent } from "../components/dialogs/help-dialog";
 import { withLoadingDialog } from "../components/dialogs/loading-dialog";
@@ -23,6 +28,7 @@ export function useLocalCommandActions(input: {
 	openMcpManager: () => Promise<boolean>;
 	openModelSelector: () => void;
 	openSkills: (invocation?: LocalSlashCommandInvocation) => void;
+	openThemePicker: () => void;
 	refocusTextarea: () => void;
 	setAppView: (view: AppView) => void;
 	onClearConversation: () => Promise<void>;
@@ -30,6 +36,13 @@ export function useLocalCommandActions(input: {
 	onExportHistorySession: TuiProps["onExportHistorySession"];
 	onDeleteHistorySession: TuiProps["onDeleteHistorySession"];
 	onCompact: TuiProps["onCompact"];
+	onDelegate: TuiProps["onDelegate"];
+	onDelegateBackground: TuiProps["onDelegateBackground"];
+	onListBackgroundDelegations: TuiProps["onListBackgroundDelegations"];
+	onControlBackgroundDelegation: TuiProps["onControlBackgroundDelegation"];
+	/** Draws the panel now rather than at the next poll. */
+	onBackgroundDelegationStarted?: () => void;
+	onListAgents: TuiProps["onListAgents"];
 	onFork: TuiProps["onFork"];
 	onUndo: () => Promise<void>;
 	onExit: TuiProps["onExit"];
@@ -45,6 +58,7 @@ export function useLocalCommandActions(input: {
 		openMcpManager,
 		openModelSelector,
 		openSkills,
+		openThemePicker,
 		refocusTextarea,
 		setAppView,
 		onClearConversation,
@@ -52,6 +66,12 @@ export function useLocalCommandActions(input: {
 		onExportHistorySession,
 		onDeleteHistorySession,
 		onCompact,
+		onDelegate,
+		onDelegateBackground,
+		onListBackgroundDelegations,
+		onControlBackgroundDelegation,
+		onBackgroundDelegationStarted,
+		onListAgents,
 		onFork,
 		onUndo,
 		onExit,
@@ -164,6 +184,210 @@ export function useLocalCommandActions(input: {
 		}
 	}, [onCompact, session]);
 
+	// A /compact asked for mid-turn, held until the turn finishes
+	// (mann1x/cline#70). A ref, not state: the queue is read by an effect on the
+	// running edge, and re-rendering for it would buy nothing.
+	const compactQueued = useRef(false);
+	const queueCompact = useCallback(() => {
+		if (compactQueued.current) {
+			session.appendEntry({
+				kind: "status",
+				text: "Compaction is already queued for the end of this turn.",
+			});
+			return;
+		}
+		compactQueued.current = true;
+		session.appendEntry({
+			kind: "status",
+			text: "Compaction queued. It will run as soon as this turn finishes.",
+		});
+	}, [session]);
+
+	useEffect(() => {
+		if (session.isRunning || !compactQueued.current) {
+			return;
+		}
+		compactQueued.current = false;
+		void runCompact();
+	}, [session.isRunning, runCompact]);
+
+	/**
+	 * `/delegate <agent> <task>` -- hand work to a configured agent directly.
+	 *
+	 * The lead model is not asked whether to delegate and does not get a turn
+	 * until the agent has reported back. With no task, this lists the agents
+	 * rather than guessing at one: picking for the user is how the wrong agent
+	 * gets a task that reads plausibly for either.
+	 */
+	const runDelegate = useCallback(
+		async (invocation?: LocalSlashCommandInvocation) => {
+			const rest = (invocation?.text ?? "")
+				.replace(/^\s*\/delegate\b/, "")
+				.trim();
+			const [agentName, ...taskWords] = rest.split(/\s+/);
+			const task = taskWords.join(" ").trim();
+
+			if (!agentName || !task) {
+				let available: Awaited<ReturnType<typeof onListAgents>> = [];
+				try {
+					available = await onListAgents();
+				} catch {
+					// Listing is best-effort; the usage line is the point.
+				}
+				session.appendEntry({
+					kind: "status",
+					text:
+						available.length > 0
+							? `Usage: /delegate <agent> <task>. Agents: ${available
+									.map((agent) =>
+										agent.profile || agent.modelId
+											? `${agent.name} (${agent.profile ?? agent.modelId})`
+											: agent.name,
+									)
+									.join(", ")}`
+							: "No agents are configured. Agent files live in .cline/agents in this workspace, or in the Cline data directory.",
+				});
+				return;
+			}
+
+			session.setIsRunning(true);
+			session.appendEntry({
+				kind: "status",
+				text: `Delegating to "${agentName}": ${task}`,
+			});
+			try {
+				const result = await onDelegate(agentName, task);
+				if (result.text.trim()) {
+					session.appendEntry({ kind: "team", text: result.text.trim() });
+				}
+				session.appendEntry({
+					kind: "status",
+					text: `"${result.agentName}" finished in ${Math.round(
+						result.durationMs / 1000,
+					)}s over ${result.iterations} ${
+						result.iterations === 1 ? "iteration" : "iterations"
+					}.`,
+				});
+			} catch (error) {
+				session.appendEntry({
+					kind: "error",
+					text: `Delegation failed: ${
+						error instanceof Error ? error.message : String(error)
+					}`,
+				});
+			} finally {
+				session.setIsRunning(false);
+			}
+		},
+		[onDelegate, onListAgents, session],
+	);
+
+	/**
+	 * The same delegation, except the user goes back to work.
+	 *
+	 * The lead is not blocked and is not even paused: the agent runs beside it
+	 * and its report is delivered into the conversation whenever it lands. That
+	 * is the only real difference, and the reason it is a second command rather
+	 * than a flag on the first -- "and I am not waiting for this" is a different
+	 * intention, not a different option.
+	 */
+	const runDelegateBackground = useCallback(
+		async (invocation?: LocalSlashCommandInvocation) => {
+			const rest = (invocation?.text ?? "")
+				.replace(/^\s*\/delegate-background\b/, "")
+				.trim();
+			const [agentName, ...taskWords] = rest.split(/\s+/);
+			const task = taskWords.join(" ").trim();
+
+			if (!agentName || !task) {
+				let available: Awaited<ReturnType<typeof onListAgents>> = [];
+				try {
+					available = await onListAgents();
+				} catch {
+					// Listing is best-effort; the usage line is the point.
+				}
+				session.appendEntry({
+					kind: "status",
+					text:
+						available.length > 0
+							? `Usage: /delegate-background <agent> <task>. Agents: ${available
+									.map((agent) => agent.name)
+									.join(", ")}`
+							: "No agents are configured. Agent files live in .cline/agents in this workspace, or in the Cline data directory.",
+				});
+				return;
+			}
+
+			try {
+				const run = await onDelegateBackground(agentName, task);
+				onBackgroundDelegationStarted?.();
+				session.appendEntry({
+					kind: "status",
+					text: `"${run.agentName}" is running in the background (${run.id}). It will report back here when it is done.`,
+				});
+			} catch (error) {
+				session.appendEntry({
+					kind: "error",
+					text: `Delegation failed: ${
+						error instanceof Error ? error.message : String(error)
+					}`,
+				});
+			}
+		},
+		[
+			onBackgroundDelegationStarted,
+			onDelegateBackground,
+			onListAgents,
+			session,
+		],
+	);
+
+	/**
+	 * Act on the agents running in the background.
+	 *
+	 * Reads the list at open rather than holding one: a background run changes
+	 * several times a second, and a dialog built on a stale copy would offer to
+	 * pause something that finished while the user was reading it. The registry
+	 * answers `false` for exactly that case, and false here is not an error.
+	 */
+	const openBackgroundAgents = useCallback(async () => {
+		let runs: BackgroundDelegationView[] = [];
+		try {
+			runs = (await onListBackgroundDelegations()).filter(
+				(run) => run.status === "running" || run.status === "paused",
+			);
+		} catch {
+			// An unstarted session has none, which is what an empty list says.
+		}
+		const chosen = await dialog.choice<BackgroundAgentAction>({
+			closeOnEscape: true,
+			content: (ctx: ChoiceContext<BackgroundAgentAction>) => (
+				<BackgroundAgentsControlContent {...ctx} runs={runs} />
+			),
+		});
+		refocusTextarea();
+		if (!chosen) return;
+		const applied = await onControlBackgroundDelegation(
+			chosen.id,
+			chosen.action,
+		);
+		const run = runs.find((entry) => entry.id === chosen.id);
+		session.appendEntry({
+			kind: "status",
+			text: applied
+				? `${chosen.action === "stop" ? "Stopped" : chosen.action === "pause" ? "Paused" : "Resumed"} "${run?.agentName ?? chosen.id}".`
+				: `"${run?.agentName ?? chosen.id}" was no longer in a state to be ${chosen.action}d.`,
+		});
+		onBackgroundDelegationStarted?.();
+	}, [
+		dialog,
+		onBackgroundDelegationStarted,
+		onControlBackgroundDelegation,
+		onListBackgroundDelegations,
+		refocusTextarea,
+		session,
+	]);
+
 	const runFork = useCallback(async () => {
 		if (!canForkSession) {
 			session.appendEntry({
@@ -227,7 +451,12 @@ export function useLocalCommandActions(input: {
 				openMcpManager,
 				openModelSelector,
 				openSkills,
+				openThemePicker,
 				runCompact,
+				queueCompact,
+				runDelegate,
+				runDelegateBackground,
+				openBackgroundAgents,
 				runFork,
 				runUndo: onUndo,
 				clearConversation: onClearConversation,
@@ -247,7 +476,12 @@ export function useLocalCommandActions(input: {
 			openHistory,
 			openModelSelector,
 			openSkills,
+			openThemePicker,
 			runCompact,
+			queueCompact,
+			runDelegate,
+			runDelegateBackground,
+			openBackgroundAgents,
 			runFork,
 			session.isRunning,
 			slashCommandRegistry,

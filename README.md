@@ -218,7 +218,12 @@ cline connect telegram -k $BOT_TOKEN
 cline connect slack --bot-token $SLACK_TOKEN --signing-secret $SECRET --base-url $URL
 # Connect to Slack using socket mode
 cline connect slack --bot-token $SLACK_TOKEN --app-token $SLACK_APP_TOKEN
+# Connect to Discord
+cline connect discord --application-id $DISCORD_APP_ID --bot-token $DISCORD_BOT_TOKEN \
+  --public-key $DISCORD_PUBLIC_KEY --base-url $URL
 ```
+
+Run `cline connect` to list every channel, and `cline connect <channel> --help` for that channel's flags and the environment variables it reads.
 
 ## Headless CLI for CI/CD
 

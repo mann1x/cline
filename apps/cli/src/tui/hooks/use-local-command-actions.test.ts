@@ -15,7 +15,12 @@ function makeActions(
 		openMcpManager: vi.fn(async () => false),
 		openModelSelector: vi.fn(),
 		openSkills: vi.fn(),
+		openThemePicker: vi.fn(),
 		runCompact: vi.fn(),
+		queueCompact: vi.fn(),
+		runDelegateBackground: vi.fn(),
+		openBackgroundAgents: vi.fn(),
+		runDelegate: vi.fn(),
 		runFork: vi.fn(),
 		runUndo: vi.fn(async () => {}),
 		clearConversation: vi.fn(async () => {}),
@@ -59,9 +64,73 @@ describe("runLocalSlashCommandAction", () => {
 		expect(openConfig).toHaveBeenCalledWith({ initialTab: "plugins" });
 	});
 
-	it("does not start compaction while a turn is running", () => {
+	it("routes /delegate to the delegate action, running or not", () => {
+		for (const isRunning of [false, true]) {
+			const runDelegate = vi.fn();
+			const actions = makeActions({ isRunning, runDelegate });
+			const invocation = {
+				text: "/delegate qa run the suite",
+				cursorOffset: 0,
+			};
+
+			const handled = runLocalSlashCommandAction({
+				name: "delegate",
+				invocation,
+				...actions,
+			});
+
+			expect(handled).toBe(true);
+			// Unlike /compact, delegation does not touch the conversation until
+			// the agent has finished, so a running turn is not a reason to defer.
+			expect(runDelegate).toHaveBeenCalledWith(invocation);
+		}
+	});
+
+	it("routes /delegate-background to its own action, mid-turn included", () => {
+		for (const isRunning of [false, true]) {
+			const runDelegate = vi.fn();
+			const runDelegateBackground = vi.fn();
+			const actions = makeActions({
+				isRunning,
+				runDelegate,
+				runDelegateBackground,
+			});
+			const invocation = {
+				text: "/delegate-background qa run the suite",
+				cursorOffset: 0,
+			};
+
+			const handled = runLocalSlashCommandAction({
+				name: "delegate-background",
+				invocation,
+				...actions,
+			});
+
+			expect(handled).toBe(true);
+			expect(runDelegateBackground).toHaveBeenCalledWith(invocation);
+			// The two are different intentions, and the prefix they share is how
+			// one would quietly become the other.
+			expect(runDelegate).not.toHaveBeenCalled();
+		}
+	});
+
+	it("routes /agents to the background-agent controls", () => {
+		const openBackgroundAgents = vi.fn();
+		const actions = makeActions({ isRunning: true, openBackgroundAgents });
+
+		const handled = runLocalSlashCommandAction({
+			name: "agents",
+			...actions,
+		});
+
+		expect(handled).toBe(true);
+		expect(openBackgroundAgents).toHaveBeenCalledTimes(1);
+	});
+
+	it("queues compaction instead of starting it mid-turn", () => {
 		const runCompact = vi.fn();
-		const actions = makeActions({ isRunning: true, runCompact });
+		const queueCompact = vi.fn();
+		const actions = makeActions({ isRunning: true, runCompact, queueCompact });
 
 		const handled = runLocalSlashCommandAction({
 			name: "compact",
@@ -69,7 +138,10 @@ describe("runLocalSlashCommandAction", () => {
 		});
 
 		expect(handled).toBe(true);
+		// Compacting under the live agent loop races it, so the request waits --
+		// but it is not dropped, which is what the user saw before.
 		expect(runCompact).not.toHaveBeenCalled();
+		expect(queueCompact).toHaveBeenCalledOnce();
 	});
 
 	it("starts compaction while the session is idle", () => {
@@ -83,6 +155,7 @@ describe("runLocalSlashCommandAction", () => {
 
 		expect(handled).toBe(true);
 		expect(runCompact).toHaveBeenCalledOnce();
+		expect(actions.queueCompact).not.toHaveBeenCalled();
 	});
 
 	it("waits for clear to reset the runtime session", async () => {

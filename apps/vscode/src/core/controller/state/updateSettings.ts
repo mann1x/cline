@@ -1,12 +1,11 @@
-import { setCompactionStrategyGlobally } from "@cline/core"
+import { setCompactionStrategyGlobally, setModelToolEnabledGlobally } from "@cline/core"
 import { Empty } from "@shared/proto/cline/common"
 import { PlanActMode, McpDisplayMode as ProtoMcpDisplayMode, UpdateSettingsRequest } from "@shared/proto/cline/state"
 import { convertProtoToApiProvider } from "@shared/proto-conversions/models/api-configuration-conversion"
 import { OpenaiReasoningEffort } from "@shared/storage/types"
 import { TelemetrySetting } from "@shared/TelemetrySetting"
 import { ClineEnv } from "@/config"
-import { fetchRemoteConfig } from "@/core/storage/remote-config/fetch"
-import { clearRemoteConfig } from "@/core/storage/remote-config/utils"
+import { updateQaCredentials } from "@/sdk/qa-credentials-store"
 import { McpDisplayMode } from "@/shared/McpDisplayMode"
 import { Logger } from "@/shared/services/Logger"
 import { telemetryService } from "../../../services/telemetry"
@@ -70,6 +69,30 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		// Update plan/act separate models setting
 		if (request.planActSeparateModelsSetting !== undefined) {
 			controller.stateManager.setGlobalState("planActSeparateModelsSetting", request.planActSeparateModelsSetting)
+		}
+
+		// Vision model: a second model that reads images for a primary one that
+		// cannot. The configuration and the profile list travel as JSON strings;
+		// see `@shared/api-config-snapshot` for why they are not proto messages.
+		if (request.visionModelEnabled !== undefined) {
+			controller.stateManager.setGlobalState("visionModelEnabled", request.visionModelEnabled)
+		}
+		if (request.visionModeApiConfiguration !== undefined) {
+			controller.stateManager.setGlobalState("visionModeApiConfiguration", request.visionModeApiConfiguration)
+		}
+		// Delegated agents: the same arrangement, for the model subagents and
+		// teammates run on rather than the one driving the session.
+		if (request.agentsModelEnabled !== undefined) {
+			controller.stateManager.setGlobalState("agentsModelEnabled", request.agentsModelEnabled)
+		}
+		if (request.agentsModeApiConfiguration !== undefined) {
+			controller.stateManager.setGlobalState("agentsModeApiConfiguration", request.agentsModeApiConfiguration)
+		}
+		if (request.apiConfigurationProfiles !== undefined) {
+			controller.stateManager.setGlobalState("apiConfigurationProfiles", request.apiConfigurationProfiles)
+		}
+		if (request.activeApiConfigurationProfile !== undefined) {
+			controller.stateManager.setGlobalState("activeApiConfigurationProfile", request.activeApiConfigurationProfile)
 		}
 
 		// Update checkpoints setting
@@ -148,14 +171,6 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 				telemetryService.captureFeatureToggle(controller.task.ulid, "hooks", isEnabled, controller.task.api.getModel().id)
 			}
 		}
-		// Update yolo mode setting
-		if (request.yoloModeToggled !== undefined) {
-			if (controller.task) {
-				telemetryService.captureYoloModeToggle(controller.task.ulid, request.yoloModeToggled)
-			}
-			controller.stateManager.setGlobalState("yoloModeToggled", request.yoloModeToggled)
-		}
-
 		// Update worktrees setting
 		if (request.worktreesEnabled !== undefined) {
 			controller.stateManager.setGlobalState("worktreesEnabled", request.worktreesEnabled)
@@ -174,6 +189,30 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		}
 
 		// Update auto-condense setting
+		if (request.compactionPrompt !== undefined) {
+			controller.stateManager.setGlobalState("compactionPrompt", request.compactionPrompt)
+		}
+
+		if (request.thinkingCompactionEnabled !== undefined) {
+			controller.stateManager.setGlobalState("thinkingCompactionEnabled", request.thinkingCompactionEnabled)
+		}
+
+		if (request.thinkingCompactionPrompt !== undefined) {
+			controller.stateManager.setGlobalState("thinkingCompactionPrompt", request.thinkingCompactionPrompt)
+		}
+
+		if (request.showRequestTimings !== undefined) {
+			controller.stateManager.setGlobalState("showRequestTimings", request.showRequestTimings)
+		}
+
+		if (request.cappedThinkingEnabled !== undefined) {
+			controller.stateManager.setGlobalState("cappedThinkingEnabled", request.cappedThinkingEnabled)
+		}
+
+		if (request.cappedThinkingPrompt !== undefined) {
+			controller.stateManager.setGlobalState("cappedThinkingPrompt", request.cappedThinkingPrompt)
+		}
+
 		if (request.useAutoCondense !== undefined) {
 			if (controller.task) {
 				telemetryService.captureAutoCondenseToggle(
@@ -183,6 +222,11 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 				)
 			}
 			controller.stateManager.setGlobalState("useAutoCondense", request.useAutoCondense)
+		}
+
+		// Update web search setting (stored in the SDK global settings file; applied when the next session is built)
+		if (request.webSearchEnabled !== undefined) {
+			setModelToolEnabledGlobally("web_search", !!request.webSearchEnabled)
 		}
 
 		if (request.compactionStrategy !== undefined) {
@@ -254,26 +298,97 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		}
 
 		if (request.optOutOfRemoteConfig !== undefined) {
-			const hadOptedOut = controller.stateManager.getGlobalSettingsKey("optOutOfRemoteConfig")
+			const hadOptedOut = !!controller.stateManager.getGlobalSettingsKey("optOutOfRemoteConfig")
 			const isOptingOut = !!request.optOutOfRemoteConfig
-			const isReenablingRemoteConfig = !isOptingOut && hadOptedOut
 
-			// Update now so any subsequent function can access the updated value
+			// Update first so the authoritative refresh evaluates the new preference.
 			controller.stateManager.setGlobalState("optOutOfRemoteConfig", isOptingOut)
-
-			if (isOptingOut && !hadOptedOut) {
-				clearRemoteConfig()
-			} else if (isReenablingRemoteConfig) {
-				// Fire-and-forget: We don't need to await here
-				// The function catches any errors and posts the updated state to the webview
-				// The immediate state update below shows the user's intent (opted-in),
-				// and we apply the actual config afterwards without blocking the settings update
-				fetchRemoteConfig(controller)
+			if (isOptingOut !== hadOptedOut) {
+				// force: never coalesce onto an in-flight refresh that already
+				// evaluated the pre-change opt-out preference.
+				await controller.refreshRemoteConfig({ force: true })
 			}
 		}
 
 		if (request.showFeatureTips !== undefined) {
 			controller.stateManager.setGlobalState("showFeatureTips", request.showFeatureTips)
+		}
+
+		// Merged onto the stored value rather than assigned: the settings UI sends
+		// only the field it changed, and proto3 gives an absent number the same
+		// wire form as zero — assigning the request wholesale would reset the
+		// reminder interval to 0 (i.e. remind on every message) whenever the
+		// toggle is flipped.
+		// The QA guard's insistence. Stored whole rather than merged: `mode` is
+		// the only field, and an unknown value would leave the guard in a state
+		// nothing downstream knows how to read.
+		if (request.editVerificationSettings !== undefined) {
+			const mode = request.editVerificationSettings.mode
+			if (mode === "off" || mode === "nudge" || mode === "require") {
+				controller.stateManager.setGlobalState("editVerificationSettings", { mode })
+			}
+		}
+
+		// The change protocol. Merged onto what is stored rather than assigned:
+		// proto3 gives an absent number the same wire form as zero, so a request
+		// that carries only the mode would otherwise set the change limit to zero
+		// and arm the protocol to a combination the user never chose.
+		if (request.atomicProtocolSettings !== undefined) {
+			const stored = controller.stateManager.getGlobalSettingsKey("atomicProtocolSettings")
+			const mode = request.atomicProtocolSettings.mode
+			const maxChanges = request.atomicProtocolSettings.maxChanges
+			const maxTransactions = request.atomicProtocolSettings.maxTransactions
+			const maxCheckProposals = request.atomicProtocolSettings.maxCheckProposals
+			controller.stateManager.setGlobalState("atomicProtocolSettings", {
+				...stored,
+				...(mode === "off" || mode === "auto" || mode === "always" ? { mode } : {}),
+				...(request.atomicProtocolSettings.oracleCommand !== undefined
+					? { oracleCommand: request.atomicProtocolSettings.oracleCommand }
+					: {}),
+				...(request.atomicProtocolSettings.oracleExpect !== undefined
+					? { oracleExpect: request.atomicProtocolSettings.oracleExpect }
+					: {}),
+				...(maxChanges > 0 ? { maxChanges } : {}),
+				...(maxTransactions > 0 ? { maxTransactions } : {}),
+				// Optional on the wire for the same reason the numbers are merged:
+				// absent has to mean "not touched", and for a boolean proto3 would
+				// otherwise send `false` for both.
+				...(request.atomicProtocolSettings.proposeCheck !== undefined
+					? { proposeCheck: request.atomicProtocolSettings.proposeCheck }
+					: {}),
+				...(maxCheckProposals > 0 ? { maxCheckProposals } : {}),
+				// Optional on the wire because zero is a value here and not an
+				// absence: it turns reconsideration off, and a merge that read
+				// it as "not touched" would leave it on.
+				...(request.atomicProtocolSettings.checkReconsideredAfter !== undefined
+					? {
+							checkReconsideredAfter: request.atomicProtocolSettings.checkReconsideredAfter,
+						}
+					: {}),
+			})
+		}
+
+		// QA credentials. A delta, because the settings view knows the names and
+		// never the values, so it has nothing to send back for one the user did
+		// not touch. Rejected entries are logged by name in the store; nothing
+		// here echoes a value anywhere, and none of it reaches `state_json`.
+		if (request.qaCredentials !== undefined) {
+			updateQaCredentials({
+				set: request.qaCredentials.set.map((credential) => ({
+					name: credential.name,
+					value: credential.value,
+				})),
+				remove: request.qaCredentials.remove,
+			})
+		}
+
+		if (request.focusChainSettings !== undefined) {
+			const current = controller.stateManager.getGlobalSettingsKey("focusChainSettings")
+			const remindClineInterval = request.focusChainSettings.remindClineInterval
+			controller.stateManager.setGlobalState("focusChainSettings", {
+				enabled: request.focusChainSettings.enabled,
+				remindClineInterval: remindClineInterval > 0 ? remindClineInterval : current.remindClineInterval,
+			})
 		}
 
 		// Post updated state to webview

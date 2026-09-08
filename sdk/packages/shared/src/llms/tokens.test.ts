@@ -2,12 +2,19 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
 	CHARS_PER_TOKEN,
 	charsPerToken,
+	consumeContextOverflow,
 	estimateRequestInputTokens,
 	estimateTokens,
 	lastObservedRequestTokens,
+	lastOutputCap,
 	measureRequestInputChars,
+	noteContextOverflow,
+	noteOutputCap,
 	observeRequestTokens,
+	observeThinkingTokens,
 	resetTokenCalibration,
+	THINKING_CHARS_PER_TOKEN,
+	thinkingCharsPerToken,
 } from "./tokens";
 
 afterEach(() => {
@@ -175,5 +182,126 @@ describe("calibration state across module copies", () => {
 		expect(lastObservedRequestTokens()).toBe(128_000);
 		expect(charsPerToken()).toBeCloseTo(5.9, 5);
 		resetTokenCalibration();
+	});
+});
+
+/**
+ * One ratio for a whole request is an average over two populations that do not
+ * tokenize alike, and the mix moves every turn. The consequence is not
+ * symmetric: a reasoning-heavy request is *under*counted, which is the
+ * direction that lets one be built too large. Measured live at 71,610
+ * estimated tokens for a request the server rejected against a 110,000 window.
+ */
+describe("counting reasoning apart from the rest", () => {
+	afterEach(() => {
+		resetTokenCalibration();
+	});
+
+	const request = (reasoningChars: number, otherChars: number) => ({
+		messages: [
+			{
+				role: "assistant",
+				content: [
+					{ type: "thinking", thinking: "x".repeat(reasoningChars) },
+					{ type: "text", text: "y".repeat(otherChars) },
+				],
+			},
+		],
+	});
+
+	it("charges reasoning at its own rate", () => {
+		// Calibrated on a request that is mostly JSON and code.
+		observeRequestTokens(420_000, 100_000);
+
+		const heavy = estimateRequestInputTokens(request(40_000, 1_000));
+		const light = estimateRequestInputTokens(request(1_000, 40_000));
+
+		// Same total characters, very different token cost — which is the whole
+		// point, and is invisible to a single ratio.
+		expect(heavy).toBeGreaterThan(light * 1.3);
+	});
+
+	it("does not let both halves account for the same characters", () => {
+		// The general ratio is calibrated on what is left once reasoning has
+		// been charged, so the split does not silently inflate every estimate.
+		observeRequestTokens(100_000, 25_000, 40_000);
+
+		expect(charsPerToken()).toBeGreaterThan(0);
+		expect(charsPerToken()).toBeLessThan(16);
+	});
+
+	it("keeps its old behaviour for a request with no reasoning in it", () => {
+		observeRequestTokens(400_000, 100_000);
+		const chars = measureRequestInputChars({
+			messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
+		});
+
+		expect(
+			estimateRequestInputTokens({
+				messages: [
+					{ role: "user", content: [{ type: "text", text: "hello" }] },
+				],
+			}),
+		).toBe(estimateTokens(chars));
+	});
+
+	it("answers a session only with counts from that session's own requests", () => {
+		// The slot is process-wide and everything that streams shares it. A count
+		// left by another session -- a delegated agent, a second task -- is a
+		// true measurement of the wrong request, and the compaction trigger reads
+		// it as "how full am I".
+		observeRequestTokens(360_000, 100_000, undefined, "session-a");
+
+		expect(lastObservedRequestTokens("session-a")).toBe(100_000);
+		expect(lastObservedRequestTokens("session-b")).toBeUndefined();
+	});
+
+	it("keeps answering a caller that cannot name its session", () => {
+		// A missing id must cost an estimate at worst, never a measurement that
+		// was already in hand: the trigger falls back to a character count that
+		// runs roughly double, which compacts transcripts with room to spare.
+		observeRequestTokens(360_000, 100_000, undefined, "session-a");
+		expect(lastObservedRequestTokens()).toBe(100_000);
+
+		resetTokenCalibration();
+		observeRequestTokens(360_000, 100_000);
+		expect(lastObservedRequestTokens("session-a")).toBe(100_000);
+	});
+
+	it("scopes the output cap and the overflow report the same way", () => {
+		// Both are read to decide whether the *window* is what truncated a turn.
+		// Another request's answer to that question suppresses the compaction the
+		// retry needs (mann1x/cline#68).
+		noteOutputCap(
+			{ maxTokens: 4_000, source: "remaining-context", windowBound: true },
+			"session-a",
+		);
+		expect(lastOutputCap("session-a")).toMatchObject({ windowBound: true });
+		expect(lastOutputCap("session-b")).toBeUndefined();
+
+		noteContextOverflow(
+			{
+				contextWindow: 262_144,
+				estimatedInputTokens: 262_000,
+				reserveTokens: 0,
+				remainingContext: 144,
+				minOutputTokens: 1_024,
+			},
+			"session-a",
+		);
+		expect(consumeContextOverflow("session-b")).toBeUndefined();
+		// Not consumed by the session it did not belong to, so it is still there
+		// for the one it did.
+		expect(consumeContextOverflow("session-a")).toMatchObject({
+			contextWindow: 262_144,
+		});
+	});
+
+	it("learns the reasoning ratio from a turn that reported its own cost", () => {
+		expect(thinkingCharsPerToken()).toBe(THINKING_CHARS_PER_TOKEN);
+
+		observeThinkingTokens(43_000, 16_000);
+
+		expect(thinkingCharsPerToken()).toBeCloseTo(43_000 / 16_000, 5);
 	});
 });

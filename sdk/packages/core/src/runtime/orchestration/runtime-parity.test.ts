@@ -51,8 +51,17 @@ function normalizeParityToolNames(toolNames: string[]): string[] {
 	// depending on the machine state. MCP tools may also be configured outside
 	// the test workspace. They are intentionally excluded from strict legacy
 	// parity checks.
+	//
+	// `create_agent` is excluded for a different reason: it is new, so the
+	// legacy list cannot contain it and never will. This test asks whether the
+	// legacy toolset still matches, not whether the toolset has grown -- that
+	// question is asked by "offers create_agent..." below, which is where a
+	// regression in it would show.
 	return toolNames.filter(
-		(toolName) => toolName !== "skills" && !toolName.includes("__"),
+		(toolName) =>
+			toolName !== "skills" &&
+			toolName !== "create_agent" &&
+			!toolName.includes("__"),
 	);
 }
 
@@ -115,6 +124,32 @@ describe("runtime tool parity", () => {
 		const actual = runtime.tools.map((tool) => tool.name);
 
 		expect(normalizeParityToolNames(actual)).toEqual(expected);
+	});
+
+	it("offers create_agent with the subagents it creates, and not without them", async () => {
+		const base = {
+			providerId: "anthropic",
+			modelId: "claude-sonnet-4-6",
+			apiKey: "key",
+			systemPrompt: "test",
+			cwd: makeEmptyWorkspaceCwd(),
+			enableTools: true,
+			enableAgentTeams: false,
+		};
+
+		const withSpawn = await new DefaultRuntimeBuilder().build({
+			config: { ...base, enableSpawnAgent: true },
+			createSpawnTool: makeSpawnTool,
+		});
+		expect(withSpawn.tools.map((tool) => tool.name)).toContain("create_agent");
+
+		// Writing an agent file is pointless in a session that cannot run one.
+		const withoutSpawn = await new DefaultRuntimeBuilder().build({
+			config: { ...base, enableSpawnAgent: false },
+		});
+		expect(withoutSpawn.tools.map((tool) => tool.name)).not.toContain(
+			"create_agent",
+		);
 	});
 
 	it("matches legacy tool list when only spawn is enabled", async () => {

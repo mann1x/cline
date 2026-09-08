@@ -76,6 +76,11 @@ enum ClineSay {
   SUBAGENT_USAGE = 36;
   COMPACTION = 37;
   PLAN_COMPLETION_RESULT = 38;
+  // A screenshot returned by the `browser` tool, shown under its tool row.
+  BROWSER_SCREENSHOT = 39;
+  // A capped turn's reasoning, replaced by the note it left itself.
+  THINKING_CONDENSED = 40;
+  TRANSACTION = 41;
 }
 
 // Enum for ClineSayTool tool types
@@ -307,4 +312,13 @@ service UiService {
 
   // Tracks intent signals before task creation or first model activity
   rpc trackIntent(IntentEvent) returns (Empty);
+
+  // Reports a failure inside the webview to the extension's log.
+  //
+  // A render that throws unmounts the whole tree and leaves an empty panel.
+  // From the extension host that is indistinguishable from a panel nobody
+  // opened: the host is fine, the task keeps running, and nothing is written
+  // anywhere. This is how the webview says what happened, so a report collected
+  // afterwards carries it.
+  rpc reportWebviewError(StringRequest) returns (Empty);
 }

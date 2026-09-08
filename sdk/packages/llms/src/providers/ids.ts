@@ -13,6 +13,7 @@ export enum BUILT_IN_PROVIDER {
 	CLAUDE_CODE = "claude-code",
 	CLINE = "cline",
 	CLINE_PASS = "cline-pass",
+	ELEVENLABS = "elevenlabs",
 	// OpenAI variants
 	OPENAI_COMPATIBLE = "openai-compatible",
 	OPENAI_NATIVE = "openai-native",
@@ -26,6 +27,7 @@ export enum BUILT_IN_PROVIDER {
 	GEMINI = "gemini",
 	// Local/self-hosted
 	OLLAMA = "ollama",
+	OPENCOTI = "opencoti",
 	LMSTUDIO = "lmstudio",
 	// OpenAI-compatible
 	DEEPSEEK = "deepseek",

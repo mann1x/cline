@@ -1,4 +1,5 @@
 import type { ApiConfiguration, ModelInfo } from "@shared/api"
+import { filterChatModelMap, resolveChatModelDefault } from "@/sdk/model-catalog/chat-models"
 import type {
 	EffectiveProviderConfig,
 	Mode,
@@ -195,16 +196,30 @@ export function toProviderModelsResponse(
 	requestId: string,
 	result: ProviderModelsResult,
 ): ProviderModelsResponse {
+	if (!result.ok) {
+		return ProviderModelsResponse.create({
+			providerId,
+			requestId,
+			configFingerprint: result.configFingerprint,
+			fetchedAt: result.fetchedAt,
+			ok: false,
+			models: {},
+			error: toCatalogErrorInfo(result.error),
+		})
+	}
+
+	const chatModels = filterChatModelMap(result.models)
+	const defaultModelId = resolveChatModelDefault(result.defaultModelId, chatModels)
+
 	return ProviderModelsResponse.create({
 		providerId,
 		requestId,
 		configFingerprint: result.configFingerprint,
 		fetchedAt: result.fetchedAt,
-		ok: result.ok,
-		models: result.ok ? toProtobufModels(result.models) : {},
-		defaultModelId: result.ok ? result.defaultModelId : undefined,
-		source: result.ok ? result.source : undefined,
-		error: result.ok ? undefined : toCatalogErrorInfo(result.error),
+		ok: true,
+		models: toProtobufModels(chatModels),
+		defaultModelId,
+		source: result.source,
 	})
 }
 
@@ -227,6 +242,8 @@ export function toRedactedProviderConfigResponse(
 		aws: toRedactedAwsProviderConfigProto(config.aws),
 		gcp: toRedactedGcpProviderConfigProto(config.gcp),
 		contextWindow: config.contextWindow,
+		parallelSessions: config.parallelSessions,
+		maxToolResultChars: config.maxToolResultChars,
 		reasoning: config.reasoning
 			? {
 					enabled: config.reasoning.enabled,
@@ -257,6 +274,16 @@ export function toProviderConfigPatch(protoPatch: WriteProviderConfigPatch | und
 		// A zero context window over the wire means "clear the setting".
 		...(protoPatch.contextWindow !== undefined
 			? { contextWindow: protoPatch.contextWindow > 0 ? protoPatch.contextWindow : null }
+			: {}),
+		// And a zero parallel-session count means the same. Cleared falls back to
+		// one, which is what `--parallel` and a basic plan give you.
+		...(protoPatch.parallelSessions !== undefined
+			? { parallelSessions: protoPatch.parallelSessions > 0 ? protoPatch.parallelSessions : null }
+			: {}),
+		// A zero cap clears it, falling back to the global setting rather than
+		// meaning "send no tool results at all".
+		...(protoPatch.maxToolResultChars !== undefined
+			? { maxToolResultChars: protoPatch.maxToolResultChars > 0 ? protoPatch.maxToolResultChars : null }
 			: {}),
 		...(protoPatch.accessToken !== undefined || protoPatch.refreshToken !== undefined || protoPatch.accountId !== undefined
 			? {

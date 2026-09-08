@@ -1,5 +1,6 @@
 import type { ClineMessage } from "@shared/ExtensionMessage"
 import { EmptyRequest, StringRequest } from "@shared/proto/cline/common"
+import { DelegateRequest } from "@shared/proto/cline/slash"
 import { AskResponseRequest, NewTaskRequest } from "@shared/proto/cline/task"
 import { IntentEvent } from "@shared/proto/cline/ui"
 import { useCallback, useRef } from "react"
@@ -67,6 +68,42 @@ export function useMessageHandlers(messages: ClineMessage[], chatState: ChatStat
 				await SlashServiceClient.condense(StringRequest.create({ value: "compact" })).catch((err) =>
 					console.error("Failed to compact task:", err),
 				)
+				if ("disableAutoScrollRef" in chatState) {
+					;(chatState as any).disableAutoScrollRef.current = false
+				}
+				return
+			}
+
+			// `/delegate-background <agent> <task>` is the same delegation with
+			// the waiting removed: the agent runs beside the turn and reports
+			// back into the conversation when it is done. Matched before
+			// `/delegate` only for the reader's sake -- the `\s+` in that
+			// pattern already means it cannot swallow this one.
+			const delegateBackgroundMatch = messageToSend.match(/^\/delegate-background\s+(\S+)\s+([\s\S]+)$/)
+			if (messages.length > 0 && delegateBackgroundMatch) {
+				setInputValue("")
+				setActiveQuote(null)
+				await SlashServiceClient.delegateBackground(
+					DelegateRequest.create({ agentName: delegateBackgroundMatch[1], prompt: delegateBackgroundMatch[2] }),
+				).catch((err) => console.error("Failed to start a background delegation:", err))
+				if ("disableAutoScrollRef" in chatState) {
+					;(chatState as any).disableAutoScrollRef.current = false
+				}
+				return
+			}
+
+			// `/delegate <agent> <task>` runs a configured agent directly. The
+			// lead model is not asked whether to delegate: an instruction that
+			// the model can decline is a suggestion, which is not what the user
+			// typed. With no task, the command falls through to the model, which
+			// can answer the "what can I delegate to" question in words.
+			const delegateMatch = messageToSend.match(/^\/delegate\s+(\S+)\s+([\s\S]+)$/)
+			if (messages.length > 0 && delegateMatch) {
+				setInputValue("")
+				setActiveQuote(null)
+				await SlashServiceClient.delegate(
+					DelegateRequest.create({ agentName: delegateMatch[1], prompt: delegateMatch[2] }),
+				).catch((err) => console.error("Failed to delegate to agent:", err))
 				if ("disableAutoScrollRef" in chatState) {
 					;(chatState as any).disableAutoScrollRef.current = false
 				}
@@ -335,8 +372,14 @@ export function useMessageHandlers(messages: ClineMessage[], chatState: ChatStat
 			}),
 		).catch((error) => console.error("Failed to track new task click:", error))
 		setActiveQuote(null)
+		// Drop any unconfirmed optimistic message: if it lingered past an explicit
+		// New Task, withPendingUserMessage would re-inject the old task (and its
+		// attachments) into the freshly cleared transcript, leaving the chat stuck
+		// on the previous task (#12924).
+		setPendingUserMessage(undefined)
+		setPendingResponse(undefined)
 		await TaskServiceClient.clearTask(EmptyRequest.create({}))
-	}, [messages.length, setActiveQuote])
+	}, [messages.length, setActiveQuote, setPendingUserMessage, setPendingResponse])
 
 	// Clear input state helper
 	const clearInputState = useCallback(() => {
@@ -507,10 +550,30 @@ export function useMessageHandlers(messages: ClineMessage[], chatState: ChatStat
 		startNewTask()
 	}, [startNewTask])
 
+	/**
+	 * Attach an image from the transcript to the message being composed.
+	 *
+	 * This is how "in the preview I don't see the top menu" becomes something the
+	 * model can act on: the sentence alone is ambiguous across a run with several
+	 * screenshots, so the picture goes with it. Attaching rather than quoting also
+	 * means the plumbing already exists — a composed message's images are sent as
+	 * image blocks — so no new mention syntax has to be resolved anywhere.
+	 *
+	 * Re-attaching the same image is a no-op: double-clicking the menu entry
+	 * should not send the same screenshot twice.
+	 */
+	const handleReferenceImage = useCallback(
+		(image: string) => {
+			setSelectedImages((current) => (current.includes(image) ? current : [...current, image]))
+		},
+		[setSelectedImages],
+	)
+
 	return {
 		handleSendMessage,
 		executeButtonAction,
 		handleTaskCloseButtonClick,
+		handleReferenceImage,
 		startNewTask,
 	}
 }

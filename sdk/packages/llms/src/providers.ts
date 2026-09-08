@@ -132,3 +132,24 @@ export async function createHandlerAsync(
 
 	return createGatewayApiHandlerAsync(normalizedConfig);
 }
+// The level an Ollama request stands for when none is set. Exported because
+// it decides the thinking budget the server enforces, so anything asking the
+// server what that budget will be has to ask about this level.
+export {
+	hasOllamaFetch,
+	hasOllamaNoStreamTimeoutDispatcher,
+	OLLAMA_DEFAULT_REASONING_EFFORT,
+	// A host that resolves the context window itself has to be able to ask the
+	// server what the model declares, and to ask before the first request.
+	primeDeclaredNumCtx,
+	// Answered by the same `/api/show` as the window: a prompt template matches
+	// on the model's architecture, and a local model's name does not carry one.
+	readDeclaredFamily,
+	readDeclaredNumCtx,
+	// The dispatcher is only honoured by a fetch that reads it, so the host
+	// hands over both or neither.
+	setOllamaFetch,
+	// Takes an opaque `unknown` and touches no Node API, so the browser build
+	// carries a setter nobody calls rather than needing a conditional export.
+	setOllamaNoStreamTimeoutDispatcher,
+} from "./providers/vendors/ollama";

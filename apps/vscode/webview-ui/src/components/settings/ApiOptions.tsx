@@ -8,6 +8,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { PLATFORM_CONFIG, PlatformType } from "@/config/platform.config"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { useProviderListings } from "@/hooks/useProviderListings"
+import { ClinePassHint } from "./ClinePassHint"
+import ParallelSessionsField, { PARALLEL_SESSIONS_DESCRIPTION } from "./common/ParallelSessionsField"
 import { OPENROUTER_MODEL_PICKER_Z_INDEX } from "./OpenRouterModelPicker"
 import { AIhubmixProvider } from "./providers/AihubmixProvider"
 import { AnthropicProvider } from "./providers/AnthropicProvider"
@@ -348,6 +350,8 @@ const ApiOptions = ({
 				</ProviderDropdownWrapper>
 			</DropdownContainer>
 
+			{!isPopup && <ClinePassHint currentMode={currentMode} selectedProvider={selectedProvider} />}
+
 			{apiConfiguration && selectedProvider === "hicap" && (
 				<HicapProvider currentMode={currentMode} isPopup={isPopup} showModelOptions={showModelOptions} />
 			)}
@@ -479,6 +483,18 @@ const ApiOptions = ({
 					providerId={selectedProvider}
 					showModelOptions={showModelOptions}
 				/>
+			)}
+
+			{/* Every provider, not a chosen few: the number describes an
+			    arrangement with an endpoint, and every endpoint has one — slots on
+			    a local server, a plan's concurrency allowance on a hosted one.
+			    Placed here rather than in each panel so the two dozen of them
+			    cannot disagree about where it lives or what it is called. */}
+			{apiConfiguration && showModelOptions && selectedProvider && (
+				<div className="mb-[5px]">
+					<ParallelSessionsField providerId={selectedProvider} />
+					<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">{PARALLEL_SESSIONS_DESCRIPTION}</p>
+				</div>
 			)}
 
 			{apiErrorMessage && (

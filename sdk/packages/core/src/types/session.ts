@@ -1,5 +1,6 @@
 import type * as LlmsProviders from "@cline/llms";
 import type { AgentFinishReason } from "@cline/shared";
+import type { AtomicProtocolSession } from "../runtime/atomic/session-protocol";
 import type { SessionAccumulatedUsage } from "../runtime/host/runtime-host";
 import type { BuiltRuntime } from "../runtime/orchestration/session-runtime";
 import type { SessionRuntime } from "../runtime/orchestration/session-runtime-orchestrator";
@@ -33,6 +34,26 @@ export type ActiveSession = {
 	pendingTeamRunUpdates: TeamRunUpdate[];
 	teamRunWaiters: Array<() => void>;
 	pendingPrompts: PendingPrompt[];
+	/**
+	 * The change protocol this session is running under, when it is armed.
+	 *
+	 * Held on the session because the rules go out with the user's own message:
+	 * the turn that delivers them is prepared long after the session was built.
+	 */
+	atomicProtocol?: AtomicProtocolSession;
+	/**
+	 * Whether the protocol engaged, waiting for a turn to be said on.
+	 *
+	 * Not said when it is decided, which is inside `startSession`. A host that
+	 * routes events to the session it currently has open has no such session at
+	 * that moment: the VS Code extension compares the event's id against its
+	 * active session, finds none, and drops it as stale one line before it
+	 * would have become a chat row. Measured that way on first live use — the
+	 * protocol was running, the rules were in the prompt, and the chat said
+	 * nothing at all. So the message waits for the first turn, where every
+	 * other event of the session is delivered, and goes out once.
+	 */
+	pendingAtomicStatus?: { armed: boolean; message: string };
 	drainingPendingPrompts: boolean;
 	pluginSandboxShutdown?: () => Promise<void>;
 	turnUsageBaseline?: SessionAccumulatedUsage;
@@ -48,14 +69,21 @@ export type ActiveSession = {
 	 *    declares completion (parity with original Cline's
 	 *    `attempt_completion`).
 	 * 2. Suppress the fallback `task.completed` emission from
-	 *    `shutdownSession(...)` so the same logical completion is not
-	 *    reported twice.
+	 *    `emitTaskCompletedOnTeardown(...)` so the same logical completion
+	 *    is not reported twice.
 	 *
 	 * Non-interactive sessions that finish without ever calling the
-	 * completion tool still receive a `task.completed` from the shutdown
+	 * completion tool still receive a `task.completed` from the teardown
 	 * fallback.
 	 */
 	submitAndExitObserved: boolean;
+	/**
+	 * Set to `true` the moment `task.completed` is emitted for this session,
+	 * whether by the `submit_and_exit` observer or by the teardown fallback
+	 * (`emitTaskCompletedOnTeardown`). Enforces the invariant of exactly one
+	 * `task.completed` per session regardless of which teardown path runs.
+	 */
+	taskCompletedEmitted: boolean;
 };
 
 export type PendingPrompt = {

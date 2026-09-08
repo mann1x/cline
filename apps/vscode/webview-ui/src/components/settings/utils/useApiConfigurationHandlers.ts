@@ -4,9 +4,27 @@ import { convertApiConfigurationToProto } from "@shared/proto-conversions/models
 import { Mode } from "@shared/storage/types"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { ModelsServiceClient } from "@/services/grpc-client"
+import { useApiConfigurationScope } from "./ApiConfigurationScopeContext"
 
 export const useApiConfigurationHandlers = () => {
 	const { apiConfiguration, planActSeparateModelsSetting } = useExtensionState()
+	// Set by the Vision tab, which shows this panel for a second model rather
+	// than for the session. When present it also means there is only one
+	// configuration to write, so mode-scoped fields go to both modes.
+	const scope = useApiConfigurationScope()
+
+	const persist = async (updatedConfig: ApiConfiguration) => {
+		if (scope) {
+			await scope.save(updatedConfig)
+			return
+		}
+		const protoConfig = convertApiConfigurationToProto(updatedConfig)
+		await ModelsServiceClient.updateApiConfigurationProto(
+			UpdateApiConfigurationRequest.create({
+				apiConfiguration: protoConfig,
+			}),
+		)
+	}
 
 	/**
 	 * Updates a single field in the API configuration.
@@ -19,17 +37,10 @@ export const useApiConfigurationHandlers = () => {
 	 * @param value - The new value for the field
 	 */
 	const handleFieldChange = async <K extends keyof ApiConfiguration>(field: K, value: ApiConfiguration[K]) => {
-		const updatedConfig = {
+		await persist({
 			...apiConfiguration,
 			[field]: value,
-		}
-
-		const protoConfig = convertApiConfigurationToProto(updatedConfig)
-		await ModelsServiceClient.updateApiConfigurationProto(
-			UpdateApiConfigurationRequest.create({
-				apiConfiguration: protoConfig,
-			}),
-		)
+		})
 	}
 
 	/**
@@ -42,17 +53,10 @@ export const useApiConfigurationHandlers = () => {
 	 * @param updates - An object containing the fields to update and their new values
 	 */
 	const handleFieldsChange = async (updates: Partial<ApiConfiguration>) => {
-		const updatedConfig = {
+		await persist({
 			...apiConfiguration,
 			...updates,
-		}
-
-		const protoConfig = convertApiConfigurationToProto(updatedConfig)
-		await ModelsServiceClient.updateApiConfigurationProto(
-			UpdateApiConfigurationRequest.create({
-				apiConfiguration: protoConfig,
-			}),
-		)
+		})
 	}
 
 	const handleModeFieldChange = async <PlanK extends keyof ApiConfiguration, ActK extends keyof ApiConfiguration>(
@@ -60,7 +64,7 @@ export const useApiConfigurationHandlers = () => {
 		value: ApiConfiguration[PlanK] & ApiConfiguration[ActK], // Intersection ensures value is compatible with both field types
 		currentMode: Mode,
 	) => {
-		if (planActSeparateModelsSetting) {
+		if (planActSeparateModelsSetting && !scope) {
 			const targetField = fieldPair[currentMode]
 			await handleFieldChange(targetField, value)
 		} else {
@@ -86,7 +90,7 @@ export const useApiConfigurationHandlers = () => {
 		values: T,
 		currentMode: Mode,
 	) => {
-		if (planActSeparateModelsSetting) {
+		if (planActSeparateModelsSetting && !scope) {
 			// Update only the current mode's fields
 			const updates: Partial<ApiConfiguration> = {}
 			Object.entries(fieldPairs).forEach(([key, { plan, act }]) => {

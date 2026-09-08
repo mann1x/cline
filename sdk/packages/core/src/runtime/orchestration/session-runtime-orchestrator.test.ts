@@ -28,6 +28,7 @@ import {
 	type AgentModel,
 	type AgentRunResult,
 	type AgentRuntimeEvent,
+	type AgentRuntimeHooks,
 	type AgentTool,
 	type AgentToolContext,
 	EMPTY_CONTENT_TEXT,
@@ -35,6 +36,8 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { MESSAGE_BUILDER_LIMIT_ENV } from "../../session/services/message-builder";
 import {
+	declaredNoOp,
+	introducedRegression,
 	SessionRuntime,
 	type SessionRuntimeOrchestratorDeps,
 } from "./session-runtime-orchestrator";
@@ -367,6 +370,57 @@ describe("SessionRuntime.getExtensionRegistry", () => {
 		expect(configs[0]?.systemPrompt).toBe(
 			"Base prompt.\n\nAlways preserve architectural boundaries.",
 		);
+	});
+
+	it("composes tool-conditional rules only when the tool is enabled", async () => {
+		const conditionalRuleExtension: AgentExtension = {
+			name: "conditional-tool-rule",
+			manifest: { capabilities: ["rules"] },
+			setup: (api) => {
+				api.registerRule({
+					id: "conditional-tool-rule:guidance",
+					content: "Use tasks for durable follow-up work.",
+					whenToolAvailable: "tasks",
+				});
+			},
+		};
+		const todoListTool: AgentTool = {
+			name: "tasks",
+			description: "Manage durable agenda items.",
+			inputSchema: { type: "object", properties: {} },
+			execute: async () => ({ ok: true }),
+		};
+
+		const enabledCapture = withCapturingFakeRuntime();
+		const enabledSession = new SessionRuntime(
+			makeAgentConfig({
+				systemPrompt: "Base prompt.",
+				tools: [todoListTool],
+				extensions: [conditionalRuleExtension],
+			}),
+			enabledCapture.deps,
+		);
+		await enabledSession.run("go");
+
+		expect(enabledCapture.configs[0]?.systemPrompt).toBe(
+			"Base prompt.\n\nUse tasks for durable follow-up work.",
+		);
+		expect(enabledCapture.configs[0]?.tools).toContainEqual(todoListTool);
+
+		const disabledCapture = withCapturingFakeRuntime();
+		const disabledSession = new SessionRuntime(
+			makeAgentConfig({
+				systemPrompt: "Base prompt.",
+				tools: [todoListTool],
+				extensions: [conditionalRuleExtension],
+				toolPolicies: { tasks: { enabled: false } },
+			}),
+			disabledCapture.deps,
+		);
+		await disabledSession.run("go");
+
+		expect(disabledCapture.configs[0]?.systemPrompt).toBe("Base prompt.");
+		expect(disabledCapture.configs[0]?.tools).toEqual([]);
 	});
 
 	it("passes session, caller, and logger context into extension setup()", async () => {
@@ -855,6 +909,51 @@ it("derives tool image support metadata from resolved provider model catalog", a
 	expect(runtimeConfig.toolContextMetadata?.telemetry).toBeUndefined();
 });
 
+it.each([
+	["absent", undefined],
+	["empty", []],
+])("keeps image support enabled when the capability list is %s", async (_label, capabilities) => {
+	const { deps, configs } = withCapturingFakeRuntime();
+	const session = new SessionRuntime(
+		makeAgentConfig({
+			knownModels: {
+				"claude-3-5-sonnet": {
+					id: "claude-3-5-sonnet",
+					...(capabilities === undefined ? {} : { capabilities }),
+				},
+			},
+		}),
+		deps,
+	);
+
+	await session.run("inspect image");
+
+	expect(configs[0]?.toolContextMetadata).toEqual(
+		expect.objectContaining({ modelSupportsImages: true }),
+	);
+});
+
+it("disables image support when a populated capability list omits images", async () => {
+	const { deps, configs } = withCapturingFakeRuntime();
+	const session = new SessionRuntime(
+		makeAgentConfig({
+			knownModels: {
+				"claude-3-5-sonnet": {
+					id: "claude-3-5-sonnet",
+					capabilities: ["tools", "prompt-cache"],
+				},
+			},
+		}),
+		deps,
+	);
+
+	await session.run("inspect image");
+
+	expect(configs[0]?.toolContextMetadata).toEqual(
+		expect.objectContaining({ modelSupportsImages: false }),
+	);
+});
+
 describe("SessionRuntime.run", () => {
 	it("invokes the injected AgentRuntime and returns an AgentResult", async () => {
 		const { deps, calls } = withFakeRuntime({
@@ -871,6 +970,116 @@ describe("SessionRuntime.run", () => {
 		expect(result.startedAt).toBeInstanceOf(Date);
 		expect(result.endedAt).toBeInstanceOf(Date);
 		expect(typeof result.durationMs).toBe("number");
+	});
+
+	it("disables tools and completion-tool policy for dedicated image models", async () => {
+		const { deps, configs } = withCapturingFakeRuntime();
+		const modelId = "openai/gpt-5-image";
+		const session = new SessionRuntime(
+			makeAgentConfig({
+				modelId,
+				knownModels: {
+					[modelId]: {
+						id: modelId,
+						operation: "image-generation",
+						capabilities: ["tools", "images"],
+						modalities: {
+							input: ["text", "image"],
+							output: ["image"],
+						},
+					},
+				},
+				tools: [
+					{
+						name: "read_files",
+						description: "Read files",
+						inputSchema: { type: "object" },
+						execute: async () => "contents",
+					},
+				],
+				completionPolicy: { requireCompletionTool: true },
+			}),
+			deps,
+		);
+
+		await session.run("Generate an image");
+
+		expect(configs).toHaveLength(1);
+		expect(configs[0]?.tools).toEqual([]);
+		expect(configs[0]?.completionPolicy).toBeUndefined();
+	});
+
+	it("preserves tools and completion-tool policy for mixed image models", async () => {
+		const { deps, configs } = withCapturingFakeRuntime();
+		const modelId = "openai/gpt-5-image";
+		const completionPolicy = { requireCompletionTool: true };
+		const session = new SessionRuntime(
+			makeAgentConfig({
+				modelId,
+				knownModels: {
+					[modelId]: {
+						id: modelId,
+						capabilities: ["tools", "images"],
+						modalities: {
+							input: ["text", "image"],
+							output: ["image", "text"],
+						},
+					},
+				},
+				tools: [
+					{
+						name: "read_files",
+						description: "Read files",
+						inputSchema: { type: "object" },
+						execute: async () => "contents",
+					},
+				],
+				completionPolicy,
+			}),
+			deps,
+		);
+
+		await session.run("Answer normally or generate an image");
+
+		expect(configs).toHaveLength(1);
+		expect(configs[0]?.tools?.map((tool) => tool.name)).toEqual(["read_files"]);
+		expect(configs[0]?.completionPolicy).toEqual(completionPolicy);
+	});
+
+	it("disables tools and completion-tool policy for tool-less mixed image models", async () => {
+		const { deps, configs } = withCapturingFakeRuntime();
+		const modelId = "google/gemini-2.5-flash-image";
+		const session = new SessionRuntime(
+			makeAgentConfig({
+				modelId,
+				knownModels: {
+					[modelId]: {
+						id: modelId,
+						capabilities: ["images"],
+						modalities: {
+							input: ["text", "image"],
+							output: ["text", "image"],
+						},
+					},
+				},
+				tools: [
+					{
+						name: "read_files",
+						description: "Read files",
+						inputSchema: { type: "object" },
+						execute: async () => "contents",
+					},
+				],
+				completionPolicy: { requireCompletionTool: true },
+			}),
+			deps,
+		);
+
+		await session.run("Generate an image");
+
+		expect(configs).toHaveLength(1);
+		expect(configs[0]?.tools).toEqual([]);
+		expect(configs[0]?.completionPolicy).toBeUndefined();
 	});
 
 	it("appends the user turn into the conversation store", async () => {
@@ -1604,6 +1813,119 @@ describe("SessionRuntime real AgentRuntime smoke", () => {
 });
 
 // ---------------------------------------------------------------------------
+// external abort signal
+// ---------------------------------------------------------------------------
+
+describe("SessionRuntime external abort signal", () => {
+	it("observes the parent signal only while a run is active", async () => {
+		const controller = new AbortController();
+		const addEventListener = vi.spyOn(controller.signal, "addEventListener");
+		const removeEventListener = vi.spyOn(
+			controller.signal,
+			"removeEventListener",
+		);
+		const { deps } = withFakeRuntime();
+		const session = new SessionRuntime(
+			makeAgentConfig({ abortSignal: controller.signal }),
+			deps,
+		);
+
+		expect(addEventListener).not.toHaveBeenCalled();
+		await session.run("delegated task");
+
+		expect(addEventListener).toHaveBeenCalledOnce();
+		expect(removeEventListener).toHaveBeenCalledOnce();
+	});
+
+	it("does not retain the parent signal when extension startup fails", async () => {
+		const controller = new AbortController();
+		const addEventListener = vi.spyOn(controller.signal, "addEventListener");
+		const extension: AgentExtension = {
+			name: "failing-startup",
+			manifest: { capabilities: ["tools"] },
+			setup: () => {
+				throw new Error("startup failed");
+			},
+		};
+		const session = new SessionRuntime(
+			makeAgentConfig({
+				abortSignal: controller.signal,
+				extensions: [extension],
+				hookErrorMode: "throw",
+			}),
+		);
+
+		await expect(session.run("delegated task")).rejects.toThrow(
+			"startup failed",
+		);
+		expect(addEventListener).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		"before",
+		"during",
+	] as const)("retains a parent abort received %s delegated startup", async (timing) => {
+		const controller = new AbortController();
+		let releaseStartup: (() => void) | undefined;
+		// AgentRuntime plugin setup has no cancellation contract. Release this
+		// finite startup explicitly and verify the retained abort is applied before
+		// the model runs; making arbitrary plugin initialization abortable is not
+		// part of SessionRuntime cancellation propagation.
+		const startupGate = new Promise<void>((resolve) => {
+			releaseStartup = resolve;
+		});
+		let markStartupEntered: (() => void) | undefined;
+		const startupEntered = new Promise<void>((resolve) => {
+			markStartupEntered = resolve;
+		});
+		const modelStream = vi.fn(async () =>
+			(async function* () {
+				yield { type: "text-delta" as const, text: "should not run" };
+				yield { type: "finish" as const, reason: "stop" as const };
+			})(),
+		);
+		const scriptedModel: AgentModel = { stream: modelStream };
+
+		if (timing === "before") {
+			controller.abort("parent session aborted");
+		}
+		const session = new SessionRuntime(
+			makeAgentConfig({ abortSignal: controller.signal }),
+			{
+				createAgentRuntimeImpl: (config) =>
+					createAgentRuntime({
+						...config,
+						model: scriptedModel,
+						plugins: [
+							...(config.plugins ?? []),
+							{
+								name: "delayed-startup",
+								async setup() {
+									markStartupEntered?.();
+									await startupGate;
+									return {};
+								},
+							},
+						],
+					}),
+			},
+		);
+		const runPromise = session.run("delegated task");
+		await startupEntered;
+		if (timing === "during") {
+			controller.abort("parent session aborted");
+		}
+		releaseStartup?.();
+
+		await expect(runPromise).resolves.toMatchObject({
+			finishReason: "aborted",
+		});
+		expect(modelStream).not.toHaveBeenCalled();
+		await session.shutdown();
+	});
+});
+
+// ---------------------------------------------------------------------------
 // shutdown
 // ---------------------------------------------------------------------------
 
@@ -2292,24 +2614,28 @@ describe("SessionRuntime.run — tracker wiring (P1 #3)", () => {
 		expect(events[0].properties.agentId).toMatch(/^agent_/);
 	});
 
-	it("aborts on hard-threshold loop detection of identical tool calls", async () => {
-		const identical = (i: number): AgentRuntimeEvent => ({
-			type: "tool-started",
-			iteration: i,
-			toolCall: {
-				type: "tool-call",
-				toolCallId: `tc${i}`,
-				toolName: "same",
-				input: { a: 1 },
-			},
-			snapshot: makeSnapshot(),
-		});
+	// One hard verdict is a last warning, not a stop. Measured on a 34-iteration
+	// run that had made nine edits and six checks in twenty-four minutes and was
+	// ended by a single repeated `editor` call: every soft warning counted
+	// strikes down, and then the run ended without the model ever being told the
+	// countdown had run out.
+	const identicalCall = (i: number): AgentRuntimeEvent => ({
+		type: "tool-started",
+		iteration: i,
+		toolCall: {
+			type: "tool-call",
+			toolCallId: `tc${i}`,
+			toolName: "same",
+			input: { a: 1 },
+		},
+		snapshot: makeSnapshot(),
+	});
+
+	const runIdenticalCalls = async (count: number) => {
 		const { deps, abortCalls } = makeScriptedRuntime({
 			events: [
 				{ type: "turn-started", iteration: 1, snapshot: makeSnapshot() },
-				identical(1),
-				identical(1),
-				identical(1),
+				...Array.from({ length: count }, (_, i) => identicalCall(i + 1)),
 			],
 		});
 		const session = new SessionRuntime(
@@ -2322,7 +2648,111 @@ describe("SessionRuntime.run — tracker wiring (P1 #3)", () => {
 			deps,
 		);
 		await session.run("loop-me");
+		return abortCalls;
+	};
+
+	it("warns rather than aborting on the first hard loop verdict", async () => {
+		expect(await runIdenticalCalls(3)).toHaveLength(0);
+	});
+
+	it("aborts on the second hard loop verdict, naming the loop", async () => {
+		const abortCalls = await runIdenticalCalls(4);
 		expect(abortCalls.length).toBeGreaterThanOrEqual(1);
+		// The reason has to say a loop stopped it. Reporting a forced stop as
+		// "maximum consecutive mistakes reached (6)" names a limit that was never
+		// approached -- the count here is 2 of 6, and the limit is where a reader
+		// then goes looking.
+		expect(String(abortCalls[0])).toContain("loop");
+		expect(String(abortCalls[0])).not.toContain("(6)");
+	});
+
+	// The warning used to be appended to the conversation store, which the run
+	// had already snapshotted and would overwrite when it finished. Measured on
+	// a live session: the guard counted six refusals of one `editor` call, and
+	// not one of the twenty-six requests on the wire carried a word of it.
+	it("puts the strike countdown into the tool result the model reads", async () => {
+		const noChange =
+			"Editor operation failed: No change: lines 94-98 already reads exactly this way in game.html.";
+		const call = (id: string) => ({
+			type: "tool-call" as const,
+			toolCallId: id,
+			toolName: "editor",
+			input: { path: "game.html", start_line: 94 },
+		});
+		const refusal = (id: string): AgentRuntimeEvent => ({
+			type: "tool-finished",
+			iteration: 1,
+			toolCall: call(id),
+			message: {
+				id: `m${id}`,
+				role: "tool",
+				content: [
+					{
+						type: "tool-result",
+						toolCallId: id,
+						toolName: "editor",
+						output: {
+							query: "edit",
+							result: "",
+							error: noChange,
+							success: false,
+						},
+						isError: true,
+					},
+				],
+				createdAt: 1,
+			},
+			snapshot: makeSnapshot(),
+		});
+		const { deps } = makeScriptedRuntime({
+			events: [
+				{ type: "turn-started", iteration: 1, snapshot: makeSnapshot() },
+				{
+					type: "tool-started",
+					iteration: 1,
+					toolCall: call("tc1"),
+					snapshot: makeSnapshot(),
+				},
+				refusal("tc1"),
+				// The repeat. This is the one the guard has something to say about.
+				{
+					type: "tool-started",
+					iteration: 2,
+					toolCall: call("tc2"),
+					snapshot: makeSnapshot(),
+				},
+			],
+		});
+		let capturedHooks: Partial<AgentRuntimeHooks> | undefined;
+		const createRuntime = deps.createAgentRuntimeImpl as (
+			config: AgentRuntimeConfig,
+		) => AgentRuntime;
+		const session = new SessionRuntime(makeAgentConfig({}), {
+			createAgentRuntimeImpl: (config: AgentRuntimeConfig) => {
+				capturedHooks = config.hooks as Partial<AgentRuntimeHooks>;
+				return createRuntime(config);
+			},
+		});
+
+		await session.run("fix the game");
+
+		const after = await capturedHooks?.afterTool?.({
+			snapshot: makeSnapshot(),
+			tool: { name: "editor" },
+			toolCall: call("tc2"),
+			input: {},
+			result: {
+				output: { query: "edit", result: "", error: noChange, success: false },
+				isError: true,
+			},
+			startedAt: new Date(),
+			endedAt: new Date(),
+			durationMs: 1,
+		} as never);
+
+		const error = (after?.result?.output as { error: string }).error;
+		expect(error).toContain("No change");
+		expect(error).toContain("strikes left");
 	});
 
 	it("resets loop detection when run() starts a fresh conversation", async () => {
@@ -2530,5 +2960,165 @@ describe("SessionRuntime auth retry", () => {
 		expect(onAuthError).not.toHaveBeenCalled();
 		expect(createdCount()).toBe(1);
 		expect(result.finishReason).toBe("error");
+	});
+});
+
+describe("introducedRegression", () => {
+	// The measured failure this exists for: eight consecutive `editor` calls,
+	// every one `success: true`, the file's diagnostics going 2 -> 20 and the
+	// class under repair written into the file three times. Judged on failure
+	// alone all eight looked productive, so the barren-repeat counter reset on
+	// each and the loop stop could never fire.
+	it("sees the mark the host puts on an edit that broke the file", () => {
+		expect(
+			introducedRegression({
+				query: "edit:game.html",
+				result: "Replaced lines 84-98",
+				success: true,
+				regressed: true,
+			}),
+		).toBe(true);
+	});
+
+	it("leaves a successful, clean edit alone", () => {
+		expect(
+			introducedRegression({
+				query: "edit:game.html",
+				result: "Replaced lines 84-98",
+				success: true,
+			}),
+		).toBe(false);
+	});
+
+	it("finds the mark on any entry of a batched result", () => {
+		expect(
+			introducedRegression([
+				{ query: "edit:a.ts", result: "ok", success: true },
+				{ query: "edit:b.ts", result: "ok", success: true, regressed: true },
+			]),
+		).toBe(true);
+	});
+
+	it("reads anything unrecognised as no regression", () => {
+		// Same conservative rule as `allOperationsFailed`: this feeds a loop
+		// stop, and the cost of guessing wrong is ending a task that worked.
+		expect(introducedRegression(undefined)).toBe(false);
+		expect(introducedRegression("edited")).toBe(false);
+		expect(introducedRegression({ regressed: "yes" })).toBe(false);
+		expect(introducedRegression([])).toBe(false);
+	});
+});
+
+describe("declaredNoOp", () => {
+	const noChange =
+		"Editor operation failed: No change: lines 94-96 already reads exactly this way in game.html. The file was not modified.";
+
+	it("recognises the tool refusing an edit that asks for nothing", () => {
+		expect(
+			declaredNoOp({
+				query: "edit:game.html",
+				result: "",
+				error: noChange,
+				success: false,
+			}),
+		).toBe(true);
+	});
+
+	it("recognises it inside a multi-operation result", () => {
+		expect(
+			declaredNoOp([
+				{ query: "edit:a.ts", result: "changed", success: true },
+				{
+					query: "edit:game.html",
+					result: "",
+					error: noChange,
+					success: false,
+				},
+			]),
+		).toBe(true);
+	});
+
+	// The other refusal reached the same way, and the one that was missing.
+	// Measured live on pandorum: one 4,991-character whole-class replacement at
+	// line 84, sent seven times, refused identically every time -- seven because
+	// this fell through to the ordinary six-strike ladder instead of the short
+	// one, for want of the marker being recognised here.
+	it("recognises the tool refusing an edit that would duplicate the range", () => {
+		expect(
+			declaredNoOp({
+				query: "edit:game.html",
+				result: "",
+				error:
+					"Editor operation failed: Duplicated instead of replaced: the edit to lines 84-98 in game.html was not applied.",
+				success: false,
+			}),
+		).toBe(true);
+	});
+
+	// An ordinary failure may stop failing next time; this one cannot, which is
+	// the whole distinction the loop tracker acts on.
+	it("does not fire on an ordinary failure", () => {
+		expect(
+			declaredNoOp({
+				query: "edit:game.html",
+				result: "",
+				error:
+					"Editor operation failed: No replacement performed: text not found in game.html.",
+				success: false,
+			}),
+		).toBe(false);
+	});
+
+	it("does not fire on success, whatever the text says", () => {
+		expect(
+			declaredNoOp({
+				query: "edit:game.html",
+				result: noChange,
+				success: true,
+			}),
+		).toBe(false);
+	});
+
+	it("ignores shapes it does not recognise", () => {
+		expect(declaredNoOp(undefined)).toBe(false);
+		expect(declaredNoOp("No change: something")).toBe(false);
+		expect(declaredNoOp([{ success: false }])).toBe(false);
+	});
+});
+
+describe("a tool result that arrives already serialised", () => {
+	// `editor` sends the `{query, result, success, error}` envelope as a JSON
+	// string, not an object. Every predicate here used to fall through the
+	// `typeof entry === "object"` test to its safe answer, and the safe answer
+	// is "productive" -- which clears the loop tally. Measured live: the
+	// identical `editor` call six times against six `No change` refusals, each
+	// recorded as a productive call, so neither the warning nor the stop fired.
+	const noChange = JSON.stringify({
+		query: "edit:manic_miner.html",
+		result: "",
+		success: false,
+		error:
+			"Editor operation failed: No change: lines 89-97 already reads exactly this way in c:\\src\\manic_miner.html",
+	});
+
+	it("is read as a no-op when it says so", () => {
+		expect(declaredNoOp(noChange)).toBe(true);
+	});
+
+	it("is read as a regression when it says so", () => {
+		expect(
+			introducedRegression(
+				JSON.stringify({ query: "edit:x", success: true, regressed: true }),
+			),
+		).toBe(true);
+	});
+
+	// The conservative half: an unrecognised string must never be taken for
+	// failure, because this feeds a loop stop and the cost of guessing wrong is
+	// ending a task that was working.
+	it("is left alone when it is not the envelope", () => {
+		expect(declaredNoOp("No change: just some file text")).toBe(false);
+		expect(declaredNoOp("{not json")).toBe(false);
+		expect(introducedRegression("regressed")).toBe(false);
 	});
 });

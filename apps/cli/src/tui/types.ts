@@ -1,12 +1,15 @@
 import type {
 	AgentEvent,
 	AgentMode,
+	BackgroundDelegationView,
 	CheckpointEntry,
 	ClineSubscriptionPlan,
+	ConfiguredAgentDelegationResult,
+	ConfiguredAgentSummary,
 	TeamEvent,
 } from "@cline/core";
 import type {
-	Message,
+	MessageWithMetadata,
 	ToolApprovalRequest,
 	ToolApprovalResult,
 } from "@cline/shared";
@@ -29,6 +32,13 @@ import type { InteractiveSlashCommand } from "./interactive-welcome";
 export type ChatEntry = (
 	| { kind: "user"; text: string }
 	| { kind: "assistant_text"; text: string; streaming: boolean }
+	| {
+			kind: "assistant_media";
+			modality: "image" | "audio" | "video" | "file";
+			mediaType: string;
+			byteLength: number;
+			location?: string;
+	  }
 	| { kind: "reasoning"; text: string; streaming: boolean }
 	| {
 			kind: "tool_call";
@@ -92,7 +102,7 @@ export interface InteractiveTurnResult {
 }
 
 export interface ResumedSessionResult {
-	messages: Message[];
+	messages: MessageWithMetadata[];
 	totalCost?: number;
 	currentContextSize?: number;
 }
@@ -145,7 +155,7 @@ export interface TuiProps {
 	initialPrompt?: string;
 	initialNotice?: CliMigrationNotice;
 	onInitialNoticeShown?: (notice: CliMigrationNotice) => void | Promise<void>;
-	initialMessages?: Message[];
+	initialMessages?: MessageWithMetadata[];
 	loadDeferredInitialMessages?: () => Promise<ResumedSessionResult>;
 	initialRepoStatus?: RepoStatus;
 	workflowSlashCommands?: InteractiveSlashCommand[];
@@ -185,6 +195,11 @@ export interface TuiProps {
 	}) => Promise<PendingPromptMutationResult>;
 	onAbort: () => boolean;
 	onExit: () => void;
+	/**
+	 * Exit the TUI and run the CLI self-update afterwards. Invoked when the
+	 * user accepts the "Hub was updated by another Cline installation" dialog.
+	 */
+	onHubUpdateRestart?: () => void;
 	onRunningChange: (isRunning: boolean) => void;
 	onTurnErrorReported: (reported: boolean) => void;
 	onAutoApproveChange: (enabled: boolean) => void;
@@ -201,6 +216,25 @@ export interface TuiProps {
 	) => Promise<string>;
 	onDeleteHistorySession: (sessionId: string) => Promise<boolean>;
 	onCompact: () => Promise<InteractiveCompactionResult>;
+	/** The agents this session can hand work to. */
+	onListAgents: () => Promise<ConfiguredAgentSummary[]>;
+	/** Hand a task to one of them, without asking the lead model first. */
+	onDelegate: (
+		agentName: string,
+		prompt: string,
+	) => Promise<ConfiguredAgentDelegationResult>;
+	/** The same, except it runs beside the turn and reports back when done. */
+	onDelegateBackground: (
+		agentName: string,
+		prompt: string,
+	) => Promise<BackgroundDelegationView>;
+	/** The background delegations of this session, for the panel. */
+	onListBackgroundDelegations: () => Promise<BackgroundDelegationView[]>;
+	/** Pause, resume or stop one of them. */
+	onControlBackgroundDelegation: (
+		id: string,
+		action: "pause" | "resume" | "stop",
+	) => Promise<boolean>;
 	onFork: () => Promise<
 		| {
 				forkedFromSessionId: string;
@@ -213,12 +247,18 @@ export interface TuiProps {
 		| undefined
 	>;
 	getCheckpointData: () => Promise<
-		{ messages: Message[]; checkpointHistory: CheckpointEntry[] } | undefined
+		| {
+				messages: MessageWithMetadata[];
+				checkpointHistory: CheckpointEntry[];
+		  }
+		| undefined
 	>;
 	onRestoreCheckpoint: (
 		runCount: number,
 		restoreWorkspace: boolean,
-	) => Promise<{ newSessionId: string; messages: Message[] } | undefined>;
+	) => Promise<
+		{ newSessionId: string; messages: MessageWithMetadata[] } | undefined
+	>;
 	setToolApprover: (
 		approver:
 			| ((request: ToolApprovalRequest) => Promise<ToolApprovalResult>)

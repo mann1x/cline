@@ -334,6 +334,88 @@ describe("McpHub.callTool", () => {
 			threw.should.be.true()
 		})
 
+		it("should reconnect and retry once when the transport died before the call", async () => {
+			// A stdio server that exits clears the client's transport but leaves the
+			// client in place, so every later call rejected with a bare `Not connected`
+			// that reached the model as the tool's own result. The SDK raises this
+			// before the request is written, so nothing was sent and the retry cannot
+			// duplicate a side effect.
+			const deadClient = createMockClient()
+			deadClient.request.rejects(new Error("Not connected"))
+			const { hub, telemetryService } = createMcpHub({ client: deadClient })
+			const freshClient = createMockClient({ content: [{ type: "text", text: "back" }] })
+			const reconnect = sinon.stub(hub as any, "reconnectForToolCall").callsFake(async () => ({
+				server: { name: "test-server", status: "connected" },
+				client: freshClient,
+			}))
+
+			const result = await hub.callTool("test-server", "memory_read_graph", { a: 1 }, "ulid-nc1")
+
+			reconnect.calledOnceWith("test-server").should.be.true()
+			freshClient.request.calledOnce.should.be.true()
+			freshClient.request.firstCall.args[0].params.name.should.equal("memory_read_graph")
+			;(result.content[0] as { type: "text"; text: string }).text.should.equal("back")
+			telemetryService.captureMcpToolCall.secondCall.args[3].should.equal("success")
+		})
+
+		it("should not retry a call that was aborted", async () => {
+			const deadClient = createMockClient()
+			deadClient.request.rejects(new Error("Not connected"))
+			const { hub } = createMcpHub({ client: deadClient })
+			const reconnect = sinon.stub(hub as any, "reconnectForToolCall")
+			const controller = new AbortController()
+			controller.abort()
+
+			let threw = false
+			try {
+				await hub.callTool("test-server", "some_tool", undefined, "ulid-nc2", controller.signal)
+			} catch {
+				threw = true
+			}
+
+			threw.should.be.true()
+			reconnect.called.should.be.false()
+		})
+
+		it("should say the server went away when the reconnect fails", async () => {
+			// `Not connected` on its own told neither the model nor the user anything.
+			const deadClient = createMockClient()
+			deadClient.request.rejects(new Error("Not connected"))
+			const { hub, connection } = createMcpHub({ client: deadClient })
+			;(connection.server as any).error = "spawn npx ENOENT"
+			sinon.stub(hub as any, "reconnectForToolCall").resolves(undefined)
+
+			let threw = false
+			try {
+				await hub.callTool("test-server", "memory_read_graph", undefined, "ulid-nc3")
+			} catch (error: any) {
+				threw = true
+				error.message.should.containEql('Server "test-server" disconnected and could not be reconnected')
+				error.message.should.containEql("memory_read_graph was not run")
+				error.message.should.containEql("spawn npx ENOENT")
+			}
+			threw.should.be.true()
+		})
+
+		it("should not retry a failure that reached the server", async () => {
+			// Anything but the pre-send `Not connected` may have run already.
+			const client = createMockClient()
+			client.request.rejects(new Error("Tool execution failed"))
+			const { hub } = createMcpHub({ client })
+			const reconnect = sinon.stub(hub as any, "reconnectForToolCall")
+
+			let threw = false
+			try {
+				await hub.callTool("test-server", "some_tool", undefined, "ulid-nc4")
+			} catch {
+				threw = true
+			}
+
+			threw.should.be.true()
+			reconnect.called.should.be.false()
+			client.request.calledOnce.should.be.true()
+		})
+
 		it("should capture error telemetry when client.request fails", async () => {
 			const client = createMockClient()
 			client.request.rejects(new Error("Network timeout"))
@@ -357,6 +439,47 @@ describe("McpHub.callTool", () => {
 			const errorCall = telemetryService.captureMcpToolCall.secondCall.args
 			errorCall[3].should.equal("error")
 			errorCall[4].should.equal("Network timeout")
+		})
+	})
+
+	// ── Reconnect used by a tool call ───────────────────────────────────
+
+	describe("reconnectForToolCall", () => {
+		it("should rebuild the connection from its in-memory config", async () => {
+			const { hub, connection } = createMcpHub()
+			connection.server.status = "disconnected"
+			const deleteConnection = sinon.stub(hub as any, "deleteConnection").callsFake(async () => {
+				;(hub as any).connections = []
+			})
+			const connectToServer = sinon.stub(hub as any, "connectToServer").callsFake(async () => {
+				;(hub as any).connections = [{ ...connection, server: { ...connection.server, status: "connected" } }]
+			})
+			sinon.stub(hub as any, "notifyWebviewOfServerChanges").resolves()
+
+			const result = await (hub as any).reconnectForToolCall("test-server")
+
+			deleteConnection.calledOnceWith("test-server").should.be.true()
+			connectToServer.firstCall.args[1].should.have.property("command", "test")
+			connectToServer.firstCall.args[2].should.equal("internal")
+			result.server.status.should.equal("connected")
+			;(hub as any).isConnecting.should.be.false()
+		})
+
+		it("should report failure rather than hand back a half-built connection", async () => {
+			const { hub } = createMcpHub()
+			sinon.stub(hub as any, "deleteConnection").callsFake(async () => {
+				;(hub as any).connections = []
+			})
+			sinon.stub(hub as any, "connectToServer").rejects(new Error("spawn npx ENOENT"))
+			const notify = sinon.stub(hub as any, "notifyWebviewOfServerChanges").resolves()
+
+			const result = await (hub as any).reconnectForToolCall("test-server")
+
+			should(result).be.undefined()
+			// The failure still reaches the server list, so the panel does not keep
+			// showing a server as connecting forever.
+			notify.calledOnce.should.be.true()
+			;(hub as any).isConnecting.should.be.false()
 		})
 	})
 

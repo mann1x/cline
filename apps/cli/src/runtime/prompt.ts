@@ -3,11 +3,22 @@ import { homedir } from "node:os";
 import { basename, resolve } from "node:path";
 import {
 	buildWorkspaceMetadata,
+	isSkillsToolAvailable,
 	mergeRulesForSystemPrompt,
+	readGlobalSettings,
 	type UserInstructionConfigService,
 } from "@cline/core";
 import { type AgentMode, buildClineSystemPrompt } from "@cline/shared";
 import { isImagePath, loadImageAsDataUrl } from "../utils/image-attachments";
+
+/**
+ * What this host calls itself, in the prompt.
+ *
+ * Read twice: the system prompt's `IDE:` line, and the `{{IDE_NAME}}` token a
+ * tool description may carry. One constant because two spellings of the same
+ * host would be drift nothing reports.
+ */
+export const CLI_IDE_NAME = "Terminal Shell";
 
 export async function resolveSystemPrompt(input: {
 	cwd: string;
@@ -15,6 +26,14 @@ export async function resolveSystemPrompt(input: {
 	providerId?: string;
 	rules?: string;
 	mode?: AgentMode;
+	/**
+	 * The `# system` section of the prompt template this session matched, when
+	 * one did. Passing it is what makes a local model read the same prompt here
+	 * as it does in the extension: `qwen.md` and `gemma.md` are where "use
+	 * `editor`, never `sed -i`, never `cat`" is written, and a host resolving no
+	 * template sends the built-in prompt, which says none of it.
+	 */
+	basePrompt?: string;
 }): Promise<string> {
 	const metadata = await buildWorkspaceMetadata(input.cwd);
 	// Mode-tag and plan-mode instructions are appended by the shared prompt
@@ -22,7 +41,7 @@ export async function resolveSystemPrompt(input: {
 	// @cline/shared), so only the caller-specific rules are merged here.
 	const rules = mergeRulesForSystemPrompt(undefined, input.rules);
 	return buildClineSystemPrompt({
-		ide: "Terminal Shell",
+		ide: CLI_IDE_NAME,
 		workspaceRoot: input.cwd,
 		workspaceName: basename(input.cwd),
 		metadata,
@@ -30,6 +49,7 @@ export async function resolveSystemPrompt(input: {
 		mode: input.mode,
 		providerId: input.providerId,
 		overridePrompt: input.explicitSystemPrompt,
+		basePrompt: input.basePrompt,
 		platform:
 			(typeof process !== "undefined" && process?.platform) || "unknown",
 	});
@@ -79,9 +99,30 @@ function resolveMentionPath(filePath: string): string {
 	return resolve(filePath);
 }
 
+/**
+ * Whether a typed `/skill` command must be textually expanded into the
+ * prompt. When the session registers the runtime's `skills` tool (its
+ * description requires the model to invoke it on slash-command references),
+ * the typed command passes through and the instructions arrive as a tool
+ * result — keeping the persisted transcript as what the user typed. When the
+ * tool is unavailable (yolo preset, user toggle), expansion is the only
+ * delivery path.
+ */
+export function shouldExpandSkillSlashCommands(mode?: string): boolean {
+	try {
+		return !isSkillsToolAvailable({
+			mode: mode === "plan" || mode === "yolo" ? mode : "act",
+			disabledToolIds: new Set(readGlobalSettings().disabledTools ?? []),
+		});
+	} catch {
+		return true;
+	}
+}
+
 export async function buildUserInputMessage(
 	rawPrompt: string,
 	userInstructionService?: UserInstructionConfigService,
+	options?: { mode?: string },
 ): Promise<{
 	prompt: string;
 	userImages: string[];
@@ -90,7 +131,9 @@ export async function buildUserInputMessage(
 	// First, resolve slash commands if the core config service is available.
 	let prompt = rawPrompt;
 	if (userInstructionService) {
-		prompt = userInstructionService.resolveRuntimeSlashCommand(rawPrompt);
+		prompt = userInstructionService.resolveRuntimeSlashCommand(rawPrompt, {
+			expandSkillCommands: shouldExpandSkillSlashCommands(options?.mode),
+		});
 	}
 
 	if (!hasFileMentions(prompt)) {

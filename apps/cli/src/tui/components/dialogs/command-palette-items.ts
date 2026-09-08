@@ -2,10 +2,14 @@ export type CommandPaletteAction =
 	| "settings"
 	| "change-model"
 	| "change-provider"
+	| "theme"
 	| "account"
 	| "mcp"
 	| "plugins"
 	| "compact"
+	| "delegate"
+	| "delegate-background"
+	| "agents"
 	| "skills"
 	| "fork"
 	| "undo"
@@ -58,6 +62,13 @@ const ACTION_ITEMS: Array<{
 		keywords: ["provider", "api key", "account", "auth"],
 	},
 	{
+		action: "theme",
+		label: "Change Theme",
+		shortcut: "Opt+T",
+		description: "Pick a color theme for the TUI",
+		keywords: ["theme", "colors", "dark", "light", "appearance"],
+	},
+	{
 		action: "mcp",
 		label: "Manage MCP Servers",
 		shortcut: "Opt+C",
@@ -84,6 +95,27 @@ const ACTION_ITEMS: Array<{
 		shortcut: "Opt+X",
 		description: "Compact context",
 		keywords: ["compact", "context", "compress"],
+	},
+	{
+		action: "delegate",
+		label: "Delegate to Agent",
+		shortcut: "Opt+D",
+		description: "Hand a task to a configured agent",
+		keywords: ["delegate", "agent", "subagent", "handoff"],
+	},
+	{
+		action: "delegate-background",
+		label: "Delegate in the Background",
+		shortcut: "Opt+B",
+		description: "Hand a task to an agent and keep working",
+		keywords: ["delegate", "background", "agent", "subagent", "async"],
+	},
+	{
+		action: "agents",
+		label: "Background Agents",
+		shortcut: "Opt+G",
+		description: "Pause, resume or stop the agents running in the background",
+		keywords: ["agents", "background", "pause", "resume", "stop"],
 	},
 	{
 		action: "skills",

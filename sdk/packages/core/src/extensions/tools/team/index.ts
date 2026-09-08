@@ -1,4 +1,13 @@
 export {
+	type BackgroundDelegationControls,
+	type BackgroundDelegationRegistry,
+	type BackgroundDelegationStatus,
+	type BackgroundDelegationView,
+	createBackgroundDelegationRegistry,
+	type StartBackgroundDelegationInput,
+	startBackgroundDelegation,
+} from "./background-delegations";
+export {
 	type ConfiguredAgentConfig,
 	type ConfiguredAgentLoadResult,
 	type ConfiguredAgentReadError,
@@ -6,6 +15,8 @@ export {
 	parseConfiguredAgentConfig,
 } from "./configured-agent-config";
 export {
+	type AgentProfileConnection,
+	type AgentProviderConnection,
 	buildConfiguredAgentToolDescriptors,
 	buildConfiguredAgentToolName,
 	type ConfiguredAgentInput,
@@ -13,6 +24,16 @@ export {
 	type ConfiguredAgentToolDescriptor,
 	createConfiguredAgentTools,
 } from "./configured-agent-tool";
+export {
+	type ConfiguredAgentDelegationResult,
+	type ConfiguredAgentSummary,
+	type DelegateToConfiguredAgentInput,
+	delegateToConfiguredAgent,
+	findConfiguredAgent,
+	listConfiguredAgentSummaries,
+	renderDelegationForTranscript,
+	UnknownConfiguredAgentError,
+} from "./delegate-to-agent";
 export {
 	buildTeamProgressSummary,
 	toTeamProgressLifecycleEvent,

@@ -16,6 +16,7 @@ import { BaseUrlField } from "../common/BaseUrlField"
 import { DebouncedTextField } from "../common/DebouncedTextField"
 import { ModelInfoView } from "../common/ModelInfoView"
 import { DropdownContainer } from "../common/ModelSelector"
+import { RequestTimingsToggle } from "../common/RequestTimingsToggle"
 import ReasoningEffortSelector from "../ReasoningEffortSelector"
 import { useApiConfigurationHandlers } from "../utils/useApiConfigurationHandlers"
 import { useProviderApiKeyField } from "../utils/useProviderApiKeyField"
@@ -553,8 +554,15 @@ export const OpenAICompatibleProvider = ({
 
 			{modelConfigurationSelected && (
 				<>
+					{/* Render the in-flight pending override, not the stale resolved
+					    value: fast-foundation checkboxes re-emit programmatic checked
+					    re-syncs as change events, so re-applying the stale value during
+					    the commit round-trip would commit it right back (#13694). */}
 					<VSCodeCheckbox
-						checked={!!openAiModelInfo?.supportsImages}
+						checked={
+							selectedModelOverridesRef.current[currentMode].overrides.supportsVision ??
+							!!openAiModelInfo?.supportsImages
+						}
 						onChange={(e: any) => updateModelOverride("supportsVision", e.target.checked === true)}>
 						Supports Images
 					</VSCodeCheckbox>
@@ -625,6 +633,13 @@ export const OpenAICompatibleProvider = ({
 					models. Less capable models may not work as expected.)
 				</span>
 			</p>
+
+			{/* The other engine that reports its own timings: a llama.cpp or
+			    opencoti-llamafile server is reached through this form, and its
+			    `timings` object is read from the same response the tokens come
+			    from. Harmless for the hosted providers on this path, which
+			    report none and show only what Cline measured. */}
+			<RequestTimingsToggle engineNote="A llama.cpp or opencoti-llamafile server also reports its own prompt and generation split, cached prefix tokens, and speculative-decoding acceptance." />
 
 			{showModelOptions && (
 				<>

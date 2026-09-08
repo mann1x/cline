@@ -10,6 +10,7 @@ import {
 	isCliHookPayload,
 	normalizeAutoApproveArgs,
 	parseArgs,
+	truncate,
 } from "./helpers";
 
 type EnvSnapshot = {
@@ -214,6 +215,106 @@ describe("parseArgs", () => {
 		expect(parsed.invalidRetries).toBeUndefined();
 	});
 
+	it.each([
+		"off",
+		"nudge",
+		"require",
+	] as const)("parses --edit-verification %s", (mode) => {
+		const parsed = parseArgs(["--edit-verification", mode]);
+		expect(parsed.editVerification).toBe(mode);
+		expect(parsed.invalidEditVerification).toBeUndefined();
+	});
+
+	// Kept out of `editVerification` rather than coerced to the default: the run
+	// fails on this rather than pretending the mode was in force.
+	it("refuses an --edit-verification mode it does not know", () => {
+		const parsed = parseArgs(["--edit-verification", "strict"]);
+		expect(parsed.editVerification).toBeUndefined();
+		expect(parsed.invalidEditVerification).toBe("strict");
+	});
+
+	it("leaves the mode unset when the flag is absent, so the host keeps its default", () => {
+		const parsed = parseArgs(["Audit the repo"]);
+		expect(parsed.editVerification).toBeUndefined();
+		expect(parsed.invalidEditVerification).toBeUndefined();
+	});
+
+	it.each(["off", "auto", "always"] as const)("parses --atomic %s", (mode) => {
+		const parsed = parseArgs(["--atomic", mode]);
+		expect(parsed.atomic).toBe(mode);
+		expect(parsed.invalidAtomic).toBeUndefined();
+	});
+
+	// A run the user believes is transactional and is not leaves a failed
+	// attempt's edits on disk under a report saying they were put back.
+	it("refuses an --atomic mode it does not know", () => {
+		const parsed = parseArgs(["--atomic", "on"]);
+		expect(parsed.atomic).toBeUndefined();
+		expect(parsed.invalidAtomic).toBe("on");
+	});
+
+	it("takes the oracle command as written", () => {
+		const parsed = parseArgs(["--oracle", "node run_game.js manic_miner.html"]);
+		expect(parsed.oracle).toBe("node run_game.js manic_miner.html");
+	});
+
+	// Checked here rather than at the first transaction's end: a pattern that
+	// will not compile fails every check, so the run would do all of its work
+	// and then throw it away.
+	it("refuses an --oracle-expect that is not a regular expression", () => {
+		const parsed = parseArgs(["--oracle-expect", "(unclosed"]);
+		expect(parsed.oracleExpect).toBeUndefined();
+		expect(parsed.invalidOracleExpect).toBe("(unclosed");
+	});
+
+	it("keeps a valid --oracle-expect", () => {
+		const parsed = parseArgs(["--oracle-expect", '"ok":\\s*true']);
+		expect(parsed.oracleExpect).toBe('"ok":\\s*true');
+	});
+
+	it.each([
+		["--max-changes", "maxChanges", "invalidMaxChanges"],
+		["--max-transactions", "maxTransactions", "invalidMaxTransactions"],
+	] as const)("parses %s", (flag, key, invalid) => {
+		const parsed = parseArgs([flag, "4"]);
+		expect(parsed[key]).toBe(4);
+		expect(parsed[invalid]).toBeUndefined();
+	});
+
+	// Zero transactions is a protocol that can never keep anything, and zero
+	// changes is one that can never do anything.
+	it.each(["0", "-1", "two"])("refuses --max-changes %s", (value) => {
+		const parsed = parseArgs(["--max-changes", value]);
+		expect(parsed.maxChanges).toBeUndefined();
+		expect(parsed.invalidMaxChanges).toBe(value);
+	});
+
+	it.each(["on", "off"] as const)("parses --task-progress %s", (mode) => {
+		const parsed = parseArgs(["--task-progress", mode]);
+		expect(parsed.taskProgress).toBe(mode);
+		expect(parsed.invalidTaskProgress).toBeUndefined();
+	});
+
+	it("refuses a --task-progress value it does not know", () => {
+		const parsed = parseArgs(["--task-progress", "yes"]);
+		expect(parsed.taskProgress).toBeUndefined();
+		expect(parsed.invalidTaskProgress).toBe("yes");
+	});
+
+	// Zero is a value, not an absence: it leaves the checklist in place and stops
+	// only the reminding, so it has to survive parsing rather than read as unset.
+	it("keeps a --task-progress-interval of zero", () => {
+		const parsed = parseArgs(["--task-progress-interval", "0"]);
+		expect(parsed.taskProgressInterval).toBe(0);
+		expect(parsed.invalidTaskProgressInterval).toBeUndefined();
+	});
+
+	it("refuses a negative --task-progress-interval", () => {
+		const parsed = parseArgs(["--task-progress-interval", "-1"]);
+		expect(parsed.taskProgressInterval).toBeUndefined();
+		expect(parsed.invalidTaskProgressInterval).toBe("-1");
+	});
+
 	it("supports yolo as an auto-approval shortcut", () => {
 		const parsedYolo = parseArgs(["--yolo"]);
 		expect(parsedYolo.mode).toBe("yolo");
@@ -373,6 +474,73 @@ describe("format helpers", () => {
 			]),
 		).toBe("first (+2 more)");
 		expect(formatToolOutput(null)).toBe("");
+	});
+
+	// Regression tests for https://github.com/cline/cline/issues/13036:
+	// malformed tool inputs crossing the model/tool boundary must never
+	// throw from display-only formatters.
+	it("does not crash on run_commands with a null command", () => {
+		expect(formatToolInput("run_commands", { command: null })).toBe("");
+	});
+
+	it("does not crash on run_commands with a non-string command", () => {
+		expect(formatToolInput("run_commands", { command: { nested: true } })).toBe(
+			'{"nested":true}',
+		);
+		expect(formatToolInput("run_commands", { commands: { command: 42 } })).toBe(
+			"42",
+		);
+	});
+
+	it("keeps valid empty-string args in structured command summaries", () => {
+		expect(
+			formatToolInput("run_commands", {
+				commands: [{ command: "grep", args: ["", "pattern", "file.txt"] }],
+			}),
+		).toBe("grep  pattern file.txt");
+		expect(
+			formatToolInput("run_commands", {
+				commands: [{ command: "git", args: [null, "status", undefined] }],
+			}),
+		).toBe("git status");
+	});
+
+	it("skips null entries in run_commands command arrays", () => {
+		expect(
+			formatToolInput("run_commands", { commands: [null, "echo hi"] }),
+		).toBe("echo hi");
+		expect(formatToolInput("run_commands", [undefined, "echo hi"])).toBe(
+			"echo hi",
+		);
+	});
+
+	it("does not crash on fetch_web_content with malformed requests", () => {
+		expect(
+			formatToolInput("fetch_web_content", {
+				requests: [null, { url: "https://example.com" }, { url: 42 }, "raw"],
+			}),
+		).toBe("https://example.com, 42");
+	});
+
+	it("falls back to an empty summary for unserializable inputs", () => {
+		const circular: Record<string, unknown> = {};
+		circular.self = circular;
+		expect(formatToolInput("unknown_tool", circular)).toBe("");
+		expect(formatToolOutput(circular)).toBe("");
+		expect(
+			formatToolInput("unknown_tool", {
+				toJSON() {
+					throw new Error("boom");
+				},
+			}),
+		).toBe("");
+	});
+
+	it("truncates non-string values without throwing", () => {
+		expect(truncate(null, 10)).toBe("");
+		expect(truncate(undefined, 10)).toBe("");
+		expect(truncate(42, 10)).toBe("42");
+		expect(truncate({ nested: true }, 60)).toBe('{"nested":true}');
 	});
 });
 

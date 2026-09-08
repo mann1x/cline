@@ -16,6 +16,7 @@ import {
 	createShellExecutor,
 	createShellTool,
 	MAX_COMMAND_OUTPUT_CHARS,
+	type QaCredential,
 	type ShellExecutor,
 	type StructuredCommandInput,
 	truncateCommandOutput,
@@ -76,6 +77,11 @@ export interface VscodeRunCommandsToolOptions {
 	 * kills the process tree.
 	 */
 	foregroundCommands?: SdkForegroundCommandCoordinator
+	/**
+	 * QA credentials from the user's secret store, read late so one added
+	 * mid-session is nameable on the next model request.
+	 */
+	qaCredentials?: () => readonly QaCredential[]
 }
 
 // ---------------------------------------------------------------------------
@@ -535,6 +541,7 @@ export function createVscodeRunCommandsTool(options: VscodeRunCommandsToolOption
 			state.snapshot = takeShellSnapshot()
 			return state.snapshot.shell
 		},
+		qaCredentials: options.qaCredentials,
 	})
 }
 
@@ -549,14 +556,28 @@ function createVscodeShellExecutor(options: VscodeRunCommandsToolOptions, state:
 	// Lazy-init terminal manager reference
 	let terminalManager: VscodeTerminalManager | undefined
 
-	return async (command, commandCwd, context): Promise<string> => {
-		Logger.log(`[VscodeRunCommands] Executing command in ${executionMode} mode`)
+	return async (command, commandCwd, context, callOptions): Promise<string> => {
+		// A command carrying QA credentials cannot run in a visible terminal.
+		// The terminal is a shell that outlives the command: anything exported
+		// into it is inherited by everything the model runs afterwards, and
+		// `env` prints it. Sending this one command to a child process keeps the
+		// secret's lifetime equal to the command's, which is the whole guarantee.
+		// Names only in the log — see qa-credentials.ts.
+		const credentialEnv = callOptions?.env
+		const needsPrivateEnvironment = credentialEnv !== undefined && Object.keys(credentialEnv).length > 0
+		const effectiveMode = needsPrivateEnvironment ? "backgroundExec" : executionMode
+		if (needsPrivateEnvironment && executionMode !== "backgroundExec") {
+			Logger.log(
+				`[VscodeRunCommands] Running in a child process rather than a terminal: this command uses ${Object.keys(credentialEnv).join(", ")}`,
+			)
+		}
+		Logger.log(`[VscodeRunCommands] Executing command in ${effectiveMode} mode`)
 
 		// Execute with the shell named in the model request that produced this
 		// tool call, not the setting's current value (see createVscodeRunCommandsTool).
 		const { profileId, shell } = state.snapshot
 
-		if (executionMode === "backgroundExec") {
+		if (effectiveMode === "backgroundExec") {
 			// Background path — use SDK's createShellExecutor.
 			// Recreate the executor if the shell has changed
 			if (!bgExecutor || bgExecutorShell !== shell) {
@@ -572,7 +593,7 @@ function createVscodeShellExecutor(options: VscodeRunCommandsToolOptions, state:
 			// Record execution outcomes so background mode is comparable with
 			// foreground mode in the same task.terminal_execution event.
 			try {
-				const result = await bgExecutor(command, commandCwd || cwd, context)
+				const result = await bgExecutor(command, commandCwd || cwd, context, callOptions)
 				telemetryService.captureTerminalExecution(true, "vscode", "child_process", {
 					exitCode: 0,
 					terminalExecutionMode: "backgroundExec",

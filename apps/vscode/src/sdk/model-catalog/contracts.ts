@@ -133,6 +133,27 @@ export interface EffectiveProviderConfig {
 	 */
 	readonly contextWindow?: number
 	/**
+	 * How many requests this endpoint serves at once (providers.json
+	 * `parallelSessions`).
+	 *
+	 * Not discoverable in general -- a plan's concurrency allowance is not on
+	 * the wire and Ollama does not report `OLLAMA_NUM_PARALLEL` -- so it is
+	 * configured. It bounds how many delegated agents may run together, because
+	 * a server with no free slot queues the request rather than refusing it and
+	 * says nothing while it does.
+	 */
+	readonly parallelSessions?: number
+	/**
+	 * Largest tool result sent to this configuration's model, in characters
+	 * (providers.json `maxToolResultChars`).
+	 *
+	 * Held per configuration rather than globally because it is a fraction of
+	 * a context window, and Plan, Act, Vision and Agents each have a window of
+	 * their own. Absent means the global setting still decides, which is what
+	 * every configuration written before this field does.
+	 */
+	readonly maxToolResultChars?: number
+	/**
 	 * Provider-level reasoning settings (providers.json `reasoning`). Read as
 	 * well as written so a settings UI can show the state it is about to
 	 * change; an absent value means the provider was never asked, which is not
@@ -192,6 +213,8 @@ export interface ProviderConfigPatch {
 	readonly aws?: AwsProviderConfig | null
 	readonly gcp?: GcpProviderConfig | null
 	readonly contextWindow?: number | null
+	readonly parallelSessions?: number | null
+	readonly maxToolResultChars?: number | null
 	readonly auth?: {
 		readonly accessToken?: string
 		readonly refreshToken?: string
@@ -247,9 +270,9 @@ export interface ResolvedModelSelection extends ModelSelection {
 	/**
 	 * Where the base `modelInfo` came from, before overrides were applied:
 	 *
-	 *  - "catalog"  — SDK catalog metadata (generated snapshot or registry).
+	 *  - "catalog"  — SDK catalog metadata (generated snapshot, registry, or live host cache).
 	 *  - "state"    — the mode-specific `*ModeModelInfo` snapshot persisted by
-	 *    the picker at selection time. Authoritative for dynamic-list providers
+	 *    the host at selection time. Authoritative for dynamic-list providers
 	 *    (openrouter, litellm, requesty, …) whose models are not in the static
 	 *    catalog.
 	 *  - "fallback" — provider-safe defaults fabricated because nothing better
@@ -309,11 +332,13 @@ export interface Disposable {
 /**
  * SDK-driven hint for how to display per-token / total cost in the UI.
  * Mirrors `ProviderUsageCostDisplay` from `@cline/llms` and the CLI's
- * `shouldShowCliUsageCost` consumer. When `"hide"`, downstream UIs MUST
- * suppress per-token pricing rows (in model info cards) and total-cost
- * lines (in task summaries / status bars).
+ * `shouldShowCliUsageCost` consumer. Anything other than `"show"` means
+ * downstream UIs MUST suppress per-token pricing rows (in model info
+ * cards) and total-cost lines (in task summaries / status bars);
+ * `"subscription"` additionally signals that usage is covered by the
+ * user's subscription (e.g. ClinePass, ChatGPT Plus/Pro).
  */
-export type UsageCostDisplay = "show" | "hide"
+export type UsageCostDisplay = "show" | "hide" | "subscription"
 
 export interface ProviderListing {
 	readonly id: ProviderId
@@ -450,10 +475,15 @@ export interface ProviderConfigStore extends ProviderConfigReader {
 	 * Supplying overrides replaces that model's stored override entry; omitting
 	 * them leaves the existing entry unchanged.
 	 *
+	 * `baseModelInfoHint` is the exact host-resolved catalog metadata selected
+	 * by the user. It is authoritative for that commit, including when a
+	 * private/dynamic provider reuses an id from the static SDK registry. It is
+	 * not user-authored and must never be persisted as an override.
+	 *
 	 * I2: refresh handlers do not have access to this method by type, since
 	 * `ProviderCatalog` holds only a `ProviderConfigReader`.
 	 */
-	commitSelection(providerId: ProviderId, mode: Mode, selection: ModelSelection): void
+	commitSelection(providerId: ProviderId, mode: Mode, selection: ModelSelection, baseModelInfoHint?: ModelInfo): void
 }
 
 /**

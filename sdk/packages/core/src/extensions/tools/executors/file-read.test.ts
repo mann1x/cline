@@ -2,12 +2,57 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { createFileReadExecutor } from "./file-read";
+import { createFileReadExecutor, readTextWindowFromText } from "./file-read";
 
 describe("createFileReadExecutor", () => {
 	it("reads a file from an absolute path", async () => {
 		const result = await readTempFile("hello absolute path");
 		expect(result).toBe("1 | hello absolute path\n\n[1 lines, shown in full.]");
+	});
+
+	// The workspace, not the process. Measured on a harness run started one
+	// directory above the workspace it was given: a model that sends bare
+	// filenames had 56 reads land in the parent and fail with ENOENT, then 19
+	// edits refused for want of a read, then six loop stops in three hours.
+	it("resolves a relative path against the workspace it was given", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "agents-file-read-"));
+		try {
+			await fs.writeFile(
+				path.join(dir, "example.txt"),
+				"in the workspace",
+				"utf-8",
+			);
+			const readFile = createFileReadExecutor({ cwd: dir });
+			const result = (await readFile(
+				{ path: "example.txt" },
+				{ agentId: "agent-1", conversationId: "conv-1", iteration: 1 },
+			)) as string;
+			expect(result).toContain("in the workspace");
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	// Without one it keeps the old behaviour, so a standalone executor an
+	// embedder wired up on its own reads exactly what it used to.
+	it("falls back to the process directory when no workspace is given", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "agents-file-read-"));
+		try {
+			await fs.writeFile(
+				path.join(dir, "example.txt"),
+				"in the workspace",
+				"utf-8",
+			);
+			const readFile = createFileReadExecutor();
+			await expect(
+				readFile(
+					{ path: "example.txt" },
+					{ agentId: "agent-1", conversationId: "conv-1", iteration: 1 },
+				),
+			).rejects.toThrow();
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
 	});
 
 	it("returns only the requested inclusive line range", async () => {
@@ -324,5 +369,43 @@ describe("createFileReadExecutor", () => {
 		} finally {
 			await fs.rm(dir, { recursive: true, force: true });
 		}
+	});
+});
+
+describe("windowing text that has no file to stream from", () => {
+	// The change protocol reads a file as its transaction found it, and that
+	// copy lives in memory. It goes through the same windowing as a read from
+	// disk, so the two can be laid side by side.
+	it("numbers and ranges a string exactly as a file", async () => {
+		const window = await readTextWindowFromText({
+			text: "alpha\nbravo\ncharlie\ndelta\n",
+			startLine: 2,
+			endLine: 3,
+		});
+
+		expect(window.text).toContain("2 | bravo");
+		expect(window.text).toContain("3 | charlie");
+		expect(window.text).not.toContain("alpha");
+		expect(window).toMatchObject({ firstLine: 2, lastLine: 3 });
+	});
+
+	// `Readable.from(text)` iterates a bare string one character at a time, so
+	// every line would arrive as a single letter and the whole window would be
+	// one character per line. The array wrapper is what stops that, and this is
+	// the test that would catch losing it.
+	it("keeps whole lines rather than one character each", async () => {
+		const window = await readTextWindowFromText({
+			text: "alpha\nbravo\n",
+			includeLineNumbers: false,
+		});
+
+		expect(window.text.split("\n")[0]).toBe("alpha");
+		expect(window.lastLine).toBe(2);
+	});
+
+	it("says how long the text is, as a file read does", async () => {
+		const window = await readTextWindowFromText({ text: "one\ntwo\n" });
+
+		expect(window.text).toContain("shown in full");
 	});
 });

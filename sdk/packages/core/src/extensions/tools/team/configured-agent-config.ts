@@ -12,6 +12,11 @@ const ConfiguredAgentFrontmatterSchema = z.object({
 	skills: z.union([z.string(), z.array(z.string())]).optional(),
 	providerId: z.string().trim().min(1).optional(),
 	modelId: z.string().trim().min(1).optional(),
+	// A saved API configuration profile, by name. Names a provider, a model and
+	// the settings around them in one word, which is what the user already has
+	// in front of them -- against `providerId` plus `modelId` plus a context
+	// window that has nowhere to live in this file at all.
+	profile: z.string().trim().min(1).optional(),
 	maxIterations: z.number().int().positive().optional(),
 });
 
@@ -22,6 +27,8 @@ export interface ConfiguredAgentConfig {
 	skills?: string[];
 	providerId?: string;
 	modelId?: string;
+	/** A saved API configuration profile this agent runs on, by name. */
+	profile?: string;
 	maxIterations?: number;
 	systemPrompt: string;
 	path?: string;
@@ -35,6 +42,15 @@ export interface ConfiguredAgentReadError {
 export interface ConfiguredAgentLoadResult {
 	configs: ConfiguredAgentConfig[];
 	errors: ConfiguredAgentReadError[];
+	/**
+	 * The directories that were looked in, whether or not they exist.
+	 *
+	 * Returned so the caller can say where it looked. A user who has turned
+	 * subagents on and written no agent file gets no tool and no error -- there
+	 * is nothing wrong to report -- and "none found, looked in these two places"
+	 * is the difference between that and a feature that appears broken.
+	 */
+	searchPaths: string[];
 }
 
 function splitFrontmatter(content: string): {
@@ -110,9 +126,24 @@ function normalizeAgentName(name: string): string {
 	return name.trim().toLowerCase();
 }
 
-function isYamlFile(fileName: string): boolean {
+/**
+ * An agent file is markdown with YAML frontmatter, so `.md` is the format.
+ *
+ * This accepted `.yml` and `.yaml` only, which meant the documented shape --
+ * `.cline/agents/*.md`, what the Agents tab writes and what every reply about
+ * this feature describes -- was skipped by the reader. Silently: an extension
+ * it does not recognise is not an error, so a user got no agent, no error, and
+ * nothing saying why (mann1x/cline#55). The two YAML extensions stay accepted
+ * so a file already written under one of them keeps working.
+ */
+function isAgentFile(fileName: string): boolean {
 	const extension = extname(fileName).toLowerCase();
-	return extension === ".yml" || extension === ".yaml";
+	return (
+		extension === ".md" ||
+		extension === ".markdown" ||
+		extension === ".yml" ||
+		extension === ".yaml"
+	);
 }
 
 export function parseConfiguredAgentConfig(
@@ -142,6 +173,7 @@ export function parseConfiguredAgentConfig(
 		skills: parseStringList(parsed.skills),
 		providerId: parsed.providerId,
 		modelId: parsed.modelId,
+		profile: parsed.profile,
 		maxIterations: parsed.maxIterations,
 		systemPrompt,
 		path: options.path,
@@ -174,7 +206,7 @@ export function loadConfiguredAgentConfigs(input: {
 		}
 
 		for (const entry of entries) {
-			if (!entry.isFile() || !isYamlFile(entry.name)) {
+			if (!entry.isFile() || !isAgentFile(entry.name)) {
 				continue;
 			}
 
@@ -200,5 +232,5 @@ export function loadConfiguredAgentConfigs(input: {
 			b.path ? basename(b.path) : b.name,
 		),
 	);
-	return { configs, errors };
+	return { configs, errors, searchPaths: searchPaths.filter(Boolean) };
 }

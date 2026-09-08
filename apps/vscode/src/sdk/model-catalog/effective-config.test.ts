@@ -213,3 +213,44 @@ describe("buildEffectiveProviderConfig", () => {
 		})
 	})
 })
+
+describe("provider-level numbers the settings panel reads back", () => {
+	beforeEach(() => {
+		mocks.setApiConfiguration({})
+		mocks.setProviderSettings({})
+	})
+
+	// Both were written to providers.json and never read back onto the config,
+	// so the fields rendered blank after a reload and looked as though the
+	// value had not been kept.
+	it("returns the stored tool-result cap and parallel-session count", async () => {
+		const { buildEffectiveProviderConfig } = await import("./effective-config")
+		mocks.setProviderSettings({
+			ollama: { provider: "ollama", maxToolResultChars: 40_000, parallelSessions: 4 },
+		})
+
+		const config = buildEffectiveProviderConfig(parseProviderId("ollama"))
+
+		expect(config.maxToolResultChars).toBe(40_000)
+		expect(config.parallelSessions).toBe(4)
+	})
+
+	it("leaves the cap absent when nothing stored one, so the global setting still decides", async () => {
+		const { buildEffectiveProviderConfig } = await import("./effective-config")
+		mocks.setProviderSettings({ ollama: { provider: "ollama" } })
+
+		const config = buildEffectiveProviderConfig(parseProviderId("ollama"))
+
+		expect(config.maxToolResultChars).toBeUndefined()
+	})
+
+	it("ignores a stored cap that is not a positive number", async () => {
+		const { buildEffectiveProviderConfig } = await import("./effective-config")
+		mocks.setProviderSettings({ ollama: { provider: "ollama", maxToolResultChars: 0 } })
+
+		const config = buildEffectiveProviderConfig(parseProviderId("ollama"))
+
+		// Zero would otherwise read as "send no tool result at all".
+		expect(config.maxToolResultChars).toBeUndefined()
+	})
+})

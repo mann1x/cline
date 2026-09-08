@@ -31,6 +31,15 @@ export interface BuildApiHandlerOptions {
 	 * OpenRouter don't receive a reasoning config at all.
 	 */
 	disableReasoning?: boolean
+	/**
+	 * Read provider settings from this entry instead of the vendor's own.
+	 *
+	 * The vision model is configured on its own tab and stores its base URL,
+	 * context window and sampler under a suffixed provider id. Without this the
+	 * handler would be built from the primary model's entry, so a tab that looks
+	 * separate would still send the primary model's `num_ctx` and sampler.
+	 */
+	visionProviderSettings?: Record<string, unknown>
 }
 
 /**
@@ -81,7 +90,16 @@ export function buildSdkProviderConfig(
 		// (`num_ctx`) on the provider config; without this, standalone callers
 		// ignore an explicit Request Timeout setting and load models with
 		// Ollama's 4096-token server default.
-		...(providerId === "ollama" ? resolveOllamaProviderConfig(configuration, modelId) : {}),
+		...(providerId === "ollama" ? resolveOllamaProviderConfig(configuration, modelId, options?.visionProviderSettings) : {}),
+		// Everything built here is a standalone utility call — the image
+		// describer, the commit-message writer, the prompt-template generator.
+		// The task loop does not come through this function; it goes through
+		// ClineCore (cline-session-factory.ts). So the flag belongs on the shape
+		// rather than on each caller: a local server serves one request at a
+		// time, and these queue behind the turn they interrupt instead of racing
+		// it. They also never speak for the session — see
+		// `GatewayStreamRequest.conversation`, which they do not set.
+		auxiliary: true,
 	}
 
 	if (options?.disableReasoning) {

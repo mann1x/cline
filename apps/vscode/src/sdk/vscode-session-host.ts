@@ -9,6 +9,8 @@ import {
 	ClineCore,
 	type ClineCoreListHistoryOptions,
 	type ClineCoreStartInput,
+	type CompareCheckpointInput,
+	type CompareCheckpointResult,
 	type CoreSessionEvent,
 	type EditorExecutor,
 	type HookEventPayload,
@@ -30,12 +32,20 @@ import {
 	type StartSessionResult,
 	type ToolExecutors,
 } from "@cline/core"
-import { type AgentToolContext, type ToolApprovalRequest, type ToolApprovalResult, type ToolPolicy } from "@cline/shared"
+import {
+	type AgentToolContext,
+	RUNTIME_CONFIG_EXTENSION_KINDS,
+	type ToolApprovalRequest,
+	type ToolApprovalResult,
+	type ToolPolicy,
+} from "@cline/shared"
 import { StateManager } from "@/core/storage/StateManager"
 import type { VscodeTerminalManager } from "@/hosts/vscode/terminal/VscodeTerminalManager"
 import { getDistinctId } from "@/services/logging/distinctId"
 import type { McpHub } from "@/services/mcp/McpHub"
 import { Logger } from "@/shared/services/Logger"
+import { approveProposedCheck } from "./check-approval"
+import { CHECK_FILE_TOOL_NAME } from "./check-file-tool"
 import type { SdkForegroundCommandCoordinator } from "./sdk-foreground-command-coordinator"
 import type { SdkSessionHost } from "./session-host"
 import { createVscodeExtraTools } from "./vscode-runtime-builder"
@@ -43,6 +53,16 @@ import { getEffectiveTerminalExecutionMode } from "./vscode-terminal-execution-m
 
 export interface VscodeSessionHostOptions {
 	mcpHub: McpHub
+	/** Files read this session; see `ListFilesToolOptions.getReadPaths`. */
+	getReadPaths?: () => string[]
+	/**
+	 * Retires the reads recorded for one file, after the change protocol has
+	 * put that file back. Every line in it has moved, so a read taken before
+	 * the restore no longer describes it, and the editor's read-before-edit
+	 * guard would otherwise accept an edit aimed at code that is no longer
+	 * there.
+	 */
+	forgetReads?: (absolutePath: string) => void
 	requestToolApproval?: (request: {
 		agentId: string
 		conversationId: string
@@ -73,6 +93,8 @@ export interface VscodeSessionHostOptions {
 	toolPolicies?: Record<string, ToolPolicy>
 	/** Shared SDK telemetry service owned by SdkController. */
 	telemetry?: ITelemetryService
+	/** Resolves once the applicable remote config is ready for a new SDK session. */
+	beforeStartSession?: () => Promise<void>
 	/** Returns the latest prepared remote-config integration, if remote config is active. */
 	getRemoteConfigIntegration?: () => PreparedRemoteConfigCoreIntegration | undefined
 	/**
@@ -88,10 +110,15 @@ export interface VscodeSessionHostOptions {
 export class VscodeSessionHost implements SdkSessionHost {
 	readonly runtimeAddress: string | undefined
 	private readonly inner: ClineCore
+	private readonly prepareStartSessionInput?: (input: ClineCoreStartInput) => Promise<ClineCoreStartInput>
 
-	private constructor(inner: ClineCore) {
+	private constructor(
+		inner: ClineCore,
+		prepareStartSessionInput?: (input: ClineCoreStartInput) => Promise<ClineCoreStartInput>,
+	) {
 		this.inner = inner
 		this.runtimeAddress = inner.runtimeAddress
+		this.prepareStartSessionInput = prepareStartSessionInput
 	}
 	updateSessionModel?(sessionId: string, modelId: string): Promise<void> {
 		return this.inner.updateSessionModel(sessionId, modelId)
@@ -122,6 +149,97 @@ export class VscodeSessionHost implements SdkSessionHost {
 			;(toolExecutors as Record<string, unknown>).bash = undefined
 		}
 
+		// Single funnel for session-start preparation: waits on the remote-config
+		// readiness/policy gate, applies the remote-config integration, and adds
+		// the VSCode extra tools. Used by ClineCore's prepare hook for normal
+		// starts AND by restore() for checkpoint-restore replacement sessions,
+		// which ClineCore starts without running the prepare hook.
+		const prepareStartSessionInput = async (input: ClineCoreStartInput): Promise<ClineCoreStartInput> => {
+			await options.beforeStartSession?.()
+			// Read only after the readiness gate: it may have atomically replaced
+			// the integration that must be captured by this session.
+			const remoteConfigIntegration = options.getRemoteConfigIntegration?.()
+			const inputWithRemoteConfig = remoteConfigIntegration
+				? await remoteConfigIntegration.applyToStartSessionInput(input)
+				: input
+			const requestedTerminalExecutionMode = StateManager.get().getGlobalStateKey("vscodeTerminalExecutionMode")
+			const extraTools = await createVscodeExtraTools(options.mcpHub, {
+				cwd: inputWithRemoteConfig.config.cwd,
+				getTerminalManager: options.getTerminalManager,
+				vscodeTerminalExecutionMode: getEffectiveTerminalExecutionMode(requestedTerminalExecutionMode),
+				foregroundCommands: options.foregroundCommands,
+				getReadPaths: options.getReadPaths,
+			})
+			// The focus-chain settings have been reachable in the UI all
+			// along — enabled by default, with a reminder interval — while
+			// nothing read them, because the SDK path had no checklist at
+			// all. This is the wire between that setting and the behaviour.
+			const focusChainSettings = StateManager.get().getGlobalSettingsKey("focusChainSettings")
+			// The checker is named here rather than assumed in core, because
+			// `check_file` is this host's tool: it needs the editor's own
+			// diagnostics and does not exist in the SDK at all. A host that
+			// names none gets no guard, which is the right answer for one
+			// that has no linter to point at.
+			const editVerificationSettings = StateManager.get().getGlobalSettingsKey("editVerificationSettings")
+			// The change protocol. The oracle is resolved in core against
+			// the workspace, so all this hands over is what the user chose:
+			// the mode, their own check if they wrote one, and the two
+			// limits. An empty command means "find something to run".
+			const atomicProtocolSettings = StateManager.get().getGlobalSettingsKey("atomicProtocolSettings")
+			return {
+				...inputWithRemoteConfig,
+				source: inputWithRemoteConfig.source ?? "vscode",
+				// The extension runs file hooks through its own hooks adapter
+				// (status chips, hooksEnabled setting, HookFactory discovery).
+				// Exclude the SDK core's file-hook extension or every hook
+				// would execute twice per event.
+				localRuntime: {
+					...(inputWithRemoteConfig.localRuntime ?? {}),
+					configExtensions: (
+						inputWithRemoteConfig.localRuntime?.configExtensions ?? RUNTIME_CONFIG_EXTENSION_KINDS
+					).filter((kind) => kind !== "hooks"),
+				},
+				config: {
+					...inputWithRemoteConfig.config,
+					telemetry: inputWithRemoteConfig.config.telemetry ?? options.telemetry,
+					extraTools: [...(inputWithRemoteConfig.config.extraTools ?? []), ...extraTools],
+					editVerification: {
+						mode: editVerificationSettings?.mode ?? "nudge",
+						checkTools: [CHECK_FILE_TOOL_NAME],
+					},
+					atomicProtocol: {
+						mode: atomicProtocolSettings?.mode ?? "off",
+						oracleCommand: atomicProtocolSettings?.oracleCommand || undefined,
+						oracleExpect: atomicProtocolSettings?.oracleExpect || undefined,
+						maxChanges: atomicProtocolSettings?.maxChanges,
+						maxTransactions: atomicProtocolSettings?.maxTransactions,
+						// There is a user here to ask, so a workspace with nothing
+						// runnable is not automatically a workspace with no verdict:
+						// the model proposes a check and this puts it to them.
+						approveCheck: approveProposedCheck,
+						// Unless it is switched off, which is a setting rather than a
+						// release: the proposed check and the self-declared verdict it
+						// replaced have to be comparable on the same workspace.
+						proposeCheck: atomicProtocolSettings?.proposeCheck !== false,
+						maxCheckProposals: atomicProtocolSettings?.maxCheckProposals,
+						// Zero is off and has to survive as zero, so `??` rather
+						// than `||`.
+						checkReconsideredAfter: atomicProtocolSettings?.checkReconsideredAfter,
+						// `restore_file` rewrites the whole file, so what the
+						// model had read of it no longer holds. This host owns
+						// the receipts, so it is the one that can say so.
+						forgetReads: options.forgetReads,
+					},
+					taskProgress: {
+						enabled: focusChainSettings?.enabled ?? true,
+						...(focusChainSettings?.remindClineInterval !== undefined
+							? { reminderInterval: focusChainSettings.remindClineInterval }
+							: {}),
+					},
+				},
+			}
+		}
+
 		const inner = await ClineCore.create({
 			backendMode: "local",
 			capabilities: {
@@ -134,28 +252,7 @@ export class VscodeSessionHost implements SdkSessionHost {
 			telemetry: options.telemetry,
 			distinctId: getDistinctId() || undefined,
 			prepare: async () => ({
-				applyToStartSessionInput: async (input: ClineCoreStartInput): Promise<ClineCoreStartInput> => {
-					const remoteConfigIntegration = options.getRemoteConfigIntegration?.()
-					const inputWithRemoteConfig = remoteConfigIntegration
-						? await remoteConfigIntegration.applyToStartSessionInput(input)
-						: input
-					const requestedTerminalExecutionMode = StateManager.get().getGlobalStateKey("vscodeTerminalExecutionMode")
-					const extraTools = await createVscodeExtraTools(options.mcpHub, {
-						cwd: inputWithRemoteConfig.config.cwd,
-						getTerminalManager: options.getTerminalManager,
-						vscodeTerminalExecutionMode: getEffectiveTerminalExecutionMode(requestedTerminalExecutionMode),
-						foregroundCommands: options.foregroundCommands,
-					})
-					return {
-						...inputWithRemoteConfig,
-						source: inputWithRemoteConfig.source ?? "vscode",
-						config: {
-							...inputWithRemoteConfig.config,
-							telemetry: inputWithRemoteConfig.config.telemetry ?? options.telemetry,
-							extraTools: [...(inputWithRemoteConfig.config.extraTools ?? []), ...extraTools],
-						},
-					}
-				},
+				applyToStartSessionInput: prepareStartSessionInput,
 			}),
 		})
 
@@ -163,7 +260,7 @@ export class VscodeSessionHost implements SdkSessionHost {
 		if (options.getTerminalManager) {
 			Logger.log("[VscodeSessionHost] SDK run_commands suppressed; using custom foreground/background terminal tool")
 		}
-		return new VscodeSessionHost(inner)
+		return new VscodeSessionHost(inner, prepareStartSessionInput)
 	}
 
 	async start(input: StartSessionInput): Promise<StartSessionResult>
@@ -242,8 +339,26 @@ export class VscodeSessionHost implements SdkSessionHost {
 		return this.inner.updateSessionCompactionState(sessionId, state)
 	}
 
+	async listConfiguredAgents(sessionId: string) {
+		return this.inner.listConfiguredAgents(sessionId)
+	}
+
+	async delegateToConfiguredAgent(input: { sessionId: string; agentName: string; prompt: string }) {
+		return this.inner.delegateToConfiguredAgent(input)
+	}
+
 	async restore(input: RestoreInput): Promise<RestoreResult> {
+		// ClineCore.restore starts the checkpoint-restore replacement session
+		// WITHOUT running the prepare hook, which would bypass the remote-config
+		// session gate and integration. Run the same preparation here.
+		if (input.start && this.prepareStartSessionInput) {
+			input = { ...input, start: await this.prepareStartSessionInput(input.start) }
+		}
 		return this.inner.restore(input)
+	}
+
+	async compareCheckpoint(input: CompareCheckpointInput): Promise<CompareCheckpointResult> {
+		return this.inner.compareCheckpoint(input)
 	}
 
 	async update(

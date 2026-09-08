@@ -3,10 +3,12 @@ import os from "node:os"
 import path from "node:path"
 import type { CoreSessionConfig } from "@cline/core"
 import * as LlmsModels from "@cline/llms"
+import { OLLAMA_DEFAULT_REASONING_EFFORT } from "@cline/llms"
 import { ApiFormat } from "@shared/proto/cline/models"
 import { Logger } from "@shared/services/Logger"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
+	buildDelegatedAgentConnection,
 	buildOutputBudgetSection,
 	buildResumeSessionInput,
 	buildSessionConfig,
@@ -18,6 +20,8 @@ import {
 	normalizeProviderReasoningSettings,
 	normalizeSdkBaseUrl,
 	resolveApiKey,
+	resolveOllamaProviderConfig,
+	resolveOllamaThinkingAllowance,
 	updateHistoryItem,
 } from "./cline-session-factory"
 import { parseProviderId } from "./model-catalog/provider-id"
@@ -34,6 +38,9 @@ const mocks = vi.hoisted(() => {
 	return {
 		getDistinctId: vi.fn(() => "test-distinct-id"),
 		getProviderSettingsManager: vi.fn(() => providerSettingsManager),
+		resolveOllamaThinkBudget: vi.fn(async (): Promise<{ level: string; budgetTokens: number } | undefined> => undefined),
+		resolveOllamaImageSupport: vi.fn(async (): Promise<boolean | undefined> => undefined),
+		resolveOllamaToolSupport: vi.fn(async (): Promise<boolean | undefined> => undefined),
 		providerSettingsManager,
 		stateManager: {
 			getApiConfiguration: vi.fn(() => ({
@@ -66,6 +73,13 @@ vi.mock("@/services/logging/distinctId", () => ({
 
 vi.mock("./provider-migration", () => ({
 	getProviderSettingsManager: mocks.getProviderSettingsManager,
+}))
+
+vi.mock("./ollama-model-family", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./ollama-model-family")>()),
+	resolveOllamaThinkBudget: mocks.resolveOllamaThinkBudget,
+	resolveOllamaImageSupport: mocks.resolveOllamaImageSupport,
+	resolveOllamaToolSupport: mocks.resolveOllamaToolSupport,
 }))
 
 vi.mock("@shared/services/Logger", () => ({
@@ -263,6 +277,21 @@ describe("normalizeSdkBaseUrl", () => {
 		expect(normalizeSdkBaseUrl("ollama", "http://localhost:11434/v1")).toBe("http://localhost:11434/v1")
 	})
 
+	// Reported live: a remote Ollama at 192.168.1.100:30068 ended up stored
+	// without its scheme, and every request died on
+	// `Failed to parse URL from 192.168.1.100:30068/api/chat` with nothing on
+	// screen connecting the two. `host:port` has one sensible reading.
+	it("puts a scheme back on a base URL that lost one", () => {
+		expect(normalizeSdkBaseUrl("ollama", "192.168.1.100:30068")).toBe("http://192.168.1.100:30068")
+		expect(normalizeSdkBaseUrl("ollama", " localhost:11434 ")).toBe("http://localhost:11434")
+		expect(normalizeSdkBaseUrl("ollama", "//192.168.1.100:30068")).toBe("http://192.168.1.100:30068")
+	})
+
+	it("leaves a scheme that is already there alone, including https", () => {
+		expect(normalizeSdkBaseUrl("ollama", "https://ollama.example.com")).toBe("https://ollama.example.com")
+		expect(normalizeSdkBaseUrl("openai", "https://example.com/custom")).toBe("https://example.com/custom")
+	})
+
 	it("preserves explicit user paths", () => {
 		expect(normalizeSdkBaseUrl("openai", " https://example.com/custom ")).toBe("https://example.com/custom")
 	})
@@ -357,6 +386,8 @@ describe("buildSessionConfig", () => {
 
 		expect(config.providerId).toBe("cline")
 		expect(config.apiKey).toBe("workos:test-access-token")
+		expect(config.systemPrompt).toContain("# Workspace Configuration")
+		expect(config.systemPrompt).toContain(JSON.stringify("/tmp/workspace"))
 	})
 
 	it("resolves ClinePass from the shared Cline OAuth credentials", async () => {
@@ -715,6 +746,80 @@ describe("buildSessionConfig", () => {
 		expect(knownModel.family).toBe(expectedModel.family)
 	})
 
+	it("injects cached LiteLLM max input tokens when the dynamic model is absent from the SDK registry", async () => {
+		mocks.stateManager.getApiConfiguration.mockReturnValue({
+			actModeApiProvider: "litellm",
+			actModeLiteLlmModelId: "openai/grok-4.6",
+			liteLlmApiKey: "litellm-key",
+			actModeLiteLlmModelInfo: {
+				name: "xai/grok-4.6",
+				contextWindow: 500_000,
+				maxInputTokens: 500_000,
+				maxTokens: 64_000,
+				supportsPromptCache: false,
+			},
+		} as any)
+		const getModelsSpy = vi.spyOn(LlmsModels, "getModelsForProvider").mockResolvedValueOnce({})
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+		const knownModel = (config.providerConfig as any).knownModels["openai/grok-4.6"]
+
+		expect(config.providerId).toBe("litellm")
+		expect(knownModel).toMatchObject({
+			id: "openai/grok-4.6",
+			name: "xai/grok-4.6",
+			contextWindow: 500_000,
+			maxInputTokens: 500_000,
+			maxTokens: 64_000,
+		})
+		expect(config.knownModels?.["openai/grok-4.6"]).toEqual(knownModel)
+		getModelsSpy.mockRestore()
+	})
+
+	it("keeps an explicit max-input override ahead of cached LiteLLM metadata", async () => {
+		const providerId = parseProviderId("litellm")
+		const modelId = "openai/grok-4.6"
+		mocks.stateManager.getApiConfiguration.mockReturnValue({
+			actModeApiProvider: "litellm",
+			actModeLiteLlmModelId: modelId,
+			liteLlmApiKey: "litellm-key",
+			actModeLiteLlmModelInfo: {
+				name: "xai/grok-4.6",
+				contextWindow: 500_000,
+				maxInputTokens: 500_000,
+				supportsPromptCache: false,
+			},
+		} as any)
+		createProviderConfigStore().commitSelection(providerId, "act", {
+			providerId,
+			modelId,
+			overrides: { maxInputTokens: 300_000 },
+		})
+		const getModelsSpy = vi.spyOn(LlmsModels, "getModelsForProvider").mockResolvedValueOnce({})
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+		const knownModel = (config.providerConfig as any).knownModels[modelId]
+
+		expect(knownModel.contextWindow).toBe(500_000)
+		expect(knownModel.maxInputTokens).toBe(300_000)
+		getModelsSpy.mockRestore()
+	})
+
+	it("does not inject fabricated max input metadata for an unknown LiteLLM model", async () => {
+		mocks.stateManager.getApiConfiguration.mockReturnValue({
+			actModeApiProvider: "litellm",
+			actModeLiteLlmModelId: "custom/no-metadata",
+			liteLlmApiKey: "litellm-key",
+		} as any)
+		const getModelsSpy = vi.spyOn(LlmsModels, "getModelsForProvider").mockResolvedValueOnce({})
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+
+		expect(config.knownModels).toBeUndefined()
+		expect(config.providerConfig).not.toHaveProperty("knownModels")
+		getModelsSpy.mockRestore()
+	})
+
 	it("keeps session creation non-fatal when known-model lookup fails", async () => {
 		const lookupError = new Error("registry unavailable")
 		const getModelsSpy = vi.spyOn(LlmsModels, "getModelsForProvider").mockRejectedValueOnce(lookupError)
@@ -754,7 +859,8 @@ describe("buildSessionConfig", () => {
 		// the top level (manual compaction budgets).
 		expect(config.knownModels).toBeDefined()
 		expect((config.providerConfig as any).knownModels).toBeDefined()
-		expect((config.providerConfig as any).maxOutputTokens).toBeUndefined()
+		// Mirrored onto providerConfig for the compaction summarizer (CLINE-2911).
+		expect((config.providerConfig as any).maxOutputTokens).toBe(4_096)
 		expect((config as any).maxTokensPerTurn).toBe(4_096)
 	})
 
@@ -807,6 +913,155 @@ describe("buildSessionConfig", () => {
 		})
 	})
 
+	it("defaults tool-calling on for dynamic-list models without preserved SDK capabilities", async () => {
+		mocks.stateManager.getApiConfiguration.mockReturnValue({
+			actModeApiProvider: "openrouter",
+			actModeOpenRouterModelId: "mock/custom-model",
+			openRouterApiKey: "openrouter-key",
+			// Dynamic-list picker snapshot: legacy boolean flags but no SDK
+			// capability list. The reconstructed capabilities array must still
+			// carry "tools" — the SDK treats a populated list without it as
+			// "cannot call tools" and silently drops every tool from the session
+			// (the file-edit e2e regression).
+			actModeOpenRouterModelInfo: {
+				name: "Mock Custom Model",
+				contextWindow: 16_000,
+				supportsImages: true,
+				supportsPromptCache: true,
+				modalities: { input: ["text", "image"], output: ["text", "image"] },
+				inputPrice: 0,
+				outputPrice: 0,
+			},
+		} as any)
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+		const knownModel = (config.providerConfig as any).knownModels["mock/custom-model"]
+
+		expect(knownModel.capabilities).toEqual(expect.arrayContaining(["images", "prompt-cache", "tools"]))
+		expect(knownModel.modalities).toEqual({ input: ["text", "image"], output: ["text", "image"] })
+	})
+
+	it("defaults tool-calling on when the preserved capability list is defined but empty", async () => {
+		mocks.stateManager.getApiConfiguration.mockReturnValue({
+			actModeApiProvider: "openrouter",
+			actModeOpenRouterModelId: "mock/empty-capabilities-model",
+			openRouterApiKey: "openrouter-key",
+			// A capabilities field that round-tripped through a boundary
+			// defaulting the missing array to [] — same "no signal" state as
+			// an absent one (modelHasCapability treats both as unspecified).
+			// Before the fix, the strict `=== undefined` guard skipped the
+			// tools seeding, supportsReasoning populated the array, and the
+			// runtime gate silently dropped every tool definition (#13463).
+			actModeOpenRouterModelInfo: {
+				name: "Empty Capabilities Model",
+				contextWindow: 16_000,
+				// Required by the store's isModelInfo gate: without a boolean
+				// supportsPromptCache the state snapshot is rejected and the
+				// model never reaches knownModels at all.
+				supportsPromptCache: false,
+				supportsReasoning: true,
+				capabilities: [],
+			},
+		} as any)
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+		const knownModel = (config.providerConfig as any).knownModels["mock/empty-capabilities-model"]
+
+		expect(knownModel.capabilities).toEqual(expect.arrayContaining(["reasoning", "tools"]))
+	})
+
+	/**
+	 * Asking Ollama about images is what turns an unspecified capability list
+	 * into a populated one, and a populated list answers every other capability
+	 * too. A local vision model whose list said only "images" was declaring
+	 * itself unable to call tools, and .58's runtime gate believed it: every
+	 * call came back "No tools are available" while the system prompt still
+	 * described the tools (mann1x/cline#63).
+	 */
+	describe("ollama capability probe", () => {
+		const ollamaConfig = {
+			actModeApiProvider: "ollama",
+			actModeOllamaModelId: "local-vision-model",
+			actModeOllamaBaseUrl: "http://localhost:11434",
+		}
+
+		it("keeps tool calling when the server reports vision but says nothing about tools", async () => {
+			mocks.stateManager.getApiConfiguration.mockReturnValue(ollamaConfig as any)
+			mocks.resolveOllamaImageSupport.mockResolvedValue(true)
+			mocks.resolveOllamaToolSupport.mockResolvedValue(undefined)
+
+			const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+			const knownModel = (config.providerConfig as any).knownModels["local-vision-model"]
+
+			expect(knownModel.capabilities).toEqual(expect.arrayContaining(["images", "tools"]))
+		})
+
+		it("records what the server does report", async () => {
+			mocks.stateManager.getApiConfiguration.mockReturnValue(ollamaConfig as any)
+			mocks.resolveOllamaImageSupport.mockResolvedValue(true)
+			mocks.resolveOllamaToolSupport.mockResolvedValue(true)
+
+			const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+			const knownModel = (config.providerConfig as any).knownModels["local-vision-model"]
+
+			expect(knownModel.capabilities).toEqual(expect.arrayContaining(["images", "tools"]))
+		})
+
+		// A server that says "no tools" is answering, not staying silent.
+		it("keeps a reported absence of tool calling authoritative", async () => {
+			mocks.stateManager.getApiConfiguration.mockReturnValue(ollamaConfig as any)
+			mocks.resolveOllamaImageSupport.mockResolvedValue(true)
+			mocks.resolveOllamaToolSupport.mockResolvedValue(false)
+
+			const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+			const knownModel = (config.providerConfig as any).knownModels["local-vision-model"]
+
+			expect(knownModel.capabilities).toContain("images")
+			expect(knownModel.capabilities).not.toContain("tools")
+		})
+	})
+
+	it("keeps legacy supportsTools=false authoritative for dynamic-list models", async () => {
+		mocks.stateManager.getApiConfiguration.mockReturnValue({
+			actModeApiProvider: "openrouter",
+			actModeOpenRouterModelId: "mock/no-tools-model",
+			openRouterApiKey: "openrouter-key",
+			actModeOpenRouterModelInfo: {
+				name: "No Tools",
+				supportsPromptCache: true,
+				supportsTools: false,
+			},
+		} as any)
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+		const knownModel = (config.providerConfig as any).knownModels["mock/no-tools-model"]
+
+		expect(knownModel.capabilities).toContain("prompt-cache")
+		expect(knownModel.capabilities).not.toContain("tools")
+	})
+
+	it("trusts a preserved SDK capability list instead of injecting tools", async () => {
+		mocks.stateManager.getApiConfiguration.mockReturnValue({
+			actModeApiProvider: "openrouter",
+			actModeOpenRouterModelId: "mock/media-model",
+			openRouterApiKey: "openrouter-key",
+			// A capability list preserved from the SDK catalog boundary is
+			// authoritative: when it omits "tools", the session must not
+			// re-enable tool calling.
+			actModeOpenRouterModelInfo: {
+				name: "Media Model",
+				supportsPromptCache: false,
+				capabilities: ["images"],
+			},
+		} as any)
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+		const knownModel = (config.providerConfig as any).knownModels["mock/media-model"]
+
+		expect(knownModel.capabilities).toContain("images")
+		expect(knownModel.capabilities).not.toContain("tools")
+	})
+
 	it("keeps -1 OpenAI Compatible values out of request settings and fallback knownModels", async () => {
 		mocks.stateManager.getApiConfiguration.mockReturnValue({
 			actModeApiProvider: "openai",
@@ -828,6 +1083,7 @@ describe("buildSessionConfig", () => {
 		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
 
 		expect((config as any).maxTokensPerTurn).toBeUndefined()
+		expect((config.providerConfig as any).maxOutputTokens).toBeUndefined()
 		expect((config as any).temperature).toBeUndefined()
 		const knownModel = (config.providerConfig as any).knownModels["custom-reasoner"]
 		expect(knownModel).not.toHaveProperty("maxTokens")
@@ -1029,6 +1285,11 @@ describe("buildSessionConfig", () => {
 		expect(config.compaction).toEqual({
 			enabled: true,
 			strategy: "agentic",
+			// The second compaction phase, on by default.
+			thinkingSummaryEnabled: true,
+			// And the condenser, which travels here but does not belong to
+			// compaction; also on by default.
+			cappedThinkingEnabled: true,
 		})
 	})
 
@@ -1049,6 +1310,9 @@ describe("buildSessionConfig", () => {
 		expect(config.compaction).toEqual({
 			enabled: true,
 			strategy: "basic",
+			// The second compaction phase, on by default.
+			thinkingSummaryEnabled: true,
+			cappedThinkingEnabled: true,
 		})
 	})
 
@@ -1069,13 +1333,32 @@ describe("buildSessionConfig", () => {
 		expect(config.compaction).toEqual({
 			enabled: true,
 			strategy: "agentic",
+			// The second compaction phase, on by default.
+			thinkingSummaryEnabled: true,
+			// And the condenser, which travels here but does not belong to
+			// compaction; also on by default.
+			cappedThinkingEnabled: true,
 		})
 	})
 
 	it("does not enable SDK compaction when global useAutoCondense is false", async () => {
 		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
 
-		expect(config.compaction).toBeUndefined()
+		// The object is still sent, and `enabled` is the whole of what turns
+		// compaction off: the runtime builds no compaction pass without it.
+		expect(config.compaction?.enabled).toBe(false)
+		expect(config.compaction?.strategy).toBeUndefined()
+		expect(config.compaction?.summaryPrompt).toBeUndefined()
+	})
+
+	it("keeps the capped-thinking condenser configured with auto condense off", async () => {
+		// The condenser reads its settings out of the compaction config but has
+		// nothing to do with compaction — it rewrites one turn's abandoned
+		// reasoning whatever the transcript is doing. Omitting the object when
+		// auto-condense was off took the condenser with it, silently.
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+
+		expect(config.compaction?.cappedThinkingEnabled).toBe(true)
 	})
 
 	it("lets task useAutoCondense override the global setting", async () => {
@@ -1103,11 +1386,67 @@ describe("buildSessionConfig", () => {
 			taskSettings: { useAutoCondense: true },
 		})
 
-		expect(disabledConfig.compaction).toBeUndefined()
+		expect(disabledConfig.compaction?.enabled).toBe(false)
 		expect(enabledConfig.compaction).toEqual({
 			enabled: true,
 			strategy: "agentic",
+			// The second compaction phase, on by default.
+			thinkingSummaryEnabled: true,
+			cappedThinkingEnabled: true,
 		})
+	})
+
+	// The toggle stored a value nothing read. Everything else was already built
+	// -- agent files in `.cline/agents`, a tool per agent, a connection for them
+	// and a slot gate to bound them -- and these two fields were written into the
+	// session config as the literal `false`, so the settings page showed the
+	// feature on and the model was never offered a subagent.
+	it("offers no subagents while the toggle is off", async () => {
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string) =>
+			key === "subagentsEnabled" ? false : undefined,
+		)
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+
+		expect(config.enableSpawnAgent).toBe(false)
+		expect(config.enableAgentTeams).toBe(false)
+	})
+
+	// Both from one setting: a user who turns subagents on wants to delegate,
+	// and which mechanism carries the delegation is not a choice they have any
+	// way to make.
+	it("offers subagents and teams once the toggle is on", async () => {
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string) =>
+			key === "subagentsEnabled" ? true : undefined,
+		)
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+
+		expect(config.enableSpawnAgent).toBe(true)
+		expect(config.enableAgentTeams).toBe(true)
+	})
+
+	// Never written is off. Delegation spends tokens on a second model, so it is
+	// not something to start doing unasked.
+	it("leaves subagents off when the setting has never been written", async () => {
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation(() => undefined)
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+
+		expect(config.enableSpawnAgent).toBe(false)
+	})
+
+	it("lets a task's own subagent setting override the global one", async () => {
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string) =>
+			key === "subagentsEnabled" ? false : undefined,
+		)
+
+		const config = await buildSessionConfig({
+			cwd: "/tmp/workspace",
+			taskSettings: { subagentsEnabled: true },
+		})
+
+		expect(config.enableSpawnAgent).toBe(true)
 	})
 
 	it("emits the shared mode-tag instructions in both act and plan system prompts", async () => {
@@ -1301,6 +1640,259 @@ describe("buildOutputBudgetSection", () => {
 		expect(section).toContain("capped at 32000 tokens")
 		expect(section).not.toContain("context window is")
 		expect(section).toContain("Prefer several focused tool calls")
+	})
+
+	it("names the separate thinking allowance when the provider enforces one", () => {
+		// Ollama caps thinking at a fraction of the response cap, server-side.
+		// A model told only the outer number reads all of it as room to think
+		// in, and spends the turn doing exactly that.
+		//
+		// The figure is whatever the server reported; this only pins that the
+		// sentence carries it through unchanged.
+		const budgetTokens = 4321
+		const section = buildOutputBudgetSection(32_000, 128_000, { level: "medium", budgetTokens })
+
+		expect(section).toContain(`at most ${budgetTokens} tokens may be spent thinking (effort medium)`)
+		expect(section).toContain("reach a decision inside it")
+	})
+
+	it("says nothing about thinking for providers that do not cap it", () => {
+		const section = buildOutputBudgetSection(32_000, 128_000)
+
+		expect(section).not.toContain("may be spent thinking")
+	})
+
+	it("omits the allowance rather than printing a zero", () => {
+		const section = buildOutputBudgetSection(32_000, 128_000, { level: "none", budgetTokens: 0 })
+
+		expect(section).not.toContain("may be spent thinking")
+	})
+})
+
+describe("resolveOllamaProviderConfig", () => {
+	// The window Ollama is actually loaded with. `ollama ps` on a live box
+	// reported CONTEXT 110000 while the system prompt was telling the model
+	// 128000 — the prompt read the resolved model selection (catalog, state
+	// hint or fallback), which never consults this setting. Both sides read
+	// this resolver now, so they cannot drift.
+	it("takes the context window from providers.json", () => {
+		mocks.providerSettingsManager.getProviderSettings.mockReturnValueOnce({
+			contextWindow: 110_000,
+		} as never)
+
+		const resolved = resolveOllamaProviderConfig({} as never, "v7-coder_tb:vision-iq4_nl")
+
+		expect(resolved.modelInfo?.contextWindow).toBe(110_000)
+	})
+
+	it("surfaces a configured num_predict, which is the cap the server enforces", () => {
+		// `num_predict` goes on the wire ahead of the session's own cap and wins,
+		// so it is the number the reply is actually truncated at — and therefore
+		// the only number the system prompt may state. Saying the fallback while
+		// sending something smaller is the same defect as the context window.
+		mocks.providerSettingsManager.getProviderSettings.mockReturnValue({
+			contextWindow: 110_000,
+			sampling: { numPredict: 20_000 },
+		} as never)
+
+		const resolved = resolveOllamaProviderConfig({} as never, "v7-coder_tb:vision-iq4_nl")
+
+		expect(resolved.sampling?.numPredict).toBe(20_000)
+		expect(resolved.modelInfo?.contextWindow).toBe(110_000)
+	})
+
+	it("falls back to the legacy field only when providers.json carries nothing", () => {
+		mocks.providerSettingsManager.getProviderSettings.mockReturnValue(undefined as never)
+
+		const resolved = resolveOllamaProviderConfig({ ollamaApiOptionsCtxNum: "64000" } as never, "v7-coder_tb:vision-iq4_nl")
+
+		expect(resolved.modelInfo?.contextWindow).toBe(64_000)
+	})
+
+	// The legacy field is one global value, so a scoped configuration reaching
+	// for it is how the setting behaved as a global one. The Vision tab holds
+	// its own settings: when it names no window, the answer is the vision
+	// model's own `num_ctx` or the default — never the primary model's number.
+	// 4.100.25 stopped the panel doing this and left the request doing it, so
+	// the tab displayed the right value and loaded the wrong one.
+	it("does not borrow the global legacy window for a scoped configuration", () => {
+		mocks.providerSettingsManager.getProviderSettings.mockReturnValue(undefined as never)
+
+		const resolved = resolveOllamaProviderConfig(
+			{ ollamaApiOptionsCtxNum: "64000" } as never,
+			"v7-coder_tb:vision-iq4_nl",
+			{},
+		)
+
+		expect(resolved.modelInfo?.contextWindow).not.toBe(64_000)
+	})
+
+	it("still takes a scoped window from the settings it was handed", () => {
+		mocks.providerSettingsManager.getProviderSettings.mockReturnValue(undefined as never)
+
+		const resolved = resolveOllamaProviderConfig({ ollamaApiOptionsCtxNum: "64000" } as never, "v7-coder_tb:vision-iq4_nl", {
+			contextWindow: 8_192,
+		})
+
+		expect(resolved.modelInfo?.contextWindow).toBe(8_192)
+	})
+})
+
+describe("buildDelegatedAgentConnection", () => {
+	function snapshot(providerConfig?: Record<string, unknown>): string {
+		return JSON.stringify({
+			global: {},
+			mode: { apiProvider: "ollama", actModeOllamaModelId: "small-agent" },
+			...(providerConfig ? { providerConfig } : {}),
+		})
+	}
+
+	beforeEach(() => {
+		mocks.providerSettingsManager.getProviderSettings.mockReturnValue(undefined)
+	})
+
+	// The whole point of the tab. `providers.json` holds one entry per provider
+	// and the session's model owns it, so agents on that same provider had the
+	// session's window and no way to have another. Their own snapshot is what
+	// makes a fourth window possible.
+	it("takes the agents' context window from their own snapshot", async () => {
+		const connection = await buildDelegatedAgentConnection(
+			{ actModeApiProvider: "ollama", ollamaApiOptionsCtxNum: "128000" } as never,
+			snapshot({ selectedModelId: "small-agent", contextWindow: 8_192 }),
+		)
+
+		expect(connection?.modelId).toBe("small-agent")
+		expect(connection?.providerConfig?.modelInfo?.contextWindow).toBe(8_192)
+	})
+
+	// `ollamaApiOptionsCtxNum` is one global value. A scoped configuration
+	// reaching for it is exactly how the setting behaved as a global one, and it
+	// would put the session's 128k on an agent model that cannot hold it.
+	it("does not borrow the session's global window", async () => {
+		const connection = await buildDelegatedAgentConnection(
+			{ actModeApiProvider: "ollama", ollamaApiOptionsCtxNum: "128000" } as never,
+			snapshot({ selectedModelId: "small-agent" }),
+		)
+
+		expect(connection?.modelId).toBe("small-agent")
+		expect(connection?.providerConfig?.modelInfo?.contextWindow).not.toBe(128_000)
+	})
+
+	// Not configured is not the same as configured badly: agents keep inheriting
+	// the session's connection, which is the behaviour every build has had.
+	it.each([
+		["nothing is stored", undefined],
+		["the tab names no model", JSON.stringify({ global: {}, mode: { apiProvider: "ollama" } })],
+		["the tab names no provider", JSON.stringify({ global: {}, mode: {} })],
+	])("reports no connection when %s", async (_label, stored) => {
+		expect(await buildDelegatedAgentConnection({ actModeApiProvider: "ollama" } as never, stored)).toBeUndefined()
+	})
+})
+
+describe("resolveOllamaThinkingAllowance", () => {
+	beforeEach(() => {
+		mocks.providerSettingsManager.getProviderSettings.mockReturnValue(undefined)
+		mocks.resolveOllamaThinkBudget.mockResolvedValue(undefined)
+	})
+
+	it("reports the budget the server resolved, never one derived here", async () => {
+		// The whole point: Ollama computes the budget from its own table, so
+		// whatever it answers is the number the model is held to. Nothing on
+		// this side recomputes it, and a changed fraction upstream cannot make
+		// the prompt state a bound that is not enforced.
+		mocks.resolveOllamaThinkBudget.mockResolvedValue({ level: "medium", budgetTokens: 4321 })
+
+		const allowance = await resolveOllamaThinkingAllowance(
+			"ollama",
+			{ reasoningEffort: "medium" },
+			32_000,
+			128_000,
+			"http://localhost:11434",
+			"v7-coder",
+		)
+
+		expect(allowance).toEqual({ level: "medium", budgetTokens: 4321 })
+	})
+
+	it("asks about the think value and options the session will actually send", async () => {
+		await resolveOllamaThinkingAllowance(
+			"ollama",
+			{ reasoningEffort: "high" },
+			8_000,
+			128_000,
+			"http://localhost:11434",
+			"v7-coder",
+		)
+
+		expect(mocks.resolveOllamaThinkBudget).toHaveBeenCalledWith("http://localhost:11434", "v7-coder", {
+			think: "high",
+			numPredict: 8_000,
+			numCtx: 128_000,
+		})
+	})
+
+	it("asks about the level the vendor will fill in when none is set", async () => {
+		// Asking about "no level" would answer for a request this session never
+		// makes: the Ollama vendor supplies its default when reasoning is unset.
+		await resolveOllamaThinkingAllowance("ollama", {}, 8_000, 128_000, "http://localhost:11434", "v7-coder")
+
+		expect(mocks.resolveOllamaThinkBudget).toHaveBeenCalledWith(
+			"http://localhost:11434",
+			"v7-coder",
+			expect.objectContaining({ think: OLLAMA_DEFAULT_REASONING_EFFORT }),
+		)
+	})
+
+	it("prefers a configured num_predict as the cap the server will apply", async () => {
+		mocks.providerSettingsManager.getProviderSettings.mockReturnValue({
+			sampling: { numPredict: 4_000 },
+		} as never)
+
+		await resolveOllamaThinkingAllowance(
+			"ollama",
+			{ reasoningEffort: "medium" },
+			32_000,
+			128_000,
+			"http://localhost:11434",
+			"v7-coder",
+		)
+
+		expect(mocks.resolveOllamaThinkBudget).toHaveBeenCalledWith(
+			"http://localhost:11434",
+			"v7-coder",
+			expect.objectContaining({ numPredict: 4_000 }),
+		)
+	})
+
+	it("says nothing when the server reports no budget", async () => {
+		// An older Ollama, or a model with no bound at all. Silence beats a
+		// guess, because the guess would go into the system prompt as fact.
+		mocks.resolveOllamaThinkBudget.mockResolvedValue(undefined)
+
+		await expect(
+			resolveOllamaThinkingAllowance("ollama", { reasoningEffort: "medium" }, 32_000, 128_000, undefined, "v7-coder"),
+		).resolves.toBeUndefined()
+	})
+
+	it("never asks for providers that do not enforce a thinking cap", async () => {
+		await expect(
+			resolveOllamaThinkingAllowance("anthropic", { reasoningEffort: "medium" }, 32_000, 128_000, undefined, "claude"),
+		).resolves.toBeUndefined()
+		expect(mocks.resolveOllamaThinkBudget).not.toHaveBeenCalled()
+	})
+
+	it("never asks when thinking is switched off", async () => {
+		await expect(
+			resolveOllamaThinkingAllowance("ollama", { thinking: false }, 32_000, 128_000, undefined, "v7-coder"),
+		).resolves.toBeUndefined()
+		expect(mocks.resolveOllamaThinkBudget).not.toHaveBeenCalled()
+	})
+
+	it("never asks without a model to ask about", async () => {
+		await expect(
+			resolveOllamaThinkingAllowance("ollama", { reasoningEffort: "medium" }, 32_000, 128_000, undefined, undefined),
+		).resolves.toBeUndefined()
+		expect(mocks.resolveOllamaThinkBudget).not.toHaveBeenCalled()
 	})
 })
 

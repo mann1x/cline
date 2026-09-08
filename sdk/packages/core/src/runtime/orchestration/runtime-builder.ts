@@ -1,8 +1,10 @@
 import { DEFAULT_MAX_NO_TOOL_CALL_NUDGES } from "@cline/agents";
+import { supportsModelTool } from "@cline/llms";
 import type {
 	AgentTool,
 	BasicLogger,
 	ITelemetryService,
+	ModelTool,
 	RuntimeConfigExtensionKind,
 	TeamTeammateSpec,
 } from "@cline/shared";
@@ -11,7 +13,12 @@ import {
 	resolveMcpTimeoutSeconds,
 } from "@cline/shared";
 import { nanoid } from "nanoid";
-import { createUserInstructionConfigService } from "../../extensions/config";
+import type { AgentPluginPackageMcpServer } from "../../extensions/agent-plugin";
+import {
+	combineUserInstructionConfigServices,
+	createUserInstructionConfigService,
+	type UserInstructionConfigService,
+} from "../../extensions/config";
 import {
 	createDefaultMcpServerClientFactory,
 	createMcpTools,
@@ -23,6 +30,8 @@ import {
 import {
 	createBuiltinTools,
 	DEFAULT_MODEL_TOOL_ROUTING_RULES,
+	type QaCredential,
+	type RunCommandExecutionController,
 	resolveToolPresetName,
 	resolveToolRoutingConfig,
 	type SkillsExecutorWithMetadata,
@@ -30,17 +39,25 @@ import {
 	ToolPresets,
 	type ToolRoutingRule,
 } from "../../extensions/tools";
+import { createPlanModeCommandGuardExtension } from "../../extensions/tools/command-guard-extension";
 import {
 	AgentTeamsRuntime,
+	agentEndpointKey,
+	agentSlotLimitsByEndpoint,
 	bootstrapAgentTeams,
+	createAgentSlotGateRegistry,
 	createDelegatedAgentConfigProvider,
+	type DelegatedAgentConnectionConfig,
+	slotsAllowParallelDelegation,
 	type TeamEvent,
 } from "../../extensions/tools/team";
 import type { ConfiguredAgentConfig } from "../../extensions/tools/team/configured-agent-config";
 import { loadConfiguredAgentConfigs } from "../../extensions/tools/team/configured-agent-config";
 import { createConfiguredAgentTools } from "../../extensions/tools/team/configured-agent-tool";
+import { createCreateAgentTool } from "../../extensions/tools/team/create-agent-tool";
 import {
 	filterDisabledTools,
+	isModelToolEnabledGlobally,
 	resolveDisabledToolNames,
 } from "../../services/global-settings";
 import { createLocalTeamStore } from "../../services/storage/team-store";
@@ -138,6 +155,8 @@ function createBuiltinToolsList(
 	skillsExecutor?: SkillsExecutorWithMetadata,
 	executorOverrides?: Partial<ToolExecutors>,
 	telemetry?: ITelemetryService,
+	qaCredentials?: QaCredential[],
+	runCommandExecutionController?: RunCommandExecutionController,
 ): AgentTool[] {
 	const preset = ToolPresets[resolveToolPresetName({ mode })];
 	const toolRoutingConfig = resolveToolRoutingConfig(
@@ -151,6 +170,10 @@ function createBuiltinToolsList(
 		createBuiltinTools({
 			cwd,
 			telemetry,
+			qaCredentials,
+			executorOptions: {
+				bash: { executionController: runCommandExecutionController },
+			},
 			...preset,
 			enableSkills: !!skillsExecutor,
 			...toolRoutingConfig,
@@ -185,39 +208,83 @@ function isSkillsToolEnabledForSession(input: {
 		input.toolPolicies,
 		SKILLS_PROBE_EXECUTOR,
 		input.toolExecutors,
+		// No telemetry and no credentials: this builds a throwaway tool list only
+		// to ask whether `skills` is in it. Handing it secrets would put them in a
+		// closure nothing ever calls.
 	).some((tool) => tool.name === "skills");
 }
 
 const SKILLS_PROBE_EXECUTOR = (async () => "") as SkillsExecutorWithMetadata;
 
-async function loadConfiguredMcpTools(logger?: BasicLogger): Promise<{
+async function loadConfiguredMcpTools(options: {
+	logger?: BasicLogger;
+	includeSettings: boolean;
+	agentPluginServers?: ReadonlyArray<AgentPluginPackageMcpServer>;
+}): Promise<{
 	tools: AgentTool[];
 	shutdown?: () => Promise<void>;
 }> {
 	const settingsPath = resolveDefaultMcpSettingsPath();
-	if (!hasMcpSettingsFile({ filePath: settingsPath })) {
+	const hasSettings =
+		options.includeSettings && hasMcpSettingsFile({ filePath: settingsPath });
+	if (!hasSettings && !options.agentPluginServers?.length) {
 		return { tools: [] };
 	}
 
+	const settingsClientFactory = createDefaultMcpServerClientFactory({
+		settingsPath,
+	});
+	const agentPluginClientFactory = createDefaultMcpServerClientFactory({
+		restrictConfiguredHeadersToOrigin: true,
+	});
 	const manager = new InMemoryMcpManager({
-		clientFactory: createDefaultMcpServerClientFactory({
-			settingsPath,
-		}),
+		clientFactory: (registration) =>
+			registration.metadata?.source === "agent-plugin"
+				? agentPluginClientFactory(registration)
+				: settingsClientFactory(registration),
 	});
 
 	let registrations: Awaited<
 		ReturnType<typeof registerMcpServersFromSettingsFile>
-	>;
-	try {
-		registrations = await registerMcpServersFromSettingsFile(manager, {
-			filePath: settingsPath,
-		});
-	} catch (error) {
+	> = [];
+	if (hasSettings) {
+		try {
+			registrations = await registerMcpServersFromSettingsFile(manager, {
+				filePath: settingsPath,
+			});
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			options.logger?.log(
+				`[mcp] Failed to load MCP settings, skipping settings-backed MCP tools: ${message}`,
+			);
+		}
+	}
+
+	const registeredNames = new Set(registrations.map((entry) => entry.name));
+	for (const agentPluginServer of options.agentPluginServers ?? []) {
+		const registration = agentPluginServer.registration;
+		if (registeredNames.has(registration.name)) {
+			options.logger?.log(
+				`[agent-plugins] MCP server '${registration.name}' conflicts with an existing server and was skipped.`,
+				{ severity: "error" },
+			);
+			continue;
+		}
+		try {
+			await manager.registerServer(registration);
+			registrations.push(registration);
+			registeredNames.add(registration.name);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			options.logger?.log(
+				`[agent-plugins] Failed to register MCP server '${registration.name}', skipping: ${message}`,
+				{ severity: "error" },
+			);
+		}
+	}
+
+	if (registrations.length === 0) {
 		await manager.dispose().catch(() => {});
-		const message = error instanceof Error ? error.message : String(error);
-		logger?.log(
-			`[mcp] Failed to load MCP settings, skipping MCP tools: ${message}`,
-		);
 		return { tools: [] };
 	}
 
@@ -242,7 +309,7 @@ async function loadConfiguredMcpTools(logger?: BasicLogger): Promise<{
 				result.reason instanceof Error
 					? result.reason.message
 					: String(result.reason);
-			logger?.log(
+			options.logger?.log(
 				`[mcp] Failed to load tools from MCP server "${enabled[i].name}", skipping: ${message}`,
 			);
 		}
@@ -318,8 +385,14 @@ function normalizeConfig(
 		enableTools: config.enableTools !== false,
 		enableSpawnAgent:
 			config.enableSpawnAgent ?? preset.enableSpawnAgent ?? true,
+		// The team tools exist to run agents beside one another. On an endpoint
+		// that serves one request at a time there is no beside, so they are
+		// withheld rather than offered and silently serialised -- see
+		// {@link slotsAllowParallelDelegation}. The host's flag does not turn
+		// them back on: this is what the server does, not what anyone prefers.
 		enableAgentTeams:
-			config.enableAgentTeams ?? preset.enableAgentTeams ?? true,
+			slotsAllowParallelDelegation(config.maxConcurrentAgents) &&
+			(config.enableAgentTeams ?? preset.enableAgentTeams ?? true),
 		disableMcpSettingsTools: config.disableMcpSettingsTools === true,
 		yolo: config.yolo === true,
 		missionLogIntervalSteps:
@@ -361,6 +434,26 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 		} = input;
 		const onTeamEvent = input.onTeamEvent ?? (() => {});
 		const normalized = normalizeConfig(config);
+		const modelTools: ModelTool[] = [];
+		if (
+			normalized.enableTools &&
+			isModelToolEnabledGlobally("web_search") &&
+			supportsModelTool(
+				{ providerId: config.providerId, modelId: config.modelId },
+				"web_search",
+			)
+		) {
+			modelTools.push({ name: "web_search" });
+		}
+		if (
+			normalized.enableTools &&
+			supportsModelTool(
+				{ providerId: config.providerId, modelId: config.modelId },
+				"image_generation",
+			)
+		) {
+			modelTools.push({ name: "image_generation", outputFormat: "png" });
+		}
 		const workspaceConfigRoot = config.workspaceRoot ?? config.cwd;
 		const effectiveToolPolicies = input.toolPolicies ?? config.toolPolicies;
 		const globallyDisabledToolNames = resolveDisabledToolNames();
@@ -371,7 +464,7 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 			? loadConfiguredAgentConfigs({
 					workspaceRoot: workspaceConfigRoot,
 				})
-			: { configs: [], errors: [] };
+			: { configs: [], errors: [], searchPaths: [] };
 		const configuredAgentsNeedSkills = configuredAgents.configs.some(
 			(agent) => agent.skills !== undefined,
 		);
@@ -384,9 +477,7 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 		const userInstructionsEnabled =
 			rulesEnabled || rootSkillsEnabled || workflowsEnabled;
 		let teamToolsRegistered = false;
-		const userInstructionServiceProvided = Boolean(
-			sharedUserInstructionService,
-		);
+		const ownedUserInstructionServices: UserInstructionConfigService[] = [];
 		let userInstructionService = sharedUserInstructionService;
 		let mcpShutdown: (() => Promise<void>) | undefined;
 
@@ -394,6 +485,41 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 			(logger ?? config.logger)?.log?.(
 				`[agents] Failed to load agent config at ${error.path}: ${error.error.message}`,
 			);
+		}
+
+		// Said whichever way it went, and said only when subagents are on. Zero
+		// agent files is not an error -- nothing is wrong, there is just nothing
+		// to offer -- so without this the feature is silent in exactly the case
+		// where a user is wondering why nothing happens.
+		if (normalized.enableSpawnAgent) {
+			(logger ?? config.logger)?.log?.(
+				configuredAgents.configs.length > 0
+					? `[agents] ${configuredAgents.configs.length} configured agent(s): ${configuredAgents.configs
+							.map((agent) => agent.name)
+							.join(", ")}`
+					: `[agents] No configured agents found. Looked in: ${configuredAgents.searchPaths.join(", ") || "(no search path)"}`,
+			);
+
+			// A profile is usually deleted long after the agent naming it was
+			// written, and nothing rewrites the agent file. Left to itself that
+			// surfaces as a failed delegation halfway through a task, which
+			// reads as the subagent being broken rather than as configuration
+			// that went stale. Said here instead, before anything calls it.
+			const danglingProfiles = configuredAgents.configs.filter(
+				(agent) =>
+					agent.profile !== undefined &&
+					config.resolveProfileConnection?.(agent.profile) === undefined,
+			);
+			for (const agent of danglingProfiles) {
+				const available = config.listProfileNames?.() ?? [];
+				(logger ?? config.logger)?.log?.(
+					`[agents] "${agent.name}" names the API configuration profile "${agent.profile}", which no longer exists, and will fail when called. ` +
+						(available.length > 0
+							? `Available profiles: ${available.join(", ")}.`
+							: "This host has no saved profiles."),
+					{ severity: "warn" },
+				);
+			}
 		}
 
 		if (
@@ -410,11 +536,34 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 								: undefined,
 							pluginPaths: config.pluginPaths,
 							cwd: config.cwd,
+							agentPluginSkills: pluginsEnabled
+								? input.agentPluginSkills
+								: undefined,
 						}
 					: { workspacePath: workspaceConfigRoot },
 				rules: { workspacePath: config.cwd },
 				workflows: { workspacePath: config.cwd },
 			});
+			ownedUserInstructionServices.push(userInstructionService);
+		} else if (
+			userInstructionService &&
+			pluginsEnabled &&
+			input.agentPluginSkills?.length &&
+			(userInstructionsEnabled || configuredAgentsNeedSkills)
+		) {
+			const agentPluginInstructionService = createUserInstructionConfigService({
+				skills: {
+					directories: [],
+					agentPluginSkills: input.agentPluginSkills,
+				},
+				rules: { directories: [] },
+				workflows: { directories: [] },
+			});
+			ownedUserInstructionServices.push(agentPluginInstructionService);
+			userInstructionService = combineUserInstructionConfigServices([
+				userInstructionService,
+				agentPluginInstructionService,
+			]);
 		}
 
 		if (userInstructionService) {
@@ -446,9 +595,27 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 						allowedSkillNames: config.skills,
 					})
 				: undefined;
-		const runtimeExtensions = userInstructionPlugin
-			? [...(extensions ?? config.extensions ?? []), userInstructionPlugin]
-			: (extensions ?? config.extensions);
+		// Plan mode keeps run_commands for read-only investigation; this
+		// beforeTool hook is the hard backstop that rejects file-editing
+		// commands before approval/execution. Registered as an extension so it
+		// rides the shared hook merge for the lead agent, host-provided
+		// run_commands replacements (e.g. the VS Code terminal tool), and
+		// delegated sub-agents alike. Mode switches rebuild the runtime, so
+		// the guard appears/disappears with the mode.
+		const planModeCommandGuard =
+			normalized.mode === "plan" && normalized.enableTools
+				? createPlanModeCommandGuardExtension({
+						telemetry: telemetry ?? config.telemetry,
+					})
+				: undefined;
+		const injectedExtensions = [
+			userInstructionPlugin,
+			planModeCommandGuard,
+		].filter((extension) => extension !== undefined);
+		const runtimeExtensions =
+			injectedExtensions.length > 0
+				? [...(extensions ?? config.extensions ?? []), ...injectedExtensions]
+				: (extensions ?? config.extensions);
 
 		if (normalized.enableTools) {
 			tools.push(
@@ -462,10 +629,22 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 					undefined,
 					toolExecutors,
 					telemetry ?? config.telemetry,
+					config.qaCredentials,
+					input.runCommandExecutionController,
 				),
 			);
-			if (!normalized.disableMcpSettingsTools) {
-				const mcpRuntime = await loadConfiguredMcpTools(config.logger);
+			const agentPluginMcpServers = pluginsEnabled
+				? input.agentPluginMcpServers
+				: undefined;
+			if (
+				!normalized.disableMcpSettingsTools ||
+				agentPluginMcpServers?.length
+			) {
+				const mcpRuntime = await loadConfiguredMcpTools({
+					logger: config.logger,
+					includeSettings: !normalized.disableMcpSettingsTools,
+					agentPluginServers: agentPluginMcpServers,
+				});
 				tools.push(...mcpRuntime.tools);
 				mcpShutdown = mcpRuntime.shutdown;
 			}
@@ -489,35 +668,126 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 			| undefined;
 		let pendingLeadTeamTools: AgentTool[] = [];
 		let restoredStateHydratedIntoRuntime = false;
-		const delegatedAgentConfigProvider = createDelegatedAgentConfigProvider({
-			providerId: config.providerId,
-			modelId: config.modelId,
-			cwd: config.cwd,
-			apiKey: config.apiKey ?? "",
-			baseUrl: config.baseUrl,
-			headers: config.headers,
-			providerConfig: config.providerConfig,
-			knownModels: config.knownModels,
-			thinking: config.thinking,
-			reasoningEffort: config.reasoningEffort,
-			thinkingBudgetTokens: config.thinkingBudgetTokens,
-			maxTokensPerTurn: config.maxTokensPerTurn,
-			maxToolResultChars: config.maxToolResultChars,
-			temperature: config.temperature,
-			maxIterations: config.maxIterations,
-			hooks,
-			extensions: runtimeExtensions,
-			logger: logger ?? config.logger,
-			telemetry: input.telemetry ?? config.telemetry,
-			workspaceMetadata: config.workspaceMetadata,
-		});
+		// A connection of their own, when the host gave them one. Only the fields
+		// it actually names are taken: an override that says which model to call
+		// and nothing else still inherits the session's sampler and thinking
+		// budget, which is the sensible reading of a tab where those were left
+		// alone. Those same fields are then pinned, so the connection updates the
+		// host pushes for the session's model do not move the agents back onto it.
+		const agentsConnection = config.delegatedAgentConnection;
+		// One registry for the session, so every spawn path shares the bound and
+		// agents on one endpoint queue together wherever they were spawned from.
+		// The host's per-endpoint bounds ride along, so an agent whose profile
+		// points at another server is held to that server's count and not to the
+		// lead's.
+		const agentSlotGates = createAgentSlotGateRegistry(
+			config.maxConcurrentAgents,
+			agentSlotLimitsByEndpoint(config.agentSlotLimits),
+		);
+		const agentsOverrides: Partial<DelegatedAgentConnectionConfig> =
+			agentsConnection
+				? {
+						providerId: agentsConnection.providerId,
+						modelId: agentsConnection.modelId,
+						...(agentsConnection.apiKey !== undefined
+							? { apiKey: agentsConnection.apiKey }
+							: {}),
+						...(agentsConnection.baseUrl !== undefined
+							? { baseUrl: agentsConnection.baseUrl }
+							: {}),
+						...(agentsConnection.headers !== undefined
+							? { headers: agentsConnection.headers }
+							: {}),
+						...(agentsConnection.knownModels !== undefined
+							? { knownModels: agentsConnection.knownModels }
+							: {}),
+						...(agentsConnection.providerConfig !== undefined
+							? { providerConfig: agentsConnection.providerConfig }
+							: {}),
+						...(agentsConnection.maxToolResultChars !== undefined
+							? { maxToolResultChars: agentsConnection.maxToolResultChars }
+							: {}),
+					}
+				: {};
+		const delegatedAgentConfigProvider = createDelegatedAgentConfigProvider(
+			{
+				providerId: config.providerId,
+				modelId: config.modelId,
+				distinctId: input.distinctId,
+				sessionId: config.sessionId,
+				cwd: config.cwd,
+				apiKey: config.apiKey ?? "",
+				baseUrl: config.baseUrl,
+				headers: config.headers,
+				providerConfig: config.providerConfig,
+				knownModels: config.knownModels,
+				thinking: config.thinking,
+				reasoningEffort: config.reasoningEffort,
+				thinkingBudgetTokens: config.thinkingBudgetTokens,
+				maxTokensPerTurn: config.maxTokensPerTurn,
+				maxToolResultChars: config.maxToolResultChars,
+				temperature: config.temperature,
+				maxIterations: config.maxIterations,
+				hooks,
+				extensions: runtimeExtensions,
+				logger: logger ?? config.logger,
+				telemetry: input.telemetry ?? config.telemetry,
+				workspaceMetadata: config.workspaceMetadata,
+				// One gate for the spawn paths that do all read this provider -- the
+				// team runtime, the lead's `spawn_agent`, and a sub-agent spawning
+				// its own -- and the registry beside it for the one that does not.
+				// The session's endpoint takes its gate from the same registry, so a
+				// configured agent left on the session's connection queues with the
+				// free-form sub-agents rather than beside them.
+				slotGate: agentSlotGates.for(
+					agentEndpointKey({
+						providerId: agentsOverrides.providerId ?? config.providerId,
+						baseUrl: agentsOverrides.baseUrl ?? config.baseUrl,
+					}),
+				),
+				slotGates: agentSlotGates,
+				...agentsOverrides,
+			},
+			Object.keys(agentsOverrides) as (keyof DelegatedAgentConnectionConfig)[],
+		);
+		if (agentsConnection) {
+			(logger ?? config.logger)?.log(
+				`[Agents] Delegated agents run on provider=${agentsConnection.providerId} model=${agentsConnection.modelId}, not the session's`,
+			);
+		}
+		// Tools that are simply absent are their own kind of confusion, so the
+		// one place that knows why says so.
+		if (
+			!slotsAllowParallelDelegation(config.maxConcurrentAgents) &&
+			(config.enableSpawnAgent !== false || config.enableAgentTeams !== false)
+		) {
+			(logger ?? config.logger)?.log(
+				"[Agents] spawn_agent and the team tools are withheld: this endpoint serves 1 request at a time, so a delegated agent would run after the agent that spawned it rather than beside it. Raise the profile's parallel sessions to offer them.",
+			);
+		}
 		if (normalized.enableSpawnAgent) {
+			// Offered to the lead only, and gated with the subagents it creates:
+			// writing an agent file is pointless in a session that cannot run one,
+			// and a subagent that could write agents is a recursion nobody asked
+			// for.
+			tools.push(
+				...filterAvailableTools(
+					[createCreateAgentTool({ workspaceRoot: workspaceConfigRoot })],
+					effectiveToolPolicies,
+				),
+			);
 			if (configuredAgents.configs.length > 0) {
 				tools.push(
 					...filterAvailableTools(
 						createConfiguredAgentTools({
 							configProvider: delegatedAgentConfigProvider,
 							agents: configuredAgents.configs,
+							// An agent naming a second provider needs that provider's
+							// own credentials and base URL, and only the host knows
+							// where its provider store is.
+							resolveProviderConnection: config.resolveProviderConnection,
+							resolveProfileConnection: config.resolveProfileConnection,
+							listProfileNames: config.listProfileNames,
 							createSubAgentTools: (agent) =>
 								normalized.enableTools
 									? filterToolsForConfiguredAgent(
@@ -536,6 +806,8 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 													: undefined,
 												toolExecutors,
 												telemetry ?? config.telemetry,
+												config.qaCredentials,
+												input.runCommandExecutionController,
 											),
 											agent,
 										)
@@ -573,6 +845,15 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 				teamRuntime = new AgentTeamsRuntime({
 					teamName: effectiveTeamName,
 					leadAgentId: config.sessionId || "lead",
+					// The team runtime has always had a bound of its own; until now it
+					// was a hardcoded 2 that no caller ever set, which is the wrong
+					// number on a one-slot server and on a ten-slot one alike. `0` is
+					// the host saying admission control decides, so the counting bound
+					// stands down rather than becoming the thing that refuses a run.
+					maxConcurrentRuns:
+						config.maxConcurrentAgents === 0
+							? Number.POSITIVE_INFINITY
+							: config.maxConcurrentAgents,
 					missionLogIntervalSteps: normalized.missionLogIntervalSteps,
 					missionLogIntervalMs: normalized.missionLogIntervalMs,
 					onTeamEvent: (event: TeamEvent) => {
@@ -641,6 +922,8 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 									undefined,
 									toolExecutors,
 									telemetry ?? config.telemetry,
+									config.qaCredentials,
+									input.runCommandExecutionController,
 								)
 						: undefined,
 					teammateConfigProvider: delegatedAgentConfigProvider,
@@ -659,7 +942,16 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 			return teamRuntime;
 		};
 
-		if (normalized.enableSpawnAgent && createSpawnTool) {
+		// `spawn_agent` goes the same way as the team tools and for the same
+		// reason. The configured agents above do not: one of those exists
+		// because someone wrote a file naming it, with its own model and often
+		// its own provider, and a deliberate hand-off is worth serialising. This
+		// is the open-ended one the model reaches for on its own.
+		if (
+			normalized.enableSpawnAgent &&
+			createSpawnTool &&
+			slotsAllowParallelDelegation(config.maxConcurrentAgents)
+		) {
 			const spawnTool = createSpawnTool();
 			tools.push({
 				...spawnTool,
@@ -725,6 +1017,10 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 
 		return {
 			tools: finalTools,
+			modelTools,
+			// Carried out so a host can delegate to one by name. The tools above
+			// are what the model sees; this is what the user wrote.
+			configuredAgents: configuredAgents.configs,
 			logger: logger ?? config.logger,
 			telemetry: telemetry ?? config.telemetry,
 			teamRuntime,
@@ -748,8 +1044,8 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 				shutdownTeamRuntime(teamRuntime, reason);
 				this.teamRuntimeEntries.delete(registryKey);
 				await mcpShutdown?.();
-				if (!userInstructionServiceProvided) {
-					userInstructionService?.stop();
+				for (const service of ownedUserInstructionServices) {
+					service.stop();
 				}
 			},
 		};

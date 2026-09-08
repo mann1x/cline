@@ -66,6 +66,7 @@ const dashboardMocks = vi.hoisted(() => ({
 }));
 const connectMocks = vi.hoisted(() => ({
 	formatAdapterList: vi.fn(() => ""),
+	runCleanupConnectorInstance: vi.fn(async () => 0),
 	runConnectAdapter: vi.fn(async () => 0),
 	runRestartConnector: vi.fn(async () => 0),
 	runStopAllConnectors: vi.fn(async () => 0),
@@ -200,6 +201,10 @@ vi.mock("./utils/feature-flags", () => ({
 }));
 vi.mock("./runtime/prompt", () => ({
 	resolveSystemPrompt: promptMocks.resolveSystemPrompt,
+	// The loader reads this to fill `{{IDE_NAME}}` in the tool descriptions; a
+	// mock without it fails the import rather than the assertion, which is how
+	// 45 tests in this file failed for one missing export.
+	CLI_IDE_NAME: "Terminal Shell",
 }));
 vi.mock("./commands/kanban", () => kanbanMocks);
 vi.mock("./commands/dashboard", () => dashboardMocks);
@@ -394,6 +399,68 @@ describe("runCli lightweight command dispatch", () => {
 		);
 		expect(connectMocks.runConnectAdapter).not.toHaveBeenCalled();
 		expect(connectMocks.runStopConnector).not.toHaveBeenCalled();
+	});
+
+	it("routes a supervised cleanup to one connector instance", async () => {
+		connectMocks.runCleanupConnectorInstance.mockClear();
+		connectMocks.runConnectAdapter.mockClear();
+		process.argv = [
+			"bun",
+			"src/index.ts",
+			"connect",
+			"--cleanup-instance",
+			"cline-slack",
+			"slack",
+		];
+
+		const { runCli } = await import("./main");
+
+		await expect(runCli()).resolves.toBeUndefined();
+		expect(process.exitCode).toBe(0);
+		expect(connectMocks.runCleanupConnectorInstance).toHaveBeenCalledWith(
+			"slack",
+			"cline-slack",
+			expect.any(Object),
+		);
+		expect(connectMocks.runConnectAdapter).not.toHaveBeenCalled();
+	});
+
+	it("rejects combining cleanup with another connect mode", async () => {
+		connectMocks.runCleanupConnectorInstance.mockClear();
+		connectMocks.runStopConnector.mockClear();
+		process.argv = [
+			"bun",
+			"src/index.ts",
+			"connect",
+			"--cleanup-instance",
+			"cline-slack",
+			"--stop",
+			"slack",
+		];
+
+		const { runCli } = await import("./main");
+
+		await runCli();
+		expect(process.exitCode).toBe(1);
+		expect(connectMocks.runCleanupConnectorInstance).not.toHaveBeenCalled();
+		expect(connectMocks.runStopConnector).not.toHaveBeenCalled();
+	});
+
+	it("requires a channel for a supervised cleanup", async () => {
+		connectMocks.runCleanupConnectorInstance.mockClear();
+		process.argv = [
+			"bun",
+			"src/index.ts",
+			"connect",
+			"--cleanup-instance",
+			"x",
+		];
+
+		const { runCli } = await import("./main");
+
+		await runCli();
+		expect(process.exitCode).toBe(1);
+		expect(connectMocks.runCleanupConnectorInstance).not.toHaveBeenCalled();
 	});
 
 	it("routes a targeted connector restart to one instance", async () => {

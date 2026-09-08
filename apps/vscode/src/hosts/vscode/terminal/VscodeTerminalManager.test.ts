@@ -183,6 +183,48 @@ describe("VscodeTerminalManager", () => {
 		}
 	})
 
+	/**
+	 * A shell with no integration can never have its cwd confirmed, so every
+	 * acquisition discards the candidate and creates a fresh terminal. Evicting
+	 * without closing leaked one window per command (mann1x/cline#56); the
+	 * discarded terminal is now closed at the next acquisition boundary.
+	 */
+	it("closes a terminal it abandons because the cwd could not be confirmed", async () => {
+		setVscodeHostProviderMock()
+		const disposeStub = sandbox.stub()
+		const terminalInfo: TerminalInfo = {
+			id: 1,
+			busy: false,
+			lastCommand: "",
+			lastActive: Date.now(),
+			terminal: {
+				// No shellIntegration at all: `cd` goes out via sendText and the
+				// resulting cwd is unobservable, which is the case that leaked.
+				sendText: sandbox.stub(),
+				show: sandbox.stub(),
+				dispose: disposeStub,
+			} as unknown as vscode.Terminal,
+		}
+		sandbox.stub(TerminalRegistry, "getAllTerminals").returns([terminalInfo])
+
+		const acquisition = manager.getOrCreateTerminal("/tmp/cline-target")
+		await sandbox.clock.tickAsync(5000)
+		const terminal = (await acquisition) as unknown as TerminalInfo
+
+		try {
+			assert.notEqual(terminal, terminalInfo)
+			assert.equal(TerminalRegistry.getTerminal(terminalInfo.id), undefined)
+			// Queued, not disposed inside the acquisition that abandoned it.
+			assert.equal(disposeStub.called, false)
+
+			TerminalRegistry.disposeTerminalsPendingCleanup()
+			assert.equal(disposeStub.calledOnce, true)
+		} finally {
+			terminal.terminal.dispose()
+			TerminalRegistry.removeTerminal(terminal.id)
+		}
+	})
+
 	it("creates a fresh terminal when the reused-terminal cwd command stream fails", async () => {
 		setVscodeHostProviderMock()
 		const terminalInfo: TerminalInfo = {

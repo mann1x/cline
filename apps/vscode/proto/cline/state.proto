@@ -48,6 +48,7 @@ message AutoApprovalActions {
   optional bool execute_all_commands = 6;
   optional bool use_browser = 7;
   optional bool use_mcp = 8;
+  optional bool use_browser_tool = 9;
 }
 
 // Auto approval settings for task execution
@@ -106,6 +107,7 @@ message Secrets {
   optional string cline_api_key = 44;
   optional string openai_codex_oauth_credentials = 48;
   optional string wandb_api_key = 50;
+  optional string qa_credentials = 51;
 }
 
 // NOTE: Add new fields under API_HANDLER_SETTINGS_FIELDS or USER_SETTINGS_FIELDS
@@ -116,6 +118,7 @@ message Settings {
   reserved "custom_prompt";
   reserved 139; // was max_consecutive_mistakes (removed; the SDK owns the mistake limit)
   reserved "max_consecutive_mistakes";
+  reserved 142; // was yolo_mode_toggled (removed; migrated into auto_approval_settings)
   optional string lite_llm_base_url = 1;
   optional bool lite_llm_use_prompt_cache = 2;
   optional string anthropic_base_url = 4;
@@ -252,7 +255,6 @@ message Settings {
   optional bool enable_checkpoints_setting = 135;
   optional int32 shell_integration_timeout = 136;
   optional string default_terminal_profile = 137;
-  optional bool yolo_mode_toggled = 142;
   optional bool use_auto_condense = 143;
   optional string preferred_language = 145;
   optional PlanActMode mode = 147;
@@ -276,7 +278,6 @@ message Settings {
   optional int32 open_telemetry_log_batch_timeout = 170;
   optional int32 open_telemetry_log_max_queue_size = 171;
   optional bool worktrees_enabled = 172;
-  optional bool auto_approve_all_toggled = 174;
   map<string, string> open_ai_headers = 177;
   optional string plan_mode_cline_model_id = 178;
   optional OpenRouterModelInfo plan_mode_cline_model_info = 179;
@@ -288,6 +289,20 @@ message Settings {
   optional string act_mode_cline_pass_model_id = 185;
   optional OpenRouterModelInfo act_mode_cline_pass_model_info = 186;
   optional int32 max_tool_result_chars = 187;
+  optional bool vision_model_enabled = 188;
+  optional string api_configuration_profiles = 189;
+  optional string active_api_configuration_profile = 190;
+  optional string vision_mode_api_configuration = 191;
+  optional string compaction_prompt = 192;
+  optional bool thinking_compaction_enabled = 193;
+  optional string thinking_compaction_prompt = 194;
+  optional bool capped_thinking_enabled = 195;
+  optional string capped_thinking_prompt = 196;
+  optional string edit_verification_settings = 197;
+  optional bool agents_model_enabled = 198;
+  optional string agents_mode_api_configuration = 199;
+  optional string atomic_protocol_settings = 200;
+  optional bool show_request_timings = 201;
 }
 
 message State {
@@ -415,7 +430,7 @@ message UpdateSettingsRequest {
   optional bool use_auto_condense = 18;
   optional BrowserSettingsUpdate browser_settings = 20;
   optional string default_terminal_profile = 21;
-  optional bool yolo_mode_toggled = 22;
+  reserved 22; // was yolo_mode_toggled (removed; migrated into auto_approval_settings)
   optional bool multi_root_enabled = 25;
   optional bool hooks_enabled = 26;
   optional string vscode_terminal_execution_mode = 27;
@@ -432,6 +447,86 @@ message UpdateSettingsRequest {
   optional string compaction_strategy = 44;
   // 0 restores the SDK default rather than meaning "keep nothing".
   optional int32 max_tool_result_chars = 45;
+  optional bool vision_model_enabled = 46;
+  // JSON, not a message: these carry a snapshot of the API configuration panel,
+  // whose field list is generated from `ApiHandlerSettingsKeys` and grows with
+  // every provider added. See `@shared/api-config-snapshot`.
+  optional string api_configuration_profiles = 47;
+  optional string active_api_configuration_profile = 48;
+  optional string vision_mode_api_configuration = 49;
+  optional string compaction_prompt = 50;
+  optional bool thinking_compaction_enabled = 51;
+  optional string thinking_compaction_prompt = 52;
+  optional bool capped_thinking_enabled = 53;
+  optional string capped_thinking_prompt = 54;
+  optional bool agents_model_enabled = 55;
+  optional string agents_mode_api_configuration = 56;
+  optional EditVerificationSettings edit_verification_settings = 57;
+  // A change to the stored set. Sent only when the user edits it; values
+  // travel in this direction and never the other.
+  optional QaCredentialsUpdate qa_credentials = 58;
+  optional AtomicProtocolSettings atomic_protocol_settings = 59;
+  optional bool web_search_enabled = 60;
+  optional bool show_request_timings = 61;
+}
+
+// Whether a run may finish with a file it changed and never checked.
+// A message rather than a JSON string because it is a closed set of fields the
+// schema can state, unlike the API-configuration snapshots.
+message EditVerificationSettings {
+  // "off", "nudge" or "require".
+  string mode = 1;
+}
+
+// Whether a task runs as judged, revertible transactions.
+//
+// Sent whole rather than as a delta: the four fields are read together when a
+// session arms the protocol, and a half-applied change would arm it to a
+// combination the user never chose.
+message AtomicProtocolSettings {
+  // "off", "auto" or "always".
+  string mode = 1;
+  // The shell line that decides whether the task is done. Empty means the
+  // workspace is inspected for something to run instead.
+  string oracle_command = 2;
+  // A regular expression that line's output must match, on top of exiting
+  // cleanly. For a check that reports its verdict and exits zero regardless.
+  string oracle_expect = 5;
+  // Changes the model may declare per transaction.
+  int32 max_changes = 3;
+  // Attempts before the task stops.
+  int32 max_transactions = 4;
+  // Whether the model may propose its own check where nothing can be run.
+  // Absent means on; false returns that case to the model's self-declared
+  // verdict, so the two can be compared on the same workspace.
+  optional bool propose_check = 6;
+  // Proposals put to the user before the run gives up on having a check.
+  int32 max_check_proposals = 7;
+  // Discarded attempts before a check the model proposed, and that has never
+  // passed once, may be replaced. Optional because zero is meaningful here --
+  // it turns reconsideration off -- and proto3 cannot tell that from unset.
+  optional int32 check_reconsidered_after = 8;
+}
+
+// Named secrets a QA command may ask for.
+//
+// This message only ever travels webview -> extension. What comes back is the
+// list of names in ExtensionState; a value that has been stored is never read
+// out to the webview, which is why the settings view offers "replace" rather
+// than showing what is there.
+message QaCredential {
+  string name = 1;
+  string value = 2;
+}
+
+// A delta rather than the whole set, because the webview does not have the
+// whole set: it is told the names and never the values, so it has nothing to
+// send back for a credential the user did not touch.
+message QaCredentialsUpdate {
+  // Added, or replaced if the name already exists.
+  repeated QaCredential set = 1;
+  // Removed by name.
+  repeated string remove = 2;
 }
 
 message UpdateTerminalConnectionTimeoutRequest {

@@ -5,19 +5,25 @@ import type { ITelemetryService } from "@cline/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	GlobalSettingsSchema,
+	isAgentPluginDisabledGlobally,
+	isModelToolEnabledGlobally,
 	readCompactionModeGlobally,
 	readCompactionStrategyGlobally,
 	readGlobalSettings,
 	readPlanActModeGlobally,
 	readToolAutoApproveGlobally,
+	readTuiThemeGlobally,
 	setAutoUpdateEnabledGlobally,
 	setCompactionModeGlobally,
 	setCompactionStrategyGlobally,
+	setDisabledAgentPlugin,
 	setDisabledPlugin,
 	setDisabledTools,
+	setModelToolEnabledGlobally,
 	setPlanActModeGlobally,
 	setTelemetryOptOutGlobally,
 	setToolAutoApproveGlobally,
+	setTuiThemeGlobally,
 	writeGlobalSettings,
 } from "./global-settings";
 
@@ -31,11 +37,13 @@ describe("global-settings", () => {
 	it("defines the global settings file schema", () => {
 		expect(
 			GlobalSettingsSchema.parse({
+				disabledAgentPlugins: [" portable ", "portable"],
 				disabledTools: [" read_files ", "read_files", "editor"],
 				disabledPlugins: ["/plugins/example.js", "/plugins/example.js"],
 			}),
 		).toEqual({
 			autoUpdateEnabled: true,
+			disabledAgentPlugins: ["portable"],
 			disabledPlugins: ["/plugins/example.js"],
 			disabledTools: ["editor", "read_files"],
 			telemetryOptOut: false,
@@ -135,27 +143,58 @@ describe("global-settings", () => {
 		}
 	});
 
-	it("preserves disabled tools and plugins across targeted updates", async () => {
+	it("preserves disabled tools and both plugin formats across targeted updates", async () => {
 		const root = await mkdtemp(join(tmpdir(), "core-global-settings-"));
 		try {
 			const settingsPath = join(root, "global-settings.json");
 			process.env.CLINE_GLOBAL_SETTINGS_PATH = settingsPath;
 
 			setDisabledPlugin("/plugins/example.js", true);
+			setDisabledAgentPlugin("portable-review", true);
 			setDisabledTools(["read_files", "editor"], true);
 			setDisabledTools(["editor"], false);
 
 			expect(readGlobalSettings()).toEqual({
 				autoUpdateEnabled: true,
+				disabledAgentPlugins: ["portable-review"],
 				disabledPlugins: ["/plugins/example.js"],
 				disabledTools: ["read_files"],
 				telemetryOptOut: false,
 			});
 			expect(JSON.parse(await readFile(settingsPath, "utf8"))).toEqual({
 				autoUpdateEnabled: true,
+				disabledAgentPlugins: ["portable-review"],
 				disabledPlugins: ["/plugins/example.js"],
 				disabledTools: ["read_files"],
 				telemetryOptOut: false,
+			});
+
+			setDisabledAgentPlugin("portable-review", false);
+			expect(isAgentPluginDisabledGlobally("portable-review")).toBe(false);
+			expect(readGlobalSettings().disabledAgentPlugins).toBeUndefined();
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("stores provider-executed tool preferences in the scalable tools map", async () => {
+		const root = await mkdtemp(join(tmpdir(), "core-global-settings-"));
+		try {
+			process.env.CLINE_GLOBAL_SETTINGS_PATH = join(
+				root,
+				"global-settings.json",
+			);
+
+			expect(isModelToolEnabledGlobally("web_search")).toBe(false);
+			setModelToolEnabledGlobally("web_search", true);
+			expect(isModelToolEnabledGlobally("web_search")).toBe(true);
+			expect(readGlobalSettings().tools).toEqual({
+				web_search: { enabled: true },
+			});
+
+			setDisabledTools(["web_search"], true);
+			expect(readGlobalSettings().tools).toEqual({
+				web_search: { enabled: false },
 			});
 		} finally {
 			await rm(root, { recursive: true, force: true });
@@ -282,6 +321,29 @@ describe("global-settings", () => {
 			expect(readToolAutoApproveGlobally()).toBe(false);
 			setToolAutoApproveGlobally(true);
 			expect(readToolAutoApproveGlobally()).toBe(true);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("reads and writes the TUI theme globally", async () => {
+		const root = await mkdtemp(join(tmpdir(), "core-global-settings-"));
+		try {
+			const settingsPath = join(root, "global-settings.json");
+			process.env.CLINE_GLOBAL_SETTINGS_PATH = settingsPath;
+
+			expect(readTuiThemeGlobally()).toBeUndefined();
+			setTuiThemeGlobally("tokyo-night");
+			expect(readTuiThemeGlobally()).toBe("tokyo-night");
+			expect(JSON.parse(await readFile(settingsPath, "utf8"))).toEqual({
+				autoUpdateEnabled: true,
+				telemetryOptOut: false,
+				tuiTheme: "tokyo-night",
+			});
+
+			// Blank values normalize to unset instead of persisting whitespace.
+			writeGlobalSettings({ tuiTheme: "  " });
+			expect(readTuiThemeGlobally()).toBeUndefined();
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}
@@ -426,6 +488,7 @@ describe("global-settings", () => {
 				const settingsPath = join(root, "global-settings.json");
 				process.env.CLINE_GLOBAL_SETTINGS_PATH = settingsPath;
 				writeGlobalSettings({
+					disabledAgentPlugins: ["portable-review"],
 					disabledTools: ["editor"],
 					disabledPlugins: ["/plugins/example.js"],
 				});
@@ -433,6 +496,7 @@ describe("global-settings", () => {
 				const settings = readGlobalSettings();
 
 				expect(Object.isFrozen(settings)).toBe(true);
+				expect(Object.isFrozen(settings.disabledAgentPlugins)).toBe(true);
 				expect(Object.isFrozen(settings.disabledTools)).toBe(true);
 				expect(Object.isFrozen(settings.disabledPlugins)).toBe(true);
 				expect(() => {
@@ -441,6 +505,7 @@ describe("global-settings", () => {
 				expect(() => {
 					settings.disabledTools?.push("malicious");
 				}).toThrow();
+				expect(isAgentPluginDisabledGlobally("portable-review")).toBe(true);
 			} finally {
 				await rm(root, { recursive: true, force: true });
 			}

@@ -1,6 +1,11 @@
 import type {
+	BackgroundDelegationView,
 	ClineCoreListHistoryOptions,
 	ClineCoreStartInput,
+	CompareCheckpointInput,
+	CompareCheckpointResult,
+	ConfiguredAgentDelegationResult,
+	ConfiguredAgentSummary,
 	CoreSessionEvent,
 	HookEventPayload,
 	PendingPromptMutationResult,
@@ -41,7 +46,23 @@ export interface SdkSessionHost {
 	 */
 	readLiveMessages?(sessionId: string): Promise<SdkInitialMessages>
 	updateSessionCompactionState?(sessionId: string, state: SessionCompactionState): Promise<{ updated: boolean }>
+	/** The configured agents this session can hand work to. */
+	listConfiguredAgents?(sessionId: string): Promise<ConfiguredAgentSummary[]>
+	/** Run one of them on a task, without asking the lead model first. */
+	delegateToConfiguredAgent?(input: {
+		sessionId: string
+		agentName: string
+		prompt: string
+	}): Promise<ConfiguredAgentDelegationResult>
+	/** The same, run beside the turn rather than in place of it. */
+	startBackgroundDelegation?(input: { sessionId: string; agentName: string; prompt: string }): Promise<BackgroundDelegationView>
+	/** The background delegations of one session, for the panel. */
+	listBackgroundDelegations?(sessionId: string): Promise<BackgroundDelegationView[]>
+	/** Pause, resume or stop one of them. */
+	controlBackgroundDelegation?(input: { sessionId: string; id: string; action: "pause" | "resume" | "stop" }): Promise<boolean>
 	restore(input: RestoreInput): Promise<RestoreResult>
+	/** Diffs a checkpoint snapshot against the current working tree. */
+	compareCheckpoint?(input: CompareCheckpointInput): Promise<CompareCheckpointResult>
 	update(
 		sessionId: string,
 		updates: {

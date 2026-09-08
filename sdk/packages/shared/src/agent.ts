@@ -5,6 +5,7 @@
  *
  */
 
+import type { GeneratedMedia } from "./llms/media";
 import type { ModelInfo } from "./llms/model-info";
 import type {
 	ToolApprovalRequest,
@@ -46,12 +47,19 @@ export interface AgentFilePart {
 	content: string;
 }
 
+export interface AgentMediaPart {
+	type: "media";
+	media: GeneratedMedia;
+}
+
 export interface AgentToolCallPart {
 	type: "tool-call";
 	toolCallId: string;
 	toolName: string;
 	input: unknown;
 	metadata?: unknown;
+	/** Absent for ordinary AgentRuntime-executed tools. */
+	execution?: ModelToolExecution;
 }
 
 export interface AgentToolResultPart {
@@ -60,6 +68,20 @@ export interface AgentToolResultPart {
 	toolName: string;
 	output: unknown;
 	isError?: boolean;
+	/** Absent for ordinary AgentRuntime-executed tools. */
+	execution?: ModelToolExecution;
+}
+
+export type ModelToolExecution = "client" | "provider";
+
+/** Observational record for a model tool executed outside AgentRuntime. */
+export interface AgentModelToolActivity {
+	toolCallId: string;
+	toolName: string;
+	execution: ModelToolExecution;
+	input?: unknown;
+	output?: unknown;
+	isError?: boolean;
 }
 
 export type AgentMessagePart =
@@ -67,6 +89,7 @@ export type AgentMessagePart =
 	| AgentReasoningPart
 	| AgentImagePart
 	| AgentFilePart
+	| AgentMediaPart
 	| AgentToolCallPart
 	| AgentToolResultPart;
 
@@ -83,6 +106,51 @@ export interface AgentTokenUsage {
 	cacheWriteTokens: number;
 	/** Provider-reported hidden reasoning tokens, when available. */
 	reasoningTokenCount?: number;
+}
+
+/**
+ * What one provider request cost in time, next to what it cost in tokens.
+ *
+ * Two independent sources, and the difference between them is the point.
+ * `requestMs` and `firstTokenMs` are measured by Cline around its own stream,
+ * so every provider has them. Everything below `engine` is the engine's own
+ * accounting, reported by the two that publish it -- Ollama on its final
+ * `done` chunk, llama.cpp in the `timings` object on its last SSE frame -- and
+ * is absent everywhere else rather than guessed at.
+ *
+ * Keeping both is what makes either readable: a request whose `requestMs` far
+ * exceeds `engineTotalMs` spent the difference queueing, and one whose
+ * `promptMs` dwarfs `generateMs` is re-reading a prompt the cache should have
+ * held. Neither question can be asked of a single number.
+ *
+ * Durations are milliseconds throughout. Ollama reports nanoseconds and
+ * llama.cpp milliseconds; both are converted at the edge so nothing
+ * downstream has to know which engine answered.
+ */
+export interface RequestTimings {
+	/** Wall time Cline measured for the request, start of stream to end. */
+	requestMs?: number;
+	/** Time from the start of the request to its first content of any kind. */
+	firstTokenMs?: number;
+	/** Which engine reported the fields below; absent when only Cline timed it. */
+	engine?: "ollama" | "llamacpp";
+	/** Time spent loading the model before any work began (Ollama). */
+	loadMs?: number;
+	/** Prompt evaluation. */
+	promptTokens?: number;
+	promptMs?: number;
+	promptPerSecond?: number;
+	/** Generation. */
+	generateTokens?: number;
+	generateMs?: number;
+	generatePerSecond?: number;
+	/** The engine's own total, which includes admission Cline cannot see. */
+	engineTotalMs?: number;
+	/** Prompt tokens served from the engine's KV cache instead of recomputed. */
+	cachedTokens?: number;
+	/** Speculative decoding: tokens drafted, and how many survived (llama.cpp). */
+	draftTokens?: number;
+	draftAcceptedTokens?: number;
 }
 
 /**
@@ -109,6 +177,12 @@ export interface AgentMessage {
 	};
 	metrics?: AgentTokenUsage & {
 		cost?: number;
+		/**
+		 * What the request that produced this message cost in time. Carried on
+		 * the message rather than only on the live event so a task reopened
+		 * from history shows the same numbers it showed while it ran.
+		 */
+		timings?: RequestTimings;
 	};
 }
 
@@ -195,6 +269,8 @@ export interface AgentModelRequest {
 	systemPrompt?: string;
 	messages: readonly AgentMessage[];
 	tools: readonly AgentToolDefinition[];
+	/** Provider-executed tools enabled for this model request. */
+	modelTools?: readonly import("./llms/model-tools").ModelTool[];
 	signal?: AbortSignal;
 	options?: Record<string, unknown>;
 }
@@ -241,12 +317,45 @@ export type AgentModelFinishReason =
  * Coarse classification of a provider error, derived from the raw provider
  * error object before it is flattened into a display string. Shared by the
  * runtime's recovery policy and telemetry (`error_class`). Extend with new
- * classes (auth, rate_limit, billing, ...) as consumers need them.
+ * classes (rate_limit, billing, ...) as consumers need them.
+ *
+ * `auth`: the provider rejected the request's credentials (HTTP 401/403) —
+ * hosts should point the user at their API key configuration.
  */
-export type ProviderErrorClass = "context_window_exceeded" | "unknown";
+export interface AgentImageToDescribe {
+	/** Base64 image data, as carried on an `AgentMessagePart` of type `image`. */
+	image: string;
+	mediaType?: string;
+	/** Text that accompanied the image, e.g. the tool's console output. */
+	context?: string;
+}
+
+export type ProviderErrorClass =
+	| "context_window_exceeded"
+	/**
+	 * The model refused an image in the request. Told apart from `unknown`
+	 * because it is recoverable without the user: the images can be dropped and
+	 * the turn resent, where an unknown failure has nowhere to go.
+	 */
+	| "image_input_unsupported"
+	/**
+	 * The provider could not parse a tool call the model emitted. Told apart
+	 * from `unknown` for the same reason as the image case: the model can be
+	 * asked to send the call again, where an unknown failure has nowhere to go.
+	 *
+	 * Note what this is not. The payload is malformed, and repairing it is the
+	 * one response that must never be taken — a call truncated mid-value would
+	 * be "repaired" into writing the fragment, silently, over the file it
+	 * names. Asking for the whole call again is the only safe recovery.
+	 */
+	| "tool_call_unparsable"
+	/** The provider rejected the credentials. */
+	| "auth"
+	| "unknown";
 
 export type AgentModelEvent =
 	| { type: "text-delta"; text: string }
+	| { type: "media"; media: GeneratedMedia }
 	| {
 			type: "reasoning-delta";
 			text: string;
@@ -261,16 +370,42 @@ export type AgentModelEvent =
 			inputText?: string;
 			input?: unknown;
 			metadata?: unknown;
+			/** Set when execution is owned by AI SDK or the model provider. */
+			execution?: ModelToolExecution;
+	  }
+	| {
+			type: "tool-result";
+			toolCallId: string;
+			/**
+			 * Declared model tools carry a ModelToolName; provider-executed tools
+			 * (e.g. the Claude Code CLI's own tools) carry arbitrary names.
+			 */
+			toolName: string;
+			input?: unknown;
+			output: unknown;
+			isError?: boolean;
+			execution: ModelToolExecution;
 	  }
 	| {
 			type: "usage";
 			usage: Partial<AgentUsage>;
+			/** What this one request cost in time. See `RequestTimings`. */
+			timings?: RequestTimings;
 	  }
 	| {
 			type: "finish";
 			reason: AgentModelFinishReason;
 			error?: string;
 			errorClass?: ProviderErrorClass;
+			/**
+			 * The model layer already recorded `sdk.error` telemetry for this
+			 * failure at its own error boundary. `error` is a flattened string,
+			 * so this bit carries reporting ownership across the boundary: the
+			 * agent loop skips re-reporting when it is set, and still reports
+			 * failures from model implementations that do not record their own
+			 * telemetry.
+			 */
+			errorReported?: boolean;
 	  };
 
 export interface AgentModel {
@@ -320,6 +455,13 @@ export interface AgentBeforeToolResult {
 	reason?: string;
 	input?: unknown;
 	policy?: ToolPolicy;
+	/**
+	 * Text to inject into the conversation as hook context (e.g. a hook's
+	 * `contextModification`). Collected across hooks and appended after this
+	 * iteration's tool results as a `<hook_context>` user message, so the
+	 * model sees it on the next request.
+	 */
+	appendContext?: string;
 }
 
 export interface AgentAfterToolContext {
@@ -337,6 +479,13 @@ export interface AgentAfterToolResult {
 	stop?: boolean;
 	reason?: string;
 	result?: AgentToolResult;
+	/**
+	 * Text to inject into the conversation as hook context (e.g. a hook's
+	 * `contextModification`). Collected across hooks and appended after this
+	 * iteration's tool results as a `<hook_context>` user message, so the
+	 * model sees it on the next request.
+	 */
+	appendContext?: string;
 }
 
 export interface AgentRunLifecycleContext {
@@ -346,6 +495,36 @@ export interface AgentRunLifecycleContext {
 // =============================================================================
 // Runtime hook bag
 // =============================================================================
+
+/**
+ * Everything a turn discarded at the output cap was carrying.
+ *
+ * Not just the reasoning. The answer it had begun writing and the call it had
+ * begun making are the most concrete statements of what it decided, and both
+ * went into the bin with the rest.
+ */
+export interface DiscardedTurnInput {
+	reasoning: string;
+	/** The reply as far as it got before the cap cut it off. */
+	text?: string;
+	/**
+	 * Whether the cap that cut this turn off was the context window.
+	 *
+	 * The distinction decides how much may be spent salvaging it. A turn cut off
+	 * by `num_predict` with two thirds of the window free can afford the same
+	 * two passes a compaction makes; one cut off because there was no room left
+	 * to answer in cannot, and gets the cheap single pass.
+	 */
+	windowBound?: boolean;
+}
+
+/** What a host makes of a discarded turn. Both halves are optional. */
+export interface DiscardedTurnCondensation {
+	/** Where the turn had got to, in its own voice. */
+	note?: string;
+	/** What the reasoning learned, which the note does not carry. */
+	retrospective?: string;
+}
 
 /**
  * 7-callback hook bag consumed by `AgentRuntime`.
@@ -413,6 +592,17 @@ export interface AgentRuntimePlugin {
 
 export interface AgentRuntimeConfig {
 	/**
+	 * Stable end-user distinct ID used for provider and observability metadata.
+	 * This is intentionally separate from the host-owned session id.
+	 */
+	distinctId?: string;
+	/** Calling client surface, for example `cline-vscode` or `cline-sdk`. */
+	clientName?: string;
+	/** Calling client version, such as the VS Code extension version. */
+	clientVersion?: string;
+	/** Version of the Cline Core SDK executing the runtime. */
+	clineCoreVersion?: string;
+	/**
 	 * Core/hub runtime session identifier.
 	 *
 	 * The host-owned lifecycle id for the task/session containing this runtime.
@@ -436,6 +626,8 @@ export interface AgentRuntimeConfig {
 	messageModelInfo?: AgentMessage["modelInfo"];
 	model: AgentModel;
 	modelOptions?: Record<string, unknown>;
+	/** Provider-executed tools, separate from locally executed AgentTools. */
+	modelTools?: readonly import("./llms/model-tools").ModelTool[];
 	// biome-ignore lint/suspicious/noExplicitAny: tool input/output types vary per tool
 	tools?: readonly AgentTool<any, any>[];
 	hooks?: Partial<AgentRuntimeHooks>;
@@ -448,6 +640,19 @@ export interface AgentRuntimeConfig {
 		requireCompletionTool?: boolean;
 		completionGuard?: () => string | undefined;
 		/**
+		 * The awaitable boundary hook. Fires on both ways a run can end, unlike
+		 * `completionGuard`; see the full note on the runtime config type.
+		 *
+		 * `forced` says the run is ending because the no-tool-call nudges ran
+		 * out, not because the model chose to stop. Silence from a model that
+		 * was cut off mid-work is not an account of its work, and a guard that
+		 * cannot tell the two apart reads it as one.
+		 */
+		onCompletionAttempt?: (context: {
+			text?: string;
+			forced?: boolean;
+		}) => Promise<string | undefined>;
+		/**
 		 * How many consecutive turns that produce no tool calls may be nudged to
 		 * continue before the run is allowed to end. Zero (the default) keeps the
 		 * standard contract: a turn with no tool calls completes the run.
@@ -458,7 +663,26 @@ export interface AgentRuntimeConfig {
 		 * the bound is on consecutive silence rather than on the run.
 		 */
 		maxNoToolCallNudges?: number;
+		/**
+		 * How many consecutive turns cut off at the per-turn output cap are
+		 * retried before the run ends. Defaults to 2; zero restores the older
+		 * behaviour where a truncated turn ends the run.
+		 *
+		 * A turn that hits the cap with no tool calls in it produced nothing the
+		 * run can use, and the model cannot see that it was cut off. Retrying
+		 * discards the truncated reply — it never enters the history — and tells
+		 * the model what happened, so the retry differs instead of reproducing
+		 * the same overlong output. The counter resets on any turn that finishes.
+		 */
+		maxTruncatedTurnRetries?: number;
 	};
+	/**
+	 * Repetition guard on the model's reasoning channel; see
+	 * `ReasoningLoopDetectionConfig`. On by default, `false` disables it.
+	 */
+	reasoningLoopDetection?:
+		| false
+		| Partial<import("./agents/types").ReasoningLoopDetectionConfig>;
 	toolExecution?: "sequential" | "parallel";
 	toolPolicies?: Record<string, ToolPolicy>;
 	toolContextMetadata?: Record<string, unknown>;
@@ -478,9 +702,59 @@ export interface AgentRuntimeConfig {
 		| Promise<AgentRuntimePrepareTurnResult | undefined>
 		| AgentRuntimePrepareTurnResult
 		| undefined;
+	/**
+	 * Optional last look at reasoning that is about to be discarded.
+	 *
+	 * A turn cut off at the output cap with no tool call is thrown away whole --
+	 * the reply was never finished, and resending it would spend the same budget
+	 * on output already abandoned. But that turn's reasoning is the only one
+	 * that reliably ends at the model's thinking budget, and it is exactly the
+	 * work the retry is about to redo from nothing.
+	 *
+	 * Called with that reasoning before it is dropped. Whatever comes back is
+	 * given to the model as a note it left itself; the discarded message still
+	 * never re-enters the transcript. Returning nothing discards as before.
+	 */
+	condenseDiscardedReasoning?: (
+		input: DiscardedTurnInput,
+	) =>
+		| Promise<DiscardedTurnCondensation | undefined>
+		| DiscardedTurnCondensation
+		| undefined;
 	// Optional host callback used by interactive sessions to inject a queued
 	// user steering message between agent loop iterations, before the next
 	// model request.
+	/**
+	 * Called once when a model refuses a request for carrying an image, after
+	 * the runtime has dropped the images and before it retries. Lets the host
+	 * stop attaching them for the rest of the session, so the refusal costs one
+	 * turn rather than one per tool call.
+	 */
+	onImageInputUnsupported?: () => void;
+	/**
+	 * Turns images into text using a second model, for a primary model that
+	 * cannot read them (or reads them poorly).
+	 *
+	 * Returns one entry per image, in order; `undefined` for any the second
+	 * model could not describe, so the caller can decide what to do with that
+	 * one rather than losing the whole batch.
+	 */
+	describeImages?: (
+		images: readonly AgentImageToDescribe[],
+	) => Promise<readonly (string | undefined)[]>;
+	/**
+	 * Describe images on every turn rather than only after a refusal. Set when
+	 * the user has configured a separate vision model: the point of doing so is
+	 * that the primary model never sees the image.
+	 */
+	alwaysDescribeImages?: boolean;
+	/**
+	 * Whether the primary model can read an image itself.
+	 *
+	 * Only consulted when a description could not be produced: it decides
+	 * between leaving the image and replacing it with a note.
+	 */
+	modelSupportsImages?: boolean;
 	consumePendingUserMessage?: () =>
 		| string
 		| undefined
@@ -488,7 +762,7 @@ export interface AgentRuntimeConfig {
 }
 
 // =============================================================================
-// Runtime event union (13 variants)
+// Runtime event union
 // =============================================================================
 
 export type AgentRuntimeEvent =
@@ -523,6 +797,12 @@ export type AgentRuntimeEvent =
 			metadata?: unknown;
 	  }
 	| {
+			type: "assistant-media";
+			snapshot: AgentRuntimeStateSnapshot;
+			iteration: number;
+			media: GeneratedMedia;
+	  }
+	| {
 			type: "assistant-message";
 			snapshot: AgentRuntimeStateSnapshot;
 			iteration: number;
@@ -553,6 +833,16 @@ export type AgentRuntimeEvent =
 			type: "usage-updated";
 			snapshot: AgentRuntimeStateSnapshot;
 			usage: AgentUsage;
+			/**
+			 * The one request whose usage this update carries, timed.
+			 *
+			 * Separate from `usage` because `usage` is the running total and
+			 * these are not addable: two requests do not have a duration
+			 * between them, and a rate is not the sum of two rates. Each
+			 * update describes exactly one request, so this replaces rather
+			 * than accumulates.
+			 */
+			timings?: RequestTimings;
 	  }
 	| {
 			type: "turn-finished";
@@ -593,4 +883,15 @@ export interface AgentRunResult {
 	messages: readonly AgentMessage[];
 	usage: AgentUsage;
 	error?: Error;
+	/**
+	 * Why an aborted run was aborted, when something said so.
+	 *
+	 * Kept apart from `error`, which means the run *failed*: an abort is a stop
+	 * that was asked for, and a consumer treating the two alike would report a
+	 * mistake limit as a crash. Carried because the reason was being thrown away
+	 * exactly when it was the only thing that could explain the stop — the
+	 * runtime aborts with a message, and every host downstream had to infer a
+	 * cause from booleans it happened to hold.
+	 */
+	abortReason?: string;
 }

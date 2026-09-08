@@ -1,4 +1,4 @@
-import type { AgentToolContext } from "@cline/core"
+import { type AgentToolContext, createEditorExecutor, createReadReceipts } from "@cline/core"
 import * as fs from "fs/promises"
 import * as os from "os"
 import * as path from "path"
@@ -42,5 +42,48 @@ describe("createWorkspaceFileReadExecutor", () => {
 
 	it("reports the resolved workspace path for missing relative files", async () => {
 		await expect(readFile({ path: "src/missing.ts" }, context)).rejects.toThrow(path.join(workspaceRoot, "src", "missing.ts"))
+	})
+})
+
+describe("sharing one read registry between the reader and the editor", () => {
+	// The wiring trap this pins: the VS Code host replaces both executors the
+	// SDK had already paired up — `read_files` with the workspace-relative
+	// reader, `editor` with the diff coordinator's. If each ends up with its
+	// own registry, reads are recorded in one and checked against the other,
+	// and every edit is refused while each half looks correct on its own.
+	it("lets an edit through when both sides share a registry", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cline-receipts-"))
+		try {
+			const filePath = path.join(dir, "app.ts")
+			await fs.writeFile(filePath, "a\nb\nc\nd", "utf8")
+			const receipts = createReadReceipts()
+			const readFile = createWorkspaceFileReadExecutor(async () => dir, receipts)
+			const editor = createEditorExecutor({ receipts })
+
+			await readFile({ path: "app.ts" }, context)
+			const result = await editor({ path: filePath, new_text: "B", start_line: 2 }, dir, context)
+
+			expect(result).toContain("Replaced line 2")
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	it("refuses every edit when the two sides hold different registries", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cline-receipts-"))
+		try {
+			const filePath = path.join(dir, "app.ts")
+			await fs.writeFile(filePath, "a\nb\nc\nd", "utf8")
+			const readFile = createWorkspaceFileReadExecutor(async () => dir, createReadReceipts())
+			const editor = createEditorExecutor({ receipts: createReadReceipts() })
+
+			await readFile({ path: "app.ts" }, context)
+
+			await expect(editor({ path: filePath, new_text: "B", start_line: 2 }, dir, context)).rejects.toThrow(
+				"Read before editing",
+			)
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true })
+		}
 	})
 })

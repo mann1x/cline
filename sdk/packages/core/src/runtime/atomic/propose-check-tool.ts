@@ -1,0 +1,240 @@
+/**
+ * The tool a model proposes its own check with.
+ *
+ * Offered only where there is nothing to run: `discoverOracle` found no test
+ * runner, no build and no compiler, so without this the transaction's verdict
+ * is the model's own account of its work. Measured, that account is wrong
+ * often enough to be the reason this protocol exists — and the model is
+ * nonetheless the only party that has read the code and knows what would
+ * demonstrate the fix. So it proposes, and the user decides.
+ *
+ * The check it adopts is reachable from `run_check` for the rest of the run.
+ * That is not decoration: this tool used to promise a feedback loop that did
+ * not exist -- the check ran once, at the completion attempt -- and a model
+ * that believes it is being checked stops checking itself.
+ *
+ * A tool rather than a sentence in the closing message. `readSelfReport` is
+ * already a phrase-matching heuristic and it is the weakest thing here; a
+ * second one deciding what the check *is* would compound it.
+ */
+
+import { type AgentTool, createTool } from "@cline/shared";
+import type { Oracle, OracleVerdict } from "./oracle";
+import {
+	type CheckApprover,
+	type CheckProposal,
+	describeCheckProposal,
+	judgeCandidateCheck,
+	MAX_CHECK_PROPOSALS,
+	PROPOSE_CHECK_TOOL_NAME,
+	proposalToOracle,
+	readCheckProposal,
+	sameProposal,
+} from "./proposal";
+
+export { PROPOSE_CHECK_TOOL_NAME };
+
+export const PROPOSE_CHECK_TOOL_DESCRIPTION = `Propose the check that will decide whether your change worked, and ask the user to approve it once.
+
+Nothing in this workspace can be run to judge a change, so without a check your own account of the work is the verdict — and that is the weakest evidence there is. Propose one instead. You have read the code; name the thing that would show the fix.
+
+**It must run without a person.** Once it is approved you run it yourself with \`run_check\`, as often as you like, and it is also run once when you finish. Never propose something a human performs — "open it in a browser and see", "confirm the layout looks right", "check that it feels responsive". Propose the mechanical thing that would catch the bug: running the file, a parse, a test, a linter, a script that exits non-zero when it is still broken.
+
+Two kinds:
+- \`kind: "page"\` — Cline loads \`path\` in this process, runs its scripts and pumps animation frames. No browser window opens and nobody looks at it. It fails if the file does not parse, throws while loading, throws in a frame, or never draws. Nothing has to be installed, so prefer this for a page, a game or a script.
+- \`kind: "command"\` — a line for the shell, run unattended, with the workspace root as its working directory: write paths relative to it and do not \`cd\` anywhere first. Only worth proposing when you know it exists on this machine; a check that cannot run judges nothing. Add \`expect\` when the command reports its verdict in its output and exits cleanly either way — without one its exit code is the whole verdict, and a command that exits zero on a broken tree would keep every change you make.
+
+Give a \`reason\` in one sentence: what passing this check proves about the task. Write it about the code, not about how a person would test it — "the level data is built before the first frame draws", not "loading it in a browser will confirm it works". The user reads that sentence to decide.
+
+Propose once, early — as soon as you know what you are fixing. What is approved judges every attempt for the rest of the run and cannot be changed, so do not propose something you can already make pass.
+
+Then use it. \`run_check\` runs it against the files as they stand, settles nothing and rolls nothing back. Run it before you edit, to see the failure in the check's own words, and after each change. A check you only meet when you finish is a check that can only ever throw the transaction away.
+
+Once the user approves it, it is tried against the files as they were before your changes, and it has to FAIL there. A check that already passes on the unmodified files cannot tell a fix from no fix, and is refused.`;
+
+export const PROPOSE_CHECK_TOOL_INPUT_SCHEMA = {
+	type: "object",
+	properties: {
+		kind: {
+			type: "string",
+			enum: ["page", "command"],
+			description:
+				"`page` for a file Cline loads and runs itself; `command` for a shell line.",
+		},
+		path: {
+			type: "string",
+			description:
+				"For `page`: the file to load, relative to the workspace root.",
+		},
+		command: {
+			type: "string",
+			description: "For `command`: the exact line to run.",
+		},
+		expect: {
+			type: "string",
+			description:
+				"For `command`: a regular expression the output must match, on top of exiting cleanly. Matched inside Cline; never a command.",
+		},
+		reason: {
+			type: "string",
+			description: "One sentence: what passing this check proves.",
+		},
+	},
+	required: ["kind", "reason"],
+} as const;
+
+/** The part of the controller this tool drives. */
+export interface CheckAdopter {
+	readonly canAdoptOracle: boolean;
+	/**
+	 * Whether the check in force is up for replacement, this transaction.
+	 *
+	 * Absent on a controller that does not offer it, which reads as never.
+	 */
+	readonly checkIsUnderReconsideration?: boolean;
+	adoptOracle(oracle: Oracle): void;
+	/** Runs a candidate against the files this transaction opened on. */
+	judgeAgainstBase(oracle: Oracle): Promise<OracleVerdict>;
+}
+
+export interface ProposeCheckToolOptions {
+	workspaceRoot: string;
+	controller: CheckAdopter;
+	/** Rounds put to the user before the run gives up on having a check. */
+	maxProposals?: number;
+	/** Asks the user. The security boundary, and never auto-approved. */
+	approve: CheckApprover;
+	/** For the host to say, in its own voice, what now judges the run. */
+	onAdopted?: (oracle: Oracle, proposal: CheckProposal) => void;
+	onError?: (message: string, error: unknown) => void;
+}
+
+export function createProposeCheckTool(
+	options: ProposeCheckToolOptions,
+): AgentTool {
+	// Rounds, not calls: a proposal the model got wrong in shape has not spent
+	// one, because nobody was asked anything. A round is spent by anything that
+	// cost the user an interaction -- a decline, or a check they approved that
+	// then turned out to judge nothing.
+	let spent = 0;
+	// What the model last got approved, so a replacement that is the same check
+	// again can be told so rather than re-approved and re-frozen.
+	let inForce: CheckProposal | undefined;
+	// Reconsideration brings its own round. Drawing on the budget above would
+	// mean a run that spent it on a shape the user declined has no way back
+	// from a check that cannot pass -- and the measured run that needed this
+	// had exactly one round left, by luck.
+	let granted = 0;
+	let grantedFor = false;
+
+	return createTool({
+		name: PROPOSE_CHECK_TOOL_NAME,
+		description: PROPOSE_CHECK_TOOL_DESCRIPTION,
+		inputSchema: PROPOSE_CHECK_TOOL_INPUT_SCHEMA as unknown as Record<
+			string,
+			unknown
+		>,
+		execute: async (input: unknown): Promise<string> => {
+			const replacing = options.controller.checkIsUnderReconsideration === true;
+			if (replacing && !grantedFor) {
+				granted += 1;
+				grantedFor = true;
+			}
+			if (!replacing) {
+				grantedFor = false;
+			}
+			if (!options.controller.canAdoptOracle) {
+				return "This run already has a check and it is frozen for the rest of the run. Make your change and let the check judge it.";
+			}
+			const maxProposals = options.maxProposals ?? MAX_CHECK_PROPOSALS;
+			if (spent >= maxProposals + granted) {
+				return "Every proposal this run allows has been put to the user without one being taken on, so it has no check and your own account of the work is the verdict. Do not propose again — say plainly whether the change worked and how you know.";
+			}
+
+			const proposal = readCheckProposal(input, options.workspaceRoot);
+			if ("problem" in proposal) {
+				// Not a declined round: nobody was asked anything.
+				return `That proposal cannot be used. ${proposal.problem}`;
+			}
+
+			// Offering the same check back is not a replacement, and spending
+			// the one round on it would leave the run exactly where it was.
+			if (replacing && inForce && sameProposal(inForce, proposal)) {
+				return "That is the check this run already has. It is being reconsidered because it has never passed — propose a different one, or say the check is right and carry on fixing the change.";
+			}
+
+			const described = describeCheckProposal(proposal);
+			let approval: Awaited<ReturnType<CheckApprover>>;
+			try {
+				approval = await options.approve(proposal, described);
+			} catch (error) {
+				options.onError?.(
+					"[Atomic] the check proposal was not answered",
+					error,
+				);
+				return "The user could not be asked about that check, so the run continues without one. Say plainly whether your change worked and how you know.";
+			}
+
+			if (!approval.approved) {
+				spent += 1;
+				const said = approval.feedback?.trim();
+				const left = MAX_CHECK_PROPOSALS - spent;
+				return [
+					"The user did not approve that check.",
+					said ? `They said: ${said}` : undefined,
+					left > 0
+						? "Propose one more, taking that into account. If you cannot think of a better one, carry on without a check and say so."
+						: "That was the last round, so this run has no check and your own account of the work is the verdict.",
+				]
+					.filter((line): line is string => line !== undefined)
+					.join(" ");
+			}
+
+			const oracle = proposalToOracle(proposal, options.workspaceRoot);
+
+			// Approved is not the same as usable. A check that already passes on
+			// the unmodified files would have kept the transaction before a line
+			// was edited, and one that cannot run at all judges nothing -- both
+			// arrive as an approved proposal and neither is a check. This is the
+			// property that separates the feature from theatre, and the snapshot
+			// it needs is already sitting there.
+			try {
+				const candidate = await options.controller.judgeAgainstBase(oracle);
+				const judged = judgeCandidateCheck(candidate, proposal);
+				if (!judged.usable) {
+					spent += 1;
+					const left = MAX_CHECK_PROPOSALS - spent;
+					return [
+						`The user approved that check, but it was tried against the files as they were before your changes and it does not work as a check. ${judged.problem}`,
+						left > 0
+							? "Propose one more."
+							: "That was the last round, so this run has no check and your own account of the work is the verdict.",
+					].join(" ");
+				}
+			} catch (error) {
+				// Never fatal: the user has approved it, and a validation that
+				// could not be performed is a weaker guarantee rather than a
+				// reason to refuse the check they asked for.
+				options.onError?.(
+					"[Atomic] the proposed check could not be tried against the base",
+					error,
+				);
+			}
+
+			try {
+				options.controller.adoptOracle(oracle);
+			} catch (error) {
+				options.onError?.("[Atomic] the approved check was not adopted", error);
+				return "That check was approved but could not be taken on, so the run keeps the check it already had.";
+			}
+			inForce = proposal;
+			options.onAdopted?.(oracle, proposal);
+
+			return [
+				`Approved. Every attempt from here is judged by: ${oracle.label}.`,
+				"Run it whenever you want with `run_check` — it settles nothing and rolls nothing back — and it is run once more when you finish, where it decides rather than your account of the change.",
+				"It is fixed for the rest of the run, so make the change work rather than proposing something easier — if it turns out never to pass at all, you will be asked about it rather than getting to swap it now.",
+			].join(" ");
+		},
+	});
+}

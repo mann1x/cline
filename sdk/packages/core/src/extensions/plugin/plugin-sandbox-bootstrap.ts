@@ -16,6 +16,7 @@ import {
 	normalizePluginManifest,
 	type PluginManifest,
 } from "@cline/shared";
+import { installParentDisconnectGuard } from "../../runtime/tools/subprocess-sandbox-lifecycle";
 import { importPluginModule } from "./plugin-module-import";
 import {
 	matchesPluginManifestTargeting,
@@ -883,6 +884,8 @@ const methods: Record<string, (args: never) => Promise<unknown>> = {
 	buildMessages,
 	resolveRuleContent,
 };
+
+installParentDisconnectGuard();
 
 process.on(
 	"message",

@@ -1,4 +1,10 @@
-import { NO_TOOL_CALL_NUDGE_MESSAGE, normalizeUserInput, stripModeNotices } from "@cline/shared"
+import {
+	ANNOUNCED_INTENT_NUDGE_PREFIX,
+	NO_TOOL_CALL_NUDGE_MESSAGE,
+	normalizeUserInput,
+	stripModeNotices,
+	UNPARSED_TOOL_CALL_NUDGE_PREFIX,
+} from "@cline/shared"
 
 /**
  * Canned prompt SdkModeCoordinator sends to drive the plan -> act
@@ -63,7 +69,19 @@ export function isSyntheticUserPrompt(text: string): boolean {
 		// calls. It is addressed to the model, not from the user: rendered as a
 		// bubble it reads as an instruction they never typed, and it splits the
 		// turn it was meant to continue into two.
-		normalized === NO_TOOL_CALL_NUDGE_MESSAGE
+		normalized === NO_TOOL_CALL_NUDGE_MESSAGE ||
+		// The second nudge quotes the model its own sentence, so it is not a
+		// constant and cannot be matched by equality -- but it is the same kind
+		// of message and must be hidden the same way.
+		normalized.startsWith(ANNOUNCED_INTENT_NUDGE_PREFIX) ||
+		// Same for the nudge that answers a tool call the provider could not
+		// read: it quotes what the model named, so it is a prefix rather than a
+		// constant, and it is no more a message from the user than the others.
+		normalized.startsWith(UNPARSED_TOOL_CALL_NUDGE_PREFIX) ||
+		// Hook-injected context is model-facing only; the runtime stamps these
+		// messages displayRole "system", and this text guard keeps transcripts
+		// clean on paths where that metadata is unavailable.
+		normalized.startsWith("<hook_context")
 	)
 }
 
@@ -94,7 +112,48 @@ function hasAttachmentBlocks(message: SdkUserMessage): boolean {
  * attachment-only continuation carries the synthetic text alongside the
  * user's image/file blocks AND a visible bubble, so it must still be counted.
  */
+export interface PersistedHookContextChip {
+	hookName: string
+	toolName?: string
+	status: "completed"
+}
+
+/**
+ * Parses hook-context blocks out of a runtime-injected user message so replay
+ * can reconstruct the hook status rows shown live. Returns [] for anything
+ * that is not a hook-context injection. Forged tags inside hook output are
+ * escaped by the runtime (`<\hook_context`), so only real blocks match.
+ */
+export function extractPersistedHookContextChips(message: SdkUserMessage): PersistedHookContextChip[] {
+	if (message.role !== "user") {
+		return []
+	}
+	const text = extractSdkUserText(message)
+	if (!text.startsWith("<hook_context")) {
+		return []
+	}
+	const chips: PersistedHookContextChip[] = []
+	const blockPattern = /<hook_context source="([^"]+)"(?:\s+tool_name="([^"]*)")?[^>]*>/g
+	let match: RegExpExecArray | null = blockPattern.exec(text)
+	while (match !== null) {
+		chips.push({
+			hookName: match[1],
+			...(match[2] ? { toolName: match[2] } : {}),
+			status: "completed",
+		})
+		match = blockPattern.exec(text)
+	}
+	return chips
+}
+
 export function isSyntheticSdkUserMessage(message: SdkUserMessage): boolean {
+	// Runtime-generated messages (hook context, compaction summaries) carry a
+	// display role that marks them model-facing only.
+	const metadata = message.metadata as { displayRole?: unknown } | undefined
+	const displayRole = typeof metadata?.displayRole === "string" ? metadata.displayRole.trim().toLowerCase() : undefined
+	if (displayRole === "system" || displayRole === "status") {
+		return true
+	}
 	const text = extractSdkUserText(message)
 	return !!text && isSyntheticUserPrompt(text) && !hasAttachmentBlocks(message)
 }

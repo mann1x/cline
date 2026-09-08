@@ -1,4 +1,10 @@
-import { getCurrentContextSize, summarizeUsageFromMessages } from "@cline/core";
+import {
+	getCurrentContextSize,
+	type ManagedHubBuildMismatchEvent,
+	summarizeUsageFromMessages,
+	upgradeManagedHub,
+	watchManagedHubBuildMismatch,
+} from "@cline/core";
 import { formatDisplayUserInput } from "@cline/shared";
 import type { KeyEvent } from "@opentui/core";
 import { useRenderer, useTerminalDimensions } from "@opentui/react";
@@ -11,10 +17,14 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { shouldSuppressClineCliMigrationNoticeForActiveProvider } from "../kanban-migration/notice";
 import { MigrationNoticeContent } from "../kanban-migration/notice-dialog";
-import type { RepoStatus } from "../utils/repo-status";
-import { readRepoStatus } from "../utils/repo-status";
+import {
+	isSameRepoStatus,
+	type RepoStatus,
+	readRepoStatus,
+} from "../utils/repo-status";
 import { buildCheckpointPickerItems } from "./checkpoint-picker-items";
 import type { TranscriptScrollHandle } from "./components/chat-message-list";
+import { DialogThemeSync } from "./components/dialog-theme-sync";
 import {
 	CheckpointConfirmContent,
 	type CheckpointRestoreMode,
@@ -32,16 +42,24 @@ import {
 	findCommandPaletteShortcut,
 } from "./components/dialogs/command-palette-items";
 import {
+	HubOutdatedContent,
+	HubUpdateRequiredContent,
+} from "./components/dialogs/hub-update-required";
+import { shouldWatchManagedHubBuild } from "./components/dialogs/hub-update-required-helpers";
+import {
 	SKILLS_MARKETPLACE_ACTION,
 	SKILLS_MARKETPLACE_URL,
 	SkillsPickerContent,
 } from "./components/dialogs/skills-picker";
+import { ThemePickerContent } from "./components/dialogs/theme-picker";
 import { Toast, type ToastState, type ToastVariant } from "./components/toast";
 import { EventBridgeProvider } from "./contexts/event-bridge-context";
 import { SessionProvider, useSession } from "./contexts/session-context";
+import { ThemeProvider } from "./hooks/theme-provider";
 import { useAccountDialog } from "./hooks/use-account-dialog";
 import { useAgentEventHandlers } from "./hooks/use-agent-events";
 import { useAutocomplete } from "./hooks/use-autocomplete";
+import { useBackgroundDelegations } from "./hooks/use-background-delegations";
 import { useConfigPanel } from "./hooks/use-config-panel";
 import { useLocalCommandActions } from "./hooks/use-local-command-actions";
 import { useMcpManager } from "./hooks/use-mcp-manager";
@@ -51,8 +69,8 @@ import { useQueuedPrompts } from "./hooks/use-queued-prompts";
 import { useRootKeyboard } from "./hooks/use-root-keyboard";
 import { useRuntimeDialogBridge } from "./hooks/use-runtime-dialog-bridge";
 import { useSlashCommands } from "./hooks/use-slash-commands";
-import { TerminalColorsContext } from "./hooks/use-terminal-background";
 import { useTerminalTitle } from "./hooks/use-terminal-title";
+import { TerminalColorsContext } from "./hooks/use-theme";
 import type { AppView, TuiProps, TuiStartupTarget } from "./types";
 import { hydrateSessionMessages } from "./utils/hydrate-messages";
 import { isProviderConfigured } from "./utils/provider-configured";
@@ -81,6 +99,8 @@ function App(props: TuiProps) {
 		props.initialRepoStatus ?? { branch: null, diffStats: null },
 	);
 	const { queuedPrompts, handlePendingPrompts } = useQueuedPrompts();
+	const { runs: backgroundRuns, refresh: refreshBackgroundRuns } =
+		useBackgroundDelegations(props.onListBackgroundDelegations);
 	const [selectedQueuedPromptId, setSelectedQueuedPromptId] = useState<
 		string | null
 	>(null);
@@ -135,11 +155,30 @@ function App(props: TuiProps) {
 		skillCommands,
 	});
 
+	const repoStatusInFlightRef = useRef(false);
 	const refreshRepoStatus = useCallback(() => {
+		// Skip if the previous read is still running (slow git on huge repos)
+		// so poll ticks never stack subprocesses or apply stale results.
+		if (repoStatusInFlightRef.current) return;
+		repoStatusInFlightRef.current = true;
 		readRepoStatus(props.config.cwd)
-			.then(setRepoStatus)
-			.catch(() => {});
+			.then((next) =>
+				// Keep the previous object when nothing changed so poll ticks
+				// don't re-render the app.
+				setRepoStatus((prev) => (isSameRepoStatus(prev, next) ? prev : next)),
+			)
+			.catch(() => {})
+			.finally(() => {
+				repoStatusInFlightRef.current = false;
+			});
 	}, [props.config.cwd]);
+
+	// Poll so branch switches made outside the CLI (another terminal, an
+	// editor) show up without requiring an agent turn.
+	useEffect(() => {
+		const interval = setInterval(refreshRepoStatus, 5_000);
+		return () => clearInterval(interval);
+	}, [refreshRepoStatus]);
 
 	const refocusTextareaRef = useRef<() => void>(() => {});
 	const populateInputRef = useRef<(value: string) => void>(() => {});
@@ -203,6 +242,22 @@ function App(props: TuiProps) {
 		onSessionRestart: props.onSessionRestart,
 		refocusTextarea: () => refocusTextareaRef.current(),
 	});
+
+	const openThemePicker = useCallback(
+		async (options?: { refocus?: boolean }) => {
+			await dialog.choice<string>({
+				size: "large",
+				style: { maxHeight: termHeight - 2 },
+				content: (ctx: ChoiceContext<string>) => (
+					<ThemePickerContent {...ctx} />
+				),
+			});
+			if (options?.refocus !== false) {
+				refocusTextareaRef.current();
+			}
+		},
+		[dialog, termHeight],
+	);
 	const propsOnToggleConfigItem = props.onToggleConfigItem;
 	const onToggleConfigItem = useMemo<TuiProps["onToggleConfigItem"]>(() => {
 		if (!propsOnToggleConfigItem) {
@@ -244,6 +299,7 @@ function App(props: TuiProps) {
 		onDeleteConfigItem,
 		openModelSelector,
 		openMcpManager,
+		openThemePicker,
 		refocusTextarea: () => refocusTextareaRef.current(),
 	});
 
@@ -521,6 +577,123 @@ function App(props: TuiProps) {
 		return () => clearTimeout(timeout);
 	}, [appView, currentProviderId, dialog, notice, onInitialNoticeShown]);
 
+	const [hubBuildMismatch, setHubBuildMismatch] =
+		useState<ManagedHubBuildMismatchEvent | null>(null);
+	const hubBuildWatchEnabled = shouldWatchManagedHubBuild(props.config);
+	useEffect(() => {
+		if (!hubBuildWatchEnabled) return;
+		return watchManagedHubBuildMismatch({
+			onMismatch: (mismatch) => setHubBuildMismatch(mismatch),
+		});
+	}, [hubBuildWatchEnabled]);
+
+	const onHubUpdateRestart = props.onHubUpdateRestart;
+	useEffect(() => {
+		if (!hubBuildMismatch) return;
+		setHubBuildMismatch(null);
+		const hubCoreVersion = hubBuildMismatch.hubCoreVersion;
+		if (hubBuildMismatch.reason === "outdated_hub") {
+			// This CLI is already the newer build; the Hub is behind only because
+			// retiring it would kill the sessions it is serving. Left alone it
+			// would stay behind for as long as those sessions run, so put the
+			// choice to the user: replace it now (interrupting that work), or
+			// keep it running and update later. This session itself is safe
+			// either way - a CLI that could not attach to the outdated Hub is
+			// running on the local backend.
+			const details = {
+				hubCoreVersion,
+				activeSessionCount: hubBuildMismatch.activeSessionCount,
+				participantClientCount: hubBuildMismatch.participantClientCount,
+			};
+			void dialog
+				.choice<boolean>({
+					content: (ctx: ChoiceContext<boolean>) => (
+						<HubOutdatedContent {...ctx} {...details} />
+					),
+				})
+				.then(async (update) => {
+					if (!update) {
+						// choice() resolves undefined on Esc; it does not reject.
+						showToast(
+							"The running Cline Hub stays on the older version. Run 'cline hub upgrade' once its sessions finish.",
+							"info",
+						);
+						refocusTextareaRef.current();
+						return;
+					}
+					showToast("Updating the Cline Hub…", "info");
+					try {
+						const result = await upgradeManagedHub({
+							force: true,
+							reason: "cline TUI hub update",
+						});
+						if (result.outcome === "still_busy") {
+							showToast(
+								"The Hub picked up new sessions before it could be replaced. Try again in a moment.",
+								"info",
+							);
+						} else {
+							showToast(
+								result.outcome === "replaced" || result.outcome === "started"
+									? "Cline Hub updated."
+									: "Cline Hub is already up to date.",
+								"success",
+							);
+						}
+					} catch (error) {
+						showToast(
+							error instanceof Error && error.message
+								? error.message
+								: "Updating the Cline Hub failed. Run 'cline doctor fix' and try again.",
+							"error",
+						);
+					}
+					refocusTextareaRef.current();
+				})
+				.catch(() => {
+					refocusTextareaRef.current();
+				});
+			return;
+		}
+		if (hubBuildMismatch.reason === "build_mismatch") {
+			// The Hub is newer but still speaks this CLI's protocol, so the
+			// session keeps working and parity is advisable rather than urgent.
+			// A modal mid-session is too heavy for advice; a toast (once per
+			// observed Hub build, the watcher dedupes) says what changed and
+			// how to catch up without stealing focus.
+			showToast(
+				`The shared Cline Hub was updated${
+					hubCoreVersion ? ` (core ${hubCoreVersion})` : ""
+				}. Run 'cline update' and restart when convenient.`,
+				"info",
+			);
+			return;
+		}
+		// unsupported_protocol: this CLI cannot speak the running Hub's
+		// protocol at all, so nothing hub-backed can work until it updates.
+		// That is worth a blocking prompt.
+		void dialog
+			.choice<boolean>({
+				content: (ctx: ChoiceContext<boolean>) => (
+					<HubUpdateRequiredContent {...ctx} hubCoreVersion={hubCoreVersion} />
+				),
+			})
+			.then((update) => {
+				if (update) {
+					(onHubUpdateRestart ?? exitCline)();
+					return;
+				}
+				showToast(
+					"Hub still differs from this CLI. Run 'cline update' and restart when convenient.",
+					"info",
+				);
+				refocusTextareaRef.current();
+			})
+			.catch(() => {
+				refocusTextareaRef.current();
+			});
+	}, [dialog, exitCline, hubBuildMismatch, onHubUpdateRestart, showToast]);
+
 	const {
 		appendEntry: appendSessionEntry,
 		replaceEntries: replaceSessionEntries,
@@ -592,6 +765,7 @@ function App(props: TuiProps) {
 		openMcpManager,
 		openModelSelector,
 		openSkills,
+		openThemePicker,
 		refocusTextarea: () => refocusTextareaRef.current(),
 		setAppView,
 		onClearConversation: clearConversation,
@@ -599,6 +773,12 @@ function App(props: TuiProps) {
 		onExportHistorySession: props.onExportHistorySession,
 		onDeleteHistorySession: props.onDeleteHistorySession,
 		onCompact: props.onCompact,
+		onDelegate: props.onDelegate,
+		onDelegateBackground: props.onDelegateBackground,
+		onListBackgroundDelegations: props.onListBackgroundDelegations,
+		onControlBackgroundDelegation: props.onControlBackgroundDelegation,
+		onBackgroundDelegationStarted: refreshBackgroundRuns,
+		onListAgents: props.onListAgents,
 		onFork: props.onFork,
 		onUndo: openCheckpointRestore,
 		onExit: exitCline,
@@ -847,6 +1027,7 @@ function App(props: TuiProps) {
 		transcriptScrollRef,
 		loadIndividualSubscriptionPlans: props.loadIndividualSubscriptionPlans,
 		queuedPrompts,
+		backgroundRuns,
 		selectedQueuedPromptId,
 		editingQueuedPrompt,
 		onQueuedPromptEditConfirm: (id: string, prompt: string) => {
@@ -914,6 +1095,7 @@ export function Root(
 	props: TuiProps & {
 		terminalBackground?: string | null;
 		terminalForeground?: string | null;
+		initialThemeId?: string;
 	},
 ) {
 	const initialEntries = useMemo(
@@ -937,19 +1119,22 @@ export function Root(
 	);
 	return (
 		<TerminalColorsContext value={terminalColors}>
-			<DialogProvider size="medium">
-				<SessionProvider
-					config={props.config}
-					initialEntries={initialEntries}
-					initialUsage={initialUsage}
-					onRunningChange={props.onRunningChange}
-					onAutoApproveChange={props.onAutoApproveChange}
-					onCompactionModeChange={props.onCompactionModeChange}
-					onExit={props.onExit}
-				>
-					<App {...props} />
-				</SessionProvider>
-			</DialogProvider>
+			<ThemeProvider initialThemeId={props.initialThemeId}>
+				<DialogProvider size="medium">
+					<DialogThemeSync />
+					<SessionProvider
+						config={props.config}
+						initialEntries={initialEntries}
+						initialUsage={initialUsage}
+						onRunningChange={props.onRunningChange}
+						onAutoApproveChange={props.onAutoApproveChange}
+						onCompactionModeChange={props.onCompactionModeChange}
+						onExit={props.onExit}
+					>
+						<App {...props} />
+					</SessionProvider>
+				</DialogProvider>
+			</ThemeProvider>
 		</TerminalColorsContext>
 	);
 }

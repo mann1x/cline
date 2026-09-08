@@ -3,6 +3,7 @@ import type {
 	GatewayProviderContext,
 	GatewayReasoningFormat,
 	GatewayStreamRequest,
+	ModelOperation,
 	ModelReasoningOption,
 	ReasoningEffort,
 } from "@cline/shared";
@@ -173,6 +174,66 @@ export function isClaudeFableModelId(modelId: string | undefined): boolean {
 	return normalizeRoutingValue(modelId)?.includes("claude-fable") ?? false;
 }
 
+// Known pre-adaptive Claude families that only accept the manual
+// `thinking: {type: "enabled", budgetTokens}` wire shape (or no thinking at
+// all): Claude Instant, 2.x, and 3.x version-first ids. Mirrors the legacy
+// guard in @ai-sdk/anthropic's capability lookup.
+const CLAUDE_LEGACY_FAMILY_PATTERN =
+	/claude-(?:instant(?:-|$)|v?2(?=$|[-.:])|3(?=$|[-.]))/;
+
+// Matches modern name-first Anthropic ids ("claude-sonnet-4-6",
+// "claude-opus-5", "anthropic.claude-opus-4-8-v1:0", "claude-sonnet-4.6").
+// The minor is capped at two digits so date-stamp suffixes
+// ("claude-sonnet-5-20260629") do not parse as versions.
+const CLAUDE_NAME_FIRST_VERSION_PATTERN =
+	/claude-(?:opus|sonnet|haiku)-(\d+)(?:[.-](\d{1,2}))?(?=$|[-.:@])/;
+
+/**
+ * Wire-shape era of a Claude model id, used only as a fallback when catalog
+ * `reasoningOptions` metadata is unavailable (offline baked catalog,
+ * user-typed unlisted ids such as "claude-opus-4-6:1m").
+ *
+ * - "adaptive": 4.6+/5.x models; the Anthropic API rejects the manual
+ *   `thinking: {type: "enabled", budgetTokens}` shape for these.
+ * - "legacy": known pre-4.6 families that require the manual shape.
+ * - "unknown-claude": a Claude id the version parser does not recognize.
+ *   Callers should treat these as NEWER than the known list and prefer
+ *   adaptive — the forward-compatible policy the ecosystem converged on
+ *   (vercel/ai#17804 for @ai-sdk/anthropic's capability lookup; opencode's
+ *   transform.ts after repeated allowlist misses for opus-4.7, sonnet-5,
+ *   and opus-5). New Claude releases reject the manual shape, so an
+ *   allowlist that lags a release turns every reasoning request into a
+ *   hard API error.
+ * - "not-claude": non-Claude ids (including Anthropic-compatible aliases)
+ *   stay conservative for third-party endpoints.
+ */
+export type ClaudeThinkingEra =
+	| "adaptive"
+	| "legacy"
+	| "unknown-claude"
+	| "not-claude";
+
+export function resolveClaudeThinkingEra(
+	modelId: string | undefined,
+): ClaudeThinkingEra {
+	const normalized = normalizeRoutingValue(modelId);
+	if (!normalized || !normalized.includes("claude")) {
+		return "not-claude";
+	}
+	if (CLAUDE_LEGACY_FAMILY_PATTERN.test(normalized)) {
+		return "legacy";
+	}
+
+	const match = CLAUDE_NAME_FIRST_VERSION_PATTERN.exec(normalized);
+	if (match) {
+		const major = Number(match[1]);
+		const minor = match[2] !== undefined ? Number(match[2]) : 0;
+		return major >= 5 || (major === 4 && minor >= 6) ? "adaptive" : "legacy";
+	}
+
+	return "unknown-claude";
+}
+
 export function isQwenModel(options: {
 	modelId?: string;
 	family?: string;
@@ -183,6 +244,46 @@ export function isQwenModel(options: {
 	}
 
 	return isQwenLineageValue(options.modelId);
+}
+
+// OpenAI reasoning-era chat models: the o-series (o1/o3/o4, including -mini,
+// -pro, and dated variants) and the gpt-5 family (including gpt-5-chat).
+// These models diverge from classic chat-completions parameter rules — most
+// importantly they reject `max_tokens` and require `max_completion_tokens`.
+// Detection is an id-pattern fallback (mirroring the legacy extension's
+// OpenAI handler) because OpenAI-compatible endpoints accept free-form,
+// user-typed model ids with no catalog metadata to rely on. The patterns
+// require non-alphanumeric boundaries so ids like "gpt-4o" or "yolo1" never
+// match, while namespaced ids like "openai/o3-mini" do.
+//
+// Maintenance:
+// - If OpenAI ships a new family with the same parameter rules (e.g. gpt-6),
+//   add a pattern here and cases to the positive/negative lists in
+//   `vendors/openai-compatible.test.ts`. The failure mode until then is the
+//   loud, self-describing OpenAI 400 ("'max_tokens' is not supported with
+//   this model. Use 'max_completion_tokens' instead."), not silent breakage.
+// - Keep the boundary anchoring on BOTH sides of each pattern; loosening it
+//   risks renaming the parameter for unrelated third-party models.
+// - Only `withMaxCompletionTokensForReasoningModels` in
+//   `vendors/openai-compatible.ts` consumes this. If a future
+//   `@ai-sdk/openai-compatible` maps `max_completion_tokens` itself (as
+//   `@ai-sdk/openai` already does), delete that transform and this helper.
+const OPENAI_O_SERIES_MODEL_ID_PATTERN = /(^|[^a-z0-9])o[134](?=$|[^a-z0-9])/;
+const OPENAI_GPT5_FAMILY_MODEL_ID_PATTERN =
+	/(^|[^a-z0-9])gpt-?5(?=$|[^a-z0-9])/;
+
+export function isOpenAIReasoningEraModelId(
+	modelId: string | undefined,
+): boolean {
+	const normalized = normalizeRoutingValue(modelId);
+	if (!normalized) {
+		return false;
+	}
+
+	return (
+		OPENAI_O_SERIES_MODEL_ID_PATTERN.test(normalized) ||
+		OPENAI_GPT5_FAMILY_MODEL_ID_PATTERN.test(normalized)
+	);
 }
 
 export function resolveGeminiThinkingMode(input: {
@@ -234,6 +335,8 @@ export function modelRouteMatches(
 		modelId?: string;
 		family?: string;
 		capabilities?: readonly string[];
+		operation?: ModelOperation;
+		modalities?: import("@cline/shared").ModelModalities;
 	},
 ): boolean {
 	if (
@@ -247,6 +350,12 @@ export function modelRouteMatches(
 	switch (route.matcher) {
 		case "anthropic-compatible":
 			return isAnthropicCompatibleModel(options);
+		case "model-operation":
+			// Language is the canonical default; only specialized transports need
+			// to declare an operation explicitly.
+			return (options.operation ?? "language") === route.operation;
+		case "model-output-modality":
+			return options.modalities?.output.includes(route.modality) ?? false;
 		case "model-family":
 			return modelFamilyMatches(options.family, route.family);
 		case "model-id":
@@ -311,6 +420,22 @@ export function isDeepSeekFamily(context: GatewayProviderContext): boolean {
 	return normalizedFamily(context).includes("deepseek");
 }
 
+/**
+ * Whether the resolved model advertises image input (`"images"` in its
+ * gateway capabilities). Models with no capability data at all (e.g. ids
+ * resolved outside any catalog) fail open: images are kept rather than
+ * hidden from a possibly capable model.
+ */
+export function modelSupportsImageInput(
+	context: GatewayProviderContext,
+): boolean {
+	const capabilities = context.model.capabilities;
+	if (!capabilities) {
+		return true;
+	}
+	return capabilities.includes("images");
+}
+
 export function getReasoningDefaultOnMetadata(
 	context: GatewayProviderContext,
 ): boolean | undefined {
@@ -346,6 +471,25 @@ export function isCerebrasProvider(
 	);
 }
 
+/**
+ * Whether this request is going to an Ollama server.
+ *
+ * Checks the same three identifiers as {@link isCerebrasProvider}: a provider
+ * can be named at the request, at the resolved config, or by the manifest, and
+ * a custom entry pointed at a local Ollama carries the name in only one of
+ * them.
+ */
+export function isOllamaProvider(
+	request: Pick<GatewayStreamRequest, "providerId">,
+	context: GatewayProviderContext,
+): boolean {
+	return [
+		request.providerId,
+		context.config.providerId,
+		context.provider.id,
+	].some((id) => id.toLowerCase() === "ollama");
+}
+
 export function modelReasoningDefaultsOn(options: {
 	request: Pick<GatewayStreamRequest, "providerId" | "modelId">;
 	context: GatewayProviderContext;
@@ -354,4 +498,65 @@ export function modelReasoningDefaultsOn(options: {
 		getReasoningDefaultOnMetadata(options.context) ??
 		isOllamaQwen3ModelIdFallback(options.request)
 	);
+}
+
+export type ReasoningHistoryMode = "all" | "last" | "none";
+
+/**
+ * The mode for a provider named only by its id.
+ *
+ * The context-aware resolver below is the one the request path uses, because a
+ * custom entry can carry the provider's name in any of three places. Callers
+ * outside that path -- the compaction pipeline, which must measure the same
+ * request the gateway will send -- have only the id, and for the providers this
+ * rule names that is enough.
+ */
+export function reasoningHistoryModeForProvider(
+	providerId: string | undefined,
+): ReasoningHistoryMode {
+	switch ((providerId ?? "").toLowerCase()) {
+		case "cerebras":
+		// Ollama's provider drops every reasoning part before the request
+		// leaves; the resolver below carries the measurement. This has to agree
+		// with it or the compaction pipeline measures a request the gateway
+		// will not send, which is the error this pair exists to prevent.
+		case "ollama":
+			return "none";
+		default:
+			return "all";
+	}
+}
+
+export function resolveReasoningHistoryMode(
+	request: GatewayStreamRequest,
+	context: GatewayProviderContext,
+): ReasoningHistoryMode {
+	if (isCerebrasProvider(request, context)) {
+		return "none";
+	}
+	// Ollama transmits no reasoning history at all, so this says so.
+	//
+	// It used to resolve to "last", then to "all" on the reasoning that a model
+	// should keep its own recent thinking. Neither described what happens on the
+	// wire. `ollama-ai-provider-v2` aliases `provider.chat` to its responses
+	// model, and that converter drops every assistant reasoning part and pushes
+	// a warning per part -- measured at 23,695 warnings in a single transaction,
+	// about 87 per request.
+	//
+	// Saying "all" while sending none is not a cosmetic mismatch: the estimator
+	// measures with this mode (see `resolveReasoningHistoryMode` in
+	// `gateway.ts`), so it counted characters the provider threw away. Measured
+	// on adjacent requests of one run: 592,322 characters estimated against a
+	// server-side prompt of 265,274 -- 2.23x -- and the overstatement is
+	// subtracted from the output cap, which resolved to 32,000 on a 262,144
+	// window.
+	//
+	// Restoring the transport is a separate question and not obviously a win:
+	// ollama's qwen3.5 renderer keeps assistant think blocks for every message
+	// after the last real user turn, so in an agent run with one user message it
+	// would render the entire thinking history into every prompt.
+	if (isOllamaProvider(request, context)) {
+		return "none";
+	}
+	return "all";
 }

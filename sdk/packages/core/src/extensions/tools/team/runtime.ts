@@ -1,4 +1,13 @@
 export {
+	type AgentSlotGate,
+	type AgentSlotGateRegistry,
+	agentEndpointKey,
+	agentSlotLimitsByEndpoint,
+	createAgentSlotGate,
+	createAgentSlotGateRegistry,
+	slotsAllowParallelDelegation,
+} from "./agent-slot-gate";
+export {
 	buildDelegatedAgentConfig,
 	createDelegatedAgent,
 	createDelegatedAgentConfigProvider,

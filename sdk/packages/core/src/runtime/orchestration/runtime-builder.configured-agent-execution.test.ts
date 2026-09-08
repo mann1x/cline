@@ -66,6 +66,18 @@ function makeBaseConfig(
 		enableTools: true,
 		enableSpawnAgent: true,
 		enableAgentTeams: false,
+		// The agent below names a provider the session is not on, which is the
+		// whole point of naming one. Core refuses an agent whose provider it
+		// cannot resolve rather than running it on the session's connection, so a
+		// host that supports second providers has to answer this.
+		resolveProviderConnection: (providerId) =>
+			providerId === "openai"
+				? {
+						apiKey: "openai-key",
+						baseUrl: "https://api.openai.com/v1",
+						providerConfig: { providerId: "openai" },
+					}
+				: undefined,
 		...overrides,
 	};
 }
@@ -220,10 +232,15 @@ Write a concise commit message.`,
 		const delegatedConfig = agentConstructorSpy.mock.calls.at(-1)?.[0] as
 			| AgentConfig
 			| undefined;
+		// The credentials as well as the id: the agent used to be given the new
+		// provider's *name* with the session's Anthropic key and base URL, which
+		// is a request to the wrong server.
 		expect(delegatedConfig).toEqual(
 			expect.objectContaining({
 				providerId: "openai",
 				modelId: "gpt-4.1",
+				apiKey: "openai-key",
+				baseUrl: "https://api.openai.com/v1",
 				maxIterations: 3,
 				parentAgentId: "parent-agent",
 				requestToolApproval,

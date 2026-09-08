@@ -10,6 +10,8 @@
  * (e.g. `execution.maxConsecutiveMistakes`, `execution.loopDetection`) are
  * consumed by `SessionRuntime` / `MistakeTracker` /
  * `LoopDetectionTracker` — not passed through here.
+ * `execution.reasoningLoopDetection` is the exception: it is enforced inside
+ * the model stream, so it does round-trip.
  */
 
 import type {
@@ -25,6 +27,7 @@ import type {
 	BasicLogger,
 	ITelemetryService,
 } from "@cline/shared";
+import { version as clineCoreVersion } from "../../../package.json";
 
 /**
  * Inputs required to assemble an `AgentRuntimeConfig`. Distinct from
@@ -69,6 +72,11 @@ export interface CreateAgentRuntimeConfigInput {
 	/** Seed messages (usually `session.conversation.getMessages()`). */
 	readonly initialMessages?: readonly AgentMessage[];
 	/**
+	 * Optional completion-policy override. Pass `null` for model modes that
+	 * cannot call tools (for example image generation).
+	 */
+	readonly completionPolicy?: AgentRuntimeConfig["completionPolicy"] | null;
+	/**
 	 * Override for `AgentRuntimeConfig.systemPrompt` — useful when
 	 * the caller has composed additional guidance (e.g. via
 	 * `LocalRuntimeHost.composeSystemPrompt`). Defaults to
@@ -91,6 +99,10 @@ export function createAgentRuntimeConfig(
 	const toolExecution = resolveToolExecution(agentConfig.maxParallelToolCalls);
 
 	const config: AgentRuntimeConfig = {
+		distinctId: agentConfig.distinctId,
+		clientName: agentConfig.extensionContext?.client?.name,
+		clientVersion: agentConfig.extensionContext?.client?.version,
+		clineCoreVersion,
 		sessionId: input.sessionId ?? agentConfig.sessionId,
 		agentId: input.agentId,
 		conversationId: input.conversationId,
@@ -100,16 +112,38 @@ export function createAgentRuntimeConfig(
 		messageModelInfo,
 		model: input.model,
 		modelOptions,
+		modelTools: agentConfig.modelTools,
 		tools: input.tools,
 		hooks,
 		prepareTurn: input.prepareTurn,
+		// Copied beside `prepareTurn`, because the two are halves of the same
+		// feature and only one of them was arriving. This builder assembles the
+		// runtime config from an explicit list, so a field the host sets on
+		// `agentConfig` and nobody copies here is dropped in silence -- which is
+		// what happened: every capped turn's reasoning went in the bin, `notes=0`
+		// across four sessions, while the prepare-turn half of the same condenser
+		// worked throughout because it *is* on the list. Nine milliseconds between
+		// the truncated turn and the retry's request said the call never happened;
+		// the runtime finally said why: "no condenser is installed".
+		condenseDiscardedReasoning: agentConfig.condenseDiscardedReasoning,
+		onImageInputUnsupported: agentConfig.onImageInputUnsupported,
+		describeImages: agentConfig.describeImages,
+		alwaysDescribeImages: agentConfig.alwaysDescribeImages,
+		modelSupportsImages: agentConfig.modelSupportsImages,
 		consumePendingUserMessage: agentConfig.consumePendingUserMessage,
 		plugins: input.plugins,
 		logger: input.logger ?? agentConfig.logger,
 		telemetry: input.telemetry ?? agentConfig.telemetry,
 		initialMessages: input.initialMessages,
-		completionPolicy: agentConfig.completionPolicy,
+		completionPolicy:
+			input.completionPolicy === null
+				? undefined
+				: (input.completionPolicy ?? agentConfig.completionPolicy),
 		maxIterations: agentConfig.maxIterations,
+		// One of the few `execution.*` fields that does round-trip: the guard runs
+		// inside the model stream, which is the only place that can cut a request
+		// mid-draw, so the runtime has to carry the setting itself.
+		reasoningLoopDetection: agentConfig.execution?.reasoningLoopDetection,
 		toolExecution,
 		toolPolicies: agentConfig.toolPolicies,
 		toolContextMetadata: input.toolContextMetadata,

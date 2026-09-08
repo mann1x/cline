@@ -21,6 +21,10 @@ export function useScrollBehavior(
 ): ScrollBehavior & {
 	isAtBottom: boolean
 	setIsAtBottom: React.Dispatch<React.SetStateAction<boolean>>
+	isFollowing: boolean
+	showJumpToPresent: boolean
+	stopFollowing: () => void
+	resumeFollowing: () => void
 	pendingScrollToMessage: number | null
 	setPendingScrollToMessage: React.Dispatch<React.SetStateAction<number | null>>
 	scrolledPastUserMessage: ClineMessage | null
@@ -34,8 +38,61 @@ export function useScrollBehavior(
 
 	// State
 	const [isAtBottom, setIsAtBottom] = useState(false)
+	/**
+	 * Whether the view is still tailing, as opposed to whether it happens to be
+	 * within ten pixels of the bottom this frame.
+	 *
+	 * The two are not the same and the difference is visible. `isAtBottom` is
+	 * Virtuoso's answer to the second question, and during a streaming turn it
+	 * goes false constantly: every appended token extends the list before the pin
+	 * scroll catches up, and the smooth scroll has an animation window in which
+	 * the list is legitimately not at the bottom. It also starts false at mount,
+	 * before Virtuoso has reported anything at all. Keying the jump button on it
+	 * made the button appear while the chat was tailing perfectly well, which is
+	 * what #49 came back about.
+	 *
+	 * Following is a decision, so it is tracked as one: it ends when the reader
+	 * scrolls up or jumps to an older message, and resumes when they come back to
+	 * the bottom or press the button. It mirrors `disableAutoScrollRef`, which
+	 * stays a ref because the pin paths read it synchronously mid-scroll.
+	 */
+	const [isFollowing, setIsFollowing] = useState(true)
 	const [pendingScrollToMessage, setPendingScrollToMessage] = useState<number | null>(null)
 	const [scrolledPastUserMessage, setScrolledPastUserMessage] = useState<ClineMessage | null>(null)
+
+	// The flag and the state always move together; separate assignments at four
+	// call sites is how they would drift.
+	const stopFollowing = useCallback(() => {
+		disableAutoScrollRef.current = true
+		setIsFollowing(false)
+	}, [])
+	const resumeFollowing = useCallback(() => {
+		disableAutoScrollRef.current = false
+		setIsFollowing(true)
+	}, [])
+
+	/**
+	 * Whether there is anything to jump to.
+	 *
+	 * Both halves are needed and #49 has now been round-tripped on each of them
+	 * separately. Keyed on `isAtBottom` alone the button appeared while the chat
+	 * was tailing perfectly well, because a growing list is legitimately not at
+	 * the bottom between the token and the pin. Keyed on following alone it
+	 * appeared while the reader was looking straight at the newest message: the
+	 * reader stops following by expanding a row as well as by scrolling, and a
+	 * row that expands below the fold leaves the list exactly where it was, so
+	 * Virtuoso reports no change in bottom-ness and nothing resumes following.
+	 * The button then sat there for the rest of the task offering to take them
+	 * somewhere they already were -- reported as "I keep seeing the jump to
+	 * present button even if it's not necessary as I never scrolled up".
+	 *
+	 * So: the reader has to have stopped following *and* the view has to be away
+	 * from the bottom. Following stays off in that case, which is the point of
+	 * expanding a row -- the view holds still while they read it -- and the
+	 * button comes back on its own as soon as new content pushes the bottom out
+	 * of reach, which is the first moment it is any use.
+	 */
+	const showJumpToPresent = !isFollowing && !isAtBottom
 
 	// Find all user feedback messages
 	const userFeedbackMessages = useMemo(() => {
@@ -154,6 +211,18 @@ export function useScrollBehavior(
 		})
 	}, [])
 
+	// Return to the newest message and start following again.
+	//
+	// Clearing the flag is the half that matters. Scrolling to the bottom on its
+	// own lands there once and stops following on the next token, because every
+	// pin below reads `disableAutoScrollRef` before it scrolls. The flag is
+	// otherwise only cleared by Virtuoso reporting the list within ten pixels of
+	// the bottom, which a reader cannot reach while a turn is still streaming.
+	const jumpToPresent = useCallback(() => {
+		resumeFollowing()
+		scrollToBottomAuto()
+	}, [resumeFollowing, scrollToBottomAuto])
+
 	const scrollToMessage = useCallback(
 		(messageIndex: number) => {
 			setPendingScrollToMessage(messageIndex)
@@ -190,7 +259,7 @@ export function useScrollBehavior(
 
 			if (groupIndex !== -1) {
 				setPendingScrollToMessage(null)
-				disableAutoScrollRef.current = true
+				stopFollowing()
 
 				// Check if this is the first user feedback message (no sticky header would show when scrolling to it)
 				const isFirstUserMessage =
@@ -237,7 +306,7 @@ export function useScrollBehavior(
 			// Disable auto-scroll when the user expands a row. Programmatic expansions
 			// for active command output should keep bottom pinning engaged.
 			if (!isCollapsing && !options?.preserveAutoScroll) {
-				disableAutoScrollRef.current = true
+				stopFollowing()
 			}
 			// Only scroll on collapse, never on expand - expanding should stay in place
 			if (isCollapsing && isAtBottom) {
@@ -319,15 +388,18 @@ export function useScrollBehavior(
 		}
 	}, [pendingScrollToMessage, groupedMessages, scrollToMessage])
 
-	const handleWheel = useCallback((event: Event) => {
-		const wheelEvent = event as WheelEvent
-		if (wheelEvent.deltaY && wheelEvent.deltaY < 0) {
-			if (scrollContainerRef.current?.contains(wheelEvent.target as Node)) {
-				// user scrolled up
-				disableAutoScrollRef.current = true
+	const handleWheel = useCallback(
+		(event: Event) => {
+			const wheelEvent = event as WheelEvent
+			if (wheelEvent.deltaY && wheelEvent.deltaY < 0) {
+				if (scrollContainerRef.current?.contains(wheelEvent.target as Node)) {
+					// user scrolled up
+					stopFollowing()
+				}
 			}
-		}
-	}, [])
+		},
+		[stopFollowing],
+	)
 	useEvent("wheel", handleWheel, window, { passive: true }) // passive improves scrolling performance
 
 	return {
@@ -337,11 +409,16 @@ export function useScrollBehavior(
 		scrollToBottomSmooth,
 		scrollToBottomAuto,
 		scrollToMessage,
+		jumpToPresent,
 		toggleRowExpansion,
 		handleRowHeightChange,
 		handleLastRowContentChange,
 		isAtBottom,
 		setIsAtBottom,
+		isFollowing,
+		showJumpToPresent,
+		stopFollowing,
+		resumeFollowing,
 		pendingScrollToMessage,
 		setPendingScrollToMessage,
 		scrolledPastUserMessage,

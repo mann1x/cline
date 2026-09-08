@@ -1,3 +1,4 @@
+import type { LanguageModelV4 } from "@ai-sdk/provider";
 import type {
 	AgentMessage,
 	AgentModelEvent,
@@ -6,39 +7,66 @@ import type {
 	GatewayProviderFactory,
 	GatewayResolvedProviderConfig,
 	GatewayStreamRequest,
+	GeneratedMedia,
+	ImageMediaValidationFailure,
+	ImageMediaValidationSuccess,
+	MediaBudgetState,
+	ModelToolExecution,
+	ModelToolName,
 	ProviderErrorClass,
 } from "@cline/shared";
 import {
 	type AiSdkFormatterMessage,
 	type AiSdkFormatterPart,
 	captureSdkError,
+	createMediaBudgetState,
 	formatMessagesForAiSdk,
+	GeneratedMediaSchema,
+	generatedMediaModalityFromMediaType,
+	modelProducesImages,
+	modelSupportsToolCalling,
 	parseJsonStream,
 	sanitizeSurrogates,
+	usesImageGenerationOperation,
+	validateAndReserveBase64Media,
+	validateAndReserveImageMedia,
+	validateImageMedia,
 } from "@cline/shared";
 import {
 	type CallSettings,
+	generateImage,
 	jsonSchema,
 	NoSuchToolError,
+	stepCountIs,
 	streamText,
 	type ToolSet,
+	wrapLanguageModel,
 } from "ai";
 import { nanoid } from "nanoid";
 import { classifyProviderError } from "./error-classification";
 import { extractErrorMessage } from "./format";
+import { createRetryEmptyResponseMiddleware } from "./middleware/retry-empty-response";
 import {
 	isAnthropicCompatibleModel,
-	isCerebrasProvider,
+	modelSupportsImageInput,
+	type ReasoningHistoryMode,
 	resolveModelFamily,
+	resolveReasoningHistoryMode,
 } from "./model-facts";
 import {
 	recordProviderRequestCapture,
 	wrapFetchForProviderRequestCapture,
 } from "./provider-request-capture";
+import { mergeRequestTimings, readEngineTimings } from "./request-timings";
 import {
 	applyPromptCacheToLastTextPart,
 	shouldApplyPromptCache,
 } from "./routing/anthropic-compatible";
+import {
+	applyBedrockCachePointToLastUserMessage,
+	shouldApplyBedrockCachePoint,
+} from "./routing/bedrock-cache-point";
+import { resolvePortableReasoning } from "./routing/portable-reasoning";
 import {
 	type AiSdkProviderOptionsTarget,
 	composeAiSdkProviderOptions,
@@ -48,7 +76,9 @@ import type {
 	AiSdkStreamResult,
 	AiSdkStreamTotalUsage,
 	AiSdkStreamUsage,
+	BuiltModelTools,
 	ProviderFactoryResult,
+	ProviderGeneratedMedia,
 } from "./vendors/types";
 
 interface GatewayNormalizedUsage {
@@ -60,6 +90,240 @@ interface GatewayNormalizedUsage {
 	totalCost?: number;
 }
 type ProviderModuleKind = AiSdkProviderOptionsTarget;
+type ImageGenerationInput = string | Uint8Array | ArrayBuffer;
+type ImageGenerationPrompt =
+	| string
+	| {
+			images: ImageGenerationInput[];
+			text?: string;
+	  };
+
+function normalizeImageGenerationInput(
+	part: Extract<AgentMessage["content"][number], { type: "image" }>,
+): ImageGenerationInput {
+	if (part.image instanceof URL) {
+		return part.image.href;
+	}
+	if (typeof part.image !== "string") {
+		return part.image;
+	}
+	if (part.image.startsWith("http://") || part.image.startsWith("https://")) {
+		return part.image;
+	}
+	const validation = validateImageMedia(part.mediaType, part.image);
+	if (!validation.ok) {
+		throw new Error(validation.message);
+	}
+	return `data:${validation.mediaType};base64,${validation.base64}`;
+}
+
+function normalizeGeneratedImageInput(
+	part: Extract<AgentMessage["content"][number], { type: "media" }>,
+): ImageGenerationInput | undefined {
+	if (part.media.modality !== "image") return undefined;
+	switch (part.media.source.type) {
+		case "url":
+			return part.media.source.url;
+		case "artifact":
+			return undefined;
+		case "base64": {
+			const validation = validateImageMedia(
+				part.media.mediaType,
+				part.media.source.data,
+			);
+			return validation.ok
+				? `data:${validation.mediaType};base64,${validation.base64}`
+				: undefined;
+		}
+	}
+}
+
+function resolveImageGenerationPrompt(
+	request: GatewayStreamRequest,
+	context: GatewayProviderContext,
+): ImageGenerationPrompt {
+	let latestUserMessageIndex = -1;
+	for (let index = request.messages.length - 1; index >= 0; index -= 1) {
+		if (request.messages[index]?.role === "user") {
+			latestUserMessageIndex = index;
+			break;
+		}
+	}
+	if (latestUserMessageIndex < 0) {
+		throw new Error("Image generation requires a text prompt or input image");
+	}
+
+	const message = request.messages[latestUserMessageIndex];
+	if (!message || message.role !== "user") {
+		throw new Error("Image generation requires a text prompt or input image");
+	}
+	const text = message.content
+		.filter((part) => part.type === "text")
+		.map((part) => part.text)
+		.join("\n")
+		.trim();
+	const supportsImageInput =
+		context.model.modalities?.input.includes("image") === true;
+	if (supportsImageInput) {
+		const explicitImages = message.content
+			.filter((part) => part.type === "image")
+			.map(normalizeImageGenerationInput);
+		if (explicitImages.length > 0) {
+			return {
+				images: explicitImages,
+				...(text ? { text } : {}),
+			};
+		}
+	}
+	if (!text) {
+		throw new Error("Image generation requires a text prompt or input image");
+	}
+	if (!supportsImageInput) {
+		return text;
+	}
+
+	// Only infer an edit from the immediately preceding assistant turn. Looking
+	// farther back can silently turn a new generation request into an edit of a
+	// stale image from an unrelated part of the conversation.
+	const previousMessage = request.messages[latestUserMessageIndex - 1];
+	if (previousMessage?.role === "assistant") {
+		const firstGeneratedImage = previousMessage.content.find(
+			(part) =>
+				part.type === "image" ||
+				(part.type === "media" && part.media.modality === "image"),
+		);
+		if (firstGeneratedImage?.type === "image") {
+			return {
+				text,
+				images: [normalizeImageGenerationInput(firstGeneratedImage)],
+			};
+		}
+		if (firstGeneratedImage?.type === "media") {
+			const input = normalizeGeneratedImageInput(firstGeneratedImage);
+			if (input) return { text, images: [input] };
+		}
+	}
+	return text;
+}
+
+type GeneratedImageExtraction =
+	| { kind: "accepted"; image: ImageMediaValidationSuccess }
+	| { kind: "rejected"; error: ImageMediaValidationFailure }
+	| { kind: "unsupported" };
+
+function toGeneratedImageMedia(
+	image: ImageMediaValidationSuccess,
+): GeneratedMedia {
+	return {
+		id: `media_${nanoid()}`,
+		modality: "image",
+		mediaType: image.mediaType,
+		source: { type: "base64", data: image.base64 },
+		sizeBytes: image.decodedBytes,
+	};
+}
+
+function extractGeneratedImage(
+	file: unknown,
+	budgetState: MediaBudgetState,
+): GeneratedImageExtraction {
+	if (!file || typeof file !== "object") return { kind: "unsupported" };
+	const record = file as Record<string, unknown>;
+	if (
+		typeof record.mediaType !== "string" ||
+		!record.mediaType.startsWith("image/") ||
+		typeof record.base64 !== "string"
+	) {
+		return { kind: "unsupported" };
+	}
+	// Generated images use the same bounded media envelope as attachments and
+	// persisted history. Accepting an image that hydration later drops would
+	// make the live and replayed assistant transcripts disagree.
+	const validation = validateAndReserveImageMedia(
+		record.mediaType,
+		record.base64,
+		{},
+		budgetState,
+	);
+	if (!validation.ok) {
+		return { kind: "rejected", error: validation };
+	}
+	return { kind: "accepted", image: validation };
+}
+
+type ProjectedMediaNormalization =
+	| { ok: true; media: GeneratedMedia }
+	| { ok: false; error: string };
+
+function normalizeProjectedModelToolMedia(
+	candidate: ProviderGeneratedMedia,
+	budgetState: MediaBudgetState,
+): ProjectedMediaNormalization {
+	if (candidate.modality === "image" && candidate.source.type === "base64") {
+		const extracted = extractGeneratedImage(
+			{
+				base64: candidate.source.data,
+				mediaType: candidate.mediaType,
+			},
+			budgetState,
+		);
+		if (extracted.kind === "accepted") {
+			return { ok: true, media: toGeneratedImageMedia(extracted.image) };
+		}
+		return {
+			ok: false,
+			error:
+				extracted.kind === "rejected"
+					? extracted.error.message
+					: "Model tool returned unsupported image media",
+		};
+	}
+
+	let source = candidate.source;
+	let sizeBytes: number | undefined;
+	if (candidate.source.type === "base64") {
+		const validation = validateAndReserveBase64Media(
+			candidate.source.data,
+			{},
+			budgetState,
+		);
+		if (!validation.ok) {
+			return { ok: false, error: validation.message };
+		}
+		source = { type: "base64", data: validation.base64 };
+		sizeBytes = validation.decodedBytes;
+	}
+
+	const media = {
+		...candidate,
+		id: `media_${nanoid()}`,
+		source,
+		...(sizeBytes !== undefined ? { sizeBytes } : {}),
+	};
+	const parsed = GeneratedMediaSchema.safeParse(media);
+	return parsed.success
+		? { ok: true, media: parsed.data }
+		: { ok: false, error: "Model tool returned invalid generated media" };
+}
+
+interface ActiveProjectedModelToolCall {
+	toolName: ModelToolName;
+	input?: unknown;
+	execution: ModelToolExecution;
+}
+
+interface ProjectedModelToolResult {
+	media: GeneratedMedia[];
+	activityOutput: unknown;
+}
+
+function summarizeProjectedMedia(media: readonly GeneratedMedia[]): unknown {
+	return {
+		generatedMediaCount: media.length,
+		mediaTypes: media.map((item) => item.mediaType),
+		byteLength: media.reduce((total, item) => total + (item.sizeBytes ?? 0), 0),
+	};
+}
 
 /**
  * Map the gateway's reasoning intent onto the AI SDK's own per-request
@@ -74,7 +338,7 @@ type ProviderModuleKind = AiSdkProviderOptionsTarget;
  * SDK on `provider-default` so a model configured with a reasoning setting
  * keeps it.
  */
-function toAiSdkReasoning(
+export function toAiSdkReasoning(
 	reasoning: GatewayStreamRequest["reasoning"],
 ): CallSettings["reasoning"] {
 	if (!reasoning) {
@@ -101,24 +365,83 @@ export function buildAiSdkStreamConfig(
 	request: GatewayStreamRequest,
 	_context: GatewayProviderContext,
 ): Partial<CallSettings> {
-	const reasoning = toAiSdkReasoning(request.reasoning);
+	const reasoning = resolvePortableReasoning(request);
 	return {
 		...(request.maxTokens !== undefined
 			? { maxOutputTokens: request.maxTokens }
 			: {}),
 		...(reasoning !== undefined ? { reasoning } : {}),
 		temperature: request.temperature,
+		...(reasoning ? { reasoning } : {}),
 	};
 }
 
-function buildCachedAiSdkMessages(
+function buildProviderModelTools(
+	provider: ProviderFactoryResult,
+	request: GatewayStreamRequest,
+	context: GatewayProviderContext,
+): BuiltModelTools | undefined {
+	if (!request.modelTools?.length) {
+		return undefined;
+	}
+
+	const requestedNames = [
+		...new Set(request.modelTools.map((tool) => tool.name)),
+	];
+	if (!provider.buildModelTools) {
+		throw new Error(
+			`Provider adapter for "${context.provider.id}" does not implement requested model tool(s): ${requestedNames.join(", ")}.`,
+		);
+	}
+
+	const modelTools = provider.buildModelTools(request.modelTools);
+	const missingNames = requestedNames.filter(
+		(toolName) => !Object.hasOwn(modelTools, toolName),
+	);
+	if (missingNames.length > 0) {
+		throw new Error(
+			`Provider adapter for "${context.provider.id}" did not build requested model tool(s): ${missingNames.join(", ")}.`,
+		);
+	}
+
+	return modelTools;
+}
+
+function toAiSdkModelToolSet(
+	modelTools: BuiltModelTools | undefined,
+): ToolSet | undefined {
+	if (!modelTools) return undefined;
+	const entries = Object.entries(modelTools).flatMap(([name, adapter]) =>
+		adapter ? [[name, adapter.tool] as const] : [],
+	);
+	return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function buildAiSdkRequestMessages(
 	request: GatewayStreamRequest,
 	context: GatewayProviderContext,
 	systemPrompt?: string,
 ) {
 	const aiMessages = toAiSdkMessages(request.messages, systemPrompt, {
-		includeReasoning: shouldIncludeReasoningHistory(request, context),
+		reasoningHistory: resolveReasoningHistoryMode(request, context),
+		supportedInputModalities:
+			context.model.modalities?.input ??
+			(context.model.capabilities
+				? modelSupportsImageInput(context)
+					? ["text", "image"]
+					: ["text"]
+				: undefined),
 	}) as Array<Record<string, unknown>>;
+
+	if (shouldApplyBedrockCachePoint(request, context)) {
+		applyBedrockCachePointToLastUserMessage(aiMessages);
+		return aiMessages;
+	}
+
+	if (!shouldApplyPromptCache(request, context)) {
+		return aiMessages;
+	}
+
 	const includeAnthropic = isAnthropicCompatibleModel({
 		modelId: request.modelId,
 		family: resolveModelFamily(context),
@@ -297,13 +620,25 @@ function wrapFetchForStickySession(
 	return sessionFetch;
 }
 
-function shouldIncludeReasoningHistory(
-	request: GatewayStreamRequest,
-	context: GatewayProviderContext,
-): boolean {
-	return !isCerebrasProvider(request, context);
-}
-
+/**
+ * How much of the transcript's reasoning goes back to the model.
+ *
+ * `all` is the historical behaviour, `none` is for backends that reject it,
+ * and `last` keeps only the most recent message's reasoning.
+ *
+ * `last` is what a tool loop actually needs. The state a coding agent carries
+ * between turns lives in the tool calls and their results; its own reasoning
+ * from six turns ago is not an input to anything, it is a transcript of how it
+ * got here. The exception is the turn in flight — a model that has just
+ * reasoned its way to a tool call needs that reasoning when the result comes
+ * back, which is also the only reasoning Anthropic requires be echoed.
+ *
+ * Measured on a live Ollama session at effort `high`: 242,078 characters of
+ * thinking against 61,728 for every tool call, result and message combined —
+ * 79.7% of the transcript, ~60,500 tokens, resent in full on every request.
+ * Compaction could only get 103.2k down to 62.2k because four-fifths of what
+ * it was compacting was stale reasoning.
+ */
 async function ensureGatewayLangfuseTelemetry(
 	providerId: string,
 ): Promise<boolean> {
@@ -315,15 +650,129 @@ async function ensureGatewayLangfuseTelemetry(
 	}
 }
 
+async function withAiSdkLangfuseTraceContext<T>(
+	enabled: boolean,
+	request: GatewayStreamRequest,
+	callback: () => T | Promise<T>,
+): Promise<T> {
+	const metadata =
+		request.metadata && typeof request.metadata === "object"
+			? request.metadata
+			: {};
+	const tags = Array.isArray(metadata.tags)
+		? metadata.tags.filter(
+				(value): value is string =>
+					typeof value === "string" && value.trim().length > 0,
+			)
+		: undefined;
+	const distinctId =
+		typeof metadata.distinctId === "string" ? metadata.distinctId : undefined;
+	const sessionId =
+		typeof metadata.sessionId === "string" ? metadata.sessionId : undefined;
+
+	if (!enabled || (!distinctId && !sessionId && !tags?.length)) {
+		return await callback();
+	}
+
+	const runtime = await import("../services/langfuse-telemetry");
+	return await runtime.withLangfuseTraceAttributes(
+		true,
+		{
+			...(distinctId ? { userId: distinctId } : {}),
+			...(sessionId ? { sessionId } : {}),
+			...(tags?.length ? { tags } : {}),
+			metadata: {
+				...(typeof metadata.conversationId === "string"
+					? { conversationId: metadata.conversationId }
+					: {}),
+				...(typeof metadata.runId === "string"
+					? { runId: metadata.runId }
+					: {}),
+			},
+		},
+		callback,
+	);
+}
+
+function buildAiSdkRuntimeContext(
+	request: GatewayStreamRequest,
+	context: GatewayProviderContext,
+): Record<string, unknown> {
+	const requestMetadata = request.metadata;
+	const metadata =
+		requestMetadata && typeof requestMetadata === "object"
+			? requestMetadata
+			: {};
+	const tags = Array.isArray(metadata.tags)
+		? metadata.tags.filter(
+				(value): value is string =>
+					typeof value === "string" && value.trim().length > 0,
+			)
+		: undefined;
+	const distinctId =
+		typeof metadata.distinctId === "string" ? metadata.distinctId : undefined;
+
+	return {
+		// `distinctId` is Cline's canonical identity field. Langfuse's data
+		// model calls the same value `userId`, so expose both in runtime
+		// context and explicitly map distinctId to Langfuse's userId below.
+		...(distinctId ? { distinctId, userId: distinctId } : {}),
+		...(typeof metadata.sessionId === "string"
+			? { sessionId: metadata.sessionId }
+			: {}),
+		...(typeof metadata.clientName === "string"
+			? { clientName: metadata.clientName }
+			: {}),
+		...(typeof metadata.clientVersion === "string"
+			? { clientVersion: metadata.clientVersion }
+			: {}),
+		...(typeof metadata.clineCoreVersion === "string"
+			? { clineCoreVersion: metadata.clineCoreVersion }
+			: {}),
+		...(tags && tags.length > 0 ? { tags } : {}),
+		// Keep Cline correlation fields available even when the integration
+		// does not promote them to first-class Langfuse fields.
+		...(typeof metadata.conversationId === "string"
+			? { conversationId: metadata.conversationId }
+			: {}),
+		...(typeof metadata.runId === "string" ? { runId: metadata.runId } : {}),
+		...(typeof metadata.iteration === "number"
+			? { iteration: metadata.iteration }
+			: {}),
+		providerId: request.providerId,
+		modelId: request.modelId,
+		resolvedModelId: context.model.id,
+	};
+}
+
 function toAiSdkMessages(
 	messages: readonly AgentMessage[],
 	systemPrompt?: string,
-	options?: { includeReasoning?: boolean },
+	options?: {
+		reasoningHistory?: ReasoningHistoryMode;
+		supportedInputModalities?: readonly string[];
+	},
 ) {
-	const includeReasoning = options?.includeReasoning ?? true;
+	const reasoningHistory = options?.reasoningHistory ?? "all";
+	// Which message keeps its reasoning under `last`. Found by scanning for the
+	// final message that actually carries a reasoning part, not by taking the
+	// final message: the last turn is often a tool result, and "keep the last
+	// one" has to mean the last reasoning there is.
+	let lastReasoningIndex = -1;
+	if (reasoningHistory === "last") {
+		for (let i = messages.length - 1; i >= 0; i--) {
+			if (messages[i]?.content.some((part) => part.type === "reasoning")) {
+				lastReasoningIndex = i;
+				break;
+			}
+		}
+	}
 	const normalizedMessages: AiSdkFormatterMessage[] = [];
 
-	for (const message of messages) {
+	for (const [messageIndex, message] of messages.entries()) {
+		const includeReasoning =
+			reasoningHistory === "all" ||
+			(reasoningHistory === "last" && messageIndex === lastReasoningIndex);
 		const content: AiSdkFormatterPart[] = [];
 		let skippedReasoning = false;
 		for (const part of message.content) {
@@ -377,6 +826,11 @@ function toAiSdkMessages(
 				continue;
 			}
 
+			if (part.type === "media") {
+				content.push({ type: "media", media: part.media });
+				continue;
+			}
+
 			if (part.type === "tool-call") {
 				const metadata = part.metadata as Record<string, unknown> | undefined;
 				const thoughtSignature =
@@ -425,6 +879,7 @@ function toAiSdkMessages(
 
 	return formatMessagesForAiSdk(systemPrompt, normalizedMessages, {
 		assistantToolCallArgKey: "input",
+		supportedInputModalities: options?.supportedInputModalities,
 	});
 }
 
@@ -450,6 +905,23 @@ function toAiSdkTools(request: GatewayStreamRequest): ToolSet | undefined {
 	return tools;
 }
 
+function mergeAiSdkTools(
+	runtimeTools: ToolSet | undefined,
+	providerTools: ToolSet | undefined,
+): ToolSet | undefined {
+	// Runtime tools carry the caller's executor contract, so they retain
+	// ownership when a provider happens to register the same public name.
+	const tools = {
+		...(providerTools ?? {}),
+		...(runtimeTools ?? {}),
+	};
+	return Object.keys(tools).length > 0 ? tools : undefined;
+}
+
+function hasAiSdkTool(tools: ToolSet | undefined, toolName: string): boolean {
+	return tools !== undefined && Object.hasOwn(tools, toolName);
+}
+
 interface RepairableToolCall {
 	toolCallId: string;
 	toolName: string;
@@ -457,21 +929,116 @@ interface RepairableToolCall {
 }
 
 /**
+ * Markers a provider's own parser uses to open a tool call.
+ *
+ * Present here because they can arrive *inside* the tool name: when the
+ * provider mis-slices the model's output, everything from the start of the
+ * turn up to the marker is handed over as the name, and the name the model
+ * actually wrote is what follows it.
+ */
+const TOOL_CALL_NAME_MARKERS = [
+	"<tool_call>",
+	"<|tool_call|>",
+	"<function_call>",
+];
+
+/**
+ * The tool name hiding at the end of a name the provider mis-sliced.
+ *
+ * Measured (mann1x/cline#60, GLM 5.3-Flash through Ollama Cloud): a ~2,000
+ * character "tool name" consisting of a code block the model had written,
+ * then the sentence `Let me re-read the current state of modifySkill and the
+ * rest:`, then `<tool_call>`, then `read_files` — a real tool, called
+ * correctly, that the turn was failed over.
+ *
+ * Only the tail after the last marker is considered, and only when it is a
+ * bare identifier that names a tool this run actually has. Anything else and
+ * we have not found the call, we have found more of the same text.
+ */
+export function recoverToolNameFromMarker(
+	toolName: string,
+	isAvailable: (name: string) => boolean,
+): string | undefined {
+	let afterMarker: number | undefined;
+	for (const marker of TOOL_CALL_NAME_MARKERS) {
+		const at = toolName.lastIndexOf(marker);
+		if (at >= 0) {
+			const end = at + marker.length;
+			if (afterMarker === undefined || end > afterMarker) {
+				afterMarker = end;
+			}
+		}
+	}
+	if (afterMarker === undefined) {
+		return undefined;
+	}
+	const tail = toolName.slice(afterMarker).trim();
+	if (!/^[A-Za-z0-9_.-]+$/.test(tail)) {
+		return undefined;
+	}
+	return isAvailable(tail) ? tail : undefined;
+}
+
+/**
+ * Recover a call whose *name* the provider mangled, leaving the rest intact.
+ *
+ * Distinct from the argument repair below, and safe where that one is not.
+ * Repairing a truncated value invents content nothing downstream can tell
+ * from content the model meant; this changes no value at all -- it takes a
+ * name the model wrote, that this run has a tool for, out of text the
+ * provider wrongly prepended to it.
+ *
+ * The arguments still have to parse. A mangled name *and* unparseable
+ * arguments means nothing about the call is understood, and two guesses do
+ * not make an answer.
+ */
+function repairLeakedToolName<T extends RepairableToolCall>(
+	toolCall: T,
+	tools: Record<string, unknown> | undefined,
+): T | null {
+	if (!tools) {
+		return null;
+	}
+	const recovered = recoverToolNameFromMarker(toolCall.toolName, (name) =>
+		Object.hasOwn(tools, name),
+	);
+	if (recovered === undefined) {
+		return null;
+	}
+	if (typeof toolCall.input !== "string") {
+		return null;
+	}
+	if (toolCall.input.trim() !== "") {
+		try {
+			JSON.parse(toolCall.input);
+		} catch {
+			return null;
+		}
+	}
+	return { ...toolCall, toolName: recovered };
+}
+
+/**
  * Last-chance repair for tool calls whose arguments are not valid JSON
  * (truncated payloads, single quotes, unescaped newlines — common with
  * weaker models). Runs the raw argument text through the shared jsonrepair
- * strategies; unknown tool names and already-valid JSON are not repairable
- * here, and returning null preserves the AI SDK's original error behavior.
+ * strategies; already-valid JSON is not repairable here, and returning null
+ * preserves the AI SDK's original error behavior.
+ *
+ * An unknown tool name gets one narrower treatment first — see
+ * {@link repairLeakedToolName} — and is otherwise still left to fail.
  */
 export async function repairMalformedToolCall<T extends RepairableToolCall>({
 	toolCall,
+	tools,
 	error,
 }: {
 	toolCall: T;
+	tools?: Record<string, unknown>;
 	error: unknown;
 }): Promise<T | null> {
 	if (NoSuchToolError.isInstance(error)) {
-		return null;
+		return repairLeakedToolName(toolCall, tools);
 	}
 	if (typeof toolCall.input !== "string" || toolCall.input.trim() === "") {
 		return null;
@@ -485,11 +1052,55 @@ export async function repairMalformedToolCall<T extends RepairableToolCall>({
 	} catch {
 		// Not valid JSON — attempt repair below.
 	}
+	// A payload cut off inside a value is not malformed, it is incomplete, and
+	// the two want opposite treatment. Closing the quote makes a *valid* call
+	// carrying a truncated value, and nothing downstream can tell that from one
+	// the model meant — so a whole-file write applies the fragment and the file
+	// is gone.
+	//
+	// Measured: a 14,127-byte file was replaced by 572 bytes ending mid-rule at
+	// `top: 50`, with no `<script>` left in it, after the model's rewrite hit
+	// the output cap. Nothing in the log said so, because repairing is silent.
+	// The synthetic case behaves identically — 98B of a 181B document, `ends
+	// "olute; top: 50"`, `has <script>: false`.
+	//
+	// Refusing here returns the SDK's own error for the call, which the model
+	// sees and retries. That costs a turn. Guessing costs the file.
+	if (endsInsideStringLiteral(toolCall.input)) {
+		return null;
+	}
 	const repaired = parseJsonStream(toolCall.input);
 	if (repaired === toolCall.input || typeof repaired === "string") {
 		return null;
 	}
 	return { ...toolCall, input: JSON.stringify(repaired) };
+}
+
+/**
+ * Whether the text stops in the middle of a JSON string literal.
+ *
+ * Only double quotes are tracked, so the malformed shapes repair exists for
+ * still reach it: single-quoted keys never open a string here, and an
+ * unescaped newline inside one does not close it. What this catches is the
+ * one case where a value is missing its end — the shape truncation makes.
+ */
+function endsInsideStringLiteral(input: string): boolean {
+	let inString = false;
+	let escaped = false;
+	for (const char of input) {
+		if (escaped) {
+			escaped = false;
+			continue;
+		}
+		if (char === "\\") {
+			escaped = inString;
+			continue;
+		}
+		if (char === '"') {
+			inString = !inString;
+		}
+	}
+	return inString;
 }
 
 function normalizeAiSdkToolInputSchema(
@@ -540,6 +1151,22 @@ function buildToolCallMetadata(input: {
 	});
 }
 
+/**
+ * A diagnostic field, bounded.
+ *
+ * A mis-sliced tool name is not a name, it is the turn's transcript: one
+ * report carried ~2,000 characters of the model's own code and prose as the
+ * "tool name", and this metadata reproduced it three times over. Diagnostics
+ * do not carry transcript content, and a reader who needs the rest has the
+ * conversation itself.
+ */
+function boundDiagnosticText(text: string, limit: number): string {
+	const collapsed = text.replace(/\s+/g, " ").trim();
+	return collapsed.length > limit
+		? `${collapsed.slice(0, limit)}… (${collapsed.length} chars)`
+		: collapsed;
+}
+
 function buildRecoverableToolErrorMetadata(input: {
 	part: AiSdkStreamPart;
 	errorMessage: string;
@@ -549,8 +1176,8 @@ function buildRecoverableToolErrorMetadata(input: {
 }): Record<string, unknown> {
 	return buildToolCallMetadata({
 		metadata: mergeToolCallMetadata(extractGoogleThoughtMetadata(input.part), {
-			inputParseError: `Tool call ${input.toolName} was rejected before execution: ${input.errorMessage}`,
-			aiSdkToolError: input.errorMessage,
+			inputParseError: `Tool call ${boundDiagnosticText(input.toolName, 80)} was rejected before execution: ${boundDiagnosticText(input.errorMessage, 600)}`,
+			aiSdkToolError: boundDiagnosticText(input.errorMessage, 600),
 		}),
 		request: input.request,
 		context: input.context,
@@ -721,6 +1348,9 @@ function calculateUsageCostFromPricing(
  * Accepts both AI SDK's normalized shapes (AiSdkStreamTotalUsage, AiSdkStreamUsage)
  * and raw provider responses. Handles multiple naming conventions (camelCase vs snake_case),
  * extracts costs from provider-specific fields, and falls back to pricing-based calculation.
+ * Provider-reported billed cost takes precedence over market cost so gateway discounts
+ * are reflected in user-facing totals. Market cost remains a fallback when no billed
+ * cost is available.
  *
  * @param usageValue - AI SDK normalized usage or raw provider response object
  * @param providerMetadata - Provider-specific metadata for cost extraction
@@ -781,9 +1411,13 @@ export function normalizeUsage(
 		baseCost !== undefined && baseCost > 0
 			? baseCost
 			: (upstreamInferenceCost ?? baseCost);
+	const billedCost = shouldAddUpstreamCost
+		? baseCost + upstreamInferenceCost
+		: costOrUpstream;
 	const totalCost =
-		marketCost ??
-		(shouldAddUpstreamCost ? baseCost + upstreamInferenceCost : costOrUpstream);
+		billedCost !== undefined && billedCost !== 0
+			? billedCost
+			: (marketCost ?? billedCost);
 	const normalizedUsage = {
 		inputTokens:
 			getNestedUsageValue(usage, "inputTokens", "total") ||
@@ -957,6 +1591,12 @@ function extractGoogleThoughtMetadata(
 interface CapturedStreamError {
 	message: string;
 	errorClass: ProviderErrorClass;
+	/**
+	 * This layer already recorded `sdk.error` telemetry for the failure.
+	 * Forwarded as `errorReported` on the `finish` event so the agent loop
+	 * does not report the same failure a second time.
+	 */
+	reported?: boolean;
 }
 
 function captureStreamError(error: unknown): CapturedStreamError {
@@ -972,13 +1612,37 @@ async function* emitAiSdkEvents(
 	context: GatewayProviderContext,
 	pricingValue?: unknown,
 	capturedError?: { current: CapturedStreamError | undefined },
+	modelToolAdapters?: BuiltModelTools,
 ): AsyncIterable<AgentModelEvent> {
 	let sawToolCalls = false;
 	const emittedToolCallIds = new Set<string>();
+	// Timed here rather than around the whole call because this is the span the
+	// user actually waits through: the stream opening to the stream closing.
+	// Every provider gets these two numbers, including the ones that report
+	// nothing of their own.
+	const startedAt = Date.now();
+	let firstContentAt: number | undefined;
 	let finishReason: unknown;
 	let streamError: CapturedStreamError | undefined;
 	let finishUsage: unknown;
 	let finishProviderMetadata: unknown;
+	let streamAborted = false;
+	let sawVisibleContent = false;
+	const mediaBudget = createMediaBudgetState();
+	const rejectedMediaErrors: string[] = [];
+	const activeProjectedModelToolCalls = new Map<
+		string,
+		ActiveProjectedModelToolCall
+	>();
+	const projectedModelToolResults = new Map<string, ProjectedModelToolResult>();
+	const pendingProjectedModelToolOutputs = new Map<string, unknown>();
+	const projectedModelToolErrors = new Map<string, string>();
+	// Tool calls the provider executed inside this inference request (e.g. the
+	// Claude Code CLI's own tools). They surface as observational activity and
+	// must never enter AgentRuntime's local execution/approval loop. Result and
+	// error parts are matched by ID because some providers omit the
+	// providerExecuted flag on the result half of the pair.
+	const observationalProviderToolCallIds = new Set<string>();
 
 	try {
 		if (stream.fullStream) {
@@ -989,6 +1653,8 @@ async function* emitAiSdkEvents(
 						(part.text as string | undefined) ??
 						(part.delta as string | undefined);
 					if (text) {
+						sawVisibleContent = true;
+						firstContentAt ??= Date.now();
 						yield { type: "text-delta", text };
 					}
 					continue;
@@ -1000,6 +1666,8 @@ async function* emitAiSdkEvents(
 						(part.text as string | undefined) ??
 						(part.reasoning as string | undefined);
 					if (text) {
+						sawVisibleContent = true;
+						firstContentAt ??= Date.now();
 						yield {
 							type: "reasoning-delta",
 							text,
@@ -1009,8 +1677,114 @@ async function* emitAiSdkEvents(
 					continue;
 				}
 
+				if (part.type === "file") {
+					const extracted = extractGeneratedImage(part.file, mediaBudget);
+					if (extracted.kind === "accepted") {
+						sawVisibleContent = true;
+						firstContentAt ??= Date.now();
+						yield {
+							type: "media",
+							media: toGeneratedImageMedia(extracted.image),
+						};
+						continue;
+					}
+					if (extracted.kind === "rejected") {
+						rejectedMediaErrors.push(extracted.error.message);
+						continue;
+					}
+					// Preserve non-image model files on the generic event path.
+					const file = part.file as
+						| { base64?: string; mediaType?: string }
+						| undefined;
+					const data = file?.base64;
+					if (typeof data === "string" && data.length > 0) {
+						const mediaType = file?.mediaType ?? "application/octet-stream";
+						const validation = validateAndReserveBase64Media(
+							data,
+							{},
+							mediaBudget,
+						);
+						if (!validation.ok) {
+							rejectedMediaErrors.push(validation.message);
+							continue;
+						}
+						sawVisibleContent = true;
+						firstContentAt ??= Date.now();
+						yield {
+							type: "media",
+							media: {
+								id: `media_${nanoid()}`,
+								modality: generatedMediaModalityFromMediaType(mediaType),
+								mediaType,
+								source: { type: "base64", data: validation.base64 },
+								sizeBytes: validation.decodedBytes,
+							},
+						};
+					}
+					continue;
+				}
+
 				if (part.type === "tool-call") {
+					const toolName =
+						(part.toolName as string | undefined) ??
+						(part.name as string | undefined) ??
+						"tool";
+					// Provider-executed tools complete inside this inference request. They
+					// must not enter AgentRuntime's local execution/approval loop. The same
+					// applies to provider-defined client tools: streamText executes those
+					// and continues the internal model step before returning control.
+					const modelTool = request.modelTools?.find(
+						(tool) => tool.name === toolName,
+					);
+					if (modelTool) {
+						const explicitToolCallId =
+							(part.toolCallId as string | undefined) ??
+							(part.id as string | undefined);
+						const adapter = modelToolAdapters?.[modelTool.name];
+						if (adapter?.projectResult && !explicitToolCallId) {
+							throw new Error(
+								`Model tool "${modelTool.name}" call is missing a valid tool-call ID`,
+							);
+						}
+						const toolCallId = explicitToolCallId ?? `model_tool_${nanoid()}`;
+						const execution =
+							part.providerExecuted === true ? "provider" : "client";
+						if (adapter?.projectResult) {
+							activeProjectedModelToolCalls.set(toolCallId, {
+								toolName: modelTool.name,
+								input: part.input ?? part.args,
+								execution,
+							});
+						}
+						yield {
+							type: "tool-call-delta",
+							toolCallId,
+							toolName: modelTool.name,
+							execution,
+							input: part.input ?? part.args,
+						};
+						continue;
+					}
+					if (part.providerExecuted === true) {
+						const toolCallId =
+							(part.toolCallId as string | undefined) ??
+							(part.id as string | undefined) ??
+							`provider_tool_${nanoid()}`;
+						observationalProviderToolCallIds.add(toolCallId);
+						sawVisibleContent = true;
+						firstContentAt ??= Date.now();
+						yield {
+							type: "tool-call-delta",
+							toolCallId,
+							toolName,
+							execution: "provider",
+							input: part.input ?? part.args,
+						};
+						continue;
+					}
 					sawToolCalls = true;
+					sawVisibleContent = true;
+					firstContentAt ??= Date.now();
 					const toolCallId =
 						(part.toolCallId as string | undefined) ??
 						(part.id as string | undefined) ??
@@ -1022,10 +1796,7 @@ async function* emitAiSdkEvents(
 					yield {
 						type: "tool-call-delta",
 						toolCallId,
-						toolName:
-							(part.toolName as string | undefined) ??
-							(part.name as string | undefined) ??
-							"tool",
+						toolName,
 						input: typeof input === "string" ? undefined : input,
 						inputText,
 						metadata: buildToolCallMetadata({
@@ -1037,7 +1808,138 @@ async function* emitAiSdkEvents(
 					continue;
 				}
 
+				if (part.type === "tool-result") {
+					const toolName =
+						(part.toolName as string | undefined) ??
+						(part.name as string | undefined) ??
+						"tool";
+					const modelTool = request.modelTools?.find(
+						(tool) => tool.name === toolName,
+					);
+					if (modelTool) {
+						const explicitToolCallId =
+							(part.toolCallId as string | undefined) ??
+							(part.id as string | undefined);
+						const adapter = modelToolAdapters?.[modelTool.name];
+						if (adapter?.projectResult && !explicitToolCallId) {
+							throw new Error(
+								`Model tool "${modelTool.name}" result is missing a valid tool-call ID`,
+							);
+						}
+						const toolCallId = explicitToolCallId ?? `model_tool_${nanoid()}`;
+						if (adapter?.projectResult) {
+							if (part.preliminary !== true) {
+								if (!activeProjectedModelToolCalls.has(toolCallId)) {
+									throw new Error(
+										`Model tool "${modelTool.name}" returned a result without a matching call`,
+									);
+								}
+								// Provider SDKs can repeat a terminal tool result. Buffer the
+								// latest value and validate it once so duplicates neither emit
+								// duplicate media nor consume the aggregate media budget twice.
+								pendingProjectedModelToolOutputs.set(
+									toolCallId,
+									part.output ?? part.result,
+								);
+								projectedModelToolErrors.delete(toolCallId);
+							}
+							continue;
+						}
+						if (part.preliminary !== true) {
+							yield {
+								type: "tool-result",
+								toolCallId,
+								toolName: modelTool.name,
+								execution:
+									part.providerExecuted === true ? "provider" : "client",
+								input: part.input ?? part.args,
+								output: part.output ?? part.result,
+							};
+						}
+						continue;
+					}
+					const toolCallId =
+						(part.toolCallId as string | undefined) ??
+						(part.id as string | undefined);
+					if (
+						part.providerExecuted === true ||
+						(toolCallId && observationalProviderToolCallIds.has(toolCallId))
+					) {
+						if (part.preliminary !== true) {
+							sawVisibleContent = true;
+							firstContentAt ??= Date.now();
+							yield {
+								type: "tool-result",
+								toolCallId: toolCallId ?? `provider_tool_${nanoid()}`,
+								toolName,
+								execution: "provider",
+								input: part.input ?? part.args,
+								output: part.output ?? part.result,
+							};
+						}
+						continue;
+					}
+				}
+
 				if (part.type === "tool-error") {
+					const toolName =
+						(part.toolName as string | undefined) ??
+						(part.name as string | undefined) ??
+						"tool";
+					const modelTool = request.modelTools?.find(
+						(tool) => tool.name === toolName,
+					);
+					if (modelTool) {
+						const explicitToolCallId =
+							(part.toolCallId as string | undefined) ??
+							(part.id as string | undefined);
+						const adapter = modelToolAdapters?.[modelTool.name];
+						if (adapter?.projectResult && !explicitToolCallId) {
+							throw new Error(
+								`Model tool "${modelTool.name}" error is missing a valid tool-call ID`,
+							);
+						}
+						const toolCallId = explicitToolCallId ?? `model_tool_${nanoid()}`;
+						if (adapter?.projectResult) {
+							pendingProjectedModelToolOutputs.delete(toolCallId);
+							projectedModelToolErrors.set(
+								toolCallId,
+								`Model tool "${modelTool.name}" failed: ${extractErrorMessage(part.error)}`,
+							);
+							continue;
+						}
+						yield {
+							type: "tool-result",
+							toolCallId,
+							toolName: modelTool.name,
+							execution: part.providerExecuted === true ? "provider" : "client",
+							input: part.input ?? part.args,
+							output: { error: extractErrorMessage(part.error) },
+							isError: true,
+						};
+						continue;
+					}
+					{
+						const errorToolCallId =
+							(part.toolCallId as string | undefined) ??
+							(part.id as string | undefined);
+						if (
+							part.providerExecuted === true ||
+							(errorToolCallId &&
+								observationalProviderToolCallIds.has(errorToolCallId))
+						) {
+							yield {
+								type: "tool-result",
+								toolCallId: errorToolCallId ?? `provider_tool_${nanoid()}`,
+								toolName,
+								execution: "provider",
+								input: part.input ?? part.args,
+								output: { error: extractErrorMessage(part.error) },
+								isError: true,
+							};
+							continue;
+						}
+					}
 					sawToolCalls = true;
 					const toolCallId =
 						(part.toolCallId as string | undefined) ??
@@ -1045,10 +1947,6 @@ async function* emitAiSdkEvents(
 						`tool_${nanoid()}`;
 					const alreadyEmitted = emittedToolCallIds.has(toolCallId);
 					emittedToolCallIds.add(toolCallId);
-					const toolName =
-						(part.toolName as string | undefined) ??
-						(part.name as string | undefined) ??
-						"tool";
 					const input = (part.input ?? part.args ?? {}) as unknown;
 					const inputText =
 						typeof input === "string" ? input : JSON.stringify(input);
@@ -1077,9 +1975,29 @@ async function* emitAiSdkEvents(
 					continue;
 				}
 
+				// Provider metadata rides `finish-step`, not `finish`.
+				//
+				// `streamText`'s terminal part carries only `finishReason`,
+				// `rawFinishReason` and `totalUsage` -- no `providerMetadata` --
+				// while each step's own end carries it. Reading it off `finish`
+				// therefore yielded `undefined` for every streamed request, and
+				// nothing said so: the field is optional, so an empty one looks
+				// exactly like a provider that reports nothing.
+				//
+				// The last step wins. A run with tool calls has several, and it
+				// is the final one that describes the request whose usage is
+				// emitted below.
+				if (part.type === "finish-step" && part.providerMetadata) {
+					finishProviderMetadata = part.providerMetadata;
+				}
+
 				if (part.type === "finish") {
 					finishUsage = part.usage ?? part.totalUsage;
-					finishProviderMetadata = part.providerMetadata;
+					// Kept as a fallback rather than removed: a model
+					// implementation that is not `streamText` -- and the mocked
+					// streams in these tests -- may put it here instead.
+					finishProviderMetadata =
+						part.providerMetadata ?? finishProviderMetadata;
 					finishReason =
 						part.finishReason ?? part.rawFinishReason ?? part.reason;
 				}
@@ -1091,7 +2009,7 @@ async function* emitAiSdkEvents(
 				}
 
 				if (part.type === "abort") {
-					// abort
+					streamAborted = true;
 					break;
 				}
 			}
@@ -1104,6 +2022,103 @@ async function* emitAiSdkEvents(
 		// Prefer the real provider error from onError over the generic
 		// NoOutputGeneratedError the AI SDK throws when 0 steps are recorded.
 		streamError = capturedError?.current ?? captureStreamError(error);
+	}
+
+	if (!streamError) {
+		for (const [toolCallId, output] of pendingProjectedModelToolOutputs) {
+			const active = activeProjectedModelToolCalls.get(toolCallId);
+			const adapter = active ? modelToolAdapters?.[active.toolName] : undefined;
+			if (!active || !adapter?.projectResult) continue;
+			try {
+				const projection = adapter.projectResult(output);
+				const media: GeneratedMedia[] = [];
+				const errors: string[] = [];
+				for (const candidate of projection.media) {
+					const normalized = normalizeProjectedModelToolMedia(
+						candidate,
+						mediaBudget,
+					);
+					if (normalized.ok) media.push(normalized.media);
+					else errors.push(normalized.error);
+				}
+				if (media.length === 0) {
+					projectedModelToolErrors.set(
+						toolCallId,
+						errors[0] ??
+							`Model tool "${active.toolName}" returned no supported media`,
+					);
+					continue;
+				}
+				projectedModelToolResults.set(toolCallId, {
+					media,
+					activityOutput:
+						projection.activityOutput ?? summarizeProjectedMedia(media),
+				});
+				projectedModelToolErrors.delete(toolCallId);
+			} catch (error) {
+				projectedModelToolErrors.set(toolCallId, extractErrorMessage(error));
+			}
+		}
+	}
+
+	if (!streamError && !streamAborted) {
+		for (const toolCallId of activeProjectedModelToolCalls.keys()) {
+			if (
+				!projectedModelToolResults.has(toolCallId) &&
+				!projectedModelToolErrors.has(toolCallId)
+			) {
+				const active = activeProjectedModelToolCalls.get(toolCallId);
+				projectedModelToolErrors.set(
+					toolCallId,
+					`Model tool "${active?.toolName ?? "unknown"}" completed without a final result`,
+				);
+			}
+		}
+	}
+
+	if (!streamError) {
+		for (const [toolCallId, projection] of projectedModelToolResults) {
+			const active = activeProjectedModelToolCalls.get(toolCallId);
+			if (!active) continue;
+			sawVisibleContent = true;
+			firstContentAt ??= Date.now();
+			for (const media of projection.media) {
+				yield { type: "media", media };
+			}
+			yield {
+				type: "tool-result",
+				toolCallId,
+				toolName: active.toolName,
+				execution: active.execution,
+				input: active.input,
+				output: projection.activityOutput,
+			};
+		}
+		for (const [toolCallId, error] of projectedModelToolErrors) {
+			const active = activeProjectedModelToolCalls.get(toolCallId);
+			if (!active) continue;
+			yield {
+				type: "tool-result",
+				toolCallId,
+				toolName: active.toolName,
+				execution: active.execution,
+				input: active.input,
+				output: { error },
+				isError: true,
+			};
+		}
+		if (
+			!sawVisibleContent &&
+			(projectedModelToolErrors.size > 0 || rejectedMediaErrors.length > 0)
+		) {
+			streamError = captureStreamError(
+				new Error(
+					projectedModelToolErrors.values().next().value ??
+						rejectedMediaErrors[0] ??
+						"Model returned no supported media",
+				),
+			);
+		}
 	}
 
 	// Prefer stream.usage (has raw cost data) over finish part usage.
@@ -1129,9 +2144,24 @@ async function* emitAiSdkEvents(
 	}
 
 	if (usageToEmit) {
+		// Read from the finish part's metadata directly rather than from
+		// `metadataToUse`, which is only populated on the fallback paths above
+		// and is deliberately left alone here: it feeds cost extraction, and a
+		// timing display is not a reason to change how anything is billed.
+		const engineTimings = readEngineTimings(finishProviderMetadata);
+		const completedAt = Date.now();
 		yield {
 			type: "usage",
 			usage: normalizeUsage(usageToEmit, metadataToUse, pricingValue),
+			timings: mergeRequestTimings(
+				{
+					requestMs: completedAt - startedAt,
+					...(firstContentAt !== undefined
+						? { firstTokenMs: firstContentAt - startedAt }
+						: {}),
+				},
+				engineTimings,
+			),
 		};
 	}
 
@@ -1140,6 +2170,7 @@ async function* emitAiSdkEvents(
 		reason: streamError ? "error" : mapFinishReason(finishReason, sawToolCalls),
 		error: streamError?.message,
 		errorClass: streamError?.errorClass,
+		errorReported: streamError?.reported,
 	};
 }
 
@@ -1149,6 +2180,10 @@ async function createProviderModule(
 	context: GatewayProviderContext,
 ): Promise<ProviderFactoryResult> {
 	switch (kind) {
+		case "cline": {
+			const { createClineProviderModule } = await import("./vendors/cline");
+			return createClineProviderModule(config, context);
+		}
 		case "openai": {
 			const { createOpenAIProviderModule } = await import("./vendors/openai");
 			return createOpenAIProviderModule(config, context);
@@ -1207,6 +2242,12 @@ async function createProviderModule(
 			const { createOllamaProviderModule } = await import("./vendors/ollama");
 			return createOllamaProviderModule(config, context);
 		}
+		case "opencoti": {
+			const { createOpencotiProviderModule } = await import(
+				"./vendors/opencoti"
+			);
+			return createOpencotiProviderModule(config, context);
+		}
 		case "sapaicore": {
 			const { createSapAiCoreProviderModule } = await import(
 				"./vendors/community"
@@ -1214,6 +2255,45 @@ async function createProviderModule(
 			return createSapAiCoreProviderModule(config);
 		}
 	}
+}
+
+/**
+ * Wrap a vendor-constructed model with the transient-failure retry
+ * middleware (empty responses + pre-content network interruptions).
+ *
+ * All-empty turns (no text, no reasoning, no tool call) are a cross-provider
+ * phenomenon: production telemetry shows them on hosted backends (openrouter,
+ * cline, generic OpenAI-compatible endpoints), not just local Ollama. An
+ * empty assistant turn is a hard failure in the agent runtime ("Model
+ * returned empty response"), so a single transient flake kills the task.
+ * The same telemetry shows mid-stream network deaths (UND_ERR_SOCKET,
+ * body/headers timeouts, ECONNRESET) as the dominant network-class run
+ * killer — the AI SDK's own retry covers only request initiation, so once a
+ * stream has started nothing else retries. Retrying here — the one
+ * composition point every AI SDK vendor flows through — turns those flakes
+ * into non-events while leaving the runtime's loud failure in place for
+ * models that are persistently empty or connections that are truly down.
+ *
+ * Applied as the *outermost* wrap so each retry re-runs the vendor's full
+ * request pipeline, including any vendor-level middleware attached inside
+ * `provider.operations.language(...)`. Vendors opt out or tune attempts through
+ * `ProviderFactoryResult.retryEmptyResponses`.
+ */
+export function withEmptyResponseRetry(
+	model: unknown,
+	retryEmptyResponses: ProviderFactoryResult["retryEmptyResponses"],
+	logger: GatewayProviderContext["logger"],
+): unknown {
+	if (retryEmptyResponses === false) {
+		return model;
+	}
+	return wrapLanguageModel({
+		model: model as LanguageModelV4,
+		middleware: createRetryEmptyResponseMiddleware({
+			...retryEmptyResponses,
+			logger,
+		}),
+	});
 }
 
 function createAiSdkProvider(kind: ProviderModuleKind): GatewayProviderFactory {
@@ -1237,26 +2317,156 @@ function createAiSdkProvider(kind: ProviderModuleKind): GatewayProviderFactory {
 					},
 					context,
 				);
+				const composedProviderOptions = composeAiSdkProviderOptions(
+					request,
+					context,
+					kind,
+				);
+				const googleImageProviderKey =
+					kind === "google"
+						? "google"
+						: kind === "vertex"
+							? "vertex"
+							: undefined;
+				const providerOptions =
+					context.provider.metadata?.imageTransport === "openrouter" &&
+					modelProducesImages(context.model)
+						? {
+								...composedProviderOptions,
+								openrouter: {
+									...((composedProviderOptions[
+										request.providerId as keyof typeof composedProviderOptions
+									] ??
+										composedProviderOptions.openaiCompatible ??
+										{}) as Record<string, unknown>),
+									// OpenRouter-compatible image generation uses chat
+									// completions under the hood and requires explicit output
+									// modalities.
+									modalities: ["image", "text"],
+								},
+							}
+						: googleImageProviderKey !== undefined &&
+								modelProducesImages(context.model) &&
+								!usesImageGenerationOperation(context.model)
+							? {
+									...composedProviderOptions,
+									[googleImageProviderKey]: {
+										...((composedProviderOptions[googleImageProviderKey] ??
+											{}) as Record<string, unknown>),
+										responseModalities: ["TEXT", "IMAGE"],
+									},
+								}
+							: composedProviderOptions;
+				const modelOperation = context.model.operation ?? "language";
+				if (
+					modelOperation !== "language" &&
+					modelOperation !== "image-generation"
+				) {
+					throw new Error(
+						`Provider "${context.provider.id}" does not implement the "${modelOperation}" model operation`,
+					);
+				}
+				if (usesImageGenerationOperation(context.model)) {
+					if (!provider.operations.imageGeneration) {
+						throw new Error(
+							`Provider "${context.provider.id}" does not support image generation models`,
+						);
+					}
+					const prompt = resolveImageGenerationPrompt(request, context);
+					recordProviderRequestCapture({
+						stage: "ai_sdk_prompt",
+						request,
+						payload: {
+							operation: "generate_image",
+							prompt:
+								typeof prompt === "string"
+									? prompt
+									: {
+											text: prompt.text,
+											imageCount: prompt.images.length,
+										},
+							providerOptions,
+						},
+					});
+					const result = await generateImage({
+						model: provider.operations.imageGeneration(
+							context.model.id,
+						) as never,
+						prompt,
+						abortSignal: request.signal,
+						providerOptions: providerOptions as never,
+					});
+					let emittedImages = 0;
+					let rejectedImageError: string | undefined;
+					const mediaBudget = createMediaBudgetState();
+					for (const file of result.images) {
+						const extracted = extractGeneratedImage(file, mediaBudget);
+						if (extracted.kind === "rejected") {
+							rejectedImageError = extracted.error.message;
+							continue;
+						}
+						if (extracted.kind !== "accepted") continue;
+						emittedImages += 1;
+						yield {
+							type: "media",
+							media: toGeneratedImageMedia(extracted.image),
+						};
+					}
+					if (emittedImages === 0) {
+						throw new Error(
+							rejectedImageError ?? "Image model returned no supported images",
+						);
+					}
+					if (result.usage) {
+						yield {
+							type: "usage",
+							usage: normalizeUsage(
+								result.usage as Record<string, unknown>,
+								result.providerMetadata,
+								context.model.metadata?.pricing,
+							),
+						};
+					}
+					yield { type: "finish", reason: "stop" };
+					return;
+				}
 				const langfuse = await ensureGatewayLangfuseTelemetry(
 					config.providerId,
 				);
-				const tools = providerDisablesExternalToolExecution(context)
+				const externalToolExecutionDisabled =
+					providerDisablesExternalToolExecution(context);
+				const toolCallingDisabled =
+					externalToolExecutionDisabled ||
+					!modelSupportsToolCalling(context.model);
+				const runtimeTools = toolCallingDisabled
 					? undefined
 					: toAiSdkTools(request);
+				const activeModelTools = toolCallingDisabled
+					? []
+					: (request.modelTools ?? []).filter(
+							(tool) => !hasAiSdkTool(runtimeTools, tool.name),
+						);
+				const modelToolRequest = {
+					...request,
+					modelTools: activeModelTools,
+				};
+				const modelToolAdapters = buildProviderModelTools(
+					provider,
+					modelToolRequest,
+					context,
+				);
+				const modelTools = toAiSdkModelToolSet(modelToolAdapters);
+				const tools = mergeAiSdkTools(runtimeTools, modelTools);
 				const systemPrompt = resolveAiSdkSystemPrompt(request);
 				const useSystemOption =
 					typeof systemPrompt === "string" && systemPrompt.trim().length > 0;
 				const messagesSystemPrompt = useSystemOption ? undefined : systemPrompt;
-				const messages = shouldApplyPromptCache(request, context)
-					? buildCachedAiSdkMessages(request, context, messagesSystemPrompt)
-					: toAiSdkMessages(request.messages, messagesSystemPrompt, {
-							includeReasoning: shouldIncludeReasoningHistory(request, context),
-						});
-				const providerOptions = composeAiSdkProviderOptions(
+				const messages = buildAiSdkRequestMessages(
 					request,
 					context,
-					kind,
-				) as never;
+					messagesSystemPrompt,
+				);
+				const portableReasoning = resolvePortableReasoning(request);
 				const requestConfig = provider.buildStreamConfig
 					? provider.buildStreamConfig(request, context)
 					: buildAiSdkStreamConfig(request, context);
@@ -1269,51 +2479,82 @@ function createAiSdkProvider(kind: ProviderModuleKind): GatewayProviderFactory {
 						tools,
 						providerOptions,
 						...requestConfig,
+						...(portableReasoning ? { reasoning: portableReasoning } : {}),
 					},
 				});
-				stream = streamText({
-					model: provider.model(context.model.id) as never,
-					messages: messages as never,
-					...(useSystemOption ? { system: systemPrompt } : {}),
-					...(tools ? { tools } : {}),
-					abortSignal: request.signal,
-					experimental_repairToolCall: repairMalformedToolCall as never,
-					experimental_telemetry: {
-						isEnabled: langfuse,
-					},
-					providerOptions,
-					...requestConfig,
-					onError: ({ error: streamError }) => {
-						const captured = captureStreamError(streamError);
-						const msg = captured.message;
-						capturedError.current = captured;
-						if (log?.error) {
-							log.error("[ai-sdk] stream error", {
-								providerId: request.providerId,
-								error: streamError,
-								severity: "error",
-							});
-						} else if (log) {
-							log.log(`[ai-sdk] stream error: ${msg}`, {
-								providerId: request.providerId,
-								severity: "error",
-							});
-						}
-						captureSdkError(context.telemetry, {
-							component: "llms",
-							operation: "provider.stream",
-							error: streamError,
-							errorMessage: msg,
-							severity: "error",
-							handled: true,
-							context: {
-								providerId: request.providerId,
-								modelId: request.modelId,
-								providerKind: kind,
+				stream = await withAiSdkLangfuseTraceContext(
+					langfuse,
+					request,
+					() =>
+						streamText({
+							model: withEmptyResponseRetry(
+								provider.operations.language(context.model.id),
+								provider.retryEmptyResponses,
+								context.logger,
+							) as never,
+							messages: messages as never,
+							...(useSystemOption ? { system: systemPrompt } : {}),
+							...(tools ? { tools } : {}),
+							abortSignal: request.signal,
+							experimental_repairToolCall: repairMalformedToolCall as never,
+							telemetry: {
+								isEnabled: langfuse,
+								functionId: "cline-agent-turn",
+								includeRuntimeContext: {
+									distinctId: true,
+									userId: true,
+									sessionId: true,
+									clientName: true,
+									clientVersion: true,
+									clineCoreVersion: true,
+									tags: true,
+									conversationId: true,
+									runId: true,
+									iteration: true,
+									providerId: true,
+									modelId: true,
+									resolvedModelId: true,
+								},
 							},
-						});
-					},
-				}) as unknown as AiSdkStreamResult;
+							runtimeContext: buildAiSdkRuntimeContext(request, context),
+							providerOptions: providerOptions as never,
+							...(provider.executesModelTools && activeModelTools.length
+								? { stopWhen: stepCountIs(8) }
+								: {}),
+							...requestConfig,
+							...(portableReasoning ? { reasoning: portableReasoning } : {}),
+							onError: ({ error: streamError }) => {
+								const captured = captureStreamError(streamError);
+								const msg = captured.message;
+								capturedError.current = captured;
+								if (log?.error) {
+									log.error("[ai-sdk] stream error", {
+										providerId: request.providerId,
+										error: streamError,
+										severity: "error",
+									});
+								} else if (log) {
+									log.log(`[ai-sdk] stream error: ${msg}`, {
+										providerId: request.providerId,
+										severity: "error",
+									});
+								}
+								captured.reported = captureSdkError(context.telemetry, {
+									component: "llms",
+									operation: "provider.stream",
+									error: streamError,
+									errorMessage: msg,
+									severity: "error",
+									handled: true,
+									context: {
+										providerId: request.providerId,
+										modelId: request.modelId,
+										providerKind: kind,
+									},
+								});
+							},
+						}) as unknown as AiSdkStreamResult,
+				);
 
 				// Suppress dangling promise rejections (finishReason, totalUsage, steps, etc.)
 				// BEFORE iterating. The AI SDK rejects these DelayedPromises inside the stream's
@@ -1323,10 +2564,11 @@ function createAiSdkProvider(kind: ProviderModuleKind): GatewayProviderFactory {
 
 				yield* emitAiSdkEvents(
 					stream,
-					request,
+					modelToolRequest,
 					context,
 					context.model.metadata?.pricing,
 					capturedError,
+					modelToolAdapters,
 				);
 			} catch (error) {
 				suppressDanglingStreamPromises(stream);
@@ -1346,7 +2588,7 @@ function createAiSdkProvider(kind: ProviderModuleKind): GatewayProviderFactory {
 						severity: "error",
 					});
 				}
-				captureSdkError(context.telemetry, {
+				const reported = captureSdkError(context.telemetry, {
 					component: "llms",
 					operation: "provider.create_or_stream",
 					error,
@@ -1364,6 +2606,7 @@ function createAiSdkProvider(kind: ProviderModuleKind): GatewayProviderFactory {
 					reason: "error",
 					error: msg,
 					errorClass: captured.errorClass,
+					errorReported: reported || captured.reported,
 				};
 			}
 		},
@@ -1371,6 +2614,7 @@ function createAiSdkProvider(kind: ProviderModuleKind): GatewayProviderFactory {
 }
 
 export const createOpenAIProvider = createAiSdkProvider("openai");
+export const createClineProvider = createAiSdkProvider("cline");
 export const createOpenAICompatibleProvider =
 	createAiSdkProvider("openai-compatible");
 export const createAnthropicProvider = createAiSdkProvider("anthropic");
@@ -1383,4 +2627,5 @@ export const createOpenAICodexProvider = createAiSdkProvider("openai-codex");
 export const createOpenCodeProvider = createAiSdkProvider("opencode");
 export const createDifyProvider = createAiSdkProvider("dify");
 export const createOllamaProvider = createAiSdkProvider("ollama");
+export const createOpencotiProvider = createAiSdkProvider("opencoti");
 export const createSapAiCoreProvider = createAiSdkProvider("sapaicore");

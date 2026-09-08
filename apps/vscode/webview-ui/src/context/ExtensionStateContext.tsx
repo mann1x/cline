@@ -1,5 +1,7 @@
+import { DEFAULT_ATOMIC_PROTOCOL_SETTINGS } from "@shared/AtomicProtocolSettings"
 import { DEFAULT_AUTO_APPROVAL_SETTINGS } from "@shared/AutoApprovalSettings"
 import { DEFAULT_BROWSER_SETTINGS } from "@shared/BrowserSettings"
+import { DEFAULT_EDIT_VERIFICATION_SETTINGS } from "@shared/EditVerificationSettings"
 import { DEFAULT_PLATFORM, type ExtensionState } from "@shared/ExtensionMessage"
 import { DEFAULT_MCP_DISPLAY_MODE } from "@shared/McpDisplayMode"
 import type { UserInfo } from "@shared/proto/cline/account"
@@ -11,6 +13,7 @@ import { convertProtoMcpServersToMcpServers } from "@shared/proto-conversions/mc
 import { fromProtobufModels } from "@shared/proto-conversions/models/typeConversion"
 import type React from "react"
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react"
+import { reportWebviewFailure } from "@/services/webview-error-report"
 import {
 	type ModelInfo,
 	openRouterDefaultModelId,
@@ -45,6 +48,8 @@ interface ProviderModelsState {
 
 export interface ExtensionStateContextType extends ExtensionState {
 	didHydrateState: boolean
+	/** The first state has not arrived and is overdue. See the subscription below. */
+	hydrationStalled: boolean
 	showWelcome: boolean
 	onboardingModels: OnboardingModelGroup | undefined
 	openRouterModels: Record<string, ModelInfo>
@@ -140,6 +145,15 @@ export interface ExtensionStateContextType extends ExtensionState {
 }
 
 export const ExtensionStateContext = createContext<ExtensionStateContextType | undefined>(undefined)
+
+/**
+ * How long the panel may render nothing before it says so.
+ *
+ * Long enough that a slow extension-host start is not called a failure, short
+ * enough that a user staring at an empty panel is told something within the
+ * time they would otherwise spend reloading the window.
+ */
+const HYDRATION_GRACE_MS = 10_000
 
 export const ExtensionStateContextProvider: React.FC<{
 	children: React.ReactNode
@@ -280,6 +294,15 @@ export const ExtensionStateContextProvider: React.FC<{
 		telemetrySetting: "unset",
 		distinctId: "",
 		planActSeparateModelsSetting: true,
+		visionModelEnabled: false,
+		visionModeApiConfiguration: "",
+		agentsModelEnabled: false,
+		agentsModeApiConfiguration: "",
+		editVerificationSettings: DEFAULT_EDIT_VERIFICATION_SETTINGS,
+		atomicProtocolSettings: DEFAULT_ATOMIC_PROTOCOL_SETTINGS,
+		qaCredentialNames: [],
+		apiConfigurationProfiles: "",
+		activeApiConfigurationProfile: "",
 		enableCheckpointsSetting: true,
 		mcpDisplayMode: DEFAULT_MCP_DISPLAY_MODE,
 		globalClineRulesToggles: {},
@@ -297,15 +320,16 @@ export const ExtensionStateContextProvider: React.FC<{
 		welcomeViewCompleted: false,
 		onboardingModels: undefined,
 		mcpResponsesCollapsed: false, // Default value (expanded), will be overwritten by extension state
-		yoloModeToggled: false,
 		useAutoCondense: true,
 		compactionStrategy: "basic",
+		webSearchEnabled: false,
 		subagentsEnabled: false,
 		worktreesEnabled: { user: true, featureFlag: false },
 		favoritedModelIds: [],
 		lastDismissedInfoBannerVersion: 0,
 		lastDismissedModelBannerVersion: 0,
 		optOutOfRemoteConfig: false,
+		remoteConfigAvailable: false,
 		remoteConfigSettings: {},
 		backgroundCommandRunning: false,
 		backgroundCommandTaskId: undefined,
@@ -325,6 +349,9 @@ export const ExtensionStateContextProvider: React.FC<{
 	})
 	const [expandTaskHeader, setExpandTaskHeader] = useState(true)
 	const [didHydrateState, setDidHydrateState] = useState(false)
+	const [hydrationStalled, setHydrationStalled] = useState(false)
+	// Read from a timer that outlives the render it was scheduled in.
+	const didHydrateRef = useRef(false)
 
 	const [showWelcome, setShowWelcome] = useState(false)
 	const [onboardingModels, setOnboardingModels] = useState<OnboardingModelGroup | undefined>(undefined)
@@ -442,70 +469,126 @@ export const ExtensionStateContextProvider: React.FC<{
 
 	// Subscribe to state updates and UI events using the gRPC streaming API
 	useEffect(() => {
-		// Set up state subscription
-		stateSubscriptionRef.current = StateServiceClient.subscribeToState(EmptyRequest.create({}), {
-			onResponse: (response: any) => {
-				if (response.stateJson) {
-					try {
-						const stateData = JSON.parse(response.stateJson) as ExtensionState
-						setState((prevState) => {
-							// Versioning logic for autoApprovalSettings
-							const incomingVersion = stateData.autoApprovalSettings?.version ?? 1
-							const currentVersion = prevState.autoApprovalSettings?.version ?? 1
-							const shouldUpdateAutoApproval = incomingVersion > currentVersion
+		// The panel renders nothing at all until the first state arrives, so
+		// losing this one stream is not a degraded view, it is an empty one --
+		// and it used to be a silent one: the webview's console never reaches
+		// the extension's output channel, so a panel that went blank left no
+		// trace in any log on the machine. Three reports arrived that way.
+		//
+		// So the stream is opened again when it fails, the failure is sent to
+		// the extension host where a collected report will find it, and a panel
+		// still waiting after the grace period says so on screen rather than
+		// staying blank.
+		let disposed = false
+		let attempts = 0
+		let retryTimer: ReturnType<typeof setTimeout> | undefined
 
-							// Route the snapshot's transcript through the convergent-replica reducer:
-							// merge by ts/seq within the same epoch (never truncate), replace on a
-							// newer epoch, ignore stale/older snapshots. Unstamped (classic/legacy)
-							// state defaults to epoch 0 / version 0, which merges.
-							replicaRef.current = reducerApplyStateSnapshot(
-								replicaRef.current,
-								stateData.clineMessages ?? [],
-								stateData.epoch ?? 0,
-								stateData.stateVersion ?? 0,
-								stateData.turnState,
-							)
-							stateData.clineMessages = replicaRef.current.messages
-							// Use the seq-gated turnState from the replica, NOT the raw snapshot's, so a
-							// late/stale snapshot carrying an older phase (e.g. "idle") cannot revert a
-							// newer phase (e.g. "streaming") and hide the Cancel button. Falls back to
-							// undefined for classic/legacy state.
-							stateData.turnState = replicaRef.current.turnState
-
-							const newState = {
-								...stateData,
-								autoApprovalSettings: shouldUpdateAutoApproval
-									? stateData.autoApprovalSettings
-									: prevState.autoApprovalSettings,
-							}
-
-							// Update welcome screen state based on API configuration if welcome view not in progress
-							if (!newState.welcomeViewCompleted && !showWelcome) {
-								setShowWelcome(true)
-								setOnboardingModels(newState.onboardingModels)
-							} else if (newState.welcomeViewCompleted) {
-								setShowWelcome(false)
-								setOnboardingModels(undefined)
-							}
-
-							setDidHydrateState(true)
-
-							return newState
-						})
-					} catch (error) {
-						console.error("Error parsing state JSON:", error)
-						console.log("[DEBUG] ERR getting state", error)
-					}
+		const scheduleStateResubscribe = (): void => {
+			if (disposed) {
+				return
+			}
+			attempts += 1
+			// Backs off, because the two things that break this stream -- a host
+			// still starting up, and one that threw building the state -- are
+			// both things that either clear in a second or do not clear at all.
+			const delay = Math.min(1000 * 2 ** (attempts - 1), 10_000)
+			retryTimer = setTimeout(() => {
+				if (!disposed) {
+					openStateSubscription()
 				}
-				console.log('[DEBUG] ended "got subscribed state"')
-			},
-			onError: (error: any) => {
-				console.error("Error in state subscription:", error)
-			},
-			onComplete: () => {
-				console.log("State subscription completed")
-			},
-		})
+			}, delay)
+		}
+
+		// A declaration, not a const: `scheduleStateResubscribe` above calls it.
+		function openStateSubscription(): void {
+			stateSubscriptionRef.current = StateServiceClient.subscribeToState(EmptyRequest.create({}), {
+				onResponse: (response: any) => {
+					if (response.stateJson) {
+						try {
+							const stateData = JSON.parse(response.stateJson) as ExtensionState
+							setState((prevState) => {
+								// Versioning logic for autoApprovalSettings
+								const incomingVersion = stateData.autoApprovalSettings?.version ?? 1
+								const currentVersion = prevState.autoApprovalSettings?.version ?? 1
+								const shouldUpdateAutoApproval = incomingVersion > currentVersion
+
+								// Route the snapshot's transcript through the convergent-replica reducer:
+								// merge by ts/seq within the same epoch (never truncate), replace on a
+								// newer epoch, ignore stale/older snapshots. Unstamped (classic/legacy)
+								// state defaults to epoch 0 / version 0, which merges.
+								replicaRef.current = reducerApplyStateSnapshot(
+									replicaRef.current,
+									stateData.clineMessages ?? [],
+									stateData.epoch ?? 0,
+									stateData.stateVersion ?? 0,
+									stateData.turnState,
+								)
+								stateData.clineMessages = replicaRef.current.messages
+								// Use the seq-gated turnState from the replica, NOT the raw snapshot's, so a
+								// late/stale snapshot carrying an older phase (e.g. "idle") cannot revert a
+								// newer phase (e.g. "streaming") and hide the Cancel button. Falls back to
+								// undefined for classic/legacy state.
+								stateData.turnState = replicaRef.current.turnState
+
+								const newState = {
+									...stateData,
+									autoApprovalSettings: shouldUpdateAutoApproval
+										? stateData.autoApprovalSettings
+										: prevState.autoApprovalSettings,
+								}
+
+								// Update welcome screen state based on API configuration if welcome view not in progress
+								if (!newState.welcomeViewCompleted && !showWelcome) {
+									setShowWelcome(true)
+									setOnboardingModels(newState.onboardingModels)
+								} else if (newState.welcomeViewCompleted) {
+									setShowWelcome(false)
+									setOnboardingModels(undefined)
+								}
+
+								didHydrateRef.current = true
+								// A stream that spoke is a stream that works: the
+								// next failure starts its backoff from the top.
+								attempts = 0
+								setHydrationStalled(false)
+								setDidHydrateState(true)
+
+								return newState
+							})
+						} catch (error) {
+							console.error("Error parsing state JSON:", error)
+							console.log("[DEBUG] ERR getting state", error)
+						}
+					}
+					console.log('[DEBUG] ended "got subscribed state"')
+				},
+				onError: (error: any) => {
+					reportWebviewFailure("State subscription failed", error)
+					scheduleStateResubscribe()
+				},
+				onComplete: () => {
+					// A stream that ends before the first state has been delivered
+					// has left the panel blank, whatever it thought it was doing.
+					if (!didHydrateRef.current) {
+						reportWebviewFailure("State subscription ended before any state arrived", "onComplete")
+						scheduleStateResubscribe()
+					}
+				},
+			})
+		}
+		openStateSubscription()
+
+		// Says out loud what the panel has been doing silently.
+		const hydrationWatchdog = setTimeout(() => {
+			if (disposed || didHydrateRef.current) {
+				return
+			}
+			setHydrationStalled(true)
+			reportWebviewFailure(
+				"No state after " + HYDRATION_GRACE_MS + "ms",
+				"the panel has nothing to render and is showing an empty view",
+			)
+		}, HYDRATION_GRACE_MS)
 
 		// Subscribe to MCP button clicked events with webview type
 		mcpButtonUnsubscribeRef.current = UiServiceClient.subscribeToMcpButtonClicked(
@@ -734,6 +817,11 @@ export const ExtensionStateContextProvider: React.FC<{
 
 		// Clean up subscriptions when component unmounts
 		return () => {
+			disposed = true
+			clearTimeout(hydrationWatchdog)
+			if (retryTimer) {
+				clearTimeout(retryTimer)
+			}
 			if (stateSubscriptionRef.current) {
 				stateSubscriptionRef.current()
 				stateSubscriptionRef.current = null
@@ -872,6 +960,7 @@ export const ExtensionStateContextProvider: React.FC<{
 	const contextValue: ExtensionStateContextType = {
 		...state,
 		didHydrateState,
+		hydrationStalled,
 		showWelcome,
 		onboardingModels,
 		openRouterModels,

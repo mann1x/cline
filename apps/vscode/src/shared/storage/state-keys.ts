@@ -1,3 +1,4 @@
+import { AtomicProtocolSettings, DEFAULT_ATOMIC_PROTOCOL_SETTINGS } from "@shared/AtomicProtocolSettings"
 import { AutoApprovalSettings, DEFAULT_AUTO_APPROVAL_SETTINGS } from "@shared/AutoApprovalSettings"
 import {
 	ApiProvider,
@@ -9,11 +10,11 @@ import {
 } from "@shared/api"
 import { BrowserSettings, DEFAULT_BROWSER_SETTINGS } from "@shared/BrowserSettings"
 import { ClineRulesToggles } from "@shared/cline-rules"
+import { DEFAULT_EDIT_VERIFICATION_SETTINGS, EditVerificationSettings } from "@shared/EditVerificationSettings"
 import { DEFAULT_FOCUS_CHAIN_SETTINGS, FocusChainSettings } from "@shared/FocusChainSettings"
 import { HistoryItem } from "@shared/HistoryItem"
 import { DEFAULT_MCP_DISPLAY_MODE, McpDisplayMode } from "@shared/McpDisplayMode"
 import { toLegacyApiProvider } from "@shared/model-catalog/provider-helpers"
-import { WorkspaceRoot } from "@shared/multi-root/types"
 import { GlobalInstructionsFile } from "@shared/remote-config/schema"
 import { Mode } from "@shared/storage/types"
 import { TelemetrySetting } from "@shared/TelemetrySetting"
@@ -83,12 +84,15 @@ const GLOBAL_STATE_FIELDS = {
 	isNewUser: { default: true as boolean },
 	welcomeViewCompleted: { default: undefined as boolean | undefined },
 	mcpDisplayMode: { default: DEFAULT_MCP_DISPLAY_MODE as McpDisplayMode },
-	workspaceRoots: { default: undefined as WorkspaceRoot[] | undefined },
-	primaryRootIndex: { default: 0 as number },
 	multiRootEnabled: { default: true as boolean },
 	lastDismissedInfoBannerVersion: { default: 0 as number },
 	lastDismissedModelBannerVersion: { default: 0 as number },
 	lastDismissedCliBannerVersion: { default: 0 as number },
+	// Organization id of the last successful managed remote-config publish.
+	// Persistent evidence that this install is managed: the session gate uses it
+	// to fail closed when the user's identity cannot be resolved (API unreachable)
+	// instead of starting an unpoliced session. Cleared on explicit no-config.
+	lastManagedOrganizationId: { default: undefined as string | undefined },
 	remoteRulesToggles: { default: {} as ClineRulesToggles },
 	remoteWorkflowToggles: { default: {} as ClineRulesToggles },
 	remoteSkillsToggles: { default: {} as ClineRulesToggles },
@@ -268,20 +272,69 @@ const USER_SETTINGS_FIELDS = {
 	},
 	telemetrySetting: { default: "unset" as TelemetrySetting },
 	planActSeparateModelsSetting: { default: false as boolean, isComputed: true },
+	// Use a second model to turn images into text for a primary model that
+	// cannot read them itself.
+	visionModelEnabled: { default: false as boolean },
+	// Run subagents and teammates on a model of their own, rather than on the
+	// one driving the session. A delegated agent inherits the session's whole
+	// connection config — provider, model, sampler and the context window with
+	// it — so up to now Plan, Act, Vision and Agents had one window between the
+	// three that share a provider entry, and no way at all to give an agent a
+	// smaller model than the lead.
+	agentsModelEnabled: { default: false as boolean },
+	// Both of these hold JSON rather than a proto message. What they carry is a
+	// snapshot of the API configuration panel, and the panel's field list grows
+	// with every provider added — spelling it out here would mean a generated
+	// proto field per setting per profile, and a schema that has to be revised
+	// in step with a list that is already the single source of truth
+	// (`ApiHandlerSettingsKeys`). See `@shared/api-config-snapshot`.
+	/** JSON `ApiConfigurationProfile[]`. */
+	apiConfigurationProfiles: { default: "" as string },
+	/** Name of the profile currently loaded, or "" when the panel is unsaved. */
+	activeApiConfigurationProfile: { default: "" as string },
+	/** JSON `ApiConfigurationSnapshot` for the vision model. */
+	visionModeApiConfiguration: { default: "" as string },
+	/** JSON `ApiConfigurationSnapshot` for delegated agents. */
+	agentsModeApiConfiguration: { default: "" as string },
 	enableCheckpointsSetting: { default: true as boolean },
 	shellIntegrationTimeout: { default: 4000 as number },
 	// 0 means "unset": the SDK's own DEFAULT_MAX_TOOL_RESULT_CHARS applies.
 	maxToolResultChars: { default: 0 as number },
 	defaultTerminalProfile: { default: "default" as string },
 	hooksEnabled: { default: true as boolean },
-	yoloModeToggled: { default: false as boolean },
-	autoApproveAllToggled: { default: false as boolean },
 	useAutoCondense: { default: true as boolean },
+	/**
+	 * Replaces the built-in instruction given to the compaction summarizer.
+	 *
+	 * Empty means the default. What a summary has to carry depends on the work
+	 * and on the model writing it, and the summary is all that survives the turns
+	 * it replaces, so this is worth being able to tune without a rebuild.
+	 */
+	compactionPrompt: { default: "" as string },
+	thinkingCompactionEnabled: { default: true as boolean },
+	thinkingCompactionPrompt: { default: "" as string },
+	/**
+	 * The condenser that replaces a turn's abandoned reasoning with a note of
+	 * what it settled, when that reasoning ran out of thinking budget.
+	 *
+	 * On by default, and only where a budget is known — without one there is
+	 * nothing to detect. The prompt is worth tuning per model for the same
+	 * reason the compaction ones are: the note is all that survives the
+	 * reasoning it replaces.
+	 */
+	cappedThinkingEnabled: { default: true as boolean },
+	// Off by default: for anyone not chasing a slow local model the timing
+	// panel is a row of numbers under every request that answers a question
+	// they never asked.
+	showRequestTimings: { default: false as boolean },
+	cappedThinkingPrompt: { default: "" as string },
 	subagentsEnabled: { default: false as boolean },
 	worktreesEnabled: { default: false as boolean },
 	preferredLanguage: { default: "English" as string },
 	mode: { default: "act" as Mode },
 	focusChainSettings: { default: DEFAULT_FOCUS_CHAIN_SETTINGS as FocusChainSettings },
+	editVerificationSettings: { default: DEFAULT_EDIT_VERIFICATION_SETTINGS as EditVerificationSettings },
+	atomicProtocolSettings: { default: DEFAULT_ATOMIC_PROTOCOL_SETTINGS as AtomicProtocolSettings },
 	backgroundEditEnabled: { default: false as boolean },
 	optOutOfRemoteConfig: { default: false as boolean },
 	showFeatureTips: { default: false as boolean },
@@ -357,6 +410,10 @@ const SECRETS_KEYS = [
 	"ocaApiKey",
 	"ocaRefreshToken",
 	"mcpOAuthSecrets",
+	// QA credentials, as a JSON array of {name, value}. A secret rather than a
+	// setting because the settings snapshot travels to the webview as one
+	// `state_json` string, and these must never be in it.
+	"qaCredentials",
 	"openai-codex-oauth-credentials", // JSON blob containing OAuth tokens for OpenAI Codex (ChatGPT subscription)
 	"wandbApiKey",
 ] as const
@@ -390,6 +447,17 @@ export type RemoteConfigFields = GlobalStateAndSettings & RemoteConfigExtra
 // ============================================================================
 // TYPE ALIASES
 // ============================================================================
+
+/**
+ * Secrets that are not part of any provider's configuration.
+ *
+ * `ApiHandlerSettings` is `ApiHandlerOptionSettings & Secrets`, and the API
+ * configuration is sent to the webview inside `state_json`. So a key added here
+ * for storage alone would travel out with it — which for a QA credential is the
+ * exact leak the feature exists to prevent. These are stored the same way and
+ * left out of the API configuration, because they are not one.
+ */
+export const NonApiHandlerSecretKeys = new Set<string>(["qaCredentials"])
 
 export type Secrets = { [K in (typeof SecretKeys)[number]]: string | undefined }
 export type LocalState = { [K in (typeof LocalStateKeys)[number]]: ClineRulesToggles }

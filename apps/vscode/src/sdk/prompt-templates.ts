@@ -1,12 +1,11 @@
 import {
-	getBuiltinPromptTemplates,
-	loadPromptTemplates,
+	describeResolvedPromptTemplate,
 	PROMPT_TEMPLATES_DIRECTORY_NAME,
 	type PromptTemplateFileWarnings,
 	type PromptTemplateLoadError,
-	resolvePromptTemplateDirectories,
+	resolveSessionPromptTemplateFrom,
 } from "@cline/core"
-import { type RenderedPromptTemplate, renderPromptTemplate } from "@cline/shared"
+import type { RenderedPromptTemplate } from "@cline/shared"
 import { Logger } from "@shared/services/Logger"
 import { resolveDataDirFromEnv } from "@shared/storage/storage-context"
 import * as path from "path"
@@ -81,19 +80,17 @@ export async function resolveSessionPromptTemplate(
 ): Promise<ResolvedSessionPromptTemplate> {
 	const family = await resolveFamily(options)
 
-	const { templates, errors, warnings } = loadPromptTemplates(
-		resolvePromptTemplateDirectories({
-			globalDir: resolveGlobalTemplateDirectory(),
-			workspaceDir: options.workspaceRoot ? resolveWorkspaceTemplateDirectory(options.workspaceRoot) : undefined,
-		}),
-		{ knownToolNames: options.knownToolNames },
-	)
-
-	// Builtins first so a user's template of the same name shadows one.
-	const rendered = renderPromptTemplate([...getBuiltinPromptTemplates(), ...templates], {
+	// The directories, the matching and the merge over `default.md` live in
+	// core, so this host and the CLI resolve the same template from the same
+	// rules. They did not: the CLI resolved none at all, and a local model read
+	// a different prompt depending on which host started it.
+	const { rendered, errors, warnings } = resolveSessionPromptTemplateFrom({
 		providerId: options.providerId,
 		modelId: options.modelId,
 		family,
+		globalDir: resolveGlobalTemplateDirectory(),
+		workspaceDir: options.workspaceRoot ? resolveWorkspaceTemplateDirectory(options.workspaceRoot) : undefined,
+		knownToolNames: options.knownToolNames,
 	})
 
 	for (const error of errors) {
@@ -104,12 +101,7 @@ export async function resolveSessionPromptTemplate(
 			Logger.log(`[PromptTemplates] ${file.fileName} (${warning.section}): ${warning.message}`)
 		}
 	}
-	if (rendered) {
-		Logger.log(
-			`[PromptTemplates] ${options.modelId}${family ? ` (${family})` : ""} → ${rendered.name}` +
-				`${rendered.overlaid ? " over default" : ""}`,
-		)
-	}
+	Logger.log(describeResolvedPromptTemplate({ modelId: options.modelId, family }, rendered))
 
 	return { rendered, family, errors, warnings }
 }

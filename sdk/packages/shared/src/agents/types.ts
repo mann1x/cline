@@ -12,9 +12,13 @@
 
 import { z } from "zod";
 import type {
+	AgentImageToDescribe,
 	AgentRuntimeHooks,
 	AgentTool,
+	DiscardedTurnCondensation,
+	DiscardedTurnInput,
 	ProviderErrorClass,
+	RequestTimings,
 } from "../agent";
 import type { ExtensionContext } from "../extensions/context";
 import type {
@@ -26,9 +30,11 @@ import type {
 	PluginSetupContext,
 } from "../extensions/contribution-registry";
 import type { HookControl } from "../hooks/contracts";
+import type { GeneratedMedia } from "../llms/media";
 import type { Message, MessageWithMetadata } from "../llms/messages";
 import type { ModelInfo } from "../llms/model-info";
 import { ModelInfoSchema } from "../llms/model-info";
+import type { ModelTool } from "../llms/model-tools";
 import {
 	type ReasoningEffort,
 	ReasoningEffortSchema,
@@ -71,7 +77,7 @@ export type AgentEvent =
 	| AgentDoneEvent
 	| AgentErrorEvent;
 
-export type AgentContentType = "text" | "reasoning" | "tool";
+export type AgentContentType = "text" | "reasoning" | "media" | "tool";
 
 export interface AgentEventMetadata {
 	/** Current ID */
@@ -87,7 +93,15 @@ export interface AgentContentStartEvent extends AgentEventMetadata {
 	contentType: AgentContentType;
 	/** The text chunk received from the model */
 	text?: string;
-	/** Accumulated text so far in this turn */
+	/**
+	 * Accumulated text so far in this turn.
+	 *
+	 * @deprecated No longer sent. Repeating the whole block on every delta made
+	 * the event stream quadratic in the length of the block. Consumers that
+	 * render a growing message accumulate `text` themselves, as the reasoning
+	 * channel always has. The field stays declared so a client can still read a
+	 * stream produced by an older core.
+	 */
 	accumulated?: string;
 	/** The reasoning/thinking text from the model */
 	reasoning?: string;
@@ -99,6 +113,8 @@ export interface AgentContentStartEvent extends AgentEventMetadata {
 	toolCallId?: string;
 	/** Input being passed to the tool */
 	input?: unknown;
+	/** Where a model tool is executed; absent for ordinary local tools. */
+	execution?: "client" | "provider";
 }
 
 export interface AgentContentUpdateEvent extends AgentEventMetadata {
@@ -119,6 +135,8 @@ export interface AgentContentEndEvent extends AgentEventMetadata {
 	text?: string;
 	/** Final reasoning/thinking text generated for this turn */
 	reasoning?: string;
+	/** Generated media returned by the model. */
+	media?: GeneratedMedia;
 	/** Name of the tool that completed */
 	toolName?: string;
 	/** Unique identifier for this tool call */
@@ -129,6 +147,8 @@ export interface AgentContentEndEvent extends AgentEventMetadata {
 	error?: string;
 	/** Time taken in milliseconds for tool content */
 	durationMs?: number;
+	/** Where a model tool is executed; absent for ordinary local tools. */
+	execution?: "client" | "provider";
 }
 
 export interface AgentIterationStartEvent extends AgentEventMetadata {
@@ -159,6 +179,10 @@ export interface AgentUsageEvent extends AgentEventMetadata {
 	cacheWriteTokens?: number;
 	/** Cost for this turn */
 	cost?: number;
+	/** Hidden reasoning tokens for this turn, where the provider reports them. */
+	reasoningTokens?: number;
+	/** What this turn's request cost in time. See `RequestTimings`. */
+	timings?: RequestTimings;
 
 	/** Accumulated totals */
 	totalInputTokens: number;
@@ -215,6 +239,16 @@ export interface ConsecutiveMistakeLimitContext {
 	maxConsecutiveMistakes: number;
 	reason: "api_error" | "invalid_tool_call" | "tool_execution_failed";
 	details?: string;
+	/**
+	 * The stop was demanded outright -- a repeated-call loop -- rather than
+	 * reached by counting up to the limit.
+	 *
+	 * Hosts word the two differently. `consecutiveMistakes` carries the real
+	 * count when this is set, and it is usually well below the limit, so
+	 * reporting it as "ran into N errors in a row" describes something that did
+	 * not happen.
+	 */
+	forced?: boolean;
 }
 
 export type ConsecutiveMistakeLimitDecision =
@@ -268,6 +302,52 @@ export interface AgentExecutionConfig {
 	 * The CLI enables this by default with `{ softThreshold: 3, hardThreshold: 5 }`.
 	 */
 	loopDetection?: false | Partial<LoopDetectionConfig>;
+	/**
+	 * Repetition guard on the model's reasoning channel. A model that collapses
+	 * into a repetition cycle mid-thought keeps generating until something stops
+	 * it, and a provider with no thinking budget (Ollama Cloud, today) leaves
+	 * nothing between a degenerate draw and the context window.
+	 *
+	 * Unlike `loopDetection`, this is **on by default**: it guards spend, and a
+	 * guard nobody enabled protects nobody. Set to `false` to turn it off, or
+	 * pass a partial config to retune it.
+	 */
+	reasoningLoopDetection?: false | Partial<ReasoningLoopDetectionConfig>;
+}
+
+/**
+ * Thresholds for the reasoning-channel repetition guard.
+ *
+ * The defaults live with the detector (`ReasoningLoopGuard` in `@cline/agents`)
+ * and were set against 1,556 recorded reasoning blocks plus 196k characters of
+ * reasoning from a run that completed its task successfully. Length is never
+ * the signal -- healthy agentic reasoning runs to six figures per turn -- so
+ * every threshold here describes periodicity, not volume.
+ */
+export interface ReasoningLoopDetectionConfig {
+	/** Never judge a reasoning block shorter than this many characters. */
+	minChars: number;
+	/** Completed lines kept for the uniqueness and period tests. */
+	window: number;
+	/** Longest cycle looked for, in lines. */
+	maxPeriod: number;
+	/** How many times a period must repeat before it counts as a cycle. */
+	minCycles: number;
+	/** A full window carrying at most this many distinct lines is degenerate. */
+	maxUniqueInWindow: number;
+	/** A single unbroken line this long is checked for a repeating phrase. */
+	minLineChars: number;
+	/** Longest repeating phrase looked for inside one unbroken line. */
+	phraseMaxPeriod: number;
+	/** How many times a phrase must repeat before it counts as a cycle. */
+	phraseMinCycles: number;
+	/**
+	 * How many turns in a row may be cut for looping before the run is ended.
+	 * Cutting the request stops one degenerate draw; a model that redraws the
+	 * same collapse every turn is not making progress, and something has to
+	 * bound that too.
+	 */
+	maxConsecutiveTrips: number;
 }
 
 // =============================================================================
@@ -637,6 +717,14 @@ export interface AgentResult {
 	iterations: number;
 	/** Why the agent stopped */
 	finishReason: AgentFinishReason;
+	/**
+	 * What aborted the run, when `finishReason` is `aborted` and something said.
+	 *
+	 * A host cannot work this out for itself: the causes it can see locally are
+	 * a timeout and its own abort call, so everything else came out as "another
+	 * client" — including a stop the run itself asked for.
+	 */
+	abortReason?: string;
 	/** Model information used */
 	model: {
 		id: string;
@@ -676,6 +764,8 @@ export const AgentResultSchema = z.object({
  * Configuration for creating an Agent
  */
 export interface AgentConfig {
+	/** Stable end-user identity used for provider and observability metadata. */
+	distinctId?: string;
 	/**
 	 * Core/hub runtime session identifier.
 	 *
@@ -725,6 +815,8 @@ export interface AgentConfig {
 	systemPrompt: string;
 	/** Tools available to the agent */
 	tools: AgentTool[];
+	/** Provider-executed tools enabled for the selected model. */
+	modelTools?: ModelTool[];
 	/**
 	 * Maximum number of loop iterations
 	 * If undefined, no iteration cap is enforced.
@@ -854,6 +946,25 @@ export interface AgentConfig {
 		| AgentPrepareTurnResult
 		| undefined;
 	/**
+	 * Optional last look at reasoning that is about to be discarded.
+	 *
+	 * A turn cut off at the output cap with no tool call is thrown away whole --
+	 * the reply was never finished, and resending it would spend the same budget
+	 * on output already abandoned. But the reasoning inside it is the only turn
+	 * that reliably ends at the model's thinking budget, and it is exactly the
+	 * work the retry is about to redo from nothing.
+	 *
+	 * Called with that reasoning before it is dropped. Whatever comes back is
+	 * given to the model as a note it left itself; the discarded message still
+	 * never re-enters the transcript. Returning nothing discards as before.
+	 */
+	condenseDiscardedReasoning?: (
+		input: DiscardedTurnInput,
+	) =>
+		| Promise<DiscardedTurnCondensation | undefined>
+		| DiscardedTurnCondensation
+		| undefined;
+	/**
 	 * Optional Telemetry service for emitting structured events about agent execution to configured telemetry backends.
 	 */
 	telemetry?: ITelemetryService;
@@ -882,6 +993,34 @@ export interface AgentConfig {
 		requireCompletionTool?: boolean;
 		completionGuard?: () => string | undefined;
 		/**
+		 * Runs at every attempt to end the run — a completion tool, or a turn with
+		 * nothing left to call — and may do work before it answers. Returning a
+		 * string keeps the run going with that string put to the model, exactly
+		 * like `completionGuard`.
+		 *
+		 * Two differences, and both are why it exists. It may await, which is what
+		 * a guard that decides by running a command needs. And it fires on the
+		 * completion-tool path as well: a model that ends a run by calling a tool
+		 * has still ended it, and a guard watching only the silent path never sees
+		 * that happen.
+		 *
+		 * Whatever a host puts here owns its own bound — the runtime keeps going
+		 * for as long as this keeps returning a string.
+		 *
+		 * `text` is what the model said as it ended: its closing message, or the
+		 * text the completion tool carried. A guard that has to weigh the model's
+		 * own account of its work cannot get that from anywhere else.
+		 *
+		 * `forced` says the run is ending because the no-tool-call nudges ran
+		 * out, not because the model chose to stop. Silence from a model that
+		 * was cut off mid-work is not an account of its work, and a guard that
+		 * cannot tell the two apart reads it as one.
+		 */
+		onCompletionAttempt?: (context: {
+			text?: string;
+			forced?: boolean;
+		}) => Promise<string | undefined>;
+		/**
 		 * How many consecutive turns that produce no tool calls may be nudged to
 		 * continue before the run is allowed to end. Zero (the default) keeps the
 		 * standard contract: a turn with no tool calls completes the run.
@@ -892,6 +1031,18 @@ export interface AgentConfig {
 		 * the bound is on consecutive silence rather than on the run.
 		 */
 		maxNoToolCallNudges?: number;
+		/**
+		 * How many consecutive turns cut off at the per-turn output cap are
+		 * retried before the run ends. Defaults to 2; zero restores the older
+		 * behaviour where a truncated turn ends the run.
+		 *
+		 * A turn that hits the cap with no tool calls in it produced nothing the
+		 * run can use, and the model cannot see that it was cut off. Retrying
+		 * discards the truncated reply — it never enters the history — and tells
+		 * the model what happened, so the retry differs instead of reproducing
+		 * the same overlong output. The counter resets on any turn that finishes.
+		 */
+		maxTruncatedTurnRetries?: number;
 	};
 
 	// -------------------------------------------------------------------------
@@ -905,6 +1056,21 @@ export interface AgentConfig {
 	 * call. This allows the host to feed user input into a running loop
 	 * without waiting for the current run to finish.
 	 */
+	/** See `AgentConfig.onImageInputUnsupported`. */
+	onImageInputUnsupported?: () => void;
+	/** See `AgentConfig.describeImages`. */
+	describeImages?: (
+		images: readonly AgentImageToDescribe[],
+	) => Promise<readonly (string | undefined)[]>;
+	/** See `AgentConfig.alwaysDescribeImages`. */
+	alwaysDescribeImages?: boolean;
+	/**
+	 * Whether the primary model can read an image itself.
+	 *
+	 * Only consulted when a description could not be produced: it decides
+	 * between leaving the image and replacing it with a note.
+	 */
+	modelSupportsImages?: boolean;
 	consumePendingUserMessage?: () => string | undefined;
 
 	// -------------------------------------------------------------------------
@@ -918,6 +1084,7 @@ export interface AgentConfig {
 }
 
 export const AgentConfigSchema = z.object({
+	distinctId: z.string().optional(),
 	sessionId: z.string().optional(),
 	// Provider Settings
 	providerId: z.string(),
@@ -932,6 +1099,7 @@ export const AgentConfigSchema = z.object({
 	// Agent Behavior
 	systemPrompt: z.string(),
 	tools: z.array(z.custom<AgentTool>()),
+	modelTools: z.array(z.custom<ModelTool>()).optional(),
 	maxIterations: z.number().positive().optional(),
 	maxParallelToolCalls: z.number().int().positive().default(8),
 	maxTokensPerTurn: z.number().positive().optional(),
@@ -955,6 +1123,22 @@ export const AgentConfigSchema = z.object({
 					z.object({
 						softThreshold: z.number().int().positive().optional(),
 						hardThreshold: z.number().int().positive().optional(),
+					}),
+				])
+				.optional(),
+			reasoningLoopDetection: z
+				.union([
+					z.literal(false),
+					z.object({
+						minChars: z.number().int().positive().optional(),
+						window: z.number().int().positive().optional(),
+						maxPeriod: z.number().int().positive().optional(),
+						minCycles: z.number().int().positive().optional(),
+						maxUniqueInWindow: z.number().int().positive().optional(),
+						minLineChars: z.number().int().positive().optional(),
+						phraseMaxPeriod: z.number().int().positive().optional(),
+						phraseMinCycles: z.number().int().positive().optional(),
+						maxConsecutiveTrips: z.number().int().positive().optional(),
 					}),
 				])
 				.optional(),

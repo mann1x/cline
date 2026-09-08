@@ -1,5 +1,5 @@
 /**
- * Adapter from the new `AgentRuntimeEvent` union (13 variants, defined
+ * Adapter from the new `AgentRuntimeEvent` union (defined
  * in `@cline/shared/src/agent.ts`) to the legacy `AgentEvent` union
  * (9 top-level types, defined in
  * `@cline/shared/src/agents/types.ts`) consumed by today's
@@ -28,6 +28,8 @@
  *                        accumulated } (per delta)
  *   reasoning deltas → content_start { contentType:"reasoning",
  *                        reasoning, redacted } (per delta)
+ *   assistant-media   → content_end { contentType:"media", media }
+ *                        at the original stream position
  *   assistant-message → one content_end { contentType:"text", text }
  *                        if any text parts; one
  *                        content_end { contentType:"reasoning", reasoning }
@@ -60,6 +62,7 @@ import type {
 	AgentToolResultPart,
 	AgentUsage,
 	LegacyAgentUsage,
+	RequestTimings,
 } from "@cline/shared";
 
 // =============================================================================
@@ -198,12 +201,17 @@ export class RuntimeEventAdapter {
 					},
 				];
 			case "assistant-text-delta":
+				// The delta only. Carrying the whole block so far on every delta
+				// makes the event stream quadratic in the length of the block --
+				// one 45k-character answer costs 830 MB of transcript, against
+				// 12 MB for the same content sent as deltas. Consumers that render
+				// a growing message accumulate on their side, the way the reasoning
+				// channel below has always done.
 				return [
 					{
 						type: "content_start",
 						contentType: "text",
 						text: event.text,
-						accumulated: event.accumulatedText,
 					},
 				];
 			case "assistant-reasoning-delta":
@@ -213,6 +221,14 @@ export class RuntimeEventAdapter {
 						contentType: "reasoning",
 						reasoning: event.text,
 						redacted: event.redacted === true,
+					},
+				];
+			case "assistant-media":
+				return [
+					{
+						type: "content_end",
+						contentType: "media",
+						media: event.media,
 					},
 				];
 			case "assistant-message":
@@ -232,7 +248,7 @@ export class RuntimeEventAdapter {
 			case "tool-finished":
 				return this.translateToolFinished(event);
 			case "usage-updated":
-				return this.translateUsage(event.usage);
+				return this.translateUsage(event.usage, event.timings);
 			case "status-notice":
 				return [
 					{
@@ -294,7 +310,12 @@ export class RuntimeEventAdapter {
 	}
 
 	private translateToolStarted(event: {
-		toolCall: { toolCallId: string; toolName: string; input: unknown };
+		toolCall: {
+			toolCallId: string;
+			toolName: string;
+			input: unknown;
+			execution?: "client" | "provider";
+		};
 	}): AgentEvent[] {
 		this.toolStartedAt.set(event.toolCall.toolCallId, Date.now());
 		return [
@@ -304,12 +325,17 @@ export class RuntimeEventAdapter {
 				toolName: event.toolCall.toolName,
 				toolCallId: event.toolCall.toolCallId,
 				input: event.toolCall.input,
+				execution: event.toolCall.execution,
 			},
 		];
 	}
 
 	private translateToolFinished(event: {
-		toolCall: { toolCallId: string; toolName: string };
+		toolCall: {
+			toolCallId: string;
+			toolName: string;
+			execution?: "client" | "provider";
+		};
 		message: AgentMessage;
 	}): AgentEvent[] {
 		const startedAt = this.toolStartedAt.get(event.toolCall.toolCallId);
@@ -328,17 +354,24 @@ export class RuntimeEventAdapter {
 				output,
 				error,
 				durationMs,
+				execution: event.toolCall.execution,
 			},
 		];
 	}
 
-	private translateUsage(next: AgentUsage): AgentEvent[] {
+	private translateUsage(
+		next: AgentUsage,
+		timings?: RequestTimings,
+	): AgentEvent[] {
 		const deltaInput = next.inputTokens - this.lastUsage.inputTokens;
 		const deltaOutput = next.outputTokens - this.lastUsage.outputTokens;
 		const deltaCacheRead =
 			next.cacheReadTokens - this.lastUsage.cacheReadTokens;
 		const deltaCacheWrite =
 			next.cacheWriteTokens - this.lastUsage.cacheWriteTokens;
+		const deltaReasoning =
+			(next.reasoningTokenCount ?? 0) -
+			(this.lastUsage.reasoningTokenCount ?? 0);
 		const prevCost = this.lastUsage.totalCost ?? 0;
 		const nextCost = next.totalCost ?? 0;
 		const deltaCost = nextCost - prevCost;
@@ -347,6 +380,7 @@ export class RuntimeEventAdapter {
 			outputTokens: next.outputTokens,
 			cacheReadTokens: next.cacheReadTokens,
 			cacheWriteTokens: next.cacheWriteTokens,
+			reasoningTokenCount: next.reasoningTokenCount,
 			totalCost: next.totalCost,
 		};
 		return [
@@ -359,6 +393,15 @@ export class RuntimeEventAdapter {
 				cacheWriteTokens:
 					deltaCacheWrite === 0 ? undefined : Math.max(0, deltaCacheWrite),
 				cost: deltaCost === 0 ? undefined : deltaCost,
+				// Reported where the provider reports it -- OpenAI's
+				// `reasoning_tokens`, Anthropic's extended thinking, Ollama on a
+				// thinking model. It has been extracted this far for a while and
+				// then dropped here, which is why a thinking model's output
+				// token count never explained itself.
+				reasoningTokens:
+					deltaReasoning === 0 ? undefined : Math.max(0, deltaReasoning),
+				// Not a delta: this update carries exactly one request's timings.
+				...(timings ? { timings } : {}),
 				totalInputTokens: next.inputTokens,
 				totalOutputTokens: next.outputTokens,
 				totalCacheReadTokens:

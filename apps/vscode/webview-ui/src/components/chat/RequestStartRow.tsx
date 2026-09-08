@@ -155,13 +155,19 @@ export const RequestStartRow: React.FC<RequestStartRowProps> = ({
 
 	const apiReqState: ApiReqState = hasError ? "error" : hasCost ? "final" : hasReasoning ? "thinking" : "pre"
 
-	// While reasoning is streaming, keep the Brain ThinkingBlock exactly as-is.
-	// Once response content starts (any text/tool/command), collapse into a compact
-	// "🧠 Thinking" row that can be expanded to show the reasoning only.
-	const showStreamingThinking = useMemo(
-		() => hasReasoning && !hasError && !cost && !responseStarted,
-		[hasReasoning, hasError, cost, responseStarted],
-	)
+	// While reasoning is streaming, the body is shown whether or not the user
+	// expanded it; it collapses to a row they can open again once the turn ends.
+	//
+	// Deliberately not keyed on `responseStarted`. A tool call *is* response
+	// content, so any turn containing one flipped that true and hid every
+	// thinking block that came after it — reported as "whenever there's a
+	// codebase search the thinking doesn't stream anymore, it surfaces only
+	// after the edit". Reasoning that arrives mid-turn is exactly the reasoning
+	// worth watching. `cost` is the honest end-of-turn signal. `ThinkingRow` renders its body only when expanded, so without
+	// this a whole thinking phase shows nothing but the shimmering title and the
+	// reasoning only becomes visible after the turn ends — which is the bug this
+	// row was changed to fix in the first place.
+	const showStreamingThinking = useMemo(() => hasReasoning && !hasError && !cost, [hasReasoning, hasError, cost])
 
 	// Check if this api_req will be absorbed into a tool group (reasoning will disappear)
 	const willBeAbsorbed = useMemo(() => {
@@ -231,26 +237,27 @@ export const RequestStartRow: React.FC<RequestStartRowProps> = ({
 					</div>
 				</div>
 			)}
-			{reasoningContent &&
-				(!hasCost ? (
-					// Still streaming - show "Thinking..." text with shimmer
-					<div className="ml-1 pl-0 mb-1 -mt-1.25 pt-1">
-						<div className="inline-flex justify-baseline gap-0.5 text-left select-none px-0 w-full">
-							<span className="animate-shimmer bg-linear-90 from-foreground to-description bg-[length:200%_100%] bg-clip-text text-transparent text-[13px] leading-none">
-								Thinking...
-							</span>
-						</div>
-					</div>
-				) : (
-					// Complete - always show collapsible thinking section
-					<ThinkingRow
-						isExpanded={isExpanded}
-						isVisible={true}
-						onToggle={handleToggle}
-						reasoningContent={reasoningContent}
-						showTitle={true}
-					/>
-				))}
+			{/*
+			 * One row for both states. While the request was in flight this
+			 * rendered a bare "Thinking..." shimmer and dropped
+			 * `reasoningContent` on the floor: the reasoning was arriving and
+			 * being thrown away, so a long thinking phase showed one word and
+			 * nothing else, and the content only became readable once the turn
+			 * had finished. `ThinkingRow` already handles streaming — it
+			 * shimmers its title on `isStreaming` and follows the tail as
+			 * content grows — so this case needed the component, not a
+			 * placeholder standing in for it.
+			 */}
+			{reasoningContent && (
+				<ThinkingRow
+					isExpanded={isExpanded || showStreamingThinking}
+					isStreaming={!hasCost}
+					isVisible={true}
+					onToggle={handleToggle}
+					reasoningContent={reasoningContent}
+					showTitle={true}
+				/>
+			)}
 
 			{apiReqState === "error" && (
 				<ErrorRow

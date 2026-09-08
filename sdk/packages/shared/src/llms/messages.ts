@@ -6,6 +6,9 @@
  * converted to any provider's native format.
  */
 
+import type { RequestTimings } from "../agent";
+import type { GeneratedMedia } from "./media";
+
 /**
  * Message roles
  */
@@ -41,6 +44,12 @@ export interface ImageContent {
 	data: string;
 	/** MIME type (e.g., "image/png", "image/jpeg") */
 	mediaType: string;
+}
+
+/** Model-generated binary media preserved independently of textual files. */
+export interface MediaContent {
+	type: "media";
+	media: GeneratedMedia;
 }
 
 /**
@@ -109,6 +118,7 @@ export interface RedactedThinkingContent {
 export type ContentBlock =
 	| TextContent
 	| ImageContent
+	| MediaContent
 	| ToolUseContent
 	| ToolResultContent
 	| ThinkingContent
@@ -150,6 +160,10 @@ export interface MessageWithMetadata extends Message {
 		cacheReadTokens?: number;
 		cacheWriteTokens?: number;
 		cost?: number;
+		/** Hidden reasoning tokens, where the provider reports them. */
+		reasoningTokenCount?: number;
+		/** What the request that produced this message cost in time. */
+		timings?: RequestTimings;
 	};
 	/** Timestamp of when the message was created */
 	ts?: number;

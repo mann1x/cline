@@ -1,7 +1,16 @@
+import type {
+	BackgroundDelegationView,
+	ConfiguredAgentDelegationResult,
+	ConfiguredAgentSummary,
+} from "@cline/core";
 import {
 	type AgentEvent,
 	type AgentHooks,
 	type CheckpointEntry,
+	type CoreSettingsListInput,
+	type CoreSettingsMutationResult,
+	type CoreSettingsSnapshot,
+	type CoreSettingsToggleInput,
 	createSessionCompactionState,
 	isSessionNotFoundError,
 	type PendingPromptMutationResult,
@@ -15,7 +24,7 @@ import {
 	type ToolApprovalResult,
 	type UserInstructionConfigService,
 } from "@cline/core";
-import type { Message } from "@cline/shared";
+import type { MessageWithMetadata } from "@cline/shared";
 import { createCliCore } from "../../session/session";
 import { submitAndExitInTerminal } from "../../utils/approval";
 import type {
@@ -56,11 +65,11 @@ type AskQuestionRef = {
 	current: ((question: string, options: string[]) => Promise<string>) | null;
 };
 type CurrentMessagesRead =
-	| { messages: Message[]; status: "read" }
-	| { messages: Message[]; status: "recovered" }
-	| { messages: Message[]; status: "stale" };
+	| { messages: MessageWithMetadata[]; status: "read" }
+	| { messages: MessageWithMetadata[]; status: "recovered" }
+	| { messages: MessageWithMetadata[]; status: "stale" };
 type MissingSessionRecovery = {
-	messages: Message[];
+	messages: MessageWithMetadata[];
 };
 type ToolPolicyResolver = (
 	toolName: string,
@@ -210,7 +219,7 @@ export function createInteractiveSessionRuntime(input: {
 	};
 
 	const startFreshSession = async (
-		initial: Message[] = [],
+		initial: MessageWithMetadata[] = [],
 		sessionMetadata?: Record<string, unknown>,
 		initialCompactionState?: SessionCompactionState,
 		// Restarting an old session associate with this ID,
@@ -243,7 +252,7 @@ export function createInteractiveSessionRuntime(input: {
 
 	const startResumedSession = async (
 		resumeId: string,
-		initial: Message[] | undefined,
+		initial: MessageWithMetadata[] | undefined,
 	): Promise<void> => {
 		const generation = sessionStartGeneration;
 		const manager = await ensureSessionManager();
@@ -297,6 +306,19 @@ export function createInteractiveSessionRuntime(input: {
 			throw error;
 		});
 		return await startupPromise;
+	};
+
+	const listCoreSettings = async (
+		settingsInput: CoreSettingsListInput,
+	): Promise<CoreSettingsSnapshot> => {
+		const manager = await ensureSessionManager();
+		return await manager.settings.list(settingsInput);
+	};
+	const toggleCoreSettings = async (
+		settingsInput: CoreSettingsToggleInput,
+	): Promise<CoreSettingsMutationResult> => {
+		const manager = await ensureSessionManager();
+		return await manager.settings.toggle(settingsInput);
 	};
 
 	const readCurrentMessages = async (): Promise<CurrentMessagesRead> => {
@@ -421,7 +443,7 @@ export function createInteractiveSessionRuntime(input: {
 	};
 
 	const restartWithMessages = async (
-		messages: Message[],
+		messages: MessageWithMetadata[],
 		sessionMetadata?: Record<string, unknown>,
 		initialCompactionState?: SessionCompactionState,
 		options?: { preserveSessionId?: boolean },
@@ -659,7 +681,9 @@ export function createInteractiveSessionRuntime(input: {
 		};
 	};
 
-	const resumeSession = async (sessionId: string): Promise<Message[]> => {
+	const resumeSession = async (
+		sessionId: string,
+	): Promise<MessageWithMetadata[]> => {
 		const manager = await ensureSessionManager();
 		const sessionRecord = await manager.get(sessionId);
 		if (!sessionRecord) {
@@ -672,6 +696,86 @@ export function createInteractiveSessionRuntime(input: {
 		await stopCurrentSession();
 		await startResumedSession(sessionId, messages);
 		return messages;
+	};
+
+	/** The agents this session can hand work to, for the /delegate picker. */
+	const listConfiguredAgents = async (): Promise<ConfiguredAgentSummary[]> => {
+		const manager = sessionManager;
+		if (!manager || !activeSessionId) {
+			return [];
+		}
+		return manager.listConfiguredAgents(activeSessionId);
+	};
+
+	/**
+	 * Hand a task to a configured agent, because the user asked for it.
+	 *
+	 * The lead model is not consulted: it does not choose whether to delegate,
+	 * and it does not get a turn until the agent has reported back. The report
+	 * is appended to the conversation by core, so the next turn sees it.
+	 */
+	const delegateToAgent = async (
+		agentName: string,
+		prompt: string,
+	): Promise<ConfiguredAgentDelegationResult> => {
+		const manager = sessionManager;
+		if (!manager || !activeSessionId) {
+			throw new Error("Start a task before delegating to an agent.");
+		}
+		return manager.delegateToConfiguredAgent({
+			sessionId: activeSessionId,
+			agentName,
+			prompt,
+		});
+	};
+
+	/**
+	 * The same delegation, started beside the turn instead of in place of it.
+	 *
+	 * No wait, and no refusal while a turn is running: that is the difference.
+	 * The report is delivered into the conversation by core when the agent is
+	 * done, as a steer if the lead is still working.
+	 */
+	const delegateToAgentInBackground = async (
+		agentName: string,
+		prompt: string,
+	): Promise<BackgroundDelegationView> => {
+		const manager = sessionManager;
+		if (!manager || !activeSessionId) {
+			throw new Error("Start a task before delegating to an agent.");
+		}
+		return manager.startBackgroundDelegation({
+			sessionId: activeSessionId,
+			agentName,
+			prompt,
+		});
+	};
+
+	/** The background delegations of this session, for the panel. */
+	const listBackgroundDelegations = async (): Promise<
+		BackgroundDelegationView[]
+	> => {
+		const manager = sessionManager;
+		if (!manager || !activeSessionId) {
+			return [];
+		}
+		return manager.listBackgroundDelegations(activeSessionId);
+	};
+
+	/** Pause, resume or stop one of them. */
+	const controlBackgroundDelegation = async (
+		id: string,
+		action: "pause" | "resume" | "stop",
+	): Promise<boolean> => {
+		const manager = sessionManager;
+		if (!manager || !activeSessionId) {
+			return false;
+		}
+		return manager.controlBackgroundDelegation({
+			sessionId: activeSessionId,
+			id,
+			action,
+		});
 	};
 
 	const compactCurrentSession = async (): Promise<{
@@ -754,7 +858,7 @@ export function createInteractiveSessionRuntime(input: {
 
 	const getCheckpointData = async (): Promise<
 		| {
-				messages: Message[];
+				messages: MessageWithMetadata[];
 				checkpointHistory: CheckpointEntry[];
 		  }
 		| undefined
@@ -777,7 +881,9 @@ export function createInteractiveSessionRuntime(input: {
 	const restoreCheckpoint = async (
 		runCount: number,
 		restoreWorkspace: boolean,
-	): Promise<{ newSessionId: string; messages: Message[] } | undefined> => {
+	): Promise<
+		{ newSessionId: string; messages: MessageWithMetadata[] } | undefined
+	> => {
 		const manager = sessionManager;
 		if (!manager || !activeSessionId) {
 			return undefined;
@@ -879,6 +985,8 @@ export function createInteractiveSessionRuntime(input: {
 
 	return {
 		ensureReady,
+		listCoreSettings,
+		toggleCoreSettings,
 		sendCurrentTurn,
 		updatePendingPrompt,
 		getAccumulatedUsage,
@@ -891,6 +999,11 @@ export function createInteractiveSessionRuntime(input: {
 		resumeSession,
 		forkCurrentSession,
 		compactCurrentSession,
+		listConfiguredAgents,
+		delegateToAgent,
+		delegateToAgentInBackground,
+		listBackgroundDelegations,
+		controlBackgroundDelegation,
 		getCheckpointData,
 		restoreCheckpoint,
 		applyMode,

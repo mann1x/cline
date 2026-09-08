@@ -1,6 +1,7 @@
 import type { CoreSessionConfig } from "@cline/core"
 import { type AgentHooks, type AgentTool, createTool } from "@cline/shared"
 import type { StateManager } from "@/core/storage/StateManager"
+import { offerAgentProfileRepair } from "./agent-profile-repair"
 import { buildSessionConfig, composeSessionHooks, type SessionConfigInput } from "./cline-session-factory"
 import { buildAgentHooks, type HookMessageEmitter } from "./hooks-adapter"
 
@@ -26,11 +27,26 @@ export interface SdkSessionConfigBuilderOptions {
 	onConsecutiveMistakeLimitReached?: CoreSessionConfig["onConsecutiveMistakeLimitReached"]
 }
 
+/**
+ * Unlike the CLI interactive runtime, plan-mode sessions do NOT expose a
+ * switch_to_act_mode tool: matching the legacy extension, the model cannot
+ * switch modes itself and must ask the user to flip the Plan/Act toggle. The
+ * plan-mode system prompt (planModeSwitchTool: false in the session factory)
+ * carries the matching instructions.
+ */
 export class SdkSessionConfigBuilder {
 	constructor(private readonly options: SdkSessionConfigBuilderOptions) {}
 
 	async build(input: SessionConfigInput): Promise<Awaited<ReturnType<typeof buildSessionConfig>>> {
 		const config = await buildSessionConfig(input)
+
+		// An agent naming a deleted profile fails on its first call, which is
+		// well into a task. Checked as the session is built so the offer to
+		// repoint it arrives before anything delegates. Deliberately not
+		// awaited: a session must start whether or not the agent directory can
+		// be read, and the prompt waits on the user.
+		void offerAgentProfileRepair(this.options.stateManager.getGlobalSettingsKey("apiConfigurationProfiles"))
+
 		if (this.options.onConsecutiveMistakeLimitReached) {
 			config.onConsecutiveMistakeLimitReached = this.options.onConsecutiveMistakeLimitReached
 		}
@@ -41,7 +57,7 @@ export class SdkSessionConfigBuilder {
 		// directly: a direct assignment silently dropped every other layer,
 		// which is how the editor-diagnostics hooks ran in the unit tests and
 		// never once in a real session.
-		const baseHooks = buildAgentHooks(this.options.stateManager, this.options.emitHookMessage)
+		const baseHooks = buildAgentHooks(this.options.stateManager, this.options.emitHookMessage, input.cwd)
 		const fileHooks: AgentHooks = {
 			...baseHooks,
 			beforeModel: async (ctx) => {

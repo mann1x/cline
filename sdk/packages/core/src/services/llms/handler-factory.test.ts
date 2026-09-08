@@ -13,12 +13,18 @@ const gatewayMock = vi.hoisted(() => {
 	};
 });
 
-vi.mock("@cline/llms", () => ({
+vi.mock("@cline/llms", async (importOriginal) => ({
 	createGateway: gatewayMock.createGateway,
 	MODEL_COLLECTIONS_BY_PROVIDER_ID: {},
 	hasRegisteredHandler: gatewayMock.hasRegisteredHandler,
 	createHandlerAsync: gatewayMock.createHandlerAsync,
 	normalizeProviderId: (id: string) => id,
+	// Capability translation is the behaviour under test in the gateway model
+	// assertions below, so use the real translator rather than a stub that
+	// would re-implement (and could disagree with) it.
+	toGatewayModelCapabilities: (
+		await importOriginal<typeof import("@cline/llms")>()
+	).toGatewayModelCapabilities,
 }));
 
 describe("createAgentModelFromConfig", () => {
@@ -125,6 +131,67 @@ describe("createAgentModelFromConfig", () => {
 		);
 	});
 
+	// Measured on a live box: temperature 0.6 and frequencyPenalty 0.3 sat in
+	// providers.json for days and never reached Ollama. Vendors read their
+	// settings out of the gateway's `options` bag, and nothing lifted the
+	// configured sampler into it — so every request carried exactly num_ctx and
+	// num_predict (which arrive by other routes) and looked well-formed while
+	// the model ran on its Modelfile defaults.
+	it("lifts the configured sampler into the gateway options bag", async () => {
+		const { createAgentModelFromConfig } = await import("./handler-factory");
+
+		createAgentModelFromConfig(
+			{
+				providerId: "ollama",
+				modelId: "v7-coder_tb:vision-iq4_nl",
+				tools: [],
+				providerConfig: {
+					providerId: "ollama",
+					modelId: "v7-coder_tb:vision-iq4_nl",
+					sampling: { temperature: 0.6, frequencyPenalty: 0.3 },
+				},
+			} as never,
+			undefined,
+		);
+
+		expect(gatewayMock.createGateway).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				providerConfigs: [
+					expect.objectContaining({
+						options: expect.objectContaining({
+							sampling: { temperature: 0.6, frequencyPenalty: 0.3 },
+						}),
+					}),
+				],
+			}),
+		);
+	});
+
+	it("adds no sampler key when none is configured", async () => {
+		const { createAgentModelFromConfig } = await import("./handler-factory");
+
+		createAgentModelFromConfig(
+			{
+				providerId: "ollama",
+				modelId: "v7-coder_tb:vision-iq4_nl",
+				tools: [],
+				providerConfig: {
+					providerId: "ollama",
+					modelId: "v7-coder_tb:vision-iq4_nl",
+				},
+			} as never,
+			undefined,
+		);
+
+		const calls = gatewayMock.createGateway.mock.calls as unknown as Array<
+			[{ providerConfigs: Array<{ options?: Record<string, unknown> }> }]
+		>;
+		const call = calls[calls.length - 1][0];
+		expect(call.providerConfigs[0].options ?? {}).not.toHaveProperty(
+			"sampling",
+		);
+	});
+
 	it("preserves model capabilities and metadata when configuring gateway models", async () => {
 		const { createAgentModelFromConfig } = await import("./handler-factory");
 
@@ -142,6 +209,10 @@ describe("createAgentModelFromConfig", () => {
 						contextWindow: 1_000_000,
 						maxInputTokens: 1_000_000,
 						maxTokens: 65_536,
+						modalities: {
+							input: ["text", "image"],
+							output: ["text", "image"],
+						},
 						capabilities: [
 							"tools",
 							"reasoning",
@@ -180,6 +251,10 @@ describe("createAgentModelFromConfig", () => {
 			contextWindow: 1_000_000,
 			maxInputTokens: 1_000_000,
 			maxOutputTokens: 65_536,
+			modalities: {
+				input: ["text", "image"],
+				output: ["text", "image"],
+			},
 			capabilities: expect.arrayContaining([
 				"text",
 				"tools",
@@ -222,7 +297,51 @@ describe("createAgentModelFromConfig", () => {
 
 		expect(gatewayMock.createAgentModel).toHaveBeenLastCalledWith(
 			{ providerId: "openai-compatible", modelId: "custom-model" },
-			{ maxTokens: 4_096, temperature: 0 },
+			{
+				maxTokens: 4_096,
+				temperature: 0,
+				auxiliary: undefined,
+				// Not claimed unless the caller says so. The image describer and
+				// the commit-message writer build their models from this same
+				// function, and a model that says it is the conversation gets to
+				// overwrite the record compaction reads (mann1x/cline#68).
+				conversation: false,
+				sessionId: undefined,
+			},
+		);
+	});
+
+	it("only marks the model as the conversation when the caller says so", async () => {
+		const { createAgentModelFromConfig } = await import("./handler-factory");
+		const config = {
+			providerId: "openai-compatible",
+			modelId: "custom-model",
+			apiKey: "key",
+			systemPrompt: "",
+			tools: [],
+			sessionId: "session-a",
+			providerConfig: {
+				providerId: "openai-compatible",
+				modelId: "custom-model",
+			},
+		};
+
+		createAgentModelFromConfig(config, undefined, undefined, {
+			conversation: true,
+		});
+		expect(gatewayMock.createAgentModel).toHaveBeenLastCalledWith(
+			expect.anything(),
+			expect.objectContaining({ conversation: true, sessionId: "session-a" }),
+		);
+
+		// The same config, built by something that is not the turn: it queues
+		// behind the turn rather than racing it, and speaks for nobody.
+		createAgentModelFromConfig(config, undefined, undefined, {
+			auxiliary: true,
+		});
+		expect(gatewayMock.createAgentModel).toHaveBeenLastCalledWith(
+			expect.anything(),
+			expect.objectContaining({ conversation: false, auxiliary: true }),
 		);
 	});
 
@@ -257,6 +376,79 @@ describe("createAgentModelFromConfig", () => {
 							region: "us-west-2",
 							authentication: "profile",
 							profile: "dev-profile",
+						}),
+					}),
+				],
+			}),
+		);
+	});
+
+	it("forwards the workspace cwd as a Claude Code gateway provider option", async () => {
+		const { createAgentModelFromConfig } = await import("./handler-factory");
+
+		createAgentModelFromConfig(
+			{
+				providerId: "claude-code",
+				modelId: "sonnet",
+				systemPrompt: "",
+				tools: [],
+				extensionContext: {
+					workspace: {
+						rootPath: "/home/user/project",
+						cwd: "/home/user/project/packages/app",
+					},
+				},
+				providerConfig: {
+					providerId: "claude-code",
+					modelId: "sonnet",
+				},
+			},
+			undefined,
+		);
+
+		expect(gatewayMock.createGateway).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				providerConfigs: [
+					expect.objectContaining({
+						providerId: "claude-code",
+						options: expect.objectContaining({
+							cwd: "/home/user/project/packages/app",
+						}),
+					}),
+				],
+			}),
+		);
+	});
+
+	it("falls back to the workspace root when no cwd is set for Claude Code", async () => {
+		const { createAgentModelFromConfig } = await import("./handler-factory");
+
+		createAgentModelFromConfig(
+			{
+				providerId: "claude-code",
+				modelId: "sonnet",
+				systemPrompt: "",
+				tools: [],
+				extensionContext: {
+					workspace: {
+						rootPath: "/home/user/project",
+					},
+				},
+				providerConfig: {
+					providerId: "claude-code",
+					modelId: "sonnet",
+				},
+			},
+			undefined,
+		);
+
+		expect(gatewayMock.createGateway).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				providerConfigs: [
+					expect.objectContaining({
+						providerId: "claude-code",
+						options: expect.objectContaining({
+							cwd: "/home/user/project",
 						}),
 					}),
 				],
@@ -509,7 +701,9 @@ describe("createAgentModelFromConfig", () => {
 		const provider = await createSapAiCoreProviderModule(
 			gatewayConfig?.providerConfigs[0] as never,
 		);
-		const model = provider.model("anthropic--claude-4.6-sonnet") as {
+		const model = provider.operations.language(
+			"anthropic--claude-4.6-sonnet",
+		) as {
 			config?: {
 				destination?: Record<string, unknown>;
 				deploymentConfig?: Record<string, unknown>;

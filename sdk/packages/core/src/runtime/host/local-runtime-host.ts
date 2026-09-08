@@ -16,12 +16,57 @@ import {
 import { setHomeDirIfUnset } from "@cline/shared/storage";
 import { isOAuthProvider } from "../../auth/provider-auth-registry";
 import {
+	createCappedThinkingNoteWriter,
+	createCappedThinkingPrepareTurn,
+} from "../../extensions/context/capped-thinking";
+import {
 	createCompactionStateAwarePrepareTurn,
 	createContextCompactionPrepareTurn,
 } from "../../extensions/context/compaction";
+import { releasePolykvSession } from "../../extensions/context/polykv-session";
 import type { ToolExecutors } from "../../extensions/tools";
-import { DefaultToolNames } from "../../extensions/tools";
+import {
+	DefaultToolNames,
+	RunCommandExecutionController,
+} from "../../extensions/tools";
+import {
+	CHECK_FILE_TOOL_NAME,
+	createCheckFileTool,
+} from "../../extensions/tools/check-file";
+import { joinCheckerToShell } from "../../extensions/tools/check-on-failure";
+import { createTaskProgressTool } from "../../extensions/tools/definitions";
+import {
+	createEditVerificationCompletionGuard,
+	EditVerificationTracker,
+	withEditVerificationCapture,
+} from "../../extensions/tools/edit-verification";
+import { cleanupStaleDetachedCommandLogs } from "../../extensions/tools/executors/bash";
+import {
+	createListFilesTool,
+	createLocalWorkspaceLister,
+	LIST_FILES_TOOL_NAME,
+} from "../../extensions/tools/list-files";
+import {
+	createTaskProgressCompletionGuard,
+	findLatestTaskProgress,
+	TASK_PROGRESS_PARAM,
+	TaskProgressTracker,
+	withTaskProgressCapture,
+} from "../../extensions/tools/task-progress";
 import type { TeamEvent } from "../../extensions/tools/team";
+import {
+	type BackgroundDelegationRegistry,
+	type BackgroundDelegationView,
+	createBackgroundDelegationRegistry,
+	startBackgroundDelegation,
+} from "../../extensions/tools/team/background-delegations";
+import {
+	type ConfiguredAgentDelegationResult,
+	type ConfiguredAgentSummary,
+	delegateToConfiguredAgent,
+	listConfiguredAgentSummaries,
+	renderDelegationForTranscript,
+} from "../../extensions/tools/team/delegate-to-agent";
 import type { HookEventPayload } from "../../hooks";
 import { buildTelemetryAgentIdentity } from "../../services/agent-events";
 import { resolveWorkspacePath } from "../../services/config";
@@ -58,6 +103,7 @@ import {
 	readGitWorkspaceState,
 	withSessionGitMetadata,
 } from "../../services/workspace/workspace-manifest";
+import { withSessionHistoryOriginMetadata } from "../../session/history-origin";
 import {
 	projectSessionCompactionState,
 	type SessionCompactionState,
@@ -88,6 +134,7 @@ import type { CoreSessionConfig } from "../../types/config";
 import type { CoreSessionEvent } from "../../types/events";
 import type { ActiveSession, PreparedTurnInput } from "../../types/session";
 import type { SessionRecord } from "../../types/sessions";
+import { createAtomicProtocolSession } from "../atomic/session-protocol";
 import type { RuntimeCapabilities } from "../capabilities";
 import { normalizeRuntimeCapabilities } from "../capabilities";
 import { normalizeConnectionUpdate } from "../config/connection-update";
@@ -140,6 +187,32 @@ import {
 } from "./runtime-host-support";
 
 const MAX_SCAN_LIMIT = 5000;
+
+// Detached-log retention timers are process-local and intentionally unref'd.
+// Recover once for every process that owns a LocalRuntimeHost so embedders get
+// the same restart cleanup guarantee as the Hub daemon. A failed scan is
+// cleared so a later host construction can retry it.
+let detachedCommandLogRecovery: Promise<void> | undefined;
+
+function recoverDetachedCommandLogsOnce(
+	logger?: BasicLogger,
+	telemetry?: ITelemetryService,
+): void {
+	if (detachedCommandLogRecovery) return;
+	detachedCommandLogRecovery = cleanupStaleDetachedCommandLogs()
+		.then(() => undefined)
+		.catch((error) => {
+			detachedCommandLogRecovery = undefined;
+			logger?.error?.("Detached command log recovery failed", { error });
+			captureSdkError(telemetry, {
+				component: "core",
+				operation: "command.detached_log_recovery",
+				error,
+				severity: "warn",
+				handled: true,
+			});
+		});
+}
 
 function asFiniteUsageNumber(value: unknown): number | undefined {
 	return typeof value === "number" && Number.isFinite(value)
@@ -234,6 +307,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 	private readonly providerSettingsManager: ProviderSettingsManager;
 	private readonly oauthTokenManager: RuntimeOAuthTokenManager;
 	private readonly defaultTelemetry?: ITelemetryService;
+	private readonly distinctId: string;
 	private readonly defaultLogger?: BasicLogger;
 	private readonly defaultFetch?: typeof fetch;
 	private readonly events = new RuntimeHostEventBus();
@@ -247,13 +321,24 @@ export class LocalRuntimeHost implements RuntimeHost {
 	>();
 	private readonly subAgentStarts: SubAgentStartTracker = new Map();
 	private readonly pendingPromptsController: PendingPromptsController;
+	/**
+	 * One registry per session, because a background run belongs to the
+	 * conversation it was started from and its report has nowhere else to go.
+	 */
+	private readonly backgroundDelegations = new Map<
+		string,
+		BackgroundDelegationRegistry
+	>();
 	private readonly eventBridge: AgentEventBridge;
 	private readonly sessionVersioning = new SessionVersioningService();
+	private readonly runCommandExecutionController =
+		new RunCommandExecutionController();
 
 	constructor(options: LocalRuntimeHostOptions) {
 		const homeDir = homedir();
 		if (homeDir) setHomeDirIfUnset(homeDir);
 		const distinctId = resolveCoreDistinctId(options.distinctId);
+		this.distinctId = distinctId;
 		this.sessionService = options.sessionService;
 		this.runtimeBuilder = options.runtimeBuilder ?? new DefaultRuntimeBuilder();
 		this.createAgentInstance =
@@ -275,6 +360,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 		this.defaultLogger = options.logger;
 		this.defaultTelemetry?.setDistinctId(distinctId);
 		this.defaultFetch = options.fetch;
+		recoverDetachedCommandLogsOnce(this.defaultLogger, this.defaultTelemetry);
 
 		this.pendingPromptsController = new PendingPromptsController({
 			getSession: (sid) => this.sessions.get(sid),
@@ -293,12 +379,36 @@ export class LocalRuntimeHost implements RuntimeHost {
 			aggregateUsageBySession: this.aggregateUsageBySession,
 			emit: (event) => this.emit(event),
 			persistMessages: (sid, messages, systemPrompt) => {
+				// Fire-and-forget: an unobserved rejection here would surface as
+				// an unhandledRejection, which is fatal in the hub daemon.
 				void this.invoke<void>(
 					"persistSessionMessages",
 					sid,
 					messages,
 					systemPrompt,
-				);
+				).catch((error) => {
+					const session = this.sessions.get(sid);
+					const logger = session?.config.logger ?? this.defaultLogger;
+					logger?.error?.(
+						"Failed to persist session messages from agent event",
+						{
+							sessionId: sid,
+							error,
+						},
+					);
+					captureSdkError(session?.config.telemetry ?? this.defaultTelemetry, {
+						component: "core",
+						operation: "session.persist_messages_on_agent_event",
+						error,
+						severity: "warn",
+						handled: true,
+						context: {
+							sessionId: sid,
+							providerId: session?.config.providerId,
+							modelId: session?.config.modelId,
+						},
+					});
+				});
 			},
 			enqueuePendingPrompt: (sid, entry) =>
 				this.pendingPromptsController.enqueue(sid, entry),
@@ -395,13 +505,21 @@ export class LocalRuntimeHost implements RuntimeHost {
 		const manifestPath = join(sessionDir, `${sessionId}.json`);
 		const workspacePath = resolveWorkspacePath(input.config);
 
+		// An interactive session started without a prompt has no turn in
+		// flight (turns arrive through separate send calls), so it must not
+		// report "running" — a created-but-never-prompted session otherwise
+		// stayed "running" forever, wedging clients that gate workspace
+		// operations (e.g. checkpoint restore) on active turns. One-shot
+		// starts still run their prompt inside start() and begin "running".
+		const startsWithoutTurn =
+			input.interactive === true && !startInput.prompt?.trim();
 		let manifest = SessionManifestSchema.parse({
 			version: 1,
 			session_id: sessionId,
 			source,
 			pid: process.pid,
 			started_at: startedAt,
-			status: "running",
+			status: startsWithoutTurn ? "idle" : "running",
 			interactive: input.interactive === true,
 			provider: startInput.config.providerId,
 			model: startInput.config.modelId,
@@ -531,17 +649,25 @@ export class LocalRuntimeHost implements RuntimeHost {
 				await this.persistSessionMetadata(sessionId, () => metadata);
 			},
 		});
-		const initialSessionMetadata = withSessionGitMetadata(
+		const initialSessionMetadata = withSessionHistoryOriginMetadata(
+			withSessionGitMetadata(
+				{
+					...(resumedArtifacts?.manifest.metadata ?? {}),
+					...(startInput.sessionMetadata ?? {}),
+				},
+				bootstrap.gitState,
+			),
 			{
-				...(resumedArtifacts?.manifest.metadata ?? {}),
-				...(startInput.sessionMetadata ?? {}),
+				mode: startInput.mode,
+				version: bootstrap.config.extensionContext?.client?.version,
 			},
-			bootstrap.gitState,
 		);
 		if (!resumedArtifacts) manifest.metadata = initialSessionMetadata;
-		const runtime = await this.runtimeBuilder.build(
-			bootstrap.runtimeBuilderInput,
-		);
+		const runtime = await this.runtimeBuilder.build({
+			...bootstrap.runtimeBuilderInput,
+			distinctId: this.distinctId,
+			runCommandExecutionController: this.runCommandExecutionController,
+		});
 		const configWithProvider = bootstrap.config;
 		const providerConfig = bootstrap.providerConfig;
 		if (runtime.teamRuntime && !configWithProvider.teamName?.trim()) {
@@ -569,7 +695,290 @@ export class LocalRuntimeHost implements RuntimeHost {
 			onAuthError,
 		});
 
-		const tools = [...runtime.tools, ...(configWithProvider.extraTools ?? [])];
+		// Builtins and host tools are merged before the checklist is applied, so
+		// a host that replaces a builtin with its own (VS Code swaps
+		// `run_commands` for a terminal-aware version) does not end up with the
+		// most-used tool in a coding run as the only one carrying no checklist.
+		// The wrapper is idempotent, so a toolset already wrapped by the builtin
+		// factory passes through untouched rather than counting calls twice.
+		const mergedTools = [
+			...runtime.tools,
+			...(configWithProvider.extraTools ?? []),
+		];
+		const taskProgressConfig = configWithProvider.taskProgress;
+		const taskProgressTracker = taskProgressConfig?.enabled
+			? new TaskProgressTracker({
+					...(taskProgressConfig.reminderInterval !== undefined
+						? { reminderInterval: taskProgressConfig.reminderInterval }
+						: {}),
+					...(taskProgressConfig.onUpdate
+						? { onUpdate: taskProgressConfig.onUpdate }
+						: {}),
+				})
+			: undefined;
+		// A resumed task would otherwise come back with an empty checklist and the
+		// model would be reminded of nothing. History is the durable copy — every
+		// call that carried a checklist is in it — so the tracker is warmed from
+		// the transcript rather than persisted separately.
+		taskProgressTracker?.hydrate(
+			findLatestTaskProgress(
+				initialMessages as readonly { content?: unknown }[] | undefined,
+			),
+		);
+		// The checklist has two halves and this path only ever wired one of them.
+		//
+		// `withTaskProgressCapture` below adds the `task_progress` parameter to
+		// every tool and feeds the tracker, which is why the panel counts the
+		// boxes correctly. The standalone tool -- the name a model calls when it
+		// has no other call to attach the checklist to -- is pushed by
+		// `createDefaultTools`, and only when a tracker was passed *into* it.
+		// Here the tracker is built after the tools, so it never was: the
+		// parameter worked, the tool did not exist, and a model that called it
+		// got `AI_NoSuchToolError: Model tried to call unavailable tool
+		// 'task_progress'` while the panel beside it read "Tasks (7/7)".
+		//
+		// Added by name-check rather than unconditionally, because a caller that
+		// did build its tools through `createDefaultTools` with a tracker already
+		// has one and a duplicate name is its own failure.
+		const mergedToolsWithChecklist =
+			taskProgressTracker &&
+			!mergedTools.some((tool) => tool.name === TASK_PROGRESS_PARAM)
+				? [...mergedTools, createTaskProgressTool()]
+				: mergedTools;
+		// The other half of "did this run leave the file in a state anyone looked
+		// at". The checklist says what the model meant to do; this says whether
+		// what it did was checked. Both watch the same merged list, so a host
+		// tool -- VS Code's own terminal-aware `run_commands`, its `check_file`
+		// -- is covered exactly like a builtin.
+		// A host with no checker gets no guard, and this host had no checker: the
+		// editor's language servers are VS Code's, and nothing replaced them
+		// here. So one is supplied. It answers a narrower question than the
+		// editor does -- syntax and brackets, not types -- but it is the
+		// difference between a model that can confirm its own edit and one that
+		// cannot, and on the CLI the measured result of the latter was ten edits,
+		// no checks, and "the implementation is complete" on a file that does not
+		// parse.
+		const checklessTools = mergedToolsWithChecklist;
+		const mergedToolsWithChecker = checklessTools.some(
+			(tool) => tool.name === CHECK_FILE_TOOL_NAME,
+		)
+			? checklessTools
+			: [
+					...checklessTools,
+					createCheckFileTool({
+						cwd: configWithProvider.cwd,
+						...(configWithProvider.checkFile?.lintCommand
+							? { lintCommand: configWithProvider.checkFile.lintCommand }
+							: {}),
+					}),
+				];
+		// And the other thing this host had no answer for: what is here. A model
+		// with no way to look around does not go without -- it runs `ls`, or
+		// `dir /s` from wherever the shell started, which is unbounded, unscoped
+		// and formatted differently on every platform. Added by name-check like
+		// the checker above, so a host that installs its own -- VS Code asks the
+		// editor, which honours the user's own excludes -- keeps it.
+		const mergedToolsWithLister = mergedToolsWithChecker.some(
+			(tool) => tool.name === LIST_FILES_TOOL_NAME,
+		)
+			? mergedToolsWithChecker
+			: [
+					...mergedToolsWithChecker,
+					createListFilesTool({
+						cwd: configWithProvider.cwd,
+						createLister: () =>
+							createLocalWorkspaceLister(
+								configWithProvider.workspaceRoot ?? configWithProvider.cwd,
+							),
+					}),
+				];
+		// Having both tools is not the same as using both. A model that runs the
+		// build and is told the file is broken has, measured, gone off and
+		// written its own analyser rather than asking the checker sitting next
+		// to it — three scratch scripts in one transaction, twenty-two edits,
+		// none of them to the broken file. So a failing command now returns the
+		// checker's answer about the file it named, in the same result. Wired
+		// over the merged list, after both halves are in it, so a host's own
+		// terminal-aware shell and its own language-server checker are joined
+		// exactly like the builtins.
+		const mergedToolsWithFailureChecks = joinCheckerToShell(
+			mergedToolsWithLister,
+			{
+				cwd: configWithProvider.cwd ?? process.cwd(),
+				shellName: DefaultToolNames.RUN_COMMANDS,
+				checkerName: CHECK_FILE_TOOL_NAME,
+			},
+		);
+		const editVerificationConfig = configWithProvider.editVerification;
+		// Nudge rather than off, now that this host always has a checker to
+		// name. Off was the honest default while it had none — a guard that can
+		// never be satisfied is worse than no guard — and that is no longer the
+		// situation. Nudging costs a run two turns; not nudging cost one the
+		// whole task.
+		const editVerificationMode = editVerificationConfig?.mode ?? "nudge";
+		const editVerificationSettings = {
+			editTools: editVerificationConfig?.editTools ?? [
+				DefaultToolNames.EDITOR,
+				DefaultToolNames.APPLY_PATCH,
+			],
+			checkTools: editVerificationConfig?.checkTools ?? [CHECK_FILE_TOOL_NAME],
+			// "require" is the same guard given more room to insist.
+			attempts: editVerificationMode === "require" ? 4 : 2,
+		};
+		const editVerificationTracker =
+			editVerificationMode === "off" ||
+			editVerificationSettings.checkTools.length === 0
+				? undefined
+				: new EditVerificationTracker(editVerificationSettings);
+		const toolsToWrap = mergedToolsWithFailureChecks;
+		const withChecklist = taskProgressTracker
+			? toolsToWrap.map((tool) =>
+					withTaskProgressCapture(tool, taskProgressTracker),
+				)
+			: // `toolsToWrap`, not `mergedTools`: falling back to the pre-checklist
+				// list drops every tool added since, which is how the checker would
+				// have gone missing on exactly the runs that have no checklist.
+				toolsToWrap;
+		const tools = editVerificationTracker
+			? withChecklist.map((tool) =>
+					withEditVerificationCapture(tool, editVerificationTracker),
+				)
+			: withChecklist;
+		// Don't let the run end quietly on a checklist with open boxes. Composed
+		// rather than assigned: the runtime may already carry a guard (team
+		// obligations), and that one speaks to work the model cannot simply tick
+		// off, so it goes first and the checklist only gets a say once it passes.
+		const checklistCloseOutGuard = taskProgressTracker
+			? createTaskProgressCompletionGuard(taskProgressTracker)
+			: undefined;
+		// Same composition, one more link: an unchecked edit is a fact about the
+		// work rather than a box the model can tick, so it speaks before the
+		// checklist and after anything the runtime already carries.
+		const uncheckedEditsGuard = editVerificationTracker
+			? createEditVerificationCompletionGuard(
+					editVerificationTracker,
+					editVerificationSettings,
+				)
+			: undefined;
+		const existingCompletionGuard = runtime.completionPolicy?.completionGuard;
+		const composedGuards = [
+			existingCompletionGuard,
+			uncheckedEditsGuard,
+			checklistCloseOutGuard,
+		].filter((guard): guard is () => string | undefined => guard !== undefined);
+		const completionPolicyWithChecklistCloseOut =
+			composedGuards.length > 0
+				? {
+						...runtime.completionPolicy,
+						completionGuard: () => {
+							for (const guard of composedGuards) {
+								const message = guard();
+								if (message !== undefined) {
+									return message;
+								}
+							}
+							return undefined;
+						},
+					}
+				: runtime.completionPolicy;
+		// The change protocol, where the user has asked for it. It settles at the
+		// boundary rather than through a guard because it decides by running a
+		// command, and because a transaction has to be judged on the deliberate
+		// way a run ends as well as the silent one.
+		let pendingAtomicStatus: { armed: boolean; message: string } | undefined;
+		const atomicProtocol = await createAtomicProtocolSession({
+			// The workspace before the working directory, unlike the shell: a
+			// rollback that covers less than the model can reach is not a rollback,
+			// and the workspace is the wider of the two wherever they differ.
+			workspaceRoot:
+				configWithProvider.workspaceRoot ??
+				configWithProvider.cwd ??
+				process.cwd(),
+			config: configWithProvider.atomicProtocol,
+			logger: {
+				log: (message) => configWithProvider.logger?.log?.(message),
+			},
+			// Whether it engaged, in the same place the verdicts go. A protocol
+			// that stood down because nothing in the workspace can judge a
+			// change is doing what it was asked to; from the chat it is
+			// indistinguishable from one that is broken.
+			//
+			// Held, not dispatched: this runs inside `startSession`, and a host
+			// that routes events to its current session has none yet. Sent on
+			// the first turn instead.
+			onStatus: (status) => {
+				pendingAtomicStatus = status;
+			},
+			// The verdict goes to the user, not only to the log. A transaction
+			// that was discarded put every file back, and a run where that
+			// happened three times and finished looks — in the transcript alone —
+			// exactly like one that got it right first time.
+			onEvent: (event) => {
+				// An empty submission is not a verdict and is not presented as one:
+				// nothing ran and nothing was put back. It still goes to the user,
+				// because a transaction that absorbed one and a transaction that
+				// never happened are otherwise indistinguishable in the transcript.
+				if (event.type === "empty") {
+					configWithProvider.logger?.debug?.(event.message);
+					this.eventBridge.dispatchAgentEvent(sessionId, configWithProvider, {
+						type: "notice",
+						noticeType: "status",
+						displayRole: "status",
+						message: event.message,
+						metadata: {
+							kind: "atomic_empty_attempt",
+							transaction: event.transaction,
+							continued: event.continued,
+						},
+					});
+					return;
+				}
+				if (event.type !== "settled") {
+					return;
+				}
+				configWithProvider.logger?.debug?.(event.message);
+				const restore = event.restore;
+				this.eventBridge.dispatchAgentEvent(sessionId, configWithProvider, {
+					type: "notice",
+					noticeType: "status",
+					displayRole: "status",
+					message: event.message,
+					metadata: {
+						kind: "atomic_transaction",
+						transaction: event.transaction,
+						kept: event.kept,
+						source: event.source,
+						...(event.verdict?.output ? { output: event.verdict.output } : {}),
+						...(restore
+							? {
+									filesPutBack:
+										restore.restored.length +
+										restore.recreated.length +
+										restore.removed.length,
+								}
+							: {}),
+					},
+				});
+			},
+		});
+		// The protocol's own tools, added after it is built because whether
+		// there are any depends on what the workspace turned out to hold. They
+		// go on last deliberately: `propose_check` carries no checklist and is
+		// not wrapped, because it is a question to the user rather than a step
+		// in the work, and `restore_file` undoes work rather than doing any.
+		// `decorateTools` then goes over the whole list, because the one thing
+		// the protocol adds to an existing tool -- reading a file as the open
+		// transaction found it -- has to reach the built-ins as well as these.
+		const toolsWithProtocol = atomicProtocol
+			? atomicProtocol.decorateTools([...tools, ...atomicProtocol.tools])
+			: tools;
+		const completionPolicyWithProtocol = atomicProtocol
+			? {
+					...completionPolicyWithChecklistCloseOut,
+					onCompletionAttempt: (context: { text?: string; forced?: boolean }) =>
+						atomicProtocol.onCompletionAttempt(context),
+				}
+			: completionPolicyWithChecklistCloseOut;
 		const extensions = runtime.extensions ?? bootstrap.extensions;
 		const explicitInitialCompactionState = startInput.initialCompactionState;
 		let activeSessionRef: ActiveSession | undefined;
@@ -588,58 +997,86 @@ export class LocalRuntimeHost implements RuntimeHost {
 						rawInitialCompactionState.conversation_id?.trim() || sessionId,
 				}
 			: undefined;
-		const prepareTurn = createCompactionStateAwarePrepareTurn({
-			compact,
-			getState: () => activeSessionRef?.compactionState,
-			saveState: async (state, sourceMessages) => {
-				const activeSession = activeSessionRef;
-				if (!activeSession) return;
-				const stateForSession = {
-					...state,
-					conversation_id: activeSession.sessionId,
-				};
-				try {
-					// Validate against the exact messages the state's hash was
-					// computed from. Mid-turn, `agent.getMessages()` (the
-					// conversation store) can legally differ from the runtime's
-					// working transcript, so validating against the store would
-					// spuriously reject the write.
-					const result = await this.persistActiveSessionCompactionState(
-						activeSession,
-						stateForSession,
-						sourceMessages,
-					);
-					if (!result.updated) {
-						configWithProvider.logger?.debug?.(
-							"Skipped stale session compaction state",
-							{
-								sessionId: activeSession.sessionId,
-								sourceMessageCount: stateForSession.source_message_count,
-							},
+		const cappedThinkingConfig = {
+			// Ahead of compaction: a condensed turn is a smaller turn, so
+			// whatever compaction then decides, it decides about a
+			// transcript that is not carrying an abandoned think.
+			enabled: configWithProvider.compaction?.cappedThinkingEnabled,
+			budgetTokens: configWithProvider.compaction?.thinkingBudgetTokens,
+			budgetMessage: configWithProvider.compaction?.cappedThinkingBudgetMessage,
+			promptTemplate: configWithProvider.compaction?.cappedThinkingPrompt,
+			// The resolved one, not the one on the config: nothing sets
+			// `config.providerConfig` on this path — compaction quietly
+			// substitutes `{ providerId, modelId }` for it a few lines down,
+			// and the agent config below uses the bootstrap's. Reading the
+			// unset field meant the condenser stood down on every session,
+			// which is exactly as visible as it sounds: no note, no failure,
+			// no log, through a run where the cap fired on 288 requests.
+			providerConfig: configWithProvider.providerConfig ?? providerConfig,
+			summarizer: configWithProvider.compaction?.summarizer,
+			logger: configWithProvider.logger,
+		};
+		// The transcript is one of the two places a capped think turns up, and
+		// the rarer one. The other is the agent loop's discard path, which is
+		// where the turns that actually end at the budget message go.
+		const condenseDiscardedReasoning =
+			createCappedThinkingNoteWriter(cappedThinkingConfig);
+		const prepareTurn = createCappedThinkingPrepareTurn(
+			createCompactionStateAwarePrepareTurn({
+				compact,
+				getState: () => activeSessionRef?.compactionState,
+				saveState: async (state, sourceMessages) => {
+					const activeSession = activeSessionRef;
+					if (!activeSession) return;
+					const stateForSession = {
+						...state,
+						conversation_id: activeSession.sessionId,
+					};
+					try {
+						// Validate against the exact messages the state's hash was
+						// computed from. Mid-turn, `agent.getMessages()` (the
+						// conversation store) can legally differ from the runtime's
+						// working transcript, so validating against the store would
+						// spuriously reject the write.
+						const result = await this.persistActiveSessionCompactionState(
+							activeSession,
+							stateForSession,
+							sourceMessages,
 						);
+						if (!result.updated) {
+							configWithProvider.logger?.debug?.(
+								"Skipped stale session compaction state",
+								{
+									sessionId: activeSession.sessionId,
+									sourceMessageCount: stateForSession.source_message_count,
+								},
+							);
+						}
+					} catch (error) {
+						configWithProvider.logger?.error?.(
+							"Failed to persist session compaction state",
+							{ sessionId: activeSession.sessionId, error },
+						);
+						captureSdkError(configWithProvider.telemetry, {
+							component: "core",
+							operation: "session.persist_compaction_state",
+							severity: "warn",
+							handled: true,
+							error,
+							context: {
+								sessionId: activeSession.sessionId,
+								providerId: configWithProvider.providerId,
+								modelId: configWithProvider.modelId,
+							},
+						});
 					}
-				} catch (error) {
-					configWithProvider.logger?.error?.(
-						"Failed to persist session compaction state",
-						{ sessionId: activeSession.sessionId, error },
-					);
-					captureSdkError(configWithProvider.telemetry, {
-						component: "core",
-						operation: "session.persist_compaction_state",
-						severity: "warn",
-						handled: true,
-						error,
-						context: {
-							sessionId: activeSession.sessionId,
-							providerId: configWithProvider.providerId,
-							modelId: configWithProvider.modelId,
-						},
-					});
-				}
-			},
-		});
+				},
+			}),
+			cappedThinkingConfig,
+		);
 
 		const agentConfig = {
+			distinctId: this.distinctId,
 			sessionId,
 			providerId: providerConfig.providerId,
 			modelId: providerConfig.modelId,
@@ -660,7 +1097,9 @@ export class LocalRuntimeHost implements RuntimeHost {
 			maxIterations: configWithProvider.maxIterations,
 			execution: configWithProvider.execution,
 			prepareTurn,
-			tools,
+			condenseDiscardedReasoning,
+			tools: toolsWithProtocol,
+			modelTools: runtime.modelTools,
 			hooks: bootstrap.hooks,
 			extensions,
 			hookErrorMode: configWithProvider.hookErrorMode,
@@ -693,7 +1132,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 			telemetry: configWithProvider.telemetry,
 			onConsecutiveMistakeLimitReached:
 				configWithProvider.onConsecutiveMistakeLimitReached,
-			completionPolicy: runtime.completionPolicy,
+			completionPolicy: completionPolicyWithProtocol,
 			consumePendingUserMessage: () => {
 				const entry = this.pendingPromptsController.consumeSteer(sessionId);
 				return entry
@@ -703,6 +1142,20 @@ export class LocalRuntimeHost implements RuntimeHost {
 						)
 					: undefined;
 			},
+			// The describer and the rule that it runs on every turn, which is the
+			// whole of the vision-model feature from this layer's point of view.
+			//
+			// This object is an explicit list with no spread, so a field a host
+			// sets on the session config and nobody copies here is dropped in
+			// silence — the same way `condenseDiscardedReasoning` was, one layer
+			// further in. Both of these were dropped, so the describer was built,
+			// logged as installed, and then never called: the image went to the
+			// session's model, which is exactly what configuring a vision model is
+			// supposed to prevent. Measured through the CLI with a real image and a
+			// real vision model — `[Vision] Describer installed`, no describe call,
+			// and the image still in the transcript at request time.
+			describeImages: configWithProvider.describeImages,
+			alwaysDescribeImages: configWithProvider.alwaysDescribeImages,
 			logger: runtime.logger ?? configWithProvider.logger,
 			extensionContext: configWithProvider.extensionContext,
 			onEvent: (event: AgentEvent) =>
@@ -799,7 +1252,9 @@ export class LocalRuntimeHost implements RuntimeHost {
 			runtime,
 			agent,
 			started: false,
-			status: resumedArtifacts?.manifest.status ?? "running",
+			status:
+				resumedArtifacts?.manifest.status ??
+				(startsWithoutTurn ? "idle" : "running"),
 			aborting: false,
 			interactive: input.interactive === true,
 			persistedMessages: initialMessages,
@@ -809,8 +1264,13 @@ export class LocalRuntimeHost implements RuntimeHost {
 			teamRunWaiters: [],
 			pendingPrompts: [],
 			drainingPendingPrompts: false,
+			...(atomicProtocol ? { atomicProtocol } : {}),
+			// Set whether or not the protocol armed: standing down is the case
+			// the user most needs told, and it leaves no session behind.
+			...(pendingAtomicStatus ? { pendingAtomicStatus } : {}),
 			pluginSandboxShutdown: bootstrap.pluginSandboxShutdown,
 			submitAndExitObserved: false,
+			taskCompletedEmitted: false,
 			lastInteractiveTurnFinishReason: undefined,
 		};
 		activeSessionRef = active;
@@ -836,28 +1296,41 @@ export class LocalRuntimeHost implements RuntimeHost {
 		if (resumedArtifacts) {
 			await this.refreshActiveSessionGitMetadata(active, bootstrap.gitState);
 		}
-		this.emitStatus(sessionId, "running");
+		// Sessions seeded with history (mode-switch restarts, forks, missing-
+		// session recovery) must be durable immediately. Lazy persistence
+		// otherwise keeps the seed memory-only until the first completed turn,
+		// so losing the resident session before then (hub restart/crash) would
+		// rebuild it from an empty disk file and silently wipe the
+		// conversation. Brand-new empty sessions stay lazy.
 		if (initialMessages.length > 0 && !resumedArtifacts) {
-			await this.ensureSessionPersisted(active);
-			await this.invoke<void>(
-				"persistSessionMessages",
-				active.sessionId,
-				initialMessages,
-				active.config.systemPrompt,
-			);
-			if (active.compactionState) {
-				const result = await this.persistActiveSessionCompactionState(
-					active,
-					active.compactionState,
+			try {
+				await this.ensureSessionPersisted(active);
+				await this.invoke<void>(
+					"persistSessionMessages",
+					sessionId,
+					initialMessages,
+					active.config.systemPrompt,
 				);
-				if (!result.updated) {
-					active.compactionState = undefined;
-				}
-			}
-			if (!startInput.prompt?.trim()) {
-				await this.updateStatus(active, "completed", 0);
+			} catch (error) {
+				active.config.logger?.error?.(
+					"Failed to persist seeded session messages at start",
+					{ sessionId, error },
+				);
+				captureSdkError(active.config.telemetry, {
+					component: "core",
+					operation: "session.persist_seeded_messages",
+					error,
+					severity: "warn",
+					handled: true,
+					context: {
+						sessionId,
+						providerId: active.config.providerId,
+						modelId: active.config.modelId,
+					},
+				});
 			}
 		}
+		this.emitStatus(sessionId, active.status);
 
 		let result: AgentResult | undefined;
 		try {
@@ -983,15 +1456,18 @@ export class LocalRuntimeHost implements RuntimeHost {
 			} else {
 				await this.completeInteractiveTurn(session, result.finishReason);
 			}
-			if (
-				result.finishReason === "error" ||
-				result.finishReason === "aborted"
-			) {
-				return result;
+			// Drain after "aborted" finishes too: both internal stops (loop
+			// detector / mistake limit) and user-initiated aborts keep the
+			// queue intact, so without a drain here the user-queued prompts
+			// would be stranded forever. "error" finishes deliberately do NOT
+			// drain — auto-running queued prompts into a failing provider
+			// would consume them; they stay queued and drain on the next
+			// enqueue/update or successful turn.
+			if (result.finishReason !== "error") {
+				queueMicrotask(() => {
+					void this.pendingPromptsController.drain(input.sessionId);
+				});
 			}
-			queueMicrotask(() => {
-				void this.pendingPromptsController.drain(input.sessionId);
-			});
 			return result;
 		} catch (error) {
 			if (session.interactive && session.aborting) {
@@ -1031,9 +1507,39 @@ export class LocalRuntimeHost implements RuntimeHost {
 			event: "session.aborted",
 			properties: { sessionId },
 		});
+		// Aborting a user-initiated turn leaves pendingPrompts untouched:
+		// clearing here would silently destroy prompts the user already typed
+		// and queued — they drain once the abort completes. Aborting a
+		// queue-initiated turn (drainingPendingPrompts) is the opposite
+		// gesture: the user is cancelling the queued work itself, so drop the
+		// remainder — otherwise every Escape would consume one queued prompt
+		// and start a fresh provider call, and the session could never be
+		// brought to a full stop.
 		session.aborting = true;
-		this.pendingPromptsController.clearAborted(session);
-		session.agent.abort(reason);
+		if (session.drainingPendingPrompts) {
+			this.pendingPromptsController.discardQueue(session);
+		}
+		const teamRuntime = session.runtime.teamRuntime;
+		try {
+			teamRuntime?.cancelOutstandingWork(reason);
+		} finally {
+			if (teamRuntime) {
+				session.activeTeamRunIds.clear();
+				session.pendingTeamRunUpdates.length = 0;
+				notifyTeamRunWaiters(session);
+			}
+			session.agent.abort(reason);
+		}
+	}
+
+	async proceedWhileRunning(
+		sessionId: string,
+		toolCallId?: string,
+	): Promise<number> {
+		return this.runCommandExecutionController.proceedWhileRunning(
+			sessionId,
+			toolCallId,
+		);
 	}
 
 	async stopSession(sessionId: string): Promise<void> {
@@ -1354,9 +1860,176 @@ export class LocalRuntimeHost implements RuntimeHost {
 		}
 	}
 
+	async listConfiguredAgents(
+		sessionId: string,
+	): Promise<ConfiguredAgentSummary[]> {
+		const live = this.sessions.get(sessionId.trim());
+		return listConfiguredAgentSummaries(live?.runtime.configuredAgents);
+	}
+
+	/**
+	 * Run a configured agent because the user asked for it.
+	 *
+	 * Refused while a turn is in flight, for the reason manual compaction is:
+	 * the report is appended to the conversation, and appending to a transcript
+	 * the agent loop is currently writing to would race it.
+	 */
+	async delegateToConfiguredAgent(input: {
+		sessionId: string;
+		agentName: string;
+		prompt: string;
+		signal?: AbortSignal;
+	}): Promise<ConfiguredAgentDelegationResult> {
+		const sessionId = input.sessionId.trim();
+		const live = this.sessions.get(sessionId);
+		if (!live) {
+			throw new Error(
+				"There is no running session to delegate from. Start a task first.",
+			);
+		}
+		if (!live.agent.canStartRun()) {
+			throw new Error(
+				"Cannot delegate while a response is in progress. Wait for the current turn to finish, or abort it.",
+			);
+		}
+		const result = await delegateToConfiguredAgent({
+			agents: live.runtime.configuredAgents,
+			tools: live.runtime.tools,
+			agentName: input.agentName,
+			prompt: input.prompt,
+			sessionId,
+			parentAgentId: live.agent.getAgentId(),
+			conversationId: live.agent.getConversationId(),
+			signal: input.signal,
+		});
+		// The lead model never made a call, so the run enters the conversation as
+		// what it was: something the user had done on their behalf.
+		const messages = live.agent.getMessages();
+		live.agent.restore([
+			...messages,
+			{
+				role: "user",
+				content: renderDelegationForTranscript(result, input.prompt),
+			} as LlmsProviders.MessageWithMetadata,
+		]);
+		return result;
+	}
+
+	/**
+	 * Start a configured agent beside the turn instead of in place of it.
+	 *
+	 * No `canStartRun()` check, unlike the foreground call: running while the
+	 * lead is working is the reason this exists. What that costs is a report
+	 * that can arrive mid-turn, which {@link deliverBackgroundDelegation}
+	 * answers.
+	 */
+	async startBackgroundDelegation(input: {
+		sessionId: string;
+		agentName: string;
+		prompt: string;
+	}): Promise<BackgroundDelegationView> {
+		const sessionId = input.sessionId.trim();
+		const live = this.sessions.get(sessionId);
+		if (!live) {
+			throw new Error(
+				"There is no running session to delegate from. Start a task first.",
+			);
+		}
+		return startBackgroundDelegation(this.backgroundDelegationsFor(sessionId), {
+			agents: live.runtime.configuredAgents,
+			tools: live.runtime.tools,
+			agentName: input.agentName,
+			prompt: input.prompt,
+			sessionId,
+			parentAgentId: live.agent.getAgentId(),
+			conversationId: live.agent.getConversationId(),
+			onSettled: (view) => {
+				this.deliverBackgroundDelegation(sessionId, view);
+			},
+		});
+	}
+
+	async listBackgroundDelegations(
+		sessionId: string,
+	): Promise<BackgroundDelegationView[]> {
+		return this.backgroundDelegations.get(sessionId.trim())?.list() ?? [];
+	}
+
+	async controlBackgroundDelegation(input: {
+		sessionId: string;
+		id: string;
+		action: "pause" | "resume" | "stop";
+	}): Promise<boolean> {
+		const registry = this.backgroundDelegations.get(input.sessionId.trim());
+		if (!registry) {
+			return false;
+		}
+		if (input.action === "pause") {
+			return registry.pause(input.id);
+		}
+		if (input.action === "resume") {
+			return registry.resume(input.id);
+		}
+		return registry.stop(input.id);
+	}
+
+	private backgroundDelegationsFor(
+		sessionId: string,
+	): BackgroundDelegationRegistry {
+		const existing = this.backgroundDelegations.get(sessionId);
+		if (existing) {
+			return existing;
+		}
+		const created = createBackgroundDelegationRegistry();
+		this.backgroundDelegations.set(sessionId, created);
+		return created;
+	}
+
+	/**
+	 * Put a finished background run into the conversation it was started from.
+	 *
+	 * Two ways in, because a background run finishes whenever it finishes. With
+	 * the session idle it is appended directly, exactly as the foreground call
+	 * does. With a turn in flight, appending would race the agent loop over the
+	 * message list, so it is queued as a steer and the runtime picks it up at
+	 * the top of its next iteration.
+	 *
+	 * A failure is reported too. A delegation the user asked for and that did
+	 * not work is something both they and the lead need to know; only a run the
+	 * user stopped says nothing, and that one never reaches here.
+	 */
+	private deliverBackgroundDelegation(
+		sessionId: string,
+		view: BackgroundDelegationView,
+	): void {
+		const text = view.result
+			? renderDelegationForTranscript(view.result, view.prompt)
+			: `The background delegation to "${view.agentName}" failed: ${
+					view.error ?? "no reason given"
+				}\n\nThe task was: ${view.prompt}`;
+		const live = this.sessions.get(sessionId);
+		if (!live) {
+			return;
+		}
+		if (live.agent.canStartRun()) {
+			live.agent.restore([
+				...live.agent.getMessages(),
+				{
+					role: "user",
+					content: text,
+				} as LlmsProviders.MessageWithMetadata,
+			]);
+			return;
+		}
+		this.pendingPromptsController.enqueue(sessionId, {
+			prompt: text,
+			delivery: "steer",
+		});
+	}
+
 	async readLiveSessionMessages(
 		sessionId: string,
-	): Promise<LlmsProviders.Message[]> {
+	): Promise<LlmsProviders.MessageWithMetadata[]> {
 		const target = sessionId.trim();
 		if (!target) return [];
 		// Resident sessions are authoritative: disk persistence lags at
@@ -1376,7 +2049,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 
 	async readSessionMessages(
 		sessionId: string,
-	): Promise<LlmsProviders.Message[]> {
+	): Promise<LlmsProviders.MessageWithMetadata[]> {
 		const target = sessionId.trim();
 		if (!target) return [];
 		const row = await this.getRow(target);
@@ -1566,9 +2239,36 @@ export class LocalRuntimeHost implements RuntimeHost {
 		if (!prompt && !images && !files) throw new Error("prompt cannot be empty");
 
 		if (!session.artifacts && !session.pendingPrompt) {
-			session.pendingPrompt = prompt;
+			// The user's own words, not what the model was sent. The two used to
+			// be near enough the same thing; they are not once the change
+			// protocol puts its rules on the front of the first message, and the
+			// session's record is what the history list and the task's title are
+			// read from. Measured on the first live use: every task started with
+			// the protocol armed was titled "== CHANGE PROTOCOL ==".
+			session.pendingPrompt = input.prompt.trim() || prompt;
 		}
 		await this.ensureSessionPersisted(session);
+		this.emitPendingAtomicStatus(session);
+		// A seeded session (fork, checkpoint restore, missing-session
+		// recovery) materializes at start, before any prompt exists, so its
+		// row is created promptless. Backfill it with the first user prompt,
+		// which restores the behavior rows had when materialization happened
+		// here: the persistence service derives the title from this prompt
+		// when the session is untitled, and leaves any user-set title alone.
+		if (!session.pendingPrompt) {
+			session.pendingPrompt = prompt;
+			try {
+				await this.invokeOptionalValue("updateSession", {
+					sessionId: session.sessionId,
+					prompt,
+				});
+			} catch (error) {
+				session.config.logger?.log?.(
+					"Failed to backfill seeded session prompt",
+					{ severity: "warn", sessionId: session.sessionId, error },
+				);
+			}
+		}
 		await this.refreshActiveSessionGitMetadata(session);
 		await this.syncOAuthCredentials(session);
 		await this.markTurnRunning(session);
@@ -1638,6 +2338,40 @@ export class LocalRuntimeHost implements RuntimeHost {
 		const usage = createInitialAccumulatedUsage();
 		session.persistedMessages = messages;
 		session.started = session.started || messages.length > 0;
+		// Flush the transcript now: persistence otherwise lags at
+		// assistant-message/turn boundaries, so without this an aborted turn
+		// (including the user's prompt) exists only in memory. If the session
+		// later has to be rebuilt from disk (hub restart, session eviction),
+		// the recovery would silently drop the aborted exchange — or, for a
+		// session seeded with in-memory history, the entire conversation.
+		if (messages.length > 0) {
+			try {
+				await this.ensureSessionPersisted(session);
+				await this.invoke<void>(
+					"persistSessionMessages",
+					session.sessionId,
+					messages,
+					session.config.systemPrompt,
+				);
+			} catch (error) {
+				session.config.logger?.error?.(
+					"Failed to persist session messages after abort",
+					{ sessionId: session.sessionId, error },
+				);
+				captureSdkError(session.config.telemetry, {
+					component: "core",
+					operation: "session.persist_messages_after_abort",
+					error,
+					severity: "warn",
+					handled: true,
+					context: {
+						sessionId: session.sessionId,
+						providerId: session.config.providerId,
+						modelId: session.config.modelId,
+					},
+				});
+			}
+		}
 		this.eventBridge.dispatchAgentEvent(session.sessionId, session.config, {
 			type: "done",
 			reason: "aborted",
@@ -1646,6 +2380,13 @@ export class LocalRuntimeHost implements RuntimeHost {
 			usage,
 		});
 		await this.completeInteractiveTurn(session, "aborted");
+		// The abort is fully settled (aborting flag reset above), so prompts
+		// the user queued behind the stopped turn can run now. This mirrors
+		// the drain in runTurn() for turns that resolve with an "aborted"
+		// finish; this path handles turns that end by throwing instead.
+		queueMicrotask(() => {
+			void this.pendingPromptsController.drain(session.sessionId);
+		});
 		return {
 			text: "",
 			usage,
@@ -1759,12 +2500,21 @@ export class LocalRuntimeHost implements RuntimeHost {
 					modelId: session.config.modelId,
 				},
 			});
-			await this.invoke<void>(
-				"persistSessionMessages",
-				session.sessionId,
-				session.agent.getMessages(),
-				session.config.systemPrompt,
-			);
+			try {
+				await this.invoke<void>(
+					"persistSessionMessages",
+					session.sessionId,
+					session.agent.getMessages(),
+					session.config.systemPrompt,
+				);
+			} catch (persistError) {
+				// Never let a failed transcript flush mask the error that
+				// actually killed the turn; that one is what callers must see.
+				session.config.logger?.error?.(
+					"Failed to persist session messages after turn error",
+					{ sessionId: session.sessionId, error: persistError },
+				);
+			}
 			throw error;
 		} finally {
 			session.turnUsageBaseline = undefined;
@@ -1782,10 +2532,11 @@ export class LocalRuntimeHost implements RuntimeHost {
 	 * `attempt_completion`-driven emission and works for both interactive
 	 * and non-interactive sessions.
 	 *
-	 * `shutdownSession(...)` retains a fallback emission for completed
-	 * sessions that finish without an explicit completion-tool observation
-	 * (e.g., non-interactive runs not using the yolo preset). This helper
-	 * sets `submitAndExitObserved` so the shutdown fallback can suppress a
+	 * `emitTaskCompletedOnTeardown(...)` retains a fallback emission for
+	 * completed sessions that finish without an explicit completion-tool
+	 * observation (e.g., non-interactive runs not using the yolo preset,
+	 * or hosts that disable `submit_and_exit` entirely). This helper sets
+	 * `taskCompletedEmitted` so the teardown fallback can suppress a
 	 * duplicate emission for the same logical completion.
 	 */
 	private observeTaskCompletionTool(
@@ -1800,6 +2551,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 		);
 		if (!completedWithSubmitAndExit) return;
 		session.submitAndExitObserved = true;
+		session.taskCompletedEmitted = true;
 		captureTaskCompleted(session.config.telemetry, {
 			ulid: session.sessionId,
 			provider: session.config.providerId,
@@ -1807,6 +2559,54 @@ export class LocalRuntimeHost implements RuntimeHost {
 			mode: session.config.mode,
 			durationMs: Date.now() - Date.parse(session.startedAt),
 			source: "submit_and_exit",
+			...this.getSessionAgentTelemetryIdentity(session),
+		});
+	}
+
+	/**
+	 * Single choke point for the fallback `task.completed` emission on
+	 * session teardown. Every path a session can end through funnels into
+	 * `shutdownSession(...)` or `releaseSessionRuntime(...)`, and BOTH must
+	 * call this helper — the emission must never depend on which teardown
+	 * branch a stop happens to route through. (The 4.1.11 regression:
+	 * truthful session-status reporting re-routed many interactive stops
+	 * onto the release branch, and the fallback that lived only inside
+	 * `shutdownSession` silently stopped firing for them.)
+	 *
+	 * Emits at most once per session (`taskCompletedEmitted`), and never
+	 * after the `submit_and_exit` observer already reported the completion.
+	 * The completion criterion deliberately does not read `session.status`
+	 * (whose lifecycle is what changed in 4.1.11):
+	 *
+	 * - Interactive sessions use the recorded final-turn outcome,
+	 *   `lastInteractiveTurnFinishReason === "completed"`. The extra guards
+	 *   suppress emission when teardown arrives mid-run (the in-flight turn
+	 *   being aborted is the real final turn, and it did not complete).
+	 * - Non-interactive sessions use the terminal status their run result
+	 *   resolved to (`finalStatus`, from `finalizeSingleRun`), preserving
+	 *   the pre-existing `input.status === "completed"` semantics.
+	 *
+	 * Sessions whose final turn errored or aborted emit nothing.
+	 */
+	private emitTaskCompletedOnTeardown(
+		session: ActiveSession,
+		finalStatus?: SessionStatus,
+	): void {
+		if (session.taskCompletedEmitted || session.submitAndExitObserved) return;
+		const completedCleanly = session.interactive
+			? session.lastInteractiveTurnFinishReason === "completed" &&
+				!session.aborting &&
+				session.agent.canStartRun()
+			: finalStatus === "completed";
+		if (!completedCleanly) return;
+		session.taskCompletedEmitted = true;
+		captureTaskCompleted(session.config.telemetry, {
+			ulid: session.sessionId,
+			provider: session.config.providerId,
+			modelId: session.config.modelId,
+			mode: session.config.mode,
+			durationMs: Date.now() - Date.parse(session.startedAt),
+			source: "shutdown",
 			...this.getSessionAgentTelemetryIdentity(session),
 		});
 	}
@@ -1839,8 +2639,13 @@ export class LocalRuntimeHost implements RuntimeHost {
 		);
 		emitMentionTelemetry(session.config.telemetry, enriched);
 
+		// The change protocol's opening rules, on the user's own message and
+		// only once. Ahead of the task text rather than after it: the rules say
+		// what to do before touching anything, and a model that has already read
+		// the request has already started planning against it.
+		const openingRules = session.atomicProtocol?.takeOpeningRules();
 		const prompt = formatModePrompt(
-			enriched.prompt,
+			openingRules ? `${openingRules}\n\n${enriched.prompt}` : enriched.prompt,
 			input.mode ?? session.config.mode,
 		);
 		const explicitUserFiles = this.resolveAbsoluteFilePaths(
@@ -1864,6 +2669,27 @@ export class LocalRuntimeHost implements RuntimeHost {
 
 	// ── Session lifecycle ───────────────────────────────────────────────
 
+	/**
+	 * Say whether the change protocol engaged, once, on the session's stream.
+	 *
+	 * Deferred from `startSession` deliberately: see `pendingAtomicStatus`. By
+	 * here the session is persisted and every host has it on record, so the
+	 * notice lands in the same channel as the verdicts rather than being
+	 * dropped as an event for a session nobody has heard of.
+	 */
+	private emitPendingAtomicStatus(session: ActiveSession): void {
+		const status = session.pendingAtomicStatus;
+		if (!status) return;
+		session.pendingAtomicStatus = undefined;
+		this.eventBridge.dispatchAgentEvent(session.sessionId, session.config, {
+			type: "notice",
+			noticeType: "status",
+			displayRole: "status",
+			message: status.message,
+			metadata: { kind: "atomic_status", armed: status.armed },
+		});
+	}
+
 	private async ensureSessionPersisted(session: ActiveSession): Promise<void> {
 		if (session.artifacts) return;
 		const workspacePath = resolveWorkspacePath(session.config);
@@ -1884,6 +2710,15 @@ export class LocalRuntimeHost implements RuntimeHost {
 			metadata: session.sessionMetadata,
 			startedAt: session.startedAt,
 		})) as RootSessionArtifacts;
+		if (session.compactionState) {
+			const result = await this.persistActiveSessionCompactionState(
+				session,
+				session.compactionState,
+			);
+			if (!result.updated) {
+				session.compactionState = undefined;
+			}
+		}
 	}
 
 	private async markTurnRunning(session: ActiveSession): Promise<void> {
@@ -1991,6 +2826,11 @@ export class LocalRuntimeHost implements RuntimeHost {
 	}
 
 	private async failSession(session: ActiveSession): Promise<void> {
+		// The failing turn is this session's final turn. Record it so the
+		// teardown completion criterion (`lastInteractiveTurnFinishReason`)
+		// cannot read a stale "completed" left over from an earlier
+		// successful turn and emit `task.completed` for an errored session.
+		session.lastInteractiveTurnFinishReason = "error";
 		await this.shutdownSession(session, {
 			status: "failed",
 			exitCode: 1,
@@ -2008,22 +2848,34 @@ export class LocalRuntimeHost implements RuntimeHost {
 			endReason: string;
 		},
 	): Promise<void> {
-		// Fallback `task.completed` emission for completed sessions that
-		// did not observe an explicit `submit_and_exit` tool call. The
-		// observer in `executeAgentTurn(...)` already emitted the event in
-		// that case, so we suppress here to avoid double-counting.
-		if (input.status === "completed" && !session.submitAndExitObserved) {
-			captureTaskCompleted(session.config.telemetry, {
-				ulid: session.sessionId,
-				provider: session.config.providerId,
-				modelId: session.config.modelId,
-				mode: session.config.mode,
-				durationMs: Date.now() - Date.parse(session.startedAt),
-				source: "shutdown",
-				...this.getSessionAgentTelemetryIdentity(session),
-			});
-		}
+		// Fallback `task.completed` emission for completed sessions that did
+		// not observe an explicit `submit_and_exit` tool call, routed through
+		// the shared teardown choke point so it can neither double-fire nor
+		// be skipped by teardown routing.
+		this.emitTaskCompletedOnTeardown(session, input.status);
 		notifyTeamRunWaiters(session);
+		// A pin outliving the session it was taken for is a leak of the cells it
+		// holds -- the engine reports the orphan, but nothing reclaims it. This
+		// is the one place every ended session passes through.
+		await releasePolykvSession({
+			sessionId: session.sessionId,
+			providerConfig: (session.config.providerConfig ?? {
+				providerId: session.config.providerId,
+			}) as never,
+			logger: session.config.logger,
+		});
+
+		// Drain an in-flight run before tearing anything down. `stopSession` aborts
+		// first for exactly this reason; callers that arrive here another way — hub
+		// `dispose()` on a restart, most notably — otherwise hit two failures at
+		// once: the runtime refuses to shut down while a run is in progress, and the
+		// plugin sandbox is SIGTERMed with tool calls still pending, so those calls
+		// reject with "plugin-sandbox process exited". A connector turn awaiting the
+		// run sees whichever surfaced first instead of an answer.
+		if (!session.aborting && !session.agent.canStartRun()) {
+			session.aborting = true;
+			session.agent.abort(new Error(input.shutdownReason));
+		}
 
 		const cleanupErrors: unknown[] = [];
 		const recordCleanupError = (stage: string, error: unknown) => {
@@ -2058,11 +2910,11 @@ export class LocalRuntimeHost implements RuntimeHost {
 			} catch (error) {
 				recordCleanupError("update_status", error);
 			}
-			try {
-				await session.agent.shutdown(input.shutdownReason);
-			} catch (error) {
-				recordCleanupError("agent_shutdown", error);
-			}
+		}
+		try {
+			await session.agent.shutdown(input.shutdownReason);
+		} catch (error) {
+			recordCleanupError("agent_shutdown", error);
 		}
 		try {
 			await Promise.resolve(session.runtime.shutdown(input.shutdownReason));
@@ -2074,6 +2926,10 @@ export class LocalRuntimeHost implements RuntimeHost {
 		} catch (error) {
 			recordCleanupError("plugin_sandbox_shutdown", error);
 		}
+		// A background run outlives the turn it was started in, not the session
+		// it was started from: the conversation it would report into is gone.
+		this.backgroundDelegations.get(session.sessionId)?.stopAll();
+		this.backgroundDelegations.delete(session.sessionId);
 		this.sessions.delete(session.sessionId);
 		this.emit({
 			type: "ended",
@@ -2092,6 +2948,12 @@ export class LocalRuntimeHost implements RuntimeHost {
 		session: ActiveSession,
 		reason: string,
 	): Promise<void> {
+		// Releasing is a full session exit too: interactive sessions whose
+		// reported status is already terminal are stopped/disposed through
+		// this branch. The completion emission must happen here as well —
+		// this is the branch that silently dropped `task.completed` when
+		// truthful status reporting re-routed interactive stops onto it.
+		this.emitTaskCompletedOnTeardown(session);
 		const cleanupErrors: unknown[] = [];
 		const recordCleanupError = (stage: string, error: unknown) => {
 			cleanupErrors.push(error);
@@ -2117,6 +2979,19 @@ export class LocalRuntimeHost implements RuntimeHost {
 			});
 		};
 
+		// Drain an in-flight run before tearing anything down, the same way
+		// stopSession does for its non-interactive path.
+		//
+		// Without this, releasing a session that is mid-run fails twice over: the
+		// runtime refuses to shut down ("a run is in progress") and that error is
+		// rethrown below, and the plugin sandbox is SIGTERMed while tool calls are
+		// still pending, so those calls reject with "plugin-sandbox process exited".
+		// A connector turn awaiting the run sees whichever surfaced first instead of
+		// an answer — which is what a hub restart looked like from Slack.
+		if (!session.aborting && !session.agent.canStartRun()) {
+			session.aborting = true;
+			session.agent.abort(new Error(reason));
+		}
 		try {
 			await session.agent.shutdown(reason);
 		} catch (error) {
@@ -2132,6 +3007,10 @@ export class LocalRuntimeHost implements RuntimeHost {
 		} catch (error) {
 			recordCleanupError("plugin_sandbox_shutdown", error);
 		}
+		// A background run outlives the turn it was started in, not the session
+		// it was started from: the conversation it would report into is gone.
+		this.backgroundDelegations.get(session.sessionId)?.stopAll();
+		this.backgroundDelegations.delete(session.sessionId);
 		this.sessions.delete(session.sessionId);
 		if (cleanupErrors.length > 0) {
 			throw cleanupErrors[0];
@@ -2350,6 +3229,11 @@ export class LocalRuntimeHost implements RuntimeHost {
 		});
 	}
 
+	// The emitted snapshot is a state notification (status, usage, workspace,
+	// checkpoint) and deliberately omits the transcript: emitStatus fires this
+	// on every status flip, so including messages would re-read and broadcast
+	// the entire conversation each time. Consumers that need messages read
+	// them explicitly via readSessionMessages / the session.messages command.
 	private async emitSessionSnapshot(sessionId: string): Promise<void> {
 		const session = await this.getSession(sessionId);
 		if (!session) return;
@@ -2359,7 +3243,6 @@ export class LocalRuntimeHost implements RuntimeHost {
 				sessionId,
 				snapshot: createCoreSessionSnapshot({
 					session,
-					messages: await this.readSessionMessages(sessionId),
 					usage: this.usageBySession.get(sessionId),
 					aggregateUsage: this.aggregateUsageBySession.get(sessionId),
 				}),

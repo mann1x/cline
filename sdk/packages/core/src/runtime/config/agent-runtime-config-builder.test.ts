@@ -13,6 +13,7 @@ import type {
 	ITelemetryService,
 } from "@cline/shared";
 import { describe, expect, it, vi } from "vitest";
+import { version as clineCoreVersion } from "../../../package.json";
 import {
 	buildMessageModelInfo,
 	buildModelOptions,
@@ -128,6 +129,37 @@ describe("resolveToolExecution", () => {
 // ---------------------------------------------------------------------------
 
 describe("createAgentRuntimeConfig", () => {
+	it("carries execution.reasoningLoopDetection through to the runtime", () => {
+		// The guard runs inside the model stream, so unlike its neighbours under
+		// `execution` it has to reach AgentRuntimeConfig. A builder that drops it
+		// leaves the feature unreachable and says nothing.
+		const off = createAgentRuntimeConfig({
+			agentConfig: makeAgentConfig({
+				execution: { reasoningLoopDetection: false },
+			}),
+			agentId: "a",
+			model: nullModel,
+		});
+		expect(off.reasoningLoopDetection).toBe(false);
+
+		const tuned = createAgentRuntimeConfig({
+			agentConfig: makeAgentConfig({
+				execution: { reasoningLoopDetection: { minChars: 100 } },
+			}),
+			agentId: "a",
+			model: nullModel,
+		});
+		expect(tuned.reasoningLoopDetection).toEqual({ minChars: 100 });
+
+		// Absent means absent, which the runtime reads as "on with defaults".
+		const bare = createAgentRuntimeConfig({
+			agentConfig: makeAgentConfig({}),
+			agentId: "a",
+			model: nullModel,
+		});
+		expect(bare.reasoningLoopDetection).toBeUndefined();
+	});
+
 	it("produces a config with the PLAN §3.2.1 field mapping", () => {
 		const agentConfig = makeAgentConfig({
 			systemPrompt: "sp",
@@ -192,6 +224,32 @@ describe("createAgentRuntimeConfig", () => {
 		);
 	});
 
+	it("maps telemetry identity fields from AgentConfig", () => {
+		const runtimeConfig = createAgentRuntimeConfig({
+			agentConfig: makeAgentConfig({
+				distinctId: "user-123",
+				extensionContext: {
+					client: { name: "cline-cli", version: "3.0.38" },
+				},
+			}),
+			agentId: "a",
+			model: nullModel,
+		});
+		expect(runtimeConfig.distinctId).toBe("user-123");
+		expect(runtimeConfig.clientName).toBe("cline-cli");
+		expect(runtimeConfig.clientVersion).toBe("3.0.38");
+		expect(runtimeConfig.clineCoreVersion).toBe(clineCoreVersion);
+	});
+
+	it("falls back to AgentConfig.sessionId when the input has none", () => {
+		const runtimeConfig = createAgentRuntimeConfig({
+			agentConfig: makeAgentConfig({ sessionId: "sess-parent" }),
+			agentId: "a",
+			model: nullModel,
+		});
+		expect(runtimeConfig.sessionId).toBe("sess-parent");
+	});
+
 	it("uses the override systemPrompt when provided", () => {
 		const runtimeConfig = createAgentRuntimeConfig({
 			agentConfig: makeAgentConfig({ systemPrompt: "default" }),
@@ -200,6 +258,18 @@ describe("createAgentRuntimeConfig", () => {
 			systemPrompt: "override",
 		});
 		expect(runtimeConfig.systemPrompt).toBe("override");
+	});
+
+	it("can explicitly disable an agent completion policy", () => {
+		const runtimeConfig = createAgentRuntimeConfig({
+			agentConfig: makeAgentConfig({
+				completionPolicy: { requireCompletionTool: true },
+			}),
+			agentId: "a",
+			model: nullModel,
+			completionPolicy: null,
+		});
+		expect(runtimeConfig.completionPolicy).toBeUndefined();
 	});
 
 	it("populates hooks when provided", () => {
@@ -266,5 +336,35 @@ describe("createAgentRuntimeConfig", () => {
 		expect(runtimeConfig.telemetry).toBe(telemetry);
 		expect(runtimeConfig.plugins).toHaveLength(1);
 		expect(runtimeConfig.initialMessages).toHaveLength(1);
+	});
+});
+
+describe("the discarded-reasoning condenser", () => {
+	it("reaches the runtime, like the prepare-turn half of the same feature", async () => {
+		// This builder assembles the runtime config from an explicit list, so a
+		// field the host sets on `agentConfig` and nobody copies is dropped in
+		// silence. That is what happened: `prepareTurn` is on the list and worked
+		// throughout, `condenseDiscardedReasoning` was not and never arrived, so
+		// every capped turn's reasoning went in the bin -- `notes=0` across four
+		// sessions, and the runtime saying "no condenser is installed" on the
+		// fifth.
+		const condenseDiscardedReasoning = vi.fn(async () => ({ note: "n" }));
+		const config = createAgentRuntimeConfig({
+			agentId: "a",
+			agentConfig: makeAgentConfig({ condenseDiscardedReasoning }),
+			model: nullModel,
+		});
+
+		expect(config.condenseDiscardedReasoning).toBe(condenseDiscardedReasoning);
+	});
+
+	it("stays undefined when the host installed none", () => {
+		const config = createAgentRuntimeConfig({
+			agentId: "a",
+			agentConfig: makeAgentConfig(),
+			model: nullModel,
+		});
+
+		expect(config.condenseDiscardedReasoning).toBeUndefined();
 	});
 });

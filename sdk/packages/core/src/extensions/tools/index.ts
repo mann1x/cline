@@ -6,6 +6,11 @@
 
 // Zod Utilities
 export { validateWithZod, zodToJsonSchema } from "@cline/shared";
+export {
+	createPlanModeCommandGuardExtension,
+	PLAN_MODE_COMMAND_GUARD_EXTENSION_NAME,
+	type PlanModeCommandGuardOptions,
+} from "./command-guard-extension";
 // Constants
 export { ALL_DEFAULT_TOOL_NAMES, DefaultToolNames } from "./constants";
 // AgentTool Definitions
@@ -31,6 +36,7 @@ export {
 	createDefaultShellExecutor,
 	createEditorExecutor,
 	createFileReadExecutor,
+	createReadReceipts,
 	createSearchExecutor,
 	createShellExecutor,
 	createWebFetchExecutor,
@@ -40,6 +46,9 @@ export {
 	PATCH_MARKERS,
 	PatchActionType,
 	type PatchFileChange,
+	type ReadReceipts,
+	RunCommandExecutionController,
+	type RunningCommandRegistration,
 	type SearchExecutorOptions,
 	type ShellExecutorOptions,
 	type WebFetchExecutorOptions,
@@ -62,14 +71,34 @@ export {
 	type ToolPresetName,
 	ToolPresets,
 } from "./presets";
+// QA credentials: named secrets a command can ask for, kept out of the model's
+// context and masked back out of everything it reads.
+export {
+	commandText,
+	createSecretRedactor,
+	describeQaCredentials,
+	type NormalizedQaCredentials,
+	normalizeQaCredentials,
+	QA_CREDENTIAL_MIN_VALUE_LENGTH,
+	QA_CREDENTIAL_NAME_PATTERN,
+	type QaCredential,
+	qaCredentialNames,
+	type RejectedQaCredential,
+	referencedCredentialNames,
+	resolveCredentialEnv,
+} from "./qa-credentials";
 export {
 	type BuiltinToolAvailabilityContext,
 	getCoreAcpToolNames,
 	getCoreBuiltinToolCatalog,
 	getCoreDefaultEnabledToolIds,
 	getCoreHeadlessToolNames,
+	isCoreBuiltinToolAvailable,
+	isSkillsToolAvailable,
 	resolveCoreSelectedToolIds,
+	resolveToolClientType,
 	type ToolCatalogEntry,
+	type ToolClientType,
 } from "./runtime";
 // Schemas
 export {
@@ -98,6 +127,22 @@ export {
 	type WebFetchRequest,
 	WebFetchRequestSchema,
 } from "./schemas";
+// Task progress (the checklist the model keeps while it works)
+export {
+	buildTaskProgressReminder,
+	buildTaskProgressState,
+	DEFAULT_TASK_PROGRESS_REMINDER_INTERVAL,
+	parseTaskProgress,
+	readTaskProgress,
+	TASK_PROGRESS_PARAM,
+	TASK_PROGRESS_PARAM_DESCRIPTION,
+	type TaskProgressItem,
+	type TaskProgressState,
+	TaskProgressTracker,
+	type TaskProgressTrackerOptions,
+	withTaskProgressCapture,
+	withTaskProgressParam,
+} from "./task-progress";
 export { TEAM_TOOL_NAMES } from "./team/team-tools";
 // Types
 export type {
@@ -109,6 +154,7 @@ export type {
 	EditorExecutor,
 	FileReadExecutor,
 	SearchExecutor,
+	ShellExecutionOptions,
 	ShellExecutor,
 	SkillsExecutor,
 	SkillsExecutorSkillMetadata,
@@ -198,6 +244,15 @@ export function createBuiltinTools(
 		bash: {
 			...executorOptions.bash,
 			shell,
+		},
+		// The reader resolves a relative path against the workspace, like every
+		// other tool here, rather than against wherever the process happens to
+		// have been started. Threaded here because this is the one place that
+		// knows both: an explicit `fileRead.cwd` still wins, for an embedder
+		// pointing the reader somewhere of its own.
+		fileRead: {
+			...(toolsConfig.cwd ? { cwd: toolsConfig.cwd } : {}),
+			...executorOptions.fileRead,
 		},
 	};
 

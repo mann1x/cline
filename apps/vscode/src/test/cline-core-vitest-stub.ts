@@ -82,12 +82,43 @@ export {
 	type ToolCallSignature,
 } from "../../../../sdk/packages/core/src/extensions/config/prompt-template-review"
 export {
+	describeResolvedPromptTemplate,
+	resolveSessionPromptTemplateFrom,
+} from "../../../../sdk/packages/core/src/extensions/config/prompt-template-session"
+export {
 	getShippedToolCallSignatures,
 	HOST_TOOL_INPUT_SCHEMAS,
 } from "../../../../sdk/packages/core/src/extensions/config/shipped-tool-signatures"
+export {
+	BROWSER_ACTIONS,
+	BROWSER_TOOL_DESCRIPTION,
+	BROWSER_TOOL_INPUT_SCHEMA,
+	BROWSER_TOOL_NAME,
+	createBrowserTool,
+	localPathOf,
+	renderBrowserResult,
+	splitDataUrl,
+	toNavigableUrl,
+} from "../../../../sdk/packages/core/src/extensions/tools/browser"
+export {
+	CODE_INTEL_OPERATIONS,
+	CODE_INTEL_TOOL_DESCRIPTION,
+	CODE_INTEL_TOOL_INPUT_SCHEMA,
+	CODE_INTEL_TOOL_NAME,
+	createCodeIntelTool,
+	parseCodeIntelRequest,
+} from "../../../../sdk/packages/core/src/extensions/tools/code-intel"
+// Likewise, and for a sharper reason. The delimiter scan moved out of the
+// extension and into core, and the three extension files that call it were
+// repointed at `@cline/core` — which under vitest is this file. Absent here the
+// import was `undefined`, the scan produced nothing, and four tests failed on
+// an empty verdict while the shipped build was fine. It is a pure function over
+// a string with no imports of its own, so a fake would only test the fake.
+export { describeDelimiterBalance } from "../../../../sdk/packages/core/src/extensions/tools/delimiter-balance"
 // Re-exported from source rather than stubbed: the session factory composes
 // its hook layers with it, so a fake would test the fake's composition.
 export { mergeAgentHooks } from "../../../../sdk/packages/core/src/hooks/hook-file-hooks"
+export { isPrivateModelCatalogProvider } from "../../../../sdk/packages/core/src/services/llms/provider-defaults"
 // Real implementation re-exported from the sdk source (same pattern as the
 // apply-patch executors below) so store writes are reflected in the live
 // @cline/llms registry exactly as in production. Tests that touch it must
@@ -119,6 +150,28 @@ export function setCompactionStrategyGlobally(compactionStrategy: GlobalCompacti
 	}
 }
 
+export type ModelToolName = "web_search"
+
+export function isModelToolEnabledGlobally(name: ModelToolName): boolean {
+	try {
+		const settings = JSON.parse(readFileSync(process.env.CLINE_GLOBAL_SETTINGS_PATH ?? "", "utf8"))
+		return settings.tools?.[name]?.enabled === true
+	} catch {
+		return false
+	}
+}
+
+export function setModelToolEnabledGlobally(name: ModelToolName, enabled: boolean): void {
+	const filePath = process.env.CLINE_GLOBAL_SETTINGS_PATH
+	if (filePath) {
+		let settings: { tools?: Record<string, { enabled: boolean }> } = {}
+		try {
+			settings = JSON.parse(readFileSync(filePath, "utf8"))
+		} catch {}
+		writeFileSync(filePath, JSON.stringify({ ...settings, tools: { ...settings.tools, [name]: { enabled } } }))
+	}
+}
+
 export function truncateCommandOutput(output: string): string {
 	return output
 }
@@ -138,6 +191,11 @@ export function createShellExecutor() {
 }
 
 export { augmentMcpTimeoutError } from "../../../../sdk/packages/core/src/extensions/mcp/timeout"
+// The real createMcpTools, so a test of the VS Code bridge exercises the
+// actual name transform and description building rather than a stub that
+// would have to restate them -- the whole point of routing the borrowed
+// tools through it is that they come out named like every other MCP tool.
+export { createMcpTools } from "../../../../sdk/packages/core/src/extensions/mcp/tools"
 // The real createShellTool, so tests exercise the actual description
 // building and shell classification (getShellKind) rather than a stub that
 // would have to duplicate those invariants.
@@ -152,8 +210,14 @@ export {
 } from "../../../../sdk/packages/core/src/extensions/tools/executors/apply-patch"
 export { PATCH_MARKERS, PatchActionType } from "../../../../sdk/packages/core/src/extensions/tools/executors/apply-patch-parser"
 export { createEditorExecutor } from "../../../../sdk/packages/core/src/extensions/tools/executors/editor"
+export { createFileReadExecutor } from "../../../../sdk/packages/core/src/extensions/tools/executors/file-read"
+export {
+	createReadReceipts,
+	type ReadReceipts,
+} from "../../../../sdk/packages/core/src/extensions/tools/executors/read-receipts"
 export type { EditFileInput } from "../../../../sdk/packages/core/src/extensions/tools/schemas"
 export type { ApplyPatchExecutor, EditorExecutor, ToolExecutors } from "../../../../sdk/packages/core/src/extensions/tools/types"
+export { projectSessionMessagesForDisplay } from "../../../../sdk/packages/core/src/session/display-messages"
 
 // Real file-read executor (dependency-light: node:fs/node:path + @cline/shared/storage)
 // so the workspace read override and its tests exercise the actual read semantics.

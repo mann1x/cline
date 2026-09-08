@@ -36,12 +36,19 @@ import * as fs from "fs/promises"
 import ReconnectingEventSource from "reconnecting-eventsource"
 import { z } from "zod"
 import { HostProvider } from "@/hosts/host-provider"
+import {
+	buildVscodeMcpServerEntry,
+	setVscodeMcpServerDisabled,
+	setVscodeMcpToolsAutoApproved,
+	VSCODE_MCP_SERVER_NAME,
+} from "@/sdk/vscode-lm-mcp-tools"
 import { fetch } from "@/shared/net"
 import { ShowMessageType } from "@/shared/proto/host/window"
 import { Logger } from "@/shared/services/Logger"
 import { expandEnvironmentVariables } from "@/utils/envExpansion"
 import type { TelemetryService } from "../telemetry/TelemetryService"
 import { McpOAuthManager } from "./McpOAuthManager"
+import { describeMcpOAuthFailure, type WatchedMcpFetch, watchMcpOAuthFetch } from "./mcp-oauth-failure"
 import { StreamableHttpReconnectHandler } from "./StreamableHttpReconnectHandler"
 import { McpSettingsSchema, McpTimeoutSecondsSchema, ServerConfigSchema } from "./schemas"
 import { updateMcpSettingsFile } from "./settingsLock"
@@ -72,6 +79,16 @@ const LIST_CHANGED_DEBOUNCE_MS = 300
 const LIST_CHANGED_MAX_WAIT_MS = 2000
 const LIST_CHANGED_MAX_RETRIES = 3
 const LIST_CHANGED_RETRY_BASE_DELAY_MS = 1000
+
+/**
+ * The MCP SDK's `Protocol.request` raises a bare `Not connected` when the client
+ * has no transport — before the request is written, so the call was never sent.
+ * That distinction is what makes retrying it after a reconnect safe.
+ */
+function isMcpNotConnectedError(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error ?? "")
+	return message.trim().toLowerCase() === "not connected"
+}
 
 export class McpHub {
 	getMcpServersPath: () => Promise<string>
@@ -167,7 +184,24 @@ export class McpHub {
 	getServers(): McpServer[] {
 		// Only return enabled servers
 
-		return this.connections.filter((conn) => !conn.server.disabled).map((conn) => conn.server)
+		return [
+			...this.connections.filter((conn) => !conn.server.disabled).map((conn) => conn.server),
+			...this.vscodeMcpServers().filter((server) => !server.disabled),
+		]
+	}
+
+	/**
+	 * The MCP servers VS Code is running, which this hub did not start.
+	 *
+	 * They have no connection here -- they are invoked through
+	 * `vscode.lm.invokeTool` -- but they are servers as far as the panel and
+	 * the auto-approval lookup are concerned, and both find them by asking
+	 * this hub for its servers. Nothing else about them belongs in
+	 * `connections`: there is no transport to open, close or restart.
+	 */
+	private vscodeMcpServers(): McpServer[] {
+		const entry = buildVscodeMcpServerEntry()
+		return entry ? [entry] : []
 	}
 
 	/**
@@ -472,6 +506,9 @@ export class McpHub {
 			)
 
 			let transport: StdioClientTransport | SSEClientTransport | StreamableHTTPClientTransport
+			// Set for the remote transports, so a connection that dies inside the
+			// OAuth handshake can name the request that answered.
+			let oauthWatch: WatchedMcpFetch | undefined
 
 			// Create OAuth provider for remote transports (SSE and HTTP)
 			const authProvider =
@@ -541,6 +578,8 @@ export class McpHub {
 					break
 				}
 				case "sse": {
+					oauthWatch = watchMcpOAuthFetch(expandedConfig.url)
+					const sseWatch = oauthWatch
 					const sseOptions = {
 						authProvider,
 						requestInit: {
@@ -565,7 +604,7 @@ export class McpHub {
 									if (tokens?.access_token) {
 										headers.set("Authorization", `Bearer ${tokens.access_token}`)
 									}
-									return fetch(url.toString(), { ...init, headers })
+									return sseWatch.fetch(url.toString(), { ...init, headers })
 								}
 							: undefined,
 					}
@@ -601,8 +640,14 @@ export class McpHub {
 					// but many servers (incorrectly) return 404. The SDK only handles 405
 					// gracefully, so we normalize 404 -> 405 to fix compatibility.
 					// See: https://github.com/modelcontextprotocol/typescript-sdk/issues/1150
+					// Records which request in the OAuth handshake failed, so a
+					// connection that dies during sign-in can say what answered
+					// instead of surfacing the SDK's parse error for a plain-text
+					// body (mann1x/cline#63).
+					oauthWatch = watchMcpOAuthFetch(expandedConfig.url)
+					const watchedFetch = oauthWatch.fetch
 					const streamableHttpFetch = (async (url, init) => {
-						const response = await fetch(url, init)
+						const response = await watchedFetch(url, init)
 						if (init?.method === "GET" && response.status === 404) {
 							return new Response(response.body, {
 								status: 405,
@@ -676,7 +721,14 @@ export class McpHub {
 				const timeout = resolveMcpServerTimeoutMs(connection.server.config)
 				await client.connect(transport, { timeout })
 			} catch (error) {
-				if (error instanceof UnauthorizedError) {
+				// A handshake that got as far as a failing OAuth endpoint is a
+				// server asking to be authenticated, not a broken connection.
+				// Without this it was thrown as an ordinary failure -- the user
+				// saw the SDK's JSON parse error for a plain-text body and got no
+				// Authenticate button at all, because the button only appears on
+				// a connection marked as needing one (mann1x/cline#63).
+				const oauthFailure = oauthWatch?.lastFailure()
+				if (error instanceof UnauthorizedError || oauthFailure) {
 					// Server requires OAuth authentication
 					Logger.log(`Server "${name}" requires OAuth authentication`)
 					const unauthConnection: McpConnection = {
@@ -687,7 +739,9 @@ export class McpHub {
 							disabled: false,
 							oauthRequired: true,
 							oauthAuthStatus: "unauthenticated",
-							error: "This MCP server requires authentication to get started.",
+							error: oauthFailure
+								? describeMcpOAuthFailure(name, oauthFailure)
+								: "This MCP server requires authentication to get started.",
 						},
 						client,
 						transport,
@@ -1561,14 +1615,40 @@ export class McpHub {
 	 * @param serverOrder Array of server names in the order they appear in settings
 	 * @returns Array of McpServer objects sorted according to settings order
 	 */
+	/**
+	 * Every server the panel should draw, in settings-file order.
+	 *
+	 * The settings file is read for the order alone; a failure to read it is
+	 * not a reason to return nothing, which is what a toggle on a borrowed
+	 * server would otherwise do the first time someone ran without one.
+	 */
+	private async getServersForPanel(): Promise<McpServer[]> {
+		let serverOrder: string[] = []
+		try {
+			const settingsPath = await getMcpSettingsFilePathHelper(await this.getSettingsDirectoryPath())
+			const content = await fs.readFile(settingsPath, "utf-8")
+			serverOrder = Object.keys(JSON.parse(content).mcpServers || {})
+		} catch {
+			// Order only; the servers themselves come from memory.
+		}
+		return this.getSortedMcpServers(serverOrder)
+	}
+
 	private getSortedMcpServers(serverOrder: string[]): McpServer[] {
-		return [...this.connections]
-			.sort((a, b) => {
-				const indexA = serverOrder.indexOf(a.server.name)
-				const indexB = serverOrder.indexOf(b.server.name)
-				return indexA - indexB
-			})
-			.map((connection) => connection.server)
+		return [
+			...[...this.connections]
+				.sort((a, b) => {
+					const indexA = serverOrder.indexOf(a.server.name)
+					const indexB = serverOrder.indexOf(b.server.name)
+					return indexA - indexB
+				})
+				.map((connection) => connection.server),
+			// Last, and unsorted: the order the others are in is the order they
+			// appear in the settings file, and these are not in it. Disabled
+			// ones are kept here, unlike in getServers(), because the panel has
+			// to draw the tick box that turns them back on.
+			...this.vscodeMcpServers(),
+		]
 	}
 
 	private async notifyWebviewOfServerChanges(): Promise<void> {
@@ -1619,6 +1699,14 @@ export class McpHub {
 	// Public methods for server management
 
 	public async toggleServerDisabledRPC(serverName: string, disabled: boolean): Promise<McpServer[]> {
+		// Borrowed from VS Code: there is no entry in the settings file to
+		// write and no connection to rebuild, so this is a setting and a
+		// redraw. Handled before the lock is taken, not inside it.
+		if (serverName === VSCODE_MCP_SERVER_NAME) {
+			await setVscodeMcpServerDisabled(disabled)
+			await this.notifyWebviewOfServerChanges()
+			return this.getServersForPanel()
+		}
 		this.isConnecting = true
 		try {
 			// Hold the cross-process lock across read-modify-write so a concurrent
@@ -1709,8 +1797,8 @@ export class McpHub {
 			toolArguments ? Object.keys(toolArguments) : undefined,
 		)
 
-		try {
-			const result = await connection.client.request(
+		const sendRequest = (client: McpConnection["client"]) =>
+			client.request(
 				{
 					method: "tools/call",
 					params: {
@@ -1724,6 +1812,36 @@ export class McpHub {
 					signal,
 				},
 			)
+
+		try {
+			let result: Awaited<ReturnType<typeof sendRequest>>
+			try {
+				result = await sendRequest(connection.client)
+			} catch (error) {
+				if (!isMcpNotConnectedError(error) || signal?.aborted) {
+					throw error
+				}
+				// A stdio server that exits (or any transport that closes) leaves the
+				// client in place with its transport cleared, and only the connection's
+				// status is updated — nothing rebuilds it. Every later call then failed
+				// with a bare `Not connected`, which reached the model as the tool's
+				// result with no indication that the server had simply gone away.
+				//
+				// Retrying is safe here and only here: the SDK raises this before the
+				// request touches the transport, so the call was never sent and cannot
+				// be duplicated. Timeouts and in-flight failures are rethrown untouched.
+				Logger.warn(`MCP server "${serverName}" was not connected for ${toolName}; reconnecting and retrying once`)
+				const reconnected = await this.reconnectForToolCall(serverName)
+				if (!reconnected?.client) {
+					const detail = this.connections.find((conn) => conn.server.name === serverName)?.server.error
+					throw new Error(
+						`Server "${serverName}" disconnected and could not be reconnected, so ${toolName} was not run.${
+							detail ? ` Last error: ${detail}` : ""
+						}`,
+					)
+				}
+				result = await sendRequest(reconnected.client)
+			}
 
 			this.telemetryService.captureMcpToolCall(
 				ulid,
@@ -1752,6 +1870,41 @@ export class McpHub {
 	}
 
 	/**
+	 * Rebuild a connection whose transport died, from inside a tool call.
+	 *
+	 * `restartConnection` is the user-facing path: it announces itself with toasts
+	 * and waits half a second so the restart is visible. Neither belongs in the
+	 * middle of a tool call the agent is waiting on, so this is the quiet
+	 * equivalent — same delete/connect, no notifications, no artificial delay.
+	 */
+	private async reconnectForToolCall(serverName: string): Promise<McpConnection | undefined> {
+		const existing = this.connections.find((conn) => conn.server.name === serverName)
+		const config = existing?.server.config
+		if (!config) {
+			return undefined
+		}
+
+		existing.server.status = "connecting"
+		existing.server.error = ""
+		this.isConnecting = true
+		try {
+			await this.deleteConnection(serverName)
+			await this.connectToServer(serverName, JSON.parse(config), "internal")
+		} catch (error) {
+			Logger.error(`Failed to reconnect MCP server ${serverName} for a tool call:`, error)
+			return undefined
+		} finally {
+			this.isConnecting = false
+			await this.notifyWebviewOfServerChanges().catch((notifyError) => {
+				Logger.error(`Failed to publish server state for "${serverName}":`, notifyError)
+			})
+		}
+
+		const reconnected = this.connections.find((conn) => conn.server.name === serverName)
+		return reconnected?.server.status === "connected" ? reconnected : undefined
+	}
+
+	/**
 	 * RPC variant of toggleToolAutoApprove that returns the updated servers instead of notifying the webview
 	 * @param serverName The name of the MCP server
 	 * @param toolNames Array of tool names to toggle auto-approve for
@@ -1759,6 +1912,10 @@ export class McpHub {
 	 * @returns Array of updated MCP servers
 	 */
 	async toggleToolAutoApproveRPC(serverName: string, toolNames: string[], shouldAllow: boolean): Promise<McpServer[]> {
+		if (serverName === VSCODE_MCP_SERVER_NAME) {
+			await setVscodeMcpToolsAutoApproved(toolNames, shouldAllow)
+			return this.getServersForPanel()
+		}
 		try {
 			const settingsPath = await getMcpSettingsFilePathHelper(await this.getSettingsDirectoryPath())
 			const { config, autoApprove } = await updateMcpSettingsFile(settingsPath, (parsed) => {
@@ -1849,7 +2006,19 @@ export class McpHub {
 		}
 	}
 
-	public async addRemoteServer(serverName: string, serverUrl: string, transportType = "streamableHttp"): Promise<McpServer[]> {
+	/**
+	 * @param options.oauthClient a client the server issued itself. Servers that
+	 * refuse dynamic client registration (GitHub, Slack, Entra publish no
+	 * registration endpoint; Figma answers 403) can be reached no other way, and
+	 * the failure without it reads as rejected credentials rather than as a
+	 * refused registration.
+	 */
+	public async addRemoteServer(
+		serverName: string,
+		serverUrl: string,
+		transportType = "streamableHttp",
+		options: { oauthClient?: { clientId: string; clientSecret?: string } } = {},
+	): Promise<McpServer[]> {
 		try {
 			const settingsPath = await getMcpSettingsFilePathHelper(await this.getSettingsDirectoryPath())
 			await updateMcpSettingsFile(settingsPath, (current) => {
@@ -1863,6 +2032,7 @@ export class McpHub {
 					type: transportType,
 					disabled: false,
 					autoApprove: [],
+					...(options.oauthClient ? { oauthClient: options.oauthClient } : {}),
 				}
 
 				// Expand environment variables for validation
@@ -1899,11 +2069,76 @@ export class McpHub {
 	}
 
 	/**
+	 * Add a server Cline launches itself and talks to over stdio.
+	 *
+	 * Written in the flat shape the settings file already uses — `command`,
+	 * `args`, and optionally `env` and `cwd` — so a server added here reads
+	 * exactly like one added by hand, and can be edited by hand afterwards. As
+	 * with the remote form, the zod-transformed config is used for validation
+	 * only; what lands in the file is what the user typed.
+	 */
+	public async addLocalServer(
+		serverName: string,
+		options: { command: string; args?: string[]; env?: Record<string, string>; cwd?: string },
+	): Promise<McpServer[]> {
+		try {
+			const settingsPath = await getMcpSettingsFilePathHelper(await this.getSettingsDirectoryPath())
+			await updateMcpSettingsFile(settingsPath, (current) => {
+				const servers = current.mcpServers as Record<string, any>
+				if (servers[serverName]) {
+					throw new Error(`An MCP server with the name "${serverName}" already exists`)
+				}
+
+				const args = (options.args ?? []).filter((arg) => arg.length > 0)
+				const env = Object.fromEntries(Object.entries(options.env ?? {}).filter(([key]) => key.trim().length > 0))
+				const cwd = options.cwd?.trim()
+				const serverConfig = {
+					type: "stdio",
+					command: options.command,
+					...(args.length > 0 ? { args } : {}),
+					...(Object.keys(env).length > 0 ? { env } : {}),
+					...(cwd ? { cwd } : {}),
+					disabled: false,
+					autoApprove: [],
+				}
+
+				// Same validation the file itself is held to, against the expanded
+				// form: a command written as `${env:HOME}/bin/thing` has to be
+				// checked as what it becomes, not as what it says.
+				const expandedConfig = expandEnvironmentVariables(serverConfig)
+				if (typeof expandedConfig.command !== "string" || expandedConfig.command.trim() === "") {
+					throw new Error("Command is required")
+				}
+				ServerConfigSchema.parse(expandedConfig)
+
+				current.mcpServers = { ...servers, [serverName]: serverConfig }
+				return current
+			})
+			const settings = await this.readPostWriteMcpSettings()
+
+			await this.updateServerConnectionsRPC(settings.mcpServers as Record<string, McpServerConfig>)
+
+			return this.getSortedMcpServers(Object.keys(settings.mcpServers || {}))
+		} catch (error) {
+			Logger.error("Failed to add local MCP server:", error)
+			throw error
+		}
+	}
+
+	/**
 	 * RPC variant of deleteServer that returns the updated server list directly
 	 * @param serverName The name of the server to delete
 	 * @returns Array of remaining MCP servers
 	 */
 	public async deleteServerRPC(serverName: string): Promise<McpServer[]> {
+		// Borrowed from VS Code, so there is nothing here to delete. Said
+		// plainly: the generic path would report it as missing from the MCP
+		// configuration, which is true and sounds like something is broken.
+		if (serverName === VSCODE_MCP_SERVER_NAME) {
+			throw new Error(
+				"These tools come from the MCP servers configured in VS Code. Remove the server there, or use the toggle to stop offering them to the model.",
+			)
+		}
 		try {
 			// Clear OAuth data BEFORE removing from config (while we still have the connection/URL)
 			await this.clearOAuthForConnection(serverName)
@@ -1974,6 +2209,75 @@ export class McpHub {
 			HostProvider.window.showMessage({
 				type: ShowMessageType.ERROR,
 				message: `Failed to update server timeout: ${error instanceof Error ? error.message : String(error)}`,
+			})
+			throw error
+		}
+	}
+
+	/**
+	 * Set, or clear, the OAuth client a server was issued.
+	 *
+	 * For a server that refuses to register one for us. Figma's advertises a
+	 * registration endpoint and answers every anonymous registration with a
+	 * bare `403 Forbidden` -- for any body, any client name, with or without
+	 * credentials -- so a client the user created in the provider's own console
+	 * is the only way in. Until this existed the only way to supply one was
+	 * editing the settings file by hand, which is not a thing to ask of someone
+	 * whose server simply will not connect.
+	 *
+	 * Clearing it returns the server to dynamic registration, so a user who
+	 * pasted the wrong id is not stuck with it.
+	 */
+	public async updateServerOAuthClientRPC(
+		serverName: string,
+		client: { clientId?: string; clientSecret?: string },
+	): Promise<McpServer[]> {
+		try {
+			const clientId = client.clientId?.trim()
+			const clientSecret = client.clientSecret?.trim()
+			if (clientSecret && !clientId) {
+				throw new Error("A client secret needs the client ID it belongs to.")
+			}
+
+			const settingsPath = await getMcpSettingsFilePathHelper(await this.getSettingsDirectoryPath())
+			await updateMcpSettingsFile(settingsPath, (parsed) => {
+				const servers = parsed.mcpServers as Record<string, any>
+				if (!servers[serverName]) {
+					throw new Error(`Server "${serverName}" not found in settings`)
+				}
+				const { oauthClient: _dropped, ...rest } = servers[serverName]
+				const next: Record<string, unknown> = clientId
+					? { ...rest, oauthClient: { clientId, ...(clientSecret ? { clientSecret } : {}) } }
+					: rest
+
+				// Whatever a previous attempt registered or was issued belongs
+				// to the old client. Left in place it sends the next connection
+				// back to the client the user has just replaced, and a token
+				// minted for that client fails in a way that reads like the new
+				// one is wrong. Cleared in the same write as the client itself,
+				// so the two can never disagree on disk. The redirect URL stays:
+				// it is ours, not the client's.
+				const state = next.oauth as Record<string, unknown> | undefined
+				if (state) {
+					const { tokens: _t, clientInformation: _c, codeVerifier: _v, lastAuthenticatedAt: _a, ...keep } = state
+					next.oauth = keep
+				}
+
+				servers[serverName] = next
+				parsed.mcpServers = servers
+				return parsed
+			})
+
+			const config = await this.readPostWriteMcpSettings()
+			await this.updateServerConnectionsRPC(config.mcpServers as Record<string, McpServerConfig>)
+
+			const serverOrder = Object.keys(config.mcpServers || {})
+			return this.getSortedMcpServers(serverOrder)
+		} catch (error) {
+			Logger.error("Failed to update the OAuth client:", error)
+			HostProvider.window.showMessage({
+				type: ShowMessageType.ERROR,
+				message: `Failed to set the OAuth client: ${error instanceof Error ? error.message : String(error)}`,
 			})
 			throw error
 		}

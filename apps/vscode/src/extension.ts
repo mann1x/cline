@@ -50,6 +50,7 @@ import { VscodeWebviewProvider } from "./hosts/vscode/VscodeWebviewProvider"
 import { exportVSCodeStorageToSharedFiles } from "./hosts/vscode/vscode-to-file-migration"
 import { ExtensionRegistryInfo } from "./registry"
 import { AuthService, LogoutReason } from "./sdk/auth-service"
+import { installOllamaStreamDispatcher, reportOllamaStreamDispatcher } from "./sdk/ollama-stream-dispatcher"
 import { telemetryService } from "./services/telemetry"
 import type { RolloutBundleActivation } from "./services/telemetry/rollout-metadata"
 import { LG_TASK_URI_PATH, SharedUriHandler, TASK_URI_PATH } from "./services/uri/SharedUriHandler"
@@ -65,6 +66,11 @@ export async function reportRolloutActivation(input: RolloutBundleActivation): P
 // for all-platform should be registered in common.ts.
 export async function activate(context: vscode.ExtensionContext) {
 	const activationStartTime = performance.now()
+
+	// 0. Hand the Ollama vendor its stream dispatcher. Before anything that can
+	// build a session: the vendor resolves one once and caches the result, so a
+	// session created first would cache the "none" it finds on its own.
+	installOllamaStreamDispatcher()
 
 	// 1. Set up HostProvider for VSCode
 	// IMPORTANT: This must be done before any service can be registered
@@ -84,6 +90,14 @@ export async function activate(context: vscode.ExtensionContext) {
 	// 4. Register services and perform common initialization
 	// IMPORTANT: Must be done after host provider is setup and migrations are complete
 	const webview = (await initialize(storageContext)) as VscodeWebviewProvider
+
+	// Only now can anything be logged. `Logger` fans out to a set of
+	// subscribers and `initialize` is what adds them — registering the output
+	// channel earlier creates somewhere to write but nothing writing to it.
+	// This line has moved twice for that reason: first from the top of
+	// `activate`, then from `setupHostProvider`, each time still ahead of the
+	// subscriber and each time silently producing nothing.
+	reportOllamaStreamDispatcher()
 
 	// 5. Register services and commands specific to VS Code
 	// Initialize hook discovery cache for performance optimization
@@ -248,51 +262,23 @@ export async function activate(context: vscode.ExtensionContext) {
 				public static readonly providedCodeActionKinds = [vscode.CodeActionKind.QuickFix, vscode.CodeActionKind.Refactor]
 
 				provideCodeActions(
-					document: vscode.TextDocument,
-					range: vscode.Range,
+					_document: vscode.TextDocument,
+					_range: vscode.Range,
 					context: vscode.CodeActionContext,
 				): vscode.CodeAction[] {
-					const CONTEXT_LINES_TO_EXPAND = 3
-					const START_OF_LINE_CHAR_INDEX = 0
-					const LINE_COUNT_ADJUSTMENT_FOR_ZERO_INDEXING = 1
-
+					// NOTE: These commands must NOT carry `arguments`. Commands with arguments are
+					// routed through VS Code's CommandsConverter cache, whose entries are disposed
+					// when the code action list is disposed - executing the action then fails with
+					// "Actual command not found, wanted to execute ...". The handlers recover the
+					// range (selection, expanded around the cursor when empty) and intersecting
+					// diagnostics themselves via getContextForCommand.
 					const actions: vscode.CodeAction[] = []
-					const editor = vscode.window.activeTextEditor // Get active editor for selection check
-
-					// Expand range to include surrounding 3 lines or use selection if broader
-					const selection = editor?.selection
-					let expandedRange = range
-					if (
-						editor &&
-						selection &&
-						!selection.isEmpty &&
-						selection.contains(range.start) &&
-						selection.contains(range.end)
-					) {
-						expandedRange = selection
-					} else {
-						expandedRange = new vscode.Range(
-							Math.max(0, range.start.line - CONTEXT_LINES_TO_EXPAND),
-							START_OF_LINE_CHAR_INDEX,
-							Math.min(
-								document.lineCount - LINE_COUNT_ADJUSTMENT_FOR_ZERO_INDEXING,
-								range.end.line + CONTEXT_LINES_TO_EXPAND,
-							),
-							document.lineAt(
-								Math.min(
-									document.lineCount - LINE_COUNT_ADJUSTMENT_FOR_ZERO_INDEXING,
-									range.end.line + CONTEXT_LINES_TO_EXPAND,
-								),
-							).text.length,
-						)
-					}
 
 					// Add to Cline (Always available)
 					const addAction = new vscode.CodeAction("Add to Cline", vscode.CodeActionKind.QuickFix)
 					addAction.command = {
 						command: commands.AddToChat,
 						title: "Add to Cline",
-						arguments: [expandedRange, context.diagnostics],
 					}
 					actions.push(addAction)
 
@@ -301,7 +287,6 @@ export async function activate(context: vscode.ExtensionContext) {
 					explainAction.command = {
 						command: commands.ExplainCode,
 						title: "Explain with Cline",
-						arguments: [expandedRange],
 					}
 					actions.push(explainAction)
 
@@ -310,7 +295,6 @@ export async function activate(context: vscode.ExtensionContext) {
 					improveAction.command = {
 						command: commands.ImproveCode,
 						title: "Improve with Cline",
-						arguments: [expandedRange],
 					}
 					actions.push(improveAction)
 
@@ -321,7 +305,6 @@ export async function activate(context: vscode.ExtensionContext) {
 						fixAction.command = {
 							command: commands.FixWithCline,
 							title: "Fix with Cline",
-							arguments: [expandedRange, context.diagnostics],
 						}
 						actions.push(fixAction)
 					}

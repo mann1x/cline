@@ -8,6 +8,7 @@ import {
 	isSettingsKey,
 	type LocalState,
 	type LocalStateKey,
+	NonApiHandlerSecretKeys,
 	type RemoteConfigFields,
 	type SecretKey,
 	SecretKeys,
@@ -746,8 +747,13 @@ export class StateManager {
 	 * Construct API configuration from cached component keys
 	 */
 	private constructApiConfigurationFromCache(): ApiConfiguration {
-		// Build secrets object
-		const secrets = Object.fromEntries(SecretKeys.map((key) => [key, this.getSecret(key)])) as Secrets
+		// Build secrets object. Keys that are not provider credentials are left
+		// out: this object becomes the API configuration, which is sent to the
+		// webview, and a QA credential in there would be the leak the feature
+		// exists to prevent. See NonApiHandlerSecretKeys.
+		const secrets = Object.fromEntries(
+			SecretKeys.filter((key) => !NonApiHandlerSecretKeys.has(key)).map((key) => [key, this.getSecret(key)]),
+		) as Secrets
 
 		// Preserve legacy fallback behavior for LiteLLM API key:
 		// if a remoteLiteLlmApiKey is set (via remote config), it should

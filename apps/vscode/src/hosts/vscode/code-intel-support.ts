@@ -1,5 +1,5 @@
+import type { CodeIntelLocation, CodeIntelProvider, CodeIntelSymbol } from "@cline/core"
 import * as vscode from "vscode"
-import type { CodeIntelLocation, CodeIntelProvider, CodeIntelSymbol } from "@/sdk/code-intel-tool"
 
 /**
  * The VS Code half of `code_intel`.

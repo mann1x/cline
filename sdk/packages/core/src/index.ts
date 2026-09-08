@@ -24,6 +24,13 @@ export {
 	isClineOrgIndividualInferenceSubscriptionMessage,
 	isClinePassLimitError,
 	isClinePassLimitMessage,
+	// A host that resolves the context window itself has to be able to ask the
+	// server what the model declares, and to ask before the first request —
+	// otherwise the window the sampler uses and the one compaction sizes itself
+	// against are two different numbers.
+	primeDeclaredNumCtx,
+	readDeclaredFamily,
+	readDeclaredNumCtx,
 } from "@cline/llms";
 // Shared contracts and path helpers re-exported for app consumers.
 export type {
@@ -225,17 +232,32 @@ export type {
 	RestoreResult,
 } from "./cline-core/types";
 export type {
+	AgentPluginPackageDiagnostic,
+	AgentPluginPackageDiagnosticScope,
+	AgentPluginPackageLoadReport,
+	AgentPluginPackageManifest,
+	AgentPluginPackageMcpServer,
+	AgentPluginPackageSkill,
+	AgentSkillMetadata,
 	LoadAgentPluginFromPathOptions,
+	LoadAgentPluginPackagesOptions,
+	LoadedAgentPluginPackage,
+	ParsedAgentSkill,
 	PluginInitializationFailure,
 	PluginInitializationWarning,
 	PluginLoadDiagnostics,
 	ResolveAgentPluginPathsOptions,
 } from "./extensions";
 export {
+	AGENT_PLUGINS_V1_MANIFEST_SCHEMA,
+	AGENT_PLUGINS_V1_MCP_SCHEMA,
 	discoverPluginModulePaths,
+	getPluginDisplayName,
 	loadAgentPluginFromPath,
+	loadAgentPluginPackages,
 	loadAgentPluginsFromPaths,
 	loadAgentPluginsFromPathsWithDiagnostics,
+	parseAgentSkillMarkdown,
 	resolveAgentPluginPaths,
 	resolveAndLoadAgentPlugins,
 	resolvePluginConfigSearchPaths,
@@ -249,6 +271,7 @@ export type {
 	CreateUserInstructionConfigServiceOptions,
 	CreateWorkflowsConfigDefinitionOptions,
 	ParseMarkdownFrontmatterResult,
+	ResolveRuntimeSlashCommandOptions,
 	RuleConfig,
 	SkillConfig,
 	UnifiedConfigDefinition,
@@ -266,12 +289,14 @@ export type {
 export {
 	type AuditPromptTemplateProposalArgs,
 	auditPromptTemplateProposal,
+	combineUserInstructionConfigServices,
 	createPromptTemplateHooks,
 	createRulesConfigDefinition,
 	createSkillsConfigDefinition,
 	createUserInstructionConfigService,
 	createWorkflowsConfigDefinition,
 	DEFAULT_REQUIRED_REWRITES,
+	describeResolvedPromptTemplate,
 	type GeneratePromptTemplateArgs,
 	type GeneratePromptTemplateResult,
 	generatePromptTemplate,
@@ -297,8 +322,11 @@ export {
 	RULES_CONFIG_DIRECTORY_NAME,
 	resolvePromptTemplateDirectories,
 	resolveRulesConfigSearchPaths,
+	resolveSessionPromptTemplateFrom,
 	resolveSkillsConfigSearchPaths,
 	resolveWorkflowsConfigSearchPaths,
+	type SessionPromptTemplateRequest,
+	type SessionPromptTemplateResult,
 	SKILLS_CONFIG_DIRECTORY_NAME,
 	summarizeToolCallSignatures,
 	type ToolCallSignature,
@@ -317,8 +345,10 @@ export {
 	createDisabledMcpToolPolicies,
 	createDisabledMcpToolPolicy,
 	createMcpTools,
+	DEFAULT_MCP_CONNECT_TIMEOUT_MS,
 	type DefaultMcpServerClientFactoryOptions,
 	getMcpServerOAuthState,
+	getMcpServerOAuthStatus,
 	hasMcpSettingsFile,
 	InMemoryMcpManager,
 	type LoadMcpSettingsOptions,
@@ -327,8 +357,10 @@ export {
 	type McpConnectionStatus,
 	type McpManager,
 	type McpManagerOptions,
+	McpOAuthClientChangedError,
 	type McpServerClient,
 	type McpServerClientFactory,
+	type McpServerOAuthClientConfig,
 	type McpServerOAuthState,
 	type McpServerOAuthStatus,
 	type McpServerRegistration,
@@ -348,22 +380,34 @@ export {
 	type McpToolDescriptor,
 	type McpToolNameTransform,
 	type McpToolProvider,
+	type ProbeMcpServerConnectionOptions,
+	type ProbeMcpServerConnectionResult,
+	parseMcpServerRegistration,
+	probeMcpServerConnection,
 	type RegisterMcpServersFromSettingsOptions,
 	registerMcpServersFromSettingsFile,
 	resolveDefaultMcpSettingsPath,
+	resolveMcpServerRegistration,
 	resolveMcpServerRegistrations,
 	type SetMcpServerDisabledOptions,
 	setMcpServerDisabled,
+	type UpdateMcpServerOAuthStateOptions,
 	updateMcpServerOAuthState,
 	updateMcpServerOAuthStateAsync,
 	updateMcpSettingsFile,
 	updateMcpSettingsFileSync,
 } from "./extensions/mcp";
 export {
+	type AgentProfileConnection,
+	type AgentProviderConnection,
 	type AgentTask,
 	AgentTeam,
 	AgentTeamsRuntime,
 	type AgentTeamsRuntimeOptions,
+	type BackgroundDelegationControls,
+	type BackgroundDelegationRegistry,
+	type BackgroundDelegationStatus,
+	type BackgroundDelegationView,
 	type BootstrapAgentTeamsOptions,
 	type BootstrapAgentTeamsResult,
 	bootstrapAgentTeams,
@@ -379,6 +423,7 @@ export {
 	type ConfiguredAgentToolDescriptor,
 	type CreateAgentTeamsToolsOptions,
 	createAgentTeamsTools,
+	createBackgroundDelegationRegistry,
 	createConfiguredAgentTools,
 	createDelegatedAgent,
 	createDelegatedAgentConfigProvider,
@@ -387,17 +432,24 @@ export {
 	type DelegatedAgentConnectionConfig,
 	type DelegatedAgentKind,
 	type DelegatedAgentRuntimeConfig,
+	delegateToConfiguredAgent,
+	findConfiguredAgent,
+	listConfiguredAgentSummaries,
 	loadConfiguredAgentConfigs,
 	parseConfiguredAgentConfig,
+	renderDelegationForTranscript,
 	reviveTeamStateDates,
 	type SpawnTeammateOptions,
+	type StartBackgroundDelegationInput,
 	type SubAgentEndContext,
 	type SubAgentStartContext,
+	startBackgroundDelegation,
 	type TaskResult,
 	type TeamEvent,
 	type TeamMemberConfig,
 	type TeamTeammateRuntimeConfig,
 	toTeamProgressLifecycleEvent,
+	UnknownConfiguredAgentError,
 } from "./extensions/tools/team";
 export {
 	createAgentHooksExtension,
@@ -465,6 +517,7 @@ export {
 } from "./runtime/host/host";
 export { LocalRuntimeHost } from "./runtime/host/local-runtime-host";
 export type {
+	CommandExecutionRuntimeService,
 	PendingPromptMutationResult,
 	PendingPromptsDeleteInput,
 	PendingPromptsListInput,
@@ -486,6 +539,7 @@ export type {
 } from "./runtime/host/runtime-host";
 export {
 	isSessionNotFoundError,
+	isUnusableSessionError,
 	SESSION_NOT_FOUND_ERROR_CODE,
 	SessionNotFoundError,
 	splitCoreSessionConfig,
@@ -505,6 +559,13 @@ export type {
 	RuntimeBuilderInput,
 	SessionRuntime,
 } from "./runtime/orchestration/session-runtime";
+export {
+	getProcessStartToken,
+	getProcessStartTokenAsync,
+	type ProcessStartTokenProbeResult,
+	probeProcessStartToken,
+	probeProcessStartTokenAsync,
+} from "./runtime/process-start-token";
 export {
 	formatRulesForSystemPrompt,
 	isRuleEnabled,
@@ -530,6 +591,21 @@ export {
 	reconnectPersistedConnectors,
 	removePersistedConnectorConnection,
 } from "./services/connectors/connector-autostart";
+export { buildConnectorChildEnv } from "./services/connectors/connector-child-env";
+export { cleanupConnectorInstanceViaCli } from "./services/connectors/connector-cleanup";
+export {
+	ADOPTED_POLL_INTERVAL_MS,
+	ConnectorSupervisor,
+	type ConnectorSupervisorDeps,
+	getActiveConnectorSupervisor,
+	RESTART_BASE_DELAY_MS,
+	RESTART_COUNTER_RESET_MS,
+	RESTART_GIVE_UP_AFTER,
+	RESTART_MAX_DELAY_MS,
+	STOP_SIGKILL_TIMEOUT_MS,
+	STOP_SIGTERM_TIMEOUT_MS,
+	setActiveConnectorSupervisor,
+} from "./services/connectors/connector-supervisor";
 export {
 	FeatureFlagsService,
 	type FeatureFlagsServiceOptions,
@@ -546,7 +622,9 @@ export {
 	filterDisabledTools,
 	filterExtensionToolRegistrations,
 	GlobalSettingsSchema,
+	isAgentPluginDisabledGlobally,
 	isAutoUpdateEnabledGlobally,
+	isModelToolEnabledGlobally,
 	isPluginDisabledGlobally,
 	isTelemetryOptedOutGlobally,
 	isToolDisabledGlobally,
@@ -555,16 +633,22 @@ export {
 	readGlobalSettings,
 	readPlanActModeGlobally,
 	readToolAutoApproveGlobally,
+	readTuiThemeGlobally,
+	resolveDisabledAgentPluginNames,
 	resolveDisabledPluginPaths,
 	resolveDisabledToolNames,
+	resolveModelToolSettings,
 	setAutoUpdateEnabledGlobally,
 	setCompactionModeGlobally,
 	setCompactionStrategyGlobally,
+	setDisabledAgentPlugin,
 	setDisabledPlugin,
 	setDisabledTools,
+	setModelToolEnabledGlobally,
 	setPlanActModeGlobally,
 	setTelemetryOptOutGlobally,
 	setToolAutoApproveGlobally,
+	setTuiThemeGlobally,
 	toggleDisabledTool,
 	writeGlobalSettings,
 } from "./services/global-settings";
@@ -591,11 +675,14 @@ export {
 export type {
 	McpInstallOptions,
 	McpInstallResult,
+	McpUninstallOptions,
+	McpUninstallResult,
 } from "./services/mcp-install";
 export {
 	buildMcpInstallTransport,
 	installMcpServer,
 	parseMcpInstallArgs,
+	uninstallMcpServer,
 } from "./services/mcp-install";
 export type {
 	ParsedPluginSource,
@@ -623,6 +710,7 @@ export {
 } from "./services/plugin-mcp-settings";
 export type {
 	ListPluginToolsResult,
+	PluginContributionSummary,
 	PluginToolSummary,
 } from "./services/plugin-tools";
 export {
@@ -645,10 +733,13 @@ export {
 } from "./services/providers/local-provider-registry";
 export {
 	addLocalProvider,
+	type CreateConfiguredStreamingTranscriptionSessionRequest,
+	createConfiguredStreamingTranscriptionSession,
 	type DeleteLocalProviderRequest,
 	deleteLocalProvider,
 	ensureCustomProvidersLoaded,
 	getLocalProviderModels,
+	isDedicatedTranscriptionModel,
 	listLocalProviders,
 	loginAndSaveLocalProviderOAuthCredentials,
 	loginLocalProvider,
@@ -658,6 +749,11 @@ export {
 	resolveLocalClineAuthToken,
 	saveLocalProviderOAuthCredentials,
 	saveLocalProviderSettings,
+	saveVoiceInputSettings,
+	type TranscribeConfiguredVoiceInputRequest,
+	type TranscribeLocalAudioRequest,
+	transcribeConfiguredVoiceInput,
+	transcribeLocalAudio,
 	type UpdateLocalProviderRequest,
 	updateLocalProvider,
 } from "./services/providers/local-provider-service";
@@ -667,6 +763,8 @@ export {
 	type ProviderConfigFieldRequirement,
 	type ProviderConfigFields,
 } from "./services/providers/provider-config-fields";
+export { isProviderSettingsUsable } from "./services/providers/provider-readiness";
+export * from "./services/session-import";
 export {
 	type MigrateLegacyProviderSettingsOptions,
 	type MigrateLegacyProviderSettingsResult,
@@ -701,6 +799,7 @@ export {
 	captureAgentUnexpectedReasoningTokens,
 	captureAuthFailed,
 	captureAuthLoggedOut,
+	captureAuthRefreshSoftFailure,
 	captureAuthStarted,
 	captureAuthSucceeded,
 	captureCompactionExecuted,
@@ -755,6 +854,7 @@ export type {
 } from "./services/workspace";
 export {
 	enrichPromptWithMentions,
+	ensureChatWorkspace,
 	getFileIndex,
 	prewarmFileIndex,
 } from "./services/workspace";
@@ -784,6 +884,10 @@ export {
 	trimMessagesBeforeUserRun,
 } from "./session/checkpoint-restore";
 export {
+	projectSessionMessagesForDisplay,
+	type SessionDisplayMessage,
+} from "./session/display-messages";
+export {
 	deriveSubsessionStatus,
 	makeSubSessionId,
 	makeTeamTaskSubSessionId,
@@ -791,6 +895,7 @@ export {
 } from "./session/models/session-graph";
 export type { SessionManifest } from "./session/models/session-manifest";
 export type { SessionRow } from "./session/models/session-row";
+export * from "./session/search";
 export type {
 	CreateRootSessionWithArtifactsInput,
 	RootSessionArtifacts,
@@ -822,11 +927,15 @@ export {
 	resolveMessageDisplayRole,
 } from "./session/user-run-messages";
 export type {
+	CorePluginContributions,
+	CorePluginSettingsSnapshot,
+	CorePluginSettingsSource,
 	CoreSettingsItem,
 	CoreSettingsItemKind,
 	CoreSettingsItemSource,
 	CoreSettingsListInput,
 	CoreSettingsMutationResult,
+	CoreSettingsServiceOptions,
 	CoreSettingsSnapshot,
 	CoreSettingsToggleInput,
 	CoreSettingsType,
@@ -835,6 +944,7 @@ export {
 	CoreSettingsService,
 	createCoreSettingsService,
 } from "./settings";
+export * from "./tasks";
 export type {
 	ChatMessage,
 	ChatMessageImage,
@@ -859,9 +969,21 @@ export async function loadOpenTelemetryAdapter() {
 }
 export { Agent, createAgentRuntime } from "@cline/agents";
 export {
+	createCappedThinkingNoteWriter,
+	createCappedThinkingPrepareTurn,
+	DEFAULT_CAPPED_THINKING_PROMPT,
+	findCappedThinkingIndex,
+} from "./extensions/context/capped-thinking";
+export {
 	createCompactionStateAwarePrepareTurn,
 	createContextCompactionPrepareTurn,
 } from "./extensions/context/compaction";
+// Exported so the settings panel can show the built-in prompt as the
+// placeholder for the field that replaces it.
+export {
+	DEFAULT_COMPACTION_PROMPT,
+	DEFAULT_THINKING_COMPACTION_PROMPT,
+} from "./extensions/context/compaction-shared";
 export {
 	ALL_DEFAULT_TOOL_NAMES,
 	type ApplyPatchExecutor,
@@ -879,6 +1001,9 @@ export {
 	createDefaultTools,
 	createDefaultToolsWithPreset,
 	createEditorExecutor,
+	createFileReadExecutor,
+	createReadReceipts,
+	createSecretRedactor,
 	createShellExecutor,
 	createShellTool,
 	createToolPoliciesWithPreset,
@@ -893,36 +1018,186 @@ export {
 	getCoreBuiltinToolCatalog,
 	getCoreDefaultEnabledToolIds,
 	getCoreHeadlessToolNames,
+	isCoreBuiltinToolAvailable,
+	isSkillsToolAvailable,
 	MAX_COMMAND_OUTPUT_CHARS,
 	PATCH_MARKERS,
 	PatchActionType,
 	type PatchFileChange,
+	type ReadReceipts,
 	resolveCoreSelectedToolIds,
+	resolveToolClientType,
+	type ShellExecutionOptions,
 	type ShellExecutor,
 	type ShellExecutorOptions,
 	type StructuredCommandInput,
 	StructuredCommandInputSchema,
 	TEAM_TOOL_NAMES,
 	type ToolCatalogEntry,
+	type ToolClientType,
 	type ToolExecutors,
 	type ToolPolicyPresetName,
 	type ToolPresetName,
 	ToolPresets,
 	truncateCommandOutput,
 } from "./extensions/tools";
+// The browser and the language-server tools. Both were the extension's alone,
+// and that was the difference between the two hosts: the CLI could not check
+// that a page runs, and could not ask what a symbol means. Each takes its host
+// half as an injected interface -- a `BrowserDriver`, a `CodeIntelProvider` --
+// so the definition and the description are shared while VS Code keeps its
+// language servers and the CLI brings its own.
 export {
+	BROWSER_ACTIONS,
+	BROWSER_TOOL_DESCRIPTION,
+	BROWSER_TOOL_INPUT_SCHEMA,
+	BROWSER_TOOL_NAME,
+	type BrowserActionResult,
+	type BrowserDriver,
+	type BrowserToolAction,
+	type BrowserToolOptions,
+	createBrowserTool,
+	localPathOf,
+	renderBrowserResult,
+	splitDataUrl,
+	toNavigableUrl,
+} from "./extensions/tools/browser";
+export {
+	buildCheckFileDescription,
+	buildLintCommand,
+	CHECK_FILE_TOOL_DESCRIPTION,
+	CHECK_FILE_TOOL_INPUT_SCHEMA,
+	CHECK_FILE_TOOL_NAME,
+	checkSource,
+	compileCheck,
+	createCheckFileTool,
+	extractScripts,
+	LINT_COMMAND_FILE_PLACEHOLDER,
+	type LintCommandResult,
+} from "./extensions/tools/check-file";
+export {
+	CODE_INTEL_OPERATIONS,
+	CODE_INTEL_TOOL_DESCRIPTION,
+	CODE_INTEL_TOOL_INPUT_SCHEMA,
+	CODE_INTEL_TOOL_NAME,
+	type CodeIntelLocation,
+	type CodeIntelOperation,
+	type CodeIntelProvider,
+	type CodeIntelSymbol,
+	type CodeIntelToolOptions,
+	createCodeIntelTool,
+	type ParsedCodeIntelRequest,
+	parseCodeIntelRequest,
+} from "./extensions/tools/code-intel";
+// The bracket scanner is host-independent and two hosts want it: the checker
+// above, and VS Code's own `check_file`, which pairs it with the language
+// servers this one has no access to.
+export {
+	type DelimiterFinding,
+	type DelimiterScan,
+	describeDelimiterBalance,
+	scanDelimiters,
+	scanWithBalance,
+} from "./extensions/tools/delimiter-balance";
+// The workspace lister, and the tool that reads it. Both hosts install this:
+// the reflex it displaces -- `ls`, `dir /s` -- is not VS Code's, it is any
+// model that has no other way to find out what exists.
+export {
+	createListFilesTool,
+	createLocalWorkspaceLister,
+	type DirectoryEntry,
+	globToRegExp,
+	isWithin,
+	LIST_FILES_TOOL_DESCRIPTION,
+	LIST_FILES_TOOL_INPUT_SCHEMA,
+	LIST_FILES_TOOL_NAME,
+	type ListFilesToolOptions,
+	normalizeMaxResults,
+	renderDirectory,
+	renderMatches,
+	type WorkspaceLister,
+} from "./extensions/tools/list-files";
+export {
+	commandText,
+	describeQaCredentials,
+	type NormalizedQaCredentials,
+	normalizeQaCredentials,
+	QA_CREDENTIAL_MIN_VALUE_LENGTH,
+	QA_CREDENTIAL_NAME_PATTERN,
+	type QaCredential,
+	qaCredentialNames,
+	type RejectedQaCredential,
+	referencedCredentialNames,
+	resolveCredentialEnv,
+} from "./extensions/tools/qa-credentials";
+export {
+	type AgentFileFields,
+	agentFileName,
+	renderAgentFile,
+	validateAgentFields,
+	writeAgentFile,
+} from "./extensions/tools/team/agent-file";
+export {
+	type CreateAgentInput,
+	type CreateAgentOutput,
+	createCreateAgentTool,
+} from "./extensions/tools/team/create-agent-tool";
+export type {
+	ConfiguredAgentDelegationResult,
+	ConfiguredAgentSummary,
+	DelegateToConfiguredAgentInput,
+} from "./extensions/tools/team/delegate-to-agent";
+// The transaction's base revision: what every file said when the open
+// transaction started. Read through `read_files` with `revision: "base"`, and
+// written back over one file by `restore_file`. Both exist only while the
+// change protocol is armed.
+export {
+	BASE_REVISION,
+	withBaseRevisionReads,
+} from "./runtime/atomic/base-revision-reads";
+// The check a model proposes and a host puts to the user. A host that has
+// somewhere to ask supplies `approveCheck`; one that has not leaves it out.
+export type {
+	CheckApproval,
+	CheckApprover,
+	CheckProposal,
+} from "./runtime/atomic/proposal";
+export {
+	createRestoreFileTool,
+	MAX_RESTORES_PER_TRANSACTION,
+	RESTORE_FILE_TOOL_DESCRIPTION,
+	RESTORE_FILE_TOOL_NAME,
+} from "./runtime/atomic/restore-file-tool";
+export {
+	createRunCheckTool,
+	describeCheckRun,
+	MAX_CHECKS_PER_TRANSACTION,
+	RUN_CHECK_TOOL_DESCRIPTION,
+	RUN_CHECK_TOOL_NAME,
+} from "./runtime/atomic/run-check-tool";
+export {
+	applyClineFeaturedModels,
 	type ClineRecommendedModel,
 	type ClineRecommendedModelsData,
 	FALLBACK_CLINE_RECOMMENDED_MODELS,
 	type FetchClineRecommendedModelsOptions,
 	fetchClineRecommendedModels,
+	getCachedClineRecommendedModels,
+	peekClineRecommendedModels,
+	resetClineRecommendedModelsCacheForTests,
 } from "./services/llms/cline-recommended-models";
+// Exported so a host can build a *second* model from a session's own settings —
+// a describer that reads images for the session's model. The extension builds
+// one from its own handler; the CLI had no way to reach this at all, which is
+// why the vision path could not be run headlessly.
+export { createAgentModelFromConfig } from "./services/llms/handler-factory";
 export {
 	clearLiveModelsCatalogCache,
 	clearPrivateModelsCatalogCache,
 	DEFAULT_MODELS_CATALOG_URL,
 	getLiveModelsCatalog,
 	getProviderConfig,
+	isPrivateModelCatalogProvider,
 	OPENAI_COMPATIBLE_PROVIDERS,
 	resolveProviderConfig,
 } from "./services/llms/provider-defaults";
@@ -1018,6 +1293,7 @@ export type {
 	CoreModelConfig,
 	CoreRuntimeFeatures,
 	CoreSessionConfig,
+	DelegatedAgentConnectionOverride,
 } from "./types/config";
 export type {
 	CoreSessionEvent,
@@ -1031,11 +1307,13 @@ export type {
 } from "./types/events";
 export type {
 	ProviderTokenSource,
+	StoredProviderModes,
 	StoredProviderSettings,
 	StoredProviderSettingsEntry,
 } from "./types/provider-settings";
 export {
 	emptyStoredProviderSettings,
+	StoredProviderModesSchema,
 	StoredProviderSettingsEntrySchema,
 	StoredProviderSettingsSchema,
 } from "./types/provider-settings";

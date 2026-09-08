@@ -213,6 +213,23 @@ async function projectAgentEvent(
 			return;
 		}
 	}
+	if (
+		agentEvent.type === "content_update" &&
+		agentEvent.contentType === "tool"
+	) {
+		ctx.publish(
+			ctx.buildEvent(
+				"tool.updated",
+				{
+					toolCallId: agentEvent.toolCallId,
+					toolName: agentEvent.toolName,
+					update: agentEvent.update,
+				},
+				sessionId,
+			),
+		);
+		return;
+	}
 	if (agentEvent.type === "content_end") {
 		switch (agentEvent.contentType) {
 			case "text":
@@ -223,6 +240,17 @@ async function projectAgentEvent(
 						sessionId,
 					),
 				);
+				break;
+			case "media":
+				if (agentEvent.media) {
+					ctx.publish(
+						ctx.buildEvent(
+							"assistant.media",
+							{ media: agentEvent.media },
+							sessionId,
+						),
+					);
+				}
 				break;
 			case "reasoning":
 				ctx.publish(
@@ -300,6 +328,14 @@ async function projectAgentEvent(
 						cacheReadTokens: agentEvent.cacheReadTokens ?? 0,
 						cacheWriteTokens: agentEvent.cacheWriteTokens ?? 0,
 						totalCost: agentEvent.cost ?? 0,
+						// Named explicitly like everything else in this payload,
+						// which is the trap it is: a field the projector does not
+						// list is a field the hub silently drops, and the display
+						// then works in-process and is empty over the hub.
+						...(agentEvent.reasoningTokens !== undefined
+							? { reasoningTokens: agentEvent.reasoningTokens }
+							: {}),
+						...(agentEvent.timings ? { timings: agentEvent.timings } : {}),
 					},
 					totals: {
 						inputTokens: agentEvent.totalInputTokens,
@@ -342,7 +378,57 @@ async function projectAgentEvent(
 				sessionId,
 			),
 		);
+		return;
 	}
+	if (agentEvent.type === "error") {
+		await projectAgentErrorEvent(ctx, event);
+	}
+}
+
+/**
+ * A failed agent run emits a legacy `error` event and resolves with a
+ * `finishReason: "error"` result instead of emitting `done`. RPC-driven turns
+ * (`run.start`) report that failure themselves: the awaiting handler publishes
+ * `run.failed` with the full result. Turns drained from the pending-prompt
+ * queue have no awaiting handler — their errored result is discarded — so
+ * without this projection the failure never reaches any client and
+ * interactive UIs hang on a running state. Publish `run.failed` here for
+ * exactly those unreported turns.
+ */
+async function projectAgentErrorEvent(
+	ctx: HubTransportContext,
+	event: Extract<CoreSessionEvent, { type: "agent_event" }>,
+): Promise<void> {
+	const { sessionId, event: agentEvent } = event.payload;
+	if (agentEvent.type !== "error" || agentEvent.recoverable) {
+		return;
+	}
+	// Subagent and teammate run failures do not end the session's turn; the
+	// lead run keeps going and reports its own terminal state.
+	if (agentEvent.parentAgentId || event.payload.teamRole === "teammate") {
+		return;
+	}
+	// An RPC handler is awaiting this turn and will publish the authoritative
+	// `run.failed` (with the full result) once `runTurn` settles.
+	if ((ctx.activeRpcTurnCountBySession.get(sessionId) ?? 0) > 0) {
+		return;
+	}
+	const message =
+		agentEvent.error instanceof Error
+			? agentEvent.error.message
+			: String(agentEvent.error);
+	const snapshot = await readCoreSessionSnapshot(ctx, sessionId);
+	ctx.publish(
+		ctx.buildEvent(
+			"run.failed",
+			{
+				reason: "error",
+				...(message ? { error: message, text: message } : {}),
+				...(snapshot ? { snapshot } : {}),
+			},
+			sessionId,
+		),
+	);
 }
 
 async function projectSessionEnded(

@@ -120,39 +120,50 @@ export function parseAuthCommandArgs(args: string[]): ParsedAuthCommandArgs {
 
 async function loadProviderCatalog(
 	providerSettingsManager: ProviderSettingsManager,
-): Promise<Array<{ id: string; name: string }>> {
+): Promise<
+	Array<{ id: string; name: string; configFields: readonly string[] }>
+> {
 	await ensureCustomProvidersLoaded(providerSettingsManager);
 	const catalog = await listLocalProviders(providerSettingsManager);
 	return catalog.providers
 		.map((provider) => ({
 			id: provider.id.trim(),
 			name: provider.name.trim() || provider.id.trim(),
+			// What this provider actually takes, as the registry declares it.
+			// The two checks below used to be a hardcoded list of provider ids,
+			// which is a second opinion about a question the registry already
+			// answers -- and it was wrong about Ollama, the provider most likely
+			// of all of them to be on a host other than the default.
+			configFields: (provider.configFields ?? []).map((field) => field.path),
 		}))
 		.filter((provider) => provider.id.length > 0)
 		.sort((a, b) => a.id.localeCompare(b.id));
 }
 
-async function ensureQuickSetupInputValid(
+/** Exported for tests: these rules are the whole reason `auth` refuses. */
+export async function ensureQuickSetupInputValid(
 	input: AuthQuickSetupInput,
 	providerSettingsManager: ProviderSettingsManager,
 ): Promise<string | undefined> {
 	const normalizedProvider = normalizeProviderId(input.provider);
 	const providerCatalog = await loadProviderCatalog(providerSettingsManager);
-	if (!providerCatalog.some((provider) => provider.id === normalizedProvider)) {
+	const provider = providerCatalog.find(
+		(candidate) => candidate.id === normalizedProvider,
+	);
+	if (!provider) {
 		return `invalid provider "${input.provider}"`;
 	}
-	if (!input.apikey.trim()) {
+	// A key is asked for only by a provider that has one. Ollama and the other
+	// local servers do not, and requiring one there means the setup that works
+	// is the one where the user invents a word.
+	if (provider.configFields.includes("apiKey") && !input.apikey.trim()) {
 		return "auth quick setup requires --apikey <key>";
 	}
 	if (!input.modelid.trim()) {
 		return "auth quick setup requires --modelid <id>";
 	}
-	if (
-		input.baseurl?.trim() &&
-		normalizedProvider !== BUILT_IN_PROVIDER.OPENAI_COMPATIBLE &&
-		normalizedProvider !== BUILT_IN_PROVIDER.OPENAI_NATIVE
-	) {
-		return "base URL is only supported for OpenAI and OpenAI-compatible providers";
+	if (input.baseurl?.trim() && !provider.configFields.includes("baseUrl")) {
+		return `base URL is not supported for provider "${normalizedProvider}"`;
 	}
 	if (
 		input.azureApiVersion?.trim() &&

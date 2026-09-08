@@ -33,11 +33,17 @@ export interface SdkSessionLifecycleOptions {
 	applyPatchExecutor?: ApplyPatchExecutorHandler
 	/** Custom `read_files` executor (resolves relative paths against the workspace root). */
 	readFileExecutor?: ReadFileExecutorHandler
+	/** Files read this session; see `ListFilesToolOptions.getReadPaths`. */
+	getReadPaths?: () => string[]
+	/** Retires a file's reads after the change protocol put that file back. */
+	forgetReads?: (absolutePath: string) => void
 	onSessionEvent: (event: CoreSessionEvent) => void
 	/** Lazy factory for the VscodeTerminalManager (foreground terminal support). */
 	getTerminalManager?: () => VscodeTerminalManager
 	/** Registry of in-flight foreground executions for "Proceed While Running". */
 	foregroundCommands?: SdkForegroundCommandCoordinator
+	/** Resolves once the applicable remote config is ready for a new SDK session. */
+	beforeStartSession?: () => Promise<void>
 	/** Returns the latest prepared remote-config integration, if remote config is active. */
 	getRemoteConfigIntegration?: () => PreparedRemoteConfigCoreIntegration | undefined
 	/** Shared SDK telemetry service owned by SdkController. */
@@ -82,6 +88,10 @@ export class SdkSessionLifecycle {
 			return
 		}
 		activeSession.isRunning = isRunning
+		if (isRunning) {
+			// Stamped on the idle→running edge, which is the start of one request.
+			activeSession.runStartedAt = Date.now()
+		}
 		if (!isRunning) {
 			this.options.onDidBecomeIdle?.()
 		}
@@ -339,8 +349,11 @@ export class SdkSessionLifecycle {
 				editorExecutor: this.options.editorExecutor,
 				applyPatchExecutor: this.options.applyPatchExecutor,
 				readFileExecutor: this.options.readFileExecutor,
+				getReadPaths: this.options.getReadPaths,
+				forgetReads: this.options.forgetReads,
 				getTerminalManager: this.options.getTerminalManager,
 				foregroundCommands: this.options.foregroundCommands,
+				beforeStartSession: this.options.beforeStartSession,
 				getRemoteConfigIntegration: this.options.getRemoteConfigIntegration,
 				telemetry: this.options.telemetry,
 			})

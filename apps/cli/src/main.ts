@@ -1,7 +1,8 @@
 import { fstatSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename } from "node:path";
-import type { ToolPolicy } from "@cline/core";
+import type { CheckApprover, ToolPolicy } from "@cline/core";
+import { resolveAgentSlotLimit } from "@cline/llms";
 
 import { registerDisposable } from "@cline/shared";
 import type { Command } from "commander";
@@ -16,7 +17,9 @@ import {
 	getPreferredKanbanInstaller,
 } from "./commands/update";
 import { CLI_DEFAULT_CHECKPOINT_CONFIG } from "./runtime/defaults";
+
 import type { TuiStartupTarget } from "./tui/types";
+import { filterChatModels } from "./utils/chat-models";
 import { getCliBuildInfo } from "./utils/common";
 import {
 	buildCliCompactionConfig,
@@ -61,6 +64,19 @@ import { runConnectWizard } from "./wizards/connect";
 import { runMcpWizard } from "./wizards/mcp";
 import { runScheduleWizard } from "./wizards/schedule";
 
+/**
+ * Approves whatever check the model proposed, without asking.
+ *
+ * The extension puts the proposal to the user because there is one. Here there
+ * is not, so the choice is between no verdict at all and one nobody vetted --
+ * and for an unattended batch the second is the point, which is why it is a
+ * flag and not the default. The proposal has already been validated by then:
+ * it must be mechanical, and a path it names must stay inside the workspace.
+ */
+const approveAnyProposedCheck: CheckApprover = async () => ({
+	approved: true,
+});
+
 export function stdinHasPipedInput(): boolean {
 	if (process.stdin.isTTY) return false;
 	try {
@@ -77,14 +93,20 @@ async function createProviderSettingsManager() {
 }
 
 async function loadCliRuntimeModules() {
-	const [coreServer, prompt, runAgentModule] = await Promise.all([
-		import("@cline/core"),
-		import("./runtime/prompt"),
-		import("./runtime/run-agent"),
-	]);
+	const [coreServer, prompt, promptTemplate, hostTools, runAgentModule] =
+		await Promise.all([
+			import("@cline/core"),
+			import("./runtime/prompt"),
+			import("./runtime/prompt-template"),
+			import("./runtime/host-tools"),
+			import("./runtime/run-agent"),
+		]);
 	return {
 		coreServer,
 		resolveSystemPrompt: prompt.resolveSystemPrompt,
+		ideName: prompt.CLI_IDE_NAME,
+		resolveCliPromptTemplate: promptTemplate.resolveCliPromptTemplate,
+		createCliHostTools: hostTools.createCliHostTools,
 		runAgent: runAgentModule.runAgent,
 	};
 }
@@ -384,6 +406,10 @@ export async function runCli(): Promise<void> {
 			"--restart-instance <id>",
 			"Restart one connector instance (used by daemon recovery)",
 		)
+		.option(
+			"--cleanup-instance <id>",
+			"Reap one dead connector instance, preserving autostart (used by hub supervision)",
+		)
 		.allowUnknownOption()
 		.passThroughOptions()
 		.addHelpText(
@@ -393,15 +419,34 @@ export async function runCli(): Promise<void> {
 		.action(async (adapter: string | undefined) => {
 			const {
 				formatAdapterList,
+				runCleanupConnectorInstance,
 				runConnectAdapter,
 				runRestartConnector,
 				runStopAllConnectors,
 				runStopConnector,
 			} = await import("./commands/connect");
 			const opts = connectCmd.opts();
-			if (opts.stop && (opts.restart || opts.restartInstance)) {
-				io.writeErr("connect accepts only one of --stop or --restart");
+			const exclusiveModes = [
+				opts.stop,
+				opts.restart || opts.restartInstance,
+				opts.cleanupInstance,
+			].filter(Boolean).length;
+			if (exclusiveModes > 1) {
+				io.writeErr(
+					"connect accepts only one of --stop, --restart or --cleanup-instance",
+				);
 				ctx.exitCode = 1;
+			} else if (opts.cleanupInstance) {
+				if (!adapter) {
+					io.writeErr("connect --cleanup-instance requires a channel");
+					ctx.exitCode = 1;
+				} else {
+					ctx.exitCode = await runCleanupConnectorInstance(
+						adapter,
+						opts.cleanupInstance,
+						io,
+					);
+				}
 			} else if (opts.stop) {
 				if (adapter) {
 					ctx.exitCode = await runStopConnector(adapter, io);
@@ -479,6 +524,24 @@ export async function runCli(): Promise<void> {
 				transport: opts.transport,
 				json: opts.json === true || program.opts().json === true,
 				yes: opts.yes === true,
+				io,
+			});
+		});
+	const mcpUninstallCmd = mcpCmd
+		.command("uninstall")
+		.alias("remove")
+		.alias("rm")
+		.description("Uninstall an MCP server by name")
+		.argument("<name>", "MCP server name")
+		.option("--json", "Output as JSON")
+		.action(async (name: string) => {
+			const opts = mcpUninstallCmd.opts<{
+				json?: boolean;
+			}>();
+			const { runMcpUninstallCommand } = await import("./commands/mcp");
+			ctx.exitCode = await runMcpUninstallCommand({
+				name,
+				json: opts.json === true || program.opts().json === true,
 				io,
 			});
 		});
@@ -746,6 +809,84 @@ export async function runCli(): Promise<void> {
 		process.exitCode = 1;
 		return;
 	}
+	// Fails the run rather than warning, unlike --retries above. The mode decides
+	// whether the model may finish without checking an edit, so a typo that fell
+	// back to the default would produce a run that looks like the mode was in
+	// force and is not -- and in an unattended loop nobody reads the warning.
+	if (args.invalidEditVerification) {
+		writeln(
+			`invalid --edit-verification "${args.invalidEditVerification}" (expected off, nudge or require)`,
+		);
+		process.exitCode = 1;
+		return;
+	}
+	// Fails hardest of these. A run the user believes is transactional and is
+	// not leaves a failed attempt's edits on disk under a report that says they
+	// were put back, which is worse than either doing it or not doing it.
+	if (args.invalidAtomic) {
+		writeln(
+			`invalid --atomic "${args.invalidAtomic}" (expected off, auto or always)`,
+		);
+		process.exitCode = 1;
+		return;
+	}
+	// A pattern that will not compile fails every check it is given, so the run
+	// would do all of its work and then throw it away.
+	if (args.invalidOracleExpect) {
+		writeln(
+			`invalid --oracle-expect "${args.invalidOracleExpect}" (not a regular expression)`,
+		);
+		process.exitCode = 1;
+		return;
+	}
+	// Fails for the same reason as `--atomic`: the two verdicts this chooses
+	// between are not close, and a run that silently used the other one is a
+	// measurement of the wrong thing that reads exactly like the right one.
+	// Zero is a value here rather than an absence, so this one says so.
+	if (args.invalidCheckReconsiderAfter) {
+		writeln(
+			`invalid --check-reconsider-after "${args.invalidCheckReconsiderAfter}" (expected a whole number, 0 or more; 0 turns it off)`,
+		);
+		process.exitCode = 1;
+		return;
+	}
+	if (args.invalidProposeCheck) {
+		writeln(
+			`invalid --propose-check "${args.invalidProposeCheck}" (expected off or auto)`,
+		);
+		process.exitCode = 1;
+		return;
+	}
+	for (const [flag, value] of [
+		["--max-changes", args.invalidMaxChanges],
+		["--max-transactions", args.invalidMaxTransactions],
+		["--max-check-proposals", args.invalidMaxCheckProposals],
+	] as const) {
+		if (value) {
+			writeln(
+				`invalid ${flag} "${value}" (expected a whole number, 1 or more)`,
+			);
+			process.exitCode = 1;
+			return;
+		}
+	}
+	// Fails for the same reason: a run that keeps no checklist because the switch
+	// was misspelled is indistinguishable from one that keeps none because it was
+	// asked not to.
+	if (args.invalidTaskProgress) {
+		writeln(
+			`invalid --task-progress "${args.invalidTaskProgress}" (expected on or off)`,
+		);
+		process.exitCode = 1;
+		return;
+	}
+	if (args.invalidTaskProgressInterval) {
+		writeln(
+			`invalid --task-progress-interval "${args.invalidTaskProgressInterval}" (expected integer >= 0)`,
+		);
+		process.exitCode = 1;
+		return;
+	}
 	if (args.invalidRetries) {
 		writeln(
 			`${c.dim}[warn] ignoring invalid --retries value "${args.invalidRetries}" (expected integer >= 1)${c.reset}`,
@@ -775,7 +916,10 @@ export async function runCli(): Promise<void> {
 	// Enters the Agent Client Protocol stdio transport and never falls through.
 	if (args.acpMode) {
 		const { runAcpMode } = await import("./acp/index");
-		await runAcpMode();
+		// Only an explicit `--auto-approve true` (or `--yolo`) enables
+		// auto-approval in ACP mode; We do not respect the default to
+		// avoid accidental auto-approval in ACP mode.
+		await runAcpMode({ autoApproveTools: args.autoApproveOverride === true });
 		return;
 	}
 
@@ -833,8 +977,14 @@ export async function runCli(): Promise<void> {
 	const providerSettingsManager = await createProviderSettingsManager();
 	const {
 		coreServer,
-		coreServer: { createUserInstructionConfigService },
+		coreServer: {
+			createUserInstructionConfigService,
+			createPromptTemplateHooks,
+		},
 		resolveSystemPrompt,
+		ideName,
+		resolveCliPromptTemplate,
+		createCliHostTools,
 		runAgent,
 	} = await loadCliRuntimeModules();
 
@@ -985,7 +1135,57 @@ export async function runCli(): Promise<void> {
 				`${c.dim}[model-catalog] catalog resolution failed (${message})${c.reset}`,
 			);
 		}
-		const knownModelIds = knownModels ? Object.keys(knownModels) : [];
+		const knownModelIds = knownModels
+			? Object.keys(filterChatModels(knownModels))
+			: [];
+		const resolvedModelId =
+			args.model ??
+			selectedProviderSettings?.model ??
+			knownModelIds[0] ??
+			"anthropic/claude-sonnet-4.6";
+		// Give the session the window the model was actually built with.
+		//
+		// A local Ollama model is discovered from `/api/tags`, which reports
+		// names only, so it has no catalog entry and `model.info` is undefined
+		// for it. Everything downstream then falls back to its own default —
+		// compaction to `DEFAULT_MAX_INPUT_TOKENS` (128k), and the preserve-recent
+		// ladder to the window it scales against. Measured before this: the
+		// server was sent `num_ctx=32768` while compaction sized itself to
+		// 128,000, so it never triggered and Ollama silently truncated the
+		// prompt instead — turns pinned at 32,674 of a 32,768 window with not one
+		// compaction logged.
+		//
+		// The two numbers have to be the same number. This is the same fix as the
+		// one in the Ollama vendor, applied to the other consumer.
+		let declaredOllamaWindow: number | undefined;
+		if (provider === "ollama") {
+			const ollamaBaseUrl = selectedProviderSettings?.baseUrl as
+				| string
+				| undefined;
+			const { primeDeclaredNumCtx, readDeclaredNumCtx } = await import(
+				"@cline/core"
+			);
+			await primeDeclaredNumCtx(ollamaBaseUrl, resolvedModelId, fetch);
+			const declared = readDeclaredNumCtx(ollamaBaseUrl, resolvedModelId);
+			declaredOllamaWindow = declared;
+			if (declared !== undefined) {
+				knownModels = {
+					...knownModels,
+					[resolvedModelId]: {
+						...(knownModels?.[resolvedModelId] ?? {}),
+						id: resolvedModelId,
+						contextWindow: declared,
+						// Cleared, not set. `resolveEffectiveMaxInputTokens` takes
+						// `min(maxInputTokens, contextWindow)` when it has both, so a
+						// stale catalog figure would quietly cap the window the model
+						// just declared. With only the window it derives the input
+						// budget as `window * 0.9`, which is the intended share —
+						// setting this to the window instead would overstate it.
+						maxInputTokens: undefined,
+					},
+				};
+			}
+		}
 		const resolvedReasoning = resolveCliReasoning({
 			thinking: args.thinking,
 			thinkingExplicitlySet: args.thinkingExplicitlySet,
@@ -1003,14 +1203,37 @@ export async function runCli(): Promise<void> {
 			hasPrompt: !!args.prompt?.trim(),
 			cwd,
 		});
+		if (declaredOllamaWindow !== undefined) {
+			// Stated because it is otherwise invisible: nothing else reports which
+			// window compaction is sizing itself against, and a wrong one shows up
+			// only as a prompt the server quietly truncated.
+			loggerAdapter.core.log(
+				`Using the context window ${resolvedModelId} declares: ${declaredOllamaWindow}`,
+				{ modelId: resolvedModelId, contextWindow: declaredOllamaWindow },
+			);
+		}
+
+		// The prompt template this session runs on, resolved once and applied
+		// twice: its `# system` section becomes the base prompt, and its tool
+		// sections replace the descriptions the tools carry in code. The extension
+		// has done both since templates existed and this host did neither, so the
+		// same model read a different prompt, and a different description of every
+		// tool, depending on which host started it.
+		const renderedTemplate = resolveCliPromptTemplate({
+			providerId: provider,
+			modelId: resolvedModelId,
+			workspaceRoot,
+			baseUrl: selectedProviderSettings?.baseUrl as string | undefined,
+			log: (message) => loggerAdapter.core.log(message),
+			// `BasicLogger` folds non-error warnings into `log` by design, and a
+			// template that could not be read is operational rather than fatal: the
+			// session continues on the built-in prompt. The message says which.
+			warn: (message) => loggerAdapter.core.log(message),
+		});
 
 		const config: Config = {
 			providerId: provider,
-			modelId:
-				args.model ??
-				selectedProviderSettings?.model ??
-				knownModelIds[0] ??
-				"anthropic/claude-sonnet-4.6",
+			modelId: resolvedModelId,
 			apiKey: apiKey ?? "",
 			knownModels,
 			systemPrompt: await resolveSystemPrompt({
@@ -1018,10 +1241,104 @@ export async function runCli(): Promise<void> {
 				explicitSystemPrompt: args.systemPrompt,
 				providerId: provider,
 				mode: effectiveMode,
+				basePrompt: renderedTemplate?.system,
 			}),
 			execution: {
-				maxConsecutiveMistakes: args.retries ?? 3,
+				// 6, which is what `--retries` has always documented. The code said
+				// 3, so every run that did not pass the flag got half the budget the
+				// help text promised.
+				maxConsecutiveMistakes: args.retries ?? 6,
 			},
+			// Mode only, and only when asked for. The host adds its own checker and
+			// already defaults `checkTools` to it, so naming the tool here would
+			// duplicate a default that can drift out from under this file.
+			...(args.editVerification
+				? { editVerification: { mode: args.editVerification } }
+				: {}),
+			// Sent whenever any of it was asked for, not only on `--atomic`: an
+			// oracle named without a mode is a user who wants the check and has
+			// not said how hard, and `auto` is the answer to that. Naming one and
+			// getting nothing would be the quiet failure again.
+			...(args.atomic || args.oracle || args.proposeCheck
+				? {
+						atomicProtocol: {
+							mode: args.atomic ?? "auto",
+							...(args.oracle ? { oracleCommand: args.oracle } : {}),
+							...(args.oracleExpect ? { oracleExpect: args.oracleExpect } : {}),
+							...(args.maxChanges ? { maxChanges: args.maxChanges } : {}),
+							...(args.maxTransactions
+								? { maxTransactions: args.maxTransactions }
+								: {}),
+							// There is nobody here to ask, so the default is the
+							// verdict a host without a user has always had: the
+							// model's own account of its work. `auto` is the other
+							// one, and it says so -- an approved check is run
+							// repeatedly and unattended, and this approves it
+							// sight unseen, which only an operator running a
+							// batch can reasonably ask for.
+							proposeCheck: args.proposeCheck === "auto",
+							...(args.proposeCheck === "auto"
+								? { approveCheck: approveAnyProposedCheck }
+								: {}),
+							// Zero is a value here and not an absence, so it is
+							// passed through as written rather than defaulted.
+							...(args.checkReconsiderAfter !== undefined
+								? { checkReconsideredAfter: args.checkReconsiderAfter }
+								: {}),
+							...(args.maxCheckProposals
+								? { maxCheckProposals: args.maxCheckProposals }
+								: {}),
+						},
+					}
+				: {}),
+			// On unless asked otherwise, which is what the extension does. Left
+			// unset until now, and unset is not "off with the same effect": the
+			// host reads `enabled` to decide whether to build the tracker at
+			// all, so the CLI shipped without the `task_progress` tool, without
+			// the parameter it adds to every other tool, without the reminder
+			// and without the close-out guard -- while the prompt still told the
+			// model to keep a checklist.
+			taskProgress: {
+				enabled: args.taskProgress !== "off",
+				...(args.taskProgressInterval !== undefined
+					? { reminderInterval: args.taskProgressInterval }
+					: {}),
+			},
+			// What the extension gets from the editor's language servers and this
+			// host has no way to ask for. Named, `check_file` runs it and says it
+			// is the linter; unnamed, it stays the syntax check it honestly is.
+			...(args.lintCommand?.trim()
+				? { checkFile: { lintCommand: args.lintCommand.trim() } }
+				: {}),
+			// The other half of the template: `# tool:` sections replace the
+			// description each tool carries in code. Without this the model is told
+			// what `editor` does by the SDK's own wording while the plugin tells it
+			// the family-tuned one, so the two hosts describe the same tool
+			// differently to the same model.
+			// `ideName` is what `{{IDE_NAME}}` resolves to in a `# tool:`
+			// section, so a description that names the host names this one
+			// rather than an IDE that is not here.
+			hooks: createPromptTemplateHooks({
+				rendered: renderedTemplate,
+				ideName,
+			}),
+			// Kept so every later rebuild of the system prompt -- a plan/act
+			// switch, the connector path -- starts from the same template.
+			promptTemplateSystem: renderedTemplate?.system,
+			// The two tools this host had no answer for, and the last of the gap
+			// with the extension. `browser` says whether a page actually runs;
+			// `code_intel` asks the language servers what a symbol means. Both
+			// take their host half as an injected interface, and neither starts
+			// anything until the model calls it: Chrome is launched on the first
+			// `open`, a language server on the first question about a file it
+			// serves.
+			extraTools: createCliHostTools({
+				cwd,
+				onError: (message, error) =>
+					loggerAdapter.core.log(
+						`${message}: ${error instanceof Error ? error.message : String(error)}`,
+					),
+			}),
 			checkpoint: CLI_DEFAULT_CHECKPOINT_CONFIG,
 			compaction: buildCliCompactionConfig(effectiveCompactionMode),
 			timeoutSeconds: args.timeoutSeconds,
@@ -1061,6 +1378,90 @@ export async function runCli(): Promise<void> {
 			},
 			teamName: !isYoloMode ? args.teamName?.trim() || undefined : undefined,
 		};
+		// A vision model means the session's model is not meant to see the image at
+		// all, whether or not it could have — the same rule the extension applies.
+		// Installed after `config` is built because the describer is made from the
+		// session's own provider settings with the model id swapped.
+		const visionModelId = args.visionModel?.trim();
+		if (visionModelId) {
+			const { createCliImageDescriber } = await import("./runtime/vision");
+			config.describeImages = createCliImageDescriber(
+				config,
+				visionModelId,
+				loggerAdapter.core,
+			);
+			config.alwaysDescribeImages = true;
+			loggerAdapter.core.log(
+				`[Vision] Describer installed: provider=${provider} model=${visionModelId}`,
+			);
+		}
+		// Delegated agents on a model of their own. The same shape the extension's
+		// Agents tab produces, read at the same place in core: only the fields
+		// named here replace the session's, so an agents model given without a
+		// window keeps the session's sampler and takes whatever window that model
+		// declares for itself.
+		const agentsModelId = args.agentsModel?.trim();
+		if (agentsModelId) {
+			const requested = Number(args.agentsNumCtx);
+			const contextWindow =
+				Number.isFinite(requested) && requested > 0
+					? Math.floor(requested)
+					: undefined;
+			config.delegatedAgentConnection = {
+				providerId: config.providerId,
+				modelId: agentsModelId,
+				...(config.apiKey ? { apiKey: config.apiKey } : {}),
+				...(config.baseUrl !== undefined ? { baseUrl: config.baseUrl } : {}),
+				providerConfig: {
+					...((config.providerConfig as Record<string, unknown> | undefined) ??
+						{}),
+					modelId: agentsModelId,
+					...(contextWindow ? { contextWindow } : {}),
+				},
+			} as NonNullable<(typeof config)["delegatedAgentConnection"]>;
+			loggerAdapter.core.log(
+				`[Agents] Delegated agents configured: provider=${provider} model=${agentsModelId}` +
+					(contextWindow ? ` contextWindow=${contextWindow}` : ""),
+			);
+		}
+		// A configured subagent may name a provider of its own. Core refuses one
+		// it cannot resolve rather than running it on the session's connection,
+		// so this is what makes a second provider work at all.
+		const { createAgentProviderConnectionResolver } = await import(
+			"./runtime/agent-provider-connection"
+		);
+		config.resolveProviderConnection = createAgentProviderConnectionResolver(
+			providerSettingsManager,
+		);
+		// How many agents this endpoint will actually serve at once. A server with
+		// no free slot queues the request rather than refusing it, so spawning
+		// more agents than there are slots makes a run slower, not faster — and
+		// nothing reports the queueing. Asked of the endpoint the agents call.
+		const agentSlots = await resolveAgentSlotLimit({
+			providerId:
+				config.delegatedAgentConnection?.providerId ?? config.providerId,
+			baseUrl: config.delegatedAgentConnection?.baseUrl ?? config.baseUrl,
+			parallelSessions: args.parallelSessions,
+		});
+		config.maxConcurrentAgents = agentSlots.limit;
+		// QA credentials named on the command line, read from this process's
+		// environment. Names only in the log — the values exist in exactly two
+		// places, this environment and the child of a command that asked.
+		const { resolveQaCredentialsFromEnv } = await import(
+			"./runtime/qa-credentials"
+		);
+		const qaCredentials = resolveQaCredentialsFromEnv(args.qaCredential);
+		if (qaCredentials.credentials.length > 0) {
+			config.qaCredentials = qaCredentials.credentials;
+		}
+		for (const note of qaCredentials.notes) {
+			loggerAdapter.core.log(`[QaCredentials] ${note}`);
+		}
+		loggerAdapter.core.log(
+			`[Agents] Concurrency: ${
+				agentSlots.limit === 0 ? "uncapped" : agentSlots.limit
+			} — ${agentSlots.reason}`,
+		);
 		try {
 			// For OAuth providers, don't write the resolved key into apiKey;
 			// the token lives in auth.accessToken and apiKey is reserved for

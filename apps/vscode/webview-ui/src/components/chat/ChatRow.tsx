@@ -1,3 +1,4 @@
+import { GeneratedMediaContent } from "@cline/ui"
 import { COMMAND_OUTPUT_STRING } from "@shared/combineCommandSequences"
 import {
 	ClineApiReqInfo,
@@ -33,9 +34,10 @@ import {
 } from "lucide-react"
 import { MouseEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useSize } from "react-use"
-import { canRestoreWorkspaceFromMessage } from "@/components/chat/chat-view/utils/messageUtils"
+import { canRestoreWorkspaceFromMessage, isTimingsOnlyApiReq } from "@/components/chat/chat-view/utils/messageUtils"
 import { OptionsButtons } from "@/components/chat/OptionsButtons"
 import { WithCopyButton } from "@/components/common/CopyButton"
+import Thumbnails from "@/components/common/Thumbnails"
 import McpResponseDisplay from "@/components/mcp/chat-display/McpResponseDisplay"
 import McpResourceRow from "@/components/mcp/configuration/tabs/installed/server-row/McpResourceRow"
 import McpToolRow from "@/components/mcp/configuration/tabs/installed/server-row/McpToolRow"
@@ -44,6 +46,7 @@ import { cn } from "@/lib/utils"
 import { FileServiceClient, UiServiceClient } from "@/services/grpc-client"
 import { findMatchingResourceOrTemplate } from "@/utils/mcp"
 import CodeAccordian, { cleanPathPrefix } from "../common/CodeAccordian"
+import BrowserScreenshotRow from "./BrowserScreenshotRow"
 import { CommandOutputContent, CommandOutputRow } from "./CommandOutputRow"
 import CompactionRow from "./CompactionRow"
 import { CompletionOutputRow } from "./CompletionOutputRow"
@@ -57,9 +60,12 @@ import PlanCompletionOutputRow from "./PlanCompletionOutputRow"
 import QuoteButton from "./QuoteButton"
 import ReportBugPreview from "./ReportBugPreview"
 import { RequestStartRow } from "./RequestStartRow"
+import { RequestTimingsRow } from "./RequestTimingsRow"
 import SearchResultsDisplay from "./SearchResultsDisplay"
 import SubagentStatusRow from "./SubagentStatusRow"
+import ThinkingCondensedRow from "./ThinkingCondensedRow"
 import { ThinkingRow } from "./ThinkingRow"
+import TransactionRow from "./TransactionRow"
 import UserMessage from "./UserMessage"
 
 const HEADER_CLASSNAMES = "flex items-center gap-2.5 mb-3"
@@ -74,6 +80,8 @@ interface ChatRowProps {
 	onLastRowContentChange: () => void
 	inputValue?: string
 	sendMessageFromChatRow?: (text: string, images: string[], files: string[]) => void
+	/** Attach an image from the transcript to the message being composed. */
+	onReferenceImage?: (image: string) => void
 	onSetQuote: (text: string) => void
 	onCancelCommand?: () => void
 	mode?: Mode
@@ -119,7 +127,7 @@ const ChatRow = memo(
 				}
 				prevHeightRef.current = height
 			}
-		}, [height, isLast, onHeightChange, message])
+		}, [height, isLast, onHeightChange])
 
 		// we cannot return null as virtuoso does not support it so we use a separate visibleMessages array to filter out messages that should not be rendered
 		return chatrow
@@ -139,6 +147,7 @@ export const ChatRowContent = memo(
 		isLast,
 		inputValue,
 		sendMessageFromChatRow,
+		onReferenceImage,
 		onSetQuote,
 		onCancelCommand,
 		onLastRowContentChange,
@@ -146,8 +155,14 @@ export const ChatRowContent = memo(
 		reasoningContent,
 		responseStarted,
 	}: ChatRowContentProps) => {
-		const { backgroundEditEnabled, mcpServers, vscodeTerminalExecutionMode, clineMessages, showFeatureTips } =
-			useExtensionState()
+		const {
+			backgroundEditEnabled,
+			mcpServers,
+			vscodeTerminalExecutionMode,
+			clineMessages,
+			showFeatureTips,
+			enableCheckpointsSetting,
+		} = useExtensionState()
 		const [quoteButtonState, setQuoteButtonState] = useState<QuoteButtonState>({
 			visible: false,
 			top: 0,
@@ -189,7 +204,7 @@ export const ChatRowContent = memo(
 			prevIsLastRef.current = isLast
 		}, [isLast, message.ask, message.say])
 
-		const [cost, apiReqCancelReason, apiReqStreamingFailedMessage] = useMemo(() => {
+		const [cost, _apiReqCancelReason, apiReqStreamingFailedMessage] = useMemo(() => {
 			if (message.text != null && message.say === "api_req_started") {
 				const info: ClineApiReqInfo = JSON.parse(message.text)
 				return [info.cost, info.cancelReason, info.streamingFailedMessage]
@@ -331,16 +346,7 @@ export const ChatRowContent = memo(
 				default:
 					return [null, null]
 			}
-		}, [
-			type,
-			cost,
-			apiRequestFailedMessage,
-			isCommandExecuting,
-			isCommandPending,
-			apiReqCancelReason,
-			isMcpServerResponding,
-			message.text,
-		])
+		}, [type, isMcpServerResponding, message.text])
 
 		const tool = useMemo(() => {
 			if (message.ask === "tool" || message.say === "tool") {
@@ -403,9 +409,17 @@ export const ChatRowContent = memo(
 				case "editedExistingFile":
 					const content = tool?.content || ""
 					const isApplyingPatch = content?.startsWith("%%bash") && !content.endsWith("*** End Patch\nEOF")
+					// The mode belongs in the header because the payload that would
+					// otherwise reveal it is collapsed, and "wants to edit this
+					// file" is the one thing about an edit that is never in
+					// question. A SEARCH/REPLACE and a line-range replace fail in
+					// completely different ways, and telling them apart at a
+					// glance is most of reading a session back.
 					const editToolTitle = isApplyingPatch
 						? "Cline is creating patches to edit this file:"
-						: "Cline wants to edit this file:"
+						: tool.editMode
+							? `Cline wants to edit this file (${tool.editMode}):`
+							: "Cline wants to edit this file:"
 					return (
 						<div>
 							<div className={HEADER_CLASSNAMES}>
@@ -497,7 +511,7 @@ export const ChatRowContent = memo(
 									{tool.path?.startsWith(".") && <span>.</span>}
 									{tool.path && !tool.path.startsWith(".") && <span>/</span>}
 									<span className="ph-no-capture whitespace-nowrap overflow-hidden text-ellipsis mr-2 text-left [direction: rtl]">
-										{cleanPathPrefix(tool.path ?? "") + "\u200E"}
+										{`${cleanPathPrefix(tool.path ?? "")}\u200E`}
 										{tool.readLineStart != null ? (
 											<span className="opacity-80">
 												{" "}
@@ -615,8 +629,7 @@ export const ChatRowContent = memo(
 											e.stopPropagation()
 											handleToggle()
 										}
-									}}
-									tabIndex={0}>
+									}}>
 									{isExpanded ? (
 										<div>
 											<div className="flex items-center mb-2">
@@ -629,7 +642,7 @@ export const ChatRowContent = memo(
 									) : (
 										<div className="flex items-center">
 											<span className="ph-no-capture whitespace-nowrap overflow-hidden text-ellipsis text-left flex-1 mr-2 [direction:rtl]">
-												{tool.content + "\u200E"}
+												{`${tool.content}\u200E`}
 											</span>
 											<ChevronRightIcon className="my-0.5 shrink-0 size-4" />
 										</div>
@@ -662,7 +675,7 @@ export const ChatRowContent = memo(
 									}
 								}}>
 								<span className="ph-no-capture whitespace-nowrap overflow-hidden text-ellipsis mr-2 [direction:rtl] text-left text-link underline">
-									{tool.path + "\u200E"}
+									{`${tool.path}\u200E`}
 								</span>
 							</div>
 						</div>
@@ -682,7 +695,7 @@ export const ChatRowContent = memo(
 							</div>
 							<div className="bg-code border border-editor-group-border overflow-hidden rounded-xs select-text py-[9px] px-2.5">
 								<span className="ph-no-capture whitespace-nowrap overflow-hidden text-ellipsis mr-2 text-left [direction:rtl]">
-									{tool.path + "\u200E"}
+									{`${tool.path}\u200E`}
 								</span>
 							</div>
 						</div>
@@ -816,6 +829,13 @@ export const ChatRowContent = memo(
 			case "say":
 				switch (message.say) {
 					case "api_req_started":
+						// Kept in the list only to carry its timings (see
+						// `isTimingsOnlyApiReq`): render the line and nothing
+						// else, or the reasoning that has its own rows is drawn
+						// a second time here.
+						if (isTimingsOnlyApiReq(message)) {
+							return <RequestTimingsRow message={message} />
+						}
 						return (
 							<RequestStartRow
 								apiReqStreamingFailedMessage={apiReqStreamingFailedMessage}
@@ -845,17 +865,34 @@ export const ChatRowContent = memo(
 							</div>
 						)
 					case "text": {
+						const hasText = !!message.text?.trim()
 						return (
 							<WithCopyButton
 								onMouseUp={handleMouseUp}
 								position="bottom-right"
 								ref={contentRef}
 								textToCopy={message.text}>
-								<div className="flex items-center">
-									<div className={cn("flex-1 min-w-0 pl-1")}>
-										<MarkdownRow markdown={message.text} showCursor={false} />
+								{hasText && (
+									<div className="flex items-center">
+										<div className={cn("flex-1 min-w-0 pl-1")}>
+											<MarkdownRow markdown={message.text} showCursor={false} />
+										</div>
 									</div>
-								</div>
+								)}
+								{!!message.images?.length && (
+									<Thumbnails className={hasText ? "mt-2" : undefined} files={[]} images={message.images} />
+								)}
+								{!!message.media?.length && (
+									<div className={cn("flex flex-col gap-2", hasText && "mt-2")}>
+										{message.media.map((media) => (
+											<GeneratedMediaContent
+												className="max-h-96 max-w-full rounded-sm"
+												key={media.id}
+												media={media}
+											/>
+										))}
+									</div>
+								)}
 								{quoteButtonState.visible && (
 									<QuoteButton
 										left={quoteButtonState.left}
@@ -870,7 +907,7 @@ export const ChatRowContent = memo(
 						const isReasoningStreaming = message.partial === true
 						const hasReasoningText = !!message.text?.trim()
 						// Show feature tips throughout the entire thinking/reasoning phase
-						const showFeatureTip = isReasoningStreaming
+						const _showFeatureTip = isReasoningStreaming
 						return (
 							<div>
 								<ThinkingRow
@@ -923,17 +960,23 @@ export const ChatRowContent = memo(
 								Loading MCP documentation
 							</div>
 						)
-					case "completion_result":
-						const hasChanges = message.text?.endsWith(COMPLETION_RESULT_CHANGES_FLAG) ?? false
-						const text = hasChanges ? message.text?.slice(0, -COMPLETION_RESULT_CHANGES_FLAG.length) : message.text
+					case "completion_result": {
+						// Strip the legacy HAS_CHANGES sentinel that pre-SDK versions
+						// persisted on completion message text.
+						const hasLegacyChangesFlag = message.text?.endsWith(COMPLETION_RESULT_CHANGES_FLAG) ?? false
+						const text = hasLegacyChangesFlag
+							? message.text?.slice(0, -COMPLETION_RESULT_CHANGES_FLAG.length)
+							: message.text
 
 						return (
 							<CompletionOutputRow
 								handleQuoteClick={handleQuoteClick}
 								quoteButtonState={quoteButtonState}
+								showViewChanges={isLast && message.partial !== true && enableCheckpointsSetting}
 								text={text || ""}
 							/>
 						)
+					}
 					case "plan_completion_result":
 						// Turn-final plan-mode response inferred at turn end (SDK path)
 						return <PlanCompletionOutputRow text={message.text || ""} />
@@ -1001,8 +1044,20 @@ export const ChatRowContent = memo(
 						)
 					case "task_progress":
 						return <InvisibleSpacer /> // task_progress messages should be displayed in TaskHeader only, not in chat
+					case "browser_screenshot":
+						return (
+							<BrowserScreenshotRow
+								images={message.images ?? []}
+								onReference={onReferenceImage}
+								text={message.text}
+							/>
+						)
 					case "compaction":
 						return <CompactionRow message={message} />
+					case "thinking_condensed":
+						return <ThinkingCondensedRow message={message} />
+					case "transaction":
+						return <TransactionRow message={message} />
 					default:
 						return (
 							<div>

@@ -107,11 +107,24 @@ function parseDataUrlImage(
 		};
 	}
 
-	// Fallback: treat as plain base64 payload.
+	// Fallback: treat as plain base64 payload — but only if it can be one.
+	//
+	// This accepted any string at all, so a value that was never image data
+	// became image data with an `image/png` label on it. Measured: the path
+	// `/home/chris/screenshot.png` came out the far end as a 26-character
+	// `image` part and went to the model as a picture. Nothing failed, because
+	// there is nothing here that could fail — which is the problem.
+	//
+	// A path is rejected on both counts below: it carries characters base64 does
+	// not use, and its length is not a multiple of four.
+	const compact = value.replace(/\s+/g, "");
+	if (!/^[A-Za-z0-9+/]+={0,2}$/.test(compact) || compact.length % 4 !== 0) {
+		return undefined;
+	}
 	return {
 		type: "image",
 		mediaType: "image/png",
-		data: value,
+		data: compact,
 	};
 }
 

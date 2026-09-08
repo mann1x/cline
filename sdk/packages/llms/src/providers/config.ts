@@ -126,6 +126,15 @@ export interface TokenConfig {
 	maxOutputTokens?: number;
 	/** Sampling temperature (overrides model default) */
 	temperature?: number;
+	/**
+	 * Marks a config the machinery uses for its own calls -- summarising,
+	 * condensing, titling -- rather than for the conversation.
+	 *
+	 * Carried through to `GatewayStreamRequest.auxiliary`, where it keeps the
+	 * call from writing itself into the process-wide record of "the last
+	 * request" that the next compaction pass reads.
+	 */
+	auxiliary?: boolean;
 }
 
 /**

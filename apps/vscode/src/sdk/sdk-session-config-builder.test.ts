@@ -62,7 +62,7 @@ describe("SdkSessionConfigBuilder", () => {
 		mocks.buildSessionConfig.mockResolvedValueOnce({ hooks: {} })
 
 		const builder = new SdkSessionConfigBuilder({
-			stateManager: {} as never,
+			stateManager: { getGlobalSettingsKey: vi.fn(() => undefined) } as never,
 			emitHookMessage: vi.fn(),
 			onSwitchToActMode: vi.fn(),
 			shouldStopAfterModeSwitch: () => true,
@@ -106,7 +106,7 @@ describe("SdkSessionConfigBuilder", () => {
 		mocks.buildAgentHooks.mockReturnValueOnce({ beforeModel: baseBeforeModel })
 
 		const builder = new SdkSessionConfigBuilder({
-			stateManager: {} as never,
+			stateManager: { getGlobalSettingsKey: vi.fn(() => undefined) } as never,
 			emitHookMessage: vi.fn(),
 			onSwitchToActMode: vi.fn(),
 		})

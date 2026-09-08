@@ -2,7 +2,11 @@ import type {
 	GatewayProviderFactory,
 	GatewayProviderRegistration,
 } from "@cline/shared";
-import { BUILTIN_SPECS, type ProviderFamily, toManifest } from "./builtins";
+import {
+	BUILTIN_PROVIDER_MANIFESTS_BY_ID,
+	BUILTIN_SPECS,
+	type ProviderFamily,
+} from "./builtins";
 
 const FAMILY_FACTORY_PROMISES = new Map<
 	ProviderFamily,
@@ -19,6 +23,10 @@ async function loadFamilyFactory(
 
 	const promise = (async () => {
 		switch (family) {
+			case "cline": {
+				const module = await import("./ai-sdk");
+				return module.createClineProvider;
+			}
 			case "openai": {
 				const module = await import("./ai-sdk");
 				return module.createOpenAIProvider;
@@ -67,6 +75,10 @@ async function loadFamilyFactory(
 				const module = await import("./ai-sdk");
 				return module.createOllamaProvider;
 			}
+			case "opencoti": {
+				const module = await import("./ai-sdk");
+				return module.createOpencotiProvider;
+			}
 			case "sap-ai-core": {
 				const module = await import("./ai-sdk");
 				return module.createSapAiCoreProvider;
@@ -93,7 +105,7 @@ function resolveRuntimeFamily(
 
 export const BUILTIN_PROVIDER_REGISTRATIONS: GatewayProviderRegistration[] =
 	BUILTIN_SPECS.map((spec) => ({
-		manifest: toManifest(spec),
+		manifest: BUILTIN_PROVIDER_MANIFESTS_BY_ID[spec.id],
 		defaults: {
 			...spec.defaults,
 			apiKeyEnv: spec.apiKeyEnv,

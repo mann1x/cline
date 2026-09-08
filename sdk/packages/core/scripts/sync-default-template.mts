@@ -57,17 +57,20 @@ const stubExecutor = (() => {
 }) as never;
 
 function liveTools(): { name: string; description?: string }[] {
+	// Only the tools whose description depends on where they run take a cwd.
+	// The rest were narrowed to a timeout of their own in f4fe3d36e and reject
+	// this object outright, so they are left to their defaults.
 	const config = { cwd: "/workspace" };
 	return [
-		createReadFilesTool(stubExecutor, config),
+		createReadFilesTool(stubExecutor),
 		createSearchTool(stubExecutor, config),
 		createShellTool(stubExecutor, config),
-		createWebFetchTool(stubExecutor, config),
+		createWebFetchTool(stubExecutor),
 		createEditorTool(stubExecutor, config),
 		createApplyPatchTool(stubExecutor, config),
-		createSkillsTool(stubExecutor, config),
+		createSkillsTool(stubExecutor),
 		createAskQuestionTool(stubExecutor),
-		createSubmitAndExitTool(stubExecutor, config),
+		createSubmitAndExitTool(stubExecutor),
 		createSpawnAgentTool({ configProvider: {} as never }),
 		...createAgentTeamsTools({
 			runtime: {} as never,

@@ -5,7 +5,7 @@ import type { McpHub } from "@/services/mcp/McpHub"
  * Build SDK `toolPolicies` for tools governed by Cline's auto-approval UI.
  *
  * The SDK defaults unlisted tools to auto-approved. For tools controlled by
- * AutoApproveBar/MCP per-tool settings, force the SDK to call
+ * the AutoApproveBar toggles (including all MCP tools), force the SDK to call
  * `requestToolApproval`; the approval callback then evaluates the latest
  * settings and either silently approves or shows the approval UI. This keeps
  * active sessions in sync when the user toggles auto-approval mid-task.
@@ -26,6 +26,7 @@ export function buildToolPolicies(
 	set(["editor", "replace_in_file", "write_to_file", "apply_patch", "delete_file"])
 	set(["run_commands", "execute_command"])
 	set(["fetch_web_content", "web_fetch", "web_search"])
+	set(["browser", "browser_action"])
 
 	if (mcpHub) {
 		for (const server of mcpHub.getServers()) {
@@ -55,12 +56,19 @@ export function isToolAutoApproved(toolName: string, settings: AutoApprovalSetti
 	if (isCommandTool(toolName)) {
 		return !!settings.actions.executeSafeCommands
 	}
-	if (isBrowserTool(toolName)) {
+	if (isWebFetchTool(toolName)) {
 		return !!settings.actions.useBrowser
+	}
+	if (isBrowserTool(toolName)) {
+		// Falls back to the web-fetch toggle when the browser one is absent,
+		// which is what settings written before it existed look like.
+		return !!(settings.actions.useBrowserTool ?? settings.actions.useBrowser)
 	}
 
 	const mcpTool = parseMcpToolName(toolName)
 	if (mcpTool) {
+		// `useMcp` is the gate, not the grant: a tool is auto-approved only when
+		// the user marked that tool auto-approve on its server.
 		if (!settings.actions.useMcp || !mcpHub) {
 			return false
 		}
@@ -86,10 +94,24 @@ function isCommandTool(toolName: string): boolean {
 	return toolName === "run_commands" || toolName === "execute_command"
 }
 
-function isBrowserTool(toolName: string): boolean {
+function isWebFetchTool(toolName: string): boolean {
 	return toolName === "fetch_web_content" || toolName === "web_fetch" || toolName === "web_search"
 }
 
+/**
+ * The tools that drive a real browser.
+ *
+ * Kept apart from the web-fetch tools, which used to share their toggle. They
+ * are not the same risk: fetching a URL returns its text, while this launches a
+ * browser process that runs whatever the page contains. Someone can reasonably
+ * want the first to go through unattended and the second to ask every time, and
+ * with one checkbox for both they could not have it.
+ */
+function isBrowserTool(toolName: string): boolean {
+	return toolName === "browser" || toolName === "browser_action"
+}
+
+/** MCP tools are registered by `createMcpTools` under `serverName__toolName`. */
 function parseMcpToolName(toolName: string): { serverName: string; toolName: string } | undefined {
 	const separatorIndex = toolName.indexOf("__")
 	if (separatorIndex <= 0) return undefined

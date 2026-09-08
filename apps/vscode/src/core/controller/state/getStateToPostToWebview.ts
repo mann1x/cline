@@ -4,11 +4,18 @@
 // This allows the SdkController to reuse the classic state-building logic
 // without inheriting the entire classic Controller implementation.
 
-import { readCompactionStrategyGlobally } from "@cline/core"
+import {
+	DEFAULT_CAPPED_THINKING_PROMPT,
+	DEFAULT_COMPACTION_PROMPT,
+	DEFAULT_THINKING_COMPACTION_PROMPT,
+	isModelToolEnabledGlobally,
+	readCompactionStrategyGlobally,
+} from "@cline/core"
 import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
 import type { ExtensionState, Platform } from "@shared/ExtensionMessage"
 import { ClineEnv } from "@/config"
 import { ExtensionRegistryInfo } from "@/registry"
+import { readQaCredentialNames } from "@/sdk/qa-credentials-store"
 import { BannerService } from "@/services/banner/BannerService"
 import { featureFlagsService } from "@/services/feature-flags"
 import { getDistinctId } from "@/services/logging/distinctId"
@@ -29,6 +36,8 @@ export async function getStateToPostToWebview(controller: {
 	foregroundCommandRunning?: boolean
 	workspaceManager?: any
 	checkpointRestoreInput?: ExtensionState["checkpointRestoreInput"]
+	isRemoteConfigAvailable?: boolean
+	currentRemoteConfigRevision?: number
 }): Promise<ExtensionState> {
 	const stateManager = controller.stateManager
 
@@ -41,15 +50,30 @@ export async function getStateToPostToWebview(controller: {
 	const browserSettings = stateManager.getGlobalSettingsKey("browserSettings")
 	const preferredLanguage = stateManager.getGlobalSettingsKey("preferredLanguage")
 	const mode = stateManager.getGlobalSettingsKey("mode")
-	const yoloModeToggled = stateManager.getGlobalSettingsKey("yoloModeToggled")
 	const useAutoCondense = stateManager.getGlobalSettingsKey("useAutoCondense")
+	const compactionPrompt = stateManager.getGlobalSettingsKey("compactionPrompt")
+	const thinkingCompactionEnabled = stateManager.getGlobalSettingsKey("thinkingCompactionEnabled")
+	const thinkingCompactionPrompt = stateManager.getGlobalSettingsKey("thinkingCompactionPrompt")
+	const cappedThinkingEnabled = stateManager.getGlobalSettingsKey("cappedThinkingEnabled")
+	const showRequestTimings = stateManager.getGlobalSettingsKey("showRequestTimings")
+	const cappedThinkingPrompt = stateManager.getGlobalSettingsKey("cappedThinkingPrompt")
+	const focusChainSettings = stateManager.getGlobalSettingsKey("focusChainSettings")
 	const compactionStrategy = readCompactionStrategyGlobally()
+	const webSearchEnabled = isModelToolEnabledGlobally("web_search")
 	const subagentsEnabled = stateManager.getGlobalSettingsKey("subagentsEnabled")
 	const userInfo = stateManager.getGlobalStateKey("userInfo")
 	const mcpMarketplaceEnabled = stateManager.getGlobalStateKey("mcpMarketplaceEnabled")
 	const mcpDisplayMode = stateManager.getGlobalStateKey("mcpDisplayMode")
 	const telemetrySetting = stateManager.getGlobalSettingsKey("telemetrySetting")
 	const planActSeparateModelsSetting = stateManager.getGlobalSettingsKey("planActSeparateModelsSetting")
+	const visionModelEnabled = stateManager.getGlobalSettingsKey("visionModelEnabled")
+	const visionModeApiConfiguration = stateManager.getGlobalSettingsKey("visionModeApiConfiguration")
+	const agentsModelEnabled = stateManager.getGlobalSettingsKey("agentsModelEnabled")
+	const agentsModeApiConfiguration = stateManager.getGlobalSettingsKey("agentsModeApiConfiguration")
+	const editVerificationSettings = stateManager.getGlobalSettingsKey("editVerificationSettings")
+	const atomicProtocolSettings = stateManager.getGlobalSettingsKey("atomicProtocolSettings")
+	const apiConfigurationProfiles = stateManager.getGlobalSettingsKey("apiConfigurationProfiles")
+	const activeApiConfigurationProfile = stateManager.getGlobalSettingsKey("activeApiConfigurationProfile")
 	const enableCheckpointsSetting = stateManager.getGlobalSettingsKey("enableCheckpointsSetting")
 	const globalClineRulesToggles = stateManager.getGlobalStateKey("globalClineRulesToggles")
 	const globalWorkflowToggles = stateManager.getGlobalStateKey("globalWorkflowToggles")
@@ -120,15 +144,36 @@ export async function getStateToPostToWebview(controller: {
 		browserSettings,
 		preferredLanguage,
 		mode,
-		yoloModeToggled,
 		useAutoCondense,
+		compactionPrompt,
+		defaultCompactionPrompt: DEFAULT_COMPACTION_PROMPT,
+		thinkingCompactionEnabled,
+		thinkingCompactionPrompt,
+		defaultThinkingCompactionPrompt: DEFAULT_THINKING_COMPACTION_PROMPT,
+		cappedThinkingEnabled,
+		showRequestTimings,
+		cappedThinkingPrompt,
+		defaultCappedThinkingPrompt: DEFAULT_CAPPED_THINKING_PROMPT,
+		focusChainSettings,
 		compactionStrategy,
+		webSearchEnabled,
 		subagentsEnabled,
 		userInfo,
 		mcpMarketplaceEnabled,
 		mcpDisplayMode,
 		telemetrySetting,
 		planActSeparateModelsSetting,
+		visionModelEnabled,
+		visionModeApiConfiguration,
+		agentsModelEnabled,
+		agentsModeApiConfiguration,
+		editVerificationSettings,
+		atomicProtocolSettings,
+		// Names only. The values live in secret storage and never travel with
+		// the state; the settings view offers "replace" rather than showing one.
+		qaCredentialNames: readQaCredentialNames(),
+		apiConfigurationProfiles,
+		activeApiConfigurationProfile,
 		enableCheckpointsSetting: enableCheckpointsSetting ?? true,
 		platform,
 		environment,
@@ -174,10 +219,12 @@ export async function getStateToPostToWebview(controller: {
 		lastDismissedInfoBannerVersion,
 		lastDismissedModelBannerVersion,
 		remoteConfigSettings: stateManager.getRemoteConfigSettings?.(),
+		remoteConfigRevision: controller.currentRemoteConfigRevision ?? 0,
 		lastDismissedCliBannerVersion,
 		dismissedBanners,
 		backgroundEditEnabled: stateManager.getGlobalSettingsKey("backgroundEditEnabled"),
 		optOutOfRemoteConfig: stateManager.getGlobalSettingsKey("optOutOfRemoteConfig"),
+		remoteConfigAvailable: controller.isRemoteConfigAvailable ?? false,
 		showFeatureTips,
 		banners,
 		welcomeBanners,

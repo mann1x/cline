@@ -35,9 +35,29 @@ export async function subscribeToState(
 		getRequestRegistry().registerRequest(requestId, cleanup, { type: "state_subscription" }, responseStream)
 	}
 
-	// Send the initial state
-	const initialState = await controller.getStateToPostToWebview()
-	const initialStateJson = JSON.stringify(initialState)
+	// Send the initial state.
+	//
+	// Built inside the try, because this is the only state the webview ever
+	// waits for: it renders nothing at all until the first push arrives, and it
+	// has no timeout of its own. A throw out here used to leave the subscription
+	// registered and the panel blank forever, with the failure recorded nowhere
+	// — the extension host healthy, the task still running, and every log clean.
+	// That is the shape of three separate "the panel went empty" reports.
+	let initialStateJson: string
+	try {
+		const initialState = await controller.getStateToPostToWebview()
+		initialStateJson = JSON.stringify(initialState)
+	} catch (error) {
+		Logger.error(
+			`Failed to build the initial state for the webview: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
+		)
+		activeStateSubscriptions.delete(responseStream)
+		// Rethrown rather than swallowed: the gRPC handler turns it into an
+		// error the webview's subscription can see, and seeing it is what lets
+		// the webview try again instead of waiting on a stream that will never
+		// speak.
+		throw error
+	}
 
 	recordStateSizeTelemetry(Buffer.byteLength(initialStateJson, "utf8"))
 

@@ -1,14 +1,18 @@
 // type that represents json data that is sent from extension to webview, called ExtensionMessage and has 'type' enum which can be 'plusButtonClicked' or 'settingsButtonClicked' or 'hello'
 
+import type { GeneratedMedia, RequestTimings } from "@cline/shared"
 import { WorkspaceRoot } from "@shared/multi-root/types"
 import { RemoteConfigFields } from "@shared/storage/state-keys"
 import type { Environment } from "../config"
+import type { AtomicProtocolSettings } from "./AtomicProtocolSettings"
 import { AutoApprovalSettings } from "./AutoApprovalSettings"
 import { ApiConfiguration } from "./api"
 import { BrowserSettings } from "./BrowserSettings"
 import { ClineFeatureSetting } from "./ClineFeatureSetting"
 import { BannerCardData } from "./cline/banner"
 import { ClineRulesToggles } from "./cline-rules"
+import type { EditVerificationSettings } from "./EditVerificationSettings"
+import type { FocusChainSettings } from "./FocusChainSettings"
 import { HistoryItem } from "./HistoryItem"
 import { McpDisplayMode } from "./McpDisplayMode"
 import { ClineMessageModelInfo } from "./messages"
@@ -80,6 +84,24 @@ export interface ExtensionState {
 	mcpMarketplaceEnabled?: boolean
 	mcpDisplayMode: McpDisplayMode
 	planActSeparateModelsSetting: boolean
+	/** Use a second model to describe images for a primary model that cannot read them. */
+	visionModelEnabled: boolean
+	/** JSON `ApiConfigurationSnapshot` for the vision model. */
+	visionModeApiConfiguration: string
+	/** Run delegated agents on a model of their own rather than the session's. */
+	agentsModelEnabled: boolean
+	/** JSON `ApiConfigurationSnapshot` for delegated agents. */
+	agentsModeApiConfiguration: string
+	/** Whether a run may finish with a file it changed and never checked. */
+	editVerificationSettings: EditVerificationSettings
+	/** Whether a task runs as judged, revertible transactions. */
+	atomicProtocolSettings: AtomicProtocolSettings
+	/** Names of the configured QA credentials. Never their values. */
+	qaCredentialNames: string[]
+	/** JSON `ApiConfigurationProfile[]`. */
+	apiConfigurationProfiles: string
+	/** Name of the loaded profile, or "" when the panel matches no profile. */
+	activeApiConfigurationProfile: string
 	enableCheckpointsSetting?: boolean
 	platform: Platform
 	environment?: Environment
@@ -118,9 +140,34 @@ export interface ExtensionState {
 	remoteWorkflowToggles?: ClineRulesToggles
 	localAgentsRulesToggles: ClineRulesToggles
 	mcpResponsesCollapsed?: boolean
-	yoloModeToggled?: boolean
 	useAutoCondense?: boolean
+	/** Replaces the built-in compaction summary instruction; empty means default. */
+	compactionPrompt?: string
+	/**
+	 * The built-in instruction, so the settings field can show what it replaces.
+	 *
+	 * Sent from the host rather than imported: the webview is a browser bundle
+	 * and `@cline/core` reaches Node-only code through `@cline/llms`.
+	 */
+	defaultCompactionPrompt?: string
+	/** Whether compaction also writes a retrospective over the discarded reasoning. */
+	thinkingCompactionEnabled?: boolean
+	/** Replaces the built-in retrospective instruction; empty means default. */
+	thinkingCompactionPrompt?: string
+	/** The built-in retrospective instruction, so the field can show what it replaces. */
+	defaultThinkingCompactionPrompt?: string
+	/** Whether a turn that ran out of thinking budget has its reasoning condensed. */
+	cappedThinkingEnabled?: boolean
+	showRequestTimings?: boolean
+	/** Replaces the built-in continuation-note instruction; empty means default. */
+	cappedThinkingPrompt?: string
+	/** The built-in continuation-note instruction, so the field can show what it replaces. */
+	defaultCappedThinkingPrompt?: string
+	/** Focus Chain / task checklist. Read by the webview so the panel and the
+	 * Features toggle agree with what the session was actually configured with. */
+	focusChainSettings?: FocusChainSettings
 	compactionStrategy?: string
+	webSearchEnabled?: boolean
 	subagentsEnabled?: boolean
 	worktreesEnabled?: ClineFeatureSetting
 	favoritedModelIds: string[]
@@ -135,10 +182,12 @@ export interface ExtensionState {
 	dismissedBanners?: Array<{ bannerId: string; dismissedAt: number }>
 	hooksEnabled?: boolean
 	remoteConfigSettings?: Partial<RemoteConfigFields>
+	remoteConfigRevision?: number
 	globalSkillsToggles?: Record<string, boolean>
 	localSkillsToggles?: Record<string, boolean>
 	backgroundEditEnabled?: boolean
 	optOutOfRemoteConfig?: boolean
+	remoteConfigAvailable?: boolean
 	showFeatureTips?: boolean
 	banners?: BannerCardData[]
 	welcomeBanners?: BannerCardData[]
@@ -181,6 +230,7 @@ export interface ClineMessage {
 	text?: string
 	reasoning?: string
 	images?: string[]
+	media?: GeneratedMedia[]
 	files?: string[]
 	partial?: boolean
 	/**
@@ -243,6 +293,7 @@ export type ClineSay =
 	| "browser_action_launch"
 	| "browser_action"
 	| "browser_action_result"
+	| "browser_screenshot" // a screenshot the `browser` tool returned, shown under its tool row
 	| "mcp_server_request_started"
 	| "mcp_server_response"
 	| "mcp_notification"
@@ -262,6 +313,8 @@ export type ClineSay =
 	| "subagent_usage"
 	| "conditional_rules_applied"
 	| "compaction" // context compaction progress/result divider
+	| "thinking_condensed" // a capped turn's reasoning, replaced by the note it left itself
+	| "transaction" // a change transaction kept, or discarded and put back
 
 export interface ClineSayTool {
 	tool:
@@ -285,6 +338,14 @@ export interface ClineSayTool {
 	operationIsLocatedInWorkspace?: boolean
 	/** Starting line numbers in the original file where each SEARCH block matched */
 	startLineNumbers?: number[]
+	/**
+	 * Which shape of edit this is — SEARCH/REPLACE, a line range, an insert.
+	 *
+	 * The card said "Cline wants to edit this file" for all of them, which is
+	 * the one thing about an edit that is never in question. What the edit is
+	 * doing is inside the payload, and the payload is collapsed.
+	 */
+	editMode?: string
 	/** One-based inclusive line range requested by read_file; readLineEnd omitted = open-ended read (for UI summaries). */
 	readLineStart?: number
 	readLineEnd?: number
@@ -371,6 +432,17 @@ export interface ClineApiReqInfo {
 	cacheWrites?: number
 	cacheReads?: number
 	cost?: number
+	/** Hidden reasoning tokens, where the provider reports them separately. */
+	reasoningTokens?: number
+	/**
+	 * What this request cost in time.
+	 *
+	 * Always written when the request produced usage, whether or not the user
+	 * has the display switched on: the switch decides what is shown, not what
+	 * is recorded, so turning it on shows the history that was already there
+	 * rather than only requests made from that moment on.
+	 */
+	timings?: RequestTimings
 	cancelReason?: ClineApiReqCancelReason
 	streamingFailedMessage?: string
 }
@@ -387,6 +459,50 @@ export interface ClineCompactionInfo {
 	tokensAfter?: number
 	messagesBefore?: number
 	messagesAfter?: number
+	/** The summary this compaction wrote, so the row can show it on demand. */
+	summary?: string
+	/** The retrospective written alongside it, when the second phase ran. */
+	thinkingSummary?: string
+}
+
+/**
+ * JSON payload of a say:"thinking_condensed" message.
+ *
+ * A turn that runs out of thinking budget is cut mid-sentence, and the next
+ * turn is given a short note in its place rather than the abandoned reasoning.
+ * That note is the only surviving account of what the turn concluded — what it
+ * replaces is never sent again — so it is shown the same way a compaction
+ * summary is: a divider that expands.
+ */
+export interface ClineThinkingCondensedInfo {
+	/** Characters of reasoning the note replaces. */
+	thinkingChars?: number
+	/** Characters of note. */
+	noteChars?: number
+	/** The allowance the turn ran out of. */
+	budgetTokens?: number
+	note: string
+}
+
+/**
+ * JSON payload of a say:"transaction" message.
+ *
+ * The verdict on one transaction under the change protocol. It gets a row of
+ * its own rather than an info line because of what a discarded one means: every
+ * file that transaction touched went back to what it was. A run where that
+ * happened three times and then finished looks, in the transcript alone,
+ * exactly like a run that got it right the first time.
+ */
+export interface ClineTransactionInfo {
+	/** One-based, in the order they were opened. */
+	transaction: number
+	kept: boolean
+	/** What the check said, when there was one to run. */
+	output?: string
+	/** Files put back, created ones removed, deleted ones recreated. */
+	filesPutBack?: number
+	/** The one-line verdict, already written for a human. */
+	message: string
 }
 
 export interface ClineSubagentUsageInfo {

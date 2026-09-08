@@ -1,12 +1,21 @@
-import { getBuiltinPromptTemplates, HOST_TOOL_INPUT_SCHEMAS, summarizeToolCallSignatures } from "@cline/core"
-import { describe, expect, it } from "vitest"
-import { CHECK_FILE_TOOL_DESCRIPTION, CHECK_FILE_TOOL_INPUT_SCHEMA, CHECK_FILE_TOOL_NAME } from "./check-file-tool"
 import {
+	BROWSER_ACTIONS,
+	BROWSER_TOOL_DESCRIPTION,
+	BROWSER_TOOL_INPUT_SCHEMA,
+	BROWSER_TOOL_NAME,
 	CODE_INTEL_OPERATIONS,
 	CODE_INTEL_TOOL_DESCRIPTION,
 	CODE_INTEL_TOOL_INPUT_SCHEMA,
 	CODE_INTEL_TOOL_NAME,
-} from "./code-intel-tool"
+	getBuiltinPromptTemplates,
+	HOST_TOOL_INPUT_SCHEMAS,
+	LIST_FILES_TOOL_INPUT_SCHEMA,
+	LIST_FILES_TOOL_NAME,
+	summarizeToolCallSignatures,
+} from "@cline/core"
+import { describe, expect, it } from "vitest"
+import { CHECK_FILE_TOOL_DESCRIPTION, CHECK_FILE_TOOL_INPUT_SCHEMA, CHECK_FILE_TOOL_NAME } from "./check-file-tool"
+
 import { SWITCH_TO_ACT_MODE_TOOL_DESCRIPTION, SWITCH_TO_ACT_MODE_TOOL_NAME } from "./sdk-session-config-builder"
 
 /**
@@ -35,6 +44,10 @@ describe("host tool descriptions in default.md", () => {
 	it("reproduces switch_to_act_mode verbatim", () => {
 		expect(shipped?.tools[SWITCH_TO_ACT_MODE_TOOL_NAME]).toBe(SWITCH_TO_ACT_MODE_TOOL_DESCRIPTION.trim())
 	})
+
+	it("reproduces browser verbatim", () => {
+		expect(shipped?.tools[BROWSER_TOOL_NAME]).toBe(BROWSER_TOOL_DESCRIPTION.trim())
+	})
 })
 
 /**
@@ -53,6 +66,18 @@ describe("host tool schemas restated in core", () => {
 	function signatureOf(name: string, schema: unknown) {
 		return summarizeToolCallSignatures([{ name, inputSchema: schema }])[0]
 	}
+
+	it("matches browser, actions included", () => {
+		const mirrored = signatureOf(BROWSER_TOOL_NAME, restated.get(BROWSER_TOOL_NAME))
+		expect(mirrored).toEqual(signatureOf(BROWSER_TOOL_NAME, BROWSER_TOOL_INPUT_SCHEMA))
+		expect(mirrored?.enumValues).toEqual([...BROWSER_ACTIONS])
+	})
+
+	it("matches list_files", () => {
+		expect(signatureOf(LIST_FILES_TOOL_NAME, restated.get(LIST_FILES_TOOL_NAME))).toEqual(
+			signatureOf(LIST_FILES_TOOL_NAME, LIST_FILES_TOOL_INPUT_SCHEMA),
+		)
+	})
 
 	it("matches check_file", () => {
 		expect(signatureOf(CHECK_FILE_TOOL_NAME, restated.get(CHECK_FILE_TOOL_NAME))).toEqual(

@@ -21,6 +21,7 @@ import { useExtensionState } from "@/context/ExtensionStateContext"
 import useRemoteConfigSettings from "@/hooks/useRemoteConfigSettings"
 import { FileServiceClient } from "@/services/grpc-client"
 import { isMacOSOrLinux } from "@/utils/platformUtils"
+import AgentsTab from "./AgentsTab"
 import HookRow from "./HookRow"
 import NewRuleRow from "./NewRuleRow"
 import RuleRow from "./RuleRow"
@@ -61,7 +62,11 @@ const ClineRulesToggleModal: React.FC = () => {
 	const { width: viewportWidth, height: viewportHeight } = useWindowSize()
 	const [arrowPosition, setArrowPosition] = useState(0)
 	const [menuPosition, setMenuPosition] = useState(0)
-	const [currentView, setCurrentView] = useState<"rules" | "workflows" | "hooks" | "skills">("rules")
+	const [currentView, setCurrentView] = useState<"rules" | "workflows" | "hooks" | "skills" | "agents">("rules")
+	// Where the Agents tab portals its dropdowns. A popup rendered to
+	// document.body is outside this modal, and the click-away above would
+	// close the whole thing the moment a select is opened.
+	const [contentContainer, setContentContainer] = useState<HTMLDivElement | null>(null)
 
 	// Auto-switch to rules tab if hooks become disabled while viewing hooks tab
 	useEffect(() => {
@@ -216,7 +221,11 @@ const ClineRulesToggleModal: React.FC = () => {
 		.map(([path, enabled]): [string, boolean] => [path, enabled as boolean])
 		.sort(([a], [b]) => a.localeCompare(b))
 
-	const remoteConfigSettings = useRemoteConfigSettings(isVisible)
+	const {
+		settings: remoteConfigSettings,
+		isLoading: isRemoteConfigLoading,
+		error: remoteConfigError,
+	} = useRemoteConfigSettings(isVisible)
 	const remoteRules = remoteConfigSettings.filter((s) => s.type === "rule")
 	const remoteWorkflows = remoteConfigSettings.filter((s) => s.type === "workflow")
 	const remoteSkills = remoteConfigSettings.filter((s) => s.type === "skill")
@@ -437,6 +446,9 @@ const ClineRulesToggleModal: React.FC = () => {
 								<TabButton isActive={currentView === "skills"} onClick={() => setCurrentView("skills")}>
 									Skills
 								</TabButton>
+								<TabButton isActive={currentView === "agents"} onClick={() => setCurrentView("agents")}>
+									Agents
+								</TabButton>
 								<TabButton isActive={currentView === "workflows"} onClick={() => setCurrentView("workflows")}>
 									Workflows
 								</TabButton>
@@ -489,6 +501,12 @@ const ClineRulesToggleModal: React.FC = () => {
 									skill's description, Cline uses the <span className="font-bold">use_skill</span> tool to load
 									the full instructions.
 								</p>
+							) : currentView === "agents" ? (
+								<p>
+									Agents are helpers the model can hand a piece of work to, each with its own prompt, its own
+									tools and its own model. Turn on <span className="font-bold">Subagents</span> in Settings to
+									offer them, and start a new task for the change to take effect.
+								</p>
 							) : (
 								<p>
 									Hooks allow you to execute custom scripts at specific points in Cline's execution lifecycle,
@@ -499,8 +517,21 @@ const ClineRulesToggleModal: React.FC = () => {
 					</div>
 
 					{/* Scrollable content area */}
-					<div className="flex-1 overflow-y-auto px-3 pb-3" style={{ minHeight: 0 }}>
-						{currentView === "rules" ? (
+					<div className="flex-1 overflow-y-auto px-3 pb-3" ref={setContentContainer} style={{ minHeight: 0 }}>
+						{isRemoteConfigLoading && remoteConfigSettings.length === 0 && (
+							<div className="text-xs text-description mb-3" role="status">
+								Loading managed configuration…
+							</div>
+						)}
+						{remoteConfigError && (
+							<div className="text-xs text-vscode-errorForeground mb-3" role="alert">
+								Could not refresh managed configuration: {remoteConfigError}
+								{remoteConfigSettings.length > 0 ? " Showing the last loaded configuration." : ""}
+							</div>
+						)}
+						{currentView === "agents" ? (
+							<AgentsTab dropdownContainer={contentContainer} />
+						) : currentView === "rules" ? (
 							<>
 								{/* Remote Rules Section */}
 								{hasRemoteRules && (
@@ -518,7 +549,7 @@ const ClineRulesToggleModal: React.FC = () => {
 														key={rule.name}
 														rulePath={rule.name}
 														ruleType="cline"
-														toggleRule={rule.toggle}
+														toggleRule={(_path, enabled) => rule.toggle(enabled)}
 													/>
 												)
 											})}
@@ -617,7 +648,7 @@ const ClineRulesToggleModal: React.FC = () => {
 															key={workflow.name}
 															rulePath={workflow.name}
 															ruleType="workflow"
-															toggleRule={workflow.toggle}
+															toggleRule={(_path, enabled) => workflow.toggle(enabled)}
 														/>
 													)
 												})}
@@ -773,7 +804,7 @@ const ClineRulesToggleModal: React.FC = () => {
 															key={skill.name}
 															rulePath={skill.name}
 															ruleType="skill"
-															toggleRule={skill.toggle}
+															toggleRule={(_path, enabled) => skill.toggle(enabled)}
 														/>
 													)
 												})}

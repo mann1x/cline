@@ -1,5 +1,6 @@
 import { StringArray, StringRequest } from "@shared/proto/cline/common"
 import axios from "axios"
+import { ensureBaseUrlScheme } from "@/sdk/cline-session-factory"
 import { getAxiosSettings } from "@/shared/net"
 import { Controller } from ".."
 
@@ -11,7 +12,10 @@ import { Controller } from ".."
  */
 export async function getOllamaModels(_controller: Controller, request: StringRequest): Promise<StringArray> {
 	try {
-		const baseUrl = request.value || "http://localhost:11434"
+		// A base URL that lost its scheme still names one endpoint, and rejecting
+		// it here left the model picker empty with no explanation while the same
+		// value was busy failing every request with `Invalid URL`.
+		const baseUrl = request.value ? ensureBaseUrlScheme(request.value.trim()) : "http://localhost:11434"
 
 		if (!URL.canParse(baseUrl)) {
 			return StringArray.create({ values: [] })

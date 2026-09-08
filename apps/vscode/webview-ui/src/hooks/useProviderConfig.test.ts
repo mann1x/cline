@@ -1,9 +1,16 @@
 import { StringRequest } from "@shared/proto/cline/common"
 import { ApiFormat, ModelOverrides, ProviderConfigResponse } from "@shared/proto/cline/models"
 import { act, renderHook, waitFor } from "@testing-library/react"
+import { createElement, type ReactNode } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import { ApiConfigurationScopeContext } from "@/components/settings/utils/ApiConfigurationScopeContext"
 import { ModelsServiceClient } from "@/services/grpc-client"
-import { fromProtobufProviderModelOverrides, toProtobufProviderModelOverrides, useProviderConfig } from "./useProviderConfig"
+import {
+	__resetProviderConfigEntries,
+	fromProtobufProviderModelOverrides,
+	toProtobufProviderModelOverrides,
+	useProviderConfig,
+} from "./useProviderConfig"
 
 vi.mock("@/services/grpc-client", () => ({
 	ModelsServiceClient: {
@@ -27,6 +34,7 @@ function config(providerId = "deepseek", baseUrl = "https://api.deepseek.com/v1"
 describe("useProviderConfig", () => {
 	beforeEach(() => {
 		vi.clearAllMocks()
+		__resetProviderConfigEntries()
 	})
 
 	it("reads provider config on mount", async () => {
@@ -138,6 +146,45 @@ describe("useProviderConfig", () => {
 		expect(toProtobufProviderModelOverrides({})).toEqual(ModelOverrides.create({}))
 	})
 
+	it("reads back overrides that carry no capabilities field at all", () => {
+		// Not every object that reaches this reader was built by
+		// `ModelOverrides.create()`. A scoped tab stores the domain overrides it
+		// was committed with, so `capabilities` is simply absent, and reading
+		// `.length` off it threw `Cannot read properties of undefined` from
+		// inside a render-time `useMemo` -- which unmounted the webview and left
+		// the panel blank with no message anywhere.
+		const stored = { maxTokens: 4_096 } as unknown as ModelOverrides
+
+		expect(() => fromProtobufProviderModelOverrides(stored)).not.toThrow()
+		expect(fromProtobufProviderModelOverrides(stored)).toEqual({ maxTokens: 4_096 })
+	})
+
+	it("gives a scoped tab's held selection a real override message", async () => {
+		const scope = {
+			save: vi.fn(),
+			ownsProviderSettings: true,
+			providerSettings: {
+				baseUrl: "http://127.0.0.1:11434",
+				selectedModelId: "qwen3-coder",
+				// What `scopedSnapshotPatches.modelSelection` stores: the domain
+				// overrides, with no proto defaults filled in.
+				selectedModelOverrides: { maxTokens: 4_096 },
+			},
+			writeProviderSettings: vi.fn(),
+			commitModelSelection: vi.fn(),
+		}
+		const wrapper = ({ children }: { children: ReactNode }) =>
+			createElement(ApiConfigurationScopeContext.Provider, { value: scope }, children)
+		vi.mocked(ModelsServiceClient.readProviderConfig).mockResolvedValue(config("ollama", "http://127.0.0.1:11434"))
+
+		const { result } = renderHook(() => useProviderConfig("ollama"), { wrapper })
+		await waitFor(() => expect(result.current.config).toBeDefined())
+
+		const overrides = result.current.config?.actSelection?.overrides
+		expect(overrides?.capabilities).toEqual([])
+		expect(fromProtobufProviderModelOverrides(overrides)).toEqual({ maxTokens: 4_096 })
+	})
+
 	it("sends an explicit empty override message so the host can clear stored overrides", async () => {
 		vi.mocked(ModelsServiceClient.readProviderConfig).mockResolvedValue(config())
 		vi.mocked(ModelsServiceClient.commitModelSelection).mockResolvedValue({})
@@ -228,6 +275,53 @@ describe("useProviderConfig", () => {
 
 		await waitFor(() => expect(ModelsServiceClient.readProviderConfig).toHaveBeenCalledTimes(2))
 		expect(result.current.config?.baseUrl).toBe("https://saved.example/v1")
+	})
+
+	it("shows one hook's write to every other hook bound to the same provider", async () => {
+		// The provider panel and the API configuration profile bar are mounted
+		// together and both bind this hook to the same entry. While each held a
+		// private copy, a context window typed into the panel never reached the
+		// bar: it went on comparing — and saving into profiles — the value it
+		// had read when settings opened, so the profile never looked changed
+		// and an overwrite stored the old number.
+		vi.mocked(ModelsServiceClient.readProviderConfig).mockResolvedValue(config("ollama", "http://localhost:11434"))
+		vi.mocked(ModelsServiceClient.writeProviderConfig).mockResolvedValue(
+			ProviderConfigResponse.create({
+				providerId: "ollama",
+				headers: {},
+				apiKeyLength: 0,
+				hasAccessToken: false,
+				hasRefreshToken: false,
+				contextWindow: 1_000_000,
+			}),
+		)
+
+		const panel = renderHook(() => useProviderConfig("ollama"))
+		const bar = renderHook(() => useProviderConfig("ollama"))
+		await waitFor(() => expect(bar.result.current.config).toBeDefined())
+
+		await act(async () => {
+			await panel.result.current.write({ contextWindow: 1_000_000 })
+		})
+
+		expect(bar.result.current.config?.contextWindow).toBe(1_000_000)
+	})
+
+	it("keeps one provider's entry out of another's", async () => {
+		vi.mocked(ModelsServiceClient.readProviderConfig).mockImplementation(async (request) =>
+			config(request.value, `https://${request.value}.example/v1`),
+		)
+		vi.mocked(ModelsServiceClient.writeProviderConfig).mockResolvedValue(config("ollama", "http://localhost:11434"))
+
+		const ollama = renderHook(() => useProviderConfig("ollama"))
+		const deepseek = renderHook(() => useProviderConfig("deepseek"))
+		await waitFor(() => expect(deepseek.result.current.config).toBeDefined())
+
+		await act(async () => {
+			await ollama.result.current.write({ baseUrl: "http://localhost:11434" })
+		})
+
+		expect(deepseek.result.current.config?.baseUrl).toBe("https://deepseek.example/v1")
 	})
 
 	it("skips the failure recovery read when a newer write is already in flight", async () => {

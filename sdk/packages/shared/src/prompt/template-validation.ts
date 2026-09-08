@@ -1,5 +1,8 @@
 import type { PromptTemplate } from "./template-types";
-import { PROMPT_TEMPLATE_DEFAULT_MARKER } from "./template-types";
+import {
+	PROMPT_TEMPLATE_DEFAULT_MARKER,
+	PROMPT_TEMPLATE_TOOL_PLACEHOLDERS,
+} from "./template-types";
 
 /**
  * Sanity checks for a hand-edited prompt template.
@@ -153,13 +156,19 @@ export function validatePromptTemplate(
 					"This section is empty, so the tool is left with no description.",
 			});
 		}
+		// A tool section knows two tokens: the default marker, and the host's
+		// name. Everything else — `{{CWD}}`, `{{CLINE_RULES}}` — belongs to the
+		// system prompt and is dead text here, which is worth saying, because a
+		// template author has no other way to find out.
+		const knownInTools = [
+			PROMPT_TEMPLATE_DEFAULT_MARKER,
+			...PROMPT_TEMPLATE_TOOL_PLACEHOLDERS,
+		];
 		for (const token of collectPlaceholders(description)) {
-			if (token === PROMPT_TEMPLATE_DEFAULT_MARKER) {
+			if (knownInTools.includes(token)) {
 				continue;
 			}
-			const suggestion = suggestPlaceholder(token, [
-				PROMPT_TEMPLATE_DEFAULT_MARKER,
-			]);
+			const suggestion = suggestPlaceholder(token, knownInTools);
 			warnings.push({
 				code: "unknown-placeholder",
 				section,

@@ -9,7 +9,6 @@ const mockExtensionState = vi.hoisted(() => ({
 		hooksEnabled: false,
 		showFeatureTips: false,
 		mcpDisplayMode: "rich",
-		yoloModeToggled: false,
 		useAutoCondense: false,
 		compactionStrategy: "basic",
 		subagentsEnabled: false,
@@ -17,6 +16,8 @@ const mockExtensionState = vi.hoisted(() => ({
 		focusChainSettings: { enabled: false, remindClineInterval: 6 },
 		remoteConfigSettings: {},
 		backgroundEditEnabled: false,
+		editVerificationSettings: { mode: "nudge" },
+		atomicProtocolSettings: { mode: "off", oracleCommand: "", oracleExpect: "", maxChanges: 3, maxTransactions: 6 },
 	},
 }))
 
@@ -35,6 +36,7 @@ describe("FeatureSettingsSection", () => {
 			...mockExtensionState.value,
 			useAutoCondense: false,
 			compactionStrategy: "basic",
+			focusChainSettings: { enabled: false, remindClineInterval: 6 },
 		}
 	})
 
@@ -89,6 +91,53 @@ describe("FeatureSettingsSection", () => {
 		expect(mockUpdateSetting).toHaveBeenCalledWith("hooksEnabled", true)
 	})
 
+	it("renders the Task Checklist toggle in the Agent section", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		const agentSection = container.querySelector("#agent-features")
+		expect(agentSection?.querySelector('[id="Task Checklist"]')).toBeTruthy()
+	})
+
+	it("keeps the reminder interval when the Task Checklist is toggled", () => {
+		// The setting is an object, so the toggle has to send the whole thing.
+		// A tuned interval must survive that round trip rather than snapping
+		// back to the default.
+		mockExtensionState.value = {
+			...mockExtensionState.value,
+			focusChainSettings: { enabled: false, remindClineInterval: 11 },
+		}
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		fireEvent.click(container.querySelector('[id="Task Checklist"]') as Element)
+
+		expect(mockUpdateSetting).toHaveBeenCalledWith("focusChainSettings", { enabled: true, remindClineInterval: 11 })
+	})
+
+	// Deleted upstream in c3671de7d and never restored, so the session factory's
+	// read of `subagentsEnabled` could only ever see the default.
+	it("renders the Subagents toggle in the Agent section", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		const agentSection = container.querySelector("#agent-features")
+		expect(agentSection?.querySelector("#Subagents")).toBeTruthy()
+	})
+
+	it("calls updateSetting with subagentsEnabled when toggled", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		fireEvent.click(container.querySelector("#Subagents") as Element)
+
+		expect(mockUpdateSetting).toHaveBeenCalledWith("subagentsEnabled", true)
+	})
+
+	// The toggle is not the whole gate, and the other half is otherwise only in
+	// the extension log.
+	it("says that the open-ended spawn also needs parallel sessions above 1", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		expect(container.querySelector("#agent-features")?.textContent).toContain("parallel sessions above 1")
+	})
+
 	it("calls updateSetting with showFeatureTips when toggled", () => {
 		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
 
@@ -98,5 +147,212 @@ describe("FeatureSettingsSection", () => {
 		fireEvent.click(featureTipsSwitch as Element)
 
 		expect(mockUpdateSetting).toHaveBeenCalledWith("showFeatureTips", true)
+	})
+})
+
+describe("Thinking Compaction", () => {
+	beforeEach(() => {
+		mockUpdateSetting.mockClear()
+		mockExtensionState.value = {
+			...mockExtensionState.value,
+			useAutoCondense: true,
+		}
+	})
+
+	it("sits below the Compaction Prompt, because it is the other half of it", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		const labels = Array.from(container.querySelectorAll("label")).map((label) => label.textContent)
+		const compaction = labels.indexOf("Compaction Prompt")
+		const thinking = labels.indexOf("Thinking Compaction Prompt")
+
+		expect(compaction).toBeGreaterThanOrEqual(0)
+		expect(thinking).toBe(compaction + 1)
+	})
+
+	it("is on unless it has been turned off", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		expect(container.querySelector("#thinkingCompactionEnabled")?.getAttribute("data-state")).toBe("checked")
+	})
+
+	it("turns off from the switch", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		const toggle = container.querySelector("#thinkingCompactionEnabled")
+		expect(toggle).toBeTruthy()
+		fireEvent.click(toggle as Element)
+
+		expect(mockUpdateSetting).toHaveBeenCalledWith("thinkingCompactionEnabled", false)
+	})
+})
+
+/**
+ * The third thing that rewrites reasoning. It had a prompt and a switch in the
+ * session config from the day it shipped and nothing that wrote either, so the
+ * built-in note was the only note it could ever produce and there was no way to
+ * turn it off.
+ */
+describe("FeatureSettingsSection — capped thinking", () => {
+	it("offers the prompt and the switch", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		const labels = Array.from(container.querySelectorAll("label")).map((label) => label.textContent)
+		expect(labels).toContain("Capped Thinking Prompt")
+		expect(container.querySelector("#cappedThinkingEnabled")?.getAttribute("data-state")).toBe("checked")
+	})
+
+	it("turns off from the switch", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		fireEvent.click(container.querySelector("#cappedThinkingEnabled") as Element)
+
+		expect(mockUpdateSetting).toHaveBeenCalledWith("cappedThinkingEnabled", false)
+	})
+})
+
+/**
+ * The guard that stops a run finishing with a file it changed and never
+ * checked. It shipped built, wired and defaulting to "nudge", with nothing
+ * anywhere that could change it — the mode was in storage and in the generated
+ * Settings proto, and no request field, no handler and no control ever reached
+ * it. So it could only ever be the value it was born with.
+ */
+describe("FeatureSettingsSection — check edited files", () => {
+	it("shows the mode the guard is running on", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		const labels = Array.from(container.querySelectorAll("label")).map((label) => label.textContent)
+		expect(labels).toContain("Check Edited Files")
+		expect(screen.getByText("Nudge")).toBeTruthy()
+	})
+
+	it("falls back to nudge rather than showing an empty control", () => {
+		mockExtensionState.value = { ...mockExtensionState.value, editVerificationSettings: undefined }
+
+		render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		expect(screen.getByText("Nudge")).toBeTruthy()
+	})
+})
+
+/**
+ * The control that decides whether a failed attempt leaves its changes on disk.
+ *
+ * The command field is hidden while the protocol is off rather than disabled:
+ * an oracle typed against a protocol that is not running is a setting the user
+ * has every reason to believe is in force.
+ */
+describe("FeatureSettingsSection — change protocol", () => {
+	it("shows the mode the protocol is running on", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		const labels = Array.from(container.querySelectorAll("label")).map((label) => label.textContent)
+		expect(labels).toContain("Change Protocol")
+	})
+
+	it("keeps the check out of sight while the protocol is off", () => {
+		render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		expect(screen.queryByPlaceholderText("node run_game.js index.html")).toBeNull()
+	})
+
+	it("offers the check once the protocol is on, and shows the user's own", () => {
+		mockExtensionState.value = {
+			...mockExtensionState.value,
+			atomicProtocolSettings: {
+				mode: "auto",
+				oracleCommand: "node run_game.js manic_miner.html",
+				maxChanges: 3,
+				maxTransactions: 6,
+			},
+		}
+
+		render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		expect(screen.getByDisplayValue("node run_game.js manic_miner.html")).toBeTruthy()
+	})
+
+	it("shows both limits once the protocol is on", () => {
+		mockExtensionState.value = {
+			...mockExtensionState.value,
+			atomicProtocolSettings: { mode: "auto", oracleCommand: "", oracleExpect: "", maxChanges: 7, maxTransactions: 4 },
+		}
+
+		render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		expect((screen.getByLabelText("Changes per attempt") as HTMLInputElement).value).toBe("7")
+		expect((screen.getByLabelText("Attempts per task") as HTMLInputElement).value).toBe("4")
+	})
+
+	it("keeps both limits out of sight while the protocol is off", () => {
+		mockExtensionState.value = {
+			...mockExtensionState.value,
+			atomicProtocolSettings: { mode: "off", oracleCommand: "", oracleExpect: "", maxChanges: 3, maxTransactions: 6 },
+		}
+
+		render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		expect(screen.queryByLabelText("Changes per attempt")).toBeNull()
+		expect(screen.queryByLabelText("Attempts per task")).toBeNull()
+	})
+
+	// One at a time, and merged onto what is stored: sending both would make
+	// every edit of one an assertion about the other.
+	it("sends a new changes-per-attempt target on its own", () => {
+		mockExtensionState.value = {
+			...mockExtensionState.value,
+			atomicProtocolSettings: { mode: "auto", oracleCommand: "", oracleExpect: "", maxChanges: 3, maxTransactions: 6 },
+		}
+
+		render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+		fireEvent.change(screen.getByLabelText("Changes per attempt"), { target: { value: "10" } })
+
+		expect(mockUpdateSetting).toHaveBeenCalledWith("atomicProtocolSettings", { maxChanges: 10 })
+	})
+
+	it("sends a new attempts-per-task target on its own", () => {
+		mockExtensionState.value = {
+			...mockExtensionState.value,
+			atomicProtocolSettings: { mode: "auto", oracleCommand: "", oracleExpect: "", maxChanges: 3, maxTransactions: 6 },
+		}
+
+		render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+		fireEvent.change(screen.getByLabelText("Attempts per task"), { target: { value: "2" } })
+
+		expect(mockUpdateSetting).toHaveBeenCalledWith("atomicProtocolSettings", { maxTransactions: 2 })
+	})
+
+	// The stored value would otherwise be overwritten mid-keystroke, and a zero
+	// is indistinguishable on the wire from a field nobody set — so an emptied
+	// box would arrive as "put it back to three" rather than as "unchanged".
+	it("sends nothing for an emptied or zeroed target", () => {
+		mockExtensionState.value = {
+			...mockExtensionState.value,
+			atomicProtocolSettings: { mode: "auto", oracleCommand: "", oracleExpect: "", maxChanges: 3, maxTransactions: 6 },
+		}
+
+		// This describe block has no shared reset, and the test before it sends a
+		// target of its own.
+		mockUpdateSetting.mockClear()
+
+		render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+		for (const label of ["Changes per attempt", "Attempts per task"]) {
+			const field = screen.getByLabelText(label)
+			fireEvent.change(field, { target: { value: "" } })
+			fireEvent.change(field, { target: { value: "0" } })
+		}
+
+		expect(mockUpdateSetting).not.toHaveBeenCalled()
+	})
+
+	// proto3 gives an absent number the same wire form as zero, so the mode is
+	// sent on its own and the limits are merged onto what is stored.
+	it("sends only the mode when the mode is what changed", () => {
+		mockExtensionState.value = { ...mockExtensionState.value, atomicProtocolSettings: undefined }
+
+		render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		expect(screen.getAllByText("Off").length).toBeGreaterThan(0)
 	})
 })

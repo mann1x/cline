@@ -4,6 +4,11 @@ import type {
 	AgentResult,
 	RuntimeConfigExtensionKind,
 } from "@cline/shared";
+import type { BackgroundDelegationView } from "../../extensions/tools/team/background-delegations";
+import type {
+	ConfiguredAgentDelegationResult,
+	ConfiguredAgentSummary,
+} from "../../extensions/tools/team/delegate-to-agent";
 import type { HookEventPayload } from "../../hooks";
 import type { CheckpointEntry } from "../../hooks/checkpoint-hooks";
 import type { ProviderSettings } from "../../services/llms/provider-settings";
@@ -51,6 +56,47 @@ export function isSessionNotFoundError(
 	);
 }
 
+function errorMessageOf(error: unknown): string {
+	if (error instanceof Error) {
+		return error.message;
+	}
+	if (typeof error === "object" && error !== null && "message" in error) {
+		const message = (error as { message?: unknown }).message;
+		return typeof message === "string" ? message : "";
+	}
+	return typeof error === "string" ? error : "";
+}
+
+/**
+ * A session that cannot serve another turn, whatever the caller does with it.
+ *
+ * Two distinct causes, one remedy: the session is gone (`session_not_found`,
+ * after a hub restart, a deletion, or retention cleanup), or its runtime is stuck
+ * with a run that never drained (`session_run_in_progress`). A caller holding a
+ * long-lived mapping to that session — a connector thread, for instance — has to
+ * replace the session rather than keep retrying against it.
+ *
+ * Errors reaching a connector have crossed the hub's JSON boundary, so the code
+ * may be gone and only the message survives; both are checked, which also keeps
+ * this working when the hub and the CLI are different versions.
+ */
+export function isUnusableSessionError(error: unknown): boolean {
+	if (isSessionNotFoundError(error)) {
+		return true;
+	}
+	if (
+		typeof error === "object" &&
+		error !== null &&
+		"code" in error &&
+		(error as { code?: unknown }).code === "session_run_in_progress"
+	) {
+		return true;
+	}
+	return errorMessageOf(error).includes(
+		"shutdown called while a run is in progress",
+	);
+}
+
 type LocalOnlyCoreSessionConfigKeys =
 	| "hooks"
 	| "logger"
@@ -59,7 +105,10 @@ type LocalOnlyCoreSessionConfigKeys =
 	| "extraTools"
 	| "extensions"
 	| "onTeamEvent"
-	| "onConsecutiveMistakeLimitReached";
+	| "onConsecutiveMistakeLimitReached"
+	// Carries an `onUpdate` callback, so it cannot cross a transport — and the
+	// checklist is applied by the local runtime when it merges the toolset.
+	| "taskProgress";
 
 export type RuntimeSessionConfig = Omit<
 	CoreSessionConfig,
@@ -99,6 +148,7 @@ export interface LocalRuntimeStartOptions {
 	extensions?: LocalRuntimeBootstrapConfig["extensions"];
 	onTeamEvent?: LocalRuntimeBootstrapConfig["onTeamEvent"];
 	onConsecutiveMistakeLimitReached?: LocalRuntimeBootstrapConfig["onConsecutiveMistakeLimitReached"];
+	taskProgress?: LocalRuntimeBootstrapConfig["taskProgress"];
 	checkpoint?: LocalRuntimeBootstrapConfig["checkpoint"];
 	compaction?: LocalRuntimeBootstrapConfig["compaction"];
 	modelCatalogDefaults?: Partial<NonNullable<ProviderSettings["modelCatalog"]>>;
@@ -109,11 +159,14 @@ export interface LocalRuntimeStartOptions {
 
 export interface StartSessionInput {
 	config: StartSessionConfig;
+	/** The process/client that starts the session. E.g., "vscode", "cli". */
 	source?: SessionSource;
+	/** How the session was initiated, such as user, automation, or subagent. */
+	mode?: string;
 	prompt?: string;
 	interactive?: boolean;
 	sessionMetadata?: Record<string, unknown>;
-	initialMessages?: LlmsProviders.Message[];
+	initialMessages?: LlmsProviders.MessageWithMetadata[];
 	initialCompactionState?: SessionCompactionState;
 	userImages?: string[];
 	userFiles?: string[];
@@ -146,6 +199,7 @@ export function splitCoreSessionConfig(config: ClineCoreStartConfig): {
 		extensions,
 		onTeamEvent,
 		onConsecutiveMistakeLimitReached,
+		taskProgress,
 		checkpoint,
 		compaction,
 		...transportConfig
@@ -164,6 +218,7 @@ export function splitCoreSessionConfig(config: ClineCoreStartConfig): {
 		localConfigOverrides.onConsecutiveMistakeLimitReached =
 			onConsecutiveMistakeLimitReached;
 	}
+	if (taskProgress) localConfigOverrides.taskProgress = taskProgress;
 	if (checkpoint?.createCheckpoint) {
 		localConfigOverrides.checkpoint = checkpoint;
 	}
@@ -176,22 +231,25 @@ export function splitCoreSessionConfig(config: ClineCoreStartConfig): {
 			? (localConfigOverrides as LocalRuntimeStartOptions)
 			: undefined;
 
+	// What crosses is defined by subtraction — everything but the callback —
+	// rather than by listing the fields that may. The types above already say
+	// exactly that (`Omit<…, "compact">`), but the implementation enumerated
+	// five compaction fields, so the seven added since were dropped at the
+	// transport boundary: both summary prompts, the thinking-summary switch,
+	// and every field the capped-thinking condenser reads, including the
+	// thinking budget itself. That fails the way `taskProgress` did — silently,
+	// with the feature present and declining to do anything. Measured on a live
+	// session: the factory resolved a 16,000-token budget and logged it, and
+	// 345ms later the condenser armed "at no thinking tokens".
+	const { compact: _compact, ...transportCompaction } = compaction ?? {};
+	const { createCheckpoint: _createCheckpoint, ...transportCheckpoint } =
+		checkpoint ?? {};
+
 	return {
 		config: {
 			...transportConfig,
-			...(checkpoint ? { checkpoint: { enabled: checkpoint.enabled } } : {}),
-			...(compaction
-				? {
-						compaction: {
-							enabled: compaction.enabled,
-							strategy: compaction.strategy,
-							preserveRecentTokens: compaction.preserveRecentTokens,
-							preserveRecentMessagesRatio:
-								compaction.preserveRecentMessagesRatio,
-							summarizer: compaction.summarizer,
-						},
-					}
-				: {}),
+			...(checkpoint ? { checkpoint: transportCheckpoint } : {}),
+			...(compaction ? { compaction: transportCompaction } : {}),
 		},
 		...(localRuntime ? { localRuntime } : {}),
 	};
@@ -286,6 +344,10 @@ export interface SessionConnectionRuntimeService {
 	): Promise<void>;
 }
 
+export interface CommandExecutionRuntimeService {
+	proceedWhileRunning(sessionId: string, toolCallId?: string): Promise<number>;
+}
+
 export interface RuntimeHostSubscribeOptions {
 	sessionId?: string;
 }
@@ -305,7 +367,7 @@ export interface RestoreSessionInput {
 export interface RestoreSessionResult {
 	sessionId?: string;
 	startResult?: StartSessionResult;
-	messages?: LlmsProviders.Message[];
+	messages?: LlmsProviders.MessageWithMetadata[];
 	checkpoint: CheckpointEntry;
 }
 
@@ -340,7 +402,9 @@ export interface RuntimeHost {
 	readSessionCompactionState(
 		sessionId: string,
 	): Promise<SessionCompactionState | undefined>;
-	readSessionMessages(sessionId: string): Promise<LlmsProviders.Message[]>;
+	readSessionMessages(
+		sessionId: string,
+	): Promise<LlmsProviders.MessageWithMetadata[]>;
 	/**
 	 * Like {@link readSessionMessages}, but prefers the resident session's
 	 * in-memory conversation over the persisted transcript. Disk persistence
@@ -350,7 +414,52 @@ export interface RuntimeHost {
 	 * session for a mode switch. Optional: hosts without live-session access
 	 * (e.g. hub clients) fall back to the persisted transcript.
 	 */
-	readLiveSessionMessages?(sessionId: string): Promise<LlmsProviders.Message[]>;
+	readLiveSessionMessages?(
+		sessionId: string,
+	): Promise<LlmsProviders.MessageWithMetadata[]>;
+	/**
+	 * The configured agents this session loaded, for a host that offers a
+	 * picker. Optional: a host with no live-session access has nothing to list.
+	 */
+	listConfiguredAgents?(sessionId: string): Promise<ConfiguredAgentSummary[]>;
+	/**
+	 * Run one configured agent on a task, because the user said to.
+	 *
+	 * Distinct from the model calling `subagent_<name>` itself: this does not
+	 * consult the lead model at all. The agent's report is appended to the
+	 * conversation, so the next turn sees what was done on its behalf.
+	 */
+	delegateToConfiguredAgent?(input: {
+		sessionId: string;
+		agentName: string;
+		prompt: string;
+		signal?: AbortSignal;
+	}): Promise<ConfiguredAgentDelegationResult>;
+	/**
+	 * The same, except the caller does not wait and the lead is not blocked.
+	 *
+	 * Unlike the foreground call this is allowed while a turn is running --
+	 * that is the whole point of it -- and the report is delivered whenever the
+	 * run finishes, into whatever the conversation is doing by then.
+	 */
+	startBackgroundDelegation?(input: {
+		sessionId: string;
+		agentName: string;
+		prompt: string;
+	}): Promise<BackgroundDelegationView>;
+	/** The background runs of one session, for a host drawing them. */
+	listBackgroundDelegations?(
+		sessionId: string,
+	): Promise<BackgroundDelegationView[]>;
+	/**
+	 * @param action What the user pressed.
+	 * @returns whether there was a run in a state that could take it.
+	 */
+	controlBackgroundDelegation?(input: {
+		sessionId: string;
+		id: string;
+		action: "pause" | "resume" | "stop";
+	}): Promise<boolean>;
 	dispatchHookEvent(payload: HookEventPayload): Promise<void>;
 	subscribe(
 		listener: (event: CoreSessionEvent) => void,

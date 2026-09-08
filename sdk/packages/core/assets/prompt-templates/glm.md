@@ -58,7 +58,7 @@ Fetches content from URLs and analyzes it.
 Edits a text file at the provided absolute path. Use this instead of shell commands like `sed -i` or `echo >`.
 - `path`: string (absolute path).
 - `insert_line`: integer (optional). If provided, inserts `new_text` at that line.
-- If `insert_line` is omitted: replaces `old_text` with `new_text`. If file does not exist, creates it with `new_text`.
+- If `insert_line` is omitted: replaces `old_text` with `new_text`. With no `old_text` either, `new_text` is the whole file — created if it does not exist, every line replaced if it does (read it first). Never `rm` a file to rewrite it.
 - `old_text`: string (optional, required for replacement). Must match exactly, including indentation.
 - `new_text`: string (required).
 - `start_line`: integer (optional). Use with `new_text` to replace lines (inclusive, defaults to `start_line` if `end_line` omitted). No `old_text` needed. Prefer this when the text is long, minified or repeated: a diagnostic already gives you the line number, and a line number cannot be ambiguous. An empty `new_text` deletes the range.
@@ -113,14 +113,32 @@ Executes shell commands. Use this for running tests, builds, or scripts. Do not 
 {{DEFAULT}}
 
 # tool: check_file
-Checks files for errors and warnings using the editor's language servers. Use this instead of running a linter or compiler via shell to check a single file.
+Checks files for errors and warnings using the editor's language servers. **This is the linter** — and the type checker, and the problems a Problems panel would list. Whatever the question calls it, ask here. Use this instead of running a linter or compiler via shell to check a single file.
 - `paths`: Array of strings (absolute paths). Pass every file you want checked in one call.
-- When to call: After editing a file; before reporting a task finished; before changing a file to see existing errors.
+- When to call: After editing a file; before reporting a task finished; before changing a file to see existing errors. Whenever the question is about the linter, lint errors, diagnostics, problems, type errors or compile errors — "how many errors is the linter reporting?", "is it clean now?" — call this. You have no other way to know, and the report from an earlier edit is already out of date.
 - Output: Plain text, one section per file. Problems listed as `file:line:column` with severity and message. A file with no problems says so in one line. No `success` field; problems being listed is the tool working.
 {{DEFAULT}}
 
+# tool: list_files
+Lists files in the workspace. Use this instead of `ls`, `dir`, `find` or `Get-ChildItem` via `run_commands`.
+- `path`: String. One directory to list, absolute or relative to the workspace root. Omit to list the root.
+- `pattern`: String. A glob searched across the whole workspace, e.g. `**/*.html`. Given this, `path` is ignored.
+- `max_results`: Number. Caps the listing.
+- When to call: To find out what files exist, or where a named file lives.
+- Output: Plain text. Directories first with a trailing `/`, then files with sizes. Scoped to the folders the user opened; `node_modules`, `.git` and build output are excluded. A path outside the workspace is refused.
+Finds files by name. To find them by their contents, use `search_codebase`.
+{{DEFAULT}}
+# tool: browser
+Open a page in a real browser and report what it printed to the console and what it threw. Check the page yourself rather than asking the user whether it works.
+
+Actions: `open` (with `url`; an absolute file path is accepted), `click` (with `coordinate` as `"x,y"`), `type` (with `text`), `scroll_down`, `scroll_up`, `close`.
+
+Call it after editing any HTML, CSS or JavaScript and before reporting a task finished. `check_file` cannot answer this — no language server checks the script inside an `.html` file, and a file that parses can still throw when it runs. `[error]` and `[Page Error]` lines are real failures; a page that printed nothing is a pass, not a failed call. The browser stays open between calls; `close` it when done.
+A parse error from the browser names no line. For a local file a `Delimiter scan` section follows it and names the *opening* bracket the parser could not match, one line per place the trouble starts — fix every line it lists in one edit rather than one reload per line, and read those lines instead of counting brackets yourself.
+{{DEFAULT}}
+
 # tool: code_intel
-Asks the IDE's language servers about a symbol. Use this instead of `search_codebase` for any question about a symbol (definitions, references, implementations, types, etc.). It is exact and does not require reading files to interpret results.
+Asks the language servers about a symbol. Use this instead of `search_codebase` for any question about a symbol (definitions, references, implementations, types, etc.). It is exact and does not require reading files to interpret results.
 - `operation`: string. One of: `definition`, `references`, `implementations`, `type_definition`, `hover`, `document_symbols`, `workspace_symbols`, `callers`.
 - `path`: string (optional). Use with `symbol` or `line`+`character`.
 - `symbol`: string (optional). The name as it appears in the file.
