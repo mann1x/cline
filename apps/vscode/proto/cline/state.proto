@@ -480,18 +480,22 @@ message EditVerificationSettings {
 
 // Whether a task runs as judged, revertible transactions.
 //
-// Sent whole rather than as a delta: the four fields are read together when a
-// session arms the protocol, and a half-applied change would arm it to a
-// combination the user never chose.
+// Sent as a delta: the settings view posts only the field the user touched, and
+// updateSettings merges it over what is stored. Proto3 puts "not sent" and the
+// type's zero on the wire identically, so every field here needs some way to
+// tell those apart -- `mode` by only accepting its three names, the counts by
+// being invalid at zero, and the rest by being `optional`. A plain `string`
+// has neither: it arrives as "" and the merge reads that as "cleared", which
+// wiped the sibling oracle field on every keystroke.
 message AtomicProtocolSettings {
   // "off", "auto" or "always".
   string mode = 1;
   // The shell line that decides whether the task is done. Empty means the
   // workspace is inspected for something to run instead.
-  string oracle_command = 2;
+  optional string oracle_command = 2;
   // A regular expression that line's output must match, on top of exiting
   // cleanly. For a check that reports its verdict and exits zero regardless.
-  string oracle_expect = 5;
+  optional string oracle_expect = 5;
   // Changes the model may declare per transaction.
   int32 max_changes = 3;
   // Attempts before the task stops.
