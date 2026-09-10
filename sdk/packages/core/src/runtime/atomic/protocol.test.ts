@@ -225,4 +225,43 @@ describe("the stuck host check notice", () => {
 		history[0] = { ...history[0], kept: true };
 		expect(build(history)).not.toContain("PASSED NONE");
 	});
+
+	/**
+	 * Measured on a run that spent 5h06m and 766 turns without closing a
+	 * transaction: 34 helper programs written, 95% of its edits to those rather
+	 * than to the file the task named, and the check called 18 times in the
+	 * whole run. Every step of it was permitted -- helpers written with
+	 * `editor`, run with `run_commands` -- so the rule has to be stated.
+	 */
+	it("rules out substituting a program of your own for the check", () => {
+		const prompt = buildProtocolPrompt({
+			transaction: 1,
+			maxChanges: 3,
+			maxTransactions: 6,
+			oracle,
+			history: [],
+		});
+
+		expect(prompt).toContain("cannot take its place");
+		expect(prompt).toContain("only tell you what you already believe");
+		// The recognisable moment, not just the principle: a model needs to know
+		// when it is in the failure, not only that the failure exists.
+		expect(prompt).toContain("more than one helper");
+	});
+
+	// It is a rule about a named check, so it must not appear where the model
+	// is the check -- there is nothing there to substitute for, and the
+	// sentence would forbid the only thing such a run can do.
+	it("says nothing about helpers when no check exists", () => {
+		const selfChecked = buildProtocolPrompt({
+			transaction: 1,
+			maxChanges: 3,
+			maxTransactions: 6,
+			history: [],
+		});
+
+		expect(selfChecked).toContain("you are the check");
+		expect(selfChecked).not.toContain("cannot take its place");
+		expect(selfChecked).not.toContain("more than one helper");
+	});
 });

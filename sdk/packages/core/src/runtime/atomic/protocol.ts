@@ -107,6 +107,16 @@ export function buildProtocolPrompt(input: ProtocolPromptInput): string {
 			"",
 			`That check is what decides. It is run again when your turn ends, and ${describeOracleStandard(input.oracle)} — not your account of the change, and not the fact that the edit applied. ${describeOracleChoice(input.oracle)}`,
 			"",
+			// Measured on a run that spent five hours and 766 turns without
+			// closing a transaction: it wrote 34 helper programs, made 95% of its
+			// edits to those instead of to the file named in the task, and called
+			// the check 18 times in the whole run -- none in the last ninety
+			// minutes. Nothing else in the protocol forbade it, because nothing
+			// it did was forbidden: it wrote the helpers with `editor` and ran
+			// them with `run_commands`, both allowed. Only said where a check
+			// exists to be substituted for, which is why it sits in this branch.
+			"A program you write yourself is not that check and cannot take its place. A small helper to locate the fault is fine; running one in place of the check is not, because a program you wrote can only tell you what you already believe. If you have written more than one helper, or you are editing a helper rather than the file this task is about, stop and run the check.",
+			"",
 			`If it passes, ${label} is kept and the task is finished.`,
 			"",
 			`If it does not, every change in ${label} is discarded. The files go back to exactly what they were when ${label} opened, and you get a new transaction with a record of what this one tried. You will never be asked to undo an edit yourself — that is done for you, mechanically, before the next transaction starts.`,
