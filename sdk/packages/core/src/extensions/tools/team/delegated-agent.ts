@@ -82,6 +82,21 @@ export interface DelegatedAgentRuntimeConfig
 	 * delegated-agent telemetry (Langfuse `sessionId`) groups with it.
 	 */
 	sessionId?: string;
+	/**
+	 * Builds this agent's context pipeline -- compaction and the thinking cap.
+	 *
+	 * A factory rather than the pipeline itself because compaction carries
+	 * state: the lead's is bound to the session's sidecar, and every delegated
+	 * agent needs one keyed to its own transcript. Called once per agent in
+	 * {@link buildDelegatedAgentConfig}.
+	 *
+	 * Absent means this agent compacts never. That was the behaviour until now,
+	 * and it is how a sub-agent reached 1.87x its model's context window across
+	 * 34 consecutive requests with nothing in the transcript to say so.
+	 */
+	createPrepareTurn?: () => AgentConfig["prepareTurn"];
+	/** The pipeline's other half; stateless, so shared rather than built. */
+	condenseDiscardedReasoning?: AgentConfig["condenseDiscardedReasoning"];
 }
 
 export interface DelegatedAgentConfigProvider {
@@ -187,6 +202,11 @@ export function buildDelegatedAgentConfig(
 		systemPrompt,
 		tools: options.tools,
 		maxIterations: options.maxIterations ?? runtimeConfig.maxIterations,
+		// One pipeline per agent, built here rather than passed in: see
+		// `createPrepareTurn`. A delegated agent that inherited the lead's
+		// would compact against the lead's summary and overwrite its state.
+		prepareTurn: runtimeConfig.createPrepareTurn?.(),
+		condenseDiscardedReasoning: runtimeConfig.condenseDiscardedReasoning,
 		parentAgentId: options.parentAgentId,
 		abortSignal: options.abortSignal,
 		onEvent: options.onEvent,

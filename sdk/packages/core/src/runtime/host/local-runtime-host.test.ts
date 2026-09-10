@@ -460,6 +460,59 @@ describe("LocalRuntimeHost", () => {
 		expect(names.filter((name) => name === "task_progress")).toHaveLength(1);
 	});
 
+	// The sub-agents and teammates this build creates are the ones that had no
+	// context pipeline at all: the host held the only compaction closure and
+	// three field lists between here and `buildDelegatedAgentConfig` dropped
+	// it. A factory rather than the closure, because compaction is stateful and
+	// each agent has to compact against its own transcript.
+	it("hands delegated agents a context pipeline of their own", async () => {
+		const runtimeBuilder = {
+			build: vi.fn().mockReturnValue({
+				tools: [],
+				shutdown: vi.fn().mockResolvedValue(undefined),
+			}),
+		};
+		const agent = {
+			run: vi.fn().mockResolvedValue(createResult()),
+			continue: vi.fn().mockResolvedValue(createResult()),
+			getMessages: vi.fn().mockReturnValue([]),
+			getAgentId: vi.fn().mockReturnValue("agent-delegated-pipeline"),
+			getConversationId: vi.fn().mockReturnValue("conv-delegated-pipeline"),
+			abort: vi.fn(),
+			subscribeEvents: vi.fn().mockReturnValue(() => {}),
+			canStartRun: vi.fn().mockReturnValue(true),
+			shutdown: vi.fn().mockResolvedValue(undefined),
+		};
+		const manager = new RuntimeHostUnderTest({
+			distinctId,
+			sessionService: new FileSessionService(join(isolatedHomeDir, "sessions")),
+			runtimeBuilder: runtimeBuilder as never,
+			createAgent: (() => agent) as never,
+		});
+
+		await manager.startSession(
+			normalizeStartInput({
+				config: createConfig({
+					compaction: { enabled: true },
+				}),
+				prompt: "hello",
+			}),
+		);
+
+		const builderInput = runtimeBuilder.build.mock.calls[0]?.[0] as {
+			createDelegatedPrepareTurn?: () => unknown;
+			condenseDiscardedReasoning?: unknown;
+		};
+		expect(builderInput.createDelegatedPrepareTurn).toBeTypeOf("function");
+		expect(builderInput.condenseDiscardedReasoning).toBeTypeOf("function");
+		// One per agent. A shared pipeline would project the lead's summary
+		// onto a sub-agent and then overwrite the lead's state with the
+		// sub-agent's messages.
+		expect(builderInput.createDelegatedPrepareTurn?.()).not.toBe(
+			builderInput.createDelegatedPrepareTurn?.(),
+		);
+	});
+
 	// This object is an explicit list with no spread, so a field a host sets on
 	// the session config and nobody copies is dropped in silence. Both halves of
 	// the vision model were: the describer was built, logged as installed, and

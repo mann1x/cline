@@ -103,4 +103,76 @@ describe("buildDelegatedAgentConfig", () => {
 		expect(config.distinctId).toBeUndefined();
 		expect(config.sessionId).toBeUndefined();
 	});
+
+	// A delegated agent with no `prepareTurn` compacts never, and nothing says
+	// so: the transcript just grows until the provider truncates the prompt. A
+	// reported session reached 491,454 input tokens against a 262,144 window,
+	// 34 requests in a row over the limit, while the lead on the same model
+	// compacted normally at its peak of 237,191.
+	it("gives the agent a context pipeline", () => {
+		const prepareTurn = async () => undefined;
+		const condenseDiscardedReasoning = async () => undefined;
+		const configProvider = createDelegatedAgentConfigProvider({
+			providerId: "ollama",
+			modelId: "small",
+			createPrepareTurn: () => prepareTurn,
+			condenseDiscardedReasoning,
+		});
+
+		const config = buildDelegatedAgentConfig({
+			kind: "subagent",
+			prompt: "review the diff",
+			tools: [],
+			configProvider,
+		});
+
+		expect(config.prepareTurn).toBe(prepareTurn);
+		expect(config.condenseDiscardedReasoning).toBe(condenseDiscardedReasoning);
+	});
+
+	// Built per agent rather than handed down, because compaction carries
+	// state: two agents sharing one pipeline would compact against each
+	// other's summaries.
+	it("builds a pipeline per agent, not one for all of them", () => {
+		let built = 0;
+		const configProvider = createDelegatedAgentConfigProvider({
+			providerId: "ollama",
+			modelId: "small",
+			createPrepareTurn: () => {
+				built += 1;
+				return async () => undefined;
+			},
+		});
+
+		const options = {
+			kind: "subagent" as const,
+			prompt: "review the diff",
+			tools: [],
+			configProvider,
+		};
+		const first = buildDelegatedAgentConfig(options);
+		const second = buildDelegatedAgentConfig(options);
+
+		expect(built).toBe(2);
+		expect(first.prepareTurn).not.toBe(second.prepareTurn);
+	});
+
+	// The host may have auto-compaction switched off entirely, and a teammate
+	// is not the place to discover that a missing factory throws.
+	it("leaves the pipeline unset when the host supplies none", () => {
+		const configProvider = createDelegatedAgentConfigProvider({
+			providerId: "ollama",
+			modelId: "small",
+		});
+
+		const config = buildDelegatedAgentConfig({
+			kind: "teammate",
+			prompt: "review the diff",
+			tools: [],
+			configProvider,
+		});
+
+		expect(config.prepareTurn).toBeUndefined();
+		expect(config.condenseDiscardedReasoning).toBeUndefined();
+	});
 });

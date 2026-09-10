@@ -95,6 +95,29 @@ export interface RuntimeBuilderInput {
 	requestToolApproval?: (
 		request: ToolApprovalRequest,
 	) => Promise<ToolApprovalResult> | ToolApprovalResult;
+	/**
+	 * Builds a context pipeline for one delegated agent -- a sub-agent or a
+	 * teammate -- called once per agent so each gets its own.
+	 *
+	 * The lead's pipeline cannot be shared: it is closed over this session's
+	 * compaction sidecar, so handing the same function to a delegated agent
+	 * would project the lead's summary onto the delegate's transcript and then
+	 * overwrite the lead's state with one computed from the delegate's
+	 * messages. A factory is what lets every agent compact against its own
+	 * history while still using the session's strategy, summarizer and window.
+	 *
+	 * Omitted means delegated agents run with no context pipeline at all, which
+	 * is neither bounded nor visible: their transcripts grow past the model's
+	 * window and the only sign is the provider quietly truncating the prompt.
+	 */
+	createDelegatedPrepareTurn?: () => AgentConfig["prepareTurn"];
+	/**
+	 * The other half of that pipeline, for the same agents.
+	 *
+	 * Stateless -- it writes a note about reasoning that is already being
+	 * discarded -- so unlike the pipeline above it is shared, not rebuilt.
+	 */
+	condenseDiscardedReasoning?: AgentConfig["condenseDiscardedReasoning"];
 }
 
 export interface RuntimeBuilder {
