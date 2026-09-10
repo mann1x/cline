@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { formatDuration, formatRate, summarizeTimings, timingRows } from "./request-timings"
+import { formatDuration, formatRate, prefillRate, summarizeTimings, timingRows } from "./request-timings"
 
 describe("formatDuration", () => {
 	it("picks the unit the number reads best in", () => {
@@ -135,5 +135,50 @@ describe("timingRows", () => {
 
 		expect(draft?.value).toBe("90 / 120")
 		expect(draft?.note).toBe("75% of speculative tokens kept")
+	})
+})
+
+describe("prefillRate", () => {
+	// Reported live at 392,100 tok/s in the chat window. A fully cached prompt
+	// evaluates nothing, so Ollama reports no rate for it -- and the fallback
+	// that used to stand here divided the *whole* prompt by the evaluated-only
+	// duration, which on the smallest duration of all produced the largest
+	// wrong number. Fixing the provider is what made this fire.
+	it("says nothing for a prompt that was served entirely from cache", () => {
+		expect(
+			prefillRate({
+				engine: "ollama",
+				promptTokens: 130_700,
+				cachedTokens: 130_700,
+				promptMs: 0.333,
+			}),
+		).toBeUndefined()
+	})
+
+	// The narrower half of the same thing: any prompt with a cached prefix has
+	// a `promptTokens` that does not match its `promptMs`, so nothing derived
+	// from that pair is a rate.
+	it("does not derive one from tokens and time", () => {
+		expect(
+			prefillRate({
+				engine: "ollama",
+				promptTokens: 91_738,
+				cachedTokens: 88_000,
+				promptMs: 63.6,
+			}),
+		).toBeUndefined()
+	})
+
+	it("reports what the engine reported", () => {
+		expect(
+			prefillRate({
+				engine: "ollama",
+				promptTokens: 91_738,
+				cachedTokens: 88_000,
+				promptMs: 63.6,
+				promptPerSecond: 4_012.6,
+			}),
+		).toBe(4_012.6)
+		expect(prefillRate(undefined)).toBeUndefined()
 	})
 })

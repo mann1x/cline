@@ -53,9 +53,31 @@ export function formatTokens(tokens: number | undefined): string | undefined {
 	return tokens.toLocaleString()
 }
 
-/** The engine's own prefill rate, or one derived from its tokens and time. */
+/**
+ * The engine's own prefill rate, and only that.
+ *
+ * There used to be a fallback here -- `?? rateFrom(promptTokens, promptMs)` --
+ * and it was the same wrong division the provider side was fixed for:
+ * `promptTokens` is the whole prompt including the cached prefix, while
+ * `promptMs` covers only the part that was actually evaluated. Dividing one by
+ * the other reports a machine that prefilled a hundred thousand tokens in a
+ * few milliseconds.
+ *
+ * Fixing the provider made this worse rather than better, which is how it was
+ * found. The provider now declines to report a rate when nothing was evaluated
+ * -- a fully cached prompt -- and that is exactly the request with the smallest
+ * `promptMs`, so the fallback fired on the one case that produces the most
+ * extreme number. Reported live at 392,100 tok/s.
+ *
+ * Nothing is derived here now. Both engines already compute this themselves
+ * when it can honestly be computed: Ollama from the evaluated tokens, llama.cpp
+ * from its own `prompt_per_second` or its own tokens and time. If neither
+ * reported one, the honest answer is that this request has no prefill rate --
+ * a fully cached prompt did not prefill -- and the cached-token figure beside
+ * it says why.
+ */
 export function prefillRate(timings: RequestTimings | undefined): number | undefined {
-	return timings?.promptPerSecond ?? rateFrom(timings?.promptTokens, timings?.promptMs)
+	return timings?.promptPerSecond
 }
 
 /**
