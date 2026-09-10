@@ -214,14 +214,51 @@ describe("VscodeTerminalManager", () => {
 		try {
 			assert.notEqual(terminal, terminalInfo)
 			assert.equal(TerminalRegistry.getTerminal(terminalInfo.id), undefined)
-			// Queued, not disposed inside the acquisition that abandoned it.
-			assert.equal(disposeStub.called, false)
+			// Closed by the time this acquisition resolves, without waiting for
+			// a next one. It used to wait, and the queue's only drain was the
+			// top of the next acquisition -- so a session whose last command
+			// abandoned a terminal left it open until VS Code closed. It holds
+			// nothing to read: all it ever received was Cline's own `cd`.
+			assert.equal(disposeStub.calledOnce, true)
 
+			// And it is not disposed twice by the drain at the next acquisition.
 			TerminalRegistry.disposeTerminalsPendingCleanup()
 			assert.equal(disposeStub.calledOnce, true)
 		} finally {
 			terminal.terminal.dispose()
 			TerminalRegistry.removeTerminal(terminal.id)
+		}
+	})
+
+	// The other half of the same rule: a command Cline stopped being able to
+	// observe may have produced output the user wants, so that terminal still
+	// waits for the next acquisition rather than closing under them.
+	it("leaves an unobserved command's terminal open when an acquisition ends", async () => {
+		setVscodeHostProviderMock()
+		const abandoned = TerminalRegistry.createTerminal()
+		const abandonedDispose = sandbox.spy(abandoned.terminal, "dispose")
+		TerminalRegistry.queueTerminalForCleanup(abandoned, "unobserved-command")
+		let acquired: TerminalInfo | undefined
+
+		try {
+			acquired = (await manager.getOrCreateTerminal("/tmp/cline-unobserved-kept")) as unknown as TerminalInfo
+			// The drain at the top of that acquisition takes everything, so this
+			// one is gone -- but it was queued before it, not during it.
+			assert.equal(abandonedDispose.calledOnce, true)
+
+			const second = TerminalRegistry.createTerminal()
+			const secondDispose = sandbox.spy(second.terminal, "dispose")
+			TerminalRegistry.queueTerminalForCleanup(second, "unobserved-command")
+			acquired.terminal.dispose()
+			TerminalRegistry.removeTerminal(acquired.id)
+			acquired = (await manager.getOrCreateTerminal("/tmp/cline-unobserved-kept-2")) as unknown as TerminalInfo
+			assert.equal(secondDispose.calledOnce, true, "the next acquisition reclaims it")
+		} finally {
+			acquired?.terminal.dispose()
+			if (acquired) {
+				TerminalRegistry.removeTerminal(acquired.id)
+			}
+			TerminalRegistry.disposeTerminalsPendingCleanup()
 		}
 	})
 
@@ -359,8 +396,8 @@ describe("VscodeTerminalManager", () => {
 		const successfulCleanup = TerminalRegistry.createTerminal()
 		const failedDispose = sandbox.stub(failedCleanup.terminal, "dispose").throws(new Error("dispose failed"))
 		const successfulDispose = sandbox.spy(successfulCleanup.terminal, "dispose")
-		TerminalRegistry.queueTerminalForCleanup(failedCleanup)
-		TerminalRegistry.queueTerminalForCleanup(successfulCleanup)
+		TerminalRegistry.queueTerminalForCleanup(failedCleanup, "unobserved-command")
+		TerminalRegistry.queueTerminalForCleanup(successfulCleanup, "unobserved-command")
 		let acquiredTerminal: TerminalInfo | undefined
 		let didRestoreFailedDispose = false
 
@@ -393,7 +430,7 @@ describe("VscodeTerminalManager", () => {
 			code: 0,
 			reason: vscode.TerminalExitReason.Process,
 		}))
-		TerminalRegistry.queueTerminalForCleanup(terminalInfo)
+		TerminalRegistry.queueTerminalForCleanup(terminalInfo, "unobserved-command")
 
 		TerminalRegistry.disposeTerminalsPendingCleanup()
 		TerminalRegistry.disposeTerminalsPendingCleanup()

@@ -239,7 +239,7 @@ export class VscodeTerminalManager {
 			// reclaimed at the next acquisition, after this tool result can report
 			// that their completion is indeterminate.
 			if (getUnobservedTerminalCommandDisposition(outcome) === "disposeBeforeNextTerminalAcquisition") {
-				TerminalRegistry.queueTerminalForCleanup(vscodeTerminalInfo)
+				TerminalRegistry.queueTerminalForCleanup(vscodeTerminalInfo, "unobserved-command")
 			}
 		})
 
@@ -321,6 +321,26 @@ export class VscodeTerminalManager {
 	 * The returned terminal is reserved until runCommand() takes ownership.
 	 */
 	async getOrCreateTerminal(cwd: string, profileId: string = this.defaultTerminalProfile): Promise<ITerminalInfo> {
+		try {
+			return await this.acquireTerminal(cwd, profileId)
+		} finally {
+			// Terminals abandoned by the acquisition that just finished hold
+			// nothing anyone can read, so they close now rather than waiting for
+			// a next acquisition that may never come. That wait was the whole of
+			// what was left of mann1x/cline#56: the queue's only drain was the
+			// top of the next acquisition, `disposeAll()` has no callers, and the
+			// manager lives as long as the window -- so a session's last
+			// abandoned terminal stayed open until the user ran another command
+			// or closed VS Code.
+			//
+			// Here rather than inside: `dispose()` fires close listeners that can
+			// acquire a terminal themselves, and by this point the acquisition
+			// they would re-enter has finished choosing.
+			TerminalRegistry.disposeTerminalsPendingCleanup("abandoned-during-preparation")
+		}
+	}
+
+	private async acquireTerminal(cwd: string, profileId: string): Promise<ITerminalInfo> {
 		// A fallback terminal becomes cleanup-eligible when its unobserved-command
 		// outcome is emitted. Dispose the snapshot of eligible terminals before
 		// selecting a terminal for this acquisition.
@@ -523,6 +543,6 @@ export class VscodeTerminalManager {
 	 */
 	private discardTerminal(terminalInfo: TerminalInfo): void {
 		this.evictTerminal(terminalInfo)
-		TerminalRegistry.queueTerminalForCleanup(terminalInfo)
+		TerminalRegistry.queueTerminalForCleanup(terminalInfo, "abandoned-during-preparation")
 	}
 }

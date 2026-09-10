@@ -17,9 +17,19 @@ export interface TerminalInfo {
 
 // Although vscode.window.terminals provides a list of all open terminals, there's no way to know whether they're busy or not (exitStatus does not provide useful information for most commands). In order to prevent creating too many terminals, we need to keep track of terminals through the life of the extension, as well as session specific terminals for the life of a task (to get latest unretrieved output).
 // Since we have promises keeping track of terminal processes, we get the added benefit of keep track of busy terminals even after a task is closed.
+/**
+ * Why a terminal is waiting to be closed, which is also when it closes.
+ *
+ * `abandoned-during-preparation` is the no-shell-integration case: the cwd can
+ * never be confirmed, so every acquisition abandons the terminal it tried to
+ * reuse. `unobserved-command` is a managed command whose completion Cline lost
+ * track of.
+ */
+export type TerminalCleanupReason = "abandoned-during-preparation" | "unobserved-command"
+
 export class TerminalRegistry {
 	private static terminals: TerminalInfo[] = []
-	private static terminalsPendingCleanup = new Map<number, TerminalInfo>()
+	private static terminalsPendingCleanup = new Map<number, { terminalInfo: TerminalInfo; reason: TerminalCleanupReason }>()
 	private static nextTerminalId = 1
 
 	static createTerminal(cwd?: string | vscode.Uri | undefined, shellPath?: string): TerminalInfo {
@@ -76,30 +86,45 @@ export class TerminalRegistry {
 	}
 
 	/**
-	 * Evict a terminal now and remember it for disposal at the next terminal
-	 * acquisition boundary. Keeping this queue in the global registry preserves
-	 * cleanup ownership across task-scoped terminal-manager replacement. If no
-	 * later command needs a terminal, leave the unobservable command alone: it
-	 * may still be running, and without another acquisition it cannot contribute
-	 * to the terminal pile-up this queue prevents.
+	 * Evict a terminal now and remember it for disposal.
+	 *
+	 * Keeping this queue in the global registry preserves cleanup ownership
+	 * across task-scoped terminal-manager replacement.
+	 *
+	 * The reason decides when it closes, because the two cases hold different
+	 * things. A terminal abandoned during preparation received nothing but
+	 * Cline's own `cd`: there is no output for anyone to read, so it is closed
+	 * as soon as the acquisition that abandoned it is finished. A terminal whose
+	 * command stopped being observable may have run something the user wants to
+	 * look at, so it waits for the next acquisition -- by which time the tool
+	 * result reporting the indeterminate outcome has long since been seen.
 	 */
-	static queueTerminalForCleanup(terminalInfo: TerminalInfo): void {
+	static queueTerminalForCleanup(terminalInfo: TerminalInfo, reason: TerminalCleanupReason): void {
 		TerminalRegistry.removeTerminal(terminalInfo.id)
-		TerminalRegistry.terminalsPendingCleanup.set(terminalInfo.id, terminalInfo)
+		TerminalRegistry.terminalsPendingCleanup.set(terminalInfo.id, { terminalInfo, reason })
 	}
 
-	/** Dispose every terminal that was cleanup-eligible when this call began. */
-	static disposeTerminalsPendingCleanup(): void {
+	/**
+	 * Dispose the terminals that were cleanup-eligible when this call began.
+	 *
+	 * With a reason, only the entries queued for it. Without one, everything --
+	 * which is what the acquisition boundary does, because by then both kinds
+	 * have had their moment.
+	 */
+	static disposeTerminalsPendingCleanup(reason?: TerminalCleanupReason): void {
 		const pending = Array.from(TerminalRegistry.terminalsPendingCleanup.entries())
-		for (const [id, terminalInfo] of pending) {
+		for (const [id, entry] of pending) {
+			if (reason !== undefined && entry.reason !== reason) {
+				continue
+			}
 			// Remove ownership before dispose(), which may synchronously trigger
 			// terminal-close listeners that acquire another terminal. Restore it if
 			// disposal fails so the resource is never silently lost.
 			TerminalRegistry.terminalsPendingCleanup.delete(id)
 			try {
-				terminalInfo.terminal.dispose()
+				entry.terminalInfo.terminal.dispose()
 			} catch (error) {
-				TerminalRegistry.terminalsPendingCleanup.set(id, terminalInfo)
+				TerminalRegistry.terminalsPendingCleanup.set(id, entry)
 				Logger.warn(`[TerminalRegistry] Failed to dispose fallback terminal ${id}; cleanup will be retried`, error)
 			}
 		}
