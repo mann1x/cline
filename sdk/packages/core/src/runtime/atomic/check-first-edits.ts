@@ -39,6 +39,16 @@
  * So the gate always fires once per transaction, and only the message changes:
  * a model that has already run the check is asked for the plan alone, and is
  * not told to re-run something it just ran.
+ *
+ * "Once" is once per turn, not once per call. A model that sends its edits as
+ * a parallel batch used to have exactly one of them refused while the rest
+ * applied, which is the worst of both: it was told its edit did not happen and
+ * asked for a plan, while two other edits it had not planned were already on
+ * disk. Measured on session 1789032320523_q29ta, assistant message 9: three
+ * `editor` calls in one message, the first held and the other two applied. So
+ * the hold covers every edit sharing the held call's iteration, and stands
+ * down from the next turn — which is the first moment the model could have
+ * read the refusal and answered it.
  */
 
 import type {
@@ -113,12 +123,15 @@ export function withCheckFirstEdits<T extends AgentToolDefinition>(
 	let seenTransaction = source.transaction;
 	let checkRun = false;
 	let held = false;
+	/** The turn the hold happened in, so its whole batch is held with it. */
+	let heldIteration: number | undefined;
 
 	const syncTransaction = () => {
 		if (source.transaction !== seenTransaction) {
 			seenTransaction = source.transaction;
 			checkRun = false;
 			held = false;
+			heldIteration = undefined;
 		}
 	};
 
@@ -149,9 +162,20 @@ export function withCheckFirstEdits<T extends AgentToolDefinition>(
 			execute: async (input: unknown, context: AgentToolContext) => {
 				syncTransaction();
 				if (held) {
+					// Everything else in the turn that was refused goes with it.
+					// Letting these through would apply edits the model has just
+					// been told to plan first, and it would learn that from the
+					// file rather than from the refusal.
+					if (
+						heldIteration !== undefined &&
+						context.iteration === heldIteration
+					) {
+						return describeCheckFirst(source.checkLabel, checkRun);
+					}
 					return original.execute(input, context);
 				}
 				held = true;
+				heldIteration = context.iteration;
 				return describeCheckFirst(source.checkLabel, checkRun);
 			},
 		} as unknown as T;

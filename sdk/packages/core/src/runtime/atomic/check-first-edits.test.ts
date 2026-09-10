@@ -33,12 +33,16 @@ function wrap(calls: string[], source: { transaction: number }) {
 	);
 }
 
-const run = (t: Map<string, AgentToolDefinition>, name: string) =>
+const run = (
+	t: Map<string, AgentToolDefinition>,
+	name: string,
+	iteration?: number,
+) =>
 	(
 		t.get(name) as never as {
 			execute: (i: unknown, c: unknown) => Promise<unknown>;
 		}
-	).execute({}, {});
+	).execute({}, iteration === undefined ? {} : { iteration });
 
 describe("withCheckFirstEdits", () => {
 	it("holds the first edit and says the edit did not happen", async () => {
@@ -145,6 +149,38 @@ describe("withCheckFirstEdits", () => {
 
 		expect(held).toContain("That edit was not made");
 		expect(calls).toEqual([RUN_CHECK_TOOL_NAME, "editor"]);
+	});
+
+	// Session 1789032320523_q29ta, assistant message 9: three `editor` calls in
+	// one message. The gate refused the first and the other two applied, so the
+	// model was asked for a plan while two unplanned edits were already on
+	// disk. A batch is one decision and gets one answer.
+	it("holds every edit sent in the same turn as the held one", async () => {
+		const calls: string[] = [];
+		const t = wrap(calls, { transaction: 1 });
+
+		const first = (await run(t, "editor", 4)) as string;
+		const second = (await run(t, "editor", 4)) as string;
+		const third = (await run(t, "apply_patch", 4)) as string;
+
+		expect(calls).toEqual([]);
+		for (const held of [first, second, third]) {
+			expect(held).toContain("That edit was not made");
+		}
+	});
+
+	// And it stands down from the next turn, which is the first one the model
+	// could have written after reading the refusal.
+	it("lets the next turn's edits through", async () => {
+		const calls: string[] = [];
+		const t = wrap(calls, { transaction: 1 });
+
+		await run(t, "editor", 4);
+		await run(t, "editor", 4);
+		await run(t, "editor", 5);
+		await run(t, "apply_patch", 5);
+
+		expect(calls).toEqual(["editor", "apply_patch"]);
 	});
 
 	it("leaves tools that are not edits alone", async () => {
