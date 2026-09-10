@@ -1,3 +1,4 @@
+import { defaultMcpToolNameTransform } from "@cline/core"
 import type { AutoApprovalSettings } from "@shared/AutoApprovalSettings"
 import type { McpHub } from "@/services/mcp/McpHub"
 
@@ -31,8 +32,17 @@ export function buildToolPolicies(
 	if (mcpHub) {
 		for (const server of mcpHub.getServers()) {
 			for (const tool of server.tools ?? []) {
-				const sdkName = `${server.name}__${tool.name}`
-				policies[sdkName] = { autoApprove: false }
+				// The name the tool is actually registered under, which is not
+				// always `server__tool`: `defaultMcpToolNameTransform` replaces
+				// anything outside [A-Za-z0-9_-] and truncates past 64 characters
+				// with a hash. A policy keyed by the raw pair matches nothing for
+				// a server called `Microsoft Learn` or
+				// `github.com/modelcontextprotocol/servers/...`, and an unlisted
+				// tool is auto-approved by the SDK -- so those servers ran with no
+				// approval gate at all, whatever the toggle said.
+				policies[defaultMcpToolNameTransform({ serverName: server.name, toolName: tool.name })] = {
+					autoApprove: false,
+				}
 			}
 		}
 	}
@@ -65,16 +75,18 @@ export function isToolAutoApproved(toolName: string, settings: AutoApprovalSetti
 		return !!(settings.actions.useBrowserTool ?? settings.actions.useBrowser)
 	}
 
-	const mcpTool = parseMcpToolName(toolName)
+	// Whether this is an MCP tool at all is answered by finding it, not by the
+	// shape of its name: a server name long enough to be truncated leaves a
+	// registered name with no `__` in it and none of the tool's own name, so
+	// there is nothing in the string to recognize or split.
+	const mcpTool = mcpHub ? findMcpTool(toolName, mcpHub) : undefined
 	if (mcpTool) {
 		// `useMcp` is the gate, not the grant: a tool is auto-approved only when
-		// the user marked that tool auto-approve on its server.
-		if (!settings.actions.useMcp || !mcpHub) {
-			return false
-		}
-		const server = mcpHub.getServers().find((entry) => entry.name === mcpTool.serverName)
-		const tool = server?.tools?.find((entry) => entry.name === mcpTool.toolName)
-		return !!tool?.autoApprove
+		// the user marked that tool auto-approve on its server. The per-tool tick
+		// boxes in the MCP panel are what set that flag; they were hidden while
+		// upstream had the toggle grant everything, which left this branch with
+		// no reachable way to return true.
+		return !!settings.actions.useMcp && !!mcpTool.autoApprove
 	}
 
 	return false
@@ -111,12 +123,22 @@ function isBrowserTool(toolName: string): boolean {
 	return toolName === "browser" || toolName === "browser_action"
 }
 
-/** MCP tools are registered by `createMcpTools` under `serverName__toolName`. */
-function parseMcpToolName(toolName: string): { serverName: string; toolName: string } | undefined {
-	const separatorIndex = toolName.indexOf("__")
-	if (separatorIndex <= 0) return undefined
-	const serverName = toolName.substring(0, separatorIndex)
-	const mcpToolName = toolName.substring(separatorIndex + 2)
-	if (!mcpToolName) return undefined
-	return { serverName, toolName: mcpToolName }
+/**
+ * The tool one of this hub's servers is offering under this registered name.
+ *
+ * Resolved by re-applying the registration transform to every known
+ * server/tool pair rather than by splitting the name. Splitting is what the
+ * transform makes unsafe: `Microsoft Learn` arrives as `Microsoft_Learn`, and
+ * a name long enough to be truncated ends in a hash with the tool's own name
+ * cut off entirely, so neither half of a split is the thing it names.
+ */
+function findMcpTool(registeredName: string, mcpHub: McpHub): { autoApprove?: boolean } | undefined {
+	for (const server of mcpHub.getServers()) {
+		for (const tool of server.tools ?? []) {
+			if (defaultMcpToolNameTransform({ serverName: server.name, toolName: tool.name }) === registeredName) {
+				return tool
+			}
+		}
+	}
+	return undefined
 }

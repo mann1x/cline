@@ -347,6 +347,7 @@ export {
 	createMcpTools,
 	DEFAULT_MCP_CONNECT_TIMEOUT_MS,
 	type DefaultMcpServerClientFactoryOptions,
+	defaultMcpToolNameTransform,
 	getMcpServerOAuthState,
 	getMcpServerOAuthStatus,
 	hasMcpSettingsFile,

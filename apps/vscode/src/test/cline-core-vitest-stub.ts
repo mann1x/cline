@@ -190,6 +190,11 @@ export function createShellExecutor() {
 	return async () => ""
 }
 
+// The real transform, for the same reason as createMcpTools below: the
+// approval gate keys its policies by the name a tool is registered under,
+// and a stub that re-implemented the sanitizing and truncation would agree
+// with itself while the shipped build disagreed.
+export { defaultMcpToolNameTransform } from "../../../../sdk/packages/core/src/extensions/mcp/name-transform"
 export { augmentMcpTimeoutError } from "../../../../sdk/packages/core/src/extensions/mcp/timeout"
 // The real createMcpTools, so a test of the VS Code bridge exercises the
 // actual name transform and description building rather than a stub that
