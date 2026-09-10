@@ -1,11 +1,46 @@
 import { ClineMessage } from "./ExtensionMessage"
 
+/**
+ * What one connection spent over a task.
+ *
+ * Kept per provider and model because a task is routinely more than one of
+ * each: the user can switch mid-task, and sub-agents can be pointed at another
+ * endpoint entirely. A single total cannot say which of those tokens were free
+ * -- a local Ollama -- and which were billed, which is the whole reason to
+ * show the numbers at all.
+ */
+export interface ProviderApiMetrics {
+	providerId?: string
+	modelId?: string
+	tokensIn: number
+	tokensOut: number
+	cacheWrites: number
+	cacheReads: number
+	cost: number
+	/**
+	 * Generation throughput, summed over the requests that reported it.
+	 *
+	 * Only some providers time their own work (Ollama and llama.cpp do), so
+	 * these stay zero elsewhere and the rate is simply not shown. An estimate
+	 * from wall-clock would include queueing, prompt processing and the
+	 * client's own latency, and calling that the model's speed would make the
+	 * comparison it exists for meaningless.
+	 */
+	generateTokens: number
+	generateMs: number
+}
+
 interface ApiMetrics {
 	totalTokensIn: number
 	totalTokensOut: number
 	totalCacheWrites?: number
 	totalCacheReads?: number
 	totalCost: number
+	/** The same totals, split by the connection that spent them. */
+	byProvider: ProviderApiMetrics[]
+	/** Generation throughput across every request that reported timings. */
+	totalGenerateTokens: number
+	totalGenerateMs: number
 }
 
 /**
@@ -35,7 +70,14 @@ export function getApiMetrics(messages: ClineMessage[]): ApiMetrics {
 		totalCacheWrites: undefined,
 		totalCacheReads: undefined,
 		totalCost: 0,
+		byProvider: [],
+		totalGenerateTokens: 0,
+		totalGenerateMs: 0,
 	}
+	// Insertion-ordered, so the connections appear in the order the task used
+	// them rather than alphabetically -- the lead's first, and an agents-only
+	// endpoint below it.
+	const byConnection = new Map<string, ProviderApiMetrics>()
 
 	messages.forEach((message) => {
 		if (
@@ -45,22 +87,67 @@ export function getApiMetrics(messages: ClineMessage[]): ApiMetrics {
 		) {
 			try {
 				const parsedData = JSON.parse(message.text)
-				const { tokensIn, tokensOut, cacheWrites, cacheReads, cost } = parsedData
+				const { tokensIn, tokensOut, cacheWrites, cacheReads, cost, providerId, modelId, timings } = parsedData
+
+				// A request row with no usage on it yet -- the spinner one -- is
+				// not a connection that spent anything, and adding it would put
+				// an empty row in the breakdown for every turn.
+				const carriesUsage =
+					typeof tokensIn === "number" ||
+					typeof tokensOut === "number" ||
+					typeof cacheWrites === "number" ||
+					typeof cacheReads === "number" ||
+					typeof cost === "number"
+				const key = `${typeof providerId === "string" ? providerId : ""}\u0000${
+					typeof modelId === "string" ? modelId : ""
+				}`
+				let connection = byConnection.get(key)
+				if (!connection && carriesUsage) {
+					connection = {
+						...(typeof providerId === "string" ? { providerId } : {}),
+						...(typeof modelId === "string" ? { modelId } : {}),
+						tokensIn: 0,
+						tokensOut: 0,
+						cacheWrites: 0,
+						cacheReads: 0,
+						cost: 0,
+						generateTokens: 0,
+						generateMs: 0,
+					}
+					byConnection.set(key, connection)
+				}
 
 				if (typeof tokensIn === "number") {
 					result.totalTokensIn += tokensIn
+					if (connection) connection.tokensIn += tokensIn
 				}
 				if (typeof tokensOut === "number") {
 					result.totalTokensOut += tokensOut
+					if (connection) connection.tokensOut += tokensOut
 				}
 				if (typeof cacheWrites === "number") {
 					result.totalCacheWrites = (result.totalCacheWrites ?? 0) + cacheWrites
+					if (connection) connection.cacheWrites += cacheWrites
 				}
 				if (typeof cacheReads === "number") {
 					result.totalCacheReads = (result.totalCacheReads ?? 0) + cacheReads
+					if (connection) connection.cacheReads += cacheReads
 				}
 				if (typeof cost === "number") {
 					result.totalCost += cost
+					if (connection) connection.cost += cost
+				}
+				// Only requests whose provider timed itself contribute, so the
+				// rate stays "what the model did", not "how long the task took".
+				const generateTokens = timings?.generateTokens
+				const generateMs = timings?.generateMs
+				if (typeof generateTokens === "number" && typeof generateMs === "number" && generateMs > 0) {
+					result.totalGenerateTokens += generateTokens
+					result.totalGenerateMs += generateMs
+					if (connection) {
+						connection.generateTokens += generateTokens
+						connection.generateMs += generateMs
+					}
 				}
 			} catch {
 				// Ignore JSON parse errors
@@ -68,6 +155,7 @@ export function getApiMetrics(messages: ClineMessage[]): ApiMetrics {
 		}
 	})
 
+	result.byProvider = [...byConnection.values()]
 	return result
 }
 

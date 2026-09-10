@@ -1,3 +1,4 @@
+import type { ProviderApiMetrics } from "@shared/getApiMetrics"
 import { StringRequest } from "@shared/proto/cline/common"
 import { VSCodeButton } from "@vscode/webview-ui-toolkit/react"
 import debounce from "debounce"
@@ -16,6 +17,10 @@ interface ContextWindowInfoProps {
 	cacheWrites?: number
 	cacheReads?: number
 	size?: number
+	/** What each connection spent, for the Token Usage breakdown. */
+	byProvider?: ProviderApiMetrics[]
+	generateTokens?: number
+	generateMs?: number
 }
 
 interface ContextWindowProgressProps extends ContextWindowInfoProps {
@@ -66,6 +71,9 @@ const ContextWindow: React.FC<ContextWindowProgressProps> = ({
 	tokensOut,
 	cacheWrites,
 	cacheReads,
+	byProvider,
+	generateTokens,
+	generateMs,
 }) => {
 	const [isOpened, setIsOpened] = useState(false)
 	const [confirmationNeeded, setConfirmationNeeded] = useState(false)
@@ -157,9 +165,12 @@ const ContextWindow: React.FC<ContextWindowProgressProps> = ({
 						<HoverCard>
 							<HoverCardContent className="bg-menu rounded-xs shadow-sm">
 								<ContextWindowSummary
+									byProvider={byProvider}
 									cacheReads={cacheReads}
 									cacheWrites={cacheWrites}
 									contextWindow={tokenData.max}
+									generateMs={generateMs}
+									generateTokens={generateTokens}
 									percentage={tokenData.percentage}
 									tokensIn={tokensIn}
 									tokensOut={tokensOut}

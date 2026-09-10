@@ -1,4 +1,5 @@
 import { ClineMessage } from "@shared/ExtensionMessage"
+import type { ProviderApiMetrics } from "@shared/getApiMetrics"
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react"
 import React, { useCallback, useLayoutEffect, useMemo, useState } from "react"
 import Thumbnails from "@/components/common/Thumbnails"
@@ -15,6 +16,7 @@ import OpenDiskConversationHistoryButton from "./buttons/OpenDiskConversationHis
 import ContextWindow from "./ContextWindow"
 import { highlightText } from "./Highlights"
 import { TaskProgressPanel } from "./TaskProgressPanel"
+import { TaskTokenSummary } from "./TaskTokenSummary"
 import TaskWorkingDirectoryBadge from "./TaskWorkingDirectoryBadge"
 
 const IS_DEV = process.env.IS_DEV === "true"
@@ -27,6 +29,10 @@ interface TaskHeaderProps {
 	cacheReads?: number
 	totalCost: number
 	lastApiReqTotalTokens?: number
+	/** What each connection spent, and how fast it generated. */
+	byProvider?: ProviderApiMetrics[]
+	generateTokens?: number
+	generateMs?: number
 	onClose: () => void
 	onSendMessage?: (command: string, files: string[], images: string[]) => void
 }
@@ -41,6 +47,9 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 	cacheReads,
 	totalCost,
 	lastApiReqTotalTokens,
+	byProvider,
+	generateTokens,
+	generateMs,
 	onClose,
 	onSendMessage,
 }) => {
@@ -215,14 +224,30 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 						)}
 
 						<ContextWindow
+							byProvider={byProvider}
 							cacheReads={cacheReads}
 							cacheWrites={cacheWrites}
 							contextWindow={selectedModelInfo?.contextWindow}
+							generateMs={generateMs}
+							generateTokens={generateTokens}
 							lastApiReqTotalTokens={lastApiReqTotalTokens}
 							onSendMessage={onSendMessage}
 							tokensIn={tokensIn}
 							tokensOut={tokensOut}
 							useAutoCondense={false} // Disable auto-condense configuration in UI for now
+						/>
+
+						{/*
+						 * The task's own totals, which the bar above does not show:
+						 * that is the last request's context, and this is everything
+						 * the task has spent, sub-agents included.
+						 */}
+						<TaskTokenSummary
+							byProvider={byProvider ?? []}
+							generateMs={generateMs ?? 0}
+							generateTokens={generateTokens ?? 0}
+							tokensIn={tokensIn}
+							tokensOut={tokensOut}
 						/>
 
 						{/*

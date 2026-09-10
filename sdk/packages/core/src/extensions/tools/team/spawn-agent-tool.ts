@@ -44,6 +44,18 @@ export interface SpawnAgentOutput {
 		inputTokens: number;
 		outputTokens: number;
 	};
+	/**
+	 * Which model actually spent those tokens.
+	 *
+	 * Not always the session's: agents can be given a connection of their own,
+	 * and a configured agent may name a provider per file. Without this the
+	 * host can only add a sub-agent's tokens to the lead's total, which is the
+	 * difference between free local tokens and billed ones going unrecorded.
+	 */
+	model?: {
+		id: string;
+		provider: string;
+	};
 }
 
 export interface SubAgentStartContext {
@@ -176,6 +188,18 @@ export function createSpawnAgentTool(
 						inputTokens: result.usage.inputTokens,
 						outputTokens: result.usage.outputTokens,
 					},
+					// Guarded rather than read straight through: `model` is
+					// required on the type but this is bookkeeping, and a
+					// result that arrives without one is not a reason to
+					// fail a sub-agent that has already done its work.
+					...(result.model
+						? {
+								model: {
+									id: result.model.id,
+									provider: result.model.provider,
+								},
+							}
+						: {}),
 				};
 				if (config.onSubAgentEnd) {
 					try {

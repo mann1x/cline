@@ -433,6 +433,22 @@ export function createConfiguredAgentTools(
 								inputTokens: result.usage.inputTokens,
 								outputTokens: result.usage.outputTokens,
 							},
+							// A configured agent is the case where this matters
+							// most: its file may name a provider of its own, so
+							// its tokens can be billed where the session's are
+							// not, or the reverse.
+							// Guarded rather than read straight through: `model` is
+							// required on the type but this is bookkeeping, and a
+							// result that arrives without one is not a reason to
+							// fail a sub-agent that has already done its work.
+							...(result.model
+								? {
+										model: {
+											id: result.model.id,
+											provider: result.model.provider,
+										},
+									}
+								: {}),
 						};
 						if (options.onSubAgentEnd) {
 							try {

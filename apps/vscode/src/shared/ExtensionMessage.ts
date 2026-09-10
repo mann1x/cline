@@ -379,6 +379,9 @@ export interface SubagentStatusItem {
 	inputTokens: number
 	outputTokens: number
 	totalCost: number
+	/** The connection this sub-agent ran on, which need not be the lead's. */
+	providerId?: string
+	modelId?: string
 	contextTokens: number
 	contextWindow: number
 	contextUsagePercentage: number
@@ -440,6 +443,16 @@ export interface ClineApiReqInfo {
 	cacheWrites?: number
 	cacheReads?: number
 	cost?: number
+	/**
+	 * Which provider and model this request was billed to.
+	 *
+	 * A task is not always one model's: a mid-task switch changes it, and
+	 * sub-agents can run on a connection of their own. Without it the totals
+	 * can only be one number, and a run split between a local server and a
+	 * paid endpoint cannot say which half cost anything.
+	 */
+	providerId?: string
+	modelId?: string
 	/** Hidden reasoning tokens, where the provider reports them separately. */
 	reasoningTokens?: number
 	/**
@@ -520,6 +533,16 @@ export interface ClineSubagentUsageInfo {
 	cacheWrites: number
 	cacheReads: number
 	cost: number
+	/**
+	 * The connection these sub-agents ran on, when they all ran on one.
+	 *
+	 * One message per provider is emitted rather than a single aggregate,
+	 * because a batch can be spread across endpoints -- a configured agent may
+	 * name its own -- and rolling those together loses exactly the split that
+	 * separates free tokens from billed ones.
+	 */
+	providerId?: string
+	modelId?: string
 }
 
 type ClineApiReqCancelReason = "streaming_failed" | "user_cancelled" | "retries_exhausted"

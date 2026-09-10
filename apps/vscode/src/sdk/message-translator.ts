@@ -1438,6 +1438,80 @@ function finalizeDanglingCompaction(
 	messages.push(buildCompactionMessage({ status, mode: "auto" }, ts))
 }
 
+/**
+ * A finished batch of sub-agents, as one usage record per connection.
+ *
+ * Grouped rather than summed because a batch is not necessarily one model's
+ * work: the agents may have been given a connection of their own, and a
+ * configured agent can name a provider in its own file. Summing them produces
+ * a single number that is right only when every agent happened to run on the
+ * same endpoint, and silently wrong -- in the direction of under-reporting
+ * paid usage -- when they did not.
+ *
+ * Agents whose output carried no model are grouped together under no provider,
+ * which keeps their tokens in the totals rather than dropping them.
+ */
+/** What core registers a configured agent's tool as (`configured-agent-tool.ts`). */
+const CONFIGURED_AGENT_TOOL_PREFIX = "subagent_"
+
+/**
+ * One configured agent's run, as a usage record.
+ *
+ * Reads the `SpawnAgentOutput` the tool returns. Returns nothing when the
+ * output is not that shape or carries no tokens, so a tool that merely happens
+ * to be named `subagent_*` contributes nothing rather than a row of zeroes.
+ */
+export function configuredAgentUsage(output: unknown): ClineSubagentUsageInfo | undefined {
+	if (typeof output !== "object" || output === null) {
+		return undefined
+	}
+	const usage = (output as Record<string, unknown>).usage as Record<string, unknown> | undefined
+	if (!usage) {
+		return undefined
+	}
+	const tokensIn = typeof usage.inputTokens === "number" ? usage.inputTokens : 0
+	const tokensOut = typeof usage.outputTokens === "number" ? usage.outputTokens : 0
+	if (!tokensIn && !tokensOut) {
+		return undefined
+	}
+	const model = (output as Record<string, unknown>).model as Record<string, unknown> | undefined
+	return {
+		source: "subagents",
+		tokensIn,
+		tokensOut,
+		cacheWrites: 0,
+		cacheReads: 0,
+		cost: typeof usage.totalCost === "number" ? usage.totalCost : 0,
+		...(typeof model?.provider === "string" ? { providerId: model.provider } : {}),
+		...(typeof model?.id === "string" ? { modelId: model.id } : {}),
+	}
+}
+
+export function summarizeSubagentUsageByProvider(items: readonly SubagentStatusItem[]): ClineSubagentUsageInfo[] {
+	const byConnection = new Map<string, ClineSubagentUsageInfo>()
+	for (const item of items) {
+		const key = `${item.providerId ?? ""}\u0000${item.modelId ?? ""}`
+		const existing = byConnection.get(key)
+		const usage = existing ?? {
+			source: "subagents" as const,
+			tokensIn: 0,
+			tokensOut: 0,
+			cacheWrites: 0,
+			cacheReads: 0,
+			cost: 0,
+			...(item.providerId ? { providerId: item.providerId } : {}),
+			...(item.modelId ? { modelId: item.modelId } : {}),
+		}
+		usage.tokensIn += item.inputTokens || 0
+		usage.tokensOut += item.outputTokens || 0
+		usage.cost += item.totalCost || 0
+		if (!existing) {
+			byConnection.set(key, usage)
+		}
+	}
+	return [...byConnection.values()]
+}
+
 function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): ClineMessage[] {
 	const messages: ClineMessage[] = []
 
@@ -1735,6 +1809,15 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 									if (typeof usage.inputTokens === "number") entry.inputTokens = usage.inputTokens
 									if (typeof usage.outputTokens === "number") entry.outputTokens = usage.outputTokens
 								}
+								// Which connection it actually ran on. Agents can be
+								// given one of their own, and a configured agent may
+								// name a provider per file, so this is not the lead's
+								// to assume.
+								const model = output.model as Record<string, unknown> | undefined
+								if (model) {
+									if (typeof model.provider === "string") entry.providerId = model.provider
+									if (typeof model.id === "string") entry.modelId = model.id
+								}
 							}
 							if (event.error) {
 								entry.status = "failed"
@@ -1763,16 +1846,39 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 							partial: !allDone,
 						})
 
-						// When all done, emit subagent_usage for cost accounting
+						// When all done, emit subagent_usage for cost accounting --
+						// one message per connection the batch ran on. Summing a
+						// mixed batch into a single row would attribute billed
+						// tokens to whichever provider happened to be named, or to
+						// none at all.
 						if (allDone) {
-							const usagePayload: ClineSubagentUsageInfo = {
-								source: "subagents",
-								tokensIn: items.reduce((acc, e) => acc + (e.inputTokens || 0), 0),
-								tokensOut: items.reduce((acc, e) => acc + (e.outputTokens || 0), 0),
-								cacheWrites: 0,
-								cacheReads: 0,
-								cost: items.reduce((acc, e) => acc + (e.totalCost || 0), 0),
+							for (const usagePayload of summarizeSubagentUsageByProvider(items)) {
+								messages.push({
+									ts: state.nextTs(),
+									type: "say",
+									say: "subagent_usage" as ClineSay,
+									text: JSON.stringify(usagePayload),
+									partial: false,
+								})
 							}
+						}
+
+						// Don't clear the generic streaming tool — spawn_agent
+						// didn't use it (we cleared it at content_start)
+						break
+					}
+
+					// A configured agent reaches the model as `subagent_<name>`,
+					// not `spawn_agent`, so none of the above runs for it and it
+					// renders as an ordinary tool call. That is fine for the
+					// transcript and wrong for the totals: its tokens were never
+					// counted anywhere the task header can see, and a configured
+					// agent is the one most likely to be on another provider --
+					// its file can name one. Emit the usage record here and let
+					// the generic rendering below carry on.
+					if (toolName.startsWith(CONFIGURED_AGENT_TOOL_PREFIX) && !event.error) {
+						const usagePayload = configuredAgentUsage(event.output)
+						if (usagePayload) {
 							messages.push({
 								ts: state.nextTs(),
 								type: "say",
@@ -1781,10 +1887,6 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 								partial: false,
 							})
 						}
-
-						// Don't clear the generic streaming tool — spawn_agent
-						// didn't use it (we cleared it at content_start)
-						break
 					}
 
 					// Completion tool (attempt_completion / submit_and_exit) → finalize the green
@@ -2080,6 +2182,11 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 				cacheWrites: usageEvent.cacheWrites,
 				cacheReads: usageEvent.cacheReads,
 				cost: usageEvent.totalCost,
+				// Stamped per request, not read from the session at display
+				// time: the model can change mid-task, and tokens already
+				// spent belong to the model that spent them.
+				...(state.activeProviderId() ? { providerId: state.activeProviderId() } : {}),
+				...(state.activeModelId() ? { modelId: state.activeModelId() } : {}),
 				...(usageEvent.reasoningTokens ? { reasoningTokens: usageEvent.reasoningTokens } : {}),
 				...(usageEvent.timings ? { timings: usageEvent.timings } : {}),
 			}

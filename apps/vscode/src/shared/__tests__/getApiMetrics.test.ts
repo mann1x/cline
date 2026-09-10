@@ -54,6 +54,118 @@ describe("getApiMetrics", () => {
 		assert.ok(Math.abs(metrics.totalCost - 0.2) < 1e-9)
 	})
 
+	// The reason the split exists: the lead runs on a paid endpoint while the
+	// sub-agents run on a local one, and a single total cannot say which of
+	// those tokens cost anything.
+	it("splits the totals by the connection that spent them", () => {
+		const messages: ClineMessage[] = [
+			{
+				ts: 1,
+				type: "say",
+				say: "api_req_started",
+				text: JSON.stringify({
+					tokensIn: 100,
+					tokensOut: 20,
+					cost: 0.5,
+					providerId: "anthropic",
+					modelId: "claude-sonnet-4-5",
+					timings: { generateTokens: 20, generateMs: 1000 },
+				}),
+			},
+			{
+				ts: 2,
+				type: "say",
+				say: "subagent_usage",
+				text: JSON.stringify({
+					source: "subagents",
+					tokensIn: 400,
+					tokensOut: 80,
+					cost: 0,
+					providerId: "ollama",
+					modelId: "qwen3",
+				}),
+			},
+			{
+				ts: 3,
+				type: "say",
+				say: "api_req_started",
+				text: JSON.stringify({
+					tokensIn: 150,
+					tokensOut: 30,
+					cost: 0.25,
+					providerId: "anthropic",
+					modelId: "claude-sonnet-4-5",
+					timings: { generateTokens: 30, generateMs: 1000 },
+				}),
+			},
+		]
+
+		const metrics = getApiMetrics(messages)
+
+		assert.equal(metrics.totalTokensIn, 650)
+		assert.equal(metrics.totalTokensOut, 130)
+		assert.equal(metrics.byProvider.length, 2)
+
+		const anthropic = metrics.byProvider.find((entry) => entry.providerId === "anthropic")
+		assert.ok(anthropic)
+		assert.equal(anthropic.tokensIn, 250)
+		assert.equal(anthropic.tokensOut, 50)
+		assert.ok(Math.abs(anthropic.cost - 0.75) < 1e-9)
+
+		const ollama = metrics.byProvider.find((entry) => entry.providerId === "ollama")
+		assert.ok(ollama)
+		assert.equal(ollama.tokensOut, 80)
+		assert.equal(ollama.cost, 0)
+	})
+
+	// Only the requests whose provider timed itself. Deriving a rate from wall
+	// clock would fold in queueing and tool time and stop being the model's.
+	it("sums generation throughput only where the provider reported it", () => {
+		const messages: ClineMessage[] = [
+			{
+				ts: 1,
+				type: "say",
+				say: "api_req_started",
+				text: JSON.stringify({
+					tokensIn: 10,
+					tokensOut: 40,
+					timings: { generateTokens: 40, generateMs: 2000 },
+				}),
+			},
+			{
+				ts: 2,
+				type: "say",
+				say: "api_req_started",
+				text: JSON.stringify({ tokensIn: 10, tokensOut: 60 }),
+			},
+		]
+
+		const metrics = getApiMetrics(messages)
+
+		assert.equal(metrics.totalTokensOut, 100)
+		assert.equal(metrics.totalGenerateTokens, 40)
+		assert.equal(metrics.totalGenerateMs, 2000)
+	})
+
+	// The spinner row carries no usage, and one is emitted per iteration. Left
+	// in, the breakdown grows an empty entry for every turn of the task.
+	it("does not open a connection row for a request that has no usage yet", () => {
+		const messages: ClineMessage[] = [
+			{ ts: 1, type: "say", say: "api_req_started", text: JSON.stringify({}) },
+			{
+				ts: 2,
+				type: "say",
+				say: "api_req_started",
+				text: JSON.stringify({ tokensIn: 10, tokensOut: 5, providerId: "ollama" }),
+			},
+		]
+
+		const metrics = getApiMetrics(messages)
+
+		assert.equal(metrics.byProvider.length, 1)
+		assert.equal(metrics.byProvider[0].providerId, "ollama")
+	})
+
 	it("ignores malformed usage payloads", () => {
 		const messages: ClineMessage[] = [
 			{

@@ -1,12 +1,19 @@
+import type { ProviderApiMetrics } from "@shared/getApiMetrics"
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react"
 import React, { memo, useCallback, useMemo, useState } from "react"
 import { formatLargeNumber as formatTokenNumber } from "@/utils/format"
+import { formatRate } from "@/utils/request-timings"
 
 interface TokenUsageInfoProps {
 	tokensIn?: number
 	tokensOut?: number
 	cacheWrites?: number
 	cacheReads?: number
+	/** What each connection spent, when the task used more than the session's. */
+	byProvider?: ProviderApiMetrics[]
+	/** Generation throughput across every request that reported timings. */
+	generateTokens?: number
+	generateMs?: number
 }
 
 interface TokenDetail {
@@ -66,27 +73,73 @@ const TOKEN_DETAILS_CONFIG: Omit<TokenDetail, "value">[] = [
 	{ title: "Cache Reads", icon: "codicon-arrow-right" },
 ]
 
-const TokenUsageDetails = memo<TokenUsageInfoProps>(({ tokensIn, tokensOut, cacheWrites, cacheReads }) => {
-	const contextTokenDetails = useMemo(() => {
-		const values = [tokensIn, tokensOut, cacheWrites || 0, cacheReads || 0]
-		return TOKEN_DETAILS_CONFIG.map((config, index) => ({ ...config, value: values[index] })).filter((item) => item.value)
-	}, [tokensIn, tokensOut, cacheWrites, cacheReads])
+const TokenUsageDetails = memo<TokenUsageInfoProps>(
+	({ tokensIn, tokensOut, cacheWrites, cacheReads, byProvider, generateTokens, generateMs }) => {
+		const contextTokenDetails = useMemo(() => {
+			const values = [tokensIn, tokensOut, cacheWrites || 0, cacheReads || 0]
+			return TOKEN_DETAILS_CONFIG.map((config, index) => ({ ...config, value: values[index] })).filter((item) => item.value)
+		}, [tokensIn, tokensOut, cacheWrites, cacheReads])
 
-	if (!tokensIn) {
-		return <div>No token usage data available</div>
-	}
+		// Every connection the task actually billed, named. One entry is the
+		// ordinary case and says nothing the totals above do not, so it is only
+		// broken out when the work was genuinely split -- which is when it
+		// matters, because one of those endpoints is usually free and another
+		// is not.
+		const connections = (byProvider ?? []).filter((entry) => entry.providerId)
+		const rate = generateMs && generateMs > 0 ? formatRate(((generateTokens ?? 0) / generateMs) * 1000) : undefined
 
-	return (
-		<div className="space-y-1">
-			{contextTokenDetails.map((item) => (
-				<div className="flex justify-between">
-					<span>{item.title}</span>
-					<span className="font-mono">{formatTokenNumber(item.value || 0)}</span>
-				</div>
-			))}
-		</div>
-	)
-})
+		if (!tokensIn) {
+			return <div>No token usage data available</div>
+		}
+
+		return (
+			<div className="space-y-1">
+				{contextTokenDetails.map((item) => (
+					<div className="flex justify-between" key={item.title}>
+						<span>{item.title}</span>
+						{/* Exact, not abbreviated: this panel is where someone
+						    who wants the number comes to read it. */}
+						<span className="font-mono" title={(item.value || 0).toLocaleString()}>
+							{formatTokenNumber(item.value || 0)}
+						</span>
+					</div>
+				))}
+				{rate && (
+					<div className="flex justify-between">
+						<span>Generation Speed</span>
+						<span className="font-mono">{rate}</span>
+					</div>
+				)}
+				{connections.length > 1 && (
+					<div className="mt-1.5 space-y-1 border-t border-border-panel pt-1.5">
+						{connections.map((entry) => {
+							const entryRate =
+								entry.generateMs > 0 ? formatRate((entry.generateTokens / entry.generateMs) * 1000) : undefined
+							return (
+								<div key={`${entry.providerId}/${entry.modelId ?? ""}`}>
+									<div className="flex justify-between gap-2">
+										<span className="truncate" title={entry.modelId}>
+											{entry.providerId}
+										</span>
+										<span className="font-mono whitespace-nowrap">
+											{entry.cost > 0 ? `$${entry.cost.toFixed(4)}` : "free"}
+										</span>
+									</div>
+									<div className="flex justify-between gap-2 opacity-75">
+										<span className="font-mono whitespace-nowrap">
+											↑ {formatTokenNumber(entry.tokensIn)} ↓ {formatTokenNumber(entry.tokensOut)}
+										</span>
+										{entryRate && <span className="font-mono whitespace-nowrap">{entryRate}</span>}
+									</div>
+								</div>
+							)
+						})}
+					</div>
+				)}
+			</div>
+		)
+	},
+)
 TokenUsageDetails.displayName = "TokenUsageDetails"
 
 export const ContextWindowSummary: React.FC<TaskContextWindowButtonsProps> = ({
@@ -96,6 +149,9 @@ export const ContextWindowSummary: React.FC<TaskContextWindowButtonsProps> = ({
 	tokensOut,
 	cacheWrites,
 	cacheReads,
+	byProvider,
+	generateTokens,
+	generateMs,
 	percentage,
 	autoCompactThreshold = 0,
 }) => {
@@ -167,8 +223,11 @@ export const ContextWindowSummary: React.FC<TaskContextWindowButtonsProps> = ({
 					title="Token Usage"
 					value={`${formatTokenNumber(totalTokens)}`}>
 					<TokenUsageDetails
+						byProvider={byProvider}
 						cacheReads={cacheReads}
 						cacheWrites={cacheWrites}
+						generateMs={generateMs}
+						generateTokens={generateTokens}
 						tokensIn={tokensIn}
 						tokensOut={tokensOut}
 					/>

@@ -6,11 +6,13 @@ import { describe, expect, it } from "vitest"
 import { getDesktopDir } from "@/utils/path"
 import {
 	buildToolApprovalAskMessage,
+	configuredAgentUsage,
 	extractToolOutputImages,
 	extractToolOutputText,
 	historyItemToSessionFields,
 	MessageTranslatorState,
 	sdkMessagesToClineMessages,
+	summarizeSubagentUsageByProvider,
 	translateSessionEvent,
 } from "./message-translator"
 
@@ -4515,5 +4517,107 @@ describe("tool display paths are relativized to the cwd", () => {
 				text: "Bun 1.3.14 is current.",
 			}),
 		)
+	})
+})
+
+// ---------------------------------------------------------------------------
+// summarizeSubagentUsageByProvider
+// ---------------------------------------------------------------------------
+
+describe("summarizeSubagentUsageByProvider", () => {
+	const item = (overrides: Record<string, unknown>) =>
+		({
+			index: 1,
+			prompt: "do the thing",
+			status: "completed",
+			toolCalls: 0,
+			inputTokens: 0,
+			outputTokens: 0,
+			totalCost: 0,
+			contextTokens: 0,
+			contextWindow: 0,
+			contextUsagePercentage: 0,
+			...overrides,
+		}) as never
+
+	// A batch is not necessarily one model's work, and summing a mixed one
+	// attributes billed tokens to whichever provider happened to be named.
+	it("emits one record per connection", () => {
+		const usage = summarizeSubagentUsageByProvider([
+			item({ inputTokens: 100, outputTokens: 10, totalCost: 0, providerId: "ollama", modelId: "qwen3" }),
+			item({ inputTokens: 200, outputTokens: 20, totalCost: 0.5, providerId: "anthropic", modelId: "sonnet" }),
+			item({ inputTokens: 50, outputTokens: 5, totalCost: 0, providerId: "ollama", modelId: "qwen3" }),
+		])
+
+		expect(usage).toHaveLength(2)
+		expect(usage[0]).toMatchObject({ providerId: "ollama", tokensIn: 150, tokensOut: 15, cost: 0 })
+		expect(usage[1]).toMatchObject({ providerId: "anthropic", tokensIn: 200, tokensOut: 20, cost: 0.5 })
+	})
+
+	// Two models on one provider are two lines in the bill, so they are two
+	// records here.
+	it("separates two models on the same provider", () => {
+		const usage = summarizeSubagentUsageByProvider([
+			item({ inputTokens: 10, providerId: "ollama", modelId: "qwen3" }),
+			item({ inputTokens: 20, providerId: "ollama", modelId: "gemma4" }),
+		])
+
+		expect(usage).toHaveLength(2)
+	})
+
+	// An older sub-agent, or one whose output carried no model, still spent
+	// tokens: dropping it would understate the task rather than leave a gap.
+	it("keeps usage that names no connection", () => {
+		const usage = summarizeSubagentUsageByProvider([item({ inputTokens: 7, outputTokens: 3 })])
+
+		expect(usage).toHaveLength(1)
+		expect(usage[0]).toMatchObject({ tokensIn: 7, tokensOut: 3 })
+		expect(usage[0].providerId).toBeUndefined()
+	})
+})
+
+// ---------------------------------------------------------------------------
+// configuredAgentUsage
+// ---------------------------------------------------------------------------
+
+describe("configuredAgentUsage", () => {
+	// A configured agent arrives as `subagent_<name>`, so none of the
+	// spawn_agent accounting runs for it and its tokens were reaching no
+	// total at all -- while being the delegation most likely to sit on a
+	// provider of its own, because its file can name one.
+	it("reads the tokens and the connection out of the tool output", () => {
+		expect(
+			configuredAgentUsage({
+				text: "done",
+				usage: { inputTokens: 900, outputTokens: 120 },
+				model: { id: "qwen3", provider: "ollama" },
+			}),
+		).toEqual({
+			source: "subagents",
+			tokensIn: 900,
+			tokensOut: 120,
+			cacheWrites: 0,
+			cacheReads: 0,
+			cost: 0,
+			providerId: "ollama",
+			modelId: "qwen3",
+		})
+	})
+
+	// A tool that happens to be named this way but returns something else
+	// should contribute nothing, rather than a row of zeroes in the breakdown.
+	it("returns nothing for output that is not an agent result", () => {
+		expect(configuredAgentUsage(undefined)).toBeUndefined()
+		expect(configuredAgentUsage("done")).toBeUndefined()
+		expect(configuredAgentUsage({ text: "done" })).toBeUndefined()
+		expect(configuredAgentUsage({ usage: { inputTokens: 0, outputTokens: 0 } })).toBeUndefined()
+	})
+
+	// Older results, and any host that does not report one, still spent tokens.
+	it("keeps the tokens when the output names no model", () => {
+		expect(configuredAgentUsage({ usage: { inputTokens: 5, outputTokens: 1 } })).toMatchObject({
+			tokensIn: 5,
+			tokensOut: 1,
+		})
 	})
 })
