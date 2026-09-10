@@ -31,11 +31,11 @@ function cleanupMarkdownEscapes(markdown: string): string {
 }
 
 /**
- * Convert HTML to Markdown
+ * The pipeline, built once per call because `unified()` processors are not
+ * reusable across concurrent processing.
  */
-export async function convertHtmlToMarkdown(html: string): Promise<string> {
-	// Process the HTML to Markdown
-	const result = await unified()
+function markdownProcessor() {
+	return unified()
 		.use(rehypeParse as any, { fragment: true }) // Parse HTML fragments
 		.use(rehypeRemark as any) // Convert HTML to Markdown AST
 		.use(remarkStringify as any, {
@@ -50,9 +50,23 @@ export async function convertHtmlToMarkdown(html: string): Promise<string> {
 			escape: false,
 			entities: false,
 		})
-		.process(html)
+}
 
-	const md = String(result)
-	// Apply comprehensive cleanup of escape characters
-	return cleanupMarkdownEscapes(md)
+/**
+ * Convert HTML to Markdown, synchronously.
+ *
+ * Synchronous because the one caller is a `copy` event listener, and a listener
+ * that awaits has already let the event finish dispatching: `preventDefault()`
+ * after that point is a no-op, and the text has to reach `clipboardData` while
+ * the event is still live. Every plugin in the pipeline is synchronous, so
+ * `processSync` is available; it throws if that ever stops being true, which is
+ * the right way to find out.
+ */
+export function convertHtmlToMarkdownSync(html: string): string {
+	return cleanupMarkdownEscapes(String(markdownProcessor().processSync(html)))
+}
+
+/** The same conversion, for callers that are not on an event's clock. */
+export async function convertHtmlToMarkdown(html: string): Promise<string> {
+	return cleanupMarkdownEscapes(String(await markdownProcessor().process(html)))
 }
