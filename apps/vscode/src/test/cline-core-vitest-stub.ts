@@ -124,6 +124,10 @@ export {
 // Re-exported from source rather than stubbed: the session factory composes
 // its hook layers with it, so a fake would test the fake's composition.
 export { mergeAgentHooks } from "../../../../sdk/packages/core/src/hooks/hook-file-hooks"
+export {
+	DEFAULT_MAX_CHANGES,
+	DEFAULT_MAX_TRANSACTIONS,
+} from "../../../../sdk/packages/core/src/runtime/atomic/session-protocol"
 export { isPrivateModelCatalogProvider } from "../../../../sdk/packages/core/src/services/llms/provider-defaults"
 // Real implementation re-exported from the sdk source (same pattern as the
 // apply-patch executors below) so store writes are reflected in the live

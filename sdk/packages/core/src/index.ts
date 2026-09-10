@@ -1193,6 +1193,14 @@ export {
 	RUN_CHECK_TOOL_DESCRIPTION,
 	RUN_CHECK_TOOL_NAME,
 } from "./runtime/atomic/run-check-tool";
+// The protocol's budgets. Exported because the VS Code extension keeps a
+// stored copy of them and its copy is the one that wins -- it is passed to the
+// SDK unconditionally, so a default that disagrees here silently replaces the
+// one below. Its test imports these to prove they still agree.
+export {
+	DEFAULT_MAX_CHANGES,
+	DEFAULT_MAX_TRANSACTIONS,
+} from "./runtime/atomic/session-protocol";
 export {
 	applyClineFeaturedModels,
 	type ClineRecommendedModel,

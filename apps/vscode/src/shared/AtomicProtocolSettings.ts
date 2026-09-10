@@ -89,16 +89,25 @@ export interface AtomicProtocolSettings {
  * workspace in memory, which is not a bargain for a one-line edit — and a
  * feature that silently reverts a user's files is not one to turn on for them.
  *
- * Three changes and six transactions are the harness's numbers: measured there,
- * the fix landed in the first three transactions or not at all, and the limit
- * of three is what stopped a transaction from becoming a rewrite nobody could
- * judge.
+ * Six changes and six transactions. Six transactions is the harness's number:
+ * measured there, the fix landed in the first three or not at all.
+ *
+ * Changes was three, also from the harness, and it had to move for the same
+ * reason the SDK's `DEFAULT_MAX_CHANGES` did — a 9B session that made 56 edits
+ * against a ceiling of three, so the ceiling was not restraining the work, only
+ * making the declaration a fiction.
+ *
+ * These two numbers must agree. This one is the one that wins: it is a stored
+ * setting, and `vscode-session-host` passes it straight through, so an
+ * extension default of three would override the SDK constant on every task the
+ * extension runs — which is every task a user runs. `atomic-protocol-defaults.test.ts`
+ * is what fails when they drift apart.
  */
 export const DEFAULT_ATOMIC_PROTOCOL_SETTINGS: AtomicProtocolSettings = {
 	mode: "off",
 	oracleCommand: "",
 	oracleExpect: "",
-	maxChanges: 3,
+	maxChanges: 6,
 	maxTransactions: 6,
 	proposeCheck: true,
 	maxCheckProposals: 2,
