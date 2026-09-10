@@ -3,17 +3,14 @@ import type { AgentTool, AgentToolContext } from "@cline/shared"
 import { createVscodeBrowserDriver, isBrowserToolEnabled } from "@/hosts/vscode/browser-support"
 import { loadDocumentForDiagnostics, resolveLintCommand, runLintCommand } from "@/hosts/vscode/check-file-support"
 import { createVscodeCodeIntelProvider } from "@/hosts/vscode/code-intel-support"
-import {
-	isImageGenerationConfigured,
-	readImageGenerationEndpoint,
-	writeGeneratedImage,
-} from "@/hosts/vscode/image-generation-support"
+import { writeGeneratedImage } from "@/hosts/vscode/image-generation-support"
 import { createVscodeWorkspaceLister } from "@/hosts/vscode/list-files-support"
 import type { VscodeTerminalManager } from "@/hosts/vscode/terminal/VscodeTerminalManager"
 import type { McpHub } from "@/services/mcp/McpHub"
 import { resolveMcpServerTimeoutMs } from "@/services/mcp/timeout"
 import { Logger } from "@/shared/services/Logger"
 import { createCheckFileTool } from "./check-file-tool"
+import { isImageGenerationConfigured, readImageGenerationEndpoint } from "./image-generation-config"
 import { readQaCredentials } from "./qa-credentials-store"
 import type { SdkForegroundCommandCoordinator } from "./sdk-foreground-command-coordinator"
 import { createVscodeLmMcpTools } from "./vscode-lm-mcp-tools"

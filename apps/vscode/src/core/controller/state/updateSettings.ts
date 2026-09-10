@@ -88,6 +88,17 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		if (request.agentsModeApiConfiguration !== undefined) {
 			controller.stateManager.setGlobalState("agentsModeApiConfiguration", request.agentsModeApiConfiguration)
 		}
+		if (request.imageGenEnabled !== undefined) {
+			controller.stateManager.setGlobalState("imageGenEnabled", request.imageGenEnabled)
+		}
+		if (request.imageGenEndpoint !== undefined) {
+			controller.stateManager.setGlobalState("imageGenEndpoint", request.imageGenEndpoint)
+		}
+		// Write-only, and one direction only: the webview is never sent this
+		// back, so an empty string is the only way it can say "clear it".
+		if (request.imageGenApiKey !== undefined) {
+			controller.stateManager.setSecret("imageGenApiKey", request.imageGenApiKey.trim() || undefined)
+		}
 		if (request.apiConfigurationProfiles !== undefined) {
 			controller.stateManager.setGlobalState("apiConfigurationProfiles", request.apiConfigurationProfiles)
 		}

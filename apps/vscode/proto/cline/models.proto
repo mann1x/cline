@@ -18,6 +18,10 @@ service ModelsService {
   rpc getOllamaModelParameters(OllamaModelParametersRequest) returns (OllamaModelParameters);
   // Fetches available models from LM Studio
   rpc getLmStudioModels(StringRequest) returns (StringArray);
+  // Fetches the image models an OpenAI-compatible endpoint serves. The request
+  // carries the base URL; the key is read from secret storage here, because the
+  // settings view has never been told it.
+  rpc getImageGenerationModels(StringRequest) returns (StringArray);
   // Fetches available models from VS Code LM API
   rpc getVsCodeLmModels(EmptyRequest) returns (VsCodeLmModelsArray);
   // Refreshes and returns OpenRouter models

@@ -93,6 +93,56 @@ export interface ImageGenerationEndpoint {
 	size?: string;
 }
 
+/**
+ * The image models an OpenAI-compatible `/v1/models` listing offers.
+ *
+ * Every server answering that route returns `{data: [{id}]}`, and a plain one
+ * says nothing more -- so an entry that carries no hint is kept, because
+ * guessing which of a local server's models draws is worse than a longer list.
+ * Servers that do say get taken at their word: pollinations.ai returns 388
+ * models, of which 36 generate images, and a picker holding the other 352 is a
+ * picker nobody scrolls.
+ */
+export function selectImageGenerationModels(payload: unknown): string[] {
+	const data = (payload as { data?: unknown })?.data;
+	if (!Array.isArray(data)) {
+		return [];
+	}
+	const ids = new Set<string>();
+	for (const raw of data) {
+		const entry = raw as {
+			id?: unknown;
+			supported_endpoints?: unknown;
+			output_modalities?: unknown;
+		};
+		if (typeof entry?.id !== "string" || !entry.id.trim()) {
+			continue;
+		}
+		const endpoints = entry.supported_endpoints;
+		if (
+			Array.isArray(endpoints) &&
+			!endpoints.some(
+				(value) =>
+					typeof value === "string" && value.includes("images/generations"),
+			)
+		) {
+			continue;
+		}
+		// A model that generates images but is listed as producing video is a
+		// video model that happens to accept the route. Asking it for a picture
+		// gets a bill and an MP4.
+		const modalities = entry.output_modalities;
+		if (
+			Array.isArray(modalities) &&
+			!modalities.some((value) => value === "image")
+		) {
+			continue;
+		}
+		ids.add(entry.id.trim());
+	}
+	return [...ids].sort();
+}
+
 export interface GenerateImageToolOptions {
 	cwd: string;
 	getEndpoint: () => ImageGenerationEndpoint | undefined;
@@ -132,6 +182,18 @@ export function defaultImagePath(prompt: string, now: number): string {
 	);
 }
 
+/** What the bytes should be called, for the paths this tool chose itself. */
+export function extensionForMediaType(mediaType: string): string {
+	const subtype = mediaType.slice("image/".length);
+	if (subtype === "svg+xml") {
+		return ".svg";
+	}
+	if (subtype === "jpeg") {
+		return ".jpg";
+	}
+	return /^[a-z0-9]+$/.test(subtype) ? `.${subtype}` : ".png";
+}
+
 /**
  * Keep the written file inside the workspace.
  *
@@ -163,7 +225,13 @@ export function parseSize(size: unknown): string | undefined {
 }
 
 interface ImagesApiResponse {
-	data?: Array<{ b64_json?: string; url?: string; revised_prompt?: string }>;
+	data?: Array<{
+		b64_json?: string;
+		url?: string;
+		/** What the bytes actually are, when the server bothers to say. */
+		media_type?: string;
+		revised_prompt?: string;
+	}>;
 	error?: { message?: string } | string;
 }
 
@@ -174,6 +242,12 @@ interface ImagesApiResponse {
  * return a URL regardless, so both are handled. A response with neither is a
  * failure worth naming rather than an empty file.
  */
+/** `image/svg+xml; charset=utf-8` is a media type; the parameters are not. */
+function cleanMediaType(value: string | null | undefined): string | undefined {
+	const cleaned = value?.split(";")[0]?.trim().toLowerCase();
+	return cleaned?.startsWith("image/") ? cleaned : undefined;
+}
+
 export async function readGeneratedImage(
 	body: ImagesApiResponse,
 	fetchImpl: typeof fetch,
@@ -190,9 +264,12 @@ export async function readGeneratedImage(
 		};
 	}
 	if (entry.b64_json) {
+		// PNG is the assumption, not the rule: a vector model answers with an
+		// SVG in the same field, and calling that a PNG puts bytes no renderer
+		// will open in front of the model.
 		return {
 			data: Buffer.from(entry.b64_json, "base64"),
-			mediaType: "image/png",
+			mediaType: cleanMediaType(entry.media_type) ?? "image/png",
 		};
 	}
 	if (entry.url) {
@@ -210,10 +287,13 @@ export async function readGeneratedImage(
 				error: `The image endpoint returned a URL that could not be fetched (HTTP ${response.status}).`,
 			};
 		}
-		const mediaType = response.headers.get("content-type") ?? "image/png";
+		const mediaType =
+			cleanMediaType(response.headers.get("content-type")) ??
+			cleanMediaType(entry.media_type) ??
+			"image/png";
 		return {
 			data: Buffer.from(await response.arrayBuffer()),
-			mediaType: mediaType.split(";")[0].trim(),
+			mediaType,
 		};
 	}
 	return {
@@ -252,15 +332,16 @@ export function createGenerateImageTool(
 			if (!endpoint?.baseUrl || !endpoint.model) {
 				return (
 					"No image generation endpoint is configured, so no image was generated. " +
-					"The user sets `cline.imageGeneration.endpoint` and `cline.imageGeneration.model` in VS Code settings; " +
+					"The user names one on the Images tab of the API configuration settings; " +
 					"tell them that rather than trying again."
 				);
 			}
 
-			const requestedPath =
+			const askedPath =
 				typeof request.path === "string" && request.path.trim()
 					? request.path.trim()
-					: defaultImagePath(prompt, Date.now());
+					: undefined;
+			let requestedPath = askedPath ?? defaultImagePath(prompt, Date.now());
 			const absolutePath = resolveInsideWorkspace(options.cwd, requestedPath);
 			if (!absolutePath) {
 				return `\`${requestedPath}\` is outside the workspace. Save the image somewhere under the project.`;
@@ -311,7 +392,18 @@ export function createGenerateImageTool(
 					return image.error;
 				}
 
-				await options.writeFile(absolutePath, image.data);
+				// A path the model chose is the model's business, extension and
+				// all. One this tool made up says `.png` before anything knows
+				// what came back, and a vector model returns an SVG.
+				let writePath = absolutePath;
+				if (askedPath === undefined) {
+					const extension = extensionForMediaType(image.mediaType);
+					if (!requestedPath.endsWith(extension)) {
+						requestedPath = requestedPath.replace(/\.png$/, extension);
+						writePath = absolutePath.replace(/\.png$/, extension);
+					}
+				}
+				await options.writeFile(writePath, image.data);
 
 				const text =
 					`Generated and saved to \`${requestedPath}\`` +

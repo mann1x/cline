@@ -282,6 +282,11 @@ const USER_SETTINGS_FIELDS = {
 	// three that share a provider entry, and no way at all to give an agent a
 	// smaller model than the lead.
 	agentsModelEnabled: { default: false as boolean },
+	// Offer `generate_image`, pointed at an OpenAI-compatible images endpoint.
+	// Off by default and with nothing configured: there is no image endpoint on
+	// a machine until someone stands one up, and a tool that always fails is
+	// worse than an absent one.
+	imageGenEnabled: { default: false as boolean },
 	// Both of these hold JSON rather than a proto message. What they carry is a
 	// snapshot of the API configuration panel, and the panel's field list grows
 	// with every provider added — spelling it out here would mean a generated
@@ -296,6 +301,11 @@ const USER_SETTINGS_FIELDS = {
 	visionModeApiConfiguration: { default: "" as string },
 	/** JSON `ApiConfigurationSnapshot` for delegated agents. */
 	agentsModeApiConfiguration: { default: "" as string },
+	// JSON `{baseUrl, model, size}` naming where `generate_image` posts. Not an
+	// `ApiConfigurationSnapshot`: what is being configured is an endpoint, not a
+	// second model in the conversation, and the provider list a snapshot carries
+	// has no image models in it. The key is not here -- it is a secret.
+	imageGenEndpoint: { default: "" as string },
 	enableCheckpointsSetting: { default: true as boolean },
 	shellIntegrationTimeout: { default: 4000 as number },
 	// 0 means "unset": the SDK's own DEFAULT_MAX_TOOL_RESULT_CHARS applies.
@@ -414,6 +424,10 @@ const SECRETS_KEYS = [
 	// setting because the settings snapshot travels to the webview as one
 	// `state_json` string, and these must never be in it.
 	"qaCredentials",
+	// The key for the image endpoint. A secret for the same reason: the settings
+	// snapshot travels to the webview as one `state_json` string, and this must
+	// never be in it. The webview is told whether one is set, and nothing else.
+	"imageGenApiKey",
 	"openai-codex-oauth-credentials", // JSON blob containing OAuth tokens for OpenAI Codex (ChatGPT subscription)
 	"wandbApiKey",
 ] as const
@@ -457,7 +471,7 @@ export type RemoteConfigFields = GlobalStateAndSettings & RemoteConfigExtra
  * exact leak the feature exists to prevent. These are stored the same way and
  * left out of the API configuration, because they are not one.
  */
-export const NonApiHandlerSecretKeys = new Set<string>(["qaCredentials"])
+export const NonApiHandlerSecretKeys = new Set<string>(["qaCredentials", "imageGenApiKey"])
 
 export type Secrets = { [K in (typeof SecretKeys)[number]]: string | undefined }
 export type LocalState = { [K in (typeof LocalStateKeys)[number]]: ClineRulesToggles }

@@ -15,6 +15,7 @@ import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
 import type { ExtensionState, Platform } from "@shared/ExtensionMessage"
 import { ClineEnv } from "@/config"
 import { ExtensionRegistryInfo } from "@/registry"
+import { readImageGenerationApiKey } from "@/sdk/image-generation-config"
 import { readQaCredentialNames } from "@/sdk/qa-credentials-store"
 import { BannerService } from "@/services/banner/BannerService"
 import { featureFlagsService } from "@/services/feature-flags"
@@ -70,6 +71,8 @@ export async function getStateToPostToWebview(controller: {
 	const visionModeApiConfiguration = stateManager.getGlobalSettingsKey("visionModeApiConfiguration")
 	const agentsModelEnabled = stateManager.getGlobalSettingsKey("agentsModelEnabled")
 	const agentsModeApiConfiguration = stateManager.getGlobalSettingsKey("agentsModeApiConfiguration")
+	const imageGenEnabled = stateManager.getGlobalSettingsKey("imageGenEnabled")
+	const imageGenEndpoint = stateManager.getGlobalSettingsKey("imageGenEndpoint")
 	const editVerificationSettings = stateManager.getGlobalSettingsKey("editVerificationSettings")
 	const atomicProtocolSettings = stateManager.getGlobalSettingsKey("atomicProtocolSettings")
 	const apiConfigurationProfiles = stateManager.getGlobalSettingsKey("apiConfigurationProfiles")
@@ -167,6 +170,11 @@ export async function getStateToPostToWebview(controller: {
 		visionModeApiConfiguration,
 		agentsModelEnabled,
 		agentsModeApiConfiguration,
+		imageGenEnabled,
+		imageGenEndpoint,
+		// Whether a key is stored, never the key: this object is serialised into
+		// the one `state_json` string the webview holds.
+		imageGenApiKeySet: readImageGenerationApiKey() !== undefined,
 		editVerificationSettings,
 		atomicProtocolSettings,
 		// Names only. The values live in secret storage and never travel with

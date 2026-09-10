@@ -9,7 +9,6 @@ export default defineConfig({
 		include: [
 			"src/sdk/**/*.test.ts",
 			"src/hosts/vscode/VscodeEditPreview.test.ts",
-			"src/hosts/vscode/image-generation-support.test.ts",
 			"src/shared/atomic-protocol-defaults.test.ts",
 			"src/hosts/vscode/terminal/terminal-output-fallback.test.ts",
 			"src/hosts/vscode/terminal/ansiUtils.test.ts",

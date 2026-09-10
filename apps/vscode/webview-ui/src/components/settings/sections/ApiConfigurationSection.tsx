@@ -9,6 +9,7 @@ import AgentsModelTab from "../AgentsModelTab"
 import ApiConfigProfileBar from "../ApiConfigProfileBar"
 import ApiOptions from "../ApiOptions"
 import { SettingsCheckbox } from "../common/SettingsCheckbox"
+import ImageGenModelTab from "../ImageGenModelTab"
 import Section from "../Section"
 import { syncModeConfigurations } from "../utils/providerUtils"
 import { useApiConfigurationHandlers } from "../utils/useApiConfigurationHandlers"
@@ -24,7 +25,25 @@ interface ApiConfigurationSectionProps {
  * Neither the Vision nor the Agents tab is a `Mode`: each configures a second
  * model rather than a mode of the session's.
  */
-type ConfigTab = Mode | "vision" | "agents"
+type ConfigTab = Mode | "vision" | "agents" | "imagegen"
+
+/** Whether the stored image endpoint names both a URL and a model. */
+function isImageEndpointComplete(raw: string): boolean {
+	if (!raw) {
+		return false
+	}
+	try {
+		const parsed = JSON.parse(raw) as { baseUrl?: unknown; model?: unknown }
+		return (
+			typeof parsed?.baseUrl === "string" &&
+			parsed.baseUrl.trim() !== "" &&
+			typeof parsed?.model === "string" &&
+			parsed.model.trim() !== ""
+		)
+	} catch {
+		return false
+	}
+}
 
 const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiConfigurationSectionProps) => {
 	const {
@@ -33,6 +52,8 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 		visionModeApiConfiguration,
 		agentsModelEnabled,
 		agentsModeApiConfiguration,
+		imageGenEnabled,
+		imageGenEndpoint,
 		mode,
 		apiConfiguration,
 	} = useExtensionState()
@@ -45,21 +66,32 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 	// enabled toggle over a tab that names nothing is a setting that silently
 	// does not apply.
 	const agentsUnconfigured = resolveScopedModelStatus(agentsModelEnabled, agentsModeApiConfiguration) === "unconfigured"
+	// And of the image endpoint, where the consequence is quieter and so worth
+	// stating louder: the tool is simply not offered, so the model never learns
+	// it could have made a picture and the user sees no error at all.
+	// Read from the stored record rather than `resolveScopedModelStatus`, which
+	// knows about provider snapshots and this is not one.
+	const imageGenUnconfigured = imageGenEnabled && !isImageEndpointComplete(imageGenEndpoint)
 	const [currentTab, setCurrentTab] = useState<ConfigTab>(mode)
 	const { handleFieldsChange } = useApiConfigurationHandlers()
 
 	// A tab can be turned off while it is showing; fall back rather than render
 	// a configuration the user can no longer see the toggle for.
-	const scopedTabOff = (currentTab === "vision" && !visionModelEnabled) || (currentTab === "agents" && !agentsModelEnabled)
+	const scopedTabOff =
+		(currentTab === "vision" && !visionModelEnabled) ||
+		(currentTab === "agents" && !agentsModelEnabled) ||
+		(currentTab === "imagegen" && !imageGenEnabled)
 	const activeTab: ConfigTab = scopedTabOff ? mode : currentTab
-	const showTabs = planActSeparateModelsSetting || visionModelEnabled || agentsModelEnabled
-	// One profile list for every tab; only the target changes with the tab.
+	const showTabs = planActSeparateModelsSetting || visionModelEnabled || agentsModelEnabled || imageGenEnabled
+	// One profile list for every tab; only the target changes with the tab. The
+	// Images tab is not in it: a profile is a provider and a model for a
+	// conversation, and that tab configures neither.
 	const profileScope: ApiConfigurationProfileScope =
 		activeTab === "vision"
 			? { kind: "vision" }
 			: activeTab === "agents"
 				? { kind: "agents" }
-				: { kind: "mode", mode: activeTab }
+				: { kind: "mode", mode: activeTab === "imagegen" ? mode : activeTab }
 
 	return (
 		<div>
@@ -138,6 +170,18 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 									Agents
 								</TabButton>
 							) : null}
+							{imageGenEnabled ? (
+								<TabButton
+									disabled={activeTab === "imagegen"}
+									isActive={activeTab === "imagegen"}
+									onClick={() => setCurrentTab("imagegen")}
+									style={{
+										opacity: 1,
+										cursor: "pointer",
+									}}>
+									Images
+								</TabButton>
+							) : null}
 						</div>
 
 						{/* Content container */}
@@ -146,6 +190,8 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 								<VisionModelTab />
 							) : activeTab === "agents" ? (
 								<AgentsModelTab />
+							) : activeTab === "imagegen" ? (
+								<ImageGenModelTab />
 							) : (
 								<ApiOptions currentMode={activeTab} initialModelTab={initialModelTab} showModelOptions={true} />
 							)}
@@ -165,7 +211,9 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 								if (!checked) {
 									await syncModeConfigurations(
 										apiConfiguration,
-										activeTab === "vision" || activeTab === "agents" ? mode : activeTab,
+										activeTab === "vision" || activeTab === "agents" || activeTab === "imagegen"
+											? mode
+											: activeTab,
 										handleFieldsChange,
 									)
 								}
@@ -242,6 +290,36 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 						<p className="text-xs mt-[5px] text-(--vscode-errorForeground)">
 							The Agents tab does not name both a provider and a model, so delegated agents keep running on the
 							session's model. Pick a provider <em>and</em> a model on the Agents tab.
+						</p>
+					) : null}
+				</div>
+
+				<div className="mb-[5px]">
+					<SettingsCheckbox
+						checked={imageGenEnabled}
+						className="mb-[5px]"
+						onChange={async (checked: boolean) => {
+							try {
+								await StateServiceClient.updateSettings(
+									UpdateSettingsRequest.create({ imageGenEnabled: checked }),
+								)
+							} catch (error) {
+								console.error("Failed to update image generation setting:", error)
+								throw error
+							}
+						}}>
+						Use an endpoint for image generation
+					</SettingsCheckbox>
+					<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
+						Offers the <code>generate_image</code> tool, which turns a description into a picture and saves it into
+						the workspace — an app icon, a placeholder sprite, a mockup of a layout before it is built. The Images tab
+						names where to generate them: any endpoint serving the OpenAI images API, local or hosted. Nothing is
+						called until the model asks for a picture.
+					</p>
+					{imageGenUnconfigured ? (
+						<p className="text-xs mt-[5px] text-(--vscode-errorForeground)">
+							The Images tab does not name both an endpoint and a model, so the tool is not offered at all and the
+							model is never told it could make one. Fill in both on the Images tab.
 						</p>
 					) : null}
 				</div>

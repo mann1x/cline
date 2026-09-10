@@ -92,6 +92,12 @@ export interface ExtensionState {
 	agentsModelEnabled: boolean
 	/** JSON `ApiConfigurationSnapshot` for delegated agents. */
 	agentsModeApiConfiguration: string
+	/** Whether `generate_image` is offered, pointed at the endpoint below. */
+	imageGenEnabled: boolean
+	/** JSON `{baseUrl, model, size}` naming where `generate_image` posts. */
+	imageGenEndpoint: string
+	/** Whether a key is stored for that endpoint. Never the key itself. */
+	imageGenApiKeySet: boolean
 	/** Whether a run may finish with a file it changed and never checked. */
 	editVerificationSettings: EditVerificationSettings
 	/** Whether a task runs as judged, revertible transactions. */

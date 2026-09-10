@@ -2,11 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	createGenerateImageTool,
 	defaultImagePath,
+	extensionForMediaType,
 	type ImageGenerationEndpoint,
 	normalizeBaseUrl,
 	parseSize,
 	readGeneratedImage,
 	resolveInsideWorkspace,
+	selectImageGenerationModels,
 } from "./image-generation";
 
 const PNG_BASE64 = Buffer.from("not really a png").toString("base64");
@@ -239,7 +241,7 @@ describe("createGenerateImageTool", () => {
 			{ endpoint: null, writeFile },
 		);
 
-		expect(output as string).toContain("cline.imageGeneration.endpoint");
+		expect(output as string).toContain("Images tab");
 		expect(writeFile).not.toHaveBeenCalled();
 	});
 
@@ -269,5 +271,79 @@ describe("createGenerateImageTool", () => {
 		expect((await run({ prompt: "   " })) as string).toContain(
 			"needs a `prompt`",
 		);
+	});
+});
+
+describe("selectImageGenerationModels", () => {
+	// A plain OpenAI-compatible server says nothing beyond the id, and guessing
+	// which of a local server's models draws is worse than a longer list.
+	it("keeps every entry a bare listing offers", () => {
+		expect(
+			selectImageGenerationModels({
+				data: [{ id: "sd-xl" }, { id: "flux" }, { id: "" }, { nope: 1 }],
+			}),
+		).toEqual(["flux", "sd-xl"]);
+	});
+
+	// pollinations.ai lists 388 models, 36 of which draw. A picker holding the
+	// other 352 is a picker nobody scrolls.
+	it("takes a server that declares its routes at its word", () => {
+		expect(
+			selectImageGenerationModels({
+				data: [
+					{
+						id: "tongyi-mai/z-image-turbo",
+						supported_endpoints: [
+							"/v1/images/generations",
+							"/v1/chat/completions",
+						],
+						output_modalities: ["image"],
+					},
+					{
+						id: "openai/gpt-5.4-nano",
+						supported_endpoints: ["/v1/chat/completions"],
+						output_modalities: ["text"],
+					},
+				],
+			}),
+		).toEqual(["tongyi-mai/z-image-turbo"]);
+	});
+
+	// A video model that accepts the images route is still a video model.
+	// Asking it for a picture gets a bill and an MP4.
+	it("drops a model that draws nothing", () => {
+		expect(
+			selectImageGenerationModels({
+				data: [
+					{
+						id: "alibaba/wan-3.0",
+						supported_endpoints: ["/v1/images/generations"],
+						output_modalities: ["video"],
+					},
+				],
+			}),
+		).toEqual([]);
+	});
+
+	it("is empty for anything that is not a listing", () => {
+		expect(selectImageGenerationModels(undefined)).toEqual([]);
+		expect(selectImageGenerationModels({ data: "nope" })).toEqual([]);
+		expect(selectImageGenerationModels({})).toEqual([]);
+	});
+});
+
+describe("extensionForMediaType", () => {
+	// A vector model answers with an SVG in the same field a raster one uses,
+	// and a `.png` holding SVG is a file nothing opens.
+	it("names the file after what came back", () => {
+		expect(extensionForMediaType("image/svg+xml")).toBe(".svg");
+		expect(extensionForMediaType("image/jpeg")).toBe(".jpg");
+		expect(extensionForMediaType("image/webp")).toBe(".webp");
+		expect(extensionForMediaType("image/png")).toBe(".png");
+	});
+
+	it("falls back rather than building a name out of punctuation", () => {
+		expect(extensionForMediaType("image/vnd.adobe.photoshop")).toBe(".png");
+		expect(extensionForMediaType("image/")).toBe(".png");
 	});
 });

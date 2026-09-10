@@ -108,6 +108,7 @@ message Secrets {
   optional string openai_codex_oauth_credentials = 48;
   optional string wandb_api_key = 50;
   optional string qa_credentials = 51;
+  optional string image_gen_api_key = 52;
 }
 
 // NOTE: Add new fields under API_HANDLER_SETTINGS_FIELDS or USER_SETTINGS_FIELDS
@@ -303,6 +304,8 @@ message Settings {
   optional string agents_mode_api_configuration = 199;
   optional string atomic_protocol_settings = 200;
   optional bool show_request_timings = 201;
+  optional bool image_gen_enabled = 202;
+  optional string image_gen_endpoint = 203;
 }
 
 message State {
@@ -461,6 +464,11 @@ message UpdateSettingsRequest {
   optional string capped_thinking_prompt = 54;
   optional bool agents_model_enabled = 55;
   optional string agents_mode_api_configuration = 56;
+  optional bool image_gen_enabled = 62;
+  optional string image_gen_endpoint = 63;
+  // Write-only, and travelling in this direction only: an empty string clears
+  // the stored key, and an unset field leaves it alone.
+  optional string image_gen_api_key = 64;
   optional EditVerificationSettings edit_verification_settings = 57;
   // A change to the stored set. Sent only when the user edits it; values
   // travel in this direction and never the other.
