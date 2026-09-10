@@ -3,6 +3,69 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createFileReadExecutor, readTextWindowFromText } from "./file-read";
+import { createReadLedger } from "./unchanged-reads";
+
+describe("createFileReadExecutor with a read ledger", () => {
+	const ctx = { agentId: "a", conversationId: "c", iteration: 1 };
+
+	async function withFile(
+		body: string,
+		run: (dir: string, file: string) => Promise<void>,
+	) {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "agents-read-ledger-"));
+		try {
+			const file = path.join(dir, "game.html");
+			await fs.writeFile(file, body, "utf-8");
+			await run(dir, file);
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	}
+
+	// End to end, not just the ledger: the executor must actually swap the
+	// content for the notice.
+	it("answers an unchanged second read with a notice", async () => {
+		await withFile("const a = 1;\nconst b = 2;\n", async (_dir, file) => {
+			const readFile = createFileReadExecutor({
+				readLedger: createReadLedger(),
+			});
+
+			const first = (await readFile({ path: file }, ctx)) as string;
+			const second = (await readFile({ path: file }, ctx)) as string;
+
+			expect(first).toContain("const a = 1;");
+			expect(second).toContain("has not changed");
+			expect(second).not.toContain("const a = 1;");
+		});
+	});
+
+	// The case that must never be suppressed: the file really did change.
+	it("returns the content again after the file changes", async () => {
+		await withFile("before\n", async (_dir, file) => {
+			const readFile = createFileReadExecutor({
+				readLedger: createReadLedger(),
+			});
+
+			await readFile({ path: file }, ctx);
+			await fs.writeFile(file, "after\n", "utf-8");
+			const third = (await readFile({ path: file }, ctx)) as string;
+
+			expect(third).toContain("after");
+		});
+	});
+
+	// Without a ledger, byte-for-byte what it did before.
+	it("repeats the content when no ledger is wired", async () => {
+		await withFile("unchanged\n", async (_dir, file) => {
+			const readFile = createFileReadExecutor();
+
+			const first = (await readFile({ path: file }, ctx)) as string;
+			const second = (await readFile({ path: file }, ctx)) as string;
+
+			expect(second).toBe(first);
+		});
+	});
+});
 
 describe("createFileReadExecutor", () => {
 	it("reads a file from an absolute path", async () => {

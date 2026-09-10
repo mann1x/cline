@@ -19,6 +19,7 @@ import {
 } from "./file-read";
 import { createReadReceipts, type ReadReceipts } from "./read-receipts";
 import { createSearchExecutor, type SearchExecutorOptions } from "./search";
+import { createReadLedger } from "./unchanged-reads";
 import {
 	createWebFetchExecutor,
 	type WebFetchExecutorOptions,
@@ -48,6 +49,11 @@ export {
 	type RunningCommandRegistration,
 } from "./run-command-execution-controller";
 export { createSearchExecutor, type SearchExecutorOptions } from "./search";
+export {
+	createReadLedger,
+	REFRESH_EVERY,
+	type ReadLedger,
+} from "./unchanged-reads";
 export {
 	createWebFetchExecutor,
 	type WebFetchExecutorOptions,
@@ -109,8 +115,15 @@ export function createDefaultExecutors(
 	// are useless apart, so they are wired together here rather than left to
 	// each caller to remember.
 	const receipts = options.receipts ?? createReadReceipts();
+	// Per session, like the receipts: what makes a re-read redundant is that
+	// the earlier copy is still in this conversation.
+	const readLedger = options.fileRead?.readLedger ?? createReadLedger();
 	return {
-		readFile: createFileReadExecutor({ ...options.fileRead, receipts }),
+		readFile: createFileReadExecutor({
+			...options.fileRead,
+			receipts,
+			readLedger,
+		}),
 		search: createSearchExecutor(options.search),
 		bash: createDefaultShellExecutor(options.bash),
 		webFetch: createWebFetchExecutor(options.webFetch),

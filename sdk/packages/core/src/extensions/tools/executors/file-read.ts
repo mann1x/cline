@@ -19,6 +19,7 @@ import {
 	MAX_READ_OUTPUT_CHARS,
 } from "./output-limits";
 import type { ReadReceipts } from "./read-receipts";
+import type { ReadLedger } from "./unchanged-reads";
 
 const IMAGE_MEDIA_TYPES = new Map<string, string>([
 	[".gif", "image/gif"],
@@ -32,6 +33,13 @@ const IMAGE_MEDIA_TYPES = new Map<string, string>([
  * Options for the file read executor
  */
 export interface FileReadExecutorOptions {
+	/**
+	 * Ledger of what has already been returned, so an unchanged re-read can be
+	 * answered with a pointer instead of a second copy. Omit and every read
+	 * returns the content, which is the behaviour this had before.
+	 */
+	readLedger?: ReadLedger;
+
 	/**
 	 * Maximum file size to read in bytes
 	 * @default 10_000_000 (10MB)
@@ -79,13 +87,15 @@ export interface FileReadExecutorOptions {
 	receipts?: ReadReceipts;
 }
 
-// `receipts` and `cwd` are deliberately outside the defaults: there is no
+// `receipts`, `cwd` and `readLedger` are deliberately outside the defaults: there is no
 // sensible default registry, and its absence is what turns the read-before-edit
 // guard off for a standalone executor. `cwd` is absent rather than defaulted so
 // that "nobody told us the workspace" stays distinguishable from "the workspace
 // is the process's directory", which is the distinction the fix rests on.
+// `readLedger` is absent for the same reason as `receipts`: without one, every
+// read returns the content, which is what a standalone executor should do.
 const DEFAULT_FILE_READ_OPTIONS: Required<
-	Omit<FileReadExecutorOptions, "receipts" | "cwd">
+	Omit<FileReadExecutorOptions, "receipts" | "cwd" | "readLedger">
 > = {
 	maxFileSizeBytes: 10_000_000, // 10MB default limit
 	encoding: "utf-8", // Default to UTF-8 encoding
@@ -329,7 +339,7 @@ async function readTextWindow(
 export function createFileReadExecutor(
 	options: FileReadExecutorOptions = {},
 ): FileReadExecutor {
-	const { receipts, cwd } = options;
+	const { receipts, cwd, readLedger } = options;
 	const { maxFileSizeBytes, encoding, includeLineNumbers } = {
 		...DEFAULT_FILE_READ_OPTIONS,
 		...options,
@@ -404,7 +414,19 @@ export function createFileReadExecutor(
 		if (window.lastLine >= window.firstLine) {
 			receipts?.noteRead(resolvedPath, window.firstLine, window.lastLine);
 		}
-		return window.text;
+		// Receipts are recorded either way above: a model told the file has not
+		// changed has still seen these lines in this conversation, and refusing
+		// its next edit for not having read them would be false.
+		const unchanged = readLedger?.noticeFor(
+			{
+				path: resolvedPath,
+				firstLine: window.firstLine,
+				lastLine: window.lastLine,
+				withLineNumbers,
+			},
+			window.text,
+		);
+		return unchanged ?? window.text;
 	};
 }
 
