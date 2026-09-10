@@ -373,6 +373,14 @@ export type SubagentExecutionStatus = "pending" | "running" | "completed" | "fai
 
 export interface SubagentStatusItem {
 	index: number
+	/**
+	 * What the lead called this sub-agent, when it called it anything.
+	 *
+	 * Optional all the way down: `spawn_agent`'s `name` is optional, older
+	 * transcripts have none, and a sub-agent without one is still shown -- by
+	 * its index, which is what every sub-agent had before.
+	 */
+	agentName?: string
 	prompt: string
 	status: SubagentExecutionStatus
 	toolCalls: number
@@ -422,6 +430,12 @@ export interface ClineAskUseMcpServer {
 
 export interface ClineAskUseSubagents {
 	prompts: string[]
+	/**
+	 * Names positionally matching `prompts`, so the approval row can show the
+	 * same tags the status row will. `null` where the lead named nothing --
+	 * this is a JSON payload, and an array hole serializes to null.
+	 */
+	names?: (string | null)[]
 }
 
 export interface ClinePlanModeResponse {

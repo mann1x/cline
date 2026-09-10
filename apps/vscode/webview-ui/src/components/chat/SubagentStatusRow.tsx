@@ -17,6 +17,7 @@ import {
 } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import MarkdownBlock from "../common/MarkdownBlock"
+import { subagentIdentity } from "./subagentIdentity"
 
 interface SubagentStatusRowProps {
 	message: ClineMessage
@@ -88,10 +89,12 @@ function parseSubagentRowData(message: ClineMessage): SubagentRowData | null {
 				return null
 			}
 
+			const names = Array.isArray(parsed.names) ? parsed.names : []
 			return {
 				status: "pending",
 				items: prompts.map((prompt, index) => ({
 					index: index + 1,
+					...(names[index] ? { agentName: names[index] } : {}),
 					prompt,
 					status: "pending",
 					toolCalls: 0,
@@ -226,6 +229,7 @@ export default function SubagentStatusRow({ message, isLast, lastModifiedMessage
 						(entry.result && entry.status === "completed") || (entry.error && entry.status === "failed"),
 					)
 					const isExpanded = expandedItems[entry.index] === true
+					const identity = subagentIdentity(entry.index, entry.agentName)
 					const isStreamingPromptUnderConstruction =
 						isPromptConstructionRow && message.partial === true && index === data.items.length - 1
 					const shouldShowStats = !isStreamingPromptUnderConstruction
@@ -239,6 +243,12 @@ export default function SubagentStatusRow({ message, isLast, lastModifiedMessage
 							<div className="flex items-start gap-2">
 								{statusIcon(displayStatus)}
 								<div className="min-w-0 flex-1">
+									<span
+										className="inline-block mb-1 px-1.5 py-[1px] rounded-xs border text-[10px] font-medium text-foreground align-middle"
+										style={identity.style}
+										title={`Sub-agent ${entry.index}`}>
+										{identity.label}
+									</span>
 									<SubagentPromptText
 										isExpanded={expandedPrompts[entry.index] === true}
 										onShowMore={() => expandPrompt(entry.index)}

@@ -438,9 +438,11 @@ export class MessageTranslatorState {
 	private spawnAgentNextIndex = 0
 
 	/** Register a new spawn_agent call. Returns the entry for this call. */
-	addSpawnAgent(toolCallId: string, prompt: string): SubagentStatusItem {
+	addSpawnAgent(toolCallId: string, prompt: string, agentName?: string): SubagentStatusItem {
+		const trimmedName = agentName?.trim()
 		const entry: SubagentStatusItem = {
 			index: ++this.spawnAgentNextIndex,
+			...(trimmedName ? { agentName: trimmedName } : {}),
 			prompt,
 			status: "running",
 			toolCalls: 0,
@@ -1626,15 +1628,20 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 						const parsedInput = parseToolInput(input)
 						const taskPrompt = getStringField(parsedInput, "task") ?? ""
 						const callId = event.toolCallId ?? `spawn-${state.nextTs()}`
-						state.addSpawnAgent(callId, taskPrompt)
+						state.addSpawnAgent(callId, taskPrompt, getStringField(parsedInput, "name"))
 						if (approvedToolMessageTs !== undefined) {
 							state.setSpawnAgentPromptsTs(approvedToolMessageTs)
 						}
 
 						// Emit the combined prompts list (replaces itself on each new spawn_agent)
-						const allPrompts = state.getSpawnAgentItems().map((e) => e.prompt)
+						const spawnedSoFar = state.getSpawnAgentItems()
 						const approvalPayload: ClineAskUseSubagents = {
-							prompts: allPrompts,
+							prompts: spawnedSoFar.map((e) => e.prompt),
+							// Only when at least one was named -- an all-undefined
+							// array in every transcript buys nothing.
+							...(spawnedSoFar.some((e) => e.agentName)
+								? { names: spawnedSoFar.map((e) => e.agentName ?? null) }
+								: {}),
 						}
 						messages.push({
 							ts: state.getSpawnAgentPromptsTs(),

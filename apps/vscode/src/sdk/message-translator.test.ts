@@ -4577,6 +4577,71 @@ describe("summarizeSubagentUsageByProvider", () => {
 })
 
 // ---------------------------------------------------------------------------
+// spawn_agent identity
+// ---------------------------------------------------------------------------
+
+describe("spawn_agent names", () => {
+	const spawn = (state: MessageTranslatorState, toolCallId: string, input: Record<string, unknown>) =>
+		translateSessionEvent(
+			{
+				type: "agent_event",
+				payload: {
+					sessionId: "session-1",
+					event: {
+						type: "content_start",
+						contentType: "tool",
+						toolName: "spawn_agent",
+						toolCallId,
+						input,
+					} as AgentEvent,
+				},
+			},
+			state,
+		)
+
+	// Anonymous sub-agents were told apart only by the prompt quoted back at
+	// them, which is exactly what stops working when two of them are doing
+	// similar work at once.
+	it("carries the lead's name onto the status item", () => {
+		const state = new MessageTranslatorState()
+		spawn(state, "call-1", { systemPrompt: "you test", task: "run the suite", name: "tests" })
+
+		expect(state.getSpawnAgentItems()[0]).toMatchObject({ index: 1, agentName: "tests" })
+	})
+
+	it("leaves the name off when the model did not give one", () => {
+		const state = new MessageTranslatorState()
+		spawn(state, "call-1", { systemPrompt: "you test", task: "run the suite" })
+		spawn(state, "call-2", { systemPrompt: "you doc", task: "write docs", name: "   " })
+
+		expect(state.getSpawnAgentItems()[0].agentName).toBeUndefined()
+		expect(state.getSpawnAgentItems()[1].agentName).toBeUndefined()
+	})
+
+	// The approval row and the status row render the same sub-agents, so a
+	// name that only reached one of them would change on approval.
+	it("puts the names on the approval payload, positionally", () => {
+		const state = new MessageTranslatorState()
+		spawn(state, "call-1", { systemPrompt: "a", task: "first" })
+		const result = spawn(state, "call-2", { systemPrompt: "b", task: "second", name: "docs" })
+
+		const payload = JSON.parse(result.messages[0].text ?? "{}")
+		expect(payload.prompts).toEqual(["first", "second"])
+		// `null`, not a hole: this crosses the wire as JSON.
+		expect(payload.names).toEqual([null, "docs"])
+	})
+
+	// An all-undefined array in every transcript that never names an agent
+	// buys nothing and has to be tolerated by the reader anyway.
+	it("omits the names entirely when no sub-agent was named", () => {
+		const state = new MessageTranslatorState()
+		const result = spawn(state, "call-1", { systemPrompt: "a", task: "first" })
+
+		expect(JSON.parse(result.messages[0].text ?? "{}").names).toBeUndefined()
+	})
+})
+
+// ---------------------------------------------------------------------------
 // configuredAgentUsage
 // ---------------------------------------------------------------------------
 

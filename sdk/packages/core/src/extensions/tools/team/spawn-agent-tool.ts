@@ -32,6 +32,21 @@ export const SpawnAgentInputSchema = z.object({
 		.string()
 		.describe("System prompt defining the sub-agent's behavior"),
 	task: z.string().describe("Task for the sub-agent to complete"),
+	/**
+	 * What to call this sub-agent in the UI.
+	 *
+	 * Spawned sub-agents are otherwise anonymous: the interface can only
+	 * number them and quote their prompts back, which is unreadable once
+	 * several are running at once. The caller knows what each one is for, so
+	 * it is the caller that names them. Optional, because a run whose model
+	 * ignores the field must still work.
+	 */
+	name: z
+		.string()
+		.optional()
+		.describe(
+			"Short label for this sub-agent, shown in the UI (e.g. 'tests', 'docs', 'api-review'). A few words at most.",
+		),
 });
 
 export type SpawnAgentInput = z.infer<typeof SpawnAgentInputSchema>;
@@ -134,7 +149,8 @@ export function createSpawnAgentTool(
 		description:
 			"Spawn a sub-agent with a custom system prompt for specialized tasks. Use when delegating work that benefits from focused expertise. " +
 			"Output: `{text, iterations, finishReason, usage: {inputTokens, outputTokens}}`. " +
-			"`text` is the sub-agent's final answer and the only part you need: it worked in its own context, so nothing it read or edited is visible to you except through `text`. It has already finished by the time you see this — there is nothing to poll and nothing to await.",
+			"`text` is the sub-agent's final answer and the only part you need: it worked in its own context, so nothing it read or edited is visible to you except through `text`. It has already finished by the time you see this — there is nothing to poll and nothing to await. " +
+			"Give each sub-agent a short `name`: when several run at once it is the only thing telling their progress apart on screen.",
 		inputSchema: zodToJsonSchema(SpawnAgentInputSchema),
 		execute: async (input, context) => {
 			const tools = config.createSubAgentTools
