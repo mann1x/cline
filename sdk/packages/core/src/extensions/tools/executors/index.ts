@@ -19,7 +19,6 @@ import {
 } from "./file-read";
 import { createReadReceipts, type ReadReceipts } from "./read-receipts";
 import { createSearchExecutor, type SearchExecutorOptions } from "./search";
-import { createReadLedger } from "./unchanged-reads";
 import {
 	createWebFetchExecutor,
 	type WebFetchExecutorOptions,
@@ -115,15 +114,13 @@ export function createDefaultExecutors(
 	// are useless apart, so they are wired together here rather than left to
 	// each caller to remember.
 	const receipts = options.receipts ?? createReadReceipts();
-	// Per session, like the receipts: what makes a re-read redundant is that
-	// the earlier copy is still in this conversation.
-	const readLedger = options.fileRead?.readLedger ?? createReadLedger();
+	// The read ledger is NOT wired by default, deliberately. Suppressing a copy
+	// on the grounds that the model "already has it" is a claim about the
+	// conversation that compaction can falsify, and re-reading is part of how
+	// these models work. A host that wants it passes its own through
+	// `fileRead.readLedger`; without one, every read returns the content.
 	return {
-		readFile: createFileReadExecutor({
-			...options.fileRead,
-			receipts,
-			readLedger,
-		}),
+		readFile: createFileReadExecutor({ ...options.fileRead, receipts }),
 		search: createSearchExecutor(options.search),
 		bash: createDefaultShellExecutor(options.bash),
 		webFetch: createWebFetchExecutor(options.webFetch),
