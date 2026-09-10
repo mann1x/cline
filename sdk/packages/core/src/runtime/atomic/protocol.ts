@@ -129,6 +129,13 @@ export function buildProtocolPrompt(input: ProtocolPromptInput): string {
 			"",
 			`Once it is approved, \`${RUN_CHECK_TOOL_NAME}\` runs it against the files as they stand, as often as you want. It settles nothing and rolls nothing back. Run it before you edit and after each change: a check you only meet at the end is one that can only throw the transaction away.`,
 			"",
+			// Same rule as the oracle branch, and needed here for a sharper
+			// reason: the approved check is already the model's own program, so
+			// "write a program to decide" is the move it has just been rewarded
+			// for. What is ruled out is a *second* one, run instead of the
+			// approved one, which is the substitution without the approval.
+			`Once a check is approved it is the only one that counts. Another program you write is not it and cannot take its place — approval is what makes a check the standard, and a program you wrote afterwards can only tell you what you already believe. A small helper to locate the fault is fine; if you have written more than one, or you are editing a helper rather than the file this task is about, stop and run \`${RUN_CHECK_TOOL_NAME}\`.`,
+			"",
 			`If no check is agreed, say plainly when you are done whether the change achieved what was asked and how you know. Answering "yes" because the edit applied is not knowing. If you cannot tell, say that instead — ${label} is then discarded and you get another transaction rather than a change nobody verified.`,
 		);
 	} else {

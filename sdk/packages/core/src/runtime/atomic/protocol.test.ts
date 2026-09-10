@@ -249,9 +249,27 @@ describe("the stuck host check notice", () => {
 		expect(prompt).toContain("more than one helper");
 	});
 
+	// The propose branch needs it for a sharper reason than the oracle branch:
+	// the approved check is itself a program the model wrote, so "write a
+	// program to decide" is the move it has just been rewarded for. What is
+	// ruled out is a second one, run instead of the approved one.
+	it("rules it out for a proposed check too, once approved", () => {
+		const prompt = buildProtocolPrompt({
+			transaction: 1,
+			maxChanges: 3,
+			maxTransactions: 6,
+			canProposeCheck: true,
+			history: [],
+		});
+
+		expect(prompt).toContain("the only one that counts");
+		expect(prompt).toContain("cannot take its place");
+		expect(prompt).toContain("more than one");
+	});
+
 	// It is a rule about a named check, so it must not appear where the model
-	// is the check -- there is nothing there to substitute for, and the
-	// sentence would forbid the only thing such a run can do.
+	// is the check and cannot name one -- there is nothing there to substitute
+	// for, and the sentence would forbid the only thing such a run can do.
 	it("says nothing about helpers when no check exists", () => {
 		const selfChecked = buildProtocolPrompt({
 			transaction: 1,
