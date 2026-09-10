@@ -248,6 +248,44 @@ function cleanMediaType(value: string | null | undefined): string | undefined {
 	return cleaned?.startsWith("image/") ? cleaned : undefined;
 }
 
+/**
+ * What the bytes are, according to the bytes.
+ *
+ * Trusted ahead of anything the server said, because most say nothing and one
+ * of them is wrong: `gen.pollinations.ai` answers `/v1/images/generations` with
+ * a JPEG in `b64_json` and no `media_type` at all. Assuming PNG there writes
+ * JPEG bytes into a `.png` and tells the model it is looking at a PNG.
+ */
+export function sniffMediaType(data: Buffer): string | undefined {
+	const starts = (...bytes: number[]) =>
+		bytes.every((byte, index) => data[index] === byte);
+	if (starts(0xff, 0xd8, 0xff)) {
+		return "image/jpeg";
+	}
+	if (starts(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)) {
+		return "image/png";
+	}
+	if (starts(0x47, 0x49, 0x46, 0x38)) {
+		return "image/gif";
+	}
+	// `RIFF....WEBP`, the length in between being anything.
+	if (
+		starts(0x52, 0x49, 0x46, 0x46) &&
+		data.subarray(8, 12).toString() === "WEBP"
+	) {
+		return "image/webp";
+	}
+	if (starts(0x42, 0x4d)) {
+		return "image/bmp";
+	}
+	// SVG is text, and may open with a declaration, a comment or the tag.
+	const head = data.subarray(0, 256).toString("utf8").trimStart();
+	if (head.startsWith("<?xml") || head.startsWith("<svg")) {
+		return head.includes("<svg") ? "image/svg+xml" : undefined;
+	}
+	return undefined;
+}
+
 export async function readGeneratedImage(
 	body: ImagesApiResponse,
 	fetchImpl: typeof fetch,
@@ -265,11 +303,14 @@ export async function readGeneratedImage(
 	}
 	if (entry.b64_json) {
 		// PNG is the assumption, not the rule: a vector model answers with an
-		// SVG in the same field, and calling that a PNG puts bytes no renderer
-		// will open in front of the model.
+		// SVG in the same field, and pollinations.ai answers with a JPEG and
+		// says nothing. Calling either one a PNG puts bytes no renderer will
+		// open in front of the model.
+		const data = Buffer.from(entry.b64_json, "base64");
 		return {
-			data: Buffer.from(entry.b64_json, "base64"),
-			mediaType: cleanMediaType(entry.media_type) ?? "image/png",
+			data,
+			mediaType:
+				sniffMediaType(data) ?? cleanMediaType(entry.media_type) ?? "image/png",
 		};
 	}
 	if (entry.url) {
@@ -287,13 +328,14 @@ export async function readGeneratedImage(
 				error: `The image endpoint returned a URL that could not be fetched (HTTP ${response.status}).`,
 			};
 		}
-		const mediaType =
-			cleanMediaType(response.headers.get("content-type")) ??
-			cleanMediaType(entry.media_type) ??
-			"image/png";
+		const data = Buffer.from(await response.arrayBuffer());
 		return {
-			data: Buffer.from(await response.arrayBuffer()),
-			mediaType,
+			data,
+			mediaType:
+				sniffMediaType(data) ??
+				cleanMediaType(response.headers.get("content-type")) ??
+				cleanMediaType(entry.media_type) ??
+				"image/png",
 		};
 	}
 	return {

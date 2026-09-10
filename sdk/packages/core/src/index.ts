@@ -1118,6 +1118,7 @@ export {
 	readGeneratedImage,
 	resolveInsideWorkspace,
 	selectImageGenerationModels,
+	sniffMediaType,
 } from "./extensions/tools/image-generation";
 // The workspace lister, and the tool that reads it. Both hosts install this:
 // the reflex it displaces -- `ls`, `dir /s` -- is not VS Code's, it is any

@@ -9,6 +9,7 @@ import {
 	readGeneratedImage,
 	resolveInsideWorkspace,
 	selectImageGenerationModels,
+	sniffMediaType,
 } from "./image-generation";
 
 const PNG_BASE64 = Buffer.from("not really a png").toString("base64");
@@ -345,5 +346,44 @@ describe("extensionForMediaType", () => {
 	it("falls back rather than building a name out of punctuation", () => {
 		expect(extensionForMediaType("image/vnd.adobe.photoshop")).toBe(".png");
 		expect(extensionForMediaType("image/")).toBe(".png");
+	});
+});
+
+describe("sniffMediaType", () => {
+	// The case that made this necessary: gen.pollinations.ai answers
+	// `/v1/images/generations` with a JPEG in `b64_json` and no `media_type`.
+	it("reads a JPEG that nothing declared", () => {
+		expect(
+			sniffMediaType(Buffer.from([0xff, 0xd8, 0xff, 0xe1, 0x02, 0x3d])),
+		).toBe("image/jpeg");
+	});
+
+	it("reads the formats an image endpoint actually returns", () => {
+		expect(
+			sniffMediaType(
+				Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+			),
+		).toBe("image/png");
+		expect(sniffMediaType(Buffer.from("GIF89a"))).toBe("image/gif");
+		expect(
+			sniffMediaType(Buffer.from("RIFF\u0000\u0000\u0000\u0000WEBPVP8 ")),
+		).toBe("image/webp");
+		expect(sniffMediaType(Buffer.from("BM_______"))).toBe("image/bmp");
+		expect(
+			sniffMediaType(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" />')),
+		).toBe("image/svg+xml");
+		expect(
+			sniffMediaType(Buffer.from('<?xml version="1.0"?><svg width="1"/>')),
+		).toBe("image/svg+xml");
+	});
+
+	// Nothing recognised means fall through to what the server said, not a
+	// confident wrong answer.
+	it("says nothing about bytes it does not recognise", () => {
+		expect(sniffMediaType(Buffer.from("not an image at all"))).toBeUndefined();
+		expect(sniffMediaType(Buffer.from([]))).toBeUndefined();
+		expect(
+			sniffMediaType(Buffer.from('<?xml version="1.0"?><rss/>')),
+		).toBeUndefined();
 	});
 });
