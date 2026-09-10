@@ -68,3 +68,15 @@ export {
 	describeReasoningLoop,
 	ReasoningLoopGuard,
 } from "./reasoning-loop-guard";
+export type {
+	ReasoningRepetitionConfig,
+	RepetitionMeasurement,
+	RepetitionNudger,
+} from "./reasoning-repetition";
+export {
+	createRepetitionNudger,
+	DEFAULT_REASONING_REPETITION,
+	describeRepetition,
+	isRepetitionLoop,
+	measureReasoningRepetition,
+} from "./reasoning-repetition";

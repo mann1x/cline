@@ -38,23 +38,14 @@
  * for a while and then getting there is a thing these models do.
  */
 
-/** Thresholds, all set from measurement rather than intuition. */
-export interface ReasoningRepetitionConfig {
-	/** Blocks shorter than this are never judged. */
-	minChars: number;
-	/** A paragraph must be at least this long to be counted at all. */
-	minParagraphChars: number;
-	/** Sentence words needed before a paragraph counts as prose. */
-	minStopwords: number;
-	/** How many times one paragraph must recur. The user's "at least 4". */
-	maxRepeatTrip: number;
-	/** What share of counted paragraphs must be duplicates. */
-	duplicateFractionTrip: number;
-	/** Turns that must pass between two nudges. */
-	cooldownTurns: number;
-	/** Most nudges in one run, ever. */
-	maxNudges: number;
-}
+import type { ReasoningRepetitionConfig } from "@cline/shared";
+
+/**
+ * The shape lives in `@cline/shared` so a host can set it through
+ * `execution.reasoningRepetition` without depending on this package; the
+ * thresholds live here, with the measurements that set them.
+ */
+export type { ReasoningRepetitionConfig };
 
 export const DEFAULT_REASONING_REPETITION: ReasoningRepetitionConfig = {
 	minChars: 4000,
@@ -62,11 +53,14 @@ export const DEFAULT_REASONING_REPETITION: ReasoningRepetitionConfig = {
 	minStopwords: 3,
 	maxRepeatTrip: 4,
 	duplicateFractionTrip: 0.25,
-	// A nudge is itself pressure on a small model, so it is rationed: at most
-	// one every few turns and a handful per run. The point is to interrupt a
-	// cycle once, not to narrate it.
+	// One per run, matching `DEFAULT_MAX_NO_TOOL_CALL_NUDGES` next door and for
+	// the reason measured there: on a 438-message session the model was nudged,
+	// answered, was nudged again with the identical text, and answered with the
+	// same sentence. The second nudge has never once changed an outcome. The
+	// cooldown therefore almost never binds -- it is kept so that a host that
+	// raises the budget does not get two in consecutive turns.
 	cooldownTurns: 3,
-	maxNudges: 3,
+	maxNudges: 1,
 };
 
 const STOPWORDS =

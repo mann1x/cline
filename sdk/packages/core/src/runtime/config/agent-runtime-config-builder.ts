@@ -144,6 +144,9 @@ export function createAgentRuntimeConfig(
 		// inside the model stream, which is the only place that can cut a request
 		// mid-draw, so the runtime has to carry the setting itself.
 		reasoningLoopDetection: agentConfig.execution?.reasoningLoopDetection,
+		// Same reason: the nudge is issued from inside the turn loop, so the
+		// runtime is the only thing that can carry the setting.
+		reasoningRepetition: agentConfig.execution?.reasoningRepetition,
 		toolExecution,
 		toolPolicies: agentConfig.toolPolicies,
 		toolContextMetadata: input.toolContextMetadata,

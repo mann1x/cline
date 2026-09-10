@@ -63,6 +63,11 @@ import {
 	ReasoningLoopGuard,
 	type ReasoningLoopVerdict,
 } from "./reasoning-loop-guard";
+import {
+	createRepetitionNudger,
+	DEFAULT_REASONING_REPETITION,
+	type RepetitionNudger,
+} from "./reasoning-repetition";
 
 const MAX_TOKENS_INCOMPLETE_TURN_MESSAGE =
 	"Model reached the maximum output token limit before completing the turn";
@@ -688,6 +693,29 @@ function textFromMessage(message: AgentMessage | undefined): string {
 		.join("");
 }
 
+/**
+ * The turn's reasoning as one block.
+ *
+ * Joined with a blank line because the repetition measure counts paragraphs,
+ * and two reasoning parts are two paragraphs, never one run-on.
+ */
+function reasoningTextInMessage(message: AgentMessage | undefined): string {
+	if (!message) {
+		return "";
+	}
+	const blocks: string[] = [];
+	for (const part of message.content) {
+		if (part.type !== "reasoning") {
+			continue;
+		}
+		const text = (part as { text?: unknown }).text;
+		if (typeof text === "string" && text.length > 0) {
+			blocks.push(text);
+		}
+	}
+	return blocks.join("\n\n");
+}
+
 /** How much reasoning a turn produced, for the streak the run is measured on. */
 function reasoningCharsInMessage(message: AgentMessage | undefined): number {
 	if (!message) {
@@ -825,6 +853,13 @@ export class AgentRuntime {
 	 * announcing is allowed to end, and it is worth exactly once.
 	 */
 	private intentNudgeSpent = false;
+	/**
+	 * The self-repetition nudger, built on first use because `this.config` is
+	 * not assigned yet when field initialisers run. It stays `undefined` when
+	 * the host turned the guard off.
+	 */
+	private repetitionNudger: RepetitionNudger | undefined;
+	private repetitionNudgerBuilt = false;
 	/**
 	 * A message arrived mid-run and the model has not been asked to resume yet.
 	 *
@@ -1079,6 +1114,41 @@ export class AgentRuntime {
 		return unparsed
 			? buildUnparsedToolCallNudge(unparsed)
 			: NO_TOOL_CALL_NUDGE_MESSAGE;
+	}
+
+	/**
+	 * The nudge for a turn whose reasoning re-derives what it already concluded,
+	 * or nothing.
+	 *
+	 * On unless the host passes `reasoningRepetition: false`, matching the
+	 * streaming guard rather than the silence budget: this one never ends a turn
+	 * and never cuts a draw, it appends one paragraph, and across 3,229 recorded
+	 * blocks from 21 model families it fires on 1.2% of them.
+	 *
+	 * Deliberately not gated on `nudgesEnabled` here. That gate answers "does a
+	 * silent turn end the run", which is a different question -- the silent path
+	 * applies it at the call site, and the tool-calling path, where the run
+	 * continues either way, does not.
+	 */
+	private repetitionNudgeFor(
+		message: AgentMessage | undefined,
+	): string | undefined {
+		if (!this.repetitionNudgerBuilt) {
+			this.repetitionNudgerBuilt = true;
+			const setting = this.config.reasoningRepetition;
+			this.repetitionNudger =
+				setting === false
+					? undefined
+					: createRepetitionNudger({
+							...DEFAULT_REASONING_REPETITION,
+							...setting,
+						});
+		}
+		const reasoning = reasoningTextInMessage(message);
+		if (!reasoning) {
+			return undefined;
+		}
+		return this.repetitionNudger?.inspect(reasoning, this.state.iteration);
 	}
 
 	/** Whether this host asks a silent turn to continue at all. */
@@ -1543,14 +1613,18 @@ export class AgentRuntime {
 						this.consecutiveNoToolCallTurns = 0;
 						this.noToolCallStreakReasoningChars = 0;
 					}
-					const completionReminderMessages =
-						this.getCompletionReminderMessages();
-					if (completionReminderMessages.length > 0) {
-						for (const reminderMessage of completionReminderMessages) {
-							await this.addUserReminderMessage(reminderMessage);
-						}
-						continue;
-					}
+					// Every handler below asks the model for something different, and
+					// a turn can be wrong in more than one way at once. They are all
+					// collected and all delivered, in the order they are evaluated,
+					// because a nudge that is needed does not stop being needed just
+					// because another one also fired. Picking a single winner meant
+					// the losers were silently dropped and, since each spent flag is
+					// set only when its message is sent, re-evaluated turn after turn
+					// -- the run was told one thing at a time about a turn that was
+					// wrong in three ways. Only the completion boundary stays a
+					// single winner, below, and for a reason of its own.
+					const reminders: string[] = [];
+					reminders.push(...this.getCompletionReminderMessages());
 					// A message sent while the run was going answers to the user, and
 					// answering it is a turn with nothing to call — which is how a run
 					// ends. Measured: asked "how many lines is manic_miner.html?" in
@@ -1559,26 +1633,14 @@ export class AgentRuntime {
 					// by hand. Nobody interjecting a question means "and stop".
 					if (this.steerAwaitingResume) {
 						this.steerAwaitingResume = false;
-						await this.addUserReminderMessage(STEER_RESUME_REMINDER);
-						continue;
+						reminders.push(STEER_RESUME_REMINDER);
 					}
 					const finalText = textFromMessage(finalAssistantMessage);
 					const noToolCallNudge = this.getNoToolCallNudgeMessage(finalText);
 					if (noToolCallNudge) {
 						this.consecutiveNoToolCallNudges += 1;
-						await this.addUserReminderMessage(noToolCallNudge);
-						continue;
+						reminders.push(noToolCallNudge);
 					}
-					// The nudge budget is spent, but a model that answered it by
-					// announcing more work has not answered it -- it restated the
-					// plan, which is the behaviour the nudge exists to catch. Once
-					// per run, and never for a model that says it is done: that one
-					// has answered, and repeating the question at it is the waste
-					// the budget of one was measured to prevent.
-					//
-					// An extension of the nudge policy, never a way around it: a
-					// host with the budget at zero has said a silent turn ends the
-					// run, and this must not be a second door into the same room.
 					// The silence budget is spent, but this turn was not silence: the
 					// model emitted a call and the provider could not read it. Ending
 					// here reports as the run's answer a block that never ran, which
@@ -1593,21 +1655,25 @@ export class AgentRuntime {
 							: unparsedToolCallInText(finalText);
 					if (unparsedCall) {
 						this.unparsedCallNudgeSpent = true;
-						await this.addUserReminderMessage(
-							buildUnparsedToolCallNudge(unparsedCall),
-						);
-						continue;
+						reminders.push(buildUnparsedToolCallNudge(unparsedCall));
 					}
+					// The nudge budget is spent, but a model that answered it by
+					// announcing more work has not answered it -- it restated the
+					// plan, which is the behaviour the nudge exists to catch. Once
+					// per run, and never for a model that says it is done: that one
+					// has answered, and repeating the question at it is the waste
+					// the budget of one was measured to prevent.
+					//
+					// An extension of the nudge policy, never a way around it: a
+					// host with the budget at zero has said a silent turn ends the
+					// run, and this must not be a second door into the same room.
 					const announcement =
 						this.intentNudgeSpent || !this.nudgesEnabled()
 							? undefined
 							: announcedIntentWithoutActing(finalText);
 					if (announcement) {
 						this.intentNudgeSpent = true;
-						await this.addUserReminderMessage(
-							buildAnnouncedIntentNudge(announcement),
-						);
-						continue;
+						reminders.push(buildAnnouncedIntentNudge(announcement));
 					}
 					// The run has thought for several turns and done nothing, and
 					// none of the handlers above saw it: each one looks at the last
@@ -1617,12 +1683,32 @@ export class AgentRuntime {
 					// beyond "no work has come out of this for a while".
 					if (this.shouldNudgeNonConvergence()) {
 						this.nonConvergenceNudgeSpent = true;
-						await this.addUserReminderMessage(
+						reminders.push(
 							buildNonConvergenceNudge(
 								this.consecutiveNoToolCallTurns,
 								this.noToolCallStreakReasoningChars,
 							),
 						);
+					}
+					// Gated on `nudgesEnabled` on this path only: a host with the
+					// budget at zero has said a silent turn ends the run, and a
+					// reminder appended here would keep it alive. The tool-calling
+					// path carries no such risk and is not gated.
+					const silentRepetition = this.nudgesEnabled()
+						? this.repetitionNudgeFor(message)
+						: undefined;
+					if (silentRepetition) {
+						reminders.push(silentRepetition);
+					}
+					if (reminders.length > 0) {
+						// Deduped by text, order kept: `getNoToolCallNudgeMessage`
+						// already answers an unreadable tool call with the unparsed
+						// nudge, so those two handlers can produce the same paragraph
+						// on one turn -- and saying the same thing twice in one breath
+						// is the exact failure the last of these guards complains about.
+						for (const reminder of new Set(reminders)) {
+							await this.addUserReminderMessage(reminder);
+						}
 						continue;
 					}
 					// Last, and only once nothing else wants the turn: everything above
@@ -1723,6 +1809,17 @@ export class AgentRuntime {
 						result,
 					});
 					return result;
+				}
+				// A looping turn that still calls tools is the shape every
+				// turn-level detector is blind to: measured on `kessj` message 30,
+				// one paragraph written seven times in sixty-five, and the turn
+				// emitted a tool call, so the run read as productive. Reached only
+				// once the turn is otherwise going to continue, so it appends to a
+				// turn that was carrying on anyway and can never keep a finished
+				// run alive.
+				const repetition = this.repetitionNudgeFor(finalAssistantMessage);
+				if (repetition) {
+					await this.addUserReminderMessage(repetition);
 				}
 			}
 

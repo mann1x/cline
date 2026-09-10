@@ -696,6 +696,13 @@ export interface AgentRuntimeConfig {
 	reasoningLoopDetection?:
 		| false
 		| Partial<import("./agents/types").ReasoningLoopDetectionConfig>;
+	/**
+	 * Verbatim self-repetition nudge on the model's reasoning channel; see
+	 * `ReasoningRepetitionConfig`. On by default, `false` disables it.
+	 */
+	reasoningRepetition?:
+		| false
+		| Partial<import("./agents/types").ReasoningRepetitionConfig>;
 	toolExecution?: "sequential" | "parallel";
 	toolPolicies?: Record<string, ToolPolicy>;
 	toolContextMetadata?: Record<string, unknown>;

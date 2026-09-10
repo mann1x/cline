@@ -313,6 +313,18 @@ export interface AgentExecutionConfig {
 	 * pass a partial config to retune it.
 	 */
 	reasoningLoopDetection?: false | Partial<ReasoningLoopDetectionConfig>;
+	/**
+	 * Verbatim self-repetition nudge on the model's reasoning channel. Where
+	 * `reasoningLoopDetection` cuts a collapsed draw mid-stream, this reads the
+	 * finished block and, at most once per run, tells the model which of its own
+	 * conclusions it keeps re-deriving. It never cuts and never ends a turn.
+	 *
+	 * On by default, for the same reason as the guard above: it fires on 1.2% of
+	 * recorded blocks, so the cost of leaving it on is close to nothing and a
+	 * guard nobody enabled protects nobody. Set to `false` to turn it off, or
+	 * pass a partial config to retune it.
+	 */
+	reasoningRepetition?: false | Partial<ReasoningRepetitionConfig>;
 }
 
 /**
@@ -348,6 +360,34 @@ export interface ReasoningLoopDetectionConfig {
 	 * bound that too.
 	 */
 	maxConsecutiveTrips: number;
+}
+
+/**
+ * Thresholds for the verbatim self-repetition nudge.
+ *
+ * The guard above catches a reasoning channel that has *collapsed*. This
+ * catches something milder and, on the recorded corpora, far more common: a
+ * model re-deriving the same conclusion in fresh-looking prose, paragraph
+ * after paragraph, while still calling tools. The defaults live with the
+ * detector (`DEFAULT_REASONING_REPETITION` in `@cline/agents`) and were set
+ * against 1,556 recorded reasoning blocks plus 3,229 blocks drawn from 21
+ * model families in the harness logs.
+ */
+export interface ReasoningRepetitionConfig {
+	/** Blocks shorter than this are never judged. */
+	minChars: number;
+	/** A paragraph must be at least this long to be counted at all. */
+	minParagraphChars: number;
+	/** Sentence words needed before a paragraph counts as prose. */
+	minStopwords: number;
+	/** How many times one paragraph must recur. */
+	maxRepeatTrip: number;
+	/** What share of counted paragraphs must be duplicates. */
+	duplicateFractionTrip: number;
+	/** Turns that must pass between two nudges. */
+	cooldownTurns: number;
+	/** Most nudges in one run, ever. */
+	maxNudges: number;
 }
 
 // =============================================================================
@@ -1152,6 +1192,20 @@ export const AgentConfigSchema = z.object({
 						phraseMaxPeriod: z.number().int().positive().optional(),
 						phraseMinCycles: z.number().int().positive().optional(),
 						maxConsecutiveTrips: z.number().int().positive().optional(),
+					}),
+				])
+				.optional(),
+			reasoningRepetition: z
+				.union([
+					z.literal(false),
+					z.object({
+						minChars: z.number().int().positive().optional(),
+						minParagraphChars: z.number().int().positive().optional(),
+						minStopwords: z.number().int().nonnegative().optional(),
+						maxRepeatTrip: z.number().int().positive().optional(),
+						duplicateFractionTrip: z.number().min(0).max(1).optional(),
+						cooldownTurns: z.number().int().nonnegative().optional(),
+						maxNudges: z.number().int().nonnegative().optional(),
 					}),
 				])
 				.optional(),

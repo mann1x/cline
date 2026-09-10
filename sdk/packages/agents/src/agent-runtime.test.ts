@@ -1279,22 +1279,16 @@ describe("AgentRuntime", () => {
 				return `edited: ${input.path}`;
 			},
 		};
+		let secondRequestMessages: AgentMessage[] | undefined;
 		const model = new ScriptedModel([
 			() => [
 				{ type: "text-delta", text: "I will use multiple editor calls" },
 				{ type: "finish", reason: "stop" },
 			],
 			(request) => {
-				const reminder = request.messages.at(-1);
-				expect(reminder?.role).toBe("user");
-				expect(
-					reminder?.content.some(
-						(part) =>
-							part.type === "text" &&
-							part.text.includes("contained no tool calls"),
-					),
-				).toBe(true);
-				expect(reminder?.metadata?.userRunSpan).toBe(0);
+				// Captured, not asserted: a throw inside the script is swallowed
+				// and surfaces as `status: "failed"` with no useful message.
+				secondRequestMessages = request.messages;
 				return [
 					{
 						type: "tool-call-delta",
@@ -1333,6 +1327,18 @@ describe("AgentRuntime", () => {
 		// model then did the work it had only described.
 		expect(result.outputText).toBe("Done");
 		expect(model.requests.length).toBeGreaterThanOrEqual(3);
+		// That turn was wrong in two ways at once -- it called nothing, and it
+		// announced work instead of doing it -- so it was told both, in the
+		// order the handlers run, rather than one now and one a turn later.
+		const reminders = (secondRequestMessages ?? [])
+			.slice(-2)
+			.flatMap((message) =>
+				message.content.flatMap((part) =>
+					part.type === "text" ? [part.text] : [],
+				),
+			);
+		expect(reminders[0]).toContain("contained no tool calls");
+		expect(reminders[1]).toContain("I will use multiple editor calls");
 	});
 
 	/**
@@ -1380,13 +1386,17 @@ describe("AgentRuntime", () => {
 
 		await runtime.run("Fix the file");
 
-		// Three: the original turn, the generic nudge, and the intent nudge.
-		expect(model.requests).toHaveLength(3);
+		// Two: the original turn, then one request carrying both nudges. They
+		// answer the same turn, so they are sent together -- the run no longer
+		// spends a turn delivering them one at a time, and the model is told
+		// everything that was wrong with the turn it just took.
+		expect(model.requests).toHaveLength(2);
 		const lastPrompt = JSON.stringify(model.requests.at(-1)?.messages ?? []);
 		// It quotes the model its own sentence rather than repeating the text
 		// it has already ignored once.
-		expect(lastPrompt).toContain("I'll start by reading the file.");
+		expect(lastPrompt).toContain("Let me propose a check, then fix them.");
 		expect(lastPrompt).toContain("called nothing");
+		expect(lastPrompt).toContain("contained no tool calls");
 	});
 
 	it("never sends the intent nudge to a model that says it is finished", async () => {
@@ -1430,9 +1440,10 @@ describe("AgentRuntime", () => {
 
 		await runtime.run("Fix the file");
 
-		// A model that announces forever still ends: original, generic nudge,
-		// intent nudge, stop.
-		expect(model.requests).toHaveLength(3);
+		// A model that announces forever still ends, and now a turn sooner:
+		// original, one request carrying both nudges, stop. Both budgets are
+		// spent by the turn that earned them, so nothing is left to say.
+		expect(model.requests).toHaveLength(2);
 	});
 
 	it("sends no intent nudge when the host has nudging switched off", async () => {
@@ -4591,8 +4602,8 @@ describe("when the vision model cannot describe an image", () => {
 
 	function sentImageParts(model: ScriptedModel): number {
 		return model.requests
-			.at(-1)!
-			.messages.flatMap((message) => message.content)
+			.at(-1)
+			?.messages.flatMap((message) => message.content)
 			.filter((part) => part.type === "image").length;
 	}
 
@@ -4890,5 +4901,138 @@ describe("AgentRuntime sdk.error reporting", () => {
 			handled: false,
 			error_message: "Model returned empty response",
 		});
+	});
+
+	/**
+	 * The turn-level blind spot. Measured on pandorum session
+	 * `1789026721979_kessj`, assistant message 30: one paragraph written seven
+	 * times in sixty-five, and the turn emitted a tool call -- so every
+	 * turn-level detector saw a productive turn, and the streaming guard next
+	 * door was blind to it too (14 distinct lines against a threshold of 4).
+	 */
+	const LOOPING_REASONING = [
+		...Array(7).fill(
+			"Actually, I think I found it! In JavaScript, `Math.random()` is a function call that returns a number between 0 and 1. These should all be fine. Let me look more carefully...",
+		),
+		...Array(5).fill(
+			"The parser sees a function call and then a comparison operator, so that part of the code is fine.",
+		),
+		...Array(5).fill(
+			"But if the code has something like a comparison without a space, the parser might read it differently.",
+		),
+		...Array(4).fill(
+			"Let me look at the code more carefully to find the missing parenthesis.",
+		),
+		...Array.from(
+			{ length: 33 },
+			(_, index) =>
+				`This is a distinct paragraph number ${index} and it needs to be long enough to be counted at all by the measurement.`,
+		),
+	].join("\n\n");
+
+	const echoTool: AgentTool<{ path: string }, string> = {
+		name: "read_file",
+		description: "Read a file",
+		inputSchema: { type: "object" },
+		async execute(input) {
+			return `read: ${input.path}`;
+		},
+	};
+
+	const callsATool = (reasoning: string) => () => [
+		{ type: "reasoning-delta" as const, text: reasoning },
+		{
+			type: "tool-call-delta" as const,
+			toolCallId: "call_read",
+			toolName: "read_file",
+			inputText: '{"path":"/tmp/x.ts"}',
+		},
+		{ type: "finish" as const, reason: "tool-calls" as const },
+	];
+
+	it("tells a looping turn it is looping even though it called a tool", async () => {
+		const model = new ScriptedModel([
+			callsATool(LOOPING_REASONING),
+			() => [
+				{ type: "text-delta" as const, text: "Done" },
+				{ type: "finish" as const, reason: "stop" as const },
+			],
+		]);
+		const runtime = new AgentRuntime({ model, tools: [echoTool] });
+
+		await runtime.run("Fix the file");
+
+		const lastPrompt = JSON.stringify(model.requests.at(-1)?.messages ?? []);
+		// Quoted back its own sentence, with the count, because the useful
+		// information is *which* thought it is stuck on.
+		expect(lastPrompt).toContain("7 times");
+		expect(lastPrompt).toContain("I think I found it");
+		// ...and it nudged. The tool call still ran and its result is there.
+		expect(lastPrompt).toContain("read: /tmp/x.ts");
+	});
+
+	it("says nothing to a turn whose reasoning never repeats", async () => {
+		const healthy = Array.from(
+			{ length: 60 },
+			(_, index) =>
+				`This is a distinct paragraph number ${index} and it needs to be long enough to be counted at all by the measurement.`,
+		).join("\n\n");
+		const model = new ScriptedModel([
+			callsATool(healthy),
+			() => [
+				{ type: "text-delta" as const, text: "Done" },
+				{ type: "finish" as const, reason: "stop" as const },
+			],
+		]);
+		const runtime = new AgentRuntime({ model, tools: [echoTool] });
+
+		await runtime.run("Fix the file");
+
+		const lastPrompt = JSON.stringify(model.requests.at(-1)?.messages ?? []);
+		expect(lastPrompt).not.toContain("word for word");
+	});
+
+	// One per run, the same budget and the same measured reason as the silence
+	// nudge: the second has never changed an outcome.
+	it("spends the repetition nudge once per run", async () => {
+		const model = new ScriptedModel([
+			callsATool(LOOPING_REASONING),
+			callsATool(LOOPING_REASONING),
+			callsATool(LOOPING_REASONING),
+			callsATool(LOOPING_REASONING),
+			() => [
+				{ type: "text-delta" as const, text: "Done" },
+				{ type: "finish" as const, reason: "stop" as const },
+			],
+		]);
+		const runtime = new AgentRuntime({ model, tools: [echoTool] });
+
+		await runtime.run("Fix the file");
+
+		// The last request carries the whole history, so each reminder ever
+		// added appears in it exactly once. Counting across every request would
+		// count one message four times.
+		const history = JSON.stringify(model.requests.at(-1)?.messages ?? []);
+		expect(history.split("word for word").length - 1).toBe(1);
+	});
+
+	it("stays out of the way when the host switches it off", async () => {
+		const model = new ScriptedModel([
+			callsATool(LOOPING_REASONING),
+			() => [
+				{ type: "text-delta" as const, text: "Done" },
+				{ type: "finish" as const, reason: "stop" as const },
+			],
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			tools: [echoTool],
+			reasoningRepetition: false,
+		});
+
+		await runtime.run("Fix the file");
+
+		const lastPrompt = JSON.stringify(model.requests.at(-1)?.messages ?? []);
+		expect(lastPrompt).not.toContain("word for word");
 	});
 });

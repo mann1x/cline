@@ -168,24 +168,33 @@ describe("describeRepetition", () => {
 describe("createRepetitionNudger", () => {
 	// A nudge is pressure on a small model. It may interrupt a cycle; it must
 	// not narrate one.
-	it("rations nudges by cooldown", () => {
+	// One per run by default, the same budget and the same measured reason as
+	// `DEFAULT_MAX_NO_TOOL_CALL_NUDGES`: the second nudge has never changed an
+	// outcome. A run that loops all day is told once.
+	it("spends one nudge per run and then stays quiet", () => {
 		const nudger = createRepetitionNudger();
+
+		expect(DEFAULT_REASONING_REPETITION.maxNudges).toBe(1);
+		expect(nudger.inspect(LOOP, 1)).toBeDefined();
+		for (const turn of [4, 7, 10, 13, 16, 100]) {
+			expect(nudger.inspect(LOOP, turn)).toBeUndefined();
+		}
+		expect(nudger.spent).toBe(1);
+	});
+
+	// The cooldown almost never binds at a budget of one, but a host that
+	// raises the budget must not get two nudges in consecutive turns.
+	it("rations a raised budget by cooldown", () => {
+		const nudger = createRepetitionNudger({
+			...DEFAULT_REASONING_REPETITION,
+			maxNudges: 3,
+		});
 
 		expect(nudger.inspect(LOOP, 1)).toBeDefined();
 		expect(nudger.inspect(LOOP, 2)).toBeUndefined();
 		expect(nudger.inspect(LOOP, 3)).toBeUndefined();
 		expect(nudger.inspect(LOOP, 4)).toBeDefined();
 		expect(nudger.spent).toBe(2);
-	});
-
-	it("stops after the run's budget is spent", () => {
-		const nudger = createRepetitionNudger();
-		for (const turn of [1, 4, 7, 10, 13, 16]) {
-			nudger.inspect(LOOP, turn);
-		}
-
-		expect(nudger.spent).toBe(DEFAULT_REASONING_REPETITION.maxNudges);
-		expect(nudger.inspect(LOOP, 100)).toBeUndefined();
 	});
 
 	it("stays silent on healthy reasoning however long", () => {
