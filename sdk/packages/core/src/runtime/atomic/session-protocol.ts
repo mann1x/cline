@@ -3,6 +3,8 @@ import type { CoreAtomicProtocolConfig } from "../../types/config";
 import { withBaseRevisionReads } from "./base-revision-reads";
 import { withCheckFirstEdits } from "./check-first-edits";
 import { discoverOracle, type Oracle } from "./oracle";
+import { withPlanCapture } from "./plan-capture";
+import { readPlan } from "./plan-text";
 import type { CheckApprover } from "./proposal";
 import { DEFAULT_CHECK_RECONSIDERED_AFTER } from "./proposal";
 import { createProposeCheckTool } from "./propose-check-tool";
@@ -296,6 +298,11 @@ export async function createAtomicProtocolSession(
 	let rules: string | undefined = await controller.open();
 	let finished = false;
 	let emptyAttempts = 0;
+	// The plan for the open transaction, as the model wrote it, kept here
+	// because it is stated at the start and needed at the end: `settle` records
+	// it so the next transaction can be told what this one intended, and by
+	// then the reply that carried it is long gone.
+	let planned: { transaction: number; plan: string } | undefined;
 
 	return {
 		controller,
@@ -305,17 +312,34 @@ export async function createAtomicProtocolSession(
 		tools,
 		decorateTools: (given) => {
 			const withReads = withBaseRevisionReads(given, controller);
+			// Outermost, so it sees every call including the ones the gate
+			// refuses: the turn that answers the gate is exactly the turn that
+			// states the plan, and its edit never reaches the executor.
+			const withPlans = withPlanCapture(withReads, {
+				get transaction() {
+					return controller.transaction;
+				},
+				onPlan: (plan, from) => {
+					planned = { transaction: controller.transaction, plan };
+					options.onEvent?.({
+						type: "plan",
+						transaction: controller.transaction,
+						plan,
+						from,
+					});
+				},
+			});
 			// Only where there is a check to run first. With none, the sentence
 			// the gate enforces was never in the prompt either.
 			const check = controller.oracle;
 			return check
-				? withCheckFirstEdits(withReads, {
+				? withCheckFirstEdits(withPlans, {
 						get transaction() {
 							return controller.transaction;
 						},
 						checkLabel: check.label,
 					})
-				: withReads;
+				: withPlans;
 		},
 		takeOpeningRules: () => {
 			const opening = rules;
@@ -374,7 +398,17 @@ export async function createAtomicProtocolSession(
 			// next transaction should not start one strike down.
 			emptyAttempts = 0;
 
+			// The reply first, then whatever was captured during the transaction.
+			// Both can be absent, and that is still a fact worth recording as
+			// itself rather than as an empty string.
+			const plan =
+				readPlan(text) ??
+				(planned?.transaction === controller.transaction
+					? planned.plan
+					: undefined);
+			planned = undefined;
 			const settlement = await controller.settle({
+				...(plan ? { plan } : {}),
 				account: text,
 				selfReport: oracle ? undefined : readSelfReport(text),
 				forced,

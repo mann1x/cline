@@ -46,7 +46,11 @@ describe("the undo the protocol hands the model", () => {
 		});
 	});
 
-	it("adds the base revision to read_files, and nothing to any other tool", async () => {
+	// Every tool is wrapped now, because the plan capture has to see the first
+	// call of a turn whatever it is. So the claim is no longer about identity —
+	// it is that nothing but `read_files` gains an argument, which is the part
+	// the model can see.
+	it("adds the base revision to read_files, and no argument to any other tool", async () => {
 		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
@@ -69,7 +73,9 @@ describe("the undo the protocol hands the model", () => {
 				(decorated[0]?.inputSchema.properties as Record<string, unknown>)
 					.revision,
 			).toBeDefined();
-			expect(decorated[1]).toBe(plainSearch);
+			expect(decorated[1]?.name).toBe(plainSearch.name);
+			expect(decorated[1]?.description).toBe(plainSearch.description);
+			expect(decorated[1]?.inputSchema).toEqual(plainSearch.inputSchema);
 		});
 	});
 

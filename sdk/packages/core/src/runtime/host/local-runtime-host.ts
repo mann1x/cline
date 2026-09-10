@@ -981,6 +981,28 @@ export class LocalRuntimeHost implements RuntimeHost {
 					});
 					return;
 				}
+				// A plan the model stated in its reply is already on screen. One it
+				// stated only in its reasoning is not, and asking a small model
+				// again does not move it: measured on session
+				// 1789032320523_q29ta, four plans, four times in reasoning, four
+				// replies of zero characters. So it is shown here instead.
+				if (event.type === "plan") {
+					if (event.from !== "reasoning") {
+						return;
+					}
+					this.eventBridge.dispatchAgentEvent(sessionId, configWithProvider, {
+						type: "notice",
+						noticeType: "status",
+						displayRole: "status",
+						message: `Plan for transaction ${event.transaction}:\n\n${event.plan}`,
+						metadata: {
+							kind: "atomic_plan",
+							transaction: event.transaction,
+							from: event.from,
+						},
+					});
+					return;
+				}
 				if (event.type !== "settled") {
 					return;
 				}

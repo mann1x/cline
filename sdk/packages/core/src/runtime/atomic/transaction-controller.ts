@@ -69,6 +69,21 @@ export type TransactionEvent =
 			message: string;
 			continued: boolean;
 	  }
+	/**
+	 * The plan for this transaction, the first time one is seen.
+	 *
+	 * `from` says where it was found. A plan stated in the reply is already in
+	 * front of the user; one found in the reasoning is not, and is the reason
+	 * this event exists — the protocol asks for the plan in the reply and a 9B
+	 * put it in its reasoning four times out of four, so nothing downstream
+	 * ever saw it.
+	 */
+	| {
+			type: "plan";
+			transaction: number;
+			plan: string;
+			from: "reply" | "reasoning";
+	  }
 	| {
 			type: "settled";
 			transaction: number;
