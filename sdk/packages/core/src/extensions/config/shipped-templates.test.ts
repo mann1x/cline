@@ -91,6 +91,7 @@ const HOST_TOOL_NAMES = [
 	"code_intel",
 	"switch_to_act_mode",
 	"browser",
+	"generate_image",
 ];
 
 const SHIPPED_TOOL_NAMES = [

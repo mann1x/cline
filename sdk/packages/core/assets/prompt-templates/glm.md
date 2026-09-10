@@ -155,6 +155,9 @@ Reach for it the moment you are about to do one of these by hand:
 - scroll a file, or count brackets, to work out its structure -> `document_symbols`
 - grep the repo to find which file something lives in -> `workspace_symbols`
 
+# tool: generate_image
+{{DEFAULT}}
+
 # tool: switch_to_act_mode
 Switches from plan mode to act mode.
 - Output: One-line confirmation as plain text. This call ends the current run and the next starts in act mode. Call only after user explicitly approves the plan.

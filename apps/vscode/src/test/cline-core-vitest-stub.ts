@@ -115,6 +115,12 @@ export {
 // an empty verdict while the shipped build was fine. It is a pure function over
 // a string with no imports of its own, so a fake would only test the fake.
 export { describeDelimiterBalance } from "../../../../sdk/packages/core/src/extensions/tools/delimiter-balance"
+export {
+	createGenerateImageTool,
+	GENERATE_IMAGE_TOOL_DESCRIPTION,
+	GENERATE_IMAGE_TOOL_INPUT_SCHEMA,
+	GENERATE_IMAGE_TOOL_NAME,
+} from "../../../../sdk/packages/core/src/extensions/tools/image-generation"
 // Re-exported from source rather than stubbed: the session factory composes
 // its hook layers with it, so a fake would test the fake's composition.
 export { mergeAgentHooks } from "../../../../sdk/packages/core/src/hooks/hook-file-hooks"

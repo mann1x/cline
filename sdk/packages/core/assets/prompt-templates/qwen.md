@@ -241,6 +241,9 @@ Reach for it the moment you are about to do one of these by hand:
 - **Arguments**: `operation` (string), `path` (string, optional), `symbol` (string, optional), `line` (number, optional), `character` (number, optional).
 - **Output**: Plain text listing results (`file:line:column` + source line). `hover` returns signature/docs. Empty results mean the symbol truly has no matches; do not fallback to grep.
 
+# tool: generate_image
+{{DEFAULT}}
+
 # tool: switch_to_act_mode
 Switch from plan mode to act mode.
 

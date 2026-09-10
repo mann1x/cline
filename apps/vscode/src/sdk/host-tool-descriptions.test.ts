@@ -7,6 +7,8 @@ import {
 	CODE_INTEL_TOOL_DESCRIPTION,
 	CODE_INTEL_TOOL_INPUT_SCHEMA,
 	CODE_INTEL_TOOL_NAME,
+	GENERATE_IMAGE_TOOL_DESCRIPTION,
+	GENERATE_IMAGE_TOOL_NAME,
 	getBuiltinPromptTemplates,
 	HOST_TOOL_INPUT_SCHEMAS,
 	LIST_FILES_TOOL_INPUT_SCHEMA,
@@ -47,6 +49,14 @@ describe("host tool descriptions in default.md", () => {
 
 	it("reproduces browser verbatim", () => {
 		expect(shipped?.tools[BROWSER_TOOL_NAME]).toBe(BROWSER_TOOL_DESCRIPTION.trim())
+	})
+
+	// `generate_image` is the odd one here: it is contributed by this host but
+	// its text lives in core, so the description could have been checked on
+	// either side. It is checked here with the rest of the host's tools,
+	// because what makes it drift is a change to this host's tool set.
+	it("reproduces generate_image verbatim", () => {
+		expect(shipped?.tools[GENERATE_IMAGE_TOOL_NAME]).toBe(GENERATE_IMAGE_TOOL_DESCRIPTION.trim())
 	})
 })
 

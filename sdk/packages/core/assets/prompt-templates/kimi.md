@@ -191,6 +191,9 @@ How to address a symbol:
 
 Output: plain text, one result per line as `file:line:column` followed by that source line, so you can go straight to the one you want. `hover` returns signature and documentation as text; `document_symbols` and `workspace_symbols` name each symbol's kind. No results is a definite answer — the language server understands this symbol and nothing matches — so do not fall back to a text search for the same question.
 
+# tool: generate_image
+{{DEFAULT}}
+
 # tool: switch_to_act_mode
 {{DEFAULT}}
 

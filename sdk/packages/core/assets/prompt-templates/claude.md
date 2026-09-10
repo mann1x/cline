@@ -256,6 +256,9 @@ Use this before falling back to `search_codebase` for anything about a symbol. I
 
 Output: plain text, one result per line as `file:line:column` followed by that source line, so you can go straight to the one you want instead of reading each candidate. `hover` returns the signature and documentation as text instead; `document_symbols` and `workspace_symbols` name each symbol's kind alongside its location. No results is a definite answer — the language server understands this symbol and nothing matches — so do not re-ask it as a text search.
 
+# tool: generate_image
+{{DEFAULT}}
+
 # tool: switch_to_act_mode
 {{DEFAULT}}
 

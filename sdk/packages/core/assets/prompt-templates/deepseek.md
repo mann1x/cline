@@ -107,6 +107,9 @@ Reach for it the moment you are about to do one of these by hand:
 - scroll a file, or count brackets, to work out its structure -> `document_symbols`
 - grep the repo to find which file something lives in -> `workspace_symbols`
 
+# tool: generate_image
+{{DEFAULT}}
+
 # tool: switch_to_act_mode
 Switch from plan mode to act mode. Switching immediately starts executing the plan, so only call this after the user has explicitly approved the plan in a message sent AFTER you presented it (e.g. 'looks good', 'go ahead', 'switch to act mode'). Never call this in the same turn you present a plan, never call it proactively, and never treat the original task request as approval. Output: a one-line confirmation as plain text. This call ends the current run and the next one starts in act mode with file and command tools available — it is a handover, not a failure; carry on with the plan there.
 

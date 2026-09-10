@@ -26,6 +26,10 @@ import {
 	createSubmitAndExitTool,
 	createWebFetchTool,
 } from "../tools/definitions";
+import {
+	GENERATE_IMAGE_TOOL_INPUT_SCHEMA,
+	GENERATE_IMAGE_TOOL_NAME,
+} from "../tools/image-generation";
 import { createSpawnAgentTool } from "../tools/team/spawn-agent-tool";
 import { createAgentTeamsTools } from "../tools/team/team-tools";
 import {
@@ -55,6 +59,13 @@ export const HOST_TOOL_INPUT_SCHEMAS: readonly {
 	name: string;
 	inputSchema: unknown;
 }[] = [
+	// `generate_image` is contributed by the host like the rest of these, but
+	// its schema lives here, so it is imported rather than restated -- there is
+	// nothing for it to drift from.
+	{
+		name: GENERATE_IMAGE_TOOL_NAME,
+		inputSchema: GENERATE_IMAGE_TOOL_INPUT_SCHEMA,
+	},
 	{
 		name: "check_file",
 		inputSchema: {

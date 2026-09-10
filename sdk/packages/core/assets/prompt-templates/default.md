@@ -196,11 +196,23 @@ How to address a symbol:
 
 Output: plain text, one result per line as `file:line:column` followed by that source line, so you can go straight to the one you want rather than reading each candidate. `hover` returns the signature and documentation as text instead, and `document_symbols` and `workspace_symbols` name each symbol's kind. No results is a definite answer — the language server understands this symbol and nothing matches — so do not fall back to a text search for the same question.
 
+# tool: generate_image
+Generate an image from a text description and save it into the workspace. Use it for visual work you would otherwise have to ask the user to do elsewhere: an app icon, a placeholder texture or sprite, a logo, a background, or a mockup of a layout or theme you are about to build.
+
+The image is written to a file and, if you can see images, returned to you as well — so you can look at what you made and generate again with a changed prompt if it is wrong.
+
+Arguments:
+- `prompt` — what to draw. Describe the subject, the style and the background. Say "flat vector icon, solid background, no text" rather than "an icon": these models render text badly, so ask for lettering only when you must.
+- `path` — where to save it, relative to the workspace. Optional; defaults to a file under `.cline/generated-images/`. Give a real path when the image is an asset the project will use.
+- `size` — `WxH` in pixels, e.g. `1024x1024`. Optional, and the backend may round it.
+
+This costs real time — seconds to a minute per image — and on a hosted backend it costs money. Generate one image and look at it before generating variations.
+
 # tool: switch_to_act_mode
 Switch from plan mode to act mode. Switching to act mode immediately starts executing the plan, so only call this after the user has explicitly approved the plan in a message sent AFTER you presented it (e.g. 'looks good', 'go ahead', 'switch to act mode'). Never call this in the same turn you present a plan, never call it proactively, and never treat the original task request as approval. Output: a one-line confirmation, as plain text. This call ends the current run and the next one starts in act mode with the file and command tools available, so it is a handover, not a failure — carry on with the plan there.
 
 # tool: spawn_agent
-Spawn a sub-agent with a custom system prompt for specialized tasks. Use when delegating work that benefits from focused expertise. Output: `{text, iterations, finishReason, usage: {inputTokens, outputTokens}}`. `text` is the sub-agent's final answer and the only part you need: it worked in its own context, so nothing it read or edited is visible to you except through `text`. It has already finished by the time you see this — there is nothing to poll and nothing to await.
+Spawn a sub-agent with a custom system prompt for specialized tasks. Use when delegating work that benefits from focused expertise. Output: `{text, iterations, finishReason, usage: {inputTokens, outputTokens}}`. `text` is the sub-agent's final answer and the only part you need: it worked in its own context, so nothing it read or edited is visible to you except through `text`. It has already finished by the time you see this — there is nothing to poll and nothing to await. Give each sub-agent a short `name`: when several run at once it is the only thing telling their progress apart on screen.
 
 # tool: team_spawn_teammate
 Spawn a teammate with a required agentId and rolePrompt. Output: {agentId, status}. The teammate exists after this returns but has done nothing; give it work with team_run_task.
