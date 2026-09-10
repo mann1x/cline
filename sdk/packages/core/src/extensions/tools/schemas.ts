@@ -177,6 +177,80 @@ export const ReadFilesInputUnionSchema = z.union([
 ]);
 
 /**
+ * A string the model meant as a list.
+ *
+ * Measured on a live 9B session: `search_codebase` was called six times with
+ * `queries` holding the *text* `["Math.random()<", "Math.random()>", ...` --
+ * a JSON array, serialised, and truncated mid-way. Every string branch below
+ * already accepts a lone string as one query, so that whole literal became one
+ * regex, and `[` opens a character class: the tool answered
+ * `Invalid regex pattern: Unterminated character class`. The model read that as
+ * an escaping problem, spent a thousand tokens on backslashes, and then gave up
+ * on the tool and shelled out to PowerShell -- which took the same argument the
+ * same way and failed identically.
+ *
+ * So a string that opens with `[` is treated as what it plainly is. Parsed, it
+ * becomes the list it was meant to be. Unparseable, it is refused by name
+ * rather than run: a truncated array is a marshalling fault, and searching for
+ * its text finds nothing while looking like a search that ran.
+ *
+ * The test is deliberately narrow: an opening bracket followed by a quote. A
+ * regex character class (`[a-z]+`) and a shell test (`[ -f package.json ]`)
+ * both open with a bracket and neither is a list, so a looser check would
+ * refuse two things that work today -- which the tests below caught it doing.
+ */
+export function parseArrayString(
+	value: string,
+): { list: string[] } | { truncated: true } | undefined {
+	if (!/^\s*\[\s*["']/.test(value)) {
+		return undefined;
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(value);
+	} catch {
+		return { truncated: true };
+	}
+	if (
+		!Array.isArray(parsed) ||
+		!parsed.every((entry) => typeof entry === "string")
+	) {
+		return undefined;
+	}
+	const list = (parsed as string[])
+		.map((entry) => entry.trim())
+		.filter(Boolean);
+	return list.length > 0 ? { list } : { truncated: true };
+}
+
+/** What the model is told about a list it sent as text that will not parse. */
+export const TRUNCATED_ARRAY_MESSAGE =
+	"This looks like a JSON array that was sent as a string and did not survive the trip -- it starts with `[` but does not parse. Send the field as an actual array of strings, one entry per item, rather than as text.";
+
+/**
+ * Turn one string into the list it was meant to be, or keep it as one entry.
+ *
+ * Shared by `search_codebase` and `run_commands`, which took the same malformed
+ * argument in the same session and failed in two different ways.
+ *
+ * A truncated list throws rather than adding a zod issue, and the difference
+ * matters inside a union: an issue only makes that one branch lose, and the
+ * next branch along accepts any string — so the malformed literal would be run
+ * anyway, which is the behaviour being fixed. A thrown error leaves the union
+ * entirely and reaches the model as the message.
+ */
+export function stringToList(value: string): string[] {
+	const parsed = parseArrayString(value);
+	if (parsed === undefined) {
+		return [value];
+	}
+	if ("truncated" in parsed) {
+		throw new Error(TRUNCATED_ARRAY_MESSAGE);
+	}
+	return parsed.list;
+}
+
+/**
  * Schema for search_codebase tool input
  */
 export const SearchCodebaseInputSchema = z.object({
@@ -234,16 +308,22 @@ export const SearchCodebaseUnionInputSchema = z
 	.union([
 		SearchCodebaseInputSchema,
 		z.array(z.string()).transform((queries) => ({ queries })),
-		z.string().transform((query) => ({ queries: [query] })),
+		z.string().transform((query) => ({ queries: stringToList(query) })),
 		z
 			.object({ queries: z.string(), ...SearchOptionFields })
-			.transform(({ queries, ...rest }) => ({ queries: [queries], ...rest })),
+			.transform(({ queries, ...rest }) => ({
+				queries: stringToList(queries),
+				...rest,
+			})),
 		z
 			.object({ query: z.array(z.string()), ...SearchOptionFields })
 			.transform(({ query, ...rest }) => ({ queries: query, ...rest })),
 		z
 			.object({ query: z.string(), ...SearchOptionFields })
-			.transform(({ query, ...rest }) => ({ queries: [query], ...rest })),
+			.transform(({ query, ...rest }) => ({
+				queries: stringToList(query),
+				...rest,
+			})),
 	])
 	// Piped back through the canonical schema so the caller is handed one shape
 	// rather than a six-way union it has to narrow. Every branch already produces
@@ -346,6 +426,14 @@ export const RunCommandsInputUnionSchema = z.union([
 	RunCommandsInputSchema,
 	StructuredCommandsInputSchema,
 	z.object({ commands: z.array(LooseCommandEntrySchema) }),
+	// A list sent as text, before the loose entry reads the same value as one
+	// shell command. The same 9B session that fed `search_codebase` a truncated
+	// JSON array fed this one `["powershell -Command \"...` -- and running that
+	// literal as a command is worse than refusing it, because a shell will
+	// happily start something out of the first token.
+	z.object({ commands: z.string() }).transform(({ commands }) => ({
+		commands: stringToList(commands),
+	})),
 	z.object({ commands: LooseCommandEntrySchema }),
 	z.array(StructuredCommandInputSchema),
 	StructuredCommandInputSchema,
@@ -355,6 +443,14 @@ export const RunCommandsInputUnionSchema = z.union([
 	// always meant a list of shell commands, and the loose entry would read the
 	// same value as one argv list. Order is the only thing separating them.
 	z.array(z.string()),
+	// A bare string holding a serialised list, placed before the loose entry:
+	// that branch accepts any string and would read the whole literal as one
+	// command. Only a string that actually parses as a JSON array of strings
+	// gets here, so `[ -f file ] && ...` is still just a command.
+	z
+		.string()
+		.refine((value) => parseArrayString(value) !== undefined)
+		.transform((value) => ({ commands: stringToList(value) })),
 	LooseCommandEntrySchema,
 	z.string(),
 ]);

@@ -21,16 +21,24 @@
  * looking at.
  *
  * So the sentence is turned into a gate. Not a permanent one: it refuses one
- * edit, once per transaction, and only when the check has not been run in that
- * transaction yet. A model that opens by running the check -- TX-03 and TX-05
- * above -- never encounters it at all, which is the point. It is a nudge with
- * a mechanism, not a new rule.
+ * edit, once per transaction. It is a nudge with a mechanism, not a new rule.
  *
  * It also asks for the plan, because that is the other thing the same run did
  * not do: TX-01, TX-02 and TX-03 produced no plan text of any kind, the model
- * going straight from reading to editing. The two omissions have one cause and
- * one moment where saying so is useful, which is the moment before the first
- * edit lands.
+ * going straight from reading to editing.
+ *
+ * Those two used to be one condition, and that was wrong. The gate fired only
+ * when the check had not been run, so a transaction that opened *with* the
+ * check bought an exemption from stating its plan. Measured on a later
+ * jackdelta-9b session that did exactly the right thing first: `run_check` was
+ * tool call #1 in TX-01, the gate therefore never fired, and no plan was
+ * stated -- 362 messages produced exactly one plan, in TX-02, and it appeared
+ * because the gate fired there. The model was rewarded for running the check
+ * by being asked for less.
+ *
+ * So the gate always fires once per transaction, and only the message changes:
+ * a model that has already run the check is asked for the plan alone, and is
+ * not told to re-run something it just ran.
  */
 
 import type {
@@ -64,13 +72,24 @@ export interface CheckFirstSource {
  * as many words, because a model that thinks the change landed will build the
  * next one on top of it.
  */
-export function describeCheckFirst(checkLabel: string): string {
+export function describeCheckFirst(
+	checkLabel: string,
+	checkAlreadyRun = false,
+): string {
 	return [
 		"That edit was not made. Nothing has changed on disk.",
 		"",
-		`Run \`${RUN_CHECK_TOOL_NAME}\` first — it runs ${checkLabel} — and read what it reports. It is the failure this transaction is judged on, and reading the source is not a substitute for it: a file can look wrong in one place and fail in another, and the edit you were about to make would have been aimed at whichever one you happened to read.`,
-		"",
-		"Then state your plan before you edit: a numbered list, each entry naming WHERE, WHAT and WHY. State it in your reply, so it is on the record and the user can see it, not only in your reasoning.",
+		...(checkAlreadyRun
+			? [
+					"You have run the check, which is the right way to open a transaction — this is not asking you to run it again. What is missing is the plan.",
+					"",
+					"State it before you edit: a numbered list, each entry naming WHERE, WHAT and WHY. Put it in your reply, so it is on the record and the user can see it, not only in your reasoning.",
+				]
+			: [
+					`Run \`${RUN_CHECK_TOOL_NAME}\` first — it runs ${checkLabel} — and read what it reports. It is the failure this transaction is judged on, and reading the source is not a substitute for it: a file can look wrong in one place and fail in another, and the edit you were about to make would have been aimed at whichever one you happened to read.`,
+					"",
+					"Then state your plan before you edit: a numbered list, each entry naming WHERE, WHAT and WHY. State it in your reply, so it is on the record and the user can see it, not only in your reasoning.",
+				]),
 		"",
 		"After that, make the edit. This is asked once per transaction and not again — the next edit goes through whatever you decide.",
 	].join("\n");
@@ -129,11 +148,11 @@ export function withCheckFirstEdits<T extends AgentToolDefinition>(
 			...original,
 			execute: async (input: unknown, context: AgentToolContext) => {
 				syncTransaction();
-				if (checkRun || held) {
+				if (held) {
 					return original.execute(input, context);
 				}
 				held = true;
-				return describeCheckFirst(source.checkLabel);
+				return describeCheckFirst(source.checkLabel, checkRun);
 			},
 		} as unknown as T;
 	});

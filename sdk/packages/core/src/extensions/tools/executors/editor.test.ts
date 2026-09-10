@@ -546,12 +546,52 @@ describe("createEditorExecutor", () => {
 				await expect(send()).rejects.toThrow(
 					"You have now sent this identical edit 2 times",
 				);
+				// And it still says what to do about it: the count leads, the
+				// two ways out follow it.
 				await expect(send()).rejects.toThrow(
 					"You have now sent this identical edit 3 times",
 				);
-				// And it still says what to do about it, both ways round.
-				await expect(send()).rejects.toThrow("already in the file");
-				await expect(send()).rejects.toThrow("only re-reading around it");
+			});
+		});
+
+		// Five identical refusals over the last twenty messages of a
+		// jackdelta-9b run, with a full re-read of the file between three of
+		// them and the check run twice in between. Every refusal said the same
+		// true thing in the same reasonable tone, and the run ended still
+		// sending it. Past the limit the message has to stop explaining.
+		it("stops explaining once the same no-op has been refused four times", async () => {
+			await withTempFile("one\ntwo\nthree", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const send = () =>
+					editor(
+						{ path: filePath, new_text: "two", start_line: 2 },
+						dir,
+						context,
+					);
+
+				/** One attempt, and the message it was refused with. */
+				const attempt = async (): Promise<string> => {
+					try {
+						await send();
+						throw new Error("the edit was applied, which it must not be");
+					} catch (error) {
+						return error instanceof Error ? error.message : String(error);
+					}
+				};
+
+				expect(await attempt()).toContain("No change");
+				expect(await attempt()).toContain("identical edit 2 times");
+				expect(await attempt()).toContain("identical edit 3 times");
+
+				// The fourth is the one that changes.
+				const fourth = await attempt();
+				expect(fourth).toContain("This is attempt 4");
+				expect(fourth).toContain("Stop sending it");
+				expect(fourth).toContain("Two moves are left");
+				// It must not go back to counting politely afterwards.
+				const fifth = await attempt();
+				expect(fifth).toContain("This is attempt 5");
+				expect(fifth).not.toContain("identical edit 5 times");
 			});
 		});
 

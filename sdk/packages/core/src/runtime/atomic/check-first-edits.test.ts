@@ -68,20 +68,39 @@ describe("withCheckFirstEdits", () => {
 		expect(calls).toEqual(["editor", "apply_patch"]);
 	});
 
-	// TX-03 and TX-05 of the measured session opened on the check. Neither
-	// should ever have seen this.
-	it("never fires for a model that runs the check first", async () => {
+	// A later session ran the check as tool call #1 and, under the old rule,
+	// was never asked for a plan at all — 362 messages, one plan, and that one
+	// only because the gate fired in a transaction that had not opened on the
+	// check. Running the check must not buy an exemption from the plan.
+	it("asks for the plan alone when the check has already run", async () => {
+		const calls: string[] = [];
+		const t = wrap(calls, { transaction: 1 });
+
+		await run(t, RUN_CHECK_TOOL_NAME);
+		const held = (await run(t, "editor")) as string;
+
+		expect(calls).toEqual([RUN_CHECK_TOOL_NAME]);
+		expect(held).toContain("What is missing is the plan");
+		expect(held).toContain("WHERE, WHAT and WHY");
+		// It must not tell a model to re-run something it just ran.
+		expect(held).not.toContain("first — it runs");
+	});
+
+	// And the edit after it goes through, as it always did.
+	it("holds only the first edit either way", async () => {
 		const calls: string[] = [];
 		const t = wrap(calls, { transaction: 1 });
 
 		await run(t, RUN_CHECK_TOOL_NAME);
 		await run(t, "editor");
+		await run(t, "editor");
+		await run(t, "apply_patch");
 
-		expect(calls).toEqual([RUN_CHECK_TOOL_NAME, "editor"]);
+		expect(calls).toEqual([RUN_CHECK_TOOL_NAME, "editor", "apply_patch"]);
 	});
 
-	// A check that threw still showed the model the program's own answer.
-	// Holding the edit after that would punish the model for complying.
+	// A check that threw still showed the model the program's own answer, so
+	// the message must be the plan-only one rather than "run the check first".
 	it("counts a check that failed as having been run", async () => {
 		const calls: string[] = [];
 		const wrapped = new Map(
@@ -104,8 +123,10 @@ describe("withCheckFirstEdits", () => {
 		await expect(run(wrapped, RUN_CHECK_TOOL_NAME)).rejects.toThrow(
 			"check blew up",
 		);
+		const held = (await run(wrapped, "editor")) as string;
 		await run(wrapped, "editor");
 
+		expect(held).toContain("What is missing is the plan");
 		expect(calls).toEqual(["editor"]);
 	});
 
@@ -115,6 +136,7 @@ describe("withCheckFirstEdits", () => {
 		const t = wrap(calls, source);
 
 		await run(t, RUN_CHECK_TOOL_NAME);
+		await run(t, "editor");
 		await run(t, "editor");
 		expect(calls).toEqual([RUN_CHECK_TOOL_NAME, "editor"]);
 

@@ -2423,6 +2423,98 @@ describe("createContextCompactionPrepareTurn", () => {
 		expect(result?.messages.length).toBeLessThan(messages.length);
 	});
 
+	// Measured on a jackdelta-9b session: 362 messages, one typed request at
+	// index 0 and a tool loop for the rest. Compaction folded 322 into 70, and
+	// neither the user's own words nor the transaction rules appear anywhere in
+	// what survived -- because the pin refused index 0, which is the only turn
+	// start such a transcript has. Sixteen seconds later the model asked the
+	// user what the task was and which files it was working on.
+	it("keeps the opening request when it is the only typed prompt", async () => {
+		createHandlerMock.mockReturnValue({
+			createMessage: vi.fn(() =>
+				streamChunks([
+					{ type: "text", id: "sum", text: "## Goal\nFix the file" },
+					{ type: "done", id: "sum", success: true },
+				]),
+			),
+		});
+
+		const messages: MessageWithMetadata[] = [
+			{
+				role: "user",
+				content: [
+					{
+						type: "text",
+						text: "check manic_miner.html, it's not working — use the linter and lsp (code_intel) tools",
+					},
+				],
+			},
+		];
+		for (let i = 0; i < 12; i++) {
+			messages.push({
+				role: "assistant",
+				content: [
+					{
+						type: "tool_use",
+						id: `pin-tool-${i}`,
+						name: "read_files",
+						input: { file_paths: [`/tmp/p${i}.ts`] },
+					},
+				],
+			});
+			messages.push({
+				role: "user",
+				content: [
+					{
+						type: "tool_result",
+						tool_use_id: `pin-tool-${i}`,
+						name: "read_files",
+						content: "z".repeat(1_500),
+					},
+				],
+			});
+		}
+
+		const prepareTurn = createContextCompactionPrepareTurn({
+			providerId: "anthropic",
+			modelId: "mock-model",
+			providerConfig: {
+				providerId: "anthropic",
+				modelId: "mock-model",
+			} as LlmsProviders.ProviderConfig,
+			compaction: {
+				enabled: true,
+				strategy: "agentic",
+				preserveRecentTokens: 1_000,
+			},
+			logger: undefined,
+		});
+
+		const result = await prepareTurn?.({
+			agentId: "agent-1",
+			conversationId: "conv-pin",
+			parentAgentId: null,
+			iteration: 2,
+			abortSignal: new AbortController().signal,
+			emitStatusNotice: vi.fn(),
+			systemPrompt: "You are helpful.",
+			tools: [],
+			messages,
+			apiMessages: messages,
+			model: {
+				id: "mock-model",
+				provider: "anthropic",
+				info: { id: "mock-model", maxInputTokens: 4_000 },
+			},
+		});
+
+		expect(result?.messages.length).toBeLessThan(messages.length);
+		// The request itself, verbatim — not a summary's account of it.
+		expect(JSON.stringify(result?.messages)).toContain(
+			"use the linter and lsp",
+		);
+	});
+
 	// Measured live: one typed prompt followed by a long tool loop is a single
 	// turn, so clamping the cut to its start dragged the cut back to near the
 	// beginning of the transcript. A 250,621-byte request compacted to 226,763 --

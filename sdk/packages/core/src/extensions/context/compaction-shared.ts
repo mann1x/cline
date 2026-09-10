@@ -1110,7 +1110,7 @@ export function findCutPlan(
 	// the prompt pinned rather than summarized away -- the model keeps the
 	// request it is working on and loses only the loop it can re-derive.
 	if (
-		lastTurnStartIndex > 0 &&
+		lastTurnStartIndex >= 0 &&
 		exceedsLastTurnCeiling(
 			messages,
 			lastTurnStartIndex,
@@ -1145,6 +1145,23 @@ export function findCutPlan(
 	);
 }
 
+/**
+ * Fold everything after one message, keeping that message verbatim.
+ *
+ * `pinnedIndex === 0` is allowed, and that is the fix rather than a detail.
+ * The guard used to be `<= 0`, so the one shape where the prompt matters most
+ * was the one shape that could not pin it: a single typed request followed by
+ * a long tool loop has its only turn start at index 0, every caller's
+ * `lastTurnStartIndex > 0` test failed, and the request was summarized away
+ * with the rest.
+ *
+ * Measured on a jackdelta-9b session: 322 messages compacted to 70, and
+ * neither the user's own words ("it's not working", "use the linter and lsp")
+ * nor the transaction rules appear anywhere in what survived. Sixteen seconds
+ * later the model asked the user what the task was and which files it was
+ * working on. The summary is a good summary; it is not the request, and a
+ * model cannot re-derive an instruction that no longer exists.
+ */
 function planPinnedCut(
 	messages: MessageWithMetadata[],
 	pinnedIndex: number,
@@ -1152,7 +1169,15 @@ function planPinnedCut(
 	estimateMessageTokens: EstimateMessageTokens,
 ): CompactionCutPlan {
 	const tailStart = pinnedIndex + 1;
-	if (pinnedIndex <= 0 || tailStart >= messages.length) {
+	if (pinnedIndex < 0 || tailStart >= messages.length) {
+		return NO_CUT;
+	}
+	// A summary is not a request. On a second compaction the transcript begins
+	// with the previous one, and pinning that would keep a stale summary
+	// verbatim for the rest of the session instead of folding it into the new
+	// one -- which is what the old `<= 0` guard achieved by accident, and the
+	// only thing it was right about.
+	if (isCompactionSummaryMessage(messages[pinnedIndex])) {
 		return NO_CUT;
 	}
 

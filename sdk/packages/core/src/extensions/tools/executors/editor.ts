@@ -77,6 +77,16 @@ export interface EditorExecutorOptions {
  */
 type NoOpLedger = (key: string) => number;
 
+/**
+ * How many identical no-op refusals before the message stops explaining.
+ *
+ * Four rather than a larger number because the first three already say it in
+ * three different ways, and a fourth reading of the same paragraph is not what
+ * a model repeating itself is short of. The session this comes from reached
+ * five and was still going when it ran out.
+ */
+const NO_OP_REFUSAL_LIMIT = 4;
+
 function resolveFilePath(
 	cwd: string,
 	inputPath: string,
@@ -613,6 +623,24 @@ function noChangeMessage(
 		repeats && repeats > 1
 			? `You have now sent this identical edit ${repeats} times and it has been refused ${repeats} times for the same reason, so nothing about the file, the tool or this call is going to change on the next one. Either the change you meant is already in the file -- in which case it is done, and the next thing to do is the next change or the answer -- or the text you want is somewhere else in the file, and only re-reading around it will find it. `
 			: "";
+
+	// Past the limit the explanation stops and the instruction starts. Measured
+	// on a jackdelta-9b session: the same edit to lines 90-92, refused five
+	// times over the last twenty messages of the run, with a full re-read of
+	// the file between three of them and the check run twice in between. Every
+	// refusal said the same true thing in the same reasonable tone, and the run
+	// ended still sending it. A message that has been read and acted against
+	// five times is not going to work on the sixth, so the sixth says something
+	// else: that this call is finished, and what the two remaining moves are.
+	if (repeats !== undefined && repeats >= NO_OP_REFUSAL_LIMIT) {
+		throw new Error(
+			`${NO_CHANGE_ERROR_PREFIX}${why} in ${filePath}. This is attempt ${repeats}, and every one has been refused for this same reason.\n\n` +
+				"Stop sending it. This edit is not going to apply, because there is nothing in it to apply: the file already holds exactly what it asks for.\n\n" +
+				"Two moves are left, and only two. Either this part of the fix is done — in which case say so and go to the next thing that still needs changing — or what you are trying to fix is not on these lines at all, in which case find where it is before you edit again. Re-read the check's own output and let it, not this range, choose where to look next.\n\n" +
+				`If you send this call again it will be refused again.${comparison}`,
+		);
+	}
+
 	throw new Error(
 		`${NO_CHANGE_ERROR_PREFIX}${why} in ${filePath}. The file was not modified. ${history}What you sent as \`new_text\` is character-for-character what that part of the file already holds, so this edit asks for nothing and sending it again cannot help.${comparison}`,
 	);
