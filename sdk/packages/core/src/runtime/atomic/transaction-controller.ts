@@ -371,6 +371,14 @@ export class TransactionController {
 			canProposeCheck:
 				this.options.allowCheckProposal === true && this.canAdoptOracle,
 			checkNeverPassed: this.adopted !== undefined && !this.adoptedEverPassed,
+			// A check the host supplied rather than one the model proposed.
+			// `checkNeverPassed` above cannot see this case at all -- `adopted`
+			// is only set by `adoptOracle()` -- so a host check that failed every
+			// attempt was reported as one that had never been questioned, and the
+			// model was told its reading of the symptom was wrong once per
+			// transaction while the check said the same thing each time.
+			hostSuppliedCheck:
+				this.adopted === undefined && this.options.oracle !== undefined,
 			canReplaceCheck:
 				this.options.allowCheckProposal === true && this.reconsidering,
 			history: this.history,

@@ -61,6 +61,15 @@ export interface ProtocolPromptInput {
 	checkNeverPassed?: boolean;
 	/** Whether the model may replace that check, this transaction, once. */
 	canReplaceCheck?: boolean;
+	/**
+	 * Whether the check came from the host rather than from the model.
+	 *
+	 * A different situation from `checkNeverPassed`, which only ever describes
+	 * a check the model proposed and may replace. This one cannot be replaced:
+	 * the user named it, so a run that keeps failing it is not evidence against
+	 * the check.
+	 */
+	hostSuppliedCheck?: boolean;
 	/** What earlier transactions tried, in order. */
 	history: readonly TransactionOutcome[];
 }
@@ -147,12 +156,90 @@ export function buildProtocolPrompt(input: ProtocolPromptInput): string {
 		lines.push(
 			"",
 			describeHistory(input.history, input.checkNeverPassed === true),
-			"",
-			describePostMortemRequest(input.history.length),
 		);
+		const stuck = input.hostSuppliedCheck
+			? describeStuckHostCheck(input.history)
+			: undefined;
+		if (stuck) {
+			lines.push("", stuck);
+		}
+		lines.push("", describePostMortemRequest(input.history.length));
 	}
 
 	return lines.join("\n");
+}
+
+/**
+ * How many attempts a host check must judge and fail before it is worth saying
+ * so. Three of six: two failures is an ordinary run, and firing at two would
+ * spend the notice before there is a pattern to describe. Three leaves half the
+ * budget to act on it.
+ */
+const STUCK_HOST_CHECK_AFTER = 3;
+
+/**
+ * Said when the user's own check has judged every attempt and passed none.
+ *
+ * `checkNeverPassed` next door cannot cover this: it reads `adopted`, which is
+ * only set on the model-proposed path, so a host check that failed six times
+ * out of six left the flag false and the model was told once per transaction
+ * that "the previous reading of it was wrong" -- while the check had reported
+ * the same string every time.
+ *
+ * What it does NOT say is that the check might be wrong. That is the right
+ * thing to offer about a check the model proposed and can replace, and the
+ * wrong thing here: the user wrote this one, it will not change, and a model
+ * invited to doubt it argues with the task instead of doing it.
+ *
+ * Only the identical branch is emitted. Output that CHANGED between attempts
+ * looks like evidence the edits are landing, and for a check that prints a
+ * duration, a timestamp or a seed it would say that every single time --
+ * telling a model its edits are working when nothing moved. Byte-identical
+ * output cannot be wrong in that direction: if the check printed the same
+ * thing twice, nothing on the path it takes changed.
+ */
+function describeStuckHostCheck(
+	history: readonly TransactionOutcome[],
+): string | undefined {
+	if (history.length < STUCK_HOST_CHECK_AFTER) {
+		return undefined;
+	}
+	if (
+		!history.every((outcome) => !outcome.kept && outcome.source === "oracle")
+	) {
+		return undefined;
+	}
+	// How far back the identical output reaches. Counted from the end, because
+	// what matters is the current streak, not whether it ever repeated.
+	const last = history[history.length - 1].evidence.trim();
+	if (!last) {
+		return undefined;
+	}
+	let streak = 1;
+	for (let i = history.length - 2; i >= 0; i--) {
+		if (history[i].evidence.trim() !== last) {
+			break;
+		}
+		streak += 1;
+	}
+	if (streak < 2) {
+		return undefined;
+	}
+	const first = history[history.length - streak];
+	const since = `TX-${String(first.transaction).padStart(2, "0")}`;
+	return [
+		`== THE CHECK HAS JUDGED ${history.length} ATTEMPTS AND PASSED NONE ==`,
+		"",
+		"This check is the gate to mark the task completed successfully. It was named for this task by the user and it will not change, so the question is not whether it is right. The question is what it has been telling you, which is not the same as what you have been reading it as.",
+		"",
+		`Its output has not changed since ${since} — the same text, byte for byte, across ${streak} attempts:`,
+		"",
+		last,
+		"",
+		"Nothing you have edited is on the path the check takes. Whatever the file looks like where you have been working, the failure it reports is raised somewhere your changes have not reached. Before editing anything else, find where that output actually comes from — read it as text, locate the thing it names, and confirm you are looking at the code that produces it.",
+		"",
+		"Say in one sentence where you now think it comes from. Then plan.",
+	].join("\n");
 }
 
 /**

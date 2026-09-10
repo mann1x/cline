@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { Oracle } from "./oracle";
-import { buildProtocolPrompt, describeVerdict } from "./protocol";
+import {
+	buildProtocolPrompt,
+	describeVerdict,
+	type TransactionOutcome,
+} from "./protocol";
 
 const oracle: Oracle = {
 	label: "node run_game.js manic_miner.html",
@@ -122,5 +126,103 @@ describe("the line a transaction ends on", () => {
 		const line = describeVerdict(1, false, "oracle", verdict);
 		expect(line).toContain(expected);
 		expect(line).toContain("back as they were");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// A host-supplied check that has passed nothing
+// ---------------------------------------------------------------------------
+
+describe("the stuck host check notice", () => {
+	const failed = (
+		transaction: number,
+		evidence: string,
+	): TransactionOutcome => ({
+		transaction,
+		kept: false,
+		source: "oracle",
+		evidence,
+	});
+	const ERR = '{"ok":false,"error":"SyntaxError: Unexpected token \')\'"}';
+	const build = (history: TransactionOutcome[], hostSuppliedCheck = true) =>
+		buildProtocolPrompt({
+			transaction: history.length + 1,
+			maxChanges: 6,
+			maxTransactions: 6,
+			oracle,
+			hostSuppliedCheck,
+			history,
+		});
+
+	it("fires once the same output has been reported across three attempts", () => {
+		const prompt = build([failed(1, ERR), failed(2, ERR), failed(3, ERR)]);
+
+		expect(prompt).toContain("THE CHECK HAS JUDGED 3 ATTEMPTS AND PASSED NONE");
+		expect(prompt).toContain("has not changed since TX-01");
+		expect(prompt).toContain("across 3 attempts");
+		expect(prompt).toContain("gate to mark the task completed successfully");
+	});
+
+	// The user's wording, and the reason for it: told the check *is* the task, a
+	// model games the check instead of fixing the code.
+	it("never suggests the check itself might be wrong", () => {
+		const prompt = build([failed(1, ERR), failed(2, ERR), failed(3, ERR)]);
+
+		expect(prompt).not.toContain("the check itself is not asking");
+		expect(prompt).not.toContain("propose_check");
+	});
+
+	// Two failures is an ordinary run.
+	it("stays quiet below three attempts", () => {
+		expect(build([failed(1, ERR), failed(2, ERR)])).not.toContain(
+			"PASSED NONE",
+		);
+	});
+
+	// Output that changed is not reported at all: a check that prints a
+	// duration or a seed changes every run, and calling that progress would
+	// tell a model its edits are landing when nothing moved.
+	it("says nothing when the last output differs from the one before", () => {
+		const prompt = build([
+			failed(1, ERR),
+			failed(2, ERR),
+			failed(
+				3,
+				'{"ok":false,"error":"ReferenceError: collide is not defined"}',
+			),
+		]);
+
+		expect(prompt).not.toContain("PASSED NONE");
+	});
+
+	// It reports the current streak, not the longest one anywhere in history.
+	it("counts back only as far as the streak reaches", () => {
+		const prompt = build([
+			failed(
+				1,
+				'{"ok":false,"error":"ReferenceError: collide is not defined"}',
+			),
+			failed(2, ERR),
+			failed(3, ERR),
+			failed(4, ERR),
+		]);
+
+		expect(prompt).toContain("has not changed since TX-02");
+		expect(prompt).toContain("across 3 attempts");
+	});
+
+	// A check the model proposed keeps the old message, which offers that the
+	// check may be replaceable — because there it is.
+	it("does not fire for a check the model proposed", () => {
+		expect(
+			build([failed(1, ERR), failed(2, ERR), failed(3, ERR)], false),
+		).not.toContain("PASSED NONE");
+	});
+
+	// A kept transaction means the check passed once, so the premise is gone.
+	it("does not fire once anything has been kept", () => {
+		const history = [failed(1, ERR), failed(2, ERR), failed(3, ERR)];
+		history[0] = { ...history[0], kept: true };
+		expect(build(history)).not.toContain("PASSED NONE");
 	});
 });
