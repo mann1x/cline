@@ -1,8 +1,13 @@
-import { createBrowserTool, createCodeIntelTool, createListFilesTool, createMcpTools } from "@cline/core"
+import { createBrowserTool, createCodeIntelTool, createGenerateImageTool, createListFilesTool, createMcpTools } from "@cline/core"
 import type { AgentTool, AgentToolContext } from "@cline/shared"
 import { createVscodeBrowserDriver, isBrowserToolEnabled } from "@/hosts/vscode/browser-support"
 import { loadDocumentForDiagnostics, resolveLintCommand, runLintCommand } from "@/hosts/vscode/check-file-support"
 import { createVscodeCodeIntelProvider } from "@/hosts/vscode/code-intel-support"
+import {
+	isImageGenerationConfigured,
+	readImageGenerationEndpoint,
+	writeGeneratedImage,
+} from "@/hosts/vscode/image-generation-support"
 import { createVscodeWorkspaceLister } from "@/hosts/vscode/list-files-support"
 import type { VscodeTerminalManager } from "@/hosts/vscode/terminal/VscodeTerminalManager"
 import type { McpHub } from "@/services/mcp/McpHub"
@@ -160,6 +165,22 @@ export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExt
 		)
 	} else {
 		Logger.log("[VscodeRuntimeTools] browser tool omitted; cline.browserTool is false")
+	}
+
+	// `generate_image` is the one tool here that is off by default, because it
+	// is the one with nowhere to go by default: there is no image endpoint on a
+	// machine until someone stands one up, and a tool that always fails is
+	// worse than an absent one. Offered as soon as an endpoint and a model are
+	// configured, and not before.
+	if (isImageGenerationConfigured()) {
+		tools.push(
+			createGenerateImageTool({
+				cwd: options?.cwd ?? process.cwd(),
+				getEndpoint: readImageGenerationEndpoint,
+				writeFile: writeGeneratedImage,
+				onError: (message, error) => Logger.error(`${message}:`, error),
+			}),
+		)
 	}
 
 	// Add the custom run_commands tool when a terminal manager is available.

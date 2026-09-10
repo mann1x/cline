@@ -353,6 +353,34 @@
 					"default": true,
 					"markdownDescription": "Offer the `browser` tool, which opens a page in a real browser and reports its console output and uncaught errors. Turn this off to remove it from the model's tools; Chrome is only launched if the model actually calls it."
 				},
+				"cline.imageGeneration.endpoint": {
+					"type": "string",
+					"default": "",
+					"markdownDescription": "Base URL of an OpenAI-compatible image endpoint, which enables the `generate_image` tool. Cline calls `POST <endpoint>/images/generations`; the `/v1` is added if you leave it off. Leave empty to keep the tool off entirely. Works with anything that serves that API \u2014 LocalAI, a ComfyUI or Automatic1111 shim, OpenAI itself.",
+					"examples": [
+						"http://localhost:8080/v1",
+						"https://api.openai.com/v1"
+					]
+				},
+				"cline.imageGeneration.model": {
+					"type": "string",
+					"default": "",
+					"markdownDescription": "Image model to ask that endpoint for. Required alongside `#cline.imageGeneration.endpoint#`: without both, the `generate_image` tool is not offered."
+				},
+				"cline.imageGeneration.apiKey": {
+					"type": "string",
+					"default": "",
+					"markdownDescription": "Bearer token for the image endpoint, if it needs one. Local servers usually do not. Use `${env:VAR_NAME}` to read it from the environment rather than storing the key in your settings file."
+				},
+				"cline.imageGeneration.size": {
+					"type": "string",
+					"default": "",
+					"markdownDescription": "Default pixel size as `WIDTHxHEIGHT`, used when the model does not ask for one. Leave empty to let the backend choose.",
+					"examples": [
+						"1024x1024",
+						"1024x576"
+					]
+				},
 				"cline.vscodeMcpTools": {
 					"type": "boolean",
 					"default": true,

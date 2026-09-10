@@ -1100,6 +1100,23 @@ export {
 	scanDelimiters,
 	scanWithBalance,
 } from "./extensions/tools/delimiter-balance";
+// Image generation. Cline could write the CSS for a theme and had nothing to
+// say about what it looked like; this is the tool that makes one. It speaks the
+// OpenAI images API because that is what every local image server already
+// serves, and it is only offered when the user has configured an endpoint.
+export {
+	createGenerateImageTool,
+	defaultImagePath,
+	GENERATE_IMAGE_TOOL_DESCRIPTION,
+	GENERATE_IMAGE_TOOL_INPUT_SCHEMA,
+	GENERATE_IMAGE_TOOL_NAME,
+	type GenerateImageToolOptions,
+	type ImageGenerationEndpoint,
+	normalizeBaseUrl,
+	parseSize,
+	readGeneratedImage,
+	resolveInsideWorkspace,
+} from "./extensions/tools/image-generation";
 // The workspace lister, and the tool that reads it. Both hosts install this:
 // the reflex it displaces -- `ls`, `dir /s` -- is not VS Code's, it is any
 // model that has no other way to find out what exists.
