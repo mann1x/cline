@@ -1,6 +1,7 @@
 import type { AgentTool, AgentToolDefinition } from "@cline/shared";
 import type { CoreAtomicProtocolConfig } from "../../types/config";
 import { withBaseRevisionReads } from "./base-revision-reads";
+import { withCheckFirstEdits } from "./check-first-edits";
 import { discoverOracle, type Oracle } from "./oracle";
 import type { CheckApprover } from "./proposal";
 import { DEFAULT_CHECK_RECONSIDERED_AFTER } from "./proposal";
@@ -14,8 +15,24 @@ import {
 	type TransactionEvent,
 } from "./transaction-controller";
 
-/** Changes a transaction may declare, unless the user says otherwise. */
-export const DEFAULT_MAX_CHANGES = 3;
+/**
+ * Changes a transaction may declare, unless the user says otherwise.
+ *
+ * Six. It was three, from the harness campaign that produced this protocol,
+ * where the models under test were large enough that three declared changes
+ * was a comfortable budget and the limit did what it was for -- stopping a
+ * shotgun rewrite. On a 9B it does something else. Measured on a JackDelta 9B
+ * session: the model made 56 editor calls in TX-01 against a ceiling of three
+ * declared changes, so the ceiling was not restraining the work, it was only
+ * making the declaration a fiction the model abandoned. A small model that
+ * needs four small edits to remove one symptom has to either under-declare or
+ * ignore the number, and it ignored it.
+ *
+ * Six leaves the limit meaning what it says while giving a model that works in
+ * smaller steps room to describe what it is actually going to do. It is still
+ * a ceiling and the prompt still says so.
+ */
+export const DEFAULT_MAX_CHANGES = 6;
 
 /**
  * Attempts a task gets. Six, as the harness this comes from runs it: measured
@@ -286,7 +303,20 @@ export async function createAtomicProtocolSession(
 			return controller.oracle;
 		},
 		tools,
-		decorateTools: (given) => withBaseRevisionReads(given, controller),
+		decorateTools: (given) => {
+			const withReads = withBaseRevisionReads(given, controller);
+			// Only where there is a check to run first. With none, the sentence
+			// the gate enforces was never in the prompt either.
+			const check = controller.oracle;
+			return check
+				? withCheckFirstEdits(withReads, {
+						get transaction() {
+							return controller.transaction;
+						},
+						checkLabel: check.label,
+					})
+				: withReads;
+		},
 		takeOpeningRules: () => {
 			const opening = rules;
 			rules = undefined;

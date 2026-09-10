@@ -44,13 +44,26 @@ export const RESTORE_FILE_TOOL_NAME = "restore_file";
 /**
  * Restores one transaction is allowed before it is told to stop.
  *
- * Three, which is one more than the protocol's other budgets (a check gets two
- * proposals, an empty submission one nudge) because unlike those this one can
- * be legitimately right several times in a transaction: three declared changes
- * means three chances to damage a different file. A fourth in the same
- * transaction is not a recovery, it is the loop.
+ * Nine. It was three, on the reasoning that a fourth restore in one
+ * transaction is not a recovery but the loop -- and for a model that edits
+ * accurately it still is. For one that does not, the cap turned out to be the
+ * thing that ended the run rather than the thing that saved it.
+ *
+ * Measured on a JackDelta 9B session: 19 restore attempts, 8 of them refused
+ * because the cap was already spent, and the model then named the cap as its
+ * reason for giving up in three separate transactions -- "exhausted restore
+ * slots (3/3)" in TX-02, and the same again in TX-03 and TX-05. Faced with a
+ * mangled file it could neither restore nor repair, it submitted an apology
+ * instead of a change. The cap was doing the opposite of its job: the
+ * transaction still gets rolled back wholesale if the check fails, so a
+ * restore costs nothing but the tokens, while refusing one costs the
+ * transaction.
+ *
+ * Nine keeps the shape of the limit -- a transaction that has undone its work
+ * nine times is looping and is told so -- at a depth a small model can reach
+ * the end of its work through.
  */
-export const MAX_RESTORES_PER_TRANSACTION = 3;
+export const MAX_RESTORES_PER_TRANSACTION = 9;
 
 export const RESTORE_FILE_TOOL_DESCRIPTION = `Put one file back exactly as it was when this transaction opened, discarding every change you have made to it since.
 

@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	createAtomicProtocolSession,
+	DEFAULT_MAX_CHANGES,
 	readSelfReport,
 } from "./session-protocol";
 
@@ -367,7 +368,7 @@ describe("where the rules are put", () => {
 
 			expect(message).toContain("TX-01 discarded");
 			expect(message).toContain("CHANGE PROTOCOL");
-			expect(message).toContain("AT MOST 3 changes");
+			expect(message).toContain(`AT MOST ${DEFAULT_MAX_CHANGES} changes`);
 			expect(message).toContain("TX-01 — discarded");
 		});
 	});

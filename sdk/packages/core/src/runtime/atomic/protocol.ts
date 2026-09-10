@@ -147,10 +147,49 @@ export function buildProtocolPrompt(input: ProtocolPromptInput): string {
 		lines.push(
 			"",
 			describeHistory(input.history, input.checkNeverPassed === true),
+			"",
+			describePostMortemRequest(input.history.length),
 		);
 	}
 
 	return lines.join("\n");
+}
+
+/**
+ * What to do with the wreckage of the last transaction before planning again.
+ *
+ * The record above says what was tried and what the check said about it. What
+ * it cannot say is what the model learned, because nothing ever asked. Across
+ * the JackDelta 9B session the accounts it carried forward were, verbatim: "I
+ * cannot complete this task.", "Task cannot be completed — exhausted restore
+ * slots (3/3)", and three more of the same. That is the record the next
+ * transaction opened on, and a transaction that opens on five statements of
+ * defeat re-derives defeat.
+ *
+ * So the retrospective is asked for rather than hoped for, and it is asked as
+ * four specific questions. Not "reflect on the failure": a model given that
+ * writes another apology. Each question has an answer that changes the next
+ * plan, and the last one is the one nobody asks -- whether the check's own
+ * output was read correctly, which is a different question from whether the
+ * fix was right and the only one that can catch a diagnosis that was wrong
+ * about what it was even looking at.
+ */
+function describePostMortemRequest(attempts: number): string {
+	const those = attempts === 1 ? "that attempt" : "those attempts";
+	return [
+		"== BEFORE YOU PLAN, LOOK BACK ==",
+		"",
+		`Open this transaction with a short retrospective on ${those} — four lines, before the plan, in your reply where the user can see it:`,
+		"",
+		"  WORKED     - what you established that is still true. A symptom you located, a line you confirmed is fine, a reading of the file that held up. This survives the rollback even though the edits did not.",
+		"  DID NOT    - which edit failed to move the check, and what the check said instead of what you expected.",
+		"  RE-USE     - what you will carry into this attempt unchanged, so you do not spend the transaction rediscovering it.",
+		'  DIFFERENT  - what you will do differently, named concretely. Not "be more careful".',
+		"",
+		"Then read the check's last output again as text rather than as a verdict. Does it name the thing you were fixing? If it names something else, the plan that follows should be about what it names, not about what you were working on when it said so.",
+		"",
+		"The files are back to their starting state, but what you learned is not. That is the only thing this transaction begins with that the last one did not.",
+	].join("\n");
 }
 
 /**

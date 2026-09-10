@@ -34,6 +34,65 @@ describe("readEngineTimings", () => {
 		expect(timings?.generatePerSecond).toBeCloseTo(77.1, 0);
 	});
 
+	// Measured on a real session: 91,738 prompt tokens against 63.6 ms of
+	// prompt_eval_duration, reported as 1.44 million tokens a second. The
+	// clock covers only what was evaluated, so the rate has to as well.
+	it("rates Ollama's prefill on the tokens it actually evaluated", () => {
+		const timings = readEngineTimings({
+			ollama: {
+				responseId: "resp_cached",
+				prompt_eval_count: 91_738,
+				prompt_eval_cached_count: 91_000,
+				prompt_eval_duration: 63_600_000,
+				eval_count: 10,
+				eval_duration: 1_000_000_000,
+			},
+		});
+
+		// The prompt is still the whole prompt; only the rate changes.
+		expect(timings?.promptTokens).toBe(91_738);
+		expect(timings?.cachedTokens).toBe(91_000);
+		// 738 evaluated in 63.6ms, not 91,738 in 63.6ms.
+		expect(timings?.promptPerSecond).toBeCloseTo(11_603.8, 0);
+	});
+
+	// An absent field is unknown, not "nothing was cached": a server that does
+	// not report it must not have its whole prompt counted as evaluated in one
+	// direction or as zero-evaluated in the other.
+	it("falls back to the whole prompt when Ollama reports no cached count", () => {
+		const timings = readEngineTimings({
+			ollama: {
+				responseId: "resp_nocache",
+				prompt_eval_count: 900,
+				prompt_eval_duration: 1_000_000_000,
+				eval_count: 1,
+				eval_duration: 1_000_000_000,
+			},
+		});
+
+		expect(timings?.cachedTokens).toBeUndefined();
+		expect(timings?.promptPerSecond).toBeCloseTo(900, 0);
+	});
+
+	// A fully cached prompt evaluated nothing, so there is no rate to report.
+	// Zero tokens in some milliseconds is not "infinitely fast".
+	it("reports no prefill rate when the whole prompt was cached", () => {
+		const timings = readEngineTimings({
+			ollama: {
+				responseId: "resp_allcached",
+				prompt_eval_count: 4_096,
+				prompt_eval_cached_count: 4_096,
+				prompt_eval_duration: 12_000_000,
+				eval_count: 5,
+				eval_duration: 1_000_000_000,
+			},
+		});
+
+		expect(timings?.promptTokens).toBe(4_096);
+		expect(timings?.cachedTokens).toBe(4_096);
+		expect(timings?.promptPerSecond).toBeUndefined();
+	});
+
 	it("keeps llama.cpp's own rates rather than recomputing them", () => {
 		// The server divides by decode steps, not by generated tokens: the
 		// first token comes free with the prompt batch. Recomputing here would

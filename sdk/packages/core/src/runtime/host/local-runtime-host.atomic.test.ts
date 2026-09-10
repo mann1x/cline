@@ -12,6 +12,7 @@ import { setClineDir, setHomeDir } from "@cline/shared/storage";
 import { nanoid } from "nanoid";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CoreSessionEvent } from "../../types/events";
+import { DEFAULT_MAX_CHANGES } from "../atomic/session-protocol";
 import { LocalRuntimeHost } from "./local-runtime-host";
 import { splitCoreSessionConfig } from "./runtime-host";
 
@@ -353,7 +354,7 @@ describe("the change protocol, as the host wires it", () => {
 		const first = String(agent.run.mock.calls[0]?.[0] ?? "");
 		const second = String(agent.continue.mock.calls[0]?.[0] ?? "");
 		expect(first).toContain("CHANGE PROTOCOL");
-		expect(first).toContain("AT MOST 3 changes");
+		expect(first).toContain(`AT MOST ${DEFAULT_MAX_CHANGES} changes`);
 		// Rules first: a model that has read the request has already started
 		// planning against it.
 		expect(first.indexOf("CHANGE PROTOCOL")).toBeLessThan(

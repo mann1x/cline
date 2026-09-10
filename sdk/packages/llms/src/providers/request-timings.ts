@@ -60,16 +60,34 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 /**
  * Ollama's `/api/chat` final chunk, as the patched vendor forwards it.
  *
- * `prompt_eval_count` is the whole prompt, cached prefix included -- Ollama
- * does not say how much of it it skipped, which is why `cachedTokens` stays
- * empty here and is filled in on the llama.cpp path, where the server does.
+ * `prompt_eval_count` is the whole prompt, cached prefix included, while
+ * `prompt_eval_duration` covers only the part that was actually evaluated. The
+ * rate has to be computed on the second of those, and dividing the first by it
+ * is what produced 91,738 prompt tokens in 63.6 ms -- 1.44 million tokens a
+ * second, on a 9B whose real prefill rate is the ~4,000/s this same run
+ * reports on its cold turns. Measured across 385 turns of one session: the
+ * median came out at 108,000/s, so the number was not merely spiky, it was
+ * wrong nearly everywhere.
+ *
+ * `prompt_eval_cached_count` is how many were skipped, and Ollama has reported
+ * it since the KV-cache accounting landed. It is optional in the API type, so
+ * a server that omits it falls back to the old behaviour rather than to zero
+ * tokens evaluated -- an absent field is unknown, not "nothing was cached".
  */
 function readOllamaTimings(
 	metadata: Record<string, unknown>,
 ): RequestTimings | undefined {
 	const promptTokens = count(metadata.prompt_eval_count);
+	const cachedTokens = count(metadata.prompt_eval_cached_count);
 	const generateTokens = count(metadata.eval_count);
 	const promptMs = ms(metadata.prompt_eval_duration);
+	// What the clock in `promptMs` was actually spent on. Clamped at zero
+	// rather than trusted: a cached count larger than the prompt would
+	// otherwise produce a negative rate, which reads as a fast one.
+	const evaluatedTokens =
+		promptTokens === undefined || cachedTokens === undefined
+			? promptTokens
+			: Math.max(0, promptTokens - cachedTokens);
 	const generateMs = ms(metadata.eval_duration);
 	const loadMs = ms(metadata.load_duration);
 	const engineTotalMs = ms(metadata.total_duration);
@@ -87,8 +105,9 @@ function readOllamaTimings(
 		...(loadMs !== undefined ? { loadMs } : {}),
 		...(promptTokens !== undefined ? { promptTokens } : {}),
 		...(promptMs !== undefined ? { promptMs } : {}),
-		...(rate(promptTokens, promptMs) !== undefined
-			? { promptPerSecond: rate(promptTokens, promptMs) }
+		...(cachedTokens !== undefined ? { cachedTokens } : {}),
+		...(rate(evaluatedTokens, promptMs) !== undefined
+			? { promptPerSecond: rate(evaluatedTokens, promptMs) }
 			: {}),
 		...(generateTokens !== undefined ? { generateTokens } : {}),
 		...(generateMs !== undefined ? { generateMs } : {}),
