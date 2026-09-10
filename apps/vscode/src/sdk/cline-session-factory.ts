@@ -1011,7 +1011,14 @@ export function composeSessionHooks(
 	return mergeAgentHooks([
 		fileHooks,
 		createEditorDiagnosticsHooks({ cwd }),
-		createPromptTemplateHooks({ rendered, ideName: HOST_IDE_NAME }),
+		createPromptTemplateHooks({
+			rendered,
+			ideName: HOST_IDE_NAME,
+			// Both hosts report it, because the comparison that needs it is
+			// between them: a difference in what the model was told about its
+			// tools is invisible unless each side says what it sent.
+			log: (message) => Logger.log(message),
+		}),
 	])
 }
 

@@ -217,4 +217,95 @@ describe("createPromptTemplateHooks", () => {
 
 		expect(result?.tools?.[0]?.description).toBe("Search the web.");
 	});
+
+	// The whole point of the report: a run where the tools kept their built-in
+	// text is indistinguishable from a working one without it.
+	it("names the tools whose description the template changed", async () => {
+		const lines: string[] = [];
+		const hooks = createPromptTemplateHooks({
+			rendered: rendered({
+				name: "qwen",
+				tools: { editor: "use editor, never sed", read_files: "read them" },
+			}),
+			log: (message) => lines.push(message),
+		});
+
+		await hooks?.beforeModel?.(
+			contextWith([
+				tool("editor", "builtin editor text"),
+				tool("read_files", "builtin read text"),
+				tool("run_commands", "builtin shell text"),
+			]),
+		);
+
+		expect(lines).toHaveLength(1);
+		expect(lines[0]).toContain("qwen");
+		expect(lines[0]).toContain("2 of 3");
+		expect(lines[0]).toContain("editor");
+		expect(lines[0]).toContain("read_files");
+		expect(lines[0]).not.toContain("run_commands");
+	});
+
+	// The failure this exists to catch, stated in the log rather than inferred
+	// from its absence.
+	it("says so when the template changed nothing at all", async () => {
+		const lines: string[] = [];
+		const hooks = createPromptTemplateHooks({
+			rendered: rendered({ name: "qwen", tools: { editor: "same text" } }),
+			log: (message) => lines.push(message),
+		});
+
+		await hooks?.beforeModel?.(contextWith([tool("editor", "same text")]));
+
+		expect(lines[0]).toContain("0 of 1");
+		expect(lines[0]).toContain("kept its built-in text");
+	});
+
+	// A fifty-turn conversation must not print fifty copies.
+	it("reports once, not once per request", async () => {
+		const lines: string[] = [];
+		const hooks = createPromptTemplateHooks({
+			rendered: rendered({ name: "qwen", tools: { editor: "rewritten" } }),
+			log: (message) => lines.push(message),
+		});
+		const tools = [tool("editor", "builtin")];
+
+		await hooks?.beforeModel?.(contextWith(tools));
+		await hooks?.beforeModel?.(contextWith(tools));
+		// A rebuilt array: recomputed, but it changes the same tool, so silent.
+		await hooks?.beforeModel?.(contextWith([tool("editor", "builtin")]));
+
+		expect(lines).toHaveLength(1);
+	});
+
+	it("speaks again when a later request changes a different set", async () => {
+		const lines: string[] = [];
+		const hooks = createPromptTemplateHooks({
+			rendered: rendered({
+				name: "qwen",
+				tools: { editor: "rewritten", browser: "rewritten too" },
+			}),
+			log: (message) => lines.push(message),
+		});
+
+		await hooks?.beforeModel?.(contextWith([tool("editor", "builtin")]));
+		await hooks?.beforeModel?.(
+			contextWith([tool("editor", "builtin"), tool("browser", "builtin")]),
+		);
+
+		expect(lines).toHaveLength(2);
+		expect(lines[1]).toContain("browser");
+	});
+
+	it("rewrites exactly as before when no log is given", async () => {
+		const hooks = createPromptTemplateHooks({
+			rendered: rendered({ tools: { editor: "rewritten" } }),
+		});
+
+		const result = await hooks?.beforeModel?.(
+			contextWith([tool("editor", "builtin")]),
+		);
+
+		expect(result?.tools?.[0]?.description).toBe("rewritten");
+	});
 });

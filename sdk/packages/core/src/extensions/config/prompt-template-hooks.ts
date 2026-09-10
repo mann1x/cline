@@ -33,12 +33,29 @@ export interface PromptTemplateHooksOptions {
 	 * is not required.
 	 */
 	ideName?: string;
+	/**
+	 * Where the rewrite is reported, once.
+	 *
+	 * The resolution line -- `[PromptTemplates] <model> (<family>) -> qwen over
+	 * default` -- says which template won. It does not say whether the
+	 * descriptions reached the request, and those are two different failures.
+	 * This hook has to be merged into the host's config, and merging it wrongly
+	 * dropped it before: silently, and completely under `--yolo`, where the
+	 * runtime layer was `undefined` and the assignment erased everything. A
+	 * session whose tools kept their built-in text looks identical from the
+	 * outside to one where the template applied -- same log line, same prompt,
+	 * different tools.
+	 *
+	 * So this names what actually went onto the request. A host that omits it
+	 * loses the report, not the rewrite.
+	 */
+	log?: (message: string) => void;
 }
 
 export function createPromptTemplateHooks(
 	options: PromptTemplateHooksOptions,
 ): AgentHooks | undefined {
-	const { rendered, ideName } = options;
+	const { rendered, ideName, log } = options;
 	if (!rendered || Object.keys(rendered.tools).length === 0) {
 		// No templates on disk at all. Every other case — including a template
 		// that overrides nothing — still carries `default.md`'s descriptions and
@@ -53,6 +70,9 @@ export function createPromptTemplateHooks(
 	// recomputes, which is correct either way. Weak so a finished session's
 	// tools can be collected.
 	const cache = new WeakMap<object, AgentToolDefinition[]>();
+	// The last set reported, so a rebuilt tool array that changes nothing stays
+	// quiet while one that changes something is heard.
+	let reported: string | undefined;
 
 	return {
 		beforeModel: async (context) => {
@@ -74,6 +94,32 @@ export function createPromptTemplateHooks(
 				description: tool.description ?? "",
 			}));
 			cache.set(tools, rewritten);
+			if (log) {
+				const changed: string[] = [];
+				let before = 0;
+				let after = 0;
+				for (const [index, tool] of tools.entries()) {
+					const was = tool.description ?? "";
+					const now = rewritten[index]?.description ?? "";
+					before += was.length;
+					after += now.length;
+					if (was !== now) {
+						changed.push(tool.name);
+					}
+				}
+				const signature = changed.join(",");
+				if (signature !== reported) {
+					reported = signature;
+					// Named, not counted: "30 of 34" does not say whether `editor`
+					// was one of them, and `editor` is the one that matters when a
+					// model is writing files by other means.
+					log(
+						changed.length === 0
+							? `[PromptTemplates] ${rendered.name}: 0 of ${tools.length} tool descriptions rewritten -- every tool kept its built-in text`
+							: `[PromptTemplates] ${rendered.name}: ${changed.length} of ${tools.length} tool descriptions rewritten (${before} -> ${after} chars): ${changed.join(", ")}`,
+					);
+				}
+			}
 			return { tools: rewritten };
 		},
 	};

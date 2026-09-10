@@ -1321,6 +1321,10 @@ export async function runCli(): Promise<void> {
 			hooks: createPromptTemplateHooks({
 				rendered: renderedTemplate,
 				ideName,
+				// Reported on the same channel as the resolution line above, so a
+				// run's log answers both halves: which template won, and which
+				// tool descriptions actually went onto the request.
+				log: (message) => loggerAdapter.core.log(message),
 			}),
 			// Kept so every later rebuild of the system prompt -- a plan/act
 			// switch, the connector path -- starts from the same template.
