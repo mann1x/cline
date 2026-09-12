@@ -1,0 +1,166 @@
+# Release the mann1x fork to GitHub Releases.
+#
+# This exists because the manual release path kept getting the artefact name
+# wrong. `vsce package` with no `--out` falls back to
+# `<package.json name>-<version>.vsix`, and this fork has never changed
+# package.json's `name` from upstream's `claude-dev` — so v4.100.99 through
+# v4.100.104 were all published as `claude-dev-<version>.vsix`, under
+# upstream's identity, while v4.100.86 and earlier were correctly
+# `cline-mann1x-<version>.vsix`. The `gh release create` line in the protocol
+# used a glob, so the wrong name uploaded silently.
+#
+# Here the name is computed once, asserted, and uploaded by exact path. There
+# is no glob and no human in the naming path.
+#
+# This does NOT publish to the VS Code Marketplace or Open VSX — that is
+# upstream's `ext-vscode-publish-stable.yml`, and it needs secrets this fork
+# does not have. This only cuts the GitHub release.
+
+name: Fork Release
+
+on:
+    push:
+        tags:
+            - "v*"
+    workflow_dispatch:
+        inputs:
+            tag:
+                description: "Existing tag to release (e.g. v4.100.105)"
+                required: true
+                type: string
+
+# The artefact name for this fork. Changing this breaks every install
+# instruction that names the file, so change it deliberately or not at all.
+env:
+    ARTIFACT_PREFIX: cline-mann1x
+
+permissions:
+    contents: write
+
+jobs:
+    release:
+        name: Build and release the VSIX
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Resolve the tag
+              id: tag
+              run: |
+                  if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+                    TAG="${{ github.event.inputs.tag }}"
+                  else
+                    TAG="${GITHUB_REF#refs/tags/}"
+                  fi
+                  if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$ ]]; then
+                    echo "Error: tag '$TAG' must match vX.Y.Z (optionally with -suffix or .suffix)"
+                    exit 1
+                  fi
+                  echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+                  echo "Releasing $TAG"
+
+            - uses: actions/checkout@v4
+              with:
+                  ref: refs/tags/${{ steps.tag.outputs.tag }}
+                  fetch-depth: 0
+                  lfs: true
+
+            - name: Setup Bun
+              uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: 1.3.14
+
+            # Node 22 specifically: newer LTS (Node 24 / npm 11) makes vsce's
+            # `npm list` detection fail with ELSPROBLEMS during packaging.
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+
+            - name: Install workspace dependencies
+              run: bun install --frozen-lockfile
+
+            # @cline/* are workspace symlinks to source packages. Without this the
+            # build is green while the .vsix carries a stale dist/ — the extension
+            # bundles core FROM dist, not from source.
+            - name: Build SDK packages
+              run: bun run build:sdk
+
+            - name: Assert better-sqlite3 native binary present
+              working-directory: apps/vscode
+              run: |
+                  NODE_FILE="node_modules/better-sqlite3/build/Release/better_sqlite3.node"
+                  if [ ! -f "$NODE_FILE" ]; then
+                    echo "ERROR: better-sqlite3 native binary missing at apps/vscode/$NODE_FILE"
+                    echo "(bun trustedDependencies postinstall likely did not run)"
+                    exit 1
+                  fi
+                  echo "Found better-sqlite3 native binary: $NODE_FILE"
+
+            - name: Install vsce
+              run: npm install -g @vscode/vsce
+
+            - name: Resolve version and assert it matches the tag
+              id: version
+              working-directory: apps/vscode
+              run: |
+                  VERSION=$(node -p "require('./package.json').version")
+                  TAG="${{ steps.tag.outputs.tag }}"
+                  if [[ "$TAG" != "v$VERSION" ]]; then
+                    echo "Error: tag '$TAG' does not match apps/vscode/package.json version 'v$VERSION'"
+                    echo "Bump the version and commit it before tagging."
+                    exit 1
+                  fi
+                  echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+                  echo "artifact=${ARTIFACT_PREFIX}-${VERSION}.vsix" >> "$GITHUB_OUTPUT"
+                  echo "Tag and package version agree: $TAG"
+
+            # `package` is build:sdk && check-types && build:webview && lint &&
+            # esbuild. It builds only — it does not produce a .vsix.
+            - name: Build the extension
+              working-directory: apps/vscode
+              run: bun run package
+
+            # --no-dependencies: the extension is fully esbuild-bundled, and under
+            # the bun workspace the @cline/* deps are symlinks pointing outside the
+            # package, so without this vsce walks them and pulls the whole monorepo
+            # into the .vsix.
+            - name: Package the VSIX under the fork's name
+              working-directory: apps/vscode
+              run: |
+                  vsce package --no-dependencies --allow-package-secrets sendgrid \
+                    --out "${{ steps.version.outputs.artifact }}"
+
+            - name: Assert the artefact exists under exactly the expected name
+              working-directory: apps/vscode
+              run: |
+                  ARTIFACT="${{ steps.version.outputs.artifact }}"
+                  if [ ! -f "$ARTIFACT" ]; then
+                    echo "ERROR: expected artefact '$ARTIFACT' was not produced."
+                    echo "What is actually here:"
+                    ls -l ./*.vsix 2>/dev/null || echo "  (no .vsix at all)"
+                    exit 1
+                  fi
+                  # A stray upstream-named build alongside ours means --out was
+                  # ignored or a previous step produced one; refuse rather than
+                  # let a glob pick the wrong file later.
+                  STRAYS=$(ls ./*.vsix | grep -v -F "$ARTIFACT" || true)
+                  if [ -n "$STRAYS" ]; then
+                    echo "ERROR: unexpected extra .vsix files present:"
+                    echo "$STRAYS"
+                    exit 1
+                  fi
+                  echo "Artefact: $ARTIFACT ($(stat -c%s "$ARTIFACT") bytes)"
+                  sha256sum "$ARTIFACT"
+
+            - name: Create the GitHub release
+              uses: softprops/action-gh-release@v1
+              with:
+                  tag_name: ${{ steps.tag.outputs.tag }}
+                  name: ${{ steps.tag.outputs.tag }}
+                  # Exact path, never a glob: a glob is what let the wrongly-named
+                  # artefact upload silently in the first place.
+                  files: apps/vscode/${{ steps.version.outputs.artifact }}
+                  fail_on_unmatched_files: true
+                  generate_release_notes: true
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

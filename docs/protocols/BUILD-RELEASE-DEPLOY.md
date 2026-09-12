@@ -58,7 +58,24 @@ git commit -am "release: 4.100.91"
 ### 3. Build the VSIX
 
 ```bash
-cd apps/vscode && bun run package && bunx vsce package --no-dependencies
+cd apps/vscode && bun run package && \
+  bunx vsce package --no-dependencies --allow-package-secrets sendgrid \
+    --out "cline-mann1x-4.100.91.vsix"
+```
+
+**`--out` is not optional.** With no `--out`, vsce names the file from
+`package.json` — and this fork has never changed `name` from upstream's
+`claude-dev`, so you get `claude-dev-<version>.vsix`. That is upstream's
+identity on a fork's release asset. It happened: v4.100.86 was correctly
+`cline-mann1x-4.100.86.vsix`, and v4.100.99 through v4.100.104 all shipped as
+`claude-dev-<version>.vsix` because this line had no `--out`.
+
+**The artefact is always `cline-mann1x-<version>.vsix`.** Check the name before
+going further — the wrong one builds and uploads perfectly happily:
+
+```bash
+ls -l apps/vscode/cline-mann1x-4.100.91.vsix   # must exist, by that exact name
+ls apps/vscode/*.vsix                          # must list nothing else
 ```
 
 `package` is `build:sdk && check-types && build:webview && lint && esbuild`. It
@@ -77,9 +94,27 @@ commit before believing a success.
 ```bash
 git push origin HEAD:mann1x/full-build-release
 git tag -a v4.100.91 -m "v4.100.91" && git push origin v4.100.91
-gh release create v4.100.91 apps/vscode/*4.100.91.vsix --repo mann1x/cline \
+gh release create v4.100.91 \
+  apps/vscode/cline-mann1x-4.100.91.vsix --repo mann1x/cline \
   --title "v4.100.91" --notes-file <notes>
 ```
+
+**Name the file, never glob it.** `apps/vscode/*4.100.91.vsix` uploads whatever
+is on disk, which is exactly how the `claude-dev-*` assets got published without
+anyone noticing. Spelling the name out makes a mis-named build fail here instead
+of shipping.
+
+**Better: don't do this by hand.** `.github/workflows/fork-release.yml` does the
+whole of steps 3 and 4 — it computes the name, asserts it, refuses a stray
+second `.vsix`, and uploads by exact path. Push the tag and it runs:
+
+```bash
+git push origin HEAD:mann1x/full-build-release
+git tag -a v4.100.91 -m "v4.100.91" && git push origin v4.100.91   # this releases
+```
+
+It also refuses to release if the tag and `apps/vscode/package.json` disagree.
+Use the manual path only when Actions is unavailable on the fork.
 
 Merge to `main` as well when the raw-URL tools need to see the change — `main`
 is what those fetch from, and it has sat hundreds of commits behind before.
@@ -94,8 +129,9 @@ different claims.
 ### 6. Deploy to pandorum
 
 ```bash
-scp apps/vscode/<name>.vsix 'pandorum:C:/Users/manni/Downloads/<name>.vsix'
-ssh pandorum 'powershell -NoProfile -Command "code --install-extension C:/Users/manni/Downloads/<name>.vsix --force"'
+scp apps/vscode/cline-mann1x-4.100.91.vsix \
+  'pandorum:C:/Users/manni/Downloads/cline-mann1x-4.100.91.vsix'
+ssh pandorum 'powershell -NoProfile -Command "code --install-extension C:/Users/manni/Downloads/cline-mann1x-4.100.91.vsix --force"'
 ```
 
 **Always the full path.** Path stripping is a standing rule, and the installer
