@@ -6,6 +6,8 @@ import {
 	createRestoreFileTool,
 	MAX_NOOP_RESTORES_PER_TRANSACTION,
 	MAX_RESTORES_PER_TRANSACTION,
+	RESTORE_HABIT_AFTER,
+	RESTORE_HABIT_INSISTS_AFTER,
 } from "./restore-file-tool";
 import { type Snapshot, takeSnapshot } from "./snapshot";
 
@@ -266,6 +268,114 @@ describe("putting one file back", () => {
 			);
 
 			expect(said).toContain("outside the directory");
+		});
+	});
+});
+
+describe("what a run of restores is told it means", () => {
+	// 13.6 restores per run on the JackOD4-AC 9B arm against 0.23 on qwen3.6
+	// 27B, and within the arm near-monotonic with wall time: the three runs that
+	// restored nothing were the three fastest successes, the three highest
+	// counts were the three timeouts. The sentence is aimed at the reading
+	// behind the edits, not at the restoring, which is the part that is working.
+	async function restoring(
+		run: (
+			restore: () => Promise<string>,
+			reopen: () => Promise<void>,
+		) => Promise<void>,
+	): Promise<void> {
+		await withWorkspace(
+			{ "game.html": "line one\nline two\n" },
+			async (root) => {
+				const controller = new FakeController();
+				controller.pending = await takeSnapshot(root);
+				const tool = createRestoreFileTool({ controller });
+				let wrecks = 0;
+				const restore = async () => {
+					wrecks += 1;
+					await fs.writeFile(
+						path.join(root, "game.html"),
+						`wrecked ${wrecks}`,
+						"utf8",
+					);
+					return String(await tool.execute({ path: "game.html" }, context));
+				};
+				const reopen = async () => {
+					controller.transaction += 1;
+					controller.pending = await takeSnapshot(root);
+				};
+				await run(restore, reopen);
+			},
+		);
+	}
+
+	it("says nothing about the habit for the first two", async () => {
+		await restoring(async (restore) => {
+			expect(RESTORE_HABIT_AFTER).toBe(3);
+			expect(await restore()).not.toContain("changes undone");
+			expect(await restore()).not.toContain("changes undone");
+		});
+	});
+
+	it("names it from the third", async () => {
+		await restoring(async (restore) => {
+			await restore();
+			await restore();
+			const third = await restore();
+
+			expect(third).toContain("3 changes undone");
+			expect(third).toContain("the reading behind it is wrong");
+			// The half these runs behaved as though they did not know.
+			expect(third).toContain("put back in full");
+		});
+	});
+
+	it("stops nudging and answers from the sixth", async () => {
+		await restoring(async (restore) => {
+			let said = "";
+			for (let call = 0; call < RESTORE_HABIT_INSISTS_AFTER; call += 1) {
+				said = await restore();
+			}
+
+			expect(said).toContain("no longer recovery");
+			expect(said).toContain("end the transaction");
+			expect(said).not.toContain("the reading behind it is wrong");
+		});
+	});
+
+	// `spentIn` and `noOps` are separate counters and must stay that way: a
+	// model asking about a file it never changed has lost track of what it
+	// changed, which the no-op budget answers. It is not a run of undone work.
+	it("does not count a restore that undid nothing", async () => {
+		await withWorkspace({ "game.html": "line one\n" }, async (root) => {
+			const controller = new FakeController();
+			controller.pending = await takeSnapshot(root);
+			const tool = createRestoreFileTool({ controller });
+
+			await fs.writeFile(path.join(root, "game.html"), "wrecked", "utf8");
+			await tool.execute({ path: "game.html" }, context);
+			// Two no-ops: the file already matches the base.
+			await tool.execute({ path: "game.html" }, context);
+			await tool.execute({ path: "game.html" }, context);
+
+			await fs.writeFile(path.join(root, "game.html"), "wrecked again", "utf8");
+			const second = String(await tool.execute({ path: "game.html" }, context));
+
+			expect(second).not.toContain("changes undone");
+		});
+	});
+
+	// A model that recovered in TX-01 does not begin TX-02 already two strikes
+	// down, exactly as the restore budget itself is reset by a new transaction.
+	it("starts again in the next transaction", async () => {
+		await restoring(async (restore, reopen) => {
+			await restore();
+			await restore();
+			await reopen();
+
+			expect(await restore()).not.toContain("changes undone");
+			expect(await restore()).not.toContain("changes undone");
+			expect(await restore()).toContain("3 changes undone");
 		});
 	});
 });

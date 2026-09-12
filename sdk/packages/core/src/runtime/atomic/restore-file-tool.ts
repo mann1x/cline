@@ -342,9 +342,65 @@ export function createRestoreFileTool(
 
 function describeBudget(spent: number): string {
 	const left = MAX_RESTORES_PER_TRANSACTION - spent;
-	return left > 0
-		? `${left} more restore${left === 1 ? "" : "s"} available in this transaction.`
-		: "That was the last restore available in this transaction.";
+	const budget =
+		left > 0
+			? `${left} more restore${left === 1 ? "" : "s"} available in this transaction.`
+			: "That was the last restore available in this transaction.";
+	const habit = describeRestoreHabit(spent);
+	return habit ? `${budget} ${habit}` : budget;
+}
+
+/**
+ * Real restores in one transaction before the tool says what that many means.
+ *
+ * Measured on the JackOD4-AC 9B arm: 13.6 `restore_file` calls per run against
+ * 0.23 for qwen3.6 27B over 40 runs, a factor of 59. Within the arm the count
+ * is near-monotonic with wall time -- the three runs that restored nothing were
+ * the three fastest successes, and the three highest counts (28, 30, 36) were
+ * the three timeouts. One of them deleted 4,939 bytes, 35% of the file, before
+ * it reached the cap.
+ *
+ * Three is early on purpose, because this is a sentence and not a refusal. The
+ * cap that refuses is `MAX_RESTORES_PER_TRANSACTION` and it is deliberately
+ * generous: a restore is the right call for an edit that went wrong, and a
+ * model told to stop restoring goes back to retyping the original from memory,
+ * which is how the runs this came from actually lost files.
+ */
+export const RESTORE_HABIT_AFTER = 3;
+
+/** Where the same sentence stops being a nudge and starts being the answer. */
+export const RESTORE_HABIT_INSISTS_AFTER = 6;
+
+/**
+ * What three restores in one transaction are evidence of.
+ *
+ * Not that restoring is wrong. That the edits being undone are wrong in the
+ * same way each time, which makes the reading behind them wrong rather than the
+ * typing -- and no number of restores fixes a reading.
+ *
+ * The second half is the thing these runs behaved as though they did not know.
+ * A model restoring file after file is trying to hand back a clean workspace,
+ * and it does not have to: a transaction that ends on a failing check is put
+ * back in full whatever state its files are in, and the account it writes is
+ * kept and read by the next one. Restoring buys nothing that ending does not.
+ */
+function describeRestoreHabit(spent: number): string | undefined {
+	if (spent < RESTORE_HABIT_AFTER) {
+		return undefined;
+	}
+	if (spent < RESTORE_HABIT_INSISTS_AFTER) {
+		return [
+			`That is ${spent} changes undone in this transaction.`,
+			"Undoing the same kind of edit that many times means the reading behind it is wrong, not the typing.",
+			"Run the check and say what it actually reports, and what in the file produces it, before you edit again.",
+			"You do not have to restore your way back to a clean file: if this transaction ends with the check still failing, every file in it is put back in full and what you wrote about it is kept.",
+		].join(" ");
+	}
+	return [
+		`That is ${spent} changes undone in this transaction, which is no longer recovery — it is one attempt being repeated.`,
+		"Stop editing and end the transaction: say plainly what you tried and what the check still says.",
+		"The files are put back either way, and saying it is the only part that reaches the next transaction.",
+	].join(" ");
 }
 
 function describeDiscarded(current: Buffer, base: Buffer): string {
