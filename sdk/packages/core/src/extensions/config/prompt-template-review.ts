@@ -34,6 +34,13 @@ import { parsePromptTemplate } from "./prompt-template-parser";
  * The other twenty-three are genuinely fine as `{{DEFAULT}}`: nothing about
  * how a model reads changes what `team_finalize_outcome` should say.
  */
+import {
+	buildToolSectionDeltaPrompt,
+	parseToolSectionsFromReply,
+	spliceToolSections,
+	splitTemplateSections,
+} from "./prompt-template-delta";
+
 export const DEFAULT_REQUIRED_REWRITES = [
 	"read_files",
 	"search_codebase",
@@ -1230,6 +1237,20 @@ export interface GeneratePromptTemplateArgs {
 	 * one would judge a name the file will never have.
 	 */
 	fileName?: string;
+	/**
+	 * Rewrite only these tool sections, splicing them into `familyTemplate`.
+	 *
+	 * The reason this exists is that adding one tool otherwise rewrites all ten
+	 * shipped templates end to end, putting thirty untouched sections per file
+	 * at risk to change one. With it, the model is asked for the named sections
+	 * and the rest of the file is carried through byte for byte.
+	 *
+	 * The audit is not relaxed: the delta is spliced first and the *whole* file
+	 * is audited second, so full tool coverage and every other whole-file rule
+	 * still has to hold. Requires `familyTemplate` — there is nothing to splice
+	 * a section into otherwise.
+	 */
+	onlyTools?: readonly string[];
 	/** Tries, including the first. Each retry hands back the problem list. */
 	attempts?: number;
 	/** One completion. Returns the reply text; throws to abort. */
@@ -1253,32 +1274,77 @@ export async function generatePromptTemplate(
 ): Promise<GeneratePromptTemplateResult> {
 	const attemptLimit = Math.max(1, args.attempts ?? 3);
 	const fileName = args.fileName ?? `${args.expectedName ?? "generated"}.md`;
+
+	// A section rewrite and a whole-file rewrite differ only in what is asked
+	// for and what is done with the reply. Everything after that -- the audit,
+	// the repair loop, the choice of the cleanest attempt -- is deliberately
+	// the same code, because a template produced either way has to be the same
+	// artefact.
+	const onlyTools = args.onlyTools ?? [];
+	const isDelta = onlyTools.length > 0;
+	const familyTemplate = args.familyTemplate;
+	if (isDelta && familyTemplate === undefined) {
+		throw new Error(
+			"A section rewrite needs a file to splice into: pass `familyTemplate`, or leave `onlyTools` empty to write a whole template.",
+		);
+	}
+	const unknownAsked = onlyTools.filter(
+		(name) => !args.knownToolNames.includes(name),
+	);
+	if (unknownAsked.length > 0) {
+		throw new Error(
+			`Asked to rewrite ${unknownAsked.map((name) => `\`${name}\``).join(", ")}, which ${unknownAsked.length === 1 ? "is not a tool" : "are not tools"}. A section can only be written for a tool that exists.`,
+		);
+	}
+	const defaultSections = new Map(
+		splitTemplateSections(args.defaultTemplate).flatMap((section) =>
+			section.name === undefined ? [] : [[section.name, section.body] as const],
+		),
+	);
+
 	const messages: { role: "user" | "assistant"; content: string }[] = [
 		{
 			role: "user",
-			content: buildPromptTemplateReviewPrompt(
-				args.defaultTemplate,
-				args.familyTemplate,
-				args.familyFileName,
-				{
-					providerId: args.providerId,
-					modelId: args.modelId,
-					family: args.family,
-				},
-				args.toolSignatures,
-				args.requiredSections ?? args.knownToolNames,
-				hasMatchOverride({
-					name: args.expectedName,
-					family: args.matchFamily,
-					model: args.matchModel,
-				})
-					? {
+			content: isDelta
+				? buildToolSectionDeltaPrompt({
+						familyTemplate: familyTemplate as string,
+						defaultSections,
+						tools: onlyTools,
+						...(args.toolSignatures
+							? {
+									signatureText: renderToolCallSignatures(
+										args.toolSignatures.filter((entry) =>
+											onlyTools.includes(entry.name),
+										),
+									),
+								}
+							: {}),
+						modelId: args.modelId,
+						...(args.family === undefined ? {} : { family: args.family }),
+					})
+				: buildPromptTemplateReviewPrompt(
+						args.defaultTemplate,
+						args.familyTemplate,
+						args.familyFileName,
+						{
+							providerId: args.providerId,
+							modelId: args.modelId,
+							family: args.family,
+						},
+						args.toolSignatures,
+						args.requiredSections ?? args.knownToolNames,
+						hasMatchOverride({
 							name: args.expectedName,
 							family: args.matchFamily,
 							model: args.matchModel,
-						}
-					: undefined,
-			),
+						})
+							? {
+									name: args.expectedName,
+									family: args.matchFamily,
+									model: args.matchModel,
+								}
+							: undefined,
+					),
 		},
 	];
 
@@ -1290,8 +1356,32 @@ export async function generatePromptTemplate(
 			throw new Error("The model returned an empty response.");
 		}
 
-		const raw = extractTemplateFromReply(reply);
-		const audit = auditPromptTemplateProposal({
+		// In delta mode the reply is a handful of sections, not a template. It
+		// is spliced into the file it came from and the whole result is what
+		// gets audited, so a partial answer is never a partial check.
+		const deltaProblems: string[] = [];
+		let raw: string;
+		if (isDelta) {
+			const parsed = parseToolSectionsFromReply(reply, args.knownToolNames);
+			const wanted = new Map(
+				[...parsed.sections].filter(([name]) => onlyTools.includes(name)),
+			);
+			const missing = onlyTools.filter((name) => !wanted.has(name));
+			if (missing.length > 0) {
+				deltaProblems.push(
+					`The reply has no \`# tool: ${missing[0]}\` section${missing.length > 1 ? ` (and none for ${missing.slice(1).join(", ")})` : ""}. Return one \`# tool: <name>\` section for each of ${onlyTools.join(", ")}, and nothing else.`,
+				);
+			}
+			if (parsed.unknown.length > 0) {
+				deltaProblems.push(
+					`The reply has a section for ${parsed.unknown.map((name) => `\`${name}\``).join(", ")}, which ${parsed.unknown.length === 1 ? "is not a tool that exists" : "are not tools that exist"}. Write sections only for ${onlyTools.join(", ")}.`,
+				);
+			}
+			raw = spliceToolSections(familyTemplate as string, wanted).template;
+		} else {
+			raw = extractTemplateFromReply(reply);
+		}
+		const fileAudit = auditPromptTemplateProposal({
 			raw,
 			fileName,
 			providerId: args.providerId,
@@ -1307,6 +1397,13 @@ export async function generatePromptTemplate(
 			toolSignatures: args.toolSignatures,
 			expectedName: args.expectedName,
 		});
+		// A delta's own failures are reported alongside the file's, first,
+		// because "you did not send the section" explains an audit failure that
+		// would otherwise read as the template being broken.
+		const audit: PromptTemplateProposalAudit =
+			deltaProblems.length > 0
+				? { ...fileAudit, problems: [...deltaProblems, ...fileAudit.problems] }
+				: fileAudit;
 		args.onAttempt?.(attempt, audit.problems);
 
 		// Keep the cleanest attempt, so a run that never reaches zero problems
@@ -1325,7 +1422,9 @@ export async function generatePromptTemplate(
 			messages.push({ role: "assistant", content: raw });
 			messages.push({
 				role: "user",
-				content: buildPromptTemplateRepairPrompt(raw, audit.problems),
+				content: isDelta
+					? `${buildPromptTemplateRepairPrompt(raw, audit.problems)}\n\nReturn ONLY the \`# tool:\` ${onlyTools.length === 1 ? "section" : "sections"} for ${onlyTools.join(", ")} again, corrected. The file above is shown whole so you can see the effect; it is not what to send back.`
+					: buildPromptTemplateRepairPrompt(raw, audit.problems),
 			});
 		}
 	}

@@ -15,6 +15,11 @@
  *   bun scripts/review-prompt-templates.mts
  *   bun scripts/review-prompt-templates.mts --model glm-5.3:cloud
  *   bun scripts/review-prompt-templates.mts --all
+ *
+ * To add or rewrite one tool across every shipped template without touching
+ * anything else in those files:
+ *
+ *   bun scripts/review-prompt-templates.mts --all --tool grep --tool sed
  *   OLLAMA_HOST=http://pandorum:11439 bun scripts/review-prompt-templates.mts
  *
  * What comes back is a proposal, not a template. It is parsed and validated
@@ -282,6 +287,18 @@ interface Options {
 	/** Extra tools a rewrite must address, on top of REQUIRED_MENTIONS. */
 	require: string[];
 	/**
+	 * Rewrite only these tool sections, leaving the rest of the file alone.
+	 *
+	 * Adding one tool otherwise means a full-file rewrite of every shipped
+	 * template, which puts thirty untouched sections per file at risk to change
+	 * one. With `--tool` the model is asked for the named sections, they are
+	 * spliced into the existing file, and the diff is exactly those sections.
+	 *
+	 * The audit is unchanged: the splice happens first and the whole file is
+	 * audited second, so nothing is checked less thoroughly for being a delta.
+	 */
+	onlyTools: string[];
+	/**
 	 * An explicit `model:` match for a template written from scratch.
 	 *
 	 * For a model reachable only through a params overlay: the overlay's name is
@@ -334,6 +351,7 @@ function parseArgs(argv: string[]): Options {
 	let timeoutMs = DEFAULT_TIMEOUT_MS;
 	let attempts = DEFAULT_ATTEMPTS;
 	const require: string[] = [];
+	const onlyTools: string[] = [];
 	const matchModel: string[] = [];
 	const matchFamily: string[] = [];
 	let name: string | undefined;
@@ -409,6 +427,13 @@ function parseArgs(argv: string[]): Options {
 				timeoutMs = Number(value) * 1000;
 				index++;
 				break;
+			case "--tool":
+				if (!value) {
+					throw new Error("--tool needs a tool name");
+				}
+				onlyTools.push(value);
+				index++;
+				break;
 			case "--require":
 				if (!value) {
 					throw new Error("--require needs a tool name");
@@ -438,6 +463,7 @@ function parseArgs(argv: string[]): Options {
 		timeoutMs,
 		attempts,
 		require,
+		onlyTools,
 		matchModel,
 		matchFamily,
 		name,
@@ -584,6 +610,21 @@ async function review(model: string, options: Options): Promise<boolean> {
 		)?.tools ?? {},
 	);
 
+	// A delta run and a full rewrite produce the same kind of file, so the log
+	// has to say which one happened: reading a diff of two sections and thinking
+	// you are reading a whole regenerated template is the confusion to prevent.
+	if (options.onlyTools.length > 0) {
+		runLog.log(
+			`  rewriting ${options.onlyTools.length} section(s) only: ${options.onlyTools.join(", ")}`,
+		);
+		if (familyTemplate === undefined) {
+			runLog.error(
+				`  ${model} resolves to the default template, so there is no family file to splice into. Give it --family, or drop --tool to write a whole template.`,
+			);
+			return false;
+		}
+	}
+
 	const slug = model.replace(/[^a-zA-Z0-9._-]/g, "-");
 	const runDir = join(options.regenRoot, `${RUN_STAMP}-${slug}`);
 	const outputPath = join(runDir, `${slug}.md`);
@@ -603,6 +644,7 @@ async function review(model: string, options: Options): Promise<boolean> {
 			// audited against the schema it will actually be sent.
 			toolSignatures: getShippedToolCallSignatures(),
 			requiredMentions: [...REQUIRED_MENTIONS, ...options.require],
+			onlyTools: options.onlyTools,
 			expectedName: options.name ?? (isDefault ? undefined : matchedName),
 			matchModel: options.matchModel,
 			matchFamily: options.matchFamily,
