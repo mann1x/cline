@@ -9,6 +9,17 @@ import { ScrollBehavior } from "../types/chatTypes"
 const STICKY_HEADER_HEIGHT = 32
 
 /**
+ * How often the growing last row may pull the view back to the bottom, and how
+ * long after the last growth to scroll once more.
+ *
+ * The throttle is what makes the pin work at all during a stream (see
+ * `keepPinnedToBottomAfterLayout`); the settle is what makes it land in the
+ * right place once the stream stops.
+ */
+const LEADING_PIN_THROTTLE_MS = 120
+const LAYOUT_SETTLE_MS = 500
+
+/**
  * Custom hook for managing scroll behavior
  * Handles auto-scrolling, manual scrolling, and scroll-to-message functionality
  */
@@ -35,6 +46,7 @@ export function useScrollBehavior(
 	const scrollContainerRef = useRef<HTMLDivElement>(null)
 	const disableAutoScrollRef = useRef(false)
 	const layoutSettleScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+	const lastLeadingPinAtRef = useRef(0)
 
 	// State
 	const [isAtBottom, setIsAtBottom] = useState(false)
@@ -336,9 +348,41 @@ export function useScrollBehavior(
 		}
 	}, [])
 
+	/**
+	 * Keep the newest content in view while the last row grows.
+	 *
+	 * The list's other pin paths are keyed on the number of rows and on the ts of
+	 * the tail row, both of which are deliberately stable while a message
+	 * streams -- so for the whole of a streaming turn this is the *only* thing
+	 * holding the view at the bottom.
+	 *
+	 * It used to be a trailing-edge debounce alone: every content change cleared
+	 * the pending timer and set a new one 500ms out. A turn that streams
+	 * continuously produces content changes far closer together than that, so the
+	 * timer was cancelled and reset indefinitely and the scroll fired only once
+	 * the stream went quiet -- which, from the reader's side, is at the end of the
+	 * turn. A long turn looked frozen partway down its own output, and a reader
+	 * who wheeled down to check found the view sitting still while the model was
+	 * plainly still generating.
+	 *
+	 * So the pin now leads as well as trails. The leading scroll is throttled
+	 * rather than run on every change, because the height observer fires about as
+	 * often as frames do and an unthrottled scroll per frame fights the browser's
+	 * own layout; it is instant rather than smooth for the same reason, since a
+	 * smooth scroll restarted every 120ms never arrives anywhere. The trailing
+	 * settle is unchanged and still earns its place: it is what catches the late
+	 * shift after an image or a code block finishes measuring, once the stream
+	 * has stopped feeding the leading edge.
+	 */
 	const keepPinnedToBottomAfterLayout = useCallback(() => {
 		if (disableAutoScrollRef.current) {
 			return
+		}
+
+		const now = Date.now()
+		if (now - lastLeadingPinAtRef.current >= LEADING_PIN_THROTTLE_MS) {
+			lastLeadingPinAtRef.current = now
+			scrollToBottomAuto()
 		}
 
 		if (layoutSettleScrollTimerRef.current !== null) {
@@ -346,11 +390,12 @@ export function useScrollBehavior(
 		}
 		layoutSettleScrollTimerRef.current = setTimeout(() => {
 			if (!disableAutoScrollRef.current) {
+				lastLeadingPinAtRef.current = Date.now()
 				scrollToBottomSmooth()
 			}
 			layoutSettleScrollTimerRef.current = null
-		}, 500)
-	}, [scrollToBottomSmooth])
+		}, LAYOUT_SETTLE_MS)
+	}, [scrollToBottomSmooth, scrollToBottomAuto])
 
 	const handleRowHeightChange = useCallback(
 		(_isTaller: boolean) => {

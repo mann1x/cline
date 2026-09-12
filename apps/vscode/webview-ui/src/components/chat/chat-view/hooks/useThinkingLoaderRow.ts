@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { isToolGroup } from "../utils/messageUtils"
 
 /**
- * Grace period before showing the "Thinking..." loader row when its trigger is the tail
+ * Grace period before showing the "Generating..." loader row when its trigger is the tail
  * message finishing streaming (partial -> false). That signal is ambiguous: mid-turn it means
  * "waiting on the model's next content block / API request" (loader wanted), but at the end of
  * a turn it arrives via the fast partial-message stream moments before the `done` event flips
@@ -37,7 +37,7 @@ export interface ThinkingLoaderInputs {
 
 /**
  * Whether the agent is presumed to be working with nothing visibly streaming yet, i.e. the
- * "Thinking..." loader row should be requested. This is the sole early loading indicator -
+ * "Generating..." loader row should be requested. This is the sole early loading indicator -
  * RequestStartRow does NOT duplicate it.
  * Covers: pre-api_req_started (backend processing) AND post-api_req_started (waiting for model).
  * Hides once reasoning, tools, text, or any other content message appears.
@@ -152,7 +152,7 @@ export function computeIsWaitingForResponse({
 }
 
 /**
- * Debounced visibility for the in-list "Thinking..." loader row.
+ * Debounced visibility for the in-list "Generating..." loader row.
  *
  * Shows immediately for unambiguous triggers (turn start, new message appended, tool group
  * tail). When the trigger is the current tail message transitioning partial -> non-partial,
@@ -215,7 +215,7 @@ export function useDebouncedLoaderVisibility(
 }
 
 /**
- * Whether the in-list "Thinking..." loader row should currently be rendered.
+ * Whether the in-list "Generating..." loader row should currently be rendered.
  * Combines the waiting heuristic, the waiting -> reasoning handoff guard, and the
  * anti-flash debounce for tail-finalization triggers.
  */

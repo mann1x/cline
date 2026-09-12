@@ -53,11 +53,13 @@ import { CommandOutputContent, CommandOutputRow } from "./CommandOutputRow"
 import CompactionRow from "./CompactionRow"
 import { CompletionOutputRow } from "./CompletionOutputRow"
 import { DiffEditRow } from "./DiffEditRow"
+import EmptyTurnRow from "./EmptyTurnRow"
 import ErrorRow from "./ErrorRow"
 import { FeatureTip } from "./FeatureTip"
 import HookMessage from "./HookMessage"
 import { MarkdownRow } from "./MarkdownRow"
 import NewTaskPreview from "./NewTaskPreview"
+import OutputLimitRetryRow from "./OutputLimitRetryRow"
 import PlanCompletionOutputRow from "./PlanCompletionOutputRow"
 import QuoteButton from "./QuoteButton"
 import ReportBugPreview from "./ReportBugPreview"
@@ -266,7 +268,12 @@ export const ChatRowContent = memo(
 		const handleQuoteClick = useCallback(() => {
 			onSetQuote(quoteButtonState.selectedText)
 			window.getSelection()?.removeAllRanges() // Clear the browser selection
-			setQuoteButtonState({ visible: false, top: 0, left: 0, selectedText: "" })
+			setQuoteButtonState({
+				visible: false,
+				top: 0,
+				left: 0,
+				selectedText: "",
+			})
 		}, [onSetQuote, quoteButtonState.selectedText]) // <-- Use onSetQuote from props
 
 		const handleMouseUp = useCallback((event: MouseEvent<HTMLDivElement>) => {
@@ -326,7 +333,12 @@ export const ChatRowContent = memo(
 					})
 				} else if (!isClickOnButton) {
 					// Scenario B: No valid selection AND click was NOT on button -> Hide button
-					setQuoteButtonState({ visible: false, top: 0, left: 0, selectedText: "" })
+					setQuoteButtonState({
+						visible: false,
+						top: 0,
+						left: 0,
+						selectedText: "",
+					})
 				}
 				// Scenario C (Click WAS on button): Do nothing here, handleQuoteClick takes over.
 			}, 0) // Delay of 0ms pushes execution after current event cycle
@@ -391,7 +403,10 @@ export const ChatRowContent = memo(
 					return null
 				}
 				return parsed as {
-					rules: Array<{ name: string; matchedConditions: Record<string, string[]> }>
+					rules: Array<{
+						name: string
+						matchedConditions: Record<string, string[]>
+					}>
 				}
 			} catch {
 				return null
@@ -986,7 +1001,24 @@ export const ChatRowContent = memo(
 									reasoningContent={message.text}
 									showChevron={!isReasoningStreaming || hasReasoningText}
 									showTitle={true}
-									title={isReasoningStreaming ? "Thinking..." : "Thinking"}
+									// The live label is chosen by what is actually in the row,
+									// because this one component renders two different things.
+									// With reasoning text streaming it is thinking, and saying
+									// so is more useful than a generic word. With none, it is
+									// MessagesArea's WAITING_ROW -- a `say: "reasoning"`
+									// message with EMPTY text, shown whenever a turn is in
+									// flight and nothing is streaming yet, including with
+									// reasoning turned off entirely. "Thinking..." there
+									// asserts the one thing that is definitely not happening,
+									// and it reads as output being routed into a thinking
+									// channel: measured 2026-09-12, a model emitting only tool
+									// calls under `think: false` showed a bare "Thinking..."
+									// and was reported as lost model output. Nothing was lost
+									// -- tokensOut was 22 on that turn -- but the label had
+									// made a claim the turn did not support.
+									title={
+										isReasoningStreaming ? (hasReasoningText ? "Thinking..." : "Generating...") : "Thinking"
+									}
 								/>
 								{isReasoningStreaming && showFeatureTips === true && <FeatureTip />}
 							</div>
@@ -1125,6 +1157,10 @@ export const ChatRowContent = memo(
 						return <CompactionRow message={message} />
 					case "thinking_condensed":
 						return <ThinkingCondensedRow message={message} />
+					case "empty_turn":
+						return <EmptyTurnRow message={message} />
+					case "output_limit_retry":
+						return <OutputLimitRetryRow message={message} />
 					case "transaction":
 						return <TransactionRow message={message} />
 					default:

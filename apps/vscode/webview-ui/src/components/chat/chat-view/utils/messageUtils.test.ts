@@ -180,7 +180,7 @@ describe("groupLowStakesTools", () => {
  * Reasoning absorbed into a tool group is not merely reordered — `ToolGroupRenderer`
  * drops it ("Skip reasoning messages - they should not be in file lists"). So a
  * reasoning row that lands in a group is a reasoning row nobody ever sees, and
- * for a partial row that is the whole live "Thinking..." display.
+ * for a partial row that is the whole live "Generating..." display.
  */
 describe("reasoning that arrives while a tool group is open", () => {
 	it("stays visible instead of disappearing into the group", () => {

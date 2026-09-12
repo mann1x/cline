@@ -12,7 +12,7 @@ import { isPendingResponseUnconfirmed } from "../../utils/pendingResponse"
 import { createMessageRenderer } from "../messages/MessageRenderer"
 import { JumpToPresent } from "./JumpToPresent"
 
-// Sentinel ts for the synthetic "Thinking..." placeholder row. Not a real message; ignored when
+// Sentinel ts for the synthetic "Generating..." placeholder row. Not a real message; ignored when
 // deriving scroll triggers from the tail of the rendered list.
 const WAITING_ROW_TS = Number.MIN_SAFE_INTEGER
 
@@ -94,7 +94,7 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 	}, [lastVisibleRow])
 	// A turn (new task or follow-up) was just started from this webview but the backend's
 	// streaming TurnState has not round-tripped yet, so the replica's turnState is stale
-	// (idle/completed/awaiting_*). Let the loader show optimistically so "Thinking..." renders
+	// (idle/completed/awaiting_*). Let the loader show optimistically so "Generating..." renders
 	// the moment the send happens instead of popping in after the state post.
 	const forcePendingResponseLoader = isPendingResponseUnconfirmed(chatState.pendingResponse, turnState, clineMessages.length)
 
@@ -112,7 +112,7 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 
 	// While the list has no visible rows yet (new task just submitted), the loader is rendered as
 	// a plain element instead of a Virtuoso item: a cold-mounting virtualized list takes several
-	// frames to measure and paint its first item, which visibly delays the "Thinking..." shimmer
+	// frames to measure and paint its first item, which visibly delays the "Generating..." shimmer
 	// right when the chat view appears. Once any real row exists the list is warm and the loader
 	// goes back to being an in-list row (unchanged behavior).
 	const showEmptyListLoader = showThinkingLoaderRow && groupedMessages.length === 0
@@ -264,7 +264,14 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 							resumeFollowing()
 						}
 					}}
-					atBottomThreshold={10} // trick to make sure virtuoso re-renders when task changes, and we use initialTopMostItemIndex to start at the bottom
+					// Non-default on purpose -- it is also the trick that makes virtuoso
+					// re-render when the task changes, alongside initialTopMostItemIndex.
+					// 10px was too tight to be reachable by hand: this is the threshold
+					// that decides whether wheeling back down counts as returning to the
+					// bottom and re-engages tailing, and stopping within ten pixels of it
+					// while the list is still growing under you is not something a reader
+					// can do. Landing near the bottom is the intent.
+					atBottomThreshold={64}
 					className="scrollable grow overflow-y-scroll"
 					components={virtuosoComponents}
 					data={displayedGroupedMessages}
@@ -279,9 +286,14 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 					rangeChanged={handleRangeChanged}
 					ref={virtuosoRef} // anything lower causes issues with followOutput
 					style={{
-						scrollbarWidth: "none", // Firefox
-						msOverflowStyle: "none", // IE/Edge
+						// No `scrollbarWidth: none` here. It used to hide the scrollbar on
+						// the one list in the product long enough to need it, and because
+						// it is an inline style it also beat the `.scrollable` rules in
+						// main.css that theme a thumb for every other scrollable region --
+						// so the chat was the only pane with no bar to drag, leaving the
+						// wheel and PgUp/PgDn as the only ways down a long task.
 						overflowAnchor: "none", // prevent scroll jump when content expands
+						scrollbarGutter: "stable", // reserve the track so rows don't reflow when it appears
 					}}
 				/>
 				{/* Neither signal alone is the question this button answers, and #49 came

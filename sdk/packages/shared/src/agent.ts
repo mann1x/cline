@@ -653,6 +653,26 @@ export interface AgentRuntimeConfig {
 			forced?: boolean;
 		}) => Promise<string | undefined>;
 		/**
+		 * A clause naming work the host knows has not started, appended to the
+		 * no-tool-call nudge.
+		 *
+		 * The generic nudge says "you called nothing". That is true and not
+		 * enough when a protocol is engaged: measured on pandorum session
+		 * 1789230811792_qnyfa, the change protocol opened TX-01, the model spent
+		 * three turns describing edits and calling nothing, and both nudges told
+		 * it only that it had called nothing -- never that a transaction was
+		 * open and empty. It invented a precedence rule, decided the protocol
+		 * replaced its other instructions, and the run ended with the file
+		 * untouched.
+		 *
+		 * Returns undefined when there is nothing to say, which is the usual
+		 * case. The host owns the state this reads; the runtime only appends it.
+		 */
+		describeUnstartedWork?: () =>
+			| Promise<string | undefined>
+			| string
+			| undefined;
+		/**
 		 * How many consecutive turns that produce no tool calls may be nudged to
 		 * continue before the run is allowed to end. Zero (the default) keeps the
 		 * standard contract: a turn with no tool calls completes the run.

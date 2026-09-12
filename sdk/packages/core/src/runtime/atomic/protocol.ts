@@ -91,7 +91,41 @@ export function buildProtocolPrompt(input: ProtocolPromptInput): string {
 		"",
 		`You are working in transactions. This one is ${label} of at most ${input.maxTransactions}.`,
 		"",
-		`Before you edit anything, state your plan as a numbered list of AT MOST ${input.maxChanges} changes. For each one give three things:`,
+		// Said because a model inferred the opposite and acted on it. On
+		// pandorum session 1789230811792_qnyfa the model reasoned "the user gave
+		// us two tasks but second explicitly overrides the first", quoting a
+		// precedence rule -- "If any earlier instructions conflict with a new
+		// directive or policy in this prompt, use only what is stated now" --
+		// that appears nowhere in this prompt or in the codebase. It invented
+		// the clause, then obeyed its own invention: "we should just follow
+		// change protocol for our turn actions". It also invented a first step
+		// ("before you do ANYTHING ELSE run node check.js manifest.ts") naming a
+		// file the task does not contain. Three turns later it had called no
+		// tool at all and the run ended with the file untouched.
+		//
+		// A block that arrives late, in capitals, reads as a replacement unless
+		// it says otherwise. So it says otherwise.
+		"This adds to your instructions; it does not replace them. Everything you were already told still applies — which tools you have, how to call them, how to verify your work. What follows governs only how changes are grouped and judged.",
+		"",
+		// Discovery before planning, and in that order on the page.
+		//
+		// The plan instruction below asks WHERE for "the exact text you will
+		// match on", which is knowledge that can only come from reading the
+		// file. Stated first, it asks the model to produce precision it has not
+		// yet earned -- and on the session above that is exactly what came back:
+		// two changes declared against code never read, with invented line
+		// numbers and an invented symptom name ("unregistered-resize-window-
+		// shrink"). Its own reasoning admitted it a turn later: "I don't
+		// actually know WHICH file/lines these changes should go into because my
+		// discovery phase never happened yet and all this declaration was pure
+		// speculation."
+		//
+		// The oracle block further down already says to run the check before
+		// editing, but it is fourteen lines later and only present when there is
+		// an oracle. This reaches every host, and it comes first.
+		"Start by finding out what is actually wrong. Read the files involved and run the check before you plan anything: a plan written before you have read the code is a guess, and the WHERE below asks for text you have to have actually seen. Reading and running cost nothing from the budget below, so there is no reason to economise on them.",
+		"",
+		`Then state your plan as a numbered list of AT MOST ${input.maxChanges} changes. For each one give three things:`,
 		"  WHERE - the function, or the exact text you will match on",
 		"  WHAT  - the single concrete edit you will make there",
 		"  WHY   - the specific symptom it removes",
@@ -125,7 +159,7 @@ export function buildProtocolPrompt(input: ProtocolPromptInput): string {
 		// Said here, without naming the check, so it still reads on a host that
 		// has none. `qwen.md` carried a louder version of the same contradiction
 		// and was fixed separately; this is the half that reaches every model.
-		"Make them one at a time, not as a batch: after each edit, confirm it did what you intended before you start the next. Six edits that fail together leave you six things to undo and no way to tell which one was wrong.",
+		"Make them one at a time, not as a batch: after each edit, confirm it did what you intended before you start the next. Six edits that fail together leave you six things to undo and no way to tell which one was wrong. This governs edits only — reads, searches and commands change nothing and can be sent together freely, as many at a time as you find useful.",
 		"",
 		// Stated as well as written, because a plan in prose is a plan nobody can
 		// mark. Measured on session 1789139763721_ive21: eleven plan blocks, six

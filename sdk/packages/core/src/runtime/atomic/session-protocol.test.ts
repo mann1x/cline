@@ -945,3 +945,54 @@ describe("the reconsideration setting reaching the controller", () => {
 		});
 	});
 });
+
+/**
+ * What the model is told when it stops without starting.
+ *
+ * The generic no-tool-call nudge says only that the turn called nothing. With
+ * the protocol engaged that leaves out the fact the model most needs: a
+ * transaction is open and nothing has landed in it. Measured on pandorum
+ * session 1789230811792_qnyfa — three turns of prose, two nudges, neither
+ * mentioning the protocol, run ended with the file untouched.
+ */
+describe("the clause for a transaction nothing has landed in", () => {
+	it("names the open transaction while the workspace is untouched", async () => {
+		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "always", oracleCommand: shellCheck(root, "fixed") },
+			});
+
+			const clause = await session?.describeUnstartedWork();
+
+			expect(clause).toBeDefined();
+			expect(clause).toContain("TX-01");
+		});
+	});
+
+	it("says nothing once an edit has landed", async () => {
+		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "always", oracleCommand: shellCheck(root, "fixed") },
+			});
+			// Opening the transaction is what snapshots the file; the edit has to
+			// come after it or there is nothing for the comparison to see.
+			session?.takeOpeningRules();
+			await fs.writeFile(path.join(root, "game.js"), "let a = 2", "utf8");
+
+			expect(await session?.describeUnstartedWork()).toBeUndefined();
+		});
+	});
+
+	it("says nothing when the protocol is not armed", async () => {
+		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: {},
+			});
+
+			expect(session).toBeUndefined();
+		});
+	});
+});

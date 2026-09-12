@@ -81,6 +81,10 @@ enum ClineSay {
   // A capped turn's reasoning, replaced by the note it left itself.
   THINKING_CONDENSED = 40;
   TRANSACTION = 41;
+  // A turn that produced neither prose nor a tool call.
+  EMPTY_TURN = 42;
+  // A turn cut off at the output cap, being retried.
+  OUTPUT_LIMIT_RETRY = 43;
 }
 
 // Enum for ClineSayTool tool types

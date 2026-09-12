@@ -6,16 +6,15 @@ match:
 
 <!-- PROVENANCE -- written by scripts/review-prompt-templates.mts, not by the model.
 
-     Written by qwen3.5:397b-cloud (Ollama family `qwen3.5`) on 2026-09-11.
-     Run, with its log: prompt-reviews/regen/20260911-0611-qwen3.5-397b-cloud
+     Written by qwen3.5:397b-cloud (Ollama family `qwen3.5`) on 2026-09-12.
+     Run, with its log: prompt-reviews/regen/20260912-1817-qwen3.5-397b-cloud
 
      Sampler asked for by the generator, overriding the model's own:
        temperature 0.2
 
      Sampler the tag sources (`/api/show`), which applies to every key
      the request above does not set:
-       (none reported -- a cloud tag; its sampler is server-side and
-        not visible to us through /api/show)
+       (none reported)
 
      The script hands a model the prompt it would really receive, names the
      failures observed with models in its family, and asks for the version it
@@ -161,7 +160,7 @@ Create and edit text files. This is the **only** correct way to write or modify 
   - **Replace Characters**: Provide `start_line`, `start_column`, and `new_text`, optionally `end_line`/`end_column` (inclusive, each defaults to its start). Diagnostics give you `Line N, column C` — this is the mode that uses the column. On a minified line it changes only those characters. `start_column` alone replaces one character.
   - **Insert**: Provide `insert_line` (integer) and `new_text`. Inserts before the specified line. Use `line_count + 1` to append at EOF. Add `insert_column` to insert within the line, before that character — this is how you add a single missing bracket; `line_length + 1` appends at the end of the line.
   - **Create or replace whole**: Provide `new_text` and a `path`. A path that does not exist is created; one that does has every line replaced, which requires having read the file first. Do not delete a file to rewrite it — this call already writes it whole, and a file deleted at the end of a turn is simply gone.
-- **Parallelism**: If you have multiple independent edits (different files or non-overlapping regions), emit multiple `editor` calls in the same response. Do not wait for one edit to finish before sending the next.
+- **One at a time**: send one `editor` call, check it, then send the next. Parallelism is for reads, searches and commands; an edit changes the file, and several checked together leave several things to undo.
 - **Arguments**: `path` (string), `old_text` (string, optional), `new_text` (string), `insert_line` (integer, optional), `insert_column` (integer, optional), `start_line` (integer, optional), `end_line` (integer, optional), `start_column` (integer, optional), `end_column` (integer, optional), `occurrence` (integer, optional), `replace_all` (boolean, optional).
 - **Output**: Returns `{query, result, success, error?}`. If `success` is false (e.g., `old_text` not found), the file is unchanged. Read the file again to get the correct context. Note: Text copied from `read_files` must have line number gutters removed before using as `old_text`.
 
@@ -241,6 +240,7 @@ List files in the workspace. Use this rather than `ls`, `dir` or `find` through 
 
 This finds files by name. To find them by their contents, use `search_codebase`.
 {{DEFAULT}}
+
 # tool: browser
 Open a page in a real browser and report its console output and uncaught errors. Use it to verify a page yourself instead of asking the user whether it works.
 

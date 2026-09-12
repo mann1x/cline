@@ -1050,6 +1050,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 					...completionPolicyWithChecklistCloseOut,
 					onCompletionAttempt: (context: { text?: string; forced?: boolean }) =>
 						atomicProtocol.onCompletionAttempt(context),
+					describeUnstartedWork: () => atomicProtocol.describeUnstartedWork(),
 				}
 			: completionPolicyWithChecklistCloseOut;
 		const extensions = runtime.extensions ?? bootstrap.extensions;

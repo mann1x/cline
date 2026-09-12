@@ -576,7 +576,7 @@ export function buildRunCommandsDescription(
 			RUN_COMMANDS_SHARED_INSTRUCTIONS +
 			`Output beyond ~${Math.round(MAX_COMMAND_OUTPUT_CHARS / 1000)}k characters is middle-truncated (start and end preserved); filter output when you need specific sections. ` +
 			`Commands run through ${shellName}; quote paths and arguments for ${shellName} and use ${sequencingOperator} to sequence commands. ` +
-			"Include multiple commands in the same call when they are independent and safe to run concurrently. When independent reads, searches, or edits are also needed, call those tools in the same response. " +
+			"Include multiple commands in the same call when they are independent and safe to run concurrently. When independent reads or searches are also needed, call those tools in the same response; edits are the exception, and go one at a time. " +
 			RUN_COMMANDS_OUTPUT
 		);
 	}
@@ -591,7 +591,7 @@ export function buildRunCommandsDescription(
 		"Run non-interactive shell commands from the root of the workspace. " +
 		RUN_COMMANDS_SHARED_INSTRUCTIONS +
 		environmentNote +
-		"Commands should be properly shell-escaped and targeted to avoid error or timeout. Include multiple commands in the same call when they are independent complete shell commands and safe to run concurrently; multiline scripts and heredocs must be a single command string. When independent reads, searches, or edits are also needed, call those tools in the same response. " +
+		"Commands should be properly shell-escaped and targeted to avoid error or timeout. Include multiple commands in the same call when they are independent complete shell commands and safe to run concurrently; multiline scripts and heredocs must be a single command string. When independent reads or searches are also needed, call those tools in the same response; edits are the exception, and go one at a time. " +
 		`Output beyond ~${Math.round(MAX_COMMAND_OUTPUT_CHARS / 1000)}k characters is middle-truncated (start and end preserved); pipe through grep/head/tail when you need specific sections of large output. ` +
 		"For long-running commands, run them in background and redirect output to a tmp file that you can read from later. " +
 		RUN_COMMANDS_OUTPUT
@@ -907,7 +907,7 @@ export function createEditorTool(
 			"- Replace characters: `start_line` and `start_column` plus `new_text`, with optional `end_line`/`end_column` (both inclusive; each defaults to its start). This is the unit a diagnostic speaks in — `Line 108, column 385` — and on a long or minified line it is the only edit that leaves the other 400 characters untouched. `start_column` on its own replaces exactly one character.\n" +
 			"- Insert: `insert_line` plus `new_text`, which adds text before that line without replacing anything. Use `line_count + 1` to append at EOF. Add `insert_column` to insert *within* that line instead, before the character at that column — this is how you add one missing bracket. Use `line_length + 1` to append at the end of the line.\n" +
 			"- Create, or replace a file whole: `new_text` alone. When the file does not exist this creates it; when it exists this replaces every line, which is allowed once you have read the file, since reading it is what tells you what you are overwriting. `start_line: 1` with `end_line: <line count>` is the same write by another name. Neither has a size limit, because a file written whole cannot be split — but reach for a whole-file write only once a targeted edit has failed, since a rewrite that is slightly wrong quietly loses the parts you did not mean to touch. Never delete a file to get a clean slate: this call already is one, and a deleted file is simply gone if the turn ends before you write it back.\n" +
-			"Use this rather than a shell command for anything that changes a file. If several edits to different files or non-overlapping regions are already known, emit multiple editor tool calls in the same response instead of serializing them across turns. " +
+			"Use this rather than a shell command for anything that changes a file. Make one edit at a time and check it before starting the next: reads and searches cost nothing if one turns out to be unnecessary, but several edits made together and checked once leave several things to undo and no way to tell which one was wrong. " +
 			"Read the lines you are about to change before you change them: an edit aimed at a range you have not read in its current state is refused. Your own edits count — one that changes the file's length moves every line below it, so read that region again before editing it a second time. Line numbers taken from an earlier turn, from a task summary, or from a diagnostic issued before your last edit are the ones that go stale. " +
 			"Replace means replace. If `new_text` repeats the lines already in the range and then continues, the edit appends a second copy of them rather than replacing anything, and it is refused. Send only the text that should end up in that range. " +
 			"Output: a single `{query, result, success, error?}` object for this one edit, where `query` is `edit:<path>` or `insert:<path>` and `result` describes what changed. " +

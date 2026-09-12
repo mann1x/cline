@@ -12,7 +12,7 @@ history. Everything that cost time is written down here.
 
 ---
 
-## 0. The fifteen things that are easy to get wrong
+## 0. The nineteen things that are easy to get wrong
 
 | | |
 |---|---|
@@ -31,6 +31,10 @@ history. Everything that cost time is written down here.
 | **A provenance header inside a model's reply is inherited, not observed.** | The model is shown its current template, header and all, and copies it. `deepseek.md` came back naming `deepseek-v4-flash`/`deepseek4` when it was written by `deepseek-v4.1-flash` against family `deepseek_v41`. The generator now strips any model-written header and stamps its own — model, family, run dir, and both samplers. Never trust a header a model handed you. |
 | **`prompt-reviews/` has a layout, and it is load-bearing.** | Root = the current set, one file per family, named for the family — the parser falls back to the filename for a template's name. Runs go to `regen/<stamp>-<model>/` with their log; backups go to `archive/`. Rules in `prompt-reviews/README.md`. |
 | **Specificity now ranks patterns, not just dimensions.** | `qwen*moe*` (7 literal chars) beats `qwen*` (4) inside the `family` dimension, so a generic family template and a narrower one per generation/architecture can coexist. Order no longer decides. A `model:` match still beats any `family:` match, however narrow. |
+| **A params overlay reports no family, and is then handed `default.md`.** | `/api/show` answers `family: ""` for a model built `FROM` a cloud tag, so routing resolves to `default` and the model is asked to improve *the base prompt* rather than its own family's template. `glm` was seeded this way on every attempt across two days and never produced a parsable file, with `family=unknown template=default` in each run log. Pass `--family <what the cloud tag reports>`. The run log says `(declared; /api/show reported none)` when you have. |
+| **`think: false` is a request, and a model may answer it by not *separating* its reasoning.** | The generator disables thinking because a reasoning model otherwise spends the whole budget on it. glm-5.3 complies by writing the reasoning into `content` instead. Same prompt, same sampler: thinking on → `thinking` 2,978 chars / `content` 46 chars, exactly the template; thinking off → `thinking` 0 / `content` 1,598 chars, all of it reasoning. That is what "does not parse: no '# system' or '# tool:' section" meant. Use `--think`, and raise `--timeout` with it. |
+| **The audit only read `# system` until 2026-09-12.** | The batch-edits ban was enforced against model proposals and against that section only, so nine of the ten shipped templates carried the rule in `# tool: editor` while reporting clean. A model reads a tool description in the same request as the system prompt. `findBatchedEditRules()` now runs over both, and `builtin-templates.test.ts` runs it over what ships. |
+| **A rule can reach every template from code, not from a template.** | The batch-edits rule was in `DEFAULT_CLINE_SYSTEM_PROMPT`, `YOLO_CLINE_SYSTEM_PROMPT` and the `editor` and `run_commands` tool descriptions. `default.md` mirrors all of those verbatim, and every other template is regenerated from `default.md`, so fixing the templates alone fixes nothing that lasts. Fix the code, re-sync `default.md`, then regenerate. |
 | **Keep the generic pattern when you add a narrow one.** | `kimi*` + `kimi-k3*` means an unreleased `kimi-k4` lands on `kimi.md`. `kimi-k2*` + `kimi-k3*` means it falls silently to `default.md` — the `glm5*` / `deepseek4*` failure again. The fallback rung is the point of the ladder. |
 
 ---
@@ -322,6 +326,63 @@ Notes from doing this:
 - **The `match:` block a model writes from an overlay cannot key on family.**
   Use `model: ["*minimax*"]`, which scores 3 and beats family anyway (§3).
 
+**glm took three separate fixes and is worth writing down in full.** It failed
+on 2026-09-11 and twice on 2026-09-12, each time with the same unhelpful
+message, and each time for a different reason:
+
+1. **Wrong seed.** The overlay reports no family, so it was handed `default.md`.
+   Fixed by `--family glm_dsa_moe`.
+2. **Reasoning in `content`.** With thinking off the file was prose, not a
+   template. Fixed by `--think`.
+3. **Wall time.** `glm-5.3-tpl:latest` with `--think` then timed out at 3,000 s —
+   reasoning 65× the length of its own output, against a 76 KB prompt asking for
+   a 20 KB document. Fixed by moving to the **flash** tag.
+
+`glm-5.3-flash-tpl2:latest` is the same overlay recipe (`FROM glm-5.3-flash:cloud`
+with `num_predict 131072`, `num_ctx 262144`, `repeat_last_n 2048`,
+`repeat_penalty 1.1`, `temperature 1`, `top_p 0.95`, both penalties `0.1`) and it
+came back clean on attempt 1. Note the family differs from the non-flash tag:
+`glm-5.3-flash:cloud` reports `glm5_next`, not `glm_dsa_moe`. Both match
+`glm*`; declare whichever the tag you actually call reports.
+
+### The four overrides, and when each is needed
+
+`--model` alone is right for a cloud tag that reports its own family and answers
+without reasoning. Everything else needs one or more of these.
+
+| flag | needed when | symptom without it |
+|---|---|---|
+| `--family <name>` | the tag reports no family — every params overlay | seeded from `default.md`; run log says `family=unknown template=default` |
+| `--think` | the model writes its reasoning into `content` when thinking is off | `does not parse: no '# system' or '# tool: <name>' section`, and the file is prose |
+| `--name <template>` | the written file must keep a name the model would not infer | the proposal is named after the overlay tag |
+| `--match-family` / `--match-model` | **creating** a split, or an overlay whose own name is scaffolding | the match block claims the wrong thing, or claims nothing |
+
+Two of these are recent and neither is guessable from a failure message:
+
+**`--family`.** A params overlay built `FROM` a cloud tag carries no weights, so
+`/api/show` answers `family: ""`. Routing then resolves to `default`, and the
+model is handed the base prompt to improve instead of its own family's template.
+Pass what the *cloud* tag reports — `/api/show` on `glm-5.3:cloud` says
+`glm_dsa_moe`, on `nemotron-3-super:cloud` `nemotron_h_moe`. The provenance
+header and the run log both record that the family was declared rather than
+measured, because a reader has to be able to tell those apart.
+
+**`--think`.** Reasoning is disabled by default and that is right for most
+models — a one-shot transform is not a problem to reason about, and
+`deepseek-v4-flash` takes forty minutes with it on against two with it off. But
+`think: false` is a request. glm-5.3 answers it by not *separating* the
+reasoning, and the prose lands in `content` where the template should be:
+
+```
+think on   thinking 2,978 chars   content 46 chars, exactly the template asked for
+think off  thinking 0             content 1,598 chars, all of it reasoning
+```
+
+Reproduced on a neutral prompt (a heading and one bullet) and on the bare
+`glm-5.3:cloud` with no overlay, so it is the model, not the prompt and not the
+Modelfile. A tell, when it happens: the leaked content ends in a truncated
+`</thin` — the model emits its own thinking tags and nothing strips them.
+
 ### Regenerate one family
 
 ```bash
@@ -379,6 +440,13 @@ OLLAMA_HOST=http://localhost:11439 \
     --match-family 'kimi-k3*' --name kimi-k3 --attempts 4
 ```
 
+That recipe **creates** the split. Once `kimi-k3.md` exists and claims the
+model, regenerating it is a plain `--model kimi-k3:cloud` — routing resolves
+`family=kimi-k3` to `template=kimi-k3` on its own, and the flags above would
+only restate what the file already says. Check the run log line before assuming
+either way: it prints `family=<x> template=<y>`, and that is the only thing that
+says which template was actually seeded.
+
 Then narrow the template being split *away from*, by hand, and rename its file
 to its family: `kimi.md` (`family: [kimi*]`) became `kimi-k2.md`
 (`family: [kimi-k2*]`). Both patterns score 2 on the family dimension, so they
@@ -427,10 +495,71 @@ bun scripts/generate-builtin-templates.mts
 
 ### Producing a template for a model with no Ollama build (e.g. Claude)
 
+There is no Ollama build of Claude, so the generator cannot drive it. The
+transport is the `claude` CLI on solidPC in non-interactive mode; the input and
+the checks are identical to a generated one.
+
 ```bash
-bun scripts/dump-review-prompt.mts --template claude.md --out /tmp/p.txt
-# hand the prompt to that model, then audit the reply through the same checks
+cd sdk/packages/core
+W=../../../prompt-reviews/regen/$(date +%Y%m%d-%H%M)-claude-p
+mkdir -p "$W"
+
+# 1. dump the exact prompt a Claude session would be handed (~76 KB, 34 sections)
+bun scripts/dump-review-prompt.mts --template claude.md --out "$W/prompt.txt"
+
+# 2. answer it. -p is non-interactive: prompt on stdin, reply on stdout.
+#    --max-turns 1 matters -- this is a single rewrite, not an agent session,
+#    and without it the CLI may start using tools on the repo it is run in.
+(cd "$W" && claude -p --model opus --max-turns 1 < prompt.txt > claude-opus-5.md 2> run.log)
+
+# 3. same audit as every generated template. --model is required in practice:
+#    one check is that the match: block still claims the session it was written
+#    for, and without a target it fires on every file (7).
+bun scripts/audit-prompt-template.mts "$W/claude-opus-5.md" --model claude-opus-5
 ```
+
+**There is no repair loop on this path, so build one by hand.** For an Ollama
+model `review-prompt-templates.mts` feeds the audit's complaints back up to
+`--attempts` times; `claude -p --max-turns 1` is a single shot, so the audit is
+advisory unless you act on it. Measured 2026-09-12: attempt 1 was structurally
+perfect — 34/34 tool sections, one `# system`, no fence, no inherited header —
+and failed the audit on one point, the one-change-at-a-time rule. One repair
+round fixed it:
+
+```bash
+# 3b. if the audit complained, hand it back the way the generator would
+bun scripts/audit-prompt-template.mts "$W/claude-opus-5.md" \
+  --model claude-opus-5 2>&1 | tail -n +2 > "$W/audit-1.txt"
+{ cat "$W/prompt.txt"; echo; echo "---"; echo
+  echo "You answered this once already. The answer is below, and it failed the audit on the following point. Fix exactly that and return the whole file again, in the same format, with nothing before or after it."
+  echo; echo "AUDIT:"; cat "$W/audit-1.txt"
+  echo; echo "YOUR PREVIOUS ANSWER:"; cat "$W/claude-opus-5.md"
+} > "$W/prompt-2.txt"
+(cd "$W" && claude -p --model opus --max-turns 1 < prompt-2.txt > claude-opus-5.attempt2.md 2> run-2.log)
+bun scripts/audit-prompt-template.mts "$W/claude-opus-5.attempt2.md" --model claude-opus-5
+```
+
+Keep both attempts and both audits in the run directory, and say in the
+hand-written provenance header which attempt the file is and what the earlier
+one failed on — there is no generator to record it for you.
+
+Notes from doing it:
+
+- **The reply is not automatically a file.** `claude -p` writes prose to stdout;
+  if the model wraps the template in a ```markdown fence or adds a sentence
+  before it, strip that before auditing. The audit's first complaint on a
+  fenced reply is `does not parse: no '# system' or '# tool:' section`.
+- **Write into `prompt-reviews/regen/<stamp>-claude-p/`, not `/tmp`.** Same
+  layout rule as every other run (`prompt-reviews/README.md`), and it keeps the
+  prompt next to the reply so a later audit failure can be reproduced.
+- **Strip any provenance header the reply carries.** The prompt includes the
+  current `claude.md` header and the model copies it -- the same inheritance
+  that made `deepseek.md` name the wrong model (0). The generator stamps its own
+  header for Ollama runs; this path has no generator, so do it by hand.
+- `claude.md` matches on `model:`, not `family:` -- there is no GGUF
+  architecture string for a cloud Claude. Keep
+  `["*claude*", "*opus*", "*sonnet*", "*fable*", "*haiku*"]` so a rename of one
+  model does not drop the family.
 
 ---
 
@@ -461,6 +590,95 @@ Three models, one family, three answers — one of which is nothing. Check with
 `/api/show` before writing a `match:` block, and use `--match-model` (§7) when
 the family comes back empty.
 
+### WHICH MODEL TO USE FOR WHICH TEMPLATE
+
+**Four of these must be generated from a local params overlay, not from the
+cloud tag.** `--all` walks `REVIEW_MODELS`, which is the bare `:cloud` tags, so
+`--all` alone regenerates four templates and silently wastes the attempts on
+the other three. The overlays are already built on solidPC's dev server
+(`127.0.0.1:11439`) and are listed below — check with `/api/tags` before
+rebuilding one.
+
+| Template | Generate with | Why |
+|---|---|---|
+| `gemma.md` | `gemma4:31b-cloud` | cloud tag works |
+| `qwen.md` | `qwen3.5:397b-cloud` | cloud tag works |
+| `deepseek.md` | `deepseek-v4.1-flash:cloud` | cloud tag works |
+| `kimi.md` | `kimi-k2.6:cloud` | cloud tag works (family `kimi-k2`) |
+| `glm.md` | **`glm-5.3-flash-tpl2:latest`** + `--think` | §7 "glm took three separate fixes" — the only family needing an overlay *and* reasoning *and* the flash tag |
+| `minimax.md` | **`minimax-m3-tpl:latest`** | `minimax-m3:cloud` degenerates / truncates |
+| `nemotron.md` | **`nemotron-3-super-tpl:latest`** | `nemotron-3-super:cloud` same |
+| `kimi-k3.md` | `kimi-k3:cloud` | its own family (`kimi-k3`), not a kimi variant |
+| `claude.md` | `claude -p` on solidPC | no Ollama build of Claude |
+
+The overlay runs need their identity stated, because an overlay reports **no
+family at all** and its own name is scaffolding.
+
+`--family` is the one that decides which template seeds the rewrite, and it is
+easy to miss: without it `/api/show` answers `family: ""` for a params overlay,
+routing resolves to `default`, and the model is asked to improve **the base
+prompt** rather than its own family's template. That is what happened to `glm`
+on 2026-09-11 and again on 2026-09-12 -- seeded from `default.md` on every
+attempt across two days, never producing a parsable file, with `family=unknown
+template=default` sitting in each run log. Pass the family the *cloud* tag
+reports (`/api/show` on `glm-5.3:cloud` says `glm_dsa_moe`). The provenance
+header records that it was declared rather than measured.
+
+`--name` and `--match-*` are a different job: they keep the written file's
+identity and match block pointing at the family rather than at the scaffolding.
+All three are needed:
+
+```bash
+cd sdk/packages/core
+export OLLAMA_HOST=http://127.0.0.1:11439
+R="bun scripts/review-prompt-templates.mts --timeout 1200"
+
+# the five that work from their cloud tag -- one invocation, one run stamp
+$R --model gemma4:31b-cloud --model qwen3.5:397b-cloud \
+   --model deepseek-v4.1-flash:cloud --model kimi-k2.6:cloud \
+   --model kimi-k3:cloud
+
+# the three that need an overlay. --name keeps the template's identity;
+# --match-* states the block the model must write, and the audit fails the
+# attempt if the stated match does not arrive.
+# glm needs --think as well, and a longer timeout to pay for it (see below)
+$R2="bun scripts/review-prompt-templates.mts --timeout 3000"
+$R2 --model glm-5.3-flash-tpl2:latest  --family glm5_next --think \
+   --match-family 'glm*'      --name glm
+$R --model minimax-m3-tpl:latest       --family minimax \
+   --match-model '*minimax*'  --name minimax
+$R --model nemotron-3-super-tpl:latest --family nemotron_h_moe \
+   --match-model '*nemotron*' --name nemotron
+```
+
+Measured 2026-09-12, running `--all` without the overlays: `gemma`, `qwen`,
+`deepseek` and `kimi` came back clean; `glm` produced nothing, `minimax` spent
+every attempt (four of them) and `nemotron` was NOT CLEAN after two. Those are
+the same three the overlays exist for, and the run had been told to ask the
+cloud tags anyway.
+
+Also note what `--all` does **not** cover: `claude.md` has no Ollama build, and
+`kimi-k3.md` has no tag in `REVIEW_MODELS`. Neither is regenerated by `--all`,
+and neither reports that it was skipped. After a rule change — which
+invalidates every template (9) — those two must be handled by hand or they
+silently keep the old rules.
+
+The local overlays, as built (params only, no weights, `FROM` the cloud tag):
+
+| overlay | `num_predict` | `num_ctx` |
+|---|---|---|
+| `glm-5.3-tpl:latest` | 131072 | 262144 |
+| `glm-5.3-flash-tpl:latest` | 131072 | 1048576 |
+| `minimax-m3-tpl:latest` | 131072 | 262144 |
+| `nemotron-3-super-tpl:latest` | **65536** | 262144 |
+
+All four also carry `temperature 1, top_p 0.95, repeat_last_n 2048,
+repeat_penalty 1.1, frequency_penalty 0.1, presence_penalty 0.1`.
+`nemotron-3-super` refuses `num_predict` above 65536 — it names the ceiling in
+the error.
+
+### The roster in code
+
 | Template | Model |
 |---|---|
 | `gemma.md` | `gemma4:31b-cloud` |
@@ -488,6 +706,8 @@ in `shipped-templates.test.ts`.
 | …"ships the base layer and one template per model family" | the family list is exactly as expected |
 | `builtin-templates.test.ts` | the generated bundle matches the `.md` files on disk |
 | `prompt-template-hooks.test.ts` | the change report fires once per session, names the changed tools |
+| `builtin-templates.test.ts` "ships no template telling the model to batch its edits" | **what ships** carries the rule in no `# system` and no `# tool:` section. The gate on the artefact, not on the proposal — the audit runs against model output only, which is how seven of ten shipped files broke a ban that read as enforced |
+| `findBatchedEditRules()` — phrasings | "Batching:", "Do not split … edits across separate turns", "emit multiple editor calls together", and the cadence rule stated correctly, which must pass |
 | `auditSystemSection()` — read-back | the system section does not tell the model to read a file back after editing it |
 | `auditSystemSection()` — verbatim copy | the system section is not `default.md` reproduced word for word |
 | `auditSystemSection()` — completion rule | the system section does not say a response without tool calls counts as completion |
@@ -570,6 +790,18 @@ false positive blocks a correct answer.
 * `8323c3f65` — `code_intel` required-use-cases audit rule; all six regenerated
   under it. The **worked example of the §4 recommendation**: add a rule to the
   instructions, regenerate everything, re-audit.
+* **2026-09-12, the batch-edits rule.** Found in `qwen.md` and blamed on it;
+  the commit message said it was the only one of the ten. It was not. The rule
+  lives in `DEFAULT_CLINE_SYSTEM_PROMPT`, `YOLO_CLINE_SYSTEM_PROMPT` and the
+  `editor` and `run_commands` tool descriptions, and from there in seven of the
+  ten templates' system sections and nine of the ten's `# tool: editor`. It read
+  as enforced the whole time, because the audit ran against model proposals and
+  against `# system` only. Cost, measured over ten runs: 13.6 `restore_file`
+  calls per run for the family reading it against 0.23 for the family that was
+  not. Three lessons, all now gates: fix the code and re-sync rather than
+  fixing templates; audit what ships, not only what a model proposes; and widen
+  the matching against real sentences — three models wrote three phrasings past
+  the first version of the check on the same afternoon.
 * `d0b4ce0c4`, `cea985baa`, `84a667163`, `e825ae5f5` — four hand edits to
   `qwen.md` alone, from harness findings. These were the reason `qwen.md`
   diverged from every other template. Folded into the instructions on

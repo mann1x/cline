@@ -68,7 +68,7 @@ Four more things are settled by measurement rather than by opinion, and a rewrit
 
 - The checker and the run belong in the same turn. Call 'check_file' and the thing that executes the code - 'run_commands', or 'browser' for a page - together, not one or the other. Running it says *that* something is broken and where the parser gave up; the checker says *which line* to edit. Each is half the answer, and the half you skip is the half the turn gets spent guessing at.
 - A tool's report outranks your own reasoning about the same question. Where a tool has measured something - a delimiter scan naming the line to edit, a diagnostic naming a type - that is the measurement, and re-deriving it yourself is an estimate. Where the two disagree, it is the estimate that is wrong. Measured twice: a model called a delimiter scan a false positive, counted brackets by hand instead, and was wrong both times, at over 30,000 thinking tokens a turn. If you doubt a report, do not re-derive it - act on it and run the result. That costs milliseconds and settles it either way.
-- Run the program once, after every change you planned is in place - not after each one. The cheap check that does not execute the code is what goes after each edit; the build, the tests or the program itself goes at the end.
+- Make the planned changes one at a time, and confirm each one before starting the next. The cheap check that does not execute the code goes after every edit; the thing that runs the code is what settles whether the change was right. Six edits made together and checked once leave six things to undo and no way to tell which one was wrong - measured across ten runs, the template that said otherwise drew 13.6 'restore_file' calls per run against 0.23 for the family that did not.
 - Do not re-read a file to confirm your own edit. The edit call already reports whether it landed and what changed, and that is the confirmation. Measured on one session: 'read_files' was called 33 times, 31 of them byte-identical, returning 440,013 characters against a file of 14 KB - four times the tokens that session spent on all of its reasoning. Read again when the call failed, or when you need content you have not seen. A rule that says to read a file back after every edit is the one thing here you must not write.
 
 Hard constraints:
@@ -825,6 +825,90 @@ const REQUIRED_SYSTEM_GUIDANCE: ReadonlyArray<{
 ];
 
 /**
+ * Lines in a system prompt that tell the model to batch its edits, or to save
+ * the run that would have caught a bad one for the end.
+ *
+ * Exported because the audit is only ever run against what a *model* proposes,
+ * and the rule reached the shipped templates by another road entirely: it was
+ * in `default.md`, which every regeneration is seeded from, and from there in
+ * six more. Seven of the ten carried it while the ban read as enforced. The
+ * detector belongs in one place so the shipped-template test and the proposal
+ * audit cannot drift apart.
+ */
+export function findBatchedEditRules(system: string): string[] {
+	return system.split(/\r?\n/).filter((line) => {
+		const text = line.toLowerCase();
+		// Three phrasings got past the first version of this, all on the same
+		// afternoon and all from different models, so the widening is not
+		// hypothetical: `\bbatch\b` missed "Batching:", the 80-character window
+		// was shorter than the sentence a model writes, and the negation check
+		// below read the "Do not" in "Do not split ... edits across separate
+		// turns" as a correction when it is the same rule inverted.
+		const batchesEdits =
+			/\b(batch(?:es|ed|ing)?|group(?:s|ed|ing)?|combin(?:e|es|ed|ing))\b[^.]{0,200}\b(edit|change)/.test(
+				text,
+			) ||
+			// Plural, and only the nouns that name the batched thing. Matching a
+			// bare "change" caught "call `check_file` on the changed file in the
+			// same response", which is the checker and the run going together --
+			// the rule two lines below this one asks for.
+			/\b(edits|editor (?:tool )?calls|changes)\b[^.]{0,200}\b(in|into) (one|a single|the same) (response|turn|message|call)\b/.test(
+				text,
+			) ||
+			/\b(do not|don'?t|never)\b[^.]{0,160}\b(split|separat|serialis|serializ|spread|defer)\w*\b[^.]{0,160}\b(edit|change)/.test(
+				text,
+			) ||
+			// The shape the base system prompt used, which none of the patterns
+			// above reach: no "batch", and the "in one response" belongs to an
+			// earlier clause about reads. "emit multiple editor calls together"
+			// is the rule with the word removed.
+			/\beditor\b[^.]{0,60}\bcalls?\b[^.]{0,60}\b(together|simultaneously|at once|in parallel)\b/.test(
+				text,
+			);
+		const defersTheCheck =
+			/\bnot after each\b|\brather than after each\b|\bonce,? (at the end|after every change)\b/.test(
+				text,
+			);
+		// "...one at a time, not as a batch" is the rule stated correctly, and it
+		// has to pass or the repair loop spends its attempts rejecting the answer
+		// the instructions asked for. Only phrases that negate *batching* count:
+		// a bare "do not" was letting the inverted phrasing through above.
+		const isNegated =
+			/\b(one at a time|one edit at a time|not as a batch|rather than batch(?:ing)?|instead of batch(?:ing)?|(?:do not|don'?t|never) (?:batch|group|combine)|one edit per (?:response|turn|message)|after every edit|after each edit|before the next)\b/.test(
+				text,
+			);
+		return (batchesEdits || defersTheCheck) && !isNegated;
+	});
+}
+
+/**
+ * The same ban, applied to the tool sections.
+ *
+ * The audit read `# system` and nothing else, and that is where the rule hid:
+ * nine of the ten shipped templates carried it in `# tool: editor` while the
+ * gate reported them clean. The model does not distinguish -- a tool's
+ * description is in the same request as the system prompt, and the editor's own
+ * description is the most natural place to write "and you can send several at
+ * once".
+ */
+function auditToolSectionsForBatchedEdits(
+	tools: Record<string, string>,
+): string[] {
+	const problems: string[] = [];
+	for (const [name, body] of Object.entries(tools)) {
+		const [offender] = findBatchedEditRules(body ?? "");
+		if (offender) {
+			problems.push(
+				`In 'tool: ${name}': the section tells the model to batch its edits or to save the run for the end: ${JSON.stringify(
+					offender.trim().slice(0, 160),
+				)}. Remove that rule. Six edits made together and checked once leave six things to undo and no way to tell which one was wrong -- measured across ten runs, the family whose template said this drew 13.6 'restore_file' calls per run against 0.23 for the family that did not. Batching reads, searches and commands is fine and is not what this is about.`,
+			);
+		}
+	}
+	return problems;
+}
+
+/**
  * The one rule a rewrite may not write into its system prompt.
  *
  * "Read the file back after you edit it" is the most expensive sentence a
@@ -902,28 +986,12 @@ function auditSystemSection(
 	//
 	// "Emit all the editor calls in one response, then run it once at the end"
 	// is the shape of every expensive run in the harness: batch six edits,
-	// check once, fail, and the only way back is undoing six things. It read as
-	// efficiency to whichever model wrote it into `qwen.md`, and it will read
-	// that way to the next one, so asking nicely is not enough -- the same
-	// lesson the read-back ban above records.
-	const batchers = system.split(/\r?\n/).filter((line) => {
-		const text = line.toLowerCase();
-		const batchesEdits =
-			/\b(batch|group|combine)\b[^.]{0,80}\b(edit|change)/.test(text) ||
-			/\b(edit|editor call|change)s?\b[^.]{0,80}\b(in|into) (one|a single|the same) (response|turn|message|call)/.test(
-				text,
-			);
-		const defersTheCheck =
-			/\bnot after each\b|\brather than after each\b|\bonce,? (at the end|after every change)\b/.test(
-				text,
-			);
-		// "...one at a time, not as a batch" is the rule stated correctly.
-		const isNegated =
-			/\b(do not|don't|never|one at a time|not as a batch|rather than batch|instead of batch)\b/.test(
-				text,
-			);
-		return (batchesEdits || defersTheCheck) && !isNegated;
-	});
+	// check once, fail, and the only way back is undoing six things. It reads as
+	// efficiency to every model that writes it, which was seven of the ten
+	// shipped templates and not the one it was first found in, so asking nicely
+	// is not enough -- the same lesson the read-back ban above records.
+	const batchers = findBatchedEditRules(system);
+
 	if (batchers.length > 0) {
 		problems.push(
 			`The system section tells the model to batch its edits or to save the run for the end: ${JSON.stringify(
@@ -1030,6 +1098,7 @@ export function auditPromptTemplateProposal(
 		),
 	);
 	problems.push(...auditExampleCalls(args.raw, args.toolSignatures ?? []));
+	problems.push(...auditToolSectionsForBatchedEdits(parsed.template.tools));
 	problems.push(
 		...auditToolSectionContent(
 			parsed.template.tools,

@@ -31,19 +31,29 @@ function parseCompactionInfo(text: string | undefined): ClineCompactionInfo | un
 
 /** Mirrors the CLI's formatCompactionDividerLabel wording for product consistency. */
 function formatCompactionLabel(info: ClineCompactionInfo): string {
+	const overflow = info.mode === "overflow"
 	if (info.status === "started") {
+		if (overflow) {
+			return "Making room after the output limit — compacting context"
+		}
 		return info.mode === "manual" ? "Compacting context" : "Auto compacting context"
 	}
 	if (info.status === "failed") {
-		return "Compaction failed"
+		return overflow ? "Could not compact after the output limit" : "Compaction failed"
 	}
 	if (info.status === "cancelled") {
-		return "Compaction cancelled"
+		return overflow ? "Compaction cancelled after the output limit" : "Compaction cancelled"
 	}
 	if (info.status === "skipped") {
-		return "Compaction skipped"
+		return overflow ? "Nothing left to compact after the output limit" : "Compaction skipped"
 	}
-	const parts: string[] = [info.mode === "manual" ? "Context compacted (manual)" : "Context compacted"]
+	const parts: string[] = [
+		overflow
+			? "Context compacted after the output limit"
+			: info.mode === "manual"
+				? "Context compacted (manual)"
+				: "Context compacted",
+	]
 	if (typeof info.tokensBefore === "number" && typeof info.tokensAfter === "number") {
 		parts.push(`${formatTokenCount(info.tokensBefore)} → ${formatTokenCount(info.tokensAfter)} tokens`)
 	}

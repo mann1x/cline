@@ -328,6 +328,8 @@ export type ClineSay =
 	| "conditional_rules_applied"
 	| "compaction" // context compaction progress/result divider
 	| "thinking_condensed" // a capped turn's reasoning, replaced by the note it left itself
+	| "empty_turn" // a turn that produced neither prose nor a tool call
+	| "output_limit_retry" // a turn cut off at the output cap, being retried
 	| "transaction" // a change transaction kept, or discarded and put back
 
 export interface ClineSayTool {
@@ -495,7 +497,18 @@ export interface ClineApiReqInfo {
  */
 export interface ClineCompactionInfo {
 	status: "started" | "completed" | "skipped" | "failed" | "cancelled"
-	mode: "auto" | "manual"
+	/**
+	 * Which of the three compactions this is.
+	 *
+	 * `overflow` is the one that runs after a turn was cut off at the output
+	 * limit, and it was missing here: the core emits `overflow_recovery_compaction`
+	 * and the parser accepted only the other two, so both of its notices fell
+	 * through to the generic info row and printed their raw slugs --
+	 * "overflow-recovery-compacting" and "overflow-recovery-compacted" -- next
+	 * to the retry message, with none of the token counts the metadata was
+	 * already carrying.
+	 */
+	mode: "auto" | "manual" | "overflow"
 	tokensBefore?: number
 	tokensAfter?: number
 	messagesBefore?: number
@@ -504,6 +517,53 @@ export interface ClineCompactionInfo {
 	summary?: string
 	/** The retrospective written alongside it, when the second phase ran. */
 	thinkingSummary?: string
+}
+
+/**
+ * JSON payload of a say:"output_limit_retry" message.
+ *
+ * A turn that ran past the output cap before it finished is discarded and
+ * retried. That is a recovery, not a failure, and the row should read like
+ * one -- and it should say what the reader needs to judge it: which attempt
+ * this is out of how many, what the cap was and where it came from, and
+ * whether the transcript is being compacted before the retry.
+ */
+export interface ClineOutputLimitRetryInfo {
+	/** 1-based attempt number. */
+	attempt?: number
+	/** How many retries the completion policy allows. */
+	maxAttempts?: number
+	/** The output cap the turn ran into. */
+	capTokens?: number
+	/** Where that cap came from — `remaining-context`, `model-max-output`, `requested`. */
+	capSource?: string
+	/**
+	 * Whether the transcript is compacted before retrying.
+	 *
+	 * False means the cap was a ceiling the caller set, which no amount of
+	 * compaction can raise — so a reader seeing repeated retries without
+	 * compaction is looking at a limit to change, not a context to shrink.
+	 */
+	compacting?: boolean
+}
+
+/**
+ * JSON payload of a say:"empty_turn" message.
+ *
+ * A turn that produced no assistant text and called no tool leaves no row of
+ * its own, so in the panel it is indistinguishable from the model still
+ * working. This row is that turn's trace.
+ */
+export interface ClineEmptyTurnInfo {
+	/**
+	 * Characters of reasoning the turn produced, if any.
+	 *
+	 * Reasoning does not make a turn non-empty -- a turn that thought at length
+	 * and then said nothing and called nothing is the case most worth seeing --
+	 * but it is what separates that from a turn that produced literally
+	 * nothing, so the row reports it rather than hiding it.
+	 */
+	reasoningChars?: number
 }
 
 /**

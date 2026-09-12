@@ -110,6 +110,8 @@ function convertClineSayToProtoEnum(say: AppClineSay | undefined): ClineSay | un
 		subagent_usage: ClineSay.SUBAGENT_USAGE,
 		compaction: ClineSay.COMPACTION,
 		thinking_condensed: ClineSay.THINKING_CONDENSED,
+		empty_turn: ClineSay.EMPTY_TURN,
+		output_limit_retry: ClineSay.OUTPUT_LIMIT_RETRY,
 		transaction: ClineSay.TRANSACTION,
 	}
 
@@ -163,6 +165,8 @@ function convertProtoEnumToClineSay(say: ClineSay): AppClineSay | undefined {
 		[ClineSay.SUBAGENT_USAGE]: "subagent_usage",
 		[ClineSay.COMPACTION]: "compaction",
 		[ClineSay.THINKING_CONDENSED]: "thinking_condensed",
+		[ClineSay.EMPTY_TURN]: "empty_turn",
+		[ClineSay.OUTPUT_LIMIT_RETRY]: "output_limit_retry",
 		[ClineSay.TRANSACTION]: "transaction",
 	}
 

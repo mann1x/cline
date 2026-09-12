@@ -118,6 +118,12 @@ function stampProvenance(
 	details: {
 		model: string;
 		family: string | undefined;
+		/**
+		 * True when the family was declared on the command line rather than read
+		 * from `/api/show`. It decides which template seeded the rewrite, so a
+		 * reader has to be able to tell a measured family from an asserted one.
+		 */
+		familyDeclared: boolean;
 		sourced: string | undefined;
 		runDir: string;
 	},
@@ -131,9 +137,11 @@ function stampProvenance(
 	const header: string = [
 		"<!-- PROVENANCE -- written by scripts/review-prompt-templates.mts, not by the model.",
 		"",
-		`     Written by ${details.model} (Ollama family \`${
-			details.family ?? "unreported"
-		}\`) on ${RUN_STAMP.slice(0, 4)}-${RUN_STAMP.slice(4, 6)}-${RUN_STAMP.slice(6, 8)}.`,
+		`     Written by ${details.model} (${
+			details.familyDeclared ? "family declared as" : "Ollama family"
+		} \`${details.family ?? "unreported"}\`${
+			details.familyDeclared ? ", because the tag reports none of its own" : ""
+		}) on ${RUN_STAMP.slice(0, 4)}-${RUN_STAMP.slice(4, 6)}-${RUN_STAMP.slice(6, 8)}.`,
 		`     Run, with its log: ${details.runDir.replace(/^.*?(?=prompt-reviews\/)/, "")}`,
 		"",
 		"     Sampler asked for by the generator, overriding the model's own:",
@@ -225,6 +233,11 @@ const REVIEW_MODELS = [
 	"glm-5.3:cloud",
 	"deepseek-v4.1-flash:cloud",
 	"kimi-k2.6:cloud",
+	// Its own family, not a variant of the one above: `kimi-k3:cloud` reports
+	// family `kimi-k3` and routes to `kimi-k3.md`. It was left out of this list
+	// when the split was made, which is why `--all` silently regenerated nine
+	// templates and left the tenth on whatever it last had.
+	"kimi-k3:cloud",
 	"minimax-m3:cloud",
 	"nemotron-3-super:cloud",
 ];
@@ -246,7 +259,12 @@ const DEFAULT_TIMEOUT_MS = 600_000;
  * spending calls to get a clean one. Three is enough in practice: a model that
  * cannot fix a duplicated heading on the second try is not going to.
  */
-const DEFAULT_ATTEMPTS = 3;
+// Four, not three. The repair loop spends one attempt learning what the audit
+// wants and one producing it; a model that also has to fix a name or a dropped
+// placeholder runs out on the third. Measured 2026-09-12: minimax-m3 was still
+// converging when it hit the limit, and gemma/deepseek/kimi all landed on
+// attempt 2 -- so the extra attempt costs nothing on the models that work.
+const DEFAULT_ATTEMPTS = 4;
 
 /**
  * Tools a rewrite has to address, because the instructions name the failure
@@ -275,6 +293,38 @@ interface Options {
 	matchFamily: string[];
 	/** The template's name, when the split means it is no longer the one shown. */
 	name?: string;
+	/**
+	 * Leave the model's reasoning on for this run.
+	 *
+	 * Off is right for most: a one-shot transform is not a problem to reason
+	 * about, and a reasoning model spends the whole budget on the thinking
+	 * block. But `think: false` is a request, not a guarantee, and a model that
+	 * declines it does not stop reasoning -- it stops *separating* the
+	 * reasoning, and the prose lands in `content` where the template should be.
+	 * Measured on `glm-5.3-tpl:latest`, same prompt, same sampler:
+	 *
+	 *   think on   -> thinking 2,978 chars, content 46 chars, exactly the
+	 *                 template asked for
+	 *   think off  -> thinking 0, content 1,598 chars, all of it reasoning
+	 *
+	 * That is every glm attempt across two days of "does not parse: no
+	 * '# system' or '# tool:' section" -- the file was reasoning, not a
+	 * template. For such a model the reasoning has to stay in its own block,
+	 * and the cost is a longer call, so raise `--timeout` with it.
+	 */
+	think?: boolean;
+	/**
+	 * The family this model stands in for, when it cannot report one itself.
+	 *
+	 * A params-only overlay built `FROM` a cloud tag carries no weights, so
+	 * `/api/show` answers `family: ""` for it. The family is what decides which
+	 * template seeds the rewrite, so an overlay with none is handed `default.md`
+	 * instead of its own family's file -- measured on `glm-5.3-tpl:latest`,
+	 * which was seeded from `default.md` on every attempt across two days and
+	 * never produced a parsable template. Declaring it here is the difference
+	 * between reviewing the glm template and reviewing the base prompt.
+	 */
+	family?: string;
 }
 
 function parseArgs(argv: string[]): Options {
@@ -287,11 +337,23 @@ function parseArgs(argv: string[]): Options {
 	const matchModel: string[] = [];
 	const matchFamily: string[] = [];
 	let name: string | undefined;
+	let family: string | undefined;
+	let think = false;
 
 	for (let index = 0; index < argv.length; index++) {
 		const arg = argv[index];
 		const value = argv[index + 1];
 		switch (arg) {
+			case "--think":
+				think = true;
+				break;
+			case "--family":
+				if (!value) {
+					throw new Error("--family needs a family name");
+				}
+				family = value;
+				index++;
+				break;
 			case "--match-family":
 				if (!value) {
 					throw new Error("--match-family needs a pattern");
@@ -379,6 +441,8 @@ function parseArgs(argv: string[]): Options {
 		matchModel,
 		matchFamily,
 		name,
+		family,
+		think,
 	};
 }
 
@@ -478,7 +542,10 @@ async function review(model: string, options: Options): Promise<boolean> {
 		options.timeoutMs,
 		runLog,
 	);
-	const family = facts.family;
+	// The declaration wins over what the tag reports, because the only reason to
+	// pass it is that the tag reports nothing usable. Kept separate from `facts`
+	// so the provenance header can say which of the two it was.
+	const family = options.family ?? facts.family;
 	const templates = getBuiltinPromptTemplates();
 	const rendered = renderPromptTemplate(templates, {
 		providerId: "ollama",
@@ -490,7 +557,11 @@ async function review(model: string, options: Options): Promise<boolean> {
 		matchedName === undefined ||
 		matchedName.toLowerCase() === DEFAULT_PROMPT_TEMPLATE_NAME;
 	runLog.log(
-		`  family=${family ?? "unknown"} template=${matchedName ?? "none"}`,
+		`  family=${family ?? "unknown"}${
+			options.family
+				? ` (declared; /api/show reported ${facts.family ?? "none"})`
+				: ""
+		} template=${matchedName ?? "none"}`,
 	);
 
 	const defaultTemplate = readFileSync(
@@ -550,7 +621,13 @@ async function review(model: string, options: Options): Promise<boolean> {
 						// forty minutes with it on and answers in two with it
 						// off. The in-app generator disables reasoning for the
 						// same reason; ignored by models that have none.
-						think: false,
+						//
+						// `--think` overrides it, because "ignored" is not the
+						// only other outcome: a model can decline to separate
+						// its reasoning and write it into `content` instead,
+						// which produces a file of prose and an audit that
+						// says the file does not parse. See `Options.think`.
+						think: options.think ?? false,
 						options: REQUEST_OPTIONS,
 						messages,
 					},
@@ -570,6 +647,7 @@ async function review(model: string, options: Options): Promise<boolean> {
 			`${stampProvenance(result.raw, {
 				model,
 				family,
+				familyDeclared: options.family !== undefined,
 				sourced: facts.sourced,
 				runDir,
 			})}\n`,

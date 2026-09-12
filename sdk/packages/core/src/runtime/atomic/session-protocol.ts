@@ -182,6 +182,19 @@ export interface AtomicProtocolSession {
 	 * arrive the same way, on the message that reopens it.
 	 */
 	takeOpeningRules(): string | undefined;
+	/**
+	 * A clause for the no-tool-call nudge naming a transaction nothing has
+	 * landed in, or undefined when there is nothing to say.
+	 *
+	 * The runtime's nudge tells a silent turn that it called nothing. That is
+	 * the whole message, and with the protocol engaged it omits the state the
+	 * model is actually in. Measured on pandorum session 1789230811792_qnyfa:
+	 * TX-01 open, three turns of prose describing edits, two nudges, neither
+	 * naming the transaction, and the run ended with the file untouched and no
+	 * tool ever called. The transaction machinery could not intervene because
+	 * every one of its entry points is a tool call.
+	 */
+	describeUnstartedWork(): Promise<string | undefined>;
 	/** The boundary. Judges the open transaction and keeps it or puts it back. */
 	onCompletionAttempt(context: {
 		text?: string;
@@ -464,6 +477,27 @@ export async function createAtomicProtocolSession(
 			const opening = rules;
 			rules = undefined;
 			return opening;
+		},
+		async describeUnstartedWork() {
+			// Spent transactions have nothing left to start.
+			if (finished) {
+				return undefined;
+			}
+			// `isUntouched` is the same question the boundary asks, and the same
+			// answer: nothing in this transaction has changed a file yet. A model
+			// mid-transaction with an edit already landed does not need telling
+			// to begin, and saying so would be wrong as well as noisy.
+			if (!(await controller.isUntouched())) {
+				return undefined;
+			}
+			const label = `TX-${String(controller.transaction).padStart(2, "0")}`;
+			return (
+				` The change protocol is engaged and ${label} is open with nothing in it:` +
+				" no file has been changed yet. It does not replace your other instructions," +
+				" and it cannot advance on prose — reading a file, running the check and" +
+				" editing are all tool calls, and one of them is the next thing to do." +
+				" Start by reading what you are about to change."
+			);
 		},
 		async onCompletionAttempt({ text, forced }) {
 			// Once the transactions are spent there is nothing left to judge with,

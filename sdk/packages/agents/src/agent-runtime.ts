@@ -1102,7 +1102,9 @@ export class AgentRuntime {
 	 * The nudge for a turn that produced no tool calls, or undefined once the
 	 * consecutive limit is reached and the run should be allowed to end.
 	 */
-	private getNoToolCallNudgeMessage(text?: string): string | undefined {
+	private async getNoToolCallNudgeMessage(
+		text?: string,
+	): Promise<string | undefined> {
 		const budget = this.config.completionPolicy?.maxNoToolCallNudges ?? 0;
 		if (this.consecutiveNoToolCallNudges >= budget) {
 			return undefined;
@@ -1117,9 +1119,16 @@ export class AgentRuntime {
 		}
 		// Only where the model actually has the tool. Gated on the registry
 		// rather than on config so it cannot drift from what was sent.
-		return this.tools.has("ask_question")
+		const base = this.tools.has("ask_question")
 			? NO_TOOL_CALL_NUDGE_MESSAGE + ASK_QUESTION_NUDGE_CLAUSE
 			: NO_TOOL_CALL_NUDGE_MESSAGE;
+		// What the host knows and this message did not say. "You called nothing"
+		// is true of a model that has not started as well as of one that has
+		// finished, and the two need different things said to them; the host is
+		// the only thing here that can tell them apart.
+		const unstarted =
+			await this.config.completionPolicy?.describeUnstartedWork?.();
+		return unstarted ? base + unstarted : base;
 	}
 
 	/**
@@ -1545,7 +1554,18 @@ export class AgentRuntime {
 							phase: "started",
 							iteration: this.state.iteration,
 							attempt: this.consecutiveMaxTokensRetries,
+							// The budget the attempt count is counting against, so a
+							// row can say "1 of 2" rather than a bare ordinal that
+							// tells the reader nothing about how much rope is left.
+							maxAttempts: this.getMaxTokensRetryBudget(),
 							outputCapSource: outputCap?.source ?? "unknown",
+							// The cap that actually ended the turn. Without it the
+							// row cannot distinguish the window being tight from a
+							// caller-set ceiling no compaction can raise -- which is
+							// the whole reason `compacting` is decided the way it is.
+							...(typeof outputCap?.maxTokens === "number"
+								? { capTokens: outputCap.maxTokens }
+								: {}),
 							compacting: this.compactBeforeNextTurn,
 						},
 					});
@@ -1642,7 +1662,8 @@ export class AgentRuntime {
 						reminders.push(STEER_RESUME_REMINDER);
 					}
 					const finalText = textFromMessage(finalAssistantMessage);
-					const noToolCallNudge = this.getNoToolCallNudgeMessage(finalText);
+					const noToolCallNudge =
+						await this.getNoToolCallNudgeMessage(finalText);
 					if (noToolCallNudge) {
 						this.consecutiveNoToolCallNudges += 1;
 						reminders.push(noToolCallNudge);

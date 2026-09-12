@@ -36,7 +36,9 @@ import type {
 	ClineAskUseMcpServer,
 	ClineAskUseSubagents,
 	ClineCompactionInfo,
+	ClineEmptyTurnInfo,
 	ClineMessage,
+	ClineOutputLimitRetryInfo,
 	ClineSay,
 	ClineSaySubagentStatus,
 	ClineSayTool,
@@ -218,6 +220,47 @@ export class MessageTranslatorState {
 		const ts = this.openCompactionTs
 		this.openCompactionTs = undefined
 		return ts
+	}
+
+	// What this iteration actually put in front of the user. A turn that
+	// produced none of it renders as nothing at all between two request rows,
+	// which is indistinguishable from the model still working -- and a model
+	// that answers with an empty turn is a real failure mode that currently
+	// leaves no trace in the panel. Counted here rather than derived at
+	// `iteration_end`, because by then the streaming buffers have been cleared.
+	private iterationTextChars = 0
+	private iterationReasoningChars = 0
+	private iterationToolCalls = 0
+
+	/** Record that this iteration finalized visible assistant prose. */
+	noteIterationText(text: string): void {
+		this.iterationTextChars += text.trim().length
+	}
+
+	/** Record that this iteration produced reasoning. */
+	noteIterationReasoning(reasoning: string): void {
+		this.iterationReasoningChars += reasoning.trim().length
+	}
+
+	/** Record that this iteration called a tool. */
+	noteIterationToolCall(): void {
+		this.iterationToolCalls += 1
+	}
+
+	/**
+	 * The iteration's output, for deciding whether it left any trace.
+	 *
+	 * Reasoning is reported but does NOT count as output: a turn that thought
+	 * at length and then said nothing and called nothing is exactly the case
+	 * worth surfacing, and the character count is what separates it from a
+	 * turn that produced literally nothing.
+	 */
+	iterationOutput(): { textChars: number; reasoningChars: number; toolCalls: number } {
+		return {
+			textChars: this.iterationTextChars,
+			reasoningChars: this.iterationReasoningChars,
+			toolCalls: this.iterationToolCalls,
+		}
 	}
 
 	/** Get and increment for streaming text */
@@ -535,6 +578,9 @@ export class MessageTranslatorState {
 	 * `attemptCompletionSeen` — those are scoped to the whole turn and survive its iterations.
 	 */
 	reset(): void {
+		this.iterationTextChars = 0
+		this.iterationReasoningChars = 0
+		this.iterationToolCalls = 0
 		this.streamingTextTs = undefined
 		this.streamingReasoningTs = undefined
 		this.streamingToolTs = undefined
@@ -1392,10 +1438,16 @@ export function parseCompactionNoticeMetadata(metadata: Record<string, unknown> 
 		return undefined
 	}
 	const kind = metadata.kind ?? metadata.reason
-	if (kind !== "auto_compaction" && kind !== "manual_compaction") {
+	// `overflow_recovery_compaction` was missing here, and the cost was visible:
+	// the core emits it with the same phase/token metadata as the other two, but
+	// an unrecognised kind falls through to the generic info row below, which
+	// prints the notice's slug. A user recovering from an output-limit overflow
+	// saw "overflow-recovery-compacting" and "overflow-recovery-compacted" as
+	// bare text, with none of the counts those notices were carrying.
+	if (kind !== "auto_compaction" && kind !== "manual_compaction" && kind !== "overflow_recovery_compaction") {
 		return undefined
 	}
-	const mode = kind === "manual_compaction" ? "manual" : "auto"
+	const mode = kind === "manual_compaction" ? "manual" : kind === "overflow_recovery_compaction" ? "overflow" : "auto"
 	if (metadata.phase === "started") {
 		return { status: "started", mode }
 	}
@@ -1429,6 +1481,36 @@ function asFiniteNumber(value: unknown): number | undefined {
  * slugs are handled above via parseCompactionNoticeMetadata instead).
  */
 const INTERNAL_STATUS_NOTICES = new Set(["compaction-budget-adjusted"])
+
+/**
+ * Extract an output-limit retry payload from a status notice's metadata.
+ *
+ * Emitted by the agent runtime when a turn runs past its output cap before
+ * finishing and is discarded and retried. Without this the notice fell through
+ * to the info row and rendered as the bare sentence the runtime happened to
+ * write, with the attempt count, the cap and the compaction decision -- all
+ * already in the metadata -- thrown away.
+ */
+export function parseOutputLimitRetryNoticeMetadata(
+	metadata: Record<string, unknown> | undefined,
+): ClineOutputLimitRetryInfo | undefined {
+	if (!metadata) {
+		return undefined
+	}
+	const kind = metadata.kind ?? metadata.reason
+	if (kind !== "max_tokens_turn_recovery") {
+		return undefined
+	}
+	return {
+		attempt: asFiniteNumber(metadata.attempt),
+		maxAttempts: asFiniteNumber(metadata.maxAttempts),
+		capTokens: asFiniteNumber(metadata.capTokens),
+		...(typeof metadata.outputCapSource === "string" && metadata.outputCapSource !== "unknown"
+			? { capSource: metadata.outputCapSource }
+			: {}),
+		...(typeof metadata.compacting === "boolean" ? { compacting: metadata.compacting } : {}),
+	}
+}
 
 /**
  * Extract a condensed-thinking payload from a status notice's metadata.
@@ -1845,6 +1927,7 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 						text: finalText,
 						partial: false,
 					})
+					state.noteIterationText(finalText)
 					// Candidate for the turn-final response: if the turn ends cleanly with
 					// this text as its last content, `done` retags it as a completion row.
 					if (finalText.trim()) {
@@ -1855,6 +1938,7 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 				case "reasoning": {
 					const ts = state.clearStreamingReasoning()
 					const reasoning = event.reasoning ?? ""
+					state.noteIterationReasoning(reasoning)
 					messages.push({
 						ts,
 						type: "say",
@@ -1882,6 +1966,11 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 				}
 				case "tool": {
 					const toolName = event.toolName ?? "unknown"
+
+					// Counted before the denial branch below: a call the user
+					// refused is still something the turn did, and still leaves a
+					// row on screen, so it is not an empty turn.
+					state.noteIterationToolCall()
 
 					// A completed tool call after a text block means that text wasn't the
 					// turn-final response — drop the retag candidate.
@@ -2218,7 +2307,31 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 		}
 
 		case "iteration_end": {
-			// Iteration ended — no specific message needed
+			// A turn that put nothing in front of the user leaves no row at all,
+			// which in the panel is indistinguishable from the model still
+			// working. Measured 2026-09-12: a turn that emitted only a tool call
+			// under `think: false` was read as lost model output, and the only
+			// way to tell what had happened was `tokensOut` in the extension log.
+			// A turn with neither prose nor a tool call is worse -- it is a real
+			// failure mode (a model answering with nothing) and it is currently
+			// invisible everywhere except the token count.
+			//
+			// Reasoning deliberately does not count as output. A turn that
+			// reasoned at length and then said nothing and called nothing is the
+			// case most worth seeing, so the row reports the reasoning it did
+			// rather than being suppressed by it.
+			{
+				const output = state.iterationOutput()
+				if (output.textChars === 0 && output.toolCalls === 0) {
+					messages.push({
+						ts: state.nextTs(),
+						type: "say",
+						say: "empty_turn",
+						text: JSON.stringify({ reasoningChars: output.reasoningChars } satisfies ClineEmptyTurnInfo),
+						partial: false,
+					})
+				}
+			}
 			break
 		}
 
@@ -2246,6 +2359,17 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 						type: "say",
 						say: "transaction",
 						text: JSON.stringify(transaction),
+						partial: false,
+					})
+					break
+				}
+				const outputLimitRetry = parseOutputLimitRetryNoticeMetadata(event.metadata)
+				if (outputLimitRetry) {
+					messages.push({
+						ts: state.nextTs(),
+						type: "say",
+						say: "output_limit_retry",
+						text: JSON.stringify(outputLimitRetry),
 						partial: false,
 					})
 					break

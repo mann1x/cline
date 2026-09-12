@@ -19,7 +19,64 @@ describe("useScrollBehavior", () => {
 		vi.useRealTimers()
 	})
 
-	it("scrolls to bottom after command output layout has been quiet for 500ms", () => {
+	/**
+	 * The regression this file did not cover, reported as "it only scrolls at the
+	 * end of the turn" and reproduced by hand: the pin was a trailing-edge
+	 * debounce alone, so a stream whose content changes arrive closer together
+	 * than the settle window cancelled and reset the timer forever and scrolled
+	 * only once the stream went quiet. Three seconds of steady streaming is what
+	 * a reader experiences as frozen.
+	 */
+	it("keeps pinning while content streams faster than the settle window", () => {
+		const { result } = renderHook(() => useScrollBehavior([], [], [], {}, vi.fn()))
+		const scrollTo = vi.fn()
+		act(() => {
+			vi.runOnlyPendingTimers()
+		})
+		;(result.current.virtuosoRef as MutableRefObject<{ scrollTo: typeof scrollTo } | null>).current = { scrollTo }
+
+		act(() => {
+			// 3s of output arriving every 50ms: never a 500ms gap.
+			for (let elapsed = 0; elapsed < 3_000; elapsed += 50) {
+				result.current.handleLastRowContentChange()
+				vi.advanceTimersByTime(50)
+			}
+		})
+
+		// Throttled to one every 120ms, so this is roughly 25 over three seconds --
+		// the assertion that matters is that it is neither zero nor one per change.
+		expect(scrollTo.mock.calls.length).toBeGreaterThan(10)
+		expect(scrollTo.mock.calls.length).toBeLessThan(60)
+		expect(scrollTo).toHaveBeenCalledWith({
+			top: Number.MAX_SAFE_INTEGER,
+			behavior: "auto",
+		})
+	})
+
+	it("does not pin while streaming once the reader has scrolled away", () => {
+		const { result } = renderHook(() => useScrollBehavior([], [], [], {}, vi.fn()))
+		const scrollTo = vi.fn()
+		act(() => {
+			vi.runOnlyPendingTimers()
+		})
+		;(result.current.virtuosoRef as MutableRefObject<{ scrollTo: typeof scrollTo } | null>).current = { scrollTo }
+
+		act(() => {
+			result.current.stopFollowing()
+		})
+		scrollTo.mockClear()
+
+		act(() => {
+			for (let elapsed = 0; elapsed < 3_000; elapsed += 50) {
+				result.current.handleLastRowContentChange()
+				vi.advanceTimersByTime(50)
+			}
+		})
+
+		expect(scrollTo).not.toHaveBeenCalled()
+	})
+
+	it("pins immediately on a content change, then settles 500ms after the last one", () => {
 		const { result } = renderHook(() => useScrollBehavior([], [], [], {}, vi.fn()))
 		const scrollTo = vi.fn()
 		act(() => {
@@ -31,7 +88,16 @@ describe("useScrollBehavior", () => {
 			result.current.handleLastRowContentChange()
 		})
 
-		expect(scrollTo).not.toHaveBeenCalled()
+		// The leading pin. This assertion used to read `not.toHaveBeenCalled()`,
+		// which is the behaviour that made a streaming turn look frozen: with only
+		// the trailing settle below, output arriving faster than 500ms apart reset
+		// the timer indefinitely and nothing scrolled until the turn ended. Instant
+		// rather than smooth, because it repeats while the row grows.
+		expect(scrollTo).toHaveBeenCalledWith({
+			top: Number.MAX_SAFE_INTEGER,
+			behavior: "auto",
+		})
+		scrollTo.mockClear()
 
 		act(() => {
 			vi.advanceTimersByTime(499)

@@ -44,7 +44,7 @@ const CYCLE_INTERVAL_MS = 8000
 const FADE_DURATION_MS = 300
 
 /**
- * Shows rotating feature tips below the "Thinking..." indicator.
+ * Shows rotating feature tips below the "Generating..." indicator.
  * Appears after a brief delay and cycles through tips while Cline is thinking.
  */
 export const FeatureTip = memo(() => {

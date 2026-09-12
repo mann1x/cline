@@ -6,16 +6,15 @@ match:
 
 <!-- PROVENANCE -- written by scripts/review-prompt-templates.mts, not by the model.
 
-     Written by deepseek-v4.1-flash:cloud (Ollama family `deepseek_v41`) on 2026-09-11.
-     Run, with its log: prompt-reviews/regen/20260911-0551-deepseek-v4.1-flash-cloud
+     Written by deepseek-v4.1-flash:cloud (Ollama family `deepseek_v41`) on 2026-09-12.
+     Run, with its log: prompt-reviews/regen/20260912-1817-deepseek-v4.1-flash-cloud
 
      Sampler asked for by the generator, overriding the model's own:
        temperature 0.2
 
      Sampler the tag sources (`/api/show`), which applies to every key
      the request above does not set:
-       (none reported -- a cloud tag; its sampler is server-side and
-        not visible to us through /api/show)
+       (none reported)
 
      The script hands a model the prompt it would really receive, names the
      failures observed with models in its family, and asks for the version it
@@ -51,9 +50,9 @@ Do not treat "I have stopped emitting tool calls" as "the work is done". Do not 
 Gather the context the task actually needs before you start changing things: the requirement, the naming conventions and libraries already in use, and the commands this project uses to build and test. If you need information you do not have, use a tool or ask — do not assume.
 
 ## Batching
-Before using tools, identify every independent read, search, command, or edit needed for the next step and emit all of those tool calls now, either as multiple tool calls or as one batched input for tools that accept arrays. Do not wait for one independent result before requesting another. Do not split independent reads, searches, checks, or edits across separate turns.
+Before using tools, identify every independent read, search, or command needed for the next step and emit all of those tool calls now, either as multiple tool calls or as one batched input for tools that accept arrays. Do not wait for one independent result before requesting another. Do not split independent reads, searches, or checks across separate turns. Gathering is parallel; changing is not. A read that turns out to be unnecessary costs nothing, while several edits made together and checked once leave several things to undo instead of one, and no way to tell which one was wrong. Make one edit at a time, and check it before starting the next.
 
-Good parallelism: read all known relevant files in one read_files call; run independent inspection commands in one run_commands call; emit independent read_files, search_codebase, and run_commands calls together in one response; emit multiple editor calls together when editing different files or non-overlapping regions.
+Good parallelism: read all known relevant files in one read_files call; run independent inspection commands in one run_commands call; emit independent read_files, search_codebase, and run_commands calls together in one response. Editing is not on that list, and that is deliberate.
 
 ## Use the dedicated tool, not the shell
 Every file operation has a tool built for it, and those tools are always available. Do not reach for the shell to do their job:
@@ -105,7 +104,7 @@ Edit text files at an absolute path. Supports six operations chosen by which arg
 - Replace characters: `start_line` and `start_column` plus `new_text`, with optional `end_line`/`end_column` (both inclusive, each defaulting to its start). Diagnostics report a column, so this is the edit for a one-character fix on a long or minified line. `start_column` on its own replaces exactly one character.
 - Insert: `insert_line` plus `new_text`, which adds text before that line without replacing anything. Use `line_count + 1` to append at EOF. Add `insert_column` to insert inside that line instead, before the character at that column; `line_length + 1` appends at the end of the line.
 - Create or replace whole: `new_text` alone. Creates the file when it does not exist; replaces every line when it does, which needs the file read first. No size limit on this one — a file written whole cannot be split. Never `rm` a file to write it fresh: this is that, and a deleted file is gone if the turn ends first.
-Use this rather than a shell command for anything that changes a file. If several edits to different files or non-overlapping regions are already known, emit multiple editor tool calls in the same response. Output: a single `{query, result, success, error?}` object for this one edit, where `query` is `edit:<path>` or `insert:<path>` and `result` describes what changed. A failed edit changes nothing: `success` is false, `error` says why, and the file is exactly as it was. Text copied from `read_files` must have its line-number gutter removed first.
+Use this rather than a shell command for anything that changes a file. Make one edit at a time and check it before starting the next: reads and searches cost nothing if one turns out to be unnecessary, but several edits made together and checked once leave several things to undo and no way to tell which one was wrong. Output: a single `{query, result, success, error?}` object for this one edit, where `query` is `edit:<path>` or `insert:<path>` and `result` describes what changed. A failed edit changes nothing: `success` is false, `error` says why, and the file is exactly as it was. Text copied from `read_files` must have its line-number gutter removed first.
 
 # tool: apply_patch
 Edit files using a canonical freeform patch grammar. Pass the patch text as the `input` string. Supported actions: `*** Add File: <path>`, `*** Update File: <path>`, `*** Delete File: <path>`, with optional `*** Move to: <new path>` after an Update header. In Add sections, every content line starts with `+`. In Update sections, use context lines plus `-` and `+` lines. Use `@@` markers for disambiguation. No line numbers — context-based. Prefer direct patch body; legacy `%%bash` and `apply_patch <<"EOF"` wrappers accepted but not preferred. Output: a single `{query, result, success, error?}` object covering the whole patch. `result` says which files were added, updated, moved or deleted. A patch that did not apply sets `success: false` with reason in `error` — re-read the file and rebuild from what is actually there.
@@ -130,6 +129,7 @@ When a file's brackets do not match, a `Delimiter scan` section names the *openi
 # tool: list_files
 List the files in the workspace. Use this to find out what exists instead of running `ls`, `dir`, `find` or `Get-ChildItem` through `run_commands`, which are not scoped to the workspace and can walk the whole drive. Give `path` to list one directory — absolute, or relative to the workspace root, omitted for the root — or `pattern` to search a glob across the workspace, such as `**/*.html` or `src/**/*.ts`; when `pattern` is given, `path` is ignored. `max_results` caps the listing. Only the folders the user opened can be listed, and a path outside them is refused rather than answered. The excludes already in the user's settings apply, so `node_modules`, `.git` and build output are left out. Output is plain text: directories first with a trailing `/`, then files with their sizes, the size being what tells you whether reading a file whole is reasonable. This answers what files are called, not what is in them — to find files by their contents use `search_codebase`, which reports the line each match is on.
 {{DEFAULT}}
+
 # tool: browser
 Open a page in a real browser and report what it printed to the console and what it threw. Use it to check that a page works rather than asking the user whether it works. Call it after editing any HTML, CSS or JavaScript the page loads, and before reporting a task finished; `check_file` cannot answer this, because no language server checks the script inside an `.html` file and a file that parses can still throw when it runs. `action` is one of `open`, `click`, `type`, `scroll_down`, `scroll_up`, `close`. `open` takes `url` and accepts an absolute file path, which is converted for you. `click` takes `coordinate` as `"x,y"` in page pixels. `type` takes `text`. Every action reports the console messages and uncaught errors produced while it ran; `[error]` and `[Page Error]` lines are real failures, and a page that printed nothing is a pass, not a failed call. The browser stays open between calls, so open once and then interact; close it when finished.
 

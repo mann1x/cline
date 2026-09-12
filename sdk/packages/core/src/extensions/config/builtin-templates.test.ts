@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { getBuiltinPromptTemplates } from "./builtin-templates";
 import { BUILTIN_PROMPT_TEMPLATE_FILES } from "./builtin-templates.generated";
 import { buildBuiltinTemplatesModule } from "./builtin-templates-codegen";
+import { findBatchedEditRules } from "./prompt-template-review";
 
 const TEMPLATE_DIR = join(
 	__dirname,
@@ -46,6 +47,36 @@ describe("builtin prompt templates", () => {
 		expect(getBuiltinPromptTemplates()).toHaveLength(
 			BUILTIN_PROMPT_TEMPLATE_FILES.length,
 		);
+	});
+
+	it("ships no template telling the model to batch its edits", () => {
+		// The ban existed and was enforced -- against model proposals only. The
+		// rule still reached seven of these ten files, because `default.md` is
+		// hand-maintained and every other template is regenerated from it, and
+		// nothing ever audited what shipped. This is the gate on the artefact
+		// rather than on the proposal: a hand-edit, a promoted proposal and a
+		// regeneration all land here.
+		//
+		// Gathering stays batched. Reads, searches and commands cost nothing if
+		// one turns out to be unnecessary; a batch of edits that fails its check
+		// leaves several things to undo instead of one, which is the restore loop
+		// measured at 13.6 `restore_file` calls per run against 0.23.
+		// System *and* tool sections. Scanning only the system section is the
+		// mistake that let this ship: nine of the ten carried it in
+		// `# tool: editor`, which the model reads in the same request.
+		const offenders = getBuiltinPromptTemplates().flatMap((template) => [
+			...findBatchedEditRules(template.system ?? "").map(
+				(line) => `${template.name} [system]: ${line.trim().slice(0, 110)}`,
+			),
+			...Object.entries(template.tools ?? {}).flatMap(([tool, body]) =>
+				findBatchedEditRules(body ?? "").map(
+					(line) =>
+						`${template.name} [tool: ${tool}]: ${line.trim().slice(0, 110)}`,
+				),
+			),
+		]);
+
+		expect(offenders).toEqual([]);
 	});
 
 	it("carries the base layer every other template falls back to", () => {

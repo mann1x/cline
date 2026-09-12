@@ -2242,6 +2242,102 @@ describe("translateSessionEvent — agent_event notice", () => {
 		})
 	})
 
+	it("renders overflow-recovery compaction as a compaction row, not two raw slugs", () => {
+		// The exact notices the core emits (compaction.test.ts:3307-3318). The
+		// parser accepted only the auto and manual kinds, so both of these fell
+		// through to the generic info row and the user read
+		// "overflow-recovery-compacting" and "overflow-recovery-compacted" as bare
+		// text -- with the token and message counts, already in the metadata,
+		// discarded.
+		const state = new MessageTranslatorState()
+
+		const started = translateSessionEvent(
+			noticeEvent("overflow-recovery-compacting", {
+				kind: "overflow_recovery_compaction",
+				reason: "overflow_recovery_compaction",
+				phase: "started",
+			}),
+			state,
+		).messages
+		expect(started).toHaveLength(1)
+		expect(started[0].say).toBe("compaction")
+		expect(JSON.parse(started[0].text ?? "{}")).toMatchObject({ status: "started", mode: "overflow" })
+
+		const completed = translateSessionEvent(
+			noticeEvent("overflow-recovery-compacted", {
+				kind: "overflow_recovery_compaction",
+				phase: "completed",
+				tokensBefore: 45_783,
+				tokensAfter: 12_300,
+				messagesBefore: 120,
+				messagesAfter: 18,
+			}),
+			state,
+		).messages
+		expect(completed).toHaveLength(1)
+		expect(completed[0].say).toBe("compaction")
+		expect(completed[0].ts).toBe(started[0].ts)
+		expect(JSON.parse(completed[0].text ?? "{}")).toMatchObject({
+			status: "completed",
+			mode: "overflow",
+			tokensBefore: 45_783,
+			tokensAfter: 12_300,
+			messagesBefore: 120,
+			messagesAfter: 18,
+		})
+	})
+
+	it("renders the output-limit retry with the numbers the notice already carried", () => {
+		const state = new MessageTranslatorState()
+		const result = translateSessionEvent(
+			noticeEvent("output limit reached before the turn finished — retrying", {
+				kind: "max_tokens_turn_recovery",
+				reason: "max_tokens_turn_recovery",
+				phase: "started",
+				iteration: 7,
+				attempt: 1,
+				maxAttempts: 2,
+				outputCapSource: "remaining-context",
+				capTokens: 16_000,
+				compacting: true,
+			}),
+			state,
+		)
+
+		expect(result.messages).toHaveLength(1)
+		expect(result.messages[0].say).toBe("output_limit_retry")
+		expect(JSON.parse(result.messages[0].text ?? "{}")).toEqual({
+			attempt: 1,
+			maxAttempts: 2,
+			capTokens: 16_000,
+			capSource: "remaining-context",
+			compacting: true,
+		})
+	})
+
+	it("drops an output cap source it cannot name rather than showing the placeholder", () => {
+		// The runtime writes "unknown" when no report came back. Passing it
+		// through would put the word itself in front of the reader.
+		const state = new MessageTranslatorState()
+		const result = translateSessionEvent(
+			noticeEvent("output limit reached before the turn finished — retrying", {
+				kind: "max_tokens_turn_recovery",
+				phase: "started",
+				attempt: 2,
+				maxAttempts: 2,
+				outputCapSource: "unknown",
+				compacting: false,
+			}),
+			state,
+		)
+
+		expect(result.messages).toHaveLength(1)
+		expect(result.messages[0].say).toBe("output_limit_retry")
+		const info = JSON.parse(result.messages[0].text ?? "{}")
+		expect(info.capSource).toBeUndefined()
+		expect(info).toMatchObject({ attempt: 2, maxAttempts: 2, compacting: false })
+	})
+
 	it("suppresses known-internal status notices instead of rendering raw slugs", () => {
 		const state = new MessageTranslatorState()
 		const result = translateSessionEvent(
@@ -4800,5 +4896,78 @@ describe("tools with no bespoke row still reach the chat with something to show"
 
 	it("says how many when check_file is given several", () => {
 		expect(sayToolFor("check_file", { paths: ["/w/a.html", "/w/b.html", "/w/c.html"] }).path).toBe("/w/a.html (+2 more)")
+	})
+})
+
+// ---------------------------------------------------------------------------
+// A turn that produced nothing visible
+// ---------------------------------------------------------------------------
+
+describe("translateSessionEvent — empty turns", () => {
+	const agentEvent = (event: AgentEvent, state: MessageTranslatorState) =>
+		translateSessionEvent({ type: "agent_event", payload: { sessionId: "s", event } }, state)
+
+	const endIteration = (state: MessageTranslatorState) => agentEvent({ type: "iteration_end" } as AgentEvent, state)
+
+	const emptyTurnRows = (state: MessageTranslatorState) => endIteration(state).messages.filter((m) => m.say === "empty_turn")
+
+	it("marks a turn that produced neither prose nor a tool call", () => {
+		// Previously this turn left no row at all, so the gap between two
+		// request rows was indistinguishable from the model still working.
+		const state = new MessageTranslatorState()
+		const rows = emptyTurnRows(state)
+
+		expect(rows).toHaveLength(1)
+		expect(JSON.parse(rows[0].text ?? "{}")).toEqual({ reasoningChars: 0 })
+	})
+
+	it("says how much the turn reasoned before producing nothing", () => {
+		// Reasoning does not make a turn non-empty -- thinking at length and
+		// then saying nothing and calling nothing is the case worth seeing --
+		// but it is what separates that from a turn that produced literally
+		// nothing, so the count rides along.
+		const state = new MessageTranslatorState()
+		agentEvent({ type: "content_end", contentType: "reasoning", reasoning: "  weighing it up  " } as AgentEvent, state)
+
+		const rows = emptyTurnRows(state)
+		expect(rows).toHaveLength(1)
+		expect(JSON.parse(rows[0].text ?? "{}").reasoningChars).toBe("weighing it up".length)
+	})
+
+	it("stays quiet when the turn said something", () => {
+		const state = new MessageTranslatorState()
+		agentEvent({ type: "content_end", contentType: "text", text: "here is the plan" } as AgentEvent, state)
+
+		expect(emptyTurnRows(state)).toHaveLength(0)
+	})
+
+	it("stays quiet when the turn called a tool", () => {
+		// The 22-token turn that started this: no prose at all, one tool call.
+		// It is not an empty turn -- the tool row is its trace.
+		const state = new MessageTranslatorState()
+		agentEvent({ type: "content_end", contentType: "tool", toolName: "read_files", toolCallId: "c1" } as AgentEvent, state)
+
+		expect(emptyTurnRows(state)).toHaveLength(0)
+	})
+
+	it("does not carry one iteration's output into the next", () => {
+		// `iteration_start` resets the counters. Without that, one talkative
+		// turn would suppress the row for every silent turn after it.
+		const state = new MessageTranslatorState()
+		agentEvent({ type: "content_end", contentType: "text", text: "here is the plan" } as AgentEvent, state)
+		expect(emptyTurnRows(state)).toHaveLength(0)
+
+		agentEvent({ type: "iteration_start" } as AgentEvent, state)
+		expect(emptyTurnRows(state)).toHaveLength(1)
+	})
+
+	it("counts a denied tool call as something the turn did", () => {
+		// A call the user refused still leaves a row on screen, so the turn is
+		// not empty. Counted before the denial branch for that reason.
+		const state = new MessageTranslatorState()
+		state.recordDeniedToolApproval("c1", "read_files", "user denied")
+		agentEvent({ type: "content_end", contentType: "tool", toolName: "read_files", toolCallId: "c1" } as AgentEvent, state)
+
+		expect(emptyTurnRows(state)).toHaveLength(0)
 	})
 })

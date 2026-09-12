@@ -218,7 +218,7 @@ export const RequestStartRow: React.FC<RequestStartRowProps> = ({
 	// (otherwise they'll be shown in the unified ToolGroupRenderer list)
 	const shouldShowActivities = currentActivities.length > 0 && !hasCompletedTools
 
-	// Initial loading ("Thinking..." before any content) is injected as a synthetic in-list
+	// Initial loading ("Generating..." before any content) is injected as a synthetic in-list
 	// reasoning row in MessagesArea to avoid footer handoff flicker.
 
 	return (
@@ -239,7 +239,7 @@ export const RequestStartRow: React.FC<RequestStartRowProps> = ({
 			)}
 			{/*
 			 * One row for both states. While the request was in flight this
-			 * rendered a bare "Thinking..." shimmer and dropped
+			 * rendered a bare "Generating..." shimmer and dropped
 			 * `reasoningContent` on the floor: the reasoning was arriving and
 			 * being thrown away, so a long thinking phase showed one word and
 			 * nothing else, and the content only became readable once the turn

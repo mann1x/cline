@@ -623,7 +623,7 @@ export function groupLowStakesTools(groupedMessages: (ClineMessage | ClineMessag
 		// - they should not be in file lists"), so a reasoning row that goes into
 		// a group is a reasoning row nobody ever sees. For a finished block that
 		// is merely a loss; for a streaming one it is total, because the partial
-		// row *is* the live "Thinking..." display, and absorbing it leaves the
+		// row *is* the live "Generating..." display, and absorbing it leaves the
 		// screen blank for as long as the model thinks.
 		//
 		// Whether it got absorbed depended on nothing but whether a tool group

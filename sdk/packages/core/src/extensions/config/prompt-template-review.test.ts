@@ -95,6 +95,118 @@ describe("auditPromptTemplateProposal", () => {
 		).toBe(true);
 	});
 
+	// Three sentences three different models wrote on 2026-09-12, every one of
+	// which the gate passed clean. The ban was in place; the matching was not
+	// wide enough to reach how models actually phrase it, so the rule that cost
+	// 13.6 restores per run was on its way back into three templates at once.
+	it("refuses the rule written as 'Batching:' rather than 'batch'", () => {
+		// minimax-m3, regen/20260912-1546. `\bbatch\b` does not match
+		// "Batching", and the distance from "edits" to "in the same response"
+		// is past the window the second pattern allowed.
+		const result = audit(
+			GOOD.replace(
+				"{{CLINE_RULES}}",
+				"**Batching:** if several edits to different files or non-overlapping regions are already known, emit multiple `editor` tool calls in the same response instead of serialising them across turns.\n{{CLINE_RULES}}",
+			),
+		);
+
+		expect(
+			result.problems.some((problem) => problem.includes("batch its edits")),
+		).toBe(true);
+	});
+
+	it("refuses the rule written as a prohibition on splitting them up", () => {
+		// nemotron-3-super, regen/20260912-1547. "Do not split edits across
+		// separate turns" *is* "batch your edits", and the negation check --
+		// there to let the rule be stated correctly -- read the "Do not" and
+		// waved it through.
+		const result = audit(
+			GOOD.replace(
+				"{{CLINE_RULES}}",
+				"Do not split independent reads, searches, checks, or edits across separate turns.\n{{CLINE_RULES}}",
+			),
+		);
+
+		expect(
+			result.problems.some((problem) => problem.includes("batch its edits")),
+		).toBe(true);
+	});
+
+	it("refuses the rule offered as an example of good batching", () => {
+		// kimi-k2.6, regen/20260912-1527.
+		const result = audit(
+			GOOD.replace(
+				"{{CLINE_RULES}}",
+				"Good batching: every file you already know you need in one `read_files`; multiple `editor` calls on different files or non-overlapping regions together.\n{{CLINE_RULES}}",
+			),
+		);
+
+		expect(
+			result.problems.some((problem) => problem.includes("batch its edits")),
+		).toBe(true);
+	});
+
+	it("refuses the rule written without the word 'batch' at all", () => {
+		// Verbatim from DEFAULT_CLINE_SYSTEM_PROMPT, which is where the rule
+		// actually came from -- `default.md` is that prompt verbatim, and every
+		// other template is regenerated from `default.md`.
+		const result = audit(
+			GOOD.replace(
+				"{{CLINE_RULES}}",
+				"Good parallelism examples: read all known relevant files in one read_files call; emit independent read_files, search_codebase, and run_commands calls together in one response; emit multiple editor calls together when editing different files or non-overlapping regions.\n{{CLINE_RULES}}",
+			),
+		);
+
+		expect(
+			result.problems.some((problem) => problem.includes("batch its edits")),
+		).toBe(true);
+	});
+
+	it("refuses the rule when it is in a tool section instead of the system one", () => {
+		// Where it actually was. The audit only ever read `# system`, so nine of
+		// the ten shipped templates carried this in `# tool: editor` while the
+		// ban read as enforced -- and a model reads a tool description exactly
+		// as it reads the system prompt. Verbatim from the minimax-m3-tpl
+		// proposal, regen/20260912-1546, line 128.
+		const result = audit(
+			GOOD.replace(
+				"Use this to write files.",
+				"**Batching:** if several edits to different files or non-overlapping regions are already known, emit multiple `editor` tool calls in the same response instead of serialising them across turns.",
+			),
+		);
+
+		expect(
+			result.problems.some((problem) => problem.includes("batch its edits")),
+		).toBe(true);
+	});
+
+	// The other half of the same 2026-09-12 batch, and the reason the patterns
+	// above cannot simply be widened until they catch everything: this is the
+	// cadence rule stated correctly, at the length a model states it, and it
+	// has to survive or the repair loop spends its attempts rejecting the
+	// answer it asked for.
+	it("accepts the cadence rule at the length a model writes it", () => {
+		const result = audit(
+			GOOD.replace(
+				"{{CLINE_RULES}}",
+				"**Verification cadence.** Each planned change is its own step. Make the planned changes one at a time, and confirm each one before starting the next. The check that confirms one edit is the cheap one that does not execute the code. That check goes after every edit, before the next one starts. The thing that runs the code -- the build, the tests, the program itself -- goes at the end, once, after every change you planned is in place.\n{{CLINE_RULES}}",
+			),
+		);
+
+		expect(result.problems).toEqual([]);
+	});
+
+	it("accepts batching the reads, which is not what cost anything", () => {
+		const result = audit(
+			GOOD.replace(
+				"{{CLINE_RULES}}",
+				"Emit every independent `read_files` and `search_codebase` call together in one response rather than waiting for each result.\n{{CLINE_RULES}}",
+			),
+		);
+
+		expect(result.problems).toEqual([]);
+	});
+
 	// The same subject stated correctly has to pass, or the gate refuses the
 	// answer it is asking for and the repair loop spends attempts it cannot win.
 	it("accepts the rule stated the right way round", () => {
