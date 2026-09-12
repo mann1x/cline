@@ -6,8 +6,10 @@ match:
 
 <!-- PROVENANCE -- written by scripts/review-prompt-templates.mts, not by the model.
 
-     Written by kimi-k2.6:cloud (Ollama family `kimi-k2`) on 2026-09-12.
-     Run, with its log: prompt-reviews/regen/20260912-1817-kimi-k2.6-cloud
+     Sections `grep`, `sed`, `awk`, `run_commands` written by kimi-k2.6:cloud (Ollama family `kimi-k2`) on 2026-09-12.
+
+     Every other section is unchanged. Written by kimi-k2.6:cloud (Ollama family `kimi-k2`) on 2026-09-12.
+     Run, with its log: prompt-reviews/regen/20260912-2324-kimi-k2.6-cloud
 
      Sampler asked for by the generator, overriding the model's own:
        temperature 0.2
@@ -142,13 +144,21 @@ Output: `{query, result, success, error?}` covering the whole patch. `result` li
 {{DEFAULT}}
 
 # tool: run_commands
+
 Run shell commands in the working directory. Use for builds, tests, package-manager operations, git operations, and any command that does not have a dedicated tool.
 
-Do not use shell commands to read files — `read_files` exists. Do not use shell commands to write or edit files — `editor` and `apply_patch` exist. Do not use shell commands to search code — `search_codebase` exists. Do not use shell commands to check individual files — `check_file` exists. Those dedicated tools are faster, safer, and give structured output.
+Do not use shell commands to read files — `read_files` exists. Do not use shell commands to write or edit files — `editor` and `apply_patch` exist. Do not use shell commands to search code — `search_codebase`, `grep`, `sed`, and `awk` exist. Do not use shell commands to check individual files — `check_file` exists. Those dedicated tools are faster, safer, and give structured output.
 
 When you need multiple independent commands, run them together in one call. Each command runs in its own shell, so `cd` in one does not affect the next. Use absolute paths or chain with `&&` when a command depends on being in a specific directory.
 
 Output: one object per command, in order — `{query, result, success, error?}`, where `query` is the command string, `result` is stdout and stderr combined, and a failed command has `success: false` with the reason in `error`.
+
+Example:
+```json
+{
+  "commands": ["npm test", "npm run build"]
+}
+```
 
 {{DEFAULT}}
 
@@ -294,3 +304,50 @@ Output: plain text, one result per line as `file:line:column` followed by that s
 
 # tool: team_list_outcomes
 {{DEFAULT}}
+
+# tool: grep
+
+Search files for lines matching a pattern, as POSIX `grep` does. Give it a `pattern` and, optionally, `paths` — files or directories, defaulting to the workspace root searched recursively, skipping `node_modules`, `.git`, `dist` and the like. The pattern is a BASIC regular expression by default, exactly as grep reads one: `+ ? ( ) { } |` are literal characters there, and `\(a\|b\)` is how you group and alternate. Pass `extended: true` for the syntax you are probably thinking of, or `fixed: true` to search for the text itself with no syntax at all. Flags: `ignore_case`, `invert` (the lines that do not match), `word` (whole words), `count` (how many per file), `files_with_matches` (names only), `context` (lines either side), `max_count` (stop after N per file). Line numbers are included unless you set `line_numbers: false`. Use it to find where something is before you read or edit it — it is cheaper than reading whole files, and a match records that you have read those lines. This runs in-process, not through the shell: it needs no binary installed and behaves identically on every platform.
+
+Output: a single `{query, result, success, error?}`, where a failed entry has `success: false` and the reason in `error`. `query` is `grep:<pattern>` and `result` holds the matching lines prefixed with their path and line number. A pattern that matched nothing still has `success: true`, and `result` says so in words: that is an answer, and re-running the same search will not change it.
+
+Example:
+```json
+{
+  "pattern": "class.*Controller",
+  "paths": ["src"],
+  "extended": true,
+  "context": 2
+}
+```
+
+# tool: sed
+
+Apply a `sed` script to one or more files. Send a `script` — `s/foo/bar/g`, `/^debug/d`, `2,5s/^/# /`, several separated by newlines or `;` — and the `files` to run it over. Without `in_place` it only prints the result, which is how you check a script before trusting it; with `in_place: true` it rewrites each file. Addresses and `s///` patterns are BASIC regular expressions, as sed reads them, unless you pass `extended: true`. `quiet: true` prints only what the script prints, as `sed -n` does. Reach for this over `editor` when one mechanical change applies in many places or across many files — renaming an identifier everywhere, stripping a prefix from every line of a block. For a single considered change to one place, `editor` is the better tool: it can anchor on text you quote back, and it tells you when the file has moved under you. An in-place run is refused on a file you have not read, the same way an `editor` call is — and a script addressed by line number is refused unless you have read those lines. Read first. This runs in-process, not through the shell: it needs no binary installed and behaves identically on every platform.
+
+Output: one object per file — `{query, result, success, error?}`, where a failed entry has `success: false` and the reason in `error`. `query` is `sed:<file>` and `result` is that file's output, or a sentence saying what was written. The files do not share a fate: one may be written while the next is refused, so read every entry. `success: false` means that file was NOT touched and `error` says why. A script that matched nothing is `success: true` — it ran, and that is its answer; running it again unchanged will not change it.
+
+Example:
+```json
+{
+  "script": "s/oldName/newName/g",
+  "files": ["src/utils.ts", "src/helpers.ts"],
+  "in_place": true,
+  "extended": true
+}
+```
+
+# tool: awk
+
+Run an `awk` program over one or more files. Send a `program` — `{print $1}`, `NR>1 {sum+=$2} END {print sum}`, `$3 ~ /error/ {print FILENAME, NR, $0}` — and the `files` to run it over. `field_separator` is `-F`; `variables` is `-v`. A program with only a BEGIN block needs no files. This is the tool for questions about columns and totals, where grep would only find the lines and you would still have to count them yourself: summing a column, picking fields out of a delimited file, counting occurrences per key. It is read-only, and deliberately so: output redirection, pipes, `system()` and `getline` are all refused rather than quietly ignored. Use `sed` or `editor` to change a file. This runs in-process, not through the shell: it needs no binary installed and behaves identically on every platform.
+
+Output: a single `{query, result, success, error?}`, where a failed entry has `success: false` and the reason in `error`. `query` is `awk:<program>` and `result` is everything the program printed. A program that printed nothing still has `success: true` — that is the program's answer, not a failure.
+
+Example:
+```json
+{
+  "program": "NR>1 {sum+=$2} END {print sum}",
+  "files": ["data.csv"],
+  "field_separator": ","
+}
+```

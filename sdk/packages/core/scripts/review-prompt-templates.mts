@@ -131,6 +131,21 @@ function stampProvenance(
 		familyDeclared: boolean;
 		sourced: string | undefined;
 		runDir: string;
+		/**
+		 * Set when only some sections were rewritten.
+		 *
+		 * A delta run replaces three sections of a file whose other three
+		 * hundred lines somebody else wrote — `glm.md`, `minimax.md` and
+		 * `nemotron.md` were each written by a different tag from the one that
+		 * added `grep`/`sed`/`awk`. Stamping the whole file as this model's
+		 * work would be false, and this header exists precisely to record who
+		 * wrote the text.
+		 */
+		delta?: {
+			tools: readonly string[];
+			/** The `Written by ...` line the base template already carried. */
+			base: string | undefined;
+		};
 	},
 ): string {
 	// Drop a model-supplied provenance block, wherever it put it.
@@ -142,11 +157,24 @@ function stampProvenance(
 	const header: string = [
 		"<!-- PROVENANCE -- written by scripts/review-prompt-templates.mts, not by the model.",
 		"",
-		`     Written by ${details.model} (${
+		`     ${
+			details.delta
+				? `Sections ${details.delta.tools
+						.map((tool) => `\`${tool}\``)
+						.join(", ")} written by`
+				: "Written by"
+		} ${details.model} (${
 			details.familyDeclared ? "family declared as" : "Ollama family"
 		} \`${details.family ?? "unreported"}\`${
 			details.familyDeclared ? ", because the tag reports none of its own" : ""
 		}) on ${RUN_STAMP.slice(0, 4)}-${RUN_STAMP.slice(4, 6)}-${RUN_STAMP.slice(6, 8)}.`,
+		...(details.delta
+			? [
+					details.delta.base
+						? `     Every other section is unchanged. ${details.delta.base.trim()}`
+						: "     Every other section is unchanged from the previous version of this file.",
+				]
+			: []),
 		`     Run, with its log: ${details.runDir.replace(/^.*?(?=prompt-reviews\/)/, "")}`,
 		"",
 		"     Sampler asked for by the generator, overriding the model's own:",
@@ -692,6 +720,14 @@ async function review(model: string, options: Options): Promise<boolean> {
 				familyDeclared: options.family !== undefined,
 				sourced: facts.sourced,
 				runDir,
+				...(options.onlyTools.length > 0
+					? {
+							delta: {
+								tools: options.onlyTools,
+								base: /^\s*Written by .*$/m.exec(familyTemplate ?? "")?.[0],
+							},
+						}
+					: {}),
 			})}\n`,
 			"utf8",
 		);

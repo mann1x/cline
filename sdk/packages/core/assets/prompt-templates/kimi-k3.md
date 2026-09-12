@@ -4,7 +4,11 @@ match:
   family: ["kimi-k3*"]
 ---
 
-<!-- PROVENANCE -- written by scripts/review-prompt-templates.mts, not by the model.
+<!-- PROVENANCE
+
+     Sections `grep`, `sed`, `awk` written by hand on 2026-09-12, and the
+     `run_commands` redirect updated with them: kimi-k3:cloud was asked six
+     times and returned the built-in text verbatim every time. -- written by scripts/review-prompt-templates.mts, not by the model.
 
      Written by kimi-k3:cloud (Ollama family `kimi-k3`) on 2026-09-12.
      Run, with its log: prompt-reviews/regen/20260912-1906-kimi-k3-cloud
@@ -92,6 +96,34 @@ Output per query is middle-truncated beyond ~48k characters; specific patterns b
 
 Output: one object per pattern — `{query, result, success, error?}`. `query` is the pattern you sent. `result` is matching lines with file paths. A pattern that matched nothing has `success: true` and `result: []`; that is an answer, not a failure, and re-running it will not change it.
 
+# tool: grep
+Search files for lines matching a pattern, the way POSIX `grep` does. Runs in this process, not through the shell, so nothing needs to be installed and the behaviour is the same on every platform.
+
+Arguments:
+- `pattern`: the pattern. It is a **basic** regular expression by default — in BRE, `+ ? ( ) { } |` are literal characters and you group and alternate with `\(a\|b\)`. Pass `extended: true` for ERE, or `fixed: true` to match the text literally with no regex syntax at all.
+- `paths`: files or directories to search. Defaults to the workspace root, recursively, skipping `node_modules`, `.git`, `dist` and similar.
+- `ignore_case`, `invert`, `word`: match without case, return the lines that do *not* match, match whole words only.
+- `count`, `files_with_matches`: report a count per file, or only the names of files that matched.
+- `context`: lines shown either side of a match. `max_count`: stop after this many per file. `line_numbers`: on unless set to false.
+
+Use `search_codebase` when you do not yet know which files are involved — it takes several patterns at once and reports one hit per file, which is what answers "where is this". Use `grep` when you already know the file or directory and want grep's own semantics: every matching line, a count, an inverted match, a window of context. Neither answers questions about a symbol; `code_intel` does.
+
+Output: a single `{query, result, success, error?}`. `query` is `grep:<pattern>`. `result` is the matching lines prefixed with path and line number. A pattern that matched nothing has `success: true` and says so in words — that is an answer, not a failure, and re-running it will not change it. Lines returned here count as read.
+
+# tool: awk
+Run an `awk` program over one or more files. Runs in this process; nothing needs to be installed.
+
+Arguments:
+- `program`: the awk program, e.g. `{print $1}` or `NR>1 {sum+=$2} END {print sum}`.
+- `files`: the files to run over. A program with only a `BEGIN` block needs none.
+- `field_separator`: the input separator, as `-F` sets it. `variables`: pre-set variables, as `-v name=value` sets them.
+
+Use this for questions about columns and totals — summing a column, pulling fields out of a delimited file, counting occurrences per key. A search finds the lines; awk answers the question about them.
+
+It cannot write, and that is enforced rather than assumed: output redirection, pipes, `system()` and `getline` are refused. Use `sed` or `editor` to change a file.
+
+Output: a single `{query, result, success, error?}`. `query` is `awk:<program>`. `result` is everything the program printed. A program that printed nothing has `success: true` — that is the program's answer.
+
 # tool: fetch_web_content
 Fetch web pages and extract information using a prompt. Each request needs a `url` and a `prompt` describing what to extract. Batch independent URLs into one call, together with other independent tool calls in the same response.
 
@@ -109,6 +141,21 @@ Make precise edits to a single text file at `path`. Six modes, chosen by which a
 Use this rather than a shell command for anything that changes a file. Make one edit at a time and check it before starting the next: reads and searches cost nothing if one turns out to be unnecessary, but several edits made together and checked once leave several things to undo and no way to tell which one was wrong.
 
 Output: a single `{query, result, success, error?}` object for this one edit, where `query` is `edit:<path>` or `insert:<path>` and `result` describes what changed. A failed edit changes nothing: `success` is false, `error` says why, and the file is exactly as it was. Do not resend the same call — `error` names the fix. In particular, text copied out of a `read_files` result must have its `123 | ` line-number gutter removed first.
+
+# tool: sed
+Apply a `sed` script to one or more files. Runs in this process, not through the shell.
+
+Arguments:
+- `script`: the sed program — `s/foo/bar/g`, `/^debug/d`, `2,5s/^/# /`. Several commands go in one script, separated by newlines or `;`. Addresses and `s///` patterns are **basic** regular expressions unless you pass `extended: true`.
+- `files`: the files to run it over.
+- `in_place`: omit it and the call only prints what the script would produce — that is how you check a script before trusting it. Set it to `true` and each file is rewritten.
+- `quiet`: print only what the script itself prints, as `sed -n` does.
+
+Use this when one mechanical change applies in many places or across many files — renaming an identifier everywhere, stripping a prefix from a block. Use `editor` for a single considered change to one place: it anchors on text you quote back and tells you when the file has moved under you, which a script cannot. Preview before writing.
+
+The read rule is the same as `editor`'s and exists for the same reason: an in-place run is refused on a file you have not read, and a script addressed by line number is refused unless you have read those lines. In plan mode `in_place` is refused outright, as `sed -i` through the shell is; the preview still works.
+
+Output: one object per file — `{query, result, success, error?}`. `query` is `sed:<file>`. `result` is that file's output, or a sentence saying what was written. The files do not share a fate: one can be written while the next is refused, so read every entry. `success: false` means that file was **not** touched and `error` says why. A script that matched nothing has `success: true` — it ran, and that is its answer.
 
 # tool: apply_patch
 Apply a freeform patch to edit one or more files. Pass the patch text as `input`. Preferred format:
@@ -140,7 +187,7 @@ Output: `{query, result, success, error?}` covering the whole patch. `result` li
 {{DEFAULT}}
 
 # tool: run_commands
-Run shell commands in the working directory. Use for builds, tests, package-manager operations, git operations, and any command that does not have a dedicated tool. Do not use shell commands to read files (`read_files` exists), to write or edit files (`editor` and `apply_patch` exist), to search code (`search_codebase` exists), or to check individual files (`check_file` exists). Those dedicated tools are faster, safer, and give structured output.
+Run shell commands in the working directory. Use for builds, tests, package-manager operations, git operations, and any command that does not have a dedicated tool. Do not use shell commands to read files (`read_files` exists), to write or edit files (`editor`, `apply_patch` and the `sed` tool exist), to search code (`search_codebase` and the `grep` tool exist), to process columns or totals (`awk` exists), or to check individual files (`check_file` exists). In particular, `grep`, `sed` and `awk` are tools here: call them directly rather than running the binaries through this one. Those dedicated tools are faster, safer, and give structured output.
 
 When you need multiple independent commands, run them together in one call. Each command runs in its own shell, so `cd` in one does not affect the next. Use absolute paths or chain with `&&` when a command depends on being in a specific directory.
 

@@ -50,6 +50,17 @@ export const DEFAULT_REQUIRED_REWRITES = [
 	"fetch_web_content",
 	"check_file",
 	"code_intel",
+	// The three POSIX tools. They are here for the same reason as the rest, but
+	// the specific hazard is that each has a default a reader will assume the
+	// other way round: `grep` reads BASIC regular expressions, so `a+` is two
+	// literal characters; `sed` refuses an in-place run on a file nobody read,
+	// and reports one outcome per file rather than one per call; `awk` cannot
+	// write at all. A section passed through as `{{DEFAULT}}` states all of
+	// that once, in our words, at the bottom of a long file. A family template
+	// that has rewritten it has had to decide how to say it.
+	"grep",
+	"sed",
+	"awk",
 ] as const;
 
 export const PROMPT_TEMPLATE_REVIEW_INSTRUCTIONS = `You are being shown the prompt Cline gives you when it uses you as a coding agent: a system prompt and a set of tool descriptions. You are the intended reader of this text. Rewrite it into the form you would rather receive.
@@ -482,7 +493,13 @@ const COMPUTED_TOOL_NAMES = ["run_commands", "skills"];
  * guidance and loses its effect.
  */
 const REQUIRED_REDIRECTS: Readonly<Record<string, readonly string[]>> = {
-	run_commands: ["read_files", "editor", "search_codebase"],
+	// `grep` and `sed` joined this list when they became tools. Every template
+	// tells the model never to run grep or `sed -i` through the shell, which
+	// was unambiguous while those names belonged to nothing else. They now name
+	// two tools in the same list the model is given, so a prohibition that does
+	// not say what to reach for instead reads as a prohibition on the tools —
+	// which would leave them shipped and unusable.
+	run_commands: ["read_files", "editor", "search_codebase", "grep", "sed"],
 };
 
 /**

@@ -6,8 +6,10 @@ match:
 
 <!-- PROVENANCE -- written by scripts/review-prompt-templates.mts, not by the model.
 
-     Written by deepseek-v4.1-flash:cloud (Ollama family `deepseek_v41`) on 2026-09-12.
-     Run, with its log: prompt-reviews/regen/20260912-1817-deepseek-v4.1-flash-cloud
+     Sections `grep`, `sed`, `awk`, `run_commands` written by deepseek-v4.1-flash:cloud (Ollama family `deepseek_v41`) on 2026-09-12.
+
+     Every other section is unchanged. Written by deepseek-v4.1-flash:cloud (Ollama family `deepseek_v41`) on 2026-09-12.
+     Run, with its log: prompt-reviews/regen/20260912-2324-deepseek-v4.1-flash-cloud
 
      Sampler asked for by the generator, overriding the model's own:
        temperature 0.2
@@ -57,8 +59,8 @@ Good parallelism: read all known relevant files in one read_files call; run inde
 ## Use the dedicated tool, not the shell
 Every file operation has a tool built for it, and those tools are always available. Do not reach for the shell to do their job:
 - Reading a file: `read_files`, not `cat`, `head`, `tail`, `type` or `Get-Content`.
-- Writing or editing a file: `editor` or `apply_patch`, not `sed -i`, `echo >`, `tee`, or a heredoc.
-- Searching: `search_codebase` for text, `list_files` for names, `code_intel` for anything about a symbol — not `grep`, `find`, `rg`, `ls` or `dir`.
+- Writing or editing a file: `editor`, `apply_patch`, or the `sed` tool for one mechanical change in many places — not `sed -i`, `echo >`, `tee`, or a heredoc through the shell.
+- Searching: `search_codebase` for text across the repo, the `grep` tool for grep's own flags on a file you have located, `list_files` for names, `code_intel` for anything about a symbol — not `grep`, `find`, `rg`, `ls` or `dir` through the shell.
 - Checking whether a file is valid: `check_file`, not a compiler or linter run through the shell.
 `run_commands` is for building, testing, running the program, installing dependencies, and other things that genuinely need a shell.
 
@@ -116,7 +118,8 @@ Ask the user a single clarifying question. Provide an array of 2-5 options for t
 Submit the final answer and exit the conversation. Call only when all necessary steps are completed. Verify output matches expected format, data types, and file locations. Provide a summary of what was done and confirm the issue is resolved. Output: a short confirmation as plain text. This call ends the run — nothing planned after it will execute.
 
 # tool: run_commands
-Run shell commands in the working directory. Use for building, testing, running linters, installing dependencies, or any operation that needs a shell. Do not use for reading files (use read_files), searching code (use search_codebase), or editing files (use editor or apply_patch). When several independent commands that do not depend on each other's output are needed, pass them all in one call as an array of strings — they run in order but you do not need to wait for one result before sending the next. Each command runs in its own shell; use `&&` or `;` to chain steps within one string. Output: one object per command — `{command, exitCode, stdout, stderr, success}`, where `success` is true when exitCode is 0. A non-zero exitCode is not a tool failure; it is the command's answer — read stdout and stderr to understand what happened. Long output is truncated; redirect to a file and read it with read_files if you need the full output.
+
+Run shell commands in the working directory. Use for building, testing, running linters, installing dependencies, or any operation that needs a shell. Do not use for reading files (use read_files), searching code (use search_codebase, or grep when you want grep's own flags), or editing files (use editor, apply_patch, or sed when one mechanical change applies across many files). When several independent commands that do not depend on each other's output are needed, pass them all in one call as an array of strings — they run in order but you do not need to wait for one result before sending the next. Each command runs in its own shell; use `&&` or `;` to chain steps within one string. Output: one object per command — `{command, exitCode, stdout, stderr, success}`, where `success` is true when exitCode is 0. A non-zero exitCode is not a tool failure; it is the command's answer — read stdout and stderr to understand what happened. Long output is truncated; redirect to a file and read it with read_files if you need the full output.
 {{DEFAULT}}
 
 # tool: skills
@@ -207,3 +210,33 @@ Spawn a sub-agent with a custom system prompt for specialized tasks. Use when de
 
 # tool: team_list_outcomes
 {{DEFAULT}}
+
+# tool: grep
+
+Find lines matching a pattern, the way POSIX `grep` does. Give it a `pattern`, and `paths` if you want to narrow the search — files or directories, defaulting to the whole workspace searched recursively with `node_modules`, `.git`, `dist` and the like skipped.
+
+The pattern is a BASIC regular expression by default, which is what grep itself reads: `+ ? ( ) { } |` are ordinary characters there, and grouping and alternation are written `\(a\|b\)`. If that is not what you meant, pass `extended: true` for the syntax you are probably picturing, or `fixed: true` to match the text literally with no syntax at all.
+
+Other flags: `ignore_case`, `invert` (the lines that do *not* match), `word` (whole words only), `count` (how many matches per file), `files_with_matches` (names only), `context` (lines either side of a match), `max_count` (stop after N per file). Line numbers come back unless you set `line_numbers: false`.
+
+Reach for this to find where something is before you read or edit it: it is cheaper than reading whole files, and a match counts as having read those lines. It runs in-process rather than through the shell, so it needs no binary installed and behaves the same on every platform.
+
+Output: a single `{query, result, success, error?}`. `query` is `grep:<pattern>`; `result` holds the matching lines, each prefixed with its path and line number. A failed entry has `success: false` with the reason in `error`. A pattern that matched nothing is still `success: true`, with `result` saying so in words — that is an answer, and running the same search again will not change it.
+
+# tool: sed
+
+Apply a `sed` script to one or more files. Send a `script` — `s/foo/bar/g`, `/^debug/d`, `2,5s/^/# /`, or several separated by newlines or `;` — together with the `files` to run it over.
+
+Without `in_place` it only prints the result, which is how you check a script before trusting it; with `in_place: true` it rewrites each file. Addresses and `s///` patterns are BASIC regular expressions, as sed reads them, unless you pass `extended: true`. `quiet: true` prints only what the script prints, the way `sed -n` does.
+
+Choose this over `editor` when one mechanical change applies in many places or across many files — renaming an identifier everywhere, stripping a prefix from every line of a block. For a single considered change in one place, `editor` is the better tool: it can anchor on text you quote back, and it tells you when the file has moved under you. An in-place run is refused on a file you have not read, exactly as an `editor` call is, and a script addressed by line number is refused unless you have read those lines. Read first. It runs in-process rather than through the shell, so it needs no binary installed and behaves the same on every platform.
+
+Output: one object per file — `{query, result, success, error?}`. `query` is `sed:<file>`; `result` is that file's output, or a sentence saying what was written. A failed entry has `success: false` with the reason in `error`. The files do not share a fate: one may be written while the next is refused, so read every entry. `success: false` means that file was NOT touched, and `error` says why. A script that matched nothing is `success: true` — it ran, and that is its answer; running it again unchanged will not change it.
+
+# tool: awk
+
+Run an `awk` program over one or more files. Send a `program` — `{print $1}`, `NR>1 {sum+=$2} END {print sum}`, `$3 ~ /error/ {print FILENAME, NR, $0}` — and the `files` to run it over. `field_separator` is `-F`; `variables` is `-v`. A program that is only a BEGIN block needs no files.
+
+This is the tool for questions about columns and totals, where grep would only hand you the lines and leave you to count them yourself: summing a column, pulling fields out of a delimited file, counting occurrences per key. It is read-only, and deliberately so — output redirection, pipes, `system()` and `getline` are refused rather than quietly ignored. Use `sed` or `editor` to change a file. It runs in-process rather than through the shell, so it needs no binary installed and behaves the same on every platform.
+
+Output: a single `{query, result, success, error?}`. `query` is `awk:<program>`; `result` is everything the program printed. A failed entry has `success: false` with the reason in `error`. A program that printed nothing is still `success: true` — that is the program's answer, not a failure.

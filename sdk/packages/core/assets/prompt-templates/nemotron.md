@@ -6,22 +6,17 @@ match:
 
 <!-- PROVENANCE -- written by scripts/review-prompt-templates.mts, not by the model.
 
-     Written by nemotron-3-super-tpl:latest (family declared as `nemotron_h_moe`, because the tag reports none of its own) on 2026-09-12.
-     Run, with its log: prompt-reviews/regen/20260912-1834-nemotron-3-super-tpl-latest
+     Sections `grep`, `sed`, `awk` written by nemotron-3-super:cloud (Ollama family `nemotron_h_moe`) on 2026-09-12.
+
+     Every other section is unchanged. Written by nemotron-3-super-tpl:latest (family declared as `nemotron_h_moe`, because the tag reports none of its own) on 2026-09-12.
+     Run, with its log: prompt-reviews/regen/20260912-2340-nemotron-3-super-cloud
 
      Sampler asked for by the generator, overriding the model's own:
        temperature 0.2
 
      Sampler the tag sources (`/api/show`), which applies to every key
      the request above does not set:
-       num_ctx                        262144
-       num_predict                    65536
-       presence_penalty               0.1
-       repeat_last_n                  2048
-       repeat_penalty                 1.1
-       temperature                    1
-       top_p                          0.95
-       frequency_penalty              0.1
+       (none reported)
 
      The script hands a model the prompt it would really receive, names the
      failures observed with models in its family, and asks for the version it
@@ -301,3 +296,15 @@ Output: plain text, one result per line as `file:line:column` followed by that s
 
 # tool: team_list_outcomes
 {{DEFAULT}}
+
+# tool: grep
+
+Search files for lines matching a pattern using an in-process implementation that mirrors POSIX grep behavior. Provide a `pattern` and optionally `paths` to limit the search (defaults to the workspace root, skipping common directories like `node_modules`, `.git`, and `dist`). The pattern uses basic regular expression syntax by default, where metacharacters such as `+ ? ( ) { } |` are treated literally unless escaped; use `\(a\|b\)` for grouping and alternation. Enable extended regex syntax with `extended: true` (making `+ ? ( ) { } |` active as metacharacters) or literal text matching with `fixed: true`. Additional flags include `ignore_case`, `invert` (to select non-matching lines), `word` (for whole-word matches), `count` (to output match counts per file), `files_with_matches` (to list only files containing matches), `context` (to show N lines before and after each match), and `max_count` (to limit matches per file). Line numbers are included in output unless `line_numbers: false` is set. This tool is ideal for locating patterns before reading or editing files, as it avoids loading entire files into the conversation and marks those lines as read. Output is a single `{query, result, success, error?}` object where `query` reflects the grep invocation and `result` contains matching lines prefixed with path and line number. If no matches are found, `success` remains true and `result` indicates no matches—this is a valid answer, and repeating the search yields the same result.
+
+# tool: sed
+
+Apply a sed script to one or more files using an in-process implementation that behaves identically across platforms without requiring a binary. Provide a `script` (e.g., `s/foo/bar/g`, `/^debug/d`, or multi-line scripts separated by newlines or semicolons) and the target `files`. By default, the tool outputs the transformed content without modifying files—use `in_place: true` to rewrite files in place. Addresses and substitution patterns follow basic regular expression rules unless `extended: true` is specified. Use `quiet: true` to suppress output and only print what the script emits (similar to `sed -n`). This tool is preferred over `editor` for repetitive, mechanical changes across many files (e.g., renaming symbols or stripping prefixes), while `editor` is better for isolated, context-dependent edits. An in-place operation is refused if any target file has not been read first, and line-numbered scripts are rejected unless those lines have been read. Output consists of one `{query, result, success, error?}` object per file, where `query` identifies the file and `result` shows the output or a summary of changes. A `success: false` indicates the file was not modified, with `error` explaining why. A script that produces no changes still returns `success: true`, indicating it executed successfully, and re-running it with the same input will yield identical results.
+
+# tool: awk
+
+Execute an awk program over one or more files using an in-process implementation that requires no external binary and behaves consistently across all platforms. Supply a `program` (e.g., `{print $1}`, `NR>1 {sum+=$2} END {print sum}`, or pattern-action rules like `$3 ~ /error/ {print FILENAME, NR, $0}`) and optionally the `files` to process—programs with only a BEGIN block need no input files. Use `field_separator` to change the input field separator (equivalent to `-F`) and `variables` to define awk variables (equivalent to `-v` assignments). This tool is designed for data transformation and aggregation tasks such as summing columns, extracting fields from delimited text, or counting key occurrences—scenarios where grep would locate relevant lines but leave further processing to the user. Importantly, awk is read-only: features like output redirection, pipes, `system()` calls, and `getline` are disallowed to prevent unintended side effects; use `sed` or `editor` for file modifications. Output is a single `{query, result, success, error?}` object where `query` reflects the awk invocation and `result` captures all printed output. A program that produces no output still returns `success: true`, signifying successful execution, and re-running it with identical input will yield the same result.

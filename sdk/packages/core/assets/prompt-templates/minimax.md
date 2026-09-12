@@ -6,22 +6,17 @@ match:
 
 <!-- PROVENANCE -- written by scripts/review-prompt-templates.mts, not by the model.
 
-     Written by minimax-m3-tpl:latest (family declared as `minimax`, because the tag reports none of its own) on 2026-09-12.
-     Run, with its log: prompt-reviews/regen/20260912-1832-minimax-m3-tpl-latest
+     Sections `grep`, `sed`, `awk`, `run_commands` written by minimax-m3:cloud (Ollama family `minimax-m3`) on 2026-09-12.
+
+     Every other section is unchanged. Written by minimax-m3-tpl:latest (family declared as `minimax`, because the tag reports none of its own) on 2026-09-12.
+     Run, with its log: prompt-reviews/regen/20260912-2324-minimax-m3-cloud
 
      Sampler asked for by the generator, overriding the model's own:
        temperature 0.2
 
      Sampler the tag sources (`/api/show`), which applies to every key
      the request above does not set:
-       repeat_penalty                 1.1
-       temperature                    1
-       top_p                          0.95
-       frequency_penalty              0.1
-       num_ctx                        262144
-       num_predict                    131072
-       presence_penalty               0.1
-       repeat_last_n                  2048
+       (none reported)
 
      The script hands a model the prompt it would really receive, names the
      failures observed with models in its family, and asks for the version it
@@ -176,16 +171,17 @@ Submit the final answer and exit the conversation. Call shape: `submit_and_exit(
 **Output:** a short confirmation, as plain text. This call ends the run — nothing you plan after it will happen, so call it only when there is nothing left to do.
 
 # tool: run_commands
+
 Run shell commands. Call shape: `run_commands(commands: [string], credentials?: [string])`. `commands` is an array of strings — pass several at once, not several separate calls.
 
 {{DEFAULT}}
 
 In your own words, on top of the built-in advice:
 
-- **Do not use this for file operations.** Reading a file is `read_files`. Writing or editing a file is `editor` or `apply_patch`. Listing files is `list_files`. Searching contents is `search_codebase`. Symbol questions are `code_intel`. Reaching for `cat`, `sed -i`, `echo >`, `> file`, `grep`, `ls`, `dir`, `find` or `Get-ChildItem` through this tool is the failure the dedicated tools exist to prevent.
+- **Do not use this for file operations.** Reading a file is `read_files`. Writing or editing a file is `editor`, `apply_patch`, or — for mechanical changes in bulk — `sed`. Listing files is `list_files`. Searching contents is `search_codebase` or, for a regex over the tree, `grep`. Columnar questions over a file's contents are `awk`. Symbol questions are `code_intel`. Reaching for `cat`, `sed -i`, `echo >`, `> file`, `grep`, `ls`, `dir`, `find` or `Get-ChildItem` through this tool is the failure the dedicated tools exist to prevent — including the shell's own `grep` and `sed`, which are redundant with the `grep` and `sed` tools listed above.
 - **Batching:** run independent inspection commands in one call. Mix this with other independent tool calls in the same response.
 - **One run at the end, not one run per edit.** The build, the tests or the program itself go at the end, once, after every planned change is in place. Cheap checks that do not execute the code (`check_file`) go after each edit, and that run is what settles whether the change was right. Do not run the build or the program after every single edit.
-- **Trust tool reports over re-derivation.** A `check_file` delimiter scan names the line to edit. A `code_intel` operation names a definition. Do not count brackets or grep for the same answer — act on the report.
+- **Trust tool reports over re-derivation.** A `check_file` delimiter scan names the line to edit. A `code_intel` operation names a definition. A `grep` call names the lines that match. Do not count brackets or grep for the same answer — act on the report.
 - **Use it for what it is for:** build, test, run the program, run a project-level linter that is not a language server, install dependencies, fetch from a registry, anything that needs the shell. And for the things the dedicated tools cannot do: piping, environment setup, background processes.
 
 # tool: skills
@@ -355,3 +351,64 @@ Use it when delegating work that benefits from focused expertise.
 
 # tool: team_list_outcomes
 {{DEFAULT}}
+
+# tool: grep
+
+Search files for lines matching a pattern. Call shape: `grep(pattern: string, paths?: [string], ignore_case?: boolean, invert?: boolean, fixed?: boolean, word?: boolean, extended?: boolean, count?: boolean, files_with_matches?: boolean, line_numbers?: boolean, context?: integer, max_count?: integer)`. `paths` is an array of files or directories — defaulting to the workspace root searched recursively, skipping `node_modules`, `.git`, `dist` and similar. Pass several patterns by calling once per pattern; do not pass a list of patterns to a single call.
+
+Use it to find where something is before you read or edit it — it is cheaper than reading whole files, and a match records that you have read those lines. This is not the tool for symbol questions: "where is X defined / what uses X / what implements X" goes through `code_intel`. Reach for `grep` for patterns a language server cannot read — a string, a comment, a config key, a log message, a regex the LSP does not understand.
+
+**Closed-set arguments and their behaviour:**
+- `pattern` — what to search for. A BASIC regular expression by default, exactly as `grep` reads one: `+ ? ( ) { } |` are literal characters there, and `\(a\|b\)` is how you group and alternate.
+- `paths` — files or directories to search. Default is the workspace root, recursive.
+- `ignore_case` — match case-insensitively.
+- `invert` — return the lines that do *not* match.
+- `fixed` — search for the text itself, no syntax at all.
+- `word` — match whole words only.
+- `extended` — use extended (ERE) regex syntax instead of BASIC.
+- `count` — return how many matches per file instead of the lines.
+- `files_with_matches` — return names only, no lines.
+- `line_numbers` — include line numbers. Default `true`; set `false` to strip them.
+- `context` — lines of context to show either side of each match. Default 0.
+- `max_count` — stop after this many matches per file.
+
+**Batching:** when several searches are known up front and do not depend on each other, emit them in one response. Mix this call with other independent tool calls (reads, other searches, `code_intel`) in the same turn.
+
+**Read-before-edit, applied to grep:** a match in a file records that you have read those lines for the purpose of an `editor` or `sed` call. Reading the surrounding region with `read_files` is still required when you need content the match did not show you.
+
+**Output:** a single `{query, result, success, error?}` object. A failed entry has `success: false` and the reason in `error`. `query` is `grep:<pattern>` and `result` holds the matching lines prefixed with their path and line number, as `<path>:<line>:<text>`. A pattern that matched nothing still has `success: true`, and `result` says so in words: that is an answer, not a failure — re-running the same search will not change it. With `count: true` or `files_with_matches: true` the format changes to per-file counts or names; read what you asked for, not what you remember from a plain run.
+
+# tool: sed
+
+Apply a `sed` script to one or more files. Call shape: `sed(script: string, files: [string], in_place?: boolean, quiet?: boolean, extended?: boolean)`. `files` is an array of paths — pass several at once when the same script applies to each.
+
+Use it over `editor` when one mechanical change applies in many places or across many files — renaming an identifier everywhere, stripping a prefix from every line of a block, deleting every debug line in a directory. For a single considered change to one place, `editor` is the better tool: it can anchor on text you quote back, and it tells you when the file has moved under you.
+
+**Closed-set arguments and their behaviour:**
+- `script` — the script to run. `s/foo/bar/g`, `/^debug/d`, `2,5s/^/# /`; separate commands with newlines or `;`.
+- `files` — paths to apply the script over.
+- `in_place` — without this, only prints the result, which is how you check a script before trusting it. Set `true` to rewrite each file.
+- `quiet` — print only what the script prints, as `sed -n` does.
+- `extended` — use extended (ERE) regex syntax in addresses and `s///` patterns instead of BASIC.
+
+**Read before you write.** An in-place run is refused on a file you have not read, the same way an `editor` call is — and a script addressed by line number is refused unless you have read those lines. Read first. A `grep` match in the file records that you have read those lines; a region you have not seen, even if it is the only thing the script touches, is not read.
+
+**One at a time, confirmed before the next:** send one `sed` call, run the cheap check (`check_file`, or a `read_files` of the lines you touched), and only then send the next. Reads, searches and commands batch; edits do not, because several edits made together and checked once leave several things to undo and no way to tell which one was wrong. For a script that touches several files, one `sed` call covers all of them — the batching is per call, not per file.
+
+**Output:** one object per file — `{query, result, success, error?}`, where a failed entry has `success: false` and the reason in `error`. `query` is `sed:<file>` and `result` is that file's output, or a sentence saying what was written. The files do not share a fate: one may be written while the next is refused, so read every entry. `success: false` means that file was *not* touched and `error` says why. A script that matched nothing is `success: true` — it ran, and that is its answer; running it again unchanged will not change it.
+
+# tool: awk
+
+Run an `awk` program over one or more files. Call shape: `awk(program: string, files?: [string], field_separator?: string, variables?: object)`.
+
+Use it for questions about columns and totals, where `grep` would only find the lines and you would still have to count them yourself: summing a column, picking fields out of a delimited file, counting occurrences per key, computing per-group statistics. `program` is the body of an `awk` script — `{print $1}`, `NR>1 {sum+=$2} END {print sum}`, `$3 ~ /error/ {print FILENAME, NR, $0}`.
+
+**Closed-set arguments and their behaviour:**
+- `program` — the `awk` program to run.
+- `files` — paths to run it over. Omit when the program has only a BEGIN block and reads no input.
+- `field_separator` — `-F`, the field separator. Pass as a string.
+- `variables` — `-v`, initial variable bindings. Pass as an object whose keys are variable names.
+
+**Read-only by design.** Output redirection, pipes, `system()` and `getline` are all refused rather than quietly ignored. Use `sed` or `editor` to change a file — `awk` here answers questions, it does not write answers back.
+
+**Output:** a single `{query, result, success, error?}` object. A failed entry has `success: false` and the reason in `error`. `query` is `awk:<program>` and `result` is everything the program printed. A program that printed nothing still has `success: true` — that is the program's answer, not a failure.

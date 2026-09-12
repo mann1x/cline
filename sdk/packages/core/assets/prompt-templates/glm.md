@@ -6,22 +6,17 @@ match:
 
 <!-- PROVENANCE -- written by scripts/review-prompt-templates.mts, not by the model.
 
-     Written by glm-5.3-flash-tpl2:latest (family declared as `glm5_next`, because the tag reports none of its own) on 2026-09-12.
-     Run, with its log: prompt-reviews/regen/20260912-1856-glm-5.3-flash-tpl2-latest
+     Sections `grep`, `sed`, `awk` written by glm-5.3:cloud (Ollama family `glm_dsa_moe`) on 2026-09-12.
+
+     Every other section is unchanged. Written by glm-5.3-flash-tpl2:latest (family declared as `glm5_next`, because the tag reports none of its own) on 2026-09-12.
+     Run, with its log: prompt-reviews/regen/20260912-2340-glm-5.3-cloud
 
      Sampler asked for by the generator, overriding the model's own:
        temperature 0.2
 
      Sampler the tag sources (`/api/show`), which applies to every key
      the request above does not set:
-       presence_penalty               0.1
-       repeat_last_n                  2048
-       repeat_penalty                 1.1
-       temperature                    1
-       top_p                          0.95
-       frequency_penalty              0.1
-       num_ctx                        262144
-       num_predict                    131072
+       (none reported)
 
      The script hands a model the prompt it would really receive, names the
      failures observed with models in its family, and asks for the version it
@@ -243,4 +238,48 @@ Output: plain text, one result per line as `file:line:column` followed by the so
 {{DEFAULT}}
 
 # tool: team_list_outcomes
+{{DEFAULT}}
+
+# tool: sed
+
+Applies a `sed` script to one or more files. This is the sed to use, not `sed` through `run_commands`: it runs in-process, needs no binary installed, and behaves identically on every platform.
+
+The call is `sed(script: string, files: [string], in_place?: boolean, quiet?: boolean, extended?: boolean)` — every argument by name. `script` is the sed program — `s/foo/bar/g`, `/^debug/d`, `2,5s/^/# /` — and several commands can go in one script, separated by newlines or `;`. `files` is the list to run it over. Addresses and `s///` patterns are BASIC regular expressions, as sed reads them — the same syntax `grep` reads by default — unless you pass `extended: true`.
+
+Without `in_place` the call only prints — nothing is written — and what it prints is each file as the script would leave it. That is the dry run, and it is how you check a script before trusting it. With `in_place: true` it rewrites each file. When you are not sure of a script, print it first and commit the same script after. `quiet: true` prints only what the script itself prints, as `sed -n` does.
+
+Reach for this over `editor` when one mechanical change applies in many places or across many files — renaming an identifier everywhere, stripping a prefix from every line of a block. For a single considered change to one place, `editor` is the better tool: it can anchor on text you quote back, and it tells you when the file has moved under you.
+
+An in-place run is refused on a file you have not read, the same way an `editor` call is — and a script addressed by line number is refused unless you have read those lines. Read first. A line number in a script describes the file as you last read it — an edit that changes the file's length shifts every line below it — so re-read before aiming a line-numbered script at a file that has changed since.
+
+Output: one object per file, in the order listed — `{query, result, success, error?}`. `query` is `sed:<file>`; `result` is that file's printed output, or, for an in-place run, a sentence saying what was written. The files do not share a fate: one may be written while the next is refused, so read every entry. `success: false` means that file was NOT touched, and `error` says why. A script that matched nothing is `success: true` — it ran, there was nothing to do, and the file is as it was; running it again unchanged will not change it.
+{{DEFAULT}}
+
+# tool: grep
+
+Searches files for lines matching a pattern, as POSIX `grep` does. This is the grep to use, not `grep` through `run_commands`: it runs in-process, needs no binary installed, and behaves identically on every platform.
+
+`pattern` is the one required argument. `paths` is an optional list of files or directories; left out, the search is the workspace root, recursive, skipping `node_modules`, `.git`, `dist` and the like. One pattern per call — when several searches are wanted, send several calls in the same response, alongside your other independent calls.
+
+The pattern is a BASIC regular expression by default, exactly as grep reads one, and that is not the syntax you are probably thinking of: `+ ? ( ) { } |` are literal characters there, and `\(a\|b\)` is how you group and alternate. Pass `extended: true` for the syntax you are probably thinking of, where `(a|b)` and `x+` behave as they look. Pass `fixed: true` to search for the text itself with no syntax at all — the right choice whenever what you are looking for contains characters a regex would read, like `array[0]` or `foo.bar`.
+
+Flags: `ignore_case`, `invert` (the lines that do not match), `word` (whole words), `count` (how many per file), `files_with_matches` (names only), `context` (lines either side), `max_count` (stop after N per file). Line numbers are included unless you set `line_numbers: false`.
+
+Use it to find where something is before you read or edit it — it is cheaper than reading whole files, and a match records that you have read those lines.
+
+Output: a single `{query, result, success, error?}` for the whole call. `query` is `grep:<pattern>`; `result` holds the matching lines, each prefixed with its path and line number. A failed call has `success: false` and the reason in `error`. A pattern that matched nothing is still `success: true`, and `result` says so in words: that is an answer, not a failure, and running the same search again will not change it.
+
+{{DEFAULT}}
+
+# tool: awk
+
+Runs an `awk` program over one or more files. This is the awk to use, not `awk` through `run_commands`: it runs in-process, needs no binary installed, and behaves identically on every platform.
+
+`program` is the awk program — `{print $1}`, `NR>1 {sum+=$2} END {print sum}`, `$3 ~ /error/ {print FILENAME, NR, $0}`. `files` is the list to run it over, and can be left out: a program with only a `BEGIN` block needs no files at all. `field_separator` is `-F` — `","` for comma-delimited fields, `":"` for colon-delimited. `variables` is `-v`: an object of names to values, each one a variable the program can read.
+
+This is the tool for questions about columns and totals, where `grep` would only find the lines and you would still have to count them yourself: summing a column, picking fields out of a delimited file, counting occurrences per key.
+
+It is read-only, and deliberately so: output redirection, pipes, `system()` and `getline` are all refused rather than quietly ignored. Use `sed` or `editor` to change a file.
+
+Output: a single `{query, result, success, error?}` for the whole call. `query` is `awk:<program>`; `result` is everything the program printed. A failed call has `success: false` and the reason in `error`. A program that printed nothing is still `success: true` — that is the program's answer, not a failure.
 {{DEFAULT}}

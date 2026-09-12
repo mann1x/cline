@@ -18,9 +18,12 @@
 import {
 	createApplyPatchTool,
 	createAskQuestionTool,
+	createAwkTool,
 	createEditorTool,
+	createGrepTool,
 	createReadFilesTool,
 	createSearchTool,
+	createSedTool,
 	createShellTool,
 	createSkillsTool,
 	createSubmitAndExitTool,
@@ -147,6 +150,9 @@ export function getShippedToolCallSignatures(): readonly ToolCallSignature[] {
 	cached = summarizeToolCallSignatures([
 		createReadFilesTool(stubExecutor, config),
 		createSearchTool(stubExecutor, config),
+		createGrepTool(stubExecutor, config),
+		createSedTool(stubExecutor, config),
+		createAwkTool(stubExecutor, config),
 		createShellTool(stubExecutor, config),
 		createWebFetchTool(stubExecutor, config),
 		createEditorTool(stubExecutor, config),

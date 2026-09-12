@@ -12,9 +12,12 @@ import { describe, expect, it } from "vitest";
 import {
 	createApplyPatchTool,
 	createAskQuestionTool,
+	createAwkTool,
 	createEditorTool,
+	createGrepTool,
 	createReadFilesTool,
 	createSearchTool,
+	createSedTool,
 	createShellTool,
 	createSkillsTool,
 	createSubmitAndExitTool,
@@ -57,6 +60,9 @@ const stubConfig = { cwd: "/workspace", shell: "/bin/bash" } as never;
 const LIVE_TOOLS = [
 	createReadFilesTool(stubExecutor, stubConfig),
 	createSearchTool(stubExecutor, stubConfig),
+	createGrepTool(stubExecutor, stubConfig),
+	createSedTool(stubExecutor, stubConfig),
+	createAwkTool(stubExecutor, stubConfig),
 	createShellTool(stubExecutor, stubConfig),
 	createWebFetchTool(stubExecutor, stubConfig),
 	createEditorTool(stubExecutor, stubConfig),

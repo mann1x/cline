@@ -86,9 +86,9 @@ These tools are always available. Each replaces a shell habit, and each reports 
 | You were about to | Use instead |
 |---|---|
 | `cat`, `head`, `tail`, `type`, `Get-Content` a file | `read_files` |
-| `grep`, `rg`, `findstr`, `Select-String` for text | `search_codebase` |
+| `grep`, `rg`, `findstr`, `Select-String` for text | `search_codebase` across the repo, or the `grep` tool on a known file or directory |
 | `ls`, `dir`, `find`, `Get-ChildItem` to see what exists | `list_files` |
-| `sed -i`, `echo >`, `cat > f <<EOF`, `tee`, `Set-Content`, a throwaway script that rewrites a file | `editor`, or `apply_patch` for one change across several files |
+| `sed -i`, `echo >`, `cat > f <<EOF`, `tee`, `Set-Content`, a throwaway script that rewrites a file | `editor`, `apply_patch` for one change across several files, or the `sed` tool for one mechanical change in many places |
 | grep a name to find its definition, callers or implementations | `code_intel` |
 | run `tsc`, `eslint`, `ruff`, `mypy`, `cargo check` to see whether a file is valid | `check_file` |
 
@@ -181,9 +181,40 @@ Searches the codebase with regular expressions.
 - `max_per_file`: optional. By default each file reports only its first match, which answers *which files* mention something. Raise it when you need *every* occurrence in a file and where each one sits.
 - `context_lines`: optional, lines shown either side of a match; 2 by default.
 
-What it is for: text. String literals, log messages, config keys, comments, TODOs, a spelling to find everywhere. It is also how you find the line to read around before calling `read_files`. What it is not for: questions about a symbol. If the pattern is an identifier and the question is where it is defined, what uses or calls it, or what implements it, `code_intel` answers exactly in one call; a text search returns every mention and leaves you opening files to work out which hit was real. Use this instead of `grep`, `rg`, `findstr` or `Select-String` through `run_commands`.
+What it is for: text. String literals, log messages, config keys, comments, TODOs, a spelling to find everywhere. It is also how you find the line to read around before calling `read_files`. What it is not for: questions about a symbol. If the pattern is an identifier and the question is where it is defined, what uses or calls it, or what implements it, `code_intel` answers exactly in one call; a text search returns every mention and leaves you opening files to work out which hit was real. Use this instead of `grep`, `rg`, `findstr` or `Select-String` through `run_commands` — and see the `grep` tool when you want grep's own flags on a file you have already located.
 
 Output: one object per pattern, shaped `{query, result, success, error?}`. `query` is the pattern you sent; `result` is the matching lines with their file paths and line numbers, plus context. Output beyond ~48k characters for one pattern is middle-truncated, so narrow a broad pattern rather than paging it. A pattern that matched nothing returns `success: true` with an empty `result` — that is an answer, and re-running it will not change it. `success: false` with `error` means the search itself failed.
+
+# tool: grep
+Searches files for lines matching a pattern, as POSIX `grep` does, in this process.
+
+{"pattern": "TODO", "paths": ["src"], "context": 2, "max_count": 20}
+
+- `pattern`: a **basic** regular expression by default — `+ ? ( ) { } |` are literal characters there, and `\(a\|b\)` is how you group and alternate. Pass `extended: true` for the syntax you were probably about to write, or `fixed: true` to search for the text itself with no syntax at all.
+- `paths`: optional, files or directories. Defaults to the workspace root, searched recursively, skipping `node_modules`, `.git`, `dist` and the like.
+- `ignore_case`, `invert`, `word`, `count`, `files_with_matches`: the usual flags, spelled out — case-insensitive, the lines that do *not* match, whole words only, a count per file, names only.
+- `context`: lines shown either side of a match. `max_count`: stop after this many per file. Line numbers are included unless you set `line_numbers: false`.
+
+What it is for: grep's own semantics on a known file or directory — every matching line rather than one per file, a count, an inverted match, a window of context, a pattern you already have in POSIX form. What `search_codebase` is for: sweeping the whole repository with several independent patterns at once to find *which* files mention something. Reach for that first when you do not yet know where to look, and for this when you do. Neither is for questions about a symbol — `code_intel` answers those exactly.
+
+This runs in-process. It is not the `grep` binary and does not go through `run_commands`, so it needs nothing installed and behaves the same on every platform; running `grep` or `rg` through the shell instead is the thing to avoid.
+
+Output: a single `{query, result, success, error?}`. `query` is `grep:<pattern>`; `result` is the matching lines, each prefixed with its path and line number, with context lines separated by `-` and matches by `:`. A pattern that matched nothing returns `success: true` and says so in words — that is an answer, and re-running it will not change it. Reading a file's lines here counts as having read them.
+
+# tool: awk
+Runs an `awk` program over one or more files, in this process.
+
+{"program": "NR>1 {sum += $2} END {print sum}", "files": ["data.csv"], "field_separator": ","}
+
+- `program`: the awk program. `{print $1}`, `$3 ~ /error/ {print FILENAME, NR, $0}`, a `BEGIN`/`END` pair — all of it.
+- `files`: optional. A program with only a `BEGIN` block needs none.
+- `field_separator`: `-F`. `variables`: `-v name=value`, as an object.
+
+What it is for: questions about columns and totals, where a search would only find the lines and leave you counting them yourself — summing a column, pulling fields out of a delimited file, counting occurrences per key, reshaping a report into the two numbers you actually wanted.
+
+It cannot write, and that is deliberate rather than incidental: output redirection, pipes, `system()` and `getline` are refused rather than quietly ignored. Use `sed` or `editor` to change a file.
+
+Output: a single `{query, result, success, error?}`. `query` is `awk:<program>`; `result` is everything the program printed. A program that printed nothing still returns `success: true` — that is the program's answer, not a failure.
 
 # tool: fetch_web_content
 Fetches web pages — documentation, API references, changelogs — and extracts from each what you ask for.
@@ -223,6 +254,22 @@ One edit, then its check, then the next. Where two edits to the same file are ge
 Output: one `{query, result, success, error?}` object for this edit. `query` is `edit:<path>` or `insert:<path>`; `result` describes what changed, and that is your confirmation — do not read the file back to see it. A failed edit changed nothing: `success` is false, the file is exactly as it was, and `error` names the fix. Don't resend the same call; change what `error` points at.
 
 Once the edit lands, call `check_file` on the file before starting the next change.
+
+# tool: sed
+Applies a `sed` script to one or more files, in this process. The third way to change a file, alongside `editor` and `apply_patch`.
+
+{"script": "s/oldName/newName/g", "files": ["src/a.ts", "src/b.ts"], "in_place": true}
+
+- `script`: the sed program — `s/foo/bar/g`, `/^debug/d`, `2,5s/^/# /`. Several commands go in one script, separated by newlines or `;`. Addresses and `s///` patterns are **basic** regular expressions unless you pass `extended: true`.
+- `files`: what to run it over.
+- `in_place`: omit it and the call only prints what the script would produce, which is how you check a script before trusting it. Set it to `true` and each file is rewritten.
+- `quiet`: print only what the script itself prints, as `sed -n` does.
+
+What it is for: one mechanical change that applies in many places, or across many files — renaming an identifier everywhere, stripping a prefix from every line of a block. What `editor` is for: a single considered change to one place. It can anchor on text you quote back and it tells you when the file has moved under you; a script cannot, and a script that matches more than you meant changes more than you meant. Preview first.
+
+The same rule as `editor` applies, for the same reason: an in-place run is refused on a file you have not read, and a script addressed by line number is refused unless you have read those lines. Read first. In plan mode `in_place` is refused outright, exactly as `sed -i` through the shell is; the preview still works.
+
+Output: one object per file, shaped `{query, result, success, error?}`. `query` is `sed:<file>`; `result` is that file's output, or a sentence saying what was written. The files do not share a fate — one can be written while the next is refused — so read every entry. `success: false` means that file was **not** touched and `error` says why. A script that matched nothing is `success: true`: it ran, and that is its answer.
 
 # tool: apply_patch
 Applies one patch that adds, updates, moves or deletes files. Use it when a single change spans several files, or when a new file arrives alongside edits to existing ones. For one change to one file, `editor` is simpler.
@@ -265,9 +312,9 @@ Runs shell commands: builds, test suites, running the program you changed, insta
 
 It is not for files. Each of these has a tool that reports whether it worked:
 - reading a file (`cat`, `head`, `tail`, `type`, `Get-Content`) → `read_files`
-- searching for text (`grep`, `rg`, `findstr`, `Select-String`) → `search_codebase`
+- searching for text (`grep`, `rg`, `findstr`, `Select-String`) → `search_codebase`, or the `grep` tool
 - listing what exists (`ls`, `dir`, `find`, `Get-ChildItem`) → `list_files`
-- writing or changing a file (`sed -i`, `echo >`, `cat > f <<EOF`, `tee`, `Set-Content`, a one-off script that rewrites a file) → `editor`, or `apply_patch` for a change across several files
+- writing or changing a file (`sed -i`, `echo >`, `cat > f <<EOF`, `tee`, `Set-Content`, a one-off script that rewrites a file) → `editor`, `apply_patch` for a change across several files, or the `sed` tool
 - finding where a name is defined, or what uses it → `code_intel`
 - asking whether one file type-checks or lints clean (`tsc`, `eslint`, `biome`, `ruff`, `mypy`, `go build`, `cargo check`) → `check_file`, which answers from the language servers in milliseconds without building the project. Run the checker here only when you need a project-wide answer, or when no language server covers the file.
 
