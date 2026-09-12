@@ -45,7 +45,7 @@ function replyWith(...replies: string[]) {
  * what makes covering thirty-one tools cheap here and cheap for a model.
  */
 /**
- * A section for one of the eight tools that must be written rather than
+ * A section for one of the tools that must be written rather than
  * inherited, in the cheapest shape that is actually acceptable.
  *
  * Not the built-in text itself: the audit rejects a verbatim copy, because a
@@ -61,7 +61,7 @@ function replyWith(...replies: string[]) {
 function written(builtin: string): string {
 	return builtin.trim() === "{{DEFAULT}}"
 		? [
-				"Run it, and only for work no other tool covers: `read_files` reads, `editor` writes, `search_codebase` searches.",
+				"Run it, and only for work no other tool covers: `read_files` reads, `editor` and `sed` write, `search_codebase` and `grep` search, `awk` totals columns.",
 				"Output: one object per command, `{query, result, success, error?}`, with the command in `query`.",
 				"",
 				"{{DEFAULT}}",
@@ -74,7 +74,7 @@ function coverEveryTool(): string {
 	const tools = getBuiltinPromptTemplates().find((template) => template.name === "default")?.tools ?? {}
 	return Object.entries(tools)
 		.map(([tool, builtin]) =>
-			// The eight behaviour-critical tools have to be written rather than
+			// The behaviour-critical tools have to be written rather than
 			// inherited, and reproducing the built-in text is the cheapest thing
 			// that satisfies that — it cannot have dropped anything.
 			required.has(tool) ? `# tool: ${tool}\n${written(builtin)}\n` : `# tool: ${tool}\n{{DEFAULT}}\n`,
