@@ -697,6 +697,139 @@ describe("the check the model can reach", () => {
 	});
 });
 
+describe("closing a transaction the model will not close", () => {
+	// `settle` is reachable from exactly one place, `onCompletionAttempt`, so a
+	// model that never ends its turn never settles anything. That is the
+	// measured timeout shape: the three JackOD4-AC 9B timeouts closed zero
+	// transactions between them over 308-428 iterations. What ends it is not a
+	// count of failures -- a healthy transaction fails the task's own check
+	// after every edit on the way to passing -- but a count of checks run over
+	// files nothing has changed in between.
+	async function armed(root: string) {
+		const session = await createAtomicProtocolSession({
+			workspaceRoot: root,
+			config: { mode: "always", oracleCommand: shellCheck(root, "fixed") },
+		});
+		if (!session) {
+			throw new Error("the protocol did not arm");
+		}
+		// The editing tool belongs to the host, not the protocol -- `decorateTools`
+		// is where the two meet -- so the stub stands in for it and records
+		// whether the call ever reached an executor.
+		const applied: unknown[] = [];
+		const editor = {
+			name: "editor",
+			description: "edit a file",
+			inputSchema: {},
+			execute: async (input: unknown) => {
+				applied.push(input);
+				return "edited";
+			},
+		} as unknown as (typeof session.tools)[number];
+		const tools = session.decorateTools([...session.tools, editor]);
+		const named = (name: string) => {
+			const tool = tools.find((entry) => entry.name === name);
+			if (!tool?.execute) {
+				throw new Error(`no ${name} tool`);
+			}
+			return (input: unknown, iteration = 1) =>
+				(tool.execute as (a: unknown, b: unknown) => Promise<unknown>)(input, {
+					iteration,
+				} as never).then(String);
+		};
+		return { session, tools, named, applied };
+	}
+
+	it("settles on the third check over files nobody changed", async () => {
+		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
+			const { session, named } = await armed(root);
+			const runCheck = named("run_check");
+
+			expect(await runCheck({})).not.toContain("judged here");
+			expect(await runCheck({})).not.toContain("judged here");
+			expect(session.controller.outcomes).toHaveLength(0);
+
+			const third = await runCheck({});
+
+			// The verdict, the reason it closed, and the whole of the next
+			// transaction's rules, all in the one reply -- the model is not
+			// waiting on a turn boundary it was never going to reach.
+			expect(third).toContain("The check failed");
+			expect(third).toContain("judged here");
+			expect(session.controller.outcomes).toHaveLength(1);
+			expect(session.controller.transaction).toBe(2);
+		});
+	});
+
+	it("does not settle when something changed between the checks", async () => {
+		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
+			const { session, named } = await armed(root);
+			const runCheck = named("run_check");
+			const restore = named("restore_file");
+
+			await runCheck({});
+			await runCheck({});
+			await restore({ path: "game.js", reason: "start again" });
+			await runCheck({});
+			const fourth = await runCheck({});
+
+			expect(fourth).not.toContain("judged here");
+			expect(session.controller.outcomes).toHaveLength(0);
+			expect(session.controller.transaction).toBe(1);
+		});
+	});
+
+	it("does not settle a transaction whose check passes", async () => {
+		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
+			const { session, named } = await armed(root);
+			const runCheck = named("run_check");
+
+			await runCheck({});
+			await runCheck({});
+			await fs.writeFile(path.join(root, "game.js"), "let fixed = 1", "utf8");
+			expect(await runCheck({})).toContain("The check passed");
+			expect(session.controller.outcomes).toHaveLength(0);
+		});
+	});
+
+	// The hazard of settling from inside a tool call: the rest of the turn's
+	// batch is still queued, and it was written against the transaction that
+	// just closed. It does not need a guard of its own -- the check-first gate
+	// holds the first edit of every transaction, and the forced settle opened a
+	// new one -- but that is a property worth a test, because the failure it
+	// prevents is silent.
+	it("refuses an edit that trails the forced settle in the same turn", async () => {
+		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
+			const { named, applied } = await armed(root);
+			const runCheck = named("run_check");
+			const edit = named("editor");
+			const change = {
+				command: "str_replace",
+				path: path.join(root, "game.js"),
+				old_str: "let a = 1",
+				new_str: "let a = 2",
+			};
+
+			// Spend the gate inside TX-01 first, so that what holds the trailing
+			// edit below can only be the new transaction. Without this the test
+			// passes on the gate every transaction's first edit meets anyway.
+			await runCheck({});
+			await edit(change);
+			await edit(change, 2);
+			expect(applied).toHaveLength(1);
+
+			await runCheck({}, 3);
+			await runCheck({}, 3);
+			await runCheck({}, 3);
+
+			const trailing = await edit(change, 3);
+
+			expect(trailing).toContain("That edit was not made");
+			expect(applied).toHaveLength(1);
+		});
+	});
+});
+
 describe("the switch on model-proposed checks", () => {
 	// The comparison this exists for: the proposed check against the
 	// self-declared verdict it replaced, on one workspace rather than across

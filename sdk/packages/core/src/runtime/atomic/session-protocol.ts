@@ -13,6 +13,11 @@ import { buildEmptyAttemptPrompt, describeEmptyAttempt } from "./protocol";
 import { createRestoreFileTool } from "./restore-file-tool";
 import { createRunCheckTool } from "./run-check-tool";
 import {
+	createStalledChecks,
+	describeStalledChecks,
+	withChangeSignal,
+} from "./stalled-checks";
+import {
 	type SelfReport,
 	TransactionController,
 	type TransactionEvent,
@@ -286,14 +291,46 @@ export async function createAtomicProtocolSession(
 				),
 		}),
 	);
+	// Counts checks run over files nothing has changed in between. A model that
+	// never yields its turn never reaches `onCompletionAttempt`, which is the
+	// only caller of `settle`, so without this a run can spend its whole clock
+	// with every transaction still open. See `stalled-checks.ts` for why the
+	// trigger counts unchanged files rather than failures.
+	const stalled = createStalledChecks({
+		get transaction() {
+			return controller.transaction;
+		},
+	});
 	tools.push(
 		createRunCheckTool({
 			controller,
 			canProposeCheck,
-			onRun: (verdict, ran) =>
+			onRun: async (verdict, ran) => {
 				options.logger?.log?.(
 					`[Atomic] ${ran.label} run on request: ${verdict.passed ? "passed" : "failed"}.`,
-				),
+				);
+				if (!stalled.checked(verdict.passed) || finished) {
+					return undefined;
+				}
+				const notice = describeStalledChecks(stalled.streak, ran.label);
+				options.logger?.log?.(`[Atomic] ${notice}`);
+				const closed = await settleTransaction({
+					...(planned?.transaction === controller.transaction
+						? { plan: planned.plan }
+						: {}),
+					account: notice,
+					forced: true,
+					notice,
+				});
+				if (closed.message) {
+					return closed.message;
+				}
+				// Nothing left to open. Which of the two it is matters to the
+				// model: one is the task done, the other is the budget gone.
+				return closed.kept
+					? `${notice}\n\nJudged at that point the check passed, so the task is settled and this run is done.`
+					: `${notice}\n\nThat was the last transaction, so there is no next one. Say plainly what you tried and what the check still says.`;
+			},
 			onError: (message, error) =>
 				options.logger?.log?.(`${message}: ${String(error)}`),
 		}),
@@ -326,6 +363,60 @@ export async function createAtomicProtocolSession(
 	// then the reply that carried it is long gone.
 	let planned: { transaction: number; plan: string } | undefined;
 
+	/**
+	 * Close the open transaction and work out what the model has to be told.
+	 *
+	 * Shared by the two things that can end one: the completion attempt, and a
+	 * check run three times over files nobody changed in between. Both need the
+	 * same answer -- the verdict, what the check said, and the whole of the next
+	 * transaction's rules -- and both have to set `finished` in this closure,
+	 * which is why this lives here rather than on the controller.
+	 */
+	const settleTransaction = async (report: {
+		plan?: string;
+		account?: string;
+		selfReport?: SelfReport;
+		forced?: boolean;
+		notice?: string;
+	}): Promise<{ finished: boolean; kept: boolean; message?: string }> => {
+		// Each transaction gets its own budget: a model that submitted nothing,
+		// was asked again and then made a real change has recovered, and the next
+		// transaction should not start one strike down. A transaction spent on
+		// emptiness resets it for the same reason.
+		emptyAttempts = 0;
+		planned = undefined;
+
+		const settlement = await controller.settle({
+			...(report.plan ? { plan: report.plan } : {}),
+			account: report.account,
+			selfReport: report.selfReport,
+			forced: report.forced,
+		});
+		if (settlement.kept || !settlement.nextPrompt) {
+			finished = true;
+			return { finished: true, kept: settlement.kept };
+		}
+		// The whole of the next transaction's rules, not a pointer to them. This
+		// message is the only thing that opens TX-02, exactly as a fresh
+		// session's opening prompt is in the harness this comes from: the rules,
+		// the limit and the record of what was already tried, restated in full
+		// rather than referred back to.
+		return {
+			finished: false,
+			kept: false,
+			message: [
+				report.notice,
+				settlement.message,
+				settlement.verdict?.output
+					? `The check said:\n${settlement.verdict.output}`
+					: undefined,
+				settlement.nextPrompt,
+			]
+				.filter((line): line is string => line !== undefined)
+				.join("\n\n"),
+		};
+	};
+
 	return {
 		controller,
 		get oracle() {
@@ -351,17 +442,23 @@ export async function createAtomicProtocolSession(
 					});
 				},
 			});
+			// Inside the check-first gate below, so an edit that gate refuses --
+			// which never reaches the file -- cannot clear the stalled-check
+			// count and hold a dead transaction open.
+			const withChanges = withChangeSignal(withPlans, () => {
+				stalled.changed();
+			});
 			// Only where there is a check to run first. With none, the sentence
 			// the gate enforces was never in the prompt either.
 			const check = controller.oracle;
 			return check
-				? withCheckFirstEdits(withPlans, {
+				? withCheckFirstEdits(withChanges, {
 						get transaction() {
 							return controller.transaction;
 						},
 						checkLabel: check.label,
 					})
-				: withPlans;
+				: withChanges;
 		},
 		takeOpeningRules: () => {
 			const opening = rules;
@@ -428,12 +525,6 @@ export async function createAtomicProtocolSession(
 				emptyNotice = notice;
 			}
 
-			// Each transaction gets its own budget: a model that submitted nothing,
-			// was asked again and then made a real change has recovered, and the
-			// next transaction should not start one strike down. A transaction
-			// spent on emptiness resets it for the same reason.
-			emptyAttempts = 0;
-
 			// The reply first, then whatever was captured during the transaction.
 			// Both can be absent, and that is still a fact worth recording as
 			// itself rather than as an empty string.
@@ -442,36 +533,14 @@ export async function createAtomicProtocolSession(
 				(planned?.transaction === controller.transaction
 					? planned.plan
 					: undefined);
-			planned = undefined;
-			const settlement = await controller.settle({
+			const closed = await settleTransaction({
 				...(plan ? { plan } : {}),
 				account: text,
 				selfReport: oracle ? undefined : readSelfReport(text),
 				forced,
+				...(emptyNotice ? { notice: emptyNotice } : {}),
 			});
-			if (settlement.kept) {
-				finished = true;
-				return undefined;
-			}
-			if (!settlement.nextPrompt) {
-				finished = true;
-				return undefined;
-			}
-			// The whole of the next transaction's rules, not a pointer to them.
-			// This message is the only thing that opens TX-02, exactly as a fresh
-			// session's opening prompt is in the harness this comes from: the
-			// rules, the limit and the record of what was already tried, restated
-			// in full rather than referred back to.
-			return [
-				emptyNotice,
-				settlement.message,
-				settlement.verdict?.output
-					? `The check said:\n${settlement.verdict.output}`
-					: undefined,
-				settlement.nextPrompt,
-			]
-				.filter((line): line is string => line !== undefined)
-				.join("\n\n");
+			return closed.message;
 		},
 	};
 }

@@ -63,7 +63,18 @@ export interface RunCheckToolOptions {
 	controller: CheckRunner;
 	/** Whether a check could still arrive, for the message when there is none. */
 	canProposeCheck?: boolean;
-	onRun?: (verdict: OracleVerdict, oracle: Oracle) => void;
+	/**
+	 * Told about every run, and given the chance to add to what the model is
+	 * told about it. Anything returned is appended to the result -- which is how
+	 * a transaction closed out from under a stalled check gets its settlement
+	 * and the next transaction's rules into the same reply as the verdict.
+	 */
+	onRun?: (
+		verdict: OracleVerdict,
+		oracle: Oracle,
+		// `void` in the union on purpose: a host that only wants to log is not
+		// obliged to return anything, and that is the shape it already had.
+	) => string | void | Promise<string | void>;
 	onError?: (message: string, error: unknown) => void;
 }
 
@@ -123,8 +134,10 @@ export function createRunCheckTool(options: RunCheckToolOptions): AgentTool {
 				options.onError?.("[Atomic] the check could not be run", error);
 				return `The check could not be run: ${String(error)}. It will still be run when you finish, so this is not a reason to stop.`;
 			}
-			options.onRun?.(verdict, oracle);
-			return describeCheckRun(verdict, oracle.label);
+			const added = await options.onRun?.(verdict, oracle);
+			return [describeCheckRun(verdict, oracle.label), added]
+				.filter((part): part is string => Boolean(part))
+				.join("\n\n");
 		},
 	});
 }
