@@ -108,6 +108,25 @@ export function buildProtocolPrompt(input: ProtocolPromptInput): string {
 		"",
 		"Then make exactly those changes, in that order, and nothing else. Do not fix anything you did not declare. Do not rewrite a whole function or a whole file: edit the smallest region that removes the symptom.",
 		"",
+		// The sentence above is about scope -- do not fix what you did not
+		// declare -- but it reads as pacing, and models act on the reading.
+		// Caught in v7-coder's own reasoning on pandorum 2026-09-12, weighing the
+		// two and talking itself out of the right one: "Actually, I'll do them
+		// one by one? No, the instructions say 'make exactly those changes, in
+		// that order, and nothing else'. I can emit multiple editor calls."
+		//
+		// It had a point. "Make exactly those changes, in that order" is one
+		// continuous instruction to execute a list, and nothing in it says to
+		// stop in between. What says so is the check line below -- fourteen
+		// lines later, and only present when there is an oracle. So the
+		// batching reading came first and unconditionally, and the correction
+		// came second and optionally.
+		//
+		// Said here, without naming the check, so it still reads on a host that
+		// has none. `qwen.md` carried a louder version of the same contradiction
+		// and was fixed separately; this is the half that reaches every model.
+		"Make them one at a time, not as a batch: after each edit, confirm it did what you intended before you start the next. Six edits that fail together leave you six things to undo and no way to tell which one was wrong.",
+		"",
 		// Stated as well as written, because a plan in prose is a plan nobody can
 		// mark. Measured on session 1789139763721_ive21: eleven plan blocks, six
 		// of them announcing a count that disagreed with their own list, and two
