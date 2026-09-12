@@ -2,6 +2,7 @@ import { isPageOracle, type Oracle, type OracleVerdict } from "./oracle";
 import { PLAN_TOOL_NAME } from "./plan-tool";
 import { PROPOSE_CHECK_TOOL_NAME } from "./proposal";
 import { RUN_CHECK_TOOL_NAME } from "./run-check-tool";
+import { SUBMIT_TRANSACTION_TOOL_NAME } from "./submit-transaction-tool";
 
 /**
  * How a transaction was judged, and by whom.
@@ -253,6 +254,23 @@ export function buildProtocolPrompt(input: ProtocolPromptInput): string {
 		}
 		lines.push("", describePostMortemRequest(input.history.length));
 	}
+
+	// Last, because it is the one instruction the rest of the run cannot work
+	// without. Before this existed there was no way to submit at all: the only
+	// path that judged a transaction was reached by ending a turn having called
+	// nothing, which is the single thing the runtime's own nudge tells the model
+	// never to do. It was asked to end its turn in the one way it had been told
+	// not to, and never told that was what ending meant.
+	lines.push(
+		"",
+		"== HOW THIS TRANSACTION ENDS ==",
+		"",
+		`When you have made the changes you planned and you are confident in them, call \`${SUBMIT_TRANSACTION_TOOL_NAME}\`. That is what submits ${label}, and it is the only thing that does. The check runs and the answer comes straight back to you in the same reply.`,
+		"",
+		"You decide when. Take the turns you need: thinking a turn through, reading another file, running the check again — none of that ends anything, and none of it costs you a transaction. There is no credit for submitting early and no penalty for taking another look first.",
+		"",
+		`Ending your turn without calling anything does not submit and never has. If you do it repeatedly the run has to assume you have stopped, and ${label} gets submitted for you and judged exactly as it stands — which is strictly worse than submitting it yourself, because you do not get to finish first.`,
+	);
 
 	return lines.join("\n");
 }
@@ -553,6 +571,50 @@ export function describeEmptyAttempt(
 	return continued
 		? `${label} was submitted with nothing changed, so it was not spent and is still open.`
 		: `${label} was submitted with nothing changed again, so it is being spent and closed rather than held open, and the run carries on with whatever transactions are left.`;
+}
+
+/**
+ * What a turn that called nothing is told, while the guard is still holding.
+ *
+ * Deliberately not phrased as a submission. The message this replaces opened
+ * "TX-01 was submitted with…", which was a report of something the model had
+ * not done — it had thought a turn through and called nothing, and the protocol
+ * treated that as an act. On a model that could not reconcile the two, that
+ * produced six identical boundary messages and reasoning reading "I keep
+ * failing to emit actual tool calls".
+ *
+ * So this says what actually happened, names the tool that does submit, and is
+ * honest that the guard exists and when it fires.
+ */
+export function describeSilentTurn(input: {
+	transaction: number;
+	silent: number;
+	before: number;
+	untouched: boolean;
+	check?: { label: string; output?: string };
+}): string {
+	const label = `TX-${String(input.transaction).padStart(2, "0")}`;
+	const left = Math.max(1, input.before - input.silent);
+	return [
+		`Your turn ended without calling anything, so nothing was submitted. ${label} is still open and still yours.`,
+		"",
+		input.untouched
+			? "No file has been changed in it yet."
+			: "The changes you have made are still in place — nothing has been judged and nothing rolled back.",
+		"",
+		"A transaction is submitted by calling `submit_transaction`, and only by that. Call it when you have made the changes you planned and you are confident in them: the check runs and the verdict comes straight back to you. If you are not there yet, keep working — `run_check` will tell you where you stand as often as you want, and it settles nothing.",
+		...(input.check
+			? [
+					"",
+					`As things stand \`${input.check.label}\` does not pass, so there is still work to do.`,
+					...(input.check.output ? [`It said:\n${input.check.output}`] : []),
+				]
+			: []),
+		"",
+		left === 1
+			? "One more turn that calls nothing and this transaction will be submitted for you and judged as it stands, which is a worse outcome than submitting it yourself."
+			: `${left} more turns that call nothing and this transaction will be submitted for you and judged as it stands.`,
+	].join("\n");
 }
 
 /**

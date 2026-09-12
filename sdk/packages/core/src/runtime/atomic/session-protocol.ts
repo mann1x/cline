@@ -13,6 +13,7 @@ import {
 	buildEmptyAttemptPrompt,
 	describeEmptyAttempt,
 	describeNeverStarted,
+	describeSilentTurn,
 } from "./protocol";
 import { createRestoreFileTool } from "./restore-file-tool";
 import { createRunCheckTool } from "./run-check-tool";
@@ -21,6 +22,10 @@ import {
 	describeStalledChecks,
 	withChangeSignal,
 } from "./stalled-checks";
+import {
+	createSubmitTransactionTool,
+	SUBMIT_TRANSACTION_TOOL_NAME,
+} from "./submit-transaction-tool";
 import { withAnyToolSignal } from "./tool-activity";
 import {
 	type SelfReport,
@@ -104,6 +109,32 @@ export const DEFAULT_MAX_EMPTY_ATTEMPTS = 1;
  * suggest six attempts were made.
  */
 export const DEFAULT_MAX_UNSTARTED_ATTEMPTS = 6;
+
+/**
+ * Silent turns the boundary absorbs before it submits the transaction itself.
+ *
+ * The boundary used to BE the submission. `onCompletionAttempt` is reached from
+ * one place in the runtime — a turn that called no tools — so a model that
+ * thought a turn through and called nothing had, as far as the protocol was
+ * concerned, submitted. It was then told so, in those words, for something it
+ * had not done. Measured on pandorum 2026-09-12 under 4.100.103: ten turns, no
+ * tool calls, six boundary messages, and reasoning that reads "I keep failing
+ * to emit actual tool calls" and "I have called none of those yet". The model
+ * was not confused about the task; it was reacting to a report of an act it had
+ * not performed.
+ *
+ * It is also the one thing the rest of the contract forbids. The no-tool-call
+ * nudge exists to stop a turn ending without a call, and the protocol's only
+ * exit was to do exactly that. A model strong enough to hold both ideas at once
+ * absorbs the contradiction; a smaller one either breaks on it or calls tools
+ * it does not need in order to avoid ending a turn.
+ *
+ * So `submit_transaction` is the submission now, and the model decides when.
+ * This is what the boundary is demoted to: a guard for a run that has stopped
+ * calling anything at all. Three, because one silent turn is a model thinking
+ * and two is a model thinking twice — neither is a run that has stopped.
+ */
+export const DEFAULT_SILENT_TURNS_BEFORE_GUARD = 3;
 
 export interface AtomicProtocolSessionOptions {
 	workspaceRoot: string;
@@ -383,6 +414,29 @@ export async function createAtomicProtocolSession(
 				options.logger?.log?.(`${message}: ${String(error)}`),
 		}),
 	);
+	// The model's own way out, and the only thing here that commits. Everything
+	// else in this list gathers information or undoes work.
+	tools.push(
+		createSubmitTransactionTool({
+			submit: async (account) => {
+				submitting = true;
+				try {
+					const message = await judgeSubmission({
+						text: account,
+						deliberate: true,
+					});
+					return (
+						message ??
+						"Submitted, and that settles it: the task is done and this run is over. Say plainly what you changed."
+					);
+				} finally {
+					submitting = false;
+				}
+			},
+			onError: (message, error) =>
+				options.logger?.log?.(`${message}: ${String(error)}`),
+		}),
+	);
 	if (canProposeCheck && approveCheck) {
 		tools.push(
 			createProposeCheckTool({
@@ -410,6 +464,12 @@ export async function createAtomicProtocolSession(
 	let calledInTransaction = 0;
 	// Completion attempts made in a transaction that never began.
 	let unstartedAttempts = 0;
+	// Consecutive boundary hits since the last tool call. Reset by any call,
+	// because a model that is calling tools has not stopped.
+	let silentBoundaries = 0;
+	// True only while `submit_transaction` is running, so the boundary can tell
+	// a deliberate submission from a turn that merely went quiet.
+	let submitting = false;
 	// The plan for the open transaction, as the model wrote it, kept here
 	// because it is stated at the start and needed at the end: `settle` records
 	// it so the next transaction can be told what this one intended, and by
@@ -440,6 +500,7 @@ export async function createAtomicProtocolSession(
 		// Both belong to the transaction that is closing, not to the session.
 		calledInTransaction = 0;
 		unstartedAttempts = 0;
+		silentBoundaries = 0;
 		planned = undefined;
 
 		const settlement = await controller.settle({
@@ -471,6 +532,199 @@ export async function createAtomicProtocolSession(
 				.filter((line): line is string => line !== undefined)
 				.join("\n\n"),
 		};
+	};
+
+	/**
+	 * Judge the open transaction and say what happened to it.
+	 *
+	 * Reached two ways now, and the difference matters. `submit_transaction`
+	 * arrives here because the model decided it was done; the completion
+	 * boundary arrives here because the run stopped calling anything at all.
+	 * The first is a submission, the second is a guard, and only the first is
+	 * something the model actually did.
+	 */
+	const judgeSubmission = async ({
+		text,
+		forced,
+		deliberate,
+	}: {
+		text?: string;
+		forced?: boolean;
+		deliberate?: boolean;
+	}): Promise<string | undefined> => {
+		// Once the transactions are spent there is nothing left to judge with,
+		// and asking again would settle a transaction that was never opened.
+		if (finished) {
+			return undefined;
+		}
+
+		const untouched = await controller.isUntouched();
+
+		// A task that changed nothing is not a transaction. Answering a
+		// question about the code is a legitimate way for a run to end, and
+		// running a typecheck to confirm that nobody edited anything is a cost
+		// with no verdict in it.
+		//
+		// Unless there is a check, and it disagrees. Whether this run had work
+		// to do is not the model's to declare where something here can answer
+		// the question: a failing check is the defect still being present, and
+		// a completion on top of one is a fix reported rather than made.
+		// Measured on pandorum: a run ended `completed` on an early turn with
+		// TX-01 open, nothing read, nothing edited and the bug untouched, and
+		// this branch stood the protocol down — set `finished`, returned
+		// nothing, and left the contract unenforced for the rest of the run.
+		// Everything needed to push back already existed below; it was simply
+		// unreachable from here.
+		//
+		// So the stand-down now needs the check to agree. When it does not,
+		// this falls through to the empty-attempt handling below, which holds
+		// the transaction open, says what the check reported, and asks for the
+		// plan again — and which is already bounded, spending the transaction
+		// on a model that keeps submitting nothing until the budget runs out.
+		let unfixed: OracleVerdict | undefined;
+		if (controller.outcomes.length === 0 && untouched) {
+			const verdict = await judgeStandDown();
+			if (!verdict || verdict.passed) {
+				finished = true;
+				return undefined;
+			}
+			unfixed = verdict;
+		}
+
+		// A silent turn is not a submission, and saying it was is what broke
+		// the run this comes from. Everything below judges a transaction the
+		// model put forward; reaching it because the model went quiet for one
+		// turn judges work it never offered, and then reports the act back to
+		// it. `submit_transaction` is how a transaction is submitted. This
+		// stays only as a guard, for a run that has stopped calling anything,
+		// and until the streak says that it asks rather than judges.
+		if (
+			!deliberate &&
+			!forced &&
+			silentBoundaries < DEFAULT_SILENT_TURNS_BEFORE_GUARD
+		) {
+			const notice = describeSilentTurn({
+				transaction: controller.transaction,
+				silent: silentBoundaries,
+				before: DEFAULT_SILENT_TURNS_BEFORE_GUARD,
+				untouched,
+				...(unfixed
+					? {
+							check: {
+								label: controller.oracle?.label ?? "the check",
+								...(unfixed.output ? { output: unfixed.output } : {}),
+							},
+						}
+					: {}),
+			});
+			options.logger?.log?.(`[Atomic] ${notice.split("\n")[0]}`);
+			return notice;
+		}
+
+		// Once a transaction has been judged, an empty submission means
+		// something else: the model has given up. The first one does not spend
+		// a transaction — it stays open, the model is told what it just did,
+		// and it gets to try again.
+		//
+		// The second one does spend it. Not because the transaction earned a
+		// verdict, but because the alternative is worse: holding it open
+		// forever needs some other rule to end the run, and the rule this used
+		// to have ended it on the spot, with transactions still unspent and
+		// nothing said about what had been tried. Settling instead closes this
+		// transaction like any other, writes the retrospective, and opens the
+		// next one with the rules in full. A model that submits nothing every
+		// time runs out of transactions, which is the budget it was given.
+		let emptyNotice: string | undefined;
+		if (untouched) {
+			// The distinction the old rule did not make. A transaction with
+			// no tool call in it was not attempted, so there is nothing to
+			// spend: a reasoning model that thinks for several turns is doing
+			// what reasoning models do, and charging it an attempt for that
+			// spent the whole budget in about twenty turns with no edit ever
+			// tried. Held open instead; the runtime's turn-level
+			// non-convergence guard is what nudges a run that has stopped
+			// converging, and it is built to nudge rather than end.
+			const neverBegan = calledInTransaction === 0;
+			if (neverBegan) {
+				unstartedAttempts += 1;
+			} else {
+				emptyAttempts += 1;
+			}
+			// The backstop, so a model that will never call a tool cannot
+			// hold the session open forever. When it fires the run ends
+			// saying so, rather than leaving six discarded transactions
+			// behind that read as six attempts.
+			if (neverBegan && unstartedAttempts > DEFAULT_MAX_UNSTARTED_ATTEMPTS) {
+				finished = true;
+				const stuck = describeNeverStarted(
+					controller.transaction,
+					unstartedAttempts,
+				);
+				options.logger?.log?.(`[Atomic] ${stuck}`);
+				options.onEvent?.({
+					type: "empty",
+					transaction: controller.transaction,
+					message: stuck,
+					continued: false,
+				});
+				return undefined;
+			}
+			const continued =
+				neverBegan || emptyAttempts <= DEFAULT_MAX_EMPTY_ATTEMPTS;
+			const notice = describeEmptyAttempt(
+				controller.transaction,
+				continued,
+				neverBegan,
+			);
+			options.logger?.log?.(`[Atomic] ${notice}`);
+			options.onEvent?.({
+				type: "empty",
+				transaction: controller.transaction,
+				message: notice,
+				continued,
+			});
+			if (continued) {
+				return [
+					notice,
+					buildEmptyAttemptPrompt({
+						transaction: controller.transaction,
+						maxChanges: options.config?.maxChanges ?? DEFAULT_MAX_CHANGES,
+						maxTransactions:
+							options.config?.maxTransactions ?? DEFAULT_MAX_TRANSACTIONS,
+						...(unfixed
+							? {
+									check: {
+										label: controller.oracle?.label ?? "the check",
+										...(unfixed.output ? { output: unfixed.output } : {}),
+									},
+								}
+							: {}),
+						...(calledInTransaction === 0 ? { neverBegan: true } : {}),
+					}),
+				].join("\n\n");
+			}
+			// Falls through to the settle below, which spends this transaction
+			// and opens the next. The notice rides along so the model is told
+			// why this one closed without a change in it.
+			emptyNotice = notice;
+		}
+
+		// The reply first, then whatever was captured during the transaction.
+		// Both can be absent, and that is still a fact worth recording as
+		// itself rather than as an empty string.
+		const plan =
+			readPlan(text) ??
+			(planned?.transaction === controller.transaction
+				? planned.plan
+				: undefined);
+		const closed = await settleTransaction({
+			...(plan ? { plan } : {}),
+			account: text,
+			selfReport: oracle ? undefined : readSelfReport(text),
+			forced,
+			...(emptyNotice ? { notice: emptyNotice } : {}),
+		});
+		return closed.message;
 	};
 
 	/**
@@ -545,7 +799,16 @@ export async function createAtomicProtocolSession(
 			// Outermost of everything, including the gate: a refused edit is
 			// still the model reaching for a tool, and the only question this
 			// answers is whether the transaction was ever attempted.
-			return withAnyToolSignal(gated, () => {
+			return withAnyToolSignal(gated, (name) => {
+				// Any call at all means the run has not stopped, so the guard's
+				// count starts again.
+				silentBoundaries = 0;
+				// But submitting is not working. A model that submits having read
+				// nothing and changed nothing has not begun this transaction, and
+				// counting its own submission as work would hide exactly that.
+				if (name === SUBMIT_TRANSACTION_TOOL_NAME) {
+					return;
+				}
 				calledInTransaction += 1;
 			});
 		},
@@ -576,149 +839,14 @@ export async function createAtomicProtocolSession(
 			);
 		},
 		async onCompletionAttempt({ text, forced }) {
-			// Once the transactions are spent there is nothing left to judge with,
-			// and asking again would settle a transaction that was never opened.
-			if (finished) {
+			// The tool that submitted is already judging this transaction. The
+			// runtime reaches the boundary for the same turn, and judging it
+			// twice would settle the transaction the submission just opened.
+			if (submitting) {
 				return undefined;
 			}
-
-			const untouched = await controller.isUntouched();
-
-			// A task that changed nothing is not a transaction. Answering a
-			// question about the code is a legitimate way for a run to end, and
-			// running a typecheck to confirm that nobody edited anything is a cost
-			// with no verdict in it.
-			//
-			// Unless there is a check, and it disagrees. Whether this run had work
-			// to do is not the model's to declare where something here can answer
-			// the question: a failing check is the defect still being present, and
-			// a completion on top of one is a fix reported rather than made.
-			// Measured on pandorum: a run ended `completed` on an early turn with
-			// TX-01 open, nothing read, nothing edited and the bug untouched, and
-			// this branch stood the protocol down — set `finished`, returned
-			// nothing, and left the contract unenforced for the rest of the run.
-			// Everything needed to push back already existed below; it was simply
-			// unreachable from here.
-			//
-			// So the stand-down now needs the check to agree. When it does not,
-			// this falls through to the empty-attempt handling below, which holds
-			// the transaction open, says what the check reported, and asks for the
-			// plan again — and which is already bounded, spending the transaction
-			// on a model that keeps submitting nothing until the budget runs out.
-			let unfixed: OracleVerdict | undefined;
-			if (controller.outcomes.length === 0 && untouched) {
-				const verdict = await judgeStandDown();
-				if (!verdict || verdict.passed) {
-					finished = true;
-					return undefined;
-				}
-				unfixed = verdict;
-			}
-
-			// Once a transaction has been judged, an empty submission means
-			// something else: the model has given up. The first one does not spend
-			// a transaction — it stays open, the model is told what it just did,
-			// and it gets to try again.
-			//
-			// The second one does spend it. Not because the transaction earned a
-			// verdict, but because the alternative is worse: holding it open
-			// forever needs some other rule to end the run, and the rule this used
-			// to have ended it on the spot, with transactions still unspent and
-			// nothing said about what had been tried. Settling instead closes this
-			// transaction like any other, writes the retrospective, and opens the
-			// next one with the rules in full. A model that submits nothing every
-			// time runs out of transactions, which is the budget it was given.
-			let emptyNotice: string | undefined;
-			if (untouched) {
-				// The distinction the old rule did not make. A transaction with
-				// no tool call in it was not attempted, so there is nothing to
-				// spend: a reasoning model that thinks for several turns is doing
-				// what reasoning models do, and charging it an attempt for that
-				// spent the whole budget in about twenty turns with no edit ever
-				// tried. Held open instead; the runtime's turn-level
-				// non-convergence guard is what nudges a run that has stopped
-				// converging, and it is built to nudge rather than end.
-				const neverBegan = calledInTransaction === 0;
-				if (neverBegan) {
-					unstartedAttempts += 1;
-				} else {
-					emptyAttempts += 1;
-				}
-				// The backstop, so a model that will never call a tool cannot
-				// hold the session open forever. When it fires the run ends
-				// saying so, rather than leaving six discarded transactions
-				// behind that read as six attempts.
-				if (neverBegan && unstartedAttempts > DEFAULT_MAX_UNSTARTED_ATTEMPTS) {
-					finished = true;
-					const stuck = describeNeverStarted(
-						controller.transaction,
-						unstartedAttempts,
-					);
-					options.logger?.log?.(`[Atomic] ${stuck}`);
-					options.onEvent?.({
-						type: "empty",
-						transaction: controller.transaction,
-						message: stuck,
-						continued: false,
-					});
-					return undefined;
-				}
-				const continued =
-					neverBegan || emptyAttempts <= DEFAULT_MAX_EMPTY_ATTEMPTS;
-				const notice = describeEmptyAttempt(
-					controller.transaction,
-					continued,
-					neverBegan,
-				);
-				options.logger?.log?.(`[Atomic] ${notice}`);
-				options.onEvent?.({
-					type: "empty",
-					transaction: controller.transaction,
-					message: notice,
-					continued,
-				});
-				if (continued) {
-					return [
-						notice,
-						buildEmptyAttemptPrompt({
-							transaction: controller.transaction,
-							maxChanges: options.config?.maxChanges ?? DEFAULT_MAX_CHANGES,
-							maxTransactions:
-								options.config?.maxTransactions ?? DEFAULT_MAX_TRANSACTIONS,
-							...(unfixed
-								? {
-										check: {
-											label: controller.oracle?.label ?? "the check",
-											...(unfixed.output ? { output: unfixed.output } : {}),
-										},
-									}
-								: {}),
-							...(calledInTransaction === 0 ? { neverBegan: true } : {}),
-						}),
-					].join("\n\n");
-				}
-				// Falls through to the settle below, which spends this transaction
-				// and opens the next. The notice rides along so the model is told
-				// why this one closed without a change in it.
-				emptyNotice = notice;
-			}
-
-			// The reply first, then whatever was captured during the transaction.
-			// Both can be absent, and that is still a fact worth recording as
-			// itself rather than as an empty string.
-			const plan =
-				readPlan(text) ??
-				(planned?.transaction === controller.transaction
-					? planned.plan
-					: undefined);
-			const closed = await settleTransaction({
-				...(plan ? { plan } : {}),
-				account: text,
-				selfReport: oracle ? undefined : readSelfReport(text),
-				forced,
-				...(emptyNotice ? { notice: emptyNotice } : {}),
-			});
-			return closed.message;
+			silentBoundaries += 1;
+			return judgeSubmission({ text, forced });
 		},
 	};
 }

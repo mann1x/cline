@@ -6,6 +6,7 @@ import {
 	createAtomicProtocolSession,
 	DEFAULT_MAX_CHANGES,
 	DEFAULT_MAX_UNSTARTED_ATTEMPTS,
+	DEFAULT_SILENT_TURNS_BEFORE_GUARD,
 	readSelfReport,
 } from "./session-protocol";
 
@@ -56,6 +57,38 @@ async function workIn(session: {
 	await (check.execute as (a: unknown, b: unknown) => Promise<unknown>)({}, {
 		iteration: 1,
 	} as never);
+}
+
+/**
+ * Submit the open transaction the way a model does: by calling the tool.
+ *
+ * `onCompletionAttempt` used to be the submission, so these tests drove it
+ * directly. It is a guard now — a turn that called nothing does not submit —
+ * and a test that means "the model submitted" has to say so the way the model
+ * does.
+ *
+ * Returns `undefined` when the run is over, so the assertions can keep reading
+ * "nothing came back" as "the run may end".
+ */
+const SETTLED = "Submitted, and that settles it";
+async function submit(
+	session: unknown,
+	account?: string,
+): Promise<string | undefined> {
+	const s = session as {
+		tools: unknown[];
+		decorateTools: (g: unknown[]) => { name: string; execute?: unknown }[];
+	};
+	const tools = s.decorateTools([...s.tools]);
+	const tool = tools.find((entry) => entry.name === "submit_transaction");
+	if (!tool?.execute) {
+		throw new Error("no submit_transaction tool");
+	}
+	const out = await (
+		tool.execute as (a: unknown, b: unknown) => Promise<unknown>
+	)(account === undefined ? {} : { account }, { iteration: 1 } as never);
+	const text = out === undefined ? undefined : String(out);
+	return text?.startsWith(SETTLED) ? undefined : text;
 }
 
 describe("the undo the protocol hands the model", () => {
@@ -181,6 +214,140 @@ describe("arming the protocol for a session", () => {
 	});
 });
 
+describe("submitting a transaction", () => {
+	// The whole point of the change. Before this there was no way to submit:
+	// the only path that judged a transaction was reached by ending a turn
+	// having called nothing, which is the one thing the runtime's own nudge
+	// tells the model never to do.
+	it("offers submit_transaction whenever the protocol is armed", async () => {
+		await withWorkspace({ "game.js": "broken" }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "always", oracleCommand: shellCheck(root, "fixed") },
+			});
+			expect(session?.tools.map((tool) => tool.name)).toContain(
+				"submit_transaction",
+			);
+		});
+	});
+
+	it("names it in the opening rules as the way a transaction ends", async () => {
+		await withWorkspace({ "game.js": "broken" }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "auto", oracleCommand: shellCheck(root, "fixed") },
+			});
+			const rules = session?.takeOpeningRules();
+			expect(rules).toContain("HOW THIS TRANSACTION ENDS");
+			expect(rules).toContain("submit_transaction");
+		});
+	});
+
+	it("judges the transaction when the model submits", async () => {
+		await withWorkspace({ "game.js": "broken" }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "auto", oracleCommand: shellCheck(root, "fixed") },
+			});
+			await fs.writeFile(path.join(root, "game.js"), "fixed", "utf8");
+
+			// Kept: the check passes, so the run is over and the helper reads
+			// that as nothing further to say.
+			await expect(submit(session, "Fixed it.")).resolves.toBeUndefined();
+			await expect(
+				fs.readFile(path.join(root, "game.js"), "utf8"),
+			).resolves.toBe("fixed");
+		});
+	});
+
+	// The defect this was built for. A quiet turn was the submission, so the
+	// model was told "TX-01 was submitted" for an act it had not performed —
+	// and on pandorum it spent ten turns reacting to that.
+	it("does not submit when a turn merely goes quiet", async () => {
+		await withWorkspace({ "game.js": "broken" }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "auto", oracleCommand: shellCheck(root, "fixed") },
+			});
+
+			const message = await session?.onCompletionAttempt({
+				text: "I will read the file next.",
+			});
+
+			expect(message).toContain("nothing was submitted");
+			expect(message).toContain("submit_transaction");
+			expect(message).not.toContain("was submitted with");
+			// Nothing judged, nothing spent, still the first transaction.
+			expect(session?.controller.transaction).toBe(1);
+			expect(session?.controller.outcomes).toHaveLength(0);
+		});
+	});
+
+	// It is still a guard, though, or a run that has genuinely stopped would
+	// hold the session open for ever.
+	it("submits for the model once it has stopped calling anything", async () => {
+		await withWorkspace({ "game.js": "broken" }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "auto", oracleCommand: shellCheck(root, "fixed") },
+			});
+			if (!session) {
+				throw new Error("the protocol did not arm");
+			}
+			// Worked in, so the guard has a real attempt to judge.
+			await workIn(session as never);
+			await fs.writeFile(path.join(root, "game.js"), "still broken", "utf8");
+
+			for (
+				let quiet = 0;
+				quiet < DEFAULT_SILENT_TURNS_BEFORE_GUARD - 1;
+				quiet += 1
+			) {
+				expect(await session.onCompletionAttempt({})).toContain(
+					"nothing was submitted",
+				);
+			}
+			const judged = await session.onCompletionAttempt({});
+			expect(judged).toContain("TX-01 discarded");
+			expect(judged).toContain("This one is TX-02");
+		});
+	});
+
+	// A tool call means the run is alive, so the guard starts counting again.
+	it("resets the guard whenever the model calls anything", async () => {
+		await withWorkspace({ "game.js": "broken" }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "auto", oracleCommand: shellCheck(root, "fixed") },
+			});
+			if (!session) {
+				throw new Error("the protocol did not arm");
+			}
+			await fs.writeFile(path.join(root, "game.js"), "still broken", "utf8");
+
+			// Two rounds, not three: a third `run_check` over files nothing has
+			// changed is what the stalled-check guard settles on, and that is a
+			// different rule being tested elsewhere.
+			for (let round = 0; round < 2; round += 1) {
+				for (
+					let quiet = 0;
+					quiet < DEFAULT_SILENT_TURNS_BEFORE_GUARD - 1;
+					quiet += 1
+				) {
+					expect(await session.onCompletionAttempt({})).toContain(
+						"nothing was submitted",
+					);
+				}
+				// One call, and the streak is gone.
+				await workIn(session as never);
+			}
+			// Never judged, across four silent turns, because work kept happening.
+			expect(session.controller.transaction).toBe(1);
+			expect(session.controller.outcomes).toHaveLength(0);
+		});
+	});
+});
+
 describe("the boundary", () => {
 	it("lets a task that changed nothing end when the check agrees", async () => {
 		await withWorkspace({ "game.js": "fine" }, async (root) => {
@@ -190,7 +357,7 @@ describe("the boundary", () => {
 			});
 
 			await expect(
-				session?.onCompletionAttempt({ text: "That file draws the sprite." }),
+				submit(session, "That file draws the sprite."),
 			).resolves.toBeUndefined();
 			await expect(
 				fs.readFile(path.join(root, "game.js"), "utf8"),
@@ -209,9 +376,10 @@ describe("the boundary", () => {
 				config: { mode: "auto", oracleCommand: shellCheck(root, "fixed") },
 			});
 
-			const message = await session?.onCompletionAttempt({
-				text: "Everything looks correct to me, so there is nothing to do.",
-			});
+			const message = await submit(
+				session,
+				"Everything looks correct to me, so there is nothing to do.",
+			);
 
 			expect(message).toContain("NOTHING WAS CHANGED");
 			expect(message).toContain("FAILED");
@@ -236,7 +404,7 @@ describe("the boundary", () => {
 			// Four quiet turns: under the old rule the second of these spent
 			// TX-01 and opened TX-02.
 			for (let attempt = 0; attempt < 4; attempt += 1) {
-				const message = await session?.onCompletionAttempt({ text: "Done." });
+				const message = await submit(session, "Done.");
 				expect(message).toContain("TX-01");
 				expect(message).not.toContain("This one is TX-02");
 				expect(message).toContain("no tool called in it at all");
@@ -260,12 +428,10 @@ describe("the boundary", () => {
 			// count as begun — it need not have changed anything.
 			await workIn(session as never);
 
-			expect(await session.onCompletionAttempt({ text: "Done." })).toContain(
+			expect(await submit(session, "Done.")).toContain(
 				"was not spent and is still open",
 			);
-			expect(await session.onCompletionAttempt({ text: "Done." })).toContain(
-				"This one is TX-02",
-			);
+			expect(await submit(session, "Done.")).toContain("This one is TX-02");
 		});
 	});
 
@@ -290,14 +456,12 @@ describe("the boundary", () => {
 				attempt < DEFAULT_MAX_UNSTARTED_ATTEMPTS;
 				attempt += 1
 			) {
-				expect(await session?.onCompletionAttempt({ text: "Done." })).toContain(
+				expect(await submit(session, "Done.")).toContain(
 					"no tool called in it at all",
 				);
 			}
 			// One past the backstop: the run ends.
-			await expect(
-				session?.onCompletionAttempt({ text: "Done." }),
-			).resolves.toBeUndefined();
+			await expect(submit(session, "Done.")).resolves.toBeUndefined();
 			expect(notices.at(-1)).toContain("never started work");
 			// Still TX-01. Nothing was spent on the way here.
 			expect(notices.at(-1)).toContain("TX-01");
@@ -314,7 +478,7 @@ describe("the boundary", () => {
 			});
 
 			await expect(
-				session?.onCompletionAttempt({ text: "Nothing to change here." }),
+				submit(session, "Nothing to change here."),
 			).resolves.toBeUndefined();
 		});
 	});
@@ -327,9 +491,7 @@ describe("the boundary", () => {
 			});
 			await fs.writeFile(path.join(root, "game.js"), "fixed", "utf8");
 
-			await expect(
-				session?.onCompletionAttempt({ text: "Fixed." }),
-			).resolves.toBeUndefined();
+			await expect(submit(session, "Fixed.")).resolves.toBeUndefined();
 		});
 	});
 
@@ -341,7 +503,7 @@ describe("the boundary", () => {
 			});
 			await fs.writeFile(path.join(root, "game.js"), "still broken", "utf8");
 
-			const message = await session?.onCompletionAttempt({ text: "Fixed." });
+			const message = await submit(session, "Fixed.");
 
 			expect(message).toContain("TX-01 discarded");
 			// The reopened transaction's rules, in full, on this message.
@@ -367,12 +529,10 @@ describe("the boundary", () => {
 			});
 
 			await fs.writeFile(path.join(root, "game.js"), "no", "utf8");
-			expect(await session?.onCompletionAttempt({})).toContain(
-				"This one is TX-02",
-			);
+			expect(await submit(session)).toContain("This one is TX-02");
 			await fs.writeFile(path.join(root, "game.js"), "no again", "utf8");
-			expect(await session?.onCompletionAttempt({})).toBeUndefined();
-			expect(await session?.onCompletionAttempt({})).toBeUndefined();
+			expect(await submit(session)).toBeUndefined();
+			expect(await submit(session)).toBeUndefined();
 			await expect(
 				fs.readFile(path.join(root, "game.js"), "utf8"),
 			).resolves.toBe("broken");
@@ -397,12 +557,10 @@ describe("the boundary", () => {
 			});
 
 			await fs.writeFile(path.join(root, "game.js"), "still broken", "utf8");
-			expect(await session?.onCompletionAttempt({ text: "Fixed." })).toContain(
-				"TX-01 discarded",
-			);
+			expect(await submit(session, "Fixed.")).toContain("TX-01 discarded");
 
 			// TX-02 is open and the model changes nothing in it.
-			const message = await session?.onCompletionAttempt({ text: "Done." });
+			const message = await submit(session, "Done.");
 
 			expect(message).toContain("NOTHING WAS CHANGED");
 			expect(message).toContain("was not spent");
@@ -437,18 +595,16 @@ describe("the boundary", () => {
 			});
 
 			await fs.writeFile(path.join(root, "game.js"), "still broken", "utf8");
-			await session?.onCompletionAttempt({ text: "Fixed." });
+			await submit(session, "Fixed.");
 
 			// TX-02 is worked in, so its empty submissions are failed attempts
 			// rather than a transaction that never began.
 			if (session) {
 				await workIn(session as never);
 			}
-			expect(await session?.onCompletionAttempt({})).toContain(
-				"NOTHING WAS CHANGED",
-			);
+			expect(await submit(session)).toContain("NOTHING WAS CHANGED");
 
-			const message = await session?.onCompletionAttempt({});
+			const message = await submit(session);
 			// It says what happened to TX-02, and it is not "the run is stopping".
 			expect(message).toContain("being spent and closed");
 			expect(message).not.toContain("the run is stopping");
@@ -477,27 +633,21 @@ describe("the boundary", () => {
 			});
 
 			await fs.writeFile(path.join(root, "game.js"), "still broken", "utf8");
-			await session?.onCompletionAttempt({ text: "Fixed." });
+			await submit(session, "Fixed.");
 
 			// TX-02: worked in, nudged, then spent.
 			if (session) {
 				await workIn(session as never);
 			}
-			expect(await session?.onCompletionAttempt({})).toContain(
-				"NOTHING WAS CHANGED",
-			);
-			expect(await session?.onCompletionAttempt({})).toContain(
-				"This one is TX-03",
-			);
+			expect(await submit(session)).toContain("NOTHING WAS CHANGED");
+			expect(await submit(session)).toContain("This one is TX-03");
 			// TX-03 is the last one: worked in, nudged, then spent, and now there
 			// is no next.
 			if (session) {
 				await workIn(session as never);
 			}
-			expect(await session?.onCompletionAttempt({})).toContain(
-				"NOTHING WAS CHANGED",
-			);
-			await expect(session?.onCompletionAttempt({})).resolves.toBeUndefined();
+			expect(await submit(session)).toContain("NOTHING WAS CHANGED");
+			await expect(submit(session)).resolves.toBeUndefined();
 			expect(session?.controller.outcomes).toHaveLength(3);
 			// Every transaction was spent and the file is back as it was seeded.
 			await expect(
@@ -514,21 +664,15 @@ describe("the boundary", () => {
 			});
 
 			await fs.writeFile(path.join(root, "game.js"), "still broken", "utf8");
-			await session?.onCompletionAttempt({ text: "Fixed." });
-			expect(await session?.onCompletionAttempt({})).toContain(
-				"NOTHING WAS CHANGED",
-			);
+			await submit(session, "Fixed.");
+			expect(await submit(session)).toContain("NOTHING WAS CHANGED");
 
 			// A real change in the same transaction: the strike is forgotten, and
 			// the empty submission that follows it in TX-03 is nudged rather than
 			// treated as the second in a row.
 			await fs.writeFile(path.join(root, "game.js"), "broken again", "utf8");
-			expect(await session?.onCompletionAttempt({})).toContain(
-				"This one is TX-03",
-			);
-			expect(await session?.onCompletionAttempt({})).toContain(
-				"NOTHING WAS CHANGED",
-			);
+			expect(await submit(session)).toContain("This one is TX-03");
+			expect(await submit(session)).toContain("NOTHING WAS CHANGED");
 			expect(session?.controller.outcomes).toHaveLength(2);
 		});
 	});
@@ -541,9 +685,10 @@ describe("the boundary", () => {
 			});
 			await fs.writeFile(path.join(root, "notes.md"), "after", "utf8");
 
-			const message = await session?.onCompletionAttempt({
-				text: "I rewrote the section, but I could not verify it renders.",
-			});
+			const message = await submit(
+				session,
+				"I rewrote the section, but I could not verify it renders.",
+			);
 
 			expect(message).toContain("TX-01 discarded");
 			await expect(
@@ -582,7 +727,7 @@ describe("where the rules are put", () => {
 			session?.takeOpeningRules();
 			await fs.writeFile(path.join(root, "game.js"), "still broken", "utf8");
 
-			const message = await session?.onCompletionAttempt({ text: "Fixed." });
+			const message = await submit(session, "Fixed.");
 
 			expect(message).toContain("TX-01 discarded");
 			expect(message).toContain("CHANGE PROTOCOL");
@@ -688,9 +833,10 @@ describe("a check the model proposes", () => {
 				"utf8",
 			);
 
-			const message = await session.onCompletionAttempt({
-				text: "Fixed — the page loads cleanly now.",
-			});
+			const message = await submit(
+				session,
+				"Fixed — the page loads cleanly now.",
+			);
 
 			expect(message).toContain("discarded");
 			expect(message).toContain("the page did not run");
@@ -719,9 +865,7 @@ describe("a check the model proposes", () => {
 			});
 			await fs.writeFile(path.join(root, "game.html"), WORKING, "utf8");
 
-			expect(
-				await session.onCompletionAttempt({ text: "fixed" }),
-			).toBeUndefined();
+			expect(await submit(session, "fixed")).toBeUndefined();
 			expect(session.oracle?.kind).toBe("page");
 		});
 	});

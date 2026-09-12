@@ -149,6 +149,35 @@ describe("the change protocol, as the host wires it", () => {
 		rmSync(root, { recursive: true, force: true });
 	});
 
+	/**
+	 * Submit the open transaction the way a model does — by calling the tool.
+	 *
+	 * The completion boundary used to be the submission, so these tests drove it
+	 * directly. It is a guard now: a turn that called nothing does not submit,
+	 * and a test that means "the model submitted" has to say so the way the
+	 * model does.
+	 */
+	async function submitVia(
+		agentConfig: AgentConfig | undefined,
+		account?: string,
+	): Promise<string | undefined> {
+		const tools = (agentConfig?.tools ?? []) as {
+			name: string;
+			execute?: unknown;
+		}[];
+		const tool = tools.find((entry) => entry.name === "submit_transaction");
+		if (!tool?.execute) {
+			throw new Error("no submit_transaction tool on the agent config");
+		}
+		const out = await (
+			tool.execute as (a: unknown, b: unknown) => Promise<unknown>
+		)(account === undefined ? {} : { account }, { iteration: 1 } as never);
+		const text = out === undefined ? undefined : String(out);
+		return text?.startsWith("Submitted, and that settles it")
+			? undefined
+			: text;
+	}
+
 	async function startProtocolSession(
 		oracleCommand: string,
 		oracleExpect?: string,
@@ -277,9 +306,7 @@ describe("the change protocol, as the host wires it", () => {
 
 		writeFileSync(join(workspace, "game.js"), "edited", "utf8");
 		writeFileSync(join(workspace, "scratch.js"), "junk", "utf8");
-		const message = await agentConfig?.completionPolicy?.onCompletionAttempt?.({
-			text: "Fixed it.",
-		});
+		const message = await submitVia(agentConfig, "Fixed it.");
 
 		expect(message).toContain("TX-01 discarded");
 		expect(readFileSync(join(workspace, "game.js"), "utf8")).toBe("original");
@@ -296,9 +323,7 @@ describe("the change protocol, as the host wires it", () => {
 
 		writeFileSync(join(workspace, "game.js"), "edited", "utf8");
 
-		await expect(
-			agentConfig?.completionPolicy?.onCompletionAttempt?.({ text: "Fixed." }),
-		).resolves.toBeUndefined();
+		await expect(submitVia(agentConfig, "Fixed.")).resolves.toBeUndefined();
 		expect(readFileSync(join(workspace, "game.js"), "utf8")).toBe("edited");
 	});
 
@@ -312,9 +337,7 @@ describe("the change protocol, as the host wires it", () => {
 		);
 
 		writeFileSync(join(workspace, "game.js"), "edited", "utf8");
-		const message = await agentConfig?.completionPolicy?.onCompletionAttempt?.(
-			{},
-		);
+		const message = await submitVia(agentConfig);
 
 		expect(message).toContain("TX-01 discarded");
 		expect(message).toContain("ReferenceError");
@@ -322,18 +345,30 @@ describe("the change protocol, as the host wires it", () => {
 	});
 
 	// Answering a question about the code is a legitimate way for a run to end,
-	// and running a check to confirm nobody edited anything is a cost with no
-	// verdict in it.
-	it("does not run the check on a task that changed nothing", async () => {
+	// and running a check to confirm nobody edited anything would be a cost with
+	// no verdict in it — so long as the check agrees there was nothing to do.
+	it("lets a task that changed nothing end when the check passes", async () => {
 		writeFileSync(join(workspace, "game.js"), "original", "utf8");
-		const { agentConfig, events } = await startProtocolSession("exit 1");
+		const { agentConfig, events } = await startProtocolSession("exit 0");
 
 		await expect(
-			agentConfig?.completionPolicy?.onCompletionAttempt?.({
-				text: "That file draws the sprite.",
-			}),
+			submitVia(agentConfig, "That file draws the sprite."),
 		).resolves.toBeUndefined();
 		expect(findTransactionNotice(events)).toBeUndefined();
+	});
+
+	// And not when it does not. Whether this run had work to do is not the
+	// model's to declare where something here can answer the question: a failing
+	// check is the defect still being present, and a completion on top of one is
+	// a fix reported rather than made.
+	it("refuses to end a changed-nothing task while the check fails", async () => {
+		writeFileSync(join(workspace, "game.js"), "original", "utf8");
+		const { agentConfig } = await startProtocolSession("exit 1");
+
+		const message = await submitVia(agentConfig, "That file draws the sprite.");
+
+		expect(message).toBeDefined();
+		expect(message).toContain("NOTHING WAS CHANGED");
 	});
 
 	// The rules go where the harness this comes from puts them. Measured: from
