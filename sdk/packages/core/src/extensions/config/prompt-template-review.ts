@@ -64,6 +64,13 @@ A coding agent is multi-turn, and the end of a turn is never in itself the end o
 - Do not write a rule that makes stopping feel like failure, such as "a response without a tool call is considered complete". A rule like that buys one more unnecessary tool call on every finished task, and it teaches the wrong thing: that continuing is always correct.
 - Keep your attention on the long horizon of the assigned work rather than on the current turn. Ending a turn to ask a question is correct when you need the answer. Ending it while work you were asked to do remains untouched, and saying nothing about that, is not.
 
+Four more things are settled by measurement rather than by opinion, and a rewrite is judged on whether it keeps them:
+
+- The checker and the run belong in the same turn. Call 'check_file' and the thing that executes the code - 'run_commands', or 'browser' for a page - together, not one or the other. Running it says *that* something is broken and where the parser gave up; the checker says *which line* to edit. Each is half the answer, and the half you skip is the half the turn gets spent guessing at.
+- A tool's report outranks your own reasoning about the same question. Where a tool has measured something - a delimiter scan naming the line to edit, a diagnostic naming a type - that is the measurement, and re-deriving it yourself is an estimate. Where the two disagree, it is the estimate that is wrong. Measured twice: a model called a delimiter scan a false positive, counted brackets by hand instead, and was wrong both times, at over 30,000 thinking tokens a turn. If you doubt a report, do not re-derive it - act on it and run the result. That costs milliseconds and settles it either way.
+- Run the program once, after every change you planned is in place - not after each one. The cheap check that does not execute the code is what goes after each edit; the build, the tests or the program itself goes at the end.
+- Do not re-read a file to confirm your own edit. The edit call already reports whether it landed and what changed, and that is the confirmation. Measured on one session: 'read_files' was called 33 times, 31 of them byte-identical, returning 440,013 characters against a file of 14 KB - four times the tokens that session spent on all of its reasoning. Read again when the call failed, or when you need content you have not seen. A rule that says to read a file back after every edit is the one thing here you must not write.
+
 Hard constraints:
 
 - Keep every placeholder exactly as written, including the braces: {{PLATFORM_NAME}}, {{CURRENT_DATE}}, {{IDE_NAME}}, {{CWD}}, {{CLINE_RULES}}, {{CLINE_METADATA}}, {{DEFAULT}}. They are substituted at runtime; a renamed or dropped placeholder breaks the prompt.
@@ -109,6 +116,12 @@ export function buildPromptTemplateReviewPrompt(
 	toolSignatures?: readonly ToolCallSignature[],
 	/** Every tool the reply must give a section. Checked by the audit. */
 	requiredSections?: readonly string[],
+	/**
+	 * An explicit `match:` block, overriding both what is inferred from the
+	 * generating model's identifiers AND the block the template being rewritten
+	 * already carries.
+	 */
+	matchOverride?: PromptTemplateMatchOverride,
 ): string {
 	const signatureBlock = renderToolCallSignatures(toolSignatures ?? []);
 	const parts = [
@@ -131,8 +144,29 @@ export function buildPromptTemplateReviewPrompt(
 			"",
 			`Rewrite ${familyTemplateName}. It must end up with a '# tool:' section for every one of the ${requiredSections?.length ?? 0} tools listed above, not only the ones it has today.`,
 		);
+		if (hasMatchOverride(matchOverride)) {
+			// The standing rule above is "leave the 'match:' block exactly as it
+			// is", and without this the model obeys it -- which is how an
+			// explicit override used to be accepted by the CLI and then
+			// silently do nothing. Measured: a run with
+			// `--match-model '*kimi-k3*'` returned `family: [kimi*]`, because
+			// the old kimi template already claimed kimi-k3 and so this branch
+			// ran instead of the from-scratch one.
+			//
+			// This is a split: the template being rewritten stays where it is
+			// and keeps claiming what it claims. The rewrite is for a narrower
+			// or different set of models.
+			parts.push(
+				"",
+				"One exception to the rule about the 'match:' block above. This rewrite is for a different set of models than the template you were given, so REPLACE its frontmatter with exactly this, changing nothing in it:",
+				"",
+				...renderMatchOverride(matchOverride),
+				"",
+				"The template you were shown keeps its own 'match:' block and continues to exist; yours is a separate file. Do not widen this block, do not add keys to it, and do not merge it with the one above.",
+			);
+		}
 	} else {
-		parts.push("", buildNewTemplateInstruction(target));
+		parts.push("", buildNewTemplateInstruction(target, matchOverride));
 	}
 	return parts.join("\n");
 }
@@ -165,17 +199,90 @@ function renderRequiredSections(tools: readonly string[]): string {
  * routes to nothing. Showing the block it should write, filled in with its own
  * identifiers, is what stops that.
  */
-function buildNewTemplateInstruction(target?: {
-	providerId: string;
-	modelId: string;
-	family?: string;
-}): string {
+/**
+ * An explicit `match:` block stated by the operator.
+ *
+ * Two things need this and they pull in opposite directions from the same
+ * cause -- what the generating model reports about itself is not what the
+ * template should claim.
+ *
+ * `model` is for a params overlay: the overlay is scaffolding
+ * (`igovet/minimax-m3-opencode`, `nemotron-3-super-tpl`) that reports no
+ * family, so an inferred block would claim the scaffolding.
+ *
+ * `family` is for a generational split. The inferred stem truncates at the
+ * first non-alphanumeric character, so `kimi-k2` and `kimi-k3` both infer
+ * `kimi*` -- one pattern for two generations that need different templates.
+ * Stating `kimi-k3*` is the only way to say what the model cannot.
+ */
+export interface PromptTemplateMatchOverride {
+	name?: string;
+	family?: readonly string[];
+	model?: readonly string[];
+}
+
+function hasMatchOverride(
+	override: PromptTemplateMatchOverride | undefined,
+): override is PromptTemplateMatchOverride {
+	return Boolean(
+		(override?.family && override.family.length > 0) ||
+			(override?.model && override.model.length > 0),
+	);
+}
+
+/** The literal block to write, plus the name line when one is stated. */
+function renderMatchOverride(override: PromptTemplateMatchOverride): string[] {
+	const lines = ["---"];
+	if (override.name) {
+		lines.push(`name: ${override.name}`);
+	}
+	lines.push("match:");
+	if (override.family && override.family.length > 0) {
+		lines.push(
+			`  family: [${override.family.map((p) => JSON.stringify(p)).join(", ")}]`,
+		);
+	}
+	if (override.model && override.model.length > 0) {
+		lines.push(
+			`  model: [${override.model.map((p) => JSON.stringify(p)).join(", ")}]`,
+		);
+	}
+	lines.push("---");
+	return lines;
+}
+
+function buildNewTemplateInstruction(
+	target?: {
+		providerId: string;
+		modelId: string;
+		family?: string;
+	},
+	matchOverride?: PromptTemplateMatchOverride,
+): string {
 	const lines = [
 		"No template claims you today, so you are given the base layer above. Write the template that should claim you.",
 		"",
 		"The 'match:' block is what routes a template to a model. It is a mapping, and the only three keys it accepts are 'provider', 'family' and 'model'. Each takes a list of patterns where '*' is the only wildcard. Any other key, or a list where the mapping should be, is an error.",
 	];
-	if (target?.family) {
+	if (hasMatchOverride(matchOverride)) {
+		// Stated by the operator, and it has to win over anything inferred from
+		// the generating model's own identifiers.
+		//
+		// The case this exists for: a model can only be reached through a params
+		// overlay (see the runbook). The overlay is a build artifact --
+		// `igovet/minimax-m3-opencode`, `nemotron-3-super-tpl` -- and it reports
+		// no family, so the inferred block would be
+		// `model: ["*igovet/minimax-m3-opencode*"]`: a template that claims the
+		// scaffolding and none of the models it was written for.
+		lines.push(
+			"",
+			"Write exactly this frontmatter, and change nothing in it:",
+			"",
+			...renderMatchOverride(matchOverride),
+			"",
+			"It is what routes this template to the models it is for. It is not derived from the name of the model answering now.",
+		);
+	} else if (target?.family) {
 		// Family is the right key when the provider reports one: it is stable
 		// across quants, tags and renames of the same model.
 		const stem = target.family.replace(/[^a-zA-Z0-9]+.*$/, "") || target.family;
@@ -640,6 +747,20 @@ export interface AuditPromptTemplateProposalArgs {
 	 */
 	requiredRewrites?: readonly string[];
 	/**
+	 * Check the system section against `REQUIRED_SYSTEM_GUIDANCE`.
+	 *
+	 * Opt-in, because those are requirements on a *complete family template* and
+	 * would otherwise fire on every fragment a caller asks to be checked. The
+	 * generator and `audit-prompt-template.mts` both set it.
+	 */
+	requireSystemGuidance?: boolean;
+	/**
+	 * An operator-stated `match:` block, if one was given. Checked, because an
+	 * instruction the model can quietly decline is not an instruction.
+	 */
+	matchFamily?: readonly string[];
+	matchModel?: readonly string[];
+	/**
 	 * Real call shapes, so example calls in the proposal can be checked.
 	 * Without these the audit cannot tell `read_files(["a.ts"])` — which is
 	 * rejected at runtime — from a correct one.
@@ -647,6 +768,141 @@ export interface AuditPromptTemplateProposalArgs {
 	toolSignatures?: readonly ToolCallSignature[];
 	/** Injection point for tests; defaults to the shipped templates. */
 	baseTemplates?: readonly PromptTemplate[];
+}
+
+/**
+ * Guidance the review instructions state as settled, and which therefore has to
+ * be *checked* rather than merely asked for.
+ *
+ * Measured 2026-09-11, across six regenerations: of the four rules folded into
+ * the instructions that day, the only one that landed reliably was the one with
+ * an audit gate behind it. The other three appeared in `gemma` and `deepseek`,
+ * once in `qwen`, and not at all in `kimi` -- from the same instructions, in the
+ * same run. Asking is not enforcing.
+ *
+ * The patterns are deliberately loose. They are not checking for a phrasing --
+ * the whole premise of the exercise is that each family writes its own -- only
+ * that the subject was addressed at all. Each was derived from the wording the
+ * models that did comply actually produced.
+ */
+const REQUIRED_SYSTEM_GUIDANCE: ReadonlyArray<{
+	name: string;
+	present: RegExp;
+	fix: string;
+}> = [
+	{
+		name: "the checker and the run go in the same turn",
+		present:
+			// Any correct phrasing must pass. `kimi-k2.6` wrote "in the same
+			// response as `run_commands`", which an earlier pattern that only knew
+			// the word "turn" rejected three times running -- a gate that refuses a
+			// compliant answer is worse than no gate, because the repair loop then
+			// spends attempts it cannot win.
+			/same (turn|response|message|call)|together in one (turn|response)|in one response|alongside the run|at the same time as/i,
+		fix: "Say that `check_file` and the thing that executes the code -- `run_commands`, or `browser` for a page -- are called in the same turn, not one or the other. Running it says *that* something is broken and where the parser gave up; the checker says *which line* to edit.",
+	},
+	{
+		name: "a tool's report outranks re-deriving it",
+		present:
+			/measurement|is the answer, not a second opinion|outranks|do not re-derive|rather than counting|estimate/i,
+		fix: "Say that where a tool has measured something -- a delimiter scan naming a line, a diagnostic naming a type -- that report is the measurement and re-deriving it is an estimate, and that where the two disagree it is the estimate that is wrong.",
+	},
+	{
+		name: "run the program last",
+		present:
+			// Wide on purpose, and widened twice after rejecting correct answers:
+			// `claude` wrote "When every change you planned is in, run it once",
+			// which a pattern expecting `run the build ... once` did not match.
+			/once, after every change|(after|when|once) every change you planned|run (it|them|the program|the build|the tests?)[^.]{0,60}\bonce\b|\b(runs?|running)\b[^.]{0,60}\b(last|once)\b|not after each( one)?/i,
+		fix: "Say that the build, the tests or the program itself runs once, after every change you planned is in place -- not after each one -- and that the cheap check which does not execute the code is what goes after each edit.",
+	},
+];
+
+/**
+ * The one rule a rewrite may not write into its system prompt.
+ *
+ * "Read the file back after you edit it" is the most expensive sentence a
+ * template can contain, and models keep writing it because it reads as
+ * diligence. Measured on one session: `read_files` was called 33 times, 31 of
+ * them byte-identical, returning 440,013 characters against a file of 14 KB --
+ * four times the tokens that session spent on all of its reasoning. The
+ * `editor` result already reports whether the edit landed and what changed, and
+ * the read ledger now answers an unchanged repeat with a pointer rather than
+ * the content, so the rule buys nothing and costs a turn every time.
+ *
+ * This is a check rather than a request because asking was tried and failed:
+ * the review instructions name it as the one thing not to write, and a
+ * regeneration of `qwen.md` kept the sentence verbatim anyway. A rule in the
+ * instructions is a suggestion; a rule in the audit is a gate.
+ */
+function auditSystemSection(
+	system: string | undefined,
+	baseSystem: string | undefined,
+	requireGuidance: boolean,
+): string[] {
+	if (!system) {
+		return [];
+	}
+	const problems: string[] = [];
+
+	// The same rule the tool sections have, for the same reason -- and it was
+	// missing here, which is how a proposal shipped `default.md`'s system text
+	// back verbatim and audited clean. A copy says the same thing today and
+	// stops tracking the base tomorrow.
+	if (baseSystem && system.trim() === baseSystem.trim()) {
+		problems.push(
+			"The '# system' section is `default.md` copied out word for word. That is not a rewrite: the whole point of a family template is that the base layer was written for a different reader. Write the version you would rather receive, or say what you would change.",
+		);
+	}
+
+	// The one sentence the base layer contains and the instructions forbid.
+	// Measured: it buys an unnecessary tool call on every finished task, and it
+	// teaches that continuing is always correct.
+	if (
+		/(response|reply|message|turn)s?\s+without\s+(a\s+|any\s+)?tool\s+calls?[^.]{0,80}\b(complete|completed|final|done)\b/i.test(
+			system,
+		)
+	) {
+		problems.push(
+			"The '# system' section says a response without tool calls counts as completion. Remove that rule. Ending a turn is not a signal about the work: the rule buys one unnecessary tool call on every finished task, and it teaches that continuing is always correct. Say instead that the work is done when the assigned task is done and verified.",
+		);
+	}
+	const offenders = system.split(/\r?\n/).filter((line) => {
+		const text = line.toLowerCase();
+		// "After editing a file, use read_files to confirm..." -- the shape,
+		// not one model's phrasing.
+		const afterAChange =
+			/\b(after|once)\b[^.]{0,60}\b(edit|editing|edited|creat|writ|wrote)/.test(
+				text,
+			);
+		const readsItBack =
+			/read_files|read (it|them|the file) back|\bread back\b/.test(text);
+		// "...do not read it back" is the rule being stated correctly.
+		const isNegated =
+			/\b(do not|don't|never|rather than|instead of|without|no need)\b/.test(
+				text,
+			);
+		return afterAChange && readsItBack && !isNegated;
+	});
+	if (offenders.length > 0) {
+		problems.push(
+			`The system section tells the model to read a file back after changing it: ${JSON.stringify(
+				offenders[0].trim().slice(0, 160),
+			)}. Remove that rule. The 'editor' call already reports whether the edit landed and what changed, so a re-read returns bytes the conversation already holds -- measured on one session, 'read_files' was called 33 times, 31 of them byte-identical, returning 440,013 characters against a file of 14 KB. Say to read again only when the call failed, or when content that has not been seen is needed.`,
+		);
+	}
+
+	// Positive requirements. Same pattern as REQUIRED_USE_CASES for `code_intel`,
+	// and for the same measured reason.
+	for (const rule of requireGuidance ? REQUIRED_SYSTEM_GUIDANCE : []) {
+		if (!rule.present.test(system)) {
+			problems.push(
+				`The '# system' section never addresses ${rule.name}. ${rule.fix} Write it in your own words, wherever you would be when you are about to get it wrong.`,
+			);
+		}
+	}
+
+	return problems;
 }
 
 export function auditPromptTemplateProposal(
@@ -672,6 +928,39 @@ export function auditPromptTemplateProposal(
 		);
 	}
 
+	// An operator-stated match must actually arrive. Without this check the
+	// instruction is a request, and the standing rule two paragraphs above it
+	// says to leave the 'match:' block alone -- so a model that obeys the
+	// stronger-sounding rule returns the block it was given and the override
+	// vanishes. Measured 2026-09-11: a run with `--match-model '*kimi-k3*'`
+	// returned `family: [kimi*]`, and nothing anywhere said the flag had been
+	// ignored. A flag that can be silently dropped is worse than no flag.
+	const stated: Record<"family" | "model", readonly string[] | undefined> = {
+		family: args.matchFamily,
+		model: args.matchModel,
+	};
+	for (const key of ["family", "model"] as const) {
+		const want = stated[key];
+		if (!want || want.length === 0) {
+			continue;
+		}
+		const got = parsed.template.match?.[key] ?? [];
+		const missing = want.filter((pattern) => !got.includes(pattern));
+		if (missing.length > 0) {
+			problems.push(
+				`The 'match:' block must declare ${key}: [${want
+					.map((p) => JSON.stringify(p))
+					.join(
+						", ",
+					)}] — it was stated for this rewrite and it is what routes the template. It currently declares ${key}: [${got
+					.map((p) => JSON.stringify(p))
+					.join(
+						", ",
+					)}]. Write the block exactly as given; do not keep the one from the template you were shown.`,
+			);
+		}
+	}
+
 	// Routing is the whole point. A rewrite that no longer claims this model is
 	// a file that will never be used, and nothing downstream would say so.
 	const base = (args.baseTemplates ?? getBuiltinPromptTemplates()).filter(
@@ -693,6 +982,13 @@ export function auditPromptTemplateProposal(
 		);
 	}
 
+	problems.push(
+		...auditSystemSection(
+			parsed.template.system,
+			base[0]?.system,
+			args.requireSystemGuidance ?? false,
+		),
+	);
 	problems.push(...auditExampleCalls(args.raw, args.toolSignatures ?? []));
 	problems.push(
 		...auditToolSectionContent(
@@ -800,6 +1096,22 @@ export interface GeneratePromptTemplateArgs {
 	requiredSections?: readonly string[];
 	/** Tools that must be rewritten rather than inherited via the marker. */
 	requiredRewrites?: readonly string[];
+	/**
+	 * An explicit `model:` match for a template written from scratch.
+	 *
+	 * Needed when the generating model is a params overlay: the overlay is
+	 * scaffolding, and a match inferred from its name would claim the
+	 * scaffolding instead of the family the template is for.
+	 */
+	matchModel?: readonly string[];
+	/**
+	 * An explicit `family:` match, for a generational split.
+	 *
+	 * The inferred stem truncates at the first non-alphanumeric character, so
+	 * `kimi-k2` and `kimi-k3` both infer `kimi*`. Stating `kimi-k3*` is the only
+	 * way to give one generation its own template.
+	 */
+	matchFamily?: readonly string[];
 	/** Real call shapes: put into the prompt and used to check the result. */
 	toolSignatures?: readonly ToolCallSignature[];
 	expectedName?: string;
@@ -846,6 +1158,17 @@ export async function generatePromptTemplate(
 				},
 				args.toolSignatures,
 				args.requiredSections ?? args.knownToolNames,
+				hasMatchOverride({
+					name: args.expectedName,
+					family: args.matchFamily,
+					model: args.matchModel,
+				})
+					? {
+							name: args.expectedName,
+							family: args.matchFamily,
+							model: args.matchModel,
+						}
+					: undefined,
 			),
 		},
 	];
@@ -868,6 +1191,9 @@ export async function generatePromptTemplate(
 			knownToolNames: args.knownToolNames,
 			requiredMentions: args.requiredMentions,
 			requiredSections: args.requiredSections ?? args.knownToolNames,
+			requireSystemGuidance: true,
+			matchFamily: args.matchFamily,
+			matchModel: args.matchModel,
 			requiredRewrites: args.requiredRewrites ?? DEFAULT_REQUIRED_REWRITES,
 			toolSignatures: args.toolSignatures,
 			expectedName: args.expectedName,
@@ -951,9 +1277,16 @@ export function auditExampleCalls(
 			if (isNegativeExample(raw, match.index ?? 0)) {
 				continue;
 			}
-			const named = [...args.matchAll(/([a-zA-Z_][a-zA-Z0-9_]*)\s*[=:]/g)].map(
-				(m) => m[1],
-			);
+			// `\??` because an optional parameter is written `path?: string` -- and
+			// without it this check was unsatisfiable. `entry.signature`, the exact
+			// text the failure message tells the model to write, is itself full of
+			// `name?: type`, so a template that complied was told again that it had
+			// "passed its argument positionally", with the fix quoted back at it
+			// verbatim. Measured: minimax looped on `list_files` for three attempts,
+			// alternating between the two forms, and neither could pass.
+			const named = [
+				...args.matchAll(/([a-zA-Z_][a-zA-Z0-9_]*)\??\s*[=:]/g),
+			].map((m) => m[1]);
 			const example =
 				match[0].length > 90 ? `${match[0].slice(0, 90)}…` : match[0];
 			if (seen.has(example)) {

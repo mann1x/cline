@@ -61,7 +61,36 @@ export const DEFAULT_REASONING_REPETITION: ReasoningRepetitionConfig = {
 	// raises the budget does not get two in consecutive turns.
 	cooldownTurns: 3,
 	maxNudges: 1,
+	// Earned back, rather than spent for the run.
+	//
+	// The budget was one per run on the measurement that a *second* nudge into
+	// the same unbroken loop had never changed an outcome. That measurement
+	// still holds and this does not contradict it: the cooldown still refuses a
+	// second nudge into the same loop. What it no longer does is refuse a nudge
+	// into a *different* loop, half an hour of real work later.
+	//
+	// The distinction is the whole point, and pandorum session
+	// 1789122866533_br1d0 is why it is worth making. One nudge fired there, on
+	// a 63,272-character block with a single paragraph repeated 91 times, and
+	// the run recovered on the spot: mean reasoning per turn fell from 2,068
+	// characters to 503, and 26 more tool calls followed. A guard that good is
+	// one a long run should be able to reach twice.
+	//
+	// 4,000 tokens of reasoning that does not trip the thresholds, counted since
+	// the last nudge. Long enough that it cannot be earned back inside the loop
+	// that was just interrupted -- the blocks in a live loop trip on sight -- and
+	// short enough to be reached in a few productive turns.
+	recoveryTokens: 4000,
 };
+
+/**
+ * Characters per token, for the recovery window.
+ *
+ * The nudger sees text, not tokens. Four is the usual English approximation and
+ * the precision does not matter here: the window is a coarse "has real work
+ * happened since", not an accounting of spend.
+ */
+const CHARS_PER_TOKEN = 4;
 
 const STOPWORDS =
 	/\b(the|is|are|to|and|of|it|that|this|be|for|but|so|if|will|need|should|let|now|then|because|actually|wait)\b/g;
@@ -188,22 +217,42 @@ export function createRepetitionNudger(
 ): RepetitionNudger {
 	let spent = 0;
 	let lastTurn = Number.NEGATIVE_INFINITY;
+	// Reasoning characters seen since the last nudge that did not trip the
+	// thresholds. Only clean work counts: a block that trips adds nothing, so a
+	// model still looping cannot buy its way back to a fresh budget.
+	let cleanCharsSinceNudge = 0;
+	const recoveryChars = Math.max(0, config.recoveryTokens) * CHARS_PER_TOKEN;
 	return {
 		get spent() {
 			return spent;
 		},
 		inspect(text, turn) {
+			const measurement = measureReasoningRepetition(text, config);
+			const looping = isRepetitionLoop(measurement, config) && !!measurement;
+
+			if (!looping) {
+				// Recovery is measured before the budget is consulted, so the turn
+				// that completes the window is the turn the budget comes back.
+				if (recoveryChars > 0 && spent > 0) {
+					cleanCharsSinceNudge += text.length;
+					if (cleanCharsSinceNudge >= recoveryChars) {
+						spent = 0;
+						cleanCharsSinceNudge = 0;
+					}
+				}
+				return undefined;
+			}
+
 			if (spent >= config.maxNudges) {
 				return undefined;
 			}
+			// The cooldown is what still refuses a second nudge into the *same*
+			// loop, and it is deliberately not reset by recovery.
 			if (turn - lastTurn < config.cooldownTurns) {
 				return undefined;
 			}
-			const measurement = measureReasoningRepetition(text, config);
-			if (!isRepetitionLoop(measurement, config) || !measurement) {
-				return undefined;
-			}
 			spent += 1;
+			cleanCharsSinceNudge = 0;
 			lastTurn = turn;
 			return describeRepetition(measurement);
 		},

@@ -156,7 +156,13 @@ describe("isRepetitionLoop", () => {
 
 describe("describeRepetition", () => {
 	it("quotes the passage back and asks for a concrete step", () => {
-		const message = describeRepetition(measureReasoningRepetition(LOOP)!);
+		// Asserted rather than `!`-ed: if the measure ever stops recognising LOOP
+		// this should fail naming that, not throw inside describeRepetition.
+		const measured = measureReasoningRepetition(LOOP);
+		expect(measured).toBeDefined();
+		const message = describeRepetition(
+			measured as NonNullable<typeof measured>,
+		);
 
 		expect(message).toContain("7 times");
 		expect(message).toContain("I think I found it");
@@ -203,5 +209,83 @@ describe("createRepetitionNudger", () => {
 		expect(nudger.inspect(LONG_HEALTHY, 1)).toBeUndefined();
 		expect(nudger.inspect(CODE_QUOTING, 5)).toBeUndefined();
 		expect(nudger.spent).toBe(0);
+	});
+});
+
+/**
+ * Earning the nudge back.
+ *
+ * The budget was one per run, on the measurement that a second nudge into the
+ * same unbroken loop never changed an outcome. That still holds — the cooldown
+ * enforces it. What the flat cap also refused was a nudge into a *different*
+ * loop, much later, after real work.
+ *
+ * Measured on pandorum session 1789122866533_br1d0: the one nudge fired on a
+ * 63,272-character block with a paragraph repeated 91 times, and the run
+ * recovered immediately — mean reasoning per turn 2,068 chars → 503, with 26
+ * more tool calls after. A guard that works that well should be reachable
+ * twice in a 340-message run.
+ */
+describe("recovering the nudge budget", () => {
+	const CLEAN = FILLER(40).join("\n\n");
+
+	it("gives the budget back after enough non-looping reasoning", () => {
+		const nudger = createRepetitionNudger();
+
+		expect(nudger.inspect(LOOP, 1)).toBeDefined();
+		expect(nudger.spent).toBe(1);
+
+		// Clean turns, past the recovery window and the cooldown.
+		let turn = 4;
+		let fed = 0;
+		const needed = DEFAULT_REASONING_REPETITION.recoveryTokens * 4;
+		while (fed < needed) {
+			expect(nudger.inspect(CLEAN, turn)).toBeUndefined();
+			fed += CLEAN.length;
+			turn += 1;
+		}
+
+		expect(nudger.spent).toBe(0);
+		expect(nudger.inspect(LOOP, turn + 10)).toBeDefined();
+	});
+
+	// The guarantee that keeps the original measurement intact: a model still
+	// looping cannot buy its way back to a fresh budget, because a block that
+	// trips the thresholds contributes nothing to the window.
+	it("does not let a still-looping model earn the budget back", () => {
+		const nudger = createRepetitionNudger();
+
+		expect(nudger.inspect(LOOP, 1)).toBeDefined();
+		for (const turn of [4, 8, 12, 16, 20, 24, 28, 32, 36, 40]) {
+			expect(nudger.inspect(LOOP, turn)).toBeUndefined();
+		}
+
+		expect(nudger.spent).toBe(1);
+	});
+
+	// A little clean reasoning is not recovery — that is what would let the
+	// model alternate one tidy turn with one loop and be nudged every time.
+	it("does not give it back on a short quiet spell", () => {
+		const nudger = createRepetitionNudger();
+
+		expect(nudger.inspect(LOOP, 1)).toBeDefined();
+		expect(nudger.inspect(CLEAN, 5)).toBeUndefined();
+		expect(nudger.spent).toBe(1);
+		expect(nudger.inspect(LOOP, 9)).toBeUndefined();
+	});
+
+	it("keeps the old behaviour when recovery is switched off", () => {
+		const nudger = createRepetitionNudger({
+			...DEFAULT_REASONING_REPETITION,
+			recoveryTokens: 0,
+		});
+
+		expect(nudger.inspect(LOOP, 1)).toBeDefined();
+		for (let turn = 4; turn < 60; turn += 4) {
+			nudger.inspect(FILLER(40).join("\n\n"), turn);
+		}
+
+		expect(nudger.spent).toBe(1);
+		expect(nudger.inspect(LOOP, 100)).toBeUndefined();
 	});
 });

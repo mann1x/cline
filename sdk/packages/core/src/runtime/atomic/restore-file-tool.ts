@@ -59,11 +59,49 @@ export const RESTORE_FILE_TOOL_NAME = "restore_file";
  * restore costs nothing but the tokens, while refusing one costs the
  * transaction.
  *
- * Nine keeps the shape of the limit -- a transaction that has undone its work
- * nine times is looping and is told so -- at a depth a small model can reach
- * the end of its work through.
+ * It was then nine, for the same reason, and nine was still too few. Measured
+ * on pandorum session 1789122866533_br1d0 (JackOD 9B, 4.100.94): the
+ * transaction spent all nine and was refused twice more, and the model's own
+ * account of why it stopped names the state it could not get out of -- "this
+ * transaction has accumulated 14+ failed/rolled-back attempts with no clean fix
+ * landing on disk", ending in a question to the user rather than a change.
+ * Twenty-seven is three times the last figure and, unlike it, is not a number
+ * the measured runs reach.
+ *
+ * The cap costs more than it saves at small sizes and the asymmetry is not
+ * close. A restore cannot lose the file -- it writes the base revision back, so
+ * the worst case is tokens -- while refusing one strands a model in a file it
+ * mangled, and the transaction is rolled back wholesale anyway if the check
+ * fails. The looping this was meant to catch is caught better elsewhere now:
+ * `MAX_NOOP_RESTORES_PER_TRANSACTION` stops the degenerate case where nothing
+ * is being undone at all, which is what the 102-restore run actually was, and
+ * the repeated-call guard stops an identical call being retried. This number
+ * only has to stop a model restoring real work in circles forever, and it is
+ * the last line rather than the first.
  */
-export const MAX_RESTORES_PER_TRANSACTION = 9;
+export const MAX_RESTORES_PER_TRANSACTION = 27;
+
+/**
+ * No-op restores answered before the tool stops answering them.
+ *
+ * A restore of a file that already matches the base changes nothing, so it
+ * never touched the budget above and never refused. That made it free, and a
+ * free call that returns a reassuring sentence is a loop waiting to happen.
+ *
+ * Measured on pandorum session 1789117848964_zhbk5 (JackOD 9B, 4.100.93):
+ * 108 `restore_file` calls in a single transaction, of which **102 were
+ * no-ops** and 6 were real -- against a cap of 9 that was therefore never
+ * reached. The model was told "that is 102 times you have asked" and asked
+ * again. 212 tool calls and 33 minutes went to a transaction that never
+ * closed.
+ *
+ * Three, and they are counted across the transaction rather than
+ * consecutively: while the file matches the base there is nothing to undo, and
+ * that is equally true whatever the model did in between. Three leaves room
+ * for the honest case -- an edit that did not apply, restored out of caution --
+ * without leaving the door open on a hundred.
+ */
+export const MAX_NOOP_RESTORES_PER_TRANSACTION = 3;
 
 export const RESTORE_FILE_TOOL_DESCRIPTION = `Put one file back exactly as it was when this transaction opened, discarding every change you have made to it since.
 
@@ -252,6 +290,22 @@ export function createRestoreFileTool(
 
 			if (current?.equals(lookup.body)) {
 				noOps += 1;
+				// Past the budget the tool stops answering. Not to punish the
+				// call -- it costs nothing on disk -- but because answering it
+				// is what kept the loop fed: the reply was reassuring, the next
+				// call was identical, and the transaction never moved. The
+				// refusal names the one thing that is true (the file is the
+				// original) and the two calls that can follow it, and it does
+				// not offer stopping as one of them.
+				if (noOps > MAX_NOOP_RESTORES_PER_TRANSACTION) {
+					return [
+						`\`${display}\` is the original. You have now asked to restore it ${noOps} times without it having been changed, and this tool will not answer again for this file in this transaction — there is nothing here to undo.`,
+						"",
+						"That is the answer to the question you keep asking: your edits are not landing. The file on disk is exactly what it was when the transaction opened, so nothing you have done to it has taken effect.",
+						"",
+						`Read \`${display}\` now — the whole region you mean to change, with \`start_line\` and \`end_line\` — and send one \`editor\` call using the line numbers that read reports. If that call is refused, the refusal says why; fix what it names and send it again.`,
+					].join("\n");
+				}
 				return `\`${display}\` is already exactly as it was when this transaction opened, so nothing was changed${noOps > 1 ? ` (that is ${noOps} times you have asked)` : ""}. Whatever is still wrong with it was wrong before you touched it — look at the file itself rather than at your own edits.`;
 			}
 

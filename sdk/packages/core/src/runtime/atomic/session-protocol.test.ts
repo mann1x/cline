@@ -273,12 +273,22 @@ describe("the boundary", () => {
 
 	// Bounded like the runtime's own no-tool-call nudge. Asking a model that has
 	// stopped working to carry on is worth one turn; asking forever is a spin
-	// against the run's wall clock.
-	it("lets the run end rather than nudging an empty submission twice", async () => {
+	// against the run's wall clock. But the second empty submission spends the
+	// transaction rather than ending the run: measured on the harness, a model
+	// that submitted nothing twice in TX-02 stopped the run with four
+	// transactions unspent and nothing said about what had been tried.
+	it("spends the transaction on a second empty submission and opens the next", async () => {
 		await withWorkspace({ "game.js": "broken" }, async (root) => {
+			const events: string[] = [];
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
 				config: { mode: "auto", oracleCommand: shellCheck(root, "fixed") },
+				onEvent: (event) =>
+					events.push(
+						event.type === "empty"
+							? `empty:${event.transaction}:${event.continued}`
+							: `${event.type}:${event.transaction}`,
+					),
 			});
 
 			await fs.writeFile(path.join(root, "game.js"), "still broken", "utf8");
@@ -287,10 +297,55 @@ describe("the boundary", () => {
 			expect(await session?.onCompletionAttempt({})).toContain(
 				"NOTHING WAS CHANGED",
 			);
+
+			const message = await session?.onCompletionAttempt({});
+			// It says what happened to TX-02, and it is not "the run is stopping".
+			expect(message).toContain("being spent and closed");
+			expect(message).not.toContain("the run is stopping");
+			// And it is the next transaction's rules in full, the same message a
+			// judged discard opens one with.
+			expect(message).toContain("This one is TX-03");
+			expect(message).toContain("TX-02 — discarded");
+			expect(session?.controller.transaction).toBe(3);
+			expect(session?.controller.outcomes).toHaveLength(2);
+			expect(events).toContain("empty:2:false");
+		});
+	});
+
+	// The stopping rule is the budget and nothing else. A model that never edits
+	// anything works through its transactions one pair of empty submissions at a
+	// time and then the run ends, rather than ending early with them unspent.
+	it("ends only once a model that changes nothing has spent every transaction", async () => {
+		await withWorkspace({ "game.js": "broken" }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: {
+					mode: "auto",
+					oracleCommand: shellCheck(root, "fixed"),
+					maxTransactions: 3,
+				},
+			});
+
+			await fs.writeFile(path.join(root, "game.js"), "still broken", "utf8");
+			await session?.onCompletionAttempt({ text: "Fixed." });
+
+			// TX-02: nudged, then spent.
+			expect(await session?.onCompletionAttempt({})).toContain(
+				"NOTHING WAS CHANGED",
+			);
+			expect(await session?.onCompletionAttempt({})).toContain(
+				"This one is TX-03",
+			);
+			// TX-03 is the last one: nudged, then spent, and now there is no next.
+			expect(await session?.onCompletionAttempt({})).toContain(
+				"NOTHING WAS CHANGED",
+			);
 			await expect(session?.onCompletionAttempt({})).resolves.toBeUndefined();
-			// Four of the six transactions are still unspent, and the run stopped
-			// instead of feeding them empty submissions.
-			expect(session?.controller.outcomes).toHaveLength(1);
+			expect(session?.controller.outcomes).toHaveLength(3);
+			// Every transaction was spent and the file is back as it was seeded.
+			await expect(
+				fs.readFile(path.join(root, "game.js"), "utf8"),
+			).resolves.toBe("broken");
 		});
 	});
 

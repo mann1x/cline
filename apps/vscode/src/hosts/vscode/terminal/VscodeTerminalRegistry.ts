@@ -27,18 +27,42 @@ export interface TerminalInfo {
  */
 export type TerminalCleanupReason = "abandoned-during-preparation" | "unobserved-command"
 
+/** The terminal name every Cline-created terminal carries. */
+export const CLINE_TERMINAL_NAME = "Cline"
+
+/**
+ * Which extension host created a terminal.
+ *
+ * Terminals outlive the extension host that made them: the window owns them,
+ * and a host restart -- which is what installing a `.vsix` does -- leaves the
+ * previous host's terminals open with nothing tracking them. Stamping the host
+ * into the environment lets `reclaimOrphanedTerminals` prove a terminal belongs
+ * to a host that is gone rather than inferring it.
+ */
+const CLINE_HOST_SESSION_ENV = "CLINE_HOST_SESSION"
+
 export class TerminalRegistry {
 	private static terminals: TerminalInfo[] = []
 	private static terminalsPendingCleanup = new Map<number, { terminalInfo: TerminalInfo; reason: TerminalCleanupReason }>()
 	private static nextTerminalId = 1
+	/** Identifies this extension host for the life of the process. */
+	private static readonly hostSessionId = `${process.pid}-${Date.now()}`
 
 	static createTerminal(cwd?: string | vscode.Uri | undefined, shellPath?: string): TerminalInfo {
 		const terminalOptions: vscode.TerminalOptions = {
 			cwd,
-			name: "Cline",
+			name: CLINE_TERMINAL_NAME,
 			iconPath: new vscode.ThemeIcon("cline-icon"),
+			// A Cline terminal is reusable only by the extension host that made
+			// it: reuse is decided from `TerminalRegistry.terminals`, a static
+			// that starts empty in every new host. Persisting one past the window
+			// therefore revives a shell nothing can ever reuse and nothing will
+			// ever close -- measured on the test host as 16 shells restored in a
+			// single second at window start, against a registry that held two.
+			isTransient: true,
 			env: {
 				CLINE_ACTIVE: "true",
+				[CLINE_HOST_SESSION_ENV]: TerminalRegistry.hostSessionId,
 				// Override $SHELL to match the selected shell profile so that
 				// child processes (make, npm scripts, etc.) that read $SHELL
 				// see the correct value instead of the user's login shell.
@@ -128,6 +152,54 @@ export class TerminalRegistry {
 				Logger.warn(`[TerminalRegistry] Failed to dispose fallback terminal ${id}; cleanup will be retried`, error)
 			}
 		}
+	}
+
+	/**
+	 * Close Cline terminals left behind by an extension host that is gone.
+	 *
+	 * The seam this covers: a terminal is owned by the *window*, reuse is
+	 * decided from a `static` owned by the *extension host*, and nothing in the
+	 * ordinary path ever disposes a healthy terminal -- `disposeAll()` keeps
+	 * them deliberately, and the cleanup queue only takes the two failure
+	 * reasons above. So every host restart (each `--install-extension`, each
+	 * "Reload Window") strands the terminals the previous host was reusing:
+	 * invisible to the new registry, and with no shell exit to close them they
+	 * sit at a prompt forever. Measured on the test host after a day of
+	 * deploys: 21 live `pwsh.exe`, against a registry that never held more than
+	 * two.
+	 *
+	 * Safe to call at activation, and only meaningful there: ownership is
+	 * proven twice over. A terminal is reclaimed only if it is absent from this
+	 * host's registry *and* its `CLINE_HOST_SESSION` is not this host's -- and a
+	 * terminal with no stamp at all is one this host provably did not create,
+	 * since `createTerminal` always writes it. A user's own shell is untouched:
+	 * it carries neither the name nor the stamp.
+	 *
+	 * @returns how many were closed.
+	 */
+	static reclaimOrphanedTerminals(): number {
+		const tracked = new Set(TerminalRegistry.terminals.map((t) => t.terminal))
+		let reclaimed = 0
+		for (const terminal of vscode.window.terminals) {
+			if (terminal.name !== CLINE_TERMINAL_NAME || tracked.has(terminal)) {
+				continue
+			}
+			const options = terminal.creationOptions as vscode.TerminalOptions
+			const env = options?.env as Record<string, string | null | undefined> | undefined
+			if (env?.[CLINE_HOST_SESSION_ENV] === TerminalRegistry.hostSessionId) {
+				continue
+			}
+			try {
+				terminal.dispose()
+				reclaimed += 1
+			} catch (error) {
+				Logger.warn("[TerminalRegistry] Failed to reclaim an orphaned Cline terminal", error)
+			}
+		}
+		if (reclaimed > 0) {
+			Logger.log(`[TerminalRegistry] Reclaimed ${reclaimed} orphaned Cline terminal(s) from a previous extension host`)
+		}
+		return reclaimed
 	}
 
 	static getAllTerminals(): TerminalInfo[] {

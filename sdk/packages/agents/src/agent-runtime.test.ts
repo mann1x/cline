@@ -5036,3 +5036,90 @@ describe("AgentRuntime sdk.error reporting", () => {
 		expect(lastPrompt).not.toContain("word for word");
 	});
 });
+
+/**
+ * Telling a model how to reach the user.
+ *
+ * The no-tool-call nudge offers two branches — keep working, or say you are
+ * finished. A model that genuinely needs a decision from the user has neither,
+ * so it writes the question as prose. That is a turn with no tool calls, which
+ * is this nudge, which tells it to keep working; the question reaches nobody.
+ *
+ * Measured on pandorum session 1789122866533_br1d0, message 227: the model laid
+ * out two options and asked "What would you prefer?". Messages 228 and 229 are
+ * an unchecked-file reminder and this nudge. The user was never prompted.
+ */
+describe("the no-tool-call nudge and ask_question", () => {
+	const askTool = {
+		name: "ask_question",
+		description: "Ask the user a question",
+		inputSchema: { type: "object", properties: {} },
+		execute: async () => "answered",
+	} as unknown as AgentTool;
+
+	const silentThenDone = () =>
+		new ScriptedModel([
+			() => [
+				{ type: "text-delta", text: "Which would you prefer?" },
+				{ type: "finish", reason: "stop" },
+			],
+			() => [
+				{ type: "text-delta", text: "Done" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+
+	it("names ask_question when the model has it", async () => {
+		const model = silentThenDone();
+		const runtime = new AgentRuntime({
+			model,
+			tools: [askTool],
+			completionPolicy: { maxNoToolCallNudges: 1 },
+		});
+
+		await runtime.run("Fix the file");
+
+		const nudges = model.requests
+			.flatMap((request) => request.messages ?? [])
+			.flatMap((message) =>
+				(message.content ?? []).flatMap(
+					(part: { type: string; text?: string }) =>
+						part.type === "text" &&
+						part.text?.includes("contained no tool calls")
+							? [part.text]
+							: [],
+				),
+			);
+		expect(nudges.length).toBeGreaterThan(0);
+		expect(nudges[0]).toContain("ask_question");
+		// The sentence that matters: prose is not a question anyone sees.
+		expect(nudges[0]).toContain("not a question anyone will see");
+	});
+
+	// Naming a tool the model was never given is its own wasted turn. The clause
+	// is gated on the registry, so a preset without it says nothing.
+	it("says nothing about it when the model does not have it", async () => {
+		const model = silentThenDone();
+		const runtime = new AgentRuntime({
+			model,
+			tools: [],
+			completionPolicy: { maxNoToolCallNudges: 1 },
+		});
+
+		await runtime.run("Fix the file");
+
+		const nudges = model.requests
+			.flatMap((request) => request.messages ?? [])
+			.flatMap((message) =>
+				(message.content ?? []).flatMap(
+					(part: { type: string; text?: string }) =>
+						part.type === "text" &&
+						part.text?.includes("contained no tool calls")
+							? [part.text]
+							: [],
+				),
+			);
+		expect(nudges.length).toBeGreaterThan(0);
+		expect(nudges[0]).not.toContain("ask_question");
+	});
+});

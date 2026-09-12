@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { mergeRequestTimings, readEngineTimings } from "./request-timings";
 
@@ -169,5 +172,68 @@ describe("mergeRequestTimings", () => {
 	it("stands alone when the engine reported nothing", () => {
 		const merged = mergeRequestTimings({ requestMs: 500 }, undefined);
 		expect(merged).toEqual({ requestMs: 500 });
+	});
+});
+
+/**
+ * The gap every test above sat over.
+ *
+ * `readOllamaTimings` is exercised with a hand-built metadata object, so it
+ * passes whether or not the provider ever delivers those fields. It did not:
+ * `prompt_eval_cached_count` was added to this reader on 2026-09-10 and was
+ * absent from both the zod schemas and the forwarding whitelist in
+ * `patches/ollama-ai-provider-v2@4.0.1.patch`, so zod stripped it and
+ * `cachedTokens` was `undefined` on every single request. The reader then took
+ * its documented fallback -- the whole prompt divided by the evaluated
+ * duration -- which is the 613,878 tok/s prefill the fix was written to remove.
+ * Two green tests above assert that fallback, so nothing failed.
+ *
+ * This reads the patch and checks the other half: every field this module
+ * consumes has to survive the provider. Reading the patch rather than the
+ * installed package on purpose -- the patch is what is committed, and a
+ * reinstall rebuilds node_modules from it.
+ */
+describe("the ollama provider patch", () => {
+	const here = dirname(fileURLToPath(import.meta.url));
+	const patch = readFileSync(
+		join(
+			here,
+			"..",
+			"..",
+			"..",
+			"..",
+			"..",
+			"patches",
+			"ollama-ai-provider-v2@4.0.1.patch",
+		),
+		"utf8",
+	);
+
+	const CONSUMED = [
+		"total_duration",
+		"load_duration",
+		"prompt_eval_count",
+		"prompt_eval_cached_count",
+		"prompt_eval_duration",
+		"eval_count",
+		"eval_duration",
+	];
+
+	it.each(CONSUMED)("forwards %s, which readOllamaTimings reads", (field) => {
+		// In the whitelist the patched processor copies from. Matched without a
+		// trailing comma: the last element of the array has none.
+		expect(patch).toMatch(new RegExp(`^\\+\\s*"${field}",?\\s*$`, "m"));
+	});
+
+	// Being in the whitelist is not enough: the object handed to it is already
+	// zod-parsed, and an unknown key is stripped before it is ever seen.
+	it("admits the cached count through the zod schemas as well", () => {
+		const declarations = patch.match(
+			/^\+\s*prompt_eval_cached_count: .*number\(\)/gm,
+		);
+
+		// One per schema that already declares `prompt_eval_count`, in each of
+		// the CJS and ESM builds.
+		expect(declarations?.length).toBeGreaterThanOrEqual(2);
 	});
 });

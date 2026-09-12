@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Oracle } from "./oracle";
 import {
+	buildEmptyAttemptPrompt,
 	buildProtocolPrompt,
 	describeVerdict,
 	type TransactionOutcome,
@@ -281,5 +282,90 @@ describe("the stuck host check notice", () => {
 		expect(selfChecked).toContain("you are the check");
 		expect(selfChecked).not.toContain("cannot take its place");
 		expect(selfChecked).not.toContain("more than one helper");
+	});
+});
+
+/**
+ * The regression this exists for. The first version of this message ended with
+ * "if you have run out of ideas, say so plainly in one sentence and stop...
+ * it is not counted against you", and on pandorum session
+ * 1789114968332_v7fsq a 9B took that offer on its first empty attempt and
+ * closed the run -- while claiming its edits had never matched, which the
+ * transcript contradicts. Nothing tested this message, so nothing caught it.
+ */
+describe("buildEmptyAttemptPrompt", () => {
+	const prompt = (transaction: number, maxTransactions = 6) =>
+		buildEmptyAttemptPrompt({
+			transaction,
+			maxChanges: 3,
+			maxTransactions,
+		});
+
+	it("never offers stopping as an option", () => {
+		const text = prompt(1);
+
+		expect(text).not.toMatch(/run out of ideas/i);
+		expect(text).not.toMatch(/and stop\b/i);
+		expect(text).not.toMatch(/not counted against you/i);
+		expect(text).not.toMatch(/worth more than another empty/i);
+	});
+
+	it("counts the remaining transactions out loud", () => {
+		expect(prompt(1)).toContain("you have 6 left");
+		expect(prompt(1)).toContain("TX-01 of 6");
+		expect(prompt(4)).toContain("you have 3 left");
+	});
+
+	// The open transaction counts as available: it was not spent.
+	it("says so plainly when only the last one is left", () => {
+		const text = prompt(6);
+
+		expect(text).toContain("TX-06 is the last transaction you have");
+		expect(text).not.toContain("left, counting this one");
+	});
+
+	it("tells it to keep going and what the next step is", () => {
+		const text = prompt(2);
+
+		expect(text).toMatch(/keep going/i);
+		expect(text).toContain("AT MOST 3 changes");
+		expect(text).toMatch(/WHERE, WHAT and WHY/);
+	});
+
+	// The measured cause of the empty transaction in that session: five
+	// consecutive editor refusals for an `old_text` disagreeing with the line
+	// range. The refusal already says so; the model read it five times and
+	// changed nothing.
+	it("points at the refusal rather than at another read", () => {
+		const text = prompt(1);
+
+		expect(text).toMatch(/old_text/);
+		expect(text).toMatch(/line range/i);
+		expect(text).toMatch(/linter/i);
+	});
+});
+
+/**
+ * What counts as a change.
+ *
+ * Measured on pandorum session 1789122866533_br1d0: the model spent one of its
+ * numbered changes on "Run check_file then node run_game.js to verify fix
+ * passes /\"ok\":true/". That edits nothing, and nothing in the protocol ruled
+ * it out — it asked for WHERE/WHAT/WHY and got three plausible answers.
+ */
+describe("what the protocol counts as a change", () => {
+	it("says a change is an edit and a check is not one", () => {
+		const prompt = buildProtocolPrompt({
+			transaction: 1,
+			maxChanges: 6,
+			maxTransactions: 6,
+			history: [],
+		});
+
+		expect(prompt).toContain("A change is an edit to a file");
+		expect(prompt).toContain("must not take a number");
+		// The budget is the reason it matters, so the prompt says the cheap
+		// things are free rather than merely disallowed.
+		expect(prompt).toContain("cost nothing from this budget");
 	});
 });

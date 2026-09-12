@@ -32,6 +32,7 @@ import {
 	SquareMinusIcon,
 	TerminalIcon,
 	TriangleAlertIcon,
+	WrenchIcon,
 } from "lucide-react"
 import { MouseEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useSize } from "react-use"
@@ -103,6 +104,31 @@ interface ChatRowContentProps extends Omit<ChatRowProps, "onHeightChange" | "onL
 
 export const ProgressIndicator = () => <LoaderCircleIcon className="size-2 mr-2 animate-spin" />
 const InvisibleSpacer = () => <div aria-hidden className="h-px" />
+
+/**
+ * A readable header for a tool the switch below has no bespoke row for.
+ *
+ * The names are the SDK's own, which the message translator passes through
+ * untouched for anything it does not map. Known ones get a sentence; anything
+ * else gets its name, which is still infinitely more than the nothing these
+ * rendered before.
+ */
+const GENERIC_TOOL_VERBS: Record<string, string> = {
+	browser: "Cline used the browser:",
+	check_file: "Cline checked this file:",
+	code_intel: "Cline asked the language server:",
+	commit: "Cline committed:",
+	generate_image: "Cline generated an image:",
+	image_generation: "Cline generated an image:",
+	propose_check: "Cline proposed a check:",
+	restore_file: "Cline put this file back as the transaction found it:",
+	run_check: "Cline ran the check:",
+	tasks: "Cline updated its task list:",
+}
+
+function toolVerbForDisplay(toolName: string): string {
+	return GENERIC_TOOL_VERBS[toolName] ?? `Cline used \`${toolName}\`:`
+}
 
 const ChatRow = memo(
 	(props: ChatRowProps) => {
@@ -714,7 +740,47 @@ export const ChatRowContent = memo(
 						</div>
 					)
 				default:
-					return <InvisibleSpacer />
+					// Every tool that is not one of the cases above used to render
+					// as nothing at all. The translator's own default passes the
+					// raw SDK tool name through (`restore_file`, `check_file`,
+					// `run_check`, `code_intel`, `browser`, `propose_check`,
+					// `tasks`, `commit`, `generate_image`), none of which are in
+					// this switch and none of which are in `LOW_STAKES_TOOLS`
+					// either -- so they are not grouped, they arrive here, and
+					// they were swallowed by an invisible spacer.
+					//
+					// Measured on pandorum session 1789122866533_br1d0: 21 of the
+					// run's 69 tool calls, 30%, left no trace in the chat. The
+					// model restored the file eleven times and checked it ten and
+					// the transcript showed none of it, which makes a session
+					// unreadable exactly when something has gone wrong.
+					//
+					// Generic on purpose. A bespoke case per tool is what left
+					// this gap -- every new tool starts invisible and stays that
+					// way until someone notices. This renders whatever arrives,
+					// so the failure mode of an unhandled tool is a plain row
+					// rather than silence.
+					return (
+						<div>
+							<div className={HEADER_CLASSNAMES}>
+								<WrenchIcon className="size-2" />
+								<span className="font-bold">{toolVerbForDisplay(tool.tool)}</span>
+							</div>
+							{tool.path ? (
+								<div className="bg-code border border-editor-group-border overflow-hidden rounded-xs py-[9px] px-2.5">
+									<span className="ph-no-capture font-medium break-all">{tool.path}</span>
+								</div>
+							) : null}
+							{tool.content ? (
+								<CodeAccordian
+									code={tool.content}
+									isExpanded={isExpanded}
+									onToggleExpand={handleToggle}
+									path={tool.path || tool.tool}
+								/>
+							) : null}
+						</div>
+					)
 			}
 		}
 

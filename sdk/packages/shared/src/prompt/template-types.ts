@@ -105,6 +105,37 @@ export function matchesPromptPattern(value: string, pattern: string): boolean {
 	return new RegExp(`^${escaped}$`).test(normalizedValue);
 }
 
+/** A pattern written `!qwen*moe*` excludes instead of including. */
+export const PROMPT_TEMPLATE_EXCLUDE_PREFIX = "!";
+
+/**
+ * Whether a dimension's pattern list claims this value.
+ *
+ * WHY EXCLUSIONS EXIST. They predate pattern specificity (see
+ * `patternSpecificity`) and were the only way to break a tie within a
+ * dimension: `qwen*` and `qwen*moe*` both score `family`, the tie fell to
+ * `SOURCE_RANK`, and between two builtins that is a draw -- leaving the winner
+ * to be whichever the array happened to list first. Measured: with
+ * `[qwen, qwen-moe]` a `qwen35moe` session resolved to `qwen`, and with the
+ * same two reversed it resolved to `qwen-moe`.
+ *
+ * A family could then say out loud which architectures are not its own:
+ *
+ * ```yaml
+ * match:
+ *   family: [qwen*, "!*moe*"]
+ * ```
+ *
+ * An exclusion beats every inclusion in its list, so the order of the list
+ * does not matter either. A list of nothing but exclusions matches everything
+ * it does not name.
+ *
+ * STILL USEFUL, AND STILL DIFFERENT. Specificity picks a winner among templates
+ * that all claim a value; an exclusion says a value is not claimed at all. Use
+ * an exclusion when a family must fall through to the base layer rather than to
+ * a sibling -- and note that it is the one thing specificity cannot express,
+ * because the most specific pattern still claims what it matches.
+ */
 function matchesAny(
 	value: string | undefined,
 	patterns: string[] | undefined,
@@ -115,7 +146,83 @@ function matchesAny(
 	if (value === undefined || value === "") {
 		return false; // constrained, but we have nothing to test
 	}
-	return patterns.some((pattern) => matchesPromptPattern(value, pattern));
+	const included: string[] = [];
+	for (const pattern of patterns) {
+		const trimmed = pattern.trim();
+		if (trimmed.startsWith(PROMPT_TEMPLATE_EXCLUDE_PREFIX)) {
+			if (matchesPromptPattern(value, trimmed.slice(1))) {
+				return false;
+			}
+			continue;
+		}
+		included.push(trimmed);
+	}
+	if (included.length === 0) {
+		return true;
+	}
+	return included.some((pattern) => matchesPromptPattern(value, pattern));
+}
+
+/**
+ * How specific the most specific pattern that claims `value` is.
+ *
+ * The tie-break within a dimension, and what lets a generational template sit
+ * under a generic one. `kimi-k3*` and `kimi*` both score `family`, and without
+ * this the winner between two builtins is array order. Measuring the literal
+ * (non-wildcard) characters of the matched pattern makes `kimi-k3*` (7) beat
+ * `kimi*` (4), so a family can keep a generic template as its fallback and add
+ * a narrower one per generation:
+ *
+ * ```yaml
+ * # kimi.md      -> claims every kimi, including generations not yet released
+ * match: { family: [kimi*] }
+ * # kimi-k3.md   -> claims kimi-k3 specifically, and outranks the above
+ * match: { family: [kimi-k3*] }
+ * ```
+ *
+ * A future `kimi-k4` then lands on `kimi.md` rather than falling silently to
+ * the base layer, which is the failure that hit `glm5*` and `deepseek4*`.
+ *
+ * An exact pattern outranks a wildcard one of the same literal length, which is
+ * why the bonus exists: `kimi-k3` is a stronger claim than `kimi-k3*`.
+ *
+ * Exclusions are skipped. They do not claim a value -- they veto it, in
+ * `matchesAny`, before scoring is reached.
+ *
+ * This CANNOT re-route any template shipped today: no two shipped `match:`
+ * blocks claim the same value (verified in the tests). It changes an outcome
+ * only where two patterns already overlapped, and there the old outcome was
+ * array order, i.e. luck.
+ */
+export function patternSpecificity(
+	value: string | undefined,
+	patterns: string[] | undefined,
+): number {
+	if (!patterns || value === undefined || value === "") {
+		return 0;
+	}
+	let best = 0;
+	for (const pattern of patterns) {
+		const trimmed = pattern.trim();
+		if (
+			trimmed === "" ||
+			trimmed.startsWith(PROMPT_TEMPLATE_EXCLUDE_PREFIX) ||
+			!matchesPromptPattern(value, trimmed)
+		) {
+			continue;
+		}
+		const literal = trimmed.replace(/\*/g, "").length;
+		best = Math.max(best, trimmed.includes("*") ? literal : literal + 1);
+	}
+	return best;
+}
+
+/** A template's claim on a session: the dimension first, then how narrow. */
+export interface PromptTemplateScore {
+	/** The most specific dimension the template named. */
+	dimension: number;
+	/** How narrow the winning dimension's matching pattern is. */
+	specificity: number;
 }
 
 /**
@@ -125,32 +232,39 @@ function matchesAny(
  * provider `ollama` AND family `gemma4` does not apply to Gemma on another
  * provider. The score is the most specific dimension it named.
  */
-export function scorePromptTemplate(
+export function scorePromptTemplateDetailed(
 	template: PromptTemplate,
 	target: PromptTemplateTarget,
-): number | undefined {
+): PromptTemplateScore | undefined {
 	const match = template.match;
 	if (!match) {
-		return PROMPT_TEMPLATE_SPECIFICITY.default;
+		return {
+			dimension: PROMPT_TEMPLATE_SPECIFICITY.default,
+			specificity: 0,
+		};
 	}
-	const checks: Array<[boolean | undefined, number]> = [
+	const checks: Array<[boolean | undefined, number, number]> = [
 		[
 			matchesAny(target.providerId, match.provider),
 			PROMPT_TEMPLATE_SPECIFICITY.provider,
+			patternSpecificity(target.providerId, match.provider),
 		],
 		[
 			matchesAny(target.family, match.family),
 			PROMPT_TEMPLATE_SPECIFICITY.family,
+			patternSpecificity(target.family, match.family),
 		],
 		[
 			matchesAny(target.modelId, match.model),
 			PROMPT_TEMPLATE_SPECIFICITY.model,
+			patternSpecificity(target.modelId, match.model),
 		],
 	];
 
-	let score: number = PROMPT_TEMPLATE_SPECIFICITY.default;
+	let dimension: number = PROMPT_TEMPLATE_SPECIFICITY.default;
+	let specificity = 0;
 	let constrained = false;
-	for (const [result, weight] of checks) {
+	for (const [result, weight, narrowness] of checks) {
 		if (result === undefined) {
 			continue;
 		}
@@ -158,10 +272,34 @@ export function scorePromptTemplate(
 			return undefined;
 		}
 		constrained = true;
-		score = Math.max(score, weight);
+		// The tie-break belongs to the dimension that wins, not to the
+		// broadest one the template happened to name: a template matching on
+		// both family and model is chosen on its model pattern.
+		if (weight > dimension) {
+			dimension = weight;
+			specificity = narrowness;
+		} else if (weight === dimension) {
+			specificity = Math.max(specificity, narrowness);
+		}
 	}
 	// `match: {}` names nothing, so it is the default rather than a mismatch.
-	return constrained ? score : PROMPT_TEMPLATE_SPECIFICITY.default;
+	return constrained
+		? { dimension, specificity }
+		: { dimension: PROMPT_TEMPLATE_SPECIFICITY.default, specificity: 0 };
+}
+
+/**
+ * The dimension a template matched on, or `undefined` when it does not apply.
+ *
+ * The long-standing shape of this function, kept because it is what callers
+ * outside resolution ask for. Resolution itself needs the tie-break as well and
+ * uses `scorePromptTemplateDetailed`.
+ */
+export function scorePromptTemplate(
+	template: PromptTemplate,
+	target: PromptTemplateTarget,
+): number | undefined {
+	return scorePromptTemplateDetailed(template, target)?.dimension;
 }
 
 /**
@@ -199,17 +337,24 @@ export function resolvePromptTemplate(
 	target: PromptTemplateTarget,
 ): PromptTemplate | undefined {
 	let best: PromptTemplate | undefined;
-	let bestScore = -1;
+	let bestScore: PromptTemplateScore | undefined;
 	for (const template of shadowPromptTemplates(templates)) {
-		const score = scorePromptTemplate(template, target);
+		const score = scorePromptTemplateDetailed(template, target);
 		if (score === undefined) {
 			continue;
 		}
+		// Three keys, in order: the dimension named, then how narrowly that
+		// dimension's pattern claims this session, then the source. The middle
+		// one is what lets `kimi-k3*` sit under `kimi*` instead of tying with
+		// it and being decided by array order.
 		if (
-			score > bestScore ||
-			(score === bestScore &&
-				best !== undefined &&
-				SOURCE_RANK[template.source] > SOURCE_RANK[best.source])
+			best === undefined ||
+			bestScore === undefined ||
+			score.dimension > bestScore.dimension ||
+			(score.dimension === bestScore.dimension &&
+				(score.specificity > bestScore.specificity ||
+					(score.specificity === bestScore.specificity &&
+						SOURCE_RANK[template.source] > SOURCE_RANK[best.source])))
 		) {
 			best = template;
 			bestScore = score;

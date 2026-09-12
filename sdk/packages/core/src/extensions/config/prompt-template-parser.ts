@@ -82,6 +82,16 @@ function normalizePatternList(
 			throw new Error(`match.${field} must be a string or a list of strings`);
 		}
 		const trimmed = entry.trim();
+		// A lone `!` excludes nothing and reads like it excludes everything.
+		// The marker is spelled out rather than imported from `@cline/shared`:
+		// this package's tests resolve that import to the built dist, so a
+		// constant added in the same change reads as `undefined` here and the
+		// guard silently never fires.
+		if (trimmed === "!") {
+			throw new Error(
+				`match.${field} has a bare "!" — write what to exclude after it, e.g. "!*moe*"`,
+			);
+		}
 		if (trimmed !== "") {
 			patterns.push(trimmed);
 		}

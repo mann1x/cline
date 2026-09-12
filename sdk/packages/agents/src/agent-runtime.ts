@@ -34,6 +34,7 @@ import type {
 	ToolPolicy,
 } from "@cline/shared";
 import {
+	ASK_QUESTION_NUDGE_CLAUSE,
 	announcedIntentWithoutActing,
 	buildAnnouncedIntentNudge,
 	buildNonConvergenceNudge,
@@ -1111,8 +1112,13 @@ export class AgentRuntime {
 		// called nothing. It is not, and the generic message is false in the one
 		// way most likely to make it repeat itself: it tried to act.
 		const unparsed = unparsedToolCallInText(text);
-		return unparsed
-			? buildUnparsedToolCallNudge(unparsed)
+		if (unparsed) {
+			return buildUnparsedToolCallNudge(unparsed);
+		}
+		// Only where the model actually has the tool. Gated on the registry
+		// rather than on config so it cannot drift from what was sent.
+		return this.tools.has("ask_question")
+			? NO_TOOL_CALL_NUDGE_MESSAGE + ASK_QUESTION_NUDGE_CLAUSE
 			: NO_TOOL_CALL_NUDGE_MESSAGE;
 	}
 

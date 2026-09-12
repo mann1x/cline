@@ -5,6 +5,7 @@ import { withCheckFirstEdits } from "./check-first-edits";
 import { discoverOracle, type Oracle } from "./oracle";
 import { withPlanCapture } from "./plan-capture";
 import { readPlan } from "./plan-text";
+import { createPlanTool } from "./plan-tool";
 import type { CheckApprover } from "./proposal";
 import { DEFAULT_CHECK_RECONSIDERED_AFTER } from "./proposal";
 import { createProposeCheckTool } from "./propose-check-tool";
@@ -44,7 +45,7 @@ export const DEFAULT_MAX_CHANGES = 6;
 export const DEFAULT_MAX_TRANSACTIONS = 6;
 
 /**
- * Empty submissions a transaction absorbs before the run is let go.
+ * Empty submissions a transaction absorbs before it is spent.
  *
  * One, and bounded for the same reason the runtime bounds its no-tool-call
  * nudge: asking a model that has stopped working to carry on is worth a turn,
@@ -55,6 +56,12 @@ export const DEFAULT_MAX_TRANSACTIONS = 6;
  * without a single edit between them — one iteration each, no tool calls, and
  * the work file byte-identical to the seeded source at the end. It read as six
  * failed attempts and it was one.
+ *
+ * What happens after the budget is spent is not the run ending. The transaction
+ * is settled like any other, which closes it, writes the retrospective and
+ * opens the next with the rules in full — so a model that keeps submitting
+ * nothing is stopped by running out of transactions rather than by a second
+ * rule nobody counted.
  */
 export const DEFAULT_MAX_EMPTY_ATTEMPTS = 1;
 
@@ -264,6 +271,21 @@ export async function createAtomicProtocolSession(
 	// the model has to be able to ask, and the answer "there is none" is a
 	// better one than silence. It is also the only way to reach a `page` check,
 	// which runs inside Cline and cannot be typed into a shell.
+	// The plan, held rather than restated. Measured on a 9B: eleven plan blocks
+	// in one session, each written from scratch, six of them announcing a count
+	// that disagreed with their own list, and nothing carried across the
+	// discard. This holds the items, numbers them, and writes the retrospective
+	// from the record instead of asking the model to remember it.
+	tools.push(
+		createPlanTool({
+			controller,
+			maxChanges: options.config?.maxChanges ?? DEFAULT_MAX_CHANGES,
+			onPlan: (items) =>
+				options.logger?.log?.(
+					`[Atomic] plan: ${items.length} change(s), ${items.filter((item) => item.status === "done").length} landed.`,
+				),
+		}),
+	);
 	tools.push(
 		createRunCheckTool({
 			controller,
@@ -365,10 +387,19 @@ export async function createAtomicProtocolSession(
 			}
 
 			// Once a transaction has been judged, an empty submission means
-			// something else: the model has given up, and settling this would
-			// spend a transaction on nothing. So it is not settled. The
-			// transaction stays open, the model is told what it just did, and the
-			// budget is spent only on attempts that contained an attempt.
+			// something else: the model has given up. The first one does not spend
+			// a transaction — it stays open, the model is told what it just did,
+			// and it gets to try again.
+			//
+			// The second one does spend it. Not because the transaction earned a
+			// verdict, but because the alternative is worse: holding it open
+			// forever needs some other rule to end the run, and the rule this used
+			// to have ended it on the spot, with transactions still unspent and
+			// nothing said about what had been tried. Settling instead closes this
+			// transaction like any other, writes the retrospective, and opens the
+			// next one with the rules in full. A model that submits nothing every
+			// time runs out of transactions, which is the budget it was given.
+			let emptyNotice: string | undefined;
 			if (untouched) {
 				emptyAttempts += 1;
 				const continued = emptyAttempts <= DEFAULT_MAX_EMPTY_ATTEMPTS;
@@ -380,22 +411,27 @@ export async function createAtomicProtocolSession(
 					message: notice,
 					continued,
 				});
-				if (!continued) {
-					finished = true;
-					return undefined;
+				if (continued) {
+					return [
+						notice,
+						buildEmptyAttemptPrompt({
+							transaction: controller.transaction,
+							maxChanges: options.config?.maxChanges ?? DEFAULT_MAX_CHANGES,
+							maxTransactions:
+								options.config?.maxTransactions ?? DEFAULT_MAX_TRANSACTIONS,
+						}),
+					].join("\n\n");
 				}
-				return [
-					notice,
-					buildEmptyAttemptPrompt({
-						transaction: controller.transaction,
-						maxChanges: options.config?.maxChanges ?? DEFAULT_MAX_CHANGES,
-					}),
-				].join("\n\n");
+				// Falls through to the settle below, which spends this transaction
+				// and opens the next. The notice rides along so the model is told
+				// why this one closed without a change in it.
+				emptyNotice = notice;
 			}
 
 			// Each transaction gets its own budget: a model that submitted nothing,
 			// was asked again and then made a real change has recovered, and the
-			// next transaction should not start one strike down.
+			// next transaction should not start one strike down. A transaction
+			// spent on emptiness resets it for the same reason.
 			emptyAttempts = 0;
 
 			// The reply first, then whatever was captured during the transaction.
@@ -427,6 +463,7 @@ export async function createAtomicProtocolSession(
 			// rules, the limit and the record of what was already tried, restated
 			// in full rather than referred back to.
 			return [
+				emptyNotice,
 				settlement.message,
 				settlement.verdict?.output
 					? `The check said:\n${settlement.verdict.output}`

@@ -882,10 +882,26 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown): ClineSayTool 
 
 		default: {
 			// MCP tools and unknown tools — pass through with the raw tool name.
+			// `ChatRow` renders these generically rather than swallowing them, so
+			// whatever is found here is what the user sees.
+			//
+			// `paths` as well as `path`: the atomic protocol's `check_file` takes
+			// an array, so the singular lookup found nothing and the row named no
+			// file. Measured on pandorum session 1789122866533_br1d0, where six
+			// of the run's `check_file` calls were on one file.
+			const pathsField = parsedInput?.paths
+			const firstPath = Array.isArray(pathsField)
+				? pathsField.filter((entry): entry is string => typeof entry === "string")
+				: []
 			const filePath =
 				getStringField(parsedInput, "path") ??
 				getStringField(parsedInput, "url") ??
 				getStringField(parsedInput, "command") ??
+				(firstPath.length > 0
+					? firstPath.length === 1
+						? firstPath[0]
+						: `${firstPath[0]} (+${firstPath.length - 1} more)`
+					: "") ??
 				""
 			return {
 				tool: toolName as ClineSayTool["tool"],

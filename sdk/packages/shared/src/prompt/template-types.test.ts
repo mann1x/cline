@@ -3,6 +3,7 @@ import {
 	applyPromptTemplateToTools,
 	matchesPromptPattern,
 	type PromptTemplate,
+	patternSpecificity,
 	renderPromptTemplate,
 	resolvePromptTemplate,
 	scorePromptTemplate,
@@ -252,6 +253,192 @@ describe("resolvePromptTemplate", () => {
 				modelId: "claude-sonnet-5",
 			}),
 		).toBeUndefined();
+	});
+});
+
+describe("pattern specificity", () => {
+	// The shape this exists for: a generic family template as the fallback, and
+	// a narrower one per generation above it. Without pattern specificity both
+	// score `family` and the winner is array order.
+	const kimi = template({
+		name: "kimi",
+		match: { family: ["kimi*"] },
+		system: "generic",
+	});
+	const k3 = template({
+		name: "kimi-k3",
+		match: { family: ["kimi-k3*"] },
+		system: "k3",
+	});
+	const at = (family: string) => ({
+		providerId: "ollama",
+		modelId: `x:${family}`,
+		family,
+	});
+
+	it("prefers the narrower family pattern in either order", () => {
+		expect(resolvePromptTemplate([kimi, k3], at("kimi-k3"))?.system).toBe("k3");
+		expect(resolvePromptTemplate([k3, kimi], at("kimi-k3"))?.system).toBe("k3");
+	});
+
+	// The whole reason for keeping the generic one: a generation nobody has
+	// written a template for yet lands on the family's template rather than
+	// falling silently to the base layer, which is what hit `glm5*` and
+	// `deepseek4*`.
+	it("falls back to the generic pattern for a generation with no template", () => {
+		expect(resolvePromptTemplate([kimi, k3], at("kimi-k2"))?.system).toBe(
+			"generic",
+		);
+		expect(resolvePromptTemplate([kimi, k3], at("kimi-k4"))?.system).toBe(
+			"generic",
+		);
+	});
+
+	it("ranks an exact pattern above a wildcard that matches the same value", () => {
+		const exact = template({
+			name: "e",
+			match: { family: ["kimi-k3"] },
+			system: "exact",
+		});
+		expect(resolvePromptTemplate([k3, exact], at("kimi-k3"))?.system).toBe(
+			"exact",
+		);
+		expect(resolvePromptTemplate([exact, k3], at("kimi-k3"))?.system).toBe(
+			"exact",
+		);
+	});
+
+	// A dimension still outranks narrowness inside a lesser one: `model` is 3,
+	// `family` is 2, and no amount of literal text in a family pattern crosses
+	// that.
+	it("never lets a narrow family pattern beat a model match", () => {
+		const byModel = template({
+			name: "m",
+			match: { model: ["*x*"] },
+			system: "model",
+		});
+		const longFamily = template({
+			name: "f",
+			match: { family: ["kimi-k3-something-very-long*"] },
+			system: "family",
+		});
+		const target = {
+			providerId: "ollama",
+			modelId: "x:kimi-k3-something-very-long",
+			family: "kimi-k3-something-very-long",
+		};
+		expect(resolvePromptTemplate([longFamily, byModel], target)?.system).toBe(
+			"model",
+		);
+	});
+
+	it("ignores exclusions when measuring narrowness", () => {
+		// `!*moe*` is 5 literal characters and must not make this the winner.
+		const excluding = template({
+			name: "x",
+			match: { family: ["kimi*", "!*moe*"] },
+			system: "excluding",
+		});
+		expect(resolvePromptTemplate([excluding, k3], at("kimi-k3"))?.system).toBe(
+			"k3",
+		);
+	});
+
+	it("scores nothing for a value no pattern claims", () => {
+		expect(patternSpecificity("gemma4", ["kimi*"])).toBe(0);
+		expect(patternSpecificity(undefined, ["kimi*"])).toBe(0);
+		expect(patternSpecificity("kimi-k3", undefined)).toBe(0);
+	});
+});
+
+describe("match exclusions", () => {
+	// The regression this exists for. Scoring used to be per dimension only, so
+	// `qwen*` and `qwen*moe*` both scored `family` and the tie fell through
+	// SOURCE_RANK to array order: measured, the same session resolved to `qwen`
+	// with one ordering and `qwen-moe` with the other. Pattern specificity
+	// decides it now; the exclusion remains the way to say "not claimed at
+	// all", which specificity cannot express.
+	const qwenAll = template({
+		name: "qwen",
+		match: { family: ["qwen*"] },
+		system: "qwen",
+	});
+	const qwenNotMoe = template({
+		name: "qwen",
+		match: { family: ["qwen*", "!*moe*"] },
+		system: "qwen",
+	});
+	const moe = template({
+		name: "qwen-moe",
+		match: { family: ["qwen*moe*"] },
+		system: "moe",
+	});
+	const a3b = {
+		providerId: "ollama",
+		modelId: "ornith15-base-rp_tb:35b-high",
+		family: "qwen35moe",
+	};
+	const dense = {
+		providerId: "ollama",
+		modelId: "qwen36-base-mtp_tb:27b-q4km-128k",
+		family: "qwen35",
+	};
+
+	// Was "is order-dependent without an exclusion", and asserted the defect:
+	// `[qwenAll, moe]` gave `qwen` and the reverse gave `moe`. The narrower
+	// pattern wins on its own now, so an exclusion is no longer needed merely
+	// to make routing deterministic.
+	it("prefers the narrower pattern whatever the order, with no exclusion", () => {
+		expect(resolvePromptTemplate([qwenAll, moe], a3b)?.system).toBe("moe");
+		expect(resolvePromptTemplate([moe, qwenAll], a3b)?.system).toBe("moe");
+	});
+
+	// ...and the generic template still claims everything the narrow one does
+	// not, which is the point of keeping it.
+	it("falls back to the generic pattern for the rest of the family", () => {
+		expect(resolvePromptTemplate([qwenAll, moe], dense)?.system).toBe("qwen");
+	});
+
+	it("routes the same session the same way whatever the order", () => {
+		expect(resolvePromptTemplate([qwenNotMoe, moe], a3b)?.system).toBe("moe");
+		expect(resolvePromptTemplate([moe, qwenNotMoe], a3b)?.system).toBe("moe");
+	});
+
+	it("leaves the family's other architectures alone", () => {
+		expect(resolvePromptTemplate([qwenNotMoe, moe], dense)?.system).toBe(
+			"qwen",
+		);
+	});
+
+	it("excludes regardless of where in the list the exclusion sits", () => {
+		const first = template({
+			name: "qwen",
+			match: { family: ["!*moe*", "qwen*"] },
+			system: "qwen",
+		});
+		expect(scorePromptTemplate(first, a3b)).toBeUndefined();
+	});
+
+	// An exclusion is not an inclusion: a family the list never names is still
+	// not claimed by it.
+	it("does not claim an unrelated family it merely failed to exclude", () => {
+		expect(
+			scorePromptTemplate(qwenNotMoe, {
+				providerId: "ollama",
+				modelId: "v7-coder_tb:Q4_K_M",
+				family: "gemma4",
+			}),
+		).toBeUndefined();
+	});
+
+	it("matches everything it does not name when given only exclusions", () => {
+		const allButMoe = template({
+			name: "catch-all",
+			match: { family: ["!*moe*"] },
+			system: "catch-all",
+		});
+		expect(scorePromptTemplate(allButMoe, dense)).toBe(2);
+		expect(scorePromptTemplate(allButMoe, a3b)).toBeUndefined();
 	});
 });
 

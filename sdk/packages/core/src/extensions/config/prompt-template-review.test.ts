@@ -321,6 +321,58 @@ describe("buildPromptTemplateReviewPrompt", () => {
 		expect(prompt).toContain('model: ["*claude-opus-5*"]');
 	});
 
+	// A model reachable only through a params overlay reports no family, so the
+	// inferred block would be `model: ["*igovet/minimax-m3-opencode*"]` -- a
+	// template claiming the scaffolding and none of the models it is for.
+	it("lets an explicit match override the overlay's own name", () => {
+		const prompt = buildPromptTemplateReviewPrompt(
+			"default body",
+			undefined,
+			undefined,
+			{
+				providerId: "ollama",
+				modelId: "igovet/minimax-m3-opencode:latest",
+			},
+			undefined,
+			undefined,
+			{ model: ["*minimax*"] },
+		);
+
+		expect(prompt).toContain('model: ["*minimax*"]');
+		expect(prompt).not.toContain("opencode*");
+	});
+
+	// The branch that dropped it. A model whose family template already claims
+	// it takes the "rewrite this" path, where the standing rule is to leave the
+	// match block alone -- so before this, `--match-model '*kimi-k3*'` came back
+	// as `family: [kimi*]` with nothing reporting that the flag did nothing.
+	it("states the match when rewriting a template that already claims the model", () => {
+		const prompt = buildPromptTemplateReviewPrompt(
+			"---\nname: default\n---\n\n# system\nbase\n",
+			"---\nname: kimi\nmatch:\n  family: [kimi*]\n---\n\n# system\nold\n",
+			"kimi.md",
+			{ providerId: "ollama", modelId: "kimi-k3:cloud", family: "kimi-k3" },
+			undefined,
+			undefined,
+			{ name: "kimi-k3", family: ["kimi-k3*"] },
+		);
+
+		expect(prompt).toContain('family: ["kimi-k3*"]');
+		expect(prompt).toContain("name: kimi-k3");
+		expect(prompt).toContain("REPLACE its frontmatter");
+	});
+
+	it("still infers from the model name when no match is given", () => {
+		const prompt = buildPromptTemplateReviewPrompt(
+			"default body",
+			undefined,
+			undefined,
+			{ providerId: "ollama", modelId: "igovet/minimax-m3-opencode:latest" },
+		);
+
+		expect(prompt).toContain('model: ["*igovet/minimax-m3-opencode*"]');
+	});
+
 	it("says nothing about writing a new one when there is a template to rewrite", () => {
 		const prompt = buildPromptTemplateReviewPrompt(
 			"default body",

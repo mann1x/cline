@@ -12,6 +12,7 @@ import type { EditFileInput } from "../schemas";
 import type { EditorExecutor } from "../types";
 import {
 	detectLineEnding,
+	type LineEnding,
 	normalizeLineEndings,
 	normalizeNewFileLineEndings,
 } from "./line-endings";
@@ -339,9 +340,36 @@ function describeFirstDivergence(
 	}
 	const index = content.indexOf(needle.slice(0, low));
 	const line = content.slice(0, index).split(/\r\n|\n/).length;
-	return ` The first ${low} character(s) do match, on line ${line}, and diverge there: the file has ${JSON.stringify(
+	// Both sides quoted with line breaks shown the same way, and said out loud
+	// when the file is CRLF.
+	//
+	// This message used to `JSON.stringify` the file's excerpt raw, so a CRLF
+	// file printed a literal `\r\n` at the model while its own `old_text`
+	// printed `\n` -- next to the words "diverge there". Measured on pandorum
+	// session 1789117848964_zhbk5: the model read exactly that, concluded "the
+	// file uses CRLF so it shows as `});}\r\n`" and later "I'm failing because
+	// my exact text match doesn't work due to CRLF line endings!", and chased
+	// the theory for the rest of the run. It was never true -- `old_text` is
+	// converted to the file's own EOL before any comparison -- and the
+	// divergence in that call was two closing braces the model had invented.
+	const crlf = content.includes("\r\n");
+	const endingNote = crlf
+		? " (Line breaks are shown as \\n on both sides. This file uses CRLF, and your `old_text` is converted to CRLF before it is compared, so line endings are never the reason a match fails.)"
+		: "";
+	return ` The first ${low} character(s) do match, on line ${line}, and diverge there: the file has ${quoteExcerpt(
 		content.slice(index + low, index + low + 48),
-	)} where \`old_text\` has ${JSON.stringify(needle.slice(low, low + 48))}. Send the edit again with the file's own text from that point, or replace line ${line} by number with \`start_line\`/\`end_line\`.`;
+	)} where \`old_text\` has ${quoteExcerpt(needle.slice(low, low + 48))}.${endingNote} Send the edit again with the file's own text from that point, or replace line ${line} by number with \`start_line\`/\`end_line\`.`;
+}
+
+/**
+ * Quote a snippet for an error message with line breaks rendered uniformly.
+ *
+ * The two sides of a mismatch are always compared after normalization, so
+ * quoting one of them with `\r\n` and the other with `\n` shows a difference
+ * that does not exist and hides the one that does.
+ */
+function quoteExcerpt(text: string): string {
+	return JSON.stringify(text.replace(/\r\n/g, "\n"));
 }
 
 async function replaceInFile(
@@ -769,7 +797,7 @@ function anchorDescribesRange(rangeText: string, oldStr: string): boolean {
  */
 async function replaceLineRange(
 	filePath: string,
-	startLineOneBased: number,
+	requestedStartLine: number,
 	endLineOneBased: number,
 	newStr: string | null | undefined,
 	oldStr: string | null | undefined,
@@ -780,6 +808,9 @@ async function replaceLineRange(
 	const content = await fs.readFile(filePath, encoding);
 	const eol = detectLineEnding(content);
 	const { lines, trailingNewline } = splitFileLines(content);
+
+	// Both are reassigned once, by the re-anchoring below, and nowhere else.
+	let startLineOneBased = requestedStartLine;
 
 	if (startLineOneBased < 1 || startLineOneBased > lines.length) {
 		throw new Error(
@@ -798,7 +829,7 @@ async function replaceLineRange(
 	// line count — and both calls failed. Clamping removes the need to know
 	// the count at all, which matters because replacing lines 1..count is the
 	// route we point at for rewriting a file whole.
-	const effectiveEndLine = Math.min(endLineOneBased, lines.length);
+	let effectiveEndLine = Math.min(endLineOneBased, lines.length);
 
 	// A range edit with no `old_text` asserts nothing about the file: the model
 	// names two numbers and trusts its memory of what lives between them.
@@ -823,14 +854,58 @@ async function replaceLineRange(
 	// its code. Across six sessions, 26 calls carried both and 13 of those had an
 	// anchor that could not fit the span it named.
 	//
-	// A mismatch is refused rather than re-anchored to `old_text`, because a call
-	// whose two halves disagree is a call whose author is wrong about the file,
-	// and the cheap repair is to read it again.
+	// A mismatch used to be refused outright, on the reasoning that a call whose
+	// two halves disagree is a call whose author is wrong about the file. That
+	// held for the case it was written for and not for the common one.
+	//
+	// Measured on pandorum session 1789117848964_zhbk5 (JackOD 9B, 4.100.93):
+	// 39 `editor` calls, 6 applied, and **19 of the 33 failures were this
+	// refusal** -- more than every other editor error in the run combined. The
+	// model's habit is to send both halves, and its line numbers go stale the
+	// moment it restores or re-reads, so the anchor was right and the numbers
+	// were not, nineteen times.
+	//
+	// So: when the anchor occurs in the file exactly once, the file has settled
+	// which half was wrong, and the edit is re-anchored to it. This is the same
+	// "let the file decide" recovery `replaceInFile` already performs for the
+	// line-number gutter and for escaped `\n`, and it is narrower than both --
+	// *exactly* once, never merely somewhere.
+	//
+	// It does not weaken the read gate. `requireRead` has already passed for the
+	// range the call named, so a receipt for this file exists -- and the
+	// `old_text`-only path, which this re-anchors to behave like, gates on
+	// `hasEverRead(filePath)` alone. An anchor the model typed out and that
+	// occurs exactly once is stronger evidence of having seen the code than a
+	// span receipt is.
+	//
+	// The case the refusal was written for is untouched, and that is the point
+	// of requiring uniqueness rather than presence. Measured live:
+	// `{start_line: 100, end_line: 102, old_text: "\n"}` -- one blank line named,
+	// three lines replaced -- deleted a class's closing brace and a function
+	// declaration and reported success. A bare newline occurs everywhere, so it
+	// is not unique, so it is still refused. An anchor that is ambiguous, or
+	// absent from the file entirely, is still refused too.
 	const rangeText = lines
 		.slice(startLineOneBased - 1, effectiveEndLine)
 		.join(eol);
 	const anchored = oldStr != null && oldStr !== "";
+	let reanchoredFrom: { start: number; end: number } | undefined;
 	if (anchored && !anchorDescribesRange(rangeText, oldStr as string)) {
+		const uniqueSpan = findUniqueAnchorSpan(content, eol, oldStr as string);
+		if (uniqueSpan) {
+			reanchoredFrom = {
+				start: startLineOneBased,
+				end: effectiveEndLine,
+			};
+			startLineOneBased = uniqueSpan.startLine;
+			effectiveEndLine = uniqueSpan.endLine;
+		}
+	}
+	if (
+		anchored &&
+		!reanchoredFrom &&
+		!anchorDescribesRange(rangeText, oldStr as string)
+	) {
 		const suppliedLines = anchorText(oldStr as string).split("\n").length;
 		const namedLines = effectiveEndLine - startLineOneBased + 1;
 		throw new Error(
@@ -979,7 +1054,53 @@ async function replaceLineRange(
 		unchanged > 0
 			? ` (${unchanged} of the ${requestedLines} line(s) in the range were already identical, so the diff below does not show them)`
 			: "";
-	return `Replaced ${range} in ${filePath}${note}\n${diff}${lineCountNote(content, updated, effectiveEndLine, filePath)}`;
+	// Say where it actually landed. The model believed its own line numbers, and
+	// a success message that repeats them back would leave it holding numbers
+	// the file has already disproved -- which is how the stale range survived
+	// nineteen calls in the first place.
+	const reanchorNote = reanchoredFrom
+		? `\nYour \`old_text\` was not at ${
+				reanchoredFrom.start === reanchoredFrom.end
+					? `line ${reanchoredFrom.start}`
+					: `lines ${reanchoredFrom.start}-${reanchoredFrom.end}`
+			}, the lines the call named. It occurs exactly once in the file, at ${range}, so the edit was made there. Your line numbers are stale — read the file again before the next edit rather than adjusting them by hand.`
+		: "";
+	return `Replaced ${range} in ${filePath}${note}\n${diff}${lineCountNote(content, updated, effectiveEndLine, filePath)}${reanchorNote}`;
+}
+
+/**
+ * Where an anchor lives, if the file contains it exactly once.
+ *
+ * Uniqueness is the whole safety argument, so it is measured against the file
+ * as it stands rather than inferred from the anchor's shape. `undefined` for
+ * absent, and equally for ambiguous: two matches mean the file has not settled
+ * anything and the model still has to look.
+ */
+function findUniqueAnchorSpan(
+	content: string,
+	eol: LineEnding,
+	oldStr: string,
+): { startLine: number; endLine: number } | undefined {
+	const anchor = normalizeLineEndings(anchorText(oldStr), eol);
+	if (anchor === "" || countOccurrences(content, anchor) !== 1) {
+		return undefined;
+	}
+	const index = content.indexOf(anchor);
+	// A partial-line match would make `start`/`end` describe lines the edit does
+	// not replace whole, and this path replaces whole lines. Require the anchor
+	// to begin a line and to end one.
+	const startsLine = index === 0 || content.startsWith(eol, index - eol.length);
+	const endsLine =
+		index + anchor.length === content.length ||
+		content.startsWith(eol, index + anchor.length);
+	if (!startsLine || !endsLine) {
+		return undefined;
+	}
+	const startLine = content.slice(0, index).split(/\r\n|\n/).length;
+	return {
+		startLine,
+		endLine: startLine + anchor.split(/\r\n|\n/).length - 1,
+	};
 }
 
 /**
@@ -1501,8 +1622,32 @@ export function createEditorExecutor(
 				return result;
 			}
 			if (input.end_column != null) {
+				// Refused, not guessed, and then told exactly what to send.
+				//
+				// The refusal is right: measured on pandorum session
+				// 1789122866533_br1d0, the model sent
+				// `{start_line: 95, end_column: 482, new_text: ""}` meaning
+				// "delete the one character at column 482". Line 95 is 495
+				// characters, so reading the missing `start_column` as 1 would
+				// have deleted 482 of them and reported success.
+				//
+				// But the refusal alone did not work either: that same call came
+				// back eleven times across the run, unchanged, and it was the
+				// single largest editor failure in it. The message explained the
+				// constraint and never named a call the model could send, so
+				// there was nothing to act on. It now spells both out using the
+				// model's own numbers -- a column pair is inclusive on both ends,
+				// so one character at column N is `start_column: N, end_column:
+				// N`, which is the thing that is impossible to guess from a
+				// sentence about bounding.
+				const line = input.start_line;
+				const column = input.end_column;
 				throw new Error(
-					"`end_column` needs `start_column`: without it the tool replaces whole lines and the column has nothing to bound.",
+					`\`end_column\` needs \`start_column\`: a column pair names a span *within* one line, so both ends are required and one end alone bounds nothing.${
+						line != null
+							? ` You sent \`start_line: ${line}\` and \`end_column: ${column}\`. Send whichever of these you meant:\n  - the single character at column ${column}: \`start_line: ${line}, start_column: ${column}, end_column: ${column}\` (both ends are inclusive, so naming the same column twice is one character)\n  - from the start of the line through column ${column}: \`start_line: ${line}, start_column: 1, end_column: ${column}\`\n  - the whole of line ${line}: drop both columns and send \`start_line: ${line}, end_line: ${line}\`\nA deletion is \`new_text: ""\` in every one of those forms.`
+							: ""
+					}`,
 				);
 			}
 			await requireRead(

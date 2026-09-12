@@ -347,6 +347,7 @@ export type {
 } from "./prompt/format";
 export {
 	ANNOUNCED_INTENT_NUDGE_PREFIX,
+	ASK_QUESTION_NUDGE_CLAUSE,
 	announcedIntentWithoutActing,
 	buildAnnouncedIntentNudge,
 	buildNonConvergenceNudge,
@@ -378,6 +379,7 @@ export {
 export type {
 	PromptTemplate,
 	PromptTemplateMatch,
+	PromptTemplateScore,
 	PromptTemplateSource,
 	PromptTemplateTarget,
 	PromptTemplateToolFacts,
@@ -388,11 +390,14 @@ export {
 	DEFAULT_PROMPT_TEMPLATE_NAME,
 	matchesPromptPattern,
 	PROMPT_TEMPLATE_DEFAULT_MARKER,
+	PROMPT_TEMPLATE_EXCLUDE_PREFIX,
 	PROMPT_TEMPLATE_SPECIFICITY,
 	PROMPT_TEMPLATE_TOOL_PLACEHOLDERS,
+	patternSpecificity,
 	renderPromptTemplate,
 	resolvePromptTemplate,
 	scorePromptTemplate,
+	scorePromptTemplateDetailed,
 	shadowPromptTemplates,
 } from "./prompt/template-types";
 export type {

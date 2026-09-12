@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	createRestoreFileTool,
+	MAX_NOOP_RESTORES_PER_TRANSACTION,
 	MAX_RESTORES_PER_TRANSACTION,
 } from "./restore-file-tool";
 import { type Snapshot, takeSnapshot } from "./snapshot";
@@ -162,6 +163,47 @@ describe("putting one file back", () => {
 			const second = await tool.execute({ path: "game.html" }, context);
 
 			expect(second).toContain("2 times");
+		});
+	});
+
+	it("stops answering a no-op that keeps being asked, and says why the edits are not landing", async () => {
+		// Measured on pandorum session 1789117848964_zhbk5: 108 restore calls in
+		// one transaction, 102 of them no-ops against a cap of 9 that was
+		// therefore never reached. A no-op changes nothing on disk, so it never
+		// spent the budget and never refused -- it was free, and the friendly
+		// reply is what kept the loop fed.
+		await withWorkspace({ "game.html": "original" }, async (root) => {
+			controller.pending = await takeSnapshot(root);
+			const tool = createRestoreFileTool({ controller });
+
+			for (let i = 0; i < MAX_NOOP_RESTORES_PER_TRANSACTION; i += 1) {
+				expect(await tool.execute({ path: "game.html" }, context)).toContain(
+					"already exactly as it was",
+				);
+			}
+			const said = await tool.execute({ path: "game.html" }, context);
+
+			expect(said).toContain("will not answer again");
+			// The diagnosis, not just the refusal: the file being untouched is
+			// evidence about the model's edits, and naming it is the whole value.
+			expect(said).toContain("your edits are not landing");
+			// Never an invitation to stop — that was the failure mode of the
+			// empty-transaction message this replaces the shape of.
+			expect(said).not.toContain("say so");
+		});
+	});
+
+	it("does not spend the no-op budget on restores that actually did something", async () => {
+		await withWorkspace({ "game.html": "original" }, async (root) => {
+			controller.pending = await takeSnapshot(root);
+			const tool = createRestoreFileTool({ controller });
+
+			for (let i = 0; i < MAX_NOOP_RESTORES_PER_TRANSACTION + 2; i += 1) {
+				await fs.writeFile(path.join(root, "game.html"), `mess ${i}`, "utf8");
+				expect(await tool.execute({ path: "game.html" }, context)).toContain(
+					"back as it was",
+				);
+			}
 		});
 	});
 

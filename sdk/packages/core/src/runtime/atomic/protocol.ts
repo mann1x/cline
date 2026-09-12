@@ -1,4 +1,5 @@
 import { isPageOracle, type Oracle, type OracleVerdict } from "./oracle";
+import { PLAN_TOOL_NAME } from "./plan-tool";
 import { PROPOSE_CHECK_TOOL_NAME } from "./proposal";
 import { RUN_CHECK_TOOL_NAME } from "./run-check-tool";
 
@@ -95,7 +96,24 @@ export function buildProtocolPrompt(input: ProtocolPromptInput): string {
 		"  WHAT  - the single concrete edit you will make there",
 		"  WHY   - the specific symptom it removes",
 		"",
+		// A change is an edit, and that had to be said. Measured on pandorum
+		// session 1789122866533_br1d0: the model spent one of its numbered
+		// changes on "Run check_file then node run_game.js to verify fix passes
+		// /"ok":true/", which edits nothing. Nothing in the protocol ruled it
+		// out -- it asked for WHERE/WHAT/WHY and the model supplied three
+		// plausible-looking answers -- and the budget is small enough that
+		// spending one on a step the protocol already performs for it is a real
+		// loss. Named rather than implied, because the implication did not land.
+		`A change is an edit to a file: after it, the file is different. Running a check, reading a file, or verifying the result is none of those, and must not take a number — you will do plenty of all three, and they cost nothing from this budget. If an item's WHAT does not name text being replaced, inserted or deleted, it is not a change and does not belong in the list.`,
+		"",
 		"Then make exactly those changes, in that order, and nothing else. Do not fix anything you did not declare. Do not rewrite a whole function or a whole file: edit the smallest region that removes the symptom.",
+		"",
+		// Stated as well as written, because a plan in prose is a plan nobody can
+		// mark. Measured on session 1789139763721_ive21: eleven plan blocks, six
+		// of them announcing a count that disagreed with their own list, and two
+		// edits that landed and were then re-planned because nothing recorded
+		// them. `plan` numbers the list and keeps the record across a discard.
+		`Put the same list into \`${PLAN_TOOL_NAME}\` as well as into your reply, and mark each item \`done\` the moment its edit applies. It numbers them for you and hands the whole list back on every call, so you never have to remember what has already landed — and it survives a discarded transaction, which your own account of it does not.`,
 		"",
 	];
 
@@ -283,12 +301,20 @@ function describePostMortemRequest(attempts: number): string {
 	return [
 		"== BEFORE YOU PLAN, LOOK BACK ==",
 		"",
-		`Open this transaction with a short retrospective on ${those} — four lines, before the plan, in your reply where the user can see it:`,
+		`Call \`${PLAN_TOOL_NAME}\` first. It answers WORKED, DID NOT and RE-USE for you, from what was actually recorded rather than from what you remember, and the plan you stated last time is still in it.`,
+		"",
+		`Then open this transaction with a short retrospective on ${those} — four lines, before the plan, in your reply where the user can see it:`,
 		"",
 		"  WORKED     - what you established that is still true. A symptom you located, a line you confirmed is fine, a reading of the file that held up. This survives the rollback even though the edits did not.",
 		"  DID NOT    - which edit failed to move the check, and what the check said instead of what you expected.",
 		"  RE-USE     - what you will carry into this attempt unchanged, so you do not spend the transaction rediscovering it.",
 		'  DIFFERENT  - what you will do differently, named concretely. Not "be more careful".',
+		"",
+		// The retrospective displaced the plan rather than preceding it: from
+		// TX-02 on, that session wrote "Retrospective & Plan" headings whose plan
+		// half was one prose sentence inside DIFFERENT. Saying that DIFFERENT is
+		// the plan, and that the plan is a tool call, is what closes the gap.
+		`DIFFERENT is this transaction's plan. A retrospective on its own is not one — state the new list through \`${PLAN_TOOL_NAME}\` before your first edit, the way you did for the first transaction.`,
 		"",
 		"Then read the check's last output again as text rather than as a verdict. Does it name the thing you were fixing? If it names something else, the plan that follows should be about what it names, not about what you were working on when it said so.",
 		"",
@@ -374,24 +400,48 @@ function describeHistory(
  *
  * Not the protocol rules again. The rules are already in the window — it read
  * them when the transaction opened and followed none of them — so restating
- * them buys another few hundred tokens of the same. What it has not been told
- * is the only thing that is new: that the submission was empty, that this cost
- * it nothing, and that giving up out loud is a better end than five more of
- * these.
+ * them buys another few hundred tokens of the same. What is new is that the
+ * submission was empty, that it cost nothing, and how much budget is left.
+ *
+ * IT MUST NOT OFFER AN EXIT. The first version ended with "if you have run out
+ * of ideas, say so plainly in one sentence and stop... it is not counted
+ * against you". Measured on pandorum session 1789114968332_v7fsq
+ * (JackDeltaCoder 9B, 4.100.92): the model took that offer on its first empty
+ * attempt and closed the run, reporting that "all my edits failed to match any
+ * lines" — which the transcript contradicts, since one edit had applied and it
+ * had used `restore_file` six times to undo its own work. A model facing a task
+ * it finds hard reads a sanctioned, unpenalised exit as permission, and a small
+ * one takes it immediately.
+ *
+ * So this says the opposite: the budget is counted out loud, an empty
+ * submission is named as an attempt that has not happened rather than a failed
+ * one, and the next step is concrete. Stopping is still possible — nothing
+ * here prevents it — but it is no longer suggested, and no longer described as
+ * worth more than trying again.
  */
 export function buildEmptyAttemptPrompt(input: {
 	transaction: number;
 	maxChanges: number;
+	maxTransactions: number;
 }): string {
 	const label = `TX-${String(input.transaction).padStart(2, "0")}`;
+	// `transaction` is the one that came back empty and is still open, so it
+	// counts as available along with everything after it.
+	const left = Math.max(1, input.maxTransactions - input.transaction + 1);
+	const budget =
+		left === 1
+			? `${label} is the last transaction you have`
+			: `you have ${left} left, counting this one: ${label} of ${input.maxTransactions}`;
 	return [
 		"== NOTHING WAS CHANGED ==",
 		"",
-		`You ended ${label} without editing a single file, so there was nothing to judge. The transaction was not spent and is still open.`,
+		`You ended ${label} without editing a single file, so there was nothing to judge. The transaction was not spent, it is still open, and ${budget}.`,
 		"",
-		`If you know what to change, state the plan as before — AT MOST ${input.maxChanges} changes, each with WHERE, WHAT and WHY — and then make it.`,
+		"Keep going. An empty submission is not a failed attempt — it is an attempt that has not happened yet, and nothing has been used up.",
 		"",
-		"If you have run out of ideas, say so plainly in one sentence and stop. Ending the run and saying why is worth more than another empty transaction, and it is not counted against you.",
+		`State the plan as before — AT MOST ${input.maxChanges} changes, each with WHERE, WHAT and WHY — and then make it.`,
+		"",
+		"If your edits are being refused, the refusal says why, and it is worth more than another read: an `old_text` that disagrees with the line range you named is the usual cause, so send one or the other, not both. If you cannot see the defect, run the linter on the file and act on the line it names rather than reading the whole file again.",
 	].join("\n");
 }
 
@@ -401,6 +451,10 @@ export function buildEmptyAttemptPrompt(input: {
  * Worth a line of its own precisely because it is not a verdict: no check ran,
  * nothing was put back, and a run where this happened reads — from the
  * transcript alone — like a transaction that quietly went missing.
+ *
+ * `continued` says which of the two things is about to happen: the transaction
+ * is held open for another attempt, or it has come back empty often enough
+ * that it is spent and closed like any other. Neither of them ends the run.
  */
 export function describeEmptyAttempt(
 	transaction: number,
@@ -409,7 +463,7 @@ export function describeEmptyAttempt(
 	const label = `TX-${String(transaction).padStart(2, "0")}`;
 	return continued
 		? `${label} was submitted with nothing changed, so it was not spent and is still open.`
-		: `${label} was submitted with nothing changed again, so the run is stopping rather than spending the transactions it has left.`;
+		: `${label} was submitted with nothing changed again, so it is being spent and closed rather than held open, and the run carries on with whatever transactions are left.`;
 }
 
 /**

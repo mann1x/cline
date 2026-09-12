@@ -10,6 +10,37 @@ const parse = (raw: string, fileName = "gemma.md") =>
 	});
 
 describe("parsePromptTemplate", () => {
+	it("keeps an exclusion pattern as written", () => {
+		const result = parse(`---
+name: qwen
+match:
+  family: [qwen*, "!*moe*"]
+---
+
+# system
+You are Cline.
+`);
+
+		expect(result.error).toBeUndefined();
+		expect(result.template?.match?.family).toEqual(["qwen*", "!*moe*"]);
+	});
+
+	// A lone "!" excludes nothing while reading like it excludes everything,
+	// and the failure would land at the next session start, not here.
+	it("refuses a bare exclusion marker", () => {
+		const result = parse(`---
+name: qwen
+match:
+  family: [qwen*, "!"]
+---
+
+# system
+You are Cline.
+`);
+
+		expect(result.error).toMatch(/bare "!"/);
+	});
+
 	it("reads the match rule and both kinds of section", () => {
 		const result = parse(`---
 name: gemma-4

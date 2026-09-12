@@ -4686,3 +4686,58 @@ describe("configuredAgentUsage", () => {
 		})
 	})
 })
+
+/**
+ * The tools the chat rendered as nothing at all.
+ *
+ * `sdkToolToClineSayTool` passes an unmapped tool name straight through, and
+ * `ChatRow`'s tool switch ended in `default: return <InvisibleSpacer />`. These
+ * names are in neither the switch nor `LOW_STAKES_TOOLS`, so they were not
+ * grouped either — they arrived at that default and vanished.
+ *
+ * Measured on pandorum session 1789122866533_br1d0: 21 of the run's 69 tool
+ * calls left no trace in the chat. `ChatRow` now renders whatever arrives, so
+ * what these tests protect is the other half — that a row has something to say.
+ */
+describe("tools with no bespoke row still reach the chat with something to show", () => {
+	const sayToolFor = (toolName: string, input: unknown) => {
+		const state = new MessageTranslatorState()
+		const result = translateSessionEvent(
+			{
+				type: "agent_event",
+				payload: {
+					sessionId: "s1",
+					event: {
+						type: "content_start",
+						contentType: "tool",
+						toolName,
+						toolCallId: "c1",
+						input,
+					} as AgentEvent,
+				},
+			},
+			state,
+		)
+		return JSON.parse(result.messages[0].text!)
+	}
+
+	it("keeps the raw tool name so the row can label itself", () => {
+		expect(sayToolFor("restore_file", { path: "/w/game.html" }).tool).toBe("restore_file")
+		expect(sayToolFor("run_check", {}).tool).toBe("run_check")
+		expect(sayToolFor("code_intel", { path: "/w/game.html" }).tool).toBe("code_intel")
+	})
+
+	it("names the file a restore put back", () => {
+		expect(sayToolFor("restore_file", { path: "/w/game.html" }).path).toBe("/w/game.html")
+	})
+
+	// `check_file` takes an array, so the singular `path` lookup found nothing
+	// and the row named no file at all — six of that session's calls were on one.
+	it("names the file check_file was given, which it passes as an array", () => {
+		expect(sayToolFor("check_file", { paths: ["/w/game.html"] }).path).toBe("/w/game.html")
+	})
+
+	it("says how many when check_file is given several", () => {
+		expect(sayToolFor("check_file", { paths: ["/w/a.html", "/w/b.html", "/w/c.html"] }).path).toBe("/w/a.html (+2 more)")
+	})
+})

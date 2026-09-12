@@ -57,6 +57,7 @@ const audit = auditPromptTemplateProposal({
 	expectedName: flag("--name"),
 	requiredSections: knownToolNames,
 	requiredRewrites: DEFAULT_REQUIRED_REWRITES,
+	requireSystemGuidance: true,
 	toolSignatures: getShippedToolCallSignatures(),
 });
 

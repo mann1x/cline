@@ -129,7 +129,16 @@ describe("shipped prompt templates", () => {
 			"default",
 			"gemma",
 			"glm",
+			// `kimi` is the generic family template and `kimi-k3` sits above it
+			// on pattern specificity: k2.6 and k2.7-code both report family
+			// `kimi-k2` and share the generic one, while a generation nobody has
+			// written a template for yet still lands on `kimi` rather than
+			// falling to the base layer.
 			"kimi",
+			"kimi-k3",
+			// Matched on `model:` -- neither reports a usable family string.
+			"minimax",
+			"nemotron",
 			"qwen",
 		]);
 	});
@@ -295,6 +304,21 @@ describe("shipped prompt templates", () => {
 		for (const [label, target, expected] of cases) {
 			it(`routes ${label} to ${expected}`, () => {
 				expect(resolvePromptTemplate(templates, target)?.name).toBe(expected);
+			});
+		}
+
+		// The defect class that pattern specificity exists to close: two
+		// patterns claiming one value used to tie, fall through SOURCE_RANK,
+		// and be decided by whichever the array listed first. Every case above
+		// must survive the array being reversed. This also pins the safety
+		// property of adding specificity at all -- no two shipped `match:`
+		// blocks claim the same value today, so the ranking is inert here and
+		// none of these outcomes may move.
+		for (const [label, target, expected] of cases) {
+			it(`routes ${label} to ${expected} whatever the array order`, () => {
+				expect(
+					resolvePromptTemplate([...templates].reverse(), target)?.name,
+				).toBe(expected);
 			});
 		}
 	});

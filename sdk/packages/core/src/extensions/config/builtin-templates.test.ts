@@ -32,7 +32,10 @@ describe("builtin prompt templates", () => {
 			"default.md",
 			"gemma.md",
 			"glm.md",
+			"kimi-k3.md",
 			"kimi.md",
+			"minimax.md",
+			"nemotron.md",
 			"qwen.md",
 		]);
 	});

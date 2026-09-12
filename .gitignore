@@ -96,5 +96,10 @@ apps/examples/desktop-app/webview/next-env.d.ts
 
 # Raw reviewer output from scripts/audit-prompt-template.mts. Regenerable, and
 # the templates it produced carry their own provenance header.
-prompt-reviews/
+# Proposals, regen runs and backups are build output and stay out of the repo.
+# The layout rules are not: a `prompt-reviews/` with no README is how it became
+# six stale templates and five loose logs. A trailing-slash ignore cannot be
+# negated, so the directory is matched by contents instead.
+prompt-reviews/*
+!prompt-reviews/README.md
 apps/examples/desktop-app/.cursor/settings.json

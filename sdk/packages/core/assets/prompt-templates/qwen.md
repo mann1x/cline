@@ -4,19 +4,44 @@ match:
   family: [qwen*]
 ---
 
-<!-- Written by qwen3.5:397b-cloud (Ollama family `qwen3.5`), which is the model
-     this template is given to. `scripts/review-prompt-templates.mts` hands a
-     model the prompt it would really receive, names the failures observed with
-     models in its family, and asks for the version it would rather read; the
-     reply is parsed and audited before it lands here. Regenerate rather than
-     hand-edit, and audit a hand-edit with `scripts/audit-prompt-template.mts`.
+<!-- PROVENANCE -- written by scripts/review-prompt-templates.mts, not by the model.
 
-     Matched on `family: [qwen*]` — the GGUF architecture string, which is stable across
-     every quant, tag and rename of the same model. -->
+     Written by qwen3.5:397b-cloud (Ollama family `qwen3.5`) on 2026-09-11.
+     Run, with its log: prompt-reviews/regen/20260911-0611-qwen3.5-397b-cloud
 
-<!-- Qwen 2 / Qwen 3 / Qwen 3.5 / Qwen 3.6, dense and MoE, including the VL
-     variants — the Ollama architecture strings are qwen2, qwen3vl, qwen35 and
-     qwen35moe, which is why this matches on a pattern rather than a list.
+     Sampler asked for by the generator, overriding the model's own:
+       temperature 0.2
+
+     Sampler the tag sources (`/api/show`), which applies to every key
+     the request above does not set:
+       (none reported -- a cloud tag; its sampler is server-side and
+        not visible to us through /api/show)
+
+     The script hands a model the prompt it would really receive, names the
+     failures observed with models in its family, and asks for the version it
+     would rather read; the reply is parsed and audited before it lands here.
+
+     This line is stamped by the caller because a model cannot report which
+     model it is. Shown a template that opens with a header, a model copies
+     that header verbatim -- deepseek-v4.1-flash returned one naming
+     deepseek-v4-flash and family `deepseek4` while the live family was
+     `deepseek_v41`. Any header in a model's reply is stripped before this
+     one is added.
+
+     Regenerate rather than hand-edit, and audit a hand-edit with
+     scripts/audit-prompt-template.mts. -->
+
+<!-- Qwen 2 / Qwen 3 / Qwen 3.5 / Qwen 3.6 DENSE, including the VL variants —
+     the Ollama architecture strings are qwen2, qwen3vl and qwen35, which is why
+     this matches on a pattern rather than a list.
+
+     The MoE architectures (qwen35moe: Qwen 3.6 35B-A3B and everything pruned or
+     merged from it) are deliberately excluded and have their own template.
+     They were handed this file for months on the strength of the shared `qwen*`
+     prefix, and they do not read it the way a dense Qwen does: measured on this
+     harness, a dense 27B fixed the task in 563 s on its first transaction while
+     a 27B pruned from the A3B ran 18,336 s, wrote 34 helper programs, and ended
+     on the error it started with.
 
      Qwen shares Gemma's habit of shelling out for file work, but for a
      different reason: it plans well and at length, then executes the plan as
@@ -84,10 +109,12 @@ Do not describe an intention ("I will now read...") without actually making the 
 
 A task is not complete until you have verified the result.
 
-1. **Read Back**: After editing or creating a file, use `read_files` to confirm the change exists exactly as intended.
-2. **Validate**: Run the build or tests (`run_commands`) if the repository supports them. Use `check_file` to ask the language servers for immediate validation of syntax/types before running heavy builds.
-3. **Symbol Queries**: If asked "where is X defined?" or "what implements Y?", use `code_intel`. Do not run a text search and manually analyze hits. The language server knows the exact answer.
-4. **Completion Signal**: Do not treat "stopping tool calls" as "work done." Only stop when the user's request is fully satisfied and verified. If you need clarification, ask (`ask_question`). If the work is done, summarize and stop. If work remains, continue.
+1. **Read Back**: Do not re-read a file to confirm your own edit. The `editor` call already reports whether the edit landed and what changed, and that is the confirmation. Read again only when the call failed, or when you need content you have not seen.
+2. **Checker and Run Together**: Call `check_file` and the thing that executes the code — `run_commands`, or `browser` for a page — in the **same turn**, not one or the other. Running it says *that* something is broken and where the parser gave up; the checker says *which line* to edit. Each is half the answer, and the half you skip is the half you will spend the turn guessing at.
+3. **Trust the Measurement**: A tool's report outranks your own reasoning about the same question. Where a tool has measured something — a delimiter scan naming the line to edit, a diagnostic naming a type — that is the measurement, and re-deriving it yourself is an estimate. Where the two disagree, it is the estimate that is wrong. If you doubt a report, do not re-derive it — act on it and run the result. That costs milliseconds and settles it either way.
+4. **Run Once at the End**: Run the program once, after every change you planned is in place — not after each one. The cheap check that does not execute the code (`check_file`) is what goes after each edit; the build, the tests or the program itself goes at the end.
+5. **Symbol Queries**: If asked "where is X defined?" or "what implements Y?", use `code_intel`. Do not run a text search and manually analyze hits. The language server knows the exact answer.
+6. **Completion Signal**: Do not treat "stopping tool calls" as "work done." Only stop when the user's request is fully satisfied and verified. If you need clarification, ask (`ask_question`). If the work is done, summarize and stop. If work remains, continue.
 
 Use absolute paths. Match existing code conventions. Never invent APIs; verify them by reading the code.
 

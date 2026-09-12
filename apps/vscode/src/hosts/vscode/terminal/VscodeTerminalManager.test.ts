@@ -4,7 +4,7 @@ import * as sinon from "sinon"
 import * as vscode from "vscode"
 import { setVscodeHostProviderMock } from "@/test/host-provider-test-utils"
 import { VscodeTerminalManager } from "./VscodeTerminalManager"
-import { TerminalInfo, TerminalRegistry } from "./VscodeTerminalRegistry"
+import { CLINE_TERMINAL_NAME, TerminalInfo, TerminalRegistry } from "./VscodeTerminalRegistry"
 
 function createNeverEndingStream(): AsyncIterable<string> {
 	return {
@@ -575,5 +575,88 @@ describe("VscodeTerminalManager", () => {
 			terminalInfo.terminal.dispose()
 			TerminalRegistry.removeTerminal(terminalInfo.id)
 		}
+	})
+})
+
+/**
+ * Terminals outlive the extension host that created them, and reuse does not:
+ * `TerminalRegistry.terminals` is a static that starts empty in every new host,
+ * while the window keeps the shells. Nothing in the ordinary path closes a
+ * healthy terminal either -- `disposeAll()` keeps them deliberately and the
+ * cleanup queue only takes the two failure reasons. So each host restart (every
+ * `--install-extension`, every "Reload Window") stranded the terminals the
+ * previous host was reusing. Measured on the test host after a day of deploys:
+ * 21 live `pwsh.exe`, 16 of them revived in a single second at window start,
+ * against a registry that never held more than two.
+ */
+describe("TerminalRegistry orphan reclamation", () => {
+	let sandbox: sinon.SinonSandbox
+	const created: vscode.Terminal[] = []
+
+	beforeEach(() => {
+		sandbox = sinon.createSandbox()
+	})
+
+	afterEach(() => {
+		// Restore before disposing: the tests stub `dispose` to observe it, and
+		// a stubbed terminal is still open.
+		sandbox.restore()
+		for (const terminal of created.splice(0)) {
+			terminal.dispose()
+		}
+	})
+
+	// The half that stops them accumulating across *window* sessions: without
+	// this VS Code revives them into the next window, where they are orphaned
+	// before the extension host has even started.
+	it("creates terminals that do not persist across window sessions", () => {
+		const info = TerminalRegistry.createTerminal(undefined)
+		created.push(info.terminal)
+		TerminalRegistry.removeTerminal(info.id)
+
+		const options = info.terminal.creationOptions as vscode.TerminalOptions
+		assert.equal(options.isTransient, true)
+	})
+
+	// Asserted on the terminal itself rather than on the returned count: the
+	// window is shared with every other test in this file, and disposal is not
+	// synchronous, so a count is a statement about all of them.
+	it("closes a Cline terminal left by a previous extension host", () => {
+		const orphan = vscode.window.createTerminal({
+			name: CLINE_TERMINAL_NAME,
+			env: { CLINE_ACTIVE: "true", CLINE_HOST_SESSION: "a-host-that-is-gone" },
+		})
+		created.push(orphan)
+		const dispose = sandbox.stub(orphan, "dispose")
+
+		TerminalRegistry.reclaimOrphanedTerminals()
+
+		assert.equal(dispose.callCount, 1)
+	})
+
+	// Ownership is proven, not inferred. A terminal this host created carries
+	// this host's stamp and is tracked, so it survives reclamation running while
+	// it is open.
+	it("leaves this host's own terminal alone", () => {
+		const info = TerminalRegistry.createTerminal(undefined)
+		created.push(info.terminal)
+		const dispose = sandbox.stub(info.terminal, "dispose")
+
+		TerminalRegistry.reclaimOrphanedTerminals()
+
+		assert.equal(dispose.callCount, 0)
+		TerminalRegistry.removeTerminal(info.id)
+	})
+
+	// The user's own shells are not Cline's to close, and they carry neither the
+	// name nor the stamp.
+	it("leaves a terminal that is not Cline's alone", () => {
+		const mine = vscode.window.createTerminal({ name: "my own shell" })
+		created.push(mine)
+		const dispose = sandbox.stub(mine, "dispose")
+
+		TerminalRegistry.reclaimOrphanedTerminals()
+
+		assert.equal(dispose.callCount, 0)
 	})
 })

@@ -386,8 +386,21 @@ export interface ReasoningRepetitionConfig {
 	duplicateFractionTrip: number;
 	/** Turns that must pass between two nudges. */
 	cooldownTurns: number;
-	/** Most nudges in one run, ever. */
+	/**
+	 * Most nudges before the budget must be earned back.
+	 *
+	 * Not "ever" any more — see `recoveryTokens`.
+	 */
 	maxNudges: number;
+	/**
+	 * Reasoning tokens of non-looping work that restore the nudge budget.
+	 *
+	 * A model that is nudged, recovers, works for a while and then falls into a
+	 * *second* loop is not the case the budget was rationing; it is the case the
+	 * guard exists for. Set to 0 to keep the old behaviour, where the budget was
+	 * spent for the rest of the run.
+	 */
+	recoveryTokens: number;
 }
 
 // =============================================================================
@@ -1206,6 +1219,11 @@ export const AgentConfigSchema = z.object({
 						duplicateFractionTrip: z.number().min(0).max(1).optional(),
 						cooldownTurns: z.number().int().nonnegative().optional(),
 						maxNudges: z.number().int().nonnegative().optional(),
+						// Must be listed here to survive: this schema strips what it
+						// does not name, so a field added to the interface alone is
+						// accepted by the type checker, dropped at the boundary, and
+						// never applied — with nothing saying so.
+						recoveryTokens: z.number().int().nonnegative().optional(),
 					}),
 				])
 				.optional(),

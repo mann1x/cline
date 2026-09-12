@@ -2244,3 +2244,293 @@ describe("recovering the calls a transaction used to lose", () => {
 		});
 	});
 });
+
+/**
+ * A range and an `old_text` that disagree.
+ *
+ * Measured on pandorum session 1789117848964_zhbk5 (JackOD 9B, 4.100.93): of
+ * 39 `editor` calls, 6 applied, and 19 of the 33 failures were this one
+ * refusal -- more than every other editor error in that run combined. The
+ * model sends both halves as a matter of habit, and its line numbers go stale
+ * the moment it restores or re-reads, so the anchor was the right half
+ * nineteen times.
+ */
+describe("a range edit whose old_text is somewhere else", () => {
+	it("makes the edit where the anchor actually is, when it is there exactly once", async () => {
+		await withTempFile("alpha\nbeta\ngamma\ndelta\n", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 4);
+
+			const result = await editor(
+				{
+					path: filePath,
+					start_line: 1,
+					end_line: 1,
+					old_text: "gamma",
+					new_text: "GAMMA",
+				},
+				dir,
+				context,
+			);
+
+			expect(result).toContain("Replaced line 3");
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+				"alpha\nbeta\nGAMMA\ndelta\n",
+			);
+		});
+	});
+
+	it("says the line numbers were stale rather than repeating them back", async () => {
+		await withTempFile("alpha\nbeta\ngamma\n", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 3);
+
+			const result = await editor(
+				{
+					path: filePath,
+					start_line: 1,
+					end_line: 1,
+					old_text: "gamma",
+					new_text: "GAMMA",
+				},
+				dir,
+				context,
+			);
+
+			expect(result).toContain("was not at line 1");
+			expect(result).toContain("read the file again");
+		});
+	});
+
+	// Uniqueness is the entire safety argument, and this is the call it is
+	// there for. Measured live: `{start_line: 100, end_line: 102,
+	// old_text: "\n"}` -- one blank line named, three lines replaced -- deleted
+	// a class's closing brace and a function declaration and reported success.
+	// A bare newline is everywhere, so it is not unique, so it is still refused.
+	it("still refuses an anchor that occurs more than once", async () => {
+		await withTempFile("dup\nbeta\ndup\ngamma\n", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 4);
+
+			await expect(
+				editor(
+					{
+						path: filePath,
+						start_line: 2,
+						end_line: 2,
+						old_text: "dup",
+						new_text: "CHANGED",
+					},
+					dir,
+					context,
+				),
+			).rejects.toThrow(/two halves of the edit describe different code/);
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+				"dup\nbeta\ndup\ngamma\n",
+			);
+		});
+	});
+
+	it("still refuses an anchor the file does not contain at all", async () => {
+		await withTempFile("alpha\nbeta\n", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 2);
+
+			await expect(
+				editor(
+					{
+						path: filePath,
+						start_line: 1,
+						end_line: 1,
+						old_text: "nowhere",
+						new_text: "CHANGED",
+					},
+					dir,
+					context,
+				),
+			).rejects.toThrow(/two halves of the edit describe different code/);
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+				"alpha\nbeta\n",
+			);
+		});
+	});
+
+	// An anchor that starts or ends mid-line cannot name whole lines, and this
+	// path replaces whole lines.
+	it("still refuses an anchor that does not begin and end a line", async () => {
+		await withTempFile("alpha\nbetagammaX\n", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 2);
+
+			await expect(
+				editor(
+					{
+						path: filePath,
+						start_line: 1,
+						end_line: 1,
+						old_text: "gamma",
+						new_text: "CHANGED",
+					},
+					dir,
+					context,
+				),
+			).rejects.toThrow(/two halves of the edit describe different code/);
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+				"alpha\nbetagammaX\n",
+			);
+		});
+	});
+});
+
+/**
+ * What a mismatch is quoted as.
+ *
+ * The message used to `JSON.stringify` the file's excerpt raw, so a CRLF file
+ * printed a literal `\r\n` while the model's own `old_text` printed `\n` --
+ * next to the words "diverge there". Measured on session 1789117848964_zhbk5:
+ * the model concluded "the file uses CRLF so it shows as `});}\r\n`", then "I'm
+ * failing because my exact text match doesn't work due to CRLF line endings!",
+ * and chased that for the rest of the run. It was never true.
+ */
+describe("quoting a mismatch on a CRLF file", () => {
+	it("does not show a raw carriage return, and says endings are not the cause", async () => {
+		await withTempFile(
+			"alpha\r\nbeta and a long enough line to anchor on\r\ngamma\r\n",
+			async (filePath, dir) => {
+				const receipts = createReadReceipts();
+				const editor = createEditorExecutor({ receipts });
+				receipts.noteRead(filePath, 1, 3);
+
+				const said = await editor(
+					{
+						path: filePath,
+						old_text: "beta and a long enough line to anchor on WRONG",
+						new_text: "x",
+					},
+					dir,
+					context,
+				).then(
+					() => "the edit was applied",
+					(error: Error) => error.message,
+				);
+
+				expect(said).toContain("diverge there");
+				// The whole point: the file's own CRLF must not appear in a
+				// message about two texts that differ.
+				expect(said).not.toContain("\\r");
+				expect(said).toContain("line endings are never the reason");
+			},
+		);
+	});
+
+	// CRLF really is handled: the same anchor, sent with bare newlines against a
+	// CRLF file, matches and applies. This is the claim the message now makes.
+	it("matches a multi-line anchor sent with bare newlines", async () => {
+		await withTempFile("alpha\r\nbeta\r\ngamma\r\n", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 3);
+
+			const result = await editor(
+				{ path: filePath, old_text: "alpha\nbeta", new_text: "ALPHA\nBETA" },
+				dir,
+				context,
+			);
+
+			expect(result).toContain("Edited");
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+				"ALPHA\r\nBETA\r\ngamma\r\n",
+			);
+		});
+	});
+});
+
+/**
+ * `end_column` without `start_column`.
+ *
+ * Measured on pandorum session 1789122866533_br1d0: the model sent
+ * `{start_line: 95, end_column: 482, new_text: ""}` — meaning "delete the one
+ * character at column 482" — eleven times across the run, unchanged. It was
+ * the single largest editor failure in it, ahead of everything else combined.
+ *
+ * Refusing is right: line 95 is 495 characters, so reading the missing
+ * `start_column` as 1 would have deleted 482 of them and reported success. The
+ * defect was that the refusal explained a constraint and never named a call
+ * that would work, so there was nothing for the model to act on.
+ */
+describe("a column edit missing its start_column", () => {
+	it("refuses rather than guessing the missing end", async () => {
+		await withTempFile("alpha\nbetagamma\n", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 2);
+
+			await expect(
+				editor(
+					{ path: filePath, start_line: 2, end_column: 5, new_text: "" },
+					dir,
+					context,
+				),
+			).rejects.toThrow(/needs `start_column`/);
+			// Nothing guessed means nothing written.
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+				"alpha\nbetagamma\n",
+			);
+		});
+	});
+
+	it("names the calls that would work, using the numbers that were sent", async () => {
+		await withTempFile("alpha\nbetagamma\n", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 2);
+
+			const said = await editor(
+				{ path: filePath, start_line: 2, end_column: 5, new_text: "" },
+				dir,
+				context,
+			).then(
+				() => "the edit was applied",
+				(error: Error) => error.message,
+			);
+
+			// The one that is impossible to guess from a sentence about bounding:
+			// both ends are inclusive, so one character is the column twice.
+			expect(said).toContain("start_column: 5, end_column: 5");
+			expect(said).toContain("start_column: 1, end_column: 5");
+			expect(said).toContain("start_line: 2, end_line: 2");
+			expect(said).toContain('new_text: ""');
+		});
+	});
+
+	// The form the message points at has to actually work, or it is a longer
+	// way of being stuck.
+	it("applies the single-character deletion it recommends", async () => {
+		await withTempFile("alpha\nbetaXgamma\n", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 2);
+
+			await editor(
+				{
+					path: filePath,
+					start_line: 2,
+					start_column: 5,
+					end_column: 5,
+					new_text: "",
+				},
+				dir,
+				context,
+			);
+
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+				"alpha\nbetagamma\n",
+			);
+		});
+	});
+});

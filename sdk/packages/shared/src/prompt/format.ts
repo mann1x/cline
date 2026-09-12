@@ -189,6 +189,29 @@ export const NO_TOOL_CALL_NUDGE_MESSAGE =
 	"say so in one short sentence.";
 
 /**
+ * The third branch, for a model that was trying to ask the user something.
+ *
+ * The message above offers exactly two: keep working, or say you are finished.
+ * A model that genuinely needs the user to decide has neither, so it writes the
+ * question as prose -- which is a turn with no tool calls, which is this nudge,
+ * which tells it to keep working. The question never reaches anyone.
+ *
+ * Measured on pandorum session 1789122866533_br1d0, message 227: the model
+ * laid out two options and ended "What would you prefer?". Messages 228 and 229
+ * are an unchecked-file reminder and this nudge. The user was never prompted
+ * and answered nothing; the model went back to work on a file it had already
+ * said it could not repair.
+ *
+ * Appended only when `ask_question` is actually registered -- it is on in the
+ * `act` and `plan` presets and off in `search`, `minimal` and `yolo` -- because
+ * naming a tool the model has not been given is its own way of wasting a turn.
+ */
+export const ASK_QUESTION_NUDGE_CLAUSE =
+	" If what you need is a decision from the user, call `ask_question` - that is the only way " +
+	"to reach them. A question written as ordinary text is not a question anyone will see: it " +
+	"reads here as a turn that called nothing, which is what produced this message.";
+
+/**
  * The second nudge, for the model that answered the first by announcing again.
  *
  * The budget for the message above is one, and rightly: it asks a question

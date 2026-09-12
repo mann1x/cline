@@ -44,6 +44,7 @@ import {
 	disposeVscodeCommentReviewController,
 	getVscodeCommentReviewController,
 } from "./hosts/vscode/review/VscodeCommentReviewController"
+import { TerminalRegistry } from "./hosts/vscode/terminal/VscodeTerminalRegistry"
 import { DIFF_VIEW_URI_SCHEME, diffContentProvider } from "./hosts/vscode/VscodeDiffContentProvider"
 import { EDIT_PREVIEW_URI_SCHEME, editPreviewContentProvider, VscodeEditPreview } from "./hosts/vscode/VscodeEditPreview"
 import { VscodeWebviewProvider } from "./hosts/vscode/VscodeWebviewProvider"
@@ -98,6 +99,12 @@ export async function activate(context: vscode.ExtensionContext) {
 	// `activate`, then from `setupHostProvider`, each time still ahead of the
 	// subscriber and each time silently producing nothing.
 	reportOllamaStreamDispatcher()
+
+	// Terminals outlive the extension host: the window owns them, while the
+	// reuse bookkeeping is a static that starts empty here. Anything named
+	// "Cline" still open at this point belongs to a host that is gone, so it can
+	// neither be reused nor ever be closed -- see `reclaimOrphanedTerminals`.
+	TerminalRegistry.reclaimOrphanedTerminals()
 
 	// 5. Register services and commands specific to VS Code
 	// Initialize hook discovery cache for performance optimization

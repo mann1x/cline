@@ -1,6 +1,9 @@
 diff --git a/node_modules/ollama-ai-provider-v2/.bun-tag-97581e065ca9a535 b/.bun-tag-97581e065ca9a535
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/ollama-ai-provider-v2/.bun-tag-dc72d124cd1fe2d3 b/.bun-tag-dc72d124cd1fe2d3
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/node_modules/ollama-ai-provider-v2/.bun-tag-f7e5721b5b5587de b/.bun-tag-f7e5721b5b5587de
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
@@ -39,7 +42,7 @@ index 78a8fa3d31d67cc20113170e887b39006cdb8df4..360e15c0bb6f847e242a28d0fe66f8da
      suffix: z.ZodOptional<z.ZodString>;
      echo: z.ZodOptional<z.ZodBoolean>;
 diff --git a/dist/index.js b/dist/index.js
-index aafa72c4167302af45db22e41a227cbaf02f792f..5e82dce466e5a71f71f8307175cb51cbf6911560 100644
+index aafa72c4167302af45db22e41a227cbaf02f792f..cb8f190e2c1a4e6f599856bddd158fe8bd60ac94 100644
 --- a/dist/index.js
 +++ b/dist/index.js
 @@ -146,15 +146,12 @@ function resolveOllamaThinkFlag({
@@ -125,7 +128,29 @@ index aafa72c4167302af45db22e41a227cbaf02f792f..5e82dce466e5a71f71f8307175cb51cb
    user: import_v42.z.string().optional(),
    suffix: import_v42.z.string().optional(),
    echo: import_v42.z.boolean().optional()
-@@ -710,6 +723,37 @@ var baseOllamaResponseSchema2 = import_v44.z.object({
+@@ -594,6 +607,7 @@ var baseOllamaResponseSchema = import_v42.z.object({
+   load_duration: import_v42.z.number().optional(),
+   total_duration: import_v42.z.number().optional(),
+   prompt_eval_count: import_v42.z.number().optional(),
++  prompt_eval_cached_count: import_v42.z.number().optional(),
+   prompt_eval_duration: import_v42.z.number().optional()
+ });
+ 
+@@ -675,7 +689,8 @@ var ollamaTextEmbeddingResponseSchema = import_v43.z.object({
+   embeddings: import_v43.z.array(import_v43.z.array(import_v43.z.number())),
+   total_duration: import_v43.z.number(),
+   load_duration: import_v43.z.number(),
+-  prompt_eval_count: import_v43.z.number()
++  prompt_eval_count: import_v43.z.number(),
++  prompt_eval_cached_count: import_v43.z.number().optional(),
+ });
+ 
+ // src/responses/ollama-responses-language-model.ts
+@@ -707,9 +722,42 @@ var baseOllamaResponseSchema2 = import_v44.z.object({
+   eval_duration: import_v44.z.number().optional(),
+   load_duration: import_v44.z.number().optional(),
+   prompt_eval_count: import_v44.z.number().optional(),
++  prompt_eval_cached_count: import_v44.z.number().optional(),
    prompt_eval_duration: import_v44.z.number().optional(),
    total_duration: import_v44.z.number().optional()
  });
@@ -145,6 +170,7 @@ index aafa72c4167302af45db22e41a227cbaf02f792f..5e82dce466e5a71f71f8307175cb51cb
 +    "total_duration",
 +    "load_duration",
 +    "prompt_eval_count",
++    "prompt_eval_cached_count",
 +    "prompt_eval_duration",
 +    "eval_count",
 +    "eval_duration"
@@ -163,7 +189,7 @@ index aafa72c4167302af45db22e41a227cbaf02f792f..5e82dce466e5a71f71f8307175cb51cb
  var OllamaResponseProcessor = class {
    constructor(config) {
      this.config = config;
-@@ -720,7 +764,8 @@ var OllamaResponseProcessor = class {
+@@ -720,7 +768,8 @@ var OllamaResponseProcessor = class {
      const rawFinishReason = mapOllamaFinishReason(response.done_reason);
      const finishReason = hasToolCalls && rawFinishReason.unified !== "tool-calls" ? { unified: "tool-calls", raw: "tool_calls" } : rawFinishReason;
      const usage = this.extractUsage(response);
@@ -173,7 +199,7 @@ index aafa72c4167302af45db22e41a227cbaf02f792f..5e82dce466e5a71f71f8307175cb51cb
      return {
        content,
        finishReason,
-@@ -843,7 +888,7 @@ function convertToOllamaChatMessages({
+@@ -843,7 +892,7 @@ function convertToOllamaChatMessages({
          }).map((part) => extractOllamaFileData(part.data));
          messages.push({
            role: "user",
@@ -182,7 +208,7 @@ index aafa72c4167302af45db22e41a227cbaf02f792f..5e82dce466e5a71f71f8307175cb51cb
            images: images.length > 0 ? images : void 0
          });
          break;
-@@ -901,10 +946,37 @@ function convertToOllamaChatMessages({
+@@ -901,10 +950,37 @@ function convertToOllamaChatMessages({
          for (const toolResponse of content) {
            switch (toolResponse.type) {
              case "tool-result": {
@@ -221,7 +247,7 @@ index aafa72c4167302af45db22e41a227cbaf02f792f..5e82dce466e5a71f71f8307175cb51cb
                });
                break;
              }
-@@ -942,7 +1014,7 @@ var ollamaProviderOptions = import_v45.z.object({
+@@ -942,7 +1018,7 @@ var ollamaProviderOptions = import_v45.z.object({
     *
     * Only supported by certain models like DeepSeek R1 and Qwen 3.
     */
@@ -230,7 +256,7 @@ index aafa72c4167302af45db22e41a227cbaf02f792f..5e82dce466e5a71f71f8307175cb51cb
    options: import_v45.z.object({
      num_ctx: import_v45.z.number().optional(),
      repeat_last_n: import_v45.z.number().optional(),
-@@ -954,7 +1026,7 @@ var ollamaProviderOptions = import_v45.z.object({
+@@ -954,7 +1030,7 @@ var ollamaProviderOptions = import_v45.z.object({
      top_k: import_v45.z.number().optional(),
      top_p: import_v45.z.number().optional(),
      min_p: import_v45.z.number().optional()
@@ -239,7 +265,7 @@ index aafa72c4167302af45db22e41a227cbaf02f792f..5e82dce466e5a71f71f8307175cb51cb
  });
  
  // src/responses/convert-to-ollama-responses-messages.ts
-@@ -1406,15 +1478,24 @@ var OllamaStreamProcessor = class {
+@@ -1406,15 +1482,24 @@ var OllamaStreamProcessor = class {
          ...getResponseMetadata(value)
        });
      }
@@ -267,7 +293,7 @@ index aafa72c4167302af45db22e41a227cbaf02f792f..5e82dce466e5a71f71f8307175cb51cb
      this.state.finishReason = mapOllamaFinishReason(value.done_reason);
      this.state.usage = {
        inputTokens: {
-@@ -1525,7 +1606,8 @@ var OllamaStreamProcessor = class {
+@@ -1525,7 +1610,8 @@ var OllamaStreamProcessor = class {
        usage: this.state.usage,
        providerMetadata: {
          ollama: {
@@ -278,7 +304,7 @@ index aafa72c4167302af45db22e41a227cbaf02f792f..5e82dce466e5a71f71f8307175cb51cb
        }
      });
 diff --git a/dist/index.mjs b/dist/index.mjs
-index 5aa396bef7354dcd523cfeabc69fe7d8ada7d4c6..61ea740d279c0f3beb4d0306a08339c7c2f81153 100644
+index 5aa396bef7354dcd523cfeabc69fe7d8ada7d4c6..a5e438af8d8fa0e3303a0fcd08db1e938c99b338 100644
 --- a/dist/index.mjs
 +++ b/dist/index.mjs
 @@ -135,15 +135,12 @@ function resolveOllamaThinkFlag({
@@ -364,7 +390,29 @@ index 5aa396bef7354dcd523cfeabc69fe7d8ada7d4c6..61ea740d279c0f3beb4d0306a08339c7
    user: z2.string().optional(),
    suffix: z2.string().optional(),
    echo: z2.boolean().optional()
-@@ -714,6 +727,37 @@ var baseOllamaResponseSchema2 = z4.object({
+@@ -587,6 +600,7 @@ var baseOllamaResponseSchema = z2.object({
+   load_duration: z2.number().optional(),
+   total_duration: z2.number().optional(),
+   prompt_eval_count: z2.number().optional(),
++  prompt_eval_cached_count: z2.number().optional(),
+   prompt_eval_duration: z2.number().optional()
+ });
+ 
+@@ -675,7 +689,8 @@ var ollamaTextEmbeddingResponseSchema = z3.object({
+   embeddings: z3.array(z3.array(z3.number())),
+   total_duration: z3.number(),
+   load_duration: z3.number(),
+-  prompt_eval_count: z3.number()
++  prompt_eval_count: z3.number(),
++  prompt_eval_cached_count: z3.number().optional(),
+ });
+ 
+ // src/responses/ollama-responses-language-model.ts
+@@ -711,9 +726,42 @@ var baseOllamaResponseSchema2 = z4.object({
+   eval_duration: z4.number().optional(),
+   load_duration: z4.number().optional(),
+   prompt_eval_count: z4.number().optional(),
++  prompt_eval_cached_count: z4.number().optional(),
    prompt_eval_duration: z4.number().optional(),
    total_duration: z4.number().optional()
  });
@@ -384,6 +432,7 @@ index 5aa396bef7354dcd523cfeabc69fe7d8ada7d4c6..61ea740d279c0f3beb4d0306a08339c7
 +    "total_duration",
 +    "load_duration",
 +    "prompt_eval_count",
++    "prompt_eval_cached_count",
 +    "prompt_eval_duration",
 +    "eval_count",
 +    "eval_duration"
@@ -402,7 +451,7 @@ index 5aa396bef7354dcd523cfeabc69fe7d8ada7d4c6..61ea740d279c0f3beb4d0306a08339c7
  var OllamaResponseProcessor = class {
    constructor(config) {
      this.config = config;
-@@ -724,7 +768,8 @@ var OllamaResponseProcessor = class {
+@@ -724,7 +772,8 @@ var OllamaResponseProcessor = class {
      const rawFinishReason = mapOllamaFinishReason(response.done_reason);
      const finishReason = hasToolCalls && rawFinishReason.unified !== "tool-calls" ? { unified: "tool-calls", raw: "tool_calls" } : rawFinishReason;
      const usage = this.extractUsage(response);
@@ -412,7 +461,7 @@ index 5aa396bef7354dcd523cfeabc69fe7d8ada7d4c6..61ea740d279c0f3beb4d0306a08339c7
      return {
        content,
        finishReason,
-@@ -847,7 +892,7 @@ function convertToOllamaChatMessages({
+@@ -847,7 +896,7 @@ function convertToOllamaChatMessages({
          }).map((part) => extractOllamaFileData(part.data));
          messages.push({
            role: "user",
@@ -421,7 +470,7 @@ index 5aa396bef7354dcd523cfeabc69fe7d8ada7d4c6..61ea740d279c0f3beb4d0306a08339c7
            images: images.length > 0 ? images : void 0
          });
          break;
-@@ -905,10 +950,37 @@ function convertToOllamaChatMessages({
+@@ -905,10 +954,37 @@ function convertToOllamaChatMessages({
          for (const toolResponse of content) {
            switch (toolResponse.type) {
              case "tool-result": {
@@ -460,7 +509,7 @@ index 5aa396bef7354dcd523cfeabc69fe7d8ada7d4c6..61ea740d279c0f3beb4d0306a08339c7
                });
                break;
              }
-@@ -946,7 +1018,7 @@ var ollamaProviderOptions = z5.object({
+@@ -946,7 +1022,7 @@ var ollamaProviderOptions = z5.object({
     *
     * Only supported by certain models like DeepSeek R1 and Qwen 3.
     */
@@ -469,7 +518,7 @@ index 5aa396bef7354dcd523cfeabc69fe7d8ada7d4c6..61ea740d279c0f3beb4d0306a08339c7
    options: z5.object({
      num_ctx: z5.number().optional(),
      repeat_last_n: z5.number().optional(),
-@@ -958,7 +1030,7 @@ var ollamaProviderOptions = z5.object({
+@@ -958,7 +1034,7 @@ var ollamaProviderOptions = z5.object({
      top_k: z5.number().optional(),
      top_p: z5.number().optional(),
      min_p: z5.number().optional()
@@ -478,7 +527,7 @@ index 5aa396bef7354dcd523cfeabc69fe7d8ada7d4c6..61ea740d279c0f3beb4d0306a08339c7
  });
  
  // src/responses/convert-to-ollama-responses-messages.ts
-@@ -1416,15 +1488,24 @@ var OllamaStreamProcessor = class {
+@@ -1416,15 +1492,24 @@ var OllamaStreamProcessor = class {
          ...getResponseMetadata(value)
        });
      }
@@ -506,7 +555,7 @@ index 5aa396bef7354dcd523cfeabc69fe7d8ada7d4c6..61ea740d279c0f3beb4d0306a08339c7
      this.state.finishReason = mapOllamaFinishReason(value.done_reason);
      this.state.usage = {
        inputTokens: {
-@@ -1535,7 +1616,8 @@ var OllamaStreamProcessor = class {
+@@ -1535,7 +1620,8 @@ var OllamaStreamProcessor = class {
        usage: this.state.usage,
        providerMetadata: {
          ollama: {
