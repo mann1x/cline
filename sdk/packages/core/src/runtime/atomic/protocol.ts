@@ -524,7 +524,9 @@ export function buildEmptyAttemptPrompt(input: {
 		...(input.check
 			? [
 					"",
-					`\`${input.check.label}\` was run at that boundary and it FAILED. The defect is still there, so the task is not done and this run is not over — ending your turn does not end it. What finishes this task is the check passing, not your account of the work.`,
+					`\`${input.check.label}\` was run for you at that boundary and it FAILED. The defect is still there, so the task is not done and this run is not over — ending your turn does not end it. What finishes this task is the check passing, not your account of the work.`,
+					"",
+					"Take that as the state of the files, not as your diagnosis being done. It says the defect is still present; it does not tell you which line is wrong. Read the file.",
 					...(input.check.output
 						? [`The check said:\n${input.check.output}`]
 						: []),
@@ -535,7 +537,9 @@ export function buildEmptyAttemptPrompt(input: {
 		...(input.neverBegan
 			? [
 					"",
-					"Nothing has been called in this transaction yet — not a read, not the check, not an edit. Thinking a turn through without calling anything does not spend a transaction and never will, so there is no clock on you here. What there is no substitute for is the first call: read the file you mean to change, or run the check, and do it in this turn rather than describing it.",
+					"Nothing has been called in this transaction yet — not a read, not the check, not an edit. That is the thing to change in this turn: read the file you mean to change, or run the check. Not a description of doing it — the call itself.",
+					"",
+					"It is true that this costs you no transaction, and that is deliberate. It is not the same as costing nothing. The run has a wall clock, the turns are being counted, and a run that reasons its way to the end of that clock without calling anything finishes with the defect exactly where it started.",
 				]
 			: []),
 		"",
