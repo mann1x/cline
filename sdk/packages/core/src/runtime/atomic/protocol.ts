@@ -483,6 +483,13 @@ export function buildEmptyAttemptPrompt(input: {
 	 * in the same message that tells it the transaction is still open.
 	 */
 	check?: { label: string; output?: string };
+	/**
+	 * No tool was called in this transaction at all. Worth saying, because the
+	 * advice that follows assumes edits were tried and refused, and here
+	 * nothing has been tried — the useful next move is the first tool call, not
+	 * a better plan.
+	 */
+	neverBegan?: boolean;
 }): string {
 	const label = `TX-${String(input.transaction).padStart(2, "0")}`;
 	// `transaction` is the one that came back empty and is still open, so it
@@ -507,6 +514,12 @@ export function buildEmptyAttemptPrompt(input: {
 			: []),
 		"",
 		"Keep going. An empty submission is not a failed attempt — it is an attempt that has not happened yet, and nothing has been used up.",
+		...(input.neverBegan
+			? [
+					"",
+					"Nothing has been called in this transaction yet — not a read, not the check, not an edit. Thinking a turn through without calling anything does not spend a transaction and never will, so there is no clock on you here. What there is no substitute for is the first call: read the file you mean to change, or run the check, and do it in this turn rather than describing it.",
+				]
+			: []),
 		"",
 		`State the plan as before — AT MOST ${input.maxChanges} changes, each with WHERE, WHAT and WHY — and then make it.`,
 		"",
@@ -528,11 +541,34 @@ export function buildEmptyAttemptPrompt(input: {
 export function describeEmptyAttempt(
 	transaction: number,
 	continued: boolean,
+	neverBegan = false,
 ): string {
 	const label = `TX-${String(transaction).padStart(2, "0")}`;
+	// Said differently because it is a different fact, and the line is read by
+	// someone deciding whether the model made an attempt. A transaction with no
+	// tool call in it did not fail — it has not happened.
+	if (neverBegan) {
+		return `${label} was submitted with no tool called in it at all, so it was not attempted and is not being spent. It stays open.`;
+	}
 	return continued
 		? `${label} was submitted with nothing changed, so it was not spent and is still open.`
 		: `${label} was submitted with nothing changed again, so it is being spent and closed rather than held open, and the run carries on with whatever transactions are left.`;
+}
+
+/**
+ * The line a run ends on when the model never called a tool.
+ *
+ * The backstop for an unstarted transaction, and it says what actually
+ * happened. The alternative this replaces — spending a transaction per pair of
+ * quiet turns — left six discarded transactions behind and read as six failed
+ * attempts when nothing had been attempted once.
+ */
+export function describeNeverStarted(
+	transaction: number,
+	attempts: number,
+): string {
+	const label = `TX-${String(transaction).padStart(2, "0")}`;
+	return `${label} has now been submitted ${attempts} times with no tool called in it at any point, so the run is stopping here. No transaction was spent and no change was attempted: this is a run that never started work, not a set of attempts that failed.`;
 }
 
 /**

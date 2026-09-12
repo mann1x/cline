@@ -9,7 +9,11 @@ import { createPlanTool } from "./plan-tool";
 import type { CheckApprover } from "./proposal";
 import { DEFAULT_CHECK_RECONSIDERED_AFTER } from "./proposal";
 import { createProposeCheckTool } from "./propose-check-tool";
-import { buildEmptyAttemptPrompt, describeEmptyAttempt } from "./protocol";
+import {
+	buildEmptyAttemptPrompt,
+	describeEmptyAttempt,
+	describeNeverStarted,
+} from "./protocol";
 import { createRestoreFileTool } from "./restore-file-tool";
 import { createRunCheckTool } from "./run-check-tool";
 import {
@@ -17,6 +21,7 @@ import {
 	describeStalledChecks,
 	withChangeSignal,
 } from "./stalled-checks";
+import { withAnyToolSignal } from "./tool-activity";
 import {
 	type SelfReport,
 	TransactionController,
@@ -69,6 +74,36 @@ export const DEFAULT_MAX_TRANSACTIONS = 6;
  * rule nobody counted.
  */
 export const DEFAULT_MAX_EMPTY_ATTEMPTS = 1;
+
+/**
+ * Empty submissions a transaction absorbs when **no tool was called in it at
+ * all**, before the run is stopped and told why.
+ *
+ * Separate from the budget above, and much larger, because it counts a
+ * different thing. A transaction the model worked in — read files, ran the
+ * check, had an edit refused — and then submitted with nothing changed is an
+ * attempt that failed, and spending it is fair. A transaction it spent
+ * thinking, calling nothing, is not an attempt at all, and spending it charges
+ * the model for work it never got to do.
+ *
+ * A reasoning model takes turns without calling tools; that is what reasoning
+ * models do. Under the old rule one nudge and two quiet turns spent a
+ * transaction, so roughly four turns of thinking cost an attempt and the whole
+ * six-transaction budget could go in about twenty turns without one edit ever
+ * being tried. The note on `DEFAULT_MAX_EMPTY_ATTEMPTS` describes that run
+ * exactly — "it read as six failed attempts and it was one" — and answers it by
+ * spending faster, which makes the misreading arrive sooner rather than
+ * removing it.
+ *
+ * So an unstarted transaction is no longer spent. It is held open, and the
+ * turn-level non-convergence guard in the runtime does the nudging, which is
+ * what that guard is for and why it is documented as nudging and never ending.
+ * This number is only the backstop that keeps a model which will never call a
+ * tool from holding a session open forever — and when it fires the run ends
+ * saying that, instead of leaving behind six discarded transactions that
+ * suggest six attempts were made.
+ */
+export const DEFAULT_MAX_UNSTARTED_ATTEMPTS = 6;
 
 export interface AtomicProtocolSessionOptions {
 	workspaceRoot: string;
@@ -370,6 +405,11 @@ export async function createAtomicProtocolSession(
 	let rules: string | undefined = await controller.open();
 	let finished = false;
 	let emptyAttempts = 0;
+	// Tool calls made in the open transaction, of any kind, including ones the
+	// check-first gate refused. Zero means this transaction never began.
+	let calledInTransaction = 0;
+	// Completion attempts made in a transaction that never began.
+	let unstartedAttempts = 0;
 	// The plan for the open transaction, as the model wrote it, kept here
 	// because it is stated at the start and needed at the end: `settle` records
 	// it so the next transaction can be told what this one intended, and by
@@ -397,6 +437,9 @@ export async function createAtomicProtocolSession(
 		// transaction should not start one strike down. A transaction spent on
 		// emptiness resets it for the same reason.
 		emptyAttempts = 0;
+		// Both belong to the transaction that is closing, not to the session.
+		calledInTransaction = 0;
+		unstartedAttempts = 0;
 		planned = undefined;
 
 		const settlement = await controller.settle({
@@ -491,7 +534,7 @@ export async function createAtomicProtocolSession(
 			// Only where there is a check to run first. With none, the sentence
 			// the gate enforces was never in the prompt either.
 			const check = controller.oracle;
-			return check
+			const gated = check
 				? withCheckFirstEdits(withChanges, {
 						get transaction() {
 							return controller.transaction;
@@ -499,6 +542,12 @@ export async function createAtomicProtocolSession(
 						checkLabel: check.label,
 					})
 				: withChanges;
+			// Outermost of everything, including the gate: a refused edit is
+			// still the model reaching for a tool, and the only question this
+			// answers is whether the transaction was ever attempted.
+			return withAnyToolSignal(gated, () => {
+				calledInTransaction += 1;
+			});
 		},
 		takeOpeningRules: () => {
 			const opening = rules;
@@ -581,9 +630,46 @@ export async function createAtomicProtocolSession(
 			// time runs out of transactions, which is the budget it was given.
 			let emptyNotice: string | undefined;
 			if (untouched) {
-				emptyAttempts += 1;
-				const continued = emptyAttempts <= DEFAULT_MAX_EMPTY_ATTEMPTS;
-				const notice = describeEmptyAttempt(controller.transaction, continued);
+				// The distinction the old rule did not make. A transaction with
+				// no tool call in it was not attempted, so there is nothing to
+				// spend: a reasoning model that thinks for several turns is doing
+				// what reasoning models do, and charging it an attempt for that
+				// spent the whole budget in about twenty turns with no edit ever
+				// tried. Held open instead; the runtime's turn-level
+				// non-convergence guard is what nudges a run that has stopped
+				// converging, and it is built to nudge rather than end.
+				const neverBegan = calledInTransaction === 0;
+				if (neverBegan) {
+					unstartedAttempts += 1;
+				} else {
+					emptyAttempts += 1;
+				}
+				// The backstop, so a model that will never call a tool cannot
+				// hold the session open forever. When it fires the run ends
+				// saying so, rather than leaving six discarded transactions
+				// behind that read as six attempts.
+				if (neverBegan && unstartedAttempts > DEFAULT_MAX_UNSTARTED_ATTEMPTS) {
+					finished = true;
+					const stuck = describeNeverStarted(
+						controller.transaction,
+						unstartedAttempts,
+					);
+					options.logger?.log?.(`[Atomic] ${stuck}`);
+					options.onEvent?.({
+						type: "empty",
+						transaction: controller.transaction,
+						message: stuck,
+						continued: false,
+					});
+					return undefined;
+				}
+				const continued =
+					neverBegan || emptyAttempts <= DEFAULT_MAX_EMPTY_ATTEMPTS;
+				const notice = describeEmptyAttempt(
+					controller.transaction,
+					continued,
+					neverBegan,
+				);
 				options.logger?.log?.(`[Atomic] ${notice}`);
 				options.onEvent?.({
 					type: "empty",
@@ -607,6 +693,7 @@ export async function createAtomicProtocolSession(
 										},
 									}
 								: {}),
+							...(calledInTransaction === 0 ? { neverBegan: true } : {}),
 						}),
 					].join("\n\n");
 				}

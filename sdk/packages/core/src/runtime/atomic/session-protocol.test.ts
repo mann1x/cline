@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
 	createAtomicProtocolSession,
 	DEFAULT_MAX_CHANGES,
+	DEFAULT_MAX_UNSTARTED_ATTEMPTS,
 	readSelfReport,
 } from "./session-protocol";
 
@@ -28,6 +29,33 @@ async function withWorkspace(
 /** A command that passes only once the file says what it is told to look for. */
 function shellCheck(root: string, needle: string): string {
 	return `grep -q ${needle} ${path.join(root, "game.js")}`;
+}
+
+/**
+ * One real tool call in the open transaction.
+ *
+ * A transaction is spent by an empty submission only once the model has
+ * actually worked in it; a direct `fs.writeFile` in a test is not that, because
+ * a real edit reaches the file through a decorated tool. Running the check is
+ * the cheapest call that makes the transaction begun without changing anything.
+ */
+async function workIn(session: {
+	tools: readonly unknown[];
+	decorateTools: (given: never[]) => readonly unknown[];
+}): Promise<void> {
+	const tools = (
+		session as unknown as {
+			decorateTools: (g: unknown[]) => { name: string; execute?: unknown }[];
+			tools: unknown[];
+		}
+	).decorateTools([...(session as unknown as { tools: unknown[] }).tools]);
+	const check = tools.find((tool) => tool.name === "run_check");
+	if (!check?.execute) {
+		throw new Error("no run_check tool");
+	}
+	await (check.execute as (a: unknown, b: unknown) => Promise<unknown>)({}, {
+		iteration: 1,
+	} as never);
 }
 
 describe("the undo the protocol hands the model", () => {
@@ -194,33 +222,85 @@ describe("the boundary", () => {
 		});
 	});
 
-	// The refusal has to be bounded, or a model that says "done" forever holds
-	// the run open forever. The empty-attempt budget is what bounds it.
-	it("spends the transaction rather than refusing forever", async () => {
+	// A reasoning model takes turns without calling tools; that is what it is
+	// for. Charging it an attempt for that spent the whole six-transaction
+	// budget in about twenty turns with no edit ever tried, and left six
+	// discarded transactions that read as six failed attempts.
+	it("does not spend a transaction nothing was ever called in", async () => {
 		await withWorkspace({ "game.js": "broken" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: {
-					mode: "auto",
-					oracleCommand: shellCheck(root, "fixed"),
-					maxTransactions: 2,
+				config: { mode: "auto", oracleCommand: shellCheck(root, "fixed") },
+			});
+
+			// Four quiet turns: under the old rule the second of these spent
+			// TX-01 and opened TX-02.
+			for (let attempt = 0; attempt < 4; attempt += 1) {
+				const message = await session?.onCompletionAttempt({ text: "Done." });
+				expect(message).toContain("TX-01");
+				expect(message).not.toContain("This one is TX-02");
+				expect(message).toContain("no tool called in it at all");
+			}
+		});
+	});
+
+	// The other half of the same rule: once the model has actually worked in a
+	// transaction, an empty submission is a failed attempt again and the
+	// original budget applies.
+	it("spends a transaction that was worked in and came back empty", async () => {
+		await withWorkspace({ "game.js": "broken" }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "auto", oracleCommand: shellCheck(root, "fixed") },
+			});
+			if (!session) {
+				throw new Error("the protocol did not arm");
+			}
+			// One real tool call, which is all it takes for the transaction to
+			// count as begun — it need not have changed anything.
+			await workIn(session as never);
+
+			expect(await session.onCompletionAttempt({ text: "Done." })).toContain(
+				"was not spent and is still open",
+			);
+			expect(await session.onCompletionAttempt({ text: "Done." })).toContain(
+				"This one is TX-02",
+			);
+		});
+	});
+
+	// The backstop. A model that will never call a tool must not hold a session
+	// open forever — but the run ends saying that, rather than by quietly
+	// consuming a budget of attempts it never made.
+	it("stops the run when nothing is ever called, and says so", async () => {
+		await withWorkspace({ "game.js": "broken" }, async (root) => {
+			const notices: string[] = [];
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "auto", oracleCommand: shellCheck(root, "fixed") },
+				onEvent: (event) => {
+					if (event.type === "empty") {
+						notices.push(event.message);
+					}
 				},
 			});
 
-			expect(await session?.onCompletionAttempt({ text: "Done." })).toContain(
-				"NOTHING WAS CHANGED",
-			);
-			// Second empty submission spends TX-01 and opens TX-02 in full.
-			expect(await session?.onCompletionAttempt({ text: "Done." })).toContain(
-				"This one is TX-02",
-			);
-			expect(await session?.onCompletionAttempt({ text: "Done." })).toContain(
-				"NOTHING WAS CHANGED",
-			);
-			// TX-02 spent: the budget is gone and the run is allowed to end.
+			for (
+				let attempt = 0;
+				attempt < DEFAULT_MAX_UNSTARTED_ATTEMPTS;
+				attempt += 1
+			) {
+				expect(await session?.onCompletionAttempt({ text: "Done." })).toContain(
+					"no tool called in it at all",
+				);
+			}
+			// One past the backstop: the run ends.
 			await expect(
 				session?.onCompletionAttempt({ text: "Done." }),
 			).resolves.toBeUndefined();
+			expect(notices.at(-1)).toContain("never started work");
+			// Still TX-01. Nothing was spent on the way here.
+			expect(notices.at(-1)).toContain("TX-01");
 		});
 	});
 
@@ -359,6 +439,11 @@ describe("the boundary", () => {
 			await fs.writeFile(path.join(root, "game.js"), "still broken", "utf8");
 			await session?.onCompletionAttempt({ text: "Fixed." });
 
+			// TX-02 is worked in, so its empty submissions are failed attempts
+			// rather than a transaction that never began.
+			if (session) {
+				await workIn(session as never);
+			}
 			expect(await session?.onCompletionAttempt({})).toContain(
 				"NOTHING WAS CHANGED",
 			);
@@ -394,14 +479,21 @@ describe("the boundary", () => {
 			await fs.writeFile(path.join(root, "game.js"), "still broken", "utf8");
 			await session?.onCompletionAttempt({ text: "Fixed." });
 
-			// TX-02: nudged, then spent.
+			// TX-02: worked in, nudged, then spent.
+			if (session) {
+				await workIn(session as never);
+			}
 			expect(await session?.onCompletionAttempt({})).toContain(
 				"NOTHING WAS CHANGED",
 			);
 			expect(await session?.onCompletionAttempt({})).toContain(
 				"This one is TX-03",
 			);
-			// TX-03 is the last one: nudged, then spent, and now there is no next.
+			// TX-03 is the last one: worked in, nudged, then spent, and now there
+			// is no next.
+			if (session) {
+				await workIn(session as never);
+			}
 			expect(await session?.onCompletionAttempt({})).toContain(
 				"NOTHING WAS CHANGED",
 			);
