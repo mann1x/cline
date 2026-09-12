@@ -476,6 +476,13 @@ export function buildEmptyAttemptPrompt(input: {
 	transaction: number;
 	maxChanges: number;
 	maxTransactions: number;
+	/**
+	 * The check, run at the boundary, that disagrees with the model's decision
+	 * to stop. Present only when it failed: a completion on top of a failing
+	 * check is a fix being reported rather than made, and the model is told so
+	 * in the same message that tells it the transaction is still open.
+	 */
+	check?: { label: string; output?: string };
 }): string {
 	const label = `TX-${String(input.transaction).padStart(2, "0")}`;
 	// `transaction` is the one that came back empty and is still open, so it
@@ -489,6 +496,15 @@ export function buildEmptyAttemptPrompt(input: {
 		"== NOTHING WAS CHANGED ==",
 		"",
 		`You ended ${label} without editing a single file, so there was nothing to judge. The transaction was not spent, it is still open, and ${budget}.`,
+		...(input.check
+			? [
+					"",
+					`\`${input.check.label}\` was run at that boundary and it FAILED. The defect is still there, so the task is not done and this run is not over — ending your turn does not end it. What finishes this task is the check passing, not your account of the work.`,
+					...(input.check.output
+						? [`The check said:\n${input.check.output}`]
+						: []),
+				]
+			: []),
 		"",
 		"Keep going. An empty submission is not a failed attempt — it is an attempt that has not happened yet, and nothing has been used up.",
 		"",

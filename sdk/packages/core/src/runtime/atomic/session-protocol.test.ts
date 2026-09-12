@@ -154,15 +154,11 @@ describe("arming the protocol for a session", () => {
 });
 
 describe("the boundary", () => {
-	it("lets a task that changed nothing end without running the check", async () => {
+	it("lets a task that changed nothing end when the check agrees", async () => {
 		await withWorkspace({ "game.js": "fine" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: {
-					mode: "auto",
-					// Fails if it is ever run, which is the point of the assertion.
-					oracleCommand: "exit 1",
-				},
+				config: { mode: "auto", oracleCommand: shellCheck(root, "fine") },
 			});
 
 			await expect(
@@ -171,6 +167,75 @@ describe("the boundary", () => {
 			await expect(
 				fs.readFile(path.join(root, "game.js"), "utf8"),
 			).resolves.toBe("fine");
+		});
+	});
+
+	// The run this comes from ended `completed` on an early turn with TX-01
+	// open, nothing read and nothing edited. Whether there was work to do is
+	// not the model's to declare where a check can answer it, and standing down
+	// here left the rest of the run unguarded.
+	it("refuses to stand down while the check still fails", async () => {
+		await withWorkspace({ "game.js": "broken" }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "auto", oracleCommand: shellCheck(root, "fixed") },
+			});
+
+			const message = await session?.onCompletionAttempt({
+				text: "Everything looks correct to me, so there is nothing to do.",
+			});
+
+			expect(message).toContain("NOTHING WAS CHANGED");
+			expect(message).toContain("FAILED");
+			// Held open, not spent: the model gets to make the attempt it has
+			// not made yet.
+			expect(message).toContain("TX-01");
+			expect(message).toContain("still open");
+		});
+	});
+
+	// The refusal has to be bounded, or a model that says "done" forever holds
+	// the run open forever. The empty-attempt budget is what bounds it.
+	it("spends the transaction rather than refusing forever", async () => {
+		await withWorkspace({ "game.js": "broken" }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: {
+					mode: "auto",
+					oracleCommand: shellCheck(root, "fixed"),
+					maxTransactions: 2,
+				},
+			});
+
+			expect(await session?.onCompletionAttempt({ text: "Done." })).toContain(
+				"NOTHING WAS CHANGED",
+			);
+			// Second empty submission spends TX-01 and opens TX-02 in full.
+			expect(await session?.onCompletionAttempt({ text: "Done." })).toContain(
+				"This one is TX-02",
+			);
+			expect(await session?.onCompletionAttempt({ text: "Done." })).toContain(
+				"NOTHING WAS CHANGED",
+			);
+			// TX-02 spent: the budget is gone and the run is allowed to end.
+			await expect(
+				session?.onCompletionAttempt({ text: "Done." }),
+			).resolves.toBeUndefined();
+		});
+	});
+
+	// A check that cannot run has no verdict. Inventing a failure would turn a
+	// broken harness into a session with no way out.
+	it("lets the run end when there is no check to ask", async () => {
+		await withWorkspace({ "game.js": "fine" }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "always" },
+			});
+
+			await expect(
+				session?.onCompletionAttempt({ text: "Nothing to change here." }),
+			).resolves.toBeUndefined();
 		});
 	});
 

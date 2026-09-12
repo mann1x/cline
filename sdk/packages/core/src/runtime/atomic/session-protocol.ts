@@ -2,7 +2,7 @@ import type { AgentTool, AgentToolDefinition } from "@cline/shared";
 import type { CoreAtomicProtocolConfig } from "../../types/config";
 import { withBaseRevisionReads } from "./base-revision-reads";
 import { withCheckFirstEdits } from "./check-first-edits";
-import { discoverOracle, type Oracle } from "./oracle";
+import { discoverOracle, type Oracle, type OracleVerdict } from "./oracle";
 import { withPlanCapture } from "./plan-capture";
 import { readPlan } from "./plan-text";
 import { createPlanTool } from "./plan-tool";
@@ -430,6 +430,33 @@ export async function createAtomicProtocolSession(
 		};
 	};
 
+	/**
+	 * The check's answer to "was there anything to do here?", or `undefined`
+	 * when nothing here can answer it.
+	 *
+	 * Run at the boundary rather than read back from the last verdict the model
+	 * chose to produce. A check it ran ten turns and one rollback ago is not
+	 * evidence about the state it is leaving behind, and the whole point of
+	 * asking is to get a fact the model did not author.
+	 *
+	 * A check that cannot be run has no verdict, and `undefined` is that, not a
+	 * failure: refusing to let a run end because the harness is broken would
+	 * turn a bad check into an unstoppable session.
+	 */
+	const judgeStandDown = async (): Promise<OracleVerdict | undefined> => {
+		if (!controller.oracle) {
+			return undefined;
+		}
+		try {
+			return await controller.runCheck();
+		} catch (error) {
+			options.logger?.log?.(
+				`[Atomic] the check could not be run at the completion boundary, so the run was allowed to end: ${String(error)}`,
+			);
+			return undefined;
+		}
+	};
+
 	return {
 		controller,
 		get oracle() {
@@ -512,9 +539,31 @@ export async function createAtomicProtocolSession(
 			// question about the code is a legitimate way for a run to end, and
 			// running a typecheck to confirm that nobody edited anything is a cost
 			// with no verdict in it.
+			//
+			// Unless there is a check, and it disagrees. Whether this run had work
+			// to do is not the model's to declare where something here can answer
+			// the question: a failing check is the defect still being present, and
+			// a completion on top of one is a fix reported rather than made.
+			// Measured on pandorum: a run ended `completed` on an early turn with
+			// TX-01 open, nothing read, nothing edited and the bug untouched, and
+			// this branch stood the protocol down — set `finished`, returned
+			// nothing, and left the contract unenforced for the rest of the run.
+			// Everything needed to push back already existed below; it was simply
+			// unreachable from here.
+			//
+			// So the stand-down now needs the check to agree. When it does not,
+			// this falls through to the empty-attempt handling below, which holds
+			// the transaction open, says what the check reported, and asks for the
+			// plan again — and which is already bounded, spending the transaction
+			// on a model that keeps submitting nothing until the budget runs out.
+			let unfixed: OracleVerdict | undefined;
 			if (controller.outcomes.length === 0 && untouched) {
-				finished = true;
-				return undefined;
+				const verdict = await judgeStandDown();
+				if (!verdict || verdict.passed) {
+					finished = true;
+					return undefined;
+				}
+				unfixed = verdict;
 			}
 
 			// Once a transaction has been judged, an empty submission means
@@ -550,6 +599,14 @@ export async function createAtomicProtocolSession(
 							maxChanges: options.config?.maxChanges ?? DEFAULT_MAX_CHANGES,
 							maxTransactions:
 								options.config?.maxTransactions ?? DEFAULT_MAX_TRANSACTIONS,
+							...(unfixed
+								? {
+										check: {
+											label: controller.oracle?.label ?? "the check",
+											...(unfixed.output ? { output: unfixed.output } : {}),
+										},
+									}
+								: {}),
 						}),
 					].join("\n\n");
 				}
