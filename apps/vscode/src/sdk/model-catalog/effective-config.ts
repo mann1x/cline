@@ -47,6 +47,32 @@ const SAMPLING_NUMBER_FIELDS = {
 } as const
 
 /**
+ * The range each sampling field can hold a meaning in.
+ *
+ * A sign check is not enough. `top_p: 9` is non-negative and still not a
+ * probability, and it reached a live server that way: a settings field stored
+ * `0.9` as `9`, `0.4` as `4` and `1.05` as `105`, and every request for the
+ * next 73 minutes ran at temperature 4.0 with a repeat penalty of 105 — noise,
+ * diagnosed at the time as the model misbehaving.
+ *
+ * The panel refuses these at the point of entry now, but a settings file
+ * written before that fix still holds them, so the value is dropped here too.
+ * Dropping rather than clamping is deliberate: an unsent parameter leaves the
+ * model's own value in force, which is a defensible answer, where a clamped one
+ * silently invents a sampler nobody chose.
+ */
+const SAMPLING_RANGES: Partial<Record<keyof typeof SAMPLING_NUMBER_FIELDS, { min?: number; max?: number }>> = {
+	temperature: { min: 0, max: 2 },
+	topK: { min: 0, max: 1000 },
+	topP: { min: 0, max: 1 },
+	minP: { min: 0, max: 1 },
+	typicalP: { min: 0, max: 1 },
+	repeatPenalty: { min: 0, max: 2 },
+	presencePenalty: { min: -2, max: 2 },
+	frequencyPenalty: { min: -2, max: 2 },
+}
+
+/**
  * Read the stored sampling settings.
  *
  * Absent stays absent, field by field: an unset parameter is one the request
@@ -68,6 +94,10 @@ function readSampling(settings: Record<string, unknown>): SamplingConfig | undef
 			continue
 		}
 		if (sign === "non-negative" && parsed < 0) {
+			continue
+		}
+		const range = SAMPLING_RANGES[field as keyof typeof SAMPLING_NUMBER_FIELDS]
+		if (range && ((range.min !== undefined && parsed < range.min) || (range.max !== undefined && parsed > range.max))) {
 			continue
 		}
 		result[field] = parsed

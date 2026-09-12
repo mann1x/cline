@@ -84,29 +84,56 @@ const OLLAMA_SAMPLING_FIELDS = [
 		label: "temperature",
 		kind: "number",
 		hint: "Randomness of the next-token choice. Lower is more deterministic.",
+		min: 0,
+		max: 2,
 	},
-	{ key: "topK", label: "top_k", kind: "integer", hint: "Sample from the K most likely tokens." },
-	{ key: "topP", label: "top_p", kind: "number", hint: "Sample from the smallest set whose probabilities sum to P." },
-	{ key: "minP", label: "min_p", kind: "number", hint: "Drop tokens below this fraction of the most likely one." },
-	{ key: "typicalP", label: "typical_p", kind: "number", hint: "Locally typical sampling." },
+	{ key: "topK", label: "top_k", kind: "integer", hint: "Sample from the K most likely tokens.", min: 0, max: 1000 },
+	{
+		key: "topP",
+		label: "top_p",
+		kind: "number",
+		hint: "Sample from the smallest set whose probabilities sum to P.",
+		min: 0,
+		max: 1,
+	},
+	{
+		key: "minP",
+		label: "min_p",
+		kind: "number",
+		hint: "Drop tokens below this fraction of the most likely one.",
+		min: 0,
+		max: 1,
+	},
+	{ key: "typicalP", label: "typical_p", kind: "number", hint: "Locally typical sampling.", min: 0, max: 1 },
 	{
 		key: "repeatLastN",
 		label: "repeat_last_n",
 		kind: "integer",
 		hint: "How far back the repeat penalty looks. 0 disables it, -1 uses the whole context.",
 	},
-	{ key: "repeatPenalty", label: "repeat_penalty", kind: "number", hint: "Penalty applied within that window." },
+	{
+		key: "repeatPenalty",
+		label: "repeat_penalty",
+		kind: "number",
+		hint: "Penalty applied within that window.",
+		min: 0,
+		max: 2,
+	},
 	{
 		key: "presencePenalty",
 		label: "presence_penalty",
 		kind: "number",
 		hint: "Flat penalty for tokens already used, over the whole context.",
+		min: -2,
+		max: 2,
 	},
 	{
 		key: "frequencyPenalty",
 		label: "frequency_penalty",
 		kind: "number",
 		hint: "Penalty proportional to how often a token was used, over the whole context.",
+		min: -2,
+		max: 2,
 	},
 	{ key: "seed", label: "seed", kind: "integer", hint: "Fixes sampling for reproducible runs." },
 	{
@@ -125,6 +152,50 @@ const SAMPLING_PLACEHOLDER_MAX_LENGTH = 48
 
 /** Sampling values as the panel edits them: raw text, so a half-typed number survives a render. */
 type SamplingDraft = Partial<Record<OllamaSamplingFieldKey | "stop" | "thinkBudget" | "thinkBudgetMessage", string>>
+
+/**
+ * Whether the text is a number the user has finished typing.
+ *
+ * `Number("0.")` is 0, so committing on every keystroke turns a half-typed
+ * `0.9` into a stored `0` — and the stored value then renders back over the
+ * field, so the remaining `9` lands on a `0` that the user thought still had a
+ * decimal point after it. Measured on pandorum: `top_p` was typed as `0.9` and
+ * stored as `9`, `temperature` as `0.4` and stored as `4`, `repeat_penalty` as
+ * `1.05` and stored as `105`. Every request for the following 73 minutes ran at
+ * temperature 4.0 with a repeat penalty of 105, which is noise, and it was
+ * diagnosed as the model misbehaving.
+ *
+ * So a value is only committed once it is a complete number. A trailing `.`,
+ * a lone sign, or a half-written exponent means the user is mid-keystroke.
+ */
+function isCompleteNumber(raw: string): boolean {
+	return /^[+-]?(\d+(\.\d+)?|\.\d+)([eE][+-]?\d+)?$/.test(raw.trim())
+}
+
+/**
+ * Why this value cannot be sent, if it cannot.
+ *
+ * The range check is the part that does not depend on catching the input race
+ * above: whatever route a number takes to get here, `top_p: 9` is not a
+ * probability and must never reach the server. Silence would be worse than a
+ * refusal — the panel would look set while the request carried something else.
+ */
+function samplingProblem(field: { label: string; min?: number; max?: number }, raw: string): string | undefined {
+	const trimmed = raw.trim()
+	if (trimmed === "" || !isCompleteNumber(trimmed)) {
+		return undefined
+	}
+	const value = Number(trimmed)
+	if (field.min !== undefined && value < field.min) {
+		return `${field.label} cannot be below ${field.min}.`
+	}
+	if (field.max !== undefined && value > field.max) {
+		return `${field.label} cannot be above ${field.max}. Did you mean ${
+			value >= 10 ? (value / 10 ** Math.ceil(Math.log10(value / field.max))).toString() : field.max
+		}?`
+	}
+	return undefined
+}
 
 function parseSamplingNumber(raw: string | undefined, kind: "number" | "integer"): number | undefined {
 	const trimmed = raw?.trim()
@@ -279,6 +350,13 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 			for (const field of OLLAMA_SAMPLING_FIELDS) {
 				const raw =
 					draft[field.key] ?? (storedSampling?.[field.key] !== undefined ? String(storedSampling[field.key]) : "")
+				// A half-typed or out-of-range value is not sent at all: leaving
+				// the parameter absent keeps the model's own value in force,
+				// which is the right answer while the user is still typing and
+				// the only safe one for a value that cannot be valid.
+				if (raw.trim() !== "" && (!isCompleteNumber(raw) || samplingProblem(field, raw) !== undefined)) {
+					continue
+				}
 				const parsed = parseSamplingNumber(raw, field.kind)
 				if (parsed !== undefined) {
 					next[field.key] = parsed
@@ -710,21 +788,34 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 								the model either, and fall back to Ollama's own.
 							</p>
 							<div className="grid grid-cols-2 gap-2">
-								{OLLAMA_SAMPLING_FIELDS.map((field) => (
-									<div key={field.key}>
-										<DebouncedTextField
-											className="w-full"
-											initialValue={samplingValue(field.key)}
-											onChange={(value: string) => {
-												handleSamplingChange(field.key, value)
-												handleSamplingCommit()
-											}}
-											placeholder={samplingPlaceholder(field.label)}>
-											<span className="font-medium text-xs">{field.label}</span>
-										</DebouncedTextField>
-										<p className="text-xs mt-0 mb-0 text-description">{field.hint}</p>
-									</div>
-								))}
+								{OLLAMA_SAMPLING_FIELDS.map((field) => {
+									const raw = samplingValue(field.key)
+									const problem = samplingProblem(field, raw)
+									return (
+										<div key={field.key}>
+											<DebouncedTextField
+												className="w-full"
+												initialValue={raw}
+												onChange={(value: string) => {
+													handleSamplingChange(field.key, value)
+													// Committing a half-typed number stores it and
+													// renders it back over the field, which is how
+													// `0.9` became `9`. Wait until it is finished.
+													if (value.trim() === "" || isCompleteNumber(value)) {
+														handleSamplingCommit()
+													}
+												}}
+												placeholder={samplingPlaceholder(field.label)}>
+												<span className="font-medium text-xs">{field.label}</span>
+											</DebouncedTextField>
+											{problem ? (
+												<p className="text-xs mt-0 mb-0 text-error">{problem} Not sent.</p>
+											) : (
+												<p className="text-xs mt-0 mb-0 text-description">{field.hint}</p>
+											)}
+										</div>
+									)
+								})}
 							</div>
 							<div>
 								<DebouncedTextField

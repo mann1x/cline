@@ -254,3 +254,53 @@ describe("provider-level numbers the settings panel reads back", () => {
 		expect(config.maxToolResultChars).toBeUndefined()
 	})
 })
+
+// A settings field stored `0.9` as `9`, `0.4` as `4` and `1.05` as `105`, and
+// every one passed the sign check and reached a live Ollama. 73 minutes of
+// requests ran at temperature 4.0 with a repeat penalty of 105 before anyone
+// looked at the server's own sampler log. The panel refuses these on entry now,
+// but a settings file written earlier still holds them.
+describe("sampling values that cannot mean anything", () => {
+	beforeEach(() => {
+		mocks.setApiConfiguration({})
+		mocks.setProviderSettings({})
+	})
+
+	const load = async (sampling: Record<string, number>) => {
+		const { buildEffectiveProviderConfig } = await import("./effective-config")
+		mocks.setProviderSettings({ ollama: { provider: "ollama", sampling } })
+		return buildEffectiveProviderConfig(parseProviderId("ollama")).sampling
+	}
+
+	it("drops a top_p that is not a probability", async () => {
+		expect((await load({ topP: 9 }))?.topP).toBeUndefined()
+	})
+
+	it("drops a temperature of 4 and a repeat penalty of 105", async () => {
+		const sampling = await load({ temperature: 4, repeatPenalty: 105 })
+		expect(sampling?.temperature).toBeUndefined()
+		expect(sampling?.repeatPenalty).toBeUndefined()
+	})
+
+	it("keeps the value that was actually meant", async () => {
+		const sampling = await load({ topP: 0.9, temperature: 0.4, repeatPenalty: 1.05, minP: 0.05 })
+		expect(sampling?.topP).toBe(0.9)
+		expect(sampling?.temperature).toBe(0.4)
+		expect(sampling?.repeatPenalty).toBe(1.05)
+		expect(sampling?.minP).toBe(0.05)
+	})
+
+	it("drops only the bad field, leaving its neighbours in force", async () => {
+		const sampling = await load({ topP: 9, temperature: 0.4 })
+		expect(sampling?.topP).toBeUndefined()
+		expect(sampling?.temperature).toBe(0.4)
+	})
+
+	it("still allows the edges each parameter is defined at", async () => {
+		const sampling = await load({ temperature: 0, topP: 1, repeatPenalty: 2, presencePenalty: -2 })
+		expect(sampling?.temperature).toBe(0)
+		expect(sampling?.topP).toBe(1)
+		expect(sampling?.repeatPenalty).toBe(2)
+		expect(sampling?.presencePenalty).toBe(-2)
+	})
+})
