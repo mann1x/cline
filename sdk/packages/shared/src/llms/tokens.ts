@@ -246,13 +246,18 @@ export function estimateThinkingTokens(chars: number): number {
  * default it replaces is a guess, not a measurement -- and subsequent ones are
  * smoothed, so one unusual request cannot move the estimate far.
  *
- * The count and the ratio are recorded independently, because only one of them
- * can be wrong. `tokens` is what the provider counted for the request that just
- * ran; nothing about the character measurement can make that untrue. The ratio
- * pairs it with a character count, and a mismatched pairing is what the bounds
- * above reject -- so a rejected ratio must not take the count down with it.
- * Keeping them together froze `lastObservedRequestTokens` at a count from
- * fourteen turns earlier while the compaction trigger kept reading it.
+ * The count and the ratio are judged separately, because the two bounds above
+ * reject for different reasons and only one of them indicts the count.
+ *
+ * Above the ceiling, `tokens` is small against the characters -- an unusual
+ * tokenizer, or a measurement that counted more characters than the provider
+ * was sent. The pairing is what is wrong, not the count, and discarding both
+ * froze `lastObservedRequestTokens` at a count from fourteen turns earlier
+ * while the compaction trigger kept reading it.
+ *
+ * Below the floor, `tokens` approaches or passes the number of characters it
+ * was supposedly counted from, and no tokenizer does that. There the count is
+ * the impossible term, so it goes out with the ratio.
  */
 export function observeRequestTokens(
 	chars: number,
@@ -267,8 +272,6 @@ export function observeRequestTokens(
 		return;
 	}
 	const state = calibration();
-	state.requestTokens = tokens;
-	state.requestTokensOwner = owner;
 	// With the reasoning share known, this ratio describes the rest of the
 	// request rather than a blend of two populations. Charging reasoning at its
 	// own rate first and calibrating on what is left is what keeps the two
@@ -287,10 +290,22 @@ export function observeRequestTokens(
 			ratio = (chars - reasoning) / remainingTokens;
 		}
 	}
-	if (
-		ratio < MIN_OBSERVED_CHARS_PER_TOKEN ||
-		ratio > MAX_OBSERVED_CHARS_PER_TOKEN
-	) {
+	if (ratio < MIN_OBSERVED_CHARS_PER_TOKEN) {
+		// A count this function has just judged impossible is not evidence of
+		// what the request cost either -- and the compaction trigger prefers it
+		// over its own estimate precisely because a provider's count "cannot be
+		// wrong". Measured on pandorum session 1789201117876_5t3as against a
+		// 64,000-token window: one usage event reported 138,549 input tokens
+		// for 138,262 characters, a ratio of 1.0. The ratio was refused
+		// (`charsPerToken` stayed 3.61 all session) but the count was kept,
+		// beat the estimate of 48,258, and compacted a transcript holding
+		// 45,783 real tokens -- which the chat then announced to the user as
+		// "138.5k -> 104.7k tokens".
+		return;
+	}
+	state.requestTokens = tokens;
+	state.requestTokensOwner = owner;
+	if (ratio > MAX_OBSERVED_CHARS_PER_TOKEN) {
 		return;
 	}
 	state.charsPerToken =

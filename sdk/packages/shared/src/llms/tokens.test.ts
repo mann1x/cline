@@ -55,11 +55,25 @@ describe("token calibration", () => {
 		expect(charsPerToken()).toBeCloseTo(8.26, 2);
 	});
 
-	it("keeps the provider's count even when the ratio is rejected", () => {
-		// Only the pairing can be wrong. The count is what the provider counted.
+	it("keeps the provider's count when only the pairing looks wrong", () => {
+		// Above the ceiling the count is small against the characters, which an
+		// unusual tokenizer can do. The pairing is rejected; the count stands.
 		observeRequestTokens(1_000, 1); // 1000 chars/token, rejected
 		expect(charsPerToken()).toBe(CHARS_PER_TOKEN);
 		expect(lastObservedRequestTokens()).toBe(1);
+	});
+
+	it("drops a count that claims a token per character", () => {
+		// Measured on pandorum session 1789201117876_5t3as: one usage event
+		// reported 138,549 input tokens for 138,262 characters. No tokenizer
+		// does that, so the count is the impossible term -- and the compaction
+		// trigger reads it in preference to its own estimate, so keeping it
+		// compacted a 45,783-token transcript and told the user it was 138.5k.
+		observeRequestTokens(353_282, 100_182); // a real request first
+		const calibrated = charsPerToken();
+		observeRequestTokens(138_262, 138_549);
+		expect(charsPerToken()).toBe(calibrated);
+		expect(lastObservedRequestTokens()).toBe(100_182);
 	});
 
 	it("ignores absent, zero and negative counts", () => {
