@@ -18,7 +18,13 @@ export interface TimingRow {
 	note?: string
 }
 
-/** `840ms`, `17.3s`, `2m 04s`. */
+/**
+ * `840ms`, `17.3s`, `2m 04s`, `1h 47m`.
+ *
+ * The hour is for the durations this also has to render now that a whole
+ * transaction is timed and not just one request: `127m 30s` is legible but
+ * nobody reads it as two hours at a glance.
+ */
 export function formatDuration(ms: number | undefined): string | undefined {
 	if (ms === undefined || !Number.isFinite(ms) || ms < 0) {
 		return undefined
@@ -31,6 +37,11 @@ export function formatDuration(ms: number | undefined): string | undefined {
 		return `${seconds.toFixed(seconds < 10 ? 2 : 1)}s`
 	}
 	const minutes = Math.floor(seconds / 60)
+	if (minutes >= 60) {
+		const hours = Math.floor(minutes / 60)
+		const restMinutes = minutes - hours * 60
+		return `${hours}h ${restMinutes < 10 ? "0" : ""}${restMinutes}m`
+	}
 	const rest = seconds - minutes * 60
 	return `${minutes}m ${rest < 10 ? "0" : ""}${rest.toFixed(0)}s`
 }

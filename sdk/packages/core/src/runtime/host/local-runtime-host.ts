@@ -1018,6 +1018,9 @@ export class LocalRuntimeHost implements RuntimeHost {
 						transaction: event.transaction,
 						kept: event.kept,
 						source: event.source,
+						...(event.elapsedMs !== undefined
+							? { elapsedMs: event.elapsedMs }
+							: {}),
 						...(event.verdict?.output ? { output: event.verdict.output } : {}),
 						...(restore
 							? {

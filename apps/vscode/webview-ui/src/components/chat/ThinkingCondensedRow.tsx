@@ -17,11 +17,32 @@ function parseInfo(text: string | undefined): ClineThinkingCondensedInfo | undef
 	return undefined
 }
 
-function formatChars(count: number | undefined): string | undefined {
+function formatCount(count: number | undefined): string | undefined {
 	if (typeof count !== "number" || !Number.isFinite(count)) {
 		return undefined
 	}
 	return count < 1_000 ? `${count}` : `${(count / 1_000).toFixed(1).replace(/\.0$/, "")}k`
+}
+
+/**
+ * The size of what was condensed, in tokens where the message carries them.
+ *
+ * The budget this row exists to explain is set in tokens, so a row measured in
+ * characters could not be compared against it — "43k → 620 chars" under a
+ * 16,000-token allowance reads as an overrun of nearly three times the budget
+ * when it was in fact under it. Tasks saved before the token counts were
+ * emitted carry only the characters, and those stay labelled as characters
+ * rather than being silently renamed.
+ */
+function describeSize(info: ClineThinkingCondensedInfo): string | undefined {
+	const fromTokens = formatCount(info.thinkingTokens)
+	const toTokens = formatCount(info.noteTokens)
+	if (fromTokens && toTokens) {
+		return `${fromTokens} → ${toTokens} tokens`
+	}
+	const fromChars = formatCount(info.thinkingChars)
+	const toChars = formatCount(info.noteChars)
+	return fromChars && toChars ? `${fromChars} → ${toChars} chars` : undefined
 }
 
 /**
@@ -42,11 +63,10 @@ export const ThinkingCondensedRow = ({ message }: { message: ClineMessage }) => 
 		return <div aria-hidden className="h-px" />
 	}
 
-	const before = formatChars(info.thinkingChars)
-	const after = formatChars(info.noteChars)
+	const size = describeSize(info)
 	const parts = ["Thinking budget spent · reasoning condensed"]
-	if (before && after) {
-		parts.push(`${before} → ${after} chars`)
+	if (size) {
+		parts.push(size)
 	}
 
 	return (

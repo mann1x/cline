@@ -1,6 +1,7 @@
 import type { ClineMessage, ClineTransactionInfo } from "@shared/ExtensionMessage"
 import { CheckIcon, ChevronDownIcon, ChevronRightIcon, UndoIcon } from "lucide-react"
 import { useState } from "react"
+import { formatDuration } from "@/utils/request-timings"
 
 function parseInfo(text: string | undefined): ClineTransactionInfo | undefined {
 	if (!text) {
@@ -46,6 +47,13 @@ export const TransactionRow = ({ message }: { message: ClineMessage }) => {
 	const parts = [info.message || `${label(info.transaction)} ${info.kept ? "kept" : "discarded"}`]
 	if (!info.kept && info.filesPutBack) {
 		parts.push(`${info.filesPutBack} file${info.filesPutBack === 1 ? "" : "s"} put back`)
+	}
+	// What the transaction cost in wall-clock. Nothing else in the transcript
+	// says it: the settlement line and the completion message above it both
+	// described the outcome and never how long it took to reach.
+	const elapsed = formatDuration(info.elapsedMs)
+	if (elapsed) {
+		parts.push(elapsed)
 	}
 
 	return (

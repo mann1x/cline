@@ -40,6 +40,22 @@ describe("ThinkingCondensedRow", () => {
 		expect(screen.getByText(/dPw, not dEn/)).toBeTruthy()
 	})
 
+	// The budget beside it is in tokens, so a row in characters could not be
+	// compared against the thing it exists to explain.
+	it("reports the sizes in tokens when the message carries them", () => {
+		render(<ThinkingCondensedRow message={condensedMessage({ thinkingTokens: 15_900, noteTokens: 230 })} />)
+
+		expect(screen.getByText(/15.9k → 230 tokens/)).toBeTruthy()
+	})
+
+	// A task saved before the token counts were emitted has only the characters,
+	// and calling those tokens would be a worse answer than naming them.
+	it("falls back to characters, still labelled as characters", () => {
+		render(<ThinkingCondensedRow message={condensedMessage({})} />)
+
+		expect(screen.getByText(/43k → 620 chars/)).toBeTruthy()
+	})
+
 	it("still reads as a divider when the sizes are missing", () => {
 		render(<ThinkingCondensedRow message={condensedMessage({ thinkingChars: undefined, noteChars: undefined })} />)
 

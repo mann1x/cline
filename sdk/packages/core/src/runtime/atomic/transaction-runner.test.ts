@@ -264,6 +264,33 @@ describe("a workspace with nothing to run", () => {
 		});
 	});
 
+	// The settlement line said what happened and never how long it took, and
+	// the completion message above it carried no time either, so a run that
+	// looped for an hour read exactly like one that landed first try.
+	it("times the transaction it settles", async () => {
+		await withWorkspace({ "notes.md": "before" }, async (root) => {
+			const elapsed: (number | undefined)[] = [];
+			await runAtomicTask(
+				{
+					workspaceRoot: root,
+					maxChanges: 3,
+					maxTransactions: 1,
+					onEvent: (event: TransactionEvent) => {
+						if (event.type === "settled") elapsed.push(event.elapsedMs);
+					},
+				},
+				async () => {
+					await fs.writeFile(path.join(root, "notes.md"), "after", "utf8");
+					return {};
+				},
+			);
+
+			expect(elapsed).toHaveLength(1);
+			expect(elapsed[0]).toBeGreaterThanOrEqual(0);
+			expect(elapsed[0]).toBeLessThan(60_000);
+		});
+	});
+
 	/**
 	 * The nudge that produced this stop says, in as many words, "If the task
 	 * really is finished, say so in one short sentence." A model that answers

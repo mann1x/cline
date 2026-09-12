@@ -41,6 +41,23 @@ describe("SdkSessionLifecycle", () => {
 		expect(lifecycle.getActiveSession()?.isRunning).toBe(true)
 	})
 
+	// A new session is born running, so `setRunning(true)` sees no edge and
+	// returns before stamping this. The first run of a task -- the long one --
+	// was therefore never timed, and the completion row showed no duration.
+	it("stamps the run start time on a session that is born running", async () => {
+		const sdkHost = makeSdkHost({ startResult: { sessionId: "session-123" } })
+		mockCreateSessionHost.mockResolvedValueOnce(sdkHost)
+		const lifecycle = makeLifecycle()
+		const before = Date.now()
+
+		// biome-ignore lint/suspicious/noExplicitAny: focused fake for lifecycle unit test
+		await lifecycle.startNewSession({} as any)
+
+		const startedAt = lifecycle.getActiveSession()?.runStartedAt
+		expect(startedAt).toBeGreaterThanOrEqual(before)
+		expect(startedAt).toBeLessThanOrEqual(Date.now())
+	})
+
 	it("stores the provider and model config used to start the active session", async () => {
 		const sdkHost = makeSdkHost({ startResult: { sessionId: "session-123" } })
 		mockCreateSessionHost.mockResolvedValueOnce(sdkHost)

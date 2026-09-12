@@ -32,6 +32,21 @@ describe("TransactionRow", () => {
 		expect(screen.getByText(/3 files put back/)).toBeTruthy()
 	})
 
+	// Nothing else in the transcript says it: the settlement line described the
+	// outcome and the completion box above it carries the task's total, not this
+	// transaction's.
+	it("says how long the transaction took", () => {
+		render(<TransactionRow message={row({ transaction: 1, kept: true, message: "TX-01 kept.", elapsedMs: 4_920_000 })} />)
+
+		expect(screen.getByText(/1h 22m/)).toBeTruthy()
+	})
+
+	it("says nothing about time when the message carries none", () => {
+		render(<TransactionRow message={row({ transaction: 1, kept: true, message: "TX-01 kept." })} />)
+
+		expect(screen.queryByText(/[0-9]+(h|m|s)\b/)).toBeNull()
+	})
+
 	// Opened by default, unlike a kept one: the failures are what you need to
 	// read, and in a run that finishes they are the minority.
 	it("shows a failed check's output without being asked", () => {

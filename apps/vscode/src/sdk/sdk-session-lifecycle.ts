@@ -184,6 +184,13 @@ export class SdkSessionLifecycle {
 			unsubscribe: () => {},
 			startResult,
 			isRunning: true,
+			// Stamped here as well as on the idle->running edge, because a new
+			// session is born running: `setRunning(true)` then sees no edge,
+			// returns early, and never stamps this. The first run of a task --
+			// the long one -- therefore had no start time, so the completion
+			// row carried no duration and the fallback row that would have said
+			// it was skipped too. Only follow-up turns were ever timed.
+			runStartedAt: Date.now(),
 		}
 
 		return { startResult, sdkHost }

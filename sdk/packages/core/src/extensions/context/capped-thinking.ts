@@ -943,6 +943,13 @@ export function createCappedThinkingPrepareTurn<T extends PrepareTurn>(
 				phase: "completed",
 				thinkingChars: thinking.length,
 				noteChars: note.length,
+				// The row this feeds reported characters, against a budget the
+				// user sets in tokens -- so "45k -> 0.9k chars" sat under a
+				// 16,000-token budget and the two numbers could not be compared
+				// at all. Converted here rather than in the webview because the
+				// reasoning rate is calibrated in this process and nowhere else.
+				thinkingTokens: estimateThinkingTokens(thinking.length),
+				noteTokens: estimateThinkingTokens(note.length),
 				budgetTokens: config.budgetTokens,
 				note,
 			});

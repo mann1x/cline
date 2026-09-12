@@ -520,6 +520,18 @@ export interface ClineThinkingCondensedInfo {
 	thinkingChars?: number
 	/** Characters of note. */
 	noteChars?: number
+	/**
+	 * The same two, in the unit the budget is set in.
+	 *
+	 * Estimated at the reasoning rate the core process has calibrated, because
+	 * nothing reports a token count for text it is about to throw away. Absent
+	 * on messages persisted before this shipped, which is why the character
+	 * counts stay: a row rendering an old task has only those, and labelling
+	 * them as tokens would be a worse answer than labelling them as what they
+	 * are.
+	 */
+	thinkingTokens?: number
+	noteTokens?: number
 	/** The allowance the turn ran out of. */
 	budgetTokens?: number
 	note: string
@@ -542,6 +554,8 @@ export interface ClineTransactionInfo {
 	output?: string
 	/** Files put back, created ones removed, deleted ones recreated. */
 	filesPutBack?: number
+	/** How long the transaction ran, from the change proposal to this verdict. */
+	elapsedMs?: number
 	/** The one-line verdict, already written for a human. */
 	message: string
 }

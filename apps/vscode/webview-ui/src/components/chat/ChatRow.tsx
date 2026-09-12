@@ -120,6 +120,7 @@ const GENERIC_TOOL_VERBS: Record<string, string> = {
 	commit: "Cline committed:",
 	generate_image: "Cline generated an image:",
 	image_generation: "Cline generated an image:",
+	plan: "Cline wrote down the plan:",
 	propose_check: "Cline proposed a check:",
 	restore_file: "Cline put this file back as the transaction found it:",
 	run_check: "Cline ran the check:",

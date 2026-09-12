@@ -880,6 +880,18 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown): ClineSayTool 
 			}
 		}
 
+		case "plan": {
+			// The plan tool names no file and runs no command, so the generic
+			// lookup below found nothing to show and the row rendered as a bare
+			// "Cline used `plan`:" header with an empty body. What the user wants
+			// from this row is the plan itself, and it is right here in the input.
+			return {
+				tool: toolName as ClineSayTool["tool"],
+				path: "",
+				content: describePlanCall(parsedInput),
+			}
+		}
+
 		default: {
 			// MCP tools and unknown tools — pass through with the raw tool name.
 			// `ChatRow` renders these generically rather than swallowing them, so
@@ -906,9 +918,76 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown): ClineSayTool 
 			return {
 				tool: toolName as ClineSayTool["tool"],
 				path: filePath,
+				// A tool that names neither a file nor a command still did
+				// something, and a header over an empty body says less than the
+				// name alone did. Fall back to the arguments it was called with.
+				...(filePath ? {} : { content: describeToolArguments(parsedInput) }),
 			}
 		}
 	}
+}
+
+/**
+ * The plan a `plan` call states or amends, as the chat row should show it.
+ *
+ * The tool takes three shapes — state the list, mark an item landed, mark one
+ * failed — and each of them is one line or a few. Rendering the raw arguments
+ * would work but reads as JSON; this reads as a plan, which is what the row is
+ * for. The numbering is the tool's, so it is deliberately not reproduced here
+ * for `changes`: the list arrives unnumbered and the tool assigns the ids.
+ */
+function describePlanCall(input: Record<string, unknown> | undefined): string | undefined {
+	if (!input) {
+		return undefined
+	}
+	const changes = Array.isArray(input.changes) ? input.changes : undefined
+	if (changes && changes.length > 0) {
+		return changes
+			.map((entry, index) => {
+				const item = typeof entry === "object" && entry ? (entry as Record<string, unknown>) : {}
+				const lines = [`${index + 1}. ${getStringField(item, "what") ?? "(no change stated)"}`]
+				const where = getStringField(item, "where")
+				const why = getStringField(item, "why")
+				if (where) {
+					lines.push(`   where: ${where}`)
+				}
+				if (why) {
+					lines.push(`   why:   ${why}`)
+				}
+				return lines.join("\n")
+			})
+			.join("\n")
+	}
+	const note = getStringField(input, "note")
+	const suffix = note ? ` — ${note}` : ""
+	if (typeof input.done === "number") {
+		return `Marked #${input.done} as landed${suffix}`
+	}
+	if (typeof input.failed === "number") {
+		return `Marked #${input.failed} as failed${suffix}`
+	}
+	return describeToolArguments(input)
+}
+
+/**
+ * A tool's arguments, for a row that has nothing better to show.
+ *
+ * Long values are cut: this is a row in a chat, not a transcript of the call,
+ * and a tool that was handed a whole file should not push the next message off
+ * the screen.
+ */
+function describeToolArguments(input: Record<string, unknown> | undefined): string | undefined {
+	if (!input) {
+		return undefined
+	}
+	const lines = Object.entries(input).map(([key, value]) => {
+		const rendered = typeof value === "string" ? value : JSON.stringify(value)
+		if (rendered === undefined) {
+			return `${key}: (not shown)`
+		}
+		return `${key}: ${rendered.length > 400 ? `${rendered.slice(0, 400)}…` : rendered}`
+	})
+	return lines.length > 0 ? lines.join("\n") : undefined
 }
 
 /**
@@ -1372,6 +1451,8 @@ export function parseThinkingCondensedNoticeMetadata(
 		note,
 		thinkingChars: asFiniteNumber(metadata.thinkingChars),
 		noteChars: asFiniteNumber(metadata.noteChars),
+		thinkingTokens: asFiniteNumber(metadata.thinkingTokens),
+		noteTokens: asFiniteNumber(metadata.noteTokens),
 		budgetTokens: asFiniteNumber(metadata.budgetTokens),
 	}
 }
@@ -1395,12 +1476,14 @@ export function parseAtomicTransactionNoticeMetadata(
 		return undefined
 	}
 	const filesPutBack = asFiniteNumber(metadata.filesPutBack)
+	const elapsedMs = asFiniteNumber(metadata.elapsedMs)
 	return {
 		transaction,
 		kept: metadata.kept,
 		message,
 		...(typeof metadata.output === "string" && metadata.output.trim() !== "" ? { output: metadata.output } : {}),
 		...(filesPutBack !== undefined ? { filesPutBack } : {}),
+		...(elapsedMs !== undefined ? { elapsedMs } : {}),
 	}
 }
 

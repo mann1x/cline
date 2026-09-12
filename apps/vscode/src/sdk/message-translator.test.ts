@@ -593,6 +593,67 @@ describe("translateSessionEvent — agent_event content_start", () => {
 // translateSessionEvent — agent_event (content_end)
 // ---------------------------------------------------------------------------
 
+describe("translateSessionEvent — tools with nothing but arguments", () => {
+	function toolRow(toolName: string, input: Record<string, unknown>) {
+		const state = new MessageTranslatorState()
+		const result = translateSessionEvent(
+			{
+				type: "agent_event",
+				payload: {
+					sessionId: "session-1",
+					event: {
+						type: "content_start",
+						contentType: "tool",
+						toolName,
+						toolCallId: "call-1",
+						input,
+					} as AgentEvent,
+				},
+			},
+			state,
+		)
+		return JSON.parse(result.messages[0].text ?? "{}")
+	}
+
+	// The row was a bare "Cline used `plan`:" header over nothing: the tool
+	// names no file and runs no command, so the generic lookup found neither a
+	// path nor content and rendered an empty body.
+	it("shows the plan a plan call states", () => {
+		const row = toolRow("plan", {
+			changes: [
+				{ where: "drawSprite", what: "clamp y to the canvas", why: "the miner falls through the floor" },
+				{ where: "tick", what: "stop the loop at 0 lives", why: "the game never ends" },
+			],
+		})
+
+		expect(row.content).toContain("1. clamp y to the canvas")
+		expect(row.content).toContain("where: drawSprite")
+		expect(row.content).toContain("2. stop the loop at 0 lives")
+	})
+
+	it("shows what a plan call marked done", () => {
+		const row = toolRow("plan", { done: 2, note: "applied cleanly" })
+
+		expect(row.content).toBe("Marked #2 as landed — applied cleanly")
+	})
+
+	// Not only `plan`: a header over an empty body says less than the tool's
+	// name alone did, whatever the tool is.
+	it("falls back to the arguments for any tool that names no file", () => {
+		const row = toolRow("some_future_tool", { mode: "strict", attempts: 3 })
+
+		expect(row.content).toContain("mode: strict")
+		expect(row.content).toContain("attempts: 3")
+	})
+
+	it("leaves a tool that names a file alone", () => {
+		const row = toolRow("check_file", { paths: ["/src/app.ts"] })
+
+		expect(row.path).toBe("/src/app.ts")
+		expect(row.content).toBeUndefined()
+	})
+})
+
 describe("translateSessionEvent — agent_event content_end", () => {
 	it("translates text content_end to complete text message", () => {
 		const state = new MessageTranslatorState()

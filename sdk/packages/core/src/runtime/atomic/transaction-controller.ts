@@ -95,6 +95,16 @@ export type TransactionEvent =
 			 */
 			source: TransactionVerdictSource;
 			message: string;
+			/**
+			 * Wall-clock from `open()` to this settlement.
+			 *
+			 * The settlement line said what happened to the transaction and
+			 * never how long it took, so a run that looped for forty minutes
+			 * and one that landed first try read identically in the transcript
+			 * -- and the completion message above it carries no time either, so
+			 * there was nowhere else to look.
+			 */
+			elapsedMs?: number;
 			verdict?: OracleVerdict;
 			restore?: RestoreReport;
 	  };
@@ -147,6 +157,8 @@ export class TransactionController {
 	private readonly uncoveredPaths = new Set<string>();
 	private snapshot?: Snapshot;
 	private current = 0;
+	/** When the open transaction started, for the settlement line. */
+	private openedAt: number | undefined;
 	private adopted?: Oracle;
 	/** Whether the adopted check has ever passed, on any files, since adoption. */
 	private adoptedEverPassed = false;
@@ -365,6 +377,7 @@ export class TransactionController {
 
 	async open(): Promise<string> {
 		this.current += 1;
+		this.openedAt = Date.now();
 		this.reconsidering = this.shouldReconsiderCheck();
 		this.snapshot = await takeSnapshot(
 			this.options.workspaceRoot,
@@ -413,6 +426,8 @@ export class TransactionController {
 			throw new Error("settle() was called before a transaction was opened");
 		}
 		const transaction = this.current;
+		const elapsedMs =
+			this.openedAt === undefined ? undefined : Date.now() - this.openedAt;
 		this.emit({ type: "judging", transaction, oracle: this.oracle });
 
 		// Three sources, not two. Silence still keeps the files -- see
@@ -481,6 +496,7 @@ export class TransactionController {
 				kept,
 				source,
 				message,
+				elapsedMs,
 				verdict,
 			});
 			return { kept: true, message, verdict };
@@ -518,6 +534,7 @@ export class TransactionController {
 			kept,
 			source,
 			message,
+			elapsedMs,
 			verdict,
 			restore,
 		});
