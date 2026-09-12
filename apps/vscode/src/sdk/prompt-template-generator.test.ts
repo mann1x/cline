@@ -92,6 +92,12 @@ const GOOD = [
 	"# system",
 	"You are Cline on {{PLATFORM_NAME}}, {{CURRENT_DATE}}, in {{IDE_NAME}}. Directory {{CWD}}.",
 	"Use check_file and code_intel.",
+	// The three subjects REQUIRED_SYSTEM_GUIDANCE insists a rewrite address.
+	// A proposal that skips them is a flawed one, and this fixture is the
+	// clean one -- so it says all three, in the plainest words that pass.
+	"Call `check_file` in the same turn as the command that runs the code, not one or the other.",
+	"Where a tool has measured something, its report is the measurement; re-deriving it yourself is an estimate.",
+	"Make edits one at a time, and confirm each one before you start the next.",
 	"{{CLINE_RULES}}",
 	"{{CLINE_METADATA}}",
 	"",

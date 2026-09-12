@@ -18,6 +18,7 @@ vi.mock("@shared/services/Logger", () => ({
 	Logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }))
 
+import { getBuiltinPromptTemplates } from "@cline/core"
 import { readPromptTemplateSettings, resolvePromptTemplateEditPath } from "./prompt-template-settings"
 
 const roots: string[] = []
@@ -47,18 +48,19 @@ afterEach(() => {
 })
 
 describe("readPromptTemplateSettings", () => {
+	// Against the catalogue rather than a written-out list. The property being
+	// guarded is that nothing is filtered down to the resolved template -- a
+	// hardcoded list tests that too, right up until a template ships and the
+	// test fails for naming the wrong set rather than for any filtering.
 	it("lists every shipped template, not only the one that won", async () => {
 		const settings = await readPromptTemplateSettings({ providerId: "openai", modelId: "gpt-5.5" })
 
-		expect(settings.templates.map((template) => template.name).sort()).toEqual([
-			"claude",
-			"deepseek",
-			"default",
-			"gemma",
-			"glm",
-			"kimi",
-			"qwen",
-		])
+		const shipped = getBuiltinPromptTemplates()
+			.map((template) => template.name)
+			.sort()
+		expect(shipped.length).toBeGreaterThan(1)
+		expect(shipped).toContain("default")
+		expect(settings.templates.map((template) => template.name).sort()).toEqual(shipped)
 		expect(settings.templates.every((template) => template.source === "builtin")).toBe(true)
 	})
 

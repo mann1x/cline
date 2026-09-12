@@ -63,6 +63,51 @@ const GOOD = [
 ].join("\n");
 
 describe("auditPromptTemplateProposal", () => {
+	// The rule that cost the most, and the one a model keeps writing because it
+	// reads as efficiency. `qwen.md` said it, alone among the ten, and the
+	// family reading it made 13.6 `restore_file` calls per run against 0.23 for
+	// the family that did not. Asking was tried; this is the gate.
+	it("refuses a proposal that tells the model to batch its edits", () => {
+		const result = audit(
+			GOOD.replace(
+				"{{CLINE_RULES}}",
+				"Batch your edits into one response.\n{{CLINE_RULES}}",
+			),
+		);
+
+		expect(
+			result.problems.some((problem) => problem.includes("batch its edits")),
+		).toBe(true);
+	});
+
+	it("refuses a proposal that saves the run for the end", () => {
+		const result = audit(
+			GOOD.replace(
+				"{{CLINE_RULES}}",
+				"Run the program once, at the end.\n{{CLINE_RULES}}",
+			),
+		);
+
+		expect(
+			result.problems.some((problem) =>
+				problem.includes("save the run for the end"),
+			),
+		).toBe(true);
+	});
+
+	// The same subject stated correctly has to pass, or the gate refuses the
+	// answer it is asking for and the repair loop spends attempts it cannot win.
+	it("accepts the rule stated the right way round", () => {
+		const result = audit(
+			GOOD.replace(
+				"{{CLINE_RULES}}",
+				"Make edits one at a time, not as a batch.\n{{CLINE_RULES}}",
+			),
+		);
+
+		expect(result.problems).toEqual([]);
+	});
+
 	it("accepts a proposal that is actually usable", () => {
 		const result = audit(GOOD);
 

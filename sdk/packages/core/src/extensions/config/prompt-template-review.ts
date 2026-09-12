@@ -808,13 +808,19 @@ const REQUIRED_SYSTEM_GUIDANCE: ReadonlyArray<{
 		fix: "Say that where a tool has measured something -- a delimiter scan naming a line, a diagnostic naming a type -- that report is the measurement and re-deriving it is an estimate, and that where the two disagree it is the estimate that is wrong.",
 	},
 	{
-		name: "run the program last",
+		// This requirement used to be "run the program last", and asked for the
+		// exact rule that produced the restore loop: every planned edit in
+		// place first, one run at the end. That is what `qwen.md` said, alone
+		// among the ten, and deleting it (08bc73a6e) is the change the current
+		// arms are measuring -- jackod 13.6 `restore_file` calls per run
+		// against qwen3.6 27B's 0.23 over 40. Left here, this gate would have
+		// written the contradiction back into all ten templates on the next
+		// regeneration, and `protocol.ts` would have gone on disagreeing with
+		// every one of them.
+		name: "a change is confirmed before the next one starts",
 		present:
-			// Wide on purpose, and widened twice after rejecting correct answers:
-			// `claude` wrote "When every change you planned is in, run it once",
-			// which a pattern expecting `run the build ... once` did not match.
-			/once, after every change|(after|when|once) every change you planned|run (it|them|the program|the build|the tests?)[^.]{0,60}\bonce\b|\b(runs?|running)\b[^.]{0,60}\b(last|once)\b|not after each( one)?/i,
-		fix: "Say that the build, the tests or the program itself runs once, after every change you planned is in place -- not after each one -- and that the cheap check which does not execute the code is what goes after each edit.",
+			/after each (edit|change)|one at a time|before (you )?(start|begin|make) the next|confirm[^.]{0,40}before (the |you )?(next|starting)|one edit, one check/i,
+		fix: "Say that each edit is confirmed before the next one starts: the cheap check that does not execute the code after every edit, and the thing that runs the code where a run is what settles it. Six edits made together leave six things to undo and no way to tell which one was wrong.",
 	},
 ];
 
@@ -889,6 +895,40 @@ function auditSystemSection(
 			`The system section tells the model to read a file back after changing it: ${JSON.stringify(
 				offenders[0].trim().slice(0, 160),
 			)}. Remove that rule. The 'editor' call already reports whether the edit landed and what changed, so a re-read returns bytes the conversation already holds -- measured on one session, 'read_files' was called 33 times, 31 of them byte-identical, returning 440,013 characters against a file of 14 KB. Say to read again only when the call failed, or when content that has not been seen is needed.`,
+		);
+	}
+
+	// The rule that cost the most, banned rather than merely not asked for.
+	//
+	// "Emit all the editor calls in one response, then run it once at the end"
+	// is the shape of every expensive run in the harness: batch six edits,
+	// check once, fail, and the only way back is undoing six things. It read as
+	// efficiency to whichever model wrote it into `qwen.md`, and it will read
+	// that way to the next one, so asking nicely is not enough -- the same
+	// lesson the read-back ban above records.
+	const batchers = system.split(/\r?\n/).filter((line) => {
+		const text = line.toLowerCase();
+		const batchesEdits =
+			/\b(batch|group|combine)\b[^.]{0,80}\b(edit|change)/.test(text) ||
+			/\b(edit|editor call|change)s?\b[^.]{0,80}\b(in|into) (one|a single|the same) (response|turn|message|call)/.test(
+				text,
+			);
+		const defersTheCheck =
+			/\bnot after each\b|\brather than after each\b|\bonce,? (at the end|after every change)\b/.test(
+				text,
+			);
+		// "...one at a time, not as a batch" is the rule stated correctly.
+		const isNegated =
+			/\b(do not|don't|never|one at a time|not as a batch|rather than batch|instead of batch)\b/.test(
+				text,
+			);
+		return (batchesEdits || defersTheCheck) && !isNegated;
+	});
+	if (batchers.length > 0) {
+		problems.push(
+			`The system section tells the model to batch its edits or to save the run for the end: ${JSON.stringify(
+				batchers[0].trim().slice(0, 160),
+			)}. Remove that rule. Six edits made together and checked once leave six things to undo and no way to tell which one was wrong -- measured across ten runs, the template that said this drew 13.6 'restore_file' calls per run against 0.23 for the family that did not. Say that each edit is confirmed before the next one starts.`,
 		);
 	}
 
