@@ -872,8 +872,11 @@ export interface AwkInput {
 }
 
 export function createAwkExecutor(options: AwkExecutorOptions = {}) {
-	return async (input: AwkInput): Promise<string> => {
-		const cwd = options.cwd ?? process.cwd();
+	// `cwd` is taken per call, the way `EditorExecutor` takes it: the tool
+	// layer knows the workspace root and the executor is built before it is
+	// known. The creation-time one is the fallback, not the authority.
+	return async (input: AwkInput, callCwd?: string): Promise<string> => {
+		const cwd = callCwd || options.cwd || process.cwd();
 		const rules = parseAwk(input.program);
 		if (rules.length === 0) {
 			throw new Error(

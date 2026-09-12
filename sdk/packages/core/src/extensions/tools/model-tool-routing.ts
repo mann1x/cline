@@ -41,6 +41,9 @@ const TOOL_NAME_TO_FLAG: Record<
 		| "enableWebFetch"
 		| "enableApplyPatch"
 		| "enableEditor"
+		| "enableGrep"
+		| "enableSed"
+		| "enableAwk"
 		| "enableSkills"
 		| "enableAskQuestion"
 		| "enableSubmitAndExit"
@@ -52,6 +55,9 @@ const TOOL_NAME_TO_FLAG: Record<
 	fetch_web_content: "enableWebFetch",
 	apply_patch: "enableApplyPatch",
 	editor: "enableEditor",
+	grep: "enableGrep",
+	sed: "enableSed",
+	awk: "enableAwk",
 	skills: "enableSkills",
 	ask_question: "enableAskQuestion",
 	submit_and_exit: "enableSubmitAndExit",

@@ -129,8 +129,11 @@ function looksBinary(content: string): boolean {
 export function createGrepExecutor(options: GrepExecutorOptions = {}) {
 	const limit = options.maxOutputChars ?? MAX_SEARCH_OUTPUT_CHARS;
 
-	return async (input: GrepInput): Promise<string> => {
-		const cwd = options.cwd ?? process.cwd();
+	// `cwd` is taken per call, the way `EditorExecutor` takes it: the tool
+	// layer knows the workspace root and the executor is built before it is
+	// known. The creation-time one is the fallback, not the authority.
+	return async (input: GrepInput, callCwd?: string): Promise<string> => {
+		const cwd = callCwd || options.cwd || process.cwd();
 		if (!input.pattern) {
 			throw new Error("`pattern` is required.");
 		}

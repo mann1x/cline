@@ -750,9 +750,142 @@ export const SubmitInputSchema = z.object({
 		),
 });
 
+/**
+ * Schema for the grep tool input.
+ *
+ * The flag names are spelled out rather than carried as `-i`/`-v`/`-E`, because
+ * a model reading the schema has to guess what a single letter means and a
+ * wrong guess here silently changes which lines come back.
+ */
+export const GrepInputSchema = z.object({
+	pattern: z.string().describe("The pattern to search for."),
+	paths: z
+		.array(z.string())
+		.optional()
+		.describe(
+			"Files or directories to search. Defaults to the workspace root, searched recursively.",
+		),
+	ignore_case: z.boolean().optional().describe("Match without regard to case."),
+	invert: z
+		.boolean()
+		.optional()
+		.describe("Return the lines that do NOT match."),
+	fixed: z
+		.boolean()
+		.optional()
+		.describe(
+			"Treat the pattern as literal text rather than a regular expression.",
+		),
+	word: z.boolean().optional().describe("Match whole words only."),
+	extended: z
+		.boolean()
+		.optional()
+		.describe(
+			"Read the pattern as an extended regular expression (ERE). Without this it is a basic one (BRE), where `+ ? ( ) { } |` are literal characters.",
+		),
+	count: z
+		.boolean()
+		.optional()
+		.describe("Report how many lines matched per file instead of the lines."),
+	files_with_matches: z
+		.boolean()
+		.optional()
+		.describe("Report only the names of the files that contain a match."),
+	line_numbers: z
+		.boolean()
+		.optional()
+		.describe("Prefix each line with its number. On unless set to false."),
+	context: z.coerce
+		.number()
+		.int()
+		.min(0)
+		.max(20)
+		.optional()
+		.describe("How many lines of context to show either side of a match."),
+	max_count: z.coerce
+		.number()
+		.int()
+		.positive()
+		.optional()
+		.describe("Stop after this many matching lines per file."),
+});
+
+/**
+ * Schema for the sed tool input.
+ */
+export const SedInputSchema = z.object({
+	script: z
+		.string()
+		.describe(
+			"The sed script, e.g. `s/foo/bar/g`, `/^debug/d`, or `2,5s/^/# /`. Several commands may be separated by newlines or `;`.",
+		),
+	files: z
+		.array(z.string())
+		.min(1)
+		.describe("The files to run the script over."),
+	in_place: z
+		.boolean()
+		.optional()
+		.describe(
+			"Write the result back to each file. Without this the result is only printed, which is the way to check a script before committing to it.",
+		),
+	quiet: z
+		.boolean()
+		.optional()
+		.describe(
+			"Print only what the script explicitly prints, as `sed -n` does.",
+		),
+	extended: z
+		.boolean()
+		.optional()
+		.describe(
+			"Read addresses and `s///` patterns as extended regular expressions (ERE). Without this they are basic ones (BRE).",
+		),
+});
+
+/**
+ * Schema for the awk tool input.
+ */
+export const AwkInputSchema = z.object({
+	program: z
+		.string()
+		.describe(
+			"The awk program, e.g. `{print $1}` or `NR>1 {sum+=$2} END {print sum}`.",
+		),
+	files: z
+		.array(z.string())
+		.optional()
+		.describe(
+			"The files to run over. A program with only a BEGIN block needs none.",
+		),
+	field_separator: z
+		.string()
+		.optional()
+		.describe("The input field separator, as `awk -F` sets it."),
+	variables: z
+		.record(z.string(), z.string())
+		.optional()
+		.describe("Variables to pre-set, as `awk -v name=value` sets them."),
+});
+
 // =============================================================================
 // Type Definitions (derived from Zod schemas)
 // =============================================================================
+
+/**
+ * Input for the grep tool
+ */
+export type GrepToolInput = z.infer<typeof GrepInputSchema>;
+
+/**
+ * Input for the sed tool
+ */
+export type SedToolInput = z.infer<typeof SedInputSchema>;
+
+/**
+ * Input for the awk tool
+ */
+export type AwkToolInput = z.infer<typeof AwkInputSchema>;
 
 /**
  * Input for a single file read request

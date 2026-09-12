@@ -11,14 +11,17 @@ import {
 	type ApplyPatchExecutorOptions,
 	createApplyPatchExecutor,
 } from "./apply-patch";
+import { type AwkExecutorOptions, createAwkExecutor } from "./awk";
 import { createShellExecutor, type ShellExecutorOptions } from "./bash";
 import { createEditorExecutor, type EditorExecutorOptions } from "./editor";
 import {
 	createFileReadExecutor,
 	type FileReadExecutorOptions,
 } from "./file-read";
+import { createGrepExecutor, type GrepExecutorOptions } from "./grep";
 import { createReadReceipts, type ReadReceipts } from "./read-receipts";
 import { createSearchExecutor, type SearchExecutorOptions } from "./search";
+import { createSedExecutor, type SedExecutorOptions } from "./sed";
 import {
 	createWebFetchExecutor,
 	type WebFetchExecutorOptions,
@@ -32,6 +35,7 @@ export {
 	type PatchFileChange,
 } from "./apply-patch";
 export { PATCH_MARKERS, PatchActionType } from "./apply-patch-parser";
+export { type AwkExecutorOptions, createAwkExecutor } from "./awk";
 export {
 	CommandExitError,
 	createShellExecutor,
@@ -42,12 +46,14 @@ export {
 	createFileReadExecutor,
 	type FileReadExecutorOptions,
 } from "./file-read";
+export { createGrepExecutor, type GrepExecutorOptions } from "./grep";
 export { createReadReceipts, type ReadReceipts } from "./read-receipts";
 export {
 	RunCommandExecutionController,
 	type RunningCommandRegistration,
 } from "./run-command-execution-controller";
 export { createSearchExecutor, type SearchExecutorOptions } from "./search";
+export { createSedExecutor, type SedExecutorOptions } from "./sed";
 export {
 	createReadLedger,
 	REFRESH_EVERY,
@@ -68,6 +74,9 @@ export interface DefaultExecutorsOptions {
 	webFetch?: WebFetchExecutorOptions;
 	applyPatch?: ApplyPatchExecutorOptions;
 	editor?: EditorExecutorOptions;
+	grep?: GrepExecutorOptions;
+	sed?: SedExecutorOptions;
+	awk?: AwkExecutorOptions;
 
 	/**
 	 * Record of what has been read, shared by the reader and the editor.
@@ -126,5 +135,13 @@ export function createDefaultExecutors(
 		webFetch: createWebFetchExecutor(options.webFetch),
 		applyPatch: createApplyPatchExecutor(options.applyPatch),
 		editor: createEditorExecutor({ ...options.editor, receipts }),
+		// The same registry as the reader and the editor, deliberately: a model
+		// that greps a file has read it, and `sed -i` is an edit and is refused
+		// on a file nobody read. Give these their own and both halves break
+		// quietly — grep would stop counting as a read, and sed would guard
+		// against a history it cannot see.
+		grep: createGrepExecutor({ ...options.grep, receipts }),
+		sed: createSedExecutor({ ...options.sed, receipts }),
+		awk: createAwkExecutor({ ...options.awk, receipts }),
 	};
 }

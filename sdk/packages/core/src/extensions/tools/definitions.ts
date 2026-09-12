@@ -48,11 +48,15 @@ import {
 	ApplyPatchInputUnionSchema,
 	type AskQuestionInput,
 	AskQuestionInputSchema,
+	AwkInputSchema,
+	type AwkToolInput,
 	describeEditorArgumentGap,
 	type EditFileInput,
 	EditFileInputSchema,
 	type FetchWebContentInput,
 	FetchWebContentInputSchema,
+	GrepInputSchema,
+	type GrepToolInput,
 	LooseFetchWebContentInputSchema,
 	type ReadFileRequest,
 	type ReadFilesInput,
@@ -62,6 +66,8 @@ import {
 	type SearchCodebaseInput,
 	SearchCodebaseInputSchema,
 	SearchCodebaseUnionInputSchema,
+	SedInputSchema,
+	type SedToolInput,
 	type SkillsInput,
 	SkillsInputSchema,
 	type StructuredCommandInput,
@@ -77,11 +83,14 @@ import {
 import type {
 	ApplyPatchExecutor,
 	AskQuestionExecutor,
+	AwkExecutor,
 	CreateDefaultToolsOptions,
 	DefaultToolsConfig,
 	EditorExecutor,
 	FileReadExecutor,
+	GrepExecutor,
 	SearchExecutor,
+	SedExecutor,
 	ShellExecutor,
 	SkillsExecutorWithMetadata,
 	ToolOperationResult,
@@ -972,6 +981,165 @@ export function createEditorTool(
 }
 
 /**
+ * Shared closing line for grep / sed / awk.
+ *
+ * All three run in this process against the local filesystem. They are not
+ * shelled out and they are not the system binaries, so a host without them
+ * installed — or with a different implementation of them — behaves the same.
+ */
+const TEXT_TOOL_PROVENANCE =
+	"This runs in-process, not through the shell: it needs no binary installed and behaves identically on every platform. ";
+
+/**
+ * Create the grep tool.
+ */
+export function createGrepTool(
+	executor: GrepExecutor,
+	config: Pick<DefaultToolsConfig, "cwd" | "textToolsTimeoutMs"> = {},
+): AgentTool<GrepToolInput, ToolOperationResult> {
+	const timeoutMs = config.textToolsTimeoutMs ?? 30000;
+	const cwd = config.cwd ?? process.cwd();
+
+	return createTool<GrepToolInput, ToolOperationResult>({
+		name: "grep",
+		description:
+			"Search files for lines matching a pattern, as POSIX `grep` does. " +
+			"Give it a `pattern` and, optionally, `paths` — files or directories, defaulting to the workspace root searched recursively, skipping `node_modules`, `.git`, `dist` and the like. " +
+			"The pattern is a BASIC regular expression by default, exactly as grep reads one: `+ ? ( ) { } |` are literal characters there, and `\\(a\\|b\\)` is how you group and alternate. Pass `extended: true` for the syntax you are probably thinking of, or `fixed: true` to search for the text itself with no syntax at all. " +
+			"Flags: `ignore_case`, `invert` (the lines that do not match), `word` (whole words), `count` (how many per file), `files_with_matches` (names only), `context` (lines either side), `max_count` (stop after N per file). Line numbers are included unless you set `line_numbers: false`. " +
+			"Use it to find where something is before you read or edit it — it is cheaper than reading whole files, and a match records that you have read those lines. " +
+			TEXT_TOOL_PROVENANCE +
+			`Output: a single ${TOOL_RESULT_ENVELOPE} \`query\` is \`grep:<pattern>\` and \`result\` holds the matching lines prefixed with their path and line number. ` +
+			"A pattern that matched nothing still has `success: true`, and `result` says so in words: that is an answer, and re-running the same search will not change it.",
+		inputSchema: zodToJsonSchema(GrepInputSchema),
+		timeoutMs,
+		retryable: true,
+		maxRetries: 1,
+		execute: async (input, context) => {
+			const validated = validateWithZod(GrepInputSchema, input);
+			const query = `grep:${validated.pattern}`;
+			try {
+				const result = await withTimeout(
+					executor(validated, cwd, context),
+					timeoutMs,
+					`grep timed out after ${timeoutMs}ms`,
+				);
+				return { query, result, success: true };
+			} catch (error) {
+				return {
+					query,
+					result: "",
+					error: `grep failed: ${formatError(error)}`,
+					success: false,
+				};
+			}
+		},
+	});
+}
+
+/**
+ * Create the sed tool.
+ */
+export function createSedTool(
+	executor: SedExecutor,
+	config: Pick<DefaultToolsConfig, "cwd" | "textToolsTimeoutMs"> = {},
+): AgentTool<SedToolInput, ToolOperationResult[]> {
+	const timeoutMs = config.textToolsTimeoutMs ?? 30000;
+	const cwd = config.cwd ?? process.cwd();
+
+	return createTool<SedToolInput, ToolOperationResult[]>({
+		name: "sed",
+		description:
+			"Apply a `sed` script to one or more files. " +
+			"Send a `script` — `s/foo/bar/g`, `/^debug/d`, `2,5s/^/# /`, several separated by newlines or `;` — and the `files` to run it over. " +
+			"Without `in_place` it only prints the result, which is how you check a script before trusting it; with `in_place: true` it rewrites each file. " +
+			"Addresses and `s///` patterns are BASIC regular expressions, as sed reads them, unless you pass `extended: true`. `quiet: true` prints only what the script prints, as `sed -n` does. " +
+			"Reach for this over `editor` when one mechanical change applies in many places or across many files — renaming an identifier everywhere, stripping a prefix from every line of a block. For a single considered change to one place, `editor` is the better tool: it can anchor on text you quote back, and it tells you when the file has moved under you. " +
+			"An in-place run is refused on a file you have not read, the same way an `editor` call is — and a script addressed by line number is refused unless you have read those lines. Read first. " +
+			TEXT_TOOL_PROVENANCE +
+			`Output: one object per file — ${TOOL_RESULT_ENVELOPE} \`query\` is \`sed:<file>\` and \`result\` is that file's output, or a sentence saying what was written. ` +
+			"The files do not share a fate: one may be written while the next is refused, so read every entry. `success: false` means that file was NOT touched and `error` says why. A script that matched nothing is `success: true` — it ran, and that is its answer; running it again unchanged will not change it.",
+		inputSchema: zodToJsonSchema(SedInputSchema),
+		timeoutMs,
+		// In-place runs write files; a silent retry would apply a script twice.
+		retryable: false,
+		maxRetries: 0,
+		execute: async (input, context) => {
+			const validated = validateWithZod(SedInputSchema, input);
+			try {
+				const outcomes = await withTimeout(
+					executor(validated, cwd, context),
+					timeoutMs,
+					`sed timed out after ${timeoutMs}ms`,
+				);
+				return outcomes.map((outcome) => ({
+					query: `sed:${outcome.file}`,
+					result: outcome.output,
+					success: outcome.ok,
+					...(outcome.error ? { error: outcome.error } : {}),
+				}));
+			} catch (error) {
+				// The script itself did not parse, or the call timed out: nothing
+				// ran, so there is no per-file outcome to report.
+				const msg = formatError(error);
+				return (validated.files ?? []).map((file) => ({
+					query: `sed:${file}`,
+					result: "",
+					error: `sed failed: ${msg}`,
+					success: false,
+				}));
+			}
+		},
+	});
+}
+
+/**
+ * Create the awk tool.
+ */
+export function createAwkTool(
+	executor: AwkExecutor,
+	config: Pick<DefaultToolsConfig, "cwd" | "textToolsTimeoutMs"> = {},
+): AgentTool<AwkToolInput, ToolOperationResult> {
+	const timeoutMs = config.textToolsTimeoutMs ?? 30000;
+	const cwd = config.cwd ?? process.cwd();
+
+	return createTool<AwkToolInput, ToolOperationResult>({
+		name: "awk",
+		description:
+			"Run an `awk` program over one or more files. " +
+			"Send a `program` — `{print $1}`, `NR>1 {sum+=$2} END {print sum}`, `$3 ~ /error/ {print FILENAME, NR, $0}` — and the `files` to run it over. `field_separator` is `-F`; `variables` is `-v`. A program with only a BEGIN block needs no files. " +
+			"This is the tool for questions about columns and totals, where grep would only find the lines and you would still have to count them yourself: summing a column, picking fields out of a delimited file, counting occurrences per key. " +
+			"It is read-only, and deliberately so: output redirection, pipes, `system()` and `getline` are all refused rather than quietly ignored. Use `sed` or `editor` to change a file. " +
+			TEXT_TOOL_PROVENANCE +
+			`Output: a single ${TOOL_RESULT_ENVELOPE} \`query\` is \`awk:<program>\` and \`result\` is everything the program printed. ` +
+			"A program that printed nothing still has `success: true` — that is the program's answer, not a failure.",
+		inputSchema: zodToJsonSchema(AwkInputSchema),
+		timeoutMs,
+		retryable: true,
+		maxRetries: 1,
+		execute: async (input, context) => {
+			const validated = validateWithZod(AwkInputSchema, input);
+			const query = `awk:${validated.program}`;
+			try {
+				const result = await withTimeout(
+					executor(validated, cwd, context),
+					timeoutMs,
+					`awk timed out after ${timeoutMs}ms`,
+				);
+				return { query, result, success: true };
+			} catch (error) {
+				return {
+					query,
+					result: "",
+					error: `awk failed: ${formatError(error)}`,
+					success: false,
+				};
+			}
+		},
+	});
+}
+
+/**
  * Create the skills tool
  *
  * Invokes a configured skill by name and optional arguments.
@@ -1142,6 +1310,9 @@ export function createDefaultTools(
 		enableWebFetch = true,
 		enableApplyPatch = false,
 		enableEditor = true,
+		enableGrep = true,
+		enableSed = true,
+		enableAwk = true,
 		enableSkills = true,
 		enableAskQuestion = true,
 		enableSubmitAndExit = false,
@@ -1178,6 +1349,18 @@ export function createDefaultTools(
 		tools.push(createEditorTool(executors.editor, config));
 	} else if (enableApplyPatch && executors.applyPatch) {
 		tools.push(createApplyPatchTool(executors.applyPatch, config));
+	}
+
+	// grep / sed / awk. Independent of `editor`: they answer different
+	// questions, and a host that turns off one has said nothing about the rest.
+	if (enableGrep && executors.grep) {
+		tools.push(createGrepTool(executors.grep, config));
+	}
+	if (enableSed && executors.sed) {
+		tools.push(createSedTool(executors.sed, config));
+	}
+	if (enableAwk && executors.awk) {
+		tools.push(createAwkTool(executors.awk, config));
 	}
 
 	// Add skills tool if enabled and executor provided

@@ -10,11 +10,15 @@ import type {
 	ITelemetryService,
 	TextContent,
 } from "@cline/shared";
+import type { SedFileOutcome } from "./executors/sed";
 import type { QaCredential } from "./qa-credentials";
 import type {
 	ApplyPatchInput,
+	AwkToolInput,
 	EditFileInput,
+	GrepToolInput,
 	ReadFileRequest,
+	SedToolInput,
 	StructuredCommandInput,
 } from "./schemas";
 import type { TaskProgressTracker } from "./task-progress";
@@ -156,6 +160,55 @@ export type EditorExecutor = (
 ) => Promise<string>;
 
 /**
+ * Executor for the in-process `grep`.
+ *
+ * Read-only, so there is no write guard to satisfy — but it does record what it
+ * read, which is why it belongs to the same executor set as the editor rather
+ * than being constructed wherever it is called.
+ *
+ * @param input - grep command input
+ * @param cwd - Current working directory; paths are resolved against it
+ * @param context - Tool execution context
+ */
+export type GrepExecutor = (
+	input: GrepToolInput,
+	cwd: string,
+	context: AgentToolContext,
+) => Promise<string>;
+
+/**
+ * Executor for the in-process `sed`.
+ *
+ * `in_place: true` writes, so it takes the same read receipt the editor takes:
+ * a file the model has not read is not a file it may rewrite.
+ *
+ * @param input - sed command input
+ * @param cwd - Current working directory; paths are resolved against it
+ * @param context - Tool execution context
+ */
+export type SedExecutor = (
+	input: SedToolInput,
+	cwd: string,
+	context: AgentToolContext,
+) => Promise<SedFileOutcome[]>;
+
+/**
+ * Executor for the in-process `awk`.
+ *
+ * Read-only by construction — output redirection, pipes and `getline` are all
+ * refused — so, like grep, it records reads and guards no writes.
+ *
+ * @param input - awk command input
+ * @param cwd - Current working directory; paths are resolved against it
+ * @param context - Tool execution context
+ */
+export type AwkExecutor = (
+	input: AwkToolInput,
+	cwd: string,
+	context: AgentToolContext,
+) => Promise<string>;
+
+/**
  * Executor for apply_patch operations
  *
  * @param input - apply_patch command payload
@@ -251,6 +304,12 @@ export interface ToolExecutors {
 	webFetch?: WebFetchExecutor;
 	/** Filesystem editor implementation */
 	editor?: EditorExecutor;
+	/** In-process grep implementation */
+	grep?: GrepExecutor;
+	/** In-process sed implementation */
+	sed?: SedExecutor;
+	/** In-process awk implementation */
+	awk?: AwkExecutor;
 	/** Apply patch implementation */
 	applyPatch?: ApplyPatchExecutor;
 	/** Skill invocation implementation */
@@ -275,6 +334,9 @@ export type DefaultToolName =
 	| "fetch_web_content"
 	| "apply_patch"
 	| "editor"
+	| "grep"
+	| "sed"
+	| "awk"
 	| "skills"
 	| "ask_question"
 	| "submit_and_exit";
@@ -332,6 +394,24 @@ export interface DefaultToolsConfig {
 	 * @default true
 	 */
 	enableEditor?: boolean;
+
+	/**
+	 * Enable the grep tool
+	 * @default true
+	 */
+	enableGrep?: boolean;
+
+	/**
+	 * Enable the sed tool
+	 * @default true
+	 */
+	enableSed?: boolean;
+
+	/**
+	 * Enable the awk tool
+	 * @default true
+	 */
+	enableAwk?: boolean;
 
 	/**
 	 * Enable the skills tool
@@ -399,6 +479,17 @@ export interface DefaultToolsConfig {
 	 * @default 30000
 	 */
 	editorTimeoutMs?: number;
+
+	/**
+	 * Timeout for the grep / sed / awk tools, in milliseconds.
+	 *
+	 * One value for all three: they are the same kind of work — a pattern over
+	 * a set of local files — and splitting it into three knobs would invite a
+	 * host to set one and leave the others at a default it did not choose.
+	 *
+	 * @default 30000
+	 */
+	textToolsTimeoutMs?: number;
 
 	/**
 	 * Timeout for skills operations in milliseconds

@@ -610,11 +610,37 @@ function countLines(text: string): number {
 		: text.split("\n").length;
 }
 
+/**
+ * What happened to one file.
+ *
+ * One `sed` call names a list of files, and they do not share a fate: an
+ * in-place run can write the first and be refused on the second for never
+ * having been read. Joining that into one string made a refusal indexable only
+ * by reading the prose — and the tool layer above reported the whole call as a
+ * success, which is the one thing a blocked write must never look like.
+ */
+export interface SedFileOutcome {
+	/** The file as the caller named it, not as it was resolved. */
+	file: string;
+	/** The script's output for this file, or a sentence describing the write. */
+	output: string;
+	/** False only when the file was NOT touched: a guard, or an unreadable file. */
+	ok: boolean;
+	/** Why, when `ok` is false. */
+	error?: string;
+}
+
 export function createSedExecutor(options: SedExecutorOptions = {}) {
 	const { receipts } = options;
 
-	return async (input: SedInput): Promise<string> => {
-		const cwd = options.cwd ?? process.cwd();
+	// `cwd` is taken per call, the way `EditorExecutor` takes it: the tool
+	// layer knows the workspace root and the executor is built before it is
+	// known. The creation-time one is the fallback, not the authority.
+	return async (
+		input: SedInput,
+		callCwd?: string,
+	): Promise<SedFileOutcome[]> => {
+		const cwd = callCwd || options.cwd || process.cwd();
 		if (!input.files || input.files.length === 0) {
 			throw new Error("`files` is required: name at least one file to run on.");
 		}
@@ -625,7 +651,7 @@ export function createSedExecutor(options: SedExecutorOptions = {}) {
 			);
 		}
 
-		const sections: string[] = [];
+		const outcomes: SedFileOutcome[] = [];
 		for (const file of input.files) {
 			const filePath = isAbsolute(file) ? file : resolve(cwd, file);
 			let original: string;
@@ -633,7 +659,12 @@ export function createSedExecutor(options: SedExecutorOptions = {}) {
 				original = await fs.readFile(filePath, "utf8");
 			} catch (error) {
 				const reason = error instanceof Error ? error.message : String(error);
-				sections.push(`${file}: could not be read: ${reason}`);
+				outcomes.push({
+					file,
+					output: "",
+					ok: false,
+					error: `could not be read: ${reason}`,
+				});
 				continue;
 			}
 
@@ -648,15 +679,21 @@ export function createSedExecutor(options: SedExecutorOptions = {}) {
 							const why = receipts.wasRetired(filePath)
 								? "an earlier edit moved the lines that were read"
 								: "those lines have not been read in this session";
-							sections.push(
-								`${file}: not modified. Read before editing: ${why}. Call \`read_files\` for ${file} covering lines ${range.first}-${range.last}, then run this again.`,
-							);
+							outcomes.push({
+								file,
+								output: "",
+								ok: false,
+								error: `not modified. Read before editing: ${why}. Call \`read_files\` for ${file} covering lines ${range.first}-${range.last}, then run this again.`,
+							});
 							continue;
 						}
 					} else if (!receipts.hasEverRead(filePath)) {
-						sections.push(
-							`${file}: not modified. Read before editing: ${file} has not been read in this session. Call \`read_files\` for it first, then run this again.`,
-						);
+						outcomes.push({
+							file,
+							output: "",
+							ok: false,
+							error: `not modified. Read before editing: ${file} has not been read in this session. Call \`read_files\` for it first, then run this again.`,
+						});
 						continue;
 					}
 				}
@@ -666,7 +703,13 @@ export function createSedExecutor(options: SedExecutorOptions = {}) {
 
 			if (input.in_place) {
 				if (!result.changed) {
-					sections.push(`${file}: no change — the script matched nothing.`);
+					// Not a failure: the script ran and this is what it did. Saying
+					// otherwise invites the model to run it again unchanged.
+					outcomes.push({
+						file,
+						output: "no change — the script matched nothing.",
+						ok: true,
+					});
 					continue;
 				}
 				await fs.writeFile(filePath, result.output, "utf8");
@@ -676,26 +719,24 @@ export function createSedExecutor(options: SedExecutorOptions = {}) {
 					countLines(result.output),
 				);
 				const delta = countLines(result.output) - countLines(original);
-				sections.push(
-					`${file}: written. ${
+				outcomes.push({
+					file,
+					output: `written. ${
 						delta === 0
 							? "Line count unchanged."
 							: `${delta > 0 ? "+" : ""}${delta} line${Math.abs(delta) === 1 ? "" : "s"}.`
 					}`,
-				);
+					ok: true,
+				});
 				continue;
 			}
 
 			// A read-only run is a read: record it, so a later edit to the same
 			// file is not refused for a file the model has just been through.
 			receipts?.noteRead(filePath, 1, Number.POSITIVE_INFINITY);
-			sections.push(
-				input.files.length === 1
-					? result.output
-					: `==> ${file} <==\n${result.output}`,
-			);
+			outcomes.push({ file, output: result.output, ok: true });
 		}
 
-		return sections.join("\n");
+		return outcomes;
 	};
 }

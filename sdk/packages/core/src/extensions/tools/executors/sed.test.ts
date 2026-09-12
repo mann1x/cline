@@ -171,22 +171,26 @@ describe("file handling and the read guard", () => {
 
 	it("reads without the guard and does not modify the file", async () => {
 		const sed = createSedExecutor({ cwd: dir, receipts: createReadReceipts() });
-		const output = await sed({ script: "s/alpha/ALPHA/", files: [file] });
+		const [outcome] = await sed({ script: "s/alpha/ALPHA/", files: [file] });
 
-		expect(output).toContain("ALPHA");
+		expect(outcome.ok).toBe(true);
+		expect(outcome.output).toContain("ALPHA");
 		expect(await fs.readFile(file, "utf8")).toBe("alpha\nbeta\ngamma\n");
 	});
 
 	it("refuses an in-place edit of a file that has never been read", async () => {
 		const sed = createSedExecutor({ cwd: dir, receipts: createReadReceipts() });
-		const output = await sed({
+		const [outcome] = await sed({
 			script: "s/alpha/ALPHA/",
 			files: [file],
 			in_place: true,
 		});
 
-		expect(output).toContain("not modified");
-		expect(output).toContain("has not been read in this session");
+		// The flag, not just the prose: a refusal that reports `ok` is a refusal
+		// the tool layer above reports to the model as a completed edit.
+		expect(outcome.ok).toBe(false);
+		expect(outcome.error).toContain("not modified");
+		expect(outcome.error).toContain("has not been read in this session");
 		expect(await fs.readFile(file, "utf8")).toBe("alpha\nbeta\ngamma\n");
 	});
 
@@ -195,13 +199,14 @@ describe("file handling and the read guard", () => {
 		receipts.noteRead(file, 1, Number.POSITIVE_INFINITY);
 		const sed = createSedExecutor({ cwd: dir, receipts });
 
-		const output = await sed({
+		const [outcome] = await sed({
 			script: "s/alpha/ALPHA/",
 			files: [file],
 			in_place: true,
 		});
 
-		expect(output).toContain("written");
+		expect(outcome.ok).toBe(true);
+		expect(outcome.output).toContain("written");
 		expect(await fs.readFile(file, "utf8")).toBe("ALPHA\nbeta\ngamma\n");
 	});
 
@@ -211,13 +216,14 @@ describe("file handling and the read guard", () => {
 		receipts.noteRead(file, 1, 1);
 		const sed = createSedExecutor({ cwd: dir, receipts });
 
-		const output = await sed({
+		const [outcome] = await sed({
 			script: "3s/gamma/GAMMA/",
 			files: [file],
 			in_place: true,
 		});
 
-		expect(output).toContain("lines 3-3");
+		expect(outcome.ok).toBe(false);
+		expect(outcome.error).toContain("lines 3-3");
 		expect(await fs.readFile(file, "utf8")).toBe("alpha\nbeta\ngamma\n");
 	});
 
@@ -238,13 +244,35 @@ describe("file handling and the read guard", () => {
 		const sed = createSedExecutor({ cwd: dir, receipts });
 
 		await sed({ script: "s/alpha/x/", files: [file] });
-		const output = await sed({
+		const [outcome] = await sed({
 			script: "s/alpha/ALPHA/",
 			files: [file],
 			in_place: true,
 		});
 
-		expect(output).toContain("written");
+		expect(outcome.ok).toBe(true);
+		expect(outcome.output).toContain("written");
+	});
+
+	it("reports each file separately when they do not share a fate", async () => {
+		const other = join(dir, "other.txt");
+		await fs.writeFile(other, "alpha\n", "utf8");
+		const receipts = createReadReceipts();
+		// One read, one not.
+		receipts.noteRead(file, 1, Number.POSITIVE_INFINITY);
+		const sed = createSedExecutor({ cwd: dir, receipts });
+
+		const outcomes = await sed({
+			script: "s/alpha/ALPHA/",
+			files: [file, other],
+			in_place: true,
+		});
+
+		expect(outcomes).toHaveLength(2);
+		expect(outcomes[0].ok).toBe(true);
+		expect(outcomes[1].ok).toBe(false);
+		expect(await fs.readFile(file, "utf8")).toBe("ALPHA\nbeta\ngamma\n");
+		expect(await fs.readFile(other, "utf8")).toBe("alpha\n");
 	});
 
 	it("says so when the script matched nothing rather than claiming a write", async () => {
@@ -252,13 +280,16 @@ describe("file handling and the read guard", () => {
 		receipts.noteRead(file, 1, Number.POSITIVE_INFINITY);
 		const sed = createSedExecutor({ cwd: dir, receipts });
 
-		const output = await sed({
+		const [outcome] = await sed({
 			script: "s/nowhere/x/",
 			files: [file],
 			in_place: true,
 		});
 
-		expect(output).toContain("no change");
+		// A script that matched nothing ran correctly. Reporting it as a failure
+		// invites the model to send the identical call again.
+		expect(outcome.ok).toBe(true);
+		expect(outcome.output).toContain("no change");
 	});
 });
 
