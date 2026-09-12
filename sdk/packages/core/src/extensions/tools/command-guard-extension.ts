@@ -42,6 +42,34 @@ export function createPlanModeCommandGuardExtension(
 	const beforeTool = (
 		context: AgentBeforeToolContext,
 	): AgentBeforeToolResult | undefined => {
+		// `sed` is the second way to write a file that is not the editor. The
+		// editor is simply absent from the plan preset; `sed` is present,
+		// because reading a script's output without applying it is exactly the
+		// read-only inspection plan mode is for. Only the write is refused —
+		// the same call without `in_place` goes through and prints the result.
+		if (context.tool.name === DefaultToolNames.SED) {
+			const input = context.input as { in_place?: unknown } | undefined;
+			if (input?.in_place === true) {
+				capturePlanModeCommandBlocked(options.telemetry, {
+					tool_name: "sed",
+					blocked_construct: "sed in_place",
+					command_count: 1,
+					agent_id: context.snapshot.agentId,
+					conversation_id: context.snapshot.conversationId,
+					run_id: context.snapshot.runId,
+					iteration: context.snapshot.iteration,
+					tool_call_id: context.toolCall.toolCallId,
+				});
+				return {
+					skip: true,
+					reason: formatPlanModeBlockedCommandError(
+						"`sed` with `in_place: true`",
+					),
+				};
+			}
+			return undefined;
+		}
+
 		if (context.tool.name !== DefaultToolNames.RUN_COMMANDS) {
 			return undefined;
 		}

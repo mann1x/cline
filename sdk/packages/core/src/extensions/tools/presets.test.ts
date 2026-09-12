@@ -6,6 +6,34 @@ import {
 } from "./presets";
 
 describe("default tool presets", () => {
+	it("never gives a writer to a preset that turned the editor off", () => {
+		// `enableSed` defaults to true, so a preset written before `sed` existed
+		// says nothing about it and would acquire a file writer silently. The
+		// plan preset is the exception and is guarded instead: the plan-mode
+		// hook refuses `in_place: true`.
+		for (const [name, preset] of Object.entries(ToolPresets)) {
+			const config = preset as Record<string, boolean>;
+			if (config.enableEditor === false && name !== "plan") {
+				expect(
+					config.enableSed,
+					`preset '${name}' disables the editor but leaves sed on`,
+				).toBe(false);
+			}
+		}
+	});
+
+	it("states all three POSIX tools explicitly in every preset", () => {
+		for (const [name, preset] of Object.entries(ToolPresets)) {
+			const config = preset as Record<string, unknown>;
+			for (const flag of ["enableGrep", "enableSed", "enableAwk"]) {
+				expect(
+					typeof config[flag],
+					`preset '${name}' leaves ${flag} to the default`,
+				).toBe("boolean");
+			}
+		}
+	});
+
 	it("explicitly configures ask_question across presets", () => {
 		expect(ToolPresets.search.enableAskQuestion).toBe(false);
 		expect(ToolPresets.act.enableAskQuestion).toBe(true);

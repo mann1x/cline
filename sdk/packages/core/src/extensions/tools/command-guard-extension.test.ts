@@ -75,6 +75,67 @@ describe("plan-mode command-guard extension", () => {
 		expect(extension.manifest.capabilities).toContain("hooks");
 	});
 
+	it("blocks the sed tool when it would write in place", async () => {
+		// The editor is simply absent from the plan preset. `sed` is not: it is
+		// enabled for its preview mode, so the write is what has to be stopped.
+		const extension = createPlanModeCommandGuardExtension();
+		const result = await runBeforeTool(
+			extension,
+			makeContext("sed", {
+				script: "s/a/b/",
+				files: ["src/index.ts"],
+				in_place: true,
+			}),
+		);
+
+		expect(result?.skip).toBe(true);
+		expect(result?.reason).toContain("PLAN MODE");
+		expect(result?.reason).toContain("in_place");
+	});
+
+	it("lets a sed preview through, because it changes nothing", async () => {
+		const extension = createPlanModeCommandGuardExtension();
+		const result = await runBeforeTool(
+			extension,
+			makeContext("sed", { script: "s/a/b/", files: ["src/index.ts"] }),
+		);
+
+		expect(result).toBeUndefined();
+	});
+
+	it("reports a blocked sed write to telemetry as sed, not run_commands", async () => {
+		const telemetry = makeTelemetryStub();
+		const extension = createPlanModeCommandGuardExtension({ telemetry });
+		await runBeforeTool(
+			extension,
+			makeContext("sed", {
+				script: "s/a/b/",
+				files: ["a.ts"],
+				in_place: true,
+			}),
+		);
+
+		const captured = (telemetry.capture as ReturnType<typeof vi.fn>).mock
+			.calls[0];
+		expect(captured?.[0]?.properties?.tool_name).toBe("sed");
+	});
+
+	it("leaves grep and awk alone: neither can write", async () => {
+		const extension = createPlanModeCommandGuardExtension();
+		expect(
+			await runBeforeTool(
+				extension,
+				makeContext("grep", { pattern: "x", paths: ["."] }),
+			),
+		).toBeUndefined();
+		expect(
+			await runBeforeTool(
+				extension,
+				makeContext("awk", { program: "{print $1}", files: ["a.txt"] }),
+			),
+		).toBeUndefined();
+	});
+
 	it("skips run_commands calls containing a file-editing command", async () => {
 		const extension = createPlanModeCommandGuardExtension();
 		const result = await runBeforeTool(
