@@ -23,8 +23,13 @@ export function buildToolPolicies(
 		}
 	}
 
-	set(["read_files", "read_file", "list_files", "list_code_definition_names", "search_codebase", "search_files"])
-	set(["editor", "replace_in_file", "write_to_file", "apply_patch", "delete_file"])
+	// `grep` and `awk` read, `sed` writes -- see the two predicates below.
+	// Listing them here is what forces `requestToolApproval` at all: the SDK
+	// auto-approves any tool a policy does not name, so before this all three
+	// ran with no approval gate whatever the toggles said, `sed --in-place`
+	// included.
+	set(["read_files", "read_file", "list_files", "list_code_definition_names", "search_codebase", "search_files", "grep", "awk"])
+	set(["editor", "replace_in_file", "write_to_file", "apply_patch", "delete_file", "sed"])
 	set(["run_commands", "execute_command"])
 	set(["fetch_web_content", "web_fetch", "web_search"])
 	set(["browser", "browser_action"])
@@ -93,13 +98,33 @@ export function isToolAutoApproved(toolName: string, settings: AutoApprovalSetti
 }
 
 function isReadTool(toolName: string): boolean {
-	return ["read_files", "read_file", "list_files", "list_code_definition_names", "search_codebase", "search_files"].includes(
-		toolName,
-	)
+	// `grep` and `awk` belong here and not with the writers: neither can
+	// change a file, and a user who has allowed reading has allowed both.
+	//
+	// POSIX awk *can* write -- `print > "file"`, `print | "cmd"` and
+	// `system()` are all standard -- so this rests on a property of our
+	// implementation rather than of the language. That implementation refuses
+	// all three, and refuses the redirects in `parseAwk` before a rule runs;
+	// `readFile` is the only filesystem call in the executor, and there is no
+	// in-place mode. See `awk.ts` and `awk-parser.ts:467`. If that ever
+	// changes, `awk` moves back to `isEditTool` in the same commit.
+	return [
+		"read_files",
+		"read_file",
+		"list_files",
+		"list_code_definition_names",
+		"search_codebase",
+		"search_files",
+		"grep",
+		"awk",
+	].includes(toolName)
 }
 
 export function isEditTool(toolName: string): boolean {
-	return ["editor", "replace_in_file", "write_to_file", "apply_patch", "delete_file"].includes(toolName)
+	// `sed` writes when `in_place` is true, so it is governed by the edit
+	// toggle -- and by this predicate's denial text, which says the file was
+	// not modified. `awk` is not here: see `isReadTool`.
+	return ["editor", "replace_in_file", "write_to_file", "apply_patch", "delete_file", "sed"].includes(toolName)
 }
 
 function isCommandTool(toolName: string): boolean {
