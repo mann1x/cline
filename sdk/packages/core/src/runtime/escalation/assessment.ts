@@ -31,6 +31,14 @@ export interface EscalationAssessmentInput {
 	};
 	/** A terminal guard has already stood down once for this task. */
 	guardStoodDown?: boolean;
+	/**
+	 * What the complexity walker made of the files in play, already worded.
+	 *
+	 * A tiebreaker and nothing more. It measures how hard the code is to read,
+	 * not how likely this model is to fix it, and each line says so where it is
+	 * read -- the same discipline `check_file` keeps about its own bound.
+	 */
+	complexity?: readonly string[];
 }
 
 /**
@@ -69,6 +77,9 @@ export function buildEscalationAssessment(
 				carried ? `, ${carried} carried forward unverified` : ""
 			}.`,
 		);
+	}
+	for (const line of input.complexity ?? []) {
+		lines.push(line);
 	}
 	if (input.guardStoodDown) {
 		lines.push(

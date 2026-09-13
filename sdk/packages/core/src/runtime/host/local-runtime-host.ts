@@ -289,6 +289,46 @@ function maxAccumulatedUsage(
 	};
 }
 
+/** Files a single escalation's assessment will read for complexity. */
+const COMPLEXITY_FILE_LIMIT = 3;
+
+/**
+ * What the complexity walker makes of the files the model named.
+ *
+ * Whole files rather than the function under change: `escalate` names paths,
+ * not lines, and inventing a line to narrow to would be the measurement
+ * pretending to a precision it was not given. Every failure is silence --
+ * unreadable, unparseable, or a language nothing ships a grammar for -- and
+ * silence means "not measured", never "simple".
+ */
+async function describeFilesInPlay(
+	files: readonly string[] | undefined,
+	workspaceRoot: string | undefined,
+): Promise<string[]> {
+	if (!files?.length) {
+		return [];
+	}
+	const { readFile } = await import("node:fs/promises");
+	const { scoreComplexity, describeComplexity } = await import(
+		"../../extensions/complexity/walker"
+	);
+	const described: string[] = [];
+	for (const file of files.slice(0, COMPLEXITY_FILE_LIMIT)) {
+		const absolute =
+			isAbsolute(file) || !workspaceRoot ? file : join(workspaceRoot, file);
+		try {
+			const source = await readFile(absolute, "utf8");
+			const score = await scoreComplexity(absolute, source);
+			if (score) {
+				described.push(describeComplexity(score, file));
+			}
+		} catch {
+			// Not a fact about the code.
+		}
+	}
+	return described;
+}
+
 /**
  * Which round of compaction a saved state carries, or 0 for none.
  *
@@ -1230,10 +1270,19 @@ export class LocalRuntimeHost implements RuntimeHost {
 			// itself rather than instead of it. The model's account is the one
 			// piece of evidence it has an interest in, and a disagreement between
 			// the two is worth reading on its own.
-			assess: async () => {
+			assess: async (context) => {
 				const controller = atomicProtocol?.controller;
 				const outcomes = controller?.outcomes ?? [];
+				// Complexity is a tiebreaker, so it is asked for last and never
+				// waited on for long: a grammar that will not load, a file that
+				// will not parse and a language nothing ships a grammar for all
+				// answer the same way, which is silence.
+				const complexity = await describeFilesInPlay(
+					context.files,
+					configWithProvider.workspaceRoot ?? configWithProvider.cwd,
+				);
 				return buildEscalationAssessment({
+					...(complexity.length > 0 ? { complexity } : {}),
 					...(struggleIteration > 0 ? { iteration: struggleIteration } : {}),
 					...(struggleDetector
 						? { signals: struggleDetector.signalsAt(struggleIteration) }

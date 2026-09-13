@@ -79,8 +79,15 @@ export interface EscalationSessionOptions {
 	readTransaction?: () => EscalationTransactionState | undefined;
 	/** The task as the user stated it. */
 	readTask?: () => string | undefined;
-	/** The harness's own reading of the code. Phase-6 seam. */
-	assess?: () => Promise<string | undefined>;
+	/**
+	 * The harness's own reading of the run, and of the code in play.
+	 *
+	 * Given the files the model named so the reading can cover them. What comes
+	 * back is opaque text for the brief and the approval dialog.
+	 */
+	assess?: (context: {
+		files?: readonly string[];
+	}) => Promise<string | undefined>;
 	/** Retires what the base model had read about a file the expert changed. */
 	forgetReads?: (absolutePath: string) => void;
 	/**
@@ -301,7 +308,9 @@ export function createEscalationSession(
 		// user's refusal -- and the tool turns that into a result the model can
 		// act on rather than a failed call.
 		const transaction = options.readTransaction?.();
-		const assessment = await options.assess?.();
+		const assessment = await options.assess?.({
+			...(request.files?.length ? { files: request.files } : {}),
+		});
 		const index = controller.used + 1;
 		const brief = buildEscalationBrief({
 			goal: request.goal ?? "",

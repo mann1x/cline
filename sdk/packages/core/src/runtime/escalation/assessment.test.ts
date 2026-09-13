@@ -59,6 +59,19 @@ describe("the harness's own reading", () => {
 		expect(assessment).toContain("None of this is a verdict");
 	});
 
+	// Carried verbatim, bound and all: the walker words its own line because
+	// the bound has to travel with the number wherever it is read.
+	it("carries the complexity lines it was handed", () => {
+		const assessment = buildEscalationAssessment({
+			signals: { iteration: 40, failedCalls: 5, distress: 0 },
+			complexity: [
+				"Cognitive complexity of `step` (game.js:10-40): 31. That measures how hard…",
+			],
+		});
+
+		expect(assessment).toContain("Cognitive complexity of `step`");
+	});
+
 	it("says when a guard has already stood down", () => {
 		const assessment = buildEscalationAssessment({
 			signals: { iteration: 90, failedCalls: 6, distress: 0 },

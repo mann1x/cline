@@ -50,8 +50,8 @@
 	},
 	"dependencies": {
 		"@cline/agents": "workspace:*",
-		"@cline/shared": "workspace:*",
 		"@cline/llms": "workspace:*",
+		"@cline/shared": "workspace:*",
 		"@modelcontextprotocol/sdk": "^1.29.0",
 		"@opentelemetry/api": "^1.9.0",
 		"@opentelemetry/api-logs": "^0.214.0",
@@ -65,9 +65,11 @@
 		"@opentelemetry/sdk-trace-node": "^2.6.1",
 		"@opentelemetry/semantic-conventions": "^1.40.0",
 		"jiti": "^2.7.0",
-		"node-machine-id": "^1.1.12",
 		"nanoid": "^5.1.7",
+		"node-machine-id": "^1.1.12",
 		"simple-git": "3.36.0",
+		"tree-sitter-wasms": "^0.1.12",
+		"web-tree-sitter": "^0.25.0",
 		"ws": "^8.20.0",
 		"yaml": "^2.8.2",
 		"zod": "^4.3.6"
