@@ -11,6 +11,7 @@ import { DEFAULT_CHECK_RECONSIDERED_AFTER } from "./proposal";
 import { createProposeCheckTool } from "./propose-check-tool";
 import {
 	buildEmptyAttemptPrompt,
+	describeDisengagement,
 	describeEmptyAttempt,
 	describeNeverStarted,
 	describeSilentTurn,
@@ -266,6 +267,26 @@ export interface AtomicProtocolSession {
 		text?: string;
 		forced?: boolean;
 	}): Promise<string | undefined>;
+	/**
+	 * The user turned the protocol off. Judge what is open and stand down.
+	 *
+	 * Whoever calls this owns the timing, and the timing is the hard part: a
+	 * discarded transaction puts every file it touched back, and doing that
+	 * while a tool call is open would rewrite a file underneath the call that is
+	 * writing it. The host calls this where no call is in flight -- idle, or at
+	 * the top of an agent-loop iteration -- and nowhere else.
+	 *
+	 * Returns what to tell the model, already written. After it returns, the
+	 * protocol is inert: its tools refuse, and the completion boundary judges
+	 * nothing, so the message's claim that the tools have gone is true for the
+	 * rest of this session rather than only after the next rebuild.
+	 *
+	 * Calling it twice is a no-op and returns nothing: the second caller has
+	 * nothing to tell the model that the first did not already say.
+	 */
+	disengage(): Promise<string | undefined>;
+	/** Whether it has stood down. */
+	readonly disengaged: boolean;
 }
 
 /**
@@ -467,6 +488,11 @@ export async function createAtomicProtocolSession(
 
 	let rules: string | undefined = await controller.open();
 	let finished = false;
+	// Set by `disengage`, and checked by everything the protocol added. A stood
+	// down protocol is inert rather than removed: its tools are already bound
+	// into the running session, so refusing is the only way to make "these tools
+	// have gone" true before the next rebuild.
+	let disengaged = false;
 	let emptyAttempts = 0;
 	// Tool calls made in the open transaction, of any kind, including ones the
 	// check-first gate refused. Zero means this transaction never began.
@@ -763,12 +789,29 @@ export async function createAtomicProtocolSession(
 		}
 	};
 
+	/**
+	 * What a protocol tool says after the user turned the protocol off.
+	 *
+	 * Named as a user action, because the model has just been told it was one
+	 * and a second, blanker refusal would read as the tool being broken.
+	 */
+	const refuseDisengaged = (name: string) =>
+		`\`${name}\` is not available: the user turned the change protocol off. There are no transactions now -- edit the files directly, and say what you changed.`;
+
 	return {
 		controller,
 		get oracle() {
 			return controller.oracle;
 		},
-		tools,
+		tools: tools.map((tool) => ({
+			...tool,
+			execute: async (input: never, context: never) => {
+				if (disengaged) {
+					return refuseDisengaged(tool.name);
+				}
+				return tool.execute?.(input, context);
+			},
+		})) as AgentTool[],
 		decorateTools: (given) => {
 			const withReads = withBaseRevisionReads(given, controller);
 			// Outermost, so it sees every call including the ones the gate
@@ -848,6 +891,10 @@ export async function createAtomicProtocolSession(
 			);
 		},
 		async onCompletionAttempt({ text, forced }) {
+			// Nothing left to judge: the protocol stood down and said so.
+			if (disengaged) {
+				return undefined;
+			}
 			// The tool that submitted is already judging this transaction. The
 			// runtime reaches the boundary for the same turn, and judging it
 			// twice would settle the transaction the submission just opened.
@@ -856,6 +903,50 @@ export async function createAtomicProtocolSession(
 			}
 			silentBoundaries += 1;
 			return judgeSubmission({ text, forced });
+		},
+		get disengaged() {
+			return disengaged;
+		},
+		async disengage() {
+			if (disengaged) {
+				return undefined;
+			}
+			disengaged = true;
+			// A transaction nobody ever put anything in is not an attempt, and
+			// judging it would report a discard over a file nobody touched. The
+			// same question the boundary asks before it nudges.
+			const open = controller.transaction;
+			const nothingToJudge = finished || (await controller.isUntouched());
+			if (nothingToJudge) {
+				options.logger?.log?.(
+					"[Atomic] disengaged by the user with nothing open to judge.",
+				);
+				return describeDisengagement({});
+			}
+			// Forced, because this is not the model saying it is done -- exactly
+			// the same flag the runtime uses when a run is cut short, and it is
+			// what makes the verdict say so where nothing could check the change.
+			const settlement = await controller.settle({ forced: true });
+			const filesPutBack = settlement.kept
+				? 0
+				: settlement.restore.restored.length +
+					settlement.restore.removed.length +
+					settlement.restore.recreated.length;
+			options.logger?.log?.(
+				`[Atomic] disengaged by the user; TX-${String(open).padStart(2, "0")} ${
+					settlement.kept
+						? "kept"
+						: `discarded, ${filesPutBack} file(s) put back`
+				}.`,
+			);
+			return describeDisengagement({
+				transaction: open,
+				// The verdict already written, so the sentence the model reads is
+				// the one it would have read had this closed on its own.
+				verdict: settlement.message,
+				kept: settlement.kept,
+				filesPutBack,
+			});
 		},
 	};
 }

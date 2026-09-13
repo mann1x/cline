@@ -1305,3 +1305,111 @@ describe("the clause for a transaction nothing has landed in", () => {
 		});
 	});
 });
+
+describe("standing down because the user turned the protocol off", () => {
+	it("judges the open transaction and reports it as discarded when the check fails", async () => {
+		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "on", oracleCommand: shellCheck(root, "fixed") },
+			});
+			if (!session) {
+				throw new Error("expected the protocol to arm");
+			}
+			// Begun, so there is something to judge.
+			await workIn(session);
+			await fs.writeFile(path.join(root, "game.js"), "let a = 2", "utf8");
+
+			const notice = await session.disengage();
+
+			expect(notice).toContain("The user has turned the change protocol off");
+			expect(notice).toContain("TX-01");
+			expect(notice).toContain("discarded");
+			// The file goes back, which is the whole reason the timing of this
+			// call matters.
+			expect(await fs.readFile(path.join(root, "game.js"), "utf8")).toBe(
+				"let a = 1",
+			);
+			expect(notice).toContain("Read a file again before you edit it");
+		});
+	});
+
+	it("keeps the work and says so when the check passes", async () => {
+		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "on", oracleCommand: shellCheck(root, "fixed") },
+			});
+			if (!session) {
+				throw new Error("expected the protocol to arm");
+			}
+			await workIn(session);
+			await fs.writeFile(path.join(root, "game.js"), "// fixed", "utf8");
+
+			const notice = await session.disengage();
+
+			expect(notice).toContain("kept");
+			expect(notice).not.toContain("put back");
+			expect(await fs.readFile(path.join(root, "game.js"), "utf8")).toBe(
+				"// fixed",
+			);
+		});
+	});
+
+	// A transaction nobody put anything in is not an attempt. Judging it would
+	// report a discard over a file nobody touched.
+	it("says nothing moved when the open transaction was never started", async () => {
+		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "on", oracleCommand: shellCheck(root, "fixed") },
+			});
+
+			const notice = await session?.disengage();
+
+			expect(notice).toContain("No transaction was open");
+			expect(notice).not.toContain("put back");
+		});
+	});
+
+	it("is inert afterwards: the tools refuse and the boundary judges nothing", async () => {
+		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "on", oracleCommand: shellCheck(root, "fixed") },
+			});
+			if (!session) {
+				throw new Error("expected the protocol to arm");
+			}
+			await session.disengage();
+
+			expect(session.disengaged).toBe(true);
+			// The message tells the model these have gone, and they are already
+			// bound into the running session -- so refusing is what makes that
+			// true before the next rebuild.
+			const check = session.tools.find((tool) => tool.name === "run_check");
+			const refusal = String(
+				await check?.execute?.({} as never, { iteration: 1 } as never),
+			);
+			expect(refusal).toContain("the user turned the change protocol off");
+			// And nothing is judged at the boundary any more.
+			expect(
+				await session.onCompletionAttempt({ text: "done" }),
+			).toBeUndefined();
+		});
+	});
+
+	it("says nothing the second time, having nothing left to say", async () => {
+		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "on", oracleCommand: shellCheck(root, "fixed") },
+			});
+			if (!session) {
+				throw new Error("expected the protocol to arm");
+			}
+			expect(await session.disengage()).toBeDefined();
+			expect(await session.disengage()).toBeUndefined();
+		});
+	});
+});

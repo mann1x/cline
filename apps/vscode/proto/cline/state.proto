@@ -477,6 +477,25 @@ message UpdateSettingsRequest {
   optional AtomicProtocolSettings atomic_protocol_settings = 59;
   optional bool web_search_enabled = 60;
   optional bool show_request_timings = 61;
+  optional AtomicProtocolSessionSettings atomic_protocol_session = 65;
+}
+
+// The per-task half of the change protocol: engaged, and this task's check.
+//
+// Only meaningful where the mode is "on". Every field is `optional` for the
+// reason spelled out on AtomicProtocolSettings below -- this travels as a delta
+// and proto3 cannot otherwise tell "not sent" from the type's zero, so an
+// unticked propose-check and an untouched one would look identical, and typing
+// the first character of an oracle command would clear the expect pattern.
+//
+// `engaged` is not a setting so much as a switch position, and it is the one
+// field here with consequences beyond storage: turning it off judges whatever
+// transaction is open and may put files back.
+message AtomicProtocolSessionSettings {
+  optional bool engaged = 1;
+  optional string oracle_command = 2;
+  optional string oracle_expect = 3;
+  optional bool propose_check = 4;
 }
 
 // Whether a run may finish with a file it changed and never checked.
@@ -497,7 +516,9 @@ message EditVerificationSettings {
 // has neither: it arrives as "" and the merge reads that as "cleared", which
 // wiped the sibling oracle field on every keystroke.
 message AtomicProtocolSettings {
-  // "off", "auto" or "always".
+  // "off", "on" or "static". "auto" and "always" are still read, and both mean
+  // "static": a settings blob written before the rename says one of those, and
+  // both of them engaged the protocol by themselves.
   string mode = 1;
   // The shell line that decides whether the task is done. Empty means the
   // workspace is inspected for something to run instead.
