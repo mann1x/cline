@@ -622,6 +622,12 @@ export interface ClineTransactionInfo {
 	/** One-based, in the order they were opened. */
 	transaction: number
 	kept: boolean
+	/**
+	 * Not kept, and not rolled back either: the check said something it had
+	 * never said in this run, so the changes stayed on disk and the next
+	 * transaction opened on top of them.
+	 */
+	carried?: boolean
 	/** What the check said, when there was one to run. */
 	output?: string
 	/** Files put back, created ones removed, deleted ones recreated. */

@@ -1,5 +1,5 @@
 import type { ClineMessage, ClineTransactionInfo } from "@shared/ExtensionMessage"
-import { CheckIcon, ChevronDownIcon, ChevronRightIcon, UndoIcon } from "lucide-react"
+import { ArrowRightIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, UndoIcon } from "lucide-react"
 import { useState } from "react"
 import { formatDuration } from "@/utils/request-timings"
 
@@ -34,6 +34,11 @@ function label(transaction: number): string {
  * A discarded one therefore stays open, and a kept one collapses to a divider.
  * The asymmetry is deliberate: the failures are the ones you need to read, and
  * they are the minority in a run that finishes.
+ *
+ * A carried transaction is the third case and must not wear the rollback's
+ * clothes: nothing went back, the files on disk are the ones the model just
+ * wrote, and an undo arrow over that sentence would say the opposite of what
+ * happened.
  */
 export const TransactionRow = ({ message }: { message: ClineMessage }) => {
 	const info = parseInfo(message.text)
@@ -44,7 +49,8 @@ export const TransactionRow = ({ message }: { message: ClineMessage }) => {
 		return <div aria-hidden className="h-px" />
 	}
 
-	const parts = [info.message || `${label(info.transaction)} ${info.kept ? "kept" : "discarded"}`]
+	const carried = info.kept !== true && info.carried === true
+	const parts = [info.message || `${label(info.transaction)} ${info.kept ? "kept" : carried ? "carried" : "discarded"}`]
 	if (!info.kept && info.filesPutBack) {
 		parts.push(`${info.filesPutBack} file${info.filesPutBack === 1 ? "" : "s"} put back`)
 	}
@@ -57,7 +63,7 @@ export const TransactionRow = ({ message }: { message: ClineMessage }) => {
 	}
 
 	return (
-		<div className={`py-1.5 ${info.kept ? "text-description" : "text-error"}`}>
+		<div className={`py-1.5 ${info.kept ? "text-description" : carried ? "text-warning" : "text-error"}`}>
 			<button
 				aria-expanded={expanded}
 				className="flex items-center gap-2 w-full text-inherit hover:text-foreground bg-transparent border-0 p-0 cursor-pointer"
@@ -73,7 +79,13 @@ export const TransactionRow = ({ message }: { message: ClineMessage }) => {
 				) : (
 					<span className="size-3 shrink-0" />
 				)}
-				{info.kept ? <CheckIcon className="size-3 shrink-0" /> : <UndoIcon className="size-3 shrink-0" />}
+				{info.kept ? (
+					<CheckIcon className="size-3 shrink-0" />
+				) : carried ? (
+					<ArrowRightIcon className="size-3 shrink-0" />
+				) : (
+					<UndoIcon className="size-3 shrink-0" />
+				)}
 				<span className="min-w-0 text-left">{parts.join(" · ")}</span>
 				<div className="flex-1 min-w-4 border-t border-description/30" />
 			</button>

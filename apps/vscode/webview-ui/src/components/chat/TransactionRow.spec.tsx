@@ -14,6 +14,25 @@ describe("TransactionRow", () => {
 		expect(screen.getByText(/TX-02 kept/)).toBeTruthy()
 	})
 
+	// The third outcome. An undo arrow and an error colour over a sentence that
+	// says the files are still there would contradict it on the same line.
+	it("does not dress a carried transaction as a rollback", () => {
+		const { container } = render(
+			<TransactionRow
+				message={row({
+					transaction: 1,
+					kept: false,
+					carried: true,
+					message: "TX-01 carried — the check failed (exit 1).",
+				})}
+			/>,
+		)
+
+		expect(screen.getByText(/TX-01 carried/)).toBeTruthy()
+		expect(container.querySelector(".text-error")).toBeNull()
+		expect(container.querySelector(".text-warning")).toBeTruthy()
+	})
+
 	// The count is the part that appears nowhere else. The model's own account
 	// of the edits is still on screen above this row, describing changes that no
 	// longer exist on disk.

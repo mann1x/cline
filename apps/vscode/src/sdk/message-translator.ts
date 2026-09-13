@@ -1591,6 +1591,7 @@ export function parseAtomicTransactionNoticeMetadata(
 	return {
 		transaction,
 		kept: metadata.kept,
+		...(metadata.carried === true ? { carried: true } : {}),
 		message,
 		...(typeof metadata.output === "string" && metadata.output.trim() !== "" ? { output: metadata.output } : {}),
 		...(filesPutBack !== undefined ? { filesPutBack } : {}),

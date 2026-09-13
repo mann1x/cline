@@ -1039,6 +1039,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 						kind: "atomic_transaction",
 						transaction: event.transaction,
 						kept: event.kept,
+						...(event.carried ? { carried: true } : {}),
 						source: event.source,
 						...(event.elapsedMs !== undefined
 							? { elapsedMs: event.elapsedMs }

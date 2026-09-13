@@ -52,6 +52,13 @@ export type TransactionSettlement =
 			message: string;
 			verdict?: OracleVerdict;
 			restore: RestoreReport;
+			/**
+			 * Whether the work stayed on disk instead of being rolled back.
+			 *
+			 * See `carriedOn` on the controller. `restore` is empty when this is
+			 * set -- nothing was put back, so there is nothing to report.
+			 */
+			carried?: boolean;
 			/** The next transaction's rules and record, or nothing when out of them. */
 			nextPrompt?: string;
 	  };
@@ -93,6 +100,8 @@ export type TransactionEvent =
 			type: "settled";
 			transaction: number;
 			kept: boolean;
+			/** Not kept, and not rolled back either: the check's answer moved. */
+			carried?: boolean;
 			/**
 			 * Who judged it. A consumer counting successes has to be able to
 			 * separate "the check passed" from "nothing checked and nobody
@@ -160,7 +169,17 @@ export interface TransactionControllerOptions {
 export class TransactionController {
 	private readonly history: TransactionOutcome[] = [];
 	private readonly uncoveredPaths = new Set<string>();
+	/** What a rollback goes back to. Outlives a transaction that was carried. */
 	private snapshot?: Snapshot;
+	/**
+	 * The tree as the open transaction found it.
+	 *
+	 * The same object as `snapshot` in the ordinary case, and older than it
+	 * after a carry -- "has this transaction changed anything" and "what does a
+	 * rollback undo" stop being the same question once work outlives the
+	 * transaction that made it.
+	 */
+	private openedWith?: Snapshot;
 	private current = 0;
 	/** When the open transaction started, for the settlement line. */
 	private openedAt: number | undefined;
@@ -171,6 +190,23 @@ export class TransactionController {
 	private discardedSinceAdoption = 0;
 	/** Open while the model may replace a check that has never passed. Once. */
 	private reconsidering = false;
+	/**
+	 * Every distinct thing this run's check has said, and whether it has ever
+	 * said the same thing twice.
+	 *
+	 * The repeat is what makes the novelty mean anything. A check that prints a
+	 * duration, a timestamp or a seed says something new every single time it
+	 * runs, and treating that as evidence the edits are landing would tell a
+	 * model its work was progressing while nothing moved -- the same trap
+	 * `describeStuckHostCheck` documents from the other direction. A check that
+	 * has repeated itself once is demonstrably deterministic on the path it
+	 * takes, and only then is "it has never said this before" a fact about the
+	 * files rather than about the clock.
+	 */
+	private readonly checkOutputs = new Set<string>();
+	private checkHasRepeated = false;
+	/** Set by a carried settlement, so the next `open` keeps the older base. */
+	private carrying = false;
 	private reconsiderationsUsed = 0;
 
 	constructor(private readonly options: TransactionControllerOptions) {}
@@ -281,6 +317,23 @@ export class TransactionController {
 	}
 
 	/**
+	 * Record what the check just said, and answer whether it is new.
+	 *
+	 * One funnel for every run of the oracle in this controller, so the record
+	 * covers the checks the model asked for as well as the ones that judged a
+	 * transaction.
+	 */
+	private noteCheckOutput(output: string): boolean {
+		const key = output.trim();
+		if (this.checkOutputs.has(key)) {
+			this.checkHasRepeated = true;
+			return false;
+		}
+		this.checkOutputs.add(key);
+		return true;
+	}
+
+	/**
 	 * Run the check against the working tree, and settle nothing.
 	 *
 	 * The check the transaction is judged by was reachable from exactly one
@@ -305,6 +358,7 @@ export class TransactionController {
 		const verdict = await runOracle(oracle, {
 			timeoutMs: this.options.oracleTimeoutMs ?? DEFAULT_ORACLE_TIMEOUT_MS,
 		});
+		this.noteCheckOutput(verdict.output);
 		// A pass here is the whole answer to "can this check ever pass", and it
 		// counts wherever it happened -- a check the model satisfied once and
 		// then broke again is not a check that cannot be satisfied.
@@ -334,8 +388,8 @@ export class TransactionController {
 
 	/** Whether the open transaction has changed anything on disk. */
 	async isUntouched(): Promise<boolean> {
-		return this.snapshot
-			? await snapshotIsClean(this.snapshot, this.options.snapshotLimits)
+		return this.openedWith
+			? await snapshotIsClean(this.openedWith, this.options.snapshotLimits)
 			: true;
 	}
 
@@ -384,11 +438,18 @@ export class TransactionController {
 		this.current += 1;
 		this.openedAt = Date.now();
 		this.reconsidering = this.shouldReconsiderCheck();
-		this.snapshot = await takeSnapshot(
+		// A carried transaction leaves its work on disk and its base behind it:
+		// the rollback target stays where it was, so a later discard puts back
+		// everything since the last verified state rather than only the last
+		// attempt. Unverified work never accumulates past one discard.
+		const carriedBase = this.carrying ? this.snapshot : undefined;
+		this.carrying = false;
+		this.openedWith = await takeSnapshot(
 			this.options.workspaceRoot,
 			this.options.snapshotLimits,
 		);
-		for (const skipped of this.snapshot.skipped) {
+		this.snapshot = carriedBase ?? this.openedWith;
+		for (const skipped of this.openedWith.skipped) {
 			this.uncoveredPaths.add(skipped);
 		}
 		this.emit({
@@ -430,6 +491,7 @@ export class TransactionController {
 		if (!snapshot) {
 			throw new Error("settle() was called before a transaction was opened");
 		}
+		const openedWith = this.openedWith ?? snapshot;
 		const transaction = this.current;
 		const elapsedMs =
 			this.openedAt === undefined ? undefined : Date.now() - this.openedAt;
@@ -457,10 +519,16 @@ export class TransactionController {
 		let verdict: OracleVerdict | undefined;
 		let evidence: string;
 
+		// Whether the check said something it has not said before in this run.
+		// Read before the output is recorded, and only ever meaningful once the
+		// check has repeated itself at least once -- see `checkOutputs`.
+		let moved = false;
+
 		if (this.oracle) {
 			verdict = await runOracle(this.oracle, {
 				timeoutMs: this.options.oracleTimeoutMs ?? DEFAULT_ORACLE_TIMEOUT_MS,
 			});
+			moved = this.noteCheckOutput(verdict.output);
 			kept = verdict.passed;
 			evidence = verdict.output;
 			if (verdict.passed) {
@@ -475,18 +543,18 @@ export class TransactionController {
 		}
 
 		const untouched = kept
-			? await snapshotIsClean(snapshot, this.options.snapshotLimits)
+			? await snapshotIsClean(openedWith, this.options.snapshotLimits)
 			: false;
-		const line = describeVerdict(
-			transaction,
-			kept,
-			source,
-			verdict,
-			report.forced === true,
-		);
-		const message = untouched ? `${line} No files were changed.` : line;
 
 		if (kept) {
+			const line = describeVerdict(
+				transaction,
+				kept,
+				source,
+				verdict,
+				report.forced === true,
+			);
+			const message = untouched ? `${line} No files were changed.` : line;
 			this.history.push({
 				transaction,
 				kept,
@@ -507,16 +575,53 @@ export class TransactionController {
 			return { kept: true, message, verdict };
 		}
 
+		// Whether this may end as a carry rather than a rollback. Everything
+		// here is cheap and none of it touches the disk, so the snapshot compare
+		// below is still only taken where something needs the answer.
+		//
+		// Never forced: a settlement the guard or the user imposed is not the
+		// model reaching a new reading, and the stalled-check guard fires
+		// precisely when the check has stopped moving. Never the last
+		// transaction either -- there is no next one to start from, and a run
+		// that ended by leaving unverified work on disk would be worse than one
+		// that put the files back.
+		const mayCarry =
+			moved &&
+			this.checkHasRepeated &&
+			report.forced !== true &&
+			transaction < this.options.maxTransactions;
+
 		// Only an attempt that changed something is evidence about the check.
 		// Counting an empty transaction would let a model that edits nothing
 		// buy its way back to a fresh proposal, which is the weakening this
 		// protocol exists to prevent.
-		if (
-			this.adopted !== undefined &&
-			!(await snapshotIsClean(snapshot, this.options.snapshotLimits))
-		) {
+		const changedSomething =
+			this.adopted !== undefined || mayCarry
+				? !(await snapshotIsClean(openedWith, this.options.snapshotLimits))
+				: false;
+		if (this.adopted !== undefined && changedSomething) {
 			this.discardedSinceAdoption += 1;
 		}
+
+		// A check whose answer moved is not a failed hypothesis. Measured on the
+		// pandorum run of 2026-09-13: the fix needed three separate repairs on
+		// three lines, each one found because the previous had changed what the
+		// parser complained about. Under a plain rollback each of those would
+		// have gone back and been re-derived from the same starting file, which
+		// is what the protocol-armed runs of the same task spend their clock on
+		// -- 189 and 177 edits against 33, and 26 and 35 rollbacks.
+		const carried = mayCarry && changedSomething;
+		this.carrying = carried;
+
+		const line = describeVerdict(
+			transaction,
+			kept,
+			source,
+			verdict,
+			report.forced === true,
+			carried,
+		);
+		const message = untouched ? `${line} No files were changed.` : line;
 
 		// Asked while the files are still on disk. One call later they are not,
 		// and the answer -- that the check measured a file no engine would run
@@ -535,16 +640,16 @@ export class TransactionController {
 			: null;
 		const discarded = unparseable ? `${message}\n\n${unparseable}` : message;
 
-		const restore = await restoreSnapshot(
-			snapshot,
-			this.options.snapshotLimits,
-		);
+		const restore: RestoreReport = carried
+			? { restored: [], removed: [], recreated: [], uncovered: [] }
+			: await restoreSnapshot(snapshot, this.options.snapshotLimits);
 		for (const filePath of restore.uncovered) {
 			this.uncoveredPaths.add(filePath);
 		}
 		this.history.push({
 			transaction,
 			kept,
+			carried,
 			source,
 			plan: report.plan,
 			account: report.account,
@@ -554,6 +659,7 @@ export class TransactionController {
 			type: "settled",
 			transaction,
 			kept,
+			carried,
 			source,
 			message: discarded,
 			elapsedMs,
@@ -563,12 +669,14 @@ export class TransactionController {
 
 		if (transaction >= this.options.maxTransactions) {
 			this.snapshot = undefined;
+			this.openedWith = undefined;
 			return { kept: false, message: discarded, verdict, restore };
 		}
 		return {
 			kept: false,
 			message: discarded,
 			verdict,
+			carried,
 			restore,
 			nextPrompt: await this.open(),
 		};
@@ -588,6 +696,7 @@ export class TransactionController {
 			this.options.snapshotLimits,
 		);
 		this.snapshot = undefined;
+		this.openedWith = undefined;
 		return restore;
 	}
 

@@ -30,6 +30,15 @@ export interface TransactionOutcome {
 	/** One-based, in the order they were opened. */
 	transaction: number;
 	kept: boolean;
+	/**
+	 * Not kept, and not rolled back either.
+	 *
+	 * The check said something it had never said before in this run, which is
+	 * the one observable that separates an attempt that moved the problem from
+	 * one that failed on the same wall. The changes stayed on disk and the next
+	 * transaction opened on top of them, with the rollback target unchanged.
+	 */
+	carried?: boolean;
 	source: TransactionVerdictSource;
 	/** What the model said it would change, as it declared it. */
 	plan?: string;
@@ -436,7 +445,7 @@ function describeHistory(
 		const label = `TX-${String(outcome.transaction).padStart(2, "0")}`;
 		lines.push(
 			"",
-			`${label} — ${outcome.kept ? "kept" : "discarded"}${
+			`${label} — ${outcome.kept ? "kept" : outcome.carried ? "carried, and its changes are still in place" : "discarded"}${
 				outcome.source === "self-declared"
 					? " (no check available)"
 					: outcome.source === "undeclared"
@@ -650,6 +659,7 @@ export function describeVerdict(
 	source: TransactionVerdictSource,
 	verdict?: OracleVerdict,
 	forced = false,
+	carried = false,
 ): string {
 	const label = `TX-${String(transaction).padStart(2, "0")}`;
 	if (kept) {
@@ -666,27 +676,38 @@ export function describeVerdict(
 			? `${label} kept but UNVERIFIED — the run was cut short before you said whether the change worked, and nothing here could check it. The changes are on disk; check them before relying on them.`
 			: `${label} kept but UNVERIFIED — nothing here could check the change and it was never stated to work. The changes are on disk; check them before relying on them.`;
 	}
+	// Not kept, and the files are staying where they are. Said as its own word
+	// rather than as a softer "discarded": the model has to be able to tell the
+	// two apart, because everything it does next depends on which file it is
+	// looking at.
+	const verb = carried ? "carried" : "discarded";
+	// A carried transaction is not a pass and must never read like one. What it
+	// says is narrow and true -- the answer moved, so the work stays -- and it
+	// says what is still missing in the same breath.
+	const tail = carried
+		? " The check said something it has not said before in this run, so your changes stay on disk and the next transaction opens on top of them. Nothing has verified them: what you have is a different failure, not a fix."
+		: " Your files are back as they were.";
 	if (source === "self-declared" || source === "undeclared") {
-		return `${label} discarded — the change was not verified. Your files are back as they were.`;
+		return `${label} ${verb} — the change was not verified.${tail}`;
 	}
 	if (verdict?.timedOut) {
-		return `${label} discarded — the check did not finish. Your files are back as they were.`;
+		return `${label} ${verb} — the check did not finish.${tail}`;
 	}
 	// Named apart from a crash: "it ran and reported a problem" reads nothing
 	// like "it fell over", and the model's next move differs between the two.
 	if (verdict?.unmatched) {
-		return `${label} discarded — the check ran, and what it reported is not what this task counts as working. Your files are back as they were.`;
+		return `${label} ${verb} — the check ran, and what it reported is not what this task counts as working.${tail}`;
 	}
 	// A check that can say what went wrong says it. "The check failed (exit 1)"
 	// is the least informative true thing available about a page that threw a
 	// ReferenceError on frame 2.
 	if (verdict?.summary) {
-		return `${label} discarded — ${verdict.summary} Your files are back as they were.`;
+		return `${label} ${verb} — ${verdict.summary}${tail}`;
 	}
 	if (verdict?.exitCode == null) {
-		return `${label} discarded — the check could not be run at all, so nothing was verified. Your files are back as they were.`;
+		return `${label} ${verb} — the check could not be run at all, so nothing was verified.${tail}`;
 	}
-	return `${label} discarded — the check failed (exit ${verdict.exitCode}). Your files are back as they were.`;
+	return `${label} ${verb} — the check failed (exit ${verdict.exitCode}).${tail}`;
 }
 
 /**
