@@ -314,8 +314,19 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 								<p className="text-xs text-muted-foreground">
 									Runs a task as transactions: a few declared changes, then a check. If the check fails, every
 									file goes back to what it was and the next attempt starts fresh with a record of what was
-									already tried. Auto engages only where something can be run to judge the change; Always
-									engages anyway and asks the model to judge its own work, which is the weaker of the two.
+									already tried.
+								</p>
+								{/* The two modes differ in who decides and where the check
+								    comes from, not in how a transaction is judged. On is
+								    how a developer meets this — partway through the work,
+								    at the bug that turns out to be worth the cost. Static
+								    is how a model is measured, and a measured run must not
+								    depend on what a panel happened to be showing. */}
+								<p className="text-xs text-muted-foreground">
+									<strong>On</strong> makes it available and you engage it per task, from the Auto-approve panel
+									above the message box, where you also name that task's check. <strong>Static</strong> engages
+									it on every task using the check set here, and the chat cannot change it — which is what makes
+									a run repeatable.
 								</p>
 								<Select
 									onValueChange={(value) => updateSetting("atomicProtocolSettings", { mode: value })}
@@ -325,56 +336,67 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 									</SelectTrigger>
 									<SelectContent>
 										<SelectItem value="off">Off</SelectItem>
-										<SelectItem value="auto">Auto</SelectItem>
-										<SelectItem value="always">Always</SelectItem>
+										<SelectItem value="on">On</SelectItem>
+										<SelectItem value="static">Static</SelectItem>
 									</SelectContent>
 								</Select>
 								{atomicProtocolSettings?.mode !== "off" ? (
 									<>
-										{/* Detection answers "does this workspace still hold
+										{/* The check fields are Static's. Under On they
+										    belong to the task and live next to the engage
+										    button, because they are decisions about the bug
+										    in front of you rather than about how you work. */}
+										{atomicProtocolSettings?.mode === "static" ? (
+											<>
+												{/* Detection answers "does this workspace still hold
 										    together", which a model can leave green with the
 										    asked-for thing still broken: a typecheck passes
 										    over a game that no longer starts. */}
-										<p className="text-xs text-muted-foreground">
-											What to run to decide whether the task worked. Yours outranks anything found by
-											looking at the workspace — leave it empty and the project's own test, typecheck or
-											build is used instead.
-										</p>
-										{/* Naming it here is the way out of being asked
+												<p className="text-xs text-muted-foreground">
+													What to run to decide whether the task worked. Yours outranks anything found
+													by looking at the workspace — leave it empty and the project's own test,
+													typecheck or build is used instead.
+												</p>
+												{/* Naming it here is the way out of being asked
 										    once per run. A page check is otherwise
 										    reachable only by approving a proposal, and a
 										    user running the same task repeatedly is then
 										    approving the same check over and over. */}
-										<p className="text-xs text-muted-foreground">
-											For a page or a script with nothing to run it, write{" "}
-											<code>cline:page index.html</code>: Cline loads the file itself, runs it, and fails if
-											it does not parse, throws, or never draws a frame. No browser and no shell.
-										</p>
-										<DebouncedTextArea
-											initialValue={atomicProtocolSettings?.oracleCommand ?? ""}
-											maxRows={3}
-											minRows={1}
-											onChange={(value) =>
-												updateSetting("atomicProtocolSettings", { oracleCommand: value })
-											}
-											placeholder="node run_game.js index.html"
-										/>
-										{/* Plenty of check scripts report a verdict and
+												<p className="text-xs text-muted-foreground">
+													For a page or a script with nothing to run it, write{" "}
+													<code>cline:page index.html</code>: Cline loads the file itself, runs it, and
+													fails if it does not parse, throws, or never draws a frame. No browser and no
+													shell.
+												</p>
+												<DebouncedTextArea
+													initialValue={atomicProtocolSettings?.oracleCommand ?? ""}
+													maxRows={3}
+													minRows={1}
+													onChange={(value) =>
+														updateSetting("atomicProtocolSettings", { oracleCommand: value })
+													}
+													placeholder="node run_game.js index.html"
+												/>
+												{/* Plenty of check scripts report a verdict and
 										    exit zero regardless. Without this, one of
 										    those keeps every transaction it is pointed
 										    at — including the one this protocol was
 										    measured against. */}
-										<p className="text-xs text-muted-foreground">
-											Optional: a regular expression the output must match as well. For a check that prints
-											whether it worked and exits cleanly either way.
-										</p>
-										<DebouncedTextArea
-											initialValue={atomicProtocolSettings?.oracleExpect ?? ""}
-											maxRows={2}
-											minRows={1}
-											onChange={(value) => updateSetting("atomicProtocolSettings", { oracleExpect: value })}
-											placeholder={'"ok":\\s*true'}
-										/>
+												<p className="text-xs text-muted-foreground">
+													Optional: a regular expression the output must match as well. For a check that
+													prints whether it worked and exits cleanly either way.
+												</p>
+												<DebouncedTextArea
+													initialValue={atomicProtocolSettings?.oracleExpect ?? ""}
+													maxRows={2}
+													minRows={1}
+													onChange={(value) =>
+														updateSetting("atomicProtocolSettings", { oracleExpect: value })
+													}
+													placeholder={'"ok":\\s*true'}
+												/>
+											</>
+										) : null}
 										{/* Targets rather than caps: nothing stops the model
 										    mid-edit, and it does not obey the change count —
 										    measured on the campaign this comes from, an attempt
@@ -438,20 +460,28 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 										</div>
 										{/* Only about the case with nothing to run. With a
 										    check configured or detected there is nothing to
-										    propose, and this changes nothing. */}
-										<FeatureRow
-											checked={atomicProtocolSettings?.proposeCheck !== false}
-											description="Where nothing can be run, let the model name the check that should decide and ask you to approve it once; it can then run that check itself at any point. Off, the model's own account of its work is the verdict — weaker evidence, and measurably faster."
-											label="Model proposes the check"
-											onChange={(checked) =>
-												updateSetting("atomicProtocolSettings", { proposeCheck: checked })
-											}
-										/>
+										    propose, and this changes nothing. Static's copy
+										    of the switch; On keeps its own per task. */}
+										{atomicProtocolSettings?.mode === "static" ? (
+											<FeatureRow
+												checked={atomicProtocolSettings?.proposeCheck !== false}
+												description="Where nothing can be run, let the model name the check that should decide and ask you to approve it once; it can then run that check itself at any point. Off, the model's own account of its work is the verdict — weaker evidence, and measurably faster."
+												label="Model proposes the check"
+												onChange={(checked) =>
+													updateSetting("atomicProtocolSettings", { proposeCheck: checked })
+												}
+											/>
+										) : null}
 										{/* Both are only about a check the model named, so
 										    they are hidden with the switch that produces
 										    one. A check you wrote is never reconsidered and
-										    was never proposed. */}
-										{atomicProtocolSettings?.proposeCheck !== false ? (
+										    was never proposed. Shown under On regardless:
+										    the switch is per task there, and hiding these
+										    behind Static's copy of it would leave them
+										    unreachable for a session that turns proposals
+										    on. */}
+										{atomicProtocolSettings?.mode === "on" ||
+										atomicProtocolSettings?.proposeCheck !== false ? (
 											<>
 												<p className="text-xs text-muted-foreground">
 													How many checks you are asked to judge, and when a check that has never passed

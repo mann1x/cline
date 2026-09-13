@@ -44,6 +44,7 @@ import {
 } from "@/utils/slash-commands"
 import ClineRulesToggleModal from "../cline-rules/ClineRulesToggleModal"
 import { getModeToggleDraftAction } from "./chat-textarea-mode-toggle"
+import { describeFixIndicator } from "./fix-indicator"
 import ServersToggleModal from "./ServersToggleModal"
 
 const { MAX_IMAGES_AND_FILES_PER_MESSAGE } = CHAT_CONSTANTS
@@ -95,6 +96,9 @@ interface GitCommit {
 
 const PLAN_MODE_COLOR = "var(--vscode-activityWarningBadge-background)"
 const ACT_MODE_COLOR = "var(--vscode-focusBorder)"
+// Green because it is the colour of a check that passed, which is what the
+// protocol is for. Charts green is themed and present in both light and dark.
+const FIX_ENGAGED_COLOR = "var(--vscode-charts-green, #89d185)"
 
 const SwitchContainer = styled.div<{ disabled: boolean }>`
 	display: flex;
@@ -116,10 +120,39 @@ const Slider = styled.div.withConfig({
 })<{ isAct: boolean; isPlan?: boolean }>`
 	position: absolute;
 	height: 100%;
-	width: 50%;
+	/* One of three positions now. Fix sits between Plan and Act but is not one
+	   of them: the thumb still only ever travels between the two real modes. */
+	width: 33.3333%;
 	background-color: ${(props) => (props.isPlan ? PLAN_MODE_COLOR : ACT_MODE_COLOR)};
 	transition: transform 0.2s ease;
-	transform: translateX(${(props) => (props.isAct ? "100%" : "0%")});
+	transform: translateX(${(props) => (props.isAct ? "200%" : "0%")});
+`
+
+/**
+ * The middle segment: whether the change protocol is available and engaged.
+ *
+ * An indicator, not a control. Engaging is a decision with consequences for
+ * files on disk -- a transaction that is open when it is switched off gets
+ * judged, and may be put back -- and that does not belong on a control the eye
+ * reads as a mode toggle and the hand reaches for by habit. The switch is in
+ * the auto-approve panel, next to the check it runs.
+ */
+const FixSegment = styled.div.withConfig({
+	shouldForwardProp: (prop) => !["engaged", "available"].includes(prop),
+})<{ engaged: boolean; available: boolean }>`
+	z-index: 10;
+	width: 33.3333%;
+	text-align: center;
+	padding: 2px 8px 1px;
+	font-size: 12px;
+	background-color: ${(props) => (props.engaged ? FIX_ENGAGED_COLOR : "transparent")};
+	color: ${(props) => (props.engaged ? "var(--vscode-editor-background)" : "var(--vscode-input-foreground)")};
+	font-weight: ${(props) => (props.engaged ? 700 : "inherit")};
+	/* Dimmed rather than hidden while the protocol is off: a segment that comes
+	   and goes changes the width of the other two, and the control moves under
+	   the pointer. */
+	opacity: ${(props) => (props.available ? 1 : 0.4)};
+	cursor: default;
 `
 
 const ButtonGroup = styled.div`
@@ -225,7 +258,13 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			remoteConfigSettings,
 			navigateToSettingsModelPicker,
 			mcpServers,
+			atomicProtocolSettings,
+			atomicProtocolSession,
 		} = useExtensionState()
+		const fixIndicator = useMemo(
+			() => describeFixIndicator(atomicProtocolSettings, atomicProtocolSession),
+			[atomicProtocolSettings, atomicProtocolSession],
+		)
 		const [isTextAreaFocused, setIsTextAreaFocused] = useState(false)
 		const [isDraggingOver, setIsDraggingOver] = useState(false)
 		const [gitCommits, setGitCommits] = useState<GitCommit[]>([])
@@ -1666,20 +1705,43 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 						<TooltipTrigger>
 							<SwitchContainer data-testid="mode-switch" disabled={false} onClick={onModeToggle}>
 								<Slider isAct={mode === "act"} isPlan={mode === "plan"} />
-								{["Plan", "Act"].map((m) => (
-									<div
-										aria-checked={mode === m.toLowerCase()}
-										className={cn(
-											"pt-0.5 pb-px px-2 z-10 text-xs w-1/2 text-center bg-transparent",
-											mode === m.toLowerCase() ? "text-white" : "text-input-foreground",
-										)}
-										key={m}
-										onMouseLeave={() => setShownTooltipMode(null)}
-										onMouseOver={() => setShownTooltipMode(m.toLowerCase() === "plan" ? "plan" : "act")}
-										role="switch">
-										{m}
-									</div>
-								))}
+								<div
+									aria-checked={mode === "plan"}
+									className={cn(
+										"pt-0.5 pb-px px-2 z-10 text-xs w-1/3 text-center bg-transparent",
+										mode === "plan" ? "text-white" : "text-input-foreground",
+									)}
+									onMouseLeave={() => setShownTooltipMode(null)}
+									onMouseOver={() => setShownTooltipMode("plan")}
+									role="switch">
+									Plan
+								</div>
+								{/* Not a switch and not clickable: `role="status"` rather
+								    than `role="switch"` so a screen reader does not offer
+								    it as something to toggle, and the click is stopped so
+								    the habit of hitting this control does not change mode
+								    by accident. */}
+								<FixSegment
+									aria-label={fixIndicator.label}
+									available={fixIndicator.available}
+									data-testid="fix-indicator"
+									engaged={fixIndicator.engaged}
+									onClick={(event) => event.stopPropagation()}
+									role="status"
+									title={fixIndicator.title}>
+									Fix
+								</FixSegment>
+								<div
+									aria-checked={mode === "act"}
+									className={cn(
+										"pt-0.5 pb-px px-2 z-10 text-xs w-1/3 text-center bg-transparent",
+										mode === "act" ? "text-white" : "text-input-foreground",
+									)}
+									onMouseLeave={() => setShownTooltipMode(null)}
+									onMouseOver={() => setShownTooltipMode("act")}
+									role="switch">
+									Act
+								</div>
 							</SwitchContainer>
 						</TooltipTrigger>
 					</Tooltip>

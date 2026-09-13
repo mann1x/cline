@@ -257,11 +257,11 @@ describe("FeatureSettingsSection — change protocol", () => {
 		expect(screen.queryByPlaceholderText("node run_game.js index.html")).toBeNull()
 	})
 
-	it("offers the check once the protocol is on, and shows the user's own", () => {
+	it("offers the check under static, and shows the user's own", () => {
 		mockExtensionState.value = {
 			...mockExtensionState.value,
 			atomicProtocolSettings: {
-				mode: "auto",
+				mode: "static",
 				oracleCommand: "node run_game.js manic_miner.html",
 				maxChanges: 3,
 				maxTransactions: 6,
@@ -273,10 +273,31 @@ describe("FeatureSettingsSection — change protocol", () => {
 		expect(screen.getByDisplayValue("node run_game.js manic_miner.html")).toBeTruthy()
 	})
 
+	// Under On the check belongs to the task and is set next to the engage
+	// button. Showing a second copy here would be two fields for one decision,
+	// and the one you were not looking at would be the one that counted.
+	it("keeps the check out of the settings panel under on", () => {
+		mockExtensionState.value = {
+			...mockExtensionState.value,
+			atomicProtocolSettings: {
+				mode: "on",
+				oracleCommand: "node run_game.js manic_miner.html",
+				maxChanges: 3,
+				maxTransactions: 6,
+			},
+		}
+
+		render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		expect(screen.queryByPlaceholderText("node run_game.js index.html")).toBeNull()
+		expect(screen.queryByDisplayValue("node run_game.js manic_miner.html")).toBeNull()
+		expect(screen.queryByText("Model proposes the check")).toBeNull()
+	})
+
 	it("shows both limits once the protocol is on", () => {
 		mockExtensionState.value = {
 			...mockExtensionState.value,
-			atomicProtocolSettings: { mode: "auto", oracleCommand: "", oracleExpect: "", maxChanges: 7, maxTransactions: 4 },
+			atomicProtocolSettings: { mode: "on", oracleCommand: "", oracleExpect: "", maxChanges: 7, maxTransactions: 4 },
 		}
 
 		render(<FeatureSettingsSection renderSectionHeader={() => null} />)
@@ -302,7 +323,7 @@ describe("FeatureSettingsSection — change protocol", () => {
 	it("sends a new changes-per-attempt target on its own", () => {
 		mockExtensionState.value = {
 			...mockExtensionState.value,
-			atomicProtocolSettings: { mode: "auto", oracleCommand: "", oracleExpect: "", maxChanges: 3, maxTransactions: 6 },
+			atomicProtocolSettings: { mode: "static", oracleCommand: "", oracleExpect: "", maxChanges: 3, maxTransactions: 6 },
 		}
 
 		render(<FeatureSettingsSection renderSectionHeader={() => null} />)
@@ -314,7 +335,7 @@ describe("FeatureSettingsSection — change protocol", () => {
 	it("sends a new attempts-per-task target on its own", () => {
 		mockExtensionState.value = {
 			...mockExtensionState.value,
-			atomicProtocolSettings: { mode: "auto", oracleCommand: "", oracleExpect: "", maxChanges: 3, maxTransactions: 6 },
+			atomicProtocolSettings: { mode: "static", oracleCommand: "", oracleExpect: "", maxChanges: 3, maxTransactions: 6 },
 		}
 
 		render(<FeatureSettingsSection renderSectionHeader={() => null} />)
@@ -329,7 +350,7 @@ describe("FeatureSettingsSection — change protocol", () => {
 	it("sends nothing for an emptied or zeroed target", () => {
 		mockExtensionState.value = {
 			...mockExtensionState.value,
-			atomicProtocolSettings: { mode: "auto", oracleCommand: "", oracleExpect: "", maxChanges: 3, maxTransactions: 6 },
+			atomicProtocolSettings: { mode: "static", oracleCommand: "", oracleExpect: "", maxChanges: 3, maxTransactions: 6 },
 		}
 
 		// This describe block has no shared reset, and the test before it sends a

@@ -1,4 +1,4 @@
-import { DEFAULT_ATOMIC_PROTOCOL_SETTINGS } from "@shared/AtomicProtocolSettings"
+import { DEFAULT_ATOMIC_PROTOCOL_SESSION, DEFAULT_ATOMIC_PROTOCOL_SETTINGS } from "@shared/AtomicProtocolSettings"
 import { DEFAULT_AUTO_APPROVAL_SETTINGS } from "@shared/AutoApprovalSettings"
 import { DEFAULT_BROWSER_SETTINGS } from "@shared/BrowserSettings"
 import { DEFAULT_EDIT_VERIFICATION_SETTINGS } from "@shared/EditVerificationSettings"
@@ -303,6 +303,7 @@ export const ExtensionStateContextProvider: React.FC<{
 		imageGenApiKeySet: false,
 		editVerificationSettings: DEFAULT_EDIT_VERIFICATION_SETTINGS,
 		atomicProtocolSettings: DEFAULT_ATOMIC_PROTOCOL_SETTINGS,
+		atomicProtocolSession: DEFAULT_ATOMIC_PROTOCOL_SESSION,
 		qaCredentialNames: [],
 		apiConfigurationProfiles: "",
 		activeApiConfigurationProfile: "",
