@@ -370,6 +370,10 @@ export class Controller {
 			},
 			shouldStopAfterModeSwitch: () => this.mode.hasPendingModeChange(),
 			onConsecutiveMistakeLimitReached: (context) => this.interactions.handleConsecutiveMistakeLimitReached(context),
+			// The same asker the model's own questions go through, so an
+			// approval renders as markdown with real options rather than as a
+			// modal that flattens both.
+			askUser: (question, options) => this.interactions.handleAskQuestion(question, options, undefined),
 		})
 		this.diffEdits = new SdkDiffEditCoordinator({
 			getCwd: () => this.getWorkspaceRoot(),

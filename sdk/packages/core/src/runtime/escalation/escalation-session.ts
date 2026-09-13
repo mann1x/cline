@@ -76,6 +76,18 @@ export type EscalationEvent =
 	  }
 	| { type: "escalation_ended"; held: boolean; usage: ExpertUsage };
 
+/**
+ * What the user said when the escalation was put to them.
+ *
+ * A bare boolean is still accepted because a host with only a yes/no to offer
+ * should not have to wrap it, and every host did exactly that until the
+ * approval moved out of a modal dialog and into the chat, where there is room
+ * to say why.
+ */
+export type EscalationApproval =
+	| boolean
+	| { approved: boolean; feedback?: string };
+
 export interface EscalationSessionOptions {
 	workspaceRoot: string;
 	config: CoreEscalationConfig | undefined;
@@ -118,7 +130,7 @@ export interface EscalationSessionOptions {
 		brief: string;
 		index: number;
 		of: number;
-	}) => Promise<boolean>;
+	}) => Promise<EscalationApproval>;
 	/** The escalation endpoint's slot gate, when the host resolved one. */
 	gate?: Pick<AgentSlotGate, "run" | "active">;
 	onEvent?: (event: EscalationEvent) => void;
@@ -360,15 +372,31 @@ export function createEscalationSession(
 		});
 
 		if (config?.requireApproval) {
-			const approved = await options.approve?.({
+			const answer = await options.approve?.({
 				brief,
 				index,
 				of: maxEscalations,
 			});
-			if (!approved) {
+			// No asker configured is a refusal, not an approval: an approval
+			// nobody can give is not one, and escalating anyway would make the
+			// setting do the opposite of what it says.
+			const decision =
+				answer === undefined
+					? { approved: false }
+					: typeof answer === "boolean"
+						? { approved: answer }
+						: answer;
+			if (!decision.approved) {
+				// What they said when they said no, if they said anything. A
+				// refusal on its own tells the model only that it may not have
+				// help; a refusal with a reason tells it what to do instead,
+				// and that is the difference between a model that stops and one
+				// that carries on usefully.
+				const said = decision.feedback?.trim();
 				return {
 					reply:
-						"The user did not approve this escalation. Nothing was spent and the expert was not called — carry on with the task yourself, and say plainly what you are blocked on if you cannot.",
+						"The user did not approve this escalation. Nothing was spent and the expert was not called — carry on with the task yourself, and say plainly what you are blocked on if you cannot." +
+						(said ? `\n\nThey said: ${said}` : ""),
 					opened: false,
 					closed: true,
 					followUpsLeft: 0,

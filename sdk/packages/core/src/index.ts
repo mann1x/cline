@@ -1204,6 +1204,9 @@ export {
 	DEFAULT_MAX_CHANGES,
 	DEFAULT_MAX_TRANSACTIONS,
 } from "./runtime/atomic/session-protocol";
+// What the user said when an escalation was put to them. A bare boolean still
+// counts: a host with only a yes and a no should not have to wrap it.
+export type { EscalationApproval } from "./runtime/escalation/escalation-session";
 export {
 	applyClineFeaturedModels,
 	type ClineRecommendedModel,

@@ -480,4 +480,58 @@ describe("createEscalationSession", () => {
 			31_054,
 		);
 	});
+
+	// The approval moved out of a modal dialog and into the chat, where there
+	// is room to say why. A refusal that carries a reason tells the model what
+	// to do instead; one that does not only tells it to stop asking.
+	it("passes on what the user said when they declined", async () => {
+		const harness = build({
+			config: {
+				connection: { providerId: "ollama", modelId: "big" },
+				requireApproval: true,
+			},
+			approve: async () => ({
+				approved: false,
+				feedback: "don't escalate for syntax errors, run node --check first",
+			}),
+		});
+
+		const result = await harness.call({ goal: "fix line 90" });
+
+		expect(result).toContain("did not approve");
+		expect(result).toContain("They said: don't escalate for syntax errors");
+		// A refusal spends nothing, so the expert is never opened.
+		expect(harness.open).not.toHaveBeenCalled();
+	});
+
+	it("still takes a bare boolean from a host with only a yes and a no", async () => {
+		const harness = build({
+			config: {
+				connection: { providerId: "ollama", modelId: "big" },
+				requireApproval: true,
+			},
+			approve: async () => true,
+		});
+
+		const result = await harness.call({ goal: "fix line 90" });
+
+		expect(result).toContain("expert reply 1");
+		expect(harness.open).toHaveBeenCalled();
+	});
+
+	// A host with nobody to ask can only refuse. Escalating anyway would make
+	// `requireApproval` do the opposite of what it says.
+	it("refuses when the host configured no way to ask", async () => {
+		const harness = build({
+			config: {
+				connection: { providerId: "ollama", modelId: "big" },
+				requireApproval: true,
+			},
+		});
+
+		const result = await harness.call({ goal: "fix line 90" });
+
+		expect(result).toContain("did not approve");
+		expect(harness.open).not.toHaveBeenCalled();
+	});
 });

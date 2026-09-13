@@ -24,6 +24,7 @@ import type {
 	TeamEvent,
 } from "../extensions/tools/team";
 import type { CheckApprover } from "../runtime/atomic/proposal";
+import type { EscalationApproval } from "../runtime/escalation/escalation-session";
 import type { ProviderConfig } from "./provider-settings";
 
 export type CoreAgentMode = AgentMode;
@@ -147,7 +148,7 @@ export interface CoreEscalationConfig {
 		brief: string;
 		index: number;
 		of: number;
-	}) => Promise<boolean>;
+	}) => Promise<EscalationApproval>;
 	/** Escalations allowed in one task. Three by default. */
 	maxEscalations?: number;
 	/** Follow-ups within one escalation, after the first delivery. Twenty by default. */

@@ -69,7 +69,7 @@ import {
 } from "./agent-profile-connection"
 import { type BedrockProviderConfig, buildBedrockProviderConfig } from "./bedrock-config"
 import { createEditorDiagnosticsHooks } from "./editor-diagnostics"
-import { approveEscalation } from "./escalation-approval"
+import { createEscalationApprover } from "./escalation-approval"
 import { buildAgentHooks } from "./hooks-adapter"
 import { readTaskHistory, resolveDataDir } from "./legacy-state-reader"
 import type { ResolvedModelSelection } from "./model-catalog/contracts"
@@ -1921,7 +1921,12 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 						...(escalationSettings?.maxFollowUps ? { maxFollowUps: escalationSettings.maxFollowUps } : {}),
 						// There is a user here to ask, so the approval setting has
 						// somewhere to go. Without this it could only ever refuse.
-						approve: approveEscalation,
+						//
+						// Modal here, because this builder has no chat to ask in.
+						// `SdkSessionConfigBuilder` replaces it with the chat-backed
+						// one, which is the path every real session takes; this is
+						// what is left for the ones that do not.
+						approve: createEscalationApprover(undefined),
 					},
 				}
 			: {}),

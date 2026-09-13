@@ -46,10 +46,11 @@ import type { VscodeTerminalManager } from "@/hosts/vscode/terminal/VscodeTermin
 import { getDistinctId } from "@/services/logging/distinctId"
 import type { McpHub } from "@/services/mcp/McpHub"
 import { Logger } from "@/shared/services/Logger"
-import { approveProposedCheck } from "./check-approval"
+import { createCheckApprover } from "./check-approval"
 import { CHECK_FILE_TOOL_NAME } from "./check-file-tool"
 import type { SdkForegroundCommandCoordinator } from "./sdk-foreground-command-coordinator"
 import type { SdkSessionHost } from "./session-host"
+import { asChatAsker } from "./user-choice"
 import { createVscodeExtraTools } from "./vscode-runtime-builder"
 import { getEffectiveTerminalExecutionMode } from "./vscode-terminal-execution-mode"
 
@@ -248,7 +249,10 @@ export class VscodeSessionHost implements SdkSessionHost {
 						// There is a user here to ask, so a workspace with nothing
 						// runnable is not automatically a workspace with no verdict:
 						// the model proposes a check and this puts it to them.
-						approveCheck: approveProposedCheck,
+						// Put to them in the chat when there is one, which is
+						// the only surface that renders the command in a fenced
+						// block and lets a refusal say what to run instead.
+						approveCheck: createCheckApprover(asChatAsker(options.askQuestion)),
 						// Unless it is switched off, which is a setting rather than a
 						// release: the proposed check and the self-declared verdict it
 						// replaced have to be comparable on the same workspace.

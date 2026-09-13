@@ -265,7 +265,7 @@ export const SearchCodebaseInputSchema = z.object({
 		.nullable()
 		.optional()
 		.describe(
-			"How many lines to show either side of each match. Defaults to 2. Use 0 for just the matching lines.",
+			"How many lines to show either side of each match, 0 to 20. Defaults to 2. Use 0 for just the matching lines.",
 		),
 	max_per_file: z.coerce
 		.number()
@@ -275,7 +275,7 @@ export const SearchCodebaseInputSchema = z.object({
 		.nullable()
 		.optional()
 		.describe(
-			"How many matches to report per file. Defaults to 1, which is right for finding *which* files mention something. Raise it when you need every occurrence within one file — how many times a name appears, and where each one is.",
+			"How many matches to report per file. Defaults to 1, which is right for finding *which* files mention something. Raise it when you need every occurrence within one file — how many times a name appears, and where each one is, up to 200.",
 		),
 });
 
@@ -801,7 +801,9 @@ export const GrepInputSchema = z.object({
 		.min(0)
 		.max(20)
 		.optional()
-		.describe("How many lines of context to show either side of a match."),
+		.describe(
+			"How many lines of context to show either side of a match, 0 to 20. Ask for a wider window than that and the call is refused, so read the file instead.",
+		),
 	max_count: z.coerce
 		.number()
 		.int()

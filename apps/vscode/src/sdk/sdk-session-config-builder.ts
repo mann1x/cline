@@ -3,7 +3,9 @@ import { type AgentHooks, type AgentTool, createTool } from "@cline/shared"
 import type { StateManager } from "@/core/storage/StateManager"
 import { offerAgentProfileRepair } from "./agent-profile-repair"
 import { buildSessionConfig, composeSessionHooks, type SessionConfigInput } from "./cline-session-factory"
+import { createEscalationApprover } from "./escalation-approval"
 import { buildAgentHooks, type HookMessageEmitter } from "./hooks-adapter"
+import type { AskUser } from "./user-choice"
 
 export const SWITCH_TO_ACT_MODE_TOOL_NAME = "switch_to_act_mode"
 
@@ -25,6 +27,15 @@ export interface SdkSessionConfigBuilderOptions {
 	onSwitchToActMode: () => void
 	shouldStopAfterModeSwitch?: () => boolean
 	onConsecutiveMistakeLimitReached?: CoreSessionConfig["onConsecutiveMistakeLimitReached"]
+	/**
+	 * Puts a question with options into the chat.
+	 *
+	 * The escalation approval is built in the session factory, which has no
+	 * chat to ask in and so can only raise a modal. This is where one is in
+	 * hand, so the approver is rebuilt here -- the same reason the hook stack
+	 * is rebuilt below rather than assigned.
+	 */
+	askUser?: AskUser
 }
 
 /**
@@ -49,6 +60,12 @@ export class SdkSessionConfigBuilder {
 
 		if (this.options.onConsecutiveMistakeLimitReached) {
 			config.onConsecutiveMistakeLimitReached = this.options.onConsecutiveMistakeLimitReached
+		}
+
+		// Only when the session has an escalation at all: writing the block
+		// would tell the runtime an expert is configured when none is.
+		if (config.escalation && this.options.askUser) {
+			config.escalation.approve = createEscalationApprover(this.options.askUser)
 		}
 
 		// `buildSessionConfig` already built a hook stack, but on a file-hook
