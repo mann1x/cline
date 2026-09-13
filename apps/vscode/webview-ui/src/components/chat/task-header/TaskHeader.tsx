@@ -1,5 +1,5 @@
 import { ClineMessage } from "@shared/ExtensionMessage"
-import type { ProviderApiMetrics } from "@shared/getApiMetrics"
+import type { ExpertApiMetrics, ProviderApiMetrics } from "@shared/getApiMetrics"
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react"
 import React, { useCallback, useLayoutEffect, useMemo, useState } from "react"
 import Thumbnails from "@/components/common/Thumbnails"
@@ -32,6 +32,8 @@ interface TaskHeaderProps {
 	/** What each connection spent, and how fast it generated. */
 	byProvider?: ProviderApiMetrics[]
 	generateTokens?: number
+	/** What the expert spent, when the task escalated. */
+	expert?: ExpertApiMetrics
 	generateMs?: number
 	onClose: () => void
 	onSendMessage?: (command: string, files: string[], images: string[]) => void
@@ -49,6 +51,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 	lastApiReqTotalTokens,
 	byProvider,
 	generateTokens,
+	expert,
 	generateMs,
 	onClose,
 	onSendMessage,
@@ -244,6 +247,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 						 */}
 						<TaskTokenSummary
 							byProvider={byProvider ?? []}
+							expert={expert}
 							generateMs={generateMs ?? 0}
 							generateTokens={generateTokens ?? 0}
 							tokensIn={tokensIn}

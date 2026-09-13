@@ -37,6 +37,7 @@ import type {
 	ClineAskUseSubagents,
 	ClineCompactionInfo,
 	ClineEmptyTurnInfo,
+	ClineEscalationInfo,
 	ClineMessage,
 	ClineOutputLimitRetryInfo,
 	ClineSay,
@@ -1598,6 +1599,86 @@ export function parseAtomicTransactionNoticeMetadata(
 }
 
 /**
+ * Read one turn of an escalation off a status notice.
+ *
+ * Four kinds collapse into one payload, keyed on `kind` like the others rather
+ * than on the message text -- these lines are written for a human and will be
+ * reworded, and a row that stops appearing because someone improved a sentence
+ * is worse than no row at all.
+ */
+export function parseEscalationNoticeMetadata(
+	metadata: Record<string, unknown> | undefined,
+	message: string,
+): ClineEscalationInfo | undefined {
+	if (!metadata) {
+		return undefined
+	}
+	if (metadata.kind === "escalation_started") {
+		const index = asFiniteNumber(metadata.index)
+		const of = asFiniteNumber(metadata.of)
+		return {
+			phase: "started",
+			// The brief, not the notice line: the notice repeats it after a
+			// heading, and the row renders the brief itself.
+			text: typeof metadata.brief === "string" ? metadata.brief : message,
+			...(index !== undefined ? { index } : {}),
+			...(of !== undefined ? { of } : {}),
+		}
+	}
+	if (metadata.kind === "escalation_message") {
+		return { phase: "message", text: message }
+	}
+	if (metadata.kind === "expert_reply") {
+		const changed = Array.isArray(metadata.changed)
+			? metadata.changed.filter((entry): entry is string => typeof entry === "string")
+			: []
+		return {
+			phase: "reply",
+			text: message,
+			...(changed.length > 0 ? { changed } : {}),
+			...(readEscalationUsage(metadata.usage) ?? {}),
+		}
+	}
+	if (metadata.kind === "escalation_ended") {
+		return {
+			phase: "ended",
+			text: message,
+			...(typeof metadata.held === "boolean" ? { held: metadata.held } : {}),
+		}
+	}
+	return undefined
+}
+
+/**
+ * The expert's spend for one delivery.
+ *
+ * Absent rather than zeroed when the provider reported nothing: a rate built
+ * from a zero is not a slow model, it is a model nobody timed, and the header
+ * shows no rate at all in that case.
+ */
+function readEscalationUsage(value: unknown): { usage: NonNullable<ClineEscalationInfo["usage"]> } | undefined {
+	if (!value || typeof value !== "object") {
+		return undefined
+	}
+	const record = value as Record<string, unknown>
+	const tokensIn = asFiniteNumber(record.inputTokens)
+	const tokensOut = asFiniteNumber(record.outputTokens)
+	if (tokensIn === undefined && tokensOut === undefined) {
+		return undefined
+	}
+	return {
+		usage: {
+			tokensIn: tokensIn ?? 0,
+			tokensOut: tokensOut ?? 0,
+			generateTokens: asFiniteNumber(record.generateTokens) ?? 0,
+			generateMs: asFiniteNumber(record.generateMs) ?? 0,
+			wallMs: asFiniteNumber(record.wallMs) ?? 0,
+			requests: asFiniteNumber(record.requests) ?? 0,
+		},
+	}
+}
+
+/**
  * Read the task checklist off a tool call's input.
  *
  * The parameter is optional on every tool, so most calls carry nothing. A
@@ -2387,6 +2468,17 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 						type: "say",
 						say: "transaction",
 						text: JSON.stringify(transaction),
+						partial: false,
+					})
+					break
+				}
+				const escalation = parseEscalationNoticeMetadata(event.metadata, event.message ?? "")
+				if (escalation) {
+					messages.push({
+						ts: state.nextTs(),
+						type: "say",
+						say: "escalation",
+						text: JSON.stringify(escalation),
 						partial: false,
 					})
 					break

@@ -1,5 +1,5 @@
 import { ClineMessage } from "@shared/ExtensionMessage"
-import type { ProviderApiMetrics } from "@shared/getApiMetrics"
+import type { ExpertApiMetrics, ProviderApiMetrics } from "@shared/getApiMetrics"
 import React from "react"
 import TaskHeader from "@/components/chat/task-header/TaskHeader"
 import { MessageHandlers } from "../../types/chatTypes"
@@ -15,6 +15,7 @@ interface TaskSectionProps {
 		byProvider: ProviderApiMetrics[]
 		totalGenerateTokens: number
 		totalGenerateMs: number
+		expert?: ExpertApiMetrics
 	}
 	lastApiReqTotalTokens?: number
 	selectedModelInfo: {
@@ -41,6 +42,7 @@ export const TaskSection: React.FC<TaskSectionProps> = ({
 			cacheReads={apiMetrics.totalCacheReads}
 			cacheWrites={apiMetrics.totalCacheWrites}
 			doesModelSupportPromptCache={selectedModelInfo.supportsPromptCache}
+			expert={apiMetrics.expert}
 			generateMs={apiMetrics.totalGenerateMs}
 			generateTokens={apiMetrics.totalGenerateTokens}
 			lastApiReqTotalTokens={lastApiReqTotalTokens}

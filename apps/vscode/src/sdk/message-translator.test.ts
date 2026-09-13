@@ -2373,6 +2373,89 @@ describe("translateSessionEvent — agent_event notice", () => {
 		expect(info).toMatchObject({ attempt: 2, maxAttempts: 2, compacting: false })
 	})
 
+	// The exchange with the expert, as four notices that become one row type.
+	// Keyed on `kind` rather than on the message text, which is written for a
+	// human and will be reworded.
+	it("renders the hand-over from the brief the notice carried, not from its headline", () => {
+		const state = new MessageTranslatorState()
+		const result = translateSessionEvent(
+			noticeEvent("Escalation 1 of 3: the task has been handed to the expert.\n\n== ESCALATION ==\n\nfix it", {
+				kind: "escalation_started",
+				index: 1,
+				of: 3,
+				brief: "== ESCALATION ==\n\nfix it",
+			}),
+			state,
+		)
+
+		expect(result.messages).toHaveLength(1)
+		expect(result.messages[0].say).toBe("escalation")
+		expect(JSON.parse(result.messages[0].text ?? "{}")).toEqual({
+			phase: "started",
+			index: 1,
+			of: 3,
+			text: "== ESCALATION ==\n\nfix it",
+		})
+	})
+
+	// The delivery carries what it cost. The task header's expert figures are
+	// summed from exactly these rows, so a delivery that arrives without its
+	// usage is a bill that never appears anywhere.
+	it("carries the expert's spend on the delivery", () => {
+		const state = new MessageTranslatorState()
+		const result = translateSessionEvent(
+			noticeEvent("I clamped the row index.", {
+				kind: "expert_reply",
+				changed: ["/work/src/game.js"],
+				usage: {
+					inputTokens: 40_000,
+					outputTokens: 2_000,
+					generateTokens: 2_000,
+					generateMs: 80_000,
+					wallMs: 95_000,
+					requests: 1,
+				},
+			}),
+			state,
+		)
+
+		expect(result.messages[0].say).toBe("escalation")
+		const info = JSON.parse(result.messages[0].text ?? "{}")
+		expect(info.phase).toBe("reply")
+		expect(info.changed).toEqual(["/work/src/game.js"])
+		expect(info.usage).toEqual({
+			tokensIn: 40_000,
+			tokensOut: 2_000,
+			generateTokens: 2_000,
+			generateMs: 80_000,
+			wallMs: 95_000,
+			requests: 1,
+		})
+	})
+
+	// A provider that reported no usage at all. Zeroes here would become a
+	// zero-token expert on the header, which is a claim rather than a gap.
+	it("omits the usage when the notice carried none", () => {
+		const state = new MessageTranslatorState()
+		const result = translateSessionEvent(noticeEvent("done", { kind: "expert_reply" }), state)
+
+		expect(JSON.parse(result.messages[0].text ?? "{}").usage).toBeUndefined()
+	})
+
+	it("renders the end of an exchange, saying whether the expert was held", () => {
+		const state = new MessageTranslatorState()
+		const result = translateSessionEvent(
+			noticeEvent("The expert conversation is on hold.", { kind: "escalation_ended", held: true }),
+			state,
+		)
+
+		expect(JSON.parse(result.messages[0].text ?? "{}")).toEqual({
+			phase: "ended",
+			text: "The expert conversation is on hold.",
+			held: true,
+		})
+	})
+
 	it("suppresses known-internal status notices instead of rendering raw slugs", () => {
 		const state = new MessageTranslatorState()
 		const result = translateSessionEvent(

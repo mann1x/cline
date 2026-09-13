@@ -85,6 +85,8 @@ enum ClineSay {
   EMPTY_TURN = 42;
   // A turn cut off at the output cap, being retried.
   OUTPUT_LIMIT_RETRY = 43;
+  // The exchange with the expert a stuck task was handed to.
+  ESCALATION = 44;
 }
 
 // Enum for ClineSayTool tool types

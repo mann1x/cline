@@ -113,6 +113,7 @@ function convertClineSayToProtoEnum(say: AppClineSay | undefined): ClineSay | un
 		empty_turn: ClineSay.EMPTY_TURN,
 		output_limit_retry: ClineSay.OUTPUT_LIMIT_RETRY,
 		transaction: ClineSay.TRANSACTION,
+		escalation: ClineSay.ESCALATION,
 	}
 
 	const result = mapping[say]
@@ -168,6 +169,7 @@ function convertProtoEnumToClineSay(say: ClineSay): AppClineSay | undefined {
 		[ClineSay.EMPTY_TURN]: "empty_turn",
 		[ClineSay.OUTPUT_LIMIT_RETRY]: "output_limit_retry",
 		[ClineSay.TRANSACTION]: "transaction",
+		[ClineSay.ESCALATION]: "escalation",
 	}
 
 	return mapping[say]

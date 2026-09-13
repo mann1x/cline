@@ -342,6 +342,7 @@ export type ClineSay =
 	| "empty_turn" // a turn that produced neither prose nor a tool call
 	| "output_limit_retry" // a turn cut off at the output cap, being retried
 	| "transaction" // a change transaction kept, or discarded and put back
+	| "escalation" // the exchange with the expert a stuck task was handed to
 
 export interface ClineSayTool {
 	tool:
@@ -629,6 +630,41 @@ export interface ClineTransactionInfo {
 	elapsedMs?: number
 	/** The one-line verdict, already written for a human. */
 	message: string
+}
+
+/**
+ * JSON payload of a say:"escalation" message.
+ *
+ * One say type for the whole exchange rather than four, keyed by `phase`: the
+ * hand-over, the base model's push-back, the expert's delivery, and the end of
+ * it. They are one conversation on screen and reading them as one row type is
+ * what lets the chat collapse them together.
+ *
+ * The usage rides on the delivery because the expert is the one model whose
+ * cost has to be separable. A total that folds it into the session's answers
+ * no question anybody has about a metered account, and it is the source of the
+ * expert figures on the task header's own token line.
+ */
+export interface ClineEscalationInfo {
+	phase: "started" | "message" | "reply" | "ended"
+	/** Which escalation this is, and how many the task gets. On "started". */
+	index?: number
+	of?: number
+	/** The brief, the push-back, the delivery, or the closing line. */
+	text: string
+	/** Workspace-relative paths the expert changed. On "reply". */
+	changed?: string[]
+	/** Whether the conversation was held rather than released. On "ended". */
+	held?: boolean
+	/** What this turn of the exchange spent. On "reply". */
+	usage?: {
+		tokensIn: number
+		tokensOut: number
+		generateTokens: number
+		generateMs: number
+		wallMs: number
+		requests: number
+	}
 }
 
 export interface ClineSubagentUsageInfo {

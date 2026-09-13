@@ -4,6 +4,89 @@ import type { ClineMessage } from "../ExtensionMessage"
 import { getApiMetrics, getLastApiReqTotalTokens } from "../getApiMetrics"
 
 describe("getApiMetrics", () => {
+	// The expert is the one model whose cost has to be separable: it is usually
+	// the metered one, and a total that folds it into the session's own answers
+	// no question anybody has about a paid account.
+	it("keeps the expert's spend apart from the session's own", () => {
+		const messages: ClineMessage[] = [
+			{
+				ts: 1,
+				type: "say",
+				say: "api_req_started",
+				text: JSON.stringify({ tokensIn: 1_000, tokensOut: 100 }),
+			},
+			{
+				ts: 2,
+				type: "say",
+				say: "escalation",
+				text: JSON.stringify({
+					phase: "reply",
+					text: "done",
+					usage: {
+						tokensIn: 40_000,
+						tokensOut: 2_000,
+						generateTokens: 2_000,
+						generateMs: 80_000,
+						wallMs: 95_000,
+						requests: 1,
+					},
+				}),
+			},
+		]
+
+		const metrics = getApiMetrics(messages)
+
+		assert.equal(metrics.totalTokensIn, 1_000)
+		assert.equal(metrics.totalTokensOut, 100)
+		assert.equal(metrics.expert?.tokensIn, 40_000)
+		assert.equal(metrics.expert?.tokensOut, 2_000)
+		assert.equal(metrics.expert?.generateTokens, 2_000)
+		assert.equal(metrics.expert?.generateMs, 80_000)
+		assert.equal(metrics.expert?.requests, 1)
+	})
+
+	// Every delivery of every escalation, summed. A task that escalated three
+	// times spent three times.
+	it("sums every delivery the expert made", () => {
+		const delivery = (tokensIn: number, ts: number): ClineMessage => ({
+			ts,
+			type: "say",
+			say: "escalation",
+			text: JSON.stringify({
+				phase: "reply",
+				text: "done",
+				usage: {
+					tokensIn,
+					tokensOut: 100,
+					generateTokens: 100,
+					generateMs: 1_000,
+					wallMs: 1_200,
+					requests: 1,
+				},
+			}),
+		})
+
+		const metrics = getApiMetrics([delivery(1_000, 1), delivery(2_000, 2)])
+
+		assert.equal(metrics.expert?.tokensIn, 3_000)
+		assert.equal(metrics.expert?.requests, 2)
+	})
+
+	// The brief and the closing line carry no usage, and a zero on the header
+	// would read as an expert that answered for free.
+	it("reports no expert at all when none was called", () => {
+		const metrics = getApiMetrics([
+			{
+				ts: 1,
+				type: "say",
+				say: "escalation",
+				text: JSON.stringify({ phase: "started", text: "the brief" }),
+			},
+		])
+
+		assert.equal(metrics.expert, undefined)
+	})
+
 	it("includes subagent_usage in aggregate totals", () => {
 		const messages: ClineMessage[] = [
 			{

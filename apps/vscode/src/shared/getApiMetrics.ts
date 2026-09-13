@@ -30,6 +30,26 @@ export interface ProviderApiMetrics {
 	generateMs: number
 }
 
+/**
+ * What the expert spent, if a task escalated.
+ *
+ * Kept out of the session's own totals deliberately. The expert is usually the
+ * metered model -- a cloud account, a shared allowance -- and folding its
+ * tokens into the session's produces one number that answers neither "what did
+ * this task cost me" nor "what did my own model do". Absent when no escalation
+ * delivered anything.
+ */
+export interface ExpertApiMetrics {
+	tokensIn: number
+	tokensOut: number
+	generateTokens: number
+	generateMs: number
+	/** Wall-clock the expert was running, queueing included. */
+	wallMs: number
+	/** Turns asked of the expert across every escalation. */
+	requests: number
+}
+
 interface ApiMetrics {
 	totalTokensIn: number
 	totalTokensOut: number
@@ -41,6 +61,8 @@ interface ApiMetrics {
 	/** Generation throughput across every request that reported timings. */
 	totalGenerateTokens: number
 	totalGenerateMs: number
+	/** What the expert spent, when the task escalated. */
+	expert?: ExpertApiMetrics
 }
 
 /**
@@ -80,6 +102,36 @@ export function getApiMetrics(messages: ClineMessage[]): ApiMetrics {
 	const byConnection = new Map<string, ProviderApiMetrics>()
 
 	messages.forEach((message) => {
+		// The expert's deliveries, summed apart from everything above. Read off
+		// the escalation row rather than given a connection of its own in the
+		// breakdown: the question this answers is "what did handing the task
+		// over cost", which is about the escalation and not about the endpoint
+		// it happened to run on.
+		if (message.type === "say" && message.say === "escalation" && message.text) {
+			try {
+				const parsed = JSON.parse(message.text)
+				const usage = parsed?.usage
+				if (usage && typeof usage === "object") {
+					const expert = (result.expert ??= {
+						tokensIn: 0,
+						tokensOut: 0,
+						generateTokens: 0,
+						generateMs: 0,
+						wallMs: 0,
+						requests: 0,
+					})
+					expert.tokensIn += typeof usage.tokensIn === "number" ? usage.tokensIn : 0
+					expert.tokensOut += typeof usage.tokensOut === "number" ? usage.tokensOut : 0
+					expert.generateTokens += typeof usage.generateTokens === "number" ? usage.generateTokens : 0
+					expert.generateMs += typeof usage.generateMs === "number" ? usage.generateMs : 0
+					expert.wallMs += typeof usage.wallMs === "number" ? usage.wallMs : 0
+					expert.requests += typeof usage.requests === "number" ? usage.requests : 0
+				}
+			} catch {
+				// Ignore JSON parse errors
+			}
+			return
+		}
 		if (
 			message.type === "say" &&
 			(message.say === "api_req_started" || message.say === "deleted_api_reqs" || message.say === "subagent_usage") &&

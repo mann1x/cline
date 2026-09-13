@@ -55,6 +55,7 @@ import { CompletionOutputRow } from "./CompletionOutputRow"
 import { DiffEditRow } from "./DiffEditRow"
 import EmptyTurnRow from "./EmptyTurnRow"
 import ErrorRow from "./ErrorRow"
+import EscalationRow from "./EscalationRow"
 import { FeatureTip } from "./FeatureTip"
 import HookMessage from "./HookMessage"
 import { MarkdownRow } from "./MarkdownRow"
@@ -1170,6 +1171,8 @@ export const ChatRowContent = memo(
 						return <OutputLimitRetryRow message={message} />
 					case "transaction":
 						return <TransactionRow message={message} />
+					case "escalation":
+						return <EscalationRow message={message} />
 					default:
 						return (
 							<div>
