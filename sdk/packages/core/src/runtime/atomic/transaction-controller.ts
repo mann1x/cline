@@ -15,9 +15,14 @@ import {
 	restoreSnapshot,
 	type Snapshot,
 	type SnapshotLimits,
+	snapshotChanges,
 	snapshotIsClean,
 	takeSnapshot,
 } from "./snapshot";
+import {
+	describeUnparseableChange,
+	looksLikeSyntaxError,
+} from "./unparseable-change";
 
 /** What the model said about its own change, where nothing else could say it. */
 export type SelfReport = "success" | "failure" | "unsure";
@@ -513,6 +518,23 @@ export class TransactionController {
 			this.discardedSinceAdoption += 1;
 		}
 
+		// Asked while the files are still on disk. One call later they are not,
+		// and the answer -- that the check measured a file no engine would run
+		// -- is the difference between a plan the model reconsiders and a typo
+		// it retypes.
+		const unparseable = looksLikeSyntaxError(evidence)
+			? describeUnparseableChange(
+					(await snapshotChanges(snapshot, this.options.snapshotLimits)).map(
+						(change) => ({
+							path: change.path,
+							text: change.body.toString("utf8"),
+						}),
+					),
+					snapshot.root,
+				)
+			: null;
+		const discarded = unparseable ? `${message}\n\n${unparseable}` : message;
+
 		const restore = await restoreSnapshot(
 			snapshot,
 			this.options.snapshotLimits,
@@ -533,7 +555,7 @@ export class TransactionController {
 			transaction,
 			kept,
 			source,
-			message,
+			message: discarded,
 			elapsedMs,
 			verdict,
 			restore,
@@ -541,11 +563,11 @@ export class TransactionController {
 
 		if (transaction >= this.options.maxTransactions) {
 			this.snapshot = undefined;
-			return { kept: false, message, verdict, restore };
+			return { kept: false, message: discarded, verdict, restore };
 		}
 		return {
 			kept: false,
-			message,
+			message: discarded,
 			verdict,
 			restore,
 			nextPrompt: await this.open(),

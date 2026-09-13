@@ -173,6 +173,34 @@ export async function restoreSnapshot(
 	return report;
 }
 
+/** A file that differs from the snapshot, with the content it holds now. */
+export interface SnapshotChange {
+	readonly path: string;
+	readonly body: Buffer;
+}
+
+/**
+ * What the open transaction has changed, as it stands right now.
+ *
+ * Files only, and only files that exist: a deletion is a change, but there is
+ * nothing to read back from one, and every caller of this is asking about the
+ * content. The order is the tree walk's, so the answer is stable between two
+ * calls that see the same disk.
+ */
+export async function snapshotChanges(
+	snapshot: Snapshot,
+	limits: SnapshotLimits = {},
+): Promise<SnapshotChange[]> {
+	const now = await takeSnapshot(snapshot.root, limits);
+	const changes: SnapshotChange[] = [];
+	for (const [filePath, current] of now.files) {
+		if (snapshot.files.get(filePath)?.hash !== current.hash) {
+			changes.push({ path: filePath, body: current.body });
+		}
+	}
+	return changes;
+}
+
 /** Whether anything under the snapshot's root differs from it now. */
 export async function snapshotIsClean(
 	snapshot: Snapshot,
