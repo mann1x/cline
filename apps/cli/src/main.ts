@@ -1428,6 +1428,65 @@ export async function runCli(): Promise<void> {
 					(contextWindow ? ` contextWindow=${contextWindow}` : ""),
 			);
 		}
+		// The expert `escalate` hands a stuck task to. Same shape as the agents
+		// connection above and read at the same place in core, because the
+		// reason is the same: `providers.json` holds one entry per provider and
+		// the session's model owns it, so a second model on that provider needs
+		// a configuration of its own rather than a share of the session's.
+		//
+		// Without `--expert-model` there is no `escalation` block, and core
+		// then closes every escalation path: the tool is not offered, the
+		// struggle detector does not suggest it, and the terminal guards do not
+		// force it. That is deliberate. An `escalate` that answers "no expert is
+		// configured" is worst exactly where it is reached, which is a model
+		// that is already stuck.
+		const expertModelId = args.expertModel?.trim();
+		if (expertModelId) {
+			const requestedCtx = Number(args.expertNumCtx);
+			const expertWindow =
+				Number.isFinite(requestedCtx) && requestedCtx > 0
+					? Math.floor(requestedCtx)
+					: undefined;
+			const positive = (value: string | undefined): number | undefined => {
+				const parsed = Number(value);
+				return Number.isFinite(parsed) && parsed > 0
+					? Math.floor(parsed)
+					: undefined;
+			};
+			const maxEscalations = positive(args.expertMaxEscalations);
+			const maxFollowUps = positive(args.expertMaxFollowUps);
+			config.escalation = {
+				connection: {
+					providerId: config.providerId,
+					modelId: expertModelId,
+					...(config.apiKey ? { apiKey: config.apiKey } : {}),
+					...(config.baseUrl !== undefined ? { baseUrl: config.baseUrl } : {}),
+					providerConfig: {
+						...((config.providerConfig as
+							| Record<string, unknown>
+							| undefined) ?? {}),
+						modelId: expertModelId,
+						...(expertWindow ? { contextWindow: expertWindow } : {}),
+					},
+				},
+				...(args.expertCloseAfter ? { closeAfterEscalation: true } : {}),
+				...(maxEscalations ? { maxEscalations } : {}),
+				...(maxFollowUps ? { maxFollowUps } : {}),
+			} as NonNullable<(typeof config)["escalation"]>;
+			// `requireApproval` is deliberately not offered here. It needs an
+			// `approve` callback and a person to answer it; a CLI run under
+			// `--auto-approve`, or in cron, has neither, and core is explicit
+			// that an approval nobody can give may only refuse. Offering the
+			// flag would mean shipping a switch whose only effect is to close
+			// the path it claims to guard.
+			loggerAdapter.core.log(
+				`[Escalation] Expert configured: provider=${provider} model=${expertModelId}` +
+					(expertWindow ? ` contextWindow=${expertWindow}` : "") +
+					` maxEscalations=${maxEscalations ?? 3}` +
+					` maxFollowUps=${maxFollowUps ?? 20}` +
+					` closeAfter=${args.expertCloseAfter ? "yes" : "no"}`,
+			);
+		}
 		// A configured subagent may name a provider of its own. Core refuses one
 		// it cannot resolve rather than running it on the session's connection,
 		// so this is what makes a second provider work at all.

@@ -84,3 +84,50 @@ describe("--propose-check", () => {
 		expect(parse([]).invalidProposeCheck).toBeUndefined();
 	});
 });
+
+describe("--expert-model and its knobs", () => {
+	function parse(argv: string[]) {
+		const program = createProgram();
+		program.exitOverride();
+		program.parse(["node", "cline", ...argv]);
+		return commanderToParsedArgs(program);
+	}
+
+	it("carries the expert flags through to the parsed args", () => {
+		const args = parse([
+			"--expert-model",
+			"nemotron-3-nano:30b-cloud",
+			"--expert-num-ctx",
+			"131072",
+			"--expert-max-escalations",
+			"2",
+			"--expert-max-follow-ups",
+			"8",
+			"--expert-close-after",
+		]);
+
+		expect(args.expertModel).toBe("nemotron-3-nano:30b-cloud");
+		expect(args.expertNumCtx).toBe("131072");
+		expect(args.expertMaxEscalations).toBe("2");
+		expect(args.expertMaxFollowUps).toBe("8");
+		expect(args.expertCloseAfter).toBe(true);
+	});
+
+	it("is absent when no expert is named", () => {
+		// Absent has to stay absent all the way down: it is what closes the
+		// escalation paths, rather than offering a tool with nobody behind it.
+		const args = parse([]);
+
+		expect(args.expertModel).toBeUndefined();
+		expect(args.expertCloseAfter).toBeUndefined();
+		expect(args.expertMaxEscalations).toBeUndefined();
+	});
+
+	it("names the expert in the help, and says what omitting it does", () => {
+		const program = createProgram();
+		const help = program.helpInformation();
+
+		expect(help).toContain("--expert-model");
+		expect(help).toContain("escalation paths stay closed");
+	});
+});

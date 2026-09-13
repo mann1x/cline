@@ -160,6 +160,21 @@ export interface ParsedArgs {
 	agentsModel?: string;
 	/** Context window for that model. A string: it arrives from the flag. */
 	agentsNumCtx?: string;
+	/**
+	 * Model the expert runs on. Absent means no expert, and `escalate` is not
+	 * offered at all -- which is the right answer rather than a degraded one:
+	 * a tool that replies "nobody is configured" is worst exactly where it is
+	 * reached, which is a model already stuck.
+	 */
+	expertModel?: string;
+	/** Context window for the expert. A string, from the flag. */
+	expertNumCtx?: string;
+	/** Escalations allowed in one task. A string, from the flag. */
+	expertMaxEscalations?: string;
+	/** Follow-ups inside one escalation. A string, from the flag. */
+	expertMaxFollowUps?: string;
+	/** Release the expert's conversation at the end of each escalation. */
+	expertCloseAfter?: boolean;
 	/** Concurrent requests this endpoint serves. A string, from the flag. */
 	parallelSessions?: string;
 	/**

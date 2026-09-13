@@ -117,6 +117,26 @@ export function addRootOptions(cmd: Command): Command {
 				"Context window for the agents model; omit to use whatever that model declares",
 			)
 			.option(
+				"--expert-model <model-id>",
+				"Model the `escalate` tool hands a stuck task to (same provider). Without this there is no expert and the escalation paths stay closed",
+			)
+			.option(
+				"--expert-num-ctx <tokens>",
+				"Context window for the expert model; omit to use whatever that model declares",
+			)
+			.option(
+				"--expert-max-escalations <count>",
+				"Escalations allowed in one task (default: 3)",
+			)
+			.option(
+				"--expert-max-follow-ups <count>",
+				"Follow-ups within one escalation, after the first delivery (default: 20)",
+			)
+			.option(
+				"--expert-close-after",
+				"Release the expert's conversation when an escalation ends. Frees the server slot it was holding, which a local endpoint with OLLAMA_MAX_LOADED_MODELS of 1 or 2 needs; costs a hosted provider's warm prompt cache",
+			)
+			.option(
 				"--parallel-sessions <count>",
 				"How many requests this endpoint serves at once (OLLAMA_NUM_PARALLEL, --parallel); bounds concurrent agents (default: 1, max: 10)",
 			)
@@ -409,6 +429,14 @@ export function commanderToParsedArgs(program: Command): ParsedArgs {
 	if (opts.visionModel !== undefined) result.visionModel = opts.visionModel;
 	if (opts.agentsModel !== undefined) result.agentsModel = opts.agentsModel;
 	if (opts.agentsNumCtx !== undefined) result.agentsNumCtx = opts.agentsNumCtx;
+	if (opts.expertModel !== undefined) result.expertModel = opts.expertModel;
+	if (opts.expertNumCtx !== undefined) result.expertNumCtx = opts.expertNumCtx;
+	if (opts.expertMaxEscalations !== undefined)
+		result.expertMaxEscalations = opts.expertMaxEscalations;
+	if (opts.expertMaxFollowUps !== undefined)
+		result.expertMaxFollowUps = opts.expertMaxFollowUps;
+	if (opts.expertCloseAfter !== undefined)
+		result.expertCloseAfter = !!opts.expertCloseAfter;
 	if (opts.parallelSessions !== undefined)
 		result.parallelSessions = opts.parallelSessions;
 	if (opts.qaCredential !== undefined) result.qaCredential = opts.qaCredential;
