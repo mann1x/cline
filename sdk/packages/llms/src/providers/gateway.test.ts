@@ -670,7 +670,18 @@ describe("sdk-gateway", () => {
 			providerId: "scripted",
 			modelId: "scripted-model",
 			messages: [
-				{ role: "user", content: [{ type: "text", text: "hi" }] },
+				// Long enough that 4,000 tokens is a credible count for it.
+				// `observeRequestTokens` refuses a count whose chars-per-token
+				// ratio is below 1.2 -- a provider claiming a token per
+				// character has not measured anything, and keeping such a count
+				// once compacted a 45,783-token transcript while announcing
+				// "138.5k". A two-character request paired with 4,000 tokens is
+				// exactly that shape, so the fixture has to be a real request
+				// for the ownership this test is about to be reached at all.
+				{
+					role: "user",
+					content: [{ type: "text", text: "hi ".repeat(10_000) }],
+				},
 			] as readonly AgentMessage[],
 		};
 
