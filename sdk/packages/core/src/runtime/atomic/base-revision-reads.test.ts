@@ -7,6 +7,7 @@ import { createFileReadExecutor } from "../../extensions/tools/executors/file-re
 import { createReadReceipts } from "../../extensions/tools/executors/read-receipts";
 import type { ToolOperationResult } from "../../extensions/tools/types";
 import { withBaseRevisionReads } from "./base-revision-reads";
+import { createRevisionLog } from "./file-revisions";
 import { type Snapshot, takeSnapshot } from "./snapshot";
 
 const context = {} as never;
@@ -55,7 +56,7 @@ describe("reading the version this transaction started from", () => {
 			await fs.writeFile(path.join(root, "game.html"), "wrecked\n", "utf8");
 			const [tool] = withBaseRevisionReads(
 				[readTool(createReadReceipts(), root)],
-				{ pending: snapshot, transaction: 1 },
+				{ pending: snapshot, transaction: 1, revisions: createRevisionLog() },
 			);
 
 			const results = await call(tool, {
@@ -81,6 +82,7 @@ describe("reading the version this transaction started from", () => {
 			const [tool] = withBaseRevisionReads([readTool(receipts, root)], {
 				pending: snapshot,
 				transaction: 1,
+				revisions: createRevisionLog(),
 			});
 
 			await call(tool, { files: [{ path: "game.html" }], revision: "base" });
@@ -97,6 +99,7 @@ describe("reading the version this transaction started from", () => {
 			const [tool] = withBaseRevisionReads([readTool(receipts, root)], {
 				pending: snapshot,
 				transaction: 1,
+				revisions: createRevisionLog(),
 			});
 
 			const results = await call(tool, { files: [{ path: "game.html" }] });
@@ -113,7 +116,7 @@ describe("reading the version this transaction started from", () => {
 			await fs.writeFile(path.join(root, "game.html"), "wrecked\n", "utf8");
 			const [tool] = withBaseRevisionReads(
 				[readTool(createReadReceipts(), root)],
-				{ pending: snapshot, transaction: 1 },
+				{ pending: snapshot, transaction: 1, revisions: createRevisionLog() },
 			);
 
 			const results = await call(tool, {
@@ -131,7 +134,7 @@ describe("reading the version this transaction started from", () => {
 			await fs.writeFile(path.join(root, "game.html"), "gone\n", "utf8");
 			const [tool] = withBaseRevisionReads(
 				[readTool(createReadReceipts(), root)],
-				{ pending: snapshot, transaction: 1 },
+				{ pending: snapshot, transaction: 1, revisions: createRevisionLog() },
 			);
 
 			const results = await call(tool, {
@@ -151,7 +154,7 @@ describe("reading the version this transaction started from", () => {
 			await fs.writeFile(path.join(root, "game.html"), "wrecked\n", "utf8");
 			const [tool] = withBaseRevisionReads(
 				[readTool(createReadReceipts(), root)],
-				{ pending: snapshot, transaction: 1 },
+				{ pending: snapshot, transaction: 1, revisions: createRevisionLog() },
 			);
 
 			const results = await call(tool, { path: "game.html", revision: "base" });
@@ -167,7 +170,7 @@ describe("reading the version this transaction started from", () => {
 			const snapshot = await takeSnapshot(root);
 			const [tool] = withBaseRevisionReads(
 				[readTool(createReadReceipts(), root)],
-				{ pending: snapshot, transaction: 1 },
+				{ pending: snapshot, transaction: 1, revisions: createRevisionLog() },
 			);
 
 			const fromString = await call(tool, "game.html");
@@ -182,6 +185,7 @@ describe("reading the version this transaction started from", () => {
 		const [tool] = withBaseRevisionReads([readTool()], {
 			pending: undefined,
 			transaction: 0,
+			revisions: createRevisionLog(),
 		});
 
 		const results = await call(tool, {
@@ -199,7 +203,7 @@ describe("what a host without the protocol sees", () => {
 		const other = readTool();
 		const decorated = withBaseRevisionReads(
 			[{ ...other, name: "search_codebase" }],
-			{ pending: undefined, transaction: 0 },
+			{ pending: undefined, transaction: 0, revisions: createRevisionLog() },
 		);
 
 		expect(decorated[0]?.name).toBe("search_codebase");
@@ -214,6 +218,7 @@ describe("what a host without the protocol sees", () => {
 		const [decorated] = withBaseRevisionReads([plain], {
 			pending: undefined,
 			transaction: 0,
+			revisions: createRevisionLog(),
 		});
 
 		expect(
@@ -222,6 +227,119 @@ describe("what a host without the protocol sees", () => {
 		expect(
 			(decorated.inputSchema.properties as Record<string, unknown>).revision,
 		).toBeDefined();
-		expect(decorated.description).toContain('revision: "base"');
+		// It still advertises the base, and now the rest of the history with it.
+		expect(decorated.description).toContain("Reading an earlier version");
+		expect(decorated.description).toContain('"base"');
+		expect(decorated.description).toContain('"last"');
+	});
+});
+
+describe("reading a numbered revision", () => {
+	// The read side and the restore side take the same words, so a model that
+	// has learned one has learned the other. Looking before restoring is the
+	// cheap move and it should never need a different vocabulary.
+	it("shows the version a number names", async () => {
+		await withWorkspace({ "game.html": "one\n" }, async (root) => {
+			const snapshot = await takeSnapshot(root);
+			const file = path.join(root, "game.html");
+			const log = createRevisionLog();
+			log.seed(file, Buffer.from("one\n", "utf8"));
+			log.record(file, Buffer.from("two\n", "utf8"), "editor");
+			log.record(file, Buffer.from("three\n", "utf8"), "editor");
+			await fs.writeFile(file, "three\n", "utf8");
+
+			const [tool] = withBaseRevisionReads(
+				[readTool(createReadReceipts(), root)],
+				{ pending: snapshot, transaction: 1, revisions: log },
+			);
+			const [result] = await call(tool as never, {
+				path: "game.html",
+				revision: "#2",
+			});
+
+			expect(result?.success).toBe(true);
+			expect(result?.result).toContain("two");
+			expect(result?.result).not.toContain("three");
+		});
+	});
+
+	it("resolves `last` to the version before the most recent change", async () => {
+		await withWorkspace({ "game.html": "one\n" }, async (root) => {
+			const snapshot = await takeSnapshot(root);
+			const file = path.join(root, "game.html");
+			const log = createRevisionLog();
+			log.seed(file, Buffer.from("one\n", "utf8"));
+			log.record(file, Buffer.from("two\n", "utf8"), "editor");
+			log.record(file, Buffer.from("three\n", "utf8"), "editor");
+
+			const [tool] = withBaseRevisionReads(
+				[readTool(createReadReceipts(), root)],
+				{ pending: snapshot, transaction: 1, revisions: log },
+			);
+			const [result] = await call(tool as never, {
+				path: "game.html",
+				revision: "last",
+			});
+
+			expect(result?.result).toContain("two");
+		});
+	});
+
+	// The ids are useless if they live only in scrollback: a long thrashing run
+	// auto-compacts, and it is exactly the run that needs to go back three
+	// revisions. Listing them on every read makes them recoverable from one call.
+	it("lists the revisions available, so the numbers survive a compaction", async () => {
+		await withWorkspace({ "game.html": "one\n" }, async (root) => {
+			const snapshot = await takeSnapshot(root);
+			const file = path.join(root, "game.html");
+			const log = createRevisionLog();
+			log.seed(file, Buffer.from("one\n", "utf8"));
+			log.record(file, Buffer.from("two\n", "utf8"), "editor");
+			await fs.writeFile(file, "two\n", "utf8");
+
+			const [tool] = withBaseRevisionReads(
+				[readTool(createReadReceipts(), root)],
+				{ pending: snapshot, transaction: 1, revisions: log },
+			);
+			const [result] = await call(tool as never, { path: "game.html" });
+
+			expect(result?.result).toContain("Revisions of");
+			expect(result?.result).toContain("#2");
+		});
+	});
+
+	it("says nothing about revisions for a file no tool has written", async () => {
+		await withWorkspace({ "game.html": "one\n" }, async (root) => {
+			const snapshot = await takeSnapshot(root);
+			const [tool] = withBaseRevisionReads(
+				[readTool(createReadReceipts(), root)],
+				{ pending: snapshot, transaction: 1, revisions: createRevisionLog() },
+			);
+			const [result] = await call(tool as never, { path: "game.html" });
+
+			expect(result?.result).not.toContain("Revisions of");
+		});
+	});
+
+	it("names what exists when the number does not", async () => {
+		await withWorkspace({ "game.html": "one\n" }, async (root) => {
+			const snapshot = await takeSnapshot(root);
+			const file = path.join(root, "game.html");
+			const log = createRevisionLog();
+			log.seed(file, Buffer.from("one\n", "utf8"));
+			log.record(file, Buffer.from("two\n", "utf8"), "editor");
+
+			const [tool] = withBaseRevisionReads(
+				[readTool(createReadReceipts(), root)],
+				{ pending: snapshot, transaction: 1, revisions: log },
+			);
+			const [result] = await call(tool as never, {
+				path: "game.html",
+				revision: "#9",
+			});
+
+			expect(result?.success).toBe(false);
+			expect(result?.error).toContain("#2");
+		});
 	});
 });

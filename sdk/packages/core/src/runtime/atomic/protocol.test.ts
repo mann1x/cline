@@ -493,3 +493,20 @@ describe("the notice sent when the user disengages mid-run", () => {
 		expect(notice).toContain("applies at once and stays");
 	});
 });
+
+describe("what the rules say about undoing one edit", () => {
+	// Without this the protocol described a rollback and an all-or-nothing
+	// restore, and a model that had fixed three things and broken the fourth
+	// read that as its only options.
+	it("tells the model a single edit can be undone on its own", () => {
+		const prompt = buildProtocolPrompt({
+			transaction: 1,
+			maxChanges: 6,
+			maxTransactions: 6,
+			history: [],
+		});
+		expect(prompt).toContain("numbered as you make it");
+		expect(prompt).toContain('"last"');
+		expect(prompt).toContain("restore_file");
+	});
+});

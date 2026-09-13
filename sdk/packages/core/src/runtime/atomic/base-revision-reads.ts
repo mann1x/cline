@@ -12,6 +12,7 @@
  * a model that leans on it cannot thrash with it.
  */
 
+import * as path from "node:path";
 import type {
 	AgentTool,
 	AgentToolContext,
@@ -30,6 +31,12 @@ import {
 	isTextBody,
 	resolveBaseFile,
 } from "./base-revision";
+import {
+	describeRevisions,
+	LAST_REVISION,
+	ORIGINAL_REVISION,
+	type RevisionLog,
+} from "./file-revisions";
 import type { Snapshot } from "./snapshot";
 
 /** The value that asks for the transaction's copy instead of the file on disk. */
@@ -41,11 +48,17 @@ export interface BaseRevisionSource {
 	readonly pending: Snapshot | undefined;
 	/** Which transaction is open, for messages that need to name it. */
 	readonly transaction: number;
+	/** Every version of every file a tool has written this transaction. */
+	readonly revisions: RevisionLog;
 }
 
 const REVISION_DESCRIPTION = `
 
-**Reading the version this transaction started from.** Set \`revision: "base"\` to be shown the file as it was when this transaction opened, instead of as it is now. Your own edits are not in it.
+**Reading an earlier version of a file.** Set \`revision\` to be shown the file as it was at some earlier point, instead of as it is now:
+
+- \`"base"\` (or \`"${ORIGINAL_REVISION}"\`) — as this transaction opened. Your own edits are not in it.
+- \`"${LAST_REVISION}"\` — as it was before your most recent change to it.
+- \`"#3"\` — that numbered version. Every version a tool writes is numbered, and the numbers are listed at the end of every read of that file, so you never have to remember them.
 
 Use it the moment you have damaged a file and are about to rebuild part of it from memory — a method you deleted, a line you rewrote and lost, a block whose brackets you have been moving around. Reading the original is exact and reconstructing it is not, and a long minified line is where the difference shows.
 
@@ -75,23 +88,95 @@ function withRevisionProperty(
 			...properties,
 			revision: {
 				type: "string",
-				enum: [BASE_REVISION],
-				description:
-					'Set to "base" to read the files as they were when this transaction opened, rather than as they are now. Applies to every path in the call.',
+				description: `Read an earlier version instead of the file as it is now: "${BASE_REVISION}" or "${ORIGINAL_REVISION}" for the file as this transaction opened, "${LAST_REVISION}" for the version before your most recent change to it, or a number such as "#3". Applies to every path in the call.`,
 			},
 		},
 	};
 }
 
-async function readFromBase(
+/** Where a requested revision's bytes come from, and what to call it. */
+type RevisionSource =
+	| { kind: "body"; body: Buffer; label: string }
+	| { kind: "error"; message: string };
+
+function bodyForRevision(
+	source: BaseRevisionSource,
+	absolutePath: string,
+	requested: string,
+	base: Buffer | undefined,
+): RevisionSource {
+	const history = source.revisions.revisions(absolutePath);
+	if (history.length === 0) {
+		// Nothing has written it, so the only earlier version that exists is the
+		// one the transaction opened with.
+		if (!isOriginal(requested)) {
+			return {
+				kind: "error",
+				message: `Nothing has written to that file in this transaction, so the only earlier version of it is the one the transaction opened with — there is no \`${requested}\` to read. Ask for \`"${BASE_REVISION}"\`, or read the file as it stands.`,
+			};
+		}
+		return base
+			? {
+					kind: "body",
+					body: base,
+					label: "the version from before this transaction's changes",
+				}
+			: {
+					kind: "error",
+					message: describeMissingBase({ kind: "created", absolutePath }),
+				};
+	}
+	const found = source.revisions.resolve(absolutePath, requested);
+	if (found.kind === "dropped") {
+		return {
+			kind: "error",
+			message: `Revision #${found.index} is no longer held: its content was released to stay inside the memory this transaction may spend on file history.\n\n${describeRevisions(path.basename(absolutePath), history)}`,
+		};
+	}
+	if (found.kind !== "found") {
+		return {
+			kind: "error",
+			message: `\`${requested}\` does not name a version of that file that exists.\n\n${describeRevisions(path.basename(absolutePath), history)}`,
+		};
+	}
+	if (!found.revision.body) {
+		return {
+			kind: "error",
+			message: `The file did not exist at revision #${found.revision.index}, so there is nothing to show.`,
+		};
+	}
+	return {
+		kind: "body",
+		body: found.revision.body,
+		label:
+			found.revision.index === 1
+				? "the version from before this transaction's changes"
+				: `revision #${found.revision.index}`,
+	};
+}
+
+function isOriginal(requested: string): boolean {
+	const text = requested.trim().toLowerCase();
+	return (
+		text === BASE_REVISION ||
+		text === ORIGINAL_REVISION ||
+		text === "first" ||
+		text === "1" ||
+		text === "#1"
+	);
+}
+
+async function readFromRevision(
+	source: BaseRevisionSource,
 	snapshot: Snapshot,
 	input: unknown,
 	context: AgentToolContext,
+	requested: string,
 ): Promise<ToolOperationResult[]> {
 	const requests = readFileRequestsFrom(input);
 	return Promise.all(
 		requests.map(async (request): Promise<ToolOperationResult> => {
-			const query = `${formatReadFileQuery(request)}@base`;
+			const query = `${formatReadFileQuery(request)}@${requested}`;
 			const rangeError = getReadFileRangeError(request);
 			if (rangeError) {
 				return {
@@ -102,7 +187,7 @@ async function readFromBase(
 				};
 			}
 			const lookup = resolveBaseFile(snapshot, request.path);
-			if (lookup.kind !== "held") {
+			if (lookup.kind === "uncovered" || lookup.kind === "outside") {
 				return {
 					query,
 					result: "",
@@ -110,7 +195,16 @@ async function readFromBase(
 					success: false,
 				};
 			}
-			if (!isTextBody(lookup.body)) {
+			const chosen = bodyForRevision(
+				source,
+				lookup.absolutePath,
+				requested,
+				lookup.kind === "held" ? lookup.body : undefined,
+			);
+			if (chosen.kind === "error") {
+				return { query, result: "", error: chosen.message, success: false };
+			}
+			if (!isTextBody(chosen.body)) {
 				return {
 					query,
 					result: "",
@@ -120,7 +214,7 @@ async function readFromBase(
 				};
 			}
 			const window = await readTextWindowFromText({
-				text: lookup.body.toString("utf8"),
+				text: chosen.body.toString("utf8"),
 				includeLineNumbers: request.line_numbers ?? true,
 				startLine: request.start_line,
 				endLine: request.end_line,
@@ -132,11 +226,49 @@ async function readFromBase(
 			// standing between a rebuilt-from-memory line and the file on disk.
 			return {
 				query,
-				result: `${window.text}\n\n[This is the version from before this transaction's changes, not the file as it stands.]`,
+				result: `${window.text}\n\n[This is ${chosen.label}, not the file as it stands.]`,
 				success: true,
 			};
 		}),
 	);
+}
+
+/**
+ * Put the file's revision list on the end of an ordinary read.
+ *
+ * The compaction answer. The numbers are only useful if the model can find
+ * them, and a long thrashing run auto-compacts away the receipts that first
+ * announced them — while being exactly the run that needs to go back three
+ * versions. Every read of a file that has any restates the whole list, so one
+ * call recovers it.
+ *
+ * Only for files that have a history: a read of anything else is untouched, so
+ * a session that never edits sees precisely the tool it saw before.
+ */
+function annotateWithRevisions(
+	source: BaseRevisionSource,
+	snapshot: Snapshot,
+	input: unknown,
+	results: ToolOperationResult[],
+): ToolOperationResult[] {
+	const byQuery = new Map<string, string>();
+	for (const request of readFileRequestsFrom(input)) {
+		const lookup = resolveBaseFile(snapshot, request.path);
+		if (lookup.kind === "uncovered" || lookup.kind === "outside") continue;
+		byQuery.set(formatReadFileQuery(request), lookup.absolutePath);
+	}
+	if (byQuery.size === 0) return results;
+	return results.map((result) => {
+		if (!result.success) return result;
+		const absolutePath = byQuery.get(result.query);
+		if (!absolutePath) return result;
+		const history = source.revisions.revisions(absolutePath);
+		if (history.length < 2) return result;
+		return {
+			...result,
+			result: `${result.result}\n\n${describeRevisions(path.basename(absolutePath), history)}`,
+		};
+	});
 }
 
 /**
@@ -164,21 +296,31 @@ export function withBaseRevisionReads<T extends AgentToolDefinition>(
 			inputSchema: withRevisionProperty(original.inputSchema),
 			execute: async (input: unknown, context: AgentToolContext) => {
 				const { revision, rest } = revisionOf(input);
-				if (typeof revision !== "string") {
-					return original.execute(rest, context);
-				}
-				const wanted = revision.trim().toLowerCase();
-				// Anything but "base" is the working tree, which is what the
-				// unadorned call already does. A model that writes
-				// `revision: "current"` gets the file rather than a refusal.
-				if (wanted !== BASE_REVISION) {
-					return original.execute(rest, context);
-				}
 				const snapshot = source.pending;
+				const wanted =
+					typeof revision === "string" ? revision.trim() : undefined;
+				// Names for the working tree are what the unadorned call already
+				// does. A model that writes `revision: "current"` gets the file
+				// rather than a refusal.
+				const isWorkingTree =
+					wanted === undefined ||
+					wanted === "" ||
+					["current", "now", "disk", "head", "working"].includes(
+						wanted.toLowerCase(),
+					);
+				if (isWorkingTree) {
+					const plain = (await original.execute(
+						rest,
+						context,
+					)) as ToolOperationResult[];
+					return snapshot && Array.isArray(plain)
+						? annotateWithRevisions(source, snapshot, rest, plain)
+						: plain;
+				}
 				if (!snapshot) {
 					return [
 						{
-							query: BASE_REVISION,
+							query: wanted,
 							result: "",
 							error:
 								"No transaction is open, so there is no earlier version to read. Read the file as it stands.",
@@ -186,7 +328,7 @@ export function withBaseRevisionReads<T extends AgentToolDefinition>(
 						} satisfies ToolOperationResult,
 					];
 				}
-				return readFromBase(snapshot, rest, context);
+				return readFromRevision(source, snapshot, rest, context, wanted);
 			},
 		} as unknown as T;
 	});

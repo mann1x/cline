@@ -1,3 +1,4 @@
+import { LAST_REVISION } from "./file-revisions";
 import { isPageOracle, type Oracle, type OracleVerdict } from "./oracle";
 import { PLAN_TOOL_NAME } from "./plan-tool";
 import { PROPOSE_CHECK_TOOL_NAME } from "./proposal";
@@ -178,6 +179,15 @@ export function buildProtocolPrompt(input: ProtocolPromptInput): string {
 		// has none. `qwen.md` carried a louder version of the same contradiction
 		// and was fixed separately; this is the half that reaches every model.
 		"Make them one at a time, not as a batch: after each edit, confirm it did what you intended before you start the next. Six edits that fail together leave you six things to undo and no way to tell which one was wrong. This governs edits only — reads, searches and commands change nothing and can be sent together freely, as many at a time as you find useful.",
+		"",
+		// The other half of that rule, and the reason it is cheap to follow.
+		// Without it the only undo was the whole file as the transaction opened,
+		// so a model that had fixed three things and broken the fourth had to
+		// choose between keeping the break and losing the three -- and measurably
+		// chose to rebuild from memory instead, which is where the long runs went
+		// (user, 2026-09-13: "restoring to original doesn't work, the model is
+		// loosing all the wins or half wins and starts from scratch").
+		`Each of those edits is numbered as you make it, and \`${RESTORE_FILE_TOOL_NAME}\` takes a \`revision\`: \`"${LAST_REVISION}"\` undoes only your most recent change to a file and keeps everything before it, and a number goes back to any earlier point. So a single edit that goes wrong costs one step and not the transaction, and you are never choosing between keeping a mistake and throwing away the work that came before it.`,
 		"",
 		// Stated as well as written, because a plan in prose is a plan nobody can
 		// mark. Measured on session 1789139763721_ive21: eleven plan blocks, six

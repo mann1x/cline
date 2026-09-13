@@ -1,3 +1,4 @@
+import { createRevisionLog, type RevisionLog } from "./file-revisions";
 import {
 	DEFAULT_ORACLE_TIMEOUT_MS,
 	type Oracle,
@@ -176,6 +177,14 @@ export interface TransactionControllerOptions {
 export class TransactionController {
 	private readonly history: TransactionOutcome[] = [];
 	private readonly uncoveredPaths = new Set<string>();
+	/**
+	 * Every version of every file a tool has written in the open transaction.
+	 *
+	 * Lives here because its lifetime is the base snapshot's: #1 of each file is
+	 * what the base holds, so a log that outlived its base would offer the model
+	 * a revision the rollback cannot honour.
+	 */
+	private readonly revisionLog = createRevisionLog();
 	/** What a rollback goes back to. Outlives a transaction that was carried. */
 	private snapshot?: Snapshot;
 	/**
@@ -393,6 +402,11 @@ export class TransactionController {
 		return this.snapshot;
 	}
 
+	/** The open transaction's per-file history. Empty before the first write. */
+	get revisions(): RevisionLog {
+		return this.revisionLog;
+	}
+
 	/** Whether the open transaction has changed anything on disk. */
 	async isUntouched(): Promise<boolean> {
 		return this.openedWith
@@ -451,6 +465,14 @@ export class TransactionController {
 		// attempt. Unverified work never accumulates past one discard.
 		const carriedBase = this.carrying ? this.snapshot : undefined;
 		this.carrying = false;
+		// The log's #1 is whatever the base holds, so it survives exactly as long
+		// as the base does. A carried transaction keeps both: its work is still
+		// on disk, so the revisions that produced it still describe the file. A
+		// fresh base means the tree was put back, and a history of versions that
+		// no longer exist would offer the model somewhere it cannot go.
+		if (!carriedBase) {
+			this.revisionLog.reset();
+		}
 		this.openedWith = await takeSnapshot(
 			this.options.workspaceRoot,
 			this.options.snapshotLimits,
@@ -709,6 +731,7 @@ export class TransactionController {
 		);
 		this.snapshot = undefined;
 		this.openedWith = undefined;
+		this.revisionLog.reset();
 		return restore;
 	}
 

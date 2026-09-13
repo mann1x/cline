@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createRevisionLog } from "./file-revisions";
 import {
 	createRestoreFileTool,
 	MAX_NOOP_RESTORES_PER_TRANSACTION,
@@ -31,6 +32,11 @@ async function withWorkspace(
 class FakeController {
 	pending: Snapshot | undefined;
 	transaction = 1;
+	// A real log, not a stub: these tests cover the path where a file has no
+	// recorded history, which is what every file looks like until a tool writes
+	// it -- and that path has to keep behaving exactly as it did before
+	// revisions existed.
+	revisions = createRevisionLog();
 }
 
 describe("putting one file back", () => {
@@ -59,7 +65,7 @@ describe("putting one file back", () => {
 				await expect(
 					fs.readFile(path.join(root, "other.js"), "utf8"),
 				).resolves.toBe("also edited");
-				expect(said).toContain("back as it was");
+				expect(said).toContain("back to the original");
 			},
 		);
 	});
@@ -151,7 +157,7 @@ describe("putting one file back", () => {
 			const tool = createRestoreFileTool({ controller });
 			const said = await tool.execute({ path: "game.html" }, context);
 
-			expect(said).toContain("already exactly as it was");
+			expect(said).toContain("already exactly the original");
 			expect(said).toContain("wrong before you touched it");
 		});
 	});
@@ -180,7 +186,7 @@ describe("putting one file back", () => {
 
 			for (let i = 0; i < MAX_NOOP_RESTORES_PER_TRANSACTION; i += 1) {
 				expect(await tool.execute({ path: "game.html" }, context)).toContain(
-					"already exactly as it was",
+					"already exactly the original",
 				);
 			}
 			const said = await tool.execute({ path: "game.html" }, context);
@@ -203,7 +209,7 @@ describe("putting one file back", () => {
 			for (let i = 0; i < MAX_NOOP_RESTORES_PER_TRANSACTION + 2; i += 1) {
 				await fs.writeFile(path.join(root, "game.html"), `mess ${i}`, "utf8");
 				expect(await tool.execute({ path: "game.html" }, context)).toContain(
-					"back as it was",
+					"back to the original",
 				);
 			}
 		});
@@ -245,7 +251,7 @@ describe("putting one file back", () => {
 			await fs.writeFile(path.join(root, "game.html"), "new mess", "utf8");
 			const said = await tool.execute({ path: "game.html" }, context);
 
-			expect(said).toContain("back as it was");
+			expect(said).toContain("back to the original");
 		});
 	});
 

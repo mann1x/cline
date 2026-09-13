@@ -37,6 +37,12 @@ import {
 	isTextBody,
 	resolveBaseFile,
 } from "./base-revision";
+import {
+	describeRevisions,
+	LAST_REVISION,
+	ORIGINAL_REVISION,
+	type RevisionLog,
+} from "./file-revisions";
 import type { Snapshot } from "./snapshot";
 
 export const RESTORE_FILE_TOOL_NAME = "restore_file";
@@ -109,7 +115,15 @@ Use it the moment an edit goes wrong in a way you would otherwise have to undo b
 
 It affects one file. Anything you changed in other files this transaction stays. If the file did not exist when the transaction opened, restoring it deletes it.
 
-This is not the end of the transaction and it does not spend one — you carry on, from the file as it was. Read the file again afterwards: its line numbers are back to what they were before your changes, and any range you read earlier no longer addresses the same code.
+**You do not have to go all the way back.** Every time a tool writes a file, that version is kept and numbered, and \`revision\` says which one to return to:
+
+- \`revision: "${LAST_REVISION}"\` undoes only your most recent change to the file, keeping everything before it. This is almost always the one you want after a single edit goes wrong.
+- \`revision: "#3"\` (or \`3\`) returns to that numbered version. Every edit's result tells you the number it just made, and every read of the file lists the ones you can go back to.
+- \`revision: "${ORIGINAL_REVISION}"\` is the file as this transaction opened, which is what you get if you say nothing.
+
+Going back one step is not the same as starting again. If you have fixed three things and broken the fourth, \`${LAST_REVISION}\` keeps the three.
+
+This is not the end of the transaction and it does not spend one — you carry on, from the file as it was. Read the file again afterwards: its line numbers are back to what they were at that revision, and any range you read earlier no longer addresses the same code.
 
 If you only want to *see* what the file said before your changes, do not restore it — call \`read_files\` with \`revision: "base"\` and it is shown to you with the file left alone.`;
 
@@ -120,6 +134,10 @@ export const RESTORE_FILE_TOOL_INPUT_SCHEMA = {
 			type: "string",
 			description:
 				"The file to put back, absolute or relative to the workspace root.",
+		},
+		revision: {
+			type: "string",
+			description: `Which version to return to: "${LAST_REVISION}" to undo only your most recent change to this file, a number such as "#3" for that version, or "${ORIGINAL_REVISION}" for the file as this transaction opened. Defaults to "${ORIGINAL_REVISION}".`,
 		},
 		reason: {
 			type: "string",
@@ -136,6 +154,8 @@ export interface RestoreFileSource {
 	readonly pending: Snapshot | undefined;
 	/** Which transaction is open. A new one gets a fresh budget. */
 	readonly transaction: number;
+	/** Every version of every file a tool has written this transaction. */
+	readonly revisions: RevisionLog;
 }
 
 export interface RestoreFileToolOptions {
@@ -235,6 +255,15 @@ export function createRestoreFileTool(
 				return `That is ${MAX_RESTORES_PER_TRANSACTION} restores already in this transaction, so no more will be made. Undoing the same work repeatedly is not converging on it. Read the file as it stands, decide on one change, and make that change — or say plainly that you cannot, and let the transaction be judged.`;
 			}
 
+			const requestedRevision =
+				input && typeof input === "object" && !Array.isArray(input)
+					? (input as { revision?: unknown }).revision
+					: undefined;
+			const revisionSpec =
+				typeof requestedRevision === "string" && requestedRevision.trim() !== ""
+					? requestedRevision.trim()
+					: ORIGINAL_REVISION;
+
 			const lookup = resolveBaseFile(snapshot, requested.trim());
 			if (lookup.kind === "uncovered" || lookup.kind === "outside") {
 				return describeMissingBase(lookup);
@@ -244,17 +273,49 @@ export function createRestoreFileTool(
 				path.relative(snapshot.root, lookup.absolutePath) ||
 				lookup.absolutePath;
 
-			// Created by this transaction: its base revision is not existing, so
-			// putting it back means removing it. The same thing the rollback does
-			// at the boundary, and said plainly rather than dressed up as an edit.
-			if (lookup.kind === "created") {
-				// A path that is not in the snapshot and is not on disk either was
-				// never created by anything. Deleting nothing and reporting a
-				// restore would spend the budget on a typo.
+			const log = options.controller.revisions;
+			// Seed the base before resolving anything, so a file that no tool has
+			// written still has #1 to go back to. Without this the log would
+			// record its first entry as "did not exist" for a file the snapshot
+			// holds, and `original` would mean deleting it.
+			log.seed(
+				lookup.absolutePath,
+				lookup.kind === "held" ? lookup.body : undefined,
+			);
+			const history = log.revisions(lookup.absolutePath);
+
+			const found = log.resolve(lookup.absolutePath, revisionSpec);
+			if (found.kind === "dropped") {
+				return [
+					`Revision #${found.index} of \`${display}\` is no longer held: its content was released to stay inside the memory this transaction may spend on file history. The revisions still held are below, and one of them is the nearest point you can return to.`,
+					"",
+					describeRevisions(display, history),
+				].join("\n");
+			}
+			if (found.kind !== "found") {
+				return [
+					`\`${revisionSpec}\` does not name a version of \`${display}\` that exists.`,
+					"",
+					describeRevisions(display, history),
+				].join("\n");
+			}
+			const target = found.revision.body;
+			const targetLabel =
+				found.revision.index === 1
+					? "the original (#1)"
+					: `revision #${found.revision.index}`;
+
+			// Nothing to put back means the file did not exist at that revision,
+			// so putting it back means removing it — the same thing the rollback
+			// does at the boundary, said plainly rather than dressed up as an edit.
+			if (target === undefined) {
+				// A path that is not on disk either was never created by anything.
+				// Deleting nothing and reporting a restore would spend the budget
+				// on a typo.
 				try {
 					await fs.stat(lookup.absolutePath);
 				} catch {
-					return `\`${display}\` does not exist and did not exist when this transaction opened, so there is nothing to put back. Check the path.`;
+					return `\`${display}\` does not exist and did not exist at ${targetLabel}, so there is nothing to put back. Check the path.`;
 				}
 				let existed = true;
 				try {
@@ -278,7 +339,16 @@ export function createRestoreFileTool(
 					transaction,
 					deleted: true,
 				});
-				return `\`${display}\` did not exist when this transaction opened, so it has been deleted — that is what putting it back means. ${describeBudget(spentIn)}`;
+				const removal = log.record(
+					lookup.absolutePath,
+					undefined,
+					RESTORE_FILE_TOOL_NAME,
+				);
+				return [
+					`\`${display}\` did not exist at ${targetLabel}, so it has been deleted — that is what putting it back means.${removal ? ` That is now revision #${removal.index}.` : ""} ${describeBudget(spentIn)}`,
+					"",
+					describeRevisions(display, log.revisions(lookup.absolutePath)),
+				].join("\n");
 			}
 
 			let current: Buffer | undefined;
@@ -288,30 +358,36 @@ export function createRestoreFileTool(
 				current = undefined;
 			}
 
-			if (current?.equals(lookup.body)) {
+			if (current?.equals(target)) {
 				noOps += 1;
 				// Past the budget the tool stops answering. Not to punish the
 				// call -- it costs nothing on disk -- but because answering it
 				// is what kept the loop fed: the reply was reassuring, the next
-				// call was identical, and the transaction never moved. The
-				// refusal names the one thing that is true (the file is the
-				// original) and the two calls that can follow it, and it does
-				// not offer stopping as one of them.
+				// call was identical, and the transaction never moved.
 				if (noOps > MAX_NOOP_RESTORES_PER_TRANSACTION) {
 					return [
-						`\`${display}\` is the original. You have now asked to restore it ${noOps} times without it having been changed, and this tool will not answer again for this file in this transaction — there is nothing here to undo.`,
+						`\`${display}\` already matches ${targetLabel}. You have now asked to restore it ${noOps} times without it having changed in between, and this tool will not answer again for this file in this transaction — there is nothing here to undo.`,
 						"",
-						"That is the answer to the question you keep asking: your edits are not landing. The file on disk is exactly what it was when the transaction opened, so nothing you have done to it has taken effect.",
+						"That is the answer to the question you keep asking: your edits are not landing. The file on disk is exactly what it was, so nothing you have done to it has taken effect.",
 						"",
 						`Read \`${display}\` now — the whole region you mean to change, with \`start_line\` and \`end_line\` — and send one \`editor\` call using the line numbers that read reports. If that call is refused, the refusal says why; fix what it names and send it again.`,
 					].join("\n");
 				}
-				return `\`${display}\` is already exactly as it was when this transaction opened, so nothing was changed${noOps > 1 ? ` (that is ${noOps} times you have asked)` : ""}. Whatever is still wrong with it was wrong before you touched it — look at the file itself rather than at your own edits.`;
+				// The original keeps the sharper sentence. "Wrong before you
+				// touched it" is only true of #1, and it is the one that ends the
+				// loop: a model asking to restore an unchanged file has lost
+				// track of what it changed, and being told its edits never landed
+				// is the answer it was actually looking for.
+				const sinceWhen =
+					found.revision.index === 1
+						? "Whatever is still wrong with it was wrong before you touched it"
+						: "Whatever is still wrong with it was wrong at that revision";
+				return `\`${display}\` is already exactly ${targetLabel}, so nothing was changed${noOps > 1 ? ` (that is ${noOps} times you have asked)` : ""}. ${sinceWhen} — look at the file itself rather than at your own edits.`;
 			}
 
 			try {
 				await fs.mkdir(path.dirname(lookup.absolutePath), { recursive: true });
-				await fs.writeFile(lookup.absolutePath, lookup.body);
+				await fs.writeFile(lookup.absolutePath, target);
 			} catch (error) {
 				options.onError?.(`[Atomic] ${display} could not be restored`, error);
 				return `\`${display}\` could not be restored: ${String(error)}`;
@@ -325,17 +401,25 @@ export function createRestoreFileTool(
 				deleted: false,
 			});
 
-			const restoredLines = countLines(lookup.body);
+			// Append rather than rewind. The model re-reads its own history, and
+			// a #3 that quietly stops meaning what it meant is worse than a
+			// larger number.
+			const made = log.record(
+				lookup.absolutePath,
+				target,
+				RESTORE_FILE_TOOL_NAME,
+			);
+			const restoredLines = countLines(target);
 			const discarded =
 				current === undefined
 					? "it had been deleted"
-					: describeDiscarded(current, lookup.body);
+					: describeDiscarded(current, target);
 
 			return [
-				`\`${display}\` is back as it was when this transaction opened: ${restoredLines} lines, ${discarded}.`,
-				"Every line number you read before this now points somewhere else, so read the file again before you edit it.",
-				describeBudget(spentIn),
-			].join(" ");
+				`\`${display}\` is back to ${targetLabel}: ${restoredLines} lines, ${discarded}.${made ? ` That is now revision #${made.index}.` : ""} Every line number you read before this now points somewhere else, so read the file again before you edit it. ${describeBudget(spentIn)}`,
+				"",
+				describeRevisions(display, log.revisions(lookup.absolutePath)),
+			].join("\n");
 		},
 	});
 }

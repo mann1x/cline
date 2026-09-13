@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import type { AgentTool, AgentToolDefinition } from "@cline/shared";
 import type { CoreAtomicProtocolConfig } from "../../types/config";
 import { withBaseRevisionReads } from "./base-revision-reads";
@@ -17,6 +18,7 @@ import {
 	describeSilentTurn,
 } from "./protocol";
 import { createRestoreFileTool } from "./restore-file-tool";
+import { withRevisionCapture } from "./revision-capture";
 import { createRunCheckTool } from "./run-check-tool";
 import {
 	createStalledChecks,
@@ -835,10 +837,36 @@ export async function createAtomicProtocolSession(
 		})) as AgentTool[],
 		decorateTools: (given) => {
 			const withReads = withBaseRevisionReads(given, controller);
+			// Inside the check-first gate below, so a refused edit -- which never
+			// reaches the file -- does not cost a read of it. It wraps the real
+			// execution, so what it captures is what the tool actually left on
+			// disk rather than what the call asked for.
+			const withRevisions = withRevisionCapture(withReads, {
+				source: {
+					get pending() {
+						return controller.pending;
+					},
+					get transaction() {
+						return controller.transaction;
+					},
+					get log() {
+						return controller.revisions;
+					},
+				},
+				readFile: async (absolutePath) => {
+					try {
+						return await readFile(absolutePath);
+					} catch {
+						// Gone, unreadable, or never there. All three are "no
+						// content at this revision", which is a real answer.
+						return undefined;
+					}
+				},
+			});
 			// Outermost, so it sees every call including the ones the gate
 			// refuses: the turn that answers the gate is exactly the turn that
 			// states the plan, and its edit never reaches the executor.
-			const withPlans = withPlanCapture(withReads, {
+			const withPlans = withPlanCapture(withRevisions, {
 				get transaction() {
 					return controller.transaction;
 				},

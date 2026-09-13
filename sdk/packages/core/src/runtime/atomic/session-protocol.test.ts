@@ -1439,3 +1439,168 @@ describe("standing down because the user turned the protocol off", () => {
 		});
 	});
 });
+
+/**
+ * The whole point of per-file revisions, end to end through the real wiring.
+ *
+ * The complaint this answers (user, 2026-09-13): "restoring to original doesn't
+ * work, the model is loosing all the wins or half wins and starts from
+ * scratch". A model that has fixed one thing and wrecked the next had exactly
+ * two options -- keep the wreck, or throw the fix away with it.
+ */
+describe("going back one step instead of all the way", () => {
+	/** A stand-in for `editor`: it writes what it is told, as the real one does. */
+	function writingEditor(file: string) {
+		return {
+			name: "editor",
+			description: "Edit.",
+			inputSchema: { type: "object", properties: {} },
+			execute: async (input: unknown) => {
+				await fs.writeFile(
+					file,
+					String((input as { new_text?: unknown }).new_text ?? ""),
+					"utf8",
+				);
+				return "Edited.";
+			},
+		};
+	}
+
+	/**
+	 * The check-first gate refuses the first edit of a transaction until the
+	 * check has been run, so a test that edits has to do what the model does.
+	 * That it refuses here is itself the proof that the revision capture sits
+	 * inside the gate: the refused edit never reached the file and made no
+	 * revision.
+	 */
+	type Decorated = {
+		name: string;
+		execute?: (a: unknown, b: unknown) => Promise<unknown>;
+	};
+	async function check(tools: Decorated[], file: string): Promise<void> {
+		await tools
+			.find((entry) => entry.name === "run_check")
+			?.execute?.(
+				{},
+				{
+					iteration: 0,
+				},
+			);
+		// The gate also holds the first edit of a transaction whatever else has
+		// happened — it is asking for a plan, not for the check — and holds the
+		// rest of that turn with it. A real session spends a turn on this, so a
+		// test that edits has to spend one too.
+		await tools
+			.find((entry) => entry.name === "editor")
+			?.execute?.({ path: file, new_text: "" }, { iteration: 0 });
+	}
+
+	function decorated(session: unknown, extra: unknown) {
+		const s = session as {
+			tools: unknown[];
+			decorateTools: (g: unknown[]) => {
+				name: string;
+				execute?: (a: unknown, b: unknown) => Promise<unknown>;
+			}[];
+		};
+		return s.decorateTools([extra, ...s.tools]);
+	}
+
+	it("keeps the earlier work when the model undoes only its last change", async () => {
+		await withWorkspace({ "game.js": "one\ntwo\nthree\n" }, async (root) => {
+			const file = path.join(root, "game.js");
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "static", oracleCommand: shellCheck(root, "fixed") },
+			});
+			const tools = decorated(session, writingEditor(file));
+			const edit = tools.find((tool) => tool.name === "editor");
+			const restore = tools.find((tool) => tool.name === "restore_file");
+			await check(tools, file);
+
+			const first = String(
+				await edit?.execute?.(
+					{ path: file, new_text: "one\nFIXED\nthree\n" },
+					{ iteration: 1 },
+				),
+			);
+			expect(first).toContain("#2");
+
+			const wrecked = String(
+				await edit?.execute?.(
+					{ path: file, new_text: "WRECKED\n" },
+					{
+						iteration: 2,
+					},
+				),
+			);
+			expect(wrecked).toContain("#3");
+
+			const undone = String(
+				await restore?.execute?.(
+					{ path: file, revision: "last" },
+					{
+						iteration: 3,
+					},
+				),
+			);
+			expect(undone).toContain("revision #2");
+			// The fix survives the undo. This is the assertion the feature exists
+			// for: before it, the only way back was the original, which took the
+			// fix with it.
+			expect(await fs.readFile(file, "utf8")).toBe("one\nFIXED\nthree\n");
+		});
+	});
+
+	it("still goes all the way back when asked to", async () => {
+		await withWorkspace({ "game.js": "one\ntwo\nthree\n" }, async (root) => {
+			const file = path.join(root, "game.js");
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "static", oracleCommand: shellCheck(root, "fixed") },
+			});
+			const tools = decorated(session, writingEditor(file));
+			const edit = tools.find((tool) => tool.name === "editor");
+			const restore = tools.find((tool) => tool.name === "restore_file");
+			await check(tools, file);
+
+			await edit?.execute?.({ path: file, new_text: "a\n" }, { iteration: 1 });
+			await edit?.execute?.({ path: file, new_text: "b\n" }, { iteration: 2 });
+			const said = String(
+				await restore?.execute?.({ path: file }, { iteration: 3 }),
+			);
+
+			expect(said).toContain("the original");
+			expect(await fs.readFile(file, "utf8")).toBe("one\ntwo\nthree\n");
+		});
+	});
+
+	it("lists the revisions it can go back to, so the numbers survive a compaction", async () => {
+		await withWorkspace({ "game.js": "one\n" }, async (root) => {
+			const file = path.join(root, "game.js");
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "static", oracleCommand: shellCheck(root, "fixed") },
+			});
+			const tools = decorated(session, writingEditor(file));
+			const edit = tools.find((tool) => tool.name === "editor");
+			const restore = tools.find((tool) => tool.name === "restore_file");
+			await check(tools, file);
+
+			await edit?.execute?.({ path: file, new_text: "a\n" }, { iteration: 1 });
+			await edit?.execute?.({ path: file, new_text: "b\n" }, { iteration: 2 });
+			const said = String(
+				await restore?.execute?.(
+					{ path: file, revision: "#2" },
+					{
+						iteration: 3,
+					},
+				),
+			);
+
+			expect(said).toContain("Revisions of");
+			expect(said).toContain("#1");
+			expect(said).toContain("#3");
+		});
+	});
+});
