@@ -1157,7 +1157,17 @@ export interface AgentConfig {
 	 * between leaving the image and replacing it with a note.
 	 */
 	modelSupportsImages?: boolean;
-	consumePendingUserMessage?: () => string | undefined;
+	/**
+	 * Widened to allow a promise, which the runtime has always awaited
+	 * (`agent-runtime.ts` does `await this.consumePendingUserMessage()`), and
+	 * which the sibling declaration in `agent.ts` already permitted. A host that
+	 * has work to do at this boundary -- it is the one point in the loop with no
+	 * tool call open -- could not express it through a synchronous signature.
+	 */
+	consumePendingUserMessage?: () =>
+		| string
+		| undefined
+		| Promise<string | undefined>;
 
 	// -------------------------------------------------------------------------
 	// Cancellation

@@ -253,7 +253,11 @@ describe("the change protocol, as the host wires it", () => {
 		const notice = findStatusNotice(events);
 		expect(notice?.metadata.armed).toBe(false);
 		expect(notice?.message).toContain("nothing in this workspace can be run");
-		expect(notice?.message).toContain("Always");
+		// Names the way out rather than only the problem. Was "Always", which was
+		// a mode; the way out now is a check of your own, or letting the model
+		// propose one where there is someone to approve it.
+		expect(notice?.message).toContain("nobody here to approve");
+		expect(notice?.message).toContain("Name a check of your own");
 		// And it really did stand down, rather than merely saying so.
 		expect(agentConfig?.completionPolicy?.onCompletionAttempt).toBeUndefined();
 	});

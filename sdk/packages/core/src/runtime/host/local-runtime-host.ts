@@ -296,6 +296,15 @@ export interface LocalRuntimeHostOptions {
 }
 
 export class LocalRuntimeHost implements RuntimeHost {
+	/**
+	 * Sessions whose change protocol is to stand down at the next safe point.
+	 *
+	 * A request, not the act. The act is in `consumePendingUserMessage`, which
+	 * is the only place in the loop where putting files back cannot race a tool
+	 * call that is still open.
+	 */
+	private readonly pendingAtomicDisengage = new Set<string>();
+
 	public readonly runtimeAddress = undefined;
 	public readonly pendingPrompts: PendingPromptsServiceApi;
 	private readonly sessionService: SessionBackend;
@@ -1182,7 +1191,24 @@ export class LocalRuntimeHost implements RuntimeHost {
 			onConsecutiveMistakeLimitReached:
 				configWithProvider.onConsecutiveMistakeLimitReached,
 			completionPolicy: completionPolicyWithProtocol,
-			consumePendingUserMessage: () => {
+			consumePendingUserMessage: async () => {
+				// Standing down happens here and nowhere else. This runs after
+				// the previous turn's tool results and before the next model
+				// request, which is the only point in the loop where no tool call
+				// is open -- and a discarded transaction puts files back, which
+				// would otherwise land underneath a call that is writing one.
+				//
+				// Ahead of the steer queue rather than behind it: the notice says
+				// what the files on disk now are, and a message read before it
+				// would be read against a workspace that no longer exists.
+				if (this.pendingAtomicDisengage.delete(sessionId)) {
+					const notice = await this.sessions
+						.get(sessionId)
+						?.atomicProtocol?.disengage();
+					if (notice) {
+						return formatModePrompt(notice, configWithProvider.mode);
+					}
+				}
 				const entry = this.pendingPromptsController.consumeSteer(sessionId);
 				return entry
 					? formatModePrompt(
@@ -2047,6 +2073,41 @@ export class LocalRuntimeHost implements RuntimeHost {
 	 * not work is something both they and the lead need to know; only a run the
 	 * user stopped says nothing, and that one never reaches here.
 	 */
+	/**
+	 * The user turned the change protocol off.
+	 *
+	 * Two ways in, for the same reason `deliverBackgroundDelegation` has two:
+	 * with the session idle the notice is appended to the transcript directly,
+	 * and with a turn in flight nothing is touched now -- the request is parked
+	 * and the standing down happens at the top of the next iteration, where no
+	 * tool call is open. A rollback is a write to the user's files, and the one
+	 * thing it must never do is land while the model is mid-edit.
+	 *
+	 * Returns whether there was a protocol to stand down at all.
+	 */
+	async disengageAtomicProtocol(sessionId: string): Promise<boolean> {
+		const live = this.sessions.get(sessionId);
+		const protocol = live?.atomicProtocol;
+		if (!live || !protocol || protocol.disengaged) {
+			return false;
+		}
+		if (live.agent.canStartRun()) {
+			const notice = await protocol.disengage();
+			if (notice) {
+				live.agent.restore([
+					...live.agent.getMessages(),
+					{
+						role: "user",
+						content: notice,
+					} as LlmsProviders.MessageWithMetadata,
+				]);
+			}
+			return true;
+		}
+		this.pendingAtomicDisengage.add(sessionId);
+		return true;
+	}
+
 	private deliverBackgroundDelegation(
 		sessionId: string,
 		view: BackgroundDelegationView,
