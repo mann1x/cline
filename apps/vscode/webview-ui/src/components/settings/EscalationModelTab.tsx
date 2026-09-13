@@ -1,9 +1,9 @@
 import { DEFAULT_ESCALATION_SETTINGS } from "@shared/EscalationSettings"
+import { VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import ScopedModelTab from "./ScopedModelTab"
-import SettingsCheckbox from "./SettingsCheckbox"
 import { updateSetting } from "./utils/settingsHandlers"
 
 /** A limit the user typed. Anything that is not a positive integer is ignored. */
@@ -81,12 +81,14 @@ const EscalationModelTab = () => {
 			</div>
 
 			<div>
-				<SettingsCheckbox
+				<VSCodeCheckbox
 					checked={escalationSettings?.requireApproval ?? DEFAULT_ESCALATION_SETTINGS.requireApproval}
 					className="mb-[5px]"
-					onChange={(checked: boolean) => updateSetting("escalationSettings", { requireApproval: checked })}>
+					onChange={(event) =>
+						updateSetting("escalationSettings", { requireApproval: !!(event.target as HTMLInputElement).checked })
+					}>
 					Ask before escalating
-				</SettingsCheckbox>
+				</VSCodeCheckbox>
 				<p className="text-xs text-(--vscode-descriptionForeground)">
 					Shows you the brief the expert would be given, alongside the harness's own reading of why the run looks stuck
 					— which is computed separately from the model's account of itself. Saying no costs nothing: the escalation
@@ -95,12 +97,16 @@ const EscalationModelTab = () => {
 			</div>
 
 			<div>
-				<SettingsCheckbox
+				<VSCodeCheckbox
 					checked={escalationSettings?.closeAfterEscalation ?? DEFAULT_ESCALATION_SETTINGS.closeAfterEscalation}
 					className="mb-[5px]"
-					onChange={(checked: boolean) => updateSetting("escalationSettings", { closeAfterEscalation: checked })}>
+					onChange={(event) =>
+						updateSetting("escalationSettings", {
+							closeAfterEscalation: !!(event.target as HTMLInputElement).checked,
+						})
+					}>
 					Close the expert's conversation after each escalation
-				</SettingsCheckbox>
+				</VSCodeCheckbox>
 				<p className="text-xs text-(--vscode-descriptionForeground)">
 					Off holds the conversation open, so a hosted provider's prompt cache stays warm and a second escalation does
 					not pay to send the whole exchange again. On releases it at once, which is what a local server with one slot

@@ -2,6 +2,7 @@ import { DEFAULT_ATOMIC_PROTOCOL_SESSION, DEFAULT_ATOMIC_PROTOCOL_SETTINGS } fro
 import { DEFAULT_AUTO_APPROVAL_SETTINGS } from "@shared/AutoApprovalSettings"
 import { DEFAULT_BROWSER_SETTINGS } from "@shared/BrowserSettings"
 import { DEFAULT_EDIT_VERIFICATION_SETTINGS } from "@shared/EditVerificationSettings"
+import { DEFAULT_ESCALATION_SETTINGS } from "@shared/EscalationSettings"
 import { DEFAULT_PLATFORM, type ExtensionState } from "@shared/ExtensionMessage"
 import { DEFAULT_MCP_DISPLAY_MODE } from "@shared/McpDisplayMode"
 import type { UserInfo } from "@shared/proto/cline/account"
@@ -287,6 +288,7 @@ export const ExtensionStateContextProvider: React.FC<{
 		shouldShowAnnouncement: false,
 		autoApprovalSettings: DEFAULT_AUTO_APPROVAL_SETTINGS,
 		browserSettings: DEFAULT_BROWSER_SETTINGS,
+		escalationSettings: DEFAULT_ESCALATION_SETTINGS,
 		preferredLanguage: "English",
 		mode: "act",
 		platform: DEFAULT_PLATFORM,
