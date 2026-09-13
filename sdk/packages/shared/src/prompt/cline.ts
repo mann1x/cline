@@ -18,6 +18,48 @@ const WORKSPACE_CONFIGURATION_MARKER = "# Workspace Configuration";
  * after a switch the transcript still contains messages tagged with the other
  * mode.
  */
+/**
+ * That grep, sed and awk exist, said once to every template.
+ *
+ * They are described in their own tool sections, which reach the model as tool
+ * schemas -- enough to use one it has already decided to use, and not enough to
+ * make it think of one. The part of the prompt that decides WHICH tool gets
+ * reached for is the system section, and that belongs to whichever family
+ * template matched: measured across all ten shipped templates, awk is named in
+ * the system section of none of them, and grep and sed only inside "never run
+ * this through the shell" lists, which frames them as substitutes for something
+ * forbidden rather than as tools worth choosing.
+ *
+ * What that cost, on pandorum session 1789276298025_l5yr9: asked to count
+ * braces, the model reached for PowerShell (it failed on a binding error), and
+ * found the awk tool ninety-eight messages later.
+ *
+ * It rides in the rules slot because that is the one thing appended to every
+ * template, including one that never mentions these tools and one that forgets
+ * the marker entirely. A family template can then say more; none of them has to
+ * say this.
+ */
+export const POSIX_TOOL_AVAILABILITY = `# grep, sed and awk
+
+Three POSIX tools run inside this process, and they are available in their own
+right rather than as substitutes for anything: use them when they fit the
+question, not only when a shell command has been ruled out.
+
+- grep searches files for lines matching a pattern, with grep's own flags, once
+  you know which files to look in. search_codebase is still the tool for finding
+  out WHERE something is; grep answers questions about a file you have already
+  located.
+- sed applies a script to one or more files. It prints the result by default,
+  which is a safe way to check a script before trusting it, and rewrites the
+  files when in_place is true.
+- awk runs a program over one or more files and is the right tool for questions
+  about columns, fields and totals -- summing a column, counting occurrences per
+  key, extracting a field from delimited text. It cannot write, and that is
+  enforced.
+
+None of the three goes through the shell, so none needs anything installed and
+all three behave the same on every platform.`;
+
 export const MODE_TAG_INSTRUCTIONS = `# Plan / Act Modes
 
 User messages arrive wrapped in a <user_input mode="..."> tag. The mode attribute is the interaction mode the user was in when they sent that message: "plan" means plan-mode constraints applied (explore, analyze, and align on a plan -- no edits or state-changing commands), while "act" (or "yolo") means implementation was allowed. If the mode attribute changes between messages, the user switched modes -- the newest message's mode is what governs right now, regardless of what earlier messages allowed. A <mode_notice> block inside a message marks exactly when such a switch happened.`;
@@ -216,6 +258,7 @@ export function buildClineSystemPrompt(
 	// contract), keeping CLI output byte-identical after the promotion.
 	const effectiveRules = [
 		rules,
+		POSIX_TOOL_AVAILABILITY,
 		MODE_TAG_INSTRUCTIONS,
 		mode === "plan"
 			? planModeSwitchTool

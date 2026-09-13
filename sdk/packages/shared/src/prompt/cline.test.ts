@@ -202,3 +202,57 @@ describe("buildClineSystemPrompt with a template base prompt", () => {
 		expect(prompt).toBe("Just this. {{CWD}}");
 	});
 });
+
+/**
+ * The POSIX tools have to be named where the model chooses a tool.
+ *
+ * Their tool sections reach the model as schemas, which is enough to use a tool
+ * already chosen and not enough to bring one to mind. Choosing happens against
+ * the system section, and that belongs to whichever family template matched —
+ * across all ten shipped templates, `awk` was named in the system section of
+ * none of them. On pandorum session 1789276298025_l5yr9 the model reached for
+ * PowerShell to count braces and found the `awk` tool 98 messages later.
+ */
+describe("the POSIX tools are announced to every template", () => {
+	const namesAllThree = (prompt: string) => {
+		expect(prompt).toContain("grep");
+		expect(prompt).toContain("sed");
+		expect(prompt).toContain("awk");
+	};
+
+	it("names them with no template at all", () => {
+		namesAllThree(buildClineSystemPrompt({ ...BASE_OPTIONS, mode: "act" }));
+	});
+
+	it("names them under a template that never mentions them", () => {
+		const prompt = buildClineSystemPrompt({
+			...BASE_OPTIONS,
+			mode: "act",
+			basePrompt: "You are a coding agent.\n\n{{CLINE_RULES}}",
+		});
+		namesAllThree(prompt);
+	});
+
+	it("names them even when the template forgets the rules marker", () => {
+		// The marker is appended rather than required, so a template that drops
+		// it does not also drop this.
+		const prompt = buildClineSystemPrompt({
+			...BASE_OPTIONS,
+			mode: "act",
+			basePrompt: "You are a coding agent. No marker here.",
+		});
+		namesAllThree(prompt);
+	});
+
+	it("says they are available in their own right, not as substitutes", () => {
+		const prompt = buildClineSystemPrompt({ ...BASE_OPTIONS, mode: "act" });
+		expect(prompt).toContain("in their own\nright rather than as substitutes");
+		// And says which question each one answers, which is what makes a tool
+		// get reached for rather than merely be known about.
+		expect(prompt).toContain("columns, fields and totals");
+	});
+
+	it("is there in plan mode too", () => {
+		namesAllThree(buildClineSystemPrompt({ ...BASE_OPTIONS, mode: "plan" }));
+	});
+});

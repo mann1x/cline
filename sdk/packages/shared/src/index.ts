@@ -338,6 +338,7 @@ export {
 	MODE_TAG_INSTRUCTIONS,
 	PLAN_MODE_INSTRUCTIONS,
 	PLAN_MODE_INSTRUCTIONS_MANUAL_SWITCH,
+	POSIX_TOOL_AVAILABILITY,
 	processWorkspaceInfo,
 } from "./prompt/cline";
 export type {
