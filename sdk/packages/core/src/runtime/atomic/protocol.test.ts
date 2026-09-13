@@ -3,6 +3,7 @@ import type { Oracle } from "./oracle";
 import {
 	buildEmptyAttemptPrompt,
 	buildProtocolPrompt,
+	describeDisengagement,
 	describeVerdict,
 	type TransactionOutcome,
 } from "./protocol";
@@ -367,5 +368,105 @@ describe("what the protocol counts as a change", () => {
 		// The budget is the reason it matters, so the prompt says the cheap
 		// things are free rather than merely disallowed.
 		expect(prompt).toContain("cost nothing from this budget");
+	});
+});
+
+describe("the notice sent when the user disengages mid-run", () => {
+	const failedCheck = {
+		passed: false,
+		exitCode: 1,
+		output: "1 test failed",
+		timedOut: false,
+	};
+	const discarded = describeVerdict(3, false, "oracle", failedCheck);
+
+	it("names the user as the one who stopped it, before anything else", () => {
+		const notice = describeDisengagement({});
+		// A model told only that the protocol stopped reads it as a judgement on
+		// its work. The first sentence is what stops that, so it has to be first.
+		expect(notice.split("\n")[0]).toContain(
+			"The user has turned the change protocol off",
+		);
+		expect(notice).toContain("not a verdict on your work");
+	});
+
+	it("carries the verdict line exactly as the transaction would have reported it", () => {
+		const notice = describeDisengagement({
+			transaction: 3,
+			verdict: discarded,
+			kept: false,
+			filesPutBack: 4,
+		});
+		// Character for character: the sentence must not be a paraphrase the
+		// model has to reconcile with the one it would otherwise have seen.
+		expect(notice).toContain(discarded);
+		expect(notice).toContain("TX-03");
+	});
+
+	it("tells the model its reads are stale, and that the refusal to come is expected", () => {
+		const notice = describeDisengagement({
+			transaction: 3,
+			verdict: discarded,
+			kept: false,
+			filesPutBack: 4,
+		});
+		expect(notice).toContain("4 files were put back");
+		expect(notice).toContain("Read a file again before you edit it");
+		// The receipts are forgotten mechanically, so the next edit IS refused.
+		// Unexplained, that refusal reads as a bug and gets retried.
+		expect(notice).toContain("will be refused");
+		expect(notice).toContain("Do not simply make the same change again");
+	});
+
+	it("counts one restored file in the singular", () => {
+		const notice = describeDisengagement({
+			transaction: 1,
+			verdict: describeVerdict(1, false, "oracle", failedCheck),
+			kept: false,
+			filesPutBack: 1,
+		});
+		expect(notice).toContain("1 file was put back");
+	});
+
+	it("says nothing about re-reading when the transaction was kept", () => {
+		const kept = describeVerdict(2, true, "oracle");
+		const notice = describeDisengagement({
+			transaction: 2,
+			verdict: kept,
+			kept: true,
+		});
+		expect(notice).toContain(kept);
+		expect(notice).toContain("on disk and stay there");
+		expect(notice).not.toContain("put back");
+		expect(notice).not.toContain("Read a file again");
+	});
+
+	it("says plainly that nothing moved when no transaction was open", () => {
+		const notice = describeDisengagement({});
+		expect(notice).toContain(
+			"No transaction was open, so nothing on disk has changed",
+		);
+		expect(notice).not.toContain("put back");
+	});
+
+	it("names every tool that leaves with the protocol", () => {
+		const notice = describeDisengagement({});
+		// An unknown-tool error with no explanation is the kind a model repeats.
+		for (const tool of [
+			"submit_transaction",
+			"run_check",
+			"plan",
+			"propose_check",
+			"restore_file",
+		]) {
+			expect(notice).toContain(tool);
+		}
+		expect(notice).toContain("calling one will fail");
+	});
+
+	it("says edits are now permanent and unchecked", () => {
+		const notice = describeDisengagement({});
+		expect(notice).toContain("no rollback");
+		expect(notice).toContain("applies at once and stays");
 	});
 });

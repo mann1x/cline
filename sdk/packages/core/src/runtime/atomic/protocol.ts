@@ -1,6 +1,7 @@
 import { isPageOracle, type Oracle, type OracleVerdict } from "./oracle";
 import { PLAN_TOOL_NAME } from "./plan-tool";
 import { PROPOSE_CHECK_TOOL_NAME } from "./proposal";
+import { RESTORE_FILE_TOOL_NAME } from "./restore-file-tool";
 import { RUN_CHECK_TOOL_NAME } from "./run-check-tool";
 import { SUBMIT_TRANSACTION_TOOL_NAME } from "./submit-transaction-tool";
 
@@ -686,4 +687,88 @@ export function describeVerdict(
 		return `${label} discarded — the check could not be run at all, so nothing was verified. Your files are back as they were.`;
 	}
 	return `${label} discarded — the check failed (exit ${verdict.exitCode}). Your files are back as they were.`;
+}
+
+/**
+ * What the model is told when the user turns the protocol off mid-run.
+ *
+ * Sent as a steer, not a queued message, and so delivered after the previous
+ * turn's tool results and before the next model request -- the one window in
+ * the loop where no edit is in flight. That matters for more than tidiness: a
+ * discarded transaction puts every file it touched back, and doing that while
+ * an `editor` call is open would rewrite the file underneath the call that is
+ * writing it. So the rollback happens at this same boundary, and this message
+ * reports what has *already* happened rather than warning about what is about
+ * to.
+ *
+ * Three things it has to get right, each learned from a way a model reads a
+ * message like this wrongly:
+ *
+ * 1. **Whose decision this was.** A model told only that the protocol stopped
+ *    reads it as a verdict on its work and starts apologising or re-doing the
+ *    change. It is the user's choice about how the session runs, and saying so
+ *    first is what stops that.
+ * 2. **That the files on disk may have moved.** A rollback invalidates every
+ *    read the model is holding. The host forgets the receipts mechanically
+ *    (`forgetReads`), so the next edit is refused until the file is read again
+ *    -- but a model that does not know why reads the refusal as a bug and
+ *    retries the same call. Saying it here turns a confusing refusal into an
+ *    expected one.
+ * 3. **That the tools are gone.** The protocol's tools leave with it. A model
+ *    that calls `submit_transaction` afterwards gets an unknown-tool error and
+ *    no explanation, and unknown-tool errors are the kind a model repeats.
+ *
+ * The verdict line is passed in already written rather than rebuilt here, so
+ * the sentence the model reads is character for character the one it would have
+ * read had the transaction closed on its own.
+ */
+export function describeDisengagement(input: {
+	/** The transaction that was open, if one was. */
+	transaction?: number;
+	/** `describeVerdict` for that transaction, if one was judged. */
+	verdict?: string;
+	/** Files put back by the rollback. Absent or zero means nothing moved. */
+	filesPutBack?: number;
+	/** Whether the judged transaction was kept. */
+	kept?: boolean;
+}): string {
+	const lines: string[] = [
+		"The user has turned the change protocol off. This is their decision about how this session runs; it is not a verdict on your work, and nothing has gone wrong.",
+		"",
+	];
+
+	if (input.transaction !== undefined && input.verdict) {
+		const label = `TX-${String(input.transaction).padStart(2, "0")}`;
+		lines.push(
+			`${label} was open, so it was judged once as the protocol stopped, on the same terms it would have been judged on anyway: ${input.verdict}`,
+			"",
+		);
+		if (input.kept === false) {
+			// Said as a count and as an instruction. "Your files are back as they
+			// were" is already in the verdict line and describes the disk; what
+			// this adds is what it means for the model's own state.
+			const moved =
+				input.filesPutBack && input.filesPutBack > 0
+					? `${input.filesPutBack} file${input.filesPutBack === 1 ? " was" : "s were"} put back`
+					: "the files were put back";
+			lines.push(
+				`So ${moved}, and what you have read of them no longer describes what is on disk. Read a file again before you edit it — an edit sent against what you remember will be refused, and that refusal is this, not a fault.`,
+				"",
+				`What you found out in ${label} is still true even though its edits are gone. Do not simply make the same change again: it has already been shown not to work.`,
+				"",
+			);
+		} else {
+			lines.push("Those changes are on disk and stay there.", "");
+		}
+	} else {
+		lines.push("No transaction was open, so nothing on disk has changed.", "");
+	}
+
+	lines.push(
+		`From here there are no transactions. No change budget, no attempt to fall back to, and no rollback: every edit you make applies at once and stays, and nothing will check it for you. \`${SUBMIT_TRANSACTION_TOOL_NAME}\`, \`${RUN_CHECK_TOOL_NAME}\`, \`${PLAN_TOOL_NAME}\`, \`${PROPOSE_CHECK_TOOL_NAME}\` and \`${RESTORE_FILE_TOOL_NAME}\` have gone with it and calling one will fail.`,
+		"",
+		"Carry on with the task you were given. Keep making one change at a time and confirming each one before the next — that was worth doing before the protocol was enforcing it, and it is worth doing now that nothing is.",
+	);
+
+	return lines.join("\n");
 }
