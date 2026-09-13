@@ -261,11 +261,11 @@ export const SearchCodebaseInputSchema = z.object({
 		.number()
 		.int()
 		.min(0)
-		.max(20)
+		.max(50)
 		.nullable()
 		.optional()
 		.describe(
-			"How many lines to show either side of each match, 0 to 20. Defaults to 2. Use 0 for just the matching lines.",
+			"How many lines to show either side of each match, 0 to 50. Defaults to 2. Use 0 for just the matching lines.",
 		),
 	max_per_file: z.coerce
 		.number()
@@ -799,10 +799,10 @@ export const GrepInputSchema = z.object({
 		.number()
 		.int()
 		.min(0)
-		.max(20)
+		.max(50)
 		.optional()
 		.describe(
-			"How many lines of context to show either side of a match, 0 to 20. Ask for a wider window than that and the call is refused, so read the file instead.",
+			"How many lines of context to show either side of a match, 0 to 50. A wide window fills the output budget quickly; past that, read the file instead.",
 		),
 	max_count: z.coerce
 		.number()
