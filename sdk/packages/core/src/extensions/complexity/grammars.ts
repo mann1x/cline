@@ -14,7 +14,10 @@
  * mean the same thing, and none of them is evidence about the code.
  */
 
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /** File extension to the grammar `tree-sitter-wasms` names it with. */
 const GRAMMARS: Readonly<Record<string, string>> = {
@@ -79,20 +82,56 @@ let initialised: Promise<unknown> | undefined;
 const languages = new Map<string, Promise<unknown | undefined>>();
 
 /**
- * Where the wasm files are, resolved from this package's own dependency.
+ * Where the wasm files are. Three places, in the order a host would want.
  *
  * `createRequire` rather than a bundler import: the grammars are data the
  * runtime reads, not modules, and a bundler asked to inline 50 MB of wasm
- * produces a bundle nobody can ship. A host that relocates them -- the VS Code
- * extension copies the ones it wants next to its bundle -- passes its own
- * directory instead.
+ * produces a bundle nobody can ship.
+ *
+ * The middle case is the shipped one. A bundled host has no `node_modules` to
+ * resolve against, so the build copies the grammars to a `grammars/` directory
+ * beside the bundle and this finds them there -- by looking, not by being told.
+ * Being told was the alternative and it is the weaker design: a `grammarDir`
+ * threaded through the runtime config is a field every layer has to remember to
+ * copy, and the failure when one does not is this feature going quiet rather
+ * than anything breaking. The explicit option stays for a host that puts them
+ * somewhere else entirely.
  */
-function resolveGrammarPath(grammar: string, grammarDir?: string): string {
+export function resolveGrammarPath(
+	grammar: string,
+	grammarDir?: string,
+	/** The bundle's directory. A parameter so a test can be somewhere else. */
+	besideDir: string = moduleDirectory(),
+): string | undefined {
+	const file = `tree-sitter-${grammar}.wasm`;
 	if (grammarDir) {
-		return `${grammarDir}/tree-sitter-${grammar}.wasm`;
+		return join(grammarDir, file);
 	}
-	const require = createRequire(import.meta.url);
-	return require.resolve(`tree-sitter-wasms/out/tree-sitter-${grammar}.wasm`);
+	const beside = join(besideDir, "grammars", file);
+	if (existsSync(beside)) {
+		return beside;
+	}
+	try {
+		const require = createRequire(import.meta.url);
+		return require.resolve(`tree-sitter-wasms/out/${file}`);
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * The directory this module was loaded from.
+ *
+ * In the extension that is the bundle's directory, because esbuild rewrites
+ * `import.meta.url` to the bundle's own path; unbundled it is this file's.
+ * Either way it is where a build would have put the grammars.
+ */
+function moduleDirectory(): string {
+	try {
+		return dirname(fileURLToPath(import.meta.url));
+	} catch {
+		return ".";
+	}
 }
 
 /**
@@ -121,9 +160,11 @@ export async function parserFor(
 		await initialised;
 		let language = languages.get(grammar);
 		if (!language) {
-			language = treeSitter.Language.load(
-				resolveGrammarPath(grammar, options.grammarDir),
-			).catch(() => undefined);
+			const path = resolveGrammarPath(grammar, options.grammarDir);
+			if (!path) {
+				return undefined;
+			}
+			language = treeSitter.Language.load(path).catch(() => undefined);
 			languages.set(grammar, language);
 		}
 		const loaded = await language;

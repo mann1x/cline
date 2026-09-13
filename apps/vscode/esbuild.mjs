@@ -1,4 +1,5 @@
 import fs from "node:fs"
+import { createRequire } from "node:module"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import * as esbuild from "esbuild"
@@ -182,8 +183,72 @@ const e2eBuildConfig = {
 	plugins: [aliasResolverPlugin, esbuildProblemMatcherPlugin],
 }
 
+/**
+ * Put the tree-sitter grammars beside the bundle.
+ *
+ * `@cline/core` reads these as data at runtime -- 36 wasm files, ~50 MB -- and
+ * a bundler cannot inline them into anything shippable. The VSIX has no
+ * `node_modules` to resolve them from either, so the build copies them to
+ * `dist/grammars/` and core finds them next to itself. Without this the
+ * complexity measurement is silent, which reads as "this code is simple"
+ * rather than as "nothing was measured", so it is worth the 50 MB to have the
+ * feature tell the truth.
+ *
+ * `tree-sitter.wasm` is web-tree-sitter's own runtime and goes in `dist/`
+ * itself, because emscripten resolves it against `__dirname` -- which after
+ * bundling is the bundle's directory.
+ *
+ * Missing packages are not fatal: the copy is skipped with a warning and the
+ * feature goes quiet, the same way it does in a host that never had them.
+ */
+function copyGrammars(destDir) {
+	// Resolve from `@cline/core`, not from here: the grammars are its
+	// dependencies, and under bun's isolated node_modules they are not
+	// reachable from this package at all. Its manifest is found by path
+	// rather than by `require.resolve`, because the package's `exports` map
+	// refuses every subpath including `./package.json`.
+	const candidates = [
+		path.join(__dirname, "node_modules", "@cline", "core", "package.json"),
+		path.resolve(__dirname, "..", "..", "sdk", "packages", "core", "package.json"),
+	]
+	const core = candidates.find((candidate) => fs.existsSync(candidate))
+	const require = createRequire(core ?? import.meta.url)
+	const copies = []
+	try {
+		const runtime = require.resolve("web-tree-sitter/tree-sitter.wasm")
+		copies.push([runtime, path.join(destDir, "tree-sitter.wasm")])
+	} catch {
+		console.warn("[grammars] web-tree-sitter not resolvable; complexity will be silent")
+	}
+	try {
+		const anyGrammar = require.resolve("tree-sitter-wasms/out/tree-sitter-javascript.wasm")
+		const from = path.dirname(anyGrammar)
+		const into = path.join(destDir, "grammars")
+		fs.mkdirSync(into, { recursive: true })
+		for (const name of fs.readdirSync(from)) {
+			if (name.endsWith(".wasm")) {
+				copies.push([path.join(from, name), path.join(into, name)])
+			}
+		}
+	} catch {
+		console.warn("[grammars] tree-sitter-wasms not resolvable; complexity will be silent")
+	}
+	let bytes = 0
+	for (const [from, to] of copies) {
+		fs.mkdirSync(path.dirname(to), { recursive: true })
+		fs.copyFileSync(from, to)
+		bytes += fs.statSync(to).size
+	}
+	if (copies.length) {
+		console.log(`[grammars] ${copies.length} file(s), ${(bytes / 1024 / 1024).toFixed(0)} MB -> ${destDir}`)
+	}
+}
+
 async function main() {
 	const config = standalone ? standaloneConfig : e2eBuild ? e2eBuildConfig : extensionConfig
+	if (!e2eBuild) {
+		copyGrammars(path.resolve(__dirname, destDir))
+	}
 	const extensionCtx = await esbuild.context(config)
 	if (watch) {
 		await extensionCtx.watch()
