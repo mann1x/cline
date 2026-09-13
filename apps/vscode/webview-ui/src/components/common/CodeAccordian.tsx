@@ -95,7 +95,11 @@ const CodeAccordian = ({
 			{(!(path || isFeedback || isConsoleLogs) || isExpanded) && (
 				<div className="overflow-x-auto overflow-y-hidden max-w-full">
 					<CodeBlock
-						source={`${"```"}${diff !== undefined ? "diff" : inferredLanguage}\n${(
+						// `?? ""` because a template literal turns an undefined
+						// language into the literal word: a tool whose path has no
+						// extension -- `sed`, or any tool that names no file at all
+						// -- opened its block with "```undefined".
+						source={`${"```"}${diff !== undefined ? "diff" : (inferredLanguage ?? "")}\n${(
 							code ?? diff ?? ""
 						).trim()}\n${"```"}`}
 					/>

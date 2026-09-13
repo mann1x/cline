@@ -724,6 +724,7 @@ function relativizePatchPaths(patch: string | undefined, cwd: string): string | 
  *   delete_file                        → fileDeleted
  *   run_commands/execute_command       → (uses say="command", NOT say="tool")
  *   search_codebase/search_files       → searchFiles
+ *   grep/sed/awk                       → (generic row: file + the script it runs)
  *   fetch_web_content/web_fetch        → webFetch
  *   web_search                         → webSearch
  *   skills/use_skill                   → useSkill
@@ -938,6 +939,30 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown): ClineSayTool 
 			}
 		}
 
+		case "grep":
+		case "sed":
+		case "awk": {
+			// These three name their files under `files` and carry the thing the
+			// user actually wants to read -- the pattern, the script, the program
+			// -- in a second field. The generic branch below shows one or the
+			// other, never both, so a `sed` row either named no file or hid the
+			// script that was about to rewrite it.
+			const named = Array.isArray(parsedInput?.files)
+				? (parsedInput.files as unknown[]).filter((entry): entry is string => typeof entry === "string")
+				: []
+			const program =
+				getStringField(parsedInput, "script") ??
+				getStringField(parsedInput, "pattern") ??
+				getStringField(parsedInput, "program") ??
+				""
+			const inPlace = getBooleanField(parsedInput, "in_place") === true
+			return {
+				tool: toolName as ClineSayTool["tool"],
+				path: named.length > 1 ? `${named[0]} (+${named.length - 1} more)` : (named[0] ?? ""),
+				content: [inPlace ? `${toolName} -i` : toolName, program].filter(Boolean).join(" "),
+			}
+		}
+
 		default: {
 			// MCP tools and unknown tools — pass through with the raw tool name.
 			// `ChatRow` renders these generically rather than swallowing them, so
@@ -947,7 +972,10 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown): ClineSayTool 
 			// an array, so the singular lookup found nothing and the row named no
 			// file. Measured on pandorum session 1789122866533_br1d0, where six
 			// of the run's `check_file` calls were on one file.
-			const pathsField = parsedInput?.paths
+			// `files` as well as `paths`: `grep`, `sed` and `awk` take an array
+			// under that name, so the lookup below found nothing and the row
+			// named no file at all.
+			const pathsField = parsedInput?.paths ?? parsedInput?.files
 			const firstPath = Array.isArray(pathsField)
 				? pathsField.filter((entry): entry is string => typeof entry === "string")
 				: []

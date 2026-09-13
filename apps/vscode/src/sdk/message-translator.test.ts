@@ -652,6 +652,41 @@ describe("translateSessionEvent — tools with nothing but arguments", () => {
 		expect(row.path).toBe("/src/app.ts")
 		expect(row.content).toBeUndefined()
 	})
+
+	// `sed` names its files under `files`, not `paths` or `path`, so the row
+	// named no file at all and fell through to dumping the arguments — with the
+	// script buried in a code block whose language rendered as "undefined".
+	// Observed on pandorum, 4.100.105.
+	it("names the file a sed call rewrites, and shows the script", () => {
+		const row = toolRow("sed", {
+			files: ["c:\\Users\\manni\\source\\repos\\test\\manic_miner.html"],
+			in_place: true,
+			script: "s/});})$/});}/",
+		})
+
+		expect(row.path).toBe("c:\\Users\\manni\\source\\repos\\test\\manic_miner.html")
+		expect(row.content).toBe("sed -i s/});})$/});}/")
+	})
+
+	it("says how many more files a multi-file call touched", () => {
+		const row = toolRow("grep", { files: ["a.ts", "b.ts", "c.ts"], pattern: "needle" })
+
+		expect(row.path).toBe("a.ts (+2 more)")
+		expect(row.content).toBe("grep needle")
+	})
+
+	it("does not claim in-place for a read-only sed", () => {
+		const row = toolRow("sed", { files: ["a.txt"], script: "s/x/y/" })
+
+		expect(row.content).toBe("sed s/x/y/")
+	})
+
+	it("shows an awk program", () => {
+		const row = toolRow("awk", { files: ["data.csv"], program: "{ print $2 }" })
+
+		expect(row.path).toBe("data.csv")
+		expect(row.content).toBe("awk { print $2 }")
+	})
 })
 
 describe("translateSessionEvent — agent_event content_end", () => {
