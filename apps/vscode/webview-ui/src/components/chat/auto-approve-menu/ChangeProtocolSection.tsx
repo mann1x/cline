@@ -2,7 +2,7 @@ import { normalizeAtomicProtocolMode } from "@shared/AtomicProtocolSettings"
 import { useCallback, useMemo, useState } from "react"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { StateServiceClient } from "@/services/grpc-client"
-import { openTransaction, transactionLabel } from "./change-protocol-status"
+import { latestPlan, openTransaction, transactionLabel } from "./change-protocol-status"
 
 /**
  * The change protocol, where a developer actually meets it.
@@ -23,6 +23,16 @@ const ChangeProtocolSection = () => {
 	const [busy, setBusy] = useState(false)
 
 	const transaction = useMemo(() => openTransaction(clineMessages ?? [], engaged), [clineMessages, engaged])
+	// The plan the model filed through the `plan` tool, if it has. Whether one
+	// exists at all is the thing worth seeing at a glance -- a transaction with
+	// no plan behind it is the shape that goes round in circles -- so the status
+	// line says which, and the hover carries the plan itself.
+	const plan = useMemo(() => (engaged ? latestPlan(clineMessages ?? []) : undefined), [clineMessages, engaged])
+	const planTitle = engaged
+		? plan
+			? `Plan filed through the plan tool:\n\n${plan}`
+			: "No plan filed through the plan tool yet."
+		: undefined
 
 	const post = useCallback(
 		async (update: { engaged?: boolean; oracleCommand?: string; oracleExpect?: string; proposeCheck?: boolean }) => {
@@ -49,12 +59,13 @@ const ChangeProtocolSection = () => {
 		<div className="mb-2.5 border-t border-[var(--vscode-panel-border)] pt-2.5">
 			<div className="flex items-center justify-between gap-2">
 				<span className="text-xs font-medium">Change Protocol</span>
-				<span className="text-xs text-muted-foreground" data-testid="change-protocol-status">
+				<span className="text-xs text-muted-foreground" data-testid="change-protocol-status" title={planTitle}>
 					{mode === "static"
 						? `Engaged for every task${transaction ? ` · ${transactionLabel(transaction)}` : ""}`
 						: engaged
 							? `Engaged${transaction ? ` · ${transactionLabel(transaction)}` : ""}`
 							: "Not engaged"}
+					{engaged ? (plan ? " · plan filed" : " · no plan") : ""}
 				</span>
 			</div>
 

@@ -1,6 +1,6 @@
 import type { ClineMessage } from "@shared/ExtensionMessage"
 import { describe, expect, it } from "vitest"
-import { openTransaction, transactionLabel } from "./change-protocol-status"
+import { latestPlan, openTransaction, transactionLabel } from "./change-protocol-status"
 
 const verdict = (transaction: number, kept: boolean): ClineMessage =>
 	({
@@ -44,5 +44,43 @@ describe("which transaction is open", () => {
 	it("writes the label the way the rest of the protocol does", () => {
 		expect(transactionLabel(1)).toBe("TX-01")
 		expect(transactionLabel(12)).toBe("TX-12")
+	})
+})
+
+const planRow = (content: string, ts = 1): ClineMessage =>
+	({
+		type: "say",
+		say: "tool",
+		ts,
+		text: JSON.stringify({ tool: "plan", path: "", content }),
+	}) as ClineMessage
+
+describe("the plan the model filed", () => {
+	it("is nothing when the tool was never called", () => {
+		expect(latestPlan([])).toBeUndefined()
+		const edit = {
+			type: "say",
+			say: "tool",
+			ts: 1,
+			text: JSON.stringify({ tool: "editedExistingFile", path: "game.js" }),
+		} as ClineMessage
+		expect(latestPlan([edit])).toBeUndefined()
+	})
+
+	// The tool hands back the whole plan on every call, so the last one is the
+	// current state and the earlier ones are history.
+	it("is the most recent call, not the first", () => {
+		expect(latestPlan([planRow("[ ] 1. one", 1), planRow("[x] 1. one\n[ ] 2. two", 2)])).toContain("2. two")
+	})
+
+	// "Filed an empty plan" and "never filed one" are different, and only the
+	// second is worth saying.
+	it("is nothing when the filed plan is empty", () => {
+		expect(latestPlan([planRow("   ")])).toBeUndefined()
+	})
+
+	it("falls back to an older call when the newest row will not parse", () => {
+		const broken = { type: "say", say: "tool", ts: 3, text: "{not json" } as ClineMessage
+		expect(latestPlan([planRow("[ ] 1. one", 1), broken])).toContain("1. one")
 	})
 })
