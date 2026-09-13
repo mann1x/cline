@@ -6,6 +6,7 @@ import {
 	type AgentConfig,
 	type AgentEvent,
 	type AgentResult,
+	type AgentTool,
 	type BasicLogger,
 	captureSdkError,
 	createSessionId,
@@ -54,6 +55,7 @@ import {
 	withTaskProgressCapture,
 } from "../../extensions/tools/task-progress";
 import type { TeamEvent } from "../../extensions/tools/team";
+import { agentEndpointKey } from "../../extensions/tools/team/agent-slot-gate";
 import {
 	type BackgroundDelegationRegistry,
 	type BackgroundDelegationView,
@@ -67,6 +69,11 @@ import {
 	listConfiguredAgentSummaries,
 	renderDelegationForTranscript,
 } from "../../extensions/tools/team/delegate-to-agent";
+import {
+	createDelegatedAgent,
+	createDelegatedAgentConfigProvider,
+	type DelegatedAgentConnectionConfig,
+} from "../../extensions/tools/team/delegated-agent";
 import type { HookEventPayload } from "../../hooks";
 import { buildTelemetryAgentIdentity } from "../../services/agent-events";
 import { resolveWorkspacePath } from "../../services/config";
@@ -134,10 +141,16 @@ import type { CoreSessionConfig } from "../../types/config";
 import type { CoreSessionEvent } from "../../types/events";
 import type { ActiveSession, PreparedTurnInput } from "../../types/session";
 import type { SessionRecord } from "../../types/sessions";
-import { createAtomicProtocolSession } from "../atomic/session-protocol";
+import {
+	createAtomicProtocolSession,
+	DEFAULT_MAX_CHANGES,
+	DEFAULT_MAX_TRANSACTIONS,
+} from "../atomic/session-protocol";
 import type { RuntimeCapabilities } from "../capabilities";
 import { normalizeRuntimeCapabilities } from "../capabilities";
 import { normalizeConnectionUpdate } from "../config/connection-update";
+import { createEscalationSession } from "../escalation/escalation-session";
+import { buildExpertPrompt } from "../escalation/expert-prompt";
 import { DefaultRuntimeBuilder } from "../orchestration/runtime-builder";
 import {
 	OAuthReauthRequiredError,
@@ -1043,6 +1056,204 @@ export class LocalRuntimeHost implements RuntimeHost {
 				});
 			},
 		});
+		// The escalation path: a second, costlier model that this session's own
+		// can hand a stuck task to. Built unconditionally and asked to decide for
+		// itself -- with no expert configured it offers no tool, which is every
+		// previous build exactly.
+		//
+		// The expert runs on this session's toolset, after the protocol has
+		// decorated it and without `escalate` itself. Two consequences, both
+		// wanted: its edits land inside the open transaction and count against
+		// the same change budget, and its tool calls face the same approval the
+		// session's own model does. An expert editing under weaker approval than
+		// the model that called it would be a hole.
+		let expertTools: AgentTool[] = [];
+		const escalationConnection = configWithProvider.escalation?.connection;
+		const escalation = createEscalationSession({
+			workspaceRoot:
+				configWithProvider.workspaceRoot ??
+				configWithProvider.cwd ??
+				process.cwd(),
+			config: configWithProvider.escalation,
+			logger: {
+				log: (message) => configWithProvider.logger?.log?.(message),
+			},
+			openExpert: async ({ onEvent }) => {
+				const base = runtime.delegatedAgentConfigProvider?.getRuntimeConfig();
+				if (!base || !escalationConnection) {
+					throw new Error(
+						"No expert is configured for this session, so there is nothing to escalate to.",
+					);
+				}
+				// Only the fields the escalation scope actually names are taken,
+				// and those are then pinned: the same rule the agents scope runs
+				// under, and for the same reason -- a connection update the host
+				// pushes for the session's model must not move the expert onto it.
+				const overrides: Partial<DelegatedAgentConnectionConfig> = {
+					providerId: escalationConnection.providerId,
+					modelId: escalationConnection.modelId,
+					...(escalationConnection.apiKey !== undefined
+						? { apiKey: escalationConnection.apiKey }
+						: {}),
+					...(escalationConnection.baseUrl !== undefined
+						? { baseUrl: escalationConnection.baseUrl }
+						: {}),
+					...(escalationConnection.headers !== undefined
+						? { headers: escalationConnection.headers }
+						: {}),
+					...(escalationConnection.knownModels !== undefined
+						? { knownModels: escalationConnection.knownModels }
+						: {}),
+					...(escalationConnection.providerConfig !== undefined
+						? { providerConfig: escalationConnection.providerConfig }
+						: {}),
+					...(escalationConnection.maxToolResultChars !== undefined
+						? { maxToolResultChars: escalationConnection.maxToolResultChars }
+						: {}),
+				};
+				const configProvider = createDelegatedAgentConfigProvider(
+					{ ...base, ...overrides },
+					Object.keys(overrides) as (keyof DelegatedAgentConnectionConfig)[],
+				);
+				return createDelegatedAgent({
+					kind: "subagent",
+					prompt: buildExpertPrompt({
+						workspaceRoot:
+							configWithProvider.workspaceRoot ?? configWithProvider.cwd,
+					}),
+					configProvider,
+					tools: expertTools,
+					onEvent,
+					toolPolicies: bootstrap.toolPolicies,
+					requestToolApproval: bootstrap.requestToolApproval,
+					hookErrorMode: configWithProvider.hookErrorMode,
+				});
+			},
+			// Held to what the expert's endpoint will serve, which is not
+			// necessarily the session's: a local server queues the request that
+			// finds no free slot rather than refusing it, and says nothing while
+			// it does.
+			...(() => {
+				const gate = escalationConnection
+					? runtime.delegatedAgentConfigProvider
+							?.getRuntimeConfig()
+							.slotGates?.for(
+								agentEndpointKey({
+									providerId: escalationConnection.providerId,
+									baseUrl: escalationConnection.baseUrl,
+								}),
+							)
+					: undefined;
+				return gate ? { gate } : {};
+			})(),
+			// The open transaction, read at hand-over rather than captured: the
+			// expert is called turns after this session was built, and which
+			// transaction is open by then is the whole point of telling it.
+			readTransaction: () => {
+				const controller = atomicProtocol?.controller;
+				if (!controller || controller.transaction === 0) {
+					return undefined;
+				}
+				return {
+					transaction: controller.transaction,
+					maxChanges:
+						configWithProvider.atomicProtocol?.maxChanges ??
+						DEFAULT_MAX_CHANGES,
+					maxTransactions:
+						configWithProvider.atomicProtocol?.maxTransactions ??
+						DEFAULT_MAX_TRANSACTIONS,
+					...(controller.oracle ? { oracle: controller.oracle } : {}),
+					history: controller.outcomes,
+				};
+			},
+			// The task as the user stated it. The session's own record of it,
+			// not the manifest's: an interactive session is created before the
+			// user has said anything, and its prompt arrives on the first turn.
+			readTask: () =>
+				this.sessions.get(sessionId)?.pendingPrompt ?? manifest.prompt,
+			// The same registry `restore_file` retires reads through. The expert
+			// moves lines the base model has read, and this host owns the
+			// receipts that the read-before-edit guard is built on.
+			...(configWithProvider.atomicProtocol?.forgetReads
+				? { forgetReads: configWithProvider.atomicProtocol.forgetReads }
+				: {}),
+			// The exchange goes in the chat, not only in the log. The user is
+			// paying for this model and is entitled to read what it was asked and
+			// what it answered, beside the work it produced.
+			onEvent: (event) => {
+				if (event.type === "escalation_started") {
+					this.eventBridge.dispatchAgentEvent(sessionId, configWithProvider, {
+						type: "notice",
+						noticeType: "status",
+						displayRole: "status",
+						message: `Escalation ${event.index} of ${event.of}: the task has been handed to the expert.\n\n${event.brief}`,
+						metadata: {
+							kind: "escalation_started",
+							index: event.index,
+							of: event.of,
+							brief: event.brief,
+						},
+					});
+					return;
+				}
+				if (event.type === "expert_asked") {
+					this.eventBridge.dispatchAgentEvent(sessionId, configWithProvider, {
+						type: "notice",
+						noticeType: "status",
+						displayRole: "status",
+						message: event.message,
+						metadata: { kind: "escalation_message" },
+					});
+					return;
+				}
+				if (event.type === "expert_replied") {
+					this.eventBridge.dispatchAgentEvent(sessionId, configWithProvider, {
+						type: "notice",
+						noticeType: "status",
+						displayRole: "status",
+						message: event.reply,
+						metadata: {
+							kind: "expert_reply",
+							changed: event.changed,
+							// What the expert cost, carried on the message rather
+							// than summed by the host: the task header's expert row
+							// is built from these, and a second model's spend that
+							// is folded into the session's answers no question
+							// anybody has about a metered account.
+							usage: {
+								inputTokens: event.usage.inputTokens,
+								outputTokens: event.usage.outputTokens,
+								generateTokens: event.usage.generateTokens,
+								generateMs: event.usage.generateMs,
+								wallMs: event.usage.wallMs,
+								requests: event.usage.requests,
+							},
+						},
+					});
+					return;
+				}
+				this.eventBridge.dispatchAgentEvent(sessionId, configWithProvider, {
+					type: "notice",
+					noticeType: "status",
+					displayRole: "status",
+					message: event.held
+						? "The expert conversation is on hold. It keeps its context, so a second escalation costs a message rather than the whole exchange again."
+						: "The expert conversation is closed and its slot released.",
+					metadata: {
+						kind: "escalation_ended",
+						held: event.held,
+						usage: {
+							inputTokens: event.usage.inputTokens,
+							outputTokens: event.usage.outputTokens,
+							generateTokens: event.usage.generateTokens,
+							generateMs: event.usage.generateMs,
+							wallMs: event.usage.wallMs,
+							requests: event.usage.requests,
+						},
+					},
+				});
+			},
+		});
 		// The protocol's own tools, added after it is built because whether
 		// there are any depends on what the workspace turned out to hold. They
 		// go on last deliberately: `propose_check` carries no checklist and is
@@ -1054,6 +1265,17 @@ export class LocalRuntimeHost implements RuntimeHost {
 		const toolsWithProtocol = atomicProtocol
 			? atomicProtocol.decorateTools([...tools, ...atomicProtocol.tools])
 			: tools;
+		// The expert gets what the session has, less the tool that reached it.
+		// Set before the session's own list is extended: an expert that could
+		// escalate would escalate to itself.
+		// Cast because the session's list is a union of tools with their own
+		// input types and the delegated-agent builder takes the erased one; the
+		// runtime reads them through the same `execute` either way.
+		expertTools = toolsWithProtocol as AgentTool[];
+		const toolsWithEscalation =
+			escalation.tools.length > 0
+				? [...toolsWithProtocol, ...escalation.tools]
+				: toolsWithProtocol;
 		const completionPolicyWithProtocol = atomicProtocol
 			? {
 					...completionPolicyWithChecklistCloseOut,
@@ -1156,7 +1378,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 			execution: configWithProvider.execution,
 			prepareTurn,
 			condenseDiscardedReasoning,
-			tools: toolsWithProtocol,
+			tools: toolsWithEscalation,
 			modelTools: runtime.modelTools,
 			hooks: bootstrap.hooks,
 			extensions,
@@ -1340,6 +1562,10 @@ export class LocalRuntimeHost implements RuntimeHost {
 			pendingPrompts: [],
 			drainingPendingPrompts: false,
 			...(atomicProtocol ? { atomicProtocol } : {}),
+			// Held on the session so teardown can release a conversation the
+			// setting says to hold: an expert still open when the task ends is a
+			// local server's slot booked by something nothing can reach.
+			...(escalation.tools.length > 0 ? { escalation } : {}),
 			// Set whether or not the protocol armed: standing down is the case
 			// the user most needs told, and it leaves no session behind.
 			...(pendingAtomicStatus ? { pendingAtomicStatus } : {}),
@@ -3032,6 +3258,11 @@ export class LocalRuntimeHost implements RuntimeHost {
 			recordCleanupError("runtime_shutdown", error);
 		}
 		try {
+			await session.escalation?.dispose();
+		} catch (error) {
+			recordCleanupError("escalation_shutdown", error);
+		}
+		try {
 			await session.pluginSandboxShutdown?.();
 		} catch (error) {
 			recordCleanupError("plugin_sandbox_shutdown", error);
@@ -3111,6 +3342,11 @@ export class LocalRuntimeHost implements RuntimeHost {
 			await Promise.resolve(session.runtime.shutdown(reason));
 		} catch (error) {
 			recordCleanupError("runtime_shutdown", error);
+		}
+		try {
+			await session.escalation?.dispose();
+		} catch (error) {
+			recordCleanupError("escalation_shutdown", error);
 		}
 		try {
 			await session.pluginSandboxShutdown?.();

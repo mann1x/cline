@@ -1,6 +1,7 @@
 import type * as LlmsProviders from "@cline/llms";
 import type { AgentFinishReason } from "@cline/shared";
 import type { AtomicProtocolSession } from "../runtime/atomic/session-protocol";
+import type { EscalationSession } from "../runtime/escalation/escalation-session";
 import type { SessionAccumulatedUsage } from "../runtime/host/runtime-host";
 import type { BuiltRuntime } from "../runtime/orchestration/session-runtime";
 import type { SessionRuntime } from "../runtime/orchestration/session-runtime-orchestrator";
@@ -41,6 +42,15 @@ export type ActiveSession = {
 	 * the turn that delivers them is prepared long after the session was built.
 	 */
 	atomicProtocol?: AtomicProtocolSession;
+	/**
+	 * The escalation path, when an expert is configured.
+	 *
+	 * Held here for the same reason the protocol is: it outlives the turn that
+	 * built it. A held expert conversation has to be released when the task
+	 * ends, whatever the hold setting says, or a local server keeps a slot
+	 * booked for a session nothing can reach.
+	 */
+	escalation?: EscalationSession;
 	/**
 	 * Whether the protocol engaged, waiting for a turn to be said on.
 	 *
