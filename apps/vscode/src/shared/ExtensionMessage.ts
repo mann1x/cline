@@ -4,7 +4,7 @@ import type { GeneratedMedia, RequestTimings } from "@cline/shared"
 import { WorkspaceRoot } from "@shared/multi-root/types"
 import { RemoteConfigFields } from "@shared/storage/state-keys"
 import type { Environment } from "../config"
-import type { AtomicProtocolSettings } from "./AtomicProtocolSettings"
+import type { AtomicProtocolSessionSettings, AtomicProtocolSettings } from "./AtomicProtocolSettings"
 import { AutoApprovalSettings } from "./AutoApprovalSettings"
 import { ApiConfiguration } from "./api"
 import { BrowserSettings } from "./BrowserSettings"
@@ -102,6 +102,13 @@ export interface ExtensionState {
 	editVerificationSettings: EditVerificationSettings
 	/** Whether a task runs as judged, revertible transactions. */
 	atomicProtocolSettings: AtomicProtocolSettings
+	/**
+	 * The per-task half of it: engaged, and this task's own check.
+	 *
+	 * Only meaningful where the mode is `on`. The chat needs it to say whether
+	 * the protocol is running right now, which no global setting can answer.
+	 */
+	atomicProtocolSession: AtomicProtocolSessionSettings
 	/** Names of the configured QA credentials. Never their values. */
 	qaCredentialNames: string[]
 	/** JSON `ApiConfigurationProfile[]`. */

@@ -17,10 +17,22 @@
 export type AtomicProtocolMode =
 	/** Off. What every build before this one did. */
 	| "off"
-	/** On where a change can actually be judged, and quiet where it cannot. */
-	| "auto"
-	/** On regardless, with the model as the check where nothing else is. */
-	| "always"
+	/**
+	 * Available, and the user engages it per task when they hit something worth
+	 * judging. The oracle, the pattern and the propose-check switch are session
+	 * settings under this mode, set in the chat's auto-approve panel next to the
+	 * engage button, because they are decisions about the bug in front of you
+	 * rather than about how you work.
+	 */
+	| "on"
+	/**
+	 * Engaged on every task from the moment it starts, configured once in
+	 * Settings and unaffected by anything said in the conversation.
+	 *
+	 * The mode to measure a model in: a run must not depend on what a panel
+	 * happened to be showing when it started.
+	 */
+	| "static"
 
 export interface AtomicProtocolSettings {
 	mode: AtomicProtocolMode
@@ -103,6 +115,43 @@ export interface AtomicProtocolSettings {
  * extension runs — which is every task a user runs. `atomic-protocol-defaults.test.ts`
  * is what fails when they drift apart.
  */
+/**
+ * What the user decides per task, rather than once in Settings.
+ *
+ * Only read where the mode is `on`. Under `static` these three come from the
+ * stored settings above and this is ignored entirely, which is the point of
+ * `static`: a measured run cannot be perturbed from the chat panel.
+ *
+ * Stored at task scope, so `StateManager.getGlobalSettingsKey` resolves it over
+ * the global value without anything here having to merge the two. A new task
+ * starts with none of it, which is what makes engaging a per-task decision.
+ */
+export interface AtomicProtocolSessionSettings {
+	/**
+	 * Whether the protocol is running for this task right now.
+	 *
+	 * Not a setting so much as a switch position. Under `static` it is implied
+	 * and cannot be changed; under `on` it starts false on every new task.
+	 */
+	engaged: boolean
+	/** This task's own check. See `oracleCommand` above. */
+	oracleCommand: string
+	/** What that check's output must say. See `oracleExpect` above. */
+	oracleExpect: string
+	/** Whether the model may propose a check for this task. */
+	proposeCheck: boolean
+}
+
+/**
+ * Not engaged, and nothing named. A task that has never touched the protocol.
+ */
+export const DEFAULT_ATOMIC_PROTOCOL_SESSION: AtomicProtocolSessionSettings = {
+	engaged: false,
+	oracleCommand: "",
+	oracleExpect: "",
+	proposeCheck: true,
+}
+
 export const DEFAULT_ATOMIC_PROTOCOL_SETTINGS: AtomicProtocolSettings = {
 	mode: "off",
 	oracleCommand: "",
@@ -112,4 +161,96 @@ export const DEFAULT_ATOMIC_PROTOCOL_SETTINGS: AtomicProtocolSettings = {
 	proposeCheck: true,
 	maxCheckProposals: 2,
 	checkReconsideredAfter: 2,
+}
+
+/**
+ * Read a stored mode, including one written before the rename.
+ *
+ * `auto` and `always` were the old pair. Both engaged the protocol by
+ * themselves and differed only in a workspace where nothing could judge a
+ * change, so both become `static`: it is the mode that engages on its own, and
+ * mapping them to `on` would leave the protocol switched on for everyone who
+ * had it and never engaging, which reads exactly like it broke.
+ *
+ * Applied on read rather than as a one-off migration so that it also covers a
+ * value arriving from remote config, and so that a stale write cannot
+ * reintroduce a mode nothing else understands.
+ */
+export function readAtomicProtocolMode(value: unknown): AtomicProtocolMode | undefined {
+	if (value === "on" || value === "static" || value === "off") {
+		return value
+	}
+	if (value === "auto" || value === "always") {
+		return "static"
+	}
+	return undefined
+}
+
+/**
+ * The same, for a place that must end up with a mode.
+ *
+ * Kept apart from `readAtomicProtocolMode` because the two questions have
+ * different right answers. Rendering a dropdown needs a value and `off` is the
+ * safe one; *storing* a value does not, and defaulting there would let an
+ * unrecognized string switch the protocol off for someone who had it on.
+ */
+export function normalizeAtomicProtocolMode(value: unknown): AtomicProtocolMode {
+	return readAtomicProtocolMode(value) ?? DEFAULT_ATOMIC_PROTOCOL_SETTINGS.mode
+}
+
+/** What a session actually runs with, once the two halves are resolved. */
+export interface ResolvedAtomicProtocol {
+	/** Whether the protocol runs for this task at all. */
+	engaged: boolean
+	/** The check for this task, empty meaning "find something to run". */
+	oracleCommand: string
+	/** What that check's output must say. */
+	oracleExpect: string
+	/** Whether the model may propose a check. */
+	proposeCheck: boolean
+}
+
+/**
+ * Fold the stored settings and the task's own into what this session runs with.
+ *
+ * The split is the whole point of the rename, and it is one rule: `static`
+ * reads Settings and ignores the task, `on` reads the task and ignores
+ * Settings' check fields. Nothing is inherited across that line -- an `on`
+ * session with no command of its own means "find something to run", not "use
+ * the command someone last typed into Settings", because that command was
+ * written for a different task and would judge this one by its standard.
+ *
+ * The limits are not here: `maxChanges`, `maxTransactions` and the two proposal
+ * numbers stay in Settings in both modes. They are how you work, not what this
+ * particular bug needs.
+ */
+export function resolveAtomicProtocol(
+	settings: AtomicProtocolSettings | undefined,
+	session: AtomicProtocolSessionSettings | undefined,
+): ResolvedAtomicProtocol {
+	const mode = normalizeAtomicProtocolMode(settings?.mode)
+	if (mode === "static") {
+		return {
+			engaged: true,
+			oracleCommand: settings?.oracleCommand ?? "",
+			oracleExpect: settings?.oracleExpect ?? "",
+			proposeCheck: settings?.proposeCheck !== false,
+		}
+	}
+	if (mode === "on") {
+		return {
+			engaged: session?.engaged === true,
+			oracleCommand: session?.oracleCommand ?? "",
+			oracleExpect: session?.oracleExpect ?? "",
+			proposeCheck: session?.proposeCheck !== false,
+		}
+	}
+	// Off. Reported with the session's fields cleared rather than carried, so
+	// nothing downstream can read a check off a protocol that is not running.
+	return {
+		engaged: false,
+		oracleCommand: "",
+		oracleExpect: "",
+		proposeCheck: false,
+	}
 }

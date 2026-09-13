@@ -12,6 +12,7 @@ import {
 	readCompactionStrategyGlobally,
 } from "@cline/core"
 import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
+import { normalizeAtomicProtocolMode } from "@shared/AtomicProtocolSettings"
 import type { ExtensionState, Platform } from "@shared/ExtensionMessage"
 import { ClineEnv } from "@/config"
 import { ExtensionRegistryInfo } from "@/registry"
@@ -74,7 +75,17 @@ export async function getStateToPostToWebview(controller: {
 	const imageGenEnabled = stateManager.getGlobalSettingsKey("imageGenEnabled")
 	const imageGenEndpoint = stateManager.getGlobalSettingsKey("imageGenEndpoint")
 	const editVerificationSettings = stateManager.getGlobalSettingsKey("editVerificationSettings")
-	const atomicProtocolSettings = stateManager.getGlobalSettingsKey("atomicProtocolSettings")
+	// Normalized on the way out so the settings dropdown has a value it knows:
+	// a profile stored before the rename still says `auto` or `always`, and a
+	// select with no matching option renders blank.
+	const storedAtomicProtocolSettings = stateManager.getGlobalSettingsKey("atomicProtocolSettings")
+	const atomicProtocolSettings = {
+		...storedAtomicProtocolSettings,
+		mode: normalizeAtomicProtocolMode(storedAtomicProtocolSettings?.mode),
+	}
+	// The per-task half. The webview needs it to know whether the protocol is
+	// engaged right now, which is what the Fix indicator reports.
+	const atomicProtocolSession = stateManager.getGlobalSettingsKey("atomicProtocolSession")
 	const apiConfigurationProfiles = stateManager.getGlobalSettingsKey("apiConfigurationProfiles")
 	const activeApiConfigurationProfile = stateManager.getGlobalSettingsKey("activeApiConfigurationProfile")
 	const enableCheckpointsSetting = stateManager.getGlobalSettingsKey("enableCheckpointsSetting")
@@ -177,6 +188,7 @@ export async function getStateToPostToWebview(controller: {
 		imageGenApiKeySet: readImageGenerationApiKey() !== undefined,
 		editVerificationSettings,
 		atomicProtocolSettings,
+		atomicProtocolSession,
 		// Names only. The values live in secret storage and never travel with
 		// the state; the settings view offers "replace" rather than showing one.
 		qaCredentialNames: readQaCredentialNames(),

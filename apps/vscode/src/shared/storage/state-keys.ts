@@ -1,4 +1,9 @@
-import { AtomicProtocolSettings, DEFAULT_ATOMIC_PROTOCOL_SETTINGS } from "@shared/AtomicProtocolSettings"
+import {
+	AtomicProtocolSessionSettings,
+	AtomicProtocolSettings,
+	DEFAULT_ATOMIC_PROTOCOL_SESSION,
+	DEFAULT_ATOMIC_PROTOCOL_SETTINGS,
+} from "@shared/AtomicProtocolSettings"
 import { AutoApprovalSettings, DEFAULT_AUTO_APPROVAL_SETTINGS } from "@shared/AutoApprovalSettings"
 import {
 	ApiProvider,
@@ -345,6 +350,11 @@ const USER_SETTINGS_FIELDS = {
 	focusChainSettings: { default: DEFAULT_FOCUS_CHAIN_SETTINGS as FocusChainSettings },
 	editVerificationSettings: { default: DEFAULT_EDIT_VERIFICATION_SETTINGS as EditVerificationSettings },
 	atomicProtocolSettings: { default: DEFAULT_ATOMIC_PROTOCOL_SETTINGS as AtomicProtocolSettings },
+	// Written at task scope, which `getGlobalSettingsKey` already resolves over
+	// the global value -- so the session host reads one key and gets the task's
+	// answer where there is one. It is listed here because that resolution only
+	// covers keys this registry knows about.
+	atomicProtocolSession: { default: DEFAULT_ATOMIC_PROTOCOL_SESSION as AtomicProtocolSessionSettings },
 	backgroundEditEnabled: { default: false as boolean },
 	optOutOfRemoteConfig: { default: false as boolean },
 	showFeatureTips: { default: false as boolean },

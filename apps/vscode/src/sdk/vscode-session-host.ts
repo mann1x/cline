@@ -40,6 +40,7 @@ import {
 	type ToolApprovalResult,
 	type ToolPolicy,
 } from "@cline/shared"
+import { normalizeAtomicProtocolMode, resolveAtomicProtocol } from "@shared/AtomicProtocolSettings"
 import { StateManager } from "@/core/storage/StateManager"
 import type { VscodeTerminalManager } from "@/hosts/vscode/terminal/VscodeTerminalManager"
 import { getDistinctId } from "@/services/logging/distinctId"
@@ -198,6 +199,12 @@ export class VscodeSessionHost implements SdkSessionHost {
 			// the mode, their own check if they wrote one, and the two
 			// limits. An empty command means "find something to run".
 			const atomicProtocolSettings = StateManager.get().getGlobalSettingsKey("atomicProtocolSettings")
+			// The other half of it, and only under `on`. `static` is configured
+			// once and deliberately cannot be reached from the conversation: a
+			// run being measured must not depend on what a panel was showing.
+			const atomicProtocolSession = StateManager.get().getGlobalSettingsKey("atomicProtocolSession")
+			const atomicMode = normalizeAtomicProtocolMode(atomicProtocolSettings?.mode)
+			const atomic = resolveAtomicProtocol(atomicProtocolSettings, atomicProtocolSession)
 			return {
 				...inputWithRemoteConfig,
 				source: inputWithRemoteConfig.source ?? "vscode",
@@ -220,9 +227,13 @@ export class VscodeSessionHost implements SdkSessionHost {
 						checkTools: [CHECK_FILE_TOOL_NAME],
 					},
 					atomicProtocol: {
-						mode: atomicProtocolSettings?.mode ?? "off",
-						oracleCommand: atomicProtocolSettings?.oracleCommand || undefined,
-						oracleExpect: atomicProtocolSettings?.oracleExpect || undefined,
+						// Core reads this only to ask whether it is off, so a mode
+						// that is set but not engaged is handed over as off. Which
+						// mode it is has no meaning past this line -- who engages
+						// is entirely this host's business.
+						mode: atomic.engaged ? atomicMode : "off",
+						oracleCommand: atomic.oracleCommand || undefined,
+						oracleExpect: atomic.oracleExpect || undefined,
 						maxChanges: atomicProtocolSettings?.maxChanges,
 						maxTransactions: atomicProtocolSettings?.maxTransactions,
 						// There is a user here to ask, so a workspace with nothing
@@ -232,7 +243,7 @@ export class VscodeSessionHost implements SdkSessionHost {
 						// Unless it is switched off, which is a setting rather than a
 						// release: the proposed check and the self-declared verdict it
 						// replaced have to be comparable on the same workspace.
-						proposeCheck: atomicProtocolSettings?.proposeCheck !== false,
+						proposeCheck: atomic.proposeCheck,
 						maxCheckProposals: atomicProtocolSettings?.maxCheckProposals,
 						// Zero is off and has to survive as zero, so `??` rather
 						// than `||`.

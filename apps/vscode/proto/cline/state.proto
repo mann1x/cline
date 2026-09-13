@@ -306,6 +306,7 @@ message Settings {
   optional bool show_request_timings = 201;
   optional bool image_gen_enabled = 202;
   optional string image_gen_endpoint = 203;
+  optional string atomic_protocol_session = 204;
 }
 
 message State {

@@ -1,4 +1,5 @@
 import { setCompactionStrategyGlobally, setModelToolEnabledGlobally } from "@cline/core"
+import { readAtomicProtocolMode } from "@shared/AtomicProtocolSettings"
 import { Empty } from "@shared/proto/cline/common"
 import { PlanActMode, McpDisplayMode as ProtoMcpDisplayMode, UpdateSettingsRequest } from "@shared/proto/cline/state"
 import { convertProtoToApiProvider } from "@shared/proto-conversions/models/api-configuration-conversion"
@@ -352,7 +353,11 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			const maxCheckProposals = request.atomicProtocolSettings.maxCheckProposals
 			controller.stateManager.setGlobalState("atomicProtocolSettings", {
 				...stored,
-				...(mode === "off" || mode === "auto" || mode === "always" ? { mode } : {}),
+				// An unknown string leaves the stored mode alone rather than
+				// defaulting: defaulting would switch the protocol off for
+				// someone who had it on. `auto` and `always` are read as
+				// `static`, which is what they both did.
+				...(readAtomicProtocolMode(mode) !== undefined ? { mode: readAtomicProtocolMode(mode) } : {}),
 				...(request.atomicProtocolSettings.oracleCommand !== undefined
 					? { oracleCommand: request.atomicProtocolSettings.oracleCommand }
 					: {}),

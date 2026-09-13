@@ -21,7 +21,7 @@ function makeController(current = DEFAULT_ATOMIC_PROTOCOL_SETTINGS) {
 
 const stored = {
 	...DEFAULT_ATOMIC_PROTOCOL_SETTINGS,
-	mode: "always" as const,
+	mode: "static" as const,
 	oracleCommand: "node run_game.js index.html",
 	oracleExpect: '"ok":\\s*true',
 }
@@ -75,11 +75,34 @@ describe("updateSettings — atomicProtocolSettings", () => {
 	it("leaves both alone when the request only changes the mode", async () => {
 		const controller = makeController(stored)
 
-		await updateSettings(controller, UpdateSettingsRequest.create({ atomicProtocolSettings: { mode: "auto" } }))
+		await updateSettings(controller, UpdateSettingsRequest.create({ atomicProtocolSettings: { mode: "on" } }))
 
 		const written = lastWrite(controller)
-		assert.equal(written?.mode, "auto")
+		assert.equal(written?.mode, "on")
 		assert.equal(written?.oracleCommand, "node run_game.js index.html")
 		assert.equal(written?.oracleExpect, '"ok":\\s*true')
+	})
+
+	// A settings blob written before the rename still says `auto` or `always`.
+	// Both engaged the protocol by themselves, so both read as `static`; reading
+	// them as `on` would leave it switched on and never engaging.
+	it("reads a mode stored before the rename as static", async () => {
+		for (const legacy of ["auto", "always"]) {
+			const controller = makeController(stored)
+
+			await updateSettings(controller, UpdateSettingsRequest.create({ atomicProtocolSettings: { mode: legacy } }))
+
+			assert.equal(lastWrite(controller)?.mode, "static")
+		}
+	})
+
+	// An unknown string must not be stored: a mode nothing understands reaches
+	// the session host as "not off" and arms something nobody asked for.
+	it("leaves the stored mode alone when the request carries one it does not know", async () => {
+		const controller = makeController(stored)
+
+		await updateSettings(controller, UpdateSettingsRequest.create({ atomicProtocolSettings: { mode: "sometimes" } }))
+
+		assert.equal(lastWrite(controller)?.mode, "static")
 	})
 })
