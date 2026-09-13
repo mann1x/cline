@@ -1145,20 +1145,27 @@ function readStoredMaxToolResultChars(providerId: string | undefined): unknown {
 }
 
 /**
- * The connection subagents and teammates run on, from the Agents tab.
+ * The connection a scoped tab names, for a model that is not the session's.
  *
  * Resolved the same way the session's own connection is, from the tab's stored
  * snapshot rather than from `providers.json`: that file holds one entry per
  * provider, the session's model owns it, and a second configuration on the same
- * provider would overwrite the first. Reading the agents' context window out of
- * their own snapshot is what stops Plan, Act, Vision and Agents sharing one.
+ * provider would overwrite the first. Reading a tab's context window out of its
+ * own snapshot is what stops Plan, Act, Vision, Agents and Escalation sharing
+ * one.
+ *
+ * Two tabs resolve through here — Agents, whose model runs subagents and
+ * teammates, and Escalation, whose model is the expert a stuck session hands
+ * over to. The resolution is identical; only `label` differs, and it exists so
+ * a log line says which tab was being read.
  *
  * `undefined` means the tab named no provider or no model, which is the signal
- * to leave delegated agents inheriting the session's connection as before.
+ * to leave the feature inheriting the session's connection, or off entirely.
  */
 export async function buildDelegatedAgentConnection(
 	primary: ApiConfiguration | undefined,
 	storedSnapshot: string | undefined,
+	label: "Agents" | "Escalation" = "Agents",
 ): Promise<DelegatedAgentConnectionOverride | undefined> {
 	const configuration = buildScopedApiConfiguration(primary, storedSnapshot)
 	const namedProvider = snapshotProviderId(storedSnapshot)
@@ -1190,7 +1197,7 @@ export async function buildDelegatedAgentConnection(
 	try {
 		knownModels = await getModelsForProvider(sdkProviderId)
 	} catch (error) {
-		Logger.warn(`[Agents] Failed to resolve known models for provider=${sdkProviderId}:`, error)
+		Logger.warn(`[${label}] Failed to resolve known models for provider=${sdkProviderId}:`, error)
 	}
 	const hasKnownModels = !!knownModels && Object.keys(knownModels).length > 0
 
@@ -1660,6 +1667,38 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		)
 	}
 
+	// The expert: a second, costlier model a stuck session can hand the task
+	// to. The fifth scope, resolved exactly like the Agents tab — and kept in a
+	// snapshot of its own for the same reason, which matters more here than
+	// anywhere else: an expert is usually the *larger* model, so borrowing the
+	// session's context window would size it down to whatever the small model
+	// was given.
+	const escalationSnapshot = stateManager.getGlobalSettingsKey("escalationModeApiConfiguration")
+	const escalationStatus = resolveScopedModelStatus(
+		stateManager.getGlobalSettingsKey("escalationModelEnabled"),
+		escalationSnapshot,
+	)
+	const escalationConnection =
+		escalationStatus === "ready"
+			? await buildDelegatedAgentConnection(apiConfig, escalationSnapshot, "Escalation")
+			: undefined
+	if (escalationStatus === "unconfigured") {
+		// Worth a line of its own rather than being inferred later from an
+		// escalation that did not happen: nothing else in the session says the
+		// path is closed, and a tab holding a provider and no model reads as
+		// configured to anyone looking at it.
+		const namedProvider = snapshotProviderId(escalationSnapshot)
+		Logger.warn(
+			`[Escalation] An escalation model is enabled but the Escalation tab names ${
+				namedProvider ? `no model (provider=${namedProvider})` : "no provider"
+			}; there is no expert to hand a stuck task to`,
+		)
+	} else if (escalationConnection) {
+		Logger.log(
+			`[Escalation] Expert configured: provider=${escalationConnection.providerId} model=${escalationConnection.modelId}`,
+		)
+	}
+
 	// How many agents this endpoint will actually serve at once. Asked of the
 	// endpoint the *agents* call, which is not always the session's: an Agents
 	// tab pointed at a second server has that server's slots, not the lead's.
@@ -1860,6 +1899,10 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		// otherwise falls back to a conservative 64k input budget.
 		...(knownModels && Object.keys(knownModels).length > 0 ? { knownModels } : {}),
 		...(delegatedAgentConnection ? { delegatedAgentConnection } : {}),
+		// Only when there is somewhere to escalate to. An `escalation` block
+		// holding no connection would be a feature that is on and cannot run,
+		// which is the state this fork keeps finding and then has to explain.
+		...(escalationConnection ? { escalation: { connection: escalationConnection } } : {}),
 		maxConcurrentAgents: agentSlots.limit,
 		...(agentSlotLimits ? { agentSlotLimits } : {}),
 		resolveProviderConnection: resolveAgentProviderConnection,

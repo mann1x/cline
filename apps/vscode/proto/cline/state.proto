@@ -307,6 +307,8 @@ message Settings {
   optional bool image_gen_enabled = 202;
   optional string image_gen_endpoint = 203;
   optional string atomic_protocol_session = 204;
+  optional bool escalation_model_enabled = 205;
+  optional string escalation_mode_api_configuration = 206;
 }
 
 message State {
@@ -465,6 +467,8 @@ message UpdateSettingsRequest {
   optional string capped_thinking_prompt = 54;
   optional bool agents_model_enabled = 55;
   optional string agents_mode_api_configuration = 56;
+  optional bool escalation_model_enabled = 66;
+  optional string escalation_mode_api_configuration = 67;
   optional bool image_gen_enabled = 62;
   optional string image_gen_endpoint = 63;
   // Write-only, and travelling in this direction only: an empty string clears

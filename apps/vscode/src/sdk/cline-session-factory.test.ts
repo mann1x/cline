@@ -1469,6 +1469,84 @@ describe("buildSessionConfig", () => {
 		)
 		expect(planConfig.systemPrompt).toContain("switch_to_act_mode")
 	})
+
+	// ---------------------------------------------------------------------
+	// The escalation scope: a costlier model the session's own can hand a
+	// stuck task to. The fourth configuration to need a snapshot of its own,
+	// after Vision and Agents, and for the same reason -- `providers.json`
+	// holds one entry per provider and the session's model owns it.
+	// ---------------------------------------------------------------------
+
+	const escalationSnapshot = (providerConfig?: Record<string, unknown>) =>
+		JSON.stringify({
+			global: {},
+			mode: { apiProvider: "ollama", actModeOllamaModelId: "the-expert" },
+			...(providerConfig ? { providerConfig } : {}),
+		})
+
+	// Off is off: no expert on the config means the tool is never offered and
+	// no guard can hand over to one. That is every previous build's behaviour
+	// and it has to survive the setting existing.
+	it("carries no expert while the escalation toggle is off", async () => {
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string) => {
+			if (key === "escalationModelEnabled") {
+				return false
+			}
+			if (key === "escalationModeApiConfiguration") {
+				return escalationSnapshot() as never
+			}
+			return undefined
+		})
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+
+		expect(config.escalation?.connection).toBeUndefined()
+	})
+
+	// The point of the tab. The expert is usually a larger model than the
+	// session's, so it needs a window of its own as much as the agents model
+	// needs a smaller one.
+	it("resolves the expert from the escalation tab's own snapshot", async () => {
+		mocks.stateManager.getApiConfiguration.mockReturnValue({
+			actModeApiProvider: "ollama",
+			ollamaApiOptionsCtxNum: "8192",
+		} as never)
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string) => {
+			if (key === "escalationModelEnabled") {
+				return true
+			}
+			if (key === "escalationModeApiConfiguration") {
+				return escalationSnapshot({ selectedModelId: "the-expert", contextWindow: 131_072 }) as never
+			}
+			return undefined
+		})
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+
+		expect(config.escalation?.connection?.modelId).toBe("the-expert")
+		expect(config.escalation?.connection?.providerConfig?.modelInfo?.contextWindow).toBe(131_072)
+	})
+
+	// Enabled with nothing named is not the same as enabled: there is nothing
+	// to call. Said in the log rather than left to be inferred from a failed
+	// escalation, because a tab holding a provider and no model reads as
+	// configured to anyone looking at it.
+	it("carries no expert when the toggle is on but the tab names no model", async () => {
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string) => {
+			if (key === "escalationModelEnabled") {
+				return true
+			}
+			if (key === "escalationModeApiConfiguration") {
+				return JSON.stringify({ global: {}, mode: { apiProvider: "ollama" } }) as never
+			}
+			return undefined
+		})
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+
+		expect(config.escalation?.connection).toBeUndefined()
+		expect(Logger.warn).toHaveBeenCalledWith(expect.stringContaining("[Escalation]"))
+	})
 })
 
 // ---------------------------------------------------------------------------

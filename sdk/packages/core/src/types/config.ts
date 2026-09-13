@@ -92,6 +92,54 @@ export type DelegatedAgentConnectionOverride = Pick<
 	| "maxToolResultChars"
 >;
 
+/**
+ * A second, costlier model the session's own can hand a stuck task to.
+ *
+ * The expert is not a better default -- it is a model whose call is worth
+ * avoiding: a metered account, a limited allowance, or hardware shared with
+ * other people. So the whole configuration is about *when* it is allowed to be
+ * called and what happens to it afterwards, and none of it is about making the
+ * expert easier to reach.
+ *
+ * The connection is the same shape a delegated agent takes, for the same
+ * reason: `providers.json` holds one entry per provider and the session's model
+ * owns it, so an expert on that provider needs a configuration of its own
+ * rather than a share of the session's. See {@link
+ * DelegatedAgentConnectionOverride}.
+ */
+export interface CoreEscalationConfig {
+	/**
+	 * Where the expert runs. Absent means no expert is configured, and every
+	 * escalation path is closed -- the tool is not offered and no guard hands
+	 * over to it.
+	 */
+	connection?: DelegatedAgentConnectionOverride;
+	/**
+	 * Release the expert's conversation when an escalation ends, rather than
+	 * holding it for the next one.
+	 *
+	 * Off by default, and the two answers are right on different hardware. A
+	 * held conversation keeps a hosted provider's prompt cache warm, so a
+	 * follow-up an hour later does not pay to send the whole exchange again. A
+	 * released one frees the slot a local server was holding, which is what
+	 * lets another model load at all.
+	 */
+	closeAfterEscalation?: boolean;
+	/**
+	 * Ask the user before each escalation, showing the brief and the
+	 * assessment.
+	 *
+	 * Off by default. The model's own account of why it needs help is the one
+	 * piece of evidence it has an interest in, so a host that turns this on
+	 * gets the harness's independent assessment beside it.
+	 */
+	requireApproval?: boolean;
+	/** Escalations allowed in one task. Three by default. */
+	maxEscalations?: number;
+	/** Follow-ups within one escalation, after the first delivery. Twenty by default. */
+	maxFollowUps?: number;
+}
+
 export interface CoreRuntimeFeatures {
 	enableTools: boolean;
 	enableSpawnAgent: boolean;
@@ -652,6 +700,13 @@ export interface CoreSessionConfig
 	 * what was already tried.
 	 */
 	atomicProtocol?: CoreAtomicProtocolConfig;
+	/**
+	 * A costlier model this session may hand a stuck task to.
+	 *
+	 * Absent means no escalation path exists, which is every previous build's
+	 * behaviour. See {@link CoreEscalationConfig}.
+	 */
+	escalation?: CoreEscalationConfig;
 	/**
 	 * The project's own checker, for the `check_file` this host supplies.
 	 *

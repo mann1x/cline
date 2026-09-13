@@ -298,6 +298,8 @@ export const ExtensionStateContextProvider: React.FC<{
 		visionModeApiConfiguration: "",
 		agentsModelEnabled: false,
 		agentsModeApiConfiguration: "",
+		escalationModelEnabled: false,
+		escalationModeApiConfiguration: "",
 		imageGenEnabled: false,
 		imageGenEndpoint: "",
 		imageGenApiKeySet: false,

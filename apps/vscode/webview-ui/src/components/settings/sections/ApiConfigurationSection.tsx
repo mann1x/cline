@@ -9,6 +9,7 @@ import AgentsModelTab from "../AgentsModelTab"
 import ApiConfigProfileBar from "../ApiConfigProfileBar"
 import ApiOptions from "../ApiOptions"
 import { SettingsCheckbox } from "../common/SettingsCheckbox"
+import EscalationModelTab from "../EscalationModelTab"
 import ImageGenModelTab from "../ImageGenModelTab"
 import Section from "../Section"
 import { syncModeConfigurations } from "../utils/providerUtils"
@@ -22,10 +23,10 @@ interface ApiConfigurationSectionProps {
 }
 
 /**
- * Neither the Vision nor the Agents tab is a `Mode`: each configures a second
+ * None of Vision, Agents and Escalation is a `Mode`: each configures a second
  * model rather than a mode of the session's.
  */
-type ConfigTab = Mode | "vision" | "agents" | "imagegen"
+type ConfigTab = Mode | "vision" | "agents" | "escalation" | "imagegen"
 
 /** Whether the stored image endpoint names both a URL and a model. */
 function isImageEndpointComplete(raw: string): boolean {
@@ -52,6 +53,8 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 		visionModeApiConfiguration,
 		agentsModelEnabled,
 		agentsModeApiConfiguration,
+		escalationModelEnabled,
+		escalationModeApiConfiguration,
 		imageGenEnabled,
 		imageGenEndpoint,
 		mode,
@@ -66,6 +69,12 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 	// enabled toggle over a tab that names nothing is a setting that silently
 	// does not apply.
 	const agentsUnconfigured = resolveScopedModelStatus(agentsModelEnabled, agentsModeApiConfiguration) === "unconfigured"
+	// And of the Escalation tab. The consequence here is the quietest of the
+	// three: nothing fails, the model is simply never offered the expert, and a
+	// guard that would have handed the task over stops the run instead — which
+	// is exactly what it did before the feature existed.
+	const escalationUnconfigured =
+		resolveScopedModelStatus(escalationModelEnabled, escalationModeApiConfiguration) === "unconfigured"
 	// And of the image endpoint, where the consequence is quieter and so worth
 	// stating louder: the tool is simply not offered, so the model never learns
 	// it could have made a picture and the user sees no error at all.
@@ -80,9 +89,11 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 	const scopedTabOff =
 		(currentTab === "vision" && !visionModelEnabled) ||
 		(currentTab === "agents" && !agentsModelEnabled) ||
+		(currentTab === "escalation" && !escalationModelEnabled) ||
 		(currentTab === "imagegen" && !imageGenEnabled)
 	const activeTab: ConfigTab = scopedTabOff ? mode : currentTab
-	const showTabs = planActSeparateModelsSetting || visionModelEnabled || agentsModelEnabled || imageGenEnabled
+	const showTabs =
+		planActSeparateModelsSetting || visionModelEnabled || agentsModelEnabled || escalationModelEnabled || imageGenEnabled
 	// One profile list for every tab; only the target changes with the tab. The
 	// Images tab is not in it: a profile is a provider and a model for a
 	// conversation, and that tab configures neither.
@@ -91,17 +102,17 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 			? { kind: "vision" }
 			: activeTab === "agents"
 				? { kind: "agents" }
-				: { kind: "mode", mode: activeTab === "imagegen" ? mode : activeTab }
+				: activeTab === "escalation"
+					? { kind: "escalation" }
+					: { kind: "mode", mode: activeTab === "imagegen" ? mode : activeTab }
 
 	return (
 		<div>
 			{renderSectionHeader?.("api-config")}
 			<Section>
-				{activeTab === "vision" || activeTab === "agents" ? (
+				{activeTab === "vision" || activeTab === "agents" || activeTab === "escalation" ? (
 					<ApiConfigProfileBar
-						description={`Saving here stores the ${
-							activeTab === "vision" ? "vision" : "agents"
-						} model's settings. Profiles are shared with the other tabs, so one saved from Act can be loaded here.`}
+						description={`Saving here stores the ${activeTab} model's settings. Profiles are shared with the other tabs, so one saved from Act can be loaded here.`}
 						scope={profileScope}
 					/>
 				) : (
@@ -136,8 +147,8 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 								</>
 							) : (
 								<TabButton
-									disabled={activeTab !== "vision" && activeTab !== "agents"}
-									isActive={activeTab !== "vision" && activeTab !== "agents"}
+									disabled={activeTab !== "vision" && activeTab !== "agents" && activeTab !== "escalation"}
+									isActive={activeTab !== "vision" && activeTab !== "agents" && activeTab !== "escalation"}
 									onClick={() => setCurrentTab(mode)}
 									style={{
 										opacity: 1,
@@ -170,6 +181,18 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 									Agents
 								</TabButton>
 							) : null}
+							{escalationModelEnabled ? (
+								<TabButton
+									disabled={activeTab === "escalation"}
+									isActive={activeTab === "escalation"}
+									onClick={() => setCurrentTab("escalation")}
+									style={{
+										opacity: 1,
+										cursor: "pointer",
+									}}>
+									Escalation
+								</TabButton>
+							) : null}
 							{imageGenEnabled ? (
 								<TabButton
 									disabled={activeTab === "imagegen"}
@@ -190,6 +213,8 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 								<VisionModelTab />
 							) : activeTab === "agents" ? (
 								<AgentsModelTab />
+							) : activeTab === "escalation" ? (
+								<EscalationModelTab />
 							) : activeTab === "imagegen" ? (
 								<ImageGenModelTab />
 							) : (
@@ -203,6 +228,36 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 
 				<div className="mb-[5px]">
 					<SettingsCheckbox
+						checked={escalationModelEnabled}
+						className="mb-[5px]"
+						onChange={async (checked: boolean) => {
+							try {
+								await StateServiceClient.updateSettings(
+									UpdateSettingsRequest.create({ escalationModelEnabled: checked }),
+								)
+							} catch (error) {
+								console.error("Failed to update escalation model setting:", error)
+								throw error
+							}
+						}}>
+						Use a different model for escalation
+					</SettingsCheckbox>
+					<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
+						When the model gets stuck it can hand the task to the model on the Escalation tab — on request, or when a
+						guard would otherwise stop the run. The expert is meant to be the expensive one: a metered account, a
+						limited allowance, or a larger model that has to be loaded. It is told so, and asked not to be called for
+						work the session's own model can finish.
+					</p>
+					{escalationUnconfigured ? (
+						<p className="text-xs mt-[5px] text-(--vscode-errorForeground)">
+							The Escalation tab does not name both a provider and a model, so there is nothing to escalate to and
+							the guards will stop the run as before. Pick a provider <em>and</em> a model on the Escalation tab.
+						</p>
+					) : null}
+				</div>
+
+				<div className="mb-[5px]">
+					<SettingsCheckbox
 						checked={planActSeparateModelsSetting}
 						className="mb-[5px]"
 						onChange={async (checked: boolean) => {
@@ -211,7 +266,10 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 								if (!checked) {
 									await syncModeConfigurations(
 										apiConfiguration,
-										activeTab === "vision" || activeTab === "agents" || activeTab === "imagegen"
+										activeTab === "vision" ||
+											activeTab === "agents" ||
+											activeTab === "escalation" ||
+											activeTab === "imagegen"
 											? mode
 											: activeTab,
 										handleFieldsChange,

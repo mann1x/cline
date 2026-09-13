@@ -24,6 +24,7 @@ import { useExtensionState } from "@/context/ExtensionStateContext"
 import { getActiveProviderAndModelId } from "@/hooks/useNormalizedApiConfiguration"
 import { useProviderConfig, writeProviderConfigFor } from "@/hooks/useProviderConfig"
 import { ModelsServiceClient, StateServiceClient } from "@/services/grpc-client"
+import { SCOPED_MODEL_SETTINGS, scopedSettingsPatch } from "./scopedSettingsPatch"
 import { useApiConfigurationHandlers } from "./useApiConfigurationHandlers"
 
 const EMPTY_SNAPSHOT: ApiConfigurationSnapshot = { global: {}, mode: {} }
@@ -36,7 +37,11 @@ const EMPTY_SNAPSHOT: ApiConfigurationSnapshot = { global: {}, mode: {} }
  * a configuration of their own, so a bar on either that wrote to Plan or Act
  * would save the wrong settings under a name the user chose for something else.
  */
-export type ApiConfigurationProfileScope = { kind: "mode"; mode: Mode } | { kind: "vision" } | { kind: "agents" }
+export type ApiConfigurationProfileScope =
+	| { kind: "mode"; mode: Mode }
+	| { kind: "vision" }
+	| { kind: "agents" }
+	| { kind: "escalation" }
 
 /**
  * The scopes that keep their own snapshot rather than reading the live panel.
@@ -45,10 +50,11 @@ export type ApiConfigurationProfileScope = { kind: "mode"; mode: Mode } | { kind
  * owns it — so a second and a third configuration on that provider cannot live
  * there without overwriting the first. Each of these keeps its settings, its
  * model and its context window in a settings string of its own instead
- * (`visionModeApiConfiguration`, `agentsModeApiConfiguration`), which is what
- * makes four separate context windows possible at all.
+ * (`visionModeApiConfiguration`, `agentsModeApiConfiguration`,
+ * `escalationModeApiConfiguration`), which is what makes five separate context
+ * windows possible at all.
  */
-type SnapshotScopeKind = "vision" | "agents"
+type SnapshotScopeKind = "vision" | "agents" | "escalation"
 
 export interface ApiConfigurationProfilesState {
 	profiles: ApiConfigurationProfile[]
@@ -81,6 +87,7 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 		activeApiConfigurationProfile,
 		visionModeApiConfiguration,
 		agentsModeApiConfiguration,
+		escalationModeApiConfiguration,
 		planActSeparateModelsSetting,
 	} = useExtensionState()
 	const { handleFieldsChange } = useApiConfigurationHandlers()
@@ -88,7 +95,12 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 	// A tab that keeps its own snapshot, and the snapshot it keeps. `undefined`
 	// on Plan and Act, which read the panel's live configuration instead.
 	const snapshotKind: SnapshotScopeKind | undefined = scope.kind === "mode" ? undefined : scope.kind
-	const storedSnapshot = snapshotKind === "agents" ? agentsModeApiConfiguration : visionModeApiConfiguration
+	const storedSnapshot =
+		snapshotKind === "agents"
+			? agentsModeApiConfiguration
+			: snapshotKind === "escalation"
+				? escalationModeApiConfiguration
+				: visionModeApiConfiguration
 
 	// The provider whose providers.json entry this bar saves and loads. Read from
 	// the configuration in view rather than the panel's tab, so the Vision bar
@@ -124,8 +136,8 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 	}, [snapshotKind, apiConfiguration, scopeMode, storedSnapshot, providerConfig])
 
 	// The active profile is per scope: loading one into Vision says nothing
-	// about what Plan, Act and Agents are holding, so a single stored name would
-	// show the wrong one on three tabs out of four.
+	// about what Plan, Act, Agents and Escalation are holding, so a single
+	// stored name would show the wrong one on four tabs out of five.
 	const activeNames = useMemo(() => parseActiveNames(activeApiConfigurationProfile), [activeApiConfigurationProfile])
 	const scopeKey = snapshotKind ?? scopeMode
 	const activeProfile = useMemo(
@@ -190,15 +202,11 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 					...(selection.modelId ? { selectedModelId: selection.modelId } : {}),
 				}
 				const stored = JSON.stringify(Object.keys(providerConfig).length > 0 ? { ...snapshot, providerConfig } : snapshot)
-				// Spelled out per scope rather than written under a computed key: a
-				// computed key widens the object to an index signature, and the
-				// request builder then accepts it without checking the field exists.
+				// Through the same map the tab's own writes go through: a computed
+				// key would widen the object to an index signature, and the request
+				// builder then accepts it without checking the field exists.
 				await StateServiceClient.updateSettings(
-					UpdateSettingsRequest.create(
-						snapshotKind === "agents"
-							? { agentsModeApiConfiguration: stored }
-							: { visionModeApiConfiguration: stored },
-					),
+					UpdateSettingsRequest.create(scopedSettingsPatch(SCOPED_MODEL_SETTINGS[snapshotKind], stored)),
 				)
 				return
 			}

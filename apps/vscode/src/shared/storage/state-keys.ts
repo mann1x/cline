@@ -287,6 +287,12 @@ const USER_SETTINGS_FIELDS = {
 	// three that share a provider entry, and no way at all to give an agent a
 	// smaller model than the lead.
 	agentsModelEnabled: { default: false as boolean },
+	// Hand a stuck task to a second, costlier model — a cloud account, or
+	// simply a larger local one. Off by default and deliberately so: the point
+	// of the expert is that calling it costs more than the session's own model,
+	// so a session that has not been told where one is should never reach for
+	// it.
+	escalationModelEnabled: { default: false as boolean },
 	// Offer `generate_image`, pointed at an OpenAI-compatible images endpoint.
 	// Off by default and with nothing configured: there is no image endpoint on
 	// a machine until someone stands one up, and a tool that always fails is
@@ -306,6 +312,8 @@ const USER_SETTINGS_FIELDS = {
 	visionModeApiConfiguration: { default: "" as string },
 	/** JSON `ApiConfigurationSnapshot` for delegated agents. */
 	agentsModeApiConfiguration: { default: "" as string },
+	/** JSON `ApiConfigurationSnapshot` for the escalation expert. */
+	escalationModeApiConfiguration: { default: "" as string },
 	// JSON `{baseUrl, model, size}` naming where `generate_image` posts. Not an
 	// `ApiConfigurationSnapshot`: what is being configured is an endpoint, not a
 	// second model in the conversation, and the provider list a snapshot carries

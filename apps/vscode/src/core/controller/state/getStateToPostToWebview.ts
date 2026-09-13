@@ -72,6 +72,8 @@ export async function getStateToPostToWebview(controller: {
 	const visionModeApiConfiguration = stateManager.getGlobalSettingsKey("visionModeApiConfiguration")
 	const agentsModelEnabled = stateManager.getGlobalSettingsKey("agentsModelEnabled")
 	const agentsModeApiConfiguration = stateManager.getGlobalSettingsKey("agentsModeApiConfiguration")
+	const escalationModelEnabled = stateManager.getGlobalSettingsKey("escalationModelEnabled")
+	const escalationModeApiConfiguration = stateManager.getGlobalSettingsKey("escalationModeApiConfiguration")
 	const imageGenEnabled = stateManager.getGlobalSettingsKey("imageGenEnabled")
 	const imageGenEndpoint = stateManager.getGlobalSettingsKey("imageGenEndpoint")
 	const editVerificationSettings = stateManager.getGlobalSettingsKey("editVerificationSettings")
@@ -181,6 +183,8 @@ export async function getStateToPostToWebview(controller: {
 		visionModeApiConfiguration,
 		agentsModelEnabled,
 		agentsModeApiConfiguration,
+		escalationModelEnabled,
+		escalationModeApiConfiguration,
 		imageGenEnabled,
 		imageGenEndpoint,
 		// Whether a key is stored, never the key: this object is serialised into

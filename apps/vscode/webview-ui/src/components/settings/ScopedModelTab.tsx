@@ -10,28 +10,26 @@ import { ExtensionStateContext, useExtensionState } from "@/context/ExtensionSta
 import { ModelsServiceClient, StateServiceClient } from "@/services/grpc-client"
 import ApiOptions from "./ApiOptions"
 import { ApiConfigurationScopeContext, type ScopedModelSelection } from "./utils/ApiConfigurationScopeContext"
+import { type ScopedModelSetting, scopedSettingsPatch } from "./utils/scopedSettingsPatch"
 import { createScopedSnapshotWriter, scopedSnapshotPatches } from "./utils/scopedSnapshotWriter"
 
 const EMPTY_SNAPSHOT = { global: {}, mode: {} }
 
-/** The settings string a scoped tab stores its whole configuration in. */
-export type ScopedModelSetting = "visionModeApiConfiguration" | "agentsModeApiConfiguration"
-
 /**
  * The API configuration panel, pointed at a model that is not the session's.
  *
- * Two of these exist: the vision model, which turns images into text for a
- * primary model that cannot read them, and the agents model, which subagents
- * and teammates run on instead of the lead's. Both need the same settings as
- * any other model, so this renders the same panel rather than a reduced copy of
- * it — the panel is shown an overridden extension state to read from and a
+ * Three of these exist: the vision model, which turns images into text for a
+ * primary model that cannot read them; the agents model, which subagents and
+ * teammates run on instead of the lead's; and the escalation model, the expert
+ * a stuck session hands the task to. All three need the same settings as any
+ * other model, so this renders the same panel rather than a reduced copy of it — the panel is shown an overridden extension state to read from and a
  * scope to write to, and never learns it is being used for something else.
  *
  * The configuration is kept in a settings string of its own rather than in
  * `providers.json`, which holds one entry per provider: a second and a third
  * configuration on the same provider have nowhere to go there without
- * overwriting the first. That is what lets Plan, Act, Vision and Agents each
- * hold a context window of their own.
+ * overwriting the first. That is what lets Plan, Act, Vision, Agents and
+ * Escalation each hold a context window of their own.
  *
  * There is no Plan/Act distinction here, so both modes are written with the
  * same values and the panel is shown the configuration as if the separate-model
@@ -45,22 +43,13 @@ const ScopedModelTab = ({ setting, storedSnapshot }: { setting: ScopedModelSetti
 	const state = useExtensionState()
 	const { apiConfiguration } = state
 
-	// Spelled out per setting rather than computed from `setting`: a computed key
-	// widens the object to an index signature and the request builder then takes
-	// it without checking that the field exists at all.
-	const settingsPatch = useCallback(
-		(json: string) =>
-			setting === "agentsModeApiConfiguration"
-				? { agentsModeApiConfiguration: json }
-				: { visionModeApiConfiguration: json },
-		[setting],
-	)
-
 	const persist = useCallback(
 		async (snapshot: unknown) => {
-			await StateServiceClient.updateSettings(UpdateSettingsRequest.create(settingsPatch(JSON.stringify(snapshot))))
+			await StateServiceClient.updateSettings(
+				UpdateSettingsRequest.create(scopedSettingsPatch(setting, JSON.stringify(snapshot))),
+			)
 		},
-		[settingsPatch],
+		[setting],
 	)
 
 	const writerRef = useRef<ReturnType<typeof createScopedSnapshotWriter> | undefined>(undefined)

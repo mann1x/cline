@@ -92,6 +92,10 @@ export interface ExtensionState {
 	agentsModelEnabled: boolean
 	/** JSON `ApiConfigurationSnapshot` for delegated agents. */
 	agentsModeApiConfiguration: string
+	/** Hand a stuck task to a second, costlier model. */
+	escalationModelEnabled: boolean
+	/** JSON `ApiConfigurationSnapshot` for the escalation expert. */
+	escalationModeApiConfiguration: string
 	/** Whether `generate_image` is offered, pointed at the endpoint below. */
 	imageGenEnabled: boolean
 	/** JSON `{baseUrl, model, size}` naming where `generate_image` posts. */
