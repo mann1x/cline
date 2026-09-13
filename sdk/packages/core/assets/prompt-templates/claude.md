@@ -398,7 +398,7 @@ Three ways to address the symbol:
 
 For `document_symbols`, `path` is the file to outline.
 
-Output: plain text, one result per line as `file:line:column` followed by that line of source, so you can go straight to the one you want instead of reading each candidate. `hover` returns the signature and documentation as text. `document_symbols` and `workspace_symbols` give each symbol's kind alongside its location. No results is a definite answer — the language server understood the symbol and nothing matches — so don't re-ask the same question as a text search.
+Output: plain text, one result per line as `file:line:column` followed by that line of source, so you can go straight to the one you want instead of reading each candidate. `hover` returns the signature and documentation as text. `document_symbols` and `workspace_symbols` give each symbol's kind alongside its location. No results is a definite answer for the symbol-addressed operations — `definition`, `references`, `implementations`, `type_definition`, `callers`, `hover`: the server understood the symbol and nothing matches, so don't re-ask the same question as a text search. `workspace_symbols` is different. It reads a project-wide index that doesn't cover script embedded in `.html` or other template files, and it tells you so when it finds nothing — take `document_symbols` on the file, or `search_codebase`, rather than concluding the symbol doesn't exist. And when an answer opens with a line saying the file doesn't parse, everything under it came from a partial parse: fix the syntax first.
 
 It is the wrong tool for text that is not a symbol: strings, comments, config keys. Those go to `search_codebase`.
 

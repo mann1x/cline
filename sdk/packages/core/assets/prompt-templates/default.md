@@ -203,7 +203,9 @@ How to address a symbol:
 - If you know the exact position: `path`, `line` and `character` (both 1-based).
 - If you do not know the file: `symbol` alone, with `operation: "workspace_symbols"`.
 
-Output: plain text, one result per line as `file:line:column` followed by that source line, so you can go straight to the one you want rather than reading each candidate. `hover` returns the signature and documentation as text instead, and `document_symbols` and `workspace_symbols` name each symbol's kind. No results is a definite answer — the language server understands this symbol and nothing matches — so do not fall back to a text search for the same question.
+Output: plain text, one result per line as `file:line:column` followed by that source line, so you can go straight to the one you want rather than reading each candidate. `hover` returns the signature and documentation as text instead, and `document_symbols` and `workspace_symbols` name each symbol's kind.
+
+An empty answer is a real answer once the symbol resolved: for `definition`, `references`, `implementations`, `type_definition`, `callers` and `hover` the server understood the symbol and nothing matched, so a text search for the same question will not find more. `workspace_symbols` is the exception, and says so when it comes back empty: it reads a project-wide index that covers the languages a server is installed for and does not index script embedded in `.html` or other template files, so nothing there is not proof of nothing anywhere. And when the file does not parse, every answer about it opens with that line — while it is there, the server is answering from a partial parse and you are reading guesses.
 
 # tool: generate_image
 Generate an image from a text description and save it into the workspace. Use it for visual work you would otherwise have to ask the user to do elsewhere: an app icon, a placeholder texture or sprite, a logo, a background, or a mockup of a layout or theme you are about to build.

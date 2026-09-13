@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import { type AgentTool, createTool } from "@cline/shared";
+import { findScriptSyntaxError } from "./delimiter-balance";
 
 /**
  * Hand the model the workspace's language servers.
@@ -64,7 +65,9 @@ How to address a symbol:
 - If you know the exact position: \`path\`, \`line\` and \`character\` (both 1-based).
 - If you do not know the file: \`symbol\` alone, with \`operation: "workspace_symbols"\`.
 
-Output: plain text, one result per line as \`file:line:column\` followed by that source line, so you can go straight to the one you want rather than reading each candidate. \`hover\` returns the signature and documentation as text instead, and \`document_symbols\` and \`workspace_symbols\` name each symbol's kind. No results is a definite answer — the language server understands this symbol and nothing matches — so do not fall back to a text search for the same question.`;
+Output: plain text, one result per line as \`file:line:column\` followed by that source line, so you can go straight to the one you want rather than reading each candidate. \`hover\` returns the signature and documentation as text instead, and \`document_symbols\` and \`workspace_symbols\` name each symbol's kind.
+
+An empty answer is a real answer once the symbol resolved: for \`definition\`, \`references\`, \`implementations\`, \`type_definition\`, \`callers\` and \`hover\` the server understood the symbol and nothing matched, so a text search for the same question will not find more. \`workspace_symbols\` is the exception, and says so when it comes back empty: it reads a project-wide index that covers the languages a server is installed for and does not index script embedded in \`.html\` or other template files, so nothing there is not proof of nothing anywhere. And when the file does not parse, every answer about it opens with that line — while it is there, the server is answering from a partial parse and you are reading guesses.`;
 
 /** Exported for the same reason as `CHECK_FILE_TOOL_INPUT_SCHEMA`. */
 export const CODE_INTEL_TOOL_INPUT_SCHEMA = {
@@ -139,6 +142,13 @@ export interface CodeIntelProvider {
 	callers(at: CodeIntelLocation): Promise<CodeIntelSymbol[]>;
 	/** The source line, so a result is readable without opening the file. */
 	readLine(filePath: string, line: number): Promise<string | undefined>;
+	/**
+	 * The whole file, for the parse check that qualifies every answer about it.
+	 *
+	 * Optional because it arrived after the two hosts did, and a provider that
+	 * cannot read the file should lose the warning rather than the answer.
+	 */
+	readFile?(filePath: string): Promise<string | undefined>;
 }
 
 export interface CodeIntelToolOptions {
@@ -312,17 +322,29 @@ export function createCodeIntelTool(options: CodeIntelToolOptions): AgentTool {
 					}
 					return renderSymbols(
 						await provider.workspaceSymbols(request.symbol),
-						`No symbol matching "${request.symbol}" in this workspace.`,
+						// The one empty answer this tool cannot stand behind.
+						// It reads a project-wide index, and an index has a
+						// shape: it covers the languages a server is installed
+						// for, and script inside an `.html` file is in none of
+						// them. Reported as authoritative, a class that plainly
+						// exists comes back "no symbol" and the model either
+						// believes it or stops believing the tool.
+						`No symbol named "${request.symbol}" in the project-wide index. That index covers the languages a server is installed for and does not index script embedded in \`.html\` or other template files, so this is not proof the symbol does not exist: if you know which file it is in, ask \`document_symbols\` for that file; otherwise \`search_codebase\` is the right fallback here.`,
 					);
 				}
 
 				const filePath = path.resolve(cwd, request.filePath as string);
 				const display = relative(cwd, filePath);
 
+				const fault = await describeParseFault(provider, filePath, display);
+
 				if (request.operation === "document_symbols") {
-					return renderSymbols(
-						await provider.documentSymbols(filePath),
-						`${display}: no symbols reported.`,
+					return (
+						fault +
+						renderSymbols(
+							await provider.documentSymbols(filePath),
+							`${display}: no symbols reported.`,
+						)
 					);
 				}
 
@@ -330,50 +352,83 @@ export function createCodeIntelTool(options: CodeIntelToolOptions): AgentTool {
 				if (!at) {
 					// The distinction matters: "the symbol is not there" is a
 					// different problem from "the language server said nothing".
-					return `Could not find \`${request.symbol}\` in ${display}. Check the spelling, or pass \`line\` and \`character\`.`;
+					return `${fault}Could not find \`${request.symbol}\` in ${display}. Check the spelling, or pass \`line\` and \`character\`.`;
 				}
 
-				switch (request.operation) {
-					case "definition":
-						return await renderLocations(
-							await provider.definitions(at),
-							`No definition found for that symbol.`,
-						);
-					case "type_definition":
-						return await renderLocations(
-							await provider.typeDefinitions(at),
-							`No type definition found.`,
-						);
-					case "implementations":
-						return await renderLocations(
-							await provider.implementations(at),
-							`No implementations found.`,
-						);
-					case "references":
-						return await renderLocations(
-							await provider.references(at),
-							`No references found.`,
-						);
-					case "callers":
-						return renderSymbols(
-							await provider.callers(at),
-							`Nothing calls that.`,
-						);
-					case "hover": {
-						const hover = await provider.hover(at);
-						return hover?.trim()
-							? hover.trim()
-							: `The language server had nothing to say about that symbol.`;
-					}
-					default:
-						return `Unsupported operation: ${request.operation}.`;
-				}
+				return fault + (await answer(request.operation, at));
 			} catch (error) {
 				options.onError?.("[CodeIntel] request failed", error);
 				return `The language server could not answer: ${error instanceof Error ? error.message : String(error)}`;
 			}
 		},
 	});
+
+	/** The position-addressed operations, once the position is known. */
+	async function answer(
+		operation: CodeIntelOperation,
+		at: CodeIntelLocation,
+	): Promise<string> {
+		switch (operation) {
+			case "definition":
+				return await renderLocations(
+					await provider.definitions(at),
+					`No definition found for that symbol.`,
+				);
+			case "type_definition":
+				return await renderLocations(
+					await provider.typeDefinitions(at),
+					`No type definition found.`,
+				);
+			case "implementations":
+				return await renderLocations(
+					await provider.implementations(at),
+					`No implementations found.`,
+				);
+			case "references":
+				return await renderLocations(
+					await provider.references(at),
+					`No references found.`,
+				);
+			case "callers":
+				return renderSymbols(await provider.callers(at), `Nothing calls that.`);
+			case "hover": {
+				const hover = await provider.hover(at);
+				return hover?.trim()
+					? hover.trim()
+					: `The language server had nothing to say about that symbol.`;
+			}
+			default:
+				return `Unsupported operation: ${operation}.`;
+		}
+	}
+}
+
+/**
+ * A line to put in front of every answer about a file that does not parse.
+ *
+ * A language server does not stop at a syntax error: it recovers, and keeps
+ * answering from whatever tree it salvaged. So `definition` still returns a
+ * location and `references` still returns a list, and past the fault both are
+ * guesses — which is exactly the state a model is in when it is hunting a
+ * broken file, and exactly when it is least able to tell. Saying so costs one
+ * line and turns a wrong answer into a signposted one.
+ *
+ * The check is the same `new Function` parse `check_file` uses, on the same
+ * file extensions, so the two tools never disagree about whether a file parses.
+ */
+async function describeParseFault(
+	provider: CodeIntelProvider,
+	filePath: string,
+	display: string,
+): Promise<string> {
+	const source = await provider.readFile?.(filePath).catch(() => undefined);
+	if (source === undefined) {
+		return "";
+	}
+	const fault = findScriptSyntaxError(filePath, source);
+	return fault
+		? `${display} does not parse — ${fault}. The language server answered from a partial parse, so treat what follows as a guess: run \`check_file\` on this file and fix the syntax first.\n\n`
+		: "";
 }
 
 /**

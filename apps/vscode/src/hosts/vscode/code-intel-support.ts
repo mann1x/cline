@@ -250,6 +250,16 @@ export function createVscodeCodeIntelProvider(): CodeIntelProvider {
 				return undefined
 			}
 		},
+		async readFile(filePath) {
+			try {
+				// The document, not the file on disk: the parse check has to
+				// agree with what the language server just answered from, and
+				// that is the editor's buffer, unsaved edits included.
+				return (await vscode.workspace.openTextDocument(vscode.Uri.file(filePath))).getText()
+			} catch {
+				return undefined
+			}
+		},
 	}
 }
 

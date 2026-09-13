@@ -240,7 +240,7 @@ How to address a symbol:
 - If you know the exact position: `path`, `line`, and `character` (1-based).
 - If you do not know the file: `symbol` alone with `operation: "workspace_symbols"`.
 
-Output: plain text, one result per line as `file:line:column` followed by that source line, so you can go straight to the one you want. `hover` returns signature and documentation as text; `document_symbols` and `workspace_symbols` name each symbol's kind. No results is a definite answer — the language server understands this symbol and nothing matches — so do not fall back to a text search for the same question.
+Output: plain text, one result per line as `file:line:column` followed by that source line, so you can go straight to the one you want. `hover` returns signature and documentation as text; `document_symbols` and `workspace_symbols` name each symbol's kind. Empty means empty for the symbol-addressed operations — `definition`, `references`, `implementations`, `type_definition`, `callers`, `hover` — so do not re-ask them as a text search. Not for `workspace_symbols`: that one reads a project index that skips script inside `.html` and other template files, and it says so when it finds nothing; fall back to `document_symbols` on the file, or `search_codebase`. And an answer that opens with `does not parse` came from a half-parsed file — repair the syntax before you believe any of it.
 
 # tool: generate_image
 {{DEFAULT}}

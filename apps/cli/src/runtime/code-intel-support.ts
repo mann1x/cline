@@ -490,5 +490,8 @@ export function createCliCodeIntelProvider(
 			const source = await lines(filePath).catch(() => undefined);
 			return source?.[line];
 		},
+		async readFile(filePath) {
+			return (await lines(filePath).catch(() => undefined))?.join("\n");
+		},
 	};
 }

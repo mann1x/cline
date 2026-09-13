@@ -299,3 +299,116 @@ describe("code_intel", () => {
 		expect(output).toContain("server crashed");
 	});
 });
+
+describe("what an empty answer is allowed to claim", () => {
+	it("does not let an empty workspace_symbols stand as proof", async () => {
+		// The index covers the languages a server is installed for. A class
+		// inside an `.html` file is in none of them, and reporting that as
+		// "no symbol" sent the model looking for an indexing bug in us.
+		const output = await run(stubProvider(), {
+			operation: "workspace_symbols",
+			symbol: "SoundManager",
+		});
+
+		expect(output).toContain("not proof the symbol does not exist");
+		expect(output).toContain("`document_symbols`");
+		expect(output).toContain("`search_codebase`");
+	});
+
+	it("keeps the empty answer definite once the symbol resolved", async () => {
+		const output = await run(stubProvider(), {
+			operation: "references",
+			path: "src/app.ts",
+			symbol: "run",
+		});
+
+		expect(output).toBe("No references found.");
+	});
+});
+
+describe("a file that does not parse", () => {
+	// `.js`, because the check is a real parse and the parser is the JS one:
+	// it covers exactly the extensions `check_file` parses, and is silent
+	// where it cannot tell rather than guessing.
+	const broken = "function gen() { if (x) { return 1; } } }";
+
+	it("says so in front of the answer, not instead of it", async () => {
+		const provider = stubProvider({
+			readFile: async () => broken,
+			definitions: async () => [location("/repo/src/app.js", 4, 2)],
+			readLine: async () => "const run = () => {}",
+		});
+
+		const output = await run(provider, {
+			operation: "definition",
+			path: "src/app.js",
+			symbol: "run",
+		});
+
+		expect(output).toContain("does not parse");
+		expect(output).toContain("check_file");
+		// The answer still arrives; the warning qualifies it.
+		expect(output).toContain("src/app.js:5:3");
+	});
+
+	it("qualifies document_symbols too", async () => {
+		const provider = stubProvider({
+			readFile: async () => broken,
+			documentSymbols: async () => [
+				symbol("gen", "function", "/repo/src/app.js", 0),
+			],
+		});
+
+		const output = await run(provider, {
+			operation: "document_symbols",
+			path: "src/app.js",
+		});
+
+		expect(output).toContain("does not parse");
+		expect(output).toContain("function gen");
+	});
+
+	it("is silent about a language it cannot parse", async () => {
+		// TypeScript does not go through `new Function`, so a `.ts` file is
+		// never reported as broken here -- a miss, and the safe direction.
+		const provider = stubProvider({
+			readFile: async () => broken,
+			references: async () => [],
+		});
+
+		const output = await run(provider, {
+			operation: "references",
+			path: "src/app.ts",
+			symbol: "run",
+		});
+
+		expect(output).toBe("No references found.");
+	});
+
+	it("says nothing when the file parses", async () => {
+		const provider = stubProvider({
+			readFile: async () => "const run = () => {};",
+			references: async () => [],
+		});
+
+		const output = await run(provider, {
+			operation: "references",
+			path: "src/app.js",
+			symbol: "run",
+		});
+
+		expect(output).toBe("No references found.");
+	});
+
+	it("loses the warning, not the answer, when the host cannot read files", async () => {
+		// `readFile` is optional on the provider: a host without it still
+		// answers, it just cannot qualify what it answered.
+		const output = await run(stubProvider({ references: async () => [] }), {
+			operation: "references",
+			path: "src/app.ts",
+			symbol: "run",
+		});
+
+		expect(output).toBe("No references found.");
+	});
+});

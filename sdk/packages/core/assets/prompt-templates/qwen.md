@@ -281,7 +281,9 @@ Reach for it the moment you are about to do one of these by hand:
   - Known file: `path` + `symbol` (or `line` + `character`).
   - Unknown file: `symbol` + `operation: "workspace_symbols"`.
 - **Arguments**: `operation` (string), `path` (string, optional), `symbol` (string, optional), `line` (number, optional), `character` (number, optional).
-- **Output**: Plain text listing results (`file:line:column` + source line). `hover` returns signature/docs. Empty results mean the symbol truly has no matches; do not fallback to grep.
+- **Output**: Plain text listing results (`file:line:column` + source line). `hover` returns signature/docs.
+- **Empty results**: definite for `definition`, `references`, `implementations`, `type_definition`, `callers` and `hover` — the symbol resolved and nothing matched, so do not fall back to grep. NOT definite for `workspace_symbols`, which reads a project index that skips script embedded in `.html` and other template files; it says so when empty, and `document_symbols` on the file — or `search_codebase` — is the right next step.
+- **`does not parse` line in front of an answer**: the server answered from a partial parse and the result is a guess. Fix the syntax first, with `check_file`.
 
 # tool: generate_image
 {{DEFAULT}}
