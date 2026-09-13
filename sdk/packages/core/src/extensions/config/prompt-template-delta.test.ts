@@ -166,3 +166,64 @@ describe("buildToolSectionDeltaPrompt", () => {
 		expect(prompt).toContain("Start your reply with `# tool: grep`");
 	});
 });
+
+/**
+ * A delta run knows what it handed the model. Until 2026-09-13 it did not check
+ * that anything came back changed.
+ *
+ * The verbatim-copy rule downstream compares a section against the BUILT-IN
+ * description, so it only fires while the section still holds the built-in
+ * text. Once a section has been written by anyone, a model can return it
+ * unchanged and the run reports clean. Measured both ways on `kimi-k3:cloud`:
+ * caught six times while the sections were built-in text, then NOT caught when
+ * the same behaviour returned the hand-written text it had just been shown.
+ */
+describe("a section returned exactly as it was handed over", () => {
+	const base = [
+		"---",
+		"name: sample",
+		'family: ["qwen*"]',
+		"---",
+		"",
+		"# system",
+		"",
+		"Base system text.",
+		"",
+		"# tool: grep",
+		"",
+		"The original grep words, written by somebody.",
+		"",
+		"# tool: sed",
+		"",
+		"The original sed words, written by somebody.",
+		"",
+	].join("\n");
+
+	const bodyOf = (raw: string, tool: string) =>
+		splitTemplateSections(raw).find((section) => section.name === tool)?.body;
+
+	it("is byte-identical after a splice, which is what makes it invisible", () => {
+		// The splice itself is not the bug: handing a section back unchanged
+		// produces a correct, unchanged file. Nothing downstream can tell that
+		// from a rewrite that happened to agree.
+		const unchanged = new Map([["grep", bodyOf(base, "grep") as string]]);
+		const spliced = spliceToolSections(base, unchanged).template;
+		expect(spliced).toBe(base);
+	});
+
+	it("is distinguishable from a real rewrite by comparing against the input", () => {
+		const prior = new Map(
+			splitTemplateSections(base)
+				.filter((section) => section.name !== undefined)
+				.map((section) => [section.name as string, section.body]),
+		);
+		const reply = new Map([
+			["grep", prior.get("grep") as string],
+			["sed", "Different words that say the same thing about sed."],
+		]);
+		const returnedUnchanged = [...reply]
+			.filter(([name, body]) => prior.get(name) === body)
+			.map(([name]) => name);
+		expect(returnedUnchanged).toEqual(["grep"]);
+	});
+});

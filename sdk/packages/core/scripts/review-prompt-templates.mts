@@ -89,7 +89,26 @@ const RUN_STAMP = (() => {
  * Everything this does NOT set is the tag's own sourced parameter, which is why
  * the header records both.
  */
-const REQUEST_OPTIONS: Record<string, number> = { temperature: 0.2 };
+const DEFAULT_TEMPERATURE = 0.2;
+
+/**
+ * The sampler the request actually sends, built once per run.
+ *
+ * Still one value read by both the request and the header, which is the whole
+ * point of naming it: the header cannot claim a temperature the request did not
+ * send. `--temperature` moves both together or neither.
+ *
+ * Why it is adjustable at all: at 0.2 a model asked to rewrite a tool
+ * description it has just been shown will sometimes hand the same text straight
+ * back. `kimi-k3:cloud` did exactly that for `grep`, `sed` and `awk` -- six
+ * attempts across two runs on 2026-09-12, the built-in text returned verbatim
+ * every time, and the tag sources no parameters of its own, so 0.2 was the only
+ * sampler in play. Copying is the low-temperature failure, and it has no other
+ * knob.
+ */
+function requestOptions(temperature: number): Record<string, number> {
+	return { temperature };
+}
 
 function describeSampler(sampler: Record<string, number>): string[] {
 	const keys = Object.keys(sampler);
@@ -130,6 +149,11 @@ function stampProvenance(
 		 */
 		familyDeclared: boolean;
 		sourced: string | undefined;
+		/**
+		 * The request's own options. Passed in rather than read from a module
+		 * constant so this header records what THIS run sent.
+		 */
+		sampler: Record<string, number>;
 		runDir: string;
 		/**
 		 * Set when only some sections were rewritten.
@@ -178,7 +202,7 @@ function stampProvenance(
 		`     Run, with its log: ${details.runDir.replace(/^.*?(?=prompt-reviews\/)/, "")}`,
 		"",
 		"     Sampler asked for by the generator, overriding the model's own:",
-		...describeSampler(REQUEST_OPTIONS),
+		...describeSampler(details.sampler),
 		"",
 		"     Sampler the tag sources (`/api/show`), which applies to every key",
 		"     the request above does not set:",
@@ -312,6 +336,8 @@ interface Options {
 	regenRoot: string;
 	timeoutMs: number;
 	attempts: number;
+	/** Sent as the request's `temperature`, and recorded in the header. */
+	temperature: number;
 	/** Extra tools a rewrite must address, on top of REQUIRED_MENTIONS. */
 	require: string[];
 	/**
@@ -378,6 +404,7 @@ function parseArgs(argv: string[]): Options {
 	let regenRoot = DEFAULT_REGEN_ROOT;
 	let timeoutMs = DEFAULT_TIMEOUT_MS;
 	let attempts = DEFAULT_ATTEMPTS;
+	let temperature = DEFAULT_TEMPERATURE;
 	const require: string[] = [];
 	const onlyTools: string[] = [];
 	const matchModel: string[] = [];
@@ -469,6 +496,17 @@ function parseArgs(argv: string[]): Options {
 				require.push(value);
 				index++;
 				break;
+			case "--temperature":
+				if (!value) {
+					throw new Error("--temperature needs a number");
+				}
+				temperature = Number(value);
+				if (!Number.isFinite(temperature) || temperature < 0) {
+					throw new Error(`--temperature must be a number >= 0, got ${value}`);
+				}
+				index++;
+				break;
+
 			case "--attempts":
 				if (!value) {
 					throw new Error("--attempts needs a number");
@@ -490,6 +528,7 @@ function parseArgs(argv: string[]): Options {
 		regenRoot,
 		timeoutMs,
 		attempts,
+		temperature,
 		require,
 		onlyTools,
 		matchModel,
@@ -698,7 +737,7 @@ async function review(model: string, options: Options): Promise<boolean> {
 						// which produces a file of prose and an audit that
 						// says the file does not parse. See `Options.think`.
 						think: options.think ?? false,
-						options: REQUEST_OPTIONS,
+						options: requestOptions(options.temperature),
 						messages,
 					},
 					options.timeoutMs,
@@ -719,6 +758,7 @@ async function review(model: string, options: Options): Promise<boolean> {
 				family,
 				familyDeclared: options.family !== undefined,
 				sourced: facts.sourced,
+				sampler: requestOptions(options.temperature),
 				runDir,
 				...(options.onlyTools.length > 0
 					? {

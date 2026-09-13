@@ -356,8 +356,23 @@ without reasoning. Everything else needs one or more of these.
 | `--think` | the model writes its reasoning into `content` when thinking is off | `does not parse: no '# system' or '# tool: <name>' section`, and the file is prose |
 | `--name <template>` | the written file must keep a name the model would not infer | the proposal is named after the overlay tag |
 | `--match-family` / `--match-model` | **creating** a split, or an overlay whose own name is scaffolding | the match block claims the wrong thing, or claims nothing |
+| `--temperature <n>` | the model hands a tool description straight back instead of rewriting it | `the '# tool: X' section is the built-in description copied out word for word`, on every attempt |
 
-Two of these are recent and neither is guessable from a failure message:
+Three of these are recent and none is guessable from a failure message:
+
+**`--temperature`.** The generator pins `temperature 0.2`, and at 0.2 a model
+asked to rewrite a description it has just been shown will sometimes hand the
+same text back. That is a *different* failure from truncation and degeneration
+(§ "When a cloud model cannot produce a template"), and an overlay cannot fix it:
+the request's `options` override a Modelfile `PARAMETER`, so a params layer
+setting a temperature is ignored. The flag is the only lever.
+
+Measured on `kimi-k3:cloud`, which sources no parameters of its own, so 0.2 was
+the entire sampler: six attempts across two runs on 2026-09-12 returned the
+built-in `grep`, `sed` and `awk` text verbatim every time, and the three
+sections were written by hand instead. The flag moves the request and the
+provenance header together — the header cannot record a temperature the request
+did not send — so a template written at a non-default temperature says so.
 
 **`--family`.** A params overlay built `FROM` a cloud tag carries no weights, so
 `/api/show` answers `family: ""`. Routing then resolves to `default`, and the

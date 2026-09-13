@@ -1394,6 +1394,43 @@ export async function generatePromptTemplate(
 					`The reply has a section for ${parsed.unknown.map((name) => `\`${name}\``).join(", ")}, which ${parsed.unknown.length === 1 ? "is not a tool that exists" : "are not tools that exist"}. Write sections only for ${onlyTools.join(", ")}.`,
 				);
 			}
+			// A section returned exactly as it was handed over is not a rewrite,
+			// and until now nothing could say so. The verbatim check downstream
+			// compares against the BUILT-IN description, so it only catches a
+			// copy while the section still holds the built-in text: once a
+			// section has been written by anyone, a model can hand it straight
+			// back and audit clean.
+			//
+			// Measured on `kimi-k3:cloud`. Asked six times on 2026-09-12 for
+			// `grep`, `sed` and `awk` it returned the built-in text verbatim and
+			// was caught; the sections were then written by hand. Asked again on
+			// 2026-09-13 it returned all four sections byte-identical to that
+			// hand-written input and the run reported "clean on attempt 2".
+			// Same behaviour, opposite verdict, because the check was looking at
+			// the wrong thing.
+			const before = new Map(
+				splitTemplateSections(familyTemplate as string)
+					.filter((section) => section.name !== undefined)
+					.map((section) => [section.name as string, section.body]),
+			);
+			const unchanged = [...wanted]
+				.filter(([name, body]) => {
+					const prior = before.get(name);
+					return (
+						prior !== undefined &&
+						normalizeForComparison(prior) === normalizeForComparison(body)
+					);
+				})
+				.map(([name]) => name);
+			if (unchanged.length > 0) {
+				deltaProblems.push(
+					`The ${unchanged
+						.map((name) => `'# tool: ${name}'`)
+						.join(
+							", ",
+						)} section${unchanged.length === 1 ? " came" : "s came"} back exactly as ${unchanged.length === 1 ? "it was" : "they were"} handed over, character for character. That is not a rewrite -- it is the text you were shown. Say it the way you would say it to yourself: keep every fact, change the words.`,
+				);
+			}
 			raw = spliceToolSections(familyTemplate as string, wanted).template;
 		} else {
 			raw = extractTemplateFromReply(reply);
