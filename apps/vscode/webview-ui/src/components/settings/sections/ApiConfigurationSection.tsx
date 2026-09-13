@@ -276,16 +276,13 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 									try {
 										// If unchecking the toggle, wait a bit for state to update, then sync configurations
 										if (!checked) {
-											await syncModeConfigurations(
-												apiConfiguration,
-												activeTab === "vision" ||
-													activeTab === "agents" ||
-													activeTab === "escalation" ||
-													activeTab === "imagegen"
-													? mode
-													: activeTab,
-												handleFieldsChange,
-											)
+											// `activeTab` is a plan/act mode here: this
+											// whole stack only renders on the Model
+											// tab, which is what `onModelTab` above
+											// establishes. The scoped-tab fallback to
+											// `mode` that used to stand here is dead
+											// code inside that branch.
+											await syncModeConfigurations(apiConfiguration, activeTab, handleFieldsChange)
 										}
 										await StateServiceClient.updateSettings(
 											UpdateSettingsRequest.create({
