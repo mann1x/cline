@@ -3,6 +3,7 @@ import { useClickAway } from "react-use"
 import { useAutoApproveActions } from "@/hooks/useAutoApproveActions"
 import { getAsVar, VSC_TITLEBAR_INACTIVE_FOREGROUND } from "@/utils/vscStyles"
 import AutoApproveMenuItem from "./AutoApproveMenuItem"
+import ChangeProtocolSection from "./ChangeProtocolSection"
 import { ActionMetadata } from "./types"
 
 const breakpoint = 500
@@ -78,6 +79,12 @@ const AutoApproveModal: React.FC<AutoApproveModalProps> = ({ isVisible, setIsVis
 						Docs
 					</a>
 				</div>
+
+				{/* Above the approval list rather than in it: this is not another
+				    thing to approve, it is whether the work is being judged at
+				    all, and it is the thing a user opens this panel for once
+				    they have hit a bug worth the cost. */}
+				<ChangeProtocolSection />
 
 				<div
 					className="relative mb-2 w-full"

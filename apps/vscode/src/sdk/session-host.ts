@@ -55,6 +55,14 @@ export interface SdkSessionHost {
 		prompt: string
 	}): Promise<ConfiguredAgentDelegationResult>
 	/** The same, run beside the turn rather than in place of it. */
+	/**
+	 * Stand the change protocol down for this session.
+	 *
+	 * The runtime owns the moment, not the caller: judging the open transaction
+	 * can put files back, and that write must not land while a tool call is
+	 * still open. Resolving does not mean it has happened yet.
+	 */
+	disengageAtomicProtocol?(sessionId: string): Promise<boolean>
 	startBackgroundDelegation?(input: { sessionId: string; agentName: string; prompt: string }): Promise<BackgroundDelegationView>
 	/** The background delegations of one session, for the panel. */
 	listBackgroundDelegations?(sessionId: string): Promise<BackgroundDelegationView[]>

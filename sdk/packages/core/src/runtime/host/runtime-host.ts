@@ -442,6 +442,17 @@ export interface RuntimeHost {
 	 * that is the whole point of it -- and the report is delivered whenever the
 	 * run finishes, into whatever the conversation is doing by then.
 	 */
+	/**
+	 * The user turned the change protocol off for this session.
+	 *
+	 * Optional because a host without the protocol has nothing to stand down.
+	 * The implementation owns the timing: putting a discarded transaction's
+	 * files back must not race a tool call that is still open, so this may
+	 * complete without having done it yet.
+	 *
+	 * @returns whether there was a protocol running to stand down.
+	 */
+	disengageAtomicProtocol?(sessionId: string): Promise<boolean>;
 	startBackgroundDelegation?(input: {
 		sessionId: string;
 		agentName: string;

@@ -137,6 +137,15 @@ export class VscodeSessionHost implements SdkSessionHost {
 		return this.inner.updateSessionModel(sessionId, modelId)
 	}
 
+	/**
+	 * The user turned the change protocol off. Passed straight through: the
+	 * runtime decides when, because it is the only layer that knows whether a
+	 * tool call is open, and a rollback must not land while one is.
+	 */
+	disengageAtomicProtocol(sessionId: string): Promise<boolean> {
+		return this.inner.disengageAtomicProtocol(sessionId)
+	}
+
 	static async create(options: VscodeSessionHostOptions): Promise<VscodeSessionHost> {
 		// Build tool executor capabilities from options — only include keys that are provided.
 		// When a terminal manager is available, suppress the SDK's built-in run_commands

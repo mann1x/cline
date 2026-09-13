@@ -4,6 +4,7 @@
 // Controller but delegates session lifecycle (initTask, askResponse,
 // cancelTask, …) to the Cline SDK (@cline/core) and bridges SDK events to
 // the webview's gRPC streams.
+
 import * as fs from "node:fs/promises"
 import * as path from "node:path"
 import type { BackgroundDelegationView, ConfiguredAgentDelegationResult, ConfiguredAgentSummary } from "@cline/core"
@@ -22,6 +23,8 @@ import {
 	type UserInstructionConfigService,
 } from "@cline/core"
 import { formatDisplayUserInput, type RemoteConfig, type RemoteConfigBundle } from "@cline/shared"
+import type { AtomicProtocolSessionSettings } from "@shared/AtomicProtocolSettings"
+import { DEFAULT_ATOMIC_PROTOCOL_SESSION } from "@shared/AtomicProtocolSettings"
 import type { ApiConfiguration } from "@shared/api"
 import type { ChatContent } from "@shared/ChatContent"
 import { CLINE_ACCOUNT_AUTH_ERROR_MESSAGE } from "@shared/ClineAccount"
@@ -2009,6 +2012,68 @@ export class Controller {
 
 	async togglePlanActMode(modeToSwitchTo: Mode, chatContent?: ChatContent): Promise<boolean> {
 		return this.mode.togglePlanActMode(modeToSwitchTo, chatContent)
+	}
+
+	// ---- The change protocol, per task ----
+
+	/**
+	 * Apply the per-task half of the change protocol: its check, and the switch.
+	 *
+	 * A delta. Absent fields are untouched, because the panel posts only what
+	 * the user changed and a merge that read absence as "cleared" would wipe the
+	 * expect pattern on the first keystroke of an oracle command.
+	 *
+	 * Two of the three outcomes do more than store a value:
+	 *
+	 * - **Engaging** needs the session rebuilt. The protocol's tools and its
+	 *   completion boundary are bound when a session is built, so a flag on its
+	 *   own would change nothing until the next task. The rebuild keeps the
+	 *   conversation -- it is the same one a Plan/Act switch already does.
+	 * - **Disengaging** must not rebuild. A rebuild interrupts the turn, which
+	 *   is exactly what steering the model instead is for, so this asks the
+	 *   runtime to stand down and the runtime picks the moment: now if the
+	 *   session is idle, otherwise at the next point in the agent loop with no
+	 *   tool call open. It judges what is open and may put files back, and that
+	 *   write must never land while the model is mid-edit.
+	 */
+	async updateAtomicProtocolSession(update: {
+		engaged?: boolean
+		oracleCommand?: string
+		oracleExpect?: string
+		proposeCheck?: boolean
+	}): Promise<void> {
+		const stored = this.stateManager.getGlobalSettingsKey("atomicProtocolSession") ?? DEFAULT_ATOMIC_PROTOCOL_SESSION
+		const next: AtomicProtocolSessionSettings = {
+			...DEFAULT_ATOMIC_PROTOCOL_SESSION,
+			...stored,
+			...(update.engaged !== undefined ? { engaged: update.engaged } : {}),
+			...(update.oracleCommand !== undefined ? { oracleCommand: update.oracleCommand } : {}),
+			...(update.oracleExpect !== undefined ? { oracleExpect: update.oracleExpect } : {}),
+			...(update.proposeCheck !== undefined ? { proposeCheck: update.proposeCheck } : {}),
+		}
+		const engaging = next.engaged && !stored.engaged
+		const disengaging = !next.engaged && stored.engaged
+
+		// Task scope where there is a task, which is the point of this setting.
+		// Without one it is still worth storing: the user can arm the next task
+		// from an empty chat, and a value written globally is what a new task
+		// with nothing of its own falls back to.
+		const taskId = this.task?.taskId
+		if (taskId) {
+			this.stateManager.setTaskSettings(taskId, "atomicProtocolSession", next)
+		} else {
+			this.stateManager.setGlobalState("atomicProtocolSession", next)
+		}
+
+		const activeSession = this.sessions.getActiveSession()
+		if (activeSession && disengaging) {
+			await activeSession.sdkHost.disengageAtomicProtocol?.(activeSession.sessionId)
+		} else if (activeSession && engaging) {
+			await this.mode.rebuildSessionForMode(this.stateManager.getGlobalSettingsKey("mode"), {
+				source: "ui",
+			})
+		}
+		await this.postStateToWebview()
 	}
 
 	// ---- Telemetry ----

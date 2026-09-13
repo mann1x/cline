@@ -529,6 +529,22 @@ export class ClineCore {
 	};
 
 	/**
+	 * Stand the change protocol down for a session, because the user said so.
+	 *
+	 * Resolving does not mean it has happened: the runtime picks the moment,
+	 * because judging the open transaction can put files back and that write
+	 * must not land while a tool call is still open.
+	 *
+	 * @returns whether there was a protocol running to stand down.
+	 */
+	disengageAtomicProtocol = (sessionId: string): Promise<boolean> => {
+		if (!this.host.disengageAtomicProtocol) {
+			return Promise.resolve(false);
+		}
+		return this.host.disengageAtomicProtocol(sessionId);
+	};
+
+	/**
 	 * Starts a configured agent beside the current turn rather than in place of
 	 * it. Returns as soon as the run exists; the report arrives in the
 	 * conversation whenever the agent is done.

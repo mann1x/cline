@@ -384,6 +384,30 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			})
 		}
 
+		// The per-task half of the change protocol, from the auto-approve panel.
+		// A delta for the same proto3 reason as the settings above, and handled
+		// on the controller rather than here because two of its three outcomes
+		// do more than store a value: engaging rebuilds the session so the
+		// protocol's tools exist, and disengaging asks the runtime to stand down
+		// at a moment of its own choosing, since judging the open transaction can
+		// put files back and that must not race an open tool call.
+		if (request.atomicProtocolSession !== undefined) {
+			await controller.updateAtomicProtocolSession({
+				...(request.atomicProtocolSession.engaged !== undefined
+					? { engaged: request.atomicProtocolSession.engaged }
+					: {}),
+				...(request.atomicProtocolSession.oracleCommand !== undefined
+					? { oracleCommand: request.atomicProtocolSession.oracleCommand }
+					: {}),
+				...(request.atomicProtocolSession.oracleExpect !== undefined
+					? { oracleExpect: request.atomicProtocolSession.oracleExpect }
+					: {}),
+				...(request.atomicProtocolSession.proposeCheck !== undefined
+					? { proposeCheck: request.atomicProtocolSession.proposeCheck }
+					: {}),
+			})
+		}
+
 		// QA credentials. A delta, because the settings view knows the names and
 		// never the values, so it has nothing to send back for one the user did
 		// not touch. Rejected entries are logged by name in the store; nothing
