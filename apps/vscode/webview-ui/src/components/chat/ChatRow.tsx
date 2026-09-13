@@ -141,7 +141,14 @@ const ChatRow = memo(
 		const prevHeightRef = useRef(0)
 
 		const [chatrow, { height }] = useSize(
-			<div className="relative pt-2.5 px-4">
+			// `pr-1` and not `px-4`: the scrollbar's gutter is subtracted from this
+			// element's content box before its own padding is applied, so a
+			// symmetric `px-4` put the text 28px from the panel edge while the task
+			// header above it sits at 16px. The chat column read as narrower than
+			// everything around it, and the shortfall lined up with the bar into one
+			// dead band down the whole right edge. 12px of gutter plus 4px here is
+			// the same 16px, and the 4px is what keeps the text off the track.
+			<div className="relative pt-2.5 pl-4 pr-1">
 				<ChatRowContent {...props} />
 			</div>,
 		)

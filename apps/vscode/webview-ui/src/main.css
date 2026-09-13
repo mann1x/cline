@@ -86,6 +86,50 @@ https://github.com/microsoft/vscode/issues/213045
 }
 
 /*
+The chat list's own scrollbar.
+
+Deliberately not `.scrollable`. That rule paints its thumb with an enormous
+inset right border (`border-right-width: calc(100vw + 100vh)`) and
+`border-radius: unset`, which is what makes it a hard-edged block filling the
+full width of the track, flush against the panel edge. A border that wide cannot
+be rounded and cannot be inset, so the chat gets its own rules rather than
+fighting those.
+
+The thumb is painted into its content box only, so the transparent border
+becomes real space on both sides: it keeps the bar off the text on one side and
+off the panel edge on the other, and leaves it reading as something floating
+inside the message list rather than as a column reserved down the whole view.
+
+Width here and `pr-1` on the row in ChatRow.tsx are one measurement, not two:
+together they put the chat text the same 16px from the edge as the task header
+above it.
+*/
+
+.chat-scrollable::-webkit-scrollbar {
+	width: 12px;
+}
+
+.chat-scrollable::-webkit-scrollbar-track,
+.chat-scrollable::-webkit-scrollbar-corner {
+	background-color: transparent;
+}
+
+.chat-scrollable::-webkit-scrollbar-thumb {
+	background-color: var(--vscode-scrollbarSlider-background);
+	background-clip: content-box;
+	border: 3px solid transparent;
+	border-radius: 999px;
+}
+
+.chat-scrollable::-webkit-scrollbar-thumb:hover {
+	background-color: var(--vscode-scrollbarSlider-hoverBackground);
+}
+
+.chat-scrollable::-webkit-scrollbar-thumb:active {
+	background-color: var(--vscode-scrollbarSlider-activeBackground);
+}
+
+/*
 The above scrollbar styling uses some transparent background color magic to accomplish its animation. However this doesn't play nicely with SyntaxHighlighter, so we need to set a background color for the code blocks' horizontal scrollbar. This actually has the unintended consequence of always showing the scrollbar which I prefer since it makes it more obvious that there is more content to scroll to.
 */
 

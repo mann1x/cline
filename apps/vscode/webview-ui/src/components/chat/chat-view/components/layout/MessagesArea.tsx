@@ -241,7 +241,12 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 				    causes no visual jump. Virtuoso stays mounted (empty) underneath, so it is
 				    already warm when the first real row arrives. */}
 				{showEmptyListLoader && (
-					<div className="absolute inset-0 overflow-hidden">
+					// `pr-3` stands in for the scrolled list's scrollbar gutter. This
+					// row is rendered outside the scroller, so without it the
+					// placeholder would sit 12px wider than the real row that
+					// replaces it -- which is the visual jump this fast path exists
+					// to avoid.
+					<div className="absolute inset-0 overflow-hidden pr-3">
 						<ChatRow
 							inputValue={inputValue}
 							isExpanded={false}
@@ -272,7 +277,7 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 					// while the list is still growing under you is not something a reader
 					// can do. Landing near the bottom is the intent.
 					atBottomThreshold={64}
-					className="scrollable grow overflow-y-scroll"
+					className="chat-scrollable grow overflow-y-scroll"
 					components={virtuosoComponents}
 					data={displayedGroupedMessages}
 					// increasing top by 3_000 to prevent jumping around when user collapses a row
