@@ -7,8 +7,19 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentToolContext } from "@cline/shared";
+import { describeDelimiterBalance } from "../delimiter-balance";
 import type { EditFileInput } from "../schemas";
 import type { EditorExecutor } from "../types";
+import type { ReadReceipts } from "./read-receipts";
+
+/**
+ * The largest file worth re-scanning for bracket balance after an edit.
+ *
+ * The scan walks every character. Nothing a model edits line by line is this
+ * big, and a bundle or a data file that is would pay for the whole walk on
+ * every call to say nothing useful.
+ */
+const MAX_SCANNED_BYTES = 2_000_000;
 
 /**
  * Options for the editor executor
@@ -32,6 +43,16 @@ export interface EditorExecutorOptions {
 	 * @default 200
 	 */
 	maxDiffLines?: number;
+
+	/**
+	 * Shared record of what has been read, used to refuse an edit aimed at
+	 * lines the model has never seen.
+	 *
+	 * Optional, and the guard is off when it is absent: an executor built on
+	 * its own has no reader to pair with, and failing every edit would be the
+	 * wrong default for an embedder wiring the tools up one at a time.
+	 */
+	receipts?: ReadReceipts;
 }
 
 function resolveFilePath(
@@ -219,15 +240,36 @@ async function replaceInFile(
 
 	const content = await fs.readFile(filePath, encoding);
 	const eol = detectLineEnding(content);
-	const normalizedOldStr = normalizeLineEndings(oldStr, eol);
-	const normalizedNewStr = normalizeLineEndings(newStr ?? "", eol);
-	const occurrences = countOccurrences(content, normalizedOldStr);
+	let normalizedOldStr = normalizeLineEndings(oldStr, eol);
+	let normalizedNewStr = normalizeLineEndings(newStr ?? "", eol);
+	let occurrences = countOccurrences(content, normalizedOldStr);
+
+	// `read_files` renders content as `  92 | <text>` and the model pastes the
+	// gutter back in. Naming the mistake was not enough: mined from real
+	// sessions, one model made this exact error ten times in a row against an
+	// error message that explains it precisely, and every attempt cost a full
+	// generation of the replacement text. So recover instead of refusing.
+	//
+	// Safe because the file decides. The gutter is only stripped when the
+	// stripped text then actually occurs in the file — that match is the
+	// evidence, not the shape of the input, so a file that genuinely contains
+	// `123 | ` text is unaffected. `new_text` is stripped on the same condition
+	// it is detected on: a model in "gutter mode" numbers both, and writing the
+	// gutter *into* the file is the worse failure of the two.
+	if (occurrences === 0 && hasLineNumberGutter(normalizedOldStr)) {
+		const strippedOld = stripLineNumberGutter(normalizedOldStr);
+		const strippedOccurrences = countOccurrences(content, strippedOld);
+		if (strippedOccurrences > 0) {
+			normalizedOldStr = strippedOld;
+			occurrences = strippedOccurrences;
+			if (hasLineNumberGutter(normalizedNewStr)) {
+				normalizedNewStr = stripLineNumberGutter(normalizedNewStr);
+			}
+		}
+	}
 
 	if (occurrences === 0) {
-		// The commonest cause, measured on a live session: `read_files` renders
-		// content as `  92 | <text>` and the model pastes the gutter back in.
-		// Naming it turns a dead end into a retry that works.
-		const looksNumbered = /(^|\n)\s*\d+\s\|\s/.test(normalizedOldStr);
+		const looksNumbered = hasLineNumberGutter(normalizedOldStr);
 		throw new Error(
 			`No replacement performed: text not found in ${filePath}.${
 				looksNumbered
@@ -285,9 +327,150 @@ async function replaceInFile(
  * the model had to infer "no-op" from an absence. It re-sent the same edit,
  * then six identical inserts at the same line. An outcome a model has to
  * deduce from missing output is one it will deduce wrong.
+ *
+ * Saying so in prose was not enough either. A later session sent one identical
+ * call twelve times, each answered "The file was not modified — do not retry
+ * this edit", because the envelope around that sentence still said
+ * `success: true`. A model weighing a structured flag against a paragraph
+ * takes the flag, and the flag was telling it the edit had worked.
+ *
+ * So it throws. The tool wrapper turns that into `success: false` with the
+ * reason in `error`, which is exactly what the tool's own description already
+ * promises a failed edit looks like — and it is the truth: an edit that
+ * changed nothing did not do what it was asked to do.
+ *
+ * The wording names the thing the model actually had wrong, which was not
+ * "retrying is unwise" but "the text you sent is the text already there". It
+ * kept re-deriving the same replacement because it believed it was sending a
+ * fix.
  */
-function noChangeMessage(filePath: string, why: string): string {
-	return `No change: ${why} in ${filePath}. The file was not modified — do not retry this edit; re-read the region if you expected something different.`;
+/** Beyond this the quote stops being readable and starts being the file. */
+const MAX_NO_CHANGE_QUOTE_CHARS = 4_000;
+
+/**
+ * A file's lines, counted the way `read_files` counts them.
+ *
+ * Splitting on newlines yields one element more than the file has lines
+ * whenever it ends with a newline, because the text after the last separator is
+ * empty. `read_files` counts with `readline`, which does not emit that element,
+ * so the two tools described the same file as 270 lines and 271 lines. Measured
+ * live: a model was told "lines 1-270 is 270 of the file's 271 lines", could
+ * only see 270 in the read output, and spent its turns alternating between the
+ * two numbers trying to find the one that meant "the whole file".
+ *
+ * The trailing newline is kept and re-applied on write; it is a property of the
+ * file, not a line of it.
+ */
+function splitFileLines(content: string): {
+	lines: string[];
+	trailingNewline: boolean;
+} {
+	const lines = content.split(/\r\n|\n/);
+	const trailingNewline = lines.length > 1 && lines[lines.length - 1] === "";
+	if (trailingNewline) {
+		lines.pop();
+	}
+	return { lines, trailingNewline };
+}
+
+/** Reassemble what {@link splitFileLines} took apart. */
+function joinFileLines(
+	lines: readonly string[],
+	eol: string,
+	trailingNewline: boolean,
+): string {
+	return lines.join(eol) + (trailingNewline ? eol : "");
+}
+
+/**
+ * The lines as they stand, numbered the way `read_files` numbers them.
+ *
+ * Width is taken from the last line number in the span, matching the read
+ * renderer, so the two agree about how far the gutter is indented for the same
+ * range.
+ */
+function quoteCurrentLines(
+	content: string,
+	startOneBased: number,
+	endOneBased: number,
+): string | undefined {
+	const { lines } = splitFileLines(content);
+	const first = Math.max(1, startOneBased);
+	const last = Math.min(lines.length, endOneBased);
+	if (last < first) {
+		return undefined;
+	}
+	const width = String(last).length;
+	const rendered: string[] = [];
+	for (let n = first; n <= last; n++) {
+		rendered.push(`${String(n).padStart(width)} | ${lines[n - 1] ?? ""}`);
+	}
+	const text = rendered.join("\n");
+	return text.length > MAX_NO_CHANGE_QUOTE_CHARS
+		? `${text.slice(0, MAX_NO_CHANGE_QUOTE_CHARS)}\n… truncated`
+		: text;
+}
+
+/**
+ * Marker that opens every "this edit asks for nothing" refusal.
+ *
+ * Imported rather than copied wherever the outcome has to be recognised, so the
+ * detector cannot drift from the message. The loop tracker uses it: a call the
+ * tool has compared against the file and found identical is the one kind of
+ * failure that provably cannot succeed on a retry.
+ */
+export const NO_CHANGE_ERROR_PREFIX = "No change: ";
+
+function noChangeMessage(
+	filePath: string,
+	why: string,
+	quoted?: string,
+): never {
+	// The instruction to compare used to end "differs from the text quoted back
+	// to you" while quoting nothing at all. Measured on a live session: the
+	// model read that, went looking for the quote, found none, and fell back to
+	// re-reading the file — "the editor said No change but then showed a diff …
+	// let me read those lines VERY carefully". An instruction to diff against
+	// something has to carry the something.
+	const comparison = quoted
+		? ` If you meant to change something there, work out how the text you want differs from what those lines hold now — shown below — and send that; if the fix belongs on a different line, edit that line instead.\n\n${quoted}`
+		: ` If you meant to change something there, work out how the text you want differs from what is already in the file at that spot and send that; if the fix belongs on a different line, edit that line instead.`;
+	throw new Error(
+		`${NO_CHANGE_ERROR_PREFIX}${why} in ${filePath}. The file was not modified. What you sent as \`new_text\` is character-for-character what that part of the file already holds, so this edit asks for nothing and sending it again cannot help.${comparison}`,
+	);
+}
+
+/**
+ * Refuse a "replacement" that removed nothing and grew the range instead.
+ *
+ * Measured on a live session, on a dense single-file game: the model asked to
+ * replace lines 84-98 with a block that opened with those same fifteen lines
+ * and then restated the rest of the class. Nothing was removed, ~140 lines were
+ * added, and the class ended up in the file three times over. The result read
+ * `success: true` with the note "15 of the 15 line(s) in the range were already
+ * identical", which is true and reassuring and describes a file that had just
+ * been corrupted. Diagnostics went from 3 to 14 on that one call.
+ *
+ * The signature is exact: a range replacement that deletes none of the range it
+ * names, while adding more lines than the range holds, did not replace anything
+ * — it appended a second copy. Wrapping a block (try/catch, an if) removes
+ * nothing either, but adds a handful of lines rather than more than the block
+ * itself, so it stays under this.
+ */
+function duplicatedRangeMessage(
+	filePath: string,
+	range: string,
+	requestedLines: number,
+	added: number,
+	/** Set when the stripped gutter numbered past `end_line` — the cause, named. */
+	gutterSpan?: { firstLine: number; lastLine: number },
+): never {
+	const gutterHint = gutterSpan
+		? ` The gutter on your \`new_text\` covers lines ${gutterSpan.firstLine}-${gutterSpan.lastLine}, but the call names only ${range}: if you meant to replace ${gutterSpan.firstLine}-${gutterSpan.lastLine}, send \`end_line: ${gutterSpan.lastLine}\`.`
+		: "";
+	throw new Error(
+		`Duplicated instead of replaced: the edit to ${range} in ${filePath} was not applied. None of the ${requestedLines} line(s) you named were removed, yet ${added} new line(s) were added — so what you sent as \`new_text\` opens with the text already at ${range} and then continues, which appends a second copy rather than replacing anything.${gutterHint} If you meant to rewrite that range, send only the text that should end up there, without restating the lines that are already at ${range}. If you meant to add code, insert it at the line it belongs on instead. Re-read the file first: after earlier edits the line numbers you are working from may no longer point at what you think.`,
+	);
 }
 
 /**
@@ -340,7 +523,7 @@ async function replaceLineRange(
 ): Promise<string> {
 	const content = await fs.readFile(filePath, encoding);
 	const eol = detectLineEnding(content);
-	const lines = content.split(/\r\n|\n/);
+	const { lines, trailingNewline } = splitFileLines(content);
 
 	if (startLineOneBased < 1 || startLineOneBased > lines.length) {
 		throw new Error(
@@ -361,23 +544,134 @@ async function replaceLineRange(
 	// route we point at for rewriting a file whole.
 	const effectiveEndLine = Math.min(endLineOneBased, lines.length);
 
+	// A range edit with no `old_text` asserts nothing about the file: the model
+	// names two numbers and trusts its memory of what lives between them.
+	// Anchored edits are self-verifying — the file must actually contain the
+	// text — so the larger an *unanchored* range grows, the more it is a
+	// whole-file rewrite wearing a range's clothing.
+	//
+	// Measured: `start_line: 30, end_line: 134` with 101 replacement lines in a
+	// 138-line file, which left 278 problems behind. Every existing guard
+	// passed it — read-before-edit was satisfied, and the "adds more lines than
+	// the range holds" check passes because 101 < 105. Telling the model in
+	// prose that whole-file rewrites are a last resort did not stop it either,
+	// so this is the enforcement.
+	const spanned = effectiveEndLine - startLineOneBased + 1;
+	// Lines 1..count is not a range wearing a rewrite's clothing — it *is* the
+	// rewrite, stated plainly, and it is the shape this tool's own errors send
+	// the model to when the create form is refused on an existing file. Refusing
+	// it too left no reachable way to rewrite a file at all: measured, the model
+	// was bounced between three guards for five calls and ~52,000 characters of
+	// generated text before giving up and editing in pieces. A partial range
+	// that merely covers most of the file is still refused below — that is the
+	// case the guard was written for, where the model believes it is touching
+	// part of the file and is not.
+	const isFullSpanRewrite =
+		startLineOneBased === 1 && effectiveEndLine === lines.length;
+	if (
+		!isFullSpanRewrite &&
+		spanned > MAX_UNANCHORED_RANGE_LINES &&
+		spanned > lines.length * MAX_UNANCHORED_RANGE_SHARE
+	) {
+		throw new Error(
+			`No replacement performed: lines ${startLineOneBased}-${effectiveEndLine} is ${spanned} of the file's ${lines.length} lines, and the call carries no \`old_text\` to check it against. An unanchored replacement this large is a whole-file rewrite, and one that is slightly wrong duplicates or drops the parts it did not mean to touch. Make the edit in smaller pieces, each anchored with the \`old_text\` it replaces, or send \`old_text\` for this range so the file can verify it — or, if you do mean to rewrite the file, say so exactly with \`start_line: 1\` and \`end_line: ${lines.length}\`. ${lines.length} is the file's length right now, counted a moment ago; if your last read said otherwise, the file has changed since — most often because of your own edits — and this number is the current one. Anything larger works too: an \`end_line\` past the end of the file means "to the end of the file", so you never have to know the count exactly.`,
+		);
+	}
+
+	// Strip the read gutter the model pasted back in.
+	//
+	// The `old_text` form recovers from this already, and can, because the file
+	// itself decides: strip, and see whether the text now occurs. A range edit
+	// has no such anchor, so nothing stopped a gutter from being written *into*
+	// the file. Measured live: `new_text` of "  135 | </body>\n  136 | </html>"
+	// against `start_line: 135` was accepted verbatim, and the file's last two
+	// lines became the read output that described them.
+	//
+	// The numbers are the evidence instead. Text whose gutter counts up from
+	// exactly `start_line` came from a read of exactly this range; content that
+	// happens to begin "  135 | " on line 135, then "  136 | " on line 136, does
+	// not occur. So the check is narrow, and silence is the failure it prevents:
+	// a refusal would cost a turn, but a gutter written into a file is a
+	// corruption that reads as success.
+	const hadSequentialGutter =
+		newStr != null &&
+		newStr !== "" &&
+		hasSequentialGutter(newStr, startLineOneBased);
+	const replacementText = hadSequentialGutter
+		? stripLineNumberGutter(normalizeLineEndings(newStr as string, eol))
+		: newStr;
+
+	// The gutter also says which lines the text was read from, and that is worth
+	// keeping: when its last number runs past `end_line`, the call names a
+	// narrower range than the text it carries. Measured: `start_line: 129,
+	// end_line: 129` with a gutter of 129, 130, 131 — one line named, three
+	// pasted. The duplication guard below catches the consequence, but it
+	// describes the damage rather than the cause, leaving the model to work
+	// backwards from "2 new line(s) were added" to "I named one line".
+	//
+	// Said, never acted on. The gutter records where the text came FROM, not
+	// where it should go: a model rewriting one line into three could number
+	// them 129, 130, 131 just as legitimately, and widening the range for it
+	// would delete two lines nobody asked to touch.
+	const gutterLastLine = hadSequentialGutter
+		? startLineOneBased + countNonBlankLines(newStr as string) - 1
+		: undefined;
+	const gutterOverrunsRange =
+		gutterLastLine !== undefined && gutterLastLine > effectiveEndLine;
+
 	// An empty new_text deletes the range outright, which is the natural
 	// reading and what a caller removing a bad line wants.
+	//
+	// Split the way the file itself is split, trailing empty element and all.
+	// A plain split treats `new_text` ending in a newline -- which is how a
+	// model normally terminates a block of text -- as one more line than it
+	// wrote, and that phantom line is appended to the file on every edit.
+	//
+	// Measured, and it is the reason the editor looked unusable tonight: six
+	// consecutive whole-file rewrites of the same file, each refused with the
+	// model's `end_line` exactly one short of the file's length --
+	// "lines 1-136 is 136 of the file's 137 lines", then 125 of 126, then 186
+	// of 187, then 190 of 191. The file was growing a blank line per rewrite
+	// and the model's own read could never name the right number, because the
+	// number only became right after it had already been used. It shelled out
+	// to `(Get-Content).Count` to check, and the count it got was already stale.
 	const replacement =
-		newStr == null || newStr === "" ? [] : newStr.split(/\r\n|\n/);
+		replacementText == null || replacementText === ""
+			? []
+			: splitFileLines(replacementText).lines;
 	lines.splice(
 		startLineOneBased - 1,
 		effectiveEndLine - startLineOneBased + 1,
 		...replacement,
 	);
-	const updated = lines.join(eol);
+	const updated = joinFileLines(lines, eol, trailingNewline);
 	const range =
 		startLineOneBased === effectiveEndLine
 			? `line ${startLineOneBased}`
 			: `lines ${startLineOneBased}-${effectiveEndLine}`;
 
 	if (updated === content) {
-		return noChangeMessage(filePath, `${range} already reads exactly this way`);
+		return noChangeMessage(
+			filePath,
+			`${range} already reads exactly this way`,
+			quoteCurrentLines(content, startLineOneBased, effectiveEndLine),
+		);
+	}
+
+	// Everything that can refuse the edit has to run before the write, or a
+	// rejected edit still lands on disk and the model is told it failed.
+	const requestedLines = effectiveEndLine - startLineOneBased + 1;
+	const { removed, added } = changedLineCounts(content, updated);
+	if (removed === 0 && added > requestedLines) {
+		duplicatedRangeMessage(
+			filePath,
+			range,
+			requestedLines,
+			added,
+			gutterOverrunsRange
+				? { firstLine: startLineOneBased, lastLine: gutterLastLine as number }
+				: undefined,
+		);
 	}
 
 	await fs.writeFile(filePath, updated, { encoding });
@@ -387,14 +681,113 @@ async function replaceLineRange(
 	// lines where one was already correct shows a single line and reads like a
 	// half-applied edit. Measured: a model spent a turn asking whether line 90
 	// had been touched. Say it instead of leaving it to be inferred.
-	const requestedLines = effectiveEndLine - startLineOneBased + 1;
-	const { removed } = changedLineCounts(content, updated);
 	const unchanged = requestedLines - removed;
 	const note =
 		unchanged > 0
 			? ` (${unchanged} of the ${requestedLines} line(s) in the range were already identical, so the diff below does not show them)`
 			: "";
-	return `Replaced ${range} in ${filePath}${note}\n${diff}`;
+	return `Replaced ${range} in ${filePath}${note}\n${diff}${lineCountNote(content, updated, effectiveEndLine, filePath)}`;
+}
+
+/**
+ * How large an unanchored range replacement may be before it is refused.
+ *
+ * Both bounds must be exceeded. The absolute floor keeps small files editable —
+ * replacing 20 lines of a 25-line file is a normal rewrite of something tiny —
+ * while the share is what catches a "range" that is really the whole file.
+ */
+const MAX_UNANCHORED_RANGE_LINES = 60;
+const MAX_UNANCHORED_RANGE_SHARE = 0.5;
+
+/** `  92 | text` — the gutter `read_files` renders, on every non-empty line. */
+const LINE_NUMBER_GUTTER = /^\s*\d+\s\|\s?/;
+
+/**
+ * Whether every non-empty line carries the read gutter.
+ *
+ * Uniformity is the test rather than "any line matches": a single line that
+ * happens to start with a number and a pipe is ordinary source (a table row, a
+ * regex alternation), and stripping it would corrupt the text.
+ */
+function hasLineNumberGutter(text: string): boolean {
+	const lines = text.split("\n").filter((line) => line.trim() !== "");
+	if (lines.length === 0) {
+		return false;
+	}
+	return lines.every((line) => LINE_NUMBER_GUTTER.test(line));
+}
+
+/**
+ * Whether the gutter on this text numbers consecutively from `firstLine`.
+ *
+ * The narrow test that makes stripping safe without a file to match against.
+ * Every non-blank line must carry a gutter, and the numbers must run
+ * 1-by-1 from the line the edit starts at -- which is what a paste of a read
+ * of that range looks like, and what ordinary content does not.
+ */
+function hasSequentialGutter(text: string, firstLine: number): boolean {
+	if (!hasLineNumberGutter(text)) {
+		return false;
+	}
+	const numbered = text
+		.split(/\r\n|\n/)
+		.filter((line) => line.trim() !== "")
+		.map((line) => Number.parseInt(line.trim(), 10));
+	return numbered.every(
+		(value, index) => Number.isFinite(value) && value === firstLine + index,
+	);
+}
+
+/** Remove the read gutter, leaving the source's own indentation intact. */
+/** How many lines the gutter actually numbers — blank lines carry none. */
+function countNonBlankLines(text: string): number {
+	return text.split(/\r\n|\n/).filter((line) => line.trim() !== "").length;
+}
+
+function stripLineNumberGutter(text: string): string {
+	return text
+		.split("\n")
+		.map((line) =>
+			line.trim() === "" ? line : line.replace(LINE_NUMBER_GUTTER, ""),
+		)
+		.join("\n");
+}
+
+/**
+ * Say how the file's length changed, and by how much the lines below the edit
+ * moved.
+ *
+ * Every line number the model holds — from a diagnostic, from an earlier read,
+ * from its own plan — refers to the file as it was. An edit that changes the
+ * line count silently invalidates all of them below it. Measured: eight
+ * consecutive edits addressed lines 84-98 of a file that had meanwhile grown
+ * from ~120 lines to 440, so by the end the range named unrelated code and the
+ * edits landed on it.
+ *
+ * Only reported when the count actually changed; a same-size edit shifts
+ * nothing and the note would be noise — and it also leaves the read receipt
+ * intact, so the instruction to read again would be wrong as well as noisy.
+ *
+ * The note names the next action rather than only the fact, because stating
+ * the fact was not enough. Measured: a model read this, composed a large
+ * replacement anyway, and had it refused for editing from a retired read —
+ * minutes of generation thrown away. The cost of skipping the read is the
+ * part it needs to know, so the note says it.
+ */
+function lineCountNote(
+	oldContent: string,
+	newContent: string,
+	editedThroughLine: number,
+	filePathForNote = "this file",
+): string {
+	const before = splitFileLines(oldContent).lines.length;
+	const after = splitFileLines(newContent).lines.length;
+	if (before === after) {
+		return "";
+	}
+	const shift = after - before;
+	const direction = shift > 0 ? `+${shift}` : `${shift}`;
+	return `\n\nThe file is now ${after} lines (was ${before}). Every line after ${editedThroughLine} has moved by ${direction}, so line numbers you read before this edit no longer point at the same code. Your earlier read of ${filePathForNote} no longer counts as having read it: call \`read_files\` for the lines you intend to change next, before you compose that edit. An edit built on the old numbers is refused — and it is refused only after you have written the replacement out in full, so reading first is the cheaper path.`;
 }
 
 async function insertInFile(
@@ -415,7 +808,11 @@ async function insertInFile(
 	}
 
 	const insertLine = insertLineOneBased - 1;
-	lines.splice(insertLine, 0, ...newStr.split(/\r\n|\n/));
+	// Same convention as everywhere else here: a trailing newline terminates
+	// the text rather than adding a line to it. Without this, inserting "foo\n"
+	// -- the normal way to write one line -- inserts foo *and* a blank line, and
+	// the file drifts a line at a time exactly as it did on the range path.
+	lines.splice(insertLine, 0, ...splitFileLines(newStr).lines);
 	await fs.writeFile(filePath, lines.join(eol), { encoding });
 
 	return `Inserted content at line ${insertLineOneBased} in ${filePath}.`;
@@ -502,7 +899,11 @@ async function replaceColumnRange(
 			: `line ${startLineOneBased} column ${startColumnOneBased} through line ${endLineOneBased} column ${endColumnOneBased}`;
 
 	if (updated === content) {
-		return noChangeMessage(filePath, `${span} already reads exactly this way`);
+		return noChangeMessage(
+			filePath,
+			`${span} already reads exactly this way`,
+			quoteCurrentLines(content, startLineOneBased, endLineOneBased),
+		);
 	}
 
 	await fs.writeFile(filePath, updated, { encoding });
@@ -590,14 +991,110 @@ export function createEditorExecutor(
 		encoding = "utf-8",
 		restrictToCwd = true,
 		maxDiffLines = 200,
+		receipts,
 	} = options;
 
-	return async (
+	/** How many lines the file holds right now, or null if it has none to count. */
+	const countLines = async (filePath: string): Promise<number | null> => {
+		try {
+			return splitFileLines(await fs.readFile(filePath, encoding)).lines.length;
+		} catch {
+			return null;
+		}
+	};
+
+	/**
+	 * Refuse an edit aimed at lines the model has not read.
+	 *
+	 * The message names the exact call that would satisfy it, because the
+	 * measured failure was not refusal to read but never considering it: in
+	 * 111,790 characters of reasoning across eight edits, `read_files` was
+	 * mentioned nine times and called zero.
+	 */
+	const requireRead = async (
+		filePath: string,
+		first: number,
+		last: number,
+	): Promise<void> => {
+		if (!receipts) {
+			return;
+		}
+		// Clamped to the file. A range that runs past the last line cannot be
+		// read -- `read_files` returns what exists and records a receipt for
+		// that -- so requiring a receipt covering the overshoot is a demand no
+		// read can satisfy, and the message telling the model to go and read it
+		// sends it round again. Measured: an edit aimed at lines 101-200 of a
+		// 198-line file, read correctly three times, refused three times, with
+		// the model doing exactly as instructed each time.
+		const lineCount = await countLines(filePath);
+		const end =
+			lineCount != null && lineCount > 0 ? Math.min(last, lineCount) : last;
+		const wanted = Math.max(first, end);
+		if (receipts.covers(filePath, first, wanted)) {
+			return;
+		}
+		const range =
+			first === wanted ? `line ${first}` : `lines ${first}-${wanted}`;
+		const why = receipts.wasRetired(filePath)
+			? `${range} of ${filePath} has not been read in its current state — either it was never read, or an earlier edit changed the file's length and moved every line below it`
+			: `${filePath} has not been read in this session`;
+		throw new Error(
+			`Read before editing: ${why}. The file was not modified. Call \`read_files\` for ${filePath} covering ${range} — with \`start_line\` and \`end_line\` around it, not the whole file — then send this edit again using the line numbers that read reports. Editing lines you have not seen is how a correct-looking edit lands on the wrong code.`,
+		);
+	};
+
+	/**
+	 * Report what the edit left behind, when it left the file unparseable.
+	 *
+	 * The prompt asks the model to run `check_file` after every edit, and the
+	 * models that need it most are the ones that do not. Measured over one
+	 * transaction: 109 turns, 17 of them edits, and two `check_file` calls --
+	 * the scan that names the line to fix reached the model once, while it ran
+	 * the program seventy times looking for the same answer. Attaching the scan
+	 * to the edit puts it where the model is already looking, at the moment it
+	 * has just changed the file, and asks nothing of it.
+	 *
+	 * Silent unless the file's delimiters do not balance, so a healthy edit
+	 * reads exactly as it did before.
+	 */
+	const withDelimiterScan = async (
+		filePath: string,
+		result: string,
+	): Promise<string> => {
+		let text: string;
+		try {
+			const stat = await fs.stat(filePath);
+			// A scan of a file this size costs more than the answer is worth,
+			// and nothing a model edits by hand is this big.
+			if (stat.size > MAX_SCANNED_BYTES) {
+				return result;
+			}
+			text = await fs.readFile(filePath, encoding);
+		} catch {
+			// The edit's own result is the answer; a file that cannot be read
+			// back has nothing to say about brackets.
+			return result;
+		}
+		const scan = describeDelimiterBalance(filePath, text);
+		return scan ? `${result}\n\n${scan}` : result;
+	};
+
+	const edit = async (
 		input: EditFileInput,
 		cwd: string,
 		_context: AgentToolContext,
 	): Promise<string> => {
 		const filePath = resolveFilePath(cwd, input.path, restrictToCwd);
+		const linesBefore = receipts ? await countLines(filePath) : null;
+		const noteWrite = async (): Promise<void> => {
+			if (!receipts || linesBefore == null) {
+				return;
+			}
+			const linesAfter = await countLines(filePath);
+			if (linesAfter != null) {
+				receipts.noteWrite(filePath, linesBefore, linesAfter);
+			}
+		};
 
 		if (input.insert_line != null) {
 			if (input.start_line != null) {
@@ -613,7 +1110,8 @@ export function createEditorExecutor(
 						`Cannot insert into ${filePath}: the file does not exist. Omit insert_line and insert_column to create it.`,
 					);
 				}
-				return insertAtColumn(
+				await requireRead(filePath, input.insert_line, input.insert_line);
+				const result = await insertAtColumn(
 					filePath,
 					input.insert_line,
 					input.insert_column,
@@ -621,13 +1119,23 @@ export function createEditorExecutor(
 					encoding,
 					maxDiffLines,
 				);
+				await noteWrite();
+				return result;
 			}
-			return insertInFile(
+			// A boundary insert only shifts lines; it never overwrites one. The
+			// line it is anchored to still has to have been seen, or the text
+			// lands next to something other than what the model thinks.
+			if (linesBefore != null) {
+				await requireRead(filePath, input.insert_line, input.insert_line);
+			}
+			const result = await insertInFile(
 				filePath,
 				input.insert_line, // One-based index
 				input.new_text,
 				encoding,
 			);
+			await noteWrite();
+			return result;
 		}
 
 		if (input.insert_column != null) {
@@ -643,7 +1151,12 @@ export function createEditorExecutor(
 				);
 			}
 			if (input.start_column != null) {
-				return replaceColumnRange(
+				await requireRead(
+					filePath,
+					input.start_line,
+					input.end_line ?? input.start_line,
+				);
+				const result = await replaceColumnRange(
 					filePath,
 					input.start_line,
 					input.start_column,
@@ -653,13 +1166,20 @@ export function createEditorExecutor(
 					encoding,
 					maxDiffLines,
 				);
+				await noteWrite();
+				return result;
 			}
 			if (input.end_column != null) {
 				throw new Error(
 					"`end_column` needs `start_column`: without it the tool replaces whole lines and the column has nothing to bound.",
 				);
 			}
-			return replaceLineRange(
+			await requireRead(
+				filePath,
+				input.start_line,
+				input.end_line ?? input.start_line,
+			);
+			const result = await replaceLineRange(
 				filePath,
 				input.start_line,
 				input.end_line ?? input.start_line,
@@ -667,6 +1187,8 @@ export function createEditorExecutor(
 				encoding,
 				maxDiffLines,
 			);
+			await noteWrite();
+			return result;
 		}
 
 		if (input.start_column != null || input.end_column != null) {
@@ -676,31 +1198,90 @@ export function createEditorExecutor(
 		}
 
 		if (!(await fileExists(filePath))) {
-			return createFile(filePath, input.new_text, encoding);
+			const created = await createFile(filePath, input.new_text, encoding);
+			// A file the model just wrote is a file the model has seen: it
+			// supplied every line of it. Without a receipt here, the very next
+			// edit to that file is refused for not having been read, and the
+			// model reads back text it authored one call earlier.
+			//
+			// Measured across one atomic run: 79 edits refused as unread, 68 of
+			// them on files created in the same session — a refused call and the
+			// read that answered it, twice per occurrence, out of 837 turns. The
+			// guard exists for edits aimed at lines nobody has looked at, and
+			// this is the one case where the model wrote them itself.
+			receipts?.noteRead(filePath, 1, Number.POSITIVE_INFINITY);
+			return created;
 		}
 		if (input.old_text == null) {
 			// `new_text` alone against an existing file is a model asking to
-			// rewrite it wholesale. That is a legitimate move once incremental
-			// edits have failed, and the route exists — it is a line range
-			// covering the file — so name it rather than only naming what is
-			// missing.
+			// rewrite it wholesale.
 			//
-			// Every argument of the working call is spelled out, `path`
-			// included. An earlier version of this message named only the two
-			// line numbers to add, and a model rebuilt the call from the
-			// sentence instead of amending its own: it sent `start_line`,
-			// `end_line` and `new_text` with no `path` at all, three times in
-			// a row. A message that lists some of the arguments will be read
-			// as listing all of them.
-			const lineCount = (await fs.readFile(filePath, encoding)).split(
-				/\r\n|\n/,
-			).length;
+			// This was refused outright, and the refusal was routed around. On
+			// one transaction the model deleted the file with `run_commands`
+			// twelve times and recreated it from `new_text` alone each time,
+			// because a file that does not exist is one this call will write.
+			// The twelfth delete landed twelve seconds before the transaction's
+			// clock ran out, so the run ended with no file at all and the
+			// oracle reported `ENOENT` instead of whatever was actually wrong.
+			//
+			// `rm` is strictly worse than the write it stands in for: it takes
+			// the file out of existence between two turns, it drops the read
+			// receipts rather than satisfying them, and nothing checks what
+			// comes back. Refusing the honest spelling of an operation the
+			// model can perform anyway only decides how it performs it. So the
+			// write is allowed here, through the same range replacement
+			// `start_line: 1` would use — the duplication guard included — on
+			// the one condition the deletion route silently discarded: that the
+			// model has read what it is about to replace.
+			//
+			// Counted the way every other message in this tool counts, and the
+			// way `read_files` does. Splitting on newlines here yielded one more
+			// line than the file has whenever it ends with a newline, so this
+			// message and the whole-file-rewrite refusal a few lines above named
+			// two different numbers for the same file -- which is precisely the
+			// pair of numbers a model was measured alternating between, trying
+			// to find the one that meant "the whole file".
+			const { lines: fileLines } = splitFileLines(
+				await fs.readFile(filePath, encoding),
+			);
+			const lineCount = fileLines.length;
+			// Checked here rather than through `requireRead`, whose message
+			// tells the model to read a range "not the whole file". That is the
+			// right advice for a targeted edit and the wrong advice for this
+			// call, which replaces every line: following it would satisfy no
+			// receipt and send the model round again.
+			if (receipts && !receipts.covers(filePath, 1, lineCount)) {
+				const why = receipts.wasRetired(filePath)
+					? "an earlier edit changed the file's length, so what you read is no longer where you read it"
+					: "not all of it has been read in this session";
+				throw new Error(
+					`Read before replacing: this call replaces every one of the ${lineCount} line(s) in ${filePath}, and ${why}. The file was not modified. Call \`read_files\` for ${filePath} — all of it, since all of it is what you are replacing — then send this call again with \`path: "${filePath}"\` and the \`new_text\` the whole file should end up as. ` +
+						`Changing part of it is cheaper and safer: read around the lines you mean to change, then send \`path\`, \`start_line\`, \`end_line\` and the \`new_text\` for just those lines.`,
+				);
+			}
+			const result = await replaceLineRange(
+				filePath,
+				1,
+				lineCount,
+				input.new_text,
+				encoding,
+				maxDiffLines,
+			);
+			await noteWrite();
+			return result;
+		}
+
+		// A text-matched edit does not name a line, so there is no range to
+		// insist on — but editing a file sight-unseen is the same mistake at a
+		// coarser grain, and the match itself can land on a repeat the model
+		// never saw.
+		if (receipts && !receipts.hasAny(filePath)) {
 			throw new Error(
-				`Parameter \`old_text\` is required when editing an existing file without \`insert_line\` or \`start_line\`. To replace ${filePath} in full, send this call again with every argument it already has — \`path: "${filePath}"\` and the same \`new_text\` — plus \`start_line: 1\` and \`end_line: ${lineCount}\`.`,
+				`Read before editing: ${filePath} has not been read in this session. The file was not modified. Call \`read_files\` for it first — narrow it with \`start_line\`/\`end_line\` around the text you mean to change — then send this edit again.`,
 			);
 		}
 
-		return replaceInFile(
+		const result = await replaceInFile(
 			filePath,
 			input.old_text,
 			input.new_text,
@@ -708,5 +1289,22 @@ export function createEditorExecutor(
 			maxDiffLines,
 			{ occurrence: input.occurrence, replaceAll: input.replace_all },
 		);
+		await noteWrite();
+		return result;
+	};
+
+	return async (
+		input: EditFileInput,
+		cwd: string,
+		context: AgentToolContext,
+	): Promise<string> => {
+		const result = await edit(input, cwd, context);
+		let filePath: string;
+		try {
+			filePath = resolveFilePath(cwd, input.path, restrictToCwd);
+		} catch {
+			return result;
+		}
+		return withDelimiterScan(filePath, result);
 	};
 }

@@ -1,5 +1,6 @@
 import { DEFAULT_AUTO_APPROVAL_SETTINGS } from "@shared/AutoApprovalSettings"
 import { DEFAULT_BROWSER_SETTINGS } from "@shared/BrowserSettings"
+import { DEFAULT_EDIT_VERIFICATION_SETTINGS } from "@shared/EditVerificationSettings"
 import { DEFAULT_PLATFORM, type ExtensionState } from "@shared/ExtensionMessage"
 import { DEFAULT_MCP_DISPLAY_MODE } from "@shared/McpDisplayMode"
 import type { UserInfo } from "@shared/proto/cline/account"
@@ -280,6 +281,14 @@ export const ExtensionStateContextProvider: React.FC<{
 		telemetrySetting: "unset",
 		distinctId: "",
 		planActSeparateModelsSetting: true,
+		visionModelEnabled: false,
+		visionModeApiConfiguration: "",
+		agentsModelEnabled: false,
+		agentsModeApiConfiguration: "",
+		editVerificationSettings: DEFAULT_EDIT_VERIFICATION_SETTINGS,
+		qaCredentialNames: [],
+		apiConfigurationProfiles: "",
+		activeApiConfigurationProfile: "",
 		enableCheckpointsSetting: true,
 		mcpDisplayMode: DEFAULT_MCP_DISPLAY_MODE,
 		globalClineRulesToggles: {},

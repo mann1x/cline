@@ -24,12 +24,21 @@ import { applyPromptTemplateToTools } from "@cline/shared";
 export interface PromptTemplateHooksOptions {
 	/** The session's rendered template, from `renderPromptTemplate`. */
 	rendered: RenderedPromptTemplate | undefined;
+	/**
+	 * What this host is called — the same string the system prompt puts after
+	 * `IDE:`, so `{{IDE_NAME}}` means one thing across the whole prompt.
+	 *
+	 * A host that omits it gets `the editor` in the descriptions that use the
+	 * token. That is a wording default, not a behavioural one, which is why it
+	 * is not required.
+	 */
+	ideName?: string;
 }
 
 export function createPromptTemplateHooks(
 	options: PromptTemplateHooksOptions,
 ): AgentHooks | undefined {
-	const { rendered } = options;
+	const { rendered, ideName } = options;
 	if (!rendered || Object.keys(rendered.tools).length === 0) {
 		// No templates on disk at all. Every other case — including a template
 		// that overrides nothing — still carries `default.md`'s descriptions and
@@ -55,15 +64,15 @@ export function createPromptTemplateHooks(
 			if (cached) {
 				return { tools: cached };
 			}
-			const rewritten = applyPromptTemplateToTools(tools, rendered).map(
-				(tool) => ({
-					...tool,
-					// `AgentToolDefinition.description` is required while the
-					// shared helper is generic over an optional one; this only
-					// bridges the type boundary.
-					description: tool.description ?? "",
-				}),
-			);
+			const rewritten = applyPromptTemplateToTools(tools, rendered, {
+				ideName,
+			}).map((tool) => ({
+				...tool,
+				// `AgentToolDefinition.description` is required while the shared
+				// helper is generic over an optional one; this only bridges the
+				// type boundary.
+				description: tool.description ?? "",
+			}));
 			cache.set(tools, rewritten);
 			return { tools: rewritten };
 		},

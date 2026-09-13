@@ -36,6 +36,7 @@ test.describe("cline --help", () => {
 			"--config",
 			"--thinking",
 			"--retries",
+			"--edit-verification",
 			"--json",
 			"--acp",
 			"--update",

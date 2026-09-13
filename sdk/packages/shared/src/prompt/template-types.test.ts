@@ -362,6 +362,92 @@ describe("applyPromptTemplateToTools", () => {
 
 		expect(result).toEqual(tools);
 	});
+
+	/**
+	 * The host's own name, in a tool description.
+	 *
+	 * The word being replaced is "IDE": the shipped descriptions said "the
+	 * IDE's language servers" and "the IDE's Problems panel" to a model running
+	 * in a terminal, where there is neither. A template that wants to name the
+	 * host now can, and gets the same string the system prompt's `IDE:` line
+	 * shows.
+	 */
+	describe("{{IDE_NAME}}", () => {
+		it("resolves to the host the caller named", () => {
+			const result = applyPromptTemplateToTools(
+				tools,
+				template({
+					name: "g",
+					tools: { editor: "Edit files in {{IDE_NAME}}." },
+				}),
+				{ ideName: "Terminal Shell" },
+			);
+
+			expect(result[0]?.description).toBe("Edit files in Terminal Shell.");
+		});
+
+		it("resolves in a description no template touched", () => {
+			// A host builds its own tools and can write the token into one of
+			// them. Resolving it only in template sections would make the same
+			// token mean two different things depending on where it was written.
+			const result = applyPromptTemplateToTools(
+				[{ name: "check_file", description: "Ask {{IDE_NAME}}." }],
+				template({ name: "g", tools: { editor: "unrelated" } }),
+				{ ideName: "VS Code" },
+			);
+
+			expect(result[0]?.description).toBe("Ask VS Code.");
+		});
+
+		it("resolves every occurrence, not just the first", () => {
+			const result = applyPromptTemplateToTools(
+				tools,
+				template({
+					name: "g",
+					tools: { editor: "{{IDE_NAME}} and {{IDE_NAME}}" },
+				}),
+				{ ideName: "VS Code" },
+			);
+
+			expect(result[0]?.description).toBe("VS Code and VS Code");
+		});
+
+		it("resolves inside text the marker expanded", () => {
+			const result = applyPromptTemplateToTools(
+				[{ name: "editor", description: "built in {{IDE_NAME}}" }],
+				template({ name: "g", tools: { editor: "Wrapped. {{DEFAULT}}" } }),
+				{ ideName: "VS Code" },
+			);
+
+			expect(result[0]?.description).toBe("Wrapped. built in VS Code");
+		});
+
+		// Never left as braces in front of the model: a host that says nothing
+		// gets wording that is vague rather than wording that is broken.
+		it("falls back to a generic name when the host does not say", () => {
+			const section = template({
+				name: "g",
+				tools: { editor: "Ask {{IDE_NAME}}." },
+			});
+
+			expect(applyPromptTemplateToTools(tools, section)[0]?.description).toBe(
+				"Ask the editor.",
+			);
+			expect(
+				applyPromptTemplateToTools(tools, section, { ideName: "  " })[0]
+					?.description,
+			).toBe("Ask the editor.");
+		});
+
+		it("leaves a description that does not use it identical", () => {
+			const result = applyPromptTemplateToTools(tools, undefined, {
+				ideName: "VS Code",
+			});
+
+			expect(result).toEqual(tools);
+			expect(result[0]).toBe(tools[0]);
+		});
+	});
 });
 
 describe("renderPromptTemplate", () => {
@@ -493,29 +579,42 @@ describe("renderPromptTemplate", () => {
  * This is the last layer, and the only one a session actually depends on.
  */
 describe("applyPromptTemplateToTools never blanks a description", () => {
-	const tools = [{ name: "team_finalize_outcome", description: "Finalize one outcome. Output: {outcomeId, status}." }]
+	const tools = [
+		{
+			name: "team_finalize_outcome",
+			description: "Finalize one outcome. Output: {outcomeId, status}.",
+		},
+	];
 
 	it("keeps the built-in text when a section is empty", () => {
-		const [applied] = applyPromptTemplateToTools(tools, { tools: { team_finalize_outcome: "" } })
+		const [applied] = applyPromptTemplateToTools(tools, {
+			tools: { team_finalize_outcome: "" },
+		});
 
-		expect(applied?.description).toBe(tools[0]?.description)
-	})
+		expect(applied?.description).toBe(tools[0]?.description);
+	});
 
 	it("keeps the built-in text when a section is only whitespace", () => {
-		const [applied] = applyPromptTemplateToTools(tools, { tools: { team_finalize_outcome: "  \n\t " } })
+		const [applied] = applyPromptTemplateToTools(tools, {
+			tools: { team_finalize_outcome: "  \n\t " },
+		});
 
-		expect(applied?.description).toBe(tools[0]?.description)
-	})
+		expect(applied?.description).toBe(tools[0]?.description);
+	});
 
 	it("keeps the built-in text when a section is only the marker", () => {
-		const [applied] = applyPromptTemplateToTools(tools, { tools: { team_finalize_outcome: "{{DEFAULT}}" } })
+		const [applied] = applyPromptTemplateToTools(tools, {
+			tools: { team_finalize_outcome: "{{DEFAULT}}" },
+		});
 
-		expect(applied?.description).toBe(tools[0]?.description)
-	})
+		expect(applied?.description).toBe(tools[0]?.description);
+	});
 
 	it("still lets a real replacement replace", () => {
-		const [applied] = applyPromptTemplateToTools(tools, { tools: { team_finalize_outcome: "Close it out." } })
+		const [applied] = applyPromptTemplateToTools(tools, {
+			tools: { team_finalize_outcome: "Close it out." },
+		});
 
-		expect(applied?.description).toBe("Close it out.")
-	})
-})
+		expect(applied?.description).toBe("Close it out.");
+	});
+});

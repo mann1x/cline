@@ -10,12 +10,14 @@ import type {
 	ITelemetryService,
 	TextContent,
 } from "@cline/shared";
+import type { QaCredential } from "./qa-credentials";
 import type {
 	ApplyPatchInput,
 	EditFileInput,
 	ReadFileRequest,
 	StructuredCommandInput,
 } from "./schemas";
+import type { TaskProgressTracker } from "./task-progress";
 
 // =============================================================================
 // Tool Result Types
@@ -82,17 +84,47 @@ export type SearchExecutor = (
 ) => Promise<string>;
 
 /**
+ * Per-call execution options for a shell executor.
+ */
+export interface ShellExecutionOptions {
+	/**
+	 * Environment for this command and no other.
+	 *
+	 * Separate from the executor's own `env` because it carries QA credentials,
+	 * which are scoped to the single command that asked for them. An executor
+	 * that cannot honour per-command environment -- a persistent terminal, where
+	 * anything exported outlives the command -- must not silently ignore this;
+	 * see the VS Code `run_commands` tool, which routes such a command to a
+	 * child process instead.
+	 */
+	env?: Record<string, string>;
+	/**
+	 * Names to strip from the inherited environment before `env` is applied.
+	 *
+	 * Without this the gate is decorative wherever the host itself holds the
+	 * secret: the CLI is started with `QA_PASSWORD` exported, `spawn` inherits
+	 * the parent environment, and every command in the run sees it whether it
+	 * asked or not. Withholding the declared names and re-adding only the ones a
+	 * command asked for gives that host the same guarantee as one with a secret
+	 * store.
+	 */
+	withhold?: readonly string[];
+}
+
+/**
  * Executor for running shell commands
  *
  * @param command - Shell command to execute
  * @param cwd - Current working directory for execution
  * @param context - Tool execution context
+ * @param options - Per-call options, currently the command's own environment
  * @returns Command output (stdout)
  */
 export type ShellExecutor = (
 	command: string | StructuredCommandInput,
 	cwd: string,
 	context: AgentToolContext,
+	options?: ShellExecutionOptions,
 ) => Promise<string>;
 
 /**
@@ -252,6 +284,12 @@ export type DefaultToolName =
  */
 export interface DefaultToolsConfig {
 	/**
+	 * QA credentials available to `run_commands`, from the host's secret store.
+	 * A function when the set can change while a session runs.
+	 */
+	qaCredentials?: readonly QaCredential[] | (() => readonly QaCredential[]);
+
+	/**
 	 * Host telemetry service, injected at tool construction time. Tools that
 	 * emit operational telemetry (e.g. run_commands timeouts) close over this
 	 * service. It is a live host object and must never travel on the per-call
@@ -384,4 +422,14 @@ export interface CreateDefaultToolsOptions extends DefaultToolsConfig {
 	 * Only tools with provided executors will be available
 	 */
 	executors: ToolExecutors;
+	/**
+	 * Session-scoped checklist tracker. When provided, every tool gains the
+	 * optional `task_progress` parameter, and results carry the checklist back
+	 * to the model periodically.
+	 *
+	 * Absent by default: the tracker holds per-session state, so a shared or
+	 * missing one is the difference between a checklist and a leak between
+	 * tasks. Hosts opt in by constructing one per session.
+	 */
+	taskProgress?: TaskProgressTracker;
 }

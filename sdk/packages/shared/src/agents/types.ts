@@ -12,8 +12,11 @@
 
 import { z } from "zod";
 import type {
+	AgentImageToDescribe,
 	AgentRuntimeHooks,
 	AgentTool,
+	DiscardedTurnCondensation,
+	DiscardedTurnInput,
 	ProviderErrorClass,
 } from "../agent";
 import type { ExtensionContext } from "../extensions/context";
@@ -215,6 +218,16 @@ export interface ConsecutiveMistakeLimitContext {
 	maxConsecutiveMistakes: number;
 	reason: "api_error" | "invalid_tool_call" | "tool_execution_failed";
 	details?: string;
+	/**
+	 * The stop was demanded outright -- a repeated-call loop -- rather than
+	 * reached by counting up to the limit.
+	 *
+	 * Hosts word the two differently. `consecutiveMistakes` carries the real
+	 * count when this is set, and it is usually well below the limit, so
+	 * reporting it as "ran into N errors in a row" describes something that did
+	 * not happen.
+	 */
+	forced?: boolean;
 }
 
 export type ConsecutiveMistakeLimitDecision =
@@ -637,6 +650,14 @@ export interface AgentResult {
 	iterations: number;
 	/** Why the agent stopped */
 	finishReason: AgentFinishReason;
+	/**
+	 * What aborted the run, when `finishReason` is `aborted` and something said.
+	 *
+	 * A host cannot work this out for itself: the causes it can see locally are
+	 * a timeout and its own abort call, so everything else came out as "another
+	 * client" — including a stop the run itself asked for.
+	 */
+	abortReason?: string;
 	/** Model information used */
 	model: {
 		id: string;
@@ -854,6 +875,25 @@ export interface AgentConfig {
 		| AgentPrepareTurnResult
 		| undefined;
 	/**
+	 * Optional last look at reasoning that is about to be discarded.
+	 *
+	 * A turn cut off at the output cap with no tool call is thrown away whole --
+	 * the reply was never finished, and resending it would spend the same budget
+	 * on output already abandoned. But the reasoning inside it is the only turn
+	 * that reliably ends at the model's thinking budget, and it is exactly the
+	 * work the retry is about to redo from nothing.
+	 *
+	 * Called with that reasoning before it is dropped. Whatever comes back is
+	 * given to the model as a note it left itself; the discarded message still
+	 * never re-enters the transcript. Returning nothing discards as before.
+	 */
+	condenseDiscardedReasoning?: (
+		input: DiscardedTurnInput,
+	) =>
+		| Promise<DiscardedTurnCondensation | undefined>
+		| DiscardedTurnCondensation
+		| undefined;
+	/**
 	 * Optional Telemetry service for emitting structured events about agent execution to configured telemetry backends.
 	 */
 	telemetry?: ITelemetryService;
@@ -892,6 +932,18 @@ export interface AgentConfig {
 		 * the bound is on consecutive silence rather than on the run.
 		 */
 		maxNoToolCallNudges?: number;
+		/**
+		 * How many consecutive turns cut off at the per-turn output cap are
+		 * retried before the run ends. Defaults to 2; zero restores the older
+		 * behaviour where a truncated turn ends the run.
+		 *
+		 * A turn that hits the cap with no tool calls in it produced nothing the
+		 * run can use, and the model cannot see that it was cut off. Retrying
+		 * discards the truncated reply — it never enters the history — and tells
+		 * the model what happened, so the retry differs instead of reproducing
+		 * the same overlong output. The counter resets on any turn that finishes.
+		 */
+		maxTruncatedTurnRetries?: number;
 	};
 
 	// -------------------------------------------------------------------------
@@ -905,6 +957,21 @@ export interface AgentConfig {
 	 * call. This allows the host to feed user input into a running loop
 	 * without waiting for the current run to finish.
 	 */
+	/** See `AgentConfig.onImageInputUnsupported`. */
+	onImageInputUnsupported?: () => void;
+	/** See `AgentConfig.describeImages`. */
+	describeImages?: (
+		images: readonly AgentImageToDescribe[],
+	) => Promise<readonly (string | undefined)[]>;
+	/** See `AgentConfig.alwaysDescribeImages`. */
+	alwaysDescribeImages?: boolean;
+	/**
+	 * Whether the primary model can read an image itself.
+	 *
+	 * Only consulted when a description could not be produced: it decides
+	 * between leaving the image and replacing it with a note.
+	 */
+	modelSupportsImages?: boolean;
 	consumePendingUserMessage?: () => string | undefined;
 
 	// -------------------------------------------------------------------------

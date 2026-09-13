@@ -173,7 +173,48 @@ function formatHubStartupError(
 	return wrapped;
 }
 
-async function resolveEphemeralPort(host: string): Promise<number> {
+/**
+ * Ports `fetch()` refuses to connect to, whatever is listening on them.
+ *
+ * This is the WHATWG "bad port" list, which undici enforces: a request to one
+ * of these fails as a network error reading `bad port`, before a socket is
+ * opened. Nothing the hub does can make such a port reachable — the health
+ * probe, the discovery record and every client fetch would fail against it.
+ *
+ * It matters here because the OS picks the port. The ephemeral range is
+ * configurable (`net.ipv4.ip_local_port_range`), and a host widened to
+ * `1024 65535` — measured on this one — can hand back 6667 or 10080 like any
+ * other number. Roughly one bind in three thousand, which is exactly often
+ * enough to fail a test run occasionally and never reproduce.
+ */
+const FETCH_BLOCKED_PORTS = new Set([
+	1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79,
+	87, 95, 101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137,
+	139, 143, 161, 179, 389, 427, 465, 512, 513, 514, 515, 526, 530, 531, 532,
+	540, 548, 554, 556, 563, 587, 601, 636, 989, 990, 993, 995, 1719, 1720, 1723,
+	2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669,
+	6679, 6697, 10080,
+]);
+
+/** How many times to ask the OS again after it hands back an unusable port. */
+const EPHEMERAL_PORT_ATTEMPTS = 8;
+
+export async function resolveEphemeralPort(
+	host: string,
+	probe: (host: string) => Promise<number> = probeEphemeralPort,
+): Promise<number> {
+	for (let attempt = 1; attempt < EPHEMERAL_PORT_ATTEMPTS; attempt += 1) {
+		const port = await probe(host);
+		if (!FETCH_BLOCKED_PORTS.has(port)) {
+			return port;
+		}
+	}
+	// Out of attempts: the last probe is returned rather than throwing, because a
+	// port that is merely hard to reach still beats refusing to start at all.
+	return await probe(host);
+}
+
+async function probeEphemeralPort(host: string): Promise<number> {
 	return await new Promise<number>((resolve, reject) => {
 		const probe = net.createServer();
 		probe.once("error", reject);

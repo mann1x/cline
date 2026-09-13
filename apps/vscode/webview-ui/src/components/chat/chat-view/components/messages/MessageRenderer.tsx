@@ -108,6 +108,7 @@ const MessageRenderer: React.FC<MessageRendererProps> = ({
 				onCancelCommand={() => messageHandlers.executeButtonAction("cancel")}
 				onHeightChange={onHeightChange}
 				onLastRowContentChange={onLastRowContentChange}
+				onReferenceImage={messageHandlers.handleReferenceImage}
 				onSetQuote={onSetQuote}
 				onToggleExpand={onToggleExpand}
 				reasoningContent={reasoningData.reasoning}

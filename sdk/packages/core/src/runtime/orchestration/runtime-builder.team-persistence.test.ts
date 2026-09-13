@@ -43,9 +43,27 @@ class MockAgentTeamsRuntime {
 	shutdownTeammate = vi.fn();
 }
 
-vi.mock("../../extensions/tools/team", () => ({
+// Partial rather than a replacement list. Written as a full replacement, this
+// mock broke whenever the module gained an export -- a failure that says
+// nothing about the builder and everything about the shape of the mock, and
+// which reads at a glance like someone else's problem. Spreading the real
+// module means only the three things this file actually substitutes are named,
+// and anything the builder newly reaches for resolves for real.
+vi.mock("../../extensions/tools/team", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../extensions/tools/team")>()),
 	AgentTeamsRuntime: MockAgentTeamsRuntime,
 	bootstrapAgentTeams: bootstrapAgentTeamsMock,
+	// A pass-through gate: this file is about what the builder persists, and a
+	// real one would make its assertions depend on scheduling. The gate's own
+	// behaviour, and which endpoint each agent is held to, are covered in
+	// `agent-slot-gate.test.ts` and `configured-agent-tool.test.ts`.
+	createAgentSlotGateRegistry: () => ({
+		for: () => ({
+			run: <T>(task: () => Promise<T>) => task(),
+			active: () => 0,
+		}),
+		active: () => 0,
+	}),
 	createDelegatedAgentConfigProvider: (config: Record<string, unknown>) => {
 		let runtimeConfig = { ...config };
 		return {

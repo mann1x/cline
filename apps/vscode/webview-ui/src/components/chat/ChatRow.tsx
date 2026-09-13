@@ -44,6 +44,7 @@ import { cn } from "@/lib/utils"
 import { FileServiceClient, UiServiceClient } from "@/services/grpc-client"
 import { findMatchingResourceOrTemplate } from "@/utils/mcp"
 import CodeAccordian, { cleanPathPrefix } from "../common/CodeAccordian"
+import BrowserScreenshotRow from "./BrowserScreenshotRow"
 import { CommandOutputContent, CommandOutputRow } from "./CommandOutputRow"
 import CompactionRow from "./CompactionRow"
 import { CompletionOutputRow } from "./CompletionOutputRow"
@@ -59,6 +60,7 @@ import ReportBugPreview from "./ReportBugPreview"
 import { RequestStartRow } from "./RequestStartRow"
 import SearchResultsDisplay from "./SearchResultsDisplay"
 import SubagentStatusRow from "./SubagentStatusRow"
+import ThinkingCondensedRow from "./ThinkingCondensedRow"
 import { ThinkingRow } from "./ThinkingRow"
 import UserMessage from "./UserMessage"
 
@@ -74,6 +76,8 @@ interface ChatRowProps {
 	onLastRowContentChange: () => void
 	inputValue?: string
 	sendMessageFromChatRow?: (text: string, images: string[], files: string[]) => void
+	/** Attach an image from the transcript to the message being composed. */
+	onReferenceImage?: (image: string) => void
 	onSetQuote: (text: string) => void
 	onCancelCommand?: () => void
 	mode?: Mode
@@ -139,6 +143,7 @@ export const ChatRowContent = memo(
 		isLast,
 		inputValue,
 		sendMessageFromChatRow,
+		onReferenceImage,
 		onSetQuote,
 		onCancelCommand,
 		onLastRowContentChange,
@@ -403,9 +408,17 @@ export const ChatRowContent = memo(
 				case "editedExistingFile":
 					const content = tool?.content || ""
 					const isApplyingPatch = content?.startsWith("%%bash") && !content.endsWith("*** End Patch\nEOF")
+					// The mode belongs in the header because the payload that would
+					// otherwise reveal it is collapsed, and "wants to edit this
+					// file" is the one thing about an edit that is never in
+					// question. A SEARCH/REPLACE and a line-range replace fail in
+					// completely different ways, and telling them apart at a
+					// glance is most of reading a session back.
 					const editToolTitle = isApplyingPatch
 						? "Cline is creating patches to edit this file:"
-						: "Cline wants to edit this file:"
+						: tool.editMode
+							? `Cline wants to edit this file (${tool.editMode}):`
+							: "Cline wants to edit this file:"
 					return (
 						<div>
 							<div className={HEADER_CLASSNAMES}>
@@ -1001,8 +1014,18 @@ export const ChatRowContent = memo(
 						)
 					case "task_progress":
 						return <InvisibleSpacer /> // task_progress messages should be displayed in TaskHeader only, not in chat
+					case "browser_screenshot":
+						return (
+							<BrowserScreenshotRow
+								images={message.images ?? []}
+								onReference={onReferenceImage}
+								text={message.text}
+							/>
+						)
 					case "compaction":
 						return <CompactionRow message={message} />
+					case "thinking_condensed":
+						return <ThinkingCondensedRow message={message} />
 					default:
 						return (
 							<div>

@@ -18,7 +18,14 @@ export interface AutoApprovalSettings {
 		editFilesExternally?: boolean // Legacy field - kept for backward compatibility with older extension versions
 		executeSafeCommands?: boolean // Execute commands
 		executeAllCommands?: boolean // Legacy field - kept for backward compatibility with older extension versions
-		useBrowser: boolean // Use browser
+		useBrowser: boolean // Fetch web content
+		// Drive a real browser. Separate from useBrowser because the two are not
+		// the same risk: fetching a URL returns text, while this launches a
+		// browser process that executes whatever the page contains. Someone can
+		// reasonably want the first without approval and the second with it.
+		// Optional, so settings written before this existed still parse; the
+		// policy falls back to useBrowser when it is absent.
+		useBrowserTool?: boolean
 		useMcp: boolean // Use MCP servers
 	}
 	// Global settings
@@ -38,6 +45,7 @@ export const DEFAULT_AUTO_APPROVAL_SETTINGS: AutoApprovalSettings = {
 		executeSafeCommands: false,
 		executeAllCommands: true,
 		useBrowser: true,
+		useBrowserTool: true,
 		useMcp: true,
 	},
 	enableNotifications: false,

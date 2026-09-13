@@ -1,6 +1,7 @@
 import {
 	type AgentEvent,
 	type AgentResult,
+	mergeAgentHooks,
 	type ProviderSettings,
 	prewarmFileIndex,
 	SessionSource,
@@ -161,8 +162,19 @@ export async function runAgent(
 	});
 
 	const isYoloMode = config.mode === "yolo";
+	// A follow-up question needs someone to answer it. With no terminal on
+	// either stream, `askQuestionInTerminal` hands back the model's own first
+	// option unread, which is not an answer -- measured on a headless run, one
+	// such turn spent 20,611 tokens composing a question and got back "Try
+	// extracting and running through node directly", its own suggestion
+	// returned to it; a second got "Yes, proceed". Two turns and roughly 21,000
+	// tokens spent consulting a stub. Withholding the tool where nobody can
+	// answer leaves the model to do the work instead, which is what it did on
+	// the next turn anyway.
+	const canAskFollowUps =
+		process.stdin.isTTY === true && process.stdout.isTTY === true;
 	const toolExecutors = {
-		askQuestion: askQuestionInTerminal,
+		...(canAskFollowUps ? { askQuestion: askQuestionInTerminal } : {}),
 		submit: submitAndExitInTerminal,
 	};
 	const sessionManager = await createCliCore({
@@ -278,38 +290,21 @@ export async function runAgent(
 			userImages,
 			userFiles,
 		} = await buildUserInputMessage(prompt, userInstructionService);
-		const started = await sessionManager.start({
-			source: SessionSource.CLI,
-			config: {
-				...config,
-				sessionId: plannedSessionId,
-				execution: {
-					...config.execution,
-					loopDetection:
-						config.execution?.loopDetection ?? CLI_DEFAULT_LOOP_DETECTION,
-				},
-				checkpoint: config.checkpoint ?? CLI_DEFAULT_CHECKPOINT_CONFIG,
-				hooks: runtimeHooks.hooks,
-				onTeamEvent: handleTeamEvent,
-				onConsecutiveMistakeLimitReached: async (
-					context: ConsecutiveMistakeLimitContext,
-				) => resolveMistakeLimitDecision(config, context),
-			},
-			prompt: userInput,
-			userImages: userImages.length > 0 ? userImages : undefined,
-			userFiles: userFiles.length > 0 ? userFiles : undefined,
-			interactive: false,
-			localRuntime: {
-				onTeamRestored: () => emitTeamRestored(config),
-			},
-		});
 
-		activeSessionId = started.sessionId;
-		setActiveCliSession({
-			manifest: started.manifest,
-		});
-
-		// Schedule timeout abort if configured.
+		// Both of these are armed before `start()`, because `start()` is what runs
+		// the task. In non-interactive mode with a prompt it does not resolve until
+		// the whole run is over, so a timeout scheduled after it was scheduled
+		// after the thing it was meant to bound -- and then cleared immediately --
+		// while `abortAll()` spent the entire run with no `activeSessionId` to
+		// abort.
+		//
+		// Measured on one run: `-t 2400` never fired, SIGTERM at 2520s aborted
+		// nothing, and the run went on for 3649s and nine further iterations. The
+		// only mark either left was the word "aborted" in the closing summary.
+		//
+		// The id is safe to claim in advance -- it is the one passed in the config
+		// below, and the event subscription above already depends on that.
+		activeSessionId = plannedSessionId;
 		const timeoutMs =
 			typeof config.timeoutSeconds === "number" &&
 			Number.isFinite(config.timeoutSeconds) &&
@@ -325,6 +320,43 @@ export async function runAgent(
 		const clearRunTimeout = () => {
 			if (timeoutId) clearTimeout(timeoutId);
 		};
+
+		const started = await sessionManager.start({
+			source: SessionSource.CLI,
+			config: {
+				...config,
+				sessionId: plannedSessionId,
+				execution: {
+					...config.execution,
+					loopDetection:
+						config.execution?.loopDetection ?? CLI_DEFAULT_LOOP_DETECTION,
+				},
+				checkpoint: config.checkpoint ?? CLI_DEFAULT_CHECKPOINT_CONFIG,
+				// Merged, not replaced. The config carries the prompt-template hooks
+				// that rewrite tool descriptions, and overwriting the field dropped
+				// them -- silently, and completely in `--yolo`, where the runtime
+				// layer is `undefined` and this assignment erased everything.
+				hooks: mergeAgentHooks([config.hooks, runtimeHooks.hooks]),
+				onTeamEvent: handleTeamEvent,
+				onConsecutiveMistakeLimitReached: async (
+					context: ConsecutiveMistakeLimitContext,
+				) => resolveMistakeLimitDecision(config, context),
+			},
+			prompt: userInput,
+			userImages: userImages.length > 0 ? userImages : undefined,
+			userFiles: userFiles.length > 0 ? userFiles : undefined,
+			interactive: false,
+			localRuntime: {
+				onTeamRestored: () => emitTeamRestored(config),
+			},
+		});
+
+		// Reassigned in case the host handed back a different id than the one
+		// claimed above; the abort path has been live throughout either way.
+		activeSessionId = started.sessionId;
+		setActiveCliSession({
+			manifest: started.manifest,
+		});
 
 		// When start() already ran the first turn (non-interactive with prompt),
 		// the session is finalized before start() returns. Use that result
@@ -376,15 +408,38 @@ export async function runAgent(
 			if (timedOut) {
 				writeErr(`run timed out after ${config.timeoutSeconds}s`);
 				process.exitCode = 1;
+				// Also on the JSON stream. A timeout used to be reported on stderr
+				// only, so anything reading the machine-readable output saw a run
+				// that stopped for no stated reason.
+				if (config.outputMode === "json") {
+					emitJsonLine("stdout", {
+						type: "run_aborted",
+						reason: "timeout",
+						message: `run timed out after ${config.timeoutSeconds}s`,
+					});
+				}
 			} else if (config.outputMode === "json") {
+				// `external_abort` only when nothing else accounts for the stop. A
+				// run that ended on its own mistake limit is not external to
+				// anything, and calling it that sent every JSON consumer looking
+				// for a second client that does not exist.
+				const abortReason = result?.abortReason;
 				emitJsonLine("stdout", {
 					type: "run_aborted",
-					reason: abortRequested ? "local_abort" : "external_abort",
-					message: describeAbortSource({ abortRequested, timedOut }),
+					reason: abortRequested
+						? "local_abort"
+						: abortReason
+							? "stopped"
+							: "external_abort",
+					message: describeAbortSource({
+						abortRequested,
+						timedOut,
+						abortReason,
+					}),
 				});
 			} else {
 				writeln(
-					`${c.dim}[abort] ${describeAbortSource({ abortRequested, timedOut })}${c.reset}`,
+					`${c.dim}[abort] ${describeAbortSource({ abortRequested, timedOut, abortReason: result?.abortReason })}${c.reset}`,
 				);
 			}
 			writeln();

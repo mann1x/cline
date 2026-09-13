@@ -12,6 +12,11 @@ const ConfiguredAgentFrontmatterSchema = z.object({
 	skills: z.union([z.string(), z.array(z.string())]).optional(),
 	providerId: z.string().trim().min(1).optional(),
 	modelId: z.string().trim().min(1).optional(),
+	// A saved API configuration profile, by name. Names a provider, a model and
+	// the settings around them in one word, which is what the user already has
+	// in front of them -- against `providerId` plus `modelId` plus a context
+	// window that has nowhere to live in this file at all.
+	profile: z.string().trim().min(1).optional(),
 	maxIterations: z.number().int().positive().optional(),
 });
 
@@ -22,6 +27,8 @@ export interface ConfiguredAgentConfig {
 	skills?: string[];
 	providerId?: string;
 	modelId?: string;
+	/** A saved API configuration profile this agent runs on, by name. */
+	profile?: string;
 	maxIterations?: number;
 	systemPrompt: string;
 	path?: string;
@@ -142,6 +149,7 @@ export function parseConfiguredAgentConfig(
 		skills: parseStringList(parsed.skills),
 		providerId: parsed.providerId,
 		modelId: parsed.modelId,
+		profile: parsed.profile,
 		maxIterations: parsed.maxIterations,
 		systemPrompt,
 		path: options.path,

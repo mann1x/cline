@@ -5,7 +5,7 @@ import {
 	syncStoredProviderRegistration,
 	writeModelsFileSync,
 } from "@cline/core"
-import { getGeneratedModelsForProvider, MODEL_COLLECTIONS_BY_PROVIDER_ID } from "@cline/llms"
+import { getGeneratedModelsForProvider, MODEL_COLLECTIONS_BY_PROVIDER_ID, normalizeParallelSessions } from "@cline/llms"
 import { ModelCapabilitySchema } from "@cline/shared"
 import { type ApiConfiguration, type ApiProvider, type ModelInfo, openAiModelInfoSafeDefaults } from "@shared/api"
 import { Logger } from "@shared/services/Logger"
@@ -570,6 +570,18 @@ function writeProviderSettingsFields(providerId: ProviderId, patch: ProviderConf
 			next.contextWindow = Math.floor(contextWindow)
 		} else {
 			delete next.contextWindow
+		}
+	}
+
+	// Clamped on the way in rather than trusted: this number decides how many
+	// agents are allowed at a server at once, and a stored 500 would be a
+	// self-inflicted queue that nothing reports.
+	if ("parallelSessions" in patch) {
+		const parallelSessions = normalizeParallelSessions(patch.parallelSessions)
+		if (parallelSessions !== undefined) {
+			next.parallelSessions = parallelSessions
+		} else {
+			delete next.parallelSessions
 		}
 	}
 

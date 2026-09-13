@@ -120,11 +120,34 @@ describe("validatePromptTemplate", () => {
 	});
 
 	it("does not expect system placeholders inside a tool description", () => {
-		// Tool descriptions are not substituted, so a template that omits
-		// {{CWD}} there is doing nothing wrong.
+		// A tool description is not the environment block, so a template that
+		// omits {{CWD}} there is doing nothing wrong.
 		expect(
 			validatePromptTemplate(template({ tools: { editor: "Edit files." } })),
 		).toEqual([]);
+	});
+
+	it("accepts {{IDE_NAME}} in a tool section", () => {
+		// The one system placeholder that is also substituted in a tool
+		// description, so a section naming the host is correct rather than dead
+		// text.
+		expect(
+			validatePromptTemplate(
+				template({
+					system: COMPLETE_SYSTEM,
+					tools: { check_file: "Ask {{IDE_NAME}}." },
+				}),
+			),
+		).toEqual([]);
+	});
+
+	it("still reports a system placeholder that means nothing in a tool section", () => {
+		const warnings = validatePromptTemplate(
+			template({ system: COMPLETE_SYSTEM, tools: { editor: "In {{CWD}}." } }),
+		);
+
+		expect(warnings[0]?.code).toBe("unknown-placeholder");
+		expect(warnings[0]?.section).toBe("tool: editor");
 	});
 
 	it("reports a section naming a tool that does not exist", () => {

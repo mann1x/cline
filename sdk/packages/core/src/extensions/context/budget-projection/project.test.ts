@@ -435,6 +435,109 @@ describe("buildBudgetProjection", () => {
 		);
 	});
 
+	// What compaction leaves behind is what the model wakes up holding. Its own
+	// last turn is the one it is still working on, and a conclusion handed back
+	// with the reasoning cut out of it is a turn the model cannot re-enter.
+	it("leaves compaction's most recent reasoning in place", () => {
+		const result = buildBudgetProjection({
+			messages: [
+				{
+					role: "assistant",
+					content: [
+						{ type: "thinking", thinking: "stale reasoning" },
+						{ type: "text", text: "older turn" },
+					],
+				},
+				{ role: "user", content: "latest typed prompt" },
+				{
+					role: "assistant",
+					content: [
+						{ type: "thinking", thinking: "the turn in flight" },
+						{ type: "text", text: "current turn" },
+					],
+				},
+			],
+			targetTokens: 10_000,
+			policyIntent: "basic_compaction_projection",
+			estimateMessageTokens: estimateChars,
+		});
+
+		const serialized = JSON.stringify(result.messages);
+		expect(serialized).toContain("the turn in flight");
+		expect(serialized).not.toContain("stale reasoning");
+	});
+
+	it("gives up the exemption when keeping it misses the target", () => {
+		// Priced, not assumed: one block at high effort can be the whole
+		// difference between landing inside the target and compacting again on
+		// the next turn.
+		const result = buildBudgetProjection({
+			messages: [
+				{ role: "user", content: "latest typed prompt" },
+				{
+					role: "assistant",
+					content: [
+						{ type: "text", text: "current turn" },
+						{ type: "thinking", thinking: "b".repeat(4_000) },
+					],
+				},
+			],
+			targetTokens: 900,
+			policyIntent: "basic_compaction_projection",
+			estimateMessageTokens: estimateChars,
+		});
+
+		expect(JSON.stringify(result.messages)).not.toContain("b".repeat(100));
+	});
+
+	// The summarizer is reading the transcript to describe it. How the model
+	// talked itself into each tool call is not part of that description.
+	it("still drops every block for the summarizer's own input", () => {
+		const result = buildBudgetProjection({
+			messages: [
+				{ role: "user", content: "latest typed prompt" },
+				{
+					role: "assistant",
+					content: [
+						{ type: "text", text: "current turn" },
+						{ type: "thinking", thinking: "the turn in flight" },
+					],
+				},
+			],
+			targetTokens: 10_000,
+			policyIntent: "agentic_summary",
+			estimateMessageTokens: estimateChars,
+		});
+
+		expect(JSON.stringify(result.messages)).not.toContain("the turn in flight");
+	});
+
+	it("never touches reasoning on an ordinary request", () => {
+		const result = buildBudgetProjection({
+			messages: [
+				{
+					role: "assistant",
+					content: [
+						{ type: "thinking", thinking: "six turns ago" },
+						{ type: "text", text: "older turn" },
+					],
+				},
+				{ role: "user", content: "latest typed prompt" },
+				{
+					role: "assistant",
+					content: [{ type: "thinking", thinking: "the turn in flight" }],
+				},
+			],
+			targetTokens: 10_000,
+			policyIntent: "normal_provider_request",
+			estimateMessageTokens: estimateChars,
+		});
+
+		const serialized = JSON.stringify(result.messages);
+		expect(serialized).toContain("six turns ago");
+		expect(serialized).toContain("the turn in flight");
+	});
+
 	it("drops nested unsafe tool-result blocks outside the protected tail", () => {
 		const result = buildBudgetProjection({
 			messages: [

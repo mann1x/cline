@@ -17,6 +17,7 @@ const mockExtensionState = vi.hoisted(() => ({
 		focusChainSettings: { enabled: false, remindClineInterval: 6 },
 		remoteConfigSettings: {},
 		backgroundEditEnabled: false,
+		editVerificationSettings: { mode: "nudge" },
 	},
 }))
 
@@ -35,6 +36,7 @@ describe("FeatureSettingsSection", () => {
 			...mockExtensionState.value,
 			useAutoCondense: false,
 			compactionStrategy: "basic",
+			focusChainSettings: { enabled: false, remindClineInterval: 6 },
 		}
 	})
 
@@ -89,6 +91,28 @@ describe("FeatureSettingsSection", () => {
 		expect(mockUpdateSetting).toHaveBeenCalledWith("hooksEnabled", true)
 	})
 
+	it("renders the Task Checklist toggle in the Agent section", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		const agentSection = container.querySelector("#agent-features")
+		expect(agentSection?.querySelector('[id="Task Checklist"]')).toBeTruthy()
+	})
+
+	it("keeps the reminder interval when the Task Checklist is toggled", () => {
+		// The setting is an object, so the toggle has to send the whole thing.
+		// A tuned interval must survive that round trip rather than snapping
+		// back to the default.
+		mockExtensionState.value = {
+			...mockExtensionState.value,
+			focusChainSettings: { enabled: false, remindClineInterval: 11 },
+		}
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		fireEvent.click(container.querySelector('[id="Task Checklist"]') as Element)
+
+		expect(mockUpdateSetting).toHaveBeenCalledWith("focusChainSettings", { enabled: true, remindClineInterval: 11 })
+	})
+
 	it("calls updateSetting with showFeatureTips when toggled", () => {
 		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
 
@@ -98,5 +122,91 @@ describe("FeatureSettingsSection", () => {
 		fireEvent.click(featureTipsSwitch as Element)
 
 		expect(mockUpdateSetting).toHaveBeenCalledWith("showFeatureTips", true)
+	})
+})
+
+describe("Thinking Compaction", () => {
+	beforeEach(() => {
+		mockUpdateSetting.mockClear()
+		mockExtensionState.value = {
+			...mockExtensionState.value,
+			useAutoCondense: true,
+		}
+	})
+
+	it("sits below the Compaction Prompt, because it is the other half of it", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		const labels = Array.from(container.querySelectorAll("label")).map((label) => label.textContent)
+		const compaction = labels.indexOf("Compaction Prompt")
+		const thinking = labels.indexOf("Thinking Compaction Prompt")
+
+		expect(compaction).toBeGreaterThanOrEqual(0)
+		expect(thinking).toBe(compaction + 1)
+	})
+
+	it("is on unless it has been turned off", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		expect(container.querySelector("#thinkingCompactionEnabled")?.getAttribute("data-state")).toBe("checked")
+	})
+
+	it("turns off from the switch", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		const toggle = container.querySelector("#thinkingCompactionEnabled")
+		expect(toggle).toBeTruthy()
+		fireEvent.click(toggle as Element)
+
+		expect(mockUpdateSetting).toHaveBeenCalledWith("thinkingCompactionEnabled", false)
+	})
+})
+
+/**
+ * The third thing that rewrites reasoning. It had a prompt and a switch in the
+ * session config from the day it shipped and nothing that wrote either, so the
+ * built-in note was the only note it could ever produce and there was no way to
+ * turn it off.
+ */
+describe("FeatureSettingsSection — capped thinking", () => {
+	it("offers the prompt and the switch", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		const labels = Array.from(container.querySelectorAll("label")).map((label) => label.textContent)
+		expect(labels).toContain("Capped Thinking Prompt")
+		expect(container.querySelector("#cappedThinkingEnabled")?.getAttribute("data-state")).toBe("checked")
+	})
+
+	it("turns off from the switch", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		fireEvent.click(container.querySelector("#cappedThinkingEnabled") as Element)
+
+		expect(mockUpdateSetting).toHaveBeenCalledWith("cappedThinkingEnabled", false)
+	})
+})
+
+/**
+ * The guard that stops a run finishing with a file it changed and never
+ * checked. It shipped built, wired and defaulting to "nudge", with nothing
+ * anywhere that could change it — the mode was in storage and in the generated
+ * Settings proto, and no request field, no handler and no control ever reached
+ * it. So it could only ever be the value it was born with.
+ */
+describe("FeatureSettingsSection — check edited files", () => {
+	it("shows the mode the guard is running on", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		const labels = Array.from(container.querySelectorAll("label")).map((label) => label.textContent)
+		expect(labels).toContain("Check Edited Files")
+		expect(screen.getByText("Nudge")).toBeTruthy()
+	})
+
+	it("falls back to nudge rather than showing an empty control", () => {
+		mockExtensionState.value = { ...mockExtensionState.value, editVerificationSettings: undefined }
+
+		render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		expect(screen.getByText("Nudge")).toBeTruthy()
 	})
 })

@@ -1,8 +1,10 @@
 import { appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { reasoningHistoryModeForProvider } from "@cline/llms";
 import {
 	charsPerToken,
+	consumeContextOverflow,
 	estimateRequestInputTokens,
 	lastObservedRequestTokens,
 } from "@cline/shared";
@@ -32,12 +34,21 @@ import {
 	COMPACTION_TRIGGER_RATIO,
 	createTokenEstimator,
 	DEFAULT_MAX_INPUT_TOKENS,
-	DEFAULT_PRESERVE_RECENT_TOKENS,
 	DEFAULT_TARGET_RATIO,
+	getCompactionSummaryMetadata,
+	resolveCompactionTriggerTokens,
 	resolveEffectiveMaxInputTokens,
+	resolveObservedOutputTokens,
+	resolvePreserveRecentTokens,
 	resolveRecencyBounds,
 	seedCalibrationFromTranscript,
 } from "./compaction-shared";
+import {
+	ensurePolykvPool,
+	polykvSaysCompact,
+	readPolykvCapacity,
+	repointPolykvAfterCompaction,
+} from "./polykv-session";
 
 export interface ContextPipelinePrepareTurnInput {
 	agentId: string;
@@ -107,11 +118,50 @@ export interface ContextCompactionPrepareTurnOptions {
  * near half full and compacted again and again. A third leaves nearly twice the
  * runway for one summary at the same price.
  *
- * Lower is not automatically better. The summarizer has to fit the discarded
- * turns into what is left, and below roughly a third the summary becomes the
- * thing that loses the detail, rather than the window.
+ * Lower is not automatically better, and the measured floor is higher than this
+ * reasoning assumed. Sessions retaining 69,300 and 54,600 tokens finished their
+ * task in an hour to an hour and a half; the same task at 36,300 did not finish
+ * once across a day of attempts, looping instead on files it had already read.
+ * Below roughly half, the summary becomes the thing that loses the detail rather
+ * than the window -- so this rung is for windows tight enough that there is no
+ * alternative, which {@link LONG_CONVERSATION_MAX_OUTPUT_SHARE} is what decides.
  */
 const LONG_CONVERSATION_TARGET_RATIO = 0.33;
+
+/**
+ * How small a model's per-turn output cap has to be for the aggressive target
+ * to apply.
+ *
+ * The rule used to be `modelMaxTokens < maxInputTokens`, which was written when
+ * `modelMaxTokens` was almost never populated and read as "this model has a
+ * genuinely tight cap". Once the cap reached the session it became true of every
+ * local model on every long session, so the aggressive target went from never
+ * firing to always firing and the conservative branch became dead code. That
+ * change is what took the retained context from 54,600 to 36,300, and the
+ * completions stopped on the same day.
+ *
+ * An eighth is the line between a cap that constrains and a cap that is merely
+ * smaller: a model that can only answer in 12,000 tokens against a 100,000
+ * window really does need the runway more than the history, while one allowed
+ * 32,000 of a 110,000 window does not.
+ */
+const LONG_CONVERSATION_MAX_OUTPUT_SHARE = 0.125;
+
+/**
+ * The share of the budget past which the last turn loses its exemption.
+ *
+ * The cut normally stops at the start of the latest typed turn so the model
+ * keeps the request it is working on intact. A turn is a prompt and everything
+ * the model did about it, so one prompt followed by a long tool loop is a
+ * single turn that can be most of the transcript -- and then the exemption is
+ * not protecting the model's train of thought, it is refusing to compact.
+ *
+ * Two thirds is chosen to sit above the 0.33 target with real room to spare, so
+ * an ordinary compaction that simply lands wide of its target does not start
+ * cutting into the live turn; only one that would leave the window still mostly
+ * full does.
+ */
+const LAST_TURN_PRESERVE_CEILING_RATIO = 0.66;
 
 function isCompactionCancellation(
 	error: unknown,
@@ -190,6 +240,9 @@ const BUILTIN_COMPACTION_STRATEGIES = {
 			context,
 			providerConfig,
 			summarizer: compaction?.summarizer,
+			summaryPrompt: compaction?.summaryPrompt,
+			thinkingSummaryEnabled: compaction?.thinkingSummaryEnabled,
+			thinkingSummaryPrompt: compaction?.thinkingSummaryPrompt,
 			// The recency budget is a floor and the message budget a ceiling —
 			// two different bounds, not one clamped by the other. Taking the
 			// smaller of the pair (as this did) collapses them: the floor is
@@ -197,10 +250,19 @@ const BUILTIN_COMPACTION_STRATEGIES = {
 			// and the room the target bought went unused, every compaction
 			// folding to the 20,000-token minimum no matter how much fit.
 			bounds: resolveRecencyBounds({
-				preserveRecentTokens:
-					compaction?.preserveRecentTokens ?? DEFAULT_PRESERVE_RECENT_TOKENS,
+				preserveRecentTokens: resolvePreserveRecentTokens({
+					contextWindow: context.model.info?.contextWindow,
+					maxInputTokens: context.budget.request.maxInputTokens,
+					messageTargetTokens: context.budget.messages.targetTokens,
+					override: compaction?.preserveRecentTokens,
+				}),
 				preserveRecentMessagesRatio: compaction?.preserveRecentMessagesRatio,
 				messageTargetTokens: context.budget.messages.targetTokens,
+				lastTurnCeiling:
+					translateRequestBudgetToMessages(
+						context.budget.request.maxInputTokens,
+						context.budget.request.overheadTokens,
+					) * LAST_TURN_PRESERVE_CEILING_RATIO,
 			}),
 			estimateMessageTokens,
 			logger,
@@ -265,7 +327,8 @@ function resolveAutoRequestTargetTokens(input: {
 		input.messagePairCount >= 5 &&
 		typeof input.modelMaxTokens === "number" &&
 		Number.isFinite(input.modelMaxTokens) &&
-		input.modelMaxTokens < input.maxInputTokens
+		input.modelMaxTokens <=
+			input.maxInputTokens * LONG_CONVERSATION_MAX_OUTPUT_SHARE
 			? Math.floor(input.maxInputTokens * LONG_CONVERSATION_TARGET_RATIO)
 			: Math.floor(input.triggerTokens * DEFAULT_TARGET_RATIO);
 	const triggerCeiling = Math.max(1, input.triggerTokens - 1);
@@ -273,6 +336,33 @@ function resolveAutoRequestTargetTokens(input: {
 		1,
 		Math.min(targetTokens, input.maxInputTokens, triggerCeiling),
 	);
+}
+
+/**
+ * Put an estimate on the same scale as the provider's own count.
+ *
+ * `estimate` and `estimateOfObserved` measure the same transcript the same way;
+ * `observed` is what the provider charged for it. The ratio between the last
+ * two is this session's standing estimator error, and applying it to the first
+ * is what makes a "before" and an "after" comparable. Falls back to the raw
+ * estimate when there is nothing to calibrate against -- the first request of a
+ * session, before any response has been counted.
+ */
+export function scaleEstimateToObserved(
+	estimate: number,
+	estimateOfObserved: number,
+	observed: number | undefined,
+): number {
+	if (
+		observed === undefined ||
+		!Number.isFinite(observed) ||
+		observed <= 0 ||
+		!Number.isFinite(estimateOfObserved) ||
+		estimateOfObserved <= 0
+	) {
+		return estimate;
+	}
+	return Math.max(1, Math.round(estimate * (observed / estimateOfObserved)));
 }
 
 function translateRequestBudgetToMessages(
@@ -356,25 +446,63 @@ export function createContextCompactionPrepareTurn(
 			(total: number, message) => total + estimateMessageTokens(message),
 			0,
 		);
-		const requestInputTokens = estimateRequestInputTokens({
-			systemPrompt: context.systemPrompt,
-			messages: context.apiMessages,
-			tools: context.tools,
-		});
+		// Measured the way the gateway measures it: reasoning the provider will
+		// drop is not part of the request, and counting it here ran the estimate
+		// at roughly twice the provider's own count (139,991 against 60,444,
+		// measured live). The trigger prefers the observed count, so this is the
+		// fallback path -- the first request of a session, and every resume --
+		// which is exactly where an estimate that high compacts a transcript that
+		// had ample room.
+		const reasoningHistory = reasoningHistoryModeForProvider(config.providerId);
+		const requestInputTokens = estimateRequestInputTokens(
+			{
+				systemPrompt: context.systemPrompt,
+				messages: context.apiMessages,
+				tools: context.tools,
+			},
+			{ reasoningHistory },
+		);
 		const messageInputTokens = context.messages.reduce(
 			(total: number, message) => total + estimateMessageTokens(message),
 			0,
 		);
-		const requestOverheadTokens = Math.max(
-			0,
-			requestInputTokens - apiMessageTokens,
+		// Measured directly, not left over from a subtraction. `requestInputTokens`
+		// and `apiMessageTokens` do not share a ratio -- the first splits
+		// reasoning out at its own rate, the second does not -- so their
+		// difference absorbs the whole disagreement between two estimators and
+		// calls it overhead. Measured live: system prompt and tool schemas
+		// totalling 57,876 characters, about 12,700 tokens at the ratio the
+		// session had calibrated, reported as 53,323 tokens of overhead. That
+		// left 56,677 tokens for the transcript instead of ~97,000, dropped the
+		// message target to 32,380, and a compaction that had to hit it cut 24
+		// messages to 4 -- after which the model, having lost what it was working
+		// from, looped. The term also wandered 19,793 -> 53,323 across a single
+		// session while the payload it describes barely changed.
+		const requestOverheadTokens = estimateRequestInputTokens(
+			{
+				systemPrompt: context.systemPrompt,
+				messages: [],
+				tools: context.tools,
+			},
+			{ reasoningHistory },
 		);
 		const maxInputTokens =
 			resolveEffectiveMaxInputTokens({
 				maxInputTokens: context.model.info?.maxInputTokens,
 				contextWindow: context.model.info?.contextWindow,
 			}) ?? DEFAULT_MAX_INPUT_TOKENS;
-		const requestTriggerTokens = maxInputTokens * COMPACTION_TRIGGER_RATIO;
+		// What this session's own turns have cost, so the room held back for the
+		// next one is sized to the model actually running rather than to its
+		// declared ceiling. A model that answers in two thousand tokens and one
+		// that opens seventeen thousand tokens of thinking want opposite
+		// reservations, and the transcript already says which is which.
+		const observedOutputTokens = resolveObservedOutputTokens(context.messages);
+		const requestTriggerTokens = resolveCompactionTriggerTokens({
+			maxInputTokens,
+			contextWindow: context.model.info?.contextWindow,
+			modelMaxTokens: context.model.info?.maxTokens,
+			observedOutputTokens,
+		});
 		const messageTriggerTokens = translateRequestBudgetToMessages(
 			requestTriggerTokens,
 			requestOverheadTokens,
@@ -406,10 +534,41 @@ export function createContextCompactionPrepareTurn(
 			systemPrompt: context.systemPrompt,
 			messages: context.messages,
 			tools: context.tools,
+			reasoningHistory,
 		});
 		const observedRequestTokens = lastObservedRequestTokens();
 		const triggerInputTokens = observedRequestTokens ?? requestInputTokens;
-		const shouldCompact = triggerInputTokens >= requestTriggerTokens;
+		// The request path found no room for a reply on the last turn. That is
+		// not a projection that could be miscalibrated -- it is the budget
+		// arithmetic having already failed -- so it compacts whatever the ratio
+		// above concludes, and covers the case where the two disagree.
+		const contextOverflow = consumeContextOverflow();
+		// The one signal here that is not an estimate.
+		//
+		// On an engine with a KV pool tree, the pool knows what it holds and
+		// says how close to full it is; everything else on this path is
+		// inference from character counts. It is asked only when the session
+		// actually has a pool, it cannot fail the turn, and it can only ever add
+		// a reason to compact -- a pool that says there is room does not
+		// overrule arithmetic that says there is not.
+		await ensurePolykvPool({
+			sessionId: config.sessionId,
+			providerConfig,
+			systemPrompt: context.systemPrompt,
+			tools: context.tools,
+			logger: config.logger,
+		});
+		const polykvCapacity = await readPolykvCapacity({
+			sessionId: config.sessionId,
+			providerConfig,
+			expectedTokens: triggerInputTokens,
+			logger: config.logger,
+		});
+		const polykvPressure = polykvSaysCompact(polykvCapacity);
+		const shouldCompact =
+			contextOverflow !== undefined ||
+			triggerInputTokens >= requestTriggerTokens ||
+			polykvPressure;
 		const diagnostics = {
 			mode: effectiveMode,
 			strategy,
@@ -426,6 +585,13 @@ export function createContextCompactionPrepareTurn(
 			requestTriggerTokens,
 			messageTriggerTokens,
 			thresholdRatio: COMPACTION_TRIGGER_RATIO,
+			contextWindow: context.model.info?.contextWindow,
+			modelMaxTokens: context.model.info?.maxTokens,
+			observedOutputTokens,
+			contextOverflow,
+			polykvCompactionPressure: polykvCapacity?.compaction_pressure,
+			polykvKvHeadroomPct: polykvCapacity?.kv_headroom_pct,
+			polykvPressure,
 			shouldCompact,
 			messageCount: context.messages.length,
 			apiMessageCount: context.apiMessages.length,
@@ -527,18 +693,26 @@ export function createContextCompactionPrepareTurn(
 		let executedStrategy = telemetryStrategy;
 		let result: CoreCompactionResult | undefined;
 		if (effectiveMode === "overflow_recovery") {
-			// The provider already rejected the request, so recovery must end
-			// deterministically: the agentic strategy's own summarizer call could
-			// overflow the same window (its input budgeting trusts the same
-			// estimator that just undercounted). A custom compactor gets first
-			// shot — it sees mode "overflow_recovery" and owns its transcript
-			// invariants — but its result is held to the same bar basic
-			// compaction aims for: strictly smaller than the input (the runtime
+			// Recovery has to end deterministically, because the provider has
+			// already rejected this request: whatever else is attempted, basic
+			// compaction is what guarantees an answer without another LLM call
+			// succeeding. But it is the *last* resort rather than the first,
+			// because of what it costs. Basic compaction drops turns whole, and
+			// measured on live runs the model does not survive it — the
+			// transcript it wakes up in has the work in it but not the reasons,
+			// and every recovery in a session was followed by the run coming
+			// apart. So the summarising strategy gets a bounded attempt first,
+			// held to exactly the bar basic aims for, and basic runs the moment
+			// that attempt throws, declines, or does not shrink the transcript
+			// enough. The failure mode this guards against is one wasted
+			// summariser call; the one it replaces was a dead run.
+			//
+			// A custom compactor still goes first — it sees mode
+			// "overflow_recovery" and owns its transcript invariants — and is
+			// held to the same bar: strictly smaller than the input (the runtime
 			// refuses to retry with a request that is not smaller) AND within
-			// the recovery token target. A marginal shrink would spend the
-			// run's single retry on a request that still cannot fit. On throw,
-			// decline, or an insufficient result, basic compaction runs so
-			// recovery never depends on another successful LLM request.
+			// the recovery token target. A marginal shrink would spend the run's
+			// single retry on a request that still cannot fit.
 			if (userCompaction?.compact) {
 				try {
 					result = await userCompaction.compact(compactionContext);
@@ -587,8 +761,71 @@ export function createContextCompactionPrepareTurn(
 				}
 			}
 			if (!result?.messages) {
+				// Basic first, but as the floor rather than the answer: it is
+				// local, deterministic and cheap, and having it in hand means the
+				// summarising attempt can be judged against what it would
+				// actually replace instead of against a target basic itself is
+				// not held to.
+				const basicResult =
+					await BUILTIN_COMPACTION_STRATEGIES.basic(builtinOptions);
+				const basicTokens = (basicResult?.messages ?? []).reduce(
+					(total: number, message) => total + estimateMessageTokens(message),
+					0,
+				);
 				executedStrategy = "basic";
-				result = await BUILTIN_COMPACTION_STRATEGIES.basic(builtinOptions);
+				result = basicResult;
+
+				if (strategy !== "basic") {
+					// The summarising attempt: one model call, and the difference
+					// between resuming with a transcript that explains itself and
+					// one that merely contains the work.
+					try {
+						const summarised = await runBuiltinStrategy(builtinOptions);
+						const summarisedTokens = (summarised?.messages ?? []).reduce(
+							(total: number, message) =>
+								total + estimateMessageTokens(message),
+							0,
+						);
+						// The bar is whether the retry fits, which is what the
+						// recovery target expresses — not whether it beats basic
+						// on size. It never will: a summary plus the recent turns
+						// is by construction bigger than the recent turns alone,
+						// and a rule that preferred the smaller transcript would
+						// choose the one that loses the reasons every single
+						// time. `basicTokens` is reported when this fails so the
+						// two are comparable in the log.
+						const acceptable =
+							(summarised?.messages?.length ?? 0) > 0 &&
+							summarisedTokens < messageInputTokens &&
+							summarisedTokens <= messageTargetTokens;
+						if (acceptable) {
+							result = summarised;
+							executedStrategy = strategy;
+						} else {
+							config.logger?.log(
+								`${strategy} compaction did not produce an acceptable overflow-recovery transcript; keeping the basic one`,
+								{
+									severity: "warn",
+									summarisedMessageCount: summarised?.messages?.length ?? 0,
+									summarisedTokens,
+									basicTokens,
+									messageTargetTokens,
+								},
+							);
+						}
+					} catch (error) {
+						if (isCompactionCancellation(error, context.abortSignal)) {
+							throw error;
+						}
+						config.logger?.log(
+							`${strategy} compaction failed during overflow recovery; keeping the basic one`,
+							{
+								severity: "warn",
+								...describeCompactionError(error),
+							},
+						);
+					}
+				}
 			}
 		} else if (userCompaction?.compact) {
 			result = await userCompaction.compact(compactionContext);
@@ -651,11 +888,31 @@ export function createContextCompactionPrepareTurn(
 		};
 
 		if (result?.messages) {
+			// Compaction is a prompt rewrite, so the pool it was serving is now
+			// serving text that no longer exists. Re-rooting forks the shared
+			// prefix -- which did not change -- and releases the old subtree; the
+			// alternative is a pinned pool nothing will ever match again, which
+			// is the leak the engine's own design warns about.
+			await repointPolykvAfterCompaction({
+				sessionId: config.sessionId,
+				providerConfig,
+				compactedPrompt: JSON.stringify(result.messages),
+				logger: config.logger,
+			});
+			const compactedSummary = result.messages
+				.map((message) => getCompactionSummaryMetadata(message))
+				.find((metadata) => metadata !== undefined);
 			const afterMessageTokens = result.messages.reduce(
 				(total: number, message) => total + estimateMessageTokens(message),
 				0,
 			);
 			const afterRequestTokens = requestOverheadTokens + afterMessageTokens;
+			// On the provider's scale, so it can be compared with `tokensBefore`.
+			const scaledAfterRequestTokens = scaleEstimateToObserved(
+				afterRequestTokens,
+				requestInputTokens,
+				observedRequestTokens,
+			);
 			config.logger?.log("Context compaction completed", {
 				severity: "info",
 				strategy: executedStrategy,
@@ -685,13 +942,31 @@ export function createContextCompactionPrepareTurn(
 				// estimator was calibrated, which put this notice at odds with
 				// the context bar it sits above. The "after" figure has no
 				// counterpart to use -- it describes a request that has not
-				// been sent -- so it stays an estimate and is corrected by the
-				// next response's usage.
+				// been sent.
+				//
+				// It can only be an estimate, but printing a measurement and an
+				// estimate as the two ends of one arrow compares two different
+				// rulers. Measured live: 89,881 observed before against 93,844
+				// estimated after, shown as a compaction that made the context
+				// *larger* -- and the next response counted 80,317. So the estimate
+				// is scaled by how far this same transcript's estimate stood from
+				// the count the provider gave it. That is the only calibration
+				// available here and it is the right one: the same messages,
+				// measured the same way, moments earlier.
 				tokensBefore: triggerInputTokens,
-				tokensAfter: afterRequestTokens,
+				tokensAfter: scaledAfterRequestTokens,
 				messagesBefore: beforeMessageCount,
 				messagesAfter: result.messages.length,
 				maxInputTokens,
+				// The summary and the retrospective travel with the notice so
+				// the row that announces a compaction can also show what it
+				// produced. A compaction is the one operation whose output the
+				// user never sees and cannot get back to afterwards -- it
+				// replaces the messages it was written from.
+				...(compactedSummary ? { summary: compactedSummary.summary } : {}),
+				...(compactedSummary?.thinkingSummary
+					? { thinkingSummary: compactedSummary.thinkingSummary }
+					: {}),
 			});
 			captureCompactionExecuted(config.telemetry, {
 				ulid: telemetryUlid,
@@ -701,8 +976,8 @@ export function createContextCompactionPrepareTurn(
 				messagesAfter: result.messages.length,
 				messagesRemoved: beforeMessageCount - result.messages.length,
 				tokensBefore: triggerInputTokens,
-				tokensAfter: afterRequestTokens,
-				tokensSaved: triggerInputTokens - afterRequestTokens,
+				tokensAfter: scaledAfterRequestTokens,
+				tokensSaved: triggerInputTokens - scaledAfterRequestTokens,
 				triggerTokens: requestTriggerTokens,
 				maxInputTokens,
 				thresholdRatio: COMPACTION_TRIGGER_RATIO,

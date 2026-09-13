@@ -13,7 +13,7 @@ import {
 import { CommandExitError } from "./executors/bash";
 import { RUN_COMMAND_QUERY_PREVIEW_LIMIT, TimeoutError } from "./helpers";
 import { EDITOR_ARG_CHAR_LIMIT, type EditFileInput } from "./schemas";
-import type { SkillsExecutorWithMetadata } from "./types";
+import type { EditorExecutor, SkillsExecutorWithMetadata } from "./types";
 
 function hasSchemaKey(value: unknown, key: string): boolean {
 	if (Array.isArray(value)) {
@@ -384,6 +384,78 @@ describe("default search_codebase tool", () => {
 				success: true,
 			},
 		]);
+	});
+
+	// The tool's own results come back as `{ query, result, success }` and its
+	// description says so, so a model that has read one sends the singular back.
+	// Reported in #52: three consecutive calls shaped `{"query":"…"}` answered
+	// `✖ Invalid input`, which names no field, and the model gave up on the tool.
+	it.each([
+		["singular string", { query: "startPlayerDrag" }, ["startPlayerDrag"]],
+		["singular array", { query: ["a", "b"] }, ["a", "b"]],
+		["plural string", { queries: "startPlayerDrag" }, ["startPlayerDrag"]],
+		["plural array", { queries: ["a", "b"] }, ["a", "b"]],
+		["bare string", "startPlayerDrag", ["startPlayerDrag"]],
+		["bare array", ["a", "b"], ["a", "b"]],
+	])("accepts a %s query", async (_name, input, expected) => {
+		// Declares the query parameter it ignores: the assertion below reads
+		// `call[0]`, and a mock inferred from `async () => …` has an empty
+		// argument tuple for that to index into.
+		const execute = vi.fn(async (_query: string) => "match");
+		const tool = createSearchTool(execute);
+
+		await tool.execute(input as never, {
+			agentId: "agent-1",
+			conversationId: "conv-1",
+			iteration: 1,
+		});
+
+		expect(execute.mock.calls.map((call) => call[0])).toEqual(expected);
+	});
+
+	// A `{queries: "x", max_per_file: 10}` used to match the bare
+	// `{queries: string}` branch, which stripped the unknown key: the search ran
+	// at one match per file and nothing said the option had been dropped.
+	it.each([
+		["singular", { query: "drag", max_per_file: 10, context_lines: 0 }],
+		["plural", { queries: "drag", max_per_file: 10, context_lines: 0 }],
+	])("keeps the tuning options alongside a %s query", async (_name, input) => {
+		const execute = vi.fn(async () => "match");
+		const tool = createSearchTool(execute);
+
+		await tool.execute(input as never, {
+			agentId: "agent-1",
+			conversationId: "conv-1",
+			iteration: 1,
+		});
+
+		expect(execute).toHaveBeenCalledWith(
+			"drag",
+			expect.any(String),
+			expect.any(Object),
+			{ contextLines: 0, maxPerFile: 10 },
+		);
+	});
+
+	it("leaves the options undefined when the model sent none", async () => {
+		const execute = vi.fn(async () => "match");
+		const tool = createSearchTool(execute);
+
+		await tool.execute(
+			{ queries: ["drag"] },
+			{
+				agentId: "agent-1",
+				conversationId: "conv-1",
+				iteration: 1,
+			},
+		);
+
+		expect(execute).toHaveBeenCalledWith(
+			"drag",
+			expect.any(String),
+			expect.any(Object),
+			undefined,
+		);
 	});
 
 	it("treats executor errors as failures", async () => {
@@ -1390,12 +1462,16 @@ describe("default read_files tool", () => {
 		const tool = createReadFilesTool(execute);
 
 		const result = await tool.execute(
+			// Deliberately the shape the declared input type forbids: a bare
+			// single-file request, unwrapped, with every flag arriving as a
+			// string. That is what a live model sent, and accepting it is the
+			// whole point of the test, so the cast is part of the assertion.
 			{
 				path: "/tmp/manic_miner.html",
 				start_line: "108",
 				end_line: "108",
 				line_numbers: "false",
-			},
+			} as never,
 			{ agentId: "agent-1", conversationId: "conv-1", iteration: 1 },
 		);
 
@@ -2249,5 +2325,200 @@ describe("default editor tool", () => {
 		expect(result.error).toContain("old_text was");
 		expect(result.error).toContain("start_line");
 		expect(execute).not.toHaveBeenCalled();
+	});
+});
+
+/**
+ * Measured on two builds: an `editor` call carrying `path`, `start_line`,
+ * `end_line` and the whole replacement body under `text` — everything present
+ * and correct, refused for a missing argument. Eight such calls in one
+ * two-hour transaction, ten in another.
+ */
+describe("an editor call that names new_text something else", () => {
+	/** Captures what the executor was actually handed, typed. */
+	function recordingEditor() {
+		const seen: EditFileInput[] = [];
+		const execute: EditorExecutor = async (input) => {
+			seen.push(input);
+			return "Replaced line 95";
+		};
+		return { seen, tool: createEditorTool(execute, { cwd: "/w" }) };
+	}
+
+	it("takes `text` as the replacement body", async () => {
+		const { seen, tool } = recordingEditor();
+
+		const result = await tool.execute(
+			{
+				path: "/w/game.html",
+				text: "const a = 1;",
+				start_line: 95,
+				end_line: 95,
+			} as unknown as EditFileInput,
+			{} as never,
+		);
+
+		expect((result as { success: boolean }).success).toBe(true);
+		expect(seen[0]).toMatchObject({ new_text: "const a = 1;" });
+	});
+
+	it.each(["content", "replacement"])("takes `%s` too", async (alias) => {
+		const { seen, tool } = recordingEditor();
+
+		await tool.execute(
+			{
+				path: "/w/a.ts",
+				[alias]: "x",
+				start_line: 3,
+			} as unknown as EditFileInput,
+			{} as never,
+		);
+
+		expect(seen[0]).toMatchObject({ new_text: "x" });
+	});
+
+	// A model that sent the real argument meant it; a stray alias beside it is
+	// not a vote.
+	it("prefers new_text wherever both are present", async () => {
+		const { seen, tool } = recordingEditor();
+
+		await tool.execute(
+			{
+				path: "/w/a.ts",
+				new_text: "real",
+				text: "stray",
+				start_line: 3,
+			} as unknown as EditFileInput,
+			{} as never,
+		);
+
+		expect(seen[0]).toMatchObject({ new_text: "real" });
+	});
+
+	// The alias is a landing net, not a second way to call the tool: the model
+	// is still shown exactly one name for this argument.
+	it("does not advertise the aliases in the schema", () => {
+		const { tool } = recordingEditor();
+
+		expect(hasSchemaKey(tool.inputSchema, "new_text")).toBe(true);
+		expect(hasSchemaKey(tool.inputSchema, "text")).toBe(false);
+		expect(hasSchemaKey(tool.inputSchema, "content")).toBe(false);
+	});
+
+	// This is a rename, never a reconstruction. A call with no replacement body
+	// under any name is still missing one, and must fail rather than be
+	// invented into an empty write.
+	it("still refuses a call that carries no body at all", async () => {
+		const { seen, tool } = recordingEditor();
+
+		await expect(
+			tool.execute(
+				{ path: "/w/a.ts", start_line: 3 } as unknown as EditFileInput,
+				{} as never,
+			),
+		).rejects.toThrow("new_text");
+		expect(seen).toHaveLength(0);
+	});
+
+	it("ignores an alias that is not a string", async () => {
+		const { tool } = recordingEditor();
+
+		await expect(
+			tool.execute(
+				{
+					path: "/w/a.ts",
+					text: 42,
+					start_line: 3,
+				} as unknown as EditFileInput,
+				{} as never,
+			),
+		).rejects.toThrow("new_text");
+	});
+});
+
+describe("an editor call refused for a missing argument", () => {
+	/** The message the model is handed back, as one string. */
+	async function refusal(input: unknown): Promise<string> {
+		const execute: EditorExecutor = async () => "edited";
+		const tool = createEditorTool(execute, { cwd: "/w" });
+		try {
+			await tool.execute(input as EditFileInput, {} as never);
+		} catch (error) {
+			return (error as Error).message;
+		}
+		throw new Error("the call was not refused");
+	}
+
+	// Five of the six missing-argument refusals in the campaign were this: a
+	// range addressed, no body, and a model deleting text with no reason to
+	// think a deletion needs a replacement spelled out.
+	it("spells out how to delete the range it addressed", async () => {
+		const message = await refusal({
+			path: "/w/game.html",
+			start_line: 95,
+			end_line: 291,
+			old_text: "  dGrid(c,x){",
+		});
+
+		expect(message).toContain("Missing required argument `new_text`");
+		expect(message).toContain('`new_text: ""`');
+	});
+
+	it("says what the call did carry, so the model can tell which one it was", async () => {
+		const message = await refusal({
+			path: "/w/game.html",
+			start_line: 95,
+			end_line: 291,
+		});
+
+		expect(message).toContain("The call carried: `path`");
+		expect(message).toContain("`start_line`");
+		expect(message).toContain("`end_line`");
+	});
+
+	// Measured: an `editor` call carrying `line_numbers` was a `read_files`
+	// call in the wrong envelope, and the refusal named only `new_text`.
+	it("names read_files when the arguments are a read", async () => {
+		const message = await refusal({
+			path: "/w/game.html",
+			start_line: 90,
+			end_line: 90,
+			line_numbers: false,
+		});
+
+		expect(message).toContain("`read_files`");
+		expect(message).toContain("`line_numbers`");
+	});
+
+	// The tool that fills in the file a model forgot to name is the tool that
+	// edits the wrong one.
+	it("proposes no path of its own when path is what is missing", async () => {
+		const message = await refusal({
+			start_line: 96,
+			end_line: 97,
+			new_text: "  sX(){return -1;}",
+		});
+
+		expect(message).toContain("Missing required argument `path`");
+		expect(message).toContain("never inferred");
+		expect(message).not.toContain("/w/");
+	});
+
+	// A call that validates has nothing to be told.
+	it("says none of this when the call is well formed", async () => {
+		const seen: EditFileInput[] = [];
+		const execute: EditorExecutor = async (input) => {
+			seen.push(input);
+			return "Replaced line 95";
+		};
+		const tool = createEditorTool(execute, { cwd: "/w" });
+
+		const result = await tool.execute(
+			{ path: "/w/a.ts", start_line: 3, new_text: "" } as EditFileInput,
+			{} as never,
+		);
+
+		expect((result as { success: boolean }).success).toBe(true);
+		expect(seen).toHaveLength(1);
 	});
 });

@@ -20,7 +20,37 @@ export const INPUT_ARG_CHAR_LIMIT = 6000;
  * thing. The guard is still here to catch a runaway payload; it should not be
  * catching ordinary work.
  */
-export const EDITOR_ARG_CHAR_LIMIT = 16_000;
+export const DEFAULT_EDITOR_ARG_CHAR_LIMIT = 32_000;
+
+/**
+ * Resolve the ceiling, allowing a deployment to move it.
+ *
+ * The number that actually constrains an edit is the per-turn output cap, and
+ * that is a property of the model, not of this file. At a 32,000-token cap with
+ * 16,000 reserved for thinking there is roughly 41,000 characters of room for
+ * the reply, so a 16,000-character ceiling was leaving most of the budget
+ * unusable; a smaller local model may want it lower again. Read once at module
+ * load — the value is interpolated into the tool description the model reads,
+ * so it cannot be allowed to change underneath a running session and leave the
+ * prompt describing a limit that is no longer enforced.
+ *
+ * Anything unparseable, zero or negative falls back to the default rather than
+ * disabling the guard: a typo in an environment variable should not silently
+ * remove a safety limit.
+ */
+function resolveEditorArgCharLimit(): number {
+	const raw = process.env.CLINE_EDITOR_ARG_CHAR_LIMIT?.trim();
+	if (!raw) {
+		return DEFAULT_EDITOR_ARG_CHAR_LIMIT;
+	}
+	const parsed = Number(raw);
+	if (!Number.isFinite(parsed) || parsed <= 0) {
+		return DEFAULT_EDITOR_ARG_CHAR_LIMIT;
+	}
+	return Math.floor(parsed);
+}
+
+export const EDITOR_ARG_CHAR_LIMIT = resolveEditorArgCharLimit();
 
 /**
  * A boolean that also accepts the string a model actually sends.
@@ -175,15 +205,51 @@ export const SearchCodebaseInputSchema = z.object({
 		),
 });
 
+/** The two tuning fields, shared by every object shape below. */
+const SearchOptionFields = {
+	context_lines: SearchCodebaseInputSchema.shape.context_lines,
+	max_per_file: SearchCodebaseInputSchema.shape.max_per_file,
+};
+
 /**
- * Union schema for search_codebase tool input, allowing either a single string, an array of strings, or the full object schema
+ * Union schema for search_codebase tool input, allowing either a single string,
+ * an array of strings, or the full object schema.
+ *
+ * `query` is accepted alongside `queries` because the tool teaches the singular
+ * itself: every result comes back as `{ query, result, success }`, and the tool
+ * description says so in as many words. Measured on a live session, a model that
+ * had read its own search results then sent `{"query":"SpectatorSelectionCard"}`
+ * and got `✖ Invalid input` — a union that matches no branch names no field, so
+ * it retried the same shape twice more before giving up on the tool. `read_files`
+ * already takes `path`, `file_path`, `filePath`, `files`, `file_paths` and
+ * `paths`; this one had four branches and none of them singular.
+ *
+ * Every branch normalises to the canonical `{ queries: string[] }`, and the two
+ * option fields ride along on the object branches. They did not before: a
+ * `{queries: "x", max_per_file: 10}` matched the bare `{queries: string}` branch,
+ * which stripped the unknown key, so the search silently ran at the default of
+ * one match per file.
  */
-export const SearchCodebaseUnionInputSchema = z.union([
-	SearchCodebaseInputSchema,
-	z.array(z.string()),
-	z.string(),
-	z.object({ queries: z.string() }),
-]);
+export const SearchCodebaseUnionInputSchema = z
+	.union([
+		SearchCodebaseInputSchema,
+		z.array(z.string()).transform((queries) => ({ queries })),
+		z.string().transform((query) => ({ queries: [query] })),
+		z
+			.object({ queries: z.string(), ...SearchOptionFields })
+			.transform(({ queries, ...rest }) => ({ queries: [queries], ...rest })),
+		z
+			.object({ query: z.array(z.string()), ...SearchOptionFields })
+			.transform(({ query, ...rest }) => ({ queries: query, ...rest })),
+		z
+			.object({ query: z.string(), ...SearchOptionFields })
+			.transform(({ query, ...rest }) => ({ queries: [query], ...rest })),
+	])
+	// Piped back through the canonical schema so the caller is handed one shape
+	// rather than a six-way union it has to narrow. Every branch already produces
+	// something this accepts; the pipe is what makes that a type as well as a
+	// convention.
+	.pipe(SearchCodebaseInputSchema);
 
 const CommandInputSchema = z
 	.string()
@@ -211,6 +277,16 @@ export const RunCommandsInputSchema = z.object({
 	commands: z
 		.array(CommandInputSchema)
 		.describe("Array of complete shell command strings to execute."),
+	// Only meaningful when the user has configured QA credentials; the tool
+	// description lists the names when there are any and says nothing when
+	// there are none. Optional everywhere, because a command that spells
+	// `$QA_PASSWORD` out is already asking.
+	credentials: z
+		.array(z.string())
+		.optional()
+		.describe(
+			"Names of configured QA credentials these commands need, for a command that does not name them itself (a test runner reading its own environment). Values are set only for this call and are never shown to you.",
+		),
 });
 
 const StructuredCommandsInputSchema = z.object({
@@ -218,17 +294,68 @@ const StructuredCommandsInputSchema = z.object({
 });
 
 /**
+ * One command, however the model chose to spell it.
+ *
+ * Measured live: `run_commands` answered `Invalid input` to every call in a
+ * session -- for `echo` as much as for a pipeline -- and the model concluded
+ * the tool was "definitively non-functional in this environment". The union
+ * accepted `cmd` at the top level but not inside `commands`, and `args` only
+ * as an array, so a single spelling slip failed the whole call with a message
+ * that named no field.
+ *
+ * These are the unambiguous spellings only. Each is transformed to the
+ * canonical entry so everything downstream sees one shape.
+ */
+const ARGV_MIN_LENGTH = 1;
+
+const LooseCommandEntrySchema = z.union([
+	CommandInputSchema,
+	StructuredCommandInputSchema,
+	// `args` as a single string rather than a list.
+	z
+		.object({ command: z.string().min(1), args: z.string() })
+		.transform(({ command, args }) => ({ command, args: [args] })),
+	// `cmd` inside `commands`, which the top level already accepted.
+	z
+		.object({
+			cmd: z.string().min(1),
+			args: z.union([z.array(z.string()), z.string()]).optional(),
+		})
+		.transform(({ cmd, args }) => ({
+			command: cmd,
+			...(args === undefined
+				? {}
+				: { args: typeof args === "string" ? [args] : args }),
+		})),
+	// The other names models reach for when they mean "a shell command".
+	z
+		.object({ shell_command: z.string().min(1) })
+		.transform(({ shell_command }) => shell_command),
+	z.object({ script: z.string().min(1) }).transform(({ script }) => script),
+	// An argv list: first element is the executable, the rest are arguments.
+	z
+		.array(z.string())
+		.min(ARGV_MIN_LENGTH)
+		.transform((argv) => ({ command: argv[0], args: argv.slice(1) })),
+]);
+
+/**
  * Union schema for run_commands tool input. More flexible.
  */
 export const RunCommandsInputUnionSchema = z.union([
 	RunCommandsInputSchema,
 	StructuredCommandsInputSchema,
-	z.object({ commands: StructuredCommandEntrySchema }),
+	z.object({ commands: z.array(LooseCommandEntrySchema) }),
+	z.object({ commands: LooseCommandEntrySchema }),
 	z.array(StructuredCommandInputSchema),
 	StructuredCommandInputSchema,
 	z.object({ command: CommandInputSchema }),
 	z.object({ cmd: CommandInputSchema }),
+	// Before the loose entry, and deliberately: a bare list of strings has
+	// always meant a list of shell commands, and the loose entry would read the
+	// same value as one argv list. Order is the only thing separating them.
 	z.array(z.string()),
+	LooseCommandEntrySchema,
 	z.string(),
 ]);
 
@@ -276,6 +403,105 @@ export const LooseFetchWebContentInputSchema = z.union([
 ]);
 
 /**
+ * The names a model reaches for when it means `new_text`.
+ *
+ * This is a landing net kept on judgement, not on evidence: every refused
+ * `editor` call in the campaign that measured it was missing its body outright
+ * rather than sending it under another name. A first reading of that data said
+ * otherwise and it was wrong. It stays because the cost of catching a synonym
+ * is one rename and the cost of missing one is a spent turn, and a smaller
+ * model is likelier to reach for the ordinary word.
+ *
+ * Accepting the synonym is safe in a way that repairing a payload is not, and
+ * the difference is worth stating. Nothing here reconstructs a value or infers
+ * intent: the schema has no `text`, `content` or `replacement` field of its
+ * own, so a string under one of those names has exactly one thing it can be,
+ * and it arrived whole. A `new_text` that was cut short still fails, as it
+ * must — a call truncated mid-value patched up and executed writes the
+ * fragment over the file it names, and says nothing.
+ *
+ * `new_text` wins wherever both are present: a model that sent the real
+ * argument meant it, and a stray `text` beside it is not a vote.
+ */
+const NEW_TEXT_ALIASES = ["text", "content", "replacement"] as const;
+
+export function withNewTextAlias(value: unknown): unknown {
+	if (value == null || typeof value !== "object" || Array.isArray(value)) {
+		return value;
+	}
+	const input = value as Record<string, unknown>;
+	if (typeof input.new_text === "string") {
+		return value;
+	}
+	for (const alias of NEW_TEXT_ALIASES) {
+		if (typeof input[alias] === "string") {
+			const { [alias]: aliased, ...rest } = input;
+			return { ...rest, new_text: aliased };
+		}
+	}
+	return value;
+}
+
+/** Arguments that address a region without saying what belongs in it. */
+const EDITOR_ADDRESSING_ARGS = [
+	"old_text",
+	"start_line",
+	"end_line",
+	"start_column",
+	"end_column",
+	"insert_line",
+	"insert_column",
+	"occurrence",
+	"replace_all",
+] as const;
+
+/** Arguments that belong to `read_files`, which the editor's schema drops. */
+const READ_FILES_ARGS = ["files", "line_numbers"] as const;
+
+/**
+ * Say what an incomplete `editor` call was trying to be.
+ *
+ * "Missing required argument `new_text`" is accurate and, on the calls that
+ * earn it, not enough. Measured across eleven runs, six `editor` calls were
+ * refused for a missing argument and five of them had addressed a region and
+ * sent no body: the model was deleting a range and had no reason to think a
+ * deletion needed a replacement to be spelled out. The sixth carried
+ * `line_numbers` — a `read_files` argument — and was a read wearing the wrong
+ * envelope, which the refusal, complaining only about `new_text`, hid.
+ *
+ * Every line here is read off the arguments that arrived. Nothing is guessed,
+ * and in particular no path is ever proposed: the tool that fills in the file
+ * a model forgot to name is the tool that edits the wrong one.
+ */
+export function describeEditorArgumentGap(value: unknown): string | null {
+	if (value == null || typeof value !== "object" || Array.isArray(value)) {
+		return null;
+	}
+	const input = value as Record<string, unknown>;
+	const has = (key: string) => input[key] !== undefined && input[key] !== null;
+	const notes: string[] = [];
+
+	if (!has("new_text") && EDITOR_ADDRESSING_ARGS.some(has)) {
+		notes.push(
+			'`new_text` is what goes into the region you addressed, and every form of this call needs it — a deletion included. To delete that region rather than replace it, send `new_text: ""`.',
+		);
+	}
+	if (!has("path")) {
+		notes.push(
+			"`path` is the one file this call edits. It is not carried over from an earlier call and is never inferred, so a call without it is not aimed at anything.",
+		);
+	}
+	const readArgs = READ_FILES_ARGS.filter(has);
+	if (readArgs.length > 0) {
+		const names = readArgs.map((arg) => `\`${arg}\``).join(" and ");
+		notes.push(
+			`${names} ${readArgs.length === 1 ? "is an argument" : "are arguments"} of \`read_files\`, not of \`editor\`, and ${readArgs.length === 1 ? "was" : "were"} dropped here. If you meant to look at that range rather than change it, call \`read_files\`.`,
+		);
+	}
+	return notes.length > 0 ? notes.join("\n") : null;
+}
+
+/**
  * Schema for editor tool input
  */
 export const EditFileInputSchema = z
@@ -294,7 +520,7 @@ export const EditFileInputSchema = z
 		new_text: z
 			.string()
 			.describe(
-				`The new content to write when creating a missing file, the replacement text for edits, or the inserted text when insert_line is provided. Keep this at or below ${EDITOR_ARG_CHAR_LIMIT} characters for an edit; a whole-file write — new_text with no old_text, insert_line or start_line — has no limit, because there is nothing to split it into.`,
+				`The new content to write when creating a missing file, the replacement text for edits, or the inserted text when insert_line is provided. Keep this at or below ${EDITOR_ARG_CHAR_LIMIT} characters for an edit. A whole-file write has no limit, because there is nothing to split it into: that is new_text alone for a file that does not exist, or start_line: 1 with end_line set to the file's line count for one that does.`,
 			),
 		// See start_line above: coerced so a stringified line number still applies.
 		insert_line: z.coerce

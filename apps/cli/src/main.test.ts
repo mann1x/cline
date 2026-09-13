@@ -200,6 +200,10 @@ vi.mock("./utils/feature-flags", () => ({
 }));
 vi.mock("./runtime/prompt", () => ({
 	resolveSystemPrompt: promptMocks.resolveSystemPrompt,
+	// The loader reads this to fill `{{IDE_NAME}}` in the tool descriptions; a
+	// mock without it fails the import rather than the assertion, which is how
+	// 45 tests in this file failed for one missing export.
+	CLI_IDE_NAME: "Terminal Shell",
 }));
 vi.mock("./commands/kanban", () => kanbanMocks);
 vi.mock("./commands/dashboard", () => dashboardMocks);

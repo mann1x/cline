@@ -16,11 +16,39 @@ import {
 import { setHomeDirIfUnset } from "@cline/shared/storage";
 import { isOAuthProvider } from "../../auth/provider-auth-registry";
 import {
+	createCappedThinkingNoteWriter,
+	createCappedThinkingPrepareTurn,
+} from "../../extensions/context/capped-thinking";
+import {
 	createCompactionStateAwarePrepareTurn,
 	createContextCompactionPrepareTurn,
 } from "../../extensions/context/compaction";
+import { releasePolykvSession } from "../../extensions/context/polykv-session";
 import type { ToolExecutors } from "../../extensions/tools";
 import { DefaultToolNames } from "../../extensions/tools";
+import {
+	CHECK_FILE_TOOL_NAME,
+	createCheckFileTool,
+} from "../../extensions/tools/check-file";
+import { joinCheckerToShell } from "../../extensions/tools/check-on-failure";
+import { createTaskProgressTool } from "../../extensions/tools/definitions";
+import {
+	createEditVerificationCompletionGuard,
+	EditVerificationTracker,
+	withEditVerificationCapture,
+} from "../../extensions/tools/edit-verification";
+import {
+	createListFilesTool,
+	createLocalWorkspaceLister,
+	LIST_FILES_TOOL_NAME,
+} from "../../extensions/tools/list-files";
+import {
+	createTaskProgressCompletionGuard,
+	findLatestTaskProgress,
+	TASK_PROGRESS_PARAM,
+	TaskProgressTracker,
+	withTaskProgressCapture,
+} from "../../extensions/tools/task-progress";
 import type { TeamEvent } from "../../extensions/tools/team";
 import type { HookEventPayload } from "../../hooks";
 import { buildTelemetryAgentIdentity } from "../../services/agent-events";
@@ -569,7 +597,192 @@ export class LocalRuntimeHost implements RuntimeHost {
 			onAuthError,
 		});
 
-		const tools = [...runtime.tools, ...(configWithProvider.extraTools ?? [])];
+		// Builtins and host tools are merged before the checklist is applied, so
+		// a host that replaces a builtin with its own (VS Code swaps
+		// `run_commands` for a terminal-aware version) does not end up with the
+		// most-used tool in a coding run as the only one carrying no checklist.
+		// The wrapper is idempotent, so a toolset already wrapped by the builtin
+		// factory passes through untouched rather than counting calls twice.
+		const mergedTools = [
+			...runtime.tools,
+			...(configWithProvider.extraTools ?? []),
+		];
+		const taskProgressConfig = configWithProvider.taskProgress;
+		const taskProgressTracker = taskProgressConfig?.enabled
+			? new TaskProgressTracker({
+					...(taskProgressConfig.reminderInterval !== undefined
+						? { reminderInterval: taskProgressConfig.reminderInterval }
+						: {}),
+					...(taskProgressConfig.onUpdate
+						? { onUpdate: taskProgressConfig.onUpdate }
+						: {}),
+				})
+			: undefined;
+		// A resumed task would otherwise come back with an empty checklist and the
+		// model would be reminded of nothing. History is the durable copy — every
+		// call that carried a checklist is in it — so the tracker is warmed from
+		// the transcript rather than persisted separately.
+		taskProgressTracker?.hydrate(
+			findLatestTaskProgress(
+				initialMessages as readonly { content?: unknown }[] | undefined,
+			),
+		);
+		// The checklist has two halves and this path only ever wired one of them.
+		//
+		// `withTaskProgressCapture` below adds the `task_progress` parameter to
+		// every tool and feeds the tracker, which is why the panel counts the
+		// boxes correctly. The standalone tool -- the name a model calls when it
+		// has no other call to attach the checklist to -- is pushed by
+		// `createDefaultTools`, and only when a tracker was passed *into* it.
+		// Here the tracker is built after the tools, so it never was: the
+		// parameter worked, the tool did not exist, and a model that called it
+		// got `AI_NoSuchToolError: Model tried to call unavailable tool
+		// 'task_progress'` while the panel beside it read "Tasks (7/7)".
+		//
+		// Added by name-check rather than unconditionally, because a caller that
+		// did build its tools through `createDefaultTools` with a tracker already
+		// has one and a duplicate name is its own failure.
+		const mergedToolsWithChecklist =
+			taskProgressTracker &&
+			!mergedTools.some((tool) => tool.name === TASK_PROGRESS_PARAM)
+				? [...mergedTools, createTaskProgressTool()]
+				: mergedTools;
+		// The other half of "did this run leave the file in a state anyone looked
+		// at". The checklist says what the model meant to do; this says whether
+		// what it did was checked. Both watch the same merged list, so a host
+		// tool -- VS Code's own terminal-aware `run_commands`, its `check_file`
+		// -- is covered exactly like a builtin.
+		// A host with no checker gets no guard, and this host had no checker: the
+		// editor's language servers are VS Code's, and nothing replaced them
+		// here. So one is supplied. It answers a narrower question than the
+		// editor does -- syntax and brackets, not types -- but it is the
+		// difference between a model that can confirm its own edit and one that
+		// cannot, and on the CLI the measured result of the latter was ten edits,
+		// no checks, and "the implementation is complete" on a file that does not
+		// parse.
+		const checklessTools = mergedToolsWithChecklist;
+		const mergedToolsWithChecker = checklessTools.some(
+			(tool) => tool.name === CHECK_FILE_TOOL_NAME,
+		)
+			? checklessTools
+			: [
+					...checklessTools,
+					createCheckFileTool({
+						cwd: configWithProvider.cwd,
+						...(configWithProvider.checkFile?.lintCommand
+							? { lintCommand: configWithProvider.checkFile.lintCommand }
+							: {}),
+					}),
+				];
+		// And the other thing this host had no answer for: what is here. A model
+		// with no way to look around does not go without -- it runs `ls`, or
+		// `dir /s` from wherever the shell started, which is unbounded, unscoped
+		// and formatted differently on every platform. Added by name-check like
+		// the checker above, so a host that installs its own -- VS Code asks the
+		// editor, which honours the user's own excludes -- keeps it.
+		const mergedToolsWithLister = mergedToolsWithChecker.some(
+			(tool) => tool.name === LIST_FILES_TOOL_NAME,
+		)
+			? mergedToolsWithChecker
+			: [
+					...mergedToolsWithChecker,
+					createListFilesTool({
+						cwd: configWithProvider.cwd,
+						createLister: () =>
+							createLocalWorkspaceLister(
+								configWithProvider.workspaceRoot ?? configWithProvider.cwd,
+							),
+					}),
+				];
+		// Having both tools is not the same as using both. A model that runs the
+		// build and is told the file is broken has, measured, gone off and
+		// written its own analyser rather than asking the checker sitting next
+		// to it — three scratch scripts in one transaction, twenty-two edits,
+		// none of them to the broken file. So a failing command now returns the
+		// checker's answer about the file it named, in the same result. Wired
+		// over the merged list, after both halves are in it, so a host's own
+		// terminal-aware shell and its own language-server checker are joined
+		// exactly like the builtins.
+		const mergedToolsWithFailureChecks = joinCheckerToShell(
+			mergedToolsWithLister,
+			{
+				cwd: configWithProvider.cwd ?? process.cwd(),
+				shellName: DefaultToolNames.RUN_COMMANDS,
+				checkerName: CHECK_FILE_TOOL_NAME,
+			},
+		);
+		const editVerificationConfig = configWithProvider.editVerification;
+		// Nudge rather than off, now that this host always has a checker to
+		// name. Off was the honest default while it had none — a guard that can
+		// never be satisfied is worse than no guard — and that is no longer the
+		// situation. Nudging costs a run two turns; not nudging cost one the
+		// whole task.
+		const editVerificationMode = editVerificationConfig?.mode ?? "nudge";
+		const editVerificationSettings = {
+			editTools: editVerificationConfig?.editTools ?? [
+				DefaultToolNames.EDITOR,
+				DefaultToolNames.APPLY_PATCH,
+			],
+			checkTools: editVerificationConfig?.checkTools ?? [CHECK_FILE_TOOL_NAME],
+			// "require" is the same guard given more room to insist.
+			attempts: editVerificationMode === "require" ? 4 : 2,
+		};
+		const editVerificationTracker =
+			editVerificationMode === "off" ||
+			editVerificationSettings.checkTools.length === 0
+				? undefined
+				: new EditVerificationTracker(editVerificationSettings);
+		const toolsToWrap = mergedToolsWithFailureChecks;
+		const withChecklist = taskProgressTracker
+			? toolsToWrap.map((tool) =>
+					withTaskProgressCapture(tool, taskProgressTracker),
+				)
+			: // `toolsToWrap`, not `mergedTools`: falling back to the pre-checklist
+				// list drops every tool added since, which is how the checker would
+				// have gone missing on exactly the runs that have no checklist.
+				toolsToWrap;
+		const tools = editVerificationTracker
+			? withChecklist.map((tool) =>
+					withEditVerificationCapture(tool, editVerificationTracker),
+				)
+			: withChecklist;
+		// Don't let the run end quietly on a checklist with open boxes. Composed
+		// rather than assigned: the runtime may already carry a guard (team
+		// obligations), and that one speaks to work the model cannot simply tick
+		// off, so it goes first and the checklist only gets a say once it passes.
+		const checklistCloseOutGuard = taskProgressTracker
+			? createTaskProgressCompletionGuard(taskProgressTracker)
+			: undefined;
+		// Same composition, one more link: an unchecked edit is a fact about the
+		// work rather than a box the model can tick, so it speaks before the
+		// checklist and after anything the runtime already carries.
+		const uncheckedEditsGuard = editVerificationTracker
+			? createEditVerificationCompletionGuard(
+					editVerificationTracker,
+					editVerificationSettings,
+				)
+			: undefined;
+		const existingCompletionGuard = runtime.completionPolicy?.completionGuard;
+		const composedGuards = [
+			existingCompletionGuard,
+			uncheckedEditsGuard,
+			checklistCloseOutGuard,
+		].filter((guard): guard is () => string | undefined => guard !== undefined);
+		const completionPolicyWithChecklistCloseOut =
+			composedGuards.length > 0
+				? {
+						...runtime.completionPolicy,
+						completionGuard: () => {
+							for (const guard of composedGuards) {
+								const message = guard();
+								if (message !== undefined) {
+									return message;
+								}
+							}
+							return undefined;
+						},
+					}
+				: runtime.completionPolicy;
 		const extensions = runtime.extensions ?? bootstrap.extensions;
 		const explicitInitialCompactionState = startInput.initialCompactionState;
 		let activeSessionRef: ActiveSession | undefined;
@@ -588,56 +801,83 @@ export class LocalRuntimeHost implements RuntimeHost {
 						rawInitialCompactionState.conversation_id?.trim() || sessionId,
 				}
 			: undefined;
-		const prepareTurn = createCompactionStateAwarePrepareTurn({
-			compact,
-			getState: () => activeSessionRef?.compactionState,
-			saveState: async (state, sourceMessages) => {
-				const activeSession = activeSessionRef;
-				if (!activeSession) return;
-				const stateForSession = {
-					...state,
-					conversation_id: activeSession.sessionId,
-				};
-				try {
-					// Validate against the exact messages the state's hash was
-					// computed from. Mid-turn, `agent.getMessages()` (the
-					// conversation store) can legally differ from the runtime's
-					// working transcript, so validating against the store would
-					// spuriously reject the write.
-					const result = await this.persistActiveSessionCompactionState(
-						activeSession,
-						stateForSession,
-						sourceMessages,
-					);
-					if (!result.updated) {
-						configWithProvider.logger?.debug?.(
-							"Skipped stale session compaction state",
-							{
-								sessionId: activeSession.sessionId,
-								sourceMessageCount: stateForSession.source_message_count,
-							},
+		const cappedThinkingConfig = {
+			// Ahead of compaction: a condensed turn is a smaller turn, so
+			// whatever compaction then decides, it decides about a
+			// transcript that is not carrying an abandoned think.
+			enabled: configWithProvider.compaction?.cappedThinkingEnabled,
+			budgetTokens: configWithProvider.compaction?.thinkingBudgetTokens,
+			budgetMessage: configWithProvider.compaction?.cappedThinkingBudgetMessage,
+			promptTemplate: configWithProvider.compaction?.cappedThinkingPrompt,
+			// The resolved one, not the one on the config: nothing sets
+			// `config.providerConfig` on this path — compaction quietly
+			// substitutes `{ providerId, modelId }` for it a few lines down,
+			// and the agent config below uses the bootstrap's. Reading the
+			// unset field meant the condenser stood down on every session,
+			// which is exactly as visible as it sounds: no note, no failure,
+			// no log, through a run where the cap fired on 288 requests.
+			providerConfig: configWithProvider.providerConfig ?? providerConfig,
+			summarizer: configWithProvider.compaction?.summarizer,
+			logger: configWithProvider.logger,
+		};
+		// The transcript is one of the two places a capped think turns up, and
+		// the rarer one. The other is the agent loop's discard path, which is
+		// where the turns that actually end at the budget message go.
+		const condenseDiscardedReasoning =
+			createCappedThinkingNoteWriter(cappedThinkingConfig);
+		const prepareTurn = createCappedThinkingPrepareTurn(
+			createCompactionStateAwarePrepareTurn({
+				compact,
+				getState: () => activeSessionRef?.compactionState,
+				saveState: async (state, sourceMessages) => {
+					const activeSession = activeSessionRef;
+					if (!activeSession) return;
+					const stateForSession = {
+						...state,
+						conversation_id: activeSession.sessionId,
+					};
+					try {
+						// Validate against the exact messages the state's hash was
+						// computed from. Mid-turn, `agent.getMessages()` (the
+						// conversation store) can legally differ from the runtime's
+						// working transcript, so validating against the store would
+						// spuriously reject the write.
+						const result = await this.persistActiveSessionCompactionState(
+							activeSession,
+							stateForSession,
+							sourceMessages,
 						);
+						if (!result.updated) {
+							configWithProvider.logger?.debug?.(
+								"Skipped stale session compaction state",
+								{
+									sessionId: activeSession.sessionId,
+									sourceMessageCount: stateForSession.source_message_count,
+								},
+							);
+						}
+					} catch (error) {
+						configWithProvider.logger?.error?.(
+							"Failed to persist session compaction state",
+							{ sessionId: activeSession.sessionId, error },
+						);
+						captureSdkError(configWithProvider.telemetry, {
+							component: "core",
+							operation: "session.persist_compaction_state",
+							severity: "warn",
+							handled: true,
+							error,
+							context: {
+								sessionId: activeSession.sessionId,
+								providerId: configWithProvider.providerId,
+								modelId: configWithProvider.modelId,
+							},
+						});
 					}
-				} catch (error) {
-					configWithProvider.logger?.error?.(
-						"Failed to persist session compaction state",
-						{ sessionId: activeSession.sessionId, error },
-					);
-					captureSdkError(configWithProvider.telemetry, {
-						component: "core",
-						operation: "session.persist_compaction_state",
-						severity: "warn",
-						handled: true,
-						error,
-						context: {
-							sessionId: activeSession.sessionId,
-							providerId: configWithProvider.providerId,
-							modelId: configWithProvider.modelId,
-						},
-					});
-				}
-			},
-		});
+				},
+			}),
+			cappedThinkingConfig,
+		);
 
 		const agentConfig = {
 			sessionId,
@@ -660,6 +900,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 			maxIterations: configWithProvider.maxIterations,
 			execution: configWithProvider.execution,
 			prepareTurn,
+			condenseDiscardedReasoning,
 			tools,
 			hooks: bootstrap.hooks,
 			extensions,
@@ -693,7 +934,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 			telemetry: configWithProvider.telemetry,
 			onConsecutiveMistakeLimitReached:
 				configWithProvider.onConsecutiveMistakeLimitReached,
-			completionPolicy: runtime.completionPolicy,
+			completionPolicy: completionPolicyWithChecklistCloseOut,
 			consumePendingUserMessage: () => {
 				const entry = this.pendingPromptsController.consumeSteer(sessionId);
 				return entry
@@ -703,6 +944,20 @@ export class LocalRuntimeHost implements RuntimeHost {
 						)
 					: undefined;
 			},
+			// The describer and the rule that it runs on every turn, which is the
+			// whole of the vision-model feature from this layer's point of view.
+			//
+			// This object is an explicit list with no spread, so a field a host
+			// sets on the session config and nobody copies here is dropped in
+			// silence — the same way `condenseDiscardedReasoning` was, one layer
+			// further in. Both of these were dropped, so the describer was built,
+			// logged as installed, and then never called: the image went to the
+			// session's model, which is exactly what configuring a vision model is
+			// supposed to prevent. Measured through the CLI with a real image and a
+			// real vision model — `[Vision] Describer installed`, no describe call,
+			// and the image still in the transcript at request time.
+			describeImages: configWithProvider.describeImages,
+			alwaysDescribeImages: configWithProvider.alwaysDescribeImages,
 			logger: runtime.logger ?? configWithProvider.logger,
 			extensionContext: configWithProvider.extensionContext,
 			onEvent: (event: AgentEvent) =>
@@ -2024,6 +2279,16 @@ export class LocalRuntimeHost implements RuntimeHost {
 			});
 		}
 		notifyTeamRunWaiters(session);
+		// A pin outliving the session it was taken for is a leak of the cells it
+		// holds -- the engine reports the orphan, but nothing reclaims it. This
+		// is the one place every ended session passes through.
+		await releasePolykvSession({
+			sessionId: session.sessionId,
+			providerConfig: (session.config.providerConfig ?? {
+				providerId: session.config.providerId,
+			}) as never,
+			logger: session.config.logger,
+		});
 
 		const cleanupErrors: unknown[] = [];
 		const recordCleanupError = (stage: string, error: unknown) => {

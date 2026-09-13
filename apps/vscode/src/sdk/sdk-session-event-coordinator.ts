@@ -8,6 +8,7 @@ import { isClineManagedProvider } from "@/shared/utils/cline"
 import type { MessageTranslatorState, TranslationResult } from "./message-translator"
 import { translateSessionEvent } from "./message-translator"
 import { PROVIDER_FAILURE_ERROR_TYPE, PROVIDER_FAILURE_PHASE, type ProviderFailureTelemetry } from "./provider-failure-telemetry"
+import { formatRequestDuration } from "./request-duration"
 import type { SdkMessageCoordinator } from "./sdk-message-coordinator"
 import type { SdkSessionLifecycle } from "./sdk-session-lifecycle"
 import type { SdkTaskHistory } from "./sdk-task-history"
@@ -90,6 +91,30 @@ export class SdkSessionEventCoordinator {
 			result.messages = result.messages.filter(
 				(m) => !(m.type === "ask" && (m.ask === "completion_result" || m.ask === "resume_completed_task")),
 			)
+		}
+
+		// How long the request took, once it is over and only when it was long
+		// enough to be worth saying. Emitted as its own row rather than appended
+		// to the model's sentence: that sentence is a transcript message, and
+		// editing it would send our annotation back to the model on the next
+		// turn as if it had written it.
+		//
+		// Below the floor nothing is emitted at all. A follow-up question
+		// answered in twenty seconds does not want a stopwatch under it; an hour
+		// of work does.
+		if ((result.sessionEnded || result.turnComplete) && activeSession?.runStartedAt) {
+			const elapsedMs = Date.now() - activeSession.runStartedAt
+			const spent = formatRequestDuration(elapsedMs)
+			if (spent) {
+				result.messages.push({
+					ts: Date.now(),
+					type: "say",
+					say: "info",
+					text: `(${spent})`,
+					partial: false,
+				})
+			}
+			activeSession.runStartedAt = undefined
 		}
 
 		if (result.messages.length > 0) {

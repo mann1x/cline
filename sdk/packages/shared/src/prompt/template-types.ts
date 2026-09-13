@@ -321,13 +321,81 @@ export function renderPromptTemplate(
 export const PROMPT_TEMPLATE_DEFAULT_MARKER = "{{DEFAULT}}";
 
 /**
+ * The host, named the way the system prompt names it.
+ *
+ * `{{IDE_NAME}}` is substituted in the system prompt and was not substituted
+ * anywhere else, so a `# tool:` section that used it shipped the braces to the
+ * model verbatim. That left a template author two bad options: name one host
+ * and be wrong on the other, or write "the IDE" and be wrong on every host
+ * that is not one — which is what the shipped descriptions did, telling a
+ * model in a terminal about an IDE it does not have and a Problems panel that
+ * does not exist.
+ *
+ * So the same token resolves here. Nothing else does: `{{CWD}}` and the rest
+ * describe the moment a request is built, and a tool description is written
+ * once for the session.
+ */
+export const PROMPT_TEMPLATE_TOOL_PLACEHOLDERS = ["{{IDE_NAME}}"] as const;
+
+/**
+ * What the host is called, for substitution into a tool description.
+ *
+ * Optional, and deliberately so: a host that says nothing gets `the editor`,
+ * which is wrong nowhere in particular rather than wrong somewhere specific.
+ * The alternative — leaving the token unsubstituted — puts literal braces in
+ * front of the model, which is the failure this exists to prevent.
+ */
+export interface PromptTemplateToolFacts {
+	ideName?: string;
+}
+
+const UNNAMED_HOST = "the editor";
+
+function substituteToolPlaceholders(
+	description: string,
+	facts: PromptTemplateToolFacts | undefined,
+): string {
+	if (!description.includes("{{IDE_NAME}}")) {
+		return description;
+	}
+	return description.replaceAll(
+		"{{IDE_NAME}}",
+		facts?.ideName?.trim() || UNNAMED_HOST,
+	);
+}
+
+/**
  * Apply a template's tool descriptions to the tools a request is about to
  * carry, leaving every other field — name, schema, executor — untouched.
  *
  * Tools the template does not name keep the description they were built with,
  * so a template can rewrite one tool without having to restate the rest.
+ *
+ * Every description that survives is then read once for `{{IDE_NAME}}`,
+ * including the ones no template touched — a host tool can carry the token as
+ * well as a template section can, and a token that resolved in one place and
+ * not the other would be worse than not resolving at all. That read is the
+ * reason this walks tools it has nothing to say about; on `skills` the getter
+ * it costs walks the installed skills, which is why callers memoise this.
  */
 export function applyPromptTemplateToTools<
+	T extends { name: string; description?: string },
+>(
+	tools: readonly T[],
+	template: Pick<PromptTemplate, "tools"> | undefined,
+	facts?: PromptTemplateToolFacts,
+): T[] {
+	const templated = applyPromptTemplateSections(tools, template);
+	return templated.map((tool) => {
+		const description = tool.description ?? "";
+		const substituted = substituteToolPlaceholders(description, facts);
+		return substituted === description
+			? tool
+			: { ...tool, description: substituted };
+	});
+}
+
+function applyPromptTemplateSections<
 	T extends { name: string; description?: string },
 >(
 	tools: readonly T[],

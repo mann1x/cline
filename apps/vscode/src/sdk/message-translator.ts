@@ -41,6 +41,7 @@ import type {
 	ClineSaySubagentStatus,
 	ClineSayTool,
 	ClineSubagentUsageInfo,
+	ClineThinkingCondensedInfo,
 	SubagentStatusItem,
 } from "@shared/ExtensionMessage"
 import { Logger } from "@shared/services/Logger"
@@ -604,11 +605,27 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown): ClineSayTool 
 			// DiffEditRow's `patch` prop, so the formatted diff must go into `content`.
 			const diffContent = oldText && newText ? `------- SEARCH\n${oldText}\n=======\n${newText}\n+++++++ REPLACE` : newText
 
+			// Named from the arguments rather than guessed from the payload: the
+			// executor branches on exactly these fields, so this is the same
+			// decision it makes, reported rather than re-derived.
+			const endLine = getNumberField(parsedInput, "end_line")
+			const editMode =
+				oldText && newText
+					? "SEARCH/REPLACE"
+					: insertLine != null
+						? `INSERT at ${insertLine}`
+						: startLine != null
+							? endLine != null && endLine !== startLine
+								? `LINES ${startLine}-${endLine}`
+								: `LINE ${startLine}`
+							: undefined
+
 			return {
 				tool: isEdit ? "editedExistingFile" : "newFileCreated",
 				path: filePath,
 				content: diffContent,
 				diff: patch,
+				...(editMode ? { editMode } : {}),
 			}
 		}
 
@@ -630,6 +647,7 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown): ClineSayTool 
 				path: filePath,
 				content: patch,
 				diff: patch,
+				editMode: "PATCH",
 			}
 		}
 
@@ -646,15 +664,25 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown): ClineSayTool 
 			// The SDK's SearchCodebaseUnionInputSchema accepts multiple formats:
 			//   1. { queries: string[] }  — standard object (parsedInput handles this)
 			//   2. { queries: string }    — queries as single string
-			//   3. string[]               — bare array (parseToolInput returns undefined for arrays)
-			//   4. string                 — bare string (parseToolInput tries JSON.parse, returns undefined if not an object)
-			// We must handle all four to avoid showing empty regex in the UI.
+			//   3. { query: … }           — the singular the tool's own results use
+			//   4. string[]               — bare array (parseToolInput returns undefined for arrays)
+			//   5. string                 — bare string (parseToolInput tries JSON.parse, returns undefined if not an object)
+			// We must handle all five to avoid showing empty regex in the UI. The
+			// singular was the visible half of the bug in #52: a model that sent
+			// `{"query":"…"}` had the call rejected by the schema *and* rendered
+			// here as `"" in codebase`, so the row named neither what was searched
+			// nor why it failed.
 			let regex = ""
 			if (parsedInput) {
-				// Cases 1 & 2: input was an object with a "queries" field
-				const queries = getArrayField(parsedInput, "queries")
+				// Cases 1-3: input was an object carrying the pattern under one of
+				// the accepted names.
+				const queries = getArrayField(parsedInput, "queries") ?? getArrayField(parsedInput, "query")
 				regex =
-					queries?.join(", ") ?? getStringField(parsedInput, "queries") ?? getStringField(parsedInput, "regex") ?? ""
+					queries?.join(", ") ??
+					getStringField(parsedInput, "queries") ??
+					getStringField(parsedInput, "query") ??
+					getStringField(parsedInput, "regex") ??
+					""
 			} else if (Array.isArray(input)) {
 				// Case 3: bare array of query strings
 				regex = input.map(String).join(", ")
@@ -958,6 +986,11 @@ export function extractToolOutputText(output: unknown): string {
 					parts.push(record.result)
 				} else if ("error" in record && typeof record.error === "string" && record.error) {
 					parts.push(record.error)
+				} else if (record.type === "text" && typeof record.text === "string" && record.text) {
+					// Content-block output, as the browser tool returns alongside its
+					// screenshot. Without this the whole array — base64 image and all —
+					// went through JSON.stringify below and became the row's text.
+					parts.push(record.text)
 				}
 			}
 		}
@@ -968,6 +1001,33 @@ export function extractToolOutputText(output: unknown): string {
 
 	// Fallback for unknown structured output
 	return JSON.stringify(output)
+}
+
+/**
+ * Pull image content blocks out of a tool result as data URLs.
+ *
+ * Tools hand images back as `{ type: "image", data, mediaType }` with raw base64,
+ * while everything on the webview side — attachments, thumbnails, the image
+ * opener — speaks data URLs. Converting here means the rest of the UI needs no
+ * special case for an image that came from a tool rather than from the user.
+ */
+export function extractToolOutputImages(output: unknown): string[] {
+	if (!Array.isArray(output)) {
+		return []
+	}
+	const images: string[] = []
+	for (const item of output) {
+		if (typeof item !== "object" || item === null) {
+			continue
+		}
+		const record = item as Record<string, unknown>
+		if (record.type !== "image" || typeof record.data !== "string" || record.data === "") {
+			continue
+		}
+		const mediaType = typeof record.mediaType === "string" && record.mediaType ? record.mediaType : "image/png"
+		images.push(record.data.startsWith("data:") ? record.data : `data:${mediaType};base64,${record.data}`)
+	}
+	return images
 }
 
 // ---------------------------------------------------------------------------
@@ -1117,6 +1177,10 @@ export function parseCompactionNoticeMetadata(metadata: Record<string, unknown> 
 		tokensAfter: asFiniteNumber(metadata.tokensAfter),
 		messagesBefore: asFiniteNumber(metadata.messagesBefore),
 		messagesAfter: asFiniteNumber(metadata.messagesAfter),
+		...(typeof metadata.summary === "string" && metadata.summary.trim() ? { summary: metadata.summary } : {}),
+		...(typeof metadata.thinkingSummary === "string" && metadata.thinkingSummary.trim()
+			? { thinkingSummary: metadata.thinkingSummary }
+			: {}),
 	}
 }
 
@@ -1133,6 +1197,51 @@ function asFiniteNumber(value: unknown): number | undefined {
  * slugs are handled above via parseCompactionNoticeMetadata instead).
  */
 const INTERNAL_STATUS_NOTICES = new Set(["compaction-budget-adjusted"])
+
+/**
+ * Extract a condensed-thinking payload from a status notice's metadata.
+ *
+ * Emitted by the capped-thinking condenser (see
+ * sdk/packages/core/src/extensions/context/capped-thinking.ts), which runs
+ * inside `prepareTurn` and has no other way to reach the transcript.
+ */
+export function parseThinkingCondensedNoticeMetadata(
+	metadata: Record<string, unknown> | undefined,
+): ClineThinkingCondensedInfo | undefined {
+	if (!metadata || metadata.kind !== "capped_thinking") {
+		return undefined
+	}
+	const note = typeof metadata.note === "string" ? metadata.note.trim() : ""
+	if (note === "") {
+		return undefined
+	}
+	return {
+		note,
+		thinkingChars: asFiniteNumber(metadata.thinkingChars),
+		noteChars: asFiniteNumber(metadata.noteChars),
+		budgetTokens: asFiniteNumber(metadata.budgetTokens),
+	}
+}
+
+/**
+ * Read the task checklist off a tool call's input.
+ *
+ * The parameter is optional on every tool, so most calls carry nothing. A
+ * non-string value is not a checklist and is ignored rather than guessed at —
+ * putting invented items on screen is worse than showing none.
+ */
+export function readTaskProgressFromToolInput(input: unknown): string | undefined {
+	const parsed = typeof input === "string" ? parseToolInput(input) : input
+	if (!parsed || typeof parsed !== "object") {
+		return undefined
+	}
+	const value = (parsed as Record<string, unknown>).task_progress
+	if (typeof value !== "string") {
+		return undefined
+	}
+	const trimmed = value.trim()
+	return trimmed === "" ? undefined : trimmed
+}
 
 /** Build the say:"compaction" divider message for a compaction status payload. */
 export function buildCompactionMessage(info: ClineCompactionInfo, ts: number): ClineMessage {
@@ -1582,6 +1691,23 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 					const storedInput = state.getStreamingToolInput()
 					const ts = state.clearStreamingTool()
 
+					// The checklist rides along on whatever tool the model was already
+					// calling, so this is the only place it surfaces. Emitted as its own
+					// say:"task_progress" row rather than folded into the tool row: the
+					// panel wants the newest checklist regardless of which tool carried
+					// it, and `openFocusChainFile` already looks for exactly this message
+					// type.
+					const checklist = readTaskProgressFromToolInput(storedInput)
+					if (checklist) {
+						messages.push({
+							ts: state.nextTs(),
+							type: "say",
+							say: "task_progress" as ClineSay,
+							text: checklist,
+							partial: false,
+						})
+					}
+
 					// Special handling: read_files may read multiple files in one tool call.
 					// Emit one readFile UI message per file so the tool group summary and
 					// list reflect what was actually read.
@@ -1654,6 +1780,26 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 							partial: false,
 						})
 					}
+
+					// The browser tool hands the model a screenshot, and until now the user
+					// could not see it: the tool row is built from the call's *input*, and
+					// the output — where the image lives — was dropped. So the model was
+					// looking at the page and the person watching was not, which is the one
+					// case where the user has something to say that the model cannot know.
+					// Emitted as its own row so the image sits under the tool call it came
+					// from, and carried in `images` (the field user attachments already use)
+					// so referencing one back into a reply is just re-attaching it.
+					const screenshots = extractToolOutputImages(event.output)
+					if (screenshots.length > 0) {
+						messages.push({
+							ts: state.nextTs(),
+							type: "say",
+							say: "browser_screenshot" as ClineSay,
+							text: extractToolOutputText(event.output),
+							images: screenshots,
+							partial: false,
+						})
+					}
 					break
 				}
 			}
@@ -1698,6 +1844,17 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 							? state.beginCompaction()
 							: (state.takeOpenCompactionTs() ?? state.nextTs())
 					messages.push(buildCompactionMessage(compaction, ts))
+					break
+				}
+				const condensed = parseThinkingCondensedNoticeMetadata(event.metadata)
+				if (condensed) {
+					messages.push({
+						ts: state.nextTs(),
+						type: "say",
+						say: "thinking_condensed",
+						text: JSON.stringify(condensed),
+						partial: false,
+					})
 					break
 				}
 				if (INTERNAL_STATUS_NOTICES.has(event.message ?? "")) {
@@ -1745,16 +1902,24 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 			// A compaction divider still open here means the turn was aborted mid-compaction.
 			finalizeDanglingCompaction(state, messages, "cancelled")
 
-			// A turn can terminate with done(reason:"error") without a separate
-			// "error" event — record the error outcome here too so turn end still
-			// resolves to the "error" phase (Retry / Start New Task).
-			if (event.reason === "error") {
-				state.setErrorSeen()
-			} else if (event.reason === "completed") {
-				// The turn recovered: whatever failed mid-turn was retried and the
-				// run reached its end. The terminal reason is the authority on the
-				// outcome, not the worst thing that happened on the way there.
+			// The terminal reason is the authority on the outcome, and only
+			// "completed" means the run reached its end. Everything else — an
+			// error, a mistake-limit stop, max iterations, an abort — is a run
+			// that STOPPED, and the footer has to offer a way out of it.
+			//
+			// `error` was the only reason handled here, which worked only because
+			// a mistake notice happened to set the same flag mid-run. Once those
+			// notices stopped ending the turn (4.99.68, correctly — they were
+			// putting Retry on screen over a task that was still working), nothing
+			// carried the outcome to the end: a mistake-limit stop resolved to
+			// "awaiting_followup", which shows no buttons at all. Measured:
+			// `AgentRuntimeAbortError: mistake_limit_reached` at 22:18:15, and the
+			// task sat there with no Retry and no Start New Task.
+			if (event.reason === "completed") {
+				// Whatever failed mid-turn was recovered from; the run finished.
 				state.clearErrorSeen()
+			} else {
+				state.setErrorSeen()
 			}
 
 			// Inferred completion feedback: the SDK agent normally ends a turn with a plain
@@ -1782,12 +1947,32 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 		}
 
 		case "error": {
-			finalizeDanglingCompaction(state, messages, "failed")
-			// An errored turn didn't end on its text response — no completion retag.
-			state.clearTurnFinalText()
 			if (state.isSuppressedToolApprovalDenial(event.error)) {
 				break
 			}
+
+			// `recoverable: true` is an in-run NOTICE, not a failed turn. The
+			// MistakeTracker emits one for every recorded mistake ("1 tool call(s)
+			// failed: [task_progress] ..."), and extension setup failures surface the
+			// same way — the run carries straight on afterwards. Treating those like a
+			// terminal provider error put the footer into Retry / Start New Task and
+			// marked the session not-running while the agent was still working, and
+			// nothing on the continuing run ever cleared it. Only `run-failed` carries
+			// `recoverable: false`.
+			if (event.recoverable === true) {
+				messages.push({
+					ts: state.nextTs(),
+					type: "say",
+					say: "error",
+					text: event.error instanceof Error ? event.error.message : String(event.error ?? ""),
+					partial: false,
+				})
+				break
+			}
+
+			finalizeDanglingCompaction(state, messages, "failed")
+			// An errored turn didn't end on its text response — no completion retag.
+			state.clearTurnFinalText()
 
 			// Record the error outcome so turn end resolves to the "error" phase
 			// (footer shows Retry / Start New Task) instead of awaiting_followup.
@@ -1902,7 +2087,15 @@ export function translateSessionEvent(event: CoreSessionEvent, state: MessageTra
 			if (agentEvent.type === "done") {
 				result.turnComplete = true
 			}
-			if (agentEvent.type === "error" && !state.isSuppressedToolApprovalDenial(agentEvent.error)) {
+			if (
+				agentEvent.type === "error" &&
+				agentEvent.recoverable !== true &&
+				!state.isSuppressedToolApprovalDenial(agentEvent.error)
+			) {
+				// Terminal failures only. A recoverable notice completes nothing — the
+				// coordinator resolves the turn phase (and clears `isRunning`) off this
+				// flag, so treating a mid-run mistake notice as turn end was what left
+				// Retry / Start New Task on screen over a still-running task.
 				result.turnComplete = true
 			}
 

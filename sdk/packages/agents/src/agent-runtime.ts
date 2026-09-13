@@ -7,6 +7,7 @@ import type {
 	AgentAfterToolResult,
 	AgentBeforeModelResult,
 	AgentBeforeToolResult,
+	AgentImageToDescribe,
 	AgentMessage,
 	AgentMessagePart,
 	AgentModel,
@@ -35,6 +36,7 @@ import {
 	captureSdkError,
 	captureTaskLifecycleEvent,
 	estimateTokens,
+	lastOutputCap,
 	mergeModelOptions,
 	NO_TOOL_CALL_NUDGE_MESSAGE,
 	normalizeJsonLikeStringsForSchema,
@@ -50,6 +52,178 @@ import { nanoid } from "nanoid";
 
 const MAX_TOKENS_INCOMPLETE_TURN_MESSAGE =
 	"Model reached the maximum output token limit before completing the turn";
+
+/**
+ * How many truncated turns in a row are retried before the run ends.
+ *
+ * Bounded because each attempt costs a whole generation — up to the output cap
+ * itself, which on a local model is minutes of GPU time. Two is enough for the
+ * case this exists for: a model that reasoned past the cap once and, told so,
+ * produces a shorter reply. A model that truncates three times running is not
+ * going to be talked out of it, and ending the run beats burning the window.
+ *
+ * The counter is consecutive, not per-run: any turn that finishes resets it, so
+ * a long session gets the same protection at every point rather than spending a
+ * single allowance early.
+ */
+export const DEFAULT_MAX_TOKENS_TURN_RETRIES = 2;
+
+/**
+ * What the model is told after its reply was cut off.
+ *
+ * Said plainly, because the failure is invisible from the model's side: it
+ * emitted a well-formed reply and simply never saw it end. Without being told,
+ * a regenerated turn reproduces the same overlong output — the prompt has not
+ * changed, and at a low temperature neither will the answer.
+ *
+ * It names the discarded work, since that is the part that changes behaviour:
+ * the model's reasoning was thrown away and is not in the conversation, so
+ * continuing from it is not an option and the cheapest correct move is one
+ * small step.
+ */
+/**
+ * Stands in for an image the model would not accept.
+ *
+ * Says so rather than vanishing: a tool result that quietly loses its
+ * screenshot reads as a tool that did nothing, and the model calls it again.
+ */
+/**
+ * How much of the surrounding text goes to the vision model as context.
+ *
+ * Enough for a browser tool's URL and console output, which is what turns "a
+ * web page" into "the login form, with an error under the password field";
+ * short enough that a large tool result does not become the prompt.
+ */
+const IMAGE_DESCRIPTION_CONTEXT_LIMIT = 2_000;
+
+const IMAGE_DESCRIPTION_UNAVAILABLE_NOTICE =
+	"[an image was here; the vision model could not describe it, and this model cannot read images. " +
+	"Work from what the surrounding text says about it, or ask for the detail you need.]";
+
+const IMAGE_DROPPED_NOTICE =
+	"[image omitted — this model does not accept image input; the text above is what the tool reported]";
+
+/**
+ * The base64 payload of an image part, whichever field is carrying it.
+ *
+ * `AgentImagePart.image` is typed `string | Uint8Array | ArrayBuffer | URL`,
+ * and parts also reach the transcript in the llms shape, which carries the
+ * payload under `data`. The describer used to require a *string* under `image`
+ * — one of five possibilities — and silently skipped the rest.
+ *
+ * Measured on a tester's 4.100.24 session: a describer was installed
+ * (`[Vision] Describer installed: provider=ollama model=…`), the transcript
+ * still read `transcriptTail=[user:text+image]` at request time, and no
+ * `[Vision] Described N of M` line was ever logged — the describer was never
+ * called, because nothing matched. The image went to a primary model that
+ * cannot read one, and the turn failed.
+ *
+ * A `URL` is left alone deliberately: there is no payload to hand a describer
+ * that takes base64, and fetching it here is not this function's business.
+ */
+function imagePartPayload(part: {
+	image?: unknown;
+	data?: unknown;
+}): string | undefined {
+	const candidate = typeof part.image === "string" ? part.image : part.data;
+	if (typeof candidate === "string") {
+		return candidate.length > 0 ? candidate : undefined;
+	}
+	const binary =
+		part.image instanceof Uint8Array
+			? part.image
+			: part.image instanceof ArrayBuffer
+				? new Uint8Array(part.image)
+				: undefined;
+	if (!binary || binary.byteLength === 0) {
+		return undefined;
+	}
+	return Buffer.from(binary).toString("base64");
+}
+
+/**
+ * The least a retry after a truncated turn may be given.
+ *
+ * Above the largest turn measured recovering from one of these (5,568 output
+ * tokens), so the ladder bounds the waste without truncating the turn that was
+ * about to get the work done.
+ */
+const RETRY_OUTPUT_CAP_FLOOR_TOKENS = 8_000;
+
+const MAX_TOKENS_INCOMPLETE_TURN_REMINDER =
+	"[SYSTEM] Your last reply hit the per-turn output limit before you finished, so it was discarded — none of it, including your reasoning, is in this conversation. " +
+	"Do not try to reproduce it. Take the smallest useful next step instead: make one tool call, or write one short paragraph. " +
+	"If the work you were planning does not fit in one reply, do the part that fits, call the tools it needs, and continue in the next turn.";
+
+/**
+ * How the retrospective is introduced, when there was room to write one.
+ *
+ * Separate from the note because it answers a different question. The note is
+ * where the turn had got to; this is what the reasoning learned on the way --
+ * the part a summary drops first and the part that stops the next pass walking
+ * into the same wall.
+ */
+const DISCARDED_RETROSPECTIVE_PREFIX =
+	"And what that reasoning had established about the problem itself:";
+
+/**
+ * How the salvaged reasoning is introduced to the model.
+ *
+ * As the model's own note, not as a system finding: it wrote the reasoning this
+ * summarises, and a turn told "here is what you concluded" resumes, where one
+ * told "here is some context" re-derives it to check.
+ *
+ * The precedence sentence is not decoration. The first note this produced on a
+ * live run carried a fragment of the file as the model had read it -- `…
+ * c.fill();}}});}` -- and the file had been edited since, so the model opened
+ * its next turn arguing with a tool result: "I see this in my thought process
+ * but the tool output says…". A note is a recollection of reasoning, and the
+ * only thing it can be wrong about is the world; saying which one wins costs a
+ * sentence and settles it before it starts.
+ */
+const DISCARDED_REASONING_NOTE_PREFIX =
+	"Before it was discarded, your reasoning was condensed into the note below. It is what you had worked out when you ran out of room. Continue from it rather than repeating it. " +
+	"It is a record of your thinking, not an observation of the workspace: where it disagrees with a tool result in this conversation, the tool result is what is true and the note is out of date.";
+
+/**
+ * Sent when a turn spent its tokens and delivered nothing.
+ *
+ * Same wording as the output-limit reminder for the same reason: what the model
+ * has to do next is identical, and the two are indistinguishable from where it
+ * sits. It reasoned, the reply never arrived, and reproducing the thought that
+ * did not fit is the one thing that cannot work.
+ */
+/**
+ * Sent after the model answers a message that arrived mid-run.
+ *
+ * Deliberately says the answer was received: without that the model re-answers
+ * instead of resuming, having no way to tell the reminder apart from the user
+ * asking again.
+ */
+const STEER_RESUME_REMINDER =
+	"[SYSTEM] Your answer has been passed on. That message came in while you were working, so it did not replace the task you were given — " +
+	"the work you were doing when it arrived is still unfinished. Take that work up again from where you left off, unless the message told you to change course or to stop.";
+
+const EMPTY_TURN_REMINDER =
+	"[SYSTEM] Your last reply ran out of room before any of it was delivered, so it was discarded — none of it, including your reasoning, is in this conversation. " +
+	"Do not try to reproduce it. Take the smallest useful next step instead: make one tool call, or write one short paragraph. " +
+	"If the work you were planning does not fit in one reply, do the part that fits, call the tools it needs, and continue in the next turn.";
+
+const TOOL_CALL_UNPARSABLE_REMINDER =
+	"[SYSTEM] Your last tool call did not parse, so it never ran and nothing was changed by it. " +
+	"The text you wrote before it is still here and still correct — the call around it was malformed, most often because it was cut short. " +
+	"Send that one call again, complete, and nothing else in this reply. " +
+	"If it carries a large argument, make the argument smaller rather than sending the same one again: name a line range instead of a whole file, or split the work across two calls.";
+
+/**
+ * How many times one turn may be asked to resend a call before the run ends.
+ *
+ * Two, and it resets on any turn that parses. A model that cannot produce a
+ * well-formed call twice running is not going to on the third attempt, and the
+ * run has somewhere better to spend the clock; a model that hit a truncated
+ * argument once has been told to make it smaller and usually can.
+ */
+const TOOL_CALL_PARSE_RETRY_BUDGET = 2;
 
 /**
  * The nudge budget for hosts that want it without picking a number.
@@ -483,8 +657,45 @@ export class AgentRuntime {
 	};
 	/** One automatic overflow-recovery attempt per run. */
 	private overflowRecoveryAttempted = false;
+	/**
+	 * Compact before the next request, whatever the trigger concludes.
+	 *
+	 * Set when a turn was cut off at the output cap. Re-prompting on its own only
+	 * asks the model to be briefer, which does nothing when the cap is small
+	 * because the prompt has taken the window -- the retry then hits the same
+	 * wall, and the run spends its whole retry budget on identical failures.
+	 * Making room is the part that changes the outcome.
+	 */
+	private compactBeforeNextTurn = false;
+	/**
+	 * Whether this run has already dropped images after a model refused them.
+	 * Once is enough: the second refusal means images were not the problem.
+	 */
+	private imageRecoveryAttempted = false;
 	/** Consecutive turns nudged for producing no tool calls; reset by any turn that does. */
 	private consecutiveNoToolCallNudges = 0;
+	/**
+	 * A message arrived mid-run and the model has not been asked to resume yet.
+	 *
+	 * Cleared as soon as the resume nudge is sent, so an interjection costs one
+	 * extra turn at most and a model that means to stop still can.
+	 */
+	private steerAwaitingResume = false;
+	/** Consecutive turns cut off at the output cap; reset by any turn that completes. */
+	private consecutiveMaxTokensRetries = 0;
+	/**
+	 * Consecutive turns whose tool call the provider could not parse; reset by
+	 * any turn that reaches the tool-call stage, malformed or not.
+	 */
+	private toolCallParseRetries = 0;
+	/**
+	 * The cap that truncated the last turn, when the cap was the request's own.
+	 *
+	 * Kept so the retry can ask for less. Unset when the window was what
+	 * truncated the turn: that cap is the room the prompt left, compaction is
+	 * about to change it, and halving it would take away room the retry needs.
+	 */
+	private truncatedOutputCapTokens: number | undefined;
 	private initialization?: Promise<void>;
 	private abortController?: AbortController;
 	private readonly telemetryProviderId?: string;
@@ -659,6 +870,177 @@ export class AgentRuntime {
 			: undefined;
 	}
 
+	/**
+	 * Retries allowed for turns truncated at the output cap.
+	 *
+	 * Defaulted on rather than opted into, unlike the no-tool-call nudge: a
+	 * nudge asks a model that has finished to keep going, which is a policy
+	 * question, while this recovers a turn the model never got to finish. A
+	 * host that wants the old behaviour sets it to zero.
+	 */
+	/**
+	 * Whether the turn generated anything at all, whatever became of it.
+	 *
+	 * The difference between a model that reasoned itself out of room and a
+	 * provider handing back empty responses as fast as it can. The first is worth
+	 * another turn; the second would spin, and is left to fail as it did before.
+	 */
+	private turnProducedOutputTokens(before: AgentUsage): boolean {
+		return this.state.usage.outputTokens > before.outputTokens;
+	}
+
+	/**
+	 * Condense a truncated turn's reasoning, if the host asked to be given the
+	 * chance, and never at the cost of the retry it exists to help.
+	 *
+	 * A condenser that throws, or that has nothing to say, leaves the discard
+	 * exactly as it was.
+	 */
+	private async noteDiscardedReasoning(
+		message: AgentMessage,
+		windowBound: boolean,
+	): Promise<{ note?: string; retrospective?: string } | undefined> {
+		const condense = this.config.condenseDiscardedReasoning;
+		if (!condense) {
+			this.config.logger?.debug?.(
+				"Discarded turn not condensed: no condenser is installed",
+			);
+			return undefined;
+		}
+		const reasoning = message.content
+			.filter(
+				(part: AgentMessagePart): part is AgentMessagePart & { text: string } =>
+					part.type === "reasoning" &&
+					typeof (part as { text?: unknown }).text === "string",
+			)
+			.map((part) => part.text)
+			.join("")
+			.trim();
+		// The reply as far as it got. It was on its way to the bin with the
+		// reasoning, and it states what the turn had decided more plainly than the
+		// reasoning does. (There is never a tool call to collect here: this path
+		// runs only for a truncated turn that produced none.)
+		const text = message.content
+			.filter(
+				(part: AgentMessagePart): part is AgentMessagePart & { text: string } =>
+					part.type === "text" &&
+					typeof (part as { text?: unknown }).text === "string",
+			)
+			.map((part) => part.text)
+			.join("")
+			.trim();
+		// Said on every discarded turn, not only the ones that decline. A turn
+		// that hits the cap and produces no note is indistinguishable, from the
+		// outside, from a condenser that was never wired -- and for four sessions
+		// that is exactly how it read: `outputLimitRetries=1, notes=0`, no note in
+		// the reminder, and nothing in the log at all. The gap that settled it was
+		// nine milliseconds between the capped turn and the retry's request, which
+		// is far too little for the summariser round trip the note requires. What
+		// the discarded message was carrying is the one fact the transcript can
+		// never supply, because that message is the one thing that never enters it.
+		this.config.logger?.log?.(
+			`Discarded a turn cut off at the output limit: parts=[${
+				message.content.map((part) => part.type).join(", ") || "none"
+			}] reasoning=${reasoning.length} chars partialReply=${text.length} chars windowBound=${windowBound}`,
+			{ severity: "info" },
+		);
+		if (!reasoning && !text) {
+			// Said, because the alternative is what this path has been doing:
+			// declining in silence, which reads exactly like a condenser that was
+			// never wired. Measured across four sessions -- six discarded turns,
+			// not one note -- and the transcript cannot say why, since the
+			// discarded message is the one thing that never enters it. The part
+			// types are what settles it.
+			this.config.logger?.log?.(
+				`Discarded turn had nothing to condense: parts=[${
+					message.content.map((part) => part.type).join(", ") || "none"
+				}] contentLength=${message.content.length}`,
+				{ severity: "warn" },
+			);
+			return undefined;
+		}
+		try {
+			const condensation = await condense({
+				reasoning,
+				...(text ? { text } : {}),
+				windowBound,
+			});
+			const note = condensation?.note?.trim();
+			const retrospective = condensation?.retrospective?.trim();
+			if (!note && !retrospective) {
+				this.config.logger?.log?.(
+					`Discarded turn was not condensed: the condenser returned nothing for ${reasoning.length} chars of reasoning and ${text.length} chars of partial reply`,
+					{ severity: "warn" },
+				);
+				return undefined;
+			}
+			this.config.logger?.log?.(
+				`Condensed ${reasoning.length} chars of discarded reasoning into a ${
+					note?.length ?? 0
+				}-char note and a ${retrospective?.length ?? 0}-char retrospective for the retry`,
+				{
+					severity: "info",
+					reasoningChars: reasoning.length,
+					noteChars: note?.length ?? 0,
+					retrospectiveChars: retrospective?.length ?? 0,
+				},
+			);
+			return {
+				...(note ? { note } : {}),
+				...(retrospective ? { retrospective } : {}),
+			};
+		} catch (error) {
+			this.config.logger?.log?.(
+				"Could not condense the discarded reasoning; retrying without a note",
+				{
+					severity: "warn",
+					errorMessage: error instanceof Error ? error.message : String(error),
+				},
+			);
+			return undefined;
+		}
+	}
+
+	/**
+	 * What the retry after a truncated turn is allowed to spend.
+	 *
+	 * A turn that just spent its whole cap without producing a tool call gets
+	 * less on the retry, halving with each consecutive failure. Handing back the
+	 * same cap invites the same turn, and the same wait: measured on one run,
+	 * four turns ended at exactly 32,000 output tokens -- 6m15s, 5m13s, 5m39s,
+	 * 5m30s -- for 22m37s of a 31m43s session generated and thrown away, none of
+	 * it window-bound (input ran 29,527 to 53,842 against a 110,000 window).
+	 *
+	 * It also asks for what the reminder asks for. "One tool call, or one short
+	 * paragraph" does not need 32,000 tokens, and the turns that recovered on
+	 * that same run did it in 5,568, 3,082 and 2,852 -- so the floor here is
+	 * still comfortably above the largest turn that ever succeeded after one of
+	 * these, and a relapse costs about a minute instead of six.
+	 *
+	 * Returns `undefined` when nothing should change: no truncation to answer
+	 * for, or one the window caused, where the cap is the room the prompt left
+	 * rather than a budget the model overran.
+	 */
+	private getRetryOutputCap(): number | undefined {
+		if (
+			this.consecutiveMaxTokensRetries < 1 ||
+			this.truncatedOutputCapTokens === undefined
+		) {
+			return undefined;
+		}
+		const halved = Math.floor(
+			this.truncatedOutputCapTokens / 2 ** this.consecutiveMaxTokensRetries,
+		);
+		return Math.max(RETRY_OUTPUT_CAP_FLOOR_TOKENS, halved);
+	}
+
+	private getMaxTokensRetryBudget(): number {
+		const configured = this.config.completionPolicy?.maxTruncatedTurnRetries;
+		return typeof configured === "number" && Number.isFinite(configured)
+			? Math.max(0, Math.floor(configured))
+			: DEFAULT_MAX_TOKENS_TURN_RETRIES;
+	}
+
 	private async addUserReminderMessage(text: string): Promise<AgentMessage> {
 		const reminderMessage = createMessage("user", [{ type: "text", text }], {
 			userRunSpan: 0,
@@ -687,6 +1069,9 @@ export class AgentRuntime {
 		this.state.lastErrorClass = undefined;
 		this.state.usage = cloneUsage(DEFAULT_USAGE);
 		this.overflowRecoveryAttempted = false;
+		this.compactBeforeNextTurn = false;
+		this.imageRecoveryAttempted = false;
+		this.steerAwaitingResume = false;
 
 		try {
 			await this.callBeforeRunHooks();
@@ -721,12 +1106,55 @@ export class AgentRuntime {
 					iteration: this.state.iteration,
 				});
 
+				const usageBeforeTurn = cloneUsage(this.state.usage);
 				const { message, finishReason } =
 					await this.generateAssistantMessageWithOverflowRecovery();
 				if (finishReason === "aborted") {
 					throw this.normalizeAbortError();
 				}
 				if (message.content.length === 0) {
+					// A turn that spent tokens and delivered nothing is a wasted
+					// turn, not a failed run — the same situation as one cut off at
+					// the output cap, and it gets the same retry.
+					//
+					// Measured on a 1h19m session: the prompt estimate ran 8.2% low
+					// (95,115 against a real 103,591), so the output cap was sized
+					// from room that was not there. The model reasoned for 6,489
+					// tokens, hit the true end of the 110,000-token window inside an
+					// unterminated thinking block, and the parser — with no closing
+					// marker — emitted nothing at all. Not an error: the stream
+					// finished normally, with an empty message. The run died there,
+					// on a turn the model could simply have taken again.
+					if (
+						finishReason !== "error" &&
+						this.turnProducedOutputTokens(usageBeforeTurn) &&
+						this.consecutiveMaxTokensRetries < this.getMaxTokensRetryBudget()
+					) {
+						this.consecutiveMaxTokensRetries += 1;
+						await this.emit({
+							type: "status-notice",
+							snapshot: this.snapshot(),
+							message: "the model produced nothing usable — retrying",
+							metadata: {
+								kind: "empty_turn_recovery",
+								reason: "empty_turn_recovery",
+								phase: "started",
+								iteration: this.state.iteration,
+								attempt: this.consecutiveMaxTokensRetries,
+								finishReason,
+							},
+						});
+						await this.addUserReminderMessage(EMPTY_TURN_REMINDER);
+						continue;
+					}
+					// The other way a malformed call arrives: the parser refused it
+					// and emitted nothing at all, so there is no text to sit above
+					// the failure. Same recovery, and it has to be tried here too —
+					// the branch above declines every `error` turn, which is the
+					// whole class this one belongs to.
+					if (await this.recoverUnparsableToolCall()) {
+						continue;
+					}
 					throw new Error(
 						finishReason === "error"
 							? (this.state.lastError ?? "Model stream failed")
@@ -737,6 +1165,82 @@ export class AgentRuntime {
 					(part: AgentMessagePart): part is AgentToolCallPart =>
 						part.type === "tool-call",
 				);
+
+				// A turn cut off at the output cap with nothing actionable in it is
+				// a wasted turn, not a failed run. Restarting is only possible
+				// *here*, before the push: the truncated message never enters the
+				// history, so the retry starts from the same place the turn did
+				// rather than from a half-written reply that would be resent in
+				// full and eat the same budget again.
+				//
+				// The reminder is what makes the retry differ. Regenerating from an
+				// unchanged prompt reproduces an overlong reply, so the model is
+				// told what happened and asked for the smallest next step.
+				// `prepareTurn` runs on the retry like any other turn, so when the
+				// window is what is tight, compaction happens there.
+				if (
+					finishReason === "max-tokens" &&
+					toolCalls.length === 0 &&
+					this.consecutiveMaxTokensRetries < this.getMaxTokensRetryBudget()
+				) {
+					this.consecutiveMaxTokensRetries += 1;
+					// Compaction only when the window is what truncated the turn.
+					// Forcing it on every truncation was measured recovering a
+					// 48,508-token request against a 110,000-token window: the cap that
+					// ended that turn was the caller's own 32,000, which no amount of
+					// compaction can raise, so the transcript was spent to leave the
+					// retry facing the same ceiling with less of the work it was doing.
+					// Absent a report -- a custom `AgentModel` that never went through
+					// the gateway -- compaction is kept: a runtime that cannot say what
+					// capped it is likelier to be near a window it never declared than
+					// to be held by a limit nobody set.
+					const outputCap = lastOutputCap();
+					this.compactBeforeNextTurn = outputCap?.windowBound ?? true;
+					this.truncatedOutputCapTokens = this.compactBeforeNextTurn
+						? undefined
+						: outputCap?.maxTokens;
+					// The reasoning goes with the message, unless the host wants a note
+					// out of it first. This is the only turn whose thinking reliably
+					// ends at the model's budget -- a think ends *at* the budget message
+					// only when there was no room to continue past it, which is the same
+					// condition that lands here -- so a condenser watching the transcript
+					// never sees one.
+					const discardedNote = await this.noteDiscardedReasoning(
+						message,
+						this.compactBeforeNextTurn,
+					);
+					await this.emit({
+						type: "status-notice",
+						snapshot: this.snapshot(),
+						message: "output limit reached before the turn finished — retrying",
+						metadata: {
+							kind: "max_tokens_turn_recovery",
+							reason: "max_tokens_turn_recovery",
+							phase: "started",
+							iteration: this.state.iteration,
+							attempt: this.consecutiveMaxTokensRetries,
+							outputCapSource: outputCap?.source ?? "unknown",
+							compacting: this.compactBeforeNextTurn,
+						},
+					});
+					await this.addUserReminderMessage(
+						discardedNote
+							? [
+									MAX_TOKENS_INCOMPLETE_TURN_REMINDER,
+									...(discardedNote.note
+										? [DISCARDED_REASONING_NOTE_PREFIX, discardedNote.note]
+										: []),
+									...(discardedNote.retrospective
+										? [
+												DISCARDED_RETROSPECTIVE_PREFIX,
+												discardedNote.retrospective,
+											]
+										: []),
+								].join("\n\n")
+							: MAX_TOKENS_INCOMPLETE_TURN_REMINDER,
+					);
+					continue;
+				}
 
 				finalAssistantMessage = message;
 				this.state.messages.push(message);
@@ -757,8 +1261,12 @@ export class AgentRuntime {
 					throw new Error(MAX_TOKENS_INCOMPLETE_TURN_MESSAGE);
 				}
 				if (finishReason === "error" && toolCalls.length === 0) {
+					if (await this.recoverUnparsableToolCall()) {
+						continue;
+					}
 					throw new Error(this.state.lastError ?? "Model stream failed");
 				}
+				this.toolCallParseRetries = 0;
 				this.state.pendingToolCalls = toolCalls.map((part) => part.toolCallId);
 
 				if (toolCalls.length === 0) {
@@ -774,6 +1282,17 @@ export class AgentRuntime {
 						for (const reminderMessage of completionReminderMessages) {
 							await this.addUserReminderMessage(reminderMessage);
 						}
+						continue;
+					}
+					// A message sent while the run was going answers to the user, and
+					// answering it is a turn with nothing to call — which is how a run
+					// ends. Measured: asked "how many lines is manic_miner.html?" in
+					// the middle of a fix, the model answered, the run stopped, and
+					// the file was left half-edited until "continue fixing" was typed
+					// by hand. Nobody interjecting a question means "and stop".
+					if (this.steerAwaitingResume) {
+						this.steerAwaitingResume = false;
+						await this.addUserReminderMessage(STEER_RESUME_REMINDER);
 						continue;
 					}
 					const noToolCallNudge = this.getNoToolCallNudgeMessage();
@@ -795,6 +1314,10 @@ export class AgentRuntime {
 				// A turn that calls tools is a turn that is working, so the
 				// consecutive-silence budget starts over.
 				this.consecutiveNoToolCallNudges = 0;
+				// Same for truncation: a turn that reached its tool calls did not
+				// run out of room, so a later one gets the full allowance again.
+				this.consecutiveMaxTokensRetries = 0;
+				this.truncatedOutputCapTokens = undefined;
 				const toolMessages = await this.executeToolCalls(toolCalls);
 				this.state.pendingToolCalls = [];
 				for (const toolMessage of toolMessages) {
@@ -862,18 +1385,35 @@ export class AgentRuntime {
 				messages: cloneMessages(this.state.messages),
 				usage: cloneUsage(this.state.usage),
 				error: status === "failed" ? normalized : undefined,
+				// The abort carries its reason in the error it was aborted with, and
+				// dropping it here left the CLI to infer one from two booleans: no
+				// timeout and no local abort, therefore "aborted by another client".
+				// There is no other client in a headless run. Measured: a run stopped
+				// by the mistake limit — `consecutive mistakes reached (6/6) in yolo
+				// mode` in the runtime log — reported `external_abort` on the JSON
+				// stream, which is what anything machine-readable had to go on.
+				abortReason: status === "aborted" ? normalized.message : undefined,
 			};
-			this.config.logger?.log?.("Agent loop caught error", {
-				severity: status === "failed" ? "error" : "warn",
-				agentId: this.state.agentId,
-				agentRole: this.state.agentRole,
-				runId: result.runId,
-				status,
-				iteration: this.state.iteration,
-				errorName: normalized.name,
-				errorMessage: normalized.message,
-				assistantContentPartCount: lastAssistantMessage?.content.length ?? 0,
-			});
+			// The name and message go in the text, not only in the metadata below.
+			// Hosts routinely drop structured log arguments — the VS Code host
+			// serialises them only when `IS_DEV=true`, so in a packaged build this
+			// line read "Agent loop caught error" and nothing else. Measured: a run
+			// aborted by the loop detector produced exactly that, and the user saw a
+			// task end with no message at all while the reason sat one field away.
+			this.config.logger?.log?.(
+				`Agent loop caught error (${status}): ${normalized.name}: ${normalized.message}`,
+				{
+					severity: status === "failed" ? "error" : "warn",
+					agentId: this.state.agentId,
+					agentRole: this.state.agentRole,
+					runId: result.runId,
+					status,
+					iteration: this.state.iteration,
+					errorName: normalized.name,
+					errorMessage: normalized.message,
+					assistantContentPartCount: lastAssistantMessage?.content.length ?? 0,
+				},
+			);
 			await this.callAfterRunHooks(result);
 			if (status === "failed") {
 				await this.emit({
@@ -920,7 +1460,20 @@ export class AgentRuntime {
 		message: AgentMessage;
 		finishReason: AgentModelFinishReason;
 	}> {
-		const first = await this.generateAssistantMessage();
+		// With a vision model configured, the primary model is not meant to see
+		// the image at all — the point of configuring one is that a description
+		// goes in its place, whether or not the primary model could have coped.
+		if (this.config.alwaysDescribeImages === true) {
+			await this.describeImagesInTranscript();
+		}
+		const forceCompaction = this.compactBeforeNextTurn;
+		this.compactBeforeNextTurn = false;
+		const first = await this.generateAssistantMessage(
+			forceCompaction ? { overflowRecovery: true } : undefined,
+		);
+		if (this.isRecoverableImageTurn(first)) {
+			return await this.retryWithoutImages();
+		}
 		if (!this.isRecoverableOverflowTurn(first)) {
 			return first;
 		}
@@ -946,6 +1499,7 @@ export class AgentRuntime {
 		});
 		const retry = await this.generateAssistantMessage({
 			overflowRecovery: true,
+			requireSmallerRequest: true,
 		});
 		if (
 			retry.finishReason === "error" &&
@@ -957,6 +1511,246 @@ export class AgentRuntime {
 			);
 		}
 		return retry;
+	}
+
+	/**
+	 * Ask the model to send a tool call the provider could not parse again.
+	 *
+	 * Returns whether the turn was recovered, so both call sites can `continue`
+	 * on true and fall through to their own error on false.
+	 *
+	 * A call that would not parse is a wasted turn, not a failed run: nothing
+	 * executed, nothing changed, and whatever the model wrote before it is
+	 * still in the transcript — usually the expensive part. Measured: a
+	 * transaction that had already carried a broken file past its syntax error
+	 * ended on `XML syntax error on line 12: element <parameter> closed by
+	 * </function>` at 3,449s of a 7,200s budget. An hour of clock went unused
+	 * because one malformed call was treated as the end of the run.
+	 *
+	 * What this deliberately does not do is repair the payload. A call
+	 * truncated mid-argument, patched up and executed, writes the fragment over
+	 * the file it names and reports success.
+	 */
+	private async recoverUnparsableToolCall(): Promise<boolean> {
+		if (
+			this.state.lastErrorClass !== "tool_call_unparsable" ||
+			this.toolCallParseRetries >= TOOL_CALL_PARSE_RETRY_BUDGET
+		) {
+			return false;
+		}
+		this.toolCallParseRetries += 1;
+		await this.emit({
+			type: "status-notice",
+			snapshot: this.snapshot(),
+			message: "the model's tool call did not parse — asking for it again",
+			metadata: {
+				kind: "tool_call_parse_recovery",
+				reason: "tool_call_parse_recovery",
+				phase: "started",
+				iteration: this.state.iteration,
+				attempt: this.toolCallParseRetries,
+				providerError: this.state.lastError,
+			},
+		});
+		await this.addUserReminderMessage(TOOL_CALL_UNPARSABLE_REMINDER);
+		return true;
+	}
+
+	/**
+	 * Whether the model refused the turn because it carried an image.
+	 *
+	 * Measured: a tester ran DeepSeek on Ollama Cloud, the `browser` tool
+	 * attached a screenshot, and the session ended on "this model does not
+	 * support image input". Tools guard on `modelSupportsImages`, but that flag
+	 * defaults to true for any model with no declared capabilities — every model
+	 * outside the shipped catalog, including the local ones this fork runs.
+	 * Tightening the default would trade one broken setup for another, so the
+	 * refusal itself is what we act on.
+	 *
+	 * It used to act on it only where nobody had declared the capability, on the
+	 * grounds that a declared answer means the tools were told before they
+	 * attached anything. That reasoning does not survive contact with the other
+	 * ways an image arrives: the user pastes one, or a vision model is switched
+	 * on and the attach guards defer to it. A tester hit exactly that — Ollama
+	 * declared the model reads no images, `imageSupportDeclared` was therefore
+	 * true, the vision toggle let the paste through with no describer behind it,
+	 * and the run ended on the provider's refusal with no retry. Dropping the
+	 * images and taking the turn again is strictly better than failing it, so
+	 * the declaration no longer vetoes the recovery. What still bounds it is
+	 * that the error says image input specifically, that images are actually
+	 * present, and that this is tried once.
+	 */
+	private isRecoverableImageTurn(turn: {
+		message: AgentMessage;
+		finishReason: AgentModelFinishReason;
+	}): boolean {
+		return (
+			turn.finishReason === "error" &&
+			this.state.lastErrorClass === "image_input_unsupported" &&
+			!this.imageRecoveryAttempted &&
+			this.hasImageContent()
+		);
+	}
+
+	private hasImageContent(): boolean {
+		return this.state.messages.some((message) =>
+			message.content.some((part) => part.type === "image"),
+		);
+	}
+
+	/**
+	 * Drop every image from the transcript and take the turn again.
+	 *
+	 * The images are replaced with a line saying so rather than deleted: a tool
+	 * result that silently loses its screenshot reads as a tool that did
+	 * nothing, and the model would call it again. What remains is the text the
+	 * same tool returned — for `browser`, the console output and page state,
+	 * which is the part a non-vision model could act on anyway.
+	 *
+	 * Retried once. A second refusal means images were not the cause, and that
+	 * error belongs to the caller unchanged.
+	 */
+	private async retryWithoutImages(): Promise<{
+		message: AgentMessage;
+		finishReason: AgentModelFinishReason;
+	}> {
+		this.imageRecoveryAttempted = true;
+		const providerError = this.state.lastError;
+		// A configured vision model turns the screenshot into something the
+		// primary model can still act on. Anything it could not describe falls
+		// through to the notice below.
+		const described = await this.describeImagesInTranscript();
+		let dropped = 0;
+		for (const message of this.state.messages) {
+			for (let i = 0; i < message.content.length; i++) {
+				if (message.content[i]?.type !== "image") {
+					continue;
+				}
+				dropped += 1;
+				message.content[i] = {
+					type: "text",
+					text: IMAGE_DROPPED_NOTICE,
+				} as AgentMessagePart;
+			}
+		}
+		this.config.onImageInputUnsupported?.();
+		await this.emit({
+			type: "status-notice",
+			snapshot: this.snapshot(),
+			message: "model does not accept images — resending without them",
+			metadata: {
+				kind: "image_input_recovery",
+				reason: "image_input_recovery",
+				phase: "started",
+				iteration: this.state.iteration,
+				droppedImages: dropped,
+				describedImages: described,
+				providerError,
+			},
+		});
+		return await this.generateAssistantMessage();
+	}
+
+	/**
+	 * Replace images in the transcript with a second model's description of them.
+	 *
+	 * Returns how many were replaced. Images the describer could not handle are
+	 * left exactly as they were: this runs on every turn when a vision model is
+	 * configured, including for primary models that read images perfectly well,
+	 * and a describer that is briefly unreachable must not cost the primary
+	 * model its screenshot.
+	 *
+	 * Text that shared the message with an image is passed along as context —
+	 * for a browser screenshot that is the URL and console output, which is what
+	 * makes the difference between "a web page" and "the login form, with an
+	 * error under the password field".
+	 */
+	private async describeImagesInTranscript(): Promise<number> {
+		const describeImages = this.config.describeImages;
+		if (!describeImages) {
+			return 0;
+		}
+		const targets: Array<{ message: AgentMessage; index: number }> = [];
+		const images: AgentImageToDescribe[] = [];
+		for (const message of this.state.messages) {
+			const context = message.content
+				.filter((part) => part.type === "text")
+				.map((part) => (part as { text: string }).text)
+				.join("\n")
+				.slice(0, IMAGE_DESCRIPTION_CONTEXT_LIMIT);
+			for (let i = 0; i < message.content.length; i++) {
+				const part = message.content[i];
+				if (part?.type !== "image") {
+					continue;
+				}
+				const payload = imagePartPayload(part);
+				if (payload === undefined) {
+					continue;
+				}
+				targets.push({ message, index: i });
+				images.push({
+					image: payload,
+					mediaType: part.mediaType,
+					context: context.length > 0 ? context : undefined,
+				});
+			}
+		}
+		if (images.length === 0) {
+			// The silence that made this take three rounds. A describer is
+			// installed and there is nothing for it to do, which from the outside
+			// looks exactly like a describer that was never installed: both end
+			// with the image gone and the task carrying on, and neither wrote a
+			// line. Said here so the two can be told apart from a log alone.
+			// Counts only — an image and its surrounding text are the user's.
+			this.config.logger?.log?.(
+				`Vision describer found no images in ${this.state.messages.length} transcript message(s)`,
+			);
+			return 0;
+		}
+
+		let descriptions: readonly (string | undefined)[] = [];
+		try {
+			descriptions = await describeImages(images);
+		} catch (error) {
+			this.config.logger?.log?.(
+				`Vision model could not describe ${images.length} image(s): ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+				{ severity: "warn" },
+			);
+		}
+
+		// Whether an image the vision model could not describe may be left for
+		// the primary model to look at.
+		//
+		// It may, unless that model is known not to read images. A real image
+		// beats a note saying there was one, and where the capability is unknown
+		// the refusal path already recovers a turn that goes wrong. But where it
+		// is known — Ollama answers from `/api/show` — leaving the image turns a
+		// failed description into a failed turn, and the vision model being
+		// unreachable is exactly when that happens.
+		//
+		// Optimistic by default, matching the flag the tools guard on: the two
+		// disagreeing about the same model is how a screenshot reached a model
+		// that could not read one.
+		const primaryCanSeeImages = this.config.modelSupportsImages !== false;
+
+		let replaced = 0;
+		for (let i = 0; i < targets.length; i++) {
+			const description = descriptions[i]?.trim();
+			if (!description && primaryCanSeeImages) {
+				continue;
+			}
+			const target = targets[i];
+			target.message.content[target.index] = {
+				type: "text",
+				text: description
+					? `[image description, from the vision model]\n${description}`
+					: IMAGE_DESCRIPTION_UNAVAILABLE_NOTICE,
+			} as AgentMessagePart;
+			replaced += 1;
+		}
+		return replaced;
 	}
 
 	private isRecoverableOverflowTurn(turn: {
@@ -978,6 +1772,7 @@ export class AgentRuntime {
 
 	private async generateAssistantMessage(options?: {
 		overflowRecovery?: boolean;
+		requireSmallerRequest?: boolean;
 	}): Promise<{
 		message: AgentMessage;
 		finishReason: AgentModelFinishReason;
@@ -990,6 +1785,13 @@ export class AgentRuntime {
 			runId: this.state.runId,
 			iteration: this.state.iteration,
 		});
+		const retryOutputCap = this.getRetryOutputCap();
+		if (retryOutputCap !== undefined) {
+			this.config.logger?.log?.(
+				`Retrying a truncated turn on a reduced output cap of ${retryOutputCap} tokens (attempt ${this.consecutiveMaxTokensRetries}, was ${this.truncatedOutputCapTokens})`,
+				{ severity: "info" },
+			);
+		}
 		let request: AgentModelRequest = {
 			systemPrompt: this.config.systemPrompt,
 			messages: cloneMessages(this.state.messages),
@@ -1001,6 +1803,7 @@ export class AgentRuntime {
 			signal: this.abortController?.signal,
 			options: mergeModelOptions(this.config.modelOptions, {
 				metadata: modelRequestMetadata,
+				...(retryOutputCap !== undefined ? { maxTokens: retryOutputCap } : {}),
 			}),
 		};
 
@@ -1385,13 +2188,21 @@ export class AgentRuntime {
 
 	private async prepareTurnForModelRequest(
 		request: AgentModelRequest,
-		options?: { overflowRecovery?: boolean },
+		options?: { overflowRecovery?: boolean; requireSmallerRequest?: boolean },
 	): Promise<AgentModelRequest> {
 		if (!this.config.prepareTurn) {
 			return request;
 		}
 
 		const overflowRecovery = options?.overflowRecovery === true;
+		// Whether compaction finding nothing to remove is fatal.
+		//
+		// It is when the provider has already rejected the request: resending an
+		// identical one fails identically. It is not when the last turn merely ran
+		// past its output cap -- the transcript may be nowhere near full, and a
+		// long reply to a short prompt is exactly that case. Treating the two the
+		// same turns a retryable turn into a dead run.
+		const requireSmallerRequest = options?.requireSmallerRequest === true;
 		const result = await this.config.prepareTurn({
 			agentId: this.state.agentId,
 			conversationId: this.config.conversationId,
@@ -1415,7 +2226,7 @@ export class AgentRuntime {
 				});
 			},
 		});
-		if (overflowRecovery) {
+		if (requireSmallerRequest) {
 			// Only retry a provider-rejected overflow with a request that is
 			// actually smaller — anything else is guaranteed to fail again.
 			//
@@ -1466,6 +2277,9 @@ export class AgentRuntime {
 		const message = createMessage("user", [{ type: "text", text: pending }], {
 			userRunSpan: 0,
 		});
+		// A message sent mid-run is an interjection, not a new instruction: the
+		// work it interrupted is still outstanding. See the resume nudge below.
+		this.steerAwaitingResume = true;
 		this.state.messages.push(message);
 		await this.emit({
 			type: "message-added",

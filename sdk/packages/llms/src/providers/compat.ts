@@ -426,6 +426,11 @@ function buildGatewayRequest(
 		messages: toGatewayRequestMessages(messages),
 		tools: toGatewayTools(tools),
 		maxTokens: config.maxOutputTokens,
+		// This is the path a summariser actually takes: `createHandlerAsync`
+		// with a config from `resolveSummarizerConfig`, not the agent's model
+		// handle. Dropping the flag here would leave the whole marking
+		// decorative.
+		auxiliary: config.auxiliary,
 		reasoning:
 			config.thinking !== undefined ||
 			config.reasoningEffort ||

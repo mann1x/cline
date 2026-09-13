@@ -1,11 +1,15 @@
+import { DEFAULT_FOCUS_CHAIN_SETTINGS } from "@shared/FocusChainSettings"
 import { UpdateSettingsRequest } from "@shared/proto/cline/state"
+import { VSCodeButton } from "@vscode/webview-ui-toolkit/react"
 import { memo, type ReactNode } from "react"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useExtensionState } from "@/context/ExtensionStateContext"
+import { DebouncedTextArea } from "../common/DebouncedTextArea"
 import PromptTemplatesSection from "../PromptTemplatesSection"
+import QaCredentialsField from "../QaCredentialsField"
 import Section from "../Section"
 import { updateSetting } from "../utils/settingsHandlers"
 
@@ -39,6 +43,13 @@ const agentFeatures: FeatureToggle[] = [
 		settingKey: "useAutoCondense",
 	},
 ]
+
+// Not in `agentFeatures`: that table maps a state key to a flat boolean, and
+// this setting is an object (`enabled` plus the reminder interval). Toggling it
+// has to preserve the interval rather than replace the whole object with a
+// boolean, so it gets its own row against the same `FeatureRow`.
+const TASK_CHECKLIST_DESCRIPTION =
+	"Ask the model to keep a checklist of the task's steps, shown under the context window and updated as it works."
 
 const editorFeatures: FeatureToggle[] = [
 	{
@@ -155,12 +166,22 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		mcpDisplayMode,
 		yoloModeToggled,
 		useAutoCondense,
+		compactionPrompt,
+		defaultCompactionPrompt,
+		thinkingCompactionEnabled,
+		thinkingCompactionPrompt,
+		defaultThinkingCompactionPrompt,
+		cappedThinkingEnabled,
+		cappedThinkingPrompt,
+		defaultCappedThinkingPrompt,
 		compactionStrategy,
+		editVerificationSettings,
 		subagentsEnabled,
 		worktreesEnabled,
 		remoteConfigSettings,
 		backgroundEditEnabled,
 		showFeatureTips,
+		focusChainSettings,
 	} = useExtensionState()
 
 	const isYoloRemoteLocked = remoteConfigSettings?.yoloModeToggled !== undefined
@@ -203,6 +224,22 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 									onChange={(checked) => updateSetting(feature.settingKey, checked)}
 								/>
 							))}
+							<FeatureRow
+								checked={focusChainSettings?.enabled ?? true}
+								description={TASK_CHECKLIST_DESCRIPTION}
+								label="Task Checklist"
+								onChange={(checked) =>
+									updateSetting("focusChainSettings", {
+										enabled: checked,
+										// Carried through, not defaulted: dropping it here would
+										// silently reset a tuned interval every time the toggle
+										// is flipped.
+										remindClineInterval:
+											focusChainSettings?.remindClineInterval ??
+											DEFAULT_FOCUS_CHAIN_SETTINGS.remindClineInterval,
+									})
+								}
+							/>
 							<div className="space-y-2 py-3">
 								<Label className="text-sm font-medium text-foreground">Auto Compact Strategy</Label>
 								<p className="text-xs text-muted-foreground">Controls how auto compaction rewrites context.</p>
@@ -219,6 +256,33 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 									</SelectContent>
 								</Select>
 							</div>
+							<div className="space-y-2 py-3">
+								<Label className="text-sm font-medium text-foreground">Check Edited Files</Label>
+								{/* A guard rather than an instruction. Measured on a live
+								    session: list_files → browser → read_files → check_file →
+								    editor → editor → editor → editor. The linter ran once,
+								    before anything was touched, then four edits landed with
+								    nothing checking them and sixteen problems in the file
+								    afterwards. A model that ignores a linter it has already
+								    run will ignore a sentence asking it to run one again. */}
+								<p className="text-xs text-muted-foreground">
+									Whether a task may finish with a file it changed and never checked. Nudge holds the run back
+									twice and then lets it through; Require gives the same guard more room to insist.
+								</p>
+								<Select
+									onValueChange={(value) => updateSetting("editVerificationSettings", { mode: value })}
+									value={editVerificationSettings?.mode ?? "nudge"}>
+									<SelectTrigger className="w-full">
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectItem value="off">Off</SelectItem>
+										<SelectItem value="nudge">Nudge</SelectItem>
+										<SelectItem value="require">Require</SelectItem>
+									</SelectContent>
+								</Select>
+							</div>
+							<QaCredentialsField />
 						</div>
 					</div>
 
@@ -300,6 +364,102 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 				</div>
 
 				<PromptTemplatesSection />
+
+				{/* Last, because it is the longest field on the page and the one
+				    most people never touch. */}
+				<div className="space-y-2 pt-2">
+					<Label className="text-sm font-medium text-foreground">Compaction Prompt</Label>
+					<p className="text-xs text-muted-foreground">
+						The instruction the summarizer is given when auto compaction runs. The summary replaces the turns it
+						stands for, so this decides what survives. Leave empty for the built-in prompt.{" "}
+						<code>{"{{files_read}}"}</code> and <code>{"{{files_edited}}"}</code> are substituted; the transcript is
+						appended automatically.
+					</p>
+					<DebouncedTextArea
+						disabled={!useAutoCondense}
+						initialValue={compactionPrompt ?? ""}
+						maxRows={24}
+						minRows={4}
+						onChange={(value) => updateSetting("compactionPrompt", value)}
+						placeholder={defaultCompactionPrompt}
+					/>
+					{compactionPrompt?.trim() ? (
+						<VSCodeButton appearance="secondary" onClick={() => updateSetting("compactionPrompt", "")}>
+							Reset to default
+						</VSCodeButton>
+					) : null}
+				</div>
+
+				{/* Directly below, because it is the second half of the same
+				    operation: the summary says what happened, this says how it
+				    went. */}
+				<div className="space-y-2 pt-2">
+					<div className="flex items-center justify-between w-full">
+						<Label className="text-sm font-medium text-foreground">Thinking Compaction Prompt</Label>
+						<Switch
+							checked={thinkingCompactionEnabled ?? true}
+							className="shrink-0"
+							disabled={!useAutoCondense}
+							id="thinkingCompactionEnabled"
+							onCheckedChange={(checked) => updateSetting("thinkingCompactionEnabled", checked)}
+							size="lg"
+						/>
+					</div>
+					<p className="text-xs text-muted-foreground">
+						Compaction throws away the model&apos;s reasoning along with the turns, and with it every approach it had
+						already ruled out. This is a second pass over that reasoning &mdash; what worked, what wasted time, what
+						to do differently &mdash; written as the summary&apos;s own thinking block. Costs one extra model call per
+						compaction. Leave empty for the built-in prompt.
+					</p>
+					<DebouncedTextArea
+						disabled={!useAutoCondense || thinkingCompactionEnabled === false}
+						initialValue={thinkingCompactionPrompt ?? ""}
+						maxRows={24}
+						minRows={4}
+						onChange={(value) => updateSetting("thinkingCompactionPrompt", value)}
+						placeholder={defaultThinkingCompactionPrompt}
+					/>
+					{thinkingCompactionPrompt?.trim() ? (
+						<VSCodeButton appearance="secondary" onClick={() => updateSetting("thinkingCompactionPrompt", "")}>
+							Reset to default
+						</VSCodeButton>
+					) : null}
+				</div>
+
+				{/* The third thing that rewrites reasoning, and the only one that
+				    runs without compaction: it fires on a single capped turn,
+				    whatever the transcript is doing. */}
+				<div className="space-y-2 pt-2">
+					<div className="flex items-center justify-between w-full">
+						<Label className="text-sm font-medium text-foreground">Capped Thinking Prompt</Label>
+						<Switch
+							checked={cappedThinkingEnabled ?? true}
+							className="shrink-0"
+							id="cappedThinkingEnabled"
+							onCheckedChange={(checked) => updateSetting("cappedThinkingEnabled", checked)}
+							size="lg"
+						/>
+					</div>
+					<p className="text-xs text-muted-foreground">
+						A turn that runs out of thinking budget is cut mid-sentence, and the next turn re-derives the same
+						reasoning from the beginning rather than continuing it. This replaces the abandoned reasoning, for the
+						next request only, with a note of what it had settled. Needs a thinking budget to detect one, and stands
+						down where none is known. Leave empty for the built-in prompt.
+					</p>
+					<DebouncedTextArea
+						disabled={cappedThinkingEnabled === false}
+						initialValue={cappedThinkingPrompt ?? ""}
+						maxRows={24}
+						minRows={4}
+						onChange={(value) => updateSetting("cappedThinkingPrompt", value)}
+						placeholder={defaultCappedThinkingPrompt}
+					/>
+					{cappedThinkingPrompt?.trim() ? (
+						<VSCodeButton appearance="secondary" onClick={() => updateSetting("cappedThinkingPrompt", "")}>
+							Reset to default
+						</VSCodeButton>
+					) : null}
+				</div>
 			</Section>
 		</div>
 	)

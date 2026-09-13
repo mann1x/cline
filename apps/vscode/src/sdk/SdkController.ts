@@ -7,6 +7,7 @@
 import * as fs from "node:fs/promises"
 import * as path from "node:path"
 import {
+	createReadReceipts,
 	createRestoredCheckpointMetadata,
 	createUserInstructionConfigService,
 	getProviderAuthStorageId,
@@ -169,6 +170,16 @@ export class Controller {
 	private sessionRebuilds: SdkSessionRebuildScheduler
 	private interactions: SdkInteractionCoordinator
 	private diffEdits: SdkDiffEditCoordinator
+	/**
+	 * What the model has read, shared by the `read_files` override and the
+	 * `editor` executor behind the diff coordinator.
+	 *
+	 * Both of those replace executors the SDK had already paired up, so the
+	 * registry has to be handed to them here. Two registries would be worse
+	 * than none: the reader would record into one and the guard would check
+	 * the other, and every edit would be refused.
+	 */
+	private readonly readReceipts = createReadReceipts()
 	private sessionConfigBuilder: SdkSessionConfigBuilder
 	private taskHistory: SdkTaskHistory
 	private mode: SdkModeCoordinator
@@ -313,6 +324,7 @@ export class Controller {
 		this.diffEdits = new SdkDiffEditCoordinator({
 			getCwd: () => this.getWorkspaceRoot(),
 			isBackgroundEditEnabled: () => !!this.stateManager.getGlobalSettingsKey("backgroundEditEnabled"),
+			receipts: this.readReceipts,
 		})
 		this.interactions = new SdkInteractionCoordinator({
 			messages: this.messages,
@@ -346,7 +358,12 @@ export class Controller {
 			applyPatchExecutor: (input, cwd, context) => this.diffEdits.executeApplyPatchTool(input, cwd, context),
 			// The SDK's built-in reader resolves relative paths against the extension
 			// host's process.cwd() (usually "/"); resolve them against the workspace instead.
-			readFileExecutor: createWorkspaceFileReadExecutor(() => this.getWorkspaceRoot()),
+			readFileExecutor: createWorkspaceFileReadExecutor(() => this.getWorkspaceRoot(), this.readReceipts),
+			// The receipts already record every file the model has read, wherever
+			// it lives. A workspace-scoped search that finds nothing consults them
+			// so it can say what it could not have covered, rather than reporting
+			// that a file the model just edited does not exist.
+			getReadPaths: () => this.readReceipts.paths(),
 			onSessionEvent: (event) => {
 				this.sessionEvents.handleSessionEvent(event).catch((err) => {
 					Logger.error("[SdkController] Failed to handle session event:", err)

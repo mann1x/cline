@@ -67,6 +67,10 @@ async function loadFamilyFactory(
 				const module = await import("./ai-sdk");
 				return module.createOllamaProvider;
 			}
+			case "opencoti": {
+				const module = await import("./ai-sdk");
+				return module.createOpencotiProvider;
+			}
 			case "sap-ai-core": {
 				const module = await import("./ai-sdk");
 				return module.createSapAiCoreProvider;

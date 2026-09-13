@@ -50,6 +50,7 @@ import { VscodeWebviewProvider } from "./hosts/vscode/VscodeWebviewProvider"
 import { exportVSCodeStorageToSharedFiles } from "./hosts/vscode/vscode-to-file-migration"
 import { ExtensionRegistryInfo } from "./registry"
 import { AuthService, LogoutReason } from "./sdk/auth-service"
+import { installOllamaStreamDispatcher, reportOllamaStreamDispatcher } from "./sdk/ollama-stream-dispatcher"
 import { telemetryService } from "./services/telemetry"
 import type { RolloutBundleActivation } from "./services/telemetry/rollout-metadata"
 import { LG_TASK_URI_PATH, SharedUriHandler, TASK_URI_PATH } from "./services/uri/SharedUriHandler"
@@ -65,6 +66,11 @@ export async function reportRolloutActivation(input: RolloutBundleActivation): P
 // for all-platform should be registered in common.ts.
 export async function activate(context: vscode.ExtensionContext) {
 	const activationStartTime = performance.now()
+
+	// 0. Hand the Ollama vendor its stream dispatcher. Before anything that can
+	// build a session: the vendor resolves one once and caches the result, so a
+	// session created first would cache the "none" it finds on its own.
+	installOllamaStreamDispatcher()
 
 	// 1. Set up HostProvider for VSCode
 	// IMPORTANT: This must be done before any service can be registered
@@ -84,6 +90,14 @@ export async function activate(context: vscode.ExtensionContext) {
 	// 4. Register services and perform common initialization
 	// IMPORTANT: Must be done after host provider is setup and migrations are complete
 	const webview = (await initialize(storageContext)) as VscodeWebviewProvider
+
+	// Only now can anything be logged. `Logger` fans out to a set of
+	// subscribers and `initialize` is what adds them — registering the output
+	// channel earlier creates somewhere to write but nothing writing to it.
+	// This line has moved twice for that reason: first from the top of
+	// `activate`, then from `setupHostProvider`, each time still ahead of the
+	// subscriber and each time silently producing nothing.
+	reportOllamaStreamDispatcher()
 
 	// 5. Register services and commands specific to VS Code
 	// Initialize hook discovery cache for performance optimization

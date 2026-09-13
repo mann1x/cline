@@ -918,6 +918,24 @@ const OPENAI_COMPATIBLE_SPEC_OVERRIDES: BuiltinSpecOverride[] = [
 		modelsSourceUrl: "http://localhost:11434/api/tags",
 	},
 	{
+		id: "opencoti",
+		name: "Opencoti",
+		description: "opencoti-llamafile: llama.cpp with PolyKV agentic KV pools",
+		// Its chat endpoint is OpenAI-compatible, but the vendor module is not
+		// the compatible one: the pool the request attaches to travels in the
+		// body next to `messages`, and the control plane that owns those pools
+		// sits beside `/v1` rather than under it.
+		family: "opencoti",
+		capabilities: ["tools"],
+		defaultModelId: "",
+		apiKeyEnv: ["OPENCOTI_API_KEY"],
+		// Local models are discovered from the running server, so the generated
+		// catalog has nothing to say about them.
+		modelsFactory: () => ({}),
+		defaults: { baseUrl: "http://localhost:8080/v1" },
+		modelsSourceUrl: "http://localhost:8080/v1/models",
+	},
+	{
 		id: "lmstudio",
 		name: "LM Studio",
 		description: "Local model inference with LM Studio",
@@ -1150,8 +1168,9 @@ export function resolveProviderApiLineBaseUrl(
 	if (!isProviderApiLine(apiLine)) {
 		return undefined;
 	}
-	return API_LINE_BASE_URLS_BY_PROVIDER_ID.get(normalizeProviderId(providerId))
-		?.[apiLine];
+	return API_LINE_BASE_URLS_BY_PROVIDER_ID.get(
+		normalizeProviderId(providerId),
+	)?.[apiLine];
 }
 
 function getModels(spec: BuiltinSpec): Record<string, ModelInfo> {

@@ -2,7 +2,7 @@
 	"name": "claude-dev",
 	"displayName": "Cline (mann1x build)",
 	"description": "Autonomous coding agent right in your IDE, capable of creating/editing files, running commands, using the browser, and more with your permission every step of the way.",
-	"version": "4.99.12",
+	"version": "4.100.40",
 	"icon": "assets/icons/icon.png",
 	"engines": {
 		"vscode": "^1.101.0"
@@ -347,6 +347,11 @@
 						"shellcheck",
 						"npx eslint --format unix ${file}"
 					]
+				},
+				"cline.browserTool": {
+					"type": "boolean",
+					"default": true,
+					"markdownDescription": "Offer the `browser` tool, which opens a page in a real browser and reports its console output and uncaught errors. Turn this off to remove it from the model's tools; Chrome is only launched if the model actually calls it."
 				}
 			}
 		}

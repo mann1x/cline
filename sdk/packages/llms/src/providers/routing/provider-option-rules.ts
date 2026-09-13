@@ -11,6 +11,12 @@ import {
 	providerReasoningRouteMatches,
 	resolveGeminiThinkingMode,
 } from "../model-facts";
+import {
+	buildOllamaSamplingOptions,
+	readOllamaNumCtx,
+	readOllamaNumPredict,
+	readOllamaSamplingOptions,
+} from "../vendors/ollama";
 import { buildGatewayReasoningOptions } from "./anthropic-compatible";
 import { buildOpenAINativeProviderOptions } from "./generic-compatible";
 import {
@@ -532,6 +538,46 @@ const ollamaReasoningDefaultOnDisableRule: ProviderOptionRule = {
 	},
 };
 
+/**
+ * Ollama's own request options: the context window and the configured sampler.
+ *
+ * `ollama-ai-provider-v2` has no model-level options hook, so everything
+ * Ollama-specific has to arrive as request-scoped provider options. This is the
+ * only place that can happen without loss: `buildStreamConfig`'s result is
+ * spread *after* the composed provider options in `ai-sdk.ts`, so returning a
+ * `providerOptions` from there would replace the whole composed bucket rather
+ * than add to it.
+ *
+ * The sampler comes from the user's Ollama panel and includes `think_budget`,
+ * which the package's option schema does not name — the vendored patch gives
+ * that schema a catchall so it survives the parse instead of being dropped.
+ */
+const ollamaNativeOptionsRule: ProviderOptionRule = {
+	id: "provider.ollama.native-options",
+	phase: "provider-reasoning",
+	description:
+		"Ollama receives its context window and configured sampler through native provider options; reasoning stays top-level.",
+	applies: (input) => input.target === "ollama",
+	suppresses: { genericThinking: true },
+	build: (input) => {
+		const numPredict = readOllamaNumPredict(input.request, input.context);
+		return {
+			ollama: {
+				options: {
+					num_ctx: readOllamaNumCtx(input.context),
+					// Before the sampler, so a `num_predict` the user configured in
+					// the Ollama panel still wins — this only fills in the cap the
+					// session already believes it is sending.
+					...(numPredict !== undefined ? { num_predict: numPredict } : {}),
+					...buildOllamaSamplingOptions(
+						readOllamaSamplingOptions(input.context.config),
+					),
+				},
+			},
+		};
+	},
+};
+
 const nonGlmProviderRoutingSuppressionRule: ProviderOptionRule = {
 	id: "provider.routing.glm-thinking.non-glm.suppress-generic-thinking",
 	phase: "provider",
@@ -614,6 +660,7 @@ export const PROVIDER_OPTION_RULES: ReadonlyArray<ProviderOptionRule> = [
 	kimiK26ThinkingRule,
 	deepSeekThinkingRule,
 	ollamaReasoningDefaultOnDisableRule,
+	ollamaNativeOptionsRule,
 	nonGlmProviderRoutingSuppressionRule,
 	nativeZaiGlmThinkingRule,
 	miniMaxThinkingRule,

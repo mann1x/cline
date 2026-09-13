@@ -299,7 +299,11 @@ function parseToolSafe(text: string | undefined): ClineSayTool {
 function getToolDisplayInfo(tool: ClineSayTool) {
 	const icon = getIconByToolName(tool.tool)
 	const filePath = tool.path || ""
-	const folderPath = filePath + "/"
+	// Listing the workspace root arrives with an empty path, and the bare "/"
+	// that produced was stripped back to nothing by the path cleaner — the row
+	// rendered as "Cline read 1 folder:" naming no folder at all. `searchFiles`
+	// below already guarded this case; the three list tools did not.
+	const folderPath = filePath ? `${filePath}/` : "./"
 
 	switch (tool.tool) {
 		case "readFile": {

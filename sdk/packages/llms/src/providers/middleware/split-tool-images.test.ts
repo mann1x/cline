@@ -4,6 +4,7 @@ import type {
 } from "@ai-sdk/provider";
 import { describe, expect, it } from "vitest";
 import {
+	keepToolImagesMiddleware,
 	rewritePromptToolImages,
 	splitToolImagesMiddleware,
 } from "./split-tool-images";
@@ -916,5 +917,147 @@ describe("splitToolImagesMiddleware", () => {
 
 		expect(out?.temperature).toBe(0.7);
 		expect(out?.maxOutputTokens).toBe(1000);
+	});
+});
+
+/**
+ * The other half of the same handling, for a wire format that can carry images
+ * on a tool message. Relocating there is not redundant, it is destructive: a
+ * chat template replays the assistant's reasoning only from the last user turn
+ * onward, so a synthetic user message after every screenshot deletes the whole
+ * thinking history from the prompt.
+ */
+describe("keepToolImagesMiddleware", () => {
+	const screenshotPrompt = (
+		data = imageData(1024),
+	): LanguageModelV4Message[] => [
+		{
+			role: "tool",
+			content: [
+				{
+					type: "tool-result",
+					toolCallId: "call_1",
+					toolName: "browser",
+					output: {
+						type: "content",
+						value: [
+							{ type: "text", text: "open: http://localhost" },
+							{
+								type: "file",
+								mediaType: "image/png",
+								data: { type: "data", data },
+							},
+						],
+					},
+				},
+			],
+		},
+	];
+
+	it("leaves the image inside the tool result and adds no user message", () => {
+		const out = rewritePromptToolImages(screenshotPrompt(), {
+			relocate: false,
+		});
+
+		expect(out.prompt).toHaveLength(1);
+		expect(out.prompt[0]?.role).toBe("tool");
+		const value = (
+			out.prompt[0] as { content: { output: { value: unknown[] } }[] }
+		).content[0].output.value;
+		expect(value).toHaveLength(2);
+		expect(value[1]).toMatchObject({ type: "file", mediaType: "image/png" });
+		expect(JSON.stringify(out.prompt)).not.toContain(PLACEHOLDER);
+	});
+
+	it("still refuses an image that blows the budget", () => {
+		// The byte checks are the part worth sharing; only the destination
+		// differs between the two policies.
+		const out = rewritePromptToolImages(
+			screenshotPrompt(imageData(40 * 1024 * 1024)),
+			{
+				relocate: false,
+			},
+		);
+
+		expect(JSON.stringify(out.prompt)).toContain(OMITTED_PLACEHOLDER);
+		expect(JSON.stringify(out.prompt)).not.toContain("file");
+	});
+
+	it("drops media the native format has no field for rather than stringifying it", () => {
+		// Relocation dropped these silently at the converter; left in place they
+		// would be JSON-stringified into the tool text as base64, which is the
+		// failure this file exists to prevent.
+		const prompt: LanguageModelV4Message[] = [
+			{
+				role: "tool",
+				content: [
+					{
+						type: "tool-result",
+						toolCallId: "call_1",
+						toolName: "read_files",
+						output: {
+							type: "content",
+							value: [
+								{
+									type: "file",
+									mediaType: "application/pdf",
+									data: { type: "data", data: imageData(1024) },
+								},
+							],
+						},
+					},
+				],
+			},
+		];
+
+		const out = rewritePromptToolImages(prompt, { relocate: false });
+
+		expect(JSON.stringify(out.prompt)).toContain("not an image");
+		expect(JSON.stringify(out.prompt)).not.toContain("application/pdf");
+	});
+
+	it("has nothing to do once a vision model has described the images", () => {
+		// The describer runs on the agent transcript, well above this layer, and
+		// replaces each image with text before a request is ever built.
+		const prompt: LanguageModelV4Message[] = [
+			{
+				role: "tool",
+				content: [
+					{
+						type: "tool-result",
+						toolCallId: "call_1",
+						toolName: "browser",
+						output: {
+							type: "content",
+							value: [
+								{ type: "text", text: "open: http://localhost" },
+								{ type: "text", text: "Image: a login form with an error." },
+							],
+						},
+					},
+				],
+			},
+		];
+
+		const out = rewritePromptToolImages(prompt, { relocate: false });
+
+		expect(out.mutated).toBe(false);
+		expect(out.prompt).toEqual(prompt);
+	});
+
+	it("passes the params straight through when there is nothing to change", async () => {
+		const params = {
+			prompt: [
+				{ role: "user", content: [{ type: "text", text: "hi" }] },
+			] as LanguageModelV4Message[],
+		} as LanguageModelV4CallOptions;
+
+		const out = await keepToolImagesMiddleware.transformParams?.({
+			params,
+			type: "stream",
+			model: {} as never,
+		});
+
+		expect(out).toBe(params);
 	});
 });

@@ -7,6 +7,7 @@ import { TelemetrySetting } from "@shared/TelemetrySetting"
 import { ClineEnv } from "@/config"
 import { fetchRemoteConfig } from "@/core/storage/remote-config/fetch"
 import { clearRemoteConfig } from "@/core/storage/remote-config/utils"
+import { updateQaCredentials } from "@/sdk/qa-credentials-store"
 import { McpDisplayMode } from "@/shared/McpDisplayMode"
 import { Logger } from "@/shared/services/Logger"
 import { telemetryService } from "../../../services/telemetry"
@@ -70,6 +71,30 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		// Update plan/act separate models setting
 		if (request.planActSeparateModelsSetting !== undefined) {
 			controller.stateManager.setGlobalState("planActSeparateModelsSetting", request.planActSeparateModelsSetting)
+		}
+
+		// Vision model: a second model that reads images for a primary one that
+		// cannot. The configuration and the profile list travel as JSON strings;
+		// see `@shared/api-config-snapshot` for why they are not proto messages.
+		if (request.visionModelEnabled !== undefined) {
+			controller.stateManager.setGlobalState("visionModelEnabled", request.visionModelEnabled)
+		}
+		if (request.visionModeApiConfiguration !== undefined) {
+			controller.stateManager.setGlobalState("visionModeApiConfiguration", request.visionModeApiConfiguration)
+		}
+		// Delegated agents: the same arrangement, for the model subagents and
+		// teammates run on rather than the one driving the session.
+		if (request.agentsModelEnabled !== undefined) {
+			controller.stateManager.setGlobalState("agentsModelEnabled", request.agentsModelEnabled)
+		}
+		if (request.agentsModeApiConfiguration !== undefined) {
+			controller.stateManager.setGlobalState("agentsModeApiConfiguration", request.agentsModeApiConfiguration)
+		}
+		if (request.apiConfigurationProfiles !== undefined) {
+			controller.stateManager.setGlobalState("apiConfigurationProfiles", request.apiConfigurationProfiles)
+		}
+		if (request.activeApiConfigurationProfile !== undefined) {
+			controller.stateManager.setGlobalState("activeApiConfigurationProfile", request.activeApiConfigurationProfile)
 		}
 
 		// Update checkpoints setting
@@ -174,6 +199,26 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		}
 
 		// Update auto-condense setting
+		if (request.compactionPrompt !== undefined) {
+			controller.stateManager.setGlobalState("compactionPrompt", request.compactionPrompt)
+		}
+
+		if (request.thinkingCompactionEnabled !== undefined) {
+			controller.stateManager.setGlobalState("thinkingCompactionEnabled", request.thinkingCompactionEnabled)
+		}
+
+		if (request.thinkingCompactionPrompt !== undefined) {
+			controller.stateManager.setGlobalState("thinkingCompactionPrompt", request.thinkingCompactionPrompt)
+		}
+
+		if (request.cappedThinkingEnabled !== undefined) {
+			controller.stateManager.setGlobalState("cappedThinkingEnabled", request.cappedThinkingEnabled)
+		}
+
+		if (request.cappedThinkingPrompt !== undefined) {
+			controller.stateManager.setGlobalState("cappedThinkingPrompt", request.cappedThinkingPrompt)
+		}
+
 		if (request.useAutoCondense !== undefined) {
 			if (controller.task) {
 				telemetryService.captureAutoCondenseToggle(
@@ -274,6 +319,44 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 
 		if (request.showFeatureTips !== undefined) {
 			controller.stateManager.setGlobalState("showFeatureTips", request.showFeatureTips)
+		}
+
+		// Merged onto the stored value rather than assigned: the settings UI sends
+		// only the field it changed, and proto3 gives an absent number the same
+		// wire form as zero — assigning the request wholesale would reset the
+		// reminder interval to 0 (i.e. remind on every message) whenever the
+		// toggle is flipped.
+		// The QA guard's insistence. Stored whole rather than merged: `mode` is
+		// the only field, and an unknown value would leave the guard in a state
+		// nothing downstream knows how to read.
+		if (request.editVerificationSettings !== undefined) {
+			const mode = request.editVerificationSettings.mode
+			if (mode === "off" || mode === "nudge" || mode === "require") {
+				controller.stateManager.setGlobalState("editVerificationSettings", { mode })
+			}
+		}
+
+		// QA credentials. A delta, because the settings view knows the names and
+		// never the values, so it has nothing to send back for one the user did
+		// not touch. Rejected entries are logged by name in the store; nothing
+		// here echoes a value anywhere, and none of it reaches `state_json`.
+		if (request.qaCredentials !== undefined) {
+			updateQaCredentials({
+				set: request.qaCredentials.set.map((credential) => ({
+					name: credential.name,
+					value: credential.value,
+				})),
+				remove: request.qaCredentials.remove,
+			})
+		}
+
+		if (request.focusChainSettings !== undefined) {
+			const current = controller.stateManager.getGlobalSettingsKey("focusChainSettings")
+			const remindClineInterval = request.focusChainSettings.remindClineInterval
+			controller.stateManager.setGlobalState("focusChainSettings", {
+				enabled: request.focusChainSettings.enabled,
+				remindClineInterval: remindClineInterval > 0 ? remindClineInterval : current.remindClineInterval,
+			})
 		}
 
 		// Post updated state to webview

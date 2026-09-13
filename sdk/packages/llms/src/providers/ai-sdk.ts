@@ -28,8 +28,9 @@ import { classifyProviderError } from "./error-classification";
 import { extractErrorMessage } from "./format";
 import {
 	isAnthropicCompatibleModel,
-	isCerebrasProvider,
+	type ReasoningHistoryMode,
 	resolveModelFamily,
+	resolveReasoningHistoryMode,
 } from "./model-facts";
 import {
 	recordProviderRequestCapture,
@@ -117,7 +118,7 @@ function buildCachedAiSdkMessages(
 	systemPrompt?: string,
 ) {
 	const aiMessages = toAiSdkMessages(request.messages, systemPrompt, {
-		includeReasoning: shouldIncludeReasoningHistory(request, context),
+		reasoningHistory: resolveReasoningHistoryMode(request, context),
 	}) as Array<Record<string, unknown>>;
 	const includeAnthropic = isAnthropicCompatibleModel({
 		modelId: request.modelId,
@@ -297,13 +298,25 @@ function wrapFetchForStickySession(
 	return sessionFetch;
 }
 
-function shouldIncludeReasoningHistory(
-	request: GatewayStreamRequest,
-	context: GatewayProviderContext,
-): boolean {
-	return !isCerebrasProvider(request, context);
-}
-
+/**
+ * How much of the transcript's reasoning goes back to the model.
+ *
+ * `all` is the historical behaviour, `none` is for backends that reject it,
+ * and `last` keeps only the most recent message's reasoning.
+ *
+ * `last` is what a tool loop actually needs. The state a coding agent carries
+ * between turns lives in the tool calls and their results; its own reasoning
+ * from six turns ago is not an input to anything, it is a transcript of how it
+ * got here. The exception is the turn in flight — a model that has just
+ * reasoned its way to a tool call needs that reasoning when the result comes
+ * back, which is also the only reasoning Anthropic requires be echoed.
+ *
+ * Measured on a live Ollama session at effort `high`: 242,078 characters of
+ * thinking against 61,728 for every tool call, result and message combined —
+ * 79.7% of the transcript, ~60,500 tokens, resent in full on every request.
+ * Compaction could only get 103.2k down to 62.2k because four-fifths of what
+ * it was compacting was stale reasoning.
+ */
 async function ensureGatewayLangfuseTelemetry(
 	providerId: string,
 ): Promise<boolean> {
@@ -318,12 +331,28 @@ async function ensureGatewayLangfuseTelemetry(
 function toAiSdkMessages(
 	messages: readonly AgentMessage[],
 	systemPrompt?: string,
-	options?: { includeReasoning?: boolean },
+	options?: { reasoningHistory?: ReasoningHistoryMode },
 ) {
-	const includeReasoning = options?.includeReasoning ?? true;
+	const reasoningHistory = options?.reasoningHistory ?? "all";
+	// Which message keeps its reasoning under `last`. Found by scanning for the
+	// final message that actually carries a reasoning part, not by taking the
+	// final message: the last turn is often a tool result, and "keep the last
+	// one" has to mean the last reasoning there is.
+	let lastReasoningIndex = -1;
+	if (reasoningHistory === "last") {
+		for (let i = messages.length - 1; i >= 0; i--) {
+			if (messages[i]?.content.some((part) => part.type === "reasoning")) {
+				lastReasoningIndex = i;
+				break;
+			}
+		}
+	}
 	const normalizedMessages: AiSdkFormatterMessage[] = [];
 
-	for (const message of messages) {
+	for (const [messageIndex, message] of messages.entries()) {
+		const includeReasoning =
+			reasoningHistory === "all" ||
+			(reasoningHistory === "last" && messageIndex === lastReasoningIndex);
 		const content: AiSdkFormatterPart[] = [];
 		let skippedReasoning = false;
 		for (const part of message.content) {
@@ -485,11 +514,55 @@ export async function repairMalformedToolCall<T extends RepairableToolCall>({
 	} catch {
 		// Not valid JSON — attempt repair below.
 	}
+	// A payload cut off inside a value is not malformed, it is incomplete, and
+	// the two want opposite treatment. Closing the quote makes a *valid* call
+	// carrying a truncated value, and nothing downstream can tell that from one
+	// the model meant — so a whole-file write applies the fragment and the file
+	// is gone.
+	//
+	// Measured: a 14,127-byte file was replaced by 572 bytes ending mid-rule at
+	// `top: 50`, with no `<script>` left in it, after the model's rewrite hit
+	// the output cap. Nothing in the log said so, because repairing is silent.
+	// The synthetic case behaves identically — 98B of a 181B document, `ends
+	// "olute; top: 50"`, `has <script>: false`.
+	//
+	// Refusing here returns the SDK's own error for the call, which the model
+	// sees and retries. That costs a turn. Guessing costs the file.
+	if (endsInsideStringLiteral(toolCall.input)) {
+		return null;
+	}
 	const repaired = parseJsonStream(toolCall.input);
 	if (repaired === toolCall.input || typeof repaired === "string") {
 		return null;
 	}
 	return { ...toolCall, input: JSON.stringify(repaired) };
+}
+
+/**
+ * Whether the text stops in the middle of a JSON string literal.
+ *
+ * Only double quotes are tracked, so the malformed shapes repair exists for
+ * still reach it: single-quoted keys never open a string here, and an
+ * unescaped newline inside one does not close it. What this catches is the
+ * one case where a value is missing its end — the shape truncation makes.
+ */
+function endsInsideStringLiteral(input: string): boolean {
+	let inString = false;
+	let escaped = false;
+	for (const char of input) {
+		if (escaped) {
+			escaped = false;
+			continue;
+		}
+		if (char === "\\") {
+			escaped = inString;
+			continue;
+		}
+		if (char === '"') {
+			inString = !inString;
+		}
+	}
+	return inString;
 }
 
 function normalizeAiSdkToolInputSchema(
@@ -1207,6 +1280,12 @@ async function createProviderModule(
 			const { createOllamaProviderModule } = await import("./vendors/ollama");
 			return createOllamaProviderModule(config, context);
 		}
+		case "opencoti": {
+			const { createOpencotiProviderModule } = await import(
+				"./vendors/opencoti"
+			);
+			return createOpencotiProviderModule(config, context);
+		}
 		case "sapaicore": {
 			const { createSapAiCoreProviderModule } = await import(
 				"./vendors/community"
@@ -1250,7 +1329,7 @@ function createAiSdkProvider(kind: ProviderModuleKind): GatewayProviderFactory {
 				const messages = shouldApplyPromptCache(request, context)
 					? buildCachedAiSdkMessages(request, context, messagesSystemPrompt)
 					: toAiSdkMessages(request.messages, messagesSystemPrompt, {
-							includeReasoning: shouldIncludeReasoningHistory(request, context),
+							reasoningHistory: resolveReasoningHistoryMode(request, context),
 						});
 				const providerOptions = composeAiSdkProviderOptions(
 					request,
@@ -1383,4 +1462,5 @@ export const createOpenAICodexProvider = createAiSdkProvider("openai-codex");
 export const createOpenCodeProvider = createAiSdkProvider("opencode");
 export const createDifyProvider = createAiSdkProvider("dify");
 export const createOllamaProvider = createAiSdkProvider("ollama");
+export const createOpencotiProvider = createAiSdkProvider("opencoti");
 export const createSapAiCoreProvider = createAiSdkProvider("sapaicore");

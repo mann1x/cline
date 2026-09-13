@@ -42,6 +42,19 @@
 //     own chat-messages converter) was previously uncovered.
 //   * Decoupled from the AI SDK's wire-output shape: if the SDK ever
 //     changes how it serialises content arrays, this layer doesn't care.
+//
+// Relocation is not universal, though — it is what a wire format that cannot
+// carry images on a tool message forces. Ollama's native `/api/chat` can:
+// `images` is a field on every message, tool ones included. Relocating there
+// is actively harmful, because chat templates replay the assistant's reasoning
+// only from the last user turn onward, so a synthetic user message after every
+// screenshot deletes the model's whole thinking history from the prompt (see
+// `vendors/ollama-tool-images.ts` for the measurement). So the media handling
+// splits in two: everything except *where the images end up* is shared —
+// validation, the byte budget, the omission placeholder — and the policy is a
+// parameter. `keepToolImagesMiddleware` runs the same checks and leaves the
+// images inside the tool result for a converter that knows what to do with
+// them.
 
 import type {
 	LanguageModelV4CallOptions,
@@ -64,6 +77,9 @@ import {
 } from "@cline/shared";
 
 const IMAGE_PLACEHOLDER = "(see following user message for image)";
+
+/** For media a native format has no field to carry. */
+const NON_IMAGE_MEDIA_PLACEHOLDER = "(attachment omitted: not an image)";
 
 type ContentOutput = Extract<
 	LanguageModelV4ToolResultOutput,
@@ -219,6 +235,7 @@ function reserveGenericMediaDataBudget(
 function splitContentOutputMedia(
 	output: LanguageModelV4ToolResultOutput,
 	mediaState: MediaBudgetState,
+	relocate: boolean,
 ): SplitResult | null {
 	if (output.type !== "content") {
 		return null;
@@ -311,6 +328,24 @@ function splitContentOutputMedia(
 				continue;
 			}
 		}
+		if (!relocate) {
+			// The images stay where the tool put them. What does not stay is
+			// anything the target has no field for: Ollama carries `images` and
+			// nothing else, so a PDF left in place would be JSON-stringified into
+			// the tool text as base64 — the failure this whole file exists to
+			// prevent. Relocation dropped those silently; a note is better.
+			if (currentPart.mediaType.startsWith("image/")) {
+				newValue.push(currentPart);
+				mutated = mutated || currentPart !== part;
+			} else {
+				newValue.push({
+					type: "text",
+					text: NON_IMAGE_MEDIA_PLACEHOLDER,
+				});
+				mutated = true;
+			}
+			continue;
+		}
 		const filePart = mediaPartToFilePart(currentPart);
 		if (!filePart) {
 			// Unhandled media kind (image-file-id) — pass through unchanged.
@@ -345,10 +380,14 @@ function splitContentOutputMedia(
  * Returns the (possibly new) prompt array and a `mutated` flag for
  * test/observation use.
  */
-export function rewritePromptToolImages(prompt: LanguageModelV4Message[]): {
+export function rewritePromptToolImages(
+	prompt: LanguageModelV4Message[],
+	options?: { relocate?: boolean },
+): {
 	prompt: LanguageModelV4Message[];
 	mutated: boolean;
 } {
+	const relocate = options?.relocate !== false;
 	const newPrompt: LanguageModelV4Message[] = [];
 	let mutated = false;
 	const mediaState = createMediaBudgetState();
@@ -364,7 +403,7 @@ export function rewritePromptToolImages(prompt: LanguageModelV4Message[]): {
 			if (part.type !== "tool-result") {
 				return part;
 			}
-			const split = splitContentOutputMedia(part.output, mediaState);
+			const split = splitContentOutputMedia(part.output, mediaState, relocate);
 			if (!split) {
 				return part;
 			}
@@ -404,19 +443,44 @@ export function rewritePromptToolImages(prompt: LanguageModelV4Message[]): {
  * structurally-faithful tool-results with the placeholder text + sibling
  * user message pattern unnecessarily.
  */
-export const splitToolImagesMiddleware: LanguageModelV4Middleware = {
-	specificationVersion: "v4",
-	transformParams: async ({ params }) => {
-		const { prompt: newPrompt, mutated } = rewritePromptToolImages(
-			params.prompt,
-		);
-		if (!mutated) {
-			return params;
-		}
-		const next: LanguageModelV4CallOptions = {
-			...params,
-			prompt: newPrompt,
-		};
-		return next;
-	},
-};
+function createToolImagesMiddleware(
+	relocate: boolean,
+): LanguageModelV4Middleware {
+	return {
+		specificationVersion: "v4",
+		transformParams: async ({ params }) => {
+			const { prompt: newPrompt, mutated } = rewritePromptToolImages(
+				params.prompt,
+				{ relocate },
+			);
+			if (!mutated) {
+				return params;
+			}
+			const next: LanguageModelV4CallOptions = {
+				...params,
+				prompt: newPrompt,
+			};
+			return next;
+		},
+	};
+}
+
+export const splitToolImagesMiddleware: LanguageModelV4Middleware =
+	createToolImagesMiddleware(true);
+
+/**
+ * The same checks, without the relocation.
+ *
+ * For a converter that can carry images on a tool message — Ollama's native
+ * API is the one in this codebase — the images stay where the tool put them.
+ * What is shared is everything that protects the request: the per-image and
+ * per-request byte budgets, base64 validation, and the omission placeholder
+ * for anything that fails them. What is not shared is the synthetic user
+ * message, which on that path costs the model its reasoning history.
+ *
+ * The vision-describer path is upstream of all of this and unaffected: when a
+ * second model reads the images, it has already replaced them with text in the
+ * transcript, and there is nothing here left to place.
+ */
+export const keepToolImagesMiddleware: LanguageModelV4Middleware =
+	createToolImagesMiddleware(false);

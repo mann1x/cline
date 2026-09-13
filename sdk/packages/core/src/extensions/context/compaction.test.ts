@@ -18,13 +18,20 @@ import {
 	createContextCompactionPrepareTurn,
 } from "./compaction";
 import {
+	buildSummaryMessage,
+	buildThinkingSummaryRequest,
 	createTokenEstimator,
 	estimateTokens,
 	findCutPlan,
+	getCompactionSummaryMetadata,
+	resolveCompactionOutputBudgets,
 	resolveEffectiveMaxInputTokens,
+	resolvePreserveRecentTokens,
 	resolveRecencyBounds,
 	resolveSummarizerConfig,
+	resolveThinkingSummaryMaxTokens,
 	serializeMessage,
+	serializeReasoningWithOutcomes,
 	TOOL_RESULT_CHAR_LIMIT,
 } from "./compaction-shared";
 
@@ -32,8 +39,16 @@ type FakeChunk = Record<string, unknown>;
 
 const createHandlerMock = vi.fn();
 
-vi.mock("@cline/llms", () => ({
+vi.mock("@cline/llms", async (importOriginal) => ({
+	// Partial: compaction also reaches the PolyKV session registry through this
+	// module, and a mock that names only what these tests stub turns any new
+	// dependency into 54 failures that say nothing about compaction.
+	...((await importOriginal()) as Record<string, unknown>),
 	createHandlerAsync: (config: unknown) => createHandlerMock(config),
+	// The estimator has to measure what the provider will send, so compaction
+	// asks which reasoning the provider keeps. These tests use a stub provider,
+	// which keeps all of it.
+	reasoningHistoryModeForProvider: () => "all",
 }));
 
 async function* streamChunks(chunks: FakeChunk[]): AsyncGenerator<FakeChunk> {
@@ -58,17 +73,65 @@ function totalJsonTokens(messages: LlmsProviders.Message[]): number {
  */
 function bounds(
 	preserveRecentTokens: number,
-	overrides: { messagesRatio?: number; messageTargetTokens?: number } = {},
+	overrides: {
+		messagesRatio?: number;
+		messageTargetTokens?: number;
+		lastTurnCeiling?: number;
+	} = {},
 ) {
 	return resolveRecencyBounds({
 		preserveRecentTokens,
 		preserveRecentMessagesRatio: overrides.messagesRatio ?? Number.EPSILON,
 		messageTargetTokens:
 			overrides.messageTargetTokens ?? Number.MAX_SAFE_INTEGER,
+		lastTurnCeiling: overrides.lastTurnCeiling,
 	});
 }
 
 /** Multi-turn transcript with prunable tool output for basic-compaction tests. */
+/**
+ * A transcript with enough history behind it for summarising to be worth doing.
+ *
+ * The short fixture below cannot show it: on five small messages a summary plus
+ * the recent turns is larger than the recent turns alone, so recovery correctly
+ * keeps the dropped version. Recovery happens on transcripts that overflowed a
+ * context window, where the proportions are the other way around.
+ */
+function longOverflowRecoveryTranscript(): MessageWithMetadata[] {
+	const older: MessageWithMetadata[] = [];
+	for (let index = 0; index < 12; index += 1) {
+		older.push({
+			role: "assistant",
+			content: [
+				{
+					type: "text",
+					text: `Older assistant explanation ${index}. ${"detail ".repeat(200)}`,
+				},
+			],
+		});
+		older.push({
+			role: "user",
+			content: [
+				{
+					type: "tool_result",
+					tool_use_id: `tool-${index}`,
+					name: "tool",
+					content: `tool output ${index}. ${"line ".repeat(200)}`,
+				},
+			],
+		});
+	}
+	return [
+		{ role: "user", content: "Initial request that should survive" },
+		...older,
+		{ role: "user", content: "Most recent user turn" },
+		{
+			role: "assistant",
+			content: [{ type: "text", text: "Most recent assistant reply" }],
+		},
+	];
+}
+
 function overflowRecoveryTranscript(): MessageWithMetadata[] {
 	return [
 		{ role: "user", content: "Initial request that should survive" },
@@ -1333,6 +1396,70 @@ describe("createContextCompactionPrepareTurn", () => {
 		expect(anthropicConfig.maxOutputTokens).toBe(1_024);
 	});
 
+	it("measures request overhead instead of inferring it from a difference", async () => {
+		// The overhead term decides how much of the window the transcript may
+		// keep. Derived as `requestInputTokens - apiMessageTokens`, it absorbed
+		// the disagreement between two estimators that do not share a ratio:
+		// 57,876 characters of system prompt and tool schemas -- about 12,700
+		// tokens -- were reported as 53,323, and the compaction that followed cut
+		// 24 messages to 4.
+		const tools = Array.from({ length: 20 }, (_index, i) => ({
+			name: `tool_${i}`,
+			description: "x".repeat(2_000),
+			inputSchema: { type: "object" as const, properties: {} },
+		}));
+		const overhead = estimateRequestInputTokens(
+			{ systemPrompt: "you are a helpful agent", messages: [], tools },
+			// "none", not "omit": the mode is `"all" | "last" | "none"`. "omit" is
+			// not a mode that drops reasoning, it is a mode the estimator does not
+			// have -- which is what this test was measuring.
+			{ reasoningHistory: "none" },
+		);
+
+		// Whatever the ratio, the overhead has to be in the neighbourhood of the
+		// payload it describes: ~40,000 characters of schemas cannot be 50,000
+		// tokens.
+		const overheadChars =
+			"you are a helpful agent".length +
+			tools.reduce((total, tool) => total + tool.description.length, 0);
+		expect(overhead).toBeLessThan(overheadChars);
+		expect(overhead).toBeGreaterThan(overheadChars / 10);
+	});
+
+	it("marks every summarizer config as auxiliary", () => {
+		// The request path keeps one process-wide record of the last request --
+		// its token count, its chars-per-token, what capped it -- and compaction
+		// reads that record as the conversation's. Measured: a 25,969-token
+		// condenser prompt overwrote a 67,572-token conversation, and the next
+		// pass stood down at `triggerInputTokens: 25969` on a transcript of
+		// 262,915 characters. Every branch here has to carry the mark, including
+		// the one that strips `maxOutputTokens`.
+		const codexConfig = resolveSummarizerConfig({
+			activeProviderConfig: {
+				providerId: "openai-codex",
+				modelId: "gpt-5.4",
+				maxOutputTokens: 16_000,
+			},
+		});
+		const activeConfig = resolveSummarizerConfig({
+			activeProviderConfig: {
+				providerId: "anthropic",
+				modelId: "claude-sonnet",
+			},
+		});
+		const dedicatedConfig = resolveSummarizerConfig({
+			activeProviderConfig: {
+				providerId: "anthropic",
+				modelId: "claude-sonnet",
+			},
+			summarizer: { providerId: "openai", modelId: "small-summary" },
+		});
+
+		expect(codexConfig.auxiliary).toBe(true);
+		expect(activeConfig.auxiliary).toBe(true);
+		expect(dedicatedConfig.auxiliary).toBe(true);
+	});
+
 	it("preserves summarizer modelInfo without a nested providerConfig", () => {
 		const resolved = resolveSummarizerConfig({
 			activeProviderConfig: {
@@ -1456,7 +1583,9 @@ describe("createContextCompactionPrepareTurn", () => {
 			},
 		});
 
-		expect(createHandlerMock).toHaveBeenCalledTimes(1);
+		// Two: the summary, then the retrospective over the reasoning being
+		// discarded. Both go to the same summarizer.
+		expect(createHandlerMock).toHaveBeenCalledTimes(2);
 		expect(emitStatusNotice).toHaveBeenCalledWith(
 			"auto-compacting",
 			expect.objectContaining({
@@ -1465,7 +1594,13 @@ describe("createContextCompactionPrepareTurn", () => {
 				iteration: 1,
 			}),
 		);
-		expect(result?.messages).toHaveLength(5);
+		// Three, not five: this model reports a 10-token input budget and the
+		// last turn costs 116, so keeping that turn whole would leave the
+		// transcript over the ceiling and the trigger would fire again at once.
+		// The turn is cut with its prompt pinned -- what the window cannot afford
+		// is the tool traffic under the prompt, not the sentence that asked for
+		// it, and the assertions below still hold.
+		expect(result?.messages).toHaveLength(3);
 		expect(result?.messages[0]).toMatchObject({
 			role: "user",
 			metadata: expect.objectContaining({
@@ -1473,26 +1608,39 @@ describe("createContextCompactionPrepareTurn", () => {
 				displayRole: "system",
 				userRunSpan: 2,
 				details: {
-					readFiles: [],
+					// The read is folded now rather than sitting in the preserved
+					// tail, so the summary is what carries it -- which is the point
+					// of recording file operations in the summary at all.
+					readFiles: ["/tmp/example.ts"],
 					modifiedFiles: [],
 				},
 			}),
 		});
+		// The retrospective leads and the summary follows, both as text. Not as a
+		// reasoning block: those are only valid on an assistant message, and a
+		// live run died on `AI_TypeValidationError: The messages do not match the
+		// ModelMessage[] schema` when this message carried one.
 		expect(result?.messages[0]?.content).toEqual([
 			expect.objectContaining({ type: "text" }),
+			expect.objectContaining({ type: "text" }),
 		]);
-		const summaryContent = Array.isArray(result?.messages[0]?.content)
-			? result.messages[0].content[0]?.type === "text"
-				? result.messages[0].content[0].text
-				: ""
-			: "";
+		expect(JSON.stringify(result?.messages[0])).not.toContain('"thinking"');
+		expect(JSON.stringify(result?.messages[0])).not.toContain('"reasoning"');
+		const summaryBlock = Array.isArray(result?.messages[0]?.content)
+			? result.messages[0].content.find(
+					(block) =>
+						block.type === "text" && block.text.startsWith("Context summary:"),
+				)
+			: undefined;
+		const summaryContent =
+			summaryBlock?.type === "text" ? summaryBlock.text : "";
 		expect(summaryContent).toContain("Context summary:");
 		expect(summaryContent).toContain("## Files");
 		expect(result?.messages[1]).toEqual({
 			role: "user",
 			content: "Implement the change",
 		});
-		expect(result?.messages[4]).toEqual({
+		expect(result?.messages.at(-1)).toEqual({
 			role: "assistant",
 			content: "Recent assistant state",
 		});
@@ -1711,7 +1859,8 @@ describe("createContextCompactionPrepareTurn", () => {
 			},
 		});
 
-		expect(createMessage).toHaveBeenCalledTimes(1);
+		// The summary request, then the retrospective's.
+		expect(createMessage).toHaveBeenCalledTimes(2);
 		const createMessageCalls = createMessage.mock.calls as unknown as [
 			string,
 			Array<{ role: string; content: string }>,
@@ -2084,6 +2233,53 @@ describe("createContextCompactionPrepareTurn", () => {
 			}),
 		});
 		expect(result?.messages.length).toBeLessThan(messages.length);
+	});
+
+	// Measured live: one typed prompt followed by a long tool loop is a single
+	// turn, so clamping the cut to its start dragged the cut back to near the
+	// beginning of the transcript. A 250,621-byte request compacted to 226,763 --
+	// 9.5% reclaimed -- and the trigger fired again on the very next turn.
+	it("cuts into the last turn when keeping it whole would reclaim nothing", () => {
+		const messages: MessageWithMetadata[] = [
+			{ role: "user", content: "first task" },
+			{ role: "assistant", content: "first answer" },
+			{ role: "user", content: "the one long turn" },
+			...Array.from({ length: 6 }, () => ({
+				role: "assistant" as const,
+				content: "x".repeat(4_000),
+			})),
+		];
+		const lastTurnStart = 2;
+
+		// Without a ceiling the cut cannot pass the start of that turn.
+		expect(
+			findCutPlan(messages, bounds(1), estimateJsonTokens).cutIndex,
+		).toBeLessThanOrEqual(lastTurnStart);
+
+		// With one the turn stops being exempt, so the cut lands past it.
+		expect(
+			findCutPlan(
+				messages,
+				bounds(1, { lastTurnCeiling: 100 }),
+				estimateJsonTokens,
+			).cutIndex,
+		).toBeGreaterThan(lastTurnStart);
+	});
+
+	it("keeps the last turn whole when it fits inside the ceiling", () => {
+		const messages: MessageWithMetadata[] = [
+			{ role: "user", content: "first task" },
+			{ role: "assistant", content: "first answer" },
+			{ role: "user", content: "second task" },
+			{ role: "assistant", content: "second answer" },
+		];
+		expect(
+			findCutPlan(
+				messages,
+				bounds(1, { lastTurnCeiling: Number.MAX_SAFE_INTEGER }),
+				estimateJsonTokens,
+			),
+		).toEqual({ cutIndex: 2, pinnedIndex: -1 });
 	});
 
 	it("leaves the cut at the latest typed prompt when that still folds work", () => {
@@ -2786,7 +2982,7 @@ describe("createContextCompactionPrepareTurn", () => {
 		assertBasicCompactionResult(result);
 	});
 
-	it("forces a basic compaction on overflow recovery, bypassing the estimate gate", async () => {
+	it("compacts on overflow recovery whatever the estimate said, and lands on basic when the summariser cannot run", async () => {
 		const emitStatusNotice = vi.fn();
 		const prepareTurn = createContextCompactionPrepareTurn({
 			providerId: "anthropic",
@@ -2797,8 +2993,9 @@ describe("createContextCompactionPrepareTurn", () => {
 			} as LlmsProviders.ProviderConfig,
 			compaction: {
 				enabled: true,
-				// Agentic is configured, but recovery must not depend on a
-				// summarizer call succeeding.
+				// Agentic is configured and is attempted first; recovery must
+				// not *depend* on that call succeeding, and here it cannot —
+				// the handler mock returns nothing to stream.
 				strategy: "agentic",
 			},
 			logger: undefined,
@@ -2825,7 +3022,7 @@ describe("createContextCompactionPrepareTurn", () => {
 			},
 		});
 
-		expect(createHandlerMock).not.toHaveBeenCalled();
+		expect(createHandlerMock).toHaveBeenCalled();
 		expect(emitStatusNotice).toHaveBeenCalledWith(
 			"overflow-recovery-compacting",
 			expect.objectContaining({
@@ -2841,6 +3038,58 @@ describe("createContextCompactionPrepareTurn", () => {
 			}),
 		);
 		assertBasicCompactionResult(result);
+	});
+
+	it("recovers by summarising rather than dropping turns when the summariser works", async () => {
+		// Basic compaction drops turns whole, and measured on live runs the model
+		// does not survive it: the transcript it wakes up in has the work but not
+		// the reasons, and every recovery was followed by the run coming apart.
+		// So the summariser gets the first attempt, and its transcript is what
+		// the retry uses when it fits.
+		createHandlerMock.mockReturnValue({
+			createMessage: vi.fn(() =>
+				streamChunks([
+					{
+						type: "text",
+						id: "summary-1",
+						text: "## Goal\nShip the feature\n\n## Next\n- Finish it",
+					},
+					{ type: "done", id: "summary-1", success: true },
+				]),
+			),
+		});
+
+		const prepareTurn = createContextCompactionPrepareTurn({
+			providerId: "anthropic",
+			modelId: "mock-model",
+			providerConfig: {
+				providerId: "anthropic",
+				modelId: "mock-model",
+			} as LlmsProviders.ProviderConfig,
+			compaction: { enabled: true, strategy: "agentic" },
+			logger: undefined,
+		});
+
+		const result = await prepareTurn?.({
+			agentId: "agent-1",
+			conversationId: "conv-1",
+			parentAgentId: null,
+			iteration: 1,
+			abortSignal: new AbortController().signal,
+			overflowRecovery: true,
+			systemPrompt: "You are helpful.",
+			tools: [],
+			messages: longOverflowRecoveryTranscript(),
+			apiMessages: longOverflowRecoveryTranscript(),
+			model: {
+				id: "mock-model",
+				provider: "anthropic",
+				info: { id: "mock-model", maxInputTokens: 1_000_000 },
+			},
+		});
+
+		expect(createHandlerMock).toHaveBeenCalled();
+		expect(JSON.stringify(result?.messages)).toContain("Ship the feature");
 	});
 
 	it("skips overflow-recovery compaction when there is nothing to remove", async () => {
@@ -2969,7 +3218,8 @@ describe("createContextCompactionPrepareTurn", () => {
 		});
 
 		expect(compact).toHaveBeenCalledTimes(1);
-		expect(createHandlerMock).not.toHaveBeenCalled();
+		// Custom declines, the summariser is tried and cannot run, basic ends it.
+		expect(createHandlerMock).toHaveBeenCalled();
 		assertBasicCompactionResult(result);
 	});
 
@@ -3085,7 +3335,8 @@ describe("createContextCompactionPrepareTurn", () => {
 		});
 
 		expect(compact).toHaveBeenCalledTimes(1);
-		expect(createHandlerMock).not.toHaveBeenCalled();
+		// Custom declines, the summariser is tried and cannot run, basic ends it.
+		expect(createHandlerMock).toHaveBeenCalled();
 		assertBasicCompactionResult(result);
 	});
 
@@ -3224,7 +3475,12 @@ describe("createContextCompactionPrepareTurn", () => {
 		expect(context?.budget.request.maxInputTokens).toBeCloseTo(
 			contextWindow * 0.9,
 		);
-		expect(context?.budget.request.triggerTokens).toBeCloseTo(inputTokens);
+		// A window of a few dozen tokens is smaller than the default output room,
+		// so the quarter ceiling on the reservation decides: three quarters of the
+		// window, rather than the negative number the raw subtraction gives.
+		expect(context?.budget.request.triggerTokens).toBeCloseTo(
+			contextWindow * 0.75,
+		);
 		expect(result?.messages).toEqual([
 			{ role: "user", content: "Compacted at 81%" },
 		]);
@@ -3470,7 +3726,10 @@ describe("createContextCompactionPrepareTurn", () => {
 				info: {
 					id: "gpt-5.5",
 					maxInputTokens: 272_000,
-					maxTokens: 128_000,
+					// An eighth of the input budget: a cap this tight is a real
+					// constraint on how much a turn can say, and that is what the
+					// aggressive target is for.
+					maxTokens: 32_000,
 				},
 			},
 		});
@@ -3485,6 +3744,65 @@ describe("createContextCompactionPrepareTurn", () => {
 			(context?.budget.request.targetTokens ?? 0) -
 				(context?.budget.request.overheadTokens ?? 0),
 		);
+	});
+
+	// The regression this pins: `modelMaxTokens < maxInputTokens` was written when
+	// the cap was almost never populated, and read as "this model has a tight
+	// cap". Once the cap reached the session it was true of every local model, so
+	// the aggressive target went from never firing to always firing and the
+	// retained context fell from 54,600 to 36,300 on a 110,000-token window.
+	// Measured across a day: the task that finished in an hour at 54,600 did not
+	// finish once at 36,300.
+	it("does not take the aggressive target for a cap that is merely smaller", async () => {
+		const compact = vi.fn((_context: CoreCompactionContext) => ({
+			messages: [{ role: "user" as const, content: "Compacted" }],
+		}));
+		const prepareTurn = createContextCompactionPrepareTurn({
+			providerId: "ollama",
+			modelId: "local-model",
+			providerConfig: {
+				providerId: "ollama",
+				modelId: "local-model",
+			} as LlmsProviders.ProviderConfig,
+			compaction: { enabled: true, strategy: "basic", compact },
+			logger: undefined,
+		});
+		const messages: MessageWithMetadata[] = [
+			{ role: "user", content: "turn 1" },
+			{ role: "assistant", content: "answer 1" },
+			{ role: "user", content: "turn 2" },
+			{ role: "assistant", content: "answer 2" },
+			{ role: "user", content: "turn 3" },
+			{ role: "assistant", content: "answer 3" },
+			{ role: "user", content: "turn 4" },
+			{ role: "assistant", content: "answer 4" },
+			{ role: "user", content: "turn 5" },
+			{ role: "assistant", content: "answer 5" },
+			{ role: "user", content: "large prompt ".repeat(40_000) },
+		];
+
+		await prepareTurn?.({
+			agentId: "agent-1",
+			conversationId: "conv-1",
+			parentAgentId: null,
+			iteration: 1,
+			abortSignal: new AbortController().signal,
+			systemPrompt: "You are helpful.",
+			tools: [],
+			messages,
+			apiMessages: messages,
+			model: {
+				id: "local-model",
+				provider: "ollama",
+				// The live setup: a 110,000 window and the user's own 32,000
+				// num_predict, which is 29% of the input budget.
+				info: { id: "local-model", contextWindow: 110_000, maxTokens: 32_000 },
+			},
+		});
+
+		const context = compact.mock.calls[0]?.[0];
+		// Not 36,300. The conservative branch: 0.7 of the trigger, floored.
+		expect(context?.budget.request.targetTokens).toBeCloseTo(57_750, -1);
 	});
 
 	it("keeps the long-conversation target below the fixed trigger", async () => {
@@ -3537,7 +3855,7 @@ describe("createContextCompactionPrepareTurn", () => {
 				info: {
 					id: "mock-model",
 					maxInputTokens: 100,
-					maxTokens: 20,
+					maxTokens: 12,
 				},
 			},
 		});
@@ -3602,7 +3920,12 @@ describe("createContextCompactionPrepareTurn", () => {
 		expect(compact).toHaveBeenCalledTimes(1);
 		const context = compact.mock.calls[0]?.[0];
 		expect(context?.budget.request.maxInputTokens).toBe(360_000);
-		expect(context?.budget.request.triggerTokens).toBe(324_000);
+		// The ratio would allow 324,000, but a turn has to hold prompt and reply
+		// in one 400,000 window. The trigger is whichever bound comes first, and
+		// here it is the one that leaves room to answer. The model's own 128,000
+		// cap is not reserved in full -- a third of the window held back for an
+		// output that size costs more than it saves -- so a quarter is.
+		expect(context?.budget.request.triggerTokens).toBe(300_000);
 		expect(context?.budget.request.thresholdRatio).toBe(0.9);
 		expect(result?.messages).toEqual([
 			{ role: "user", content: "Compacted by derived input budget" },
@@ -4781,5 +5104,290 @@ describe("createContextCompactionPrepareTurn", () => {
 		expect(
 			projectSessionCompactionState(savedState, currentMessages),
 		).toBeDefined();
+	});
+});
+
+describe("the output budget ladder", () => {
+	// Generation 1 has to land where the flat cap used to, or every short task
+	// silently changes behaviour to buy something only long ones benefit from.
+	it("starts where the flat cap was and climbs to the ceiling", () => {
+		const target = 32_670; // a 110k window, the model this was specified on
+		const shares = [1, 2, 3, 4, 5, 9].map(
+			(generation) =>
+				resolveCompactionOutputBudgets({
+					messageTargetTokens: target,
+					generation,
+				}).combinedTokens / target,
+		);
+
+		expect(shares.map((share) => Number(share.toFixed(2)))).toEqual([
+			0.33, 0.4, 0.45, 0.5, 0.55, 0.55,
+		]);
+	});
+
+	it("gives the summary seven tenths and lets it write first", () => {
+		const budgets = resolveCompactionOutputBudgets({
+			messageTargetTokens: 32_670,
+			generation: 1,
+		});
+
+		expect(budgets.combinedTokens).toBe(10_781);
+		expect(budgets.summaryMaxTokens).toBe(7_546);
+	});
+
+	// The whole reason the summary is written first: an economical one buys the
+	// retrospective room rather than leaving it unspent.
+	it("hands the retrospective what the summary did not spend", () => {
+		const budgets = resolveCompactionOutputBudgets({
+			messageTargetTokens: 32_670,
+			generation: 1,
+		});
+
+		const afterAFullSummary = resolveThinkingSummaryMaxTokens({
+			budgets,
+			summaryTokens: budgets.summaryMaxTokens,
+		});
+		const afterAShortSummary = resolveThinkingSummaryMaxTokens({
+			budgets,
+			summaryTokens: Math.floor(budgets.combinedTokens * 0.3),
+		});
+
+		// 30% when the summary took its whole share, and capped at 50% when it
+		// came in well under -- not the whole 70% it left behind.
+		expect(afterAFullSummary).toBe(
+			budgets.combinedTokens - budgets.summaryMaxTokens,
+		);
+		expect(afterAShortSummary).toBe(Math.floor(budgets.combinedTokens * 0.5));
+	});
+
+	it("keeps a floor when the summary overran its share", () => {
+		const budgets = resolveCompactionOutputBudgets({
+			messageTargetTokens: 32_670,
+			generation: 1,
+		});
+
+		expect(
+			resolveThinkingSummaryMaxTokens({
+				budgets,
+				summaryTokens: budgets.combinedTokens * 2,
+			}),
+		).toBe(Math.floor(budgets.combinedTokens * 0.2));
+	});
+});
+
+describe("resolvePreserveRecentTokens", () => {
+	// The two anchors this was specified against. A flat 20,000 is right for
+	// exactly one window: on 32k it asks to preserve more than the compaction
+	// target, and on 1M it throws away a task with room for forty times that.
+	it("holds its anchors at 128k and 1M", () => {
+		expect(resolvePreserveRecentTokens({ contextWindow: 128_000 })).toBe(
+			20_000,
+		);
+		expect(resolvePreserveRecentTokens({ contextWindow: 1_000_000 })).toBe(
+			78_745,
+		);
+	});
+
+	it("grows sub-linearly between them", () => {
+		const at256k = resolvePreserveRecentTokens({ contextWindow: 256_000 });
+
+		// Eight times the window buys four times the tail, not eight.
+		expect(at256k).toBeGreaterThan(20_000);
+		expect(at256k).toBeLessThan(40_000);
+	});
+
+	it("never claims more than its share of what compaction is aiming for", () => {
+		// A 32k window: the ladder asks 7,937 against a 9,732 target, which would
+		// leave the summary nothing to be written into.
+		expect(
+			resolvePreserveRecentTokens({
+				contextWindow: 32_768,
+				messageTargetTokens: 9_732,
+			}),
+		).toBe(Math.floor(9_732 * 0.6));
+	});
+
+	it("yields to an explicit setting", () => {
+		expect(
+			resolvePreserveRecentTokens({
+				contextWindow: 1_000_000,
+				override: 4_000,
+			}),
+		).toBe(4_000);
+	});
+});
+
+describe("serializeReasoningWithOutcomes", () => {
+	// Reasoning alone reads as a plan, and every plan reads as sound. What makes
+	// it a retrospective is the outcome sitting next to it.
+	it("pairs each stretch of reasoning with what its call came back as", () => {
+		const rendered = serializeReasoningWithOutcomes([
+			{
+				role: "assistant",
+				content: [
+					{ type: "thinking", thinking: "the range must have moved" },
+					{
+						type: "tool_use",
+						id: "call_1",
+						name: "editor",
+						input: { path: "game.html" },
+					},
+				],
+				metrics: { outputTokens: 17_901 },
+			} as MessageWithMetadata,
+			{
+				role: "user",
+				content: [
+					{
+						type: "tool_result",
+						tool_use_id: "call_1",
+						name: "editor",
+						content:
+							'{"error":"Editor operation failed: No change: lines 94-98 already reads exactly this way"}',
+						is_error: true,
+					},
+				],
+			} as MessageWithMetadata,
+		]);
+
+		expect(rendered).toContain("the range must have moved");
+		expect(rendered).toContain(
+			"editor -> refused: the change was already in the file",
+		);
+		// The cost, which is the one thing the model cannot read back off its own
+		// thinking: whether the turn that felt thorough was the expensive one.
+		expect(rendered).toContain("17901 output tokens");
+	});
+
+	it("names a loop-guard refusal as its own outcome", () => {
+		const rendered = serializeReasoningWithOutcomes([
+			{
+				role: "assistant",
+				content: [
+					{ type: "thinking", thinking: "try it once more" },
+					{ type: "tool_use", id: "c", name: "editor", input: {} },
+				],
+			} as MessageWithMetadata,
+			{
+				role: "user",
+				content: [
+					{
+						type: "tool_result",
+						tool_use_id: "c",
+						name: "editor",
+						content: "No change: …\n\nWarning: you have only 2 strikes left …",
+						is_error: true,
+					},
+				],
+			} as MessageWithMetadata,
+		]);
+
+		expect(rendered).toContain(
+			"refused by the loop guard as an unchanged repeat",
+		);
+	});
+
+	it("has nothing to say about turns that did not reason", () => {
+		expect(
+			serializeReasoningWithOutcomes([
+				{ role: "user", content: [{ type: "text", text: "fix it" }] },
+			] as MessageWithMetadata[]),
+		).toBe("");
+	});
+});
+
+describe("buildThinkingSummaryRequest", () => {
+	it("asks the model to revise its standing assessment, not repeat it", () => {
+		const request = buildThinkingSummaryRequest({
+			previousThinkingSummary: "editing from stale reads cost most of the time",
+			reasoningText: "Reasoning: …",
+		});
+
+		expect(request).toContain("Carry forward what still holds");
+		expect(request).toContain("editing from stale reads cost most of the time");
+	});
+
+	it("bans the specifics that belong in the summary", () => {
+		expect(buildThinkingSummaryRequest({ reasoningText: "x" })).toContain(
+			"No file names, line numbers, code, identifiers or values",
+		);
+	});
+
+	it("takes a replacement instruction", () => {
+		expect(
+			buildThinkingSummaryRequest({
+				reasoningText: "x",
+				promptTemplate: "Be brutal and be brief.",
+			}),
+		).toContain("Be brutal and be brief.");
+	});
+});
+
+describe("buildSummaryMessage", () => {
+	// The wire rejects it. Reasoning parts are valid only on an assistant
+	// message, and the compaction summary is the user turn that replaces the
+	// transcript — so a retrospective shipped as a thinking block took down a
+	// live run with `AI_TypeValidationError: The messages do not match the
+	// ModelMessage[] schema`, with a perfectly good retrospective inside it.
+	it("never puts reasoning on the user message the transcript is replaced with", () => {
+		const message = buildSummaryMessage({
+			summary: "what the task has done",
+			fileOps: { readFiles: [], modifiedFiles: [] },
+			tokensBefore: 1_000,
+			userRunSpan: 1,
+			thinkingSummary: "## What worked\n- narrowing the range",
+		});
+
+		expect(message.role).toBe("user");
+		expect(
+			Array.isArray(message.content)
+				? message.content.map((block) => block.type)
+				: [],
+		).toEqual(["text", "text"]);
+	});
+
+	it("puts the retrospective first, and says what it is", () => {
+		const message = buildSummaryMessage({
+			summary: "what the task has done",
+			fileOps: { readFiles: [], modifiedFiles: [] },
+			tokensBefore: 1_000,
+			userRunSpan: 1,
+			thinkingSummary: "## What worked\n- narrowing the range",
+		});
+
+		const first = Array.isArray(message.content)
+			? message.content[0]
+			: undefined;
+		expect(first?.type === "text" ? first.text : "").toContain("Retrospective");
+		expect(first?.type === "text" ? first.text : "").toContain(
+			"narrowing the range",
+		);
+	});
+
+	it("keeps it on the metadata, which is what chains it to the next compaction", () => {
+		const message = buildSummaryMessage({
+			summary: "s",
+			fileOps: { readFiles: [], modifiedFiles: [] },
+			tokensBefore: 1,
+			userRunSpan: 1,
+			generation: 3,
+			thinkingSummary: "lessons",
+		});
+
+		expect(getCompactionSummaryMetadata(message)?.thinkingSummary).toBe(
+			"lessons",
+		);
+		expect(getCompactionSummaryMetadata(message)?.generation).toBe(3);
+	});
+
+	it("is one block when there was no retrospective", () => {
+		const message = buildSummaryMessage({
+			summary: "s",
+			fileOps: { readFiles: [], modifiedFiles: [] },
+			tokensBefore: 1,
+			userRunSpan: 1,
+		});
+
+		expect(Array.isArray(message.content) ? message.content.length : 0).toBe(1);
 	});
 });

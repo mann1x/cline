@@ -17,6 +17,7 @@ import {
 	MAX_READ_LINES,
 	MAX_READ_OUTPUT_CHARS,
 } from "./output-limits";
+import type { ReadReceipts } from "./read-receipts";
 
 const IMAGE_MEDIA_TYPES = new Map<string, string>([
 	[".gif", "image/gif"],
@@ -47,9 +48,20 @@ export interface FileReadExecutorOptions {
 	 * @default false
 	 */
 	includeLineNumbers?: boolean;
+
+	/**
+	 * Shared record of what has been read. Paired with the same object on the
+	 * editor executor, this is what lets an edit require a prior read.
+	 */
+	receipts?: ReadReceipts;
 }
 
-const DEFAULT_FILE_READ_OPTIONS: Required<FileReadExecutorOptions> = {
+// `receipts` is deliberately outside the defaults: there is no sensible
+// default registry, and its absence is what turns the read-before-edit guard
+// off for a standalone executor.
+const DEFAULT_FILE_READ_OPTIONS: Required<
+	Omit<FileReadExecutorOptions, "receipts">
+> = {
 	maxFileSizeBytes: 10_000_000, // 10MB default limit
 	encoding: "utf-8", // Default to UTF-8 encoding
 	includeLineNumbers: true, // Include line numbers by default
@@ -71,6 +83,13 @@ const MAX_UNRANGED_LINE_SCAN = 50_000;
  * stream pass with no capture and no allocation.
  */
 const MAX_LINE_COUNT_SCAN = 500_000;
+
+/** A read's text together with the line span it actually returned. */
+interface ReadWindow {
+	text: string;
+	firstLine: number;
+	lastLine: number;
+}
 
 interface CapturedLine {
 	lineNumber: number;
@@ -95,7 +114,7 @@ async function readTextWindow(
 	startLine: number | null | undefined,
 	endLine: number | null | undefined,
 	signal?: AbortSignal,
-): Promise<string> {
+): Promise<ReadWindow> {
 	if (signal?.aborted) {
 		throw getAbortError(signal);
 	}
@@ -201,8 +220,15 @@ async function readTextWindow(
 		.join("\n");
 	const lastCapturedLine = captured[captured.length - 1]?.lineNumber;
 	if (lastCapturedLine === undefined) {
-		return body;
+		// Nothing was captured, so nothing has been seen: no span to record.
+		return { text: body, firstLine: 0, lastLine: -1 };
 	}
+	// The span the model actually saw, which is not the span it asked for
+	// whenever the read was capped by line count or output size.
+	const seen = {
+		firstLine: captured[0]?.lineNumber ?? requestedStartLine,
+		lastLine: lastCapturedLine,
+	};
 
 	// How long the file is, said on every read rather than only on a truncated
 	// one. It is the number needed to replace a file whole (`start_line: 1`
@@ -217,9 +243,12 @@ async function readTextWindow(
 			requestedStartLine === 1 &&
 			!approximateFileLineCount &&
 			lastCapturedLine === fileLineCount;
-		return readWholeFile
-			? `${body}\n\n[${fileLength} lines, shown in full.]`
-			: `${body}\n\n[Lines ${requestedStartLine}-${lastCapturedLine} of ${fileLength}.]`;
+		return {
+			text: readWholeFile
+				? `${body}\n\n[${fileLength} lines, shown in full.]`
+				: `${body}\n\n[Lines ${requestedStartLine}-${lastCapturedLine} of ${fileLength}.]`,
+			...seen,
+		};
 	}
 
 	// `approximateTotalLines` was the old ceiling on counting: an unranged read
@@ -230,11 +259,13 @@ async function readTextWindow(
 			? `${fileLength} lines`
 			: fileLength;
 
-	return (
-		`${body}\n\n` +
-		`[Showing lines ${requestedStartLine}-${lastCapturedLine} of ${totalLineText}. ` +
-		"Use start_line/end_line to read other sections.]"
-	);
+	return {
+		text:
+			`${body}\n\n` +
+			`[Showing lines ${requestedStartLine}-${lastCapturedLine} of ${totalLineText}. ` +
+			"Use start_line/end_line to read other sections.]",
+		...seen,
+	};
 }
 
 /**
@@ -253,6 +284,7 @@ async function readTextWindow(
 export function createFileReadExecutor(
 	options: FileReadExecutorOptions = {},
 ): FileReadExecutor {
+	const { receipts } = options;
 	const { maxFileSizeBytes, encoding, includeLineNumbers } = {
 		...DEFAULT_FILE_READ_OPTIONS,
 		...options,
@@ -310,7 +342,7 @@ export function createFileReadExecutor(
 			);
 		}
 
-		return readTextWindow(
+		const window = await readTextWindow(
 			resolvedPath,
 			encoding,
 			withLineNumbers,
@@ -318,5 +350,15 @@ export function createFileReadExecutor(
 			end_line,
 			context.signal,
 		);
+		// Record what was actually looked at, so `editor` can refuse an edit
+		// aimed at lines that were never read. The span comes from the read
+		// itself, not from the request: a read capped by line count or output
+		// size returns less than it was asked for, and crediting the model for
+		// lines it never saw is the one way this guard could wave through the
+		// edit it exists to catch.
+		if (window.lastLine >= window.firstLine) {
+			receipts?.noteRead(resolvedPath, window.firstLine, window.lastLine);
+		}
+		return window.text;
 	};
 }

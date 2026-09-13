@@ -75,6 +75,11 @@ export {
 	getClinePassSubscriptionUrl,
 	getRegisteredHandler,
 	getRegisteredHandlerAsync,
+	// A host that bundles has to hand the Ollama vendor its stream dispatcher:
+	// the vendor's own lookup is written to be invisible to bundlers, so it
+	// finds nothing once packaged.
+	hasOllamaFetch,
+	hasOllamaNoStreamTimeoutDispatcher,
 	hasRegisteredHandler,
 	isBuiltInProviderId,
 	isClineFreeModelLimitError,
@@ -90,11 +95,25 @@ export {
 	isRegisteredHandlerAsync,
 	normalizeProviderId,
 	OLLAMA_DEFAULT_CONTEXT_WINDOW,
+	OLLAMA_DEFAULT_REASONING_EFFORT,
 	type ProviderApiLine,
+	primeDeclaredNumCtx,
+	readDeclaredFamily,
+	readDeclaredNumCtx,
 	registerAsyncHandler,
 	registerHandler,
 	resolveProviderApiLineBaseUrl,
+	setOllamaFetch,
+	setOllamaNoStreamTimeoutDispatcher,
 } from "./providers";
+export {
+	type AgentSlotLimit,
+	DEFAULT_PARALLEL_SESSIONS,
+	MAX_PARALLEL_SESSIONS,
+	MIN_PARALLEL_SESSIONS,
+	normalizeParallelSessions,
+	resolveAgentSlotLimit,
+} from "./providers/agent-slots";
 export {
 	type ProviderUsageCostDisplay,
 	resolveProviderUsageCostDisplay,
@@ -105,7 +124,12 @@ export {
 	createGateway,
 	DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS,
 	DefaultGateway,
+	resolveDefaultMaxOutputTokens,
 } from "./providers/gateway";
+export {
+	type ReasoningHistoryMode,
+	reasoningHistoryModeForProvider,
+} from "./providers/model-facts";
 export { resolveProviderModelCatalogKeys } from "./providers/provider-keys";
 export {
 	type OpenAICodexRequestHeaderContext,
@@ -114,4 +138,20 @@ export {
 	type ResolveProviderRequestHeadersInput,
 	resolveProviderRequestHeaders,
 } from "./providers/request-headers";
+export {
+	clearPolykvSession,
+	createPolykvClient,
+	getPolykvSession,
+	type PolykvCapacity,
+	type PolykvClient,
+	type PolykvClientOptions,
+	type PolykvPool,
+	PolykvSaturatedError,
+	type PolykvSessionState,
+	polykvRoot,
+	probePolykvEnabled,
+	resetPolykvAvailability,
+	resetPolykvSessions,
+	setPolykvSession,
+} from "./providers/vendors/polykv";
 export { disposeLangfuseTelemetry } from "./services/langfuse-telemetry";

@@ -158,7 +158,16 @@ export function createSpawnAgentTool(
 				}
 			}
 			try {
-				const result = await subAgent.run(input.task);
+				// Held to the endpoint's slot count, from the connection the agents
+				// run on -- the gate lives on the delegated-agent config provider
+				// because that is the one thing every spawn path already shares.
+				// Gated around the run alone: building the toolset and telling the
+				// observers costs the server nothing, and holding a slot across them
+				// would leave the endpoint idle while a slot was booked.
+				const slotGate = config.configProvider.getRuntimeConfig().slotGate;
+				const result = slotGate
+					? await slotGate.run(() => subAgent.run(input.task))
+					: await subAgent.run(input.task);
 				const output: SpawnAgentOutput = {
 					text: result.text,
 					iterations: result.iterations,

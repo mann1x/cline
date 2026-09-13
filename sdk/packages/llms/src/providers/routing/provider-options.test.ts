@@ -28,6 +28,8 @@ type ContextOverrides = {
 	metadata?: GatewayProviderContext["provider"]["metadata"];
 	/** Test helper escape hatch for Claude-like models that should not get an auto-injected Anthropic reasoning route. */
 	disableAutoAnthropicRouting?: boolean;
+	contextWindow?: number;
+	configOptions?: Record<string, unknown>;
 };
 
 function makeContext(options?: ContextOverrides): GatewayProviderContext {
@@ -90,12 +92,16 @@ function makeContext(options?: ContextOverrides): GatewayProviderContext {
 			id: modelId,
 			name: modelId,
 			providerId,
+			contextWindow: options?.contextWindow,
 			maxOutputTokens: options?.maxOutputTokens,
 			reasoningOptions: options?.reasoningOptions,
 			capabilities: options?.capabilities,
 			metadata: modelMetadata,
 		},
-		config: { providerId },
+		config: {
+			providerId,
+			...(options?.configOptions ? { options: options.configOptions } : {}),
+		},
 	};
 }
 
@@ -2371,5 +2377,126 @@ describe("composeAiSdkProviderOptions: provider-specific overlays", () => {
 		expect(result.vertex).not.toHaveProperty("reasoningEffort");
 		expect(result.vertex).not.toHaveProperty("reasoningSummary");
 		expect(result.google).toBeUndefined();
+	});
+});
+
+describe("composeAiSdkProviderOptions: ollama native options", () => {
+	it("sends the context window and the configured sampler as request options", () => {
+		// This package has no model-level options hook, so these have to arrive
+		// as provider options or not at all.
+		const result = composeAiSdkProviderOptions(
+			makeRequest({ providerId: "ollama", modelId: "v7-coder" }),
+			makeContext({
+				providerId: "ollama",
+				modelId: "v7-coder",
+				contextWindow: 65_536,
+				configOptions: { sampling: { temperature: 0.7, numPredict: 8_000 } },
+			}),
+		);
+
+		expect(result.ollama).toEqual(
+			expect.objectContaining({
+				options: expect.objectContaining({
+					num_ctx: 65_536,
+					temperature: 0.7,
+					num_predict: 8_000,
+				}),
+			}),
+		);
+	});
+
+	it("sends the per-turn cap as num_predict", () => {
+		// `ollama-ai-provider-v2` names `num_predict` only in its provider-options
+		// schema and never derives one from `maxOutputTokens`, so without this the
+		// cap reaches Ollama on no request at all. It is not only the cap that
+		// goes missing: Ollama sizes the thinking budget from
+		// `min(num_predict, num_ctx)`, so an absent one makes the whole context
+		// window the base and the bound stated in the system prompt four times
+		// smaller than the one actually enforced.
+		const result = composeAiSdkProviderOptions(
+			makeRequest({
+				providerId: "ollama",
+				modelId: "v7-coder",
+				maxTokens: 32_000,
+			}),
+			makeContext({
+				providerId: "ollama",
+				modelId: "v7-coder",
+				contextWindow: 128_000,
+			}),
+		);
+
+		expect(result.ollama).toEqual(
+			expect.objectContaining({
+				options: expect.objectContaining({
+					num_ctx: 128_000,
+					num_predict: 32_000,
+				}),
+			}),
+		);
+	});
+
+	it("lets a configured num_predict win over the per-turn cap", () => {
+		// The panel value is the user's deliberate choice about their own model;
+		// the cap is what the session assumed in its absence.
+		const result = composeAiSdkProviderOptions(
+			makeRequest({
+				providerId: "ollama",
+				modelId: "v7-coder",
+				maxTokens: 32_000,
+			}),
+			makeContext({
+				providerId: "ollama",
+				modelId: "v7-coder",
+				contextWindow: 128_000,
+				configOptions: { sampling: { numPredict: 4_096 } },
+			}),
+		);
+
+		expect(
+			(result.ollama as { options: Record<string, unknown> }).options
+				.num_predict,
+		).toBe(4_096);
+	});
+
+	it("omits num_predict when no cap is known", () => {
+		const result = composeAiSdkProviderOptions(
+			makeRequest({ providerId: "ollama", modelId: "v7-coder" }),
+			makeContext({
+				providerId: "ollama",
+				modelId: "v7-coder",
+				contextWindow: 128_000,
+			}),
+		);
+
+		expect(
+			(result.ollama as { options: Record<string, unknown> }).options,
+		).not.toHaveProperty("num_predict");
+	});
+
+	it("carries think_budget, which the package's own schema would drop", () => {
+		// The reason the dependency is patched: `ollama-ai-provider-v2` parses
+		// its options against a closed allowlist that does not name
+		// `think_budget`, and zod strips what it does not name. Losing it means
+		// a request that is silently unbounded.
+		const result = composeAiSdkProviderOptions(
+			makeRequest({ providerId: "ollama", modelId: "v7-coder" }),
+			makeContext({
+				providerId: "ollama",
+				modelId: "v7-coder",
+				configOptions: {
+					sampling: { thinkBudget: "medium", thinkBudgetMessage: "wrap up" },
+				},
+			}),
+		);
+
+		expect(result.ollama).toEqual(
+			expect.objectContaining({
+				options: expect.objectContaining({
+					think_budget: "medium",
+					think_budget_message: "wrap up",
+				}),
+			}),
+		);
 	});
 });

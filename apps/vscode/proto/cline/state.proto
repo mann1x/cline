@@ -48,6 +48,7 @@ message AutoApprovalActions {
   optional bool execute_all_commands = 6;
   optional bool use_browser = 7;
   optional bool use_mcp = 8;
+  optional bool use_browser_tool = 9;
 }
 
 // Auto approval settings for task execution
@@ -106,6 +107,7 @@ message Secrets {
   optional string cline_api_key = 44;
   optional string openai_codex_oauth_credentials = 48;
   optional string wandb_api_key = 50;
+  optional string qa_credentials = 51;
 }
 
 // NOTE: Add new fields under API_HANDLER_SETTINGS_FIELDS or USER_SETTINGS_FIELDS
@@ -288,6 +290,18 @@ message Settings {
   optional string act_mode_cline_pass_model_id = 185;
   optional OpenRouterModelInfo act_mode_cline_pass_model_info = 186;
   optional int32 max_tool_result_chars = 187;
+  optional bool vision_model_enabled = 188;
+  optional string api_configuration_profiles = 189;
+  optional string active_api_configuration_profile = 190;
+  optional string vision_mode_api_configuration = 191;
+  optional string compaction_prompt = 192;
+  optional bool thinking_compaction_enabled = 193;
+  optional string thinking_compaction_prompt = 194;
+  optional bool capped_thinking_enabled = 195;
+  optional string capped_thinking_prompt = 196;
+  optional string edit_verification_settings = 197;
+  optional bool agents_model_enabled = 198;
+  optional string agents_mode_api_configuration = 199;
 }
 
 message State {
@@ -432,6 +446,53 @@ message UpdateSettingsRequest {
   optional string compaction_strategy = 44;
   // 0 restores the SDK default rather than meaning "keep nothing".
   optional int32 max_tool_result_chars = 45;
+  optional bool vision_model_enabled = 46;
+  // JSON, not a message: these carry a snapshot of the API configuration panel,
+  // whose field list is generated from `ApiHandlerSettingsKeys` and grows with
+  // every provider added. See `@shared/api-config-snapshot`.
+  optional string api_configuration_profiles = 47;
+  optional string active_api_configuration_profile = 48;
+  optional string vision_mode_api_configuration = 49;
+  optional string compaction_prompt = 50;
+  optional bool thinking_compaction_enabled = 51;
+  optional string thinking_compaction_prompt = 52;
+  optional bool capped_thinking_enabled = 53;
+  optional string capped_thinking_prompt = 54;
+  optional bool agents_model_enabled = 55;
+  optional string agents_mode_api_configuration = 56;
+  optional EditVerificationSettings edit_verification_settings = 57;
+  // A change to the stored set. Sent only when the user edits it; values
+  // travel in this direction and never the other.
+  optional QaCredentialsUpdate qa_credentials = 58;
+}
+
+// Whether a run may finish with a file it changed and never checked.
+// A message rather than a JSON string because it is a closed set of fields the
+// schema can state, unlike the API-configuration snapshots.
+message EditVerificationSettings {
+  // "off", "nudge" or "require".
+  string mode = 1;
+}
+
+// Named secrets a QA command may ask for.
+//
+// This message only ever travels webview -> extension. What comes back is the
+// list of names in ExtensionState; a value that has been stored is never read
+// out to the webview, which is why the settings view offers "replace" rather
+// than showing what is there.
+message QaCredential {
+  string name = 1;
+  string value = 2;
+}
+
+// A delta rather than the whole set, because the webview does not have the
+// whole set: it is told the names and never the values, so it has nothing to
+// send back for a credential the user did not touch.
+message QaCredentialsUpdate {
+  // Added, or replaced if the name already exists.
+  repeated QaCredential set = 1;
+  // Removed by name.
+  repeated string remove = 2;
 }
 
 message UpdateTerminalConnectionTimeoutRequest {

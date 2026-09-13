@@ -18,6 +18,7 @@ export type AiSdkProviderOptionsTarget =
 	| "opencode"
 	| "dify"
 	| "ollama"
+	| "opencoti"
 	| "sapaicore";
 
 export type ProviderOptionSuppression = {

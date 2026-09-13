@@ -33,6 +33,8 @@ export interface SdkSessionLifecycleOptions {
 	applyPatchExecutor?: ApplyPatchExecutorHandler
 	/** Custom `read_files` executor (resolves relative paths against the workspace root). */
 	readFileExecutor?: ReadFileExecutorHandler
+	/** Files read this session; see `ListFilesToolOptions.getReadPaths`. */
+	getReadPaths?: () => string[]
 	onSessionEvent: (event: CoreSessionEvent) => void
 	/** Lazy factory for the VscodeTerminalManager (foreground terminal support). */
 	getTerminalManager?: () => VscodeTerminalManager
@@ -82,6 +84,10 @@ export class SdkSessionLifecycle {
 			return
 		}
 		activeSession.isRunning = isRunning
+		if (isRunning) {
+			// Stamped on the idle→running edge, which is the start of one request.
+			activeSession.runStartedAt = Date.now()
+		}
 		if (!isRunning) {
 			this.options.onDidBecomeIdle?.()
 		}
@@ -339,6 +345,7 @@ export class SdkSessionLifecycle {
 				editorExecutor: this.options.editorExecutor,
 				applyPatchExecutor: this.options.applyPatchExecutor,
 				readFileExecutor: this.options.readFileExecutor,
+				getReadPaths: this.options.getReadPaths,
 				getTerminalManager: this.options.getTerminalManager,
 				foregroundCommands: this.options.foregroundCommands,
 				getRemoteConfigIntegration: this.options.getRemoteConfigIntegration,

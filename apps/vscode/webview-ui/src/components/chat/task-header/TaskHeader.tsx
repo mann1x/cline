@@ -14,6 +14,7 @@ import NewTaskButton from "./buttons/NewTaskButton"
 import OpenDiskConversationHistoryButton from "./buttons/OpenDiskConversationHistoryButton"
 import ContextWindow from "./ContextWindow"
 import { highlightText } from "./Highlights"
+import { TaskProgressPanel } from "./TaskProgressPanel"
 import TaskWorkingDirectoryBadge from "./TaskWorkingDirectoryBadge"
 
 const IS_DEV = process.env.IS_DEV === "true"
@@ -52,6 +53,8 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 		environment,
 		workspaceRoots,
 		platform,
+		clineMessages,
+		focusChainSettings,
 	} = useExtensionState()
 
 	const [isHighlightedTextExpanded, setIsHighlightedTextExpanded] = useState(false)
@@ -219,6 +222,20 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 							tokensOut={tokensOut}
 							useAutoCondense={false} // Disable auto-condense configuration in UI for now
 						/>
+
+						{/*
+						 * Under the context window, where the old focus chain lived. It
+						 * renders nothing until the model actually sends a checklist, so
+						 * a model that ignores the parameter costs no screen space.
+						 *
+						 * No `enabled` prop yet: `focusChainSettings` is read by the
+						 * extension when it configures the session, but it never reaches
+						 * the webview — it is absent from `ExtensionState`, and the
+						 * Features toggle that used to drive it was deleted with the rest
+						 * of the focus chain. Turning the checklist off therefore
+						 * suppresses the messages, and this panel disappears with them.
+						 */}
+						<TaskProgressPanel clineMessages={clineMessages} enabled={focusChainSettings?.enabled ?? true} />
 					</div>
 				)}
 			</div>

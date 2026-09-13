@@ -181,6 +181,17 @@ export const ProviderSettingsSchema = z.object({
 	routingProviderId: ProviderIdSchema.optional(),
 	maxTokens: z.number().int().positive().optional(),
 	contextWindow: z.number().int().positive().optional(),
+	/**
+	 * How many requests this endpoint serves at once -- `OLLAMA_NUM_PARALLEL`,
+	 * llama.cpp's and opencoti's `--parallel N`, or what a hosted plan allows.
+	 *
+	 * Stored rather than discovered because it is not on the wire, and it
+	 * matters because a server with no free slot *queues* the request instead of
+	 * refusing it: over-spawning agents against one endpoint reads as a slow run
+	 * rather than a blocked one. Bounded at ten, past which the number stops
+	 * describing a server.
+	 */
+	parallelSessions: z.number().int().min(1).max(10).optional(),
 	baseUrl: z.string().url().optional(),
 	headers: z.record(z.string(), z.string()).optional(),
 	timeout: z.number().int().positive().optional(),

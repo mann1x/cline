@@ -1,4 +1,4 @@
-import type { TeamEvent } from "@cline/core";
+import { mergeAgentHooks, type TeamEvent } from "@cline/core";
 import type { ChatCommandState } from "../../utils/chat-commands";
 import type { Config } from "../../utils/types";
 import {
@@ -24,7 +24,9 @@ export function buildInteractiveSessionConfig(input: {
 		enableTools: input.chatCommandState.enableTools,
 		cwd: input.chatCommandState.cwd,
 		workspaceRoot: input.chatCommandState.workspaceRoot,
-		hooks: input.runtimeHooks.hooks,
+		// Merged for the same reason as the non-interactive path: the config's
+		// own hooks carry the prompt template's tool descriptions.
+		hooks: mergeAgentHooks([input.config.hooks, input.runtimeHooks.hooks]),
 		onTeamEvent: input.onTeamEvent,
 		onConsecutiveMistakeLimitReached: input.resolveMistakeLimitDecision,
 	};

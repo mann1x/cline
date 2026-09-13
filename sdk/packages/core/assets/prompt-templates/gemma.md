@@ -130,14 +130,30 @@ Execute shell commands.
 {{DEFAULT}}
 
 # tool: check_file
-Verify file validity using IDE language servers. Use this instead of running a full project build or a shell-based linter for a single file.
+Verify file validity using the language servers. **This is the linter** — and the type checker, and the problems a Problems panel would list. Whatever the question calls it, ask here. Use this instead of running a full project build or a shell-based linter for a single file.
 - **Arguments:** `paths`: An array of absolute paths to check.
-- **When to use:** After editing a file to ensure it is syntactically correct, or before finishing a task.
+- **When to use:** After editing a file to ensure it is syntactically correct, or before finishing a task. Whenever the question is about the linter, lint errors, diagnostics, problems, type errors or compile errors — "how many errors is the linter reporting?", "is it clean now?" — call this. You have no other way to know, and the report from an earlier edit is already out of date.
 - **Output:** Plain text listing `file:line:column` with severity and message. "No problems reported" means the file is valid according to the server.
 {{DEFAULT}}
 
+# tool: list_files
+List the files in the workspace. Use this to find out what exists instead of running `ls`, `dir` or `find` through `run_commands`.
+- **Arguments:** `path` lists one directory (absolute, or relative to the workspace root; omit for the root). `pattern` is a glob searched across the workspace, e.g. `**/*.html`. `max_results` caps the listing.
+- **When to use:** Whenever you need to know what files exist or where a file lives. Prefer it over a shell command: it is limited to the folders the user opened, and it leaves out `node_modules`, `.git` and build output.
+- **Output:** Directories first with a trailing `/`, then files with their size. A path outside the workspace is refused rather than listed.
+This says which files exist, not what is in them — use `search_codebase` to find files by their contents.
+{{DEFAULT}}
+# tool: browser
+Open a page in a real browser and read its console output. Use this to check that a page works instead of asking the user whether it works.
+- **Arguments:** `action` is one of `open`, `click`, `type`, `scroll_down`, `scroll_up`, `close`. `open` takes `url` (an absolute file path is accepted). `click` takes `coordinate` as `"x,y"`. `type` takes `text`.
+- **When to use:** After editing any HTML, CSS or JavaScript, and before finishing a task. `check_file` cannot check a page: no language server checks the script inside an `.html` file, and a file that parses can still throw when it runs.
+- **Output:** The console messages and uncaught errors produced while the action ran. `[error]` and `[Page Error]` lines are real failures; a page that printed nothing is a pass.
+The browser stays open between calls. `close` it when finished.
+A parse error from the browser names no line. For a local file a `Delimiter scan` section follows it and names the *opening* bracket the parser could not match, one line per place the trouble starts — fix every line it lists in one edit rather than one reload per line, and read those lines instead of counting brackets yourself.
+{{DEFAULT}}
+
 # tool: code_intel
-Query the IDE's language server for semantic information. Use this instead of `search_codebase` for symbol-related questions.
+Query the language servers for semantic information. Use this instead of `search_codebase` for symbol-related questions.
 - **Arguments:** 
     - `operation`: One of `definition`, `references`, `implementations`, `type_definition`, `hover`, `document_symbols`, `workspace_symbols`, `callers`.
     - `path` (Optional): Absolute path to the file.

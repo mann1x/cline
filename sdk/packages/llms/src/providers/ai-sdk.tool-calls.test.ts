@@ -261,4 +261,33 @@ describe("repairMalformedToolCall", () => {
 		});
 		expect(repaired).toBeNull();
 	});
+
+	// Cut off inside a value is not malformed, it is incomplete, and closing
+	// the quote makes a valid call carrying a fragment. Nothing downstream can
+	// tell that from a value the model meant, so a whole-file write applies it.
+	// Measured: a 14,127-byte file replaced by 572 bytes ending mid-rule at
+	// `top: 50` with no `<script>` left, after the rewrite hit the output cap.
+	it("refuses a payload cut off inside a value", async () => {
+		const repaired = await repairMalformedToolCall({
+			toolCall: toolCall(
+				'{"path": "index.html", "new_text": "<html>\\n<style>#msg { top: 50',
+			),
+			error: new Error("JSON parsing failed"),
+		});
+		expect(repaired).toBeNull();
+	});
+
+	// The shapes repair exists for are untouched: a single-quoted key never
+	// opens a string here, and a payload that ends after a *closed* value is
+	// only missing its brackets, which is a repair that invents nothing.
+	it.each([
+		["a closed value missing its brackets", '{"commands": ["ls"'],
+		["single quotes", "{'commands': ['ls']}"],
+	])("still repairs %s", async (_label, input) => {
+		const repaired = await repairMalformedToolCall({
+			toolCall: toolCall(input),
+			error: new Error("JSON parsing failed"),
+		});
+		expect(repaired?.input).toBe('{"commands":["ls"]}');
+	});
 });

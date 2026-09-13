@@ -19,7 +19,9 @@
 // picture with `@problems`.
 
 import { appendFileSync } from "node:fs"
+import { readFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
+import { describeDelimiterBalance } from "@cline/core"
 import type { AgentAfterToolContext, AgentBeforeToolContext, AgentHooks } from "@cline/shared"
 import { getNewDiagnostics, singleFileDiagnosticsToProblemsString } from "@integrations/diagnostics"
 import * as path from "path"
@@ -161,8 +163,37 @@ export function isLintableFile(filePath: string): boolean {
 	return !OPAQUE_EXTENSIONS.has(path.extname(filePath).toLowerCase())
 }
 
+/**
+ * A path in the form used to compare two paths for identity.
+ *
+ * Windows filesystems are case-insensitive, and the two sides of this
+ * comparison come from different places: the editor reports the path as the
+ * workspace has it, and the model types the path itself. Measured on a live
+ * session — the workspace was `c:\Users\manni\source\repos\test` and the model
+ * asked about `C:\Users\...`. One capital letter, and `Set.has` said no.
+ *
+ * The consequence is the worst one available to this tool: no match means no
+ * diagnostics, and no diagnostics reads as a clean file. Six consecutive
+ * `check_file` calls answered "no problems reported by the editor" for a file
+ * that `node --check` rejects, and the model believed them.
+ *
+ * Only the case is normalized. Symlinks, 8.3 short names and UNC spellings are
+ * still distinct here, which is correct: this is a comparison key, not a
+ * canonical path.
+ */
+export function comparablePath(filePath: string): string {
+	const resolved = path.resolve(filePath)
+	return process.platform === "win32" ? resolved.toLowerCase() : resolved
+}
+
+/** Whether two paths name the same file, as this platform judges it. */
+export function samePath(a: string, b: string): boolean {
+	return comparablePath(a) === comparablePath(b)
+}
+
 function filterToPaths(diagnostics: FileDiagnostics[], absolutePaths: Set<string>): FileDiagnostics[] {
-	return diagnostics.filter((file) => absolutePaths.has(path.resolve(file.filePath)))
+	const wanted = new Set([...absolutePaths].map(comparablePath))
+	return diagnostics.filter((file) => wanted.has(comparablePath(file.filePath)))
 }
 
 export function isReportableDiagnostic(diagnostic: Diagnostic): boolean {
@@ -224,6 +255,80 @@ export function appendToOutput(output: unknown, block: string): unknown {
 		return output === "" ? block : `${output}\n\n${block}`
 	}
 	return output
+}
+
+/**
+ * Mark a tool result as having made the file worse.
+ *
+ * The loop tracker asks one question of every finished call: did it get
+ * anywhere? It answered that from failure alone — a thrown error, or the
+ * `{success: false}` envelope — which is blind to the way a weaker model
+ * actually stalls. Measured on a live session: eight consecutive `editor` calls
+ * all returned `success: true` while the file's diagnostics went 2 → 20 and the
+ * class under repair ended up in the file three times. Nothing failed, so the
+ * barren-repeat counter was reset on every one of those turns and the loop
+ * detector could never fire.
+ *
+ * An edit that introduces diagnostics did not get anywhere, whatever its
+ * envelope says. The flag rides on the result so the runtime can read it
+ * without this package having to know about the loop tracker.
+ */
+/**
+ * How many diagnostics on these files are worth a turn of attention.
+ *
+ * The count, not the novelty. The first cut of this marked an edit regressed
+ * whenever it introduced *any* diagnostic that was not there before, and a
+ * live run showed what that costs: edits that took the file from 14 problems
+ * to 10, from 12 to 11, from 9 to 6 — real progress every time — were all
+ * scored as having got nowhere, because each of them also moved one error to
+ * a new line. Repairing a broken file almost always shifts a diagnostic while
+ * removing others, so the novel-diagnostic test fires on exactly the work it
+ * should be encouraging.
+ *
+ * A net-neutral edit is left unflagged too. It is not progress, but a loop
+ * stop is expensive and being wrong here ends a task that was working; the
+ * repeat detectors already cover a model that churns without moving.
+ */
+function countReportable(files: readonly FileDiagnostics[]): number {
+	let total = 0
+	for (const file of files) {
+		total += file.diagnostics.filter(isReportableDiagnostic).length
+	}
+	return total
+}
+
+export function markRegressed(output: unknown): unknown {
+	if (output && typeof output === "object" && !Array.isArray(output)) {
+		return { ...(output as Record<string, unknown>), regressed: true }
+	}
+	return output
+}
+
+/**
+ * The delimiter verdict for the files an edit touched, when they have one.
+ *
+ * `check_file` already computes this and says exactly the thing a stuck model
+ * needs — "counting only code, this line has 1 more `}` than `{` — that is the
+ * edit". In the measured session it was never called: across 111,790 characters
+ * of reasoning the model named two of the twenty-five tools available to it and
+ * `check_file` was not one of them. So this stops depending on the model
+ * choosing it, and attaches the verdict to the edit that caused the trouble.
+ */
+async function describeBalanceForPaths(paths: readonly string[]): Promise<string> {
+	const sections: string[] = []
+	for (const filePath of paths) {
+		try {
+			const text = await readFile(filePath, "utf8")
+			const verdict = describeDelimiterBalance(filePath, text)
+			if (verdict) {
+				sections.push(verdict)
+			}
+		} catch {
+			// A file that cannot be read has no verdict; the diagnostics block
+			// above is still worth sending on its own.
+		}
+	}
+	return sections.join("\n\n")
 }
 
 export const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
@@ -348,18 +453,33 @@ export function createEditorDiagnosticsHooks(options: EditorDiagnosticsOptions):
 				}
 				const after = await readSettledDiagnostics(new Set(snapshot.paths), read, delay)
 				const block = await formatIntroducedDiagnostics(snapshot.before, after)
+				// Only worth reading the file back when the edit already looks
+				// wrong. A clean edit pays nothing for this.
+				const balance = block ? await describeBalanceForPaths(snapshot.paths) : ""
+				const wasCount = countReportable(snapshot.before)
+				const nowCount = countReportable(after)
+				const regressed = nowCount > wasCount
 				appendEditorDiagnosticsTrace({
 					phase: "after",
 					tool: ctx.toolCall.toolName,
 					targets: snapshot.paths,
-					before: snapshot.before.reduce((total, file) => total + file.diagnostics.length, 0),
-					after: after.reduce((total, file) => total + file.diagnostics.length, 0),
+					before: wasCount,
+					after: nowCount,
 					blockChars: block.length,
+					balanceChars: balance.length,
+					regressed,
 				})
 				if (!block) {
 					return undefined
 				}
-				return { result: { ...ctx.result, output: appendToOutput(ctx.result.output, block) } }
+				const appended = [block, balance].filter((part) => part !== "").join("\n\n")
+				const output = appendToOutput(ctx.result.output, appended)
+				return {
+					result: {
+						...ctx.result,
+						output: regressed ? markRegressed(output) : output,
+					},
+				}
 			} catch (error) {
 				Logger.error("[EditorDiagnostics] failed to report diagnostics:", error)
 				return undefined

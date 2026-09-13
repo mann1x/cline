@@ -13,6 +13,9 @@ option java_package = "bot.cline.proto";
 service ModelsService {
   // Fetches available models from Ollama
   rpc getOllamaModels(StringRequest) returns (StringArray);
+  // Reads the parameters a model's own Modelfile sets, so the settings panel
+  // can show what "model default" actually means for the selected model.
+  rpc getOllamaModelParameters(OllamaModelParametersRequest) returns (OllamaModelParameters);
   // Fetches available models from LM Studio
   rpc getLmStudioModels(StringRequest) returns (StringArray);
   // Fetches available models from VS Code LM API
@@ -262,6 +265,10 @@ message ProviderConfigResponse {
   // Provider-level sampling parameters, so a settings UI can show the state it
   // is about to write. Carries no secret, so it is returned unredacted.
   optional ProviderSamplingPatch sampling = 16;
+  // How many requests this endpoint serves at once (providers.json
+  // `parallelSessions`). Bounds how many delegated agents may run together; a
+  // server with fewer free slots queues the rest rather than refusing them.
+  optional int32 parallel_sessions = 17;
 }
 
 message CommittedModelSelection {
@@ -317,6 +324,8 @@ message WriteProviderConfigPatch {
   optional int32 context_window = 13;
   // Sampling parameters; an explicitly empty message clears them.
   optional ProviderSamplingPatch sampling = 14;
+  // Concurrent sessions this endpoint serves; 0 clears the setting.
+  optional int32 parallel_sessions = 15;
 }
 
 message WriteProviderConfigRequest {
@@ -879,4 +888,18 @@ message ModelsApiConfiguration {
   optional OpenRouterModelInfo act_mode_cline_model_info = 241;
   optional string act_mode_cline_pass_model_id = 242;
   optional OpenRouterModelInfo act_mode_cline_pass_model_info = 243;
+}
+
+// Which model's Modelfile parameters to read.
+message OllamaModelParametersRequest {
+  // Blank falls back to the provider's own default endpoint.
+  optional string base_url = 1;
+  string model_id = 2;
+}
+
+// Modelfile parameters, keyed by Ollama's own spelling (`temperature`,
+// `top_k`, ...). Repeated parameters are newline-joined. Empty when the server
+// did not answer, which is not the same as a model that sets nothing.
+message OllamaModelParameters {
+  map<string, string> parameters = 1;
 }

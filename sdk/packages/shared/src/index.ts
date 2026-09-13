@@ -219,17 +219,32 @@ export {
 	ReasoningLevelSchema,
 } from "./llms/reasoning-options";
 export { serializeAbortReason } from "./llms/requests";
+export type {
+	ContextOverflowReport,
+	OutputCapReport,
+	OutputCapSource,
+	ReasoningHistoryMode,
+} from "./llms/tokens";
 export {
 	CHARS_PER_TOKEN,
 	charsPerToken,
+	consumeContextOverflow,
 	estimateRequestInputTokens,
+	estimateThinkingTokens,
 	estimateTokens,
 	lastObservedRequestTokens,
+	lastOutputCap,
 	measureRequestInputChars,
+	measureRequestReasoningChars,
+	noteContextOverflow,
+	noteOutputCap,
 	observeRequestTokens,
+	observeThinkingTokens,
 	resetTokenCalibration,
 	seedRequestTokenCalibration,
+	THINKING_CHARS_PER_TOKEN,
 	type TokenEstimatedRequest,
+	thinkingCharsPerToken,
 } from "./llms/tokens";
 export type {
 	ToolApprovalRequest,
@@ -306,6 +321,7 @@ export type {
 	PromptTemplateMatch,
 	PromptTemplateSource,
 	PromptTemplateTarget,
+	PromptTemplateToolFacts,
 	RenderedPromptTemplate,
 } from "./prompt/template-types";
 export {
@@ -314,6 +330,7 @@ export {
 	matchesPromptPattern,
 	PROMPT_TEMPLATE_DEFAULT_MARKER,
 	PROMPT_TEMPLATE_SPECIFICITY,
+	PROMPT_TEMPLATE_TOOL_PLACEHOLDERS,
 	renderPromptTemplate,
 	resolvePromptTemplate,
 	scorePromptTemplate,

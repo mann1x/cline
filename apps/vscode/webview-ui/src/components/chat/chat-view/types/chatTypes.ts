@@ -76,6 +76,8 @@ export interface MessageHandlers {
 	executeButtonAction: (action: ButtonActionType, text?: string, images?: string[], files?: string[]) => Promise<void>
 	handleSendMessage: (text: string, images: string[], files: string[]) => Promise<void>
 	handleTaskCloseButtonClick: () => void
+	/** Attach an image from the transcript to the message being composed. */
+	handleReferenceImage: (image: string) => void
 	startNewTask: () => Promise<void>
 }
 
@@ -89,11 +91,21 @@ export interface ScrollBehavior {
 	scrollToBottomSmooth: () => void
 	scrollToBottomAuto: () => void
 	scrollToMessage: (messageIndex: number) => void
+	jumpToPresent: () => void
 	toggleRowExpansion: (ts: number, options?: { preserveAutoScroll?: boolean }) => void
 	handleRowHeightChange: (isTaller: boolean) => void
 	handleLastRowContentChange: () => void
 	isAtBottom: boolean
 	setIsAtBottom: React.Dispatch<React.SetStateAction<boolean>>
+	/**
+	 * Whether the view is still tailing, as opposed to whether it is within ten
+	 * pixels of the bottom this frame. `isAtBottom` answers the second question
+	 * and goes false throughout a streaming turn; this answers the one the jump
+	 * button asks. Always moved through the two helpers below, never on its own.
+	 */
+	isFollowing: boolean
+	stopFollowing: () => void
+	resumeFollowing: () => void
 	pendingScrollToMessage: number | null
 	setPendingScrollToMessage: React.Dispatch<React.SetStateAction<number | null>>
 	scrolledPastUserMessage: ClineMessage | null

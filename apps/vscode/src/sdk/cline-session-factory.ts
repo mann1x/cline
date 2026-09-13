@@ -9,41 +9,58 @@
 // The factory does NOT handle UI concerns — that's the SdkController's job.
 
 import {
+	type AgentProviderConnection,
 	type ClineCoreStartInput,
 	type CoreSessionConfig,
 	createPromptTemplateHooks,
+	type DelegatedAgentConnectionOverride,
 	getProviderAuthHandler,
 	mergeAgentHooks,
 	type ProviderSettings,
 	readCompactionStrategyGlobally,
 	resolveProviderApiKeyFromSettings,
 	type StartSessionResult,
+	toProviderConfig,
 } from "@cline/core"
 import type { ProviderApiLine, ProviderSamplingOptions, ModelInfo as SdkModelInfo } from "@cline/llms"
 import {
-	DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS,
 	getGeneratedModelsForProvider,
 	getModelsForProvider,
 	isProviderApiLine,
 	MODEL_COLLECTIONS_BY_PROVIDER_ID,
 	OLLAMA_DEFAULT_CONTEXT_WINDOW,
+	OLLAMA_DEFAULT_REASONING_EFFORT,
+	primeDeclaredNumCtx,
+	readDeclaredNumCtx,
+	resolveAgentSlotLimit,
+	resolveDefaultMaxOutputTokens,
 } from "@cline/llms"
 import { type AgentHooks, buildClineSystemPrompt, type RenderedPromptTemplate } from "@cline/shared"
 import type { ApiConfiguration } from "@shared/api"
+import { profileProviderSettingsFor } from "@shared/api-config-profiles"
 import { ClineClient } from "@shared/cline"
 import type { HistoryItem } from "@shared/HistoryItem"
 import { DEFAULT_LANGUAGE_SETTINGS, getLanguageKey, type LanguageDisplay } from "@shared/Languages"
 import { toLegacyApiProvider } from "@shared/model-catalog/provider-helpers"
+import {
+	resolveScopedModelStatus,
+	snapshotModelId,
+	snapshotProviderId,
+	snapshotProviderSettings,
+} from "@shared/model-scope-config"
 import { Logger } from "@shared/services/Logger"
+import { getProviderModelIdKey } from "@shared/storage/provider-keys"
 import type { Settings } from "@shared/storage/state-keys"
 import type { Mode } from "@shared/storage/types"
 import { reasoningEffortFromThinkingBudget } from "@shared/utils/reasoning-support"
+import { resolveVisionModelStatus, visionSnapshotProviderId } from "@shared/vision-config"
 import { stringifyVsCodeLmModelSelector } from "@shared/vsCodeSelectorUtils"
 import { StateManager } from "@/core/storage/StateManager"
 import { HostProvider } from "@/hosts/host-provider"
 import { ExtensionRegistryInfo } from "@/registry"
 import { getDistinctId } from "@/services/logging/distinctId"
 import { fetch } from "@/shared/net"
+import { createAgentProfileConnectionResolver } from "./agent-profile-connection"
 import { type BedrockProviderConfig, buildBedrockProviderConfig } from "./bedrock-config"
 import { createEditorDiagnosticsHooks } from "./editor-diagnostics"
 import { buildAgentHooks } from "./hooks-adapter"
@@ -53,10 +70,17 @@ import { nonNegativeFiniteNumber, positiveFiniteNumber, toSdkApiFormat } from ".
 import { parseProviderId } from "./model-catalog/provider-id"
 import { toSdkProviderId } from "./model-catalog/sdk-provider-id"
 import { createProviderConfigStore, resolveRuntimeModelSelection } from "./model-catalog/store"
+import {
+	resolveOllamaContextWindow,
+	resolveOllamaImageSupport,
+	resolveOllamaModelParameters,
+	resolveOllamaThinkBudget,
+} from "./ollama-model-family"
 import { resolveSessionPromptTemplate } from "./prompt-templates"
 import { getProviderSettingsManager } from "./provider-migration"
 import { buildSapProviderConfig, type SapProviderConfig } from "./sap-config"
 import type { SdkSessionHost } from "./session-host"
+import { buildScopedApiConfiguration, buildVisionApiConfiguration, createVisionImageDescriber } from "./vision-model"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -96,6 +120,16 @@ export interface ActiveSession {
 	startResult?: StartSessionResult
 	/** Whether the session is currently running */
 	isRunning: boolean
+	/**
+	 * When the current request started, in epoch ms.
+	 *
+	 * Set when the session goes from idle to running and read when it goes back,
+	 * so it measures one request — from the message that started the work to the
+	 * turn that ends it — rather than the age of the session. A follow-up
+	 * question answered in twenty seconds and an hour of fixing a file are the
+	 * two cases this has to tell apart.
+	 */
+	runStartedAt?: number
 }
 
 function createSdkLogger() {
@@ -324,12 +358,28 @@ const OUTPUT_BUDGET_WINDOW_SHARE_THRESHOLD = 0.9
  * 32,768-token model is the entire context window — filling it leaves nothing
  * for the conversation and forces a compaction round trip.
  *
+ * `thinking` names the share of that cap the model may spend reasoning, when
+ * the provider enforces one. Ollama does: a level is a fraction of
+ * `min(num_predict, num_ctx)`, computed server-side, and a model told only the
+ * outer cap reads the whole of it as available to think in. Sessions ended on
+ * "reached the maximum output token limit" with the entire allowance spent
+ * inside the thinking block and no answer written.
+ *
  * Exported for tests: the wording is the whole behaviour.
  */
-export function buildOutputBudgetSection(outputCap: number, contextWindow: number | undefined): string {
+export function buildOutputBudgetSection(
+	outputCap: number,
+	contextWindow: number | undefined,
+	thinking?: { level: string; budgetTokens: number },
+): string {
 	let section =
 		`\n\n# Output Budget\n\nEach reply you produce is capped at ${outputCap} tokens, thinking included. ` +
 		"Anything past the cap is cut off mid-sentence and the turn is wasted."
+	if (thinking && thinking.budgetTokens > 0) {
+		section +=
+			` Of that, at most ${thinking.budgetTokens} tokens may be spent thinking (effort ${thinking.level}); ` +
+			"reasoning past that point is cut short, so reach a decision inside it and write the answer with what is left."
+	}
 	if (contextWindow !== undefined && outputCap >= contextWindow * OUTPUT_BUDGET_WINDOW_SHARE_THRESHOLD) {
 		const safeCap = Math.floor(outputCap * OUTPUT_BUDGET_SAFE_SHARE)
 		const reservedPercent = Math.round((1 - OUTPUT_BUDGET_SAFE_SHARE) * 100)
@@ -343,6 +393,55 @@ export function buildOutputBudgetSection(outputCap: number, contextWindow: numbe
 		" Prefer several focused tool calls over one oversized reply: if the remaining work does not fit, " +
 		"do the part that fits, call the tools it needs, and continue in the next turn."
 	return section
+}
+
+/**
+ * The thinking allowance an Ollama turn will actually be held to.
+ *
+ * Asked of the server, never derived here. The budget is a share of the room
+ * the response has, resolved by Ollama from its own table, so a copy of that
+ * table on this side would have to be kept in step with it — and a stale copy
+ * would put a bound in the system prompt that the model is not held to, which
+ * is worse than saying nothing. `/api/show` answers for the think value and
+ * options this session will actually send.
+ *
+ * Returns undefined for every other provider, and for an Ollama that does not
+ * report a budget: no other provider here enforces a separate thinking cap, and
+ * an invented figure would be worse than silence.
+ */
+export async function resolveOllamaThinkingAllowance(
+	providerId: string,
+	reasoning: SessionReasoningConfig,
+	outputCap: number,
+	contextWindow: number | undefined,
+	baseUrl: string | undefined,
+	modelId: string | undefined,
+): Promise<{ level: string; budgetTokens: number } | undefined> {
+	if (toSdkProviderId(providerId) !== "ollama" || reasoning.thinking === false || !modelId) {
+		return undefined
+	}
+
+	let numPredict: number | undefined
+	try {
+		const settings = getProviderSettingsManager(resolveDataDir()).getProviderSettings(providerSettingsProviderId(providerId))
+		numPredict = positiveFiniteNumber(settings?.sampling?.numPredict)
+	} catch (error) {
+		// Advisory: the session's own cap is the sensible stand-in.
+		Logger.warn("[SessionFactory] Failed to read Ollama sampling settings:", error)
+	}
+
+	// The level this session will send. The vendor fills in its default when
+	// nothing set one, so that is the level to ask about — asking about "no
+	// level" would answer for a request this session never makes.
+	const think = reasoning.reasoningEffort ?? OLLAMA_DEFAULT_REASONING_EFFORT
+	return resolveOllamaThinkBudget(baseUrl, modelId, {
+		think,
+		// A configured num_predict is the cap the server will apply; the
+		// agent's own per-turn cap only stands in when nothing more specific
+		// was set.
+		numPredict: numPredict ?? outputCap,
+		numCtx: contextWindow,
+	})
 }
 
 function resolveCommittedRuntimeModel(
@@ -452,6 +551,15 @@ const PROVIDER_MODEL_ID_MAP: Record<string, { plan: keyof ApiConfiguration; act:
 // ---------------------------------------------------------------------------
 
 const DEFAULT_PROVIDER_ID = "cline"
+
+/**
+ * What this host calls itself, in the prompt.
+ *
+ * One constant because it is now read twice: the system prompt's `IDE:` line
+ * and the `{{IDE_NAME}}` token a tool description may carry. Two spellings of
+ * the same host would be the sort of drift nothing reports.
+ */
+const HOST_IDE_NAME = "VS Code"
 
 /**
  * Providers whose model list comes from a live local endpoint (Ollama's
@@ -589,13 +697,37 @@ export function resolveModelId(providerId: string, mode: Mode, config: ApiConfig
 /**
  * Resolve the base URL for a given provider from the ApiConfiguration.
  */
+/**
+ * Put a scheme back on a base URL that lost one.
+ *
+ * Reported live: a remote Ollama at `http://192.168.1.100:30068` ended up
+ * stored without its scheme, and every request then died on
+ * `Failed to parse URL from 192.168.1.100:30068/api/chat` -- the provider
+ * unusable, with nothing on screen connecting the two. Whatever dropped it,
+ * `host:port` has exactly one sensible reading, and refusing to take it is
+ * worse than assuming it.
+ *
+ * `http`, not `https`: this is the spelling a local or LAN Ollama answers on,
+ * and it is the one the field's own placeholder shows. Anything that already
+ * names a scheme is left alone.
+ */
+export function ensureBaseUrlScheme(value: string): string {
+	if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
+		return value
+	}
+	// A bare `localhost:11434` parses as a URL whose *protocol* is `localhost:`,
+	// so `URL.canParse` cannot be used to tell a scheme-less authority from a
+	// real one. The shape is what distinguishes them.
+	return `http://${value.replace(/^\/+/, "")}`
+}
+
 export function normalizeSdkBaseUrl(providerId: string, baseUrl: unknown): string | undefined {
 	if (typeof baseUrl !== "string") {
 		return undefined
 	}
 
-	const trimmed = baseUrl.trim()
-	if (!trimmed) {
+	const trimmed = ensureBaseUrlScheme(baseUrl.trim())
+	if (!trimmed || trimmed === "http://") {
 		return undefined
 	}
 
@@ -645,6 +777,11 @@ export function resolveVertexProviderConfig(config: ApiConfiguration): Pick<Prov
 type OllamaProviderConfig = {
 	modelInfo?: { id: string; name: string; contextWindow: number }
 	timeoutMs?: number
+	/**
+	 * The sampler as configured. Read here for the output budget (`numPredict`),
+	 * and carried to the wire by `buildGatewayProviderOptions`, which lifts it
+	 * into the gateway's `options` bag where the Ollama vendor looks for it.
+	 */
 	sampling?: ProviderSamplingOptions
 }
 
@@ -657,28 +794,50 @@ type OllamaProviderConfig = {
  * budgets against the window Ollama actually applies (Ollama truncates the
  * prompt to `num_ctx` server-side).
  */
-export function resolveOllamaProviderConfig(config: ApiConfiguration, modelId: string | undefined): OllamaProviderConfig {
+export function resolveOllamaProviderConfig(
+	config: ApiConfiguration,
+	modelId: string | undefined,
+	overrideSettings?: Record<string, unknown>,
+): OllamaProviderConfig {
 	// providers.json (`contextWindow`) is the source of truth; the legacy
 	// StateManager string is a migration fallback (the config store mirrors
 	// writes to both).
 	let settingsContextWindow: number | undefined
 	try {
-		const value = getProviderSettingsManager().getProviderSettings("ollama")?.contextWindow
+		const value = (overrideSettings ?? getProviderSettingsManager().getProviderSettings("ollama"))?.contextWindow
 		settingsContextWindow = typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined
 	} catch {
 		Logger.warn("[SessionFactory] Failed to read Ollama settings from providers.json")
 	}
 	let sampling: ProviderSamplingOptions | undefined
 	try {
-		const stored = getProviderSettingsManager().getProviderSettings("ollama")?.sampling
+		const stored = (overrideSettings ?? getProviderSettingsManager().getProviderSettings("ollama"))?.sampling
 		sampling = stored && typeof stored === "object" ? (stored as ProviderSamplingOptions) : undefined
 	} catch {
 		Logger.warn("[SessionFactory] Failed to read Ollama sampling settings from providers.json")
 	}
-	const raw = config.ollamaApiOptionsCtxNum?.trim()
+	// A scoped configuration owns its own entry, so an empty context window on it
+	// means empty rather than "borrow the other model's".
+	//
+	// `ollamaApiOptionsCtxNum` is a single global value, and reaching for it here
+	// is what made the setting behave as a global one: the Vision tab holds its
+	// settings in its own snapshot, so when it named no window this fell through
+	// to the number the primary model had been given and loaded the vision model
+	// with it. The webview stopped doing this in 4.100.25 and this did not, so the
+	// panel showed the right thing while the request carried the wrong one —
+	// a display fixed over a behaviour that was not.
+	const scoped = overrideSettings !== undefined
+	const raw = scoped ? undefined : config.ollamaApiOptionsCtxNum?.trim()
 	const parsed = raw ? Number(raw) : Number.NaN
 	const legacyContextWindow = Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined
-	const contextWindow = settingsContextWindow ?? legacyContextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW
+	// The model's own `num_ctx` sits between the user's setting and the
+	// constant. Without it a model whose Modelfile says 128000 was loaded at
+	// 32768: sending a default overrides the model's own value, and Ollama
+	// cannot tell a considered 32768 from a placeholder one. Primed by
+	// `buildSessionConfig` before this runs, so the first request already has
+	// it — a `num_ctx` that changes between turns reloads the model mid-task.
+	const declaredContextWindow = readDeclaredNumCtx(config.ollamaBaseUrl, modelId)
+	const contextWindow = settingsContextWindow ?? legacyContextWindow ?? declaredContextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW
 	const timeoutMs = config.requestTimeoutMs
 	return {
 		...(typeof timeoutMs === "number" && timeoutMs > 0 ? { timeoutMs } : {}),
@@ -812,7 +971,130 @@ export function composeSessionHooks(
 	cwd: string,
 	rendered?: RenderedPromptTemplate,
 ): AgentHooks | undefined {
-	return mergeAgentHooks([fileHooks, createEditorDiagnosticsHooks({ cwd }), createPromptTemplateHooks({ rendered })])
+	return mergeAgentHooks([
+		fileHooks,
+		createEditorDiagnosticsHooks({ cwd }),
+		createPromptTemplateHooks({ rendered, ideName: HOST_IDE_NAME }),
+	])
+}
+
+/**
+ * Resolves a provider other than the session's, for a configured subagent whose
+ * frontmatter names one.
+ *
+ * Core cannot do this itself: it would have to guess where the provider store
+ * lives, and this host's follows its own data directory rather than the default
+ * path. Without it a subagent on a second provider inherited the session's base
+ * URL, key and context window along with the new provider id — a request to the
+ * wrong server, which fails as an auth error or, worse, succeeds against a
+ * model nobody chose.
+ */
+function resolveAgentProviderConnection(providerId: string): AgentProviderConnection | undefined {
+	try {
+		const stored = getProviderSettingsManager(resolveDataDir()).getProviderSettings(providerId)
+		if (!stored) {
+			return undefined
+		}
+		const providerConfig = toProviderConfig(stored)
+		return {
+			apiKey: providerConfig.apiKey,
+			baseUrl: providerConfig.baseUrl,
+			headers: providerConfig.headers,
+			knownModels: providerConfig.knownModels,
+			providerConfig,
+		}
+	} catch (error) {
+		Logger.warn(`[Agents] Failed to resolve provider "${providerId}" for a subagent:`, error)
+		return undefined
+	}
+}
+
+/**
+ * The parallel-session count stored on the shared provider entry.
+ *
+ * Only consulted when no profile is in force for the scope: a profile that
+ * carries the field owns it, in the same way it owns the context window.
+ */
+function readStoredParallelSessions(providerId: string | undefined): unknown {
+	if (!providerId) {
+		return undefined
+	}
+	try {
+		return getProviderSettingsManager().getProviderSettings(providerId)?.parallelSessions
+	} catch {
+		return undefined
+	}
+}
+
+/**
+ * The connection subagents and teammates run on, from the Agents tab.
+ *
+ * Resolved the same way the session's own connection is, from the tab's stored
+ * snapshot rather than from `providers.json`: that file holds one entry per
+ * provider, the session's model owns it, and a second configuration on the same
+ * provider would overwrite the first. Reading the agents' context window out of
+ * their own snapshot is what stops Plan, Act, Vision and Agents sharing one.
+ *
+ * `undefined` means the tab named no provider or no model, which is the signal
+ * to leave delegated agents inheriting the session's connection as before.
+ */
+export async function buildDelegatedAgentConnection(
+	primary: ApiConfiguration | undefined,
+	storedSnapshot: string | undefined,
+): Promise<DelegatedAgentConnectionOverride | undefined> {
+	const configuration = buildScopedApiConfiguration(primary, storedSnapshot)
+	const namedProvider = snapshotProviderId(storedSnapshot)
+	const modelId = snapshotModelId(storedSnapshot)
+	if (!configuration || !namedProvider || !modelId) {
+		return undefined
+	}
+	// State written by older builds may carry SDK catalog spellings; the
+	// resolvers below are keyed by the legacy ones.
+	const providerId = toLegacyApiProvider(namedProvider) ?? namedProvider
+	const apiKey = resolveApiKey(providerId, configuration)
+	const baseUrl = resolveBaseUrl(providerId, configuration)
+	const providerSettings = snapshotProviderSettings(storedSnapshot)
+
+	let ollamaConfig: ReturnType<typeof resolveOllamaProviderConfig> | undefined
+	if (providerId === "ollama") {
+		// Same priming as the session's own model: ask the server what window
+		// this one was built with before resolving one for it, so the first
+		// request already carries it rather than reloading the model mid-run.
+		await primeDeclaredNumCtx(configuration.ollamaBaseUrl, modelId, fetch)
+		// The tab's own settings, passed as the override — so an Agents tab that
+		// names no window falls through to what the model itself declares rather
+		// than to the number the session's model was given.
+		ollamaConfig = resolveOllamaProviderConfig(configuration, modelId, providerSettings ?? {})
+	}
+
+	const sdkProviderId = toSdkProviderId(providerId)
+	let knownModels: Awaited<ReturnType<typeof getModelsForProvider>> | undefined
+	try {
+		knownModels = await getModelsForProvider(sdkProviderId)
+	} catch (error) {
+		Logger.warn(`[Agents] Failed to resolve known models for provider=${sdkProviderId}:`, error)
+	}
+	const hasKnownModels = !!knownModels && Object.keys(knownModels).length > 0
+
+	return {
+		providerId: sdkProviderId,
+		modelId,
+		...(apiKey ? { apiKey } : {}),
+		...(baseUrl !== undefined ? { baseUrl } : {}),
+		...(hasKnownModels ? { knownModels } : {}),
+		// The proxy/CA-aware fetch belongs here for the same reason it does on
+		// the session's own config: without it the agents' model calls fall back
+		// to bare global fetch.
+		providerConfig: {
+			...(ollamaConfig ?? {}),
+			providerId: sdkProviderId,
+			modelId,
+			...(apiKey ? { apiKey } : {}),
+			...(baseUrl !== undefined ? { baseUrl } : {}),
+			...(hasKnownModels ? { knownModels } : {}),
+			fetch,
+		},
+	}
 }
 
 /**
@@ -848,6 +1130,11 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	let vertexProviderConfig: Pick<ProviderSettings, "gcp" | "region"> | undefined
 	let sapProviderConfig: SapProviderConfig | undefined
 	let ollamaProviderConfig: ReturnType<typeof resolveOllamaProviderConfig> | undefined
+	// The provider settings the profile in force for this mode carries, or
+	// `undefined` when this mode is running on the shared providers.json entry.
+	// Hoisted because two things read it now: the Ollama context window, and the
+	// parallel-session count, which every provider has.
+	let profileSettings: Record<string, unknown> | undefined
 
 	try {
 		const stateManager = StateManager.get()
@@ -861,6 +1148,21 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		providerId = modeProvider ? toLegacyApiProvider(modeProvider) : modeProvider
 
 		if (providerId) {
+			// The window and the slot count belong to the profile in force for this
+			// mode, not to the provider. `providers.json` has one entry per provider,
+			// and Plan and Act are in force at the same time — so two profiles on the
+			// same provider had one place between them, whichever was loaded last won,
+			// and the other quietly ran on that number. A profile already carries
+			// these fields in its snapshot; this is what reads them back per scope.
+			profileSettings = profileProviderSettingsFor(
+				stateManager.getGlobalSettingsKey("apiConfigurationProfiles"),
+				stateManager.getGlobalSettingsKey("activeApiConfigurationProfile"),
+				mode,
+			)
+			if (profileSettings) {
+				Logger.log(`[SessionFactory] Provider settings for ${mode} came from its profile, not the shared entry`)
+			}
+
 			// Resolve API key
 			apiKey = resolveApiKey(providerId, apiConfig)
 
@@ -892,7 +1194,13 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 			}
 
 			if (providerId === "ollama") {
-				ollamaProviderConfig = resolveOllamaProviderConfig(apiConfig, modelId)
+				// Ask the server what window this model was built with before
+				// resolving one for it. Cached per server and model, so this
+				// costs one request the first time a model is used and nothing
+				// afterwards; a server that will not answer leaves the previous
+				// behaviour exactly as it was.
+				await primeDeclaredNumCtx(apiConfig.ollamaBaseUrl, modelId, fetch)
+				ollamaProviderConfig = resolveOllamaProviderConfig(apiConfig, modelId, profileSettings)
 			}
 
 			Logger.log(
@@ -990,7 +1298,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	try {
 		const workspaceName = resolveWorkspaceName(cwd)
 		systemPrompt = buildClineSystemPrompt({
-			ide: "VS Code",
+			ide: HOST_IDE_NAME,
 			workspaceRoot,
 			workspaceName,
 			mode: mode === "plan" ? "plan" : "act",
@@ -1016,12 +1324,98 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		Logger.warn("[SessionFactory] Failed to inject preferredLanguage instructions:", error)
 	}
 
+	// The one context window for this session.
+	//
+	// Everything that budgets against the window has to read this and nothing
+	// else. They did not, and the consequences were not subtle: the wire carried
+	// `num_ctx: 110000` from providers.json while the compaction trigger was
+	// computed from a catalog-shaped 128,000, putting the trigger at 115,200 --
+	// five thousand tokens beyond the end of the real window. Auto-compaction
+	// could never fire, and every long session ran until its per-turn output cap
+	// collapsed to nothing.
+	//
+	// The order is what the user asked for, and it is the order that cannot
+	// surprise them: a context size they set is the context size, whatever the
+	// model would allow. Asking for 128k from a model that supports 512k means
+	// 128k. Only when they have set nothing does the model get to answer, and for
+	// Ollama it can answer exactly -- `num_ctx` is in the Modelfile and
+	// `/api/show` reports it -- rather than being guessed at by a catalog that
+	// has never heard of a local model.
+	const configuredContextWindow = positiveFiniteNumber(ollamaProviderConfig?.modelInfo?.contextWindow)
+	const declaredContextWindow =
+		configuredContextWindow === undefined && toSdkProviderId(providerId) === "ollama"
+			? await resolveOllamaContextWindow(apiConfig ? resolveBaseUrl(providerId, apiConfig) : undefined, modelId)
+			: undefined
+	const sessionContextWindow =
+		configuredContextWindow ?? declaredContextWindow ?? positiveFiniteNumber(committedRuntimeModel?.modelInfo?.contextWindow)
+
+	// The per-turn thinking allowance, once it is known. The system prompt states
+	// it, and the capped-thinking condenser needs it to tell a turn that stopped
+	// thinking from one that ran out of room to think.
+	let thinkingBudgetTokens: number | undefined
+
+	// What the server appends to reasoning it cut at the budget, when there is
+	// anything to know. Cline's own setting goes on the wire and overrides the
+	// model file, so it is the answer where it is set; otherwise the model's own
+	// is what will be appended, and Ollama reports it. A model with neither
+	// leaves this undefined, and the condenser measures instead of matching.
+	let thinkingBudgetMessage: string | undefined
+
+	// The per-turn output cap, resolved once: the system prompt states it, and
+	// compaction budgets against it. A configured `num_predict` goes on the wire
+	// ahead of the session's cap and wins, so it is the answer wherever the
+	// question is "how long can this reply be".
+	const configuredNumPredict = positiveFiniteNumber(ollamaProviderConfig?.sampling?.numPredict)
+	// What the user or the session actually chose, as opposed to the figure used
+	// when nobody has chosen anything. Only the former may overrule a model's own
+	// published cap.
+	const explicitOutputCap = configuredNumPredict ?? maxTokensPerTurn
+	// The same default the gateway will synthesize for this request, asked of it
+	// with the same model facts: it is a share of the window for a model that
+	// publishes no cap of its own, and stating the flat anchor here would put a
+	// smaller number in the prompt than the server enforces on every local model
+	// with a window wider than 128k.
+	const sessionOutputCap =
+		explicitOutputCap ??
+		resolveDefaultMaxOutputTokens({
+			contextWindow: sessionContextWindow,
+			maxOutputTokens: positiveFiniteNumber(committedRuntimeModel?.modelInfo?.maxTokens),
+		})
+
 	// Tell the model about the cap its reply will actually be truncated at.
 	try {
-		const outputCap = maxTokensPerTurn ?? DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS
-		const contextWindow = positiveFiniteNumber(committedRuntimeModel?.modelInfo?.contextWindow)
-		systemPrompt = `${systemPrompt}${buildOutputBudgetSection(outputCap, contextWindow)}`
-		Logger.log(`[SessionFactory] Output budget: cap=${outputCap} contextWindow=${contextWindow ?? "unknown"}`)
+		// Both figures below answer the same question: what will the server
+		// actually hold this reply to. A configured `num_predict` is that
+		// answer — it goes on the wire ahead of the session's cap and wins — so
+		// the prompt has to say it. Stating the fallback while sending something
+		// smaller tells the model it has room it does not have, which is the
+		// same defect as the context window and fails the same way.
+		const outputCap = sessionOutputCap
+		const contextWindow = sessionContextWindow
+		const thinking = await resolveOllamaThinkingAllowance(
+			providerId,
+			reasoningConfig,
+			outputCap,
+			contextWindow,
+			apiConfig ? resolveBaseUrl(providerId, apiConfig) : undefined,
+			modelId,
+		)
+		systemPrompt = `${systemPrompt}${buildOutputBudgetSection(outputCap, contextWindow, thinking)}`
+		thinkingBudgetTokens = thinking?.budgetTokens
+		const configuredBudgetMessage = ollamaProviderConfig?.sampling?.thinkBudgetMessage?.trim()
+		if (configuredBudgetMessage) {
+			thinkingBudgetMessage = configuredBudgetMessage
+		} else if (providerId === "ollama" && modelId) {
+			const parameters = await resolveOllamaModelParameters(
+				apiConfig ? resolveBaseUrl(providerId, apiConfig) : undefined,
+				modelId,
+			)
+			thinkingBudgetMessage = parameters.think_budget_message?.trim() || undefined
+		}
+		Logger.log(
+			`[SessionFactory] Output budget: cap=${outputCap} contextWindow=${contextWindow ?? "unknown"}` +
+				(thinking ? ` thinking=${thinking.budgetTokens} (${thinking.level})` : ""),
+		)
 	} catch (error) {
 		Logger.warn("[SessionFactory] Failed to inject output budget instructions:", error)
 	}
@@ -1031,11 +1425,122 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	// `useAutoCondense` default in shared/storage/state-keys.ts.
 	const globalUseAutoCondense = stateManager.getGlobalSettingsKey("useAutoCondense") ?? true
 	const compactionStrategy = readCompactionStrategyGlobally()
+	const compactionPrompt = (stateManager.getGlobalSettingsKey("compactionPrompt") ?? "").trim()
+	// Second-phase retrospective over the reasoning compaction discards.
+	// Defaults on: the summary alone leaves a resumed task with no memory of
+	// having been wrong, which is how a long run repeats its own mistakes.
+	const thinkingCompactionEnabled = stateManager.getGlobalSettingsKey("thinkingCompactionEnabled") ?? true
+	const thinkingCompactionPrompt = (stateManager.getGlobalSettingsKey("thinkingCompactionPrompt") ?? "").trim()
+	// The condenser that replaces an abandoned think with a note of what it
+	// settled. Also defaults on, and stands down by itself where no thinking
+	// budget is known, so the switch is about turning it off deliberately.
+	const cappedThinkingEnabled = stateManager.getGlobalSettingsKey("cappedThinkingEnabled") ?? true
+	const cappedThinkingPrompt = (stateManager.getGlobalSettingsKey("cappedThinkingPrompt") ?? "").trim()
 	// Per-tool-result cap. Stored as 0 when unset, which is not "keep nothing":
 	// it hands the decision back to the SDK default.
 	const maxToolResultChars = positiveFiniteNumber(stateManager.getGlobalSettingsKey("maxToolResultChars"))
 	const enableCheckpoints = stateManager.getGlobalSettingsKey("enableCheckpointsSetting") ?? true
+	// A second model that reads images for the primary one. Only installed when
+	// the user has both enabled it and picked a model for it: without a
+	// describer the runtime keeps its existing behaviour of sending images
+	// straight through, and falling back to a refusal if the model objects.
+	// The vision tab's own provider settings, held in its snapshot rather than
+	// in providers.json — the shared entry belongs to the primary model.
+	const visionProviderSettings = (() => {
+		try {
+			const raw = stateManager.getGlobalSettingsKey("visionModeApiConfiguration")
+			const parsed = typeof raw === "string" && raw ? JSON.parse(raw) : undefined
+			const held = parsed?.providerConfig
+			return held && typeof held === "object" ? (held as Record<string, unknown>) : undefined
+		} catch {
+			return undefined
+		}
+	})()
+	const visionSnapshot = stateManager.getGlobalSettingsKey("visionModeApiConfiguration")
+	const visionStatus = resolveVisionModelStatus(stateManager.getGlobalSettingsKey("visionModelEnabled"), visionSnapshot)
+	const visionApiConfiguration = visionStatus === "ready" ? buildVisionApiConfiguration(apiConfig, visionSnapshot) : undefined
+	// Said out loud, because the silence was the bug: a tester's twenty-thousand
+	// line log of a session that failed on "this model does not support image
+	// input" contained no line mentioning vision at all, so there was no way to
+	// tell a describer that failed from one that was never installed.
+	if (visionStatus === "unconfigured") {
+		// Which half is missing, not merely that something is. A Vision tab
+		// holding a provider and no model reads as configured to anyone looking
+		// at it, and said so in the log too.
+		const namedProvider = visionSnapshotProviderId(visionSnapshot)
+		Logger.warn(
+			`[Vision] Vision model is enabled but the Vision tab names ${
+				namedProvider ? `no model (provider=${namedProvider})` : "no provider"
+			}; images will not be described`,
+		)
+	} else if (visionApiConfiguration) {
+		// The model *and* the window it will run with. The model line alone read
+		// correct through four builds of #43 while every request went to the
+		// primary model: it printed the tab's picker, and the handler read the
+		// mode keys, and nothing said the two disagreed. They are reconciled in
+		// `buildScopedApiConfiguration` now, and this prints what was resolved
+		// rather than what was picked, so a future disagreement shows here.
+		const visionProvider = visionSnapshotProviderId(visionSnapshot)
+		const resolvedVisionModel = visionProvider
+			? ((visionApiConfiguration as Record<string, unknown>)[getProviderModelIdKey(visionProvider, "act")] as
+					| string
+					| undefined)
+			: undefined
+		const visionContextWindow = visionProviderSettings?.contextWindow
+		Logger.log(
+			`[Vision] Describer installed: provider=${visionProvider} model=${resolvedVisionModel ?? "unset"}` +
+				(typeof visionContextWindow === "number" ? ` contextWindow=${visionContextWindow}` : ""),
+		)
+	}
+
+	// Delegated agents: their own connection, when the Agents tab names one. The
+	// same arrangement as vision, for the same reason — `providers.json` holds
+	// one entry per provider and the session's model owns it, so a second and a
+	// third configuration on that provider have to live in snapshots of their
+	// own. That is what gives Plan, Act, Vision and Agents four context windows
+	// rather than one shared between whichever of them are on one provider.
+	const agentsSnapshot = stateManager.getGlobalSettingsKey("agentsModeApiConfiguration")
+	const agentsStatus = resolveScopedModelStatus(stateManager.getGlobalSettingsKey("agentsModelEnabled"), agentsSnapshot)
+	const delegatedAgentConnection =
+		agentsStatus === "ready" ? await buildDelegatedAgentConnection(apiConfig, agentsSnapshot) : undefined
+	if (agentsStatus === "unconfigured") {
+		const namedProvider = snapshotProviderId(agentsSnapshot)
+		Logger.warn(
+			`[Agents] A separate agents model is enabled but the Agents tab names ${
+				namedProvider ? `no model (provider=${namedProvider})` : "no provider"
+			}; delegated agents will run on the session's model`,
+		)
+	} else if (delegatedAgentConnection) {
+		Logger.log(
+			`[Agents] Delegated agents configured: provider=${delegatedAgentConnection.providerId} model=${delegatedAgentConnection.modelId}`,
+		)
+	}
+
+	// How many agents this endpoint will actually serve at once. Asked of the
+	// endpoint the *agents* call, which is not always the session's: an Agents
+	// tab pointed at a second server has that server's slots, not the lead's.
+	//
+	// The number is configured rather than discovered because it is not on the
+	// wire — Ollama does not report `OLLAMA_NUM_PARALLEL`, and a hosted plan's
+	// concurrency allowance is not published — and the cost of getting it wrong
+	// is silent: a server with no free slot queues the request instead of
+	// refusing it, so over-spawning reads as a slow run rather than a blocked
+	// one.
+	const agentSlots = await resolveAgentSlotLimit({
+		providerId: delegatedAgentConnection?.providerId ?? toSdkProviderId(providerId ?? ""),
+		baseUrl: delegatedAgentConnection?.baseUrl ?? baseUrl,
+		parallelSessions: delegatedAgentConnection
+			? snapshotProviderSettings(agentsSnapshot)?.parallelSessions
+			: (profileSettings?.parallelSessions ?? readStoredParallelSessions(providerId)),
+		fetch,
+	})
+	Logger.log(`[Agents] Concurrency: ${agentSlots.limit === 0 ? "uncapped" : agentSlots.limit} — ${agentSlots.reason}`)
 	const useAutoCondense = input.taskSettings?.useAutoCondense ?? globalUseAutoCondense
+	// Whether the model is offered subagents at all. Task settings win over the
+	// global one, the same way every other setting here does.
+	const subagentsEnabled =
+		input.taskSettings?.subagentsEnabled ?? stateManager.getGlobalSettingsKey("subagentsEnabled") ?? false
+	Logger.log(`[Agents] Subagents ${subagentsEnabled ? "enabled" : "disabled"}`)
 
 	// Core resolves providers against the SDK registry, which uses the SDK's
 	// own provider id spelling (e.g. "openai-compatible" rather than the
@@ -1063,6 +1568,84 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		}
 	} catch (error) {
 		Logger.warn(`[SessionFactory] Failed to resolve known models for provider=${sdkProviderId}:`, error)
+	}
+
+	// Ask Ollama whether this model reads images, rather than guessing.
+	//
+	// The catalog is silent for every model it has never heard of — all the
+	// local ones, and anything published since the last catalog build — and the
+	// default there is optimistic. That is how a browser screenshot reached a
+	// model that could not read one. Ollama reports the answer, so for this
+	// provider the tools that attach images can be told before they attach one,
+	// instead of the model refusing the turn after the fact.
+	const ollamaImageSupport =
+		sdkProviderId === "ollama" && modelId ? await resolveOllamaImageSupport(baseUrl, modelId) : undefined
+	if (ollamaImageSupport !== undefined) {
+		const existing = knownModels?.[modelId]
+		const capabilities = new Set<string>(existing?.capabilities ?? [])
+		if (ollamaImageSupport) {
+			capabilities.add("images")
+		} else {
+			capabilities.delete("images")
+		}
+		knownModels = {
+			...(knownModels ?? {}),
+			[modelId]: { ...(existing ?? {}), capabilities: [...capabilities] },
+		} as typeof knownModels
+	}
+
+	// The window compaction budgets against.
+	//
+	// `knownModels[modelId]` is where the runtime reads it from, and for a local
+	// model it was filled from the resolved model selection -- catalog, state
+	// hint, or fallback -- none of which consult the setting that decides what
+	// actually goes on the wire. Writing the session's window here is what makes
+	// the compaction trigger and `num_ctx` the same number.
+	//
+	// `maxInputTokens` goes too, and has to: left at the model's own figure it
+	// outranks `contextWindow` in `resolveEffectiveMaxInputTokens`, which is how
+	// the stale window survived into the trigger in the first place.
+	// Only a window that was actually reported gets written here. The resolved
+	// model's own figure can be a catalog guess or a pure fallback, and writing
+	// that would fabricate model metadata for a provider whose lookup failed —
+	// which is the one thing the known-model path is careful not to do. An
+	// existing entry is still amended, because there the metadata is real and
+	// only the window is in question.
+	const reportedContextWindow = configuredContextWindow ?? declaredContextWindow
+	if (sessionContextWindow !== undefined && (reportedContextWindow !== undefined || knownModels?.[modelId])) {
+		const existing = knownModels?.[modelId]
+		// Spread rather than assigned: writing `undefined` still creates the key,
+		// and a key that exists with no value is not the same as no key -- the
+		// `-1`-sentinel path asserts the difference.
+		const resolvedMaxTokens =
+			explicitOutputCap ?? existing?.maxTokens ?? (sdkProviderId === "ollama" ? sessionOutputCap : undefined)
+		knownModels = {
+			...(knownModels ?? {}),
+			[modelId]: {
+				...(existing ?? {}),
+				contextWindow: sessionContextWindow,
+				maxInputTokens: Math.min(existing?.maxInputTokens ?? sessionContextWindow, sessionContextWindow),
+				// The per-turn cap belongs here too. Compaction reads it as
+				// `model.info.maxTokens` to decide how far a long conversation should
+				// be compacted, and for a local model it was never set: every
+				// diagnostic read `modelMaxTokens: null`, so the branch aiming at a
+				// third of the window was unreachable and the target silently fell
+				// back to 70% of the trigger. Measured live, that is a compaction
+				// aiming at 54,600 instead of 36,300 -- one reclaimed 10% and the
+				// very next turn triggered another.
+				// A configured cap is what goes on the wire, so it wins. Absent one,
+				// a model that publishes its own figure keeps it -- overwriting a
+				// catalog model's real 128,000 with a fallback would be inventing
+				// metadata, which is the mistake the guard above exists to prevent.
+				// The synthesized default is written only for Ollama, where the model
+				// publishes nothing and the session's cap is what the wire will carry;
+				// that is what finally gives the long-conversation target its number.
+				...(resolvedMaxTokens !== undefined ? { maxTokens: resolvedMaxTokens } : {}),
+			},
+		} as typeof knownModels
+		Logger.log(
+			`[SessionFactory] Context window: ${sessionContextWindow} maxTokens=${resolvedMaxTokens ?? "unset"} (model=${modelId})`,
+		)
 	}
 
 	// Always pass a providerConfig so the proxy/CA-aware fetch reaches the SDK
@@ -1094,6 +1677,16 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		// (sdk-compaction.ts) budgets against config.knownModels[modelId] and
 		// otherwise falls back to a conservative 64k input budget.
 		...(knownModels && Object.keys(knownModels).length > 0 ? { knownModels } : {}),
+		...(delegatedAgentConnection ? { delegatedAgentConnection } : {}),
+		maxConcurrentAgents: agentSlots.limit,
+		resolveProviderConnection: resolveAgentProviderConnection,
+		// An agent file can name a saved profile instead of a provider and a
+		// model. Built from the stored list at session start, which is when the
+		// agent files are read too.
+		resolveProfileConnection: createAgentProfileConnectionResolver({
+			storedProfiles: stateManager.getGlobalSettingsKey("apiConfigurationProfiles"),
+			primary: apiConfig,
+		}),
 		cwd,
 		workspaceRoot,
 		systemPrompt,
@@ -1101,16 +1694,45 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		checkpoint: {
 			enabled: enableCheckpoints,
 		},
-		enableSpawnAgent: false,
-		enableAgentTeams: false,
-		...(useAutoCondense
-			? {
-					compaction: {
-						enabled: true,
+		// The Subagents toggle, which until now stored a value nothing read. The
+		// machinery was all here -- agent files in `.cline/agents`, a tool per
+		// agent, a connection and a slot gate for them -- and the model was never
+		// offered any of it, because these two were written as literals.
+		//
+		// Both from one setting rather than two: a user who turns subagents on
+		// wants to delegate, and which mechanism carries the delegation is an
+		// implementation detail they have no way to choose between.
+		enableSpawnAgent: subagentsEnabled,
+		enableAgentTeams: subagentsEnabled,
+		// Sent whether or not auto compaction is on. `enabled` is the only thing
+		// that decides whether the transcript gets compacted — the runtime
+		// returns no compaction pass without it — but this object is also where
+		// the capped-thinking condenser reads its settings, and that condenser
+		// has nothing to do with compaction: it rewrites one turn's abandoned
+		// reasoning whatever the transcript is doing. Omitting the object when
+		// auto-condense was off silently took the condenser with it.
+		compaction: {
+			enabled: useAutoCondense,
+			...(useAutoCondense
+				? {
 						strategy: compactionStrategy,
-					},
-				}
-			: {}),
+						...(compactionPrompt ? { summaryPrompt: compactionPrompt } : {}),
+						thinkingSummaryEnabled: thinkingCompactionEnabled,
+						...(thinkingCompactionPrompt ? { thinkingSummaryPrompt: thinkingCompactionPrompt } : {}),
+					}
+				: {}),
+			// A turn that ran out of thinking budget is cut mid-sentence and the
+			// next turn re-derives the same reasoning from the start. Needs the
+			// allowance to detect it, so it stands down on any provider that
+			// does not report one.
+			...(thinkingBudgetTokens ? { thinkingBudgetTokens } : {}),
+			// Turns a good measurement into a statement: where the wording is
+			// known, its presence at the end of the reasoning is the server
+			// saying it stopped there.
+			...(thinkingBudgetMessage ? { cappedThinkingBudgetMessage: thinkingBudgetMessage } : {}),
+			cappedThinkingEnabled,
+			...(cappedThinkingPrompt ? { cappedThinkingPrompt } : {}),
+		},
 		disableMcpSettingsTools: true,
 		mode: mode === "plan" ? "plan" : "act",
 		...reasoningConfig,
@@ -1139,6 +1761,27 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 			logger: sdkLogger,
 		},
 		hooks: composeSessionHooks(buildAgentHooks(StateManager.get()), cwd, renderedTemplate),
+		...(visionApiConfiguration
+			? {
+					describeImages: createVisionImageDescriber(visionApiConfiguration, visionProviderSettings),
+					// Configuring a vision model means the primary model is not
+					// meant to see the image, whether or not it could have.
+					alwaysDescribeImages: true,
+					// And it means images are usable in this session even though
+					// the primary model cannot read one. The tools guard on the
+					// primary's own capability, which is the right question when
+					// the image would reach it — with a describer installed it
+					// never does, so a screenshot the browser tool refused to
+					// attach was refused on behalf of a model that was never
+					// going to see it.
+					//
+					// `modelSupportsImages` on the agent config is deliberately
+					// left alone: that one decides whether an image the vision
+					// model *failed* to describe may be left in place, and the
+					// honest answer there is still no.
+					toolContextMetadata: { modelSupportsImages: true },
+				}
+			: {}),
 	}
 
 	return config
