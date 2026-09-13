@@ -1649,6 +1649,16 @@ export function parseEscalationNoticeMetadata(
 			...(of !== undefined ? { of } : {}),
 		}
 	}
+	if (metadata.kind === "expert_thinking" || metadata.kind === "expert_message") {
+		const index = asFiniteNumber(metadata.index)
+		const of = asFiniteNumber(metadata.of)
+		return {
+			phase: metadata.kind === "expert_thinking" ? "expert_thinking" : "expert_message",
+			text: message,
+			...(index !== undefined ? { index } : {}),
+			...(of !== undefined ? { of } : {}),
+		}
+	}
 	if (metadata.kind === "expert_progress") {
 		const index = asFiniteNumber(metadata.index)
 		const of = asFiniteNumber(metadata.of)
@@ -2516,6 +2526,13 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 					// that ends the turn takes the same row over -- which is
 					// what keeps the expert's spend from being counted once
 					// while it works and again when it answers.
+					// The progress row is rewritten in place, and the delivery
+					// that ends the turn takes the same row over -- which is
+					// what keeps the expert's spend from being counted once
+					// while it works and again when it answers. Everything else,
+					// the expert's own thinking and messages included, is a row
+					// of its own: they are a transcript, and a transcript that
+					// overwrote itself would only ever show its last line.
 					const ts =
 						escalation.phase === "working"
 							? state.expertProgressTs()

@@ -534,4 +534,60 @@ describe("createEscalationSession", () => {
 		expect(result).toContain("did not approve");
 		expect(harness.open).not.toHaveBeenCalled();
 	});
+
+	// What the expert was actually doing was visible only as file changes in
+	// the editor and commands in the terminal -- its words reached nothing.
+	// Reported per finished block rather than streamed: the block arrives
+	// whole, and the thinking is the part worth having whole.
+	it("reports the expert's thinking and messages as they finish", async () => {
+		const events: Array<{ type: string; [key: string]: unknown }> = [];
+		const harness = build({
+			onEvent: (event) => events.push(event),
+			openExpert: async ({ onEvent }) => ({
+				run: async (): Promise<AgentResult> => {
+					onEvent({
+						type: "content_end",
+						contentType: "reasoning",
+						reasoning: "  line 90 closes a forEach with }} instead of })  ",
+					} as AgentEvent);
+					onEvent({
+						type: "content_end",
+						contentType: "text",
+						text: "Found it — fixing the bracket now.",
+					} as AgentEvent);
+					// Empty blocks are not utterances; a row saying nothing is
+					// worse than no row.
+					onEvent({
+						type: "content_end",
+						contentType: "text",
+						text: "   ",
+					} as AgentEvent);
+					return {
+						text: "fixed line 90",
+						iterations: 2,
+						usage: { inputTokens: 10, outputTokens: 5 },
+					} as AgentResult;
+				},
+				shutdown: vi.fn(async () => {}),
+			}),
+		});
+
+		await harness.call({ goal: "fix line 90" });
+
+		const said = events.filter((event) => event.type === "expert_said");
+		expect(said).toHaveLength(2);
+		expect(said[0]).toMatchObject({
+			kind: "thinking",
+			index: 1,
+			of: 3,
+			text: "line 90 closes a forEach with }} instead of })",
+		});
+		expect(said[1]).toMatchObject({
+			kind: "message",
+			text: "Found it — fixing the bracket now.",
+		});
+		// The transcript carries no spend. It would be added to the progress
+		// row's and the delivery's, which already report the same turn.
+		expect(said.every((entry) => entry.usage === undefined)).toBe(true);
+	});
 });

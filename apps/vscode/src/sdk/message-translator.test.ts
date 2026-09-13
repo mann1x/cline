@@ -2441,6 +2441,52 @@ describe("translateSessionEvent — agent_event notice", () => {
 		expect(later.messages[0].ts).not.toBe(first.messages[0].ts)
 	})
 
+	// The expert's own words. Each finished block is a row of its own: they are
+	// a transcript, and one that overwrote itself would only ever show its last
+	// line -- unlike the progress row above it, which is a live measurement and
+	// should.
+	it("gives the expert's thinking and messages a row each, never the progress row", () => {
+		const state = new MessageTranslatorState()
+		const working = translateSessionEvent(
+			noticeEvent("The expert is working: 1 tool call so far.", {
+				kind: "expert_progress",
+				index: 1,
+				of: 3,
+				toolCalls: 1,
+				usage: { inputTokens: 100, outputTokens: 10, generateTokens: 10, generateMs: 1, wallMs: 1, requests: 1 },
+			}),
+			state,
+		)
+		const thinking = translateSessionEvent(
+			noticeEvent("x".repeat(52_776), { kind: "expert_thinking", index: 1, of: 3 }),
+			state,
+		)
+		const said = translateSessionEvent(noticeEvent("Found it — line 90.", { kind: "expert_message", index: 1, of: 3 }), state)
+
+		expect(JSON.parse(thinking.messages[0].text ?? "{}")).toMatchObject({
+			phase: "expert_thinking",
+			index: 1,
+			of: 3,
+		})
+		expect(JSON.parse(said.messages[0].text ?? "{}")).toMatchObject({ phase: "expert_message" })
+		// Three rows, three ids.
+		const ids = [working.messages[0].ts, thinking.messages[0].ts, said.messages[0].ts]
+		expect(new Set(ids).size).toBe(3)
+		// And the transcript carries no spend, so nothing is counted twice.
+		expect(JSON.parse(thinking.messages[0].text ?? "{}").usage).toBeUndefined()
+		expect(JSON.parse(said.messages[0].text ?? "{}").usage).toBeUndefined()
+
+		// The delivery still takes over the progress row, not the last transcript row.
+		const delivery = translateSessionEvent(
+			noticeEvent("fixed line 90", {
+				kind: "expert_reply",
+				usage: { inputTokens: 100, outputTokens: 40, generateTokens: 40, generateMs: 1, wallMs: 1, requests: 1 },
+			}),
+			state,
+		)
+		expect(delivery.messages[0].ts).toBe(working.messages[0].ts)
+	})
+
 	// The exchange with the expert, as four notices that become one row type.
 	// Keyed on `kind` rather than on the message text, which is written for a
 	// human and will be reworded.

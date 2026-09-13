@@ -66,6 +66,21 @@ export interface ExpertProgress {
 	usage: ExpertUsage;
 }
 
+/**
+ * A block the expert finished: a stretch of thinking, or something it said.
+ *
+ * Reported per completed block rather than streamed. The block arrives whole on
+ * `content_end`, so a consumer that wants the whole of it -- and the thinking
+ * is the part worth having whole; 50,000 characters of it is normal -- gets it
+ * in one message instead of rebuilding it from deltas. Nothing accumulates on
+ * either side, which is what keeps a long escalation from re-sending the same
+ * text on every update.
+ */
+export interface ExpertUtterance {
+	kind: "thinking" | "message";
+	text: string;
+}
+
 export interface ExpertReply {
 	text: string;
 	iterations: number;
@@ -114,6 +129,15 @@ export interface ExpertSessionOptions {
 	 * sends, which is as often as the expert gives anyone anything to report.
 	 */
 	onProgress?: (progress: ExpertProgress) => void;
+	/**
+	 * Called as the expert thinks and speaks, block by block.
+	 *
+	 * Separate from `onProgress` because these are the expert's words rather
+	 * than a measurement of it, and because they must never carry usage: the
+	 * turn's spend is reported once, and a second copy riding on the transcript
+	 * would be added to it.
+	 */
+	onUtterance?: (utterance: ExpertUtterance) => void;
 }
 
 export interface ExpertSession {
@@ -158,6 +182,20 @@ export function createExpertSession(
 		if (event.type === "content_end" && event.contentType === "tool") {
 			turnToolCalls += 1;
 			report(event.toolName);
+			return;
+		}
+		if (event.type === "content_end" && event.contentType === "reasoning") {
+			const thinking = event.reasoning?.trim();
+			if (thinking) {
+				options.onUtterance?.({ kind: "thinking", text: thinking });
+			}
+			return;
+		}
+		if (event.type === "content_end" && event.contentType === "text") {
+			const said = event.text?.trim();
+			if (said) {
+				options.onUtterance?.({ kind: "message", text: said });
+			}
 			return;
 		}
 		if (event.type !== "usage") {

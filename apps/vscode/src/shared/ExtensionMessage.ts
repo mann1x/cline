@@ -655,7 +655,7 @@ export interface ClineTransactionInfo {
  * expert figures on the task header's own token line.
  */
 export interface ClineEscalationInfo {
-	phase: "started" | "working" | "message" | "reply" | "ended"
+	phase: "started" | "working" | "expert_thinking" | "expert_message" | "message" | "reply" | "ended"
 	/** Which escalation this is, and how many the task gets. On "started" and "working". */
 	index?: number
 	of?: number

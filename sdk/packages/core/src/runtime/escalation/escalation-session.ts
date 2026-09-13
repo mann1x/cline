@@ -67,6 +67,13 @@ export type EscalationEvent =
 			usage: ExpertUsage;
 	  }
 	| {
+			type: "expert_said";
+			index: number;
+			of: number;
+			kind: "thinking" | "message";
+			text: string;
+	  }
+	| {
 			type: "expert_progress";
 			index: number;
 			of: number;
@@ -218,6 +225,14 @@ export function createEscalationSession(
 				...(options.gate ? { gate: options.gate } : {}),
 				...(options.onEvent
 					? {
+							onUtterance: (utterance) =>
+								options.onEvent?.({
+									type: "expert_said",
+									index: liveIndex,
+									of: maxEscalations,
+									kind: utterance.kind,
+									text: utterance.text,
+								}),
 							onProgress: (progress) =>
 								options.onEvent?.({
 									type: "expert_progress",

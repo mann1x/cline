@@ -1,5 +1,14 @@
 import type { ClineEscalationInfo, ClineMessage } from "@shared/ExtensionMessage"
-import { ChevronDownIcon, ChevronRightIcon, LoaderIcon, PauseIcon, SendIcon, SquareUserIcon, UserCheckIcon } from "lucide-react"
+import {
+	BrainIcon,
+	ChevronDownIcon,
+	ChevronRightIcon,
+	LoaderIcon,
+	PauseIcon,
+	SendIcon,
+	SquareUserIcon,
+	UserCheckIcon,
+} from "lucide-react"
 import { useState } from "react"
 import { formatLargeNumber } from "@/utils/format"
 import { formatDuration, formatRate } from "@/utils/request-timings"
@@ -104,6 +113,57 @@ export const EscalationRow = ({ message }: { message: ClineMessage }) => {
 					</span>
 				) : null}
 				<div className="flex-1 min-w-4 border-t border-description/30" />
+			</div>
+		)
+	}
+
+	// The expert's own thinking, one row per block it finished, collapsed the
+	// way the main model's is. Uncapped: a block runs to 50,000 characters and
+	// the whole of it is the point -- it sits behind a disclosure, so its
+	// length costs a reader nothing until they ask for it.
+	if (info.phase === "expert_thinking") {
+		return (
+			<div className="py-1.5 text-description">
+				<button
+					aria-expanded={expanded}
+					className="flex items-center gap-2 w-full text-inherit hover:text-foreground bg-transparent border-0 p-0 cursor-pointer"
+					onClick={() => setExpanded((current) => !current)}
+					type="button">
+					{expanded ? (
+						<ChevronDownIcon className="size-3 shrink-0" />
+					) : (
+						<ChevronRightIcon className="size-3 shrink-0" />
+					)}
+					<BrainIcon className="size-3 shrink-0" />
+					<span className="min-w-0 text-left">
+						The expert's thinking
+						<span className="ml-2 text-xs">{formatLargeNumber(info.text.length)} characters</span>
+					</span>
+					<div className="flex-1 min-w-4 border-t border-description/30" />
+				</button>
+				{expanded ? (
+					<pre className="mt-1 ml-4 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded border border-description/30 p-2 text-xs">
+						{info.text}
+					</pre>
+				) : null}
+			</div>
+		)
+	}
+
+	// What it said between tool calls. Shown without an interaction, because
+	// this is the running commentary that makes a long escalation legible --
+	// the part that says what it found and what it is about to do.
+	if (info.phase === "expert_message") {
+		return (
+			<div className="py-1.5">
+				<div className="flex items-center gap-2 text-description">
+					<SquareUserIcon className="size-3 shrink-0" />
+					<span>The expert</span>
+					<div className="flex-1 min-w-4 border-t border-description/30" />
+				</div>
+				<div className="mt-1 ml-4 border-l-2 border-description/30 pl-2">
+					<MarkdownRow markdown={info.text} />
+				</div>
 			</div>
 		)
 	}

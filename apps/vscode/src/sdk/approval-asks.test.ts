@@ -32,13 +32,13 @@ describe("approvals asked in the chat", () => {
 	const brief = `== ESCALATION ==\n\n## What you are being asked to do\n\n${"x".repeat(5_000)}`
 
 	it("sends the escalation brief whole, not truncated to a preview", async () => {
-		const askUser = vi.fn(async () => "Hand it over")
+		const askUser = vi.fn(async (_question: string, _options: string[]) => "Hand it over")
 		const approve = createEscalationApprover(askUser)
 
 		const answer = await approve({ brief, index: 1, of: 3 })
 
 		expect(answer).toEqual({ approved: true })
-		const asked = askUser.mock.calls[0][0] as string
+		const asked = askUser.mock.calls[0][0]
 		expect(asked).toContain(brief)
 		expect(asked).not.toContain("more characters")
 		expect(askUser.mock.calls[0][1]).toEqual(["Hand it over", "No — keep going"])
@@ -82,7 +82,7 @@ describe("approvals asked in the chat", () => {
 	})
 
 	it("approves a proposed check and names a command as one", async () => {
-		const askUser = vi.fn(async () => "Use this check")
+		const askUser = vi.fn(async (_question: string, _options: string[]) => "Use this check")
 		const approve = createCheckApprover(askUser)
 
 		const answer = await approve({ kind: "command" } as never, "`node run_game.js manic_miner.html`")

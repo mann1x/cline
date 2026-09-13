@@ -132,4 +132,35 @@ describe("EscalationRow", () => {
 		expect(screen.getByText(/last read_files/)).toBeTruthy()
 		expect(screen.getByText(/37\.2k/)).toBeTruthy()
 	})
+
+	// Reported from a real escalation: "I should see the conversation between
+	// the model and the expert, i only see the files being changed and some
+	// shell commands". Its words reached nothing; only its side effects did.
+	it("keeps the expert's thinking behind a disclosure, and says how much there is", () => {
+		const thinking = "x".repeat(52_776)
+		render(<EscalationRow message={row({ phase: "expert_thinking", index: 2, of: 3, text: thinking })} />)
+
+		expect(screen.getByText(/The expert's thinking/)).toBeTruthy()
+		expect(screen.getByText(/52\.8k characters/)).toBeTruthy()
+		expect(screen.queryByText(thinking)).toBeNull()
+
+		fireEvent.click(screen.getByRole("button"))
+		expect(screen.getByText(thinking)).toBeTruthy()
+	})
+
+	// The commentary is the opposite: it is what makes a twenty-minute
+	// escalation legible while it is still running.
+	it("shows what the expert said without an interaction", () => {
+		render(
+			<EscalationRow
+				message={row({
+					phase: "expert_message",
+					text: "Found it — line 90 closes a forEach with `}}` instead of `})`.",
+				})}
+			/>,
+		)
+
+		expect(screen.getByText(/line 90 closes a forEach/)).toBeTruthy()
+		expect(screen.queryByRole("button")).toBeNull()
+	})
 })

@@ -1343,6 +1343,27 @@ export class LocalRuntimeHost implements RuntimeHost {
 					});
 					return;
 				}
+				if (event.type === "expert_said") {
+					this.eventBridge.dispatchAgentEvent(sessionId, configWithProvider, {
+						type: "notice",
+						noticeType: "status",
+						displayRole: "status",
+						message: event.text,
+						metadata: {
+							kind:
+								event.kind === "thinking"
+									? "expert_thinking"
+									: "expert_message",
+							index: event.index,
+							of: event.of,
+							// No usage here, deliberately. The turn's spend is
+							// reported once on the progress row and again on the
+							// delivery that replaces it; a third copy riding on
+							// the transcript would be added to both.
+						},
+					});
+					return;
+				}
 				if (event.type === "expert_progress") {
 					this.eventBridge.dispatchAgentEvent(sessionId, configWithProvider, {
 						type: "notice",
