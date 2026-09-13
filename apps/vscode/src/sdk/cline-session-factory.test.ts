@@ -1527,6 +1527,54 @@ describe("buildSessionConfig", () => {
 		expect(config.escalation?.connection?.providerConfig?.modelInfo?.contextWindow).toBe(131_072)
 	})
 
+	// The budgets and switches the Escalation tab edits. A stored value that
+	// nobody reads back is the shape of bug this codebase keeps finding: the
+	// panel writes it, the run uses a default, and nothing says so.
+	it("carries the tab's budgets and switches onto the session", async () => {
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string) => {
+			if (key === "escalationModelEnabled") {
+				return true
+			}
+			if (key === "escalationModeApiConfiguration") {
+				return escalationSnapshot({ selectedModelId: "the-expert" }) as never
+			}
+			if (key === "escalationSettings") {
+				return {
+					requireApproval: true,
+					closeAfterEscalation: true,
+					maxEscalations: 2,
+					maxFollowUps: 7,
+				} as never
+			}
+			return undefined
+		})
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+
+		expect(config.escalation?.requireApproval).toBe(true)
+		expect(config.escalation?.closeAfterEscalation).toBe(true)
+		expect(config.escalation?.maxEscalations).toBe(2)
+		expect(config.escalation?.maxFollowUps).toBe(7)
+	})
+
+	// `requireApproval` with nowhere to ask can only refuse, so the host that
+	// has a window supplies the way to ask alongside the setting.
+	it("gives the session somewhere to put the approval", async () => {
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string) => {
+			if (key === "escalationModelEnabled") {
+				return true
+			}
+			if (key === "escalationModeApiConfiguration") {
+				return escalationSnapshot({ selectedModelId: "the-expert" }) as never
+			}
+			return undefined
+		})
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+
+		expect(typeof config.escalation?.approve).toBe("function")
+	})
+
 	// Enabled with nothing named is not the same as enabled: there is nothing
 	// to call. Said in the log rather than left to be inferred from a failed
 	// escalation, because a tab holding a provider and no model reads as

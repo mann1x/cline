@@ -1252,6 +1252,11 @@ export class LocalRuntimeHost implements RuntimeHost {
 					...(forcedEscalation?.spent ? { guardStoodDown: true } : {}),
 				});
 			},
+			// Putting it to the user, where the host set `requireApproval` and
+			// gave this session somewhere to ask.
+			...(configWithProvider.escalation?.approve
+				? { approve: configWithProvider.escalation.approve }
+				: {}),
 			// The task as the user stated it. The session's own record of it,
 			// not the manifest's: an interactive session is created before the
 			// user has said anything, and its prompt arrives on the first turn.

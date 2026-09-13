@@ -69,6 +69,7 @@ import {
 } from "./agent-profile-connection"
 import { type BedrockProviderConfig, buildBedrockProviderConfig } from "./bedrock-config"
 import { createEditorDiagnosticsHooks } from "./editor-diagnostics"
+import { approveEscalation } from "./escalation-approval"
 import { buildAgentHooks } from "./hooks-adapter"
 import { readTaskHistory, resolveDataDir } from "./legacy-state-reader"
 import type { ResolvedModelSelection } from "./model-catalog/contracts"
@@ -1673,6 +1674,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	// anywhere else: an expert is usually the *larger* model, so borrowing the
 	// session's context window would size it down to whatever the small model
 	// was given.
+	const escalationSettings = stateManager.getGlobalSettingsKey("escalationSettings")
 	const escalationSnapshot = stateManager.getGlobalSettingsKey("escalationModeApiConfiguration")
 	const escalationStatus = resolveScopedModelStatus(
 		stateManager.getGlobalSettingsKey("escalationModelEnabled"),
@@ -1902,7 +1904,27 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		// Only when there is somewhere to escalate to. An `escalation` block
 		// holding no connection would be a feature that is on and cannot run,
 		// which is the state this fork keeps finding and then has to explain.
-		...(escalationConnection ? { escalation: { connection: escalationConnection } } : {}),
+		...(escalationConnection
+			? {
+					escalation: {
+						connection: escalationConnection,
+						// The budgets and switches from the Escalation tab. Read
+						// here rather than defaulted in core, so what the panel
+						// shows is what the run uses.
+						...(escalationSettings?.requireApproval !== undefined
+							? { requireApproval: escalationSettings.requireApproval }
+							: {}),
+						...(escalationSettings?.closeAfterEscalation !== undefined
+							? { closeAfterEscalation: escalationSettings.closeAfterEscalation }
+							: {}),
+						...(escalationSettings?.maxEscalations ? { maxEscalations: escalationSettings.maxEscalations } : {}),
+						...(escalationSettings?.maxFollowUps ? { maxFollowUps: escalationSettings.maxFollowUps } : {}),
+						// There is a user here to ask, so the approval setting has
+						// somewhere to go. Without this it could only ever refuse.
+						approve: approveEscalation,
+					},
+				}
+			: {}),
 		maxConcurrentAgents: agentSlots.limit,
 		...(agentSlotLimits ? { agentSlotLimits } : {}),
 		resolveProviderConnection: resolveAgentProviderConnection,

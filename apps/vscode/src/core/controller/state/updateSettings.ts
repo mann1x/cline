@@ -392,6 +392,28 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			})
 		}
 
+		// The escalation path's budgets and switches. Merged onto what is
+		// stored, for the reason the change protocol's block above spells out:
+		// this arrives as a delta and proto3 cannot tell an untouched field from
+		// the type's zero, so an assignment would clear every field the user did
+		// not happen to be editing.
+		if (request.escalationSettings !== undefined) {
+			const stored = controller.stateManager.getGlobalSettingsKey("escalationSettings")
+			const maxEscalations = request.escalationSettings.maxEscalations
+			const maxFollowUps = request.escalationSettings.maxFollowUps
+			controller.stateManager.setGlobalState("escalationSettings", {
+				...stored,
+				...(request.escalationSettings.requireApproval !== undefined
+					? { requireApproval: request.escalationSettings.requireApproval }
+					: {}),
+				...(request.escalationSettings.closeAfterEscalation !== undefined
+					? { closeAfterEscalation: request.escalationSettings.closeAfterEscalation }
+					: {}),
+				...(maxEscalations !== undefined && maxEscalations > 0 ? { maxEscalations } : {}),
+				...(maxFollowUps !== undefined && maxFollowUps > 0 ? { maxFollowUps } : {}),
+			})
+		}
+
 		// The per-task half of the change protocol, from the auto-approve panel.
 		// A delta for the same proto3 reason as the settings above, and handled
 		// on the controller rather than here because two of its three outcomes

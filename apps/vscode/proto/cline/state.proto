@@ -309,6 +309,7 @@ message Settings {
   optional string atomic_protocol_session = 204;
   optional bool escalation_model_enabled = 205;
   optional string escalation_mode_api_configuration = 206;
+  optional string escalation_settings = 207;
 }
 
 message State {
@@ -482,6 +483,27 @@ message UpdateSettingsRequest {
   optional bool web_search_enabled = 60;
   optional bool show_request_timings = 61;
   optional AtomicProtocolSessionSettings atomic_protocol_session = 65;
+  optional EscalationSettings escalation_settings = 68;
+}
+
+// The escalation path's budgets and switches.
+//
+// Every field is `optional` for the reason AtomicProtocolSettings spells out:
+// this travels as a delta, and proto3 cannot tell "not sent" from the type's
+// zero -- so an untouched checkbox and an unticked one would look identical,
+// and editing one number would zero the others.
+message EscalationSettings {
+  // Ask before each escalation, showing the brief and the harness's own
+  // assessment. Off by default.
+  optional bool require_approval = 1;
+  // Release the expert's conversation when an escalation ends rather than
+  // holding it. Off by default; the two answers are right on different
+  // hardware, and the setting says which.
+  optional bool close_after_escalation = 2;
+  // Escalations allowed in one task.
+  optional int32 max_escalations = 3;
+  // Follow-ups within one escalation, after the first delivery.
+  optional int32 max_follow_ups = 4;
 }
 
 // The per-task half of the change protocol: engaged, and this task's check.

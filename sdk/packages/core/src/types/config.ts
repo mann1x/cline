@@ -134,6 +134,20 @@ export interface CoreEscalationConfig {
 	 * gets the harness's independent assessment beside it.
 	 */
 	requireApproval?: boolean;
+	/**
+	 * Puts the escalation to the user, where `requireApproval` is set.
+	 *
+	 * Supplied by hosts that have somewhere to ask. A host with nobody there --
+	 * cron, automation, a CLI with no terminal -- leaves this out, and then
+	 * `requireApproval` can only refuse: an approval nobody can give is not an
+	 * approval, and escalating anyway would be the setting doing the opposite of
+	 * what it says.
+	 */
+	approve?: (request: {
+		brief: string;
+		index: number;
+		of: number;
+	}) => Promise<boolean>;
 	/** Escalations allowed in one task. Three by default. */
 	maxEscalations?: number;
 	/** Follow-ups within one escalation, after the first delivery. Twenty by default. */

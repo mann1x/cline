@@ -16,6 +16,7 @@ import {
 import { BrowserSettings, DEFAULT_BROWSER_SETTINGS } from "@shared/BrowserSettings"
 import { ClineRulesToggles } from "@shared/cline-rules"
 import { DEFAULT_EDIT_VERIFICATION_SETTINGS, EditVerificationSettings } from "@shared/EditVerificationSettings"
+import { DEFAULT_ESCALATION_SETTINGS, type EscalationSettings } from "@shared/EscalationSettings"
 import { DEFAULT_FOCUS_CHAIN_SETTINGS, FocusChainSettings } from "@shared/FocusChainSettings"
 import { HistoryItem } from "@shared/HistoryItem"
 import { DEFAULT_MCP_DISPLAY_MODE, McpDisplayMode } from "@shared/McpDisplayMode"
@@ -358,6 +359,7 @@ const USER_SETTINGS_FIELDS = {
 	focusChainSettings: { default: DEFAULT_FOCUS_CHAIN_SETTINGS as FocusChainSettings },
 	editVerificationSettings: { default: DEFAULT_EDIT_VERIFICATION_SETTINGS as EditVerificationSettings },
 	atomicProtocolSettings: { default: DEFAULT_ATOMIC_PROTOCOL_SETTINGS as AtomicProtocolSettings },
+	escalationSettings: { default: DEFAULT_ESCALATION_SETTINGS as EscalationSettings },
 	// Written at task scope, which `getGlobalSettingsKey` already resolves over
 	// the global value -- so the session host reads one key and gets the task's
 	// answer where there is one. It is listed here because that resolution only

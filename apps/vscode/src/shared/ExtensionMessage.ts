@@ -12,6 +12,7 @@ import { ClineFeatureSetting } from "./ClineFeatureSetting"
 import { BannerCardData } from "./cline/banner"
 import { ClineRulesToggles } from "./cline-rules"
 import type { EditVerificationSettings } from "./EditVerificationSettings"
+import type { EscalationSettings } from "./EscalationSettings"
 import type { FocusChainSettings } from "./FocusChainSettings"
 import { HistoryItem } from "./HistoryItem"
 import { McpDisplayMode } from "./McpDisplayMode"
@@ -94,6 +95,8 @@ export interface ExtensionState {
 	agentsModeApiConfiguration: string
 	/** Hand a stuck task to a second, costlier model. */
 	escalationModelEnabled: boolean
+	/** The escalation path's budgets and switches. */
+	escalationSettings: EscalationSettings
 	/** JSON `ApiConfigurationSnapshot` for the escalation expert. */
 	escalationModeApiConfiguration: string
 	/** Whether `generate_image` is offered, pointed at the endpoint below. */

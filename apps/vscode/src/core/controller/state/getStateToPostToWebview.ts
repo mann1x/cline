@@ -88,6 +88,7 @@ export async function getStateToPostToWebview(controller: {
 	// The per-task half. The webview needs it to know whether the protocol is
 	// engaged right now, which is what the Fix indicator reports.
 	const atomicProtocolSession = stateManager.getGlobalSettingsKey("atomicProtocolSession")
+	const escalationSettings = stateManager.getGlobalSettingsKey("escalationSettings")
 	const apiConfigurationProfiles = stateManager.getGlobalSettingsKey("apiConfigurationProfiles")
 	const activeApiConfigurationProfile = stateManager.getGlobalSettingsKey("activeApiConfigurationProfile")
 	const enableCheckpointsSetting = stateManager.getGlobalSettingsKey("enableCheckpointsSetting")
@@ -192,6 +193,7 @@ export async function getStateToPostToWebview(controller: {
 		imageGenApiKeySet: readImageGenerationApiKey() !== undefined,
 		editVerificationSettings,
 		atomicProtocolSettings,
+		escalationSettings,
 		atomicProtocolSession,
 		// Names only. The values live in secret storage and never travel with
 		// the state; the settings view offers "replace" rather than showing one.
