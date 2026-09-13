@@ -105,8 +105,16 @@ export interface ParsedArgs {
 	editVerification?: "off" | "nudge" | "require";
 	invalidEditVerification?: string;
 	invalidRetries?: string;
-	/** Whether the task runs as judged, revertible transactions. */
-	atomic?: "off" | "auto" | "always";
+	/**
+	 * Whether the task runs as judged, revertible transactions.
+	 *
+	 * `auto` and `always` are still accepted and both mean `static`, because
+	 * this flag is how the measurement harness drives the protocol and those
+	 * arm scripts are not ours to rewrite. `on` also means `static` here: it
+	 * asks a user to engage the protocol partway through a task, and a CLI run
+	 * has nobody to ask.
+	 */
+	atomic?: "off" | "static";
 	invalidAtomic?: string;
 	/** The shell line that decides whether the task worked. */
 	oracle?: string;

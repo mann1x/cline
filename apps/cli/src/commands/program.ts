@@ -62,7 +62,7 @@ export function addRootOptions(cmd: Command): Command {
 			)
 			.option(
 				"--atomic <mode>",
-				"Run the task as judged, revertible transactions: off | auto | always (default: off)",
+				"Run the task as judged, revertible transactions: off | static (default: off). auto, always and on are accepted and mean static",
 			)
 			.option(
 				"--oracle <command>",
@@ -299,8 +299,20 @@ export function commanderToParsedArgs(program: Command): ParsedArgs {
 	// transactional and is not will leave a failed attempt's edits on disk.
 	if (opts.atomic !== undefined) {
 		const raw = String(opts.atomic).trim();
-		if (raw === "off" || raw === "auto" || raw === "always") {
-			result.atomic = raw;
+		if (raw === "off") {
+			result.atomic = "off";
+		} else if (
+			// `auto` and `always` predate the rename and are kept: this flag is
+			// the harness's interface and its arm scripts pass them. Both engaged
+			// the protocol by themselves, which is what `static` is. `on` lands
+			// here too -- it means "a user engages this when they choose to", and
+			// a CLI run has no user to choose.
+			raw === "static" ||
+			raw === "on" ||
+			raw === "auto" ||
+			raw === "always"
+		) {
+			result.atomic = "static";
 		} else if (raw) {
 			result.invalidAtomic = raw;
 		}

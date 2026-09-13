@@ -239,18 +239,35 @@ describe("parseArgs", () => {
 		expect(parsed.invalidEditVerification).toBeUndefined();
 	});
 
-	it.each(["off", "auto", "always"] as const)("parses --atomic %s", (mode) => {
+	it.each(["off", "static"] as const)("parses --atomic %s", (mode) => {
 		const parsed = parseArgs(["--atomic", mode]);
 		expect(parsed.atomic).toBe(mode);
 		expect(parsed.invalidAtomic).toBeUndefined();
 	});
 
+	// The harness drives the protocol through this flag and its arm scripts pass
+	// the old names. Both of them engaged the protocol by themselves, which is
+	// what `static` is, so both keep working and mean exactly that. `on` is here
+	// for the same reason from the other direction: it means "a user engages
+	// this when they choose to", and a CLI run has no user to choose.
+	it.each([
+		"auto",
+		"always",
+		"on",
+	] as const)("still accepts --atomic %s and reads it as static", (alias) => {
+		const parsed = parseArgs(["--atomic", alias]);
+		expect(parsed.atomic).toBe("static");
+		expect(parsed.invalidAtomic).toBeUndefined();
+	});
+
 	// A run the user believes is transactional and is not leaves a failed
 	// attempt's edits on disk under a report saying they were put back.
+	// Was "on", which the rename made a valid alias. The example moved; what
+	// the test is for did not.
 	it("refuses an --atomic mode it does not know", () => {
-		const parsed = parseArgs(["--atomic", "on"]);
+		const parsed = parseArgs(["--atomic", "sometimes"]);
 		expect(parsed.atomic).toBeUndefined();
-		expect(parsed.invalidAtomic).toBe("on");
+		expect(parsed.invalidAtomic).toBe("sometimes");
 	});
 
 	it("takes the oracle command as written", () => {

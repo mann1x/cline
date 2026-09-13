@@ -100,7 +100,7 @@ describe("the undo the protocol hands the model", () => {
 		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "always", oracleCommand: shellCheck(root, "fixed") },
+				config: { mode: "static", oracleCommand: shellCheck(root, "fixed") },
 			});
 
 			expect(session?.tools.map((tool) => tool.name)).toContain("restore_file");
@@ -115,7 +115,7 @@ describe("the undo the protocol hands the model", () => {
 		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "always", oracleCommand: shellCheck(root, "fixed") },
+				config: { mode: "static", oracleCommand: shellCheck(root, "fixed") },
 			});
 			const plainRead = {
 				name: "read_files",
@@ -146,7 +146,7 @@ describe("the undo the protocol hands the model", () => {
 		await withWorkspace({ "notes.md": "# hello" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "auto" },
+				config: { mode: "static" },
 			});
 
 			expect(session).toBeUndefined();
@@ -166,13 +166,13 @@ describe("arming the protocol for a session", () => {
 	// The whole reason the protocol exists is that a model's account of its own
 	// change and the program disagree. Engaging with only the account to go on
 	// buys the cost and not the verdict.
-	it("declines auto in a workspace with nothing to run, and says why", async () => {
+	it("declines a workspace with nothing to run and nobody to ask, and says why", async () => {
 		await withWorkspace({ "notes.md": "# hello" }, async (root) => {
 			const logged: string[] = [];
 			const status: { armed: boolean; message: string }[] = [];
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "auto" },
+				config: { mode: "static" },
 				logger: { log: (message) => logged.push(message) },
 				onStatus: (update) => status.push(update),
 			});
@@ -182,15 +182,15 @@ describe("arming the protocol for a session", () => {
 			// To the user as well as the log: standing down is invisible from the
 			// chat, and looks exactly like a feature that is not working.
 			expect(status[0]?.armed).toBe(false);
-			expect(status[0]?.message).toContain("Settings");
+			expect(status[0]?.message).toContain("nobody here to approve");
 		});
 	});
 
-	it("engages always in the same workspace, with the model as the check", async () => {
+	it("engages in the same workspace when proposals are switched off, with the model as the check", async () => {
 		await withWorkspace({ "notes.md": "# hello" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "always" },
+				config: { mode: "static", proposeCheck: false },
 			});
 
 			expect(session?.oracle).toBeUndefined();
@@ -204,7 +204,7 @@ describe("arming the protocol for a session", () => {
 			async (root) => {
 				const session = await createAtomicProtocolSession({
 					workspaceRoot: root,
-					config: { mode: "auto", oracleCommand: "node run_game.js" },
+					config: { mode: "static", oracleCommand: "node run_game.js" },
 				});
 
 				expect(session?.oracle?.label).toBe("node run_game.js");
@@ -223,7 +223,7 @@ describe("submitting a transaction", () => {
 		await withWorkspace({ "game.js": "broken" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "always", oracleCommand: shellCheck(root, "fixed") },
+				config: { mode: "static", oracleCommand: shellCheck(root, "fixed") },
 			});
 			expect(session?.tools.map((tool) => tool.name)).toContain(
 				"submit_transaction",
@@ -235,7 +235,7 @@ describe("submitting a transaction", () => {
 		await withWorkspace({ "game.js": "broken" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "auto", oracleCommand: shellCheck(root, "fixed") },
+				config: { mode: "static", oracleCommand: shellCheck(root, "fixed") },
 			});
 			const rules = session?.takeOpeningRules();
 			expect(rules).toContain("HOW THIS TRANSACTION ENDS");
@@ -247,7 +247,7 @@ describe("submitting a transaction", () => {
 		await withWorkspace({ "game.js": "broken" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "auto", oracleCommand: shellCheck(root, "fixed") },
+				config: { mode: "static", oracleCommand: shellCheck(root, "fixed") },
 			});
 			await fs.writeFile(path.join(root, "game.js"), "fixed", "utf8");
 
@@ -267,7 +267,7 @@ describe("submitting a transaction", () => {
 		await withWorkspace({ "game.js": "broken" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "auto", oracleCommand: shellCheck(root, "fixed") },
+				config: { mode: "static", oracleCommand: shellCheck(root, "fixed") },
 			});
 
 			const message = await session?.onCompletionAttempt({
@@ -289,7 +289,7 @@ describe("submitting a transaction", () => {
 		await withWorkspace({ "game.js": "broken" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "auto", oracleCommand: shellCheck(root, "fixed") },
+				config: { mode: "static", oracleCommand: shellCheck(root, "fixed") },
 			});
 			if (!session) {
 				throw new Error("the protocol did not arm");
@@ -318,7 +318,7 @@ describe("submitting a transaction", () => {
 		await withWorkspace({ "game.js": "broken" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "auto", oracleCommand: shellCheck(root, "fixed") },
+				config: { mode: "static", oracleCommand: shellCheck(root, "fixed") },
 			});
 			if (!session) {
 				throw new Error("the protocol did not arm");
@@ -353,7 +353,7 @@ describe("the boundary", () => {
 		await withWorkspace({ "game.js": "fine" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "auto", oracleCommand: shellCheck(root, "fine") },
+				config: { mode: "static", oracleCommand: shellCheck(root, "fine") },
 			});
 
 			await expect(
@@ -373,7 +373,7 @@ describe("the boundary", () => {
 		await withWorkspace({ "game.js": "broken" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "auto", oracleCommand: shellCheck(root, "fixed") },
+				config: { mode: "static", oracleCommand: shellCheck(root, "fixed") },
 			});
 
 			const message = await submit(
@@ -398,7 +398,7 @@ describe("the boundary", () => {
 		await withWorkspace({ "game.js": "broken" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "auto", oracleCommand: shellCheck(root, "fixed") },
+				config: { mode: "static", oracleCommand: shellCheck(root, "fixed") },
 			});
 
 			// Four quiet turns: under the old rule the second of these spent
@@ -419,7 +419,7 @@ describe("the boundary", () => {
 		await withWorkspace({ "game.js": "broken" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "auto", oracleCommand: shellCheck(root, "fixed") },
+				config: { mode: "static", oracleCommand: shellCheck(root, "fixed") },
 			});
 			if (!session) {
 				throw new Error("the protocol did not arm");
@@ -443,7 +443,7 @@ describe("the boundary", () => {
 			const notices: string[] = [];
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "auto", oracleCommand: shellCheck(root, "fixed") },
+				config: { mode: "static", oracleCommand: shellCheck(root, "fixed") },
 				onEvent: (event) => {
 					if (event.type === "empty") {
 						notices.push(event.message);
@@ -474,7 +474,7 @@ describe("the boundary", () => {
 		await withWorkspace({ "game.js": "fine" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "always" },
+				config: { mode: "static", proposeCheck: false },
 			});
 
 			await expect(
@@ -487,7 +487,7 @@ describe("the boundary", () => {
 		await withWorkspace({ "game.js": "broken" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "auto", oracleCommand: shellCheck(root, "fixed") },
+				config: { mode: "static", oracleCommand: shellCheck(root, "fixed") },
 			});
 			await fs.writeFile(path.join(root, "game.js"), "fixed", "utf8");
 
@@ -499,7 +499,7 @@ describe("the boundary", () => {
 		await withWorkspace({ "game.js": "broken" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "auto", oracleCommand: shellCheck(root, "fixed") },
+				config: { mode: "static", oracleCommand: shellCheck(root, "fixed") },
 			});
 			await fs.writeFile(path.join(root, "game.js"), "still broken", "utf8");
 
@@ -522,7 +522,7 @@ describe("the boundary", () => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
 				config: {
-					mode: "auto",
+					mode: "static",
 					oracleCommand: shellCheck(root, "fixed"),
 					maxTransactions: 2,
 				},
@@ -547,7 +547,7 @@ describe("the boundary", () => {
 			const events: string[] = [];
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "auto", oracleCommand: shellCheck(root, "fixed") },
+				config: { mode: "static", oracleCommand: shellCheck(root, "fixed") },
 				onEvent: (event) =>
 					events.push(
 						event.type === "empty"
@@ -585,7 +585,7 @@ describe("the boundary", () => {
 			const events: string[] = [];
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "auto", oracleCommand: shellCheck(root, "fixed") },
+				config: { mode: "static", oracleCommand: shellCheck(root, "fixed") },
 				onEvent: (event) =>
 					events.push(
 						event.type === "empty"
@@ -626,7 +626,7 @@ describe("the boundary", () => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
 				config: {
-					mode: "auto",
+					mode: "static",
 					oracleCommand: shellCheck(root, "fixed"),
 					maxTransactions: 3,
 				},
@@ -660,7 +660,7 @@ describe("the boundary", () => {
 		await withWorkspace({ "game.js": "broken" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "auto", oracleCommand: shellCheck(root, "fixed") },
+				config: { mode: "static", oracleCommand: shellCheck(root, "fixed") },
 			});
 
 			await fs.writeFile(path.join(root, "game.js"), "still broken", "utf8");
@@ -681,7 +681,7 @@ describe("the boundary", () => {
 		await withWorkspace({ "notes.md": "before" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "always" },
+				config: { mode: "static", proposeCheck: false },
 			});
 			await fs.writeFile(path.join(root, "notes.md"), "after", "utf8");
 
@@ -707,7 +707,7 @@ describe("where the rules are put", () => {
 		await withWorkspace({ "game.js": "broken" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "always" },
+				config: { mode: "static", proposeCheck: false },
 			});
 
 			expect(session?.takeOpeningRules()).toContain("CHANGE PROTOCOL");
@@ -722,7 +722,7 @@ describe("where the rules are put", () => {
 		await withWorkspace({ "game.js": "broken" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "auto", oracleCommand: shellCheck(root, "fixed") },
+				config: { mode: "static", oracleCommand: shellCheck(root, "fixed") },
 			});
 			session?.takeOpeningRules();
 			await fs.writeFile(path.join(root, "game.js"), "still broken", "utf8");
@@ -774,7 +774,7 @@ describe("a check the model proposes", () => {
 			const statuses: string[] = [];
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "auto" },
+				config: { mode: "static" },
 				approveCheck: async () => ({ approved: true }),
 				onStatus: (status) => statuses.push(status.message),
 			});
@@ -789,7 +789,7 @@ describe("a check the model proposes", () => {
 			expect(
 				await createAtomicProtocolSession({
 					workspaceRoot: root,
-					config: { mode: "auto" },
+					config: { mode: "static" },
 				}),
 			).toBeUndefined();
 		});
@@ -799,7 +799,7 @@ describe("a check the model proposes", () => {
 		await withWorkspace({ "game.html": WORKING }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "auto" },
+				config: { mode: "static" },
 				approveCheck: async () => ({ approved: true }),
 			});
 
@@ -813,7 +813,7 @@ describe("a check the model proposes", () => {
 		await withWorkspace({ "game.html": BROKEN }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "always" },
+				config: { mode: "static" },
 				approveCheck: async () => ({ approved: true }),
 			});
 			if (!session) {
@@ -851,7 +851,7 @@ describe("a check the model proposes", () => {
 		await withWorkspace({ "game.html": BROKEN }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "always" },
+				config: { mode: "static" },
 				approveCheck: async () => ({ approved: true }),
 			});
 			if (!session) {
@@ -876,7 +876,7 @@ describe("a check the model proposes", () => {
 		await withWorkspace({ "game.html": BROKEN }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "always" },
+				config: { mode: "static" },
 				approveCheck: async () => ({ approved: true }),
 			});
 			if (!session) {
@@ -905,7 +905,7 @@ describe("a check the model proposes", () => {
 			async (root) => {
 				const session = await createAtomicProtocolSession({
 					workspaceRoot: root,
-					config: { mode: "auto" },
+					config: { mode: "static" },
 					approveCheck: async () => ({ approved: true }),
 				});
 
@@ -925,7 +925,7 @@ describe("a check the model proposes", () => {
 		await withWorkspace({ "game.html": WORKING }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "always" },
+				config: { mode: "static" },
 				approveCheck: async () => ({ approved: true }),
 			});
 			if (!session) {
@@ -953,7 +953,7 @@ describe("the check the model can reach", () => {
 		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "always", oracleCommand: shellCheck(root, "fixed") },
+				config: { mode: "static", oracleCommand: shellCheck(root, "fixed") },
 			});
 
 			expect(session?.tools.map((tool) => tool.name)).toContain("run_check");
@@ -964,7 +964,7 @@ describe("the check the model can reach", () => {
 		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "always", oracleCommand: shellCheck(root, "fixed") },
+				config: { mode: "static", oracleCommand: shellCheck(root, "fixed") },
 			});
 			const runCheck = session?.tools.find((tool) => tool.name === "run_check");
 			const before = await runCheck?.execute?.({}, {} as never);
@@ -987,7 +987,7 @@ describe("the check the model can reach", () => {
 		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "always" },
+				config: { mode: "static", proposeCheck: false },
 			});
 			const runCheck = session?.tools.find((tool) => tool.name === "run_check");
 
@@ -1009,7 +1009,7 @@ describe("closing a transaction the model will not close", () => {
 	async function armed(root: string) {
 		const session = await createAtomicProtocolSession({
 			workspaceRoot: root,
-			config: { mode: "always", oracleCommand: shellCheck(root, "fixed") },
+			config: { mode: "static", oracleCommand: shellCheck(root, "fixed") },
 		});
 		if (!session) {
 			throw new Error("the protocol did not arm");
@@ -1139,7 +1139,7 @@ describe("the switch on model-proposed checks", () => {
 		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "always" },
+				config: { mode: "static" },
 				approveCheck: async () => ({ approved: true }),
 			});
 
@@ -1154,7 +1154,7 @@ describe("the switch on model-proposed checks", () => {
 			const messages: string[] = [];
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "always" },
+				config: { mode: "static" },
 				approveCheck: async () => ({ approved: true }),
 				proposeCheck: false,
 				onStatus: ({ message }) => messages.push(message),
@@ -1167,16 +1167,24 @@ describe("the switch on model-proposed checks", () => {
 		});
 	});
 
-	it("stands down in auto with the switch off, as it did before the feature", async () => {
+	// Was "stands down in auto with the switch off". It no longer does, and the
+	// reversal is deliberate: `auto` stood down here while `always` armed with
+	// the model judging itself, and with that split gone the switch has to mean
+	// one thing. It means what its own description says -- the model's own
+	// account of its work, labelled as such -- which is also the arm the check
+	// comparison was measured on, and standing down would have deleted it.
+	it("arms with the model as the check when the switch is off, rather than standing down", async () => {
 		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "auto" },
+				config: { mode: "static" },
 				approveCheck: async () => ({ approved: true }),
 				proposeCheck: false,
 			});
 
-			expect(session).toBeUndefined();
+			expect(session).toBeDefined();
+			expect(session?.oracle).toBeUndefined();
+			expect(session?.takeOpeningRules()).toContain("you are the check");
 		});
 	});
 });
@@ -1191,7 +1199,7 @@ describe("the reconsideration setting reaching the controller", () => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
 				approveCheck: async () => ({ approved: true }),
-				config: { mode: "always", checkReconsideredAfter: 0 },
+				config: { mode: "static", checkReconsideredAfter: 0 },
 			});
 			const controller = session?.controller;
 			expect(controller).toBeDefined();
@@ -1219,7 +1227,7 @@ describe("the reconsideration setting reaching the controller", () => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
 				approveCheck: async () => ({ approved: true }),
-				config: { mode: "always", checkReconsideredAfter: 2 },
+				config: { mode: "static", checkReconsideredAfter: 2 },
 			});
 			const controller = session?.controller;
 			expect(controller).toBeDefined();
@@ -1261,7 +1269,7 @@ describe("the clause for a transaction nothing has landed in", () => {
 		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "always", oracleCommand: shellCheck(root, "fixed") },
+				config: { mode: "static", oracleCommand: shellCheck(root, "fixed") },
 			});
 
 			const clause = await session?.describeUnstartedWork();
@@ -1275,7 +1283,7 @@ describe("the clause for a transaction nothing has landed in", () => {
 		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
 			const session = await createAtomicProtocolSession({
 				workspaceRoot: root,
-				config: { mode: "always", oracleCommand: shellCheck(root, "fixed") },
+				config: { mode: "static", oracleCommand: shellCheck(root, "fixed") },
 			});
 			// Opening the transaction is what snapshots the file; the edit has to
 			// come after it or there is nothing for the comparison to see.

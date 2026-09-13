@@ -825,7 +825,7 @@ export async function runCli(): Promise<void> {
 	// were put back, which is worse than either doing it or not doing it.
 	if (args.invalidAtomic) {
 		writeln(
-			`invalid --atomic "${args.invalidAtomic}" (expected off, auto or always)`,
+			`invalid --atomic "${args.invalidAtomic}" (expected off or static; auto, always and on are accepted and mean static)`,
 		);
 		process.exitCode = 1;
 		return;
@@ -1262,7 +1262,7 @@ export async function runCli(): Promise<void> {
 			...(args.atomic || args.oracle || args.proposeCheck
 				? {
 						atomicProtocol: {
-							mode: args.atomic ?? "auto",
+							mode: args.atomic ?? "static",
 							...(args.oracle ? { oracleCommand: args.oracle } : {}),
 							...(args.oracleExpect ? { oracleExpect: args.oracleExpect } : {}),
 							...(args.maxChanges ? { maxChanges: args.maxChanges } : {}),

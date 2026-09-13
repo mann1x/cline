@@ -151,7 +151,7 @@ export interface AtomicProtocolSessionOptions {
 	 * Said to the user, not to the log: whether the protocol engaged, and why.
 	 *
 	 * A log line is the wrong place for this. Measured on the first live use:
-	 * the mode was set to auto, the workspace held one HTML file and nothing
+	 * the protocol was on, the workspace held one HTML file and nothing
 	 * that could be run, so the protocol stood down exactly as designed — and
 	 * from the chat that is indistinguishable from a feature that is broken, or
 	 * from one that is running and has had nothing to judge yet. The user's
@@ -163,7 +163,7 @@ export interface AtomicProtocolSessionOptions {
 	 * Asks the user to approve a check the model proposed.
 	 *
 	 * Its presence is what makes a workspace with nothing to run worth arming
-	 * in `auto`: the alternative there is the model judging its own work, and
+	 * at all: the alternative there is the model judging its own work, and
 	 * a host with nobody to ask -- cron, automation, a CLI with no terminal --
 	 * leaves this out and gets the old behaviour.
 	 */
@@ -301,12 +301,21 @@ export async function createAtomicProtocolSession(
 		(options.proposeCheck ?? options.config?.proposeCheck) !== false;
 	const canProposeCheck =
 		!oracle && approveCheck !== undefined && proposeCheckAllowed;
-	if (!oracle && !canProposeCheck && mode === "auto") {
+	// Turning proposals off is a choice to be judged by the model's own account
+	// of its work, not a choice to have no protocol: that is what the setting
+	// says it means, and it is one of the three arms the check comparison was
+	// measured on. So it arms, with the weakest verdict, labelled as such.
+	const selfDeclaredChosen = !proposeCheckAllowed;
+	// Which leaves one way to have nothing at all: no check to run, proposals
+	// wanted, and no one to put them to. This used to be the difference between
+	// `auto` and `always`, and it is not a user's decision -- it is the host
+	// saying it has nobody to ask.
+	if (!oracle && !canProposeCheck && !selfDeclaredChosen) {
 		// Said out loud, and to the user rather than to a log file. A feature
 		// that silently does nothing looks exactly like one that is working and
 		// has nothing to do, and there is no other line to tell them apart.
 		const message =
-			"Change protocol stood down: nothing in this workspace can be run to judge a change, and the mode is Auto. Name your own check in Settings → Features → Change Protocol, or set the mode to Always to have the model judge its own work.";
+			"Change protocol stood down: nothing in this workspace can be run to judge a change, and there is nobody here to approve one the model proposes. Name a check of your own to have it engage.";
 		options.logger?.log?.(`[Atomic] ${message}`);
 		options.onStatus?.({ armed: false, message });
 		return undefined;

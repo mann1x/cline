@@ -235,13 +235,29 @@ export interface CoreEditVerificationConfig {
 /**
  * When a task is run as a sequence of judged, revertible transactions.
  *
- * `auto` engages the protocol only where it can pay for itself — a task that
- * changes files, in a workspace something can be run in. `always` engages it on
- * every task, including the ones whose verdict can only come from the model
- * itself. Off is the default: the protocol costs a check per attempt and holds
- * a copy of the workspace in memory, which is not a bargain for a one-line edit.
+ * This says where the protocol is configured from and who decides to run it,
+ * not whether a change can be judged — that question is answered by whether
+ * there is an oracle and whether the model may propose one, and it is the same
+ * question in both modes.
+ *
+ * `static` engages on every task from the moment it starts, configured once and
+ * unaffected by anything said in the conversation. It is the mode to measure a
+ * model in, because a run must not depend on what a panel happened to be
+ * showing. `on` makes the protocol available and leaves the engaging to the
+ * user, per task, at the point they hit something worth judging — which is how
+ * a developer meets it: not at the start of the work, but partway through.
+ *
+ * Off is the default: the protocol costs a check per attempt and holds a copy
+ * of the workspace in memory, which is not a bargain for a one-line edit.
+ *
+ * Replaced `off | auto | always`. `auto` stood down where nothing could judge a
+ * change and `always` engaged anyway with the model as the check — a
+ * distinction that had stopped carrying its own weight, because `proposeCheck`
+ * already decides that same case and says so in plainer words. Both old values
+ * engaged by themselves, so both migrate to `static`; migrating them to `on`
+ * would leave the protocol switched on and never engaging.
  */
-export type CoreAtomicProtocolMode = "off" | "auto" | "always";
+export type CoreAtomicProtocolMode = "off" | "on" | "static";
 
 export interface CoreAtomicProtocolConfig {
 	mode?: CoreAtomicProtocolMode;

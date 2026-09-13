@@ -214,7 +214,7 @@ describe("the change protocol, as the host wires it", () => {
 				enableSpawnAgent: false,
 				enableAgentTeams: false,
 				atomicProtocol: {
-					mode: "auto",
+					mode: "static",
 					oracleCommand,
 					...(oracleExpect ? { oracleExpect } : {}),
 					maxTransactions: 2,
