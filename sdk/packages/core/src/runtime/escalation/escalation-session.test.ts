@@ -300,6 +300,48 @@ describe("createEscalationSession", () => {
 		expect(report?.restored).toEqual(["/work/a.js"]);
 	});
 
+	// While the expert is working the base model is blocked inside a tool call,
+	// so the turn boundary that ordinarily delivers a steering message will not
+	// come round until the escalation is over. The user's words would otherwise
+	// wait out the whole exchange they were written about.
+	it("carries a steering message into the brief", async () => {
+		const { call, asked } = build({
+			takeSteering: () => "not that file — the bug is in board.js",
+		});
+
+		await call({ goal: "fix the crash" });
+
+		expect(asked[0]).toContain("not that file — the bug is in board.js");
+		expect(asked[0]).toMatch(/user/i);
+	});
+
+	// And one that arrives while the expert is running reaches the base model on
+	// the way back, because by then the brief has already gone.
+	it("hands back steering that arrived while the expert was working", async () => {
+		let asks = 0;
+		const { call } = build({
+			// Nothing at hand-over; a message typed during the run.
+			takeSteering: () =>
+				asks++ === 0 ? undefined : "stop, I fixed it myself",
+		});
+
+		const result = await call({ goal: "fix the crash" });
+
+		expect(result).toContain("stop, I fixed it myself");
+	});
+
+	// Nothing typed is the ordinary case, and it must add nothing at all: a
+	// heading with no message under it teaches the expert that the user said
+	// something and it was lost.
+	it("says nothing about the user when nothing was typed", async () => {
+		const { call, asked } = build({ takeSteering: () => undefined });
+
+		const result = await call({ goal: "fix the crash" });
+
+		expect(asked[0]).not.toMatch(/FROM THE USER/i);
+		expect(result).not.toMatch(/FROM THE USER/i);
+	});
+
 	// The user's own veto, when the host asks for one. A refused escalation
 	// spends nothing: the budget is what the model is rationed by, and being
 	// told "no" by a person is not the model overspending.

@@ -84,6 +84,15 @@ export interface EscalationSessionOptions {
 	/** Retires what the base model had read about a file the expert changed. */
 	forgetReads?: (absolutePath: string) => void;
 	/**
+	 * Takes whatever the user has typed since it was last asked, if anything.
+	 *
+	 * The same queue the turn boundary drains, drained here because that
+	 * boundary will not come round: while the expert is working the base model
+	 * is blocked inside a tool call, so a steering message would otherwise wait
+	 * out the entire exchange it was written about.
+	 */
+	takeSteering?: () => string | undefined;
+	/**
 	 * Puts the escalation to the user before it happens.
 	 *
 	 * Only consulted where the host set `requireApproval`. A refusal spends
@@ -194,6 +203,18 @@ export function createEscalationSession(
 		return { ...reply, changed };
 	};
 
+	/**
+	 * The user's words, labelled as theirs.
+	 *
+	 * Labelled rather than merged, in both directions. To the expert, because a
+	 * correction from the person who owns the task carries a different weight
+	 * from the model's own account of it; to the base model, because a line that
+	 * arrives inside a tool result and reads as the expert's would be attributed
+	 * to the expert for the rest of the run.
+	 */
+	const fromTheUser = (message: string): string =>
+		`\n\n== FROM THE USER, JUST NOW ==\n\n${message.trim()}`;
+
 	const describeChanged = (changed: string[]): string =>
 		changed.length === 0
 			? ""
@@ -222,7 +243,10 @@ export function createEscalationSession(
 		}
 
 		if (live) {
-			const message = request.message ?? request.goal ?? "";
+			const steer = options.takeSteering?.();
+			const message =
+				(request.message ?? request.goal ?? "") +
+				(steer ? fromTheUser(steer) : "");
 			let reply = { text: "", usage: open.usage, changed: [] as string[] };
 			if (message.trim()) {
 				options.onEvent?.({ type: "expert_asked", message });
@@ -253,8 +277,12 @@ export function createEscalationSession(
 					escalationsLeft: controller.remaining,
 				};
 			}
+			const arrived = options.takeSteering?.();
 			return {
-				reply: reply.text + describeChanged(reply.changed),
+				reply:
+					reply.text +
+					describeChanged(reply.changed) +
+					(arrived ? fromTheUser(arrived) : ""),
 				opened: false,
 				followUpsLeft: Math.max(0, maxFollowUps - open.followUps),
 				escalationsLeft: controller.remaining,
@@ -301,6 +329,8 @@ export function createEscalationSession(
 			}
 		}
 
+		const steer = options.takeSteering?.();
+		const opening = steer ? brief + fromTheUser(steer) : brief;
 		const session = controller.begin();
 		options.logger?.log?.(
 			`[Escalation] Escalation ${index} of ${maxEscalations}: handing over to the expert`,
@@ -312,7 +342,7 @@ export function createEscalationSession(
 			brief,
 		});
 		const reply = await runAndObserve(async () => {
-			const answer = await session.ask(brief);
+			const answer = await session.ask(opening);
 			return { text: answer.text, usage: answer.usage };
 		});
 		options.onEvent?.({
@@ -329,8 +359,12 @@ export function createEscalationSession(
 				usage: controller.usage,
 			});
 		}
+		const arrived = options.takeSteering?.();
 		return {
-			reply: reply.text + describeChanged(reply.changed),
+			reply:
+				reply.text +
+				describeChanged(reply.changed) +
+				(arrived ? fromTheUser(arrived) : ""),
 			opened: true,
 			...(request.finished ? { closed: true } : {}),
 			followUpsLeft: maxFollowUps,

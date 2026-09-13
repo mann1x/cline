@@ -1171,6 +1171,13 @@ export class LocalRuntimeHost implements RuntimeHost {
 			// user has said anything, and its prompt arrives on the first turn.
 			readTask: () =>
 				this.sessions.get(sessionId)?.pendingPrompt ?? manifest.prompt,
+			// The user's own words, taken from the same queue the turn boundary
+			// drains. Drained here because that boundary will not come round
+			// while the expert is working: the base model is blocked inside the
+			// tool call, so a steering message written about the escalation
+			// would otherwise be delivered after it had finished.
+			takeSteering: () =>
+				this.pendingPromptsController.consumeSteer(sessionId)?.prompt,
 			// The same registry `restore_file` retires reads through. The expert
 			// moves lines the base model has read, and this host owns the
 			// receipts that the read-before-edit guard is built on.
