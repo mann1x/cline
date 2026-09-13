@@ -111,25 +111,6 @@ function steeringFor(attempt: number, toolName: string): string {
 }
 
 /**
- * What a stop says, which is not what a warning says.
- *
- * The terminal message used to end with `steeringFor(3, ...)` -- "leave this
- * alone now, take the next thing that is still wrong" -- addressed to a model
- * that has just been stopped and will not take anything. It reached the person
- * instead, under a red row offering Retry and Start New Task, as advice nobody
- * could act on: reported as "not useful, the 'leave this alone now' when it
- * ends in retry/new task and it stops".
- *
- * So the stop reports. The reader needs to know what was repeated, how many
- * times, and that the run had already said so before ending -- everything that
- * decides whether to retry as-is or steer by hand. The advice keeps its place
- * in the warnings, where there are still turns left to use it.
- */
-function stoppedNotAdvised(attempts: number): string {
-	return `The run is being stopped here. It was warned about this call ${attempts > 3 ? "three times" : "on each earlier attempt"} and the same arguments came back, so further attempts would spend turns without changing anything. Retry to run it again as it stands, or send a message saying what to do differently.`;
-}
-
-/**
  * Tools whose calls address a file by matching its text, and can therefore be
  * redirected to address it by position instead.
  *
@@ -340,7 +321,7 @@ export class LoopDetectionTracker {
 			}
 			return {
 				kind: "hard",
-				message: `This exact call to \`${call.name}\` was refused ${strike} times because the tool compared it against the file and answered it in advance. The arguments are unchanged, so the result cannot be either.\n\n${stoppedNotAdvised(strike)}`,
+				message: `This exact call to \`${call.name}\` was refused ${strike} times because the tool compared it against the file and answered it in advance. The arguments are unchanged, so the result cannot be either.`,
 			};
 		}
 
@@ -348,7 +329,7 @@ export class LoopDetectionTracker {
 		if (barren >= STRIKE_LIMIT) {
 			return {
 				kind: "hard",
-				message: `This exact call to \`${call.name}\` has already been made ${barren} times and failed every time. The arguments have not changed between attempts, so neither will the result.\n\n${stoppedNotAdvised(barren)}`,
+				message: `This exact call to \`${call.name}\` has already been made ${barren} times and failed every time. The arguments have not changed between attempts, so neither will the result.`,
 			};
 		}
 		// The same countdown for a call that keeps failing outright. The first
@@ -370,7 +351,7 @@ export class LoopDetectionTracker {
 		if (result.hardEscalation) {
 			return {
 				kind: "hard",
-				message: `Detected ${this.state.consecutiveIdenticalCount} consecutive identical calls to \`${call.name}\`. The arguments have not changed between them, so neither will the result.\n\n${stoppedNotAdvised(this.state.consecutiveIdenticalCount)}`,
+				message: `Detected ${this.state.consecutiveIdenticalCount} consecutive identical calls to \`${call.name}\`. The arguments have not changed between them, so neither will the result.`,
 			};
 		}
 		if (result.softWarning) {

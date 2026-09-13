@@ -449,9 +449,19 @@ const LOOP_HARD_ESCALATION_LIMIT = 2;
 const LOOP_FINAL_WARNING =
 	"This is the last attempt that will be allowed with these arguments — the run stops if the same call comes back. Do not send it again. Change what the call does: a different range, different text, or a different tool. If it is not clear what still needs changing, re-read the file and compare it against what you set out to fix.";
 
-/** Appended to the verdict that stops the run, so the abort names the loop. */
+/**
+ * Appended to the verdict that stops the run, so the abort names the loop.
+ *
+ * This is the only place the stop is worded. The tracker's `message` is the
+ * diagnosis and nothing else, because the *first* hard verdict is a last
+ * warning that lets the call run -- a diagnosis carrying "the run is being
+ * stopped here" was attached to that warning too, and said so while the run
+ * carried on for another twenty-two messages. Measured on pandorum session
+ * 1789276298025_l5yr9: the stop text arrived at strike 4 and the run ended at
+ * strike 5.
+ */
 const LOOP_STOP_NOTICE =
-	"The last warning was already given and the same call came back, so the run is being stopped to avoid a loop.";
+	"The last warning was already given and the same call came back, so the run is being stopped to avoid a loop. Retry to run it again as it stands, or send a message saying what to do differently.";
 
 // =============================================================================
 // Public types

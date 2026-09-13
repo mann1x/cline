@@ -330,14 +330,16 @@ describe("steering a repeated call somewhere else", () => {
 		expect(warn(tracker, 3)[2]).toContain("Leave this alone");
 	});
 
-	// The verdict that ends the run reports; it does not steer. The steering
-	// used to be repeated here, and it reached the person rather than the model
-	// -- under a red row offering Retry and Start New Task, telling them to
-	// "take the next thing that is still wrong and work on that". Reported as
-	// "not useful, the 'leave this alone now' when it ends in retry/new task and
-	// it stops". What the reader needs there is what was repeated, how often,
-	// and that it had already been said, which is what decides between retrying
-	// as-is and steering by hand.
+	// A hard verdict reports what was repeated and how often, and stops there.
+	// It does not steer -- that reached the person under a red row offering
+	// Retry and Start New Task, telling them to "take the next thing that is
+	// still wrong and work on that", reported as "not useful".
+	//
+	// Nor does it say what happens next, which is the consumer's to decide: the
+	// FIRST hard verdict is delivered as a last warning and the call still runs.
+	// This message used to end "The run is being stopped here", and on pandorum
+	// session 1789276298025_l5yr9 it said so at strike 4 while the run carried
+	// on for another twenty-two messages and ended at strike 5.
 	it("reports rather than advises in the verdict that ends it", () => {
 		const tracker = new LoopDetectionTracker();
 		tracker.inspect(edit);
@@ -353,9 +355,13 @@ describe("steering a repeated call somewhere else", () => {
 		}
 
 		expect(last).not.toContain("Leave this alone");
-		expect(last).toContain("The run is being stopped here");
-		expect(last).toContain("warned about this call");
-		expect(last).toContain("Retry");
+		expect(last).toContain("was refused");
+		expect(last).toContain("the result cannot be either");
+		// The consequence belongs to the consumer, which is the only place that
+		// knows whether this verdict is the last warning or the stop.
+		expect(last).not.toContain("The run is being stopped here");
+		expect(last).not.toContain("stopped to avoid a loop");
+		expect(last).not.toContain("Retry");
 	});
 
 	// The countdown is what makes the stop honest, and it is load-bearing on
