@@ -13,6 +13,7 @@
 				"--extensionDevelopmentPath=${workspaceFolder}/apps/vscode",
 				"--disable-workspace-trust",
 				"--disable-extension",
+				"mann1x.cerebriline", // Avoid conflicts with installed Cerebriline
 				"saoudrizwan.claude-dev", // Avoid conflicts with installed Cline
 				"--disable-extension",
 				"saoudrizwan.cline-nightly", // Avoid conflicts with installed Cline Nightly
@@ -38,6 +39,7 @@
 				"--extensionDevelopmentPath=${workspaceFolder}/apps/vscode",
 				"--disable-workspace-trust",
 				"--disable-extension",
+				"mann1x.cerebriline", // Avoid conflicts with installed Cerebriline
 				"saoudrizwan.claude-dev", // Avoid conflicts with installed Cline
 				"--disable-extension",
 				"saoudrizwan.cline-nightly", // Avoid conflicts with installed Cline Nightly
@@ -63,6 +65,7 @@
 				"--extensionDevelopmentPath=${workspaceFolder}/apps/vscode",
 				"--disable-workspace-trust",
 				"--disable-extension",
+				"mann1x.cerebriline", // Avoid conflicts with installed Cerebriline
 				"saoudrizwan.claude-dev", // Avoid conflicts with installed Cline
 				"--disable-extension",
 				"saoudrizwan.cline-nightly", // Avoid conflicts with installed Cline Nightly
@@ -90,6 +93,7 @@
 				"--profile-temp",
 				"--sync=off",
 				"--disable-extension",
+				"mann1x.cerebriline", // Avoid conflicts with installed Cerebriline
 				"saoudrizwan.claude-dev", // Avoid conflicts with installed Cline
 				"--disable-extension",
 				"saoudrizwan.cline-nightly", // Avoid conflicts with installed Cline Nightly

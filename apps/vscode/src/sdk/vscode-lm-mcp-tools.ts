@@ -2,6 +2,7 @@ import { createMcpTools } from "@cline/core"
 import type { AgentTool, AgentToolContext } from "@cline/shared"
 import type { McpServer } from "@shared/mcp"
 import * as vscode from "vscode"
+import { CONFIG_SECTION } from "@/registry"
 import { Logger } from "@/shared/services/Logger"
 
 /**
@@ -51,7 +52,7 @@ const VSCODE_MCP_ID_PREFIX = "mcp_"
 export const VSCODE_MCP_SERVER_NAME = "vscode"
 
 export function areVscodeMcpToolsEnabled(): boolean {
-	return vscode.workspace.getConfiguration("cline").get<boolean>("vscodeMcpTools") !== false
+	return vscode.workspace.getConfiguration(CONFIG_SECTION).get<boolean>("vscodeMcpTools") !== false
 }
 
 /**
@@ -60,7 +61,7 @@ export function areVscodeMcpToolsEnabled(): boolean {
  * server Cline runs itself, so `isToolAutoApproved` needs no special case.
  */
 function autoApprovedToolNames(): string[] {
-	const stored = vscode.workspace.getConfiguration("cline").get<string[]>("vscodeMcpAutoApprove")
+	const stored = vscode.workspace.getConfiguration(CONFIG_SECTION).get<string[]>("vscodeMcpAutoApprove")
 	return Array.isArray(stored) ? stored : []
 }
 
@@ -72,7 +73,7 @@ function autoApprovedToolNames(): string[] {
  * in the other with nothing to say which won.
  */
 export async function setVscodeMcpServerDisabled(disabled: boolean): Promise<void> {
-	await vscode.workspace.getConfiguration("cline").update("vscodeMcpTools", !disabled, vscode.ConfigurationTarget.Global)
+	await vscode.workspace.getConfiguration(CONFIG_SECTION).update("vscodeMcpTools", !disabled, vscode.ConfigurationTarget.Global)
 }
 
 /** The per-tool auto-approve tick boxes in the MCP panel. */
@@ -86,7 +87,7 @@ export async function setVscodeMcpToolsAutoApproved(toolNames: string[], shouldA
 		}
 	}
 	await vscode.workspace
-		.getConfiguration("cline")
+		.getConfiguration(CONFIG_SECTION)
 		.update("vscodeMcpAutoApprove", [...approved], vscode.ConfigurationTarget.Global)
 }
 

@@ -148,19 +148,62 @@ export function setClineDirIfUnset(dir: string): void {
 	CLINE_DIR = trimmed;
 }
 
+/**
+ * Pick the home-directory data root, preferring the current name but honouring
+ * an installation that predates the rename.
+ *
+ * The fork's data used to live under `~/.cline`, and the same data is now
+ * `~/.cerebriline`. `tools/Migrate-ToCerebriline.ps1` moves it across, but the
+ * build must not quietly start from empty for anyone who upgrades before
+ * running the script -- every session they have ever had is in there, and
+ * "your history is gone" is not a recoverable first impression. So: use the
+ * new name when it exists, fall back to the old one when only it does, and use
+ * the new name for a fresh install. Once the script has run, only the new name
+ * exists and the fallback never fires again.
+ *
+ * Resolved once. These are process-lifetime constants and the fallback costs a
+ * stat; callers reach for them far too often to pay it repeatedly.
+ */
+function pickExisting(currentPath: string, legacyPath: string): string {
+	if (existsSync(currentPath)) {
+		return currentPath;
+	}
+	return existsSync(legacyPath) ? legacyPath : currentPath;
+}
+
+let RESOLVED_HOME_DATA_DIR: string | undefined;
+let RESOLVED_DOCUMENTS_DIR: string | undefined;
+
 export function resolveClineDir(): string {
 	if (CLINE_DIR) {
 		return CLINE_DIR;
 	}
-	const envDir = process.env.CLINE_DIR?.trim();
+	// CLINE_DIR is still read: it is the documented override and people have it
+	// in scripts and launch configs. CEREBRILINE_DIR is the current spelling and
+	// wins where both are set.
+	const envDir =
+		process.env.CEREBRILINE_DIR?.trim() || process.env.CLINE_DIR?.trim();
 	if (envDir) {
 		return envDir;
 	}
-	return join(HOME_DIR, ".cline");
+	if (!RESOLVED_HOME_DATA_DIR) {
+		RESOLVED_HOME_DATA_DIR = pickExisting(
+			join(HOME_DIR, ".cerebriline"),
+			join(HOME_DIR, ".cline"),
+		);
+	}
+	return RESOLVED_HOME_DATA_DIR;
 }
 
 export function resolveDocumentsClineDirectoryPath(): string {
-	return join(HOME_DIR, "Documents", "Cline");
+	if (!RESOLVED_DOCUMENTS_DIR) {
+		const documents = join(HOME_DIR, "Documents");
+		RESOLVED_DOCUMENTS_DIR = pickExisting(
+			join(documents, "Cerebriline"),
+			join(documents, "Cline"),
+		);
+	}
+	return RESOLVED_DOCUMENTS_DIR;
 }
 
 type DocumentsExtensionName =
@@ -177,7 +220,9 @@ export function resolveDocumentsExtensionPath(
 }
 
 export function resolveClineDataDir(): string {
-	const explicitDir = process.env.CLINE_DATA_DIR?.trim();
+	const explicitDir =
+		process.env.CEREBRILINE_DATA_DIR?.trim() ||
+		process.env.CLINE_DATA_DIR?.trim();
 	if (explicitDir) {
 		return explicitDir;
 	}

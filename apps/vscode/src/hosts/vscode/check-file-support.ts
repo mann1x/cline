@@ -1,5 +1,6 @@
 import { exec } from "child_process"
 import * as vscode from "vscode"
+import { CONFIG_SECTION } from "@/registry"
 import type { LintCommandResult } from "@/sdk/check-file-tool"
 import { buildLintCommand } from "@/sdk/check-file-tool"
 
@@ -38,7 +39,7 @@ export async function loadDocumentForDiagnostics(filePath: string): Promise<void
  * installed — and costs nothing until someone sets it.
  */
 export function resolveLintCommand(): string | undefined {
-	const configured = vscode.workspace.getConfiguration("cline").get<string>("lintCommand")
+	const configured = vscode.workspace.getConfiguration(CONFIG_SECTION).get<string>("lintCommand")
 	const trimmed = configured?.trim()
 	return trimmed ? trimmed : undefined
 }

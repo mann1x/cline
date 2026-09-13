@@ -44,7 +44,7 @@ describe("storage home directory fallback", () => {
 		delete process.env.CLINE_DIR;
 
 		const { resolveClineDir } = await import("./paths");
-		expect(resolveClineDir()).toBe(join("C:\\Users\\saoud", ".cline"));
+		expect(resolveClineDir()).toBe(join("C:\\Users\\saoud", ".cerebriline"));
 	});
 
 	it("treats HOME=~ as unset and falls back to USERPROFILE", async () => {
@@ -56,6 +56,6 @@ describe("storage home directory fallback", () => {
 		delete process.env.CLINE_DIR;
 
 		const { resolveClineDir } = await import("./paths");
-		expect(resolveClineDir()).toBe(join("C:\\Users\\saoud", ".cline"));
+		expect(resolveClineDir()).toBe(join("C:\\Users\\saoud", ".cerebriline"));
 	});
 });

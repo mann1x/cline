@@ -82,7 +82,7 @@ Build your own AI agents and integrations powered by the same engine that runs t
 
 <!--
 ```
-npm install @Cerebriline/sdk
+npm install @cline/sdk
 ```
 -->
 
@@ -95,6 +95,53 @@ npm install @Cerebriline/sdk
 </div>
 
 ---
+
+## Install
+
+Cerebriline is not on the VS Code Marketplace. Download the `.vsix` from the
+[latest release](https://github.com/mann1x/cline/releases/latest) and install it:
+
+```
+code --install-extension cerebriline-<version>.vsix
+```
+
+Or, from VS Code: **Extensions** -> **...** -> **Install from VSIX...**
+
+Then reload the window. Cerebriline appears in the activity bar.
+
+### Upgrading from the mann1x Cline fork
+
+The fork used to be published under Cline's own extension identity
+(`saoudrizwan.claude-dev`) and kept its data in `~/.cline`. It is now
+`mann1x.cerebriline`, with its data in `~/.cerebriline`.
+
+VS Code keys an extension's storage on its publisher and name, so as far as VS
+Code is concerned this is a *different* extension: installing it leaves the old
+one in place beside it, with its own settings and its own storage.
+
+**Your conversations are not lost either way.** If Cerebriline starts and finds
+no `~/.cerebriline` but does find `~/.cline`, it keeps using the old directory.
+You can install and carry on.
+
+To tidy the layout up properly - move the data across, rename the `cline.*`
+settings keys, and remove the old extension - close VS Code and run:
+
+```powershell
+# See exactly what would move, and change nothing:
+.\tools\Migrate-ToCerebriline.ps1 -WhatIf
+
+# Do it:
+.\tools\Migrate-ToCerebriline.ps1
+```
+
+Windows PowerShell 5.1 and PowerShell 7 both work, and it needs no admin
+rights. It copies first, verifies the copy, and only then renames the original
+aside as `*.migrated-<timestamp>` - nothing is deleted, and re-running it is
+safe. Delete those folders yourself once you are happy.
+
+It does **not** touch `.cline` folders inside your own projects. That name is
+unchanged and still read: it is a convention shared with upstream Cline, so a
+repository you work on with other people keeps working for everyone.
 
 ## Index
 

@@ -1,6 +1,6 @@
 {
-	"name": "claude-dev",
-	"displayName": "Cerebriline (mann1x build)",
+	"name": "cerebriline",
+	"displayName": "Cerebriline",
 	"description": "Autonomous coding agent right in your IDE, capable of creating/editing files, running commands, using the browser, and more with your permission every step of the way.",
 	"version": "4.100.111",
 	"icon": "assets/icons/icon.png",
@@ -8,15 +8,15 @@
 		"vscode": "^1.101.0"
 	},
 	"author": {
-		"name": "Cline Bot Inc."
+		"name": "mann1x"
 	},
 	"license": "Apache-2.0",
-	"publisher": "saoudrizwan",
+	"publisher": "mann1x",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/cline/cline"
+		"url": "https://github.com/mann1x/cline"
 	},
-	"homepage": "https://cline.bot",
+	"homepage": "https://github.com/mann1x/cline",
 	"categories": [
 		"AI",
 		"Chat",
@@ -57,22 +57,22 @@
 		},
 		"walkthroughs": [
 			{
-				"id": "ClineWalkthrough",
-				"title": "Meet Cline, your new coding partner",
-				"description": "Cline codes like a developer because it thinks like one. Here are 5 ways to put it to work:",
+				"id": "CerebrilineWalkthrough",
+				"title": "Meet Cerebriline, your new coding partner",
+				"description": "Cerebriline codes like a developer because it thinks like one. Here are 5 ways to put it to work:",
 				"steps": [
 					{
 						"id": "welcome",
 						"title": "Start with a Goal, Not Just a Prompt",
-						"description": "Tell Cline what you want to achieve. It plans, asks, and then codes, like a true partner.",
+						"description": "Tell Cerebriline what you want to achieve. It plans, asks, and then codes, like a true partner.",
 						"media": {
 							"markdown": "walkthrough/step1.md"
 						}
 					},
 					{
 						"id": "learn",
-						"title": "Let Cline Learn Your Codebase",
-						"description": "Point Cline to your project. It builds understanding to make smart, context-aware changes.",
+						"title": "Let Cerebriline Learn Your Codebase",
+						"description": "Point Cerebriline to your project. It builds understanding to make smart, context-aware changes.",
 						"media": {
 							"markdown": "walkthrough/step2.md"
 						}
@@ -80,7 +80,7 @@
 					{
 						"id": "advanced-features",
 						"title": "Always Use the Best AI Models",
-						"description": "Cline empowers you with State-of-the-Art AI, connecting to top models (Anthropic, Gemini, OpenAI & more).",
+						"description": "Cerebriline empowers you with State-of-the-Art AI, connecting to top models (Anthropic, Gemini, OpenAI & more).",
 						"media": {
 							"markdown": "walkthrough/step3.md"
 						}
@@ -96,7 +96,7 @@
 					{
 						"id": "getting-started",
 						"title": "You're Always in Control",
-						"description": "Review Cline's plans and diffs. Approve changes before they happen. No surprises.",
+						"description": "Review Cerebriline's plans and diffs. Approve changes before they happen. No surprises.",
 						"media": {
 							"markdown": "walkthrough/step5.md"
 						},
@@ -110,17 +110,17 @@
 		"viewsContainers": {
 			"activitybar": [
 				{
-					"id": "claude-dev-ActivityBar",
-					"title": "Cline",
+					"id": "cerebriline-ActivityBar",
+					"title": "Cerebriline",
 					"icon": "assets/icons/icon.svg"
 				}
 			]
 		},
 		"views": {
-			"claude-dev-ActivityBar": [
+			"cerebriline-ActivityBar": [
 				{
 					"type": "webview",
-					"id": "claude-dev.SidebarProvider",
+					"id": "cerebriline.SidebarProvider",
 					"name": "",
 					"icon": "assets/icons/icon.svg"
 				}
@@ -128,111 +128,111 @@
 		},
 		"commands": [
 			{
-				"command": "cline.plusButtonClicked",
+				"command": "cerebriline.plusButtonClicked",
 				"title": "New Task",
 				"icon": "$(add)"
 			},
 			{
-				"command": "cline.mcpButtonClicked",
+				"command": "cerebriline.mcpButtonClicked",
 				"title": "MCP Servers",
 				"icon": "$(server)"
 			},
 			{
-				"command": "cline.marketplaceButtonClicked",
+				"command": "cerebriline.marketplaceButtonClicked",
 				"title": "Customize",
 				"icon": "$(wrench)"
 			},
 			{
-				"command": "cline.historyButtonClicked",
+				"command": "cerebriline.historyButtonClicked",
 				"title": "History",
 				"icon": "$(history)"
 			},
 			{
-				"command": "cline.accountButtonClicked",
+				"command": "cerebriline.accountButtonClicked",
 				"title": "Account",
 				"icon": "$(account)"
 			},
 			{
-				"command": "cline.settingsButtonClicked",
+				"command": "cerebriline.settingsButtonClicked",
 				"title": "Settings",
 				"icon": "$(settings-gear)"
 			},
 			{
-				"command": "cline.dev.createTestTasks",
+				"command": "cerebriline.dev.createTestTasks",
 				"title": "Create Test Tasks",
-				"category": "Cline",
-				"when": "cline.isDevMode"
+				"category": "Cerebriline",
+				"when": "cerebriline.isDevMode"
 			},
 			{
-				"command": "cline.dev.expireMcpOAuthTokens",
+				"command": "cerebriline.dev.expireMcpOAuthTokens",
 				"title": "Expire MCP OAuth Tokens (for testing)",
-				"category": "Cline",
-				"when": "cline.isDevMode"
+				"category": "Cerebriline",
+				"when": "cerebriline.isDevMode"
 			},
 			{
-				"command": "cline.addToChat",
-				"title": "Add to Cline",
-				"category": "Cline"
+				"command": "cerebriline.addToChat",
+				"title": "Add to Cerebriline",
+				"category": "Cerebriline"
 			},
 			{
-				"command": "cline.addTerminalOutputToChat",
-				"title": "Add to Cline",
-				"category": "Cline"
+				"command": "cerebriline.addTerminalOutputToChat",
+				"title": "Add to Cerebriline",
+				"category": "Cerebriline"
 			},
 			{
-				"command": "cline.focusChatInput",
+				"command": "cerebriline.focusChatInput",
 				"title": "Jump to Chat Input",
-				"category": "Cline"
+				"category": "Cerebriline"
 			},
 			{
-				"command": "cline.generateGitCommitMessage",
-				"title": "Generate Commit Message with Cline",
-				"category": "Cline",
+				"command": "cerebriline.generateGitCommitMessage",
+				"title": "Generate Commit Message with Cerebriline",
+				"category": "Cerebriline",
 				"icon": "$(cline-icon)"
 			},
 			{
-				"command": "cline.abortGitCommitMessage",
-				"title": "Generate Commit Message with Cline - Stop",
-				"category": "Cline",
+				"command": "cerebriline.abortGitCommitMessage",
+				"title": "Generate Commit Message with Cerebriline - Stop",
+				"category": "Cerebriline",
 				"icon": "$(debug-stop)"
 			},
 			{
-				"command": "cline.explainCode",
-				"title": "Explain with Cline",
-				"category": "Cline"
+				"command": "cerebriline.explainCode",
+				"title": "Explain with Cerebriline",
+				"category": "Cerebriline"
 			},
 			{
-				"command": "cline.improveCode",
-				"title": "Improve with Cline",
-				"category": "Cline"
+				"command": "cerebriline.improveCode",
+				"title": "Improve with Cerebriline",
+				"category": "Cerebriline"
 			},
 			{
-				"command": "cline.jupyterGenerateCell",
-				"title": "Generate Jupyter Cell with Cline",
-				"category": "Cline",
+				"command": "cerebriline.jupyterGenerateCell",
+				"title": "Generate Jupyter Cell with Cerebriline",
+				"category": "Cerebriline",
 				"icon": "$(sparkle)"
 			},
 			{
-				"command": "cline.jupyterExplainCell",
-				"title": "Explain Jupyter Cell with Cline",
-				"category": "Cline",
+				"command": "cerebriline.jupyterExplainCell",
+				"title": "Explain Jupyter Cell with Cerebriline",
+				"category": "Cerebriline",
 				"icon": "$(question)"
 			},
 			{
-				"command": "cline.jupyterImproveCell",
-				"title": "Improve Jupyter Cell with Cline",
-				"category": "Cline",
+				"command": "cerebriline.jupyterImproveCell",
+				"title": "Improve Jupyter Cell with Cerebriline",
+				"category": "Cerebriline",
 				"icon": "$(lightbulb)"
 			},
 			{
-				"command": "cline.openWalkthrough",
+				"command": "cerebriline.openWalkthrough",
 				"title": "Open Walkthrough",
-				"category": "Cline"
+				"category": "Cerebriline"
 			}
 		],
 		"keybindings": [
 			{
-				"command": "cline.addToChat",
+				"command": "cerebriline.addToChat",
 				"key": "cmd+'",
 				"mac": "cmd+'",
 				"win": "ctrl+'",
@@ -240,11 +240,11 @@
 				"when": "editorHasSelection"
 			},
 			{
-				"command": "cline.generateGitCommitMessage",
+				"command": "cerebriline.generateGitCommitMessage",
 				"when": "config.git.enabled && scmProvider == git"
 			},
 			{
-				"command": "cline.focusChatInput",
+				"command": "cerebriline.focusChatInput",
 				"key": "cmd+'",
 				"mac": "cmd+'",
 				"win": "ctrl+'",
@@ -255,90 +255,90 @@
 		"menus": {
 			"view/title": [
 				{
-					"command": "cline.plusButtonClicked",
+					"command": "cerebriline.plusButtonClicked",
 					"group": "navigation@1",
-					"when": "view == claude-dev.SidebarProvider"
+					"when": "view == cerebriline.SidebarProvider"
 				},
 				{
-					"command": "cline.marketplaceButtonClicked",
+					"command": "cerebriline.marketplaceButtonClicked",
 					"group": "navigation@2",
-					"when": "view == claude-dev.SidebarProvider"
+					"when": "view == cerebriline.SidebarProvider"
 				},
 				{
-					"command": "cline.historyButtonClicked",
+					"command": "cerebriline.historyButtonClicked",
 					"group": "navigation@3",
-					"when": "view == claude-dev.SidebarProvider"
+					"when": "view == cerebriline.SidebarProvider"
 				},
 				{
-					"command": "cline.accountButtonClicked",
+					"command": "cerebriline.accountButtonClicked",
 					"group": "navigation@5",
-					"when": "view == claude-dev.SidebarProvider"
+					"when": "view == cerebriline.SidebarProvider"
 				},
 				{
-					"command": "cline.settingsButtonClicked",
+					"command": "cerebriline.settingsButtonClicked",
 					"group": "navigation@6",
-					"when": "view == claude-dev.SidebarProvider"
+					"when": "view == cerebriline.SidebarProvider"
 				}
 			],
 			"editor/context": [
 				{
-					"command": "cline.addToChat",
+					"command": "cerebriline.addToChat",
 					"group": "navigation",
 					"when": "editorHasSelection"
 				}
 			],
 			"terminal/context": [
 				{
-					"command": "cline.addTerminalOutputToChat",
+					"command": "cerebriline.addTerminalOutputToChat",
 					"group": "navigation"
 				}
 			],
 			"scm/title": [
 				{
-					"command": "cline.generateGitCommitMessage",
+					"command": "cerebriline.generateGitCommitMessage",
 					"group": "navigation",
-					"when": "config.git.enabled && scmProvider == git && !cline.isGeneratingCommit"
+					"when": "config.git.enabled && scmProvider == git && !cerebriline.isGeneratingCommit"
 				},
 				{
-					"command": "cline.abortGitCommitMessage",
+					"command": "cerebriline.abortGitCommitMessage",
 					"group": "navigation",
-					"when": "config.git.enabled && scmProvider == git && cline.isGeneratingCommit"
+					"when": "config.git.enabled && scmProvider == git && cerebriline.isGeneratingCommit"
 				}
 			],
 			"notebook/toolbar": [
 				{
-					"command": "cline.jupyterGenerateCell",
+					"command": "cerebriline.jupyterGenerateCell",
 					"group": "navigation/add@1",
 					"when": "notebookType == 'jupyter-notebook'"
 				}
 			],
 			"notebook/cell/title": [
 				{
-					"command": "cline.jupyterExplainCell",
+					"command": "cerebriline.jupyterExplainCell",
 					"group": "inline@1",
 					"when": "notebookType == 'jupyter-notebook'"
 				},
 				{
-					"command": "cline.jupyterImproveCell",
+					"command": "cerebriline.jupyterImproveCell",
 					"group": "inline@2",
 					"when": "notebookType == 'jupyter-notebook'"
 				}
 			],
 			"commandPalette": [
 				{
-					"command": "cline.generateGitCommitMessage",
-					"when": "config.git.enabled && !cline.isGeneratingCommit"
+					"command": "cerebriline.generateGitCommitMessage",
+					"when": "config.git.enabled && !cerebriline.isGeneratingCommit"
 				},
 				{
-					"command": "cline.abortGitCommitMessage",
-					"when": "config.git.enabled && cline.isGeneratingCommit"
+					"command": "cerebriline.abortGitCommitMessage",
+					"when": "config.git.enabled && cerebriline.isGeneratingCommit"
 				}
 			]
 		},
 		"configuration": {
-			"title": "Cline",
+			"title": "Cerebriline",
 			"properties": {
-				"cline.lintCommand": {
+				"cerebriline.lintCommand": {
 					"type": "string",
 					"default": "",
 					"markdownDescription": "Command the `check_file` tool falls back to when the editor's language servers report nothing for a file. Use `${file}` for the file path; if omitted, the path is appended. Leave empty to rely on the editor alone, which is correct for any language with a working language server.",
@@ -348,23 +348,23 @@
 						"npx eslint --format unix ${file}"
 					]
 				},
-				"cline.browserTool": {
+				"cerebriline.browserTool": {
 					"type": "boolean",
 					"default": true,
 					"markdownDescription": "Offer the `browser` tool, which opens a page in a real browser and reports its console output and uncaught errors. Turn this off to remove it from the model's tools; Chrome is only launched if the model actually calls it."
 				},
-				"cline.vscodeMcpTools": {
+				"cerebriline.vscodeMcpTools": {
 					"type": "boolean",
 					"default": true,
-					"markdownDescription": "Offer the tools of the MCP servers configured in **VS Code**, alongside the ones configured in Cline. VS Code has already started and authenticated those servers, so this reaches ones Cline cannot connect to on its own \u2014 a server that refuses dynamic client registration has no way to issue Cline a client id, and VS Code already holds a token for it. Their names are prefixed `vscode__`. Turn this off to offer only the servers in Cline's own MCP settings."
+					"markdownDescription": "Offer the tools of the MCP servers configured in **VS Code**, alongside the ones configured in Cerebriline. VS Code has already started and authenticated those servers, so this reaches ones Cerebriline cannot connect to on its own \u2014 a server that refuses dynamic client registration has no way to issue Cerebriline a client id, and VS Code already holds a token for it. Their names are prefixed `vscode__`. Turn this off to offer only the servers in Cerebriline's own MCP settings."
 				},
-				"cline.vscodeMcpAutoApprove": {
+				"cerebriline.vscodeMcpAutoApprove": {
 					"type": "array",
 					"items": {
 						"type": "string"
 					},
 					"default": [],
-					"markdownDescription": "Tools borrowed from VS Code's MCP servers that run without asking, by the name Cline shows them under minus the `vscode__` prefix. Set from the tick boxes in Manage MCP Servers; the servers' own approval settings live in VS Code, where Cline cannot read them, so this is Cline's own list."
+					"markdownDescription": "Tools borrowed from VS Code's MCP servers that run without asking, by the name Cerebriline shows them under minus the `vscode__` prefix. Set from the tick boxes in Manage MCP Servers; the servers' own approval settings live in VS Code, where Cerebriline cannot read them, so this is Cerebriline's own list."
 				}
 			}
 		}

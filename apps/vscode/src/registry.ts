@@ -1,13 +1,28 @@
 import { name, publisher, version } from "../package.json"
 import { HostProvider } from "./hosts/host-provider"
 
-const prefix = name === "claude-dev" ? "cline" : name
+/**
+ * The namespace every contribution of this extension lives under: command IDs,
+ * context keys, the settings section, and the sidebar view ID.
+ *
+ * It is derived from the manifest `name` rather than written out, so the
+ * manifest is the single place the identity is decided. Anything that spells
+ * the namespace out a second time -- a `setContext` call, a
+ * `getConfiguration()` section -- silently stops matching package.json the
+ * moment the name changes, and VS Code reports nothing: the command is simply
+ * never found and the menu item never appears. Import this instead.
+ */
+export const ID_PREFIX = name
+
+/** The settings section, i.e. what `getConfiguration()` is called with. */
+export const CONFIG_SECTION = ID_PREFIX
+
+const prefix = ID_PREFIX
 
 /**
  * List of commands with the name of the extension they are registered under.
- * These should match the command IDs defined in package.json.
- * For Nightly build, the publish script has updated all the commands to use the extension name as prefix.
- * In production, all commands are registered under "cline" for consistency.
+ * These should match the command IDs defined in package.json, which they do by
+ * construction: both sides are the manifest `name` plus the suffix.
  */
 const ClineCommands = {
 	PlusButton: prefix + ".plusButtonClicked",
@@ -37,7 +52,19 @@ const ClineCommands = {
  * These should match the name + view IDs defined in package.json.
  */
 const ClineViewIds = {
-	Sidebar: name + ".SidebarProvider",
+	Sidebar: prefix + ".SidebarProvider",
+}
+
+/** The `contributes.walkthroughs[].id` this extension declares. */
+const WALKTHROUGH_ID = "CerebrilineWalkthrough"
+
+/**
+ * `when`-clause context keys set with `setContext`. Must match the `when`
+ * expressions in package.json.
+ */
+const ClineContextKeys = {
+	DevMode: prefix + ".isDevMode",
+	GeneratingCommit: prefix + ".isGeneratingCommit",
 }
 
 /**
@@ -51,6 +78,10 @@ export const ExtensionRegistryInfo = {
 	publisher,
 	commands: ClineCommands,
 	views: ClineViewIds,
+	contextKeys: ClineContextKeys,
+	/** What `workbench.action.openWalkthrough` takes: `<publisher>.<name>#<id>`. */
+	walkthrough: publisher + "." + name + "#" + WALKTHROUGH_ID,
+	configSection: CONFIG_SECTION,
 }
 
 export interface HostInfo {

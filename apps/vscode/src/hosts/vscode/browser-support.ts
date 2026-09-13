@@ -1,6 +1,7 @@
 import type { BrowserDriver } from "@cline/core"
 import * as vscode from "vscode"
 import { StateManager } from "@/core/storage/StateManager"
+import { CONFIG_SECTION } from "@/registry"
 import { BrowserSession } from "@/services/browser/BrowserSession"
 
 /**
@@ -42,5 +43,5 @@ export function createVscodeBrowserDriver(): BrowserDriver {
  * `cline.lintCommand`, which `check_file` already reads the same way.
  */
 export function isBrowserToolEnabled(): boolean {
-	return vscode.workspace.getConfiguration("cline").get<boolean>("browserTool") !== false
+	return vscode.workspace.getConfiguration(CONFIG_SECTION).get<boolean>("browserTool") !== false
 }

@@ -5,6 +5,7 @@ import * as fs from "fs/promises"
 import * as path from "path"
 import * as vscode from "vscode"
 import { HostProvider } from "@/hosts/host-provider"
+import { ID_PREFIX } from "@/registry"
 import { ShowMessageType } from "@/shared/proto/host/window"
 import { Logger } from "@/shared/services/Logger"
 
@@ -14,7 +15,7 @@ import { Logger } from "@/shared/services/Logger"
  */
 export function registerTaskCommands(controller: Controller): vscode.Disposable[] {
 	return [
-		vscode.commands.registerCommand("cline.dev.expireMcpOAuthTokens", async () => {
+		vscode.commands.registerCommand(`${ID_PREFIX}.dev.expireMcpOAuthTokens`, async () => {
 			try {
 				// OAuth tokens live in the shared MCP settings file (per-server
 				// `oauth.tokens`). Invalidate each access_token so the next request
@@ -53,7 +54,7 @@ export function registerTaskCommands(controller: Controller): vscode.Disposable[
 				Logger.error("[Dev] Error expiring MCP OAuth tokens:", error)
 			}
 		}),
-		vscode.commands.registerCommand("cline.dev.createTestTasks", async () => {
+		vscode.commands.registerCommand(`${ID_PREFIX}.dev.createTestTasks`, async () => {
 			const count = (
 				await HostProvider.window.showInputBox({
 					title: "Test Tasks",

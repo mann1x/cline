@@ -4,6 +4,11 @@ import { fetch } from "@/shared/net"
 import { posthogConfig } from "@/shared/services/config/posthog-config"
 import { Logger } from "@/shared/services/Logger"
 
+import { name as EXTENSION_NAME, publisher as EXTENSION_PUBLISHER } from "../../../../../package.json"
+
+/** Lower-case fragments that identify a stack frame as ours. */
+const OWN_FILE_MARKERS = [EXTENSION_PUBLISHER.toLowerCase(), EXTENSION_NAME.toLowerCase(), "cline"]
+
 export class PostHogClientProvider {
 	private static _instance: PostHogClientProvider | null = null
 
@@ -59,8 +64,8 @@ export class PostHogClientProvider {
 		// Check if any exception is from Cline
 		for (let i = 0; i < exceptionList.length; i++) {
 			const stacktrace = exceptionList[i].stacktrace
-			// Fast check: error message contains "cline"
-			if (stacktrace?.value?.toLowerCase().includes("cline")) {
+			// Fast check: the error message names us
+			if (OWN_FILE_MARKERS.some((marker) => stacktrace?.value?.toLowerCase().includes(marker))) {
 				return event
 			}
 
@@ -68,9 +73,12 @@ export class PostHogClientProvider {
 			if (frames?.length) {
 				for (let j = 0; j < frames.length; j++) {
 					const fileName = frames[j]?.filename
-					// The extension filename will include "saoudrizwan"
-					// The CLI filename will include "cline"
-					if (fileName?.includes("saoudrizwan") || fileName?.includes("cline")) {
+					// The extension's files sit under `<publisher>.<name>-<version>`,
+					// and the CLI's under "cline". Both halves of the extension id
+					// are matched because neither is a substring of the other, and
+					// hard-coding either one is how this check quietly stopped
+					// recognising its own errors when the extension was renamed.
+					if (OWN_FILE_MARKERS.some((marker) => fileName?.includes(marker))) {
 						return event
 					}
 				}

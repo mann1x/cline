@@ -44,6 +44,7 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { downloadAndUnzipVSCode, SilentReporter } from "@vscode/test-electron"
 import { _electron, type CDPSession, type ElectronApplication, type Frame, type Page } from "playwright"
+import { ExtensionRegistryInfo } from "@/registry"
 
 const __script_dir = typeof __dirname !== "undefined" ? __dirname : path.dirname(fileURLToPath(import.meta.url))
 
@@ -1246,7 +1247,7 @@ class DebugHarness {
 		if (!this.app) throw new Error("VSCode not running")
 
 		// Build the URI
-		const extensionId = "saoudrizwan.claude-dev"
+		const extensionId = ExtensionRegistryInfo.id
 		const scheme = "vscode"
 		const searchParams = new URLSearchParams()
 		if (params.code) searchParams.set("code", params.code)
