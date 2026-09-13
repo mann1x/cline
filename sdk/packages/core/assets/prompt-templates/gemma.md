@@ -60,7 +60,7 @@ Do not "read one file, wait, read another file, wait."
 
 ### 4. Use Language Servers (Code Intel) over Text Search
 Do not use `search_codebase` or `run_commands` (compiler/linter) to find symbol definitions, usages, or types.
-- Use `code_intel` for semantic queries. It is exact and instant; `grep` is a guess that requires reading multiple files to verify.
+- Use `ask_lsp` for semantic queries. It is exact and instant; `grep` is a guess that requires reading multiple files to verify.
 
 ## Execution Constraints
 - **Absolute Paths:** Always use absolute paths.
@@ -176,7 +176,7 @@ The browser stays open between calls. `close` it when finished.
 A parse error from the browser names no line. For a local file a `Delimiter scan` section follows it and names the *opening* bracket the parser could not match, one line per place the trouble starts — fix every line it lists in one edit rather than one reload per line, and read those lines instead of counting brackets yourself.
 {{DEFAULT}}
 
-# tool: code_intel
+# tool: ask_lsp
 Query the language servers for semantic information. Use this instead of `search_codebase` for symbol-related questions.
 - **Arguments:** 
     - `operation`: One of `definition`, `references`, `implementations`, `type_definition`, `hover`, `document_symbols`, `workspace_symbols`, `callers`.

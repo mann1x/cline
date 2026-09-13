@@ -764,7 +764,7 @@ produce a parseable file) are to re-run with the model that wrote it, or to
 hand-edit it and make it pass `audit-prompt-template.mts`. "It was clean before"
 is not a state that survives a rule change.
 
-This is the same lesson as `8323c3f65`, which fixed `code_intel` by adding
+This is the same lesson as `8323c3f65`, which fixed `ask_lsp` by adding
 `REQUIRED_USE_CASES` rather than by asking more clearly.
 
 #### …and a gate must accept every correct phrasing
@@ -802,7 +802,7 @@ false positive blocks a correct answer.
 * `f07eea894` — the templating system itself. Ours, not upstream.
 * `f9dc49b50` — *"ship a template per model family, written by that model"*.
   Where the `## Critical Rules` structure entered.
-* `8323c3f65` — `code_intel` required-use-cases audit rule; all six regenerated
+* `8323c3f65` — `ask_lsp` required-use-cases audit rule; all six regenerated
   under it. The **worked example of the §4 recommendation**: add a rule to the
   instructions, regenerate everything, re-audit.
 * **2026-09-12, the batch-edits rule.** Found in `qwen.md` and blamed on it;

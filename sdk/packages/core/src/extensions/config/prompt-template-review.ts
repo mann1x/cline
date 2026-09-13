@@ -49,7 +49,7 @@ export const DEFAULT_REQUIRED_REWRITES = [
 	"run_commands",
 	"fetch_web_content",
 	"check_file",
-	"code_intel",
+	"ask_lsp",
 	// The three POSIX tools. They are here for the same reason as the rest, but
 	// the specific hazard is that each has a default a reader will assume the
 	// other way round: `grep` reads BASIC regular expressions, so `a+` is two
@@ -97,8 +97,8 @@ Hard constraints:
 - Keep the file structure: YAML frontmatter between --- markers, then '# system', then one '# tool: <name>' section for EVERY tool listed below. Not only the ones you want to change — every one of them.
 - Covering every tool is a hard requirement. A tool with no section keeps its built-in description, and that fallback exists for exactly one situation: Cline gains a new tool and the templates have not been regenerated yet. It is not a way to skip tools you have nothing to say about. A template that covers six of thirty-one tools is not using the fallback, it is relying on it, and nothing in the file shows which twenty-five were left out.
 - '{{DEFAULT}}' expands to the tool's built-in description at runtime, and it is how you cover a tool cheaply. Where you would improve on the built-in wording, write your own and put '{{DEFAULT}}' on its own line where the built-in text should follow. Where you would not, the entire section body may be just '{{DEFAULT}}'. Either is a covered tool; an absent section is not.
-- These eight tools must be written in your own words, and a section containing only '{{DEFAULT}}' is not acceptable for any of them: read_files, search_codebase, editor, apply_patch, run_commands, fetch_web_content, check_file, code_intel. They are the tools models in your family are observed to misuse, so they are the whole reason this template exists. For these eight, your own text — not the inherited text — has to carry the three things listed below: every value of any closed set, every argument and when to use it, and what comes back. Adding '{{DEFAULT}}' after your text is allowed and does not excuse you from any of that.
-- For 'code_intel', say when to reach for it, not only what it does. List at least three concrete situations as the reader actually meets them — "about to search for a name to find where it is defined", "about to open a file just to read a signature", "about to scroll or count brackets to work out a file's structure" — each pointing at the operation that answers it, and name 'search_codebase' as the thing those situations would otherwise go to. This is not padding: measured across a whole session against a real bug, a template that described all eight operations correctly and said only "prefer this over search_codebase for anything about a symbol" produced zero calls to the tool, while the model hand-rolled the same answers in the shell twenty times. It could not recognise the moment.
+- These eight tools must be written in your own words, and a section containing only '{{DEFAULT}}' is not acceptable for any of them: read_files, search_codebase, editor, apply_patch, run_commands, fetch_web_content, check_file, ask_lsp. They are the tools models in your family are observed to misuse, so they are the whole reason this template exists. For these eight, your own text — not the inherited text — has to carry the three things listed below: every value of any closed set, every argument and when to use it, and what comes back. Adding '{{DEFAULT}}' after your text is allowed and does not excuse you from any of that.
+- For 'ask_lsp', say when to reach for it, not only what it does. List at least three concrete situations as the reader actually meets them — "about to search for a name to find where it is defined", "about to open a file just to read a signature", "about to scroll or count brackets to work out a file's structure" — each pointing at the operation that answers it, and name 'search_codebase' as the thing those situations would otherwise go to. This is not padding: measured across a whole session against a real bug, a template that described all eight operations correctly and said only "prefer this over search_codebase for anything about a symbol" produced zero calls to the tool, while the model hand-rolled the same answers in the shell twenty times. It could not recognise the moment.
 - Do not copy a built-in description out word for word. That is a snapshot: it says the same thing today and stops tracking the built-in text tomorrow, so the next edit to it reaches every model except you. If you would not change the wording, write '{{DEFAULT}}' — that is what it is for.
 - Where you rule a use of a tool out, name the tool that replaces it. 'run_commands' in particular must name 'read_files', 'editor' and 'search_codebase' in your own text: "do not use this for file operations when dedicated tools exist" is a rule the reader has to already know the answer to in order to follow, which is the same as not writing it.
 - Two of those eight — 'run_commands' and 'skills' — must keep '{{DEFAULT}}' in the section as well. Their built-in descriptions are not fixed text: 'run_commands' is composed against the shell that will actually run the commands, so PowerShell, cmd and a POSIX shell get different quoting and sequencing advice, and 'skills' appends the skills installed on that machine. Replace either outright and you freeze one machine's answer into every machine's prompt, silently. Write your own text and put '{{DEFAULT}}' on its own line where the built-in text should follow.
@@ -351,7 +351,7 @@ export interface ToolCallSignature {
 	/**
 	 * Every value of every enum in the schema, flattened.
 	 *
-	 * These are the closed sets a model cannot guess: `code_intel` accepts
+	 * These are the closed sets a model cannot guess: `ask_lsp` accepts
 	 * exactly eight operations and a description that names four of them has
 	 * hidden half the tool. Collected here so the audit can require them
 	 * without a hand-maintained list that would drift the first time an
@@ -506,7 +506,7 @@ const REQUIRED_REDIRECTS: Readonly<Record<string, readonly string[]>> = {
  * Tools whose section has to say *when* to reach for them, not only what they
  * do and how to call them.
  *
- * `code_intel` is the case that proved it. Every template described its eight
+ * `ask_lsp` is the case that proved it. Every template described its eight
  * operations correctly and told the model to prefer it over `search_codebase`
  * "for anything about a symbol" — and across a 279-message session against a
  * real bug it was called exactly zero times, while the model spent twenty
@@ -522,7 +522,7 @@ const REQUIRED_REDIRECTS: Readonly<Record<string, readonly string[]>> = {
 const REQUIRED_USE_CASES: Readonly<
 	Record<string, { minimum: number; namesInstead?: string }>
 > = {
-	code_intel: { minimum: 3, namesInstead: "search_codebase" },
+	ask_lsp: { minimum: 3, namesInstead: "search_codebase" },
 };
 
 /** Ways a use case gets phrased. Deliberately broad; the count is the test. */
@@ -541,7 +541,7 @@ function normalizeForComparison(text: string): string {
  * and needs nothing from this: the model is adding emphasis on top of a
  * complete text. A section that drops the marker has replaced that text, and
  * replacing it is where information goes missing — measured across five models
- * rewriting `code_intel`, the replacements ranged from complete to two lines
+ * rewriting `ask_lsp`, the replacements ranged from complete to two lines
  * naming none of the eight operations, none of the three ways to address a
  * symbol, and no output at all. Both parsed. Both resolved. Both applied.
  *
@@ -566,7 +566,7 @@ export function auditToolSectionContent(
 	 * about, and for most of the thirty-one that is the honest answer. It is
 	 * not the honest answer for the handful the model actually gets wrong: a
 	 * 31B model handed the option produced twenty-four bare markers and two
-	 * lines of its own on `code_intel`, which is not a template that reads
+	 * lines of its own on `ask_lsp`, which is not a template that reads
 	 * differently from the default — it is the default with a preamble.
 	 */
 	requiredRewrites: readonly string[] = [],
@@ -1024,7 +1024,7 @@ function auditSystemSection(
 		);
 	}
 
-	// Positive requirements. Same pattern as REQUIRED_USE_CASES for `code_intel`,
+	// Positive requirements. Same pattern as REQUIRED_USE_CASES for `ask_lsp`,
 	// and for the same measured reason.
 	for (const rule of requireGuidance ? REQUIRED_SYSTEM_GUIDANCE : []) {
 		if (!rule.present.test(system)) {

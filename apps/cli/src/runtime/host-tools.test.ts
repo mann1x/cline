@@ -9,7 +9,7 @@ import { createCliHostTools } from "./host-tools";
  * The two tools this host brings itself.
  *
  * The extension has had both since they were written; the CLI offered 28 tools
- * to its 30, and the prompt template told the model to use `code_intel` for a
+ * to its 30, and the prompt template told the model to use `ask_lsp` for a
  * symbol query on a host where it did not exist. These cases guard the wiring —
  * that both are built, named the same, and that neither starts anything until
  * it is called.
@@ -28,7 +28,7 @@ afterEach(() => {
 describe("createCliHostTools", () => {
 	it("offers the two tools the extension has and this host did not", () => {
 		const names = createCliHostTools({ cwd: "/repo" }).map((tool) => tool.name);
-		expect(names).toEqual(["browser", "code_intel"]);
+		expect(names).toEqual(["browser", "ask_lsp"]);
 	});
 
 	// Building the tools must not launch Chrome or spawn a language server:

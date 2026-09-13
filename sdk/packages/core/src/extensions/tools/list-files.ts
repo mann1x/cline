@@ -13,7 +13,7 @@ function comparablePath(filePath: string): string {
  * A tool that answers "what is here?".
  *
  * There was no such tool. The model had `read_files`, `search_codebase`,
- * `editor`, `code_intel`, `check_file` and `browser` — everything for working
+ * `editor`, `ask_lsp`, `check_file` and `browser` — everything for working
  * on a file it could already name, and nothing for finding out what files
  * exist. So it shelled out. Measured on a live session, the only two shell
  * commands in the whole run were:

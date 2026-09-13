@@ -1042,6 +1042,20 @@ export {
 	ToolPresets,
 	truncateCommandOutput,
 } from "./extensions/tools";
+export {
+	ASK_LSP_OPERATIONS,
+	ASK_LSP_TOOL_DESCRIPTION,
+	ASK_LSP_TOOL_INPUT_SCHEMA,
+	ASK_LSP_TOOL_NAME,
+	type AskLspOperation,
+	type AskLspToolOptions,
+	type CodeIntelLocation,
+	type CodeIntelProvider,
+	type CodeIntelSymbol,
+	createAskLspTool,
+	type ParsedAskLspRequest,
+	parseAskLspRequest,
+} from "./extensions/tools/ask-lsp";
 // The browser and the language-server tools. Both were the extension's alone,
 // and that was the difference between the two hosts: the CLI could not check
 // that a page runs, and could not ask what a symbol means. Each takes its host
@@ -1076,20 +1090,6 @@ export {
 	LINT_COMMAND_FILE_PLACEHOLDER,
 	type LintCommandResult,
 } from "./extensions/tools/check-file";
-export {
-	CODE_INTEL_OPERATIONS,
-	CODE_INTEL_TOOL_DESCRIPTION,
-	CODE_INTEL_TOOL_INPUT_SCHEMA,
-	CODE_INTEL_TOOL_NAME,
-	type CodeIntelLocation,
-	type CodeIntelOperation,
-	type CodeIntelProvider,
-	type CodeIntelSymbol,
-	type CodeIntelToolOptions,
-	createCodeIntelTool,
-	type ParsedCodeIntelRequest,
-	parseCodeIntelRequest,
-} from "./extensions/tools/code-intel";
 // The bracket scanner is host-independent and two hosts want it: the checker
 // above, and VS Code's own `check_file`, which pairs it with the language
 // servers this one has no access to.

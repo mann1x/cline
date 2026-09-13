@@ -701,9 +701,9 @@ describe("auditExampleCalls", () => {
  * whole tool.
  */
 describe("auditToolSectionContent", () => {
-	const CODE_INTEL = summarizeToolCallSignatures([
+	const ASK_LSP_SIGNATURES = summarizeToolCallSignatures([
 		{
-			name: "code_intel",
+			name: "ask_lsp",
 			inputSchema: {
 				type: "object",
 				properties: {
@@ -725,7 +725,7 @@ describe("auditToolSectionContent", () => {
 		"Use this instead of search_codebase when you are about to grep for a name, when you are about to open a file just to read a signature, or when you need to know what would break.";
 
 	const BUILTIN = {
-		code_intel: [
+		ask_lsp: [
 			"Ask the language server about a symbol.",
 			"Operations: definition, references, hover.",
 			"Address by path plus symbol.",
@@ -743,7 +743,7 @@ describe("auditToolSectionContent", () => {
 		].join("\n");
 
 		expect(
-			auditToolSectionContent({ code_intel: body }, CODE_INTEL, BUILTIN),
+			auditToolSectionContent({ ask_lsp: body }, ASK_LSP_SIGNATURES, BUILTIN),
 		).toEqual([]);
 	});
 
@@ -756,8 +756,8 @@ describe("auditToolSectionContent", () => {
 		].join("\n");
 
 		const [problem] = auditToolSectionContent(
-			{ code_intel: body },
-			CODE_INTEL,
+			{ ask_lsp: body },
+			ASK_LSP_SIGNATURES,
 			BUILTIN,
 		);
 		expect(problem).toContain("references");
@@ -772,9 +772,11 @@ describe("auditToolSectionContent", () => {
 		].join("\n");
 
 		expect(
-			auditToolSectionContent({ code_intel: body }, CODE_INTEL, BUILTIN).some(
-				(problem) => problem.includes("drops the argument(s) it named"),
-			),
+			auditToolSectionContent(
+				{ ask_lsp: body },
+				ASK_LSP_SIGNATURES,
+				BUILTIN,
+			).some((problem) => problem.includes("drops the argument(s) it named")),
 		).toBe(true);
 	});
 
@@ -785,9 +787,12 @@ describe("auditToolSectionContent", () => {
 		].join("\n");
 
 		expect(
-			auditToolSectionContent({ code_intel: body }, CODE_INTEL, BUILTIN).some(
-				(problem) =>
-					problem.includes("drops what it said about the tool's output"),
+			auditToolSectionContent(
+				{ ask_lsp: body },
+				ASK_LSP_SIGNATURES,
+				BUILTIN,
+			).some((problem) =>
+				problem.includes("drops what it said about the tool's output"),
 			),
 		).toBe(true);
 	});
@@ -798,7 +803,7 @@ describe("auditToolSectionContent", () => {
 		const body = "Use this instead of grep for symbols.\n{{DEFAULT}}";
 
 		expect(
-			auditToolSectionContent({ code_intel: body }, CODE_INTEL, BUILTIN),
+			auditToolSectionContent({ ask_lsp: body }, ASK_LSP_SIGNATURES, BUILTIN),
 		).toEqual([]);
 	});
 
@@ -901,7 +906,7 @@ describe("auditExampleCalls and counter-examples", () => {
 describe("required rewrites", () => {
 	const SIGNATURES = summarizeToolCallSignatures([
 		{
-			name: "code_intel",
+			name: "ask_lsp",
 			inputSchema: {
 				type: "object",
 				properties: {
@@ -913,7 +918,7 @@ describe("required rewrites", () => {
 		},
 	]);
 	const BUILTIN = {
-		code_intel:
+		ask_lsp:
 			"Operations: definition, references. Address by path. Output: file:line:column lines.",
 	};
 
@@ -922,10 +927,10 @@ describe("required rewrites", () => {
 		// times out of thirty-one. For the tools it actually misuses, the cheap
 		// option produces the default with a preamble.
 		const [problem] = auditToolSectionContent(
-			{ code_intel: "{{DEFAULT}}" },
+			{ ask_lsp: "{{DEFAULT}}" },
 			SIGNATURES,
 			BUILTIN,
-			["code_intel"],
+			["ask_lsp"],
 		);
 
 		expect(problem).toContain("is nothing but '{{DEFAULT}}'");
@@ -936,10 +941,10 @@ describe("required rewrites", () => {
 		// contract arrives from the built-in text, so the model was never made
 		// to think about it.
 		const problems = auditToolSectionContent(
-			{ code_intel: "Use this instead of grep for symbols.\n{{DEFAULT}}" },
+			{ ask_lsp: "Use this instead of grep for symbols.\n{{DEFAULT}}" },
 			SIGNATURES,
 			BUILTIN,
-			["code_intel"],
+			["ask_lsp"],
 		);
 
 		expect(problems.length).toBeGreaterThan(0);
@@ -959,8 +964,8 @@ describe("required rewrites", () => {
 		].join("\n");
 
 		expect(
-			auditToolSectionContent({ code_intel: body }, SIGNATURES, BUILTIN, [
-				"code_intel",
+			auditToolSectionContent({ ask_lsp: body }, SIGNATURES, BUILTIN, [
+				"ask_lsp",
 			]),
 		).toEqual([]);
 	});
@@ -979,10 +984,10 @@ describe("required rewrites", () => {
 		].join("\n");
 
 		const problems = auditToolSectionContent(
-			{ code_intel: body },
+			{ ask_lsp: body },
 			SIGNATURES,
 			BUILTIN,
-			["code_intel"],
+			["ask_lsp"],
 		);
 
 		expect(problems.some((p) => p.includes("when to reach for it"))).toBe(true);
@@ -992,7 +997,7 @@ describe("required rewrites", () => {
 	it("still lets an unlisted tool inherit everything", () => {
 		expect(
 			auditToolSectionContent(
-				{ code_intel: "{{DEFAULT}}" },
+				{ ask_lsp: "{{DEFAULT}}" },
 				SIGNATURES,
 				BUILTIN,
 				[],

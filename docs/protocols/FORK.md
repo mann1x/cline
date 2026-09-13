@@ -64,7 +64,7 @@ Grouped by the failure each one answers. This is the part worth knowing before
 changing anything — most of these exist because a measurement said so.
 
 **Tools the model was hand-rolling in the shell.** `check_file` (a linter, so a
-one-file question does not trigger a project build), `code_intel` (LSP
+one-file question does not trigger a project build), `ask_lsp` (LSP
 operations, so "where is this defined" is not a `grep` plus four file reads),
 `list_files`, `browser`, a delimiter scan that names the unbalanced line.
 

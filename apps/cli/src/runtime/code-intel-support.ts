@@ -14,7 +14,7 @@ import {
 } from "./lsp-client";
 
 /**
- * The CLI half of `code_intel`.
+ * The CLI half of `ask_lsp`.
  *
  * In the extension this is a thin wrapper over VS Code, which already runs a
  * language server for every language in the workspace. A terminal runs none, so
@@ -129,7 +129,7 @@ export function languageIdFor(filePath: string): string | undefined {
  *
  * A PATH walk rather than `which`: spawning a shell to ask about six servers on
  * every session start costs more than reading six directories, and this runs
- * before the first `code_intel` question is answered.
+ * before the first `ask_lsp` question is answered.
  */
 function commandExists(command: string): boolean {
 	// A command with a path in it is already an answer, and walking PATH for it
@@ -354,7 +354,7 @@ export function createCliCodeIntelProvider(
 			);
 			return await connection.request(method, params);
 		} catch (error) {
-			options.onError?.(`[code_intel] ${method} failed`, error);
+			options.onError?.(`[ask_lsp] ${method} failed`, error);
 			return undefined;
 		}
 	}
@@ -453,7 +453,7 @@ export function createCliCodeIntelProvider(
 						),
 					);
 				} catch (error) {
-					options.onError?.("[code_intel] workspace/symbol failed", error);
+					options.onError?.("[ask_lsp] workspace/symbol failed", error);
 				}
 			}
 			return results;
@@ -482,7 +482,7 @@ export function createCliCodeIntelProvider(
 				}
 				return toSymbols(incoming.map((entry) => entry.from));
 			} catch (error) {
-				options.onError?.("[code_intel] incomingCalls failed", error);
+				options.onError?.("[ask_lsp] incomingCalls failed", error);
 				return [];
 			}
 		},

@@ -30,7 +30,7 @@ import { buildApiHandler } from "./sdk-api-handler"
  */
 
 /** The tool prompts a generated template is required to address. */
-const REQUIRED_MENTIONS = ["check_file", "code_intel"]
+const REQUIRED_MENTIONS = ["check_file", "ask_lsp"]
 
 /** Tries, including the first. Each retry hands the model its own problems. */
 const ATTEMPTS = 3

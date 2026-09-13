@@ -3,9 +3,9 @@ import {
 	type CodeIntelLocation,
 	type CodeIntelProvider,
 	type CodeIntelSymbol,
-	createCodeIntelTool,
-	parseCodeIntelRequest,
-} from "./code-intel";
+	createAskLspTool,
+	parseAskLspRequest,
+} from "./ask-lsp";
 
 const CWD = "/repo";
 
@@ -46,7 +46,7 @@ function stubProvider(
 }
 
 function run(provider: CodeIntelProvider, input: unknown): Promise<string> {
-	return createCodeIntelTool({ cwd: CWD, provider }).execute(
+	return createAskLspTool({ cwd: CWD, provider }).execute(
 		input,
 		{} as never,
 	) as Promise<string>;
@@ -56,26 +56,26 @@ beforeEach(() => {
 	vi.clearAllMocks();
 });
 
-describe("parseCodeIntelRequest", () => {
+describe("parseAskLspRequest", () => {
 	it("rejects an operation it does not have", () => {
-		expect(parseCodeIntelRequest({ operation: "rename" })).toContain(
+		expect(parseAskLspRequest({ operation: "rename" })).toContain(
 			"`operation` must be one of",
 		);
 	});
 
 	it("names what is missing rather than failing silently", () => {
-		expect(parseCodeIntelRequest({ operation: "definition" })).toContain(
+		expect(parseAskLspRequest({ operation: "definition" })).toContain(
 			"needs a `path`",
 		);
 		expect(
-			parseCodeIntelRequest({ operation: "definition", path: "a.ts" }),
+			parseAskLspRequest({ operation: "definition", path: "a.ts" }),
 		).toContain("needs a `symbol`");
 	});
 
 	it("converts the 1-based position the description asks for", () => {
 		// A model copies line numbers out of error messages, which are 1-based.
 		expect(
-			parseCodeIntelRequest({
+			parseAskLspRequest({
 				operation: "hover",
 				path: "a.ts",
 				line: 12,
@@ -89,21 +89,21 @@ describe("parseCodeIntelRequest", () => {
 
 	it("takes a workspace search from either field, since models put it in both", () => {
 		expect(
-			parseCodeIntelRequest({ operation: "workspace_symbols", symbol: "Foo" }),
+			parseAskLspRequest({ operation: "workspace_symbols", symbol: "Foo" }),
 		).toMatchObject({ symbol: "Foo" });
 		expect(
-			parseCodeIntelRequest({ operation: "workspace_symbols", path: "Foo" }),
+			parseAskLspRequest({ operation: "workspace_symbols", path: "Foo" }),
 		).toMatchObject({ symbol: "Foo" });
 		// `search_codebase` sits beside this tool and takes `queries`, and a
 		// model searching for a name here sent `query` -- which was silently
 		// ignored, so it was told a `symbol` was missing while its own value
 		// sat unread in the call.
 		expect(
-			parseCodeIntelRequest({ operation: "workspace_symbols", query: "Foo" }),
+			parseAskLspRequest({ operation: "workspace_symbols", query: "Foo" }),
 		).toMatchObject({ symbol: "Foo" });
 		// An explicit `symbol` still wins over the alias.
 		expect(
-			parseCodeIntelRequest({
+			parseAskLspRequest({
 				operation: "workspace_symbols",
 				symbol: "Foo",
 				query: "Bar",
@@ -112,7 +112,7 @@ describe("parseCodeIntelRequest", () => {
 	});
 });
 
-describe("code_intel", () => {
+describe("ask_lsp", () => {
 	it("finds a symbol's position from its name, which is all a model has", async () => {
 		const findSymbolPosition = vi.fn(async () =>
 			location("/repo/src/app.ts", 10, 6),

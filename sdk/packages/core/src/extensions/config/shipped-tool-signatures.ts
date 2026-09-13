@@ -47,7 +47,7 @@ const stubExecutor = (() => {
 /**
  * The host tools' schemas, restated, because this package cannot build them.
  *
- * `check_file`, `code_intel`, `switch_to_act_mode`, `browser` and
+ * `check_file`, `ask_lsp`, `switch_to_act_mode`, `browser` and
  * `list_files` are
  * contributed by the VS Code extension. The review script runs here and has no way to reach them,
  * and leaving them out would mean the audit never checked the one tool with a
@@ -78,7 +78,7 @@ export const HOST_TOOL_INPUT_SCHEMAS: readonly {
 		},
 	},
 	{
-		name: "code_intel",
+		name: "ask_lsp",
 		inputSchema: {
 			type: "object",
 			properties: {

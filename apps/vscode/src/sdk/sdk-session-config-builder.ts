@@ -12,7 +12,7 @@ export const SWITCH_TO_ACT_MODE_TOOL_NAME = "switch_to_act_mode"
  *
  * This tool is built here rather than in the SDK, which means core has no way
  * to construct one and compare — the same position `check_file` and
- * `code_intel` are in, and they are handled the same way.
+ * `ask_lsp` are in, and they are handled the same way.
  */
 export const SWITCH_TO_ACT_MODE_TOOL_DESCRIPTION =
 	"Switch from plan mode to act mode. Switching to act mode immediately starts executing the plan, so only call this after the user has explicitly approved the plan in a message sent AFTER you presented it (e.g. 'looks good', 'go ahead', 'switch to act mode'). " +

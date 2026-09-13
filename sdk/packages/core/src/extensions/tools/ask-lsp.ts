@@ -22,11 +22,23 @@ import { findScriptSyntaxError } from "./delimiter-balance";
  * a name it read in a file. So `symbol` is the primary way to ask, and the
  * position is found on the model's behalf; line/character are accepted too, for
  * when it does know.
+ *
+ * The name is `ask_lsp` because `code_intel` was not carrying what the tool is.
+ * Asked afterwards what `code_intel` had been, models that had *used it* did
+ * not know it was the LSP and did not expect it to be — with the first line of
+ * the description saying so, in the same request. A name is read every time and
+ * retained; a description is read once. `ask_lsp` also cannot prefix-match an
+ * MCP server's `lsp__*` tools, which a model in a workspace that has one was
+ * observed merging with ours.
+ *
+ * The provider interface below keeps its `CodeIntel*` names. It is the editor's
+ * code-intelligence surface, which this tool is one consumer of, and no model
+ * ever sees it.
  */
 
-export const CODE_INTEL_TOOL_NAME = "code_intel";
+export const ASK_LSP_TOOL_NAME = "ask_lsp";
 
-export const CODE_INTEL_OPERATIONS = [
+export const ASK_LSP_OPERATIONS = [
 	"definition",
 	"references",
 	"implementations",
@@ -37,9 +49,9 @@ export const CODE_INTEL_OPERATIONS = [
 	"callers",
 ] as const;
 
-export type CodeIntelOperation = (typeof CODE_INTEL_OPERATIONS)[number];
+export type AskLspOperation = (typeof ASK_LSP_OPERATIONS)[number];
 
-export const CODE_INTEL_TOOL_DESCRIPTION = `Ask the language servers — the LSP — about a symbol. If you are reaching for an LSP tool or an MCP server that wraps one, this is it: the same protocol, already running against this workspace and its open files, with no server to start. This answers questions a text search cannot, because it understands the code: it distinguishes a definition from a mention, and this class's method from another class's method of the same name.
+export const ASK_LSP_TOOL_DESCRIPTION = `Ask the language servers — the LSP — about a symbol. If you are reaching for an LSP tool or an MCP server that wraps one, this is it: the same protocol, already running against this workspace and its open files, with no server to start. This answers questions a text search cannot, because it understands the code: it distinguishes a definition from a mention, and this class's method from another class's method of the same name.
 
 Use this before falling back to \`search_codebase\` for anything about a symbol. It is faster, exact, and does not need you to read files to interpret the result.
 
@@ -70,12 +82,12 @@ Output: plain text, one result per line as \`file:line:column\` followed by that
 An empty answer is a real answer once the symbol resolved: for \`definition\`, \`references\`, \`implementations\`, \`type_definition\`, \`callers\` and \`hover\` the server understood the symbol and nothing matched, so a text search for the same question will not find more. \`workspace_symbols\` is the exception, and says so when it comes back empty: it reads a project-wide index that covers the languages a server is installed for and does not index script embedded in \`.html\` or other template files, so nothing there is not proof of nothing anywhere. And when the file does not parse, every answer about it opens with that line — while it is there, the server is answering from a partial parse and you are reading guesses.`;
 
 /** Exported for the same reason as `CHECK_FILE_TOOL_INPUT_SCHEMA`. */
-export const CODE_INTEL_TOOL_INPUT_SCHEMA = {
+export const ASK_LSP_TOOL_INPUT_SCHEMA = {
 	type: "object",
 	properties: {
 		operation: {
 			type: "string",
-			enum: [...CODE_INTEL_OPERATIONS],
+			enum: [...ASK_LSP_OPERATIONS],
 			description: "What to ask the language server.",
 		},
 		path: {
@@ -151,7 +163,7 @@ export interface CodeIntelProvider {
 	readFile?(filePath: string): Promise<string | undefined>;
 }
 
-export interface CodeIntelToolOptions {
+export interface AskLspToolOptions {
 	cwd: string;
 	provider: CodeIntelProvider;
 	/**
@@ -161,7 +173,7 @@ export interface CodeIntelToolOptions {
 	onError?: (message: string, error: unknown) => void;
 }
 
-interface CodeIntelInput {
+interface AskLspInput {
 	operation?: unknown;
 	path?: unknown;
 	symbol?: unknown;
@@ -177,8 +189,8 @@ interface CodeIntelInput {
 	character?: unknown;
 }
 
-export interface ParsedCodeIntelRequest {
-	operation: CodeIntelOperation;
+export interface ParsedAskLspRequest {
+	operation: AskLspOperation;
 	filePath?: string;
 	symbol?: string;
 	/** 0-based, converted from the 1-based numbers the description asks for. */
@@ -215,14 +227,14 @@ function readIndex(value: unknown): number | undefined {
  * model one sentence telling it what to send, not a tool error it has to
  * interpret.
  */
-export function parseCodeIntelRequest(
-	input: CodeIntelInput | undefined,
-): ParsedCodeIntelRequest | string {
+export function parseAskLspRequest(
+	input: AskLspInput | undefined,
+): ParsedAskLspRequest | string {
 	const operation = readString(input?.operation)?.toLowerCase() as
-		| CodeIntelOperation
+		| AskLspOperation
 		| undefined;
-	if (!operation || !CODE_INTEL_OPERATIONS.includes(operation)) {
-		return `\`operation\` must be one of: ${CODE_INTEL_OPERATIONS.join(", ")}.`;
+	if (!operation || !ASK_LSP_OPERATIONS.includes(operation)) {
+		return `\`operation\` must be one of: ${ASK_LSP_OPERATIONS.join(", ")}.`;
 	}
 
 	const filePath = readString(input?.path);
@@ -254,7 +266,7 @@ function relative(cwd: string, filePath: string): string {
 	return rel && !rel.startsWith("..") ? rel : filePath;
 }
 
-export function createCodeIntelTool(options: CodeIntelToolOptions): AgentTool {
+export function createAskLspTool(options: AskLspToolOptions): AgentTool {
 	const { provider, cwd } = options;
 
 	const renderLocations = async (
@@ -300,13 +312,11 @@ export function createCodeIntelTool(options: CodeIntelToolOptions): AgentTool {
 	};
 
 	return createTool({
-		name: CODE_INTEL_TOOL_NAME,
-		description: CODE_INTEL_TOOL_DESCRIPTION,
-		inputSchema: CODE_INTEL_TOOL_INPUT_SCHEMA,
+		name: ASK_LSP_TOOL_NAME,
+		description: ASK_LSP_TOOL_DESCRIPTION,
+		inputSchema: ASK_LSP_TOOL_INPUT_SCHEMA,
 		execute: async (rawInput: unknown) => {
-			const request = parseCodeIntelRequest(
-				rawInput as CodeIntelInput | undefined,
-			);
+			const request = parseAskLspRequest(rawInput as AskLspInput | undefined);
 			if (typeof request === "string") {
 				return request;
 			}
@@ -365,7 +375,7 @@ export function createCodeIntelTool(options: CodeIntelToolOptions): AgentTool {
 
 	/** The position-addressed operations, once the position is known. */
 	async function answer(
-		operation: CodeIntelOperation,
+		operation: AskLspOperation,
 		at: CodeIntelLocation,
 	): Promise<string> {
 		switch (operation) {
@@ -441,7 +451,7 @@ async function describeParseFault(
 async function resolvePosition(
 	provider: CodeIntelProvider,
 	filePath: string,
-	request: ParsedCodeIntelRequest,
+	request: ParsedAskLspRequest,
 ): Promise<CodeIntelLocation | undefined> {
 	if (request.line !== undefined) {
 		return { filePath, line: request.line, character: request.character ?? 0 };

@@ -117,8 +117,11 @@ const InvisibleSpacer = () => <div aria-hidden className="h-px" />
  * rendered before.
  */
 const GENERIC_TOOL_VERBS: Record<string, string> = {
+	ask_lsp: "Cline asked the language server:",
 	browser: "Cline used the browser:",
 	check_file: "Cline checked this file:",
+	// `ask_lsp` was called `code_intel` until 2026-09-13. Kept so a task from
+	// before the rename still renders its sentence rather than a bare name.
 	code_intel: "Cline asked the language server:",
 	commit: "Cline committed:",
 	generate_image: "Cline generated an image:",
@@ -767,7 +770,7 @@ export const ChatRowContent = memo(
 					// Every tool that is not one of the cases above used to render
 					// as nothing at all. The translator's own default passes the
 					// raw SDK tool name through (`restore_file`, `check_file`,
-					// `run_check`, `code_intel`, `browser`, `propose_check`,
+					// `run_check`, `ask_lsp`, `browser`, `propose_check`,
 					// `tasks`, `commit`, `generate_image`), none of which are in
 					// this switch and none of which are in `LOW_STAKES_TOOLS`
 					// either -- so they are not grouped, they arrive here, and

@@ -327,7 +327,7 @@ const DEFAULT_ATTEMPTS = 4;
  * Tools a rewrite has to address, because the instructions name the failure
  * each one exists to prevent. Everything else is the model's call.
  */
-const REQUIRED_MENTIONS = ["check_file", "code_intel"];
+const REQUIRED_MENTIONS = ["check_file", "ask_lsp"];
 
 interface Options {
 	models: string[];

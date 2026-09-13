@@ -61,12 +61,12 @@ describe("createPromptTemplateHooks", () => {
 		// same host. This is the seam where "the IDE" stops being written into
 		// a prompt a terminal will read.
 		const hooks = createPromptTemplateHooks({
-			rendered: rendered({ tools: { code_intel: "Ask {{IDE_NAME}}." } }),
+			rendered: rendered({ tools: { ask_lsp: "Ask {{IDE_NAME}}." } }),
 			ideName: "Terminal Shell",
 		});
 
 		const result = await hooks?.beforeModel?.(
-			contextWith([tool("code_intel", "symbols")]),
+			contextWith([tool("ask_lsp", "symbols")]),
 		);
 
 		expect(result?.tools?.[0]?.description).toBe("Ask Terminal Shell.");

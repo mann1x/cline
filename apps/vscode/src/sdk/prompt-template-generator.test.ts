@@ -91,7 +91,7 @@ const GOOD = [
 	"",
 	"# system",
 	"You are Cline on {{PLATFORM_NAME}}, {{CURRENT_DATE}}, in {{IDE_NAME}}. Directory {{CWD}}.",
-	"Use check_file and code_intel.",
+	"Use check_file and ask_lsp.",
 	// The three subjects REQUIRED_SYSTEM_GUIDANCE insists a rewrite address.
 	// A proposal that skips them is a flawed one, and this fixture is the
 	// clean one -- so it says all three, in the plainest words that pass.

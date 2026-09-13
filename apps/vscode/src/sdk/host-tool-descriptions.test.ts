@@ -1,12 +1,12 @@
 import {
+	ASK_LSP_OPERATIONS,
+	ASK_LSP_TOOL_DESCRIPTION,
+	ASK_LSP_TOOL_INPUT_SCHEMA,
+	ASK_LSP_TOOL_NAME,
 	BROWSER_ACTIONS,
 	BROWSER_TOOL_DESCRIPTION,
 	BROWSER_TOOL_INPUT_SCHEMA,
 	BROWSER_TOOL_NAME,
-	CODE_INTEL_OPERATIONS,
-	CODE_INTEL_TOOL_DESCRIPTION,
-	CODE_INTEL_TOOL_INPUT_SCHEMA,
-	CODE_INTEL_TOOL_NAME,
 	GENERATE_IMAGE_TOOL_DESCRIPTION,
 	GENERATE_IMAGE_TOOL_NAME,
 	getBuiltinPromptTemplates,
@@ -39,8 +39,8 @@ describe("host tool descriptions in default.md", () => {
 		expect(shipped?.tools[CHECK_FILE_TOOL_NAME]).toBe(CHECK_FILE_TOOL_DESCRIPTION.trim())
 	})
 
-	it("reproduces code_intel verbatim", () => {
-		expect(shipped?.tools[CODE_INTEL_TOOL_NAME]).toBe(CODE_INTEL_TOOL_DESCRIPTION.trim())
+	it("reproduces ask_lsp verbatim", () => {
+		expect(shipped?.tools[ASK_LSP_TOOL_NAME]).toBe(ASK_LSP_TOOL_DESCRIPTION.trim())
 	})
 
 	it("reproduces switch_to_act_mode verbatim", () => {
@@ -66,7 +66,7 @@ describe("host tool descriptions in default.md", () => {
  * audit a generated template. A copy is only safe while something fails when
  * it stops matching. This is that something.
  *
- * `code_intel` is the one that matters: it is the only tool with a closed set
+ * `ask_lsp` is the one that matters: it is the only tool with a closed set
  * of operations, and an operation added here but not there would silently stop
  * being required of every rewrite.
  */
@@ -95,10 +95,10 @@ describe("host tool schemas restated in core", () => {
 		)
 	})
 
-	it("matches code_intel, operations included", () => {
-		const mirrored = signatureOf(CODE_INTEL_TOOL_NAME, restated.get(CODE_INTEL_TOOL_NAME))
-		const real = signatureOf(CODE_INTEL_TOOL_NAME, CODE_INTEL_TOOL_INPUT_SCHEMA)
+	it("matches ask_lsp, operations included", () => {
+		const mirrored = signatureOf(ASK_LSP_TOOL_NAME, restated.get(ASK_LSP_TOOL_NAME))
+		const real = signatureOf(ASK_LSP_TOOL_NAME, ASK_LSP_TOOL_INPUT_SCHEMA)
 		expect(mirrored).toEqual(real)
-		expect(mirrored?.enumValues).toEqual([...CODE_INTEL_OPERATIONS])
+		expect(mirrored?.enumValues).toEqual([...ASK_LSP_OPERATIONS])
 	})
 })

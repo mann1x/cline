@@ -1,4 +1,4 @@
-import { createBrowserTool, createCodeIntelTool, createGenerateImageTool, createListFilesTool, createMcpTools } from "@cline/core"
+import { createAskLspTool, createBrowserTool, createGenerateImageTool, createListFilesTool, createMcpTools } from "@cline/core"
 import type { AgentTool, AgentToolContext } from "@cline/shared"
 import { createVscodeBrowserDriver, isBrowserToolEnabled } from "@/hosts/vscode/browser-support"
 import { loadDocumentForDiagnostics, resolveLintCommand, runLintCommand } from "@/hosts/vscode/check-file-support"
@@ -123,11 +123,11 @@ export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExt
 		}),
 	)
 
-	// `code_intel` is likewise unconditional. It answers from whichever language
+	// `ask_lsp` is likewise unconditional. It answers from whichever language
 	// servers the user already has; a language nobody installed support for
 	// returns nothing, which is a cheaper failure than the tool being absent.
 	tools.push(
-		createCodeIntelTool({
+		createAskLspTool({
 			cwd: options?.cwd ?? process.cwd(),
 			provider: createVscodeCodeIntelProvider(),
 			// The tool moved into core so both hosts share it; the logger did

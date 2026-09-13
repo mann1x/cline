@@ -119,7 +119,7 @@ Arguments:
 - `count`, `files_with_matches`: report a count per file, or only the names of files that matched.
 - `context`: lines shown either side of a match. `max_count`: stop after this many per file. `line_numbers`: on unless set to false.
 
-Use `search_codebase` when you do not yet know which files are involved — it takes several patterns at once and reports one hit per file, which answers "where is this". Use `grep` when you already know the file or directory and want grep's own semantics: every matching line, a count, an inverted match, a window of context. Neither answers questions about a symbol; `code_intel` does.
+Use `search_codebase` when you do not yet know which files are involved — it takes several patterns at once and reports one hit per file, which answers "where is this". Use `grep` when you already know the file or directory and want grep's own semantics: every matching line, a count, an inverted match, a window of context. Neither answers questions about a symbol; `ask_lsp` does.
 
 Output: a single `{query, result, success, error?}`. `query` is `grep:<pattern>`. `result` is the matching lines prefixed with path and line number. A pattern that matched nothing has `success: true` and says so in words — that is an answer, not a failure, and re-running it will not change it. Lines returned here count as read.
 
@@ -253,7 +253,7 @@ Arguments:
 Call it after editing any HTML, CSS or JavaScript, and before reporting a task finished — `check_file` cannot answer this, since no language server checks the script inside an `.html` file and a file that parses can still throw when it runs. `[error]` and `[Page Error]` lines are real failures; a page that printed nothing is a pass, not a failed call. The browser stays open between calls; `close` it when finished.
 
 A parse error from the browser names no line. For a local file a `Delimiter scan` section follows it and names the *opening* bracket the parser could not match, one line per place the trouble starts — fix every line it lists in one edit rather than one reload per line, and read those lines instead of counting brackets yourself.
-# tool: code_intel
+# tool: ask_lsp
 Ask the language servers — the LSP — about a symbol. This is the LSP: if you are reaching for an LSP tool or an MCP server that wraps one, this is it, already running against this workspace. Use this before falling back to `search_codebase` for anything about a symbol. It is faster, exact, and does not need you to read files to interpret the result.
 
 Reach for it the moment you are about to do one of these by hand:

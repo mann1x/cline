@@ -121,7 +121,7 @@ export async function applyInteractiveModeConfig(input: {
 	switchToActModeTool: NonNullable<Config["extraTools"]>[number];
 }): Promise<void> {
 	input.config.mode = input.mode;
-	// The host's own tools -- `browser`, `code_intel` -- are on this list too,
+	// The host's own tools -- `browser`, `ask_lsp` -- are on this list too,
 	// and they are not mode-dependent. Replacing the whole list to add or drop
 	// the mode-switch tool took them with it, so a single switch between plan
 	// and act left the session without a browser or a language server for the

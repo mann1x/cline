@@ -70,7 +70,7 @@ Do not re-read a file to confirm your own edit. The `editor` call already report
 # tool: read_files
 Read text or image files by absolute path. Give `start_line` and `end_line` (1-based, inclusive) on the same entry to read a range. Batch every file you already know you need into one call, and emit this together with other independent tool calls in the same response. Each file returns at most 2000 lines / ~47k characters; longer files report their total line count, so paginate with `start_line`/`end_line` on that entry.
 
-Locate first, then read: a diagnostic or stack trace names the line, `search_codebase` reports the line every match is on, and `code_intel` resolves a symbol to where it is defined. Take roughly 30 lines either side of that line, widening only if what you needed falls outside. Read a file entire only when you have no line to start from and it is genuinely small. Every line returned stays in the conversation for the rest of the task, crowding out room to reason — read only what you need.
+Locate first, then read: a diagnostic or stack trace names the line, `search_codebase` reports the line every match is on, and `ask_lsp` resolves a symbol to where it is defined. Take roughly 30 lines either side of that line, widening only if what you needed falls outside. Read a file entire only when you have no line to start from and it is genuinely small. Every line returned stays in the conversation for the rest of the task, crowding out room to reason — read only what you need.
 
 Binary non-image files and very large files are not supported.
 
@@ -90,7 +90,7 @@ Output per query is middle-truncated beyond ~48k characters; narrow patterns bea
 
 Output: one object per pattern — `{query, result, success, error?}`. `query` is the pattern you sent. `result` is matching lines with file paths. A pattern that matched nothing has `success: true` and `result: []`; that is an answer, not a failure, and re-running it will not change it.
 
-Use this for text patterns. For questions about a symbol — where it is defined, what uses it, what implements it, what its type is — use `code_intel` instead. `code_intel` understands the code; this only matches text.
+Use this for text patterns. For questions about a symbol — where it is defined, what uses it, what implements it, what its type is — use `ask_lsp` instead. `ask_lsp` understands the code; this only matches text.
 
 # tool: fetch_web_content
 Fetch web pages and extract information using a prompt. Each request needs a `url` and a `prompt` describing what to extract. Batch independent URLs into one call, together with other independent tool calls in the same response.
@@ -215,7 +215,7 @@ Call this together with `check_file` in the same response when you are about to 
 
 {{DEFAULT}}
 
-# tool: code_intel
+# tool: ask_lsp
 Ask the language servers — the LSP — about a symbol. This is the LSP: if you are reaching for an LSP tool or an MCP server that wraps one, this is it, already running against this workspace. Use this before falling back to `search_codebase` for anything about a symbol. It is faster, exact, and does not need you to read files to interpret the result.
 
 Reach for it the moment you are about to do one of these by hand:

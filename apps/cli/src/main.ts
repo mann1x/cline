@@ -1331,7 +1331,7 @@ export async function runCli(): Promise<void> {
 			promptTemplateSystem: renderedTemplate?.system,
 			// The two tools this host had no answer for, and the last of the gap
 			// with the extension. `browser` says whether a page actually runs;
-			// `code_intel` asks the language servers what a symbol means. Both
+			// `ask_lsp` asks the language servers what a symbol means. Both
 			// take their host half as an injected interface, and neither starts
 			// anything until the model calls it: Chrome is launched on the first
 			// `open`, a language server on the first question about a file it

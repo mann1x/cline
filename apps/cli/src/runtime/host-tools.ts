@@ -1,7 +1,7 @@
 import {
 	type AgentTool,
+	createAskLspTool,
 	createBrowserTool,
-	createCodeIntelTool,
 } from "@cline/core";
 import { createCliBrowserDriver } from "./browser-support";
 import { createCliCodeIntelProvider } from "./code-intel-support";
@@ -11,7 +11,7 @@ import { createCliCodeIntelProvider } from "./code-intel-support";
  *
  * `check_file` and `list_files` are added by the local runtime host, because
  * everything they need is a filesystem. These two are not: `browser` needs a
- * Chrome and `code_intel` needs a language server, so each is assembled here
+ * Chrome and `ask_lsp` needs a language server, so each is assembled here
  * with its host half and handed over as an extra tool -- the same way the
  * extension hands over its own, built on VS Code instead.
  *
@@ -34,7 +34,7 @@ export function createCliHostTools(options: {
 			createDriver: () => createCliBrowserDriver(),
 			onError: options.onError,
 		}),
-		createCodeIntelTool({
+		createAskLspTool({
 			cwd: options.cwd,
 			provider: createCliCodeIntelProvider({
 				cwd: options.cwd,

@@ -2,7 +2,7 @@ import type { CodeIntelLocation, CodeIntelProvider, CodeIntelSymbol } from "@cli
 import * as vscode from "vscode"
 
 /**
- * The VS Code half of `code_intel`.
+ * The VS Code half of `ask_lsp`.
  *
  * Every language feature VS Code exposes to an extension is reachable through
  * `vscode.commands.executeCommand("vscode.execute<X>Provider", …)`, which

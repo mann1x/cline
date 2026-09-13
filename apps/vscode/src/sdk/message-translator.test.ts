@@ -4999,7 +4999,7 @@ describe("tools with no bespoke row still reach the chat with something to show"
 	it("keeps the raw tool name so the row can label itself", () => {
 		expect(sayToolFor("restore_file", { path: "/w/game.html" }).tool).toBe("restore_file")
 		expect(sayToolFor("run_check", {}).tool).toBe("run_check")
-		expect(sayToolFor("code_intel", { path: "/w/game.html" }).tool).toBe("code_intel")
+		expect(sayToolFor("ask_lsp", { path: "/w/game.html" }).tool).toBe("ask_lsp")
 	})
 
 	it("names the file a restore put back", () => {

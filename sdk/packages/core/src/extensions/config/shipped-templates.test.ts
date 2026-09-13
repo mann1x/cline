@@ -94,7 +94,7 @@ const COMPUTED_TOOL_NAMES = ["run_commands", "skills"];
  */
 const HOST_TOOL_NAMES = [
 	"check_file",
-	"code_intel",
+	"ask_lsp",
 	"switch_to_act_mode",
 	"browser",
 	"generate_image",

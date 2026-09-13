@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 /**
  * A language server, spoken to over stdio.
  *
- * The extension's `code_intel` asks VS Code, which already runs a server for
+ * The extension's `ask_lsp` asks VS Code, which already runs a server for
  * every language in the workspace and answers in a single `executeCommand`. A
  * terminal has no such thing, so this is the part the CLI has to bring itself:
  * spawn the server, complete the LSP handshake, keep the documents it has been
@@ -12,7 +12,7 @@ import { pathToFileURL } from "node:url";
  *
  * Kept to exactly what `CodeIntelProvider` needs. This is not a general LSP
  * client and should not grow into one: every method here exists because a
- * `code_intel` operation calls it.
+ * `ask_lsp` operation calls it.
  */
 
 /** LSP frames a message with a `Content-Length` header and a blank line. */

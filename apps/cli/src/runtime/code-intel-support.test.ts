@@ -9,7 +9,7 @@ import {
 import { fileUri, uriToPath } from "./lsp-client";
 
 /**
- * The CLI's `code_intel`, against a language server that is not real.
+ * The CLI's `ask_lsp`, against a language server that is not real.
  *
  * A stub rather than `typescript-language-server`: the client's job is the
  * protocol -- framing, request correlation, opening a document before asking

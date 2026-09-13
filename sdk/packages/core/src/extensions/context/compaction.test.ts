@@ -2445,7 +2445,7 @@ describe("createContextCompactionPrepareTurn", () => {
 				content: [
 					{
 						type: "text",
-						text: "check manic_miner.html, it's not working — use the linter and lsp (code_intel) tools",
+						text: "check manic_miner.html, it's not working — use the linter and lsp (ask_lsp) tools",
 					},
 				],
 			},
