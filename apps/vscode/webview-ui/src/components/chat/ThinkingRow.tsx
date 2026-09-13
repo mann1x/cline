@@ -1,5 +1,6 @@
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react"
 import { memo, useCallback, useEffect, useRef, useState } from "react"
+import { CopyButton } from "@/components/common/CopyButton"
 import MarkdownBlock from "@/components/common/MarkdownBlock"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -159,6 +160,24 @@ export const ThinkingRow = memo(
 									)}
 								</span>
 							</div>
+							{/*
+							 * Reasoning was the one thing in the panel with no way
+							 * to copy it. Every other row has a button; this had a
+							 * 150px scroller, so the only route was dragging a
+							 * selection through a box that scrolls under the cursor
+							 * -- and the reasoning is what a person actually wants
+							 * out of a run, to quote a model's own account of what
+							 * it was doing.
+							 *
+							 * Not while streaming: the text is still arriving, and a
+							 * button that copies a third of a sentence is worse than
+							 * no button.
+							 */}
+							{!isStreaming && !!reasoningContent?.trim() && (
+								<div className="absolute top-0 right-0 z-10">
+									<CopyButton ariaLabel="Copy reasoning" textToCopy={reasoningContent} />
+								</div>
+							)}
 							{canScrollUp && (
 								<div className="absolute top-0 left-0 right-0 h-6 pointer-events-none bg-gradient-to-b from-background to-transparent" />
 							)}

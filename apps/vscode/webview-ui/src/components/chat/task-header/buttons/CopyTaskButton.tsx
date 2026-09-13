@@ -3,6 +3,7 @@ import { CheckIcon, CopyIcon } from "lucide-react"
 import { useCallback, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { writeToClipboard } from "@/utils/clipboard"
 
 const CopyTaskButton: React.FC<{
 	taskText?: string
@@ -15,7 +16,10 @@ const CopyTaskButton: React.FC<{
 			return
 		}
 
-		navigator.clipboard.writeText(taskText).then(() => {
+		writeToClipboard(taskText).then((written) => {
+			if (!written) {
+				return
+			}
 			setCopied(true)
 			setTimeout(() => setCopied(false), 1500)
 		})

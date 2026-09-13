@@ -2,6 +2,7 @@ import { CheckCheckIcon, CopyIcon } from "lucide-react"
 import { forwardRef, useCallback, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { writeToClipboard } from "@/utils/clipboard"
 
 interface CopyButtonProps {
 	textToCopy?: string
@@ -41,13 +42,16 @@ export const CopyButton: React.FC<CopyButtonProps> = ({ textToCopy, onCopy, clas
 			return
 		}
 
-		navigator.clipboard
-			.writeText(text)
-			.then(() => {
-				setCopied(true)
-				setTimeout(() => setCopied(false), COPIED_TIMEOUT)
-			})
-			.catch((err) => console.error("Copy failed", err))
+		// The tick is set on the write landing, not on the attempt. The webview
+		// clipboard rejects whenever the panel is not focused, and this button
+		// used to report success anyway -- see `writeToClipboard`.
+		writeToClipboard(text).then((written) => {
+			if (!written) {
+				return
+			}
+			setCopied(true)
+			setTimeout(() => setCopied(false), COPIED_TIMEOUT)
+		})
 	}, [textToCopy, onCopy])
 
 	return (

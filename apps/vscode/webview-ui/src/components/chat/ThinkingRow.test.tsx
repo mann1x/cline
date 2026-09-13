@@ -52,8 +52,45 @@ describe("ThinkingRow", () => {
 			/>,
 		)
 
-		// Only the header toggle is a button.
-		expect(screen.getAllByRole("button")).toHaveLength(1)
+		// The invariant is that the *body* is not inside a button, not that the
+		// row has exactly one: the copy control below is a button too, and
+		// counting them made this test fail for a reason it does not care about.
+		const body = screen.getByText("some reasoning")
+		expect(body.closest("button")).toBeNull()
+		expect(screen.getByRole("button", { name: "Thinking" })).toBeInTheDocument()
+	})
+
+	it("offers a way to copy the reasoning once it has stopped arriving", () => {
+		// Reasoning was the one row in the panel with no copy affordance, and
+		// its body is a 150px scroller -- so the only route was dragging a
+		// selection through a box that scrolls under the cursor.
+		const { rerender } = render(
+			<ThinkingRow
+				isExpanded={true}
+				isStreaming={true}
+				isVisible={true}
+				onToggle={vi.fn()}
+				reasoningContent="I keep regressing."
+				showTitle={true}
+			/>,
+		)
+
+		// Not mid-stream: a button that copies a third of a sentence is worse
+		// than no button.
+		expect(screen.queryByRole("button", { name: "Copy reasoning" })).toBeNull()
+
+		rerender(
+			<ThinkingRow
+				isExpanded={true}
+				isStreaming={false}
+				isVisible={true}
+				onToggle={vi.fn()}
+				reasoningContent="I keep regressing."
+				showTitle={true}
+			/>,
+		)
+
+		expect(screen.getByRole("button", { name: "Copy reasoning" })).toBeInTheDocument()
 	})
 
 	it("calls onToggle when header is clicked", () => {
