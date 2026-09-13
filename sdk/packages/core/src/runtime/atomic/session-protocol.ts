@@ -20,6 +20,7 @@ import { createRestoreFileTool } from "./restore-file-tool";
 import { createRunCheckTool } from "./run-check-tool";
 import {
 	createStalledChecks,
+	describeStalledCheckNudge,
 	describeStalledChecks,
 	withChangeSignal,
 } from "./stalled-checks";
@@ -418,8 +419,17 @@ export async function createAtomicProtocolSession(
 				options.logger?.log?.(
 					`[Atomic] ${ran.label} run on request: ${verdict.passed ? "passed" : "failed"}.`,
 				);
-				if (!stalled.checked(verdict.passed) || finished) {
+				const earned = stalled.checked(verdict.passed);
+				if (earned === "ok" || finished) {
 					return undefined;
+				}
+				// Said first, cut second. The nudge judges nothing and puts
+				// nothing back; a model that ignores it reaches the settlement
+				// below two checks later, exactly as it did before.
+				if (earned === "nudge") {
+					const nudge = describeStalledCheckNudge(stalled.streak, ran.label);
+					options.logger?.log?.(`[Atomic] ${nudge}`);
+					return nudge;
 				}
 				const notice = describeStalledChecks(stalled.streak, ran.label);
 				options.logger?.log?.(`[Atomic] ${notice}`);

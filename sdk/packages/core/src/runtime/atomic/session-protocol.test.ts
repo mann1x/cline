@@ -1041,22 +1041,46 @@ describe("closing a transaction the model will not close", () => {
 		return { session, tools, named, applied };
 	}
 
-	it("settles on the third check over files nobody changed", async () => {
+	// Nudged at three, settled at five. Settling is a rollback, and on the
+	// measured evidence a sentence usually does the job: the pandorum run of
+	// 2026-09-13 spent eleven of eighteen checks re-reading the same failure,
+	// and converged three minutes after a guard said so in words.
+	it("nudges on the third check over files nobody changed, and judges nothing", async () => {
 		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
 			const { session, named } = await armed(root);
 			const runCheck = named("run_check");
 
 			expect(await runCheck({})).not.toContain("judged here");
 			expect(await runCheck({})).not.toContain("judged here");
-			expect(session.controller.outcomes).toHaveLength(0);
 
 			const third = await runCheck({});
+
+			expect(third).toContain("check_file");
+			expect(third).toContain("still open");
+			expect(third).not.toContain("judged here");
+			expect(session.controller.outcomes).toHaveLength(0);
+			expect(session.controller.transaction).toBe(1);
+		});
+	});
+
+	it("settles on the fifth, when the nudge did not move it", async () => {
+		await withWorkspace({ "game.js": "let a = 1" }, async (root) => {
+			const { session, named } = await armed(root);
+			const runCheck = named("run_check");
+
+			await runCheck({});
+			await runCheck({});
+			await runCheck({});
+			expect(await runCheck({})).not.toContain("judged here");
+			expect(session.controller.outcomes).toHaveLength(0);
+
+			const fifth = await runCheck({});
 
 			// The verdict, the reason it closed, and the whole of the next
 			// transaction's rules, all in the one reply -- the model is not
 			// waiting on a turn boundary it was never going to reach.
-			expect(third).toContain("The check failed");
-			expect(third).toContain("judged here");
+			expect(fifth).toContain("The check failed");
+			expect(fifth).toContain("judged here");
 			expect(session.controller.outcomes).toHaveLength(1);
 			expect(session.controller.transaction).toBe(2);
 		});
@@ -1119,6 +1143,8 @@ describe("closing a transaction the model will not close", () => {
 			await edit(change, 2);
 			expect(applied).toHaveLength(1);
 
+			await runCheck({}, 3);
+			await runCheck({}, 3);
 			await runCheck({}, 3);
 			await runCheck({}, 3);
 			await runCheck({}, 3);

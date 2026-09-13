@@ -2,7 +2,9 @@ import type { AgentTool } from "@cline/shared";
 import { describe, expect, it } from "vitest";
 import {
 	createStalledChecks,
+	DEFAULT_MAX_CHECKS_BEFORE_SETTLING,
 	DEFAULT_MAX_CHECKS_WITHOUT_EDIT,
+	describeStalledCheckNudge,
 	describeStalledChecks,
 	withChangeSignal,
 } from "./stalled-checks";
@@ -22,13 +24,46 @@ function source(max?: number) {
 }
 
 describe("counting checks over files nobody changed", () => {
-	it("fires on the third failure and not the second", () => {
+	// Nudged at three, settled at five. Measured on the pandorum run of
+	// 2026-09-13: eleven of eighteen check runs returned the previous answer
+	// byte for byte, and what ended the loop was a sentence -- the guard quoting
+	// the model's own "I'm stuck in an infinite loop of edits" back at it, after
+	// which it converged in three minutes. Settling is a rollback, which is the
+	// most expensive possible answer to "that check told you nothing new".
+	it("nudges on the third failure, and not before", () => {
 		const { counter } = source();
 
 		expect(DEFAULT_MAX_CHECKS_WITHOUT_EDIT).toBe(3);
-		expect(counter.checked(false)).toBe(false);
-		expect(counter.checked(false)).toBe(false);
-		expect(counter.checked(false)).toBe(true);
+		expect(counter.checked(false)).toBe("ok");
+		expect(counter.checked(false)).toBe("ok");
+		expect(counter.checked(false)).toBe("nudge");
+	});
+
+	it("settles only after two more stalled checks", () => {
+		const { counter } = source();
+
+		expect(DEFAULT_MAX_CHECKS_BEFORE_SETTLING).toBe(5);
+		expect(counter.checked(false)).toBe("ok");
+		expect(counter.checked(false)).toBe("ok");
+		expect(counter.checked(false)).toBe("nudge");
+		expect(counter.checked(false)).toBe("ok");
+		expect(counter.checked(false)).toBe("settle");
+	});
+
+	// The nudge is spent once per transaction. A guard that repeats itself every
+	// third check is noise, and the model has already been told.
+	it("does not nudge twice in one transaction", () => {
+		const { counter } = source();
+
+		counter.checked(false);
+		counter.checked(false);
+		expect(counter.checked(false)).toBe("nudge");
+		counter.changed();
+		expect(counter.checked(false)).toBe("ok");
+		expect(counter.checked(false)).toBe("ok");
+		expect(counter.checked(false)).toBe("ok");
+		expect(counter.checked(false)).toBe("ok");
+		expect(counter.checked(false)).toBe("settle");
 	});
 
 	// The distinction the whole guard rests on. A transaction working its way
@@ -40,7 +75,7 @@ describe("counting checks over files nobody changed", () => {
 		const { counter } = source();
 
 		for (const _ of [1, 2, 3, 4, 5]) {
-			expect(counter.checked(false)).toBe(false);
+			expect(counter.checked(false)).toBe("ok");
 			counter.changed();
 		}
 
@@ -52,9 +87,9 @@ describe("counting checks over files nobody changed", () => {
 
 		counter.checked(false);
 		counter.checked(false);
-		expect(counter.checked(true)).toBe(false);
+		expect(counter.checked(true)).toBe("ok");
 		expect(counter.streak).toBe(0);
-		expect(counter.checked(false)).toBe(false);
+		expect(counter.checked(false)).toBe("ok");
 	});
 
 	// Observed rather than announced, like the check-first gate next door: a
@@ -67,15 +102,17 @@ describe("counting checks over files nobody changed", () => {
 		counter.checked(false);
 		state.transaction = 2;
 
-		expect(counter.checked(false)).toBe(false);
+		expect(counter.checked(false)).toBe("ok");
 		expect(counter.streak).toBe(1);
 	});
 
 	it("takes the limit from the source when one is given", () => {
 		const { counter } = source(2);
 
-		expect(counter.checked(false)).toBe(false);
-		expect(counter.checked(false)).toBe(true);
+		expect(counter.checked(false)).toBe("ok");
+		expect(counter.checked(false)).toBe("nudge");
+		expect(counter.checked(false)).toBe("ok");
+		expect(counter.checked(false)).toBe("settle");
 	});
 });
 
@@ -141,5 +178,17 @@ describe("what the model is told", () => {
 		expect(message).toContain("node run_game.js");
 		expect(message).toContain("3 times");
 		expect(message).toContain("have not changed");
+	});
+
+	// The nudge must not read as a verdict. Nothing has been judged, nothing
+	// has been put back, and a message that sounds like a settlement would have
+	// the model report a transaction that is still open.
+	it("nudges without judging anything, and names a sharper instrument", () => {
+		const message = describeStalledCheckNudge(3, "node run_game.js");
+
+		expect(message).toContain("node run_game.js");
+		expect(message).toContain("3 times");
+		expect(message).toMatch(/check_file/);
+		expect(message).not.toMatch(/judged|put back|discarded|rolled back/i);
 	});
 });
