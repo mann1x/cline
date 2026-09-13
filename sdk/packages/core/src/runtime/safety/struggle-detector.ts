@@ -100,14 +100,13 @@ const HEDGING: readonly RegExp[] = [
 	/\bhmm+\b/gi,
 	/\blet me reconsider\b/gi,
 	/\bdead end\b/gi,
-	// `in` or `going`, never both at once: `going in circles` has to count as
-	// one hedge and not two. The second alternative is the only pattern in
-	// either lexicon with no occurrence behind it -- `going circles`, the
-	// preposition dropped, was reported from a live session and appears zero
-	// times in 198 plugin sessions and 323 harness runs. It is carried anyway
-	// because it cannot match anything else, and a small model dropping a
-	// preposition is not a hypothetical.
-	/\b(?:in|going) circles\b/gi,
+	// `going circles`, without the preposition, was carried here for one
+	// commit on a report from a live session, and the report was a typo: the
+	// phrase occurs zero times in 198 plugin sessions and 323 harness runs,
+	// where every instance is `going in circles`. Out again, on the same rule
+	// that keeps `I'm in trouble` out of the distress list -- a pattern with no
+	// occurrence behind it is a guess that reads like a measurement.
+	/\bin circles\b/gi,
 	/\bunexpected\b/gi,
 ];
 
