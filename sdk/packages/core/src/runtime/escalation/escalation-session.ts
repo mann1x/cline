@@ -118,6 +118,14 @@ export interface EscalationSession {
 	readonly tools: AgentTool[];
 	/** Escalations made. */
 	readonly used: number;
+	/**
+	 * Escalations still available.
+	 *
+	 * Read by the struggle detector's offer, which must not suggest a tool call
+	 * the budget would refuse -- an offer the model takes and is turned down on
+	 * is worse than no offer.
+	 */
+	readonly remaining: number;
 	/** What the expert has spent in this task. */
 	readonly usage: ExpertUsage;
 	/**
@@ -386,6 +394,11 @@ export function createEscalationSession(
 		tools,
 		get used() {
 			return controller.used;
+		},
+		get remaining() {
+			return tools.length === 0
+				? 0
+				: Math.max(0, maxEscalations - controller.used);
 		},
 		get usage() {
 			return controller.usage;

@@ -151,6 +151,11 @@ import { normalizeRuntimeCapabilities } from "../capabilities";
 import { normalizeConnectionUpdate } from "../config/connection-update";
 import { createEscalationSession } from "../escalation/escalation-session";
 import { buildExpertPrompt } from "../escalation/expert-prompt";
+import {
+	createPendingSuggestion,
+	describeEscalationOffer,
+	withStruggleSuggestion,
+} from "../escalation/struggle-offer";
 import { DefaultRuntimeBuilder } from "../orchestration/runtime-builder";
 import {
 	OAuthReauthRequiredError,
@@ -159,6 +164,10 @@ import {
 } from "../orchestration/runtime-oauth-token-manager";
 import type { RuntimeBuilder } from "../orchestration/session-runtime";
 import { SessionRuntime } from "../orchestration/session-runtime-orchestrator";
+import {
+	createStruggleFeed,
+	StruggleDetector,
+} from "../safety/struggle-detector";
 import { PendingPromptsController } from "../turn-queue/pending-prompt-service";
 import { manifestToSessionRecord } from "./history";
 import { AgentEventBridge } from "./local/agent-event-bridge";
@@ -274,6 +283,34 @@ function maxAccumulatedUsage(
 		cacheWriteTokens: Math.max(left.cacheWriteTokens, right.cacheWriteTokens),
 		totalCost: Math.max(left.totalCost, right.totalCost),
 	};
+}
+
+/**
+ * Which round of compaction a saved state carries, or 0 for none.
+ *
+ * Needed because `saveState` fires on every turn once a compaction exists --
+ * the pipeline re-projects the stored state each turn and persists the result
+ * -- so the write itself says nothing about whether anything was compacted.
+ * The summary message carries a generation, and that is what moves only when a
+ * new round actually happened.
+ */
+function latestCompactionGeneration(state: SessionCompactionState): number {
+	let highest = 0;
+	for (const message of state.messages) {
+		const metadata = (message as { metadata?: Record<string, unknown> })
+			.metadata;
+		if (metadata?.kind !== "compaction_summary") {
+			continue;
+		}
+		const generation = metadata.generation;
+		highest = Math.max(
+			highest,
+			typeof generation === "number" && Number.isFinite(generation)
+				? generation
+				: 1,
+		);
+	}
+	return highest;
 }
 
 function isIncomingCompactionStateStale(
@@ -956,6 +993,11 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// command, and because a transaction has to be judged on the deliberate
 		// way a run ends as well as the silent one.
 		let pendingAtomicStatus: { armed: boolean; message: string } | undefined;
+		// Declared here and built below, once the escalation session has said
+		// whether there is an expert to offer. The protocol's own events reach it
+		// through this binding, and a transaction boundary can be emitted while
+		// the protocol is still being constructed.
+		let struggleDetector: StruggleDetector | undefined;
 		const atomicProtocol = await createAtomicProtocolSession({
 			// The workspace before the working directory, unlike the shell: a
 			// rollback that covers less than the model can reach is not a rollback,
@@ -984,6 +1026,13 @@ export class LocalRuntimeHost implements RuntimeHost {
 			// happened three times and finished looks — in the transcript alone —
 			// exactly like one that got it right first time.
 			onEvent: (event) => {
+				// One suggestion per transaction: a second inside the same one
+				// repeats a diagnosis the model has not yet had the chance to act
+				// on, and the protocol's own boundary is the only honest place to
+				// decide that a new attempt has started.
+				if (event.type === "opened") {
+					struggleDetector?.noteTransaction(event.transaction);
+				}
 				// An empty submission is not a verdict and is not presented as one:
 				// nothing ran and nothing was put back. It still goes to the user,
 				// because a transaction that absorbed one and a transaction that
@@ -1280,9 +1329,38 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// input types and the delegated-agent builder takes the erased one; the
 		// runtime reads them through the same `execute` either way.
 		expertTools = toolsWithProtocol as AgentTool[];
+		// The struggle detector and the offer it earns.
+		//
+		// Built only where an expert is configured: the diagnosis is worth
+		// nothing on its own, and a session with nowhere to escalate to would
+		// pay to compute an offer it could not make. Where there is no expert
+		// this is every previous build, tool for tool.
+		const struggleSuggestion = createPendingSuggestion();
+		struggleDetector =
+			escalation.tools.length > 0 ? new StruggleDetector() : undefined;
+		const struggleFeed = struggleDetector
+			? createStruggleFeed(struggleDetector, (verdict) => {
+					const remaining = escalation.remaining;
+					// Never an offer the budget would refuse: a model that takes
+					// the advice and is turned down is worse off than one that
+					// was never given it.
+					if (remaining <= 0 || !verdict.message) {
+						return;
+					}
+					const offer = describeEscalationOffer({
+						diagnosis: verdict.message,
+						remaining,
+					});
+					configWithProvider.logger?.debug?.(`[Escalation] ${verdict.message}`);
+					struggleSuggestion.hold(offer);
+				})
+			: undefined;
 		const toolsWithEscalation =
 			escalation.tools.length > 0
-				? [...toolsWithProtocol, ...escalation.tools]
+				? withStruggleSuggestion(
+						[...toolsWithProtocol, ...escalation.tools],
+						struggleSuggestion,
+					)
 				: toolsWithProtocol;
 		const completionPolicyWithProtocol = atomicProtocol
 			? {
@@ -1309,6 +1387,12 @@ export class LocalRuntimeHost implements RuntimeHost {
 						rawInitialCompactionState.conversation_id?.trim() || sessionId,
 				}
 			: undefined;
+		// Never diagnose across a compaction. It is normal for a long task --
+		// 545 occurrences in the corpus this was built from -- and the reasoning
+		// the detector's window was counting is no longer in the conversation,
+		// so the model would be reading a diagnosis of something it can no
+		// longer see.
+		let seenCompactionGeneration = 0;
 		const prepareTurn = createCappedThinkingPrepareTurn(
 			createCompactionStateAwarePrepareTurn({
 				compact,
@@ -1320,6 +1404,11 @@ export class LocalRuntimeHost implements RuntimeHost {
 						...state,
 						conversation_id: activeSession.sessionId,
 					};
+					const generation = latestCompactionGeneration(stateForSession);
+					if (generation > seenCompactionGeneration) {
+						seenCompactionGeneration = generation;
+						struggleDetector?.noteCompaction();
+					}
 					try {
 						// Validate against the exact messages the state's hash was
 						// computed from. Mid-turn, `agent.getMessages()` (the
@@ -1463,12 +1552,16 @@ export class LocalRuntimeHost implements RuntimeHost {
 			alwaysDescribeImages: configWithProvider.alwaysDescribeImages,
 			logger: runtime.logger ?? configWithProvider.logger,
 			extensionContext: configWithProvider.extensionContext,
-			onEvent: (event: AgentEvent) =>
+			onEvent: (event: AgentEvent) => {
+				// Before the dispatch, so a listener that throws cannot cost the
+				// detector the turn it was counting.
+				struggleFeed?.observe(event);
 				this.eventBridge.dispatchAgentEvent(
 					sessionId,
 					configWithProvider,
 					event,
-				),
+				);
+			},
 		} as AgentConfig;
 		agentConfig.hooks = {
 			...agentConfig.hooks,

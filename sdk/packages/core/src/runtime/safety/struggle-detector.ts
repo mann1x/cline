@@ -1,0 +1,454 @@
+/**
+ * Per-session scorer for "this run is not going anywhere".
+ *
+ * Built from 360 harness run digests, replayed against every run's iteration
+ * timeline. Two findings shaped it, and both cut against the obvious design:
+ *
+ * - **Absolute hedging does not separate anything.** `wait` spans 5.4 to 11.9
+ *   per 1,000 reasoning words across thirteen cohorts with no relation to
+ *   outcome: the highest rate in the study belongs to a mediocre model and the
+ *   lowest to the weakest one in it. What separates a converging run from a
+ *   stuck one is whether hedging *decays* -- `hmm` collapses to 14% of its
+ *   opening rate in runs that end FIXED and holds at 57% in runs that do not.
+ *   So the feature is the ratio of the current window to the run's own opening,
+ *   which needs no cross-model calibration.
+ * - **Lexical evidence alone is unusable.** `distress10 >= 2` catches 86% of
+ *   failures and fires on 62% of successes -- 46% of successes by the good
+ *   models, which should almost never be told they are struggling. Behavioural
+ *   evidence alone is precise and far too late: `f10 >= 5` arrives with 46
+ *   iterations left of a 300-iteration run.
+ *
+ * The conjunction is what earns its place. Replayed over the corpus it fires at
+ * 42% of the way in, leaves 91 iterations of budget to spend differently, and
+ * troubles a healthy good-model run once in twenty-five: 56% recall, 15% false
+ * alarm overall, 4% on the good models.
+ *
+ * Diagnosis only, never the consequence -- the same separation the loop
+ * detector next door keeps. What this says is what it measured; whether that
+ * earns an offer of help, and in what words, belongs to the caller.
+ */
+
+import type { AgentEvent } from "@cline/shared";
+
+/** Iterations of history the trigger reads. */
+export const STRUGGLE_WINDOW = 10;
+
+/**
+ * Failed tool calls in that window before the behavioural half is satisfied.
+ *
+ * Four, not five. Five is the precise-but-late operating point -- 48% recall at
+ * a 7% false alarm, firing 60% of the way into a run -- and the conjunction
+ * below already supplies the precision that the lower threshold gives up.
+ */
+export const STRUGGLE_FAILED_CALLS = 4;
+
+/** Distress-lexicon hits in the window that satisfy the lexical half. */
+export const STRUGGLE_DISTRESS_HITS = 2;
+
+/**
+ * Before this iteration nothing fires, whatever the evidence says.
+ *
+ * A run that is genuinely stuck at iteration 12 is indistinguishable from one
+ * that is still reading the problem, and the corpus has no operating point
+ * below 20 that is worth its false alarms.
+ */
+export const STRUGGLE_MIN_ITERATION = 20;
+
+/** Suggestions per task. Two, and at most one per transaction. */
+export const STRUGGLE_MAX_PER_TASK = 2;
+
+/**
+ * Phrases that are distress rather than deliberation.
+ *
+ * `I'm confusing` is the most frequent match in the corpus at 1,628 hits and it
+ * is two different things: `I'm confusing myself` is the marker, and `I'm
+ * confusing X with Y` is a model correctly noticing it mixed up two names. The
+ * first is anchored to `myself` here for exactly that reason -- a lexicon that
+ * counted both would be counting competence as distress.
+ *
+ * `I'm in trouble` is deliberately absent: it was searched for across all 360
+ * runs and does not occur.
+ */
+const DISTRESS: readonly RegExp[] = [
+	/\bi ?'?m confusing myself\b/i,
+	/\bi ?'?m confused\b/i,
+	/\bkeeps? failing\b/i,
+	/\bi ?'?m stuck\b/i,
+	/\bi ?'?m not sure\b/i,
+	/\bthat makes no sense\b/i,
+];
+
+/**
+ * Hedging, counted for its decay and never for its level.
+ *
+ * See the header: the level is noise across cohorts. These are the markers
+ * whose first-fifth-to-last-fifth ratio separated the two populations.
+ */
+const HEDGING: readonly RegExp[] = [
+	/\bwait\b/gi,
+	/\bhmm+\b/gi,
+	/\blet me reconsider\b/gi,
+	/\bdead end\b/gi,
+	/\bin circles\b/gi,
+	/\bunexpected\b/gi,
+];
+
+/** What one iteration contributed, kept so the window can slide over it. */
+interface IterationRecord {
+	iteration: number;
+	failedCalls: number;
+	distress: number;
+	hedging: number;
+	words: number;
+}
+
+export interface StruggleSignals {
+	/** The iteration the verdict was asked for. */
+	iteration: number;
+	/** Failed tool calls in the last `STRUGGLE_WINDOW` iterations. */
+	failedCalls: number;
+	/** Distress-lexicon hits in the same window. */
+	distress: number;
+	/**
+	 * Hedging in the window as a multiple of the run's own opening rate, or
+	 * undefined where there is not yet an opening rate to compare against.
+	 */
+	hedgingRatio?: number;
+}
+
+export interface StruggleVerdict {
+	kind: "ok" | "suggest";
+	/** What was measured. Never what should be done about it. */
+	message?: string;
+	signals?: StruggleSignals;
+}
+
+export interface StruggleTurn {
+	iteration: number;
+	/** The model's reasoning for that turn, where the provider reports it. */
+	reasoning?: string;
+}
+
+export interface StruggleToolOutcome {
+	iteration: number;
+	failed: boolean;
+}
+
+export interface StruggleInspection {
+	iteration: number;
+}
+
+function count(
+	text: string,
+	patterns: readonly RegExp[],
+	global: boolean,
+): number {
+	let hits = 0;
+	for (const pattern of patterns) {
+		if (global) {
+			hits += text.match(pattern)?.length ?? 0;
+		} else if (pattern.test(text)) {
+			hits += 1;
+		}
+	}
+	return hits;
+}
+
+function words(text: string): number {
+	const trimmed = text.trim();
+	return trimmed === "" ? 0 : trimmed.split(/\s+/).length;
+}
+
+/** Hedging per 1,000 words, or undefined where there are too few to divide by. */
+function rate(hedging: number, wordCount: number): number | undefined {
+	return wordCount === 0 ? undefined : (hedging * 1000) / wordCount;
+}
+
+/**
+ * What the detector measured, in the model's own terms.
+ *
+ * Written as observation and nothing else. The loop detector's header explains
+ * why at length: a message that names a consequence the caller has not decided
+ * on describes something that did not happen.
+ */
+export function describeStruggle(signals: StruggleSignals): string {
+	const lines = [
+		`Over your last ${STRUGGLE_WINDOW} turns: ${signals.failedCalls} tool call${
+			signals.failedCalls === 1 ? "" : "s"
+		} came back as failures or refusals.`,
+	];
+	if (signals.distress >= STRUGGLE_DISTRESS_HITS) {
+		lines.push(
+			`Your own reasoning said so ${signals.distress} times over the same turns — stuck, confused, or that something keeps failing.`,
+		);
+	}
+	if (signals.hedgingRatio !== undefined && signals.hedgingRatio >= 1) {
+		lines.push(
+			`You are hedging at ${signals.hedgingRatio.toFixed(2)}× the rate you opened this run with, and a run that is converging hedges less as it goes, not the same or more.`,
+		);
+	}
+	return lines.join(" ");
+}
+
+/**
+ * Per-session struggle scorer.
+ *
+ * The caller feeds it turns and tool outcomes and asks `inspect` at a boundary
+ * of its choosing. Nothing here reads the clock, the provider or the workspace.
+ */
+export class StruggleDetector {
+	private readonly history: IterationRecord[] = [];
+	/** The run's opening hedging rate, frozen once the baseline window closes. */
+	private baseline?: number;
+	private baselineHedging = 0;
+	private baselineWords = 0;
+	private firedInTask = 0;
+	private firedInTransaction = false;
+	private transaction = 0;
+	private lastFiredKey?: string;
+	/**
+	 * Files the session has changed, for the rule that a diagnosis is never
+	 * repeated over an unchanged file set.
+	 *
+	 * A model told it is struggling, which then changes nothing, has been told
+	 * everything this can tell it -- and the two-per-task allowance is there
+	 * for a run that moved on to different code, not for one saying the same
+	 * thing about the same file twice.
+	 */
+	private readonly changedFiles = new Set<string>();
+
+	/** Record a file this session has changed. */
+	noteFileChanged(path: string): void {
+		this.changedFiles.add(path);
+	}
+
+	/** Record a turn's reasoning, which is where both lexicons are counted. */
+	noteTurn(turn: StruggleTurn): void {
+		const record = this.recordFor(turn.iteration);
+		const text = turn.reasoning ?? "";
+		if (text === "") {
+			return;
+		}
+		record.distress += count(text, DISTRESS, false);
+		record.hedging += count(text, HEDGING, true);
+		record.words += words(text);
+		this.absorbBaseline(turn.iteration);
+	}
+
+	/** Record one tool call's outcome. Only the failures are counted. */
+	noteToolOutcome(outcome: StruggleToolOutcome): void {
+		if (!outcome.failed) {
+			// Still recorded, so the iteration exists in the window even when
+			// every call in it succeeded.
+			this.recordFor(outcome.iteration);
+			return;
+		}
+		this.recordFor(outcome.iteration).failedCalls += 1;
+	}
+
+	/**
+	 * Context was compacted.
+	 *
+	 * Never fire across one. Compaction is normal for a long task -- 545
+	 * occurrences in the corpus -- and the reasoning the window was counting is
+	 * no longer in the conversation, so the evidence for a diagnosis the model
+	 * would now be reading for the first time has been deleted. The window
+	 * rebuilds from here.
+	 */
+	noteCompaction(): void {
+		this.history.length = 0;
+	}
+
+	/**
+	 * The change protocol opened a transaction.
+	 *
+	 * At most one suggestion per transaction: a second inside the same one is a
+	 * repeat of a diagnosis the model has already been given and has not been
+	 * able to act on yet.
+	 */
+	noteTransaction(transaction: number): void {
+		if (transaction === this.transaction) {
+			return;
+		}
+		this.transaction = transaction;
+		this.firedInTransaction = false;
+	}
+
+	/** The signals as they stand, without the caps or the firing decision. */
+	signalsAt(iteration: number): StruggleSignals {
+		const window = this.history.filter(
+			(record) => record.iteration > iteration - STRUGGLE_WINDOW,
+		);
+		const hedging = window.reduce((sum, record) => sum + record.hedging, 0);
+		const wordCount = window.reduce((sum, record) => sum + record.words, 0);
+		const current = rate(hedging, wordCount);
+		return {
+			iteration,
+			failedCalls: window.reduce((sum, record) => sum + record.failedCalls, 0),
+			distress: window.reduce((sum, record) => sum + record.distress, 0),
+			...(this.baseline !== undefined &&
+			this.baseline > 0 &&
+			current !== undefined
+				? { hedgingRatio: current / this.baseline }
+				: {}),
+		};
+	}
+
+	inspect(input: StruggleInspection): StruggleVerdict {
+		const { iteration } = input;
+		if (
+			iteration < STRUGGLE_MIN_ITERATION ||
+			this.firedInTransaction ||
+			this.firedInTask >= STRUGGLE_MAX_PER_TASK
+		) {
+			return { kind: "ok" };
+		}
+		const signals = this.signalsAt(iteration);
+		if (signals.failedCalls < STRUGGLE_FAILED_CALLS) {
+			return { kind: "ok" };
+		}
+		// The disjunction: either the model said so, or it has stopped getting
+		// less unsure. One of the two, never neither -- the failures on their own
+		// are the late-and-precise operating point this exists to improve on.
+		const lexical = signals.distress >= STRUGGLE_DISTRESS_HITS;
+		const noDecay =
+			signals.hedgingRatio !== undefined && signals.hedgingRatio >= 1;
+		if (!lexical && !noDecay) {
+			return { kind: "ok" };
+		}
+		// Same diagnosis, same files: nothing has happened since it was last
+		// said, so saying it again is noise the model has already ignored once.
+		const key = `${lexical ? "d" : ""}${noDecay ? "h" : ""}|${[...this.changedFiles].sort().join("\u0000")}`;
+		if (key === this.lastFiredKey) {
+			return { kind: "ok" };
+		}
+		this.lastFiredKey = key;
+		this.firedInTransaction = true;
+		this.firedInTask += 1;
+		return { kind: "suggest", message: describeStruggle(signals), signals };
+	}
+
+	private recordFor(iteration: number): IterationRecord {
+		const last = this.history.at(-1);
+		if (last?.iteration === iteration) {
+			return last;
+		}
+		const record: IterationRecord = {
+			iteration,
+			failedCalls: 0,
+			distress: 0,
+			hedging: 0,
+			words: 0,
+		};
+		this.history.push(record);
+		// Only the window is ever read, and a long run would otherwise hold
+		// every iteration it has had.
+		while (this.history.length > STRUGGLE_WINDOW * 2) {
+			this.history.shift();
+		}
+		return record;
+	}
+
+	/**
+	 * Fold a turn into the run's opening rate while the baseline is still open.
+	 *
+	 * Frozen after the first `STRUGGLE_WINDOW` iterations, because the
+	 * comparison is against how this run started and a baseline that kept
+	 * moving would converge on the window it is being compared to.
+	 */
+	private absorbBaseline(iteration: number): void {
+		if (iteration > STRUGGLE_WINDOW) {
+			return;
+		}
+		// Recomputed from the records rather than accumulated, so two turns
+		// noted for one iteration cannot double-count into the baseline.
+		const opening = this.history.filter(
+			(entry) => entry.iteration <= STRUGGLE_WINDOW,
+		);
+		this.baselineHedging = opening.reduce(
+			(sum, entry) => sum + entry.hedging,
+			0,
+		);
+		this.baselineWords = opening.reduce((sum, entry) => sum + entry.words, 0);
+		this.baseline = rate(this.baselineHedging, this.baselineWords);
+	}
+}
+
+/**
+ * Tools that change a file, so the detector can tell one diagnosis from the
+ * next by what has moved since.
+ */
+const CHANGING_TOOLS = new Set(["editor", "apply_patch", "restore_file"]);
+
+export interface StruggleFeed {
+	/** Fold one agent event into the detector, and inspect at a turn's end. */
+	observe(event: AgentEvent): void;
+}
+
+/**
+ * Drive a detector from the session's own event stream.
+ *
+ * Everything the trigger needs is already on the wire: `iteration_start`
+ * carries the cursor, `content_end` carries the turn's reasoning and each tool
+ * call's error, and `content_start` carries the tool input the file set is read
+ * from. Nothing here reaches into the runtime.
+ *
+ * `onSuggest` fires at the end of a turn and never mid-turn: a diagnosis
+ * delivered between two tool calls of the same reply arrives in the middle of
+ * work the model has already decided on.
+ */
+export function createStruggleFeed(
+	detector: StruggleDetector,
+	onSuggest: (verdict: StruggleVerdict) => void,
+): StruggleFeed {
+	let iteration = 0;
+	return {
+		observe(event: AgentEvent): void {
+			switch (event.type) {
+				case "iteration_start":
+					iteration = event.iteration;
+					return;
+				case "content_start": {
+					if (
+						event.contentType !== "tool" ||
+						!event.toolName ||
+						!CHANGING_TOOLS.has(event.toolName)
+					) {
+						return;
+					}
+					const input = event.input;
+					const path =
+						input && typeof input === "object"
+							? (input as { path?: unknown }).path
+							: undefined;
+					if (typeof path === "string" && path !== "") {
+						detector.noteFileChanged(path);
+					}
+					return;
+				}
+				case "content_end":
+					if (event.contentType === "reasoning") {
+						detector.noteTurn({
+							iteration,
+							reasoning: event.reasoning ?? event.text ?? "",
+						});
+					} else if (event.contentType === "tool") {
+						detector.noteToolOutcome({
+							iteration,
+							failed: event.error !== undefined,
+						});
+					}
+					return;
+				case "iteration_end": {
+					const verdict = detector.inspect({ iteration: event.iteration });
+					if (verdict.kind === "suggest") {
+						onSuggest(verdict);
+					}
+					return;
+				}
+				default:
+					return;
+			}
+		},
+	};
+}
