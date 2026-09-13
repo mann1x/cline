@@ -349,15 +349,28 @@ describe("the lexicon reaches the words models actually use", () => {
 	}
 
 	it("reads a model reporting it has lost ground as distress", () => {
-		// Reported from a live session: "I keep regressing". Nothing in the
-		// lexicon matched it, and it is the one phrase here that cannot be a
-		// model deliberating carefully.
+		// The four shapes the plugin corpus actually contains. The subject
+		// varies -- the model, its edits, the file, the task -- which is why
+		// the pattern is the participle alone and not a first-person frame.
+		for (const said of [
+			"I keep regressing. Let me try the edit again.",
+			"My edits keep regressing, so the file is worse than before.",
+			"The file keeps regressing every time I touch line 90.",
+			"Previous edits have been regressing the fix.",
+		]) {
+			expect(signalsFor(said).distress).toBeGreaterThanOrEqual(
+				STRUGGLE_DISTRESS_HITS,
+			);
+		}
+	});
+
+	it("does not read the noun as distress", () => {
+		// `regression` is a different word, and a run writing or discussing
+		// regression tests is not in trouble for saying so.
 		expect(
-			signalsFor("I keep regressing. Let me try the edit again.").distress,
-		).toBeGreaterThanOrEqual(STRUGGLE_DISTRESS_HITS);
-		expect(
-			signalsFor("I'm regressing on every attempt.").distress,
-		).toBeGreaterThanOrEqual(STRUGGLE_DISTRESS_HITS);
+			signalsFor("The regression suite covers this, so add a regression test.")
+				.distress,
+		).toBe(0);
 	});
 
 	// Hedging is only ever exposed as a ratio to the run's opening rate, and
