@@ -114,3 +114,81 @@ describe("how it reaches the model", () => {
 		expect(result).toEqual({ rows: 3 });
 	});
 });
+
+describe("an offer that cannot ride the result it was given", () => {
+	// The bug this covers, measured on manic-harness run 0298 (jackod4ac 9B,
+	// 4.100.108, 155 iterations): the detector fired at iteration 130 and the
+	// word "escalate" appears nowhere in the transcript. `take()` consumed the
+	// offer before checking whether the result could carry it, so a structured
+	// result swallowed it. 106 of that run's 154 calls were `read_files` or
+	// `run_commands`, neither of which answers with a plain string.
+	it("keeps the offer held when the result cannot carry it", async () => {
+		const pending = createPendingSuggestion();
+		const structured = {
+			...tool("run_commands"),
+			execute: async () => ({ rows: 3 }),
+		} as unknown as AgentTool<unknown, unknown>;
+		const [wrappedStructured] = withStruggleSuggestion([structured], pending);
+		const [wrappedText] = withStruggleSuggestion([tool("editor")], pending);
+		pending.hold("the offer");
+
+		const first = await (
+			wrappedStructured as unknown as AgentTool<unknown, unknown>
+		).execute({}, context);
+		expect(first).toEqual({ rows: 3 });
+
+		// Still owed, so the next result that can carry it does.
+		const second = await (
+			wrappedText as unknown as AgentTool<unknown, unknown>
+		).execute({}, context);
+		expect(second).toContain("the offer");
+	});
+
+	// `read_files` answers with one entry per path. It is the most likely call
+	// to follow a diagnosis -- a model told it is struggling reads before it
+	// edits -- so the offer has to reach this shape rather than wait it out.
+	it("rides a per-file result list", async () => {
+		const pending = createPendingSuggestion();
+		const reader = {
+			...tool("read_files"),
+			execute: async () => [
+				{ query: "a.js", result: "contents of a", success: true },
+				{ query: "b.js", result: "contents of b", success: true },
+			],
+		} as unknown as AgentTool<unknown, unknown>;
+		const [wrapped] = withStruggleSuggestion([reader], pending);
+		pending.hold("the offer");
+
+		const result = (await (
+			wrapped as unknown as AgentTool<unknown, unknown>
+		).execute({}, context)) as {
+			result: string;
+		}[];
+
+		expect(result[0]?.result).toBe("contents of a");
+		expect(result[1]?.result).toContain("contents of b");
+		expect(result[1]?.result).toContain("the offer");
+	});
+
+	it("does not attach to an entry that failed, and stays held", async () => {
+		const pending = createPendingSuggestion();
+		const failing = {
+			...tool("read_files"),
+			execute: async () => [
+				{ query: "a.js", result: "", success: false, error: "no such file" },
+			],
+		} as unknown as AgentTool<unknown, unknown>;
+		const [wrapped] = withStruggleSuggestion([failing], pending);
+		const [wrappedText] = withStruggleSuggestion([tool("editor")], pending);
+		pending.hold("the offer");
+
+		await (wrapped as unknown as AgentTool<unknown, unknown>).execute(
+			{},
+			context,
+		);
+		const next = await (
+			wrappedText as unknown as AgentTool<unknown, unknown>
+		).execute({}, context);
+		expect(next).toContain("the offer");
+	});
+});

@@ -2373,6 +2373,74 @@ describe("translateSessionEvent — agent_event notice", () => {
 		expect(info).toMatchObject({ attempt: 2, maxAttempts: 2, compacting: false })
 	})
 
+	// Between the hand-over and the delivery the panel had nothing at all, and
+	// on 2026-09-13 that was twenty minutes of one collapsed grey line while the
+	// expert made twelve tool calls. The progress row fills it -- one row,
+	// rewritten, which the delivery then takes over so the header never adds the
+	// same turn's spend twice.
+	it("rewrites one progress row while the expert works, and lets the delivery take it over", () => {
+		const state = new MessageTranslatorState()
+		const progress = (toolCalls: number, lastTool: string, inputTokens: number) =>
+			translateSessionEvent(
+				noticeEvent(`The expert is working: ${toolCalls} tool calls so far.`, {
+					kind: "expert_progress",
+					index: 2,
+					of: 3,
+					toolCalls,
+					lastTool,
+					usage: {
+						inputTokens,
+						outputTokens: 400,
+						generateTokens: 400,
+						generateMs: 8_000,
+						wallMs: 90_000,
+						requests: 1,
+					},
+				}),
+				state,
+			)
+
+		const first = progress(1, "read_files", 31_054)
+		const second = progress(2, "grep", 37_241)
+
+		expect(first.messages).toHaveLength(1)
+		expect(second.messages).toHaveLength(1)
+		// Same row: the webview replaces by ts, so the second overwrites the first.
+		expect(second.messages[0].ts).toBe(first.messages[0].ts)
+		expect(JSON.parse(second.messages[0].text ?? "{}")).toMatchObject({
+			phase: "working",
+			index: 2,
+			of: 3,
+			toolCalls: 2,
+			lastTool: "grep",
+			usage: { tokensIn: 37_241 },
+		})
+
+		const delivery = translateSessionEvent(
+			noticeEvent("fixed line 90", {
+				kind: "expert_reply",
+				changed: ["manic_miner.html"],
+				usage: {
+					inputTokens: 37_241,
+					outputTokens: 900,
+					generateTokens: 900,
+					generateMs: 20_000,
+					wallMs: 120_000,
+					requests: 1,
+				},
+			}),
+			state,
+		)
+
+		expect(delivery.messages[0].ts).toBe(first.messages[0].ts)
+		expect(JSON.parse(delivery.messages[0].text ?? "{}")).toMatchObject({ phase: "reply" })
+
+		// And the next escalation starts a fresh progress row rather than
+		// reusing the one the delivery consumed.
+		const later = progress(1, "read_files", 100)
+		expect(later.messages[0].ts).not.toBe(first.messages[0].ts)
+	})
+
 	// The exchange with the expert, as four notices that become one row type.
 	// Keyed on `kind` rather than on the message text, which is written for a
 	// human and will be reworded.

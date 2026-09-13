@@ -92,6 +92,15 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 		(currentTab === "escalation" && !escalationModelEnabled) ||
 		(currentTab === "imagegen" && !imageGenEnabled)
 	const activeTab: ConfigTab = scopedTabOff ? mode : currentTab
+	// The feature toggles belong to the Model tab and are shown only there.
+	//
+	// They used to sit below the tab content on every tab, which put "Use a
+	// different model for escalation" directly under the Escalation tab's own
+	// settings -- and unticking it there removes the tab you are standing on,
+	// unmounting the panel mid-edit and losing whatever was typed into it. The
+	// toggles say which tabs exist; the tab they switch off is the wrong place
+	// to offer them.
+	const onModelTab = activeTab !== "vision" && activeTab !== "agents" && activeTab !== "escalation" && activeTab !== "imagegen"
 	const showTabs =
 		planActSeparateModelsSetting || visionModelEnabled || agentsModelEnabled || escalationModelEnabled || imageGenEnabled
 	// One profile list for every tab; only the target changes with the tab. The
@@ -226,161 +235,167 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 					<ApiOptions currentMode={mode} initialModelTab={initialModelTab} showModelOptions={true} />
 				)}
 
-				<div className="mb-[5px]">
-					<SettingsCheckbox
-						checked={escalationModelEnabled}
-						className="mb-[5px]"
-						onChange={async (checked: boolean) => {
-							try {
-								await StateServiceClient.updateSettings(
-									UpdateSettingsRequest.create({ escalationModelEnabled: checked }),
-								)
-							} catch (error) {
-								console.error("Failed to update escalation model setting:", error)
-								throw error
-							}
-						}}>
-						Use a different model for escalation
-					</SettingsCheckbox>
-					<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
-						When the model gets stuck it can hand the task to the model on the Escalation tab — on request, or when a
-						guard would otherwise stop the run. The expert is meant to be the expensive one: a metered account, a
-						limited allowance, or a larger model that has to be loaded. It is told so, and asked not to be called for
-						work the session's own model can finish.
-					</p>
-					{escalationUnconfigured ? (
-						<p className="text-xs mt-[5px] text-(--vscode-errorForeground)">
-							The Escalation tab does not name both a provider and a model, so there is nothing to escalate to and
-							the guards will stop the run as before. Pick a provider <em>and</em> a model on the Escalation tab.
-						</p>
-					) : null}
-				</div>
+				{onModelTab ? (
+					<>
+						<div className="mb-[5px]">
+							<SettingsCheckbox
+								checked={escalationModelEnabled}
+								className="mb-[5px]"
+								onChange={async (checked: boolean) => {
+									try {
+										await StateServiceClient.updateSettings(
+											UpdateSettingsRequest.create({ escalationModelEnabled: checked }),
+										)
+									} catch (error) {
+										console.error("Failed to update escalation model setting:", error)
+										throw error
+									}
+								}}>
+								Use a different model for escalation
+							</SettingsCheckbox>
+							<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
+								When the model gets stuck it can hand the task to the model on the Escalation tab — on request, or
+								when a guard would otherwise stop the run. The expert is meant to be the expensive one: a metered
+								account, a limited allowance, or a larger model that has to be loaded. It is told so, and asked
+								not to be called for work the session's own model can finish.
+							</p>
+							{escalationUnconfigured ? (
+								<p className="text-xs mt-[5px] text-(--vscode-errorForeground)">
+									The Escalation tab does not name both a provider and a model, so there is nothing to escalate
+									to and the guards will stop the run as before. Pick a provider <em>and</em> a model on the
+									Escalation tab.
+								</p>
+							) : null}
+						</div>
 
-				<div className="mb-[5px]">
-					<SettingsCheckbox
-						checked={planActSeparateModelsSetting}
-						className="mb-[5px]"
-						onChange={async (checked: boolean) => {
-							try {
-								// If unchecking the toggle, wait a bit for state to update, then sync configurations
-								if (!checked) {
-									await syncModeConfigurations(
-										apiConfiguration,
-										activeTab === "vision" ||
-											activeTab === "agents" ||
-											activeTab === "escalation" ||
-											activeTab === "imagegen"
-											? mode
-											: activeTab,
-										handleFieldsChange,
-									)
-								}
-								await StateServiceClient.updateSettings(
-									UpdateSettingsRequest.create({
-										planActSeparateModelsSetting: checked,
-									}),
-								)
-							} catch (error) {
-								console.error("Failed to update separate models setting:", error)
-								throw error
-							}
-						}}>
-						Use different models for Plan and Act modes
-					</SettingsCheckbox>
-					<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
-						Switching between Plan and Act mode will persist the API and model used in the previous mode. This may be
-						helpful e.g. when using a strong reasoning model to architect a plan for a cheaper coding model to act on.
-					</p>
-				</div>
+						<div className="mb-[5px]">
+							<SettingsCheckbox
+								checked={planActSeparateModelsSetting}
+								className="mb-[5px]"
+								onChange={async (checked: boolean) => {
+									try {
+										// If unchecking the toggle, wait a bit for state to update, then sync configurations
+										if (!checked) {
+											await syncModeConfigurations(
+												apiConfiguration,
+												activeTab === "vision" ||
+													activeTab === "agents" ||
+													activeTab === "escalation" ||
+													activeTab === "imagegen"
+													? mode
+													: activeTab,
+												handleFieldsChange,
+											)
+										}
+										await StateServiceClient.updateSettings(
+											UpdateSettingsRequest.create({
+												planActSeparateModelsSetting: checked,
+											}),
+										)
+									} catch (error) {
+										console.error("Failed to update separate models setting:", error)
+										throw error
+									}
+								}}>
+								Use different models for Plan and Act modes
+							</SettingsCheckbox>
+							<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
+								Switching between Plan and Act mode will persist the API and model used in the previous mode. This
+								may be helpful e.g. when using a strong reasoning model to architect a plan for a cheaper coding
+								model to act on.
+							</p>
+						</div>
 
-				<div className="mb-[5px]">
-					<SettingsCheckbox
-						checked={visionModelEnabled}
-						className="mb-[5px]"
-						onChange={async (checked: boolean) => {
-							try {
-								await StateServiceClient.updateSettings(
-									UpdateSettingsRequest.create({ visionModelEnabled: checked }),
-								)
-							} catch (error) {
-								console.error("Failed to update vision model setting:", error)
-								throw error
-							}
-						}}>
-						Use a different model for vision processing
-					</SettingsCheckbox>
-					<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
-						Images produced by tools — browser screenshots, for example — are sent to the model configured on the
-						Vision tab, which describes them in text for the main model. Useful when the main model cannot read images
-						at all, or reads them poorly.
-					</p>
-					{visionUnconfigured ? (
-						<p className="text-xs mt-[5px] text-(--vscode-errorForeground)">
-							The Vision tab does not name both a provider and a model, so nothing will describe images: they will
-							not be accepted, and any already in a task are dropped rather than sent to a main model that cannot
-							read them. Pick a provider <em>and</em> a model on the Vision tab.
-						</p>
-					) : null}
-				</div>
+						<div className="mb-[5px]">
+							<SettingsCheckbox
+								checked={visionModelEnabled}
+								className="mb-[5px]"
+								onChange={async (checked: boolean) => {
+									try {
+										await StateServiceClient.updateSettings(
+											UpdateSettingsRequest.create({ visionModelEnabled: checked }),
+										)
+									} catch (error) {
+										console.error("Failed to update vision model setting:", error)
+										throw error
+									}
+								}}>
+								Use a different model for vision processing
+							</SettingsCheckbox>
+							<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
+								Images produced by tools — browser screenshots, for example — are sent to the model configured on
+								the Vision tab, which describes them in text for the main model. Useful when the main model cannot
+								read images at all, or reads them poorly.
+							</p>
+							{visionUnconfigured ? (
+								<p className="text-xs mt-[5px] text-(--vscode-errorForeground)">
+									The Vision tab does not name both a provider and a model, so nothing will describe images:
+									they will not be accepted, and any already in a task are dropped rather than sent to a main
+									model that cannot read them. Pick a provider <em>and</em> a model on the Vision tab.
+								</p>
+							) : null}
+						</div>
 
-				<div className="mb-[5px]">
-					<SettingsCheckbox
-						checked={agentsModelEnabled}
-						className="mb-[5px]"
-						onChange={async (checked: boolean) => {
-							try {
-								await StateServiceClient.updateSettings(
-									UpdateSettingsRequest.create({ agentsModelEnabled: checked }),
-								)
-							} catch (error) {
-								console.error("Failed to update agents model setting:", error)
-								throw error
-							}
-						}}>
-						Use a different model for subagents and teammates
-					</SettingsCheckbox>
-					<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
-						Delegated agents otherwise run on the session's own model, with the session's own context window and
-						sampler. The Agents tab gives them their own — a smaller or cheaper model under a strong lead, or the same
-						model with a window sized for the narrower job.
-					</p>
-					{agentsUnconfigured ? (
-						<p className="text-xs mt-[5px] text-(--vscode-errorForeground)">
-							The Agents tab does not name both a provider and a model, so delegated agents keep running on the
-							session's model. Pick a provider <em>and</em> a model on the Agents tab.
-						</p>
-					) : null}
-				</div>
+						<div className="mb-[5px]">
+							<SettingsCheckbox
+								checked={agentsModelEnabled}
+								className="mb-[5px]"
+								onChange={async (checked: boolean) => {
+									try {
+										await StateServiceClient.updateSettings(
+											UpdateSettingsRequest.create({ agentsModelEnabled: checked }),
+										)
+									} catch (error) {
+										console.error("Failed to update agents model setting:", error)
+										throw error
+									}
+								}}>
+								Use a different model for subagents and teammates
+							</SettingsCheckbox>
+							<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
+								Delegated agents otherwise run on the session's own model, with the session's own context window
+								and sampler. The Agents tab gives them their own — a smaller or cheaper model under a strong lead,
+								or the same model with a window sized for the narrower job.
+							</p>
+							{agentsUnconfigured ? (
+								<p className="text-xs mt-[5px] text-(--vscode-errorForeground)">
+									The Agents tab does not name both a provider and a model, so delegated agents keep running on
+									the session's model. Pick a provider <em>and</em> a model on the Agents tab.
+								</p>
+							) : null}
+						</div>
 
-				<div className="mb-[5px]">
-					<SettingsCheckbox
-						checked={imageGenEnabled}
-						className="mb-[5px]"
-						onChange={async (checked: boolean) => {
-							try {
-								await StateServiceClient.updateSettings(
-									UpdateSettingsRequest.create({ imageGenEnabled: checked }),
-								)
-							} catch (error) {
-								console.error("Failed to update image generation setting:", error)
-								throw error
-							}
-						}}>
-						Use an endpoint for image generation
-					</SettingsCheckbox>
-					<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
-						Offers the <code>generate_image</code> tool, which turns a description into a picture and saves it into
-						the workspace — an app icon, a placeholder sprite, a mockup of a layout before it is built. The Images tab
-						names where to generate them: any endpoint serving the OpenAI images API, local or hosted. Nothing is
-						called until the model asks for a picture.
-					</p>
-					{imageGenUnconfigured ? (
-						<p className="text-xs mt-[5px] text-(--vscode-errorForeground)">
-							The Images tab does not name both an endpoint and a model, so the tool is not offered at all and the
-							model is never told it could make one. Fill in both on the Images tab.
-						</p>
-					) : null}
-				</div>
+						<div className="mb-[5px]">
+							<SettingsCheckbox
+								checked={imageGenEnabled}
+								className="mb-[5px]"
+								onChange={async (checked: boolean) => {
+									try {
+										await StateServiceClient.updateSettings(
+											UpdateSettingsRequest.create({ imageGenEnabled: checked }),
+										)
+									} catch (error) {
+										console.error("Failed to update image generation setting:", error)
+										throw error
+									}
+								}}>
+								Use an endpoint for image generation
+							</SettingsCheckbox>
+							<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
+								Offers the <code>generate_image</code> tool, which turns a description into a picture and saves it
+								into the workspace — an app icon, a placeholder sprite, a mockup of a layout before it is built.
+								The Images tab names where to generate them: any endpoint serving the OpenAI images API, local or
+								hosted. Nothing is called until the model asks for a picture.
+							</p>
+							{imageGenUnconfigured ? (
+								<p className="text-xs mt-[5px] text-(--vscode-errorForeground)">
+									The Images tab does not name both an endpoint and a model, so the tool is not offered at all
+									and the model is never told it could make one. Fill in both on the Images tab.
+								</p>
+							) : null}
+						</div>
+					</>
+				) : null}
 			</Section>
 		</div>
 	)

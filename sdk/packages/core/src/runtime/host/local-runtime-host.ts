@@ -1343,6 +1343,36 @@ export class LocalRuntimeHost implements RuntimeHost {
 					});
 					return;
 				}
+				if (event.type === "expert_progress") {
+					this.eventBridge.dispatchAgentEvent(sessionId, configWithProvider, {
+						type: "notice",
+						noticeType: "status",
+						displayRole: "status",
+						message: `The expert is working: ${event.toolCalls} tool call${
+							event.toolCalls === 1 ? "" : "s"
+						} so far.`,
+						metadata: {
+							kind: "expert_progress",
+							index: event.index,
+							of: event.of,
+							toolCalls: event.toolCalls,
+							...(event.lastTool ? { lastTool: event.lastTool } : {}),
+							// Carried the same way the delivery carries its own, so
+							// the task header's expert line ticks while the expert
+							// is working rather than jumping at the end. The row is
+							// replaced by the delivery, so nothing is counted twice.
+							usage: {
+								inputTokens: event.usage.inputTokens,
+								outputTokens: event.usage.outputTokens,
+								generateTokens: event.usage.generateTokens,
+								generateMs: event.usage.generateMs,
+								wallMs: event.usage.wallMs,
+								requests: event.usage.requests,
+							},
+						},
+					});
+					return;
+				}
 				if (event.type === "expert_asked") {
 					this.eventBridge.dispatchAgentEvent(sessionId, configWithProvider, {
 						type: "notice",

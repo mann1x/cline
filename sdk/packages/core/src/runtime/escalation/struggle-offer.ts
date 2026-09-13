@@ -53,6 +53,8 @@ export function describeEscalationOffer(input: {
 /** A held suggestion, taken by whichever tool result comes next. */
 export interface PendingSuggestion {
 	hold(message: string): void;
+	/** What is owed, without consuming it. */
+	peek(): string | undefined;
 	take(): string | undefined;
 }
 
@@ -62,12 +64,59 @@ export function createPendingSuggestion(): PendingSuggestion {
 		hold(message: string) {
 			held = message;
 		},
+		peek() {
+			return held;
+		},
 		take() {
 			const message = held;
 			held = undefined;
 			return message;
 		},
 	};
+}
+
+/**
+ * Put the suggestion on a result, or say that this result cannot carry one.
+ *
+ * Two shapes reach here. A tool that answers with text is appended to. A tool
+ * that answers with one entry per item -- `read_files` and its neighbours --
+ * has it appended to the last entry that succeeded, because an entry that
+ * failed is already carrying an explanation of its own and is the one the model
+ * is least likely to read to the end.
+ *
+ * Anything else returns `undefined`, and the caller leaves the suggestion held.
+ * That is the whole point of the split: consuming an offer that was never
+ * delivered is how this went silent.
+ */
+function withSuggestionAttached(
+	result: unknown,
+	suggestion: string,
+): unknown | undefined {
+	if (typeof result === "string") {
+		return `${result}\n\n${suggestion}`;
+	}
+	if (!Array.isArray(result)) {
+		return undefined;
+	}
+	for (let index = result.length - 1; index >= 0; index -= 1) {
+		const entry = result[index];
+		if (
+			!entry ||
+			typeof entry !== "object" ||
+			Array.isArray(entry) ||
+			(entry as { success?: unknown }).success === false ||
+			typeof (entry as { result?: unknown }).result !== "string"
+		) {
+			continue;
+		}
+		const copy = [...result];
+		copy[index] = {
+			...(entry as Record<string, unknown>),
+			result: `${(entry as { result: string }).result}\n\n${suggestion}`,
+		};
+		return copy;
+	}
+	return undefined;
 }
 
 /**
@@ -91,11 +140,20 @@ export function withStruggleSuggestion<T extends AgentToolDefinition>(
 			...original,
 			execute: async (input: unknown, context: AgentToolContext) => {
 				const result = await original.execute(input, context);
-				const suggestion = pending.take();
-				if (!suggestion || typeof result !== "string") {
+				// Peeked, not taken. `take()` used to run first and clear the
+				// offer whatever happened next, so a result that could not carry
+				// one swallowed it -- measured on run 0298, where the detector
+				// fired at iteration 130 and the model was never told.
+				const suggestion = pending.peek();
+				if (!suggestion) {
 					return result;
 				}
-				return `${result}\n\n${suggestion}`;
+				const delivered = withSuggestionAttached(result, suggestion);
+				if (delivered === undefined) {
+					return result;
+				}
+				pending.take();
+				return delivered;
 			},
 		} as unknown as T;
 	});

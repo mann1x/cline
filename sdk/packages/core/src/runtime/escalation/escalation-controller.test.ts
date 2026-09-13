@@ -17,6 +17,9 @@ function fakeSession(usage: Partial<ExpertUsage> = {}): ExpertSession & {
 	};
 	return {
 		closeCalls: 0,
+		get deliveries() {
+			return 0;
+		},
 		get followUps() {
 			return 0;
 		},
@@ -192,5 +195,41 @@ describe("createEscalationController", () => {
 		await controller.dispose();
 
 		expect(session.closed).toBe(true);
+	});
+
+	// A hand-over that never reached the expert is not a hand-over. The first
+	// escalation of run slhu9 failed 31ms in on a transport error, and the task
+	// came back with two of three left -- charged for a model that was never
+	// asked anything.
+	it("gives the escalation back when the hand-over produced nothing", async () => {
+		const controller = createEscalationController({
+			maxEscalations: 3,
+			closeAfterEscalation: false,
+			createSession: () => fakeSession(),
+		});
+
+		controller.begin();
+		expect(controller.remaining).toBe(2);
+
+		await controller.refund();
+
+		expect(controller.used).toBe(0);
+		expect(controller.remaining).toBe(3);
+	});
+
+	it("cannot refund more than was spent", async () => {
+		const controller = createEscalationController({
+			maxEscalations: 2,
+			closeAfterEscalation: false,
+			createSession: () => fakeSession(),
+		});
+
+		await controller.refund();
+		controller.begin();
+		await controller.refund();
+		await controller.refund();
+
+		expect(controller.used).toBe(0);
+		expect(controller.remaining).toBe(2);
 	});
 });

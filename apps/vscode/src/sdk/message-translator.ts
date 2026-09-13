@@ -223,6 +223,29 @@ export class MessageTranslatorState {
 		return ts
 	}
 
+	/**
+	 * The ts of the row an escalation's progress is being written to.
+	 *
+	 * One row per hand-over, rewritten in place, and the delivery takes it over
+	 * when it arrives. Twelve separate "the expert called read_files" rows would
+	 * bury the delivery they lead to, and a progress row left standing beside
+	 * the delivery would have its spend counted twice on the task header.
+	 */
+	private openExpertProgressTs: number | undefined
+
+	/** Mint or reuse the ts of the live expert-progress row. */
+	expertProgressTs(): number {
+		this.openExpertProgressTs ??= this.nextTs()
+		return this.openExpertProgressTs
+	}
+
+	/** Take (and clear) the live expert-progress row's ts, if any. */
+	takeOpenExpertProgressTs(): number | undefined {
+		const ts = this.openExpertProgressTs
+		this.openExpertProgressTs = undefined
+		return ts
+	}
+
 	// What this iteration actually put in front of the user. A turn that
 	// produced none of it renders as nothing at all between two request rows,
 	// which is indistinguishable from the model still working -- and a model
@@ -1626,6 +1649,20 @@ export function parseEscalationNoticeMetadata(
 			...(of !== undefined ? { of } : {}),
 		}
 	}
+	if (metadata.kind === "expert_progress") {
+		const index = asFiniteNumber(metadata.index)
+		const of = asFiniteNumber(metadata.of)
+		const toolCalls = asFiniteNumber(metadata.toolCalls)
+		return {
+			phase: "working",
+			text: message,
+			...(index !== undefined ? { index } : {}),
+			...(of !== undefined ? { of } : {}),
+			...(toolCalls !== undefined ? { toolCalls } : {}),
+			...(typeof metadata.lastTool === "string" ? { lastTool: metadata.lastTool } : {}),
+			...(readEscalationUsage(metadata.usage) ?? {}),
+		}
+	}
 	if (metadata.kind === "escalation_message") {
 		return { phase: "message", text: message }
 	}
@@ -2475,8 +2512,18 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 				}
 				const escalation = parseEscalationNoticeMetadata(event.metadata, event.message ?? "")
 				if (escalation) {
+					// The progress row is rewritten in place, and the delivery
+					// that ends the turn takes the same row over -- which is
+					// what keeps the expert's spend from being counted once
+					// while it works and again when it answers.
+					const ts =
+						escalation.phase === "working"
+							? state.expertProgressTs()
+							: escalation.phase === "reply"
+								? (state.takeOpenExpertProgressTs() ?? state.nextTs())
+								: state.nextTs()
 					messages.push({
-						ts: state.nextTs(),
+						ts,
 						type: "say",
 						say: "escalation",
 						text: JSON.stringify(escalation),

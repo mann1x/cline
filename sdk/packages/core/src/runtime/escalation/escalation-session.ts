@@ -66,6 +66,14 @@ export type EscalationEvent =
 			changed: string[];
 			usage: ExpertUsage;
 	  }
+	| {
+			type: "expert_progress";
+			index: number;
+			of: number;
+			toolCalls: number;
+			lastTool?: string;
+			usage: ExpertUsage;
+	  }
 	| { type: "escalation_ended"; held: boolean; usage: ExpertUsage };
 
 export interface EscalationSessionOptions {
@@ -179,6 +187,15 @@ export function createEscalationSession(
 	const restore =
 		options.restoreSnapshot ?? ((snapshot) => restoreSnapshotOnDisk(snapshot));
 
+	/**
+	 * Which hand-over the open conversation belongs to.
+	 *
+	 * The conversation is built once and reused across escalations, so the
+	 * progress it reports has to be stamped with the escalation that is live
+	 * now rather than the one it was created for.
+	 */
+	let liveIndex = 0;
+
 	const controller = createEscalationController({
 		maxEscalations,
 		closeAfterEscalation: config?.closeAfterEscalation === true,
@@ -187,6 +204,19 @@ export function createEscalationSession(
 				maxFollowUps,
 				open: options.openExpert,
 				...(options.gate ? { gate: options.gate } : {}),
+				...(options.onEvent
+					? {
+							onProgress: (progress) =>
+								options.onEvent?.({
+									type: "expert_progress",
+									index: liveIndex,
+									of: maxEscalations,
+									toolCalls: progress.toolCalls,
+									...(progress.lastTool ? { lastTool: progress.lastTool } : {}),
+									usage: progress.usage,
+								}),
+						}
+					: {}),
 			}),
 	});
 
@@ -258,6 +288,7 @@ export function createEscalationSession(
 		}
 
 		if (live) {
+			liveIndex = controller.used;
 			const steer = options.takeSteering?.();
 			const message =
 				(request.message ?? request.goal ?? "") +
@@ -349,6 +380,7 @@ export function createEscalationSession(
 		const steer = options.takeSteering?.();
 		const opening = steer ? brief + fromTheUser(steer) : brief;
 		const session = controller.begin();
+		liveIndex = index;
 		options.logger?.log?.(
 			`[Escalation] Escalation ${index} of ${maxEscalations}: handing over to the expert`,
 		);
@@ -358,10 +390,24 @@ export function createEscalationSession(
 			of: maxEscalations,
 			brief,
 		});
-		const reply = await runAndObserve(async () => {
-			const answer = await session.ask(opening);
-			return { text: answer.text, usage: answer.usage };
-		});
+		let reply: { text: string; usage: ExpertUsage; changed: string[] };
+		try {
+			reply = await runAndObserve(async () => {
+				const answer = await session.ask(opening);
+				return { text: answer.text, usage: answer.usage };
+			});
+		} catch (error) {
+			// The hand-over is charged at `begin`, before the expert has been
+			// asked anything, because that is the only place that can refuse
+			// one. When the ask then fails outright there is nothing to charge
+			// for -- and the conversation it opened has to go with the charge,
+			// or the next `escalate` arrives as a follow-up into a context the
+			// expert never saw.
+			if (session.deliveries === 0) {
+				await controller.refund();
+			}
+			throw error;
+		}
 		options.onEvent?.({
 			type: "expert_replied",
 			reply: reply.text,

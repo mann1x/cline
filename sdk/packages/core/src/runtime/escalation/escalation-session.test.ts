@@ -360,4 +360,124 @@ describe("createEscalationSession", () => {
 		expect(session.used).toBe(0);
 		expect(result).toMatch(/did not|refus|declin/i);
 	});
+
+	// Run slhu9, 2026-09-13: the expert's ollama answered "ollama cloud is
+	// disabled: remote model is unavailable" 31ms after the hand-over. The base
+	// model was told that this was the delivery, and the task was charged an
+	// escalation for a model that was never asked anything.
+	it("says the escalation did not happen when the expert's run failed", async () => {
+		const harness = build({
+			openExpert: async () => ({
+				run: async (): Promise<AgentResult> =>
+					({
+						text: "ollama cloud is disabled: remote model is unavailable",
+						iterations: 1,
+						finishReason: "error",
+						usage: { inputTokens: 0, outputTokens: 0 },
+					}) as AgentResult,
+				shutdown: vi.fn(async () => {}),
+			}),
+		});
+
+		const result = await harness.call({ goal: "fix line 90" });
+
+		expect(result).toContain("The escalation did not happen");
+		expect(result).toContain("ollama cloud is disabled");
+		expect(result).not.toContain("THIS IS A DELIVERY");
+	});
+
+	it("gives the escalation back when the expert's run failed", async () => {
+		let fail = true;
+		const prompts: string[] = [];
+		const harness = build({
+			config: {
+				connection: { providerId: "ollama", modelId: "big" },
+				maxEscalations: 1,
+			},
+			openExpert: async () => ({
+				run: async (prompt: string): Promise<AgentResult> => {
+					prompts.push(prompt);
+					if (fail) {
+						fail = false;
+						return {
+							text: "upstream is down",
+							iterations: 1,
+							finishReason: "error",
+							usage: { inputTokens: 0, outputTokens: 0 },
+						} as AgentResult;
+					}
+					return {
+						text: "fixed line 90",
+						iterations: 1,
+						usage: { inputTokens: 10, outputTokens: 5 },
+					} as AgentResult;
+				},
+				shutdown: vi.fn(async () => {}),
+			}),
+		});
+
+		await harness.call({ goal: "fix line 90" });
+		// The only escalation this task has. A charge for the failed attempt
+		// would make this second call the one that is refused.
+		const second = await harness.call({ goal: "fix line 90" });
+
+		expect(second).toContain("fixed line 90");
+		expect(second).not.toContain("did not happen");
+		// And it is a hand-over, not a follow-up into the conversation the
+		// failure left behind: the expert gets the brief, not the raw goal.
+		expect(second).toContain("THIS IS A DELIVERY");
+		expect(prompts.at(-1)).toContain("== ESCALATION ==");
+	});
+
+	// A hand-over is one tool call from the base model's side, so the chat had
+	// nothing to say between the brief and the delivery. On 2026-09-13 that was
+	// twenty minutes of one collapsed grey line while the expert made twelve
+	// tool calls and spent 40k tokens nobody could see.
+	it("reports the expert's progress while the turn is still running", async () => {
+		const events: Array<{ type: string; [key: string]: unknown }> = [];
+		const harness = build({
+			onEvent: (event) => events.push(event),
+			openExpert: async ({ onEvent }) => ({
+				run: async (): Promise<AgentResult> => {
+					onEvent({
+						type: "content_end",
+						contentType: "tool",
+						toolName: "read_files",
+					} as AgentEvent);
+					onEvent({
+						type: "usage",
+						inputTokens: 31_054,
+						outputTokens: 2_100,
+					} as AgentEvent);
+					onEvent({
+						type: "content_end",
+						contentType: "tool",
+						toolName: "grep",
+					} as AgentEvent);
+					return {
+						text: "fixed line 90",
+						iterations: 3,
+						usage: { inputTokens: 31_054, outputTokens: 2_100 },
+					} as AgentResult;
+				},
+				shutdown: vi.fn(async () => {}),
+			}),
+		});
+
+		await harness.call({ goal: "fix line 90" });
+
+		const progress = events.filter((event) => event.type === "expert_progress");
+		expect(progress).toHaveLength(3);
+		expect(progress[0]).toMatchObject({
+			index: 1,
+			of: 3,
+			toolCalls: 1,
+			lastTool: "read_files",
+		});
+		expect(progress[2]).toMatchObject({ toolCalls: 2, lastTool: "grep" });
+		// The spend has to be live, not the zeroes a turn carries until it ends.
+		expect((progress[2].usage as { inputTokens: number }).inputTokens).toBe(
+			31_054,
+		);
+	});
 });

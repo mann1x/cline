@@ -1,8 +1,8 @@
 import type { ClineEscalationInfo, ClineMessage } from "@shared/ExtensionMessage"
-import { ChevronDownIcon, ChevronRightIcon, PauseIcon, SendIcon, SquareUserIcon, UserCheckIcon } from "lucide-react"
+import { ChevronDownIcon, ChevronRightIcon, LoaderIcon, PauseIcon, SendIcon, SquareUserIcon, UserCheckIcon } from "lucide-react"
 import { useState } from "react"
 import { formatLargeNumber } from "@/utils/format"
-import { formatRate } from "@/utils/request-timings"
+import { formatDuration, formatRate } from "@/utils/request-timings"
 import { MarkdownRow } from "./MarkdownRow"
 
 function parseInfo(text: string | undefined): ClineEscalationInfo | undefined {
@@ -75,6 +75,34 @@ export const EscalationRow = ({ message }: { message: ClineMessage }) => {
 			<div className="flex items-center gap-2 py-1.5 text-description">
 				<PauseIcon className="size-3 shrink-0" />
 				<span className="min-w-0">{info.text}</span>
+				<div className="flex-1 min-w-4 border-t border-description/30" />
+			</div>
+		)
+	}
+
+	// What the expert is doing, while it is still doing it. A hand-over is one
+	// tool call from the base model's side, so without this the panel shows the
+	// collapsed line above and nothing else until the delivery lands -- twenty
+	// minutes of it, on a run where the expert made twelve tool calls. Rewritten
+	// in place rather than appended, and the delivery takes this row over.
+	if (info.phase === "working") {
+		const elapsed = formatDuration(info.usage?.wallMs)
+		const calls = info.toolCalls ?? 0
+		return (
+			<div className="flex items-center gap-2 py-1.5 text-description">
+				<LoaderIcon className="size-3 shrink-0 animate-spin motion-reduce:animate-none" />
+				<span className="min-w-0">
+					The expert is working
+					{calls > 0 ? ` — ${calls} tool call${calls === 1 ? "" : "s"}` : ""}
+					{info.lastTool ? `, last ${info.lastTool}` : ""}
+				</span>
+				{info.usage ? (
+					<span className="flex items-center gap-2 text-xs" title="What this turn has spent so far">
+						<span>↑ {formatLargeNumber(info.usage.tokensIn)}</span>
+						<span>↓ {formatLargeNumber(info.usage.tokensOut)}</span>
+						{elapsed ? <span>{elapsed}</span> : null}
+					</span>
+				) : null}
 				<div className="flex-1 min-w-4 border-t border-description/30" />
 			</div>
 		)

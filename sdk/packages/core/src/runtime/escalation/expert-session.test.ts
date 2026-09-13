@@ -9,6 +9,8 @@ import { createExpertSession, type ExpertRuntime } from "./expert-session";
 function stubRuntime(
 	options: {
 		replies?: string[];
+		/** Per-call finish reason, so a test can stage a run that failed. */
+		finishReasons?: Array<AgentResult["finishReason"]>;
 		timings?: Array<{
 			inputTokens: number;
 			outputTokens: number;
@@ -44,7 +46,7 @@ function stubRuntime(
 			return {
 				text: options.replies?.[index] ?? `reply ${index + 1}`,
 				iterations: 1,
-				finishReason: "completed",
+				finishReason: options.finishReasons?.[index] ?? "completed",
 				usage: {
 					inputTokens: turn?.inputTokens ?? 0,
 					outputTokens: turn?.outputTokens ?? 0,
@@ -240,5 +242,56 @@ describe("createExpertSession", () => {
 		await session.ask("first");
 
 		expect(order).toEqual(["enter", "exit"]);
+	});
+
+	// The failure this exists for: ollama answered "ollama cloud is disabled"
+	// 31ms after a hand-over, the run finished with `error`, and its message was
+	// handed to the base model wrapped in "THIS IS A DELIVERY, NOT A VERDICT".
+	// The model read it as an empty delivery and carried on alone, an escalation
+	// the poorer. A run that failed has no answer in it; saying so is the only
+	// honest thing the session can do with one.
+	it("refuses to pass a failed run off as the expert's answer", async () => {
+		const stub = stubRuntime({
+			replies: ["ollama cloud is disabled: remote model is unavailable"],
+			finishReasons: ["error"],
+		});
+		const session = sessionWith(stub);
+
+		await expect(session.ask("goal: fix line 90")).rejects.toThrow(
+			/ollama cloud is disabled/,
+		);
+	});
+
+	it("does not count a failed run as a delivery", async () => {
+		const stub = stubRuntime({
+			replies: ["upstream is down", "the bug is on line 90"],
+			finishReasons: ["error", "completed"],
+		});
+		const session = sessionWith(stub);
+
+		await expect(session.ask("goal: fix line 90")).rejects.toThrow();
+		expect(session.deliveries).toBe(0);
+
+		const reply = await session.ask("goal: fix line 90");
+
+		expect(reply.text).toBe("the bug is on line 90");
+		expect(session.deliveries).toBe(1);
+		expect(session.followUps).toBe(0);
+	});
+
+	// A run that stopped for any other reason did produce something. A model
+	// that hit its iteration cap mid-repair has a partial answer worth reading,
+	// and turning that into an exception would throw the spend away with it.
+	it("still delivers a run that stopped for a reason other than error", async () => {
+		const stub = stubRuntime({
+			replies: ["I got as far as line 90"],
+			finishReasons: ["max_iterations"],
+		});
+		const session = sessionWith(stub);
+
+		const reply = await session.ask("goal: fix line 90");
+
+		expect(reply.text).toBe("I got as far as line 90");
+		expect(reply.finishReason).toBe("max_iterations");
 	});
 });

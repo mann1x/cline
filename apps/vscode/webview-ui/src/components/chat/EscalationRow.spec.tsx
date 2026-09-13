@@ -103,4 +103,33 @@ describe("EscalationRow", () => {
 
 		expect(container.querySelector("[aria-hidden]")).toBeTruthy()
 	})
+
+	// The gap this closes: between the hand-over and the delivery the panel had
+	// one collapsed grey line and nothing else, for as long as the expert took.
+	it("says what the expert is doing and what it has spent so far", () => {
+		render(
+			<EscalationRow
+				message={row({
+					phase: "working",
+					index: 2,
+					of: 3,
+					text: "The expert is working: 12 tool calls so far.",
+					toolCalls: 12,
+					lastTool: "read_files",
+					usage: {
+						tokensIn: 37_241,
+						tokensOut: 4_100,
+						generateTokens: 4_100,
+						generateMs: 90_000,
+						wallMs: 1_140_000,
+						requests: 1,
+					},
+				})}
+			/>,
+		)
+
+		expect(screen.getByText(/12 tool calls/)).toBeTruthy()
+		expect(screen.getByText(/last read_files/)).toBeTruthy()
+		expect(screen.getByText(/37\.2k/)).toBeTruthy()
+	})
 })

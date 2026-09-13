@@ -40,6 +40,22 @@ export interface EscalationController {
 	readonly usage: ExpertUsage;
 	/** Spends one escalation and returns the conversation to ask through. */
 	begin(): ExpertSession;
+	/**
+	 * Gives back an escalation that bought nothing.
+	 *
+	 * A hand-over is charged at {@link begin}, before the expert has been asked
+	 * anything, because that is the only place that can refuse one. When the ask
+	 * then fails outright -- the endpoint is down, the model is unavailable, the
+	 * run finished on `error` -- no expert saw the task and the budget must not
+	 * record that it did. Floors at zero: refunding what was never spent would
+	 * hand the task a fourth escalation out of a budget of three.
+	 *
+	 * The conversation goes with it when it has delivered nothing. A held
+	 * session that never opened still reads as live to the next `escalate`,
+	 * which would then arrive as a follow-up -- the model's raw goal, into an
+	 * empty context, instead of the brief a hand-over builds.
+	 */
+	refund(): Promise<void>;
 	/** Ends the current escalation: closes the conversation, or holds it. */
 	end(): Promise<void>;
 	/** Task teardown. Releases whatever is held, whatever the setting says. */
@@ -102,6 +118,21 @@ export function createEscalationController(
 				session = options.createSession();
 			}
 			return session;
+		},
+		async refund(): Promise<void> {
+			used = Math.max(0, used - 1);
+			if (!session || session.deliveries > 0) {
+				return;
+			}
+			settled = addUsage(settled, session.usage);
+			const closing = session;
+			session = undefined;
+			try {
+				await closing.close("the escalation did not happen");
+			} catch {
+				// A conversation that will not close cleanly must not leave the
+				// task believing an expert is still holding a slot.
+			}
 		},
 		async end(): Promise<void> {
 			if (!session) {

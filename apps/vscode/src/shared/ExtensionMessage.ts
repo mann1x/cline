@@ -655,17 +655,25 @@ export interface ClineTransactionInfo {
  * expert figures on the task header's own token line.
  */
 export interface ClineEscalationInfo {
-	phase: "started" | "message" | "reply" | "ended"
-	/** Which escalation this is, and how many the task gets. On "started". */
+	phase: "started" | "working" | "message" | "reply" | "ended"
+	/** Which escalation this is, and how many the task gets. On "started" and "working". */
 	index?: number
 	of?: number
 	/** The brief, the push-back, the delivery, or the closing line. */
 	text: string
+	/** Tool calls the expert has made in the turn that is running. On "working". */
+	toolCalls?: number
+	/** The last of those, by name. On "working". */
+	lastTool?: string
 	/** Workspace-relative paths the expert changed. On "reply". */
 	changed?: string[]
 	/** Whether the conversation was held rather than released. On "ended". */
 	held?: boolean
-	/** What this turn of the exchange spent. On "reply". */
+	/**
+	 * What this turn of the exchange spent. On "reply", and on "working" while
+	 * it is still spending it -- the delivery replaces that row rather than
+	 * following it, so the task header never adds the same turn twice.
+	 */
 	usage?: {
 		tokensIn: number
 		tokensOut: number

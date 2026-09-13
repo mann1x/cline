@@ -49,6 +49,23 @@ export interface ExpertUsage {
 	requests: number;
 }
 
+/**
+ * What the expert has done so far in the turn that is still running.
+ *
+ * A hand-over is one tool call from the base model's point of view, so the
+ * chat has nothing to say between the brief and the delivery -- and an expert
+ * that reads a file twelve times over twenty minutes looks exactly like a hung
+ * request. This is what makes the difference visible while it is still true.
+ */
+export interface ExpertProgress {
+	/** Tool calls the expert has completed in this turn. */
+	toolCalls: number;
+	/** The last one's name, when the event carried it. */
+	lastTool?: string;
+	/** What the turn has spent so far, wall-clock included. */
+	usage: ExpertUsage;
+}
+
 export interface ExpertReply {
 	text: string;
 	iterations: number;
@@ -90,9 +107,18 @@ export interface ExpertSessionOptions {
 	 * reads as a slow run rather than a blocked one.
 	 */
 	gate?: Pick<AgentSlotGate, "run" | "active">;
+	/**
+	 * Called as the expert works, not only when it answers.
+	 *
+	 * Fires on every completed tool call and on every usage event the provider
+	 * sends, which is as often as the expert gives anyone anything to report.
+	 */
+	onProgress?: (progress: ExpertProgress) => void;
 }
 
 export interface ExpertSession {
+	/** Answers the expert has actually produced. A failed run is not one. */
+	readonly deliveries: number;
 	/** Deliveries after the first. The brief itself is not a follow-up. */
 	readonly followUps: number;
 	readonly closed: boolean;
@@ -122,11 +148,18 @@ export function createExpertSession(
 	let runtime: ExpertRuntime | undefined;
 	let deliveries = 0;
 	let closed = false;
+	let turnToolCalls = 0;
+	let askStartedAt: number | undefined;
 
 	// Provider timings arrive as events during the run rather than on its
 	// result, which is also where the task header's own rate comes from. Only
 	// some providers report them; the token counts do not depend on it.
 	const onEvent = (event: AgentEvent): void => {
+		if (event.type === "content_end" && event.contentType === "tool") {
+			turnToolCalls += 1;
+			report(event.toolName);
+			return;
+		}
 		if (event.type !== "usage") {
 			return;
 		}
@@ -137,9 +170,31 @@ export function createExpertSession(
 			turn.generateTokens += timings.generateTokens;
 			turn.generateMs += timings.generateMs;
 		}
+		report();
+	};
+
+	/**
+	 * Hands out what the turn has spent so far.
+	 *
+	 * The wall-clock is computed here rather than read off `turn`, which only
+	 * learns it when the turn ends -- and a progress line whose elapsed time is
+	 * zero until the work is over is the thing this exists to replace.
+	 */
+	const report = (lastTool?: string): void => {
+		if (!options.onProgress || askStartedAt === undefined) {
+			return;
+		}
+		options.onProgress({
+			toolCalls: turnToolCalls,
+			...(lastTool ? { lastTool } : {}),
+			usage: { ...turn, wallMs: Date.now() - askStartedAt, requests: 1 },
+		});
 	};
 
 	return {
+		get deliveries() {
+			return deliveries;
+		},
 		get followUps() {
 			return Math.max(0, deliveries - 1);
 		},
@@ -168,7 +223,9 @@ export function createExpertSession(
 				runtime = await options.open({ onEvent });
 			}
 			turn = emptyUsage();
+			turnToolCalls = 0;
 			const startedAt = Date.now();
+			askStartedAt = startedAt;
 			const result = options.gate
 				? await options.gate.run(
 						() => runtime?.run(message) as Promise<AgentResult>,
@@ -176,6 +233,7 @@ export function createExpertSession(
 				: await runtime.run(message);
 			turn.wallMs = Date.now() - startedAt;
 			turn.requests = 1;
+			askStartedAt = undefined;
 			// The provider's own token counts win where the events reported
 			// none: a provider that streams no usage event still answers with a
 			// result, and reporting zero tokens for a turn that happened would
@@ -190,6 +248,28 @@ export function createExpertSession(
 			total.generateMs += turn.generateMs;
 			total.wallMs += turn.wallMs;
 			total.requests += 1;
+			// A run that finished on `error` has no answer in it. Its `text` is
+			// whatever the provider said going down -- "ollama cloud is
+			// disabled: remote model is unavailable" is a real one -- and the
+			// caller wraps a reply in "THIS IS A DELIVERY, NOT A VERDICT"
+			// before handing it to the base model. Returning it would tell a
+			// stuck model that the expert had answered and that this was the
+			// answer, which is how one transport failure came back as an empty
+			// delivery, cost an escalation, and sent the model back to editing
+			// alone. Throw instead: the tool above has a catch that says the
+			// escalation did not happen, and the escalation is refunded.
+			//
+			// The spend stays counted. A run can fail after real work, and a
+			// metered account is owed that number whether or not anything came
+			// back.
+			if (result.finishReason === "error") {
+				const reason = result.text?.trim();
+				throw new Error(
+					`The expert's run failed and produced no answer${
+						reason ? `: ${reason}` : "."
+					}`,
+				);
+			}
 			deliveries += 1;
 			return {
 				text: result.text,
