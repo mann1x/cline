@@ -4,32 +4,44 @@ match:
   family: ["kimi-k3*"]
 ---
 
-<!-- PROVENANCE
+<!-- PROVENANCE -- assembled by hand from three generator runs, not by one.
 
-     Sections `grep`, `sed`, `awk` written by hand on 2026-09-12, and the
-     `run_commands` redirect updated with them: kimi-k3:cloud was asked six
-     times and returned the built-in text verbatim every time. -- written by scripts/review-prompt-templates.mts, not by the model.
+     Sections `grep` and `run_commands` written by kimi-k3:cloud (Ollama
+     family `kimi-k3`) on 2026-09-13 at temperature 0.6, clean on attempt 4.
+     Run, with its log: prompt-reviews/regen/20260913-0452-kimi-k3-cloud
 
-     Written by kimi-k3:cloud (Ollama family `kimi-k3`) on 2026-09-12.
-     Run, with its log: prompt-reviews/regen/20260912-1906-kimi-k3-cloud
+     Section `awk` written by kimi-k3:cloud on 2026-09-13 at temperature 0.9,
+     clean on attempt 3; the 0.6 run had changed one sentence of it and no
+     more. Run, with its log: prompt-reviews/regen/20260913-0456-kimi-k3-cloud
+
+     Section `sed` is still written by hand, from 2026-09-12. kimi-k3:cloud
+     will not rewrite it. Asked six times on 2026-09-12 it returned the
+     built-in text verbatim; asked again on 2026-09-13 at 0.6 and at 0.9 it
+     returned the hand-written text with a single sentence extended, both
+     times borrowing the tail of its own `grep` section to do it. Three
+     sections of this file are the model's words and this one is not, which
+     is the whole reason this header distinguishes them.
+
+     Every other section is unchanged. Written by kimi-k3:cloud (Ollama
+     family `kimi-k3`) on 2026-09-12.
 
      Sampler asked for by the generator, overriding the model's own:
-       temperature 0.2
+       temperature 0.6 (`grep`, `run_commands`), 0.9 (`awk`)
 
      Sampler the tag sources (`/api/show`), which applies to every key
      the request above does not set:
        (none reported)
 
+     Why a temperature at all: the generator pins 0.2, and at 0.2 this model
+     hands back the text it was shown. The copy was invisible until the delta
+     path learned to compare a returned section against the one it replaced
+     -- before that, a byte-identical reply audited clean, because the
+     verbatim rule only ever compared against the BUILT-IN description and
+     these sections no longer held it.
+
      The script hands a model the prompt it would really receive, names the
      failures observed with models in its family, and asks for the version it
      would rather read; the reply is parsed and audited before it lands here.
-
-     This line is stamped by the caller because a model cannot report which
-     model it is. Shown a template that opens with a header, a model copies
-     that header verbatim -- deepseek-v4.1-flash returned one naming
-     deepseek-v4-flash and family `deepseek4` while the live family was
-     `deepseek_v41`. Any header in a model's reply is stripped before this
-     one is added.
 
      Regenerate rather than hand-edit, and audit a hand-edit with
      scripts/audit-prompt-template.mts. -->
@@ -97,30 +109,32 @@ Output per query is middle-truncated beyond ~48k characters; specific patterns b
 Output: one object per pattern — `{query, result, success, error?}`. `query` is the pattern you sent. `result` is matching lines with file paths. A pattern that matched nothing has `success: true` and `result: []`; that is an answer, not a failure, and re-running it will not change it.
 
 # tool: grep
-Search files for lines matching a pattern, the way POSIX `grep` does. Runs in this process, not through the shell, so nothing needs to be installed and the behaviour is the same on every platform.
+
+Search for lines matching a pattern across files, following POSIX grep semantics. This runs in-process — no shell involved, no binary to install, identical behavior on every platform.
 
 Arguments:
-- `pattern`: the pattern. It is a **basic** regular expression by default — in BRE, `+ ? ( ) { } |` are literal characters and you group and alternate with `\(a\|b\)`. Pass `extended: true` for ERE, or `fixed: true` to match the text literally with no regex syntax at all.
+- `pattern`: the pattern to match. By default this is a **basic** regular expression: `+ ? ( ) { } |` are literal characters, and you group or alternate with `\(a\|b\)`. Set `extended: true` for ERE syntax, or `fixed: true` to match the text exactly with no regex interpretation.
 - `paths`: files or directories to search. Defaults to the workspace root, recursively, skipping `node_modules`, `.git`, `dist` and similar.
-- `ignore_case`, `invert`, `word`: match without case, return the lines that do *not* match, match whole words only.
+- `ignore_case`, `invert`, `word`: match without case, return lines that do *not* match, match whole words only.
 - `count`, `files_with_matches`: report a count per file, or only the names of files that matched.
 - `context`: lines shown either side of a match. `max_count`: stop after this many per file. `line_numbers`: on unless set to false.
 
-Use `search_codebase` when you do not yet know which files are involved — it takes several patterns at once and reports one hit per file, which is what answers "where is this". Use `grep` when you already know the file or directory and want grep's own semantics: every matching line, a count, an inverted match, a window of context. Neither answers questions about a symbol; `code_intel` does.
+Use `search_codebase` when you do not yet know which files are involved — it takes several patterns at once and reports one hit per file, which answers "where is this". Use `grep` when you already know the file or directory and want grep's own semantics: every matching line, a count, an inverted match, a window of context. Neither answers questions about a symbol; `code_intel` does.
 
 Output: a single `{query, result, success, error?}`. `query` is `grep:<pattern>`. `result` is the matching lines prefixed with path and line number. A pattern that matched nothing has `success: true` and says so in words — that is an answer, not a failure, and re-running it will not change it. Lines returned here count as read.
 
 # tool: awk
-Run an `awk` program over one or more files. Runs in this process; nothing needs to be installed.
+
+Execute an `awk` program against one or more files. Runs internally in this process; no binary installation is required.
 
 Arguments:
-- `program`: the awk program, e.g. `{print $1}` or `NR>1 {sum+=$2} END {print sum}`.
-- `files`: the files to run over. A program with only a `BEGIN` block needs none.
-- `field_separator`: the input separator, as `-F` sets it. `variables`: pre-set variables, as `-v name=value` sets them.
+- `program`: the awk script, such as `{print $1}` or `NR>1 {sum+=$2} END {print sum}`.
+- `files`: the input files to process. A program containing only a `BEGIN` block requires none.
+- `field_separator`: the input field separator, equivalent to `-F`. `variables`: pre-set variables, as `-v name=value` would set them.
 
-Use this for questions about columns and totals — summing a column, pulling fields out of a delimited file, counting occurrences per key. A search finds the lines; awk answers the question about them.
+Use this for columnar questions and aggregations — summing a column, extracting fields from a delimited file, counting occurrences per key. A search locates the lines; awk answers the question about them.
 
-It cannot write, and that is enforced rather than assumed: output redirection, pipes, `system()` and `getline` are refused. Use `sed` or `editor` to change a file.
+This tool is read-only, and that is enforced rather than assumed: output redirection, pipes, `system()` and `getline` are refused. To modify a file, use `sed` or `editor`.
 
 Output: a single `{query, result, success, error?}`. `query` is `awk:<program>`. `result` is everything the program printed. A program that printed nothing has `success: true` — that is the program's answer.
 
@@ -187,9 +201,10 @@ Output: `{query, result, success, error?}` covering the whole patch. `result` li
 {{DEFAULT}}
 
 # tool: run_commands
-Run shell commands in the working directory. Use for builds, tests, package-manager operations, git operations, and any command that does not have a dedicated tool. Do not use shell commands to read files (`read_files` exists), to write or edit files (`editor`, `apply_patch` and the `sed` tool exist), to search code (`search_codebase` and the `grep` tool exist), to process columns or totals (`awk` exists), or to check individual files (`check_file` exists). In particular, `grep`, `sed` and `awk` are tools here: call them directly rather than running the binaries through this one. Those dedicated tools are faster, safer, and give structured output.
 
-When you need multiple independent commands, run them together in one call. Each command runs in its own shell, so `cd` in one does not affect the next. Use absolute paths or chain with `&&` when a command depends on being in a specific directory.
+Execute shell commands in the working directory. This is the tool for builds, tests, package-manager operations, git operations, and anything else that does not have a dedicated tool. Do not use it to read files (`read_files` exists), to write or edit files (`editor`, `apply_patch` and the `sed` tool exist), to search code (`search_codebase` and the `grep` tool exist), to process columns or totals (`awk` exists), or to check individual files (`check_file` exists). In particular, `grep`, `sed` and `awk` are tools here: invoke them directly rather than running the binaries through this one. Those dedicated tools are faster, safer, and give structured output.
+
+When you need multiple independent commands, send them all in one call. Each command runs in its own shell, so `cd` in one does not affect the next. Use absolute paths or chain with `&&` when a command depends on being in a specific directory.
 
 Output: one object per command, in order — `{query, result, success, error?}`, where `query` is the command string, `result` is stdout and stderr combined, and a failed command has `success: false` with the reason in `error`.
 
