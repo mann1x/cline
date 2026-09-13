@@ -151,6 +151,7 @@ import {
 import type { RuntimeCapabilities } from "../capabilities";
 import { normalizeRuntimeCapabilities } from "../capabilities";
 import { normalizeConnectionUpdate } from "../config/connection-update";
+import { buildEscalationAssessment } from "../escalation/assessment";
 import { createEscalationSession } from "../escalation/escalation-session";
 import { buildExpertPrompt } from "../escalation/expert-prompt";
 import { createForcedEscalation } from "../escalation/forced-escalation";
@@ -1004,6 +1005,8 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// Same late binding, for the same reason: the offer is only known once
 		// the escalation session has resolved whether there is an expert.
 		let offerExpertOnLastTransaction: (() => string | undefined) | undefined;
+		/** Where the run is, for an assessment asked for mid-turn. */
+		let struggleIteration = 0;
 		const atomicProtocol = await createAtomicProtocolSession({
 			// The workspace before the working directory, unlike the shell: a
 			// rollback that covers less than the model can reach is not a rollback,
@@ -1222,6 +1225,32 @@ export class LocalRuntimeHost implements RuntimeHost {
 					...(controller.oracle ? { oracle: controller.oracle } : {}),
 					history: controller.outcomes,
 				};
+			},
+			// The harness's own reading, computed beside the model's account of
+			// itself rather than instead of it. The model's account is the one
+			// piece of evidence it has an interest in, and a disagreement between
+			// the two is worth reading on its own.
+			assess: async () => {
+				const controller = atomicProtocol?.controller;
+				const outcomes = controller?.outcomes ?? [];
+				return buildEscalationAssessment({
+					...(struggleIteration > 0 ? { iteration: struggleIteration } : {}),
+					...(struggleDetector
+						? { signals: struggleDetector.signalsAt(struggleIteration) }
+						: {}),
+					...(controller && controller.transaction > 0
+						? {
+								transactions: {
+									opened: controller.transaction,
+									discarded: outcomes.filter(
+										(outcome) => !outcome.kept && !outcome.carried,
+									).length,
+									carried: outcomes.filter((outcome) => outcome.carried).length,
+								},
+							}
+						: {}),
+					...(forcedEscalation?.spent ? { guardStoodDown: true } : {}),
+				});
 			},
 			// The task as the user stated it. The session's own record of it,
 			// not the manifest's: an interactive session is created before the
@@ -1620,6 +1649,9 @@ export class LocalRuntimeHost implements RuntimeHost {
 			onEvent: (event: AgentEvent) => {
 				// Before the dispatch, so a listener that throws cannot cost the
 				// detector the turn it was counting.
+				if (event.type === "iteration_start") {
+					struggleIteration = event.iteration;
+				}
 				struggleFeed?.observe(event);
 				forcedEscalation?.observe(event);
 				this.eventBridge.dispatchAgentEvent(
