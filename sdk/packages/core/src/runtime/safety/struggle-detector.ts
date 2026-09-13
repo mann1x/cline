@@ -68,6 +68,14 @@ export const STRUGGLE_MAX_PER_TASK = 2;
  *
  * `I'm in trouble` is deliberately absent: it was searched for across all 360
  * runs and does not occur.
+ *
+ * `regressing` is here on a different footing, and it is worth being honest
+ * about which. It was reported from a session by the person watching it -- "I
+ * keep regressing" -- and it does not occur anywhere in the harness corpus, so
+ * it has no measured operating point behind it. It is admitted because of what
+ * it says: a first-person report of having lost ground is the one thing in this
+ * lexicon that cannot be deliberation. `I'm not sure` can be a model reasoning
+ * carefully; `I keep regressing` cannot.
  */
 const DISTRESS: readonly RegExp[] = [
 	/\bi ?'?m confusing myself\b/i,
@@ -76,6 +84,7 @@ const DISTRESS: readonly RegExp[] = [
 	/\bi ?'?m stuck\b/i,
 	/\bi ?'?m not sure\b/i,
 	/\bthat makes no sense\b/i,
+	/\b(?:i ?'?m|keeps?|been) regressing\b/i,
 ];
 
 /**
@@ -89,7 +98,10 @@ const HEDGING: readonly RegExp[] = [
 	/\bhmm+\b/gi,
 	/\blet me reconsider\b/gi,
 	/\bdead end\b/gi,
-	/\bin circles\b/gi,
+	// `in` or `going`, never both at once: `going in circles` has to count as
+	// one hedge and not two, and a model that drops the preposition -- "I'm
+	// going circles" -- is saying the same thing and was not being counted.
+	/\b(?:in|going) circles\b/gi,
 	/\bunexpected\b/gi,
 ];
 

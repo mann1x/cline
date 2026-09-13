@@ -12,7 +12,10 @@ import type { AgentEvent } from "@cline/shared";
 import { describe, expect, it } from "vitest";
 import {
 	createStruggleFeed,
+	STRUGGLE_DISTRESS_HITS,
+	STRUGGLE_FAILED_CALLS,
 	STRUGGLE_MAX_PER_TASK,
+	STRUGGLE_MIN_ITERATION,
 	StruggleDetector,
 	type StruggleVerdict,
 } from "./struggle-detector";
@@ -331,5 +334,52 @@ describe("driving the detector from the session's own events", () => {
 			input: { path: "src/board.js" },
 		});
 		expect(detector.inspect({ iteration: 25 }).kind).toBe("suggest");
+	});
+});
+
+describe("the lexicon reaches the words models actually use", () => {
+	/** Signals at the iteration floor, for a run whose window says `reasoning`. */
+	function signalsFor(reasoning: string) {
+		const struggle = detector();
+		windowUpTo(struggle, STRUGGLE_MIN_ITERATION, {
+			failures: STRUGGLE_FAILED_CALLS,
+			reasoning,
+		});
+		return struggle.signalsAt(STRUGGLE_MIN_ITERATION);
+	}
+
+	it("reads a model reporting it has lost ground as distress", () => {
+		// Reported from a live session: "I keep regressing". Nothing in the
+		// lexicon matched it, and it is the one phrase here that cannot be a
+		// model deliberating carefully.
+		expect(
+			signalsFor("I keep regressing. Let me try the edit again.").distress,
+		).toBeGreaterThanOrEqual(STRUGGLE_DISTRESS_HITS);
+		expect(
+			signalsFor("I'm regressing on every attempt.").distress,
+		).toBeGreaterThanOrEqual(STRUGGLE_DISTRESS_HITS);
+	});
+
+	// Hedging is only ever exposed as a ratio to the run's opening rate, and
+	// the rate is per 1,000 words -- so every sentence compared here is six
+	// words long, and only the marker differs.
+	it("counts circles with or without the preposition", () => {
+		// "I've been going in circles" was counted; "I'm going circles" -- the
+		// same report with the preposition dropped -- was not.
+		const withPreposition = signalsFor("I am going in circles here");
+		const without = signalsFor("I am going circles again here");
+		const calm = signalsFor("I am reading the board again");
+
+		expect(calm.hedgingRatio).toBe(0);
+		expect(withPreposition.hedgingRatio).toBeGreaterThan(0);
+		expect(without.hedgingRatio).toBe(withPreposition.hedgingRatio);
+	});
+
+	it("still counts `going in circles` once, not twice", () => {
+		// Both alternatives can claim that phrase; only one may.
+		const going = signalsFor("I am going in circles here");
+		const round = signalsFor("I am round in circles here");
+
+		expect(going.hedgingRatio).toBe(round.hedgingRatio);
 	});
 });
