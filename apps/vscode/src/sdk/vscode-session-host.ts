@@ -20,6 +20,7 @@ import {
 	type PendingPromptsListInput,
 	type PendingPromptsUpdateInput,
 	type PreparedRemoteConfigCoreIntegration,
+	type ReadReceipts,
 	type RestoreInput,
 	type RestoreResult,
 	type SendSessionInput,
@@ -89,6 +90,17 @@ export interface VscodeSessionHostOptions {
 	 * instead of the extension host's process.cwd(), which is usually "/").
 	 */
 	readFileExecutor?: ToolExecutors["readFile"]
+	/**
+	 * This host's record of what has been read, shared with the SDK.
+	 *
+	 * The extension supplies its own `read_files` and `editor`, which between
+	 * them own the read-before-write guard. Without handing the registry over,
+	 * the SDK's `grep`/`sed`/`awk` build one of their own that this host's
+	 * reader never writes to, and every `sed` in-place run is refused with
+	 * "has not been read in this session" no matter how many times the file
+	 * was just read. Shipped that way in 4.100.105.
+	 */
+	readReceipts?: ReadReceipts
 	/** Per-tool approval policies derived from the user's auto-approval settings. */
 	toolPolicies?: Record<string, ToolPolicy>
 	/** Shared SDK telemetry service owned by SdkController. */
@@ -247,6 +259,10 @@ export class VscodeSessionHost implements SdkSessionHost {
 					| ((request: ToolApprovalRequest) => Promise<ToolApprovalResult>)
 					| undefined,
 				toolExecutors: Object.keys(toolExecutors).length > 0 ? toolExecutors : undefined,
+				// Handed over with the executors above, because it is the other
+				// half of them: the reader writes it and the SDK's file tools
+				// read it.
+				readReceipts: options.readReceipts,
 			},
 			toolPolicies: options.toolPolicies,
 			telemetry: options.telemetry,

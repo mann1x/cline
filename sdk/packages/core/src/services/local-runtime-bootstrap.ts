@@ -493,6 +493,10 @@ export async function prepareLocalRuntimeBootstrap(
 	);
 	const requestToolApproval = capabilities?.requestToolApproval;
 	const effectiveToolExecutors = capabilities?.toolExecutors;
+	// Travels with the executors, not apart from them: a host that supplied its
+	// own reader supplied the registry that reader writes to, and `grep`/`sed`/
+	// `awk` have to read that one rather than an empty one of their own.
+	const effectiveReadReceipts = capabilities?.readReceipts;
 	const subAgentLifecycleCallbacks = createSubAgentLifecycleCallbacks?.(config);
 	const workspaceManager = new InMemoryWorkspaceManager({
 		currentWorkspacePath: workspaceInfo.rootPath,
@@ -529,6 +533,7 @@ export async function prepareLocalRuntimeBootstrap(
 			agentPluginMcpServers: loadedAgentPluginPackages?.mcpServers,
 			configExtensions: configExtensions,
 			toolExecutors: effectiveToolExecutors,
+			readReceipts: effectiveReadReceipts,
 			toolPolicies,
 			workspaceManager,
 			logger: config.logger,

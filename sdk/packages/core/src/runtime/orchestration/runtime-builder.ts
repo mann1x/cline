@@ -31,6 +31,7 @@ import {
 	createBuiltinTools,
 	DEFAULT_MODEL_TOOL_ROUTING_RULES,
 	type QaCredential,
+	type ReadReceipts,
 	type RunCommandExecutionController,
 	resolveToolPresetName,
 	resolveToolRoutingConfig,
@@ -157,6 +158,7 @@ function createBuiltinToolsList(
 	telemetry?: ITelemetryService,
 	qaCredentials?: QaCredential[],
 	runCommandExecutionController?: RunCommandExecutionController,
+	readReceipts?: ReadReceipts,
 ): AgentTool[] {
 	const preset = ToolPresets[resolveToolPresetName({ mode })];
 	const toolRoutingConfig = resolveToolRoutingConfig(
@@ -173,6 +175,10 @@ function createBuiltinToolsList(
 			qaCredentials,
 			executorOptions: {
 				bash: { executionController: runCommandExecutionController },
+				// One registry for every tool that reads or writes a file. Without
+				// this the host's reader records into its own and `grep`/`sed`/
+				// `awk` guard against a registry nothing ever writes to.
+				...(readReceipts ? { receipts: readReceipts } : {}),
 			},
 			...preset,
 			enableSkills: !!skillsExecutor,
@@ -198,6 +204,7 @@ function isSkillsToolEnabledForSession(input: {
 	toolRoutingRules?: ToolRoutingRule[];
 	toolPolicies?: CoreSessionConfig["toolPolicies"];
 	toolExecutors?: Partial<ToolExecutors>;
+	readReceipts?: ReadReceipts;
 }): boolean {
 	return createBuiltinToolsList(
 		input.cwd,
@@ -631,6 +638,7 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 					telemetry ?? config.telemetry,
 					config.qaCredentials,
 					input.runCommandExecutionController,
+					input.readReceipts,
 				),
 			);
 			const agentPluginMcpServers = pluginsEnabled
@@ -813,6 +821,7 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 												telemetry ?? config.telemetry,
 												config.qaCredentials,
 												input.runCommandExecutionController,
+												input.readReceipts,
 											),
 											agent,
 										)
@@ -929,6 +938,7 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 									telemetry ?? config.telemetry,
 									config.qaCredentials,
 									input.runCommandExecutionController,
+									input.readReceipts,
 								)
 						: undefined,
 					teammateConfigProvider: delegatedAgentConfigProvider,

@@ -17,6 +17,7 @@ import type {
 } from "../../extensions/agent-plugin";
 import type { UserInstructionConfigService } from "../../extensions/config";
 import type {
+	ReadReceipts,
 	RunCommandExecutionController,
 	ToolExecutors,
 } from "../../extensions/tools";
@@ -87,6 +88,7 @@ export interface RuntimeBuilderInput {
 	agentPluginMcpServers?: ReadonlyArray<AgentPluginPackageMcpServer>;
 	configExtensions?: RuntimeConfigExtensionKind[];
 	toolExecutors?: Partial<ToolExecutors>;
+	readReceipts?: ReadReceipts;
 	runCommandExecutionController?: RunCommandExecutionController;
 	toolPolicies?: CoreSessionConfig["toolPolicies"];
 	workspaceManager?: WorkspaceManager;

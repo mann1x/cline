@@ -1,4 +1,5 @@
 import type { ClineCoreStartInput, ITelemetryService } from "@cline/core"
+import { createReadReceipts } from "@cline/core"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const mockClineCoreCreate = vi.hoisted(() => vi.fn())
@@ -46,6 +47,29 @@ describe("VscodeSessionHost telemetry wiring", () => {
 		mockClineCoreCreate.mockResolvedValue({ runtimeAddress: undefined })
 		mockCreateVscodeExtraTools.mockReset().mockResolvedValue([])
 		mockFocusChainSettings.value = { enabled: true, remindClineInterval: 9 }
+	})
+
+	it("hands the host's read receipts to ClineCore alongside the executors", async () => {
+		// The reader and the editor below are this host's, and they record what
+		// was read into a registry of this host's own. The SDK's `grep`, `sed`
+		// and `awk` enforce the read-before-write guard against whichever
+		// registry they were given: without this one they build an empty one,
+		// and every in-place `sed` is refused for a file just read. Shipped that
+		// way in 4.100.105 — pandorum session 1789264258103_k7vim.
+		const readReceipts = createReadReceipts()
+
+		await VscodeSessionHost.create({
+			// biome-ignore lint/suspicious/noExplicitAny: focused host unit test
+			mcpHub: {} as any,
+			readFileExecutor: (async () => []) as any,
+			readReceipts,
+		})
+
+		expect(mockClineCoreCreate).toHaveBeenCalledWith(
+			expect.objectContaining({
+				capabilities: expect.objectContaining({ readReceipts }),
+			}),
+		)
 	})
 
 	it("passes shared telemetry to ClineCore.create", async () => {

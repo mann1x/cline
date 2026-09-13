@@ -407,6 +407,11 @@ export class Controller {
 			// The SDK's built-in reader resolves relative paths against the extension
 			// host's process.cwd() (usually "/"); resolve them against the workspace instead.
 			readFileExecutor: createWorkspaceFileReadExecutor(() => this.getWorkspaceRoot(), this.readReceipts),
+			// The same registry the reader and the editor above write to. The
+			// SDK's `grep`/`sed`/`awk` enforce the read-before-write guard
+			// against it; give them none and they build an empty one that
+			// nothing here ever writes, and refuse every in-place edit.
+			readReceipts: this.readReceipts,
 			// The receipts already record every file the model has read, wherever
 			// it lives. A workspace-scoped search that finds nothing consults them
 			// so it can say what it could not have covered, rather than reporting

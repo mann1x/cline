@@ -33,6 +33,12 @@ export interface SdkSessionLifecycleOptions {
 	applyPatchExecutor?: ApplyPatchExecutorHandler
 	/** Custom `read_files` executor (resolves relative paths against the workspace root). */
 	readFileExecutor?: ReadFileExecutorHandler
+	/**
+	 * The receipts the `readFileExecutor` and `editorExecutor` above write to.
+	 * Passed on so the SDK's own file tools guard against the same record
+	 * rather than an empty one of their own.
+	 */
+	readReceipts?: NonNullable<Parameters<typeof VscodeSessionHost.create>[0]["readReceipts"]>
 	/** Files read this session; see `ListFilesToolOptions.getReadPaths`. */
 	getReadPaths?: () => string[]
 	/** Retires a file's reads after the change protocol put that file back. */
@@ -356,6 +362,7 @@ export class SdkSessionLifecycle {
 				editorExecutor: this.options.editorExecutor,
 				applyPatchExecutor: this.options.applyPatchExecutor,
 				readFileExecutor: this.options.readFileExecutor,
+				readReceipts: this.options.readReceipts,
 				getReadPaths: this.options.getReadPaths,
 				forgetReads: this.options.forgetReads,
 				getTerminalManager: this.options.getTerminalManager,
