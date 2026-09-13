@@ -7,7 +7,10 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentToolContext } from "@cline/shared";
-import { describeDelimiterBalance } from "../delimiter-balance";
+import {
+	describeDelimiterBalance,
+	PRESCRIPTION_MARKER,
+} from "../delimiter-balance";
 import type { EditFileInput } from "../schemas";
 import type { EditorExecutor } from "../types";
 import {
@@ -26,6 +29,13 @@ import type { ReadReceipts } from "./read-receipts";
  * every call to say nothing useful.
  */
 const MAX_SCANNED_BYTES = 2_000_000;
+
+/**
+ * How much `new_text` an edit has to carry before retyping it is worth naming
+ * as a cost. Below this the whole-line rewrite and the column edit cost about
+ * the same, and the note would be pedantry.
+ */
+const RETYPE_NOTICE_MIN_CHARS = 200;
 
 /**
  * Options for the editor executor
@@ -1421,6 +1431,50 @@ function assertColumnInRange(
 }
 
 /**
+ * Name what the edit just cost, when the scan says a column would have done it.
+ *
+ * The scan already prints the exact `editor` call that repairs the line. What
+ * it cannot see is that the model read the same prescription a turn ago and
+ * rewrote the whole line instead: measured on one run, the prescription landed
+ * at 24.5, 31.1, 33.0 and 35.0 minutes and every following edit retyped the
+ * line by hand -- 393 characters, median, to move one bracket -- until the fix
+ * finally arrived at 38.9. Retyping a long line is also how the next fault gets
+ * introduced, so the cost is not only tokens.
+ *
+ * Silent unless all three hold: the scan prescribes a call, this edit addressed
+ * no column, and it carried enough text for the difference to matter. Creating
+ * a file is never retyping -- its whole text is the smallest call that could
+ * have written it.
+ */
+function describeRetypeCost(input: EditFileInput, scan: string): string | null {
+	if (!scan.includes(PRESCRIPTION_MARKER)) {
+		return null;
+	}
+	const addressedByColumn =
+		input.insert_column != null ||
+		input.start_column != null ||
+		input.end_column != null;
+	if (addressedByColumn) {
+		return null;
+	}
+	const created =
+		input.start_line == null &&
+		input.insert_line == null &&
+		input.old_text == null;
+	if (created) {
+		return null;
+	}
+	const typed = input.new_text?.length ?? 0;
+	if (typed < RETYPE_NOTICE_MIN_CHARS) {
+		return null;
+	}
+	return (
+		`\n  That edit retyped ${typed} characters and the file still does not ` +
+		"balance; the call above changes one column and retypes nothing."
+	);
+}
+
+/**
  * Create an editor executor using Node.js fs module
  */
 export function createEditorExecutor(
@@ -1514,6 +1568,7 @@ export function createEditorExecutor(
 	const withDelimiterScan = async (
 		filePath: string,
 		result: string,
+		input: EditFileInput,
 	): Promise<string> => {
 		let text: string;
 		try {
@@ -1530,7 +1585,11 @@ export function createEditorExecutor(
 			return result;
 		}
 		const scan = describeDelimiterBalance(filePath, text);
-		return scan ? `${result}\n\n${scan}` : result;
+		if (!scan) {
+			return result;
+		}
+		const cost = describeRetypeCost(input, scan);
+		return `${result}\n\n${scan}${cost ?? ""}`;
 	};
 
 	const edit = async (
@@ -1796,6 +1855,6 @@ export function createEditorExecutor(
 		} catch {
 			return result;
 		}
-		return withDelimiterScan(filePath, result);
+		return withDelimiterScan(filePath, result, input);
 	};
 }

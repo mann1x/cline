@@ -609,9 +609,19 @@ function proposeRepair(
 			: `and leaves ${best.left} of the ${baseline} crossings, all further down the file`;
 	return (
 		`${best.say} — checked: that clears this line ${rest}.\n` +
-		`      that edit is \`editor\` with ${best.call} — send it as it stands; there is no text to match on.`
+		`      ${PRESCRIPTION_MARKER}${best.call} — send it as it stands; there is no text to match on.`
 	);
 }
+
+/**
+ * How a prescribed repair opens, so a caller can tell a scan that names the
+ * exact call from one that only names the line.
+ *
+ * Exported rather than matched by hand: the editor appends to this line, and a
+ * reworded prescription that silently stopped being recognised would take the
+ * follow-up with it.
+ */
+export const PRESCRIPTION_MARKER = "that edit is `editor` with ";
 
 /**
  * Whether this scanner reads the given file's language at all.

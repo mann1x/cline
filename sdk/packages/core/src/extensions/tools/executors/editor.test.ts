@@ -11,6 +11,12 @@ const context = {
 	iteration: 1,
 };
 
+/** One spare `}` at column 48, which the scan can prescribe a repair for. */
+const SPARE_BRACE_LINE = "dDec(c,x){this.dc.forEach(d=>{if(d){c.fill();}}});}";
+
+/** The same fault, on a line long enough that rewriting it is the expensive way. */
+const LONG_UNBALANCED_LINE = `${SPARE_BRACE_LINE} // ${"pad ".repeat(50)}`;
+
 async function withTempFile(
 	content: string,
 	run: (filePath: string, dir: string) => Promise<void>,
@@ -1976,6 +1982,101 @@ describe("how long the file is", () => {
 					expect(result).not.toContain("Delimiter scan");
 				},
 			);
+		});
+
+		// The scan names a column and the model rewrites the line anyway. Measured
+		// on one run: the scan prescribed the exact `editor` call at 24.5, 31.1,
+		// 33.0 and 35.0 minutes, and each following edit retyped the whole line
+		// by hand -- 393 characters, median, to move one bracket. Nothing said
+		// the cheaper call was still on the table, so this does, at the moment
+		// the expensive one has just been paid for.
+		it("names what the rewrite cost when the scan prescribes a column", async () => {
+			await withTempDir(async (dir) => {
+				const editor = createEditorExecutor();
+				const filePath = path.join(dir, "game.js");
+				await fs.writeFile(filePath, "// old\n", "utf-8");
+
+				const result = await editor(
+					{
+						path: filePath,
+						start_line: 1,
+						end_line: 1,
+						new_text: LONG_UNBALANCED_LINE,
+					},
+					dir,
+					context,
+				);
+
+				expect(result).toContain("start_column: 48");
+				expect(result).toContain(
+					`retyped ${LONG_UNBALANCED_LINE.length} characters`,
+				);
+			});
+		});
+
+		it("says nothing about the cost when the edit already named a column", async () => {
+			await withTempDir(async (dir) => {
+				const editor = createEditorExecutor();
+				const filePath = path.join(dir, "game.js");
+				await fs.writeFile(filePath, "// old\n", "utf-8");
+
+				const result = await editor(
+					{
+						path: filePath,
+						start_line: 1,
+						start_column: 1,
+						end_column: 6,
+						new_text: LONG_UNBALANCED_LINE,
+					},
+					dir,
+					context,
+				);
+
+				expect(result).toContain("start_column: 48");
+				expect(result).not.toContain("retyped");
+			});
+		});
+
+		// Writing a file that did not exist is not retyping anything; the whole
+		// of its text is the smallest call that could have produced it.
+		it("says nothing about the cost when the edit created the file", async () => {
+			await withTempDir(async (dir) => {
+				const editor = createEditorExecutor();
+
+				const result = await editor(
+					{
+						path: path.join(dir, "game.js"),
+						new_text: `${LONG_UNBALANCED_LINE}\n`,
+					},
+					dir,
+					context,
+				);
+
+				expect(result).toContain("start_column: 48");
+				expect(result).not.toContain("retyped");
+			});
+		});
+
+		it("says nothing about the cost of a short edit", async () => {
+			await withTempDir(async (dir) => {
+				const editor = createEditorExecutor();
+				const filePath = path.join(dir, "game.js");
+				await fs.writeFile(filePath, "// old\n", "utf-8");
+
+				const result = await editor(
+					{
+						path: filePath,
+						start_line: 1,
+						end_line: 1,
+						new_text: SPARE_BRACE_LINE,
+					},
+					dir,
+					context,
+				);
+
+				expect(result).toContain("start_column: 48");
+				expect(result).not.toContain("retyped");
+			});
 		});
 
 		it("says nothing about a language it cannot parse", async () => {
