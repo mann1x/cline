@@ -8,11 +8,13 @@ import {
 	type AgentResult,
 	type AgentTool,
 	type BasicLogger,
+	type ConsecutiveMistakeLimitContext,
 	captureSdkError,
 	createSessionId,
 	type ITelemetryService,
 	isLikelyAuthError,
 	normalizeUserInput,
+	type ReasoningLoopLimitContext,
 } from "@cline/shared";
 import { setHomeDirIfUnset } from "@cline/shared/storage";
 import { isOAuthProvider } from "../../auth/provider-auth-registry";
@@ -151,6 +153,7 @@ import { normalizeRuntimeCapabilities } from "../capabilities";
 import { normalizeConnectionUpdate } from "../config/connection-update";
 import { createEscalationSession } from "../escalation/escalation-session";
 import { buildExpertPrompt } from "../escalation/expert-prompt";
+import { createForcedEscalation } from "../escalation/forced-escalation";
 import {
 	createPendingSuggestion,
 	describeEscalationOffer,
@@ -998,6 +1001,9 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// through this binding, and a transaction boundary can be emitted while
 		// the protocol is still being constructed.
 		let struggleDetector: StruggleDetector | undefined;
+		// Same late binding, for the same reason: the offer is only known once
+		// the escalation session has resolved whether there is an expert.
+		let offerExpertOnLastTransaction: (() => string | undefined) | undefined;
 		const atomicProtocol = await createAtomicProtocolSession({
 			// The workspace before the working directory, unlike the shell: a
 			// rollback that covers less than the model can reach is not a rollback,
@@ -1010,6 +1016,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 			logger: {
 				log: (message) => configWithProvider.logger?.log?.(message),
 			},
+			describeLastTransaction: () => offerExpertOnLastTransaction?.(),
 			// Whether it engaged, in the same place the verdicts go. A protocol
 			// that stood down because nothing in the workspace can judge a
 			// change is doing what it was asked to; from the chat it is
@@ -1335,6 +1342,36 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// nothing on its own, and a session with nowhere to escalate to would
 		// pay to compute an offer it could not make. Where there is no expert
 		// this is every previous build, tool for tool.
+		// The terminal guards, given somewhere to go. 40 of the 88 failures in
+		// the study behind this were ended by the repeated-call loop guard, which
+		// ended 3 of 243 successes: a run that reaches one of these is over, so
+		// spending it on the expert costs nothing that was not already lost.
+		const forcedEscalation =
+			escalation.tools.length > 0
+				? createForcedEscalation({
+						remaining: () => escalation.remaining,
+						stop: (message) => {
+							configWithProvider.logger?.log?.(`[Escalation] ${message}`);
+							this.sessions.get(sessionId)?.agent.abort(new Error(message));
+						},
+						logger: {
+							log: (message) => configWithProvider.logger?.log?.(message),
+						},
+					})
+				: undefined;
+		// The last transaction, where the offer is worth most: there is still an
+		// attempt open to hold whatever the expert does, which is exactly what
+		// the run has just proved it needs.
+		offerExpertOnLastTransaction = () => {
+			const remaining = escalation.remaining;
+			return remaining > 0
+				? describeEscalationOffer({
+						diagnosis:
+							"This is the last transaction this task gets. Whatever it ends as is what the run ends as.",
+						remaining,
+					})
+				: undefined;
+		};
 		const struggleSuggestion = createPendingSuggestion();
 		struggleDetector =
 			escalation.tools.length > 0 ? new StruggleDetector() : undefined;
@@ -1507,8 +1544,36 @@ export class LocalRuntimeHost implements RuntimeHost {
 					}
 				: undefined,
 			telemetry: configWithProvider.telemetry,
-			onConsecutiveMistakeLimitReached:
-				configWithProvider.onConsecutiveMistakeLimitReached,
+			// Both terminal guards arrive here: the consecutive-mistake limit at
+			// 6/6, and the repeated-call loop guard's second hard verdict, which
+			// reaches the tracker with `forced` set. The offer is made once and
+			// the host's own decision is asked for every time after it.
+			onConsecutiveMistakeLimitReached: forcedEscalation
+				? async (context: ConsecutiveMistakeLimitContext) => {
+						const offer = forcedEscalation.decide({
+							guard: context.forced
+								? "The repeated-call loop guard"
+								: "The consecutive-mistake limit",
+							...(context.details ? { diagnosis: context.details } : {}),
+						});
+						return (
+							offer ??
+							(await configWithProvider.onConsecutiveMistakeLimitReached?.(
+								context,
+							)) ?? { action: "stop" as const }
+						);
+					}
+				: configWithProvider.onConsecutiveMistakeLimitReached,
+			// The other terminal guard, which had no seam at all until now.
+			...(forcedEscalation
+				? {
+						onReasoningLoopLimitReached: (context: ReasoningLoopLimitContext) =>
+							forcedEscalation.decide({
+								guard: "The reasoning-loop guard",
+								diagnosis: context.diagnosis,
+							}) ?? { action: "stop" as const },
+					}
+				: {}),
 			completionPolicy: completionPolicyWithProtocol,
 			consumePendingUserMessage: async () => {
 				// Standing down happens here and nowhere else. This runs after
@@ -1556,6 +1621,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 				// Before the dispatch, so a listener that throws cannot cost the
 				// detector the turn it was counting.
 				struggleFeed?.observe(event);
+				forcedEscalation?.observe(event);
 				this.eventBridge.dispatchAgentEvent(
 					sessionId,
 					configWithProvider,

@@ -147,6 +147,13 @@ export interface TransactionControllerOptions {
 	checkReconsideredAfter?: number;
 	oracleTimeoutMs?: number;
 	snapshotLimits?: SnapshotLimits;
+	/**
+	 * Something for the last transaction's opening prompt, asked for once.
+	 *
+	 * The host's, and opaque here: this is where the escalation offer is said,
+	 * and the protocol does not know what an expert is.
+	 */
+	describeLastTransaction?: () => string | undefined;
 	onEvent?: (event: TransactionEvent) => void;
 }
 
@@ -457,10 +464,15 @@ export class TransactionController {
 			transaction: this.current,
 			oracle: this.oracle,
 		});
+		const lastTransactionNotice =
+			this.current >= this.options.maxTransactions
+				? this.options.describeLastTransaction?.()
+				: undefined;
 		return buildProtocolPrompt({
 			transaction: this.current,
 			maxChanges: this.options.maxChanges,
 			maxTransactions: this.options.maxTransactions,
+			...(lastTransactionNotice ? { lastTransactionNotice } : {}),
 			oracle: this.oracle,
 			canProposeCheck:
 				this.options.allowCheckProposal === true && this.canAdoptOracle,

@@ -251,7 +251,15 @@ export interface ConsecutiveMistakeLimitContext {
 	forced?: boolean;
 }
 
-export type ConsecutiveMistakeLimitDecision =
+/**
+ * A terminal guard, asked what to do instead of ending the run.
+ *
+ * The same shape for every guard that can end a run on its own, because the
+ * answer is the same question each time: stand, or stand down once and say
+ * something. `ConsecutiveMistakeLimitDecision` is the original name and stays
+ * as an alias -- both hosts and the hub boundary spell it.
+ */
+export type TerminalGuardDecision =
 	| {
 			action: "continue";
 			/**
@@ -266,6 +274,25 @@ export type ConsecutiveMistakeLimitDecision =
 			 */
 			reason?: string;
 	  };
+
+export type ConsecutiveMistakeLimitDecision = TerminalGuardDecision;
+
+/**
+ * The reasoning-loop guard at the end of its rope.
+ *
+ * Measured over 360 runs: a single trip is not evidence -- twelve runs tripped
+ * it and six of those still ended FIXED, because cutting the block is what the
+ * guard is for and the model recovers. Only the streak is terminal, and this
+ * is the streak.
+ */
+export interface ReasoningLoopLimitContext {
+	iteration: number;
+	/** Consecutive turns cut for this. Equal to the limit when this fires. */
+	consecutiveTrips: number;
+	maxConsecutiveTrips: number;
+	/** The guard's own words for what it saw. */
+	diagnosis: string;
+}
 
 export interface LoopDetectionConfig {
 	softThreshold: number;
@@ -978,6 +1005,16 @@ export interface AgentConfig {
 	) =>
 		| Promise<ConsecutiveMistakeLimitDecision>
 		| ConsecutiveMistakeLimitDecision;
+	/**
+	 * Asked before the reasoning-loop streak ends the run.
+	 *
+	 * The other terminal guard, given the same seam the mistake limit has had
+	 * since it was written. Absent, or answered with `stop`, the run ends
+	 * exactly as it did before.
+	 */
+	onReasoningLoopLimitReached?: (
+		context: ReasoningLoopLimitContext,
+	) => Promise<TerminalGuardDecision> | TerminalGuardDecision;
 	/**
 	 * Optional logger for tracing agent loop lifecycle and recoverable failures.
 	 */

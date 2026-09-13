@@ -717,6 +717,19 @@ export interface AgentRuntimeConfig {
 		| false
 		| Partial<import("./agents/types").ReasoningLoopDetectionConfig>;
 	/**
+	 * Asked before the reasoning-loop streak ends the run.
+	 *
+	 * The mistake limit has had this seam since it was written; this guard has
+	 * not, and it is the other terminal one a host might want to answer with
+	 * something other than a stop. Absent, or answered with `stop`, the run ends
+	 * exactly as it did before.
+	 */
+	onReasoningLoopLimitReached?: (
+		context: import("./agents/types").ReasoningLoopLimitContext,
+	) =>
+		| Promise<import("./agents/types").TerminalGuardDecision>
+		| import("./agents/types").TerminalGuardDecision;
+	/**
 	 * Verbatim self-repetition nudge on the model's reasoning channel; see
 	 * `ReasoningRepetitionConfig`. On by default, `false` disables it.
 	 */

@@ -55,6 +55,13 @@ export interface ProtocolPromptInput {
 	maxChanges: number;
 	/** Last transaction this task will get, so the model knows the budget. */
 	maxTransactions: number;
+	/**
+	 * Something the host wants said on the last transaction only.
+	 *
+	 * The escalation offer uses it. Kept as opaque text because the protocol
+	 * has no business knowing what an expert is.
+	 */
+	lastTransactionNotice?: string;
 	/** The check that will decide, when there is one. */
 	oracle?: Oracle;
 	/**
@@ -250,6 +257,20 @@ export function buildProtocolPrompt(input: ProtocolPromptInput): string {
 		"",
 		`${input.maxChanges} is a hard limit and not a target. One change that removes one symptom is a better transaction than ${input.maxChanges} that might.`,
 	);
+
+	// Said on the last transaction and nowhere else.
+	//
+	// The obvious place for this was the moment the protocol runs out, and that
+	// is the wrong one: at exhaustion there is no transaction left to hold the
+	// expert's edits, so it would be handed a workspace with no rollback at the
+	// exact moment the run had proved it needed one. Here there is still an
+	// attempt to spend, and whatever the expert does is inside it.
+	if (
+		input.lastTransactionNotice &&
+		input.transaction >= input.maxTransactions
+	) {
+		lines.push("", input.lastTransactionNotice);
+	}
 
 	if (input.history.length > 0) {
 		lines.push(

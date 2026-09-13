@@ -200,6 +200,14 @@ export interface AtomicProtocolSessionOptions {
 	 * noticing.
 	 */
 	forgetReads?: (absolutePath: string) => void;
+	/**
+	 * Something the host wants said on the last transaction's opening prompt.
+	 *
+	 * Opaque: the protocol does not know what it is for. The escalation path
+	 * uses it to offer the expert while there is still a transaction to hold
+	 * whatever it does.
+	 */
+	describeLastTransaction?: () => string | undefined;
 }
 
 export interface AtomicProtocolSession {
@@ -361,6 +369,9 @@ export async function createAtomicProtocolSession(
 			options.checkReconsideredAfter ??
 			options.config?.checkReconsideredAfter ??
 			DEFAULT_CHECK_RECONSIDERED_AFTER,
+		...(options.describeLastTransaction
+			? { describeLastTransaction: options.describeLastTransaction }
+			: {}),
 		oracleTimeoutMs: options.config?.oracleTimeoutMs,
 		onEvent: options.onEvent,
 	});

@@ -144,6 +144,10 @@ export function createAgentRuntimeConfig(
 		// inside the model stream, which is the only place that can cut a request
 		// mid-draw, so the runtime has to carry the setting itself.
 		reasoningLoopDetection: agentConfig.execution?.reasoningLoopDetection,
+		// The decision seam for the guard above, carried for the same reason: the
+		// streak is counted inside the runtime and nothing outside it can see the
+		// moment the run is about to end.
+		onReasoningLoopLimitReached: agentConfig.onReasoningLoopLimitReached,
 		// Same reason: the nudge is issued from inside the turn loop, so the
 		// runtime is the only thing that can carry the setting.
 		reasoningRepetition: agentConfig.execution?.reasoningRepetition,

@@ -123,6 +123,71 @@ describe("the reasoning loop guard, inside the runtime", () => {
 		expect(seen.map((n) => n.phase)).toEqual(["cut", "aborted"]);
 	});
 
+	// The seam the mistake limit has had since it was written, given to the
+	// other terminal guard. A host that answers `continue` gets one more turn.
+	it("lets a host answer the streak with one more turn", async () => {
+		const model = new CountingModel([
+			collapsingTurn,
+			collapsingTurn,
+			healthyTurn,
+			healthyTurn,
+			healthyTurn,
+			healthyTurn,
+			healthyTurn,
+		]);
+		const events: AgentRuntimeEvent[] = [];
+		const asked: number[] = [];
+		const runtime = new AgentRuntime({
+			model,
+			reasoningLoopDetection: { maxConsecutiveTrips: 2 },
+			completionPolicy: { maxNoToolCallNudges: 5 },
+			onReasoningLoopLimitReached: (context) => {
+				asked.push(context.consecutiveTrips);
+				return { action: "continue", guidance: "hand this over instead" };
+			},
+		});
+		runtime.subscribe((event) => {
+			events.push(event);
+		});
+
+		const result = await runtime.run("go");
+
+		expect(asked).toEqual([2]);
+		expect(result.status).toBe("completed");
+		expect(
+			result.messages.some((message) =>
+				JSON.stringify(message.content).includes("hand this over instead"),
+			),
+		).toBe(true);
+	});
+
+	// Deferred, never removed: the streak is not forgiven, so the next turn cut
+	// the same way arrives back at the limit with the decision already spent.
+	it("ends the run on the next collapse after a host said continue", async () => {
+		const model = new CountingModel([
+			collapsingTurn,
+			collapsingTurn,
+			collapsingTurn,
+		]);
+		let answered = 0;
+		const runtime = new AgentRuntime({
+			model,
+			reasoningLoopDetection: { maxConsecutiveTrips: 2 },
+			completionPolicy: { maxNoToolCallNudges: 5 },
+			onReasoningLoopLimitReached: () => {
+				answered += 1;
+				return answered === 1
+					? { action: "continue", guidance: "one more turn" }
+					: { action: "stop" };
+			},
+		});
+
+		const result = await runtime.run("go");
+
+		expect(answered).toBe(2);
+		expect(result.status).toBe("aborted");
+	});
+
 	it("forgets the streak after a turn that streams cleanly", async () => {
 		const model = new CountingModel([
 			collapsingTurn,

@@ -3277,13 +3277,30 @@ export class AgentRuntime {
 				: this.config.reasoningLoopDetection?.maxConsecutiveTrips) ??
 			DEFAULT_REASONING_LOOP_GUARD.maxConsecutiveTrips;
 		const diagnosis = describeReasoningLoop(verdict);
-		const giveUp = this.reasoningLoopStreak >= limit;
+		const atLimit = this.reasoningLoopStreak >= limit;
+		// Asked before the run ends rather than after, so the notice below says
+		// what actually happened. The streak is deliberately not reset by a
+		// `continue`: the guard is deferred, never removed, and the next turn cut
+		// the same way arrives back here with the decision already spent.
+		const decision = atLimit
+			? await this.config.onReasoningLoopLimitReached?.({
+					iteration: this.state.iteration,
+					consecutiveTrips: this.reasoningLoopStreak,
+					maxConsecutiveTrips: limit,
+					diagnosis,
+				})
+			: undefined;
+		const guidance =
+			decision?.action === "continue" ? decision.guidance?.trim() : undefined;
+		const giveUp = atLimit && decision?.action !== "continue";
 		await this.emit({
 			type: "status-notice",
 			snapshot: this.snapshot(),
 			message: giveUp
 				? `${diagnosis} Ending the run after ${this.reasoningLoopStreak} turns cut for this.`
-				: `${diagnosis} Cutting the request and continuing.`,
+				: atLimit
+					? `${diagnosis} That is ${this.reasoningLoopStreak} turns cut for this, and the run was to end here.`
+					: `${diagnosis} Cutting the request and continuing.`,
 			metadata: {
 				kind: "reasoning_loop",
 				reason: "reasoning_loop",
@@ -3296,6 +3313,13 @@ export class AgentRuntime {
 		if (giveUp) {
 			this.abort(new AgentRuntimeAbortError(diagnosis));
 			this.throwIfAborted();
+			return;
+		}
+		if (guidance) {
+			// A user message, the way the mistake limit delivers its own
+			// guidance: the model is about to draw again, and this is the only
+			// channel the next request is certain to carry.
+			await this.addUserReminderMessage(guidance);
 		}
 	}
 

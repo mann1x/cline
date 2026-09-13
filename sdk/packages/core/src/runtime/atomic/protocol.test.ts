@@ -30,6 +30,29 @@ describe("the rules put to the model", () => {
 		expect(prompt).toContain("WHY");
 	});
 
+	// The host's notice, on the last transaction and nowhere else. The obvious
+	// place for it was the moment the protocol runs out, and that is the wrong
+	// one: at exhaustion there is no transaction left to hold what follows.
+	it("says the host's last-transaction notice only on the last one", () => {
+		const early = buildProtocolPrompt({
+			transaction: 5,
+			maxChanges: 3,
+			maxTransactions: 6,
+			lastTransactionNotice: "the expert is available",
+			history: [],
+		});
+		const last = buildProtocolPrompt({
+			transaction: 6,
+			maxChanges: 3,
+			maxTransactions: 6,
+			lastTransactionNotice: "the expert is available",
+			history: [],
+		});
+
+		expect(early).not.toContain("the expert is available");
+		expect(last).toContain("the expert is available");
+	});
+
 	// The model is never asked to undo its own edits: it is bad at it, and a
 	// half-undone transaction is worse than the change it was reverting.
 	it("says the rollback is done for the model, not by it", () => {
