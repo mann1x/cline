@@ -103,3 +103,6 @@ apps/examples/desktop-app/webview/next-env.d.ts
 prompt-reviews/*
 !prompt-reviews/README.md
 apps/examples/desktop-app/.cursor/settings.json
+
+# Caliber local state
+.caliber/
