@@ -9,6 +9,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	resolveDocumentsClineDirectoryPath,
 	resolveGlobalAgentsRulesPath,
 	setHomeDir,
 } from "@cline/shared/storage";
@@ -80,12 +81,13 @@ describe("user instruction config loader", () => {
 		const paths = resolveWorkflowsConfigSearchPaths(workspacePath);
 		expect(paths).toContain(join(workspacePath, ".clinerules", "workflows"));
 		expect(paths).toContain(join(workspacePath, ".cline", "workflows"));
+		// The Documents folder is whichever of `Documents/Cerebriline` and
+		// `Documents/Cline` is on disk, so ask the resolver rather than naming
+		// one: a literal here passes on a box that still has the legacy
+		// directory and fails in CI, which has neither.
 		expect(
-			paths.some(
-				(p) =>
-					p.includes("Documents") &&
-					p.includes("Cline") &&
-					p.includes("Workflows"),
+			paths.some((p) =>
+				p.includes(join(resolveDocumentsClineDirectoryPath(), "Workflows")),
 			),
 		).toBe(true);
 		expect(paths).not.toContain(
