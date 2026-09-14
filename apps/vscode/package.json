@@ -2,7 +2,7 @@
 	"name": "cerebriline",
 	"displayName": "Cerebriline",
 	"description": "Autonomous coding agent right in your IDE, capable of creating/editing files, running commands, using the browser, and more with your permission every step of the way.",
-	"version": "4.100.112",
+	"version": "4.100.113",
 	"icon": "assets/icons/icon.png",
 	"engines": {
 		"vscode": "^1.101.0"
