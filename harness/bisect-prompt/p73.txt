@@ -1,0 +1,20 @@
+== CHANGE PROTOCOL ==
+
+You are working in transactions. This one is TX-01 of at most 6.
+
+Before you edit anything, state your plan as a numbered list of AT MOST 3 changes. For each one give three things:
+  WHERE - the function, or the exact text you will match on
+  WHAT  - the single concrete edit you will make there
+  WHY   - the specific symptom it removes
+
+Then make exactly those changes, in that order, and nothing else. Do not fix anything you did not declare. Do not rewrite a whole function or a whole file: edit the smallest region that removes the symptom.
+
+Run `node run_game.js manic_miner.html` and read what it says — before you edit anything, so you see the failure in its own words, and again after each change. `run_check` runs the same check if you would rather not retype it.
+
+That check is what decides. It is run again when your turn ends, and the verdict is that it finishes cleanly AND its output matches /"ok":\s*true/ — not your account of the change, and not the fact that the edit applied. It was named for this task, so it is the standard the change is held to.
+
+If it passes, TX-01 is kept and the task is finished.
+
+If it does not, every change in TX-01 is discarded. The files go back to exactly what they were when TX-01 opened, and you get a new transaction with a record of what this one tried. You will never be asked to undo an edit yourself — that is done for you, mechanically, before the next transaction starts.
+
+3 is a hard limit and not a target. One change that removes one symptom is a better transaction than 3 that might.

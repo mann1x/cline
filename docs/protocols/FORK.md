@@ -6,35 +6,43 @@ measuring whether the changes actually help. Upstream optimises for frontier
 models on hosted APIs. Much of what this fork adds exists because a 27B model on
 an Ollama endpoint fails in ways a frontier model does not, and fails silently.
 
-As of 2026-09-11: **438 commits ahead of `upstream/main`, 5 behind.**
+As of 2026-09-14: **570 commits ahead of `upstream/main`, 88 behind.**
 
 ## Identity
 
 | | |
 |---|---|
-| Extension id | `saoudrizwan.claude-dev` — **unchanged from upstream**, deliberately |
-| Display name | `Cline (mann1x build)` |
+| Extension id | `mann1x.cerebriline` |
+| Display name | `Cerebriline` |
+| Artefact | `cerebriline-<version>.vsix` |
+| Data directory | `~/.cerebriline`, falling back to `~/.cline` when that exists and the new one does not |
 | Versioning | `4.100.x`, incremented per build; not aligned with upstream's numbering |
 | Distribution | GitHub releases on `mann1x/cline` with the `.vsix` attached. **Never the marketplace.** |
 
-Keeping the upstream extension id means installing a build **replaces** an
-upstream Cline install rather than sitting beside it. That is intended — the
-test host runs one Cline — but it is why `--force` is always needed and why the
-display name says which build you have.
+The extension id was `saoudrizwan.claude-dev` until 4.100.112 — upstream's own,
+so a build *replaced* an upstream Cline install rather than sitting beside it.
+Since the rename the two coexist, which is why `tools/Migrate-ToCerebriline.ps1`
+exists: it moves an existing install's data across rather than leaving a user
+with two agents and one history. Releases before v4.100.112 carry the old
+artefact name `cline-mann1x-<version>.vsix`.
 
 ## Branches
 
 | branch | role |
 |---|---|
-| `mann1x/full-build-release` | **where releases are cut.** The integration branch; the build tree sits here. |
-| `main` | what the raw-URL tools fetch. Merge into it when a change must reach them; it has sat hundreds of commits behind. |
-| `mann1x/scan-analysis` | what the **harness worktree** runs. A consumer of releases, not their source. |
-| `mann1x/<topic>` | one per piece of work — `check-file-tool`, `code-intel-tool`, `compaction-trigger`, ~30 of them. |
+| `main` | **the trunk.** Everything that is not a running experiment's output: the extension, the CLI, the SDK, the docs, `tools/`, `harness/`. The default branch, so it is also what a browser and every raw-URL fetch sees. |
+| `mann1x/full-build-release` | **where releases are cut.** Fast-forwarded from `main` at release time and tagged there. It exists so a tag is never taken from a moving trunk, not as a second place to develop. |
+| `mann1x/scan-analysis` | the **plugin build the harness runs**. A version pin, not a fork of content — it holds no commits `main` does not. It exists so an experiment can keep running one release while the trunk moves to the next. |
+| `mann1x/<topic>` | one per piece of work — `check-file-tool`, `code-intel-tool`, `compaction-trigger`, ~30 of them. Also where an upstream sync is resolved. |
 
-Releases came from `mann1x/scan-analysis` in the 4.100.4x/5x line. They do not
-any more; every tag since v4.100.79 is on `mann1x/full-build-release`. If a note
-or a memory says otherwise, it is out of date — `git branch -a --contains <tag>`
-settles it.
+**This changed on 2026-09-14.** `main` had been left behind at 4.100.80 while
+the work went to `mann1x/full-build-release`, so the repo a visitor saw was a
+pre-rename Cline fork and `tools/Migrate-ToCerebriline.ps1` — shipped as a
+release asset since v4.100.112 — was not in the tree at all. `main` was
+fast-forwarded 137 commits onto the release branch's tip; nothing was lost, the
+old tip is an ancestor. If a note or a memory says releases come from
+`mann1x/scan-analysis`, or that `main` is only for raw-URL tools, it is out of
+date — `git branch -a --contains <tag>` settles where a tag actually is.
 
 ## Trees on solidPC
 
@@ -43,8 +51,8 @@ checked out twice and why building in one does not disturb another:
 
 | path | branch | role |
 |---|---|---|
-| `/srv/dev-disk-by-label-opt/dev/cline` | `mann1x/full-build-release` | the build tree |
-| `/srv/dev-disk-by-label-opt/dev/cline-scan` | (scan-analysis lineage) | **the harness tree — never build here** |
+| `/srv/dev-disk-by-label-opt/dev/cline` | `main` | the build and development tree |
+| `/srv/dev-disk-by-label-opt/dev/cline-scan` | (scan-analysis lineage, often detached at the pinned build) | **the harness tree — never build here** |
 | `.../spool/cline-parity` | `mann1x/cli-parity` | CLI/extension parity checks |
 
 `/shared/dev/cline` and `/shared/dev/cline-scan` are symlinks to the first two.
@@ -91,10 +99,23 @@ per-profile config, a VS Code MCP bridge, capability-list fixes.
 ## The harness
 
 `manic_miner` — a deliberately broken HTML game, an oracle that runs it, and a
-loop that scores whether an agent fixed it. It is how a change here is judged;
-`.../spool/manic-harness/native.sh` loads the CLI from **`apps/cli/src/index.ts`
-in the harness tree at the start of every run**, which is the reason for the
-never-build-there rule.
+loop that scores whether an agent fixed it. It is how a change here is judged.
+
+**The scripts live in [`harness/`](../../harness/), on `main`.** Read
+[`harness/README.md`](../../harness/README.md) first: it is the reference for
+the four loops, the arms, the verdicts and what counts as success.
+
+Two halves, deliberately separate:
+
+- **the scripts** — `harness/` in this repo, versioned with everything else.
+- **the runs** — `.../spool/manic-harness` on the nvme: `runs-*/`, `work-*/`,
+  `verdicts-*.txt`, the archives. 38 GB and growing, and never in git.
+
+`native.sh` loads the CLI from **`apps/cli/src/index.ts` in the harness tree at
+the start of every run** (`CLI_DIR`, which every driver pins to
+`/shared/dev/cline-scan/apps/cli`). That is the whole reason for the
+never-build-there rule, and the reason `mann1x/scan-analysis` exists as a pin:
+the trunk can move to the next release while an arm keeps running the last one.
 
 Do not "fix" `run_game.js` or `smoke.js`. They are the campaign constant — the
 experiment is only comparable because they do not change.
@@ -107,7 +128,9 @@ workflow and does not apply.
 
 ## Staying current with upstream
 
-`upstream/main` is a real remote and the fork is 5 behind it today. Merges are
-occasional and deliberate: the surface this fork changes — system prompt, tool
-descriptions, provider config, the agent loop — is exactly the surface upstream
-edits most, so a merge is a review, not a fast-forward.
+See **[`UPSTREAM-SYNC.md`](./UPSTREAM-SYNC.md)**. In short: merges are occasional
+and deliberate, resolved on a `mann1x/upstream-sync-*` branch rather than on the
+trunk, and a merge is a review rather than a fast-forward — the surface this
+fork changes is exactly the surface upstream edits most. The rename gives every
+sync a small, known conflict set where the answer is always ours, and `bun.lock`
+is regenerated rather than merged.

@@ -2,20 +2,34 @@
 
 The cycle for `mann1x/cline`: build a VSIX, cut a GitHub release, install it on
 the test host. Written down 2026-09-11 after being re-derived from memory for
-the seventh time.
+the seventh time. **Revised 2026-09-14**, when `main` became the trunk.
 
 **This is not `.claude/commands/release.md`.** That file is upstream Cline's
 marketplace workflow — publish from `main`, trigger
 `ext-vscode-publish-stable.yml`, edit notes with `gh release edit`. We do not
-publish to the marketplace and we do not release from `main`. If you followed
-that file you are in the wrong procedure.
+publish to the marketplace, and although we now develop on `main` the rest of
+that file still does not apply. If you followed it you are in the wrong
+procedure.
+
+## Which branch does what
+
+| | |
+|---|---|
+| **Develop on** | `main`. Everything lands here: extension, CLI, SDK, docs, `tools/`, `harness/`. |
+| **Release from** | `mann1x/full-build-release`, fast-forwarded from `main` at release time and tagged there. |
+
+The release branch is a **cut**, not a second trunk. It exists so a tag names a
+frozen ref rather than a moving one, and so a half-finished merge on `main`
+cannot become a release by accident. It should never hold a commit `main` does
+not — if `git rev-list --count main..mann1x/full-build-release` is not zero,
+something was committed in the wrong place and belongs on `main` first.
 
 ## Where things are
 
 | | |
 |---|---|
-| Build tree | `/srv/dev-disk-by-label-opt/dev/cline` |
-| Release branch | `mann1x/full-build-release` |
+| Build tree | `/srv/dev-disk-by-label-opt/dev/cline`, on `main` |
+| Release branch | `mann1x/full-build-release` (cut from `main`) |
 | Harness tree — **do not build here** | `/shared/dev/cline-scan`, on `mann1x/scan-analysis` |
 | Test host | `pandorum` (Windows; `ssh` lands in `cmd`, so use `powershell -NoProfile -Command`) |
 | Repo for releases | `mann1x/cline` |
@@ -39,9 +53,8 @@ directory under `runs-native/` has a `run.jsonl` written in the last few minutes
 
 ### 1. Commit the work
 
-On `mann1x/full-build-release`. Every commit must stand alone — the pre-commit
-typecheck sees untracked files, so splitting a change across commits fights the
-hook.
+On `main`. Every commit must stand alone — the pre-commit typecheck sees
+untracked files, so splitting a change across commits fights the hook.
 
 ### 2. Bump and commit the version
 
@@ -109,7 +122,8 @@ commit before believing a success.
 ### 4. Push, tag, release
 
 ```bash
-git push origin HEAD:mann1x/full-build-release
+git push origin main                                    # the trunk first
+git push origin main:mann1x/full-build-release          # cut the release branch
 git tag -a v4.100.112 -m "v4.100.112" && git push origin v4.100.112
 gh release create v4.100.112 \
   apps/vscode/cerebriline-4.100.112.vsix --repo mann1x/cline \
@@ -126,15 +140,24 @@ whole of steps 3 and 4 — it computes the name, asserts it, refuses a stray
 second `.vsix`, and uploads by exact path. Push the tag and it runs:
 
 ```bash
-git push origin HEAD:mann1x/full-build-release
+git push origin main
+git push origin main:mann1x/full-build-release
 git tag -a v4.100.112 -m "v4.100.112" && git push origin v4.100.112   # this releases
 ```
+
+Push `main` **before** the release branch, and the release branch before the
+tag. The cut must be a fast-forward of the trunk, and a tag that names a commit
+the trunk does not have is how the two drift apart again.
 
 It also refuses to release if the tag and `apps/vscode/package.json` disagree.
 Use the manual path only when Actions is unavailable on the fork.
 
-Merge to `main` as well when the raw-URL tools need to see the change — `main`
-is what those fetch from, and it has sat hundreds of commits behind before.
+No separate step is needed to reach the raw-URL tools any more: `tools/` lives
+on `main` and `main` is what those fetch. That was not true until 2026-09-14,
+and it cost us twice — a report collector three revisions stale, and
+`Migrate-ToCerebriline.ps1` shipped as a release asset while being absent from
+the tree for two days. If you ever find yourself pushing only to the release
+branch, that is the bug.
 
 ### 5. Verify the artefact, not the build log
 

@@ -275,7 +275,23 @@ git diff origin/main | cline "Review these changes for issues"
 cline --json "List all TODO comments" | jq -r 'select(.type == "agent_event" and .event.text) | .event.text'
 ```
 
-## Contributing
+## Working on this fork
+
+Cerebriline is a fork of [cline/cline](https://github.com/cline/cline) aimed at
+making coding agents work with **local and small models**, and at measuring
+whether each change actually helps. Four documents cover the whole cycle:
+
+| | |
+|---|---|
+| [`docs/protocols/FORK.md`](docs/protocols/FORK.md) | what this fork is, its branches, its trees, and what it adds to upstream |
+| [`docs/protocols/BUILD-RELEASE-DEPLOY.md`](docs/protocols/BUILD-RELEASE-DEPLOY.md) | build a VSIX, cut a release, deploy it to the test host |
+| [`docs/protocols/UPSTREAM-SYNC.md`](docs/protocols/UPSTREAM-SYNC.md) | merging `upstream/main`, and what must never come across with it |
+| [`harness/README.md`](harness/README.md) | the `manic_miner` loop that judges whether a change helped |
+
+Development happens on `main`; `mann1x/full-build-release` is where a release is
+cut from, not a second trunk.
+
+## Contributing to upstream Cline
 
 Start with the [Contributing Guide](CONTRIBUTING.md). Join our [Discord](https://discord.gg/CuE9Jaggp) and head to the `#contributors` channel to connect with other contributors. 
 ## License

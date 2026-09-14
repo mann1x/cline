@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Manic Miner - ZX Spectrum Classic</title>
+    <style>
+        body { margin: 0; background: #111; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; font-family: sans-serif; }
+        canvas { background: #224466; box-shadow: 0 0 30px rgba(0,0,0,0.7); border: 4px solid #000; }
+        #ui { position: absolute; top: 10px; left: 10px; color: white; pointer-events: none; font-size: 14px; z-index: 20; }
+        #level-msg { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #ffff00; font-size: 24px; display: none; pointer-events: none; z-index: 10; }
+        #game-over-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); display: none; flex-direction: column; justify-content: center; align-items: center; color: white; z-index: 100; }
+    </style>
+</head>
+<body>
+<div id="ui">
+    <div>CAVERN: <span id="cavern-val">1</span>/20</div>
+    <div>SCORE: <span id="score">0</span></div>
+    <div>O₂: <span id="o2-val" style="color:#ff6600">100%</span></div>
+    <div id="status" style="color:#ffcc00;"></div>
+</div>
+<div id="level-msg"></div>
+<div id="game-over-overlay">
+    <h2 id="go-title">GAME OVER</h2>
+    <p id="go-score">Final Score: 0</p>
+    <button onclick="restartGame()">RESTART</button>
+</div>
+<canvas id="gameCanvas"></canvas>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const scoreEl = { innerText: "" };
+const cavernEl = { innerText: "" };
+const o2El = { innerText: "", style: { color: "" } };
+const statusEl = { innerText: "", style: { color: "" } };
+const levelMsgEl = document.getElementById('level-msg');
+const goOverlay = document.getElementById('game-over-overlay');
+
+const TILE_SIZE = 24;
+const VIEWPORT_W = 672;
+const VIEWPORT_H = 504;
+canvas.width = VIEWPORT_W;
+canvas.height = VIEWPORT_H;
+
+class SoundManager {
+    constructor() { this.ctx = null; }
+    init() { try { this.ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) {} }
+    play(f, d, t='sine', v=0.1) {
+        if (!this.ctx) return;
+        try { const o = this.ctx.createOscillator(), g = this.ctx.createGain(); o.type = t; o.frequency.setValueAtTime(f, this.ctx.currentTime); g.gain.setValueAtTime(v, this.ctx.currentTime); g.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + d); o.connect(g); g.connect(this.ctx.destination); o.start(); o.stop(this.ctx.currentTime + d); } catch(e) {}
+    }
+    playJump() { this.play(400, 0.15); }
+    collectGem() { this.play(660, 0.25, 'sine', 0.15); }
+    collectO2() { this.play(880, 0.3, 'sine', 0.2); }
+    hitEnemy() { this.play(120, 0.4, 'sawtooth'); }
+    powerup() { this.play(1500, 0.5); }
+    caveMusic() { this.play(220, 1.0, 'sine', 0.08); }
+    gameOver() { this.play(80, 1.5, 'sawtooth'); }
+    levelComplete() { this.play(990, 0.6); }
+}
+const sound = new SoundManager();
+
+let gameState = 'COUNTDOWN';
+let countdownTimer = 3;
+let lastCountdownUpdate = performance.now();
+let transitionTimer = 0;
+
+const player = { x: 0, y: 0, vx: 0, vy: 0, width: 20, height: 28, grounded: false, score: 0, o2: 100, isSuper: false, powerupTimer: 0, transitionTimer: 0, frameCount: 0 };
+
+class Cloud {
+    constructor(x, y, speed) { this.x = x; this.y = y; this.speed = speed; this.size = 30 + Math.random()*40; }
+    update() { this.x += this.speed; if (this.x > camera.x + VIEWPORT_W + 100) this.x = camera.x - 100; }
+    draw(ctx, camX) { ctx.fillStyle = '#aaccdd'; ctx.beginPath(); ctx.arc(this.x - camX, this.y, this.size, 0, Math.PI*2); ctx.fill(); }
+}
+
+let clouds = [];
+let currentLevel = 1;
+let currentLevelObj = null;
+const camera = { x: 0 };
+let gameOverFlag = false;
+
+function restartGame() { goOverlay.style.display = 'none'; gameOverFlag = false; player.score = 0; currentLevel = 1; initClouds(); setupLevel(currentLevel); gameState = 'COUNTDOWN'; countdownTimer = 3; lastCountdownUpdate = performance.now(); }
+
+class Level {
+    constructor(lv){this.num=lv;this.width=180+(lv*40);this.height=12;this.en=[];this.it=[];this.o2c=[];this.pw=[];this.dc=[];this.bs=false;this.boss=null;this.data=this.gen();this.o2Max=80+(lv*5);}
+    gen(){const g=Array.from({length:this.height},()=>Array(this.width).fill(0));for(let x=0;x<this.width;x++){g[this.height-1][x]=1;g[this.height-2][x]=Math.random()<.3?1:0;}for(let r=2;r<this.height-3;r++){let x=0;while(x<this.width){const l=3+~~(Math.random()*8),gp=2+~~(Math.random()*4);for(let i=0;i<l&&x<this.width;i++)g[r][x]=Math.random()<.7?1:0;x+=gp;}}for(let r=0;r<2;r++)for(let x=0;x<this.width;x++)if(Math.random()<.4)g[r][x]=1;for(let i=0;i<15+this.num*3;i++){const rx=~~(Math.random()*this.width),ry=2+~~(Math.random()*(this.height-4));if(g[ry][rx]===0)g[ry][rx]=1;}return g;}
+    pop(){for(let i=0;i<3+currentLevel*2;i++){const ex=this.sX();if(ex!==-1)this.en.push({x:ex*TILE_SIZE,y:(this.height-3)*TILE_SIZE,vx:(Math.random()<.5?2:-2),al:true,tp:Math.random()<.3?'spike':'worm',fc:0});}const gt=['ruby','emerald','sapphire','diamond','gold'];const pm={ruby:10,emerald:20,sapphire:30,diamond:50,gold:15};for(let i=0;i<8+currentLevel*3;i++){const gx=this.sX();if(gx!==-1){const t=gt[~~(Math.random()*5)];this.it.push({x:gx*TILE_SIZE,y:(2+~~(Math.random()*(this.height-4)))*TILE_SIZE,tp:t,pt:pm[t],cl:false,fp:Math.random()*6.28});}}for(let i=0;i<3+~~(currentLevel/2);i++){const ox=this.sX();if(ox!==-1)this.o2c.push({x:ox*TILE_SIZE,y:(3+~~(Math.random()*(this.height-5)))*TILE_SIZE,cl:false,ra:20+currentLevel*2});}if(currentLevel>3&&Math.random()<.5){const px=this.sX();if(px!==-1)this.pw.push({x:px*TILE_SIZE,y:(2+~~(Math.random()*(this.height-4)))*TILE_SIZE,cl:false});}if(currentLevel%5===0){this.bs=true;this.boss={x:(this.width-10)*TILE_SIZE,y:(this.height-3)*TILE_SIZE,vx:3,hp:currentLevel*2,mhp:currentLevel*2,ac:true,fc:0};}for(let i=0;i<8;i++){const dx=~~(Math.random()*this.width);this.dc.push({x:dx*TILE_SIZE,y:(this.height-1)*TILE_SIZE,tp:['stl','msh','cry'][~~(Math.random()*3)]});}}
+
+    dGrid(c,x){for(let y=0;y<this.height;y++)for(let i=0;i<this.width;i++)if(this.data[y][i]===1){c.fillStyle='#556688';c.fillRect(i*TILE_SIZE-x,y*TILE_SIZE,TILE_SIZE,TILE_SIZE);}}
+    dDec(c,x){this.dc.forEach(d=>{if(d.tp==='stl'){c.fillStyle='#8899aa';c.fillRect(d.x-x,d.y-20,8,20);c.fillRect(d.x-x+2,d.y-15,4,3);}else if(d.tp==='msh'){c.fillStyle='#667799';c.fillRect(d.x-x,d.y-12,10,12);c.beginPath();c.arc(d.x-x+5,d.y-12,8,Math.PI,0);c.fill();}else{c.fillStyle='#aabbcc';c.fillRect(d.x-x-4,d.y-10,8,10);c.beginPath();c.arc(d.x-x,d.y-10,5,0,6.28);c.fill();}}});}
+    dIt(c,x){this.it.forEach(it=>{if(!it.cl){const px=it.x-x,py=it.y;it.fp+=.1;const fl=Math.sin(it.fp);c.save();if(fl>.3){if(it.tp==='ruby')c.fillStyle='#cc4400';else if(it.tp==='emerald')c.fillStyle='#44aa00';else if(it.tp==='sapphire')c.fillStyle='#0088cc';else if(it.tp==='diamond')c.fillStyle='#fff';else c.fillStyle='#ffaa00';c.beginPath();c.moveTo(px,py-8);c.lineTo(px+6,py);c.lineTo(px,py+8);c.lineTo(px-6,py);c.closePath();c.fill();if(fl>.7){c.fillStyle=it.tp==='diamond'?'#fff':'#ffaa44';c.beginPath();c.arc(px,py,12,0,6.28);c.fill();}}c.restore();} })};
+    dO2(c,x){this.o2c.forEach(o=>{if(!o.cl){const px=o.x-x,py=o.y;c.fillStyle='#f40';c.fillRect(px-5,py-10,10,20);c.fillStyle='#f60';c.fillRect(px-7,py-12,14,4);c.fillRect(px-7,py+8,14,4);if(Math.sin(performance.now()/300)>0){c.fillStyle='#f80';c.beginPath();c.arc(px,py,14,0,6.28);c.fill();}}})};
+    dPw(c,x){this.pw.forEach(p=>{if(!p.cl){const px=p.x-x,py=p.y;c.fillStyle='#f08';c.beginPath();for(let i=0;i<5;i++){const a=(i*6.28/5)-1.57;c.lineTo(px+Math.cos(a)*10,py+Math.sin(a)*10);const m=((i+.5)*6.28/5)-1.57;c.lineTo(px+Math.cos(m)*5,py+Math.sin(m)*5);}c.closePath();c.fill();}})};
+    dEn(c,x){this.en.forEach(e=>{if(e.al){e.fc++;const ex=e.x-x,ey=e.y;c.save();if(e.tp==='spike'){c.fillStyle='#840';c.fillRect(ex-8,ey-12,16,24);c.fillStyle='#a50';c.beginPath();c.moveTo(ex-8,ey-12);c.lineTo(ex-12,ey-20);c.lineTo(ex-4,ey-12);c.closePath();c.fill();c.beginPath();c.moveTo(ex+8,ey-12);c.lineTo(ex+12,ey-20);c.lineTo(ex+4,ey-12);c.closePath();c.fill();}else{const w=Math.sin(e.fc*.2)*3;c.fillStyle='#962';c.fillRect(ex-10,ey+w-6,20,12);c.fillStyle='#a73';c.beginPath();c.arc(ex+10,ey+w,4,0,6.28);c.fill();}c.restore();}})};
+    dBoss(c,x){if(this.bs&&this.boss&&this.boss.ac){const b=this.boss;b.fc++;const bx=b.x-x,by=b.y;c.save();c.fillStyle='#48f';c.fillRect(bx-20,by-30,40,60);c.fillStyle='#f40';c.beginPath();c.arc(bx-10,by-20,5,0,6.28);c.fill();c.beginPath();c.arc(bx+10,by-20,5,0,6.28);c.fill();const hr=b.hp/b.mhp;c.fillStyle='#f80';c.fillRect(bx-20,by-35,40*hr,4);const gl=Math.sin(b.fc*.1)*.5+.5;if(gl>.3){c.fillStyle=`rgba(68,136,255,${gl*.3})`;c.beginPath();c.arc(bx,by,40,0,6.28);c.fill();}c.restore();}}};
+    dPl(c,x){ /* Placeholder for player drawing */ };
+}
+
+function update(){
+if(gameOverFlag)return;
+if(gameState==='COUNTDOWN'){const now=performance.now();if(now-lastCountdownUpdate>=1000){countdownTimer--;statusEl.innerText=countdownTimer>0?`${countdownTimer}...`:'GO!';statusEl.style.color='#ff8800';lastCountdownUpdate=now;if(countdownTimer<=0){gameState='PLAYING';statusEl.innerText='';player.grounded=true;}}return;}
+if(gameState==='LEVEL_COMPLETE'){transitionTimer--;if(transitionTimer<=0){if(currentLevel>=20){gameOverFlag=true;goOverlay.style.display='flex';document.getElementById('go-title').innerText='YOU WIN!';document.getElementById('go-score').innerText=`Final Score: ${player.score}`;return;}gameState='SHOW_STARTING_MSG';levelMsgEl.style.display='block';levelMsgEl.innerText=`CAVERN ${currentLevel+1} STARTING, ARE YOU READY?`;transitionTimer=90;}return;}
+if(gameState==='SHOW_STARTING_MSG'){transitionTimer--;if(transitionTimer<=0){levelMsgEl.style.display='none';gameState='COUNTDOWN';countdownTimer=3;lastCountdownUpdate=performance.now();}return;}
+player.frameCount++;player.vy+=.45;if(player.vy>8)player.vy=8;player.vx*=.92;if(Math.abs(player.vx)<.1)player.vx=0;player.grounded=false;const nx=player.x+player.vx;if(!collide(nx,player.y,player.width,player.height))player.x=nx;else player.vx=0;const ny=player.y+player.vy;if(!collide(player.x,ny,player.width,player.height)){player.y=ny;}else{if(player.vy>0)player.grounded=true;player.vy=0;}if(player.x<0){player.x=0;player.vx=0;}if(player.x>currentLevelObj.width*TILE_SIZE-player.width){player.x=currentLevelObj.width*TILE_SIZE-player.width;}
+if(keys.u&&player.grounded){player.vy=-9;player.grounded=false;sound.playJump();}
+if(keys.l)player.vx-=.6;if(player.vx<-5)player.vx=-5;
+if(keys.r)player.vx+=.6;if(player.vx>5)player.vx=5;
+currentLevelObj.it.forEach(it=>{if(!it.cl&&Math.abs(player.x+player.width/2-it.x)<16&&Math.abs(player.y+player.height/2-it.y)<16){it.cl=true;player.score+=it.pt;sound.collectGem();}});
+currentLevelObj.o2c.forEach(o=>{if(!o.cl&&Math.abs(player.x+player.width/2-o.x)<14&&Math.abs(player.y+player.height/2-o.y)<14){o.cl=true;player.o2=Math.min(100,player.o2+o.ra);sound.collectO2();}});
+currentLevelObj.pw.forEach(p=>{if(!p.cl&&Math.abs(player.x+player.width/2-p.x)<14&&Math.abs(player.y+player.height/2-p.y)<14){p.cl=true;player.isSuper=true;player.powerupTimer=300;sound.powerup();}});
+currentLevelObj.en.forEach(e=>{if(e.al){e.x+=e.vx;e.fc++;if(e.x<TILE_SIZE||e.x>(currentLevelObj.width-2)*TILE_SIZE)e.vx*=-1;const ex=e.x+10,ey=e.y+6;if(Math.abs(player.x+player.width/2-ex)<18&&Math.abs(player.y+player.height/2-ey)<18){if(!player.isSuper){player.o2-=15;sound.hitEnemy();player.vy=-5;player.vx=(player.x<e.x)?-3:3;}else{e.al=false;player.score+=25;sound.collectGem();}}});}
+if(currentLevelObj.bs&&currentLevelObj.boss&&currentLevelObj.boss.ac){const b=currentLevelObj.boss;b.x+=b.vx;if(b.x<currentLevelObj.width*TILE_SIZE/2||b.x>(currentLevelObj.width-5)*TILE_SIZE)b.vx*=-1;const bx=b.x,by=b.y;if(Math.abs(player.x+player.width/2-bx)<25&&Math.abs(player.y+player.height/2-by)<30){if(!player.isSuper){player.o2-=10;sound.hitEnemy();player.vy=-6;}else{b.hp--;if(b.hp<=0){b.ac=false;player.score+=100+currentLevel*10;gameState='LEVEL_COMPLETE';transitionTimer=120;sound.levelComplete();}else sound.collectGem();}}}
+if(player.isSuper){player.powerupTimer--;if(player.powerupTimer<=0){player.isSuper=false;player.powerupTimer=0;}}
+camera.x=Math.max(0,Math.min(player.x-VIEWPORT_W/2,currentLevelObj.width*TILE_SIZE-VIEWPORT_W));
+if(player.x>(currentLevelObj.width-8)*TILE_SIZE){gameState='LEVEL_COMPLETE';transitionTimer=120;player.score+=currentLevel*50;sound.levelComplete();}
+scoreEl.innerText=player.score;cavernEl.innerText=currentLevel;o2El.innerText=`${Math.max(0,~~(player.o2))}%`;
+clouds.forEach(c=>c.update());
+}
+
+const keys={l:false,r:false,u:false};
+document.addEventListener('keydown',e=>{if(e.key==='ArrowLeft')keys.l=true;if(e.key==='ArrowRight')keys.r=true;if(e.key==='ArrowUp')keys.u=true;});
+document.addEventListener('keyup',e=>{if(e.key==='ArrowLeft')keys.l=false;if(e.key==='ArrowRight')keys.r=false;if(e.key==='ArrowUp')keys.u=false;});
+
+function gameLoop(){
+ctx.clearRect(0,0,VIEWPORT_W,VIEWPORT_H);update();clouds.forEach(c=>c.draw(ctx,camera.x));currentLevelObj.dGrid(ctx,camera.x);currentLevelObj.dDec(ctx,camera.x);currentLevelObj.dEn(ctx,camera.x);currentLevelObj.dIt(ctx,camera.x);currentLevelObj.dO2(ctx,camera.x);currentLevelObj.dPw(ctx,camera.x);currentLevelObj.dBoss(ctx,camera.x);currentLevelObj.dPl(ctx,camera.x);
+ctx.save();ctx.fillStyle='white';ctx.font='14px sans-serif';ctx.textAlign='left';ctx.fillText(`SCORE: ${player.score}`,10,25);ctx.textAlign='right';ctx.fillText(`CAVERN: ${currentLevel}/20`,VIEWPORT_W-10,25);const or=player.o2/100;ctx.fillStyle=or>.3?'#f60':'#f00';ctx.fillRect(VIEWPORT_W-80,45,70*or,8);ctx.fillText('O₂',VIEWPORT_W-80,65);ctx.restore();
+requestAnimationFrame(gameLoop);
+}
+
+function startGame(){if(!sound.ctx)sound.init();initClouds();setupLevel(currentLevel);gameState='COUNTDOWN';countdownTimer=3;lastCountdownUpdate=performance.now();}
+startGame();gameLoop();
+
+</script>
+</body>
+</html>
+

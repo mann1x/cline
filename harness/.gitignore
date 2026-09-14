@@ -1,0 +1,16 @@
+
+# Harness output never belongs in git: runs, work trees, archives and state.
+# The scripts here are versioned; everything an arm produces lives in the spool.
+runs/
+runs-*/
+work/
+work-*/
+verdicts-*.txt
+results-*.jsonl
+state/
+state-archive/
+archive/
+tmp-archive/
+*.log
+*.out
+__pycache__/
