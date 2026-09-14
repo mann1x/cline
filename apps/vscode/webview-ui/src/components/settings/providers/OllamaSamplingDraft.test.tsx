@@ -239,6 +239,33 @@ describe("typing a decimal into an Ollama sampling field", () => {
 	})
 
 	/**
+	 * And the number has to be *saved*, not merely displayed.
+	 *
+	 * The check above asserts `field.value`, which is the draft -- the fix that
+	 * stopped the box refilling itself. It says nothing about whether anything
+	 * was written, so a cap that types cleanly and persists nothing passes it.
+	 * That is the state the panel was actually in: the report came back as "it
+	 * is still 64000 and I cannot change it" after the typing was fixed,
+	 * because the value never reached providers.json and the next read
+	 * borrowed the global again.
+	 */
+	it("writes the tool-result cap that was typed, not just shows it", async () => {
+		mocks.readExtensionState.mockReturnValue({ apiConfiguration: {}, maxToolResultChars: 64000 })
+		const { type, press } = await openSampling("Tool Results Character Cap", {}, { contextWindow: 131072 })
+
+		await type("")
+		for (const char of "32000") {
+			await press(char)
+		}
+		await act(async () => {
+			await Promise.resolve()
+		})
+
+		const written = mocks.write.mock.calls.map(([patch]: [Record<string, unknown>]) => patch)
+		expect(written.some((patch) => patch.maxToolResultChars === 32000)).toBe(true)
+	})
+
+	/**
 	 * The context window writes twice, and the order matters.
 	 *
 	 * `commitModelSelection` rebuilds the provider entry from a fresh read of
