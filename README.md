@@ -42,7 +42,7 @@ Interactive chat or fully headless
 for CI/CD and scripting.
 <!--
 ```
-npm i -g Cerebriline
+npm i -g cline
 ```
 -->
 
@@ -128,11 +128,18 @@ settings keys, and remove the old extension - close VS Code and run:
 
 ```powershell
 # See exactly what would move, and change nothing:
-.\tools\Migrate-ToCerebriline.ps1 -WhatIf
+.\Migrate-ToCerebriline.ps1 -WhatIf
 
 # Do it:
-.\tools\Migrate-ToCerebriline.ps1
+.\Migrate-ToCerebriline.ps1
 ```
+
+`Migrate-ToCerebriline.ps1` is attached to the
+[release](https://github.com/mann1x/cline/releases/latest) beside the `.vsix`,
+so you do not need a checkout; it is also in the repo at
+`tools/Migrate-ToCerebriline.ps1`. If PowerShell refuses to run it, either
+unblock it (`Unblock-File .\Migrate-ToCerebriline.ps1`) or run it as
+`powershell -ExecutionPolicy Bypass -File .\Migrate-ToCerebriline.ps1`.
 
 Windows PowerShell 5.1 and PowerShell 7 both work, and it needs no admin
 rights. It copies first, verifies the copy, and only then renames the original
@@ -151,7 +158,7 @@ repository you work on with other people keeps working for everyone.
 | **CLI** | Terminal UI, headless mode, shell commands, and CLI-specific flows. | [`apps/cli/`](#) | [CHANGELOG.md](#) |
 | **VS Code Extension** | The Marketplace extension and extension host integration. | [`/`](#) (WIP migrating) | [CHANGELOG.md](#) |
 | **JetBrains Plugin** | JetBrains-hosted client that talks to the shared agent core. | Currently we are not open-sourcing JetBrains plugins | - |
-| **Kanban** | Web-based multi-agent task board. | [`Cerebriline/kanban`](#) | [CHANGELOG.md](#) |
+| **Kanban** | Web-based multi-agent task board. | [`cline/kanban`](#) | [CHANGELOG.md](#) |
 | **Docs site** | Public documentation pages. | [`docs/`](#) | - |
 
 ## Edits Code Across Your Project
@@ -168,7 +175,7 @@ Toggle between Plan mode and Act mode. In Plan mode, Cerebriline explores your c
 
 ## Rules and Skills
 
-Define project-specific rules in `.Cerebrilinerules` files that guide how Cerebriline works in your codebase: coding standards, architecture conventions, deployment procedures, testing requirements. Rules are picked up automatically by the CLI, VS Code extension, and JetBrains plugin. Use skills to let the model load specific rules when needed.
+Define project-specific rules in `.clinerules` files that guide how Cerebriline works in your codebase: coding standards, architecture conventions, deployment procedures, testing requirements. Rules are picked up automatically by the CLI, VS Code extension, and JetBrains plugin. Use skills to let the model load specific rules when needed.
 
 ## Works With Every Model
 
@@ -192,7 +199,7 @@ Cerebriline is not locked to a single AI provider. Use whichever model fits your
 Extend Cerebriline's capabilities with plugins. Using the SDK, register tools and lifecycle hooks programmatically through the plugin system for logging, auditing, policy enforcement, or adding domain-specific capabilities. Simple plugin example below.
 
 ```typescript
-import { Agent, createTool } from "@Cerebriline/sdk"
+import { Agent, createTool } from "@cline/sdk"
 
 const deployTool = createTool({
   name: "deploy",
@@ -205,14 +212,14 @@ const deployTool = createTool({
 
 const agent = new Agent({ tools: [deployTool], /* ... */ })
 ```
-...or use [MCP servers](https://github.com/modelcontextprotocol) to connect to databases, query APIs, manage cloud infrastructure, and interact with external systems. Use [community-built servers](https://github.com/modelcontextprotocol/servers) or ask Cerebriline to create custom tools on the fly. In the CLI, manage servers with `Cerebriline mcp`.
+...or use [MCP servers](https://github.com/modelcontextprotocol) to connect to databases, query APIs, manage cloud infrastructure, and interact with external systems. Use [community-built servers](https://github.com/modelcontextprotocol/servers) or ask Cerebriline to create custom tools on the fly. In the CLI, manage servers with `cline mcp`.
 
 ## Multi-Agent Teams
 
 Coordinate multiple agents working together on complex tasks. A coordinator agent breaks the work into subtasks and delegates to specialist agents, each with their own tools and context. Team state persists across sessions so you can pick up where you left off.
 
 ```bash
-Cerebriline --team-name auth-sprint "Plan and implement user authentication with tests"
+cline --team-name auth-sprint "Plan and implement user authentication with tests"
 ```
 
 ## Scheduled Agents
@@ -220,7 +227,7 @@ Cerebriline --team-name auth-sprint "Plan and implement user authentication with
 Run agents on cron schedules for recurring automations. Daily PR summaries, weekly dependency checks, codebase health reports. Schedules persist across restarts and run independently of any terminal session.
 
 ```bash
-Cerebriline schedule create "PR summary" \
+cline schedule create "PR summary" \
   --cron "0 9 * * MON-FRI" \
   --prompt "List all open PRs and their review status" \
   --workspace /path/to/repo
@@ -232,26 +239,26 @@ Chat with your agent from any messaging platform: Telegram, Slack, Discord, Goog
 
 ```bash
 # Connect to Telegram
-Cerebriline connect telegram -k $BOT_TOKEN
+cline connect telegram -k $BOT_TOKEN
 # Connect to Slack through webhook
-Cerebriline connect slack --bot-token $SLACK_TOKEN --signing-secret $SECRET --base-url $URL
+cline connect slack --bot-token $SLACK_TOKEN --signing-secret $SECRET --base-url $URL
 # Connect to Slack using socket mode
-Cerebriline connect slack --bot-token $SLACK_TOKEN --app-token $SLACK_APP_TOKEN
+cline connect slack --bot-token $SLACK_TOKEN --app-token $SLACK_APP_TOKEN
 # Connect to Discord
-Cerebriline connect discord --application-id $DISCORD_APP_ID --bot-token $DISCORD_BOT_TOKEN \
+cline connect discord --application-id $DISCORD_APP_ID --bot-token $DISCORD_BOT_TOKEN \
   --public-key $DISCORD_PUBLIC_KEY --base-url $URL
 ```
 
-Run `Cerebriline connect` to list every channel, and `Cerebriline connect <channel> --help` for that channel's flags and the environment variables it reads.
+Run `cline connect` to list every channel, and `cline connect <channel> --help` for that channel's flags and the environment variables it reads.
 
 ## Headless CLI for CI/CD
 
 Run Cerebriline with zero interaction for scripting and automation. Pipe input, get JSON output, chain commands, integrate into CI/CD pipelines.
 
 ```bash
-Cerebriline "Run tests and fix any failures"
-git diff origin/main | Cerebriline "Review these changes for issues"
-Cerebriline --json "List all TODO comments" | jq -r 'select(.type == "agent_event" and .event.text) | .event.text'
+cline "Run tests and fix any failures"
+git diff origin/main | cline "Review these changes for issues"
+cline --json "List all TODO comments" | jq -r 'select(.type == "agent_event" and .event.text) | .event.text'
 ```
 
 ## Contributing
@@ -259,4 +266,4 @@ Cerebriline --json "List all TODO comments" | jq -r 'select(.type == "agent_even
 Start with the [Contributing Guide](CONTRIBUTING.md). Join our [Discord](https://discord.gg/CuE9Jaggp) and head to the `#contributors` channel to connect with other contributors. 
 ## License
 
-[Apache 2.0 © 2026 Cerebriline Bot Inc.](./LICENSE)
+[Apache 2.0 © 2026 Cline Bot Inc.](./LICENSE)

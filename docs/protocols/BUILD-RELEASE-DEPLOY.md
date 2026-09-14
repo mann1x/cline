@@ -48,11 +48,11 @@ hook.
 ```bash
 cd apps/vscode && python3 - <<'PY'
 import re; p='package.json'; s=open(p).read()
-s2, n = re.subn(r'("version":\s*)"4\.100\.90"', r'\1"4.100.91"', s, count=1)
+s2, n = re.subn(r'("version":\s*)"4\.100\.90"', r'\1"4.100.112"', s, count=1)
 assert n == 1, "version line not matched"     # never a blind sed
 open(p,'w').write(s2)
 PY
-git commit -am "release: 4.100.91"
+git commit -am "release: 4.100.112"
 ```
 
 ### 3. Build the VSIX
@@ -60,21 +60,24 @@ git commit -am "release: 4.100.91"
 ```bash
 cd apps/vscode && bun run package && \
   bunx vsce package --no-dependencies --allow-package-secrets sendgrid \
-    --out "cline-mann1x-4.100.91.vsix"
+    --out "cerebriline-4.100.112.vsix"
 ```
 
 **`--out` is not optional.** With no `--out`, vsce names the file from
-`package.json` — and this fork has never changed `name` from upstream's
-`claude-dev`, so you get `claude-dev-<version>.vsix`. That is upstream's
+`package.json`. That is now `cerebriline`, so the default finally happens to be
+right — but it is right by coincidence, and the coincidence is one
+`package.json` edit away from ending. That is upstream's
 identity on a fork's release asset. It happened: v4.100.86 was correctly
 `cline-mann1x-4.100.86.vsix`, and v4.100.99 through v4.100.104 all shipped as
 `claude-dev-<version>.vsix` because this line had no `--out`.
 
-**The artefact is always `cline-mann1x-<version>.vsix`.** Check the name before
+**The artefact is always `cerebriline-<version>.vsix`.** (It was
+`cline-mann1x-<version>.vsix` until 2026-09-14, when the extension became
+`mann1x.cerebriline`; releases before v4.100.112 carry the old name.) Check the name before
 going further — the wrong one builds and uploads perfectly happily:
 
 ```bash
-ls -l apps/vscode/cline-mann1x-4.100.91.vsix   # must exist, by that exact name
+ls -l apps/vscode/cerebriline-4.100.112.vsix   # must exist, by that exact name
 ls apps/vscode/*.vsix                          # must list nothing else
 ```
 
@@ -93,13 +96,13 @@ commit before believing a success.
 
 ```bash
 git push origin HEAD:mann1x/full-build-release
-git tag -a v4.100.91 -m "v4.100.91" && git push origin v4.100.91
-gh release create v4.100.91 \
-  apps/vscode/cline-mann1x-4.100.91.vsix --repo mann1x/cline \
-  --title "v4.100.91" --notes-file <notes>
+git tag -a v4.100.112 -m "v4.100.112" && git push origin v4.100.112
+gh release create v4.100.112 \
+  apps/vscode/cerebriline-4.100.112.vsix --repo mann1x/cline \
+  --title "v4.100.112" --notes-file <notes>
 ```
 
-**Name the file, never glob it.** `apps/vscode/*4.100.91.vsix` uploads whatever
+**Name the file, never glob it.** `apps/vscode/*4.100.112.vsix` uploads whatever
 is on disk, which is exactly how the `claude-dev-*` assets got published without
 anyone noticing. Spelling the name out makes a mis-named build fail here instead
 of shipping.
@@ -110,7 +113,7 @@ second `.vsix`, and uploads by exact path. Push the tag and it runs:
 
 ```bash
 git push origin HEAD:mann1x/full-build-release
-git tag -a v4.100.91 -m "v4.100.91" && git push origin v4.100.91   # this releases
+git tag -a v4.100.112 -m "v4.100.112" && git push origin v4.100.112   # this releases
 ```
 
 It also refuses to release if the tag and `apps/vscode/package.json` disagree.
@@ -129,9 +132,9 @@ different claims.
 ### 6. Deploy to pandorum
 
 ```bash
-scp apps/vscode/cline-mann1x-4.100.91.vsix \
-  'pandorum:C:/Users/manni/Downloads/cline-mann1x-4.100.91.vsix'
-ssh pandorum 'powershell -NoProfile -Command "code --install-extension C:/Users/manni/Downloads/cline-mann1x-4.100.91.vsix --force"'
+scp apps/vscode/cerebriline-4.100.112.vsix \
+  'pandorum:C:/Users/manni/Downloads/cerebriline-4.100.112.vsix'
+ssh pandorum 'powershell -NoProfile -Command "code --install-extension C:/Users/manni/Downloads/cerebriline-4.100.112.vsix --force"'
 ```
 
 **Always the full path.** Path stripping is a standing rule, and the installer
@@ -141,7 +144,7 @@ CLI is normal noise, not a failure.
 ### 7. Verify the install, then say to reload
 
 ```bash
-ssh pandorum 'powershell -NoProfile -Command "Get-ChildItem C:/Users/manni/.vscode/extensions -Directory -Filter *claude-dev* | Sort-Object Name | Select-Object -Last 3 Name,CreationTime"'
+ssh pandorum 'powershell -NoProfile -Command "Get-ChildItem C:/Users/manni/.vscode/extensions -Directory -Filter *cerebriline* | Sort-Object Name | Select-Object -Last 3 Name,CreationTime"'
 ```
 
 Hash the **installed** `dist/extension.js` on pandorum and compare it to the

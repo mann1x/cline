@@ -31,8 +31,14 @@ on:
 
 # The artefact name for this fork. Changing this breaks every install
 # instruction that names the file, so change it deliberately or not at all.
+#
+# Changed 2026-09-14: the fork's extension identity became `mann1x.cerebriline`,
+# so this is now `cerebriline` and it equals package.json's `name` -- which is
+# also what vsce would pick with no `--out`. Declaring it anyway, and asserting
+# the two agree, is the point: it is the drift between them that published five
+# releases under upstream's `claude-dev` identity.
 env:
-    ARTIFACT_PREFIX: cline-mann1x
+    ARTIFACT_PREFIX: cerebriline
 
 permissions:
     contents: write
@@ -110,6 +116,12 @@ jobs:
                     echo "Bump the version and commit it before tagging."
                     exit 1
                   fi
+                  NAME=$(node -p "require('./package.json').name")
+                  if [[ "$NAME" != "$ARTIFACT_PREFIX" ]]; then
+                    echo "Error: package.json name '$NAME' does not match ARTIFACT_PREFIX '$ARTIFACT_PREFIX'."
+                    echo "The extension's identity moved without the release name following it."
+                    exit 1
+                  fi
                   echo "version=$VERSION" >> "$GITHUB_OUTPUT"
                   echo "artifact=${ARTIFACT_PREFIX}-${VERSION}.vsix" >> "$GITHUB_OUTPUT"
                   echo "Tag and package version agree: $TAG"
@@ -152,14 +164,38 @@ jobs:
                   echo "Artefact: $ARTIFACT ($(stat -c%s "$ARTIFACT") bytes)"
                   sha256sum "$ARTIFACT"
 
+            # Shipped with the release because it is the thing a user needs at
+            # exactly the moment they are installing this: the upgrade path from
+            # the old `saoudrizwan.claude-dev` identity. Telling someone to go
+            # and find a script in the repo, at the point where their old
+            # extension is still installed beside the new one, is where an
+            # upgrade gets abandoned half-done.
+            - name: Assert the migration script is present
+              run: |
+                  SCRIPT="tools/Migrate-ToCerebriline.ps1"
+                  if [ ! -f "$SCRIPT" ]; then
+                    echo "ERROR: $SCRIPT is missing; the release would ship without an upgrade path."
+                    exit 1
+                  fi
+                  # PowerShell reads a BOM-less UTF-8 file as ASCII on Windows
+                  # PowerShell 5.1, which mangles any non-ASCII character in it.
+                  if [ "$(head -c 3 "$SCRIPT" | xxd -p)" != "efbbbf" ]; then
+                    echo "ERROR: $SCRIPT has lost its UTF-8 BOM; PowerShell 5.1 will misread it."
+                    exit 1
+                  fi
+                  echo "Migration script: $(stat -c%s "$SCRIPT") bytes"
+                  sha256sum "$SCRIPT"
+
             - name: Create the GitHub release
               uses: softprops/action-gh-release@v1
               with:
                   tag_name: ${{ steps.tag.outputs.tag }}
                   name: ${{ steps.tag.outputs.tag }}
-                  # Exact path, never a glob: a glob is what let the wrongly-named
+                  # Exact paths, never a glob: a glob is what let the wrongly-named
                   # artefact upload silently in the first place.
-                  files: apps/vscode/${{ steps.version.outputs.artifact }}
+                  files: |
+                      apps/vscode/${{ steps.version.outputs.artifact }}
+                      tools/Migrate-ToCerebriline.ps1
                   fail_on_unmatched_files: true
                   generate_release_notes: true
               env:
