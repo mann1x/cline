@@ -55,6 +55,14 @@ export interface EscalationSettings {
 	struggleMinIteration: number
 	/** Offers of help per task. */
 	struggleMaxPerTask: number
+	/**
+	 * Consecutive refused edits before the model is told to consider the expert.
+	 *
+	 * A different measurement from `struggleFailedCalls`, not a smaller one:
+	 * that one reads a window of every tool the session called, this one reads
+	 * an unbroken run of calls that tried to change a file.
+	 */
+	struggleEditStreak: number
 }
 
 export const DEFAULT_ESCALATION_SETTINGS: EscalationSettings = {
@@ -65,9 +73,10 @@ export const DEFAULT_ESCALATION_SETTINGS: EscalationSettings = {
 	// The detector's own corpus-fitted operating point, restated here so the
 	// panel shows the number actually in force rather than an empty box. They
 	// are kept in step by `escalation-thresholds.test.ts`.
-	struggleFailedCalls: 4,
+	struggleFailedCalls: 6,
 	struggleDistressHits: 2,
 	struggleWindow: 10,
 	struggleMinIteration: 20,
 	struggleMaxPerTask: 2,
+	struggleEditStreak: 3,
 }

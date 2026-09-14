@@ -12,6 +12,7 @@ import {
 	bandFor,
 	COMPLEXITY_SCALE,
 	describeComplexity,
+	fileParses,
 	isHighComplexity,
 	scoreComplexity,
 } from "./walker";
@@ -311,5 +312,33 @@ describe("which part of the file the score describes", () => {
 
 		expect(score?.score).toBe(4);
 		expect(score?.name).toBeUndefined();
+	});
+});
+
+/**
+ * The yes/no next to the score.
+ *
+ * It exists because "your edits are being refused" and "the file no longer
+ * parses" are different facts: a refused edit changes nothing, so a file that
+ * is broken while the refusals pile up was broken by the edits that landed.
+ */
+describe("whether a file still parses", () => {
+	it("says yes to code the grammar can read end to end", async () => {
+		expect(
+			await fileParses("game.js", "function f() { if (a) { b(); } }"),
+		).toBe(true);
+	});
+
+	it("says no to a file the grammar gives up on", async () => {
+		// An unclosed brace at the top of a file, which is what half an edit
+		// leaves behind.
+		const broken = `function f() { if (a) { b(); }\n${"const x = ) ( } ;\n".repeat(40)}`;
+		expect(await fileParses("game.js", broken)).toBe(false);
+	});
+
+	// Never `false`: nothing was measured, and reading silence as a verdict is
+	// the mistake the whole module is written against.
+	it("says nothing about a language it has no grammar for", async () => {
+		expect(await fileParses("notes.txt", "!!! not code !!!")).toBeUndefined();
 	});
 });

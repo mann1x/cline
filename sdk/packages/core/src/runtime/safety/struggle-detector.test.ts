@@ -63,21 +63,24 @@ describe("what earns a suggestion", () => {
 	it("fires on failures plus the model saying it is stuck", () => {
 		const struggle = detector();
 		windowUpTo(struggle, 24, {
-			failures: 4,
+			failures: STRUGGLE_FAILED_CALLS,
 			reasoning: "I'm stuck. The edit keeps failing.",
 		});
 
 		const verdict = struggle.inspect({ iteration: 24 });
 
 		expect(verdict.kind).toBe("suggest");
-		expect(verdict.message).toContain("4 tool calls");
+		expect(verdict.message).toContain(`${STRUGGLE_FAILED_CALLS} tool calls`);
 	});
 
 	// The half that needs no cross-model calibration: the run is compared with
 	// how it opened, not with any other model's rate.
 	it("fires on failures plus hedging that has not decayed", () => {
 		const struggle = detector();
-		windowUpTo(struggle, 24, { failures: 4, reasoning: HEDGED });
+		windowUpTo(struggle, 24, {
+			failures: STRUGGLE_FAILED_CALLS,
+			reasoning: HEDGED,
+		});
 
 		const verdict = struggle.inspect({ iteration: 24 });
 
@@ -105,7 +108,10 @@ describe("what earns a suggestion", () => {
 	// what this test has always been about.
 	it("offers nothing on failures alone, and nudges instead", () => {
 		const struggle = detector();
-		windowUpTo(struggle, 24, { failures: 6, reasoning: CALM });
+		windowUpTo(struggle, 24, {
+			failures: STRUGGLE_FAILED_CALLS + 2,
+			reasoning: CALM,
+		});
 
 		expect(struggle.inspect({ iteration: 24 }).kind).toBe("nudge");
 	});
@@ -113,7 +119,7 @@ describe("what earns a suggestion", () => {
 	it("says nothing before the run has had a chance to read the problem", () => {
 		const struggle = detector();
 		windowUpTo(struggle, 15, {
-			failures: 6,
+			failures: STRUGGLE_FAILED_CALLS + 2,
 			reasoning: "I'm stuck. This keeps failing.",
 		});
 
@@ -125,13 +131,13 @@ describe("how often it may say it", () => {
 	it("says it at most once in a transaction", () => {
 		const struggle = detector();
 		windowUpTo(struggle, 24, {
-			failures: 4,
+			failures: STRUGGLE_FAILED_CALLS,
 			reasoning: "I'm stuck, this keeps failing.",
 		});
 		expect(struggle.inspect({ iteration: 24 }).kind).toBe("suggest");
 
 		windowUpTo(struggle, 30, {
-			failures: 4,
+			failures: STRUGGLE_FAILED_CALLS,
 			reasoning: "I'm stuck, this keeps failing.",
 		});
 		expect(struggle.inspect({ iteration: 30 }).kind).toBe("ok");
@@ -142,7 +148,7 @@ describe("how often it may say it", () => {
 		for (let round = 0; round < STRUGGLE_MAX_PER_TASK; round += 1) {
 			struggle.noteTransaction(round + 1);
 			windowUpTo(struggle, 24 + round * 10, {
-				failures: 4,
+				failures: STRUGGLE_FAILED_CALLS,
 				reasoning: "I'm stuck, this keeps failing.",
 			});
 			struggle.noteFileChanged(`file-${round}.js`);
@@ -154,7 +160,7 @@ describe("how often it may say it", () => {
 		struggle.noteTransaction(99);
 		struggle.noteFileChanged("file-later.js");
 		windowUpTo(struggle, 90, {
-			failures: 4,
+			failures: STRUGGLE_FAILED_CALLS,
 			reasoning: "I'm stuck, this keeps failing.",
 		});
 
@@ -168,7 +174,7 @@ describe("how often it may say it", () => {
 	it("does not repeat a diagnosis over an unchanged file set", () => {
 		const struggle = detector();
 		windowUpTo(struggle, 24, {
-			failures: 4,
+			failures: STRUGGLE_FAILED_CALLS,
 			reasoning: "I'm stuck, this keeps failing.",
 		});
 		struggle.noteFileChanged("game.js");
@@ -176,7 +182,7 @@ describe("how often it may say it", () => {
 
 		struggle.noteTransaction(2);
 		windowUpTo(struggle, 34, {
-			failures: 4,
+			failures: STRUGGLE_FAILED_CALLS,
 			reasoning: "I'm stuck, this keeps failing.",
 		});
 
@@ -193,7 +199,7 @@ describe("how often it may say it", () => {
 	it("does not fire across a compaction", () => {
 		const struggle = detector();
 		windowUpTo(struggle, 24, {
-			failures: 4,
+			failures: STRUGGLE_FAILED_CALLS,
 			reasoning: "I'm stuck, this keeps failing.",
 		});
 		struggle.noteCompaction();
@@ -234,12 +240,16 @@ describe("the nudge below the offer", () => {
 		expect(struggle.inspect({ iteration: 24 }).kind).toBe("ok");
 	});
 
+	// A host that sets its own trigger moves the nudge with it: the whole point
+	// of the quieter verdict is to be the turn before the offer, wherever that
+	// turn is. Written against a threshold of its own so it says something
+	// whatever the shipped default becomes.
 	it("moves with the threshold rather than sitting on a number of its own", () => {
-		const struggle = new StruggleDetector({ failedCalls: 6 });
+		const struggle = new StruggleDetector({ failedCalls: 9 });
 		for (let iteration = 1; iteration <= 10; iteration += 1) {
 			struggle.noteTurn({ iteration, reasoning: CALM });
 		}
-		windowUpTo(struggle, 24, { failures: 4, reasoning: CALM });
+		windowUpTo(struggle, 24, { failures: 7, reasoning: CALM });
 		expect(struggle.inspect({ iteration: 24 }).kind).toBe("ok");
 
 		windowUpTo(struggle, 24, { failures: 1, reasoning: CALM });
@@ -303,7 +313,7 @@ describe("the distress lexicon", () => {
 	it("separates confusing myself from confusing one thing with another", () => {
 		const struggle = detector();
 		windowUpTo(struggle, 24, {
-			failures: 4,
+			failures: STRUGGLE_FAILED_CALLS,
 			reasoning: "I'm confusing the board array with the sprite array.",
 		});
 		// Not the offer. The failures still earn the quieter verdict, which is
@@ -312,7 +322,7 @@ describe("the distress lexicon", () => {
 
 		const stuck = detector();
 		windowUpTo(stuck, 24, {
-			failures: 4,
+			failures: STRUGGLE_FAILED_CALLS,
 			reasoning: "I'm confusing myself. I'm confusing myself again.",
 		});
 		expect(stuck.inspect({ iteration: 24 }).kind).toBe("suggest");
@@ -357,48 +367,109 @@ describe("driving the detector from the session's own events", () => {
 			turn(feed, iteration, "I'm stuck, this keeps failing.", 1);
 		}
 
-		expect(seen).toHaveLength(1);
-		expect(seen[0]?.kind).toBe("suggest");
+		// The nudges below it arrive first and repeat as the streak of refused
+		// edits lengthens; the offer is made exactly once.
+		expect(seen.filter((verdict) => verdict.kind === "suggest")).toHaveLength(
+			1,
+		);
+		expect(seen.at(-1)?.kind).toBe("suggest");
 	});
 
-	// A diagnosis delivered between two tool calls of one reply arrives in the
-	// middle of work the model has already decided on. The turn's end is the
-	// only boundary this fires on.
-	it("says nothing between the tool calls of one turn", () => {
+	// This used to be "says nothing between the tool calls of one turn", on the
+	// argument that a diagnosis arriving mid-reply lands in the middle of work
+	// the model has already decided on. The argument was wrong about where the
+	// message goes -- the caller holds it and attaches it to the next tool
+	// result -- and it cost the whole signal on a looping run, which can spend
+	// hundreds of calls without ever ending a turn.
+	it("speaks on the tool result, without waiting for the turn to end", () => {
 		const detector = new StruggleDetector();
 		const seen: StruggleVerdict[] = [];
 		const feed = createStruggleFeed(detector, (verdict) => seen.push(verdict));
 
-		for (let iteration = 1; iteration <= 10; iteration += 1) {
-			turn(feed, iteration, HEDGED, 0);
-		}
-		// Everything the trigger wants, held below the iteration floor.
-		for (let iteration = 11; iteration <= 19; iteration += 1) {
-			turn(feed, iteration, "I'm stuck, this keeps failing.", 1);
+		feed.observe({ type: "iteration_start", iteration: 1 });
+		for (let call = 1; call <= 2; call += 1) {
+			feed.observe({
+				type: "content_end",
+				contentType: "tool",
+				toolName: "editor",
+				output: { success: false, error: "No replacement performed" },
+			});
 		}
 		expect(seen).toHaveLength(0);
 
-		feed.observe({ type: "iteration_start", iteration: 20 });
-		feed.observe({
-			type: "content_end",
-			contentType: "reasoning",
-			reasoning: "I'm stuck, this keeps failing.",
-		});
 		feed.observe({
 			type: "content_end",
 			contentType: "tool",
 			toolName: "editor",
-			error: "No replacement performed",
-		});
-		expect(seen).toHaveLength(0);
-
-		feed.observe({
-			type: "iteration_end",
-			iteration: 20,
-			hadToolCalls: true,
-			toolCallCount: 1,
+			output: { success: false, error: "No replacement performed" },
 		});
 		expect(seen).toHaveLength(1);
+		expect(seen[0]?.kind).toBe("nudge");
+		expect(seen[0]?.reason).toBe("edit-streak");
+		expect(seen[0]?.message).toContain("3 attempts");
+	});
+
+	it("counts the refusal a tool hides inside a successful result", () => {
+		const detector = new StruggleDetector();
+		const feed = createStruggleFeed(detector, () => undefined);
+
+		for (let call = 1; call <= 4; call += 1) {
+			feed.observe({ type: "iteration_start", iteration: 20 + call });
+			feed.observe({
+				type: "content_end",
+				contentType: "tool",
+				toolName: "read_files",
+				// No `error` on the event at all: the runtime called this a
+				// success, and only the body says otherwise.
+				output: [
+					{ query: "a.js", result: "", error: "no such file", success: false },
+				],
+			});
+		}
+		expect(detector.signalsAt(24).failedCalls).toBe(4);
+	});
+
+	it("does not count a partial result as a refusal", () => {
+		const detector = new StruggleDetector();
+		const feed = createStruggleFeed(detector, () => undefined);
+
+		feed.observe({ type: "iteration_start", iteration: 21 });
+		feed.observe({
+			type: "content_end",
+			contentType: "tool",
+			toolName: "read_files",
+			output: [
+				{ query: "a.js", result: "", error: "no such file", success: false },
+				{ query: "b.js", result: "ok", success: true },
+			],
+		});
+		expect(detector.signalsAt(21).failedCalls).toBe(0);
+	});
+
+	it("reads the message as reasoning only while the model reports none", () => {
+		const thinking = new StruggleDetector();
+		const open = new StruggleDetector();
+		const both = [thinking, open].map((detector) =>
+			createStruggleFeed(detector, () => undefined),
+		);
+		for (const feed of both) {
+			feed.observe({ type: "iteration_start", iteration: 1 });
+		}
+		// The thinking model reports reasoning, so its reply is the answer.
+		both[0]?.observe({
+			type: "content_end",
+			contentType: "reasoning",
+			reasoning: "Checking the bracket balance.",
+		});
+		for (const feed of both) {
+			feed.observe({
+				type: "content_end",
+				contentType: "text",
+				text: "I'm stuck and I'm confused.",
+			});
+		}
+		expect(thinking.signalsAt(1).distress).toBe(0);
+		expect(open.signalsAt(1).distress).toBe(2);
 	});
 
 	it("reads the file set from the calls that change files", () => {

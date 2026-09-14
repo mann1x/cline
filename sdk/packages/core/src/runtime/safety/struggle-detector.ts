@@ -36,11 +36,32 @@ export const STRUGGLE_WINDOW = 10;
 /**
  * Failed tool calls in that window before the behavioural half is satisfied.
  *
- * Four, not five. Five is the precise-but-late operating point -- 48% recall at
- * a 7% false alarm, firing 60% of the way into a run -- and the conjunction
- * below already supplies the precision that the lower threshold gives up.
+ * **Six, raised from four when the signal underneath it was corrected.** Four
+ * was fitted against `content_end.error`, and our tools almost never set it: a
+ * tool that refuses returns `{success: false, error: ...}` as its output and
+ * the call is reported as a success. `refusalIn` below now counts both, which
+ * moved the measurement by an order of magnitude rather than a little.
+ *
+ * Replayed over 288 harness runs -- 219 that reached FIXED, 69 that ended
+ * broken or timed out -- with the old signal against the new one, at the same
+ * thresholds:
+ *
+ * ```
+ *          error only            error + refusal
+ *   N=3    3% / 19%              47% / 91%          (false alarm / recall)
+ *   N=4    3% / 10%              35% / 87%
+ *   N=5    2% /  4%              25% / 74%
+ *   N=6    1% /  3%              13% / 57%
+ * ```
+ *
+ * The old four was not a conservative operating point, it was an unreachable
+ * one: it caught 10% of the runs that failed. The new four is the opposite
+ * problem -- the nudge fires one below the trigger, so four here means the
+ * model is nudged on 47% of the runs that go on to succeed. Six restores the
+ * intended rarity with 57% recall, which is better than the old number ever
+ * delivered, and `STRUGGLE_EDIT_STREAK` covers the loops it gives up.
  */
-export const STRUGGLE_FAILED_CALLS = 4;
+export const STRUGGLE_FAILED_CALLS = 6;
 
 /** Distress-lexicon hits in the window that satisfy the lexical half. */
 export const STRUGGLE_DISTRESS_HITS = 2;
@@ -56,6 +77,21 @@ export const STRUGGLE_MIN_ITERATION = 20;
 
 /** Suggestions per task. Two, and at most one per transaction. */
 export const STRUGGLE_MAX_PER_TASK = 2;
+
+/**
+ * Consecutive failing edits before the model is told to consider the expert.
+ *
+ * Separate from `STRUGGLE_FAILED_CALLS` because it is a different measurement,
+ * not a smaller one. That threshold reads a ten-turn window of every tool the
+ * session called; this one reads an unbroken run of calls to the tools that
+ * change a file, and it does not care how far apart the turns are.
+ *
+ * Three, measured. Across 307 harness runs and one 829-message plugin session,
+ * the longest unbroken run of refused calls is 2 in a run that finishes and 4
+ * to 8 in the three that do not, so 3 is the first value that separates them.
+ * Two would fire on healthy runs; four arrives after the loop is established.
+ */
+export const STRUGGLE_EDIT_STREAK = 3;
 
 /**
  * The operating point, as the user may set it.
@@ -81,6 +117,8 @@ export interface StruggleThresholds {
 	minIteration?: number;
 	/** Suggestions per task. */
 	maxPerTask?: number;
+	/** Consecutive failing edits before the model is told to consider the expert. */
+	editStreak?: number;
 }
 
 /** A positive integer, or the default. Anything else is not an operating point. */
@@ -96,6 +134,7 @@ export interface ResolvedStruggleThresholds {
 	readonly distressHits: number;
 	readonly minIteration: number;
 	readonly maxPerTask: number;
+	readonly editStreak: number;
 }
 
 export function resolveStruggleThresholds(
@@ -107,6 +146,7 @@ export function resolveStruggleThresholds(
 		distressHits: positive(given?.distressHits, STRUGGLE_DISTRESS_HITS),
 		minIteration: positive(given?.minIteration, STRUGGLE_MIN_ITERATION),
 		maxPerTask: positive(given?.maxPerTask, STRUGGLE_MAX_PER_TASK),
+		editStreak: positive(given?.editStreak, STRUGGLE_EDIT_STREAK),
 	};
 }
 
@@ -163,6 +203,72 @@ const HEDGING: readonly RegExp[] = [
 	/\bunexpected\b/gi,
 ];
 
+/**
+ * The refusal a tool reported inside a successful envelope, if it did.
+ *
+ * `content_end.error` is set only where the runtime marked the whole call an
+ * error, and our own tools almost never are: a tool that refuses returns
+ * `{success: false, error: "..."}` as its *output* and the call is reported as
+ * having succeeded. Measured on one 829-message session, that gap is the whole
+ * signal -- 3 calls carried `error`, 50 carried a refusal in the output, and
+ * 46 of 162 `editor` calls were refused. A detector reading only the first
+ * number is looking at 6% of what the model experienced.
+ *
+ * A call counts as refused only when nothing in it succeeded. The list-shaped
+ * tools return one result per item, so a `read_files` that found two paths of
+ * three did work the model can use and is not a failure.
+ */
+export function refusalIn(output: unknown): string | undefined {
+	if (Array.isArray(output)) {
+		if (output.length === 0) {
+			return undefined;
+		}
+		let first: string | undefined;
+		for (const item of output) {
+			const refusal = refusalIn(item);
+			if (refusal === undefined) {
+				return undefined;
+			}
+			first ??= refusal;
+		}
+		return first;
+	}
+	if (typeof output === "string") {
+		const text = output.trim();
+		if (text === "" || !(text.startsWith("{") || text.startsWith("["))) {
+			return undefined;
+		}
+		try {
+			return refusalIn(JSON.parse(text));
+		} catch {
+			return undefined;
+		}
+	}
+	if (typeof output !== "object" || output === null) {
+		return undefined;
+	}
+	const record = output as {
+		success?: unknown;
+		error?: unknown;
+		result?: unknown;
+	};
+	const error =
+		typeof record.error === "string" && record.error.trim() !== ""
+			? record.error
+			: undefined;
+	if (record.success === false) {
+		// `success: false` is the refusal even where nobody wrote a message.
+		return error ?? "the call did not succeed";
+	}
+	if (error !== undefined && record.success !== true) {
+		return error;
+	}
+	// A wrapper whose own result is the refusal -- `{result: "{...}"}`.
+	return record.success === undefined && record.result !== undefined
+		? refusalIn(record.result)
+		: undefined;
+}
+
 /** What one iteration contributed, kept so the window can slide over it. */
 interface IterationRecord {
 	iteration: number;
@@ -197,6 +303,14 @@ export interface StruggleVerdict {
 	 * proposal of its own, and stops as soon as the offer takes over.
 	 */
 	kind: "ok" | "nudge" | "suggest";
+	/**
+	 * Which measurement produced it, for a caller that words them differently.
+	 *
+	 * `failures` is the ten-turn window; `edit-streak` is an unbroken run of
+	 * refused edits, which says something the window cannot -- that the model
+	 * is not merely failing often but failing at the same thing, in a row.
+	 */
+	reason?: "failures" | "edit-streak";
 	/** What was measured. Never what should be done about it. */
 	message?: string;
 	signals?: StruggleSignals;
@@ -216,6 +330,10 @@ export interface StruggleTurn {
 export interface StruggleToolOutcome {
 	iteration: number;
 	failed: boolean;
+	/** The tool that ran, where the caller knows it. */
+	tool?: string;
+	/** What the tool said when it refused, where it said anything. */
+	refusal?: string;
 }
 
 export interface StruggleInspection {
@@ -282,6 +400,40 @@ export function describeStruggle(
 }
 
 /**
+ * What an unbroken run of refused edits looks like, in the model's own terms.
+ *
+ * Observation, like `describeStruggle` next door, and for the same reason: the
+ * caller owns what follows from it. What this adds over the window is the word
+ * *row* -- a model failing four calls out of ten is having a bad patch, and a
+ * model whose last three edits were all refused is trying the same thing.
+ */
+export function describeEditStreak(
+	streak: number,
+	lastRefusal?: string,
+): string {
+	const lines = [
+		`Your last ${streak} attempts to change a file were all refused or failed, one after another, with nothing landing in between.`,
+	];
+	if (lastRefusal !== undefined && lastRefusal.trim() !== "") {
+		lines.push(`The most recent said: ${lastRefusal.trim()}`);
+	}
+	lines.push(
+		"Repeating an edit that was refused does not make it land; the reading of the file that produced it is what has to change.",
+	);
+	return lines.join(" ");
+}
+
+/**
+ * Tools whose call is an attempt to change a file.
+ *
+ * `restore_file` is deliberately absent. It changes a file, so it earns its
+ * place in `CHANGING_TOOLS` below, but it is a rollback rather than an attempt
+ * -- counting it here would read a model correctly undoing its own work as a
+ * model failing to edit.
+ */
+const EDIT_TOOLS = new Set(["editor", "apply_patch"]);
+
+/**
  * Per-session struggle scorer.
  *
  * The caller feeds it turns and tool outcomes and asks `inspect` at a boundary
@@ -298,6 +450,16 @@ export class StruggleDetector {
 	private firedInTransaction = false;
 	private transaction = 0;
 	private lastFiredKey?: string;
+	/**
+	 * The nudge repeats while the evidence holds, and the evidence holds for
+	 * many calls at a time. Keyed so that saying the same thing twice in a row
+	 * -- which inspecting after every tool call would otherwise do several
+	 * times per turn -- says it once.
+	 */
+	private lastNudgeKey?: string;
+	/** Consecutive refused edits, counted over edit calls and nothing else. */
+	private editStreak = 0;
+	private lastEditRefusal?: string;
 	/**
 	 * Files the session has changed, for the rule that a diagnosis is never
 	 * repeated over an unchanged file set.
@@ -338,6 +500,18 @@ export class StruggleDetector {
 
 	/** Record one tool call's outcome. Only the failures are counted. */
 	noteToolOutcome(outcome: StruggleToolOutcome): void {
+		// The streak runs over edit calls alone: a read or a command between
+		// two refused edits is the model looking for the reason, not a break
+		// in the pattern, and resetting on it would hide the loop it is in.
+		if (outcome.tool !== undefined && EDIT_TOOLS.has(outcome.tool)) {
+			if (outcome.failed) {
+				this.editStreak += 1;
+				this.lastEditRefusal = outcome.refusal;
+			} else {
+				this.editStreak = 0;
+				this.lastEditRefusal = undefined;
+			}
+		}
 		if (!outcome.failed) {
 			// Still recorded, so the iteration exists in the window even when
 			// every call in it succeeded.
@@ -358,6 +532,9 @@ export class StruggleDetector {
 	 */
 	noteCompaction(): void {
 		this.history.length = 0;
+		this.editStreak = 0;
+		this.lastEditRefusal = undefined;
+		this.lastNudgeKey = undefined;
 	}
 
 	/**
@@ -373,6 +550,9 @@ export class StruggleDetector {
 		}
 		this.transaction = transaction;
 		this.firedInTransaction = false;
+		this.editStreak = 0;
+		this.lastEditRefusal = undefined;
+		this.lastNudgeKey = undefined;
 	}
 
 	/** The signals as they stand, without the caps or the firing decision. */
@@ -399,7 +579,19 @@ export class StruggleDetector {
 		const { iteration } = input;
 		// The offer has already been made in this transaction. Everything below
 		// is a way of working up to it, so there is nothing left to say.
-		if (iteration < this.limits.minIteration || this.firedInTransaction) {
+		if (this.firedInTransaction) {
+			return { kind: "ok" };
+		}
+		// The streak is deliberately outside `minIteration`. That floor exists
+		// because a run stuck at iteration 12 is indistinguishable from one
+		// still reading the problem -- true of a hedging rate, and not true of
+		// three refused edits in a row, which mean the same thing whenever they
+		// happen.
+		const streak = this.editStreakVerdict();
+		if (streak !== undefined) {
+			return streak;
+		}
+		if (iteration < this.limits.minIteration) {
 			return { kind: "ok" };
 		}
 		const signals = this.signalsAt(iteration);
@@ -429,6 +621,7 @@ export class StruggleDetector {
 		this.firedInTask += 1;
 		return {
 			kind: "suggest",
+			reason: "failures",
 			message: describeStruggle(signals, this.limits),
 			signals,
 		};
@@ -453,10 +646,63 @@ export class StruggleDetector {
 		) {
 			return { kind: "ok" };
 		}
+		return this.nudge(
+			"failures",
+			`f${signals.failedCalls}`,
+			describeStruggle(signals, this.limits),
+			signals,
+		);
+	}
+
+	/**
+	 * Three refused edits in a row, said once per new value of "three".
+	 *
+	 * It speaks again only once as much evidence has accumulated again -- at
+	 * three, then six, then nine. A model that has already been told about the
+	 * third refusal learns nothing from being told about the fourth, and a
+	 * nudge that arrives on every one of them is how a diagnosis stops being
+	 * read. The longest streak in the corpus is nine, so this is at most three
+	 * messages in the worst run measured.
+	 */
+	private editStreakVerdict(): StruggleVerdict | undefined {
+		if (
+			this.editStreak < this.limits.editStreak ||
+			this.editStreak % this.limits.editStreak !== 0
+		) {
+			return undefined;
+		}
+		const verdict = this.nudge(
+			"edit-streak",
+			`e${this.editStreak}`,
+			describeEditStreak(this.editStreak, this.lastEditRefusal),
+		);
+		return verdict.kind === "ok" ? undefined : verdict;
+	}
+
+	/**
+	 * Emit a nudge, or nothing if it would repeat the last one verbatim.
+	 *
+	 * `inspect` is asked after every tool call and every block of reasoning, so
+	 * the same evidence is read many times per turn. Without this the model
+	 * would be told the same thing four times in one reply, which is how a
+	 * diagnosis stops being read.
+	 */
+	private nudge(
+		reason: "failures" | "edit-streak",
+		key: string,
+		message: string,
+		signals?: StruggleSignals,
+	): StruggleVerdict {
+		const full = `${reason}:${key}`;
+		if (full === this.lastNudgeKey) {
+			return { kind: "ok" };
+		}
+		this.lastNudgeKey = full;
 		return {
 			kind: "nudge",
-			message: describeStruggle(signals, this.limits),
-			signals,
+			reason,
+			message,
+			...(signals ? { signals } : {}),
 			files: [...this.changedFiles],
 		};
 	}
@@ -526,16 +772,39 @@ export interface StruggleFeed {
  * call's error, and `content_start` carries the tool input the file set is read
  * from. Nothing here reaches into the runtime.
  *
- * `onVerdict` fires at the end of a turn and never mid-turn: a diagnosis
- * delivered between two tool calls of the same reply arrives in the middle of
- * work the model has already decided on. It receives both verdicts that carry
- * something -- the offer and the nudge below it -- and never `ok`.
+ * `onVerdict` fires after every tool result, after every block of reasoning,
+ * and at the end of a turn. It used to fire only at the turn boundary, on the
+ * argument that a diagnosis arriving between two tool calls of one reply lands
+ * in the middle of work the model has already decided on. That argument was
+ * wrong about where the message goes: the caller holds the verdict and attaches
+ * it to the next tool result, so inspecting sooner does not interrupt anything
+ * -- it only stops the evidence waiting for a turn that a looping model may
+ * take hundreds of calls to end. The detector dedupes, so reading the same
+ * evidence four times in one reply still says it once.
+ *
+ * It receives both verdicts that carry something -- the offer and the nudge
+ * below it -- and never `ok`.
  */
 export function createStruggleFeed(
 	detector: StruggleDetector,
 	onVerdict: (verdict: StruggleVerdict) => void,
 ): StruggleFeed {
 	let iteration = 0;
+	/**
+	 * Whether this session's provider reports reasoning separately.
+	 *
+	 * Both lexicons are counted over the model's reasoning, and a model with
+	 * thinking off has none -- it reasons in the message, in the open. Until a
+	 * reasoning block has actually arrived, the text block is read as the
+	 * reasoning it is standing in for; after one has, text is the answer and
+	 * counting it would be counting the reply to the user as distress.
+	 */
+	let sawReasoning = false;
+	const publish = (verdict: StruggleVerdict): void => {
+		if (verdict.kind !== "ok") {
+			onVerdict(verdict);
+		}
+	};
 	return {
 		observe(event: AgentEvent): void {
 			switch (event.type) {
@@ -562,24 +831,33 @@ export function createStruggleFeed(
 				}
 				case "content_end":
 					if (event.contentType === "reasoning") {
-						detector.noteTurn({
-							iteration,
-							reasoning: event.reasoning ?? event.text ?? "",
-						});
+						const reasoning = event.reasoning ?? event.text ?? "";
+						sawReasoning = sawReasoning || reasoning.trim() !== "";
+						detector.noteTurn({ iteration, reasoning });
+						publish(detector.inspect({ iteration }));
+					} else if (event.contentType === "text") {
+						if (sawReasoning) {
+							return;
+						}
+						detector.noteTurn({ iteration, reasoning: event.text ?? "" });
+						publish(detector.inspect({ iteration }));
 					} else if (event.contentType === "tool") {
+						// Both halves of what the model experienced: the error
+						// the runtime raised, and the refusal the tool returned
+						// inside a result it called a success.
+						const refusal = event.error ?? refusalIn(event.output);
 						detector.noteToolOutcome({
 							iteration,
-							failed: event.error !== undefined,
+							failed: refusal !== undefined,
+							tool: event.toolName,
+							...(refusal !== undefined ? { refusal } : {}),
 						});
+						publish(detector.inspect({ iteration }));
 					}
 					return;
-				case "iteration_end": {
-					const verdict = detector.inspect({ iteration: event.iteration });
-					if (verdict.kind !== "ok") {
-						onVerdict(verdict);
-					}
+				case "iteration_end":
+					publish(detector.inspect({ iteration: event.iteration }));
 					return;
-				}
 				default:
 					return;
 			}

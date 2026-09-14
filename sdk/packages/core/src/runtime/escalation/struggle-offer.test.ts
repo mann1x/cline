@@ -249,6 +249,38 @@ describe("the nudge", () => {
 		expect(ordinary).not.toContain("escalate");
 	});
 
+	it("names the expert on a streak of refusals, dense code or not", () => {
+		const text = describeEscalationNudge({
+			diagnosis:
+				"Your last 3 attempts to change a file were all refused or failed, one after another, with nothing landing in between.",
+			complexity: ["Cognitive complexity of small.js:1-20: 3."],
+			high: false,
+			reason: "edit-streak",
+			remaining: 2,
+		});
+
+		expect(text).toContain("escalate");
+		expect(text).toContain("refused the same way three times");
+	});
+
+	// The file no longer parsing is the one thing a run of refusals cannot
+	// tell the model: a refused edit changes nothing, so the damage came from
+	// the ones that landed.
+	it("names the expert where a file in play no longer parses", () => {
+		const text = describeEscalationNudge({
+			diagnosis,
+			complexity: [
+				"game.html no longer parses — the grammar cannot read it end to end.",
+			],
+			high: false,
+			broken: true,
+			remaining: 2,
+		});
+
+		expect(text).toContain("escalate");
+		expect(text).toContain("broken end to end");
+	});
+
 	// An offer the budget would refuse is worse than no offer.
 	it("says nothing about the expert with nothing left to spend", () => {
 		const text = describeEscalationNudge({
@@ -259,5 +291,14 @@ describe("the nudge", () => {
 		});
 
 		expect(text).not.toContain("escalate");
+
+		const streak = describeEscalationNudge({
+			diagnosis,
+			complexity: [],
+			high: false,
+			reason: "edit-streak",
+			remaining: 0,
+		});
+		expect(streak).not.toContain("escalate");
 	});
 });

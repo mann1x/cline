@@ -314,15 +314,16 @@ const COMPLEXITY_FILE_LIMIT = 10;
 async function describeFilesInPlay(
 	files: readonly string[] | undefined,
 	workspaceRoot: string | undefined,
-): Promise<{ lines: string[]; high: boolean }> {
+): Promise<{ lines: string[]; high: boolean; broken: boolean }> {
 	if (!files?.length) {
-		return { lines: [], high: false };
+		return { lines: [], high: false, broken: false };
 	}
 	const { readFile } = await import("node:fs/promises");
-	const { scoreComplexity, describeComplexity, isHighComplexity } =
+	const { scoreComplexity, describeComplexity, isHighComplexity, fileParses } =
 		await import("../../extensions/complexity/walker");
 	const lines: string[] = [];
 	let high = false;
+	let broken = false;
 	for (const file of files.slice(0, COMPLEXITY_FILE_LIMIT)) {
 		const absolute =
 			isAbsolute(file) || !workspaceRoot ? file : join(workspaceRoot, file);
@@ -336,12 +337,24 @@ async function describeFilesInPlay(
 				// makes from the number, and handing the raw score onward is
 				// how it would end up being read as a verdict.
 				high = high || isHighComplexity(score);
+				continue;
+			}
+			// No score has two causes and they mean opposite things: nothing to
+			// measure with, or a file so broken the grammar gave up on it. The
+			// second is worth saying out loud -- a model whose edits are being
+			// refused while the file no longer parses is being told the one
+			// thing it cannot see from the refusals.
+			if ((await fileParses(absolute, source)) === false) {
+				broken = true;
+				lines.push(
+					`${file} no longer parses — the grammar cannot read it end to end, so whatever is wrong with it is structural rather than in one expression.`,
+				);
 			}
 		} catch {
 			// Not a fact about the code.
 		}
 	}
-	return { lines, high };
+	return { lines, high, broken };
 }
 
 /**
@@ -1545,12 +1558,14 @@ export class LocalRuntimeHost implements RuntimeHost {
 						void describeFilesInPlay(
 							verdict.files,
 							configWithProvider.workspaceRoot ?? configWithProvider.cwd,
-						).then(({ lines, high }) => {
+						).then(({ lines, high, broken }) => {
 							struggleSuggestion.hold(
 								describeEscalationNudge({
 									diagnosis: verdict.message as string,
 									complexity: lines,
 									high,
+									broken,
+									...(verdict.reason ? { reason: verdict.reason } : {}),
 									remaining,
 								}),
 							);

@@ -1700,6 +1700,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		window: escalationSettings?.struggleWindow,
 		minIteration: escalationSettings?.struggleMinIteration,
 		maxPerTask: escalationSettings?.struggleMaxPerTask,
+		editStreak: escalationSettings?.struggleEditStreak,
 	})
 	const escalationSnapshot = stateManager.getGlobalSettingsKey("escalationModeApiConfiguration")
 	const escalationStatus = resolveScopedModelStatus(

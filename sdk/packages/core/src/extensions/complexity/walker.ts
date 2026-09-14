@@ -770,6 +770,44 @@ export async function scoreComplexity(
 }
 
 /**
+ * Whether the file still parses, or nothing where that cannot be told.
+ *
+ * The same grammar and the same `MAX_ERROR_COVERAGE` the score uses, asked as
+ * a yes/no. It exists because "your last three edits were refused" and "the
+ * file you are editing no longer parses" are different facts and a model
+ * needs both: the first says the edits are not landing, the second says the
+ * ones that did land broke something. Nothing here counts errors -- the number
+ * of ERROR nodes a grammar produces is an artefact of its recovery strategy,
+ * not a count of the mistakes in the file -- so the answer is only ever
+ * whether the file is wholesale broken.
+ *
+ * `undefined` means not measured: no grammar, no wasm, nothing to say. It must
+ * never be read as "fine".
+ */
+export async function fileParses(
+	filePath: string,
+	source: string,
+	options: { grammarDir?: string } = {},
+): Promise<boolean | undefined> {
+	if (!grammarFor(filePath)) {
+		return undefined;
+	}
+	const parser = await parserFor(filePath, options);
+	if (!parser) {
+		return undefined;
+	}
+	let tree: ParsedTree | null = null;
+	try {
+		tree = parser.parse(source);
+		return tree ? !parseFailed(tree.rootNode, source.length) : undefined;
+	} catch {
+		return undefined;
+	} finally {
+		tree?.delete?.();
+	}
+}
+
+/**
  * The one sentence that must travel with the number.
  *
  * `check_file` states its own bound the same way, and for the same reason: a

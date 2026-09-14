@@ -186,6 +186,7 @@ export interface ParsedArgs {
 	struggleWindow?: string;
 	struggleMinIteration?: string;
 	struggleMaxPerTask?: string;
+	struggleEditStreak?: string;
 	/** Concurrent requests this endpoint serves. A string, from the flag. */
 	parallelSessions?: string;
 	/**

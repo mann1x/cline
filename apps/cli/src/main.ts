@@ -1468,6 +1468,7 @@ export async function runCli(): Promise<void> {
 					window: positive(args.struggleWindow),
 					minIteration: positive(args.struggleMinIteration),
 					maxPerTask: positive(args.struggleMaxPerTask),
+					editStreak: positive(args.struggleEditStreak),
 				}).filter(([, value]) => value !== undefined),
 			);
 			config.escalation = {

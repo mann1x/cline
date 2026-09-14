@@ -154,15 +154,30 @@ const EscalationModelTab = () => {
 						label="Offers per task"
 						stored={escalationSettings?.struggleMaxPerTask}
 					/>
+					<Threshold
+						fallback={DEFAULT_ESCALATION_SETTINGS.struggleEditStreak}
+						field="struggleEditStreak"
+						id="escalation-struggle-edit-streak"
+						label="Refused edits in a row"
+						stored={escalationSettings?.struggleEditStreak}
+					/>
 				</div>
 				<p className="text-xs text-muted-foreground">
 					Both halves have to agree before the expert is offered: enough failed tool calls in the window, and the model
 					saying in its own words that it is stuck. Raising either number makes the offer rarer.
 				</p>
 				<p className="text-xs text-muted-foreground">
-					Worth knowing before you tune these: a session running the change protocol rarely fails a tool call. It calls
-					the check, the call succeeds, and the result says the check did not pass — so the failed-call count stays near
-					zero and the offer never comes. Lowering it to 1 is the setting that makes the trigger reachable there.
+					"Refused edits in a row" is the separate, quieter trigger, and it reads only calls that tried to change a
+					file. It does not wait for the window or for the model to say it is stuck: three refusals in a row with
+					nothing landing in between is the point at which the expert is worth raising, and it says so once at three,
+					again at six, and not in between.
+				</p>
+				<p className="text-xs text-muted-foreground">
+					Worth knowing before you tune these: a refused tool call usually is not a failed one. A tool that says no
+					returns a result the runtime calls a success, with the refusal inside it — so these counts read both, which is
+					what the model actually experienced. Measured over 288 harness runs, four refusals in a ten-turn window fires
+					on 35% of the runs that go on to succeed; six fires on 13% of them and still catches 57% of the ones that do
+					not.
 				</p>
 			</div>
 

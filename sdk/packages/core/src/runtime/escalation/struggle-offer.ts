@@ -75,26 +75,44 @@ export function describeEscalationNudge(input: {
 	 * TypeScript, C and C++. Rare enough that raising it means something.
 	 */
 	high: boolean;
+	/** Whether a file in play no longer parses end to end. */
+	broken?: boolean;
+	/**
+	 * Which measurement asked for this.
+	 *
+	 * `edit-streak` names the expert on its own, where the plain nudge names it
+	 * only in dense code. Three refused edits in a row is not a bad patch --
+	 * the model has tried the same thing three times and been told no three
+	 * times -- and that is the point at which raising the expert is the useful
+	 * thing to say rather than the premature one.
+	 */
+	reason?: "failures" | "edit-streak";
 	remaining: number;
 }): string {
 	const lines = [input.diagnosis];
 	if (input.complexity.length > 0) {
 		lines.push("", ...input.complexity);
 	}
-	if (input.high && input.remaining > 0) {
+	const streak = input.reason === "edit-streak";
+	if ((streak || input.high || input.broken) && input.remaining > 0) {
+		const because = streak
+			? "You have now been refused the same way three times over"
+			: input.broken
+				? "The file is broken end to end rather than in one place"
+				: "This is dense code, and dense code is where a second reading is worth most";
 		lines.push(
 			"",
-			`This is dense code, and dense code is where a second reading is worth most. If the next attempt fails the same way, \`${ESCALATE_TOOL_NAME}\` hands this change to the expert — ${
+			`${because}. \`${ESCALATE_TOOL_NAME}\` hands this change to the expert — a second, stronger model that takes it over, edits, and hands back — and ${
 				input.remaining === 1
 					? "you have one left"
 					: `you have ${input.remaining} left`
-			}. Nothing is being taken away from you: keep going if you have something specific you have not tried.`,
+			}. Nothing is being taken away from you: keep going if you have something specific you have not tried yet, and take it if what you have is another attempt at what has already been refused.`,
 		);
 	}
 	return lines.join("\n");
 }
 
-/** A held suggestion, taken by whichever tool result comes next. */ /** A held suggestion, taken by whichever tool result comes next. */
+/** A held suggestion, taken by whichever tool result comes next. */
 export interface PendingSuggestion {
 	hold(message: string): void;
 	/** What is owed, without consuming it. */
