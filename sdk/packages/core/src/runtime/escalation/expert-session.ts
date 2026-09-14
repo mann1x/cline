@@ -45,8 +45,24 @@ export interface ExpertUsage {
 	generateMs: number;
 	/** Wall-clock the expert was running, by ours. */
 	wallMs: number;
-	/** Turns asked of the expert, the first brief included. */
+	/**
+	 * Requests the expert's provider was actually sent.
+	 *
+	 * This used to be the number of *turns asked of the expert*, which put two
+	 * different denominators on one line: `inputTokens` sums the prompt of
+	 * every request the expert's own agent loop makes, and an expert that
+	 * works for an hour makes dozens. Run 0303 reported
+	 * `expert_in=9,490,524 expert_requests=1` -- a prompt larger than any
+	 * context window, over one request, which is impossible and was read as a
+	 * broken counter rather than as two units. Now `inputTokens / requests` is
+	 * the average prompt, which is what anyone dividing them expects.
+	 *
+	 * The turn count is not lost: it is `asks` below, and the harness already
+	 * reports it separately as `expert_replies`.
+	 */
 	requests: number;
+	/** Turns asked of the expert, the first brief included. */
+	asks: number;
 }
 
 /**
@@ -161,6 +177,7 @@ function emptyUsage(): ExpertUsage {
 		generateMs: 0,
 		wallMs: 0,
 		requests: 0,
+		asks: 0,
 	};
 }
 
@@ -201,6 +218,9 @@ export function createExpertSession(
 		if (event.type !== "usage") {
 			return;
 		}
+		// One usage event is one request to the provider. Counting them here is
+		// what keeps `requests` in the same unit as the tokens beside it.
+		turn.requests += 1;
 		turn.inputTokens += event.inputTokens ?? 0;
 		turn.outputTokens += event.outputTokens ?? 0;
 		const timings = event.timings;
@@ -225,7 +245,7 @@ export function createExpertSession(
 		options.onProgress({
 			toolCalls: turnToolCalls,
 			...(lastTool ? { lastTool } : {}),
-			usage: { ...turn, wallMs: Date.now() - askStartedAt, requests: 1 },
+			usage: { ...turn, wallMs: Date.now() - askStartedAt, asks: 1 },
 		});
 	};
 
@@ -270,7 +290,7 @@ export function createExpertSession(
 					)
 				: await runtime.run(message);
 			turn.wallMs = Date.now() - startedAt;
-			turn.requests = 1;
+			turn.asks = 1;
 			askStartedAt = undefined;
 			// The provider's own token counts win where the events reported
 			// none: a provider that streams no usage event still answers with a
@@ -279,13 +299,17 @@ export function createExpertSession(
 			if (turn.inputTokens === 0 && turn.outputTokens === 0) {
 				turn.inputTokens = result.usage?.inputTokens ?? 0;
 				turn.outputTokens = result.usage?.outputTokens ?? 0;
+				// A provider that streams no usage event still made at least
+				// one request, and reporting zero would divide by nothing.
+				turn.requests = 1;
 			}
 			total.inputTokens += turn.inputTokens;
 			total.outputTokens += turn.outputTokens;
 			total.generateTokens += turn.generateTokens;
 			total.generateMs += turn.generateMs;
 			total.wallMs += turn.wallMs;
-			total.requests += 1;
+			total.requests += turn.requests;
+			total.asks += 1;
 			// A run that finished on `error` has no answer in it. Its `text` is
 			// whatever the provider said going down -- "ollama cloud is
 			// disabled: remote model is unavailable" is a real one -- and the

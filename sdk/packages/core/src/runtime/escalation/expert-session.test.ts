@@ -113,7 +113,83 @@ describe("createExpertSession", () => {
 		expect(session.usage.outputTokens).toBe(300);
 		expect(session.usage.generateTokens).toBe(300);
 		expect(session.usage.generateMs).toBe(6_000);
+		// Two asks, one provider request each.
 		expect(session.usage.requests).toBe(2);
+		expect(session.usage.asks).toBe(2);
+	});
+
+	/**
+	 * The expert works in a loop, and every pass through it is a request whose
+	 * prompt carries the whole conversation again. `requests` counted *asks*,
+	 * so one hand-over reported one request beside the summed prompt of all of
+	 * them: run 0303 printed `expert_in=9,490,524 expert_requests=1`, a prompt
+	 * larger than any context window, and the ratio anyone would compute from
+	 * those two numbers was meaningless.
+	 */
+	it("counts one request per provider call, not one per hand-over", async () => {
+		let listener: ((event: AgentEvent) => void) | undefined;
+		const runtime: ExpertRuntime = {
+			run: vi.fn(async (): Promise<AgentResult> => {
+				// One hand-over, three passes through the expert's own loop.
+				for (const inputTokens of [120_000, 130_000, 140_000]) {
+					listener?.({
+						type: "usage",
+						inputTokens,
+						outputTokens: 1_000,
+						totalInputTokens: inputTokens,
+						totalOutputTokens: 1_000,
+					} as AgentEvent);
+				}
+				return {
+					text: "done",
+					iterations: 3,
+					finishReason: "completed",
+					usage: { inputTokens: 140_000, outputTokens: 1_000 },
+				} as AgentResult;
+			}),
+			shutdown: vi.fn(async () => {}),
+		};
+		const session = createExpertSession({
+			maxFollowUps: 20,
+			open: async ({ onEvent }) => {
+				listener = onEvent;
+				return runtime;
+			},
+		});
+
+		await session.ask("fix it");
+
+		expect(session.usage.asks).toBe(1);
+		expect(session.usage.requests).toBe(3);
+		expect(session.usage.inputTokens).toBe(390_000);
+		// The ratio is now a real average prompt rather than a nonsense one.
+		expect(session.usage.inputTokens / session.usage.requests).toBe(130_000);
+	});
+
+	// A provider that streams no usage event still made a request; dividing by
+	// zero requests is how a silent provider becomes an infinite prompt.
+	it("counts one request when the provider streams no usage at all", async () => {
+		const runtime: ExpertRuntime = {
+			run: vi.fn(
+				async (): Promise<AgentResult> =>
+					({
+						text: "done",
+						iterations: 1,
+						finishReason: "completed",
+						usage: { inputTokens: 4_000, outputTokens: 200 },
+					}) as AgentResult,
+			),
+			shutdown: vi.fn(async () => {}),
+		};
+		const session = createExpertSession({
+			maxFollowUps: 20,
+			open: async () => runtime,
+		});
+
+		await session.ask("fix it");
+
+		expect(session.usage.requests).toBe(1);
+		expect(session.usage.inputTokens).toBe(4_000);
 	});
 
 	// Wall time is the other half of a cloud bill, and it is not the provider's

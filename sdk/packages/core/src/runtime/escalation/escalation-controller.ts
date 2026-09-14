@@ -70,6 +70,7 @@ function addUsage(into: ExpertUsage, from: ExpertUsage): ExpertUsage {
 		generateMs: into.generateMs + from.generateMs,
 		wallMs: into.wallMs + from.wallMs,
 		requests: into.requests + from.requests,
+		asks: into.asks + from.asks,
 	};
 }
 
@@ -80,6 +81,7 @@ const ZERO: ExpertUsage = {
 	generateMs: 0,
 	wallMs: 0,
 	requests: 0,
+	asks: 0,
 };
 
 export function createEscalationController(
