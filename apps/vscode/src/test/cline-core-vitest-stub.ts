@@ -128,6 +128,13 @@ export {
 	DEFAULT_MAX_CHANGES,
 	DEFAULT_MAX_TRANSACTIONS,
 } from "../../../../sdk/packages/core/src/runtime/atomic/session-protocol"
+// From source, not stubbed: the panel's defaults exist to show the number the
+// detector actually uses, and a guard that compared them against a stub would
+// pass while the two drifted apart.
+export {
+	resolveStruggleThresholds,
+	type StruggleThresholds,
+} from "../../../../sdk/packages/core/src/runtime/safety/struggle-detector"
 export { isPrivateModelCatalogProvider } from "../../../../sdk/packages/core/src/services/llms/provider-defaults"
 // Real implementation re-exported from the sdk source (same pattern as the
 // apply-patch executors below) so store writes are reflected in the live

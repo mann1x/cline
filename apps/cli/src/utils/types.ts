@@ -175,6 +175,17 @@ export interface ParsedArgs {
 	expertMaxFollowUps?: string;
 	/** Release the expert's conversation at the end of each escalation. */
 	expertCloseAfter?: boolean;
+	/**
+	 * When a run counts as stuck, and how often it may be offered the expert.
+	 * Strings, from the flags; absent leaves core's own operating point in
+	 * place. They are here because finding their defaults is a measurement,
+	 * and the measurement runs from this CLI rather than from the panel.
+	 */
+	struggleFailedCalls?: string;
+	struggleDistressHits?: string;
+	struggleWindow?: string;
+	struggleMinIteration?: string;
+	struggleMaxPerTask?: string;
 	/** Concurrent requests this endpoint serves. A string, from the flag. */
 	parallelSessions?: string;
 	/**

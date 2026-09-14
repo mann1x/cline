@@ -504,6 +504,14 @@ message EscalationSettings {
   optional int32 max_escalations = 3;
   // Follow-ups within one escalation, after the first delivery.
   optional int32 max_follow_ups = 4;
+  // When a stuck session is offered the expert. Zero or absent means the
+  // built-in default; these are exposed because the right numbers are still
+  // being measured and the setting decides whether the path is taken at all.
+  optional int32 struggle_failed_calls = 5;
+  optional int32 struggle_distress_hits = 6;
+  optional int32 struggle_window = 7;
+  optional int32 struggle_min_iteration = 8;
+  optional int32 struggle_max_per_task = 9;
 }
 
 // The per-task half of the change protocol: engaged, and this task's check.

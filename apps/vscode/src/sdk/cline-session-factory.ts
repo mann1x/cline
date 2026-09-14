@@ -21,6 +21,7 @@ import {
 	readCompactionStrategyGlobally,
 	resolveProviderApiKeyFromSettings,
 	type StartSessionResult,
+	type StruggleThresholds,
 	toProviderConfig,
 } from "@cline/core"
 import type { ProviderApiLine, ProviderSamplingOptions, ModelInfo as SdkModelInfo } from "@cline/llms"
@@ -1034,6 +1035,20 @@ export function composeSessionHooks(
  * wrong server, which fails as an auth error or, worse, succeeds against a
  * model nobody chose.
  */
+/**
+ * The thresholds the tab holds, as a block core can read -- or nothing.
+ *
+ * Two absences have to stay distinguishable here. A field the user never
+ * touched must not reach core at all, because core treats any number it is
+ * given as the setting and only a missing one falls back to its own constant.
+ * And the whole block is dropped when no field survives, so a session with an
+ * untouched tab is byte-identical to one built before this setting existed.
+ */
+function pickThresholds(given: Record<string, number | undefined>): StruggleThresholds | undefined {
+	const chosen = Object.entries(given).filter(([, value]) => typeof value === "number" && value > 0)
+	return chosen.length > 0 ? (Object.fromEntries(chosen) as StruggleThresholds) : undefined
+}
+
 function resolveAgentProviderConnection(providerId: string): AgentProviderConnection | undefined {
 	try {
 		const stored = getProviderSettingsManager(resolveDataDir()).getProviderSettings(providerId)
@@ -1675,6 +1690,17 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	// session's context window would size it down to whatever the small model
 	// was given.
 	const escalationSettings = stateManager.getGlobalSettingsKey("escalationSettings")
+	// The trigger's thresholds, carried across only where the tab actually
+	// holds one. Core reads a present number as a setting, so an unset
+	// threshold has to travel as an absence rather than as zero -- otherwise
+	// the panel's blank box would be read as "fire on every turn".
+	const struggleThresholds = pickThresholds({
+		failedCalls: escalationSettings?.struggleFailedCalls,
+		distressHits: escalationSettings?.struggleDistressHits,
+		window: escalationSettings?.struggleWindow,
+		minIteration: escalationSettings?.struggleMinIteration,
+		maxPerTask: escalationSettings?.struggleMaxPerTask,
+	})
 	const escalationSnapshot = stateManager.getGlobalSettingsKey("escalationModeApiConfiguration")
 	const escalationStatus = resolveScopedModelStatus(
 		stateManager.getGlobalSettingsKey("escalationModelEnabled"),
@@ -1919,6 +1945,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 							: {}),
 						...(escalationSettings?.maxEscalations ? { maxEscalations: escalationSettings.maxEscalations } : {}),
 						...(escalationSettings?.maxFollowUps ? { maxFollowUps: escalationSettings.maxFollowUps } : {}),
+						...(struggleThresholds ? { struggleThresholds } : {}),
 						// There is a user here to ask, so the approval setting has
 						// somewhere to go. Without this it could only ever refuse.
 						//

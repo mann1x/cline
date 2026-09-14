@@ -166,6 +166,26 @@ export function addRootOptions(cmd: Command): Command {
 				"Release the expert's conversation when an escalation ends. Frees the server slot it was holding, which a local endpoint with OLLAMA_MAX_LOADED_MODELS of 1 or 2 needs; costs a hosted provider's warm prompt cache",
 			)
 			.option(
+				"--struggle-failed-calls <count>",
+				"Failed tool calls within the window that satisfy the behavioural half of the stuck trigger (default: 4). A session running the change protocol rarely fails a call at all -- it calls the check, the call succeeds, and the result says the check did not pass -- so 1 is what makes the trigger reachable there",
+			)
+			.option(
+				"--struggle-distress-hits <count>",
+				"Turns within the window in which the model says it is stuck, satisfying the lexical half (default: 2)",
+			)
+			.option(
+				"--struggle-window <turns>",
+				"How many recent turns the stuck trigger reads (default: 10)",
+			)
+			.option(
+				"--struggle-min-iteration <turn>",
+				"Before this turn nothing is offered, whatever the evidence says (default: 20)",
+			)
+			.option(
+				"--struggle-max-per-task <count>",
+				"Times one task may be offered the expert by the trigger (default: 2)",
+			)
+			.option(
 				"--parallel-sessions <count>",
 				"How many requests this endpoint serves at once (OLLAMA_NUM_PARALLEL, --parallel); bounds concurrent agents (default: 1, max: 10)",
 			)
@@ -469,6 +489,16 @@ export function commanderToParsedArgs(program: Command): ParsedArgs {
 		result.expertMaxFollowUps = opts.expertMaxFollowUps;
 	if (opts.expertCloseAfter !== undefined)
 		result.expertCloseAfter = !!opts.expertCloseAfter;
+	if (opts.struggleFailedCalls !== undefined)
+		result.struggleFailedCalls = opts.struggleFailedCalls;
+	if (opts.struggleDistressHits !== undefined)
+		result.struggleDistressHits = opts.struggleDistressHits;
+	if (opts.struggleWindow !== undefined)
+		result.struggleWindow = opts.struggleWindow;
+	if (opts.struggleMinIteration !== undefined)
+		result.struggleMinIteration = opts.struggleMinIteration;
+	if (opts.struggleMaxPerTask !== undefined)
+		result.struggleMaxPerTask = opts.struggleMaxPerTask;
 	if (opts.parallelSessions !== undefined)
 		result.parallelSessions = opts.parallelSessions;
 	if (opts.qaCredential !== undefined) result.qaCredential = opts.qaCredential;

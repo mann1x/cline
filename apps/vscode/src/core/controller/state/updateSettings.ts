@@ -401,6 +401,18 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			const stored = controller.stateManager.getGlobalSettingsKey("escalationSettings")
 			const maxEscalations = request.escalationSettings.maxEscalations
 			const maxFollowUps = request.escalationSettings.maxFollowUps
+			// The trigger's thresholds. Zero is dropped for the same reason the
+			// budgets drop it and a different reason than the switches keep
+			// `false`: a budget or a threshold of zero is not a setting anyone
+			// means -- at zero the trigger fires on every turn -- it is what an
+			// emptied box sends, and an emptied box means "use the default".
+			const struggle = {
+				struggleFailedCalls: request.escalationSettings.struggleFailedCalls,
+				struggleDistressHits: request.escalationSettings.struggleDistressHits,
+				struggleWindow: request.escalationSettings.struggleWindow,
+				struggleMinIteration: request.escalationSettings.struggleMinIteration,
+				struggleMaxPerTask: request.escalationSettings.struggleMaxPerTask,
+			}
 			controller.stateManager.setGlobalState("escalationSettings", {
 				...stored,
 				...(request.escalationSettings.requireApproval !== undefined
@@ -411,6 +423,7 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 					: {}),
 				...(maxEscalations !== undefined && maxEscalations > 0 ? { maxEscalations } : {}),
 				...(maxFollowUps !== undefined && maxFollowUps > 0 ? { maxFollowUps } : {}),
+				...Object.fromEntries(Object.entries(struggle).filter(([, value]) => value !== undefined && value > 0)),
 			})
 		}
 

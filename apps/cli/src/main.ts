@@ -1455,6 +1455,21 @@ export async function runCli(): Promise<void> {
 			};
 			const maxEscalations = positive(args.expertMaxEscalations);
 			const maxFollowUps = positive(args.expertMaxFollowUps);
+			// The stuck trigger's own numbers. Only the flags actually given
+			// travel: core reads any number it is handed as the setting, and
+			// an omitted flag has to stay an absence so its own operating
+			// point applies. No flags at all and the block is not sent, so a
+			// run built without them is identical to one built before these
+			// existed.
+			const struggleThresholds = Object.fromEntries(
+				Object.entries({
+					failedCalls: positive(args.struggleFailedCalls),
+					distressHits: positive(args.struggleDistressHits),
+					window: positive(args.struggleWindow),
+					minIteration: positive(args.struggleMinIteration),
+					maxPerTask: positive(args.struggleMaxPerTask),
+				}).filter(([, value]) => value !== undefined),
+			);
 			config.escalation = {
 				connection: {
 					providerId: config.providerId,
@@ -1472,6 +1487,9 @@ export async function runCli(): Promise<void> {
 				...(args.expertCloseAfter ? { closeAfterEscalation: true } : {}),
 				...(maxEscalations ? { maxEscalations } : {}),
 				...(maxFollowUps ? { maxFollowUps } : {}),
+				...(Object.keys(struggleThresholds).length > 0
+					? { struggleThresholds }
+					: {}),
 			} as NonNullable<(typeof config)["escalation"]>;
 			// `requireApproval` is deliberately not offered here. It needs an
 			// `approve` callback and a person to answer it; a CLI run under
@@ -1484,7 +1502,10 @@ export async function runCli(): Promise<void> {
 					(expertWindow ? ` contextWindow=${expertWindow}` : "") +
 					` maxEscalations=${maxEscalations ?? 3}` +
 					` maxFollowUps=${maxFollowUps ?? 20}` +
-					` closeAfter=${args.expertCloseAfter ? "yes" : "no"}`,
+					` closeAfter=${args.expertCloseAfter ? "yes" : "no"}` +
+					(Object.keys(struggleThresholds).length > 0
+						? ` struggle=${JSON.stringify(struggleThresholds)}`
+						: ""),
 			);
 		}
 		// A configured subagent may name a provider of its own. Core refuses one

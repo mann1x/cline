@@ -1557,6 +1557,63 @@ describe("buildSessionConfig", () => {
 		expect(config.escalation?.maxFollowUps).toBe(7)
 	})
 
+	// The same journey for the trigger's own numbers. These decide whether the
+	// escalation path is entered at all, so a panel that writes them and a run
+	// that ignores them would be the worst version of that bug: the feature
+	// would be on, configured, and never fire.
+	it("carries the tab's trigger thresholds onto the session", async () => {
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string) => {
+			if (key === "escalationModelEnabled") {
+				return true
+			}
+			if (key === "escalationModeApiConfiguration") {
+				return escalationSnapshot({ selectedModelId: "the-expert" }) as never
+			}
+			if (key === "escalationSettings") {
+				return {
+					struggleFailedCalls: 2,
+					struggleDistressHits: 1,
+					struggleWindow: 25,
+					struggleMinIteration: 8,
+					struggleMaxPerTask: 4,
+				} as never
+			}
+			return undefined
+		})
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+
+		expect(config.escalation?.struggleThresholds).toEqual({
+			failedCalls: 2,
+			distressHits: 1,
+			window: 25,
+			minIteration: 8,
+			maxPerTask: 4,
+		})
+	})
+
+	// An unset threshold must not travel as a field, because core reads a
+	// present-but-zero number as a real setting on the way in and only the
+	// absence means "your default".
+	it("sends no thresholds when the tab holds none", async () => {
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string) => {
+			if (key === "escalationModelEnabled") {
+				return true
+			}
+			if (key === "escalationModeApiConfiguration") {
+				return escalationSnapshot({ selectedModelId: "the-expert" }) as never
+			}
+			if (key === "escalationSettings") {
+				return { maxEscalations: 2, struggleWindow: 0 } as never
+			}
+			return undefined
+		})
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+
+		expect(config.escalation?.struggleThresholds).toBeUndefined()
+	})
+
 	// `requireApproval` with nowhere to ask can only refuse, so the host that
 	// has a window supplies the way to ask alongside the setting.
 	it("gives the session somewhere to put the approval", async () => {

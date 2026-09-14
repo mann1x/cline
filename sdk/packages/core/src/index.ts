@@ -573,6 +573,11 @@ export {
 	mergeRulesForSystemPrompt,
 } from "./runtime/safety/rules";
 export {
+	type ResolvedStruggleThresholds,
+	resolveStruggleThresholds,
+	type StruggleThresholds,
+} from "./runtime/safety/struggle-detector";
+export {
 	type SandboxCallOptions,
 	SubprocessSandbox,
 	type SubprocessSandboxOptions,

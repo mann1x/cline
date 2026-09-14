@@ -25,6 +25,7 @@ import type {
 } from "../extensions/tools/team";
 import type { CheckApprover } from "../runtime/atomic/proposal";
 import type { EscalationApproval } from "../runtime/escalation/escalation-session";
+import type { StruggleThresholds } from "../runtime/safety/struggle-detector";
 import type { ProviderConfig } from "./provider-settings";
 
 export type CoreAgentMode = AgentMode;
@@ -153,6 +154,16 @@ export interface CoreEscalationConfig {
 	maxEscalations?: number;
 	/** Follow-ups within one escalation, after the first delivery. Twenty by default. */
 	maxFollowUps?: number;
+	/**
+	 * When the struggle detector offers an escalation.
+	 *
+	 * Exposed because the right numbers are still an open question and the
+	 * setting is load-bearing: on one measured arm the trigger fired zero times
+	 * in three runs, because the change protocol produces successful tool calls
+	 * carrying bad verdicts rather than failed ones. Omitted fields keep the
+	 * corpus-fitted defaults.
+	 */
+	struggleThresholds?: StruggleThresholds;
 }
 
 export interface CoreRuntimeFeatures {

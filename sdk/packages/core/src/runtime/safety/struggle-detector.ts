@@ -58,6 +58,59 @@ export const STRUGGLE_MIN_ITERATION = 20;
 export const STRUGGLE_MAX_PER_TASK = 2;
 
 /**
+ * The operating point, as the user may set it.
+ *
+ * These are load-bearing and the right numbers are an empirical question we
+ * have not finished answering -- the constants above are the best corpus fit
+ * so far, and one measured arm (jackod4ac, oracle, n=3) fired the trigger zero
+ * times because the change protocol produces no failed tool calls at all.
+ * Rather than keep guessing centrally, they are exposed so a run can set them
+ * and the defaults can be chosen from evidence.
+ *
+ * Every field is optional and falls back to the constant, so a host that says
+ * nothing behaves exactly as it did.
+ */
+export interface StruggleThresholds {
+	/** Iterations of history the trigger reads. */
+	window?: number;
+	/** Failed tool calls in that window before the behavioural half is satisfied. */
+	failedCalls?: number;
+	/** Distress-lexicon hits in the window that satisfy the lexical half. */
+	distressHits?: number;
+	/** Before this iteration nothing fires, whatever the evidence says. */
+	minIteration?: number;
+	/** Suggestions per task. */
+	maxPerTask?: number;
+}
+
+/** A positive integer, or the default. Anything else is not an operating point. */
+function positive(value: number | undefined, fallback: number): number {
+	return typeof value === "number" && Number.isInteger(value) && value > 0
+		? value
+		: fallback;
+}
+
+export interface ResolvedStruggleThresholds {
+	readonly window: number;
+	readonly failedCalls: number;
+	readonly distressHits: number;
+	readonly minIteration: number;
+	readonly maxPerTask: number;
+}
+
+export function resolveStruggleThresholds(
+	given: StruggleThresholds | undefined,
+): ResolvedStruggleThresholds {
+	return {
+		window: positive(given?.window, STRUGGLE_WINDOW),
+		failedCalls: positive(given?.failedCalls, STRUGGLE_FAILED_CALLS),
+		distressHits: positive(given?.distressHits, STRUGGLE_DISTRESS_HITS),
+		minIteration: positive(given?.minIteration, STRUGGLE_MIN_ITERATION),
+		maxPerTask: positive(given?.maxPerTask, STRUGGLE_MAX_PER_TASK),
+	};
+}
+
+/**
  * Phrases that are distress rather than deliberation.
  *
  * `I'm confusing` is the most frequent match in the corpus at 1,628 hits and it
@@ -188,13 +241,20 @@ function rate(hedging: number, wordCount: number): number | undefined {
  * why at length: a message that names a consequence the caller has not decided
  * on describes something that did not happen.
  */
-export function describeStruggle(signals: StruggleSignals): string {
+export function describeStruggle(
+	signals: StruggleSignals,
+	// The operating point can be set per host, and a message that quotes the
+	// default window while the detector used another one describes a
+	// measurement nobody took.
+	thresholds?: StruggleThresholds,
+): string {
+	const limits = resolveStruggleThresholds(thresholds);
 	const lines = [
-		`Over your last ${STRUGGLE_WINDOW} turns: ${signals.failedCalls} tool call${
+		`Over your last ${limits.window} turns: ${signals.failedCalls} tool call${
 			signals.failedCalls === 1 ? "" : "s"
 		} came back as failures or refusals.`,
 	];
-	if (signals.distress >= STRUGGLE_DISTRESS_HITS) {
+	if (signals.distress >= limits.distressHits) {
 		lines.push(
 			`Your own reasoning said so ${signals.distress} times over the same turns — stuck, confused, or that something keeps failing.`,
 		);
@@ -214,6 +274,7 @@ export function describeStruggle(signals: StruggleSignals): string {
  * of its choosing. Nothing here reads the clock, the provider or the workspace.
  */
 export class StruggleDetector {
+	private readonly limits: ResolvedStruggleThresholds;
 	private readonly history: IterationRecord[] = [];
 	/** The run's opening hedging rate, frozen once the baseline window closes. */
 	private baseline?: number;
@@ -233,6 +294,15 @@ export class StruggleDetector {
 	 * thing about the same file twice.
 	 */
 	private readonly changedFiles = new Set<string>();
+
+	constructor(thresholds?: StruggleThresholds) {
+		this.limits = resolveStruggleThresholds(thresholds);
+	}
+
+	/** The operating point in force, for whoever has to report it. */
+	get thresholds(): ResolvedStruggleThresholds {
+		return this.limits;
+	}
 
 	/** Record a file this session has changed. */
 	noteFileChanged(path: string): void {
@@ -294,7 +364,7 @@ export class StruggleDetector {
 	/** The signals as they stand, without the caps or the firing decision. */
 	signalsAt(iteration: number): StruggleSignals {
 		const window = this.history.filter(
-			(record) => record.iteration > iteration - STRUGGLE_WINDOW,
+			(record) => record.iteration > iteration - this.limits.window,
 		);
 		const hedging = window.reduce((sum, record) => sum + record.hedging, 0);
 		const wordCount = window.reduce((sum, record) => sum + record.words, 0);
@@ -314,20 +384,20 @@ export class StruggleDetector {
 	inspect(input: StruggleInspection): StruggleVerdict {
 		const { iteration } = input;
 		if (
-			iteration < STRUGGLE_MIN_ITERATION ||
+			iteration < this.limits.minIteration ||
 			this.firedInTransaction ||
-			this.firedInTask >= STRUGGLE_MAX_PER_TASK
+			this.firedInTask >= this.limits.maxPerTask
 		) {
 			return { kind: "ok" };
 		}
 		const signals = this.signalsAt(iteration);
-		if (signals.failedCalls < STRUGGLE_FAILED_CALLS) {
+		if (signals.failedCalls < this.limits.failedCalls) {
 			return { kind: "ok" };
 		}
 		// The disjunction: either the model said so, or it has stopped getting
 		// less unsure. One of the two, never neither -- the failures on their own
 		// are the late-and-precise operating point this exists to improve on.
-		const lexical = signals.distress >= STRUGGLE_DISTRESS_HITS;
+		const lexical = signals.distress >= this.limits.distressHits;
 		const noDecay =
 			signals.hedgingRatio !== undefined && signals.hedgingRatio >= 1;
 		if (!lexical && !noDecay) {
@@ -342,7 +412,11 @@ export class StruggleDetector {
 		this.lastFiredKey = key;
 		this.firedInTransaction = true;
 		this.firedInTask += 1;
-		return { kind: "suggest", message: describeStruggle(signals), signals };
+		return {
+			kind: "suggest",
+			message: describeStruggle(signals, this.limits),
+			signals,
+		};
 	}
 
 	private recordFor(iteration: number): IterationRecord {
@@ -360,7 +434,7 @@ export class StruggleDetector {
 		this.history.push(record);
 		// Only the window is ever read, and a long run would otherwise hold
 		// every iteration it has had.
-		while (this.history.length > STRUGGLE_WINDOW * 2) {
+		while (this.history.length > this.limits.window * 2) {
 			this.history.shift();
 		}
 		return record;
@@ -374,13 +448,13 @@ export class StruggleDetector {
 	 * moving would converge on the window it is being compared to.
 	 */
 	private absorbBaseline(iteration: number): void {
-		if (iteration > STRUGGLE_WINDOW) {
+		if (iteration > this.limits.window) {
 			return;
 		}
 		// Recomputed from the records rather than accumulated, so two turns
 		// noted for one iteration cannot double-count into the baseline.
 		const opening = this.history.filter(
-			(entry) => entry.iteration <= STRUGGLE_WINDOW,
+			(entry) => entry.iteration <= this.limits.window,
 		);
 		this.baselineHedging = opening.reduce(
 			(sum, entry) => sum + entry.hedging,

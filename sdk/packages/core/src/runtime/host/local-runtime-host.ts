@@ -1508,7 +1508,11 @@ export class LocalRuntimeHost implements RuntimeHost {
 		};
 		const struggleSuggestion = createPendingSuggestion();
 		struggleDetector =
-			escalation.tools.length > 0 ? new StruggleDetector() : undefined;
+			escalation.tools.length > 0
+				? new StruggleDetector(
+						configWithProvider.escalation?.struggleThresholds,
+					)
+				: undefined;
 		const struggleFeed = struggleDetector
 			? createStruggleFeed(struggleDetector, (verdict) => {
 					const remaining = escalation.remaining;

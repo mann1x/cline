@@ -10,6 +10,7 @@ export default defineConfig({
 			"src/sdk/**/*.test.ts",
 			"src/hosts/vscode/VscodeEditPreview.test.ts",
 			"src/shared/atomic-protocol-defaults.test.ts",
+			"src/shared/escalation-thresholds.test.ts",
 			"src/shared/atomic-protocol-resolution.test.ts",
 			"src/hosts/vscode/terminal/terminal-output-fallback.test.ts",
 			"src/hosts/vscode/terminal/ansiUtils.test.ts",

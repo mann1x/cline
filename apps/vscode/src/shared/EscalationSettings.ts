@@ -33,6 +33,28 @@ export interface EscalationSettings {
 	maxEscalations: number
 	/** Follow-ups within one escalation, after the first delivery. */
 	maxFollowUps: number
+	/**
+	 * When a stuck session is offered the expert.
+	 *
+	 * These decide whether the escalation path is ever taken, and the right
+	 * numbers are still being measured -- on one arm (jackod4ac, protocol on,
+	 * three runs) the trigger fired zero times, because the change protocol
+	 * produces successful tool calls carrying bad verdicts rather than failed
+	 * calls, and the behavioural half counts failures. That is a judgement
+	 * about someone's own workload, not a constant, so it is theirs to set.
+	 *
+	 * Zero or absent means "use the built-in default", which is the
+	 * corpus-fitted operating point.
+	 */
+	struggleFailedCalls: number
+	/** Distress-lexicon hits in the window that satisfy the lexical half. */
+	struggleDistressHits: number
+	/** Iterations of history the trigger reads. */
+	struggleWindow: number
+	/** Before this iteration nothing fires, whatever the evidence says. */
+	struggleMinIteration: number
+	/** Offers of help per task. */
+	struggleMaxPerTask: number
 }
 
 export const DEFAULT_ESCALATION_SETTINGS: EscalationSettings = {
@@ -40,4 +62,12 @@ export const DEFAULT_ESCALATION_SETTINGS: EscalationSettings = {
 	closeAfterEscalation: false,
 	maxEscalations: 3,
 	maxFollowUps: 20,
+	// The detector's own corpus-fitted operating point, restated here so the
+	// panel shows the number actually in force rather than an empty box. They
+	// are kept in step by `escalation-thresholds.test.ts`.
+	struggleFailedCalls: 4,
+	struggleDistressHits: 2,
+	struggleWindow: 10,
+	struggleMinIteration: 20,
+	struggleMaxPerTask: 2,
 }

@@ -24,6 +24,11 @@ const stored: EscalationSettings = {
 	closeAfterEscalation: true,
 	maxEscalations: 5,
 	maxFollowUps: 8,
+	struggleFailedCalls: 6,
+	struggleDistressHits: 3,
+	struggleWindow: 12,
+	struggleMinIteration: 30,
+	struggleMaxPerTask: 1,
 }
 
 function lastWrite(controller: ReturnType<typeof makeController>) {
@@ -67,6 +72,34 @@ describe("updateSettings — escalationSettings", () => {
 		await updateSettings(controller, UpdateSettingsRequest.create({ escalationSettings: { closeAfterEscalation: false } }))
 
 		assert.equal(lastWrite(controller)?.closeAfterEscalation, false)
+	})
+
+	// The trigger's own numbers travel in the same blob and are edited the same
+	// way -- one box at a time -- so they need the same merge, not an
+	// assignment that would take the other four down with them.
+	it("keeps the stored thresholds while one of them is being typed", async () => {
+		const controller = makeController(stored)
+
+		await updateSettings(controller, UpdateSettingsRequest.create({ escalationSettings: { struggleFailedCalls: 2 } }))
+
+		const written = lastWrite(controller)
+		assert.equal(written?.struggleFailedCalls, 2)
+		assert.equal(written?.struggleDistressHits, 3)
+		assert.equal(written?.struggleWindow, 12)
+		assert.equal(written?.struggleMinIteration, 30)
+		assert.equal(written?.struggleMaxPerTask, 1)
+		assert.equal(written?.maxEscalations, 5)
+	})
+
+	// Zero is not a threshold anyone can mean: at zero failed calls the trigger
+	// would fire on every turn. It is what an emptied box sends, and an emptied
+	// box means "back to the default".
+	it("ignores a threshold of zero rather than storing one", async () => {
+		const controller = makeController(stored)
+
+		await updateSettings(controller, UpdateSettingsRequest.create({ escalationSettings: { struggleWindow: 0 } }))
+
+		assert.equal(lastWrite(controller)?.struggleWindow, 12)
 	})
 
 	it("ignores a budget of zero rather than storing one", async () => {

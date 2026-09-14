@@ -113,6 +113,32 @@ describe("--expert-model and its knobs", () => {
 		expect(args.expertCloseAfter).toBe(true);
 	});
 
+	// The thresholds that decide whether the expert is ever offered. They are
+	// on the CLI as well as the panel because finding their defaults is a
+	// measurement, and the measurement runs here.
+	it("carries the struggle thresholds through to the parsed args", () => {
+		const args = parse([
+			"--expert-model",
+			"nemotron-3-nano:30b-cloud",
+			"--struggle-failed-calls",
+			"1",
+			"--struggle-distress-hits",
+			"3",
+			"--struggle-window",
+			"14",
+			"--struggle-min-iteration",
+			"5",
+			"--struggle-max-per-task",
+			"4",
+		]);
+
+		expect(args.struggleFailedCalls).toBe("1");
+		expect(args.struggleDistressHits).toBe("3");
+		expect(args.struggleWindow).toBe("14");
+		expect(args.struggleMinIteration).toBe("5");
+		expect(args.struggleMaxPerTask).toBe("4");
+	});
+
 	it("is absent when no expert is named", () => {
 		// Absent has to stay absent all the way down: it is what closes the
 		// escalation paths, rather than offering a tool with nobody behind it.
