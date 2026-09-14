@@ -63,6 +63,36 @@ export interface EscalationSettings {
 	 * an unbroken run of calls that tried to change a file.
 	 */
 	struggleEditStreak: number
+	/**
+	 * Let the base model run while the expert is working.
+	 *
+	 * Off by default, because on the most common setup it costs real time and
+	 * we cannot tell that setup apart from the one where it is free. A local
+	 * ollama serves a cloud expert through the same endpoint as the local base,
+	 * so "same endpoint" says nothing about whether the two contend, and with
+	 * `OLLAMA_MAX_LOADED_MODELS` at its default every alternation between two
+	 * local models is an unload and a load. The user knows which of those their
+	 * machine is doing; nothing in here can find out.
+	 *
+	 * OFF is the hand-over this started as: the base waits, and sees the
+	 * delivery and nothing else.
+	 *
+	 * ON is the supervision: batched notes while the expert works, the guards
+	 * watching for an expert going in circles, and a message channel in both
+	 * directions.
+	 */
+	alternateWithBase: boolean
+	/**
+	 * Keep the base running, and relay nothing to it until the delivery.
+	 *
+	 * Only read when {@link alternateWithBase} is on, and there for the machine
+	 * where a model swap is expensive. The base still runs -- it may read, run
+	 * the check and think while it stands down from edits, and a steer from the
+	 * user still reaches it -- but nothing about the expert's work is relayed
+	 * while that work is happening, and nothing is saved up for the end: a
+	 * batch is only worth a wake-up while it can still change something.
+	 */
+	relayNothing: boolean
 }
 
 export const DEFAULT_ESCALATION_SETTINGS: EscalationSettings = {
@@ -79,4 +109,6 @@ export const DEFAULT_ESCALATION_SETTINGS: EscalationSettings = {
 	struggleMinIteration: 20,
 	struggleMaxPerTask: 2,
 	struggleEditStreak: 3,
+	alternateWithBase: false,
+	relayNothing: false,
 }

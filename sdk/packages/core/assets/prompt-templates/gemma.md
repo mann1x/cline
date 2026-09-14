@@ -1,7 +1,8 @@
 ---
 name: gemma
 match:
-  family: [gemma*]
+  - model: ["gemma*"]
+  - family: [gemma*]
 ---
 
 <!-- PROVENANCE -- written by scripts/review-prompt-templates.mts, not by the model.

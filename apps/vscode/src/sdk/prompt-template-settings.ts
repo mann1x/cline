@@ -5,7 +5,7 @@ import {
 	loadPromptTemplates,
 	resolvePromptTemplateDirectories,
 } from "@cline/core"
-import { type PromptTemplate, type PromptTemplateSource, renderPromptTemplate } from "@cline/shared"
+import { type PromptTemplate, type PromptTemplateSource, promptTemplateMatchBlocks, renderPromptTemplate } from "@cline/shared"
 import { fileExistsAtPath } from "@utils/fs"
 import * as path from "path"
 import { resolveOllamaModelFamily } from "./ollama-model-family"
@@ -42,6 +42,45 @@ export interface PromptTemplateEntry {
 	error?: string
 }
 
+/**
+ * Which template one configured model scope resolves to.
+ *
+ * The panel used to answer this for the session's model and no other, which
+ * made the one question it exists to answer -- "did that file take effect" --
+ * unanswerable for every other model the task runs. A subagent, and an expert
+ * especially, is usually a different model of a different family; the expert
+ * is also the one most likely to be reached through a cloud tag, which reports
+ * no family and until 2026-09-14 landed silently on `default.md`.
+ */
+export interface PromptTemplateScopeMapping {
+	/** What the tab is called, e.g. "Escalation". */
+	scope: string
+	providerId: string
+	modelId: string
+	/** What the provider says the model is, when it can say. */
+	family?: string
+	/** The template it resolves to. Absent when nothing loaded at all. */
+	templateName?: string
+	/** Whether that template is layered over `default.md`. */
+	overlaid: boolean
+	/**
+	 * Nothing claimed it, so it is running on the base layer.
+	 *
+	 * Called out separately because it is not visible from the name: the
+	 * template is `default` either way, and a reader cannot tell the model that
+	 * was claimed by the base layer from the one that fell through to it.
+	 */
+	fallback: boolean
+}
+
+/** A scope the caller wants resolved, before it has been. */
+export interface PromptTemplateScopeRequest {
+	scope: string
+	providerId: string
+	modelId: string
+	baseUrl?: string
+}
+
 export interface PromptTemplateSettings {
 	providerId: string
 	modelId: string
@@ -54,6 +93,8 @@ export interface PromptTemplateSettings {
 	globalDirectory: string
 	workspaceDirectory?: string
 	templates: PromptTemplateEntry[]
+	/** Every configured scope, the session's included, in display order. */
+	scopes: PromptTemplateScopeMapping[]
 }
 
 export interface ReadPromptTemplateSettingsOptions {
@@ -62,17 +103,33 @@ export interface ReadPromptTemplateSettingsOptions {
 	workspaceRoot?: string
 	baseUrl?: string
 	knownToolNames?: readonly string[]
+	/**
+	 * The other models this task can run, each resolved on its own.
+	 *
+	 * Supplied by the caller rather than read here: which scopes are configured
+	 * is a question about the settings store, and this module's job is the
+	 * template directories.
+	 */
+	scopes?: readonly PromptTemplateScopeRequest[]
 }
 
 function describeMatch(template: PromptTemplate): string[] {
 	const parts: string[] = []
-	for (const [dimension, patterns] of [
-		["provider", template.match?.provider],
-		["family", template.match?.family],
-		["model", template.match?.model],
-	] as const) {
-		if (patterns && patterns.length > 0) {
-			parts.push(`${dimension}: ${patterns.join(", ")}`)
+	// Every rung of the claim, in the order they are written. A ladder reads as
+	// `model: qwen*` then `family: qwen*`, which is what it is: either one
+	// claims the session, and the panel would be lying if it showed only the
+	// first. Two rungs naming the same dimension are joined with "or" so the
+	// line cannot be read as an AND.
+	const blocks = promptTemplateMatchBlocks(template.match)
+	for (const block of blocks) {
+		for (const [dimension, patterns] of [
+			["provider", block.provider],
+			["family", block.family],
+			["model", block.model],
+		] as const) {
+			if (patterns && patterns.length > 0) {
+				parts.push(`${dimension}: ${patterns.join(", ")}`)
+			}
 		}
 	}
 	// A template with no rules is the base layer, not an unmatched one.
@@ -148,6 +205,34 @@ export async function readPromptTemplateSettings(options: ReadPromptTemplateSett
 		})
 	}
 
+	// Every other model this task can run, resolved against the same set. The
+	// family lookup is per scope because it is per model: an expert on a cloud
+	// tag reports none, and that is exactly the case worth showing.
+	const scopes: PromptTemplateScopeMapping[] = []
+	for (const request of options.scopes ?? []) {
+		const scopeFamily =
+			request.providerId === "ollama"
+				? await resolveOllamaModelFamily(request.baseUrl, request.modelId).catch(() => undefined)
+				: undefined
+		const scopeRendered = renderPromptTemplate(all, {
+			providerId: request.providerId,
+			modelId: request.modelId,
+			family: scopeFamily,
+		})
+		scopes.push({
+			scope: request.scope,
+			providerId: request.providerId,
+			modelId: request.modelId,
+			family: scopeFamily,
+			templateName: scopeRendered?.name,
+			overlaid: scopeRendered?.overlaid ?? false,
+			// `overlaid` is false both for a model the base layer claimed and
+			// for one that nothing claimed, so the name alone cannot tell them
+			// apart. This is the second case, said out loud.
+			fallback: scopeRendered !== undefined && !scopeRendered.overlaid,
+		})
+	}
+
 	return {
 		providerId: options.providerId,
 		modelId: options.modelId,
@@ -157,6 +242,7 @@ export async function readPromptTemplateSettings(options: ReadPromptTemplateSett
 		globalDirectory,
 		workspaceDirectory,
 		templates: entries,
+		scopes,
 	}
 }
 

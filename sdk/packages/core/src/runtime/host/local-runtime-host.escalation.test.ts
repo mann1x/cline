@@ -23,6 +23,7 @@ import { splitCoreSessionConfig } from "./runtime-host";
 const expertCalls: Array<{
 	prompt: string;
 	tools: string[];
+	descriptions: Record<string, string>;
 	connection: { providerId: string; modelId: string; baseUrl?: string };
 	asked: string[];
 }> = [];
@@ -38,7 +39,7 @@ vi.mock(
 			...actual,
 			createDelegatedAgent: (options: {
 				prompt: string;
-				tools: Array<{ name: string }>;
+				tools: Array<{ name: string; description?: string }>;
 				configProvider: {
 					getConnectionConfig: () => {
 						providerId: string;
@@ -50,6 +51,12 @@ vi.mock(
 				const call = {
 					prompt: options.prompt,
 					tools: options.tools.map((tool) => tool.name),
+					descriptions: Object.fromEntries(
+						options.tools.map((tool) => [
+							tool.name,
+							(tool as { description?: string }).description ?? "",
+						]),
+					),
 					connection: options.configProvider.getConnectionConfig(),
 					asked: [] as string[],
 				};
@@ -168,7 +175,10 @@ describe("the escalation path, as the host wires it", () => {
 		rmSync(root, { recursive: true, force: true });
 	});
 
-	async function startSession(escalation?: Record<string, unknown>) {
+	async function startSession(
+		escalation?: Record<string, unknown>,
+		atomicProtocol?: Record<string, unknown>,
+	) {
 		let agentConfig: AgentConfig | undefined;
 		const events: CoreSessionEvent[] = [];
 		const host = new LocalRuntimeHost({
@@ -196,6 +206,7 @@ describe("the escalation path, as the host wires it", () => {
 				enableSpawnAgent: false,
 				enableAgentTeams: false,
 				...(escalation ? { escalation } : {}),
+				...(atomicProtocol ? { atomicProtocol } : {}),
 			} as never),
 		});
 		return { agentConfig, events, host, sessionId: started.sessionId };
@@ -265,6 +276,110 @@ describe("the escalation path, as the host wires it", () => {
 		);
 		// An expert that could escalate would escalate to itself.
 		expect(expertCalls[0]?.tools).not.toContain("escalate");
+	});
+
+	// The transaction is the BASE model's: its budget, its plan, its record of
+	// what has been tried, and its rollback. The expert used to be handed the
+	// whole decorated list, `submit_transaction` included -- the one tool in
+	// the protocol that commits -- so it could close a transaction the base had
+	// not finished, or put back work the base meant to keep.
+	it("does not hand the expert the base model's change protocol", async () => {
+		const { agentConfig } = await startSession(
+			{
+				connection: {
+					providerId: "ollama",
+					modelId: "qwen3.6:27b",
+					baseUrl: "http://192.168.178.161:11434",
+				},
+			},
+			{
+				mode: "static",
+				oracleCommand: "node run_game.js",
+				maxTransactions: 2,
+			},
+		);
+
+		// The session itself has them, or this test proves nothing.
+		const sessionTools = (agentConfig?.tools ?? []).map((tool) => tool.name);
+		expect(sessionTools).toContain("submit_transaction");
+
+		await escalateVia(agentConfig)({
+			goal: "explain why step() throws on frame 2",
+			expectation: "run_game.js prints ok:true",
+		});
+
+		expect(expertCalls).toHaveLength(1);
+		for (const protocolTool of [
+			"submit_transaction",
+			"restore_file",
+			"run_check",
+			"plan",
+		]) {
+			expect(expertCalls[0]?.tools).not.toContain(protocolTool);
+		}
+	});
+
+	// The expert is a different model from the session's, usually a different
+	// family, and it used to get neither its family's system text nor its tool
+	// descriptions -- it read upstream Cline's prompt, written for frontier
+	// models, which is the reason family templates exist at all.
+	it("gives the expert its own family template, after the role preamble", async () => {
+		const { agentConfig } = await startSession({
+			connection: {
+				providerId: "ollama",
+				modelId: "qwen3.6:27b",
+				baseUrl: "http://192.168.178.161:11434",
+			},
+			promptTemplate: {
+				name: "qwen",
+				fileName: "qwen.md",
+				source: "builtin",
+				overlaid: true,
+				system: "THE QWEN SYSTEM TEXT",
+				tools: { read_files: "THE QWEN READ_FILES TEXT" },
+			},
+		});
+
+		await escalateVia(agentConfig)({
+			goal: "explain why step() throws on frame 2",
+			expectation: "run_game.js prints ok:true",
+		});
+
+		const prompt = expertCalls[0]?.prompt ?? "";
+		expect(prompt).toContain("You are the expert on an escalation.");
+		expect(prompt).toContain("THE QWEN SYSTEM TEXT");
+		// Order is the point. The preamble says the caller is a model and that a
+		// suggested patch is the one useless answer; a family prompt read first
+		// gets answered as if a user had asked.
+		expect(prompt.indexOf("You are the expert on an escalation.")).toBeLessThan(
+			prompt.indexOf("THE QWEN SYSTEM TEXT"),
+		);
+	});
+
+	it("rewrites the expert's tool descriptions from its own template", async () => {
+		const { agentConfig } = await startSession({
+			connection: {
+				providerId: "ollama",
+				modelId: "qwen3.6:27b",
+				baseUrl: "http://192.168.178.161:11434",
+			},
+			promptTemplate: {
+				name: "qwen",
+				fileName: "qwen.md",
+				source: "builtin",
+				overlaid: true,
+				tools: { check_file: "THE QWEN CHECK_FILE TEXT" },
+			},
+		});
+
+		await escalateVia(agentConfig)({
+			goal: "explain why step() throws on frame 2",
+			expectation: "run_game.js prints ok:true",
+		});
+
+		expect(expertCalls[0]?.descriptions?.check_file).toBe(
+			"THE QWEN CHECK_FILE TEXT",
+		);
 	});
 
 	it("hands the expert a brief carrying the goal and the task", async () => {

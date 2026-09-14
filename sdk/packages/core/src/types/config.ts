@@ -11,6 +11,7 @@ import type {
 	HookErrorMode,
 	ITelemetryService,
 	MessageWithMetadata,
+	RenderedPromptTemplate,
 	SessionExecutionConfig,
 	SessionPromptConfig,
 	SessionWorkspaceConfig,
@@ -150,6 +151,61 @@ export interface CoreEscalationConfig {
 		index: number;
 		of: number;
 	}) => Promise<EscalationApproval>;
+	/**
+	 * The expert's own prompt template, already resolved by the host.
+	 *
+	 * The expert is a different model from the session's, often a different
+	 * family, and until this existed it received neither: `openExpert` built a
+	 * hand-written role preamble and handed the delegated agent the built-in
+	 * tool descriptions, so a glm or qwen expert read upstream Cline's prompt --
+	 * written for frontier models, which is the reason family templates exist
+	 * at all. Resolution lives in the host because only the host can ask
+	 * `/api/show` what a local tag actually is; core composes what it is given.
+	 *
+	 * The system text does NOT replace the role preamble, it follows it. The
+	 * preamble says who is asking and what is expected back -- that the caller
+	 * is a model rather than a user, and that a suggested patch in a code block
+	 * is the one answer that is useless here. Put the family text first and the
+	 * model reads a general-purpose coding prompt and answers as if to a user,
+	 * which is the exact failure the preamble was written to stop.
+	 */
+	promptTemplate?: RenderedPromptTemplate;
+	/**
+	 * Let the session's own model keep running while the expert works.
+	 *
+	 * Off by default, and the default is not conservatism about the feature --
+	 * it is that the cost cannot be found out from here. A local ollama serves
+	 * a cloud expert through the same endpoint as the local base, so the two
+	 * sharing an endpoint says nothing about whether they contend for it; and
+	 * between two local models on a server holding one at a time, every
+	 * alternation is an unload and a load. Only the host knows which of those
+	 * its hardware is doing, so only the host can answer this.
+	 *
+	 * Off is not the hand-over this feature started as. The notes are still
+	 * collected and still carry the revision each changed file can be read at;
+	 * they arrive in one batch with the delivery rather than while the expert
+	 * is still working, so the base can check the claims against the exact
+	 * bytes without ever having run beside it.
+	 */
+	alternateWithBase?: boolean;
+	/**
+	 * Keep the base running, and relay nothing to it until the delivery.
+	 *
+	 * Read only when {@link alternateWithBase} is set, and there for the
+	 * machine where a model swap is expensive. The base still runs -- it may
+	 * read, run the check and think about the problem while it stands down from
+	 * edits, and a steer from the user still reaches it -- but nothing about
+	 * the expert's work is relayed while that work is happening: no note
+	 * batches, no guards on the expert's channels, no messages either way.
+	 *
+	 * The notes are not saved up for the end, either. A batch is only worth a
+	 * wake-up while it can still change something, and a model handed four
+	 * hundred of them at the delivery is reading a transcript of work that has
+	 * already finished -- which costs the swap it was avoiding and buys nothing
+	 * (user, 2026-09-14: "the batches are not useful and would be processed
+	 * when the runs end and there will be a ton").
+	 */
+	relayNothing?: boolean;
 	/** Escalations allowed in one task. Three by default. */
 	maxEscalations?: number;
 	/** Follow-ups within one escalation, after the first delivery. Twenty by default. */

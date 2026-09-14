@@ -422,6 +422,12 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 				...(request.escalationSettings.closeAfterEscalation !== undefined
 					? { closeAfterEscalation: request.escalationSettings.closeAfterEscalation }
 					: {}),
+				...(request.escalationSettings.alternateWithBase !== undefined
+					? { alternateWithBase: request.escalationSettings.alternateWithBase }
+					: {}),
+				...(request.escalationSettings.relayNothing !== undefined
+					? { relayNothing: request.escalationSettings.relayNothing }
+					: {}),
 				...(maxEscalations !== undefined && maxEscalations > 0 ? { maxEscalations } : {}),
 				...(maxFollowUps !== undefined && maxFollowUps > 0 ? { maxFollowUps } : {}),
 				...Object.fromEntries(Object.entries(struggle).filter(([, value]) => value !== undefined && value > 0)),

@@ -1,5 +1,11 @@
 /**
- * `read_files` with a `revision`, offered only inside the change protocol.
+ * `read_files` with a `revision`, offered wherever a file history is being kept.
+ *
+ * Built for the change protocol and worded for it; the escalation keeps a
+ * history of its own -- the expert's writes, so the base model can check a note
+ * against the bytes it was about -- and needs the same reads under different
+ * words. `RevisionWording` below is that seam, and the change protocol's words
+ * remain the default, so nothing that called this before sees any change.
  *
  * A decoration rather than a parameter on the built-in tool, and deliberately:
  * without an open transaction there is no base revision, and a schema that
@@ -52,7 +58,31 @@ export interface BaseRevisionSource {
 	readonly revisions: RevisionLog;
 }
 
-const REVISION_DESCRIPTION = `
+/**
+ * The words that differ between the two histories this decoration can serve.
+ *
+ * One machinery, two arrangements. The change protocol's log holds the base
+ * model's own edits inside its open transaction; the escalation's holds the
+ * expert's edits while the base model stands down and watches. The numbering,
+ * the de-duplication and the reads are identical. What is not identical is who
+ * wrote the versions and what the reader means to do with them -- and a reader
+ * told "your own edits are not in it" about somebody else's edits has been
+ * told something false.
+ */
+export interface RevisionWording {
+	/** Appended to `read_files`' description. */
+	readonly description: string;
+	/** The `revision` parameter's own description. */
+	readonly parameter: string;
+	/** What a refusal calls the span: "this transaction", "this escalation". */
+	readonly span: string;
+	/** What a served revision #1 is called. */
+	readonly baseLabel: string;
+	/** The refusal when nothing is open at all. */
+	readonly closed: string;
+}
+
+const TRANSACTION_DESCRIPTION = `
 
 **Reading an earlier version of a file.** Set \`revision\` to be shown the file as it was at some earlier point, instead of as it is now:
 
@@ -63,6 +93,63 @@ const REVISION_DESCRIPTION = `
 Use it the moment you have damaged a file and are about to rebuild part of it from memory — a method you deleted, a line you rewrote and lost, a block whose brackets you have been moving around. Reading the original is exact and reconstructing it is not, and a long minified line is where the difference shows.
 
 It is a read and nothing else: the file on disk is untouched, and what you are shown does not count as having read the file as it stands. To edit it, read it again without \`revision\` — the line numbers in the base version are the ones from before your changes and will not address today's file.`;
+
+const TRANSACTION_PARAMETER = `Read an earlier version instead of the file as it is now: "${BASE_REVISION}" or "${ORIGINAL_REVISION}" for the file as this transaction opened, "${LAST_REVISION}" for the version before your most recent change to it, or a number such as "#3". Applies to every path in the call.`;
+
+/** How the change protocol talks about its own revisions. The default. */
+export const TRANSACTION_REVISION_WORDING: RevisionWording = {
+	description: TRANSACTION_DESCRIPTION,
+	parameter: TRANSACTION_PARAMETER,
+	span: "this transaction",
+	baseLabel: "the version from before this transaction's changes",
+	closed:
+		"No transaction is open, so there is no earlier version to read. Read the file as it stands.",
+};
+
+const ESCALATION_DESCRIPTION = `
+
+**Reading a version of a file the expert wrote.** Set \`revision\` to be shown a file as it was at some point during this escalation, instead of as it is now:
+
+- \`"${BASE_REVISION}"\` (or \`"${ORIGINAL_REVISION}"\`) — the workspace as it stood when you handed the work over. None of the expert's changes are in it.
+- \`"${LAST_REVISION}"\` — as it was before the expert's most recent change to it.
+- \`"#3"\` — that numbered version. Every version the expert writes is numbered, and the note reporting the change names its number, so you can read the exact bytes a note was about.
+
+This is what makes the notes checkable. A note reaches you describing a moment that has already passed: by the time you read that the expert edited a file, the file on disk may have moved on twice, so checking the claim against disk is checking it against evidence that moved under you. The numbered version does not move. Read the revision a note names when you want to judge what the expert said it did, and read the file on disk when you want to know where the work stands now.
+
+It is a read and nothing else. The file is untouched, and you are standing down from changes while the expert works.`;
+
+const ESCALATION_PARAMETER = `Read a version from during this escalation instead of the file as it is now: "${BASE_REVISION}" or "${ORIGINAL_REVISION}" for the workspace as you handed it over, "${LAST_REVISION}" for the version before the expert's most recent change to it, or a number such as "#3" taken from a note. Applies to every path in the call.`;
+
+/** How the escalation talks about the expert's revisions. */
+export const ESCALATION_REVISION_WORDING: RevisionWording = {
+	description: ESCALATION_DESCRIPTION,
+	parameter: ESCALATION_PARAMETER,
+	span: "this escalation",
+	baseLabel: "the version from before the expert's changes",
+	closed:
+		"No escalation is open, so there is no earlier version to read. Read the file as it stands.",
+};
+
+/**
+ * A second history that takes over while it is live.
+ *
+ * The escalation's, in practice. Two logs exist at once during a hand-over --
+ * the base model's open transaction and the expert's writes -- and they cannot
+ * both answer `revision: "#3"`. They do not have to: while the expert has the
+ * pen the base model is standing down and its own transaction is not moving,
+ * so the only numbers that mean anything are the expert's, and those are the
+ * ones the notes are quoting. When the escalation closes and the log is
+ * purged, this stops being live and the transaction answers again.
+ *
+ * Stacking two decorations instead would not work: the outer one would take
+ * `revision` off the input and the inner would never see it.
+ */
+export interface RevisionOverlay {
+	readonly source: BaseRevisionSource;
+	readonly wording: RevisionWording;
+	/** Whether this is the history a `revision` means right now. */
+	live(): boolean;
+}
 
 function revisionOf(input: unknown): {
 	revision: unknown;
@@ -77,6 +164,8 @@ function revisionOf(input: unknown): {
 
 function withRevisionProperty(
 	schema: Record<string, unknown>,
+	wording: RevisionWording,
+	overlay?: RevisionOverlay,
 ): Record<string, unknown> {
 	const properties =
 		typeof schema.properties === "object" && schema.properties !== null
@@ -88,7 +177,9 @@ function withRevisionProperty(
 			...properties,
 			revision: {
 				type: "string",
-				description: `Read an earlier version instead of the file as it is now: "${BASE_REVISION}" or "${ORIGINAL_REVISION}" for the file as this transaction opened, "${LAST_REVISION}" for the version before your most recent change to it, or a number such as "#3". Applies to every path in the call.`,
+				description: overlay
+					? `${wording.parameter} While an expert is working this workspace, the versions are the expert's: ${overlay.wording.parameter}`
+					: wording.parameter,
 			},
 		},
 	};
@@ -104,6 +195,7 @@ function bodyForRevision(
 	absolutePath: string,
 	requested: string,
 	base: Buffer | undefined,
+	wording: RevisionWording,
 ): RevisionSource {
 	const history = source.revisions.revisions(absolutePath);
 	if (history.length === 0) {
@@ -112,14 +204,14 @@ function bodyForRevision(
 		if (!isOriginal(requested)) {
 			return {
 				kind: "error",
-				message: `Nothing has written to that file in this transaction, so the only earlier version of it is the one the transaction opened with — there is no \`${requested}\` to read. Ask for \`"${BASE_REVISION}"\`, or read the file as it stands.`,
+				message: `Nothing has written to that file in ${wording.span}, so the only earlier version of it is the one ${wording.span} opened with — there is no \`${requested}\` to read. Ask for \`"${BASE_REVISION}"\`, or read the file as it stands.`,
 			};
 		}
 		return base
 			? {
 					kind: "body",
 					body: base,
-					label: "the version from before this transaction's changes",
+					label: wording.baseLabel,
 				}
 			: {
 					kind: "error",
@@ -130,7 +222,7 @@ function bodyForRevision(
 	if (found.kind === "dropped") {
 		return {
 			kind: "error",
-			message: `Revision #${found.index} is no longer held: its content was released to stay inside the memory this transaction may spend on file history.\n\n${describeRevisions(path.basename(absolutePath), history)}`,
+			message: `Revision #${found.index} is no longer held: its content was released to stay inside the memory ${wording.span} may spend on file history.\n\n${describeRevisions(path.basename(absolutePath), history)}`,
 		};
 	}
 	if (found.kind !== "found") {
@@ -150,7 +242,7 @@ function bodyForRevision(
 		body: found.revision.body,
 		label:
 			found.revision.index === 1
-				? "the version from before this transaction's changes"
+				? wording.baseLabel
 				: `revision #${found.revision.index}`,
 	};
 }
@@ -172,6 +264,7 @@ async function readFromRevision(
 	input: unknown,
 	context: AgentToolContext,
 	requested: string,
+	wording: RevisionWording,
 ): Promise<ToolOperationResult[]> {
 	const requests = readFileRequestsFrom(input);
 	return Promise.all(
@@ -200,6 +293,7 @@ async function readFromRevision(
 				lookup.absolutePath,
 				requested,
 				lookup.kind === "held" ? lookup.body : undefined,
+				wording,
 			);
 			if (chosen.kind === "error") {
 				return { query, result: "", error: chosen.message, success: false };
@@ -280,7 +374,12 @@ function annotateWithRevisions(
 export function withBaseRevisionReads<T extends AgentToolDefinition>(
 	tools: readonly T[],
 	source: BaseRevisionSource,
+	wording: RevisionWording = TRANSACTION_REVISION_WORDING,
+	overlay?: RevisionOverlay,
 ): T[] {
+	/** Whichever history a call means, decided when the call is made. */
+	const live = (): { source: BaseRevisionSource; wording: RevisionWording } =>
+		overlay?.live() ? overlay : { source, wording };
 	return tools.map((tool) => {
 		if (tool.name !== DefaultToolNames.READ_FILES) {
 			return tool;
@@ -292,11 +391,15 @@ export function withBaseRevisionReads<T extends AgentToolDefinition>(
 		const original = tool as unknown as AgentTool<unknown, unknown>;
 		return {
 			...original,
-			description: original.description + REVISION_DESCRIPTION,
-			inputSchema: withRevisionProperty(original.inputSchema),
+			description:
+				original.description +
+				wording.description +
+				(overlay ? overlay.wording.description : ""),
+			inputSchema: withRevisionProperty(original.inputSchema, wording, overlay),
 			execute: async (input: unknown, context: AgentToolContext) => {
+				const active = live();
 				const { revision, rest } = revisionOf(input);
-				const snapshot = source.pending;
+				const snapshot = active.source.pending;
 				const wanted =
 					typeof revision === "string" ? revision.trim() : undefined;
 				// Names for the working tree are what the unadorned call already
@@ -314,7 +417,7 @@ export function withBaseRevisionReads<T extends AgentToolDefinition>(
 						context,
 					)) as ToolOperationResult[];
 					return snapshot && Array.isArray(plain)
-						? annotateWithRevisions(source, snapshot, rest, plain)
+						? annotateWithRevisions(active.source, snapshot, rest, plain)
 						: plain;
 				}
 				if (!snapshot) {
@@ -322,13 +425,19 @@ export function withBaseRevisionReads<T extends AgentToolDefinition>(
 						{
 							query: wanted,
 							result: "",
-							error:
-								"No transaction is open, so there is no earlier version to read. Read the file as it stands.",
+							error: active.wording.closed,
 							success: false,
 						} satisfies ToolOperationResult,
 					];
 				}
-				return readFromRevision(source, snapshot, rest, context, wanted);
+				return readFromRevision(
+					active.source,
+					snapshot,
+					rest,
+					context,
+					wanted,
+					active.wording,
+				);
 			},
 		} as unknown as T;
 	});

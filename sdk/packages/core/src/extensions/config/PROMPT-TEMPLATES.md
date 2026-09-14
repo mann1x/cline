@@ -16,6 +16,8 @@ history. Everything that cost time is written down here.
 
 | | |
 |---|---|
+| **One `match:` block ANDs its dimensions. A list of blocks ORs them.** | `match: {model: [qwen*], family: [qwen*]}` claims a model that satisfies **both**, so a local build called `ornith-27b_tbq3_k_s-128k` with family `qwen35moe` matches neither rung and drops to `default.md` in silence. The fallback ladder is a list: `match:` then `- model: [qwen*]` then `- family: [qwen*]`. Each alternative is scored on its own and the best wins, so the name rung still outranks the family rung where both apply. |
+| **A cloud tag reports no family, so every family template needs a name rung.** | `/api/show` answers `family: ""` for anything built `FROM` a cloud tag, which is how most people reach a model bigger than they can host. Six shipped templates matched on `family:` alone until 2026-09-14, so `glm-5.3:cloud`, `deepseek-v4.1-flash:cloud` and `qwen3.5:397b-cloud` all ran on `default.md`. |
 | **`default.md` is generated, not authored.** | It is a verbatim mirror of `DEFAULT_CLINE_SYSTEM_PROMPT` plus every built-in tool description. A test fails if it drifts. Editing it to change what a model sees does nothing except break CI. |
 | **The `# system` section REPLACES. It does not wrap.** | `{{DEFAULT}}` works in `# tool:` sections only. A family template's system text is the *entire* system prompt for that family — `default.md`'s system text is never appended, prepended, or merged. |
 | **Every family already overrides `system`.** | All six family templates ship a full `# system` section, so nothing inherits `default.md`'s system text in practice. "Add it to the base layer so everyone gets it" does not work. |
@@ -109,6 +111,34 @@ match:
   `{{IDE_NAME}}`, `{{CWD}}`, `{{CLINE_RULES}}`, `{{CLINE_METADATA}}`,
   `{{DEFAULT}}`.
 
+### The `match:` block, and the fallback ladder
+
+```yaml
+match:
+  family: [gemma*]            # one block: every key it names must match
+```
+
+```yaml
+match:                        # a list: any one block matching is enough
+  - model: ["qwen*"]
+  - family: [qwen*]
+```
+
+Use the single block for a conjunction that is really meant — `provider:
+[ollama]` with `family: [gemma4]` is *Gemma on Ollama*, and that is a different
+statement from Gemma anywhere.
+
+Use the list for the fallback ladder, which is what every family template
+needs. The two rungs claim disjoint sets:
+
+| rung | claims |
+|---|---|
+| `model: ["glm*"]` | the cloud tags, which report **no family at all** |
+| `family: ["glm*"]` | local builds, merges, prunes and quants, whose names say nothing but whose architecture `/api/show` reports |
+
+Naming both keys in **one** block claims the intersection, which is close to
+empty, and nothing reports it.
+
 ---
 
 ## 3. Resolution: which template wins
@@ -125,6 +155,11 @@ a `qwen35moe` session to `qwen`, and the same two reversed routed it to
 `qwen-moe`. Exclusions (`"!*moe*"`) existed to work around that and are still
 the only way to say a value is *not claimed at all*, which narrowness cannot
 express.
+
+A list-form `match:` is scored one block at a time and the best-scoring block
+that applies becomes the template's score — so `- model: [qwen*]` /
+`- family: [qwen*]` is chosen on its model rung when the name matches, and on
+its family rung when only the architecture does.
 
 `resolvePromptTemplate()` in `shared/src/prompt/template-types.ts`.
 

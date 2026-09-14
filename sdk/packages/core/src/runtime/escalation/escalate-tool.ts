@@ -90,6 +90,14 @@ export interface EscalationExchangeResult {
 	escalationsLeft: number;
 	/** Whether the exchange is over — because the model said so, or the host. */
 	closed?: boolean;
+	/**
+	 * The expert has the work and is still doing it.
+	 *
+	 * The non-blocking hand-over. `reply` is then the hand-over notice rather
+	 * than a delivery, and wrapping it in "check this before you build on it"
+	 * would have the base model checking work that has not happened yet.
+	 */
+	handedOver?: boolean;
 }
 
 export interface EscalateToolOptions {
@@ -137,6 +145,9 @@ export function readEscalationRequest(input: unknown): EscalationRequest {
 }
 
 function describeResult(result: EscalationExchangeResult): string {
+	if (result.handedOver) {
+		return result.reply.trim();
+	}
 	const lines = [result.reply.trim() || "(the expert returned nothing)"];
 	lines.push("", "== THIS IS A DELIVERY, NOT A VERDICT ==", "");
 	lines.push(

@@ -15,7 +15,7 @@
  * that failure would land on whoever edited the file rather than on us.
  */
 
-/** Which sessions a template claims. Every field present must match. */
+/** One claim. Every field present in it must match. */
 export interface PromptTemplateMatch {
 	/** Provider IDs, e.g. `ollama`, `anthropic`. Wildcards allowed. */
 	provider?: string[];
@@ -27,6 +27,45 @@ export interface PromptTemplateMatch {
 	family?: string[];
 	/** Model IDs. Wildcards allowed, e.g. `*v7-coder*`. */
 	model?: string[];
+}
+
+/**
+ * What a template claims: one block, or a list of alternatives.
+ *
+ * The single block is an AND across the dimensions it names, which is the
+ * right default -- `provider: ollama` with `family: gemma4` means Gemma **on
+ * Ollama**, and a version of that which also claimed Gemma on Anthropic would
+ * be a different statement.
+ *
+ * The list is an OR, and it exists because the fallback ladder cannot be
+ * written any other way. A family template needs to claim two disjoint things:
+ * the local builds, merges and quants whose names say nothing but whose
+ * architecture `/api/show` reports -- and the cloud tags, which report no
+ * family at all and are recognisable only by the name. One block cannot say
+ * that: adding a `model:` rung beside the `family:` rung ANDs them, and a
+ * local build called `ornith-27b_tbq3_k_s-128k` with family `qwen35moe` then
+ * matches neither and drops silently to `default.md`. Measured exactly that
+ * way on the first attempt at this.
+ *
+ * Each alternative is scored on its own and the best one wins, so the model
+ * rung still outranks the family rung wherever both apply.
+ */
+export type PromptTemplateClaim = PromptTemplateMatch | PromptTemplateMatch[];
+
+/**
+ * A claim as a list of blocks, whichever form it was written in.
+ *
+ * For callers that describe or audit a claim rather than score it: one block
+ * and a list of one block say the same thing, and code that has to render
+ * "family: qwen*" should not have to know which was typed.
+ */
+export function promptTemplateMatchBlocks(
+	claim: PromptTemplateClaim | undefined,
+): PromptTemplateMatch[] {
+	if (!claim) {
+		return [];
+	}
+	return Array.isArray(claim) ? [...claim] : [claim];
 }
 
 /** Where a template was loaded from. Later entries win ties. */
@@ -49,7 +88,7 @@ export interface PromptTemplate {
 	/** Absolute path, for the settings UI to open. Absent for builtins. */
 	filePath?: string;
 	/** Absent means "applies to everything", i.e. the default template. */
-	match?: PromptTemplateMatch;
+	match?: PromptTemplateClaim;
 	/** Replaces the system prompt when present. */
 	system?: string;
 	/** Tool name to replacement description. Tools absent here keep theirs. */
@@ -228,21 +267,59 @@ export interface PromptTemplateScore {
 /**
  * Score a template against a session, or `undefined` when it does not apply.
  *
- * Every dimension the template names must match — a template that asks for
- * provider `ollama` AND family `gemma4` does not apply to Gemma on another
- * provider. The score is the most specific dimension it named.
+ * Every dimension a block names must match — a block that asks for provider
+ * `ollama` AND family `gemma4` does not apply to Gemma on another provider.
+ * The score is the most specific dimension it named.
+ *
+ * A list of blocks is an OR: each is scored on its own and the best-scoring one
+ * that applies is the template's score, so a template claiming `model: [qwen*]`
+ * or `family: [qwen*]` is chosen on its model rung when the name matches and on
+ * its family rung when only the architecture does.
  */
 export function scorePromptTemplateDetailed(
 	template: PromptTemplate,
 	target: PromptTemplateTarget,
 ): PromptTemplateScore | undefined {
-	const match = template.match;
-	if (!match) {
+	const claim = template.match;
+	if (!claim) {
 		return {
 			dimension: PROMPT_TEMPLATE_SPECIFICITY.default,
 			specificity: 0,
 		};
 	}
+	if (Array.isArray(claim)) {
+		// An empty list claims nothing and nothing claims everything: treated as
+		// the default rather than as a mismatch, the same way `match: {}` is.
+		if (claim.length === 0) {
+			return {
+				dimension: PROMPT_TEMPLATE_SPECIFICITY.default,
+				specificity: 0,
+			};
+		}
+		let best: PromptTemplateScore | undefined;
+		for (const alternative of claim) {
+			const score = scoreOneClaim(alternative, target);
+			if (!score) {
+				continue;
+			}
+			if (
+				!best ||
+				score.dimension > best.dimension ||
+				(score.dimension === best.dimension &&
+					score.specificity > best.specificity)
+			) {
+				best = score;
+			}
+		}
+		return best;
+	}
+	return scoreOneClaim(claim, target);
+}
+
+function scoreOneClaim(
+	match: PromptTemplateMatch,
+	target: PromptTemplateTarget,
+): PromptTemplateScore | undefined {
 	const checks: Array<[boolean | undefined, number, number]> = [
 		[
 			matchesAny(target.providerId, match.provider),

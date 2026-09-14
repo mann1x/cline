@@ -6,7 +6,10 @@ import { createReadFilesTool } from "../../extensions/tools/definitions";
 import { createFileReadExecutor } from "../../extensions/tools/executors/file-read";
 import { createReadReceipts } from "../../extensions/tools/executors/read-receipts";
 import type { ToolOperationResult } from "../../extensions/tools/types";
-import { withBaseRevisionReads } from "./base-revision-reads";
+import {
+	ESCALATION_REVISION_WORDING,
+	withBaseRevisionReads,
+} from "./base-revision-reads";
 import { createRevisionLog } from "./file-revisions";
 import { type Snapshot, takeSnapshot } from "./snapshot";
 
@@ -341,5 +344,124 @@ describe("reading a numbered revision", () => {
 			expect(result?.success).toBe(false);
 			expect(result?.error).toContain("#2");
 		});
+	});
+});
+
+describe("the same reads, worded for an escalation", () => {
+	it("names the expert rather than the transaction", async () => {
+		await withWorkspace({ "game.html": "original\n" }, async (root) => {
+			const snapshot = await takeSnapshot(root);
+			await fs.writeFile(path.join(root, "game.html"), "expert\n", "utf8");
+			const [tool] = withBaseRevisionReads(
+				[readTool(createReadReceipts(), root)],
+				{ pending: snapshot, transaction: 1, revisions: createRevisionLog() },
+				ESCALATION_REVISION_WORDING,
+			);
+
+			// The base model is not the one who wrote these versions, and a
+			// description that says "your own edits" about the expert's edits
+			// is simply false.
+			expect(tool.description).toContain("the expert");
+			expect(tool.description).not.toContain("transaction");
+
+			const results = await call(tool, {
+				files: [{ path: "game.html" }],
+				revision: "base",
+			});
+
+			expect(results[0]?.result).toContain("original");
+			expect(results[0]?.result).toContain("before the expert's changes");
+		});
+	});
+
+	it("refuses an unwritten revision without naming a transaction", async () => {
+		await withWorkspace({ "game.html": "original\n" }, async (root) => {
+			const snapshot = await takeSnapshot(root);
+			const [tool] = withBaseRevisionReads(
+				[readTool(createReadReceipts(), root)],
+				{ pending: snapshot, transaction: 1, revisions: createRevisionLog() },
+				ESCALATION_REVISION_WORDING,
+			);
+
+			const results = await call(tool, {
+				files: [{ path: "game.html" }],
+				revision: "#3",
+			});
+
+			expect(results[0]?.success).toBe(false);
+			expect(results[0]?.error).toContain("this escalation");
+			expect(results[0]?.error).not.toContain("transaction");
+		});
+	});
+
+	it("still speaks of the transaction when no wording is given", async () => {
+		const [tool] = withBaseRevisionReads([readTool()], {
+			pending: undefined,
+			transaction: 0,
+			revisions: createRevisionLog(),
+		});
+
+		expect(tool.description).toContain("this transaction opened");
+	});
+});
+
+describe("two histories, one revision parameter", () => {
+	it("serves the expert's while the escalation is live, and the transaction's after", async () => {
+		await withWorkspace({ "game.html": "now\n" }, async (root) => {
+			const mine = await takeSnapshot(root);
+			await fs.writeFile(path.join(root, "game.html"), "mine\n", "utf8");
+			const theirs = await takeSnapshot(root);
+			await fs.writeFile(path.join(root, "game.html"), "theirs\n", "utf8");
+			let escalating = true;
+			const [tool] = withBaseRevisionReads(
+				[readTool(createReadReceipts(), root)],
+				{ pending: mine, transaction: 1, revisions: createRevisionLog() },
+				undefined,
+				{
+					source: {
+						pending: theirs,
+						transaction: 1,
+						revisions: createRevisionLog(),
+					},
+					wording: ESCALATION_REVISION_WORDING,
+					live: () => escalating,
+				},
+			);
+
+			// The notes quote the expert's numbers, so while it has the pen
+			// `base` has to mean the workspace as it was handed over.
+			const during = await call(tool, {
+				files: [{ path: "game.html" }],
+				revision: "base",
+			});
+			expect(during[0]?.result).toContain("mine");
+
+			escalating = false;
+			const after = await call(tool, {
+				files: [{ path: "game.html" }],
+				revision: "base",
+			});
+			expect(after[0]?.result).toContain("now");
+		});
+	});
+
+	it("tells the model both stories when an expert can take the pen", async () => {
+		const [tool] = withBaseRevisionReads(
+			[readTool()],
+			{ pending: undefined, transaction: 0, revisions: createRevisionLog() },
+			undefined,
+			{
+				source: {
+					pending: undefined,
+					transaction: 0,
+					revisions: createRevisionLog(),
+				},
+				wording: ESCALATION_REVISION_WORDING,
+				live: () => false,
+			},
+		);
+
+		expect(tool.description).toContain("this transaction opened");
+		expect(tool.description).toContain("the expert's most recent change");
 	});
 });

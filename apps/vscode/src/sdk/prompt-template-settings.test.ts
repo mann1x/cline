@@ -98,7 +98,9 @@ describe("readPromptTemplateSettings", () => {
 		const settings = await readPromptTemplateSettings({ providerId: "openai", modelId: "gpt-5.5" })
 		const gemma = settings.templates.find((template) => template.name === "gemma")
 
-		expect(gemma?.match).toEqual(["family: gemma*"])
+		// Both rungs of the ladder, in the order they are written. Showing only
+		// the first would tell the reader the template claims less than it does.
+		expect(gemma?.match).toEqual(["model: gemma*", "family: gemma*"])
 		// default.md claims nothing, which is what makes it the base layer.
 		expect(settings.templates.find((template) => template.name === "default")?.match).toEqual(["any model"])
 	})

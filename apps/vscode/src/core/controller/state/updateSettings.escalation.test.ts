@@ -30,6 +30,8 @@ const stored: EscalationSettings = {
 	struggleMinIteration: 30,
 	struggleMaxPerTask: 1,
 	struggleEditStreak: 4,
+	alternateWithBase: true,
+	relayNothing: false,
 }
 
 function lastWrite(controller: ReturnType<typeof makeController>) {
@@ -51,6 +53,27 @@ describe("updateSettings — escalationSettings", () => {
 		assert.equal(written?.maxEscalations, 5)
 		assert.equal(written?.maxFollowUps, 8)
 		assert.equal(written?.closeAfterEscalation, true)
+	})
+
+	it("can turn alternation back off, because false is a value and not an absence", async () => {
+		const controller = makeController(stored)
+
+		await updateSettings(controller, UpdateSettingsRequest.create({ escalationSettings: { alternateWithBase: false } }))
+
+		const written = lastWrite(controller)
+		assert.equal(written?.alternateWithBase, false)
+		assert.equal(written?.relayNothing, false)
+		assert.equal(written?.maxEscalations, 5)
+	})
+
+	it("keeps alternation while its sub-option is being ticked", async () => {
+		const controller = makeController(stored)
+
+		await updateSettings(controller, UpdateSettingsRequest.create({ escalationSettings: { relayNothing: true } }))
+
+		const written = lastWrite(controller)
+		assert.equal(written?.relayNothing, true)
+		assert.equal(written?.alternateWithBase, true)
 	})
 
 	it("keeps the stored switches while a budget is being typed", async () => {

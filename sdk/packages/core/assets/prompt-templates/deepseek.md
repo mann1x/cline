@@ -1,7 +1,8 @@
 ---
 name: deepseek
 match:
-  family: [deepseek*]
+  - model: ["deepseek*"]
+  - family: [deepseek*]
 ---
 
 <!-- PROVENANCE -- written by scripts/review-prompt-templates.mts, not by the model.

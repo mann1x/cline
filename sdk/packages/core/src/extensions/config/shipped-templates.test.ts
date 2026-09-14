@@ -295,6 +295,39 @@ describe("shipped prompt templates", () => {
 				{ providerId: "anthropic", modelId: "claude-haiku-4-5-20251001" },
 				"claude",
 			],
+			// The cloud-tag case, which is how most people will reach a model
+			// bigger than the one they can host. `/api/show` answers
+			// `family: ""` for a model built FROM a cloud tag, so a template
+			// matching on family alone does not claim it and the session drops
+			// to `default.md` with nothing reporting it. The model-name rung is
+			// what catches these.
+			[
+				"GLM on a cloud tag that reports no family",
+				{ providerId: "ollama", modelId: "glm-5.3:cloud" },
+				"glm",
+			],
+			[
+				"DeepSeek on a cloud tag that reports no family",
+				{ providerId: "ollama", modelId: "deepseek-v4.1-flash:cloud" },
+				"deepseek",
+			],
+			[
+				"Qwen on a cloud tag that reports no family",
+				{ providerId: "ollama", modelId: "qwen3.5:397b-cloud" },
+				"qwen",
+			],
+			[
+				"Gemma on a cloud tag that reports no family",
+				{ providerId: "ollama", modelId: "gemma4:31b-cloud" },
+				"gemma",
+			],
+			// Two model rungs claim this one, and the narrower has to win on
+			// the name exactly as it does on the family.
+			[
+				"Kimi K3 on a cloud tag, against the generic kimi rung",
+				{ providerId: "ollama", modelId: "kimi-k3:cloud" },
+				"kimi-k3",
+			],
 			[
 				"a model no template claims",
 				{ providerId: "ollama", modelId: "gpt-oss:latest", family: "gptoss" },

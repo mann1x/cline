@@ -1,3 +1,4 @@
+import { promptTemplateMatchBlocks } from "@cline/shared";
 import { describe, expect, it } from "vitest";
 import { parsePromptTemplate } from "./prompt-template-parser";
 
@@ -22,7 +23,47 @@ You are Cline.
 `);
 
 		expect(result.error).toBeUndefined();
-		expect(result.template?.match?.family).toEqual(["qwen*", "!*moe*"]);
+		expect(
+			promptTemplateMatchBlocks(result.template?.match)[0]?.family,
+		).toEqual(["qwen*", "!*moe*"]);
+	});
+
+	// The any-of form. One block ANDs its dimensions, which is right for
+	// "Gemma on Ollama" and wrong for the fallback ladder: a family template
+	// has to claim the local builds by architecture AND the cloud tags by
+	// name, and those are disjoint sets.
+	it("reads a list of match blocks as alternatives", () => {
+		const result = parse(`---
+name: qwen
+match:
+  - model: ["qwen*"]
+  - family: [qwen*]
+---
+
+# system
+You are Cline.
+`);
+
+		expect(result.error).toBeUndefined();
+		const blocks = promptTemplateMatchBlocks(result.template?.match);
+		expect(blocks).toHaveLength(2);
+		expect(blocks[0]?.model).toEqual(["qwen*"]);
+		expect(blocks[0]?.family).toBeUndefined();
+		expect(blocks[1]?.family).toEqual(["qwen*"]);
+	});
+
+	it("refuses a list entry that is not a mapping", () => {
+		const result = parse(`---
+name: qwen
+match:
+  - "qwen*"
+---
+
+# system
+Hi.
+`);
+
+		expect(result.error).toMatch(/match\[0\]/);
 	});
 
 	// A lone "!" excludes nothing while reading like it excludes everything,
@@ -84,7 +125,9 @@ match:
 Hi.
 `);
 
-		expect(result.template?.match?.family).toEqual(["gemma*"]);
+		expect(
+			promptTemplateMatchBlocks(result.template?.match)[0]?.family,
+		).toEqual(["gemma*"]);
 	});
 
 	it("falls back to the filename for the template name", () => {

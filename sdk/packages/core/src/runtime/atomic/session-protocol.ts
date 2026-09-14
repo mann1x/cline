@@ -1,7 +1,10 @@
 import { readFile } from "node:fs/promises";
 import type { AgentTool, AgentToolDefinition } from "@cline/shared";
 import type { CoreAtomicProtocolConfig } from "../../types/config";
-import { withBaseRevisionReads } from "./base-revision-reads";
+import {
+	type RevisionOverlay,
+	withBaseRevisionReads,
+} from "./base-revision-reads";
 import { withCheckFirstEdits } from "./check-first-edits";
 import { discoverOracle, type Oracle, type OracleVerdict } from "./oracle";
 import { withPlanCapture } from "./plan-capture";
@@ -172,6 +175,15 @@ export interface AtomicProtocolSessionOptions {
 	 * leaves this out and gets the old behaviour.
 	 */
 	approveCheck?: CheckApprover;
+	/**
+	 * A second file history that answers `revision` while it is live.
+	 *
+	 * The escalation's, when the host wired one up. Passed through rather than
+	 * decorated on top, because `read_files` can only be widened once: an outer
+	 * decoration would consume `revision` and the protocol's own would never
+	 * see it. See `RevisionOverlay`.
+	 */
+	revisionOverlay?: RevisionOverlay;
 	/**
 	 * Whether the model may propose its own check where nothing can be run.
 	 *
@@ -836,7 +848,12 @@ export async function createAtomicProtocolSession(
 			},
 		})) as AgentTool[],
 		decorateTools: (given) => {
-			const withReads = withBaseRevisionReads(given, controller);
+			const withReads = withBaseRevisionReads(
+				given,
+				controller,
+				undefined,
+				options.revisionOverlay,
+			);
 			// Inside the check-first gate below, so a refused edit -- which never
 			// reaches the file -- does not cost a read of it. It wraps the real
 			// execution, so what it captures is what the tool actually left on

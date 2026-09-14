@@ -1176,9 +1176,13 @@ export type {
 // The transaction's base revision: what every file said when the open
 // transaction started. Read through `read_files` with `revision: "base"`, and
 // written back over one file by `restore_file`. Both exist only while the
-// change protocol is armed.
+// change protocol is armed. The same reads serve the escalation's history of
+// the expert's writes, under `ESCALATION_REVISION_WORDING`.
 export {
 	BASE_REVISION,
+	ESCALATION_REVISION_WORDING,
+	type RevisionWording,
+	TRANSACTION_REVISION_WORDING,
 	withBaseRevisionReads,
 } from "./runtime/atomic/base-revision-reads";
 export {

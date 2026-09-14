@@ -6,6 +6,10 @@ import {
 	createEscalationSession,
 	type EscalationSessionOptions,
 } from "./escalation-session";
+import { createExpertMailbox } from "./expert-mailbox";
+import { createExpertNotes } from "./expert-notes";
+import { createStandDown } from "./stand-down";
+import { WAIT_FOR_EXPERT_TOOL_NAME } from "./watch-tool";
 
 function snapshotOf(files: Record<string, string>): Snapshot {
 	return {
@@ -589,5 +593,185 @@ describe("createEscalationSession", () => {
 		// The transcript carries no spend. It would be added to the progress
 		// row's and the delivery's, which already report the same turn.
 		expect(said.every((entry) => entry.usage === undefined)).toBe(true);
+	});
+});
+
+describe("the non-blocking hand-over", () => {
+	/** A build whose expert waits to be released before it replies. */
+	function buildDetached(over: Partial<EscalationSessionOptions> = {}) {
+		const standDown = createStandDown();
+		const notes = createExpertNotes({ intervalMs: 0 });
+		let release: ((text: string) => void) | undefined;
+		const finishes = new Promise<string>((resolve) => {
+			release = resolve;
+		});
+		const open = vi.fn(
+			async (_context: { onEvent: (event: AgentEvent) => void }) => ({
+				run: async (): Promise<AgentResult> =>
+					({
+						text: await finishes,
+						iterations: 1,
+						usage: { inputTokens: 10, outputTokens: 5 },
+					}) as AgentResult,
+				shutdown: vi.fn(async () => {}),
+			}),
+		);
+		const session = createEscalationSession({
+			workspaceRoot: "/work",
+			config: { connection: { providerId: "ollama", modelId: "big" } },
+			openExpert: open,
+			takeSnapshot: async () => snapshotOf({ "/work/a.js": "before" }),
+			standDown,
+			notes,
+			wait: async () => {},
+			...over,
+		});
+		const named = (name: string) =>
+			session.tools.find((entry) => entry.name === name);
+		return {
+			session,
+			standDown,
+			notes,
+			finish: (text: string) => release?.(text),
+			escalate: (input: unknown) =>
+				named(ESCALATE_TOOL_NAME)?.execute(
+					input,
+					{} as never,
+				) as Promise<string>,
+			watch: () =>
+				named(WAIT_FOR_EXPERT_TOOL_NAME)?.execute(
+					{},
+					{} as never,
+				) as Promise<string>,
+		};
+	}
+
+	it("offers the wait alongside escalate", () => {
+		const { session } = buildDetached();
+
+		expect(session.tools.map((tool) => tool.name)).toEqual([
+			ESCALATE_TOOL_NAME,
+			WAIT_FOR_EXPERT_TOOL_NAME,
+		]);
+	});
+
+	it("returns before the expert has replied, and stands the base down", async () => {
+		const { escalate, standDown, finish } = buildDetached();
+
+		const answer = await escalate({ goal: "fix the freeze" });
+
+		expect(standDown.engaged).toBe(true);
+		expect(answer).toContain("The expert has the work");
+		expect(answer).toContain("STANDING DOWN");
+		// The hand-over is not a delivery: telling the base to check work that
+		// has not happened yet is how it ends up checking the old file.
+		expect(answer).not.toContain("NOT A VERDICT");
+		finish("done");
+	});
+
+	it("hands the delivery over through the wait, and gives the pen back", async () => {
+		const { escalate, watch, standDown, finish } = buildDetached();
+		await escalate({ goal: "fix the freeze" });
+
+		finish("I rewrote step() and the check passes");
+		const answer = await watch();
+
+		expect(answer).toContain("I rewrote step() and the check passes");
+		expect(answer).toContain("NOT A VERDICT");
+		expect(standDown.engaged).toBe(false);
+	});
+
+	it("hands over what the expert did before the delivery", async () => {
+		const { escalate, watch, notes, finish } = buildDetached();
+		await escalate({ goal: "fix the freeze" });
+		notes.noteTool({ tool: "editor", files: [{ path: "a.js", revision: 2 }] });
+
+		const batch = await watch();
+		finish("done");
+
+		expect(batch).toContain("editor");
+		expect(batch).toContain("a.js (#2)");
+		expect(batch).toContain("SINCE YOU LAST LOOKED");
+	});
+
+	it("delivers a message to a working expert rather than refusing it", async () => {
+		const mailbox = createExpertMailbox();
+		const { escalate, finish } = buildDetached({ mailbox });
+		await escalate({ goal: "fix the freeze" });
+
+		const answer = await escalate({ message: "the check still fails" });
+
+		expect(answer).toContain("waiting for the expert");
+		expect(mailbox.take()).toContain("the check still fails");
+		finish("done");
+	});
+
+	it("drops an unread message when the escalation ends", async () => {
+		const mailbox = createExpertMailbox();
+		const { escalate, session, finish } = buildDetached({ mailbox });
+		await escalate({ goal: "fix the freeze" });
+		await escalate({ message: "never read" });
+
+		await session.dispose();
+
+		expect(mailbox.take()).toBeUndefined();
+		finish("done");
+	});
+
+	it("will not take a push-back while the expert is still working", async () => {
+		const { escalate, finish } = buildDetached();
+		await escalate({ goal: "fix the freeze" });
+
+		const answer = await escalate({ message: "that is wrong" });
+
+		expect(answer).toContain("still working");
+		expect(answer).toContain(WAIT_FOR_EXPERT_TOOL_NAME);
+		finish("done");
+	});
+
+	it("lets the base call the expert off mid-turn", async () => {
+		// The base model is the one watching for circling, so it is the one
+		// that has to be able to stop it.
+		const { escalate, standDown, finish } = buildDetached();
+		await escalate({ goal: "fix the freeze" });
+
+		const answer = await escalate({ finished: true });
+
+		expect(answer).toContain("called the expert off");
+		expect(standDown.engaged).toBe(false);
+		finish("done");
+	});
+
+	it("says there is nothing to wait for when no expert is working", async () => {
+		const { watch } = buildDetached();
+
+		expect(await watch()).toContain("nothing to wait for");
+	});
+
+	it("releases the base model when the task is disposed mid-escalation", async () => {
+		const { escalate, session, standDown, finish } = buildDetached();
+		await escalate({ goal: "fix the freeze" });
+
+		await session.dispose();
+
+		expect(standDown.engaged).toBe(false);
+		finish("done");
+	});
+
+	it("turns a failed hand-over into a result, and refunds it", async () => {
+		const { escalate, watch, session, standDown } = buildDetached({
+			openExpert: async () => {
+				throw new Error("the expert endpoint is down");
+			},
+		});
+		await escalate({ goal: "fix the freeze" });
+
+		const answer = await watch();
+
+		expect(answer).toContain("the expert endpoint is down");
+		expect(standDown.engaged).toBe(false);
+		// Charged at hand-over and refunded when nothing was delivered, or a
+		// dead endpoint costs the task its whole escalation budget.
+		expect(session.remaining).toBe(3);
 	});
 });

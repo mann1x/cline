@@ -166,6 +166,14 @@ export function addRootOptions(cmd: Command): Command {
 				"Release the expert's conversation when an escalation ends. Frees the server slot it was holding, which a local endpoint with OLLAMA_MAX_LOADED_MODELS of 1 or 2 needs; costs a hosted provider's warm prompt cache",
 			)
 			.option(
+				"--expert-alternate",
+				"Let the base model keep running while the expert works: batched notes on what the expert is doing, the guards watching it for going in circles, and messages in both directions. Two models are then in use at once -- free against a cloud expert, an unload and a load per alternation against a second local model on a one-slot server. Off, the same notes arrive in one batch with the delivery",
+			)
+			.option(
+				"--expert-no-relay",
+				"With --expert-alternate, keep the base running but relay nothing to it until the delivery: no note batches, no guards on the expert's channels, no messages either way, and nothing saved up for the end. For a machine where a model swap is expensive",
+			)
+			.option(
 				"--struggle-failed-calls <count>",
 				"Failed tool calls within the window that satisfy the behavioural half of the stuck trigger (default: 4). A session running the change protocol rarely fails a call at all -- it calls the check, the call succeeds, and the result says the check did not pass -- so 1 is what makes the trigger reachable there",
 			)
@@ -505,6 +513,10 @@ export function commanderToParsedArgs(program: Command): ParsedArgs {
 		result.struggleMaxPerTask = opts.struggleMaxPerTask;
 	if (opts.struggleEditStreak !== undefined)
 		result.struggleEditStreak = opts.struggleEditStreak;
+	if (opts.expertAlternate !== undefined)
+		result.expertAlternate = opts.expertAlternate;
+	if (opts.expertNoRelay !== undefined)
+		result.expertNoRelay = opts.expertNoRelay;
 	if (opts.parallelSessions !== undefined)
 		result.parallelSessions = opts.parallelSessions;
 	if (opts.qaCredential !== undefined) result.qaCredential = opts.qaCredential;

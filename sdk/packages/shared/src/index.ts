@@ -379,6 +379,7 @@ export {
 } from "./prompt/system";
 export type {
 	PromptTemplate,
+	PromptTemplateClaim,
 	PromptTemplateMatch,
 	PromptTemplateScore,
 	PromptTemplateSource,
@@ -395,6 +396,7 @@ export {
 	PROMPT_TEMPLATE_SPECIFICITY,
 	PROMPT_TEMPLATE_TOOL_PLACEHOLDERS,
 	patternSpecificity,
+	promptTemplateMatchBlocks,
 	renderPromptTemplate,
 	resolvePromptTemplate,
 	scorePromptTemplate,

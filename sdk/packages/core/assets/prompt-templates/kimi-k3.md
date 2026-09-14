@@ -1,7 +1,8 @@
 ---
 name: kimi-k3
 match:
-  family: ["kimi-k3*"]
+  - model: ["kimi-k3*"]
+  - family: ["kimi-k3*"]
 ---
 
 <!-- PROVENANCE -- assembled by hand from three generator runs, not by one.

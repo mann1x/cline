@@ -517,6 +517,17 @@ message EscalationSettings {
   // one: that reads a window of every tool the session called, this reads an
   // unbroken run of calls that tried to change a file.
   optional int32 struggle_edit_streak = 10;
+  // Let the base model run while the expert works. Off by default: on the
+  // most common setup -- a local ollama serving a cloud expert beside a local
+  // base -- "same endpoint" says nothing about whether the two contend, and
+  // between two local models every alternation is an unload and a load. Off,
+  // the escalation is a hand-over: the base waits and sees the delivery.
+  optional bool alternate_with_base = 11;
+  // Keep the base running and relay nothing to it until the delivery. Read
+  // only when alternate_with_base is on: no note batches, no guards on the
+  // expert's channels, no messages either way, and nothing saved up for the
+  // end. For a machine where a model swap is expensive.
+  optional bool relay_nothing = 12;
 }
 
 // The per-task half of the change protocol: engaged, and this task's check.

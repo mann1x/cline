@@ -1,5 +1,6 @@
 import {
 	type PromptTemplate,
+	type PromptTemplateClaim,
 	type PromptTemplateMatch,
 	type PromptTemplateSource,
 	type PromptTemplateWarning,
@@ -99,14 +100,31 @@ function normalizePatternList(
 	return patterns.length > 0 ? patterns : undefined;
 }
 
-function parseMatch(value: unknown): PromptTemplateMatch | undefined {
+function parseMatch(value: unknown): PromptTemplateClaim | undefined {
 	if (value === undefined || value === null) {
 		return undefined;
 	}
-	if (typeof value !== "object" || Array.isArray(value)) {
+	// A list is the any-of form: each entry is a block in its own right and one
+	// of them matching is enough. It is what lets a family template claim both
+	// the local builds it knows by architecture and the cloud tags it can only
+	// know by name -- two things one block would AND together.
+	if (Array.isArray(value)) {
+		return value.map((entry, index) => {
+			if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+				throw new Error(
+					`match[${index}] must be a mapping of provider / family / model`,
+				);
+			}
+			return parseMatchBlock(entry as Record<string, unknown>);
+		});
+	}
+	if (typeof value !== "object") {
 		throw new Error("match must be a mapping of provider / family / model");
 	}
-	const record = value as Record<string, unknown>;
+	return parseMatchBlock(value as Record<string, unknown>);
+}
+
+function parseMatchBlock(record: Record<string, unknown>): PromptTemplateMatch {
 	const known = new Set(["provider", "family", "model"]);
 	for (const key of Object.keys(record)) {
 		if (!known.has(key)) {
@@ -219,7 +237,7 @@ export function parsePromptTemplate(
 		}
 	}
 
-	let match: PromptTemplateMatch | undefined;
+	let match: PromptTemplateClaim | undefined;
 	try {
 		match = parseMatch(meta.match);
 	} catch (error) {

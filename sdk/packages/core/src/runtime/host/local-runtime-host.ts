@@ -1,4 +1,5 @@
 import { readdirSync } from "node:fs";
+import { readFile as readFileFromDisk } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import type * as LlmsProviders from "@cline/llms";
@@ -7,6 +8,7 @@ import {
 	type AgentEvent,
 	type AgentResult,
 	type AgentTool,
+	applyPromptTemplateToTools,
 	type BasicLogger,
 	type ConsecutiveMistakeLimitContext,
 	captureSdkError,
@@ -143,6 +145,8 @@ import type { CoreSessionConfig } from "../../types/config";
 import type { CoreSessionEvent } from "../../types/events";
 import type { ActiveSession, PreparedTurnInput } from "../../types/session";
 import type { SessionRecord } from "../../types/sessions";
+import { ESCALATION_REVISION_WORDING } from "../atomic/base-revision-reads";
+import { withRevisionCapture } from "../atomic/revision-capture";
 import {
 	createAtomicProtocolSession,
 	DEFAULT_MAX_CHANGES,
@@ -153,8 +157,13 @@ import { normalizeRuntimeCapabilities } from "../capabilities";
 import { normalizeConnectionUpdate } from "../config/connection-update";
 import { buildEscalationAssessment } from "../escalation/assessment";
 import { createEscalationSession } from "../escalation/escalation-session";
+import { createExpertGuards } from "../escalation/expert-guards";
+import { createExpertMailbox } from "../escalation/expert-mailbox";
+import { createExpertNotes, withExpertNotes } from "../escalation/expert-notes";
 import { buildExpertPrompt } from "../escalation/expert-prompt";
+import { createExpertRevisions } from "../escalation/expert-revisions";
 import { createForcedEscalation } from "../escalation/forced-escalation";
+import { createStandDown, withStandDown } from "../escalation/stand-down";
 import {
 	createPendingSuggestion,
 	describeEscalationNudge,
@@ -1075,7 +1084,60 @@ export class LocalRuntimeHost implements RuntimeHost {
 		let offerExpertOnLastTransaction: (() => string | undefined) | undefined;
 		/** Where the run is, for an assessment asked for mid-turn. */
 		let struggleIteration = 0;
+		// The escalation's own state, built before the change protocol because
+		// the protocol has to be told about it. `read_files` can only be widened
+		// once, and during a hand-over there are two file histories in play --
+		// the base model's transaction and the expert's writes -- so one
+		// decoration has to answer for both. Only the host knows both exist.
+		const expertRevisions = createExpertRevisions();
+		// The base model keeps its turn while the expert works, alternating with
+		// it. Off is the hand-over this feature started as: the base blocked
+		// inside `escalate` until the delivery, which costs no model swaps on a
+		// machine that holds one at a time.
+		const standDown =
+			configWithProvider.escalation?.alternateWithBase === true
+				? createStandDown()
+				: undefined;
+		// Relayed while the work happens, unless the user asked for silence. A
+		// base that is told nothing still stands down, still reads, still runs
+		// the check -- it simply waits for the delivery rather than following.
+		const expertNotes =
+			standDown && configWithProvider.escalation?.relayNothing !== true
+				? createExpertNotes()
+				: undefined;
+		// The escalation guards, run on the expert instead of on the base. They
+		// only ever produce a note: the base model is the one that decides
+		// whether the expert is going in circles, because it is the one that
+		// can read what the expert actually changed.
+		// Messages from the base model to a still-working expert. Gated on the
+		// notes for the same reason the guards are: "relay nothing" turns off
+		// the supervision, and a channel nobody is watching over is not one.
+		const expertMailbox = expertNotes ? createExpertMailbox() : undefined;
+		const expertGuards = expertNotes
+			? createExpertGuards({
+					onVerdict: (verdict) => expertNotes.noteGuard(verdict.text),
+				})
+			: undefined;
 		const atomicProtocol = await createAtomicProtocolSession({
+			...(standDown
+				? {
+						revisionOverlay: {
+							source: {
+								get pending() {
+									return expertRevisions.source.pending;
+								},
+								get transaction() {
+									return expertRevisions.source.transaction;
+								},
+								get revisions() {
+									return expertRevisions.source.log;
+								},
+							},
+							wording: ESCALATION_REVISION_WORDING,
+							live: () => standDown.engaged,
+						},
+					}
+				: {}),
 			// The workspace before the working directory, unlike the shell: a
 			// rollback that covers less than the model can reach is not a rollback,
 			// and the workspace is the wider of the two wherever they differ.
@@ -1197,7 +1259,19 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// the model that called it would be a hole.
 		let expertTools: AgentTool[] = [];
 		const escalationConnection = configWithProvider.escalation?.connection;
+		// Where the expert's writes are recorded while an escalation runs.
+		//
+		// Built here because the tools are decorated here, and handed to the
+		// escalation session because only it knows when an escalation opens and
+		// when it ends. It is separate from the change protocol's log on
+		// purpose: those revisions belong to the base model's transaction, and
+		// the expert is not in that arrangement.
 		const escalation = createEscalationSession({
+			revisions: expertRevisions,
+			...(standDown ? { standDown } : {}),
+			...(expertNotes ? { notes: expertNotes } : {}),
+			...(expertGuards ? { guards: expertGuards } : {}),
+			...(expertMailbox ? { mailbox: expertMailbox } : {}),
 			workspaceRoot:
 				configWithProvider.workspaceRoot ??
 				configWithProvider.cwd ??
@@ -1243,18 +1317,101 @@ export class LocalRuntimeHost implements RuntimeHost {
 					{ ...base, ...overrides },
 					Object.keys(overrides) as (keyof DelegatedAgentConnectionConfig)[],
 				);
-				return createDelegatedAgent({
-					kind: "subagent",
-					prompt: buildExpertPrompt({
+				// The expert's own family template, where the host resolved one.
+				//
+				// Composed, not substituted, and the order is load-bearing. The
+				// role preamble goes first: it says the caller is a model rather
+				// than a user, and that what is wanted is the edit rather than a
+				// suggested patch in a code block. A model handed a
+				// general-purpose coding prompt first answers as if to a user,
+				// which is the failure `buildExpertPrompt` exists to prevent.
+				// The family text follows, and says how this family works best.
+				const expertTemplate = configWithProvider.escalation?.promptTemplate;
+				const expertPrompt = [
+					buildExpertPrompt({
 						workspaceRoot:
 							configWithProvider.workspaceRoot ?? configWithProvider.cwd,
 					}),
+					expertTemplate?.system?.trim(),
+				]
+					.filter((part): part is string => Boolean(part))
+					.join("\n\n");
+				// And its tool descriptions. The expert holds the built-ins, and
+				// a family template's `# tool:` sections are as much a part of
+				// what it was written for as its system section is -- the
+				// measured failures they address (shelling out to edit, a text
+				// search for a symbol) are the expert's to make too.
+				const expertToolsForRun = expertTemplate
+					? applyPromptTemplateToTools(expertTools, expertTemplate, {}).map(
+							(tool: AgentTool) => ({
+								...tool,
+								description: tool.description ?? "",
+							}),
+						)
+					: expertTools;
+				// Every file the expert writes, captured as it writes it. The
+				// base model is told what happened in batches that describe a
+				// moment already gone, so each note carries the revision its
+				// file can be read at -- which is the only way a claim about a
+				// file the expert has since edited twice more stays checkable.
+				const expertToolsWithRevisions = withRevisionCapture(
+					expertToolsForRun as AgentTool[],
+					{
+						source: expertRevisions.source,
+						readFile: async (absolutePath: string) => {
+							try {
+								return await readFileFromDisk(absolutePath);
+							} catch {
+								// Gone, unreadable, or never there: all three are
+								// "no content at this revision", which is an answer.
+								return undefined;
+							}
+						},
+					},
+				);
+				// Every call the expert makes becomes a note for the base
+				// model. Outside the revision capture, so the revision numbers
+				// it quotes are the ones the call has just written -- a note
+				// that named a revision that did not exist yet would be worse
+				// than no note at all.
+				const expertToolsWatched = expertNotes
+					? withExpertNotes(expertToolsWithRevisions as AgentTool[], {
+							notes: expertNotes,
+							heads: () => expertRevisions.heads(),
+							relative: (absolutePath: string) => {
+								const root =
+									configWithProvider.workspaceRoot ??
+									configWithProvider.cwd ??
+									process.cwd();
+								const prefix = root.endsWith("/") ? root : `${root}/`;
+								return absolutePath.startsWith(prefix)
+									? absolutePath.slice(prefix.length)
+									: absolutePath;
+							},
+						})
+					: expertToolsWithRevisions;
+				return createDelegatedAgent({
+					kind: "subagent",
+					prompt: expertPrompt,
 					configProvider,
-					tools: expertTools,
-					onEvent,
+					tools: expertToolsWatched as AgentTool[],
+					// Everything the guards read is already on this wire: the
+					// reasoning they count distress and hedging over, and the
+					// tool calls they count repetition over.
+					onEvent: expertGuards
+						? (event) => {
+								expertGuards.observe(event);
+								onEvent(event);
+							}
+						: onEvent,
 					toolPolicies: bootstrap.toolPolicies,
 					requestToolApproval: bootstrap.requestToolApproval,
 					hookErrorMode: configWithProvider.hookErrorMode,
+					// Read at the expert's own turn boundary, which is the one
+					// point in its loop with no tool call open.
+					...(expertMailbox
+						? { consumePendingUserMessage: () => expertMailbox.take() }
+						: {}),
 				});
 			},
 			// Held to what the expert's endpoint will serve, which is not
@@ -1493,13 +1650,31 @@ export class LocalRuntimeHost implements RuntimeHost {
 		const toolsWithProtocol = atomicProtocol
 			? atomicProtocol.decorateTools([...tools, ...atomicProtocol.tools])
 			: tools;
-		// The expert gets what the session has, less the tool that reached it.
-		// Set before the session's own list is extended: an expert that could
-		// escalate would escalate to itself.
+		// The expert gets the session's tools WITHOUT the change protocol, and
+		// less the tool that reached it. Set before the session's own list is
+		// extended: an expert that could escalate would escalate to itself.
+		//
+		// Why the protocol is withheld, which is a correction rather than a
+		// design. It used to get `toolsWithProtocol` -- the whole decorated list
+		// -- and that handed it `submit_transaction`, described two hundred
+		// lines above as the only tool here that commits. The transaction is the
+		// BASE model's: its budget, its plan rows, its record of what has been
+		// tried, and its rollback. An expert holding those can close a
+		// transaction the base has not finished, put back work the base meant to
+		// keep, or write plan items into somebody else's plan. None of that is
+		// the expert refusing to follow a rule; it is the expert being given
+		// controls that were never about it.
+		//
+		// It is not a loss of capability either. The protocol's own framing --
+		// "as this transaction opened", a budget of declared changes, a record
+		// to submit -- describes an arrangement the expert is not in. What the
+		// expert needs to check its work is `check_file` and `run_commands`, and
+		// both are built-ins that stay.
+		//
 		// Cast because the session's list is a union of tools with their own
 		// input types and the delegated-agent builder takes the erased one; the
 		// runtime reads them through the same `execute` either way.
-		expertTools = toolsWithProtocol as AgentTool[];
+		expertTools = tools as AgentTool[];
 		// The struggle detector and the offer it earns.
 		//
 		// Built only where an expert is configured: the diagnosis is worth
@@ -1593,6 +1768,14 @@ export class LocalRuntimeHost implements RuntimeHost {
 						struggleSuggestion,
 					)
 				: toolsWithProtocol;
+		// The stand-down goes on last, so it refuses before any other
+		// decoration runs. A write that reaches the check-first gate or the
+		// revision capture has already been allowed, and the whole point is
+		// that while the expert has the pen nothing of the base model's
+		// reaches disk.
+		const toolsWithStandDown = standDown
+			? withStandDown(toolsWithEscalation, standDown)
+			: toolsWithEscalation;
 		const completionPolicyWithProtocol = atomicProtocol
 			? {
 					...completionPolicyWithChecklistCloseOut,
@@ -1706,7 +1889,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 			execution: configWithProvider.execution,
 			prepareTurn,
 			condenseDiscardedReasoning,
-			tools: toolsWithEscalation,
+			tools: toolsWithStandDown,
 			modelTools: runtime.modelTools,
 			hooks: bootstrap.hooks,
 			extensions,

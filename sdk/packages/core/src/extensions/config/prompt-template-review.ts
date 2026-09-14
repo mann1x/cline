@@ -2,6 +2,7 @@ import {
 	DEFAULT_PROMPT_TEMPLATE_NAME,
 	PROMPT_TEMPLATE_DEFAULT_MARKER,
 	type PromptTemplate,
+	promptTemplateMatchBlocks,
 	resolvePromptTemplate,
 } from "@cline/shared";
 import { getBuiltinPromptTemplates } from "./builtin-templates";
@@ -248,25 +249,49 @@ function hasMatchOverride(
 	);
 }
 
-/** The literal block to write, plus the name line when one is stated. */
+/**
+ * The literal block to write, plus the name line when one is stated.
+ *
+ * Two stated dimensions are written as a LADDER, not as one block. A single
+ * block ANDs what it names, so `--match-family 'kimi-k3*' --match-model
+ * '*kimi-k3*'` in one block claims only a model that satisfies both -- which
+ * is not what either flag means, and which drops every model that satisfies
+ * one of them to `default.md` in silence.
+ */
 function renderMatchOverride(override: PromptTemplateMatchOverride): string[] {
 	const lines = ["---"];
 	if (override.name) {
 		lines.push(`name: ${override.name}`);
 	}
-	lines.push("match:");
-	if (override.family && override.family.length > 0) {
-		lines.push(
-			`  family: [${override.family.map((p) => JSON.stringify(p)).join(", ")}]`,
-		);
-	}
+	const rungs: string[] = [];
 	if (override.model && override.model.length > 0) {
-		lines.push(
-			`  model: [${override.model.map((p) => JSON.stringify(p)).join(", ")}]`,
+		rungs.push(
+			`  - model: [${override.model.map((p) => JSON.stringify(p)).join(", ")}]`,
 		);
 	}
-	lines.push("---");
+	if (override.family && override.family.length > 0) {
+		rungs.push(
+			`  - family: [${override.family.map((p) => JSON.stringify(p)).join(", ")}]`,
+		);
+	}
+	lines.push("match:", ...rungs, "---");
 	return lines;
+}
+
+/**
+ * The claimable prefix of a model id.
+ *
+ * The namespace is dropped: `igovet/minimax-m3-opencode` is a build artifact
+ * whose owner says nothing about which model it serves, and a pattern claiming
+ * `igovet*` claims that person's other uploads instead. What is left is
+ * truncated at the first non-alphanumeric character for the same reason the
+ * family stem is -- `glm-5.3:cloud`, `glm-5.4:cloud` and a local `glm5-...`
+ * build are one family and one template, and a pattern carrying the generation
+ * stops claiming the next one silently.
+ */
+function modelNameStem(modelId: string): string {
+	const tail = modelId.trim().split("/").pop() ?? "";
+	return tail.replace(/[^a-zA-Z0-9]+.*$/, "");
 }
 
 function buildNewTemplateInstruction(
@@ -280,7 +305,7 @@ function buildNewTemplateInstruction(
 	const lines = [
 		"No template claims you today, so you are given the base layer above. Write the template that should claim you.",
 		"",
-		"The 'match:' block is what routes a template to a model. It is a mapping, and the only three keys it accepts are 'provider', 'family' and 'model'. Each takes a list of patterns where '*' is the only wildcard. Any other key, or a list where the mapping should be, is an error.",
+		"The 'match:' block is what routes a template to a model. The only three keys it accepts are 'provider', 'family' and 'model', and each takes a list of patterns where '*' is the only wildcard. It may be written as one mapping, where every key it names must match, or as a list of mappings, where any one of them matching is enough. Any other key is an error.",
 	];
 	if (hasMatchOverride(matchOverride)) {
 		// Stated by the operator, and it has to win over anything inferred from
@@ -301,25 +326,40 @@ function buildNewTemplateInstruction(
 			"It is what routes this template to the models it is for. It is not derived from the name of the model answering now.",
 		);
 	} else if (target?.family) {
-		// Family is the right key when the provider reports one: it is stable
-		// across quants, tags and renames of the same model.
-		const stem = target.family.replace(/[^a-zA-Z0-9]+.*$/, "") || target.family;
+		// A ladder, not one key. Family is stable across quants, tags and
+		// renames of one architecture, and it is the only thing that claims a
+		// local build, merge or prune whose name says nothing. But a model
+		// reached through a cloud tag reports NO family at all -- `/api/show`
+		// answers `family: ""` for anything built FROM one -- and the only
+		// thing that claims those is the name. The two sets are disjoint, so
+		// one block cannot cover both: naming both keys in one block ANDs them
+		// and claims neither set.
+		const familyStem =
+			target.family.replace(/[^a-zA-Z0-9]+.*$/, "") || target.family;
+		const modelStem = modelNameStem(target.modelId);
 		lines.push(
 			"",
 			"Write exactly this, and change nothing in it:",
 			"",
 			"match:",
-			`  family: [${stem}*]`,
+			...(modelStem ? [`  - model: ["${modelStem}*"]`] : []),
+			`  - family: [${familyStem}*]`,
 			"",
 			`Your family is '${target.family}', so that pattern claims you and every other build of the same architecture.`,
+			...(modelStem
+				? [
+						`The name rung claims '${modelStem}...' tags, which is how the same model is reached when it is served from the cloud and reports no family of its own. Either rung matching is enough.`,
+					]
+				: []),
 		);
 	} else if (target) {
+		const modelStem = modelNameStem(target.modelId);
 		lines.push(
 			"",
 			"Your provider does not report a model family, so match on the model name. Write exactly this, and change nothing in it:",
 			"",
 			"match:",
-			`  model: ["*${target.modelId.replace(/[:@].*$/, "")}*"]`,
+			`  - model: ["${modelStem || target.modelId.replace(/[:@].*$/, "")}*"]`,
 		);
 	}
 	return lines.join("\n");
@@ -1076,8 +1116,13 @@ export function auditPromptTemplateProposal(
 		if (!want || want.length === 0) {
 			continue;
 		}
-		const got = parsed.template.match?.[key] ?? [];
-		const missing = want.filter((pattern) => !got.includes(pattern));
+		// Across every block of the claim: an any-of list satisfies a stated
+		// pattern wherever it appears, and which rung carries it is not the
+		// operator's statement to make.
+		const got = promptTemplateMatchBlocks(parsed.template.match).flatMap(
+			(block) => block[key] ?? [],
+		);
+		const missing = want.filter((pattern: string) => !got.includes(pattern));
 		if (missing.length > 0) {
 			problems.push(
 				`The 'match:' block must declare ${key}: [${want

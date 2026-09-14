@@ -1471,6 +1471,20 @@ export async function runCli(): Promise<void> {
 					editStreak: positive(args.struggleEditStreak),
 				}).filter(([, value]) => value !== undefined),
 			);
+			// The expert's own template, resolved for the EXPERT's model.
+			//
+			// The same host, the same rules and the same directories as the
+			// session's above -- but a different model. The expert is usually a
+			// larger one from another family, and handing it the session
+			// model's template would be the same defect as handing it none.
+			const expertTemplate = resolveCliPromptTemplate({
+				providerId: config.providerId,
+				modelId: expertModelId,
+				workspaceRoot,
+				baseUrl: config.baseUrl,
+				log: (message) => loggerAdapter.core.log(`[Escalation] ${message}`),
+				warn: (message) => loggerAdapter.core.log(`[Escalation] ${message}`),
+			});
 			config.escalation = {
 				connection: {
 					providerId: config.providerId,
@@ -1485,7 +1499,10 @@ export async function runCli(): Promise<void> {
 						...(expertWindow ? { contextWindow: expertWindow } : {}),
 					},
 				},
+				...(expertTemplate ? { promptTemplate: expertTemplate } : {}),
 				...(args.expertCloseAfter ? { closeAfterEscalation: true } : {}),
+				...(args.expertAlternate ? { alternateWithBase: true } : {}),
+				...(args.expertNoRelay ? { relayNothing: true } : {}),
 				...(maxEscalations ? { maxEscalations } : {}),
 				...(maxFollowUps ? { maxFollowUps } : {}),
 				...(Object.keys(struggleThresholds).length > 0

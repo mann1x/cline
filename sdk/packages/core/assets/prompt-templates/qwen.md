@@ -1,7 +1,8 @@
 ---
 name: qwen
 match:
-  family: [qwen*]
+  - model: ["qwen*"]
+  - family: [qwen*]
 ---
 
 <!-- PROVENANCE -- written by scripts/review-prompt-templates.mts, not by the model.

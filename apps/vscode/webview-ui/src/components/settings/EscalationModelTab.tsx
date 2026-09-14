@@ -67,6 +67,9 @@ function Threshold({
  */
 const EscalationModelTab = () => {
 	const { escalationModeApiConfiguration, escalationSettings } = useExtensionState()
+	// Read once: it decides both the checkbox and whether its sub-option is on
+	// screen at all, and the two must never disagree about it.
+	const alternateWithBase = escalationSettings?.alternateWithBase ?? DEFAULT_ESCALATION_SETTINGS.alternateWithBase
 	return (
 		<div className="flex flex-col gap-4">
 			<ScopedModelTab setting="escalationModeApiConfiguration" storedSnapshot={escalationModeApiConfiguration} />
@@ -214,6 +217,50 @@ const EscalationModelTab = () => {
 					needs before another model can load.
 				</p>
 			</div>
+
+			<div>
+				<VSCodeCheckbox
+					checked={alternateWithBase}
+					className="mb-[5px]"
+					onChange={(event) =>
+						updateSetting("escalationSettings", {
+							alternateWithBase: !!(event.target as HTMLInputElement).checked,
+						})
+					}>
+					Alternate usage with base model
+				</VSCodeCheckbox>
+				<p className="text-xs text-(--vscode-descriptionForeground)">
+					On, your model keeps working while the expert does: it is told what the expert is doing in batches, it can
+					check the expert's changes, and it can message it. That means two models are in use at once, and only you know
+					what that costs you. Against a cloud expert it costs nothing. Against a second local model on a server that
+					holds one at a time, every alternation unloads one and loads the other.
+				</p>
+				<p className="text-xs text-(--vscode-descriptionForeground)">
+					Off, the escalation is a hand-over: your model waits, and sees the expert's delivery and nothing else. One
+					model is in use at any moment, so nothing is ever swapped out.
+				</p>
+			</div>
+
+			{alternateWithBase && (
+				<div className="ml-6">
+					<VSCodeCheckbox
+						checked={escalationSettings?.relayNothing ?? DEFAULT_ESCALATION_SETTINGS.relayNothing}
+						className="mb-[5px]"
+						onChange={(event) =>
+							updateSetting("escalationSettings", {
+								relayNothing: !!(event.target as HTMLInputElement).checked,
+							})
+						}>
+						Do not relay the expert's work
+					</VSCodeCheckbox>
+					<p className="text-xs text-(--vscode-descriptionForeground)">
+						Your model stays live and may read, run the check and think about the problem, but it is told nothing
+						about the expert's work until the delivery arrives: no batches, no guards watching the expert for going in
+						circles, no messages either way. Notes it would only read at the end are not worth the swap it would take
+						to hand them over — by then there are hundreds of them and the work they describe is finished.
+					</p>
+				</div>
+			)}
 		</div>
 	)
 }

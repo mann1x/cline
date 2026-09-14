@@ -54,6 +54,63 @@ beforeEach(() => {
 })
 
 describe("PromptTemplatesSection", () => {
+	// The chat model was the only one this panel ever answered for, which left
+	// the question unanswerable for the two models most likely to be on a
+	// different template: the subagent and the expert.
+	it("says which template every configured model resolves to", async () => {
+		mocks.getPromptTemplates.mockResolvedValue(
+			state({
+				scopes: [
+					{
+						scope: "Act",
+						providerId: "ollama",
+						modelId: "v7-coder",
+						family: "gemma4",
+						templateName: "gemma",
+						overlaid: true,
+						fallback: false,
+					},
+					{
+						scope: "Escalation",
+						providerId: "ollama",
+						modelId: "glm-5.3:cloud",
+						templateName: "glm",
+						overlaid: true,
+						fallback: false,
+					},
+				],
+			}),
+		)
+
+		render(<PromptTemplatesSection />)
+
+		expect(await screen.findByText(/Escalation/)).toBeInTheDocument()
+		expect(await screen.findByText(/glm-5\.3:cloud/)).toBeInTheDocument()
+	})
+
+	// `overlaid: false` is true both of a model the base layer claimed and of
+	// one nothing claimed, so the template name alone cannot tell them apart.
+	it("calls out a model nothing claims", async () => {
+		mocks.getPromptTemplates.mockResolvedValue(
+			state({
+				scopes: [
+					{
+						scope: "Escalation",
+						providerId: "openai",
+						modelId: "gpt-5.5",
+						templateName: "default",
+						overlaid: false,
+						fallback: true,
+					},
+				],
+			}),
+		)
+
+		render(<PromptTemplatesSection />)
+
+		expect(await screen.findByText(/nothing claims this model/)).toBeInTheDocument()
+	})
+
 	it("says which template the current model resolves to", async () => {
 		render(<PromptTemplatesSection />)
 

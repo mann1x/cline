@@ -1728,6 +1728,38 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		)
 	}
 
+	// The expert's own prompt template.
+	//
+	// Resolved here for the same reason the session's is: only the host can
+	// read the template directories and ask `/api/show` what a local tag
+	// actually is. It is resolved for the EXPERT's model, not the session's --
+	// they are usually different models and often different families, and the
+	// expert reading the session model's template would be the same defect as
+	// reading none.
+	//
+	// A failure is not fatal. The expert then runs on its role preamble alone,
+	// which is every build before this one.
+	let escalationTemplate: Awaited<ReturnType<typeof resolveSessionPromptTemplate>>["rendered"]
+	if (escalationConnection) {
+		try {
+			escalationTemplate = (
+				await resolveSessionPromptTemplate({
+					providerId: escalationConnection.providerId,
+					modelId: escalationConnection.modelId,
+					workspaceRoot,
+					baseUrl: escalationConnection.baseUrl,
+				})
+			).rendered
+			Logger.log(
+				`[Escalation] Expert prompt template: ${escalationTemplate?.name ?? "none"}${
+					escalationTemplate?.overlaid ? " over default" : ""
+				}`,
+			)
+		} catch (error) {
+			Logger.warn("[Escalation] Failed to resolve the expert's prompt template:", error)
+		}
+	}
+
 	// How many agents this endpoint will actually serve at once. Asked of the
 	// endpoint the *agents* call, which is not always the session's: an Agents
 	// tab pointed at a second server has that server's slots, not the lead's.
@@ -1935,6 +1967,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 			? {
 					escalation: {
 						connection: escalationConnection,
+						...(escalationTemplate ? { promptTemplate: escalationTemplate } : {}),
 						// The budgets and switches from the Escalation tab. Read
 						// here rather than defaulted in core, so what the panel
 						// shows is what the run uses.
@@ -1943,6 +1976,12 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 							: {}),
 						...(escalationSettings?.closeAfterEscalation !== undefined
 							? { closeAfterEscalation: escalationSettings.closeAfterEscalation }
+							: {}),
+						...(escalationSettings?.alternateWithBase !== undefined
+							? { alternateWithBase: escalationSettings.alternateWithBase }
+							: {}),
+						...(escalationSettings?.relayNothing !== undefined
+							? { relayNothing: escalationSettings.relayNothing }
 							: {}),
 						...(escalationSettings?.maxEscalations ? { maxEscalations: escalationSettings.maxEscalations } : {}),
 						...(escalationSettings?.maxFollowUps ? { maxFollowUps: escalationSettings.maxFollowUps } : {}),

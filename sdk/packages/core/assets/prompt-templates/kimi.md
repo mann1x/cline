@@ -1,7 +1,8 @@
 ---
 name: kimi
 match:
-  family: [kimi*]
+  - model: ["kimi*"]
+  - family: [kimi*]
 ---
 
 <!-- PROVENANCE -- written by scripts/review-prompt-templates.mts, not by the model.

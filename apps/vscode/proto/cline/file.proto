@@ -196,6 +196,25 @@ message PromptTemplates {
   string global_directory = 6;
   optional string workspace_directory = 7;
   repeated PromptTemplateInfo templates = 8;
+  // Every configured model scope, each resolved on its own. The panel used to
+  // answer "which template is in force" for the chat model alone, which left
+  // the question unanswerable for the subagent and the expert -- usually
+  // different models of different families, and the expert most likely of all
+  // to be reached through a cloud tag that reports no family.
+  repeated PromptTemplateScope scopes = 9;
+}
+
+// Which template one configured model scope resolves to.
+message PromptTemplateScope {
+  string scope = 1; // The tab's name, e.g. "Escalation"
+  string provider_id = 2;
+  string model_id = 3;
+  optional string family = 4;
+  optional string template_name = 5;
+  bool overlaid = 6; // Layered over default.md
+  // Nothing claimed this model, so it is running on the base layer. Not
+  // visible from the name: the template is `default` either way.
+  bool fallback = 7;
 }
 
 // Request to open a prompt template for editing

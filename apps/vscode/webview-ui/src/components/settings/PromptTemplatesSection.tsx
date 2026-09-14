@@ -248,7 +248,7 @@ const PromptTemplatesSection = () => {
 					</div>
 				)}
 
-				{state && (
+				{state && !state.scopes?.length && (
 					<div className="text-xs text-description mb-2">
 						{state.modelId || "No model selected"}
 						{state.family ? ` (${state.family})` : ""}
@@ -257,6 +257,31 @@ const PromptTemplatesSection = () => {
 						{state.overlaid ? " over default" : ""}
 					</div>
 				)}
+
+				{/* One row per model the task can actually run. The chat model was
+				    the only one shown until now, which left the question this
+				    panel exists to answer unanswerable for the subagent and for
+				    the expert -- both usually a different model of a different
+				    family, and the expert the one most likely to be reached
+				    through a cloud tag, which reports no family and lands on the
+				    base layer with nothing saying so. That case is called out
+				    rather than left to be inferred from the name. */}
+				{state && state.scopes?.length ? (
+					<div className="mb-2 flex flex-col gap-0.5">
+						{state.scopes.map((scope) => (
+							<div className="text-xs text-description" key={`${scope.scope}:${scope.modelId}`}>
+								<span className="text-foreground">{scope.scope}</span>
+								{"  "}
+								{scope.modelId || "no model"}
+								{scope.family ? ` (${scope.family})` : ""}
+								{scope.providerId ? ` on ${scope.providerId}` : ""} →{" "}
+								<span className="text-foreground">{scope.templateName ?? "built-in prompt"}</span>
+								{scope.overlaid ? " over default" : ""}
+								{scope.fallback && <span className="text-warning"> — nothing claims this model</span>}
+							</div>
+						))}
+					</div>
+				) : null}
 
 				{loading && state === undefined ? (
 					<div className="text-xs text-description">Loading…</div>

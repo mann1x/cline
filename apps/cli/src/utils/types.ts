@@ -187,6 +187,10 @@ export interface ParsedArgs {
 	struggleMinIteration?: string;
 	struggleMaxPerTask?: string;
 	struggleEditStreak?: string;
+	/** Let the base model run while the expert works. From the flag. */
+	expertAlternate?: boolean;
+	/** With `expertAlternate`, wake the base on the clock and nothing else. */
+	expertNoRelay?: boolean;
 	/** Concurrent requests this endpoint serves. A string, from the flag. */
 	parallelSessions?: string;
 	/**

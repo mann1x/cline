@@ -1,7 +1,8 @@
 ---
 name: glm
 match:
-  family: ["glm*"]
+  - model: ["glm*"]
+  - family: ["glm*"]
 ---
 
 <!-- PROVENANCE -- written by scripts/review-prompt-templates.mts, not by the model.

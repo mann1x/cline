@@ -134,6 +134,17 @@ export interface BuildDelegatedAgentConfigOptions {
 	 * belongs to that run and no other.
 	 */
 	hooks?: AgentHooks;
+	/**
+	 * Something to say to this agent at its next turn boundary, if anything.
+	 *
+	 * The runtime asks at the one point in the loop with no tool call open, so
+	 * what is handed back arrives inside the turn rather than as an invitation
+	 * to go and fetch it. The session's own model has had this since steering
+	 * existed; a delegated agent could not be reached at all, which was fine
+	 * while nothing else was running beside one and is not fine now that the
+	 * escalation's base model watches the expert and may need to stop it.
+	 */
+	consumePendingUserMessage?: AgentConfig["consumePendingUserMessage"];
 }
 
 /**
@@ -217,6 +228,7 @@ export function buildDelegatedAgentConfig(
 		requestToolApproval: options.requestToolApproval,
 		logger: runtimeConfig.logger,
 		role: options.role,
+		consumePendingUserMessage: options.consumePendingUserMessage,
 	};
 }
 

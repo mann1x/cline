@@ -458,9 +458,13 @@ describe("buildPromptTemplateReviewPrompt", () => {
 			},
 		);
 
-		// glm5* rather than glm*: it claims the 5.x line without over-claiming
-		// every GLM that ever shipped.
-		expect(prompt).toContain("match:\n  family: [glm5*]");
+		// A ladder, not one key. glm5* rather than glm* on the family rung: it
+		// claims the 5.x line without over-claiming every GLM that ever
+		// shipped. The name rung is what catches the same model served from the
+		// cloud, where `/api/show` reports no family at all.
+		expect(prompt).toContain(
+			'match:\n  - model: ["glm*"]\n  - family: [glm5*]',
+		);
 		expect(prompt).toContain("'glm5.2'");
 	});
 
@@ -475,7 +479,10 @@ describe("buildPromptTemplateReviewPrompt", () => {
 			},
 		);
 
-		expect(prompt).toContain('model: ["*claude-opus-5*"]');
+		// A prefix, not a contains-pattern: `claude*` claims the next Opus and
+		// the next Sonnet, where `*claude-opus-5*` stops claiming anything the
+		// day the version moves.
+		expect(prompt).toContain('match:\n  - model: ["claude*"]');
 	});
 
 	// A model reachable only through a params overlay reports no family, so the
@@ -514,7 +521,7 @@ describe("buildPromptTemplateReviewPrompt", () => {
 			{ name: "kimi-k3", family: ["kimi-k3*"] },
 		);
 
-		expect(prompt).toContain('family: ["kimi-k3*"]');
+		expect(prompt).toContain('- family: ["kimi-k3*"]');
 		expect(prompt).toContain("name: kimi-k3");
 		expect(prompt).toContain("REPLACE its frontmatter");
 	});
@@ -527,7 +534,9 @@ describe("buildPromptTemplateReviewPrompt", () => {
 			{ providerId: "ollama", modelId: "igovet/minimax-m3-opencode:latest" },
 		);
 
-		expect(prompt).toContain('model: ["*igovet/minimax-m3-opencode*"]');
+		// The namespace goes: `igovet` is whoever uploaded the overlay, and a
+		// pattern claiming it claims that account's other uploads instead.
+		expect(prompt).toContain('match:\n  - model: ["minimax*"]');
 	});
 
 	it("says nothing about writing a new one when there is a template to rewrite", () => {
