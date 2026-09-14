@@ -6,6 +6,7 @@ import { type ElectronApplication, expect, type Frame, type Page, test } from "@
 import { downloadAndUnzipVSCode, SilentReporter } from "@vscode/test-electron"
 import { _electron } from "playwright"
 import { ClineApiServerMock } from "../fixtures/server"
+import { asPattern, SIDEBAR_TITLE } from "./manifest"
 
 interface E2ETestDirectories {
 	workspaceDir: string
@@ -299,7 +300,10 @@ export class E2ETestHelper {
 	}
 
 	public static async openClineSidebar(page: Page): Promise<void> {
-		await page.getByRole("tab", { name: /Cline/ }).locator("a").click()
+		await page
+			.getByRole("tab", { name: asPattern(SIDEBAR_TITLE) })
+			.locator("a")
+			.click()
 	}
 
 	public static async runCommandPalette(page: Page, command: string): Promise<void> {

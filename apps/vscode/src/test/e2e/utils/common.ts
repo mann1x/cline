@@ -1,4 +1,5 @@
 import type { Page } from "@playwright/test"
+import { asPattern, commandTitle } from "./manifest"
 
 export const openTab = async (_page: Page, tabName: string) => {
 	await _page
@@ -16,7 +17,7 @@ export const addSelectedCodeToClineWebview = async (_page: Page) => {
 
 	// Target the explicit action instead of pressing Enter on the first item.
 	// The first item can vary by platform or diagnostics.
-	const addToCline = _page.getByText(/Add to Cline/i)
+	const addToCline = _page.getByText(asPattern(commandTitle("cerebriline.addToChat")))
 	await addToCline.waitFor({ state: "visible" })
 	// For whatever reason, we need to move the mouse to make the context menu item clickable
 	await _page.mouse.move(10, 10)
