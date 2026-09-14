@@ -472,6 +472,7 @@ describe("buildOllamaSamplingOptions", () => {
 				seed: 7,
 				numPredict: -1,
 				numKeep: 24,
+				numGpu: 99,
 				stop: ["</done>"],
 				thinkBudget: "8192",
 				thinkBudgetMessage: "answer now",
@@ -489,10 +490,21 @@ describe("buildOllamaSamplingOptions", () => {
 			seed: 7,
 			num_predict: -1,
 			num_keep: 24,
+			num_gpu: 99,
 			stop: ["</done>"],
 			think_budget: "8192",
 			think_budget_message: "answer now",
 		});
+	});
+
+	// Ollama's own layer estimator refuses layers it could fit, and `num_gpu` is
+	// the override. -1 is its "decide for me"; a large number means "all of
+	// them". Both are real settings and must reach the wire -- dropping the
+	// negative would silently restore the behaviour the field exists to defeat.
+	it("sends num_gpu, including the negative that means auto", () => {
+		expect(buildOllamaSamplingOptions({ numGpu: -1 })).toEqual({ num_gpu: -1 });
+		expect(buildOllamaSamplingOptions({ numGpu: 99 })).toEqual({ num_gpu: 99 });
+		expect(buildOllamaSamplingOptions({ numGpu: 0 })).toEqual({ num_gpu: 0 });
 	});
 
 	it("sends nothing for parameters the user did not set", () => {

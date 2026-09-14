@@ -303,4 +303,21 @@ describe("sampling values that cannot mean anything", () => {
 		expect(sampling?.repeatPenalty).toBe(2)
 		expect(sampling?.presencePenalty).toBe(-2)
 	})
+
+	// num_gpu is a layer count, and the point of the field is to override an
+	// estimator that under-offloads. Its range has to admit -1 ("you decide"),
+	// 0 (CPU only) and counts well past the 99 people habitually type, because
+	// large models really do have more layers than that.
+	it("keeps every num_gpu that means something, including past 99", async () => {
+		expect((await load({ numGpu: -1 }))?.numGpu).toBe(-1)
+		expect((await load({ numGpu: 0 }))?.numGpu).toBe(0)
+		expect((await load({ numGpu: 99 }))?.numGpu).toBe(99)
+		expect((await load({ numGpu: 126 }))?.numGpu).toBe(126)
+		expect((await load({ numGpu: 9999 }))?.numGpu).toBe(9999)
+	})
+
+	it("drops a num_gpu that is not a layer count", async () => {
+		expect((await load({ numGpu: -2 }))?.numGpu).toBeUndefined()
+		expect((await load({ numGpu: 990000 }))?.numGpu).toBeUndefined()
+	})
 })

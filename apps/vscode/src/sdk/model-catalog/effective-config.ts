@@ -44,6 +44,7 @@ const SAMPLING_NUMBER_FIELDS = {
 	seed: "any",
 	numPredict: "any",
 	numKeep: "any",
+	numGpu: "any",
 } as const
 
 /**
@@ -70,6 +71,13 @@ const SAMPLING_RANGES: Partial<Record<keyof typeof SAMPLING_NUMBER_FIELDS, { min
 	repeatPenalty: { min: 0, max: 2 },
 	presencePenalty: { min: -2, max: 2 },
 	frequencyPenalty: { min: -2, max: 2 },
+	// -1 is Ollama's "you decide"; 0 is a real answer (keep it all on the CPU).
+	// Above that the number is a layer count, and layer counts are not bounded by
+	// the 99 people habitually type -- large models run well past 100, and one
+	// here needed more than 99 to get fully offloaded. The ceiling is set far
+	// enough above any real model that "all of them" always fits, while a
+	// mistyped 990000 still does not become a setting.
+	numGpu: { min: -1, max: 9999 },
 }
 
 /**
@@ -79,7 +87,7 @@ const SAMPLING_RANGES: Partial<Record<keyof typeof SAMPLING_NUMBER_FIELDS, { min
  * will not mention, leaving the model's own value in force, and a zero is a
  * real value for several of these (`temperature: 0`, `seed: 0`). `repeatLastN`,
  * `numPredict` and `numKeep` accept negatives because Ollama gives -1 a meaning
- * (whole context / unlimited).
+ * (whole context / unlimited), and `numGpu` because -1 is its "decide for me".
  */
 function readSampling(settings: Record<string, unknown>): SamplingConfig | undefined {
 	const sampling = settings.sampling

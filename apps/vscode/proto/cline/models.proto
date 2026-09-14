@@ -314,6 +314,9 @@ message ProviderSamplingPatch {
   // Token count or effort level, as typed.
   optional string think_budget = 14;
   optional string think_budget_message = 15;
+  // Layers to place on the GPU. -1 leaves it to Ollama's own estimator, which
+  // is conservative and has been measured refusing layers that fit.
+  optional int32 num_gpu = 16;
 }
 
 message WriteProviderConfigPatch {

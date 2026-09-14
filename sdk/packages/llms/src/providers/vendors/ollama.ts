@@ -607,6 +607,7 @@ const OLLAMA_SAMPLING_WIRE_NAMES = {
 	seed: "seed",
 	numPredict: "num_predict",
 	numKeep: "num_keep",
+	numGpu: "num_gpu",
 	stop: "stop",
 	thinkBudget: "think_budget",
 	thinkBudgetMessage: "think_budget_message",

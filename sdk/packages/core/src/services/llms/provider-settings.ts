@@ -86,8 +86,9 @@ export type ReasoningSettings = z.infer<typeof ReasoningSettingsSchema>;
  * against that quant — and a client that sent a complete set on every request
  * would silently replace it.
  *
- * `repeatLastN`, `numPredict` and `numKeep` accept negative values because
- * Ollama gives -1 a meaning there (whole context / unlimited), and
+ * `repeatLastN`, `numPredict`, `numKeep` and `numGpu` accept negative values
+ * because Ollama gives -1 a meaning there (whole context / unlimited / decide
+ * for me), and
  * `temperature` and `seed` accept zero because zero is a real setting.
  */
 export const SamplingSettingsSchema = z.object({
@@ -103,6 +104,7 @@ export const SamplingSettingsSchema = z.object({
 	seed: z.number().int().optional(),
 	numPredict: z.number().int().optional(),
 	numKeep: z.number().int().optional(),
+	numGpu: z.number().int().optional(),
 	stop: z.array(z.string()).optional(),
 	thinkBudget: z.string().optional(),
 	thinkBudgetMessage: z.string().optional(),

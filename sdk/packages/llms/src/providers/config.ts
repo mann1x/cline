@@ -284,6 +284,15 @@ export interface ProviderSamplingOptions {
 	seed?: number;
 	numPredict?: number;
 	numKeep?: number;
+	/**
+	 * How many model layers to put on the GPU. Ollama's `num_gpu`.
+	 *
+	 * Its own estimator decides this by default and is conservative: it has been
+	 * measured refusing layers that fit, dropping a model to CPU without saying
+	 * so. -1 leaves the decision to it; a number large enough to cover the model
+	 * (99 is the usual idiom) means "all of them".
+	 */
+	numGpu?: number;
 	stop?: string[];
 	/**
 	 * Bound on how many tokens the model may spend inside a thinking block,

@@ -143,6 +143,14 @@ const OLLAMA_SAMPLING_FIELDS = [
 		hint: "Maximum tokens to generate. -1 is unlimited.",
 	},
 	{ key: "numKeep", label: "num_keep", kind: "integer", hint: "Tokens kept from the prompt when the context is trimmed." },
+	{
+		key: "numGpu",
+		label: "num_gpu",
+		kind: "integer",
+		hint: "Model layers to put on the GPU. -1 lets Ollama's estimator decide, which is conservative and has been measured refusing layers that fit. 0 keeps the model on the CPU. Anything at least the model's layer count puts all of them on the GPU — layer counts vary by model and can exceed 100, so use a number you know covers it.",
+		min: -1,
+		max: 9999,
+	},
 ] as const
 
 type OllamaSamplingFieldKey = (typeof OLLAMA_SAMPLING_FIELDS)[number]["key"]

@@ -112,6 +112,7 @@ export interface ProviderSamplingSettings {
 	readonly seed?: number
 	readonly numPredict?: number
 	readonly numKeep?: number
+	readonly numGpu?: number
 	readonly stop?: readonly string[]
 	readonly thinkBudget?: string
 	readonly thinkBudgetMessage?: string
