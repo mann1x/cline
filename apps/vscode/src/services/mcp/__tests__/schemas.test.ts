@@ -6,13 +6,13 @@ import { McpSettingsSchema, ServerConfigSchema } from "../schemas"
  * Unit tests for MCP settings schema parsing.
  *
  * Covers three formats:
- *  1. "Nested transport" format written by the Cline CLI (`cline mcp add`)
+ *  1. "Nested transport" format written by the Cerebriline CLI (`cline mcp add`)
  *  2. "Flat" legacy format accepted by the VSCode extension before this change
  *  3. Invalid configs that must still be rejected
  */
 describe("McpSettingsSchema", () => {
 	// -------------------------------------------------------------------------
-	// Nested transport format (written by the Cline CLI)
+	// Nested transport format (written by the Cerebriline CLI)
 	// -------------------------------------------------------------------------
 
 	describe("nested transport format (CLI-authored)", () => {

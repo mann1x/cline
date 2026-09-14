@@ -135,7 +135,7 @@ vi.mock("@cline/core", async () => ({
 		providerId === "cline" || providerId === "cline-pass" ? "cline" : undefined,
 }))
 
-// Stateful in-memory provider-settings store. Cline credentials are persisted
+// Stateful in-memory provider-settings store. Cerebriline credentials are persisted
 // to providers.json (via the SDK's ProviderSettingsManager), not to secrets, so
 // the credential round-trip tests exercise this store.
 const mockProviderSettings = new Map<string, Record<string, unknown>>()
@@ -507,7 +507,7 @@ describe("AuthService", () => {
 			testAccess(authService)._clineAuthInfo = authInfo
 			testAccess(authService)._authenticated = true
 
-			// Seed persisted Cline credentials in providers.json.
+			// Seed persisted Cerebriline credentials in providers.json.
 			mockProviderSettings.set("cline", {
 				provider: "cline",
 				auth: { accessToken: "workos:test-access-token", refreshToken: "test-refresh-token", accountId: "user-123" },
@@ -526,7 +526,7 @@ describe("AuthService", () => {
 	})
 
 	describe("token persistence (providers.json)", () => {
-		// Cline OAuth credentials are persisted to providers.json via the SDK's
+		// Cerebriline OAuth credentials are persisted to providers.json via the SDK's
 		// ProviderSettingsManager, not to VSCode secrets. These tests exercise
 		// the round-trip through the public restore/logout surface.
 

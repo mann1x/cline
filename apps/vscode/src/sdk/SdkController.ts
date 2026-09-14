@@ -2,7 +2,7 @@
 //
 // The SDK-backed Controller. It provides the same interface as the classic
 // Controller but delegates session lifecycle (initTask, askResponse,
-// cancelTask, …) to the Cline SDK (@cline/core) and bridges SDK events to
+// cancelTask, …) to the Cerebriline SDK (@cline/core) and bridges SDK events to
 // the webview's gRPC streams.
 
 import * as fs from "node:fs/promises"
@@ -1544,7 +1544,7 @@ export class Controller {
 			throw new Error("There is no active task to delegate from. Start one first.")
 		}
 		if (!activeSession.sdkHost.startBackgroundDelegation) {
-			throw new Error("This runtime cannot run a delegation in the background. Please update Cline and try again.")
+			throw new Error("This runtime cannot run a delegation in the background. Please update Cerebriline and try again.")
 		}
 		return activeSession.sdkHost.startBackgroundDelegation({
 			sessionId: activeSession.sessionId,
@@ -1588,7 +1588,7 @@ export class Controller {
 			throw new Error("There is no active task to delegate from. Start one first.")
 		}
 		if (!activeSession.sdkHost.delegateToConfiguredAgent) {
-			throw new Error("This runtime cannot delegate to an agent. Please update Cline and try again.")
+			throw new Error("This runtime cannot delegate to an agent. Please update Cerebriline and try again.")
 		}
 		if (activeSession.isRunning) {
 			throw new Error("Cannot delegate while a response is in progress. Wait for the current turn to finish.")

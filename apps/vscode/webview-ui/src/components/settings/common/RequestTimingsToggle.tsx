@@ -9,7 +9,7 @@ import { updateSetting } from "../utils/settingsHandlers"
  * One setting, offered from the panels of the providers it says the most
  * about, rather than one setting per provider. A per-provider flag would give
  * a chat where some requests carry the panel and others do not, which reads as
- * a bug in the panel rather than as a choice — and the measurements Cline
+ * a bug in the panel rather than as a choice — and the measurements Cerebriline
  * makes itself are the same for every provider anyway.
  *
  * Off by default. What is recorded does not depend on it: the numbers are

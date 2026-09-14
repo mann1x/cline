@@ -211,7 +211,7 @@ function toErrorMessage(error: unknown): string {
 
 function createOAuthClientMetadata(redirectUrl: string): OAuthClientMetadata {
 	return {
-		client_name: "Cline",
+		client_name: "Cerebriline",
 		redirect_uris: [redirectUrl],
 		grant_types: ["authorization_code", "refresh_token"],
 		response_types: ["code"],

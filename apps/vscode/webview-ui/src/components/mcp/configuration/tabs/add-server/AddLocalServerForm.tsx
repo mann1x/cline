@@ -80,7 +80,7 @@ export function parseEnvLines(input: string): Record<string, string> {
 }
 
 /**
- * Add a server Cline launches itself and talks to over stdio.
+ * Add a server Cerebriline launches itself and talks to over stdio.
  *
  * The settings file has always taken these; the only way to add one was to open
  * the JSON and write it by hand. The fields are the same ones that file holds,
@@ -140,8 +140,8 @@ const AddLocalServerForm = ({ onCancel, onServerAdded }: AddLocalServerFormProps
 	return (
 		<div className="p-4 px-5">
 			<div className="text-(--vscode-foreground) mb-2">
-				Add an MCP server that Cline runs on this machine. Give it the command that starts the server and any arguments it
-				takes — for example <code>npx</code> with <code>-y @azure/mcp@latest</code>, or <code>dnx</code> with{" "}
+				Add an MCP server that Cerebriline runs on this machine. Give it the command that starts the server and any
+				arguments it takes — for example <code>npx</code> with <code>-y @azure/mcp@latest</code>, or <code>dnx</code> with{" "}
 				<code>NuGet.Mcp.Server</code>.
 			</div>
 

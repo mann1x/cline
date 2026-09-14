@@ -19,7 +19,7 @@ e2e.describe("Code Actions and Editor Panel", () => {
 			await page.getByRole("treeitem", { name: "index.html" }).locator("a").click()
 			await expect(sidebarInput).not.toBeFocused()
 
-			// Sidebar should be opened and visible after adding code to Cline
+			// Sidebar should be opened and visible after adding code to Cerebriline
 			await addSelectedCodeToClineWebview(page)
 			await expect(sidebarInput).not.toBeEmpty()
 			await expect(sidebarInput).toBeFocused()

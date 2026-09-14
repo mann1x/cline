@@ -104,7 +104,7 @@ function readSessionStartedAtMs(metadata: AuthMetadata | undefined): number | un
 // ---------------------------------------------------------------------------
 
 /**
- * Read Cline OAuth credentials from providers.json.
+ * Read Cerebriline OAuth credentials from providers.json.
  * Returns { accessToken, refreshToken, expiresAt, accountId } or null.
  */
 function readClineCredentials(): {
@@ -146,7 +146,7 @@ function readClineCredentials(): {
 }
 
 /**
- * Write Cline OAuth credentials to providers.json.
+ * Write Cerebriline OAuth credentials to providers.json.
  */
 function writeClineCredentials(credentials: {
 	accessToken: string
@@ -211,7 +211,7 @@ function writeClineCredentials(credentials: {
 }
 
 /**
- * Clear Cline OAuth credentials from providers.json.
+ * Clear Cerebriline OAuth credentials from providers.json.
  */
 function clearClineCredentials(): void {
 	try {
@@ -395,7 +395,7 @@ export class AuthService {
 	}
 
 	/**
-	 * Refresh the access token using the SDK's shared Cline credential validator.
+	 * Refresh the access token using the SDK's shared Cerebriline credential validator.
 	 * Persists refreshed credentials to providers.json when credentials change.
 	 */
 	private async refreshAccessToken(): Promise<boolean> {
@@ -546,7 +546,7 @@ export class AuthService {
 	}
 
 	/**
-	 * Initiate Cline OAuth login.
+	 * Initiate Cerebriline OAuth login.
 	 * Uses SDK's loginClineOAuth() which spawns a local callback server.
 	 * Persists credentials to providers.json.
 	 */
@@ -623,7 +623,7 @@ export class AuthService {
 				})
 			} catch (error) {
 				rejectAuthMessage(error)
-				Logger.error("[SdkAuthService] Cline OAuth login failed:", error)
+				Logger.error("[SdkAuthService] Cerebriline OAuth login failed:", error)
 			}
 		})()
 

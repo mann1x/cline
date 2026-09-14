@@ -4,7 +4,7 @@ import { promisify } from "util"
 const execAsync = promisify(exec)
 
 /**
- * Check if the Cline CLI tool is installed on the system
+ * Check if the Cerebriline CLI tool is installed on the system
  * @returns true if CLI is installed, false otherwise
  */
 export async function isClineCliInstalled(): Promise<boolean> {
@@ -17,7 +17,7 @@ export async function isClineCliInstalled(): Promise<boolean> {
 
 		// If we get here, the CLI is installed
 		// We could also validate the version if needed
-		return stdout.includes("Cline CLI Version") || stdout.includes("Cline Core Version")
+		return stdout.includes("Cerebriline CLI Version") || stdout.includes("Cerebriline Core Version")
 	} catch (error) {
 		// Command failed, which likely means CLI is not installed
 		// or not in PATH

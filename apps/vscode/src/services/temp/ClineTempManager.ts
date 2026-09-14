@@ -1,5 +1,5 @@
 /**
- * ClineTempManager - Manages temporary files for Cline with automatic cleanup.
+ * ClineTempManager - Manages temporary files for Cerebriline with automatic cleanup.
  *
  * Simple approach:
  * - Uses a "cline" subdirectory inside the system temp dir (falls back to system temp if creation fails)
@@ -25,7 +25,7 @@ interface TempFileInfo {
 }
 
 /**
- * Singleton manager for Cline's temporary files.
+ * Singleton manager for Cerebriline's temporary files.
  */
 class ClineTempManagerImpl {
 	private readonly tempDir: string
@@ -76,11 +76,11 @@ class ClineTempManagerImpl {
 	}
 
 	/**
-	 * Clean up old Cline temp files based on age and total size constraints.
+	 * Clean up old Cerebriline temp files based on age and total size constraints.
 	 * Called on extension activation.
 	 *
 	 * Strategy:
-	 * 1. Scan the Cline temp directory
+	 * 1. Scan the Cerebriline temp directory
 	 * 2. Delete all files older than 50 hours
 	 * 3. If still over 2GB total, delete oldest files until under limit
 	 */
@@ -154,10 +154,12 @@ class ClineTempManagerImpl {
 			}
 
 			if (deletedCount > 0) {
-				Logger.info(`Cline temp cleanup: deleted ${deletedCount} files, freed ${Math.round(freedBytes / 1024 / 1024)}MB`)
+				Logger.info(
+					`Cerebriline temp cleanup: deleted ${deletedCount} files, freed ${Math.round(freedBytes / 1024 / 1024)}MB`,
+				)
 			}
 		} catch (error) {
-			Logger.error("Error during Cline temp cleanup", error)
+			Logger.error("Error during Cerebriline temp cleanup", error)
 		}
 
 		return { deletedCount, freedBytes }

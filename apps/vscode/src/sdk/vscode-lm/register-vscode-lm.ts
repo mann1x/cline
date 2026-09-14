@@ -1,4 +1,4 @@
-// Registers the VS Code Language Model handler with the Cline SDK.
+// Registers the VS Code Language Model handler with the Cerebriline SDK.
 //
 // The SDK's `@cline/llms` factory registry (registerHandler) exists for
 // providers that need host-only dependencies — here, the `vscode` module /

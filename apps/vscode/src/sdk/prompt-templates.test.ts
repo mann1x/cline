@@ -51,7 +51,7 @@ afterEach(() => {
 })
 
 describe("resolveGlobalTemplateDirectory", () => {
-	it("sits under the Cline data directory", () => {
+	it("sits under the Cerebriline data directory", () => {
 		mocks.dataDir = "/home/me/.cline/data"
 		expect(resolveGlobalTemplateDirectory()).toBe("/home/me/.cline/data/templates")
 	})
@@ -87,7 +87,7 @@ describe("resolveSessionPromptTemplate", () => {
 	it("falls back to default.md for a tool the matched template never mentions", async () => {
 		// The shipped templates all cover every tool, so the fallback has to be
 		// provoked with one that does not — which is the situation it exists
-		// for: Cline gains a tool and a template has not been regenerated yet.
+		// for: Cerebriline gains a tool and a template has not been regenerated yet.
 		writeTemplate(
 			join(mocks.dataDir, "templates"),
 			"partial.md",
@@ -107,6 +107,10 @@ describe("resolveSessionPromptTemplate", () => {
 		expect(result.rendered?.tools.apply_patch).toContain("*** Begin Patch")
 		expect(result.rendered?.tools.ask_question).toBeDefined()
 		// And so does the system prompt it never wrote.
+		// Still "Cline": the prompt templates keep the agent's own name for now.
+		// What the model is told it is called is a behavioural variable, not a
+		// label -- it is measured by the harness arms -- so the rename stops at
+		// the edge of the templates until those runs are done.
 		expect(result.rendered?.system).toContain("You are Cline")
 	})
 

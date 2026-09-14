@@ -57,9 +57,11 @@ export class RootErrorBoundary extends React.Component<RootErrorBoundaryProps, R
 					height: "100vh",
 					overflow: "auto",
 				}}>
-				<h3 style={{ margin: "0 0 8px 0", color: "var(--vscode-errorForeground)" }}>Cline could not draw this view</h3>
+				<h3 style={{ margin: "0 0 8px 0", color: "var(--vscode-errorForeground)" }}>
+					Cerebriline could not draw this view
+				</h3>
 				<p style={{ margin: "0 0 12px 0" }}>
-					The failure below has been written to the Cline output channel, so a report collected now will carry it.
+					The failure below has been written to the Cerebriline output channel, so a report collected now will carry it.
 					Reloading usually brings the panel back.
 				</p>
 				<button

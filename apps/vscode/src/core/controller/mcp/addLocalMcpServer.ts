@@ -5,12 +5,12 @@ import { Logger } from "@/shared/services/Logger"
 import type { Controller } from "../index"
 
 /**
- * Adds a locally-launched MCP server — one Cline starts itself and talks to
+ * Adds a locally-launched MCP server — one Cerebriline starts itself and talks to
  * over stdio.
  *
  * The settings file has always accepted these; there was simply no way to add
  * one except by opening the JSON and writing it by hand, which is what this
- * replaces. The counterpart for servers Cline connects to over the network is
+ * replaces. The counterpart for servers Cerebriline connects to over the network is
  * `addRemoteMcpServer`.
  */
 export async function addLocalMcpServer(controller: Controller, request: AddLocalMcpServerRequest): Promise<McpServers> {

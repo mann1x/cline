@@ -110,9 +110,10 @@ const ImageGenModelTab = () => {
 				<span className="font-medium">Endpoint</span>
 			</DebouncedTextField>
 			<p className="text-xs -mt-2 text-(--vscode-descriptionForeground)">
-				Any server that speaks the OpenAI images API. Cline calls <code>POST &lt;endpoint&gt;/images/generations</code>{" "}
-				and adds the <code>/v1</code> if you leave it off. A local LocalAI, ComfyUI or Automatic1111 shim, or a hosted one
-				— <VSCodeLink href="https://gen.pollinations.ai/docs">pollinations.ai</VSCodeLink>, OpenAI itself.
+				Any server that speaks the OpenAI images API. Cerebriline calls{" "}
+				<code>POST &lt;endpoint&gt;/images/generations</code> and adds the <code>/v1</code> if you leave it off. A local
+				LocalAI, ComfyUI or Automatic1111 shim, or a hosted one —{" "}
+				<VSCodeLink href="https://gen.pollinations.ai/docs">pollinations.ai</VSCodeLink>, OpenAI itself.
 			</p>
 
 			<DebouncedTextField

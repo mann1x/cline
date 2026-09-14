@@ -1,6 +1,6 @@
 // Replaces classic src/core/storage/disk.ts reads (see origin/main)
 //
-// Reads on-disk state written in the pre-SDK storage format from the Cline
+// Reads on-disk state written in the pre-SDK storage format from the Cerebriline
 // data directory, so the SDK adapter can surface tasks and settings created
 // before the SDK migration.
 //
@@ -20,7 +20,7 @@ import { resolveDataDirFromEnv } from "@shared/storage/storage-context"
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve the Cline data directory.
+ * Resolve the Cerebriline data directory.
  * Priority: CLINE_DATA_DIR env > CLINE_DIR env + "/data" > ~/.cline/data
  */
 export function resolveDataDir(override?: string): string {

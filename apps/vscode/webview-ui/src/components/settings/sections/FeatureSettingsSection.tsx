@@ -76,7 +76,7 @@ const editorFeatures: FeatureToggle[] = [
 	{
 		id: "show-feature-tips",
 		label: "Feature Tips",
-		description: "Show rotating tips during the thinking phase to help you discover Cline features.",
+		description: "Show rotating tips during the thinking phase to help you discover Cerebriline features.",
 		stateKey: "showFeatureTips",
 		settingKey: "showFeatureTips",
 	},
@@ -97,7 +97,7 @@ const editorFeatures: FeatureToggle[] = [
 	{
 		id: "worktrees",
 		label: "Worktrees",
-		description: "Enables git worktree management for running parallel Cline tasks.",
+		description: "Enables git worktree management for running parallel Cerebriline tasks.",
 		stateKey: "worktreesEnabled",
 		settingKey: "worktreesEnabled",
 	},
@@ -364,9 +364,9 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 										    approving the same check over and over. */}
 												<p className="text-xs text-muted-foreground">
 													For a page or a script with nothing to run it, write{" "}
-													<code>cline:page index.html</code>: Cline loads the file itself, runs it, and
-													fails if it does not parse, throws, or never draws a frame. No browser and no
-													shell.
+													<code>cline:page index.html</code>: Cerebriline loads the file itself, runs
+													it, and fails if it does not parse, throws, or never draws a frame. No browser
+													and no shell.
 												</p>
 												<DebouncedTextArea
 													initialValue={atomicProtocolSettings?.oracleCommand ?? ""}

@@ -43,6 +43,7 @@ export {
 	resolveGlobalCronSpecsDir,
 	resolveGlobalSettingsPath,
 	resolveGlobalTaskSpecsDir,
+	resolveHomeDir,
 	resolveHooksConfigSearchPaths,
 	resolveMcpSettingsPath,
 	resolvePluginConfigSearchPaths,

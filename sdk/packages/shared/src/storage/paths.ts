@@ -114,6 +114,17 @@ export function setHomeDir(dir: string) {
 	HOME_DIR_SET_EXPLICITLY = true;
 }
 
+/**
+ * The home directory these resolvers are working from.
+ *
+ * Not always `os.homedir()`: hosts and tests move it with {@link setHomeDir}.
+ * Anything rendering a resolved path back as `~/...` must tildify against this
+ * one, or it will print an absolute path whenever the two differ.
+ */
+export function resolveHomeDir(): string {
+	return HOME_DIR;
+}
+
 export function setHomeDirIfUnset(dir: string) {
 	if (HOME_DIR_SET_EXPLICITLY) {
 		return;
@@ -161,8 +172,10 @@ export function setClineDirIfUnset(dir: string): void {
  * the new name for a fresh install. Once the script has run, only the new name
  * exists and the fallback never fires again.
  *
- * Resolved once. These are process-lifetime constants and the fallback costs a
- * stat; callers reach for them far too often to pay it repeatedly.
+ * Resolved once per home directory: the fallback costs a stat and callers reach
+ * for these far too often to pay it every time. Keyed on the home it was
+ * computed for rather than cached flat, because `setHomeDir` moves HOME_DIR at
+ * runtime and a flat cache would answer for the previous one.
  */
 function pickExisting(currentPath: string, legacyPath: string): string {
 	if (existsSync(currentPath)) {
@@ -171,8 +184,9 @@ function pickExisting(currentPath: string, legacyPath: string): string {
 	return existsSync(legacyPath) ? legacyPath : currentPath;
 }
 
-let RESOLVED_HOME_DATA_DIR: string | undefined;
-let RESOLVED_DOCUMENTS_DIR: string | undefined;
+type HomeScopedPath = { home: string; path: string };
+let RESOLVED_HOME_DATA_DIR: HomeScopedPath | undefined;
+let RESOLVED_DOCUMENTS_DIR: HomeScopedPath | undefined;
 
 export function resolveClineDir(): string {
 	if (CLINE_DIR) {
@@ -186,24 +200,30 @@ export function resolveClineDir(): string {
 	if (envDir) {
 		return envDir;
 	}
-	if (!RESOLVED_HOME_DATA_DIR) {
-		RESOLVED_HOME_DATA_DIR = pickExisting(
-			join(HOME_DIR, ".cerebriline"),
-			join(HOME_DIR, ".cline"),
-		);
+	if (RESOLVED_HOME_DATA_DIR?.home !== HOME_DIR) {
+		RESOLVED_HOME_DATA_DIR = {
+			home: HOME_DIR,
+			path: pickExisting(
+				join(HOME_DIR, ".cerebriline"),
+				join(HOME_DIR, ".cline"),
+			),
+		};
 	}
-	return RESOLVED_HOME_DATA_DIR;
+	return RESOLVED_HOME_DATA_DIR.path;
 }
 
 export function resolveDocumentsClineDirectoryPath(): string {
-	if (!RESOLVED_DOCUMENTS_DIR) {
+	if (RESOLVED_DOCUMENTS_DIR?.home !== HOME_DIR) {
 		const documents = join(HOME_DIR, "Documents");
-		RESOLVED_DOCUMENTS_DIR = pickExisting(
-			join(documents, "Cerebriline"),
-			join(documents, "Cline"),
-		);
+		RESOLVED_DOCUMENTS_DIR = {
+			home: HOME_DIR,
+			path: pickExisting(
+				join(documents, "Cerebriline"),
+				join(documents, "Cline"),
+			),
+		};
 	}
-	return RESOLVED_DOCUMENTS_DIR;
+	return RESOLVED_DOCUMENTS_DIR.path;
 }
 
 type DocumentsExtensionName =

@@ -98,7 +98,7 @@ export function prefillRate(timings: RequestTimings | undefined): number | undef
  * decode steps rather than tokens -- the first token comes free with the
  * prompt batch -- and with speculative decoding those two are different
  * numbers. Only when no engine reported does this fall back to the output
- * tokens the provider billed over the time Cline measured after the first
+ * tokens the provider billed over the time Cerebriline measured after the first
  * token arrived, which is a real measurement of two reported quantities
  * rather than a guess, and is marked as derived wherever it is shown.
  */
@@ -171,7 +171,7 @@ export function engineName(timings: RequestTimings | undefined): string | undefi
 /**
  * Every row worth showing, in the order they answer questions.
  *
- * Cline's own measurements come first because they are the only ones present
+ * Cerebriline's own measurements come first because they are the only ones present
  * for every provider, and the engine's follow as the explanation. A row is
  * omitted rather than zeroed when its field is missing — see the module note.
  */
@@ -186,22 +186,22 @@ export function timingRows(timings: RequestTimings | undefined, outputTokens?: n
 		}
 	}
 
-	push("Total", formatDuration(timings.requestMs), "measured by Cline")
+	push("Total", formatDuration(timings.requestMs), "measured by Cerebriline")
 	push("First token", formatDuration(timings.firstTokenMs))
 
 	// A provider that reports nothing still has a generation rate worth
-	// showing, from tokens it did report over time Cline did measure. Said to
+	// showing, from tokens it did report over time Cerebriline did measure. Said to
 	// be derived, because it is not the engine's own count of decode steps.
 	if (!timings.engine) {
 		const generation = generationRate(timings, outputTokens)
 		if (generation) {
-			push("Generation rate", formatRate(generation.perSecond), "derived from output tokens and Cline's timing")
+			push("Generation rate", formatRate(generation.perSecond), "derived from output tokens and Cerebriline's timing")
 		}
 	}
 
 	const name = engineName(timings)
 	if (name) {
-		// The engine's own total sits next to Cline's on purpose: the gap
+		// The engine's own total sits next to Cerebriline's on purpose: the gap
 		// between them is time the request spent queued, which is invisible in
 		// either number alone.
 		push("Engine total", formatDuration(timings.engineTotalMs), `reported by ${name}`)

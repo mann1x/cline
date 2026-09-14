@@ -77,7 +77,7 @@ export type ClineContent = ClineUserContent | ClineAssistantContent
 /**
  * An extension of Anthropic.MessageParam that includes Cline-specific fields.
  * This ensures backward compatibility where the messages were stored in Anthropic format,
- * while allowing for additional metadata specific to Cline to avoid unknown fields in Anthropic SDK
+ * while allowing for additional metadata specific to Cerebriline to avoid unknown fields in Anthropic SDK
  * added by ignoring the type checking for those fields.
  */
 export interface ClineStorageMessage extends Anthropic.MessageParam {
@@ -132,9 +132,9 @@ export function convertClineStorageToAnthropicMessage(
 }
 
 /**
- * Cline stores images as base64, so an image block's source is always a base64 source.
+ * Cerebriline stores images as base64, so an image block's source is always a base64 source.
  * The Anthropic SDK types the source as a Base64ImageSource | URLImageSource union, so this
- * narrows to the base64 variant for the transform layer. URL sources are not produced by Cline,
+ * narrows to the base64 variant for the transform layer. URL sources are not produced by Cerebriline,
  * so they degrade to empty values rather than throwing.
  */
 export function getBase64ImageSource(source: Anthropic.ImageBlockParam["source"]): { mediaType: string; data: string } {

@@ -7,7 +7,7 @@ import { ExtensionRegistryInfo } from "@/registry"
 
 const packagePath = path.join(__dirname, "..", "..", "package.json")
 
-describe("Cline Extension", () => {
+describe("Cerebriline Extension", () => {
 	after(() => {
 		vscode.window.showInformationMessage("All tests done!")
 	})

@@ -50,7 +50,7 @@ describe("watchMcpOAuthFetch", () => {
 
 		await watched.fetch("https://example.test/register", {
 			method: "POST",
-			body: JSON.stringify({ client_name: "Cline", redirect_uris: ["http://127.0.0.1:1456/cb"] }),
+			body: JSON.stringify({ client_name: "Cerebriline", redirect_uris: ["http://127.0.0.1:1456/cb"] }),
 		})
 
 		expect(watched.lastFailure()?.registration).toBe(true)
@@ -82,7 +82,7 @@ describe("describeMcpOAuthFailure", () => {
 			registration: true,
 		})
 
-		expect(message).toContain("refused to register Cline")
+		expect(message).toContain("refused to register Cerebriline")
 		expect(message).toContain("no credentials were sent")
 		// The button, not the settings file: for the server this was reported
 		// on, a client the user registers themselves is the only way in, and

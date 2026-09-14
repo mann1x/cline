@@ -615,7 +615,7 @@ describe("translateSessionEvent — tools with nothing but arguments", () => {
 		return JSON.parse(result.messages[0].text ?? "{}")
 	}
 
-	// The row was a bare "Cline used `plan`:" header over nothing: the tool
+	// The row was a bare "Cerebriline used `plan`:" header over nothing: the tool
 	// names no file and runs no command, so the generic lookup found neither a
 	// path nor content and rendered an empty body.
 	it("shows the plan a plan call states", () => {
@@ -3941,7 +3941,7 @@ describe("sdkToolToClineSayTool — editor diff rendering (S6-48)", () => {
 	it("labels a line-range replace as an edit, not a new file", () => {
 		// You cannot replace line 92 of a file that does not exist. The predicate
 		// knew about old_text and insert_line but not start_line, so a session
-		// that leaned on line-range edits showed "Cline wants to create a new
+		// that leaned on line-range edits showed "Cerebriline wants to create a new
 		// file" on nearly every card.
 		const state = new MessageTranslatorState()
 		const event: CoreSessionEvent = {

@@ -1,6 +1,16 @@
 import fs from "fs/promises"
 import path from "path"
 import { ensureHooksDirectoryExists, getDocumentsPath } from "@/core/storage/disk"
+import { documentsExtensionDir, getHomeDocumentsExtensionPath } from "@/core/storage/documents-path"
+
+/**
+ * The Documents folder name baked into the generated hook scripts.
+ *
+ * They are emitted as source and run in their own process, so they cannot ask
+ * `documentsExtensionDir` where to look. Resolving it here means a machine that
+ * has not run the migration yet gets scripts pointing at the folder it has.
+ */
+const DOCUMENTS_FOLDER = path.basename(getHomeDocumentsExtensionPath())
 
 type LgHookScript = {
 	fileName: string
@@ -10,7 +20,7 @@ type LgHookScript = {
 
 export async function writeLgWebhookConfig(webhookUrl: string, webhookToken: string): Promise<void> {
 	const documentsPath = await getDocumentsPath()
-	const clineDir = path.join(documentsPath, "Cline")
+	const clineDir = documentsExtensionDir(documentsPath)
 	const configPath = path.join(clineDir, "webhook_config.json")
 
 	await fs.mkdir(clineDir, { recursive: true })
@@ -74,7 +84,7 @@ try {
         $documentsPath = Join-Path $HOME "Documents"
     }
 
-    $configPath = Join-Path (Join-Path $documentsPath "Cline") "webhook_config.json"
+    $configPath = Join-Path (Join-Path $documentsPath "${DOCUMENTS_FOLDER}") "webhook_config.json"
     if (-not (Test-Path $configPath)) {
         @{ cancel = $false } | ConvertTo-Json -Compress
         exit 0
@@ -134,7 +144,7 @@ try {
         $documentsPath = Join-Path $HOME "Documents"
     }
 
-    $configPath = Join-Path (Join-Path $documentsPath "Cline") "webhook_config.json"
+    $configPath = Join-Path (Join-Path $documentsPath "${DOCUMENTS_FOLDER}") "webhook_config.json"
     if (-not (Test-Path $configPath)) {
         @{ cancel = $false } | ConvertTo-Json -Compress
         exit 0
@@ -190,7 +200,7 @@ try {
         $documentsPath = Join-Path $HOME "Documents"
     }
 
-    $configPath = Join-Path (Join-Path $documentsPath "Cline") "webhook_config.json"
+    $configPath = Join-Path (Join-Path $documentsPath "${DOCUMENTS_FOLDER}") "webhook_config.json"
     if (-not (Test-Path $configPath)) {
         @{ cancel = $false } | ConvertTo-Json -Compress
         exit 0
@@ -233,7 +243,7 @@ const os = require("os")
 const path = require("path")
 
 async function readConfig() {
-  const configPath = path.join(os.homedir(), "Documents", "Cline", "webhook_config.json")
+  const configPath = path.join(os.homedir(), "Documents", "${DOCUMENTS_FOLDER}", "webhook_config.json")
   try {
     const rawConfig = await fs.readFile(configPath, "utf-8")
     const config = JSON.parse(rawConfig)

@@ -44,7 +44,7 @@ export interface ProviderMigrationResult {
  * Migration is idempotent — calling it multiple times is safe because the SDK
  * never overwrites existing provider entries.
  *
- * @param dataDir Override for the Cline data directory. Defaults to
+ * @param dataDir Override for the Cerebriline data directory. Defaults to
  *   resolveDataDir() which checks CLINE_DATA_DIR, CLINE_DIR, then ~/.cline/data.
  * @returns Migration result indicating what happened
  */

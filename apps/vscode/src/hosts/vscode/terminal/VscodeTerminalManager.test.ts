@@ -218,7 +218,7 @@ describe("VscodeTerminalManager", () => {
 			// a next one. It used to wait, and the queue's only drain was the
 			// top of the next acquisition -- so a session whose last command
 			// abandoned a terminal left it open until VS Code closed. It holds
-			// nothing to read: all it ever received was Cline's own `cd`.
+			// nothing to read: all it ever received was Cerebriline's own `cd`.
 			assert.equal(disposeStub.calledOnce, true)
 
 			// And it is not disposed twice by the drain at the next acquisition.
@@ -230,7 +230,7 @@ describe("VscodeTerminalManager", () => {
 		}
 	})
 
-	// The other half of the same rule: a command Cline stopped being able to
+	// The other half of the same rule: a command Cerebriline stopped being able to
 	// observe may have produced output the user wants, so that terminal still
 	// waits for the next acquisition rather than closing under them.
 	it("leaves an unobserved command's terminal open when an acquisition ends", async () => {
@@ -621,7 +621,7 @@ describe("TerminalRegistry orphan reclamation", () => {
 	// Asserted on the terminal itself rather than on the returned count: the
 	// window is shared with every other test in this file, and disposal is not
 	// synchronous, so a count is a statement about all of them.
-	it("closes a Cline terminal left by a previous extension host", () => {
+	it("closes a Cerebriline terminal left by a previous extension host", () => {
 		const orphan = vscode.window.createTerminal({
 			name: CLINE_TERMINAL_NAME,
 			env: { CLINE_ACTIVE: "true", CLINE_HOST_SESSION: "a-host-that-is-gone" },
@@ -648,9 +648,9 @@ describe("TerminalRegistry orphan reclamation", () => {
 		TerminalRegistry.removeTerminal(info.id)
 	})
 
-	// The user's own shells are not Cline's to close, and they carry neither the
+	// The user's own shells are not Cerebriline's to close, and they carry neither the
 	// name nor the stamp.
-	it("leaves a terminal that is not Cline's alone", () => {
+	it("leaves a terminal that is not Cerebriline's alone", () => {
 		const mine = vscode.window.createTerminal({ name: "my own shell" })
 		created.push(mine)
 		const dispose = sandbox.stub(mine, "dispose")

@@ -1,3 +1,9 @@
+import { relative, sep } from "node:path";
+import {
+	resolveClineDataDir,
+	resolveClineDir,
+	resolveHomeDir,
+} from "@cline/shared/storage";
 import { Command, CommanderError, Option } from "commander";
 import { version } from "../../package.json";
 import {
@@ -7,6 +13,29 @@ import {
 import type { ParsedArgs } from "../utils/types";
 
 export { CommanderError };
+
+/**
+ * Render a resolved path the way help text shows it: `~/...`.
+ *
+ * The defaults in `--help` are read from the resolvers rather than written out,
+ * because the directory they name has been renamed once already and help text
+ * that lies about where the config lives is worse than none. `program.test.ts`
+ * asserts the two agree.
+ */
+function tildePath(absolutePath: string): string {
+	const home = resolveHomeDir();
+	const rel = relative(home, absolutePath);
+	if (!rel || rel.startsWith("..")) {
+		return absolutePath;
+	}
+	return `~/${rel.split(sep).join("/")}`;
+}
+
+// Resolved when the program is built, not at import: the home directory can be
+// set after this module loads, and a constant captured here would describe
+// whatever home happened to be in effect at import time.
+const configDirDefault = () => tildePath(resolveClineDir());
+const dataDirDefault = () => tildePath(resolveClineDataDir());
 
 function normalizeAutoApproveValue(
 	value: string | boolean | undefined,
@@ -153,18 +182,21 @@ export function addRootOptions(cmd: Command): Command {
 				"--acp",
 				"Run in Agent Client Protocol (ACP) mode for editor integration",
 			)
-			.option("--config <path>", "Configuration directory (default: ~/.cline)")
+			.option(
+				"--config <path>",
+				`Configuration directory (default: ${configDirDefault()})`,
+			)
 			.option(
 				"--data-dir <path>",
-				"Use isolated local state at this directory path (default: ~/.cline/data)",
+				`Use isolated local state at this directory path (default: ${dataDirDefault()})`,
 			)
 			.option(
 				"--hooks-dir <path>",
-				"Directory path to additional hooks for runtime hook injection (default: ~/.cline/hooks)",
+				`Directory path to additional hooks for runtime hook injection (default: ${configDirDefault()}/hooks)`,
 			)
 			.option(
 				"--worktree",
-				"Auto-create a detached git worktree under ~/.cline/worktrees/ and run the task there",
+				`Auto-create a detached git worktree under ${configDirDefault()}/worktrees/ and run the task there`,
 			)
 			.option("--update", "Check for updates and install if available")
 			.option("--kanban", "Run the kanban app")

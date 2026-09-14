@@ -153,7 +153,7 @@ function makeBaseConfig(overrides: Partial<CoreSessionConfig> = {}): CoreSession
 // ---------------------------------------------------------------------------
 
 describe("getDefaultModelIdForProvider", () => {
-	it("uses the SDK provider catalog for the Cline default model", () => {
+	it("uses the SDK provider catalog for the Cerebriline default model", () => {
 		expect(getDefaultModelIdForProvider("cline")).toBe(
 			LlmsModels.MODEL_COLLECTIONS_BY_PROVIDER_ID.cline.provider.defaultModelId,
 		)
@@ -390,7 +390,7 @@ describe("buildSessionConfig", () => {
 		expect(config.systemPrompt).toContain(JSON.stringify("/tmp/workspace"))
 	})
 
-	it("resolves ClinePass from the shared Cline OAuth credentials", async () => {
+	it("resolves ClinePass from the shared Cerebriline OAuth credentials", async () => {
 		mocks.providerSettingsManager.getProviderSettings.mockImplementation((providerId?: string) => {
 			if (providerId !== "cline") {
 				return undefined

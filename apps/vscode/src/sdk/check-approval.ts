@@ -28,12 +28,12 @@ export function createCheckApprover(askUser: AskUser | undefined) {
 	return async function approveProposedCheck(proposal: CheckProposal, described: string): Promise<CheckApproval> {
 		try {
 			// A shell line is named as one. It is the kind that runs something
-			// outside Cline, repeatedly and unattended, so the question says so
+			// outside Cerebriline, repeatedly and unattended, so the question says so
 			// rather than making the user read the text to find out.
 			const opening =
 				proposal.kind === "command"
-					? "Cline proposes running a command to judge this task:"
-					: "Cline proposes a check for this task:"
+					? "Cerebriline proposes running a command to judge this task:"
+					: "Cerebriline proposes a check for this task:"
 
 			if (!askUser) {
 				const answer = await putToUserModally(

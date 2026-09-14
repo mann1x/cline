@@ -179,7 +179,7 @@ describe("Shell Detection Tests", () => {
 			expect(getShell()).to.equal(storePwsh)
 		})
 
-		it("uses Store-installed pwsh for Cline's PowerShell 7 profile", () => {
+		it("uses Store-installed pwsh for Cerebriline's PowerShell 7 profile", () => {
 			process.env.LOCALAPPDATA = "C:\\Users\\Test\\AppData\\Local"
 			const storePwsh = "C:\\Users\\Test\\AppData\\Local\\Microsoft\\WindowsApps\\pwsh.exe"
 			existsSyncImpl = (() => false) as typeof actualFs.existsSync

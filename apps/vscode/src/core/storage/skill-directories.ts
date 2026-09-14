@@ -1,3 +1,4 @@
+import { resolveClineDir } from "@cline/shared/storage"
 import os from "os"
 import * as path from "path"
 
@@ -14,7 +15,7 @@ export type SkillsScanDirectory = {
 }
 
 function getClineHomePath(): string {
-	return path.join(os.homedir(), ".cline")
+	return resolveClineDir()
 }
 
 function getClineSkillsDirectoryPath(): string {

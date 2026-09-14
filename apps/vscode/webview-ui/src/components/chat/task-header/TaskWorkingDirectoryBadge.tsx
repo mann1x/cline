@@ -65,7 +65,7 @@ function basename(p: string, platform: Platform): string {
 /**
  * Persistent task-header chip shown when a task's working directory lies
  * outside the folder(s) open in this window (e.g. a task resumed from the
- * CLI or from another workspace). Cline reads, edits, and runs commands in
+ * CLI or from another workspace). Cerebriline reads, edits, and runs commands in
  * the task's own cwd, so the mismatch must stay visible for the whole task.
  */
 const TaskWorkingDirectoryBadge: React.FC<{
@@ -81,8 +81,8 @@ const TaskWorkingDirectoryBadge: React.FC<{
 	return (
 		<Tooltip>
 			<TooltipContent className="max-w-xs" side="bottom">
-				This task's working directory is {cwd}, which is outside the current workspace. Cline reads and edits files and
-				runs commands there.
+				This task's working directory is {cwd}, which is outside the current workspace. Cerebriline reads and edits files
+				and runs commands there.
 			</TooltipContent>
 			<TooltipTrigger className="flex items-center min-w-0">
 				<div

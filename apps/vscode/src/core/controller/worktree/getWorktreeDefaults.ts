@@ -3,6 +3,7 @@ import { WorktreeDefaults } from "@shared/proto/cline/worktree"
 import { getWorkspacePath } from "@utils/path"
 import path from "path"
 import { getDocumentsPath } from "@/core/storage/disk"
+import { documentsExtensionDir } from "@/core/storage/documents-path"
 import { Controller } from ".."
 
 /**
@@ -40,7 +41,7 @@ export async function getWorktreeDefaults(_controller: Controller, _request: Emp
 		projectName = path.basename(cwd)
 	}
 
-	const suggestedPath = path.join(documentsPath, "Cline", "Worktrees", `${projectName}-${suffix}`)
+	const suggestedPath = path.join(documentsExtensionDir(documentsPath), "Worktrees", `${projectName}-${suffix}`)
 
 	return WorktreeDefaults.create({
 		suggestedBranch,

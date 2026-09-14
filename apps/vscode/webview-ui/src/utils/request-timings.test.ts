@@ -67,7 +67,7 @@ describe("summarizeTimings", () => {
 })
 
 describe("timingRows", () => {
-	it("shows only Cline's own measurements when no engine reported", () => {
+	it("shows only Cerebriline's own measurements when no engine reported", () => {
 		const rows = timingRows({ requestMs: 4321, firstTokenMs: 800 })
 		expect(rows.map((row) => row.label)).toEqual(["Total", "First token"])
 	})
@@ -78,7 +78,7 @@ describe("timingRows", () => {
 
 		expect(rate?.value).toBe("20.0 tok/s")
 		// Never presented as the engine's own count of decode steps.
-		expect(rate?.note).toBe("derived from output tokens and Cline's timing")
+		expect(rate?.note).toBe("derived from output tokens and Cerebriline's timing")
 	})
 
 	it("prefers the engine's generation rate over the derived one", () => {

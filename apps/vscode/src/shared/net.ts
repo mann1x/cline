@@ -1,5 +1,5 @@
 /**
- * # Network Support for Cline
+ * # Network Support for Cerebriline
  *
  * ## Development Guidelines
  *
@@ -35,7 +35,7 @@
  *
  * ## Proxy Support
  *
- * Cline uses platform-specific fetch implementations to handle proxy
+ * Cerebriline uses platform-specific fetch implementations to handle proxy
  * configuration:
  * - **VSCode**: Uses global fetch (VSCode provides proxy configuration)
  * - **JetBrains, CLI**: Uses undici fetch with explicit ProxyAgent

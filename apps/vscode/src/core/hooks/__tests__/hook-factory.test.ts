@@ -763,9 +763,9 @@ console.log(JSON.stringify({
 			factory.determineHookCwd(script(inner), [hooksDir(outer), hooksDir(inner)], [outer, inner]).should.equal(inner)
 
 			// Global hooks (and unplaceable scripts) fall back to the primary root.
-			const globalScript = path.join(path.sep, "home", "Documents", "Cline", "Hooks", "PreToolUse")
+			const globalScript = path.join(path.sep, "home", "Documents", "Cerebriline", "Hooks", "PreToolUse")
 			factory
-				.determineHookCwd(globalScript, [path.join(path.sep, "home", "Documents", "Cline", "Hooks")], [app, appWeb])
+				.determineHookCwd(globalScript, [path.join(path.sep, "home", "Documents", "Cerebriline", "Hooks")], [app, appWeb])
 				.should.equal(app)
 		})
 	})

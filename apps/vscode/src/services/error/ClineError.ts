@@ -79,7 +79,7 @@ export class ClineError extends Error {
 	readonly _error: ErrorDetails
 
 	// Error details per providers:
-	// Cline: error?.error
+	// Cerebriline: error?.error
 	// Ollama: error?.cause
 	// tbc
 	constructor(

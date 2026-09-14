@@ -8,19 +8,19 @@ interface FeatureTipItem {
 
 const FEATURE_TIPS: FeatureTipItem[] = [
 	{
-		text: "Add a .clinerules file to your project root to give Cline project-specific instructions.",
+		text: "Add a .clinerules file to your project root to give Cerebriline project-specific instructions.",
 	},
 	{
-		text: "Switch to Plan Mode to discuss and plan an approach before Cline takes action.",
+		text: "Switch to Plan Mode to discuss and plan an approach before Cerebriline takes action.",
 	},
 	{
 		text: "Use @ in the chat input to add files, folders, or URLs as context for your task.",
 	},
 	{
-		text: "Set up MCP Servers to give Cline access to external tools and APIs.",
+		text: "Set up MCP Servers to give Cerebriline access to external tools and APIs.",
 	},
 	{
-		text: "Cline creates checkpoints after changes — you can always restore to a previous state.",
+		text: "Cerebriline creates checkpoints after changes — you can always restore to a previous state.",
 	},
 	{
 		text: "Use /compact to condense long conversations and free up context window space.",
@@ -29,10 +29,10 @@ const FEATURE_TIPS: FeatureTipItem[] = [
 		text: "Enable auto-approve for read-only tools like file reads to speed up exploration.",
 	},
 	{
-		text: "Use the quote button to select text from Cline's response and reference it in your reply.",
+		text: "Use the quote button to select text from Cerebriline's response and reference it in your reply.",
 	},
 	{
-		text: "You can drag and drop images into the chat to share screenshots with Cline.",
+		text: "You can drag and drop images into the chat to share screenshots with Cerebriline.",
 	},
 	{
 		text: 'You can disable these tips in Settings → Features → "Feature Tips".',
@@ -45,7 +45,7 @@ const FADE_DURATION_MS = 300
 
 /**
  * Shows rotating feature tips below the "Generating..." indicator.
- * Appears after a brief delay and cycles through tips while Cline is thinking.
+ * Appears after a brief delay and cycles through tips while Cerebriline is thinking.
  */
 export const FeatureTip = memo(() => {
 	const [isVisible, setIsVisible] = useState(false)

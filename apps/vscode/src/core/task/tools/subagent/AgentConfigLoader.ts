@@ -6,6 +6,7 @@ import fs from "fs/promises"
 import os from "os"
 import * as path from "path"
 import { z } from "zod"
+import { documentsExtensionDir } from "@/core/storage/documents-path"
 import { buildSubagentToolName } from "./SubagentToolName"
 
 /** Default Directory for agent configurations: ~/Documents/Cline/Agents */
@@ -103,7 +104,7 @@ function parseAgentConfigFromYaml(content: string): AgentBaseConfig {
 }
 
 function getAgentsConfigPath(homeDir = os.homedir()): string {
-	return path.join(homeDir, "Documents", "Cline", AGENTS_CONFIG_DIRECTORY_NAME)
+	return path.join(documentsExtensionDir(path.join(homeDir, "Documents")), AGENTS_CONFIG_DIRECTORY_NAME)
 }
 
 function normalizeAgentName(name: string): string {

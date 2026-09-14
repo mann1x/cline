@@ -175,8 +175,8 @@ const NewRuleRow: React.FC<NewRuleRowProps> = ({ isGlobal, ruleType, existingHoo
 								Select hook type to create
 							</label>
 							<span className="sr-only" id="hook-select-description">
-								Choose a hook type to create. Hooks execute at specific points in Cline's lifecycle. Available:{" "}
-								{availableHookTypes.map((h) => h.name).join(", ")}
+								Choose a hook type to create. Hooks execute at specific points in Cerebriline's lifecycle.
+								Available: {availableHookTypes.map((h) => h.name).join(", ")}
 							</span>
 							{/* Controlled with a constant empty value so the trigger
 							    resets to the placeholder after each hook is created. */}

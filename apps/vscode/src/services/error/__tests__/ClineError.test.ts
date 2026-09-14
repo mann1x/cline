@@ -64,7 +64,7 @@ describe("ClineError", () => {
 			ClineError.getErrorType(err)!.should.equal(ClineErrorType.ClinePassLimit)
 		})
 
-		it("should classify daily Cline free model limits separately", () => {
+		it("should classify daily Cerebriline free model limits separately", () => {
 			const err = new ClineError(
 				"Error: Error 429: Daily free limit reached on model deepseek/deepseek-v4-flash. Try again in 23h 59m",
 			)

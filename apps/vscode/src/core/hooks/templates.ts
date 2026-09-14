@@ -319,7 +319,7 @@ function getUserPromptSubmitTemplate(): string {
 #
 # UserPromptSubmit Hook
 # 
-# Executes when the user submits a prompt to Cline.
+# Executes when the user submits a prompt to Cerebriline.
 # 
 # Input: { taskId, userPromptSubmit: { prompt: string, attachments: string[] }, clineVersion, timestamp, ... }
 # Output: { cancel: boolean, contextModification?: string, errorMessage?: string }
@@ -353,7 +353,7 @@ function getNotificationTemplate(): string {
 #
 # Notification Hook
 #
-# Executes when Cline reaches a user-attention boundary or emits lifecycle notifications.
+# Executes when Cerebriline reaches a user-attention boundary or emits lifecycle notifications.
 #
 # Input: {
 #   taskId,

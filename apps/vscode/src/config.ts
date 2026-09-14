@@ -1,5 +1,5 @@
+import { resolveClineDir } from "@cline/shared/storage"
 import * as fs from "fs/promises"
-import * as os from "os"
 import * as path from "path"
 import { Environment, type EnvironmentConfig } from "./shared/config-types"
 import { Logger } from "./shared/services/Logger"
@@ -16,8 +16,8 @@ interface EndpointsFileSchema {
 }
 
 /**
- * Error thrown when the Cline configuration file exists but is invalid.
- * This error prevents Cline from starting to avoid misconfiguration in enterprise environments.
+ * Error thrown when the Cerebriline configuration file exists but is invalid.
+ * This error prevents Cerebriline from starting to avoid misconfiguration in enterprise environments.
  */
 export class ClineConfigurationError extends Error {
 	constructor(message: string) {
@@ -65,7 +65,7 @@ class ClineEndpoint {
 		const endpointsConfig = await ClineEndpoint.loadEndpointsFile()
 		if (endpointsConfig) {
 			ClineEndpoint._instance.onPremiseConfig = endpointsConfig
-			Logger.log("Cline running in self-hosted mode with custom endpoints")
+			Logger.log("Cerebriline running in self-hosted mode with custom endpoints")
 		}
 
 		ClineEndpoint._initialized = true
@@ -79,7 +79,7 @@ class ClineEndpoint {
 	}
 
 	/**
-	 * Checks if Cline is running in self-hosted/on-premise mode.
+	 * Checks if Cerebriline is running in self-hosted/on-premise mode.
 	 * @returns true if in selfHosted mode, or true if not initialized (safety fallback to prevent accidental external calls)
 	 */
 	public static isSelfHosted(): boolean {
@@ -127,7 +127,7 @@ class ClineEndpoint {
 	 * Located at ~/.cline/endpoints.json
 	 */
 	private static getEndpointsFilePath(): string {
-		return path.join(os.homedir(), ".cline", "endpoints.json")
+		return path.join(resolveClineDir(), "endpoints.json")
 	}
 
 	/**

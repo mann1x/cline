@@ -90,7 +90,7 @@ const GOOD = [
 	"---",
 	"",
 	"# system",
-	"You are Cline on {{PLATFORM_NAME}}, {{CURRENT_DATE}}, in {{IDE_NAME}}. Directory {{CWD}}.",
+	"You are Cerebriline on {{PLATFORM_NAME}}, {{CURRENT_DATE}}, in {{IDE_NAME}}. Directory {{CWD}}.",
 	"Use check_file and ask_lsp.",
 	// The three subjects REQUIRED_SYSTEM_GUIDANCE insists a rewrite address.
 	// A proposal that skips them is a flawed one, and this fixture is the

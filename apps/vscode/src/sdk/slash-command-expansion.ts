@@ -108,7 +108,7 @@ export interface ExpandSlashCommandsOptions {
  * Find the runtime command matching a typed slash-command name.
  *
  * The SDK names workflows by frontmatter `name` or file basename *without* the
- * extension, but the webview autocomplete (and legacy Cline versions) surface
+ * extension, but the webview autocomplete (and legacy Cerebriline versions) surface
  * workflow files as `/my-workflow.md`. Accept both spellings — and resolve a
  * typed file name to its frontmatter-renamed command — so workflows created
  * under the legacy extension keep working after an upgrade.

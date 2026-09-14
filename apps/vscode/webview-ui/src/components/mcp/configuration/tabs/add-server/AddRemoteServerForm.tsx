@@ -9,7 +9,7 @@ import { McpServiceClient } from "@/services/grpc-client"
 
 type TransportType = "streamableHttp" | "sse"
 
-// "dynamic" lets the server register Cline itself, which is what most servers
+// "dynamic" lets the server register Cerebriline itself, which is what most servers
 // want. "preregistered" is for servers that refuse to: GitHub, Slack and Entra
 // publish no registration endpoint at all, and Figma answers 403 to anyone
 // outside its allowlist. Without a way to say so here, those servers fail with
@@ -176,8 +176,8 @@ const AddRemoteServerForm = ({ onCancel, onServerAdded, showEditConfiguration = 
 					</VSCodeRadioGroup>
 					<div className="mt-1 text-xs text-(--vscode-descriptionForeground)">
 						{authMode === "dynamic"
-							? "Cline registers itself with the server when you authenticate. Most servers work this way."
-							: "For servers that only accept clients they issued themselves — GitHub, Slack, Microsoft Entra, Figma. Register Cline there first, then paste what it gave you."}
+							? "Cerebriline registers itself with the server when you authenticate. Most servers work this way."
+							: "For servers that only accept clients they issued themselves — GitHub, Slack, Microsoft Entra, Figma. Register Cerebriline there first, then paste what it gave you."}
 					</div>
 				</div>
 

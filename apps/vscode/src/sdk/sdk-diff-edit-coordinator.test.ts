@@ -299,7 +299,7 @@ describe("SdkDiffEditCoordinator", () => {
 			displayPath: "a.ts",
 			leftContent: "line1\nline2\n",
 			rightContent: "changed\nline2\n",
-			title: "a.ts: Original ↔ Cline's Changes (Preview)",
+			title: "a.ts: Original ↔ Cerebriline's Changes (Preview)",
 		})
 	})
 

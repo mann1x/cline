@@ -50,7 +50,7 @@ export interface BannerCardData {
 	 */
 	platforms?: ("windows" | "mac" | "linux")[]
 
-	/** Only show to Cline users */
+	/** Only show to Cerebriline users */
 	isClineUserOnly?: boolean
 }
 

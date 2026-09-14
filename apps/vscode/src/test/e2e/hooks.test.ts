@@ -18,7 +18,7 @@ const hooksE2e = e2e.extend({
 // working directory, recording process.cwd() and the workspaceRoots it received
 // on stdin. Discovery, cwd selection, and hook input metadata all resolve from
 // the window's actual workspace folders, so the marker must land in this
-// window's workspace root and name it — regardless of what any other Cline
+// window's workspace root and name it — regardless of what any other Cerebriline
 // instance recorded in shared state.
 hooksE2e("Hooks - workspace hook runs from this window's workspace root", async ({ helper, sidebar, workspaceDir }) => {
 	const markerPath = path.join(workspaceDir, "hook-ran.json")

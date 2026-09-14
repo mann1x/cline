@@ -297,7 +297,7 @@ describe("resolveModelInfo", () => {
 		const store = makeStore({ providerId: parseProviderId("cline-pass") })
 		const catalog = makeCatalog()
 		// The cline-pass catalog carries the endpoint's clinePass bucket plus the
-		// Cline free models (zero-priced, OpenRouter-style ids without the
+		// Cerebriline free models (zero-priced, OpenRouter-style ids without the
 		// cline-pass/ prefix). Selecting a free model must not be replaced by the
 		// default pass model.
 		vi.mocked(catalog.peekModels).mockReturnValue(

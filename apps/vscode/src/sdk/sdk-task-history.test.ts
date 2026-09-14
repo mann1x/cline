@@ -122,7 +122,7 @@ describe("SdkTaskHistory", () => {
 		expect(result.ts).toBeGreaterThan(0)
 	})
 
-	it("converts SDK persisted conversation messages to Cline messages", () => {
+	it("converts SDK persisted conversation messages to Cerebriline messages", () => {
 		const result = sdkMessagesToClineMessages([
 			{ role: "user", content: "Build the feature" },
 			{ role: "assistant", content: [{ type: "text", text: "Done" }] },

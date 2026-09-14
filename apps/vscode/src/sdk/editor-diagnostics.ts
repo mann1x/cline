@@ -1,6 +1,6 @@
 // Hands the model the editor's verdict on the file it just wrote.
 //
-// The IDE type-checks and lints every edit Cline makes, and none of it reached
+// The IDE type-checks and lints every edit Cerebriline makes, and none of it reached
 // the model: workspace diagnostics were readable through exactly one path, the
 // `@problems` mention, which only a user can type. So the model writes a file,
 // VS Code underlines the broken line a second later, the user sees it, and the
@@ -47,7 +47,7 @@ export const REPORTED_SEVERITIES = [DiagnosticSeverity.DIAGNOSTIC_ERROR, Diagnos
  *
  * A language server only produces diagnostics for files it can parse, so most
  * of the filtering happens upstream of this list. What it catches is the case
- * where Cline writes bytes rather than source — an audio file, an image, a
+ * where Cerebriline writes bytes rather than source — an audio file, an image, a
  * font, an archive — and something in the editor reads them as text anyway and
  * reports on the mojibake. That report is not actionable by anyone: the file is
  * correct, the reader is wrong, and the model cannot tell the difference.

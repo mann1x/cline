@@ -35,7 +35,7 @@ describe("SdkTaskControlCoordinator", () => {
 		expect(options.postStateToWebview).toHaveBeenCalledOnce()
 	})
 
-	it("cancels a running Cline task when the user signs out", async () => {
+	it("cancels a running Cerebriline task when the user signs out", async () => {
 		const activeSession = makeActiveSession()
 		const { coordinator, options } = makeCoordinator({ activeSession })
 
@@ -45,7 +45,7 @@ describe("SdkTaskControlCoordinator", () => {
 		expect(options.sessions.setRunning).toHaveBeenCalledWith(false)
 	})
 
-	it("does not cancel a non-Cline task when the user signs out", async () => {
+	it("does not cancel a non-Cerebriline task when the user signs out", async () => {
 		const activeSession = makeActiveSession()
 		const { coordinator, options } = makeCoordinator({ activeSession })
 

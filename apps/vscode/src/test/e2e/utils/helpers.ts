@@ -119,7 +119,7 @@ export class E2ETestHelper {
 
 				try {
 					const title = await frame.title()
-					if (title.startsWith("Cline")) {
+					if (title.startsWith("Cerebriline") || title.startsWith("Cline")) {
 						this.cachedFrame = frame
 						return frame
 					}
@@ -320,11 +320,11 @@ export class E2ETestHelper {
 }
 
 /**
- * NOTE: Use the `e2e` test fixture for all E2E tests to test the Cline extension.
+ * NOTE: Use the `e2e` test fixture for all E2E tests to test the Cerebriline extension.
  *
- * Extended Playwright test configuration for Cline E2E testing.
+ * Extended Playwright test configuration for Cerebriline E2E testing.
  *
- * This test configuration provides a comprehensive setup for end-to-end testing of the Cline VS Code extension,
+ * This test configuration provides a comprehensive setup for end-to-end testing of the Cerebriline VS Code extension,
  * including server mocking, temporary directories, VS Code instance management, and helper utilities.
  *
  * NOTE: Default to run in single-root workspace; use `e2eMultiRoot` for multi-root workspace tests.
@@ -339,8 +339,8 @@ export class E2ETestHelper {
  * - `openVSCode`: Function that returns a Promise resolving to an ElectronApplication instance
  * - `app`: ElectronApplication instance with automatic cleanup
  * - `helper`: E2ETestHelper instance for test utilities
- * - `page`: Playwright Page object representing the main VS Code window with Cline sidebar opened
- * - `sidebar`: Playwright Frame object representing the Cline extension's sidebar iframe
+ * - `page`: Playwright Page object representing the main VS Code window with Cerebriline sidebar opened
+ * - `sidebar`: Playwright Frame object representing the Cerebriline extension's sidebar iframe
  *
  * @returns Extended test object with all fixtures available for E2E test scenarios:
  * - **server**: Automatically starts and manages a ClineApiServerMock instance
@@ -350,8 +350,8 @@ export class E2ETestHelper {
  * - **openVSCode**: Factory function that launches VS Code with proper configuration for testing
  * - **app**: Manages the VS Code ElectronApplication lifecycle with automatic cleanup
  * - **helper**: Provides E2ETestHelper utilities for test operations
- * - **page**: Configures the main VS Code window with notifications disabled and Cline sidebar open
- * - **sidebar**: Provides access to the Cline extension's sidebar frame
+ * - **page**: Configures the main VS Code window with notifications disabled and Cerebriline sidebar open
+ * - **sidebar**: Provides access to the Cerebriline extension's sidebar frame
  *
  * @example
  * ```typescript
@@ -362,7 +362,7 @@ export class E2ETestHelper {
  *
  * @remarks
  * - Automatically handles VS Code download and setup
- * - Installs the Cline extension in development mode
+ * - Installs the Cerebriline extension in development mode
  * - Records test videos for debugging
  * - Performs cleanup of temporary directories after each test
  * - Configures VS Code with disabled updates, workspace trust, and welcome screens
@@ -413,7 +413,7 @@ export const e2e = test
 			)
 
 			await use(async (workspacePath: string) => {
-				// Create isolated Cline data directory for this test
+				// Create isolated Cerebriline data directory for this test
 				const clineTestDir = mkdtempSync(path.join(os.tmpdir(), "cline-e2e-"))
 				const clineDataDir = path.join(clineTestDir, "data")
 
@@ -427,7 +427,7 @@ export const e2e = test
 						// Prevent OAuth E2E from launching a browser that can outlive VS Code on Linux.
 						CLINE_CAPTURE_BROWSER: "true",
 						CLINE_DIR: clineTestDir, // Isolate test data from user's ~/.cline
-						CLINE_DATA_DIR: clineDataDir, // Keep SDK/shared storage off the user's real Cline data dir
+						CLINE_DATA_DIR: clineDataDir, // Keep SDK/shared storage off the user's real Cerebriline data dir
 						GRPC_RECORDER_FILE_NAME: E2ETestHelper.generateTestFileName(testInfo.title, testInfo.project.name),
 						// GRPC_RECORDER_ENABLED: "true",
 						// GRPC_RECORDER_TESTS_FILTERS_ENABLED: "true"
@@ -477,7 +477,7 @@ export const e2e = test
 					E2ETestHelper.rmForRetries(extensionsDir, { recursive: true }),
 				]
 
-				// Clean up the isolated Cline data directory
+				// Clean up the isolated Cerebriline data directory
 				// Find all temp directories matching our pattern
 				const tmpDir = os.tmpdir()
 				try {

@@ -1,6 +1,6 @@
 import fsSync from "node:fs"
-import os from "node:os"
 import path from "node:path"
+import { resolveClineDataDir } from "@cline/shared/storage"
 import { ClineFileStorage } from "./ClineFileStorage"
 import { ClineMemento } from "./ClineStorage"
 
@@ -40,7 +40,7 @@ export interface StorageContext {
 
 export interface StorageContextOptions {
 	/**
-	 * Override the Cline home directory. When set, the data directory is always
+	 * Override the Cerebriline home directory. When set, the data directory is always
 	 * `<clineDir>/data`. Defaults to env-based resolution: CLINE_DATA_DIR, then
 	 * CLINE_DIR + "/data", then ~/.cline/data.
 	 */
@@ -80,23 +80,19 @@ function hashString(str: string): string {
 }
 
 /**
- * Resolve the Cline data directory from the environment:
- * CLINE_DATA_DIR (trimmed) > CLINE_DIR + "/data" > ~/.cline/data.
+ * Resolve the data directory from the environment:
+ * CEREBRILINE_DATA_DIR > CLINE_DATA_DIR > <data dir> + "/data".
  *
- * Single source of truth shared by createStorageContext and the SDK adapter's
- * legacy-state-reader, matching the SDK's own resolveClineDataDir. Every
+ * Delegates to the SDK's own resolveClineDataDir rather than restating those
+ * rules. It used to restate them, and the restatement was correct right up
+ * until the directory was renamed. Every
  * reader/writer of globalState.json, secrets.json, and providers.json must
  * resolve through the same rules — diverging resolvers split provider state
  * across directories, so requests can run on a provider the settings never
  * show (ENG-2332).
  */
 export function resolveDataDirFromEnv(): string {
-	const envDataDir = process.env.CLINE_DATA_DIR?.trim()
-	if (envDataDir) {
-		return envDataDir
-	}
-	const clineDir = process.env.CLINE_DIR?.trim() || path.join(os.homedir(), ".cline")
-	return path.join(clineDir, SETTINGS_SUBFOLDER)
+	return resolveClineDataDir()
 }
 
 /**

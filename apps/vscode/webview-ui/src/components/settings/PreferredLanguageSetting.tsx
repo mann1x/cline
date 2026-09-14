@@ -26,7 +26,7 @@ const PreferredLanguageSetting: React.FC = () => {
 					))}
 				</SelectContent>
 			</Select>
-			<p className="text-sm text-description mt-1">The language that Cline should use for communication.</p>
+			<p className="text-sm text-description mt-1">The language that Cerebriline should use for communication.</p>
 		</div>
 	)
 }

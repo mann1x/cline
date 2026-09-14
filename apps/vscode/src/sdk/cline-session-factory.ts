@@ -1452,7 +1452,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		Logger.log(`[SessionFactory] Built system prompt: ${systemPrompt.length} chars`)
 	} catch (error) {
 		Logger.warn("[SessionFactory] Failed to build system prompt, using minimal fallback:", error)
-		systemPrompt = "You are Cline, a highly skilled software engineer. Help the user with their request."
+		systemPrompt = "You are Cerebriline, a highly skilled software engineer. Help the user with their request."
 	}
 
 	// Inject preferred language instructions when a non-default language is selected.
@@ -1498,7 +1498,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	let thinkingBudgetTokens: number | undefined
 
 	// What the server appends to reasoning it cut at the budget, when there is
-	// anything to know. Cline's own setting goes on the wire and overrides the
+	// anything to know. Cerebriline's own setting goes on the wire and overrides the
 	// model file, so it is the answer where it is set; otherwise the model's own
 	// is what will be appended, and Ollama reports it. A model with neither
 	// leaves this undefined, and the condenser measures instead of matching.

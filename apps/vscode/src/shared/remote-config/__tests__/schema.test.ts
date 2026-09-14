@@ -737,7 +737,7 @@ describe("Remote Config Schema", () => {
 						awsBedrockUsePromptCache: true,
 						awsBedrockEndpoint: "https://custom-bedrock.endpoint",
 					},
-					Cline: {
+					Cerebriline: {
 						models: [{ id: "claude-3-5-sonnet-20241022" }, { id: "claude-3-5-haiku-20241022" }],
 					},
 					Vertex: {
@@ -794,10 +794,10 @@ describe("Remote Config Schema", () => {
 			expect(result.providerSettings?.AwsBedrock?.awsBedrockUsePromptCache).to.equal(true)
 			expect(result.providerSettings?.AwsBedrock?.awsBedrockEndpoint).to.equal("https://custom-bedrock.endpoint")
 
-			// Verify Cline settings
-			expect(result.providerSettings?.Cline?.models).to.have.lengthOf(2)
-			expect(result.providerSettings?.Cline?.models?.[0].id).to.equal("claude-3-5-sonnet-20241022")
-			expect(result.providerSettings?.Cline?.models?.[1].id).to.equal("claude-3-5-haiku-20241022")
+			// Verify Cerebriline settings
+			expect(result.providerSettings?.Cerebriline?.models).to.have.lengthOf(2)
+			expect(result.providerSettings?.Cerebriline?.models?.[0].id).to.equal("claude-3-5-sonnet-20241022")
+			expect(result.providerSettings?.Cerebriline?.models?.[1].id).to.equal("claude-3-5-haiku-20241022")
 
 			// Verify Vertex settings
 			expect(result.providerSettings?.Vertex?.models).to.have.lengthOf(2)

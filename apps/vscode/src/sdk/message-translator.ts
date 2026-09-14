@@ -798,13 +798,13 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown): ClineSayTool 
 			const oldText = getStringField(parsedInput, "old_text") ?? getStringField(parsedInput, "old_str")
 			// `insert_line` inserts into an existing file (the SDK editor executor requires
 			// the file to already exist), so it is an edit — not a new-file creation. Without
-			// this the card mislabels a prepend/insert as "Cline wants to create a new file".
+			// this the card mislabels a prepend/insert as "Cerebriline wants to create a new file".
 			const insertLine = getNumberField(parsedInput, "insert_line")
 			// So does a line range: you cannot replace line 92 of a file that does not
 			// exist. This predicate knew about `old_text` and `insert_line` but not about
 			// `start_line`, which arrived later — and a line-range replace is the shape a
 			// model reaches for on minified or generated files, so most of the edit cards
-			// in a session were reading "Cline wants to create a new file".
+			// in a session were reading "Cerebriline wants to create a new file".
 			const startLine = getNumberField(parsedInput, "start_line")
 			const isEdit = toolName === "replace_in_file" || !!oldText || insertLine != null || startLine != null
 
@@ -954,7 +954,7 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown): ClineSayTool 
 		case "plan": {
 			// The plan tool names no file and runs no command, so the generic
 			// lookup below found nothing to show and the row rendered as a bare
-			// "Cline used `plan`:" header with an empty body. What the user wants
+			// "Cerebriline used `plan`:" header with an empty body. What the user wants
 			// from this row is the plan itself, and it is right here in the input.
 			return {
 				tool: toolName as ClineSayTool["tool"],
@@ -1205,7 +1205,7 @@ function getApplyPatchString(input: unknown): string | undefined {
 
 /**
  * Split a multi-file apply_patch string into one ClineSayTool per file so each
- * "Cline wants to edit this file" row renders only that file's diff (cline#9904).
+ * "Cerebriline wants to edit this file" row renders only that file's diff (cline#9904).
  *
  * Returns [] for single-file (or unparseable) patches so callers keep the existing
  * single-message behavior — only genuinely multi-file patches are split.
@@ -1422,7 +1422,7 @@ function extractCommandText(input: unknown): string {
 }
 
 /**
- * Build the Cline approval ask message for an SDK tool approval request.
+ * Build the Cerebriline approval ask message for an SDK tool approval request.
  * Keeps approval prompts aligned with the SDK event translator so the webview
  * can render specialized rows (MCP, commands, subagents) instead of a generic
  * tool approval with missing context.
@@ -3081,7 +3081,7 @@ export interface SdkMessagesToClineMessagesOptions {
 /**
  * Convert SDK-persisted LLM messages back into the ClineMessage format used by
  * the webview. Keep this in the live message translator so history rendering
- * and streaming rendering share the same SDK tool → Cline UI mapping.
+ * and streaming rendering share the same SDK tool → Cerebriline UI mapping.
  */
 export function sdkMessagesToClineMessages(
 	messages: SdkMessageWithMetrics[],

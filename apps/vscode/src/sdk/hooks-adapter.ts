@@ -1,4 +1,4 @@
-// Bridges Cline's file-based hook scripts into the SDK's runtime hooks.
+// Bridges Cerebriline's file-based hook scripts into the SDK's runtime hooks.
 //
 // Runtime hooks use typed in-process lifecycle callbacks:
 //   TaskStart        -> beforeRun

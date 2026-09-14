@@ -43,7 +43,7 @@ const DEFAULT_HTTP_MCP_REDIRECT_URL = "http://127.0.0.1:1456/mcp/oauth/callback"
 
 /**
  * Ports the local OAuth callback server may bind. The first three match the
- * @cline/core defaults; extras tolerate concurrent flows from other Cline
+ * @cline/core defaults; extras tolerate concurrent flows from other Cerebriline
  * processes (CLI, another extension window) holding a port.
  */
 const MCP_OAUTH_CALLBACK_PORTS = [1456, 1457, 1458, 1459, 1460, 1461]
@@ -143,7 +143,7 @@ class ClineOAuthClientProvider implements OAuthClientProvider {
 			token_endpoint_auth_method: configured?.client_secret ? "client_secret_basic" : "none",
 			grant_types: ["authorization_code", "refresh_token"],
 			response_types: ["code"],
-			client_name: "Cline",
+			client_name: "Cerebriline",
 		}
 	}
 
@@ -290,7 +290,7 @@ export class McpOAuthManager {
 			const result = await authorizeMcpServerOAuth({
 				serverName,
 				filePath: settingsPath,
-				clientName: "Cline",
+				clientName: "Cerebriline",
 				fetch,
 				openUrl: (url) => openExternal(url),
 				callbackPorts: MCP_OAUTH_CALLBACK_PORTS,

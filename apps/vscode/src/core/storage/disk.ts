@@ -1,4 +1,5 @@
 import { Anthropic } from "@anthropic-ai/sdk"
+import { resolveClineDir } from "@cline/shared/storage"
 import { TaskMetadata } from "@core/context/context-tracking/ContextTrackerTypes"
 import { RemoteConfig } from "@shared/remote-config/schema"
 import { GlobalState, Settings } from "@shared/storage/state-keys"
@@ -8,7 +9,7 @@ import os from "os"
 import * as path from "path"
 import { HostProvider } from "@/hosts/host-provider"
 import { Logger } from "@/shared/services/Logger"
-import { getDocumentsPath } from "./documents-path"
+import { documentsExtensionDir, getDocumentsPath, getHomeDocumentsExtensionPath } from "./documents-path"
 
 export { getDocumentsPath } from "./documents-path"
 
@@ -36,16 +37,16 @@ export const GlobalFileNames = {
 }
 
 /**
- * Returns the cross-platform path to the Cline home directory (~/.cline).
+ * Returns the cross-platform path to the Cerebriline home directory (~/.cline).
  * This works on macOS, Linux, and Windows:
  * - macOS: /Users/username/.cline
  * - Linux: /home/username/.cline
  * - Windows: C:\Users\username\.cline
  *
- * This is intended to eventually replace ~/Documents/Cline as the global config location.
+ * This is intended to eventually replace ~/Documents/Cerebriline as the global config location.
  */
 function getClineHomePath(): string {
-	return path.join(os.homedir(), ".cline")
+	return resolveClineDir()
 }
 
 export async function ensureTaskDirectoryExists(taskId: string): Promise<string> {
@@ -54,44 +55,44 @@ export async function ensureTaskDirectoryExists(taskId: string): Promise<string>
 
 export async function ensureRulesDirectoryExists(): Promise<string> {
 	const userDocumentsPath = await getDocumentsPath()
-	const clineRulesDir = path.join(userDocumentsPath, "Cline", "Rules")
+	const clineRulesDir = path.join(documentsExtensionDir(userDocumentsPath), "Rules")
 	try {
 		await fs.mkdir(clineRulesDir, { recursive: true })
 	} catch (_error) {
-		return path.join(os.homedir(), "Documents", "Cline", "Rules") // in case creating a directory in documents fails for whatever reason (e.g. permissions) - this is fine because we will fail gracefully with a path that does not exist
+		return getHomeDocumentsExtensionPath("Rules") // in case creating a directory in documents fails for whatever reason (e.g. permissions) - this is fine because we will fail gracefully with a path that does not exist
 	}
 	return clineRulesDir
 }
 
 export async function ensureWorkflowsDirectoryExists(): Promise<string> {
 	const userDocumentsPath = await getDocumentsPath()
-	const clineWorkflowsDir = path.join(userDocumentsPath, "Cline", "Workflows")
+	const clineWorkflowsDir = path.join(documentsExtensionDir(userDocumentsPath), "Workflows")
 	try {
 		await fs.mkdir(clineWorkflowsDir, { recursive: true })
 	} catch (_error) {
-		return path.join(os.homedir(), "Documents", "Cline", "Workflows") // in case creating a directory in documents fails for whatever reason (e.g. permissions) - this is fine because we will fail gracefully with a path that does not exist
+		return getHomeDocumentsExtensionPath("Workflows") // in case creating a directory in documents fails for whatever reason (e.g. permissions) - this is fine because we will fail gracefully with a path that does not exist
 	}
 	return clineWorkflowsDir
 }
 
 export async function ensureMcpServersDirectoryExists(): Promise<string> {
 	const userDocumentsPath = await getDocumentsPath()
-	const mcpServersDir = path.join(userDocumentsPath, "Cline", "MCP")
+	const mcpServersDir = path.join(documentsExtensionDir(userDocumentsPath), "MCP")
 	try {
 		await fs.mkdir(mcpServersDir, { recursive: true })
 	} catch (_error) {
-		return path.join(os.homedir(), "Documents", "Cline", "MCP") // in case creating a directory in documents fails for whatever reason (e.g. permissions) - this is fine since this path is only ever used in the system prompt
+		return getHomeDocumentsExtensionPath("MCP") // in case creating a directory in documents fails for whatever reason (e.g. permissions) - this is fine since this path is only ever used in the system prompt
 	}
 	return mcpServersDir
 }
 
 export async function ensureHooksDirectoryExists(): Promise<string> {
 	const userDocumentsPath = await getDocumentsPath()
-	const clineHooksDir = path.join(userDocumentsPath, "Cline", "Hooks")
+	const clineHooksDir = path.join(documentsExtensionDir(userDocumentsPath), "Hooks")
 	try {
 		await fs.mkdir(clineHooksDir, { recursive: true })
 	} catch (_error) {
-		return path.join(os.homedir(), "Documents", "Cline", "Hooks") // in case creating a directory in documents fails for whatever reason (e.g. permissions) - this is fine because we will fail gracefully with a path that does not exist
+		return getHomeDocumentsExtensionPath("Hooks") // in case creating a directory in documents fails for whatever reason (e.g. permissions) - this is fine because we will fail gracefully with a path that does not exist
 	}
 	return clineHooksDir
 }
@@ -321,7 +322,7 @@ export async function getAllHooksDirs(workspaceRootPaths?: string[]): Promise<st
 /**
  * Resolves this window's workspace root paths for hook discovery. Workspace
  * identity must come from the window's host, not global state: ~/.cline global
- * state is shared across every Cline instance, so a persisted value can point
+ * state is shared across every Cerebriline instance, so a persisted value can point
  * at another window's project.
  *
  * Blank entries are filtered out, and a host lookup failure degrades to no

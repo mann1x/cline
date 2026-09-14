@@ -91,9 +91,9 @@ export function watchMcpOAuthFetch(resourceUrl: string, baseFetch: typeof fetch 
 export function describeMcpOAuthFailure(serverName: string, failure: McpOAuthRequestFailure): string {
 	if (failure.registration) {
 		return (
-			`MCP server "${serverName}" refused to register Cline as an OAuth client (HTTP ${failure.status} from ${failure.url}). ` +
+			`MCP server "${serverName}" refused to register Cerebriline as an OAuth client (HTTP ${failure.status} from ${failure.url}). ` +
 			"This server only accepts clients it issued itself, so no credentials were sent and this will not start working on its own. " +
-			'Register Cline in the provider\'s own developer settings, then use "Use an OAuth client I already have" below to paste the client ID it gave you.'
+			'Register Cerebriline in the provider\'s own developer settings, then use "Use an OAuth client I already have" below to paste the client ID it gave you.'
 		)
 	}
 	return (

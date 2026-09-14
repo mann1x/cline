@@ -21,6 +21,7 @@ import {
 	uninstallMarketplaceEntry as uninstallCoreMarketplaceEntry,
 	uninstallPlugin,
 } from "@cline/core"
+import { resolveClineDir } from "@cline/shared/storage"
 import { deleteSkillFile } from "@core/controller/file/deleteSkillFile"
 import { refreshSkills } from "@core/controller/file/refreshSkills"
 import { toggleSkill } from "@core/controller/file/toggleSkill"
@@ -185,7 +186,7 @@ function hashSource(source: string): string {
 }
 
 function resolveClineHome(): string {
-	return process.env.CLINE_DIR?.trim() || join(homedir(), ".cline")
+	return resolveClineDir()
 }
 
 function sanitizeSegment(value: string): string {

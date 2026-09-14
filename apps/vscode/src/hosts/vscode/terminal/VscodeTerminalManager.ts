@@ -226,7 +226,7 @@ export class VscodeTerminalManager {
 		})
 		process.once("error", () => {
 			// A stream/API failure does not prove the launched command stopped.
-			// Evict the terminal from Cline reuse without disposing potentially
+			// Evict the terminal from Cerebriline reuse without disposing potentially
 			// active user work.
 			this.evictTerminal(vscodeTerminalInfo)
 		})
@@ -234,7 +234,7 @@ export class VscodeTerminalManager {
 		process.once("unobserved_command", (outcome) => {
 			Logger.log(`unobserved_command (${outcome.source}) received for terminal ${vscodeTerminalInfo.id}`)
 			this.evictTerminal(vscodeTerminalInfo)
-			// Markerless streams (for example, an SSH session) and commands Cline no
+			// Markerless streams (for example, an SSH session) and commands Cerebriline no
 			// longer owns remain open. Ordinary managed sendText fallbacks are
 			// reclaimed at the next acquisition, after this tool result can report
 			// that their completion is indeterminate.
@@ -305,7 +305,7 @@ export class VscodeTerminalManager {
 	 * writes the ETX control character (`\x03`, i.e. Ctrl+C) without a trailing
 	 * newline; the pty's line discipline delivers it to the foreground process
 	 * group as SIGINT. Used when a task is cancelled so the spawned command
-	 * actually stops instead of continuing to run after Cline stops observing it.
+	 * actually stops instead of continuing to run after Cerebriline stops observing it.
 	 * The terminal itself is left open for reuse.
 	 */
 	sendInterrupt(terminalInfo: ITerminalInfo): void {
@@ -523,7 +523,7 @@ export class VscodeTerminalManager {
 	/**
 	 * Abandon a terminal that could not be prepared for a command, and close it.
 	 *
-	 * Eviction alone only stops Cline tracking it. The window stays open with
+	 * Eviction alone only stops Cerebriline tracking it. The window stays open with
 	 * nothing able to reuse it -- it is out of the registry -- and nothing that
 	 * will ever close it. That is invisible when the cwd can be confirmed,
 	 * because preparation succeeds and the terminal is reused; where a shell has
@@ -537,8 +537,8 @@ export class VscodeTerminalManager {
 	 * in progress. It also leaves the terminal readable until the next command
 	 * actually needs one.
 	 *
-	 * Only for terminals that received nothing but Cline's own `cd`. A terminal
-	 * running a command Cline no longer observes is left alone by the caller
+	 * Only for terminals that received nothing but Cerebriline's own `cd`. A terminal
+	 * running a command Cerebriline no longer observes is left alone by the caller
 	 * that evicts it, since it may be a user's session.
 	 */
 	private discardTerminal(terminalInfo: TerminalInfo): void {

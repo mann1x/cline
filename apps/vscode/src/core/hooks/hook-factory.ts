@@ -198,11 +198,11 @@ export abstract class HookRunner<Name extends HookName> {
 	 *
 	 * This method enriches the hook-specific input (like preToolUse or postToolUse data)
 	 * with standard information that all hooks receive:
-	 * - clineVersion: Current Cline extension version
+	 * - clineVersion: Current Cerebriline extension version
 	 * - hookName: The type of hook being executed (e.g., "PreToolUse")
 	 * - timestamp: Execution time in milliseconds since epoch
 	 * - workspaceRoots: Array of workspace folder paths
-	 * - userId: Cline user ID, machine ID, or generated UUID
+	 * - userId: Cerebriline user ID, machine ID, or generated UUID
 	 *
 	 * This separation allows hook scripts to receive consistent metadata without
 	 * requiring callers to manually provide it each time.
@@ -223,7 +223,7 @@ export abstract class HookRunner<Name extends HookName> {
 			hookName: this.hookName,
 			timestamp: Date.now().toString(),
 			workspaceRoots,
-			userId: getDistinctId(), // Always available: Cline User ID, machine ID, or generated UUID
+			userId: getDistinctId(), // Always available: Cerebriline User ID, machine ID, or generated UUID
 			...params,
 			model,
 		}

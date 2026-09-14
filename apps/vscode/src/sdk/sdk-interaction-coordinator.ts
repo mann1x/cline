@@ -83,8 +83,8 @@ export class SdkInteractionCoordinator {
 			// behind it as six consecutive errors, which sent the reader looking
 			// for four failures that were never there.
 			text: context.forced
-				? `Cline stopped the task: ${latest}\n\nSend a message to give Cline guidance and continue the task.`
-				: `Cline ran into ${context.consecutiveMistakes} errors in a row and stopped the task.\n\nLatest: ${latest}\n\nSend a message to give Cline guidance and continue the task.`,
+				? `Cerebriline stopped the task: ${latest}\n\nSend a message to give Cerebriline guidance and continue the task.`
+				: `Cerebriline ran into ${context.consecutiveMistakes} errors in a row and stopped the task.\n\nLatest: ${latest}\n\nSend a message to give Cerebriline guidance and continue the task.`,
 			partial: false,
 		}
 

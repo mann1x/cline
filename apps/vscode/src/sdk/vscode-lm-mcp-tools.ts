@@ -6,10 +6,10 @@ import { CONFIG_SECTION } from "@/registry"
 import { Logger } from "@/shared/services/Logger"
 
 /**
- * MCP servers Cline did not start, borrowed from VS Code.
+ * MCP servers Cerebriline did not start, borrowed from VS Code.
  *
  * A server configured in VS Code is already running, already authenticated and
- * already exposing its tools to any extension that asks. Cline's own MCP client
+ * already exposing its tools to any extension that asks. Cerebriline's own MCP client
  * has to repeat all three, and for a server that refuses dynamic client
  * registration -- Figma's advertises a registration endpoint and 403s everyone
  * -- the second of those cannot be repeated at all: there is no way to obtain a
@@ -58,7 +58,7 @@ export function areVscodeMcpToolsEnabled(): boolean {
 /**
  * Auto-approved tool names, by the name the model is given without the
  * `vscode__` prefix -- the same string the MCP settings file stores for a
- * server Cline runs itself, so `isToolAutoApproved` needs no special case.
+ * server Cerebriline runs itself, so `isToolAutoApproved` needs no special case.
  */
 function autoApprovedToolNames(): string[] {
 	const stored = vscode.workspace.getConfiguration(CONFIG_SECTION).get<string[]>("vscodeMcpAutoApprove")
@@ -172,7 +172,7 @@ function tokenFor(signal: AbortSignal | undefined): {
  *
  * Everything downstream of the tool -- the transcript, the truncation, the
  * webview row -- already understands `{ content: [{ type, text }] }`, because
- * that is what Cline's own MCP client hands back. Returning the VS Code object
+ * that is what Cerebriline's own MCP client hands back. Returning the VS Code object
  * instead would work its way through as `[object Object]`.
  */
 function flattenResult(result: vscode.LanguageModelToolResult): { content: { type: "text"; text: string }[] } {
@@ -195,10 +195,10 @@ function flattenResult(result: vscode.LanguageModelToolResult): { content: { typ
 }
 
 /**
- * The MCP tools VS Code has, as Cline tools.
+ * The MCP tools VS Code has, as Cerebriline tools.
  *
  * Built through `createMcpTools` rather than by hand so these are named,
- * described and timed out exactly like the servers Cline runs itself: from the
+ * described and timed out exactly like the servers Cerebriline runs itself: from the
  * model's side the only difference is the `vscode__` prefix.
  */
 export async function createVscodeLmMcpTools(options?: { timeoutMs?: number }): Promise<AgentTool[]> {

@@ -17,7 +17,7 @@ function isClineFreeModelException(modelId: string): boolean {
  * For OpenRouter/Vercel: excludes cline/ prefixed models
  * @param modelIds Array of model IDs to filter
  * @param provider The current API provider
- * @param allowedFreeModelIds Optional list of Cline free model IDs to keep visible
+ * @param allowedFreeModelIds Optional list of Cerebriline free model IDs to keep visible
  * @returns Filtered array of model IDs
  */
 export function filterOpenRouterModelIds(

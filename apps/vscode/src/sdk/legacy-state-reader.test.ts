@@ -1,6 +1,7 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { resolveClineDir } from "@cline/shared/storage"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import {
 	listTaskIds,
@@ -82,16 +83,29 @@ describe("resolveDataDir", () => {
 		}
 	})
 
-	it("falls back to ~/.cline/data", () => {
-		const originalData = process.env.CLINE_DATA_DIR
-		const originalDir = process.env.CLINE_DIR
-		delete process.env.CLINE_DATA_DIR
-		delete process.env.CLINE_DIR
+	it("falls back to the data directory the SDK resolves", () => {
+		const saved = {
+			data: process.env.CLINE_DATA_DIR,
+			dir: process.env.CLINE_DIR,
+			newData: process.env.CEREBRILINE_DATA_DIR,
+			newDir: process.env.CEREBRILINE_DIR,
+		}
+		for (const key of ["CLINE_DATA_DIR", "CLINE_DIR", "CEREBRILINE_DATA_DIR", "CEREBRILINE_DIR"]) {
+			delete process.env[key]
+		}
 		try {
-			expect(resolveDataDir()).toBe(path.join(os.homedir(), ".cline", "data"))
+			// Deliberately not spelled out as `~/.cerebriline/data`. Which home
+			// directory that is depends on whether the machine has been migrated
+			// yet, and pinning one name here made this test pass or fail on the
+			// contents of whoever's home directory ran it. What must hold is that
+			// the extension and the SDK land in the same place -- diverging here
+			// is what splits provider state across two directories (ENG-2332).
+			expect(resolveDataDir()).toBe(path.join(resolveClineDir(), "data"))
 		} finally {
-			process.env.CLINE_DATA_DIR = originalData
-			process.env.CLINE_DIR = originalDir
+			process.env.CLINE_DATA_DIR = saved.data
+			process.env.CLINE_DIR = saved.dir
+			process.env.CEREBRILINE_DATA_DIR = saved.newData
+			process.env.CEREBRILINE_DIR = saved.newDir
 		}
 	})
 })

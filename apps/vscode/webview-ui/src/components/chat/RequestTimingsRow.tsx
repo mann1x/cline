@@ -7,7 +7,7 @@ import { engineName, formatTokens, summarizeTimings, timingRows } from "@/utils/
 /**
  * What one request cost, under the request.
  *
- * Cline has always recorded a per-request token count and shown none of it:
+ * Cerebriline has always recorded a per-request token count and shown none of it:
  * the numbers went into the `api_req_started` row, the row read `cost` as a
  * boolean meaning "the turn ended", and everything else was aggregated into
  * the task header where a single slow request cannot be seen. Asked for on
@@ -72,7 +72,7 @@ export const RequestTimingsRow = memo<RequestTimingsRowProps>(({ message }) => {
 			    rather than being a mark the reader has to guess at. */}
 			{isExpanded && summary.includes("gen*") && (
 				<div className="ml-4 mt-1 opacity-60">
-					* generation rate derived from Cline's timing, not reported by the provider
+					* generation rate derived from Cerebriline's timing, not reported by the provider
 				</div>
 			)}
 			{isExpanded && (

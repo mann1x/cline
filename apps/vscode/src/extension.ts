@@ -102,7 +102,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	// Terminals outlive the extension host: the window owns them, while the
 	// reuse bookkeeping is a static that starts empty here. Anything named
-	// "Cline" still open at this point belongs to a host that is gone, so it can
+	// "Cerebriline" still open at this point belongs to a host that is gone, so it can
 	// neither be reused nor ever be closed -- see `reclaimOrphanedTerminals`.
 	TerminalRegistry.reclaimOrphanedTerminals()
 
@@ -212,10 +212,10 @@ export async function activate(context: vscode.ExtensionContext) {
 			.then((module) => {
 				const devTaskCommands = module.registerTaskCommands(webview.controller)
 				context.subscriptions.push(...devTaskCommands)
-				Logger.log("[Cline Dev] Dev mode activated & dev commands registered")
+				Logger.log("[Cerebriline Dev] Dev mode activated & dev commands registered")
 			})
 			.catch((error) => {
-				Logger.log(`[Cline Dev] Failed to register dev commands: ${error}`)
+				Logger.log(`[Cerebriline Dev] Failed to register dev commands: ${error}`)
 			})
 	}
 
@@ -281,37 +281,37 @@ export async function activate(context: vscode.ExtensionContext) {
 					// diagnostics themselves via getContextForCommand.
 					const actions: vscode.CodeAction[] = []
 
-					// Add to Cline (Always available)
-					const addAction = new vscode.CodeAction("Add to Cline", vscode.CodeActionKind.QuickFix)
+					// Add to Cerebriline (Always available)
+					const addAction = new vscode.CodeAction("Add to Cerebriline", vscode.CodeActionKind.QuickFix)
 					addAction.command = {
 						command: commands.AddToChat,
-						title: "Add to Cline",
+						title: "Add to Cerebriline",
 					}
 					actions.push(addAction)
 
-					// Explain with Cline (Always available)
-					const explainAction = new vscode.CodeAction("Explain with Cline", vscode.CodeActionKind.RefactorExtract) // Using a refactor kind
+					// Explain with Cerebriline (Always available)
+					const explainAction = new vscode.CodeAction("Explain with Cerebriline", vscode.CodeActionKind.RefactorExtract) // Using a refactor kind
 					explainAction.command = {
 						command: commands.ExplainCode,
-						title: "Explain with Cline",
+						title: "Explain with Cerebriline",
 					}
 					actions.push(explainAction)
 
-					// Improve with Cline (Always available)
-					const improveAction = new vscode.CodeAction("Improve with Cline", vscode.CodeActionKind.RefactorRewrite) // Using a refactor kind
+					// Improve with Cerebriline (Always available)
+					const improveAction = new vscode.CodeAction("Improve with Cerebriline", vscode.CodeActionKind.RefactorRewrite) // Using a refactor kind
 					improveAction.command = {
 						command: commands.ImproveCode,
-						title: "Improve with Cline",
+						title: "Improve with Cerebriline",
 					}
 					actions.push(improveAction)
 
-					// Fix with Cline (Only if diagnostics exist)
+					// Fix with Cerebriline (Only if diagnostics exist)
 					if (context.diagnostics.length > 0) {
-						const fixAction = new vscode.CodeAction("Fix with Cline", vscode.CodeActionKind.QuickFix)
+						const fixAction = new vscode.CodeAction("Fix with Cerebriline", vscode.CodeActionKind.QuickFix)
 						fixAction.isPreferred = true
 						fixAction.command = {
 							command: commands.FixWithCline,
-							title: "Fix with Cline",
+							title: "Fix with Cerebriline",
 						}
 						actions.push(fixAction)
 					}
@@ -529,7 +529,7 @@ ${ctx.cellJson || "{}"}
 	})
 	context.subscriptions.push({ dispose: unsubSecrets })
 
-	Logger.log(`[Cline] extension activated in ${performance.now() - activationStartTime} ms`)
+	Logger.log(`[Cerebriline] extension activated in ${performance.now() - activationStartTime} ms`)
 
 	return createClineAPI(webview.controller)
 }
@@ -582,7 +582,7 @@ async function showJupyterPromptInput(title: string, placeholder: string): Promi
 
 function setupHostProvider(context: ExtensionContext) {
 	const outputChannel = registerClineOutputChannel(context)
-	outputChannel.appendLine("[Cline] Setting up VS Code host...")
+	outputChannel.appendLine("[Cerebriline] Setting up VS Code host...")
 
 	const createWebview = () => new VscodeWebviewProvider(context)
 	const createEditPreview = () => new VscodeEditPreview()
@@ -638,7 +638,7 @@ async function openClineSidebarForTaskUri(): Promise<void> {
 		await new Promise((resolve) => setTimeout(resolve, sidebarWaitIntervalMs))
 	}
 
-	Logger.warn("Task URI handling timed out waiting for Cline sidebar visibility")
+	Logger.warn("Task URI handling timed out waiting for Cerebriline sidebar visibility")
 }
 
 async function getBinaryLocation(name: string): Promise<string> {
@@ -718,7 +718,7 @@ async function cleanupLegacyVSCodeStorage(context: ExtensionContext): Promise<vo
 
 		Logger.info("[VS Code Storage Migrations] Starting")
 
-		// Migrate custom instructions to global Cline rules (one-time cleanup)
+		// Migrate custom instructions to global Cerebriline rules (one-time cleanup)
 		await migrateCustomInstructionsToGlobalRules(context)
 
 		// Migrate welcomeViewCompleted setting based on existing API keys (one-time cleanup)

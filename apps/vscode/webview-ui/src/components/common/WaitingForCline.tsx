@@ -3,7 +3,7 @@
  *
  * The webview renders nothing until its first state arrives, so a stream that
  * fails leaves an empty grey rectangle — indistinguishable from a panel that
- * never opened, and reported three times as "Cline crashed" when the extension
+ * never opened, and reported three times as "Cerebriline crashed" when the extension
  * host was healthy the whole time and the task was still running.
  *
  * The stream is already being reopened by the time this appears; this is here
@@ -27,7 +27,7 @@ export function WaitingForCline() {
 				not the run. Reconnecting.
 			</p>
 			<p style={{ margin: 0, opacity: 0.8, fontSize: "12px" }}>
-				The failure has been written to the Cline output channel, so a report collected now will carry it.
+				The failure has been written to the Cerebriline output channel, so a report collected now will carry it.
 			</p>
 			<button
 				onClick={() => window.location.reload()}

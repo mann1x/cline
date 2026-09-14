@@ -2,10 +2,10 @@ import fs from "node:fs"
 import path from "node:path"
 
 /**
- * A file the Cline log can be read out of while the window is still running.
+ * A file the Cerebriline log can be read out of while the window is still running.
  *
  * The output channel is not that file. VS Code buffers the channel and only
- * writes `…/exthost/output_logging_<ts>/1-Cline.log` when the extension host
+ * writes `…/exthost/output_logging_<ts>/1-Cerebriline.log` when the extension host
  * restarts, so the current session's log is 0 bytes on disk for as long as you
  * would want to read it. Diagnosing a live run meant reloading the window,
  * which ends the run being diagnosed.

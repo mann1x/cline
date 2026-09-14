@@ -4,7 +4,7 @@ import type { ApiConfigurationSnapshot } from "./api-config-snapshot"
 /**
  * Named API-configuration profiles.
  *
- * Stock Cline needs none of this: a provider and a model fit on one screen and
+ * Stock Cerebriline needs none of this: a provider and a model fit on one screen and
  * are quick to retype. This fork's panel is not that — context size, sampling,
  * thinking budget and a base URL all vary per model, and several of them vary
  * per quantisation of the *same* model. Rebuilding that combination by hand

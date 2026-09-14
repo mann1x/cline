@@ -169,7 +169,7 @@ function createRealisticMessageSequence(baseTimestamp: number, taskPrompt: strin
 
 	// Create a realistic message sequence
 	const messages: ClineMessage[] = [
-		// Initial task message - uses "say" with "text" which is the format used in Cline.ts
+		// Initial task message - uses "say" with "text" which is the format used in Cerebriline.ts
 		{
 			ts: baseTimestamp,
 			type: "say",

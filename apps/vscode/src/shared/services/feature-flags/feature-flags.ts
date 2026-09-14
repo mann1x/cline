@@ -12,7 +12,7 @@ export enum FeatureFlag {
 	// When off, hardcoded welcome items are shown instead
 	REMOTE_WELCOME_BANNERS = "remote-welcome-banners",
 	// Rollout flag for Cline provider model sourcing:
-	// off => OpenRouter model list, on => Cline endpoint model list.
+	// off => OpenRouter model list, on => Cerebriline endpoint model list.
 	EXTENSION_CLINE_MODELS_ENDPOINT = "extension_cline_models_endpoint",
 	// Rollout flag for fetching recommended Cline models from the upstream endpoint.
 	CLINE_RECOMMENDED_MODELS_UPSTREAM = "cline_recommended_models_upstream",

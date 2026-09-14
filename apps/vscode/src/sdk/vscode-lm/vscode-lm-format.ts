@@ -1,4 +1,4 @@
-// Converts Cline SDK messages (@cline/llms `Message`) into VS Code Language
+// Converts Cerebriline SDK messages (@cline/llms `Message`) into VS Code Language
 // Model API messages (`vscode.LanguageModelChatMessage`).
 //
 // SDK content blocks (text / image / tool_use / tool_result) map onto VS Code LM
@@ -29,7 +29,7 @@ export function asObjectSafe(value: unknown): object {
 		}
 		return {}
 	} catch (error) {
-		Logger.warn("Cline <Language Model API>: Failed to parse object:", error)
+		Logger.warn("Cerebriline <Language Model API>: Failed to parse object:", error)
 		return {}
 	}
 }

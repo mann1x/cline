@@ -3,7 +3,7 @@ import type { AutoApprovalSettings } from "@shared/AutoApprovalSettings"
 import type { McpHub } from "@/services/mcp/McpHub"
 
 /**
- * Build SDK `toolPolicies` for tools governed by Cline's auto-approval UI.
+ * Build SDK `toolPolicies` for tools governed by Cerebriline's auto-approval UI.
  *
  * The SDK defaults unlisted tools to auto-approved. For tools controlled by
  * the AutoApproveBar toggles (including all MCP tools), force the SDK to call

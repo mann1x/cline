@@ -22,13 +22,13 @@ export interface TerminalInfo {
  *
  * `abandoned-during-preparation` is the no-shell-integration case: the cwd can
  * never be confirmed, so every acquisition abandons the terminal it tried to
- * reuse. `unobserved-command` is a managed command whose completion Cline lost
+ * reuse. `unobserved-command` is a managed command whose completion Cerebriline lost
  * track of.
  */
 export type TerminalCleanupReason = "abandoned-during-preparation" | "unobserved-command"
 
 /** The terminal name every Cline-created terminal carries. */
-export const CLINE_TERMINAL_NAME = "Cline"
+export const CLINE_TERMINAL_NAME = "Cerebriline"
 
 /**
  * Which extension host created a terminal.
@@ -53,7 +53,7 @@ export class TerminalRegistry {
 			cwd,
 			name: CLINE_TERMINAL_NAME,
 			iconPath: new vscode.ThemeIcon("cline-icon"),
-			// A Cline terminal is reusable only by the extension host that made
+			// A Cerebriline terminal is reusable only by the extension host that made
 			// it: reuse is decided from `TerminalRegistry.terminals`, a static
 			// that starts empty in every new host. Persisting one past the window
 			// therefore revives a shell nothing can ever reuse and nothing will
@@ -117,7 +117,7 @@ export class TerminalRegistry {
 	 *
 	 * The reason decides when it closes, because the two cases hold different
 	 * things. A terminal abandoned during preparation received nothing but
-	 * Cline's own `cd`: there is no output for anyone to read, so it is closed
+	 * Cerebriline's own `cd`: there is no output for anyone to read, so it is closed
 	 * as soon as the acquisition that abandoned it is finished. A terminal whose
 	 * command stopped being observable may have run something the user wants to
 	 * look at, so it waits for the next acquisition -- by which time the tool
@@ -155,7 +155,7 @@ export class TerminalRegistry {
 	}
 
 	/**
-	 * Close Cline terminals left behind by an extension host that is gone.
+	 * Close Cerebriline terminals left behind by an extension host that is gone.
 	 *
 	 * The seam this covers: a terminal is owned by the *window*, reuse is
 	 * decided from a `static` owned by the *extension host*, and nothing in the
@@ -193,11 +193,13 @@ export class TerminalRegistry {
 				terminal.dispose()
 				reclaimed += 1
 			} catch (error) {
-				Logger.warn("[TerminalRegistry] Failed to reclaim an orphaned Cline terminal", error)
+				Logger.warn("[TerminalRegistry] Failed to reclaim an orphaned Cerebriline terminal", error)
 			}
 		}
 		if (reclaimed > 0) {
-			Logger.log(`[TerminalRegistry] Reclaimed ${reclaimed} orphaned Cline terminal(s) from a previous extension host`)
+			Logger.log(
+				`[TerminalRegistry] Reclaimed ${reclaimed} orphaned Cerebriline terminal(s) from a previous extension host`,
+			)
 		}
 		return reclaimed
 	}

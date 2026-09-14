@@ -222,7 +222,7 @@ const PromptTemplatesSection = () => {
 				<p className="text-xs text-description mt-0 mb-3">
 					The system prompt and tool descriptions a model receives. A template applies to a provider, a model family, or
 					a model, and anything it leaves out falls back to <code>default.md</code>. Files in{" "}
-					<code>{state?.globalDirectory ?? "the Cline data directory"}</code>
+					<code>{state?.globalDirectory ?? "the Cerebriline data directory"}</code>
 					{state?.workspaceDirectory ? (
 						<>
 							{" "}

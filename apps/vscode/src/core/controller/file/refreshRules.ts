@@ -8,7 +8,7 @@ import { getCwd, getDesktopDir } from "@/utils/path"
 import type { Controller } from "../index"
 
 /**
- * Refreshes all rule toggles (Cline, External, and Workflows)
+ * Refreshes all rule toggles (Cerebriline, External, and Workflows)
  * @param controller The controller instance
  * @param _request The empty request
  * @returns RefreshedRules containing updated toggles for all rule types

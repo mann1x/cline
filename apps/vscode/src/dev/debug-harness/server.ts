@@ -3,7 +3,7 @@
 /**
  * Debug Harness Server
  *
- * Launches VSCode with the Cline extension in debug mode and provides
+ * Launches VSCode with the Cerebriline extension in debug mode and provides
  * an HTTP API for:
  *   - Extension host debugging (breakpoints, evaluate, stepping) via CDP
  *   - Webview debugging (breakpoints, evaluate, stepping) via CDP
@@ -544,7 +544,7 @@ class DebugHarness {
 				if (frame.isDetached()) continue
 				try {
 					const title = await frame.title()
-					if (title.startsWith("Cline")) {
+					if (title.startsWith("Cerebriline") || title.startsWith("Cline")) {
 						this.sidebarFrame = frame
 						return frame
 					}
@@ -893,7 +893,7 @@ class DebugHarness {
 			// Activity bar might need a different approach
 			await this.page.keyboard.press("Meta+Shift+p")
 			await sleep(300)
-			await this.page.keyboard.type("Cline: Focus on Cline View")
+			await this.page.keyboard.type("Cerebriline: Focus on Cerebriline View")
 			await sleep(200)
 			await this.page.keyboard.press("Enter")
 		}
@@ -1226,7 +1226,7 @@ class DebugHarness {
 	 * browser entirely — use with oauth.captured_urls to get the redirect
 	 * parameters from the captured authorization URL.
 	 *
-	 * For Cline OAuth: the SDK's local callback server captures the code
+	 * For Cerebriline OAuth: the SDK's local callback server captures the code
 	 * automatically. Use this ONLY for provider-specific callbacks (OpenRouter,
 	 * MCP, etc.) that use the vscode:// URI scheme.
 	 *
@@ -1279,7 +1279,7 @@ class DebugHarness {
 						// SharedUriHandler which is imported in extension.ts.
 						//
 						// For now, we'll note the URI and the agent should use
-						// ui.command_palette with "Cline: Handle URI" or similar.
+						// ui.command_palette with "Cerebriline: Handle URI" or similar.
 						return ${JSON.stringify(uri)}
 					})()
 				`,
@@ -1296,7 +1296,7 @@ class DebugHarness {
 				note:
 					"URI constructed. For callbacks that use the vscode:// scheme, " +
 					"you need to trigger the extension's URI handler. Options:\n" +
-					"1. For Cline OAuth (SDK local callback): the SDK captures the code " +
+					"1. For Cerebriline OAuth (SDK local callback): the SDK captures the code " +
 					"automatically from its local HTTP server — no simulation needed.\n" +
 					"2. For MCP/provider OAuth: use 'ext.evaluate' to call " +
 					"SharedUriHandler.handleUri() directly, or use the command palette.",

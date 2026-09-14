@@ -40,7 +40,7 @@ import { prepareTaskResumeStartInput } from "./sdk-task-resume"
 import type { SdkSessionHost } from "./session-host"
 
 const COMPACTION_FAILURE_MESSAGE = "Couldn't compact the conversation. Please try again."
-const COMPACTION_UNSUPPORTED_MESSAGE = "Compaction is not supported by this runtime yet. Please update Cline and try again."
+const COMPACTION_UNSUPPORTED_MESSAGE = "Compaction is not supported by this runtime yet. Please update Cerebriline and try again."
 const COMPACTION_QUEUED_MESSAGE = "Compaction queued. It will run as soon as this turn finishes."
 const COMPACTION_ALREADY_QUEUED_MESSAGE = "Compaction is already queued for the end of this turn."
 

@@ -1,11 +1,11 @@
 import fs from "fs/promises"
-import os from "os"
 import path from "path"
+import { getHomeDocumentsExtensionPath } from "@/core/storage/documents-path"
 import { HostProvider } from "@/hosts/host-provider"
 import { getCwd, getDesktopDir } from "@/utils/path"
 
 /**
- * All valid hook types that can be created and executed by Cline.
+ * All valid hook types that can be created and executed by Cerebriline.
  * These hooks correspond to specific lifecycle events in the task execution process.
  */
 export const VALID_HOOK_TYPES = [
@@ -51,7 +51,7 @@ export async function resolveHooksDirectory(
 	globalHooksDirOverride?: string,
 ): Promise<string> {
 	if (isGlobal) {
-		return globalHooksDirOverride || path.join(os.homedir(), "Documents", "Cline", "Hooks")
+		return globalHooksDirOverride || getHomeDocumentsExtensionPath("Hooks")
 	}
 
 	// For workspace hooks, find the correct workspace

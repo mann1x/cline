@@ -314,7 +314,7 @@ export class SdkSessionEventCoordinator {
 				freeIds.length > 0 ? freeIds : CLINE_RECOMMENDED_MODELS_FALLBACK.free.map((model) => normalizeModelId(model.id))
 			return resolvedFreeIds.includes(normalizedModelId)
 		} catch (error) {
-			Logger.error("[SdkController] Failed to check Cline free model list:", error)
+			Logger.error("[SdkController] Failed to check Cerebriline free model list:", error)
 			const modelId = this.getCurrentClineModelId()
 			if (!modelId) {
 				return false

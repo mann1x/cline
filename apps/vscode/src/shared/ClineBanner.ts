@@ -1,5 +1,5 @@
 /**
- * Banner message types for Cline extension
+ * Banner message types for Cerebriline extension
  */
 
 type BannerSeverity = "info" | "success" | "warning"

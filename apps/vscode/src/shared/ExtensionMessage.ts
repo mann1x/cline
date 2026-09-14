@@ -372,7 +372,7 @@ export interface ClineSayTool {
 	/**
 	 * Which shape of edit this is — SEARCH/REPLACE, a line range, an insert.
 	 *
-	 * The card said "Cline wants to edit this file" for all of them, which is
+	 * The card said "Cerebriline wants to edit this file" for all of them, which is
 	 * the one thing about an edit that is never in question. What the edit is
 	 * doing is inside the payload, and the payload is collapsed.
 	 */

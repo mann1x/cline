@@ -55,8 +55,8 @@ const PRIMITIVES: PrimitiveConfig[] = [
 		title: "Skills",
 		description: (
 			<>
-				Reusable instruction sets that Cline loads on demand for specific tasks, without staying in context for unrelated
-				work. Browse more at <VSCodeLink href="https://agentskills.io/">Agent Skills</VSCodeLink>.
+				Reusable instruction sets that Cerebriline loads on demand for specific tasks, without staying in context for
+				unrelated work. Browse more at <VSCodeLink href="https://agentskills.io/">Agent Skills</VSCodeLink>.
 			</>
 		),
 		icon: SparklesIcon,
@@ -69,7 +69,7 @@ const PRIMITIVES: PrimitiveConfig[] = [
 		title: "MCP Servers",
 		description: (
 			<>
-				Connect Cline to external APIs, local tools, and hosted services through{" "}
+				Connect Cerebriline to external APIs, local tools, and hosted services through{" "}
 				<VSCodeLink href="https://modelcontextprotocol.io/">MCP</VSCodeLink> servers.
 			</>
 		),

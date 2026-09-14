@@ -40,7 +40,7 @@ export function createEscalationApprover(askUser: AskUser | undefined) {
 						? `${request.brief.slice(0, BRIEF_PREVIEW_CHARS)}\n\n… (${request.brief.length - BRIEF_PREVIEW_CHARS} more characters)`
 						: request.brief
 				const answer = await putToUserModally(
-					`Cline wants to hand this task to the expert model (escalation ${request.index} of ${request.of}).\n\n${preview}\n\nThe expert edits your files and takes the task over until it hands back.`,
+					`Cerebriline wants to hand this task to the expert model (escalation ${request.index} of ${request.of}).\n\n${preview}\n\nThe expert edits your files and takes the task over until it hands back.`,
 					[APPROVE, DECLINE],
 				)
 				return { approved: answer.picked === APPROVE }

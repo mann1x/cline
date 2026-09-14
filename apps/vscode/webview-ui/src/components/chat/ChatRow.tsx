@@ -117,24 +117,24 @@ const InvisibleSpacer = () => <div aria-hidden className="h-px" />
  * rendered before.
  */
 const GENERIC_TOOL_VERBS: Record<string, string> = {
-	ask_lsp: "Cline asked the language server:",
-	browser: "Cline used the browser:",
-	check_file: "Cline checked this file:",
+	ask_lsp: "Cerebriline asked the language server:",
+	browser: "Cerebriline used the browser:",
+	check_file: "Cerebriline checked this file:",
 	// `ask_lsp` was called `code_intel` until 2026-09-13. Kept so a task from
 	// before the rename still renders its sentence rather than a bare name.
-	code_intel: "Cline asked the language server:",
-	commit: "Cline committed:",
-	generate_image: "Cline generated an image:",
-	image_generation: "Cline generated an image:",
-	plan: "Cline wrote down the plan:",
-	propose_check: "Cline proposed a check:",
-	restore_file: "Cline put this file back as the transaction found it:",
-	run_check: "Cline ran the check:",
-	tasks: "Cline updated its task list:",
+	code_intel: "Cerebriline asked the language server:",
+	commit: "Cerebriline committed:",
+	generate_image: "Cerebriline generated an image:",
+	image_generation: "Cerebriline generated an image:",
+	plan: "Cerebriline wrote down the plan:",
+	propose_check: "Cerebriline proposed a check:",
+	restore_file: "Cerebriline put this file back as the transaction found it:",
+	run_check: "Cerebriline ran the check:",
+	tasks: "Cerebriline updated its task list:",
 }
 
 function toolVerbForDisplay(toolName: string): string {
-	return GENERIC_TOOL_VERBS[toolName] ?? `Cline used \`${toolName}\`:`
+	return GENERIC_TOOL_VERBS[toolName] ?? `Cerebriline used \`${toolName}\`:`
 }
 
 const ChatRow = memo(
@@ -365,12 +365,12 @@ export const ChatRowContent = memo(
 				case "mistake_limit_reached":
 					return [
 						<CircleXIcon className="text-error size-2" />,
-						<span className="text-error font-bold">Cline is having trouble...</span>,
+						<span className="text-error font-bold">Cerebriline is having trouble...</span>,
 					]
 				case "command":
 					return [
 						<TerminalIcon className="text-foreground size-2" />,
-						<span className="font-bold text-foreground">Cline wants to execute this command:</span>,
+						<span className="font-bold text-foreground">Cerebriline wants to execute this command:</span>,
 					]
 				case "use_mcp_server":
 					const mcpServerUse = JSON.parse(message.text || "{}") as ClineAskUseMcpServer
@@ -381,8 +381,8 @@ export const ChatRowContent = memo(
 							<span className="codicon codicon-server text-foreground mb-[-1.5px]" />
 						),
 						<span className="ph-no-capture font-bold text-foreground break-words">
-							Cline wants to {mcpServerUse.type === "use_mcp_tool" ? "use a tool" : "access a resource"} on the{" "}
-							<code className="break-all">{mcpServerUse.serverName}</code> MCP server:
+							Cerebriline wants to {mcpServerUse.type === "use_mcp_tool" ? "use a tool" : "access a resource"} on
+							the <code className="break-all">{mcpServerUse.serverName}</code> MCP server:
 						</span>,
 					]
 				case "api_req_started":
@@ -392,7 +392,7 @@ export const ChatRowContent = memo(
 				case "followup":
 					return [
 						<span className="codicon codicon-question text-foreground mb-[-1.5px]" />,
-						<span className="font-bold text-foreground">Cline has a question:</span>,
+						<span className="font-bold text-foreground">Cerebriline has a question:</span>,
 					]
 				default:
 					return [null, null]
@@ -470,10 +470,10 @@ export const ChatRowContent = memo(
 					// completely different ways, and telling them apart at a
 					// glance is most of reading a session back.
 					const editToolTitle = isApplyingPatch
-						? "Cline is creating patches to edit this file:"
+						? "Cerebriline is creating patches to edit this file:"
 						: tool.editMode
-							? `Cline wants to edit this file (${tool.editMode}):`
-							: "Cline wants to edit this file:"
+							? `Cerebriline wants to edit this file (${tool.editMode}):`
+							: "Cerebriline wants to edit this file:"
 					return (
 						<div>
 							<div className={HEADER_CLASSNAMES}>
@@ -507,7 +507,7 @@ export const ChatRowContent = memo(
 								<SquareMinusIcon className="size-2" />
 								{tool.operationIsLocatedInWorkspace === false &&
 									toolIcon("sign-out", "yellow", -90, "This file is outside of your workspace")}
-								<span style={{ fontWeight: "bold" }}>Cline wants to delete this file:</span>
+								<span style={{ fontWeight: "bold" }}>Cerebriline wants to delete this file:</span>
 							</div>
 							<CodeAccordian
 								// isLoading={message.partial}
@@ -525,7 +525,7 @@ export const ChatRowContent = memo(
 								<FilePlus2Icon className="size-2" />
 								{tool.operationIsLocatedInWorkspace === false &&
 									toolIcon("sign-out", "yellow", -90, "This file is outside of your workspace")}
-								<span className="font-bold">Cline wants to create a new file:</span>
+								<span className="font-bold">Cerebriline wants to create a new file:</span>
 							</div>
 							{backgroundEditEnabled && tool.path && tool.content ? (
 								<DiffEditRow patch={tool.content} path={tool.path} startLineNumbers={tool.startLineNumbers} />
@@ -548,7 +548,7 @@ export const ChatRowContent = memo(
 								{isImage ? <ImageUpIcon className="size-2" /> : <FileCode2Icon className="size-2" />}
 								{tool.operationIsLocatedInWorkspace === false &&
 									toolIcon("sign-out", "yellow", -90, "This file is outside of your workspace")}
-								<span className="font-bold">Cline wants to read this file:</span>
+								<span className="font-bold">Cerebriline wants to read this file:</span>
 							</div>
 							<div className="bg-code rounded-sm overflow-hidden border border-editor-group-border">
 								<div
@@ -589,8 +589,8 @@ export const ChatRowContent = memo(
 									toolIcon("sign-out", "yellow", -90, "This is outside of your workspace")}
 								<span style={{ fontWeight: "bold" }}>
 									{message.type === "ask"
-										? "Cline wants to view the top level files in this directory:"
-										: "Cline viewed the top level files in this directory:"}
+										? "Cerebriline wants to view the top level files in this directory:"
+										: "Cerebriline viewed the top level files in this directory:"}
 								</span>
 							</div>
 							<CodeAccordian
@@ -611,8 +611,8 @@ export const ChatRowContent = memo(
 									toolIcon("sign-out", "yellow", -90, "This is outside of your workspace")}
 								<span style={{ fontWeight: "bold" }}>
 									{message.type === "ask"
-										? "Cline wants to recursively view all files in this directory:"
-										: "Cline recursively viewed all files in this directory:"}
+										? "Cerebriline wants to recursively view all files in this directory:"
+										: "Cerebriline recursively viewed all files in this directory:"}
 								</span>
 							</div>
 							<CodeAccordian
@@ -633,8 +633,8 @@ export const ChatRowContent = memo(
 									toolIcon("sign-out", "yellow", -90, "This file is outside of your workspace")}
 								<span style={{ fontWeight: "bold" }}>
 									{message.type === "ask"
-										? "Cline wants to view source code definition names used in this directory:"
-										: "Cline viewed source code definition names used in this directory:"}
+										? "Cerebriline wants to view source code definition names used in this directory:"
+										: "Cerebriline viewed source code definition names used in this directory:"}
 								</span>
 							</div>
 							<CodeAccordian
@@ -653,7 +653,8 @@ export const ChatRowContent = memo(
 								{tool.operationIsLocatedInWorkspace === false &&
 									toolIcon("sign-out", "yellow", -90, "This is outside of your workspace")}
 								<span className="font-bold">
-									Cline wants to search this directory for <code className="break-all">{tool.regex}</code>:
+									Cerebriline wants to search this directory for <code className="break-all">{tool.regex}</code>
+									:
 								</span>
 							</div>
 							<SearchResultsDisplay
@@ -670,7 +671,7 @@ export const ChatRowContent = memo(
 						<div>
 							<div className={HEADER_CLASSNAMES}>
 								<FoldVerticalIcon className="size-2" />
-								<span className="font-bold">Cline is condensing the conversation:</span>
+								<span className="font-bold">Cerebriline is condensing the conversation:</span>
 							</div>
 							<div className="bg-code overflow-hidden border border-editor-group-border rounded-[3px]">
 								<div
@@ -714,8 +715,8 @@ export const ChatRowContent = memo(
 									toolIcon("sign-out", "yellow", -90, "This URL is external")}
 								<span className="font-bold">
 									{message.type === "ask"
-										? "Cline wants to fetch content from this URL:"
-										: "Cline fetched content from this URL:"}
+										? "Cerebriline wants to fetch content from this URL:"
+										: "Cerebriline fetched content from this URL:"}
 								</span>
 							</div>
 							<div
@@ -743,8 +744,8 @@ export const ChatRowContent = memo(
 									toolIcon("sign-out", "yellow", -90, "This search is external")}
 								<span className="font-bold">
 									{message.type === "ask"
-										? "Cline wants to search the web for:"
-										: "Cline searched the web for:"}
+										? "Cerebriline wants to search the web for:"
+										: "Cerebriline searched the web for:"}
 								</span>
 							</div>
 							<div className="bg-code border border-editor-group-border overflow-hidden rounded-xs select-text py-[9px] px-2.5">
@@ -759,7 +760,7 @@ export const ChatRowContent = memo(
 						<div>
 							<div className={HEADER_CLASSNAMES}>
 								<LightbulbIcon className="size-2" />
-								<span className="font-bold">Cline loaded the skill:</span>
+								<span className="font-bold">Cerebriline loaded the skill:</span>
 							</div>
 							<div className="bg-code border border-editor-group-border overflow-hidden rounded-xs py-[9px] px-2.5">
 								<span className="ph-no-capture font-medium">{tool.path}</span>
@@ -1100,7 +1101,7 @@ export const ChatRowContent = memo(
 									<span className="font-medium text-foreground">Shell Integration Unavailable</span>
 								</div>
 								<div className="text-foreground opacity-80">
-									Cline may have trouble viewing the command's output. Please update VSCode (
+									Cerebriline may have trouble viewing the command's output. Please update VSCode (
 									<code>CMD/CTRL + Shift + P</code> → "Update") and make sure you're using a supported shell:
 									zsh, bash, fish, or PowerShell (<code>CMD/CTRL + Shift + P</code> → "Terminal: Select Default
 									Profile").
@@ -1267,7 +1268,7 @@ export const ChatRowContent = memo(
 							<div>
 								<div className={HEADER_CLASSNAMES}>
 									<FilePlus2Icon className="size-2" />
-									<span className="text-foreground font-bold">Cline wants to start a new task:</span>
+									<span className="text-foreground font-bold">Cerebriline wants to start a new task:</span>
 								</div>
 								<NewTaskPreview context={message.text || ""} />
 							</div>
@@ -1277,7 +1278,9 @@ export const ChatRowContent = memo(
 							<div>
 								<div className={HEADER_CLASSNAMES}>
 									<FilePlus2Icon className="size-2" />
-									<span className="text-foreground font-bold">Cline wants to condense your conversation:</span>
+									<span className="text-foreground font-bold">
+										Cerebriline wants to condense your conversation:
+									</span>
 								</div>
 								<NewTaskPreview context={message.text || ""} />
 							</div>
@@ -1287,7 +1290,7 @@ export const ChatRowContent = memo(
 							<div>
 								<div className={HEADER_CLASSNAMES}>
 									<FilePlus2Icon className="size-2" />
-									<span className="text-foreground font-bold">Cline wants to create a Github issue:</span>
+									<span className="text-foreground font-bold">Cerebriline wants to create a Github issue:</span>
 								</div>
 								<ReportBugPreview data={message.text || ""} />
 							</div>

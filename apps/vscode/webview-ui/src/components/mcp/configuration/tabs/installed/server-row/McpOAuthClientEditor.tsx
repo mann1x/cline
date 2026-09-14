@@ -11,7 +11,7 @@ import { McpServiceClient } from "@/services/grpc-client"
  * Set the OAuth client a server issued, on a server that already exists.
  *
  * The fields were on the *Add Remote Server* form only, which helps nobody:
- * a user finds out their server refuses to register Cline by adding it and
+ * a user finds out their server refuses to register Cerebriline by adding it and
  * watching it fail, and at that point the only way to supply a client the
  * provider issued was to hand-edit `cline_mcp_settings.json` — for a server
  * sitting right there in the list with a red error under it (mann1x/cline#63).
@@ -97,8 +97,8 @@ export function McpOAuthClientEditor({ server }: OAuthClientEditorProps) {
 		// biome-ignore lint/a11y/useKeyWithClickEvents: containment, not a control
 		<div className="m-2.5 mt-0" onClick={(event) => event.stopPropagation()}>
 			<div className="mb-2 text-xs text-(--vscode-descriptionForeground)">
-				For a server that only accepts clients it issued itself. Register Cline in the provider's own developer settings,
-				then paste what it gave you.
+				For a server that only accepts clients it issued itself. Register Cerebriline in the provider's own developer
+				settings, then paste what it gave you.
 			</div>
 
 			<VSCodeTextField

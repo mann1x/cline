@@ -80,7 +80,7 @@ export function appendLegacyResumeWarning<T extends { role: string; content: unk
 }
 
 /**
- * Classic Cline truncated long conversations by omitting an index range of
+ * Classic Cerebriline truncated long conversations by omitting an index range of
  * api_conversation_history from every API request: it kept the first
  * user-assistant pair, dropped everything up to and including the range end,
  * and stripped orphaned tool_results from the first kept message

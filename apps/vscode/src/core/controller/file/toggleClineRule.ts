@@ -6,10 +6,10 @@ import { Logger } from "@/shared/services/Logger"
 import type { Controller } from "../index"
 
 /**
- * Toggles a Cline rule (enable or disable)
+ * Toggles a Cerebriline rule (enable or disable)
  * @param controller The controller instance
  * @param request The toggle request
- * @returns The updated Cline rule toggles
+ * @returns The updated Cerebriline rule toggles
  */
 export async function toggleClineRule(controller: Controller, request: ToggleClineRuleRequest): Promise<ToggleClineRules> {
 	const { scope, rulePath, enabled } = request

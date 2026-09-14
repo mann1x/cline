@@ -4,7 +4,7 @@ import { Controller } from "../index"
 
 /**
  * Handles the user clicking the login link in the UI.
- * Uses the SDK-backed AuthService to initiate the Cline OAuth flow.
+ * Uses the SDK-backed AuthService to initiate the Cerebriline OAuth flow.
  * The SDK spawns a local callback server and opens the browser.
  *
  * @param controller The controller instance.

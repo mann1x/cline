@@ -93,7 +93,7 @@ export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExt
 		}),
 	)
 
-	// The MCP servers VS Code is running, which Cline did not start and in one
+	// The MCP servers VS Code is running, which Cerebriline did not start and in one
 	// important case could not: a server that refuses dynamic client
 	// registration cannot be authenticated from here at all, and VS Code
 	// already holds a token for it. Failure to read them is not failure to

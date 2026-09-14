@@ -3,7 +3,7 @@ import { isClineCliInstalled } from "@/utils/cli-detector"
 import { Controller } from ".."
 
 /**
- * Check if the Cline CLI is installed
+ * Check if the Cerebriline CLI is installed
  * @param controller The controller instance
  * @returns Boolean indicating if CLI is installed
  */

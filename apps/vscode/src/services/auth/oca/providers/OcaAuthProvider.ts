@@ -230,7 +230,7 @@ export class OcaAuthProvider {
 	clearAuth(controller: Controller): void {
 		controller.stateManager.setSecret("ocaApiKey", undefined)
 		controller.stateManager.setSecret("ocaRefreshToken", undefined)
-		// Clear legacy OCA secrets that may persist from older Cline versions.
+		// Clear legacy OCA secrets that may persist from older Cerebriline versions.
 		// These are not in SecretKeys (to avoid proto field number changes) but
 		// may exist in users' secret storage and cause auth loops if not cleared.
 		controller.stateManager.setSecret("ocaAccessToken" as any, undefined)

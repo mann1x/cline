@@ -26,7 +26,7 @@ describe("buildSdkProviderConfig", () => {
 		vi.clearAllMocks()
 	})
 
-	it("uses shared Cline OAuth credentials for ClinePass direct handlers", () => {
+	it("uses shared Cerebriline OAuth credentials for ClinePass direct handlers", () => {
 		mocks.providerSettingsManager.getProviderSettings.mockImplementation((providerId: string) => {
 			if (providerId !== "cline") {
 				return undefined

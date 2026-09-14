@@ -161,7 +161,7 @@ export function transformRemoteConfigToStateShape(remoteConfig: RemoteConfig): P
 		}
 	}
 
-	const clineSettings = remoteConfig.providerSettings?.Cline
+	const clineSettings = remoteConfig.providerSettings?.Cerebriline
 	if (clineSettings) {
 		transformed.planModeApiProvider = "cline"
 		transformed.actModeApiProvider = "cline"

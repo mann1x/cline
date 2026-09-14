@@ -54,7 +54,7 @@ export function installOllamaStreamDispatcher(): void {
  * Say whether the dispatcher is in force, once there is somewhere to say it.
  *
  * Split from the install because `Logger` fans out to a set of subscribers and
- * the Cline output channel registers late in activation — anything logged
+ * the Cerebriline output channel registers late in activation — anything logged
  * before that goes to an empty set. The first cut of this logged from the
  * installer at the top of `activate()`, so the one line written to prove the
  * dispatcher was attached could never appear, which is the same shape of

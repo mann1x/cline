@@ -129,7 +129,7 @@ export async function createOcaHeaders(accessToken: string, taskId: string): Pro
 	return {
 		Authorization: `Bearer ${accessToken}`,
 		"Content-Type": "application/json",
-		client: "Cline",
+		client: "Cerebriline",
 		"client-version": `${clineVersion}`,
 		"client-ide": host.platform || "unknown",
 		"client-ide-version": host.version || "unknown",

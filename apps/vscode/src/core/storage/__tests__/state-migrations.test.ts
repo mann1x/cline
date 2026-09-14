@@ -25,7 +25,7 @@ function makeContext(initial: { globalState?: Record<string, unknown>; secrets?:
 
 let dataDir: string
 
-/** Seed a file in the temp Cline data dir (e.g. globalState.json, secrets.json). */
+/** Seed a file in the temp Cerebriline data dir (e.g. globalState.json, secrets.json). */
 function writeDataFile(name: string, contents: unknown) {
 	fs.writeFileSync(path.join(dataDir, name), JSON.stringify(contents), "utf-8")
 }

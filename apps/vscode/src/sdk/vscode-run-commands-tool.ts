@@ -214,7 +214,7 @@ function formatDetachedResult(logFilePath: string, output: string, reason: Detac
 	return [
 		reason === "user"
 			? "The user chose to proceed while the command is starting or still running in their terminal."
-			: `The command was still starting or running after ${FOREGROUND_COMMAND_AUTO_PROCEED_MS / 1000} seconds, so Cline automatically proceeded while leaving it running in the terminal.`,
+			: `The command was still starting or running after ${FOREGROUND_COMMAND_AUTO_PROCEED_MS / 1000} seconds, so Cerebriline automatically proceeded while leaving it running in the terminal.`,
 		`This is partial output; further output is being redirected to this file, which you can read to check progress: ${logFilePath}`,
 		output.length > 0 ? `Output so far:\n${output}` : "No output so far.",
 	].join("\n")

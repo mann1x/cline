@@ -497,7 +497,7 @@ export class McpHub {
 			// Each MCP server requires its own transport connection and has unique capabilities, configurations, and error handling. Having separate clients also allows proper scoping of resources/tools and independent server management like reconnection.
 			const client = new Client(
 				{
-					name: "Cline",
+					name: "Cerebriline",
 					version: this.clientVersion,
 				},
 				{
@@ -1521,7 +1521,7 @@ export class McpHub {
 	private setupFileWatcher(name: string, config: Extract<McpServerConfig, { type: "stdio" }>) {
 		const filePath = config.args?.find((arg: string) => arg.includes("build/index.js"))
 		if (filePath) {
-			// we use chokidar instead of onDidSaveTextDocument because it doesn't require the file to be open in the editor. The settings config is better suited for onDidSave since that will be manually updated by the user or Cline (and we want to detect save events, not every file change)
+			// we use chokidar instead of onDidSaveTextDocument because it doesn't require the file to be open in the editor. The settings config is better suited for onDidSave since that will be manually updated by the user or Cerebriline (and we want to detect save events, not every file change)
 			const watcher = chokidar.watch(filePath, {
 				// persistent: true,
 				// ignoreInitial: true,
@@ -2069,7 +2069,7 @@ export class McpHub {
 	}
 
 	/**
-	 * Add a server Cline launches itself and talks to over stdio.
+	 * Add a server Cerebriline launches itself and talks to over stdio.
 	 *
 	 * Written in the flat shape the settings file already uses — `command`,
 	 * `args`, and optionally `env` and `cwd` — so a server added here reads

@@ -301,7 +301,7 @@ function getToolDisplayInfo(tool: ClineSayTool) {
 	const filePath = tool.path || ""
 	// Listing the workspace root arrives with an empty path, and the bare "/"
 	// that produced was stripped back to nothing by the path cleaner — the row
-	// rendered as "Cline read 1 folder:" naming no folder at all. `searchFiles`
+	// rendered as "Cerebriline read 1 folder:" naming no folder at all. `searchFiles`
 	// below already guarded this case; the three list tools did not.
 	const folderPath = filePath ? `${filePath}/` : "./"
 
@@ -398,5 +398,5 @@ export function getToolGroupSummaryFromParsedTools(tools: ClineSayTool[]): strin
 		parts.push(`performed ${counts.search} search${counts.search > 1 ? "es" : ""}`)
 	}
 
-	return parts.length === 0 ? "Context" : "Cline" + action + parts.join(", ")
+	return parts.length === 0 ? "Context" : "Cerebriline" + action + parts.join(", ")
 }

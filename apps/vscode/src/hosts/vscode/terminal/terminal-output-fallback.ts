@@ -1,7 +1,7 @@
 /**
  * Whether a command's empty output means the capture failed.
  *
- * When shell integration yields nothing, Cline can fall back to reading the
+ * When shell integration yields nothing, Cerebriline can fall back to reading the
  * terminal's visible contents. That snapshot is the *terminal's*, not the
  * command's: it holds whatever is on screen, which is mostly earlier commands.
  * Handing it back as "the command's output" is worse than returning nothing,

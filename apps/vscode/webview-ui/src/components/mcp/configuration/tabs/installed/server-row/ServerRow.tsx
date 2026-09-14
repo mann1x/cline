@@ -78,7 +78,7 @@ const ServerRow = ({
 		}
 	})()
 
-	// OAuth only applies to a server Cline connects to over the network; a
+	// OAuth only applies to a server Cerebriline connects to over the network; a
 	// stdio server it starts itself has nothing to authenticate against.
 	const isRemoteServer = (() => {
 		try {

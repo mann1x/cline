@@ -337,7 +337,7 @@ export class SdkDiffEditCoordinator {
 		const title =
 			content.editType === "create"
 				? `${fileName}: New File (Preview)`
-				: `${fileName}: Original ↔ Cline's Changes (Preview)`
+				: `${fileName}: Original ↔ Cerebriline's Changes (Preview)`
 		// The preview is cosmetic, so a vscode.diff call that rejects or stalls must never
 		// block the approval ask or fail the edit: race the open against a timer and let
 		// callers catch the failure and proceed without a preview.

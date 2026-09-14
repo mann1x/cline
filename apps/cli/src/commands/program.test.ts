@@ -48,8 +48,8 @@ describe("root option help text", () => {
 
 		// Sanity-check the resolvers themselves so the assertions below can't
 		// silently drift along with a resolver regression.
-		expect(configDefault).toBe("~/.cline");
-		expect(dataDirDefault).toBe("~/.cline/data");
+		expect(configDefault).toBe("~/.cerebriline");
+		expect(dataDirDefault).toBe("~/.cerebriline/data");
 
 		expect(help).toContain(
 			`Configuration directory (default: ${configDefault})`,

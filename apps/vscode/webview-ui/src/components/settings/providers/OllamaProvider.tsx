@@ -697,8 +697,8 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 					</DebouncedTextField>
 					<p className="text-xs mt-0 text-description">
 						How much of a single tool result reaches the model. Anything longer keeps its start and its end and loses
-						the middle, with a note saying Cline removed it. Belongs to this configuration, so a profile carries it
-						and the Vision and Agents tabs each have their own. Blank falls back to the global setting.
+						the middle, with a note saying Cerebriline removed it. Belongs to this configuration, so a profile carries
+						it and the Vision and Agents tabs each have their own. Blank falls back to the global setting.
 					</p>
 
 					<DebouncedTextField
@@ -884,7 +884,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 					quickstart guide.
 				</VSCodeLink>{" "}
 				<span style={{ color: "var(--vscode-errorForeground)" }}>
-					(<span style={{ fontWeight: 500 }}>Note:</span> Cline uses complex prompts, so behavior can vary across
+					(<span style={{ fontWeight: 500 }}>Note:</span> Cerebriline uses complex prompts, so behavior can vary across
 					models. Less capable models may not work as expected.)
 				</span>
 			</p>

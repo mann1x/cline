@@ -63,7 +63,7 @@ export class ViewErrorBoundary extends React.Component<ViewErrorBoundaryProps, V
 				</h3>
 				<p style={{ margin: "0 0 12px 0" }}>
 					Your conversation is untouched — close this view to go back to it. The failure below has been written to the
-					Cline output channel, so a report collected now will carry it.
+					Cerebriline output channel, so a report collected now will carry it.
 				</p>
 				<div style={{ display: "flex", gap: "8px", marginBottom: "12px" }}>
 					{this.props.onDone && (

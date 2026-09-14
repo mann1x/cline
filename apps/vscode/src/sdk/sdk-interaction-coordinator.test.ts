@@ -393,7 +393,7 @@ describe("SdkInteractionCoordinator", () => {
 		const errorText = task.messageStateHandler.getClineMessages()[0].text ?? ""
 		expect(errorText).toContain("3 errors in a row")
 		expect(errorText).toContain("tool_execution_failed: bad arguments")
-		expect(errorText).toContain("Send a message to give Cline guidance")
+		expect(errorText).toContain("Send a message to give Cerebriline guidance")
 	})
 
 	it("summarizes the mistake limit without details using the iteration", async () => {
