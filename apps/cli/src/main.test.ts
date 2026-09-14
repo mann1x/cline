@@ -374,7 +374,12 @@ describe("runCli lightweight command dispatch", () => {
 		expect(historyListCalls[0]?.[0]).not.toHaveProperty("workspaceRoot");
 		expect(mockState.runAgentImports).toBe(0);
 		expect(mockState.runInteractiveImports).toBe(0);
-	}, 30_000);
+		// 60s, not the file's 15s and not the 30s #12511 raised it to: this is
+		// the first test to `import("./main")`, so it pays for transforming the
+		// whole CLI module graph, and the fork's graph is bigger. On a CI runner
+		// with the other packages' suites running beside it, that cold import
+		// has twice come in at 30.05s -- the budget, not the work.
+	}, 60_000);
 
 	it("routes connector restart arguments through the restart lifecycle", async () => {
 		process.argv = [
