@@ -132,13 +132,25 @@ export interface CheckFileToolOptions {
 export const LINT_COMMAND_FILE_PLACEHOLDER = `\${file}`
 
 /**
+ * Quote a path for the shell the command will run in.
+ *
+ * `JSON.stringify` is right on POSIX, where a backslash inside double quotes
+ * has to be escaped. On Windows it is wrong twice over: every separator in the
+ * path comes back doubled (`"D:\\repo\\my file.ts"`), and there is nothing to
+ * escape for -- a double quote cannot appear in a Windows filename at all.
+ */
+function quoteForShell(filePath: string): string {
+	return process.platform === "win32" ? `"${filePath}"` : JSON.stringify(filePath)
+}
+
+/**
  * Substitute the file into the configured command.
  *
  * A command without the placeholder gets the path appended, because `"eslint"`
  * is what a user will actually type and refusing it would be pedantry.
  */
 export function buildLintCommand(template: string, filePath: string): string {
-	const quoted = /[\s"']/.test(filePath) ? JSON.stringify(filePath) : filePath
+	const quoted = /[\s"']/.test(filePath) ? quoteForShell(filePath) : filePath
 	return template.includes(LINT_COMMAND_FILE_PLACEHOLDER)
 		? template.replaceAll(LINT_COMMAND_FILE_PLACEHOLDER, quoted)
 		: `${template} ${quoted}`

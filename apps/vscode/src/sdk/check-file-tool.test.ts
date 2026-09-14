@@ -105,8 +105,35 @@ describe("buildLintCommand", () => {
 		expect(buildLintCommand("eslint", at("a.ts"))).toBe(`eslint ${at("a.ts")}`)
 	})
 
-	it("quotes a path with a space in it", () => {
-		expect(buildLintCommand("eslint", at("my file.ts"))).toBe(`eslint "${at("my file.ts")}"`)
+	describe("a path with a space in it", () => {
+		// Both branches, on whichever runner: the quoting differs by platform and
+		// the wrong one is silent -- a Windows agent produced
+		// `eslint "D:\\repo\\my file.ts"`, every separator doubled, and the
+		// command still ran.
+		const withPlatform = (value: string, body: () => void) => {
+			const platform = Object.getOwnPropertyDescriptor(process, "platform") as PropertyDescriptor
+			Object.defineProperty(process, "platform", { value, configurable: true })
+			try {
+				body()
+			} finally {
+				Object.defineProperty(process, "platform", platform)
+			}
+		}
+
+		it("escapes the backslashes a POSIX shell would eat", () => {
+			withPlatform("linux", () => {
+				expect(buildLintCommand("eslint", "/repo/my file.ts")).toBe('eslint "/repo/my file.ts"')
+				// A backslash inside the quotes is the shell's escape character, so it
+				// has to be doubled to survive.
+				expect(buildLintCommand("eslint", "/repo/a\\b c.ts")).toBe('eslint "/repo/a\\\\b c.ts"')
+			})
+		})
+
+		it("leaves a Windows path alone inside the quotes", () => {
+			withPlatform("win32", () => {
+				expect(buildLintCommand("eslint", "D:\\repo\\my file.ts")).toBe('eslint "D:\\repo\\my file.ts"')
+			})
+		})
 	})
 })
 
