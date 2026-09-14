@@ -24,6 +24,7 @@ import { toLegacyApiProvider } from "@shared/model-catalog/provider-helpers"
 import { GlobalInstructionsFile } from "@shared/remote-config/schema"
 import { Mode } from "@shared/storage/types"
 import { TelemetrySetting } from "@shared/TelemetrySetting"
+import { DEFAULT_UPDATE_CHANNEL, type UpdateChannel } from "@shared/UpdateSettings"
 import { UserInfo } from "@shared/UserInfo"
 import { LanguageModelChatSelector } from "vscode"
 import { type BlobStoreSettings } from "./types"
@@ -351,6 +352,17 @@ const USER_SETTINGS_FIELDS = {
 	// panel is a row of numbers under every request that answers a question
 	// they never asked.
 	showRequestTimings: { default: false as boolean },
+	// How the extension keeps itself current. Stored here rather than in
+	// `contributes.configuration` so the panel owns it: VS Code's settings UI
+	// and the plugin's own General tab writing to two different places is how a
+	// feature ends up on in one and off in the other with nothing to say which
+	// won. See `services/updates/`.
+	updateChannel: { default: DEFAULT_UPDATE_CHANNEL as UpdateChannel },
+	// The version the last check found, or "" when the installed build is the
+	// released one. Persisted so the home-page banner is there on the next
+	// window as well: a toast is gone the moment it is dismissed, and the whole
+	// point is that someone who never saw the toast still finds out.
+	availableUpdate: { default: "" as string },
 	cappedThinkingPrompt: { default: "" as string },
 	subagentsEnabled: { default: false as boolean },
 	worktreesEnabled: { default: false as boolean },

@@ -2,7 +2,8 @@ import { BANNER_DATA, BannerAction, BannerActionType, BannerCardData } from "@sh
 import { EmptyRequest } from "@shared/proto/cline/common"
 import type { Worktree } from "@shared/proto/cline/worktree"
 import { TrackWorktreeViewOpenedRequest } from "@shared/proto/cline/worktree"
-import { GitBranch, Sparkles } from "lucide-react"
+import { compareVersions } from "@shared/UpdateSettings"
+import { ArrowDownToLine, GitBranch, Sparkles } from "lucide-react"
 import React, { useCallback, useEffect, useMemo, useState } from "react"
 import BannerCarousel, { BannerData } from "@/components/common/BannerCarousel"
 import WhatsNewModal from "@/components/common/WhatsNewModal"
@@ -26,6 +27,16 @@ import { WelcomeSectionProps } from "../../types/chatTypes"
 const CLINE_PASS_PROMO_BANNER_ID = "cline-pass-home-promo-v2"
 
 /**
+ * The update banner's id, versioned.
+ *
+ * Versioned so dismissing one release's banner does not silence the next one,
+ * and dismissed for the session only rather than persisted: someone who says
+ * "not now" means not now, not never, and the whole reason this exists is that
+ * a `.vsix` install is otherwise never told anything.
+ */
+const updateBannerId = (version: string) => `cerebriline-update-${version}`
+
+/**
  * Welcome section shown when there's no active task
  * Includes info banner, announcements, home header, and history preview
  */
@@ -37,8 +48,13 @@ export const WelcomeSection: React.FC<WelcomeSectionProps> = ({
 	taskHistory,
 	shouldShowQuickWins,
 }) => {
-	const { lastDismissedInfoBannerVersion, lastDismissedCliBannerVersion, lastDismissedModelBannerVersion, dismissedBanners } =
-		useExtensionState()
+	const {
+		lastDismissedInfoBannerVersion,
+		lastDismissedCliBannerVersion,
+		lastDismissedModelBannerVersion,
+		dismissedBanners,
+		availableUpdate,
+	} = useExtensionState()
 
 	// Track if we've shown the "What's New" modal this session
 	const [hasShownWhatsNewModal, setHasShownWhatsNewModal] = useState(false)
@@ -288,6 +304,62 @@ export const WelcomeSection: React.FC<WelcomeSectionProps> = ({
 	])
 
 	/**
+	 * "A newer Cerebriline exists", on the page you see before starting work.
+	 *
+	 * The notification the check raises is a toast: it is gone the moment it is
+	 * dismissed or the window is away from the keyboard, and the people this
+	 * feature is for are exactly the ones who installed a `.vsix` months ago and
+	 * have never been told anything since. This is the durable half.
+	 */
+	const updateBanner = useMemo((): BannerData | undefined => {
+		// Compared, not merely present. The stored version outlives the install
+		// it was about -- someone who updates by hand, or through Open VSX,
+		// would otherwise be advertised the release they are already running
+		// until the next daily check clears it.
+		if (!availableUpdate || compareVersions(availableUpdate, version) <= 0) {
+			return undefined
+		}
+		const id = updateBannerId(availableUpdate)
+		if (dismissedLocalBanners.has(id)) {
+			return undefined
+		}
+		return {
+			id,
+			icon: <ArrowDownToLine className="size-4 text-[var(--vscode-charts-blue)]" />,
+			title: `Cerebriline ${availableUpdate} is available`,
+			description: (
+				<div className="flex flex-col gap-2">
+					<p className="m-0">
+						You are running {version}. The download is checked against the SHA-256 published with the release before
+						anything is installed.
+					</p>
+					<div className="flex items-center gap-2">
+						<Button
+							onClick={() => UiServiceClient.installAvailableUpdate(EmptyRequest.create({})).catch(console.error)}
+							size="sm">
+							Install and reload
+						</Button>
+						<button
+							className="cursor-pointer border-0 bg-transparent p-0 text-xs text-[var(--vscode-textLink-foreground)] underline hover:text-[var(--vscode-textLink-activeForeground,var(--vscode-textLink-foreground))]"
+							onClick={() =>
+								UiServiceClient.openUrl({
+									value: "https://github.com/mann1x/cline/releases/latest",
+								}).catch(console.error)
+							}
+							type="button">
+							Release notes
+						</button>
+					</div>
+				</div>
+			),
+			onDismiss: () => {
+				markBannerDismissedForSession(id)
+				setDismissedLocalBanners(getSessionDismissedBannerIds())
+			},
+		}
+	}, [availableUpdate, dismissedLocalBanners, version])
+
+	/**
 	 * Build array of active banners for carousel
 	 * Combines hardcoded banners (bannerConfig) with dynamic banners from extension state
 	 */
@@ -308,9 +380,15 @@ export const WelcomeSection: React.FC<WelcomeSectionProps> = ({
 			}),
 		)
 
-		// ClinePass promo leads, then extension state banners, then hardcoded banners
-		return [...(clinePassPromoBanner ? [clinePassPromoBanner] : []), ...extensionStateBanners, ...hardcodedBanners]
-	}, [bannerConfig, banners, clineUser, handleBannerAction, handleBannerDismiss, clinePassPromoBanner])
+		// The update leads: it is about the tool the other banners are shown in,
+		// and it is the only one whose usefulness expires.
+		return [
+			...(updateBanner ? [updateBanner] : []),
+			...(clinePassPromoBanner ? [clinePassPromoBanner] : []),
+			...extensionStateBanners,
+			...hardcodedBanners,
+		]
+	}, [bannerConfig, banners, clineUser, handleBannerAction, handleBannerDismiss, clinePassPromoBanner, updateBanner])
 
 	return (
 		<div className="flex flex-col flex-1 w-full h-full p-0 m-0">

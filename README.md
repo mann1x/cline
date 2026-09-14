@@ -98,8 +98,22 @@ npm install @cline/sdk
 
 ## Install
 
-Cerebriline is not on the VS Code Marketplace. Download the `.vsix` from the
-[latest release](https://github.com/mann1x/cline/releases/latest) and install it:
+Cerebriline is not on the VS Code Marketplace — upstream Cline is there, and one
+of us is enough. There are two ways to get it.
+
+**From Open VSX** ([`mann1x.cerebriline`](https://open-vsx.org/extension/mann1x/cerebriline)).
+This is the gallery **VSCodium, Cursor, Windsurf and Gitpod** use, so on those
+editors Cerebriline installs and updates itself the ordinary way — search for
+it in the Extensions panel, or:
+
+```
+codium --install-extension mann1x.cerebriline
+```
+
+Stock VS Code does not read Open VSX, so on it use the `.vsix` below.
+
+**From the `.vsix`.** Download it from the
+[latest release](https://github.com/mann1x/cline/releases/latest) and install:
 
 ```
 code --install-extension cerebriline-<version>.vsix
@@ -108,6 +122,28 @@ code --install-extension cerebriline-<version>.vsix
 Or, from VS Code: **Extensions** -> **...** -> **Install from VSIX...**
 
 Then reload the window. Cerebriline appears in the activity bar.
+
+### Staying up to date
+
+VS Code only auto-updates extensions it installed from a gallery, so a `.vsix`
+install is never checked again on its own. Cerebriline therefore checks for
+itself: once a day it looks at the
+[latest release](https://github.com/mann1x/cline/releases/latest), and when
+there is a newer one it says so. The download is verified against the SHA-256
+published with the release before anything is installed, and nothing installs
+without you asking unless you choose **Auto**.
+
+**Settings -> General -> Check for Updates**, with three values:
+
+| | |
+|---|---|
+| **Off** | never check; install a `.vsix` yourself |
+| **Notify** *(default)* | check daily and tell you; nothing is downloaded until you say so |
+| **Auto** | check daily and install a newer release as soon as it is found, then offer to reload |
+
+There is also a **Cerebriline: Check for Updates** command for checking on
+demand. If you installed from Open VSX your editor already keeps it current,
+and this check will simply find nothing to report.
 
 ### Upgrading from the mann1x Cline fork
 

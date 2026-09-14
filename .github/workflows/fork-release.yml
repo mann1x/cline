@@ -12,9 +12,16 @@
 # Here the name is computed once, asserted, and uploaded by exact path. There
 # is no glob and no human in the naming path.
 #
-# This does NOT publish to the VS Code Marketplace or Open VSX — that is
-# upstream's `ext-vscode-publish-stable.yml`, and it needs secrets this fork
-# does not have. This only cuts the GitHub release.
+# This does NOT publish to the VS Code Marketplace. Upstream Cline is there and
+# one of us there is enough; `ext-vscode-publish-stable.yml` is upstream's and
+# does not apply.
+#
+# It DOES publish to Open VSX when `OVSX_PAT` is configured, and skips that step
+# in silence when it is not — so the release keeps working on a fork or a clone
+# with no token. Open VSX is what VSCodium, Cursor, Windsurf and Gitpod read, so
+# a build published there is auto-updated by those editors the ordinary way.
+# Stock VS Code does not read Open VSX, which is why the extension also carries
+# its own update check (`apps/vscode/src/services/updates/`).
 
 name: Fork Release
 
@@ -185,6 +192,27 @@ jobs:
                   fi
                   echo "Migration script: $(stat -c%s "$SCRIPT") bytes"
                   sha256sum "$SCRIPT"
+
+            - name: Publish to Open VSX
+              # Never fails the release. The GitHub release is the artefact of
+              # record and the extension's own updater reads it; Open VSX is a
+              # convenience for the editors that use it as their gallery, and a
+              # gallery outage must not lose us a tag that is already pushed.
+              continue-on-error: true
+              env:
+                  OVSX_PAT: ${{ secrets.OVSX_PAT }}
+              run: |
+                  # Guarded in the shell, not in `if:`. A step's own `env` is not
+                  # in scope for its `if` expression, so `if: env.OVSX_PAT != ''`
+                  # is always false and the step would silently never run.
+                  if [ -z "$OVSX_PAT" ]; then
+                    echo "OVSX_PAT is not configured - skipping Open VSX. The GitHub release is unaffected."
+                    exit 0
+                  fi
+                  # The `mann1x` namespace was created on 2026-09-14 and the
+                  # token owns it. If it ever has to be recreated:
+                  #   OVSX_PAT=<token> npx ovsx create-namespace mann1x
+                  npx --yes ovsx publish "apps/vscode/${{ steps.version.outputs.artifact }}" -p "$OVSX_PAT"
 
             - name: Create the GitHub release
               uses: softprops/action-gh-release@v1

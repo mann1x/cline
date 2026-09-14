@@ -310,6 +310,8 @@ message Settings {
   optional bool escalation_model_enabled = 205;
   optional string escalation_mode_api_configuration = 206;
   optional string escalation_settings = 207;
+  optional string update_channel = 208;
+  optional string available_update = 209;
 }
 
 message State {
@@ -484,6 +486,10 @@ message UpdateSettingsRequest {
   optional bool show_request_timings = 61;
   optional AtomicProtocolSessionSettings atomic_protocol_session = 65;
   optional EscalationSettings escalation_settings = 68;
+  // "off" | "notify" | "auto". A string rather than an enum: the three values
+  // are the stored ones verbatim, and an enum here would mean a second mapping
+  // to keep in step for no gain.
+  optional string update_channel = 69;
 }
 
 // The escalation path's budgets and switches.

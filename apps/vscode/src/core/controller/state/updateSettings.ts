@@ -5,6 +5,7 @@ import { PlanActMode, McpDisplayMode as ProtoMcpDisplayMode, UpdateSettingsReque
 import { convertProtoToApiProvider } from "@shared/proto-conversions/models/api-configuration-conversion"
 import { OpenaiReasoningEffort } from "@shared/storage/types"
 import { TelemetrySetting } from "@shared/TelemetrySetting"
+import { asUpdateChannel } from "@shared/UpdateSettings"
 import { ClineEnv } from "@/config"
 import { updateQaCredentials } from "@/sdk/qa-credentials-store"
 import { McpDisplayMode } from "@/shared/McpDisplayMode"
@@ -223,6 +224,13 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 
 		if (request.showRequestTimings !== undefined) {
 			controller.stateManager.setGlobalState("showRequestTimings", request.showRequestTimings)
+		}
+
+		if (request.updateChannel !== undefined) {
+			// Narrowed rather than trusted: this arrives as a proto string, and
+			// anything that is not one of the three reads as the default rather
+			// than being stored and silently disabling the check.
+			controller.stateManager.setGlobalState("updateChannel", asUpdateChannel(request.updateChannel))
 		}
 
 		if (request.cappedThinkingEnabled !== undefined) {

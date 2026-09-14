@@ -189,6 +189,57 @@ bundle you grepped, rather than trusting the installer's success message. Then
 tell the maintainer to **Reload Window** — VS Code does not pick it up on its
 own, and the old version's folder stays on disk until restart.
 
+## How users get the update
+
+Three channels, and only the first is automatic on stock VS Code.
+
+**The extension's own update check.** VS Code auto-updates extensions it
+installed from a *gallery* and nothing else: a `.vsix` install is recorded with
+`source: "vsix"` and is never looked at again. That is why 4.100.80 through .86
+once sat unpacked side by side on pandorum, each arriving by `--force` and none
+superseding anything. So the extension checks for itself —
+`apps/vscode/src/services/updates/`. Once a day it reads
+`repos/mann1x/cline/releases/latest`, and when the tag is newer than the running
+build it offers to install: the `.vsix` is downloaded to the extension's own
+global storage, its SHA-256 is compared against the `digest` GitHub published
+with the asset, and only then does it reach
+`workbench.extensions.installExtension`. Nothing is installed unverified and
+nothing is installed silently unless the user set `cerebriline.updates` to
+`auto`; the default is `notify`. `Cerebriline: Check for Updates` runs it on
+demand and, unlike the scheduled check, says so when there is nothing to report.
+
+Two consequences for this procedure. The release must carry the `.vsix` under
+its exact expected name — the updater matches `cerebriline-*.vsix` and ignores
+everything else, so a mis-named asset is invisible to it rather than wrong. And
+a release published as a **draft or pre-release** will not be offered at all:
+`releases/latest` skips both.
+
+**Open VSX.** Published automatically by `fork-release.yml` when the `OVSX_PAT`
+secret is set, and skipped in silence when it is not — the GitHub release is the
+artefact of record either way, and an Open VSX outage must never lose a tag
+that has already been pushed. VSCodium, Cursor, Windsurf and Gitpod use Open VSX
+as their gallery, so a build published there is auto-updated by those editors
+the ordinary way, and the extension's own check then finds the versions equal
+and stays quiet.
+
+Setup is **done** — the `mann1x` namespace was created on 2026-09-14 and the
+token is stored as the `OVSX_PAT` repository secret, so nothing is needed per
+release. If the namespace ever has to be recreated, or the token rotated:
+
+```bash
+OVSX_PAT=<token> npx ovsx create-namespace mann1x        # once, ever
+gh secret set OVSX_PAT --repo mann1x/cline < token.txt   # never in argv
+```
+
+The first release through this path is the one to watch: the Open VSX step is
+`continue-on-error`, so a rejection there will not fail the run and will not be
+obvious. Check the step's log once.
+
+**The VS Code Marketplace: no.** Upstream Cline is there and one of us there is
+enough. This is a decision rather than a constraint — since the rename to
+`mann1x.cerebriline` the extension *could* be published under its own publisher
+— so if it is ever revisited, revisit it here.
+
 ## What installing does NOT touch
 
 The harness runs the **CLI** (`apps/cli/src/index.ts`) on solidPC, not the VS

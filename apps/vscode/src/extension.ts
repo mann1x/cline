@@ -15,6 +15,7 @@ import { WebviewProvider } from "./core/webview"
 import { createClineAPI } from "./exports"
 import "./utils/path" // necessary to have access to String.prototype.toPosix
 import path from "node:path"
+import { checkForUpdates, registerUpdateChecks } from "@services/updates/update-service"
 import type { ExtensionContext } from "vscode"
 import { HostProvider } from "@/hosts/host-provider"
 import { vscodeHostBridgeClient } from "@/hosts/vscode/hostbridge/client/host-grpc-client"
@@ -162,6 +163,14 @@ export async function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(vscode.commands.registerCommand(commands.HistoryButton, () => sendHistoryButtonClickedEvent()))
 	context.subscriptions.push(vscode.commands.registerCommand(commands.AccountButton, () => sendAccountButtonClickedEvent()))
 	context.subscriptions.push(vscode.commands.registerCommand(commands.WorktreesButton, () => sendWorktreesButtonClickedEvent()))
+	// Cerebriline is not on the Marketplace -- upstream Cline is, and one of us
+	// there is enough -- so VS Code will never update a build installed from a
+	// .vsix on its own. The check is the extension's own; see
+	// `services/updates/update-check.ts` for why each decision is where it is.
+	context.subscriptions.push(
+		vscode.commands.registerCommand(commands.CheckForUpdates, () => checkForUpdates(context, { manual: true })),
+	)
+	registerUpdateChecks(context)
 
 	context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider(DIFF_VIEW_URI_SCHEME, diffContentProvider))
 

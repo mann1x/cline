@@ -3,6 +3,7 @@
 import type { GeneratedMedia, RequestTimings } from "@cline/shared"
 import { WorkspaceRoot } from "@shared/multi-root/types"
 import { RemoteConfigFields } from "@shared/storage/state-keys"
+import type { UpdateChannel } from "@shared/UpdateSettings"
 import type { Environment } from "../config"
 import type { AtomicProtocolSessionSettings, AtomicProtocolSettings } from "./AtomicProtocolSettings"
 import { AutoApprovalSettings } from "./AutoApprovalSettings"
@@ -179,6 +180,10 @@ export interface ExtensionState {
 	/** Whether a turn that ran out of thinking budget has its reasoning condensed. */
 	cappedThinkingEnabled?: boolean
 	showRequestTimings?: boolean
+	/** How the extension keeps itself current. See `shared/UpdateSettings.ts`. */
+	updateChannel?: UpdateChannel
+	/** The version the last check found, or empty when this build is current. */
+	availableUpdate?: string
 	/** Replaces the built-in continuation-note instruction; empty means default. */
 	cappedThinkingPrompt?: string
 	/** The built-in continuation-note instruction, so the field can show what it replaces. */

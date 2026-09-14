@@ -320,6 +320,9 @@ service UiService {
 
   // Opens the Cline walkthrough
   rpc openWalkthrough(EmptyRequest) returns (Empty);
+  // Install the release the last update check found. The home-page banner's
+  // button; the same work the notification's "Install" does.
+  rpc installAvailableUpdate(EmptyRequest) returns (Empty);
 
   // Tracks intent signals before task creation or first model activity
   rpc trackIntent(IntentEvent) returns (Empty);

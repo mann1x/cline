@@ -228,6 +228,12 @@
 				"command": "cerebriline.openWalkthrough",
 				"title": "Open Walkthrough",
 				"category": "Cerebriline"
+			},
+			{
+				"command": "cerebriline.checkForUpdates",
+				"title": "Check for Updates",
+				"category": "Cerebriline",
+				"icon": "$(cloud-download)"
 			}
 		],
 		"keybindings": [

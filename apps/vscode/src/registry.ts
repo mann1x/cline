@@ -45,6 +45,7 @@ const ClineCommands = {
 	JupyterGenerateCell: prefix + ".jupyterGenerateCell",
 	JupyterExplainCell: prefix + ".jupyterExplainCell",
 	JupyterImproveCell: prefix + ".jupyterImproveCell",
+	CheckForUpdates: prefix + ".checkForUpdates",
 }
 
 /**
