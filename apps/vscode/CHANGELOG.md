@@ -5,6 +5,64 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
+## [4.100.117] — 2026-09-14
+
+### The listing says what this is
+
+The Open VSX page was rendering almost empty, for three separate reasons.
+
+- **The description** was byte-identical to upstream Cline's. It now says what
+  Cerebriline actually is: a Cline fork built for local and small models, with
+  per-model prompt templating, escalation, sub-agents and image generation.
+- **The Overview tab shipped a zero-byte readme.** `vsce` reads `README.md` from
+  the extension root, and ours is an empty upstream placeholder; the swap that
+  fills it was never wired into this fork's release workflow. Every release up
+  to 4.100.116 shipped it blank.
+- **The Changelog tab shipped nothing at all**, because no changelog was
+  packaged. This release is the first to carry one.
+
+Release notes are now the single source for both: written once per release, they
+become the GitHub release body *and* the Changelog tab, so the two cannot
+disagree. A release with no notes now fails before anything is built.
+
+### Ollama: num_gpu
+
+Ollama decides how many model layers to offload with its own estimator, and it
+is conservative — it has been measured refusing layers that fit and dropping a
+model to the CPU without saying so. **num_gpu** now sits in the Ollama advanced
+settings so you can overrule it.
+
+`-1` leaves the decision to Ollama and `0` keeps the model on the CPU; both are
+real settings and are sent as typed. Above that the number is a layer count, and
+the range goes to 9999 because layer counts are not bounded by the 99 people
+habitually type. Left blank, nothing is sent and Ollama's own estimate stands.
+
+### Fixed
+
+- **The Images tab trapped you on it.** The Model tab button and the gate that
+  hides the "Use a different model for …" toggles asked the same question in two
+  hand-written copies that disagreed — the button's list omitted the Images tab.
+  Standing there, Model rendered as both the selected tab and a disabled one, so
+  the only control that leads back was unusable and the section had to be left
+  entirely. Both now share one checked definition.
+- **Parallel Sessions was invisible to profiles.** It saved correctly, but it was
+  missing from the list of fields a profile carries, so changing it never marked
+  a profile as having unsaved changes and saving one did not store it.
+- **The provider-config write log** named only the context window, so editing any
+  other field looked identical to a no-op refresh. It now names the fields a
+  write actually carried.
+
+### Telemetry is off, and the switch is gone
+
+"Allow error and usage reporting" offered a choice this fork cannot honour: no
+telemetry key is built into it, and the ingest host is upstream's. The switch
+could only ever have meant reporting your usage to Cline — under a label reading
+"Help improve Cline" — and with no key it did nothing at all.
+
+The control is removed, and the setting is forced off in code rather than merely
+hidden, so a value inherited from a Cline install or set by a remote config
+cannot quietly turn it back on.
+
 ## [4.100.116] — 2026-09-14
 
 ### The expert works beside you, not instead of you
