@@ -380,6 +380,18 @@ export interface ClineSayTool {
 	/** One-based inclusive line range requested by read_file; readLineEnd omitted = open-ended read (for UI summaries). */
 	readLineStart?: number
 	readLineEnd?: number
+	/**
+	 * The header sentence for this row, when the call's own arguments change
+	 * what the row is reporting and the tool's name alone would misstate it.
+	 *
+	 * `restore_file` is why this exists. Its row header was a constant —
+	 * "put this file back as the transaction found it" — written before the
+	 * tool could return to anything other than the transaction's base. It now
+	 * takes a `revision`, and a `find` that restores nothing at all, so the
+	 * constant asserted both the wrong target and, for a search, a write that
+	 * never happened.
+	 */
+	headline?: string
 }
 
 // must keep in sync with system prompt

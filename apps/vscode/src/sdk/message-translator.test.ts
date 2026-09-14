@@ -5120,6 +5120,36 @@ describe("tools with no bespoke row still reach the chat with something to show"
 		expect(sayToolFor("restore_file", { path: "/w/game.html" }).path).toBe("/w/game.html")
 	})
 
+	// The row header was the constant "put this file back as the transaction
+	// found it", written before `restore_file` could go anywhere but the base.
+	// Measured on pandorum session 1789378195473_62r4h, where the one call in
+	// the run asked for `#3` and the transcript said it went to the base.
+	it("names the revision a restore went back to", () => {
+		expect(sayToolFor("restore_file", { path: "/w/game.html", revision: "#3" }).headline).toBe(
+			"Cerebriline put this file back to revision #3:",
+		)
+	})
+
+	it("says an undo is an undo, not a return to the base", () => {
+		expect(sayToolFor("restore_file", { path: "/w/game.html", revision: "last" }).headline).toBe(
+			"Cerebriline undid its last change to this file:",
+		)
+	})
+
+	it("keeps the old sentence when the call asked for the base, or asked for nothing", () => {
+		const expected = "Cerebriline put this file back as the transaction found it:"
+		expect(sayToolFor("restore_file", { path: "/w/game.html" }).headline).toBe(expected)
+		expect(sayToolFor("restore_file", { path: "/w/game.html", revision: "original" }).headline).toBe(expected)
+	})
+
+	// `find` searches the history and writes nothing, so the constant header
+	// asserted a restore that never happened.
+	it("does not claim a restore when the call only searched the history", () => {
+		expect(sayToolFor("restore_file", { path: "/w/game.html", find: "setupLevel" }).headline).toBe(
+			"Cerebriline searched this file's earlier versions:",
+		)
+	})
+
 	// `check_file` takes an array, so the singular `path` lookup found nothing
 	// and the row named no file at all — six of that session's calls were on one.
 	it("names the file check_file was given, which it passes as an array", () => {

@@ -274,10 +274,19 @@ export function createRestoreFileTool(
 				input && typeof input === "object" && !Array.isArray(input)
 					? (input as { revision?: unknown }).revision
 					: undefined;
+			// A number as well as a string. The description above offers
+			// `revision: "#3"` (or `3`), and a model that takes the second half
+			// of that at its word sends the JSON number -- which a string-only
+			// check dropped on the floor, leaving the default. The file then
+			// went all the way back to the transaction's base and the result
+			// said so, truthfully, about a restore nobody asked for.
 			const revisionSpec =
 				typeof requestedRevision === "string" && requestedRevision.trim() !== ""
 					? requestedRevision.trim()
-					: ORIGINAL_REVISION;
+					: typeof requestedRevision === "number" &&
+							Number.isFinite(requestedRevision)
+						? String(requestedRevision)
+						: ORIGINAL_REVISION;
 
 			const lookup = resolveBaseFile(snapshot, requested.trim());
 			if (lookup.kind === "uncovered" || lookup.kind === "outside") {

@@ -274,6 +274,40 @@ function parseRevision(requested: string): number | "original" | "last" | null {
 	return Number.isInteger(value) && value > 0 ? value : null;
 }
 
+/**
+ * Which version a `restore_file` call asked for, as something that can be said
+ * out loud.
+ *
+ * The chat row that reports a restore has to name its target, and it only has
+ * the call's arguments to name it from -- the row is built when the call
+ * starts. It used to name none of them: the header was the constant sentence
+ * "put this file back as the transaction found it", written when the base was
+ * the only place the tool could go. A restore to `#3` was reported as a
+ * restore to the base.
+ *
+ * This goes through `parseRevision`, the same reader the tool itself uses, so
+ * the aliases stay one set. Add an alias there and every caller says the right
+ * thing without being told.
+ */
+export type RestoreTarget =
+	| { readonly kind: "original" }
+	| { readonly kind: "last" }
+	| { readonly kind: "numbered"; readonly index: number }
+	| { readonly kind: "unreadable"; readonly requested: string };
+
+export function describeRestoreTarget(
+	requested: string | undefined | null,
+): RestoreTarget {
+	const text = typeof requested === "string" ? requested.trim() : "";
+	// An absent `revision` is the documented default, not a bad one.
+	if (text === "") return { kind: "original" };
+	const parsed = parseRevision(text);
+	if (parsed === null) return { kind: "unreadable", requested: text };
+	if (parsed === "original") return { kind: "original" };
+	if (parsed === "last") return { kind: "last" };
+	return { kind: "numbered", index: parsed };
+}
+
 export function createRevisionLog(
 	_unused?: unknown,
 	limits: RevisionLimits = {},

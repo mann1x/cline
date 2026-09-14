@@ -27,7 +27,7 @@
 // - SDK "ended" event → finalizes the session
 
 import type { CoreSessionEvent } from "@cline/core"
-import { PATCH_MARKERS, projectSessionMessagesForDisplay } from "@cline/core"
+import { describeRestoreTarget, PATCH_MARKERS, projectSessionMessagesForDisplay } from "@cline/core"
 import type { MessageWithMetadata as SdkMessage } from "@cline/llms"
 import { type AgentEvent, formatDisplayUserInput, type ProviderErrorClass, type RequestTimings } from "@cline/shared"
 import { COMMAND_OUTPUT_STRING } from "@shared/combineCommandSequences"
@@ -960,6 +960,35 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown): ClineSayTool 
 				tool: toolName as ClineSayTool["tool"],
 				path: "",
 				content: describePlanCall(parsedInput),
+			}
+		}
+
+		case "restore_file": {
+			// The row's header used to be a constant: "put this file back as the
+			// transaction found it". The tool has taken a `revision` since it
+			// learned to hold file history, so that sentence named the base for
+			// every restore -- a return to `#3` was reported as a return to the
+			// file the transaction opened with. It also takes a `find`, which
+			// searches the history and writes nothing at all, so the constant
+			// asserted a write that never happened.
+			//
+			// Measured on pandorum session 1789378195473_62r4h: one call, with
+			// `revision: "#3"`, rendered as the base.
+			const searched = getStringField(parsedInput, "find")
+			const target = describeRestoreTarget(getStringField(parsedInput, "revision"))
+			const headline = searched
+				? "Cerebriline searched this file's earlier versions:"
+				: target.kind === "numbered"
+					? `Cerebriline put this file back to revision #${target.index}:`
+					: target.kind === "last"
+						? "Cerebriline undid its last change to this file:"
+						: target.kind === "unreadable"
+							? `Cerebriline could not read which version to put back (\`${target.requested}\`):`
+							: "Cerebriline put this file back as the transaction found it:"
+			return {
+				tool: toolName as ClineSayTool["tool"],
+				path: getStringField(parsedInput, "path") ?? "",
+				headline,
 			}
 		}
 

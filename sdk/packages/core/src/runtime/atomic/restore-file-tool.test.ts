@@ -453,6 +453,23 @@ describe("searching the revisions instead of restoring", () => {
 		});
 	});
 
+	// The tool's own description offers `revision: "#3"` (or `3`), and a model
+	// that sends the JSON number used to have it dropped: the string-only check
+	// fell through to the default and the file went back to the transaction's
+	// base instead of to #2. Silent, and the result text then described the
+	// base restore truthfully.
+	it("takes a revision sent as a number, not only as a string", async () => {
+		await withWorkspace({ "m.html": "still broken\n" }, async (root) => {
+			const file = await seeded(root);
+			const tool = createRestoreFileTool({ controller });
+			const out = String(
+				await tool.execute?.({ path: file, revision: 2 } as never, context),
+			);
+			expect(out).toContain("revision #2");
+			expect(await fs.readFile(file, "utf8")).toBe("broken\n");
+		});
+	});
+
 	it("still searches once the restore budget is spent", async () => {
 		await withWorkspace({ "m.html": "still broken\n" }, async (root) => {
 			const file = await seeded(root);

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createRevisionLog, describeRevisions } from "./file-revisions";
+import {
+	createRevisionLog,
+	describeRestoreTarget,
+	describeRevisions,
+} from "./file-revisions";
 
 const body = (text: string) => Buffer.from(text, "utf8");
 const FILE = "/w/manic_miner.html";
@@ -294,5 +298,46 @@ describe("de-duplication", () => {
 		expect(log.heldBytes(FILE)).toBe(
 			Buffer.byteLength("a\n") + Buffer.byteLength("b\n"),
 		);
+	});
+});
+
+// The chat row that reports a restore is built from the call's arguments, so
+// what it can say about the target is exactly what this returns. It said
+// "as the transaction found it" for every restore until this existed.
+describe("describeRestoreTarget", () => {
+	it("reads a numbered revision, however the model wrote it", () => {
+		for (const spec of ["#3", "3", "v3", "rev 3", "revision #3"]) {
+			expect(describeRestoreTarget(spec)).toEqual({
+				kind: "numbered",
+				index: 3,
+			});
+		}
+	});
+
+	it("reads the undo aliases as the last change", () => {
+		for (const spec of ["last", "previous", "undo", "  LAST  "]) {
+			expect(describeRestoreTarget(spec)).toEqual({ kind: "last" });
+		}
+	});
+
+	it("reads the base aliases, and an absent revision, as the original", () => {
+		for (const spec of ["original", "base", "first", "", "   "]) {
+			expect(describeRestoreTarget(spec)).toEqual({ kind: "original" });
+		}
+		expect(describeRestoreTarget(undefined)).toEqual({ kind: "original" });
+	});
+
+	// An unreadable spec is refused by the tool, so the row must not report it
+	// as a restore to the base -- that is the sentence this whole type exists
+	// to stop being told.
+	it("keeps a spec it cannot read rather than calling it the original", () => {
+		expect(describeRestoreTarget("the good one")).toEqual({
+			kind: "unreadable",
+			requested: "the good one",
+		});
+		expect(describeRestoreTarget("#0")).toEqual({
+			kind: "unreadable",
+			requested: "#0",
+		});
 	});
 });

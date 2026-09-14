@@ -124,6 +124,11 @@ export {
 // Re-exported from source rather than stubbed: the session factory composes
 // its hook layers with it, so a fake would test the fake's composition.
 export { mergeAgentHooks } from "../../../../sdk/packages/core/src/hooks/hook-file-hooks"
+// From source, like describeDelimiterBalance above and for the same reason:
+// a pure function over a string, and the sentence the chat row prints about a
+// restore is the thing under test. A fake would agree with itself while the
+// row went on naming the wrong revision.
+export { describeRestoreTarget } from "../../../../sdk/packages/core/src/runtime/atomic/file-revisions"
 export {
 	DEFAULT_MAX_CHANGES,
 	DEFAULT_MAX_TRANSACTIONS,

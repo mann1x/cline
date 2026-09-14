@@ -1181,6 +1181,10 @@ export {
 	BASE_REVISION,
 	withBaseRevisionReads,
 } from "./runtime/atomic/base-revision-reads";
+export {
+	describeRestoreTarget,
+	type RestoreTarget,
+} from "./runtime/atomic/file-revisions";
 // The check a model proposes and a host puts to the user. A host that has
 // somewhere to ask supplies `approveCheck`; one that has not leaves it out.
 export type {

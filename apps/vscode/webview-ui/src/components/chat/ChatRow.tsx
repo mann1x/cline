@@ -128,6 +128,9 @@ const GENERIC_TOOL_VERBS: Record<string, string> = {
 	image_generation: "Cerebriline generated an image:",
 	plan: "Cerebriline wrote down the plan:",
 	propose_check: "Cerebriline proposed a check:",
+	// The fallback only. A restore names the version it went back to, and the
+	// translator puts that sentence on the row as `headline`; this is what a
+	// row from before that change still says.
 	restore_file: "Cerebriline put this file back as the transaction found it:",
 	run_check: "Cerebriline ran the check:",
 	tasks: "Cerebriline updated its task list:",
@@ -792,7 +795,7 @@ export const ChatRowContent = memo(
 						<div>
 							<div className={HEADER_CLASSNAMES}>
 								<WrenchIcon className="size-2" />
-								<span className="font-bold">{toolVerbForDisplay(tool.tool)}</span>
+								<span className="font-bold">{tool.headline || toolVerbForDisplay(tool.tool)}</span>
 							</div>
 							{tool.path ? (
 								<div className="bg-code border border-editor-group-border overflow-hidden rounded-xs py-[9px] px-2.5">
