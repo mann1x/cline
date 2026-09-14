@@ -55,6 +55,20 @@ PY
 git commit -am "release: 4.100.112"
 ```
 
+**Then check the lockfile resolves before you tag:**
+
+```bash
+bun install --frozen-lockfile   # must say "no changes"
+```
+
+The release job runs exactly this, and it is the last thing that can fail
+*after* a tag is pushed. `bun.lock` records each workspace's `name` and
+`version`; a version drift it tolerates, but a **renamed** package it does not —
+the name is the key for that package and every one of its dependency entries.
+v4.100.112's first tag died here, because `apps/vscode` became `cerebriline`
+while the lockfile still keyed the graph under `claude-dev`. Ten seconds here
+saves a five-minute round trip and a re-tag.
+
 ### 3. Build the VSIX
 
 ```bash
