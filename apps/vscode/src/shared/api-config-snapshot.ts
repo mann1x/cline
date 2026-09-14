@@ -67,6 +67,10 @@ export const PROVIDER_CONFIG_PROFILE_KEYS = [
 	"apiLine",
 	"contextWindow",
 	"maxToolResultChars",
+	// Edited in the same panel and writable through the same patch. Left out of
+	// this list it was invisible to a profile in both directions: changing it
+	// marked nothing unsaved, and saving a profile did not carry it.
+	"parallelSessions",
 	"reasoning",
 	"sampling",
 	"headers",

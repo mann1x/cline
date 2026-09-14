@@ -187,6 +187,25 @@ describe("the provider config a profile carries", () => {
 		})
 	})
 
+	// Reported as "Parallel sessions does not trigger Update button as well".
+	// It is a provider-level setting edited in the same panel as the context
+	// window and the tool-result cap, it is writable through the same patch, and
+	// it was simply absent from the key list -- so the profile could neither
+	// notice it changing nor store it.
+	it("carries the settings edited beside the context window", () => {
+		const captured = captureProviderConfigSnapshot({
+			contextWindow: 110000,
+			maxToolResultChars: 32000,
+			parallelSessions: 4,
+		})
+
+		expect(captured).toEqual({
+			contextWindow: 110000,
+			maxToolResultChars: 32000,
+			parallelSessions: 4,
+		})
+	})
+
 	it("never carries a credential", () => {
 		const captured = captureProviderConfigSnapshot({
 			baseUrl: "http://localhost:11434",
