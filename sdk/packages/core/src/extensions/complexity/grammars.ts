@@ -71,6 +71,8 @@ export function grammarFor(filePath: string): string | undefined {
 /** The minimum of web-tree-sitter this module uses, so tests can stand in. */
 export interface ParsedTree {
 	rootNode: SyntaxNode;
+	/** Trees live in wasm memory too, and are freed the same way. */
+	delete?(): void;
 }
 
 export interface SyntaxNode {
@@ -94,10 +96,28 @@ export interface SyntaxNode {
 export interface ParserLike {
 	setLanguage(language: unknown): void;
 	parse(source: string): ParsedTree | null;
+	/** web-tree-sitter holds parsers in wasm memory and frees none of them. */
+	delete?(): void;
 }
 
 let initialised: Promise<unknown> | undefined;
 const languages = new Map<string, Promise<unknown | undefined>>();
+/**
+ * One parser per grammar, kept.
+ *
+ * A new `Parser` was built for every call and never deleted. Parsers live in
+ * wasm memory, which is not the JS heap and is not collected: nothing here
+ * dropped a reference that anything could act on, so every score leaked one
+ * parser for the life of the process. It showed up as the thing that starves a
+ * worker -- a suite that scored a few hundred files spent its time in
+ * instantiation and left an unrelated test with a five-second budget short of
+ * it.
+ *
+ * Reuse is safe because `parse` is synchronous: nothing can interleave two
+ * parses on one parser, whatever is awaiting around them. Verified by parsing
+ * repeatedly through a single parser and comparing trees.
+ */
+const parsers = new Map<string, ParserLike>();
 
 /**
  * Where the wasm files are. Three places, in the order a host would want.
@@ -203,8 +223,13 @@ export async function parserForGrammar(
 		if (!loaded) {
 			return undefined;
 		}
+		const existing = parsers.get(grammar);
+		if (existing) {
+			return existing;
+		}
 		const parser = new treeSitter.Parser();
 		parser.setLanguage(loaded);
+		parsers.set(grammar, parser);
 		return parser;
 	} catch {
 		// A runtime without wasm, a grammar that will not instantiate, a
@@ -217,4 +242,8 @@ export async function parserForGrammar(
 export function forgetGrammars(): void {
 	initialised = undefined;
 	languages.clear();
+	for (const parser of parsers.values()) {
+		parser.delete?.();
+	}
+	parsers.clear();
 }

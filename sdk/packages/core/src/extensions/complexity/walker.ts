@@ -635,18 +635,23 @@ async function scoreHtml(
 		// almost always well-formed HTML around a broken script, would have
 		// let every one of them through.
 		if (!parsed || parseFailed(parsed.rootNode, containing.body.text.length)) {
+			parsed?.delete?.();
 			return undefined;
 		}
-		const inner = scoreTree(parsed, {
-			line: (options.line as number) - containing.startRow,
-		});
-		return inner
-			? {
-					...inner,
-					startLine: inner.startLine + containing.startRow,
-					endLine: inner.endLine + containing.startRow,
-				}
-			: undefined;
+		try {
+			const inner = scoreTree(parsed, {
+				line: (options.line as number) - containing.startRow,
+			});
+			return inner
+				? {
+						...inner,
+						startLine: inner.startLine + containing.startRow,
+						endLine: inner.endLine + containing.startRow,
+					}
+				: undefined;
+		} finally {
+			parsed.delete?.();
+		}
 	}
 
 	// The hardest function across every script, not the sum across them: a page
@@ -656,11 +661,16 @@ async function scoreHtml(
 	for (const { body, startRow } of scripts) {
 		const parsed = parser.parse(body.text);
 		if (!parsed || parseFailed(parsed.rootNode, body.text.length)) {
+			parsed?.delete?.();
 			return undefined;
 		}
-		const scored = worstFunctionIn(parsed, startRow);
-		if (scored && (!worst || scored.score > worst.score)) {
-			worst = scored;
+		try {
+			const scored = worstFunctionIn(parsed, startRow);
+			if (scored && (!worst || scored.score > worst.score)) {
+				worst = scored;
+			}
+		} finally {
+			parsed.delete?.();
 		}
 	}
 	return worst;
@@ -732,8 +742,11 @@ export async function scoreComplexity(
 	if (!parser) {
 		return undefined;
 	}
+	// The tree is freed in `finally`: it lives in wasm memory, which nothing
+	// collects, and the result is a plain object that holds no node.
+	let tree: ParsedTree | null = null;
 	try {
-		const tree = parser.parse(source);
+		tree = parser.parse(source);
 		if (!tree) {
 			return undefined;
 		}
@@ -751,6 +764,8 @@ export async function scoreComplexity(
 			: scoreTree(tree, options);
 	} catch {
 		return undefined;
+	} finally {
+		tree?.delete?.();
 	}
 }
 
