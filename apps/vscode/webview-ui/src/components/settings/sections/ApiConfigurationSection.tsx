@@ -1,6 +1,5 @@
 import { resolveScopedModelStatus } from "@shared/model-scope-config"
 import { UpdateSettingsRequest } from "@shared/proto/cline/state"
-import { Mode } from "@shared/storage/types"
 import { useState } from "react"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { StateServiceClient } from "@/services/grpc-client"
@@ -12,6 +11,7 @@ import { SettingsCheckbox } from "../common/SettingsCheckbox"
 import EscalationModelTab from "../EscalationModelTab"
 import ImageGenModelTab from "../ImageGenModelTab"
 import Section from "../Section"
+import { type ConfigTab, isModelTab } from "../utils/configTabs"
 import { syncModeConfigurations } from "../utils/providerUtils"
 import { useApiConfigurationHandlers } from "../utils/useApiConfigurationHandlers"
 import type { ApiConfigurationProfileScope } from "../utils/useApiConfigurationProfiles"
@@ -26,7 +26,6 @@ interface ApiConfigurationSectionProps {
  * None of Vision, Agents and Escalation is a `Mode`: each configures a second
  * model rather than a mode of the session's.
  */
-type ConfigTab = Mode | "vision" | "agents" | "escalation" | "imagegen"
 
 /** Whether the stored image endpoint names both a URL and a model. */
 function isImageEndpointComplete(raw: string): boolean {
@@ -100,7 +99,7 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 	// unmounting the panel mid-edit and losing whatever was typed into it. The
 	// toggles say which tabs exist; the tab they switch off is the wrong place
 	// to offer them.
-	const onModelTab = activeTab !== "vision" && activeTab !== "agents" && activeTab !== "escalation" && activeTab !== "imagegen"
+	const onModelTab = isModelTab(activeTab)
 	const showTabs =
 		planActSeparateModelsSetting || visionModelEnabled || agentsModelEnabled || escalationModelEnabled || imageGenEnabled
 	// One profile list for every tab; only the target changes with the tab. The
@@ -156,8 +155,8 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 								</>
 							) : (
 								<TabButton
-									disabled={activeTab !== "vision" && activeTab !== "agents" && activeTab !== "escalation"}
-									isActive={activeTab !== "vision" && activeTab !== "agents" && activeTab !== "escalation"}
+									disabled={isModelTab(activeTab)}
+									isActive={isModelTab(activeTab)}
 									onClick={() => setCurrentTab(mode)}
 									style={{
 										opacity: 1,
