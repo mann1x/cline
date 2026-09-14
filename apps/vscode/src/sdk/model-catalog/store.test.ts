@@ -171,6 +171,41 @@ describe("createProviderConfigStore", () => {
 		expect(secondRead).not.toBe(firstRead)
 	})
 
+	// Reported as "I can't change maxToolResultChars, it always comes back with
+	// the same value", with the tell that editing it never marks the profile
+	// dirty -- the dirty check compares the live provider config, so a cap that
+	// never lands there is invisible to it. Every link was read and looked
+	// correct, so the chain is asserted rather than reasoned about.
+	it("keeps a tool-result cap written the way the panel writes it", async () => {
+		const { toProviderConfigPatch } = await import("@core/controller/models/providerCatalogShared")
+		const { WriteProviderConfigPatch } = await import("@shared/proto/cline/models")
+		const { createProviderConfigStore } = await import("./store")
+		const store = createProviderConfigStore()
+		const providerId = parseProviderId("ollama")
+
+		const patch = toProviderConfigPatch(WriteProviderConfigPatch.create({ maxToolResultChars: 32_000 } as never))
+		expect(patch).toMatchObject({ maxToolResultChars: 32_000 })
+
+		store.write(providerId, patch)
+		expect(store.read(providerId).maxToolResultChars).toBe(32_000)
+	})
+
+	// The shape that lost the context window in mann1x/cline#67: a second write
+	// in the same interaction rebuilds the entry and puts back one without the
+	// field. Any other field will do to provoke it.
+	it("does not lose the cap to an unrelated later write", async () => {
+		const { toProviderConfigPatch } = await import("@core/controller/models/providerCatalogShared")
+		const { WriteProviderConfigPatch } = await import("@shared/proto/cline/models")
+		const { createProviderConfigStore } = await import("./store")
+		const store = createProviderConfigStore()
+		const providerId = parseProviderId("ollama")
+
+		store.write(providerId, toProviderConfigPatch(WriteProviderConfigPatch.create({ maxToolResultChars: 32_000 } as never)))
+		store.write(providerId, toProviderConfigPatch(WriteProviderConfigPatch.create({ baseUrl: "http://x:11434" } as never)))
+
+		expect(store.read(providerId).maxToolResultChars).toBe(32_000)
+	})
+
 	it("clears string fields from providers.json when they are written as empty strings", async () => {
 		const { createProviderConfigStore } = await import("./store")
 		mocks.setProviderSettings({ gemini: { provider: "gemini", apiKey: "existing-key", baseUrl: "https://custom.example" } })
