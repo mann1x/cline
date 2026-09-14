@@ -321,8 +321,28 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 	const [samplingDraft, setSamplingDraft] = useState<SamplingDraft>({})
 
 	const storedSampling = config?.sampling
-	// The stored values are the source of truth; the draft only holds what is
-	// being typed right now, so a write from anywhere else still shows up.
+	// The draft is the user's text and it outlives the write, which is the
+	// opposite of what this did and the reason decimals could not be typed.
+	//
+	// `DebouncedTextField` re-syncs its contents whenever `initialValue`
+	// changes and no user edit is pending, and its pending flag is cleared
+	// *before* `onChange` runs. Committing on every complete keystroke and then
+	// emptying the draft meant the field fell back to the stored value, so the
+	// round-trip landed in that unguarded window and overwrote what had been
+	// typed since. Typing `0.0` committed `0` at the first keystroke, the store
+	// echoed `0` back over the field, and the `.0` went with it -- unless the
+	// remaining keystrokes beat the 100ms debounce, which is exactly the
+	// "it works if I type fast" shape of the report.
+	//
+	// Keeping the draft means `initialValue` is whatever the user last typed,
+	// so there is nothing for the echo to overwrite. `top_p` was reported as
+	// the one field that worked; it is not, and the test covers it too -- with
+	// the draft cleared every field fails, so which ones a user notices is
+	// down to how fast they type.
+	//
+	// The cost is that a write from somewhere else does not show up in a field
+	// that has been touched, until the section is reset or the model changes.
+	// That is the right way round: the value on screen is the one being typed.
 	const samplingValue = useCallback(
 		(key: OllamaSamplingFieldKey | "stop" | "thinkBudget" | "thinkBudgetMessage"): string => {
 			const draft = samplingDraft[key]
@@ -419,7 +439,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 	const handleSamplingCommit = useCallback(() => {
 		setSamplingDraft((current) => {
 			commitSampling(current)
-			return {}
+			return current
 		})
 	}, [commitSampling])
 
@@ -467,6 +487,15 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 	// which value it is leaving in force instead of only that it is leaving one.
 	const [modelParameters, setModelParameters] = useState<Record<string, string>>({})
 	const selectedModelId = selectedModel.modelId
+
+	// The draft belongs to the model and the tab it was typed on. It survives a
+	// write, which is what makes a decimal typeable, so something has to end
+	// it: without this, switching model or scope would carry the previous one's
+	// half-typed numbers across and show them as though they were stored.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: the draft is cleared because these changed, so they are the dependencies even though the body does not read them
+	useEffect(() => {
+		setSamplingDraft({})
+	}, [selectedModelId, scope])
 
 	useEffect(() => {
 		if (!selectedModelId) {
