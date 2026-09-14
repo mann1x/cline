@@ -33,8 +33,10 @@ hooksE2e("Hooks - workspace hook runs from this window's workspace root", async 
 		await sidebar.getByTestId("send-button").click()
 
 		// The hook runs during beforeRun, ahead of the model call, so the
-		// marker exists by the time the mock response renders.
-		await expect(sidebar.getByText("mock Cline API response")).toBeVisible()
+		// marker exists by the time the mock response renders. `.first()`
+		// because the mock repeats itself and the nudge gives the turn a second
+		// message: what this waits for is the response rendering at all.
+		await expect(sidebar.getByText("mock Cline API response").first()).toBeVisible()
 
 		let markerRaw: string | undefined
 		await expect

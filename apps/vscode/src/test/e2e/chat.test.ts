@@ -16,7 +16,11 @@ e2e("Chat - can send messages and switch between modes", async ({ helper, sideba
 	// Wait for the (mock) agent turn to finish before navigating away — the task
 	// is persisted to SDK session history when the turn completes, so clicking
 	// "New Task" mid-turn races the history write and "Recent" may not show.
-	await expect(sidebar.getByText("mock Cline API response")).toBeVisible()
+	// `.first()`: the mock answers every request with the same sentence, and a
+	// turn that ends without a tool call is nudged once to continue, so the
+	// finished turn shows the sentence twice. What this line waits for is the
+	// turn ending, not how many messages it took.
+	await expect(sidebar.getByText("mock Cline API response").first()).toBeVisible()
 
 	// Starting a new task should clear the current chat view and show the recent tasks
 	await sidebar.getByRole("button", { name: "New Task", exact: true }).first().click()
