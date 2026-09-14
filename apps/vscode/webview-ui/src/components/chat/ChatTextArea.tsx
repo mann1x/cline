@@ -128,33 +128,6 @@ const Slider = styled.div.withConfig({
 	transform: translateX(${(props) => (props.isAct ? "200%" : "0%")});
 `
 
-/**
- * The middle segment: whether the change protocol is available and engaged.
- *
- * An indicator, not a control. Engaging is a decision with consequences for
- * files on disk -- a transaction that is open when it is switched off gets
- * judged, and may be put back -- and that does not belong on a control the eye
- * reads as a mode toggle and the hand reaches for by habit. The switch is in
- * the auto-approve panel, next to the check it runs.
- */
-const FixSegment = styled.div.withConfig({
-	shouldForwardProp: (prop) => !["engaged", "available"].includes(prop),
-})<{ engaged: boolean; available: boolean }>`
-	z-index: 10;
-	width: 33.3333%;
-	text-align: center;
-	padding: 2px 8px 1px;
-	font-size: 12px;
-	background-color: ${(props) => (props.engaged ? FIX_ENGAGED_COLOR : "transparent")};
-	color: ${(props) => (props.engaged ? "var(--vscode-editor-background)" : "var(--vscode-input-foreground)")};
-	font-weight: ${(props) => (props.engaged ? 700 : "inherit")};
-	/* Dimmed rather than hidden while the protocol is off: a segment that comes
-	   and goes changes the width of the other two, and the control moves under
-	   the pointer. */
-	opacity: ${(props) => (props.available ? 1 : 0.4)};
-	cursor: default;
-`
-
 const ButtonGroup = styled.div`
 	display: flex;
 	align-items: center;
@@ -1716,21 +1689,51 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 									role="switch">
 									Plan
 								</div>
-								{/* Not a switch and not clickable: `role="status"` rather
-								    than `role="switch"` so a screen reader does not offer
-								    it as something to toggle, and the click is stopped so
-								    the habit of hitting this control does not change mode
-								    by accident. */}
-								<FixSegment
+								{/* The middle segment: whether the change protocol is
+								    available and engaged. Not a switch and not clickable:
+								    `role="status"` rather than `role="switch"` so a screen
+								    reader does not offer it as something to toggle, and the
+								    click is stopped so the habit of hitting this control
+								    does not change mode by accident.
+
+								    An indicator, not a control. Engaging is a decision with
+								    consequences for files on disk -- a transaction that is
+								    open when it is switched off gets judged, and may be put
+								    back -- and that does not belong on a control the eye
+								    reads as a mode toggle and the hand reaches for by
+								    habit. The switch is in the auto-approve panel, next to
+								    the check it runs.
+
+								    It carries the same class list as Plan and Act rather
+								    than its own copy of the numbers. As a styled component
+								    it had `font-size: 12px` where its neighbours have
+								    `text-xs`, and no line-height at all where they get
+								    `1rem` -- so it sat on a different baseline and looked
+								    like a different font. Sharing the classes is what makes
+								    that impossible rather than merely fixed. */}
+								<div
 									aria-label={fixIndicator.label}
-									available={fixIndicator.available}
+									className={cn(
+										"pt-0.5 pb-px px-2 z-10 text-xs w-1/3 text-center cursor-default",
+										fixIndicator.engaged ? "font-bold" : "",
+										// Dimmed rather than hidden while the protocol is
+										// off: a segment that comes and goes changes the
+										// width of the other two, and the control moves
+										// under the pointer.
+										fixIndicator.available ? "opacity-100" : "opacity-40",
+									)}
 									data-testid="fix-indicator"
-									engaged={fixIndicator.engaged}
 									onClick={(event) => event.stopPropagation()}
 									role="status"
+									style={{
+										backgroundColor: fixIndicator.engaged ? FIX_ENGAGED_COLOR : "transparent",
+										color: fixIndicator.engaged
+											? "var(--vscode-editor-background)"
+											: "var(--vscode-input-foreground)",
+									}}
 									title={fixIndicator.title}>
 									Fix
-								</FixSegment>
+								</div>
 								<div
 									aria-checked={mode === "act"}
 									className={cn(
