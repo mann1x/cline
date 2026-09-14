@@ -1,3 +1,4 @@
+import path from "node:path"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { FileDiagnostics } from "@/shared/proto/index.cline"
 import { DiagnosticSeverity } from "@/shared/proto/index.cline"
@@ -33,10 +34,20 @@ vi.mock("fs/promises", () => ({
 // `String.prototype.toPosix`, which the diagnostics formatter relies on.
 vi.mock("@/utils/path", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@/utils/path")>()),
-	getCwd: async () => "/repo",
+	getCwd: async () => (await import("node:path")).resolve("/repo"),
 }))
 
-const CWD = "/repo"
+/**
+ * The workspace every test works in, and the way to name a file inside it.
+ *
+ * The tool turns a requested path into an absolute one with `path.resolve`, so
+ * the fixtures have to be built the same way. A "/repo/src/app.ts" literal is a
+ * claim that the runner is POSIX: on Windows the tool produces
+ * `D:\repo\src\app.ts`, the fake disk and the diagnostics never match it, and
+ * five tests fail describing anything but a separator.
+ */
+const CWD = path.resolve("/repo")
+const at = (relativePath: string) => path.resolve(CWD, relativePath)
 
 function diagnostic(message: string, severity = DiagnosticSeverity.DIAGNOSTIC_ERROR) {
 	return {
@@ -85,20 +96,17 @@ describe("readRequestedPaths", () => {
 describe("buildLintCommand", () => {
 	it("substitutes every placeholder", () => {
 		expect(
-			buildLintCommand(
-				`ruff check ${LINT_COMMAND_FILE_PLACEHOLDER} --stdin ${LINT_COMMAND_FILE_PLACEHOLDER}`,
-				"/repo/a.py",
-			),
-		).toBe("ruff check /repo/a.py --stdin /repo/a.py")
+			buildLintCommand(`ruff check ${LINT_COMMAND_FILE_PLACEHOLDER} --stdin ${LINT_COMMAND_FILE_PLACEHOLDER}`, at("a.py")),
+		).toBe(`ruff check ${at("a.py")} --stdin ${at("a.py")}`)
 	})
 
 	it("appends the path when the template names no placeholder", () => {
 		// "eslint" is what a user will actually type.
-		expect(buildLintCommand("eslint", "/repo/a.ts")).toBe("eslint /repo/a.ts")
+		expect(buildLintCommand("eslint", at("a.ts"))).toBe(`eslint ${at("a.ts")}`)
 	})
 
 	it("quotes a path with a space in it", () => {
-		expect(buildLintCommand("eslint", "/repo/my file.ts")).toBe('eslint "/repo/my file.ts"')
+		expect(buildLintCommand("eslint", at("my file.ts"))).toBe(`eslint "${at("my file.ts")}"`)
 	})
 })
 
@@ -107,7 +115,7 @@ describe("check_file", () => {
 		const tool = createCheckFileTool({
 			cwd: CWD,
 			delay: noDelay,
-			readDiagnostics: async () => [fileDiagnostics("/repo/src/app.ts", diagnostic("Unexpected token"))],
+			readDiagnostics: async () => [fileDiagnostics(at("src/app.ts"), diagnostic("Unexpected token"))],
 		})
 
 		const output = await run(tool, { paths: ["src/app.ts"] })
@@ -116,7 +124,7 @@ describe("check_file", () => {
 	})
 
 	it("resolves a relative path against the working directory", async () => {
-		const read = vi.fn(async () => [fileDiagnostics("/repo/src/app.ts", diagnostic("boom"))])
+		const read = vi.fn(async () => [fileDiagnostics(at("src/app.ts"), diagnostic("boom"))])
 		const tool = createCheckFileTool({ cwd: CWD, delay: noDelay, readDiagnostics: read })
 
 		expect(await run(tool, { paths: ["src/app.ts"] })).toContain("boom")
@@ -140,10 +148,7 @@ describe("check_file", () => {
 			cwd: CWD,
 			delay: noDelay,
 			readDiagnostics: async () => [
-				fileDiagnostics(
-					"/repo/src/app.ts",
-					diagnostic("convert to template literal", DiagnosticSeverity.DIAGNOSTIC_HINT),
-				),
+				fileDiagnostics(at("src/app.ts"), diagnostic("convert to template literal", DiagnosticSeverity.DIAGNOSTIC_HINT)),
 			],
 		})
 
@@ -156,15 +161,15 @@ describe("check_file", () => {
 
 		await run(tool, { paths: ["src/app.ts", "src/other.ts"] })
 
-		expect(loadDocument).toHaveBeenCalledWith("/repo/src/app.ts")
-		expect(loadDocument).toHaveBeenCalledWith("/repo/src/other.ts")
+		expect(loadDocument).toHaveBeenCalledWith(at("src/app.ts"))
+		expect(loadDocument).toHaveBeenCalledWith(at("src/other.ts"))
 	})
 
 	it("still reports when a document cannot be loaded", async () => {
 		const tool = createCheckFileTool({
 			cwd: CWD,
 			delay: noDelay,
-			readDiagnostics: async () => [fileDiagnostics("/repo/src/app.ts", diagnostic("boom"))],
+			readDiagnostics: async () => [fileDiagnostics(at("src/app.ts"), diagnostic("boom"))],
 			loadDocument: async () => {
 				throw new Error("no such file")
 			},
@@ -178,8 +183,8 @@ describe("check_file", () => {
 			cwd: CWD,
 			delay: noDelay,
 			readDiagnostics: async () => [
-				fileDiagnostics("/repo/a.ts", diagnostic("first")),
-				fileDiagnostics("/repo/b.ts", diagnostic("second")),
+				fileDiagnostics(at("a.ts"), diagnostic("first")),
+				fileDiagnostics(at("b.ts"), diagnostic("second")),
 			],
 		})
 
@@ -224,13 +229,22 @@ describe("check_file", () => {
 	})
 
 	it("keeps two paths apart on a case-sensitive platform", async () => {
-		const tool = createCheckFileTool({
-			cwd: CWD,
-			delay: noDelay,
-			readDiagnostics: async () => [fileDiagnostics("/repo/App.ts", diagnostic("Unexpected token"))],
-		})
+		// Pinned, because the platform is the subject: on win32 the lookup folds
+		// case on purpose (the test above), so running this one on a Windows agent
+		// asserts the opposite of what the fold is for.
+		const platform = Object.getOwnPropertyDescriptor(process, "platform") as PropertyDescriptor
+		Object.defineProperty(process, "platform", { value: "linux", configurable: true })
+		try {
+			const tool = createCheckFileTool({
+				cwd: CWD,
+				delay: noDelay,
+				readDiagnostics: async () => [fileDiagnostics(at("App.ts"), diagnostic("Unexpected token"))],
+			})
 
-		expect(await run(tool, { paths: ["app.ts"] })).toContain("no problems reported by the editor")
+			expect(await run(tool, { paths: ["app.ts"] })).toContain("no problems reported by the editor")
+		} finally {
+			Object.defineProperty(process, "platform", platform)
+		}
 	})
 
 	it("reports a broken diagnostics read rather than claiming the file is clean", async () => {
@@ -247,11 +261,11 @@ describe("check_file", () => {
 
 	describe("the delimiter scan", () => {
 		it("names the opener beside the editor's own error", async () => {
-			files.set("/repo/app.ts", "function f(){ if (a) { b(); ) }")
+			files.set(at("app.ts"), "function f(){ if (a) { b(); ) }")
 			const tool = createCheckFileTool({
 				cwd: CWD,
 				delay: noDelay,
-				readDiagnostics: async () => [fileDiagnostics("/repo/app.ts", diagnostic("')' expected"))],
+				readDiagnostics: async () => [fileDiagnostics(at("app.ts"), diagnostic("')' expected"))],
 			})
 
 			const output = await run(tool, { paths: ["app.ts"] })
@@ -267,7 +281,7 @@ describe("check_file", () => {
 			// reported by nobody — the file comes back "clean" and the model
 			// believes it. Measured: six consecutive calls on a real file that
 			// `node --check` rejects.
-			files.set("/repo/game.html", ["<body>", "<script>", "function f(){ g(); ) }", "</script>"].join("\n"))
+			files.set(at("game.html"), ["<body>", "<script>", "function f(){ g(); ) }", "</script>"].join("\n"))
 			const tool = createCheckFileTool({ cwd: CWD, delay: noDelay, readDiagnostics: async () => [] })
 
 			const output = await run(tool, { paths: ["game.html"] })
@@ -278,7 +292,7 @@ describe("check_file", () => {
 		})
 
 		it("says nothing extra about a file that balances", async () => {
-			files.set("/repo/app.ts", "export function f(){ return 1 }")
+			files.set(at("app.ts"), "export function f(){ return 1 }")
 			const tool = createCheckFileTool({ cwd: CWD, delay: noDelay, readDiagnostics: async () => [] })
 
 			expect(await run(tool, { paths: ["app.ts"] })).not.toContain("Delimiter scan")
@@ -297,7 +311,7 @@ describe("check_file", () => {
 			const tool = createCheckFileTool({
 				cwd: CWD,
 				delay: noDelay,
-				readDiagnostics: async () => [fileDiagnostics("/repo/a.ts", diagnostic("boom"))],
+				readDiagnostics: async () => [fileDiagnostics(at("a.ts"), diagnostic("boom"))],
 				resolveLintCommand: () => `ruff check ${LINT_COMMAND_FILE_PLACEHOLDER}`,
 				runLintCommand,
 			})
@@ -320,7 +334,7 @@ describe("check_file", () => {
 			const output = await run(tool, { paths: ["a.py"] })
 
 			expect(output).toContain("F401 unused import")
-			expect(output).toContain("ruff check /repo/a.py")
+			expect(output).toContain(`ruff check ${at("a.py")}`)
 		})
 
 		it("says both sources agree when the command passes", async () => {

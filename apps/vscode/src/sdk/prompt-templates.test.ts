@@ -52,14 +52,18 @@ afterEach(() => {
 
 describe("resolveGlobalTemplateDirectory", () => {
 	it("sits under the Cerebriline data directory", () => {
-		mocks.dataDir = "/home/me/.cline/data"
-		expect(resolveGlobalTemplateDirectory()).toBe("/home/me/.cline/data/templates")
+		// Joined rather than spelled out: the separator is the platform's, so a
+		// literal "a/b" here asserts the runner is POSIX and fails on Windows
+		// without saying anything about where the directory sits.
+		mocks.dataDir = join("/home", "me", ".cline", "data")
+		expect(resolveGlobalTemplateDirectory()).toBe(join(mocks.dataDir, "templates"))
 	})
 })
 
 describe("resolveWorkspaceTemplateDirectory", () => {
 	it("sits under .clinerules so it is committed with the project", () => {
-		expect(resolveWorkspaceTemplateDirectory("/repo")).toBe("/repo/.clinerules/templates")
+		const workspace = join("/repo")
+		expect(resolveWorkspaceTemplateDirectory(workspace)).toBe(join(workspace, ".clinerules", "templates"))
 	})
 
 	it("is absent without a workspace", () => {
