@@ -82,7 +82,50 @@ v4.100.112's first tag died here, because `apps/vscode` became `cerebriline`
 while the lockfile still keyed the graph under `claude-dev`. Ten seconds here
 saves a five-minute round trip and a re-tag.
 
-### 3. Build the VSIX
+### 3. Write the release notes
+
+`release-notes/<version>.md`, committed alongside the version bump. **This is the
+one text a release needs you to write**, and it feeds two places at once:
+
+- the **GitHub release body**, and
+- the **Changelog tab** of the Open VSX / Marketplace listing, via
+  `apps/vscode/CHANGELOG.md` baked into the `.vsix`.
+
+They cannot diverge, because both are generated from the same file.
+
+```bash
+$EDITOR release-notes/4.100.117.md
+git add release-notes/4.100.117.md && git commit -m "release: 4.100.117"
+```
+
+Write it as ordinary markdown starting at `##` — the generator demotes headings
+one level so they nest under the version heading, and strips the auto-generated
+**Full Changelog** line.
+
+**A release with no notes does not build.** The generator exits non-zero, before
+anything is packaged, rather than shipping a version whose changelog entry is
+blank. If you would rather not keep a file, annotate the tag instead — the
+resolution order is:
+
+1. `--pending-notes <file>`
+2. `release-notes/<version>.md`
+3. the annotated tag message for `v<version>`
+
+To regenerate by hand, or to preview before tagging:
+
+```bash
+node apps/vscode/scripts/generate-fork-changelog.mjs \
+  --pending-version 4.100.117 --emit-notes /tmp/body.md
+```
+
+Past entries come from the GitHub releases API; only the release being built is
+read locally, because the workflow packages the `.vsix` **before** it creates
+that release.
+
+**Do not point any of this at the repo-root `CHANGELOG.md`.** That one is
+upstream Cline's (`4.1.x`) and describes releases this extension never shipped.
+
+### 4. Build the VSIX
 
 ```bash
 cd apps/vscode && bun run package && \
@@ -119,7 +162,7 @@ call — the outer shell exits and takes the build with it, and you get a silent
 exit 0 with no artefact. Confirm `dist/extension.js` exists and is newer than the
 commit before believing a success.
 
-### 4. Push, tag, release
+### 5. Push, tag, release
 
 ```bash
 git push origin main                                    # the trunk first
@@ -127,7 +170,7 @@ git push origin main:mann1x/full-build-release          # cut the release branch
 git tag -a v4.100.112 -m "v4.100.112" && git push origin v4.100.112
 gh release create v4.100.112 \
   apps/vscode/cerebriline-4.100.112.vsix --repo mann1x/cline \
-  --title "v4.100.112" --notes-file <notes>
+  --title "v4.100.112" --notes-file release-notes/4.100.112.md
 ```
 
 **Name the file, never glob it.** `apps/vscode/*4.100.112.vsix` uploads whatever
@@ -136,7 +179,7 @@ anyone noticing. Spelling the name out makes a mis-named build fail here instead
 of shipping.
 
 **Better: don't do this by hand.** `.github/workflows/fork-release.yml` does the
-whole of steps 3 and 4 — it computes the name, asserts it, refuses a stray
+whole of steps 4 and 5 — it computes the name, asserts it, refuses a stray
 second `.vsix`, and uploads by exact path. Push the tag and it runs:
 
 ```bash
@@ -159,14 +202,28 @@ and it cost us twice — a report collector three revisions stale, and
 the tree for two days. If you ever find yourself pushing only to the release
 branch, that is the bug.
 
-### 5. Verify the artefact, not the build log
+### 6. Verify the artefact, not the build log
 
 Download the published asset back and compare `sha256sum` to the local file.
 Then grep the packaged `extension.js` for a string that only exists in this
 change. A build that "succeeded" and a bundle that carries the code are
 different claims.
 
-### 6. Deploy to pandorum
+**Check the listing files too.** The Overview and Changelog tabs are rendered
+from `readme.md` and `CHANGELOG.md` *inside the `.vsix`*, and both were shipping
+empty or absent up to 4.100.116 without anything failing:
+
+```bash
+# vsce lower-cases both names inside the package.
+unzip -p "$VSIX" extension/readme.md    | wc -c    # must not be 0
+unzip -p "$VSIX" extension/changelog.md | head -8  # must name this version
+```
+
+A zero-byte `readme.md` is the signature of the README swap not running;
+`apps/vscode/README.md` is an empty upstream placeholder and is what vsce picks
+up when `scripts/marketplace-readme.mjs swap-in` has not been called.
+
+### 7. Deploy to pandorum
 
 ```bash
 scp apps/vscode/cerebriline-4.100.112.vsix \
@@ -178,7 +235,7 @@ ssh pandorum 'powershell -NoProfile -Command "code --install-extension C:/Users/
 fails confusingly without it. The `url.parse()` deprecation spew from the `code`
 CLI is normal noise, not a failure.
 
-### 7. Verify the install, then say to reload
+### 8. Verify the install, then say to reload
 
 ```bash
 ssh pandorum 'powershell -NoProfile -Command "Get-ChildItem C:/Users/manni/.vscode/extensions -Directory -Filter *cerebriline* | Sort-Object Name | Select-Object -Last 3 Name,CreationTime"'

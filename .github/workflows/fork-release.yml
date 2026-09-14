@@ -133,6 +133,22 @@ jobs:
                   echo "artifact=${ARTIFACT_PREFIX}-${VERSION}.vsix" >> "$GITHUB_OUTPUT"
                   echo "Tag and package version agree: $TAG"
 
+            # The listing's Changelog tab renders CHANGELOG.md from inside the
+            # .vsix, and the .vsix is packaged below — before the GitHub release
+            # for this tag exists. So this release's notes are resolved locally
+            # (release-notes/<version>.md, else the annotated tag message), baked
+            # into the changelog, and emitted for the release body further down.
+            # One text feeds both. No notes means no release: the script exits
+            # non-zero rather than shipping a version with a blank entry.
+            - name: Resolve release notes and rebuild the changelog
+              run: |
+                  node apps/vscode/scripts/generate-fork-changelog.mjs \
+                    --repo "${{ github.repository }}" \
+                    --pending-version "${{ steps.version.outputs.version }}" \
+                    --emit-notes "${{ runner.temp }}/release-body.md"
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
             # `package` is build:sdk && check-types && build:webview && lint &&
             # esbuild. It builds only — it does not produce a .vsix.
             - name: Build the extension
@@ -146,6 +162,13 @@ jobs:
             - name: Package the VSIX under the fork's name
               working-directory: apps/vscode
               run: |
+                  # vsce reads README.md from the extension root and has no flag
+                  # to point it elsewhere. apps/vscode/README.md is an empty
+                  # upstream placeholder, so without this swap the Overview tab
+                  # ships blank — which is what every release up to 4.100.116 did.
+                  node scripts/marketplace-readme.mjs swap-in
+                  trap 'node scripts/marketplace-readme.mjs restore' EXIT
+
                   vsce package --no-dependencies --allow-package-secrets sendgrid \
                     --out "${{ steps.version.outputs.artifact }}"
 
@@ -225,6 +248,8 @@ jobs:
                       apps/vscode/${{ steps.version.outputs.artifact }}
                       tools/Migrate-ToCerebriline.ps1
                   fail_on_unmatched_files: true
-                  generate_release_notes: true
+                  # The same text baked into the changelog above, so the release
+                  # page and the listing's Changelog tab cannot diverge.
+                  body_path: ${{ runner.temp }}/release-body.md
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
