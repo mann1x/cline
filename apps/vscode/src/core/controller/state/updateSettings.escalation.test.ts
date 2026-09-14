@@ -29,6 +29,7 @@ const stored: EscalationSettings = {
 	struggleWindow: 12,
 	struggleMinIteration: 30,
 	struggleMaxPerTask: 1,
+	struggleEditStreak: 4,
 }
 
 function lastWrite(controller: ReturnType<typeof makeController>) {

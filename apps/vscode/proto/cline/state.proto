@@ -512,6 +512,11 @@ message EscalationSettings {
   optional int32 struggle_window = 7;
   optional int32 struggle_min_iteration = 8;
   optional int32 struggle_max_per_task = 9;
+  // Refused edits in a row before the model is told to consider the expert.
+  // A different measurement from struggle_failed_calls rather than a smaller
+  // one: that reads a window of every tool the session called, this reads an
+  // unbroken run of calls that tried to change a file.
+  optional int32 struggle_edit_streak = 10;
 }
 
 // The per-task half of the change protocol: engaged, and this task's check.
