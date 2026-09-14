@@ -130,9 +130,23 @@ settings keys, and remove the old extension - close VS Code and run:
 # See exactly what would move, and change nothing:
 .\Migrate-ToCerebriline.ps1 -WhatIf
 
-# Do it:
+# Do it. You are asked whether to back up first; the default is yes:
 .\Migrate-ToCerebriline.ps1
+
+# Or answer in advance:
+.\Migrate-ToCerebriline.ps1 -Backup      # back up, no question
+.\Migrate-ToCerebriline.ps1 -SkipBackup  # do not back up, no question
 ```
+
+The backup is a full second copy into a timestamped folder in your home
+directory, with a `MANIFEST.txt` saying what came from where. It needs as much
+room again as your data - on a real install that was 958 MB, nearly all of it
+VS Code extension storage.
+
+Close anything looking at these files, not just VS Code. Renaming a folder on
+Windows needs every handle inside it closed, and an Explorer preview pane is
+enough to block it. If that happens the script names the process holding it and
+carries on - your data has already been copied and verified by that point.
 
 `Migrate-ToCerebriline.ps1` is attached to the
 [release](https://github.com/mann1x/cline/releases/latest) beside the `.vsix`,
