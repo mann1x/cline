@@ -6,6 +6,7 @@ import type { AgentTool, AgentToolContext } from "@cline/shared";
 import { describe, expect, it } from "vitest";
 import {
 	createPendingSuggestion,
+	describeEscalationNudge,
 	describeEscalationOffer,
 	withStruggleSuggestion,
 } from "./struggle-offer";
@@ -190,5 +191,73 @@ describe("an offer that cannot ride the result it was given", () => {
 			wrappedText as unknown as AgentTool<unknown, unknown>
 		).execute({}, context);
 		expect(next).toContain("the offer");
+	});
+});
+
+/**
+ * The nudge, which is the offer's quieter predecessor and must stay quieter.
+ *
+ * If it read like the offer, a model would meet the full proposal on every
+ * ordinary bad patch and learn to skip the one that matters.
+ */
+describe("the nudge", () => {
+	const diagnosis =
+		"Over your last 10 turns: 2 tool calls came back as failures or refusals.";
+
+	it("states what was measured and proposes nothing", () => {
+		const text = describeEscalationNudge({
+			diagnosis,
+			complexity: [],
+			high: false,
+			remaining: 3,
+		});
+
+		expect(text).toContain("2 tool calls");
+		expect(text).not.toContain("escalate");
+	});
+
+	it("carries the complexity lines with their bound attached", () => {
+		const text = describeEscalationNudge({
+			diagnosis,
+			complexity: [
+				"Cognitive complexity of game.html:30-133: 238. That measures how hard the code is to read, not how likely this change is to work — treat it as context, not as evidence.",
+			],
+			high: true,
+			remaining: 2,
+		});
+
+		expect(text).toContain("238");
+		expect(text).toContain("treat it as context, not as evidence");
+	});
+
+	it("names the expert only where the code is dense", () => {
+		const dense = describeEscalationNudge({
+			diagnosis,
+			complexity: ["Cognitive complexity of game.html:1-200: 238."],
+			high: true,
+			remaining: 2,
+		});
+		expect(dense).toContain("escalate");
+		expect(dense).toContain("you have 2 left");
+
+		const ordinary = describeEscalationNudge({
+			diagnosis,
+			complexity: ["Cognitive complexity of small.js:1-20: 3."],
+			high: false,
+			remaining: 2,
+		});
+		expect(ordinary).not.toContain("escalate");
+	});
+
+	// An offer the budget would refuse is worse than no offer.
+	it("says nothing about the expert with nothing left to spend", () => {
+		const text = describeEscalationNudge({
+			diagnosis,
+			complexity: ["Cognitive complexity of game.html:1-200: 238."],
+			high: true,
+			remaining: 0,
+		});
+
+		expect(text).not.toContain("escalate");
 	});
 });

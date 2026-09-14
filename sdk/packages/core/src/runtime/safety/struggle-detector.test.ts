@@ -99,11 +99,15 @@ describe("what earns a suggestion", () => {
 
 	// Failures alone are the late-and-precise operating point this exists to
 	// improve on. A run whose hedging is collapsing is converging.
-	it("says nothing about failures on their own", () => {
+	//
+	// They now earn the quieter verdict rather than silence -- a nudge states
+	// what was counted and proposes nothing -- but never the offer, which is
+	// what this test has always been about.
+	it("offers nothing on failures alone, and nudges instead", () => {
 		const struggle = detector();
 		windowUpTo(struggle, 24, { failures: 6, reasoning: CALM });
 
-		expect(struggle.inspect({ iteration: 24 }).kind).toBe("ok");
+		expect(struggle.inspect({ iteration: 24 }).kind).toBe("nudge");
 	});
 
 	it("says nothing before the run has had a chance to read the problem", () => {
@@ -154,7 +158,9 @@ describe("how often it may say it", () => {
 			reasoning: "I'm stuck, this keeps failing.",
 		});
 
-		expect(struggle.inspect({ iteration: 90 }).kind).toBe("ok");
+		// Spent for the task. What is left is the nudge, which proposes
+		// nothing and so has nothing to spend.
+		expect(struggle.inspect({ iteration: 90 }).kind).not.toBe("suggest");
 	});
 
 	// A model told it is struggling, which then changes nothing, has been told
@@ -174,7 +180,7 @@ describe("how often it may say it", () => {
 			reasoning: "I'm stuck, this keeps failing.",
 		});
 
-		expect(struggle.inspect({ iteration: 34 }).kind).toBe("ok");
+		expect(struggle.inspect({ iteration: 34 }).kind).not.toBe("suggest");
 
 		// The same diagnosis over a file set that has moved is a new one.
 		struggle.noteFileChanged("board.js");
@@ -196,6 +202,100 @@ describe("how often it may say it", () => {
 	});
 });
 
+/**
+ * The turn before the offer.
+ *
+ * The offer costs money, so it fires late and on a disjunction. That made the
+ * turn before it silent, and the turn before it is where saying something is
+ * cheapest. The nudge is derived from the trigger -- one failure short of it
+ * -- so it moves whenever the trigger is reconfigured.
+ */
+describe("the nudge below the offer", () => {
+	it("speaks one failure short of the trigger", () => {
+		const struggle = detector();
+		windowUpTo(struggle, 24, {
+			failures: STRUGGLE_FAILED_CALLS - 1,
+			reasoning: CALM,
+		});
+
+		const verdict = struggle.inspect({ iteration: 24 });
+
+		expect(verdict.kind).toBe("nudge");
+		expect(verdict.message).toContain(`${STRUGGLE_FAILED_CALLS - 1} tool call`);
+	});
+
+	it("stays quiet one failure below that", () => {
+		const struggle = detector();
+		windowUpTo(struggle, 24, {
+			failures: STRUGGLE_FAILED_CALLS - 2,
+			reasoning: CALM,
+		});
+
+		expect(struggle.inspect({ iteration: 24 }).kind).toBe("ok");
+	});
+
+	it("moves with the threshold rather than sitting on a number of its own", () => {
+		const struggle = new StruggleDetector({ failedCalls: 6 });
+		for (let iteration = 1; iteration <= 10; iteration += 1) {
+			struggle.noteTurn({ iteration, reasoning: CALM });
+		}
+		windowUpTo(struggle, 24, { failures: 4, reasoning: CALM });
+		expect(struggle.inspect({ iteration: 24 }).kind).toBe("ok");
+
+		windowUpTo(struggle, 24, { failures: 1, reasoning: CALM });
+		expect(struggle.inspect({ iteration: 24 }).kind).toBe("nudge");
+	});
+
+	// There is no turn before the first one.
+	it("has nothing to say when the trigger is one failure", () => {
+		const struggle = new StruggleDetector({ failedCalls: 1, maxPerTask: 0 });
+		for (let iteration = 1; iteration <= 10; iteration += 1) {
+			struggle.noteTurn({ iteration, reasoning: CALM });
+		}
+		windowUpTo(struggle, 24, { failures: 3, reasoning: CALM });
+
+		expect(struggle.inspect({ iteration: 24 }).kind).toBe("ok");
+	});
+
+	// The caller has to read the files to say anything about them, and the
+	// detector never touches a disk.
+	it("hands over the files the session has changed", () => {
+		const struggle = detector();
+		windowUpTo(struggle, 24, {
+			failures: STRUGGLE_FAILED_CALLS - 1,
+			reasoning: CALM,
+		});
+		struggle.noteFileChanged("src/game.html");
+
+		expect(struggle.inspect({ iteration: 24 }).files).toEqual([
+			"src/game.html",
+		]);
+	});
+
+	// Once the offer has been made there is nothing left to work up to, and a
+	// nudge behind it would be the same measurement said twice.
+	it("stops once the offer has been made in this transaction", () => {
+		const struggle = detector();
+		windowUpTo(struggle, 24, {
+			failures: STRUGGLE_FAILED_CALLS,
+			reasoning: "I'm stuck, this keeps failing.",
+		});
+		expect(struggle.inspect({ iteration: 24 }).kind).toBe("suggest");
+
+		expect(struggle.inspect({ iteration: 25 }).kind).toBe("ok");
+	});
+
+	it("says nothing before the run has had a chance to read the problem", () => {
+		const struggle = detector();
+		windowUpTo(struggle, 15, {
+			failures: STRUGGLE_FAILED_CALLS - 1,
+			reasoning: CALM,
+		});
+
+		expect(struggle.inspect({ iteration: 15 }).kind).toBe("ok");
+	});
+});
+
 describe("the distress lexicon", () => {
 	// 1,628 hits in the corpus, and the same regex catches a model correctly
 	// noticing it mixed up two names. Counting that as distress counts
@@ -206,7 +306,9 @@ describe("the distress lexicon", () => {
 			failures: 4,
 			reasoning: "I'm confusing the board array with the sprite array.",
 		});
-		expect(struggle.inspect({ iteration: 24 }).kind).toBe("ok");
+		// Not the offer. The failures still earn the quieter verdict, which is
+		// what four failed calls are worth on their own.
+		expect(struggle.inspect({ iteration: 24 }).kind).toBe("nudge");
 
 		const stuck = detector();
 		windowUpTo(stuck, 24, {
@@ -325,7 +427,7 @@ describe("driving the detector from the session's own events", () => {
 			turn(feed, iteration, "I'm stuck, this keeps failing.", 1);
 		}
 		detector.noteTransaction(2);
-		expect(detector.inspect({ iteration: 25 }).kind).toBe("ok");
+		expect(detector.inspect({ iteration: 25 }).kind).not.toBe("suggest");
 
 		feed.observe({
 			type: "content_start",

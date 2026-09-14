@@ -164,6 +164,40 @@ describe("the tool", () => {
 		expect(report).toContain("No files named");
 	});
 
+	// The number rides on this tool because this is where the model already is
+	// when it is about to change a file. It must arrive with its bound attached
+	// -- a score handed over bare gets read as a verdict.
+	it("reports the file's cognitive complexity, with the bound", async () => {
+		const filePath = await tempFile(
+			"nested.js",
+			[
+				"function tick(items) {",
+				"  items.forEach((d) => {",
+				"    if (d.on) {",
+				"      for (const p of d.parts) { if (p.hit) { p.y += 1; } }",
+				"    }",
+				"  });",
+				"}",
+			].join("\n"),
+		);
+		const report = (await tool.execute(
+			{ paths: [filePath] },
+			{} as never,
+		)) as string;
+		expect(report).toContain("Cognitive complexity of");
+		expect(report).toContain("treat it as context, not as evidence");
+	});
+
+	// Silence, not a zero: a language with no grammar simply has no line.
+	it("says nothing about complexity for a language it cannot measure", async () => {
+		const filePath = await tempFile("notes.txt", "if if if\n");
+		const report = (await tool.execute(
+			{ paths: [filePath] },
+			{} as never,
+		)) as string;
+		expect(report).not.toContain("Cognitive complexity");
+	});
+
 	it("checks every file named in one call", async () => {
 		const good = await tempFile("good.js", "const a = 1;\n");
 		const bad = await tempFile("bad.js", "const b = (1;\n");

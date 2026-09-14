@@ -24,6 +24,7 @@ import {
 	grammarFor,
 	type ParsedTree,
 	parserFor,
+	parserForGrammar,
 	type SyntaxNode,
 } from "./grammars";
 
@@ -92,6 +93,22 @@ const FUNCTIONS = new Set([
 ]);
 
 const LOGICAL_OPERATORS = new Set(["&&", "||", "and", "or", "??"]);
+
+/**
+ * Where a file's score starts being worth mentioning unprompted.
+ *
+ * Extended from SonarSource's default, which flags a *function* at 15. A file
+ * is the sum of its functions, so 50 is roughly "several functions that would
+ * each be flagged" -- a convention carried over, not a boundary measured on
+ * these runs, and it is quoted nowhere as evidence of anything. It decides one
+ * thing only: whether a nudge mentions the expert.
+ */
+export const HIGH_FILE_COMPLEXITY = 50;
+
+/** Whether a score is high enough to be worth raising on its own. */
+export function isHighComplexity(score: ComplexityScore | undefined): boolean {
+	return score !== undefined && score.score >= HIGH_FILE_COMPLEXITY;
+}
 
 export interface ComplexityScore {
 	/** The cognitive-complexity total for the span that was walked. */
@@ -322,6 +339,146 @@ export function scoreTree(
 }
 
 /**
+ * The `<script>` bodies in an HTML document, with where each one starts.
+ *
+ * `tree-sitter-html` does not descend into a script: the body arrives as one
+ * `raw_text` node and nothing inside it is parsed. So a single-file game --
+ * every loop and every nested `forEach(d=>{if(d){...}})` of it -- scored
+ * exactly 0, and 0 is a *defined* answer, which is the one reading the rest of
+ * this module refuses to allow. Measured on the manic_miner harness source:
+ * 137 lines, score 0.
+ */
+function scriptBodies(
+	root: SyntaxNode,
+): { body: SyntaxNode; startRow: number }[] {
+	const found: { body: SyntaxNode; startRow: number }[] = [];
+	const walk = (node: SyntaxNode): void => {
+		if (node.type === "script_element") {
+			// A `type` that is not JavaScript means the body is data -- an
+			// import map, a JSON island, a template -- and scoring it as code
+			// would be inventing a number. Absent, `module`, and the
+			// JavaScript media types are the ones that are code.
+			const start = childrenOf(node).find(
+				(child) => child.type === "start_tag",
+			);
+			if (start && !isJavaScriptScriptTag(start.text)) {
+				return;
+			}
+			const body = childrenOf(node).find((child) => child.type === "raw_text");
+			// No body is `<script src=...>`: a real script, but not one this
+			// file contains, so there is nothing here to measure.
+			if (body) {
+				found.push({ body, startRow: body.startPosition.row });
+			}
+			return;
+		}
+		for (const child of childrenOf(node)) {
+			walk(child);
+		}
+	};
+	walk(root);
+	return found;
+}
+
+/** Whether a `<script ...>` start tag says its body is JavaScript. */
+function isJavaScriptScriptTag(startTag: string): boolean {
+	const match = startTag.match(/\stype\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/i);
+	const declared = (match?.[2] ?? match?.[3] ?? match?.[4])
+		?.trim()
+		.toLowerCase();
+	if (!declared) {
+		return true;
+	}
+	return (
+		declared === "module" ||
+		declared === "text/javascript" ||
+		declared === "application/javascript" ||
+		declared === "text/ecmascript" ||
+		declared === "application/ecmascript"
+	);
+}
+
+/**
+ * An HTML document scored through its scripts.
+ *
+ * The sum across every script, because the document is the unit the caller
+ * named -- `escalate` and `check_file` both hand over a path, not a function.
+ * The span reported is the first script's first line to the last script's
+ * last line, in the HTML file's own coordinates, so it points at something the
+ * reader can open.
+ *
+ * Silence is preserved exactly where it was: a document whose scripts cannot
+ * be parsed, or whose JavaScript grammar will not load, answers `undefined`.
+ * A document with no script at all is not silence -- there is genuinely no
+ * code in it -- and keeps the markup score, which is 0.
+ */
+async function scoreHtml(
+	tree: ParsedTree,
+	options: { line?: number; grammarDir?: string },
+): Promise<ComplexityScore | undefined> {
+	const scripts = scriptBodies(tree.rootNode);
+	if (scripts.length === 0) {
+		return scoreTree(tree, options);
+	}
+	const parser = await parserForGrammar("javascript", options);
+	if (!parser) {
+		return undefined;
+	}
+
+	// A line inside one script narrows to the function around it, the way the
+	// same option does for a file that is all one language. The line arrives in
+	// the document's numbering and the script is parsed on its own, so it is
+	// shifted in and the answer shifted back.
+	const containing =
+		options.line === undefined
+			? undefined
+			: scripts.find(
+					({ body }) =>
+						options.line !== undefined &&
+						options.line - 1 >= body.startPosition.row &&
+						options.line - 1 <= body.endPosition.row,
+				);
+	if (containing) {
+		const parsed = parser.parse(containing.body.text);
+		if (!parsed) {
+			return undefined;
+		}
+		const inner = scoreTree(parsed, {
+			line: (options.line as number) - containing.startRow,
+		});
+		return inner
+			? {
+					...inner,
+					startLine: inner.startLine + containing.startRow,
+					endLine: inner.endLine + containing.startRow,
+				}
+			: undefined;
+	}
+
+	let total = 0;
+	let startLine = Number.POSITIVE_INFINITY;
+	let endLine = 0;
+	for (const { body, startRow } of scripts) {
+		const parsed = parser.parse(body.text);
+		if (!parsed) {
+			return undefined;
+		}
+		const scored = scoreTree(parsed);
+		if (!scored) {
+			return undefined;
+		}
+		total += scored.score;
+		startLine = Math.min(startLine, scored.startLine + startRow);
+		endLine = Math.max(endLine, scored.endLine + startRow);
+	}
+	return {
+		score: total,
+		startLine: Number.isFinite(startLine) ? startLine : 1,
+		endLine,
+	};
+}
+
+/**
  * How hard the code around a line is to follow, or nothing.
  *
  * Nothing means "not measured" and must never be read as "simple": a language
@@ -333,7 +490,8 @@ export async function scoreComplexity(
 	source: string,
 	options: { line?: number; grammarDir?: string } = {},
 ): Promise<ComplexityScore | undefined> {
-	if (!grammarFor(filePath)) {
+	const grammar = grammarFor(filePath);
+	if (!grammar) {
 		return undefined;
 	}
 	const parser = await parserFor(filePath, options);
@@ -342,7 +500,13 @@ export async function scoreComplexity(
 	}
 	try {
 		const tree = parser.parse(source);
-		return tree ? scoreTree(tree, options) : undefined;
+		if (!tree) {
+			return undefined;
+		}
+		if (grammar === "html") {
+			return await scoreHtml(tree, options);
+		}
+		return scoreTree(tree, options);
 	} catch {
 		return undefined;
 	}

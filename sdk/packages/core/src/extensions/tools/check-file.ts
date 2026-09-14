@@ -462,6 +462,37 @@ async function describeLint(
  * Reading is plain `fs`: this runs in the same process as the rest of the
  * local host's tools, which read files the same way.
  */
+/**
+ * The file's cognitive complexity, as a line to append, or nothing.
+ *
+ * Imported lazily and never fatally, the same way the escalation assessment
+ * reaches it: the grammars are 50 MB of wasm that nothing should pay for until
+ * a file in that language is actually asked about, and every failure -- no
+ * grammar, no wasm runtime, a file that will not parse -- is silence. Silence
+ * here means the line is absent, never that the file is simple.
+ *
+ * Why it rides on `check_file` at all: this is the tool a model calls on a
+ * file it is about to change or has just changed, which is exactly the moment
+ * the number is worth having. It is diagnostic context and the sentence that
+ * travels with it says so -- it is not a verdict, and nothing downstream reads
+ * it as one.
+ */
+async function describeFileComplexity(
+	displayPath: string,
+	absolutePath: string,
+	text: string,
+): Promise<string | undefined> {
+	try {
+		const { scoreComplexity, describeComplexity } = await import(
+			"../complexity/walker"
+		);
+		const score = await scoreComplexity(absolutePath, text);
+		return score ? describeComplexity(score, displayPath) : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 export function createCheckFileTool(options?: {
 	cwd?: string;
 	/** The user's lint command, if they configured one. */
@@ -514,7 +545,7 @@ export function createCheckFileTool(options?: {
 				try {
 					const text = await fs.readFile(filePath, "utf-8");
 					const syntax = checkSource(entry, text);
-					sections.push(
+					const checked =
 						lintCommand && runLint
 							? `${syntax}\n${await describeLint(
 									lintCommand,
@@ -522,8 +553,13 @@ export function createCheckFileTool(options?: {
 									filePath,
 									context?.signal,
 								)}`
-							: syntax,
+							: syntax;
+					const complexity = await describeFileComplexity(
+						entry,
+						filePath,
+						text,
 					);
+					sections.push(complexity ? `${checked}\n${complexity}` : checked);
 				} catch (error) {
 					sections.push(
 						`## ${entry}\nCould not read this file: ${

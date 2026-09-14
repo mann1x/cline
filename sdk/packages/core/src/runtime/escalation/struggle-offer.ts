@@ -50,7 +50,46 @@ export function describeEscalationOffer(input: {
 	].join("\n");
 }
 
-/** A held suggestion, taken by whichever tool result comes next. */
+/**
+ * The quieter message, one failure short of the offer above.
+ *
+ * Two things separate it from `describeEscalationOffer`. It states what was
+ * measured and stops -- no paragraph about cost, no "the expert exists to be
+ * used" -- because at this count the honest reading is usually "this is a
+ * normal bad patch", and a full proposal every time one would arrive would
+ * train the model to skip the one that matters. And it names the expert only
+ * when the code it is working in is genuinely hard to read, which is the one
+ * case where the extra help is worth raising before the trigger.
+ *
+ * The complexity lines arrive already worded, each carrying its own bound.
+ * Nothing here restates the number as a prediction: it says the code is hard
+ * to read, which is all it measures.
+ */
+export function describeEscalationNudge(input: {
+	diagnosis: string;
+	complexity: readonly string[];
+	/** Whether any file in play is over the convention in `walker.ts`. */
+	high: boolean;
+	remaining: number;
+}): string {
+	const lines = [input.diagnosis];
+	if (input.complexity.length > 0) {
+		lines.push("", ...input.complexity);
+	}
+	if (input.high && input.remaining > 0) {
+		lines.push(
+			"",
+			`This is dense code, and dense code is where a second reading is worth most. If the next attempt fails the same way, \`${ESCALATE_TOOL_NAME}\` hands this change to the expert — ${
+				input.remaining === 1
+					? "you have one left"
+					: `you have ${input.remaining} left`
+			}. Nothing is being taken away from you: keep going if you have something specific you have not tried.`,
+		);
+	}
+	return lines.join("\n");
+}
+
+/** A held suggestion, taken by whichever tool result comes next. */ /** A held suggestion, taken by whichever tool result comes next. */
 export interface PendingSuggestion {
 	hold(message: string): void;
 	/** What is owed, without consuming it. */

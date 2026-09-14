@@ -187,10 +187,24 @@ export interface StruggleSignals {
 }
 
 export interface StruggleVerdict {
-	kind: "ok" | "suggest";
+	/**
+	 * `nudge` is the quieter one, and it arrives first.
+	 *
+	 * The offer at `suggest` is a real proposal: it costs money or somebody
+	 * else's hardware, so it fires late and only on the disjunction. That left
+	 * the turn before it silent, which is the turn where saying something is
+	 * cheapest. A nudge is one failure short of the trigger, carries no
+	 * proposal of its own, and stops as soon as the offer takes over.
+	 */
+	kind: "ok" | "nudge" | "suggest";
 	/** What was measured. Never what should be done about it. */
 	message?: string;
 	signals?: StruggleSignals;
+	/**
+	 * Files this session has changed, for a caller that can say something about
+	 * them the detector cannot -- their complexity, which needs to read them.
+	 */
+	files?: readonly string[];
 }
 
 export interface StruggleTurn {
@@ -383,16 +397,17 @@ export class StruggleDetector {
 
 	inspect(input: StruggleInspection): StruggleVerdict {
 		const { iteration } = input;
-		if (
-			iteration < this.limits.minIteration ||
-			this.firedInTransaction ||
-			this.firedInTask >= this.limits.maxPerTask
-		) {
+		// The offer has already been made in this transaction. Everything below
+		// is a way of working up to it, so there is nothing left to say.
+		if (iteration < this.limits.minIteration || this.firedInTransaction) {
 			return { kind: "ok" };
 		}
 		const signals = this.signalsAt(iteration);
-		if (signals.failedCalls < this.limits.failedCalls) {
-			return { kind: "ok" };
+		if (
+			signals.failedCalls < this.limits.failedCalls ||
+			this.firedInTask >= this.limits.maxPerTask
+		) {
+			return this.nudgeAt(signals);
 		}
 		// The disjunction: either the model said so, or it has stopped getting
 		// less unsure. One of the two, never neither -- the failures on their own
@@ -401,13 +416,13 @@ export class StruggleDetector {
 		const noDecay =
 			signals.hedgingRatio !== undefined && signals.hedgingRatio >= 1;
 		if (!lexical && !noDecay) {
-			return { kind: "ok" };
+			return this.nudgeAt(signals);
 		}
 		// Same diagnosis, same files: nothing has happened since it was last
 		// said, so saying it again is noise the model has already ignored once.
 		const key = `${lexical ? "d" : ""}${noDecay ? "h" : ""}|${[...this.changedFiles].sort().join("\u0000")}`;
 		if (key === this.lastFiredKey) {
-			return { kind: "ok" };
+			return this.nudgeAt(signals);
 		}
 		this.lastFiredKey = key;
 		this.firedInTransaction = true;
@@ -416,6 +431,33 @@ export class StruggleDetector {
 			kind: "suggest",
 			message: describeStruggle(signals, this.limits),
 			signals,
+		};
+	}
+
+	/**
+	 * The quieter verdict, one failure short of the offer.
+	 *
+	 * `failedCalls - 1`, derived rather than configured: the point of it is to
+	 * speak on the turn before the trigger, so it has to move when the trigger
+	 * moves. A host that sets `failedCalls: 1` gets no nudge at all, which is
+	 * right -- there is no turn before the first one.
+	 *
+	 * It repeats while the count stays in the band, and the band is one wide by
+	 * construction, so "repeats" is bounded by how long the model sits at
+	 * exactly that many failures.
+	 */
+	private nudgeAt(signals: StruggleSignals): StruggleVerdict {
+		if (
+			this.limits.failedCalls <= 1 ||
+			signals.failedCalls < this.limits.failedCalls - 1
+		) {
+			return { kind: "ok" };
+		}
+		return {
+			kind: "nudge",
+			message: describeStruggle(signals, this.limits),
+			signals,
+			files: [...this.changedFiles],
 		};
 	}
 
@@ -484,13 +526,14 @@ export interface StruggleFeed {
  * call's error, and `content_start` carries the tool input the file set is read
  * from. Nothing here reaches into the runtime.
  *
- * `onSuggest` fires at the end of a turn and never mid-turn: a diagnosis
+ * `onVerdict` fires at the end of a turn and never mid-turn: a diagnosis
  * delivered between two tool calls of the same reply arrives in the middle of
- * work the model has already decided on.
+ * work the model has already decided on. It receives both verdicts that carry
+ * something -- the offer and the nudge below it -- and never `ok`.
  */
 export function createStruggleFeed(
 	detector: StruggleDetector,
-	onSuggest: (verdict: StruggleVerdict) => void,
+	onVerdict: (verdict: StruggleVerdict) => void,
 ): StruggleFeed {
 	let iteration = 0;
 	return {
@@ -532,8 +575,8 @@ export function createStruggleFeed(
 					return;
 				case "iteration_end": {
 					const verdict = detector.inspect({ iteration: event.iteration });
-					if (verdict.kind === "suggest") {
-						onSuggest(verdict);
+					if (verdict.kind !== "ok") {
+						onVerdict(verdict);
 					}
 					return;
 				}

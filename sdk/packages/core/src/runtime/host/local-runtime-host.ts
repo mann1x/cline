@@ -157,6 +157,7 @@ import { buildExpertPrompt } from "../escalation/expert-prompt";
 import { createForcedEscalation } from "../escalation/forced-escalation";
 import {
 	createPendingSuggestion,
+	describeEscalationNudge,
 	describeEscalationOffer,
 	withStruggleSuggestion,
 } from "../escalation/struggle-offer";
@@ -290,8 +291,16 @@ function maxAccumulatedUsage(
 	};
 }
 
-/** Files a single escalation's assessment will read for complexity. */
-const COMPLEXITY_FILE_LIMIT = 3;
+/**
+ * Files a single escalation's assessment will read for complexity.
+ *
+ * Ten, not the three this started at. Three was chosen against the cost of
+ * parsing, which is the wrong thing to be careful about here: the grammars
+ * load once per language per process, the parse is milliseconds, and a model
+ * that names eight files it has been working in was describing the shape of
+ * its problem. Truncating that to the first three threw the description away.
+ */
+const COMPLEXITY_FILE_LIMIT = 10;
 
 /**
  * What the complexity walker makes of the files the model named.
@@ -305,15 +314,15 @@ const COMPLEXITY_FILE_LIMIT = 3;
 async function describeFilesInPlay(
 	files: readonly string[] | undefined,
 	workspaceRoot: string | undefined,
-): Promise<string[]> {
+): Promise<{ lines: string[]; high: boolean }> {
 	if (!files?.length) {
-		return [];
+		return { lines: [], high: false };
 	}
 	const { readFile } = await import("node:fs/promises");
-	const { scoreComplexity, describeComplexity } = await import(
-		"../../extensions/complexity/walker"
-	);
-	const described: string[] = [];
+	const { scoreComplexity, describeComplexity, isHighComplexity } =
+		await import("../../extensions/complexity/walker");
+	const lines: string[] = [];
+	let high = false;
 	for (const file of files.slice(0, COMPLEXITY_FILE_LIMIT)) {
 		const absolute =
 			isAbsolute(file) || !workspaceRoot ? file : join(workspaceRoot, file);
@@ -321,13 +330,18 @@ async function describeFilesInPlay(
 			const source = await readFile(absolute, "utf8");
 			const score = await scoreComplexity(absolute, source);
 			if (score) {
-				described.push(describeComplexity(score, file));
+				lines.push(describeComplexity(score, file));
+				// The scores themselves stay here rather than travelling with
+				// the wording: `high` is the only decision anything downstream
+				// makes from the number, and handing the raw score onward is
+				// how it would end up being read as a verdict.
+				high = high || isHighComplexity(score);
 			}
 		} catch {
 			// Not a fact about the code.
 		}
 	}
-	return described;
+	return { lines, high };
 }
 
 /**
@@ -1278,10 +1292,12 @@ export class LocalRuntimeHost implements RuntimeHost {
 				// waited on for long: a grammar that will not load, a file that
 				// will not parse and a language nothing ships a grammar for all
 				// answer the same way, which is silence.
-				const complexity = await describeFilesInPlay(
-					context.files,
-					configWithProvider.workspaceRoot ?? configWithProvider.cwd,
-				);
+				const complexity = (
+					await describeFilesInPlay(
+						context.files,
+						configWithProvider.workspaceRoot ?? configWithProvider.cwd,
+					)
+				).lines;
 				return buildEscalationAssessment({
 					...(complexity.length > 0 ? { complexity } : {}),
 					...(struggleIteration > 0 ? { iteration: struggleIteration } : {}),
@@ -1517,10 +1533,34 @@ export class LocalRuntimeHost implements RuntimeHost {
 		const struggleFeed = struggleDetector
 			? createStruggleFeed(struggleDetector, (verdict) => {
 					const remaining = escalation.remaining;
+					if (!verdict.message) {
+						return;
+					}
+					if (verdict.kind === "nudge") {
+						// Held asynchronously: reading the files is the only part
+						// of this that touches a disk, and a nudge is not worth
+						// making the turn boundary wait. If it lands after the
+						// next tool result has already gone out it rides on the
+						// one after that, which is a turn late and still in time.
+						void describeFilesInPlay(
+							verdict.files,
+							configWithProvider.workspaceRoot ?? configWithProvider.cwd,
+						).then(({ lines, high }) => {
+							struggleSuggestion.hold(
+								describeEscalationNudge({
+									diagnosis: verdict.message as string,
+									complexity: lines,
+									high,
+									remaining,
+								}),
+							);
+						});
+						return;
+					}
 					// Never an offer the budget would refuse: a model that takes
 					// the advice and is turned down is worse off than one that
 					// was never given it.
-					if (remaining <= 0 || !verdict.message) {
+					if (remaining <= 0) {
 						return;
 					}
 					const offer = describeEscalationOffer({

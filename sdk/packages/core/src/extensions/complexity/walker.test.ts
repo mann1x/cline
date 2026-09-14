@@ -127,3 +127,83 @@ describe("the bound the number travels with", () => {
 		expect(said).toContain("not how likely");
 	});
 });
+
+/**
+ * HTML, which is where the number was wrong rather than absent.
+ *
+ * `tree-sitter-html` hands a `<script>` body over as one unparsed `raw_text`
+ * node, so a single-file game scored a *defined* 0 -- the reading the rest of
+ * this module exists to prevent. Measured on the manic_miner harness source
+ * before this: 137 lines, score 0.
+ */
+describe("code inside an HTML document", () => {
+	const page = (body: string, attrs = "") =>
+		`<!doctype html>\n<html>\n<body>\n<script${attrs}>\n${body}\n</script>\n</body>\n</html>\n`;
+
+	it("scores the script instead of seeing an empty document", async () => {
+		const source = page(
+			[
+				"function tick(items, x) {",
+				"  items.forEach((d) => {",
+				"    if (d.on) {",
+				"      for (const p of d.parts) {",
+				"        if (p.hit) { p.y += 1; }",
+				"      }",
+				"    }",
+				"  });",
+				"}",
+			].join("\n"),
+		);
+		const score = await scoreComplexity("game.html", source);
+		expect(score?.score).toBeGreaterThan(0);
+	});
+
+	it("adds up every script in the document", async () => {
+		const one = "if (a) { b(); }";
+		const single = await scoreComplexity("a.html", page(one));
+		const doubled = await scoreComplexity("b.html", `${page(one)}${page(one)}`);
+		expect(single?.score).toBe(1);
+		expect(doubled?.score).toBe(2);
+	});
+
+	// The span has to be openable: the line numbers a reader is given must be
+	// the HTML file's, not the script's own.
+	it("reports the span in the document's line numbers", async () => {
+		const score = await scoreComplexity("game.html", page("if (a) { b(); }"));
+		// The script body starts on line 5 of the page above.
+		expect(score?.startLine).toBeGreaterThanOrEqual(5);
+	});
+
+	// A `type` that is not JavaScript means the body is data. Scoring an import
+	// map as code would be inventing a number.
+	it("leaves a non-JavaScript script alone", async () => {
+		const data = page('{"imports": {"a": "./a.js"}}', ' type="importmap"');
+		expect((await scoreComplexity("x.html", data))?.score).toBe(0);
+		const module = page("if (a) { b(); }", ' type="module"');
+		expect((await scoreComplexity("y.html", module))?.score).toBe(1);
+	});
+
+	// `<script src=...>` is a real script this file does not contain.
+	it("says nothing about a script it does not hold", async () => {
+		const linked =
+			'<!doctype html>\n<html><body><script src="g.js"></script></body></html>\n';
+		expect((await scoreComplexity("z.html", linked))?.score).toBe(0);
+	});
+
+	it("narrows to the function around a line given in the document", async () => {
+		const source = page(
+			[
+				"function small() { return 1; }",
+				"function big(xs) {",
+				"  for (const x of xs) {",
+				"    if (x) { while (x.n) { x.n -= 1; } }",
+				"  }",
+				"}",
+			].join("\n"),
+		);
+		// `big` opens on line 6 of the page: 4 lines of preamble, then `small`.
+		const narrowed = await scoreComplexity("game.html", source, { line: 6 });
+		expect(narrowed?.name).toBe("big");
+		expect(narrowed?.startLine).toBe(6);
+	});
+});

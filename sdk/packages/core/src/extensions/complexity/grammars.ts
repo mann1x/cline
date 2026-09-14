@@ -73,7 +73,7 @@ export interface SyntaxNode {
 	readonly text: string;
 }
 
-interface ParserLike {
+export interface ParserLike {
 	setLanguage(language: unknown): void;
 	parse(source: string): ParsedTree | null;
 }
@@ -148,6 +148,20 @@ export async function parserFor(
 	if (!grammar) {
 		return undefined;
 	}
+	return parserForGrammar(grammar, options);
+}
+
+/**
+ * A parser for a grammar named directly, rather than inferred from a path.
+ *
+ * The embedded-language pass needs this: the `<script>` bodies inside an HTML
+ * file are JavaScript, and there is no filename to infer that from. Same
+ * caching, same silence on every failure.
+ */
+export async function parserForGrammar(
+	grammar: string,
+	options: { grammarDir?: string } = {},
+): Promise<ParserLike | undefined> {
 	try {
 		const treeSitter = (await import("web-tree-sitter")) as unknown as {
 			Parser: {
