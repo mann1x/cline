@@ -43,6 +43,20 @@ export interface FileRevision {
 	readonly hash: string;
 	/** What produced it: a tool name, or `transaction open` for #1. */
 	readonly by: string;
+	/**
+	 * One line saying what this revision is, so the list can be chosen from.
+	 *
+	 * Without it every entry reads `editor — 136 lines` and the only one
+	 * carrying meaning is `#1 original`, which is measurably the only one the
+	 * model ever asked for: 132 restores across three runs, 132 to the
+	 * original. A number is an address; this is the reason to go to it.
+	 *
+	 * `model` when the tool call said what it was for, `derived` when we had to
+	 * work it out. Never absent — an unlabelled revision is one the model
+	 * cannot choose, which is the whole defect.
+	 */
+	readonly note: string;
+	readonly noteSource: "model" | "derived";
 	readonly lines: number;
 	readonly bytes: number;
 	/** Content released to stay under the memory cap; the entry remains. */
@@ -100,6 +114,68 @@ export const LAST_REVISION = "last";
 
 const ABSENT_HASH = "absent";
 
+/** What a caller can say about a revision it is recording. */
+export interface RevisionNote {
+	/** The model's own words, when the tool call carried them. */
+	readonly intent?: string;
+	/** What the writing tool reported doing, e.g. "Replaced line 90". */
+	readonly summary?: string;
+	/** What the checker said about this file afterwards, when it said anything. */
+	readonly check?: string;
+}
+
+/** Longest note kept. A list of forty of these is read by a 9B model. */
+const MAX_NOTE_CHARS = 120;
+
+function tidy(text: string | undefined): string | undefined {
+	if (!text) return undefined;
+	// One line: these are printed in a list, and a note that wraps to six lines
+	// buries the numbers either side of it.
+	const flat = text.replace(/\s+/g, " ").trim();
+	if (!flat) return undefined;
+	return flat.length <= MAX_NOTE_CHARS
+		? flat
+		: `${flat.slice(0, MAX_NOTE_CHARS - 1)}…`;
+}
+
+/**
+ * The label, in order of how much it is worth.
+ *
+ * The model's own sentence first: it is the only source that knows *why*. Then
+ * what the tool reported doing, which is always available and always about this
+ * edit. The checker's verdict is appended rather than substituted — it says
+ * whether things were working at this point, which is a different question from
+ * what changed, and for many files it says nothing at all.
+ *
+ * The line delta is the floor. It is computed from the bytes, so there is
+ * always something: a revision nobody described is still "3 lines longer than
+ * #4", which is enough to tell two entries apart.
+ */
+function deriveNote(
+	note: RevisionNote | undefined,
+	lines: number,
+	previousLines: number | undefined,
+	existed: boolean,
+): { note: string; noteSource: "model" | "derived" } {
+	const intent = tidy(note?.intent);
+	const summary = tidy(note?.summary);
+	const check = tidy(note?.check);
+	const delta =
+		previousLines === undefined || !existed
+			? undefined
+			: lines === previousLines
+				? "same length"
+				: `${lines > previousLines ? "+" : "−"}${Math.abs(lines - previousLines)} lines`;
+	const head = intent ?? summary ?? delta ?? (existed ? "written" : "deleted");
+	const parts = [head];
+	if (intent && summary) parts.push(summary);
+	if (check) parts.push(`check: ${check}`);
+	return {
+		note: tidy(parts.join(" — ")) ?? head,
+		noteSource: intent ? "model" : "derived",
+	};
+}
+
 function hashOf(body: Buffer | undefined): string {
 	return body ? createHash("sha256").update(body).digest("hex") : ABSENT_HASH;
 }
@@ -123,6 +199,8 @@ interface MutableRevision {
 	index: number;
 	hash: string;
 	by: string;
+	note: string;
+	noteSource: "model" | "derived";
 	lines: number;
 	bytes: number;
 	dropped: boolean;
@@ -162,6 +240,7 @@ export interface RevisionLog {
 		absolutePath: string,
 		body: Buffer | undefined,
 		by: string,
+		note?: RevisionNote,
 	): FileRevision | undefined;
 	revisions(absolutePath: string): readonly FileRevision[];
 	resolve(absolutePath: string, requested: string): RevisionLookup;
@@ -212,6 +291,8 @@ export function createRevisionLog(
 		body: bodyOf(entry),
 		hash: entry.hash,
 		by: entry.by,
+		note: entry.note,
+		noteSource: entry.noteSource,
 		lines: entry.lines,
 		bytes: entry.bytes,
 		dropped: entry.dropped,
@@ -279,6 +360,7 @@ export function createRevisionLog(
 		absolutePath: string,
 		body: Buffer | undefined,
 		by: string,
+		note?: RevisionNote,
 	): FileRevision => {
 		const entries = logs.get(absolutePath) ?? [];
 		const hash = hashOf(body);
@@ -293,11 +375,21 @@ export function createRevisionLog(
 				blobs.set(hash, { body, refs: 1 });
 			}
 		}
+		const lines = countLines(body);
+		const previous = entries[entries.length - 1];
+		const labelled = deriveNote(
+			note,
+			lines,
+			previous?.lines,
+			body !== undefined,
+		);
 		const entry: MutableRevision = {
 			index: entries.length + 1,
 			hash,
 			by,
-			lines: countLines(body),
+			note: labelled.note,
+			noteSource: labelled.noteSource,
+			lines,
 			bytes: body?.byteLength ?? 0,
 			dropped: false,
 			existed: body !== undefined,
@@ -312,10 +404,12 @@ export function createRevisionLog(
 	return {
 		seed(absolutePath, body) {
 			if (logs.has(absolutePath)) return;
-			append(absolutePath, body, "transaction open");
+			append(absolutePath, body, "transaction open", {
+				summary: "the file as this transaction found it",
+			});
 		},
 
-		record(absolutePath, body, by) {
+		record(absolutePath, body, by, note) {
 			const entries = logs.get(absolutePath);
 			if (!entries || entries.length === 0) {
 				// Nothing seeded it, so this write is the first thing known about
@@ -323,12 +417,14 @@ export function createRevisionLog(
 				// with content it never had, so the absence is #1 and the write
 				// is #2 -- which is also exactly true of a file the transaction
 				// created.
-				append(absolutePath, undefined, "transaction open");
+				append(absolutePath, undefined, "transaction open", {
+					summary: "did not exist when this transaction opened",
+				});
 			}
 			const current = logs.get(absolutePath);
 			const newest = current?.[current.length - 1];
 			if (newest && newest.hash === hashOf(body)) return undefined;
-			return append(absolutePath, body, by);
+			return append(absolutePath, body, by, note);
 		},
 
 		revisions(absolutePath) {
@@ -396,15 +492,18 @@ export function describeRevisions(
 	// receipt. The ends are what get asked for -- #1 and the recent ones -- so
 	// the middle is elided and said to be elided, rather than the whole list
 	// being dropped once it grows.
+	// Newest first. The model is nearly always asking about something it has
+	// just done -- "undo that", "go back to before I broke it" -- and reading
+	// ascending meant the answer was at the bottom of a list whose top was the
+	// one revision it should reach for least. #1 keeps its place at the end as
+	// the floor of the history rather than its headline.
 	const limit = options.limit ?? DEFAULT_REVISION_LIST_LIMIT;
+	const newestFirst = [...revisions].reverse();
+	const oldest = revisions[0] as FileRevision;
 	const shown: (FileRevision | "gap")[] =
 		revisions.length <= limit
-			? [...revisions]
-			: [
-					revisions[0] as FileRevision,
-					"gap",
-					...revisions.slice(revisions.length - (limit - 1)),
-				];
+			? newestFirst
+			: [...newestFirst.slice(0, limit - 1), "gap", oldest];
 	const lines = shown.map((revision) => {
 		if (revision === "gap") {
 			const hidden = revisions.length - limit;
@@ -428,12 +527,88 @@ export function describeRevisions(
 			notes.push("content released to save memory — it cannot be restored");
 		}
 		if (newest) notes.push("on disk now");
-		return `  #${revision.index}  ${what} — ${notes.join(", ")}`;
+		// The note on its own line: it is the part being chosen between, and
+		// putting it after the size buries it behind three numbers.
+		return `  #${revision.index}  ${what} — ${notes.join(", ")}\n        ${revision.note}`;
 	});
 	return [
 		`Revisions of \`${display}\` in this transaction:`,
 		...lines,
 		"",
 		`Restore any of them with \`restore_file\` and \`revision\`: a number, \`"${ORIGINAL_REVISION}"\` for #1, or \`"${LAST_REVISION}"\` to undo just the most recent change.`,
+	].join("\n");
+}
+
+/** Revisions reported for one search before the list is cut. */
+const SEARCH_RESULT_LIMIT = 8;
+/** Characters of a matching line shown either side of nothing — the line, trimmed. */
+const MATCH_EXCERPT_CHARS = 120;
+
+/**
+ * Find the revisions that contain something, so a number can be looked up
+ * rather than remembered.
+ *
+ * The list answers "what are my options"; this answers "which one had the thing
+ * I want back". Those are different questions, and only the second one is
+ * asked by a model that has just deleted a method and knows exactly what it is
+ * looking for. Without it the model's only recourse is to restore candidates
+ * one at a time and read the file after each, which spends the restore budget
+ * on searching.
+ *
+ * Notes are searched as well as content: once a revision is labelled with the
+ * model's own sentence, "the dBoss brace" is a likelier query than the code.
+ */
+export function searchRevisions(
+	display: string,
+	revisions: readonly FileRevision[],
+	query: string,
+): string {
+	const needle = query.trim();
+	if (!needle) {
+		return `Say what to look for. \`find\` takes the text you want to locate among the revisions of \`${display}\`.`;
+	}
+	const lower = needle.toLowerCase();
+	const hits: { revision: FileRevision; where: string }[] = [];
+	for (const revision of revisions) {
+		if (revision.note.toLowerCase().includes(lower)) {
+			hits.push({ revision, where: "in its note" });
+			continue;
+		}
+		if (!revision.body) continue;
+		const text = revision.body.toString("utf8");
+		const at = text.toLowerCase().indexOf(lower);
+		if (at < 0) continue;
+		const line = text.slice(0, at).split(/\r\n|\r|\n/).length;
+		const source = text.split(/\r\n|\r|\n/)[line - 1] ?? "";
+		const excerpt =
+			source.trim().length > MATCH_EXCERPT_CHARS
+				? `${source.trim().slice(0, MATCH_EXCERPT_CHARS - 1)}…`
+				: source.trim();
+		hits.push({ revision, where: `line ${line}: ${excerpt}` });
+	}
+	if (hits.length === 0) {
+		const released = revisions.filter((r) => r.dropped).length;
+		const caveat = released
+			? ` ${released} revision${released === 1 ? " has" : "s have"} had its content released and could not be searched.`
+			: "";
+		return `No revision of \`${display}\` in this transaction contains \`${needle}\`.${caveat} The history is below.\n\n${describeRevisions(display, revisions)}`;
+	}
+	// Newest first: the same reason the list is. What is being looked for is
+	// usually the most recent version of it that still worked.
+	const ordered = [...hits].reverse().slice(0, SEARCH_RESULT_LIMIT);
+	const lines = ordered.map(
+		({ revision, where }) =>
+			`  #${revision.index}  ${revision.by} — ${revision.lines} line${revision.lines === 1 ? "" : "s"}\n        ${revision.note}\n        ${where}`,
+	);
+	const more =
+		hits.length > ordered.length
+			? [`  …  ${hits.length - ordered.length} older match(es) not listed`]
+			: [];
+	return [
+		`${hits.length} of ${revisions.length} revision${revisions.length === 1 ? "" : "s"} of \`${display}\` contain \`${needle}\`:`,
+		...lines,
+		...more,
+		"",
+		`Go back to one with \`restore_file\` and \`revision\`, e.g. \`revision: "#${ordered[0]?.revision.index ?? 1}"\`.`,
 	].join("\n");
 }

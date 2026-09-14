@@ -42,6 +42,7 @@ import {
 	LAST_REVISION,
 	ORIGINAL_REVISION,
 	type RevisionLog,
+	searchRevisions,
 } from "./file-revisions";
 import type { Snapshot } from "./snapshot";
 
@@ -138,6 +139,11 @@ export const RESTORE_FILE_TOOL_INPUT_SCHEMA = {
 		revision: {
 			type: "string",
 			description: `Which version to return to: "${LAST_REVISION}" to undo only your most recent change to this file, a number such as "#3" for that version, or "${ORIGINAL_REVISION}" for the file as this transaction opened. Defaults to "${ORIGINAL_REVISION}".`,
+		},
+		find: {
+			type: "string",
+			description:
+				"Search this file's revisions instead of restoring anything: the text you are looking for, matched against each revision's note and its contents. Nothing is written and no restore is spent. Use it when you know what you want back but not which number holds it — a method you deleted, a line that used to read differently, or your own note about a change.",
 		},
 		reason: {
 			type: "string",
@@ -251,7 +257,16 @@ export function createRestoreFileTool(
 				return "Name the file to restore, as `path`.";
 			}
 
-			if (spentIn >= MAX_RESTORES_PER_TRANSACTION) {
+			const requestedFind =
+				input && typeof input === "object" && !Array.isArray(input)
+					? (input as { find?: unknown }).find
+					: undefined;
+			const findSpec =
+				typeof requestedFind === "string" && requestedFind.trim() !== ""
+					? requestedFind.trim()
+					: undefined;
+
+			if (findSpec === undefined && spentIn >= MAX_RESTORES_PER_TRANSACTION) {
 				return `That is ${MAX_RESTORES_PER_TRANSACTION} restores already in this transaction, so no more will be made. Undoing the same work repeatedly is not converging on it. Read the file as it stands, decide on one change, and make that change — or say plainly that you cannot, and let the transaction be judged.`;
 			}
 
@@ -283,6 +298,13 @@ export function createRestoreFileTool(
 				lookup.kind === "held" ? lookup.body : undefined,
 			);
 			const history = log.revisions(lookup.absolutePath);
+
+			// Searching is not restoring: it writes nothing, spends no budget and
+			// is allowed even once the restore limit is reached — a model that has
+			// run out of restores still needs to be able to look.
+			if (findSpec !== undefined) {
+				return searchRevisions(display, history, findSpec);
+			}
 
 			const found = log.resolve(lookup.absolutePath, revisionSpec);
 			if (found.kind === "dropped") {

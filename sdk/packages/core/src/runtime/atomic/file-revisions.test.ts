@@ -191,6 +191,20 @@ describe("describeRevisions", () => {
 	});
 });
 
+describe("describeRevisions ordering", () => {
+	it("lists newest first and keeps #1 as the floor", () => {
+		const log = createRevisionLog();
+		log.seed(FILE, Buffer.from("a\n"));
+		log.record(FILE, Buffer.from("b\n"), "editor");
+		log.record(FILE, Buffer.from("c\n"), "editor");
+		const text = describeRevisions("f.html", log.revisions(FILE));
+		const at = (n: string) => text.indexOf(n);
+		// What the model is nearly always after is the most recent thing it did.
+		expect(at("#3")).toBeLessThan(at("#2"));
+		expect(at("#2")).toBeLessThan(at("#1"));
+	});
+});
+
 describe("describeRevisions elision", () => {
 	// A file edited forty times would otherwise put forty lines into every
 	// receipt. The ends are what get asked for, so the middle goes.

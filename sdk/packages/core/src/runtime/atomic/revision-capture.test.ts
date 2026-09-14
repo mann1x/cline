@@ -91,6 +91,167 @@ describe("withRevisionCapture", () => {
 		expect(out).toContain("last");
 	});
 
+	/**
+	 * The shapes the tools actually return.
+	 *
+	 * Every test here used a bare string, and the guard that appends the
+	 * revision line only fired on strings -- so the suite was green while the
+	 * line reached the model exactly zero times in production. Measured over
+	 * three harness runs: 361 write results, 0 carrying a revision number
+	 * (`editor` returns `{query, result, success}`, `run_commands` and `sed`
+	 * return a list of those).
+	 */
+	function structured(name: string, text = "done") {
+		return {
+			name,
+			description: name,
+			inputSchema: {},
+			execute: async () => ({
+				query: `${name}:x`,
+				result: text,
+				success: true,
+			}),
+		} as unknown as AgentTool;
+	}
+
+	function listed(name: string, text = "done") {
+		return {
+			name,
+			description: name,
+			inputSchema: {},
+			execute: async () => [
+				{ query: `${name}:x`, result: text, success: true },
+			],
+		} as unknown as AgentTool;
+	}
+
+	it("tells the model the revision number when the result is an object", async () => {
+		const { d, source } = harness({ [FILE]: "one\n" });
+		const [editor] = withRevisionCapture(
+			[structured("editor", "Replaced line 90")],
+			{
+				source,
+				readFile: d.readFile,
+			},
+		);
+		d.state.set(FILE, "two\n");
+		const out = (await editor?.execute?.(
+			{ path: FILE } as never,
+			{} as never,
+		)) as {
+			result: string;
+		};
+		expect(out.result).toContain("Replaced line 90");
+		expect(out.result).toContain("#2");
+		expect(out.result).toContain("last");
+	});
+
+	it("tells the model the revision number when the result is a list", async () => {
+		const { d, source } = harness({ [FILE]: "one\n" });
+		const [sed] = withRevisionCapture([listed("sed", "written.")], {
+			source,
+			readFile: d.readFile,
+		});
+		d.state.set(FILE, "two\n");
+		const out = (await sed?.execute?.(
+			{ files: [FILE], in_place: true } as never,
+			{} as never,
+		)) as Array<{ result: string }>;
+		expect(out[0]?.result).toContain("written.");
+		expect(out[0]?.result).toContain("#2");
+	});
+
+	it("uses the model's own sentence as the revision's label", async () => {
+		const { log, d, source } = harness({ [FILE]: "one\n" });
+		const [editor] = withRevisionCapture(
+			[structured("editor", "Replaced line 90")],
+			{
+				source,
+				readFile: d.readFile,
+			},
+		);
+		d.state.set(FILE, "two\n");
+		const out = (await editor?.execute?.(
+			{ path: FILE, intent: "close the arg list on dDec" } as never,
+			{} as never,
+		)) as { result: string };
+		expect(log.revisions(FILE)[1]?.note).toContain(
+			"close the arg list on dDec",
+		);
+		expect(log.revisions(FILE)[1]?.noteSource).toBe("model");
+		expect(out.result).toContain("close the arg list on dDec");
+		// Already labelled, so there is nothing to ask for.
+		expect(out.result).not.toContain("Send `intent`");
+	});
+
+	it("labels the revision itself when the model said nothing, and asks", async () => {
+		const { log, d, source } = harness({ [FILE]: "one\n" });
+		const [editor] = withRevisionCapture(
+			[structured("editor", "Replaced line 90")],
+			{
+				source,
+				readFile: d.readFile,
+			},
+		);
+		d.state.set(FILE, "two\nthree\n");
+		const out = (await editor?.execute?.(
+			{ path: FILE } as never,
+			{} as never,
+		)) as {
+			result: string;
+		};
+		const made = log.revisions(FILE)[1];
+		// Never unlabelled: the harness works something out from the change.
+		expect(made?.note).toBeTruthy();
+		expect(made?.note).toContain("Replaced line 90");
+		expect(made?.noteSource).toBe("derived");
+		expect(out.result).toContain("Send `intent`");
+	});
+
+	it("falls back to the line delta when the tool reported nothing usable", async () => {
+		const { log, d, source } = harness({ [FILE]: "one\n" });
+		const [editor] = withRevisionCapture([structured("editor", "   ")], {
+			source,
+			readFile: d.readFile,
+		});
+		d.state.set(FILE, "a\nb\nc\n");
+		await editor?.execute?.({ path: FILE } as never, {} as never);
+		expect(log.revisions(FILE)[1]?.note).toContain("+2 lines");
+	});
+
+	it("appends the checker's verdict without replacing what changed", async () => {
+		const { log, d, source } = harness({ [FILE]: "one\n" });
+		const [editor] = withRevisionCapture(
+			[structured("editor", "Replaced line 90")],
+			{
+				source,
+				readFile: d.readFile,
+				lastCheck: () => "SyntaxError: missing ) after argument list",
+			},
+		);
+		d.state.set(FILE, "two\n");
+		await editor?.execute?.({ path: FILE } as never, {} as never);
+		const note = log.revisions(FILE)[1]?.note ?? "";
+		expect(note).toContain("Replaced line 90");
+		expect(note).toContain("check: SyntaxError");
+	});
+
+	it("offers `intent` on writers that name their file, and not on the others", async () => {
+		const { d, source } = harness({ [FILE]: "one\n" });
+		const [editor, commands] = withRevisionCapture(
+			[tool("editor"), tool("run_commands")],
+			{ source, readFile: d.readFile },
+		);
+		const props = (
+			editor?.inputSchema as { properties?: Record<string, unknown> }
+		)?.properties;
+		expect(props?.intent).toBeDefined();
+		const opaque = (
+			commands?.inputSchema as { properties?: Record<string, unknown> }
+		)?.properties;
+		expect(opaque?.intent).toBeUndefined();
+	});
+
 	it("leaves the output alone when no revision was made", async () => {
 		const { d, source } = harness({ [FILE]: "one\n" });
 		const [editor] = withRevisionCapture([tool("editor", "Nothing matched.")], {

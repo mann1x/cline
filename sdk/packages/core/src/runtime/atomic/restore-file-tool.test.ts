@@ -385,3 +385,93 @@ describe("what a run of restores is told it means", () => {
 		});
 	});
 });
+
+describe("searching the revisions instead of restoring", () => {
+	let controller: FakeController;
+
+	beforeEach(() => {
+		controller = new FakeController();
+	});
+
+	async function seeded(root: string) {
+		const file = path.join(root, "m.html");
+		controller.pending = await takeSnapshot(root);
+		controller.revisions.seed(file, Buffer.from("intact dDec(c,x){}\n"));
+		controller.revisions.record(file, Buffer.from("broken\n"), "editor", {
+			intent: "close the arg list on dDec",
+		});
+		controller.revisions.record(file, Buffer.from("still broken\n"), "editor", {
+			intent: "try the other bracket",
+		});
+		return file;
+	}
+
+	it("finds the revision that still holds the text", async () => {
+		await withWorkspace({ "m.html": "still broken\n" }, async (root) => {
+			const file = await seeded(root);
+			const tool = createRestoreFileTool({ controller });
+			const out = String(
+				await tool.execute?.({ path: file, find: "dDec" } as never, context),
+			);
+			expect(out).toContain("#1");
+			expect(out).toContain("dDec");
+			// A search must not touch the file.
+			expect(await fs.readFile(file, "utf8")).toBe("still broken\n");
+		});
+	});
+
+	it("searches the notes the model wrote, not only the content", async () => {
+		await withWorkspace({ "m.html": "still broken\n" }, async (root) => {
+			const file = await seeded(root);
+			const tool = createRestoreFileTool({ controller });
+			const out = String(
+				await tool.execute?.(
+					{ path: file, find: "other bracket" } as never,
+					context,
+				),
+			);
+			expect(out).toContain("contain `other bracket`");
+			expect(out).toContain("#3");
+			expect(out).toContain("in its note");
+			// A search, not a restore that happened to print the list.
+			expect(out).not.toContain("is back to");
+		});
+	});
+
+	it("says so plainly when nothing matches, and shows the history", async () => {
+		await withWorkspace({ "m.html": "still broken\n" }, async (root) => {
+			const file = await seeded(root);
+			const tool = createRestoreFileTool({ controller });
+			const out = String(
+				await tool.execute?.(
+					{ path: file, find: "nothing like this" } as never,
+					context,
+				),
+			);
+			expect(out).toContain("No revision");
+			expect(out).toContain("Revisions of");
+		});
+	});
+
+	it("still searches once the restore budget is spent", async () => {
+		await withWorkspace({ "m.html": "still broken\n" }, async (root) => {
+			const file = await seeded(root);
+			const tool = createRestoreFileTool({ controller });
+			for (let i = 0; i < MAX_RESTORES_PER_TRANSACTION + 1; i += 1) {
+				await tool.execute?.({ path: file, revision: "#1" } as never, context);
+				await fs.writeFile(file, `churn ${i}\n`, "utf8");
+				controller.revisions.record(
+					file,
+					Buffer.from(`churn ${i}\n`),
+					"editor",
+				);
+			}
+			const out = String(
+				await tool.execute?.({ path: file, find: "dDec" } as never, context),
+			);
+			// Out of restores is not out of questions.
+			expect(out).not.toContain("no more will be made");
+			expect(out).toContain("contain `dDec`");
+		});
+	});
+});

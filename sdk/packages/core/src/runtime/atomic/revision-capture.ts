@@ -29,7 +29,11 @@ import type {
 } from "@cline/shared";
 import { DefaultToolNames } from "../../extensions/tools/constants";
 import { resolveBaseFile } from "./base-revision";
-import { LAST_REVISION, type RevisionLog } from "./file-revisions";
+import {
+	LAST_REVISION,
+	type RevisionLog,
+	type RevisionNote,
+} from "./file-revisions";
 import type { Snapshot } from "./snapshot";
 
 export interface RevisionCaptureSource {
@@ -45,6 +49,15 @@ export interface RevisionCaptureOptions {
 	readonly source: RevisionCaptureSource;
 	/** Read a file as it stands, or nothing when it does not exist. */
 	readFile(absolutePath: string): Promise<Buffer | undefined>;
+	/**
+	 * What the checker last said, when it has run and said anything.
+	 *
+	 * Appended to the label rather than used as it: it answers "was this
+	 * working here", which is a different question from "what changed here",
+	 * and for plenty of files -- a README, anything the checker does not look
+	 * at -- it has nothing to say at all.
+	 */
+	lastCheck?(): string | undefined;
 }
 
 /** Tools that name the file they are about to write. */
@@ -113,8 +126,120 @@ function describeNewRevision(
 	display: string,
 	index: number,
 	lines: number,
+	note: string,
+	fromModel: boolean,
 ): string {
-	return `\`${display}\` is now revision #${index} (${lines} lines). To undo just this change, \`restore_file\` with \`revision: "${LAST_REVISION}"\`; #1 is the file as this transaction opened.`;
+	const head = `\`${display}\` is now revision #${index} (${lines} lines) — ${note}.`;
+	const undo = `To undo just this change, \`restore_file\` with \`revision: "${LAST_REVISION}"\`; #1 is the file as this transaction opened.`;
+	if (fromModel) {
+		return `${head} ${undo}`;
+	}
+	// Asked for, not required. The label above is already usable -- the point
+	// of asking is that one sentence of intent beats any amount of derived
+	// description when the model later has to choose which revision to go back
+	// to, and only the model knows what the edit was for.
+	return `${head} ${undo}\n\nThat note was worked out from the change itself. Send \`intent\` with your next edit — one short sentence on what it is meant to do — and it will be the label for that revision.`;
+}
+
+/** The model's one-line reason, when the call carried one. */
+function intentOf(input: unknown): string | undefined {
+	if (!input || typeof input !== "object" || Array.isArray(input)) {
+		return undefined;
+	}
+	const record = input as Record<string, unknown>;
+	for (const key of ["intent", "why", "purpose"]) {
+		const value = record[key];
+		if (typeof value === "string" && value.trim()) return value.trim();
+	}
+	return undefined;
+}
+
+/**
+ * What the tool said it did, as the first line of its own report.
+ *
+ * `editor` opens with "Replaced line 90, columns 382-382 in <path>", which is
+ * exactly the summary wanted -- minus the path, which is already the subject of
+ * the entry and would take the whole line.
+ */
+function summaryOf(result: unknown): string | undefined {
+	const text = firstText(result);
+	if (!text) return undefined;
+	const line = text.split("\n").find((candidate) => candidate.trim());
+	if (!line) return undefined;
+	return line.replace(/\s+in\s+\/\S+$/, "").trim() || undefined;
+}
+
+function firstText(result: unknown): string | undefined {
+	if (typeof result === "string") return result;
+	if (Array.isArray(result)) {
+		for (let i = result.length - 1; i >= 0; i -= 1) {
+			const text = firstText(result[i]);
+			if (text) return text;
+		}
+		return undefined;
+	}
+	if (result && typeof result === "object") {
+		const value = (result as Record<string, unknown>).result;
+		if (typeof value === "string") return value;
+	}
+	return undefined;
+}
+
+/** Advertise `intent` on the tools that write, only while the protocol is on. */
+function withIntentProperty(
+	schema: Record<string, unknown>,
+): Record<string, unknown> {
+	const properties =
+		typeof schema.properties === "object" && schema.properties !== null
+			? (schema.properties as Record<string, unknown>)
+			: {};
+	return {
+		...schema,
+		properties: {
+			...properties,
+			intent: {
+				type: "string",
+				description:
+					"One short sentence on what this change is meant to achieve. It becomes the label for the revision this write creates, and it is what you will be choosing between if you later need to go back to a particular point. Omit it and the label is worked out from the change itself, which says what moved but not why.",
+			},
+		},
+	};
+}
+
+/**
+ * Put the note where the model will read it, whatever shape the tool returned.
+ *
+ * This used to be `typeof result === "string"` and nothing else, which is the
+ * one shape the write tools never use: `editor` returns
+ * `{query, result, success}`, and `run_commands` and `sed` return a list of
+ * those. So the number an edit had just been given was appended to nothing,
+ * every time -- 361 write results across three harness runs, none of them
+ * carrying a revision. The model could only learn a number from a read or a
+ * restore, which is why it only ever asked for `#1`.
+ *
+ * The last entry of a list, because that is the call the note is about: a
+ * batch of reads followed by the write that triggered capture ends with the
+ * write.
+ */
+function withNote(result: unknown, note: string): unknown {
+	if (typeof result === "string") {
+		return `${result}\n\n${note}`;
+	}
+	if (Array.isArray(result)) {
+		if (result.length === 0) return result;
+		const last = result[result.length - 1];
+		const updated = withNote(last, note);
+		return updated === last ? result : [...result.slice(0, -1), updated];
+	}
+	if (result && typeof result === "object") {
+		const record = result as Record<string, unknown>;
+		if (typeof record.result === "string") {
+			return { ...record, result: `${record.result}\n\n${note}` };
+		}
+	}
+	// A shape nothing here knows how to extend. Losing the note is better than
+	// corrupting a result the model has to parse.
+	return result;
 }
 
 export function withRevisionCapture<T extends AgentToolDefinition>(
@@ -139,19 +264,30 @@ export function withRevisionCapture<T extends AgentToolDefinition>(
 		return lookup.absolutePath;
 	};
 
+	type Captured = {
+		display: string;
+		index: number;
+		lines: number;
+		note: string;
+		fromModel: boolean;
+	};
+
 	const capture = async (
 		snapshot: Snapshot,
 		absolutePaths: readonly string[],
-	): Promise<{ display: string; index: number; lines: number } | undefined> => {
-		let newest: { display: string; index: number; lines: number } | undefined;
+		note: RevisionNote,
+	): Promise<Captured | undefined> => {
+		let newest: Captured | undefined;
 		for (const absolutePath of absolutePaths) {
 			const body = await options.readFile(absolutePath);
-			const revision = source.log.record(absolutePath, body, currentTool);
+			const revision = source.log.record(absolutePath, body, currentTool, note);
 			if (!revision) continue;
 			newest = {
 				display: path.relative(snapshot.root, absolutePath) || absolutePath,
 				index: revision.index,
 				lines: revision.lines,
+				note: revision.note,
+				fromModel: revision.noteSource === "model",
 			};
 		}
 		return newest;
@@ -170,6 +306,12 @@ export function withRevisionCapture<T extends AgentToolDefinition>(
 		const original = tool as unknown as AgentTool<unknown, unknown>;
 		return {
 			...original,
+			// Only the named writers take `intent`: an opaque writer's call does
+			// not say which file it is about, so a sentence attached to it could
+			// end up labelling a revision of something else.
+			...(named
+				? { inputSchema: withIntentProperty(original.inputSchema ?? {}) }
+				: {}),
 			execute: async (input: unknown, context: AgentToolContext) => {
 				const snapshot = source.pending;
 				if (!snapshot) {
@@ -187,11 +329,24 @@ export function withRevisionCapture<T extends AgentToolDefinition>(
 						[...source.log.tracked()];
 				currentTool = tool.name;
 				const result = await original.execute(input, context);
-				const newest = await capture(snapshot, targets);
-				if (!newest || typeof result !== "string") {
+				const newest = await capture(snapshot, targets, {
+					intent: intentOf(input),
+					summary: summaryOf(result),
+					check: options.lastCheck?.(),
+				});
+				if (!newest) {
 					return result;
 				}
-				return `${result}\n\n${describeNewRevision(newest.display, newest.index, newest.lines)}`;
+				return withNote(
+					result,
+					describeNewRevision(
+						newest.display,
+						newest.index,
+						newest.lines,
+						newest.note,
+						newest.fromModel,
+					),
+				);
 			},
 		} as unknown as T;
 	});
