@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import type { TelemetrySetting } from "@shared/TelemetrySetting"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { syncTelemetrySettingFromSharedGlobalSettings } from "./telemetry-settings-sync"
+import { syncTelemetrySettingFromSharedGlobalSettings, telemetrySettingFromSharedGlobalSettings } from "./telemetry-settings-sync"
 
 const state = vi.hoisted(() => ({
 	telemetrySetting: undefined as TelemetrySetting | boolean | undefined,
@@ -59,6 +59,26 @@ describe("syncTelemetrySettingFromSharedGlobalSettings", () => {
 			process.env.CLINE_GLOBAL_SETTINGS_PATH = previousSettingsPath
 		}
 		rmSync(tempDir, { force: true, recursive: true })
+	})
+
+	// This fork has no telemetry endpoint: the release build injects no keys and
+	// the ingest host is Cline's own. "enabled" could therefore only ever have
+	// meant "report this fork's usage to upstream", so it is refused at the
+	// source rather than by hiding the checkbox -- an inherited "enabled", a
+	// settings file copied from a Cline install, or an organisation's remote
+	// config would each get straight past a hidden checkbox.
+	it("resolves to disabled even when the shared settings do not opt out", () => {
+		writeFileSync(settingsPath, JSON.stringify({ autoUpdateEnabled: true, telemetryOptOut: false }))
+
+		expect(telemetrySettingFromSharedGlobalSettings()).toBe("disabled")
+	})
+
+	it("writes disabled back over a stored enabled setting", () => {
+		state.telemetrySetting = "enabled"
+
+		syncTelemetrySettingFromSharedGlobalSettings(makeStateManager())
+
+		expect(state.setGlobalState).toHaveBeenCalledWith("telemetrySetting", "disabled")
 	})
 
 	it("migrates legacy boolean false to shared telemetry opt-out", () => {

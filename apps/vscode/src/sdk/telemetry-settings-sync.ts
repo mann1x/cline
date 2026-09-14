@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs"
-import { readGlobalSettings, setTelemetryOptOutGlobally } from "@cline/core"
+import { setTelemetryOptOutGlobally } from "@cline/core"
 import { resolveGlobalSettingsPath } from "@cline/shared/storage"
 import type { TelemetrySetting } from "@shared/TelemetrySetting"
 import { Logger } from "@/shared/services/Logger"
@@ -10,8 +10,30 @@ interface TelemetryStateManager {
 	setGlobalState(key: "telemetrySetting", value: TelemetrySetting): void
 }
 
+/**
+ * Telemetry is off in this fork, and not merely defaulted off.
+ *
+ * Upstream resolves this from the shared global settings file. Here there is
+ * nowhere for it to go: the release workflow injects neither
+ * `TELEMETRY_SERVICE_API_KEY` nor `ERROR_SERVICE_API_KEY`, and the ingest host
+ * is hardcoded to Cline's own (`https://data.cline.bot`). So "enabled" could
+ * only ever have meant "send this fork's usage to upstream", which is not
+ * something a user of this fork asked for and not something they were asked
+ * about -- the checkbox said "Help improve Cline".
+ *
+ * Forced here rather than by hiding the checkbox, because the checkbox is not
+ * the only way the value is set: a `telemetrySetting` already stored as
+ * "enabled", a settings file carried over from a Cline install, or an
+ * organisation's remote config would each turn it back on with no UI involved.
+ * `syncTelemetrySettingFromSharedGlobalSettings` writes this back over the
+ * stored value on every start, so an inherited "enabled" is corrected once and
+ * stays corrected.
+ *
+ * If this fork ever gets a telemetry endpoint of its own, this function and
+ * `posthogConfig.host` are the two places that have to change together.
+ */
 export function telemetrySettingFromSharedGlobalSettings(): TelemetrySetting {
-	return readGlobalSettings().telemetryOptOut ? "disabled" : "enabled"
+	return "disabled"
 }
 
 function normalizeLegacyTelemetrySetting(value: TelemetrySetting | boolean | undefined): TelemetrySetting | undefined {

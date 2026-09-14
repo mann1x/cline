@@ -1,18 +1,25 @@
-import { VSCodeCheckbox, VSCodeLink } from "@vscode/webview-ui-toolkit/react"
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { useExtensionState } from "@/context/ExtensionStateContext"
 import PreferredLanguageSetting from "../PreferredLanguageSetting"
 import Section from "../Section"
 import UpdateChannelSetting from "../UpdateChannelSetting"
-import { updateSetting } from "../utils/settingsHandlers"
 
 interface GeneralSettingsSectionProps {
 	renderSectionHeader: (tabId: string) => JSX.Element | null
 }
 
+/**
+ * There is deliberately no "Allow error and usage reporting" control here.
+ *
+ * This fork sends none: the release build injects no telemetry or error-service
+ * key, and the ingest host in `posthog-config.ts` is Cline's own, so the only
+ * thing the switch could ever have turned on was reporting this fork's usage
+ * upstream -- under a label that read "Help improve Cline". Offering a switch
+ * for something that does not happen is worse than offering none.
+ *
+ * The setting is forced off in `telemetry-settings-sync.ts` rather than merely
+ * hidden, because a stored value, an inherited settings file or a remote config
+ * can all set it without any UI. See the note there before changing either.
+ */
 const GeneralSettingsSection = ({ renderSectionHeader }: GeneralSettingsSectionProps) => {
-	const { telemetrySetting, remoteConfigSettings } = useExtensionState()
-
 	return (
 		<div>
 			{renderSectionHeader("general")}
@@ -20,49 +27,6 @@ const GeneralSettingsSection = ({ renderSectionHeader }: GeneralSettingsSectionP
 				<PreferredLanguageSetting />
 
 				<UpdateChannelSetting />
-
-				<div className="mb-[5px]">
-					<Tooltip>
-						<TooltipContent hidden={remoteConfigSettings?.telemetrySetting === undefined}>
-							This setting is managed by your organization's remote configuration
-						</TooltipContent>
-						<TooltipTrigger asChild>
-							<div className="flex items-center gap-2 mb-[5px]">
-								<VSCodeCheckbox
-									checked={telemetrySetting !== "disabled"}
-									disabled={remoteConfigSettings?.telemetrySetting === "disabled"}
-									onChange={(e: any) => {
-										const checked = e.target.checked === true
-										updateSetting("telemetrySetting", checked ? "enabled" : "disabled")
-									}}>
-									Allow error and usage reporting
-								</VSCodeCheckbox>
-								{!!remoteConfigSettings?.telemetrySetting && (
-									<i className="codicon codicon-lock text-description text-sm" />
-								)}
-							</div>
-						</TooltipTrigger>
-					</Tooltip>
-
-					<p className="text-sm mt-[5px] text-description">
-						Help improve Cline by sending usage data and error reports. No code, prompts, or personal information are
-						ever sent. See our{" "}
-						<VSCodeLink
-							className="text-inherit"
-							href="https://docs.cline.bot/more-info/telemetry"
-							style={{ fontSize: "inherit", textDecoration: "underline" }}>
-							telemetry overview
-						</VSCodeLink>{" "}
-						and{" "}
-						<VSCodeLink
-							className="text-inherit"
-							href="https://cline.bot/privacy"
-							style={{ fontSize: "inherit", textDecoration: "underline" }}>
-							privacy policy
-						</VSCodeLink>{" "}
-						for more details.
-					</p>
-				</div>
 			</Section>
 		</div>
 	)
