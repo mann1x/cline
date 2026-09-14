@@ -1,40 +1,30 @@
-import { afterEach, beforeEach, describe, it, mock } from "bun:test"
+import { afterEach, beforeEach, describe, it } from "bun:test"
+import { resolveClineDir, resolveHomeDir, setHomeDir } from "@cline/shared/storage"
 import "should"
 import fs from "fs/promises"
-import * as actualOs from "os"
-import path from "path"
-import sinon from "sinon"
-
-// The SUT does `import * as os from "os"; os.homedir()`. Under bun, sinon's
-// `stub(os, "homedir")` on the test's own `os` binding does NOT propagate to the
-// SUT's namespace import, so inject a module-level homedir stub via mock.module
-// (the rest of `os` — tmpdir() etc. — keeps its real behavior).
-const homedirStub = sinon.stub()
-const osMockNamespace = { ...actualOs, homedir: homedirStub }
-const osMock = () => ({ ...osMockNamespace, default: osMockNamespace })
-mock.module("os", osMock)
-mock.module("node:os", osMock)
-
 import os from "os"
+import path from "path"
 import { ClineConfigurationError, ClineEndpoint, ClineEnv, Environment } from "../config"
 
 describe("ClineEndpoint configuration", () => {
-	let sandbox: sinon.SinonSandbox
 	let tempDir: string
-	let originalHomedir: typeof os.homedir
+	let userEndpointsFile: string
+	let originalHomeDir: string
 
 	beforeEach(async () => {
-		sandbox = sinon.createSandbox()
 		tempDir = path.join(os.tmpdir(), `config-test-${Date.now()}-${Math.random().toString(36).slice(2)}`)
 		await fs.mkdir(tempDir, { recursive: true })
 
-		// Create .cline directory
-		await fs.mkdir(path.join(tempDir, ".cline"), { recursive: true })
-
-		// Stub os.homedir to return our temp directory (via mock.module homedirStub)
-		originalHomedir = os.homedir
-		homedirStub.reset()
-		homedirStub.returns(tempDir)
+		// The SUT reads the user config through `resolveClineDir()`, which works off
+		// the shared resolvers' home — not `os.homedir()`, so stubbing that reaches
+		// nothing. Move the resolvers' home instead, then ask them where the file
+		// goes rather than spelling the directory out: the resolver picks between
+		// `.cerebriline` and `.cline` by what exists, so a literal here would be a
+		// claim about the brand that the resolver is free to stop honouring.
+		originalHomeDir = resolveHomeDir()
+		setHomeDir(tempDir)
+		userEndpointsFile = path.join(resolveClineDir(), "endpoints.json")
+		await fs.mkdir(path.dirname(userEndpointsFile), { recursive: true })
 
 		// Reset the singleton state using internal method
 		;(ClineEndpoint as any)._instance = null
@@ -43,7 +33,7 @@ describe("ClineEndpoint configuration", () => {
 	})
 
 	afterEach(async () => {
-		sandbox.restore()
+		setHomeDir(originalHomeDir)
 		// Reset singleton state
 		;(ClineEndpoint as any)._instance = null
 		;(ClineEndpoint as any)._initialized = false
@@ -62,7 +52,7 @@ describe("ClineEndpoint configuration", () => {
 				mcpBaseUrl: "https://mcp.enterprise.com",
 			}
 
-			await fs.writeFile(path.join(tempDir, ".cline", "endpoints.json"), JSON.stringify(validConfig), "utf8")
+			await fs.writeFile(userEndpointsFile, JSON.stringify(validConfig), "utf8")
 
 			await ClineEndpoint.initialize(tempDir)
 
@@ -92,7 +82,7 @@ describe("ClineEndpoint configuration", () => {
 				mcpBaseUrl: "http://localhost:8080/mcp",
 			}
 
-			await fs.writeFile(path.join(tempDir, ".cline", "endpoints.json"), JSON.stringify(validConfig), "utf8")
+			await fs.writeFile(userEndpointsFile, JSON.stringify(validConfig), "utf8")
 
 			await ClineEndpoint.initialize(tempDir)
 
@@ -109,7 +99,7 @@ describe("ClineEndpoint configuration", () => {
 				mcpBaseUrl: "https://proxy.enterprise.com/cline/mcp",
 			}
 
-			await fs.writeFile(path.join(tempDir, ".cline", "endpoints.json"), JSON.stringify(validConfig), "utf8")
+			await fs.writeFile(userEndpointsFile, JSON.stringify(validConfig), "utf8")
 
 			await ClineEndpoint.initialize(tempDir)
 
@@ -120,7 +110,7 @@ describe("ClineEndpoint configuration", () => {
 
 	describe("invalid JSON handling", () => {
 		it("should throw ClineConfigurationError for invalid JSON syntax", async () => {
-			await fs.writeFile(path.join(tempDir, ".cline", "endpoints.json"), "{ invalid json }", "utf8")
+			await fs.writeFile(userEndpointsFile, "{ invalid json }", "utf8")
 
 			try {
 				await ClineEndpoint.initialize(tempDir)
@@ -132,7 +122,7 @@ describe("ClineEndpoint configuration", () => {
 		})
 
 		it("should throw ClineConfigurationError for truncated JSON", async () => {
-			await fs.writeFile(path.join(tempDir, ".cline", "endpoints.json"), '{"appBaseUrl": "https://test.com"', "utf8")
+			await fs.writeFile(userEndpointsFile, '{"appBaseUrl": "https://test.com"', "utf8")
 
 			try {
 				await ClineEndpoint.initialize(tempDir)
@@ -144,7 +134,7 @@ describe("ClineEndpoint configuration", () => {
 		})
 
 		it("should throw ClineConfigurationError for empty file", async () => {
-			await fs.writeFile(path.join(tempDir, ".cline", "endpoints.json"), "", "utf8")
+			await fs.writeFile(userEndpointsFile, "", "utf8")
 
 			try {
 				await ClineEndpoint.initialize(tempDir)
@@ -155,7 +145,7 @@ describe("ClineEndpoint configuration", () => {
 		})
 
 		it("should throw ClineConfigurationError for non-object JSON", async () => {
-			await fs.writeFile(path.join(tempDir, ".cline", "endpoints.json"), '"just a string"', "utf8")
+			await fs.writeFile(userEndpointsFile, '"just a string"', "utf8")
 
 			try {
 				await ClineEndpoint.initialize(tempDir)
@@ -167,7 +157,7 @@ describe("ClineEndpoint configuration", () => {
 		})
 
 		it("should throw ClineConfigurationError for array JSON", async () => {
-			await fs.writeFile(path.join(tempDir, ".cline", "endpoints.json"), "[]", "utf8")
+			await fs.writeFile(userEndpointsFile, "[]", "utf8")
 
 			try {
 				await ClineEndpoint.initialize(tempDir)
@@ -180,7 +170,7 @@ describe("ClineEndpoint configuration", () => {
 		})
 
 		it("should throw ClineConfigurationError for null JSON", async () => {
-			await fs.writeFile(path.join(tempDir, ".cline", "endpoints.json"), "null", "utf8")
+			await fs.writeFile(userEndpointsFile, "null", "utf8")
 
 			try {
 				await ClineEndpoint.initialize(tempDir)
@@ -199,7 +189,7 @@ describe("ClineEndpoint configuration", () => {
 				mcpBaseUrl: "https://mcp.enterprise.com",
 			}
 
-			await fs.writeFile(path.join(tempDir, ".cline", "endpoints.json"), JSON.stringify(config), "utf8")
+			await fs.writeFile(userEndpointsFile, JSON.stringify(config), "utf8")
 
 			try {
 				await ClineEndpoint.initialize(tempDir)
@@ -216,7 +206,7 @@ describe("ClineEndpoint configuration", () => {
 				mcpBaseUrl: "https://mcp.enterprise.com",
 			}
 
-			await fs.writeFile(path.join(tempDir, ".cline", "endpoints.json"), JSON.stringify(config), "utf8")
+			await fs.writeFile(userEndpointsFile, JSON.stringify(config), "utf8")
 
 			try {
 				await ClineEndpoint.initialize(tempDir)
@@ -233,7 +223,7 @@ describe("ClineEndpoint configuration", () => {
 				apiBaseUrl: "https://api.enterprise.com",
 			}
 
-			await fs.writeFile(path.join(tempDir, ".cline", "endpoints.json"), JSON.stringify(config), "utf8")
+			await fs.writeFile(userEndpointsFile, JSON.stringify(config), "utf8")
 
 			try {
 				await ClineEndpoint.initialize(tempDir)
@@ -245,7 +235,7 @@ describe("ClineEndpoint configuration", () => {
 		})
 
 		it("should throw ClineConfigurationError when all fields are missing", async () => {
-			await fs.writeFile(path.join(tempDir, ".cline", "endpoints.json"), "{}", "utf8")
+			await fs.writeFile(userEndpointsFile, "{}", "utf8")
 
 			try {
 				await ClineEndpoint.initialize(tempDir)
@@ -263,7 +253,7 @@ describe("ClineEndpoint configuration", () => {
 				mcpBaseUrl: "https://mcp.enterprise.com",
 			}
 
-			await fs.writeFile(path.join(tempDir, ".cline", "endpoints.json"), JSON.stringify(config), "utf8")
+			await fs.writeFile(userEndpointsFile, JSON.stringify(config), "utf8")
 
 			try {
 				await ClineEndpoint.initialize(tempDir)
@@ -281,7 +271,7 @@ describe("ClineEndpoint configuration", () => {
 				mcpBaseUrl: "https://mcp.enterprise.com",
 			}
 
-			await fs.writeFile(path.join(tempDir, ".cline", "endpoints.json"), JSON.stringify(config), "utf8")
+			await fs.writeFile(userEndpointsFile, JSON.stringify(config), "utf8")
 
 			try {
 				await ClineEndpoint.initialize(tempDir)
@@ -299,7 +289,7 @@ describe("ClineEndpoint configuration", () => {
 				mcpBaseUrl: "https://mcp.enterprise.com",
 			}
 
-			await fs.writeFile(path.join(tempDir, ".cline", "endpoints.json"), JSON.stringify(config), "utf8")
+			await fs.writeFile(userEndpointsFile, JSON.stringify(config), "utf8")
 
 			try {
 				await ClineEndpoint.initialize(tempDir)
@@ -317,7 +307,7 @@ describe("ClineEndpoint configuration", () => {
 				mcpBaseUrl: "https://mcp.enterprise.com",
 			}
 
-			await fs.writeFile(path.join(tempDir, ".cline", "endpoints.json"), JSON.stringify(config), "utf8")
+			await fs.writeFile(userEndpointsFile, JSON.stringify(config), "utf8")
 
 			try {
 				await ClineEndpoint.initialize(tempDir)
@@ -337,7 +327,7 @@ describe("ClineEndpoint configuration", () => {
 				mcpBaseUrl: "https://mcp.enterprise.com",
 			}
 
-			await fs.writeFile(path.join(tempDir, ".cline", "endpoints.json"), JSON.stringify(config), "utf8")
+			await fs.writeFile(userEndpointsFile, JSON.stringify(config), "utf8")
 
 			try {
 				await ClineEndpoint.initialize(tempDir)
@@ -355,7 +345,7 @@ describe("ClineEndpoint configuration", () => {
 				mcpBaseUrl: "https://mcp.enterprise.com",
 			}
 
-			await fs.writeFile(path.join(tempDir, ".cline", "endpoints.json"), JSON.stringify(config), "utf8")
+			await fs.writeFile(userEndpointsFile, JSON.stringify(config), "utf8")
 
 			try {
 				await ClineEndpoint.initialize(tempDir)
@@ -373,7 +363,7 @@ describe("ClineEndpoint configuration", () => {
 				mcpBaseUrl: "https://mcp.enterprise.com",
 			}
 
-			await fs.writeFile(path.join(tempDir, ".cline", "endpoints.json"), JSON.stringify(config), "utf8")
+			await fs.writeFile(userEndpointsFile, JSON.stringify(config), "utf8")
 
 			try {
 				await ClineEndpoint.initialize(tempDir)
@@ -392,7 +382,7 @@ describe("ClineEndpoint configuration", () => {
 				mcpBaseUrl: "https://mcp.enterprise.com",
 			}
 
-			await fs.writeFile(path.join(tempDir, ".cline", "endpoints.json"), JSON.stringify(config), "utf8")
+			await fs.writeFile(userEndpointsFile, JSON.stringify(config), "utf8")
 
 			try {
 				await ClineEndpoint.initialize(tempDir)
@@ -412,7 +402,7 @@ describe("ClineEndpoint configuration", () => {
 				mcpBaseUrl: "https://mcp.enterprise.com",
 			}
 
-			await fs.writeFile(path.join(tempDir, ".cline", "endpoints.json"), JSON.stringify(config), "utf8")
+			await fs.writeFile(userEndpointsFile, JSON.stringify(config), "utf8")
 
 			await ClineEndpoint.initialize(tempDir)
 
@@ -435,7 +425,7 @@ describe("ClineEndpoint configuration", () => {
 				mcpBaseUrl: "https://mcp.enterprise.com",
 			}
 
-			await fs.writeFile(path.join(tempDir, ".cline", "endpoints.json"), JSON.stringify(config), "utf8")
+			await fs.writeFile(userEndpointsFile, JSON.stringify(config), "utf8")
 
 			await ClineEndpoint.initialize(tempDir)
 
@@ -478,7 +468,7 @@ describe("ClineEndpoint configuration", () => {
 				mcpBaseUrl: "https://mcp.enterprise.com",
 			}
 
-			await fs.writeFile(path.join(tempDir, ".cline", "endpoints.json"), JSON.stringify(config), "utf8")
+			await fs.writeFile(userEndpointsFile, JSON.stringify(config), "utf8")
 
 			await ClineEndpoint.initialize(tempDir)
 
@@ -493,7 +483,7 @@ describe("ClineEndpoint configuration", () => {
 				mcpBaseUrl: "https://custom-mcp.internal/v1",
 			}
 
-			await fs.writeFile(path.join(tempDir, ".cline", "endpoints.json"), JSON.stringify(customConfig), "utf8")
+			await fs.writeFile(userEndpointsFile, JSON.stringify(customConfig), "utf8")
 
 			await ClineEndpoint.initialize(tempDir)
 
@@ -538,7 +528,7 @@ describe("ClineEndpoint configuration", () => {
 				apiBaseUrl: "https://api.enterprise.com",
 				mcpBaseUrl: "https://mcp.enterprise.com",
 			}
-			await fs.writeFile(path.join(tempDir, ".cline", "endpoints.json"), JSON.stringify(config), "utf8")
+			await fs.writeFile(userEndpointsFile, JSON.stringify(config), "utf8")
 			await ClineEndpoint.initialize(tempDir)
 
 			ClineEndpoint.isSelfHosted().should.be.true()
@@ -608,7 +598,7 @@ describe("ClineEndpoint configuration", () => {
 
 			// Set up both configs
 			await fs.writeFile(path.join(bundledDir, "endpoints.json"), JSON.stringify(bundledConfig), "utf8")
-			await fs.writeFile(path.join(tempDir, ".cline", "endpoints.json"), JSON.stringify(userConfig), "utf8")
+			await fs.writeFile(userEndpointsFile, JSON.stringify(userConfig), "utf8")
 
 			await ClineEndpoint.initialize(bundledDir)
 
@@ -627,7 +617,7 @@ describe("ClineEndpoint configuration", () => {
 			}
 
 			// Only create user config, no bundled config
-			await fs.writeFile(path.join(tempDir, ".cline", "endpoints.json"), JSON.stringify(userConfig), "utf8")
+			await fs.writeFile(userEndpointsFile, JSON.stringify(userConfig), "utf8")
 
 			await ClineEndpoint.initialize(bundledDir)
 
