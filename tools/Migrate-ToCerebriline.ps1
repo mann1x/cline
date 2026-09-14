@@ -322,6 +322,115 @@ function Confirm-Backup {
 }
 
 <#
+    Rewrite the absolute paths that the move leaves pointing at the old dir.
+
+    This is the step whose absence made the first real migration look like a
+    success and lose every conversation. Each session records the ABSOLUTE
+    location of its own message and compaction files; the history list is built
+    from those records, so after a move the sessions all LIST correctly and then
+    open EMPTY. The copy verification could not see it -- file counts and bytes
+    at the destination matched perfectly.
+
+    Scoped to the exact home-data prefix. A project's own `.cline` folder and
+    any `.clinerules` file must NOT be rewritten: that name is unchanged and
+    shared with upstream Cline, and a blind substring replace would break every
+    repository you work in.
+#>
+function Repair-StoredPaths {
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param([string]$OldHome, [string]$NewHome)
+
+    $oldPrefix = "$OldHome\"
+    $newPrefix = "$NewHome\"
+    $oldEsc = $oldPrefix.Replace('\', '\\')   # JSON escapes backslashes
+    $newEsc = $newPrefix.Replace('\', '\\')
+
+    $targets = @()
+    $sessions = Join-Path $NewHome 'data\sessions'
+    if (Test-Path -LiteralPath $sessions) {
+        $targets += Get-ChildItem -LiteralPath $sessions -Recurse -File -Filter *.json -EA SilentlyContinue
+    }
+    $gstate = Join-Path $NewHome 'data\globalState.json'
+    if (Test-Path -LiteralPath $gstate) { $targets += Get-Item -LiteralPath $gstate }
+
+    if ($targets.Count -eq 0) { Write-Note 'No stored paths to repair.'; return }
+    if (-not $PSCmdlet.ShouldProcess("$($targets.Count) file(s)", 'rewrite stored paths')) { return }
+
+    $changed = 0
+    foreach ($f in $targets) {
+        $text = Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8 -EA SilentlyContinue
+        if ([string]::IsNullOrEmpty($text)) { continue }
+        if ($text.Contains($oldEsc) -or $text.Contains($oldPrefix)) {
+            $updated = $text.Replace($oldEsc, $newEsc).Replace($oldPrefix, $newPrefix)
+            if ($updated -ne $text) {
+                Set-Content -LiteralPath $f.FullName -Value $updated -Encoding UTF8 -NoNewline
+                $changed++
+            }
+        }
+    }
+    Write-Ok "rewrote stored paths in $changed of $($targets.Count) file(s)"
+}
+
+<#
+    The same problem in VS Code's extension storage, for the two files that hold
+    absolute paths rather than conversation text.
+
+    Puppeteer caches the absolute path of the Chromium it downloaded. Left
+    alone, every browser action looks for an executable under the OLD extension
+    id and fails. The task JSON files also name the old id, but those are
+    CONVERSATION CONTENT -- rewriting them would edit your history, so they are
+    deliberately untouched.
+#>
+function Repair-ExtensionStoragePaths {
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param([string]$StorageRoot)
+
+    $pcr = Join-Path $StorageRoot 'puppeteer\.pcr-stats.json'
+    if (-not (Test-Path -LiteralPath $pcr)) { return }
+    $text = Get-Content -LiteralPath $pcr -Raw -Encoding UTF8
+    if ([string]::IsNullOrEmpty($text)) { return }
+    if (-not ($text -match [regex]::Escape($OLD_EXTENSION_ID))) { return }
+    if (-not $PSCmdlet.ShouldProcess($pcr, 'repoint the cached browser path')) { return }
+    $updated = $text.Replace($OLD_EXTENSION_ID, $NEW_EXTENSION_ID)
+    Set-Content -LiteralPath $pcr -Value $updated -Encoding UTF8 -NoNewline
+    Write-Ok 'repointed the cached browser path'
+}
+
+<#
+    Open a session the way the app does, instead of counting bytes.
+
+    The byte/count check proves the COPY landed. It cannot prove the result is
+    usable, and the first real migration passed it while every conversation
+    opened empty. This follows a session's own recorded path and reads the file
+    at the other end.
+#>
+function Test-SessionsReadable {
+    param([string]$NewHome)
+    $sessions = Join-Path $NewHome 'data\sessions'
+    if (-not (Test-Path -LiteralPath $sessions)) { return }
+
+    $checked = 0; $broken = 0; $firstBad = ''
+    Get-ChildItem -LiteralPath $sessions -Directory -EA SilentlyContinue | ForEach-Object {
+        $id = $_.Name
+        $manifest = Join-Path $_.FullName "$id.json"
+        if (-not (Test-Path -LiteralPath $manifest)) { return }
+        $checked++
+        try { $m = Get-Content -LiteralPath $manifest -Raw -Encoding UTF8 | ConvertFrom-Json } catch { return }
+        $p = $m.messages_path
+        if ([string]::IsNullOrWhiteSpace($p)) { return }
+        if (-not (Test-Path -LiteralPath $p)) {
+            $broken++
+            if (-not $firstBad) { $firstBad = $p }
+        }
+    }
+    if ($broken -gt 0) {
+        Write-Warn "$broken of $checked session(s) still point at a file that is not there (e.g. $firstBad). Your history will open empty."
+    } else {
+        Write-Ok "all $checked session(s) resolve to a real messages file"
+    }
+}
+
+<#
     Copy a directory tree, prove the copy landed, and only then move the
     original aside. The proof is deliberately not a hash of every file - on a
     session store of a few hundred megabytes that takes long enough that people
@@ -572,6 +681,16 @@ foreach ($dir in $userDirs) {
         -Label $dir.Name
 }
 
+# The move is only half of it: every session records the ABSOLUTE path of its
+# own message file, and those still name the old directory. Without this the
+# history lists perfectly and every conversation opens empty.
+Write-Step 'Stored paths'
+Repair-StoredPaths -OldHome (Join-Path $HOME '.cline') -NewHome (Join-Path $HOME '.cerebriline')
+foreach ($dir in $userDirs) {
+    Repair-ExtensionStoragePaths -StorageRoot (Join-Path $dir.Path "globalStorage\$NEW_EXTENSION_ID")
+}
+
+
 if (-not $SkipSettings) {
     Write-Step 'Settings keys'
     foreach ($dir in $userDirs) {
@@ -604,6 +723,9 @@ if ($WhatIfPreference) {
         Write-Host "  Backup: $BackupPath" -ForegroundColor Gray
         Write-Host '  See MANIFEST.txt in there for what came from where.' -ForegroundColor Gray
     }
+    Write-Host ''
+    Write-Host ''
+    Test-SessionsReadable -NewHome (Join-Path $HOME '.cerebriline')
     Write-Host ''
     Write-Host '  Now install Cerebriline and start VS Code.' -ForegroundColor White
 }

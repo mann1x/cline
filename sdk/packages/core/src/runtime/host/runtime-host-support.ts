@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import type * as LlmsProviders from "@cline/llms";
 import type { HookEventPayload } from "../../hooks";
 import type { CoreSessionEvent } from "../../types/events";
@@ -50,6 +51,43 @@ export class RuntimeHostEventBus {
 // stripping here would launder that history off disk (and out of the model's
 // context) a little more on every restart. Display surfaces are responsible
 // for their own formatting via formatDisplayUserInput.
+/**
+ * Where a session's messages really are, when the recorded path has moved.
+ *
+ * A session row stores the ABSOLUTE path of its own messages file. That is a
+ * cache -- the location is always derivable from the session id and the current
+ * sessions directory -- and it goes stale the moment the data directory moves.
+ * The Cerebriline migration moves it (`~/.cline` to `~/.cerebriline`), and the
+ * result was the worst shape of failure: the history list is built from the
+ * rows, so every session still LISTED, and every one of them opened EMPTY,
+ * because `readPersistedMessagesFile` answers `[]` for a file that is not there
+ * and says nothing about why.
+ *
+ * The stored path still wins when it resolves, so a session whose artifacts
+ * genuinely live somewhere else is untouched. And when neither location has the
+ * file, the stored path is returned unchanged rather than the derived one:
+ * a session whose messages are actually gone must keep reporting the path it
+ * expected, or real data loss is silently redressed as an empty conversation.
+ */
+export function resolveMessagesPath(
+	storedPath: string | undefined | null,
+	sessionId: string,
+	sessionsDir: string | undefined | null,
+): string | undefined {
+	const stored = storedPath?.trim();
+	if (stored && existsSync(stored)) {
+		return stored;
+	}
+	const dir = sessionsDir?.trim();
+	if (dir) {
+		const derived = join(dir, sessionId, `${sessionId}.messages.json`);
+		if (existsSync(derived)) {
+			return derived;
+		}
+	}
+	return stored || undefined;
+}
+
 export async function readPersistedMessagesFile(
 	messagesPath?: string | null,
 ): Promise<LlmsProviders.MessageWithMetadata[]> {

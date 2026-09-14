@@ -210,6 +210,7 @@ import {
 	RuntimeHostEventBus,
 	readPersistedMessagesFile,
 	replaySubagentHookEvent,
+	resolveMessagesPath,
 } from "./runtime-host-support";
 
 const MAX_SCAN_LIMIT = 5000;
@@ -2697,11 +2698,19 @@ export class LocalRuntimeHost implements RuntimeHost {
 		const target = sessionId.trim();
 		if (!target) return [];
 		const row = await this.getRow(target);
-		if (row?.messagesPath) {
-			return readPersistedMessagesFile(row.messagesPath);
-		}
-		const manifest = await this.readManifest(target);
-		return readPersistedMessagesFile(manifest?.messages_path);
+		// The row's path, the manifest's path, and -- if both have gone stale --
+		// the one derived from where sessions live now. All three are the same
+		// string until the data directory moves, at which point the first two
+		// name a directory that no longer exists and this read would answer with
+		// an empty conversation. See resolveMessagesPath.
+		const sessionsDir = (await this.invokeOptionalValue("ensureSessionsDir")) as
+			| string
+			| undefined;
+		const stored =
+			row?.messagesPath ?? (await this.readManifest(target))?.messages_path;
+		return readPersistedMessagesFile(
+			resolveMessagesPath(stored, target, sessionsDir),
+		);
 	}
 
 	async dispatchHookEvent(payload: HookEventPayload): Promise<void> {
