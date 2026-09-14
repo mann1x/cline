@@ -147,6 +147,9 @@ const OLLAMA_SAMPLING_FIELDS = [
 
 type OllamaSamplingFieldKey = (typeof OLLAMA_SAMPLING_FIELDS)[number]["key"]
 
+/** The three numbers that are not sampling parameters but behave like them. */
+type NumericFieldKey = "contextWindow" | "toolResultChars" | "maxTokens" | "requestTimeout"
+
 /** Placeholders are shown in a two-column grid in a sidebar; this is what fits. */
 const SAMPLING_PLACEHOLDER_MAX_LENGTH = 48
 
@@ -319,6 +322,25 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 	// "1e" as settings.
 	const [samplingExpanded, setSamplingExpanded] = useState(false)
 	const [samplingDraft, setSamplingDraft] = useState<SamplingDraft>({})
+	/**
+	 * The same draft, for the three numbers above the sampling section.
+	 *
+	 * They have the sampling fields' problem and the tool-result cap has it
+	 * twice over: clearing the box to retype writes a zero, a zero clears this
+	 * configuration's own value, and the panel then borrows the global one and
+	 * puts it straight back in the field. Reported as "I have it at 64000 and I
+	 * cannot change it" — the field was refilling itself from the global faster
+	 * than it could be typed into.
+	 */
+	const [numericDraft, setNumericDraft] = useState<Partial<Record<NumericFieldKey, string>>>({})
+	/** What to show: what is being typed, or the stored value if nothing is. */
+	const numericValue = useCallback(
+		(key: NumericFieldKey, stored: string): string => numericDraft[key] ?? stored,
+		[numericDraft],
+	)
+	const noteNumeric = useCallback((key: NumericFieldKey, value: string) => {
+		setNumericDraft((current) => ({ ...current, [key]: value }))
+	}, [])
 
 	const storedSampling = config?.sampling
 	// The draft is the user's text and it outlives the write, which is the
@@ -495,6 +517,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 	// biome-ignore lint/correctness/useExhaustiveDependencies: the draft is cleared because these changed, so they are the dependencies even though the body does not read them
 	useEffect(() => {
 		setSamplingDraft({})
+		setNumericDraft({})
 	}, [selectedModelId, scope])
 
 	useEffect(() => {
@@ -662,8 +685,12 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 			    the 32768 fallback over a value saved in providers.json. */}
 			{config !== undefined && (
 				<DebouncedTextField
-					initialValue={Number.isFinite(ollamaNumCtx) && ollamaNumCtx > 0 ? String(ollamaNumCtx) : ""}
+					initialValue={numericValue(
+						"contextWindow",
+						Number.isFinite(ollamaNumCtx) && ollamaNumCtx > 0 ? String(ollamaNumCtx) : "",
+					)}
 					onChange={(v) => {
+						noteNumeric("contextWindow", v)
 						const contextWindow = Number.parseInt(v, 10)
 						const numCtx = Number.isFinite(contextWindow) && contextWindow > 0 ? contextWindow : undefined
 						// The debounced input also fires for its initial value and
@@ -675,20 +702,32 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 						// Persist to providers.json (`contextWindow`); the store
 						// mirrors the value to the legacy state key for older
 						// readers. Zero clears the setting.
-						void write({ contextWindow: numCtx ?? 0 }).catch((error) =>
-							console.error("Failed to update Ollama context window:", error),
-						)
-
-						if (selectedModel.modelId) {
-							void commitModelSelection({
+						//
+						// Sequenced, not fired together. These are two writes to
+						// one providers.json entry: the second rebuilds the entry
+						// from a fresh read, and `commitModelSelection` follows it
+						// with a read that republishes the entry to every panel.
+						// Issued side by side they raced, so the selection write
+						// could rebuild from a record that did not have the new
+						// context window in it yet and the republished entry put
+						// the old number back on screen. That is the shape of
+						// issue 67 -- the panel matched what was stored, so no
+						// unsaved change was reported either -- and it was fixed
+						// for the scoped tabs' writer without reaching here.
+						void (async () => {
+							await write({ contextWindow: numCtx ?? 0 })
+							if (!selectedModel.modelId) {
+								return
+							}
+							await commitModelSelection({
 								modelId: selectedModel.modelId,
 								modelInfo: {
 									...openAiModelInfoSafeDefaults,
 									name: selectedModel.modelId,
 									...(numCtx ? { contextWindow: numCtx } : {}),
 								},
-							}).catch((error) => console.error("Failed to update Ollama context window:", error))
-						}
+							})
+						})().catch((error) => console.error("Failed to update Ollama context window:", error))
 					}}
 					placeholder={"Default: 32768"}
 					style={{ width: "100%" }}>
@@ -702,12 +741,18 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 			{config !== undefined && (
 				<>
 					<DebouncedTextField
-						initialValue={scopedToolResultChars ? String(scopedToolResultChars) : ""}
+						initialValue={numericValue("toolResultChars", scopedToolResultChars ? String(scopedToolResultChars) : "")}
 						onChange={(v) => {
+							noteNumeric("toolResultChars", v)
 							const parsed = Number.parseInt(v, 10)
 							const next = Number.isFinite(parsed) && parsed > 0 ? parsed : 0
-							// The debounced input also fires for its initial value.
-							if (next === (scopedToolResultChars ?? 0)) {
+							// Against this configuration's own value, not the one
+							// on screen: an unscoped panel with nothing set here
+							// shows the global, and comparing against that made
+							// typing the global's number a no-op — which is the
+							// one way to pin it so a later change to the global
+							// does not move it.
+							if (next === (config?.maxToolResultChars ?? 0)) {
 								return
 							}
 							// Written to this configuration rather than to the one
@@ -731,8 +776,9 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 					</p>
 
 					<DebouncedTextField
-						initialValue={committedMaxTokens ? String(committedMaxTokens) : ""}
+						initialValue={numericValue("maxTokens", committedMaxTokens ? String(committedMaxTokens) : "")}
 						onChange={(v) => {
+							noteNumeric("maxTokens", v)
 							const parsed = Number.parseInt(v, 10)
 							const requested = Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
 							// A reply cannot be longer than the window it has to
@@ -769,11 +815,16 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 			{showModelOptions && (
 				<>
 					<DebouncedTextField
-						initialValue={
-							apiConfiguration?.requestTimeoutMs ? apiConfiguration.requestTimeoutMs.toString() : "300000"
-						}
+						initialValue={numericValue(
+							"requestTimeout",
+							apiConfiguration?.requestTimeoutMs ? apiConfiguration.requestTimeoutMs.toString() : "300000",
+						)}
 						onChange={(value) => {
-							// Convert to number, with validation
+							// The draft is what makes this editable at all: this
+							// field falls back to "300000" when it holds nothing,
+							// so emptying it to retype put 300000 straight back in
+							// on the next render.
+							noteNumeric("requestTimeout", value)
 							const numValue = Number.parseInt(value, 10)
 							if (!Number.isNaN(numValue) && numValue > 0) {
 								handleFieldChange("requestTimeoutMs", numValue)

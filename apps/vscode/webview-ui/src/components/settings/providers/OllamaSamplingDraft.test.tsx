@@ -20,18 +20,24 @@ import { OllamaProvider } from "./OllamaProvider"
 const mocks = vi.hoisted(() => ({
 	commitSelection: vi.fn(),
 	getOllamaModelParameters: vi.fn(),
+	getOllamaModels: vi.fn(),
+	commitModelSelection: vi.fn(),
 	handleApiKeyChange: vi.fn(),
 	handleFieldChange: vi.fn(),
 	handleModeFieldChange: vi.fn(),
 	readConfig: vi.fn(),
+	readExtensionState: vi.fn(),
 	write: vi.fn(),
 }))
 
 vi.mock("@/context/ExtensionStateContext", () => ({
-	useExtensionState: () => ({ apiConfiguration: {}, maxToolResultChars: undefined }),
+	useExtensionState: () => mocks.readExtensionState(),
 }))
 vi.mock("@/services/grpc-client", () => ({
-	ModelsServiceClient: { getOllamaModelParameters: mocks.getOllamaModelParameters },
+	ModelsServiceClient: {
+		getOllamaModelParameters: mocks.getOllamaModelParameters,
+		getOllamaModels: mocks.getOllamaModels,
+	},
 }))
 vi.mock("@/hooks/useProviderConfig", () => ({
 	useProviderConfig: () => ({ config: mocks.readConfig(), write: mocks.write, commitSelection: mocks.commitSelection }),
@@ -41,7 +47,7 @@ vi.mock("@/hooks/useProviderModelSelection", () => ({
 	useProviderModelSelection: () => ({
 		committedSelection: undefined,
 		selectedModel: { modelId: "qwen3:4b", modelInfo: {} },
-		commitModelSelection: vi.fn(),
+		commitModelSelection: mocks.commitModelSelection,
 	}),
 }))
 vi.mock("@shared/proto-conversions/models/modelOverrides", () => ({
@@ -98,18 +104,29 @@ describe("typing a decimal into an Ollama sampling field", () => {
 		vi.clearAllMocks()
 		vi.useFakeTimers({ shouldAdvanceTime: true })
 		mocks.getOllamaModelParameters.mockResolvedValue({ values: {} })
+		mocks.getOllamaModels.mockResolvedValue({ values: ["qwen3:4b"] })
+		mocks.readExtensionState.mockReturnValue({ apiConfiguration: {}, maxToolResultChars: undefined })
+		mocks.commitModelSelection.mockResolvedValue(undefined)
 	})
 
 	/** Render with a live store, and hand back the field named `label`. */
-	async function openSampling(label: string, stored: Record<string, unknown>) {
-		let sampling = { ...stored }
+	async function openSampling(label: string, stored: Record<string, unknown>, rest: Record<string, unknown> = {}) {
+		let config: Record<string, unknown> = { ...rest, sampling: { ...stored } }
 		let bump = () => {}
-		mocks.readConfig.mockImplementation(() => ({ sampling }))
-		mocks.write.mockImplementation(async (patch: { sampling?: Record<string, unknown> }) => {
-			if (patch.sampling) {
-				sampling = { ...patch.sampling }
-				bump()
+		mocks.readConfig.mockImplementation(() => config)
+		mocks.write.mockImplementation(async (patch: Record<string, unknown>) => {
+			// The store the panel is really writing to: a patch lands, and the
+			// new value comes back as `initialValue` on the next render.
+			config = { ...config, ...patch }
+			if (patch.sampling !== undefined) {
+				config.sampling = { ...(patch.sampling as Record<string, unknown>) }
 			}
+			for (const key of ["contextWindow", "maxToolResultChars"] as const) {
+				if (typeof config[key] === "number" && (config[key] as number) <= 0) {
+					delete config[key]
+				}
+			}
+			bump()
 		})
 		const view = render(<OllamaProvider currentMode="act" showModelOptions={true} />)
 		bump = () => act(() => view.rerender(<OllamaProvider currentMode="act" showModelOptions={true} />))
@@ -126,7 +143,23 @@ describe("typing a decimal into an Ollama sampling field", () => {
 				vi.advanceTimersByTime(150)
 			})
 		}
-		return { field, type, read: () => sampling }
+		/**
+		 * One keystroke, as a keyboard makes it.
+		 *
+		 * The new value is built from what the field currently holds rather
+		 * than passed in whole, because that is the difference between a test
+		 * and the bug: if the echo has refilled the box behind the user, the
+		 * next character lands on the refilled text.
+		 */
+		const press = async (char: string) => {
+			await act(async () => {
+				fireEvent.change(field, { target: { value: field.value + char } })
+			})
+			await act(async () => {
+				vi.advanceTimersByTime(150)
+			})
+		}
+		return { field, type, press, read: () => (config.sampling ?? {}) as Record<string, unknown> }
 	}
 
 	it("keeps the decimal when the store echoes a shorter rendering back", async () => {
@@ -170,6 +203,73 @@ describe("typing a decimal into an Ollama sampling field", () => {
 
 		expect(field.value).toBe("0.0")
 		expect(read()[stored[label] as string]).toBe(0)
+	})
+
+	/**
+	 * The audit, as a test.
+	 *
+	 * Every editable number in this panel falls back to something when it holds
+	 * nothing -- the stored value, a borrowed global, or a hard-coded default --
+	 * and every one of them commits through the same debounce and echo. So the
+	 * question for all of them is the same: can the box be emptied and retyped?
+	 * The tool-result cap is the one that was reported ("I have it at 64000 and
+	 * I cannot change it"), and it is the worst of them because clearing it
+	 * clears this configuration's own value and the panel then borrows the
+	 * global one and puts it straight back.
+	 */
+	it.each([
+		["Model Context Window", "40000"],
+		["Tool Results Character Cap", "32000"],
+		["Per-Turn Max Output Tokens", "8000"],
+		["Request Timeout (ms)", "600000"],
+	])("can empty %s and type a new number into it", async (label, typed) => {
+		// The reported state: the cap is set globally, not on this
+		// configuration, so the box shows a borrowed 64000 and clearing it
+		// clears nothing — the global comes straight back.
+		mocks.readExtensionState.mockReturnValue({ apiConfiguration: {}, maxToolResultChars: 64000 })
+		const { field, type, press } = await openSampling(label, {}, { contextWindow: 131072 })
+
+		await type("")
+		expect(field.value).toBe("")
+
+		for (const char of typed) {
+			await press(char)
+		}
+		expect(field.value).toBe(typed)
+	})
+
+	/**
+	 * The context window writes twice, and the order matters.
+	 *
+	 * `commitModelSelection` rebuilds the provider entry from a fresh read of
+	 * providers.json and then republishes it. Issued alongside the context
+	 * window write rather than after it, it could rebuild from a record that
+	 * did not carry the new window yet, and the republished entry put the old
+	 * number back -- with the panel then matching what was stored, so no
+	 * unsaved change was reported either.
+	 */
+	it("does not commit the model selection until the window has been written", async () => {
+		let writeResolved = false
+		let commitSawWrite: boolean | undefined
+		mocks.commitModelSelection.mockImplementation(async () => {
+			commitSawWrite = writeResolved
+		})
+		const { type } = await openSampling("Model Context Window", {}, { contextWindow: 64000 })
+		mocks.write.mockImplementation(async () => {
+			// One turn of the microtask queue, which is all a real RPC needs to
+			// let a second one overtake it.
+			await Promise.resolve()
+			await Promise.resolve()
+			writeResolved = true
+		})
+
+		await type("40000")
+		await act(async () => {
+			await Promise.resolve()
+		})
+
+		expect(mocks.commitModelSelection).toHaveBeenCalled()
+		expect(commitSawWrite).toBe(true)
 	})
 
 	it("lets a field be cleared", async () => {
