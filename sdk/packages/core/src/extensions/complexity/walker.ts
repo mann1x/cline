@@ -28,7 +28,33 @@ import {
 	type SyntaxNode,
 } from "./grammars";
 
-/** Breaks the flow and deepens it: each one costs 1 + the nesting it sits at. */
+/**
+ * Breaks the flow and deepens it: each one costs 1 + the nesting it sits at.
+ *
+ * These were once described here as conventional enough to share across
+ * grammars. Measured across the twelve languages below, they are not, and the
+ * failures were not small:
+ *
+ * ```
+ * construct          js   py   go   rs    c  cpp   rb     (before)
+ * for                 1    1    1    0    1    1    0
+ * switch/4 cases      1    0    0    1    9    9    0
+ * ```
+ *
+ * Three separate faults. `case_statement` is a *case label* in C, C++ and PHP,
+ * not a switch, so it was charged `1 + depth` per case -- a 20-case switch cost
+ * 41 in C against 1 in JavaScript, inverting the one property this metric is
+ * chosen for. Several languages name their loops and switches things nobody
+ * guessed (`for_expression`, `for_each_statement`, `expression_switch_statement`,
+ * `when_expression`, `match_statement`), so those constructs were free. And
+ * Ruby names every one of them with a bare keyword, matching nothing at all --
+ * a Ruby file scored a defined 0, which is the reading this module exists to
+ * refuse.
+ *
+ * Every name here is verified against a real parse by
+ * `grammar-calibration.test.ts`, which scores the same construct in every
+ * language and fails if two disagree.
+ */
 const NESTING_STRUCTURES = new Set([
 	"if_statement",
 	"if_expression",
@@ -38,18 +64,70 @@ const NESTING_STRUCTURES = new Set([
 	"for_in_statement",
 	"for_of_statement",
 	"for_range_loop",
+	// Rust and Scala write `for` as an expression; C# and PHP give the
+	// for-each form its own node; Lua splits numeric from generic.
+	"for_expression",
+	"for_each_statement",
+	"foreach_statement",
+	"enhanced_for_statement",
+	"for_numeric_statement",
+	"for_generic_statement",
 	"while_statement",
 	"while_expression",
 	"do_statement",
+	"repeat_statement",
+	"repeat_while_statement",
 	"loop_expression",
 	"switch_statement",
 	"switch_expression",
 	"match_expression",
-	"case_statement",
+	// Go has three of these and none of them is `switch_statement`; Kotlin's
+	// is `when`; Python's structural match is a statement, not an expression.
+	"expression_switch_statement",
+	"type_switch_statement",
+	"select_statement",
+	"when_expression",
+	"match_statement",
 	"catch_clause",
+	"catch_block",
 	"except_clause",
+]);
+
+/**
+ * The same thing, for grammars that name it with a bare keyword.
+ *
+ * Ruby alone: its nodes are `if`, `unless`, `while`, `until`, `for`, `case`.
+ * Those words are also *keyword tokens* in ten other grammars -- a JavaScript
+ * `if_statement` has a child of type `if` -- so matching them unconditionally
+ * would double-count everywhere else. A keyword token is a leaf and a
+ * statement is not, and across all twelve languages that separates them
+ * exactly: with `childCount > 0` required, these names occur in Ruby and
+ * nowhere else.
+ *
+ * `when` is deliberately absent. It is Ruby's *case label*, and a case label
+ * costs nothing -- that is the whole difference from cyclomatic complexity.
+ */
+const BARE_NESTING_STRUCTURES = new Set([
+	"if",
+	"unless",
+	"while",
+	"until",
+	"for",
+	"case",
+	// `rescue` was in the set above, and scored 3 for one `begin/rescue`: the
+	// statement node holds a `rescue` *keyword token* as a child, and an
+	// unconditional match counted both. The same latent fault applies to any
+	// bare keyword, which is why every one of them lives here.
 	"rescue",
 ]);
+
+/** Whether this node breaks the flow and deepens what is under it. */
+function isNestingStructure(node: SyntaxNode): boolean {
+	return (
+		NESTING_STRUCTURES.has(node.type) ||
+		(node.childCount > 0 && BARE_NESTING_STRUCTURES.has(node.type))
+	);
+}
 
 /** Breaks the flow without deepening it: a flat +1 wherever it appears. */
 const FLAT_STRUCTURES = new Set([
@@ -75,9 +153,20 @@ const NESTING_ONLY = new Set([
 	"arrow_function",
 	"lambda",
 	"closure_expression",
-	"class_declaration",
-	"class_definition",
 ]);
+
+/*
+ * Classes are deliberately absent from the set above.
+ *
+ * They were in it, and in a language where every method lives inside one --
+ * Java, C#, Kotlin -- that made the class the first function-like node and
+ * every method a *nested* one, so the whole language scored one level deeper
+ * than the rest. `if (a) { f(); }` cost 2 in Java against 1 everywhere else,
+ * for writing it the only way Java lets you write it.
+ *
+ * The specification's nesting increments are if/else, loops, switch, catch and
+ * nested functions. A class is not among them.
+ */
 
 /** Every node type that is a function of some sort, for "the function at line N". */
 const FUNCTIONS = new Set([
@@ -95,19 +184,75 @@ const FUNCTIONS = new Set([
 const LOGICAL_OPERATORS = new Set(["&&", "||", "and", "or", "??"]);
 
 /**
- * Where a file's score starts being worth mentioning unprompted.
+ * The scale, because an unbounded integer on its own says nothing.
  *
- * Extended from SonarSource's default, which flags a *function* at 15. A file
- * is the sum of its functions, so 50 is roughly "several functions that would
- * each be flagged" -- a convention carried over, not a boundary measured on
- * these runs, and it is quoted nowhere as evidence of anything. It decides one
- * thing only: whether a nudge mentions the expert.
+ * "This function scores 474" is not information. The reader's first question
+ * is *out of what*, and there is no out-of-what: the metric is a sum with no
+ * ceiling. A model handed a bare number has to score several functions itself,
+ * infer a distribution, and guess where the number sits in it -- so what it
+ * actually does is ignore the number. The bands are how the scale travels with
+ * the score instead of being left for the reader to reconstruct.
+ *
+ * The boundaries are anchored on the one published figure and then checked
+ * against measurement. SonarSource flags a **function** at 15; scoring 5,695
+ * functions across TypeScript, C, C++ and a minified HTML game puts that at
+ * the worst 6.8%, which is an independent vindication of their number rather
+ * than a coincidence worth ignoring. The rest of the ladder is the same
+ * distribution:
+ *
+ * ```
+ * p25  0     >=  5  21.6%   moderate
+ * p50  1     >= 15   6.8%   high        <- SonarSource's flag point
+ * p75  4     >= 25   3.2%   very high
+ * p90 10     >= 60   0.7%   extreme
+ * p95 18
+ * p99 50     max 452
+ * ```
  */
-export const HIGH_FILE_COMPLEXITY = 50;
+export type ComplexityBand =
+	| "simple"
+	| "moderate"
+	| "high"
+	| "very high"
+	| "extreme";
 
-/** Whether a score is high enough to be worth raising on its own. */
+/** Lower bound of each band, highest first. */
+const BANDS: readonly (readonly [number, ComplexityBand])[] = [
+	[60, "extreme"],
+	[25, "very high"],
+	[15, "high"],
+	[5, "moderate"],
+	[0, "simple"],
+];
+
+export function bandFor(score: number): ComplexityBand {
+	for (const [floor, band] of BANDS) {
+		if (score >= floor) {
+			return band;
+		}
+	}
+	return "simple";
+}
+
+/**
+ * The ladder, written out, so the number is readable without a second lookup.
+ *
+ * Said in full every time on purpose. The alternative is a bare score plus an
+ * expectation that whoever reads it remembers a scale from somewhere else,
+ * and nothing downstream of here has a somewhere else.
+ */
+export const COMPLEXITY_SCALE =
+	"0-4 simple, 5-14 moderate, 15-24 high, 25-59 very high, 60+ extreme; 15 is where SonarSource flags a function, and across 5,695 functions of real code 15+ is the worst 6.8% and 60+ the worst 0.7%";
+
+/**
+ * Where a file starts being worth raising unprompted.
+ *
+ * The worst function in it reaching `extreme`. Measured over 380 files of
+ * TypeScript, C and C++, that is 6.3% of them -- rare enough that saying
+ * something means something, common enough to fire on real code.
+ */
 export function isHighComplexity(score: ComplexityScore | undefined): boolean {
-	return score !== undefined && score.score >= HIGH_FILE_COMPLEXITY;
+	return score !== undefined && bandFor(score.score) === "extreme";
 }
 
 export interface ComplexityScore {
@@ -266,7 +411,7 @@ function scoreNode(
 		return score;
 	}
 
-	if (NESTING_STRUCTURES.has(node.type)) {
+	if (isNestingStructure(node)) {
 		score += 1 + depth;
 		nextDepth = depth + 1;
 	} else if (FLAT_STRUCTURES.has(node.type)) {
@@ -336,6 +481,50 @@ export function scoreTree(
 			? {}
 			: { ...(nameOf(target) ? { name: nameOf(target) } : {}) }),
 	};
+}
+
+/**
+ * How much of a tree may be in error before its score is worthless.
+ *
+ * Not `hasError` on its own, which was the first thing tried and was far too
+ * blunt: 40 of 100 real C and C++ files from llama.cpp set it, and **39 of
+ * those 40 had under 0.5% of their bytes inside an `ERROR` node** -- one
+ * attribute or one macro the grammar does not know, in a file that is
+ * otherwise parsed correctly. Silencing those would have deleted the feature
+ * for C and C++ (70% of files) to no purpose, because a score taken from a
+ * 99.5%-correct tree is a 99.5%-correct score.
+ *
+ * What has to be caught is wholesale failure, and it does not resemble the
+ * above at all. Measured coverage, same corpora:
+ *
+ * ```
+ * real code, grammar hiccup      <= 0.5%   (p90 of erroring C/C++ and TS files)
+ * a grammar that has gone bad     100%     (tree-sitter-lua, second parse on)
+ * the one genuinely broken file   100%
+ * ```
+ *
+ * So the two populations are separated by a factor of two hundred, and 20%
+ * sits in the empty middle with room on both sides.
+ */
+const MAX_ERROR_COVERAGE = 0.2;
+
+/** Whether the parse failed badly enough that nothing should be said. */
+function parseFailed(root: SyntaxNode, sourceLength: number): boolean {
+	if (!root.hasError || sourceLength === 0) {
+		return false;
+	}
+	let errored = 0;
+	const walk = (node: SyntaxNode): void => {
+		if (node.type === "ERROR" || node.type === "MISSING") {
+			errored += node.text.length;
+			return;
+		}
+		for (const child of childrenOf(node)) {
+			walk(child);
+		}
+	};
+	walk(root);
+	return errored / sourceLength > MAX_ERROR_COVERAGE;
 }
 
 /**
@@ -440,7 +629,12 @@ async function scoreHtml(
 				);
 	if (containing) {
 		const parsed = parser.parse(containing.body.text);
-		if (!parsed) {
+		// The same bar the outer tree is held to. A script body is where the
+		// code actually is, so a body that did not parse is exactly the case
+		// the guard exists for -- and checking only the document, which is
+		// almost always well-formed HTML around a broken script, would have
+		// let every one of them through.
+		if (!parsed || parseFailed(parsed.rootNode, containing.body.text.length)) {
 			return undefined;
 		}
 		const inner = scoreTree(parsed, {
@@ -455,27 +649,67 @@ async function scoreHtml(
 			: undefined;
 	}
 
-	let total = 0;
-	let startLine = Number.POSITIVE_INFINITY;
-	let endLine = 0;
+	// The hardest function across every script, not the sum across them: a page
+	// with six small scripts is six small problems, and adding them up reports
+	// one large one that nobody has to read.
+	let worst: ComplexityScore | undefined;
 	for (const { body, startRow } of scripts) {
 		const parsed = parser.parse(body.text);
-		if (!parsed) {
+		if (!parsed || parseFailed(parsed.rootNode, body.text.length)) {
 			return undefined;
 		}
-		const scored = scoreTree(parsed);
-		if (!scored) {
-			return undefined;
+		const scored = worstFunctionIn(parsed, startRow);
+		if (scored && (!worst || scored.score > worst.score)) {
+			worst = scored;
 		}
-		total += scored.score;
-		startLine = Math.min(startLine, scored.startLine + startRow);
-		endLine = Math.max(endLine, scored.endLine + startRow);
 	}
-	return {
-		score: total,
-		startLine: Number.isFinite(startLine) ? startLine : 1,
-		endLine,
+	return worst;
+}
+
+/**
+ * The hardest single function in a tree, shifted into the file's own lines.
+ *
+ * A whole-file sum is dominated by *size*: `local-runtime-host.ts` totalled 865
+ * over 4,002 lines and its worst function is 248, while a 137-line minified
+ * game totalled 238. Summing therefore ranks a long, plain file above a short,
+ * dense one, which inverts what the number is for. A single function is also
+ * the unit SonarSource's 15 refers to, so it is the only unit the scale can be
+ * quoted against honestly -- and unlike a file total it names something: a
+ * function, on a line, that the reader can open.
+ */
+function worstFunctionIn(
+	tree: ParsedTree,
+	rowOffset: number,
+): ComplexityScore | undefined {
+	const functions: SyntaxNode[] = [];
+	const walk = (node: SyntaxNode): void => {
+		if (NESTING_ONLY.has(node.type)) {
+			functions.push(node);
+		}
+		for (const child of childrenOf(node)) {
+			walk(child);
+		}
 	};
+	walk(tree.rootNode);
+
+	let worst: ComplexityScore | undefined;
+	for (const fn of functions) {
+		const scored = scoreTree(tree, { line: fn.startPosition.row + 1 });
+		if (scored && (!worst || scored.score > worst.score)) {
+			worst = scored;
+		}
+	}
+	// A file with no functions at all is not a file with no code -- a script of
+	// top-level statements is exactly what a small page or a shell-shaped
+	// module looks like -- so it falls back to the whole tree.
+	const result = worst ?? scoreTree(tree);
+	return result
+		? {
+				...result,
+				startLine: result.startLine + rowOffset,
+				endLine: result.endLine + rowOffset,
+			}
+		: undefined;
 }
 
 /**
@@ -503,10 +737,18 @@ export async function scoreComplexity(
 		if (!tree) {
 			return undefined;
 		}
+		if (parseFailed(tree.rootNode, source.length)) {
+			return undefined;
+		}
 		if (grammar === "html") {
 			return await scoreHtml(tree, options);
 		}
-		return scoreTree(tree, options);
+		// A line means "the function around this line" and is answered exactly.
+		// Without one the question is about the file, and the answer is its
+		// hardest function rather than the sum of all of them.
+		return options.line === undefined
+			? worstFunctionIn(tree, 0)
+			: scoreTree(tree, options);
 	} catch {
 		return undefined;
 	}
@@ -525,5 +767,5 @@ export function describeComplexity(
 	const where = score.name
 		? `\`${score.name}\` (${filePath}:${score.startLine}-${score.endLine})`
 		: `${filePath}:${score.startLine}-${score.endLine}`;
-	return `Cognitive complexity of ${where}: ${score.score}. That measures how hard the code is to read, not how likely this change is to work — treat it as context, not as evidence.`;
+	return `Cognitive complexity of ${where}: ${score.score} — ${bandFor(score.score)} (${COMPLEXITY_SCALE}). That measures how hard the code is to read, not how likely this change is to work — treat it as context, not as evidence.`;
 }

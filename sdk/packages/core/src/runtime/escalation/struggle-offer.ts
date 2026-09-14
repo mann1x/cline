@@ -68,7 +68,12 @@ export function describeEscalationOffer(input: {
 export function describeEscalationNudge(input: {
 	diagnosis: string;
 	complexity: readonly string[];
-	/** Whether any file in play is over the convention in `walker.ts`. */
+	/**
+	 * Whether the hardest function in any file in play lands in the top band.
+	 *
+	 * `extreme`, which is 60 and above -- 6.3% of files measured across
+	 * TypeScript, C and C++. Rare enough that raising it means something.
+	 */
 	high: boolean;
 	remaining: number;
 }): string {

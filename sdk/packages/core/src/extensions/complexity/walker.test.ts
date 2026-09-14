@@ -8,7 +8,13 @@
 
 import { describe, expect, it } from "vitest";
 import { grammarFor } from "./grammars";
-import { describeComplexity, scoreComplexity } from "./walker";
+import {
+	bandFor,
+	COMPLEXITY_SCALE,
+	describeComplexity,
+	isHighComplexity,
+	scoreComplexity,
+} from "./walker";
 
 describe("which files can be measured at all", () => {
 	it("knows the languages it ships a grammar for", () => {
@@ -158,12 +164,19 @@ describe("code inside an HTML document", () => {
 		expect(score?.score).toBeGreaterThan(0);
 	});
 
-	it("adds up every script in the document", async () => {
-		const one = "if (a) { b(); }";
-		const single = await scoreComplexity("a.html", page(one));
-		const doubled = await scoreComplexity("b.html", `${page(one)}${page(one)}`);
-		expect(single?.score).toBe(1);
-		expect(doubled?.score).toBe(2);
+	// Not the sum across scripts. A page with six small scripts is six small
+	// problems, and adding them up reports one large one that nobody has to
+	// read. The hardest function in the document is the one worth naming.
+	it("reports the hardest script in the document, not their total", async () => {
+		const easy = "function e(){ if (a) { b(); } }";
+		const hard =
+			"function h(xs){ for (const x of xs) { if (x) { while (x.n) { x.n--; } } } }";
+		const alone = await scoreComplexity("a.html", page(hard));
+		const both = await scoreComplexity("b.html", `${page(easy)}${page(hard)}`);
+
+		expect(alone?.score).toBe(6);
+		expect(both?.score).toBe(6);
+		expect(both?.name).toBe("h");
 	});
 
 	// The span has to be openable: the line numbers a reader is given must be
@@ -205,5 +218,98 @@ describe("code inside an HTML document", () => {
 		const narrowed = await scoreComplexity("game.html", source, { line: 6 });
 		expect(narrowed?.name).toBe("big");
 		expect(narrowed?.startLine).toBe(6);
+	});
+});
+
+/**
+ * The scale, which is the difference between a number and information.
+ *
+ * "This function scores 474" cannot be acted on: the metric has no ceiling, so
+ * the reader's first question is what 474 is out of, and there is no answer
+ * unless one travels with it. A reader who has to score a dozen other
+ * functions before knowing what they have been told will not do it.
+ */
+describe("saying what the number means", () => {
+	it("puts SonarSource's flag point at the bottom of `high`", () => {
+		expect(bandFor(14)).toBe("moderate");
+		expect(bandFor(15)).toBe("high");
+	});
+
+	it("bands the whole range, with nothing falling through", () => {
+		expect(bandFor(0)).toBe("simple");
+		expect(bandFor(4)).toBe("simple");
+		expect(bandFor(5)).toBe("moderate");
+		expect(bandFor(24)).toBe("high");
+		expect(bandFor(25)).toBe("very high");
+		expect(bandFor(59)).toBe("very high");
+		expect(bandFor(60)).toBe("extreme");
+		expect(bandFor(452)).toBe("extreme");
+	});
+
+	// Whatever else changes, a reader must never be handed a bare integer.
+	it("carries the band and the whole ladder in the sentence", async () => {
+		const source = [
+			"function big(xs) {",
+			"  for (const x of xs) {",
+			"    if (x) { while (x.n) { x.n -= 1; } }",
+			"  }",
+			"}",
+		].join("\n");
+		const score = await scoreComplexity("game.js", source);
+		const said = describeComplexity(score as never, "game.js");
+
+		expect(said).toContain("`big`");
+		expect(said).toContain(COMPLEXITY_SCALE);
+		expect(said).toMatch(/simple|moderate|high|very high|extreme/);
+		expect(said).toContain("not how likely this change is to work");
+	});
+
+	it("calls a file high only when its worst function is extreme", async () => {
+		const ordinary = await scoreComplexity(
+			"a.js",
+			"function f(){ if (a) { b(); } }",
+		);
+		expect(isHighComplexity(ordinary)).toBe(false);
+		expect(isHighComplexity(undefined)).toBe(false);
+	});
+});
+
+/**
+ * Why a function and not the file.
+ *
+ * A whole-file sum is dominated by size: it ranked a 4,002-line file above a
+ * 137-line minified game, which inverts what the number is for. A function is
+ * also the unit SonarSource's 15 refers to, so it is the only unit the scale
+ * can honestly be quoted against.
+ */
+describe("which part of the file the score describes", () => {
+	it("reports the hardest function, not the sum of all of them", async () => {
+		const source = [
+			"function small() { if (a) { b(); } }",
+			"function big(xs) {",
+			"  for (const x of xs) {",
+			"    if (x) { while (x.n) { x.n -= 1; } }",
+			"  }",
+			"}",
+			"function alsoSmall() { if (c) { d(); } }",
+		].join("\n");
+
+		const score = await scoreComplexity("game.js", source);
+
+		// The sum would be 8. The hardest function is 6, and it has a name.
+		expect(score?.score).toBe(6);
+		expect(score?.name).toBe("big");
+		expect(score?.startLine).toBe(2);
+	});
+
+	// A page or a script can be all top-level statements, and that is code.
+	it("falls back to the whole file when it holds no functions", async () => {
+		const score = await scoreComplexity(
+			"top.js",
+			"if (a) { b(); }\nfor (const x of xs) { if (x) { f(); } }",
+		);
+
+		expect(score?.score).toBe(4);
+		expect(score?.name).toBeUndefined();
 	});
 });

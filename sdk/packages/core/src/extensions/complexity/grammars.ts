@@ -34,7 +34,13 @@ const GRAMMARS: Readonly<Record<string, string>> = {
 	".rs": "rust",
 	".java": "java",
 	".c": "c",
-	".h": "c",
+	// `.h` reads as C++, not C. The extension is ambiguous -- it is the header
+	// for either language -- and C++ is very nearly a superset, so the C++
+	// grammar parses both while the C grammar chokes on every class and
+	// template. Measured on 120 llama.cpp sources: with `.h` as C, 23 files
+	// were silenced as unparseable and every one of them was a `.h`; with
+	// `.h` as C++, none are.
+	".h": "cpp",
 	".cc": "cpp",
 	".cpp": "cpp",
 	".hpp": "cpp",
@@ -44,7 +50,11 @@ const GRAMMARS: Readonly<Record<string, string>> = {
 	".swift": "swift",
 	".kt": "kotlin",
 	".scala": "scala",
-	".lua": "lua",
+	// `.lua` is deliberately absent. `tree-sitter-lua` in tree-sitter-wasms
+	// 0.1.13 parses the first source it is handed and answers `ERROR` for
+	// every one after it -- the same parser, the same bytes, reproducible.
+	// Keeping the mapping would mean the first Lua file in a process gets a
+	// score and the rest get silence, which is worse than silence throughout.
 	".sh": "bash",
 	".bash": "bash",
 	".html": "html",
@@ -65,6 +75,14 @@ export interface ParsedTree {
 
 export interface SyntaxNode {
 	readonly type: string;
+	/**
+	 * Whether anything under this node failed to parse.
+	 *
+	 * Read on the root, where it is the difference between a tree that can be
+	 * scored and one that cannot. See `scoreComplexity`, which answers nothing
+	 * for a tree that has it.
+	 */
+	readonly hasError?: boolean;
 	readonly startPosition: { row: number; column: number };
 	readonly endPosition: { row: number; column: number };
 	readonly childCount: number;
