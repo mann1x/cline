@@ -22,6 +22,7 @@ import {
 	resolveConnectorDataDir,
 	resolveConnectorSettingsPath,
 	resolveDbDataDir,
+	resolveDocumentsClineDirectoryPath,
 	resolveGlobalAgentsRulesPath,
 	resolveGlobalSettingsPath,
 	resolveHooksConfigSearchPaths,
@@ -246,7 +247,15 @@ describe("storage path resolution", () => {
 
 		expect(paths).toEqual([
 			join(workspacePath, ".clinerules", "workflows"),
-			expect.stringContaining(join("Documents", "Cline", "Workflows")),
+			// Against the resolver, not against a brand name. The Documents
+			// directory is whichever of `Cerebriline` and `Cline` exists, falling
+			// back to `Cerebriline`, so a literal here asserts a fact about the
+			// machine rather than about the code: this spelled "Cline" and passed
+			// on every box with a legacy Documents\Cline from an older install,
+			// while failing in CI, where neither directory exists.
+			expect.stringContaining(
+				join(resolveDocumentsClineDirectoryPath(), "Workflows"),
+			),
 			join("/tmp/home", ".cline", "workflows"),
 			join(workspacePath, ".cline", "workflows"),
 		]);
