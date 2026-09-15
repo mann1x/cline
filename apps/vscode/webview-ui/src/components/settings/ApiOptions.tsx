@@ -9,7 +9,7 @@ import { PLATFORM_CONFIG, PlatformType } from "@/config/platform.config"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { useProviderListings } from "@/hooks/useProviderListings"
 import { ClinePassHint } from "./ClinePassHint"
-import ParallelSessionsField, { PARALLEL_SESSIONS_DESCRIPTION } from "./common/ParallelSessionsField"
+import ParallelSessionsField, { parallelSessionsDescription } from "./common/ParallelSessionsField"
 import { PolykvSection } from "./common/PolykvSection"
 import { OPENROUTER_MODEL_PICKER_Z_INDEX } from "./OpenRouterModelPicker"
 import { AIhubmixProvider } from "./providers/AihubmixProvider"
@@ -503,7 +503,9 @@ const ApiOptions = ({
 			{apiConfiguration && showModelOptions && selectedProvider && (
 				<div className="mb-[5px]">
 					<ParallelSessionsField providerId={selectedProvider} />
-					<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">{PARALLEL_SESSIONS_DESCRIPTION}</p>
+					<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
+						{parallelSessionsDescription(selectedProvider)}
+					</p>
 				</div>
 			)}
 

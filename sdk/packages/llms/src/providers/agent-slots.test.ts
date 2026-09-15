@@ -58,32 +58,73 @@ describe("resolveAgentSlotLimit", () => {
 		expect(resolved.limit).toBe(1);
 	});
 
-	// PolyKV changes what a slot is: agents attach to a pool and share one, and
-	// the engine admits or refuses against measured KV headroom. Counting slots
-	// there would refuse work the server would have taken.
-	it("stands down when opencoti has PolyKV on", async () => {
-		const fetchImpl = vi.fn(
+	// A server that answers `/props` with whatever `opencoti` block the case
+	// needs. `/props` is the one probe that works on every configuration: the
+	// pool routes error on a server booted without `--polykv-max-pools`, so
+	// asking there cannot tell "pools off" from "no server".
+	const propsServer = (opencoti: Record<string, unknown>) =>
+		vi.fn(
 			async (_input: Parameters<typeof fetch>[0]) =>
 				new Response(
 					JSON.stringify({
 						build_info: "opencoti-0.10.5-c7-2609031229001",
-						opencoti: { polykv: { pools_enabled: true } },
+						opencoti,
 					}),
 					{ status: 200 },
 				),
 		);
+
+	const POOLS_ON = { polykv: { pools_enabled: true } };
+	const POOLS_OFF = { polykv: { pools_enabled: false, max_pools: 0 } };
+	const ELASTIC_ON = {
+		polykv: { pools_enabled: false, max_pools: 0 },
+		elastic_slots: { enabled: true, slots_live: 2, slots_max: 8 },
+	};
+
+	// PolyKV changes what a slot is: agents attach to a pool and share one, and
+	// the engine admits or refuses against measured KV headroom. Counting slots
+	// there would refuse work the server would have taken.
+	it("stands down when opencoti has PolyKV on and nothing is configured", async () => {
+		const fetchImpl = propsServer(POOLS_ON);
 		const resolved = await resolveAgentSlotLimit({
 			providerId: "opencoti",
 			baseUrl: "http://localhost:8080/v1",
-			parallelSessions: 2,
 			fetch: fetchImpl as unknown as typeof fetch,
 		});
 
 		expect(resolved.limit).toBe(0);
-		// `/props`, not `/polykv/pools`: the pool routes error on a server booted
-		// without `--polykv-max-pools`, so probing there cannot tell "pools off"
-		// from "no server". And it sits beside `/v1`, not under it.
+		// `/props` sits beside `/v1`, not under it.
 		expect(fetchImpl.mock.calls[0]?.[0]).toBe("http://localhost:8080/props");
+	});
+
+	// The elastic slot controller decides the same question by a different
+	// route -- it grows `slots_live` under load rather than admitting against a
+	// pool -- so an elastic server is equally not something to count slots on.
+	it("stands down when opencoti has elastic slots on", async () => {
+		const resolved = await resolveAgentSlotLimit({
+			providerId: "opencoti",
+			baseUrl: "http://localhost:8080/v1",
+			fetch: propsServer(ELASTIC_ON) as unknown as typeof fetch,
+		});
+		expect(resolved.limit).toBe(0);
+	});
+
+	// A number in the field is a number the user meant. On an elastic server it
+	// stops being a description of the server and becomes a ceiling of theirs --
+	// the engine may be willing to take more, and this says don't. Discarding it
+	// because the engine has an opinion would make the field unusable exactly
+	// where someone would reach for it.
+	it.each([
+		["PolyKV", POOLS_ON],
+		["elastic slots", ELASTIC_ON],
+	])("keeps a configured count as a ceiling under %s", async (_name, props) => {
+		const resolved = await resolveAgentSlotLimit({
+			providerId: "opencoti",
+			baseUrl: "http://localhost:8080/v1",
+			parallelSessions: 2,
+			fetch: propsServer(props) as unknown as typeof fetch,
+		});
+		expect(resolved.limit).toBe(2);
 	});
 
 	// A server booted without `--polykv-max-pools` -- the default -- still
@@ -94,30 +135,50 @@ describe("resolveAgentSlotLimit", () => {
 			providerId: "opencoti",
 			baseUrl: "http://localhost:8080/v1",
 			parallelSessions: 2,
-			fetch: (async () =>
-				new Response(
-					JSON.stringify({
-						build_info: "opencoti-0.10.5-c7-2609031229001",
-						opencoti: { polykv: { pools_enabled: false, max_pools: 0 } },
-					}),
-					{ status: 200 },
-				)) as unknown as typeof fetch,
+			fetch: propsServer(POOLS_OFF) as unknown as typeof fetch,
 		});
 		expect(resolved.limit).toBe(2);
 	});
 
-	// A server that cannot be reached is not a server that has PolyKV. The fixed
-	// slot count is the safe reading when the question cannot be asked.
-	it("keeps the slot count when the server cannot be reached", async () => {
+	// Neither controller is armed, so the server really does have a fixed count
+	// of slots and a request that finds none free queues silently. One.
+	it("assumes one on a plain opencoti with nothing configured", async () => {
 		const resolved = await resolveAgentSlotLimit({
 			providerId: "opencoti",
 			baseUrl: "http://localhost:8080/v1",
-			parallelSessions: 3,
-			fetch: (async () => {
-				throw new Error("ECONNREFUSED");
-			}) as unknown as typeof fetch,
+			fetch: propsServer(POOLS_OFF) as unknown as typeof fetch,
 		});
-		expect(resolved.limit).toBe(3);
+		expect(resolved.limit).toBe(1);
+	});
+
+	// A server that cannot be reached is not a server that has PolyKV. The fixed
+	// slot count is the safe reading when the question cannot be asked -- and
+	// with nothing configured that is one, never the elastic zero.
+	it("keeps the slot count when the server cannot be reached", async () => {
+		const unreachable = (async () => {
+			throw new Error("ECONNREFUSED");
+		}) as unknown as typeof fetch;
+
+		expect(
+			(
+				await resolveAgentSlotLimit({
+					providerId: "opencoti",
+					baseUrl: "http://localhost:8080/v1",
+					parallelSessions: 3,
+					fetch: unreachable,
+				})
+			).limit,
+		).toBe(3);
+
+		expect(
+			(
+				await resolveAgentSlotLimit({
+					providerId: "opencoti",
+					baseUrl: "http://localhost:8080/v1",
+					fetch: unreachable,
+				})
+			).limit,
+		).toBe(1);
 	});
 
 	it("does not probe a provider that has no PolyKV", async () => {

@@ -34,9 +34,15 @@ function parseTyped(value: string | number | undefined): number | undefined {
  * Neither number is on the wire — a plan's allowance is not published and
  * Ollama does not report `OLLAMA_NUM_PARALLEL` — so it is typed here rather
  * than discovered, and it lives beside the context window because it belongs to
- * the same thing: one profile's arrangement with one endpoint. The exception is
- * opencoti with PolyKV on, where agents share a slot and the engine's admission
- * control decides; the session probes for that and leaves this unread.
+ * the same thing: one profile's arrangement with one endpoint.
+ *
+ * The exception is an elastic opencoti — PolyKV admission, or the elastic slot
+ * controller. There the server decides how many it will take, so there is no
+ * fixed number to describe, and this field changes meaning rather than going
+ * unread: it becomes a ceiling of the user's own, applied on top of whatever
+ * the engine would have allowed. Empty hands the decision to the engine
+ * entirely. The session probes `/props` for which of the two cases it is in;
+ * this field cannot, which is why the copy explains both.
  */
 export const ParallelSessionsField = ({ providerId }: { providerId: string }) => {
 	const { config, write } = useProviderConfig(providerId as never)
@@ -75,5 +81,29 @@ export const PARALLEL_SESSIONS_DESCRIPTION =
 	"Ollama's OLLAMA_NUM_PARALLEL, or --parallel for llama.cpp and opencoti; for a hosted provider, what your plan allows. " +
 	"It bounds how many subagents run at once: a server with no free slot queues the request instead of refusing it, so " +
 	"spawning more agents than there are slots makes a run slower, not faster."
+
+/**
+ * The sentence that follows it on an elastic server, where the field means
+ * something else.
+ */
+const PARALLEL_SESSIONS_ELASTIC_NOTE =
+	" With PolyKV or elastic slots on, opencoti decides for itself how many it will take — there is no fixed count to " +
+	"state. A number here is then a ceiling of your own, applied on top of the engine's answer; leave it empty to let the " +
+	"engine decide alone."
+
+/**
+ * The copy under the field, for the provider it is being shown for.
+ *
+ * opencoti gets an extra sentence rather than different text: the shared
+ * paragraph is still true of a plain opencoti, which has a fixed `--parallel`
+ * count like any other llama.cpp server, and only stops being true once one of
+ * the two elastic controllers is armed. Nothing in the webview can tell which,
+ * so both are stated.
+ */
+export function parallelSessionsDescription(providerId: string): string {
+	return providerId === "opencoti"
+		? PARALLEL_SESSIONS_DESCRIPTION + PARALLEL_SESSIONS_ELASTIC_NOTE
+		: PARALLEL_SESSIONS_DESCRIPTION
+}
 
 export default ParallelSessionsField

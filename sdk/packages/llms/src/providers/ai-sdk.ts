@@ -43,9 +43,11 @@ import {
 	wrapLanguageModel,
 } from "ai";
 import { nanoid } from "nanoid";
+import type { PolykvOptions } from "./config";
 import { classifyProviderError } from "./error-classification";
 import { extractErrorMessage } from "./format";
 import { createRetryEmptyResponseMiddleware } from "./middleware/retry-empty-response";
+import { createRetryRateLimitMiddleware } from "./middleware/retry-rate-limit";
 import {
 	isAnthropicCompatibleModel,
 	modelSupportsImageInput,
@@ -2296,6 +2298,39 @@ export function withEmptyResponseRetry(
 	});
 }
 
+/**
+ * Wrap a model so an admission refusal waits rather than failing the turn.
+ *
+ * Applied *inside* `withEmptyResponseRetry`, so a refusal that lands on one of
+ * that middleware's own re-dials is paced too. Inert unless the server refuses:
+ * a provider that never sends `429` sees a request byte-identical to the one it
+ * saw before, and the wrapper costs one function call.
+ *
+ * `maxRetryAfterMs` is read from the provider's PolyKV section because that is
+ * where the user can see and change it, but the middleware itself is not
+ * opencoti-specific -- `429` + `Retry-After` is ordinary HTTP, and every
+ * llama.cpp endpoint reaches us through the same `openai-compatible` vendor,
+ * which sets no `isRetryable` and so gets no retry from the AI SDK at all.
+ */
+export function withRateLimitRetry(
+	model: unknown,
+	config: GatewayResolvedProviderConfig | undefined,
+	logger: GatewayProviderContext["logger"],
+): unknown {
+	const polykv = config?.options?.polykv;
+	const maxRetryAfterMs =
+		polykv && typeof polykv === "object"
+			? (polykv as PolykvOptions).maxRetryAfterMs
+			: undefined;
+	return wrapLanguageModel({
+		model: model as LanguageModelV4,
+		middleware: createRetryRateLimitMiddleware({
+			...(typeof maxRetryAfterMs === "number" ? { maxRetryAfterMs } : {}),
+			logger,
+		}),
+	});
+}
+
 function createAiSdkProvider(kind: ProviderModuleKind): GatewayProviderFactory {
 	return async (config) => ({
 		async *stream(request, context) {
@@ -2488,7 +2523,11 @@ function createAiSdkProvider(kind: ProviderModuleKind): GatewayProviderFactory {
 					() =>
 						streamText({
 							model: withEmptyResponseRetry(
-								provider.operations.language(context.model.id),
+								withRateLimitRetry(
+									provider.operations.language(context.model.id),
+									context.config,
+									context.logger,
+								),
 								provider.retryEmptyResponses,
 								context.logger,
 							) as never,

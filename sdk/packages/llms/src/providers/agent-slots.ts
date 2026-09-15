@@ -1,4 +1,4 @@
-import { probePolykvEnabled } from "./vendors/polykv";
+import { probeOpencotiProps } from "./vendors/polykv";
 
 /**
  * How many requests an endpoint will serve at once, and what that means for
@@ -68,12 +68,23 @@ export interface AgentSlotLimit {
 /**
  * How many delegated agents may run at once against this endpoint.
  *
- * The exception is PolyKV on opencoti. There, agents attach to a KV pool and
- * share a slot, and whether one more may start is decided by the engine's
- * admission control against measured KV headroom -- `can_admit`, and a 429 with
- * a `retry-after` when the answer is no. Counting slots in that case would
- * refuse work the server would have taken, so the cap is lifted and the server
- * paces the agents.
+ * The exception is an *elastic* opencoti, by either of the two mechanisms that
+ * make it one. Under PolyKV, agents attach to a KV pool and share a slot, and
+ * whether one more may start is decided by the engine's admission control
+ * against measured KV headroom -- `can_admit`, and a 429 with a `retry-after`
+ * when the answer is no. Under the elastic slot controller the server grows
+ * `slots_live` toward `slots_max` as load arrives. Either way the slot count is
+ * not a number this side can compute, and counting would refuse work the server
+ * would have taken.
+ *
+ * Which is why the configured count changes meaning rather than being ignored
+ * there. On a fixed server it *describes* the server, and its absence has to
+ * mean one, because a request that finds no free slot queues silently and
+ * nothing reports that. On an elastic one nothing needs describing, so the
+ * field becomes a ceiling the user asked for -- the engine may well be willing
+ * to take more, and a number in that box says don't. Absent, the engine decides
+ * alone. Discarding the number because the engine has an opinion would make the
+ * field unusable on exactly the servers someone would reach for it on.
  */
 export async function resolveAgentSlotLimit(input: {
 	providerId: string | undefined;
@@ -83,12 +94,22 @@ export async function resolveAgentSlotLimit(input: {
 }): Promise<AgentSlotLimit> {
 	const configured = normalizeParallelSessions(input.parallelSessions);
 	if (input.providerId === "opencoti") {
-		const polykv = await probePolykvEnabled(input.baseUrl, input.fetch);
-		if (polykv) {
-			return {
-				limit: 0,
-				reason: "opencoti has PolyKV on; admission decides, not slot count",
-			};
+		// One `/props` read answers both, and an unreachable server answers
+		// "not elastic" -- the fixed count is the safe reading when the
+		// question cannot be asked.
+		const props = await probeOpencotiProps(input.baseUrl, input.fetch);
+		const elastic = props.poolsEnabled || props.elastic;
+		if (elastic) {
+			const by = props.poolsEnabled ? "PolyKV admission" : "elastic slots";
+			return configured
+				? {
+						limit: configured,
+						reason: `opencoti has ${by} on, but this profile caps delegation at ${configured}`,
+					}
+				: {
+						limit: 0,
+						reason: `opencoti has ${by} on; the engine decides, not a slot count`,
+					};
 		}
 	}
 	const limit = configured ?? DEFAULT_PARALLEL_SESSIONS;
