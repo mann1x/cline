@@ -35,14 +35,21 @@ e2e.describe("File Edit Auto-Approval", () => {
 
 				// File edits are auto-approved by default. The ask row appears with
 				// the file path, but no manual approval buttons are shown.
-				await sidebar.waitForSelector('span:has-text("Cerebriline wants to edit this file:")')
+				//
+				// The header names the edit mode — the fork puts it there because
+				// a SEARCH/REPLACE and a line-range replace fail in completely
+				// different ways — so the text is "…this file (SEARCH/REPLACE):"
+				// and a selector ending at the colon matches nothing.
+				await sidebar.waitForSelector('span:has-text("Cerebriline wants to edit this file (SEARCH/REPLACE)")')
 				await expect(sidebar.getByText("test.ts").first()).toBeVisible()
 				await expect(sidebar.getByRole("button", { name: "Reject" })).not.toBeVisible()
 				await expect(sidebar.getByRole("button", { name: "Save", exact: true })).not.toBeVisible()
 
 				// The SDK executes the editor tool and sends the tool result back to
 				// the (mock) model, which replies with turn-ending completion text.
-				await expect(sidebar.getByText("I successfully replaced")).toBeVisible({ timeout: 30_000 })
+				// `.first()`: the turn that follows the tool result ends without a
+				// tool call, so it is nudged once and the mock repeats itself.
+				await expect(sidebar.getByText("I successfully replaced").first()).toBeVisible({ timeout: 30_000 })
 
 				// The edit was actually applied to the file on disk.
 				expect(readFileSync(editedFilePath, "utf-8")).toContain('export const name = "cline"')
