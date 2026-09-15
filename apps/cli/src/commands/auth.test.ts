@@ -121,7 +121,19 @@ describe("ensureQuickSetupInputValid", () => {
 			{
 				id: "anthropic",
 				name: "Anthropic",
-				configFields: [{ path: "apiKey" }, { path: "modelId" }],
+				// As the registry has it: a key, and a base URL, since putting a
+				// proxy in front of the Anthropic API is ordinary.
+				configFields: [
+					{ path: "apiKey" },
+					{ path: "modelId" },
+					{ path: "baseUrl" },
+				],
+			},
+			{
+				id: "openai-codex",
+				name: "OpenAI Codex",
+				// Declares no config fields at all: neither a key nor a base URL.
+				configFields: [],
 			},
 		],
 	};
@@ -173,11 +185,10 @@ describe("ensureQuickSetupInputValid", () => {
 	it("refuses a base URL for a provider that takes none", async () => {
 		expect(
 			await validate({
-				provider: "anthropic",
-				apikey: "key",
+				provider: "openai-codex",
 				baseurl: "http://example.invalid",
 			}),
-		).toBe('base URL is not supported for provider "anthropic"');
+		).toBe('base URL is not supported for provider "openai-codex"');
 	});
 });
 

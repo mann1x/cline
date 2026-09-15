@@ -250,18 +250,21 @@ test.describe("cline auth -p -k -m -b (golden path with baseUrl)", () => {
 	});
 });
 
-test.describe("cline auth --baseurl with non-OpenAI-compatible provider", () => {
+// Which providers take a base URL is the registry's answer, not a hardcoded
+// list: a provider is refused one when its entry declares no `baseUrl` field.
+// Anthropic declares one (proxies in front of the Anthropic API are ordinary),
+// so it is no longer an example of a provider that refuses -- `openai-codex`,
+// whose entry declares no config fields at all, is.
+test.describe("cline auth --baseurl with a provider that takes none", () => {
 	test.use({
 		program: {
 			file: CLINE_BIN,
 			args: [
 				"auth",
 				"--provider",
-				"anthropic",
-				"--apikey",
-				"sk-ant-test",
+				"openai-codex",
 				"--modelid",
-				"claude-sonnet-4-20250514",
+				"gpt-5.4",
 				"--baseurl",
 				"https://api.example.com",
 			],
@@ -270,13 +273,10 @@ test.describe("cline auth --baseurl with non-OpenAI-compatible provider", () => 
 		env: clineEnv("unauthenticated"),
 	});
 
-	test("shows error for baseUrl with non-OpenAI provider", async ({
+	test("shows error for baseUrl with a provider that takes none", async ({
 		terminal,
 	}) => {
-		await expectVisible(
-			terminal,
-			/only supported for openai|not supported|openai.compatible/i,
-		);
+		await expectVisible(terminal, /base URL is not supported/i);
 	});
 });
 
