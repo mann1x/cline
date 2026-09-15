@@ -242,6 +242,8 @@ Cerebriline is not locked to a single AI provider. Use whichever model fits your
 | Azure / GCP Vertex | All hosted models |
 | Cerebras / Groq | Fast inference models |
 | Ollama / LM Studio | Run local models on your machine |
+| llama.cpp | `llama-server`, with the server's own timings read back |
+| opencoti-llamafile | Single-file engine with PolyKV agentic KV pools |
 | Any OpenAI-compatible API | Self-hosted or third-party endpoints |
 
 ### Ollama: install the thinking-budget build
@@ -255,6 +257,26 @@ Install the thinking-budget build from the fork: **https://github.com/mann1x/oll
 It is ordinary Ollama with the budget sampler added — same models, same API, same `OLLAMA_HOST`, nothing to re-import. Take the binary for your platform, and on Windows and Linux take the matching **runtime** archive from the same release: the sampler lives in the runtime libraries, and a binary paired with the stock runtime will fail to start or quietly lose the budget.
 
 Everything else in the Ollama panel works on stock Ollama. Only the thinking budget requires this build.
+
+### llama.cpp: the server's own numbers
+
+A `llama-server` is configured through the **OpenAI Compatible** provider — point it at `http://localhost:8080/v1` and set Context Window to whatever you started the server with, because nothing probes it for you.
+
+What this fork adds there is llama.cpp's own measurements. The server returns a `timings` object that a standard OpenAI client throws away; Cerebriline keeps it and shows, per request, the prompt and generation split the server measured, how much of the prompt it served from its KV cache, and — if you run a draft model — how many speculative tokens were accepted. Turn on **Show request timings**; it is off by default. Set **Parallel Sessions** to match the server's `--parallel`.
+
+### opencoti-llamafile: PolyKV pools and agentic serving
+
+**https://huggingface.co/ManniX-ITA/opencoti-llamafile**
+
+opencoti-llamafile is a single-file inference engine from the [opencoti](https://github.com/mann1x/opencoti) project: a llamafile base carrying the opencoti patch series — PolyKV shared-prefix KV pools with a REST control plane, KV residency and quantization, a rolling KV window that spills to host RAM, elastic multi-session serving behind an admission gate, DCA long context, MTP speculative decode, CUDA and Vulkan backends. One executable, no runtime to install, nothing to import.
+
+In the VS Code extension it is configured exactly like llama.cpp — the OpenAI Compatible panel, timings and all. The pool-aware half of it lives in the CLI and SDK, where the engine has a provider of its own and needs no API key:
+
+```bash
+cline auth --provider opencoti --modelid <model> --baseurl http://localhost:8080/v1
+```
+
+On that provider, with auto-compaction on, a session pins one PolyKV pool for its system prompt and tool schemas, asks the engine how much room is left before each turn, compacts when the engine reports cache pressure rather than when a token estimate guesses at it, and forks the pool at the prefix afterwards so the expensive part is not processed again. Delegated agents stop counting against a fixed slot limit and let the engine's admission control decide instead.
 
 ## Extend With Plugins or MCP Servers
 
