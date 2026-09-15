@@ -54,9 +54,23 @@ jobs:
                   fetch-depth: 0
                   lfs: true
 
+            # The tag being built predates this workflow's build action whenever a
+            # release is rebuilt, and `uses: ./` resolves against the checked-out
+            # tree -- so the action would be missing exactly when it is needed.
+            # Take the CI definitions from the ref this run was started on, into
+            # a directory of their own, and run the action from there against the
+            # tag's source.
+            - name: Check out the build action from this ref
+              uses: actions/checkout@v4
+              with:
+                  ref: ${{ github.ref }}
+                  path: .ci
+                  sparse-checkout: .github/actions
+                  sparse-checkout-cone-mode: false
+
             - name: Build the VSIX
               id: build
-              uses: ./.github/actions/build-vsix
+              uses: ./.ci/.github/actions/build-vsix
               with:
                   tag: ${{ steps.tag.outputs.tag }}
                   github-token: ${{ secrets.GITHUB_TOKEN }}
