@@ -70,7 +70,11 @@ for (const profile of profiles) {
 			await expect(commandOutput).toContainText(expectedPathPart)
 		}
 		await expect(commandOutput).toContainText("UNICODE=中文")
-		await expect(sidebar.getByText("PowerShell background execution diagnostic completed.")).toBeVisible()
+		// `.first()`: the turn that follows the tool result ends without a tool
+		// call, so it is nudged once and the mock repeats its completion text.
+		// Without it the assertion is a race the test only wins when it beats
+		// the second render -- strict mode rejects the two matches.
+		await expect(sidebar.getByText("PowerShell background execution diagnostic completed.").first()).toBeVisible()
 		await page.screenshot({ path: testInfo.outputPath("powershell-background-success.png"), fullPage: true })
 	})
 }
