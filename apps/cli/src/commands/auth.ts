@@ -121,7 +121,12 @@ export function parseAuthCommandArgs(args: string[]): ParsedAuthCommandArgs {
 async function loadProviderCatalog(
 	providerSettingsManager: ProviderSettingsManager,
 ): Promise<
-	Array<{ id: string; name: string; configFields: readonly string[] }>
+	Array<{
+		id: string;
+		name: string;
+		configFields: readonly string[];
+		baseUrl: string;
+	}>
 > {
 	await ensureCustomProvidersLoaded(providerSettingsManager);
 	const catalog = await listLocalProviders(providerSettingsManager);
@@ -135,9 +140,34 @@ async function loadProviderCatalog(
 			// answers -- and it was wrong about Ollama, the provider most likely
 			// of all of them to be on a host other than the default.
 			configFields: (provider.configFields ?? []).map((field) => field.path),
+			// Already resolved for us: whatever is saved, else the registry
+			// default. It is what the next request would go to.
+			baseUrl: provider.baseUrl?.trim() ?? "",
 		}))
 		.filter((provider) => provider.id.length > 0)
 		.sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/**
+ * Is this endpoint a server on the machine running the command?
+ *
+ * Asked because a key is worth demanding only where one can be used. Ollama,
+ * LM Studio and opencoti-llamafile all declare an `apiKey` field -- each has a
+ * hosted or gated deployment where a key is real -- so the field alone cannot
+ * tell the two situations apart. The endpoint can.
+ */
+function isLocalEndpoint(url: string): boolean {
+	if (!url) return false;
+	let host: string;
+	try {
+		host = new URL(url).hostname.toLowerCase();
+	} catch {
+		return false;
+	}
+	// IPv6 literals arrive from URL() without their brackets.
+	if (host === "localhost" || host === "::1" || host === "0.0.0.0") return true;
+	if (host.endsWith(".localhost")) return true;
+	return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
 }
 
 /** Exported for tests: these rules are the whole reason `auth` refuses. */
@@ -153,10 +183,18 @@ export async function ensureQuickSetupInputValid(
 	if (!provider) {
 		return `invalid provider "${input.provider}"`;
 	}
-	// A key is asked for only by a provider that has one. Ollama and the other
-	// local servers do not, and requiring one there means the setup that works
-	// is the one where the user invents a word.
-	if (provider.configFields.includes("apiKey") && !input.apikey.trim()) {
+	// A key is asked for only where one can be used: a provider that has the
+	// field, reached at an endpoint that is not a server on this machine.
+	// Requiring one from a local server means the setup that works is the one
+	// where the user invents a word -- and the endpoint decided here is the one
+	// the run will use, not the registry default, because the same provider id
+	// is Ollama Cloud when it is given a remote base URL.
+	const endpoint = input.baseurl?.trim() || provider.baseUrl;
+	if (
+		provider.configFields.includes("apiKey") &&
+		!input.apikey.trim() &&
+		!isLocalEndpoint(endpoint)
+	) {
 		return "auth quick setup requires --apikey <key>";
 	}
 	if (!input.modelid.trim()) {

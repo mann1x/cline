@@ -116,7 +116,14 @@ describe("ensureQuickSetupInputValid", () => {
 			{
 				id: "ollama",
 				name: "Ollama",
-				configFields: [{ path: "baseUrl" }, { path: "modelId" }],
+				// As the registry has it: Ollama declares a key, because Ollama
+				// Cloud takes one, and defaults to a server on this machine.
+				configFields: [
+					{ path: "apiKey" },
+					{ path: "baseUrl" },
+					{ path: "modelId" },
+				],
+				baseUrl: "http://localhost:11434",
 			},
 			{
 				id: "anthropic",
@@ -128,12 +135,14 @@ describe("ensureQuickSetupInputValid", () => {
 					{ path: "modelId" },
 					{ path: "baseUrl" },
 				],
+				baseUrl: "https://api.anthropic.com/v1",
 			},
 			{
 				id: "openai-codex",
 				name: "OpenAI Codex",
 				// Declares no config fields at all: neither a key nor a base URL.
 				configFields: [],
+				baseUrl: "",
 			},
 		],
 	};
@@ -172,8 +181,25 @@ describe("ensureQuickSetupInputValid", () => {
 		).toBeUndefined();
 	});
 
-	it("does not demand a key from a provider that has none", async () => {
+	it("does not demand a key from a server on this machine", async () => {
 		expect(await validate({ provider: "ollama" })).toBeUndefined();
+	});
+
+	it("does not demand a key for a local base URL the caller passed", async () => {
+		expect(
+			await validate({
+				provider: "ollama",
+				baseurl: "http://127.0.0.1:11439",
+			}),
+		).toBeUndefined();
+	});
+
+	// The same provider id is Ollama Cloud once it is pointed somewhere else,
+	// and that does need a key.
+	it("demands a key once the endpoint is remote", async () => {
+		expect(
+			await validate({ provider: "ollama", baseurl: "https://ollama.com" }),
+		).toBe("auth quick setup requires --apikey <key>");
 	});
 
 	it("still demands a key from a provider that has one", async () => {
