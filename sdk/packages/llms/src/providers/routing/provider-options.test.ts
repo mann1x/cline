@@ -2681,3 +2681,89 @@ describe("composeAiSdkProviderOptions: ClinePass bucket normalization", () => {
 		expect(result).not.toHaveProperty("clinePass");
 	});
 });
+
+describe("llama.cpp and opencoti request options", () => {
+	it("sends the configured sampler under llama.cpp's own field names", () => {
+		const result = composeAiSdkProviderOptions(
+			makeRequest({ providerId: "openai-compatible", modelId: "gemma-4" }),
+			makeContext({
+				providerId: "openai-compatible",
+				modelId: "gemma-4",
+				contextWindow: 262_144,
+				configOptions: {
+					sampling: { temperature: 0.7, minP: 0.05, repeatPenalty: 1.05 },
+				},
+			}),
+		);
+
+		expect(result.openaiCompatible).toEqual(
+			expect.objectContaining({
+				temperature: 0.7,
+				min_p: 0.05,
+				repeat_penalty: 1.05,
+			}),
+		);
+	});
+
+	it("resolves an effort level into an absolute reasoning budget", () => {
+		// llama.cpp takes a token count, not a level. The fractions are Ollama's,
+		// so `medium` means a quarter on both engines rather than two different
+		// budgets depending on which server answered.
+		const result = composeAiSdkProviderOptions(
+			makeRequest({
+				providerId: "openai-compatible",
+				modelId: "gemma-4",
+				maxTokens: 32_000,
+			}),
+			makeContext({
+				providerId: "openai-compatible",
+				modelId: "gemma-4",
+				contextWindow: 262_144,
+				configOptions: { sampling: { thinkBudget: "medium" } },
+			}),
+		);
+
+		expect(result.openaiCompatible).toEqual(
+			expect.objectContaining({ reasoning_budget_tokens: 8_000 }),
+		);
+	});
+
+	it("carries the cap message too", () => {
+		const result = composeAiSdkProviderOptions(
+			makeRequest({ providerId: "opencoti", modelId: "gemma-4" }),
+			makeContext({
+				providerId: "opencoti",
+				modelId: "gemma-4",
+				contextWindow: 131_072,
+				configOptions: {
+					sampling: { thinkBudget: "8192", thinkBudgetMessage: "Answer now." },
+				},
+			}),
+		);
+
+		expect(result.opencoti).toEqual(
+			expect.objectContaining({
+				reasoning_budget_tokens: 8_192,
+				reasoning_budget_message: "Answer now.",
+			}),
+		);
+	});
+
+	it("leaves a request alone when no sampler is configured", () => {
+		// The same target carries hosted providers that reject these names.
+		const result = composeAiSdkProviderOptions(
+			makeRequest({ providerId: "openai-compatible", modelId: "gpt-4o" }),
+			makeContext({
+				providerId: "openai-compatible",
+				modelId: "gpt-4o",
+				contextWindow: 128_000,
+			}),
+		);
+
+		for (const bucket of Object.values(result)) {
+			expect(bucket).not.toHaveProperty("min_p");
+			expect(bucket).not.toHaveProperty("repeat_penalty");
+			expect(bucket).not.toHaveProperty("reasoning_budget_tokens");
+		}
+	});
+});

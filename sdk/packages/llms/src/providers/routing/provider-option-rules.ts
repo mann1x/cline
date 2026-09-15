@@ -10,6 +10,10 @@ import {
 	providerReasoningRouteMatches,
 } from "../model-facts";
 import {
+	buildLlamaCppSamplingOptions,
+	readLlamaCppSamplingOptions,
+} from "../vendors/llamacpp-sampling";
+import {
 	buildOllamaSamplingOptions,
 	readOllamaNumCtx,
 	readOllamaNumPredict,
@@ -497,6 +501,62 @@ const ollamaNativeOptionsRule: ProviderOptionRule = {
 	},
 };
 
+/**
+ * llama.cpp's per-request sampler and thinking budget.
+ *
+ * llama.cpp has no provider id of its own — it is reached through the generic
+ * OpenAI-compatible form, and nothing identifies one before a response comes
+ * back. `opencoti` is llama.cpp underneath and has its own target, so both are
+ * named here.
+ *
+ * That breadth is why the builder sends only what the user actually configured:
+ * this same target also carries hosted providers that would reject `min_p` or
+ * `repeat_penalty` outright, and for them an unconfigured sampler has to leave
+ * the request exactly as it was. A user who types a sampler into the panel for
+ * an endpoint that cannot take one has asked for it; a user who types nothing
+ * must not have their request changed underneath them.
+ *
+ * Reasoning is deliberately not suppressed. Unlike Ollama, where the `think`
+ * level *is* how the budget is bounded, llama.cpp's budget is an absolute token
+ * count in a separate field, so the portable reasoning option and the budget
+ * are independent and both belong on the wire.
+ */
+const llamaCppNativeOptionsRule: ProviderOptionRule = {
+	id: "provider.llamacpp.native-options",
+	phase: "provider-reasoning",
+	description:
+		"llama.cpp and opencoti receive the configured sampler and a resolved thinking budget as request fields.",
+	applies: (input) =>
+		input.target === "openai-compatible" || input.target === "opencoti",
+	build: (input) => {
+		const bucketOptions = buildLlamaCppSamplingOptions(
+			readLlamaCppSamplingOptions(input.context.config),
+			{
+				contextWindow:
+					input.context.model?.contextWindow ??
+					input.context.model?.maxInputTokens,
+				// The cap the session believes it is sending, which is also what
+				// `buildOutputBudgetSection` states in the system prompt — the same
+				// number an effort level has to take its share of, or the level
+				// bounds nothing.
+				numPredict:
+					input.request.maxTokens ?? input.context.model?.maxOutputTokens,
+			},
+		);
+		if (Object.keys(bucketOptions).length === 0) {
+			return undefined;
+		}
+		return {
+			...buildProviderAndAliasPatch({
+				providerId: input.request.providerId,
+				providerOptionsKey: input.providerOptionsKey,
+				bucketOptions,
+			}),
+			openaiCompatible: bucketOptions,
+		};
+	},
+};
+
 const nonGlmProviderRoutingSuppressionRule: ProviderOptionRule = {
 	id: "provider.routing.glm-thinking.non-glm.suppress-generic-thinking",
 	phase: "provider",
@@ -580,6 +640,7 @@ export const PROVIDER_OPTION_RULES: ReadonlyArray<ProviderOptionRule> = [
 	deepSeekThinkingRule,
 	ollamaReasoningDefaultOnDisableRule,
 	ollamaNativeOptionsRule,
+	llamaCppNativeOptionsRule,
 	nonGlmProviderRoutingSuppressionRule,
 	nativeZaiGlmThinkingRule,
 	miniMaxThinkingRule,
