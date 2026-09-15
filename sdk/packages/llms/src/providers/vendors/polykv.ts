@@ -370,13 +370,29 @@ const NOT_OPENCOTI: OpencotiProps = {
 
 const OPENCOTI_PROPS = new Map<string, Promise<OpencotiProps>>();
 
+/**
+ * The release, when the build says it.
+ *
+ * **It usually does not.** Measured against the published c7 binary,
+ * `/props.build_info` is `b1788384120-c588c4f47` -- a build number and a commit,
+ * with no `c<N>` anywhere in the response: the release appears only in the
+ * artifact's own filename and in its startup banner. So this reports `undefined`
+ * on the very server it was written for, and NOTHING may branch on it.
+ *
+ * It is kept because a build that does carry the tag is worth reading, and
+ * because the status panel showing "opencoti c7" when the server says so is
+ * better than never showing it. What capability detection must use instead is
+ * the evidence itself: `features` (`slots_nonblocking_v1`, `lock_v1`), and for
+ * the c8 signals the presence of the signal -- `folded` on a capacity response,
+ * an `opencoti` block on a completion, an `X-PolyKV-Settle-Waived` header. Each
+ * of those is self-identifying, which a version string that is not sent is not.
+ */
 function parseRelease(buildInfo: unknown): string | undefined {
 	if (typeof buildInfo !== "string") {
 		return undefined;
 	}
-	// `opencoti-0.10.5-c7-2609031229001`: the release is the `c<N>` segment, not
-	// the llamafile version in front of it and not the build stamp behind it.
-	return /-(c\d+)-/.exec(buildInfo)?.[1];
+	// `opencoti-0.10.5-c7-2609031229001`, on a build that stamps it there.
+	return /-(c\d+)(?:-|$)/.exec(buildInfo)?.[1];
 }
 
 /**
@@ -519,14 +535,44 @@ export function createPolykvClient(options: PolykvClientOptions): PolykvClient {
 		return (await response.json()) as T;
 	};
 
+	/**
+	 * Normalize a pool the engine just handed back.
+	 *
+	 * `pool_id` and `parent` come over the wire as NUMBERS, and the first pool
+	 * on a fresh server is id `0`. Left as a number that id is FALSY, so every
+	 * `if (poolId)` between here and the request body drops it -- which would
+	 * silently stop the very first session on every server from ever attaching.
+	 * Measured against the c7 binary: `{"pool_id":0,"parent":-1,...}`.
+	 *
+	 * `parent: -1` is the engine's "no parent" and becomes absent, not pool
+	 * "-1".
+	 */
+	const readPool = (pool: PolykvPool): PolykvPool => {
+		const parent = pool.parent as unknown;
+		const hasParent =
+			parent !== undefined &&
+			parent !== null &&
+			!(typeof parent === "number" && parent < 0) &&
+			String(parent) !== "-1";
+		return {
+			...pool,
+			pool_id: String(pool.pool_id),
+			...(hasParent ? { parent: String(parent) } : { parent: undefined }),
+		};
+	};
+
 	return {
-		createPool: (body) =>
-			call<PolykvPool>("/polykv/pools", { method: "POST", body }),
-		forkPool: (poolId, body) =>
-			call<PolykvPool>(`/polykv/pools/${encodeURIComponent(poolId)}/fork`, {
-				method: "POST",
-				body,
-			}),
+		createPool: async (body) =>
+			readPool(
+				await call<PolykvPool>("/polykv/pools", { method: "POST", body }),
+			),
+		forkPool: async (poolId, body) =>
+			readPool(
+				await call<PolykvPool>(
+					`/polykv/pools/${encodeURIComponent(poolId)}/fork`,
+					{ method: "POST", body },
+				),
+			),
 		pin: async (poolId) => {
 			await call(`/polykv/pools/${encodeURIComponent(poolId)}/pin`, {
 				method: "POST",
@@ -574,6 +620,14 @@ export function createPolykvClient(options: PolykvClientOptions): PolykvClient {
 				body: {
 					messages: body.messages,
 					...(body.tools && body.tools.length > 0 ? { tools: body.tools } : {}),
+					// Without this the template appends the assistant generation
+					// header, so the string ends `<|im_start|>assistant\n<think>`.
+					// A real request has a USER turn at that position, so a pool
+					// built from it diverges from every request that would attach
+					// to it. Measured on the c7 binary: an exact-looking prefix
+					// attached with `n_pool_shared: 0`, and the same prompt with
+					// this flag is a byte-prefix of the full request's stream.
+					add_generation_prompt: false,
 				},
 			});
 			return result.prompt ?? "";

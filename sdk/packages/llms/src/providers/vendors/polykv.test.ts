@@ -436,3 +436,105 @@ describe("the read-only status the panel shows", () => {
 		expect(status.pools).toEqual([]);
 	});
 });
+
+describe("what the engine actually puts on the wire", () => {
+	beforeEach(resetPolykvAvailability);
+
+	/** A server that answers exactly as the c7 binary was observed to. */
+	function liveShapedServer() {
+		const seen: Array<{ path: string; body?: unknown }> = [];
+		const fetchImpl = (async (input: unknown, init?: RequestInit) => {
+			const url = new URL(String(input));
+			seen.push({
+				path: url.pathname,
+				body: init?.body ? JSON.parse(String(init.body)) : undefined,
+			});
+			if (url.pathname === "/apply-template") {
+				return Response.json({ prompt: "<|im_start|>system\nx<|im_end|>\n" });
+			}
+			// `pool_id` and `parent` are NUMBERS here, which is what the engine
+			// sends -- and the first pool on a fresh server is id 0.
+			return Response.json({
+				pool_id: 0,
+				parent: -1,
+				branch_pos: 0,
+				prefix_len: 38,
+			});
+		}) as unknown as typeof fetch;
+		return { fetchImpl, seen };
+	}
+
+	// The first pool a fresh server hands out is id `0`, and the engine sends it
+	// as a number. Left as one it is FALSY, so every `if (poolId)` on the way to
+	// the request body drops it and the session silently stops attaching -- on
+	// the one pool every first session gets.
+	it("hands back pool ids as strings, so id 0 survives a truthiness check", async () => {
+		const server = liveShapedServer();
+		const client = createPolykvClient({
+			baseUrl: "http://localhost:8247/v1",
+			fetch: server.fetchImpl,
+		});
+
+		const pool = await client.createPool({ prompt: "x\n", pin: true });
+
+		expect(pool.pool_id).toBe("0");
+		expect(Boolean(pool.pool_id)).toBe(true);
+		// `-1` is the engine's "no parent"; it must not read as pool "-1".
+		expect(pool.parent).toBeUndefined();
+	});
+
+	it("does the same for a fork", async () => {
+		const server = liveShapedServer();
+		const client = createPolykvClient({
+			baseUrl: "http://localhost:8247/v1",
+			fetch: server.fetchImpl,
+		});
+		expect((await client.forkPool("0", { from_session: "s" })).pool_id).toBe(
+			"0",
+		);
+	});
+
+	// The release is NOT in `build_info` on the shipped binary -- measured as
+	// `b1788384120-c588c4f47`, a build number and a commit. Anything that
+	// branched on it would take the wrong branch on the one server it was
+	// written for, silently.
+	it("reports no release when the build does not stamp one", async () => {
+		const status = await readOpencotiStatus("http://localhost:8247/v1", (async (
+			input: Parameters<typeof fetch>[0],
+		) => {
+			if (String(input).endsWith("/props")) {
+				return new Response(
+					JSON.stringify({
+						build_info: "b1788384120-c588c4f47",
+						features: ["lock_v1", "slots_nonblocking_v1"],
+						opencoti: { polykv: { pools_enabled: true } },
+					}),
+				);
+			}
+			return new Response("{}", { status: 200 });
+		}) as unknown as typeof fetch);
+		expect(status.reachable).toBe(true);
+		expect(status.release).toBeUndefined();
+		expect(status.poolsEnabled).toBe(true);
+	});
+
+	// `/apply-template` appends the assistant generation header by default, so
+	// the templated string ends `<|im_start|>assistant\n<think>`. A real request
+	// has a USER turn at that position, so a pool built from it diverges from
+	// every request that would attach to it -- measured on the c7 binary as
+	// `n_pool_shared: 0` on an exact-looking prefix.
+	it("asks the template engine not to append a generation prompt", async () => {
+		const server = liveShapedServer();
+		const client = createPolykvClient({
+			baseUrl: "http://localhost:8247/v1",
+			fetch: server.fetchImpl,
+		});
+
+		await client.applyTemplate({
+			messages: [{ role: "system", content: "x" }],
+		});
+
+		const call = server.seen.find((entry) => entry.path === "/apply-template");
+		expect(call?.body).toMatchObject({ add_generation_prompt: false });
+	});
+});

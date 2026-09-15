@@ -558,4 +558,34 @@ describe("opencoti's own refusals", () => {
 			}),
 		).toBe("pool_contract_violation");
 	});
+
+	// Every rejection the engine's fork handler can send, transcribed from it.
+	// Only two of the six name the contract; the other four describe the same
+	// broken relationship in their own words, and all six mean "re-create the
+	// pool", not "fail the turn". The one measured live on the c7 binary from a
+	// suffix-shaped fork was `child prefix shorter than branch_pos` -- which the
+	// first version of this pattern did not match.
+	it.each([
+		["branch_pos exceeds parent prefix_len"],
+		[
+			"hybrid/recurrent fork must extend at branch_pos == parent prefix_len (bug-2203)",
+		],
+		["session context shorter than branch_pos"],
+		[
+			"contiguous-prefix contract violation: session tokens [0, branch_pos) do not match the parent — re-root or full-prefill",
+		],
+		["child prefix shorter than branch_pos"],
+		[
+			"contiguous-prefix contract violation: tokens [0, branch_pos) do not match the parent — re-root or full-prefill",
+		],
+	])("recognises the engine's own wording: %s", (message) => {
+		expect(
+			classifyProviderError({
+				statusCode: 400,
+				responseBody: JSON.stringify({
+					error: { code: 400, type: "invalid_request_error", message },
+				}),
+			}),
+		).toBe("pool_contract_violation");
+	});
 });

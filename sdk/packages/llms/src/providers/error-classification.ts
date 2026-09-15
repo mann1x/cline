@@ -13,12 +13,29 @@ const CONTEXT_WINDOW_CODES = new Set([
 ]);
 
 /**
- * A pool fork whose declared prefix does not match the parent token-exact.
+ * A pool fork whose declared prefix does not line up with its parent.
  *
  * Arrives as a `400 invalid_request_error`, which is indistinguishable by
  * status from a malformed request, so the message is what separates them.
+ *
+ * All six of the engine's fork rejections, and only two of them name the
+ * contract -- the rest describe the same broken relationship in their own
+ * words. Keying on the phrase alone missed four, including the one a
+ * suffix-shaped fork actually produces, measured against the c7 binary:
+ * `child prefix shorter than branch_pos`. Every one of them means "re-create
+ * the pool and carry on", never "fail the turn", so missing one costs a turn
+ * for a condition that is recoverable.
  */
-const POOL_CONTRACT_PATTERN = /contiguous-prefix contract violation/i;
+const POOL_CONTRACT_PATTERNS: readonly RegExp[] = [
+	/contiguous-prefix contract violation/i,
+	/branch_pos exceeds parent prefix_len/i,
+	/(?:child prefix|session context) shorter than branch_pos/i,
+	/fork must extend at branch_pos/i,
+];
+
+function isPoolContractMessage(message: string): boolean {
+	return POOL_CONTRACT_PATTERNS.some((pattern) => pattern.test(message));
+}
 
 /**
  * Message shapes providers use for context-window overflow. Sourced from the
@@ -256,7 +273,7 @@ function verdictFromSignals(signals: ErrorSignals): ProviderErrorClass {
 
 	// Before the status gates: a pool-contract refusal is a 400, the same status
 	// a malformed request carries, and only the message tells them apart.
-	if (signals.messages.some((message) => POOL_CONTRACT_PATTERN.test(message))) {
+	if (signals.messages.some((message) => isPoolContractMessage(message))) {
 		return "pool_contract_violation";
 	}
 
