@@ -149,6 +149,11 @@ export const PolykvSection = ({ providerId }: { providerId: string }) => {
 						"Bypass admission",
 						"Sends every request past the admission gate. The engine stops protecting the throughput floor, so sessions can make each other slow — deliberate, and visible here rather than silent.",
 					)}
+					{toggle(
+						"swarm",
+						"Allow swarms",
+						"Lets the model fan a task out across several agents that share a snapshot of this session's context and report one merged digest. Off by default: a swarm spends several agents' worth of tokens on a single turn.",
+					)}
 					{/* What the configured server is actually doing, read once.
 					    It answers the question every field above raises — did
 					    any of this take effect — which no amount of settings

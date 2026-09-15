@@ -429,6 +429,7 @@ export {
 	createDelegatedAgent,
 	createDelegatedAgentConfigProvider,
 	createSpawnAgentTool,
+	createSpawnSwarmTool,
 	type DelegatedAgentConfigProvider,
 	type DelegatedAgentConnectionConfig,
 	type DelegatedAgentKind,

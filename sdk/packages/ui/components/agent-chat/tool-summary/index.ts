@@ -186,6 +186,7 @@ export const TOOL_NAME_ALIASES: Record<string, string> = {
 	search: "search_codebase",
 	"spawn-agent": "spawn_agent",
 	spawn_agent_tool: "spawn_agent",
+	"spawn-swarm": "spawn_swarm",
 	"web-fetch": "fetch_web_content",
 	web_fetch: "fetch_web_content",
 };
@@ -202,7 +203,12 @@ export function classifyTool(toolName: string): ToolKind {
 	if (name === "run_commands") return "command";
 	if (name === "search_codebase") return "search";
 	if (name === "fetch_web_content") return "web";
-	if (name === "spawn_agent" || name.startsWith("subagent_")) return "spawn";
+	if (
+		name === "spawn_agent" ||
+		name === "spawn_swarm" ||
+		name.startsWith("subagent_")
+	)
+		return "spawn";
 	if (name === "team" || name === "teams" || name.startsWith("team_"))
 		return "team";
 	if (name === "skills" || name === "skill") return "skill";
@@ -740,6 +746,30 @@ export function buildToolSummary(
 				details: [formatPath(path, opts.pathStyle)],
 			};
 		}
+	}
+
+	if (toolName === "spawn_swarm") {
+		// A swarm's own shape: how many workers, not one task. The count is
+		// what a reader wants -- a round of six reads very differently from a
+		// round of one, and the per-worker tasks are in the digest.
+		const swarm = input as
+			| { task?: unknown; tasks?: unknown; count?: unknown }
+			| undefined;
+		const tasks = Array.isArray(swarm?.tasks) ? swarm.tasks.length : undefined;
+		const count =
+			tasks ??
+			(typeof swarm?.count === "number"
+				? swarm.count
+				: swarm?.count === "max"
+					? undefined
+					: 1);
+		const how =
+			count === undefined ? "as many agents as fit" : `${count} agents`;
+		return {
+			...base,
+			...labeled([{ text: `${inProgress ? "Spawning" : "Spawned"} ${how}` }]),
+			aggregate: { ...SPAWN_AGGREGATE, count: count ?? 1 },
+		};
 	}
 
 	if (toolName === "spawn_agent" || toolName.startsWith("subagent_")) {

@@ -409,3 +409,82 @@ export async function releasePolykvSession(options: {
 		);
 	}
 }
+
+/**
+ * Snapshot a session's live context into a pool the workers can share.
+ *
+ * `from_session` and nothing else: the engine takes the prefix from the slot's
+ * own token history, so no tokens cross the wire and the failure class this
+ * module was written to fix -- a client-tokenised prefix that does not match
+ * the prefilled one -- cannot arise on this path at all.
+ *
+ * **When this runs matters as much as what it does.** The host prompt cache
+ * saves and clears idle slots the moment any new task launches, so the snapshot
+ * has to be taken at the end of the lead's turn, before any worker starts. Taken
+ * late it captures a slot that has already been cleared.
+ *
+ * `ephemeral` so the engine's own sweep can reclaim it if this process dies
+ * mid-round. That is the crash net; {@link releasePolykvPool} is the plan.
+ *
+ * `undefined` when the engine will not, which lets the caller run the round
+ * unpooled rather than fail it.
+ */
+export async function snapshotPolykvSession(options: {
+	sessionId: string | undefined;
+	providerConfig: PolykvProviderConfig;
+	logger?: BasicLogger;
+}): Promise<{ poolId: string; prefixTokens: number } | undefined> {
+	if (!options.sessionId || !isPolykvProvider(options.providerConfig)) {
+		return undefined;
+	}
+	const client = clientFor(options.providerConfig);
+	if (!client) {
+		return undefined;
+	}
+	try {
+		const pool = await client.createPool({
+			from_session: options.sessionId,
+			ephemeral: true,
+		});
+		options.logger?.debug?.(
+			`[PolyKV] Snapshotted session ${options.sessionId} into pool ${pool.pool_id} (${pool.prefix_len} tokens)`,
+		);
+		return { poolId: pool.pool_id, prefixTokens: pool.prefix_len };
+	} catch (error) {
+		options.logger?.debug?.(
+			`[PolyKV] Could not snapshot session ${options.sessionId}: ${
+				error instanceof Error ? error.message : String(error)
+			}`,
+		);
+		return undefined;
+	}
+}
+
+/**
+ * Release a pool this process created, whatever happened to the work on it.
+ *
+ * Unpin first, always. The engine will not reclaim a pinned pool, and a pin
+ * left on an abandoned subtree blocks reclaim forever -- which is the leak the
+ * whole of this module's release discipline exists to prevent.
+ */
+export async function releasePolykvPool(options: {
+	poolId: string;
+	providerConfig: PolykvProviderConfig;
+	logger?: BasicLogger;
+}): Promise<void> {
+	const client = clientFor(options.providerConfig);
+	if (!client) {
+		return;
+	}
+	try {
+		await client.unpin(options.poolId);
+		await client.releasePool(options.poolId);
+		options.logger?.debug?.(`[PolyKV] Released pool ${options.poolId}`);
+	} catch (error) {
+		options.logger?.debug?.(
+			`[PolyKV] Could not release pool ${options.poolId}: ${
+				error instanceof Error ? error.message : String(error)
+			}`,
+		);
+	}
+}

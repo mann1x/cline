@@ -6,6 +6,7 @@ import {
 } from "./model-tool-routing";
 import { resolveToolPresetName, ToolPresets } from "./presets";
 import { createSpawnAgentTool } from "./team/spawn-agent-tool";
+import { createSpawnSwarmTool } from "./team/spawn-swarm-tool";
 import { TEAM_TOOL_NAMES } from "./team/team-tools";
 import type { DefaultToolsConfig } from "./types";
 
@@ -101,6 +102,11 @@ const BASE_TOOL_CATALOG: readonly RuntimeToolCatalogEntry[] = [
 		description: createSpawnAgentTool({ configProvider: {} as never })
 			.description,
 		headlessToolNames: ["spawn_agent"],
+	},
+	{
+		id: "spawn_swarm",
+		description: createSpawnSwarmTool({} as never).description,
+		headlessToolNames: ["spawn_swarm"],
 	},
 	{
 		id: "teams",
@@ -212,6 +218,14 @@ function isEntryEnabledByDefault(
 
 	const { flags } = resolvePresetFlags(context);
 	if (entryId === "spawn_agent") {
+		return flags.enableSpawnAgent === true;
+	}
+	if (entryId === "spawn_swarm") {
+		// The delegation capability is one of two gates. The other is the
+		// profile's PolyKV `swarm` switch, which lives with the provider
+		// config and is checked where the tool is built -- a swarm needs an
+		// engine with a pool tree, and this list knows nothing about which
+		// engine a session is talking to.
 		return flags.enableSpawnAgent === true;
 	}
 	if (entryId === "teams") {

@@ -282,6 +282,7 @@ function toPolykvSettings(patch: NonNullable<WriteProviderConfigPatch["polykv"]>
 		...(patch.settleMaxMs !== undefined ? { settleMaxMs: patch.settleMaxMs } : {}),
 		...(patch.prefillMaxSlots !== undefined ? { prefillMaxSlots: patch.prefillMaxSlots } : {}),
 		...(patch.overcommit !== undefined ? { overcommit: patch.overcommit } : {}),
+		...(patch.swarm !== undefined ? { swarm: patch.swarm } : {}),
 		...(patch.maxRetryAfterMs !== undefined ? { maxRetryAfterMs: patch.maxRetryAfterMs } : {}),
 	}
 }

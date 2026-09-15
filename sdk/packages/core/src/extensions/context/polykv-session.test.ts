@@ -7,9 +7,11 @@ import {
 	isPolykvProvider,
 	polykvSaysCompact,
 	readPolykvCapacity,
+	releasePolykvPool,
 	releasePolykvSession,
 	renderPolykvPrefixMessages,
 	repointPolykvAfterCompaction,
+	snapshotPolykvSession,
 } from "./polykv-session";
 
 /** A stand-in engine that records what the control plane was asked for. */
@@ -606,5 +608,65 @@ describe("when the engine says it is time to compact", () => {
 				0.5,
 			),
 		).toBe(false);
+	});
+});
+
+describe("snapshotting the lead's live context for a swarm", () => {
+	it("takes the prefix server-side, and never sends tokens", async () => {
+		clearPolykvCapacityCache();
+		const server = engine();
+		const config = provider(server.fetch);
+		await ensurePolykvPool({
+			sessionId: "lead",
+			providerConfig: config,
+			systemPrompt: "prompt",
+		});
+		const before = server.calls.length;
+
+		const snapshot = await snapshotPolykvSession({
+			sessionId: "lead",
+			providerConfig: config,
+		});
+
+		expect(snapshot?.poolId).toBeDefined();
+		const created = server.calls.slice(before).at(-1);
+		expect(created?.method).toBe("POST");
+		expect(created?.path).toBe("/polykv/pools");
+		// `from_session` is the whole point: the engine takes the prefix from
+		// the slot's own token history, so the failure class where a
+		// re-tokenised prefix does not match the prefilled one cannot arise.
+		expect(created?.body).toMatchObject({
+			from_session: "lead",
+			ephemeral: true,
+		});
+		expect(created?.body).not.toHaveProperty("tokens");
+		expect(created?.body).not.toHaveProperty("prompt");
+	});
+
+	// Ephemeral so the engine's 60-second sweep can reclaim it if this process
+	// dies mid-round; the explicit release below is still the plan.
+	it("says nothing rather than throwing when the engine will not snapshot", async () => {
+		const server = engine({ fail: "/polykv/pools" });
+		expect(
+			await snapshotPolykvSession({
+				sessionId: "lead2",
+				providerConfig: provider(server.fetch),
+			}),
+		).toBeUndefined();
+	});
+
+	it("unpins before releasing, because a pin blocks reclaim forever", async () => {
+		const server = engine();
+		const config = provider(server.fetch);
+		const before = server.calls.length;
+
+		await releasePolykvPool({ poolId: "pool-7", providerConfig: config });
+
+		expect(
+			server.calls.slice(before).map((call) => `${call.method} ${call.path}`),
+		).toEqual([
+			"POST /polykv/pools/pool-7/unpin",
+			"POST /polykv/pools/pool-7/release",
+		]);
 	});
 });

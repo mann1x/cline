@@ -81,6 +81,8 @@ export interface RuntimeBuilderInput {
 	onSubAgentStart?: (context: SubAgentStartContext) => void | Promise<void>;
 	onSubAgentEnd?: (context: SubAgentEndContext) => void | Promise<void>;
 	createSpawnTool?: () => AgentTool;
+	/** `spawn_swarm`, when the host can build one. See `local/spawn-tool.ts`. */
+	createSwarmTool?: () => AgentTool;
 	onTeamRestored?: () => void;
 	userInstructionService?: UserInstructionConfigService;
 	pluginSkillDirectories?: ReadonlyArray<string>;

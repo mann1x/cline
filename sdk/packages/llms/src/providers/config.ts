@@ -342,6 +342,15 @@ export interface PolykvOptions {
 	settleMaxMs?: number;
 	prefillMaxSlots?: number;
 	overcommit?: boolean;
+	/**
+	 * Whether the model may fan a task out across a swarm of workers sharing
+	 * this session's prefix.
+	 *
+	 * Off by default, and deliberately: a swarm spends several agents' worth of
+	 * tokens on one turn, and that is a decision worth making once rather than
+	 * discovering in a bill.
+	 */
+	swarm?: boolean;
 	maxRetryAfterMs?: number;
 }
 

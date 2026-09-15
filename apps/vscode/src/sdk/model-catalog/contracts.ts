@@ -140,6 +140,7 @@ export interface PolykvSettings {
 	readonly settleMaxMs?: number
 	readonly prefillMaxSlots?: number
 	readonly overcommit?: boolean
+	readonly swarm?: boolean
 	readonly maxRetryAfterMs?: number
 }
 

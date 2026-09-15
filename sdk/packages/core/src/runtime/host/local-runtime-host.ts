@@ -197,6 +197,7 @@ import {
 import {
 	createSessionSpawnTool,
 	createSessionSubAgentLifecycleCallbacks,
+	createSessionSwarmTool,
 	type SubAgentStartTracker,
 } from "./local/spawn-tool";
 import { loadUserFileContent } from "./local/user-files";
@@ -770,6 +771,13 @@ export class LocalRuntimeHost implements RuntimeHost {
 			},
 			createSpawnTool: () =>
 				createSessionSpawnTool(
+					subAgentDeps,
+					bootstrap.config,
+					sessionId,
+					sessionToolExecutors,
+				),
+			createSwarmTool: () =>
+				createSessionSwarmTool(
 					subAgentDeps,
 					bootstrap.config,
 					sessionId,

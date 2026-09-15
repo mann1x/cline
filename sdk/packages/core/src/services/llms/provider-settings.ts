@@ -153,6 +153,7 @@ export const PolykvSettingsSchema = z.object({
 	// How this client behaves against that policy.
 	/** Bypass admission for this profile's requests, explicitly and visibly. */
 	overcommit: z.boolean().optional(),
+	swarm: z.boolean().optional(),
 	/**
 	 * The longest `Retry-After` this client will honour before giving up.
 	 *

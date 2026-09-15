@@ -442,6 +442,7 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 			logger,
 			telemetry,
 			createSpawnTool,
+			createSwarmTool,
 			onTeamRestored,
 			userInstructionService: sharedUserInstructionService,
 			configExtensions,
@@ -1019,6 +1020,27 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 					return spawnTool.execute(spawnInput, context);
 				},
 			});
+
+			// `spawn_swarm` sits behind the same delegation capability and two
+			// more of its own: the engine must actually have a pool tree, and
+			// the profile must have asked for swarms. Off by default -- one
+			// swarm spends several agents' worth of tokens on a single turn,
+			// which is a decision worth making once rather than discovering in
+			// a bill.
+			if (
+				createSwarmTool &&
+				config.providerConfig?.polykv?.swarm === true &&
+				isPolykvProvider(config.providerConfig)
+			) {
+				const swarmTool = createSwarmTool();
+				tools.push({
+					...swarmTool,
+					execute: async (swarmInput, context) => {
+						ensureTeamRuntime();
+						return swarmTool.execute(swarmInput, context);
+					},
+				});
+			}
 		}
 
 		if (normalized.enableAgentTeams) {

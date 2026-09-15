@@ -403,6 +403,9 @@ message PolykvProviderConfig {
   // How this client behaves against that policy.
   optional bool overcommit = 12;
   optional int32 max_retry_after_ms = 13;
+  // Whether the model may fan a task out across a swarm. Off by default: a
+  // swarm spends several agents' worth of tokens on one turn.
+  optional bool swarm = 14;
 }
 
 message WriteProviderConfigPatch {

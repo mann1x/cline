@@ -43,3 +43,15 @@ export type {
 	SubAgentEndContext,
 	SubAgentStartContext,
 } from "./spawn-agent-tool";
+export {
+	createSpawnSwarmTool,
+	DEFAULT_MAX_SWARM_WORKERS,
+	type SpawnSwarmInput,
+	SpawnSwarmInputSchema,
+	type SpawnSwarmOutput,
+	type SpawnSwarmToolConfig,
+	SWARM_REDUCER_PROMPT,
+	type SwarmPoolSnapshot,
+	type SwarmPoolSource,
+	type SwarmWorkerRequest,
+} from "./spawn-swarm-tool";
