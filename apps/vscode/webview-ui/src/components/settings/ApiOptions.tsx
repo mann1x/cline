@@ -108,6 +108,11 @@ const ApiOptions = ({
 	// Configuration and Reasoning Effort sections — regardless of whether the id
 	// happens to appear in providers.json.
 	const isCustomProvider = !hasCustomProviderSettings(selectedProvider) && !isKnownGenericProvider(selectedProvider)
+	// `ApiProvider` is the legacy hardcoded union and carries none of the
+	// catalog-only ids — which is why opencoti lands in the branch above as a
+	// custom provider in the first place. Compared as a string rather than by
+	// widening that union, which a dozen exhaustive switches still depend on.
+	const isOpencoti = (selectedProvider as string) === "opencoti"
 	const genericProviderSettings = isCustomProvider
 		? undefined
 		: (getGenericProviderSettings(selectedProvider, catalogProviderListing) ??
@@ -491,9 +496,7 @@ const ApiOptions = ({
 			    panel of its own: the chat half of opencoti IS the compatible
 			    form, and duplicating it to bolt one section on would give two
 			    copies to keep in step. */}
-			{apiConfiguration && showModelOptions && selectedProvider === "opencoti" && (
-				<PolykvSection providerId={selectedProvider} />
-			)}
+			{apiConfiguration && showModelOptions && isOpencoti && <PolykvSection providerId={selectedProvider} />}
 
 			{/* Every provider, not a chosen few: the number describes an
 			    arrangement with an endpoint, and every endpoint has one — slots on
