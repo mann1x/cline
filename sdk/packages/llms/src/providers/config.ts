@@ -317,6 +317,32 @@ export interface ProviderOptions {
 	modelCatalog?: ModelCatalogConfig;
 	/** Sampling parameters for providers that accept them per request. */
 	sampling?: ProviderSamplingOptions;
+	/** opencoti's PolyKV control plane. Inert for every other provider. */
+	polykv?: PolykvOptions;
+}
+
+/**
+ * How this session uses opencoti's KV pool tree, and what it asks the engine to
+ * enforce on its behalf.
+ *
+ * Shaped to match `PolykvSettingsSchema` in `@cline/core` field for field, so a
+ * value typed into the settings panel reaches the vendor without a translation
+ * step that could drop one.
+ */
+export interface PolykvOptions {
+	enabled?: boolean;
+	pinPrefix?: boolean;
+	ephemeral?: boolean;
+	compactionPressureThreshold?: number;
+	targetTpsPerSession?: number;
+	mode?: "advisory" | "enforced";
+	onSaturation?: "reject" | "warn";
+	guaranteeMinSessions?: number;
+	settleTokens?: number;
+	settleMaxMs?: number;
+	prefillMaxSlots?: number;
+	overcommit?: boolean;
+	maxRetryAfterMs?: number;
 }
 
 /**

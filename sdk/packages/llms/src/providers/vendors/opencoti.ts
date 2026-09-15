@@ -5,10 +5,11 @@ import type {
 	GatewayResolvedProviderConfig,
 } from "@cline/shared";
 import { wrapLanguageModel } from "ai";
+import type { PolykvOptions } from "../config";
 import { splitToolImagesMiddleware } from "../middleware/split-tool-images";
 import { llamaCppTimingsMetadataExtractor } from "./llamacpp-timings";
 import { localStreamFetch, resolveLocalStreamDispatcher } from "./ollama";
-import { getPolykvSession, PolykvSaturatedError } from "./polykv";
+import { getPolykvSession } from "./polykv";
 import type { ProviderFactoryResult } from "./types";
 
 /**
@@ -48,13 +49,36 @@ export interface OpencotiRequestOptions {
 	overcommit?: boolean;
 }
 
-/** What the engine reports back about the pool it served the request from. */
+/**
+ * What the engine reports back, on the channel it actually uses.
+ *
+ * Deliberately short, and shorter than it used to be. The previous version read
+ * `x-pool-id`, `x-cached-prefix-tokens` and `x-session-tps`, none of which the
+ * server sets -- they were specified and then deferred, because headers must be
+ * emitted before the body while the slot, and therefore the tps, is only
+ * assigned after the task is queued. With all three always absent the callback
+ * guarded on them never fired once, so the whole observability path was dead
+ * while looking implemented.
+ *
+ * Whether the pool attached is the fact worth having, and on c7 it is not on
+ * the response at all: read `/slots[].opencoti.n_pool_shared`. c8 puts an
+ * `opencoti {pool_id, n_pool_shared}` block on the response itself.
+ */
 export interface OpencotiResponseFacts {
-	poolId?: string;
-	/** Prefix tokens served from cache rather than prefilled again. */
-	cachedTokens?: number;
-	sessionTps?: number;
-	backpressure?: boolean;
+	/**
+	 * Sessions the pool can still admit, as the warn arm reports it.
+	 *
+	 * Absent means "not computable", which is not zero -- and on c7 a reported
+	 * `0` may itself be wrong. Neither may be read as saturation.
+	 */
+	sessionsRemaining?: number;
+	/**
+	 * The request outlived its settling hold and was let through on the clock.
+	 *
+	 * Worth distinguishing: every other admit is evidence the pool had room, and
+	 * this one is evidence only that the timer expired.
+	 */
+	settleWaivedMs?: number;
 }
 
 /**
@@ -105,30 +129,40 @@ export function createOpencotiFetch(options: {
 			...(options.dispatcher ? { dispatcher: options.dispatcher } : {}),
 		} as RequestInit);
 
-		if (response.status === 429 || response.status === 503) {
-			const retryAfter = response.headers.get("retry-after");
-			const seconds = retryAfter ? Number(retryAfter) : Number.NaN;
-			throw new PolykvSaturatedError(
-				`opencoti declined the request (${response.status}); the pool is at capacity`,
-				Number.isFinite(seconds) ? seconds * 1000 : undefined,
-				response.headers.get("x-polykv-reason") ?? undefined,
-			);
-		}
-
+		// A refusal goes back as a response, not as a throw.
+		//
+		// The admission gate runs `enforced` by default, so `429` + `Retry-After`
+		// is a normal operating condition on a busy server rather than a fault.
+		// Thrown from inside the fetch it never reached the error classifier --
+		// the layer that knows a refusal is worth waiting out -- and surfaced as
+		// a transport failure, so the caller gave up on a server that had told it
+		// exactly when to come back.
+		//
+		// Note what is NOT done here: the body is not consulted. On c7, the
+		// published release, the refusal is a `429` carrying a body that says
+		// `503`/`unavailable_error`; the status line is the half that is right on
+		// both releases.
 		if (options.onFacts) {
 			const facts: OpencotiResponseFacts = {
-				poolId: response.headers.get("x-pool-id") ?? undefined,
-				cachedTokens: numberOrUndefined(
-					response.headers.get("x-cached-prefix-tokens"),
-				),
-				sessionTps: numberOrUndefined(response.headers.get("x-session-tps")),
-				backpressure: response.headers.get("x-sessions-remaining") === "0",
+				...(numberOrUndefined(response.headers.get("x-sessions-remaining")) !==
+				undefined
+					? {
+							sessionsRemaining: numberOrUndefined(
+								response.headers.get("x-sessions-remaining"),
+							) as number,
+						}
+					: {}),
+				...(numberOrUndefined(
+					response.headers.get("x-polykv-settle-waived"),
+				) !== undefined
+					? {
+							settleWaivedMs: numberOrUndefined(
+								response.headers.get("x-polykv-settle-waived"),
+							) as number,
+						}
+					: {}),
 			};
-			if (
-				facts.poolId !== undefined ||
-				facts.cachedTokens !== undefined ||
-				facts.sessionTps !== undefined
-			) {
+			if (Object.keys(facts).length > 0) {
 				options.onFacts(facts);
 			}
 		}
@@ -144,16 +178,34 @@ function numberOrUndefined(value: string | null): number | undefined {
 	return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+/**
+ * The PolyKV section this profile configured, if any.
+ *
+ * Read from the typed field the settings panel writes; the loose
+ * `polykv*`-prefixed keys below are the older route and stay readable so a
+ * caller that sets them directly is not silently ignored.
+ */
+export function readPolykvSettings(
+	context: GatewayProviderContext,
+): PolykvOptions | undefined {
+	const section = context.config?.options?.polykv;
+	return section && typeof section === "object"
+		? (section as PolykvOptions)
+		: undefined;
+}
+
 /** Read the per-request PolyKV options a caller put on the provider config. */
 export function readOpencotiRequestOptions(
 	context: GatewayProviderContext,
 ): OpencotiRequestOptions {
 	const options = (context.config?.options ?? {}) as Record<string, unknown>;
 	const read = (key: string): unknown => options[key];
+	const settings = readPolykvSettings(context);
 	const configuredPool = read("polykvPoolId");
 	const sessionId = read("polykvSessionId");
 	const sharedPrefix = read("polykvSharedPrefixTokens");
-	const overcommit = read("polykvOvercommit");
+	// The section wins where it says anything; the loose key is the fallback.
+	const overcommit = settings?.overcommit ?? read("polykvOvercommit");
 	// The live pool wins over anything the config froze: after a compaction
 	// re-roots the conversation the configured id names a pool that has been
 	// released.
@@ -213,13 +265,21 @@ export async function createOpencotiProviderModule(
 		dispatcher,
 		request,
 		onFacts: (facts) => {
-			context.logger?.debug(
-				`[opencoti] served from pool ${facts.poolId ?? "?"}: ${
-					facts.cachedTokens ?? 0
-				} prefix tokens cached${
-					facts.sessionTps !== undefined ? `, ${facts.sessionTps} tok/s` : ""
-				}`,
-			);
+			// Whether the pool attached is not on this channel: on c7 it is
+			// `/slots[].opencoti.n_pool_shared`, and on c8 the response's own
+			// `opencoti` block. What is here is the admission arm's own reporting.
+			const parts: string[] = [];
+			if (facts.sessionsRemaining !== undefined) {
+				parts.push(`${facts.sessionsRemaining} session(s) of headroom left`);
+			}
+			if (facts.settleWaivedMs !== undefined) {
+				parts.push(
+					`admitted on the ${facts.settleWaivedMs}ms settling timer, not on a measurement`,
+				);
+			}
+			if (parts.length > 0) {
+				context.logger?.debug(`[opencoti] ${parts.join("; ")}`);
+			}
 		},
 	});
 	const provider = createOpenAICompatible({

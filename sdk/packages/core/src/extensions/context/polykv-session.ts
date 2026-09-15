@@ -1,3 +1,4 @@
+import type { PolykvOptions } from "@cline/llms";
 import {
 	clearPolykvSession,
 	createPolykvClient,
@@ -54,16 +55,26 @@ export interface PolykvProviderConfig {
 	baseUrl?: string;
 	headers?: Record<string, string>;
 	fetch?: typeof fetch;
+	/** The profile's PolyKV section. Absent means "never configured". */
+	polykv?: PolykvOptions;
 }
 
-/** Whether this session runs on an engine that has a pool tree at all. */
+/**
+ * Whether this session runs on an engine that has a pool tree, and wants it.
+ *
+ * `enabled` is read as off only when it says so. A profile written before the
+ * section existed carries nothing, and treating that as "disabled" would take
+ * pooling away from every session that already had it -- a silent regression
+ * dressed up as a default.
+ */
 export function isPolykvProvider(
 	config: PolykvProviderConfig | undefined,
 ): boolean {
 	return (
 		config?.providerId !== undefined &&
 		normalizeProviderId(config.providerId) === "opencoti" &&
-		Boolean(config.baseUrl)
+		Boolean(config.baseUrl) &&
+		config.polykv?.enabled !== false
 	);
 }
 
@@ -79,25 +90,47 @@ function clientFor(config: PolykvProviderConfig): PolykvClient | undefined {
 }
 
 /**
- * The text whose tokens make up the shared prefix.
+ * The messages whose templated tokens make up the shared prefix.
  *
- * System prompt then tools, in the order the request serialises them, because
- * the engine matches a prefix by hashing tokens: a prefix assembled in a
- * different order than it is sent matches nothing, and the pool silently buys
- * nothing at all.
+ * Returned as a chat body rather than a string, because the string is not ours
+ * to write. The engine prefills whatever its own chat template produced, and a
+ * prefix assembled here -- the system prompt, a newline, `JSON.stringify` of
+ * the tool schemas -- is a different token sequence from the one that gets
+ * prefilled. The pool is then created, pinned and attached, and shares nothing,
+ * on every turn, with nothing reporting it. Only the server knows which
+ * template it loaded and how that template renders tools.
+ *
+ * The prefix does not have to be exactly right, only honest: the engine
+ * computes the shared length itself as the longest exact token match (auto-P),
+ * and an explicit hint may only cap that, never raise it. So a prefix running
+ * slightly past the true boundary shares less, rather than failing.
  */
-export function renderPolykvPrefix(options: {
+export function renderPolykvPrefixMessages(options: {
 	systemPrompt?: string;
 	tools?: readonly unknown[];
-}): string {
-	const parts: string[] = [];
-	if (options.systemPrompt) {
-		parts.push(options.systemPrompt);
+}): { messages: readonly unknown[]; tools?: readonly unknown[] } | undefined {
+	if (!options.systemPrompt) {
+		return undefined;
 	}
-	if (options.tools && options.tools.length > 0) {
-		parts.push(JSON.stringify(options.tools));
-	}
-	return parts.join("\n");
+	return {
+		messages: [{ role: "system", content: options.systemPrompt }],
+		...(options.tools && options.tools.length > 0
+			? { tools: options.tools }
+			: {}),
+	};
+}
+
+/**
+ * End the pinned prefix at a token boundary.
+ *
+ * A prefix ending in a trailing space merges with the first word of whatever
+ * follows into a single token, so the child's `[0, branch_pos)` no longer
+ * matches the parent's and the contiguous-prefix check answers 400. A newline
+ * is the boundary every chat template already ends its blocks on.
+ */
+export function endAtTokenBoundary(prompt: string): string {
+	const trimmed = prompt.replace(/[ \t]+$/, "");
+	return trimmed.endsWith("\n") ? trimmed : `${trimmed}\n`;
 }
 
 /**
@@ -126,18 +159,21 @@ export async function ensurePolykvPool(options: {
 		return undefined;
 	}
 	try {
-		const prefix = renderPolykvPrefix({
-			systemPrompt: options.systemPrompt,
-			tools: options.tools,
+		const prefix = renderPolykvPrefixMessages({
+			...(options.systemPrompt ? { systemPrompt: options.systemPrompt } : {}),
+			...(options.tools ? { tools: options.tools } : {}),
 		});
 		if (!prefix) {
 			return undefined;
 		}
-		const tokens = await client.tokenize(prefix);
-		if (tokens.length === 0) {
+		// The server renders it, and the server tokenizes it: `prompt` gets the
+		// same BOS and special-token treatment a completion prompt gets, which is
+		// the treatment the prefill it has to match was given.
+		const templated = endAtTokenBoundary(await client.applyTemplate(prefix));
+		if (templated.trim() === "") {
 			return undefined;
 		}
-		const pool = await client.createPool({ tokens, pin: true });
+		const pool = await client.createPool({ prompt: templated, pin: true });
 		setPolykvSession(options.sessionId, {
 			poolId: pool.pool_id,
 			prefixTokens: pool.prefix_len,
@@ -202,11 +238,16 @@ export async function readPolykvCapacity(options: {
  */
 export function polykvSaysCompact(
 	capacity: PolykvCapacity | undefined,
+	threshold?: number,
 ): boolean {
 	if (!capacity || capacity.settling) {
 		return false;
 	}
-	return (capacity.compaction_pressure ?? 0) >= POLYKV_COMPACTION_PRESSURE;
+	const at =
+		typeof threshold === "number" && threshold > 0 && threshold <= 1
+			? threshold
+			: POLYKV_COMPACTION_PRESSURE;
+	return (capacity.compaction_pressure ?? 0) >= at;
 }
 
 /**
@@ -240,10 +281,15 @@ export async function repointPolykvAfterCompaction(options: {
 	}
 	const previous = state.poolId;
 	try {
-		const tokens = await client.tokenize(options.compactedPrompt);
+		// `from_session`, not tokens. The body here is the child's FULL path
+		// `[0, L)`, checked token-exact against the parent over `[0, branch_pos)`
+		// -- sending the compacted text alone is a suffix, and is answered 400
+		// every time. Snapshotting the live session sidesteps the question
+		// entirely: the engine reads the prefix from the slot's own token history
+		// and nothing crosses the wire to be re-tokenized.
 		const forked = await client.forkPool(previous, {
 			branch_pos: state.prefixTokens,
-			tokens,
+			from_session: options.sessionId,
 		});
 		await client.pin(forked.pool_id);
 		setPolykvSession(options.sessionId, {
@@ -259,7 +305,7 @@ export async function repointPolykvAfterCompaction(options: {
 		await client.unpin(previous).catch(() => undefined);
 		await client.releasePool(previous).catch(() => undefined);
 		options.logger?.log?.(
-			`[PolyKV] Re-rooted onto pool ${forked.pool_id} (${tokens.length} suffix tokens over ${state.prefixTokens} shared); released ${previous}`,
+			`[PolyKV] Re-rooted onto pool ${forked.pool_id} (${forked.prefix_len} tokens, ${state.prefixTokens} shared with the root); released ${previous}`,
 		);
 		return forked.pool_id;
 	} catch (error) {

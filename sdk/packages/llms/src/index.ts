@@ -51,6 +51,7 @@ export type {
 	Message,
 	MessageRole,
 	MessageWithMetadata,
+	PolykvOptions,
 	ProviderCapability,
 	ProviderConfig,
 	ProviderId,
@@ -164,6 +165,14 @@ export {
 	createCline,
 } from "./providers/vendors/cline";
 export {
+	buildLlamaCppSamplingOptions,
+	LLAMACPP_SAMPLING_WIRE_NAMES,
+	LLAMACPP_THINK_BUDGET_FRACTION,
+	readLlamaCppSamplingOptions,
+	resolveLlamaCppThinkBudgetTokens,
+	resolveLlamaCppThinkBudgetWindow,
+} from "./providers/vendors/llamacpp-sampling";
+export {
 	clearPolykvSession,
 	createPolykvClient,
 	getPolykvSession,
@@ -174,6 +183,7 @@ export {
 	PolykvSaturatedError,
 	type PolykvSessionState,
 	polykvRoot,
+	probeOpencotiProps,
 	probePolykvEnabled,
 	resetPolykvAvailability,
 	resetPolykvSessions,

@@ -351,6 +351,26 @@ export type ProviderErrorClass =
 	| "tool_call_unparsable"
 	/** The provider rejected the credentials. */
 	| "auth"
+	/**
+	 * The provider declined to start this request for throughput or capacity
+	 * reasons, and said when to come back (`Retry-After`).
+	 *
+	 * Told apart from `unknown` because it is not a failure at all on a server
+	 * that admits work deliberately: opencoti runs its KV admission gate
+	 * `enforced` by default, so a busy pool answers `429` as a matter of course.
+	 * Folded into `unknown` it was indistinguishable from a bug, and the caller
+	 * that should have waited the stated interval gave up instead.
+	 */
+	| "rate_limited"
+	/**
+	 * A KV pool operation was refused because the prefix does not match what the
+	 * pool holds.
+	 *
+	 * Not retryable, and not the turn's fault: the request is fine and the pool
+	 * is wrong, so the recovery is to rebuild the pool and carry on unpooled
+	 * meanwhile — never to fail the turn.
+	 */
+	| "pool_contract_violation"
 	| "unknown";
 
 export type AgentModelEvent =

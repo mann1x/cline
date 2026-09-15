@@ -5,7 +5,20 @@ import { AISDKError, APICallError, RetryError, TypeValidationError } from "ai";
  * Provider codes that unambiguously identify a context-window overflow
  * (OpenAI-family `error.code`).
  */
-const CONTEXT_WINDOW_CODES = new Set(["context_length_exceeded"]);
+const CONTEXT_WINDOW_CODES = new Set([
+	"context_length_exceeded",
+	// opencoti/llama.cpp name it in the error `type` rather than a `code`, and
+	// its message says "context size", which none of the patterns below match.
+	"exceed_context_size_error",
+]);
+
+/**
+ * A pool fork whose declared prefix does not match the parent token-exact.
+ *
+ * Arrives as a `400 invalid_request_error`, which is indistinguishable by
+ * status from a malformed request, so the message is what separates them.
+ */
+const POOL_CONTRACT_PATTERN = /contiguous-prefix contract violation/i;
 
 /**
  * Message shapes providers use for context-window overflow. Sourced from the
@@ -23,6 +36,11 @@ const CONTEXT_WINDOW_PATTERNS = [
 	/\bprompt\s+is\s+too\s+long\b/i,
 	/reduce\s+the\s+length\s+of\s+the\s+messages\s+or\s+completion/i,
 	/requested\s+input\s+length\s+.*exceeds\s+.*maximum/i,
+	// opencoti / llama.cpp, verbatim from `server-context.cpp:9184-9200`. Both
+	// say "context size", which the first pattern above does not cover, and the
+	// token counts sit in parentheses so `tokens exceeds` does not match either.
+	/\bmax(?:imum)?\s+context\s+size\b/i,
+	/\bexceeds?\s+the\s+available\s+context\s+size\b/i,
 ];
 
 /**
@@ -236,19 +254,29 @@ function verdictFromSignals(signals: ErrorSignals): ProviderErrorClass {
 		return "context_window_exceeded";
 	}
 
+	// Before the status gates: a pool-contract refusal is a 400, the same status
+	// a malformed request carries, and only the message tells them apart.
+	if (signals.messages.some((message) => POOL_CONTRACT_PATTERN.test(message))) {
+		return "pool_contract_violation";
+	}
+
 	if ([...signals.statuses].some((status) => AUTH_STATUSES.has(status))) {
 		return "auth";
 	}
 
+	// The status, never the body. On opencoti c7 -- the published release -- an
+	// admission refusal is a 429 whose body says `503`/`unavailable_error`, so a
+	// classifier that reads the body mis-reads every refusal on the binary that
+	// is actually deployed. c8 makes the two agree; this stays correct on both.
 	if (signals.statuses.has(RATE_LIMIT_STATUS)) {
-		return "unknown";
+		return "rate_limited";
 	}
 	if (
 		signals.messages.some((message) =>
 			RATE_LIMIT_PATTERNS.some((pattern) => pattern.test(message)),
 		)
 	) {
-		return "unknown";
+		return "rate_limited";
 	}
 	if (
 		signals.statuses.size > 0 &&

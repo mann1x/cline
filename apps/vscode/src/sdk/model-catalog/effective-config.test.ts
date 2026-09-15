@@ -321,3 +321,61 @@ describe("sampling values that cannot mean anything", () => {
 		expect((await load({ numGpu: 990000 }))?.numGpu).toBeUndefined()
 	})
 })
+
+describe("the PolyKV section", () => {
+	// This is the read half of the write-only-field failure: the store writes
+	// the section, and if nothing reads it back the panel renders blank and the
+	// session runs on defaults while providers.json says otherwise.
+	it("reads the stored section back", async () => {
+		const { buildEffectiveProviderConfig } = await import("./effective-config")
+		mocks.setProviderSettings({
+			opencoti: {
+				provider: "opencoti",
+				polykv: {
+					enabled: true,
+					mode: "enforced",
+					targetTpsPerSession: 12,
+					prefillMaxSlots: 0,
+					compactionPressureThreshold: 0.7,
+				},
+			},
+		})
+
+		const config = buildEffectiveProviderConfig(parseProviderId("opencoti"))
+
+		expect(config.polykv).toEqual({
+			enabled: true,
+			mode: "enforced",
+			targetTpsPerSession: 12,
+			// Zero is "off" for this one, not "unset" — a truthiness check here
+			// would drop the only value that turns the prefill arm off.
+			prefillMaxSlots: 0,
+			compactionPressureThreshold: 0.7,
+		})
+	})
+
+	it("drops a mode the engine would refuse", async () => {
+		// `queue` never shipped and the server answers 400 to it. Carrying it
+		// forward would put a value in the request that fails the whole turn.
+		const { buildEffectiveProviderConfig } = await import("./effective-config")
+		mocks.setProviderSettings({
+			opencoti: {
+				provider: "opencoti",
+				polykv: { enabled: true, mode: "turbo", onSaturation: "queue" },
+			},
+		})
+
+		const config = buildEffectiveProviderConfig(parseProviderId("opencoti"))
+
+		expect(config.polykv).toEqual({ enabled: true })
+	})
+
+	it("leaves the section absent when nothing stored one", async () => {
+		const { buildEffectiveProviderConfig } = await import("./effective-config")
+		mocks.setProviderSettings({ opencoti: { provider: "opencoti" } })
+
+		const config = buildEffectiveProviderConfig(parseProviderId("opencoti"))
+
+		expect(config.polykv).toBeUndefined()
+	})
+})

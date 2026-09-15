@@ -571,7 +571,10 @@ export function createContextCompactionPrepareTurn(
 			expectedTokens: triggerInputTokens,
 			logger: config.logger,
 		});
-		const polykvPressure = polykvSaysCompact(polykvCapacity);
+		const polykvPressure = polykvSaysCompact(
+			polykvCapacity,
+			providerConfig.polykv?.compactionPressureThreshold,
+		);
 		const shouldCompact =
 			contextOverflow !== undefined ||
 			triggerInputTokens >= requestTriggerTokens ||

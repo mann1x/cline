@@ -5,6 +5,7 @@ import type {
 	Mode,
 	ModelSelection,
 	ModelSelectionOverrides,
+	PolykvSettings,
 	ProviderCatalog,
 	ProviderConfigPatch,
 	ProviderConfigStore,
@@ -252,7 +253,37 @@ export function toRedactedProviderConfigResponse(
 				}
 			: undefined,
 		sampling: config.sampling ? { ...config.sampling, stop: [...(config.sampling.stop ?? [])] } : undefined,
+		polykv: config.polykv ? { ...config.polykv } : undefined,
 	})
+}
+
+/**
+ * Narrow the proto's open strings onto the union the config declares.
+ *
+ * `mode` and `on_saturation` are plain strings on the wire, and a value the
+ * engine would reject must not reach providers.json looking configured -- the
+ * server answers 400 to `queue`, which never shipped.
+ */
+function toPolykvSettings(patch: NonNullable<WriteProviderConfigPatch["polykv"]>): PolykvSettings {
+	const mode = patch.mode === "advisory" || patch.mode === "enforced" ? patch.mode : undefined
+	const onSaturation = patch.onSaturation === "reject" || patch.onSaturation === "warn" ? patch.onSaturation : undefined
+	return {
+		...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+		...(patch.pinPrefix !== undefined ? { pinPrefix: patch.pinPrefix } : {}),
+		...(patch.ephemeral !== undefined ? { ephemeral: patch.ephemeral } : {}),
+		...(patch.compactionPressureThreshold !== undefined
+			? { compactionPressureThreshold: patch.compactionPressureThreshold }
+			: {}),
+		...(patch.targetTpsPerSession !== undefined ? { targetTpsPerSession: patch.targetTpsPerSession } : {}),
+		...(mode ? { mode } : {}),
+		...(onSaturation ? { onSaturation } : {}),
+		...(patch.guaranteeMinSessions !== undefined ? { guaranteeMinSessions: patch.guaranteeMinSessions } : {}),
+		...(patch.settleTokens !== undefined ? { settleTokens: patch.settleTokens } : {}),
+		...(patch.settleMaxMs !== undefined ? { settleMaxMs: patch.settleMaxMs } : {}),
+		...(patch.prefillMaxSlots !== undefined ? { prefillMaxSlots: patch.prefillMaxSlots } : {}),
+		...(patch.overcommit !== undefined ? { overcommit: patch.overcommit } : {}),
+		...(patch.maxRetryAfterMs !== undefined ? { maxRetryAfterMs: patch.maxRetryAfterMs } : {}),
+	}
 }
 
 export function toProviderConfigPatch(protoPatch: WriteProviderConfigPatch | undefined): ProviderConfigPatch {
@@ -304,6 +335,15 @@ export function toProviderConfigPatch(protoPatch: WriteProviderConfigPatch | und
 							(key !== "stop" || (protoPatch.sampling.stop?.length ?? 0) > 0),
 					)
 						? { ...protoPatch.sampling, stop: protoPatch.sampling.stop ?? undefined }
+						: null,
+				}
+			: {}),
+		// Same shape as sampling: an explicitly empty PolyKV message clears the
+		// section, which is what the UI sends when the switch is reset.
+		...(protoPatch.polykv !== undefined
+			? {
+					polykv: Object.values(protoPatch.polykv).some((value) => value !== undefined)
+						? toPolykvSettings(protoPatch.polykv)
 						: null,
 				}
 			: {}),

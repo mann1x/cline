@@ -112,6 +112,58 @@ export const SamplingSettingsSchema = z.object({
 
 export type SamplingSettings = z.infer<typeof SamplingSettingsSchema>;
 
+/**
+ * opencoti's PolyKV control plane, as a profile configures it.
+ *
+ * A section of its own rather than loose fields because it is one arrangement
+ * with one engine: the pool tree, the admission policy the engine enforces on
+ * this profile's behalf, and how this client behaves when the engine says no.
+ * All of it is inert unless `enabled`, and inert anyway on a server launched
+ * without `--polykv-max-pools`.
+ */
+export const PolykvSettingsSchema = z.object({
+	enabled: z.boolean().optional(),
+	/**
+	 * Keep the shared prefix resident between turns.
+	 *
+	 * On by default where it matters: an unpinned leaf that goes 60s without a
+	 * processing attach is swept, and the next turn silently pays full prefill.
+	 */
+	pinPrefix: z.boolean().optional(),
+	ephemeral: z.boolean().optional(),
+	/**
+	 * How full the engine must say the pool is before this compacts, 0 to 1.
+	 *
+	 * Measured by the thing holding the cells, where every other signal in the
+	 * compaction path is an estimate.
+	 */
+	compactionPressureThreshold: z.number().min(0).max(1).optional(),
+
+	// The policy the engine applies, posted to `/polykv/pools/{id}/admission`.
+	// `on_saturation: "queue"` is deliberately absent: it never shipped, and the
+	// server answers 400 to the value.
+	targetTpsPerSession: z.number().nonnegative().optional(),
+	mode: z.enum(["advisory", "enforced"]).optional(),
+	onSaturation: z.enum(["reject", "warn"]).optional(),
+	guaranteeMinSessions: z.number().int().nonnegative().optional(),
+	settleTokens: z.number().int().nonnegative().optional(),
+	settleMaxMs: z.number().int().nonnegative().optional(),
+	prefillMaxSlots: z.number().int().nonnegative().optional(),
+
+	// How this client behaves against that policy.
+	/** Bypass admission for this profile's requests, explicitly and visibly. */
+	overcommit: z.boolean().optional(),
+	/**
+	 * The longest `Retry-After` this client will honour before giving up.
+	 *
+	 * The engine says when to come back; this is the point past which waiting
+	 * stops being better than failing.
+	 */
+	maxRetryAfterMs: z.number().int().nonnegative().optional(),
+});
+
+export type PolykvSettings = z.infer<typeof PolykvSettingsSchema>;
+
 export const AwsSettingsSchema = z.object({
 	accessKey: z.string().optional(),
 	secretKey: z.string().optional(),
@@ -207,6 +259,7 @@ export const ProviderSettingsSchema = z.object({
 	timeout: z.number().int().positive().optional(),
 	reasoning: ReasoningSettingsSchema.optional(),
 	sampling: SamplingSettingsSchema.optional(),
+	polykv: PolykvSettingsSchema.optional(),
 	aws: AwsSettingsSchema.optional(),
 	gcp: GcpSettingsSchema.optional(),
 	azure: AzureSettingsSchema.optional(),
@@ -326,6 +379,7 @@ export function toProviderConfig(
 		reasoningEffort,
 		thinkingBudgetTokens: settings.reasoning?.budgetTokens,
 		sampling: settings.sampling,
+		polykv: settings.polykv,
 		region: settings.region ?? settings.aws?.region ?? settings.gcp?.region,
 		apiLine: settings.apiLine,
 		useCrossRegionInference: settings.aws?.useCrossRegionInference,

@@ -62,7 +62,16 @@ describe("resolveAgentSlotLimit", () => {
 	// the engine admits or refuses against measured KV headroom. Counting slots
 	// there would refuse work the server would have taken.
 	it("stands down when opencoti has PolyKV on", async () => {
-		const fetchImpl = vi.fn(async () => new Response("{}", { status: 200 }));
+		const fetchImpl = vi.fn(
+			async (_input: Parameters<typeof fetch>[0]) =>
+				new Response(
+					JSON.stringify({
+						build_info: "opencoti-0.10.5-c7-2609031229001",
+						opencoti: { polykv: { pools_enabled: true } },
+					}),
+					{ status: 200 },
+				),
+		);
 		const resolved = await resolveAgentSlotLimit({
 			providerId: "opencoti",
 			baseUrl: "http://localhost:8080/v1",
@@ -71,22 +80,28 @@ describe("resolveAgentSlotLimit", () => {
 		});
 
 		expect(resolved.limit).toBe(0);
-		// The control plane sits beside `/v1`, not under it.
-		expect(fetchImpl.mock.calls[0]?.[0]).toBe(
-			"http://localhost:8080/polykv/pools",
-		);
+		// `/props`, not `/polykv/pools`: the pool routes error on a server booted
+		// without `--polykv-max-pools`, so probing there cannot tell "pools off"
+		// from "no server". And it sits beside `/v1`, not under it.
+		expect(fetchImpl.mock.calls[0]?.[0]).toBe("http://localhost:8080/props");
 	});
 
-	// The routes exist only when the server was launched with
-	// `--polykv-max-pools`, so a 404 is the flag being absent rather than an
-	// error worth reporting.
+	// A server booted without `--polykv-max-pools` -- the default -- still
+	// answers `/props`, and says so there. This is the case the old probe could
+	// not see: it asked a route that errors, and read the error as "no server".
 	it("keeps the slot count when opencoti has PolyKV off", async () => {
 		const resolved = await resolveAgentSlotLimit({
 			providerId: "opencoti",
 			baseUrl: "http://localhost:8080/v1",
 			parallelSessions: 2,
 			fetch: (async () =>
-				new Response("not found", { status: 404 })) as unknown as typeof fetch,
+				new Response(
+					JSON.stringify({
+						build_info: "opencoti-0.10.5-c7-2609031229001",
+						opencoti: { polykv: { pools_enabled: false, max_pools: 0 } },
+					}),
+					{ status: 200 },
+				)) as unknown as typeof fetch,
 		});
 		expect(resolved.limit).toBe(2);
 	});

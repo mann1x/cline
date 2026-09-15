@@ -177,6 +177,10 @@ describe("classifyProviderError", () => {
 	});
 
 	describe("unknown", () => {
+		// These two used to assert `unknown`. The veto they exist for -- a quota
+		// message that says "tokens exceeded" must never be read as the context
+		// window overflowing -- is unchanged; what changed is that the right
+		// answer has a name now, so a caller can wait instead of giving up.
 		it("vetoes token-per-minute rate limits despite token wording", () => {
 			expect(
 				classifyProviderError({
@@ -187,7 +191,7 @@ describe("classifyProviderError", () => {
 							"Number of request tokens has exceeded your per-minute rate limit.",
 					},
 				}),
-			).toBe("unknown");
+			).toBe("rate_limited");
 		});
 
 		it("vetoes rate-limit wording even without a status", () => {
@@ -195,7 +199,7 @@ describe("classifyProviderError", () => {
 				classifyProviderError(
 					new Error("Rate limit reached for gpt-4o on tokens per min (TPM)"),
 				),
-			).toBe("unknown");
+			).toBe("rate_limited");
 		});
 
 		it("vetoes context wording on a non-invalid-request status", () => {
@@ -460,5 +464,98 @@ describe("tool calls the provider could not parse", () => {
 		expect(classifyProviderError(new Error(message))).not.toBe(
 			"tool_call_unparsable",
 		);
+	});
+});
+
+describe("opencoti's own refusals", () => {
+	// Verbatim from the engine (`server-context.cpp:9184-9190`,
+	// `server-common.cpp:49`). None of the existing patterns match "max context
+	// size", so this classified as `unknown`, `isRecoverableOverflowTurn` never
+	// fired, and overflow-recovery compaction never ran on this provider at all:
+	// a run that outgrew its window died instead of compacting.
+	it("reads an overflow as an overflow", () => {
+		expect(
+			classifyProviderError({
+				statusCode: 400,
+				responseBody: JSON.stringify({
+					error: {
+						code: 400,
+						type: "exceed_context_size_error",
+						message:
+							"input (13000 tokens) is larger than the max context size (8192 tokens). skipping",
+					},
+				}),
+			}),
+		).toBe("context_window_exceeded");
+	});
+
+	it("reads the other overflow message too", () => {
+		expect(
+			classifyProviderError({
+				statusCode: 400,
+				responseBody: JSON.stringify({
+					error: {
+						code: 400,
+						type: "exceed_context_size_error",
+						message:
+							"request (9000 tokens) exceeds the available context size (8192 tokens), try increasing it",
+					},
+				}),
+			}),
+		).toBe("context_window_exceeded");
+	});
+
+	// The admission gate is `enforced` by default, so this is a normal operating
+	// condition on any busy server -- and as `unknown` it was indistinguishable
+	// from a bug, so the subagent died instead of waiting the stated interval.
+	it("reads an admission refusal as rate limiting, not as a mystery", () => {
+		expect(
+			classifyProviderError({
+				statusCode: 429,
+				responseBody: JSON.stringify({
+					error: {
+						code: 429,
+						type: "rate_limit_error",
+						message: "pool saturated",
+					},
+				}),
+			}),
+		).toBe("rate_limited");
+	});
+
+	// c7 is the published release and its body disagrees with its own status
+	// line: the refusal is a 429 carrying a body that says 503. Classifying on
+	// the body would mis-read every refusal on the binary people actually run.
+	it("trusts the status over a c7 body that says 503", () => {
+		expect(
+			classifyProviderError({
+				statusCode: 429,
+				responseBody: JSON.stringify({
+					error: {
+						code: 503,
+						type: "unavailable_error",
+						message: "pool saturated; retry later",
+					},
+				}),
+			}),
+		).toBe("rate_limited");
+	});
+
+	// A fork whose child prefix does not match the parent token-exact. Not
+	// retryable and not the turn's fault: the pool is wrong and must be rebuilt.
+	it("tells a broken pool contract from a broken request", () => {
+		expect(
+			classifyProviderError({
+				statusCode: 400,
+				responseBody: JSON.stringify({
+					error: {
+						code: 400,
+						type: "invalid_request_error",
+						message:
+							"contiguous-prefix contract violation at 12859: child does not match parent",
+					},
+				}),
+			}),
+		).toBe("pool_contract_violation");
 	});
 });

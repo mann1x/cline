@@ -119,6 +119,10 @@ const PROVIDER_CONFIG_CLEARS: Readonly<Record<string, unknown>> = {
 	maxToolResultChars: 0,
 	parallelSessions: 0,
 	sampling: {},
+	// Same reason as sampling: a profile that does not mention the section must
+	// clear it on load, or it inherits the previous profile's PolyKV policy and
+	// then reports itself dirty against a value it never carried.
+	polykv: {},
 }
 
 /**

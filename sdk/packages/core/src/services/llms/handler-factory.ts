@@ -54,6 +54,10 @@ function buildGatewayProviderOptions(
 		// on its Modelfile defaults. Both hosts were affected: this is the only
 		// place the lift can happen for either.
 		sampling: config.sampling,
+		// The PolyKV section, lifted for exactly the reason above. It is read off
+		// this bag by the opencoti vendor and by nothing else, so a section left
+		// on the config configures nothing while reading as configured.
+		polykv: config.polykv,
 	};
 
 	if (usesOpenAICompatibleClient(config)) {

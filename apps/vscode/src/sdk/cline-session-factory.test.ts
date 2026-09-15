@@ -21,7 +21,7 @@ import {
 	normalizeSdkBaseUrl,
 	resolveApiKey,
 	resolveOllamaProviderConfig,
-	resolveOllamaThinkingAllowance,
+	resolveThinkingAllowance,
 	updateHistoryItem,
 } from "./cline-session-factory"
 import { parseProviderId } from "./model-catalog/provider-id"
@@ -1972,7 +1972,7 @@ describe("buildDelegatedAgentConnection", () => {
 	})
 })
 
-describe("resolveOllamaThinkingAllowance", () => {
+describe("resolveThinkingAllowance", () => {
 	beforeEach(() => {
 		mocks.providerSettingsManager.getProviderSettings.mockReturnValue(undefined)
 		mocks.resolveOllamaThinkBudget.mockResolvedValue(undefined)
@@ -1985,7 +1985,7 @@ describe("resolveOllamaThinkingAllowance", () => {
 		// the prompt state a bound that is not enforced.
 		mocks.resolveOllamaThinkBudget.mockResolvedValue({ level: "medium", budgetTokens: 4321 })
 
-		const allowance = await resolveOllamaThinkingAllowance(
+		const allowance = await resolveThinkingAllowance(
 			"ollama",
 			{ reasoningEffort: "medium" },
 			32_000,
@@ -1998,7 +1998,7 @@ describe("resolveOllamaThinkingAllowance", () => {
 	})
 
 	it("asks about the think value and options the session will actually send", async () => {
-		await resolveOllamaThinkingAllowance(
+		await resolveThinkingAllowance(
 			"ollama",
 			{ reasoningEffort: "high" },
 			8_000,
@@ -2014,10 +2014,55 @@ describe("resolveOllamaThinkingAllowance", () => {
 		})
 	})
 
+	// opencoti and any other llama.cpp server take `reasoning_budget_tokens`, an
+	// absolute count, and this fork already sends it. What it did not do is tell
+	// the *session* what it sent: both this resolver and the budget-message read
+	// were gated on `providerId === "ollama"`, so on opencoti the system prompt
+	// stated no thinking bound and the discarded-turn retrospective had no
+	// budget message to recognise a capped think by. The budget went out on the
+	// wire and nothing on this side knew it existed.
+	it("resolves a llama.cpp budget here, since that server resolves none", async () => {
+		// No server round trip: llama.cpp has no effort levels and no endpoint
+		// that would answer for one, so the level is resolved against the same
+		// table Ollama uses -- `medium` is a quarter of the window.
+		const allowance = await resolveThinkingAllowance(
+			"opencoti",
+			{ reasoningEffort: "medium" },
+			8_000,
+			128_000,
+			"http://localhost:8080/v1",
+			"lfm2.5-2.6b",
+		)
+
+		expect(allowance).toEqual({ level: "medium", budgetTokens: 2_000 })
+		expect(mocks.resolveOllamaThinkBudget).not.toHaveBeenCalled()
+	})
+
+	it("takes the llama.cpp share of the output cap, not of the context", async () => {
+		// A share of the context can exceed the output cap and then bounds
+		// nothing: the model thinks for the whole reply and stops with no answer.
+		const allowance = await resolveThinkingAllowance(
+			"opencoti",
+			{ reasoningEffort: "high" },
+			4_000,
+			262_144,
+			"http://localhost:8080/v1",
+			"lfm2.5-2.6b",
+		)
+
+		expect(allowance).toEqual({ level: "high", budgetTokens: 2_000 })
+	})
+
+	it("says nothing for a provider with no thinking budget at all", async () => {
+		expect(
+			await resolveThinkingAllowance("anthropic", { reasoningEffort: "medium" }, 8_000, 128_000, undefined, "claude"),
+		).toBeUndefined()
+	})
+
 	it("asks about the level the vendor will fill in when none is set", async () => {
 		// Asking about "no level" would answer for a request this session never
 		// makes: the Ollama vendor supplies its default when reasoning is unset.
-		await resolveOllamaThinkingAllowance("ollama", {}, 8_000, 128_000, "http://localhost:11434", "v7-coder")
+		await resolveThinkingAllowance("ollama", {}, 8_000, 128_000, "http://localhost:11434", "v7-coder")
 
 		expect(mocks.resolveOllamaThinkBudget).toHaveBeenCalledWith(
 			"http://localhost:11434",
@@ -2031,7 +2076,7 @@ describe("resolveOllamaThinkingAllowance", () => {
 			sampling: { numPredict: 4_000 },
 		} as never)
 
-		await resolveOllamaThinkingAllowance(
+		await resolveThinkingAllowance(
 			"ollama",
 			{ reasoningEffort: "medium" },
 			32_000,
@@ -2053,27 +2098,27 @@ describe("resolveOllamaThinkingAllowance", () => {
 		mocks.resolveOllamaThinkBudget.mockResolvedValue(undefined)
 
 		await expect(
-			resolveOllamaThinkingAllowance("ollama", { reasoningEffort: "medium" }, 32_000, 128_000, undefined, "v7-coder"),
+			resolveThinkingAllowance("ollama", { reasoningEffort: "medium" }, 32_000, 128_000, undefined, "v7-coder"),
 		).resolves.toBeUndefined()
 	})
 
 	it("never asks for providers that do not enforce a thinking cap", async () => {
 		await expect(
-			resolveOllamaThinkingAllowance("anthropic", { reasoningEffort: "medium" }, 32_000, 128_000, undefined, "claude"),
+			resolveThinkingAllowance("anthropic", { reasoningEffort: "medium" }, 32_000, 128_000, undefined, "claude"),
 		).resolves.toBeUndefined()
 		expect(mocks.resolveOllamaThinkBudget).not.toHaveBeenCalled()
 	})
 
 	it("never asks when thinking is switched off", async () => {
 		await expect(
-			resolveOllamaThinkingAllowance("ollama", { thinking: false }, 32_000, 128_000, undefined, "v7-coder"),
+			resolveThinkingAllowance("ollama", { thinking: false }, 32_000, 128_000, undefined, "v7-coder"),
 		).resolves.toBeUndefined()
 		expect(mocks.resolveOllamaThinkBudget).not.toHaveBeenCalled()
 	})
 
 	it("never asks without a model to ask about", async () => {
 		await expect(
-			resolveOllamaThinkingAllowance("ollama", { reasoningEffort: "medium" }, 32_000, 128_000, undefined, undefined),
+			resolveThinkingAllowance("ollama", { reasoningEffort: "medium" }, 32_000, 128_000, undefined, undefined),
 		).resolves.toBeUndefined()
 		expect(mocks.resolveOllamaThinkBudget).not.toHaveBeenCalled()
 	})

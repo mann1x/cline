@@ -127,6 +127,7 @@ describe("useApiConfigurationProfiles — loading a profile", () => {
 			maxToolResultChars: 0,
 			parallelSessions: 0,
 			sampling: {},
+			polykv: {},
 		})
 	})
 

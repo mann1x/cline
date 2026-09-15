@@ -23,12 +23,14 @@ type ProviderSettingsLike = {
 	readonly maxToolResultChars?: number
 	readonly reasoning?: ReasoningConfig
 	readonly sampling?: SamplingConfig
+	readonly polykv?: PolykvConfig
 	readonly auth?: AuthConfig
 	readonly extras?: ExtrasConfig
 }
 
 type ReasoningConfig = NonNullable<EffectiveProviderConfig["reasoning"]>
 type SamplingConfig = NonNullable<EffectiveProviderConfig["sampling"]>
+type PolykvConfig = NonNullable<EffectiveProviderConfig["polykv"]>
 
 /** Sampling fields that are read as numbers, and the sign each one allows. */
 const SAMPLING_NUMBER_FIELDS = {
@@ -89,6 +91,54 @@ const SAMPLING_RANGES: Partial<Record<keyof typeof SAMPLING_NUMBER_FIELDS, { min
  * `numPredict` and `numKeep` accept negatives because Ollama gives -1 a meaning
  * (whole context / unlimited), and `numGpu` because -1 is its "decide for me".
  */
+/**
+ * Read the stored PolyKV section.
+ *
+ * Validated rather than copied: `mode` and `on_saturation` are free strings in
+ * storage, and a value the engine would reject must not be handed on looking
+ * configured -- the server answers 400 to `queue`, which never shipped. Zero is
+ * a real value throughout (`prefillMaxSlots: 0` is "off"), so the numbers are
+ * range-checked, never truthiness-checked.
+ */
+function readPolykv(settings: Record<string, unknown>): PolykvConfig | undefined {
+	const polykv = settings.polykv
+	if (!isPlainRecord(polykv)) {
+		return undefined
+	}
+	const result: Record<string, unknown> = {}
+	for (const field of ["enabled", "pinPrefix", "ephemeral", "overcommit"]) {
+		if (typeof polykv[field] === "boolean") {
+			result[field] = polykv[field]
+		}
+	}
+	for (const field of [
+		"targetTpsPerSession",
+		"guaranteeMinSessions",
+		"settleTokens",
+		"settleMaxMs",
+		"prefillMaxSlots",
+		"maxRetryAfterMs",
+	]) {
+		const raw = polykv[field]
+		const parsed = typeof raw === "string" ? Number(raw) : raw
+		if (typeof parsed === "number" && Number.isFinite(parsed) && parsed >= 0) {
+			result[field] = parsed
+		}
+	}
+	const threshold = polykv.compactionPressureThreshold
+	const parsedThreshold = typeof threshold === "string" ? Number(threshold) : threshold
+	if (typeof parsedThreshold === "number" && Number.isFinite(parsedThreshold) && parsedThreshold > 0 && parsedThreshold <= 1) {
+		result.compactionPressureThreshold = parsedThreshold
+	}
+	if (polykv.mode === "advisory" || polykv.mode === "enforced") {
+		result.mode = polykv.mode
+	}
+	if (polykv.onSaturation === "reject" || polykv.onSaturation === "warn") {
+		result.onSaturation = polykv.onSaturation
+	}
+	return Object.keys(result).length > 0 ? (result as PolykvConfig) : undefined
+}
+
 function readSampling(settings: Record<string, unknown>): SamplingConfig | undefined {
 	const sampling = settings.sampling
 	if (!isPlainRecord(sampling)) {
@@ -344,6 +394,7 @@ function readProviderSettings(providerId: ProviderId): ConfigParts {
 			maxToolResultChars: readPositiveInteger(settings.maxToolResultChars),
 			reasoning: readReasoning(settings),
 			sampling: readSampling(settings),
+			polykv: readPolykv(settings),
 			auth: readAuth(settings),
 			extras: isPlainRecord(settings.extras) ? settings.extras : undefined,
 		} satisfies ProviderSettingsLike
@@ -535,6 +586,7 @@ export function buildEffectiveProviderConfig(providerId: ProviderId): EffectiveP
 	assignIfDefined(merged, "reasoning", providerSettings.reasoning)
 	// Same as reasoning: providers.json is the only writer.
 	assignIfDefined(merged, "sampling", providerSettings.sampling)
+	assignIfDefined(merged, "polykv", providerSettings.polykv)
 	assignIfDefined(merged, "auth", stateConfig.auth ?? providerSettings.auth)
 	assignIfDefined(merged, "extras", mergeExtras(providerSettings.extras, stateConfig.extras))
 

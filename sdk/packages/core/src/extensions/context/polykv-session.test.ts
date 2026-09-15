@@ -1,12 +1,13 @@
 import { getPolykvSession, resetPolykvSessions } from "@cline/llms";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+	endAtTokenBoundary,
 	ensurePolykvPool,
 	isPolykvProvider,
 	polykvSaysCompact,
 	readPolykvCapacity,
 	releasePolykvSession,
-	renderPolykvPrefix,
+	renderPolykvPrefixMessages,
 	repointPolykvAfterCompaction,
 } from "./polykv-session";
 
@@ -16,6 +17,7 @@ function engine(
 		tokenize?: number[];
 		pools?: Array<{ pool_id: string; prefix_len: number }>;
 		capacity?: Record<string, unknown>;
+		templated?: string;
 		fail?: string;
 	} = {},
 ) {
@@ -36,6 +38,13 @@ function engine(
 		if (overrides.fail && url.pathname.includes(overrides.fail)) {
 			return new Response("nope", { status: 500 });
 		}
+		if (url.pathname === "/apply-template") {
+			return Response.json({
+				prompt:
+					overrides.templated ??
+					"<|im_start|>system\nYou are Cline.<|im_end|>\n",
+			});
+		}
 		if (url.pathname === "/tokenize") {
 			return Response.json({ tokens: overrides.tokenize ?? [1, 2, 3] });
 		}
@@ -44,8 +53,19 @@ function engine(
 				overrides.capacity ?? { can_admit: true, compaction_pressure: 0.1 },
 			);
 		}
-		if (url.pathname.endsWith("/pin") || init?.method === "DELETE") {
+		// Every action the server actually registers, answered as itself. These
+		// used to fall through to the create branch and hand back a pool, which
+		// would let a client calling a route that does not exist look healthy.
+		if (
+			url.pathname.endsWith("/pin") ||
+			url.pathname.endsWith("/unpin") ||
+			url.pathname.endsWith("/release")
+		) {
 			return new Response(null, { status: 204 });
+		}
+		if (init?.method === "DELETE") {
+			// There is no DELETE route on this server. Say so.
+			return new Response("not found", { status: 404 });
 		}
 		const pool = pools[Math.min(created, pools.length - 1)];
 		created += 1;
@@ -78,26 +98,35 @@ describe("deciding whether there is a pool tree at all", () => {
 });
 
 describe("the shared prefix", () => {
-	// The engine matches a prefix by hashing tokens, so a prefix assembled in a
-	// different order than it is sent matches nothing and the pool buys nothing.
-	it("is the system prompt then the tools, in that order", () => {
-		const prefix = renderPolykvPrefix({
-			systemPrompt: "You are Cline.",
+	// Handed to the server as a chat body, because the order and the framing are
+	// the template's decision, not ours -- which is the whole correction here.
+	it("is the system prompt and the tools, for the template to render", () => {
+		expect(
+			renderPolykvPrefixMessages({
+				systemPrompt: "You are Cline.",
+				tools: [{ name: "editor" }],
+			}),
+		).toEqual({
+			messages: [{ role: "system", content: "You are Cline." }],
 			tools: [{ name: "editor" }],
 		});
-		expect(prefix.indexOf("You are Cline.")).toBeLessThan(
-			prefix.indexOf("editor"),
-		);
 	});
 
-	it("is empty when there is nothing stable to pin", () => {
-		expect(renderPolykvPrefix({})).toBe("");
+	it("is nothing when there is nothing stable to pin", () => {
+		expect(renderPolykvPrefixMessages({})).toBeUndefined();
+	});
+
+	it("ends the prefix at a token boundary", () => {
+		// A trailing space merges with the next word into one token, and the
+		// contiguous-prefix check then 400s the fork.
+		expect(endAtTokenBoundary("system block ")).toBe("system block\n");
+		expect(endAtTokenBoundary("already ended\n")).toBe("already ended\n");
 	});
 });
 
 describe("pinning the session's root pool", () => {
-	it("tokenizes the prefix, creates the pool pinned, and remembers it", async () => {
-		const server = engine({ tokenize: [1, 2, 3, 4] });
+	it("templates the prefix, creates the pool pinned, and remembers it", async () => {
+		const server = engine();
 		const poolId = await ensurePolykvPool({
 			sessionId: "s1",
 			providerConfig: provider(server.fetch),
@@ -110,11 +139,14 @@ describe("pinning the session's root pool", () => {
 			poolId: "pool-root",
 			prefixTokens: 12_859,
 		});
-		expect(server.calls[0].path).toBe("/tokenize");
+		expect(server.calls[0].path).toBe("/apply-template");
 		expect(server.calls[1]).toMatchObject({
 			method: "POST",
 			path: "/polykv/pools",
-			body: { tokens: [1, 2, 3, 4], pin: true },
+			body: {
+				prompt: "<|im_start|>system\nYou are Cline.<|im_end|>\n",
+				pin: true,
+			},
 		});
 	});
 
@@ -222,7 +254,7 @@ describe("what the engine says about its own room", () => {
 
 describe("re-rooting after a compaction", () => {
 	it("forks at the shared prefix, migrates, then releases the old pool", async () => {
-		const server = engine({ tokenize: [9, 9, 9] });
+		const server = engine();
 		const config = provider(server.fetch);
 		await ensurePolykvPool({
 			sessionId: "s1",
@@ -239,16 +271,17 @@ describe("re-rooting after a compaction", () => {
 
 		expect(forked).toBe("pool-fork");
 		// The branch is the prefix the compaction did not touch, which is the
-		// whole saving; the suffix is the rewritten transcript.
-		expect(server.calls[1]).toMatchObject({
+		// whole saving. The child itself comes from the live session, because the
+		// body a fork takes is the FULL child path, not the rewritten tail.
+		expect(server.calls[0]).toMatchObject({
 			path: "/polykv/pools/pool-root/fork",
-			body: { branch_pos: 12_859, tokens: [9, 9, 9] },
+			body: { branch_pos: 12_859, from_session: "s1" },
 		});
 		const paths = server.calls.map((c) => `${c.method} ${c.path}`);
 		expect(paths).toContain("POST /polykv/pools/pool-fork/pin");
-		expect(paths).toContain("DELETE /polykv/pools/pool-root");
+		expect(paths).toContain("POST /polykv/pools/pool-root/release");
 		expect(paths.indexOf("POST /polykv/pools/pool-fork/pin")).toBeLessThan(
-			paths.indexOf("DELETE /polykv/pools/pool-root"),
+			paths.indexOf("POST /polykv/pools/pool-root/release"),
 		);
 	});
 
@@ -280,7 +313,7 @@ describe("re-rooting after a compaction", () => {
 			compactedPrompt: "second",
 		});
 
-		expect(server.calls[1]).toMatchObject({
+		expect(server.calls[0]).toMatchObject({
 			path: "/polykv/pools/pool-a/fork",
 			body: { branch_pos: 12_859 },
 		});
@@ -322,11 +355,13 @@ describe("ending the session", () => {
 
 		await releasePolykvSession({ sessionId: "s1", providerConfig: config });
 
+		// Both are real actions on the server's own table. `pin` with a flag in
+		// the body is not an unpin -- the handler dispatches on the path segment
+		// and never reads the body -- and there is no DELETE route at all.
 		expect(server.calls.map((c) => `${c.method} ${c.path}`)).toEqual([
-			"POST /polykv/pools/pool-root/pin",
-			"DELETE /polykv/pools/pool-root",
+			"POST /polykv/pools/pool-root/unpin",
+			"POST /polykv/pools/pool-root/release",
 		]);
-		expect(server.calls[0].body).toEqual({ pinned: false });
 		expect(getPolykvSession("s1")).toBeUndefined();
 	});
 
@@ -337,5 +372,180 @@ describe("ending the session", () => {
 			providerConfig: provider(server.fetch),
 		});
 		expect(server.calls).toHaveLength(0);
+	});
+});
+
+describe("the prefix goes through the server's template", () => {
+	// The fault this covers: the pool used to be built from the raw system
+	// prompt plus `JSON.stringify(tools)`, while the engine prefills what its
+	// chat template produced. Those are different token sequences, so the pool
+	// was created, pinned, attached -- and shared nothing, on every turn, with
+	// no error anywhere. Only the server knows which template it loaded.
+	it("renders through /apply-template and pins what comes back", async () => {
+		const server = engine({
+			templated: "<|im_start|>system\nYou are Cline.<|im_end|>\n",
+		});
+		await ensurePolykvPool({
+			sessionId: "s1",
+			providerConfig: provider(server.fetch),
+			systemPrompt: "You are Cline.",
+			tools: [{ name: "editor" }],
+		});
+
+		expect(server.calls[0]).toMatchObject({
+			method: "POST",
+			path: "/apply-template",
+		});
+		expect(server.calls[1]).toMatchObject({
+			method: "POST",
+			path: "/polykv/pools",
+			body: {
+				prompt: "<|im_start|>system\nYou are Cline.<|im_end|>\n",
+				pin: true,
+			},
+		});
+	});
+
+	it("sends the tools to the template, not a JSON dump of them", async () => {
+		// A template renders tool schemas its own way -- inside the system block,
+		// as a separate turn, or not at all. Stringifying them here guesses.
+		const server = engine();
+		await ensurePolykvPool({
+			sessionId: "s1",
+			providerConfig: provider(server.fetch),
+			systemPrompt: "You are Cline.",
+			tools: [{ name: "editor" }],
+		});
+
+		expect(server.calls[0].body).toMatchObject({
+			messages: [{ role: "system", content: "You are Cline." }],
+			tools: [{ name: "editor" }],
+		});
+	});
+
+	it("does not send a prompt that ends mid-token", async () => {
+		// A prefix ending in a trailing space merges with the next word into one
+		// token and the contract check 400s the fork. Pools end at a newline.
+		const server = engine({ templated: "<|im_start|>system\nYou are Cline. " });
+		await ensurePolykvPool({
+			sessionId: "s1",
+			providerConfig: provider(server.fetch),
+			systemPrompt: "You are Cline.",
+		});
+
+		const created = server.calls.find((call) => call.path === "/polykv/pools")
+			?.body as { prompt?: string };
+		expect(created.prompt?.endsWith("\n")).toBe(true);
+	});
+});
+
+describe("re-rooting after a compaction", () => {
+	// The engine validates the child's prefix token-exact against the parent
+	// over `[0, branch_pos)` and answers 400 on a mismatch. The old code sent
+	// the compacted text alone -- a suffix -- so every fork was rejected and the
+	// catch reported "staying on pool X", which reads as a server that does not
+	// support it rather than a request that is malformed.
+	it("snapshots the live session rather than re-sending tokens", async () => {
+		const server = engine();
+		await ensurePolykvPool({
+			sessionId: "s1",
+			providerConfig: provider(server.fetch),
+			systemPrompt: "You are Cline.",
+		});
+		server.calls.length = 0;
+
+		const poolId = await repointPolykvAfterCompaction({
+			sessionId: "s1",
+			providerConfig: provider(server.fetch),
+			compactedPrompt: "a summary of what happened",
+		});
+
+		expect(poolId).toBe("pool-fork");
+		const fork = server.calls.find((call) => call.path.endsWith("/fork"));
+		expect(fork).toMatchObject({
+			method: "POST",
+			body: { branch_pos: 12_859, from_session: "s1" },
+		});
+		// Never a bare suffix: that is the 400.
+		expect((fork?.body as { tokens?: unknown }).tokens).toBeUndefined();
+	});
+
+	it("releases the old pool through the actions that exist", async () => {
+		const server = engine();
+		await ensurePolykvPool({
+			sessionId: "s1",
+			providerConfig: provider(server.fetch),
+			systemPrompt: "You are Cline.",
+		});
+		server.calls.length = 0;
+
+		await repointPolykvAfterCompaction({
+			sessionId: "s1",
+			providerConfig: provider(server.fetch),
+			compactedPrompt: "a summary",
+		});
+
+		const paths = server.calls.map((call) => call.path);
+		expect(paths).toContain("/polykv/pools/pool-root/unpin");
+		expect(paths).toContain("/polykv/pools/pool-root/release");
+	});
+});
+
+describe("the PolyKV switch", () => {
+	// Off unless explicitly off: a profile written before the section existed
+	// carries no `enabled`, and reading that as "disabled" would silently take
+	// pooling away from every session that already had it.
+	it("pools when the section says nothing", () => {
+		expect(
+			isPolykvProvider({ providerId: "opencoti", baseUrl: "http://h/v1" }),
+		).toBe(true);
+	});
+
+	it("stands down when the section is switched off", () => {
+		expect(
+			isPolykvProvider({
+				providerId: "opencoti",
+				baseUrl: "http://h/v1",
+				polykv: { enabled: false },
+			}),
+		).toBe(false);
+	});
+
+	it("creates no pool at all when pooling is off", async () => {
+		const server = engine();
+		const poolId = await ensurePolykvPool({
+			sessionId: "s1",
+			providerConfig: {
+				...provider(server.fetch),
+				polykv: { enabled: false },
+			},
+			systemPrompt: "You are Cline.",
+		});
+
+		expect(poolId).toBeUndefined();
+		expect(server.calls).toHaveLength(0);
+	});
+});
+
+describe("when the engine says it is time to compact", () => {
+	it("uses the profile's threshold over the built-in one", () => {
+		// The built-in is 0.85. A profile that says 0.5 wants to compact earlier
+		// than that, and reading the constant regardless would ignore it.
+		expect(
+			polykvSaysCompact({ can_admit: true, compaction_pressure: 0.6 }, 0.5),
+		).toBe(true);
+		expect(
+			polykvSaysCompact({ can_admit: true, compaction_pressure: 0.6 }),
+		).toBe(false);
+	});
+
+	it("still ignores a pool that is still settling", () => {
+		// Pressure measured mid-settle describes a state the pool is leaving.
+		expect(
+			polykvSaysCompact(
+				{ can_admit: true, compaction_pressure: 0.99, settling: true },
+				0.5,
+			),
+		).toBe(false);
 	});
 });

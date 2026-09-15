@@ -707,6 +707,32 @@ function writeProviderSettingsFields(providerId: ProviderId, patch: ProviderConf
 		}
 	}
 
+	// The PolyKV section, written whole for the same reason as sampling: the
+	// panel owns it and sends the complete state it is showing, and a merge
+	// would make turning one knob back off impossible.
+	if ("polykv" in patch) {
+		const polykvPatch = patch.polykv
+		if (polykvPatch === null || polykvPatch === undefined) {
+			delete (next as Record<string, unknown>).polykv
+		} else {
+			const stored: Record<string, unknown> = {}
+			for (const [key, value] of Object.entries(polykvPatch)) {
+				if (value === undefined || value === null) {
+					continue
+				}
+				if (typeof value === "string" && value === "") {
+					continue
+				}
+				stored[key] = value
+			}
+			if (Object.keys(stored).length > 0) {
+				;(next as Record<string, unknown>).polykv = stored
+			} else {
+				delete (next as Record<string, unknown>).polykv
+			}
+		}
+	}
+
 	// Handle reasoning patch separately — maps to ProviderSettings.reasoning
 	if ("reasoning" in patch) {
 		const reasoningPatch = patch.reasoning

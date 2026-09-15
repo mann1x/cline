@@ -13,6 +13,7 @@ export {
 	isBuiltInProviderId,
 	type LazyHandlerFactory,
 	normalizeProviderId,
+	type PolykvOptions,
 	type ProviderCapability,
 	type ProviderConfig,
 	type ProviderId,

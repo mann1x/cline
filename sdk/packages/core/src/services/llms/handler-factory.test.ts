@@ -167,6 +167,63 @@ describe("createAgentModelFromConfig", () => {
 		);
 	});
 
+	// Same lift, same failure shape: the PolyKV section is read off the options
+	// bag by the vendor, so a section that is never lifted into it configures
+	// nothing while sitting in providers.json looking configured.
+	it("lifts the PolyKV section into the gateway options bag", async () => {
+		const { createAgentModelFromConfig } = await import("./handler-factory");
+
+		createAgentModelFromConfig(
+			{
+				providerId: "opencoti",
+				modelId: "lfm2.5-2.6b",
+				tools: [],
+				providerConfig: {
+					providerId: "opencoti",
+					modelId: "lfm2.5-2.6b",
+					polykv: { enabled: true, mode: "enforced", targetTpsPerSession: 12 },
+				},
+			} as never,
+			undefined,
+		);
+
+		expect(gatewayMock.createGateway).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				providerConfigs: [
+					expect.objectContaining({
+						options: expect.objectContaining({
+							polykv: {
+								enabled: true,
+								mode: "enforced",
+								targetTpsPerSession: 12,
+							},
+						}),
+					}),
+				],
+			}),
+		);
+	});
+
+	it("adds no PolyKV key when none is configured", async () => {
+		const { createAgentModelFromConfig } = await import("./handler-factory");
+
+		createAgentModelFromConfig(
+			{
+				providerId: "opencoti",
+				modelId: "lfm2.5-2.6b",
+				tools: [],
+				providerConfig: { providerId: "opencoti", modelId: "lfm2.5-2.6b" },
+			} as never,
+			undefined,
+		);
+
+		const calls = gatewayMock.createGateway.mock.calls as unknown as Array<
+			[{ providerConfigs: Array<{ options?: Record<string, unknown> }> }]
+		>;
+		const call = calls[calls.length - 1][0];
+		expect(call.providerConfigs[0].options ?? {}).not.toHaveProperty("polykv");
+	});
+
 	it("adds no sampler key when none is configured", async () => {
 		const { createAgentModelFromConfig } = await import("./handler-factory");
 

@@ -278,6 +278,9 @@ message ProviderConfigResponse {
   // globally because it is read against a context window, and Plan, Act,
   // Vision and Agents each have one of their own.
   optional int32 max_tool_result_chars = 18;
+  // The PolyKV section, so a settings UI can show the state it is about to
+  // write. Carries no secret, so it is returned unredacted.
+  optional PolykvProviderConfig polykv = 19;
 }
 
 message CommittedModelSelection {
@@ -319,6 +322,32 @@ message ProviderSamplingPatch {
   optional int32 num_gpu = 16;
 }
 
+// opencoti's PolyKV control plane, as a profile configures it. Every field is
+// optional; an absent one means the profile does not mention it, and the
+// engine's own default stands. `on_saturation = "queue"` is deliberately not
+// offered -- it never shipped, and the server answers 400 to the value.
+message PolykvProviderConfig {
+  optional bool enabled = 1;
+  // Keep the shared prefix resident between turns. An unpinned leaf that goes
+  // 60s without a processing attach is swept, and the next turn silently pays
+  // full prefill.
+  optional bool pin_prefix = 2;
+  optional bool ephemeral = 3;
+  // How full the engine must say the pool is before compacting, 0 to 1.
+  optional double compaction_pressure_threshold = 4;
+  // The policy posted to /polykv/pools/{id}/admission.
+  optional double target_tps_per_session = 5;
+  optional string mode = 6;
+  optional string on_saturation = 7;
+  optional int32 guarantee_min_sessions = 8;
+  optional int32 settle_tokens = 9;
+  optional int32 settle_max_ms = 10;
+  optional int32 prefill_max_slots = 11;
+  // How this client behaves against that policy.
+  optional bool overcommit = 12;
+  optional int32 max_retry_after_ms = 13;
+}
+
 message WriteProviderConfigPatch {
   optional string api_key = 1;
   optional string base_url = 2;
@@ -341,6 +370,8 @@ message WriteProviderConfigPatch {
   // Largest tool result sent to the model, in characters; 0 clears the
   // setting, which falls back to the global one.
   optional int32 max_tool_result_chars = 16;
+  // The PolyKV section; an explicitly empty message clears it.
+  optional PolykvProviderConfig polykv = 17;
 }
 
 message WriteProviderConfigRequest {

@@ -37,6 +37,8 @@ import {
 	readDeclaredNumCtx,
 	resolveAgentSlotLimit,
 	resolveDefaultMaxOutputTokens,
+	resolveLlamaCppThinkBudgetTokens,
+	resolveLlamaCppThinkBudgetWindow,
 } from "@cline/llms"
 import { type AgentHooks, buildClineSystemPrompt, isClineProvider, type RenderedPromptTemplate } from "@cline/shared"
 import type { ApiConfiguration } from "@shared/api"
@@ -448,7 +450,52 @@ export function buildOutputBudgetSection(
  * report a budget: no other provider here enforces a separate thinking cap, and
  * an invented figure would be worse than silence.
  */
-export async function resolveOllamaThinkingAllowance(
+/**
+ * Engines that take a per-turn thinking budget, and where the number comes from.
+ *
+ * Ollama resolves the budget itself from an effort level, so it is asked. A
+ * llama.cpp server -- opencoti included -- takes `reasoning_budget_tokens`, an
+ * absolute count, and has no notion of a level and no endpoint that would
+ * answer for one: the number has to be resolved here, from the same table, so
+ * that `high` means the same thing whichever engine answers.
+ */
+function thinkingEngine(providerId: string): "ollama" | "llamacpp" | undefined {
+	const sdkProviderId = toSdkProviderId(providerId)
+	if (sdkProviderId === "ollama") {
+		return "ollama"
+	}
+	return sdkProviderId === "opencoti" || sdkProviderId === "openai-compatible" ? "llamacpp" : undefined
+}
+
+/**
+ * The budget message this session sends, for any provider that has one.
+ *
+ * Only the value Cerebriline itself puts on the wire; a model's own default is
+ * Ollama's to report and is read separately. Advisory throughout -- a condenser
+ * with no message to match measures instead.
+ */
+function readConfiguredThinkBudgetMessage(providerId: string): string | undefined {
+	try {
+		const settings = getProviderSettingsManager(resolveDataDir()).getProviderSettings(providerSettingsProviderId(providerId))
+		return settings?.sampling?.thinkBudgetMessage?.trim() || undefined
+	} catch (error) {
+		Logger.warn("[SessionFactory] Failed to read the configured think budget message:", error)
+		return undefined
+	}
+}
+
+/**
+ * The thinking budget this session will actually send, whoever computes it.
+ *
+ * This used to answer only for Ollama, and the omission was invisible in the
+ * worst way: the fork already sends `reasoning_budget_tokens` to a llama.cpp
+ * server, so the budget went out on the wire while the session knew nothing
+ * about it. The system prompt stated no thinking bound, and the discarded-turn
+ * retrospective had no budget message to recognise a capped think by -- so a
+ * turn that spent its whole allowance reasoning was discarded with its
+ * reasoning unread, which is the one case that machinery exists for.
+ */
+export async function resolveThinkingAllowance(
 	providerId: string,
 	reasoning: SessionReasoningConfig,
 	outputCap: number,
@@ -456,29 +503,46 @@ export async function resolveOllamaThinkingAllowance(
 	baseUrl: string | undefined,
 	modelId: string | undefined,
 ): Promise<{ level: string; budgetTokens: number } | undefined> {
-	if (toSdkProviderId(providerId) !== "ollama" || reasoning.thinking === false || !modelId) {
+	const engine = thinkingEngine(providerId)
+	if (!engine || reasoning.thinking === false || !modelId) {
 		return undefined
 	}
 
 	let numPredict: number | undefined
+	let configuredBudget: string | undefined
 	try {
 		const settings = getProviderSettingsManager(resolveDataDir()).getProviderSettings(providerSettingsProviderId(providerId))
 		numPredict = positiveFiniteNumber(settings?.sampling?.numPredict)
+		configuredBudget = settings?.sampling?.thinkBudget?.trim() || undefined
 	} catch (error) {
 		// Advisory: the session's own cap is the sensible stand-in.
-		Logger.warn("[SessionFactory] Failed to read Ollama sampling settings:", error)
+		Logger.warn("[SessionFactory] Failed to read sampling settings:", error)
 	}
 
 	// The level this session will send. The vendor fills in its default when
 	// nothing set one, so that is the level to ask about — asking about "no
 	// level" would answer for a request this session never makes.
 	const think = reasoning.reasoningEffort ?? OLLAMA_DEFAULT_REASONING_EFFORT
+	// A configured num_predict is the cap the server will apply; the agent's own
+	// per-turn cap only stands in when nothing more specific was set.
+	const effectiveNumPredict = numPredict ?? outputCap
+
+	if (engine === "llamacpp") {
+		// A configured `thinkBudget` may be a bare token count, in which case it
+		// is the answer and no level is involved. Same tri-valued field the
+		// sampler reads, resolved by the same function, so the prompt cannot
+		// state a bound different from the one on the wire.
+		const level = configuredBudget || think
+		const budgetTokens = resolveLlamaCppThinkBudgetTokens(
+			level,
+			resolveLlamaCppThinkBudgetWindow(contextWindow, effectiveNumPredict),
+		)
+		return budgetTokens === undefined ? undefined : { level, budgetTokens }
+	}
+
 	return resolveOllamaThinkBudget(baseUrl, modelId, {
 		think,
-		// A configured num_predict is the cap the server will apply; the
-		// agent's own per-turn cap only stands in when nothing more specific
-		// was set.
-		numPredict: numPredict ?? outputCap,
+		numPredict: effectiveNumPredict,
 		numCtx: contextWindow,
 	})
 }
@@ -1550,7 +1614,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		// same defect as the context window and fails the same way.
 		const outputCap = sessionOutputCap
 		const contextWindow = sessionContextWindow
-		const thinking = await resolveOllamaThinkingAllowance(
+		const thinking = await resolveThinkingAllowance(
 			providerId,
 			reasoningConfig,
 			outputCap,
@@ -1560,7 +1624,13 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		)
 		systemPrompt = `${systemPrompt}${buildOutputBudgetSection(outputCap, contextWindow, thinking)}`
 		thinkingBudgetTokens = thinking?.budgetTokens
-		const configuredBudgetMessage = ollamaProviderConfig?.sampling?.thinkBudgetMessage?.trim()
+		// Read from the provider's own settings rather than off the Ollama-only
+		// config object: `sampling.thinkBudgetMessage` is a generic field, it is
+		// what the llama.cpp sampler sends as `reasoning_budget_message`, and
+		// reading it only for Ollama left the retrospective on every other engine
+		// with nothing to match a capped think against.
+		const configuredBudgetMessage =
+			ollamaProviderConfig?.sampling?.thinkBudgetMessage?.trim() || readConfiguredThinkBudgetMessage(providerId)
 		if (configuredBudgetMessage) {
 			thinkingBudgetMessage = configuredBudgetMessage
 		} else if (providerId === "ollama" && modelId) {

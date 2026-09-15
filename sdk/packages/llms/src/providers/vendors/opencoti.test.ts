@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
 	createOpencotiFetch,
 	normalizeOpencotiBaseUrl,
+	type OpencotiResponseFacts,
 	readOpencotiRequestOptions,
 } from "./opencoti";
-import { PolykvSaturatedError, polykvRoot } from "./polykv";
+import { polykvRoot } from "./polykv";
 
 function ok(body: unknown, headers: Record<string, string> = {}): Response {
 	return new Response(JSON.stringify(body), { status: 200, headers });
@@ -45,7 +46,7 @@ describe("the opencoti request body", () => {
 
 	// An unpooled request is slower; a mangled one is broken.
 	it("leaves a body it cannot parse exactly as it was", async () => {
-		let sent: BodyInit | null | undefined;
+		let sent: RequestInit["body"];
 		const fetchImpl = createOpencotiFetch({
 			fetch: (async (_input: unknown, init?: RequestInit) => {
 				sent = init?.body;
@@ -82,55 +83,60 @@ describe("the opencoti request body", () => {
 });
 
 describe("when the engine declines the request", () => {
-	// Saturation used to present as a stall that read like a network fault. It
-	// is neither: the server said no, and said for how long.
-	it("raises a saturation error carrying the retry delay", async () => {
+	// These used to assert a throw from inside the fetch wrapper. That is what
+	// kept the refusal away from the error classifier, so a server saying "come
+	// back in 12 seconds" read as a transport fault and the turn was abandoned.
+	// The refusal is now a response; `error-classification.ts` names it
+	// `rate_limited`, and the retry belongs to the middleware that can wait.
+	it("hands the refusal back with its retry interval intact", async () => {
 		const fetchImpl = createOpencotiFetch({
 			fetch: (async () =>
 				new Response("", {
 					status: 429,
-					headers: { "retry-after": "12", "x-polykv-reason": "kv_exhausted" },
+					headers: { "retry-after": "12" },
 				})) as unknown as typeof fetch,
 		});
 
-		const error = await fetchImpl("http://localhost:8080/v1/chat/completions", {
-			method: "POST",
-			body: "{}",
-		}).catch((caught: unknown) => caught);
+		const response = await fetchImpl(
+			"http://localhost:8080/v1/chat/completions",
+			{ method: "POST", body: "{}" },
+		);
 
-		expect(error).toBeInstanceOf(PolykvSaturatedError);
-		expect((error as PolykvSaturatedError).retryAfterMs).toBe(12_000);
-		expect((error as PolykvSaturatedError).reason).toBe("kv_exhausted");
+		expect(response.status).toBe(429);
+		expect(response.headers.get("retry-after")).toBe("12");
 	});
 
-	it("treats 503 the same way, with no delay when none was given", async () => {
+	it("does not swallow a 503 either", async () => {
 		const fetchImpl = createOpencotiFetch({
 			fetch: (async () =>
 				new Response("", { status: 503 })) as unknown as typeof fetch,
 		});
 
-		const error = await fetchImpl("http://localhost:8080/v1/chat/completions", {
-			method: "POST",
-			body: "{}",
-		}).catch((caught: unknown) => caught);
+		const response = await fetchImpl(
+			"http://localhost:8080/v1/chat/completions",
+			{ method: "POST", body: "{}" },
+		);
 
-		expect(error).toBeInstanceOf(PolykvSaturatedError);
-		expect((error as PolykvSaturatedError).retryAfterMs).toBeUndefined();
+		expect(response.status).toBe(503);
 	});
 });
 
 describe("what the engine reports back", () => {
-	it("reads the pool it served from and the prefix it did not prefill", async () => {
+	// This used to assert `x-pool-id`, `x-cached-prefix-tokens` and
+	// `x-session-tps`. The server sets none of them -- they were specified and
+	// then deferred, since a header must go out before the body while the slot,
+	// and so the tps, is assigned only after the task is queued. The test passed
+	// because it supplied the headers itself; against a real server the callback
+	// it exercises had never fired.
+	it("reads the two headers the server actually sets", async () => {
 		const facts: Array<Record<string, unknown>> = [];
 		const fetchImpl = createOpencotiFetch({
 			fetch: (async () =>
 				ok(
 					{},
 					{
-						"x-pool-id": "pool-7",
-						"x-cached-prefix-tokens": "12859",
-						"x-session-tps": "41.5",
-						"x-sessions-remaining": "0",
+						"x-sessions-remaining": "3",
+						"x-polykv-settle-waived": "4200",
 					},
 				)) as unknown as typeof fetch,
 			onFacts: (fact) => facts.push(fact as unknown as Record<string, unknown>),
@@ -141,17 +147,10 @@ describe("what the engine reports back", () => {
 			body: "{}",
 		});
 
-		expect(facts).toEqual([
-			{
-				poolId: "pool-7",
-				cachedTokens: 12_859,
-				sessionTps: 41.5,
-				backpressure: true,
-			},
-		]);
+		expect(facts).toEqual([{ sessionsRemaining: 3, settleWaivedMs: 4200 }]);
 	});
 
-	it("says nothing when the response carries no pool headers", async () => {
+	it("says nothing when the response carries neither", async () => {
 		const facts: unknown[] = [];
 		const fetchImpl = createOpencotiFetch({
 			fetch: (async () => ok({})) as unknown as typeof fetch,
@@ -206,5 +205,87 @@ describe("reading the per-request pool options", () => {
 
 	it("is empty when the config holds none", () => {
 		expect(readOpencotiRequestOptions({} as never)).toEqual({});
+	});
+});
+
+describe("what the engine actually says back", () => {
+	// The gate is `enforced` by default, so a refusal is routine. Thrown from
+	// inside the fetch it never reaches the classifier, which is the layer that
+	// knows a 429 is worth waiting out -- so it surfaced as a transport failure
+	// and the turn died. Handing the response back lets it be classified.
+	it("returns the refusal rather than throwing past the classifier", async () => {
+		const fetchImpl = createOpencotiFetch({
+			fetch: (async () =>
+				new Response(
+					JSON.stringify({
+						error: {
+							code: 503,
+							type: "unavailable_error",
+							message: "saturated",
+						},
+					}),
+					{ status: 429, headers: { "retry-after": "2" } },
+				)) as unknown as typeof fetch,
+		});
+
+		const response = await fetchImpl(
+			"http://localhost:8080/v1/chat/completions",
+			{
+				method: "POST",
+				body: JSON.stringify({ model: "m", messages: [] }),
+			},
+		);
+
+		expect(response.status).toBe(429);
+		expect(response.headers.get("retry-after")).toBe("2");
+	});
+
+	// `X-Sessions-Remaining` is omitted when headroom is not computable, and on
+	// c7 it can also be a wrong `0`. Reading absence -- or that `0` -- as "no
+	// room left" invents backpressure the server never reported.
+	it("does not invent backpressure from a header that is not there", async () => {
+		let facts: OpencotiResponseFacts | undefined;
+		const fetchImpl = createOpencotiFetch({
+			fetch: (async () =>
+				new Response(JSON.stringify({ choices: [] }), {
+					status: 200,
+				})) as unknown as typeof fetch,
+			onFacts: (next) => {
+				facts = next;
+			},
+		});
+
+		await fetchImpl("http://localhost:8080/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({ model: "m", messages: [] }),
+		});
+
+		expect(facts?.sessionsRemaining).toBeUndefined();
+	});
+
+	// The one admit that is not evidence of room: the hold timed out and the
+	// request went through on the clock, not on a measurement.
+	it("reports a settling hold that was waived on a timer", async () => {
+		let facts: OpencotiResponseFacts | undefined;
+		const fetchImpl = createOpencotiFetch({
+			fetch: (async () =>
+				new Response(JSON.stringify({ choices: [] }), {
+					status: 200,
+					headers: {
+						"x-polykv-settle-waived": "5000",
+						"x-sessions-remaining": "3",
+					},
+				})) as unknown as typeof fetch,
+			onFacts: (next) => {
+				facts = next;
+			},
+		});
+
+		await fetchImpl("http://localhost:8080/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({ model: "m", messages: [] }),
+		});
+
+		expect(facts).toMatchObject({ settleWaivedMs: 5000, sessionsRemaining: 3 });
 	});
 });

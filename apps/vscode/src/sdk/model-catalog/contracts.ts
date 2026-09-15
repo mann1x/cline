@@ -118,6 +118,31 @@ export interface ProviderSamplingSettings {
 	readonly thinkBudgetMessage?: string
 }
 
+/**
+ * opencoti's PolyKV control plane, as a profile configures it.
+ *
+ * One section rather than loose fields because it is one arrangement with one
+ * engine: the pool tree, the admission policy the engine enforces on this
+ * profile's behalf, and how this client behaves when the engine refuses. All of
+ * it is inert unless `enabled`, and inert regardless on a server launched
+ * without `--polykv-max-pools`.
+ */
+export interface PolykvSettings {
+	readonly enabled?: boolean
+	readonly pinPrefix?: boolean
+	readonly ephemeral?: boolean
+	readonly compactionPressureThreshold?: number
+	readonly targetTpsPerSession?: number
+	readonly mode?: "advisory" | "enforced"
+	readonly onSaturation?: "reject" | "warn"
+	readonly guaranteeMinSessions?: number
+	readonly settleTokens?: number
+	readonly settleMaxMs?: number
+	readonly prefillMaxSlots?: number
+	readonly overcommit?: boolean
+	readonly maxRetryAfterMs?: number
+}
+
 export interface EffectiveProviderConfig {
 	readonly providerId: ProviderId
 	readonly apiKey?: string
@@ -172,6 +197,11 @@ export interface EffectiveProviderConfig {
 	 */
 	readonly sampling?: ProviderSamplingSettings
 	/**
+	 * The PolyKV section (providers.json `polykv`). Read as stored, so a
+	 * settings panel shows what it is about to write.
+	 */
+	readonly polykv?: PolykvSettings
+	/**
 	 * OAuth-style auth bundle (e.g. cline provider's WorkOS token).
 	 * Compatible with `apiKey`; some providers populate both.
 	 */
@@ -223,6 +253,7 @@ export interface ProviderConfigPatch {
 	} | null
 	readonly reasoning?: ProviderReasoningPatch | null
 	readonly sampling?: ProviderSamplingSettings | null
+	readonly polykv?: PolykvSettings | null
 	readonly extras?: Readonly<Record<string, unknown>> | null
 }
 

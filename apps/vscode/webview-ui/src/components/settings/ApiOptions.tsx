@@ -10,6 +10,7 @@ import { useExtensionState } from "@/context/ExtensionStateContext"
 import { useProviderListings } from "@/hooks/useProviderListings"
 import { ClinePassHint } from "./ClinePassHint"
 import ParallelSessionsField, { PARALLEL_SESSIONS_DESCRIPTION } from "./common/ParallelSessionsField"
+import { PolykvSection } from "./common/PolykvSection"
 import { OPENROUTER_MODEL_PICKER_Z_INDEX } from "./OpenRouterModelPicker"
 import { AIhubmixProvider } from "./providers/AihubmixProvider"
 import { AnthropicProvider } from "./providers/AnthropicProvider"
@@ -483,6 +484,15 @@ const ApiOptions = ({
 					providerId={selectedProvider}
 					showModelOptions={showModelOptions}
 				/>
+			)}
+
+			{/* opencoti's control plane, offered where opencoti is configured.
+			    Rendered beside the OpenAI-compatible form rather than inside a
+			    panel of its own: the chat half of opencoti IS the compatible
+			    form, and duplicating it to bolt one section on would give two
+			    copies to keep in step. */}
+			{apiConfiguration && showModelOptions && selectedProvider === "opencoti" && (
+				<PolykvSection providerId={selectedProvider} />
 			)}
 
 			{/* Every provider, not a chosen few: the number describes an

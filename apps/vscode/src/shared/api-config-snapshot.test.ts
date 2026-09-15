@@ -230,6 +230,8 @@ describe("the provider config a profile carries", () => {
 			// An empty message is the sampler's clear, so a profile that carries
 			// no sampler resets it instead of inheriting the last one's.
 			sampling: {},
+			// And the same for the PolyKV section.
+			polykv: {},
 		})
 	})
 
@@ -239,6 +241,7 @@ describe("the provider config a profile carries", () => {
 			maxToolResultChars: 32000,
 			parallelSessions: 2,
 			sampling: {},
+			polykv: {},
 		})
 	})
 
