@@ -1,0 +1,182 @@
+# Build the fork's .vsix, exactly once, for every workflow that needs one.
+#
+# This started life inline in fork-release.yml. It is a composite action now
+# because a second caller exists -- the manual Open VSX publish -- and a .vsix
+# that is built two slightly different ways is a .vsix whose contents depend on
+# which button was pressed. The naming assertions in particular are the reason
+# this file exists at all: five releases went out under upstream's `claude-dev`
+# identity because the artefact name was left to `vsce`'s default.
+#
+# The caller checks out the ref it wants first; this action never checks out.
+
+name: Build the fork VSIX
+description: Install, build the SDK, bake the changelog, and package the extension under the fork's name.
+
+inputs:
+    tag:
+        description: "Tag this build claims to be (vX.Y.Z). The package version must equal it."
+        required: true
+    artifact-prefix:
+        description: "Expected package.json name and .vsix basename."
+        required: false
+        default: cerebriline
+    github-token:
+        description: "Token for reading past releases when rebuilding the changelog."
+        required: true
+    notes-path:
+        description: "Where to write this release's notes, for the caller to reuse as a release body."
+        required: false
+        default: ""
+
+outputs:
+    version:
+        description: "Version resolved from apps/vscode/package.json."
+        value: ${{ steps.version.outputs.version }}
+    artifact:
+        description: "Basename of the .vsix, which lives in apps/vscode/."
+        value: ${{ steps.version.outputs.artifact }}
+    artifact-path:
+        description: "Path to the .vsix from the repository root."
+        value: apps/vscode/${{ steps.version.outputs.artifact }}
+    notes-path:
+        description: "File the release notes were written to, empty when none was requested."
+        value: ${{ steps.notes.outputs.path }}
+
+runs:
+    using: composite
+    steps:
+        - name: Setup Bun
+          uses: oven-sh/setup-bun@v2
+          with:
+              bun-version: 1.3.14
+
+        # Node 22 specifically: newer LTS (Node 24 / npm 11) makes vsce's
+        # `npm list` detection fail with ELSPROBLEMS during packaging.
+        - name: Setup Node.js
+          uses: actions/setup-node@v4
+          with:
+              node-version: 22
+
+        - name: Install workspace dependencies
+          shell: bash
+          run: bun install --frozen-lockfile
+
+        # @cline/* are workspace symlinks to source packages. Without this the
+        # build is green while the .vsix carries a stale dist/ -- the extension
+        # bundles core FROM dist, not from source.
+        - name: Build SDK packages
+          shell: bash
+          run: bun run build:sdk
+
+        - name: Assert better-sqlite3 native binary present
+          shell: bash
+          working-directory: apps/vscode
+          run: |
+              NODE_FILE="node_modules/better-sqlite3/build/Release/better_sqlite3.node"
+              if [ ! -f "$NODE_FILE" ]; then
+                echo "ERROR: better-sqlite3 native binary missing at apps/vscode/$NODE_FILE"
+                echo "(bun trustedDependencies postinstall likely did not run)"
+                exit 1
+              fi
+              echo "Found better-sqlite3 native binary: $NODE_FILE"
+
+        - name: Install vsce
+          shell: bash
+          run: npm install -g @vscode/vsce
+
+        - name: Resolve version and assert it matches the tag
+          id: version
+          shell: bash
+          working-directory: apps/vscode
+          env:
+              TAG: ${{ inputs.tag }}
+              ARTIFACT_PREFIX: ${{ inputs.artifact-prefix }}
+          run: |
+              VERSION=$(node -p "require('./package.json').version")
+              if [[ "$TAG" != "v$VERSION" ]]; then
+                echo "Error: tag '$TAG' does not match apps/vscode/package.json version 'v$VERSION'"
+                echo "Bump the version and commit it before tagging."
+                exit 1
+              fi
+              NAME=$(node -p "require('./package.json').name")
+              if [[ "$NAME" != "$ARTIFACT_PREFIX" ]]; then
+                echo "Error: package.json name '$NAME' does not match artifact-prefix '$ARTIFACT_PREFIX'."
+                echo "The extension's identity moved without the release name following it."
+                exit 1
+              fi
+              echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+              echo "artifact=${ARTIFACT_PREFIX}-${VERSION}.vsix" >> "$GITHUB_OUTPUT"
+              echo "Tag and package version agree: $TAG"
+
+        # The listing's Changelog tab renders CHANGELOG.md from inside the
+        # .vsix, and the .vsix is packaged below -- possibly before the GitHub
+        # release for this tag exists. So this release's notes are resolved
+        # locally (release-notes/<version>.md, else the annotated tag message),
+        # baked into the changelog, and emitted for the caller to reuse as the
+        # release body. One text feeds both. No notes means no build: the script
+        # exits non-zero rather than shipping a version with a blank entry.
+        - name: Resolve release notes and rebuild the changelog
+          id: notes
+          shell: bash
+          env:
+              GH_TOKEN: ${{ inputs.github-token }}
+              NOTES_PATH: ${{ inputs.notes-path }}
+              VERSION: ${{ steps.version.outputs.version }}
+              REPO: ${{ github.repository }}
+          run: |
+              ARGS=(--repo "$REPO" --pending-version "$VERSION")
+              if [ -n "$NOTES_PATH" ]; then
+                ARGS+=(--emit-notes "$NOTES_PATH")
+              fi
+              node apps/vscode/scripts/generate-fork-changelog.mjs "${ARGS[@]}"
+              echo "path=$NOTES_PATH" >> "$GITHUB_OUTPUT"
+
+        # `package` is build:sdk && check-types && build:webview && lint &&
+        # esbuild. It builds only -- it does not produce a .vsix.
+        - name: Build the extension
+          shell: bash
+          working-directory: apps/vscode
+          run: bun run package
+
+        # --no-dependencies: the extension is fully esbuild-bundled, and under
+        # the bun workspace the @cline/* deps are symlinks pointing outside the
+        # package, so without this vsce walks them and pulls the whole monorepo
+        # into the .vsix.
+        - name: Package the VSIX under the fork's name
+          shell: bash
+          working-directory: apps/vscode
+          env:
+              ARTIFACT: ${{ steps.version.outputs.artifact }}
+          run: |
+              # vsce reads README.md from the extension root and has no flag
+              # to point it elsewhere. apps/vscode/README.md is an empty
+              # upstream placeholder, so without this swap the Overview tab
+              # ships blank -- which is what every release up to 4.100.116 did.
+              node scripts/marketplace-readme.mjs swap-in
+              trap 'node scripts/marketplace-readme.mjs restore' EXIT
+
+              vsce package --no-dependencies --allow-package-secrets sendgrid --out "$ARTIFACT"
+
+        - name: Assert the artefact exists under exactly the expected name
+          shell: bash
+          working-directory: apps/vscode
+          env:
+              ARTIFACT: ${{ steps.version.outputs.artifact }}
+          run: |
+              if [ ! -f "$ARTIFACT" ]; then
+                echo "ERROR: expected artefact '$ARTIFACT' was not produced."
+                echo "What is actually here:"
+                ls -l ./*.vsix 2>/dev/null || echo "  (no .vsix at all)"
+                exit 1
+              fi
+              # A stray upstream-named build alongside ours means --out was
+              # ignored or a previous step produced one; refuse rather than
+              # let a glob pick the wrong file later.
+              STRAYS=$(ls ./*.vsix | grep -v -F "$ARTIFACT" || true)
+              if [ -n "$STRAYS" ]; then
+                echo "ERROR: unexpected extra .vsix files present:"
+                echo "$STRAYS"
+                exit 1
+              fi
+              echo "Artefact: $ARTIFACT ($(stat -c%s "$ARTIFACT") bytes)"
+              sha256sum "$ARTIFACT"

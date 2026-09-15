@@ -1,0 +1,108 @@
+# Publish a .vsix to Open VSX by hand, without cutting a GitHub release.
+#
+# fork-release.yml already publishes to Open VSX when it creates a release, but
+# that step is `continue-on-error` on purpose: a gallery outage must not lose a
+# tag that is already pushed. So a release can exist with nothing published, and
+# there was no way back except re-running the whole release. This is that way
+# back. It is also what to use when the listing text changed and the artefact
+# did not need a new release for any other reason.
+#
+# One thing it cannot do, whatever the name of the button suggests: Open VSX has
+# no overwrite. A version is published once, and publishing that same version
+# again is rejected -- the request does not replace the listing, it fails. The
+# Overview and Changelog tabs render the README and CHANGELOG baked *into the
+# .vsix*, so refreshing what people read there means shipping a new version
+# number. Bump apps/vscode/package.json, tag it, then point this at that tag.
+
+name: Publish VSIX to Open VSX
+
+on:
+    workflow_dispatch:
+        inputs:
+            tag:
+                description: "Existing tag to build and publish (e.g. v4.100.118)"
+                required: true
+                type: string
+            dry_run:
+                description: "Build and upload the .vsix as a run artefact, but do not publish"
+                required: false
+                type: boolean
+                default: false
+
+permissions:
+    contents: read
+
+jobs:
+    publish:
+        name: Build and publish to Open VSX
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Validate the tag
+              id: tag
+              run: |
+                  TAG="${{ github.event.inputs.tag }}"
+                  if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$ ]]; then
+                    echo "Error: tag '$TAG' must match vX.Y.Z (optionally with -suffix or .suffix)"
+                    exit 1
+                  fi
+                  echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+            - uses: actions/checkout@v4
+              with:
+                  ref: refs/tags/${{ steps.tag.outputs.tag }}
+                  fetch-depth: 0
+                  lfs: true
+
+            - name: Build the VSIX
+              id: build
+              uses: ./.github/actions/build-vsix
+              with:
+                  tag: ${{ steps.tag.outputs.tag }}
+                  github-token: ${{ secrets.GITHUB_TOKEN }}
+
+            # Kept whatever happens next: on a dry run it is the whole point, and
+            # on a failed publish it is the artefact you would otherwise rebuild
+            # to inspect.
+            - name: Upload the VSIX
+              uses: actions/upload-artifact@v4
+              with:
+                  name: ${{ steps.build.outputs.artifact }}
+                  path: ${{ steps.build.outputs.artifact-path }}
+                  if-no-files-found: error
+
+            - name: Publish to Open VSX
+              if: ${{ github.event.inputs.dry_run != 'true' }}
+              env:
+                  OVSX_PAT: ${{ secrets.OVSX_PAT }}
+                  ARTIFACT_PATH: ${{ steps.build.outputs.artifact-path }}
+                  VERSION: ${{ steps.build.outputs.version }}
+              run: |
+                  # Guarded in the shell, not in `if:`. A step's own `env` is not
+                  # in scope for its `if` expression, so `if: env.OVSX_PAT != ''`
+                  # is always false and the step would silently never run. Here,
+                  # unlike in the release, a missing token is a failure:
+                  # publishing is the only thing this workflow was asked to do.
+                  if [ -z "$OVSX_PAT" ]; then
+                    echo "ERROR: OVSX_PAT is not configured, so there is nothing this run can publish."
+                    exit 1
+                  fi
+                  # The `mann1x` namespace was created on 2026-09-14 and the
+                  # token owns it. If it ever has to be recreated:
+                  #   OVSX_PAT=<token> npx ovsx create-namespace mann1x
+                  if ! npx --yes ovsx publish "$ARTIFACT_PATH" -p "$OVSX_PAT"; then
+                    echo
+                    echo "Publish failed. If it says this version already exists, that is Open VSX"
+                    echo "refusing to overwrite $VERSION -- it has no overwrite. Bump"
+                    echo "apps/vscode/package.json, tag it, and run this again on the new tag."
+                    exit 1
+                  fi
+
+            - name: Say what happened
+              run: |
+                  if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+                    echo "Dry run: built ${{ steps.build.outputs.artifact }} and published nothing."
+                  else
+                    echo "Published ${{ steps.build.outputs.artifact }} to Open VSX."
+                    echo "https://open-vsx.org/extension/mann1x/cerebriline"
+                  fi
