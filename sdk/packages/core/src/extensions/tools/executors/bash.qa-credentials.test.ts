@@ -5,6 +5,19 @@ import { createShellExecutor } from "./bash";
 const CONTEXT = {} as AgentToolContext;
 
 /**
+ * How this platform's shell spells "the value of this variable".
+ *
+ * The executor runs PowerShell on Windows, where `$CLINE_TEST_SECRET` is an
+ * undefined *PowerShell* variable rather than an environment one: the command
+ * succeeds, prints nothing, and the test reads that as the secret having been
+ * withheld. `env` has no Windows spelling at all, so the command that lists the
+ * whole environment is written per platform too.
+ */
+const isWindows = process.platform === "win32";
+const expand = (name: string) => (isWindows ? `$env:${name}` : `$${name}`);
+const LIST_ENVIRONMENT = isWindows ? "Get-ChildItem Env:" : "env";
+
+/**
  * Against a real child process, because the claim is about what a spawned
  * program can see. A mock can only confirm that an object was passed along.
  */
@@ -15,7 +28,7 @@ describe("what a spawned command can actually read", () => {
 		process.env.CLINE_TEST_SECRET = "inherited-value";
 		try {
 			const output = await shell(
-				"echo $CLINE_TEST_SECRET",
+				`echo "${expand("CLINE_TEST_SECRET")}"`,
 				process.cwd(),
 				CONTEXT,
 			);
@@ -32,7 +45,7 @@ describe("what a spawned command can actually read", () => {
 		process.env.CLINE_TEST_SECRET = "inherited-value";
 		try {
 			const output = await shell(
-				"echo [$CLINE_TEST_SECRET]",
+				`echo "[${expand("CLINE_TEST_SECRET")}]"`,
 				process.cwd(),
 				CONTEXT,
 				{
@@ -52,7 +65,7 @@ describe("what a spawned command can actually read", () => {
 		process.env.CLINE_TEST_SECRET = "inherited-value";
 		try {
 			const output = await shell(
-				"echo $CLINE_TEST_SECRET",
+				`echo "${expand("CLINE_TEST_SECRET")}"`,
 				process.cwd(),
 				CONTEXT,
 				{
@@ -72,7 +85,7 @@ describe("what a spawned command can actually read", () => {
 	it("does not list a withheld variable in the child's environment at all", async () => {
 		process.env.CLINE_TEST_SECRET = "inherited-value";
 		try {
-			const output = await shell("env", process.cwd(), CONTEXT, {
+			const output = await shell(LIST_ENVIRONMENT, process.cwd(), CONTEXT, {
 				withhold: ["CLINE_TEST_SECRET"],
 			});
 

@@ -1,3 +1,4 @@
+import { join, resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	type CodeIntelLocation,
@@ -7,7 +8,18 @@ import {
 	parseAskLspRequest,
 } from "./ask-lsp";
 
-const CWD = "/repo";
+/**
+ * The workspace, and the two ways a path appears in these tests.
+ *
+ * `at()` builds the absolute paths the provider hands back; `shown()` builds
+ * the relative path the tool prints, which carries the platform's separator.
+ * A "src/app.ts" literal in an expectation is a claim that the runner is
+ * POSIX: on Windows the tool prints `src\\app.ts` and the provider is called
+ * with `D:\\repo\\src\\app.ts`, and seven tests fail on the slash alone.
+ */
+const CWD = resolve("/repo");
+const at = (relativePath: string) => join(CWD, relativePath);
+const shown = (relativePath: string) => join(relativePath);
 
 function location(
 	filePath: string,
@@ -31,7 +43,7 @@ function stubProvider(
 	overrides: Partial<CodeIntelProvider> = {},
 ): CodeIntelProvider {
 	return {
-		findSymbolPosition: async () => location("/repo/src/app.ts", 10, 6),
+		findSymbolPosition: async () => location(at("src/app.ts"), 10, 6),
 		definitions: async () => [],
 		typeDefinitions: async () => [],
 		implementations: async () => [],
@@ -115,10 +127,10 @@ describe("parseAskLspRequest", () => {
 describe("ask_lsp", () => {
 	it("finds a symbol's position from its name, which is all a model has", async () => {
 		const findSymbolPosition = vi.fn(async () =>
-			location("/repo/src/app.ts", 10, 6),
+			location(at("src/app.ts"), 10, 6),
 		);
 		const definitions = vi.fn(async () => [
-			location("/repo/src/model.ts", 3, 13),
+			location(at("src/model.ts"), 3, 13),
 		]);
 
 		await run(stubProvider({ findSymbolPosition, definitions }), {
@@ -127,12 +139,9 @@ describe("ask_lsp", () => {
 			symbol: "Widget",
 		});
 
-		expect(findSymbolPosition).toHaveBeenCalledWith(
-			"/repo/src/app.ts",
-			"Widget",
-		);
+		expect(findSymbolPosition).toHaveBeenCalledWith(at("src/app.ts"), "Widget");
 		expect(definitions).toHaveBeenCalledWith({
-			filePath: "/repo/src/app.ts",
+			filePath: at("src/app.ts"),
 			line: 10,
 			character: 6,
 		});
@@ -151,7 +160,7 @@ describe("ask_lsp", () => {
 
 		expect(findSymbolPosition).not.toHaveBeenCalled();
 		expect(definitions).toHaveBeenCalledWith({
-			filePath: "/repo/src/app.ts",
+			filePath: at("src/app.ts"),
 			line: 40,
 			character: 8,
 		});
@@ -160,14 +169,14 @@ describe("ask_lsp", () => {
 	it("renders a result as file:line:column with the source line", async () => {
 		const output = await run(
 			stubProvider({
-				definitions: async () => [location("/repo/src/model.ts", 3, 13)],
+				definitions: async () => [location(at("src/model.ts"), 3, 13)],
 				readLine: async () => "  export class Widget {",
 			}),
 			{ operation: "definition", path: "src/app.ts", symbol: "Widget" },
 		);
 
 		// Relative, so it is short, and positions are 1-based to match the editor.
-		expect(output).toBe("src/model.ts:4:14  export class Widget {");
+		expect(output).toBe(`${shown("src/model.ts")}:4:14  export class Widget {`);
 	});
 
 	it("keeps an absolute path when the result is outside the workspace", async () => {
@@ -204,7 +213,7 @@ describe("ask_lsp", () => {
 
 	it("caps a long answer and says how much it left out", async () => {
 		const many = Array.from({ length: 47 }, (_, index) =>
-			location("/repo/src/app.ts", index),
+			location(at("src/app.ts"), index),
 		);
 
 		const output = await run(stubProvider({ references: async () => many }), {
@@ -220,21 +229,21 @@ describe("ask_lsp", () => {
 		const output = await run(
 			stubProvider({
 				documentSymbols: async () => [
-					symbol("Widget", "class", "/repo/src/app.ts", 9),
-					symbol("render", "method", "/repo/src/app.ts", 14, "Widget"),
+					symbol("Widget", "class", at("src/app.ts"), 9),
+					symbol("render", "method", at("src/app.ts"), 14, "Widget"),
 				],
 			}),
 			{ operation: "document_symbols", path: "src/app.ts" },
 		);
 
 		expect(output).toBe(
-			"class Widget — src/app.ts:10\nmethod Widget.render — src/app.ts:15",
+			`class Widget — ${shown("src/app.ts")}:10\nmethod Widget.render — ${shown("src/app.ts")}:15`,
 		);
 	});
 
 	it("searches the whole workspace when the file is unknown", async () => {
 		const workspaceSymbols = vi.fn(async () => [
-			symbol("Widget", "class", "/repo/src/model.ts", 3),
+			symbol("Widget", "class", at("src/model.ts"), 3),
 		]);
 
 		const output = await run(stubProvider({ workspaceSymbols }), {
@@ -243,7 +252,7 @@ describe("ask_lsp", () => {
 		});
 
 		expect(workspaceSymbols).toHaveBeenCalledWith("Widget");
-		expect(output).toContain("class Widget — src/model.ts:4");
+		expect(output).toContain(`class Widget — ${shown("src/model.ts")}:4`);
 	});
 
 	it("reports the hover text the IDE would show", async () => {
@@ -273,7 +282,7 @@ describe("ask_lsp", () => {
 		const output = await run(
 			stubProvider({
 				callers: async () => [
-					symbol("main", "function", "/repo/src/index.ts", 20),
+					symbol("main", "function", at("src/index.ts"), 20),
 				],
 			}),
 			{
@@ -283,7 +292,7 @@ describe("ask_lsp", () => {
 			},
 		);
 
-		expect(output).toContain("function main — src/index.ts:21");
+		expect(output).toContain(`function main — ${shown("src/index.ts")}:21`);
 	});
 
 	it("reports a failing language server instead of throwing at the model", async () => {
@@ -335,7 +344,7 @@ describe("a file that does not parse", () => {
 	it("says so in front of the answer, not instead of it", async () => {
 		const provider = stubProvider({
 			readFile: async () => broken,
-			definitions: async () => [location("/repo/src/app.js", 4, 2)],
+			definitions: async () => [location(at("src/app.js"), 4, 2)],
 			readLine: async () => "const run = () => {}",
 		});
 
@@ -348,14 +357,14 @@ describe("a file that does not parse", () => {
 		expect(output).toContain("does not parse");
 		expect(output).toContain("check_file");
 		// The answer still arrives; the warning qualifies it.
-		expect(output).toContain("src/app.js:5:3");
+		expect(output).toContain(`${shown("src/app.js")}:5:3`);
 	});
 
 	it("qualifies document_symbols too", async () => {
 		const provider = stubProvider({
 			readFile: async () => broken,
 			documentSymbols: async () => [
-				symbol("gen", "function", "/repo/src/app.js", 0),
+				symbol("gen", "function", at("src/app.js"), 0),
 			],
 		});
 

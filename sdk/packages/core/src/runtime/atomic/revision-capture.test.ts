@@ -1,11 +1,23 @@
+import { join, resolve } from "node:path";
 import type { AgentTool } from "@cline/shared";
 import { describe, expect, it } from "vitest";
 import { createRevisionLog } from "./file-revisions";
 import { patchTargets, withRevisionCapture } from "./revision-capture";
 import type { Snapshot } from "./snapshot";
 
-const ROOT = "/w";
-const FILE = "/w/manic_miner.html";
+/**
+ * The transaction's root, and the way to name a file inside it.
+ *
+ * `resolveBaseFile` normalizes what the model asked for before looking it up,
+ * so the snapshot's keys have to be spelled the way this platform spells them:
+ * on Windows a "/w/manic_miner.html" literal normalizes to
+ * `\w\manic_miner.html`, misses the map, and thirteen tests report that
+ * nothing was captured.
+ */
+const ROOT = resolve("/w");
+const FILE = join(ROOT, "manic_miner.html");
+const inRoot = (name: string) => join(ROOT, name);
+const OUTSIDE = join(resolve("/elsewhere"), "x.js");
 
 function snapshotOf(
 	files: Record<string, string>,
@@ -303,7 +315,7 @@ describe("withRevisionCapture", () => {
 	it("re-checks already-tracked files after run_commands, and only those", async () => {
 		const { log, d, source } = harness({
 			[FILE]: "one\n",
-			"/w/other.js": "x\n",
+			[inRoot("other.js")]: "x\n",
 		});
 		const [editor, commands] = withRevisionCapture(
 			[tool("editor"), tool("run_commands")],
@@ -312,10 +324,10 @@ describe("withRevisionCapture", () => {
 		d.state.set(FILE, "two\n");
 		await editor?.execute?.({ path: FILE } as never, {} as never);
 		d.state.set(FILE, "three\n");
-		d.state.set("/w/other.js", "y\n");
+		d.state.set(inRoot("other.js"), "y\n");
 		await commands?.execute?.({ commands: ["true"] } as never, {} as never);
 		expect(log.revisions(FILE).map((r) => r.index)).toEqual([1, 2, 3]);
-		expect(log.revisions("/w/other.js")).toHaveLength(0);
+		expect(log.revisions(inRoot("other.js"))).toHaveLength(0);
 	});
 
 	it("records a deletion as a revision with no body", async () => {
@@ -330,13 +342,13 @@ describe("withRevisionCapture", () => {
 	});
 
 	it("does not track a file the snapshot could not hold", async () => {
-		const { log, d, source } = harness({}, ["/w/huge.bin"]);
+		const { log, d, source } = harness({}, [inRoot("huge.bin")]);
 		const [editor] = withRevisionCapture([tool("editor")], {
 			source,
 			readFile: d.readFile,
 		});
-		d.state.set("/w/huge.bin", "x");
-		await editor?.execute?.({ path: "/w/huge.bin" } as never, {} as never);
+		d.state.set(inRoot("huge.bin"), "x");
+		await editor?.execute?.({ path: inRoot("huge.bin") } as never, {} as never);
 		expect(log.tracked()).toHaveLength(0);
 	});
 
@@ -346,8 +358,8 @@ describe("withRevisionCapture", () => {
 			source,
 			readFile: d.readFile,
 		});
-		d.state.set("/elsewhere/x.js", "x");
-		await editor?.execute?.({ path: "/elsewhere/x.js" } as never, {} as never);
+		d.state.set(OUTSIDE, "x");
+		await editor?.execute?.({ path: OUTSIDE } as never, {} as never);
 		expect(log.tracked()).toHaveLength(0);
 	});
 

@@ -32,12 +32,41 @@ async function withWorkspace(
 	}
 }
 
+/**
+ * A check written as a node script rather than a `sh -c` one-liner.
+ *
+ * `sh` is not a given on Windows, and where Git for Windows supplies one, the
+ * absolute paths interpolated into the script arrive with their backslashes
+ * eaten. Both make the check fail for a reason that has nothing to do with
+ * what these tests are about -- and a check that always fails is exactly what
+ * they ask for, so the failure looks like a pass of the wrong assertion.
+ *
+ * The scripts live outside the workspace, so the snapshot never sees them.
+ */
+async function scriptOutsideWorkspace(
+	name: string,
+	body: string,
+): Promise<string> {
+	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "atomic-check-"));
+	const file = path.join(dir, name);
+	await fs.writeFile(file, body, "utf8");
+	return file;
+}
+
 /** Fails always, and says exactly what the file says, so novelty tracks bytes. */
-function echoesTheFile(root: string): CommandOracle {
+async function echoesTheFile(root: string): Promise<CommandOracle> {
+	const script = await scriptOutsideWorkspace(
+		"echo-file.js",
+		[
+			'const fs = require("node:fs");',
+			'process.stdout.write(fs.readFileSync(process.argv[2], "utf8"));',
+			"process.exit(1);",
+		].join("\n"),
+	);
 	return {
 		label: "node game.js",
-		command: "sh",
-		args: ["-c", `cat ${path.join(root, "game.js")}; exit 1`],
+		command: process.execPath,
+		args: [script, path.join(root, "game.js")],
 		cwd: root,
 		reason: "the task's own check",
 	};
@@ -53,13 +82,22 @@ async function neverRepeats(root: string): Promise<CommandOracle> {
 		await fs.mkdtemp(path.join(os.tmpdir(), "atomic-counter-")),
 		"n",
 	);
+	const script = await scriptOutsideWorkspace(
+		"counter.js",
+		[
+			'const fs = require("node:fs");',
+			"const file = process.argv[2];",
+			'const n = Number(fs.readFileSync(file, "utf8").trim() || "0") + 1;',
+			'fs.writeFileSync(file, String(n), "utf8");',
+			'console.log("run " + n);',
+			"process.exit(1);",
+		].join("\n"),
+	);
+	await fs.writeFile(counter, "0", "utf8");
 	return {
 		label: "node game.js",
-		command: "sh",
-		args: [
-			"-c",
-			`n=$(cat ${counter} 2>/dev/null || echo 0); n=$((n+1)); echo $n > ${counter}; echo "run $n"; exit 1`,
-		],
+		command: process.execPath,
+		args: [script, counter],
 		cwd: root,
 		reason: "the task's own check",
 	};
@@ -93,7 +131,7 @@ async function readGame(root: string): Promise<string> {
 describe("a failing transaction whose check said something new", () => {
 	it("keeps the work on disk and says the answer moved", async () => {
 		await withWorkspace(async (root) => {
-			const controller = controllerOn(root, echoesTheFile(root));
+			const controller = controllerOn(root, await echoesTheFile(root));
 			await controller.open();
 			await establishTheCheckRepeats(controller);
 			await fs.writeFile(path.join(root, "game.js"), "B\n", "utf8");
@@ -109,7 +147,7 @@ describe("a failing transaction whose check said something new", () => {
 	// It is not a pass, and the sentence must not read like one.
 	it("says plainly that nothing has verified the work", async () => {
 		await withWorkspace(async (root) => {
-			const controller = controllerOn(root, echoesTheFile(root));
+			const controller = controllerOn(root, await echoesTheFile(root));
 			await controller.open();
 			await establishTheCheckRepeats(controller);
 			await fs.writeFile(path.join(root, "game.js"), "B\n", "utf8");
@@ -123,7 +161,7 @@ describe("a failing transaction whose check said something new", () => {
 
 	it("rolls back when the check repeated an answer it had already given", async () => {
 		await withWorkspace(async (root) => {
-			const controller = controllerOn(root, echoesTheFile(root));
+			const controller = controllerOn(root, await echoesTheFile(root));
 			await controller.open();
 			await establishTheCheckRepeats(controller);
 			await fs.writeFile(path.join(root, "game.js"), "A\n", "utf8");
@@ -158,7 +196,7 @@ describe("a failing transaction whose check said something new", () => {
 
 	it("rolls back a settlement the model did not ask for", async () => {
 		await withWorkspace(async (root) => {
-			const controller = controllerOn(root, echoesTheFile(root));
+			const controller = controllerOn(root, await echoesTheFile(root));
 			await controller.open();
 			await establishTheCheckRepeats(controller);
 			await fs.writeFile(path.join(root, "game.js"), "B\n", "utf8");
@@ -173,7 +211,7 @@ describe("a failing transaction whose check said something new", () => {
 	// ended by leaving unverified changes behind is worse than one that did not.
 	it("rolls back the last transaction whatever the check said", async () => {
 		await withWorkspace(async (root) => {
-			const controller = controllerOn(root, echoesTheFile(root), 1);
+			const controller = controllerOn(root, await echoesTheFile(root), 1);
 			await controller.open();
 			await establishTheCheckRepeats(controller);
 			await fs.writeFile(path.join(root, "game.js"), "B\n", "utf8");
@@ -190,7 +228,7 @@ describe("what a carried transaction leaves behind it", () => {
 	// one discard, however many transactions carried before it.
 	it("puts back everything since the last verified state on the next discard", async () => {
 		await withWorkspace(async (root) => {
-			const controller = controllerOn(root, echoesTheFile(root));
+			const controller = controllerOn(root, await echoesTheFile(root));
 			await controller.open();
 			await establishTheCheckRepeats(controller);
 			await fs.writeFile(path.join(root, "game.js"), "B\n", "utf8");
@@ -212,7 +250,7 @@ describe("what a carried transaction leaves behind it", () => {
 	// whether a transaction is judged at all.
 	it("still reports a transaction nobody touched as untouched", async () => {
 		await withWorkspace(async (root) => {
-			const controller = controllerOn(root, echoesTheFile(root));
+			const controller = controllerOn(root, await echoesTheFile(root));
 			await controller.open();
 			await establishTheCheckRepeats(controller);
 			await fs.writeFile(path.join(root, "game.js"), "B\n", "utf8");

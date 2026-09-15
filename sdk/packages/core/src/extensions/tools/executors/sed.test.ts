@@ -339,6 +339,15 @@ describe("agreeing with the system sed", () => {
 		const mismatches: string[] = [];
 		let compared = 0;
 		for (const testCase of cases) {
+			// A script with a backslash cannot be compared on Windows. The `sed`
+			// that answers `--version` there is the MSYS one from Git for
+			// Windows, and its argv conversion eats the backslashes before sed
+			// sees them: `s/\(f\)oo/\1X/` arrives as `s/(f)oo/1X/`, matches
+			// nothing, and the input comes back unchanged. That is a fact about
+			// the argument, not about either implementation.
+			if (process.platform === "win32" && testCase.script.includes("\\")) {
+				continue;
+			}
 			const args: string[] = [];
 			if (testCase.quiet) {
 				args.push("-n");

@@ -32,12 +32,35 @@ async function withWorkspace(
 	}
 }
 
-/** Passes only when the file says the word. `never` is the unsatisfiable one. */
-function saysOracle(root: string, needle: string): CommandOracle {
+/**
+ * Passes only when the file says the word. `never` is the unsatisfiable one.
+ *
+ * A node script rather than `sh -c "grep ..."`: `sh` is not a given on
+ * Windows, and the absolute path interpolated into the script loses its
+ * backslashes where Git for Windows supplies one. Either way the check fails
+ * for a reason that is not the file's contents, which is the one thing these
+ * tests read it for. The script sits outside the workspace so the snapshot
+ * never holds it.
+ */
+async function saysOracle(
+	root: string,
+	needle: string,
+): Promise<CommandOracle> {
+	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "atomic-grep-"));
+	const script = path.join(dir, "says.js");
+	await fs.writeFile(
+		script,
+		[
+			'const fs = require("node:fs");',
+			'const text = fs.readFileSync(process.argv[2], "utf8");',
+			"process.exit(text.includes(process.argv[3]) ? 0 : 1);",
+		].join("\n"),
+		"utf8",
+	);
 	return {
 		label: `grep ${needle}`,
-		command: "sh",
-		args: ["-c", `grep -q ${needle} ${path.join(root, "game.js")}`],
+		command: process.execPath,
+		args: [script, path.join(root, "game.js"), needle],
 		cwd: root,
 		reason: "proposed for this task and approved by you",
 	};
@@ -78,7 +101,7 @@ describe("a check that has never passed", () => {
 		await withWorkspace(async (root) => {
 			const controller = controllerOn(root, { after: 2 });
 			await controller.open();
-			controller.adoptOracle(saysOracle(root, "never"));
+			controller.adoptOracle(await saysOracle(root, "never"));
 			expect(controller.checkIsUnderReconsideration).toBe(false);
 
 			await discardOne(controller, root, "attempt one");
@@ -99,7 +122,7 @@ describe("a check that has never passed", () => {
 		await withWorkspace(async (root) => {
 			const controller = controllerOn(root, { after: 1 });
 			await controller.open();
-			controller.adoptOracle(saysOracle(root, "fixed"));
+			controller.adoptOracle(await saysOracle(root, "fixed"));
 			await fs.writeFile(path.join(root, "game.js"), "fixed", "utf8");
 			const kept = await controller.settle({ account: "done" });
 			expect(kept.kept).toBe(true);
@@ -118,7 +141,7 @@ describe("a check that has never passed", () => {
 		await withWorkspace(async (root) => {
 			const controller = controllerOn(root, { after: 1 });
 			await controller.open();
-			controller.adoptOracle(saysOracle(root, "fixed"));
+			controller.adoptOracle(await saysOracle(root, "fixed"));
 			await fs.writeFile(path.join(root, "game.js"), "fixed", "utf8");
 			await controller.runCheck();
 			await discardOne(controller, root, "broken");
@@ -133,7 +156,7 @@ describe("a check that has never passed", () => {
 		await withWorkspace(async (root) => {
 			const controller = controllerOn(root, { after: 2 });
 			await controller.open();
-			controller.adoptOracle(saysOracle(root, "never"));
+			controller.adoptOracle(await saysOracle(root, "never"));
 
 			await controller.settle({ account: "nothing to do" });
 			await controller.settle({ account: "still nothing" });
@@ -146,12 +169,12 @@ describe("a check that has never passed", () => {
 		await withWorkspace(async (root) => {
 			const controller = controllerOn(root, { after: 1 });
 			await controller.open();
-			controller.adoptOracle(saysOracle(root, "never"));
+			controller.adoptOracle(await saysOracle(root, "never"));
 			await discardOne(controller, root, "one");
 			expect(controller.checkIsUnderReconsideration).toBe(true);
 
 			// The replacement is no better, and there is no third go.
-			controller.adoptOracle(saysOracle(root, "alsonever"));
+			controller.adoptOracle(await saysOracle(root, "alsonever"));
 			await discardOne(controller, root, "two");
 			await discardOne(controller, root, "three");
 
@@ -167,7 +190,7 @@ describe("what is never reconsidered", () => {
 		await withWorkspace(async (root) => {
 			const controller = controllerOn(root, {
 				after: 1,
-				oracle: saysOracle(root, "never"),
+				oracle: await saysOracle(root, "never"),
 			});
 			await controller.open();
 			await discardOne(controller, root, "one");
@@ -182,7 +205,7 @@ describe("what is never reconsidered", () => {
 		await withWorkspace(async (root) => {
 			const controller = controllerOn(root, { after: 0 });
 			await controller.open();
-			controller.adoptOracle(saysOracle(root, "never"));
+			controller.adoptOracle(await saysOracle(root, "never"));
 			await discardOne(controller, root, "one");
 			await discardOne(controller, root, "two");
 			await discardOne(controller, root, "three");
@@ -199,7 +222,7 @@ describe("what is never reconsidered", () => {
 		await withWorkspace(async (root) => {
 			const controller = controllerOn(root, { after: 2, maxTransactions: 2 });
 			await controller.open();
-			controller.adoptOracle(saysOracle(root, "never"));
+			controller.adoptOracle(await saysOracle(root, "never"));
 			await discardOne(controller, root, "one");
 
 			// TX-02 of 2: the threshold clamped to 1 and was met, and it is
@@ -218,7 +241,7 @@ describe("what the record of earlier attempts concludes", () => {
 		await withWorkspace(async (root) => {
 			const controller = controllerOn(root, { after: 0 });
 			await controller.open();
-			controller.adoptOracle(saysOracle(root, "never"));
+			controller.adoptOracle(await saysOracle(root, "never"));
 			const rules = await discardOne(controller, root, "one");
 
 			expect(rules).toContain("the check itself is not asking for what a fix");
@@ -230,7 +253,7 @@ describe("what the record of earlier attempts concludes", () => {
 		await withWorkspace(async (root) => {
 			const controller = controllerOn(root, { after: 0 });
 			await controller.open();
-			controller.adoptOracle(saysOracle(root, "fixed"));
+			controller.adoptOracle(await saysOracle(root, "fixed"));
 			await fs.writeFile(path.join(root, "game.js"), "fixed", "utf8");
 			await controller.settle({ account: "done" });
 			await controller.open();

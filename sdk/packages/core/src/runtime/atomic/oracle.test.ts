@@ -145,10 +145,17 @@ describe("a check that reports its verdict and exits zero anyway", () => {
 	// The harness's own oracle is one of these: `run_game.js` prints
 	// {"ok":false,"error":"…"} and exits 0 whether the game runs or not, so a
 	// protocol reading only the exit status keeps every transaction.
+	// The check is a file rather than `node -e "..."`: the nested quoting in a
+	// one-liner does not survive a Windows shell, and what comes back there is
+	// a failure for the wrong reason -- which the negative case below cannot
+	// tell apart from the right one.
+	const reports = (verdict: string) =>
+		`console.log(JSON.stringify({ ok: ${verdict} }))`;
+
 	it("fails a clean exit whose output does not match", async () => {
-		await withWorkspace({}, async (root) => {
+		await withWorkspace({ "check.js": reports("false") }, async (root) => {
 			const oracle = await discoverCommandOracle(root, {
-				manual: `${process.execPath} -e "console.log('{\\"ok\\":false}')"`,
+				manual: `${process.execPath} check.js`,
 				expect: '"ok":\\s*true',
 			});
 			const verdict = await runOracle(oracle as Oracle);
@@ -161,9 +168,9 @@ describe("a check that reports its verdict and exits zero anyway", () => {
 	});
 
 	it("passes the same command once the output says so", async () => {
-		await withWorkspace({}, async (root) => {
+		await withWorkspace({ "check.js": reports("true") }, async (root) => {
 			const oracle = await discoverCommandOracle(root, {
-				manual: `${process.execPath} -e "console.log('{\\"ok\\":true}')"`,
+				manual: `${process.execPath} check.js`,
 				expect: '"ok":\\s*true',
 			});
 

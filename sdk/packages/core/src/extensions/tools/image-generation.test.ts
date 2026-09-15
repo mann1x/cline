@@ -1,3 +1,4 @@
+import { join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
 	createGenerateImageTool,
@@ -11,6 +12,9 @@ import {
 	selectImageGenerationModels,
 	sniffMediaType,
 } from "./image-generation";
+
+/** The workspace the tool is confined to, spelled the way this platform does. */
+const WORKSPACE = resolve("/workspace");
 
 const PNG_BASE64 = Buffer.from("not really a png").toString("base64");
 
@@ -31,7 +35,7 @@ interface RunOptions {
 
 function run(input: Record<string, unknown>, options: RunOptions = {}) {
 	const tool = createGenerateImageTool({
-		cwd: "/workspace",
+		cwd: WORKSPACE,
 		getEndpoint: () =>
 			options.endpoint === undefined
 				? { baseUrl: "http://localhost:8080", model: "z-image" }
@@ -84,8 +88,11 @@ describe("defaultImagePath", () => {
 
 describe("resolveInsideWorkspace", () => {
 	it("accepts a path under the workspace", () => {
-		expect(resolveInsideWorkspace("/workspace", "assets/icon.png")).toBe(
-			"/workspace/assets/icon.png",
+		// Joined, not spelled out: the guard resolves against the workspace with
+		// `path.resolve`, so on Windows it answers `D:\\workspace\\assets\\icon.png`
+		// and a POSIX literal here is a claim about the runner.
+		expect(resolveInsideWorkspace(WORKSPACE, "assets/icon.png")).toBe(
+			join(WORKSPACE, "assets", "icon.png"),
 		);
 	});
 
@@ -93,15 +100,17 @@ describe("resolveInsideWorkspace", () => {
 	// between it and writing anywhere on the disk.
 	it("refuses a path that climbs out", () => {
 		expect(
-			resolveInsideWorkspace("/workspace", "../../.ssh/authorized_keys"),
+			resolveInsideWorkspace(WORKSPACE, "../../.ssh/authorized_keys"),
 		).toBeUndefined();
-		expect(resolveInsideWorkspace("/workspace", "/etc/passwd")).toBeUndefined();
+		expect(
+			resolveInsideWorkspace(WORKSPACE, resolve("/etc/passwd")),
+		).toBeUndefined();
 	});
 
 	// `/workspace-other` starts with `/workspace` and is not inside it.
 	it("is not fooled by a sibling with the same prefix", () => {
 		expect(
-			resolveInsideWorkspace("/workspace", "../workspace-other/x.png"),
+			resolveInsideWorkspace(WORKSPACE, "../workspace-other/x.png"),
 		).toBeUndefined();
 	});
 });
@@ -181,7 +190,7 @@ describe("createGenerateImageTool", () => {
 		);
 
 		expect(writeFile).toHaveBeenCalledWith(
-			"/workspace/assets/icon.png",
+			join(WORKSPACE, "assets", "icon.png"),
 			expect.any(Buffer),
 		);
 		expect(Array.isArray(output)).toBe(true);
