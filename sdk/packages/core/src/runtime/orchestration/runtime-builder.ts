@@ -20,6 +20,10 @@ import {
 	type UserInstructionConfigService,
 } from "../../extensions/config";
 import {
+	isPolykvProvider,
+	readPolykvCapacity,
+} from "../../extensions/context/polykv-session";
+import {
 	createDefaultMcpServerClientFactory,
 	createMcpTools,
 	hasMcpSettingsFile,
@@ -52,6 +56,10 @@ import {
 	slotsAllowParallelDelegation,
 	type TeamEvent,
 } from "../../extensions/tools/team";
+import {
+	admissionFromCapacity,
+	createAgentAdmissionController,
+} from "../../extensions/tools/team/agent-admission";
 import type { ConfiguredAgentConfig } from "../../extensions/tools/team/configured-agent-config";
 import { loadConfiguredAgentConfigs } from "../../extensions/tools/team/configured-agent-config";
 import { createConfiguredAgentTools } from "../../extensions/tools/team/configured-agent-tool";
@@ -688,9 +696,45 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 		// The host's per-endpoint bounds ride along, so an agent whose profile
 		// points at another server is held to that server's count and not to the
 		// lead's.
+		// The engine's own answer, for the one endpoint that has one.
+		//
+		// A saturated pool refuses with 429 + Retry-After, and the retry
+		// middleware waits that out -- but the better move is not to send a
+		// request that will be refused. `/capacity` says directly how many more
+		// the pool will take, which is the contract the reference fan-out node
+		// bounds its rounds by. The read is bounded inside `readPolykvCapacity`
+		// because on c7 it FOLDS the engine's admission learner; see the note
+		// there before adding another caller.
+		// `agentsConnection` rather than `agentsOverrides`, which is derived
+		// from it below: the two carry the same provider and base URL, and this
+		// has to be built before the registry it is handed to.
+		const polykvEndpointKey = agentEndpointKey({
+			providerId: agentsConnection?.providerId ?? config.providerId,
+			baseUrl: agentsConnection?.baseUrl ?? config.baseUrl,
+		});
+		const polykvProviderConfig = config.providerConfig;
+		const polykvAdmission =
+			polykvProviderConfig && isPolykvProvider(polykvProviderConfig)
+				? createAgentAdmissionController({
+						capacity: async () =>
+							admissionFromCapacity(
+								await readPolykvCapacity({
+									sessionId: config.sessionId,
+									providerConfig: polykvProviderConfig,
+									logger: logger ?? config.logger,
+								}),
+							),
+						...((logger ?? config.logger)
+							? { logger: (logger ?? config.logger) as never }
+							: {}),
+					})
+				: undefined;
 		const agentSlotGates = createAgentSlotGateRegistry(
 			config.maxConcurrentAgents,
 			agentSlotLimitsByEndpoint(config.agentSlotLimits),
+			polykvAdmission
+				? (key) => (key === polykvEndpointKey ? polykvAdmission : undefined)
+				: undefined,
 		);
 		const agentsOverrides: Partial<DelegatedAgentConnectionConfig> =
 			agentsConnection

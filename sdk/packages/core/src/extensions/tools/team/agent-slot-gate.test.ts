@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	agentEndpointKey,
 	agentSlotLimitsByEndpoint,
@@ -122,6 +122,110 @@ describe("createAgentSlotGate", () => {
 			block.resolve();
 		}
 		await Promise.all(runs);
+	});
+});
+
+describe("a gate with an admission controller", () => {
+	/** An admission controller whose answers a test can drive. */
+	function stubAdmission() {
+		const calls: string[] = [];
+		let release: (() => void) | undefined;
+		return {
+			calls,
+			hold: () =>
+				new Promise<void>((resolve) => {
+					release = resolve;
+				}),
+			letGo: () => release?.(),
+			controller: {
+				acquire: vi.fn(async () => {
+					calls.push("acquire");
+					return { reason: "ok" };
+				}),
+				release: vi.fn(() => {
+					calls.push("release");
+				}),
+			},
+		};
+	}
+
+	it("asks before the agent starts and releases after it finishes", async () => {
+		const admission = stubAdmission();
+		const gate = createAgentSlotGate(4, admission.controller);
+		const order: string[] = [];
+
+		await gate.run(async () => {
+			order.push("ran");
+		});
+
+		expect(admission.calls).toEqual(["acquire", "release"]);
+		expect(order).toEqual(["ran"]);
+	});
+
+	it("releases its admission when the agent throws", async () => {
+		const admission = stubAdmission();
+		const gate = createAgentSlotGate(4, admission.controller);
+
+		await expect(
+			gate.run(async () => {
+				throw new Error("worker failed");
+			}),
+		).rejects.toThrow("worker failed");
+
+		expect(admission.calls).toEqual(["acquire", "release"]);
+	});
+
+	// The engine's own gate says it plainly: a session already holding a slot
+	// affinity is a CONTINUATION, never an admission -- "gating it livelocks a
+	// pool under floor, its own agents' next turns would 429". A descendant
+	// reuses its ancestor's slot, so it is that session continuing.
+	it("does not ask again for an agent running inside another's slot", async () => {
+		const admission = stubAdmission();
+		const gate = createAgentSlotGate(1, admission.controller);
+
+		await gate.run(async () => {
+			await gate.run(async () => {});
+		});
+
+		expect(admission.controller.acquire).toHaveBeenCalledTimes(1);
+		expect(admission.controller.release).toHaveBeenCalledTimes(1);
+	});
+
+	// The slot count and the engine's answer bound different things -- ours is
+	// what the endpoint will serve, the engine's is what the pool's KV will
+	// hold -- so both apply, and the agent starts only once both say yes.
+	it("still holds to the slot count", async () => {
+		const admission = stubAdmission();
+		const gate = createAgentSlotGate(1, admission.controller);
+		const first = deferred();
+		const started: string[] = [];
+
+		const a = gate.run(async () => {
+			started.push("a");
+			await first.promise;
+		});
+		const b = gate.run(async () => {
+			started.push("b");
+		});
+
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(started).toEqual(["a"]);
+
+		first.resolve();
+		await Promise.all([a, b]);
+		expect(started).toEqual(["a", "b"]);
+	});
+
+	// A lifted cap is the host saying the engine decides; that is exactly the
+	// case where the engine's own answer is the only bound there is.
+	it("applies on an uncapped gate too", async () => {
+		const admission = stubAdmission();
+		const gate = createAgentSlotGate(0, admission.controller);
+
+		await gate.run(async () => {});
+
+		expect(admission.calls).toEqual(["acquire", "release"]);
 	});
 });
 
@@ -300,6 +404,45 @@ describe("a bound per endpoint", () => {
 		});
 		const key = agentEndpointKey({ providerId: "ollama" });
 		expect(registry.for(key)).toBe(registry.for(key));
+	});
+});
+
+describe("a registry with admission", () => {
+	it("gives each endpoint the controller named for it, and no other", async () => {
+		const asked: string[] = [];
+		const controllerFor = (name: string) => ({
+			acquire: async () => {
+				asked.push(name);
+				return { reason: "ok" };
+			},
+			release: () => {},
+		});
+		const registry = createAgentSlotGateRegistry(2, undefined, (key) =>
+			key === "opencoti http://localhost:8080"
+				? controllerFor("opencoti")
+				: undefined,
+		);
+
+		await registry.for("opencoti http://localhost:8080").run(async () => {});
+		await registry.for("ollama http://localhost:11434").run(async () => {});
+
+		expect(asked).toEqual(["opencoti"]);
+	});
+
+	// One gate per endpoint, kept: two agents on one endpoint must draw from
+	// one round's answer, not ask for a round each.
+	it("keeps one gate per endpoint, so the controller is asked once per agent", async () => {
+		const acquire = vi.fn(async () => ({ reason: "ok" }));
+		const registry = createAgentSlotGateRegistry(4, undefined, () => ({
+			acquire,
+			release: () => {},
+		}));
+
+		const key = "opencoti http://localhost:8080";
+		expect(registry.for(key)).toBe(registry.for(key));
+		await registry.for(key).run(async () => {});
+		await registry.for(key).run(async () => {});
+		expect(acquire).toHaveBeenCalledTimes(2);
 	});
 });
 

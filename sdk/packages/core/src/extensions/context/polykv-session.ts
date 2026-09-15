@@ -195,10 +195,49 @@ export async function ensurePolykvPool(options: {
 }
 
 /**
+ * How often one session may ask the engine for its room.
+ *
+ * `GET /capacity` is not a read on the published c7 engine: every GET folds the
+ * settle and bias EWMAs the admission projection is built from. The fold is
+ * what the enforced gate does on an admission, once per gated request -- and a
+ * client that also asks on its own cadence adds folds the engine never made,
+ * from moments that were not admissions, and then acts on the projection it
+ * skewed.
+ *
+ * Two callers want the answer: the compaction check, once a turn, and the
+ * delegation admission gate, once a round. Bounding here rather than in either
+ * of them is deliberate -- it holds however many callers appear later, and it
+ * cannot be forgotten at a new call site.
+ *
+ * (c8 makes the plain GET read-only and moves the fold behind `?fold=1`. This
+ * bound then stops being load-bearing, and is still the right manners.)
+ */
+export const POLYKV_CAPACITY_MIN_INTERVAL_MS = 5_000;
+
+/** The last answer per session, and when it was folded out of the engine. */
+const POLYKV_CAPACITY_CACHE = new Map<
+	string,
+	{ at: number; poolId: string; value: PolykvCapacity | undefined }
+>();
+
+/** Forget a session's last capacity answer. Test seam, and release path. */
+export function clearPolykvCapacityCache(sessionId?: string): void {
+	if (sessionId === undefined) {
+		POLYKV_CAPACITY_CACHE.clear();
+		return;
+	}
+	POLYKV_CAPACITY_CACHE.delete(sessionId);
+}
+
+/**
  * What the engine says about this pool's room, or `undefined` if it will not say.
  *
  * `expectedTokens` is the turn about to be sent, so the answer accounts for the
  * request rather than describing the pool at rest.
+ *
+ * Answered from the last read when one is recent enough -- see
+ * {@link POLYKV_CAPACITY_MIN_INTERVAL_MS} for why that is a correctness
+ * property on c7 and not a performance one.
  */
 export async function readPolykvCapacity(options: {
 	sessionId: string | undefined;
@@ -214,8 +253,18 @@ export async function readPolykvCapacity(options: {
 	if (!client) {
 		return undefined;
 	}
+	const key = options.sessionId ?? "";
+	const cached = POLYKV_CAPACITY_CACHE.get(key);
+	if (
+		cached &&
+		cached.poolId === state.poolId &&
+		Date.now() - cached.at < POLYKV_CAPACITY_MIN_INTERVAL_MS
+	) {
+		return cached.value;
+	}
+	let value: PolykvCapacity | undefined;
 	try {
-		return await client.capacity(state.poolId, {
+		value = await client.capacity(state.poolId, {
 			...(options.expectedTokens !== undefined
 				? { expected_tokens: options.expectedTokens }
 				: {}),
@@ -226,8 +275,17 @@ export async function readPolykvCapacity(options: {
 				error instanceof Error ? error.message : String(error)
 			}`,
 		);
-		return undefined;
+		value = undefined;
 	}
+	// A failed read is cached too: an unreachable control plane answers the
+	// same way for the next caller, and retrying it per turn is the poll this
+	// bound exists to prevent.
+	POLYKV_CAPACITY_CACHE.set(key, {
+		at: Date.now(),
+		poolId: state.poolId,
+		value,
+	});
+	return value;
 }
 
 /**
@@ -333,6 +391,8 @@ export async function releasePolykvSession(options: {
 		return;
 	}
 	clearPolykvSession(options.sessionId);
+	// The answer described a pool that is about to stop existing.
+	clearPolykvCapacityCache(options.sessionId);
 	const client = clientFor(options.providerConfig);
 	if (!client) {
 		return;

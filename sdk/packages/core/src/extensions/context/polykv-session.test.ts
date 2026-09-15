@@ -1,6 +1,7 @@
 import { getPolykvSession, resetPolykvSessions } from "@cline/llms";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+	clearPolykvCapacityCache,
 	endAtTokenBoundary,
 	ensurePolykvPool,
 	isPolykvProvider,
@@ -223,6 +224,64 @@ describe("what the engine says about its own room", () => {
 			"/polykv/pools/pool-root/capacity?expected_tokens=94454",
 		);
 		expect(polykvSaysCompact(capacity)).toBe(true);
+	});
+
+	// On c7 every `GET /capacity` FOLDS the settle and bias EWMAs -- it is not a
+	// read, it advances the learner. The compaction check runs once a turn and
+	// an admission decision runs once a round, so without a bound here the two
+	// of them roughly double the fold rate the engine's own gate produces, and
+	// then act on the answer they skewed.
+	it("folds the engine's learner no more than once in its own window", async () => {
+		clearPolykvCapacityCache();
+		const server = engine({
+			capacity: { can_admit: true, compaction_pressure: 0.5 },
+		});
+		const config = provider(server.fetch);
+		await ensurePolykvPool({
+			sessionId: "s1",
+			providerConfig: config,
+			systemPrompt: "prompt",
+		});
+		const before = server.calls.length;
+
+		const first = await readPolykvCapacity({
+			sessionId: "s1",
+			providerConfig: config,
+		});
+		const second = await readPolykvCapacity({
+			sessionId: "s1",
+			providerConfig: config,
+		});
+
+		expect(server.calls.length - before).toBe(1);
+		// The second caller gets the first caller's answer, not nothing.
+		expect(second).toEqual(first);
+	});
+
+	// A sibling session's pool is a different learner; sharing one answer
+	// between them would report the wrong pool's room.
+	it("bounds each session's reads separately", async () => {
+		clearPolykvCapacityCache();
+		const server = engine({
+			capacity: { can_admit: true, compaction_pressure: 0.5 },
+		});
+		const config = provider(server.fetch);
+		await ensurePolykvPool({
+			sessionId: "s1",
+			providerConfig: config,
+			systemPrompt: "prompt",
+		});
+		await ensurePolykvPool({
+			sessionId: "s2",
+			providerConfig: config,
+			systemPrompt: "prompt",
+		});
+		const before = server.calls.length;
+
+		await readPolykvCapacity({ sessionId: "s1", providerConfig: config });
+		await readPolykvCapacity({ sessionId: "s2", providerConfig: config });
+
+		expect(server.calls.length - before).toBe(2);
 	});
 
 	it("says nothing for a session with no pool", async () => {

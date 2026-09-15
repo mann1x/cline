@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { AgentAdmissionController } from "./agent-admission";
 
 /**
  * The gates whose slot the running async context already holds.
@@ -44,13 +45,24 @@ export interface AgentSlotGate {
 
 /**
  * @param limit Most agents at once, or `undefined` for no gate of ours.
+ * @param admission The engine's own answer, where there is one.
  *
  * `undefined` is not "unlimited": it is the caller saying something else is
  * deciding -- opencoti with PolyKV on, where admission control answers against
  * measured KV headroom and counting slots here would refuse work the server
  * would have taken.
+ *
+ * `admission` is that something else, made explicit. The two bounds measure
+ * different things and both apply: the slot count is what the endpoint will
+ * *serve* at once, the engine's answer is what the pool's KV will *hold*, and
+ * an agent starts only once both say yes. Asking before the spawn rather than
+ * absorbing the refusal after it is the better half of the same fix -- a
+ * request that is going to be refused is a request worth not sending.
  */
-export function createAgentSlotGate(limit: number | undefined): AgentSlotGate {
+export function createAgentSlotGate(
+	limit: number | undefined,
+	admission?: AgentAdmissionController,
+): AgentSlotGate {
 	// Identity for {@link heldGates}: one gate's slot says nothing about
 	// another's, and two gates in one registry must not be confused for each
 	// other when a sub-agent on a second endpoint spawns its own.
@@ -60,11 +72,28 @@ export function createAgentSlotGate(limit: number | undefined): AgentSlotGate {
 		let running = 0;
 		return {
 			run: async (task) => {
+				// A lifted cap is the host saying the engine decides, which is
+				// exactly the case where the engine's answer is the only bound
+				// there is. Re-entrancy is tracked here too, so a descendant
+				// is not admitted a second time.
+				const held = heldGates.getStore();
+				if (held?.has(token) || !admission) {
+					running += 1;
+					try {
+						return await (held?.has(token)
+							? task()
+							: heldGates.run(new Set([...(held ?? []), token]), task));
+					} finally {
+						running -= 1;
+					}
+				}
+				await admission.acquire();
 				running += 1;
 				try {
-					return await task();
+					return await heldGates.run(new Set([...(held ?? []), token]), task);
 				} finally {
 					running -= 1;
+					admission.release();
 				}
 			},
 			active: () => running,
@@ -95,7 +124,17 @@ export function createAgentSlotGate(limit: number | undefined): AgentSlotGate {
 			if (held?.has(token)) {
 				// A descendant of the task holding this slot. Queueing it would
 				// wait on an ancestor that cannot release until this returns.
+				//
+				// It is not admitted again either, and the engine says why in
+				// its own gate: a session already holding a slot affinity is a
+				// CONTINUATION, never an admission -- "gating it livelocks a
+				// pool under floor, its own agents' next turns would 429".
 				return task();
+			}
+			// Before the slot, not after: the point of asking is to not spend
+			// a slot on an agent the engine will not take.
+			if (admission) {
+				await admission.acquire();
 			}
 			if (running >= bound) {
 				await new Promise<void>((resolve) => {
@@ -111,6 +150,7 @@ export function createAgentSlotGate(limit: number | undefined): AgentSlotGate {
 				return await heldGates.run(nested, task);
 			} finally {
 				release();
+				admission?.release();
 			}
 		},
 		active: () => running,
@@ -234,14 +274,22 @@ export interface AgentSlotGateRegistry {
 /**
  * @param limit The bound for an endpoint the host said nothing about.
  * @param limits A bound per {@link agentEndpointKey}, from the host.
+ * @param admissionFor The engine's own answer for an endpoint that has one.
  *
  * `limits` is consulted before `limit`, and `0` in it is honoured rather than
  * treated as absent: zero is the host saying admission control decides for that
  * endpoint, which is a different statement from having no answer for it.
+ *
+ * `admissionFor` is asked once per endpoint, when that endpoint's gate is
+ * first built, and returning `undefined` is the ordinary case -- only opencoti
+ * with a pool has anything to ask. It is keyed by endpoint for the same reason
+ * the bound is: a pool belongs to one server, and an agent whose profile points
+ * at another must not be held against it.
  */
 export function createAgentSlotGateRegistry(
 	limit: number | undefined,
 	limits?: Readonly<Record<string, number>>,
+	admissionFor?: (key: string) => AgentAdmissionController | undefined,
 ): AgentSlotGateRegistry {
 	const gates = new Map<string, AgentSlotGate>();
 	const boundFor = (key: string): number | undefined => limits?.[key] ?? limit;
@@ -251,7 +299,7 @@ export function createAgentSlotGateRegistry(
 			if (existing) {
 				return existing;
 			}
-			const created = createAgentSlotGate(boundFor(key));
+			const created = createAgentSlotGate(boundFor(key), admissionFor?.(key));
 			gates.set(key, created);
 			return created;
 		},
