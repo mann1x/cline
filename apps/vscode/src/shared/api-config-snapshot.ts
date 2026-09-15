@@ -79,8 +79,99 @@ export const PROVIDER_CONFIG_PROFILE_KEYS = [
 	"gcp",
 ] as const
 
-/** Reads the profile-carried fields out of a provider config response. */
-export function captureProviderConfigSnapshot(config: unknown): Record<string, unknown> | undefined {
+/**
+ * Where {@link captureProviderConfigSnapshot} files the committed model's
+ * overrides. Not one of the keys above: those are provider fields written
+ * through `WriteProviderConfigPatch`, and this one is restored by committing
+ * the selection instead, so a load has to pull it back out before writing.
+ */
+export const PROVIDER_CONFIG_MODEL_OVERRIDES_KEY = "modelOverrides"
+
+/**
+ * How each profile-carried provider field is spelled when a profile does not
+ * carry it.
+ *
+ * A providers.json write is a patch: it changes what it names and leaves
+ * everything else alone. So loading a profile has to name the fields the
+ * profile is silent about as well, or the previous profile's values survive
+ * under the new profile's name — reported as "when I load a profile with a
+ * different value the tool results character cap doesn't update, and it asks me
+ * to update the new profile". It asked because the panel really did differ from
+ * the profile that had just been loaded. This is the rule
+ * {@link applyApiConfigurationSnapshot} already follows for the settings half.
+ *
+ * Listed here are the fields the store documents an unset spelling for: zero
+ * for the three numbers, an empty message for the sampler. Base URL, API line,
+ * headers, region, aws and gcp have no such sentinel and are how the provider
+ * is reached at all, so a profile that says nothing about them leaves them
+ * alone rather than guessing at a value that would take the endpoint down.
+ *
+ * The sampler needed no migration to join them: it has been captured for
+ * exactly as long as profiles have carried a provider config — both arrived in
+ * the same commit — so no profile holds one without the other. A profile with
+ * no sampler either predates provider configs altogether, and is already
+ * cleared wholesale, or genuinely had none when it was saved. Inheriting the
+ * last profile's temperature under this profile's name is the fault being
+ * fixed, and it is the one that actually changes what the model does.
+ */
+const PROVIDER_CONFIG_CLEARS: Readonly<Record<string, unknown>> = {
+	contextWindow: 0,
+	maxToolResultChars: 0,
+	parallelSessions: 0,
+	sampling: {},
+}
+
+/**
+ * The providers.json patch that loads a profile's provider config.
+ *
+ * The model overrides are dropped on the way out: they are restored by
+ * committing the model selection, not by writing a provider field.
+ */
+export function providerConfigPatchForProfile(providerConfig: Record<string, unknown> | undefined): Record<string, unknown> {
+	const patch: Record<string, unknown> = { ...(providerConfig ?? {}) }
+	delete patch[PROVIDER_CONFIG_MODEL_OVERRIDES_KEY]
+	for (const [key, cleared] of Object.entries(PROVIDER_CONFIG_CLEARS)) {
+		if (patch[key] === undefined || patch[key] === null) {
+			patch[key] = cleared
+		}
+	}
+	return patch
+}
+
+/**
+ * The committed model's overrides for one mode, if it has any.
+ *
+ * Per-Turn Max Output Tokens is written here and nowhere else: it travels with
+ * the model selection (`commitModelSelection`), not among the provider's own
+ * fields, so no entry in {@link PROVIDER_CONFIG_PROFILE_KEYS} could ever reach
+ * it. Left out, it was invisible to a profile in both directions — changing it
+ * marked nothing unsaved, and saving a profile did not carry it — which is the
+ * same fault `parallelSessions` had, one level further down.
+ */
+function committedModelOverrides(source: Record<string, unknown>, mode: Mode): Record<string, unknown> | undefined {
+	const selection = source[mode === "plan" ? "planSelection" : "actSelection"] as
+		| { overrides?: Record<string, unknown> }
+		| undefined
+	const overrides = selection?.overrides
+	if (!overrides || Object.keys(overrides).length === 0) {
+		return undefined
+	}
+	return overrides
+}
+
+/**
+ * Reads the profile-carried fields out of a provider config response.
+ *
+ * Returns `undefined` only when there is no response to read — the RPC behind
+ * it has not resolved yet. An entry that has been read and holds none of these
+ * fields captures an empty object, which is a different thing and has to stay
+ * different: the caps are blank far more often than not, and collapsing "read,
+ * and empty" into "not read yet" made {@link apiConfigurationSnapshotsEqual}
+ * treat the panel as still loading. Clearing the last value an entry held then
+ * marked nothing unsaved, so it could not be saved — reported as the two caps
+ * not raising the Update button "when they are empty".
+ */
+export function captureProviderConfigSnapshot(config: unknown, mode: Mode = "act"): Record<string, unknown> | undefined {
 	if (!config || typeof config !== "object") {
 		return undefined
 	}
@@ -93,7 +184,11 @@ export function captureProviderConfigSnapshot(config: unknown): Record<string, u
 		}
 		captured[key] = value
 	}
-	return Object.keys(captured).length > 0 ? captured : undefined
+	const overrides = committedModelOverrides(source, mode)
+	if (overrides) {
+		captured[PROVIDER_CONFIG_MODEL_OVERRIDES_KEY] = overrides
+	}
+	return captured
 }
 
 /** Splits a configuration key into its mode and unprefixed name, if it has one. */
@@ -225,7 +320,14 @@ export function apiConfigurationSnapshotsEqual(a: ApiConfigurationSnapshot, b: A
 	)
 }
 
-/** See {@link apiConfigurationSnapshotsEqual} — (stored, panel), not symmetric. */
+/**
+ * See {@link apiConfigurationSnapshotsEqual} — (stored, panel), not symmetric.
+ *
+ * `undefined` on the panel side means the RPC has not resolved, which is not
+ * evidence of a change. An empty object means it resolved and the entry holds
+ * nothing, which very much is: it is what a configuration looks like once its
+ * last value has been cleared.
+ */
 function providerConfigsEqual(stored: Record<string, unknown> | undefined, panel: Record<string, unknown> | undefined): boolean {
 	if (panel === undefined) {
 		return true

@@ -224,7 +224,7 @@ function parseSamplingNumber(raw: string | undefined, kind: "number" | "integer"
  * The Ollama provider configuration component
  */
 export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: OllamaProviderProps) => {
-	const { apiConfiguration, maxToolResultChars } = useExtensionState()
+	const { apiConfiguration, maxToolResultChars, activeApiConfigurationProfile } = useExtensionState()
 	const { handleFieldChange } = useApiConfigurationHandlers()
 	const { config, write, commitSelection } = useProviderConfig("ollama")
 	const scope = useApiConfigurationScope()
@@ -243,7 +243,18 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 	// tab doesn't set it only for the vision tab". A scoped panel owns its own
 	// entry, and an empty one means empty rather than "borrow the other model's".
 	const legacyNumCtx = scope ? Number.NaN : Number.parseInt(apiConfiguration?.ollamaApiOptionsCtxNum || "", 10)
-	const ollamaNumCtx = config?.contextWindow || legacyNumCtx
+	// This configuration's own window, and only its own — the same rule the cap
+	// below follows, and the same fault it had. The legacy key is a migration
+	// seed: it keeps an entry that predates providers.json resolving a window.
+	// Rendered as the field's *value* it refilled a cleared box with the number
+	// being erased, and the next write then saved the borrowed number as though
+	// it had been chosen here. The reporter's log shows 110000 — a number in no
+	// providers.json entry — arriving exactly that way during profile work.
+	const scopedNumCtx = config?.contextWindow
+	// What applies when the field is left blank: the size the model is described
+	// at, and the ceiling a per-turn output cap is clamped to. It belongs in
+	// those two places and in the placeholder, not in the box.
+	const ollamaNumCtx = scopedNumCtx || legacyNumCtx
 	// This configuration's tool-result cap, and only its own. The global setting
 	// is what applies when this is blank, so it belongs in the placeholder:
 	// rendered as the field's *value* it refilled the box with the very number
@@ -525,15 +536,26 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 	const [modelParameters, setModelParameters] = useState<Record<string, string>>({})
 	const selectedModelId = selectedModel.modelId
 
-	// The draft belongs to the model and the tab it was typed on. It survives a
-	// write, which is what makes a decimal typeable, so something has to end
-	// it: without this, switching model or scope would carry the previous one's
-	// half-typed numbers across and show them as though they were stored.
+	// The draft belongs to the model, the tab it was typed on, and the profile it
+	// was typed under. It survives a write, which is what makes a decimal
+	// typeable, so something has to end it: without this, switching model or
+	// scope would carry the previous one's half-typed numbers across and show
+	// them as though they were stored.
+	//
+	// Loading a profile is the third way, and it was missing. A profile load
+	// replaces providers.json wholesale — it is exactly the "write from
+	// somewhere else" the draft is designed to ignore — so the panel went on
+	// showing the sampler typed under the previous profile, and
+	// `buildSamplingPatch` reads `draft[key] ?? stored[key]`, which carries every
+	// drafted field into the next write and puts the old value back. Reported as
+	// "I changed typical_p, updated the profile, switched to a profile without it
+	// and it was still there". Switching model happened to cover most of it,
+	// which is why it only shows when two profiles share a model.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: the draft is cleared because these changed, so they are the dependencies even though the body does not read them
 	useEffect(() => {
 		setSamplingDraft({})
 		setNumericDraft({})
-	}, [selectedModelId, scope])
+	}, [selectedModelId, scope, activeApiConfigurationProfile])
 
 	useEffect(() => {
 		if (!selectedModelId) {
@@ -702,7 +724,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 				<DebouncedTextField
 					initialValue={numericValue(
 						"contextWindow",
-						Number.isFinite(ollamaNumCtx) && ollamaNumCtx > 0 ? String(ollamaNumCtx) : "",
+						Number.isFinite(scopedNumCtx) && (scopedNumCtx ?? 0) > 0 ? String(scopedNumCtx) : "",
 					)}
 					onChange={(v) => {
 						noteNumeric("contextWindow", v)
@@ -710,7 +732,9 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 						const numCtx = Number.isFinite(contextWindow) && contextWindow > 0 ? contextWindow : undefined
 						// The debounced input also fires for its initial value and
 						// external prop syncs — only persist actual changes.
-						const currentNumCtx = Number.isFinite(ollamaNumCtx) && ollamaNumCtx > 0 ? ollamaNumCtx : undefined
+						// Against this configuration's own window, so that clearing
+						// the box is a change even when a legacy key would fill it.
+						const currentNumCtx = Number.isFinite(scopedNumCtx) && (scopedNumCtx ?? 0) > 0 ? scopedNumCtx : undefined
 						if (numCtx === currentNumCtx) {
 							return
 						}
@@ -744,7 +768,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 							})
 						})().catch((error) => console.error("Failed to update Ollama context window:", error))
 					}}
-					placeholder={"Default: 32768"}
+					placeholder={`Default: ${Number.isFinite(legacyNumCtx) && legacyNumCtx > 0 ? legacyNumCtx : 32768}`}
 					style={{ width: "100%" }}>
 					<span className="font-semibold">Model Context Window</span>
 				</DebouncedTextField>

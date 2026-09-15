@@ -8,6 +8,7 @@ import {
 	captureProviderConfigSnapshot,
 	modeScopedKey,
 	parseModeScopedKey,
+	providerConfigPatchForProfile,
 } from "./api-config-snapshot"
 
 const configuration = {
@@ -218,9 +219,103 @@ describe("the provider config a profile carries", () => {
 		expect(captured).toEqual({ baseUrl: "http://localhost:11434" })
 	})
 
-	it("says nothing when the provider has no entry", () => {
+	it("clears the numbers a profile does not carry", () => {
+		// A patch changes what it names. Naming only what the profile holds left
+		// the previous profile's cap and window in place, so the panel differed
+		// from the profile that had just been loaded and the bar said so.
+		expect(providerConfigPatchForProfile({ contextWindow: 110000 })).toEqual({
+			contextWindow: 110000,
+			maxToolResultChars: 0,
+			parallelSessions: 0,
+			// An empty message is the sampler's clear, so a profile that carries
+			// no sampler resets it instead of inheriting the last one's.
+			sampling: {},
+		})
+	})
+
+	it("keeps the numbers a profile does carry", () => {
+		expect(providerConfigPatchForProfile({ maxToolResultChars: 32000, parallelSessions: 2 })).toEqual({
+			contextWindow: 0,
+			maxToolResultChars: 32000,
+			parallelSessions: 2,
+			sampling: {},
+		})
+	})
+
+	it("leaves the fields with no clear alone", () => {
+		// Base URL and friends say how to reach the provider at all; inventing a
+		// value for a profile that is silent about them takes the endpoint down.
+		const patch = providerConfigPatchForProfile({ baseUrl: "http://localhost:11434" })
+
+		expect(patch.baseUrl).toBe("http://localhost:11434")
+		expect("headers" in patch).toBe(false)
+		expect("region" in patch).toBe(false)
+	})
+
+	it("keeps a sampler the profile does carry", () => {
+		// Only the absent ones are cleared; a retuned sampler is restored as it
+		// was saved.
+		const patch = providerConfigPatchForProfile({ sampling: { temperature: 0.7, top_p: 0.9 } })
+
+		expect(patch.sampling).toEqual({ temperature: 0.7, top_p: 0.9 })
+	})
+
+	it("does not send the model overrides as a provider field", () => {
+		// They are restored by committing the selection instead.
+		const patch = providerConfigPatchForProfile({ contextWindow: 8192, modelOverrides: { maxTokens: 4096 } })
+
+		expect("modelOverrides" in patch).toBe(false)
+	})
+
+	it("says nothing only when there is no entry to read", () => {
+		// `undefined` is the RPC that has not resolved. An entry that resolved
+		// and holds nothing is an empty capture, not an absent one: the two caps
+		// are blank far more often than set, and reading "blank" as "still
+		// loading" is what stopped clearing one from marking a profile unsaved.
 		expect(captureProviderConfigSnapshot(undefined)).toBeUndefined()
-		expect(captureProviderConfigSnapshot({})).toBeUndefined()
+		expect(captureProviderConfigSnapshot({})).toEqual({})
+	})
+
+	it("carries the per-turn output cap, which travels with the model", () => {
+		// It is committed with the selection rather than written as a provider
+		// field, so no entry in the key list could reach it. Uncaptured, changing
+		// it marked nothing unsaved and a profile did not carry it.
+		const captured = captureProviderConfigSnapshot(
+			{
+				contextWindow: 110000,
+				planSelection: { modelId: "m", overrides: { maxTokens: 8192 } },
+				actSelection: { modelId: "m", overrides: { maxTokens: 4096 } },
+			},
+			"act",
+		)
+
+		expect(captured).toEqual({ contextWindow: 110000, modelOverrides: { maxTokens: 4096 } })
+	})
+
+	it("takes the overrides of the mode it was asked for", () => {
+		const captured = captureProviderConfigSnapshot(
+			{
+				planSelection: { modelId: "m", overrides: { maxTokens: 8192 } },
+				actSelection: { modelId: "m", overrides: { maxTokens: 4096 } },
+			},
+			"plan",
+		)
+
+		expect(captured).toEqual({ modelOverrides: { maxTokens: 8192 } })
+	})
+
+	it("sees a changed per-turn output cap as a difference", () => {
+		const saved = { global: {}, mode: {}, providerConfig: { modelOverrides: { maxTokens: 4096 } } }
+		const edited = { global: {}, mode: {}, providerConfig: { modelOverrides: { maxTokens: 8192 } } }
+
+		expect(apiConfigurationSnapshotsEqual(saved, edited)).toBe(false)
+	})
+
+	it("sees a cleared per-turn output cap as a difference", () => {
+		const saved = { global: {}, mode: {}, providerConfig: { modelOverrides: { maxTokens: 4096 } } }
+		const cleared = { global: {}, mode: {}, providerConfig: {} }
+
+		expect(apiConfigurationSnapshotsEqual(saved, cleared)).toBe(false)
 	})
 
 	it("sees a retuned sampler as a difference", () => {

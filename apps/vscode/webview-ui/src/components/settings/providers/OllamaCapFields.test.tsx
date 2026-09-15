@@ -123,7 +123,15 @@ describe("changing a cap the configuration already has", () => {
 		mocks.commitModelSelection.mockResolvedValue(undefined)
 	})
 
-	async function openPanel(initial: Record<string, unknown>) {
+	async function openPanel(initial: Record<string, unknown>, apiConfiguration: Record<string, unknown> = {}) {
+		// Which profile is loaded, as the profile bar records it. A load changes
+		// this, and the drafts below belong to the profile they were typed under.
+		let activeProfile = JSON.stringify({ act: "first" })
+		mocks.readExtensionState.mockImplementation(() => ({
+			apiConfiguration,
+			maxToolResultChars: STORED_CAP,
+			activeApiConfigurationProfile: activeProfile,
+		}))
 		let config: Record<string, unknown> = { contextWindow: 131072, ...initial }
 		let selection: Record<string, unknown> | undefined = { modelId: "qwen3:4b", overrides: undefined }
 		let bump = () => {}
@@ -188,6 +196,15 @@ describe("changing a cap the configuration already has", () => {
 					vi.advanceTimersByTime(10)
 				})
 			},
+			/** Load another profile: the bar writes the store, then the name. */
+			switchProfile: async (name: string, providerConfig: Record<string, unknown>) => {
+				config = { ...providerConfig }
+				activeProfile = JSON.stringify({ act: name })
+				bump()
+				await act(async () => {
+					vi.advanceTimersByTime(150)
+				})
+			},
 			stored: () => config,
 			committed: () => selection,
 		}
@@ -232,6 +249,51 @@ describe("changing a cap the configuration already has", () => {
 		// state the user actually comes back to.
 		await panel.remount()
 		expect(panel.field("Tool Results Character Cap").value).toBe("")
+	})
+
+	// The same question of the context window, which has a borrowed value of its
+	// own: the legacy `ollamaApiOptionsCtxNum` settings key, kept as a migration
+	// fallback for an entry that predates providers.json. The reporter's log
+	// shows 110000 -- a number in no providers.json entry -- being written back
+	// during profile work, which is what a borrowed value does once something
+	// saves what is on screen.
+	it("does not refill a cleared context window from the legacy settings key", async () => {
+		const panel = await openPanel({ contextWindow: 131072 }, { ollamaApiOptionsCtxNum: "110000" })
+		const window = panel.field("Model Context Window")
+		expect(window.value).toBe("131072")
+
+		await panel.clear(window)
+		await panel.settle()
+		expect(panel.stored().contextWindow).toBeUndefined()
+
+		await panel.remount()
+		expect(panel.field("Model Context Window").value).toBe("")
+	})
+
+	// Reported: "I changed typical_p, updated the profile, switched to a profile
+	// without it and it was still there, and the profile asked me to update."
+	// The draft is deliberately sticky — that is what makes a decimal typeable,
+	// because it must survive the store echoing an older value back. A profile
+	// load is not an echo: it is the store being replaced wholesale, and the
+	// panel has to show what was loaded rather than what was typed under the
+	// profile before it.
+	it("drops what was typed under the previous profile", async () => {
+		const panel = await openPanel({ maxToolResultChars: STORED_CAP })
+		const cap = panel.field("Tool Results Character Cap")
+
+		await panel.clear(cap)
+		for (const char of "32000") {
+			await panel.press(cap, char)
+		}
+		await panel.settle()
+		expect(cap.value).toBe("32000")
+
+		// Another profile, carrying a cap of its own. Same model, which is what
+		// makes this visible: switching model already cleared the draft, so the
+		// fault only showed when two profiles shared one.
+		await panel.switchProfile("second", { contextWindow: 131072, maxToolResultChars: 8000 })
+
+		expect(panel.field("Tool Results Character Cap").value).toBe("8000")
 	})
 
 	it("keeps a per-turn output cap typed over the stored one", async () => {

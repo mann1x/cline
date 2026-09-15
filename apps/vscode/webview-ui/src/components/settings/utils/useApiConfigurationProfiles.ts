@@ -15,6 +15,8 @@ import {
 	applyApiConfigurationSnapshot,
 	captureApiConfigurationSnapshot,
 	captureProviderConfigSnapshot,
+	PROVIDER_CONFIG_MODEL_OVERRIDES_KEY,
+	providerConfigPatchForProfile,
 } from "@shared/api-config-snapshot"
 import { CommitModelSelectionRequest } from "@shared/proto/cline/models"
 import { UpdateSettingsRequest } from "@shared/proto/cline/state"
@@ -22,7 +24,7 @@ import type { Mode } from "@shared/storage/types"
 import { useCallback, useMemo } from "react"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { getActiveProviderAndModelId } from "@/hooks/useNormalizedApiConfiguration"
-import { useProviderConfig, writeProviderConfigFor } from "@/hooks/useProviderConfig"
+import { toProtobufProviderModelOverrides, useProviderConfig, writeProviderConfigFor } from "@/hooks/useProviderConfig"
 import { ModelsServiceClient, StateServiceClient } from "@/services/grpc-client"
 import { SCOPED_MODEL_SETTINGS, scopedSettingsPatch } from "./scopedSettingsPatch"
 import { useApiConfigurationHandlers } from "./useApiConfigurationHandlers"
@@ -131,7 +133,7 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 			return parseApiConfigurationSnapshot(storedSnapshot) ?? EMPTY_SNAPSHOT
 		}
 		const base = captureApiConfigurationSnapshot(apiConfiguration, scopeMode)
-		const captured = captureProviderConfigSnapshot(providerConfig)
+		const captured = captureProviderConfigSnapshot(providerConfig, scopeMode)
 		return captured === undefined ? base : { ...base, providerConfig: captured }
 	}, [snapshotKind, apiConfiguration, scopeMode, storedSnapshot, providerConfig])
 
@@ -189,6 +191,20 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 				scopeMode,
 			)
 
+			// The per-turn output cap rides with the model selection rather than
+			// with the provider's own fields, so it comes back out here: what is
+			// left goes to providers.json, and the overrides go to the commit
+			// below. A profile that carries none clears them — the same rule the
+			// context window already follows, and for the same reason. Inheriting
+			// the last profile's per-turn cap is that number showing up under a
+			// name that never chose it.
+			const profileProviderConfig = snapshot.providerConfig as Record<string, unknown> | undefined
+			const modelOverrides = (profileProviderConfig?.[PROVIDER_CONFIG_MODEL_OVERRIDES_KEY] ?? {}) as Record<string, unknown>
+			// Everything the profile carries, plus a clear for every field it does
+			// not — a patch only changes what it names, so the fields left out are
+			// how the previous profile's values ended up under this profile's name.
+			const providerPatch = providerConfigPatchForProfile(profileProviderConfig)
+
 			if (snapshotKind) {
 				// Into this tab's own snapshot and nowhere else. Writing the
 				// profile's provider settings to providers.json as well put its
@@ -227,31 +243,21 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 			// left got a number that was never meant for it, and the profile's own
 			// entry kept whatever it had — which is a profile that "still matches
 			// the main profile" from the outside.
+			// A profile that carries no context window must not inherit the one the
+			// last profile left behind — that is the same value showing up under a
+			// different name — and the tool-result cap and the sampler are no
+			// different. Cleared, they fall back to what the model itself declares
+			// (`/api/show` for Ollama) rather than to whoever was loaded before.
+			//
+			// The clears are `0` and `{}`, not `undefined`. The patch reader treats
+			// an absent field as "leave this alone" and only a documented sentinel
+			// as a clear (`toProviderConfigPatch`: `contextWindow > 0 ? value :
+			// null`), so sending `undefined` was a no-op that read like a fix.
 			const configTarget = selection.provider ?? activeProviderId
-			if (snapshot.providerConfig) {
-				if (configTarget === activeProviderId) {
-					await writeProviderConfig(snapshot.providerConfig as never)
-				} else {
-					await writeProviderConfigFor(configTarget, snapshot.providerConfig as never)
-				}
+			if (configTarget === activeProviderId) {
+				await writeProviderConfig(providerPatch as never)
 			} else {
-				// A profile that carries no context window must not inherit the one
-				// the last profile left behind — that is the same value showing up
-				// under a different name. Cleared, so the window falls back to what
-				// the model itself declares (`/api/show` for Ollama) rather than to
-				// whoever was loaded before.
-				//
-				// `0`, not `undefined`. The patch reader treats an absent field as
-				// "leave this alone" and only a value at or below zero as a clear
-				// (`toProviderConfigPatch`: `contextWindow > 0 ? value : null`), so
-				// sending `undefined` here was a no-op that read like a fix. The
-				// Ollama panel's own field has always sent `numCtx ?? 0` for this.
-				const clearContextWindow = { contextWindow: 0 } as never
-				if (configTarget === activeProviderId) {
-					await writeProviderConfig(clearContextWindow)
-				} else {
-					await writeProviderConfigFor(configTarget, clearContextWindow)
-				}
+				await writeProviderConfigFor(configTarget, providerPatch as never)
 			}
 
 			if (!selection.modelId) {
@@ -261,7 +267,11 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 				if (selection.provider === activeProviderId) {
 					// Same provider: this re-reads the store, so the picker shows the
 					// loaded model without waiting for a remount.
-					await commitSelection(mode, { providerId: selection.provider as never, modelId: selection.modelId })
+					await commitSelection(mode, {
+						providerId: selection.provider as never,
+						modelId: selection.modelId,
+						overrides: modelOverrides as never,
+					})
 					continue
 				}
 				// A profile that also switches provider cannot go through the hook,
@@ -272,6 +282,7 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 						providerId: selection.provider,
 						mode,
 						modelId: selection.modelId,
+						overrides: toProtobufProviderModelOverrides(modelOverrides as never),
 					}),
 				)
 			}

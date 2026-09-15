@@ -43,6 +43,9 @@ vi.mock("@/hooks/useProviderConfig", () => ({
 		commitSelection,
 	}),
 	writeProviderConfigFor,
+	// Re-exported by the hook module; the profile load uses it to clear the
+	// committed model's overrides when the profile carries none.
+	toProtobufProviderModelOverrides: (overrides: unknown) => overrides,
 }))
 
 vi.mock("../useApiConfigurationHandlers", () => ({
@@ -89,16 +92,42 @@ describe("useApiConfigurationProfiles — loading a profile", () => {
 
 		// Both modes, because Plan and Act are kept identical here.
 		await waitFor(() => expect(commitSelection).toHaveBeenCalledTimes(2))
+		// With the overrides the profile carries, and an explicit empty set when
+		// it carries none: Per-Turn Max Output Tokens lives there, so leaving it
+		// out let the previous profile's cap survive under this profile's name.
 		expect(commitSelection).toHaveBeenCalledWith("plan", {
 			providerId: "ollama",
 			modelId: "a3b-coder_tb:iq2_xs",
+			overrides: {},
 		})
 		expect(commitSelection).toHaveBeenCalledWith("act", {
 			providerId: "ollama",
 			modelId: "a3b-coder_tb:iq2_xs",
+			overrides: {},
 		})
 		// And the settings copy still gets written, so the two agree.
 		expect(handleFieldsChange).toHaveBeenCalledOnce()
+	})
+
+	// Reported: "when I load a profile with a different value the tool results
+	// character cap doesn't update, and it asks me to update the new profile".
+	// A patch only carries what it names, so a profile that holds no cap left the
+	// previous profile's in place — and the bar then read the panel as differing
+	// from the profile just loaded, because it did.
+	it("clears the provider fields the profile does not carry", async () => {
+		const { result } = renderHook(() => useApiConfigurationProfiles({ kind: "mode", mode: "act" }))
+
+		await result.current.loadProfile(PROFILE.name)
+
+		await waitFor(() => expect(writeProviderConfig).toHaveBeenCalledOnce())
+		expect(writeProviderConfig).toHaveBeenCalledWith({
+			// What the profile carries.
+			contextWindow: 110000,
+			// And what it does not, each spelled as the clear its reader accepts.
+			maxToolResultChars: 0,
+			parallelSessions: 0,
+			sampling: {},
+		})
 	})
 
 	it("writes providers.json after the settings copy and before the model", async () => {
