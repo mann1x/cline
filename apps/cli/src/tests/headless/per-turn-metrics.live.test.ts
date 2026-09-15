@@ -125,18 +125,25 @@ test.describe("per-turn metrics in messages.json — multi-iteration @live", () 
 			);
 		}
 
-		// Turn 2 cassette: 1500 prompt_tokens / 40 completion_tokens
-		// If regressed: terminal message would show session totals (2500 in / 65 out).
-		if (m2.inputTokens !== 1500) {
+		// Turn 3 cassette: 2000 prompt_tokens / 55 completion_tokens.
+		//
+		// Three turns, not two: turn 2 answers without calling a tool, so the
+		// runtime spends its one nudge and the model replies once more. The
+		// cassette carries a third recording for it, and that reply is the
+		// terminal assistant message.
+		//
+		// If regressed: terminal message would show session totals
+		// (4500 in / 120 out).
+		if (m2.inputTokens !== 2000) {
 			throw new Error(
-				`Terminal assistant message: expected inputTokens=1500 (per-turn), got ${m2.inputTokens}. ` +
-					`If this is 2500, session totals are being stamped instead of per-turn values.`,
+				`Terminal assistant message: expected inputTokens=2000 (per-turn), got ${m2.inputTokens}. ` +
+					`If this is 4500, session totals are being stamped instead of per-turn values.`,
 			);
 		}
-		if (m2.outputTokens !== 40) {
+		if (m2.outputTokens !== 55) {
 			throw new Error(
-				`Terminal assistant message: expected outputTokens=40 (per-turn), got ${m2.outputTokens}. ` +
-					`If this is 65, session totals are being stamped instead of per-turn values.`,
+				`Terminal assistant message: expected outputTokens=55 (per-turn), got ${m2.outputTokens}. ` +
+					`If this is 120, session totals are being stamped instead of per-turn values.`,
 			);
 		}
 	});
