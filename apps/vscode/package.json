@@ -362,7 +362,7 @@
 				"cerebriline.vscodeMcpTools": {
 					"type": "boolean",
 					"default": true,
-					"markdownDescription": "Offer the tools of the MCP servers configured in **VS Code**, alongside the ones configured in Cerebriline. VS Code has already started and authenticated those servers, so this reaches ones Cerebriline cannot connect to on its own \u2014 a server that refuses dynamic client registration has no way to issue Cerebriline a client id, and VS Code already holds a token for it. Their names are prefixed `vscode__`. Turn this off to offer only the servers in Cerebriline's own MCP settings."
+					"markdownDescription": "Offer the tools of the MCP servers configured in **VS Code**, alongside the ones configured in Cerebriline. VS Code has already started and authenticated those servers, so this reaches ones Cerebriline cannot connect to on its own — a server that refuses dynamic client registration has no way to issue Cerebriline a client id, and VS Code already holds a token for it. Their names are prefixed `vscode__`. Turn this off to offer only the servers in Cerebriline's own MCP settings."
 				},
 				"cerebriline.vscodeMcpAutoApprove": {
 					"type": "array",
@@ -395,7 +395,8 @@
 		"clean:all": "bun run clean:build && bun run clean:deps",
 		"compile-tests": "node ./scripts/build-tests.js",
 		"watch-tests": "tsc -p . -w --outDir out",
-		"check-types": "bun run protos && bunx tsc --noEmit && bun run check-types:compat && cd webview-ui && bunx tsc --noEmit",
+		"typecheck": "bun run check-types",
+		"check-types": "bun run protos && bunx tsc --noEmit && bun run check-types:compat && cd webview-ui && bunx tsc -b",
 		"check-types:compat": "bunx tsc --project tsconfig.vscode-compat.json --noEmit",
 		"lint": "biome lint --config-path ./biome.jsonc --no-errors-on-unmatched --files-ignore-unknown=true --diagnostic-level=error && bun run lint:proto",
 		"lint:proto": "bash ./scripts/proto-lint.sh",
