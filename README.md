@@ -244,6 +244,18 @@ Cerebriline is not locked to a single AI provider. Use whichever model fits your
 | Ollama / LM Studio | Run local models on your machine |
 | Any OpenAI-compatible API | Self-hosted or third-party endpoints |
 
+### Ollama: install the thinking-budget build
+
+The Ollama panel offers a **thinking budget** — a cap on how long the model may reason before it has to answer — alongside the full sampler (`num_ctx`, `num_gpu`, `temperature`, `top_k`, `top_p`, penalties, `num_predict`, `stop`).
+
+The budget needs a server that understands it. Stock Ollama accepts unknown request options and silently drops them, so on a stock build the control changes nothing, says nothing, and the model reasons for as long as it likes — which is the single most common reason a small model never finishes a task.
+
+Install the thinking-budget build from the fork: **https://github.com/mann1x/ollama/releases/latest**
+
+It is ordinary Ollama with the budget sampler added — same models, same API, same `OLLAMA_HOST`, nothing to re-import. Take the binary for your platform, and on Windows and Linux take the matching **runtime** archive from the same release: the sampler lives in the runtime libraries, and a binary paired with the stock runtime will fail to start or quietly lose the budget.
+
+Everything else in the Ollama panel works on stock Ollama. Only the thinking budget requires this build.
+
 ## Extend With Plugins or MCP Servers
 
 Extend Cerebriline's capabilities with plugins. Using the SDK, register tools and lifecycle hooks programmatically through the plugin system for logging, auditing, policy enforcement, or adding domain-specific capabilities. Simple plugin example below.

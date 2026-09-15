@@ -95,6 +95,31 @@ Cerebriline talks to local servers (Ollama, LM Studio, llama.cpp) and to hosted
 providers (Anthropic, OpenAI, Google, OpenRouter, and more). The point of the
 fork is that the small local ones work too.
 
+## Ollama: install the thinking-budget build
+
+The Ollama panel offers a **thinking budget** — a cap on how long the model may
+reason before it has to answer — alongside the full sampler (`num_ctx`,
+`num_gpu`, `temperature`, `top_k`, `top_p`, penalties, `num_predict`, `stop`).
+
+The budget needs a server that understands it. Stock Ollama accepts unknown
+request options and silently drops them, so on a stock build the control changes
+nothing, says nothing, and the model reasons for as long as it likes. Long
+reasoning on a small model is the single most common reason a task never
+finishes.
+
+Install the thinking-budget build of Ollama from the fork:
+
+**https://github.com/mann1x/ollama/releases/latest**
+
+It is ordinary Ollama with the budget sampler added — same models, same API, same
+`OLLAMA_HOST`; nothing needs re-importing. Take the binary for your platform, and
+on Windows and Linux take the matching **runtime** archive from the same release:
+the sampler lives in the runtime libraries, and a binary paired with the stock
+runtime will fail to start or quietly lose the budget.
+
+Everything else in the Ollama panel works on stock Ollama. Only the thinking
+budget requires this build.
+
 ## Not affiliated with Cline
 
 Cerebriline is an independent fork published by [mann1x](https://github.com/mann1x).
