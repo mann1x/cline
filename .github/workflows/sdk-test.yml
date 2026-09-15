@@ -6,6 +6,9 @@ on:
             - main
         paths:
             - "sdk/**"
+            # This workflow builds the CLI and runs its unit and TUI e2e
+            # suites, so a change under apps/cli has to fire it too.
+            - "apps/cli/**"
             - ".github/workflows/sdk-test.yml"
     workflow_dispatch:
     pull_request:
@@ -13,6 +16,9 @@ on:
             - main
         paths:
             - "sdk/**"
+            # This workflow builds the CLI and runs its unit and TUI e2e
+            # suites, so a change under apps/cli has to fire it too.
+            - "apps/cli/**"
             - ".github/workflows/sdk-test.yml"
     workflow_call:
 
