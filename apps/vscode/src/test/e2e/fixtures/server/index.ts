@@ -8,6 +8,7 @@ import {
 	E2E_MOCK_CLINE_RECOMMENDED_MODELS,
 	E2E_MOCK_EDITOR_TOOL_CALL,
 	E2E_MOCK_POWERSHELL_TOOL_CALL,
+	E2E_MOCK_READ_TOOL_CALL,
 	E2E_REGISTERED_MOCK_ENDPOINTS,
 } from "./api"
 import { ClineDataMock } from "./data"
@@ -483,28 +484,45 @@ export class ClineApiServerMock {
 						// conversation history of the follow-up request, so order matters.
 						// Scope tool-result routing to the mock scenarios that issued a tool
 						// call so unrelated conversations retain the default response.
-						const hasToolResult =
+						const toolResultCount =
 							(body.includes("edit_request") || body.includes("powershell_background_request")) &&
-							Array.isArray(messages) &&
-							messages.some((m: { role?: string }) => m?.role === "tool")
+							Array.isArray(messages)
+								? messages.filter((m: { role?: string }) => m?.role === "tool").length
+								: 0
+						const hasToolResult = toolResultCount > 0
 
 						let responseText = E2E_MOCK_API_RESPONSES.DEFAULT
-						let toolCall: typeof E2E_MOCK_EDITOR_TOOL_CALL | typeof E2E_MOCK_POWERSHELL_TOOL_CALL | undefined
+						let toolCall:
+							| typeof E2E_MOCK_READ_TOOL_CALL
+							| typeof E2E_MOCK_EDITOR_TOOL_CALL
+							| typeof E2E_MOCK_POWERSHELL_TOOL_CALL
+							| undefined
 						log("Chat completion mock selection:", {
 							isEditRequest: body.includes("edit_request"),
 							isPowerShellRequest: body.includes("powershell_background_request"),
 							hasToolResult,
+							toolResultCount,
 						})
-						if (hasToolResult) {
-							responseText = body.includes("powershell_background_request")
-								? E2E_MOCK_API_RESPONSES.POWERSHELL_REQUEST_COMPLETE
-								: E2E_MOCK_API_RESPONSES.EDIT_REQUEST_COMPLETE
-						} else if (body.includes("edit_request")) {
-							// Stream lead-in text followed by a structured `editor` tool
-							// call (OpenAI tool_calls deltas) — the only tool-call syntax
-							// the SDK runtime executes.
-							responseText = E2E_MOCK_API_RESPONSES.EDIT_REQUEST_LEAD_IN
-							toolCall = E2E_MOCK_EDITOR_TOOL_CALL
+						if (body.includes("edit_request")) {
+							// Three turns, because the editor refuses a text-matched edit
+							// to a file nothing has read this session: read, then edit,
+							// then say what happened. Counting tool results is what tells
+							// the turns apart — the user's "edit_request" prompt stays in
+							// the history of every follow-up.
+							if (toolResultCount === 0) {
+								responseText = E2E_MOCK_API_RESPONSES.EDIT_REQUEST_READ_LEAD_IN
+								toolCall = E2E_MOCK_READ_TOOL_CALL
+							} else if (toolResultCount === 1) {
+								// Stream lead-in text followed by a structured `editor` tool
+								// call (OpenAI tool_calls deltas) — the only tool-call syntax
+								// the SDK runtime executes.
+								responseText = E2E_MOCK_API_RESPONSES.EDIT_REQUEST_LEAD_IN
+								toolCall = E2E_MOCK_EDITOR_TOOL_CALL
+							} else {
+								responseText = E2E_MOCK_API_RESPONSES.EDIT_REQUEST_COMPLETE
+							}
+						} else if (hasToolResult) {
+							responseText = E2E_MOCK_API_RESPONSES.POWERSHELL_REQUEST_COMPLETE
 						} else if (body.includes("powershell_background_request")) {
 							responseText = E2E_MOCK_API_RESPONSES.POWERSHELL_REQUEST_LEAD_IN
 							toolCall = E2E_MOCK_POWERSHELL_TOOL_CALL

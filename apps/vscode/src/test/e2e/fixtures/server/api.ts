@@ -40,6 +40,22 @@ export const E2E_REGISTERED_MOCK_ENDPOINTS = {
  * paths against the session cwd, which is the first workspace folder in both
  * the single-root and multi-root e2e workspaces (`fixtures/workspace`).
  */
+/**
+ * The read that has to come before the edit.
+ *
+ * The SDK's editor refuses a text-matched edit to a file nothing has read in
+ * this session -- "editing a file sight-unseen is the same mistake at a coarser
+ * grain" -- so a mock that jumps straight to `editor` gets a refusal instead of
+ * an edit, and the ask row the test waits for never appears.
+ */
+export const E2E_MOCK_READ_TOOL_CALL = {
+	id: "call_e2e_read_1",
+	name: "read_files",
+	arguments: {
+		files: [{ path: "test.ts" }],
+	},
+}
+
 export const E2E_MOCK_EDITOR_TOOL_CALL = {
 	id: "call_e2e_edit_1",
 	name: "editor",
@@ -72,6 +88,8 @@ The change has been applied and saved to the file.`
 export const E2E_MOCK_API_RESPONSES = {
 	DEFAULT: "Hello! I'm a mock Cline API response.",
 	/** Assistant text streamed before the structured editor tool call. */
+	/** Assistant text streamed before the read that the edit depends on. */
+	EDIT_REQUEST_READ_LEAD_IN: `Let me read test.ts before I change it.`,
 	EDIT_REQUEST_LEAD_IN: `I'll replace "john" with "cline" in the test.ts file.`,
 	/** Turn-ending text streamed after the SDK reports the editor tool result. */
 	EDIT_REQUEST_COMPLETE: edit_request_complete,
