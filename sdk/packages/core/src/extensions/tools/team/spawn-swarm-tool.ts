@@ -90,6 +90,18 @@ export interface SpawnSwarmOutput {
 	workers: number;
 	/** Whether they shared the lead's prefix, or each paid for their own. */
 	pooled: boolean;
+	/**
+	 * What the round cost, summed over the workers that reported it.
+	 *
+	 * Carried out because nothing downstream can recover it: the workers'
+	 * transcripts are discarded when their pool is released, so a swarm that
+	 * kept this to itself would spend N runs' worth of tokens that are counted
+	 * nowhere the task header can see. `spawn_agent` reports its own for the
+	 * same reason. A worker that threw contributes nothing, having returned no
+	 * result to read a count from -- the number is what was reported, not an
+	 * estimate of what was spent.
+	 */
+	usage: { inputTokens: number; outputTokens: number };
 }
 
 /** An ephemeral pool holding a snapshot of the lead's live context. */
@@ -236,7 +248,7 @@ export function createSpawnSwarmTool(
 			"Use it when a task splits into parts that do not depend on each other — searching a repo several ways, checking several files, trying several approaches. " +
 			"Give `tasks` when the workers should do different things, or `task` with `count` to fan the same question out. " +
 			'`count: "max"` means as many as the server will take right now; that is what to pass when asked for as many agents as possible. ' +
-			"Output: `{digest, workers, pooled}`. `digest` is the whole result — the workers' own transcripts are discarded, so nothing they saw reaches you except through it.",
+			"Output: `{digest, workers, pooled, usage}`. `digest` is the whole result — the workers' own transcripts are discarded, so nothing they saw reaches you except through it.",
 		inputSchema: zodToJsonSchema(SpawnSwarmInputSchema),
 		execute: async (input) => {
 			const requested = requestedWorkers(input);
@@ -245,6 +257,7 @@ export function createSpawnSwarmTool(
 					digest: "No task was given, so no workers ran.",
 					workers: 0,
 					pooled: false,
+					usage: { inputTokens: 0, outputTokens: 0 },
 				};
 			}
 
@@ -278,6 +291,9 @@ export function createSpawnSwarmTool(
 			// task launches, and the snapshot is of that slot.
 			const snapshot = await config.pools.snapshot().catch(() => undefined);
 
+			let inputTokens = 0;
+			let outputTokens = 0;
+
 			try {
 				const results = await Promise.all(
 					workers.map(async (worker) => {
@@ -288,6 +304,8 @@ export function createSpawnSwarmTool(
 								systemPrompt: input.systemPrompt,
 								...(snapshot ? { poolId: snapshot.poolId } : {}),
 							});
+							inputTokens += result.usage?.inputTokens ?? 0;
+							outputTokens += result.usage?.outputTokens ?? 0;
 							return digestOf(worker.name, result);
 						} catch (error) {
 							// Named, never dropped: the lead cannot tell an
@@ -310,6 +328,7 @@ export function createSpawnSwarmTool(
 					digest: renderWorkDigest(digest),
 					workers: workers.length,
 					pooled: snapshot !== undefined,
+					usage: { inputTokens, outputTokens },
 				};
 			} finally {
 				// The leak this whole change set exists to stop. On the failure

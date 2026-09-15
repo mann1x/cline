@@ -253,3 +253,55 @@ describe("spawn_swarm", () => {
 		expect(result.pooled).toBe(false);
 	});
 });
+
+describe("what the round cost", () => {
+	it("adds up the workers' tokens, which nothing else can recover", () => {
+		// The workers' transcripts are discarded when their pool is released,
+		// so a swarm that does not carry its usage out spends N runs' worth of
+		// tokens that are counted nowhere -- the task header included.
+		// `spawn_agent` reports its own for exactly this reason.
+		return (async () => {
+			const { tool } = toolWith(async (task) =>
+				agentResult(`did ${task}`, {
+					usage: {
+						inputTokens: 100,
+						outputTokens: 20,
+					} as AgentResult["usage"],
+				}),
+			);
+			const result = await call(tool, {
+				systemPrompt: "p",
+				task: "look",
+				count: 3,
+			});
+			expect(result.workers).toBe(3);
+			expect(result.usage).toEqual({ inputTokens: 300, outputTokens: 60 });
+		})();
+	});
+
+	it("still counts the workers that did answer when one throws", () => {
+		// A failed worker is represented in the digest rather than dropped, and
+		// its siblings' tokens were spent either way.
+		return (async () => {
+			let calls = 0;
+			const { tool } = toolWith(async (task) => {
+				calls += 1;
+				if (calls === 2) {
+					throw new Error("worker died");
+				}
+				return agentResult(`did ${task}`, {
+					usage: {
+						inputTokens: 10,
+						outputTokens: 5,
+					} as AgentResult["usage"],
+				});
+			});
+			const result = await call(tool, {
+				systemPrompt: "p",
+				task: "look",
+				count: 3,
+			});
+			expect(result.usage).toEqual({ inputTokens: 20, outputTokens: 10 });
+		})();
+	});
+});
