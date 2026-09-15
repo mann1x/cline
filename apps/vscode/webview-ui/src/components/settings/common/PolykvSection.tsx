@@ -2,6 +2,7 @@ import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { useProviderConfig } from "@/hooks/useProviderConfig"
 import { DebouncedTextField } from "./DebouncedTextField"
+import { PolykvStatusStrip } from "./PolykvStatusStrip"
 
 /**
  * opencoti's PolyKV control plane, as one section with one switch.
@@ -148,6 +149,11 @@ export const PolykvSection = ({ providerId }: { providerId: string }) => {
 						"Bypass admission",
 						"Sends every request past the admission gate. The engine stops protecting the throughput floor, so sessions can make each other slow — deliberate, and visible here rather than silent.",
 					)}
+					{/* What the configured server is actually doing, read once.
+					    It answers the question every field above raises — did
+					    any of this take effect — which no amount of settings
+					    copy can. */}
+					<PolykvStatusStrip providerId={providerId} />
 				</div>
 			)}
 		</div>

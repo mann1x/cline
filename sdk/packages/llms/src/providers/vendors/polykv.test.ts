@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
 	createPolykvClient,
 	probeOpencotiProps,
+	readOpencotiStatus,
 	resetPolykvAvailability,
 } from "./polykv";
 
@@ -214,5 +215,224 @@ describe("the /props probe", () => {
 
 		expect(props).toMatchObject({ poolsEnabled: false, elastic: false });
 		expect(props.release).toBeUndefined();
+	});
+});
+
+describe("the read-only status the panel shows", () => {
+	beforeEach(resetPolykvAvailability);
+
+	/** A server answering the three endpoints that are safe to read. */
+	function statusServer(
+		overrides: {
+			props?: Record<string, unknown>;
+			pools?: Record<string, unknown>;
+			tps?: Record<string, unknown>;
+		} = {},
+	) {
+		const paths: string[] = [];
+		const fetchImpl = (async (input: Parameters<typeof fetch>[0]) => {
+			const url = String(input);
+			paths.push(new URL(url).pathname);
+			if (url.endsWith("/props")) {
+				return new Response(
+					JSON.stringify(
+						overrides.props ?? {
+							build_info: "opencoti-0.10.5-c7-2609031229001",
+							opencoti: {
+								polykv: { pools_enabled: true },
+								elastic_slots: {
+									enabled: true,
+									slots_live: 3,
+									slots_max: 8,
+									reason: "saturated, hold",
+									grows: 2,
+									shrinks: 0,
+									vram_free_mib: null,
+									tps_floor: 1,
+								},
+							},
+						},
+					),
+					{ status: 200 },
+				);
+			}
+			if (url.endsWith("/polykv/pools")) {
+				return new Response(
+					JSON.stringify(
+						overrides.pools ?? {
+							pools_max: 4,
+							tree_depth: 2,
+							pools: [
+								{
+									pool_id: 0,
+									parent: -1,
+									prefix_len: 12_859,
+									pinned: true,
+									ephemeral: false,
+									orphaned_pin: false,
+									children: [1],
+									source_session: "",
+								},
+								{
+									pool_id: 1,
+									parent: 0,
+									branch_pos: 12_859,
+									prefix_len: 20_000,
+									pinned: false,
+									ephemeral: true,
+									orphaned_pin: true,
+									children: [],
+									source_session: "lead",
+								},
+							],
+						},
+					),
+					{ status: 200 },
+				);
+			}
+			if (url.endsWith("/polykv/tps")) {
+				return new Response(
+					JSON.stringify(
+						overrides.tps ?? {
+							sessions: [
+								{
+									slot_id: 0,
+									session_id: "lead",
+									pool_id: -1,
+									tps_ewma: 41.2,
+									active: true,
+									ctx_used: 18_000,
+									ctx_total: 32_768,
+								},
+								{
+									slot_id: 1,
+									session_id: "worker-1",
+									pool_id: -1,
+									tps_ewma: 0,
+									active: true,
+								},
+							],
+						},
+					),
+					{ status: 200 },
+				);
+			}
+			return new Response("{}", { status: 404 });
+		}) as unknown as typeof fetch;
+		return { fetchImpl, paths };
+	}
+
+	// The one endpoint the panel may never touch. On c7 every GET of it folds
+	// the settle and bias EWMAs, so a strip that refreshed would corrupt the
+	// admission projection it was drawing.
+	it("never asks /capacity", async () => {
+		const server = statusServer();
+		await readOpencotiStatus("http://localhost:8080/v1", server.fetchImpl);
+		expect(server.paths).toEqual(["/props", "/polykv/pools", "/polykv/tps"]);
+	});
+
+	it("reads the elastic state from /props, reason included", async () => {
+		const server = statusServer();
+		const status = await readOpencotiStatus(
+			"http://localhost:8080/v1",
+			server.fetchImpl,
+		);
+		expect(status.reachable).toBe(true);
+		expect(status.release).toBe("c7");
+		expect(status.slotsLive).toBe(3);
+		expect(status.slotsMax).toBe(8);
+		// Kept distinct from "kv headroom exhausted" by the engine on purpose:
+		// one says raise --max-parallel, the other says this context does not
+		// fit, and collapsing them throws that away.
+		expect(status.elasticReason).toBe("saturated, hold");
+	});
+
+	// `vram_free_mib` is null, not 0, when the number would be a lie -- no GPU
+	// layers, or integrated memory where the device reports host RAM. A reader
+	// that sees 0 cannot tell "no headroom" from "no measurement".
+	it("does not read an absent VRAM figure as zero", async () => {
+		const server = statusServer();
+		const status = await readOpencotiStatus(
+			"http://localhost:8080/v1",
+			server.fetchImpl,
+		);
+		expect(status.vramFreeMib).toBeUndefined();
+	});
+
+	it("lists the pool tree, including a pin nothing references", async () => {
+		const server = statusServer();
+		const status = await readOpencotiStatus(
+			"http://localhost:8080/v1",
+			server.fetchImpl,
+		);
+		expect(status.poolsMax).toBe(4);
+		expect(status.pools).toHaveLength(2);
+		expect(status.pools[0]).toMatchObject({
+			poolId: "0",
+			pinned: true,
+			prefixLen: 12_859,
+			children: 1,
+		});
+		// An orphaned pin blocks reclaim forever; it is the leak this whole
+		// change set exists to stop, so the panel names it.
+		expect(status.pools[1]).toMatchObject({
+			poolId: "1",
+			parent: "0",
+			ephemeral: true,
+			orphanedPin: true,
+			sourceSession: "lead",
+		});
+	});
+
+	// On c7 `/polykv/tps` reports `-1` as the pool key for every registry-pool
+	// session, so it identifies nothing. The session id is the key that works.
+	it("keys sessions by session id, not by the pool key c7 does not set", async () => {
+		const server = statusServer();
+		const status = await readOpencotiStatus(
+			"http://localhost:8080/v1",
+			server.fetchImpl,
+		);
+		expect(status.sessions.map((s) => s.sessionId)).toEqual([
+			"lead",
+			"worker-1",
+		]);
+		expect(status.sessions[0]).toMatchObject({ tps: 41.2, active: true });
+		// Zero from a slot that is processing means the EWMA has not warmed,
+		// not that the slot is producing nothing.
+		expect(status.sessions[1]?.tps).toBeUndefined();
+	});
+
+	it("reports a server it cannot reach as unreachable rather than empty", async () => {
+		const status = await readOpencotiStatus(
+			"http://localhost:8080/v1",
+			(async () => {
+				throw new Error("ECONNREFUSED");
+			}) as unknown as typeof fetch,
+		);
+		expect(status.reachable).toBe(false);
+		expect(status.pools).toEqual([]);
+	});
+
+	// A server booted without `--polykv-max-pools` errors on the pool routes.
+	// That is "pools off", which /props already said, and must not read as a
+	// server that is down.
+	it("stays reachable when the pool routes are not served", async () => {
+		const server = statusServer({
+			props: {
+				build_info: "opencoti-0.10.5-c7-2609031229001",
+				opencoti: { polykv: { pools_enabled: false, max_pools: 0 } },
+			},
+		});
+		const status = await readOpencotiStatus("http://localhost:8080/v1", (async (
+			input: Parameters<typeof fetch>[0],
+		) => {
+			if (String(input).endsWith("/polykv/pools")) {
+				return new Response("pools disabled", { status: 501 });
+			}
+			return server.fetchImpl(input);
+		}) as unknown as typeof fetch);
+		expect(status.reachable).toBe(true);
+		expect(status.poolsEnabled).toBe(false);
+		expect(status.pools).toEqual([]);
 	});
 });

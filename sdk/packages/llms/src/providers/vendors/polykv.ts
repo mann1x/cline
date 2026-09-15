@@ -580,3 +580,247 @@ export function createPolykvClient(options: PolykvClientOptions): PolykvClient {
 		},
 	};
 }
+
+/** One pool in the tree, as the status panel shows it. */
+export interface OpencotiStatusPool {
+	poolId: string;
+	/** The pool this one branches from, absent for a root. */
+	parent?: string;
+	/** Where the child's own tokens start; everything before is shared. */
+	branchPos?: number;
+	prefixLen?: number;
+	pinned: boolean;
+	ephemeral: boolean;
+	/**
+	 * Pinned, childless, and referenced by no slot's current or last task.
+	 *
+	 * Typically left behind by a compaction re-root that did not unpin. It
+	 * blocks reclaim forever, which is the leak this client's release and unpin
+	 * fixes exist to stop, so it is named rather than counted.
+	 */
+	orphanedPin: boolean;
+	/** The session a `from_session` snapshot was taken from. */
+	sourceSession?: string;
+	children: number;
+}
+
+/** One live session, keyed the way c7 allows. */
+export interface OpencotiStatusSession {
+	sessionId: string;
+	/**
+	 * The slot's throughput EWMA, absent while it is warming.
+	 *
+	 * A processing slot reporting `0` has not warmed its EWMA yet; it is not a
+	 * slot producing nothing, and averaging its zero is what dragged the
+	 * admission mean down after every spawn.
+	 */
+	tps?: number;
+	active: boolean;
+	ctxUsed?: number;
+	ctxTotal?: number;
+}
+
+/**
+ * Everything the settings panel shows about a live server.
+ *
+ * Read from `/props`, `/polykv/pools` and `/polykv/tps` -- and from nothing
+ * else. **`/capacity` is not on this list and must never be added to it**: on
+ * the published c7 engine every GET of it folds the settle and bias EWMAs, so a
+ * panel that refreshed would corrupt the admission projection it was drawing.
+ * That is why `kv_headroom_pct` and the SWA arm, which live only on that
+ * endpoint, are not here. c8 makes the plain GET read-only and moves the fold
+ * behind `?fold=1`; they can be added then, not before.
+ *
+ * The other three are served from a published snapshot and are safe while the
+ * server is busy.
+ */
+export interface OpencotiStatus {
+	/** Whether `/props` answered at all. */
+	reachable: boolean;
+	release?: string;
+	poolsEnabled: boolean;
+	elastic: boolean;
+	/**
+	 * The elastic controller's own word for where it is.
+	 *
+	 * Surfaced verbatim because the engine keeps `saturated, hold` distinct
+	 * from `kv headroom exhausted` deliberately: one says raise
+	 * `--max-parallel`, the other says this context does not fit.
+	 */
+	elasticReason?: string;
+	slotsLive?: number;
+	slotsMax?: number;
+	/**
+	 * Free VRAM, when the engine can measure it.
+	 *
+	 * The engine sends `null`, not `0`, when the number would be a lie -- no
+	 * GPU layers, or integrated memory where the device reports host RAM -- so
+	 * this stays `undefined` there. A reader that saw `0` could not tell "no
+	 * headroom" from "no measurement".
+	 */
+	vramFreeMib?: number;
+	tpsFloor?: number;
+	grows?: number;
+	shrinks?: number;
+	poolsMax?: number;
+	treeDepth?: number;
+	pools: readonly OpencotiStatusPool[];
+	sessions: readonly OpencotiStatusSession[];
+}
+
+const UNREACHABLE: OpencotiStatus = {
+	reachable: false,
+	poolsEnabled: false,
+	elastic: false,
+	pools: [],
+	sessions: [],
+};
+
+function numberOr(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isFinite(value)
+		? value
+		: undefined;
+}
+
+async function readJson(
+	doFetch: typeof fetch,
+	url: string,
+): Promise<Record<string, unknown> | undefined> {
+	try {
+		const response = await doFetch(url, { method: "GET" });
+		if (!response.ok) {
+			return undefined;
+		}
+		return (await response.json()) as Record<string, unknown>;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Read a server's live PolyKV state for display.
+ *
+ * Nothing here may fail a caller: every read that does not answer leaves its
+ * part of the shape empty, and a server that cannot be reached at all reports
+ * itself as such rather than as a server with no pools -- those are different
+ * things and the panel says which.
+ *
+ * Pool timestamps are deliberately absent. On c7 `created_ts` and
+ * `last_access_ts` are `ggml_time_us()` monotonic stamps since boot, not epoch
+ * seconds, so rendering either as a wall-clock time shows a date in 1970 and
+ * rendering the difference from now shows an age of decades. c8 anchors them;
+ * until then the honest number is none.
+ */
+export async function readOpencotiStatus(
+	baseUrl: string | undefined,
+	fetchImpl?: typeof fetch,
+): Promise<OpencotiStatus> {
+	if (!baseUrl) {
+		return UNREACHABLE;
+	}
+	const root = polykvRoot(baseUrl);
+	const doFetch = fetchImpl ?? fetch;
+
+	const props = await readJson(doFetch, `${root}/props`);
+	if (!props) {
+		return UNREACHABLE;
+	}
+	const opencoti = (props.opencoti ?? {}) as Record<string, unknown>;
+	const polykv = (opencoti.polykv ?? {}) as Record<string, unknown>;
+	const elastic = (opencoti.elastic_slots ?? {}) as Record<string, unknown>;
+	const release = parseRelease(props.build_info);
+	const poolsEnabled = polykv.pools_enabled === true;
+
+	const poolsBody = poolsEnabled
+		? await readJson(doFetch, `${root}/polykv/pools`)
+		: undefined;
+	const tpsBody = await readJson(doFetch, `${root}/polykv/tps`);
+
+	const rawPools = Array.isArray(poolsBody?.pools)
+		? (poolsBody.pools as Array<Record<string, unknown>>)
+		: [];
+	const pools: OpencotiStatusPool[] = rawPools.map((pool) => {
+		const parent = numberOr(pool.parent);
+		const children = Array.isArray(pool.children) ? pool.children.length : 0;
+		const source =
+			typeof pool.source_session === "string" && pool.source_session !== ""
+				? pool.source_session
+				: undefined;
+		return {
+			poolId: String(pool.pool_id ?? ""),
+			// `-1` is the engine's "no parent", not pool number minus one.
+			...(parent !== undefined && parent >= 0
+				? { parent: String(parent) }
+				: {}),
+			...(numberOr(pool.branch_pos) !== undefined
+				? { branchPos: pool.branch_pos as number }
+				: {}),
+			...(numberOr(pool.prefix_len) !== undefined
+				? { prefixLen: pool.prefix_len as number }
+				: {}),
+			pinned: pool.pinned === true,
+			ephemeral: pool.ephemeral === true,
+			orphanedPin: pool.orphaned_pin === true,
+			...(source !== undefined ? { sourceSession: source } : {}),
+			children,
+		};
+	});
+
+	const rawSessions = Array.isArray(tpsBody?.sessions)
+		? (tpsBody.sessions as Array<Record<string, unknown>>)
+		: [];
+	// Keyed by `session_id`, never by `pool_id`: on c7 that field reports `-1`
+	// for every registry-pool session -- it is the legacy donor-slot key -- so
+	// it identifies nothing and grouping by it collapses every session into one.
+	const sessions: OpencotiStatusSession[] = rawSessions.map((session) => {
+		const tps = numberOr(session.tps_ewma);
+		return {
+			sessionId:
+				typeof session.session_id === "string" ? session.session_id : "",
+			...(tps !== undefined && tps > 0 ? { tps } : {}),
+			active: session.active === true,
+			...(numberOr(session.ctx_used) !== undefined
+				? { ctxUsed: session.ctx_used as number }
+				: {}),
+			...(numberOr(session.ctx_total) !== undefined
+				? { ctxTotal: session.ctx_total as number }
+				: {}),
+		};
+	});
+
+	return {
+		reachable: true,
+		...(release ? { release } : {}),
+		poolsEnabled,
+		elastic: elastic.enabled === true,
+		...(typeof elastic.reason === "string"
+			? { elasticReason: elastic.reason }
+			: {}),
+		...(numberOr(elastic.slots_live) !== undefined
+			? { slotsLive: elastic.slots_live as number }
+			: {}),
+		...(numberOr(elastic.slots_max) !== undefined
+			? { slotsMax: elastic.slots_max as number }
+			: {}),
+		...(numberOr(elastic.vram_free_mib) !== undefined
+			? { vramFreeMib: elastic.vram_free_mib as number }
+			: {}),
+		...(numberOr(elastic.tps_floor) !== undefined
+			? { tpsFloor: elastic.tps_floor as number }
+			: {}),
+		...(numberOr(elastic.grows) !== undefined
+			? { grows: elastic.grows as number }
+			: {}),
+		...(numberOr(elastic.shrinks) !== undefined
+			? { shrinks: elastic.shrinks as number }
+			: {}),
+		...(numberOr(poolsBody?.pools_max) !== undefined
+			? { poolsMax: poolsBody?.pools_max as number }
+			: {}),
+		...(numberOr(poolsBody?.tree_depth) !== undefined
+			? { treeDepth: poolsBody?.tree_depth as number }
+			: {}),
+		pools,
+		sessions,
+	};
+}
