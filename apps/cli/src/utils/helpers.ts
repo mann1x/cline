@@ -6,6 +6,10 @@ import { type HookEventPayload, parseHookEventPayload } from "@cline/shared";
 import { ensureHookLogDir } from "@cline/shared/storage";
 import { nanoid } from "nanoid";
 import { commanderToParsedArgs, createProgram } from "../commands/program";
+import {
+	formatSpawnSwarmSummary,
+	parseSpawnSwarmInput,
+} from "../tui/utils/tool-parsing";
 import type { ParsedArgs } from "./types";
 
 export function sanitizeSessionToken(value: string): string {
@@ -210,6 +214,10 @@ export function formatToolInput(toolName: string, input: unknown): string {
 			break;
 		case "spawn_agent":
 			return truncate(String(obj.task ?? ""), 50);
+		case "spawn_swarm": {
+			const swarm = parseSpawnSwarmInput(obj);
+			return swarm ? formatSpawnSwarmSummary(swarm, 50) : "";
+		}
 		case "skills":
 			return truncate(
 				`${String(obj.skill ?? "")}${obj.args ? ` ${String(obj.args)}` : ""}`,

@@ -185,6 +185,82 @@ export function parseSpawnAgentInput(
 	return { task: input.task };
 }
 
+/**
+ * What a `spawn_swarm` call is asking for, in the terms a row can show.
+ *
+ * Two arms, and a renderer has to read both: `task` with `count` fans one
+ * question out, `tasks` gives a worker each a different one. The arms disagree
+ * about where the number lives -- `tasks` carries it as its own length and the
+ * model does not repeat it in `count` -- so `workers` is that number wherever
+ * it is knowable, and absent when only the server can say.
+ */
+export interface SpawnSwarmInfo {
+	/** The work, one line; several tasks joined when they differ. */
+	task: string;
+	/** What the model asked for, verbatim. `"max"` is not a number yet. */
+	count?: number | "max";
+	/** How many will run, where that is known before the call returns. */
+	workers?: number;
+}
+
+export function parseSpawnSwarmInput(
+	input: unknown,
+): SpawnSwarmInfo | undefined {
+	if (!isRecord(input)) return undefined;
+	const count =
+		input.count === "max"
+			? ("max" as const)
+			: typeof input.count === "number" && Number.isFinite(input.count)
+				? input.count
+				: undefined;
+
+	if (Array.isArray(input.tasks)) {
+		const tasks = input.tasks
+			.map((entry) =>
+				isRecord(entry) && typeof entry.task === "string"
+					? entry.task
+					: undefined,
+			)
+			.filter((entry): entry is string => Boolean(entry));
+		if (tasks.length > 0) {
+			return { task: tasks.join("; "), workers: tasks.length };
+		}
+	}
+
+	if (typeof input.task !== "string") return undefined;
+	return {
+		task: input.task,
+		...(count === undefined ? {} : { count }),
+		// `max` resolves against the engine's headroom inside the tool, so the
+		// number is not ours to state here -- saying one would be a guess the
+		// row then contradicts.
+		...(typeof count === "number" ? { workers: count } : {}),
+	};
+}
+
+/**
+ * One line for a swarm call, bounded to `maxLength`.
+ *
+ * Shared by the three renderers so they agree on the wording. The count leads
+ * and is never cut: on a narrow row a truncated task still says what kind of
+ * call this was, where a truncated count does not.
+ */
+export function formatSpawnSwarmSummary(
+	info: SpawnSwarmInfo,
+	maxLength: number,
+): string {
+	const prefix =
+		info.workers !== undefined
+			? `${info.workers} worker${info.workers === 1 ? "" : "s"}: `
+			: info.count === "max"
+				? "max workers: "
+				: "";
+	const room = Math.max(0, maxLength - prefix.length);
+	const task =
+		info.task.length > room ? `${info.task.slice(0, room)}...` : info.task;
+	return `${prefix}${task}`;
+}
+
 // Base64 payloads are one giant line; chunk to MIME width so GenericOutput's
 // line-based collapse stays compact and expand shows the full data.
 function chunkBase64(data: string): string {

@@ -20,10 +20,12 @@ import { HostProvider } from "@/hosts/host-provider"
  *
  * Delegation is the pair: a sub-agent that spawns its own arrives at the slot
  * gate with its parent's slot still held, and on a one-slot endpoint that is
- * the hang the gate exists to prevent. `submit_and_exit` is how a sub-agent
+ * the hang the gate exists to prevent. `spawn_swarm` is the same shape several
+ * times over -- the runtime gates both on `enableSpawnAgent`, so they are one
+ * capability and belong here together. `submit_and_exit` is how a sub-agent
  * returns, so it is not the user's to remove either.
  */
-const TOOLS_NOT_OFFERED = new Set(["spawn_agent", "submit_and_exit"])
+export const TOOLS_NOT_OFFERED = new Set(["spawn_agent", "spawn_swarm", "submit_and_exit"])
 
 /** Frontmatter keys, in the order they are written. */
 // One renderer for the format, in @cline/shared: the `create_agent` tool

@@ -3,7 +3,7 @@ import { parseYamlFrontmatter } from "@core/context/instructions/user-instructio
 import { AgentInfo } from "@shared/proto/cline/file"
 import { expect } from "chai"
 
-import { agentFileName, renderAgentFile } from "../agent-files"
+import { agentFileName, renderAgentFile, TOOLS_NOT_OFFERED } from "../agent-files"
 
 function agent(overrides: Partial<AgentInfo> = {}): AgentInfo {
 	return AgentInfo.create({
@@ -101,5 +101,18 @@ describe("renderAgentFile", () => {
 			name: "reviewer",
 			description: "Reviews a change and reports what is wrong with it.",
 		})
+	})
+})
+
+describe("the tools a subagent is never offered", () => {
+	it("withholds every delegation tool, not just spawn_agent", () => {
+		// A sub-agent that delegates arrives at the slot gate with its parent's
+		// slot still held, and on a one-slot endpoint that is the measured
+		// hour-and-fifty-minute hang the gate exists to prevent. `spawn_swarm`
+		// is that same shape N times over, and the runtime already treats the
+		// two as one capability — both entries are gated on `enableSpawnAgent`
+		// in `extensions/tools/runtime.ts`. A list that names one and not the
+		// other hands a sub-agent the worse half.
+		expect([...TOOLS_NOT_OFFERED].sort()).to.deep.equal(["spawn_agent", "spawn_swarm", "submit_and_exit"])
 	})
 })

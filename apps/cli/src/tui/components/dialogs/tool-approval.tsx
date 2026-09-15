@@ -5,12 +5,14 @@ import type React from "react";
 import { useDialogPalette } from "../../hooks/use-theme";
 import {
 	buildReadFilesKeys,
+	formatSpawnSwarmSummary,
 	parseApplyPatchInput,
 	parseEditorInput,
 	parseReadFilesInput,
 	parseRunCommandsInput,
 	parseSearchInput,
 	parseSpawnAgentInput,
+	parseSpawnSwarmInput,
 	parseWebFetchInput,
 	shortenPath,
 } from "../../utils/tool-parsing";
@@ -89,6 +91,16 @@ export function formatApprovalParams(
 					{url}
 				</text>
 			));
+		}
+		case "spawn_swarm": {
+			const swarm = parseSpawnSwarmInput(rawInput);
+			if (!swarm) break;
+			return (
+				<text fg="gray" selectable>
+					{"  "}
+					{formatSpawnSwarmSummary(swarm, 80)}
+				</text>
+			);
 		}
 		case "spawn_agent": {
 			const info = parseSpawnAgentInput(rawInput);

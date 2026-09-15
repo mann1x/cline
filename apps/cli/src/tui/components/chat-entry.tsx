@@ -29,6 +29,7 @@ import { getSyntaxStyle, type SyntaxAccentMode } from "../utils/syntax-style";
 import { isWarningToolError } from "../utils/tool-errors";
 import {
 	buildReadFilesKeys,
+	formatSpawnSwarmSummary,
 	parseApplyPatchInput,
 	parseAskQuestionInput,
 	parseEditorInput,
@@ -36,6 +37,7 @@ import {
 	parseRunCommandsInput,
 	parseSearchInput,
 	parseSpawnAgentInput,
+	parseSpawnSwarmInput,
 	parseWebFetchInput,
 	shortenPath,
 } from "../utils/tool-parsing";
@@ -185,6 +187,11 @@ function formatToolParams(
 			const task =
 				info.task.length > 60 ? `${info.task.slice(0, 60)}...` : info.task;
 			return task;
+		}
+		case "spawn_swarm": {
+			const info = parseSpawnSwarmInput(rawInput);
+			if (!info) return fallback;
+			return formatSpawnSwarmSummary(info, 60);
 		}
 		case "ask_question":
 		case "ask_followup_question": {

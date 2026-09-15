@@ -20,6 +20,7 @@ const TOOL_KIND_MAP: Record<string, ToolKind> = {
 	web_search: "search",
 	Agent: "think",
 	spawn_agent: "think",
+	spawn_swarm: "think",
 	NotebookEdit: "edit",
 	skills: "other",
 };
