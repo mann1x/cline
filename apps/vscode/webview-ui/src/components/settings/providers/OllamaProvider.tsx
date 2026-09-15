@@ -244,11 +244,18 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 	// entry, and an empty one means empty rather than "borrow the other model's".
 	const legacyNumCtx = scope ? Number.NaN : Number.parseInt(apiConfiguration?.ollamaApiOptionsCtxNum || "", 10)
 	const ollamaNumCtx = config?.contextWindow || legacyNumCtx
-	// This configuration's tool-result cap. A scoped tab shows only its own —
-	// falling back to the global one there would display, and then save, a
-	// number belonging to the session's model, which is the bug the context
-	// window had.
-	const scopedToolResultChars = config?.maxToolResultChars ?? (scope ? undefined : maxToolResultChars)
+	// This configuration's tool-result cap, and only its own. The global setting
+	// is what applies when this is blank, so it belongs in the placeholder:
+	// rendered as the field's *value* it refilled the box with the very number
+	// being erased, so clearing the cap to retype put 64000 straight back, and
+	// the next write sent the borrowed number as though it had been chosen here.
+	// Reported as "I still can't change from 64000", and as blank and 64000
+	// marking the profile identically — which is what one value in two roles
+	// looks like from the outside.
+	const scopedToolResultChars = config?.maxToolResultChars
+	// What the panel says will happen if this is left blank. A scoped tab has no
+	// business naming the global one: its own model is the one being capped.
+	const fallbackToolResultChars = scope ? undefined : maxToolResultChars
 	const ollamaModelInfo = useMemo(() => {
 		return {
 			...openAiModelInfoSafeDefaults,
@@ -773,7 +780,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 								console.error("Failed to update tool result cap:", error),
 							)
 						}}
-						placeholder={`Default: ${DEFAULT_TOOL_RESULT_CHARS_HINT}`}
+						placeholder={`Default: ${fallbackToolResultChars ?? DEFAULT_TOOL_RESULT_CHARS_HINT}`}
 						style={{ width: "100%" }}>
 						<span className="font-semibold">Tool Results Character Cap</span>
 					</DebouncedTextField>
