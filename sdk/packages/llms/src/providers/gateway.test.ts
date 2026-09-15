@@ -591,7 +591,14 @@ describe("sdk-gateway", () => {
 		const conversation = await gateway.stream({
 			providerId: "scripted",
 			modelId: "scripted-model",
-			messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+			messages: [
+				{
+					id: "user_primary",
+					role: "user",
+					content: [{ type: "text", text: "hi" }],
+					createdAt: Date.now(),
+				},
+			],
 		});
 
 		let auxiliaryIssued = false;
@@ -600,7 +607,14 @@ describe("sdk-gateway", () => {
 				providerId: "scripted",
 				modelId: "scripted-model",
 				auxiliary: true,
-				messages: [{ role: "user", content: [{ type: "text", text: "sum" }] }],
+				messages: [
+					{
+						id: "user_auxiliary",
+						role: "user",
+						content: [{ type: "text", text: "sum" }],
+						createdAt: Date.now(),
+					},
+				],
 			})
 			.then((stream) => {
 				auxiliaryIssued = true;
@@ -679,8 +693,10 @@ describe("sdk-gateway", () => {
 				// exactly that shape, so the fixture has to be a real request
 				// for the ownership this test is about to be reached at all.
 				{
+					id: "user_long",
 					role: "user",
 					content: [{ type: "text", text: "hi ".repeat(10_000) }],
+					createdAt: Date.now(),
 				},
 			] as readonly AgentMessage[],
 		};

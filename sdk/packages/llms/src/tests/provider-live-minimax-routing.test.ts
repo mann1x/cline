@@ -116,15 +116,18 @@ function buildCases(): LiveCase[] {
 		const config = makeConfig({ ...options, fetch: captureFetch });
 		cases.push({
 			label: options.label,
+			// `metadata` is this harness's own side channel for handing the
+			// captured requests to the assertions -- `ProviderConfig` has no such
+			// field, and the gateway ignores what it does not read.
 			config: {
 				...config,
 				metadata: {
-					...(config.metadata ?? {}),
+					...((config as ConfigWithCapture).metadata ?? {}),
 					get capturedRequests() {
 						return captured;
 					},
 				},
-			},
+			} as ProviderConfig,
 			expectedBody: options.expectedBody,
 			unexpectedBodyKeys: options.unexpectedBodyKeys,
 		});
@@ -216,11 +219,19 @@ function buildCases(): LiveCase[] {
 	return cases;
 }
 
+/**
+ * A config carrying this harness's capture channel.
+ *
+ * Kept as a separate type rather than widened into `ProviderConfig`: the field
+ * is a test fixture's, not the gateway's, and saying so here is what stops it
+ * being mistaken for part of the provider contract.
+ */
+type ConfigWithCapture = ProviderConfig & {
+	metadata?: { capturedRequests?: CapturedRequest[] };
+};
+
 function getCapturedRequests(config: ProviderConfig): CapturedRequest[] {
-	const metadata = config.metadata as
-		| { capturedRequests?: CapturedRequest[] }
-		| undefined;
-	return metadata?.capturedRequests ?? [];
+	return (config as ConfigWithCapture).metadata?.capturedRequests ?? [];
 }
 
 describe("live MiniMax M3 provider routing mechanics", () => {

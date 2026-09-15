@@ -153,7 +153,7 @@ describe("baked anthropic catalog reasoning options", () => {
 				},
 				model: {
 					id: modelId,
-					name: model.name,
+					name: model.name ?? modelId,
 					providerId: "anthropic",
 					reasoningOptions: model.reasoningOptions,
 					metadata: model.family ? { family: model.family } : undefined,
@@ -191,8 +191,8 @@ describe("vertex builtin models", () => {
 		// spec and rotates as the upstream catalog changes — assert it resolves
 		// to a model in the list rather than pinning a specific id.
 		const provider = await getProvider("vertex");
-		expect(provider.defaultModelId).toBeTruthy();
-		expect(models[provider.defaultModelId ?? ""]).toBeDefined();
+		expect(provider?.defaultModelId).toBeTruthy();
+		expect(models[provider?.defaultModelId ?? ""]).toBeDefined();
 		expect(
 			(await getModelsForProvider("gemini"))["claude-fable-5"],
 		).toBeUndefined();

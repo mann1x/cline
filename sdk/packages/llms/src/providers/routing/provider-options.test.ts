@@ -31,7 +31,6 @@ type ContextOverrides = {
 	metadata?: GatewayProviderContext["provider"]["metadata"];
 	/** Test helper escape hatch for Claude-like models that should not get an auto-injected Anthropic reasoning route. */
 	disableAutoAnthropicRouting?: boolean;
-	contextWindow?: number;
 	configOptions?: Record<string, unknown>;
 };
 

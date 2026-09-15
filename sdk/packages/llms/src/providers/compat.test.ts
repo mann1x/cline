@@ -1,3 +1,4 @@
+import type { ModelReasoningOption } from "@cline/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	_testing,
@@ -67,7 +68,10 @@ describe("createGatewayApiHandler.getMessages", () => {
 			apiKey: "test-key",
 		});
 
-		const messages: Message[] = [
+		// Deliberately off-contract: these are the legacy and third-party
+		// payload shapes this converter exists to absorb, so the fixture is
+		// typed as what arrives on the wire rather than what the union allows.
+		const messages = [
 			{
 				role: "assistant",
 				content: [
@@ -95,7 +99,7 @@ describe("createGatewayApiHandler.getMessages", () => {
 					},
 				],
 			},
-		];
+		] as unknown as Message[];
 
 		const request = handler.getMessages("", messages) as {
 			messages: Array<{
@@ -133,7 +137,10 @@ describe("createGatewayApiHandler.getMessages", () => {
 			apiKey: "test-key",
 		});
 
-		const messages: Message[] = [
+		// Deliberately off-contract: these are the legacy and third-party
+		// payload shapes this converter exists to absorb, so the fixture is
+		// typed as what arrives on the wire rather than what the union allows.
+		const messages = [
 			{
 				role: "assistant",
 				content: [
@@ -163,7 +170,7 @@ describe("createGatewayApiHandler.getMessages", () => {
 					},
 				],
 			},
-		];
+		] as unknown as Message[];
 
 		const request = handler.getMessages("", messages) as {
 			messages: Array<{
@@ -207,7 +214,10 @@ describe("createGatewayApiHandler.getMessages", () => {
 			apiKey: "test-key",
 		});
 
-		const messages: Message[] = [
+		// Deliberately off-contract: these are the legacy and third-party
+		// payload shapes this converter exists to absorb, so the fixture is
+		// typed as what arrives on the wire rather than what the union allows.
+		const messages = [
 			{
 				role: "assistant",
 				content: [
@@ -242,7 +252,7 @@ describe("createGatewayApiHandler.getMessages", () => {
 					},
 				],
 			},
-		];
+		] as unknown as Message[];
 
 		const request = handler.getMessages("", messages) as {
 			messages: Array<{
@@ -294,7 +304,10 @@ describe("createGatewayApiHandler.getMessages", () => {
 			apiKey: "test-key",
 		});
 
-		const messages: Message[] = [
+		// Deliberately off-contract: these are the legacy and third-party
+		// payload shapes this converter exists to absorb, so the fixture is
+		// typed as what arrives on the wire rather than what the union allows.
+		const messages = [
 			{
 				role: "assistant",
 				content: [
@@ -324,7 +337,7 @@ describe("createGatewayApiHandler.getMessages", () => {
 					},
 				],
 			},
-		];
+		] as unknown as Message[];
 
 		const request = handler.getMessages("", messages) as {
 			messages: Array<{
@@ -697,7 +710,10 @@ describe("createGatewayApiHandler.createMessage", () => {
  */
 describe("toGatewayRequestMessages — tool_result with images", () => {
 	it("forwards text+image content arrays as the tool-result output", () => {
-		const messages: Message[] = [
+		// Deliberately off-contract: these are the legacy and third-party
+		// payload shapes this converter exists to absorb, so the fixture is
+		// typed as what arrives on the wire rather than what the union allows.
+		const messages = [
 			{
 				role: "assistant",
 				content: [
@@ -727,13 +743,16 @@ describe("toGatewayRequestMessages — tool_result with images", () => {
 					},
 				],
 			},
-		];
+		] as unknown as Message[];
 
 		const [, userMessage] = toGatewayRequestMessages(messages);
 
 		// The user message must contain ONE tool-result block (no orphan image siblings).
 		expect(userMessage.content).toHaveLength(1);
-		const toolResult = userMessage.content[0] as Record<string, unknown>;
+		const toolResult = userMessage.content[0] as unknown as Record<
+			string,
+			unknown
+		>;
 
 		expect(toolResult.type).toBe("tool-result");
 		expect(toolResult.toolCallId).toBe("call_1");
@@ -762,7 +781,10 @@ describe("toGatewayRequestMessages — tool_result with images", () => {
 		// array directly and emits it as a `{type:'content'}` tool-result
 		// output. (`toAiSdkToolResultOutput` then forwards the text part
 		// through unchanged.)
-		const messages: Message[] = [
+		// Deliberately off-contract: these are the legacy and third-party
+		// payload shapes this converter exists to absorb, so the fixture is
+		// typed as what arrives on the wire rather than what the union allows.
+		const messages = [
 			{
 				role: "assistant",
 				content: [
@@ -784,16 +806,22 @@ describe("toGatewayRequestMessages — tool_result with images", () => {
 					},
 				],
 			},
-		];
+		] as unknown as Message[];
 
 		const [, userMessage] = toGatewayRequestMessages(messages);
 		expect(userMessage.content).toHaveLength(1);
-		const toolResult = userMessage.content[0] as Record<string, unknown>;
+		const toolResult = userMessage.content[0] as unknown as Record<
+			string,
+			unknown
+		>;
 		expect(toolResult.output).toEqual([{ type: "text", text: "hello world" }]);
 	});
 
 	it("passes plain string content through unchanged", () => {
-		const messages: Message[] = [
+		// Deliberately off-contract: these are the legacy and third-party
+		// payload shapes this converter exists to absorb, so the fixture is
+		// typed as what arrives on the wire rather than what the union allows.
+		const messages = [
 			{
 				role: "user",
 				content: [
@@ -804,10 +832,13 @@ describe("toGatewayRequestMessages — tool_result with images", () => {
 					},
 				],
 			},
-		];
+		] as unknown as Message[];
 
 		const [userMessage] = toGatewayRequestMessages(messages);
-		const toolResult = userMessage.content[0] as Record<string, unknown>;
+		const toolResult = userMessage.content[0] as unknown as Record<
+			string,
+			unknown
+		>;
 		expect(toolResult.output).toBe("raw string output");
 	});
 });
@@ -839,9 +870,12 @@ describe("buildGatewayModels", () => {
 	});
 
 	it("preserves catalog reasoning controls on projected gateway models", () => {
+		// `satisfies` rather than `as const`: the values need contextual typing to
+		// land on the effort union, and a readonly tuple is not what the field
+		// takes.
 		const reasoningOptions = [
-			{ type: "effort" as const, values: ["medium", "high", "max"] as const },
-		];
+			{ type: "effort", values: ["medium", "high", "max"] },
+		] satisfies ModelReasoningOption[];
 		const models = buildGatewayModels("openrouter", {
 			providerId: "openrouter",
 			modelId: "openai/gpt-5.6",

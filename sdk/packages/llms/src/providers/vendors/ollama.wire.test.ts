@@ -15,6 +15,7 @@
 //      (Ollama declares `Message.content` as a string), never `[]`;
 //   4. tool results must carry the documented `tool_name` field.
 import type {
+	LanguageModelV4,
 	LanguageModelV4CallOptions,
 	LanguageModelV4Prompt,
 	LanguageModelV4StreamPart,
@@ -103,7 +104,9 @@ async function streamThroughVendor({
 			model: { id: "test-model", name: "test-model", providerId: "ollama" },
 		} as unknown as GatewayProviderContext,
 	);
-	const model = module.operations.language("test-model");
+	// `ProviderFactoryResult.operations.language` returns `unknown` by design,
+	// so every caller narrows it; the tests are no exception.
+	const model = module.operations.language("test-model") as LanguageModelV4;
 	const result = await model.doStream({
 		prompt,
 		...(providerOptions ? { providerOptions } : {}),

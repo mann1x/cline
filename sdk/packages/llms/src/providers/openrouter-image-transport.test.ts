@@ -27,7 +27,7 @@ describe("OpenRouter image transport", () => {
 		const imageBase64 =
 			"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 		const fetchMock = vi.fn(
-			async (_input: RequestInfo | URL, init?: RequestInit) => {
+			async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
 				requestBody =
 					typeof init?.body === "string"
 						? (JSON.parse(init.body) as Record<string, unknown>)
@@ -137,7 +137,9 @@ describe("OpenRouter image transport", () => {
 			headers: { "content-type": "text/event-stream" },
 		});
 		const responseTextSpy = vi.spyOn(response, "text");
-		const fetchMock = vi.fn(async () => response);
+		const fetchMock = vi.fn(
+			async (_input: Parameters<typeof fetch>[0]) => response,
+		);
 		const gateway = createGateway({
 			providerConfigs: [
 				{

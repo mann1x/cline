@@ -48,13 +48,10 @@ describe("createCline", () => {
 			allowedDomains: [" cline.bot ", ""],
 		});
 
-		const result = await tool.execute?.(
-			{ query: "latest Cline release" },
-			{
-				toolCallId: "call-1",
-				messages: [],
-			},
-		);
+		const result = await tool.execute?.({ query: "latest Cline release" }, {
+			toolCallId: "call-1",
+			messages: [],
+		} as never);
 
 		expect(fetchMock).toHaveBeenCalledWith(
 			"https://api.cline.bot/api/v1/search/websearch",
@@ -86,10 +83,10 @@ describe("createCline", () => {
 		});
 
 		await expect(
-			tool.execute?.(
-				{ query: "Cline" },
-				{ toolCallId: "call-1", messages: [] },
-			),
+			tool.execute?.({ query: "Cline" }, {
+				toolCallId: "call-1",
+				messages: [],
+			} as never),
 		).rejects.toThrow("allowed domains or blocked domains");
 		expect(fetchMock).not.toHaveBeenCalled();
 	});

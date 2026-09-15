@@ -8,6 +8,18 @@ import {
 	providerManifestSupportsModelOperation,
 } from "./model-operations";
 
+/**
+ * The shape `builtinProviderSupportsModelOperation` takes, minus the provider.
+ *
+ * Named so the fixtures below can be checked against it with `satisfies`: the
+ * arrays need contextual typing to land on the modality union, and an
+ * `as const` gives them a readonly tuple the parameter will not accept.
+ */
+type ModelOperationQuery = Omit<
+	Parameters<typeof builtinProviderSupportsModelOperation>[0],
+	"providerId"
+>;
+
 describe("model operation capabilities", () => {
 	it("keeps every declared transcription transport paired with a capability", () => {
 		for (const [providerId, descriptor] of Object.entries(
@@ -34,9 +46,9 @@ describe("model operation capabilities", () => {
 	it("routes verified native image transports and fails closed for aliases", () => {
 		const imageModel = {
 			modelId: "gpt-image-2",
-			operation: "image-generation" as const,
-			modalities: { input: ["text"] as const, output: ["image"] as const },
-		};
+			operation: "image-generation",
+			modalities: { input: ["text"], output: ["image"] },
+		} satisfies ModelOperationQuery;
 
 		expect(
 			builtinProviderSupportsModelOperation({
@@ -73,9 +85,9 @@ describe("model operation capabilities", () => {
 	it("requires explicit image transport support even for compatible providers", () => {
 		const imageModel = {
 			modelId: "fal-ai/flux-pro",
-			operation: "image-generation" as const,
-			modalities: { input: ["text"] as const, output: ["image"] as const },
-		};
+			operation: "image-generation",
+			modalities: { input: ["text"], output: ["image"] },
+		} satisfies ModelOperationQuery;
 
 		expect(
 			builtinProviderSupportsModelOperation({
@@ -94,9 +106,9 @@ describe("model operation capabilities", () => {
 	it("matches transcription execution modes against provider transports", () => {
 		const transcriptionModel = {
 			modelId: "whisper-large-v3",
-			operation: "transcription" as const,
-			modalities: { input: ["audio"] as const, output: ["text"] as const },
-		};
+			operation: "transcription",
+			modalities: { input: ["audio"], output: ["text"] },
+		} satisfies ModelOperationQuery;
 
 		expect(
 			builtinProviderSupportsModelOperation({

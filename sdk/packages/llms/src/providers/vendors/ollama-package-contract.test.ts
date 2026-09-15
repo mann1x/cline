@@ -1,3 +1,4 @@
+import type { LanguageModelV4 } from "@ai-sdk/provider";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -59,7 +60,7 @@ describe("ollama-ai-provider-v2 patch contract", () => {
 		const { createOllamaProviderModule } = await import("./ollama");
 
 		const requested: string[] = [];
-		const fetchMock = (async (input: RequestInfo | URL) => {
+		const fetchMock = (async (input: Parameters<typeof fetch>[0]) => {
 			requested.push(typeof input === "string" ? input : input.toString());
 			return new Response(
 				`${JSON.stringify({
@@ -92,7 +93,9 @@ describe("ollama-ai-provider-v2 patch contract", () => {
 			} as never,
 		);
 
-		const stream = await provider.operations.language("m").doStream({
+		const stream = await (
+			provider.operations.language("m") as LanguageModelV4
+		).doStream({
 			prompt: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
 		} as never);
 		// Drain so the request is actually issued and the mock is not left open.

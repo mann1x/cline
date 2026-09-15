@@ -46,7 +46,10 @@ describe("MiniMax thinking shim", () => {
 	});
 
 	it("injects explicit disabled thinking and strips the private marker header", async () => {
-		const baseFetch = vi.fn(async () => new Response("{}"));
+		const baseFetch = vi.fn(
+			async (_input: Parameters<typeof fetch>[0], _init?: RequestInit) =>
+				new Response("{}"),
+		);
 		const wrappedFetch = createMiniMaxThinkingFetch(baseFetch);
 
 		await wrappedFetch("https://api.minimax.io/anthropic/v1/messages", {

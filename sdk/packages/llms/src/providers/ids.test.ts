@@ -222,7 +222,7 @@ describe("provider-ids", () => {
 			(item) => item.manifest.id === "tencent-tokenhub",
 		);
 		expect(registration).toBeDefined();
-		await expect(registration?.loadProvider()).resolves.toMatchObject({
+		await expect(registration?.loadProvider?.()).resolves.toMatchObject({
 			createProvider: createOpenAICompatibleProvider,
 		});
 	});
