@@ -3062,7 +3062,10 @@ describe("createContextCompactionPrepareTurn", () => {
 			),
 		});
 
-		const summarizerLimit = 600;
+		// Above the built-in instruction's own cost. At 600 the prompt alone
+		// fills the window and compaction is correctly skipped instead -- see
+		// the test below, which is where that case is asserted.
+		const summarizerLimit = 2_000;
 		const oversizedAssistant = "assistant details ".repeat(5_000);
 		const prepareTurn = createContextCompactionPrepareTurn({
 			providerId: "anthropic",

@@ -490,7 +490,21 @@ export interface CoreCompactionConfig {
 	 */
 	preserveRecentMessagesRatio?: number;
 	/**
-	 * Replaces the built-in instruction the summarizer is given.
+	 * Whether the most recent messages survive a compaction verbatim.
+	 *
+	 * On (the default) the summary is a preface: it is prepended to a recency
+	 * tail the model then reads in its own words, and `summaryPrompt` is written
+	 * for that — first person, same prose, no seam. Off, the summary *is* the
+	 * context and `fullSummaryPrompt` applies instead, which is a different
+	 * artifact rather than a longer one.
+	 *
+	 * The two are separate settings because they are separate jobs, and a user
+	 * who has tuned one should not lose it by trying the other.
+	 */
+	keepRecentMessages?: boolean;
+	/**
+	 * Replaces the built-in instruction the summarizer is given when a recency
+	 * tail survives — see {@link keepRecentMessages}.
 	 *
 	 * The summary is all that survives the turns it stands for, and what a good
 	 * one contains depends on the work and on the model writing it, so this is
@@ -499,6 +513,15 @@ export interface CoreCompactionConfig {
 	 * caller either way. Blank or unset uses the default.
 	 */
 	summaryPrompt?: string;
+	/**
+	 * Replaces the built-in instruction used when no recency tail survives.
+	 *
+	 * Ignored while {@link keepRecentMessages} is on. Blank or unset uses the
+	 * default, which is written for a reader that has this text and nothing
+	 * else: a fixed section list rather than a request for detail, because
+	 * length adjectives are a measured non-lever and structure is not.
+	 */
+	fullSummaryPrompt?: string;
 	/**
 	 * Whether compaction also writes a retrospective over the reasoning it is
 	 * discarding, prepended to the summary as its own thinking block.

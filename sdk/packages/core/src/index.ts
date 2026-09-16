@@ -992,6 +992,11 @@ export {
 	DEFAULT_THINKING_COMPACTION_PROMPT,
 } from "./extensions/context/compaction-shared";
 export {
+	DEFAULT_FULL_COMPACTION_PROMPT,
+	FULL_COMPACTION_SECTIONS,
+} from "./extensions/context/full-compaction";
+export { DEFAULT_REPLAY_COMPACTION_PROMPT } from "./extensions/context/replay-compaction";
+export {
 	ALL_DEFAULT_TOOL_NAMES,
 	type ApplyPatchExecutor,
 	type ApplyPatchInput,

@@ -22,6 +22,7 @@ import {
 	findCutPlan,
 	findLatestSummaryIndex,
 	getCompactionSummaryMetadata,
+	planFullCut,
 	type RecencyBounds,
 	resolveCompactionOutputBudgets,
 	resolveEffectiveMaxInputTokens,
@@ -72,22 +73,41 @@ interface SummaryGenerationResult {
 	incompleteReason?: string;
 }
 
+/**
+ * What the summarizer is told it is, which is not the same job in both modes.
+ *
+ * The system half used to say "concise" while the user half asked for the
+ * detail that has to survive, and the model was pulled both ways on the one
+ * message that has to carry everything. Both of these agree with their prompt
+ * instead — and they have to be separate texts, because the two prompts ask
+ * for different artifacts. A replay is written in the first person and is read
+ * as the model's own memory; a full summary is a state record read as the only
+ * surviving fact. Telling a model to write a hand-over note and then handing it
+ * the replay prompt reproduces the seam the replay prompt exists to remove.
+ */
+const SUMMARIZER_SYSTEM_PROMPTS = {
+	tail: "You are re-telling your own recent work in your own voice, because the earlier part of your transcript is about to be discarded and what you write takes its place directly in front of the turns that remain. Match the prose of those turns. Keep every specific — names, paths, quoted wording, errors, numbers — that you would otherwise have to rediscover.",
+	full: "You write the state record for a working session of any kind. The transcript you are given is about to be discarded, so what you write is the only record that remains. Follow the requested structure exactly, section for section, and keep every specific — names, paths, quoted wording, errors, numbers — that whoever continues would otherwise have to rediscover.",
+	// The retrospective ran under the hand-over wording too, and it is the one
+	// pass that must not carry specifics: they are in the summary already, and
+	// repeating them spends the budget twice for one fact.
+	retrospective:
+		"You are assessing your own reasoning on work that is about to be discarded. This is judgement, not a record — what happened is written up separately. Be terse, and say only what you would want to know before starting the next hour of this task.",
+} as const;
+
 async function generateSummary(options: {
 	providerConfig: ProviderConfig;
 	request: string;
+	systemPrompt: string;
 	logger?: BasicLogger;
 }): Promise<SummaryGenerationResult> {
 	const handler = await createHandlerAsync(options.providerConfig);
 	let text = "";
 	let reasoningChars = 0;
 	let incompleteReason: string | undefined;
-	for await (const chunk of handler.createMessage(
-		// The system half said "concise" while the user half asks for the detail
-		// that has to survive; the model was being pulled both ways on the one
-		// message that has to carry everything.
-		"You write hand-over notes for working sessions of every kind. The transcript you are given is about to be discarded, so your note is the only record that remains. Follow the requested structure exactly, and keep every specific — names, paths, quoted wording, errors, numbers — that whoever continues would otherwise have to rediscover.",
-		[{ role: "user", content: options.request }],
-	)) {
+	for await (const chunk of handler.createMessage(options.systemPrompt, [
+		{ role: "user", content: options.request },
+	])) {
 		if (chunk.type === "text") {
 			text += chunk.text;
 			continue;
@@ -176,6 +196,7 @@ async function generateThinkingSummary(options: {
 		const result = await generateSummary({
 			providerConfig,
 			request,
+			systemPrompt: SUMMARIZER_SYSTEM_PROMPTS.retrospective,
 			logger: options.logger,
 		});
 		const trimmed = result.text.trim();
@@ -214,6 +235,15 @@ export async function runAgenticCompaction(options: {
 	thinkingSummaryEnabled?: boolean;
 	/** Overrides the built-in retrospective instruction; blank uses the default. */
 	thinkingSummaryPrompt?: string;
+	/**
+	 * Whether a recency tail survives the compaction. Defaults to true.
+	 *
+	 * False is a different operation, not a tighter budget: the summary becomes
+	 * the whole context rather than its preface, `bounds` stops being consulted,
+	 * and the prompt the caller passes has to be one written for a reader with
+	 * nothing else. See {@link planFullCut}.
+	 */
+	keepRecentMessages?: boolean;
 	bounds: RecencyBounds;
 	estimateMessageTokens: EstimateMessageTokens;
 	logger?: BasicLogger;
@@ -223,12 +253,18 @@ export async function runAgenticCompaction(options: {
 		return undefined;
 	}
 
-	const { cutIndex, pinnedIndex } = findCutPlan(
-		messages,
-		options.bounds,
-		options.estimateMessageTokens,
-	);
-	if (cutIndex <= 0 || cutIndex >= messages.length) {
+	const keepRecentMessages = options.keepRecentMessages !== false;
+	const { cutIndex, pinnedIndex } = keepRecentMessages
+		? findCutPlan(messages, options.bounds, options.estimateMessageTokens)
+		: planFullCut(messages);
+	// `cutIndex === messages.length` is the whole point of the no-tail plan and
+	// is refused by the tail plan for the same reason: there, a cut at the end
+	// means the recency walk found nothing to keep, which is a failure to
+	// compact rather than a complete one.
+	const maxCutIndex = keepRecentMessages
+		? messages.length - 1
+		: messages.length;
+	if (cutIndex <= 0 || cutIndex > maxCutIndex) {
 		return undefined;
 	}
 
@@ -313,9 +349,18 @@ export async function runAgenticCompaction(options: {
 	const availableSummaryInputTokens =
 		summarizerInputLimit - summaryRequestOverheadTokens;
 	if (availableSummaryInputTokens <= 0) {
-		options.logger?.debug(
-			"Skipped agentic compaction: summarizer budget exhausted",
+		// At warn, and naming the two numbers, because this is a configuration
+		// fault rather than a transcript that happens not to need compacting.
+		// The instruction alone does not fit the summarizer's window, so no
+		// transcript will ever fit either and every compaction from here on is a
+		// silent no-op while the context keeps growing. Both built-in prompts
+		// are larger than the one they replaced — the no-tail prompt is a fixed
+		// section list and cannot be short — so the summarizer window this needs
+		// is a real floor, not a rounding error.
+		options.logger?.log(
+			"Skipped agentic compaction: the summary instruction alone exceeds the summarizer's input limit",
 			{
+				severity: "warn",
 				summarizerProviderId: summarizerProviderConfig.providerId,
 				summarizerModelId: summarizerProviderConfig.modelId,
 				summarizerInputLimit,
@@ -354,6 +399,7 @@ export async function runAgenticCompaction(options: {
 		promptTemplate: options.summaryPrompt,
 	});
 	options.logger?.debug("Agentic compaction summarizer diagnostics", {
+		keepRecentMessages,
 		messagesToSummarize: messagesToSummarize.length,
 		newMessagesToFold: newMessagesToFold.length,
 		preservedMessages: messages.length - cutIndex + (pinnedMessage ? 1 : 0),
@@ -378,6 +424,9 @@ export async function runAgenticCompaction(options: {
 	const summaryResult = await generateSummary({
 		providerConfig: summarizerProviderConfig,
 		request: summaryRequest,
+		systemPrompt: keepRecentMessages
+			? SUMMARIZER_SYSTEM_PROMPTS.tail
+			: SUMMARIZER_SYSTEM_PROMPTS.full,
 		logger: options.logger,
 	});
 	const rawSummary = summaryResult.text;

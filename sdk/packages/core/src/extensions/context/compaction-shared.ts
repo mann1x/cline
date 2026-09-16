@@ -1146,6 +1146,43 @@ export function findCutPlan(
 }
 
 /**
+ * Fold the whole transcript, keeping only the request that started the turn.
+ *
+ * The cut plan for the strategy that keeps no recency tail: the summary is the
+ * context, so the cut is the end of the transcript and there is nothing after
+ * it. None of {@link findCutPlan}'s reasoning applies, because all of it is
+ * about where to stop, and this stops nowhere.
+ *
+ * One message is still pinned, and it is a deliberate exception rather than a
+ * half-measure. The typed request that started the turn is the single thing
+ * whose loss is unrecoverable *and* unnoticeable: the material worked on is
+ * still on disk, the tool record is rebuilt by the ledger, but a summary that
+ * drops the request leaves the model with a detailed account of work whose
+ * purpose it no longer knows. That is measured, not hypothetical — a
+ * jackdelta-9b session compacted 322 messages to 70 and sixteen seconds later
+ * asked the user what the task was. It costs one message, and it is the one
+ * message worth a guaranteed carry rather than a requested one.
+ *
+ * Returns `pinnedIndex: -1` when there is no typed request to pin: a
+ * transcript that is entirely a previous summary plus a tool loop has nothing
+ * that qualifies, and pinning index 0 there would carry the old summary
+ * forward verbatim alongside the new one.
+ */
+export function planFullCut(
+	messages: MessageWithMetadata[],
+): CompactionCutPlan {
+	const lastTurnStartIndex = findLastTurnStartIndex(messages);
+	const pinned =
+		lastTurnStartIndex >= 0 &&
+		lastTurnStartIndex < messages.length &&
+		isTurnStartMessage(messages[lastTurnStartIndex]);
+	return {
+		cutIndex: messages.length,
+		pinnedIndex: pinned ? lastTurnStartIndex : -1,
+	};
+}
+
+/**
  * Fold everything after one message, keeping that message verbatim.
  *
  * `pinnedIndex === 0` is allowed, and that is the fix rather than a detail.

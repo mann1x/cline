@@ -43,12 +43,14 @@ import {
 	resolveRecencyBounds,
 	seedCalibrationFromTranscript,
 } from "./compaction-shared";
+import { DEFAULT_FULL_COMPACTION_PROMPT } from "./full-compaction";
 import {
 	ensurePolykvPool,
 	polykvSaysCompact,
 	readPolykvCapacity,
 	repointPolykvAfterCompaction,
 } from "./polykv-session";
+import { DEFAULT_REPLAY_COMPACTION_PROMPT } from "./replay-compaction";
 
 export interface ContextPipelinePrepareTurnInput {
 	agentId: string;
@@ -222,6 +224,32 @@ function summarizeToolResults(messages: CoreCompactionContext["messages"]): {
 	};
 }
 
+/**
+ * Which instruction the summarizer gets, which follows from the cut, not the
+ * other way round.
+ *
+ * The two prompts are not two styles of the same request. With a tail the
+ * summary is prepended to messages still in the transcript and has to read as
+ * the model's own memory of them; without one it is the entire context and has
+ * to read as a state record. Handing either prompt to the other cut produces
+ * the failure each was written to remove, so this pairing is not a default a
+ * caller can half-override: a custom prompt replaces the one for its own cut
+ * and nothing else.
+ */
+function resolveSummaryPrompt(
+	compaction: CoreCompactionConfig | undefined,
+	keepRecentMessages: boolean,
+): string {
+	if (keepRecentMessages) {
+		return (
+			compaction?.summaryPrompt?.trim() || DEFAULT_REPLAY_COMPACTION_PROMPT
+		);
+	}
+	return (
+		compaction?.fullSummaryPrompt?.trim() || DEFAULT_FULL_COMPACTION_PROMPT
+	);
+}
+
 const BUILTIN_COMPACTION_STRATEGIES = {
 	basic: ({ context, estimateMessageTokens, logger }) =>
 		runBasicCompaction({
@@ -240,7 +268,11 @@ const BUILTIN_COMPACTION_STRATEGIES = {
 			context,
 			providerConfig,
 			summarizer: compaction?.summarizer,
-			summaryPrompt: compaction?.summaryPrompt,
+			keepRecentMessages: compaction?.keepRecentMessages !== false,
+			summaryPrompt: resolveSummaryPrompt(
+				compaction,
+				compaction?.keepRecentMessages !== false,
+			),
 			thinkingSummaryEnabled: compaction?.thinkingSummaryEnabled,
 			thinkingSummaryPrompt: compaction?.thinkingSummaryPrompt,
 			// The recency budget is a floor and the message budget a ceiling —
