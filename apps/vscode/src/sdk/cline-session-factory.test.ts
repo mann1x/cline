@@ -1285,12 +1285,47 @@ describe("buildSessionConfig", () => {
 		expect(config.compaction).toEqual({
 			enabled: true,
 			strategy: "agentic",
+			// Which cut runs, and therefore which of the two prompts the
+			// summarizer is given. On is the current behaviour: the summary is a
+			// preface to a recency tail rather than a replacement for it.
+			keepRecentMessages: true,
 			// The second compaction phase, on by default.
 			thinkingSummaryEnabled: true,
 			// And the condenser, which travels here but does not belong to
 			// compaction; also on by default.
 			cappedThinkingEnabled: true,
 		})
+	})
+
+	// The shape assertions above pin the defaults. This one is the behaviour:
+	// the tickbox chooses which cut runs and therefore which of the two prompts
+	// the summarizer is given, and a setting that is stored but never read is
+	// this repository's most repeated bug.
+	it("carries a disabled recency tail, and its prompt, through to the SDK", async () => {
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string) => {
+			if (key === "useAutoCondense") {
+				return true
+			}
+			if (key === "keepRecentMessagesAtCompaction") {
+				return false
+			}
+			if (key === "fullCompactionPrompt") {
+				return "my own no-tail prompt"
+			}
+			if (key === "subagentsEnabled") {
+				return false
+			}
+			return undefined
+		})
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+
+		expect(config.compaction?.keepRecentMessages).toBe(false)
+		expect(config.compaction?.fullSummaryPrompt).toBe("my own no-tail prompt")
+		// The other strategy's prompt is not sent in its place: each cut gets
+		// the prompt written for it, and a blank field falls back to that cut's
+		// built-in rather than to the other one's.
+		expect(config.compaction?.summaryPrompt).toBeUndefined()
 	})
 
 	it("uses the configured SDK compaction strategy when auto condense is enabled", async () => {
@@ -1310,6 +1345,7 @@ describe("buildSessionConfig", () => {
 		expect(config.compaction).toEqual({
 			enabled: true,
 			strategy: "basic",
+			keepRecentMessages: true,
 			// The second compaction phase, on by default.
 			thinkingSummaryEnabled: true,
 			cappedThinkingEnabled: true,
@@ -1333,6 +1369,7 @@ describe("buildSessionConfig", () => {
 		expect(config.compaction).toEqual({
 			enabled: true,
 			strategy: "agentic",
+			keepRecentMessages: true,
 			// The second compaction phase, on by default.
 			thinkingSummaryEnabled: true,
 			// And the condenser, which travels here but does not belong to
@@ -1390,6 +1427,7 @@ describe("buildSessionConfig", () => {
 		expect(enabledConfig.compaction).toEqual({
 			enabled: true,
 			strategy: "agentic",
+			keepRecentMessages: true,
 			// The second compaction phase, on by default.
 			thinkingSummaryEnabled: true,
 			cappedThinkingEnabled: true,
