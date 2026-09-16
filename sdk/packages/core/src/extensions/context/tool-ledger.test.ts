@@ -202,6 +202,74 @@ describe("the tool ledger", () => {
 		});
 	});
 
+	describe("the other block shape", () => {
+		// The ledger is read from two pipelines that disagree about what a tool
+		// call looks like: the agent runtime speaks the AI SDK's `tool-call` /
+		// `toolCallId`, and compaction speaks `tool_use` / `id` with results
+		// keyed by `tool_use_id`. Reading only one of them does not half-work --
+		// it reports that no tools were called at all, which is the most
+		// damaging thing this file could say, and it says it silently.
+		function useCall(name: string, input: unknown, id: string): AgentMessage {
+			return {
+				role: "assistant",
+				content: [{ type: "tool_use", id, name, input }],
+			} as unknown as AgentMessage;
+		}
+
+		function useResult(
+			name: string,
+			content: unknown,
+			id: string,
+			isError = false,
+		): AgentMessage {
+			return {
+				role: "user",
+				content: [
+					{
+						type: "tool_result",
+						tool_use_id: id,
+						name,
+						content,
+						...(isError ? { is_error: true } : {}),
+					},
+				],
+			} as unknown as AgentMessage;
+		}
+
+		it("reads a compaction-shaped call and its result", () => {
+			const entries = buildToolLedger([
+				useCall("read_files", { path: "a.ts" }, "u1"),
+				useResult("read_files", "the contents", "u1"),
+			]);
+
+			expect(entries).toHaveLength(1);
+			expect(entries[0]?.toolName).toBe("read_files");
+			expect(entries[0]?.input).toContain("a.ts");
+			expect(entries[0]?.result).toContain("the contents");
+		});
+
+		it("keeps its own error flag", () => {
+			const entries = buildToolLedger([
+				useCall("editor", { path: "a.ts" }, "u1"),
+				useResult("editor", "no such file", "u1", true),
+			]);
+
+			expect(entries[0]?.failed).toBe(true);
+		});
+
+		it("pairs by id even when the results arrive out of order", () => {
+			const entries = buildToolLedger([
+				useCall("read_files", { path: "a.ts" }, "u1"),
+				useCall("read_files", { path: "b.ts" }, "u2"),
+				useResult("read_files", "B contents", "u2"),
+				useResult("read_files", "A contents", "u1"),
+			]);
+
+			expect(entries[0]?.result).toContain("A contents");
+			expect(entries[1]?.result).toContain("B contents");
+		});
+	});
+
 	it("has limits a caller can see and override", () => {
 		expect(DEFAULT_TOOL_LEDGER_LIMITS.maxFieldChars).toBeGreaterThan(0);
 		const entries = buildToolLedger(

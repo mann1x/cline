@@ -48,6 +48,12 @@ function transcript(): MessageWithMetadata[] {
 			role: "assistant",
 			content: [
 				{ type: "text", text: `step ${index}. ${"detail ".repeat(200)}` },
+				{
+					type: "tool_use",
+					id: `t${index}`,
+					name: "read_files",
+					input: { path: `file-${index}.ts` },
+				},
 			],
 		});
 		messages.push({
@@ -56,8 +62,9 @@ function transcript(): MessageWithMetadata[] {
 				{
 					type: "tool_result",
 					tool_use_id: `t${index}`,
-					name: "tool",
+					name: "read_files",
 					content: `result ${index}. ${"line ".repeat(200)}`,
+					...(index === 3 ? { is_error: true } : {}),
 				},
 			],
 		});
@@ -267,5 +274,78 @@ describe("a summarizer too small for its own instruction", () => {
 		];
 		expect(message).toContain("exceeds the summarizer");
 		expect(detail?.severity).toBe("warn");
+	});
+});
+
+describe("the tool ledger the harness appends", () => {
+	function summaryText(result: Awaited<ReturnType<typeof compact>>["result"]) {
+		return JSON.stringify(result?.messages[0]);
+	}
+
+	it("lands on the summary message under both cuts", async () => {
+		for (const keep of [true, false]) {
+			const { result } = await compact(
+				keep,
+				keep
+					? DEFAULT_REPLAY_COMPACTION_PROMPT
+					: DEFAULT_FULL_COMPACTION_PROMPT,
+			);
+
+			const text = summaryText(result);
+			expect(text).toContain("recorded by the harness");
+			expect(text).toContain("read_files");
+		}
+	});
+
+	it("marks the call that was refused, which the summary is worst at keeping", async () => {
+		const { result } = await compact(false, DEFAULT_FULL_COMPACTION_PROMPT);
+
+		expect(summaryText(result)).toContain("FAILED");
+	});
+
+	it("stays out of the metadata the next compaction reads back", async () => {
+		// A ledger inside `metadata.summary` becomes the next generation's
+		// `previousSummary`, gets re-emitted into the summary that replaces it,
+		// and every generation then carries every earlier one's calls -- the
+		// transcript shrinking while the summary grows.
+		const { result } = await compact(false, DEFAULT_FULL_COMPACTION_PROMPT);
+		const metadata = (
+			result?.messages[0] as { metadata?: { summary?: string } } | undefined
+		)?.metadata;
+
+		expect(metadata?.summary).toBeTruthy();
+		expect(metadata?.summary).not.toContain("read_files");
+	});
+
+	it("says nothing at all for a stretch with no tool calls", async () => {
+		const messages: MessageWithMetadata[] = [
+			{ role: "user", content: "do the thing" },
+			...Array.from({ length: 6 }, (_, index) => ({
+				role: "assistant" as const,
+				content: [
+					{
+						type: "text" as const,
+						text: `prose ${index} ${"x".repeat(2_000)}`,
+					},
+				],
+			})),
+		];
+		const result = await runAgenticCompaction({
+			context: contextFor(messages),
+			providerConfig: {
+				providerId: "anthropic",
+				modelId: "mock-model",
+				modelInfo: { id: "mock-model", maxInputTokens: 100_000 },
+			} as never,
+			keepRecentMessages: false,
+			summaryPrompt: DEFAULT_FULL_COMPACTION_PROMPT,
+			thinkingSummaryEnabled: false,
+			bounds,
+			estimateMessageTokens: estimateJsonTokens,
+		});
+
+		expect(JSON.stringify(result?.messages[0])).not.toContain(
+			"recorded by the harness",
+		);
 	});
 });

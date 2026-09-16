@@ -1782,8 +1782,22 @@ export function buildSummaryMessage(options: {
 	generation?: number;
 	/** The retrospective, prepended as this message's own reasoning. */
 	thinkingSummary?: string;
+	/**
+	 * The measured record of the tool calls being folded, appended after the
+	 * summary — see {@link renderToolLedger}.
+	 *
+	 * Deliberately not part of `metadata.summary`, which is what the next
+	 * compaction hands the model as `previousSummary`. A ledger that fed back
+	 * would be re-emitted into the summary that replaces it, and each
+	 * generation would carry every earlier generation's calls: the transcript
+	 * would shrink while the summary grew, which is the one outcome compaction
+	 * cannot have. So a ledger lives for exactly one generation, and by the
+	 * next one its calls are in the prose.
+	 */
+	toolLedger?: string;
 }): MessageWithMetadata {
 	const thinkingSummary = options.thinkingSummary?.trim();
+	const toolLedger = options.toolLedger?.trim();
 	return {
 		role: "user",
 		content: [
@@ -1817,6 +1831,18 @@ export function buildSummaryMessage(options: {
 				type: "text",
 				text: `Context summary:\n\n${options.summary}`,
 			},
+			// After the summary, because it is evidence for it rather than a
+			// second account of it: the model's prose says what happened, this
+			// says what was actually called and what came back. Where the two
+			// disagree the disagreement is visible instead of silent.
+			...(toolLedger
+				? [
+						{
+							type: "text" as const,
+							text: `\n\nThe tool calls this summary stands for, recorded by the harness rather than written by the model:\n\n${toolLedger}\n\n`,
+						},
+					]
+				: []),
 		],
 		metadata: {
 			kind: "compaction_summary",

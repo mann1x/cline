@@ -31,6 +31,11 @@ import {
 	serializeConversation,
 	serializeReasoningWithOutcomes,
 } from "./compaction-shared";
+import {
+	buildToolLedger,
+	renderToolLedger,
+	type ToolLedgerOptions,
+} from "./tool-ledger";
 
 const MIN_AGENTIC_SUMMARY_INPUT_TOKENS = 1_024;
 
@@ -244,6 +249,14 @@ export async function runAgenticCompaction(options: {
 	 * nothing else. See {@link planFullCut}.
 	 */
 	keepRecentMessages?: boolean;
+	/**
+	 * Where the ledger gets the revisions holding each touched file's content.
+	 *
+	 * Absent means the ledger still runs and simply says nothing about files.
+	 * That is the honest degradation: a wrong revision label is worse than
+	 * none, because the model will try to restore it.
+	 */
+	revisionsFor?: ToolLedgerOptions["revisionsFor"];
 	bounds: RecencyBounds;
 	estimateMessageTokens: EstimateMessageTokens;
 	logger?: BasicLogger;
@@ -450,6 +463,21 @@ export async function runAgenticCompaction(options: {
 	}
 
 	const summary = ensureFilesSection(rawSummary, fileOps);
+	// Built from what is being folded now, not from everything the session has
+	// ever done. Earlier generations' calls are already prose in the summary
+	// this one folds, and a ledger that accumulated across generations would
+	// grow while the transcript shrank.
+	//
+	// Built from the whole fold rather than from the projected budget slice,
+	// too: the projection drops tool results to make the *summary request* fit,
+	// and a call whose result was dropped is exactly the one most worth a line
+	// here — it is the one the model was never shown and so cannot have
+	// described.
+	const toolLedger = renderToolLedger(
+		buildToolLedger(newMessagesToFold, {
+			...(options.revisionsFor ? { revisionsFor: options.revisionsFor } : {}),
+		}),
+	);
 	const thinkingSummary = await generateThinkingSummary({
 		enabled: options.thinkingSummaryEnabled !== false,
 		messages: newMessagesToFold,
@@ -476,6 +504,7 @@ export async function runAgenticCompaction(options: {
 			userRunSpan: countUserRunMessages(messagesToSummarize),
 			generation,
 			thinkingSummary,
+			toolLedger,
 		}),
 		...(pinnedMessage ? [pinnedMessage] : []),
 		...messages.slice(cutIndex),
@@ -485,6 +514,7 @@ export async function runAgenticCompaction(options: {
 		0,
 	);
 	options.logger?.debug("Performed agentic compaction", {
+		toolLedgerChars: toolLedger.length,
 		messagesBefore: messages.length,
 		messagesAfter: resultMessages.length,
 		messagesSummarized: messagesToSummarize.length,

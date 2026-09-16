@@ -28,11 +28,13 @@
  * One line per call, the failures marked, no JSON it has to parse.
  */
 
-import type {
-	AgentMessage,
-	AgentToolCallPart,
-	AgentToolResultPart,
-} from "@cline/shared";
+/**
+ * Any message with a content array, in either of the two block shapes this
+ * repository carries — see {@link normaliseCall}.
+ */
+export interface ToolLedgerMessage {
+	content?: unknown;
+}
 
 /** What a file was, and became, across one call. */
 export interface ToolLedgerFileImpact {
@@ -203,31 +205,94 @@ function pathsIn(input: unknown): string[] {
 	return [...new Set(found)];
 }
 
+interface NormalisedCall {
+	id: string;
+	name: string;
+	input: unknown;
+}
+
+interface NormalisedResult {
+	id: string;
+	output: unknown;
+	isError?: boolean;
+}
+
+/**
+ * One call, whichever of the two block shapes it arrived in.
+ *
+ * This repository carries both, and which one a caller holds is not something
+ * the caller can be expected to know: the agent runtime works in the AI SDK's
+ * `tool-call` / `toolCallId` / `input`, and the compaction pipeline works in
+ * the Anthropic-style `tool_use` / `id` / `input` with results keyed by
+ * `tool_use_id`. A ledger that reads only one of them is not half-working; it
+ * silently reports that no tools were called, which is the most damaging thing
+ * it could say. So it reads both and says so here.
+ */
+function normaliseCall(part: unknown): NormalisedCall | undefined {
+	if (!isRecord(part)) {
+		return undefined;
+	}
+	if (part.type === "tool-call" && typeof part.toolCallId === "string") {
+		return {
+			id: part.toolCallId,
+			name: typeof part.toolName === "string" ? part.toolName : "(unnamed)",
+			input: part.input,
+		};
+	}
+	if (part.type === "tool_use" && typeof part.id === "string") {
+		return {
+			id: part.id,
+			name: typeof part.name === "string" ? part.name : "(unnamed)",
+			input: part.input,
+		};
+	}
+	return undefined;
+}
+
+/** One result, in either shape. See {@link normaliseCall}. */
+function normaliseResult(part: unknown): NormalisedResult | undefined {
+	if (!isRecord(part)) {
+		return undefined;
+	}
+	if (part.type === "tool-result" && typeof part.toolCallId === "string") {
+		return {
+			id: part.toolCallId,
+			output: part.output,
+			isError: part.isError === true,
+		};
+	}
+	if (part.type === "tool_result" && typeof part.tool_use_id === "string") {
+		return {
+			id: part.tool_use_id,
+			output: part.content,
+			isError: part.is_error === true,
+		};
+	}
+	return undefined;
+}
+
 /**
  * Pair the calls in a stretch of messages with their results.
  *
- * Paired by `toolCallId`, never by position: a turn can issue several calls
- * and their results arrive in one message, so counting on order puts the wrong
+ * Paired by call id, never by position: a turn can issue several calls and
+ * their results arrive in one message, so counting on order puts the wrong
  * answer against the wrong call — which reads as a tool that returned
  * something it never returned.
  */
 export function buildToolLedger(
-	messages: readonly AgentMessage[],
+	messages: readonly ToolLedgerMessage[],
 	options: ToolLedgerOptions = {},
 ): ToolLedgerEntry[] {
 	const limits = resolveLimits(options.limits);
-	const results = new Map<string, AgentToolResultPart>();
+	const results = new Map<string, NormalisedResult>();
 	for (const message of messages) {
 		if (!Array.isArray(message.content)) {
 			continue;
 		}
 		for (const part of message.content) {
-			if (
-				isRecord(part) &&
-				part.type === "tool-result" &&
-				typeof part.toolCallId === "string"
-			) {
-				results.set(part.toolCallId, part as unknown as AgentToolResultPart);
+			const answer = normaliseResult(part);
+			if (answer) {
+				results.set(answer.id, answer);
 			}
 		}
 	}
@@ -238,12 +303,12 @@ export function buildToolLedger(
 			continue;
 		}
 		for (const part of message.content) {
-			if (!isRecord(part) || part.type !== "tool-call") {
+			const call = normaliseCall(part);
+			if (!call) {
 				continue;
 			}
-			const callPart = part as unknown as AgentToolCallPart;
-			const answer = results.get(callPart.toolCallId);
-			const input = summariseInput(callPart.input, limits);
+			const answer = results.get(call.id);
+			const input = summariseInput(call.input, limits);
 			const result = answer
 				? summariseOutput(answer.output, limits)
 				: "(no result recorded)";
@@ -257,7 +322,7 @@ export function buildToolLedger(
 			const previous = entries[entries.length - 1];
 			if (
 				previous &&
-				previous.toolName === callPart.toolName &&
+				previous.toolName === call.name &&
 				previous.input === input &&
 				previous.result === result
 			) {
@@ -267,7 +332,7 @@ export function buildToolLedger(
 
 			const files: ToolLedgerFileImpact[] = [];
 			if (options.revisionsFor) {
-				for (const path of pathsIn(callPart.input)) {
+				for (const path of pathsIn(call.input)) {
 					const revisions = options.revisionsFor(path);
 					if (revisions) {
 						files.push({ path, ...revisions });
@@ -277,7 +342,7 @@ export function buildToolLedger(
 
 			entries.push({
 				index: entries.length + 1,
-				toolName: callPart.toolName,
+				toolName: call.name,
 				input,
 				result,
 				failed,

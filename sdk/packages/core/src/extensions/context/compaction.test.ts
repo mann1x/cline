@@ -1809,10 +1809,17 @@ describe("createContextCompactionPrepareTurn", () => {
 		// reasoning block: those are only valid on an assistant message, and a
 		// live run died on `AI_TypeValidationError: The messages do not match the
 		// ModelMessage[] schema` when this message carried one.
-		expect(result?.messages[0]?.content).toEqual([
-			expect.objectContaining({ type: "text" }),
-			expect.objectContaining({ type: "text" }),
-		]);
+		// Every block, rather than a fixed count: the harness's tool ledger is a
+		// third text block on this message and the claim being made here is
+		// about the block *type*, not about how many of them there are.
+		expect(result?.messages[0]?.content).toEqual(
+			expect.arrayContaining([expect.objectContaining({ type: "text" })]),
+		);
+		expect(
+			(result?.messages[0]?.content as Array<{ type: string }>).every(
+				(block) => block.type === "text",
+			),
+		).toBe(true);
 		expect(JSON.stringify(result?.messages[0])).not.toContain('"thinking"');
 		expect(JSON.stringify(result?.messages[0])).not.toContain('"reasoning"');
 		const summaryBlock = Array.isArray(result?.messages[0]?.content)
