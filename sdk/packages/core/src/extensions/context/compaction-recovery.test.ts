@@ -58,6 +58,15 @@ function prepare(options: {
 	keepRecentMessages?: boolean;
 	journal?: ReturnType<typeof createCompactionJournal>;
 	logger?: { debug: Mock; log: Mock };
+	/**
+	 * Leave the recency budget at its default instead of pinning it to 1.
+	 *
+	 * The pinned value keeps the tail to almost nothing, which is what most of
+	 * these tests want and is exactly wrong for the escalation ones: the whole
+	 * failure is a *default-sized* tail being unable to fit, so a test that
+	 * shrinks the tail first cannot see it.
+	 */
+	defaultRecencyBudget?: boolean;
 }) {
 	return createContextCompactionPrepareTurn(
 		{
@@ -70,7 +79,7 @@ function prepare(options: {
 			compaction: {
 				enabled: true,
 				strategy: "agentic",
-				preserveRecentTokens: 1,
+				...(options.defaultRecencyBudget ? {} : { preserveRecentTokens: 1 }),
 				thinkingSummaryEnabled: false,
 				...(options.keepRecentMessages === false
 					? { keepRecentMessages: false }
@@ -259,5 +268,124 @@ describe("a configuration that keeps nothing", () => {
 			"Agentic compaction produced no result; falling back to basic compaction",
 			expect.objectContaining({ severity: "warn" }),
 		);
+	});
+});
+
+describe("dropping the tail when keeping it did not fit", () => {
+	/**
+	 * A transcript whose individual messages are larger than the window.
+	 *
+	 * This is the shape that defeats a recency budget, and the reason is
+	 * structural: the tail is whole messages and its floor is one message, so
+	 * when a single message exceeds the window no budget can produce a tail
+	 * that fits. Measured on a 32k window at 4x overshoot, keeping the tail
+	 * returned 34,297 tokens — over the window it was compacting for — while
+	 * the no-tail cut on the same transcript returned 17,217.
+	 *
+	 * Four times, specifically, because the bands differ and only this one is
+	 * what the escalation is for. Below it both cuts fit and there is nothing
+	 * to escalate. Above roughly eight times neither cut can run at all: the
+	 * material stops projecting into the summarizer's input budget, agentic
+	 * declines whichever tail it was asked for, and basic takes over and
+	 * returns something still over the window. That band belongs to overflow
+	 * recovery, not to this, and writing a test for it here would assert a path
+	 * that does not exist.
+	 */
+	const OVERSHOOT = 4;
+
+	function oversizedTranscript(): MessageWithMetadata[] {
+		const turns = 10;
+		// Seven characters per `detail `, four characters per token.
+		const repeats = Math.floor((WINDOW_TOKENS * 4 * OVERSHOOT) / turns / 7);
+		return [
+			{ role: "user", content: "the standing request" },
+			...Array.from({ length: turns }, (_, index) => ({
+				role: index % 2 === 0 ? ("assistant" as const) : ("user" as const),
+				content: `turn ${index} ${"detail ".repeat(repeats)}`,
+			})),
+		];
+	}
+
+	async function runOversized(logger?: { debug: Mock; log: Mock }) {
+		const big = oversizedTranscript();
+		const notices: Array<[string, Record<string, unknown>]> = [];
+		const result = await prepare({ logger, defaultRecencyBudget: true })?.({
+			agentId: "agent-1",
+			conversationId: "conv-1",
+			parentAgentId: null,
+			iteration: 1,
+			abortSignal: new AbortController().signal,
+			systemPrompt: "You are helpful.",
+			tools: [],
+			messages: big,
+			apiMessages: big,
+			model: {
+				id: "mock-model",
+				provider: "anthropic",
+				info: { id: "mock-model", maxInputTokens: WINDOW_TOKENS },
+			},
+			emitStatusNotice: (name: string, detail?: Record<string, unknown>) => {
+				notices.push([name, detail ?? {}]);
+			},
+		});
+		return { result, notices };
+	}
+
+	it("escalates to the no-tail cut, and says so", async () => {
+		summarizerReplying(["## Goal\nThe goal.\n\n## Next\nThe step."]);
+		const logger = { debug: vi.fn(), log: vi.fn() };
+
+		const { result, notices } = await runOversized(logger);
+
+		expect(result?.messages).toBeDefined();
+		expect(logger.log).toHaveBeenCalledWith(
+			"Compaction kept the tail and stayed over the trigger; retrying without it",
+			expect.objectContaining({ severity: "warn" }),
+		);
+		expect(notices.map(([name]) => name)).toContain("compaction-tail-dropped");
+	});
+
+	it("gets the transcript under the trigger, which keeping the tail did not", async () => {
+		summarizerReplying(["## Goal\nThe goal.\n\n## Next\nThe step."]);
+
+		const { notices } = await runOversized();
+
+		const dropped = notices.find(
+			([name]) => name === "compaction-tail-dropped",
+		)?.[1];
+		expect(dropped).toBeDefined();
+		expect(Number(dropped?.noTailTokens)).toBeLessThan(
+			Number(dropped?.keptTailTokens),
+		);
+		expect(Number(dropped?.noTailTokens)).toBeLessThanOrEqual(
+			Number(dropped?.messageTriggerTokens),
+		);
+	});
+
+	it("leaves an ordinary compaction alone", async () => {
+		// The escalation costs a second summarizer call, so it fires on the
+		// transcript that is still over the *trigger* -- over the target merely
+		// means the compaction was disappointing, and paying a request for that
+		// would spend one on a transcript that is going to be fine.
+		summarizerReplying(["## Goal\nThe goal.\n\n## Next\nThe step."]);
+		const logger = { debug: vi.fn(), log: vi.fn() };
+
+		const result = await run(prepare({ logger }));
+
+		expect(result?.messages).toBeDefined();
+		expect(logger.log).not.toHaveBeenCalledWith(
+			"Compaction kept the tail and stayed over the trigger; retrying without it",
+			expect.anything(),
+		);
+	});
+
+	it("keeps the oversized result when the no-tail cut declines", async () => {
+		// An oversized transcript beats no transcript. The escalation is an
+		// improvement it may fail to make, never a way to end up with nothing.
+		summarizerReplying(["## Goal\nThe goal.\n\n## Next\nThe step.", "   "]);
+
+		const { result } = await runOversized();
+
+		expect(result?.messages).toBeDefined();
 	});
 });

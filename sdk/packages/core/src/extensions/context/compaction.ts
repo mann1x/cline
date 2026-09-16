@@ -751,6 +751,105 @@ export function createContextCompactionPrepareTurn(
 			estimateMessageTokens,
 			logger: config.logger,
 		};
+		const sizeOf = (messages: CoreCompactionResult["messages"]): number =>
+			messages.reduce(
+				(sum: number, message) => sum + estimateMessageTokens(message),
+				0,
+			);
+
+		/**
+		 * Drop the tail when keeping it did not get the transcript under the bar.
+		 *
+		 * A keep-tail compaction never declines, which made it look like the safe
+		 * configuration. It is not: past roughly four times the trigger it stops
+		 * producing a transcript that *fits*, and it reports success anyway.
+		 * Measured on a 32k window at 4x overshoot, it returned 34,297 tokens —
+		 * over the window it was compacting for — while the no-tail cut on the
+		 * same transcript returned 17,217. At 128k and 4x the pair is 136,697
+		 * against 68,417.
+		 *
+		 * The reason is structural rather than a tuning miss. The tail is whole
+		 * messages, and its floor is one message; a transcript that overshot by
+		 * that much did so because its messages are enormous, so the smallest
+		 * legal tail is itself bigger than the window. No recency budget can fix
+		 * that, because the budget cannot cut a message in half.
+		 *
+		 * So the escalation is to the cut that has no tail to be defeated by.
+		 * It fires only when the result is still above the *trigger* — above the
+		 * target merely means the compaction was disappointing, and re-running a
+		 * summarizer call for that would spend a request on a transcript that is
+		 * going to be fine. Above the trigger means the next turn compacts again
+		 * immediately or overflows, which is the failure this exists to catch.
+		 *
+		 * How the transcript gets four times past a trigger that fires at 0.9 of
+		 * the window is the other half of the story, and both known routes are
+		 * recorded here: auto-compaction silently disabled by a catalog-derived
+		 * window, and a provider reporting a window that is not the real one.
+		 * Neither is the user's doing, and neither announces itself.
+		 */
+		const escalateToNoTailIfStillOversized = async (
+			produced: CoreCompactionResult | undefined,
+		): Promise<CoreCompactionResult | undefined> => {
+			if (
+				strategy !== "agentic" ||
+				!keepRecentMessages ||
+				!produced?.messages?.length ||
+				!(Number.isFinite(messageTriggerTokens) && messageTriggerTokens > 0)
+			) {
+				return produced;
+			}
+			const producedTokens = sizeOf(produced.messages);
+			if (producedTokens <= messageTriggerTokens) {
+				return produced;
+			}
+			config.logger?.log(
+				"Compaction kept the tail and stayed over the trigger; retrying without it",
+				{
+					severity: "warn",
+					producedTokens,
+					messageTriggerTokens,
+					messageInputTokens,
+				},
+			);
+			const noTail = await runAgenticCompaction({
+				context: compactionContext,
+				providerConfig: builtinOptions.providerConfig,
+				summarizer: userCompaction?.summarizer,
+				keepRecentMessages: false,
+				summaryPrompt: resolveSummaryPrompt(userCompaction, false),
+				thinkingSummaryEnabled: userCompaction?.thinkingSummaryEnabled,
+				thinkingSummaryPrompt: userCompaction?.thinkingSummaryPrompt,
+				bounds: resolveRecencyBounds({ preserveRecentTokens: 1 }),
+				estimateMessageTokens,
+				logger: config.logger,
+			});
+			// Only if it actually did better. A no-tail cut that declines, or
+			// that somehow comes back larger, leaves the keep-tail result in
+			// place: an oversized transcript beats no transcript.
+			if (!noTail?.messages?.length) {
+				return produced;
+			}
+			const noTailTokens = sizeOf(noTail.messages);
+			if (noTailTokens >= producedTokens) {
+				return produced;
+			}
+			executedStrategy = "agentic";
+			config.logger?.log("Compaction dropped the tail to fit", {
+				severity: "warn",
+				keptTailTokens: producedTokens,
+				noTailTokens,
+				messageTriggerTokens,
+			});
+			context.emitStatusNotice?.("compaction-tail-dropped", {
+				kind: "compaction",
+				phase: "escalated",
+				iteration: context.iteration,
+				keptTailTokens: producedTokens,
+				noTailTokens,
+				messageTriggerTokens,
+			});
+			return noTail;
+		};
 		let executedStrategy = telemetryStrategy;
 		let result: CoreCompactionResult | undefined;
 		if (effectiveMode === "overflow_recovery") {
@@ -893,6 +992,7 @@ export function createContextCompactionPrepareTurn(
 		} else {
 			try {
 				result = await runBuiltinStrategy(builtinOptions);
+				result = await escalateToNoTailIfStillOversized(result);
 			} catch (error) {
 				if (
 					strategy !== "agentic" ||

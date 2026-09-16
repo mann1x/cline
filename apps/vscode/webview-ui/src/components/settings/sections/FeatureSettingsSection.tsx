@@ -648,6 +648,13 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 						everything is discarded except the request that started the turn, and the summary has to carry the rest on
 						its own. Reclaims far more, and asks far more of the model writing it.
 					</p>
+					<p className="text-xs text-muted-foreground">
+						Leaving this on does not rule the other mode out. If a compaction keeps the recent turns and the context
+						is still over the limit afterwards, the tail is dropped for that one compaction and you are told it
+						happened. That is rare &mdash; it needs the conversation to have run several times past the point where
+						compaction should have fired, which happens when a provider misreports its context window, or when auto
+						compaction was off and has just been turned on.
+					</p>
 				</div>
 
 				<div className="space-y-2 pt-2">

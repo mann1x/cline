@@ -1302,7 +1302,10 @@ describe("buildSessionConfig", () => {
 	// the summarizer is given, and a setting that is stored but never read is
 	// this repository's most repeated bug.
 	it("carries a disabled recency tail, and its prompt, through to the SDK", async () => {
-		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string) => {
+		// Typed through `unknown` because this is the one case in the file that
+		// reads a string setting as well as booleans, and the mock's inferred
+		// signature comes from the boolean-only implementations above it.
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation(((key: string) => {
 			if (key === "useAutoCondense") {
 				return true
 			}
@@ -1316,7 +1319,7 @@ describe("buildSessionConfig", () => {
 				return false
 			}
 			return undefined
-		})
+		}) as unknown as (key: string) => boolean | undefined)
 
 		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
 
