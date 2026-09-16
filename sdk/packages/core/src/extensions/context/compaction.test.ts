@@ -1574,14 +1574,21 @@ describe("createContextCompactionPrepareTurn", () => {
 			"Agentic compaction produced no result; falling back to basic compaction",
 			expect.objectContaining({ severity: "warn" }),
 		);
+		// Retried first -- a model that spent its budget reasoning may not do so
+		// again -- and the retry carries the diagnosis, which is the part this
+		// test is about.
 		expect(logger.log).toHaveBeenCalledWith(
-			"Skipped agentic compaction: summarizer returned no summary text",
+			"Compaction summarizer returned no summary text; retrying",
 			expect.objectContaining({
 				severity: "warn",
 				reasoningChars: "thinking about the summary...".length,
 				incompleteReason: "max_output_tokens",
 				likelyCause: "output_budget_consumed_by_reasoning",
 			}),
+		);
+		expect(logger.log).toHaveBeenCalledWith(
+			"Skipped agentic compaction: the summarizer produced nothing usable",
+			expect.objectContaining({ severity: "warn", lastFailure: "empty" }),
 		);
 	});
 
@@ -1842,7 +1849,12 @@ describe("createContextCompactionPrepareTurn", () => {
 		});
 	});
 
-	it("falls back to basic compaction when the agentic request fails", async () => {
+	it("retries a failed summarizer call, then falls back to basic compaction", async () => {
+		// A throw no longer ends the compaction on the spot: a transport error
+		// is usually gone on the next call, and ending here hands the same
+		// oversized transcript to the next turn having spent a call for nothing.
+		// When every attempt fails the decline still reaches basic, and the
+		// error is still named -- which is what this test was written for.
 		const providerError = new Error("temporary summarizer failure");
 		createHandlerMock.mockReturnValue({
 			createMessage: vi.fn(() => {
@@ -1892,11 +1904,15 @@ describe("createContextCompactionPrepareTurn", () => {
 		expect(result?.messages).toBeDefined();
 		expect(result?.messages[0]?.metadata?.kind).not.toBe("compaction_summary");
 		expect(log).toHaveBeenCalledWith(
-			"Agentic compaction failed; falling back to basic compaction",
+			"Compaction summarizer call failed; retrying",
 			expect.objectContaining({
 				severity: "warn",
 				errorMessage: providerError.message,
 			}),
+		);
+		expect(log).toHaveBeenCalledWith(
+			"Agentic compaction produced no result; falling back to basic compaction",
+			expect.objectContaining({ severity: "warn" }),
 		);
 	});
 
@@ -2974,8 +2990,10 @@ describe("createContextCompactionPrepareTurn", () => {
 			},
 		});
 
-		// Agentic got its chance and gave up.
-		expect(createMessage).toHaveBeenCalledTimes(1);
+		// Agentic got its chances -- an empty response is retried, because a
+		// model that spends its output budget reasoning may not do so twice --
+		// and gave up.
+		expect(createMessage).toHaveBeenCalledTimes(3);
 		expect(result?.messages).toBeDefined();
 		expect(totalJsonTokens(result?.messages ?? [])).toBeLessThan(
 			totalJsonTokens(messages),

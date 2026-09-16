@@ -985,6 +985,12 @@ export {
 	createCompactionStateAwarePrepareTurn,
 	createContextCompactionPrepareTurn,
 } from "./extensions/context/compaction";
+export {
+	COMPACTION_JOURNAL_DEPTH,
+	type CompactionJournal,
+	type CompactionJournalEntry,
+	createCompactionJournal,
+} from "./extensions/context/compaction-journal";
 // Exported so the settings panel can show the built-in prompt as the
 // placeholder for the field that replaces it.
 export {

@@ -31,6 +31,10 @@ import type { ProviderConfig } from "../../types/provider-settings";
 import { runAgenticCompaction } from "./agentic-compaction";
 import { runBasicCompaction } from "./basic-compaction";
 import {
+	type CompactionJournal,
+	createCompactionJournal,
+} from "./compaction-journal";
+import {
 	COMPACTION_TRIGGER_RATIO,
 	createTokenEstimator,
 	DEFAULT_MAX_INPUT_TOKENS,
@@ -106,6 +110,15 @@ type BuiltinCompactionStrategyRunner = (
 export interface ContextCompactionPrepareTurnOptions {
 	mode?: CoreCompactionMode;
 	manualTargetRatio?: number;
+	/**
+	 * Where the pre-compaction transcript is kept, so a compaction can be undone.
+	 *
+	 * Supplied by a caller that wants to reach it — a host offering an "undo
+	 * compaction" action, or a test. Omitted, one is created internally and the
+	 * transcript is still kept; the journal is never optional, only its
+	 * visibility is. See {@link createCompactionJournal}.
+	 */
+	journal?: CompactionJournal;
 }
 
 /**
@@ -466,6 +479,12 @@ export function createContextCompactionPrepareTurn(
 	const strategy = userCompaction?.strategy ?? "agentic";
 	const runBuiltinStrategy = BUILTIN_COMPACTION_STRATEGIES[strategy];
 	const mode = options.mode ?? "auto";
+	// Always present. Compaction is the one operation here that destroys its own
+	// input, and every other thing the model does to state is recoverable: an
+	// edit has a revision, a transaction has a base snapshot, a file has the
+	// disk. The transcript had nothing.
+	const journal = options.journal ?? createCompactionJournal();
+	const keepRecentMessages = userCompaction?.keepRecentMessages !== false;
 	const telemetryStrategy: TelemetryCompactionStrategy = userCompaction?.compact
 		? "custom"
 		: strategy;
@@ -902,18 +921,39 @@ export function createContextCompactionPrepareTurn(
 			// is fullest. Basic compaction needs no request and cannot decline for
 			// any of those reasons, so it is what stands between a declined
 			// compaction and a turn that runs out of room to answer in.
+			//
+			// Not when the configuration says to keep nothing. Basic compaction
+			// prunes tool results and keeps every message, so substituting it
+			// for a no-tail compaction silently runs the opposite of what was
+			// configured -- and a user who turned the tail off did so because
+			// keeping it was the problem. Declining is the honest answer, and
+			// with the summarizer's own retries in place an agentic decline now
+			// means there was genuinely nothing to fold rather than that a model
+			// call went wrong.
 			if (strategy === "agentic" && !result?.messages) {
-				config.logger?.log(
-					"Agentic compaction produced no result; falling back to basic compaction",
-					{
-						severity: "warn",
-						messageInputTokens,
-						messageTargetTokens,
-						messageCount: context.messages.length,
-					},
-				);
-				executedStrategy = "basic";
-				result = await BUILTIN_COMPACTION_STRATEGIES.basic(builtinOptions);
+				if (!keepRecentMessages) {
+					config.logger?.log(
+						"Agentic compaction produced no result and the tail is disabled; not substituting basic compaction",
+						{
+							severity: "warn",
+							messageInputTokens,
+							messageTargetTokens,
+							messageCount: context.messages.length,
+						},
+					);
+				} else {
+					config.logger?.log(
+						"Agentic compaction produced no result; falling back to basic compaction",
+						{
+							severity: "warn",
+							messageInputTokens,
+							messageTargetTokens,
+							messageCount: context.messages.length,
+						},
+					);
+					executedStrategy = "basic";
+					result = await BUILTIN_COMPACTION_STRATEGIES.basic(builtinOptions);
+				}
 			}
 		}
 
@@ -930,6 +970,19 @@ export function createContextCompactionPrepareTurn(
 		};
 
 		if (result?.messages) {
+			// Before anything else touches it. The transcript that was just
+			// replaced is unrecoverable from this point on unless it is held
+			// here, and a bad no-tail compaction is terminal without it.
+			journal.record({
+				generation:
+					result.messages
+						.map((message) => getCompactionSummaryMetadata(message))
+						.find((metadata) => metadata !== undefined)?.generation ?? 1,
+				before: context.messages,
+				afterMessageCount: result.messages.length,
+				strategy: executedStrategy,
+				keptRecentMessages: keepRecentMessages,
+			});
 			// Compaction is a prompt rewrite, so the pool it was serving is now
 			// serving text that no longer exists. Re-rooting forks the shared
 			// prefix -- which did not change -- and releases the old subtree; the

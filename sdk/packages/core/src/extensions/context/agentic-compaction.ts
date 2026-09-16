@@ -100,6 +100,45 @@ const SUMMARIZER_SYSTEM_PROMPTS = {
 		"You are assessing your own reasoning on work that is about to be discarded. This is judgement, not a record — what happened is written up separately. Be terse, and say only what you would want to know before starting the next hour of this task.",
 } as const;
 
+/**
+ * How many times the summarizer is asked before compaction gives up.
+ *
+ * Three, because the three failures it recovers from are different and a
+ * single retry only covers one of them: a transport error is usually gone on
+ * the next call, an empty response from a model that spent its budget
+ * reasoning may need two, and a summary that overran its budget needs one
+ * attempt to measure it and another to act on the measurement.
+ */
+const SUMMARY_ATTEMPTS = 3;
+
+/**
+ * Tell the summarizer, in numbers, that its last attempt did not fit.
+ *
+ * This is the one place length is worth talking about, and it is the exception
+ * that proves the rule the prompts follow. `DEFAULT_FULL_COMPACTION_PROMPT`
+ * carries no length adjective because adjectives are a measured non-lever
+ * (arXiv 2605.23296): "be concise" and "be very detailed" produce nearly the
+ * same output, since the model anchors length to its training distribution and
+ * has no way to know what the budget is.
+ *
+ * A measurement is not an adjective. "You wrote 4,100 tokens and the limit is
+ * 2,800" is a fact about this attempt against a number the model could not
+ * otherwise see, and the second attempt has something to aim at. What it must
+ * not turn into is an instruction to drop sections — a shorter summary that
+ * has lost the standing instructions or the identifiers is worse than one that
+ * overran, so the guidance is to compress within the structure and the two
+ * things that are never compressed are named.
+ */
+function describeOverrun(measuredTokens: number, limitTokens: number): string {
+	return [
+		"",
+		"",
+		`Your previous attempt was about ${measuredTokens} tokens. It has to fit in ${limitTokens} and it did not, so it was rejected and nothing was kept from it.`,
+		"",
+		`Write it again under ${limitTokens} tokens. Keep every section — a missing section reads as an omission by accident. Shorten within them instead: fewer words per item, no restating the same fact in two sections, no preamble. Two things are never shortened: quoted standing instructions, and identifiers, lists and checklists, which have to stay verbatim and complete however little room is left.`,
+	].join("\n");
+}
+
 async function generateSummary(options: {
 	providerConfig: ProviderConfig;
 	request: string;
@@ -434,29 +473,107 @@ export async function runAgenticCompaction(options: {
 		maxInputTokens: options.context.budget.request.maxInputTokens,
 		triggerTokens: options.context.budget.request.triggerTokens,
 	});
-	const summaryResult = await generateSummary({
-		providerConfig: summarizerProviderConfig,
-		request: summaryRequest,
-		systemPrompt: keepRecentMessages
-			? SUMMARIZER_SYSTEM_PROMPTS.tail
-			: SUMMARIZER_SYSTEM_PROMPTS.full,
-		logger: options.logger,
-	});
-	const rawSummary = summaryResult.text;
-	if (!rawSummary) {
+	// Three failures, all recoverable, none of which used to be recovered from:
+	// the call threw, the call came back empty, or the summary overran the
+	// budget it has to fit. Each one used to end the compaction — and ending it
+	// means handing the same oversized transcript to the next turn, one turn
+	// larger, having spent a model call to achieve nothing.
+	const summaryLimitTokens = outputBudgets.summaryMaxTokens;
+	let summaryResult: SummaryGenerationResult | undefined;
+	let lastFailure = "none";
+	for (let attempt = 1; attempt <= SUMMARY_ATTEMPTS; attempt += 1) {
+		// Only the overrun retry changes the request, because only the overrun
+		// gives the model something it did not already know. A throw and an
+		// empty response are told nothing new: the same request is simply sent
+		// again.
+		const request =
+			lastFailure === "over_budget" && summaryResult
+				? `${summaryRequest}${describeOverrun(
+						estimateTokens(summaryResult.text.length),
+						summaryLimitTokens,
+					)}`
+				: summaryRequest;
+		let candidate: SummaryGenerationResult | undefined;
+		try {
+			candidate = await generateSummary({
+				providerConfig: summarizerProviderConfig,
+				request,
+				systemPrompt: keepRecentMessages
+					? SUMMARIZER_SYSTEM_PROMPTS.tail
+					: SUMMARIZER_SYSTEM_PROMPTS.full,
+				logger: options.logger,
+			});
+		} catch (error) {
+			// A cancelled compaction is not a failed one, and retrying it would
+			// ignore the abort that asked it to stop.
+			if (options.context.abortSignal?.aborted) {
+				throw error;
+			}
+			lastFailure = "threw";
+			options.logger?.log("Compaction summarizer call failed; retrying", {
+				severity: "warn",
+				attempt,
+				attempts: SUMMARY_ATTEMPTS,
+				errorMessage: error instanceof Error ? error.message : String(error),
+			});
+			continue;
+		}
+		if (!candidate.text.trim()) {
+			lastFailure = "empty";
+			options.logger?.log(
+				"Compaction summarizer returned no summary text; retrying",
+				{
+					severity: "warn",
+					attempt,
+					attempts: SUMMARY_ATTEMPTS,
+					summarizerMaxOutputTokens: summarizerProviderConfig.maxOutputTokens,
+					reasoningChars: candidate.reasoningChars,
+					incompleteReason: candidate.incompleteReason,
+					likelyCause:
+						candidate.reasoningChars > 0
+							? "output_budget_consumed_by_reasoning"
+							: "empty_response",
+				},
+			);
+			continue;
+		}
+		const candidateTokens = estimateTokens(candidate.text.length);
+		if (candidateTokens > summaryLimitTokens) {
+			lastFailure = "over_budget";
+			summaryResult = candidate;
+			options.logger?.log(
+				"Compaction summary exceeded its output budget; retrying with the measurement",
+				{
+					severity: "warn",
+					attempt,
+					attempts: SUMMARY_ATTEMPTS,
+					summaryTokens: candidateTokens,
+					summaryLimitTokens,
+				},
+			);
+			continue;
+		}
+		summaryResult = candidate;
+		lastFailure = "none";
+		break;
+	}
+	// An overrunning summary on the last attempt is kept, because it is a real
+	// summary of the work and the alternative is no compaction at all. The
+	// budget is a target the retry exists to hit, not a wall worth losing the
+	// transcript over. An empty one is not kept: there is nothing in it.
+	const rawSummary =
+		lastFailure === "threw" || lastFailure === "empty"
+			? ""
+			: (summaryResult?.text ?? "");
+	if (!rawSummary || !summaryResult) {
 		options.logger?.log(
-			"Skipped agentic compaction: summarizer returned no summary text",
+			"Skipped agentic compaction: the summarizer produced nothing usable",
 			{
 				severity: "warn",
+				attempts: SUMMARY_ATTEMPTS,
+				lastFailure,
 				summarizerProviderId: summarizerProviderConfig.providerId,
 				summarizerModelId: summarizerProviderConfig.modelId,
-				summarizerMaxOutputTokens: summarizerProviderConfig.maxOutputTokens,
-				reasoningChars: summaryResult.reasoningChars,
-				incompleteReason: summaryResult.incompleteReason,
-				likelyCause:
-					summaryResult.reasoningChars > 0
-						? "output_budget_consumed_by_reasoning"
-						: "empty_response",
 			},
 		);
 		return undefined;
