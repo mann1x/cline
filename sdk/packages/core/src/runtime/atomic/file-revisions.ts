@@ -82,6 +82,16 @@ export type RevisionLookup =
 export interface RevisionLimits {
 	/** Content held for one file before the middle is released. */
 	maxBytesPerFile?: number;
+	/**
+	 * Content held across every file before the middle is released.
+	 *
+	 * The per-file cap alone is only a bound when the log's lifetime is a
+	 * transaction, which is short and touches a handful of files. A log that
+	 * lives for the session touches as many files as the session does, and 32 MB
+	 * each is not a limit — it is a limit per file, multiplied by a number
+	 * nobody chose.
+	 */
+	maxBytesTotal?: number;
 }
 
 /**
@@ -93,6 +103,17 @@ export interface RevisionLimits {
  * two thousand revisions) and bounds the pathological one.
  */
 export const DEFAULT_MAX_REVISION_BYTES_PER_FILE = 32 * 1024 * 1024;
+
+/**
+ * Content held across all files before the oldest is released.
+ *
+ * 128 MB: four times the per-file cap, so one pathological file cannot starve
+ * the rest, and small enough that a session holding the maximum is a number a
+ * person would recognise as deliberate rather than a leak. A session editing
+ * fifteen-kilobyte source files reaches it after roughly eight thousand
+ * revisions, which is not a session.
+ */
+export const DEFAULT_MAX_REVISION_BYTES_TOTAL = 128 * 1024 * 1024;
 
 /**
  * Newest revisions never released, however tight the cap.
@@ -314,6 +335,8 @@ export function createRevisionLog(
 ): RevisionLog {
 	const maxBytes =
 		limits.maxBytesPerFile ?? DEFAULT_MAX_REVISION_BYTES_PER_FILE;
+	const maxBytesTotal =
+		limits.maxBytesTotal ?? DEFAULT_MAX_REVISION_BYTES_TOTAL;
 	const logs = new Map<string, MutableRevision[]>();
 	const blobs = new Map<string, Blob>();
 
@@ -390,6 +413,54 @@ export function createRevisionLog(
 		}
 	};
 
+	/** Distinct bytes every live revision holds, across all files. */
+	const heldBytesTotal = (): number => {
+		let total = 0;
+		for (const blob of blobs.values()) {
+			total += blob.body.length;
+		}
+		return total;
+	};
+
+	/**
+	 * Release content from the oldest files until the log is under the cap.
+	 *
+	 * Across files the ordering that matters is different from the one within
+	 * one file. Inside a file the interesting revisions are at the ends — `#1`
+	 * to go back to the start, the newest to undo a mistake — so the hole is
+	 * punched in the middle. Across files it is recency: a file the session
+	 * stopped touching an hour ago is the one whose history is least likely to
+	 * be asked for, and unlike a revision index a file has no `#1` that must
+	 * survive.
+	 *
+	 * `#1` of each file is still the last thing to go, because a file whose
+	 * base is gone cannot be put back at all, and that is the single operation
+	 * this store exists for.
+	 */
+	const enforceTotalCap = (): void => {
+		if (heldBytesTotal() <= maxBytesTotal) return;
+		// Oldest-touched first. Map iteration is insertion order, and a file is
+		// re-inserted on every write, so this is a least-recently-written walk.
+		const order = [...logs.keys()];
+		for (const pass of [false, true]) {
+			for (const key of order) {
+				const entries = logs.get(key);
+				if (!entries) continue;
+				for (let i = entries.length - 1; i >= 0; i -= 1) {
+					// Second pass only: the base revision, once nothing else is
+					// left to give.
+					if (i === 0 && !pass) continue;
+					const entry = entries[i];
+					if (!entry || entry.dropped || !entry.existed) continue;
+					if ((blobs.get(entry.hash)?.refs ?? 0) > 1) continue;
+					release(entry);
+					entry.dropped = true;
+					if (heldBytesTotal() <= maxBytesTotal) return;
+				}
+			}
+		}
+	};
+
 	const append = (
 		absolutePath: string,
 		body: Buffer | undefined,
@@ -430,8 +501,13 @@ export function createRevisionLog(
 			...(earlier ? { sameAs: earlier.index } : {}),
 		};
 		entries.push(entry);
+		// Deleted first so the re-insert moves this file to the end of the map,
+		// which is what makes iteration order a least-recently-written walk for
+		// `enforceTotalCap`.
+		logs.delete(absolutePath);
 		logs.set(absolutePath, entries);
 		enforceCap(entries);
+		enforceTotalCap();
 		return frozen(entry);
 	};
 

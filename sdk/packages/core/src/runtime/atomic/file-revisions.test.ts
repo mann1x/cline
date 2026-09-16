@@ -341,3 +341,87 @@ describe("describeRestoreTarget", () => {
 		});
 	});
 });
+
+describe("the cap across every file", () => {
+	// The per-file cap is only a bound when the log's lifetime is a transaction:
+	// short, and a handful of files. A log that lives for the session touches as
+	// many files as the session does, and 32 MB each is not a limit -- it is a
+	// limit per file, multiplied by a number nobody chose.
+	// Distinct fill per call, because identical content de-duplicates to one
+	// blob: five identical 8 KB files cost 8 KB, not 40 KB. That is correct and
+	// is what makes an oscillating transaction cheap -- but a fixture that
+	// leans on it is measuring the de-duplication rather than the cap.
+	let fill = 0;
+	const big = (size: number) =>
+		Buffer.alloc(size, String.fromCharCode(97 + (fill++ % 26)));
+
+	it("releases content once every file together passes the cap", () => {
+		const log = createRevisionLog(undefined, {
+			maxBytesPerFile: 10_000,
+			maxBytesTotal: 25_000,
+		});
+		for (let file = 0; file < 5; file += 1) {
+			log.seed(`/w/f${file}.ts`, big(8_000));
+		}
+
+		const held = Array.from({ length: 5 }, (_, file) =>
+			log.heldBytes(`/w/f${file}.ts`),
+		).reduce((sum, bytes) => sum + bytes, 0);
+
+		expect(held).toBeGreaterThan(0);
+		expect(held).toBeLessThanOrEqual(25_000);
+	});
+
+	it("takes from the file touched longest ago, not from the newest", () => {
+		// Across files the ordering that matters is recency: a file the session
+		// stopped touching is the one whose history is least likely to be asked
+		// for. Inside one file it is the middle, which is a different rule and
+		// stays a different rule.
+		const log = createRevisionLog(undefined, {
+			maxBytesPerFile: 100_000,
+			maxBytesTotal: 20_000,
+		});
+		log.seed("/w/old.ts", big(9_000));
+		log.record("/w/old.ts", big(9_001), "editor");
+		log.seed("/w/new.ts", big(9_002));
+		log.record("/w/new.ts", big(9_003), "editor");
+
+		expect(log.heldBytes("/w/new.ts")).toBeGreaterThan(
+			log.heldBytes("/w/old.ts"),
+		);
+	});
+
+	it("gives up a base revision only when nothing else is left", () => {
+		// A file whose base is gone cannot be put back at all, and that is the
+		// single operation this store exists for.
+		const log = createRevisionLog(undefined, {
+			maxBytesPerFile: 100_000,
+			maxBytesTotal: 12_000,
+		});
+		log.seed("/w/a.ts", big(5_000));
+		log.record("/w/a.ts", big(5_001), "editor");
+		log.record("/w/a.ts", big(5_002), "editor");
+
+		const revisions = log.revisions("/w/a.ts");
+
+		expect(revisions[0]?.dropped).toBe(false);
+		expect(revisions.some((revision) => revision.dropped)).toBe(true);
+	});
+
+	it("leaves an entry in place when its content is released", () => {
+		// The history keeps its shape: a released revision is a hole that says
+		// where it is, not a renumbering.
+		const log = createRevisionLog(undefined, {
+			maxBytesPerFile: 100_000,
+			maxBytesTotal: 12_000,
+		});
+		log.seed("/w/a.ts", big(5_000));
+		log.record("/w/a.ts", big(5_001), "editor");
+		log.record("/w/a.ts", big(5_002), "editor");
+
+		const revisions = log.revisions("/w/a.ts");
+
+		expect(revisions).toHaveLength(3);
+		expect(revisions.map((revision) => revision.index)).toEqual([1, 2, 3]);
+	});
+});
