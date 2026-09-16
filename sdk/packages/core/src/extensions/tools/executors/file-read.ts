@@ -18,7 +18,7 @@ import {
 	MAX_READ_LINES,
 	MAX_READ_OUTPUT_CHARS,
 } from "./output-limits";
-import type { ReadReceipts } from "./read-receipts";
+import { type ReadReceipts, readFileStamp } from "./read-receipts";
 import type { ReadLedger } from "./unchanged-reads";
 
 const IMAGE_MEDIA_TYPES = new Map<string, string>([
@@ -414,6 +414,15 @@ export function createFileReadExecutor(
 		if (window.lastLine >= window.firstLine) {
 			receipts?.noteRead(resolvedPath, window.firstLine, window.lastLine);
 		}
+		// Did the file move under this session between the last look and this
+		// one? Asked here rather than inferred from the conversation, because
+		// the conversation cannot answer it: a second agent, a background task,
+		// a shell command or the user's own editor all leave no trace in the
+		// transcript, and the model has no way to know its read was stale until
+		// an edit lands on the wrong lines.
+		const stamp = await readFileStamp(resolvedPath);
+		const movedUnderUs = receipts?.changedSince(resolvedPath, stamp) ?? false;
+		receipts?.noteStamp(resolvedPath, stamp);
 		// Receipts are recorded either way above: a model told the file has not
 		// changed has still seen these lines in this conversation, and refusing
 		// its next edit for not having read them would be false.
@@ -426,8 +435,31 @@ export function createFileReadExecutor(
 			},
 			window.text,
 		);
-		return unchanged ?? window.text;
+		const text = unchanged ?? window.text;
+		// Ahead of the content, not after it. A model that has what it asked for
+		// stops reading, and this is the one thing it must not miss: everything
+		// it believed about this file a moment ago may be wrong.
+		return movedUnderUs
+			? `${describeMovedUnderUs(resolvedPath)}\n\n${text}`
+			: text;
 	};
+}
+
+/**
+ * Tell the model its earlier view of a file is out of date.
+ *
+ * Says who did it — or rather, says that this session did not — because the
+ * two cases need opposite responses. A file the model changed itself is
+ * expected and needs nothing; a file something else changed means every line
+ * number it is holding may be wrong, and the fix is to trust this read and
+ * discard the earlier one rather than to reconcile them.
+ */
+function describeMovedUnderUs(path: string): string {
+	return [
+		`NOTE: ${path} changed since you last looked at it, and not because of anything you did.`,
+		"Something outside this session wrote to it — another agent working in parallel, a background task, a command you ran, or the user.",
+		"Use the content below and discard what you remember of this file: earlier line numbers may now point at different code.",
+	].join(" ");
 }
 
 /**

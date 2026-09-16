@@ -19,7 +19,7 @@ import {
 	normalizeLineEndings,
 	normalizeNewFileLineEndings,
 } from "./line-endings";
-import type { ReadReceipts } from "./read-receipts";
+import { type ReadReceipts, readFileStamp } from "./read-receipts";
 
 /**
  * The largest file worth re-scanning for bracket balance after an edit.
@@ -1592,12 +1592,48 @@ export function createEditorExecutor(
 		return `${result}\n\n${scan}${cost ?? ""}`;
 	};
 
+	/**
+	 * Refuse an edit to a file something else has written since it was read.
+	 *
+	 * The read-before-edit guard above asks whether the model has seen these
+	 * lines. This asks a different question that guard cannot reach: whether
+	 * what it saw is still what is there. A parallel agent, a background task,
+	 * a command the model ran, or the user in their own editor all change the
+	 * file without leaving anything in the conversation, so the model's read is
+	 * stale and it has no way to find out — the edit simply lands on whatever
+	 * occupies those lines now.
+	 *
+	 * It refuses rather than warning, unlike the read path, because a warning
+	 * attached to a write arrives after the damage. The instruction is to read
+	 * again, which is cheap and always sufficient: the re-read records the new
+	 * stamp, so the resent edit goes through.
+	 *
+	 * Costs one `stat` per edit, and nothing when the file has never been seen.
+	 */
+	const requireCurrent = async (filePath: string): Promise<void> => {
+		if (!receipts) {
+			return;
+		}
+		const stamp = await readFileStamp(filePath);
+		if (!receipts.changedSince(filePath, stamp)) {
+			return;
+		}
+		// Recorded before throwing, so a model that reads and immediately
+		// resends is not refused twice for the same change.
+		receipts.noteStamp(filePath, stamp);
+		receipts.retire(filePath);
+		throw new Error(
+			`${filePath} changed since you last read it, and not because of anything you did — something outside this session wrote to it. The file was not modified. Call \`read_files\` for ${filePath} to see what it says now, then decide whether this edit is still the right one: the lines you are aiming at may hold different code, and applying this edit as written could undo someone else's work.`,
+		);
+	};
+
 	const edit = async (
 		input: EditFileInput,
 		cwd: string,
 		_context: AgentToolContext,
 	): Promise<string> => {
 		const filePath = resolveFilePath(cwd, input.path, restrictToCwd);
+		await requireCurrent(filePath);
 		const linesBefore = receipts ? await countLines(filePath) : null;
 		const noteWrite = async (): Promise<void> => {
 			if (!receipts || linesBefore == null) {
@@ -1607,6 +1643,10 @@ export function createEditorExecutor(
 			if (linesAfter != null) {
 				receipts.noteWrite(filePath, linesBefore, linesAfter);
 			}
+			// After the write, so this session's own edit is not mistaken for
+			// somebody else's on the next call. Missing this is the difference
+			// between a guard and a wall.
+			receipts.noteStamp(filePath, await readFileStamp(filePath));
 		};
 
 		const insertLine = resolveInsertLine(input);

@@ -20,7 +20,7 @@ import { promises as fs } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { type Expr, parseAwk, type Rule, type Stmt } from "./awk-parser";
 import { compilePosixRegex } from "./posix-regex";
-import type { ReadReceipts } from "./read-receipts";
+import { type ReadReceipts, readFileStamp } from "./read-receipts";
 
 /** An awk value: a number, a string, or a string that looks like a number. */
 type Value = string | number;
@@ -908,6 +908,9 @@ export function createAwkExecutor(options: AwkExecutorOptions = {}) {
 				continue;
 			}
 			options.receipts?.noteRead(filePath, 1, Number.POSITIVE_INFINITY);
+			// Stamped with the read, so a later edit can tell a file that
+			// moved under the session from one it has simply never seen.
+			options.receipts?.noteStamp(filePath, await readFileStamp(filePath));
 			// Each file is a fresh run so NR and FNR agree, which is what a model
 			// expects when it passes one file at a time.
 			const result = runAwkProgram(rules, content, {

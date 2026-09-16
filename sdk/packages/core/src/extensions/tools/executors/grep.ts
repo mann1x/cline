@@ -16,7 +16,7 @@ import { promises as fs } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { MAX_SEARCH_OUTPUT_CHARS } from "./output-limits";
 import { compilePosixRegex } from "./posix-regex";
-import type { ReadReceipts } from "./read-receipts";
+import { type ReadReceipts, readFileStamp } from "./read-receipts";
 
 /**
  * Directories not worth searching.
@@ -194,6 +194,9 @@ export function createGrepExecutor(options: GrepExecutorOptions = {}) {
 				continue;
 			}
 			options.receipts?.noteRead(filePath, 1, Number.POSITIVE_INFINITY);
+			// Stamped with the read, so a later edit can tell a file that
+			// moved under the session from one it has simply never seen.
+			options.receipts?.noteStamp(filePath, await readFileStamp(filePath));
 
 			const shown = relative(cwd, filePath) || filePath;
 			const fileLines = content.split("\n");

@@ -22,7 +22,7 @@
 import { promises as fs } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { compilePosixRegex } from "./posix-regex";
-import type { ReadReceipts } from "./read-receipts";
+import { type ReadReceipts, readFileStamp } from "./read-receipts";
 
 /** Commands whose absence would otherwise be silent. */
 const UNSUPPORTED_COMMANDS: Record<string, string> = {
@@ -674,6 +674,22 @@ export function createSedExecutor(options: SedExecutorOptions = {}) {
 				// happens to be there now.
 				const range = addressedLines(commands);
 				if (receipts) {
+					// And the other half of it: whether what was read is still
+					// what is there. `sed -i` on a file a parallel agent has
+					// rewritten applies the script to code the model has never
+					// seen, silently and to every match.
+					const stamp = await readFileStamp(filePath);
+					if (receipts.changedSince(filePath, stamp)) {
+						receipts.noteStamp(filePath, stamp);
+						receipts.retire(filePath);
+						outcomes.push({
+							file,
+							output: "",
+							ok: false,
+							error: `not modified. ${file} changed since you last read it, and not because of anything you did — something outside this session wrote to it. Call \`read_files\` for it to see what it says now, then decide whether this script is still right.`,
+						});
+						continue;
+					}
 					if (range) {
 						if (!receipts.covers(filePath, range.first, range.last)) {
 							const why = receipts.wasRetired(filePath)
@@ -718,6 +734,9 @@ export function createSedExecutor(options: SedExecutorOptions = {}) {
 					countLines(original),
 					countLines(result.output),
 				);
+				// After the write, so this session's own change is not read back
+				// as somebody else's on the next call.
+				receipts?.noteStamp(filePath, await readFileStamp(filePath));
 				const delta = countLines(result.output) - countLines(original);
 				outcomes.push({
 					file,
@@ -734,6 +753,7 @@ export function createSedExecutor(options: SedExecutorOptions = {}) {
 			// A read-only run is a read: record it, so a later edit to the same
 			// file is not refused for a file the model has just been through.
 			receipts?.noteRead(filePath, 1, Number.POSITIVE_INFINITY);
+			receipts?.noteStamp(filePath, await readFileStamp(filePath));
 			outcomes.push({ file, output: result.output, ok: true });
 		}
 
