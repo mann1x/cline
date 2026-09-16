@@ -34,6 +34,7 @@ import {
 	type CompactionJournal,
 	createCompactionJournal,
 } from "./compaction-journal";
+import { releaseUnreachableRevisions } from "./compaction-revisions";
 import {
 	COMPACTION_TRIGGER_RATIO,
 	createTokenEstimator,
@@ -282,6 +283,15 @@ const BUILTIN_COMPACTION_STRATEGIES = {
 			providerConfig,
 			summarizer: compaction?.summarizer,
 			keepRecentMessages: compaction?.keepRecentMessages !== false,
+			// Bound, because the port is an object and the ledger wants a plain
+			// function. Absent when the host keeps no log, and the ledger then
+			// says nothing about files rather than guessing a revision number.
+			...(compaction?.revisions
+				? {
+						revisionsFor: (filePath: string) =>
+							compaction.revisions?.revisionsFor(filePath),
+					}
+				: {}),
 			summaryPrompt: resolveSummaryPrompt(
 				compaction,
 				compaction?.keepRecentMessages !== false,
@@ -1083,6 +1093,14 @@ export function createContextCompactionPrepareTurn(
 				strategy: executedStrategy,
 				keptRecentMessages: keepRecentMessages,
 			});
+			// After the journal, because eviction is the one step here that
+			// destroys something, and the transcript it is reasoning about has
+			// to be recoverable before anything is released.
+			releaseUnreachableRevisions(
+				userCompaction?.revisions,
+				result.messages,
+				config.logger,
+			);
 			// Compaction is a prompt rewrite, so the pool it was serving is now
 			// serving text that no longer exists. Re-rooting forks the shared
 			// prefix -- which did not change -- and releases the old subtree; the

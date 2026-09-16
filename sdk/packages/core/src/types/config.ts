@@ -16,6 +16,7 @@ import type {
 	SessionPromptConfig,
 	SessionWorkspaceConfig,
 } from "@cline/shared";
+import type { CompactionRevisions } from "../extensions/context/compaction-revisions";
 import type { ToolRoutingRule } from "../extensions/tools/model-tool-routing";
 import type { QaCredential } from "../extensions/tools/qa-credentials";
 import type { TaskProgressState } from "../extensions/tools/task-progress";
@@ -502,6 +503,16 @@ export interface CoreCompactionConfig {
 	 * who has tuned one should not lose it by trying the other.
 	 */
 	keepRecentMessages?: boolean;
+	/**
+	 * The session's file revision log, when the host keeps one.
+	 *
+	 * Compaction is the only thing that can answer either of the log's two open
+	 * questions: which revisions a summary still refers to, and therefore which
+	 * histories are worth holding. Supplied by the host for the same reason
+	 * `forgetReads` is -- the log lives in the runtime, and a host without one
+	 * still compacts, with ledger entries that say nothing about files.
+	 */
+	revisions?: CompactionRevisions;
 	/**
 	 * Replaces the built-in instruction the summarizer is given when a recency
 	 * tail survives — see {@link keepRecentMessages}.
