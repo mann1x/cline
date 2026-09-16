@@ -21,6 +21,7 @@ import {
 	buildSummaryMessage,
 	buildThinkingSummaryRequest,
 	createTokenEstimator,
+	DEFAULT_COMPACTION_PROMPT,
 	estimateTokens,
 	findCutPlan,
 	getCompactionSummaryMetadata,
@@ -5669,5 +5670,23 @@ describe("buildSummaryMessage", () => {
 		});
 
 		expect(Array.isArray(message.content) ? message.content.length : 0).toBe(1);
+	});
+});
+
+describe("the compaction prompt speaks to whatever the session was", () => {
+	// Cline is given personalities and jobs that are not programming, and a
+	// hand-over note that opens by calling the session a coding one tells the
+	// model something false about the work it just did. The discipline the
+	// prompt exists for -- specifics over summary -- is not specific to code.
+	it("does not assume the session was about code", () => {
+		expect(DEFAULT_COMPACTION_PROMPT.toLowerCase()).not.toContain("coding");
+		expect(DEFAULT_COMPACTION_PROMPT.toLowerCase()).not.toContain("codebase");
+	});
+
+	it("still demands the specifics, which is the part that matters", () => {
+		expect(DEFAULT_COMPACTION_PROMPT).toContain("## Goal");
+		expect(DEFAULT_COMPACTION_PROMPT).toContain("## Ruled out");
+		expect(DEFAULT_COMPACTION_PROMPT).toContain("{{files_read}}");
+		expect(DEFAULT_COMPACTION_PROMPT).toContain("{{files_edited}}");
 	});
 });

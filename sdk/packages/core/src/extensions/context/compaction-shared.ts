@@ -1523,9 +1523,9 @@ export function ensureFilesSection(
  * track of which files are in play is the one failure that makes a summary
  * actively misleading rather than merely thin.
  */
-export const DEFAULT_COMPACTION_PROMPT = `You are writing the hand-over note for a coding session that is about to lose its transcript. Everything below will be discarded; only your note survives, and the agent continuing this work will have nothing else to go on.
+export const DEFAULT_COMPACTION_PROMPT = `You are writing the hand-over note for a session that is about to lose its transcript. Everything below will be discarded; only your note survives, and whoever continues this work will have nothing else to go on.
 
-Write for that reader. Prefer specifics over summary: exact file paths, function and symbol names, error text, commands, and numbers. Do not compress away detail that would have to be rediscovered — an over-long note costs a little context, a vague one costs the whole investigation.
+Write for that reader. Prefer specifics over summary: exact names, identifiers and paths, quoted wording, error text, commands, and numbers. Do not compress away detail that would have to be rediscovered — an over-long note costs a little context, a vague one costs the whole investigation.
 
 ## Goal
 What is being built or fixed, in one or two sentences, including any constraint the user stated.
@@ -1540,17 +1540,17 @@ What is underway right now, and exactly where it stopped.
 Approaches already tried that did not work, and why. Omit if none — but never drop one that was tried, or it will be tried again.
 
 ## Key facts
-Decisions taken, values discovered, identifiers, signatures, and anything learned about the codebase that is not obvious from reading it. Omit if none.
+Decisions taken, values discovered, identifiers, signatures, and anything learned about the material at hand that would not be obvious to someone looking at it fresh. Omit if none.
 
 ## Next
 The immediate next steps, in order.
 
-Write them for a reader holding no file contents. Every step that touches a file
+Write them for a reader holding no file contents. Where a step touches a file it
 must begin by reading the part it touches, and no step may say to write, rewrite
 or restore content that this note does not itself contain — that reader would
 have to reconstruct it from memory, and what it produces will be a worse version
-of a file that is still on disk. Prefer the smallest edit that fixes the problem
-over rewriting the whole of anything.
+of something that is still on disk. Prefer the smallest change that achieves the
+result over redoing the whole of anything.
 
 ## Files
 Read: {{files_read}}

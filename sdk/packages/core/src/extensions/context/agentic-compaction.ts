@@ -85,7 +85,7 @@ async function generateSummary(options: {
 		// The system half said "concise" while the user half asks for the detail
 		// that has to survive; the model was being pulled both ways on the one
 		// message that has to carry everything.
-		"You write hand-over notes for coding sessions. The transcript you are given is about to be discarded, so your note is the only record that remains. Follow the requested structure exactly, and keep every specific — paths, names, errors, numbers — that the next agent would otherwise have to rediscover.",
+		"You write hand-over notes for working sessions of every kind. The transcript you are given is about to be discarded, so your note is the only record that remains. Follow the requested structure exactly, and keep every specific — names, paths, quoted wording, errors, numbers — that whoever continues would otherwise have to rediscover.",
 		[{ role: "user", content: options.request }],
 	)) {
 		if (chunk.type === "text") {
