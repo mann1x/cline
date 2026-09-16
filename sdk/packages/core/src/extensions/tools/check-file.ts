@@ -205,8 +205,14 @@ export interface CheckFinding {
 	/** Whether the runtime named that line, or it is just the start of the file. */
 	located: boolean;
 	message: string;
-	/** The source line the parser stopped on, when it named one. */
-	source?: string;
+	/**
+	 * The text of the line the parser stopped on, when it named one.
+	 *
+	 * Not `source`: LSP spends that name on the producer of a diagnostic
+	 * ("tsc", "eslint"), and the structured report speaks LSP. A familiar key
+	 * holding an unfamiliar value is worse than an unfamiliar key.
+	 */
+	sourceText?: string;
 }
 
 /**
@@ -252,7 +258,7 @@ function parseError(code: string): string | undefined {
 function locateError(
 	code: string,
 	label: string,
-): { line: number; source?: string } | undefined {
+): { line: number; sourceText?: string } | undefined {
 	try {
 		new vm.Script(code, { filename: label });
 		return undefined;
@@ -265,8 +271,11 @@ function locateError(
 		if (!located) {
 			return undefined;
 		}
-		const source = head[1]?.trim();
-		return { line: Number(located[1]), ...(source ? { source } : {}) };
+		const sourceText = head[1]?.trim();
+		return {
+			line: Number(located[1]),
+			...(sourceText ? { sourceText } : {}),
+		};
 	}
 }
 
@@ -285,7 +294,7 @@ export function compileCheck(
 		line: where ? where.line + lineOffset : 1 + lineOffset,
 		located: where !== undefined,
 		message,
-		...(where?.source ? { source: where.source } : {}),
+		...(where?.sourceText ? { sourceText: where.sourceText } : {}),
 	};
 }
 
@@ -332,10 +341,128 @@ export function extractScripts(html: string): ScriptBlock[] {
 }
 
 /** Everything this can say about one file. */
-export function checkSource(filePath: string, text: string): string {
-	const extension = path.extname(filePath).toLowerCase();
-	const findings: CheckFinding[] = [];
+/**
+ * What a check found, in the shape the model already reads.
+ *
+ * The redesign, and the reason for it is measured rather than aesthetic: the
+ * A/B that added a sentence telling the model to call `check_file` tripled the
+ * calls and bought nothing (9/20 vs 6/20 FIXED, p=0.51) at 1.8x the wall time.
+ * Telling a model to use a tool harder does not make the tool legible. So the
+ * result now arrives in the vocabulary the LSP surface already taught it —
+ * `range`, `severity`, `message` — where it has to learn nothing at all.
+ *
+ * Positions are LSP's: zero-based line and character. Converting at the edge
+ * rather than carrying one-based numbers under LSP names, because a familiar
+ * shape holding unfamiliar values is worse than an unfamiliar shape.
+ */
+export interface CheckDiagnostic {
+	range: {
+		start: { line: number; character: number };
+		end: { line: number; character: number };
+	};
+	/** LSP severity: 1 error, 2 warning. Everything here is an error. */
+	severity: 1 | 2;
+	/** LSP's `source` is the producer of the diagnostic, not the code. */
+	source: string;
+	message: string;
+	/**
+	 * Whether the parser actually named this position.
+	 *
+	 * Every LSP diagnostic must carry a range, so an error located nowhere has
+	 * to be given one -- and the only honest choice is the top of the file,
+	 * which is exactly the lie the text renderer refused to print. Marked
+	 * rather than omitted: a reader that trusts the range needs to be told
+	 * when it is a placeholder.
+	 */
+	located: boolean;
+	/** The text of the line the parser stopped on, when it named one. */
+	sourceLine?: string;
+}
 
+/**
+ * Which check actually ran, because `diagnostics: []` cannot say.
+ *
+ * `parsed` a real parser was satisfied; `delimiters` only the bracket scan
+ * ran, which is real but narrow; `none` nothing here reads this language and
+ * the empty list means nothing at all. Reporting the third as clean tells a
+ * model its file is sound on the authority of a check that never happened,
+ * which is the failure the prose version was careful to avoid and which a bare
+ * list would quietly reintroduce.
+ */
+export type CheckCoverage = "parsed" | "delimiters" | "none";
+
+export interface CheckFileReport {
+	uri: string;
+	checked: CheckCoverage;
+	diagnostics: CheckDiagnostic[];
+}
+
+/** One finding, converted to the LSP shape. */
+function toDiagnostic(finding: CheckFinding): CheckDiagnostic {
+	// One-based in, zero-based out, and never below zero: an unlocated finding
+	// carries line 1 as a placeholder, which is line 0 here.
+	const line = Math.max(0, finding.line - 1);
+	return {
+		range: {
+			start: { line, character: 0 },
+			end: { line, character: finding.sourceText?.length ?? 0 },
+		},
+		severity: 1,
+		source: CHECK_FILE_TOOL_NAME,
+		message: finding.message,
+		located: finding.located,
+		...(finding.sourceText ? { sourceLine: finding.sourceText } : {}),
+	};
+}
+
+/**
+ * Check one file and report it structurally.
+ *
+ * The source of truth; {@link checkSource} renders this for hosts still
+ * reading prose, so the two can never disagree about what was found.
+ */
+export function checkFileReport(
+	filePath: string,
+	text: string,
+): CheckFileReport {
+	const extension = path.extname(filePath).toLowerCase();
+	const findings = findIssues(filePath, text, extension);
+	const parsed =
+		JS_LIKE.has(extension) ||
+		HTML_LIKE.has(extension) ||
+		extension === ".json" ||
+		extension === ".jsonc";
+	const scanned = canScanDelimiters(filePath);
+	const balance = describeDelimiterBalance(filePath, text);
+	const diagnostics = findings.map(toDiagnostic);
+	if (balance) {
+		// The scan speaks about the file rather than about one position, so it
+		// gets the top of the file and says it was not located there.
+		diagnostics.push({
+			range: {
+				start: { line: 0, character: 0 },
+				end: { line: 0, character: 0 },
+			},
+			severity: 1,
+			source: CHECK_FILE_TOOL_NAME,
+			message: balance,
+			located: false,
+		});
+	}
+	return {
+		uri: filePath,
+		checked: parsed ? "parsed" : scanned ? "delimiters" : "none",
+		diagnostics,
+	};
+}
+
+/** Every finding for one file, before it is shaped for a reader. */
+function findIssues(
+	filePath: string,
+	text: string,
+	extension: string,
+): CheckFinding[] {
+	const findings: CheckFinding[] = [];
 	if (JS_LIKE.has(extension)) {
 		const found = compileCheck(text, path.basename(filePath));
 		if (found) {
@@ -364,13 +491,13 @@ export function checkSource(filePath: string, text: string): string {
 			});
 		}
 	}
+	return findings;
+}
 
-	const parsed =
-		JS_LIKE.has(extension) ||
-		HTML_LIKE.has(extension) ||
-		extension === ".json" ||
-		extension === ".jsonc";
-	const scanned = canScanDelimiters(filePath);
+export function checkSource(filePath: string, text: string): string {
+	const extension = path.extname(filePath).toLowerCase();
+	const findings = findIssues(filePath, text, extension);
+	const report = checkFileReport(filePath, text);
 
 	const lines: string[] = [`## ${filePath}`];
 	if (findings.length === 0) {
@@ -381,9 +508,12 @@ export function checkSource(filePath: string, text: string): string {
 		// authority of a check that never happened. That report now travels
 		// automatically to whatever file a failing command blames, in whatever
 		// language, so the difference is no longer academic.
-		if (parsed) {
+		//
+		// `report.checked` is the same distinction, carried structurally for
+		// the reader that gets JSON instead of this.
+		if (report.checked === "parsed") {
 			lines.push("No syntax errors.");
-		} else if (scanned) {
+		} else if (report.checked === "delimiters") {
 			lines.push(
 				`Brackets balance. Nothing here parses \`${extension}\`, so anything past delimiters is unchecked.`,
 			);
@@ -402,8 +532,8 @@ export function checkSource(filePath: string, text: string): string {
 				? `${filePath}:${finding.line}: error: ${finding.message}`
 				: `${filePath}: error: ${finding.message}`,
 		);
-		if (finding.source) {
-			lines.push(`    ${finding.source}`);
+		if (finding.sourceText) {
+			lines.push(`    ${finding.sourceText}`);
 		}
 	}
 	// Runs whether or not the parse succeeded: a file can parse and still have

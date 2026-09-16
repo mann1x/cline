@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
 	buildLintCommand,
 	CHECK_FILE_TOOL_DESCRIPTION,
+	checkFileReport,
 	checkSource,
 	compileCheck,
 	createCheckFileTool,
@@ -38,7 +39,7 @@ describe("compiling without running", () => {
 		expect(found?.line).toBe(2);
 		expect(found?.located).toBe(true);
 		expect(found?.message).toContain("Unexpected token");
-		expect(found?.source).toContain("let b");
+		expect(found?.sourceText).toContain("let b");
 	});
 
 	// The whole reason this is `vm.Script` and not `eval`: a page that starts a
@@ -318,5 +319,87 @@ describe("the checker with a project checker behind it", () => {
 		await tool.execute({ paths: [filePath] }, {} as never);
 
 		expect(called).toBe(false);
+	});
+});
+
+describe("the structured report", () => {
+	it("uses LSP positions: zero-based line, with a range", () => {
+		// The point of the redesign. The model already knows this shape from
+		// the LSP surface, and a shape it knows is one it does not have to be
+		// taught in the description.
+		const report = checkFileReport("/w/a.js", "function f( {\n");
+
+		// The parse error, not the delimiter scan that also fires here: the
+		// scan speaks about the file, so it carries no located position.
+		const first = report.diagnostics.find((d) => d.located);
+		expect(first).toBeDefined();
+		expect(first?.range.start).toHaveProperty("character");
+		expect(first?.range.end).toHaveProperty("line");
+		expect(first?.severity).toBe(1);
+
+		// Pinned against the prose renderer rather than a hardcoded number,
+		// because that is the actual claim: the same finding, one-based for a
+		// human reader and zero-based for an LSP one. A literal would pass
+		// just as well if both were one-based.
+		const printed = checkSource("/w/a.js", "function f( {\n").match(
+			/a\.js:(\d+):/,
+		);
+		expect(printed).not.toBeNull();
+		expect(first?.range.start.line).toBe(Number(printed?.[1]) - 1);
+	});
+
+	it("says what actually ran, because an empty list cannot", () => {
+		// Three silences that must not read alike: a parser ran and was
+		// satisfied, only the bracket scan ran, or nothing here reads this
+		// language. `diagnostics: []` is identical in all three, and calling
+		// the last one clean tells the model its file is sound on the
+		// authority of a check that never happened.
+		expect(checkFileReport("/w/a.js", "const a = 1;\n").checked).toBe("parsed");
+		// .css is scanned for delimiters but has no parser here; .rb has
+		// neither, and its empty list means nothing at all.
+		expect(checkFileReport("/w/a.css", "a { color: red; }\n").checked).toBe(
+			"delimiters",
+		);
+		expect(checkFileReport("/w/a.bin", "\u0000\u0001").checked).toBe("none");
+	});
+
+	it("reports the file it checked, so a batch result can be split", () => {
+		expect(checkFileReport("/w/a.js", "const a = 1;\n").uri).toContain("a.js");
+	});
+
+	it("keeps the offending source line under its own name, not LSP's `source`", () => {
+		// LSP's `source` is the producer -- "tsc", "eslint". Ours was the text
+		// of the line the parser stopped on. Shipping that under the same key
+		// would be a lie in a shape the model reads fluently, which is worse
+		// than an unfamiliar shape.
+		const report = checkFileReport("/w/a.js", "function f( {\n");
+		const first = report.diagnostics.find((d) => d.located);
+
+		expect(first?.source).toBe("check_file");
+		if (first?.sourceLine !== undefined) {
+			expect(typeof first.sourceLine).toBe("string");
+		}
+	});
+
+	it("still carries an unlocated error, without pointing at line 1", () => {
+		// A parse error the runtime located nowhere used to print `:1:`, which
+		// sends the model to the wrong end of the file. In LSP shape every
+		// diagnostic has a range, so the lie has to be marked rather than
+		// avoided by omission.
+		const report = checkFileReport("/w/a.json", "{ oops ");
+
+		const parseError = report.diagnostics.find((d) =>
+			/JSON|token|position/i.test(d.message),
+		);
+		expect(parseError?.located).toBe(false);
+		expect(parseError?.range.start.line).toBe(0);
+	});
+
+	it("carries the delimiter scan as a diagnostic, not as prose", () => {
+		const report = checkFileReport("/w/a.js", "function f() {\n");
+
+		expect(
+			report.diagnostics.some((d) => /brace|bracket|\{/i.test(d.message)),
+		).toBe(true);
 	});
 });
