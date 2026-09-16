@@ -270,6 +270,32 @@ export interface RevisionLog {
 	heldBytes(absolutePath: string): number;
 	/** Forget everything. A discard puts the tree back, so the history goes too. */
 	reset(): void;
+	/**
+	 * Close the current compaction span and release what the next one cannot use.
+	 *
+	 * The retention policy, and it is semantic rather than a size. A revision
+	 * exists so the ledger in a compaction summary can say "the content is not
+	 * here, it is at `#4`", and so the model can go back to it. Both of those
+	 * stop being possible two compactions later: the summary that named `#4`
+	 * has itself been folded into a newer summary, and nothing the model can
+	 * still read mentions it. Holding it after that is holding bytes no one can
+	 * address.
+	 *
+	 * So a file's history survives while it was written inside the last two
+	 * spans, and beyond that only while something the model can still see names
+	 * it — the summary just written, and the retained tail when there is one.
+	 * `keep` is that whitelist, and a file in it is never dropped however old.
+	 *
+	 * Whole files, not individual revisions. A file written inside the window is
+	 * live and its whole history is worth having; one that has not been touched
+	 * for two compactions and is named nowhere is not half-interesting. Dropping
+	 * revisions out of the middle of a surviving file is what the byte cap does,
+	 * for a different reason, and mixing the two would leave histories with
+	 * holes that mean two different things.
+	 *
+	 * Returns how many files it released, for the log line.
+	 */
+	noteCompaction(keep?: Iterable<string>): number;
 }
 
 /**
@@ -339,6 +365,12 @@ export function createRevisionLog(
 		limits.maxBytesTotal ?? DEFAULT_MAX_REVISION_BYTES_TOTAL;
 	const logs = new Map<string, MutableRevision[]>();
 	const blobs = new Map<string, Blob>();
+	// Which compaction span each file was last written in, and which span is
+	// open. Per file rather than per revision: the question asked at eviction is
+	// "has anything touched this file lately", and a file that has been touched
+	// is worth its whole history.
+	const lastWrittenSpan = new Map<string, number>();
+	let span = 0;
 
 	const bodyOf = (entry: MutableRevision): Buffer | undefined =>
 		entry.dropped || !entry.existed ? undefined : blobs.get(entry.hash)?.body;
@@ -501,6 +533,7 @@ export function createRevisionLog(
 			...(earlier ? { sameAs: earlier.index } : {}),
 		};
 		entries.push(entry);
+		lastWrittenSpan.set(absolutePath, span);
 		// Deleted first so the re-insert moves this file to the end of the map,
 		// which is what makes iteration order a least-recently-written walk for
 		// `enforceTotalCap`.
@@ -577,6 +610,41 @@ export function createRevisionLog(
 		reset() {
 			logs.clear();
 			blobs.clear();
+			lastWrittenSpan.clear();
+		},
+
+		noteCompaction(keep) {
+			span += 1;
+			// Two spans: the one just closed and the one before it. A file
+			// written in either is still addressable from a summary the model
+			// can read, because a summary survives exactly one further
+			// compaction before being folded into the next one.
+			const cutoff = span - 2;
+			if (cutoff < 0) {
+				return 0;
+			}
+			const whitelist = new Set<string>();
+			for (const path of keep ?? []) {
+				whitelist.add(path);
+			}
+			let released = 0;
+			for (const [path, entries] of [...logs.entries()]) {
+				if (whitelist.has(path)) {
+					continue;
+				}
+				if ((lastWrittenSpan.get(path) ?? span) >= cutoff) {
+					continue;
+				}
+				for (const entry of entries) {
+					if (!entry.dropped && entry.existed) {
+						release(entry);
+					}
+				}
+				logs.delete(path);
+				lastWrittenSpan.delete(path);
+				released += 1;
+			}
+			return released;
 		},
 	};
 }

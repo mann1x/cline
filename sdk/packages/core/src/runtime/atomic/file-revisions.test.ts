@@ -425,3 +425,85 @@ describe("the cap across every file", () => {
 		expect(revisions.map((revision) => revision.index)).toEqual([1, 2, 3]);
 	});
 });
+
+describe("retention across compactions", () => {
+	let fill = 100;
+	const body2 = () => Buffer.from(`content ${fill++}`.repeat(10), "utf8");
+
+	it("keeps everything until two compactions have passed", () => {
+		// A summary survives exactly one further compaction before being folded
+		// into the next one, so a revision it named is addressable for two
+		// spans. Releasing earlier would leave a live summary pointing at
+		// content that is gone.
+		const log = createRevisionLog();
+		log.seed("/w/a.ts", body2());
+
+		expect(log.noteCompaction()).toBe(0);
+		expect(log.revisions("/w/a.ts")).toHaveLength(1);
+		expect(log.noteCompaction()).toBe(0);
+		expect(log.revisions("/w/a.ts")).toHaveLength(1);
+	});
+
+	it("drops a file nothing has touched for two spans", () => {
+		const log = createRevisionLog();
+		log.seed("/w/cold.ts", body2());
+		log.noteCompaction();
+		log.noteCompaction();
+
+		expect(log.noteCompaction()).toBe(1);
+		expect(log.revisions("/w/cold.ts")).toHaveLength(0);
+	});
+
+	it("keeps a file the summary still names, however old", () => {
+		// The whitelist is the whole point: the ledger in a summary says "the
+		// content is not here, it is at #4", and dropping #4 turns that into a
+		// dangling address the model will try to restore.
+		const log = createRevisionLog();
+		log.seed("/w/named.ts", body2());
+		log.seed("/w/unnamed.ts", body2());
+		log.noteCompaction();
+		log.noteCompaction();
+
+		expect(log.noteCompaction(["/w/named.ts"])).toBe(1);
+		expect(log.revisions("/w/named.ts")).toHaveLength(1);
+		expect(log.revisions("/w/unnamed.ts")).toHaveLength(0);
+	});
+
+	it("keeps a file that was written again inside the window", () => {
+		const log = createRevisionLog();
+		log.seed("/w/warm.ts", body2());
+		log.noteCompaction();
+		log.noteCompaction();
+		log.record("/w/warm.ts", body2(), "editor");
+
+		expect(log.noteCompaction()).toBe(0);
+		expect(log.revisions("/w/warm.ts")).toHaveLength(2);
+	});
+
+	it("releases the bytes, not just the entries", () => {
+		const log = createRevisionLog();
+		log.seed("/w/cold.ts", body2());
+		log.record("/w/cold.ts", body2(), "editor");
+		log.noteCompaction();
+		log.noteCompaction();
+		log.noteCompaction();
+
+		expect(log.heldBytes("/w/cold.ts")).toBe(0);
+	});
+
+	it("drops whole files rather than revisions out of the middle", () => {
+		// The byte cap punches holes in a surviving history for a different
+		// reason. Two kinds of hole meaning two different things is how a
+		// history stops being readable.
+		const log = createRevisionLog();
+		log.seed("/w/cold.ts", body2());
+		log.record("/w/cold.ts", body2(), "editor");
+		log.record("/w/cold.ts", body2(), "editor");
+		log.noteCompaction();
+		log.noteCompaction();
+		log.noteCompaction();
+
+		expect(log.revisions("/w/cold.ts")).toEqual([]);
+		expect(log.tracked()).not.toContain("/w/cold.ts");
+	});
+});
