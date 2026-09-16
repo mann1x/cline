@@ -249,6 +249,31 @@ interface Blob {
 	refs: number;
 }
 
+/**
+ * The revisions a file has, as one short label like `#1–#7`.
+ *
+ * What the compaction ledger prints beside a file, so the model reading a
+ * summary knows the earlier content exists and what to ask for. A range rather
+ * than a count because the numbers are the addresses: `3 revisions` leaves the
+ * reader to guess whether they are numbered from zero.
+ *
+ * A single revision is `#1`, never `#1–#1` — a range with nothing in the
+ * middle reads as a mistake, and this audience is a small model that will
+ * repeat what it reads.
+ */
+export function revisionSpan(
+	revisions: readonly FileRevision[],
+): string | undefined {
+	const first = revisions[0];
+	const last = revisions[revisions.length - 1];
+	if (!first || !last) {
+		return undefined;
+	}
+	return last.index > first.index
+		? `#${first.index}–#${last.index}`
+		: `#${last.index}`;
+}
+
 export interface RevisionLog {
 	/** Record the file as the transaction found it. Ignored if already seeded. */
 	seed(absolutePath: string, body: Buffer | undefined): void;

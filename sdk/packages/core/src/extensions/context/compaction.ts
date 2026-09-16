@@ -288,8 +288,8 @@ const BUILTIN_COMPACTION_STRATEGIES = {
 			// says nothing about files rather than guessing a revision number.
 			...(compaction?.revisions
 				? {
-						revisionsFor: (filePath: string) =>
-							compaction.revisions?.revisionsFor(filePath),
+						spanFor: (filePath: string) =>
+							compaction.revisions?.spanFor(filePath),
 					}
 				: {}),
 			summaryPrompt: resolveSummaryPrompt(

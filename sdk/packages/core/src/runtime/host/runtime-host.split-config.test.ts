@@ -86,7 +86,7 @@ describe("splitCoreSessionConfig", () => {
 		// implementation promises, so it has to hold for every callback-shaped
 		// field, not just the one that was there when it was written.
 		const revisions = {
-			revisionsFor: () => undefined,
+			spanFor: () => undefined,
 			tracked: () => [],
 			noteCompaction: () => 0,
 		};

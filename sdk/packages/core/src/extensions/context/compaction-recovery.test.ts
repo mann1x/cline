@@ -400,7 +400,7 @@ describe("closing the revision span at a compaction", () => {
 		return {
 			kept,
 			port: {
-				revisionsFor: () => undefined,
+				spanFor: () => undefined,
 				tracked: () => tracked,
 				noteCompaction: (keep?: Iterable<string>) => {
 					kept.push([...(keep ?? [])].sort());

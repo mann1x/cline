@@ -2,6 +2,7 @@ import type { AgentMessage } from "@cline/shared";
 import { describe, expect, it } from "vitest";
 import {
 	buildToolLedger,
+	collectFileHistories,
 	DEFAULT_TOOL_LEDGER_LIMITS,
 	renderToolLedger,
 } from "./tool-ledger";
@@ -144,21 +145,35 @@ describe("the tool ledger", () => {
 		});
 	});
 
-	describe("file impact", () => {
-		it("names the revision a file was at before and after a call", () => {
+	describe("which files the stretch touched", () => {
+		it("records the paths a call named, with or without a revision log", () => {
+			// A path is a fact about the call. It is recorded unconditionally
+			// because nothing about it is a claim -- unlike a revision number,
+			// which is one.
+			const entries = buildToolLedger([
+				...exchange("editor", { path: "/w/a.ts" }, "written"),
+			]);
+
+			expect(entries[0]?.files).toEqual(["/w/a.ts"]);
+		});
+
+		it("lists each file once, with the revisions that hold its earlier content", () => {
 			// This is what makes the elision safe: the content is not in the
-			// ledger, but the ledger says exactly which revision holds it.
-			const entries = buildToolLedger(
-				[...exchange("editor", { path: "/w/a.ts" }, "written")],
-				{
-					revisionsFor: (path) =>
-						path === "/w/a.ts" ? { before: "#1", after: "#2" } : undefined,
-				},
+			// ledger, but the ledger says which revisions hold it. Stated per
+			// file rather than per call, because the log records revisions in
+			// order without recording which call made which -- so `#1 → #2` on
+			// a given line would be a claim nothing can check.
+			const entries = buildToolLedger([
+				...exchange("editor", { path: "/w/a.ts" }, "written"),
+				...exchange("read_files", { path: "/w/a.ts" }, "ok"),
+				...exchange("editor", { path: "/w/b.ts" }, "written"),
+			]);
+
+			const histories = collectFileHistories(entries, (path) =>
+				path === "/w/a.ts" ? "#1–#3" : undefined,
 			);
 
-			expect(entries[0]?.files).toEqual([
-				{ path: "/w/a.ts", before: "#1", after: "#2" },
-			]);
+			expect(histories).toEqual([{ path: "/w/a.ts", span: "#1–#3" }]);
 		});
 
 		it("says nothing about files when no revision log was given", () => {
@@ -166,7 +181,18 @@ describe("the tool ledger", () => {
 				...exchange("editor", { path: "/w/a.ts" }, "written"),
 			]);
 
-			expect(entries[0]?.files).toEqual([]);
+			expect(collectFileHistories(entries, undefined)).toEqual([]);
+		});
+
+		it("keeps the order the files were first touched in", () => {
+			const entries = buildToolLedger([
+				...exchange("editor", { path: "/w/b.ts" }, "written"),
+				...exchange("editor", { path: "/w/a.ts" }, "written"),
+			]);
+
+			expect(
+				collectFileHistories(entries, () => "#1").map((file) => file.path),
+			).toEqual(["/w/b.ts", "/w/a.ts"]);
 		});
 	});
 
@@ -199,6 +225,44 @@ describe("the tool ledger", () => {
 
 		it("is empty for a stretch with no tool calls at all", () => {
 			expect(renderToolLedger([])).toBe("");
+		});
+
+		it("appends the files whose earlier content is still held", () => {
+			const entries = buildToolLedger([
+				...exchange("editor", { path: "/w/a.ts" }, "written"),
+			]);
+
+			const text = renderToolLedger(
+				entries,
+				collectFileHistories(entries, () => "#1–#4"),
+			);
+
+			expect(text).toContain("/w/a.ts");
+			expect(text).toContain("#1–#4");
+		});
+
+		it("makes no per-call revision claim on the call lines", () => {
+			// The regression this replaces: a `#a → #b` per call read as a
+			// statement about that call, and the log cannot support one.
+			const entries = buildToolLedger([
+				...exchange("editor", { path: "/w/a.ts" }, "written"),
+			]);
+
+			const [callLine] = renderToolLedger(
+				entries,
+				collectFileHistories(entries, () => "#1–#4"),
+			).split("\n");
+
+			expect(callLine).not.toMatch(/#\d/);
+		});
+
+		it("adds no trailing block when nothing is held", () => {
+			const text = renderToolLedger(
+				buildToolLedger([...exchange("editor", { path: "/w/a.ts" }, "ok")]),
+			);
+
+			expect(text).not.toMatch(/#\d/);
+			expect(text.split("\n")).toHaveLength(2);
 		});
 	});
 

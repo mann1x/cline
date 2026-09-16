@@ -3,6 +3,7 @@ import {
 	createRevisionLog,
 	describeRestoreTarget,
 	describeRevisions,
+	revisionSpan,
 } from "./file-revisions";
 
 const body = (text: string) => Buffer.from(text, "utf8");
@@ -505,5 +506,31 @@ describe("retention across compactions", () => {
 
 		expect(log.revisions("/w/cold.ts")).toEqual([]);
 		expect(log.tracked()).not.toContain("/w/cold.ts");
+	});
+});
+
+describe("naming the revisions a file has", () => {
+	it("gives the range when there is more than one", () => {
+		const log = createRevisionLog();
+		log.seed("/w/a.ts", Buffer.from("one"));
+		log.record("/w/a.ts", Buffer.from("two"), "editor");
+		log.record("/w/a.ts", Buffer.from("three"), "editor");
+
+		expect(revisionSpan(log.revisions("/w/a.ts"))).toBe("#1–#3");
+	});
+
+	it("gives the single number when the base is all there is", () => {
+		// `#1–#1` reads as a range with something in the middle, and there is
+		// nothing in the middle.
+		const log = createRevisionLog();
+		log.seed("/w/a.ts", Buffer.from("one"));
+
+		expect(revisionSpan(log.revisions("/w/a.ts"))).toBe("#1");
+	});
+
+	it("gives nothing for a file the log does not track", () => {
+		const log = createRevisionLog();
+
+		expect(revisionSpan(log.revisions("/w/missing.ts"))).toBeUndefined();
 	});
 });

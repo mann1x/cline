@@ -83,7 +83,7 @@ describe("releasing what the compacted transcript cannot reach", () => {
 		return {
 			calls,
 			port: {
-				revisionsFor: () => undefined,
+				spanFor: () => undefined,
 				tracked: () => paths,
 				noteCompaction: (keep?: Iterable<string>) => {
 					calls.push([...(keep ?? [])].sort());

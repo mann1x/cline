@@ -33,8 +33,9 @@ import {
 } from "./compaction-shared";
 import {
 	buildToolLedger,
+	collectFileHistories,
+	type RevisionSpanLookup,
 	renderToolLedger,
-	type ToolLedgerOptions,
 } from "./tool-ledger";
 
 const MIN_AGENTIC_SUMMARY_INPUT_TOKENS = 1_024;
@@ -295,7 +296,7 @@ export async function runAgenticCompaction(options: {
 	 * That is the honest degradation: a wrong revision label is worse than
 	 * none, because the model will try to restore it.
 	 */
-	revisionsFor?: ToolLedgerOptions["revisionsFor"];
+	spanFor?: RevisionSpanLookup;
 	bounds: RecencyBounds;
 	estimateMessageTokens: EstimateMessageTokens;
 	logger?: BasicLogger;
@@ -590,10 +591,10 @@ export async function runAgenticCompaction(options: {
 	// and a call whose result was dropped is exactly the one most worth a line
 	// here — it is the one the model was never shown and so cannot have
 	// described.
+	const ledgerEntries = buildToolLedger(newMessagesToFold);
 	const toolLedger = renderToolLedger(
-		buildToolLedger(newMessagesToFold, {
-			...(options.revisionsFor ? { revisionsFor: options.revisionsFor } : {}),
-		}),
+		ledgerEntries,
+		collectFileHistories(ledgerEntries, options.spanFor),
 	);
 	const thinkingSummary = await generateThinkingSummary({
 		enabled: options.thinkingSummaryEnabled !== false,

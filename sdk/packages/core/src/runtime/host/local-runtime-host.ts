@@ -147,6 +147,7 @@ import type { CoreSessionEvent } from "../../types/events";
 import type { ActiveSession, PreparedTurnInput } from "../../types/session";
 import type { SessionRecord } from "../../types/sessions";
 import { ESCALATION_REVISION_WORDING } from "../atomic/base-revision-reads";
+import { revisionSpan } from "../atomic/file-revisions";
 import { withRevisionCapture } from "../atomic/revision-capture";
 import {
 	createAtomicProtocolSession,
@@ -819,15 +820,17 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// protocol answers "nothing tracked" -- which is true, since there are
 		// no revisions without it.
 		//
-		// `revisionsFor` says nothing on purpose. The ledger renders a file line
-		// per call as `#a → #b`, which is a claim about that one call, and the
-		// log records revisions in order without recording which call made
-		// which. Returning the file's whole span under those names would be
-		// wrong for every entry but the last, and the ledger's own rule is that
-		// a wrong revision number is worse than none -- the model acts on it by
-		// trying to restore it.
+		// `spanFor` answers per file, not per call, which is the only question
+		// the log can answer truthfully: it records revisions in order without
+		// recording which call made which, and the correspondence breaks where
+		// it matters -- identical calls collapse into one ledger entry, a
+		// refused call makes no revision, and `run_commands` can make several.
+		// The span is true however the calls line up.
 		const compactionRevisions: CompactionRevisions = {
-			revisionsFor: () => undefined,
+			spanFor: (filePath) =>
+				revisionSpan(
+					atomicProtocol?.controller.revisions.revisions(filePath) ?? [],
+				),
 			tracked: () => atomicProtocol?.controller.revisions.tracked() ?? [],
 			noteCompaction: (keep) =>
 				atomicProtocol?.controller.revisions.noteCompaction(keep) ?? 0,

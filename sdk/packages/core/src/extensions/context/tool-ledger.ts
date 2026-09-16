@@ -36,13 +36,27 @@ export interface ToolLedgerMessage {
 	content?: unknown;
 }
 
-/** What a file was, and became, across one call. */
-export interface ToolLedgerFileImpact {
+/**
+ * A file the folded stretch touched, and the revisions holding its earlier
+ * content.
+ *
+ * Stated per file rather than per call, and that is a correction. The ledger
+ * used to print `path: #1 → #2` on a call's own line, which reads as a claim
+ * about *that call* -- and the revision log cannot support one: it records
+ * revisions in order with the tool that made each, not which call made which,
+ * and the correspondence breaks exactly where it matters (identical calls are
+ * collapsed into one entry, a refused call makes no revision, and an opaque
+ * writer can make several). A wrong revision number is worse than none,
+ * because the model acts on it by trying to restore it.
+ *
+ * The span is true however the calls line up, and it is what the model needs
+ * anyway: not "what did this call do" -- the result line says that -- but
+ * "where can I get this file's earlier content".
+ */
+export interface ToolLedgerFileHistory {
 	path: string;
-	/** Revision label before the call, e.g. `#1`. Absent when unknown. */
-	before?: string;
-	/** Revision label after it. Absent when unknown. */
-	after?: string;
+	/** The revisions that exist, e.g. `#1–#7`, or `#1` when there is one. */
+	span: string;
 }
 
 export interface ToolLedgerEntry {
@@ -57,8 +71,14 @@ export interface ToolLedgerEntry {
 	failed: boolean;
 	/** How many identical calls this entry stands for. 1 is the common case. */
 	repeated: number;
-	/** Files this call touched, with the revisions holding their content. */
-	files: ToolLedgerFileImpact[];
+	/**
+	 * The paths this call named, in the order its arguments gave them.
+	 *
+	 * Recorded unconditionally, because a path is a fact about the call rather
+	 * than a claim about the file. What is held for those paths is answered
+	 * once per file by {@link collectFileHistories}.
+	 */
+	files: string[];
 }
 
 export interface ToolLedgerLimits {
@@ -81,18 +101,16 @@ export const DEFAULT_TOOL_LEDGER_LIMITS: ToolLedgerLimits = {
 
 export interface ToolLedgerOptions {
 	limits?: Partial<ToolLedgerLimits>;
-	/**
-	 * The revisions holding a file's content before and after a call.
-	 *
-	 * Supplied by the caller because the ledger is pure: it reads messages, and
-	 * the revision log lives with the session. Absent means the entry says
-	 * nothing about files, which is honest — a wrong revision number is worse
-	 * than none, since the model will try to restore it.
-	 */
-	revisionsFor?: (
-		path: string,
-	) => { before?: string; after?: string } | undefined;
 }
+
+/**
+ * The revisions held for one file, as a span like `#1–#7`.
+ *
+ * Supplied by the caller because the ledger is pure: it reads messages, and
+ * the revision log lives with the session. Nothing for a file the log does not
+ * track, which is most of them — an untracked file simply does not appear.
+ */
+export type RevisionSpanLookup = (path: string) => string | undefined;
 
 function resolveLimits(given?: Partial<ToolLedgerLimits>): ToolLedgerLimits {
 	return { ...DEFAULT_TOOL_LEDGER_LIMITS, ...(given ?? {}) };
@@ -330,16 +348,6 @@ export function buildToolLedger(
 				continue;
 			}
 
-			const files: ToolLedgerFileImpact[] = [];
-			if (options.revisionsFor) {
-				for (const path of pathsIn(call.input)) {
-					const revisions = options.revisionsFor(path);
-					if (revisions) {
-						files.push({ path, ...revisions });
-					}
-				}
-			}
-
 			entries.push({
 				index: entries.length + 1,
 				toolName: call.name,
@@ -347,7 +355,7 @@ export function buildToolLedger(
 				result,
 				failed,
 				repeated: 1,
-				files,
+				files: pathsIn(call.input),
 			});
 		}
 	}
@@ -361,7 +369,10 @@ export function buildToolLedger(
  * long line: a reader scanning for what went wrong should not have to finish
  * every line to find out.
  */
-export function renderToolLedger(entries: readonly ToolLedgerEntry[]): string {
+export function renderToolLedger(
+	entries: readonly ToolLedgerEntry[],
+	histories: readonly ToolLedgerFileHistory[] = [],
+): string {
 	if (entries.length === 0) {
 		return "";
 	}
@@ -374,20 +385,48 @@ export function renderToolLedger(entries: readonly ToolLedgerEntry[]): string {
 			marks.push(`${entry.repeated}×`);
 		}
 		const mark = marks.length > 0 ? ` [${marks.join(" ")}]` : "";
-		const files = entry.files
-			.map((file) => {
-				const from = file.before ?? "?";
-				const to = file.after ?? "?";
-				return `      ${file.path}: ${from} → ${to}`;
-			})
-			.join("\n");
 		return [
 			`${entry.index}. ${entry.toolName}${mark}  ${entry.input}`,
 			`      → ${entry.result}`,
-			files,
-		]
-			.filter((part) => part !== "")
-			.join("\n");
+		].join("\n");
 	});
+	if (histories.length > 0) {
+		lines.push(
+			"",
+			"Files whose earlier content is still held, by revision:",
+			...histories.map((file) => `  ${file.path}  ${file.span}`),
+		);
+	}
 	return lines.join("\n");
+}
+
+/**
+ * The files the ledger touched that the revision log still holds, once each.
+ *
+ * First-touched order rather than sorted: the ledger is read top to bottom and
+ * a file's place in that order is the reader's way back to the calls it
+ * belongs to.
+ */
+export function collectFileHistories(
+	entries: readonly ToolLedgerEntry[],
+	spanFor: RevisionSpanLookup | undefined,
+): ToolLedgerFileHistory[] {
+	if (!spanFor) {
+		return [];
+	}
+	const histories: ToolLedgerFileHistory[] = [];
+	const seen = new Set<string>();
+	for (const entry of entries) {
+		for (const path of entry.files) {
+			if (seen.has(path)) {
+				continue;
+			}
+			seen.add(path);
+			const span = spanFor(path);
+			if (span) {
+				histories.push({ path, span });
+			}
+		}
+	}
+	return histories;
 }

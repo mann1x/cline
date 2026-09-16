@@ -16,12 +16,10 @@
 
 export interface CompactionRevisions {
 	/**
-	 * The revisions holding a file's content before and after a call, if the
-	 * log has them. Fed straight to the tool ledger.
+	 * The revisions held for a file, as a span like `#1–#7`, or nothing when
+	 * the log does not track it. Fed straight to the tool ledger.
 	 */
-	revisionsFor(
-		filePath: string,
-	): { before?: string; after?: string } | undefined;
+	spanFor(filePath: string): string | undefined;
 	/** Every file the log currently holds a history for, as absolute paths. */
 	tracked(): readonly string[];
 	/**
