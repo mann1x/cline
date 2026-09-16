@@ -1752,6 +1752,31 @@ export class LocalRuntimeHost implements RuntimeHost {
 									remaining,
 								}),
 							);
+							// On the event stream as well as in the model's next
+							// tool result. The suggestion is what the model reads;
+							// this is what anyone tuning the thresholds reads, and
+							// without it a finished run says nothing about whether
+							// the detector fired -- which is why its numbers were
+							// the only ones in the system with no corpus behind
+							// them.
+							this.eventBridge.dispatchAgentEvent(
+								sessionId,
+								configWithProvider,
+								{
+									type: "notice",
+									noticeType: "status",
+									displayRole: "status",
+									message: "the run has the shape of a stuck one",
+									metadata: {
+										kind: "struggle",
+										phase: "nudge",
+										...(verdict.reason ? { reason: verdict.reason } : {}),
+										remaining,
+										high,
+										broken,
+									},
+								},
+							);
 						});
 						return;
 					}
@@ -1766,6 +1791,19 @@ export class LocalRuntimeHost implements RuntimeHost {
 						remaining,
 					});
 					configWithProvider.logger?.debug?.(`[Escalation] ${verdict.message}`);
+					this.eventBridge.dispatchAgentEvent(sessionId, configWithProvider, {
+						type: "notice",
+						noticeType: "status",
+						displayRole: "status",
+						message:
+							"the run has the shape of a stuck one — the expert was offered",
+						metadata: {
+							kind: "struggle",
+							phase: "offer",
+							...(verdict.reason ? { reason: verdict.reason } : {}),
+							remaining,
+						},
+					});
 					struggleSuggestion.hold(offer);
 				})
 			: undefined;

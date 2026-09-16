@@ -422,4 +422,51 @@ describe("the escalation path, as the host wires it", () => {
 			(delivered[0]?.metadata.usage as { inputTokens: number }).inputTokens,
 		).toBe(4_000);
 	});
+
+	it("puts a struggle verdict on the event stream, not only in the model's tool result", async () => {
+		// The offer rides the next tool result, which is what the model needs
+		// and is invisible to everyone else: across 326 finished runs the
+		// corpus could say how often compaction fired and nothing at all about
+		// how often the detector did. Thresholds with no evidence behind them
+		// are the ones that never get tuned.
+		const { agentConfig, events } = await startSession({
+			connection: { providerId: "anthropic", modelId: "claude-opus-4-5" },
+			maxEscalations: 2,
+			struggleThresholds: { editStreak: 2, minIteration: 0, window: 10 },
+		});
+
+		// `onEvent` on the agent config is the seam the detector sits behind —
+		// the stub never runs a model, so the stream has to be played by hand.
+		const onEvent = (agentConfig as { onEvent?: (event: unknown) => void })
+			?.onEvent;
+		if (!onEvent) {
+			throw new Error("the host installed no onEvent on the agent config");
+		}
+		const play = (event: unknown) => onEvent(event);
+		play({ type: "iteration_start", iteration: 1 });
+		for (const path of ["a.ts", "b.ts"]) {
+			play({
+				type: "content_start",
+				contentType: "tool",
+				toolName: "editor",
+				input: { path },
+			});
+			play({
+				type: "content_end",
+				contentType: "tool",
+				toolName: "editor",
+				error: "the edit was refused",
+			});
+		}
+		play({ type: "iteration_end", iteration: 1 });
+
+		// The nudge arm reads the files in play before it holds, so the notice
+		// lands a tick or two after the verdict — deliberately, since a nudge is
+		// not worth making the turn boundary wait on a disk.
+		await new Promise((resolve) => setTimeout(resolve, 50));
+
+		const struggle = noticesOfKind(events, "struggle");
+		expect(struggle.length).toBeGreaterThan(0);
+		expect(["nudge", "offer"]).toContain(struggle[0]?.metadata.phase);
+	});
 });

@@ -2,6 +2,7 @@ import type {
 	AgentModel,
 	AgentModelEvent,
 	AgentModelRequest,
+	AgentRuntimeEvent,
 	AgentTool,
 } from "@cline/shared";
 import { NON_CONVERGENCE_NUDGE_PREFIX } from "@cline/shared";
@@ -286,5 +287,80 @@ describe("the non-convergence nudge", () => {
 		expect(text).toContain("3 turns in a row");
 		// Three turns of the scripted reasoning, rounded to thousands.
 		expect(text).toMatch(/characters of reasoning/);
+	});
+});
+
+describe("the nudges leave a trace", () => {
+	/**
+	 * A guard that emits nothing cannot be tuned. Every one of these fires on a
+	 * measured condition, and until now only the reasoning-loop guard said so
+	 * in the event stream -- so a corpus of 326 finished runs can report how
+	 * often compaction fired and has no idea how often the model was nudged.
+	 */
+	function nudgeNotices(
+		events: AgentRuntimeEvent[],
+	): Array<Record<string, unknown>> {
+		return events
+			.filter((event) => event.type === "status-notice")
+			.map(
+				(event) =>
+					(event as { metadata?: Record<string, unknown> }).metadata ?? {},
+			)
+			.filter((metadata) => metadata.kind === "nudge");
+	}
+
+	it("emits a notice naming the non-convergence nudge and its streak", async () => {
+		const boundaryReplies = [
+			"TX-01 discarded — the check ran and did not pass.",
+			"You changed this file and have not checked it since.",
+			"TX-02 was submitted with nothing changed.",
+		];
+		let boundaryCalls = 0;
+		const model = new ScriptModel([thinkingOnlyTurn]);
+		const events: AgentRuntimeEvent[] = [];
+		const runtime = new AgentRuntime({
+			model,
+			maxIterations: 20,
+			completionPolicy: {
+				maxNoToolCallNudges: 1,
+				onCompletionAttempt: async () => boundaryReplies[boundaryCalls++],
+			},
+		});
+		runtime.subscribe((event) => {
+			events.push(event);
+		});
+
+		await runtime.run("go");
+
+		const nonConvergence = nudgeNotices(events).filter(
+			(metadata) => metadata.nudge === "non_convergence",
+		);
+		expect(nonConvergence).toHaveLength(1);
+		// The streak is the tunable quantity, so it has to be in the record --
+		// a notice that says only "it fired" cannot answer where to put the
+		// threshold.
+		expect(nonConvergence[0]?.consecutiveNoToolCallTurns).toBeGreaterThan(0);
+		expect(nonConvergence[0]?.iteration).toBeGreaterThan(0);
+	});
+
+	it("does not emit one on a run that keeps calling tools", async () => {
+		const model = new ScriptModel([
+			toolCallTurn,
+			toolCallTurn,
+			briefAnswerTurn,
+		]);
+		const events: AgentRuntimeEvent[] = [];
+		const runtime = new AgentRuntime({
+			model,
+			maxIterations: 20,
+			tools: [echoTool()],
+		});
+		runtime.subscribe((event) => {
+			events.push(event);
+		});
+
+		await runtime.run("go");
+
+		expect(nudgeNotices(events)).toHaveLength(0);
 	});
 });

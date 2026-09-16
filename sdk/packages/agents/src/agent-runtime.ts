@@ -1650,6 +1650,17 @@ export class AgentRuntime {
 					// wrong in three ways. Only the completion boundary stays a
 					// single winner, below, and for a reason of its own.
 					const reminders: string[] = [];
+					// Which behavioural guards fired this turn, beside the text
+					// they produced. The text goes to the model; this goes to the
+					// event stream, because a guard that emits nothing cannot be
+					// tuned -- a corpus of finished runs could report how often
+					// compaction fired and had no idea how often the model was
+					// nudged, so the thresholds here were the only ones in the
+					// system with no evidence behind them.
+					const firedNudges: Array<{
+						nudge: string;
+						detail?: Record<string, unknown>;
+					}> = [];
 					reminders.push(...this.getCompletionReminderMessages());
 					// A message sent while the run was going answers to the user, and
 					// answering it is a turn with nothing to call — which is how a run
@@ -1667,6 +1678,10 @@ export class AgentRuntime {
 					if (noToolCallNudge) {
 						this.consecutiveNoToolCallNudges += 1;
 						reminders.push(noToolCallNudge);
+						firedNudges.push({
+							nudge: "no_tool_call",
+							detail: { consecutive: this.consecutiveNoToolCallNudges },
+						});
 					}
 					// The silence budget is spent, but this turn was not silence: the
 					// model emitted a call and the provider could not read it. Ending
@@ -1683,6 +1698,7 @@ export class AgentRuntime {
 					if (unparsedCall) {
 						this.unparsedCallNudgeSpent = true;
 						reminders.push(buildUnparsedToolCallNudge(unparsedCall));
+						firedNudges.push({ nudge: "unparsed_tool_call" });
 					}
 					// The nudge budget is spent, but a model that answered it by
 					// announcing more work has not answered it -- it restated the
@@ -1701,6 +1717,7 @@ export class AgentRuntime {
 					if (announcement) {
 						this.intentNudgeSpent = true;
 						reminders.push(buildAnnouncedIntentNudge(announcement));
+						firedNudges.push({ nudge: "announced_intent" });
 					}
 					// The run has thought for several turns and done nothing, and
 					// none of the handlers above saw it: each one looks at the last
@@ -1716,6 +1733,13 @@ export class AgentRuntime {
 								this.noToolCallStreakReasoningChars,
 							),
 						);
+						firedNudges.push({
+							nudge: "non_convergence",
+							detail: {
+								consecutiveNoToolCallTurns: this.consecutiveNoToolCallTurns,
+								reasoningChars: this.noToolCallStreakReasoningChars,
+							},
+						});
 					}
 					// Gated on `nudgesEnabled` on this path only: a host with the
 					// budget at zero has said a silent turn ends the run, and a
@@ -1726,6 +1750,7 @@ export class AgentRuntime {
 						: undefined;
 					if (silentRepetition) {
 						reminders.push(silentRepetition);
+						firedNudges.push({ nudge: "silent_repetition" });
 					}
 					if (reminders.length > 0) {
 						// Deduped by text, order kept: `getNoToolCallNudgeMessage`
@@ -1735,6 +1760,24 @@ export class AgentRuntime {
 						// is the exact failure the last of these guards complains about.
 						for (const reminder of new Set(reminders)) {
 							await this.addUserReminderMessage(reminder);
+						}
+						// One notice per guard that fired, not one for the turn:
+						// a turn can be wrong in several ways at once, and a
+						// record that collapses them cannot say which threshold
+						// was the one that moved.
+						for (const fired of firedNudges) {
+							await this.emit({
+								type: "status-notice",
+								snapshot: this.snapshot(),
+								message: `nudged: ${fired.nudge}`,
+								metadata: {
+									kind: "nudge",
+									reason: "nudge",
+									nudge: fired.nudge,
+									iteration: this.state.iteration,
+									...(fired.detail ?? {}),
+								},
+							});
 						}
 						continue;
 					}
