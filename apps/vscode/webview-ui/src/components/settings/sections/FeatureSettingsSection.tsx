@@ -190,6 +190,9 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		useAutoCondense,
 		compactionPrompt,
 		defaultCompactionPrompt,
+		keepRecentMessagesAtCompaction,
+		fullCompactionPrompt,
+		defaultFullCompactionPrompt,
 		thinkingCompactionEnabled,
 		thinkingCompactionPrompt,
 		defaultThinkingCompactionPrompt,
@@ -620,28 +623,78 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 				<PromptTemplatesSection />
 
 				{/* Last, because it is the longest field on the page and the one
-				    most people never touch. */}
+				    most people never touch.
+
+				    The switch comes first because it decides what the field
+				    below it is: the two prompts are written for two different
+				    cuts and neither works under the other, so the field
+				    addresses whichever one is live and keeps the other stored
+				    untouched. */}
 				<div className="space-y-2 pt-2">
-					<Label className="text-sm font-medium text-foreground">Compaction Prompt</Label>
+					<div className="flex items-center justify-between w-full">
+						<Label className="text-sm font-medium text-foreground">Keep Recent Messages At Compaction</Label>
+						<Switch
+							checked={keepRecentMessagesAtCompaction ?? true}
+							className="shrink-0"
+							disabled={!useAutoCondense}
+							id="keepRecentMessagesAtCompaction"
+							onCheckedChange={(checked) => updateSetting("keepRecentMessagesAtCompaction", checked)}
+							size="lg"
+						/>
+					</div>
 					<p className="text-xs text-muted-foreground">
-						The instruction the summarizer is given when auto compaction runs. The summary replaces the turns it
-						stands for, so this decides what survives. Leave empty for the built-in prompt.{" "}
-						<code>{"{{files_read}}"}</code> and <code>{"{{files_edited}}"}</code> are substituted; the transcript is
-						appended automatically.
+						On, the summary is a preface: the most recent turns survive verbatim underneath it, and the summary is
+						written to read as your own memory of the ones that did not. Off, the summary is the whole context &mdash;
+						everything is discarded except the request that started the turn, and the summary has to carry the rest on
+						its own. Reclaims far more, and asks far more of the model writing it.
 					</p>
-					<DebouncedTextArea
-						disabled={!useAutoCondense}
-						initialValue={compactionPrompt ?? ""}
-						maxRows={24}
-						minRows={4}
-						onChange={(value) => updateSetting("compactionPrompt", value)}
-						placeholder={defaultCompactionPrompt}
-					/>
-					{compactionPrompt?.trim() ? (
-						<VSCodeButton appearance="secondary" onClick={() => updateSetting("compactionPrompt", "")}>
-							Reset to default
-						</VSCodeButton>
-					) : null}
+				</div>
+
+				<div className="space-y-2 pt-2">
+					<Label className="text-sm font-medium text-foreground">
+						{keepRecentMessagesAtCompaction === false ? "Full Compaction Prompt" : "Compaction Prompt"}
+					</Label>
+					<p className="text-xs text-muted-foreground">
+						{keepRecentMessagesAtCompaction === false
+							? "The instruction the summarizer is given when nothing is kept. Everything the next turn knows comes from what this produces, so it asks for a fixed set of sections rather than for detail. Leave empty for the built-in prompt."
+							: "The instruction the summarizer is given when auto compaction runs. What it writes is prepended to the turns that survive, so it decides what is remembered about the ones that did not. Leave empty for the built-in prompt."}{" "}
+						<code>{"{{files_read}}"}</code> and <code>{"{{files_edited}}"}</code> are substituted; the transcript is
+						appended automatically. Each strategy keeps its own prompt, so switching the tickbox does not discard the
+						other one.
+					</p>
+					{keepRecentMessagesAtCompaction === false ? (
+						<>
+							<DebouncedTextArea
+								disabled={!useAutoCondense}
+								initialValue={fullCompactionPrompt ?? ""}
+								maxRows={24}
+								minRows={4}
+								onChange={(value) => updateSetting("fullCompactionPrompt", value)}
+								placeholder={defaultFullCompactionPrompt}
+							/>
+							{fullCompactionPrompt?.trim() ? (
+								<VSCodeButton appearance="secondary" onClick={() => updateSetting("fullCompactionPrompt", "")}>
+									Reset to default
+								</VSCodeButton>
+							) : null}
+						</>
+					) : (
+						<>
+							<DebouncedTextArea
+								disabled={!useAutoCondense}
+								initialValue={compactionPrompt ?? ""}
+								maxRows={24}
+								minRows={4}
+								onChange={(value) => updateSetting("compactionPrompt", value)}
+								placeholder={defaultCompactionPrompt}
+							/>
+							{compactionPrompt?.trim() ? (
+								<VSCodeButton appearance="secondary" onClick={() => updateSetting("compactionPrompt", "")}>
+									Reset to default
+								</VSCodeButton>
+							) : null}
+						</>
+					)}
 				</div>
 
 				{/* Directly below, because it is the second half of the same

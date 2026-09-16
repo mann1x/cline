@@ -214,6 +214,14 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			controller.stateManager.setGlobalState("compactionPrompt", request.compactionPrompt)
 		}
 
+		if (request.keepRecentMessagesAtCompaction !== undefined) {
+			controller.stateManager.setGlobalState("keepRecentMessagesAtCompaction", request.keepRecentMessagesAtCompaction)
+		}
+
+		if (request.fullCompactionPrompt !== undefined) {
+			controller.stateManager.setGlobalState("fullCompactionPrompt", request.fullCompactionPrompt)
+		}
+
 		if (request.thinkingCompactionEnabled !== undefined) {
 			controller.stateManager.setGlobalState("thinkingCompactionEnabled", request.thinkingCompactionEnabled)
 		}

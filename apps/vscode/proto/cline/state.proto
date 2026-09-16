@@ -312,6 +312,8 @@ message Settings {
   optional string escalation_settings = 207;
   optional string update_channel = 208;
   optional string available_update = 209;
+  optional bool keep_recent_messages_at_compaction = 210;
+  optional string full_compaction_prompt = 211;
 }
 
 message State {
@@ -466,6 +468,8 @@ message UpdateSettingsRequest {
   optional string compaction_prompt = 50;
   optional bool thinking_compaction_enabled = 51;
   optional string thinking_compaction_prompt = 52;
+  optional bool keep_recent_messages_at_compaction = 70;
+  optional string full_compaction_prompt = 71;
   optional bool capped_thinking_enabled = 53;
   optional string capped_thinking_prompt = 54;
   optional bool agents_model_enabled = 55;

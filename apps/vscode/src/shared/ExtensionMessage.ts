@@ -171,6 +171,12 @@ export interface ExtensionState {
 	 * and `@cline/core` reaches Node-only code through `@cline/llms`.
 	 */
 	defaultCompactionPrompt?: string
+	/** Whether the most recent messages survive a compaction verbatim. */
+	keepRecentMessagesAtCompaction?: boolean
+	/** Replaces the built-in instruction used when no recency tail survives. */
+	fullCompactionPrompt?: string
+	/** The built-in no-tail instruction, shown as that field's placeholder. */
+	defaultFullCompactionPrompt?: string
 	/** Whether compaction also writes a retrospective over the discarded reasoning. */
 	thinkingCompactionEnabled?: boolean
 	/** Replaces the built-in retrospective instruction; empty means default. */

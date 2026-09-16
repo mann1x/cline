@@ -6,7 +6,8 @@
 
 import {
 	DEFAULT_CAPPED_THINKING_PROMPT,
-	DEFAULT_COMPACTION_PROMPT,
+	DEFAULT_FULL_COMPACTION_PROMPT,
+	DEFAULT_REPLAY_COMPACTION_PROMPT,
 	DEFAULT_THINKING_COMPACTION_PROMPT,
 	isModelToolEnabledGlobally,
 	readCompactionStrategyGlobally,
@@ -54,6 +55,8 @@ export async function getStateToPostToWebview(controller: {
 	const mode = stateManager.getGlobalSettingsKey("mode")
 	const useAutoCondense = stateManager.getGlobalSettingsKey("useAutoCondense")
 	const compactionPrompt = stateManager.getGlobalSettingsKey("compactionPrompt")
+	const keepRecentMessagesAtCompaction = stateManager.getGlobalSettingsKey("keepRecentMessagesAtCompaction")
+	const fullCompactionPrompt = stateManager.getGlobalSettingsKey("fullCompactionPrompt")
 	const thinkingCompactionEnabled = stateManager.getGlobalSettingsKey("thinkingCompactionEnabled")
 	const thinkingCompactionPrompt = stateManager.getGlobalSettingsKey("thinkingCompactionPrompt")
 	const cappedThinkingEnabled = stateManager.getGlobalSettingsKey("cappedThinkingEnabled")
@@ -165,7 +168,13 @@ export async function getStateToPostToWebview(controller: {
 		mode,
 		useAutoCondense,
 		compactionPrompt,
-		defaultCompactionPrompt: DEFAULT_COMPACTION_PROMPT,
+		// The replay prompt, not `DEFAULT_COMPACTION_PROMPT`: with a tail kept,
+		// the summary is prepended to messages still in the transcript, and the
+		// hand-over note this used to show is written for the other cut.
+		defaultCompactionPrompt: DEFAULT_REPLAY_COMPACTION_PROMPT,
+		keepRecentMessagesAtCompaction,
+		fullCompactionPrompt,
+		defaultFullCompactionPrompt: DEFAULT_FULL_COMPACTION_PROMPT,
 		thinkingCompactionEnabled,
 		thinkingCompactionPrompt,
 		defaultThinkingCompactionPrompt: DEFAULT_THINKING_COMPACTION_PROMPT,

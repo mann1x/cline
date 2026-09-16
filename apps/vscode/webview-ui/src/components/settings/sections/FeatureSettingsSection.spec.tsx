@@ -150,12 +150,83 @@ describe("FeatureSettingsSection", () => {
 	})
 })
 
+/**
+ * The tickbox decides which of two prompts the field below it edits, so the
+ * thing worth testing is not that it toggles but that the other prompt is
+ * still there afterwards. A field that rewrote one setting under the user
+ * would look identical on screen.
+ */
+describe("Keep Recent Messages At Compaction", () => {
+	beforeEach(() => {
+		mockUpdateSetting.mockClear()
+		mockExtensionState.value = {
+			...mockExtensionState.value,
+			useAutoCondense: true,
+			keepRecentMessagesAtCompaction: true,
+			compactionPrompt: "my replay prompt",
+			fullCompactionPrompt: "my full prompt",
+		}
+	})
+
+	it("sits above the prompt it decides", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		const labels = Array.from(container.querySelectorAll("label")).map((label) => label.textContent)
+		const tickbox = labels.indexOf("Keep Recent Messages At Compaction")
+		const prompt = labels.indexOf("Compaction Prompt")
+
+		expect(tickbox).toBeGreaterThanOrEqual(0)
+		expect(prompt).toBe(tickbox + 1)
+	})
+
+	it("is on unless it has been turned off", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		expect(container.querySelector("#keepRecentMessagesAtCompaction")?.getAttribute("data-state")).toBe("checked")
+	})
+
+	it("turns off from the switch", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		fireEvent.click(container.querySelector("#keepRecentMessagesAtCompaction") as Element)
+
+		expect(mockUpdateSetting).toHaveBeenCalledWith("keepRecentMessagesAtCompaction", false)
+	})
+
+	it("edits the replay prompt while it is on", () => {
+		render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		expect(screen.getByText("Compaction Prompt")).toBeTruthy()
+		expect(screen.queryByText("Full Compaction Prompt")).toBeNull()
+		expect(screen.getByDisplayValue("my replay prompt")).toBeTruthy()
+	})
+
+	it("edits the full prompt while it is off, and leaves the other one stored", () => {
+		mockExtensionState.value = {
+			...mockExtensionState.value,
+			keepRecentMessagesAtCompaction: false,
+		}
+		render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		expect(screen.getByText("Full Compaction Prompt")).toBeTruthy()
+		expect(screen.getByDisplayValue("my full prompt")).toBeTruthy()
+		// The replay prompt is not on screen and was not written to either.
+		expect(screen.queryByDisplayValue("my replay prompt")).toBeNull()
+		expect(mockUpdateSetting).not.toHaveBeenCalled()
+	})
+})
+
 describe("Thinking Compaction", () => {
 	beforeEach(() => {
 		mockUpdateSetting.mockClear()
 		mockExtensionState.value = {
 			...mockExtensionState.value,
 			useAutoCondense: true,
+			// Named rather than inherited: every describe in this file spreads
+			// the one mutated state object forward, so a key another block left
+			// off arrives here silently -- and this block asserts on the label
+			// that the tickbox changes.
+			keepRecentMessagesAtCompaction: true,
 		}
 	})
 

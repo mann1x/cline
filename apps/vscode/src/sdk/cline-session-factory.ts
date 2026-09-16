@@ -1654,6 +1654,12 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	const globalUseAutoCondense = stateManager.getGlobalSettingsKey("useAutoCondense") ?? true
 	const compactionStrategy = readCompactionStrategyGlobally()
 	const compactionPrompt = (stateManager.getGlobalSettingsKey("compactionPrompt") ?? "").trim()
+	// Which cut runs, and therefore which of the two prompts the summarizer is
+	// given. The core picks the prompt from this flag rather than taking one
+	// here, so a blank field falls back to the built-in written for that cut and
+	// never to the other one's.
+	const keepRecentMessagesAtCompaction = stateManager.getGlobalSettingsKey("keepRecentMessagesAtCompaction") ?? true
+	const fullCompactionPrompt = (stateManager.getGlobalSettingsKey("fullCompactionPrompt") ?? "").trim()
 	// Second-phase retrospective over the reasoning compaction discards.
 	// Defaults on: the summary alone leaves a resumed task with no memory of
 	// having been wrong, which is how a long run repeats its own mistakes.
@@ -2107,7 +2113,9 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 			...(useAutoCondense
 				? {
 						strategy: compactionStrategy,
+						keepRecentMessages: keepRecentMessagesAtCompaction,
 						...(compactionPrompt ? { summaryPrompt: compactionPrompt } : {}),
+						...(fullCompactionPrompt ? { fullSummaryPrompt: fullCompactionPrompt } : {}),
 						thinkingSummaryEnabled: thinkingCompactionEnabled,
 						...(thinkingCompactionPrompt ? { thinkingSummaryPrompt: thinkingCompactionPrompt } : {}),
 					}

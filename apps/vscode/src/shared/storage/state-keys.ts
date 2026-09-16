@@ -336,6 +336,17 @@ const USER_SETTINGS_FIELDS = {
 	 * it replaces, so this is worth being able to tune without a rebuild.
 	 */
 	compactionPrompt: { default: "" as string },
+	/**
+	 * Whether the most recent messages survive a compaction verbatim.
+	 *
+	 * On is the current behaviour and stays the default. Off makes the summary
+	 * the whole context, which is a different operation rather than a tighter
+	 * budget, and `fullCompactionPrompt` is the instruction that writes it. The
+	 * two prompts are stored separately so switching the tickbox to try the
+	 * other strategy does not discard whatever was tuned for this one.
+	 */
+	keepRecentMessagesAtCompaction: { default: true as boolean },
+	fullCompactionPrompt: { default: "" as string },
 	thinkingCompactionEnabled: { default: true as boolean },
 	thinkingCompactionPrompt: { default: "" as string },
 	/**
