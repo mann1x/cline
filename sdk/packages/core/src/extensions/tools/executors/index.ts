@@ -131,7 +131,9 @@ export function createDefaultExecutors(
 	return {
 		readFile: createFileReadExecutor({ ...options.fileRead, receipts }),
 		search: createSearchExecutor(options.search),
-		bash: createDefaultShellExecutor(options.bash),
+		// Receipts reach the shell too, so a command that rewrites a file the
+		// model has read says so. Nothing else about the shell changes.
+		bash: createDefaultShellExecutor({ ...options.bash, receipts }),
 		webFetch: createWebFetchExecutor(options.webFetch),
 		applyPatch: createApplyPatchExecutor(options.applyPatch),
 		editor: createEditorExecutor({ ...options.editor, receipts }),

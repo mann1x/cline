@@ -33,6 +33,7 @@ import {
 	MAX_COMMAND_OUTPUT_CHARS,
 	truncateCommandOutput,
 } from "./output-limits";
+import { type ReadReceipts, readFileStamp } from "./read-receipts";
 import type { RunCommandExecutionController } from "./run-command-execution-controller";
 
 const MAX_DETACHED_LOG_BYTES = 10 * 1024 * 1024;
@@ -324,6 +325,75 @@ export class CommandExitError extends Error {
 /**
  * Options for the shell executor
  */
+/**
+ * Files re-stamped after a command before the sweep gives up.
+ *
+ * One `stat` each, so this is a fraction of a millisecond for any realistic
+ * session. The bound exists for the session that has read thousands of files,
+ * where the sweep would start to cost more than the answer is worth — and
+ * where the answer is least useful anyway, since a list of two hundred changed
+ * files tells the model nothing it can act on.
+ */
+const MAX_SWEPT_FILES = 512;
+
+/**
+ * Which of the files the model has looked at did this command change?
+ *
+ * The free half of the concurrency work. A shell command is the largest hole
+ * in the read-before-edit guard: `run_commands` can rewrite anything —
+ * a formatter, a codemod, `git checkout`, a build that regenerates a source
+ * file, a stray redirect — and none of it appears in the conversation as an
+ * edit. Every heuristic for reading that off the command line is a parser for
+ * an unbounded language, and wrong in the direction that matters: it misses.
+ *
+ * Asking the filesystem instead needs no heuristic at all. The set to check is
+ * already known — the files this session has read — and comparing their stamps
+ * before and after is exact for every command, including the ones nobody
+ * thought of.
+ *
+ * Only tracked files are swept, and that is the right scope rather than a
+ * limitation: a file the model has never read is one it holds no stale belief
+ * about, so there is nothing to correct.
+ */
+async function sweepTrackedFiles(
+	receipts: ReadReceipts,
+	paths: readonly string[],
+): Promise<string[]> {
+	const changed: string[] = [];
+	for (const filePath of paths.slice(0, MAX_SWEPT_FILES)) {
+		const stamp = await readFileStamp(filePath);
+		if (receipts.changedSince(filePath, stamp)) {
+			changed.push(filePath);
+			// The spans are wrong now whatever the command was, so the next edit
+			// is held until the model has looked again.
+			receipts.retire(filePath);
+		}
+		receipts.noteStamp(filePath, stamp);
+	}
+	return changed;
+}
+
+/**
+ * Say what the command did to the files the model was holding.
+ *
+ * Attributed to the command rather than to "something outside this session",
+ * unlike the reader's notice: the model ran this itself, and telling it
+ * otherwise would send it looking for a culprit that is in its own transcript.
+ */
+function describeSweptFiles(changed: readonly string[]): string {
+	const list = changed.map((file) => `  - ${file}`).join("\n");
+	const count =
+		changed.length === 1
+			? "1 file you had read"
+			: `${changed.length} files you had read`;
+	return [
+		`NOTE: this command changed ${count}:`,
+		list,
+		"",
+		"What you remember of these files is out of date. Read any of them again before editing it — earlier line numbers may now point at different code.",
+	].join("\n");
+}
+
 export interface ShellExecutorOptions {
 	/**
 	 * Shell to use for execution
@@ -363,6 +433,16 @@ export interface ShellExecutorOptions {
 	 * @default true
 	 */
 	combineOutput?: boolean;
+
+	/**
+	 * The session's read receipts, so a command's effect on files the model has
+	 * read can be reported back — see {@link sweepTrackedFiles}.
+	 *
+	 * Omit it and the executor behaves exactly as it did: no sweep, no stat, no
+	 * note. The shell does not need receipts to run a command; it needs them to
+	 * say what the command did to what the model believes.
+	 */
+	receipts?: ReadReceipts;
 
 	/**
 	 * Optional host-scoped controller that can release an in-flight command
@@ -1023,6 +1103,7 @@ export function createShellExecutor(
 		combineOutput = true,
 		executionController,
 		processStartTokenProbe = probeProcessStartTokenAsync,
+		receipts,
 	} = options;
 	const detachedLogRetentionMs = resolveDetachedLogRetentionMs(
 		options.detachedLogRetentionMs,
@@ -1032,7 +1113,7 @@ export function createShellExecutor(
 		options.maxOutputBytes ??
 		MAX_COMMAND_OUTPUT_CHARS;
 
-	return (command, cwd, context, callOptions) => {
+	return async (command, cwd, context, callOptions) => {
 		// Spawn without a shell only when the args key is present (even
 		// empty), marking input the caller already split. An object with no
 		// args key, like { command: "echo hello" }, holds a full command
@@ -1045,7 +1126,11 @@ export function createShellExecutor(
 					shell,
 					typeof command === "string" ? command : command.command,
 				);
-		return spawnAndCollect(
+		// Snapshotted before the command runs, because the command can add
+		// files to the set and a file this session has never read is not one it
+		// can be holding a stale view of.
+		const tracked = receipts?.paths() ?? [];
+		const output = await spawnAndCollect(
 			{
 				executable: directExec ? command.command : shell,
 				args: invocation.args,
@@ -1066,5 +1151,12 @@ export function createShellExecutor(
 			executionController,
 			processStartTokenProbe,
 		);
+		if (!receipts || tracked.length === 0) {
+			return output;
+		}
+		const changed = await sweepTrackedFiles(receipts, tracked);
+		return changed.length === 0
+			? output
+			: `${output}\n\n${describeSweptFiles(changed)}`;
 	};
 }

@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import { createShellExecutor } from "./bash";
 import { createEditorExecutor } from "./editor";
 import { createFileReadExecutor } from "./file-read";
 import { createReadReceipts } from "./read-receipts";
@@ -198,6 +199,122 @@ describe("a file two writers share", () => {
 					context as never,
 				),
 			).rejects.toThrow(/changed since you last read it/);
+		});
+	});
+});
+
+describe("what a command did to the files the model was holding", () => {
+	async function withShell(
+		run: (paths: {
+			dir: string;
+			filePath: string;
+			read: ReturnType<typeof createFileReadExecutor>;
+			edit: ReturnType<typeof createEditorExecutor>;
+			shell: ReturnType<typeof createShellExecutor>;
+		}) => Promise<void>,
+	): Promise<void> {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "swept-"));
+		const filePath = path.join(dir, "shared.txt");
+		await fs.writeFile(filePath, FILE, "utf-8");
+		const receipts = createReadReceipts();
+		try {
+			await run({
+				dir,
+				filePath,
+				read: createFileReadExecutor({ receipts, cwd: dir }),
+				edit: createEditorExecutor({ receipts }),
+				shell: createShellExecutor({ receipts }),
+			});
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	}
+
+	it("names the file a command rewrote, with no heuristic on the command line", async () => {
+		// The point of measuring instead of parsing: this is a redirect inside a
+		// subshell, and no reading of the command string was involved.
+		await withShell(async ({ dir, filePath, read, shell }) => {
+			await read({ path: filePath }, context as never);
+
+			const output = await shell(
+				`( printf 'rewritten\n' > ${JSON.stringify(filePath)} )`,
+				dir,
+				context as never,
+			);
+
+			expect(output).toContain("this command changed");
+			expect(output).toContain(filePath);
+		});
+	});
+
+	it("says nothing when the command touched nothing the model had read", async () => {
+		await withShell(async ({ dir, filePath, read, shell }) => {
+			await read({ path: filePath }, context as never);
+
+			const output = await shell("echo hello", dir, context as never);
+
+			expect(output).toContain("hello");
+			expect(output).not.toContain("this command changed");
+		});
+	});
+
+	it("says nothing about a file the model has never read", async () => {
+		// Nothing to correct: a file the session has not looked at is one it
+		// holds no stale belief about.
+		await withShell(async ({ dir, read, filePath, shell }) => {
+			await read({ path: filePath }, context as never);
+			const other = path.join(dir, "untouched-by-the-model.txt");
+
+			const output = await shell(
+				`printf 'new\n' > ${JSON.stringify(other)}`,
+				dir,
+				context as never,
+			);
+
+			expect(output).not.toContain("this command changed");
+		});
+	});
+
+	it("holds the next edit until the model has read the file again", async () => {
+		await withShell(async ({ dir, filePath, read, edit, shell }) => {
+			await read({ path: filePath }, context as never);
+			await shell(
+				`printf 'one\nrewritten\nthree\n' > ${JSON.stringify(filePath)}`,
+				dir,
+				context as never,
+			);
+
+			await expect(
+				edit(
+					{ path: filePath, start_line: 2, end_line: 2, new_text: "TWO" },
+					dir,
+					context as never,
+				),
+			).rejects.toThrow(/[Rr]ead before editing/);
+
+			await read({ path: filePath }, context as never);
+			await expect(
+				edit(
+					{ path: filePath, start_line: 2, end_line: 2, new_text: "TWO" },
+					dir,
+					context as never,
+				),
+			).resolves.toBeTruthy();
+		});
+	});
+
+	it("reports the command's change once, not again on the next read", async () => {
+		await withShell(async ({ dir, filePath, read, shell }) => {
+			await read({ path: filePath }, context as never);
+			await shell(
+				`printf 'rewritten\n' > ${JSON.stringify(filePath)}`,
+				dir,
+				context as never,
+			);
+
+			const next = textOf(await read({ path: filePath }, context as never));
+
+			expect(next).not.toContain("changed since you last looked");
 		});
 	});
 });
