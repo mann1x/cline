@@ -3,6 +3,7 @@ import type { MessageWithMetadata } from "@cline/shared";
 import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { createContextCompactionPrepareTurn } from "./compaction";
 import { createCompactionJournal } from "./compaction-journal";
+import type { CompactionRevisions } from "./compaction-revisions";
 
 const createHandlerMock = vi.fn();
 
@@ -67,6 +68,7 @@ function prepare(options: {
 	 * shrinks the tail first cannot see it.
 	 */
 	defaultRecencyBudget?: boolean;
+	revisions?: CompactionRevisions;
 }) {
 	return createContextCompactionPrepareTurn(
 		{
@@ -84,6 +86,7 @@ function prepare(options: {
 				...(options.keepRecentMessages === false
 					? { keepRecentMessages: false }
 					: {}),
+				...(options.revisions ? { revisions: options.revisions } : {}),
 			},
 			logger: options.logger,
 		},
@@ -387,5 +390,52 @@ describe("dropping the tail when keeping it did not fit", () => {
 		const { result } = await runOversized();
 
 		expect(result?.messages).toBeDefined();
+	});
+});
+
+describe("closing the revision span at a compaction", () => {
+	/** A port that records what it was asked to keep. */
+	function trackingPort(tracked: string[]) {
+		const kept: string[][] = [];
+		return {
+			kept,
+			port: {
+				revisionsFor: () => undefined,
+				tracked: () => tracked,
+				noteCompaction: (keep?: Iterable<string>) => {
+					kept.push([...(keep ?? [])].sort());
+					return 0;
+				},
+			} satisfies CompactionRevisions,
+		};
+	}
+
+	it("keeps the files the summary it just wrote still names", async () => {
+		// The end-to-end claim. `releaseUnreachableRevisions` is tested on its
+		// own; what this pins is that compaction actually reaches it, with the
+		// messages it produced rather than the ones it replaced.
+		summarizerReplying([
+			"## Goal\nFix the parser.\n\n## Next\nRe-read parser.ts.",
+		]);
+		const { kept, port } = trackingPort(["/w/src/parser.ts", "/w/src/cold.ts"]);
+
+		const result = await run(
+			prepare({ revisions: port, keepRecentMessages: false }),
+		);
+
+		expect(result?.messages).toBeDefined();
+		expect(kept).toEqual([["/w/src/parser.ts"]]);
+	});
+
+	it("does not close a span when the compaction produced nothing", async () => {
+		// A declined compaction replaced no transcript, so nothing aged. Closing
+		// the span anyway would age out histories for a compaction that did not
+		// happen, and two declines in a row would evict a live file.
+		summarizerReplying([""]);
+		const { kept, port } = trackingPort(["/w/src/parser.ts"]);
+
+		await run(prepare({ revisions: port, keepRecentMessages: false }));
+
+		expect(kept).toEqual([]);
 	});
 });

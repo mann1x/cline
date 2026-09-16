@@ -222,7 +222,11 @@ export function splitCoreSessionConfig(config: ClineCoreStartConfig): {
 	if (checkpoint?.createCheckpoint) {
 		localConfigOverrides.checkpoint = checkpoint;
 	}
-	if (compaction?.compact) {
+	// Either callback-shaped field keeps the whole block local. `revisions` is
+	// a port of methods, so it is local-only for the same reason `compact` is,
+	// and a host that supplies only the port still needs its other compaction
+	// fields to arrive with it.
+	if (compaction?.compact || compaction?.revisions) {
 		localConfigOverrides.compaction = compaction;
 	}
 
@@ -241,7 +245,11 @@ export function splitCoreSessionConfig(config: ClineCoreStartConfig): {
 	// with the feature present and declining to do anything. Measured on a live
 	// session: the factory resolved a 16,000-token budget and logged it, and
 	// 345ms later the condenser armed "at no thinking tokens".
-	const { compact: _compact, ...transportCompaction } = compaction ?? {};
+	const {
+		compact: _compact,
+		revisions: _revisions,
+		...transportCompaction
+	} = compaction ?? {};
 	const { createCheckpoint: _createCheckpoint, ...transportCheckpoint } =
 		checkpoint ?? {};
 

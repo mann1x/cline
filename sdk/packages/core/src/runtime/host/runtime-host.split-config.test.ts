@@ -77,4 +77,28 @@ describe("splitCoreSessionConfig", () => {
 		// supplies one still gets its own fields back.
 		expect(split.localRuntime?.compaction?.compact).toBe(compact);
 	});
+
+	it("keeps the revision-log port local instead of sending it across", () => {
+		// The port is an object of methods, which is the same hazard `compact`
+		// is: it cannot cross a transport, and left in the transported config it
+		// arrives as an empty object that answers every question wrongly rather
+		// than being absent. The subtraction rule is what the comment above the
+		// implementation promises, so it has to hold for every callback-shaped
+		// field, not just the one that was there when it was written.
+		const revisions = {
+			revisionsFor: () => undefined,
+			tracked: () => [],
+			noteCompaction: () => 0,
+		};
+
+		const split = splitCoreSessionConfig({
+			...(base as object),
+			compaction: { enabled: true, revisions },
+		} as never);
+
+		expect(
+			(split.config.compaction as Record<string, unknown>).revisions,
+		).toBeUndefined();
+		expect(split.localRuntime?.compaction?.revisions).toBe(revisions);
+	});
 });

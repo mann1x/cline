@@ -28,6 +28,7 @@ import {
 	createCompactionStateAwarePrepareTurn,
 	createContextCompactionPrepareTurn,
 } from "../../extensions/context/compaction";
+import type { CompactionRevisions } from "../../extensions/context/compaction-revisions";
 import { releasePolykvSession } from "../../extensions/context/polykv-session";
 import type { ToolExecutors } from "../../extensions/tools";
 import {
@@ -811,7 +812,36 @@ export class LocalRuntimeHost implements RuntimeHost {
 			},
 		);
 		if (!resumedArtifacts) manifest.metadata = initialSessionMetadata;
-		const configWithProvider = bootstrap.config;
+		// The file revision log lives on the change protocol, which is built two
+		// hundred lines below this. So the port is late-bound, the way
+		// `struggleDetector` is: compaction only ever calls it partway through a
+		// turn, by which time both exist, and a session running without the
+		// protocol answers "nothing tracked" -- which is true, since there are
+		// no revisions without it.
+		//
+		// `revisionsFor` says nothing on purpose. The ledger renders a file line
+		// per call as `#a → #b`, which is a claim about that one call, and the
+		// log records revisions in order without recording which call made
+		// which. Returning the file's whole span under those names would be
+		// wrong for every entry but the last, and the ledger's own rule is that
+		// a wrong revision number is worse than none -- the model acts on it by
+		// trying to restore it.
+		const compactionRevisions: CompactionRevisions = {
+			revisionsFor: () => undefined,
+			tracked: () => atomicProtocol?.controller.revisions.tracked() ?? [],
+			noteCompaction: (keep) =>
+				atomicProtocol?.controller.revisions.noteCompaction(keep) ?? 0,
+		};
+		const configWithProvider: typeof bootstrap.config = bootstrap.config
+			.compaction
+			? {
+					...bootstrap.config,
+					compaction: {
+						...bootstrap.config.compaction,
+						revisions: compactionRevisions,
+					},
+				}
+			: bootstrap.config;
 		const providerConfig = bootstrap.providerConfig;
 		// Compaction is assembled before the runtime is built, not after,
 		// because building the runtime is what creates this session's delegated
