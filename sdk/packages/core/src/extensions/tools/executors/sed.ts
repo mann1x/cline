@@ -21,6 +21,7 @@
  */
 import { promises as fs } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
+import { withFileLock } from "./file-locks";
 import { compilePosixRegex } from "./posix-regex";
 import { type ReadReceipts, readFileStamp } from "./read-receipts";
 
@@ -654,107 +655,112 @@ export function createSedExecutor(options: SedExecutorOptions = {}) {
 		const outcomes: SedFileOutcome[] = [];
 		for (const file of input.files) {
 			const filePath = isAbsolute(file) ? file : resolve(cwd, file);
-			let original: string;
-			try {
-				original = await fs.readFile(filePath, "utf8");
-			} catch (error) {
-				const reason = error instanceof Error ? error.message : String(error);
-				outcomes.push({
-					file,
-					output: "",
-					ok: false,
-					error: `could not be read: ${reason}`,
-				});
-				continue;
-			}
+			// One file at a time, and the whole read-modify-write inside the
+			// lock: `sed -i` reads, transforms and writes back exactly as
+			// `editor` does, so it loses an update in exactly the same way.
+			await withFileLock(filePath, async () => {
+				let original: string;
+				try {
+					original = await fs.readFile(filePath, "utf8");
+				} catch (error) {
+					const reason = error instanceof Error ? error.message : String(error);
+					outcomes.push({
+						file,
+						output: "",
+						ok: false,
+						error: `could not be read: ${reason}`,
+					});
+					return;
+				}
 
-			if (input.in_place) {
-				// Exactly the rule `editor` applies, and for the same reason: an
-				// edit aimed at lines nobody has looked at lands on whatever
-				// happens to be there now.
-				const range = addressedLines(commands);
-				if (receipts) {
-					// And the other half of it: whether what was read is still
-					// what is there. `sed -i` on a file a parallel agent has
-					// rewritten applies the script to code the model has never
-					// seen, silently and to every match.
-					const stamp = await readFileStamp(filePath);
-					if (receipts.changedSince(filePath, stamp)) {
-						receipts.noteStamp(filePath, stamp);
-						receipts.retire(filePath);
-						outcomes.push({
-							file,
-							output: "",
-							ok: false,
-							error: `not modified. ${file} changed since you last read it, and not because of anything you did — something outside this session wrote to it. Call \`read_files\` for it to see what it says now, then decide whether this script is still right.`,
-						});
-						continue;
-					}
-					if (range) {
-						if (!receipts.covers(filePath, range.first, range.last)) {
-							const why = receipts.wasRetired(filePath)
-								? "an earlier edit moved the lines that were read"
-								: "those lines have not been read in this session";
+				if (input.in_place) {
+					// Exactly the rule `editor` applies, and for the same reason: an
+					// edit aimed at lines nobody has looked at lands on whatever
+					// happens to be there now.
+					const range = addressedLines(commands);
+					if (receipts) {
+						// And the other half of it: whether what was read is still
+						// what is there. `sed -i` on a file a parallel agent has
+						// rewritten applies the script to code the model has never
+						// seen, silently and to every match.
+						const stamp = await readFileStamp(filePath);
+						if (receipts.changedSince(filePath, stamp)) {
+							receipts.noteStamp(filePath, stamp);
+							receipts.retire(filePath);
 							outcomes.push({
 								file,
 								output: "",
 								ok: false,
-								error: `not modified. Read before editing: ${why}. Call \`read_files\` for ${file} covering lines ${range.first}-${range.last}, then run this again.`,
+								error: `not modified. ${file} changed since you last read it, and not because of anything you did — something outside this session wrote to it. Call \`read_files\` for it to see what it says now, then decide whether this script is still right.`,
 							});
-							continue;
+							return;
 						}
-					} else if (!receipts.hasEverRead(filePath)) {
-						outcomes.push({
-							file,
-							output: "",
-							ok: false,
-							error: `not modified. Read before editing: ${file} has not been read in this session. Call \`read_files\` for it first, then run this again.`,
-						});
-						continue;
+						if (range) {
+							if (!receipts.covers(filePath, range.first, range.last)) {
+								const why = receipts.wasRetired(filePath)
+									? "an earlier edit moved the lines that were read"
+									: "those lines have not been read in this session";
+								outcomes.push({
+									file,
+									output: "",
+									ok: false,
+									error: `not modified. Read before editing: ${why}. Call \`read_files\` for ${file} covering lines ${range.first}-${range.last}, then run this again.`,
+								});
+								return;
+							}
+						} else if (!receipts.hasEverRead(filePath)) {
+							outcomes.push({
+								file,
+								output: "",
+								ok: false,
+								error: `not modified. Read before editing: ${file} has not been read in this session. Call \`read_files\` for it first, then run this again.`,
+							});
+							return;
+						}
 					}
 				}
-			}
 
-			const result = runSedScript(original, commands, input.quiet === true);
+				const result = runSedScript(original, commands, input.quiet === true);
 
-			if (input.in_place) {
-				if (!result.changed) {
-					// Not a failure: the script ran and this is what it did. Saying
-					// otherwise invites the model to run it again unchanged.
+				if (input.in_place) {
+					if (!result.changed) {
+						// Not a failure: the script ran and this is what it did. Saying
+						// otherwise invites the model to run it again unchanged.
+						outcomes.push({
+							file,
+							output: "no change — the script matched nothing.",
+							ok: true,
+						});
+						return;
+					}
+					await fs.writeFile(filePath, result.output, "utf8");
+					receipts?.noteWrite(
+						filePath,
+						countLines(original),
+						countLines(result.output),
+					);
+					// After the write, so this session's own change is not read back
+					// as somebody else's on the next call.
+					receipts?.noteStamp(filePath, await readFileStamp(filePath));
+					const delta = countLines(result.output) - countLines(original);
 					outcomes.push({
 						file,
-						output: "no change — the script matched nothing.",
+						output: `written. ${
+							delta === 0
+								? "Line count unchanged."
+								: `${delta > 0 ? "+" : ""}${delta} line${Math.abs(delta) === 1 ? "" : "s"}.`
+						}`,
 						ok: true,
 					});
-					continue;
+					return;
 				}
-				await fs.writeFile(filePath, result.output, "utf8");
-				receipts?.noteWrite(
-					filePath,
-					countLines(original),
-					countLines(result.output),
-				);
-				// After the write, so this session's own change is not read back
-				// as somebody else's on the next call.
-				receipts?.noteStamp(filePath, await readFileStamp(filePath));
-				const delta = countLines(result.output) - countLines(original);
-				outcomes.push({
-					file,
-					output: `written. ${
-						delta === 0
-							? "Line count unchanged."
-							: `${delta > 0 ? "+" : ""}${delta} line${Math.abs(delta) === 1 ? "" : "s"}.`
-					}`,
-					ok: true,
-				});
-				continue;
-			}
 
-			// A read-only run is a read: record it, so a later edit to the same
-			// file is not refused for a file the model has just been through.
-			receipts?.noteRead(filePath, 1, Number.POSITIVE_INFINITY);
-			receipts?.noteStamp(filePath, await readFileStamp(filePath));
-			outcomes.push({ file, output: result.output, ok: true });
+				// A read-only run is a read: record it, so a later edit to the same
+				// file is not refused for a file the model has just been through.
+				receipts?.noteRead(filePath, 1, Number.POSITIVE_INFINITY);
+				receipts?.noteStamp(filePath, await readFileStamp(filePath));
+				outcomes.push({ file, output: result.output, ok: true });
+			});
 		}
 
 		return outcomes;

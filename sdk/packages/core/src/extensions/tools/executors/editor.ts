@@ -13,6 +13,7 @@ import {
 } from "../delimiter-balance";
 import type { EditFileInput } from "../schemas";
 import type { EditorExecutor } from "../types";
+import { withFileLock } from "./file-locks";
 import {
 	detectLineEnding,
 	type LineEnding,
@@ -1630,9 +1631,22 @@ export function createEditorExecutor(
 	const edit = async (
 		input: EditFileInput,
 		cwd: string,
-		_context: AgentToolContext,
+		context: AgentToolContext,
 	): Promise<string> => {
 		const filePath = resolveFilePath(cwd, input.path, restrictToCwd);
+		// The whole edit, not just the write. An edit reads the file, computes
+		// the result and writes it back, and those three steps have to be one
+		// step with respect to other writers: two agents that each read before
+		// either writes both produce a complete, well-formed file, and the
+		// second one silently contains none of the first one's work.
+		return withFileLock(filePath, () => editLocked(input, filePath, context));
+	};
+
+	const editLocked = async (
+		input: EditFileInput,
+		filePath: string,
+		_context: AgentToolContext,
+	): Promise<string> => {
 		await requireCurrent(filePath);
 		const linesBefore = receipts ? await countLines(filePath) : null;
 		const noteWrite = async (): Promise<void> => {

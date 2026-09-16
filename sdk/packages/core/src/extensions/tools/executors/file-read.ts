@@ -13,6 +13,7 @@ import type { AgentToolContext } from "@cline/shared";
 import { resolveExistingFilePath } from "@cline/shared/storage";
 import type { ReadFileRequest } from "../schemas";
 import type { FileReadExecutor } from "../types";
+import { withFileLock } from "./file-locks";
 import {
 	MAX_LINE_CHARS,
 	MAX_READ_LINES,
@@ -397,13 +398,21 @@ export function createFileReadExecutor(
 			);
 		}
 
-		const window = await readTextWindow(
-			{ kind: "file", path: resolvedPath },
-			encoding,
-			withLineNumbers,
-			start_line,
-			end_line,
-			context.signal,
+		// Under the lock, so a read cannot land in the middle of this process's
+		// own write. `fs.writeFile` truncates and then writes, and a reader in
+		// that window sees a file that is neither the old one nor the new one --
+		// the one failure here that produces content no version of the file ever
+		// had. A reader in another process can still see it; that is what the
+		// stamps are for.
+		const window = await withFileLock(resolvedPath, () =>
+			readTextWindow(
+				{ kind: "file", path: resolvedPath },
+				encoding,
+				withLineNumbers,
+				start_line,
+				end_line,
+				context.signal,
+			),
 		);
 		// Record what was actually looked at, so `editor` can refuse an edit
 		// aimed at lines that were never read. The span comes from the read
