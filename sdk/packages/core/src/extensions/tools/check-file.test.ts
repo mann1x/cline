@@ -149,7 +149,7 @@ describe("the tool", () => {
 			{ paths: [filePath] },
 			{} as never,
 		)) as string;
-		expect(report).toContain("error:");
+		expect(report).toContain("severity");
 	});
 
 	it("says so when a file cannot be read rather than failing the call", async () => {
@@ -206,8 +206,16 @@ describe("the tool", () => {
 			{ paths: [good, bad] },
 			{} as never,
 		)) as string;
-		expect(report).toContain("No syntax errors.");
-		expect(report).toContain("error:");
+		// One entry per file, each with its own verdict: the clean one parsed
+		// with nothing to say, the broken one carrying a diagnostic.
+		const parsed = JSON.parse(report) as {
+			files: Array<{ checked?: string; diagnostics?: unknown[] }>;
+		};
+		expect(parsed.files).toHaveLength(2);
+		expect(parsed.files[0]?.diagnostics).toEqual([]);
+		expect((parsed.files[1]?.diagnostics as unknown[]).length).toBeGreaterThan(
+			0,
+		);
 	});
 });
 
@@ -263,9 +271,15 @@ describe("the checker with a project checker behind it", () => {
 			{} as never,
 		)) as string;
 
-		expect(report).toContain("No syntax errors.");
-		expect(report).toContain("lint/style/noVar");
-		expect(report).toContain("exited 1");
+		const parsed = JSON.parse(report) as {
+			files: Array<{
+				checked?: string;
+				lint?: { exitCode?: number; output?: string };
+			}>;
+		};
+		expect(parsed.files[0]?.checked).toBe("parsed");
+		expect(parsed.files[0]?.lint?.output).toContain("lint/style/noVar");
+		expect(parsed.files[0]?.lint?.exitCode).toBe(1);
 	});
 
 	it("says a clean checker was clean, so silence is never inferred", async () => {
@@ -281,7 +295,13 @@ describe("the checker with a project checker behind it", () => {
 			{} as never,
 		)) as string;
 
-		expect(report).toContain("passed with no output");
+		// exitCode 0 with no output is a checker that ran and passed. The key
+		// being present is what separates it from no checker at all.
+		const parsed = JSON.parse(report) as {
+			files: Array<{ lint?: { exitCode?: number; output?: string } }>;
+		};
+		expect(parsed.files[0]?.lint?.exitCode).toBe(0);
+		expect(parsed.files[0]?.lint?.output).toBe("");
 	});
 
 	// A command that could not run at all must not read as a pass: the model
@@ -401,5 +421,177 @@ describe("the structured report", () => {
 		expect(
 			report.diagnostics.some((d) => /brace|bracket|\{/i.test(d.message)),
 		).toBe(true);
+	});
+});
+
+describe("what the tool hands the model", () => {
+	/** Parse the result, failing loudly rather than silently returning junk. */
+	const parse = (report: string) => {
+		try {
+			return JSON.parse(report) as {
+				files: Array<Record<string, unknown>>;
+				notChecked?: { named: number; limit: number };
+				error?: string;
+			};
+		} catch (cause) {
+			throw new Error(`not JSON: ${report.slice(0, 200)}`, { cause });
+		}
+	};
+
+	it("is JSON, so the model reads it the way it reads the LSP surface", async () => {
+		const filePath = await tempFile("a.js", "const a = 1;\n");
+		const tool = createCheckFileTool({ cwd: path.dirname(filePath) });
+
+		const parsed = parse(
+			(await tool.execute({ paths: [filePath] }, {} as never)) as string,
+		);
+
+		expect(parsed.files).toHaveLength(1);
+		expect(parsed.files[0]?.checked).toBe("parsed");
+		expect(parsed.files[0]?.diagnostics).toEqual([]);
+	});
+
+	it("carries the diagnostic for a file that does not parse", async () => {
+		const filePath = await tempFile("broken.js", "let a = (1;\n");
+		const tool = createCheckFileTool({ cwd: path.dirname(filePath) });
+
+		const parsed = parse(
+			(await tool.execute({ paths: [filePath] }, {} as never)) as string,
+		);
+		const diagnostics = parsed.files[0]?.diagnostics as Array<
+			Record<string, unknown>
+		>;
+
+		expect(diagnostics.length).toBeGreaterThan(0);
+		expect(diagnostics[0]).toHaveProperty("range");
+		expect(diagnostics[0]?.severity).toBe(1);
+		expect(typeof diagnostics[0]?.message).toBe("string");
+	});
+
+	it("represents a file it could not read, rather than dropping it", async () => {
+		// Dropping it would leave the model to notice an absence, which is the
+		// one thing a list cannot make it do.
+		const tool = createCheckFileTool();
+
+		const parsed = parse(
+			(await tool.execute(
+				{ paths: ["/nope/does-not-exist.js"] },
+				{} as never,
+			)) as string,
+		);
+
+		expect(parsed.files).toHaveLength(1);
+		expect(typeof parsed.files[0]?.error).toBe("string");
+	});
+
+	it("keeps the checker's own verdict beside the syntax one", async () => {
+		const filePath = await tempFile("a.js", "const a = 1;\n");
+		const tool = createCheckFileTool({
+			cwd: path.dirname(filePath),
+			lintCommand: "biome check",
+			runLintCommand: async () => ({
+				exitCode: 1,
+				output: "a.js:1:7 lint/style/noVar",
+			}),
+		});
+
+		const parsed = parse(
+			(await tool.execute({ paths: [filePath] }, {} as never)) as string,
+		);
+		const lint = parsed.files[0]?.lint as Record<string, unknown>;
+
+		expect(lint.exitCode).toBe(1);
+		expect(String(lint.output)).toContain("lint/style/noVar");
+	});
+
+	it("says a clean checker ran, so silence is never inferred", async () => {
+		// The distinction the prose was careful about, kept: `exitCode: 0` with
+		// an empty output is a checker that ran and passed, which is not the
+		// same as no checker at all -- there the key is absent.
+		const filePath = await tempFile("a.js", "const a = 1;\n");
+		const withLint = createCheckFileTool({
+			cwd: path.dirname(filePath),
+			lintCommand: "biome check",
+			runLintCommand: async () => ({ exitCode: 0, output: "" }),
+		});
+		const without = createCheckFileTool({ cwd: path.dirname(filePath) });
+
+		const ran = parse(
+			(await withLint.execute({ paths: [filePath] }, {} as never)) as string,
+		);
+		const never = parse(
+			(await without.execute({ paths: [filePath] }, {} as never)) as string,
+		);
+
+		expect((ran.files[0]?.lint as Record<string, unknown>).exitCode).toBe(0);
+		expect(never.files[0]?.lint).toBeUndefined();
+	});
+
+	it("still answers when given no paths", async () => {
+		const tool = createCheckFileTool();
+
+		const parsed = parse(
+			(await tool.execute({ paths: [] }, {} as never)) as string,
+		);
+
+		expect(parsed.files).toEqual([]);
+		expect(String(parsed.error)).toMatch(/path/i);
+	});
+
+	it("caps a checker that will not stop talking", async () => {
+		// A build log is not a diagnostic. The prose renderer capped this and
+		// the JSON one has to as well, or one failing command puts a megabyte
+		// into the transcript compaction exists to remove.
+		const filePath = await tempFile("a.js", "const a = 1;\n");
+		const tool = createCheckFileTool({
+			cwd: path.dirname(filePath),
+			lintCommand: "noisy",
+			runLintCommand: async () => ({ exitCode: 1, output: "x".repeat(50_000) }),
+		});
+
+		const parsed = parse(
+			(await tool.execute({ paths: [filePath] }, {} as never)) as string,
+		);
+		const lint = parsed.files[0]?.lint as { output: string };
+
+		expect(lint.output.length).toBeLessThan(10_000);
+		expect(lint.output).toMatch(/truncated/i);
+	});
+
+	it("describes the shape it actually returns", async () => {
+		// The drift this catches is the one that just happened: the answer
+		// changed and the description still promised "plain text, no object to
+		// unpack". A description that lies about its own result is worse than
+		// an unfamiliar result, because the model acts on the description.
+		const filePath = await tempFile("a.js", "const a = 1;\n");
+		const tool = createCheckFileTool({ cwd: path.dirname(filePath) });
+		const parsed = parse(
+			(await tool.execute({ paths: [filePath] }, {} as never)) as string,
+		);
+
+		const described = CHECK_FILE_TOOL_DESCRIPTION.toLowerCase();
+		expect(described).not.toContain("plain text");
+		for (const key of ["files", "uri", "checked", "diagnostics"]) {
+			expect(described).toContain(key);
+		}
+		// Every top-level key the answer carries is one the description names.
+		for (const key of Object.keys(parsed.files[0] ?? {})) {
+			expect(described).toContain(key.toLowerCase());
+		}
+	});
+
+	it("does not spend 40% of the answer on indentation", async () => {
+		// Measured: a two-file answer is 1,236 chars indented and 739 compact.
+		// A tool called after every edit pays that on every call.
+		const filePath = await tempFile("a.js", "const a = 1;\n");
+		const tool = createCheckFileTool({ cwd: path.dirname(filePath) });
+
+		const report = (await tool.execute(
+			{ paths: [filePath] },
+			{} as never,
+		)) as string;
+
+		expect(report).not.toMatch(/\n\s{2,}"/);
+		expect(JSON.parse(report)).toBeTruthy();
 	});
 });

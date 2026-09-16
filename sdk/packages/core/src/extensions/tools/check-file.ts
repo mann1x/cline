@@ -65,9 +65,13 @@ For \`.html\` files each \`<script>\` block is parsed as JavaScript and the line
 
 Read the bound carefully. This reports **syntax**, not meaning: a file that parses may still call a function that does not exist, and this will not say so. It is not a type checker, it does not run tests, and it does not know your project's lint rules — for those, use \`run_commands\`.
 
-Output: plain text, one section per file you named. A file with nothing wrong says so in one line. There is no object to unpack and no \`success\` field — problems being listed is this tool working, not failing.
+Output: JSON, in the shape a language server answers in. \`files\` holds one entry per path you named, each with \`uri\`, \`checked\` and \`diagnostics\`. There is no \`success\` field — diagnostics being listed is this tool working, not failing.
 
-When a file's brackets do not match, a \`Delimiter scan\` section names the line to edit and how many brackets that line is out by, one line per place the trouble starts — a file can be broken in several spots at once, so fix every line it lists in one edit rather than one per round trip. Edit the lines it names; do not re-derive the balance by hand or with a script you write, which costs more thinking than you have and counts brackets inside strings, comments and regex literals that this scan skips. A parse error is always reported where the parser gave up, which is the closing bracket; the line named here is the one the error cannot name.`;
+\`checked\` says which check actually ran, and you have to read it before calling a file clean: \`parsed\` a real parser was satisfied, \`delimiters\` only the bracket scan reads this language so anything past brackets is unchecked, \`none\` nothing here reads this file type at all — empty \`diagnostics\` there means nothing was checked, not that the file is sound.
+
+Each diagnostic carries \`range\` (zero-based line and character), \`severity\` (1 = error) and \`message\`. \`located: false\` means the parser could not name a position, so the range is a placeholder rather than a claim about the top of the file. \`complexity\` appears on a file big enough to be worth a word about — a note to you, not a diagnostic.
+
+When a file's brackets do not match, a diagnostic names the line to edit and how many brackets that line is out by, one line per place the trouble starts — a file can be broken in several spots at once, so fix every line it lists in one edit rather than one per round trip. Edit the lines it names; do not re-derive the balance by hand or with a script you write, which costs more thinking than you have and counts brackets inside strings, comments and regex literals that this scan skips. A parse error is always reported where the parser gave up, which is the closing bracket; the line named here is the one the error cannot name.`;
 
 /**
  * The description when the host has a real checker to point at.
@@ -99,9 +103,13 @@ For \`.html\` files each \`<script>\` block is parsed as JavaScript and the line
 
 Read the bound: this is as good as the command behind it. A checker that does not cover a language reports nothing for it, and nothing reported is not the same as clean.
 
-Output: plain text, one section per file you named. A file with nothing wrong says so in one line. There is no object to unpack and no \`success\` field — problems being listed is this tool working, not failing.
+Output: JSON, in the shape a language server answers in. \`files\` holds one entry per path you named, each with \`uri\`, \`checked\` and \`diagnostics\`. There is no \`success\` field — diagnostics being listed is this tool working, not failing.
 
-When a file's brackets do not match, a \`Delimiter scan\` section names the line to edit and how many brackets that line is out by, one line per place the trouble starts — a file can be broken in several spots at once, so fix every line it lists in one edit rather than one per round trip. Edit the lines it names; do not re-derive the balance by hand or with a script you write, which costs more thinking than you have and counts brackets inside strings, comments and regex literals that this scan skips. A parse error is always reported where the parser gave up, which is the closing bracket; the line named here is the one the error cannot name.`;
+\`checked\` says which check actually ran, and you have to read it before calling a file clean: \`parsed\` a real parser was satisfied, \`delimiters\` only the bracket scan reads this language so anything past brackets is unchecked, \`none\` nothing here reads this file type at all — empty \`diagnostics\` there means nothing was checked, not that the file is sound.
+
+Each diagnostic carries \`range\` (zero-based line and character), \`severity\` (1 = error) and \`message\`. \`located: false\` means the parser could not name a position, so the range is a placeholder rather than a claim about the top of the file. \`complexity\` appears on a file big enough to be worth a word about — a note to you, not a diagnostic. \`lint\` carries what your own checker said: \`command\`, \`exitCode\` and \`output\`. \`exitCode: 0\` with empty output means it ran and found nothing; the key missing altogether means no checker ran, which is not the same thing.
+
+When a file's brackets do not match, a diagnostic names the line to edit and how many brackets that line is out by, one line per place the trouble starts — a file can be broken in several spots at once, so fix every line it lists in one edit rather than one per round trip. Edit the lines it names; do not re-derive the balance by hand or with a script you write, which costs more thinking than you have and counts brackets inside strings, comments and regex literals that this scan skips. A parse error is always reported where the parser gave up, which is the closing bracket; the line named here is the one the error cannot name.`;
 }
 
 export const CHECK_FILE_TOOL_INPUT_SCHEMA = {
@@ -547,46 +555,6 @@ export function checkSource(filePath: string, text: string): string {
 }
 
 /**
- * What the configured checker said about one file.
- *
- * A run that could not happen at all is reported as such rather than swallowed:
- * silence here would read as a pass, and a model told this tool is the linter
- * would believe it.
- */
-async function describeLint(
-	template: string,
-	run: (
-		template: string,
-		filePath: string,
-		signal?: AbortSignal,
-	) => Promise<LintCommandResult>,
-	absolutePath: string,
-	signal?: AbortSignal,
-): Promise<string> {
-	const command = buildLintCommand(template, absolutePath);
-	let result: LintCommandResult;
-	try {
-		result = await run(template, absolutePath, signal);
-	} catch (error) {
-		return `\`${command}\` could not be run: ${
-			error instanceof Error ? error.message : String(error)
-		}`;
-	}
-	const output = result.output.trim();
-	if (result.exitCode === 0 && output === "") {
-		return `\`${command}\` passed with no output.`;
-	}
-	const shown =
-		output.length > LINT_OUTPUT_LIMIT
-			? `${output.slice(0, LINT_OUTPUT_LIMIT)}\n(truncated at ${LINT_OUTPUT_LIMIT} characters)`
-			: output;
-	return [
-		`\`${command}\` exited ${result.exitCode}.`,
-		shown || "(no output)",
-	].join("\n");
-}
-
-/**
  * The checker as a tool.
  *
  * Reading is plain `fs`: this runs in the same process as the rest of the
@@ -620,6 +588,84 @@ async function describeFileComplexity(
 		return score ? describeComplexity(score, displayPath) : undefined;
 	} catch {
 		return undefined;
+	}
+}
+
+/** One file in the tool's answer. Either it was checked, or it could not be. */
+export type CheckFileEntry =
+	| (CheckFileReport & {
+			lint?: CheckFileLint;
+			complexity?: string;
+	  })
+	| { uri: string; error: string };
+
+/** What the user's own checker said, when one is configured. */
+export interface CheckFileLint {
+	command: string;
+	/** Absent when the command could not be run at all. */
+	exitCode?: number;
+	output: string;
+	/** Set when the command itself failed to launch. */
+	error?: string;
+}
+
+export interface CheckFileAnswer {
+	files: CheckFileEntry[];
+	/** Present only when more files were named than could be checked. */
+	notChecked?: { named: number; limit: number };
+	/** Present only when the call could not be served at all. */
+	error?: string;
+}
+
+/**
+ * The answer, as JSON.
+ *
+ * Compact, not indented. Indenting reads better to a person and I wrote it
+ * that way first, but measured on a two-file answer it costs 40% more
+ * characters — an LSP `range` alone becomes twelve lines of mostly zeroes.
+ * This tool is called after every edit, and the one measured fact about it is
+ * that calling it more often cost 1.8x the wall time for no verdict gain; the
+ * per-call price is the lever that matters, and a model does not need the
+ * newlines to read JSON.
+ */
+function render(answer: CheckFileAnswer): string {
+	return JSON.stringify(answer);
+}
+
+/** Run the configured checker and shape what it said. */
+async function runLintCommand(
+	template: string,
+	run: NonNullable<Parameters<typeof createCheckFileTool>[0]>["runLintCommand"],
+	filePath: string,
+	signal?: AbortSignal,
+): Promise<CheckFileLint> {
+	const command = buildLintCommand(template, filePath);
+	if (!run) {
+		return { command, output: "", error: "no runner supplied" };
+	}
+	try {
+		const result = await run(template, filePath, signal);
+		const output = result.output.trim();
+		return {
+			command,
+			exitCode: result.exitCode,
+			// A linter that says more than this is saying it twice, and the
+			// result lands in a transcript that compaction has to carry.
+			output:
+				output.length > LINT_OUTPUT_LIMIT
+					? `${output.slice(0, LINT_OUTPUT_LIMIT)}\n(truncated at ${LINT_OUTPUT_LIMIT} characters)`
+					: output,
+		};
+	} catch (error) {
+		// Not a pass. The model has been told this tool is the linter and would
+		// believe an empty answer.
+		return {
+			command,
+			output: "",
+			error: `could not be run: ${
+				error instanceof Error ? error.message : String(error)
+			}`,
+		};
 	}
 }
 
@@ -664,48 +710,61 @@ export function createCheckFileTool(options?: {
 				.filter((entry) => typeof entry === "string" && entry.trim() !== "")
 				.slice(0, MAX_FILES_PER_CALL);
 			if (paths.length === 0) {
-				return "No files named. Pass the paths you want checked in `paths`.";
+				return render({
+					files: [],
+					error: "No files named. Pass the paths you want checked in `paths`.",
+				});
 			}
 			const root = options?.cwd ?? process.cwd();
-			const sections: string[] = [];
+			const files: CheckFileEntry[] = [];
 			for (const entry of paths) {
 				const filePath = path.isAbsolute(entry)
 					? entry
 					: path.resolve(root, entry);
 				try {
 					const text = await fs.readFile(filePath, "utf-8");
-					const syntax = checkSource(entry, text);
-					const checked =
+					const report = checkFileReport(entry, text);
+					const lint =
 						lintCommand && runLint
-							? `${syntax}\n${await describeLint(
+							? await runLintCommand(
 									lintCommand,
 									runLint,
 									filePath,
 									context?.signal,
-								)}`
-							: syntax;
+								)
+							: undefined;
 					const complexity = await describeFileComplexity(
 						entry,
 						filePath,
 						text,
 					);
-					sections.push(complexity ? `${checked}\n${complexity}` : checked);
+					files.push({
+						...report,
+						...(lint ? { lint } : {}),
+						...(complexity ? { complexity } : {}),
+					});
 				} catch (error) {
-					sections.push(
-						`## ${entry}\nCould not read this file: ${
+					// Represented rather than dropped: an absence is the one thing
+					// a list cannot make a reader notice.
+					files.push({
+						uri: entry,
+						error: `Could not read this file: ${
 							error instanceof Error ? error.message : String(error)
 						}`,
-					);
+					});
 				}
 			}
-			if (requested.length > MAX_FILES_PER_CALL) {
-				sections.push(
-					`Only the first ${MAX_FILES_PER_CALL} files were checked; ${
-						requested.length - MAX_FILES_PER_CALL
-					} more were named.`,
-				);
-			}
-			return sections.join("\n\n");
+			return render({
+				files,
+				...(requested.length > MAX_FILES_PER_CALL
+					? {
+							notChecked: {
+								named: requested.length,
+								limit: MAX_FILES_PER_CALL,
+							},
+						}
+					: {}),
+			});
 		},
 	} as unknown as AgentTool<{ paths: string[] }, string>;
 }
