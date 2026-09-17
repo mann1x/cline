@@ -81,3 +81,41 @@ describe("CLI compaction mode helpers", () => {
 		expect(getNextCliCompactionMode("off")).toBe("basic");
 	});
 });
+
+/**
+ * The compaction the tail stops surviving, as an arm can set it.
+ *
+ * The default is measured and lives in core; what the CLI owes is a way to run
+ * the arm that checks it, including the arm that turns it off.
+ */
+describe("the forced full compaction", () => {
+	it("is absent unless asked for, so core's measured default applies", () => {
+		expect(buildCliCompactionConfig("agentic")).toEqual({
+			enabled: true,
+			strategy: "agentic",
+		});
+	});
+
+	it("carries the compaction it starts at", () => {
+		expect(buildCliCompactionConfig("agentic", 3)).toEqual({
+			enabled: true,
+			strategy: "agentic",
+			forceFullFromCompaction: 3,
+		});
+	});
+
+	// Zero is the off switch and has to survive as a value: a `?? default` or a
+	// positive-only parser between here and core would read it as "unset" and
+	// turn the behaviour back on.
+	it("keeps a zero, which is how the behaviour is turned off", () => {
+		expect(buildCliCompactionConfig("agentic", 0)).toEqual({
+			enabled: true,
+			strategy: "agentic",
+			forceFullFromCompaction: 0,
+		});
+	});
+
+	it("says nothing about the tail when compaction is off entirely", () => {
+		expect(buildCliCompactionConfig("off", 2)).toEqual({ enabled: false });
+	});
+});

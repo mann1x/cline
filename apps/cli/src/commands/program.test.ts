@@ -139,6 +139,19 @@ describe("--expert-model and its knobs", () => {
 		expect(args.struggleMaxPerTask).toBe("4");
 	});
 
+	// The compaction threshold travels the same way and for the same reason:
+	// the default is measured, and the arm that checks it runs from here.
+	it("carries the forced full compaction through to the parsed args", () => {
+		expect(
+			parse(["--force-full-from-compaction", "3"]).forceFullFromCompaction,
+		).toBe("3");
+		// Zero is the off switch and has to reach the parser as a value.
+		expect(
+			parse(["--force-full-from-compaction", "0"]).forceFullFromCompaction,
+		).toBe("0");
+		expect(parse([]).forceFullFromCompaction).toBeUndefined();
+	});
+
 	it("is absent when no expert is named", () => {
 		// Absent has to stay absent all the way down: it is what closes the
 		// escalation paths, rather than offering a tool with nobody behind it.

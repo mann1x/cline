@@ -198,6 +198,10 @@ export function addRootOptions(cmd: Command): Command {
 				"Refused edits in a row before the model is told to consider the expert (default: 3)",
 			)
 			.option(
+				"--force-full-from-compaction <n>",
+				"The compaction from which the recency tail is dropped and the summary becomes the whole context, counting from 1 (default: 2). Measured: across 335 harness runs the fix rate falls 85% -> 63% -> 50% -> 25% with each compaction a run has been through. 1 drops the tail on every compaction; 0 never does",
+			)
+			.option(
 				"--parallel-sessions <count>",
 				"How many requests this endpoint serves at once (OLLAMA_NUM_PARALLEL, --parallel); bounds concurrent agents (default: 1, max: 10)",
 			)
@@ -513,6 +517,8 @@ export function commanderToParsedArgs(program: Command): ParsedArgs {
 		result.struggleMaxPerTask = opts.struggleMaxPerTask;
 	if (opts.struggleEditStreak !== undefined)
 		result.struggleEditStreak = opts.struggleEditStreak;
+	if (opts.forceFullFromCompaction !== undefined)
+		result.forceFullFromCompaction = opts.forceFullFromCompaction;
 	if (opts.expertAlternate !== undefined)
 		result.expertAlternate = opts.expertAlternate;
 	if (opts.expertNoRelay !== undefined)

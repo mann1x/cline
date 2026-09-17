@@ -32,14 +32,25 @@ export function parseCliCompactionMode(
 
 export function buildCliCompactionConfig(
 	mode?: CliCompactionMode,
+	/**
+	 * The compaction from which the recency tail is dropped, when a run says.
+	 *
+	 * Passed through rather than defaulted here: core carries the measured
+	 * number, and a default repeated in the caller is one that goes stale
+	 * silently. `0` is a value and not an absence -- it is how the behaviour is
+	 * turned off -- so it must not meet a `??` on the way down.
+	 */
+	forceFullFromCompaction?: number,
 ): NonNullable<Config["compaction"]> {
-	if (mode === undefined) {
-		return { enabled: true };
-	}
 	if (mode === "off") {
 		return { enabled: false };
 	}
-	return { enabled: true, strategy: mode };
+	const tail =
+		forceFullFromCompaction === undefined ? {} : { forceFullFromCompaction };
+	if (mode === undefined) {
+		return { enabled: true, ...tail };
+	}
+	return { enabled: true, strategy: mode, ...tail };
 }
 
 export function getCliCompactionMode(config: Config): CliCompactionMode {

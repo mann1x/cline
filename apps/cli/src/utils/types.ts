@@ -187,6 +187,14 @@ export interface ParsedArgs {
 	struggleMinIteration?: string;
 	struggleMaxPerTask?: string;
 	struggleEditStreak?: string;
+	/**
+	 * The compaction from which the recency tail is dropped. From the flag.
+	 *
+	 * A string like the struggle thresholds above, and for the same reason:
+	 * absent leaves core's measured default in place, and `"0"` is a value that
+	 * turns the behaviour off rather than an absence that restores it.
+	 */
+	forceFullFromCompaction?: string;
 	/** Let the base model run while the expert works. From the flag. */
 	expertAlternate?: boolean;
 	/** With `expertAlternate`, wake the base on the clock and nothing else. */

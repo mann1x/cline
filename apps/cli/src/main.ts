@@ -1008,6 +1008,21 @@ export async function runCli(): Promise<void> {
 		args,
 		persistedGlobalSettings,
 	);
+	/**
+	 * The compaction from which the tail is dropped, when the run says so.
+	 *
+	 * Non-negative rather than positive: `0` is the value that turns the
+	 * behaviour off, so it has to survive as a number. Anything that is not a
+	 * whole number at all stays `undefined` and core's measured default
+	 * applies, which is the same contract the struggle flags have.
+	 */
+	const forceFullFromCompaction = ((value: string | undefined) => {
+		if (value === undefined) {
+			return undefined;
+		}
+		const parsed = Number(value);
+		return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
+	})(args.forceFullFromCompaction);
 
 	// Register the SDK early logger as early as possible — before any
 	// provider settings reads — so the full startup sequence is captured.
@@ -1344,7 +1359,13 @@ export async function runCli(): Promise<void> {
 					),
 			}),
 			checkpoint: CLI_DEFAULT_CHECKPOINT_CONFIG,
-			compaction: buildCliCompactionConfig(effectiveCompactionMode),
+			compaction: buildCliCompactionConfig(
+				effectiveCompactionMode,
+				// Not `positive()`: zero is the off switch here, and a
+				// positive-only parser would read it as "unset" and hand core
+				// its default, turning the behaviour back on.
+				forceFullFromCompaction,
+			),
 			timeoutSeconds: args.timeoutSeconds,
 			sandbox: sandboxEnabled,
 			sandboxDataDir,
