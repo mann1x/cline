@@ -24,6 +24,7 @@ type ProviderSettingsLike = {
 	readonly reasoning?: ReasoningConfig
 	readonly sampling?: SamplingConfig
 	readonly polykv?: PolykvConfig
+	readonly outputBudget?: OutputBudgetConfig
 	readonly auth?: AuthConfig
 	readonly extras?: ExtrasConfig
 }
@@ -31,6 +32,7 @@ type ProviderSettingsLike = {
 type ReasoningConfig = NonNullable<EffectiveProviderConfig["reasoning"]>
 type SamplingConfig = NonNullable<EffectiveProviderConfig["sampling"]>
 type PolykvConfig = NonNullable<EffectiveProviderConfig["polykv"]>
+type OutputBudgetConfig = NonNullable<EffectiveProviderConfig["outputBudget"]>
 
 /** Sampling fields that are read as numbers, and the sign each one allows. */
 const SAMPLING_NUMBER_FIELDS = {
@@ -100,6 +102,29 @@ const SAMPLING_RANGES: Partial<Record<keyof typeof SAMPLING_NUMBER_FIELDS, { min
  * a real value throughout (`prefillMaxSlots: 0` is "off"), so the numbers are
  * range-checked, never truthiness-checked.
  */
+/**
+ * The output budget, narrowed to what the schema accepts.
+ *
+ * A stored `mode` that is neither value is dropped rather than carried: the
+ * resolver treats an unknown mode as `auto` anyway, and showing the panel a
+ * value it cannot render is worse than showing it the default.
+ */
+function readOutputBudget(settings: Record<string, unknown>): OutputBudgetConfig | undefined {
+	const budget = settings.outputBudget
+	if (!isPlainRecord(budget)) {
+		return undefined
+	}
+	const result: { mode?: "auto" | "manual"; maxTokens?: number } = {}
+	if (budget.mode === "auto" || budget.mode === "manual") {
+		result.mode = budget.mode
+	}
+	const maxTokens = readPositiveInteger(budget.maxTokens)
+	if (maxTokens !== undefined) {
+		result.maxTokens = maxTokens
+	}
+	return Object.keys(result).length > 0 ? (result as OutputBudgetConfig) : undefined
+}
+
 function readPolykv(settings: Record<string, unknown>): PolykvConfig | undefined {
 	const polykv = settings.polykv
 	if (!isPlainRecord(polykv)) {
@@ -395,6 +420,7 @@ function readProviderSettings(providerId: ProviderId): ConfigParts {
 			reasoning: readReasoning(settings),
 			sampling: readSampling(settings),
 			polykv: readPolykv(settings),
+			outputBudget: readOutputBudget(settings),
 			auth: readAuth(settings),
 			extras: isPlainRecord(settings.extras) ? settings.extras : undefined,
 		} satisfies ProviderSettingsLike
@@ -587,6 +613,7 @@ export function buildEffectiveProviderConfig(providerId: ProviderId): EffectiveP
 	// Same as reasoning: providers.json is the only writer.
 	assignIfDefined(merged, "sampling", providerSettings.sampling)
 	assignIfDefined(merged, "polykv", providerSettings.polykv)
+	assignIfDefined(merged, "outputBudget", providerSettings.outputBudget)
 	assignIfDefined(merged, "auth", stateConfig.auth ?? providerSettings.auth)
 	assignIfDefined(merged, "extras", mergeExtras(providerSettings.extras, stateConfig.extras))
 

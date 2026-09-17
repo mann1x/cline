@@ -379,3 +379,65 @@ describe("the PolyKV section", () => {
 		expect(config.polykv).toBeUndefined()
 	})
 })
+
+describe("the output budget", () => {
+	// The read half again. This one has a second reader: the session factory
+	// reads the same section to size `num_predict`/`n_predict` and to state the
+	// cap in the system prompt, so a section that does not read back leaves the
+	// model told one number and held to another.
+	it("reads the stored section back", async () => {
+		const { buildEffectiveProviderConfig } = await import("./effective-config")
+		mocks.setProviderSettings({
+			opencoti: {
+				provider: "opencoti",
+				outputBudget: { mode: "manual", maxTokens: 96_000 },
+			},
+		})
+
+		const config = buildEffectiveProviderConfig(parseProviderId("opencoti"))
+
+		expect(config.outputBudget).toEqual({ mode: "manual", maxTokens: 96_000 })
+	})
+
+	it("keeps an auto ceiling on its own", async () => {
+		const { buildEffectiveProviderConfig } = await import("./effective-config")
+		mocks.setProviderSettings({
+			ollama: { provider: "ollama", outputBudget: { mode: "auto", maxTokens: 200_000 } },
+		})
+
+		const config = buildEffectiveProviderConfig(parseProviderId("ollama"))
+
+		expect(config.outputBudget).toEqual({ mode: "auto", maxTokens: 200_000 })
+	})
+
+	it("drops a mode that is neither", async () => {
+		const { buildEffectiveProviderConfig } = await import("./effective-config")
+		mocks.setProviderSettings({
+			ollama: { provider: "ollama", outputBudget: { mode: "adaptive", maxTokens: 64_000 } },
+		})
+
+		const config = buildEffectiveProviderConfig(parseProviderId("ollama"))
+
+		expect(config.outputBudget).toEqual({ maxTokens: 64_000 })
+	})
+
+	it("drops a cap that cannot mean anything", async () => {
+		const { buildEffectiveProviderConfig } = await import("./effective-config")
+		mocks.setProviderSettings({
+			ollama: { provider: "ollama", outputBudget: { mode: "manual", maxTokens: 0 } },
+		})
+
+		const config = buildEffectiveProviderConfig(parseProviderId("ollama"))
+
+		expect(config.outputBudget).toEqual({ mode: "manual" })
+	})
+
+	it("leaves the section absent when nothing stored one", async () => {
+		const { buildEffectiveProviderConfig } = await import("./effective-config")
+		mocks.setProviderSettings({ ollama: { provider: "ollama" } })
+
+		const config = buildEffectiveProviderConfig(parseProviderId("ollama"))
+
+		expect(config.outputBudget).toBeUndefined()
+	})
+})

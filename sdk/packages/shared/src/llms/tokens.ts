@@ -62,6 +62,11 @@ export const THINKING_CHARS_PER_TOKEN = 2.7;
  * 5.07 while the estimate it fed ran 1.7x high, and the remaining-context term
  * of the output cap decayed from 14,695 tokens to 60 over ten turns.
  */
+/**
+ * How much of a measured count must survive the reasoning term for the
+ * remainder to be evidence about the rest of the request.
+ */
+const RESIDUAL_SIGNAL_SHARE = 0.2;
 const MIN_OBSERVED_CHARS_PER_TOKEN = 1.2;
 const MAX_OBSERVED_CHARS_PER_TOKEN = 16;
 
@@ -95,6 +100,7 @@ interface TokenCalibrationState {
 	charsPerToken?: number;
 	thinkingCharsPerToken?: number;
 	requestTokens?: number;
+	requestTokensChars?: number;
 	requestTokensOwner?: string;
 	contextOverflow?: ContextOverflowReport;
 	contextOverflowOwner?: string;
@@ -236,6 +242,53 @@ export function observeThinkingTokens(chars: number, tokens: number): void {
 }
 
 /** Tokens for reasoning text, which is denser than the rest of a request. */
+/**
+ * What this request costs, anchored to the last one that was actually counted.
+ *
+ * A character estimate of a whole transcript compounds every error in the ratio
+ * across every character. Measured live on 2026-09-17 that estimate ran between
+ * 0.73x and 3.30x the provider's own count on the same conversation, the worst
+ * being 270,826 against a measured 117,430 -- and it was that number, not the
+ * compaction trigger, that forced a compaction at 56% of the window.
+ *
+ * The provider already tells us what the previous request cost. So only the
+ * difference needs projecting: the characters added since are estimated, and
+ * everything before them is the measurement. The ratio can be wrong by a
+ * factor of two and the answer stays close, because it applies to a delta
+ * rather than to the whole.
+ *
+ * Falls back to the plain estimate when there is nothing to anchor to -- the
+ * first request of a session, or a measurement belonging to another
+ * conversation.
+ */
+const positive = (value: unknown): value is number =>
+	typeof value === "number" && Number.isFinite(value) && value > 0;
+
+export function anchoredRequestTokens(
+	chars: number,
+	reasoningChars: number,
+	reader?: string,
+): number {
+	const plain = (total: number, reasoning: number): number =>
+		reasoning > 0 && reasoning < total
+			? estimateTokens(total - reasoning) + estimateThinkingTokens(reasoning)
+			: estimateTokens(total);
+	const state = calibration();
+	const anchorTokens = lastObservedRequestTokens(reader);
+	const anchorChars = state.requestTokensChars;
+	if (!positive(anchorTokens) || !positive(anchorChars)) {
+		return plain(chars, reasoningChars);
+	}
+	const delta = chars - anchorChars;
+	if (delta === 0) {
+		return anchorTokens;
+	}
+	// The whole-request ratio, not the content-only one: the delta is a mix of
+	// both populations and nothing here knows how it splits.
+	const ratio = anchorChars / anchorTokens;
+	return Math.max(1, Math.round(anchorTokens + delta / ratio));
+}
+
 export function estimateThinkingTokens(chars: number): number {
 	return Math.max(1, Math.ceil(chars / thinkingCharsPerToken()));
 }
@@ -290,6 +343,22 @@ export function observeRequestTokens(
 			ratio = (chars - reasoning) / remainingTokens;
 		}
 	}
+	// The residual has to be big enough to say something. When the reasoning
+	// term claims nearly the whole count, `remainingTokens` is the difference of
+	// two large numbers and the ratio it yields is noise amplified: measured on
+	// 2026-09-17, `charsPerToken` climbed 4.11 -> 13.13 across one session as the
+	// reasoning share rose, then fell back to 3.04 once a compaction removed it.
+	// A ratio derived from that residual describes the error in the reasoning
+	// rate, not the density of the content.
+	if (
+		reasoning > 0 &&
+		tokens - estimateThinkingTokens(reasoning) < tokens * RESIDUAL_SIGNAL_SHARE
+	) {
+		state.requestTokens = tokens;
+		state.requestTokensChars = chars;
+		state.requestTokensOwner = owner;
+		return;
+	}
 	if (ratio < MIN_OBSERVED_CHARS_PER_TOKEN) {
 		// A count this function has just judged impossible is not evidence of
 		// what the request cost either -- and the compaction trigger prefers it
@@ -304,6 +373,7 @@ export function observeRequestTokens(
 		return;
 	}
 	state.requestTokens = tokens;
+	state.requestTokensChars = chars;
 	state.requestTokensOwner = owner;
 	if (ratio > MAX_OBSERVED_CHARS_PER_TOKEN) {
 		return;
@@ -430,6 +500,7 @@ export function resetTokenCalibration(): void {
 	state.charsPerToken = undefined;
 	state.thinkingCharsPerToken = undefined;
 	state.requestTokens = undefined;
+	state.requestTokensChars = undefined;
 	state.requestTokensOwner = undefined;
 	state.contextOverflow = undefined;
 	state.contextOverflowOwner = undefined;

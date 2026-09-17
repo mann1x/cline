@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+	anchoredRequestTokens,
 	CHARS_PER_TOKEN,
 	charsPerToken,
 	consumeContextOverflow,
@@ -317,5 +318,90 @@ describe("counting reasoning apart from the rest", () => {
 		observeThinkingTokens(43_000, 16_000);
 
 		expect(thinkingCharsPerToken()).toBeCloseTo(43_000 / 16_000, 5);
+	});
+});
+
+/**
+ * The estimator's behaviour measured live on 2026-09-17, across the v9-agentic
+ * sessions on pandorum. `charsPerToken` swung 3.00 -> 13.13 -> 3.04 *within
+ * single sessions* and the estimate ran between 0.73x and 3.30x the provider's
+ * own count, the worst being 270,826 estimated against 117,430 measured.
+ *
+ * The cause is structural, not a bad constant: `observeRequestTokens` charges
+ * reasoning at a fixed rate and back-solves the content ratio from what is
+ * left, so every error in the reasoning term is pushed into `charsPerToken` --
+ * and because the divisor is a difference, the push grows as the reasoning
+ * share grows. The same file already warns against exactly this shape for
+ * `requestOverheadTokens`: "Measured directly, not left over from a
+ * subtraction."
+ *
+ * Two changes below. The estimate is anchored to the last request that was
+ * actually counted, so only the delta is ever projected; and an observation
+ * whose reasoning term has eaten the whole count is refused, because its
+ * residual carries no signal about the rest of the request.
+ */
+describe("anchoredRequestTokens", () => {
+	beforeEach(() => {
+		resetTokenCalibration();
+	});
+
+	it("falls back to the plain estimate before anything is measured", () => {
+		expect(anchoredRequestTokens(30_000, 0, "s1")).toBe(estimateTokens(30_000));
+	});
+
+	it("counts only the characters added since the last measured request", () => {
+		// 400,000 chars really cost 70,000 tokens: 5.71 chars/token.
+		observeRequestTokens(400_000, 70_000, 0, "s1");
+		// 20,000 chars later, the answer must be near 70,000 -- not a fresh
+		// projection of all 420,000.
+		const anchored = anchoredRequestTokens(420_000, 0, "s1");
+		expect(anchored).toBeGreaterThan(70_000);
+		expect(anchored).toBeLessThan(76_000);
+	});
+
+	it("does not drift when the ratio is wrong, because the anchor is not", () => {
+		observeRequestTokens(400_000, 70_000, 0, "s1");
+		// Even with a ratio that would project 2x, the anchor holds the answer
+		// to the measured count plus the delta.
+		expect(anchoredRequestTokens(400_000, 0, "s1")).toBe(70_000);
+	});
+
+	it("shrinks with the transcript after a compaction", () => {
+		observeRequestTokens(400_000, 70_000, 0, "s1");
+		const anchored = anchoredRequestTokens(150_000, 0, "s1");
+		expect(anchored).toBeLessThan(70_000);
+		expect(anchored).toBeGreaterThan(0);
+	});
+
+	it("ignores an anchor belonging to another conversation", () => {
+		observeRequestTokens(400_000, 70_000, 0, "s1");
+		expect(anchoredRequestTokens(420_000, 0, "s2")).toBe(
+			estimateTokens(420_000),
+		);
+	});
+});
+
+describe("observeRequestTokens with a dominant reasoning share", () => {
+	beforeEach(() => {
+		resetTokenCalibration();
+	});
+
+	it("refuses an observation whose reasoning term has eaten the count", () => {
+		const before = charsPerToken();
+		// 300,000 reasoning chars at the 2.7 default claim 111,111 tokens
+		// against a measured 120,000, leaving 8,889 to explain 100,000 other
+		// characters -- a ratio of 11.25 that says nothing about the content.
+		observeRequestTokens(400_000, 120_000, 300_000, "s1");
+		expect(charsPerToken()).toBe(before);
+	});
+
+	it("still takes an observation where the residual carries signal", () => {
+		observeRequestTokens(400_000, 120_000, 40_000, "s1");
+		expect(charsPerToken()).not.toBe(CHARS_PER_TOKEN);
+	});
+
+	it("keeps the count even when it refuses the ratio", () => {
+		observeRequestTokens(400_000, 120_000, 300_000, "s1");
+		expect(lastObservedRequestTokens("s1")).toBe(120_000);
 	});
 });

@@ -5,6 +5,7 @@ import type {
 	Mode,
 	ModelSelection,
 	ModelSelectionOverrides,
+	OutputBudgetSettings,
 	PolykvSettings,
 	ProviderCatalog,
 	ProviderConfigPatch,
@@ -254,6 +255,7 @@ export function toRedactedProviderConfigResponse(
 			: undefined,
 		sampling: config.sampling ? { ...config.sampling, stop: [...(config.sampling.stop ?? [])] } : undefined,
 		polykv: config.polykv ? { ...config.polykv } : undefined,
+		outputBudget: config.outputBudget ? { ...config.outputBudget } : undefined,
 	})
 }
 
@@ -264,6 +266,24 @@ export function toRedactedProviderConfigResponse(
  * engine would reject must not reach providers.json looking configured -- the
  * server answers 400 to `queue`, which never shipped.
  */
+/**
+ * Narrow the proto's open `mode` string onto the union the config declares.
+ *
+ * Same reason as PolyKV's: `mode` is a plain string on the wire, and a third
+ * value must not reach providers.json looking configured. An unrecognised one
+ * is dropped, which leaves the resolver on `auto`.
+ */
+function toOutputBudgetSettings(patch: NonNullable<WriteProviderConfigPatch["outputBudget"]>): OutputBudgetSettings {
+	const mode = patch.mode === "auto" || patch.mode === "manual" ? patch.mode : undefined
+	return {
+		...(mode !== undefined ? { mode } : {}),
+		// Zero is how the wire says "empty", not a cap of nothing: a manual field
+		// the user cleared and an `auto` ceiling left at its default both arrive
+		// as 0, and both mean "the default decides".
+		...(patch.maxTokens !== undefined && patch.maxTokens > 0 ? { maxTokens: patch.maxTokens } : {}),
+	}
+}
+
 function toPolykvSettings(patch: NonNullable<WriteProviderConfigPatch["polykv"]>): PolykvSettings {
 	const mode = patch.mode === "advisory" || patch.mode === "enforced" ? patch.mode : undefined
 	const onSaturation = patch.onSaturation === "reject" || patch.onSaturation === "warn" ? patch.onSaturation : undefined
@@ -345,6 +365,16 @@ export function toProviderConfigPatch(protoPatch: WriteProviderConfigPatch | und
 			? {
 					polykv: Object.values(protoPatch.polykv).some((value) => value !== undefined)
 						? toPolykvSettings(protoPatch.polykv)
+						: null,
+				}
+			: {}),
+		// Same shape as sampling and PolyKV: an explicitly empty message clears
+		// the section, which is what the panel sends when it is reset to auto
+		// with no ceiling typed.
+		...(protoPatch.outputBudget !== undefined
+			? {
+					outputBudget: Object.values(protoPatch.outputBudget).some((value) => value !== undefined)
+						? toOutputBudgetSettings(protoPatch.outputBudget)
 						: null,
 				}
 			: {}),

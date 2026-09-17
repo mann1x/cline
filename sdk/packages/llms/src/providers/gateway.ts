@@ -16,13 +16,13 @@ import type {
 	ReasoningEffort,
 } from "@cline/shared";
 import {
-	estimateThinkingTokens,
-	estimateTokens,
+	anchoredRequestTokens,
 	measureRequestInputChars,
 	measureRequestReasoningChars,
 	noteContextOverflow,
 	noteOutputCap,
 	observeRequestTokens,
+	observeThinkingTokens,
 	ReasoningEffortSchema,
 } from "@cline/shared";
 import { toAsyncIterable } from "./async";
@@ -42,6 +42,14 @@ export type * from "@cline/shared";
  * as the answer: 32,000 is the right cap for a 128k model and for no other.
  */
 export const DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS = 32_000;
+
+/**
+ * How much of a turn's output must be reasoning before it teaches the reasoning
+ * ratio. `observeThinkingTokens` states the requirement and leaves the decision
+ * to its caller: a turn that is mostly a tool call would teach that ratio about
+ * JSON.
+ */
+const MOSTLY_REASONING_SHARE = 0.8;
 
 /** The window {@link DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS} was chosen against. */
 const DEFAULT_GATEWAY_OUTPUT_WINDOW = 128_000;
@@ -819,11 +827,19 @@ export class DefaultGateway implements Gateway {
 			inputChars,
 			measureRequestReasoningChars(request, { reasoningHistory }),
 		);
-		const estimatedInputTokens =
-			reasoningChars > 0
-				? estimateTokens(inputChars - reasoningChars) +
-					estimateThinkingTokens(reasoningChars)
-				: estimateTokens(inputChars);
+		// Anchored to the provider's own count for the previous request, so only
+		// the characters added since are projected. The pure character estimate
+		// this replaces ran between 0.73x and 3.30x the measured count on one
+		// conversation (pandorum, 2026-09-17) -- and because the overflow test
+		// below is what forces a compaction when it fails, a 2.3x reading
+		// compacted a session sitting at 56% of its window while the compaction
+		// trigger, holding the measured number, said there was room. The two
+		// paths now read the same evidence.
+		const estimatedInputTokens = anchoredRequestTokens(
+			inputChars,
+			reasoningChars,
+			request.sessionId,
+		);
 		const ceilingKey = outputCeilingKey(
 			resolved.provider.id,
 			resolved.model.id,
@@ -998,7 +1014,17 @@ async function* calibrateFromUsage(
 	reasoningChars?: number,
 	sessionId?: string,
 ): AsyncIterable<AgentModelEvent> {
+	let outputChars = 0;
+	let reasoningOutputChars = 0;
 	for await (const event of events) {
+		if (event.type === "text-delta") {
+			outputChars += event.text.length;
+		} else if (event.type === "reasoning-delta") {
+			outputChars += event.text.length;
+			reasoningOutputChars += event.text.length;
+		} else if (event.type === "tool-call-delta") {
+			outputChars += event.inputText?.length ?? 0;
+		}
 		if (
 			event.type === "usage" &&
 			isPositiveFiniteNumber(event.usage.inputTokens)
@@ -1009,6 +1035,28 @@ async function* calibrateFromUsage(
 				reasoningChars,
 				sessionId,
 			);
+		}
+		// The reasoning ratio, from the turn this stream just produced.
+		//
+		// `observeThinkingTokens` shipped complete and was never called: its only
+		// caller was its own unit test, so `thinkingCharsPerToken()` returned the
+		// hardcoded 2.7 for every request ever made while the content ratio
+		// calibrated freely around it. That mismatch is not confined to the
+		// reasoning term -- `observeRequestTokens` subtracts the reasoning
+		// estimate from the measured count before deriving the content ratio, so
+		// a wrong 2.7 moves `charsPerToken` too. Measured 2026-09-17: it swung
+		// 3.00 -> 13.13 -> 3.04 inside single sessions.
+		//
+		// Only turns that are mostly reasoning are used, as the function's own
+		// contract requires: a turn that is mostly a tool call would teach this
+		// ratio about JSON.
+		if (event.type === "usage" && isPositiveFiniteNumber(outputChars)) {
+			if (
+				isPositiveFiniteNumber(event.usage.outputTokens) &&
+				reasoningOutputChars > outputChars * MOSTLY_REASONING_SHARE
+			) {
+				observeThinkingTokens(reasoningOutputChars, event.usage.outputTokens);
+			}
 		}
 		yield event;
 	}

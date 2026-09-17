@@ -248,6 +248,27 @@ export const ProviderSettingsSchema = z.object({
 	 */
 	parallelSessions: z.number().int().min(1).max(10).optional(),
 	/**
+	 * The per-turn output budget -- Ollama's `num_predict`, llama.cpp's and
+	 * opencoti's `n_predict`, and the catalog's `maxTokens`, which are the same
+	 * quantity under three names.
+	 *
+	 * It had two homes and no owner: `sampling.numPredict` in the provider's
+	 * advanced panel, and the session's own `maxTokensPerTurn`. The first was
+	 * read for Ollama only, so an opencoti user's typed value reached the wire
+	 * (through `buildLlamaCppSamplingOptions`) but not the system prompt and not
+	 * compaction's budget -- the model was told one cap and held to another.
+	 *
+	 * `auto` sizes it from the window; `manual` sends what is typed. On `auto`
+	 * `maxTokens` is the user's own ceiling and may only lower the absolute one.
+	 * See `resolveOutputBudgetTokens`, which is where both cases are decided.
+	 */
+	outputBudget: z
+		.object({
+			mode: z.enum(["auto", "manual"]).optional(),
+			maxTokens: z.number().int().positive().optional(),
+		})
+		.optional(),
+	/**
 	 * Largest tool result this configuration sends to its model, in characters.
 	 *
 	 * Per configuration rather than global because it is read against a context

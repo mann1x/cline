@@ -232,6 +232,9 @@ describe("the provider config a profile carries", () => {
 			sampling: {},
 			// And the same for the PolyKV section.
 			polykv: {},
+			// And for the output budget: a profile that names no budget must fall
+			// back to auto rather than inherit the last profile's manual cap.
+			outputBudget: {},
 		})
 	})
 
@@ -242,6 +245,7 @@ describe("the provider config a profile carries", () => {
 			parallelSessions: 2,
 			sampling: {},
 			polykv: {},
+			outputBudget: {},
 		})
 	})
 

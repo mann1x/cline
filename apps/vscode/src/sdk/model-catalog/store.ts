@@ -707,6 +707,28 @@ function writeProviderSettingsFields(providerId: ProviderId, patch: ProviderConf
 		}
 	}
 
+	// The output budget, written whole for the same reason as the two below: the
+	// panel owns the section and sends the complete state it is showing.
+	if ("outputBudget" in patch) {
+		const budgetPatch = patch.outputBudget
+		if (budgetPatch === null || budgetPatch === undefined) {
+			delete (next as Record<string, unknown>).outputBudget
+		} else {
+			const stored: Record<string, unknown> = {}
+			for (const [key, value] of Object.entries(budgetPatch)) {
+				if (value === undefined || value === null || value === "") {
+					continue
+				}
+				stored[key] = value
+			}
+			if (Object.keys(stored).length > 0) {
+				;(next as Record<string, unknown>).outputBudget = stored
+			} else {
+				delete (next as Record<string, unknown>).outputBudget
+			}
+		}
+	}
+
 	// The PolyKV section, written whole for the same reason as sampling: the
 	// panel owns it and sends the complete state it is showing, and a merge
 	// would make turning one knob back off impossible.

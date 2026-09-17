@@ -338,6 +338,7 @@ message ProviderConfigResponse {
   // The PolyKV section, so a settings UI can show the state it is about to
   // write. Carries no secret, so it is returned unredacted.
   optional PolykvProviderConfig polykv = 19;
+  optional OutputBudgetConfig output_budget = 20;
 }
 
 message CommittedModelSelection {
@@ -377,6 +378,22 @@ message ProviderSamplingPatch {
   // Layers to place on the GPU. -1 leaves it to Ollama's own estimator, which
   // is conservative and has been measured refusing layers that fit.
   optional int32 num_gpu = 16;
+}
+
+// The per-turn output budget: Ollama's `num_predict`, llama.cpp's and
+// opencoti's `n_predict`, and the catalog's `maxTokens`, which are one quantity
+// under three names. It had two settings and no owner -- `sampling.num_predict`
+// in the advanced panel and the session's own cap -- and the first was read for
+// Ollama alone, so an opencoti user's typed value reached the wire and not the
+// system prompt.
+message OutputBudgetConfig {
+  // "auto" sizes the cap from the context window; "manual" sends `max_tokens`
+  // as typed. Absent reads as "auto", which is what a profile written before
+  // this setting existed means.
+  optional string mode = 1;
+  // On "manual", the cap to send. On "auto", the user's own ceiling, which may
+  // only lower the absolute one and never raise it. Absent means the default.
+  optional int32 max_tokens = 2;
 }
 
 // opencoti's PolyKV control plane, as a profile configures it. Every field is
@@ -432,6 +449,7 @@ message WriteProviderConfigPatch {
   optional int32 max_tool_result_chars = 16;
   // The PolyKV section; an explicitly empty message clears it.
   optional PolykvProviderConfig polykv = 17;
+  optional OutputBudgetConfig output_budget = 18;
 }
 
 message WriteProviderConfigRequest {

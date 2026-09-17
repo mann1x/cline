@@ -40,7 +40,13 @@ import {
 	resolveLlamaCppThinkBudgetTokens,
 	resolveLlamaCppThinkBudgetWindow,
 } from "@cline/llms"
-import { type AgentHooks, buildClineSystemPrompt, isClineProvider, type RenderedPromptTemplate } from "@cline/shared"
+import {
+	type AgentHooks,
+	buildClineSystemPrompt,
+	isClineProvider,
+	type RenderedPromptTemplate,
+	resolveOutputBudgetTokens,
+} from "@cline/shared"
 import type { ApiConfiguration } from "@shared/api"
 import { profileProviderSettingsFor } from "@shared/api-config-profiles"
 import { ClineClient } from "@shared/cline"
@@ -495,6 +501,34 @@ function readConfiguredThinkBudgetMessage(providerId: string): string | undefine
  * turn that spent its whole allowance reasoning was discarded with its
  * reasoning unread, which is the one case that machinery exists for.
  */
+/**
+ * This provider's stored settings, or nothing if they cannot be read.
+ *
+ * Every caller here wants one field off the same record and each was reaching
+ * for it differently -- one through `ollamaProviderConfig`, one through a
+ * try/catch around the manager. Both failure modes are advisory: a settings
+ * store that will not answer must leave the session on its defaults rather than
+ * fail to start.
+ */
+function readProviderStoredSettings(providerId: string): Record<string, unknown> | undefined {
+	try {
+		return getProviderSettingsManager(resolveDataDir()).getProviderSettings(providerSettingsProviderId(providerId)) as
+			| Record<string, unknown>
+			| undefined
+	} catch (error) {
+		Logger.warn("[SessionFactory] Failed to read provider settings:", error)
+		return undefined
+	}
+}
+
+function readProviderSampling(providerId: string): { numPredict?: number } | undefined {
+	return readProviderStoredSettings(providerId)?.sampling as { numPredict?: number } | undefined
+}
+
+function readProviderOutputBudget(providerId: string): { mode?: "auto" | "manual"; maxTokens?: number } | undefined {
+	return readProviderStoredSettings(providerId)?.outputBudget as { mode?: "auto" | "manual"; maxTokens?: number } | undefined
+}
+
 export async function resolveThinkingAllowance(
 	providerId: string,
 	reasoning: SessionReasoningConfig,
@@ -1587,11 +1621,26 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	// compaction budgets against it. A configured `num_predict` goes on the wire
 	// ahead of the session's cap and wins, so it is the answer wherever the
 	// question is "how long can this reply be".
-	const configuredNumPredict = positiveFiniteNumber(ollamaProviderConfig?.sampling?.numPredict)
+	// Read for whichever provider is running, not for Ollama alone. It used to
+	// come off `ollamaProviderConfig`, so an opencoti or llama.cpp user's typed
+	// `numPredict` reached the wire through `buildLlamaCppSamplingOptions` and
+	// reached neither the system prompt nor compaction's budget -- the model was
+	// told one cap and held to another, which is the defect
+	// `buildOutputBudgetSection` exists to prevent.
+	const configuredNumPredict = positiveFiniteNumber(readProviderSampling(providerId)?.numPredict)
 	// What the user or the session actually chose, as opposed to the figure used
 	// when nobody has chosen anything. Only the former may overrule a model's own
 	// published cap.
-	const explicitOutputCap = configuredNumPredict ?? maxTokensPerTurn
+	//
+	// `outputBudget` is the setting that owns this now; `sampling.numPredict` is
+	// kept ahead of it because a profile written before the setting existed has
+	// its value there and nowhere else, and silently halving that user's cap on
+	// upgrade is worse than carrying the alias.
+	const outputBudget = readProviderOutputBudget(providerId)
+	const explicitOutputCap =
+		configuredNumPredict ??
+		maxTokensPerTurn ??
+		(outputBudget?.mode === "manual" ? positiveFiniteNumber(outputBudget.maxTokens) : undefined)
 	// The same default the gateway will synthesize for this request, asked of it
 	// with the same model facts: it is a share of the window for a model that
 	// publishes no cap of its own, and stating the flat anchor here would put a
@@ -1599,6 +1648,12 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	// with a window wider than 128k.
 	const sessionOutputCap =
 		explicitOutputCap ??
+		resolveOutputBudgetTokens({
+			mode: outputBudget?.mode ?? "auto",
+			maxTokens: outputBudget?.maxTokens,
+			contextWindow: sessionContextWindow,
+			modelMaxOutputTokens: positiveFiniteNumber(committedRuntimeModel?.modelInfo?.maxTokens),
+		}) ??
 		resolveDefaultMaxOutputTokens({
 			contextWindow: sessionContextWindow,
 			maxOutputTokens: positiveFiniteNumber(committedRuntimeModel?.modelInfo?.maxTokens),

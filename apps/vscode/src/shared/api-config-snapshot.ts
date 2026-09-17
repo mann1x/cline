@@ -123,6 +123,9 @@ const PROVIDER_CONFIG_CLEARS: Readonly<Record<string, unknown>> = {
 	// clear it on load, or it inherits the previous profile's PolyKV policy and
 	// then reports itself dirty against a value it never carried.
 	polykv: {},
+	// Same reason again: a profile that does not name an output budget must fall
+	// back to `auto` rather than inherit the previous profile's manual cap.
+	outputBudget: {},
 }
 
 /**

@@ -127,6 +127,24 @@ export interface ProviderSamplingSettings {
  * it is inert unless `enabled`, and inert regardless on a server launched
  * without `--polykv-max-pools`.
  */
+/**
+ * The per-turn output budget, as a profile configures it.
+ *
+ * One quantity under three names on the wire -- Ollama's `num_predict`,
+ * llama.cpp's and opencoti's `n_predict`, the catalog's `maxTokens` -- and
+ * until now two settings, of which only the Ollama one was read where it
+ * mattered.
+ */
+export interface OutputBudgetSettings {
+	/** Absent reads as `auto`, which is what a profile written before this means. */
+	readonly mode?: "auto" | "manual"
+	/**
+	 * On `manual`, the cap to send. On `auto`, the user's own ceiling, which may
+	 * only lower the absolute one.
+	 */
+	readonly maxTokens?: number
+}
+
 export interface PolykvSettings {
 	readonly enabled?: boolean
 	readonly pinPrefix?: boolean
@@ -203,6 +221,13 @@ export interface EffectiveProviderConfig {
 	 */
 	readonly polykv?: PolykvSettings
 	/**
+	 * The per-turn output budget (providers.json `outputBudget`).
+	 *
+	 * Read as stored so the panel shows what it is about to write. Absent means
+	 * the profile does not mention it, which reads as `auto`.
+	 */
+	readonly outputBudget?: OutputBudgetSettings
+	/**
 	 * OAuth-style auth bundle (e.g. cline provider's WorkOS token).
 	 * Compatible with `apiKey`; some providers populate both.
 	 */
@@ -255,6 +280,7 @@ export interface ProviderConfigPatch {
 	readonly reasoning?: ProviderReasoningPatch | null
 	readonly sampling?: ProviderSamplingSettings | null
 	readonly polykv?: PolykvSettings | null
+	readonly outputBudget?: OutputBudgetSettings | null
 	readonly extras?: Readonly<Record<string, unknown>> | null
 }
 

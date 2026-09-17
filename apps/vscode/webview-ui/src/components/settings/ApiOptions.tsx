@@ -9,6 +9,7 @@ import { PLATFORM_CONFIG, PlatformType } from "@/config/platform.config"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { useProviderListings } from "@/hooks/useProviderListings"
 import { ClinePassHint } from "./ClinePassHint"
+import { OutputBudgetField } from "./common/OutputBudgetField"
 import ParallelSessionsField, { parallelSessionsDescription } from "./common/ParallelSessionsField"
 import { PolykvSection } from "./common/PolykvSection"
 import { OPENROUTER_MODEL_PICKER_Z_INDEX } from "./OpenRouterModelPicker"
@@ -503,6 +504,13 @@ const ApiOptions = ({
 			    a local server, a plan's concurrency allowance on a hosted one.
 			    Placed here rather than in each panel so the two dozen of them
 			    cannot disagree about where it lives or what it is called. */}
+			{/* Every provider, for the same reason as the field below: every
+			    endpoint holds a reply to some length, and one field in one place
+			    is what stops two dozen panels disagreeing about what it is
+			    called. It replaces the `numPredict` in the advanced sampler,
+			    which was read for Ollama alone. */}
+			{apiConfiguration && showModelOptions && selectedProvider && <OutputBudgetField providerId={selectedProvider} />}
+
 			{apiConfiguration && showModelOptions && selectedProvider && (
 				<div className="mb-[5px]">
 					<ParallelSessionsField providerId={selectedProvider} />

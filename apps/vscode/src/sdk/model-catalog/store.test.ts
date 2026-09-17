@@ -190,6 +190,63 @@ describe("createProviderConfigStore", () => {
 		expect(store.read(providerId).maxToolResultChars).toBe(32_000)
 	})
 
+	// The whole round trip for the output budget: proto message in, providers.json
+	// out, effective config back. Every one of these hops is a separate list, and
+	// three of them fail silently rather than at the compiler -- a section that
+	// writes but does not read back renders the panel blank while the session
+	// runs on defaults.
+	it("round-trips the output budget the way the panel writes it", async () => {
+		const { toProviderConfigPatch } = await import("@core/controller/models/providerCatalogShared")
+		const { WriteProviderConfigPatch } = await import("@shared/proto/cline/models")
+		const { createProviderConfigStore } = await import("./store")
+		const store = createProviderConfigStore()
+		const providerId = parseProviderId("ollama")
+
+		const patch = toProviderConfigPatch(
+			WriteProviderConfigPatch.create({ outputBudget: { mode: "manual", maxTokens: 96_000 } } as never),
+		)
+		expect(patch).toMatchObject({ outputBudget: { mode: "manual", maxTokens: 96_000 } })
+
+		store.write(providerId, patch)
+		expect(store.read(providerId).outputBudget).toEqual({ mode: "manual", maxTokens: 96_000 })
+	})
+
+	// Zero is how the wire says "the box is empty", not a cap of nothing: the
+	// auto ceiling left at its default and a manual field the user cleared both
+	// arrive as 0, and neither may be stored as a limit.
+	it("does not store an empty box as a cap of zero", async () => {
+		const { toProviderConfigPatch } = await import("@core/controller/models/providerCatalogShared")
+		const { WriteProviderConfigPatch } = await import("@shared/proto/cline/models")
+		const { createProviderConfigStore } = await import("./store")
+		const store = createProviderConfigStore()
+		const providerId = parseProviderId("ollama")
+
+		store.write(
+			providerId,
+			toProviderConfigPatch(WriteProviderConfigPatch.create({ outputBudget: { mode: "auto", maxTokens: 0 } } as never)),
+		)
+
+		expect(store.read(providerId).outputBudget).toEqual({ mode: "auto" })
+	})
+
+	it("does not lose the output budget to an unrelated later write", async () => {
+		const { toProviderConfigPatch } = await import("@core/controller/models/providerCatalogShared")
+		const { WriteProviderConfigPatch } = await import("@shared/proto/cline/models")
+		const { createProviderConfigStore } = await import("./store")
+		const store = createProviderConfigStore()
+		const providerId = parseProviderId("ollama")
+
+		store.write(
+			providerId,
+			toProviderConfigPatch(
+				WriteProviderConfigPatch.create({ outputBudget: { mode: "manual", maxTokens: 64_000 } } as never),
+			),
+		)
+		store.write(providerId, toProviderConfigPatch(WriteProviderConfigPatch.create({ baseUrl: "http://x:11434" } as never)))
+
+		expect(store.read(providerId).outputBudget).toEqual({ mode: "manual", maxTokens: 64_000 })
+	})
+
 	// The shape that lost the context window in mann1x/cline#67: a second write
 	// in the same interaction rebuilds the entry and puts back one without the
 	// field. Any other field will do to provoke it.
