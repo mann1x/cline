@@ -504,6 +504,21 @@ export interface CoreCompactionConfig {
 	 */
 	keepRecentMessages?: boolean;
 	/**
+	 * The compaction from which the tail is dropped anyway, counting from 1.
+	 *
+	 * Only meaningful while {@link keepRecentMessages} is on; with it off every
+	 * compaction already keeps nothing. `1` drops the tail on every compaction
+	 * and anything below `1` never does. Unset takes the corpus-fitted default
+	 * in `FORCE_FULL_FROM_COMPACTION`, which is the second -- a run that has
+	 * compacted once already fixes the bug half the time, and one that has
+	 * compacted twice, a quarter.
+	 *
+	 * A setting rather than a constant for the same reason the struggle
+	 * thresholds are: it is load-bearing, and the corpus that fitted it was
+	 * measured on one harness rather than on the sessions this will run in.
+	 */
+	forceFullFromCompaction?: number;
+	/**
 	 * The session's file revision log, when the host keeps one.
 	 *
 	 * Compaction is the only thing that can answer either of the log's two open

@@ -22,7 +22,9 @@ async function* chunks(parts: Array<Record<string, unknown>>) {
 /** Replies in order; the last reply repeats once the list runs out. */
 function summarizerReplying(texts: string[]) {
 	let index = 0;
-	const createMessage = vi.fn(() => {
+	// The parameters are declared but unused: the replies are scripted, and the
+	// system prompt each call was handed is what the tail tests read back.
+	const createMessage = vi.fn((_system: string, _request: unknown) => {
 		const text = texts[Math.min(index, texts.length - 1)] ?? "";
 		index += 1;
 		return chunks([
@@ -437,5 +439,105 @@ describe("closing the revision span at a compaction", () => {
 		await run(prepare({ revisions: port, keepRecentMessages: false }));
 
 		expect(kept).toEqual([]);
+	});
+});
+
+/**
+ * The compaction that stops keeping a tail.
+ *
+ * Measured over 335 harness runs with a verdict: the fix rate falls 85% → 63%
+ * → 50% → 25% with the first, second and third compaction a run has been
+ * through. Firing from the second selects a population that fails two times in
+ * three, and the summary is then what the next attempt reads instead of a tail
+ * — which is the artifact the full prompt is written for.
+ */
+describe("dropping the tail from the second compaction", () => {
+	/** The transcript as it comes back to a run that has compacted before. */
+	const compactedOnce: MessageWithMetadata[] = [
+		{
+			role: "assistant",
+			content: "the replay",
+			metadata: {
+				kind: "compaction_summary",
+				summary: "the replay",
+				generation: 1,
+			},
+		} as unknown as MessageWithMetadata,
+		...messages,
+	];
+
+	async function runOver(
+		transcript: MessageWithMetadata[],
+		forceFullFromCompaction?: number,
+	) {
+		const prepareTurn = createContextCompactionPrepareTurn({
+			providerId: "anthropic",
+			modelId: "mock-model",
+			providerConfig: {
+				providerId: "anthropic",
+				modelId: "mock-model",
+			} as LlmsProviders.ProviderConfig,
+			compaction: {
+				enabled: true,
+				strategy: "agentic",
+				preserveRecentTokens: 1,
+				thinkingSummaryEnabled: false,
+				...(forceFullFromCompaction === undefined
+					? {}
+					: { forceFullFromCompaction }),
+			},
+		});
+		return prepareTurn?.({
+			agentId: "agent-1",
+			conversationId: "conv-1",
+			parentAgentId: null,
+			iteration: 1,
+			abortSignal: new AbortController().signal,
+			systemPrompt: "You are helpful.",
+			tools: [],
+			messages: transcript,
+			apiMessages: transcript,
+			model: {
+				id: "mock-model",
+				provider: "anthropic",
+				info: { id: "mock-model", maxInputTokens: WINDOW_TOKENS },
+			},
+		});
+	}
+
+	it("asks for a replay the first time", async () => {
+		const createMessage = summarizerReplying([
+			"## Goal\nThe goal.\n\n## Next\nThe step.",
+		]);
+
+		await runOver(messages);
+
+		expect(createMessage.mock.calls[0]?.[0]).toContain(
+			"re-telling your own recent work in your own voice",
+		);
+	});
+
+	it("asks for the summary that replaces everything the second time", async () => {
+		const createMessage = summarizerReplying([
+			"## Goal\nThe goal.\n\n## Next\nThe step.",
+		]);
+
+		await runOver(compactedOnce);
+
+		expect(createMessage.mock.calls[0]?.[0]).toContain(
+			"the only record that remains",
+		);
+	});
+
+	it("can be turned off, and the second compaction keeps its tail", async () => {
+		const createMessage = summarizerReplying([
+			"## Goal\nThe goal.\n\n## Next\nThe step.",
+		]);
+
+		await runOver(compactedOnce, 0);
+
+		expect(createMessage.mock.calls[0]?.[0]).toContain(
+			"re-telling your own recent work in your own voice",
+		);
 	});
 });

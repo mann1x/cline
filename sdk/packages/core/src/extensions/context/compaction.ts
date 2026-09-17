@@ -40,6 +40,7 @@ import {
 	createTokenEstimator,
 	DEFAULT_MAX_INPUT_TOKENS,
 	DEFAULT_TARGET_RATIO,
+	dropsTailAtThisCompaction,
 	getCompactionSummaryMetadata,
 	resolveCompactionTriggerTokens,
 	resolveEffectiveMaxInputTokens,
@@ -97,6 +98,15 @@ type BuiltinCompactionStrategyOptions = {
 	context: CoreCompactionContext;
 	providerConfig: ProviderConfig;
 	compaction: CoreCompactionConfig | undefined;
+	/**
+	 * Whether this compaction keeps a recency tail.
+	 *
+	 * Passed rather than read back off `compaction`, because it is not the
+	 * setting: `forceFullFromCompaction` turns it off for this compaction
+	 * alone, and a strategy re-deriving it from the config would quietly keep
+	 * the tail the caller had already decided to drop.
+	 */
+	keepRecentMessages: boolean;
 	estimateMessageTokens: EstimateMessageTokens;
 	logger: Pick<CoreSessionConfig, "logger">["logger"];
 };
@@ -275,6 +285,7 @@ const BUILTIN_COMPACTION_STRATEGIES = {
 		context,
 		providerConfig,
 		compaction,
+		keepRecentMessages,
 		estimateMessageTokens,
 		logger,
 	}) =>
@@ -282,7 +293,7 @@ const BUILTIN_COMPACTION_STRATEGIES = {
 			context,
 			providerConfig,
 			summarizer: compaction?.summarizer,
-			keepRecentMessages: compaction?.keepRecentMessages !== false,
+			keepRecentMessages,
 			// Bound, because the port is an object and the ledger wants a plain
 			// function. Absent when the host keeps no log, and the ledger then
 			// says nothing about files rather than guessing a revision number.
@@ -292,10 +303,7 @@ const BUILTIN_COMPACTION_STRATEGIES = {
 							compaction.revisions?.spanFor(filePath),
 					}
 				: {}),
-			summaryPrompt: resolveSummaryPrompt(
-				compaction,
-				compaction?.keepRecentMessages !== false,
-			),
+			summaryPrompt: resolveSummaryPrompt(compaction, keepRecentMessages),
 			thinkingSummaryEnabled: compaction?.thinkingSummaryEnabled,
 			thinkingSummaryPrompt: compaction?.thinkingSummaryPrompt,
 			// The recency budget is a floor and the message budget a ceiling —
@@ -494,12 +502,22 @@ export function createContextCompactionPrepareTurn(
 	// edit has a revision, a transaction has a base snapshot, a file has the
 	// disk. The transcript had nothing.
 	const journal = options.journal ?? createCompactionJournal();
-	const keepRecentMessages = userCompaction?.keepRecentMessages !== false;
+	const keepRecentMessagesConfigured =
+		userCompaction?.keepRecentMessages !== false;
 	const telemetryStrategy: TelemetryCompactionStrategy = userCompaction?.compact
 		? "custom"
 		: strategy;
 
 	return async (context) => {
+		// The tail is a per-compaction decision, not a per-session one: a run
+		// that has compacted before is measurably different from one that has
+		// not, and the summary is what the next attempt gets to read either way.
+		const keepRecentMessages =
+			keepRecentMessagesConfigured &&
+			!dropsTailAtThisCompaction(
+				context.messages,
+				userCompaction?.forceFullFromCompaction,
+			);
 		const effectiveMode: CoreCompactionMode = context.overflowRecovery
 			? "overflow_recovery"
 			: mode;
@@ -758,6 +776,7 @@ export function createContextCompactionPrepareTurn(
 				abortSignal: context.abortSignal,
 			},
 			compaction: userCompaction,
+			keepRecentMessages,
 			estimateMessageTokens,
 			logger: config.logger,
 		};

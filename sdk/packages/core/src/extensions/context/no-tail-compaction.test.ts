@@ -5,6 +5,7 @@ import type { CoreCompactionContext } from "../../types/config";
 import { runAgenticCompaction } from "./agentic-compaction";
 import {
 	buildSummaryMessage,
+	dropsTailAtThisCompaction,
 	planFullCut,
 	resolveRecencyBounds,
 } from "./compaction-shared";
@@ -347,5 +348,50 @@ describe("the tool ledger the harness appends", () => {
 		expect(JSON.stringify(result?.messages[0])).not.toContain(
 			"recorded by the harness",
 		);
+	});
+});
+
+/**
+ * The compaction that stops keeping a tail, and why it is the second one.
+ *
+ * Measured over 335 harness runs with a verdict. The fix rate falls with every
+ * compaction a run has been through -- 85% at none, 63% at one, 50% at two,
+ * 25% at three -- and firing at the second picks a population that fails 67% of
+ * the time, at a cost of 10.6% of the runs that went on to succeed.
+ */
+describe("dropping the tail once a run has compacted before", () => {
+	function summary(generation: number): MessageWithMetadata {
+		return {
+			role: "assistant",
+			content: "summary",
+			metadata: { kind: "compaction_summary", summary: "s", generation },
+		} as unknown as MessageWithMetadata;
+	}
+	const plain = {
+		role: "user",
+		content: "hi",
+	} as unknown as MessageWithMetadata;
+
+	it("keeps the tail on a transcript that has never been compacted", () => {
+		expect(dropsTailAtThisCompaction([plain, plain], undefined)).toBe(false);
+	});
+
+	it("drops it on the second compaction", () => {
+		expect(dropsTailAtThisCompaction([summary(1), plain], undefined)).toBe(
+			true,
+		);
+	});
+
+	// The generation is the ladder's own rung, not a count of the messages that
+	// survived: one summary carrying generation 3 means three have happened.
+	it("reads the generation rather than counting summaries", () => {
+		expect(dropsTailAtThisCompaction([summary(3)], 4)).toBe(true);
+		expect(dropsTailAtThisCompaction([summary(2)], 4)).toBe(false);
+	});
+
+	it("can be set to the first compaction, or turned off entirely", () => {
+		expect(dropsTailAtThisCompaction([plain], 1)).toBe(true);
+		expect(dropsTailAtThisCompaction([summary(9)], 0)).toBe(false);
+		expect(dropsTailAtThisCompaction([summary(9)], -1)).toBe(false);
 	});
 });

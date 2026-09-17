@@ -718,6 +718,63 @@ export function isCompactionSummaryMessage(
 	);
 }
 
+/**
+ * The compaction from which the recency tail is dropped whatever the setting.
+ *
+ * **Two, measured.** Across 335 harness runs with a verdict, the fix rate falls
+ * with every compaction a run has already been through:
+ *
+ * ```
+ *   compactions   runs   FIXED
+ *       0          218    85 %
+ *       1           41    63 %
+ *       2           24    50 %
+ *       3            8    25 %
+ *      4+           44    25 %
+ * ```
+ *
+ * Firing from the second selects 76 of 335 runs, of which 67% go on to fail --
+ * 51% of every failure in the corpus, caught at a median iteration of 180 with
+ * 246 still to spend. The cost is the 10.6% of winning runs that reach a second
+ * compaction and get a summary instead of a tail.
+ *
+ * An iteration bound was measured and rejected: compactions land late (median
+ * 180), so bounding at 150 collapses recall from 51% to 20%.
+ *
+ * Nothing here measures the *treatment*. No arm has run with the tail forced
+ * off, so what is calibrated is which runs are selected, not what dropping the
+ * tail does to them. What makes it the cheaper side of the bet is that the
+ * population it selects fails two times in three, and that a summary the model
+ * reads in place of a tail is the artifact `fullSummaryPrompt` is written for.
+ */
+export const FORCE_FULL_FROM_COMPACTION = 2;
+
+/**
+ * Whether this compaction keeps nothing, whatever `keepRecentMessages` says.
+ *
+ * `from` is the compaction index it starts at: `1` drops the tail on every
+ * compaction, and anything below `1` never does. Unset takes the measured
+ * default above.
+ */
+export function dropsTailAtThisCompaction(
+	messages: readonly MessageWithMetadata[],
+	from: number | undefined,
+): boolean {
+	const threshold = from ?? FORCE_FULL_FROM_COMPACTION;
+	if (!Number.isFinite(threshold) || threshold < 1) {
+		return false;
+	}
+	let reached = 0;
+	for (const message of messages) {
+		const metadata = getCompactionSummaryMetadata(message);
+		if (metadata) {
+			reached = Math.max(reached, metadata.generation);
+		}
+	}
+	// The one about to be written is the next rung on the ladder.
+	return reached + 1 >= threshold;
+}
+
 export function getCompactionSummaryMetadata(
 	message: MessageWithMetadata,
 ): CompactionSummaryMetadata | undefined {
