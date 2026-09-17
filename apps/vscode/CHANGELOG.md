@@ -5,6 +5,74 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
+## [4.100.124] — 2026-09-17
+
+### The session that compacted at half a full window
+
+A local session compacted with 43,000 tokens of room still free. The
+auto-compact trigger was correct throughout — it reads the token count the
+provider itself reports — but the request path never looked at that number. It
+kept its own estimate from a character count, read 113,706 for a request that
+really cost 71,651, concluded there was no room left for a reply, and forced
+the compaction anyway. Over one day that estimate ran between 0.73× and 3.30×
+the measured figure on a single conversation.
+
+Both paths now read the same evidence. The estimate is anchored to what the
+last request actually cost, so only the text added since is projected — the
+ratio can be wrong by a factor of two and the answer barely moves.
+
+Two things fed the drift and are fixed with it. The reasoning-density figure
+was never once updated from a real measurement: the function that learns it
+shipped complete and was never called, so a constant stood in for it on every
+request ever made. And because the content ratio is derived by subtracting the
+reasoning estimate from the measured total, that constant dragged the content
+ratio with it — it was seen swinging from 3.0 to 13.1 and back inside a single
+session as the reasoning share rose and a compaction removed it.
+
+### One output budget, instead of two settings that disagreed
+
+The longest reply a model may produce is called `num_predict` by Ollama,
+`n_predict` by llama.cpp and opencoti, and `maxTokens` by the model catalog. It
+had two settings and no owner: a value typed into the advanced sampler was read
+for Ollama alone, so an opencoti or llama.cpp user's cap was enforced by the
+server while the system prompt told the model something else entirely, and
+compaction budgeted against the wrong one.
+
+There is now one **Output budget** control, on every provider:
+
+- **Automatic** asks for three quarters of the context window, up to an
+  absolute ceiling of 512,000 tokens — models that advertise a megatoken window
+  start struggling well before they reach it. The box stays visible so you can
+  lower that ceiling; it can never raise it.
+- **Manual** sends exactly what you type. It is not clamped to the model
+  catalog's own figure, which is routinely wrong for a local model — that is
+  the whole point of typing one.
+
+A profile that has never seen this setting reads as Automatic, and a value
+already in the sampler still wins, so nothing changes under an existing setup
+until you touch it.
+
+### Tool calls that were right, and refused anyway
+
+Measured across 240 plugin sessions and 365 harness runs: a large share of tool
+failures were payloads where the content was correct and only its container was
+wrong.
+
+- **Task checklists were being dropped silently.** The field is documented as
+  text, and a third of the time models send the list as an actual list instead —
+  which was discarded without an error, so the tool reported a perfect success
+  rate while the checklist never reached the UI. Of 1,920 calls carrying a
+  checklist, 641 were thrown away. All of those shapes are now read.
+- **`grep`, `sed` and `awk`** accept a single file or path where they document
+  a list. `expected array, received string` was the whole of `grep`'s format
+  failures and a third of `awk`'s.
+- **`search_codebase`** accepts queries wrapped one-per-object, which is what
+  models reach for when the field is plural. It previously matched nothing and
+  returned an error naming no field at all.
+
+A genuinely truncated list is still refused by name rather than run as literal
+text — that check is what stops a half-arrived argument being searched for.
+
 ## [4.100.118] — 2026-09-15
 
 ### Three local engines, not one
