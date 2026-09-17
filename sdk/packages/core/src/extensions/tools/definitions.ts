@@ -49,6 +49,7 @@ import {
 	type AskQuestionInput,
 	AskQuestionInputSchema,
 	AwkInputSchema,
+	AwkInputUnionSchema,
 	type AwkToolInput,
 	describeEditorArgumentGap,
 	type EditFileInput,
@@ -56,6 +57,7 @@ import {
 	type FetchWebContentInput,
 	FetchWebContentInputSchema,
 	GrepInputSchema,
+	GrepInputUnionSchema,
 	type GrepToolInput,
 	LooseFetchWebContentInputSchema,
 	type ReadFileRequest,
@@ -67,6 +69,7 @@ import {
 	SearchCodebaseInputSchema,
 	SearchCodebaseUnionInputSchema,
 	SedInputSchema,
+	SedInputUnionSchema,
 	type SedToolInput,
 	type SkillsInput,
 	SkillsInputSchema,
@@ -1016,7 +1019,7 @@ export function createGrepTool(
 		retryable: true,
 		maxRetries: 1,
 		execute: async (input, context) => {
-			const validated = validateWithZod(GrepInputSchema, input);
+			const validated = validateWithZod(GrepInputUnionSchema, input);
 			const query = `grep:${validated.pattern}`;
 			try {
 				const result = await withTimeout(
@@ -1065,7 +1068,7 @@ export function createSedTool(
 		retryable: false,
 		maxRetries: 0,
 		execute: async (input, context) => {
-			const validated = validateWithZod(SedInputSchema, input);
+			const validated = validateWithZod(SedInputUnionSchema, input);
 			try {
 				const outcomes = await withTimeout(
 					executor(validated, cwd, context),
@@ -1118,7 +1121,7 @@ export function createAwkTool(
 		retryable: true,
 		maxRetries: 1,
 		execute: async (input, context) => {
-			const validated = validateWithZod(AwkInputSchema, input);
+			const validated = validateWithZod(AwkInputUnionSchema, input);
 			const query = `awk:${validated.program}`;
 			try {
 				const result = await withTimeout(

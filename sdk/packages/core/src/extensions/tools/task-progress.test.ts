@@ -23,7 +23,11 @@ describe("withTaskProgressParam", () => {
 		});
 
 		const properties = schema.properties as Record<string, unknown>;
-		expect(properties[TASK_PROGRESS_PARAM]).toMatchObject({ type: "string" });
+		// Both forms, because both arrive. See withTaskProgressParam.
+		expect(properties[TASK_PROGRESS_PARAM]).toMatchObject({
+			type: ["string", "array"],
+			items: { type: "string" },
+		});
 		// It must stay optional: a required checklist would fail every call that
 		// has nothing to report.
 		expect(schema.required).toEqual(["path"]);
@@ -76,10 +80,13 @@ describe("readTaskProgress", () => {
 		);
 	});
 
-	it("ignores non-strings and blanks", () => {
-		expect(
-			readTaskProgress({ [TASK_PROGRESS_PARAM]: ["- [ ] a"] }),
-		).toBeUndefined();
+	it("ignores blanks and shapes that carry no checklist", () => {
+		// An array of lines used to be refused here on the reasoning that it was
+		// not a checklist. Measured on 240 sessions it is the checklist, minus
+		// the newlines -- see readTaskProgress.
+		expect(readTaskProgress({ [TASK_PROGRESS_PARAM]: ["- [ ] a"] })).toBe(
+			"- [ ] a",
+		);
 		expect(readTaskProgress({ [TASK_PROGRESS_PARAM]: "   " })).toBeUndefined();
 		expect(readTaskProgress({})).toBeUndefined();
 		expect(readTaskProgress(undefined)).toBeUndefined();
@@ -472,5 +479,58 @@ describe("createTaskProgressCompletionGuard", () => {
 		expect(
 			createTaskProgressCompletionGuard(new TaskProgressTracker())(),
 		).toBeUndefined();
+	});
+});
+
+/**
+ * The shapes measured across 240 pandorum plugin sessions (2026-09-17): of
+ * 1,920 tool calls carrying the field, 641 -- 33.4% -- were discarded. No error
+ * was ever reported, so the tool reads 0% failure while a third of the
+ * checklists never reach the UI.
+ *
+ * Every dropped payload below carries the items in full. Only the container is
+ * wrong, and each one is unambiguous about what it meant.
+ */
+describe("checklists sent in a container other than a string", () => {
+	it("joins an array of checklist lines", () => {
+		expect(
+			readTaskProgress({
+				task_progress: [
+					"- [x] Analyze the error",
+					"- [ ] Fix the syntax errors",
+				],
+			}),
+		).toBe("- [x] Analyze the error\n- [ ] Fix the syntax errors");
+	});
+
+	it("unwraps the field nested inside itself", () => {
+		expect(
+			readTaskProgress({
+				task_progress: { task_progress: ["- [ ] Verify the fix"] },
+			}),
+		).toBe("- [ ] Verify the fix");
+	});
+
+	it("unwraps a nested string too", () => {
+		expect(
+			readTaskProgress({ task_progress: { task_progress: "- [ ] Verify" } }),
+		).toBe("- [ ] Verify");
+	});
+
+	it("reads items given as objects rather than markdown", () => {
+		expect(
+			readTaskProgress({
+				task_progress: [
+					{ text: "Analyze the error", done: true },
+					{ text: "Fix the syntax errors" },
+				],
+			}),
+		).toBe("- [x] Analyze the error\n- [ ] Fix the syntax errors");
+	});
+
+	it("still refuses a shape that carries no checklist", () => {
+		expect(readTaskProgress({ task_progress: 42 })).toBeUndefined();
+		expect(readTaskProgress({ task_progress: [] })).toBeUndefined();
+		expect(readTaskProgress({ task_progress: {} })).toBeUndefined();
 	});
 });

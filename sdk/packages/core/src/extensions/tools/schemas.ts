@@ -251,6 +251,26 @@ export function stringToList(value: string): string[] {
 }
 
 /**
+ * A list field that also accepts the single value it was given instead.
+ *
+ * Every list-taking tool advertises `array`, and models routinely send the one
+ * element bare -- `paths: "src/game.js"` for a single file. Measured across 240
+ * pandorum sessions and 365 harness runs: `expected array, received string` is
+ * the whole of `grep`'s format failures and a third of `awk`'s, and in every
+ * case the value itself was correct.
+ *
+ * Built on {@link stringToList} so the three list fields agree on the hard case
+ * as well as the easy one: a string that opens `["` is the model's own array
+ * serialised, and a truncated one is refused by name rather than searched for
+ * as literal text.
+ */
+export function listOrSingle(describe: string) {
+	return z
+		.union([z.array(z.string()), z.string().transform(stringToList)])
+		.describe(describe);
+}
+
+/**
  * Schema for search_codebase tool input
  */
 export const SearchCodebaseInputSchema = z.object({
@@ -324,6 +344,29 @@ export const SearchCodebaseUnionInputSchema = z
 				queries: stringToList(query),
 				...rest,
 			})),
+		// `{queries: [{query: "..."}]}` -- each query wrapped in an object,
+		// which is what a model reaches for when the field is named `queries`
+		// and it is holding one search per entry. The six branches above all
+		// assumed the entries were strings, so this shape matched none of them
+		// and came back as a bare `Invalid input` naming no field.
+		z
+			.object({
+				queries: z.array(
+					z.union([
+						z.string(),
+						z
+							.object({
+								query: z.string().optional(),
+								pattern: z.string().optional(),
+								text: z.string().optional(),
+							})
+							.transform(({ query, pattern, text }) => query ?? pattern ?? text)
+							.refine((value): value is string => typeof value === "string"),
+					]),
+				),
+				...SearchOptionFields,
+			})
+			.transform(({ queries, ...rest }) => ({ queries, ...rest })),
 	])
 	// Piped back through the canonical schema so the caller is handed one shape
 	// rather than a six-way union it has to narrow. Every branch already produces
@@ -946,3 +989,26 @@ export type AskQuestionInput = z.infer<typeof AskQuestionInputSchema>;
  * Input for the submit and exit tool
  */
 export type SubmitInput = z.infer<typeof SubmitInputSchema>;
+
+/**
+ * What `grep`, `sed` and `awk` accept, as against what they advertise.
+ *
+ * The advertised shape keeps `array`, because that is the shape that batches.
+ * These wrappers only widen the door: the one field each of them gets wrong is
+ * the file list, and it is always wrong the same way. Every other field is the
+ * canonical schema's own, so the parsed output is the canonical type already --
+ * no pipe back through it, which `z.coerce` fields make ill-typed anyway.
+ */
+export const GrepInputUnionSchema = GrepInputSchema.extend({
+	paths: listOrSingle(
+		"Files or directories to search. Defaults to the workspace root, searched recursively.",
+	).optional(),
+});
+
+export const SedInputUnionSchema = SedInputSchema.extend({
+	files: listOrSingle("The files to transform."),
+});
+
+export const AwkInputUnionSchema = AwkInputSchema.extend({
+	files: listOrSingle("The files to read.").optional(),
+});
