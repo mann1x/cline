@@ -429,6 +429,7 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 				struggleMinIteration: request.escalationSettings.struggleMinIteration,
 				struggleMaxPerTask: request.escalationSettings.struggleMaxPerTask,
 				struggleEditStreak: request.escalationSettings.struggleEditStreak,
+				struggleFailedTransactions: request.escalationSettings.struggleFailedTransactions,
 			}
 			controller.stateManager.setGlobalState("escalationSettings", {
 				...stored,

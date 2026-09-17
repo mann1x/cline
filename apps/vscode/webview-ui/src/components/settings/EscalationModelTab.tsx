@@ -164,6 +164,13 @@ const EscalationModelTab = () => {
 						label="Refused edits in a row"
 						stored={escalationSettings?.struggleEditStreak}
 					/>
+					<Threshold
+						fallback={DEFAULT_ESCALATION_SETTINGS.struggleFailedTransactions}
+						field="struggleFailedTransactions"
+						id="escalation-struggle-failed-transactions"
+						label="Attempts thrown away"
+						stored={escalationSettings?.struggleFailedTransactions}
+					/>
 				</div>
 				<p className="text-xs text-muted-foreground">
 					Both halves have to agree before the expert is offered: enough failed tool calls in the window, and the model
@@ -174,6 +181,14 @@ const EscalationModelTab = () => {
 					file. It does not wait for the window or for the model to say it is stuck: three refusals in a row with
 					nothing landing in between is the point at which the expert is worth raising, and it says so once at three,
 					again at six, and not in between.
+				</p>
+				<p className="text-xs text-muted-foreground">
+					"Attempts thrown away" only means anything with the change protocol on, and it is the one number here that
+					protocol can move. A model failing the protocol does not fail its tool calls — it runs the check, the call
+					succeeds, and the result says the check did not pass — so the counts above barely register it. This one counts
+					whole attempts instead: a transaction discarded after failing its check, or submitted with nothing changed.
+					Across 335 harness runs no run that ended up fixing the bug ever threw two away, so it is the rarest trigger
+					here rather than the loudest.
 				</p>
 				<p className="text-xs text-muted-foreground">
 					Worth knowing before you tune these: a refused tool call usually is not a failed one. A tool that says no

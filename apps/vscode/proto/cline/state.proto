@@ -538,6 +538,13 @@ message EscalationSettings {
   // expert's channels, no messages either way, and nothing saved up for the
   // end. For a machine where a model swap is expensive.
   optional bool relay_nothing = 12;
+  // Attempts the change protocol threw away -- discarded after failing the
+  // check, or submitted with nothing changed -- before the model is told. The
+  // one signal here the protocol emits: a model failing it calls its tools
+  // successfully and is told by the result that the check did not pass, so the
+  // failed-call window barely moves. Measured across 335 harness runs, no run
+  // that reached FIXED ever threw two away.
+  optional int32 struggle_failed_transactions = 13;
 }
 
 // The per-task half of the change protocol: engaged, and this task's check.

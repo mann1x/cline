@@ -64,6 +64,19 @@ export interface EscalationSettings {
 	 */
 	struggleEditStreak: number
 	/**
+	 * Attempts the change protocol threw away before the model is told.
+	 *
+	 * Counts a transaction discarded after failing its check and one submitted
+	 * with nothing changed: both are an attempt the task does not get back.
+	 *
+	 * The one threshold here the protocol actually emits. A model failing the
+	 * protocol calls its tools *successfully* and is told by the result that
+	 * the check did not pass, so `struggleFailedCalls` barely moves under it --
+	 * measured across 335 harness runs, the protocol halves the failed-call
+	 * rate, while no run that reached FIXED ever threw two attempts away.
+	 */
+	struggleFailedTransactions: number
+	/**
 	 * Let the base model run while the expert is working.
 	 *
 	 * Off by default, because on the most common setup it costs real time and
@@ -109,6 +122,7 @@ export const DEFAULT_ESCALATION_SETTINGS: EscalationSettings = {
 	struggleMinIteration: 20,
 	struggleMaxPerTask: 2,
 	struggleEditStreak: 3,
+	struggleFailedTransactions: 2,
 	alternateWithBase: false,
 	relayNothing: false,
 }

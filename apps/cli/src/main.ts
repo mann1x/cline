@@ -1490,6 +1490,7 @@ export async function runCli(): Promise<void> {
 					minIteration: positive(args.struggleMinIteration),
 					maxPerTask: positive(args.struggleMaxPerTask),
 					editStreak: positive(args.struggleEditStreak),
+					failedTransactions: positive(args.struggleFailedTransactions),
 				}).filter(([, value]) => value !== undefined),
 			);
 			// The expert's own template, resolved for the EXPERT's model.

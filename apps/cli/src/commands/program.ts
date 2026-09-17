@@ -198,6 +198,10 @@ export function addRootOptions(cmd: Command): Command {
 				"Refused edits in a row before the model is told to consider the expert (default: 3)",
 			)
 			.option(
+				"--struggle-failed-transactions <count>",
+				"Attempts the change protocol threw away -- discarded or submitted with nothing changed -- before the model is told (default: 2). The one signal here the protocol emits: measured across 335 harness runs, no run that reached FIXED ever threw two away",
+			)
+			.option(
 				"--force-full-from-compaction <n>",
 				"The compaction from which the recency tail is dropped and the summary becomes the whole context, counting from 1 (default: 2). Measured: across 335 harness runs the fix rate falls 85% -> 63% -> 50% -> 25% with each compaction a run has been through. 1 drops the tail on every compaction; 0 never does",
 			)
@@ -517,6 +521,8 @@ export function commanderToParsedArgs(program: Command): ParsedArgs {
 		result.struggleMaxPerTask = opts.struggleMaxPerTask;
 	if (opts.struggleEditStreak !== undefined)
 		result.struggleEditStreak = opts.struggleEditStreak;
+	if (opts.struggleFailedTransactions !== undefined)
+		result.struggleFailedTransactions = opts.struggleFailedTransactions;
 	if (opts.forceFullFromCompaction !== undefined)
 		result.forceFullFromCompaction = opts.forceFullFromCompaction;
 	if (opts.expertAlternate !== undefined)

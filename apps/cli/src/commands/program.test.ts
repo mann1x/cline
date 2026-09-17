@@ -139,6 +139,15 @@ describe("--expert-model and its knobs", () => {
 		expect(args.struggleMaxPerTask).toBe("4");
 	});
 
+	// The protocol's own threshold, added after the other five and on the same
+	// contract: a string, absent leaves core's measured default in place.
+	it("carries the thrown-away-attempt threshold too", () => {
+		expect(
+			parse(["--struggle-failed-transactions", "3"]).struggleFailedTransactions,
+		).toBe("3");
+		expect(parse([]).struggleFailedTransactions).toBeUndefined();
+	});
+
 	// The compaction threshold travels the same way and for the same reason:
 	// the default is measured, and the arm that checks it runs from here.
 	it("carries the forced full compaction through to the parsed args", () => {

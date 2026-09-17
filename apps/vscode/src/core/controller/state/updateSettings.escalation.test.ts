@@ -30,6 +30,7 @@ const stored: EscalationSettings = {
 	struggleMinIteration: 30,
 	struggleMaxPerTask: 1,
 	struggleEditStreak: 4,
+	struggleFailedTransactions: 3,
 	alternateWithBase: true,
 	relayNothing: false,
 }

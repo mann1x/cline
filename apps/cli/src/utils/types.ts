@@ -187,6 +187,7 @@ export interface ParsedArgs {
 	struggleMinIteration?: string;
 	struggleMaxPerTask?: string;
 	struggleEditStreak?: string;
+	struggleFailedTransactions?: string;
 	/**
 	 * The compaction from which the recency tail is dropped. From the flag.
 	 *

@@ -18,5 +18,6 @@ describe("escalation thresholds", () => {
 		assert.equal(DEFAULT_ESCALATION_SETTINGS.struggleMinIteration, core.minIteration)
 		assert.equal(DEFAULT_ESCALATION_SETTINGS.struggleMaxPerTask, core.maxPerTask)
 		assert.equal(DEFAULT_ESCALATION_SETTINGS.struggleEditStreak, core.editStreak)
+		assert.equal(DEFAULT_ESCALATION_SETTINGS.struggleFailedTransactions, core.failedTransactions)
 	})
 })
