@@ -178,6 +178,18 @@ function readLimit(value: string): number | undefined {
 	return Number.isFinite(limit) && limit > 0 ? limit : undefined
 }
 
+/**
+ * The same read, for a field where zero is a value rather than a refusal.
+ *
+ * `readLimit` above rejects 0 because every field it serves is a budget, and a
+ * budget of nothing is a mistyped box. Here 0 is the off switch, so rejecting
+ * it would leave the behaviour permanently on.
+ */
+function readCompactionIndex(value: string): number | undefined {
+	const index = Number.parseInt(value, 10)
+	return Number.isFinite(index) && index >= 0 ? index : undefined
+}
+
 interface FeatureSettingsSectionProps {
 	renderSectionHeader: (tabId: string) => JSX.Element | null
 }
@@ -191,6 +203,7 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		compactionPrompt,
 		defaultCompactionPrompt,
 		keepRecentMessagesAtCompaction,
+		forceFullFromCompaction,
 		fullCompactionPrompt,
 		defaultFullCompactionPrompt,
 		thinkingCompactionEnabled,
@@ -654,6 +667,36 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 						happened. That is rare &mdash; it needs the conversation to have run several times past the point where
 						compaction should have fired, which happens when a provider misreports its context window, or when auto
 						compaction was off and has just been turned on.
+					</p>
+					{/* The other way the tail gets dropped, and the deliberate one. Only
+					    meaningful while the switch above is on: with it off every
+					    compaction already keeps nothing. */}
+					<div className="space-y-1 pt-1">
+						<Label className="text-xs text-muted-foreground" htmlFor="force-full-from-compaction">
+							Drop the tail from compaction number
+						</Label>
+						<Input
+							defaultValue={forceFullFromCompaction ?? 2}
+							disabled={!useAutoCondense || keepRecentMessagesAtCompaction === false}
+							id="force-full-from-compaction"
+							min={0}
+							onChange={(event) => {
+								const index = readCompactionIndex(event.target.value)
+								if (index !== undefined) {
+									updateSetting("forceFullFromCompaction", index)
+								}
+							}}
+							step={1}
+							type="number"
+						/>
+					</div>
+					<p className="text-xs text-muted-foreground">
+						A task that has already been compacted is not the same as one that has not, so the tail stops surviving
+						once a run has been through this many compactions. Measured over 335 harness runs, the share that ended up
+						fixing the bug falls with each one: 85% at none, 63% after one, 50% after two, 25% after three. From the
+						second is where the count starts selecting runs that mostly do not recover &mdash; two in three of them
+						fail &mdash; and by then the summary is worth more to the model than the handful of turns it replaces. Set
+						1 to drop the tail at every compaction, or 0 to never drop it and leave the switch above in sole charge.
 					</p>
 				</div>
 

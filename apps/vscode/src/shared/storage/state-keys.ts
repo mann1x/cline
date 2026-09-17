@@ -346,6 +346,10 @@ const USER_SETTINGS_FIELDS = {
 	 * other strategy does not discard whatever was tuned for this one.
 	 */
 	keepRecentMessagesAtCompaction: { default: true as boolean },
+	// The compaction the tail stops surviving. Kept equal to core's measured
+	// constant by `force-full-from-compaction.test.ts`; `0` turns it off and is
+	// a value rather than an absence, so nothing on the way down may `??` it.
+	forceFullFromCompaction: { default: 2 as number },
 	fullCompactionPrompt: { default: "" as string },
 	thinkingCompactionEnabled: { default: true as boolean },
 	thinkingCompactionPrompt: { default: "" as string },

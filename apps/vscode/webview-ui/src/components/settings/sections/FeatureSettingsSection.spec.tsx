@@ -173,10 +173,48 @@ describe("Keep Recent Messages At Compaction", () => {
 
 		const labels = Array.from(container.querySelectorAll("label")).map((label) => label.textContent)
 		const tickbox = labels.indexOf("Keep Recent Messages At Compaction")
+		// The other way the tail is dropped goes with the switch that decides
+		// whether there is a tail at all, not with the prompt below them.
+		const dropFrom = labels.indexOf("Drop the tail from compaction number")
 		const prompt = labels.indexOf("Compaction Prompt")
 
 		expect(tickbox).toBeGreaterThanOrEqual(0)
-		expect(prompt).toBe(tickbox + 1)
+		expect(dropFrom).toBe(tickbox + 1)
+		expect(prompt).toBe(dropFrom + 1)
+	})
+
+	// Zero is the off switch, and the whole chain from this box down to core
+	// has to carry it as a value rather than read it as an empty field.
+	it("sends a zero, which is how the tail is never dropped", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		fireEvent.change(container.querySelector("#force-full-from-compaction") as Element, {
+			target: { value: "0" },
+		})
+
+		expect(mockUpdateSetting).toHaveBeenCalledWith("forceFullFromCompaction", 0)
+	})
+
+	it("sends the compaction the tail stops surviving", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		fireEvent.change(container.querySelector("#force-full-from-compaction") as Element, {
+			target: { value: "3" },
+		})
+
+		expect(mockUpdateSetting).toHaveBeenCalledWith("forceFullFromCompaction", 3)
+	})
+
+	// With the switch off every compaction already keeps nothing, so a number
+	// saying which one stops keeping it has nothing left to say.
+	it("goes quiet when the tail is off altogether", () => {
+		mockExtensionState.value = {
+			...mockExtensionState.value,
+			keepRecentMessagesAtCompaction: false,
+		}
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		expect(container.querySelector("#force-full-from-compaction")?.hasAttribute("disabled")).toBe(true)
 	})
 
 	it("is on unless it has been turned off", () => {

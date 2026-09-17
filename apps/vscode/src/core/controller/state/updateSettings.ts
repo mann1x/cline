@@ -214,6 +214,12 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			controller.stateManager.setGlobalState("compactionPrompt", request.compactionPrompt)
 		}
 
+		// Zero is the off switch, so the guard is on the field being sent at all
+		// rather than on its value: a falsy check here would make "never drop the
+		// tail" unsettable.
+		if (request.forceFullFromCompaction !== undefined) {
+			controller.stateManager.setGlobalState("forceFullFromCompaction", request.forceFullFromCompaction)
+		}
 		if (request.keepRecentMessagesAtCompaction !== undefined) {
 			controller.stateManager.setGlobalState("keepRecentMessagesAtCompaction", request.keepRecentMessagesAtCompaction)
 		}

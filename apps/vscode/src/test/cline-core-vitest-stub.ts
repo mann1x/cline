@@ -89,6 +89,11 @@ export {
 	getShippedToolCallSignatures,
 	HOST_TOOL_INPUT_SCHEMAS,
 } from "../../../../sdk/packages/core/src/extensions/config/shipped-tool-signatures"
+// From source, not stubbed: the panel's defaults exist to show the number the
+// detector actually uses, and a guard that compared them against a stub would
+// pass while the two drifted apart. The compaction threshold below is here for
+// the same reason and guarded the same way.
+export { FORCE_FULL_FROM_COMPACTION } from "../../../../sdk/packages/core/src/extensions/context/compaction-shared"
 export {
 	ASK_LSP_OPERATIONS,
 	ASK_LSP_TOOL_DESCRIPTION,
@@ -133,9 +138,6 @@ export {
 	DEFAULT_MAX_CHANGES,
 	DEFAULT_MAX_TRANSACTIONS,
 } from "../../../../sdk/packages/core/src/runtime/atomic/session-protocol"
-// From source, not stubbed: the panel's defaults exist to show the number the
-// detector actually uses, and a guard that compared them against a stub would
-// pass while the two drifted apart.
 export {
 	resolveStruggleThresholds,
 	type StruggleThresholds,

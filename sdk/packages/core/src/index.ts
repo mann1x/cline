@@ -996,6 +996,11 @@ export {
 export {
 	DEFAULT_COMPACTION_PROMPT,
 	DEFAULT_THINKING_COMPACTION_PROMPT,
+	// Exported for the same reason the struggle thresholds are: the panel shows
+	// the number actually in force rather than an empty box, and the two
+	// literals live in two packages with nothing in the type system holding
+	// them together.
+	FORCE_FULL_FROM_COMPACTION,
 } from "./extensions/context/compaction-shared";
 export {
 	DEFAULT_FULL_COMPACTION_PROMPT,

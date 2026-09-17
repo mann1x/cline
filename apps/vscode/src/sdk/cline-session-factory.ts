@@ -1659,6 +1659,10 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	// here, so a blank field falls back to the built-in written for that cut and
 	// never to the other one's.
 	const keepRecentMessagesAtCompaction = stateManager.getGlobalSettingsKey("keepRecentMessagesAtCompaction") ?? true
+	// No `??` fallback: the state key carries the default, and `0` here is the
+	// value that turns the behaviour off. Coalescing it would read "never" as
+	// "unset" and hand core back its own default, turning it on again.
+	const forceFullFromCompaction = stateManager.getGlobalSettingsKey("forceFullFromCompaction")
 	const fullCompactionPrompt = (stateManager.getGlobalSettingsKey("fullCompactionPrompt") ?? "").trim()
 	// Second-phase retrospective over the reasoning compaction discards.
 	// Defaults on: the summary alone leaves a resumed task with no memory of
@@ -2115,6 +2119,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 				? {
 						strategy: compactionStrategy,
 						keepRecentMessages: keepRecentMessagesAtCompaction,
+						...(typeof forceFullFromCompaction === "number" ? { forceFullFromCompaction } : {}),
 						...(compactionPrompt ? { summaryPrompt: compactionPrompt } : {}),
 						...(fullCompactionPrompt ? { fullSummaryPrompt: fullCompactionPrompt } : {}),
 						thinkingSummaryEnabled: thinkingCompactionEnabled,

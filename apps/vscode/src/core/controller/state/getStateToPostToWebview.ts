@@ -56,6 +56,7 @@ export async function getStateToPostToWebview(controller: {
 	const useAutoCondense = stateManager.getGlobalSettingsKey("useAutoCondense")
 	const compactionPrompt = stateManager.getGlobalSettingsKey("compactionPrompt")
 	const keepRecentMessagesAtCompaction = stateManager.getGlobalSettingsKey("keepRecentMessagesAtCompaction")
+	const forceFullFromCompaction = stateManager.getGlobalSettingsKey("forceFullFromCompaction")
 	const fullCompactionPrompt = stateManager.getGlobalSettingsKey("fullCompactionPrompt")
 	const thinkingCompactionEnabled = stateManager.getGlobalSettingsKey("thinkingCompactionEnabled")
 	const thinkingCompactionPrompt = stateManager.getGlobalSettingsKey("thinkingCompactionPrompt")
@@ -173,6 +174,7 @@ export async function getStateToPostToWebview(controller: {
 		// hand-over note this used to show is written for the other cut.
 		defaultCompactionPrompt: DEFAULT_REPLAY_COMPACTION_PROMPT,
 		keepRecentMessagesAtCompaction,
+		forceFullFromCompaction,
 		fullCompactionPrompt,
 		defaultFullCompactionPrompt: DEFAULT_FULL_COMPACTION_PROMPT,
 		thinkingCompactionEnabled,

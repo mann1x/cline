@@ -173,6 +173,7 @@ export interface ExtensionState {
 	defaultCompactionPrompt?: string
 	/** Whether the most recent messages survive a compaction verbatim. */
 	keepRecentMessagesAtCompaction?: boolean
+	forceFullFromCompaction?: number
 	/** Replaces the built-in instruction used when no recency tail survives. */
 	fullCompactionPrompt?: string
 	/** The built-in no-tail instruction, shown as that field's placeholder. */
