@@ -562,3 +562,75 @@ describe("the lexicon reaches the words models actually use", () => {
 		expect(round.hedgingRatio).toBe(going.hedgingRatio);
 	});
 });
+
+/**
+ * The signal the change protocol actually emits.
+ *
+ * Measured over 335 harness runs with a verdict: a discarded transaction and an
+ * empty submission occur in runs that end badly and, at two of them, in no run
+ * that reached FIXED at all -- 0 of 236. The failed-call window cannot see
+ * this, because a model failing the protocol calls its tools successfully and
+ * is told by the *result* that the check did not pass.
+ */
+describe("transactions the protocol threw away", () => {
+	it("speaks once two attempts have been thrown away", () => {
+		const struggle = detector();
+		struggle.noteTransactionOutcome("discarded");
+
+		expect(struggle.inspect({ iteration: 11 }).kind).toBe("ok");
+
+		struggle.noteTransactionOutcome("discarded");
+		const verdict = struggle.inspect({ iteration: 11 });
+
+		expect(verdict.kind).toBe("nudge");
+		expect(verdict.reason).toBe("transactions");
+	});
+
+	// An empty submission is the same waste by a different route: the attempt
+	// was spent and nothing was changed.
+	it("counts an empty submission as a thrown-away attempt", () => {
+		const struggle = detector();
+		struggle.noteTransactionOutcome("discarded");
+		struggle.noteTransactionOutcome("empty");
+
+		expect(struggle.inspect({ iteration: 11 }).reason).toBe("transactions");
+	});
+
+	// The count is of what the run has spent, not of what it spent in a row --
+	// that is what was measured, and a kept transaction does not give back the
+	// two that were discarded before it.
+	it("is not reset by a transaction that passed", () => {
+		const struggle = detector();
+		struggle.noteTransactionOutcome("discarded");
+		struggle.noteTransactionOutcome("kept");
+		struggle.noteTransactionOutcome("discarded");
+
+		expect(struggle.inspect({ iteration: 11 }).reason).toBe("transactions");
+	});
+
+	// `minIteration` exists because a hedging rate at iteration 12 is
+	// indistinguishable from a model still reading the problem. Two discarded
+	// transactions are not: they mean the same thing whenever they happen.
+	it("does not wait for the iteration floor", () => {
+		const struggle = new StruggleDetector({ minIteration: 500 });
+		struggle.noteTransactionOutcome("discarded");
+		struggle.noteTransactionOutcome("discarded");
+
+		expect(struggle.inspect({ iteration: 3 }).reason).toBe("transactions");
+	});
+
+	it("says it once per new pair rather than on every inspection", () => {
+		const struggle = detector();
+		struggle.noteTransactionOutcome("discarded");
+		struggle.noteTransactionOutcome("discarded");
+
+		expect(struggle.inspect({ iteration: 11 }).kind).toBe("nudge");
+		expect(struggle.inspect({ iteration: 11 }).kind).toBe("ok");
+
+		struggle.noteTransactionOutcome("discarded");
+		expect(struggle.inspect({ iteration: 11 }).kind).toBe("ok");
+
+		struggle.noteTransactionOutcome("discarded");
+		expect(struggle.inspect({ iteration: 11 }).kind).toBe("nudge");
+	});
+});

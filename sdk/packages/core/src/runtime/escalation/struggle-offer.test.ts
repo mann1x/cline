@@ -85,6 +85,28 @@ describe("how it reaches the model", () => {
 		expect(second).not.toContain("the offer");
 	});
 
+	// Same rule as `escalate` below, for the other remedy the nudge names: the
+	// suggestion is not consumed either, so it is still owed to the next call.
+	it("stays out of the subagent's own result, and is not spent on it", async () => {
+		const pending = createPendingSuggestion();
+		const [spawn, read] = withStruggleSuggestion(
+			[tool("spawn_agent"), tool("read_files")],
+			pending,
+		);
+		pending.hold("the offer");
+
+		const spawned = await (
+			spawn as unknown as AgentTool<unknown, unknown>
+		).execute({}, context);
+		expect(spawned).not.toContain("the offer");
+
+		const next = await (read as unknown as AgentTool<unknown, unknown>).execute(
+			{},
+			context,
+		);
+		expect(next).toContain("the offer");
+	});
+
 	// A model that has just taken the advice does not need to be given it again
 	// inside the answer.
 	it("stays out of the escalation's own result", async () => {
@@ -300,5 +322,66 @@ describe("the nudge", () => {
 			remaining: 0,
 		});
 		expect(streak).not.toContain("escalate");
+	});
+});
+
+/**
+ * Delegation is a different remedy from the expert and is priced differently.
+ *
+ * The expert costs money or somebody else's hardware, which is why it is named
+ * late and rarely. A subagent is this model on this endpoint, so the nudge can
+ * name it wherever it already speaks -- this adds no firing of its own, only
+ * words to a message that was being sent anyway.
+ */
+describe("the delegation nudge", () => {
+	const diagnosis =
+		"Over your last 10 turns: 5 tool calls came back as failures or refusals.";
+
+	it("names delegation only where the session can delegate", () => {
+		const can = describeEscalationNudge({
+			diagnosis,
+			complexity: [],
+			high: false,
+			canDelegate: true,
+			remaining: 3,
+		});
+		expect(can).toContain("spawn_agent");
+
+		const cannot = describeEscalationNudge({
+			diagnosis,
+			complexity: [],
+			high: false,
+			remaining: 3,
+		});
+		expect(cannot).not.toContain("spawn_agent");
+	});
+
+	// The whole point of the quieter verdict: an ordinary bad patch gets the
+	// cheap remedy named and the expensive one left alone.
+	it("does not name the expert just because it named delegation", () => {
+		const text = describeEscalationNudge({
+			diagnosis,
+			complexity: [],
+			high: false,
+			canDelegate: true,
+			remaining: 3,
+		});
+
+		expect(text).not.toContain("escalate");
+	});
+
+	it("says what a thrown-away attempt cost when that is what fired", () => {
+		const text = describeEscalationNudge({
+			diagnosis:
+				"4 of this task's attempts have been thrown away: 3 put back after failing the check, 1 submitted with nothing changed.",
+			complexity: [],
+			high: false,
+			reason: "transactions",
+			canDelegate: true,
+			remaining: 3,
+		});
+
+		expect(text).toContain("attempt");
+		expect(text).toContain("spawn_agent");
 	});
 });

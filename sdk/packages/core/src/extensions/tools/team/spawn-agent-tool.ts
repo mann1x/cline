@@ -24,6 +24,9 @@ import {
 	type DelegatedAgentConfigProvider,
 } from "./delegated-agent";
 
+/** The tool a model calls to hand a self-contained piece of work to a subagent. */
+export const SPAWN_AGENT_TOOL_NAME = "spawn_agent";
+
 type AgentExtension = NonNullable<AgentConfig["extensions"]>[number];
 type AgentFinishReason = AgentResult["finishReason"];
 
@@ -145,7 +148,7 @@ export function createSpawnAgentTool(
 	config: SpawnAgentToolConfig,
 ): AgentTool<SpawnAgentInput, SpawnAgentOutput> {
 	return createTool<SpawnAgentInput, SpawnAgentOutput>({
-		name: "spawn_agent",
+		name: SPAWN_AGENT_TOOL_NAME,
 		description:
 			"Spawn a sub-agent with a custom system prompt for specialized tasks. Use when delegating work that benefits from focused expertise. " +
 			"Output: `{text, iterations, finishReason, usage: {inputTokens, outputTokens}}`. " +

@@ -19,6 +19,7 @@ import type {
 	AgentToolContext,
 	AgentToolDefinition,
 } from "@cline/shared";
+import { SPAWN_AGENT_TOOL_NAME } from "../../extensions/tools/team/spawn-agent-tool";
 import { ESCALATE_TOOL_NAME } from "./escalate-tool";
 
 /**
@@ -86,12 +87,33 @@ export function describeEscalationNudge(input: {
 	 * times -- and that is the point at which raising the expert is the useful
 	 * thing to say rather than the premature one.
 	 */
-	reason?: "failures" | "edit-streak";
+	reason?: "failures" | "edit-streak" | "transactions";
+	/**
+	 * Whether this session can hand a piece of the work to a subagent.
+	 *
+	 * The expert is named late because it costs money or a shared GPU. A
+	 * subagent is this model on this endpoint, so naming it is nearly free --
+	 * which is why it rides the nudge that was already being sent rather than
+	 * earning a threshold of its own. The gate is the host's: `spawn_agent` off,
+	 * or an endpoint that serves one request at a time, and there is nothing to
+	 * suggest.
+	 */
+	canDelegate?: boolean;
 	remaining: number;
 }): string {
 	const lines = [input.diagnosis];
 	if (input.complexity.length > 0) {
 		lines.push("", ...input.complexity);
+	}
+	if (input.canDelegate) {
+		// Named on the nudge and not on the offer: by the time the expert is
+		// worth proposing, splitting the work is the slower of the two answers.
+		lines.push(
+			"",
+			input.reason === "transactions"
+				? `Those attempts were spent on one reading of the problem. \`${SPAWN_AGENT_TOOL_NAME}\` gives a piece of it to a subagent that reads it from nothing — the part you are least sure of is the part worth handing over, and you keep the attempt you are in.`
+				: `\`${SPAWN_AGENT_TOOL_NAME}\` hands a self-contained piece of this to a subagent that starts without what you have already assumed. It costs you no attempt and no budget; what comes back is a report, not an edit.`,
+		);
 	}
 	const streak = input.reason === "edit-streak";
 	if ((streak || input.high || input.broken) && input.remaining > 0) {
@@ -186,15 +208,19 @@ function withSuggestionAttached(
  *
  * Every tool, not a chosen few: the suggestion is about the run rather than
  * about any one call, and the model's next call is wherever it happens to go.
- * `escalate` itself is excluded — a model that has just taken the advice does
- * not need to be given it again inside the answer.
+ * `escalate` and `spawn_agent` are excluded — a model that has just taken the
+ * advice does not need to be given it again inside the answer. Neither call
+ * consumes the suggestion, so it is still owed to whatever runs next.
  */
 export function withStruggleSuggestion<T extends AgentToolDefinition>(
 	tools: readonly T[],
 	pending: PendingSuggestion,
 ): T[] {
 	return tools.map((tool) => {
-		if (tool.name === ESCALATE_TOOL_NAME) {
+		if (
+			tool.name === ESCALATE_TOOL_NAME ||
+			tool.name === SPAWN_AGENT_TOOL_NAME
+		) {
 			return tool;
 		}
 		const original = tool as unknown as AgentTool<unknown, unknown>;

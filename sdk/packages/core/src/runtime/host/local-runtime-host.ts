@@ -60,7 +60,10 @@ import {
 	withTaskProgressCapture,
 } from "../../extensions/tools/task-progress";
 import type { TeamEvent } from "../../extensions/tools/team";
-import { agentEndpointKey } from "../../extensions/tools/team/agent-slot-gate";
+import {
+	agentEndpointKey,
+	slotsAllowParallelDelegation,
+} from "../../extensions/tools/team/agent-slot-gate";
 import {
 	type BackgroundDelegationRegistry,
 	type BackgroundDelegationView,
@@ -1214,11 +1217,19 @@ export class LocalRuntimeHost implements RuntimeHost {
 				if (event.type === "opened") {
 					struggleDetector?.noteTransaction(event.transaction);
 				}
+				// The attempt is gone and the work with it. `carried` is
+				// excluded because the work stayed on disk, so nothing was
+				// thrown away -- a judgement rather than a measurement: it does
+				// not occur once in the 282 settlements of the corpus.
+				if (event.type === "settled" && !event.kept && !event.carried) {
+					struggleDetector?.noteTransactionOutcome("discarded");
+				}
 				// An empty submission is not a verdict and is not presented as one:
 				// nothing ran and nothing was put back. It still goes to the user,
 				// because a transaction that absorbed one and a transaction that
 				// never happened are otherwise indistinguishable in the transcript.
 				if (event.type === "empty") {
+					struggleDetector?.noteTransactionOutcome("empty");
 					configWithProvider.logger?.debug?.(event.message);
 					this.eventBridge.dispatchAgentEvent(sessionId, configWithProvider, {
 						type: "notice",
@@ -1753,12 +1764,21 @@ export class LocalRuntimeHost implements RuntimeHost {
 				: undefined;
 		};
 		const struggleSuggestion = createPendingSuggestion();
-		struggleDetector =
-			escalation.tools.length > 0
-				? new StruggleDetector(
-						configWithProvider.escalation?.struggleThresholds,
-					)
-				: undefined;
+		// Whether there is a cheap remedy to name. `spawn_agent` off, or an
+		// endpoint that serves one request at a time, and there is not.
+		const canDelegate =
+			configWithProvider.enableSpawnAgent !== false &&
+			slotsAllowParallelDelegation(configWithProvider.maxConcurrentAgents);
+		// An expert is no longer the only thing worth supervising a run for.
+		// The detector used to be gated on one existing, which meant a session
+		// with no expert got no struggle supervision of any kind -- including
+		// the nudge, which never needed the escalation budget. It now runs
+		// wherever it has something to suggest, and the offer keeps its own
+		// `remaining <= 0` guard below.
+		const struggleSupervised = escalation.tools.length > 0 || canDelegate;
+		struggleDetector = struggleSupervised
+			? new StruggleDetector(configWithProvider.escalation?.struggleThresholds)
+			: undefined;
 		const struggleFeed = struggleDetector
 			? createStruggleFeed(struggleDetector, (verdict) => {
 					const remaining = escalation.remaining;
@@ -1782,6 +1802,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 									high,
 									broken,
 									...(verdict.reason ? { reason: verdict.reason } : {}),
+									canDelegate,
 									remaining,
 								}),
 							);
@@ -1840,13 +1861,14 @@ export class LocalRuntimeHost implements RuntimeHost {
 					struggleSuggestion.hold(offer);
 				})
 			: undefined;
-		const toolsWithEscalation =
-			escalation.tools.length > 0
-				? withStruggleSuggestion(
-						[...toolsWithProtocol, ...escalation.tools],
-						struggleSuggestion,
-					)
-				: toolsWithProtocol;
+		const toolsWithEscalation = struggleSupervised
+			? withStruggleSuggestion(
+					escalation.tools.length > 0
+						? [...toolsWithProtocol, ...escalation.tools]
+						: toolsWithProtocol,
+					struggleSuggestion,
+				)
+			: toolsWithProtocol;
 		// The stand-down goes on last, so it refuses before any other
 		// decoration runs. A write that reaches the check-first gate or the
 		// revision capture has already been allowed, and the whole point is

@@ -94,6 +94,35 @@ export const STRUGGLE_MAX_PER_TASK = 2;
 export const STRUGGLE_EDIT_STREAK = 3;
 
 /**
+ * Attempts the change protocol threw away before the model is told.
+ *
+ * A discarded transaction is an attempt that ran, failed its check and was put
+ * back; an empty submission is one spent with nothing changed. Both are counted
+ * because both are an attempt the run no longer has.
+ *
+ * **Two, measured, and it is the only signal here the protocol emits.** The
+ * failed-call window is structurally blind to it: a model failing the protocol
+ * calls its tools *successfully* and is told by the result that the check did
+ * not pass. Replayed over 335 harness runs with a verdict (236 FIXED, 99
+ * broken/timed out), false alarm / recall:
+ *
+ * ```
+ *   >= 1 thrown away    2.5% / 18%
+ *   >= 2 thrown away    0.0% / 15%     <- this
+ *   >= 3 thrown away    0.0% / 13%
+ * ```
+ *
+ * Zero of 236 runs that reached FIXED ever threw away two. That is what buys
+ * it a place beside `STRUGGLE_FAILED_CALLS` rather than in place of it: the two
+ * signals fire on different populations, because a run without the protocol has
+ * no transactions and a run with it fails half as many tool calls (8.2% against
+ * 18.6%). Read together they catch 59% of the failures at the 9% false alarm
+ * the window already costs on its own -- nine more runs, and not one new false
+ * alarm.
+ */
+export const STRUGGLE_FAILED_TRANSACTIONS = 2;
+
+/**
  * The operating point, as the user may set it.
  *
  * These are load-bearing and the right numbers are an empirical question we
@@ -119,6 +148,8 @@ export interface StruggleThresholds {
 	maxPerTask?: number;
 	/** Consecutive failing edits before the model is told to consider the expert. */
 	editStreak?: number;
+	/** Attempts the protocol threw away before the model is told. */
+	failedTransactions?: number;
 }
 
 /** A positive integer, or the default. Anything else is not an operating point. */
@@ -135,6 +166,7 @@ export interface ResolvedStruggleThresholds {
 	readonly minIteration: number;
 	readonly maxPerTask: number;
 	readonly editStreak: number;
+	readonly failedTransactions: number;
 }
 
 export function resolveStruggleThresholds(
@@ -147,6 +179,10 @@ export function resolveStruggleThresholds(
 		minIteration: positive(given?.minIteration, STRUGGLE_MIN_ITERATION),
 		maxPerTask: positive(given?.maxPerTask, STRUGGLE_MAX_PER_TASK),
 		editStreak: positive(given?.editStreak, STRUGGLE_EDIT_STREAK),
+		failedTransactions: positive(
+			given?.failedTransactions,
+			STRUGGLE_FAILED_TRANSACTIONS,
+		),
 	};
 }
 
@@ -309,8 +345,10 @@ export interface StruggleVerdict {
 	 * `failures` is the ten-turn window; `edit-streak` is an unbroken run of
 	 * refused edits, which says something the window cannot -- that the model
 	 * is not merely failing often but failing at the same thing, in a row.
+	 * `transactions` is the protocol's own evidence, and it is the only one of
+	 * the three that survives the protocol being on.
 	 */
-	reason?: "failures" | "edit-streak";
+	reason?: "failures" | "edit-streak" | "transactions";
 	/** What was measured. Never what should be done about it. */
 	message?: string;
 	signals?: StruggleSignals;
@@ -424,6 +462,27 @@ export function describeEditStreak(
 }
 
 /**
+ * What a run of thrown-away attempts looks like, in the model's own terms.
+ *
+ * Observation, like the two beside it. What this adds over both is *cost*: a
+ * failed tool call is a turn, and a discarded transaction is a whole attempt
+ * the task does not get back.
+ */
+export function describeFailedTransactions(
+	thrownAway: number,
+	discarded: number,
+	empty: number,
+): string {
+	const lines = [
+		`${thrownAway} of this task's attempts have been thrown away: ${discarded} put back after failing the check, ${empty} submitted with nothing changed.`,
+	];
+	lines.push(
+		"Each one was a whole attempt rather than a turn, and the reading of the problem that produced them has not changed between them.",
+	);
+	return lines.join(" ");
+}
+
+/**
  * Tools whose call is an attempt to change a file.
  *
  * `restore_file` is deliberately absent. It changes a file, so it earns its
@@ -459,6 +518,15 @@ export class StruggleDetector {
 	private lastNudgeKey?: string;
 	/** Consecutive refused edits, counted over edit calls and nothing else. */
 	private editStreak = 0;
+	/**
+	 * Attempts the protocol threw away, over the whole task.
+	 *
+	 * Cumulative on purpose, and deliberately not reset by `noteTransaction`:
+	 * what was measured is how many attempts a run has spent without keeping
+	 * one, and a transaction that passes does not give back the two before it.
+	 */
+	private discardedTransactions = 0;
+	private emptyTransactions = 0;
 	private lastEditRefusal?: string;
 	/**
 	 * Files the session has changed, for the rule that a diagnosis is never
@@ -519,6 +587,20 @@ export class StruggleDetector {
 			return;
 		}
 		this.recordFor(outcome.iteration).failedCalls += 1;
+	}
+
+	/**
+	 * The change protocol closed an attempt.
+	 *
+	 * Only the two outcomes that cost the task an attempt are counted; `kept`
+	 * is recorded and counts for nothing, which is what the corpus measured.
+	 */
+	noteTransactionOutcome(outcome: "kept" | "discarded" | "empty"): void {
+		if (outcome === "discarded") {
+			this.discardedTransactions += 1;
+		} else if (outcome === "empty") {
+			this.emptyTransactions += 1;
+		}
 	}
 
 	/**
@@ -591,6 +673,13 @@ export class StruggleDetector {
 		if (streak !== undefined) {
 			return streak;
 		}
+		// Outside `minIteration` for the same reason as the streak, and on
+		// stronger evidence: no run that reached FIXED in the corpus ever threw
+		// two attempts away, at any iteration.
+		const thrown = this.thrownAwayVerdict();
+		if (thrown !== undefined) {
+			return thrown;
+		}
 		if (iteration < this.limits.minIteration) {
 			return { kind: "ok" };
 		}
@@ -655,6 +744,33 @@ export class StruggleDetector {
 	}
 
 	/**
+	 * Two attempts thrown away, said once per new pair.
+	 *
+	 * The same rule the streak uses and for the same reason: a model told about
+	 * the second discard learns nothing from being told about the third, and it
+	 * speaks again only once as much evidence has accumulated again.
+	 */
+	private thrownAwayVerdict(): StruggleVerdict | undefined {
+		const thrownAway = this.discardedTransactions + this.emptyTransactions;
+		if (
+			thrownAway < this.limits.failedTransactions ||
+			thrownAway % this.limits.failedTransactions !== 0
+		) {
+			return undefined;
+		}
+		const verdict = this.nudge(
+			"transactions",
+			`t${thrownAway}`,
+			describeFailedTransactions(
+				thrownAway,
+				this.discardedTransactions,
+				this.emptyTransactions,
+			),
+		);
+		return verdict.kind === "ok" ? undefined : verdict;
+	}
+
+	/**
 	 * Three refused edits in a row, said once per new value of "three".
 	 *
 	 * It speaks again only once as much evidence has accumulated again -- at
@@ -688,7 +804,7 @@ export class StruggleDetector {
 	 * diagnosis stops being read.
 	 */
 	private nudge(
-		reason: "failures" | "edit-streak",
+		reason: "failures" | "edit-streak" | "transactions",
 		key: string,
 		message: string,
 		signals?: StruggleSignals,
