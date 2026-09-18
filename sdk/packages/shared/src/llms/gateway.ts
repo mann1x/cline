@@ -17,6 +17,7 @@ import type {
 	ModelReasoningOption,
 	ReasoningEffort,
 } from "./reasoning-options";
+import type { ReasoningHistorySetting } from "./tokens";
 
 export type JsonValue =
 	| string
@@ -193,6 +194,11 @@ export interface GatewayProviderSettings {
 	fetch?: typeof fetch;
 	options?: Record<string, unknown>;
 	metadata?: GatewayProviderMetadata;
+	/**
+	 * How much prior assistant reasoning to replay, or `auto` to decide it per
+	 * model from a measured capability. Unset means `auto`.
+	 */
+	reasoningHistory?: ReasoningHistorySetting;
 }
 
 export interface GatewayResolvedProviderConfig extends GatewayProviderSettings {

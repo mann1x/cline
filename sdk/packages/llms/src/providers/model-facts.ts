@@ -6,8 +6,10 @@ import type {
 	ModelOperation,
 	ModelReasoningOption,
 	ReasoningEffort,
+	ReasoningHistorySetting,
 } from "@cline/shared";
 import { REASONING_LEVELS } from "@cline/shared";
+import { resolveReasoningHistorySetting } from "./reasoning-history";
 
 const ACTIVE_REASONING_EFFORTS = REASONING_LEVELS.filter(
 	(level): level is ReasoningEffort => level !== "none",
@@ -511,20 +513,44 @@ export type ReasoningHistoryMode = "all" | "last" | "none";
  * request the gateway will send -- have only the id, and for the providers this
  * rule names that is enough.
  */
-export function reasoningHistoryModeForProvider(
+/**
+ * What `auto` falls back to for a provider nothing can probe.
+ *
+ * `cerebras` transmits no reasoning at all. The local engines are probed, so
+ * their fallback is "send nothing until measured". Everything else keeps the
+ * behaviour it has always had, because the hosted wire formats specify
+ * reasoning replay and Anthropic requires the signed blocks back for tool use.
+ */
+/** Providers whose `auto` is not simply "keep replaying reasoning". */
+const PROBED_OR_MUTE_PROVIDERS = new Set(["cerebras", "ollama", "opencoti"]);
+
+function unprobedReasoningHistory(
 	providerId: string | undefined,
 ): ReasoningHistoryMode {
 	switch ((providerId ?? "").toLowerCase()) {
 		case "cerebras":
-		// Ollama's provider drops every reasoning part before the request
-		// leaves; the resolver below carries the measurement. This has to agree
-		// with it or the compaction pipeline measures a request the gateway
-		// will not send, which is the error this pair exists to prevent.
 		case "ollama":
+		case "opencoti":
 			return "none";
 		default:
 			return "all";
 	}
+}
+
+export function reasoningHistoryModeForProvider(
+	providerId: string | undefined,
+	config?: {
+		modelId?: string;
+		baseUrl?: string;
+		reasoningHistory?: ReasoningHistorySetting;
+	},
+): ReasoningHistoryMode {
+	return resolveReasoningHistorySetting(
+		config?.reasoningHistory,
+		config?.baseUrl,
+		config?.modelId ?? "",
+		unprobedReasoningHistory(providerId),
+	);
 }
 
 export function resolveReasoningHistoryMode(
@@ -534,29 +560,37 @@ export function resolveReasoningHistoryMode(
 	if (isCerebrasProvider(request, context)) {
 		return "none";
 	}
-	// Ollama transmits no reasoning history at all, so this says so.
+	// Measured, not declared.
 	//
-	// It used to resolve to "last", then to "all" on the reasoning that a model
-	// should keep its own recent thinking. Neither described what happens on the
-	// wire. `ollama-ai-provider-v2` aliases `provider.chat` to its responses
-	// model, and that converter drops every assistant reasoning part and pushes
-	// a warning per part -- measured at 23,695 warnings in a single transaction,
-	// about 87 per request.
+	// This used to return a constant per provider, and the constant for ollama
+	// was "none" with a comment saying the provider "drops every assistant
+	// reasoning part". That was wrong on the wire: captured 2026-09-18 against
+	// a stub server, flipping this one value put
+	// `"thinking": "..."` on the outgoing `/api/chat` body, because the strip
+	// happens in our own `toAiSdkMessages` and the vendor's chat converter
+	// carries the field. The dropping converter is the *responses* one, which
+	// only emits the warnings.
 	//
-	// Saying "all" while sending none is not a cosmetic mismatch: the estimator
-	// measures with this mode (see `resolveReasoningHistoryMode` in
-	// `gateway.ts`), so it counted characters the provider threw away. Measured
-	// on adjacent requests of one run: 592,322 characters estimated against a
-	// server-side prompt of 265,274 -- 2.23x -- and the overstatement is
-	// subtracted from the output cap, which resolved to 32,000 on a 262,144
-	// window.
+	// Whether sending it is worth anything is a different question again, and
+	// the only honest answer comes from the server: measured on solidPC with
+	// `qwen3.5:2b`, the same conversation cost 45 prompt tokens without
+	// `thinking` and 382 with it. `resolveReasoningHistorySetting` reads that
+	// measurement. An operator's explicit setting outranks it.
 	//
-	// Restoring the transport is a separate question and not obviously a win:
-	// ollama's qwen3.5 renderer keeps assistant think blocks for every message
-	// after the last real user turn, so in an agent run with one user message it
-	// would render the entire thinking history into every prompt.
-	if (isOllamaProvider(request, context)) {
-		return "none";
-	}
-	return "all";
+	// Getting this wrong is expensive in both directions. The estimator
+	// measures with this same mode, so claiming "all" while sending none
+	// counted 592,322 characters against a server-side prompt of 265,274 --
+	// 2.23x -- and the overstatement is subtracted from the output cap.
+	// The same three-place rule the predicates above use: a provider can be
+	// named at the request, at the resolved config, or by the manifest, and a
+	// custom entry pointed at a local engine carries the name in only one.
+	const namedProvider =
+		[request.providerId, context.config.providerId, context.provider.id].find(
+			(id) => PROBED_OR_MUTE_PROVIDERS.has(id.toLowerCase()),
+		) ?? request.providerId;
+	return reasoningHistoryModeForProvider(namedProvider, {
+		modelId: context.model?.id,
+		baseUrl: context.config?.baseUrl,
+		reasoningHistory: context.config?.reasoningHistory,
+	});
 }

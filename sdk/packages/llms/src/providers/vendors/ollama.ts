@@ -30,6 +30,7 @@ import { OLLAMA_DEFAULT_CONTEXT_WINDOW } from "../builtins";
 import type { ProviderSamplingOptions } from "../config";
 import { ensureFetch, resolveApiKey } from "../http";
 import { keepToolImagesMiddleware } from "../middleware/split-tool-images";
+import { primeOllamaReinjection } from "../reasoning-history";
 import {
 	createOllamaHealthProbe,
 	watchForStall,
@@ -725,16 +726,37 @@ export async function createOllamaProviderModule(
 		ensureFetch(requestFetch),
 		context.logger,
 	);
+	// Whether this server re-renders `thinking` back into the prompt, measured
+	// here rather than named anywhere. It costs two `/api/chat` calls with
+	// `num_predict: 1`, once per model per process, and it has to run before the
+	// first request because `toAiSdkMessages` decides what to send from the
+	// answer -- and the compaction pipeline reads the same cache, so the two
+	// must not disagree about what the request contains. Deliberately at first
+	// use and not at settings time: the probe needs the weights loaded, and a
+	// 27B model loading because a panel opened is not a trade worth making.
+	// Built once and shared with the probe below: the probe issues real
+	// `/api/chat` requests that can sit through a cold model load, so it needs
+	// the same dispatcher and the same absent body timeout as the turns do. An
+	// unwrapped probe fetch puts undici's five-minute `headersTimeout` back on
+	// exactly the request most likely to exceed it.
+	const timeoutFetch = withOllamaResponseTimeout(
+		ensureFetch(requestFetch),
+		readOllamaTimeoutMs(config),
+		streamDispatcher,
+		{ logger: context.logger },
+	);
+	if (context.model?.id) {
+		await primeOllamaReinjection(
+			config.baseUrl,
+			context.model.id,
+			timeoutFetch,
+		);
+	}
 	const provider = createOllama({
 		...(baseURL ? { baseURL } : {}),
 		...(Object.keys(headers).length > 0 ? { headers } : {}),
 		compatibility: "strict",
-		fetch: withOllamaResponseTimeout(
-			ensureFetch(requestFetch),
-			readOllamaTimeoutMs(config),
-			streamDispatcher,
-			{ logger: context.logger },
-		),
+		fetch: timeoutFetch,
 	});
 	// `num_ctx` and the sampler no longer ride on the model: this package has no
 	// model-level options hook, so they reach the wire as request-scoped

@@ -272,6 +272,7 @@ export type {
 	OutputCapReport,
 	OutputCapSource,
 	ReasoningHistoryMode,
+	ReasoningHistorySetting,
 } from "./llms/tokens";
 export {
 	anchoredRequestTokens,

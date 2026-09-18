@@ -7,6 +7,7 @@ import type {
 import { wrapLanguageModel } from "ai";
 import type { PolykvOptions } from "../config";
 import { splitToolImagesMiddleware } from "../middleware/split-tool-images";
+import { primeTemplateReinjection } from "../reasoning-history";
 import { llamaCppTimingsMetadataExtractor } from "./llamacpp-timings";
 import { localStreamFetch, resolveLocalStreamDispatcher } from "./ollama";
 import { getPolykvSession } from "./polykv";
@@ -260,6 +261,18 @@ export async function createOpencotiProviderModule(
 			request.sessionId ?? "none"
 		} dispatcher=${dispatcher ? "attached" : "none"}`,
 	);
+	// Whether this server's chat template puts prior reasoning back into the
+	// prompt. Unlike ollama's, this probe is free: `/apply-template` renders a
+	// conversation server-side, CPU-only and without taking a slot, so the
+	// answer comes from reading the server's own prompt rather than from
+	// measuring its length -- and it is safe to call while the server is busy.
+	if (context.model?.id) {
+		await primeTemplateReinjection(
+			baseURL,
+			context.model.id,
+			baseFetch ?? globalThis.fetch,
+		);
+	}
 	const providerFetch = createOpencotiFetch({
 		...(baseFetch ? { fetch: baseFetch } : {}),
 		dispatcher,

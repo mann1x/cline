@@ -9,6 +9,7 @@ import type {
 	BasicLogger,
 	ExtensionContext,
 	ReasoningEffort,
+	ReasoningHistorySetting,
 } from "@cline/shared";
 import type { ModelInfo, ProviderClient } from "../catalog/types";
 import {
@@ -147,6 +148,11 @@ export interface ReasoningConfig {
 	thinkingBudgetTokens?: number;
 	/** Enable thinking with provider/model defaults when supported */
 	thinking?: boolean;
+	/**
+	 * How much prior assistant reasoning to send back, or `auto` to decide it
+	 * per model from a measured capability. Unset means `auto`.
+	 */
+	reasoningHistory?: ReasoningHistorySetting;
 }
 
 /**

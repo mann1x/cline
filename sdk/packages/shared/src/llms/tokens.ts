@@ -623,6 +623,17 @@ function safeStringify(value: unknown): string {
 export type ReasoningHistoryMode = "all" | "last" | "none";
 
 /**
+ * What a profile stores, which is one value wider than what the request path
+ * uses.
+ *
+ * `auto` is a question, not an answer: it is resolved per model against a
+ * measured capability before anything reads it. Keeping it out of
+ * `ReasoningHistoryMode` is what stops it reaching `withSentReasoningOnly`,
+ * where it has no meaning and would silently behave as "all".
+ */
+export type ReasoningHistorySetting = ReasoningHistoryMode | "auto";
+
+/**
  * The messages as the provider will send them, for measurement purposes.
  *
  * The estimator measured the request it was handed; the provider then dropped
