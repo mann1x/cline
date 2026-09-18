@@ -209,6 +209,7 @@ export interface EffectiveProviderConfig {
 		readonly effort?: string
 		readonly budgetTokens?: number
 		readonly reasoningHistory?: string
+		readonly reasoningInline?: boolean
 	}
 	/**
 	 * Provider-level sampling parameters (providers.json `sampling`). Read as
@@ -261,6 +262,7 @@ interface ProviderReasoningPatch {
 	readonly effort?: string // "none" | "low" | "medium" | "high" | "xhigh"
 	readonly budgetTokens?: number
 	readonly reasoningHistory?: string // "auto" | "all" | "last" | "none"; "" clears to auto
+	readonly reasoningInline?: boolean
 }
 
 export interface ProviderConfigPatch {

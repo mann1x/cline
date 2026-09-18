@@ -117,4 +117,23 @@ describe("reasoning history", () => {
 			}).success,
 		).toBe(false);
 	});
+
+	it("carries the inline-fallback switch, and unset means on", () => {
+		// The gate over the goose fallback. Unset has to reach the resolver as
+		// unset rather than as `false`, because the resolver is where "on by
+		// default" is decided -- spelling the default here as well would be two
+		// places to change it and one of them would be missed.
+		expect(
+			toProviderConfig({
+				provider: "ollama",
+				reasoning: { reasoningInline: false },
+			} as never).reasoningInline,
+		).toBe(false);
+		expect(
+			toProviderConfig({
+				provider: "ollama",
+				reasoning: { enabled: true },
+			} as never).reasoningInline,
+		).toBeUndefined();
+	});
 });

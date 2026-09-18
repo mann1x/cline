@@ -219,7 +219,14 @@ function readReasoning(settings: Record<string, unknown>): ReasoningConfig | und
 		typeof reasoning.reasoningHistory === "string" && ["auto", "all", "last", "none"].includes(reasoning.reasoningHistory)
 			? reasoning.reasoningHistory
 			: undefined
-	if (enabled === undefined && effort === undefined && budgetTokens === undefined && history === undefined) {
+	const inline = typeof reasoning.reasoningInline === "boolean" ? reasoning.reasoningInline : undefined
+	if (
+		enabled === undefined &&
+		effort === undefined &&
+		budgetTokens === undefined &&
+		history === undefined &&
+		inline === undefined
+	) {
 		return undefined
 	}
 	return {
@@ -227,6 +234,7 @@ function readReasoning(settings: Record<string, unknown>): ReasoningConfig | und
 		...(effort !== undefined ? { effort } : {}),
 		...(budgetTokens !== undefined ? { budgetTokens } : {}),
 		...(history !== undefined ? { reasoningHistory: history } : {}),
+		...(inline !== undefined ? { reasoningInline: inline } : {}),
 	}
 }
 

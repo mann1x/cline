@@ -272,6 +272,7 @@ export type {
 	OutputCapReport,
 	OutputCapSource,
 	ReasoningHistoryMode,
+	ReasoningHistoryPlan,
 	ReasoningHistorySetting,
 } from "./llms/tokens";
 export {
@@ -286,6 +287,7 @@ export {
 	lastOutputCap,
 	measureRequestInputChars,
 	measureRequestReasoningChars,
+	nativeReasoningHistoryPlan,
 	noteContextOverflow,
 	noteOutputCap,
 	observeRequestTokens,

@@ -153,6 +153,11 @@ export interface ReasoningConfig {
 	 * per model from a measured capability. Unset means `auto`.
 	 */
 	reasoningHistory?: ReasoningHistorySetting;
+	/**
+	 * Whether `auto` may inline prior reasoning into content when the endpoint's
+	 * template renders none of the reasoning field. Unset means on.
+	 */
+	reasoningInline?: boolean;
 }
 
 /**

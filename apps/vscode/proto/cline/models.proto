@@ -356,6 +356,10 @@ message ProviderReasoningPatch {
   // "auto" | "all" | "last" | "none". Absent means auto, which is resolved
   // per model from a measured capability of the endpoint.
   optional string reasoning_history = 4;
+  // Whether "auto" may fold prior reasoning into the assistant's content when
+  // the endpoint's chat template renders none of the reasoning field. Absent
+  // means on; only consulted under "auto".
+  optional bool reasoning_inline = 5;
 }
 
 // Sampling parameters for providers that accept them per request (Ollama's

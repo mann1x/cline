@@ -1,6 +1,8 @@
-import type {
-	ReasoningHistoryMode,
-	ReasoningHistorySetting,
+import {
+	nativeReasoningHistoryPlan,
+	type ReasoningHistoryMode,
+	type ReasoningHistoryPlan,
+	type ReasoningHistorySetting,
 } from "@cline/shared";
 
 /**
@@ -290,4 +292,61 @@ export function resolveReasoningHistorySetting(
 		cachedReinjection(baseUrl, modelId),
 		unprobed,
 	);
+}
+
+/**
+ * The same resolution, but saying how the reasoning travels as well as how much.
+ *
+ * `resolveReasoningHistorySetting` answers one question -- how much -- and its
+ * answer for a server whose template drops the field is "none", which is
+ * correct about the field and wrong about the model: the model then starts
+ * every turn without the reasoning it produced in the last one.
+ *
+ * goose takes the other route in that case. It puts the block into the
+ * assistant's own content, wrapped in `<think>`, because content is the one
+ * thing every chat template renders. This resolver selects it only where the
+ * evidence says the field is dead:
+ *
+ * - **measured, and the template drops it** -- inline. Nothing is lost by
+ *   sending the field as well, but nothing is gained either, and the estimator
+ *   would then count it twice.
+ * - **measured, and the template renders it** -- native. Inlining on top would
+ *   send the same thinking twice, once in each place.
+ * - **no reasoning channel at all** -- inline, for the same reason as the
+ *   first case.
+ * - **never measured** -- native, at whatever the unprobed fallback is. The
+ *   probe failing is not evidence that the field is dropped, and a hosted API
+ *   that specifies reasoning replay must keep it.
+ *
+ * `allowInline` is the operator's switch over the whole fallback, on by
+ * default. Off, this degrades exactly to the mode resolver.
+ */
+export function resolveReasoningHistoryPlan(
+	setting: ReasoningHistorySetting | undefined,
+	baseUrl: string | undefined,
+	modelId: string,
+	unprobed: ReasoningHistoryMode = "none",
+	allowInline = true,
+): ReasoningHistoryPlan {
+	// An explicit choice is native by construction. Someone who picked Nothing
+	// gets nothing by any route, and someone who picked Last or Everything asked
+	// for the transport's own field.
+	if (setting !== undefined && setting !== "auto") {
+		return nativeReasoningHistoryPlan(setting);
+	}
+	const capability = cachedReinjection(baseUrl, modelId);
+	const mode = autoReasoningHistoryMode(capability, unprobed);
+	if (!allowInline || !capability) {
+		return nativeReasoningHistoryPlan(mode);
+	}
+	const dropped =
+		capability.channel === "none" || capability.reinjects === false;
+	if (!dropped) {
+		return nativeReasoningHistoryPlan(mode);
+	}
+	// Bounded the same way the native path is, and for the same reason: an agent
+	// run has one user message, so "everything" means the whole accumulated
+	// thinking history in every prompt. Inlining makes that cost unconditional
+	// rather than dependent on a renderer, which makes it worse, not better.
+	return { scope: "last", channel: "inline" };
 }

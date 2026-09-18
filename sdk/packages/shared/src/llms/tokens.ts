@@ -634,6 +634,38 @@ export type ReasoningHistoryMode = "all" | "last" | "none";
 export type ReasoningHistorySetting = ReasoningHistoryMode | "auto";
 
 /**
+ * How prior reasoning travels, which is two questions rather than one.
+ *
+ * `scope` is how much of it goes at all, and it is the only half the estimator
+ * needs: it counts characters that reach the server, and both channels do.
+ *
+ * `channel` is the route. `native` is the reasoning part the transport carries
+ * in its own field. `inline` is the fallback goose takes when the field exists
+ * and the server's chat template renders none of it: the block is folded into
+ * the assistant's own text, wrapped in `<think>`, because content is the one
+ * thing every template does render. It is measurably not the same request --
+ * the field costs nothing when it is dropped, and the inlined text costs what
+ * it says -- but the alternative is a model that cannot see what it worked out
+ * one turn ago.
+ *
+ * The two are orthogonal on purpose. A scope of `none` makes the channel moot,
+ * and an explicit scope never selects `inline`: the fallback exists to make
+ * `auto` do something sensible against a template that drops the field, not to
+ * overrule an operator who asked for nothing.
+ */
+export interface ReasoningHistoryPlan {
+	scope: ReasoningHistoryMode;
+	channel: "native" | "inline";
+}
+
+/** The plan a bare mode means: that scope, over the transport's own field. */
+export function nativeReasoningHistoryPlan(
+	scope: ReasoningHistoryMode,
+): ReasoningHistoryPlan {
+	return { scope, channel: "native" };
+}
+
+/**
  * The messages as the provider will send them, for measurement purposes.
  *
  * The estimator measured the request it was handed; the provider then dropped

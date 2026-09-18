@@ -89,6 +89,13 @@ export const ReasoningSettingsSchema = z.object({
 	 * history into every prompt.
 	 */
 	reasoningHistory: z.enum(["auto", "all", "last", "none"]).optional(),
+	/**
+	 * Whether `auto` may fall back to folding prior reasoning into the
+	 * assistant's content when the endpoint's chat template renders none of the
+	 * reasoning field. On unless this says otherwise, and consulted only under
+	 * `auto` -- an explicit replay mode is already an answer.
+	 */
+	reasoningInline: z.boolean().optional(),
 });
 
 export type ReasoningSettings = z.infer<typeof ReasoningSettingsSchema>;
@@ -417,6 +424,7 @@ export function toProviderConfig(
 		reasoningEffort,
 		thinkingBudgetTokens: settings.reasoning?.budgetTokens,
 		reasoningHistory: settings.reasoning?.reasoningHistory,
+		reasoningInline: settings.reasoning?.reasoningInline,
 		sampling: settings.sampling,
 		polykv: settings.polykv,
 		region: settings.region ?? settings.aws?.region ?? settings.gcp?.region,

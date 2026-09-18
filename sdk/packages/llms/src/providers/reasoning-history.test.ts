@@ -5,6 +5,7 @@ import {
 	primeOllamaReinjection,
 	primeTemplateReinjection,
 	resetReasoningReinjection,
+	resolveReasoningHistoryPlan,
 	resolveReasoningHistorySetting,
 } from "./reasoning-history";
 
@@ -258,5 +259,97 @@ describe("auto never silently changes a provider it cannot probe", () => {
 		expect(
 			resolveReasoningHistorySetting("auto", "http://h/api", "m", "all"),
 		).toBe("none");
+	});
+});
+
+describe("resolveReasoningHistoryPlan", () => {
+	beforeEach(() => {
+		resetReasoningReinjection();
+	});
+
+	it("inlines the last block when the channel exists but the template drops it", async () => {
+		// The goose fallback. The field goes on the wire and the renderer throws
+		// it away, so the model never sees what it just worked out -- and the
+		// only place left to put it is the content the template does render.
+		await primeTemplateReinjection(
+			"http://e/",
+			"m",
+			(async () =>
+				new Response(JSON.stringify({ prompt: "<|user|>probe" }), {
+					status: 200,
+				})) as never,
+		);
+
+		expect(resolveReasoningHistoryPlan("auto", "http://e/", "m")).toEqual({
+			scope: "last",
+			channel: "inline",
+		});
+	});
+
+	it("uses the native channel when the server does re-render it", async () => {
+		await primeTemplateReinjection(
+			"http://e/",
+			"m",
+			(async () =>
+				new Response(
+					JSON.stringify({ prompt: "x CLINE-REINJECTION-PROBE-8F2A y" }),
+					{ status: 200 },
+				)) as never,
+		);
+
+		expect(resolveReasoningHistoryPlan("auto", "http://e/", "m")).toEqual({
+			scope: "last",
+			channel: "native",
+		});
+	});
+
+	it("does not inline when the probe never answered", async () => {
+		// Unproven is not "drops it". Inlining on a server that renders the
+		// field anyway would send the same thinking twice.
+		await primeTemplateReinjection("http://e/", "m", (async () => {
+			throw new Error("unreachable");
+		}) as never);
+
+		expect(resolveReasoningHistoryPlan("auto", "http://e/", "m")).toEqual({
+			scope: "none",
+			channel: "native",
+		});
+	});
+
+	it("never inlines against an explicit choice", async () => {
+		// An operator who picked Nothing gets nothing, by any route. The
+		// fallback exists to honour `auto`, not to overrule a person.
+		await primeTemplateReinjection(
+			"http://e/",
+			"m",
+			(async () =>
+				new Response(JSON.stringify({ prompt: "no needle" }), {
+					status: 200,
+				})) as never,
+		);
+
+		expect(resolveReasoningHistoryPlan("none", "http://e/", "m")).toEqual({
+			scope: "none",
+			channel: "native",
+		});
+		expect(resolveReasoningHistoryPlan("last", "http://e/", "m")).toEqual({
+			scope: "last",
+			channel: "native",
+		});
+	});
+
+	it("is switched off by the gate", async () => {
+		await primeTemplateReinjection(
+			"http://e/",
+			"m",
+			(async () =>
+				new Response(JSON.stringify({ prompt: "no needle" }), {
+					status: 200,
+				})) as never,
+		);
+
+		expect(
+			resolveReasoningHistoryPlan("auto", "http://e/", "m", "none", false),
+		).toEqual({ scope: "none", channel: "native" });
 	});
 });

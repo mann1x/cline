@@ -3634,6 +3634,77 @@ describe("sdk-gateway", () => {
 		expect(serialized).toContain("More.");
 	});
 
+	it("inlines the last block into content when the template renders none of the field", async () => {
+		// The goose fallback, end to end. The probe has measured this endpoint's
+		// own template and found it drops the reasoning field, so sending the
+		// field costs the estimator characters the server never sees and buys
+		// the model nothing. Content is the one thing every template renders.
+		const { primeTemplateReinjection, resetReasoningReinjection } =
+			await import("./reasoning-history");
+		resetReasoningReinjection();
+		await primeTemplateReinjection(
+			"http://localhost:8080/v1",
+			"v7-coder",
+			(async () =>
+				new Response(JSON.stringify({ prompt: "<|im_start|>user\nprobe" }), {
+					status: 200,
+				})) as never,
+		);
+
+		streamTextSpy.mockReturnValue({
+			fullStream: makeStreamParts([
+				{ type: "finish", usage: { inputTokens: 1, outputTokens: 1 } },
+			]),
+		});
+
+		const gateway = createGateway({
+			providerConfigs: [
+				{ providerId: "opencoti", baseUrl: "http://localhost:8080/v1" },
+			],
+		});
+
+		await collect(
+			await gateway.stream({
+				providerId: "opencoti",
+				modelId: "v7-coder",
+				messages: [
+					baseMessages[0],
+					{
+						id: "assistant_1",
+						role: "assistant",
+						content: [
+							{ type: "reasoning", text: "stale thinking" },
+							{ type: "text", text: "Hello!" },
+						],
+						createdAt: Date.now(),
+					},
+					{
+						id: "assistant_2",
+						role: "assistant",
+						content: [
+							{ type: "reasoning", text: "current thinking" },
+							{ type: "text", text: "More." },
+						],
+						createdAt: Date.now(),
+					},
+				],
+			}),
+		);
+
+		const serialized = JSON.stringify(
+			(streamTextSpy.mock.calls.at(-1)?.[0] as { messages?: unknown })
+				?.messages,
+		);
+		// Bounded like the native path: the last block only, never the history.
+		expect(serialized).not.toContain("stale thinking");
+		expect(serialized).toContain("<think>current thinking</think>");
+		expect(serialized).toContain("More.");
+		// Inlined *instead of* sent, not as well. Both would put the same
+		// thinking in the prompt twice and count it once.
+		expect(serialized).not.toContain('"type":"reasoning"');
+		resetReasoningReinjection();
+	});
+
 	it("omits Cerebras reasoning-only assistant history instead of sending empty assistant content", async () => {
 		streamTextSpy.mockReturnValue({
 			fullStream: makeStreamParts([

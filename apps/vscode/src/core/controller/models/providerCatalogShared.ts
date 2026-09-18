@@ -252,6 +252,7 @@ export function toRedactedProviderConfigResponse(
 					effort: config.reasoning.effort,
 					budgetTokens: config.reasoning.budgetTokens,
 					reasoningHistory: config.reasoning.reasoningHistory,
+					reasoningInline: config.reasoning.reasoningInline,
 				}
 			: undefined,
 		sampling: config.sampling ? { ...config.sampling, stop: [...(config.sampling.stop ?? [])] } : undefined,
@@ -386,6 +387,9 @@ export function toProviderConfigPatch(protoPatch: WriteProviderConfigPatch | und
 						...(protoPatch.reasoning.effort !== undefined ? { effort: protoPatch.reasoning.effort } : {}),
 						...(protoPatch.reasoning.budgetTokens !== undefined
 							? { budgetTokens: protoPatch.reasoning.budgetTokens }
+							: {}),
+						...(protoPatch.reasoning.reasoningInline !== undefined
+							? { reasoningInline: protoPatch.reasoning.reasoningInline }
 							: {}),
 						...(protoPatch.reasoning.reasoningHistory !== undefined
 							? { reasoningHistory: protoPatch.reasoning.reasoningHistory }

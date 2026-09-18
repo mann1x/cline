@@ -773,7 +773,8 @@ function writeProviderSettingsFields(providerId: ProviderId, patch: ProviderConf
 			(reasoningPatch.enabled === undefined &&
 				reasoningPatch.effort === undefined &&
 				reasoningPatch.budgetTokens === undefined &&
-				reasoningPatch.reasoningHistory === undefined)
+				reasoningPatch.reasoningHistory === undefined &&
+				reasoningPatch.reasoningInline === undefined)
 		) {
 			delete next.reasoning
 		} else {
@@ -796,6 +797,12 @@ function writeProviderSettingsFields(providerId: ProviderId, patch: ProviderConf
 				// "" is the panel clearing the choice, which means auto, and auto
 				// is stored as absent so the resolver falls through to the probe.
 				merged.reasoningHistory = reasoningPatch.reasoningHistory === "" ? undefined : reasoningPatch.reasoningHistory
+			}
+			if (reasoningPatch.reasoningInline !== undefined) {
+				// `true` is the default, so it is stored as absent for the same
+				// reason Automatic is: a stored value that equals the default is
+				// a value that cannot follow the default if it ever changes.
+				merged.reasoningInline = reasoningPatch.reasoningInline === true ? undefined : false
 			}
 			;(next as Record<string, unknown>).reasoning = merged
 		}

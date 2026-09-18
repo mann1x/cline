@@ -1333,4 +1333,30 @@ describe("reasoning history round trip", () => {
 		store.write(providerId, toProviderConfigPatch(WriteProviderConfigPatch.create({ reasoning: {} } as never)))
 		expect(store.read(providerId).reasoning).toBeUndefined()
 	})
+
+	it("round-trips the inline fallback switch, storing the default as absent", async () => {
+		const { toProviderConfigPatch } = await import("@core/controller/models/providerCatalogShared")
+		const { buildEffectiveProviderConfig } = await import("./effective-config")
+		const { WriteProviderConfigPatch } = await import("@shared/proto/cline/models")
+		const { createProviderConfigStore } = await import("./store")
+		const store = createProviderConfigStore()
+		const providerId = parseProviderId("ollama")
+
+		store.write(
+			providerId,
+			toProviderConfigPatch(WriteProviderConfigPatch.create({ reasoning: { reasoningInline: false } } as never)),
+		)
+		expect(store.read(providerId).reasoning?.reasoningInline).toBe(false)
+		// Read back through the path the panel actually reads, not just the
+		// store: a field written and never read is the failure this chain keeps
+		// producing, and it does not fail at the compiler.
+		expect(buildEffectiveProviderConfig(providerId).reasoning?.reasoningInline).toBe(false)
+
+		store.write(
+			providerId,
+			toProviderConfigPatch(WriteProviderConfigPatch.create({ reasoning: { reasoningInline: true } } as never)),
+		)
+		// On is the default, so it is stored as absent rather than as `true`.
+		expect(store.read(providerId).reasoning?.reasoningInline).toBeUndefined()
+	})
 })

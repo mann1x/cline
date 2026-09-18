@@ -1,4 +1,4 @@
-import { VSCodeDropdown, VSCodeOption } from "@vscode/webview-ui-toolkit/react"
+import { VSCodeCheckbox, VSCodeDropdown, VSCodeOption } from "@vscode/webview-ui-toolkit/react"
 import { useProviderConfig } from "@/hooks/useProviderConfig"
 
 type Mode = "auto" | "all" | "last" | "none"
@@ -45,6 +45,8 @@ export const ReasoningHistoryField = ({ providerId }: { providerId: string }) =>
 	// Absent means Automatic — which is what every profile written before this
 	// setting existed means, and what clearing it goes back to.
 	const selected = (config.reasoning?.reasoningHistory as Mode | undefined) ?? "auto"
+	// On unless the profile says otherwise, the same way the resolver reads it.
+	const inline = config.reasoning?.reasoningInline !== false
 
 	return (
 		<div className="flex flex-col gap-1 mb-[5px]">
@@ -74,6 +76,28 @@ export const ReasoningHistoryField = ({ providerId }: { providerId: string }) =>
 				))}
 			</VSCodeDropdown>
 			<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">{reasoningHistoryDescription(selected)}</p>
+			{selected === "auto" ? (
+				<div className="mt-[5px]">
+					<VSCodeCheckbox
+						checked={inline}
+						onChange={(event) => {
+							const next = (event.target as HTMLInputElement).checked
+							if (next === inline) {
+								return
+							}
+							void write({ reasoning: { reasoningInline: next } }).catch((error) =>
+								console.error("Failed to update reasoning inlining:", error),
+							)
+						}}>
+						Inline thinking when the template drops it
+					</VSCodeCheckbox>
+					<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
+						Only under Automatic, and only where the endpoint has been measured to render none of the reasoning field:
+						the last block is folded into the assistant's own message as <code>&lt;think&gt;…&lt;/think&gt;</code>,
+						which every chat template does render. Turn it off to send nothing rather than spend the tokens.
+					</p>
+				</div>
+			) : null}
 		</div>
 	)
 }

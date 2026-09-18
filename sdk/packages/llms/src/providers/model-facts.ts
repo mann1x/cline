@@ -6,10 +6,11 @@ import type {
 	ModelOperation,
 	ModelReasoningOption,
 	ReasoningEffort,
+	ReasoningHistoryPlan,
 	ReasoningHistorySetting,
 } from "@cline/shared";
-import { REASONING_LEVELS } from "@cline/shared";
-import { resolveReasoningHistorySetting } from "./reasoning-history";
+import { nativeReasoningHistoryPlan, REASONING_LEVELS } from "@cline/shared";
+import { resolveReasoningHistoryPlan } from "./reasoning-history";
 
 const ACTIVE_REASONING_EFFORTS = REASONING_LEVELS.filter(
 	(level): level is ReasoningEffort => level !== "none",
@@ -537,19 +538,42 @@ function unprobedReasoningHistory(
 	}
 }
 
+export interface ReasoningHistoryProviderConfig {
+	modelId?: string;
+	baseUrl?: string;
+	reasoningHistory?: ReasoningHistorySetting;
+	/**
+	 * Whether `auto` may fall back to inlining the block into content when the
+	 * server's template renders none of the reasoning field. On unless an
+	 * operator turns it off.
+	 */
+	reasoningInline?: boolean;
+}
+
 export function reasoningHistoryModeForProvider(
 	providerId: string | undefined,
-	config?: {
-		modelId?: string;
-		baseUrl?: string;
-		reasoningHistory?: ReasoningHistorySetting;
-	},
+	config?: ReasoningHistoryProviderConfig,
 ): ReasoningHistoryMode {
-	return resolveReasoningHistorySetting(
+	return reasoningHistoryPlanForProvider(providerId, config).scope;
+}
+
+/**
+ * The same answer, with the route as well as the amount.
+ *
+ * Both callers exist: the compaction pipeline needs only the scope, because
+ * both routes put the same characters on the wire, and the request path needs
+ * the route, because it is the one building the message.
+ */
+export function reasoningHistoryPlanForProvider(
+	providerId: string | undefined,
+	config?: ReasoningHistoryProviderConfig,
+): ReasoningHistoryPlan {
+	return resolveReasoningHistoryPlan(
 		config?.reasoningHistory,
 		config?.baseUrl,
 		config?.modelId ?? "",
 		unprobedReasoningHistory(providerId),
+		config?.reasoningInline ?? true,
 	);
 }
 
@@ -557,8 +581,19 @@ export function resolveReasoningHistoryMode(
 	request: GatewayStreamRequest,
 	context: GatewayProviderContext,
 ): ReasoningHistoryMode {
+	return resolveReasoningHistoryPlanForRequest(request, context).scope;
+}
+
+export function resolveReasoningHistoryPlanForRequest(
+	request: GatewayStreamRequest,
+	context: GatewayProviderContext,
+): ReasoningHistoryPlan {
 	if (isCerebrasProvider(request, context)) {
-		return "none";
+		// Not a template that drops the field: the vendor transmits no reasoning
+		// at all, in either direction. There is nothing for the fallback to
+		// rescue, and inlining would invent history the model never wrote down
+		// anywhere this transport can carry.
+		return nativeReasoningHistoryPlan("none");
 	}
 	// Measured, not declared.
 	//
@@ -574,7 +609,7 @@ export function resolveReasoningHistoryMode(
 	// Whether sending it is worth anything is a different question again, and
 	// the only honest answer comes from the server: measured on solidPC with
 	// `qwen3.5:2b`, the same conversation cost 45 prompt tokens without
-	// `thinking` and 382 with it. `resolveReasoningHistorySetting` reads that
+	// `thinking` and 382 with it. `resolveReasoningHistoryPlan` reads that
 	// measurement. An operator's explicit setting outranks it.
 	//
 	// Getting this wrong is expensive in both directions. The estimator
@@ -588,9 +623,10 @@ export function resolveReasoningHistoryMode(
 		[request.providerId, context.config.providerId, context.provider.id].find(
 			(id) => PROBED_OR_MUTE_PROVIDERS.has(id.toLowerCase()),
 		) ?? request.providerId;
-	return reasoningHistoryModeForProvider(namedProvider, {
+	return reasoningHistoryPlanForProvider(namedProvider, {
 		modelId: context.model?.id,
 		baseUrl: context.config?.baseUrl,
 		reasoningHistory: context.config?.reasoningHistory,
+		reasoningInline: context.config?.reasoningInline,
 	});
 }

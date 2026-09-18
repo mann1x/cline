@@ -199,6 +199,12 @@ export interface GatewayProviderSettings {
 	 * model from a measured capability. Unset means `auto`.
 	 */
 	reasoningHistory?: ReasoningHistorySetting;
+	/**
+	 * Whether `auto` may inline prior reasoning into the assistant's content
+	 * when the endpoint's chat template renders none of the reasoning field.
+	 * Unset means on; it is only ever consulted under `auto`.
+	 */
+	reasoningInline?: boolean;
 }
 
 export interface GatewayResolvedProviderConfig extends GatewayProviderSettings {

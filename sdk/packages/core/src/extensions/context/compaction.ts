@@ -541,6 +541,13 @@ export function createContextCompactionPrepareTurn(
 				modelId: providerConfig.modelId ?? config.modelId,
 				baseUrl: providerConfig.baseUrl,
 				reasoningHistory: providerConfig.reasoningHistory,
+				// The gate belongs here too: with the fallback on, a template that
+				// drops the field still gets the block -- inlined into content --
+				// so those characters do reach the server and have to be counted.
+				// Reading the setting in one path and not the other is the
+				// estimator/request-path disagreement this whole resolver exists
+				// to end.
+				reasoningInline: providerConfig.reasoningInline,
 			},
 		);
 		const requestInputTokens = estimateRequestInputTokens(

@@ -14,6 +14,8 @@ import type {
 	ModelToolExecution,
 	ModelToolName,
 	ProviderErrorClass,
+	ReasoningHistoryMode,
+	ReasoningHistoryPlan,
 } from "@cline/shared";
 import {
 	type AiSdkFormatterMessage,
@@ -25,6 +27,7 @@ import {
 	generatedMediaModalityFromMediaType,
 	modelProducesImages,
 	modelSupportsToolCalling,
+	nativeReasoningHistoryPlan,
 	parseJsonStream,
 	sanitizeSurrogates,
 	usesImageGenerationOperation,
@@ -51,9 +54,8 @@ import { createRetryRateLimitMiddleware } from "./middleware/retry-rate-limit";
 import {
 	isAnthropicCompatibleModel,
 	modelSupportsImageInput,
-	type ReasoningHistoryMode,
 	resolveModelFamily,
-	resolveReasoningHistoryMode,
+	resolveReasoningHistoryPlanForRequest,
 } from "./model-facts";
 import {
 	recordProviderRequestCapture,
@@ -425,7 +427,7 @@ function buildAiSdkRequestMessages(
 	systemPrompt?: string,
 ) {
 	const aiMessages = toAiSdkMessages(request.messages, systemPrompt, {
-		reasoningHistory: resolveReasoningHistoryMode(request, context),
+		reasoningHistory: resolveReasoningHistoryPlanForRequest(request, context),
 		supportedInputModalities:
 			context.model.modalities?.input ??
 			(context.model.capabilities
@@ -751,11 +753,15 @@ function toAiSdkMessages(
 	messages: readonly AgentMessage[],
 	systemPrompt?: string,
 	options?: {
-		reasoningHistory?: ReasoningHistoryMode;
+		reasoningHistory?: ReasoningHistoryMode | ReasoningHistoryPlan;
 		supportedInputModalities?: readonly string[];
 	},
 ) {
-	const reasoningHistory = options?.reasoningHistory ?? "all";
+	const plan: ReasoningHistoryPlan =
+		typeof options?.reasoningHistory === "string"
+			? nativeReasoningHistoryPlan(options.reasoningHistory)
+			: (options?.reasoningHistory ?? nativeReasoningHistoryPlan("all"));
+	const reasoningHistory = plan.scope;
 	// Which message keeps its reasoning under `last`. Found by scanning for the
 	// final message that actually carries a reasoning part, not by taking the
 	// final message: the last turn is often a tool result, and "keep the last
@@ -777,6 +783,10 @@ function toAiSdkMessages(
 			(reasoningHistory === "last" && messageIndex === lastReasoningIndex);
 		const content: AiSdkFormatterPart[] = [];
 		let skippedReasoning = false;
+		// The goose route: reasoning the transport would carry in its own field,
+		// folded into the assistant's text instead, because this endpoint's chat
+		// template renders the field and then throws it away.
+		const inlined: string[] = [];
 		for (const part of message.content) {
 			if (part.type === "text") {
 				content.push({ type: "text", text: sanitizeSurrogates(part.text) });
@@ -786,6 +796,13 @@ function toAiSdkMessages(
 			if (part.type === "reasoning") {
 				if (!includeReasoning) {
 					skippedReasoning = true;
+					continue;
+				}
+				if (plan.channel === "inline") {
+					const text = sanitizeSurrogates(part.text).trim();
+					if (text.length > 0) {
+						inlined.push(text);
+					}
 					continue;
 				}
 				const metadata = part.metadata as Record<string, unknown> | undefined;
@@ -863,6 +880,25 @@ function toAiSdkMessages(
 					output: part.output,
 					isError: part.isError ?? false,
 				});
+			}
+		}
+
+		if (inlined.length > 0) {
+			// Onto the front of the text the message already has, rather than as
+			// a second text part beside it: an assistant turn with two text parts
+			// is rendered differently by different templates, and some collapse
+			// it, so the one that has to survive intact is the one the model
+			// wrote.
+			const block = `<think>${inlined.join("\n")}</think>`;
+			const firstText = content.findIndex((part) => part.type === "text");
+			if (firstText >= 0) {
+				const existing = content[firstText] as { type: "text"; text: string };
+				content[firstText] = {
+					type: "text",
+					text: `${block}\n${existing.text}`,
+				};
+			} else {
+				content.unshift({ type: "text", text: block });
 			}
 		}
 
