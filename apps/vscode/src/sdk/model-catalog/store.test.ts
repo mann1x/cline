@@ -1269,3 +1269,68 @@ describe("createProviderConfigStore", () => {
 		expect(() => StoredModelEntrySchema.parse(entry)).not.toThrow()
 	})
 })
+
+describe("reasoning history round trip", () => {
+	it("writes the choice into the reasoning section", async () => {
+		const { toProviderConfigPatch } = await import("@core/controller/models/providerCatalogShared")
+		const { WriteProviderConfigPatch } = await import("@shared/proto/cline/models")
+		const { createProviderConfigStore } = await import("./store")
+		const store = createProviderConfigStore()
+		const providerId = parseProviderId("ollama")
+
+		const patch = toProviderConfigPatch(WriteProviderConfigPatch.create({ reasoning: { reasoningHistory: "last" } } as never))
+		expect(patch).toMatchObject({ reasoning: { reasoningHistory: "last" } })
+
+		store.write(providerId, patch)
+		expect(store.read(providerId).reasoning?.reasoningHistory).toBe("last")
+	})
+
+	it("treats an empty string as clearing the choice back to auto", async () => {
+		const { toProviderConfigPatch } = await import("@core/controller/models/providerCatalogShared")
+		// Proto3 sends "" for an absent optional string on some paths, and the
+		// panel sends it when the user picks Auto. Auto is stored as absent so
+		// the resolver falls through to the probe rather than pinning a value.
+		const { WriteProviderConfigPatch } = await import("@shared/proto/cline/models")
+		const { createProviderConfigStore } = await import("./store")
+		const store = createProviderConfigStore()
+		const providerId = parseProviderId("ollama")
+
+		store.write(
+			providerId,
+			toProviderConfigPatch(WriteProviderConfigPatch.create({ reasoning: { reasoningHistory: "none" } } as never)),
+		)
+		expect(store.read(providerId).reasoning?.reasoningHistory).toBe("none")
+
+		store.write(
+			providerId,
+			toProviderConfigPatch(WriteProviderConfigPatch.create({ reasoning: { reasoningHistory: "" } } as never)),
+		)
+		expect(store.read(providerId).reasoning?.reasoningHistory).toBeUndefined()
+	})
+
+	it("clears the whole section when the patch names no field in it", async () => {
+		const { toProviderConfigPatch } = await import("@core/controller/models/providerCatalogShared")
+		// How a profile that carries no reasoning section loads. The section is
+		// merged field by field, so the profile has to be able to say "all of
+		// it, gone" — otherwise the previous profile's effort and budget stay
+		// under this profile's name. Same spelling as the sampler, the PolyKV
+		// section and the output budget: the section present and empty.
+		const { WriteProviderConfigPatch } = await import("@shared/proto/cline/models")
+		const { createProviderConfigStore } = await import("./store")
+		const store = createProviderConfigStore()
+		const providerId = parseProviderId("ollama")
+
+		store.write(
+			providerId,
+			toProviderConfigPatch(
+				WriteProviderConfigPatch.create({
+					reasoning: { enabled: true, effort: "high", reasoningHistory: "last" },
+				} as never),
+			),
+		)
+		expect(store.read(providerId).reasoning).toMatchObject({ enabled: true, effort: "high" })
+
+		store.write(providerId, toProviderConfigPatch(WriteProviderConfigPatch.create({ reasoning: {} } as never)))
+		expect(store.read(providerId).reasoning).toBeUndefined()
+	})
+})

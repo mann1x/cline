@@ -352,6 +352,10 @@ message ProviderReasoningPatch {
   optional bool enabled = 1;
   optional string effort = 2; // "none" | "low" | "medium" | "high" | "xhigh"
   optional int32 budget_tokens = 3;
+  // How much prior assistant thinking is replayed to the model:
+  // "auto" | "all" | "last" | "none". Absent means auto, which is resolved
+  // per model from a measured capability of the endpoint.
+  optional string reasoning_history = 4;
 }
 
 // Sampling parameters for providers that accept them per request (Ollama's

@@ -441,3 +441,30 @@ describe("the output budget", () => {
 		expect(config.outputBudget).toBeUndefined()
 	})
 })
+
+describe("reasoning history", () => {
+	// The panel shows what is in force before changing it, so a section written
+	// but never read back shows "auto" over a profile that says "last" -- the
+	// write-only failure this tree has hit before.
+	it("reads the stored choice back", async () => {
+		const { buildEffectiveProviderConfig } = await import("./effective-config")
+		mocks.setProviderSettings({
+			ollama: { provider: "ollama", reasoning: { enabled: true, reasoningHistory: "last" } },
+		})
+
+		const config = buildEffectiveProviderConfig(parseProviderId("ollama"))
+
+		expect(config.reasoning?.reasoningHistory).toBe("last")
+	})
+
+	it("drops a mode the resolver does not understand", async () => {
+		const { buildEffectiveProviderConfig } = await import("./effective-config")
+		mocks.setProviderSettings({
+			ollama: { provider: "ollama", reasoning: { reasoningHistory: "sometimes" } },
+		})
+
+		const config = buildEffectiveProviderConfig(parseProviderId("ollama"))
+
+		expect(config.reasoning?.reasoningHistory).toBeUndefined()
+	})
+})

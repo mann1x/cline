@@ -235,6 +235,8 @@ describe("the provider config a profile carries", () => {
 			// And for the output budget: a profile that names no budget must fall
 			// back to auto rather than inherit the last profile's manual cap.
 			outputBudget: {},
+			// And the reasoning section as a whole.
+			reasoning: {},
 		})
 	})
 
@@ -246,6 +248,7 @@ describe("the provider config a profile carries", () => {
 			sampling: {},
 			polykv: {},
 			outputBudget: {},
+			reasoning: {},
 		})
 	})
 
@@ -257,6 +260,28 @@ describe("the provider config a profile carries", () => {
 		expect(patch.baseUrl).toBe("http://localhost:11434")
 		expect("headers" in patch).toBe(false)
 		expect("region" in patch).toBe(false)
+	})
+
+	it("clears the whole reasoning section a profile does not carry", () => {
+		// `reasoning` is merged field by field on the store side, so an empty
+		// object names nothing and is a no-op. `null` is its clear.
+		expect(providerConfigPatchForProfile({ contextWindow: 110000 }).reasoning).toEqual({})
+	})
+
+	it("clears the reasoning replay a profile is silent about", () => {
+		// Automatic is stored as absent, so a profile saved on Automatic carries
+		// a reasoning section with no `reasoningHistory` in it. Merged as-is that
+		// leaves the previous profile's choice in place under this profile's
+		// name — the same fault as the sampler, one level down.
+		const patch = providerConfigPatchForProfile({ reasoning: { enabled: true, effort: "high" } })
+
+		expect(patch.reasoning).toEqual({ enabled: true, effort: "high", reasoningHistory: "" })
+	})
+
+	it("keeps the reasoning replay a profile does carry", () => {
+		const patch = providerConfigPatchForProfile({ reasoning: { reasoningHistory: "last" } })
+
+		expect(patch.reasoning).toEqual({ reasoningHistory: "last" })
 	})
 
 	it("keeps a sampler the profile does carry", () => {

@@ -758,7 +758,23 @@ function writeProviderSettingsFields(providerId: ProviderId, patch: ProviderConf
 	// Handle reasoning patch separately — maps to ProviderSettings.reasoning
 	if ("reasoning" in patch) {
 		const reasoningPatch = patch.reasoning
-		if (reasoningPatch === null || reasoningPatch === undefined) {
+		if (
+			reasoningPatch === null ||
+			reasoningPatch === undefined ||
+			// The section present and empty is how "clear all of it" is spelled,
+			// the same as the sampler, the PolyKV section and the output budget.
+			// It needs its own spelling because this section is merged field by
+			// field rather than written whole, so an empty patch would otherwise
+			// name nothing and change nothing — and loading a profile that
+			// carries no reasoning section would keep the previous profile's
+			// effort, budget and replay mode under the new profile's name. No
+			// panel control sends one: every one of them names at least
+			// `enabled`.
+			(reasoningPatch.enabled === undefined &&
+				reasoningPatch.effort === undefined &&
+				reasoningPatch.budgetTokens === undefined &&
+				reasoningPatch.reasoningHistory === undefined)
+		) {
 			delete next.reasoning
 		} else {
 			const existingReasoning = (next as Record<string, unknown>).reasoning as Record<string, unknown> | undefined
@@ -775,6 +791,11 @@ function writeProviderSettingsFields(providerId: ProviderId, patch: ProviderConf
 			}
 			if (reasoningPatch.budgetTokens !== undefined) {
 				merged.budgetTokens = reasoningPatch.budgetTokens
+			}
+			if (reasoningPatch.reasoningHistory !== undefined) {
+				// "" is the panel clearing the choice, which means auto, and auto
+				// is stored as absent so the resolver falls through to the probe.
+				merged.reasoningHistory = reasoningPatch.reasoningHistory === "" ? undefined : reasoningPatch.reasoningHistory
 			}
 			;(next as Record<string, unknown>).reasoning = merged
 		}

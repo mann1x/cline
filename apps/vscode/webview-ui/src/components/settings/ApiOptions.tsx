@@ -12,6 +12,7 @@ import { ClinePassHint } from "./ClinePassHint"
 import { OutputBudgetField } from "./common/OutputBudgetField"
 import ParallelSessionsField, { parallelSessionsDescription } from "./common/ParallelSessionsField"
 import { PolykvSection } from "./common/PolykvSection"
+import { ReasoningHistoryField } from "./common/ReasoningHistoryField"
 import { OPENROUTER_MODEL_PICKER_Z_INDEX } from "./OpenRouterModelPicker"
 import { AIhubmixProvider } from "./providers/AihubmixProvider"
 import { AnthropicProvider } from "./providers/AnthropicProvider"
@@ -510,6 +511,7 @@ const ApiOptions = ({
 			    called. It replaces the `numPredict` in the advanced sampler,
 			    which was read for Ollama alone. */}
 			{apiConfiguration && showModelOptions && selectedProvider && <OutputBudgetField providerId={selectedProvider} />}
+			{apiConfiguration && showModelOptions && selectedProvider && <ReasoningHistoryField providerId={selectedProvider} />}
 
 			{apiConfiguration && showModelOptions && selectedProvider && (
 				<div className="mb-[5px]">

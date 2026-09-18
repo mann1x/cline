@@ -126,6 +126,39 @@ const PROVIDER_CONFIG_CLEARS: Readonly<Record<string, unknown>> = {
 	// Same reason again: a profile that does not name an output budget must fall
 	// back to `auto` rather than inherit the previous profile's manual cap.
 	outputBudget: {},
+	// And the reasoning section, so a profile that carries none stops inheriting
+	// the previous profile's effort, budget and replay mode. `{}` rather than
+	// `null` because the patch crosses a proto boundary: `reasoning` is an
+	// optional message, and a `null` on the way in is serialized as absent,
+	// which reads as "leave it alone". Present and empty survives, and the store
+	// reads it as the clear.
+	reasoning: {},
+}
+
+/**
+ * Fields inside a carried section that a profile can be silent about.
+ *
+ * The clears above answer "the profile has no section at all". This answers the
+ * other half: the profile has the section, and one field inside it is absent
+ * because absent is what that field's default is spelled as. Merging such a
+ * section leaves the previous profile's value for exactly that field, which is
+ * the top-level fault one level down.
+ *
+ * `reasoningHistory` is the case that needs it. Automatic is stored as absent —
+ * deliberately, so the resolver falls through to the probe rather than pinning
+ * a mode that was only ever a default — so a profile saved on Automatic carries
+ * `reasoning` without it, and loading that profile would keep the last
+ * profile's `last` or `none`. `""` is the panel's own clear-to-Automatic, so
+ * the load says the same thing the dropdown says.
+ *
+ * `enabled`, `effort` and `budgetTokens` are not listed: absent means unset for
+ * all three, and the store has no sentinel that restores unset without also
+ * meaning something else (`effort: "none"` additionally forces `enabled:false`).
+ * A profile that carries the section but not those keeps whatever the section
+ * being cleared-then-written already settled.
+ */
+const PROVIDER_CONFIG_SECTION_CLEARS: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {
+	reasoning: { reasoningHistory: "" },
 }
 
 /**
@@ -137,10 +170,31 @@ const PROVIDER_CONFIG_CLEARS: Readonly<Record<string, unknown>> = {
 export function providerConfigPatchForProfile(providerConfig: Record<string, unknown> | undefined): Record<string, unknown> {
 	const patch: Record<string, unknown> = { ...(providerConfig ?? {}) }
 	delete patch[PROVIDER_CONFIG_MODEL_OVERRIDES_KEY]
+	// Which sections the profile actually carries, read before the clears below
+	// fill the rest in — a section the profile does not have is cleared whole,
+	// and must not then be handed a field-level clear that makes it non-empty
+	// again.
+	const carriedSections = new Set(Object.keys(patch))
 	for (const [key, cleared] of Object.entries(PROVIDER_CONFIG_CLEARS)) {
 		if (patch[key] === undefined || patch[key] === null) {
 			patch[key] = cleared
 		}
+	}
+	for (const [key, fields] of Object.entries(PROVIDER_CONFIG_SECTION_CLEARS)) {
+		const section = patch[key]
+		if (!carriedSections.has(key) || !section || typeof section !== "object" || Array.isArray(section)) {
+			continue
+		}
+		// Copied, not filled in place: the section object here belongs to the
+		// stored profile, and adding a clear to it would rewrite the profile to
+		// say `""` where it deliberately says nothing.
+		const carried = { ...(section as Record<string, unknown>) }
+		for (const [field, cleared] of Object.entries(fields)) {
+			if (carried[field] === undefined || carried[field] === null) {
+				carried[field] = cleared
+			}
+		}
+		patch[key] = carried
 	}
 	return patch
 }

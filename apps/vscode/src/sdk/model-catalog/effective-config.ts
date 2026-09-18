@@ -213,13 +213,20 @@ function readReasoning(settings: Record<string, unknown>): ReasoningConfig | und
 	const enabled = typeof reasoning.enabled === "boolean" ? reasoning.enabled : undefined
 	const effort = typeof reasoning.effort === "string" ? reasoning.effort : undefined
 	const budgetTokens = readPositiveInteger(reasoning.budgetTokens)
-	if (enabled === undefined && effort === undefined && budgetTokens === undefined) {
+	// Only the four the resolver understands. Anything else stored by hand is
+	// dropped rather than shown back as if it were in force.
+	const history =
+		typeof reasoning.reasoningHistory === "string" && ["auto", "all", "last", "none"].includes(reasoning.reasoningHistory)
+			? reasoning.reasoningHistory
+			: undefined
+	if (enabled === undefined && effort === undefined && budgetTokens === undefined && history === undefined) {
 		return undefined
 	}
 	return {
 		...(enabled !== undefined ? { enabled } : {}),
 		...(effort !== undefined ? { effort } : {}),
 		...(budgetTokens !== undefined ? { budgetTokens } : {}),
+		...(history !== undefined ? { reasoningHistory: history } : {}),
 	}
 }
 

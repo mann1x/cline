@@ -79,3 +79,42 @@ describe("provider settings", () => {
 		});
 	});
 });
+
+describe("reasoning history", () => {
+	it("carries the configured replay setting into the provider config", () => {
+		// Stored beside the other reasoning controls rather than at the top
+		// level, because it is one: how much of the model's own thinking goes
+		// back to it. The gateway reads it off `ProviderConfig.reasoningHistory`,
+		// and a value that is written but never read is the failure mode this
+		// tree keeps hitting.
+		const config = toProviderConfig({
+			provider: "ollama",
+			reasoning: { enabled: true, reasoningHistory: "last" },
+		} as never);
+		expect(config.reasoningHistory).toBe("last");
+	});
+
+	it("leaves it unset when the profile does not choose, which means auto", () => {
+		const config = toProviderConfig({
+			provider: "ollama",
+			reasoning: { enabled: true },
+		} as never);
+		expect(config.reasoningHistory).toBeUndefined();
+	});
+
+	it("accepts every mode the resolver understands and refuses anything else", () => {
+		for (const mode of ["auto", "all", "last", "none"]) {
+			const parsed = safeParseSettings({
+				provider: "ollama",
+				reasoning: { reasoningHistory: mode },
+			});
+			expect(parsed.success, mode).toBe(true);
+		}
+		expect(
+			safeParseSettings({
+				provider: "ollama",
+				reasoning: { reasoningHistory: "sometimes" },
+			}).success,
+		).toBe(false);
+	});
+});

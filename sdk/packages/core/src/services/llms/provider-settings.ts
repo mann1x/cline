@@ -73,6 +73,22 @@ export const ReasoningSettingsSchema = z.object({
 	enabled: z.boolean().optional(),
 	effort: ReasoningLevelSchema.optional(),
 	budgetTokens: z.number().int().positive().optional(),
+	/**
+	 * How much of the model's own prior thinking goes back to it.
+	 *
+	 * Stored beside the other reasoning controls because it is one. `auto` --
+	 * and an absent value, which means the same -- defers to a measurement of
+	 * the endpoint: whether it accepts a reasoning channel at all, and whether
+	 * it renders it back into the prompt. An explicit choice outranks that
+	 * measurement, which is the only way to test a template that is about to
+	 * change.
+	 *
+	 * `all` is deliberately offered and deliberately not what `auto` picks:
+	 * ollama re-renders every assistant think block after the last user turn,
+	 * and an agent run has one user message, so `all` puts the whole thinking
+	 * history into every prompt.
+	 */
+	reasoningHistory: z.enum(["auto", "all", "last", "none"]).optional(),
 });
 
 export type ReasoningSettings = z.infer<typeof ReasoningSettingsSchema>;
@@ -400,6 +416,7 @@ export function toProviderConfig(
 		thinking: settings.reasoning?.enabled,
 		reasoningEffort,
 		thinkingBudgetTokens: settings.reasoning?.budgetTokens,
+		reasoningHistory: settings.reasoning?.reasoningHistory,
 		sampling: settings.sampling,
 		polykv: settings.polykv,
 		region: settings.region ?? settings.aws?.region ?? settings.gcp?.region,
