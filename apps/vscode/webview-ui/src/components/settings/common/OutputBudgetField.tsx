@@ -1,3 +1,4 @@
+import { useRef } from "react"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { useProviderConfig } from "@/hooks/useProviderConfig"
@@ -51,13 +52,19 @@ function parseTyped(value: string | number | undefined): number | undefined {
  */
 export const OutputBudgetField = ({ providerId }: { providerId: string }) => {
 	const { config, write } = useProviderConfig(providerId as never)
-	// Same reason the other cap fields wait: the debounced input fires onChange
-	// for its initial value shortly after mount, so rendering before the config
-	// resolves would persist a blank over a stored number.
+	// What this panel has sent and not yet seen answered. The section is
+	// written whole, and the panel does not see its own write until the host
+	// answers -- so a cap typed straight after flipping the mode composed the
+	// section from the pre-write state and put the mode back. Same fault, and
+	// same fix, as the PolyKV section.
+	const pending = useRef<Record<string, unknown> | undefined>(undefined)
+	const inFlight = useRef(0)
+	// Same reason the other cap fields wait: rendering before the config
+	// resolves would show a blank over a stored number.
 	if (config === undefined) {
 		return null
 	}
-	const budget = config.outputBudget ?? {}
+	const budget = (pending.current ?? config.outputBudget ?? {}) as NonNullable<typeof config.outputBudget>
 	// Absent reads as automatic, which is what a profile written before this
 	// setting existed means. Only an explicit "manual" turns it off.
 	const auto = budget.mode !== "manual"
@@ -66,15 +73,29 @@ export const OutputBudgetField = ({ providerId }: { providerId: string }) => {
 	// Written whole, never merged: this panel owns the section and shows its
 	// complete state, so a merge would make clearing the box impossible.
 	const patch = (changes: { mode?: "auto" | "manual"; maxTokens?: number }) => {
-		const next = { mode: budget.mode, maxTokens: stored, ...changes }
-		void write({
-			outputBudget: {
-				mode: next.mode ?? "auto",
-				// Zero is how the wire says "empty"; the host drops it rather than
-				// storing a cap of nothing.
-				maxTokens: next.maxTokens ?? 0,
-			},
-		}).catch((error) => console.error("Failed to update output budget:", error))
+		// Read at call time, not from the render this closure was made in: two
+		// controls touched inside one round trip share a closure, so a section
+		// captured at render is the stale one by the second of them.
+		const base = (pending.current ?? config.outputBudget ?? {}) as { mode?: "auto" | "manual"; maxTokens?: number }
+		const next = {
+			mode: base.mode ?? "auto",
+			// Zero is how the wire says "empty"; the host drops it rather than
+			// storing a cap of nothing.
+			maxTokens: parseTyped(base.maxTokens) ?? 0,
+			...changes,
+		}
+		pending.current = next
+		inFlight.current += 1
+		void write({ outputBudget: next })
+			.catch((error) => console.error("Failed to update output budget:", error))
+			.finally(() => {
+				inFlight.current -= 1
+				// Only the last answer hands the section back to the config: an
+				// earlier one landing first would drop everything typed since.
+				if (inFlight.current === 0) {
+					pending.current = undefined
+				}
+			})
 	}
 
 	const window = parseTyped(config.contextWindow)

@@ -38,6 +38,36 @@ export const TASK_PROGRESS_PARAM = "task_progress";
 export const DEFAULT_TASK_PROGRESS_REMINDER_INTERVAL = 6;
 
 /**
+ * The same reminder, counted in calls that changed the workspace.
+ *
+ * Asked for after a pandorum run that wrote for twenty turns without once
+ * re-marking the list. A read does not finish an item; a write usually does, so
+ * three of them is where the list has most likely gone stale, and it arrives
+ * sooner than the every-six-calls interval in exactly the runs that are doing
+ * the most work. Both counters share one reminder and one reset, so a busy run
+ * is not reminded twice.
+ */
+export const DEFAULT_TASK_PROGRESS_WRITE_INTERVAL = 3;
+
+/**
+ * The tools that change the workspace.
+ *
+ * Named rather than inferred: there is no flag on `AgentTool` saying a tool
+ * writes, and guessing from the name would count `read_files` the day someone
+ * adds `read_files_and_fix`. A host tool this does not know about simply counts
+ * as an ordinary call, which is the safe direction -- it delays a nudge rather
+ * than inventing one.
+ */
+const WRITE_CLASS_TOOL_NAMES: ReadonlySet<string> = new Set([
+	"editor",
+	"apply_patch",
+	"sed",
+	"awk",
+	"write_to_file",
+	"new_file",
+]);
+
+/**
  * The description the model reads.
  *
  * Written to be answerable at the moment of any tool call, because that is
@@ -382,6 +412,11 @@ export function isTaskProgressWrapped(tool: object): boolean {
 export interface TaskProgressTrackerOptions {
 	/** Tool calls between reminders. Zero or less disables reminding. */
 	reminderInterval?: number;
+	/**
+	 * Workspace-changing calls between reminders. Zero or less disables that
+	 * half, leaving the plain interval above.
+	 */
+	writeInterval?: number;
 	/** Called whenever the model sends a new checklist. */
 	onUpdate?: (state: TaskProgressState) => void;
 }
@@ -396,12 +431,16 @@ export interface TaskProgressTrackerOptions {
 export class TaskProgressTracker {
 	private state: TaskProgressState | undefined;
 	private callsSinceReminder = 0;
+	private writesSinceReminder = 0;
 	private readonly reminderInterval: number;
+	private readonly writeInterval: number;
 	private readonly onUpdate: ((state: TaskProgressState) => void) | undefined;
 
 	constructor(options: TaskProgressTrackerOptions = {}) {
 		this.reminderInterval =
 			options.reminderInterval ?? DEFAULT_TASK_PROGRESS_REMINDER_INTERVAL;
+		this.writeInterval =
+			options.writeInterval ?? DEFAULT_TASK_PROGRESS_WRITE_INTERVAL;
 		this.onUpdate = options.onUpdate;
 	}
 
@@ -441,7 +480,7 @@ export class TaskProgressTracker {
 	 * A call that carried a checklist never also gets a reminder: the model just
 	 * demonstrated it has the list, and echoing it straight back is pure cost.
 	 */
-	recordToolCall(input: unknown): string | undefined {
+	recordToolCall(input: unknown, toolName?: string): string | undefined {
 		const markdown = readTaskProgress(input);
 		if (markdown !== undefined) {
 			const next = buildTaskProgressState(markdown);
@@ -452,17 +491,31 @@ export class TaskProgressTracker {
 				this.onUpdate?.(next);
 			}
 			this.callsSinceReminder = 0;
+			this.writesSinceReminder = 0;
 			return undefined;
 		}
 
 		this.callsSinceReminder += 1;
-		if (this.reminderInterval <= 0 || this.state === undefined) {
+		if (toolName !== undefined && WRITE_CLASS_TOOL_NAMES.has(toolName)) {
+			this.writesSinceReminder += 1;
+		}
+		// Only if it has been already provided: with no list there is nothing to
+		// remind anyone of, and a nudge made of nothing reads as a reprimand.
+		if (this.state === undefined) {
 			return undefined;
 		}
-		if (this.callsSinceReminder < this.reminderInterval) {
+		const due =
+			(this.reminderInterval > 0 &&
+				this.callsSinceReminder >= this.reminderInterval) ||
+			(this.writeInterval > 0 &&
+				this.writesSinceReminder >= this.writeInterval);
+		if (!due) {
 			return undefined;
 		}
+		// One reset for both counters, so a busy run is reminded once rather
+		// than twice in consecutive turns.
 		this.callsSinceReminder = 0;
+		this.writesSinceReminder = 0;
 		// Nothing left to chase — reminding would only re-send a finished list.
 		if (this.state.total > 0 && this.state.completed >= this.state.total) {
 			return undefined;
@@ -497,7 +550,7 @@ export function withTaskProgressCapture<TInput, TOutput>(
 		...tool,
 		inputSchema: withTaskProgressParam(tool.inputSchema),
 		execute: async (input, context) => {
-			const reminder = tracker.recordToolCall(input);
+			const reminder = tracker.recordToolCall(input, tool.name);
 			const result = await tool.execute(input, context);
 			if (reminder === undefined || typeof result !== "string") {
 				return result;

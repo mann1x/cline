@@ -73,6 +73,13 @@ export const PROVIDER_CONFIG_PROFILE_KEYS = [
 	"parallelSessions",
 	"reasoning",
 	"sampling",
+	// Both are in PROVIDER_CONFIG_CLEARS below, and were missing here: every
+	// profile load cleared them and no profile save ever carried them back, so
+	// a PolyKV switch turned off came back on at the next profile load and the
+	// panel could not say why. A key the load clears must be a key the save
+	// captures -- the two lists are one contract read from both ends.
+	"polykv",
+	"outputBudget",
 	"headers",
 	"region",
 	"aws",
@@ -114,7 +121,7 @@ export const PROVIDER_CONFIG_MODEL_OVERRIDES_KEY = "modelOverrides"
  * last profile's temperature under this profile's name is the fault being
  * fixed, and it is the one that actually changes what the model does.
  */
-const PROVIDER_CONFIG_CLEARS: Readonly<Record<string, unknown>> = {
+export const PROVIDER_CONFIG_CLEARS: Readonly<Record<string, unknown>> = {
 	contextWindow: 0,
 	maxToolResultChars: 0,
 	parallelSessions: 0,

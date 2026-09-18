@@ -2,7 +2,8 @@ import type { CoreSessionEvent } from "@cline/core"
 import type { Message as SdkMessage } from "@cline/llms"
 import type { AgentEvent, MessageWithMetadata } from "@cline/shared"
 import type { ClineAskUseMcpServer, ClineMessage, ClineSayTool } from "@shared/ExtensionMessage"
-import { describe, expect, it } from "vitest"
+import { Logger } from "@shared/services/Logger"
+import { describe, expect, it, vi } from "vitest"
 import { getDesktopDir } from "@/utils/path"
 import {
 	buildToolApprovalAskMessage,
@@ -153,6 +154,25 @@ describe("translateSessionEvent — chunk events", () => {
 		expect(result.messages).toHaveLength(0)
 		expect(result.sessionEnded).toBe(false)
 		expect(result.turnComplete).toBe(false)
+	})
+
+	// 127 of these per pandorum run, warned as unhandled. It is not unhandled:
+	// it carries the session snapshot the host projects elsewhere, and there is
+	// nothing in it to draw. A warning that is always wrong trains the reader
+	// to ignore the ones that are not.
+	it("passes over a session snapshot without warning", () => {
+		const warn = vi.spyOn(Logger, "warn").mockImplementation(() => undefined)
+		const state = new MessageTranslatorState()
+		const event = {
+			type: "session_snapshot",
+			payload: { sessionId: "session-1" },
+		} as unknown as CoreSessionEvent
+
+		const result = translateSessionEvent(event, state)
+
+		expect(result.messages).toHaveLength(0)
+		expect(warn).not.toHaveBeenCalled()
+		warn.mockRestore()
 	})
 
 	it("ignores stdout/stderr chunks", () => {

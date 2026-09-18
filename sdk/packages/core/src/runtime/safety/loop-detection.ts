@@ -148,6 +148,13 @@ export interface LoopDetectionState {
 	futileStrikes: Map<string, number>;
 	/** The call awaiting its outcome, so the result can be attributed. */
 	pendingKey: string;
+	/**
+	 * Per signature, the last answer it got and how many times in a row that
+	 * same answer came back. The no-progress half of the detector: a call whose
+	 * result never changes is not advancing the task, however far apart its
+	 * repeats are.
+	 */
+	resultCycles: Map<string, { signature: string; repeats: number }>;
 }
 
 export function createLoopDetectionState(): LoopDetectionState {
@@ -161,6 +168,7 @@ export function createLoopDetectionState(): LoopDetectionState {
 		settledKeys: new Set(),
 		futileStrikes: new Map(),
 		pendingKey: "",
+		resultCycles: new Map(),
 	};
 }
 
@@ -174,6 +182,7 @@ export function resetLoopDetectionState(state: LoopDetectionState): void {
 	state.settledKeys.clear();
 	state.futileStrikes.clear();
 	state.pendingKey = "";
+	state.resultCycles.clear();
 }
 
 function sortKeys(value: unknown): unknown {
@@ -255,10 +264,36 @@ export interface LoopDetectionCall {
 	input: unknown;
 }
 
+/**
+ * Two, not three, for the soft warning.
+ *
+ * Asked for after a pandorum run looped on `editor`: "if from 2 or more tool
+ * calls in sequence are detected identical, we warn and nudge the model". The
+ * second identical call is the cheapest moment to turn a model around -- it has
+ * spent one turn, not two -- and the warning is a notice on a tool result, not
+ * a stop. The hard threshold is untouched: what changed is when the model is
+ * told, not when the run ends.
+ */
 const DEFAULT_CONFIG: LoopDetectionConfig = {
-	softThreshold: 3,
+	softThreshold: 2,
 	hardThreshold: 5,
 };
+
+/**
+ * Identical (call, result) pairs before the cycle is named.
+ *
+ * Three, meaning the call has already been answered identically twice and is
+ * being sent a third time. The consecutive counter cannot see this: replayed
+ * against the pandorum session that spent 477 s on twelve refused `editor`
+ * calls, it fired zero times, because a `read_files` sat between every repeat
+ * and the one before it. What repeated was the pair.
+ *
+ * Deliberately soft and never hard. A command that is re-run after each edit
+ * and keeps printing the same thing is sometimes a loop and sometimes a passing
+ * test suite, and the two are indistinguishable from here -- so this says what
+ * it sees and never ends a run on it.
+ */
+const CYCLE_REPEAT_LIMIT = 3;
 
 /**
  * Per-session repeated-tool-call detector.
@@ -342,6 +377,21 @@ export class LoopDetectionTracker {
 			};
 		}
 
+		// The no-progress cycle, checked before the consecutive rule because it
+		// is the one that survives an interleaved call.
+		const cycle = this.state.resultCycles.get(key);
+		if (cycle && cycle.repeats >= CYCLE_REPEAT_LIMIT - 1) {
+			// The consecutive counter still has to see this call, or an
+			// interleaved loop would never reach the hard threshold.
+			checkRepeatedToolCall(this.state, call.name, signature, this.config);
+			return {
+				kind: "soft",
+				message: `This \`${call.name}\` call has been answered ${cycle.repeats} times with the same answer, and the arguments have not changed. Whatever it is being asked, it has already said everything it is going to say.
+
+${steeringFor(cycle.repeats, call.name)}`,
+			};
+		}
+
 		const result = checkRepeatedToolCall(
 			this.state,
 			call.name,
@@ -371,10 +421,26 @@ export class LoopDetectionTracker {
 	 * edit-test cycle, and it should not inherit a count from the failures in
 	 * between.
 	 */
-	noteOutcome(productive: boolean, futile = false): void {
+	noteOutcome(
+		productive: boolean,
+		futile = false,
+		resultSignature?: string,
+	): void {
 		const key = this.state.pendingKey;
 		if (key === "") {
 			return;
+		}
+		// The cycle tally is kept whatever the outcome was: a call that keeps
+		// succeeding with the same answer is exactly the case the failure
+		// counters below are blind to.
+		if (resultSignature !== undefined) {
+			const cycle = this.state.resultCycles.get(key);
+			this.state.resultCycles.set(
+				key,
+				cycle && cycle.signature === resultSignature
+					? { signature: resultSignature, repeats: cycle.repeats + 1 }
+					: { signature: resultSignature, repeats: 1 },
+			);
 		}
 		if (productive) {
 			this.state.barrenCounts.delete(key);

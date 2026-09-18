@@ -3005,6 +3005,49 @@ describe("AgentRuntime", () => {
 		expect(result.outputText).toBe("recovered");
 	});
 
+	// Measured on pandorum 2026-09-18. `resolveGatewayOutputCap` takes the
+	// smallest of {configured, model max, window - input - reserve}, so the cap
+	// shrinks every turn: one session went 96,000 -> 12,286 across 54 messages.
+	// At the thin end a whole-file rewrite is cut mid-JSON and arrives as
+	// unparseable arguments -- 101,300 raw characters against a 40,774-token cap
+	// in one case, and a pathless `editor` call carrying only `end_line`,
+	// `intent` and `new_text` in another. Telling the model its JSON was invalid
+	// sends it to look for a syntax error that is not there; the fix is to write
+	// less in one call.
+	it("says a tool call was cut off by the output budget rather than malformed", async () => {
+		const seen: unknown[] = [];
+		const model = new ScriptedModel([
+			() => [
+				{
+					type: "tool-call-delta",
+					toolCallId: "cut_off",
+					toolName: "echo",
+					inputText: '{"text":"a very long replacement that stops mid',
+				},
+				{ type: "finish", reason: "max-tokens" },
+			],
+			(request) => {
+				// Captured, not asserted here: an assertion thrown inside a
+				// ScriptedModel response is swallowed into the run's error.
+				seen.push(request.messages.at(-1)?.content[0]);
+				return [
+					{ type: "text-delta", text: "recovered" },
+					{ type: "finish", reason: "stop" },
+				];
+			},
+		]);
+		const runtime = new AgentRuntime({ model, tools: [createEchoTool()] });
+
+		const result = await runtime.run("Start");
+
+		expect(result.status).toBe("completed");
+		expect(seen[0]).toMatchObject({
+			type: "tool-result",
+			isError: true,
+			output: { error: expect.stringContaining("output budget") },
+		});
+	});
+
 	it("recovers when a model stream reports an invalid tool input error after a tool call", async () => {
 		const model = new ScriptedModel([
 			() => [
@@ -3362,6 +3405,69 @@ describe("AgentRuntime", () => {
 		]) {
 			expect(agentEvents).toContain(expected);
 		}
+	});
+
+	// The same list, one switch up. The debug default caught every event the
+	// switch above did not name, which is every per-token delta: one pandorum
+	// session wrote 260,774 `Agent event` lines out of 261,885, 64,809 of them
+	// in its last turn, and the extension host went unresponsive and was
+	// terminated. Whatever else was wrong, a log nobody can read is not a log.
+	it("does not write a debug line per stream delta", async () => {
+		const debug = vi.fn();
+		const model = new ScriptedModel([
+			() => [
+				{ type: "reasoning-delta", text: "thinking" },
+				{ type: "reasoning-delta", text: " harder" },
+				{ type: "text-delta", text: "calling tool" },
+				{
+					type: "tool-call-delta",
+					toolCallId: "stream_call",
+					toolName: "streamer",
+					inputText: "{}",
+				},
+				{ type: "finish", reason: "tool-calls" },
+			],
+			() => [
+				{ type: "text-delta", text: "done" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const observed: string[] = [];
+		const runtime = new AgentRuntime({
+			model,
+			logger: { debug, log: vi.fn(), error: vi.fn() },
+			tools: [
+				{
+					name: "streamer",
+					description: "streams progress updates",
+					inputSchema: { type: "object" },
+					async execute(_input, context) {
+						context.emitUpdate?.({ progress: 1 });
+						context.emitUpdate?.({ progress: 2 });
+						return { done: true };
+					},
+				},
+			],
+		});
+		runtime.subscribe((event) => {
+			observed.push(event.type);
+		});
+
+		const result = await runtime.run("Stream");
+
+		expect(result.status).toBe("completed");
+		// Listeners still see every delta; only the log stops repeating them.
+		expect(observed).toContain("assistant-text-delta");
+		expect(observed).toContain("tool-updated");
+
+		const types = debug.mock.calls.map(
+			([, metadata]) =>
+				(metadata as { eventType?: string } | undefined)?.eventType,
+		);
+		expect(types).not.toContain("assistant-text-delta");
+		expect(types).not.toContain("assistant-reasoning-delta");
+		expect(types).not.toContain("tool-updated");
+		expect(types).not.toContain("assistant-media");
 	});
 
 	it("propagates agent identity including role through snapshots and plugin setup", async () => {

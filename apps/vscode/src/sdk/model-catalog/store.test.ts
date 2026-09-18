@@ -1314,6 +1314,67 @@ describe("reasoning history round trip", () => {
 		expect(store.read(providerId).reasoning?.enabled).toBe(true)
 	})
 
+	// Reported 2026-09-18: "I had disabled polykv and now I found it was
+	// enabled ... it does not get saved." `false` is the value a boolean
+	// section cannot afford to lose, and it is the one every "is it set?" guard
+	// drops.
+	it("stores a PolyKV switch turned off", async () => {
+		const { toProviderConfigPatch } = await import("@core/controller/models/providerCatalogShared")
+		const { WriteProviderConfigPatch } = await import("@shared/proto/cline/models")
+		const { createProviderConfigStore } = await import("./store")
+		const store = createProviderConfigStore()
+		const providerId = parseProviderId("opencoti")
+
+		store.write(providerId, toProviderConfigPatch(WriteProviderConfigPatch.create({ polykv: { enabled: true } } as never)))
+		expect(store.read(providerId).polykv?.enabled).toBe(true)
+
+		store.write(providerId, toProviderConfigPatch(WriteProviderConfigPatch.create({ polykv: { enabled: false } } as never)))
+		expect(store.read(providerId).polykv?.enabled).toBe(false)
+	})
+
+	// The same value across the wire, because a boolean's false is exactly what
+	// proto3 spends on nothing unless the field is `optional`.
+	it("carries a PolyKV switch turned off across the proto hop", async () => {
+		const { toProviderConfigPatch } = await import("@core/controller/models/providerCatalogShared")
+		const { WriteProviderConfigPatch } = await import("@shared/proto/cline/models")
+		const { createProviderConfigStore } = await import("./store")
+		const store = createProviderConfigStore()
+		const providerId = parseProviderId("opencoti")
+
+		const sent = WriteProviderConfigPatch.create({ polykv: { enabled: false, pinPrefix: true } } as never)
+		const received = WriteProviderConfigPatch.decode(WriteProviderConfigPatch.encode(sent).finish())
+		store.write(providerId, toProviderConfigPatch(received))
+
+		expect(store.read(providerId).polykv?.enabled).toBe(false)
+		expect(store.read(providerId).polykv?.pinPrefix).toBe(true)
+	})
+
+	// The hop the panel actually sees. `writeProviderConfig` answers with the
+	// redacted response built from what the store returned, and the switch is
+	// drawn from that answer -- not from a later read. A `false` lost anywhere
+	// between the two shows up as the switch snapping straight back on, which
+	// is what "it does not get saved" looks like from the chair.
+	it("answers a write with the PolyKV switch still off", async () => {
+		const { toProviderConfigPatch, toRedactedProviderConfigResponse } = await import(
+			"@core/controller/models/providerCatalogShared"
+		)
+		const { ProviderConfigResponse, WriteProviderConfigPatch } = await import("@shared/proto/cline/models")
+		const { createProviderConfigStore } = await import("./store")
+		const store = createProviderConfigStore()
+		const providerId = parseProviderId("opencoti")
+
+		const updated = store.write(
+			providerId,
+			toProviderConfigPatch(WriteProviderConfigPatch.create({ polykv: { enabled: false } } as never)),
+		)
+		const answered = toRedactedProviderConfigResponse(updated, store)
+
+		expect(answered.polykv?.enabled).toBe(false)
+		// And once more across the wire it travels on, which is where an
+		// `optional` that was never declared would spend the `false`.
+		expect(ProviderConfigResponse.decode(ProviderConfigResponse.encode(answered).finish()).polykv?.enabled).toBe(false)
+	})
+
 	it("still switches thinking off for an effort of none", async () => {
 		const { toProviderConfigPatch } = await import("@core/controller/models/providerCatalogShared")
 		const { WriteProviderConfigPatch } = await import("@shared/proto/cline/models")

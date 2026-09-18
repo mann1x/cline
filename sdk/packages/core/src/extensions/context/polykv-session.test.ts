@@ -107,12 +107,72 @@ describe("the shared prefix", () => {
 		expect(
 			renderPolykvPrefixMessages({
 				systemPrompt: "You are Cline.",
-				tools: [{ name: "editor" }],
+				tools: [
+					{
+						name: "editor",
+						description: "edits a file",
+						inputSchema: { type: "object" },
+					},
+				],
 			}),
 		).toEqual({
 			messages: [{ role: "system", content: "You are Cline." }],
-			tools: [{ name: "editor" }],
+			tools: [
+				{
+					type: "function",
+					function: {
+						name: "editor",
+						description: "edits a file",
+						parameters: { type: "object" },
+					},
+				},
+			],
 		});
+	});
+
+	// Measured on pandorum 2026-09-18: every `/apply-template` answered
+	// `500 Failed to parse tools: Missing tool type` on the `skills` tool, so
+	// the prefix was never rendered and the whole session ran unpooled with
+	// nothing but one warn line to say so. The runtime's own tool shape is
+	// `{name, description, inputSchema}`; the engine parses OpenAI's.
+	it("gives every tool the type the engine parses", () => {
+		const rendered = renderPolykvPrefixMessages({
+			systemPrompt: "You are Cline.",
+			tools: [
+				{ name: "skills", inputSchema: { type: "object" } },
+				{
+					type: "function",
+					function: { name: "already_shaped", parameters: {} },
+				},
+			],
+		});
+
+		expect(rendered?.tools).toEqual([
+			{
+				type: "function",
+				function: {
+					name: "skills",
+					description: "",
+					parameters: { type: "object" },
+				},
+			},
+			{
+				type: "function",
+				function: { name: "already_shaped", parameters: {} },
+			},
+		]);
+	});
+
+	// A tool with no name cannot be rendered and cannot be described. Sending
+	// it costs the pool; dropping it costs one tool's schema off a prefix that
+	// is a cache key, not the request.
+	it("drops a tool it cannot name rather than losing the pool", () => {
+		expect(
+			renderPolykvPrefixMessages({
+				systemPrompt: "You are Cline.",
+				tools: [{ description: "nameless" }],
+			}),
+		).toEqual({ messages: [{ role: "system", content: "You are Cline." }] });
 	});
 
 	it("is nothing when there is nothing stable to pin", () => {
@@ -480,7 +540,10 @@ describe("the prefix goes through the server's template", () => {
 
 		expect(server.calls[0].body).toMatchObject({
 			messages: [{ role: "system", content: "You are Cline." }],
-			tools: [{ name: "editor" }],
+			// Shaped on the way out, because the engine's tool parser refuses
+			// anything without a `type` -- see "gives every tool the type the
+			// engine parses" above.
+			tools: [{ type: "function", function: { name: "editor" } }],
 		});
 	});
 

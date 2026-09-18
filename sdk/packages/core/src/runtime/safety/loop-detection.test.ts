@@ -100,6 +100,53 @@ describe("LoopDetectionTracker", () => {
 		expect(verdict.message).toContain("consecutive identical calls");
 	});
 
+	// Asked for after a pandorum run that looped on `editor`: "if from 2 or more
+	// tool calls in sequence are detected identical, we warn and nudge the
+	// model". Three meant the second repeat passed unremarked, which is the one
+	// a model can still be turned around on cheaply.
+	it("warns on the second identical call in a row", () => {
+		const tracker = new LoopDetectionTracker();
+
+		expect(tracker.inspect(call).kind).toBe("ok");
+		const second = tracker.inspect(call);
+
+		expect(second.kind).toBe("soft");
+		expect(second.message).toContain("2 consecutive identical calls");
+	});
+
+	// The half the consecutive rule cannot see. Replayed against the pandorum
+	// session that ran twelve refused `editor` calls, the consecutive counter
+	// fired zero times: every repeat had a `read_files` between it and the one
+	// before. What repeated was the pair -- the same call, and the same answer
+	// back -- which is a cycle however far apart its halves are.
+	it("warns when the same call keeps returning the same answer", () => {
+		const tracker = new LoopDetectionTracker();
+
+		for (let round = 0; round < 2; round += 1) {
+			expect(tracker.inspect(call).kind).toBe("ok");
+			tracker.noteOutcome(true, false, "the same answer");
+			tracker.inspect(other);
+			tracker.noteOutcome(true, false, "something else");
+		}
+
+		const verdict = tracker.inspect(call);
+		expect(verdict.kind).toBe("soft");
+		expect(verdict.message).toContain("the same answer");
+	});
+
+	// A repeat that moves is work, not a loop: the edit-run-edit-run cycle is
+	// the same command every time and a different result every time.
+	it("stays quiet while the answer keeps changing", () => {
+		const tracker = new LoopDetectionTracker();
+
+		for (let round = 0; round < 6; round += 1) {
+			expect(tracker.inspect(call).kind).toBe("ok");
+			tracker.noteOutcome(true, false, `answer ${round}`);
+			tracker.inspect(other);
+			tracker.noteOutcome(true, false, "something else");
+		}
+	});
+
 	it("forgets everything on reset", () => {
 		const tracker = new LoopDetectionTracker();
 
@@ -169,7 +216,10 @@ describe("a call the tool has declared a no-op", () => {
 		expect(tracker.inspect(call).kind).toBe("soft");
 		tracker.noteOutcome(true);
 
-		expect(tracker.inspect(call).kind).toBe("ok");
+		// The consecutive rule still has its say -- this is the same call a third
+		// time -- but the futile ladder is what this test is about, and that has
+		// been handed back its whole budget.
+		expect(tracker.inspect(call).message ?? "").not.toContain("strikes left");
 		tracker.noteOutcome(false, true);
 		const fresh = tracker.inspect(call);
 		expect(fresh.kind).toBe("soft");
@@ -188,7 +238,11 @@ describe("a call the tool has declared a no-op", () => {
 		expect(tracker.inspect(call).kind).toBe("ok");
 		tracker.noteOutcome(true);
 
-		expect(tracker.inspect(call).kind).toBe("ok");
+		// Warned as a repeat, but not yet as a no-op: the tool has not refused
+		// it at this point and the model must not be told its work landed twice.
+		expect(tracker.inspect(call).message ?? "").not.toContain(
+			"already succeeded",
+		);
 		tracker.noteOutcome(false, true);
 
 		const first = tracker.inspect(call);
@@ -236,7 +290,8 @@ describe("a call the tool has declared a no-op", () => {
 		tracker.inspect(call);
 		tracker.noteOutcome(true);
 
-		expect(tracker.inspect(call).kind).toBe("ok");
+		// The no-op ladder is spent; what is left is the ordinary repeat notice.
+		expect(tracker.inspect(call).message ?? "").not.toContain("no-op");
 	});
 
 	it("is cleared by reset, so a new task starts even", () => {

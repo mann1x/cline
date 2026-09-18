@@ -7,6 +7,8 @@ import {
 	captureApiConfigurationSnapshot,
 	captureProviderConfigSnapshot,
 	modeScopedKey,
+	PROVIDER_CONFIG_CLEARS,
+	PROVIDER_CONFIG_PROFILE_KEYS,
 	parseModeScopedKey,
 	providerConfigPatchForProfile,
 } from "./api-config-snapshot"
@@ -205,6 +207,41 @@ describe("the provider config a profile carries", () => {
 			maxToolResultChars: 32000,
 			parallelSessions: 4,
 		})
+	})
+
+	// Reported as "I had disabled polykv and now I found it was enabled ... it
+	// does not get saved". Both sections are in the load's clear list and were
+	// absent from the save's key list, so every profile load wiped them and no
+	// profile save ever put them back. A section the load clears and the save
+	// drops is unsettable by construction.
+	it("carries every section the load clears", () => {
+		const captured = captureProviderConfigSnapshot({
+			polykv: { enabled: false, settleTokens: 48 },
+			outputBudget: { mode: "manual", maxTokens: 8000 },
+		})
+
+		expect(captured).toEqual({
+			polykv: { enabled: false, settleTokens: 48 },
+			outputBudget: { mode: "manual", maxTokens: 8000 },
+		})
+	})
+
+	// The round trip is the one that matters: a switch turned off has to still
+	// be off after saving the profile and loading it back.
+	it("brings a PolyKV switch turned off back through a save and a load", () => {
+		const captured = captureProviderConfigSnapshot({ polykv: { enabled: false } })
+
+		expect(providerConfigPatchForProfile(captured).polykv).toEqual({ enabled: false })
+	})
+
+	// The guard, so the next section added does not repeat this: the two lists
+	// are written a hundred lines apart and nothing but this connects them.
+	it("clears nothing it does not also capture", () => {
+		const captured = Object.keys(PROVIDER_CONFIG_CLEARS).filter(
+			(key) => !(PROVIDER_CONFIG_PROFILE_KEYS as readonly string[]).includes(key),
+		)
+
+		expect(captured).toEqual([])
 	})
 
 	it("never carries a credential", () => {

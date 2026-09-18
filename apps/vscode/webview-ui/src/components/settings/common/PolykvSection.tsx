@@ -1,3 +1,4 @@
+import { useRef } from "react"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { useProviderConfig } from "@/hooks/useProviderConfig"
@@ -23,30 +24,60 @@ import { PolykvStatusStrip } from "./PolykvStatusStrip"
 
 type PolykvSettings = NonNullable<NonNullable<ReturnType<typeof useProviderConfig>["config"]>["polykv"]>
 
-/** Parse a typed number, treating an empty field as "not set" rather than zero. */
+/**
+ * Parse a typed number, treating an empty field as "not set" rather than zero.
+ *
+ * `Number("")` is 0, so the empty check has to come first: without it an
+ * emptied field stored a configured zero, and zero is a real setting for three
+ * of these -- it is how "off" is spelled for the prefill cap.
+ */
 function parseNumber(value: string | number | undefined): number | undefined {
+	if (value === undefined || (typeof value === "string" && value.trim() === "")) {
+		return undefined
+	}
 	const parsed = typeof value === "string" ? Number(value) : value
 	return typeof parsed === "number" && Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined
 }
 
 export const PolykvSection = ({ providerId }: { providerId: string }) => {
 	const { config, write } = useProviderConfig(providerId as never)
-	// Same reason the cap fields wait: the debounced inputs fire onChange for
-	// their initial value shortly after mount, so rendering before the provider
-	// config resolves would persist a blank over what is stored.
+	// What this panel has sent and not yet seen answered.
+	//
+	// The section is written whole, so every write is only as correct as the
+	// section it was composed from -- and the panel does not see its own write
+	// until the host answers. Two controls touched inside that window both
+	// composed from the pre-write section, and the second write put the first
+	// one's field back: reported as a PolyKV switch that would not stay off,
+	// with four whole-section writes in twenty seconds in the host log and the
+	// switch on again at the end. Composing from what was last sent, and
+	// drawing from it too, makes the panel's own writes the thing it builds on.
+	const pending = useRef<PolykvSettings | undefined>(undefined)
+	const inFlight = useRef(0)
+	// Same reason the cap fields wait: rendering before the provider config
+	// resolves would show defaults over what is stored.
 	if (config === undefined) {
 		return null
 	}
-	const polykv: PolykvSettings = config.polykv ?? {}
+	const polykv: PolykvSettings = pending.current ?? config.polykv ?? {}
 	const enabled = polykv.enabled !== false
 
-	// The section is written whole, never merged: the panel owns it and shows
-	// the complete state, and a merge would make turning a knob back off
-	// impossible.
 	const patch = (changes: Record<string, unknown>) => {
-		void write({ polykv: { ...polykv, ...changes } }).catch((error) =>
-			console.error("Failed to update PolyKV settings:", error),
-		)
+		// Read at call time, not from the render this closure was made in: two
+		// clicks inside one round trip share a closure, so a section captured at
+		// render is the stale one by the second of them.
+		const next = { ...(pending.current ?? config.polykv ?? {}), ...changes } as PolykvSettings
+		pending.current = next
+		inFlight.current += 1
+		void write({ polykv: next })
+			.catch((error) => console.error("Failed to update PolyKV settings:", error))
+			.finally(() => {
+				inFlight.current -= 1
+				// Only the last answer hands the section back to the config: an
+				// earlier one landing first would drop everything typed since.
+				if (inFlight.current === 0) {
+					pending.current = undefined
+				}
+			})
 	}
 
 	const numberField = (key: string, label: string, placeholder: string, description: string) => (

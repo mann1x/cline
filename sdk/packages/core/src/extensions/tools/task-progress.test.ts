@@ -136,6 +136,43 @@ describe("TaskProgressTracker", () => {
 		expect(reminder).toContain("1/2 done");
 	});
 
+	// Asked for after a pandorum run that wrote for twenty turns without once
+	// re-marking the list: "nudge the model to use task_progress, only if it has
+	// been already provided, every 3 write tool calls". Writes are where the
+	// list goes stale -- a read does not finish an item.
+	it("reminds after three calls that changed the workspace", () => {
+		const tracker = new TaskProgressTracker();
+		tracker.recordToolCall(withList, "editor");
+
+		expect(tracker.recordToolCall({}, "editor")).toBeUndefined();
+		expect(tracker.recordToolCall({}, "read_files")).toBeUndefined();
+		expect(tracker.recordToolCall({}, "apply_patch")).toBeUndefined();
+		const reminder = tracker.recordToolCall({}, "sed");
+
+		expect(reminder).toContain("<task_progress>");
+	});
+
+	// Only if it has been already provided: a model that never sent a list is
+	// not told off by a reminder made of nothing.
+	it("says nothing about a checklist that was never sent", () => {
+		const tracker = new TaskProgressTracker();
+
+		for (const name of ["editor", "editor", "apply_patch", "sed"]) {
+			expect(tracker.recordToolCall({}, name)).toBeUndefined();
+		}
+	});
+
+	// Reads still count toward the ordinary interval and nothing else: three of
+	// them must not pull the write reminder forward.
+	it("does not count a read as a write", () => {
+		const tracker = new TaskProgressTracker({ reminderInterval: 0 });
+		tracker.recordToolCall(withList, "editor");
+
+		for (const name of ["read_files", "grep", "search_codebase"]) {
+			expect(tracker.recordToolCall({}, name)).toBeUndefined();
+		}
+	});
+
 	it("restarts the count after each reminder", () => {
 		const tracker = new TaskProgressTracker({ reminderInterval: 2 });
 		tracker.recordToolCall(withList);

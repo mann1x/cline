@@ -2961,6 +2961,13 @@ export function translateSessionEvent(event: CoreSessionEvent, state: MessageTra
 			break
 		}
 
+		case "session_snapshot": {
+			// The host projects the snapshot itself; there is nothing in it to
+			// draw. It was falling through to the warning below, 127 times per
+			// pandorum run, which is how a warning stops being read.
+			break
+		}
+
 		default: {
 			Logger.warn(`[MessageTranslator] Unhandled session event type: ${(event as CoreSessionEvent).type}`)
 			break

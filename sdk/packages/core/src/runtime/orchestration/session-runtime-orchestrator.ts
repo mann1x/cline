@@ -78,7 +78,10 @@ import {
 	type ConnectionUpdate,
 	normalizeConnectionUpdate,
 } from "../config/connection-update";
-import { LoopDetectionTracker } from "../safety/loop-detection";
+import {
+	LoopDetectionTracker,
+	toolCallSignature,
+} from "../safety/loop-detection";
 import { MistakeTracker } from "../safety/mistake-tracker";
 import { RuntimeEventAdapter } from "./runtime-event-adapter";
 
@@ -1473,6 +1476,11 @@ export class SessionRuntime {
 						!allOperationsFailed(finishedOutput) &&
 						!introducedRegression(finishedOutput),
 					declaredNoOp(finishedOutput),
+					// The answer itself, so the tracker can see a call that keeps
+					// being answered the same way. The consecutive counter is
+					// defeated by any call in between, and in the session this was
+					// built from there always was one.
+					toolCallSignature(finishedOutput),
 				);
 				const errorText = isError
 					? formatToolResultError(finishedOutput)
@@ -1617,11 +1625,15 @@ export class SessionRuntime {
 	 * Report a finished tool call's outcome to the loop tracker, so a repeat
 	 * that keeps failing can be told apart from one that keeps working.
 	 */
-	private noteLoopOutcome(productive: boolean, futile = false): void {
+	private noteLoopOutcome(
+		productive: boolean,
+		futile = false,
+		resultSignature?: string,
+	): void {
 		if (this.loopDetectionDisabled) {
 			return;
 		}
-		this.loopTracker.noteOutcome(productive, futile);
+		this.loopTracker.noteOutcome(productive, futile, resultSignature);
 	}
 
 	private inspectLoopForToolCall(

@@ -112,12 +112,57 @@ export function renderPolykvPrefixMessages(options: {
 	if (!options.systemPrompt) {
 		return undefined;
 	}
+	const tools = toEngineTools(options.tools);
 	return {
 		messages: [{ role: "system", content: options.systemPrompt }],
-		...(options.tools && options.tools.length > 0
-			? { tools: options.tools }
-			: {}),
+		...(tools.length > 0 ? { tools } : {}),
 	};
+}
+
+/**
+ * The runtime's tools in the shape the engine's tool parser accepts.
+ *
+ * The runtime carries `{name, description, inputSchema}`; `/apply-template`
+ * parses OpenAI's `{type:"function", function:{...}}` and answers
+ * `500 Failed to parse tools: Missing tool type` to anything else. Measured on
+ * pandorum 2026-09-18: every single call failed that way, so no prefix was ever
+ * rendered, no pool was ever created, and the session ran unpooled behind one
+ * warn line. The chat request itself is shaped by the provider on its own way
+ * out, which is why this was only ever wrong on the pool path.
+ *
+ * An already-shaped tool passes through untouched -- the provider may hand us
+ * either -- and a tool with no name is dropped: it cannot be rendered, and one
+ * of them must not cost the pool. This is a cache key, not the request.
+ */
+function toEngineTools(tools: readonly unknown[] | undefined): unknown[] {
+	const shaped: unknown[] = [];
+	for (const tool of tools ?? []) {
+		if (!tool || typeof tool !== "object") {
+			continue;
+		}
+		const candidate = tool as Record<string, unknown>;
+		if (candidate.type === "function" && candidate.function) {
+			shaped.push(tool);
+			continue;
+		}
+		const name = candidate.name;
+		if (typeof name !== "string" || name === "") {
+			continue;
+		}
+		shaped.push({
+			type: "function",
+			function: {
+				name,
+				description:
+					typeof candidate.description === "string"
+						? candidate.description
+						: "",
+				parameters: candidate.inputSchema ??
+					candidate.parameters ?? { type: "object" },
+			},
+		});
+	}
+	return shaped;
 }
 
 /**

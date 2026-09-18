@@ -2659,7 +2659,7 @@ export class AgentRuntime {
 				});
 				continue;
 			}
-			const parsed = parseToolInput(assembly);
+			const parsed = parseToolInput(assembly, finishReason);
 			if (parsed.reason) {
 				invalidToolCalls.push({
 					toolCallId: assembly.toolCallId,
@@ -3437,7 +3437,17 @@ export class AgentRuntime {
 				}
 				break;
 			default:
-				this.config.logger?.debug?.("Agent event", metadata);
+				// Same exclusion as telemetry's, one switch down, and for a
+				// sharper reason: this is the *log*. A pandorum session wrote
+				// 260,774 of its 261,885 lines here, 64,809 of them in the last
+				// turn before the extension host stopped responding and was
+				// terminated. Listeners and hooks still receive every delta; the
+				// line said nothing but "Agent event" anyway, because the type is
+				// in the metadata the output channel never renders -- so it now
+				// names the event and skips the per-token ones.
+				if (!HIGH_VOLUME_STREAM_EVENTS.has(event.type)) {
+					this.config.logger?.debug?.(`Agent event: ${event.type}`, metadata);
+				}
 				break;
 		}
 		switch (event.type) {
@@ -3477,6 +3487,20 @@ export class AgentRuntime {
 	}
 }
 
+/**
+ * The per-token/per-chunk events, named once for the two places that skip them.
+ *
+ * They are ~97% of the event volume, they carry nothing a reader of either the
+ * log or the telemetry can act on, and one of them per token is what turns a
+ * debug channel into a denial of service against the process writing it.
+ */
+const HIGH_VOLUME_STREAM_EVENTS: ReadonlySet<string> = new Set([
+	"assistant-text-delta",
+	"assistant-reasoning-delta",
+	"assistant-media",
+	"tool-updated",
+]);
+
 function buildEventMetadata(event: AgentRuntimeEvent): Record<string, unknown> {
 	return {
 		agentId: event.snapshot.agentId,
@@ -3501,7 +3525,10 @@ function mergeToolMetadata(current: unknown, patch: unknown): unknown {
 	};
 }
 
-function parseToolInput(assembly: PendingToolAssembly): {
+function parseToolInput(
+	assembly: PendingToolAssembly,
+	finishReason?: AgentModelFinishReason,
+): {
 	input: unknown;
 	parseError?: string;
 	invalidInput: Record<string, unknown>;
@@ -3526,10 +3553,24 @@ function parseToolInput(assembly: PendingToolAssembly): {
 			invalidInput: buildInvalidToolInput(assembly.inputText),
 		};
 	}
+	// A turn that ended at the cap did not write bad JSON, it was cut off
+	// mid-write -- and the two need completely different answers. Measured on
+	// pandorum 2026-09-18: `resolveGatewayOutputCap` takes the smallest of
+	// {configured, model max, window - input - reserve}, so the cap decays every
+	// turn (96,000 -> 12,286 across one session), and the malformed calls appear
+	// exactly at the thin end: one `editor` call of 101,300 raw characters
+	// against a 40,774-token cap, another carrying `end_line`, `intent` and
+	// `new_text` but no `path`, each immediately followed by a compaction. Told
+	// its JSON was invalid, the model goes looking for a syntax error that is
+	// not there; what it has to do is write less in one call.
+	const truncated = finishReason === "max-tokens";
+	const explanation = truncated
+		? `was cut off by the output budget before its arguments finished: the turn ended at the cap with ${assembly.inputText.length} characters of arguments written. Nothing is wrong with the payload you were writing -- there was no room left to finish it. Send the same work in smaller pieces: edit one region per call rather than rewriting the file, and keep each call's arguments short enough to complete.`
+		: `emitted invalid JSON arguments: ${parsed.error}`;
 	return {
 		input: {},
 		invalidInput: buildInvalidToolInput(assembly.inputText, parsed.error),
-		parseError: `Tool call ${assembly.toolName ?? assembly.toolCallId} emitted invalid JSON arguments: ${parsed.error}`,
+		parseError: `Tool call ${assembly.toolName ?? assembly.toolCallId} ${explanation}`,
 		reason: "invalid_arguments",
 	};
 }
