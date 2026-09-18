@@ -77,6 +77,39 @@ describe("token calibration", () => {
 		expect(lastObservedRequestTokens()).toBe(100_182);
 	});
 
+	it("drops a count larger than the context window", () => {
+		// Measured on harness run 20260918-010944-0364, iteration 81: the
+		// provider reported 166,848 input tokens against a 131,072-token
+		// window. A prompt that large was never served -- it would not fit --
+		// and the ratio was 441,771/166,848 = 2.65, comfortably inside the
+		// 1.2-16 band, so the pairing guards saw nothing wrong. The count
+		// became the anchor and iteration 82 estimated 116,890 tokens for a
+		// request the provider then counted at 56,800: a 2.06x overestimate
+		// that tripped the overflow check at 43% of the window.
+		observeRequestTokens(353_282, 100_182); // a real request first
+		const calibrated = charsPerToken();
+		observeRequestTokens(441_771, 166_848, undefined, undefined, 131_072);
+		expect(charsPerToken()).toBe(calibrated);
+		expect(lastObservedRequestTokens()).toBe(100_182);
+	});
+
+	it("keeps a count that fills the context window exactly", () => {
+		// The bound is the window itself, not a share of it: a request that
+		// fills the window is the ordinary state just before compaction, and
+		// refusing it would blind the trigger at the moment it matters most.
+		observeRequestTokens(393_216, 131_072, undefined, undefined, 131_072);
+		expect(lastObservedRequestTokens()).toBe(131_072);
+		expect(charsPerToken()).toBeCloseTo(3.0, 2);
+	});
+
+	it("keeps a count when no window is known", () => {
+		// Only the caller holding the model definition can supply the window,
+		// and `seedRequestTokenCalibration` does not have one. An absent bound
+		// must not become a refusal.
+		observeRequestTokens(441_771, 166_848);
+		expect(lastObservedRequestTokens()).toBe(166_848);
+	});
+
 	it("ignores absent, zero and negative counts", () => {
 		observeRequestTokens(3_000, 0);
 		observeRequestTokens(3_000, -5);

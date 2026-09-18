@@ -317,11 +317,30 @@ export function observeRequestTokens(
 	tokens: number,
 	reasoningChars?: number,
 	owner?: string,
+	contextWindow?: number,
 ): void {
 	if (!Number.isFinite(chars) || !Number.isFinite(tokens)) {
 		return;
 	}
 	if (chars <= 0 || tokens <= 0) {
+		return;
+	}
+	// A prompt cannot be larger than the window it was served in. Unlike the
+	// ratio guards below this needs no judgement about tokenizers: the request
+	// came back, so it fit, so a count above the window is arithmetic that did
+	// not happen. Measured on harness run 20260918-010944-0364: the provider
+	// reported 166,848 input tokens against a 131,072-token window, at a ratio
+	// of 2.65 that both pairing guards pass. That count became the anchor and
+	// the next iteration overestimated by 2.06x, tripping the overflow check at
+	// 43% of the window -- the trigger prefers a provider count over its own
+	// estimate precisely because a count "cannot be wrong", so an impossible
+	// one has to be refused here or nothing downstream will.
+	//
+	// Refused as evidence of anything, count and ratio together, for the same
+	// reason as the sub-floor case below. The bound is the window itself: a
+	// request that exactly fills it is the ordinary state just before
+	// compaction.
+	if (positive(contextWindow) && tokens > contextWindow) {
 		return;
 	}
 	const state = calibration();

@@ -974,6 +974,7 @@ export class DefaultGateway implements Gateway {
 						inputChars,
 						reasoningChars,
 						request.sessionId,
+						resolved.model.contextWindow,
 					)
 				: toAsyncIterable(stream),
 			this.#takeSlot(),
@@ -1013,6 +1014,7 @@ async function* calibrateFromUsage(
 	inputChars: number,
 	reasoningChars?: number,
 	sessionId?: string,
+	contextWindow?: number,
 ): AsyncIterable<AgentModelEvent> {
 	let outputChars = 0;
 	let reasoningOutputChars = 0;
@@ -1034,6 +1036,7 @@ async function* calibrateFromUsage(
 				event.usage.inputTokens,
 				reasoningChars,
 				sessionId,
+				contextWindow,
 			);
 		}
 		// The reasoning ratio, from the turn this stream just produced.

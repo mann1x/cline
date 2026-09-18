@@ -715,6 +715,70 @@ describe("sdk-gateway", () => {
 		expect(lastObservedRequestTokens("session-b")).toBeUndefined();
 	});
 
+	it("refuses a provider count larger than the model's window", () => {
+		// The guard lives in `observeRequestTokens`, but only this gateway
+		// holds the model definition, so the window has to be carried into the
+		// call or the guard can never fire in production. Measured on harness
+		// run 20260918-010944-0364: the provider reported 166,848 input tokens
+		// against a 131,072-token window at a ratio of 2.65, which both
+		// pairing guards pass. The count anchored the next estimate, which
+		// came out 2.06x high and tripped the overflow check at 43% of the
+		// window. Scaled down here -- the shape is what matters, not the size.
+		resetTokenCalibration();
+		const createProvider = () => ({
+			async *stream() {
+				yield {
+					type: "usage",
+					usage: { inputTokens: 5_000, outputTokens: 10 },
+				} satisfies AgentModelEvent;
+				yield { type: "finish", reason: "stop" } satisfies AgentModelEvent;
+			},
+		});
+		const gateway = createGateway({
+			builtins: false,
+			providers: [
+				{
+					manifest: {
+						id: "scripted",
+						name: "Scripted",
+						defaultModelId: "scripted-model",
+						models: [
+							{
+								id: "scripted-model",
+								name: "Scripted Model",
+								providerId: "scripted",
+								contextWindow: 4_000,
+							},
+						],
+					},
+					createProvider,
+				},
+			],
+		});
+		return (async () => {
+			for await (const _event of await gateway.stream({
+				providerId: "scripted",
+				modelId: "scripted-model",
+				conversation: true,
+				sessionId: "session-window",
+				messages: [
+					// 15,000 characters against 5,000 tokens is a ratio of 3.0:
+					// entirely ordinary, so the magnitude is the only thing
+					// that can refuse this count.
+					{
+						id: "user_long",
+						role: "user",
+						content: [{ type: "text", text: "hi ".repeat(5_000) }],
+						createdAt: Date.now(),
+					},
+				] as readonly AgentMessage[],
+			})) {
+				// drain
+			}
+			expect(lastObservedRequestTokens("session-window")).toBeUndefined();
+		})();
+	});
+
 	it("keeps an auxiliary call out of the process-wide overflow record", () => {
 		// A summariser running out of room is its own problem. Left in the
 		// record, it forces a compaction of the conversation it was summarising,
