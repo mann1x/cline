@@ -101,6 +101,7 @@ interface TokenCalibrationState {
 	thinkingCharsPerToken?: number;
 	requestTokens?: number;
 	requestTokensChars?: number;
+	requestTokensReasoningChars?: number;
 	requestTokensOwner?: string;
 	contextOverflow?: ContextOverflowReport;
 	contextOverflowOwner?: string;
@@ -280,13 +281,57 @@ export function anchoredRequestTokens(
 		return plain(chars, reasoningChars);
 	}
 	const delta = chars - anchorChars;
-	if (delta === 0) {
-		return anchorTokens;
+	// The whole-request ratio, used when the split below cannot be taken. It
+	// prices the delta as an average of two populations that do not tokenize
+	// alike, which is only harmless while one of them is absent.
+	const blended = (): number =>
+		delta === 0
+			? anchorTokens
+			: Math.max(
+					1,
+					Math.round(anchorTokens + delta / (anchorChars / anchorTokens)),
+				);
+	// Reasoning at its own rate, on the path that actually runs.
+	//
+	// The caller measures `reasoningChars` and the call site documents it as
+	// load-bearing, but once an anchor existed it was never read: the entire
+	// delta went through the blended ratio. On a provider that transmits
+	// reasoning history a turn adding nothing but a long think was priced as
+	// prose -- 50,000 characters of thinking costing 12,500 tokens at a
+	// blended 4.0 instead of 18,519 at the measured reasoning rate, understated
+	// by a third, in the direction that hides an overflow rather than invents
+	// one. Ollama resolves `reasoningHistory` to "none" so both terms are zero
+	// there and this degenerates to exactly the arithmetic above.
+	const thinkingRatio = thinkingCharsPerToken();
+	const anchorReasoning = Math.min(
+		anchorChars,
+		state.requestTokensReasoningChars ?? 0,
+	);
+	if (
+		!positive(thinkingRatio) ||
+		(anchorReasoning <= 0 && reasoningChars <= 0)
+	) {
+		return blended();
 	}
-	// The whole-request ratio, not the content-only one: the delta is a mix of
-	// both populations and nothing here knows how it splits.
-	const ratio = anchorChars / anchorTokens;
-	return Math.max(1, Math.round(anchorTokens + delta / ratio));
+	// What the anchor cost once its reasoning is charged separately. A count
+	// too small to cover its own reasoning leaves nothing to calibrate content
+	// against -- refused as a ratio upstream, but still kept as the anchor.
+	const anchorContentTokens = anchorTokens - anchorReasoning / thinkingRatio;
+	const anchorContentChars = anchorChars - anchorReasoning;
+	if (!positive(anchorContentTokens) || !positive(anchorContentChars)) {
+		return blended();
+	}
+	const contentRatio = anchorContentChars / anchorContentTokens;
+	const reasoning = Math.min(chars, Math.max(0, reasoningChars));
+	const contentDelta = chars - reasoning - anchorContentChars;
+	return Math.max(
+		1,
+		Math.round(
+			anchorContentTokens +
+				contentDelta / contentRatio +
+				reasoning / thinkingRatio,
+		),
+	);
 }
 
 export function estimateThinkingTokens(chars: number): number {
@@ -375,6 +420,7 @@ export function observeRequestTokens(
 	) {
 		state.requestTokens = tokens;
 		state.requestTokensChars = chars;
+		state.requestTokensReasoningChars = reasoning;
 		state.requestTokensOwner = owner;
 		return;
 	}
@@ -393,6 +439,7 @@ export function observeRequestTokens(
 	}
 	state.requestTokens = tokens;
 	state.requestTokensChars = chars;
+	state.requestTokensReasoningChars = reasoning;
 	state.requestTokensOwner = owner;
 	if (ratio > MAX_OBSERVED_CHARS_PER_TOKEN) {
 		return;

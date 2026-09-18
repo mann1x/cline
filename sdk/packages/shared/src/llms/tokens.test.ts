@@ -378,6 +378,38 @@ describe("anchoredRequestTokens", () => {
 		resetTokenCalibration();
 	});
 
+	it("charges growth that is all reasoning at the reasoning rate", () => {
+		// The caller computes `reasoningChars` and the call site's own comment
+		// says reasoning "is counted at its own rate" -- but once an anchor
+		// existed the whole-request ratio was applied to the entire delta and
+		// the parameter was never read. On any provider that transmits
+		// reasoning history (mode "all": Anthropic, OpenAI, opencoti) a turn
+		// that added nothing but a long think was priced as if it were prose.
+		observeRequestTokens(400_000, 100_000, 200_000, "s1");
+		// 50,000 characters added, all of them reasoning. At the reasoning
+		// rate that is 50_000 / 2.7 = 18,519 tokens; at the request's blended
+		// 4.0 it would be 12,500, understating a reasoning-heavy turn by a
+		// third in the direction that hides an overflow.
+		expect(anchoredRequestTokens(450_000, 250_000, "s1")).toBe(118_519);
+	});
+
+	it("is unchanged when neither side carries reasoning", () => {
+		// The split has to degenerate exactly to the previous arithmetic, or
+		// it regresses ollama -- which transmits no reasoning history at all,
+		// so `reasoningChars` is always 0 there and this is the only path that
+		// runs on the harness lane.
+		observeRequestTokens(360_000, 100_000, 0, "s1");
+		expect(anchoredRequestTokens(396_000, 0, "s1")).toBe(110_000);
+	});
+
+	it("falls back when the anchor's reasoning would consume its whole count", () => {
+		// A count this small against that much reasoning is already refused as
+		// a ratio, but it is still kept as the anchor, so the split must not
+		// run off into a negative content base.
+		observeRequestTokens(400_000, 10_000, 300_000, "s1");
+		expect(anchoredRequestTokens(440_000, 300_000, "s1")).toBe(11_000);
+	});
+
 	it("falls back to the plain estimate before anything is measured", () => {
 		expect(anchoredRequestTokens(30_000, 0, "s1")).toBe(estimateTokens(30_000));
 	});
