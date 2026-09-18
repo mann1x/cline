@@ -245,6 +245,10 @@ export {
 	type ReadReceipts,
 } from "../../../../sdk/packages/core/src/extensions/tools/executors/read-receipts"
 export type { EditFileInput } from "../../../../sdk/packages/core/src/extensions/tools/schemas"
+// The one reader for the task checklist. The translator delegates to it, so a
+// stub that omits it hands the translator `undefined` and every checklist test
+// passes by reading nothing.
+export { readTaskProgress } from "../../../../sdk/packages/core/src/extensions/tools/task-progress"
 export type { ApplyPatchExecutor, EditorExecutor, ToolExecutors } from "../../../../sdk/packages/core/src/extensions/tools/types"
 export { projectSessionMessagesForDisplay } from "../../../../sdk/packages/core/src/session/display-messages"
 

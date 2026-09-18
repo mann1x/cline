@@ -27,7 +27,7 @@
 // - SDK "ended" event → finalizes the session
 
 import type { CoreSessionEvent } from "@cline/core"
-import { describeRestoreTarget, PATCH_MARKERS, projectSessionMessagesForDisplay } from "@cline/core"
+import { describeRestoreTarget, PATCH_MARKERS, projectSessionMessagesForDisplay, readTaskProgress } from "@cline/core"
 import type { MessageWithMetadata as SdkMessage } from "@cline/llms"
 import { type AgentEvent, formatDisplayUserInput, type ProviderErrorClass, type RequestTimings } from "@cline/shared"
 import { COMMAND_OUTPUT_STRING } from "@shared/combineCommandSequences"
@@ -1758,21 +1758,19 @@ function readEscalationUsage(value: unknown): { usage: NonNullable<ClineEscalati
 /**
  * Read the task checklist off a tool call's input.
  *
- * The parameter is optional on every tool, so most calls carry nothing. A
- * non-string value is not a checklist and is ignored rather than guessed at —
- * putting invented items on screen is worse than showing none.
+ * The parameter is optional on every tool, so most calls carry nothing. What
+ * arrives when something does is core's question, not this file's: the field is
+ * declared there, widened there, and measured there. This used to answer it a
+ * second time — "a non-string value is not a checklist" — and that reading
+ * survived core widening its own, so the tracker counted boxes the panel never
+ * drew. Measured on pandorum 4.100.124: two v9-agentic sessions sent 52
+ * checklists, all 52 as arrays, and this returned `undefined` for every one.
+ *
+ * So it delegates. The only thing left here is unwrapping the input, which
+ * reaches this file as the raw string the stream carried.
  */
 export function readTaskProgressFromToolInput(input: unknown): string | undefined {
-	const parsed = typeof input === "string" ? parseToolInput(input) : input
-	if (!parsed || typeof parsed !== "object") {
-		return undefined
-	}
-	const value = (parsed as Record<string, unknown>).task_progress
-	if (typeof value !== "string") {
-		return undefined
-	}
-	const trimmed = value.trim()
-	return trimmed === "" ? undefined : trimmed
+	return readTaskProgress(typeof input === "string" ? parseToolInput(input) : input)
 }
 
 /** Build the say:"compaction" divider message for a compaction status payload. */
@@ -2167,6 +2165,29 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 						break
 					}
 
+					// The checklist rides along on whatever tool the model was already
+					// calling, so it has to be read before the branches below claim
+					// that call. It used to sit in the tail branch, past four `break`s
+					// — `ask_question`, the completion tools, `run_commands`, MCP — and
+					// a checklist on any of those was dropped without a word. On
+					// pandorum `run_commands` carried more of them than any other tool.
+					//
+					// Emitted as its own say:"task_progress" row rather than folded into
+					// the tool row: the panel wants the newest checklist regardless of
+					// which tool carried it, and `openFocusChainFile` looks for exactly
+					// this message type. Reading is non-destructive — the stored input
+					// stays put for the branch that owns the row.
+					const checklist = readTaskProgressFromToolInput(state.getStreamingToolInput())
+					if (checklist) {
+						messages.push({
+							ts: state.nextTs(),
+							type: "say",
+							say: "task_progress" as ClineSay,
+							text: checklist,
+							partial: false,
+						})
+					}
+
 					// ask_question is serviced by the interaction coordinator (see content_start);
 					// it produces no transcript row of its own, so its content_end is a no-op.
 					if (toolName === "ask_question" || toolName === "ask_followup_question") {
@@ -2355,23 +2376,6 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 					// doesn't carry the input (S6-24 fix)
 					const storedInput = state.getStreamingToolInput()
 					const ts = state.clearStreamingTool()
-
-					// The checklist rides along on whatever tool the model was already
-					// calling, so this is the only place it surfaces. Emitted as its own
-					// say:"task_progress" row rather than folded into the tool row: the
-					// panel wants the newest checklist regardless of which tool carried
-					// it, and `openFocusChainFile` already looks for exactly this message
-					// type.
-					const checklist = readTaskProgressFromToolInput(storedInput)
-					if (checklist) {
-						messages.push({
-							ts: state.nextTs(),
-							type: "say",
-							say: "task_progress" as ClineSay,
-							text: checklist,
-							partial: false,
-						})
-					}
 
 					// Special handling: read_files may read multiple files in one tool call.
 					// Emit one readFile UI message per file so the tool group summary and

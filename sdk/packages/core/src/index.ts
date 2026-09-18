@@ -1048,6 +1048,7 @@ export {
 	PatchActionType,
 	type PatchFileChange,
 	type ReadReceipts,
+	readTaskProgress,
 	resolveCoreSelectedToolIds,
 	resolveToolClientType,
 	type ShellExecutionOptions,
