@@ -603,17 +603,11 @@ export const OpenAICompatibleProvider = ({
 						</div>
 					</div>
 
-					<div style={{ display: "flex", gap: 10, marginTop: "5px" }}>
-						<div>
-							<DebouncedTextField
-								initialValue={formatOptionalModelNumber(openAiModelInfo?.temperature)}
-								onChange={(value) => updateNumericModelOverride("temperature", "Temperature", value)}
-								placeholder="not set">
-								<span style={{ fontWeight: 500 }}>Temperature</span>
-							</DebouncedTextField>
-							{modelFieldErrors.temperature && <div role="alert">{modelFieldErrors.temperature}</div>}
-						</div>
-					</div>
+					{/* Temperature is not here: the Advanced sampler below owns it,
+					    and this field wrote a different store that goes out as the
+					    request's own `temperature`. Two controls for one parameter
+					    is two stored answers, and which of them the server saw
+					    depended on the order the request body was assembled in. */}
 				</>
 			)}
 

@@ -306,12 +306,12 @@ describe("OpenAICompatibleProvider", () => {
 		fireEvent.click(screen.getByText("Model Configuration"))
 
 		fireEvent.change(screen.getByLabelText("Model ID"), { target: { value: "listed-model" } })
-		fireEvent.change(screen.getByLabelText("Temperature"), { target: { value: "0.25" } })
+		fireEvent.change(screen.getByLabelText("Model Context Window"), { target: { value: "64000" } })
 
 		expect(mocks.commitSelection).toHaveBeenLastCalledWith("act", {
 			providerId: "custom-openai",
 			modelId: "listed-model",
-			overrides: { inputPrice: 3, outputPrice: 15, temperature: 0.25 },
+			overrides: { inputPrice: 3, outputPrice: 15, contextWindow: 64_000 },
 		})
 	})
 
@@ -364,12 +364,12 @@ describe("OpenAICompatibleProvider", () => {
 		view.rerender(<OpenAICompatibleProvider currentMode="plan" providerId="custom-openai" showModelOptions={false} />)
 		await act(async () => {})
 		fireEvent.click(screen.getByText("Model Configuration"))
-		fireEvent.change(screen.getByLabelText("Temperature"), { target: { value: "0.25" } })
+		fireEvent.change(screen.getByLabelText("Model Context Window"), { target: { value: "64000" } })
 
 		expect(mocks.commitSelection).toHaveBeenLastCalledWith("plan", {
 			providerId: "custom-openai",
 			modelId: "plan-model",
-			overrides: { outputPrice: 5, temperature: 0.25 },
+			overrides: { outputPrice: 5, contextWindow: 64_000 },
 		})
 
 		await act(async () => {
@@ -422,7 +422,7 @@ describe("OpenAICompatibleProvider", () => {
 		await act(async () => {})
 		fireEvent.click(screen.getByText("Model Configuration"))
 
-		fireEvent.change(screen.getByLabelText("Temperature"), { target: { value: "0.25" } })
+		fireEvent.change(screen.getByLabelText("Model Context Window"), { target: { value: "64000" } })
 
 		view.rerender(<OpenAICompatibleProvider currentMode="plan" providerId="custom-openai" showModelOptions={false} />)
 		await act(async () => {})
@@ -434,7 +434,7 @@ describe("OpenAICompatibleProvider", () => {
 		expect(mocks.commitSelection).toHaveBeenLastCalledWith("act", {
 			providerId: "custom-openai",
 			modelId: "custom-model",
-			overrides: { inputPrice: 3, temperature: 0.25, outputPrice: 20 },
+			overrides: { inputPrice: 3, contextWindow: 64_000, outputPrice: 20 },
 		})
 
 		await act(async () => {
@@ -470,17 +470,17 @@ describe("OpenAICompatibleProvider", () => {
 		})
 	})
 
-	it("persists a temperature edit without adding resolved defaults", async () => {
+	it("persists one edit without adding resolved defaults", async () => {
 		renderProvider()
 		await act(async () => {})
 		fireEvent.click(screen.getByText("Model Configuration"))
 
-		fireEvent.change(screen.getByLabelText("Temperature"), { target: { value: "0.25" } })
+		fireEvent.change(screen.getByLabelText("Input Price / 1M tokens"), { target: { value: "1.25" } })
 
 		expect(mocks.commitSelection).toHaveBeenCalledWith("act", {
 			providerId: "custom-openai",
 			modelId: "custom-model",
-			overrides: { temperature: 0.25 },
+			overrides: { inputPrice: 1.25 },
 		})
 	})
 
@@ -505,13 +505,13 @@ describe("OpenAICompatibleProvider", () => {
 		setCommittedSelection({
 			apiFormat: ApiFormat.OPENAI_RESPONSES,
 			capabilities: ["tools", "streaming"],
-			temperature: 0.4,
+			inputPrice: 1.25,
 		})
 		renderProvider()
 		await act(async () => {})
 		fireEvent.click(screen.getByText("Model Configuration"))
 
-		fireEvent.change(screen.getByLabelText("Temperature"), { target: { value: "" } })
+		fireEvent.change(screen.getByLabelText("Input Price / 1M tokens"), { target: { value: "" } })
 
 		expect(mocks.commitSelection).toHaveBeenCalledWith("act", {
 			providerId: "custom-openai",
@@ -546,18 +546,31 @@ describe("OpenAICompatibleProvider", () => {
 	})
 
 	it("sends an empty replacement when the final override is cleared", async () => {
-		setCommittedSelection({ temperature: 0.4 })
+		setCommittedSelection({ inputPrice: 0.4 })
 		renderProvider()
 		await act(async () => {})
 		fireEvent.click(screen.getByText("Model Configuration"))
 
-		fireEvent.change(screen.getByLabelText("Temperature"), { target: { value: "" } })
+		fireEvent.change(screen.getByLabelText("Input Price / 1M tokens"), { target: { value: "" } })
 
 		expect(mocks.commitSelection).toHaveBeenCalledWith("act", {
 			providerId: "custom-openai",
 			modelId: "custom-model",
 			overrides: {},
 		})
+	})
+
+	// Both fields used to sit in Model Configuration and both wrote a store the
+	// request reads, so which one the server saw came down to the order the body
+	// was assembled in. The sampler below owns the temperature now, and the
+	// automatic output budget owns the cap.
+	it("leaves the parameters that have an owner elsewhere out of Model Configuration", async () => {
+		renderProvider()
+		await act(async () => {})
+		fireEvent.click(screen.getByText("Model Configuration"))
+
+		expect(screen.queryByLabelText("Temperature")).not.toBeInTheDocument()
+		expect(screen.queryByLabelText("Max Output Tokens")).not.toBeInTheDocument()
 	})
 
 	it("shows invalid-number feedback without committing", async () => {
@@ -576,13 +589,13 @@ describe("OpenAICompatibleProvider", () => {
 		await act(async () => {})
 		fireEvent.click(screen.getByText("Model Configuration"))
 
-		fireEvent.change(screen.getByLabelText("Temperature"), { target: { value: "0.25" } })
+		fireEvent.change(screen.getByLabelText("Output Price / 1M tokens"), { target: { value: "2.5" } })
 		fireEvent.change(screen.getByLabelText("Input Price / 1M tokens"), { target: { value: "1.5" } })
 
 		expect(mocks.commitSelection).toHaveBeenLastCalledWith("act", {
 			providerId: "custom-openai",
 			modelId: "custom-model",
-			overrides: { inputPrice: 1.5, temperature: 0.25 },
+			overrides: { inputPrice: 1.5, outputPrice: 2.5 },
 		})
 	})
 
