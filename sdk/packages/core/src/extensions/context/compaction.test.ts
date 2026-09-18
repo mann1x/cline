@@ -49,8 +49,28 @@ vi.mock("@cline/llms", async (importOriginal) => ({
 	// The estimator has to measure what the provider will send, so compaction
 	// asks which reasoning the provider keeps. These tests use a stub provider,
 	// which keeps all of it.
-	reasoningHistoryModeForProvider: () => "all",
+	reasoningHistoryModeForProvider: (
+		providerId: string | undefined,
+		config?: unknown,
+	) => {
+		reasoningHistoryArgs.push({ providerId, config });
+		return "all";
+	},
 }));
+
+/**
+ * What compaction told the resolver about the request.
+ *
+ * The estimator has to measure the request the gateway will send, and since
+ * the mode is now decided per model from a measured capability, passing only
+ * the provider id would answer for a different request than the one going out
+ * -- the two would disagree precisely on the providers where the answer is not
+ * a constant.
+ */
+const reasoningHistoryArgs: {
+	providerId: string | undefined;
+	config?: unknown;
+}[] = [];
 
 async function* streamChunks(chunks: FakeChunk[]): AsyncGenerator<FakeChunk> {
 	for (const chunk of chunks) {
@@ -5716,5 +5736,56 @@ describe("the compaction prompt speaks to whatever the session was", () => {
 		expect(DEFAULT_COMPACTION_PROMPT).toContain("## Ruled out");
 		expect(DEFAULT_COMPACTION_PROMPT).toContain("{{files_read}}");
 		expect(DEFAULT_COMPACTION_PROMPT).toContain("{{files_edited}}");
+	});
+});
+
+describe("the estimator asks about the request, not just the provider", () => {
+	it("passes the model and endpoint so the answer matches what the gateway sends", async () => {
+		// The mode is decided per model from a probe of the endpoint, so asking
+		// with the provider id alone answers for a different request than the one
+		// going out. On a local engine that is exactly the difference between
+		// counting a turn's reasoning and not, and these two paths disagreeing is
+		// the failure the pair exists to prevent.
+		reasoningHistoryArgs.length = 0;
+		const prepareTurn = createContextCompactionPrepareTurn({
+			providerId: "ollama",
+			modelId: "qwen3.6:27b",
+			providerConfig: {
+				providerId: "ollama",
+				modelId: "qwen3.6:27b",
+				baseUrl: "http://localhost:11434",
+				reasoningHistory: "auto",
+			} as LlmsProviders.ProviderConfig,
+			compaction: { enabled: true, strategy: "basic" },
+			logger: undefined,
+		});
+		const messages: LlmsProviders.Message[] = [
+			{ role: "user", content: '<user_input mode="act">go</user_input>' },
+			{ role: "assistant", content: "thinking ".repeat(50) },
+			{ role: "user", content: "Continue" },
+		];
+		await prepareTurn?.({
+			agentId: "agent-1",
+			conversationId: "conv-1",
+			parentAgentId: null,
+			iteration: 1,
+			abortSignal: new AbortController().signal,
+			systemPrompt: "You are helpful.",
+			tools: [],
+			messages,
+			apiMessages: messages,
+			model: {
+				id: "qwen3.6:27b",
+				provider: "ollama",
+				info: { id: "qwen3.6:27b", contextWindow: 131_072 },
+			},
+		} as never);
+
+		expect(reasoningHistoryArgs.length).toBeGreaterThan(0);
+		expect(reasoningHistoryArgs[0]?.config).toMatchObject({
+			modelId: "qwen3.6:27b",
+			baseUrl: "http://localhost:11434",
+			reasoningHistory: "auto",
+		});
 	});
 });

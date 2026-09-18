@@ -532,7 +532,17 @@ export function createContextCompactionPrepareTurn(
 		// fallback path -- the first request of a session, and every resume --
 		// which is exactly where an estimate that high compacts a transcript that
 		// had ample room.
-		const reasoningHistory = reasoningHistoryModeForProvider(config.providerId);
+		// Asked about this request, not just this provider: the mode is resolved
+		// per model from a measured capability, so the provider id alone answers
+		// for a different request than the one the gateway is about to send.
+		const reasoningHistory = reasoningHistoryModeForProvider(
+			config.providerId,
+			{
+				modelId: providerConfig.modelId ?? config.modelId,
+				baseUrl: providerConfig.baseUrl,
+				reasoningHistory: providerConfig.reasoningHistory,
+			},
+		);
 		const requestInputTokens = estimateRequestInputTokens(
 			{
 				systemPrompt: context.systemPrompt,
