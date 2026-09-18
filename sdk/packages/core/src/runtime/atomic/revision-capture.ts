@@ -39,6 +39,24 @@ import type { Snapshot } from "./snapshot";
 export interface RevisionCaptureSource {
 	/** The open transaction's base, or nothing when none is open. */
 	readonly pending: Snapshot | undefined;
+	/**
+	 * Where paths resolve and what counts as inside, when there is no
+	 * transaction.
+	 *
+	 * Supplying it is what makes capture session-scoped: `#1` is seeded from the
+	 * file's own content at first touch instead of from a base snapshot, and the
+	 * log outlives every transaction because it never belonged to one. Left out,
+	 * a session with no open transaction captures nothing, which is what every
+	 * caller did before this existed.
+	 *
+	 * The promise changes with it and the label says so. Inside a transaction
+	 * `#1` is what a rollback returns the whole tree to; outside one it is what
+	 * this one file said before this session touched it. "Can the rollback reach
+	 * this path" stops being a precondition of recording history and becomes a
+	 * question the rollback asks -- which is the point, since the history is
+	 * worth having in a session that has no rollback at all.
+	 */
+	readonly root?: string;
 	/** Which transaction is open. */
 	readonly transaction: number;
 	/** Where the revisions go. */
@@ -249,7 +267,10 @@ export function withRevisionCapture<T extends AgentToolDefinition>(
 	const { source } = options;
 
 	/** Seed #1 from the base so a restore has somewhere to go back to. */
-	const track = (snapshot: Snapshot, given: string): string | undefined => {
+	const trackAgainstBase = async (
+		snapshot: Snapshot,
+		given: string,
+	): Promise<string | undefined> => {
 		const lookup = resolveBaseFile(snapshot, given);
 		// Uncovered and outside are not tracked at all: the transaction cannot
 		// put them back either, and a revision log over a file the rollback
@@ -264,6 +285,36 @@ export function withRevisionCapture<T extends AgentToolDefinition>(
 		return lookup.absolutePath;
 	};
 
+	/** Seed #1 from the file itself, for a session with no transaction. */
+	const trackAgainstDisk = async (
+		root: string,
+		given: string,
+	): Promise<string | undefined> => {
+		const absolutePath = path.normalize(
+			path.isAbsolute(given) ? given : path.resolve(root, given),
+		);
+		// The one reachability question that survives the decoupling. There is
+		// no rollback to bound this, but a workspace still has an edge, and a
+		// history of files outside it is history nothing here will ever offer.
+		const relative = path.relative(path.normalize(root), absolutePath);
+		const inside =
+			relative !== "" &&
+			!relative.startsWith("..") &&
+			!path.isAbsolute(relative);
+		if (!inside) {
+			return undefined;
+		}
+		// Read before the tool runs, so this is the content the write is about
+		// to replace. `undefined` is a real answer -- the file does not exist
+		// yet -- and `seed` records the absence as #1.
+		source.log.seed(
+			absolutePath,
+			await options.readFile(absolutePath),
+			"session",
+		);
+		return absolutePath;
+	};
+
 	type Captured = {
 		display: string;
 		index: number;
@@ -273,7 +324,7 @@ export function withRevisionCapture<T extends AgentToolDefinition>(
 	};
 
 	const capture = async (
-		snapshot: Snapshot,
+		root: string,
 		absolutePaths: readonly string[],
 		note: RevisionNote,
 	): Promise<Captured | undefined> => {
@@ -283,7 +334,7 @@ export function withRevisionCapture<T extends AgentToolDefinition>(
 			const revision = source.log.record(absolutePath, body, currentTool, note);
 			if (!revision) continue;
 			newest = {
-				display: path.relative(snapshot.root, absolutePath) || absolutePath,
+				display: path.relative(root, absolutePath) || absolutePath,
 				index: revision.index,
 				lines: revision.lines,
 				note: revision.note,
@@ -314,22 +365,31 @@ export function withRevisionCapture<T extends AgentToolDefinition>(
 				: {}),
 			execute: async (input: unknown, context: AgentToolContext) => {
 				const snapshot = source.pending;
-				if (!snapshot) {
+				// The transaction's root when there is one, so protocol sessions
+				// keep resolving exactly as they did; the session root otherwise.
+				const root = snapshot?.root ?? source.root;
+				if (root === undefined) {
 					return original.execute(input, context);
 				}
 				// Seeded before the call, so #1 holds what the file said before
 				// this write rather than after it.
 				const targets = named
-					? targetsOf(tool.name, input)
-							.map((given) => track(snapshot, given))
-							.filter((p): p is string => p !== undefined)
+					? (
+							await Promise.all(
+								targetsOf(tool.name, input).map((given) =>
+									snapshot
+										? trackAgainstBase(snapshot, given)
+										: trackAgainstDisk(root, given),
+								),
+							)
+						).filter((p): p is string => p !== undefined)
 					: // Opaque writers re-check what is already tracked and nothing
 						// else. A file nobody has touched with a tool has no history
 						// to keep consistent.
 						[...source.log.tracked()];
 				currentTool = tool.name;
 				const result = await original.execute(input, context);
-				const newest = await capture(snapshot, targets, {
+				const newest = await capture(root, targets, {
 					intent: intentOf(input),
 					summary: summaryOf(result),
 					check: options.lastCheck?.(),

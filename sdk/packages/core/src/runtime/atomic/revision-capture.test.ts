@@ -377,6 +377,104 @@ describe("withRevisionCapture", () => {
 		expect(log.tracked()).toHaveLength(0);
 	});
 
+	it("captures with no transaction open, seeding #1 from disk", async () => {
+		// The decoupling. Without a transaction there is no base snapshot, so #1
+		// is what the file said the moment this session first wrote to it --
+		// which is the same promise for the purpose that matters: the model can
+		// get back what it just destroyed.
+		const log = createRevisionLog();
+		const d = disk({ [FILE]: "one\n" });
+		// Written inside `execute`, the way a real tool does it: the seed reads
+		// disk before the call, so a fixture that writes first would seed the
+		// content it is about to compare against.
+		const writer = tool("editor");
+		writer.execute = (async () => {
+			d.state.set(FILE, "two\n");
+			return "done";
+		}) as never;
+		const [editor] = withRevisionCapture([writer], {
+			source: { pending: undefined, root: ROOT, transaction: 0, log },
+			readFile: d.readFile,
+		});
+
+		await editor?.execute?.({ path: FILE } as never, {} as never);
+
+		const revisions = log.revisions(FILE);
+		expect(revisions.map((r) => r.index)).toEqual([1, 2]);
+		expect(revisions[0]?.lines).toBe(1);
+		// Not "transaction open": there is no transaction, and a label that says
+		// there is teaches the model to expect a rollback that cannot happen.
+		expect(revisions[0]?.by).not.toContain("transaction");
+	});
+
+	it("makes the absence #1 for a file it creates, with no transaction", async () => {
+		const log = createRevisionLog();
+		const d = disk({});
+		const writer = tool("editor");
+		writer.execute = (async () => {
+			d.state.set(FILE, "new\n");
+			return "done";
+		}) as never;
+		const [editor] = withRevisionCapture([writer], {
+			source: { pending: undefined, root: ROOT, transaction: 0, log },
+			readFile: d.readFile,
+		});
+
+		await editor?.execute?.({ path: FILE } as never, {} as never);
+
+		const revisions = log.revisions(FILE);
+		expect(revisions).toHaveLength(2);
+		// Asserted through the note, which is what the model is shown -- the
+		// projection `revisions()` returns does not carry `existed`.
+		expect(revisions[0]?.note).toContain("did not exist");
+	});
+
+	it("still refuses a path outside the root with no transaction", async () => {
+		// The root is what bounds it. Without a snapshot the reachability
+		// question moves to the rollback, but "is this even in the workspace"
+		// is still ours to answer.
+		const log = createRevisionLog();
+		const d = disk({});
+		const [editor] = withRevisionCapture([tool("editor")], {
+			source: { pending: undefined, root: ROOT, transaction: 0, log },
+			readFile: d.readFile,
+		});
+
+		d.state.set(OUTSIDE, "x");
+		await editor?.execute?.({ path: OUTSIDE } as never, {} as never);
+
+		expect(log.tracked()).toHaveLength(0);
+	});
+
+	it("re-checks tracked files after run_commands with no transaction", async () => {
+		// The `sed -i` case, which is the one that needs this most: the write
+		// names no file, so only what is already tracked can be re-read.
+		const log = createRevisionLog();
+		const d = disk({ [FILE]: "one\n" });
+		const writer = tool("editor");
+		writer.execute = (async () => {
+			d.state.set(FILE, "two\n");
+			return "done";
+		}) as never;
+		const shell = tool("run_commands");
+		shell.execute = (async () => {
+			d.state.set(FILE, "three\n");
+			return "done";
+		}) as never;
+		const [editor, commands] = withRevisionCapture([writer, shell], {
+			source: { pending: undefined, root: ROOT, transaction: 0, log },
+			readFile: d.readFile,
+		});
+
+		await editor?.execute?.({ path: FILE } as never, {} as never);
+		await commands?.execute?.(
+			{ commands: ["sed -i s/two/three/"] } as never,
+			{} as never,
+		);
+
+		expect(log.revisions(FILE).map((r) => r.index)).toEqual([1, 2, 3]);
+	});
+
 	it("leaves tools that cannot write a file alone", () => {
 		const { source, d } = harness({});
 		const plain = tool("read_files");

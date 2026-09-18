@@ -274,9 +274,46 @@ export function revisionSpan(
 		: `#${last.index}`;
 }
 
+/**
+ * What `#1` is, in the two worlds this log lives in.
+ *
+ * `transaction` is the base snapshot — a rollback can return the whole tree to
+ * it. `session` is the file's own content at first touch, which undoes this
+ * session's writes to that file and promises nothing about the tree.
+ */
+export type RevisionOrigin = "transaction" | "session";
+
+const ORIGIN_LABELS: Record<
+	RevisionOrigin,
+	{ by: string; existed: string; absent: string }
+> = {
+	transaction: {
+		by: "transaction open",
+		existed: "the file as this transaction found it",
+		absent: "did not exist when this transaction opened",
+	},
+	session: {
+		by: "first seen",
+		existed: "the file as it stood before this session first wrote to it",
+		absent: "did not exist when this session first wrote to it",
+	},
+};
+
 export interface RevisionLog {
-	/** Record the file as the transaction found it. Ignored if already seeded. */
-	seed(absolutePath: string, body: Buffer | undefined): void;
+	/**
+	 * Record the file as it was found. Ignored if already seeded.
+	 *
+	 * `origin` is what `#1` is said to be, and it is not cosmetic: inside a
+	 * transaction `#1` is the base the rollback goes back to, and outside one it
+	 * is merely what the file said the first time this session wrote to it. The
+	 * second is a weaker promise, and a label claiming the first would teach the
+	 * model to expect a rollback that cannot happen.
+	 */
+	seed(
+		absolutePath: string,
+		body: Buffer | undefined,
+		origin?: RevisionOrigin,
+	): void;
 	/**
 	 * Record what a tool left behind. Returns the new revision, or nothing when
 	 * the content is what it already was -- a tool that reported a refusal, or
@@ -570,10 +607,11 @@ export function createRevisionLog(
 	};
 
 	return {
-		seed(absolutePath, body) {
+		seed(absolutePath, body, origin = "transaction") {
 			if (logs.has(absolutePath)) return;
-			append(absolutePath, body, "transaction open", {
-				summary: "the file as this transaction found it",
+			const labels = ORIGIN_LABELS[origin];
+			append(absolutePath, body, labels.by, {
+				summary: body === undefined ? labels.absent : labels.existed,
 			});
 		},
 
@@ -581,12 +619,11 @@ export function createRevisionLog(
 			const entries = logs.get(absolutePath);
 			if (!entries || entries.length === 0) {
 				// Nothing seeded it, so this write is the first thing known about
-				// the file. Recording it as #1 would claim the transaction opened
-				// with content it never had, so the absence is #1 and the write
-				// is #2 -- which is also exactly true of a file the transaction
-				// created.
-				append(absolutePath, undefined, "transaction open", {
-					summary: "did not exist when this transaction opened",
+				// the file. Recording it as #1 would claim the log opened with
+				// content the file never had, so the absence is #1 and the write
+				// is #2 -- which is also exactly true of a file that was created.
+				append(absolutePath, undefined, ORIGIN_LABELS.transaction.by, {
+					summary: ORIGIN_LABELS.transaction.absent,
 				});
 			}
 			const current = logs.get(absolutePath);
