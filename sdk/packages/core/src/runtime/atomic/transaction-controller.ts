@@ -149,6 +149,16 @@ export interface TransactionControllerOptions {
 	oracleTimeoutMs?: number;
 	snapshotLimits?: SnapshotLimits;
 	/**
+	 * The session's file-history log, when the host keeps one.
+	 *
+	 * Given rather than made, so the transaction and the session share a single
+	 * history: the numbering the model has been told about stays continuous
+	 * across engaging and disengaging the protocol, and the compaction ledger
+	 * keeps answering from the same store. Absent, this makes its own, which is
+	 * what every caller did before the log became session-scoped.
+	 */
+	revisions?: RevisionLog;
+	/**
 	 * Something for the last transaction's opening prompt, asked for once.
 	 *
 	 * The host's, and opaque here: this is where the escalation offer is said,
@@ -184,7 +194,7 @@ export class TransactionController {
 	 * what the base holds, so a log that outlived its base would offer the model
 	 * a revision the rollback cannot honour.
 	 */
-	private readonly revisionLog = createRevisionLog();
+	private readonly revisionLog: RevisionLog;
 	/** What a rollback goes back to. Outlives a transaction that was carried. */
 	private snapshot?: Snapshot;
 	/**
@@ -225,7 +235,9 @@ export class TransactionController {
 	private carrying = false;
 	private reconsiderationsUsed = 0;
 
-	constructor(private readonly options: TransactionControllerOptions) {}
+	constructor(private readonly options: TransactionControllerOptions) {
+		this.revisionLog = options.revisions ?? createRevisionLog();
+	}
 
 	/** One-based number of the open transaction, or 0 before the first opens. */
 	get transaction(): number {

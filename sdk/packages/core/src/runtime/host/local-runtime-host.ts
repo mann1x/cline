@@ -150,13 +150,13 @@ import type { CoreSessionEvent } from "../../types/events";
 import type { ActiveSession, PreparedTurnInput } from "../../types/session";
 import type { SessionRecord } from "../../types/sessions";
 import { ESCALATION_REVISION_WORDING } from "../atomic/base-revision-reads";
-import { revisionSpan } from "../atomic/file-revisions";
 import { withRevisionCapture } from "../atomic/revision-capture";
 import {
 	createAtomicProtocolSession,
 	DEFAULT_MAX_CHANGES,
 	DEFAULT_MAX_TRANSACTIONS,
 } from "../atomic/session-protocol";
+import { createSessionRevisions } from "../atomic/session-revisions";
 import type { RuntimeCapabilities } from "../capabilities";
 import { normalizeRuntimeCapabilities } from "../capabilities";
 import { normalizeConnectionUpdate } from "../config/connection-update";
@@ -816,12 +816,16 @@ export class LocalRuntimeHost implements RuntimeHost {
 			},
 		);
 		if (!resumedArtifacts) manifest.metadata = initialSessionMetadata;
-		// The file revision log lives on the change protocol, which is built two
-		// hundred lines below this. So the port is late-bound, the way
-		// `struggleDetector` is: compaction only ever calls it partway through a
-		// turn, by which time both exist, and a session running without the
-		// protocol answers "nothing tracked" -- which is true, since there are
-		// no revisions without it.
+		// The file-history log is the session's, not the change protocol's. It
+		// used to be a field on `TransactionController`, so `--atomic off`
+		// recorded nothing and this port answered "nothing tracked" for every
+		// session that ran without the protocol -- which was every session in
+		// the arm that compacts most: 36 compactions in the 12-run A/B, each
+		// shipping a ledger whose closing section was empty.
+		//
+		// Built here, before the protocol, and handed to it below so both share
+		// one history. That also keeps the numbering continuous, which matters
+		// because the numbers are addresses the model has already been given.
 		//
 		// `spanFor` answers per file, not per call, which is the only question
 		// the log can answer truthfully: it records revisions in order without
@@ -829,15 +833,14 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// it matters -- identical calls collapse into one ledger entry, a
 		// refused call makes no revision, and `run_commands` can make several.
 		// The span is true however the calls line up.
-		const compactionRevisions: CompactionRevisions = {
-			spanFor: (filePath) =>
-				revisionSpan(
-					atomicProtocol?.controller.revisions.revisions(filePath) ?? [],
-				),
-			tracked: () => atomicProtocol?.controller.revisions.tracked() ?? [],
-			noteCompaction: (keep) =>
-				atomicProtocol?.controller.revisions.noteCompaction(keep) ?? 0,
-		};
+		const sessionRevisions = createSessionRevisions({
+			// The workspace before the working directory, for the same reason the
+			// protocol takes the wider of the two: history that covers less than
+			// the model can reach is history with holes in it.
+			root:
+				bootstrap.config.workspaceRoot ?? bootstrap.config.cwd ?? process.cwd(),
+		});
+		const compactionRevisions: CompactionRevisions = sessionRevisions.port;
 		const configWithProvider: typeof bootstrap.config = bootstrap.config
 			.compaction
 			? {
@@ -1190,6 +1193,9 @@ export class LocalRuntimeHost implements RuntimeHost {
 				configWithProvider.cwd ??
 				process.cwd(),
 			config: configWithProvider.atomicProtocol,
+			// Shared, not made: the transaction becomes one consumer of the
+			// session's history rather than the thing it is defined against.
+			revisions: sessionRevisions.log,
 			logger: {
 				log: (message) => configWithProvider.logger?.log?.(message),
 			},
@@ -1701,7 +1707,13 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// transaction found it -- has to reach the built-ins as well as these.
 		const toolsWithProtocol = atomicProtocol
 			? atomicProtocol.decorateTools([...tools, ...atomicProtocol.tools])
-			: tools;
+			: // No protocol, so nothing else is going to record what the writing
+				// tools do. This is the case the decoupling exists for: the
+				// history, the ledger's file addresses and the retention rule all
+				// work with the protocol off. Only one of the two ever runs --
+				// the protocol's own decoration wraps the same list against the
+				// same log, and wrapping twice would record every write twice.
+				sessionRevisions.decorate(tools);
 		// The expert gets the session's tools WITHOUT the change protocol, and
 		// less the tool that reached it. Set before the session's own list is
 		// extended: an expert that could escalate would escalate to itself.

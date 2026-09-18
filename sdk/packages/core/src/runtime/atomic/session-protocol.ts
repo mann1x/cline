@@ -6,6 +6,7 @@ import {
 	withBaseRevisionReads,
 } from "./base-revision-reads";
 import { withCheckFirstEdits } from "./check-first-edits";
+import type { RevisionLog } from "./file-revisions";
 import { discoverOracle, type Oracle, type OracleVerdict } from "./oracle";
 import { withPlanCapture } from "./plan-capture";
 import { readPlan } from "./plan-text";
@@ -144,6 +145,13 @@ export const DEFAULT_MAX_UNSTARTED_ATTEMPTS = 6;
 export const DEFAULT_SILENT_TURNS_BEFORE_GUARD = 3;
 
 export interface AtomicProtocolSessionOptions {
+	/**
+	 * The session's file-history log, shared rather than made here.
+	 *
+	 * See `TransactionControllerOptions.revisions`. The host keeps one per
+	 * session so the ledger and recovery work with the protocol off.
+	 */
+	revisions?: RevisionLog;
 	workspaceRoot: string;
 	config: CoreAtomicProtocolConfig | undefined;
 	onEvent?: (event: TransactionEvent) => void;
@@ -374,6 +382,7 @@ export async function createAtomicProtocolSession(
 
 	const controller = new TransactionController({
 		workspaceRoot: options.workspaceRoot,
+		...(options.revisions ? { revisions: options.revisions } : {}),
 		maxChanges: options.config?.maxChanges ?? DEFAULT_MAX_CHANGES,
 		maxTransactions:
 			options.config?.maxTransactions ?? DEFAULT_MAX_TRANSACTIONS,
