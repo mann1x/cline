@@ -2460,6 +2460,87 @@ describe("a range edit whose old_text is somewhere else", () => {
 		});
 	});
 
+	// Measured on pandorum 2026-09-18, session 1789732802709_yyynk: twelve
+	// consecutive `editor` calls refused because the model's `old_text`
+	// transposed the last two characters of five lines -- it sent `})};` where
+	// the file holds `});}`. The refusal quoted the whole range back, which is
+	// 2,600 characters in which the three-character difference is invisible, and
+	// the model re-read the file three times and re-sent the same text. The
+	// divergence is what breaks that loop, and it is cheap to compute.
+	it("names the line and column where old_text first differs", async () => {
+		await withTempFile("alpha\nbeta();}\ngamma\n", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 3);
+
+			await expect(
+				editor(
+					{
+						path: filePath,
+						start_line: 1,
+						end_line: 3,
+						old_text: "alpha\nbeta)};\ngamma",
+						new_text: "CHANGED",
+					},
+					dir,
+					context,
+				),
+			).rejects.toThrow(/line 2, and differ at column 5/);
+		});
+	});
+
+	it("shows both sides of the first difference", async () => {
+		await withTempFile("alpha\nbeta();}\ngamma\n", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 3);
+
+			const error = await editor(
+				{
+					path: filePath,
+					start_line: 1,
+					end_line: 3,
+					old_text: "alpha\nbeta)};\ngamma",
+					new_text: "CHANGED",
+				},
+				dir,
+				context,
+			).catch((thrown: Error) => thrown);
+
+			expect(String(error)).toContain("beta();}");
+			expect(String(error)).toContain("beta)};");
+		});
+	});
+
+	// A difference in the number of lines has no differing line to point at, so
+	// it has to be said in its own words rather than left to the reader of a
+	// quoted block.
+	it("says how the two line counts differ when every shared line agrees", async () => {
+		await withTempFile("alpha\nbeta\ngamma\n", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 3);
+
+			await expect(
+				editor(
+					{
+						path: filePath,
+						// A shorter anchor that occurs exactly once is
+						// re-anchored rather than refused, so the anchor here is
+						// one the file does not hold: longer than the range, and
+						// agreeing with it as far as the range goes.
+						start_line: 1,
+						end_line: 3,
+						old_text: "alpha\nbeta\ngamma\ndelta",
+						new_text: "CHANGED",
+					},
+					dir,
+					context,
+				),
+			).rejects.toThrow(/agree line for line/);
+		});
+	});
+
 	// An anchor that starts or ends mid-line cannot name whole lines, and this
 	// path replaces whole lines.
 	it("still refuses an anchor that does not begin and end a line", async () => {

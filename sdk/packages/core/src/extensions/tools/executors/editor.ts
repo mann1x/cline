@@ -797,6 +797,70 @@ function anchorDescribesRange(rangeText: string, oldStr: string): boolean {
 		: false;
 }
 
+/** How much of a line to show either side of the character that differs. */
+const DIVERGENCE_WINDOW = 48;
+
+function divergenceWindow(line: string, column: number): string {
+	const from = Math.max(0, column - DIVERGENCE_WINDOW);
+	const to = Math.min(line.length, column + DIVERGENCE_WINDOW);
+	// Both sides are sliced at the same offsets, and everything before `column`
+	// is equal by construction, so the two rows line up under each other.
+	return `${from > 0 ? "…" : ""}${line.slice(from, to)}${to < line.length ? "…" : ""}`;
+}
+
+/**
+ * Where `old_text` and the lines the range names first disagree.
+ *
+ * The refusal without this quotes the whole range back, which for a minified
+ * file is one 2,600-character line. Measured on pandorum 2026-09-18: the model
+ * transposed the last two characters of five lines — `})};` for `});}` — and
+ * spent twelve calls and eight minutes re-sending it, re-reading the file three
+ * times in between. Nothing in the refusal could have told it which three
+ * characters were wrong, and a difference that cannot be seen cannot be fixed.
+ *
+ * Compared exactly as `anchorDescribesRange` compares, gutter included, so this
+ * never reports a difference the check itself forgave.
+ */
+function describeAnchorDivergence(
+	rangeText: string,
+	oldStr: string,
+	startLineOneBased: number,
+): string | undefined {
+	const target = anchorText(rangeText).split("\n");
+	const suppliedText = anchorText(oldStr);
+	const supplied = (
+		hasLineNumberGutter(suppliedText)
+			? anchorText(stripLineNumberGutter(suppliedText))
+			: suppliedText
+	).split("\n");
+
+	const shared = Math.min(target.length, supplied.length);
+	for (let index = 0; index < shared; index += 1) {
+		const fileLine = target[index] ?? "";
+		const sentLine = supplied[index] ?? "";
+		if (fileLine === sentLine) {
+			continue;
+		}
+		let column = 0;
+		while (
+			column < fileLine.length &&
+			column < sentLine.length &&
+			fileLine[column] === sentLine[column]
+		) {
+			column += 1;
+		}
+		return `They agree until line ${startLineOneBased + index}, and differ at column ${column + 1}:\n  the file  ${divergenceWindow(fileLine, column)}\n  old_text  ${divergenceWindow(sentLine, column)}\nThat is the whole of the mismatch — send \`old_text\` exactly as the file holds it there, or drop it and let the range stand alone.`;
+	}
+
+	if (target.length !== supplied.length) {
+		const longer = supplied.length > target.length ? "`old_text`" : "the range";
+		const difference = Math.abs(supplied.length - target.length);
+		return `The two agree line for line as far as they go, and ${longer} carries ${difference} more line(s): the range names ${target.length} and \`old_text\` is ${supplied.length}.`;
+	}
+
+	return undefined;
+}
+
 /**
  * Replace a whole line range — the operation that had no tool.
  *
@@ -919,12 +983,19 @@ async function replaceLineRange(
 	) {
 		const suppliedLines = anchorText(oldStr as string).split("\n").length;
 		const namedLines = effectiveEndLine - startLineOneBased + 1;
+		const divergence = describeAnchorDivergence(
+			rangeText,
+			oldStr as string,
+			startLineOneBased,
+		);
 		throw new Error(
 			`No replacement performed: the call names ${
 				startLineOneBased === effectiveEndLine
 					? `line ${startLineOneBased}`
 					: `lines ${startLineOneBased}-${effectiveEndLine}`
-			} (${namedLines} line(s)) but its \`old_text\` is ${suppliedLines} line(s) that do not match them, so the two halves of the edit describe different code. ${filePath} currently holds:\n${
+			} (${namedLines} line(s)) but its \`old_text\` is ${suppliedLines} line(s) that do not match them, so the two halves of the edit describe different code.${
+				divergence ? `\n${divergence}` : ""
+			} ${filePath} currently holds:\n${
 				quoteCurrentLines(content, startLineOneBased, effectiveEndLine) ?? ""
 			}\nReplacing the range would have changed lines your \`old_text\` never named. Send \`old_text\` on its own and let the file find it, or send the range on its own with \`new_text\` for exactly those lines — after re-reading them, because an anchor that misses usually means the line numbers have moved.`,
 		);
