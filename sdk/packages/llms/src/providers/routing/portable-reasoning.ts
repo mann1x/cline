@@ -22,6 +22,15 @@ const NON_PORTABLE_REASONING_PROVIDERS = new Set([
 	"claude-code",
 	"dify",
 	"mistral",
+	// llama.cpp under a KV control plane. It has no effort scale: measured on a
+	// live server 2026-09-18, `reasoning_effort` -- the field the AI SDK emits
+	// for a level -- is read and discarded, with minimal/low/medium/high
+	// returning byte-identical output. The level is translated to
+	// `reasoning_budget_tokens` by the llama.cpp option rule instead, and
+	// keeping the portable field here would put an inert field on the wire
+	// beside the real one. Leaving the intent on the request is what lets that
+	// rule see it.
+	"opencoti",
 	"opencode",
 	"sapaicore",
 ]);

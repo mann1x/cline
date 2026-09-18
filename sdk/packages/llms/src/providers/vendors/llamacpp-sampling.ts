@@ -152,13 +152,30 @@ export function resolveLlamaCppThinkBudgetTokens(
  */
 export function buildLlamaCppSamplingOptions(
 	sampling: ProviderSamplingOptions | undefined,
-	budget?: { contextWindow?: number; numPredict?: number },
+	budget?: {
+		contextWindow?: number;
+		numPredict?: number;
+		/**
+		 * The level the request asks for, which is what the provider panel's
+		 * dropdown actually writes.
+		 *
+		 * This used to be missing, and the omission is the whole defect: the
+		 * builder bailed out above when no *sampler* was configured, so a user
+		 * who set nothing but an effort level sent no budget at all. Measured
+		 * live on an opencoti server 2026-09-18, `reasoning_effort` -- the field
+		 * the AI SDK emits for the level -- is discarded outright, so the
+		 * thinking was unbounded for every one of those requests.
+		 */
+		effort?: string;
+		/** `false` means reason as little as possible, which here is a budget of 0. */
+		enabled?: boolean;
+	},
 ): Record<string, unknown> {
-	if (!sampling) {
-		return {};
-	}
 	const options: Record<string, unknown> = {};
 	for (const [key, wireName] of Object.entries(LLAMACPP_SAMPLING_WIRE_NAMES)) {
+		if (!sampling) {
+			break;
+		}
 		const value = sampling[key as keyof ProviderSamplingOptions];
 		if (value === undefined || value === null) {
 			continue;
@@ -186,18 +203,55 @@ export function buildLlamaCppSamplingOptions(
 	// this very sampler may have set.
 	const window = resolveLlamaCppThinkBudgetWindow(
 		budget?.contextWindow,
-		isPositiveInteger(sampling.numPredict)
-			? sampling.numPredict
+		isPositiveInteger(sampling?.numPredict)
+			? sampling?.numPredict
 			: budget?.numPredict,
 	);
-	const budgetTokens = resolveLlamaCppThinkBudgetTokens(
-		sampling.thinkBudget,
+	const budgetTokens = resolveLlamaCppReasoningBudget(
+		{
+			thinkBudget: sampling?.thinkBudget,
+			effort: budget?.effort,
+			enabled: budget?.enabled,
+		},
 		window,
 	);
 	if (budgetTokens !== undefined) {
 		options.reasoning_budget_tokens = budgetTokens;
 	}
 	return options;
+}
+
+/**
+ * The one budget this provider will be sent, from the two places it can come
+ * from.
+ *
+ * Precedence mirrors what the panel makes mutually exclusive: an explicit count
+ * is "Custom (reasoning_budget_tokens)" and is the number the user typed, so it
+ * outranks a level, which is only ever a share. Neither set means **unbounded**
+ * -- and unlike Ollama, where an absent budget hands the decision to the model's
+ * own `think_budget`, absent here means the engine bounds nothing at all. So
+ * nothing is sent rather than a computed default, and a budget then comes only
+ * from the server's own command-line flag if one was given.
+ */
+export function resolveLlamaCppReasoningBudget(
+	source: {
+		thinkBudget?: string;
+		effort?: string;
+		enabled?: boolean;
+	},
+	window: number,
+): number | undefined {
+	// Reasoning switched off is not "no preference": it is the smallest budget
+	// the engine will take. Verified on the live server -- 0 and 1 both return
+	// the same floor, so 0 reads as "as little as possible" rather than as unset.
+	if (source.enabled === false) {
+		return 0;
+	}
+	const explicit = resolveLlamaCppThinkBudgetTokens(source.thinkBudget, window);
+	if (explicit !== undefined) {
+		return explicit;
+	}
+	return resolveLlamaCppThinkBudgetTokens(source.effort, window);
 }
 
 /**

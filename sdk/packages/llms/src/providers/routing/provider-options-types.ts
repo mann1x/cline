@@ -31,6 +31,17 @@ export type ProviderOptionMatchInput = {
 	context: GatewayProviderContext;
 	providerOptionsKey: string;
 	target: AiSdkProviderOptionsTarget;
+	/**
+	 * The effort level the AI SDK would have sent as `reasoning_effort`.
+	 *
+	 * `request.reasoning` is gone by the time a rule runs — `withoutPortableReasoning`
+	 * moves the intent into the SDK's own call option and clears it, because the
+	 * SDK ignores top-level reasoning once provider options carry a reasoning
+	 * control. A rule that has to *translate* the level rather than pass it
+	 * through therefore has nothing to read, which is how llama.cpp came to be
+	 * sent a field it discards and no budget at all.
+	 */
+	portableReasoning?: string;
 };
 
 export type ProviderOptionBuildInput = ProviderOptionMatchInput & {

@@ -4,7 +4,10 @@ import type {
 } from "@cline/shared";
 import { buildAnthropicProviderOptions } from "./anthropic-compatible";
 import { buildCompatibleProviderOptions } from "./generic-compatible";
-import { withoutPortableReasoning } from "./portable-reasoning";
+import {
+	resolvePortableReasoning,
+	withoutPortableReasoning,
+} from "./portable-reasoning";
 import {
 	buildProviderOptionRulePatches,
 	matchProviderOptionRules,
@@ -78,11 +81,20 @@ export function composeAiSdkProviderOptions(
 		context,
 	);
 	const providerOptionsKey = toProviderOptionsKey(normalizedRequest.providerId);
+	// Resolved from the request as it arrived, because the line above has
+	// already taken the intent off it -- and, for a provider that keeps its
+	// intent, because `normalizeReasoningRequest` clamps the level to what the
+	// model *declares* it supports. A llama.cpp server declares nothing, so the
+	// clamp silently turned Max into High and a rule translating the level would
+	// have quietly resolved the wrong budget.
+	const portableReasoning =
+		resolvePortableReasoning(request) ?? request.reasoning?.effort;
 	const matchInput: ProviderOptionMatchInput = {
 		request: normalizedRequest,
 		context,
 		providerOptionsKey,
 		target,
+		...(typeof portableReasoning === "string" ? { portableReasoning } : {}),
 	};
 	const matchedRules = matchProviderOptionRules(
 		PROVIDER_OPTION_RULES,

@@ -1,4 +1,5 @@
 import { isClineProvider } from "@cline/shared";
+import { DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS } from "../gateway";
 import {
 	getModelReasoningControls,
 	isDeepSeekFamily,
@@ -528,6 +529,9 @@ const llamaCppNativeOptionsRule: ProviderOptionRule = {
 		"llama.cpp and opencoti receive the configured sampler and a resolved thinking budget as request fields.",
 	applies: (input) =>
 		input.target === "openai-compatible" || input.target === "opencoti",
+	// It no longer needs a configured sampler to have something to say: an
+	// effort level alone now produces a budget, which is the only form of it
+	// this engine reads.
 	build: (input) => {
 		const bucketOptions = buildLlamaCppSamplingOptions(
 			readLlamaCppSamplingOptions(input.context.config),
@@ -539,8 +543,27 @@ const llamaCppNativeOptionsRule: ProviderOptionRule = {
 				// `buildOutputBudgetSection` states in the system prompt — the same
 				// number an effort level has to take its share of, or the level
 				// bounds nothing.
+				// The cap the session believes it is sending, which is also what
+				// `buildOutputBudgetSection` states in the system prompt.
+				//
+				// The fallback is load-bearing rather than tidy. A level is a
+				// *share*, so with no cap and no context window it resolves to
+				// nothing and the setting silently bounds nothing at all -- which
+				// is the failure this rule exists to end, reappearing for any
+				// profile that never set an output budget. Measured: a bare CLI
+				// opencoti profile carries neither, so every level sent no budget.
+				// `reasoning-codecs.ts` already scales against this same constant
+				// for the same reason.
 				numPredict:
-					input.request.maxTokens ?? input.context.model?.maxOutputTokens,
+					input.request.maxTokens ??
+					input.context.model?.maxOutputTokens ??
+					DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS,
+				// The level the user picked in the panel. llama.cpp has no
+				// `reasoning_effort` -- the field the AI SDK emits for a level is
+				// read and discarded by the engine -- so unless the level is
+				// resolved to a token count here it bounds nothing at all.
+				effort: input.portableReasoning ?? input.request.reasoning?.effort,
+				enabled: input.request.reasoning?.enabled,
 			},
 		);
 		if (Object.keys(bucketOptions).length === 0) {

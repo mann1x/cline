@@ -17,7 +17,7 @@ import { DebouncedTextField } from "../common/DebouncedTextField"
 import { ModelInfoView } from "../common/ModelInfoView"
 import { DropdownContainer } from "../common/ModelSelector"
 import { RequestTimingsToggle } from "../common/RequestTimingsToggle"
-import ReasoningEffortSelector from "../ReasoningEffortSelector"
+import { ThinkingBudgetField } from "../common/ThinkingBudgetField"
 import { useApiConfigurationHandlers } from "../utils/useApiConfigurationHandlers"
 import { useProviderApiKeyField } from "../utils/useProviderApiKeyField"
 
@@ -641,22 +641,17 @@ export const OpenAICompatibleProvider = ({
 			    report none and show only what Cerebriline measured. */}
 			<RequestTimingsToggle engineNote="A llama.cpp or opencoti-llamafile server also reports its own prompt and generation split, cached prefix tokens, and speculative-decoding acceptance." />
 
+			{/* llama.cpp and opencoti-llamafile are reached through this form, and
+			    they take a thinking budget rather than an effort level — the
+			    level the generic selector wrote went out as `reasoning_effort`,
+			    which this engine reads and discards, so it bounded nothing. The
+			    same dropdown Ollama has, storing the same fields, resolved to
+			    `reasoning_budget_tokens` on the way out. Harmless for the hosted
+			    providers on this path: Default sends no field at all. */}
+			<ThinkingBudgetField providerId={providerId} />
+
 			{showModelOptions && (
-				<>
-					<ReasoningEffortSelector
-						currentMode={currentMode}
-						defaultEffort="none"
-						onEffortChange={(effort) => {
-							void write({
-								reasoning: {
-									enabled: effort !== "none",
-									effort: effort !== "none" ? effort : undefined,
-								},
-							}).catch((err) => console.error("Failed to update OpenAI Compatible reasoning effort:", err))
-						}}
-					/>
-					<ModelInfoView isPopup={isPopup} modelInfo={selectedModelInfo} selectedModelId={selectedModelId} />
-				</>
+				<ModelInfoView isPopup={isPopup} modelInfo={selectedModelInfo} selectedModelId={selectedModelId} />
 			)}
 		</div>
 	)

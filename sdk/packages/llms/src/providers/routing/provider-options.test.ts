@@ -2727,6 +2727,167 @@ describe("llama.cpp and opencoti request options", () => {
 		);
 	});
 
+	// The dropdown the user actually sets is the provider's reasoning effort, not
+	// a `thinkBudget` typed into the sampler. Measured live on an opencoti server
+	// (v9-agentic, build b1789084708-c588c4f47) 2026-09-18: `reasoning_effort` is
+	// discarded outright -- minimal/low/medium/high returned byte-identical
+	// output -- while `reasoning_budget_tokens` bounds monotonically. So an
+	// effort with no sampler configured has to reach the wire as a budget, or
+	// the setting bounds nothing and the thinking is unbounded.
+	it("resolves the request's reasoning effort into a budget with no sampler set", () => {
+		const result = composeAiSdkProviderOptions(
+			makeRequest({
+				providerId: "opencoti",
+				modelId: "v9-agentic",
+				maxTokens: 32_000,
+				reasoning: { enabled: true, effort: "medium" },
+			}),
+			makeContext({
+				providerId: "opencoti",
+				modelId: "v9-agentic",
+				contextWindow: 262_144,
+			}),
+		);
+
+		expect(result.opencoti).toEqual(
+			expect.objectContaining({ reasoning_budget_tokens: 8_000 }),
+		);
+	});
+
+	it("takes the same effort through the openai-compatible form", () => {
+		const result = composeAiSdkProviderOptions(
+			makeRequest({
+				providerId: "openai-compatible",
+				modelId: "llamafile",
+				maxTokens: 16_000,
+				reasoning: { enabled: true, effort: "high" },
+			}),
+			makeContext({
+				providerId: "openai-compatible",
+				modelId: "llamafile",
+				contextWindow: 131_072,
+			}),
+		);
+
+		expect(result.openaiCompatible).toEqual(
+			expect.objectContaining({ reasoning_budget_tokens: 8_000 }),
+		);
+	});
+
+	// "Custom (reasoning_budget_tokens)" in the panel. An explicit count is the
+	// number the user typed; a level is a share. The count wins, the same way
+	// the Ollama panel makes the two mutually exclusive.
+	it("lets an explicit count outrank the effort level", () => {
+		const result = composeAiSdkProviderOptions(
+			makeRequest({
+				providerId: "opencoti",
+				modelId: "v9-agentic",
+				maxTokens: 32_000,
+				reasoning: { enabled: true, effort: "max" },
+			}),
+			makeContext({
+				providerId: "opencoti",
+				modelId: "v9-agentic",
+				contextWindow: 262_144,
+				configOptions: { sampling: { thinkBudget: "4096" } },
+			}),
+		);
+
+		expect(result.opencoti).toEqual(
+			expect.objectContaining({ reasoning_budget_tokens: 4_096 }),
+		);
+	});
+
+	// Unlike Ollama, where absent means "the model's own budget applies", an
+	// absent budget here means the engine bounds nothing at all. That is the
+	// documented meaning of Default on this provider, so it must send no field
+	// rather than a computed one.
+	it("sends no budget at all when no effort and no count are set", () => {
+		const result = composeAiSdkProviderOptions(
+			makeRequest({
+				providerId: "opencoti",
+				modelId: "v9-agentic",
+				maxTokens: 32_000,
+			}),
+			makeContext({
+				providerId: "opencoti",
+				modelId: "v9-agentic",
+				contextWindow: 262_144,
+			}),
+		);
+
+		expect(
+			(result.opencoti as Record<string, unknown> | undefined)
+				?.reasoning_budget_tokens,
+		).toBeUndefined();
+	});
+
+	// `xhigh` is a spelling of `max`, not a seventh level.
+	it("treats xhigh as max", () => {
+		const at = (effort: "xhigh" | "max") =>
+			composeAiSdkProviderOptions(
+				makeRequest({
+					providerId: "opencoti",
+					modelId: "v9-agentic",
+					maxTokens: 32_000,
+					reasoning: { enabled: true, effort },
+				}),
+				makeContext({
+					providerId: "opencoti",
+					modelId: "v9-agentic",
+					contextWindow: 262_144,
+				}),
+			).opencoti as Record<string, unknown> | undefined;
+
+		expect(at("xhigh")?.reasoning_budget_tokens).toBe(
+			at("max")?.reasoning_budget_tokens,
+		);
+		expect(at("max")?.reasoning_budget_tokens).toBe(25_600);
+	});
+
+	// The hole the live test found: a profile that never set an output budget
+	// carries neither a cap nor a context window, so a level -- being a share of
+	// something -- resolved to nothing and the thinking stayed unbounded. A bare
+	// CLI opencoti profile is exactly that shape.
+	it("still resolves a level when the profile sets no cap and no window", () => {
+		const result = composeAiSdkProviderOptions(
+			makeRequest({
+				providerId: "opencoti",
+				modelId: "v9-agentic",
+				reasoning: { enabled: true, effort: "medium" },
+			}),
+			makeContext({ providerId: "opencoti", modelId: "v9-agentic" }),
+		);
+
+		// A quarter of the gateway's own default output cap of 32,000.
+		expect(result.opencoti).toEqual(
+			expect.objectContaining({ reasoning_budget_tokens: 8_000 }),
+		);
+	});
+
+	// The inert field is not merely useless, it is what made this look configured
+	// for weeks: the panel said High and the wire carried a level the engine
+	// throws away. Only the budget should go out.
+	it("sends no reasoning_effort to opencoti", () => {
+		const result = composeAiSdkProviderOptions(
+			makeRequest({
+				providerId: "opencoti",
+				modelId: "v9-agentic",
+				maxTokens: 32_000,
+				reasoning: { enabled: true, effort: "high" },
+			}),
+			makeContext({ providerId: "opencoti", modelId: "v9-agentic" }),
+		);
+
+		expect(result.opencoti).toEqual(
+			expect.objectContaining({ reasoning_budget_tokens: 16_000 }),
+		);
+		expect(
+			(result.opencoti as Record<string, unknown>).reasoning_effort,
+		).toBeUndefined();
+		expect(result.reasoning).toBeUndefined();
+	});
+
 	it("carries the cap message too", () => {
 		const result = composeAiSdkProviderOptions(
 			makeRequest({ providerId: "opencoti", modelId: "gemma-4" }),
