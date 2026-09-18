@@ -806,7 +806,28 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown): ClineSayTool 
 			// model reaches for on minified or generated files, so most of the edit cards
 			// in a session were reading "Cerebriline wants to create a new file".
 			const startLine = getNumberField(parsedInput, "start_line")
-			const isEdit = toolName === "replace_in_file" || !!oldText || insertLine != null || startLine != null
+			// Named here so the predicate below can read it: `end_line` says the
+			// same thing `start_line` does -- you cannot end-line a file that does
+			// not exist yet -- and was simply missed when that reasoning was
+			// written down.
+			const endLineField = getNumberField(parsedInput, "end_line")
+			// And a call that names no file creates none.
+			//
+			// Reported as "every time v9-agentic is using 'Cerebriline wants to
+			// create a new file', something goes wrong and the thinking or output
+			// of the model ends up in the tool output and the tool fails". It was
+			// never creating a file: across two pandorum sessions, every card of
+			// that kind was an `editor` call whose `path` had been swallowed by a
+			// mis-parsed payload, and the card then rendered 21,769 and 84,739
+			// characters of `new_text` as the file being created. The refusal
+			// underneath said so; the card above it said the opposite.
+			const isEdit =
+				toolName === "replace_in_file" ||
+				!!oldText ||
+				insertLine != null ||
+				startLine != null ||
+				endLineField != null ||
+				!filePath
 
 			// When the SDK provides both old and new text, build a search/replace
 			// diff in the format DiffEditRow expects. ChatRow passes `content` to
@@ -816,7 +837,7 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown): ClineSayTool 
 			// Named from the arguments rather than guessed from the payload: the
 			// executor branches on exactly these fields, so this is the same
 			// decision it makes, reported rather than re-derived.
-			const endLine = getNumberField(parsedInput, "end_line")
+			const endLine = endLineField
 			const editMode =
 				oldText && newText
 					? "SEARCH/REPLACE"

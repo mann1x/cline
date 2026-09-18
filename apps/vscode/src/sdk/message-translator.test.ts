@@ -1136,10 +1136,12 @@ describe("translateSessionEvent — agent_event content_end", () => {
 			state,
 		)
 
-		// Should still produce a message, just with empty fields
+		// Should still produce a message, just with empty fields. Not a creation:
+		// a card with no path names no file, and "wants to create a new file"
+		// with nothing after the colon is the shape a mis-parsed call took.
 		expect(endResult.messages).toHaveLength(1)
 		const endTool = JSON.parse(endResult.messages[0].text!)
-		expect(endTool.tool).toBe("newFileCreated") // no old_text → newFileCreated
+		expect(endTool.tool).toBe("editedExistingFile")
 		expect(endTool.path).toBe("")
 	})
 })
@@ -4007,6 +4009,58 @@ describe("sdkToolToClineSayTool — editor diff rendering (S6-48)", () => {
 		const tool = JSON.parse(result.messages[0].text!)
 		expect(tool.tool).toBe("newFileCreated")
 		expect(tool.content).toBe("export const x = 1")
+	})
+
+	// Reported: "every time v9-agentic is using 'Cerebriline wants to create a
+	// new file:', something goes wrong and the thinking or output of the model
+	// ends up in the tool output and the tool fails." It never chose to create a
+	// file. Both create cards across two pandorum sessions were `editor` calls
+	// whose `path` had been swallowed by a mis-parse, and the card rendered
+	// 21,769 and 84,739 characters of `new_text` as the file being created.
+	// A call that names no file creates none.
+	it("does not call a pathless editor call a new-file creation", () => {
+		const state = new MessageTranslatorState()
+		const event: CoreSessionEvent = {
+			type: "agent_event",
+			payload: {
+				sessionId: "session-1",
+				event: {
+					type: "content_start",
+					contentType: "tool",
+					toolName: "editor",
+					toolCallId: "call-pathless",
+					input: { end_line: 133, new_text: "<script>…</script>" },
+				} as AgentEvent,
+			},
+		}
+
+		const result = translateSessionEvent(event, state)
+
+		expect(JSON.parse(result.messages[0].text!).tool).not.toBe("newFileCreated")
+	})
+
+	// `start_line` was already understood to mean an edit; `end_line` says the
+	// same thing and was simply missed. You cannot end-line a file that does not
+	// exist yet.
+	it("treats an end_line range as an edit", () => {
+		const state = new MessageTranslatorState()
+		const event: CoreSessionEvent = {
+			type: "agent_event",
+			payload: {
+				sessionId: "session-1",
+				event: {
+					type: "content_start",
+					contentType: "tool",
+					toolName: "editor",
+					toolCallId: "call-endline",
+					input: { path: "/src/existing.ts", end_line: 133, new_text: "// replaced" },
+				} as AgentEvent,
+			},
+		}
+
+		const result = translateSessionEvent(event, state)
+
+		expect(JSON.parse(result.messages[0].text!).tool).toBe("editedExistingFile")
 	})
 
 	it("editor with insert_line is an edit of an existing file, not a new-file creation", () => {

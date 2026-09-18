@@ -52,6 +52,42 @@ describe("validateWithZod", () => {
 		expect(message).not.toContain("the whole file");
 	});
 
+	// pandorum 2026-09-18, session elcud. The call arrived with these keys:
+	//   `end_line`, `new_text`,
+	//   `|function setupLevel|function initClouds|class Level<|"|>],task_progress`
+	// A JSON object key cannot contain a raw quote, so that key was not written
+	// by the model -- it is the tail of a string the lenient repair path read
+	// past the end of, turned into a key. `path` did not go missing; it was
+	// swallowed. Telling the model it forgot an argument sends it to re-send the
+	// same payload, which is what it did.
+	it("says the arguments were misread when a key could not have been written", () => {
+		let message = "";
+		try {
+			validateWithZod(EditorLike, {
+				end_line: 133,
+				new_text: "<script>…</script>",
+				'|function setupLevel|class Level<|"|>],task_progress': ["- [x] run"],
+			});
+		} catch (error) {
+			message = (error as Error).message;
+		}
+
+		expect(message).toContain("could not be read");
+		// And it must not pretend the model simply forgot one.
+		expect(message).not.toContain("Missing required argument `path`");
+		// Never the garbage itself: it is the model's own text, and quoting it
+		// back is what put it in front of the user in the first place.
+		expect(message).not.toContain("setupLevel");
+	});
+
+	// The ordinary missing argument still reads as one: this must not fire on
+	// every refusal, or the message that tells a model what to fix is gone.
+	it("still names a plainly missing argument", () => {
+		expect(() =>
+			validateWithZod(EditorLike, { end_line: 133, new_text: "x" }),
+		).toThrow("Missing required argument `path`.");
+	});
+
 	it("names a nested path", () => {
 		const schema = z.object({ files: z.object({ path: z.string() }) });
 		expect(() => validateWithZod(schema, { files: {} })).toThrow(

@@ -58,6 +58,35 @@ function describeCarriedFields(input: unknown, missing: Set<string>): string {
 	return `\nThe call carried: ${names}.`;
 }
 
+/**
+ * A key no model wrote, which means the arguments were not read as sent.
+ *
+ * A JSON object key cannot contain a raw quote or a newline: a well-formed
+ * payload cannot produce one, so a key that does is the tail of a string some
+ * lenient parse ran past the end of, promoted to a key. Measured on pandorum
+ * 2026-09-18, session `elcud`, where an `editor` call arrived as
+ * `end_line`, `new_text` and
+ * `` `|function setupLevel|function initClouds|class Level<|"|>],task_progress` ``
+ * -- and `path` was not missing, it was swallowed by the same misread.
+ *
+ * The distinction is the whole point. "Missing required argument `path`" is
+ * advice a model can act on by adding `path`, and it did: it re-sent the same
+ * payload, which was mangled the same way. A model told its arguments could not
+ * be read has a reason to send them differently.
+ *
+ * Only the two characters that are impossible, never a length or a shape
+ * heuristic: an odd-looking key that a model really did write must still be
+ * reported as the extra argument it is.
+ */
+function misreadArgumentKey(input: unknown): boolean {
+	if (input === null || typeof input !== "object" || Array.isArray(input)) {
+		return false;
+	}
+	return Object.keys(input as Record<string, unknown>).some(
+		(key) => key.includes('"') || key.includes("\n"),
+	);
+}
+
 function describeMissingFields(
 	error: z.ZodError,
 	input: unknown,
@@ -79,6 +108,20 @@ function describeMissingFields(
 		return null;
 	}
 	const fields = [...missing];
+	// Asked before the missing-field wording is chosen, because the two answers
+	// are mutually exclusive: an argument cannot be both absent and swallowed,
+	// and only one of them is something the model can act on.
+	if (misreadArgumentKey(input)) {
+		const names = fields.map((field) => `\`${field}\``).join(", ");
+		return (
+			`The arguments of this call could not be read as sent: one of the keys that arrived ` +
+			`is not a name anything could have written, so the payload was mis-parsed rather than ` +
+			`mis-composed, and ${names} was lost with it.\n` +
+			`Nothing is wrong with what you were trying to do. Send the call again, smaller: put the ` +
+			`file path first, keep values short and free of unescaped quotes, and make one edit per ` +
+			`call rather than rewriting the whole file in one.`
+		);
+	}
 	const names = fields.map((field) => `\`${field}\``).join(", ");
 	const carried = describeCarriedFields(input, missing);
 	return fields.length === 1
