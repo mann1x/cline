@@ -4488,6 +4488,51 @@ describe("a turn cut off at the output cap", () => {
 		);
 	});
 
+	it("stamps the discarded-turn reminder with what the row needs", async () => {
+		// The live row is built from a status notice, and notices are not
+		// persisted: a reopened task is rebuilt from the messages alone. Without
+		// the stamp the only trace of a discarded turn is a reminder the display
+		// layer correctly refuses to show, so three thrown-away turns leave the
+		// transcript saying nothing happened.
+		noteOutputCap({
+			maxTokens: 32_000,
+			source: "default",
+			windowBound: false,
+		});
+		const model = new ScriptedModel([
+			() => [
+				{ type: "reasoning-delta", text: "thinking past the cap" },
+				{ type: "finish", reason: "max-tokens" },
+			],
+			() => [
+				{ type: "text-delta", text: "done" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({ model, tools: [] });
+
+		const result = await runtime.run("Start");
+		expect(result.status).toBe("completed");
+
+		const reminder = model.requests
+			.at(-1)
+			?.messages.find(
+				(message) =>
+					message.role === "user" &&
+					(message.metadata as { noticeKind?: string } | undefined)
+						?.noticeKind === "max_tokens_turn_recovery",
+			);
+		expect(reminder?.metadata).toMatchObject({
+			displayRole: "system",
+			noticeKind: "max_tokens_turn_recovery",
+			attempt: 1,
+			maxAttempts: 2,
+			capTokens: 32_000,
+			capSource: "default",
+			compacting: false,
+		});
+	});
+
 	it("gives a truncated turn less to spend on the retry, and less again after that", async () => {
 		// Handing back the cap the turn just overran invites the same turn and the
 		// same wait. Measured on one run: four turns ended at exactly 32,000 output

@@ -1360,7 +1360,18 @@ export class AgentRuntime {
 			: DEFAULT_MAX_TOKENS_TURN_RETRIES;
 	}
 
-	private async addUserReminderMessage(text: string): Promise<AgentMessage> {
+	private async addUserReminderMessage(
+		text: string,
+		/**
+		 * Facts the display layer has to rebuild this reminder's row from.
+		 *
+		 * A status notice is an event, and events are not persisted: a reopened
+		 * task is rebuilt from the messages alone. Anything a row needs after
+		 * the run has to ride on the message, and this is the only message a
+		 * discarded turn leaves behind.
+		 */
+		noticeMetadata?: Record<string, unknown>,
+	): Promise<AgentMessage> {
 		// Every reminder this runtime appends is model-facing: the no-tool-call
 		// nudge, the announced-intent and unparsed-call nudges, the
 		// non-convergence and repetition nudges, the completion boundary, the
@@ -1382,6 +1393,7 @@ export class AgentRuntime {
 		const reminderMessage = createMessage("user", [{ type: "text", text }], {
 			userRunSpan: 0,
 			displayRole: "system",
+			...(noticeMetadata ?? {}),
 		});
 		this.state.messages.push(reminderMessage);
 		await this.emit({
@@ -1603,6 +1615,19 @@ export class AgentRuntime {
 										: []),
 								].join("\n\n")
 							: MAX_TOKENS_INCOMPLETE_TURN_REMINDER,
+						// The same fields the notice above carries, so the row a
+						// reader sees live and the row they see when they reopen
+						// the task are the same row rather than one and nothing.
+						{
+							noticeKind: "max_tokens_turn_recovery",
+							attempt: this.consecutiveMaxTokensRetries,
+							maxAttempts: this.getMaxTokensRetryBudget(),
+							capSource: outputCap?.source ?? "unknown",
+							...(typeof outputCap?.maxTokens === "number"
+								? { capTokens: outputCap.maxTokens }
+								: {}),
+							compacting: this.compactBeforeNextTurn,
+						},
 					);
 					continue;
 				}

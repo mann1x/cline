@@ -4952,6 +4952,55 @@ describe("tool display paths are relativized to the cwd", () => {
 		expect(sdkMessagesToClineMessages(unstamped).some((m) => m.say === "user_feedback")).toBe(true)
 	})
 
+	// Reported after a run that ended on "Model reached the maximum output token
+	// limit before completing the turn": the panel showed nothing at all about
+	// the three turns that had been generated and thrown away. The live row
+	// comes from a status notice, and notices are events -- nothing persists
+	// them, so a reopened task is rebuilt from the messages alone and the only
+	// trace there is the reminder, which is (correctly) never a user bubble.
+	it("replays a discarded turn as its output-limit row", () => {
+		const messages: SdkMessage[] = [
+			{ role: "user", content: [{ type: "text", text: "rewrite the file" }] } as SdkMessage,
+			{ role: "assistant", content: [{ type: "text", text: "planning" }] } as SdkMessage,
+			{
+				role: "user",
+				content: [
+					{
+						type: "text",
+						text: "[SYSTEM] Your last reply hit the per-turn output limit before you finished, so it was discarded",
+					},
+				],
+				metadata: {
+					displayRole: "system",
+					userRunSpan: 0,
+					noticeKind: "max_tokens_turn_recovery",
+					attempt: 1,
+					maxAttempts: 2,
+					capTokens: 32_000,
+					capSource: "default",
+					compacting: false,
+				},
+			} as SdkMessage,
+			{ role: "assistant", content: [{ type: "text", text: "done" }] } as SdkMessage,
+		]
+
+		const clineMessages = sdkMessagesToClineMessages(messages)
+
+		const row = clineMessages.find((m) => m.say === "output_limit_retry")
+		expect(row).toBeDefined()
+		expect(JSON.parse(row?.text ?? "{}")).toEqual({
+			attempt: 1,
+			maxAttempts: 2,
+			capTokens: 32_000,
+			capSource: "default",
+			compacting: false,
+		})
+
+		// The row replaces the reminder; it does not resurrect it as a bubble.
+		expect(clineMessages.some((m) => m.say === "user_feedback")).toBe(false)
+		expect(clineMessages.some((m) => m.text?.includes("[SYSTEM]"))).toBe(false)
+	})
+
 	it("relativizes persisted-history tool paths via options.cwd", () => {
 		const messages: SdkMessage[] = [
 			{

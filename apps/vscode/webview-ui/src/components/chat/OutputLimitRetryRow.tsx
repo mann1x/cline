@@ -36,6 +36,11 @@ function describeCapSource(source: string | undefined): string | undefined {
 			return "the model's output limit"
 		case "requested":
 			return "the configured output limit"
+		// The session's own budget -- a share of the context window, or whatever
+		// the Output Budget setting holds. It is the most common source on a
+		// local model and read as "no provenance" until it was named here.
+		case "default":
+			return "the session's output budget"
 		default:
 			return undefined
 	}

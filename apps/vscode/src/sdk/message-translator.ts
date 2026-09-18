@@ -55,7 +55,12 @@ import { arePathsEqual, getDesktopDir } from "@/utils/path"
 import { CLINE_FREE_PROMOTION_ENDED_ERROR_CODE, isClineFreePromotionEndedMessage } from "../services/error/ClineError"
 import { MessageIdMinter } from "./message-id-minter"
 import { describeCredentialRejectedError, describeMissingCredentialError } from "./provider-credential-error"
-import { extractPersistedHookContextChips, isSyntheticSdkUserMessage, isSyntheticUserPrompt } from "./sdk-user-message-mapping"
+import {
+	extractPersistedHookContextChips,
+	extractPersistedOutputLimitRetry,
+	isSyntheticSdkUserMessage,
+	isSyntheticUserPrompt,
+} from "./sdk-user-message-mapping"
 import { isDeniedToolApprovalMistake, isKnownToolApprovalDenial } from "./tool-approval-denial"
 
 // ---------------------------------------------------------------------------
@@ -3287,6 +3292,22 @@ export function sdkMessagesToClineMessages(
 				}
 			}
 			appendPersistedMetricsMessage(clineMessages, message, state)
+			continue
+		}
+
+		// A turn discarded at the output cap is not a user turn either, and its
+		// row lived only in an event. Rebuild it here or a reopened task says
+		// nothing happened, which is how three thrown-away turns and a run that
+		// died on the output limit left a transcript with no explanation in it.
+		const outputLimitRetry = extractPersistedOutputLimitRetry(message)
+		if (outputLimitRetry) {
+			clineMessages.push({
+				ts: state.nextTs(),
+				type: "say",
+				say: "output_limit_retry",
+				text: JSON.stringify(outputLimitRetry),
+				partial: false,
+			})
 			continue
 		}
 

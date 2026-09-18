@@ -5,6 +5,7 @@ import {
 	stripModeNotices,
 	UNPARSED_TOOL_CALL_NUDGE_PREFIX,
 } from "@cline/shared"
+import type { ClineOutputLimitRetryInfo } from "@shared/ExtensionMessage"
 
 /**
  * Canned prompt SdkModeCoordinator sends to drive the plan -> act
@@ -144,6 +145,38 @@ export function extractPersistedHookContextChips(message: SdkUserMessage): Persi
 		match = blockPattern.exec(text)
 	}
 	return chips
+}
+
+/**
+ * The output-limit row a persisted reminder carries, or nothing when it is not
+ * one.
+ *
+ * The live row comes from a status notice and notices are never persisted, so
+ * a reopened task had no trace of a discarded turn at all: the reminder is the
+ * only message left, and it is (rightly) never rendered as a user bubble. The
+ * runtime stamps the facts onto that message; this reads them back.
+ *
+ * Keyed on the stamp rather than the reminder's text: the text is joined with
+ * a condensed reasoning note when there was room to write one, so it equals no
+ * constant and starts with no fixed prefix.
+ */
+export function extractPersistedOutputLimitRetry(message: SdkUserMessage): ClineOutputLimitRetryInfo | undefined {
+	if (message.role !== "user") {
+		return undefined
+	}
+	const metadata = message.metadata as Record<string, unknown> | undefined
+	if (!metadata || metadata.noticeKind !== "max_tokens_turn_recovery") {
+		return undefined
+	}
+	const finite = (value: unknown): number | undefined =>
+		typeof value === "number" && Number.isFinite(value) ? value : undefined
+	return {
+		attempt: finite(metadata.attempt),
+		maxAttempts: finite(metadata.maxAttempts),
+		capTokens: finite(metadata.capTokens),
+		...(typeof metadata.capSource === "string" && metadata.capSource !== "unknown" ? { capSource: metadata.capSource } : {}),
+		...(typeof metadata.compacting === "boolean" ? { compacting: metadata.compacting } : {}),
+	}
 }
 
 export function isSyntheticSdkUserMessage(message: SdkUserMessage): boolean {
