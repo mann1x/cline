@@ -1887,12 +1887,14 @@ export function summarizeSubagentUsageByProvider(items: readonly SubagentStatusI
 			cacheWrites: 0,
 			cacheReads: 0,
 			cost: 0,
+			agents: 0,
 			...(item.providerId ? { providerId: item.providerId } : {}),
 			...(item.modelId ? { modelId: item.modelId } : {}),
 		}
 		usage.tokensIn += item.inputTokens || 0
 		usage.tokensOut += item.outputTokens || 0
 		usage.cost += item.totalCost || 0
+		usage.agents = (usage.agents ?? 0) + 1
 		if (!existing) {
 			byConnection.set(key, usage)
 		}

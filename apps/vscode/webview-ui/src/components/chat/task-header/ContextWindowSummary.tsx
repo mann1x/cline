@@ -3,6 +3,7 @@ import { ChevronDownIcon, ChevronRightIcon } from "lucide-react"
 import React, { memo, useCallback, useMemo, useState } from "react"
 import { formatLargeNumber as formatTokenNumber } from "@/utils/format"
 import { formatRate } from "@/utils/request-timings"
+import { describeConnection } from "./ConnectionBreakdown"
 
 interface TokenUsageInfoProps {
 	tokensIn?: number
@@ -115,11 +116,16 @@ const TokenUsageDetails = memo<TokenUsageInfoProps>(
 						{connections.map((entry) => {
 							const entryRate =
 								entry.generateMs > 0 ? formatRate((entry.generateTokens / entry.generateMs) * 1000) : undefined
+							// The same identity the header's breakdown uses: the
+							// provider alone cannot tell two models apart, and a
+							// sub-agent batch on the lead's own endpoint is a
+							// different row that would otherwise look identical.
+							const { name, role, detail } = describeConnection(entry)
 							return (
-								<div key={`${entry.providerId}/${entry.modelId ?? ""}`}>
+								<div key={`${entry.providerId}/${entry.modelId ?? ""}/${entry.source ?? ""}`}>
 									<div className="flex justify-between gap-2">
-										<span className="truncate" title={entry.modelId}>
-											{entry.providerId}
+										<span className="truncate" title={`${name} — ${role}${detail ? `, ${detail}` : ""}`}>
+											{name}
 										</span>
 										<span className="font-mono whitespace-nowrap">
 											{entry.cost > 0 ? `$${entry.cost.toFixed(4)}` : "free"}
@@ -128,6 +134,10 @@ const TokenUsageDetails = memo<TokenUsageInfoProps>(
 									<div className="flex justify-between gap-2 opacity-75">
 										<span className="font-mono whitespace-nowrap">
 											↑ {formatTokenNumber(entry.tokensIn)} ↓ {formatTokenNumber(entry.tokensOut)}
+										</span>
+										<span className="whitespace-nowrap">
+											{role}
+											{detail ? ` · ${detail}` : ""}
 										</span>
 										{entryRate && <span className="font-mono whitespace-nowrap">{entryRate}</span>}
 									</div>

@@ -448,3 +448,64 @@ describe("getLastApiReqTotalTokens", () => {
 		assert.equal(total, 32_000)
 	})
 })
+
+describe("the connection breakdown", () => {
+	function usageRow(say: string, payload: Record<string, unknown>): ClineMessage {
+		return { ts: Date.now(), type: "say", say: say as ClineMessage["say"], text: JSON.stringify(payload) }
+	}
+
+	// The case the breakdown exists for and could not show: a delegated batch
+	// runs on the lead's own provider and model, so keying on the pair alone
+	// merged the two and reported one connection.
+	it("keeps sub-agents apart from the lead on the same provider and model", () => {
+		const metrics = getApiMetrics([
+			usageRow("api_req_started", { providerId: "ollama", modelId: "gemma4:31b", tokensIn: 100, tokensOut: 10 }),
+			usageRow("subagent_usage", {
+				source: "subagents",
+				providerId: "ollama",
+				modelId: "gemma4:31b",
+				tokensIn: 40,
+				tokensOut: 4,
+				agents: 3,
+			}),
+		])
+
+		assert.equal(metrics.byProvider.length, 2)
+		assert.equal(metrics.byProvider[0].source, undefined)
+		assert.equal(metrics.byProvider[0].tokensIn, 100)
+		assert.equal(metrics.byProvider[0].requests, 1)
+		assert.equal(metrics.byProvider[0].agents, 0)
+		assert.equal(metrics.byProvider[1].source, "subagents")
+		assert.equal(metrics.byProvider[1].tokensIn, 40)
+		assert.equal(metrics.byProvider[1].agents, 3)
+	})
+
+	// Whatever the split, the rows have to add back up to the line above them.
+	it("sums to the task totals", () => {
+		const metrics = getApiMetrics([
+			usageRow("api_req_started", { providerId: "ollama", modelId: "a", tokensIn: 100, tokensOut: 10 }),
+			usageRow("api_req_started", { providerId: "opencoti", modelId: "b", tokensIn: 7, tokensOut: 3 }),
+			usageRow("subagent_usage", { source: "subagents", providerId: "ollama", modelId: "a", tokensIn: 40, tokensOut: 4 }),
+		])
+
+		assert.equal(
+			metrics.byProvider.reduce((total, row) => total + row.tokensIn, 0),
+			metrics.totalTokensIn,
+		)
+		assert.equal(
+			metrics.byProvider.reduce((total, row) => total + row.tokensOut, 0),
+			metrics.totalTokensOut,
+		)
+	})
+
+	it("counts a request per request row and none for a deleted aggregate", () => {
+		const metrics = getApiMetrics([
+			usageRow("api_req_started", { providerId: "ollama", modelId: "a", tokensIn: 100, tokensOut: 10 }),
+			usageRow("api_req_started", { providerId: "ollama", modelId: "a", tokensIn: 50, tokensOut: 5 }),
+			usageRow("deleted_api_reqs", { providerId: "ollama", modelId: "a", tokensIn: 999, tokensOut: 99 }),
+		])
+
+		assert.equal(metrics.byProvider[0].requests, 2)
+		assert.equal(metrics.byProvider[0].tokensIn, 1149)
+	})
+})

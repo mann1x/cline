@@ -12,6 +12,30 @@ import { ClineMessage } from "./ExtensionMessage"
 export interface ProviderApiMetrics {
 	providerId?: string
 	modelId?: string
+	/**
+	 * What the connection was used for.
+	 *
+	 * Absent means the task's own turns. `"subagents"` is a delegated batch,
+	 * which is routinely the *same* provider and model as the lead -- so it is
+	 * part of the key, not a label applied afterwards. Without it a sub-agent
+	 * on the lead's endpoint merged into the lead's row and the breakdown said
+	 * "one connection" about two quite different pieces of spending.
+	 *
+	 * The escalation expert is deliberately not a source here: it has its own
+	 * row, because the question it answers is what handing the task over cost.
+	 */
+	source?: "subagents"
+	/**
+	 * Requests made on this connection.
+	 *
+	 * Counted from the request rows themselves, so a `deleted_api_reqs`
+	 * aggregate -- one message standing for many deleted requests -- contributes
+	 * its tokens and no count. An undercounted number is better than one
+	 * invented from an aggregate that never carried it.
+	 */
+	requests: number
+	/** Sub-agents summarized into this row. Zero on a row that is not one. */
+	agents: number
 	tokensIn: number
 	tokensOut: number
 	cacheWrites: number
@@ -139,7 +163,8 @@ export function getApiMetrics(messages: ClineMessage[]): ApiMetrics {
 		) {
 			try {
 				const parsedData = JSON.parse(message.text)
-				const { tokensIn, tokensOut, cacheWrites, cacheReads, cost, providerId, modelId, timings } = parsedData
+				const { tokensIn, tokensOut, cacheWrites, cacheReads, cost, providerId, modelId, timings, source, agents } =
+					parsedData
 
 				// A request row with no usage on it yet -- the spinner one -- is
 				// not a connection that spent anything, and adding it would put
@@ -150,14 +175,19 @@ export function getApiMetrics(messages: ClineMessage[]): ApiMetrics {
 					typeof cacheWrites === "number" ||
 					typeof cacheReads === "number" ||
 					typeof cost === "number"
+				// The source is part of the key. A sub-agent batch usually runs on
+				// the lead's own provider and model, and merging the two rows
+				// loses the only split anyone opens this breakdown to see.
+				const usageSource = source === "subagents" ? ("subagents" as const) : undefined
 				const key = `${typeof providerId === "string" ? providerId : ""}\u0000${
 					typeof modelId === "string" ? modelId : ""
-				}`
+				}\u0000${usageSource ?? ""}`
 				let connection = byConnection.get(key)
 				if (!connection && carriesUsage) {
 					connection = {
 						...(typeof providerId === "string" ? { providerId } : {}),
 						...(typeof modelId === "string" ? { modelId } : {}),
+						...(usageSource ? { source: usageSource } : {}),
 						tokensIn: 0,
 						tokensOut: 0,
 						cacheWrites: 0,
@@ -165,8 +195,18 @@ export function getApiMetrics(messages: ClineMessage[]): ApiMetrics {
 						cost: 0,
 						generateTokens: 0,
 						generateMs: 0,
+						requests: 0,
+						agents: 0,
 					}
 					byConnection.set(key, connection)
+				}
+				if (connection) {
+					if (message.say === "api_req_started") {
+						connection.requests += 1
+					}
+					if (typeof agents === "number") {
+						connection.agents += agents
+					}
 				}
 
 				if (typeof tokensIn === "number") {

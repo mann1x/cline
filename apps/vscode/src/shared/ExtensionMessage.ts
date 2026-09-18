@@ -725,6 +725,14 @@ export interface ClineSubagentUsageInfo {
 	 */
 	providerId?: string
 	modelId?: string
+	/**
+	 * How many sub-agents this row summarizes.
+	 *
+	 * A batch is one message however many agents ran, so without this the
+	 * breakdown can say what a delegation spent but not how much of it there
+	 * was. It is not a request count: an agent makes as many turns as it needs.
+	 */
+	agents?: number
 }
 
 type ClineApiReqCancelReason = "streaming_failed" | "user_cancelled" | "retries_exhausted"

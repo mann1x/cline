@@ -66,3 +66,69 @@ describe("TaskTokenSummary", () => {
 		expect(screen.queryByText(/0.0 tok\/s/)).toBeNull()
 	})
 })
+
+describe("the connection breakdown behind the header count", () => {
+	const twoConnections = [
+		{
+			providerId: "ollama",
+			modelId: "gemma4:31b",
+			tokensIn: 200_000,
+			tokensOut: 10_000,
+			cacheWrites: 0,
+			cacheReads: 0,
+			cost: 0,
+			generateTokens: 10_000,
+			generateMs: 100_000,
+			requests: 42,
+			agents: 0,
+		},
+		{
+			providerId: "ollama",
+			modelId: "gemma4:31b",
+			source: "subagents" as const,
+			tokensIn: 55_600,
+			tokensOut: 4_800,
+			cacheWrites: 0,
+			cacheReads: 0,
+			cost: 0,
+			generateTokens: 4_800,
+			generateMs: 71_800,
+			requests: 0,
+			agents: 3,
+		},
+	]
+
+	// Collapsed is the ordinary state; the split is worth an interaction, not a
+	// permanent three lines under every task header.
+	it("says how many connections there were and shows nothing else until asked", () => {
+		render(<TaskTokenSummary {...base} byProvider={twoConnections} />)
+
+		expect(screen.getByRole("button", { name: /2 connections/ })).toBeTruthy()
+		expect(screen.queryByText("sub-agents")).toBeNull()
+	})
+
+	// The reported ask: identify which connection it was, and what for. Both
+	// rows are the same provider and the same model here -- which is the case
+	// that used to collapse into one -- so the role is the only thing telling
+	// them apart.
+	it("identifies each connection and what it was used for", async () => {
+		const { default: userEvent } = await import("@testing-library/user-event")
+		render(<TaskTokenSummary {...base} byProvider={twoConnections} />)
+
+		await userEvent.click(screen.getByRole("button", { name: /2 connections/ }))
+
+		expect(screen.getAllByText("ollama · gemma4:31b")).toHaveLength(2)
+		expect(screen.getByText("main")).toBeTruthy()
+		expect(screen.getByText("sub-agents")).toBeTruthy()
+		expect(screen.getByText("42 requests")).toBeTruthy()
+		expect(screen.getByText("3 agents")).toBeTruthy()
+	})
+
+	// One connection is the ordinary task, and a disclosure over a single row
+	// would be a control that reveals what the line above it already said.
+	it("offers no disclosure when the task ran on one connection", () => {
+		render(<TaskTokenSummary {...base} byProvider={[twoConnections[0]]} />)
+
+		expect(screen.queryByRole("button")).toBeNull()
+	})
+})
