@@ -92,6 +92,24 @@ function createTelemetryMock(): {
 	};
 }
 
+function textFromTestMessage(message: { content?: unknown }): string {
+	if (typeof message.content === "string") {
+		return message.content;
+	}
+	if (!Array.isArray(message.content)) {
+		return "";
+	}
+	return message.content
+		.map((part) =>
+			part &&
+			typeof part === "object" &&
+			(part as { type?: string }).type === "text"
+				? ((part as { text?: string }).text ?? "")
+				: "",
+		)
+		.join("");
+}
+
 describe("AgentRuntime", () => {
 	it("completes a simple turn without tools", async () => {
 		const model = new ScriptedModel([
@@ -2655,6 +2673,84 @@ describe("AgentRuntime", () => {
 		expect(result.messages).toHaveLength(2);
 		expect(result.messages).not.toContainEqual(projectedMessage);
 		expect(model.requests).toHaveLength(1);
+	});
+
+	// Reported from the UI: "there's a missing description: nudged: no_tool_call".
+	// Every other status notice on this path is a sentence -- "context window
+	// exceeded — compacting and retrying", "the model's tool call did not parse
+	// — asking for it again" -- and the nudges alone emitted the raw slug the
+	// telemetry is keyed on. The slug stays in the metadata, which is what it
+	// was for; the message is now the same kind of sentence as its neighbours.
+	it("describes a nudge instead of naming its slug", async () => {
+		const notices: Array<{ message: string; nudge: unknown }> = [];
+		const model = new ScriptedModel([
+			() => [
+				{ type: "text-delta", text: "I will now fix the file." },
+				{ type: "finish", reason: "stop" },
+			],
+			() => [
+				{ type: "text-delta", text: "done" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			completionPolicy: { maxNoToolCallNudges: 1 },
+		});
+		runtime.subscribe((event) => {
+			if (event.type === "status-notice" && event.metadata?.kind === "nudge") {
+				notices.push({
+					message: event.message,
+					nudge: event.metadata?.nudge,
+				});
+			}
+		});
+
+		await runtime.run("Fix it");
+
+		expect(notices[0]?.nudge).toBe("no_tool_call");
+		expect(notices[0]?.message).toBe(
+			"the turn ended without calling anything — asking the model to carry on",
+		);
+	});
+
+	// Reported: "I only see system messages and nudges when I reopen the
+	// conversation, not at start ... I see them in blue when I resume a conv".
+	// Blue is the user bubble. These are reminders this runtime writes to the
+	// model; nothing emits them as visible content live, but a resumed
+	// conversation rebuilds the transcript from the stored messages, and without
+	// this stamp each one came back as something the user appeared to have said.
+	it("marks the reminders it appends as model-facing", async () => {
+		const model = new ScriptedModel([
+			() => [
+				{ type: "text-delta", text: "I will now fix the file." },
+				{ type: "finish", reason: "stop" },
+			],
+			() => [
+				{ type: "text-delta", text: "done" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			completionPolicy: { maxNoToolCallNudges: 1 },
+		});
+
+		const result = await runtime.run("Fix it");
+
+		const reminders = result.messages.filter(
+			(message) =>
+				message.role === "user" &&
+				textFromTestMessage(message).includes("[SYSTEM]"),
+		);
+		expect(reminders.length).toBeGreaterThan(0);
+		expect(
+			reminders.map(
+				(message) =>
+					(message as { metadata?: { displayRole?: string } }).metadata
+						?.displayRole,
+			),
+		).toEqual(reminders.map(() => "system"));
 	});
 
 	it("merges beforeModel options metadata into the model request", async () => {

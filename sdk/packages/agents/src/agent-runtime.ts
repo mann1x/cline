@@ -1361,8 +1361,27 @@ export class AgentRuntime {
 	}
 
 	private async addUserReminderMessage(text: string): Promise<AgentMessage> {
+		// Every reminder this runtime appends is model-facing: the no-tool-call
+		// nudge, the announced-intent and unparsed-call nudges, the
+		// non-convergence and repetition nudges, the completion boundary, the
+		// check-what-you-edited reminder. None of them is anything the user
+		// typed.
+		//
+		// `displayRole: "system"` is what says so, and it was missing here while
+		// the hook-context injection below has always carried it. Live these
+		// never rendered, because nothing emits them as visible content; on a
+		// *resumed* conversation the transcript is rebuilt from stored messages
+		// and each one came back as a blue user bubble. Reported as "I only see
+		// system messages and nudges when I reopen the conversation" -- they
+		// were never meant to be seen at either end.
+		//
+		// The display layer also matches these by text, but that list cannot
+		// hold: reminders are joined into one message when a turn earns more
+		// than one, and the joined text equals no constant and starts with no
+		// prefix. The stamp does not care how many were joined.
 		const reminderMessage = createMessage("user", [{ type: "text", text }], {
 			userRunSpan: 0,
+			displayRole: "system",
 		});
 		this.state.messages.push(reminderMessage);
 		await this.emit({
@@ -1769,7 +1788,7 @@ export class AgentRuntime {
 							await this.emit({
 								type: "status-notice",
 								snapshot: this.snapshot(),
-								message: `nudged: ${fired.nudge}`,
+								message: describeNudge(fired.nudge),
 								metadata: {
 									kind: "nudge",
 									reason: "nudge",
@@ -3494,6 +3513,37 @@ export class AgentRuntime {
  * log or the telemetry can act on, and one of them per token is what turns a
  * debug channel into a denial of service against the process writing it.
  */
+/**
+ * What each nudge says to a reader, as against what it is keyed on.
+ *
+ * Every other status notice on this path is a sentence -- "context window
+ * exceeded — compacting and retrying", "the model's tool call did not parse —
+ * asking for it again" -- and the nudges alone rendered the raw slug, which
+ * reached the UI as `nudged: no_tool_call` and told nobody anything. The slug
+ * stays in the metadata, which is what it exists for: the event stream is there
+ * so these thresholds can be tuned against a corpus, and a description is no
+ * use for that.
+ *
+ * A slug with no entry falls back to the old wording rather than rendering
+ * blank: a nudge added later must still show up, just less prettily.
+ */
+const NUDGE_DESCRIPTIONS: Readonly<Record<string, string>> = {
+	no_tool_call:
+		"the turn ended without calling anything — asking the model to carry on",
+	unparsed_tool_call:
+		"a tool call was written as text and never ran — asking for it again",
+	announced_intent:
+		"the model described the next step instead of taking it — asking it to make the call",
+	non_convergence:
+		"several turns of thinking with no work done — asking for a different approach",
+	silent_repetition:
+		"the turn repeated what the last one said — asking for a different approach",
+};
+
+function describeNudge(nudge: string): string {
+	return NUDGE_DESCRIPTIONS[nudge] ?? `nudged: ${nudge}`;
+}
+
 const HIGH_VOLUME_STREAM_EVENTS: ReadonlySet<string> = new Set([
 	"assistant-text-delta",
 	"assistant-reasoning-delta",

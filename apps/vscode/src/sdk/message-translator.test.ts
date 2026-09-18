@@ -4856,6 +4856,48 @@ describe("tool display paths are relativized to the cwd", () => {
 		expect(clineMessages.some((m) => m.say === "completion_result" || m.ask === "completion_result")).toBe(true)
 	})
 
+	// Reported: "I only see system messages and nudges when I reopen the
+	// conversation ... I see them in blue when I resume a conv". Blue is the
+	// user bubble. A turn that earns more than one reminder gets them joined
+	// into a single message, which equals no constant and starts with no prefix,
+	// so the text list these used to be recognised by cannot catch it. The
+	// runtime stamps them instead.
+	it("keeps a joined runtime reminder out of the replayed transcript", () => {
+		const messages: SdkMessage[] = [
+			{ role: "user", content: [{ type: "text", text: "fix the game" }] } as SdkMessage,
+			{ role: "assistant", content: [{ type: "text", text: "I will now fix it." }] } as SdkMessage,
+			{
+				role: "user",
+				content: [
+					{
+						type: "text",
+						text:
+							"You changed this file and have not checked it since: `manic_miner.html`.\n\n" +
+							"**[SYSTEM] Your last message contained no tool calls, so the run was about to end.",
+					},
+				],
+				metadata: { displayRole: "system", userRunSpan: 0 },
+			} as SdkMessage,
+			{ role: "assistant", content: [{ type: "text", text: "done" }] } as SdkMessage,
+		]
+
+		const clineMessages = sdkMessagesToClineMessages(messages)
+
+		expect(clineMessages.some((m) => m.say === "user_feedback")).toBe(false)
+		expect(clineMessages.some((m) => m.text?.includes("[SYSTEM]"))).toBe(false)
+		expect(clineMessages.some((m) => m.text?.includes("have not checked it since"))).toBe(false)
+		// The user's own first message is still the task.
+		expect(clineMessages.find((m) => m.say === "task")?.text).toBe("fix the game")
+
+		// And the stamp is what does it: the identical message without it is the
+		// blue bubble that was reported. This half is why the fix belongs in the
+		// runtime rather than in another text pattern here.
+		const unstamped = messages.map((message, index) =>
+			index === 2 ? ({ ...message, metadata: { userRunSpan: 0 } } as SdkMessage) : message,
+		)
+		expect(sdkMessagesToClineMessages(unstamped).some((m) => m.say === "user_feedback")).toBe(true)
+	})
+
 	it("relativizes persisted-history tool paths via options.cwd", () => {
 		const messages: SdkMessage[] = [
 			{
