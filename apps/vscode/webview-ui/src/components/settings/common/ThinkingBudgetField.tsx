@@ -1,5 +1,5 @@
 import { VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
-import { useCallback } from "react"
+import { useCallback, useState } from "react"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useProviderConfig } from "@/hooks/useProviderConfig"
@@ -18,9 +18,9 @@ import { DebouncedTextField } from "./DebouncedTextField"
  * `xhigh` is Ollama's alias for `max`, not a seventh level, so it is stored
  * under the name the top of the scale already has and never offered twice.
  */
-const THINKING_LEVELS = ["unset", "minimal", "low", "medium", "high", "xhigh", "custom"] as const
+export const THINKING_LEVELS = ["unset", "minimal", "low", "medium", "high", "xhigh", "custom"] as const
 
-type ThinkingLevel = (typeof THINKING_LEVELS)[number]
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number]
 
 const THINKING_LEVEL_LABELS: Record<ThinkingLevel, string> = {
 	unset: "Default (unbounded)",
@@ -30,6 +30,28 @@ const THINKING_LEVEL_LABELS: Record<ThinkingLevel, string> = {
 	high: "High",
 	xhigh: "Max",
 	custom: "Custom (reasoning_budget_tokens)",
+}
+
+/**
+ * The level the *stored* config names, or `undefined` when it names none.
+ *
+ * The dropdown is the master and is stored in two mutually exclusive places so
+ * it cannot disagree with what is sent: a level lives on `reasoning.effort`, a
+ * count on `sampling.thinkBudget`. Neither is set when the budget is meant to
+ * be unbounded — and neither is set the instant Custom is picked either, which
+ * is why this returns `undefined` rather than guessing "unset" for the caller.
+ *
+ * Shared with the Ollama panel: the two dropdowns offer the same levels and
+ * must read a stored profile the same way.
+ */
+export function readStoredThinkingLevel(source: { effort?: string; thinkBudget?: string }): ThinkingLevel | undefined {
+	if (source.effort && (THINKING_LEVELS as readonly string[]).includes(source.effort)) {
+		return source.effort as ThinkingLevel
+	}
+	if ((source.thinkBudget ?? "").trim() !== "") {
+		return "custom"
+	}
+	return undefined
 }
 
 /**
@@ -58,16 +80,19 @@ export const ThinkingBudgetField = ({ providerId }: { providerId: string }) => {
 	const storedSampling = config?.sampling
 	const storedThinkBudget = typeof storedSampling?.thinkBudget === "string" ? storedSampling.thinkBudget.trim() : ""
 
-	// The dropdown is the master, and it is stored in two mutually exclusive
-	// places so it cannot disagree with what is sent: a level lives on
-	// `reasoning.effort`, a count on `sampling.thinkBudget`, and neither is set
-	// when the budget is meant to be unbounded.
-	const thinkingLevel: ThinkingLevel =
-		config?.reasoning?.effort && (THINKING_LEVELS as readonly string[]).includes(config.reasoning.effort)
-			? (config.reasoning.effort as ThinkingLevel)
-			: storedThinkBudget !== ""
-				? "custom"
-				: "unset"
+	// Custom is the only level with nothing of its own to store until a count
+	// has been typed: it clears the level exactly as Default does, so on disk
+	// the two are the same state. Remembering the pick here is what makes the
+	// count field reachable at all — without it, choosing Custom read back as
+	// Default and the field it exists to reveal never appeared.
+	const [customPicked, setCustomPicked] = useState(false)
+
+	// A stored answer always outranks that memory.
+	const storedLevel = readStoredThinkingLevel({
+		effort: config?.reasoning?.effort,
+		thinkBudget: storedThinkBudget,
+	})
+	const thinkingLevel: ThinkingLevel = storedLevel ?? (customPicked ? "custom" : "unset")
 	const thinkingEnabled = config?.reasoning?.enabled !== false
 
 	/**
@@ -99,13 +124,18 @@ export const ThinkingBudgetField = ({ providerId }: { providerId: string }) => {
 			// Picking a level clears any count left over from Custom, in the same
 			// write that sets the level. Two stored answers to one question is how
 			// a panel comes to show one thing and send another.
+			// "" rather than undefined, for both of the levels that mean "no
+			// level": the store merges this section field by field and skips a
+			// field that is undefined, so undefined left the previous level in
+			// place and the dropdown snapped back. "" is the clear.
 			const patch =
 				level === "custom"
-					? { reasoning: { enabled: true, effort: undefined } }
+					? { reasoning: { enabled: true, effort: "" } }
 					: {
-							reasoning: { enabled: true, effort: level === "unset" ? undefined : level },
+							reasoning: { enabled: true, effort: level === "unset" ? "" : level },
 							sampling: samplingWith(""),
 						}
+			setCustomPicked(level === "custom")
 			void write(patch).catch((error) => console.error("Failed to update thinking level:", error))
 		},
 		[write, samplingWith],

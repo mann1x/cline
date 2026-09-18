@@ -128,6 +128,8 @@ describe("useApiConfigurationProfiles — loading a profile", () => {
 			parallelSessions: 0,
 			sampling: {},
 			polykv: {},
+			outputBudget: {},
+			reasoning: {},
 		})
 	})
 

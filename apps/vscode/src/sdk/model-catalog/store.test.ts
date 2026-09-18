@@ -1285,6 +1285,50 @@ describe("reasoning history round trip", () => {
 		expect(store.read(providerId).reasoning?.reasoningHistory).toBe("last")
 	})
 
+	// Reported from pandorum on 4.100.126: in the opencoti panel the levels
+	// Minimal..Max could be chosen and Default and Custom could not -- the
+	// dropdown snapped back. Both of those write "no level", and "no level" was
+	// being sent as `undefined`, which this merge treats as "leave it alone".
+	// The only clear that existed was "none", and that one also forces
+	// `enabled: false`, which is thinking switched off rather than a budget
+	// left unbounded.
+	it("clears the effort on an empty string, without switching thinking off", async () => {
+		const { toProviderConfigPatch } = await import("@core/controller/models/providerCatalogShared")
+		const { WriteProviderConfigPatch } = await import("@shared/proto/cline/models")
+		const { createProviderConfigStore } = await import("./store")
+		const store = createProviderConfigStore()
+		const providerId = parseProviderId("opencoti")
+
+		store.write(
+			providerId,
+			toProviderConfigPatch(WriteProviderConfigPatch.create({ reasoning: { enabled: true, effort: "high" } } as never)),
+		)
+		expect(store.read(providerId).reasoning?.effort).toBe("high")
+
+		store.write(
+			providerId,
+			toProviderConfigPatch(WriteProviderConfigPatch.create({ reasoning: { enabled: true, effort: "" } } as never)),
+		)
+		expect(store.read(providerId).reasoning?.effort).toBeUndefined()
+		// The distinction that matters: cleared, still on.
+		expect(store.read(providerId).reasoning?.enabled).toBe(true)
+	})
+
+	it("still switches thinking off for an effort of none", async () => {
+		const { toProviderConfigPatch } = await import("@core/controller/models/providerCatalogShared")
+		const { WriteProviderConfigPatch } = await import("@shared/proto/cline/models")
+		const { createProviderConfigStore } = await import("./store")
+		const store = createProviderConfigStore()
+		const providerId = parseProviderId("opencoti")
+
+		store.write(
+			providerId,
+			toProviderConfigPatch(WriteProviderConfigPatch.create({ reasoning: { enabled: true, effort: "none" } } as never)),
+		)
+		expect(store.read(providerId).reasoning?.effort).toBeUndefined()
+		expect(store.read(providerId).reasoning?.enabled).toBe(false)
+	})
+
 	it("treats an empty string as clearing the choice back to auto", async () => {
 		const { toProviderConfigPatch } = await import("@core/controller/models/providerCatalogShared")
 		// Proto3 sends "" for an absent optional string on some paths, and the

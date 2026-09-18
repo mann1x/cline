@@ -784,8 +784,26 @@ function writeProviderSettingsFields(providerId: ProviderId, patch: ProviderConf
 				merged.enabled = reasoningPatch.enabled
 			}
 			if (reasoningPatch.effort !== undefined) {
-				merged.effort = reasoningPatch.effort === "none" ? undefined : reasoningPatch.effort
-				// When effort is "none", disable reasoning
+				// Two different ways to have no level, and they are not the same
+				// setting.
+				//
+				// "none" is thinking switched off, and it turns reasoning off
+				// with it. "" is *no level chosen* while thinking stays on --
+				// which on Ollama hands the budget to the model's own
+				// `think_budget`, and on a llama.cpp engine means unbounded.
+				//
+				// `undefined` is neither: this whole block is skipped for it,
+				// because a patch that does not mention the field is not a
+				// decision about the field. That is what made Default and
+				// Custom unselectable in the panels (reported on 4.100.126,
+				// opencoti): both write "no level", both wrote it as
+				// `undefined`, and the stored level was therefore never
+				// cleared -- so the dropdown snapped straight back to whatever
+				// it had been. `effort` is an `optional string` in the proto,
+				// so "" survives the hop as a present-and-empty value, the same
+				// way `reasoning_history` already clears itself.
+				merged.effort =
+					reasoningPatch.effort === "none" || reasoningPatch.effort === "" ? undefined : reasoningPatch.effort
 				if (reasoningPatch.effort === "none") {
 					merged.enabled = false
 				}

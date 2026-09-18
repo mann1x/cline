@@ -17,6 +17,7 @@ import { BaseUrlField } from "../common/BaseUrlField"
 import { DebouncedTextArea } from "../common/DebouncedTextArea"
 import { DebouncedTextField } from "../common/DebouncedTextField"
 import { RequestTimingsToggle } from "../common/RequestTimingsToggle"
+import { readStoredThinkingLevel } from "../common/ThinkingBudgetField"
 import OllamaModelPicker from "../OllamaModelPicker"
 import { useApiConfigurationScope } from "../utils/ApiConfigurationScopeContext"
 import { useApiConfigurationHandlers } from "../utils/useApiConfigurationHandlers"
@@ -324,13 +325,14 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 	// a `think_budget` means Custom; neither means unset. Because the two are
 	// mutually exclusive by construction, the dropdown cannot disagree with what
 	// is sent -- which is what "the dropdown is the master" has to mean.
+	// Custom is the exception: until a count is typed it stores nothing of its
+	// own, so on disk it is indistinguishable from Default. The pick is
+	// remembered here, and any stored answer outranks it.
 	const storedThinkBudget = typeof config?.sampling?.thinkBudget === "string" ? config.sampling.thinkBudget.trim() : ""
+	const [customPicked, setCustomPicked] = useState(false)
 	const thinkingLevel: OllamaThinkingLevel =
-		config?.reasoning?.effort && (OLLAMA_THINKING_LEVELS as readonly string[]).includes(config.reasoning.effort)
-			? (config.reasoning.effort as OllamaThinkingLevel)
-			: storedThinkBudget !== ""
-				? "custom"
-				: "unset"
+		readStoredThinkingLevel({ effort: config?.reasoning?.effort, thinkBudget: storedThinkBudget }) ??
+		(customPicked ? "custom" : "unset")
 
 	const handleThinkingEnabledChange = useCallback(
 		(enabled: boolean) => {
@@ -465,13 +467,17 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 			// question, and the user's rule is that the dropdown decides: a budget
 			// left over from an earlier Custom must not quietly outrank the level
 			// now on screen. Custom is the only setting that keeps one.
+			// "" rather than undefined for the two levels that mean "no level":
+			// the store skips an undefined field, so it never cleared the stored
+			// level and Default and Custom could not be selected at all.
 			const patch =
 				level === "custom"
-					? { reasoning: { enabled: true, effort: undefined } }
+					? { reasoning: { enabled: true, effort: "" } }
 					: {
-							reasoning: { enabled: true, effort: level === "unset" ? undefined : level },
+							reasoning: { enabled: true, effort: level === "unset" ? "" : level },
 							sampling: buildSamplingPatch({ thinkBudget: "" }),
 						}
+			setCustomPicked(level === "custom")
 			void write(patch).catch((error) => console.error("Failed to update Ollama thinking level:", error))
 		},
 		[write, buildSamplingPatch],
