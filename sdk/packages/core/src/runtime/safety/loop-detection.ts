@@ -206,6 +206,59 @@ export function toolCallSignature(input: unknown): string {
 	}
 }
 
+/**
+ * The tools that change the workspace.
+ *
+ * Named rather than inferred: there is no flag on `AgentTool` saying a tool
+ * writes, and guessing from the name would count `read_files` the day someone
+ * adds `read_files_and_fix`. A tool this does not know about counts as an
+ * ordinary call, which is the safe direction -- it withholds a stop rather than
+ * inventing one.
+ *
+ * `restore_file` is one of them. It is the only tool here that writes by
+ * *removing* work, and a run that keeps calling it is the specific loop this
+ * set was extended for.
+ */
+export const WRITE_CLASS_TOOL_NAMES: ReadonlySet<string> = new Set([
+	"editor",
+	"apply_patch",
+	"sed",
+	"awk",
+	"write_to_file",
+	"new_file",
+	"restore_file",
+]);
+
+/**
+ * The answer a tool gave, with the part that cannot repeat taken out.
+ *
+ * `editor` and `restore_file` both end their message with the revision the file
+ * is now at, and that ordinal goes up on every write. So two answers that are
+ * otherwise byte-identical are never equal, and a detector comparing answers
+ * sees a fresh one every time.
+ *
+ * Measured on pandorum 2026-09-18, session `1789748860618_ya4ps`: ten rounds of
+ * `restore_file` → `read_files` → `editor` with byte-identical arguments, and
+ * the two editor answers differed in three characters --
+ * `is now revision #13` against `is now revision #15`. The cycle counter reset
+ * to one on every round and no warning was ever produced. The number that makes
+ * the message useful to the model is the number that made the loop invisible to
+ * the guard, so it is removed here and nowhere else: the model still reads the
+ * real revision.
+ */
+export function loopResultSignature(output: unknown): string {
+	return normalizeResultSignature(toolCallSignature(output));
+}
+
+/**
+ * Applied here rather than only at the call site, so the rule cannot be
+ * bypassed by a caller that hands over a signature of its own. It is
+ * idempotent, so doing it twice costs nothing.
+ */
+function normalizeResultSignature(raw: string): string {
+	return raw.replace(/#\d+/g, "#n");
+}
+
 export interface LoopCheckResult {
 	softWarning: boolean;
 	hardEscalation: boolean;
@@ -296,6 +349,20 @@ const DEFAULT_CONFIG: LoopDetectionConfig = {
 const CYCLE_REPEAT_LIMIT = 3;
 
 /**
+ * The same cycle, for a tool whose repeat cannot be work.
+ *
+ * Six, matching `STRIKE_LIMIT`, so a model told it has strikes left does not
+ * discover a second and shorter budget was also counting. Three warnings are
+ * read before the sixth attempt, which is the ladder finishing rather than
+ * repeating.
+ *
+ * Only for {@link WRITE_CLASS_TOOL_NAMES}. A read or a command answered the
+ * same way is sometimes a loop and sometimes the job, and nothing here can
+ * separate them -- those keep warning and never stop.
+ */
+const CYCLE_HARD_LIMIT = 6;
+
+/**
  * Per-session repeated-tool-call detector.
  *
  * `SessionRuntime` owns the instance and installs a `beforeTool` hook
@@ -384,6 +451,22 @@ export class LoopDetectionTracker {
 			// The consecutive counter still has to see this call, or an
 			// interleaved loop would never reach the hard threshold.
 			checkRepeatedToolCall(this.state, call.name, signature, this.config);
+			// A warning that can only ever be a warning is one the run can
+			// ignore, and on pandorum it was ignored for ten rounds. The
+			// softness protects one case -- a command re-run after each edit
+			// that keeps printing the same thing, which is sometimes a loop and
+			// sometimes a suite that passes. A write tool re-sent unchanged is
+			// not that case: a byte-identical payload applied to the same range
+			// cannot be progress, however it is answered.
+			if (
+				WRITE_CLASS_TOOL_NAMES.has(call.name) &&
+				cycle.repeats >= CYCLE_HARD_LIMIT - 1
+			) {
+				return {
+					kind: "hard",
+					message: `This \`${call.name}\` call has been made ${cycle.repeats} times with the same arguments and answered the same way every time. It changes the file to a state it has already been in, so repeating it cannot move the task forward.`,
+				};
+			}
 			return {
 				kind: "soft",
 				message: `This \`${call.name}\` call has been answered ${cycle.repeats} times with the same answer, and the arguments have not changed. Whatever it is being asked, it has already said everything it is going to say.
@@ -434,12 +517,13 @@ ${steeringFor(cycle.repeats, call.name)}`,
 		// succeeding with the same answer is exactly the case the failure
 		// counters below are blind to.
 		if (resultSignature !== undefined) {
+			const answer = normalizeResultSignature(resultSignature);
 			const cycle = this.state.resultCycles.get(key);
 			this.state.resultCycles.set(
 				key,
-				cycle && cycle.signature === resultSignature
-					? { signature: resultSignature, repeats: cycle.repeats + 1 }
-					: { signature: resultSignature, repeats: 1 },
+				cycle && cycle.signature === answer
+					? { signature: answer, repeats: cycle.repeats + 1 }
+					: { signature: answer, repeats: 1 },
 			);
 		}
 		if (productive) {

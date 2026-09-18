@@ -23,6 +23,7 @@
  */
 
 import type { AgentTool } from "@cline/shared";
+import { WRITE_CLASS_TOOL_NAMES } from "../../runtime/safety/loop-detection";
 
 /** The wire name of the checklist parameter, shared with the host. */
 export const TASK_PROGRESS_PARAM = "task_progress";
@@ -48,24 +49,6 @@ export const DEFAULT_TASK_PROGRESS_REMINDER_INTERVAL = 6;
  * is not reminded twice.
  */
 export const DEFAULT_TASK_PROGRESS_WRITE_INTERVAL = 3;
-
-/**
- * The tools that change the workspace.
- *
- * Named rather than inferred: there is no flag on `AgentTool` saying a tool
- * writes, and guessing from the name would count `read_files` the day someone
- * adds `read_files_and_fix`. A host tool this does not know about simply counts
- * as an ordinary call, which is the safe direction -- it delays a nudge rather
- * than inventing one.
- */
-const WRITE_CLASS_TOOL_NAMES: ReadonlySet<string> = new Set([
-	"editor",
-	"apply_patch",
-	"sed",
-	"awk",
-	"write_to_file",
-	"new_file",
-]);
 
 /**
  * The description the model reads.

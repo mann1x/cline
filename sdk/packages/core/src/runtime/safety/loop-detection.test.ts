@@ -429,3 +429,118 @@ describe("steering a repeated call somewhere else", () => {
 		expect(warn(tracker, 1)[0]).toContain("strikes left");
 	});
 });
+
+/**
+ * The restore/read/edit carousel.
+ *
+ * Measured on pandorum 2026-09-18, session `1789748860618_ya4ps` (4.100.132,
+ * v9-agentic on opencoti): `restore_file` → `read_files` → `editor` ten times
+ * over, with byte-identical arguments on all three from the fourth round on --
+ * the same 5,678-character `editor` payload twelve times, the same
+ * `{"path":"manic_miner.html","revision":"original"}` ten times. **Not one
+ * notice was emitted**: a scan of the session for every warning this file can
+ * produce found zero.
+ *
+ * Each of the three guards was blind for its own reason. The barren counter
+ * counts failures, and these calls *succeeded*. The consecutive counter is
+ * defeated by anything in between, and there were two calls in between. And
+ * the cycle counter -- the one built for exactly this -- was defeated by the
+ * revision ordinal: the two results differed in three characters,
+ *
+ *   `manic_miner.html` is now revision #13 (136 lines)
+ *   `manic_miner.html` is now revision #15 (136 lines)
+ *
+ * so every round looked like a new answer and reset the count to one. The
+ * number that makes the message informative is the number that made the loop
+ * invisible.
+ */
+describe("a call answered the same way but for the revision it names", () => {
+	const editor = {
+		name: "editor",
+		input: {
+			path: "manic_miner.html",
+			start_line: 84,
+			end_line: 97,
+			new_text: "class Level {",
+		},
+	};
+	const restore = {
+		name: "restore_file",
+		input: { path: "manic_miner.html", revision: "original" },
+	};
+	const read = {
+		name: "read_files",
+		input: { files: [{ path: "manic_miner.html" }] },
+	};
+
+	/** The live answers, with only the ordinal changing. */
+	const editorAnswer = (revision: number) =>
+		`{"query":"edit:manic_miner.html","result":"Replaced lines 84-97 ... \`manic_miner.html\` is now revision #${revision} (136 lines)"}`;
+	const restoreAnswer = (revision: number) =>
+		`\`manic_miner.html\` is back to the original (#1): 136 lines. That is now revision #${revision}.`;
+
+	/**
+	 * One turn of the carousel, exactly as the session ran it. The editor's own
+	 * verdict is what these tests read: the other two calls have cycles of their
+	 * own, and an assertion over all three passes on whichever fires first.
+	 */
+	function round(tracker: LoopDetectionTracker, revision: number): string {
+		tracker.inspect(restore);
+		tracker.noteOutcome(true, false, restoreAnswer(revision));
+		tracker.inspect(read);
+		// The read is answered differently every round in the live session too:
+		// its output carries the same ordinal.
+		tracker.noteOutcome(true, false, `136 lines, revision #${revision}`);
+		const verdict = tracker.inspect(editor);
+		tracker.noteOutcome(true, false, editorAnswer(revision + 1));
+		return verdict.kind;
+	}
+
+	it("is a repeat, not a new answer", () => {
+		const tracker = new LoopDetectionTracker();
+		const kinds: string[] = [];
+
+		for (let turn = 0; turn < 3; turn += 1) {
+			kinds.push(round(tracker, 10 + turn * 2));
+		}
+
+		// The third time this editor call is sent, it has already been answered
+		// the same way twice -- which is what the ordinal was hiding.
+		expect(kinds).toEqual(["ok", "ok", "soft"]);
+	});
+
+	// A warning that can only ever be a warning is a warning the run can ignore
+	// ten times, which is what happened. Re-running a passing test suite is the
+	// case the softness protects, and an `editor` re-applying a byte-identical
+	// payload is not that case: it cannot be progress, however it is answered.
+	it("stops a write tool that keeps being answered the same way", () => {
+		const tracker = new LoopDetectionTracker();
+		const kinds: string[] = [];
+
+		for (let turn = 0; turn < 8; turn += 1) {
+			kinds.push(round(tracker, 10 + turn * 2));
+		}
+
+		expect(kinds).toContain("hard");
+	});
+
+	// The reason the cycle rule was written soft. A command re-run after each
+	// edit that keeps printing the same thing is sometimes a loop and sometimes
+	// a suite that passes, and nothing here can tell them apart -- so it says
+	// what it sees and lets the run continue.
+	it("only warns about a command that keeps printing the same thing", () => {
+		const tracker = new LoopDetectionTracker();
+		const command = { name: "run_commands", input: { commands: ["npm test"] } };
+		const kinds: string[] = [];
+
+		for (let turn = 0; turn < 8; turn += 1) {
+			kinds.push(tracker.inspect(command).kind);
+			tracker.noteOutcome(true, false, "42 passing");
+			tracker.inspect(read);
+			tracker.noteOutcome(true, false, "136 lines");
+		}
+
+		expect(kinds).toContain("soft");
+		expect(kinds).not.toContain("hard");
+	});
+});

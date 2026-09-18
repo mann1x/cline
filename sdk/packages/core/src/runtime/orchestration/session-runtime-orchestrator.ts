@@ -80,7 +80,7 @@ import {
 } from "../config/connection-update";
 import {
 	LoopDetectionTracker,
-	toolCallSignature,
+	loopResultSignature,
 } from "../safety/loop-detection";
 import { MistakeTracker } from "../safety/mistake-tracker";
 import { RuntimeEventAdapter } from "./runtime-event-adapter";
@@ -1480,7 +1480,11 @@ export class SessionRuntime {
 					// being answered the same way. The consecutive counter is
 					// defeated by any call in between, and in the session this was
 					// built from there always was one.
-					toolCallSignature(finishedOutput),
+					//
+					// Not the raw signature: `editor` and `restore_file` end their
+					// answer with the revision the file is now at, which goes up on
+					// every write, so two otherwise identical answers never matched.
+					loopResultSignature(finishedOutput),
 				);
 				const errorText = isError
 					? formatToolResultError(finishedOutput)
