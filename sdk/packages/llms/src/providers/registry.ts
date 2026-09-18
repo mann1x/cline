@@ -193,6 +193,9 @@ export class GatewayRegistry {
 			fetch: config.fetch,
 			options: config.options ? { ...config.options } : undefined,
 			metadata: config.metadata ? { ...config.metadata } : undefined,
+			// This list is explicit, so a field the host sets and this copy
+			// forgets reaches the request as `undefined` with nothing to say so.
+			defaultMaxOutputTokens: config.defaultMaxOutputTokens,
 			enabled: config.enabled ?? true,
 			defaultModelId: config.defaultModelId,
 			models: config.models?.map((model) => ({ ...model })),
@@ -320,6 +323,11 @@ export class GatewayRegistry {
 				fetch: config?.fetch ?? record.defaults?.fetch ?? this.fallbackFetch,
 				options,
 				metadata,
+				// Second explicit list on the same value's way in; both have to
+				// name it or the host's setting stops at whichever one forgot.
+				defaultMaxOutputTokens:
+					config?.defaultMaxOutputTokens ??
+					record.defaults?.defaultMaxOutputTokens,
 			},
 			createProvider: record.createProvider,
 		};

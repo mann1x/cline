@@ -266,6 +266,10 @@ export function createAgentModelFromConfig(
 				headers: normalizedProviderConfig.headers,
 				timeoutMs: normalizedProviderConfig.timeoutMs,
 				fetch: normalizedProviderConfig.fetch,
+				// The session's resolved per-turn budget. Without it the gateway
+				// synthesizes the flat anchor for any model that publishes a cap,
+				// and the prompt's stated budget never reaches the wire.
+				defaultMaxOutputTokens: normalizedProviderConfig.defaultMaxOutputTokens,
 				options: buildGatewayProviderOptions(
 					normalizedProviderConfig,
 					config.sessionId,

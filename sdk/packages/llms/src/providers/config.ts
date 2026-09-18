@@ -125,6 +125,16 @@ export interface TokenConfig {
 	maxInputTokens?: number;
 	/** Maximum output tokens (overrides model default) */
 	maxOutputTokens?: number;
+	/**
+	 * The per-turn cap to synthesize when no explicit one is requested.
+	 *
+	 * Distinct from {@link maxOutputTokens}, which is the user's own ceiling and
+	 * goes on the wire as the request's cap. This is what the session resolved
+	 * for itself -- a share of the window, or the Output Budget setting -- and
+	 * is the figure its system prompt quotes. Carried separately so the number
+	 * in the prompt and the number on the wire are the same one.
+	 */
+	defaultMaxOutputTokens?: number;
 	/** Sampling temperature (overrides model default) */
 	temperature?: number;
 	/**

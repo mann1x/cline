@@ -205,6 +205,21 @@ export interface GatewayProviderSettings {
 	 * Unset means on; it is only ever consulted under `auto`.
 	 */
 	reasoningInline?: boolean;
+	/**
+	 * The per-turn output cap to synthesize when the caller asks for none.
+	 *
+	 * The session that owns the conversation already resolves one -- a share of
+	 * its context window, or whatever the user typed -- and states it in the
+	 * system prompt. Without somewhere to put it, that figure reached the wire
+	 * only when the user had set an explicit Max Output Tokens, and otherwise
+	 * the request fell back to the flat anchor while the prompt kept quoting the
+	 * larger number.
+	 *
+	 * It is a *default*, not a ceiling: the model's published cap and the room
+	 * left in the window still clamp it, and an explicitly requested cap still
+	 * wins outright.
+	 */
+	defaultMaxOutputTokens?: number;
 }
 
 export interface GatewayResolvedProviderConfig extends GatewayProviderSettings {

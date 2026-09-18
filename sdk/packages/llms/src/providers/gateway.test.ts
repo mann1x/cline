@@ -635,6 +635,67 @@ describe("sdk-gateway", () => {
 		expect(order).toEqual(["conversation-done", "auxiliary"]);
 	});
 
+	it("synthesizes the session's own output budget, not the flat anchor", async () => {
+		// Measured on pandorum 2026-09-18, session 1789757702991_wqa9u: a 110,000
+		// window with no configured cap resolved an 82,500-token budget, said so
+		// in the system prompt, and sent `num_predict: 32000`. The session writes
+		// its budget into the model's `maxTokens` so compaction can read it, and
+		// that is exactly the field `resolveDefaultMaxOutputTokens` reads as "the
+		// model publishes its own ceiling, fall back to the flat 32,000" -- so
+		// the min() below it then picks the anchor. The model was told it had
+		// 82,500 tokens and 66,000 of thinking, and was cut at 32,000 and 25,600.
+		let seenMaxTokens: number | undefined;
+		const createProvider = () => ({
+			async *stream(request: { maxTokens?: number }) {
+				seenMaxTokens = request.maxTokens;
+				yield { type: "finish", reason: "stop" } satisfies AgentModelEvent;
+			},
+		});
+		const gateway = createGateway({
+			builtins: false,
+			providers: [
+				{
+					manifest: {
+						id: "scripted",
+						name: "Scripted",
+						defaultModelId: "scripted-model",
+						models: [
+							{
+								id: "scripted-model",
+								name: "Scripted Model",
+								providerId: "scripted",
+								contextWindow: 110_000,
+								maxOutputTokens: 82_500,
+							},
+						],
+					},
+					createProvider,
+				},
+			],
+			providerConfigs: [
+				{ providerId: "scripted", defaultMaxOutputTokens: 82_500 },
+			],
+		});
+
+		for await (const _event of await gateway.stream({
+			providerId: "scripted",
+			modelId: "scripted-model",
+			conversation: true,
+			messages: [
+				{
+					id: "user_budget",
+					role: "user",
+					content: [{ type: "text", text: "hi" }],
+					createdAt: Date.now(),
+				},
+			],
+		})) {
+			// drain
+		}
+
+		expect(seenMaxTokens).toBe(82_500);
+	});
+
 	it("lets only the conversation's own request speak for the session", async () => {
 		// The process-wide record of "what the last request cost" is what the
 		// compaction trigger reads to decide whether the transcript has room.

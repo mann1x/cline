@@ -2085,6 +2085,15 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		// straight from providerConfig — notably the compaction summarizer, which
 		// otherwise falls back to a small default output cap (CLINE-2911).
 		...(maxTokensPerTurn !== undefined ? { maxOutputTokens: maxTokensPerTurn } : {}),
+		// The budget this session resolved for itself, and the figure
+		// `buildOutputBudgetSection` just put in the system prompt. Without it
+		// the gateway synthesizes its flat 32,000 anchor for any model that
+		// publishes an output cap -- which, for a local model, is the very cap
+		// this session wrote into `knownModels` a few lines below so compaction
+		// could read it. Measured on pandorum 2026-09-18: the prompt said 82,500
+		// with 66,000 for thinking, `num_predict` went out at 32,000, and the
+		// turn was cut with its 25,600-token think spent and no tool call.
+		...(sessionOutputCap !== undefined ? { defaultMaxOutputTokens: sessionOutputCap } : {}),
 		fetch,
 	}
 

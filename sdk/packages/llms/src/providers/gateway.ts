@@ -857,6 +857,16 @@ export class DefaultGateway implements Gateway {
 				// catalog is silent, which is where a synthesized cap can be
 				// impossible.
 				outputCeilingTokens: ceiling,
+				// The session's own budget, when the host set one. Without it the
+				// synthesized default is the flat anchor, which a model that
+				// publishes any ceiling at all falls back to however wide its
+				// window -- measured sending 32,000 against a session that had
+				// resolved, and stated in its system prompt, 82,500.
+				defaultMaxOutputTokens: isPositiveFiniteNumber(
+					providerRecord.config.defaultMaxOutputTokens,
+				)
+					? providerRecord.config.defaultMaxOutputTokens
+					: undefined,
 				estimatedInputTokens,
 				reasoningBudgetTokens: request.reasoning?.budgetTokens,
 				onContextOverflow: (details) => {
