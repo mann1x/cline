@@ -59,3 +59,27 @@ describe("OptionsButtons", () => {
 		consoleError.mockRestore()
 	})
 })
+
+describe("an option the model recommended", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+		askResponseMock.mockResolvedValue(undefined)
+	})
+
+	it("shows the mark beside the option and sends the option without it", async () => {
+		render(<OptionsButtons isActive options={["Keep it", "Rewrite it (recommended)"]} />)
+
+		expect(screen.getByText("Recommended")).toBeInTheDocument()
+		expect(screen.getByText("Rewrite it")).toBeInTheDocument()
+
+		fireEvent.click(screen.getByText("Rewrite it"))
+
+		await waitFor(() => expect(askResponseMock).toHaveBeenCalledWith(expect.objectContaining({ text: "Rewrite it" })))
+	})
+
+	it("looks exactly as it did when nothing is recommended", () => {
+		render(<OptionsButtons isActive options={["Dark", "Light"]} />)
+
+		expect(screen.queryByText("Recommended")).not.toBeInTheDocument()
+	})
+})
