@@ -2,6 +2,7 @@ import type * as LlmsProviders from "@cline/llms";
 import {
 	estimateRequestInputTokens,
 	type MessageWithMetadata,
+	noteOutputCap,
 	observeRequestTokens,
 	resetTokenCalibration,
 } from "@cline/shared";
@@ -1271,6 +1272,76 @@ describe("createContextCompactionPrepareTurn", () => {
 		it("compacts on the estimate before anything has been counted", async () => {
 			const result = await prepare(bloatedApiMessages);
 			expect(result?.messages).toBeDefined();
+		});
+
+		// Big enough that a compaction has something to drop, while the counts
+		// the provider recorded keep the ratio trigger well clear of firing --
+		// which is the whole point: the cap is what is short, not the prompt.
+		const starvedTranscript = (): MessageWithMetadata[] => [
+			{ role: "user", content: "start the task" },
+			{
+				role: "assistant",
+				content: "x".repeat(200_000),
+				metrics: { inputTokens: 40_000, outputTokens: 12_000 },
+			},
+			{ role: "user", content: "continue" },
+			{
+				role: "assistant",
+				content: "y".repeat(200_000),
+				metrics: { inputTokens: 41_000, outputTokens: 11_500 },
+			},
+		];
+
+		// Reported after a pandorum run: "this is what trigger v9-agentic to start
+		// looping". `resolveGatewayOutputCap` takes the smallest of {configured,
+		// model max, window - input - reserve}, so the cap decays every turn --
+		// 96,000 to 12,286 across one session -- and the ratio trigger is a turn
+		// behind because it reads the *last* request's counted tokens. In that
+		// gap the model is handed a cap too thin to finish a whole-file rewrite,
+		// the call arrives cut mid-JSON, the turn is wasted, and it tries again.
+		// The request path already records what capped it; this reads it.
+		it("compacts when the last request's cap was thinner than a reply needs", async () => {
+			const roomy = starvedTranscript();
+			// Well under the ratio trigger: nothing here says compact.
+			expect((await prepare(roomy, "starved-1"))?.messages).toBeUndefined();
+
+			// The same transcript, after the request path resolved a cap of 12,286
+			// against a session whose turns run to 12,000.
+			noteOutputCap(
+				{ maxTokens: 12_286, source: "remaining-context", windowBound: true },
+				"starved-1",
+			);
+
+			expect((await prepare(roomy, "starved-1"))?.messages).toBeDefined();
+		});
+
+		// One compaction per starvation, not one per turn: a run that cannot
+		// reclaim anything would otherwise compact on every turn for the rest of
+		// its life, which is the failure the overflow report is consumed to avoid.
+		it("compacts once for a starved cap that stays starved", async () => {
+			const roomy = starvedTranscript();
+			const cap = {
+				maxTokens: 12_286,
+				source: "remaining-context" as const,
+				windowBound: true,
+			};
+
+			noteOutputCap(cap, "starved-2");
+			expect((await prepare(roomy, "starved-2"))?.messages).toBeDefined();
+			noteOutputCap(cap, "starved-2");
+			expect((await prepare(roomy, "starved-2"))?.messages).toBeUndefined();
+		});
+
+		// A cap that is window-bound but ample is the ordinary state of every
+		// turn before the transcript grows, and must say nothing.
+		it("says nothing about a window-bound cap that is ample", async () => {
+			const roomy = starvedTranscript();
+			noteOutputCap(
+				{ maxTokens: 64_000, source: "remaining-context", windowBound: true },
+				"starved-3",
+			);
+
+			expect((await prepare(roomy, "starved-3"))?.messages).toBeUndefined();
 		});
 
 		it("recovers the count from the transcript when the process did not see it", async () => {

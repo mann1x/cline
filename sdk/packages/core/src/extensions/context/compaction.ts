@@ -7,6 +7,7 @@ import {
 	consumeContextOverflow,
 	estimateRequestInputTokens,
 	lastObservedRequestTokens,
+	lastOutputCap,
 } from "@cline/shared";
 import {
 	captureCompactionBudgetEmergency,
@@ -45,6 +46,7 @@ import {
 	resolveCompactionTriggerTokens,
 	resolveEffectiveMaxInputTokens,
 	resolveObservedOutputTokens,
+	resolveOutputRoomTokens,
 	resolvePreserveRecentTokens,
 	resolveRecencyBounds,
 	seedCalibrationFromTranscript,
@@ -465,6 +467,25 @@ function countUserAssistantPairs(
  * do not emit compaction telemetry. If we want coverage there too, the
  * plugin/hook pipelines must be instrumented separately.
  */
+/**
+ * Sessions currently compacting because their output cap went thin.
+ *
+ * A latch, not a counter: it arms when the cap recovers above the room a reply
+ * needs and fires once on the way back down. Without it a session that can no
+ * longer reclaim anything would compact on every turn for the rest of its life
+ * -- the failure the overflow report is *consumed* to avoid, arrived at from
+ * the other direction.
+ *
+ * Keyed by session rather than held in the pipeline closure because the closure
+ * is rebuilt more often than a session lives.
+ */
+const starvedOutputCapSessions = new Set<string>();
+
+/** Test seam: the latch is process-wide, so a suite has to be able to clear it. */
+export function resetStarvedOutputCapLatch(): void {
+	starvedOutputCapSessions.clear();
+}
+
 export function createContextCompactionPrepareTurn(
 	config: Pick<
 		CoreSessionConfig,
@@ -671,10 +692,46 @@ export function createContextCompactionPrepareTurn(
 			polykvCapacity,
 			providerConfig.polykv?.compactionPressureThreshold,
 		);
+		// What the request path actually resolved for the last turn, against what
+		// a reply from this session actually costs.
+		//
+		// The ratio trigger above is a turn behind by construction -- it prefers
+		// the provider's counted tokens, which describe the request that already
+		// went out. `resolveGatewayOutputCap` takes the smallest of {configured,
+		// model max, window - input - reserve}, so inside that gap the cap can
+		// fall below what a reply needs while the ratio still reports room.
+		// Measured on pandorum 2026-09-18: a session walked 96,000 -> 12,286
+		// across 54 messages, and the malformed tool calls sit exactly at the
+		// thin end -- a whole-file rewrite cut mid-JSON arrives as a pathless
+		// `editor` call, the turn is wasted, and the model tries again. Reported
+		// as "this is what trigger v9-agentic to start looping".
+		//
+		// Only a window-bound cap counts. A cap the user configured, or the
+		// model's own ceiling, is a setting rather than a symptom, and compacting
+		// the transcript cannot raise either of them.
+		const outputRoomTokens = resolveOutputRoomTokens({
+			contextWindow: context.model.info?.contextWindow,
+			modelMaxTokens: context.model.info?.maxTokens,
+			observedOutputTokens,
+		});
+		const lastCap = lastOutputCap(config.sessionId);
+		const outputCapStarved =
+			lastCap?.windowBound === true &&
+			typeof lastCap.maxTokens === "number" &&
+			lastCap.maxTokens < outputRoomTokens;
+		const latchKey = config.sessionId ?? "";
+		const outputCapStarvedFires =
+			outputCapStarved && !starvedOutputCapSessions.has(latchKey);
+		if (outputCapStarved) {
+			starvedOutputCapSessions.add(latchKey);
+		} else {
+			starvedOutputCapSessions.delete(latchKey);
+		}
 		const shouldCompact =
 			contextOverflow !== undefined ||
 			triggerInputTokens >= requestTriggerTokens ||
-			polykvPressure;
+			polykvPressure ||
+			outputCapStarvedFires;
 		const diagnostics = {
 			mode: effectiveMode,
 			strategy,
@@ -698,6 +755,11 @@ export function createContextCompactionPrepareTurn(
 			polykvCompactionPressure: polykvCapacity?.compaction_pressure,
 			polykvKvHeadroomPct: polykvCapacity?.kv_headroom_pct,
 			polykvPressure,
+			outputRoomTokens,
+			lastOutputCapTokens: lastCap?.maxTokens,
+			lastOutputCapSource: lastCap?.source,
+			outputCapStarved,
+			outputCapStarvedFires,
 			shouldCompact,
 			messageCount: context.messages.length,
 			apiMessageCount: context.apiMessages.length,

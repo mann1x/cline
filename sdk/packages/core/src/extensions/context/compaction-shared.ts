@@ -371,27 +371,32 @@ export function resolveObservedOutputTokens(
  * Taking the smaller of the two keeps the old ratio as an upper bound while
  * making room for a full turn the binding constraint, which is what it is.
  */
-export function resolveCompactionTriggerTokens(input: {
-	maxInputTokens: number;
+/**
+ * The tokens held back for the next reply, sized to this session's own turns.
+ *
+ * Extracted from {@link resolveCompactionTriggerTokens} so the two readers of
+ * this number cannot drift apart. The trigger asks it *before* a turn -- how
+ * much of the window must stay free -- and the starved-cap check asks it
+ * *after* one, against the cap the request path actually resolved. A second
+ * figure for the same quantity is the disagreement this file exists to end.
+ *
+ * The declared room comes from the gateway rather than being restated here: it
+ * synthesizes a cap in exactly this situation, and that default is a share of
+ * the window, so the flat 32,000 this used to be under-reserved on every window
+ * wider than 128k.
+ */
+export function resolveOutputRoomTokens(input: {
 	contextWindow?: number;
 	modelMaxTokens?: number;
-	/** The high-water output of recent turns, from {@link resolveObservedOutputTokens}. */
 	observedOutputTokens?: number;
 }): number {
-	const ratioTrigger = input.maxInputTokens * COMPACTION_TRIGGER_RATIO;
 	if (!isPositiveFiniteNumber(input.contextWindow)) {
-		return ratioTrigger;
+		return MIN_OUTPUT_ROOM_TOKENS;
 	}
-	// Output room to keep free when the model reports no per-turn cap of its
-	// own. Asked of the gateway rather than restated here: it synthesizes a cap
-	// in exactly this situation, and a second number here would put the two back
-	// into the disagreement this whole path exists to end. Not hypothetical --
-	// that default is a share of the window, so the flat 32,000 this used to be
-	// under-reserved on every window wider than 128k.
 	const declaredRoom = isPositiveFiniteNumber(input.modelMaxTokens)
 		? input.modelMaxTokens
 		: resolveDefaultMaxOutputTokens({ contextWindow: input.contextWindow });
-	const outputRoom = isPositiveFiniteNumber(input.observedOutputTokens)
+	return isPositiveFiniteNumber(input.observedOutputTokens)
 		? Math.min(
 				declaredRoom,
 				input.contextWindow * MAX_MEASURED_OUTPUT_ROOM_WINDOW_SHARE,
@@ -404,6 +409,20 @@ export function resolveCompactionTriggerTokens(input: {
 				declaredRoom,
 				input.contextWindow * COLD_START_OUTPUT_ROOM_WINDOW_SHARE,
 			);
+}
+
+export function resolveCompactionTriggerTokens(input: {
+	maxInputTokens: number;
+	contextWindow?: number;
+	modelMaxTokens?: number;
+	/** The high-water output of recent turns, from {@link resolveObservedOutputTokens}. */
+	observedOutputTokens?: number;
+}): number {
+	const ratioTrigger = input.maxInputTokens * COMPACTION_TRIGGER_RATIO;
+	if (!isPositiveFiniteNumber(input.contextWindow)) {
+		return ratioTrigger;
+	}
+	const outputRoom = resolveOutputRoomTokens(input);
 	const roomTrigger = Math.max(
 		input.contextWindow - outputRoom,
 		input.contextWindow * MIN_TRIGGER_WINDOW_SHARE,

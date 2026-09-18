@@ -8,6 +8,7 @@ import {
 	resolveCompactionTriggerTokens,
 	resolveDefaultMaxOutputTokens,
 	resolveObservedOutputTokens,
+	resolveOutputRoomTokens,
 	resolveSummaryMaxOutputTokens,
 	SUMMARY_OUTPUT_WINDOW_SHARE,
 } from "./compaction-shared";
@@ -28,6 +29,35 @@ describe("the compaction trigger", () => {
 				modelMaxTokens: 32_000,
 			}),
 		).toBe(82_500);
+	});
+
+	// The reservation and the trigger have to be the same number read from two
+	// ends: the trigger decides when to compact *before* a turn, and the
+	// starved-cap check decides whether the turn that just ran had room. Two
+	// figures here is the disagreement this file exists to end.
+	it("reserves exactly what the trigger holds back", () => {
+		const input = {
+			maxInputTokens: 128_000,
+			contextWindow: 128_000,
+			modelMaxTokens: 32_000,
+		};
+
+		expect(resolveCompactionTriggerTokens(input)).toBe(
+			input.contextWindow - resolveOutputRoomTokens(input),
+		);
+	});
+
+	// pandorum 2026-09-18: a session's measured turns ran to ~12,000 tokens, so
+	// the room it needs is ~18,000 -- and the cap it was actually given on the
+	// turn that emitted a pathless `editor` call was 12,286.
+	it("sizes the room from what the session's turns actually cost", () => {
+		expect(
+			resolveOutputRoomTokens({
+				contextWindow: 128_000,
+				modelMaxTokens: 96_000,
+				observedOutputTokens: 12_000,
+			}),
+		).toBe(18_000);
 	});
 
 	it("never sits above the window it is meant to protect", () => {
