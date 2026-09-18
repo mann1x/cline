@@ -7,6 +7,7 @@ import { getModeSpecificFields } from "@/components/settings/utils/providerUtils
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { useNormalizedApiConfiguration } from "@/hooks/useNormalizedApiConfiguration"
 import { useProviderUsageCostDisplay } from "@/hooks/useProviderUsageCostDisplay"
+import { hasReportableCost } from "@/hooks/useUsageCostVisibility"
 import { cn } from "@/lib/utils"
 import { getEnvironmentColor } from "@/utils/environmentColors"
 import CopyTaskButton from "./buttons/CopyTaskButton"
@@ -114,15 +115,13 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 	// mirrors the CLI's `shouldShowCliUsageCost` consumer and removes the
 	// previous extension-side hard-coded "openai-codex" check.
 	const usageCostDisplay = useProviderUsageCostDisplay(modeFields.apiProvider)
-	const isCostAvailable =
-		(totalCost &&
-			modeFields.apiProvider === "openai" &&
-			modeFields.openAiModelInfo?.inputPrice &&
-			modeFields.openAiModelInfo?.outputPrice) ||
-		(modeFields.apiProvider !== "vscode-lm" &&
-			modeFields.apiProvider !== "ollama" &&
-			modeFields.apiProvider !== "lmstudio" &&
-			usageCostDisplay === "show")
+	const isCostAvailable = shouldShowTaskCost({
+		totalCost,
+		apiProvider: modeFields.apiProvider,
+		inputPrice: modeFields.openAiModelInfo?.inputPrice,
+		outputPrice: modeFields.openAiModelInfo?.outputPrice,
+		usageCostDisplay,
+	})
 
 	// Event handlers
 	const toggleTaskExpanded = useCallback(() => setIsTaskExpanded(!isTaskExpanded), [setIsTaskExpanded, isTaskExpanded])
@@ -275,3 +274,38 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 }
 
 export default TaskHeader
+
+/**
+ * Whether this task has a cost worth showing.
+ *
+ * The provider rules were already here; what was missing is the amount. A local
+ * endpoint priced at zero — which is what a llama.cpp or opencoti server is —
+ * is not on the excluded list and reports `usageCostDisplay: "show"`, so every
+ * conversation carried a `$0.0000` badge. Reported as useless, and it is: a
+ * figure that can only ever be zero says nothing, and it sits in the one corner
+ * of the header where a real number would matter.
+ *
+ * So a positive amount is now required as well. A paid provider shows nothing
+ * until the first turn has cost something, which is the same statement made
+ * honestly — before that there is no cost to report either.
+ */
+export function shouldShowTaskCost(input: {
+	totalCost?: number
+	apiProvider?: string
+	inputPrice?: number
+	outputPrice?: number
+	usageCostDisplay?: string
+}): boolean {
+	if (!hasReportableCost(input.totalCost)) {
+		return false
+	}
+	if (input.apiProvider === "openai") {
+		return !!input.inputPrice && !!input.outputPrice
+	}
+	return (
+		input.apiProvider !== "vscode-lm" &&
+		input.apiProvider !== "ollama" &&
+		input.apiProvider !== "lmstudio" &&
+		input.usageCostDisplay === "show"
+	)
+}

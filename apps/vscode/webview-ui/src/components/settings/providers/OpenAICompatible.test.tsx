@@ -485,8 +485,7 @@ describe("OpenAICompatibleProvider", () => {
 	})
 
 	it.each([
-		["Context Window Size", "contextWindow", "64000", 64_000],
-		["Max Output Tokens", "maxTokens", "4096", 4_096],
+		["Model Context Window", "contextWindow", "64000", 64_000],
 		["Output Price / 1M tokens", "outputPrice", "2.5", 2.5],
 	] as const)("maps %s only to the %s override", async (label, key, input, expected) => {
 		renderProvider()
@@ -566,9 +565,9 @@ describe("OpenAICompatibleProvider", () => {
 		await act(async () => {})
 		fireEvent.click(screen.getByText("Model Configuration"))
 
-		fireEvent.change(screen.getByLabelText("Max Output Tokens"), { target: { value: "80000o" } })
+		fireEvent.change(screen.getByLabelText("Model Context Window"), { target: { value: "80000o" } })
 
-		expect(screen.getByRole("alert")).toHaveTextContent("Max Output Tokens must be a valid number.")
+		expect(screen.getByRole("alert")).toHaveTextContent("Model Context Window must be a valid number.")
 		expect(mocks.commitSelection).not.toHaveBeenCalled()
 	})
 

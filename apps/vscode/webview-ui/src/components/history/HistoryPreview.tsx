@@ -1,7 +1,7 @@
 import { StringRequest } from "@shared/proto/cline/common"
 import { memo } from "react"
 import { useExtensionState } from "@/context/ExtensionStateContext"
-import { useUsageCostVisibility } from "@/hooks/useUsageCostVisibility"
+import { hasReportableCost, useUsageCostVisibility } from "@/hooks/useUsageCostVisibility"
 import { TaskServiceClient } from "@/services/grpc-client"
 
 type HistoryPreviewProps = {
@@ -167,7 +167,7 @@ const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
 									</div>
 									<div className="history-meta-stack">
 										<span className="history-date">{formatDate(item.ts)}</span>
-										{item.totalCost != null && isCostVisible(item.apiProvider) && (
+										{hasReportableCost(item.totalCost) && isCostVisible(item.apiProvider) && (
 											<span className="history-cost-chip">${item.totalCost.toFixed(2)}</span>
 										)}
 									</div>

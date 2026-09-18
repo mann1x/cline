@@ -92,6 +92,7 @@ const ScopedModelTab = ({ setting, storedSnapshot }: { setting: ScopedModelSetti
 		() => ({
 			ownsProviderSettings: true,
 			providerSettings: storedProviderSettings,
+			scopeKey: setting,
 			writeProviderSettings: async (patch: Record<string, unknown>) => {
 				await writer.mutate(scopedSnapshotPatches.providerSettings(patch))
 			},
@@ -124,7 +125,7 @@ const ScopedModelTab = ({ setting, storedSnapshot }: { setting: ScopedModelSetti
 				}
 			},
 		}),
-		[apiConfiguration, storedProviderSettings, writer],
+		[apiConfiguration, setting, storedProviderSettings, writer],
 	)
 
 	const scopedState = useMemo(

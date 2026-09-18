@@ -234,26 +234,29 @@ describe("OpenApiInfoOptions", () => {
 		expect(apiKeyInput).toBeInTheDocument()
 	})
 
-	it("renders OpenAI Context Window Size input", () => {
+	// The window is read against by the output budget, the tool-result cap and
+	// compaction, so it is shown in the open rather than folded into the
+	// collapsible with the prices -- the same place Ollama shows it.
+	it("renders the context window outside Model Configuration", () => {
 		render(
 			<ExtensionStateContextProvider>
 				<ApiOptions currentMode="plan" showModelOptions={true} />
 			</ExtensionStateContextProvider>,
 		)
-		fireEvent.click(screen.getByText("Model Configuration"))
-		const orgIdInput = screen.getByText("Context Window Size")
-		expect(orgIdInput).toBeInTheDocument()
+		expect(screen.getByText("Model Context Window")).toBeInTheDocument()
 	})
 
-	it("renders OpenAI Max Output Tokens input", () => {
+	// The per-turn cap has one owner now: the automatic output budget below,
+	// which is shown for every provider. A second field above it could only
+	// disagree with it.
+	it("does not offer a second per-turn output cap", () => {
 		render(
 			<ExtensionStateContextProvider>
 				<ApiOptions currentMode="plan" showModelOptions={true} />
 			</ExtensionStateContextProvider>,
 		)
 		fireEvent.click(screen.getByText("Model Configuration"))
-		const modelInput = screen.getByText("Max Output Tokens")
-		expect(modelInput).toBeInTheDocument()
+		expect(screen.queryByText("Max Output Tokens")).not.toBeInTheDocument()
 	})
 })
 

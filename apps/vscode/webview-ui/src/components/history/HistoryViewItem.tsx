@@ -14,7 +14,7 @@ import {
 } from "lucide-react"
 import { memo, useCallback, useMemo, useState } from "react"
 import { Button } from "@/components/ui/button"
-import { useUsageCostVisibility } from "@/hooks/useUsageCostVisibility"
+import { hasReportableCost, useUsageCostVisibility } from "@/hooks/useUsageCostVisibility"
 import { cn } from "@/lib/utils"
 import { TaskServiceClient } from "@/services/grpc-client"
 import { formatLargeNumber, formatSize } from "@/utils/format"
@@ -147,8 +147,8 @@ const HistoryViewItem = ({
 					<div className="flex items-center justify-between w-full">
 						<div className="text-description text-xs uppercase">{formatDate(item.ts)}</div>
 						<div className="self-end flex items-center text-xs">
-							{isCostVisible(item.apiProvider) && (
-								<span className="text-description">${item.totalCost?.toFixed(4) ?? 0}</span>
+							{hasReportableCost(item.totalCost) && isCostVisible(item.apiProvider) && (
+								<span className="text-description">${item.totalCost?.toFixed(4)}</span>
 							)}
 							{expanded ? (
 								<ChevronsDownUpIcon className="text-description" />

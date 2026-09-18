@@ -17,6 +17,7 @@ import { DebouncedTextField } from "../common/DebouncedTextField"
 import { ModelInfoView } from "../common/ModelInfoView"
 import { DropdownContainer } from "../common/ModelSelector"
 import { RequestTimingsToggle } from "../common/RequestTimingsToggle"
+import { SamplingSection } from "../common/SamplingSection"
 import { ThinkingBudgetField } from "../common/ThinkingBudgetField"
 import { useApiConfigurationHandlers } from "../utils/useApiConfigurationHandlers"
 import { useProviderApiKeyField } from "../utils/useProviderApiKeyField"
@@ -528,6 +529,21 @@ export const OpenAICompatibleProvider = ({
 				Use Azure Identity Authentication
 			</VSCodeCheckbox>
 
+			{/* The context window is not an advanced detail: it is the number the
+			    output budget, the tool-result cap and compaction are all read
+			    against, and on a local server it is whatever the server was
+			    started with rather than anything a catalog knows. So it sits
+			    where Ollama's does -- in the open, above the section -- rather
+			    than folded away with the prices. */}
+			<DebouncedTextField
+				initialValue={formatOptionalModelNumber(openAiModelInfo?.contextWindow)}
+				onChange={(value) => updateNumericModelOverride("contextWindow", "Model Context Window", value)}
+				placeholder={`Default: ${openAiModelInfoSafeDefaults.contextWindow}`}
+				style={{ width: "100%" }}>
+				<span className="font-semibold">Model Context Window</span>
+			</DebouncedTextField>
+			{modelFieldErrors.contextWindow && <div role="alert">{modelFieldErrors.contextWindow}</div>}
+
 			<div
 				onClick={() => setModelConfigurationSelected((val) => !val)}
 				style={{
@@ -566,27 +582,6 @@ export const OpenAICompatibleProvider = ({
 						onChange={(e: any) => updateModelOverride("supportsVision", e.target.checked === true)}>
 						Supports Images
 					</VSCodeCheckbox>
-
-					<div style={{ display: "flex", gap: 10, marginTop: "5px" }}>
-						<div style={{ flex: 1 }}>
-							<DebouncedTextField
-								initialValue={formatOptionalModelNumber(openAiModelInfo?.contextWindow)}
-								onChange={(value) => updateNumericModelOverride("contextWindow", "Context Window Size", value)}>
-								<span style={{ fontWeight: 500 }}>Context Window Size</span>
-							</DebouncedTextField>
-							{modelFieldErrors.contextWindow && <div role="alert">{modelFieldErrors.contextWindow}</div>}
-						</div>
-
-						<div style={{ flex: 1 }}>
-							<DebouncedTextField
-								initialValue={formatOptionalModelNumber(openAiModelInfo?.maxTokens)}
-								onChange={(value) => updateNumericModelOverride("maxTokens", "Max Output Tokens", value)}
-								placeholder="not set">
-								<span style={{ fontWeight: 500 }}>Max Output Tokens</span>
-							</DebouncedTextField>
-							{modelFieldErrors.maxTokens && <div role="alert">{modelFieldErrors.maxTokens}</div>}
-						</div>
-					</div>
 
 					<div style={{ display: "flex", gap: 10, marginTop: "5px" }}>
 						<div style={{ flex: 1 }}>
@@ -649,6 +644,14 @@ export const OpenAICompatibleProvider = ({
 			    `reasoning_budget_tokens` on the way out. Harmless for the hosted
 			    providers on this path: Default sends no field at all. */}
 			<ThinkingBudgetField providerId={providerId} />
+
+			{/* The same sampler Ollama has, under llama.cpp's names. Every field
+			    here already had a wire name on this path -- `LLAMACPP_SAMPLING_WIRE_NAMES`
+			    maps the lot -- and only the half that lets a user set one was
+			    missing. `num_predict` is deliberately absent: the automatic
+			    output budget below owns that number, and a second answer above
+			    it would silently win. */}
+			<SamplingSection dialect="llamacpp" providerId={providerId} showThinkBudgetMessage />
 
 			{showModelOptions && (
 				<ModelInfoView isPopup={isPopup} modelInfo={selectedModelInfo} selectedModelId={selectedModelId} />

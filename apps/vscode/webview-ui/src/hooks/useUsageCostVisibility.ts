@@ -39,3 +39,20 @@ export function useUsageCostVisibility(): (providerId: string | undefined) => bo
 		[providers],
 	)
 }
+
+/**
+ * Whether a stored cost is worth putting on screen at all.
+ *
+ * Provider visibility answers "may this be shown"; this answers "is there
+ * anything to show". A local endpoint -- llama.cpp, opencoti, anything priced
+ * at zero -- is on no suppression list and reports a real, honest cost of
+ * nothing, so every task and every history row carried a `$0.0000` badge. It
+ * occupies the one spot where a number would mean something and can only ever
+ * read zero.
+ *
+ * A paid provider likewise shows nothing until the first turn has cost
+ * something, which is the same statement made accurately.
+ */
+export function hasReportableCost(totalCost: number | null | undefined): boolean {
+	return typeof totalCost === "number" && Number.isFinite(totalCost) && totalCost > 0
+}

@@ -26,6 +26,16 @@ export interface ApiConfigurationScope {
 	 */
 	ownsProviderSettings?: boolean
 	/**
+	 * Which stored entry this scope writes, for state that is held outside React
+	 * and therefore cannot be keyed by the component holding it.
+	 *
+	 * `ownsProviderSettings` says a scope has its own entry but not which one,
+	 * and the three scoped tabs each have a different one — so an in-flight
+	 * write on the Vision tab would otherwise be indistinguishable from one on
+	 * Agents and could compose into it.
+	 */
+	scopeKey?: string
+	/**
 	 * The provider settings this scope holds, and how to change them.
 	 *
 	 * Not the host's provider store. `commitSelection` there writes the global

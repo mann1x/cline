@@ -2,8 +2,8 @@ import { VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
 import { useCallback, useState } from "react"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { useProviderConfig } from "@/hooks/useProviderConfig"
 import { DebouncedTextField } from "./DebouncedTextField"
+import { useSamplingWrite } from "./sampling-fields"
 
 /**
  * The levels, in the order they escalate, and spelled the way Ollama's panel
@@ -75,9 +75,16 @@ export function readStoredThinkingLevel(source: { effort?: string; thinkBudget?:
  * "Default" to be read as "something sensible".
  */
 export const ThinkingBudgetField = ({ providerId }: { providerId: string }) => {
-	const { config, write } = useProviderConfig(providerId as never)
-
-	const storedSampling = config?.sampling
+	// One hook, not two: the sampler write and the entry it composes from have
+	// to be the same reader, or a panel writes through one copy and renders the
+	// other.
+	// The sampler section is written whole, and this panel is not its only
+	// writer -- the Advanced section beside it writes the same section. The
+	// shared hook is what makes each write compose from the last one rather
+	// than from the copy the component rendered with, which is the difference
+	// between clearing `think_budget` and undoing a temperature typed a moment
+	// earlier.
+	const { config, write, sampling: storedSampling, composeAndWrite } = useSamplingWrite(providerId)
 	const storedThinkBudget = typeof storedSampling?.thinkBudget === "string" ? storedSampling.thinkBudget.trim() : ""
 
 	// Custom is the only level with nothing of its own to store until a count
@@ -101,15 +108,6 @@ export const ThinkingBudgetField = ({ providerId }: { providerId: string }) => {
 	 * the user had set. Everything stored is carried forward and only this one
 	 * field is changed.
 	 */
-	const samplingWith = useCallback(
-		(thinkBudget: string) => ({
-			...(storedSampling ?? {}),
-			stop: storedSampling?.stop ?? [],
-			thinkBudget,
-		}),
-		[storedSampling],
-	)
-
 	const handleEnabledChange = useCallback(
 		(enabled: boolean) => {
 			void write({
@@ -128,17 +126,16 @@ export const ThinkingBudgetField = ({ providerId }: { providerId: string }) => {
 			// level": the store merges this section field by field and skips a
 			// field that is undefined, so undefined left the previous level in
 			// place and the dropdown snapped back. "" is the clear.
-			const patch =
-				level === "custom"
-					? { reasoning: { enabled: true, effort: "" } }
-					: {
-							reasoning: { enabled: true, effort: level === "unset" ? "" : level },
-							sampling: samplingWith(""),
-						}
 			setCustomPicked(level === "custom")
-			void write(patch).catch((error) => console.error("Failed to update thinking level:", error))
+			if (level === "custom") {
+				void write({ reasoning: { enabled: true, effort: "" } }).catch((error) =>
+					console.error("Failed to update thinking level:", error),
+				)
+				return
+			}
+			composeAndWrite({ thinkBudget: "" }, { reasoning: { enabled: true, effort: level === "unset" ? "" : level } })
 		},
-		[write, samplingWith],
+		[write, composeAndWrite],
 	)
 
 	// Same reason the other provider fields wait: rendering before the config
@@ -185,9 +182,7 @@ export const ThinkingBudgetField = ({ providerId }: { providerId: string }) => {
 								className="w-full"
 								initialValue={storedThinkBudget}
 								onChange={(value: string) => {
-									void write({ sampling: samplingWith(value) }).catch((error) =>
-										console.error("Failed to update the thinking budget:", error),
-									)
+									composeAndWrite({ thinkBudget: value })
 								}}
 								placeholder="4096">
 								<span className="font-medium text-xs">reasoning_budget_tokens</span>

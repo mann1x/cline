@@ -1,7 +1,7 @@
 import { renderHook } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import { useProviderListings } from "./useProviderListings"
-import { useUsageCostVisibility } from "./useUsageCostVisibility"
+import { hasReportableCost, useUsageCostVisibility } from "./useUsageCostVisibility"
 
 vi.mock("./useProviderListings", () => ({
 	useProviderListings: vi.fn(),
@@ -52,5 +52,29 @@ describe("useUsageCostVisibility", () => {
 		const isCostVisible = renderPredicate()
 		expect(isCostVisible("cline-pass")).toBe(false)
 		expect(isCostVisible("anthropic")).toBe(false)
+	})
+})
+
+describe("hasReportableCost", () => {
+	// Reported: "when input/output price is set to 0 the conversation does not
+	// report the price badges with $0.0000, it's useless." A free local endpoint
+	// is on no suppression list, so the provider rule alone lets it through.
+	it("is false for a free provider", () => {
+		expect(hasReportableCost(0)).toBe(false)
+	})
+
+	it("is false before anything has been spent", () => {
+		expect(hasReportableCost(undefined)).toBe(false)
+		expect(hasReportableCost(null)).toBe(false)
+	})
+
+	it("is true once a turn has cost something", () => {
+		expect(hasReportableCost(0.00004)).toBe(true)
+	})
+
+	// A history row can carry whatever an older build stored.
+	it("is false for a number that is not one", () => {
+		expect(hasReportableCost(Number.NaN)).toBe(false)
+		expect(hasReportableCost(-1)).toBe(false)
 	})
 })
