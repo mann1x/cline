@@ -26,6 +26,10 @@ import { readFile as readFileFromDisk } from "node:fs/promises";
 import type { AgentTool, AgentToolDefinition } from "@cline/shared";
 import type { CompactionRevisions } from "../../extensions/context/compaction-revisions";
 import {
+	SESSION_REVISION_WORDING,
+	withBaseRevisionReads,
+} from "./base-revision-reads";
+import {
 	createRevisionLog,
 	type RevisionLog,
 	revisionSpan,
@@ -117,10 +121,16 @@ export function createSessionRevisions(options: {
 			noteCompaction: (keep) => log.noteCompaction(keep),
 		},
 		decorate: (tools) =>
-			withRevisionCapture(tools, {
-				source: { ...source, log },
-				readFile,
-				...(options.lastCheck ? { lastCheck: options.lastCheck } : {}),
-			}),
+			withRevisionCapture(
+				// Reads first, writes outside, matching the protocol's own order:
+				// the read decoration widens `read_files` and the capture wraps
+				// the writers, and neither touches the other's tool.
+				withBaseRevisionReads(tools, source, SESSION_REVISION_WORDING),
+				{
+					source: { ...source, log },
+					readFile,
+					...(options.lastCheck ? { lastCheck: options.lastCheck } : {}),
+				},
+			),
 	};
 }

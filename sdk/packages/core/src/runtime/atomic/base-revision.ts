@@ -99,3 +99,29 @@ export function isTextBody(body: Buffer): boolean {
 	// refuse a binary read, and it is cheap enough to run on every call.
 	return !body.subarray(0, 8000).includes(0);
 }
+
+/**
+ * Resolve a path against the workspace, for a session with no transaction.
+ *
+ * The same answers `resolveBaseFile` gives, minus the one that needs a
+ * snapshot: there is no `uncovered`, because nothing was skipped by a snapshot
+ * that was never taken. A file inside the root reads as `created`, which here
+ * means "the log decides what it had" — and the log is seeded from the file
+ * itself at first touch, so that is exactly right.
+ */
+export function resolveSessionFile(
+	root: string,
+	requestedPath: string,
+): BaseFileLookup {
+	const absolutePath = path.normalize(
+		path.isAbsolute(requestedPath)
+			? requestedPath
+			: path.resolve(root, requestedPath),
+	);
+	const relative = path.relative(path.normalize(root), absolutePath);
+	const inside =
+		relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+	return inside
+		? { kind: "created", absolutePath }
+		: { kind: "outside", absolutePath };
+}

@@ -106,11 +106,44 @@ describe("createSessionRevisions", () => {
 		expect(restore?.description).toContain("before this session first wrote");
 	});
 
-	it("leaves a tool that cannot write a file alone", () => {
+	it("lets read_files show an earlier revision, without a transaction", async () => {
+		// The cheaper half of recovery, and the half the compaction ledger's
+		// addresses are for: `src/parser.ts #1–#7` is only worth printing if the
+		// model can go and read #4 without putting the file back.
 		const revisions = createSessionRevisions({ root: ROOT });
-		const plain = {
+		const file = join(ROOT, "parser.ts");
+		revisions.log.seed(file, Buffer.from("before\n"), "session");
+		revisions.log.record(file, Buffer.from("after\n"), "editor");
+
+		const reader = {
 			name: "read_files",
 			description: "read",
+			inputSchema: {},
+			execute: async () => [
+				{ query: "parser.ts", result: "after", success: true },
+			],
+		} as unknown as AgentTool;
+		const [wrapped] = revisions.decorate([reader]);
+
+		const shown = (await wrapped?.execute?.(
+			{ files: [{ path: "parser.ts" }], revision: "#1" } as never,
+			{} as never,
+		)) as { result: string; success: boolean }[];
+
+		expect(shown[0]?.success).toBe(true);
+		expect(shown[0]?.result).toContain("before");
+		// And the decoration says so in the description, or the model never
+		// learns the parameter exists.
+		expect(wrapped?.description).toContain("revision");
+	});
+
+	it("leaves a tool that neither reads nor writes a file alone", () => {
+		// `read_files` is deliberately not the example: it is decorated too, for
+		// the `revision` parameter. Everything else comes back untouched.
+		const revisions = createSessionRevisions({ root: ROOT });
+		const plain = {
+			name: "list_files",
+			description: "list",
 			inputSchema: {},
 			execute: async () => "x",
 		} as unknown as AgentTool;

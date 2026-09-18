@@ -33,10 +33,10 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { type AgentTool, createTool } from "@cline/shared";
 import {
-	type BaseFileLookup,
 	describeMissingBase,
 	isTextBody,
 	resolveBaseFile,
+	resolveSessionFile,
 } from "./base-revision";
 import {
 	describeRevisions,
@@ -153,7 +153,7 @@ It affects one file, and only files this session has written: a file nothing has
 
 Read the file again afterwards: its line numbers are back to what they were at that revision, and any range you read earlier no longer addresses the same code.
 
-If you only want to *see* what the file said before your changes, ask \`read_files\` for the revision instead and the file is left alone.`;
+If you only want to *see* what the file said before your changes, do not restore it — call \`read_files\` with \`revision: "${ORIGINAL_REVISION}"\` (or a number) and it is shown to you with the file left alone.`;
 
 export const RESTORE_FILE_TOOL_INPUT_SCHEMA = {
 	type: "object",
@@ -259,31 +259,6 @@ function firstDivergentLine(before: string, after: string): number {
 		if (a[i] !== b[i]) return i + 1;
 	}
 	return a.length === b.length ? 0 : shared + 1;
-}
-
-/**
- * Resolve a path against the workspace, for a session with no transaction.
- *
- * The same three answers `resolveBaseFile` gives, minus the one that needs a
- * snapshot: there is no "uncovered", because nothing was skipped by a snapshot
- * that was never taken. A file inside the root reads as `created` — meaning
- * "the log decides what it had", which is exactly right here.
- */
-function resolveSessionFile(
-	root: string,
-	requestedPath: string,
-): BaseFileLookup {
-	const absolutePath = path.normalize(
-		path.isAbsolute(requestedPath)
-			? requestedPath
-			: path.resolve(root, requestedPath),
-	);
-	const relative = path.relative(path.normalize(root), absolutePath);
-	const inside =
-		relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
-	return inside
-		? { kind: "created", absolutePath }
-		: { kind: "outside", absolutePath };
 }
 
 /**

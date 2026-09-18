@@ -33,9 +33,11 @@ import {
 } from "../../extensions/tools/helpers";
 import type { ToolOperationResult } from "../../extensions/tools/types";
 import {
+	type BaseFileLookup,
 	describeMissingBase,
 	isTextBody,
 	resolveBaseFile,
+	resolveSessionFile,
 } from "./base-revision";
 import {
 	describeRevisions,
@@ -54,8 +56,17 @@ export interface BaseRevisionSource {
 	readonly pending: Snapshot | undefined;
 	/** Which transaction is open, for messages that need to name it. */
 	readonly transaction: number;
-	/** Every version of every file a tool has written this transaction. */
+	/** Every version of every file a tool has written. */
 	readonly revisions: RevisionLog;
+	/**
+	 * Where paths resolve when no transaction is open.
+	 *
+	 * Supplying it lets a session read its own history with the change protocol
+	 * off. There is no base snapshot then, so `#1` comes from the log, seeded
+	 * from the file itself at first touch — which is what the compaction
+	 * ledger's addresses point at either way.
+	 */
+	readonly root?: string;
 }
 
 /**
@@ -121,6 +132,32 @@ It is a read and nothing else. The file is untouched, and you are standing down 
 const ESCALATION_PARAMETER = `Read a version from during this escalation instead of the file as it is now: "${BASE_REVISION}" or "${ORIGINAL_REVISION}" for the workspace as you handed it over, "${LAST_REVISION}" for the version before the expert's most recent change to it, or a number such as "#3" taken from a note. Applies to every path in the call.`;
 
 /** How the escalation talks about the expert's revisions. */
+/**
+ * The words for a session that has no transactions.
+ *
+ * Same machinery, third arrangement. `#1` here is the file as this session
+ * first found it rather than a base a rollback returns the tree to, and the
+ * "closed" line has to say something the model can act on: with the protocol
+ * off there is no transaction to open, so "no transaction is open" would be
+ * true forever and mean nothing.
+ */
+export const SESSION_REVISION_WORDING: RevisionWording = {
+	description: `
+
+**Reading an earlier version of a file.** Set \`revision\` to be shown a file as it was earlier in this session, instead of as it is now:
+
+- \`"${ORIGINAL_REVISION}"\` — the file as it stood before this session first wrote to it.
+- \`"${LAST_REVISION}"\` — as it was before your most recent change to it.
+- \`"#3"\` — that numbered version. Every version a tool writes is numbered, and the result reporting the change names its number.
+
+The file on disk is left exactly as it is. Use this to see what you had before, and \`restore_file\` when you want it back.`,
+	parameter: `Which earlier version of the file to show, instead of the file as it stands: "${ORIGINAL_REVISION}" for the file before this session first wrote to it, "${LAST_REVISION}" for the version before your most recent change, or a number such as "#3".`,
+	span: "this session",
+	baseLabel: "the version from before this session's changes",
+	closed:
+		"Nothing has written that file in this session, so there is no earlier version of it held. Read the file as it stands.",
+};
+
 export const ESCALATION_REVISION_WORDING: RevisionWording = {
 	description: ESCALATION_DESCRIPTION,
 	parameter: ESCALATION_PARAMETER,
@@ -258,9 +295,39 @@ function isOriginal(requested: string): boolean {
 	);
 }
 
+/**
+ * How a call resolves a path, and where it displays it from.
+ *
+ * One object rather than a `Snapshot`, because the only two things these
+ * helpers ever took from the snapshot were the resolver and the root — and a
+ * session with no transaction has both without having a snapshot.
+ */
+interface RevisionPlace {
+	readonly root: string;
+	resolve(requestedPath: string): BaseFileLookup;
+}
+
+function placeOf(source: BaseRevisionSource): RevisionPlace | undefined {
+	const snapshot = source.pending;
+	if (snapshot) {
+		return {
+			root: snapshot.root,
+			resolve: (requestedPath) => resolveBaseFile(snapshot, requestedPath),
+		};
+	}
+	if (source.root === undefined) {
+		return undefined;
+	}
+	const root = source.root;
+	return {
+		root,
+		resolve: (requestedPath) => resolveSessionFile(root, requestedPath),
+	};
+}
+
 async function readFromRevision(
 	source: BaseRevisionSource,
-	snapshot: Snapshot,
+	place: RevisionPlace,
 	input: unknown,
 	context: AgentToolContext,
 	requested: string,
@@ -279,7 +346,7 @@ async function readFromRevision(
 					success: false,
 				};
 			}
-			const lookup = resolveBaseFile(snapshot, request.path);
+			const lookup = place.resolve(request.path);
 			if (lookup.kind === "uncovered" || lookup.kind === "outside") {
 				return {
 					query,
@@ -341,13 +408,13 @@ async function readFromRevision(
  */
 function annotateWithRevisions(
 	source: BaseRevisionSource,
-	snapshot: Snapshot,
+	place: RevisionPlace,
 	input: unknown,
 	results: ToolOperationResult[],
 ): ToolOperationResult[] {
 	const byQuery = new Map<string, string>();
 	for (const request of readFileRequestsFrom(input)) {
-		const lookup = resolveBaseFile(snapshot, request.path);
+		const lookup = place.resolve(request.path);
 		if (lookup.kind === "uncovered" || lookup.kind === "outside") continue;
 		byQuery.set(formatReadFileQuery(request), lookup.absolutePath);
 	}
@@ -399,7 +466,7 @@ export function withBaseRevisionReads<T extends AgentToolDefinition>(
 			execute: async (input: unknown, context: AgentToolContext) => {
 				const active = live();
 				const { revision, rest } = revisionOf(input);
-				const snapshot = active.source.pending;
+				const place = placeOf(active.source);
 				const wanted =
 					typeof revision === "string" ? revision.trim() : undefined;
 				// Names for the working tree are what the unadorned call already
@@ -416,11 +483,11 @@ export function withBaseRevisionReads<T extends AgentToolDefinition>(
 						rest,
 						context,
 					)) as ToolOperationResult[];
-					return snapshot && Array.isArray(plain)
-						? annotateWithRevisions(active.source, snapshot, rest, plain)
+					return place && Array.isArray(plain)
+						? annotateWithRevisions(active.source, place, rest, plain)
 						: plain;
 				}
-				if (!snapshot) {
+				if (!place) {
 					return [
 						{
 							query: wanted,
@@ -432,7 +499,7 @@ export function withBaseRevisionReads<T extends AgentToolDefinition>(
 				}
 				return readFromRevision(
 					active.source,
-					snapshot,
+					place,
 					rest,
 					context,
 					wanted,
