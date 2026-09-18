@@ -23,13 +23,14 @@
  */
 
 import { readFile as readFileFromDisk } from "node:fs/promises";
-import type { AgentToolDefinition } from "@cline/shared";
+import type { AgentTool, AgentToolDefinition } from "@cline/shared";
 import type { CompactionRevisions } from "../../extensions/context/compaction-revisions";
 import {
 	createRevisionLog,
 	type RevisionLog,
 	revisionSpan,
 } from "./file-revisions";
+import { createRestoreFileTool } from "./restore-file-tool";
 import { withRevisionCapture } from "./revision-capture";
 
 export interface SessionRevisions {
@@ -37,6 +38,16 @@ export interface SessionRevisions {
 	readonly log: RevisionLog;
 	/** What compaction reads and writes. */
 	readonly port: CompactionRevisions;
+	/**
+	 * Tools that exist because the history does.
+	 *
+	 * Just `restore_file` today, and it is the reason any of this is worth
+	 * having: it was added by the change protocol's `decorateTools` and by
+	 * nothing else, so a session with the protocol off could record nothing and
+	 * undo nothing. Added by the host only when the protocol is absent — with
+	 * it, the protocol adds its own, bound to the transaction.
+	 */
+	readonly tools: readonly AgentTool[];
 	/**
 	 * Wrap the session's tools so writes are recorded.
 	 *
@@ -56,6 +67,11 @@ export function createSessionRevisions(options: {
 	lastCheck?: () => string | undefined;
 	/** Supplied by tests that want to inspect the log they passed in. */
 	log?: RevisionLog;
+	/** Retires what the model had read about a file a restore has moved. */
+	forgetReads?: (absolutePath: string) => void;
+	/** For the host to say, in its own voice, that a file was put back. */
+	onRestored?: (event: { path: string; deleted: boolean }) => void;
+	onError?: (message: string, error: unknown) => void;
 }): SessionRevisions {
 	const log = options.log ?? createRevisionLog();
 	const readFile =
@@ -70,8 +86,31 @@ export function createSessionRevisions(options: {
 			}
 		});
 
+	const source = {
+		// No transaction of its own, ever: a host that has the protocol routes
+		// through the protocol's decoration instead of this one.
+		pending: undefined,
+		root: options.root,
+		transaction: 0,
+		revisions: log,
+	};
+
 	return {
 		log,
+		tools: [
+			createRestoreFileTool({
+				controller: source,
+				scope: "session",
+				...(options.forgetReads ? { forgetReads: options.forgetReads } : {}),
+				...(options.onRestored
+					? {
+							onRestored: ({ path: restored, deleted }) =>
+								options.onRestored?.({ path: restored, deleted }),
+						}
+					: {}),
+				...(options.onError ? { onError: options.onError } : {}),
+			}),
+		],
 		port: {
 			spanFor: (filePath) => revisionSpan(log.revisions(filePath)),
 			tracked: () => log.tracked(),
@@ -79,14 +118,7 @@ export function createSessionRevisions(options: {
 		},
 		decorate: (tools) =>
 			withRevisionCapture(tools, {
-				source: {
-					// No transaction of its own. A protocol session goes through
-					// the protocol's decoration instead, which supplies one.
-					pending: undefined,
-					root: options.root,
-					transaction: 0,
-					log,
-				},
+				source: { ...source, log },
 				readFile,
 				...(options.lastCheck ? { lastCheck: options.lastCheck } : {}),
 			}),

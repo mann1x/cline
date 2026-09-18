@@ -1708,12 +1708,14 @@ export class LocalRuntimeHost implements RuntimeHost {
 		const toolsWithProtocol = atomicProtocol
 			? atomicProtocol.decorateTools([...tools, ...atomicProtocol.tools])
 			: // No protocol, so nothing else is going to record what the writing
-				// tools do. This is the case the decoupling exists for: the
-				// history, the ledger's file addresses and the retention rule all
-				// work with the protocol off. Only one of the two ever runs --
-				// the protocol's own decoration wraps the same list against the
-				// same log, and wrapping twice would record every write twice.
-				sessionRevisions.decorate(tools);
+				// tools do, and nothing else is going to offer a way back. This
+				// is the case the decoupling exists for: the history, the
+				// ledger's file addresses, the retention rule and `restore_file`
+				// all work with the protocol off. Only one of the two branches
+				// ever runs -- the protocol's own decoration wraps the same list
+				// against the same log and adds its own `restore_file`, and doing
+				// both would record every write twice and offer the tool twice.
+				sessionRevisions.decorate([...tools, ...sessionRevisions.tools]);
 		// The expert gets the session's tools WITHOUT the change protocol, and
 		// less the tool that reached it. Set before the session's own list is
 		// extended: an expert that could escalate would escalate to itself.

@@ -92,6 +92,20 @@ describe("createSessionRevisions", () => {
 		expect(revisions.port.spanFor(FILE)).toBeUndefined();
 	});
 
+	it("offers restore_file, described without transactions", () => {
+		// The shield itself. `restore_file` was added by the protocol's
+		// `decorateTools` and by nothing else, so a session with the protocol
+		// off had no way to undo anything — measured on pandorum, where a model
+		// that had just overwritten a 133-line file with "test content" checked
+		// for git, found none, and asked the user to paste the file back.
+		const revisions = createSessionRevisions({ root: ROOT });
+		const restore = revisions.tools.find((t) => t.name === "restore_file");
+
+		expect(restore).toBeDefined();
+		expect(restore?.description).not.toContain("transaction");
+		expect(restore?.description).toContain("before this session first wrote");
+	});
+
 	it("leaves a tool that cannot write a file alone", () => {
 		const revisions = createSessionRevisions({ root: ROOT });
 		const plain = {

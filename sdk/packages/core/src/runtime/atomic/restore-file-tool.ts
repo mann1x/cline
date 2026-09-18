@@ -33,6 +33,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { type AgentTool, createTool } from "@cline/shared";
 import {
+	type BaseFileLookup,
 	describeMissingBase,
 	isTextBody,
 	resolveBaseFile,
@@ -128,6 +129,32 @@ This is not the end of the transaction and it does not spend one — you carry o
 
 If you only want to *see* what the file said before your changes, do not restore it — call \`read_files\` with \`revision: "base"\` and it is shown to you with the file left alone.`;
 
+/**
+ * The same tool, described for a session that has no transactions.
+ *
+ * Written separately rather than templated, because almost every sentence in
+ * the transaction version is about the transaction: what the base is, what
+ * survives, what a restore does not spend. Here the base is the file as this
+ * session first found it, there is nothing to spend, and the one thing that
+ * carries over unchanged is the part that matters — going back is exact and
+ * retyping from memory is not.
+ */
+export const RESTORE_FILE_TOOL_SESSION_DESCRIPTION = `Put one file back to a version of it you had earlier, discarding what you have written to it since.
+
+Use it the moment an edit goes wrong in a way you would otherwise have to undo by hand — you deleted more than you meant to, you merged two lines together, you replaced the file with something that was never meant to be its contents. Restoring is exact. Retyping the original from memory is not, and on a long or minified line it is where runs go to die.
+
+Every time a tool writes a file, that version is kept and numbered, and \`revision\` says which one to return to:
+
+- \`revision: "${LAST_REVISION}"\` undoes only your most recent change to the file, keeping everything before it. This is almost always the one you want after a single edit goes wrong.
+- \`revision: "#3"\` (or \`3\`) returns to that numbered version. Every edit's result tells you the number it just made, and every read of the file lists the ones you can go back to.
+- \`revision: "${ORIGINAL_REVISION}"\` is the file as it stood before this session first wrote to it, which is what you get if you say nothing.
+
+It affects one file, and only files this session has written: a file nothing has touched has no earlier version held, and this will say so rather than guess.
+
+Read the file again afterwards: its line numbers are back to what they were at that revision, and any range you read earlier no longer addresses the same code.
+
+If you only want to *see* what the file said before your changes, ask \`read_files\` for the revision instead and the file is left alone.`;
+
 export const RESTORE_FILE_TOOL_INPUT_SCHEMA = {
 	type: "object",
 	properties: {
@@ -158,10 +185,20 @@ export const RESTORE_FILE_TOOL_INPUT_SCHEMA = {
 export interface RestoreFileSource {
 	/** The open transaction's base, or nothing when none is open. */
 	readonly pending: Snapshot | undefined;
-	/** Which transaction is open. A new one gets a fresh budget. */
+	/** Which transaction is open, or 0 when there is no protocol. */
 	readonly transaction: number;
-	/** Every version of every file a tool has written this transaction. */
+	/** Every version of every file a tool has written. */
 	readonly revisions: RevisionLog;
+	/**
+	 * Where paths resolve when no transaction is open.
+	 *
+	 * Supplying it is what makes the tool work with the change protocol off.
+	 * The base then comes from the log -- `#1`, seeded from the file itself at
+	 * first touch -- rather than from a snapshot, so the undo covers this
+	 * session's writes to that one file instead of the whole tree. Left out,
+	 * a call with no transaction open is refused exactly as it was.
+	 */
+	readonly root?: string;
 }
 
 export interface RestoreFileToolOptions {
@@ -184,6 +221,14 @@ export interface RestoreFileToolOptions {
 		deleted: boolean;
 	}) => void;
 	onError?: (message: string, error: unknown) => void;
+	/**
+	 * Which world this instance is describing.
+	 *
+	 * `session` swaps the description for one that does not talk about
+	 * transactions. The execute path already tells them apart from
+	 * `controller.pending`; this is the half that is fixed at creation time.
+	 */
+	scope?: "transaction" | "session";
 }
 
 /**
@@ -216,6 +261,49 @@ function firstDivergentLine(before: string, after: string): number {
 	return a.length === b.length ? 0 : shared + 1;
 }
 
+/**
+ * Resolve a path against the workspace, for a session with no transaction.
+ *
+ * The same three answers `resolveBaseFile` gives, minus the one that needs a
+ * snapshot: there is no "uncovered", because nothing was skipped by a snapshot
+ * that was never taken. A file inside the root reads as `created` — meaning
+ * "the log decides what it had", which is exactly right here.
+ */
+function resolveSessionFile(
+	root: string,
+	requestedPath: string,
+): BaseFileLookup {
+	const absolutePath = path.normalize(
+		path.isAbsolute(requestedPath)
+			? requestedPath
+			: path.resolve(root, requestedPath),
+	);
+	const relative = path.relative(path.normalize(root), absolutePath);
+	const inside =
+		relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+	return inside
+		? { kind: "created", absolutePath }
+		: { kind: "outside", absolutePath };
+}
+
+/**
+ * Revisions the log holds that this tool did not make.
+ *
+ * The "has work happened" clock. Its own restores are excluded deliberately:
+ * every restore records a revision, so counting them would make each call look
+ * like progress and hand the budget back forever — which is the loop, not the
+ * cure.
+ */
+function workRevisions(log: RevisionLog): number {
+	let total = 0;
+	for (const filePath of log.tracked()) {
+		for (const revision of log.revisions(filePath)) {
+			if (revision.by !== RESTORE_FILE_TOOL_NAME) total += 1;
+		}
+	}
+	return total;
+}
+
 export function createRestoreFileTool(
 	options: RestoreFileToolOptions,
 ): AgentTool {
@@ -224,6 +312,10 @@ export function createRestoreFileTool(
 	// empty-attempt budget is reset by a transaction that contained work.
 	let spentIn = 0;
 	let lastTransaction = 0;
+	// How much history the log held when this tool last answered a restore, so
+	// a session with no transaction can tell "went back and then did something"
+	// from "went back, and back, and back".
+	let writesAtLastRestore = -1;
 	// Counted apart and reported, the way `editor` reports a refused no-op.
 	// Restoring a file that already matches the base is not thrash, it is a
 	// model that has lost track of what it changed — and being told the file is
@@ -232,7 +324,10 @@ export function createRestoreFileTool(
 
 	return createTool({
 		name: RESTORE_FILE_TOOL_NAME,
-		description: RESTORE_FILE_TOOL_DESCRIPTION,
+		description:
+			options.scope === "session"
+				? RESTORE_FILE_TOOL_SESSION_DESCRIPTION
+				: RESTORE_FILE_TOOL_DESCRIPTION,
 		inputSchema: RESTORE_FILE_TOOL_INPUT_SCHEMA as unknown as Record<
 			string,
 			unknown
@@ -240,13 +335,28 @@ export function createRestoreFileTool(
 		execute: async (input: unknown): Promise<string> => {
 			const snapshot = options.controller.pending;
 			const transaction = options.controller.transaction;
+			const sessionRoot = options.controller.root;
 			if (transaction !== lastTransaction) {
 				lastTransaction = transaction;
 				spentIn = 0;
 				noOps = 0;
 			}
-			if (!snapshot) {
+			if (!snapshot && sessionRoot === undefined) {
 				return "No transaction is open, so there is nothing to put the file back to.";
+			}
+			// With no transaction there is no boundary to hand the budget back
+			// at, so the reset is the pathology itself rather than a clock: a
+			// run of restores with nothing done in between is the loop this
+			// budget exists to stop, and one real write clears it. Measured on
+			// the runs that produced the budget: 108 restores in one
+			// transaction, 102 of them to the same revision of the same file.
+			if (!snapshot) {
+				const writes = workRevisions(options.controller.revisions);
+				if (writes !== writesAtLastRestore) {
+					spentIn = 0;
+					noOps = 0;
+				}
+				writesAtLastRestore = writes;
 			}
 
 			const requested =
@@ -288,25 +398,37 @@ export function createRestoreFileTool(
 						? String(requestedRevision)
 						: ORIGINAL_REVISION;
 
-			const lookup = resolveBaseFile(snapshot, requested.trim());
+			const root = snapshot?.root ?? (sessionRoot as string);
+			const historySpan = snapshot ? "this transaction" : "this session";
+			const lookup = snapshot
+				? resolveBaseFile(snapshot, requested.trim())
+				: resolveSessionFile(root, requested.trim());
 			if (lookup.kind === "uncovered" || lookup.kind === "outside") {
 				return describeMissingBase(lookup);
 			}
 
 			const display =
-				path.relative(snapshot.root, lookup.absolutePath) ||
-				lookup.absolutePath;
+				path.relative(root, lookup.absolutePath) || lookup.absolutePath;
 
 			const log = options.controller.revisions;
-			// Seed the base before resolving anything, so a file that no tool has
-			// written still has #1 to go back to. Without this the log would
-			// record its first entry as "did not exist" for a file the snapshot
-			// holds, and `original` would mean deleting it.
-			log.seed(
-				lookup.absolutePath,
-				lookup.kind === "held" ? lookup.body : undefined,
-			);
+			if (snapshot) {
+				// Seed the base before resolving anything, so a file that no tool
+				// has written still has #1 to go back to. Without this the log
+				// would record its first entry as "did not exist" for a file the
+				// snapshot holds, and `original` would mean deleting it.
+				log.seed(
+					lookup.absolutePath,
+					lookup.kind === "held" ? lookup.body : undefined,
+				);
+			}
 			const history = log.revisions(lookup.absolutePath);
+			// Outside a transaction there is no snapshot to seed from, so a file
+			// with no history has no earlier version anywhere -- and saying so is
+			// a different fact from "no transaction is open", which was true of
+			// every call and told the model nothing it could act on.
+			if (!snapshot && history.length === 0) {
+				return `\`${display}\` has no earlier version held: nothing has written to it in this session, so there is nothing to put back. Only files this session has changed can be restored.`;
+			}
 
 			// Searching is not restoring: it writes nothing, spends no budget and
 			// is allowed even once the restore limit is reached — a model that has
@@ -320,14 +442,14 @@ export function createRestoreFileTool(
 				return [
 					`Revision #${found.index} of \`${display}\` is no longer held: its content was released to stay inside the memory this transaction may spend on file history. The revisions still held are below, and one of them is the nearest point you can return to.`,
 					"",
-					describeRevisions(display, history),
+					describeRevisions(display, history, { span: historySpan }),
 				].join("\n");
 			}
 			if (found.kind !== "found") {
 				return [
 					`\`${revisionSpec}\` does not name a version of \`${display}\` that exists.`,
 					"",
-					describeRevisions(display, history),
+					describeRevisions(display, history, { span: historySpan }),
 				].join("\n");
 			}
 			const target = found.revision.body;
@@ -376,9 +498,11 @@ export function createRestoreFileTool(
 					RESTORE_FILE_TOOL_NAME,
 				);
 				return [
-					`\`${display}\` did not exist at ${targetLabel}, so it has been deleted — that is what putting it back means.${removal ? ` That is now revision #${removal.index}.` : ""} ${describeBudget(spentIn)}`,
+					`\`${display}\` did not exist at ${targetLabel}, so it has been deleted — that is what putting it back means.${removal ? ` That is now revision #${removal.index}.` : ""} ${describeBudget(spentIn, snapshot !== undefined)}`,
 					"",
-					describeRevisions(display, log.revisions(lookup.absolutePath)),
+					describeRevisions(display, log.revisions(lookup.absolutePath), {
+						span: historySpan,
+					}),
 				].join("\n");
 			}
 
@@ -447,20 +571,27 @@ export function createRestoreFileTool(
 					: describeDiscarded(current, target);
 
 			return [
-				`\`${display}\` is back to ${targetLabel}: ${restoredLines} lines, ${discarded}.${made ? ` That is now revision #${made.index}.` : ""} Every line number you read before this now points somewhere else, so read the file again before you edit it. ${describeBudget(spentIn)}`,
+				`\`${display}\` is back to ${targetLabel}: ${restoredLines} lines, ${discarded}.${made ? ` That is now revision #${made.index}.` : ""} Every line number you read before this now points somewhere else, so read the file again before you edit it. ${describeBudget(spentIn, snapshot !== undefined)}`,
 				"",
-				describeRevisions(display, log.revisions(lookup.absolutePath)),
+				describeRevisions(display, log.revisions(lookup.absolutePath), {
+					span: historySpan,
+				}),
 			].join("\n");
 		},
 	});
 }
 
-function describeBudget(spent: number): string {
+function describeBudget(spent: number, inTransaction = true): string {
 	const left = MAX_RESTORES_PER_TRANSACTION - spent;
+	// "in this transaction" is a lie when there is none, and the model reads
+	// these words as facts about what it can do next.
+	const scope = inTransaction
+		? " in this transaction"
+		: " before making a change";
 	const budget =
 		left > 0
-			? `${left} more restore${left === 1 ? "" : "s"} available in this transaction.`
-			: "That was the last restore available in this transaction.";
+			? `${left} more restore${left === 1 ? "" : "s"} available${scope}.`
+			: `That was the last restore available${scope}.`;
 	const habit = describeRestoreHabit(spent);
 	return habit ? `${budget} ${habit}` : budget;
 }

@@ -723,10 +723,15 @@ export function createRevisionLog(
 export function describeRevisions(
 	display: string,
 	revisions: readonly FileRevision[],
-	options: { limit?: number } = {},
+	options: { limit?: number; span?: string } = {},
 ): string {
+	// What the history is *of*. "this transaction" is what it was when a
+	// revision could only exist inside one; a session with the change protocol
+	// off has the same list and no transaction, and naming one there describes
+	// a rollback the model cannot ask for.
+	const span = options.span ?? "this transaction";
 	if (revisions.length === 0) {
-		return `No revisions of \`${display}\` have been recorded in this transaction.`;
+		return `No revisions of \`${display}\` have been recorded in ${span}.`;
 	}
 	// A file edited forty times would otherwise put forty lines into every
 	// receipt. The ends are what get asked for -- #1 and the recent ones -- so
@@ -772,7 +777,7 @@ export function describeRevisions(
 		return `  #${revision.index}  ${what} — ${notes.join(", ")}\n        ${revision.note}`;
 	});
 	return [
-		`Revisions of \`${display}\` in this transaction:`,
+		`Revisions of \`${display}\` in ${span}:`,
 		...lines,
 		"",
 		`Restore any of them with \`restore_file\` and \`revision\`: a number, \`"${ORIGINAL_REVISION}"\` for #1, or \`"${LAST_REVISION}"\` to undo just the most recent change.`,
