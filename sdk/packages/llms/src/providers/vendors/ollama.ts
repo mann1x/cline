@@ -33,6 +33,12 @@ import { keepToolImagesMiddleware } from "../middleware/split-tool-images";
 import { primeOllamaReinjection } from "../reasoning-history";
 import { installAiSdkWarningLogger } from "../sdk-warnings";
 import {
+	primeOllamaAccountStatus,
+	readOllamaCloudFlag,
+	readOllamaRecommendation,
+	resetOllamaAccountStatus,
+} from "./ollama-account";
+import {
 	createOllamaHealthProbe,
 	watchForStall,
 	withStallWatchdog,
@@ -79,7 +85,7 @@ export function readOllamaNumCtx(context: GatewayProviderContext): number {
 	if (typeof value === "number" && Number.isFinite(value) && value > 0) {
 		return Math.floor(value);
 	}
-	const declared = readDeclaredNumCtx(
+	const declared = readResolvedOllamaWindow(
 		context.config?.baseUrl,
 		context.model?.id,
 	);
@@ -147,6 +153,89 @@ export function readDeclaredFamily(
 	return declaredFamily.get(declaredKey(baseUrl, modelId)) ?? undefined;
 }
 
+/**
+ * The window the model was *trained* with, keyed the same way as its `num_ctx`.
+ *
+ * `/api/show` reports it under the architecture's own prefix --
+ * `model_info["kimi-k2.context_length"] = 262144` -- and for a cloud model it
+ * is the only window on the response at all: a cloud tag has no `parameters`
+ * block, so `num_ctx` is absent and every cloud model was being loaded, and
+ * more importantly *budgeted*, at the local default.
+ *
+ * It is deliberately **not** used for a local model. There `num_ctx` is what
+ * the runner will honour, and the trained window is a ceiling the card may not
+ * have the memory for -- offering it would size compaction against a window the
+ * server is never going to give.
+ */
+const declaredTrainedCtx = new Map<string, number | null>();
+
+/** The trained window, if it has been looked up and the model declares one. */
+export function readDeclaredTrainedCtx(
+	baseUrl: string | undefined,
+	modelId: string | undefined,
+): number | undefined {
+	if (!modelId) {
+		return undefined;
+	}
+	return declaredTrainedCtx.get(declaredKey(baseUrl, modelId)) ?? undefined;
+}
+
+/** Parse the architecture's `*.context_length` out of `/api/show`. */
+export function parseDeclaredTrainedCtx(payload: unknown): number | undefined {
+	if (!payload || typeof payload !== "object") {
+		return undefined;
+	}
+	const info = (payload as { model_info?: unknown }).model_info;
+	if (!info || typeof info !== "object") {
+		return undefined;
+	}
+	for (const [key, value] of Object.entries(info as Record<string, unknown>)) {
+		if (!key.endsWith(".context_length")) {
+			continue;
+		}
+		if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+			return Math.floor(value);
+		}
+	}
+	return undefined;
+}
+
+/**
+ * The window to load a model with, from every source the server offers.
+ *
+ * In order, and the order is the point:
+ *
+ * 1. `parameters.num_ctx` -- the Modelfile's own value. It is what the runner
+ *    will use, so nothing may overrule it.
+ * 2. For a **cloud** model only, the `context_length` the recommendations list
+ *    publishes, then the trained window from `/api/show`. A cloud model has no
+ *    `num_ctx` to read and no local memory to run out of; the 32k default was
+ *    costing a 262k model seven eighths of its context and compacting against a
+ *    window eight times too small.
+ * 3. Nothing, and the caller falls back to {@link OLLAMA_DEFAULT_NUM_CTX}
+ *    exactly as it did before.
+ *
+ * Both host applications must read this rather than `readDeclaredNumCtx`: the
+ * wire's `num_ctx` and the compaction budget are derived from one value in this
+ * fork, and they have drifted apart once per host every time they were not.
+ */
+export function readResolvedOllamaWindow(
+	baseUrl: string | undefined,
+	modelId: string | undefined,
+): number | undefined {
+	const declared = readDeclaredNumCtx(baseUrl, modelId);
+	if (declared !== undefined) {
+		return declared;
+	}
+	if (readOllamaCloudFlag(baseUrl, modelId) !== true) {
+		return undefined;
+	}
+	return (
+		readOllamaRecommendation(baseUrl, modelId)?.contextLength ??
+		readDeclaredTrainedCtx(baseUrl, modelId)
+	);
+}
+
 /** Parse `details.family` out of what `/api/show` returns. */
 export function parseDeclaredFamily(payload: unknown): string | undefined {
 	if (!payload || typeof payload !== "object") {
@@ -207,6 +296,11 @@ export async function primeDeclaredNumCtx(
 		return;
 	}
 	const root = normalizeOllamaBaseUrl(baseUrl) ?? "http://localhost:11434/api";
+	// The catalog and the recommendations describe the *server*, so they are
+	// primed once per root beside the per-model read rather than with it. A
+	// failure here leaves the model's own `num_ctx` doing exactly what it did
+	// before, which is why it is not awaited as a precondition.
+	const account = primeOllamaAccountStatus(baseUrl, fetchImpl, logger);
 	try {
 		const response = await fetchImpl(`${root}/show`, {
 			method: "POST",
@@ -216,6 +310,8 @@ export async function primeDeclaredNumCtx(
 		if (!response.ok) {
 			declaredNumCtx.set(key, null);
 			declaredFamily.set(key, null);
+			declaredTrainedCtx.set(key, null);
+			await account;
 			return;
 		}
 		const payload = await response.json();
@@ -231,9 +327,22 @@ export async function primeDeclaredNumCtx(
 		if (family !== undefined) {
 			logger?.debug?.(`[ollama] ${modelId} declares family ${family}`);
 		}
+		const trained = parseDeclaredTrainedCtx(payload);
+		declaredTrainedCtx.set(key, trained ?? null);
 	} catch {
 		declaredNumCtx.set(key, null);
 		declaredFamily.set(key, null);
+		declaredTrainedCtx.set(key, null);
+	}
+	await account;
+	const resolved = readResolvedOllamaWindow(baseUrl, modelId);
+	if (
+		resolved !== undefined &&
+		readDeclaredNumCtx(baseUrl, modelId) === undefined
+	) {
+		logger?.debug?.(
+			`[ollama] ${modelId} is a cloud model declaring no num_ctx; using its published window of ${resolved} rather than the ${OLLAMA_DEFAULT_NUM_CTX} default`,
+		);
 	}
 }
 
@@ -241,6 +350,8 @@ export async function primeDeclaredNumCtx(
 export function resetDeclaredNumCtx(): void {
 	declaredNumCtx.clear();
 	declaredFamily.clear();
+	declaredTrainedCtx.clear();
+	resetOllamaAccountStatus();
 }
 
 /**

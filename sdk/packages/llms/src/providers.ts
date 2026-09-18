@@ -147,6 +147,10 @@ export {
 	// on the model's architecture, and a local model's name does not carry one.
 	readDeclaredFamily,
 	readDeclaredNumCtx,
+	// The window to actually load with, from every source the server offers.
+	// A cloud model declares no `num_ctx`, so this is the only one of the three
+	// that answers for one.
+	readResolvedOllamaWindow,
 	// The dispatcher is only honoured by a fetch that reads it, so the host
 	// hands over both or neither.
 	setOllamaFetch,
@@ -154,3 +158,17 @@ export {
 	// carries a setter nobody calls rather than needing a conditional export.
 	setOllamaNoStreamTimeoutDispatcher,
 } from "./providers/vendors/ollama";
+export {
+	looksLikeCloudName,
+	matchOllamaRecommendation,
+	type OllamaAccount,
+	type OllamaAccountStatus,
+	type OllamaCatalogEntry,
+	type OllamaRecommendation,
+	primeOllamaAccountStatus,
+	readOllamaAccountCache,
+	readOllamaAccountStatus,
+	readOllamaCloudFlag,
+	readOllamaRecommendation,
+	resetOllamaAccountStatus,
+} from "./providers/vendors/ollama-account";

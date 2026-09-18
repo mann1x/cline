@@ -37,6 +37,9 @@ vi.mock("@/services/grpc-client", () => ({
 	ModelsServiceClient: {
 		getOllamaModelParameters: mocks.getOllamaModelParameters,
 		getOllamaModels: mocks.getOllamaModels,
+		// The account strip under the picker reads this on mount. It renders
+		// nothing for an unreachable server, which is what these tests want.
+		readOllamaAccount: async () => ({ reachable: false, models: [] }),
 	},
 }))
 vi.mock("@/hooks/useProviderConfig", () => ({

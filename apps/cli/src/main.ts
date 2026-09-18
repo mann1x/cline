@@ -1177,11 +1177,14 @@ export async function runCli(): Promise<void> {
 			const ollamaBaseUrl = selectedProviderSettings?.baseUrl as
 				| string
 				| undefined;
-			const { primeDeclaredNumCtx, readDeclaredNumCtx } = await import(
+			const { primeDeclaredNumCtx, readResolvedOllamaWindow } = await import(
 				"@cline/core"
 			);
 			await primeDeclaredNumCtx(ollamaBaseUrl, resolvedModelId, fetch);
-			const declared = readDeclaredNumCtx(ollamaBaseUrl, resolvedModelId);
+			// Not `readDeclaredNumCtx`: a cloud model has no `num_ctx` to
+			// declare, so that answers `undefined` for every one of them and
+			// the catalog default stands in for a published 262k window.
+			const declared = readResolvedOllamaWindow(ollamaBaseUrl, resolvedModelId);
 			declaredOllamaWindow = declared;
 			if (declared !== undefined) {
 				knownModels = {

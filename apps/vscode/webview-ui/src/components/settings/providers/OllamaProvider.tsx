@@ -14,6 +14,7 @@ import { ModelsServiceClient } from "@/services/grpc-client"
 import { ApiKeyField } from "../common/ApiKeyField"
 import { BaseUrlField } from "../common/BaseUrlField"
 import { DebouncedTextField } from "../common/DebouncedTextField"
+import { OllamaAccountStrip } from "../common/OllamaAccountStrip"
 import { RequestTimingsToggle } from "../common/RequestTimingsToggle"
 import { SamplingSection } from "../common/SamplingSection"
 import { useSamplingWrite } from "../common/sampling-fields"
@@ -402,6 +403,12 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 				placeholder={ollamaModels.length > 0 ? "Search and select a model..." : "e.g. llama3.1"}
 				selectedModelId={selectedModel.modelId || ""}
 			/>
+
+			{/* What the server says about the account and the selected model:
+			    whether it is a cloud model at all, which plan it needs, and the
+			    window and thinking settings its publisher states. All read;
+			    none of it inferred from the model's name. */}
+			<OllamaAccountStrip modelId={selectedModel.modelId || undefined} providerId="ollama" />
 
 			{/* Thinking. Rendered only once the provider config has resolved, for
 			    the same reason as the context-window field below: mounting

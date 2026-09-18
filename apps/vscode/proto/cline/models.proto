@@ -78,6 +78,59 @@ service ModelsService {
   // particular never /capacity, every GET of which folds the engine's
   // admission learner on the published c7 build.
   rpc readPolykvStatus(StringRequest) returns (PolykvStatusResponse);
+  // Reads an Ollama endpoint's account and model catalog for display.
+  //
+  // Three reads: POST /api/me, which the local server signs with the host's own
+  // SSH key; GET /api/experimental/model-recommendations, which needs no auth
+  // and is re-served from a local cache; and GET /api/tags.
+  rpc readOllamaAccount(StringRequest) returns (OllamaAccountResponse);
+}
+
+// What the recommendations list publishes about one model. Absent for a model
+// the list does not name -- it holds a handful of entries, not a census.
+message OllamaRecommendationInfo {
+  string model = 1;
+  optional string description = 2;
+  // The publisher's own window. Absent, never zero: a local recommendation
+  // sends 0 to mean "the model decides".
+  optional int32 context_length = 3;
+  optional int32 max_output_tokens = 4;
+  // "free" or "pro" today. Left open: a tier this build has not heard of must
+  // still render.
+  optional string required_plan = 5;
+  // Normalized to strings. The wire mixes booleans and levels in one array, so
+  // `false` arrives as "off" and `true` as "on".
+  repeated string thinking_values = 6;
+  optional string thinking_default = 7;
+}
+
+// One entry of /api/tags.
+message OllamaCatalogModel {
+  string name = 1;
+  // From `remote_host`/`remote_model`, and from nothing else. A cloud tag need
+  // not be named `:cloud`, and a cloud model does report a family.
+  bool cloud = 2;
+  optional string remote_host = 3;
+  optional string remote_model = 4;
+  optional string family = 5;
+  repeated string capabilities = 6;
+  optional OllamaRecommendationInfo recommendation = 7;
+}
+
+// What the settings panel shows about an Ollama endpoint.
+message OllamaAccountResponse {
+  // Whether /api/tags answered. A server with no models and a server that is
+  // not there are different things.
+  bool reachable = 1;
+  // Whether /api/me answered at all. A 503 means the server could not check,
+  // which is not a verdict on the account and must not read as signed out.
+  bool account_reachable = 2;
+  bool signed_in = 3;
+  optional string plan = 4;
+  optional string name = 5;
+  // As the server itself computed it, on the 401.
+  optional string signin_url = 6;
+  repeated OllamaCatalogModel models = 7;
 }
 
 // One pool in the tree, for display.

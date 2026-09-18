@@ -34,7 +34,7 @@ import {
 	OLLAMA_DEFAULT_CONTEXT_WINDOW,
 	OLLAMA_DEFAULT_REASONING_EFFORT,
 	primeDeclaredNumCtx,
-	readDeclaredNumCtx,
+	readResolvedOllamaWindow,
 	resolveAgentSlotLimit,
 	resolveDefaultMaxOutputTokens,
 	resolveLlamaCppThinkBudgetTokens,
@@ -973,7 +973,10 @@ export function resolveOllamaProviderConfig(
 	// cannot tell a considered 32768 from a placeholder one. Primed by
 	// `buildSessionConfig` before this runs, so the first request already has
 	// it — a `num_ctx` that changes between turns reloads the model mid-task.
-	const declaredContextWindow = readDeclaredNumCtx(config.ollamaBaseUrl, modelId)
+	// A cloud model declares no `num_ctx` at all -- its `/api/show` carries no
+	// `parameters` block -- so this reads the published window from the
+	// recommendations list, or the trained one from `model_info`, for those.
+	const declaredContextWindow = readResolvedOllamaWindow(config.ollamaBaseUrl, modelId)
 	const contextWindow = settingsContextWindow ?? legacyContextWindow ?? declaredContextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW
 	const timeoutMs = config.requestTimeoutMs
 	return {

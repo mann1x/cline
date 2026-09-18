@@ -14,6 +14,7 @@ import {
 	OLLAMA_DEFAULT_TIMEOUT_MS,
 	parseDeclaredFamily,
 	parseDeclaredNumCtx,
+	parseDeclaredTrainedCtx,
 	primeDeclaredNumCtx,
 	readDeclaredFamily,
 	readOllamaNumCtx,
@@ -119,6 +120,38 @@ describe("the window the model declares for itself", () => {
 		) as unknown as typeof fetch;
 	}
 
+	function urlsOf(fetchImpl: typeof fetch): string[] {
+		return (
+			fetchImpl as unknown as { mock: { calls: unknown[][] } }
+		).mock.calls.map((call) => String(call[0]));
+	}
+
+	function callsEnding(fetchImpl: typeof fetch, suffix: string): number {
+		return urlsOf(fetchImpl).filter((url) => url.endsWith(suffix)).length;
+	}
+
+	function showCalls(fetchImpl: typeof fetch): number {
+		return callsEnding(fetchImpl, "/show");
+	}
+
+	/**
+	 * A server that answers all four endpoints, so a cloud model's window can
+	 * be resolved the way it is resolved live.
+	 */
+	function serverFetch(show: unknown, tags: unknown, recommendations: unknown) {
+		return vi.fn(async (url: string | URL | Request) => {
+			const href = String(url);
+			const body = href.endsWith("/show")
+				? show
+				: href.endsWith("/api/tags")
+					? tags
+					: href.endsWith("/api/experimental/model-recommendations")
+						? recommendations
+						: {};
+			return new Response(JSON.stringify(body), { status: 200 });
+		}) as unknown as typeof fetch;
+	}
+
 	/** A context that names the server it is talking to, as a real one does. */
 	function contextAt(
 		baseUrl: string | undefined,
@@ -186,7 +219,131 @@ describe("the window the model declares for itself", () => {
 		const fetchImpl = showFetch(SHOW_BODY);
 		await primeDeclaredNumCtx(LOCAL, "a-model", fetchImpl);
 		await primeDeclaredNumCtx(LOCAL, "a-model", fetchImpl);
-		expect(fetchImpl).toHaveBeenCalledTimes(1);
+		expect(showCalls(fetchImpl)).toBe(1);
+	});
+
+	// The catalog and the recommendations describe the server, not the model,
+	// so a second model on the same endpoint must not ask for them again.
+	it("reads the server's catalog once, however many models are primed", async () => {
+		const fetchImpl = showFetch(SHOW_BODY);
+		await primeDeclaredNumCtx(LOCAL, "a-model", fetchImpl);
+		await primeDeclaredNumCtx(LOCAL, "another-model", fetchImpl);
+		expect(showCalls(fetchImpl)).toBe(2);
+		expect(callsEnding(fetchImpl, "/api/tags")).toBe(1);
+		expect(
+			callsEnding(fetchImpl, "/api/experimental/model-recommendations"),
+		).toBe(1);
+	});
+
+	/**
+	 * A cloud tag's `/api/show` has no `parameters` block at all, so there is no
+	 * `num_ctx` to read and every cloud model was being loaded -- and budgeted
+	 * -- at the local default. `model_info["<arch>.context_length"]` is on the
+	 * same response this already fetches.
+	 */
+	it("reads the trained window out of model_info", () => {
+		expect(
+			parseDeclaredTrainedCtx({
+				model_info: { "kimi-k2.context_length": 262144 },
+			}),
+		).toBe(262144);
+		expect(parseDeclaredTrainedCtx({ model_info: {} })).toBeUndefined();
+		expect(parseDeclaredTrainedCtx({})).toBeUndefined();
+	});
+
+	it("gives a cloud model the window its publisher states", async () => {
+		const fetchImpl = serverFetch(
+			{ model_info: { "kimi-k2.context_length": 262144 } },
+			{
+				models: [
+					{
+						name: "kimi-k2.6:cloud",
+						remote_host: "https://ollama.com:443",
+						remote_model: "kimi-k2.6",
+					},
+				],
+			},
+			{ recommendations: [] },
+		);
+
+		await primeDeclaredNumCtx(LOCAL, "kimi-k2.6:cloud", fetchImpl);
+
+		expect(readOllamaNumCtx(contextAt(LOCAL, { id: "kimi-k2.6:cloud" }))).toBe(
+			262144,
+		);
+	});
+
+	// The recommendations list is the publisher's own number and outranks the
+	// architecture's trained ceiling, which a served model need not offer whole.
+	it("prefers the published context length to the trained one", async () => {
+		const fetchImpl = serverFetch(
+			{ model_info: { "glm.context_length": 262144 } },
+			{
+				models: [
+					{
+						name: "glm-5.3-flash-tpl2:latest",
+						remote_host: "https://ollama.com:443",
+						remote_model: "glm-5.3-flash",
+					},
+				],
+			},
+			{
+				recommendations: [
+					{ model: "glm-5.3-flash:cloud", context_length: 1048576 },
+				],
+			},
+		);
+
+		await primeDeclaredNumCtx(LOCAL, "glm-5.3-flash-tpl2:latest", fetchImpl);
+
+		expect(
+			readOllamaNumCtx(contextAt(LOCAL, { id: "glm-5.3-flash-tpl2:latest" })),
+		).toBe(1048576);
+	});
+
+	/**
+	 * The trained window is a ceiling, not a promise: a local model is loaded
+	 * into the memory the card has, and sizing compaction against a window the
+	 * server will never grant is the same defect as reading it from the
+	 * catalog.
+	 */
+	it("does not give a local model its trained window", async () => {
+		const fetchImpl = serverFetch(
+			{ model_info: { "gemma4.context_length": 262144 } },
+			{ models: [{ name: "gemma4:31b" }] },
+			{ recommendations: [] },
+		);
+
+		await primeDeclaredNumCtx(LOCAL, "gemma4:31b", fetchImpl);
+
+		expect(readOllamaNumCtx(contextAt(LOCAL, { id: "gemma4:31b" }))).toBe(
+			OLLAMA_DEFAULT_NUM_CTX,
+		);
+	});
+
+	// `num_ctx` is what the runner will honour; nothing may overrule it.
+	it("keeps a declared num_ctx ahead of the published window", async () => {
+		const fetchImpl = serverFetch(
+			{
+				parameters: "num_ctx 65536",
+				model_info: { "kimi-k2.context_length": 262144 },
+			},
+			{
+				models: [
+					{
+						name: "kimi-k2.6:cloud",
+						remote_host: "https://ollama.com:443",
+					},
+				],
+			},
+			{ recommendations: [] },
+		);
+
+		await primeDeclaredNumCtx(LOCAL, "kimi-k2.6:cloud", fetchImpl);
+
+		expect(readOllamaNumCtx(contextAt(LOCAL, { id: "kimi-k2.6:cloud" }))).toBe(
+			65536,
+		);
 	});
 
 	it("reads the family out of the details block", () => {
@@ -209,7 +366,7 @@ describe("the window the model declares for itself", () => {
 		const fetchImpl = showFetch(SHOW_BODY);
 		await primeDeclaredNumCtx(LOCAL, "a3b-coder_tb:Q4_K_M", fetchImpl);
 		expect(readDeclaredFamily(LOCAL, "a3b-coder_tb:Q4_K_M")).toBe("qwen35moe");
-		expect(fetchImpl).toHaveBeenCalledTimes(1);
+		expect(showCalls(fetchImpl)).toBe(1);
 	});
 
 	it("reports no family when the server will not answer", async () => {

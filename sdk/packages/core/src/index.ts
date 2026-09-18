@@ -31,6 +31,10 @@ export {
 	primeDeclaredNumCtx,
 	readDeclaredFamily,
 	readDeclaredNumCtx,
+	// A cloud model declares no `num_ctx`; its window comes from the
+	// recommendations list or from `model_info`, and both hosts must read the
+	// same resolver or the wire and the compaction budget drift apart again.
+	readResolvedOllamaWindow,
 } from "@cline/llms";
 // Shared contracts and path helpers re-exported for app consumers.
 export type {
