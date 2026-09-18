@@ -31,6 +31,7 @@ import type { ProviderSamplingOptions } from "../config";
 import { ensureFetch, resolveApiKey } from "../http";
 import { keepToolImagesMiddleware } from "../middleware/split-tool-images";
 import { primeOllamaReinjection } from "../reasoning-history";
+import { installAiSdkWarningLogger } from "../sdk-warnings";
 import {
 	createOllamaHealthProbe,
 	watchForStall,
@@ -752,6 +753,13 @@ export async function createOllamaProviderModule(
 			timeoutFetch,
 		);
 	}
+	// Before the first request, because the SDK reads this global at the moment
+	// it logs. The provider warns once per reasoning part per request about a
+	// message conversion it then throws away -- see `sdk-warnings` for why that
+	// is false and what it costs to leave in.
+	installAiSdkWarningLogger({
+		...(context.logger ? { logger: context.logger } : {}),
+	});
 	const provider = createOllama({
 		...(baseURL ? { baseURL } : {}),
 		...(Object.keys(headers).length > 0 ? { headers } : {}),
