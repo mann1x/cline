@@ -5,73 +5,107 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
-## [4.100.124] — 2026-09-17
+## [4.100.138] — 2026-09-19
 
-### The session that compacted at half a full window
+### The context bar says what the tokens are
 
-A local session compacted with 43,000 tokens of room still free. The
-auto-compact trigger was correct throughout — it reads the token count the
-provider itself reports — but the request path never looked at that number. It
-kept its own estimate from a character count, read 113,706 for a request that
-really cost 71,651, concluded there was no room left for a reply, and forced
-the compaction anyway. Over one day that estimate ran between 0.73× and 3.30×
-the measured figure on a single conversation.
+The bar showed one length and one number, and on a local model most of that bar
+is a price nobody typed. Measured on pandorum against a 65,536-token window:
+21,000 to 24,000 tokens before a single message, of which the system prompt —
+prompt template included, it is rendered into it — is 1,607. The rest is tool
+schemas, and on a host that bridges VS Code's MCP servers most of *those* are
+MCP. Told only a total, someone watching the bar start a third full has no way
+to see that the remedy is a tool switch rather than a shorter conversation.
 
-Both paths now read the same evidence. The estimate is anchored to what the
-last request actually cost, so only the text added since is projected — the
-ratio can be wrong by a factor of two and the answer barely moves.
+The bar is now coloured by what the tokens are, in the order they are paid:
+system prompt, the agent's own tool schemas, the MCP servers' schemas, then the
+conversation. Hovering gives a **Before the first message** section naming each
+slice with its token count and how many tools it covers.
 
-Two things fed the drift and are fixed with it. The reasoning-density figure
-was never once updated from a real measurement: the function that learns it
-shipped complete and was never called, so a constant stood in for it on every
-request ever made. And because the content ratio is derived by subtracting the
-reasoning estimate from the measured total, that constant dragged the content
-ratio with it — it was seen swinging from 3.0 to 13.1 and back inside a single
-session as the reasoning share rose and a compaction removed it.
+MCP schemas cannot be told apart by name — long ones are sanitized and hashed on
+the way to the wire — so the tools carry their origin, and the split is measured
+where the request is assembled and carried forward onto the row the bar reads. A
+task recorded before this build, or a host running an older core, shows the plain
+undivided bar exactly as before.
 
-### One output budget, instead of two settings that disagreed
+### Tools can be switched off per profile
 
-The longest reply a model may produce is called `num_predict` by Ollama,
-`n_predict` by llama.cpp and opencoti, and `maxTokens` by the model catalog. It
-had two settings and no owner: a value typed into the advanced sampler was read
-for Ollama alone, so an opencoti or llama.cpp user's cap was enforced by the
-server while the system prompt told the model something else entirely, and
-compaction budgeted against the wrong one.
+A new **Tools** section in the provider settings lists every tool the agent
+builds for itself with what its schema costs, and a running total. It is a deny
+list stored on the profile, so a tool added in a later release arrives switched
+on rather than silently missing from every profile that predates it.
 
-There is now one **Output budget** control, on every provider:
+`generate_image`, `skills`, the team tools and MCP tools are deliberately absent:
+each is already governed by another setting, and a second switch for one thing is
+how two settings end up disagreeing.
 
-- **Automatic** asks for three quarters of the context window, up to an
-  absolute ceiling of 512,000 tokens — models that advertise a megatoken window
-  start struggling well before they reach it. The box stays visible so you can
-  lower that ceiling; it can never raise it.
-- **Manual** sends exactly what you type. It is not clamped to the model
-  catalog's own figure, which is routinely wrong for a local model — that is
-  the whole point of typing one.
+### A number typed into settings is no longer saved half-finished
 
-A profile that has never seen this setting reads as Automatic, and a value
-already in the sampler still wins, so nothing changes under an existing setup
-until you touch it.
+Settings fields waited 100ms before saving, which is shorter than the gap between
+two keystrokes. Every prefix of a typed number was therefore written to
+providers.json as a chosen value. From pandorum's own log, while a context window
+was being retyped:
 
-### Tool calls that were right, and refused anyway
+```
+[ProviderConfig] write provider=ollama contextWindow=6553 stored=6553
+```
 
-Measured across 240 plugin sessions and 365 harness runs: a large share of tool
-failures were payloads where the content was correct and only its container was
-wrong.
+6553 is 65536 with the last digit not yet typed, and it was live until the next
+key — long enough for anything reading providers.json to start a session on it.
 
-- **Task checklists were being dropped silently.** The field is documented as
-  text, and a third of the time models send the list as an actual list instead —
-  which was discarded without an error, so the tool reported a perfect success
-  rate while the checklist never reached the UI. Of 1,920 calls carrying a
-  checklist, 641 were thrown away. All of those shapes are now read.
-- **`grep`, `sed` and `awk`** accept a single file or path where they document
-  a list. `expected array, received string` was the whole of `grep`'s format
-  failures and a third of `awk`'s.
-- **`search_codebase`** accepts queries wrapped one-per-object, which is what
-  models reach for when the field is plural. It previously matched nothing and
-  returned an error naming no field at all.
+Fields that hold a number now wait longer and save on blur and on Enter, so the
+wait is only ever paid by someone who types a number and then leaves the panel
+alone. Selecting all and retyping is now one write holding the new number, rather
+than a clear followed by five prefixes.
 
-A genuinely truncated list is still refused by name rather than run as literal
-text — that check is what stops a half-arrived argument being searched for.
+### A profile that says nothing about the context window keeps yours
+
+Switching to a 128k profile and back to a 64k one started the session at 128k
+until the number was deleted and retyped. The resolver picked the *object* rather
+than the field: a profile that stores no context window made the shared
+providers.json entry unreachable, and the session fell through to the built-in
+default. A profile now falls back to the shared entry field by field, and its own
+value still wins wherever it has one.
+
+Related: loading or saving a profile recorded its name for one mode while its
+settings were applied to both, so with Plan and Act sharing a model one of the two
+kept pointing at the profile before it.
+
+### Strong coding nudges are a switch
+
+When a reply calls no tool, the session asks the model to carry on rather than
+ending the task there — coding models often describe an edit instead of making it
+and stop with the file untouched. That is the right reading inside a coding task
+and the wrong one if you mostly ask questions, so it is now a setting, default on.
+With it off, only a reply that promises work, leaves an open transaction, or
+follows a tool call is asked to continue.
+
+### Checkpoints turns the whole machinery off
+
+The switch reads as "save progress at key points for easy rollback", and the file
+history *is* the rollback — but turning it off left `restore_file` on the model
+and revision numbers in the compaction ledger. Reported as "I was expecting the
+machinery to be completely disabled." It now also stops the revision log, the
+tool, and the ledger. The CLI gains the matching `--no-checkpoints`.
+
+### An oversized file read is refused, not truncated
+
+Truncation is the wrong answer for a read: the model reasons about the part it
+was given as though it were the file, and edits against line numbers it never
+saw. The cost is also permanent, because a tool result is re-sent on every later
+request. Past a size limit the read is now refused with what to do instead.
+
+### Compaction
+
+- The replay summary is written in the present tense. A replay in the past tense
+  reads as history, and a model re-telling its own session as history re-reads
+  files it already knows and re-derives conclusions it already has.
+- The summarizer's fallback budget was 1,024 tokens while the replay instruction
+  alone is about 1,030 — so on any summarizer with an unknown window, compaction
+  refused every time and the transcript stayed over the trigger. That escalation
+  had never once run.
+- Before/after token counts on a compaction are measured as a request, so they
+  agree with the context meter instead of with a sum of serialized messages.
 
 ## [4.100.118] — 2026-09-15
 
