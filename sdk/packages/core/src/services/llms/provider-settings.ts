@@ -159,6 +159,8 @@ export type SamplingSettings = z.infer<typeof SamplingSettingsSchema>;
  */
 export const ToolSelectionSchema = z.object({
 	disabled: z.array(z.string().min(1)).optional(),
+	readLimitEnabled: z.boolean().optional(),
+	readLimitChars: z.number().int().positive().optional(),
 });
 
 export type ToolSelection = z.infer<typeof ToolSelectionSchema>;

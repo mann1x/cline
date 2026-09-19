@@ -64,6 +64,7 @@ export {
 } from "./executors/index";
 export {
 	MAX_COMMAND_OUTPUT_CHARS,
+	MAX_READ_REFUSAL_CHARS,
 	truncateCommandOutput,
 } from "./executors/output-limits";
 export {

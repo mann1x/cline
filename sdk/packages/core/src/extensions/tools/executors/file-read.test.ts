@@ -95,14 +95,36 @@ describe("the read size refusal", () => {
 	// file; the cost lands in every later request, because a tool result is
 	// re-sent for the rest of the run. Refusing makes the model ask again with
 	// a range, which is the read it should have made.
-	it("refuses a read whose window would exceed 2KB", async () => {
-		const body = `${"x".repeat(80)}\n`.repeat(120); // ~9.7KB
-		await expect(readWholeOf(body)).rejects.toThrow(/2048|2,048|too large/i);
+	it("refuses a read whose window would cost a real share of the context", async () => {
+		const body = `${"x".repeat(80)}\n`.repeat(500); // ~40KB
+		await expect(readWholeOf(body)).rejects.toThrow(/too large/i);
 	});
 
 	it("names the range arguments in the refusal", async () => {
-		const body = `${"x".repeat(80)}\n`.repeat(120);
+		const body = `${"x".repeat(80)}\n`.repeat(500);
 		await expect(readWholeOf(body)).rejects.toThrow(/start_line/);
+	});
+
+	// A refusal that does not say how much is too much makes the model guess,
+	// and it guesses far too small: at a 2,048-char cap -- fifty lines of
+	// ordinary source -- 4.100.138 turned every read into a crawl. The number
+	// is measured from the file in hand rather than assumed.
+	it("says how many lines of this file would fit", async () => {
+		const body = `${"x".repeat(80)}\n`.repeat(500);
+		// 272, not the 296 the raw bytes suggest: the count is taken from the
+		// rendered output, line-number prefixes included, which is what is
+		// actually sent and actually costs.
+		await expect(readWholeOf(body)).rejects.toThrow(
+			/About 27[0-9] lines of this file fit/,
+		);
+	});
+
+	// The size that broke it: a whole small file is an entirely reasonable read
+	// and must come back, not be refused with advice.
+	it("returns a file of a few hundred lines whole", async () => {
+		const body = `${"const x = 1;".padEnd(60)}\n`.repeat(250); // ~15KB, 250 lines
+		const result = await readWholeOf(body);
+		expect(JSON.stringify(result)).toContain("const x = 1;");
 	});
 
 	it("still returns a file that fits", async () => {

@@ -365,6 +365,10 @@ export interface ProviderOptions {
  */
 export interface ToolSelectionOptions {
 	disabled?: string[];
+	/** Whether an oversized file-read window is refused. Absent means on. */
+	readLimitEnabled?: boolean;
+	/** The refusal threshold in characters. Absent means the built-in default. */
+	readLimitChars?: number;
 }
 
 /**

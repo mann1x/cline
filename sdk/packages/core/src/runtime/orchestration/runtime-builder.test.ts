@@ -126,6 +126,73 @@ describe("DefaultRuntimeBuilder", () => {
 			expect(runtime.tools.map((tool) => tool.name)).toContain("grep");
 		});
 
+		/**
+		 * The read limit, off.
+		 *
+		 * It defaults to on because a model that reads a whole file pays for it
+		 * in every later request -- a tool result is re-sent for the rest of the
+		 * run. A capable model paginates without being made to, and the refusal
+		 * then only costs it a turn, so which behaviour is wanted is a judgement
+		 * about the model and belongs on the profile.
+		 */
+		async function readWholeFile(config: CoreSessionConfig, body: string) {
+			const dir = mkdtempSync(join(tmpdir(), "read-limit-"));
+			tempDirs.push(dir);
+			const file = join(dir, "big.ts");
+			writeFileSync(file, body);
+			const runtime = await new DefaultRuntimeBuilder().build({
+				config: { ...config, cwd: dir },
+			});
+			const readFiles = runtime.tools.find(
+				(tool) => tool.name === "read_files",
+			);
+			if (!readFiles) {
+				throw new Error("read_files was not built");
+			}
+			return await readFiles.execute({ files: [{ path: file }] } as never, {
+				agentId: "a",
+				conversationId: "c",
+				iteration: 1,
+			});
+		}
+
+		const OVERSIZED = `${"x".repeat(80)}\n`.repeat(500); // ~40KB
+
+		it("refuses an oversized read by default", async () => {
+			const result = await readWholeFile(makeBaseConfig(), OVERSIZED);
+			expect(JSON.stringify(result)).toMatch(/too large/i);
+		});
+
+		it("returns it whole when the profile turns the read limit off", async () => {
+			const result = await readWholeFile(
+				makeBaseConfig({
+					providerConfig: {
+						providerId: "anthropic",
+						modelId: "claude-sonnet-4-6",
+						tools: { readLimitEnabled: false },
+					},
+				}),
+				OVERSIZED,
+			);
+			expect(JSON.stringify(result)).not.toMatch(/too large/i);
+		});
+
+		it("refuses at the threshold the profile sets", async () => {
+			// Well under the 40KB body and well over the default, so only a
+			// threshold that is actually read produces a refusal here.
+			const result = await readWholeFile(
+				makeBaseConfig({
+					providerConfig: {
+						providerId: "anthropic",
+						modelId: "claude-sonnet-4-6",
+						tools: { readLimitChars: 30_000 },
+					},
+				}),
+				OVERSIZED,
+			);
+			expect(JSON.stringify(result)).toMatch(/max: 30000/);
+		});
+
 		it("does not put back a tool the session never built", async () => {
 			// The selection can only withhold. Whether `generate_image` exists at
 			// all is answered by whether an image endpoint is configured, and a

@@ -58,10 +58,23 @@ export const MAX_READ_OUTPUT_CHARS = 48_000;
  * trigger in twenty turns.
  *
  * Refusing costs one turn and produces the read the model should have made.
- * The message names `start_line`/`end_line` and points at grep, because a
- * refusal that does not say what to do instead is just a failed call.
+ * The message names `start_line`/`end_line`, points at grep, and says how many
+ * lines *would* fit, because a refusal that does not say what to do instead is
+ * just a failed call — and one that does not say how much is too much makes the
+ * model guess, invariably downwards.
+ *
+ * 24,000 chars is roughly 6,000 tokens: about 9% of a 65,536-token window, or
+ * an eighth of what is left of one after the fixed price. One read that size is
+ * affordable; a habit of them is what compaction is for.
+ *
+ * It was 2,048 in 4.100.138, which is around fifty lines of ordinary source —
+ * so a whole small file was refused, and the model answered the way the message
+ * invited it to: by crawling the file in tiny windows. Reported the same day as
+ * "a huge amount of small reads". The size to refuse is the one that costs a
+ * meaningful share of the window for the rest of the run, not the one that is
+ * larger than a screenful.
  */
-export const MAX_READ_REFUSAL_CHARS = 2_048;
+export const MAX_READ_REFUSAL_CHARS = 24_000;
 
 /** Max characters returned per search query; beyond this the middle is elided. */
 export const MAX_SEARCH_OUTPUT_CHARS = 48_000;

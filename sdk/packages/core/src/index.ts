@@ -1048,6 +1048,7 @@ export {
 	isCoreBuiltinToolAvailable,
 	isSkillsToolAvailable,
 	MAX_COMMAND_OUTPUT_CHARS,
+	MAX_READ_REFUSAL_CHARS,
 	PATCH_MARKERS,
 	PatchActionType,
 	type PatchFileChange,

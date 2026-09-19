@@ -290,11 +290,20 @@ async function readTextWindow(
 	if (chars > maxReadChars) {
 		const shown = captured.length;
 		const firstShown = captured[0]?.lineNumber ?? requestedStartLine;
+		// How many lines of *this* file would fit, rather than a rule of thumb:
+		// a refusal that does not say how much is too much makes the model
+		// guess, and it guesses far too small. Measured from what it just asked
+		// for, so a file of long lines gets a smaller number than one of short.
+		const fitsLines = Math.max(
+			1,
+			Math.floor((shown * maxReadChars) / Math.max(1, chars)),
+		);
 		throw new Error(
 			`Read too large: this window is ${chars} characters (max: ${maxReadChars}). ` +
 				`The file has ${fileLineCount} lines and you asked for ${shown} of them starting at ${firstShown}. ` +
-				"Read a smaller range with `start_line` and `end_line`, or find the part you need first with grep. " +
-				"Do not read a whole file to look for one thing in it.",
+				`About ${fitsLines} lines of this file fit in one read, so read it in ranges of that size with ` +
+				"`start_line` and `end_line` — or find the part you need first with grep, which is cheaper than " +
+				"reading the file to look for one thing in it.",
 		);
 	}
 

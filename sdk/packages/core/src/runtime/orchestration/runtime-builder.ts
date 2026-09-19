@@ -115,6 +115,31 @@ function filterAvailableTools(
 }
 
 /**
+ * The file-read refusal threshold this configuration asks for.
+ *
+ * `undefined` leaves the executor's own default in place. `Infinity` is the
+ * off switch: past the threshold a read is refused rather than truncated, and
+ * a configuration that turns it off is asking for the older behaviour, where
+ * an oversized window comes back cut at `MAX_READ_OUTPUT_CHARS` instead.
+ *
+ * It is a per-profile setting because it is a per-model judgement. A capable
+ * model paginates without being made to and the refusal only costs it a turn;
+ * a smaller one reads whole files and pays for them in every later request,
+ * because a tool result is re-sent for the rest of the run.
+ */
+function resolveFileReadMaxChars(
+	tools: { readLimitEnabled?: boolean; readLimitChars?: number } | undefined,
+): number | undefined {
+	if (tools?.readLimitEnabled === false) {
+		return Number.POSITIVE_INFINITY;
+	}
+	const chars = tools?.readLimitChars;
+	return typeof chars === "number" && Number.isFinite(chars) && chars > 0
+		? Math.floor(chars)
+		: undefined;
+}
+
+/**
  * Fold the profile's tool selection into the session's tool policies.
  *
  * Expressed as policies rather than as a filter of its own because the
@@ -202,6 +227,7 @@ function createBuiltinToolsList(
 	qaCredentials?: QaCredential[],
 	runCommandExecutionController?: RunCommandExecutionController,
 	readReceipts?: ReadReceipts,
+	fileReadMaxChars?: number,
 ): AgentTool[] {
 	const preset = ToolPresets[resolveToolPresetName({ mode })];
 	const toolRoutingConfig = resolveToolRoutingConfig(
@@ -222,6 +248,9 @@ function createBuiltinToolsList(
 				// this the host's reader records into its own and `grep`/`sed`/
 				// `awk` guard against a registry nothing ever writes to.
 				...(readReceipts ? { receipts: readReceipts } : {}),
+				...(fileReadMaxChars !== undefined
+					? { fileRead: { maxReadChars: fileReadMaxChars } }
+					: {}),
 			},
 			...preset,
 			enableSkills: !!skillsExecutor,
@@ -510,6 +539,9 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 			input.toolPolicies ?? config.toolPolicies,
 			config.providerConfig?.tools?.disabled,
 		);
+		const fileReadMaxChars = resolveFileReadMaxChars(
+			config.providerConfig?.tools,
+		);
 		const globallyDisabledToolNames = resolveDisabledToolNames();
 		const tools: AgentTool[] = [];
 		const effectiveTeamName = config.teamName?.trim() || createTeamName();
@@ -686,6 +718,7 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 					config.qaCredentials,
 					input.runCommandExecutionController,
 					input.readReceipts,
+					fileReadMaxChars,
 				),
 			);
 			const agentPluginMcpServers = pluginsEnabled
@@ -905,6 +938,7 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 												config.qaCredentials,
 												input.runCommandExecutionController,
 												input.readReceipts,
+												fileReadMaxChars,
 											),
 											agent,
 										)
@@ -1022,6 +1056,7 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 									config.qaCredentials,
 									input.runCommandExecutionController,
 									input.readReceipts,
+									fileReadMaxChars,
 								)
 						: undefined,
 					teammateConfigProvider: delegatedAgentConfigProvider,
