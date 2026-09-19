@@ -244,11 +244,13 @@ export {
 export { mergeModelOptions } from "./llms/model-options";
 export * from "./llms/model-tools";
 export {
+	buildOutputBudgetSection,
 	OUTPUT_BUDGET_AUTO_WINDOW_SHARE,
 	OUTPUT_BUDGET_CEILING_TOKENS,
 	type OutputBudgetInput,
 	type OutputBudgetMode,
 	resolveOutputBudgetTokens,
+	withOutputBudgetSection,
 } from "./llms/output-budget";
 export {
 	DEFAULT_REASONING_EFFORT,

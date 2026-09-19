@@ -392,6 +392,43 @@ function resolveSettingsDefaultOutputCap(
 	});
 }
 
+/**
+ * The thinking allowance this session actually runs under, as a token count.
+ *
+ * This is what arms the capped-thinking condenser: it compares a turn's
+ * reasoning against the allowance to tell "ran out of budget mid-thought" from
+ * "finished thinking", and with no allowance it stands down -- silently, which
+ * is how it once sat out an entire run while the cap fired on 288 requests.
+ *
+ * `reasoning.budgetTokens` is a count the user typed and is returned untouched.
+ * A *level* is not a count, and until now nothing outside the VS Code factory
+ * turned one into a count, so every host that stores the level where the
+ * settings panel writes it -- `sampling.thinkBudget` -- armed nothing.
+ *
+ * Resolved against the same window the request resolves it against, so the
+ * number the detector holds the turn to is the number the server was given.
+ */
+function resolveSettingsThinkingBudget(
+	settings: ProviderSettings,
+	outputCap: number | undefined,
+): number | undefined {
+	const explicit = settings.reasoning?.budgetTokens;
+	if (
+		typeof explicit === "number" &&
+		Number.isFinite(explicit) &&
+		explicit > 0
+	) {
+		return Math.floor(explicit);
+	}
+	if (!outputCap || outputCap <= 0) {
+		return undefined;
+	}
+	return Llms.resolveLlamaCppThinkBudgetTokens(
+		settings.sampling?.thinkBudget,
+		outputCap,
+	);
+}
+
 export function toProviderConfig(
 	settings: ProviderSettings,
 	options: ToProviderConfigOptions = {},
@@ -440,6 +477,7 @@ export function toProviderConfig(
 				: undefined))
 		: undefined;
 
+	const settingsDefaultOutputCap = resolveSettingsDefaultOutputCap(settings);
 	const config: ProviderConfig = {
 		providerId,
 		clientType: settings.client,
@@ -459,10 +497,13 @@ export function toProviderConfig(
 		timeoutMs: settings.timeout,
 		maxOutputTokens: settings.maxTokens,
 		maxInputTokens: settings.contextWindow,
-		defaultMaxOutputTokens: resolveSettingsDefaultOutputCap(settings),
+		defaultMaxOutputTokens: settingsDefaultOutputCap,
 		thinking: settings.reasoning?.enabled,
 		reasoningEffort,
-		thinkingBudgetTokens: settings.reasoning?.budgetTokens,
+		thinkingBudgetTokens: resolveSettingsThinkingBudget(
+			settings,
+			settingsDefaultOutputCap,
+		),
 		reasoningHistory: settings.reasoning?.reasoningHistory,
 		reasoningInline: settings.reasoning?.reasoningInline,
 		sampling: settings.sampling,

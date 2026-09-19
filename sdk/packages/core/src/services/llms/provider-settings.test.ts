@@ -189,3 +189,53 @@ describe("per-turn output budget", () => {
 		expect(config.defaultMaxOutputTokens).toBe(40000);
 	});
 });
+
+describe("thinking budget for capped-thinking detection", () => {
+	// `compaction.thinkingBudgetTokens` is what arms the capped-thinking
+	// condenser: without an allowance it cannot tell a turn that ran out of
+	// thinking budget from one that simply stopped, so it stands down -- with no
+	// note and no failure. The VS Code factory resolves the allowance itself;
+	// every other host had `reasoning.budgetTokens` as its only source, and the
+	// panel (and the harness) write `sampling.thinkBudget` instead.
+	it("resolves a think budget level against the session's output cap", () => {
+		const config = toProviderConfig({
+			provider: "opencoti",
+			model: "/m/v9.gguf",
+			contextWindow: 131072,
+			outputBudget: { mode: "auto" },
+			sampling: { thinkBudget: "max" },
+		});
+
+		// 0.75 * 131072 = 98304 output cap, of which `max` is 4/5.
+		expect(config.defaultMaxOutputTokens).toBe(98304);
+		expect(config.thinkingBudgetTokens).toBe(78643);
+	});
+
+	// An explicit count is the user typing a number, and it is not a share of
+	// anything -- it must survive untouched.
+	it("keeps an explicit reasoning budget ahead of a level", () => {
+		const config = toProviderConfig({
+			provider: "opencoti",
+			model: "/m/v9.gguf",
+			contextWindow: 131072,
+			outputBudget: { mode: "auto" },
+			reasoning: { budgetTokens: 12345 },
+			sampling: { thinkBudget: "max" },
+		});
+
+		expect(config.thinkingBudgetTokens).toBe(12345);
+	});
+
+	// No level and no count is not "guess one". A budget invented here would
+	// arm the detector against a bound the server was never given.
+	it("resolves nothing when no budget was configured", () => {
+		const config = toProviderConfig({
+			provider: "opencoti",
+			model: "/m/v9.gguf",
+			contextWindow: 131072,
+			outputBudget: { mode: "auto" },
+		});
+
+		expect(config.thinkingBudgetTokens).toBeUndefined();
+	});
+});

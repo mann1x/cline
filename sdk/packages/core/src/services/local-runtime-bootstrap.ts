@@ -13,7 +13,10 @@ import type {
 	ToolApprovalResult,
 	WorkspaceInfo,
 } from "@cline/shared";
-import { hasRuntimeConfigExtension } from "@cline/shared";
+import {
+	hasRuntimeConfigExtension,
+	withOutputBudgetSection,
+} from "@cline/shared";
 import { version as corePackageVersion } from "../../package.json";
 import {
 	type AgentPluginPackageDiagnostic,
@@ -486,6 +489,32 @@ export async function prepareLocalRuntimeBootstrap(
 		providerConfig,
 		workspaceMetadata,
 		hooks,
+		// Every host's session is built here, which is why the Output Budget
+		// section is stated here. It used to be assembled in the VS Code
+		// factory and nowhere else, so at one and the same commit the plugin
+		// told the model the cap its reply would be cut at and the CLI told it
+		// nothing -- and a harness run stopped reproducing what the plugin did.
+		// `withOutputBudgetSection` leaves a prompt that already carries the
+		// section alone, so VS Code's richer numbers still win where it has
+		// them. An empty prompt is left empty: a system prompt that is only an
+		// output budget is not a system prompt.
+		...(baseConfig.systemPrompt
+			? {
+					systemPrompt: withOutputBudgetSection(baseConfig.systemPrompt, {
+						outputCap: providerConfig.defaultMaxOutputTokens,
+						contextWindow: providerConfig.maxInputTokens,
+						...(providerConfig.thinkingBudgetTokens &&
+						providerConfig.reasoningEffort
+							? {
+									thinking: {
+										level: providerConfig.reasoningEffort,
+										budgetTokens: providerConfig.thinkingBudgetTokens,
+									},
+								}
+							: {}),
+					}),
+				}
+			: {}),
 	};
 	const toolPolicies =
 		input.toolPolicies ?? baseConfig.toolPolicies ?? defaultToolPolicies;

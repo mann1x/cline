@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+	buildOutputBudgetSection,
 	OUTPUT_BUDGET_AUTO_WINDOW_SHARE,
 	OUTPUT_BUDGET_CEILING_TOKENS,
 	resolveOutputBudgetTokens,
+	withOutputBudgetSection,
 } from "./output-budget";
 
 describe("resolveOutputBudgetTokens", () => {
@@ -83,5 +85,43 @@ describe("resolveOutputBudgetTokens", () => {
 	it("keeps the share and the ceiling as the two published numbers", () => {
 		expect(OUTPUT_BUDGET_AUTO_WINDOW_SHARE).toBe(0.75);
 		expect(OUTPUT_BUDGET_CEILING_TOKENS).toBe(512_000);
+	});
+});
+
+describe("withOutputBudgetSection", () => {
+	// The section was built in the VS Code factory and lived only there, so the
+	// CLI told the model nothing about the cap its reply would be cut at. Moving
+	// the wording here is half of it; this is the other half -- the one place
+	// every host's session passes through.
+	it("appends the section when the host has not", () => {
+		const prompt = withOutputBudgetSection("You are Cline.", {
+			outputCap: 98304,
+			contextWindow: 131072,
+		});
+
+		expect(prompt).toContain("# Output Budget");
+		expect(prompt).toContain("98304 tokens");
+		expect(prompt.startsWith("You are Cline.")).toBe(true);
+	});
+
+	// VS Code resolves richer numbers (it asks Ollama for the real allowance)
+	// and appends the section itself before this runs. Appending a second one
+	// would state two different caps in one prompt, which is worse than either.
+	it("leaves a prompt that already states a budget alone", () => {
+		const already = `You are Cline.${buildOutputBudgetSection(32000, 128000)}`;
+		const prompt = withOutputBudgetSection(already, {
+			outputCap: 98304,
+			contextWindow: 131072,
+		});
+
+		expect(prompt).toBe(already);
+	});
+
+	// No cap is not a cap of zero. With nothing to state, saying nothing is the
+	// honest answer -- the same rule resolveOutputBudgetTokens follows.
+	it("says nothing when there is no cap to state", () => {
+		expect(
+			withOutputBudgetSection("You are Cline.", { outputCap: undefined }),
+		).toBe("You are Cline.");
 	});
 });

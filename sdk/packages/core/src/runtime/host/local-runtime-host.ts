@@ -861,7 +861,17 @@ export class LocalRuntimeHost implements RuntimeHost {
 			// whatever compaction then decides, it decides about a
 			// transcript that is not carrying an abandoned think.
 			enabled: configWithProvider.compaction?.cappedThinkingEnabled,
-			budgetTokens: configWithProvider.compaction?.thinkingBudgetTokens,
+			// Falling back to the resolved provider config for the same reason
+			// the line below does: only the VS Code factory sets this on the
+			// session, so on every other host the detector had no allowance and
+			// stood down -- the same silent stand-down the note below records,
+			// reached by the other missing field. `toProviderConfig` resolves a
+			// configured level against this session's output cap, so the number
+			// the turn is held to is the number the server was given.
+			budgetTokens:
+				configWithProvider.compaction?.thinkingBudgetTokens ??
+				(configWithProvider.providerConfig ?? providerConfig)
+					?.thinkingBudgetTokens,
 			budgetMessage: configWithProvider.compaction?.cappedThinkingBudgetMessage,
 			promptTemplate: configWithProvider.compaction?.cappedThinkingPrompt,
 			// The resolved one, not the one on the config: nothing sets

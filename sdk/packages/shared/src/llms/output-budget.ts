@@ -89,3 +89,106 @@ export function resolveOutputBudgetTokens(
 	const target = input.contextWindow * OUTPUT_BUDGET_AUTO_WINDOW_SHARE;
 	return Math.max(1, Math.floor(Math.min(target, autoCeiling, modelBound)));
 }
+
+/**
+ * The share of the cap a model is told to aim for when the cap is effectively
+ * the whole context window, leaving the rest for the conversation.
+ */
+const OUTPUT_BUDGET_SAFE_SHARE = 0.75;
+
+/**
+ * The point at which a per-turn cap stops being a cap and becomes the context
+ * window: at or above this share of it, filling the cap leaves nothing for
+ * anything else.
+ */
+const OUTPUT_BUDGET_WINDOW_SHARE_THRESHOLD = 0.9;
+
+/**
+ * Build the system-prompt section describing the per-turn output cap.
+ *
+ * Every request carries a `maxOutputTokens` the provider truncates at
+ * (`num_predict`, for Ollama), and nothing in the prompt mentions it: the model
+ * is asked for a full plan plus edits with no idea its reply will be cut off
+ * mid-sentence, thinking included, and the turn wasted. When no per-model
+ * override exists the value is the gateway default of 32,000, which on a
+ * 32,768-token model is the entire context window — filling it leaves nothing
+ * for the conversation and forces a compaction round trip.
+ *
+ * `thinking` names the share of that cap the model may spend reasoning, when
+ * the provider enforces one. Ollama does: a level is a fraction of
+ * `min(num_predict, num_ctx)`, computed server-side, and a model told only the
+ * outer cap reads the whole of it as available to think in. Sessions ended on
+ * "reached the maximum output token limit" with the entire allowance spent
+ * inside the thinking block and no answer written.
+ *
+ * Exported for tests: the wording is the whole behaviour.
+ */
+export function buildOutputBudgetSection(
+	outputCap: number,
+	contextWindow: number | undefined,
+	thinking?: { level: string; budgetTokens: number },
+): string {
+	let section =
+		`\n\n# Output Budget\n\nEach reply you produce is capped at ${outputCap} tokens, thinking included. ` +
+		"Anything past the cap is cut off mid-sentence and the turn is wasted.";
+	if (thinking && thinking.budgetTokens > 0) {
+		section +=
+			` Of that, at most ${thinking.budgetTokens} tokens may be spent thinking (effort ${thinking.level}); ` +
+			"reasoning past that point is cut short, so reach a decision inside it and write the answer with what is left.";
+	}
+	if (
+		contextWindow !== undefined &&
+		outputCap >= contextWindow * OUTPUT_BUDGET_WINDOW_SHARE_THRESHOLD
+	) {
+		const safeCap = Math.floor(outputCap * OUTPUT_BUDGET_SAFE_SHARE);
+		const reservedPercent = Math.round((1 - OUTPUT_BUDGET_SAFE_SHARE) * 100);
+		section +=
+			` That cap is effectively the whole ${contextWindow}-token context window, so keep each reply under ` +
+			`${safeCap} tokens and leave the remaining ${reservedPercent}% free for compaction.`;
+	} else if (contextWindow !== undefined) {
+		section += ` The context window is ${contextWindow} tokens.`;
+	}
+	section +=
+		" Prefer several focused tool calls over one oversized reply: if the remaining work does not fit, " +
+		"do the part that fits, call the tools it needs, and continue in the next turn.";
+	return section;
+}
+
+/** The marker that says a prompt already states a per-turn cap. */
+const OUTPUT_BUDGET_HEADING = "# Output Budget";
+
+/**
+ * Add the Output Budget section to a system prompt, unless it is already there.
+ *
+ * Every host's session is built through one bootstrap, and this is called from
+ * it, so a host that does not assemble the section itself still tells the model
+ * the cap its reply will be cut at. The CLI never did: the wording lived in the
+ * VS Code factory, so a harness run and a plugin run at the same commit gave
+ * the model different instructions about the same limit.
+ *
+ * The guard is not defensive tidiness. VS Code resolves a richer allowance --
+ * it asks Ollama for the budget the server will actually enforce rather than
+ * deriving one -- and appends the section before this runs. Appending a second
+ * one would put two different caps in a single prompt, which is worse than
+ * either alone, so the host's own statement wins where there is one.
+ */
+export function withOutputBudgetSection(
+	systemPrompt: string,
+	budget: {
+		outputCap: number | undefined;
+		contextWindow?: number;
+		thinking?: { level: string; budgetTokens: number };
+	},
+): string {
+	if (!positive(budget.outputCap)) {
+		return systemPrompt;
+	}
+	if (systemPrompt.includes(OUTPUT_BUDGET_HEADING)) {
+		return systemPrompt;
+	}
+	return `${systemPrompt}${buildOutputBudgetSection(
+		budget.outputCap,
+		budget.contextWindow,
+		budget.thinking,
+	)}`;
+}

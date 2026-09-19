@@ -4,12 +4,12 @@ import path from "node:path"
 import type { CoreSessionConfig } from "@cline/core"
 import * as LlmsModels from "@cline/llms"
 import { OLLAMA_DEFAULT_REASONING_EFFORT } from "@cline/llms"
+import { buildOutputBudgetSection } from "@cline/shared"
 import { ApiFormat } from "@shared/proto/cline/models"
 import { Logger } from "@shared/services/Logger"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
 	buildDelegatedAgentConnection,
-	buildOutputBudgetSection,
 	buildResumeSessionInput,
 	buildSessionConfig,
 	buildStartSessionInput,
