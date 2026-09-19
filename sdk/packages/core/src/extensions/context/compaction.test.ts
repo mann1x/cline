@@ -552,6 +552,65 @@ describe("createContextCompactionPrepareTurn", () => {
 		);
 	});
 
+	it("keeps structured tool results when serializing compaction input", () => {
+		// `read_files`, `run_commands` and `search_codebase` answer with
+		// ToolOperationResult objects -- `{query, result, success, error?}`, with
+		// no `type` discriminator -- and those carry the oracle's verdict and
+		// every file body the session read. Blanked, the summarizer sees a call
+		// followed by nothing and writes what it assumes happened: a pandorum
+		// session summarised three `ok:false` runs as "the game is running".
+		const serialized = serializeMessage({
+			role: "user",
+			content: [
+				{
+					type: "tool_result",
+					tool_use_id: "tool-1",
+					name: "run_commands",
+					content: [
+						{
+							query: "node run_game.js manic_miner.html",
+							result:
+								'{"ok":false,"error":"ReferenceError: collide is not defined"}',
+							success: true,
+						},
+						{
+							query: "manic_miner.html",
+							result: "",
+							success: false,
+							error: "Read too large: this window is 29867 characters",
+						},
+					] as unknown as LlmsProviders.ToolResultContent["content"],
+				},
+			],
+		});
+
+		expect(serialized).toContain("node run_game.js manic_miner.html");
+		expect(serialized).toContain("ReferenceError: collide is not defined");
+		// A refused call is the one kind the replay prompt says never to lose:
+		// without it the model simply makes the same call again.
+		expect(serialized).toContain("Read too large");
+	});
+
+	it("truncates the strings inside a structured tool result", () => {
+		const longResult = "y".repeat(TOOL_RESULT_CHAR_LIMIT + 100);
+		const serialized = serializeMessage({
+			role: "user",
+			content: [
+				{
+					type: "tool_result",
+					tool_use_id: "tool-1",
+					name: "read_files",
+					content: [
+						{ query: "big.ts", result: longResult, success: true },
+					] as unknown as LlmsProviders.ToolResultContent["content"],
+				},
+			],
+		});
+
+		expect(serialized).toContain("...[truncated 100 chars]");
+		expect(serialized.length).toBeLessThan(longResult.length);
+	});
+
 	it("returns no result when the transcript has no typed user prompt", () => {
 		// The whole-history fold anchors on typed user prompts; a transcript
 		// of pure tool traffic has nothing to fold around.
@@ -2272,6 +2331,113 @@ describe("createContextCompactionPrepareTurn", () => {
 		expect(summarizerPrompt).toContain("...[truncated ");
 		expect(summarizerPrompt).not.toContain(omittedTail);
 		expect(summarizerPrompt.length).toBeLessThan(longToolOutput.length);
+	});
+
+	it("sends structured tool results to the summarizer and cuts what it echoes", async () => {
+		// Both halves of the same pandorum failure. `read_files`,
+		// `run_commands` and `search_codebase` answer with
+		// `{query, result, success}` entries, and the compaction serializer
+		// used to blank every one of them -- 50 of 99 results and 414,337
+		// characters in session 1789848400942_m8u3a, the checker's `ok:false`
+		// verdicts among them. The summarizer then filled the silence with
+		// what it assumed had happened, and kept going into the transcript it
+		// had been handed.
+		const echoedSummary = [
+			"I am fixing the collision check.",
+			"",
+			"Conversation:",
+			"[Bot tool calls]: read_files(files=[])",
+			"[Tool result]: ECHO_SHOULD_NOT_SURVIVE",
+		].join("\n");
+		const createMessage = vi.fn(() =>
+			streamChunks([
+				{ type: "text", id: "summary-structured", text: echoedSummary },
+				{ type: "done", id: "summary-structured", success: true },
+			]),
+		);
+		createHandlerMock.mockReturnValue({ createMessage });
+
+		const structuredResultMessages = [
+			{ role: "user" as const, content: "Check the game" },
+			{
+				role: "assistant" as const,
+				content: [
+					{
+						type: "tool_use" as const,
+						id: "tool-structured",
+						name: "run_commands",
+						input: { commands: ["node run_game.js manic_miner.html"] },
+					},
+				],
+			},
+			{
+				role: "user" as const,
+				content: [
+					{
+						type: "tool_result" as const,
+						tool_use_id: "tool-structured",
+						name: "run_commands",
+						content: [
+							{
+								query: "node run_game.js manic_miner.html",
+								result:
+									'{"ok":false,"error":"ReferenceError: collide is not defined"}',
+								success: true,
+							},
+						] as unknown as LlmsProviders.ToolResultContent["content"],
+					},
+				],
+			},
+			{ role: "assistant" as const, content: "Looked at the checker" },
+			{ role: "user" as const, content: "Latest request" },
+			{ role: "assistant" as const, content: "Latest answer" },
+		];
+
+		const prepareTurn = createContextCompactionPrepareTurn({
+			providerId: "anthropic",
+			modelId: "mock-model",
+			providerConfig: {
+				providerId: "anthropic",
+				modelId: "mock-model",
+			} as LlmsProviders.ProviderConfig,
+			compaction: {
+				enabled: true,
+				strategy: "agentic",
+				preserveRecentTokens: 1,
+			},
+			logger: undefined,
+		});
+
+		const result = await prepareTurn?.({
+			agentId: "agent-1",
+			conversationId: "conv-1",
+			parentAgentId: null,
+			iteration: 1,
+			abortSignal: new AbortController().signal,
+			systemPrompt: "You are helpful.",
+			tools: [],
+			messages: structuredResultMessages,
+			apiMessages: structuredResultMessages,
+			model: {
+				id: "mock-model",
+				provider: "anthropic",
+				info: { id: "mock-model", maxInputTokens: 10 },
+			},
+		});
+
+		const createMessageCalls = createMessage.mock.calls as unknown as [
+			string,
+			Array<{ role: string; content: string }>,
+		][];
+		const summarizerPrompt = createMessageCalls[0]?.[1]?.[0]?.content ?? "";
+		// The verdict the summary used to have to guess at.
+		expect(summarizerPrompt).toContain(
+			"ReferenceError: collide is not defined",
+		);
+
+		const stored = JSON.stringify(result?.messages ?? []);
+		expect(stored).toContain("I am fixing the collision check.");
+		expect(stored).not.toContain("ECHO_SHOULD_NOT_SURVIVE");
 	});
 
 	it("budgets agentic summary input before serialization", () => {

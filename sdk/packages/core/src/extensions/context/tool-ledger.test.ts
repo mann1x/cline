@@ -343,3 +343,57 @@ describe("the tool ledger", () => {
 		expect(entries[0]?.input.length).toBeLessThan(200);
 	});
 });
+
+describe("the measured record of a structured result", () => {
+	// The ledger is placed beside the model's replay so the two accounts can
+	// be compared, which only works if the ledger carries one. `run_commands`
+	// answers with `{query, result, success}` entries and the ledger printed
+	// `[1 items]` for them -- so when a pandorum summary claimed a checker run
+	// had succeeded, the line that could have contradicted it said nothing.
+	it("prints what a structured tool result returned", () => {
+		const ledger = buildToolLedger([
+			call("run_commands", { commands: ["node run_game.js game.html"] }, "c1"),
+			result(
+				"run_commands",
+				[
+					{
+						query: "node run_game.js game.html",
+						result:
+							'{"ok":false,"error":"ReferenceError: collide is not defined"}',
+						success: true,
+					},
+				],
+				"c1",
+			),
+		]);
+
+		const rendered = renderToolLedger(ledger);
+
+		expect(rendered).toContain("ReferenceError: collide is not defined");
+		// The result line specifically: the input still renders as a shape, by
+		// the size discipline this module's header sets out.
+		expect(rendered).toMatch(
+			/\u2192 node run_game\.js game\.html: \{"ok":false/,
+		);
+	});
+
+	it("names a failed entry as failed", () => {
+		const ledger = buildToolLedger([
+			call("read_files", { files: [{ path: "game.html" }] }, "c2"),
+			result(
+				"read_files",
+				[
+					{
+						query: "game.html",
+						result: "",
+						success: false,
+						error: "Read too large: this window is 29867 characters",
+					},
+				],
+				"c2",
+			),
+		]);
+
+		expect(renderToolLedger(ledger)).toContain("failed: Read too large");
+	});
+});

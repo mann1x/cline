@@ -547,6 +547,78 @@ export function truncateText(text: string, limit: number): string {
 	return `${text.slice(0, limit)}\n...[truncated ${text.length - limit} chars]`;
 }
 
+/**
+ * The tool outputs that carry no `type` discriminator.
+ *
+ * `read_files`, `run_commands` and `search_codebase` answer with
+ * `ToolOperationResult` objects -- `{query, result, success, error?}` -- and
+ * `toPersistedToolResultContent` stores them in the same array as text and
+ * file blocks, because the persisted codec "accepts a wider runtime value set
+ * than the public `ToolResultContent` type describes". Anything here that
+ * switches on `block.type` alone therefore has to say what it does with the
+ * rest, and returning "" is the wrong answer: it blanked 50 of the 99 tool
+ * results in one measured pandorum session -- 414,337 characters, every file
+ * read and all three of the checker's verdicts among them. The summarizer saw
+ * a call followed by nothing and filled the gap with what it assumed had
+ * happened, so a session whose checker returned `ok:false` three times was
+ * summarised as "the game is running" and the next context believed it.
+ */
+export interface StructuredToolResultEntry {
+	query?: unknown;
+	result?: unknown;
+	success?: unknown;
+	error?: unknown;
+}
+
+export function asStructuredToolResultEntry(
+	block: unknown,
+): StructuredToolResultEntry | undefined {
+	if (typeof block !== "object" || block === null || "type" in block) {
+		return undefined;
+	}
+	return "result" in block || "error" in block || "query" in block
+		? (block as StructuredToolResultEntry)
+		: undefined;
+}
+
+function stringifyEntryField(value: unknown): string {
+	if (value === undefined || value === null) {
+		return "";
+	}
+	return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+/**
+ * Render one structured entry in the vocabulary the replay prompt asks the
+ * model to write its own tool blocks in, so what it reads and what it writes
+ * are the same shape. The query is repeated even though the `[Bot tool calls]`
+ * line above already carries it: a `read_files` result is one entry per range,
+ * and the query is the only thing that says which range each result is.
+ */
+function formatStructuredToolResult(entry: StructuredToolResultEntry): string {
+	const lines: string[] = [];
+	const query = stringifyEntryField(entry.query);
+	if (query) {
+		lines.push(query);
+	}
+	const error = stringifyEntryField(entry.error);
+	if (error) {
+		lines.push(`\u2192 failed: ${error}`);
+	}
+	const result = stringifyEntryField(entry.result);
+	if (result) {
+		lines.push(`\u2192 ${result}`);
+	} else if (!error) {
+		// A pattern that matched nothing is an answer, not a failure, and the
+		// tool descriptions say so. Silence here would read as the blanking
+		// this function exists to end.
+		lines.push(
+			entry.success === false ? "\u2192 failed" : "\u2192 (no output)",
+		);
+	}
+	return lines.join("\n");
+}
+
 export function flattenToolResultContent(
 	content: ToolResultContent["content"],
 ): string {
@@ -556,6 +628,10 @@ export function flattenToolResultContent(
 	}
 	return truncated
 		.map((block) => {
+			const structured = asStructuredToolResultEntry(block);
+			if (structured) {
+				return formatStructuredToolResult(structured);
+			}
 			switch (block.type) {
 				case "text":
 					return block.text;
@@ -570,6 +646,25 @@ export function flattenToolResultContent(
 		.join("\n");
 }
 
+function truncateStructuredToolResultEntry(
+	entry: StructuredToolResultEntry,
+): StructuredToolResultEntry {
+	// A copy, because the entry belongs to the live transcript and compaction
+	// only ever reads it. Truncating in place would shorten the message the
+	// session is still sending.
+	const truncated: StructuredToolResultEntry = { ...entry };
+	if (typeof truncated.query === "string") {
+		truncated.query = truncateText(truncated.query, TOOL_RESULT_CHAR_LIMIT);
+	}
+	if (typeof truncated.result === "string") {
+		truncated.result = truncateText(truncated.result, TOOL_RESULT_CHAR_LIMIT);
+	}
+	if (typeof truncated.error === "string") {
+		truncated.error = truncateText(truncated.error, TOOL_RESULT_CHAR_LIMIT);
+	}
+	return truncated;
+}
+
 export function truncateToolResultContentForCompaction(
 	content: ToolResultContent["content"],
 ): ToolResultContent["content"] {
@@ -577,6 +672,14 @@ export function truncateToolResultContentForCompaction(
 		return truncateText(content, TOOL_RESULT_CHAR_LIMIT);
 	}
 	return content.map((block) => {
+		const structured = asStructuredToolResultEntry(block);
+		if (structured) {
+			// The same cast the persisted codec makes, for the same reason: the
+			// array holds more shapes than its element type names.
+			return truncateStructuredToolResultEntry(
+				structured,
+			) as unknown as typeof block;
+		}
 		switch (block.type) {
 			case "text":
 				return {

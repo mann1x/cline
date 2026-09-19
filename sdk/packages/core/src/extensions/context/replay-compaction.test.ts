@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	cutEchoedTranscript,
 	DEFAULT_REPLAY_COMPACTION_PROMPT,
 	REPLAY_BLOCK_LIMITS,
 	trimReplayOverflow,
@@ -24,6 +25,43 @@ describe("the replay speaks in the present", () => {
 		// session. The pairs are what move it to "The user is asking me".
 		expect(DEFAULT_REPLAY_COMPACTION_PROMPT).toContain("The user is asking me");
 		expect(DEFAULT_REPLAY_COMPACTION_PROMPT).toContain("Let me start by");
+	});
+
+	it("does not print the phrasings it is trying to prevent", () => {
+		// The table carried a "not this" column, and a pandorum summary came
+		// back with its rows nearly verbatim: "I started by running the
+		// diagnostic", "The user's original request was". A negative exemplar
+		// is still an exemplar -- it puts the sequence in front of the model
+		// at the exact moment it is choosing how to open a sentence. Only the
+		// column that shows what to write is kept.
+		expect(DEFAULT_REPLAY_COMPACTION_PROMPT).not.toContain("The user asked me");
+		expect(DEFAULT_REPLAY_COMPACTION_PROMPT).not.toContain("I started by");
+	});
+
+	it("writes its own section labels in the tense it asks for", () => {
+		// The prompt demanded the present and then labelled five of its own
+		// sections in the past -- "What you were asked", "What you did",
+		// "Where you had got to". The measured result was a present-tense
+		// opening and closing around a wholly past-tense body, which is the
+		// shape of a prompt disagreeing with itself.
+		expect(DEFAULT_REPLAY_COMPACTION_PROMPT).not.toContain(
+			"What you were asked",
+		);
+		expect(DEFAULT_REPLAY_COMPACTION_PROMPT).not.toContain("What you did");
+		expect(DEFAULT_REPLAY_COMPACTION_PROMPT).not.toContain(
+			"Where you had got to",
+		);
+	});
+
+	it("tells the model to stop at the end of its replay", () => {
+		// The request ends with the transcript itself, and a model that has
+		// finished what it had to say keeps the document going: 8,925 of one
+		// stored summary's 13,846 characters were the request copied back.
+		// `cutEchoedTranscript` is the backstop; this is the instruction meant
+		// to make it unnecessary.
+		expect(DEFAULT_REPLAY_COMPACTION_PROMPT.toLowerCase()).toContain(
+			"do not continue the transcript",
+		);
 	});
 
 	it("does not describe the work as finished", () => {
@@ -148,5 +186,76 @@ describe("trimming what the model did not trim", () => {
 		expect(trimReplayOverflow(text, { maxBlockChars: 100 }).trimmedBlocks).toBe(
 			1,
 		);
+	});
+});
+
+describe("cutEchoedTranscript", () => {
+	// The request ends `Conversation:` followed by the serialized transcript,
+	// and a model that runs out of things to say keeps the document going
+	// instead of stopping. Measured on pandorum session 1789848400942_m8u3a:
+	// 8,925 of the stored summary's 13,846 characters were the transcript
+	// copied back, and the copy was still running when the output cap cut it
+	// mid-string. Nothing noticed -- the summary was under its token budget,
+	// so the overrun retry never fired, and `ensureFilesSection` saw the
+	// echoed `## Files` heading and left the harness's own section off.
+	it("cuts the transcript a summary copied back from its own request", () => {
+		const text = [
+			"I am fixing the collision check.",
+			"",
+			"## Files",
+			"Read: game.html",
+			"",
+			"Conversation:",
+			'[Bot tool calls]: read_files(files=[{"path":"game.html"}])',
+			"[Tool result]: 1 | <html>",
+		].join("\n");
+
+		const cut = cutEchoedTranscript(text);
+
+		expect(cut.text).toContain("I am fixing the collision check.");
+		// The Files section is the model's own and stays; the echo below it goes.
+		expect(cut.text).toContain("Read: game.html");
+		expect(cut.text).not.toContain("Conversation:");
+		expect(cut.text).not.toContain("[Bot tool calls]");
+		expect(cut.cutChars).toBeGreaterThan(0);
+	});
+
+	it("cuts from the first serializer marker when the header is missing", () => {
+		const text = [
+			"I am fixing the collision check.",
+			"[Tool result]: 1 | <html>",
+			'[Bot tool calls]: editor(path="game.html")',
+		].join("\n");
+
+		expect(cutEchoedTranscript(text).text).toBe(
+			"I am fixing the collision check.",
+		);
+	});
+
+	it("leaves a replay that quotes a marker inside a tool block alone", () => {
+		// The prompt asks for fenced `tool` blocks, and a faithful replay of a
+		// refused call may well carry the harness's own wording inside one.
+		// Cutting there would throw away the rest of a good summary.
+		const text = [
+			"I am fixing the collision check.",
+			"",
+			"```tool",
+			"read_files files=[{path: game.html}]",
+			"\u2192 [Tool result]: refused, the file is too large",
+			"```",
+			"",
+			"Now let me read it in ranges.",
+		].join("\n");
+
+		const cut = cutEchoedTranscript(text);
+
+		expect(cut.cutChars).toBe(0);
+		expect(cut.text).toContain("Now let me read it in ranges.");
+	});
+
+	it("leaves an ordinary replay untouched", () => {
+		const text =
+			"I am fixing the collision check.\n\nLet me start by reading it.";
+		expect(cutEchoedTranscript(text)).toEqual({ text, cutChars: 0 });
 	});
 });

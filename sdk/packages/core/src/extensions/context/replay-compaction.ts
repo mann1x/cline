@@ -26,6 +26,19 @@
  * numbers by +11". Nothing about the content changes; only whether the model
  * reads it as the state of play or as a story about one.
  *
+ * Asking was not enough on its own, and the two reasons it was not are both
+ * in this file's history. The instruction was carried by a two-column table
+ * whose left half printed the phrasings it forbade, and a pandorum summary
+ * came back with that column nearly verbatim -- "I started by running the
+ * diagnostic" against a row reading "I started by reading the file". A
+ * negative exemplar is still an exemplar. And the prompt labelled five of its
+ * own sections in the past tense -- "What you were asked", "What you did",
+ * "Where you had got to" -- while demanding the present in its second
+ * paragraph. What came back was a present-tense opening and closing around a
+ * wholly past-tense body, which is the shape of a prompt disagreeing with
+ * itself. Only the column that shows what to write is left, and the labels
+ * are in the tense they ask for.
+ *
  * Two things the replay must carry that a note gets away with omitting:
  *
  * - **The user's own words, verbatim.** A paraphrased instruction is the one
@@ -49,21 +62,19 @@ Your replay will be **prepended directly to the messages that remain** — your 
 
 Write in the **first person, present tense**, in your own voice, in the same prose as the turns it sits in front of. You are not reporting on a session to someone else and you are not recounting something finished: you are picking the work back up, and everything in the replay is the situation as it stands right now.
 
-This is the difference, and it matters more than it looks:
+These are the openings to write. Reuse them:
 
-| not this | this |
-| --- | --- |
-| "The user asked me to fix the collision." | "The user is asking me to fix the collision." |
-| "I started by reading the file." | "Let me start by reading the file." |
-| "After several unsuccessful attempts where I miscalculated line numbers..." | "Let me attempt reading the file." |
-| "The editor then warned me that because of this change, all subsequent line numbers had shifted by +11." | "Now the editor warned me this change shifted the line numbers by +11." |
+- "The user is asking me to fix the collision."
+- "Let me start by reading the file."
+- "Now the editor is warning me this change shifted the line numbers by +11."
+- "The file parses now, so what is left is the collision check."
 
-Written in the past tense the replay reads as history, and history is something you are entitled to doubt: you will re-read files you already know, re-derive what you have already settled, and treat a warning that is still in force as something that merely once happened. Written in the present it is the state of play, which is what it actually is.
+Written in the past tense the replay reads as history, and history is something you are entitled to doubt: you will re-read files you already know, re-derive what you have already settled, and treat a warning that is still in force as something that merely once happened. Written in the present it is the state of play, which is what it actually is. Every sentence, not only the first and the last.
 
 Carry all of this:
 
-- **What you were asked, verbatim.** Quote the instructions you were given word for word. Everything else here can be rebuilt from the files or from the record below your replay; what was asked exists nowhere else once these messages are gone.
-- **What you did, in order**, with the tools you called and what they returned. Put each call in a fenced block tagged \`tool\`, with the invocation and its result:
+- **What you are asked to do, verbatim.** Quote the instructions you have been given word for word. Everything else here can be rebuilt from the files or from the record below your replay; what was asked exists nowhere else once these messages are gone.
+- **What you have done, in order**, with the tools you called and what they returned. Put each call in a fenced block tagged \`tool\`, with the invocation and its result:
 
 \`\`\`tool
 <tool name> <the arguments that mattered>
@@ -71,11 +82,63 @@ Carry all of this:
 \`\`\`
 
   **Trim these yourself.** Give the arguments that identify the call and the part of the result you acted on — never a whole file body, never a full command dump. If something was long, say what it was and how big: \`<412 lines>\`. The material is still on disk; repeating it here is the exact weight this replay exists to shed.
-- **What came back wrong**, and what you did about it. A call that was refused or returned an error is the most important kind to keep — without it you will simply make it again.
-- **What you concluded**, including anything you ruled out and why. An approach that failed, omitted here, is an approach you will try again.
-- **Where you had got to** when the transcript was cut, and what you were about to do next.
+- **What is coming back wrong**, and what you are doing about it. A call that was refused or returned an error is the most important kind to keep — without it you will simply make it again.
+- **What you have concluded**, including anything you have ruled out and why. An approach that failed, omitted here, is an approach you will try again.
+- **Where you are now**, and what you are about to do next.
 
-Do not invent anything you are not sure of, and do not write instructions to yourself to rewrite or restore content that this replay does not itself contain — you would be reconstructing from memory something that is still on disk, and producing a worse version of it.`;
+Do not invent anything you are not sure of. In particular, do not report a result you cannot see: a call whose output is not in front of you is a call whose outcome you do not know, and writing that it succeeded is the one error here that the next turn cannot recover from.
+
+Do not write instructions to yourself to rewrite or restore content that this replay does not itself contain — you would be reconstructing from memory something that is still on disk, and producing a worse version of it.
+
+Write the replay and stop. Do not continue the transcript that follows these instructions, and do not copy any part of it back: it is what you are replacing.`;
+
+/**
+ * Cut the transcript a summary copied back out of its own request.
+ *
+ * `buildSummaryRequest` ends with the literal line `Conversation:` followed by
+ * the serialized transcript, and a model that has finished what it had to say
+ * does not always stop -- it keeps the document going. Measured on pandorum
+ * session 1789848400942_m8u3a: 8,925 of the stored summary's 13,846 characters
+ * were the transcript copied straight back, and the copy was still running
+ * when the output cap cut it off mid-string. Every guard missed it. The
+ * overrun retry never fired because the whole thing was still under its token
+ * budget; `trimReplayOverflow` only touches fenced blocks and the echo is not
+ * fenced; and `ensureFilesSection` found the echoed `## Files` heading and so
+ * left the harness's own file list off.
+ *
+ * The cut is keyed on `serializeMessage`'s own markers rather than on anything
+ * about the prose, because those are strings the harness writes and a replay
+ * has no reason to produce: the prompt asks for fenced `tool` blocks, not for
+ * `[Bot tool calls]:` lines. Only `[Bot tool calls]:` and `[Tool result]:`
+ * count -- `[User]:` and `[Bot]:` are plausible enough in ordinary prose that
+ * cutting on them would risk discarding a good summary -- and a marker inside
+ * a fenced block is left alone, since a faithful replay of a refused call may
+ * legitimately quote the harness back.
+ */
+const ECHOED_TRANSCRIPT_MARKER =
+	/^(?:Conversation:|Previous summary:|\[Bot tool calls\]:|\[Tool result\]:)/;
+
+export interface CutTranscript {
+	text: string;
+	/** How much of the summary was the request, copied back. */
+	cutChars: number;
+}
+
+export function cutEchoedTranscript(text: string): CutTranscript {
+	const lines = text.split("\n");
+	let inFence = false;
+	let offset = 0;
+	for (const line of lines) {
+		if (/^[ \t]*```/.test(line)) {
+			inFence = !inFence;
+		} else if (!inFence && ECHOED_TRANSCRIPT_MARKER.test(line)) {
+			const kept = text.slice(0, offset).trimEnd();
+			return { text: kept, cutChars: text.length - kept.length };
+		}
+		offset += line.length + 1;
+	}
+	return { text, cutChars: 0 };
+}
 
 export interface ReplayBlockLimits {
 	/** Longest a fenced block may be before the harness elides its middle. */

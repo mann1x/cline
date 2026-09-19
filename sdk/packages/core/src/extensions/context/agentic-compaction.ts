@@ -32,6 +32,7 @@ import {
 	serializeConversation,
 	serializeReasoningWithOutcomes,
 } from "./compaction-shared";
+import { cutEchoedTranscript, trimReplayOverflow } from "./replay-compaction";
 import {
 	buildToolLedger,
 	collectFileHistories,
@@ -257,7 +258,12 @@ async function generateThinkingSummary(options: {
 			systemPrompt: SUMMARIZER_SYSTEM_PROMPTS.retrospective,
 			logger: options.logger,
 		});
-		const trimmed = result.text.trim();
+		// The retrospective is handed its own reasoning text and can run past
+		// the end of it in the same way the summary does, so it gets the same
+		// cut. It is the more damaging of the two to leave: the retrospective
+		// is prepended above the summary, so an echo here is the first thing
+		// the next turn reads.
+		const trimmed = cutEchoedTranscript(result.text).text.trim();
 		if (!trimmed) {
 			return undefined;
 		}
@@ -476,8 +482,19 @@ export async function runAgenticCompaction(options: {
 		fileOps,
 		promptTemplate: options.summaryPrompt,
 	});
+	// Which of the three instructions actually ran. The diagnostics recorded
+	// the strategy and the mode and could not answer "which prompt", so a
+	// report that a prompt change had not worked could not be checked against
+	// the record -- the prompt had to be reconstructed from the defaults and
+	// the stored settings by hand.
+	const summaryPromptKind = options.summaryPrompt?.trim()
+		? "custom"
+		: keepRecentMessages
+			? "replay"
+			: "full";
 	options.logger?.debug("Agentic compaction summarizer diagnostics", {
 		keepRecentMessages,
+		summaryPromptKind,
 		messagesToSummarize: messagesToSummarize.length,
 		newMessagesToFold: newMessagesToFold.length,
 		preservedMessages: messages.length - cutIndex + (pinnedMessage ? 1 : 0),
@@ -544,6 +561,57 @@ export async function runAgenticCompaction(options: {
 			});
 			continue;
 		}
+		// A model can answer with more than the summary. It can copy the
+		// request's own transcript back -- the request ends `Conversation:` and
+		// it keeps the document going -- and it can paste whole file bodies
+		// into the blocks it was asked to trim. Both are removed before the
+		// answer is judged, so an attempt that was nothing but the echo is
+		// retried as the empty response it effectively is, and the budget check
+		// measures the summary rather than the copy.
+		const echoed = cutEchoedTranscript(candidate.text);
+		if (echoed.cutChars > 0) {
+			options.logger?.log(
+				"Compaction summary copied its own request back; cut",
+				{
+					severity: "warn",
+					attempt,
+					cutChars: echoed.cutChars,
+					keptChars: echoed.text.length,
+				},
+			);
+		}
+		let summaryText = echoed.text;
+		if (keepRecentMessages) {
+			const trimmedReplay = trimReplayOverflow(summaryText);
+			if (trimmedReplay.trimmedBlocks > 0) {
+				options.logger?.log(
+					"Compaction replay pasted content it was asked to trim; elided",
+					{
+						severity: "warn",
+						attempt,
+						trimmedBlocks: trimmedReplay.trimmedBlocks,
+					},
+				);
+			}
+			summaryText = trimmedReplay.text;
+		}
+		if (candidate.incompleteReason && summaryText.trim()) {
+			// A summary the output cap cut off ends mid-sentence, and what it
+			// loses is its end -- where the work had got to and what was next,
+			// which is the part the next turn reads first. Not a failure here:
+			// a truncated summary still beats no compaction, and the retry
+			// ladder has no lever that would make the next attempt shorter.
+			options.logger?.log(
+				"Compaction summary was cut short by the output cap",
+				{
+					severity: "warn",
+					attempt,
+					incompleteReason: candidate.incompleteReason,
+					summaryChars: summaryText.length,
+				},
+			);
+		}
+		candidate = { ...candidate, text: summaryText };
 		if (!candidate.text.trim()) {
 			lastFailure = "empty";
 			options.logger?.log(
@@ -676,6 +744,7 @@ export async function runAgenticCompaction(options: {
 	];
 	const tokensAfter = measureReported(resultMessages);
 	options.logger?.debug("Performed agentic compaction", {
+		summaryPromptKind,
 		toolLedgerChars: toolLedger.length,
 		messagesBefore: messages.length,
 		messagesAfter: resultMessages.length,

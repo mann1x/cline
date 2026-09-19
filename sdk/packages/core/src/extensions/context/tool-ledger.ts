@@ -28,6 +28,8 @@
  * One line per call, the failures marked, no JSON it has to parse.
  */
 
+import { asStructuredToolResultEntry } from "./compaction-shared";
+
 /**
  * Any message with a content array, in either of the two block shapes this
  * repository carries — see {@link normaliseCall}.
@@ -161,10 +163,64 @@ function summariseInput(input: unknown, limits: ToolLedgerLimits): string {
 	return clamp(parts.join(" "), limits.maxInputChars);
 }
 
+/**
+ * What a structured tool answer returned, in one line.
+ *
+ * `read_files`, `run_commands` and `search_codebase` answer with
+ * `{query, result, success, error?}` entries, and an array of them used to
+ * print as `[1 items]` here -- so the ledger, which exists to be the measured
+ * counterpart to the model's own account, carried no measurement for the
+ * three tools whose results matter most. A pandorum summary claimed a checker
+ * run had succeeded where it had returned `ok:false` three times, and the
+ * line beside it that should have said otherwise said `[1 items]`.
+ *
+ * Undefined when the array is not that shape, so text and image blocks keep
+ * the rendering they had.
+ */
+function summariseStructuredOutput(
+	entries: readonly unknown[],
+	limits: ToolLedgerLimits,
+): string | undefined {
+	if (entries.length === 0) {
+		return undefined;
+	}
+	const parts: string[] = [];
+	for (const entry of entries) {
+		const structured = asStructuredToolResultEntry(entry);
+		if (!structured) {
+			return undefined;
+		}
+		const error =
+			typeof structured.error === "string" && structured.error
+				? `failed: ${structured.error}`
+				: undefined;
+		const body =
+			error ??
+			(typeof structured.result === "string" && structured.result
+				? structured.result
+				: structured.success === false
+					? "failed"
+					: "(no output)");
+		const query =
+			typeof structured.query === "string" && structured.query
+				? `${summariseValue(structured.query, limits)}: `
+				: "";
+		parts.push(`${query}${summariseValue(body, limits)}`);
+	}
+	return parts.join("; ");
+}
+
 function summariseOutput(output: unknown, limits: ToolLedgerLimits): string {
-	const text =
-		typeof output === "string" ? output : summariseValue(output, limits);
-	return clamp(text, limits.maxResultChars);
+	if (typeof output === "string") {
+		return clamp(output, limits.maxResultChars);
+	}
+	const structured = Array.isArray(output)
+		? summariseStructuredOutput(output, limits)
+		: undefined;
+	return clamp(
+		structured ?? summariseValue(output, limits),
+		limits.maxResultChars,
+	);
 }
 
 function clamp(text: string, max: number): string {
