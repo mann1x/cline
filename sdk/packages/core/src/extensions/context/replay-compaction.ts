@@ -10,8 +10,21 @@
  * and the model writes from the wrong side of it.
  *
  * So this prompt asks for a replay instead: the same voice as the messages it
- * will sit in front of, first person, in the order things happened. The model
- * is not reporting on a session, it is re-telling its own.
+ * will sit in front of, first person, **in the present tense**. The model is
+ * not reporting on a session, it is re-telling its own.
+ *
+ * The tense is load-bearing and was wrong. A replay written in the past tense
+ * reads as history -- "The user asked me to fix the collision", "the editor
+ * then warned me the line numbers had shifted" -- and a model reading that in
+ * front of its own live turns treats the facts as old and possibly stale. It
+ * re-reads files it already knows, re-derives conclusions it already has, and
+ * discounts a warning that is still in force. Reported from a 29-minute
+ * pandorum run where the model kept working but stopped being efficient.
+ *
+ * Present tense makes the same sentences current: "The user is asking me",
+ * "Let me start by", "the editor is warning me this change shifted the line
+ * numbers by +11". Nothing about the content changes; only whether the model
+ * reads it as the state of play or as a story about one.
  *
  * Two things the replay must carry that a note gets away with omitting:
  *
@@ -34,7 +47,18 @@ export const DEFAULT_REPLAY_COMPACTION_PROMPT = `Your transcript has grown too l
 
 Your replay will be **prepended directly to the messages that remain** — your own most recent turns, which are still there and which you will read immediately after this. Write it so that seam is invisible.
 
-Write in the **first person**, in your own voice, in the same prose as the turns it sits in front of. You are not reporting on a session to someone else; you are re-telling your own, so that after the earlier messages are gone you still remember doing it. Past tense, in the order things happened.
+Write in the **first person, present tense**, in your own voice, in the same prose as the turns it sits in front of. You are not reporting on a session to someone else and you are not recounting something finished: you are picking the work back up, and everything in the replay is the situation as it stands right now.
+
+This is the difference, and it matters more than it looks:
+
+| not this | this |
+| --- | --- |
+| "The user asked me to fix the collision." | "The user is asking me to fix the collision." |
+| "I started by reading the file." | "Let me start by reading the file." |
+| "After several unsuccessful attempts where I miscalculated line numbers..." | "Let me attempt reading the file." |
+| "The editor then warned me that because of this change, all subsequent line numbers had shifted by +11." | "Now the editor warned me this change shifted the line numbers by +11." |
+
+Written in the past tense the replay reads as history, and history is something you are entitled to doubt: you will re-read files you already know, re-derive what you have already settled, and treat a warning that is still in force as something that merely once happened. Written in the present it is the state of play, which is what it actually is.
 
 Carry all of this:
 

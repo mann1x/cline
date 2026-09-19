@@ -567,6 +567,11 @@ export function resetTokenCalibration(): void {
 	state.thinkingCharsPerToken = undefined;
 	state.requestTokens = undefined;
 	state.requestTokensChars = undefined;
+	// Cleared with the anchor it belongs to. It is only read when
+	// `requestTokensChars` is set, so leaving it behind changed nothing today --
+	// and would have been a stale reasoning split the moment anything read it
+	// on its own.
+	state.requestTokensReasoningChars = undefined;
 	state.requestTokensOwner = undefined;
 	state.contextOverflow = undefined;
 	state.contextOverflowOwner = undefined;

@@ -340,6 +340,31 @@ export interface ProviderOptions {
 	sampling?: ProviderSamplingOptions;
 	/** opencoti's PolyKV control plane. Inert for every other provider. */
 	polykv?: PolykvOptions;
+	/** Which tools this configuration withholds from its sessions. */
+	tools?: ToolSelectionOptions;
+}
+
+/**
+ * The tools a configuration leaves out.
+ *
+ * A deny list, because the tool set grows: an allow list written today would
+ * withhold every tool added after it from every configuration that already
+ * exists, and the symptom would be a model that never calls a tool nobody
+ * remembers switching off.
+ *
+ * Names are the registered tool names, so an MCP tool appears under the name
+ * it was registered with rather than under `server__tool` -- the two differ
+ * whenever the transform had to rewrite or truncate the pair.
+ *
+ * Why a configuration and not a global setting: the reason to drop a tool is
+ * the window it has to fit in. The tool schemas are a fixed price paid before
+ * a single message exists -- measured at 21,000-24,000 tokens of a
+ * 65,536-token window -- so a profile pointed at a small local model and one
+ * pointed at a 400k cloud model want opposite answers, and only the profile
+ * knows which is which.
+ */
+export interface ToolSelectionOptions {
+	disabled?: string[];
 }
 
 /**

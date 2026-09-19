@@ -327,6 +327,41 @@ function readCaptureRecords(dir: string): Array<Record<string, unknown>> {
 		);
 }
 
+/**
+ * A fetch that answers Ollama's start-up probes without leaving the process.
+ *
+ * `createOllamaProviderModule` primes two things before its first request: the
+ * model's declared `num_ctx` from `/api/show`, and the server's catalog,
+ * recommendations and account from `/api/tags`, `/api/experimental/...` and
+ * `/api/me`. Without a stub those go to whatever is listening on 11434, so
+ * these tests passed in milliseconds on a machine with no Ollama and took ten
+ * seconds on a developer's -- `/api/tags` measured at 10.35s against a server
+ * holding 123 models, three runs in a row -- which is how two of them came to
+ * fail on the 5s default while asserting nothing about the network.
+ *
+ * Every answer is the empty-but-valid one: nothing here is under test, and a
+ * probe that succeeds with no content leaves the paths that are under test
+ * exactly where a fresh server would.
+ */
+function ollamaProbeFetch(): typeof fetch {
+	// `RequestInfo` is a DOM name and this package does not load that lib, so
+	// the parameter is typed structurally: a string, a URL, or anything with a
+	// `url`, which is every shape `fetch` is called with here.
+	return (async (input: string | URL | { url: string }) => {
+		const url =
+			typeof input === "string"
+				? input
+				: input instanceof URL
+					? input.href
+					: input.url;
+		const body = url.includes("/api/tags") ? { models: [] } : {};
+		return new Response(JSON.stringify(body), {
+			status: 200,
+			headers: { "content-type": "application/json" },
+		});
+	}) as typeof fetch;
+}
+
 describe("sdk-gateway", () => {
 	beforeEach(() => {
 		resetSdkErrorRateLimiterForTests();
@@ -3647,7 +3682,11 @@ describe("sdk-gateway", () => {
 
 		const gateway = createGateway({
 			providerConfigs: [
-				{ providerId: "ollama", baseUrl: "http://localhost:11434" },
+				{
+					providerId: "ollama",
+					baseUrl: "http://localhost:11434",
+					fetch: ollamaProbeFetch(),
+				},
 			],
 		});
 
@@ -4674,6 +4713,7 @@ describe("sdk-gateway", () => {
 					providerId: "ollama",
 					baseUrl: "http://127.0.0.1:11434",
 					models: [{ id: "test-model", name: "test-model" }],
+					fetch: ollamaProbeFetch(),
 				},
 			],
 		});

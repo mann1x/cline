@@ -840,6 +840,26 @@ export class LocalRuntimeHost implements RuntimeHost {
 			root:
 				bootstrap.config.workspaceRoot ?? bootstrap.config.cwd ?? process.cwd(),
 		});
+		// What the Checkpoints switch turns off, which until now was nothing
+		// this session could see. The switch reads as "save progress at key
+		// points for easy rollback", and the file history *is* the rollback --
+		// so a user who turns it off and still finds `restore_file` on the model
+		// and revision numbers in the compaction ledger has been told one thing
+		// and shown another. Reported that way: "I was expecting the machinery
+		// to be completely disabled."
+		//
+		// `=== false` rather than `!== true`, deliberately. The extension always
+		// sends an explicit boolean, so the switch is honoured exactly; an SDK
+		// or CLI caller that never mentions checkpoints has not turned anything
+		// off, and stripping the history from every headless run would be a
+		// larger change than the one asked for -- the harness arms run with the
+		// protocol off, and the history is the only record they keep.
+		//
+		// The change protocol is the one exception, and it is handled where the
+		// tools are assembled: it brings its own `restore_file` and its own
+		// transaction to put back, which is the protocol working rather than
+		// this machinery leaking past its switch.
+		const revisionsEnabled = bootstrap.config.checkpoint?.enabled !== false;
 		const compactionRevisions: CompactionRevisions = sessionRevisions.port;
 		const configWithProvider: typeof bootstrap.config = bootstrap.config
 			.compaction
@@ -847,7 +867,12 @@ export class LocalRuntimeHost implements RuntimeHost {
 					...bootstrap.config,
 					compaction: {
 						...bootstrap.config.compaction,
-						revisions: compactionRevisions,
+						// Absent when the switch is off, which is also what takes
+						// the ledger's file addresses out of the summary: a ledger
+						// naming revisions no tool can reach is worse than no
+						// ledger, because the model reads it as an offer.
+						...(revisionsEnabled ? { revisions: compactionRevisions } : {}),
+						toolLedgerEnabled: revisionsEnabled,
 					},
 				}
 			: bootstrap.config;
@@ -1725,7 +1750,12 @@ export class LocalRuntimeHost implements RuntimeHost {
 				// ever runs -- the protocol's own decoration wraps the same list
 				// against the same log and adds its own `restore_file`, and doing
 				// both would record every write twice and offer the tool twice.
-				sessionRevisions.decorate([...tools, ...sessionRevisions.tools]);
+				revisionsEnabled
+				? sessionRevisions.decorate([...tools, ...sessionRevisions.tools])
+				: // Checkpoints off and no protocol: nothing records the
+					// writing tools and nothing offers a way back, which is
+					// what the switch says it does.
+					tools;
 		// The expert gets the session's tools WITHOUT the change protocol, and
 		// less the tool that reached it. Set before the session's own list is
 		// extended: an expert that could escalate would escalate to itself.

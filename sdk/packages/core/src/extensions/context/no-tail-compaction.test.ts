@@ -112,7 +112,11 @@ const bounds = resolveRecencyBounds({
 	messageTargetTokens: Number.MAX_SAFE_INTEGER,
 });
 
-async function compact(keepRecentMessages: boolean, summaryPrompt: string) {
+async function compact(
+	keepRecentMessages: boolean,
+	summaryPrompt: string,
+	overrides: { toolLedgerEnabled?: boolean } = {},
+) {
 	const messages = transcript();
 	return {
 		messages,
@@ -125,6 +129,7 @@ async function compact(keepRecentMessages: boolean, summaryPrompt: string) {
 			} as never,
 			keepRecentMessages,
 			summaryPrompt,
+			...overrides,
 			thinkingSummaryEnabled: false,
 			bounds,
 			estimateMessageTokens: estimateJsonTokens,
@@ -318,6 +323,26 @@ describe("the tool ledger the harness appends", () => {
 		expect(metadata?.summary).not.toContain("read_files");
 	});
 
+	// The Checkpoints switch owns it: the ledger quotes the revision each file
+	// reached, and those are addresses for a `restore_file` the session no
+	// longer offers. Reported as "I have disabled checkpoints in features but
+	// ... the ledger additions at compaction".
+	it("goes away with the checkpoints switch", async () => {
+		const { result } = await compact(false, DEFAULT_FULL_COMPACTION_PROMPT, {
+			toolLedgerEnabled: false,
+		});
+
+		const text = summaryText(result);
+		expect(text).not.toContain("recorded by the harness");
+		expect(text).not.toContain("read_files");
+		// The summary itself is untouched: this removes an appendix, not the
+		// compaction.
+		expect(
+			(result?.messages[0] as { metadata?: { summary?: string } } | undefined)
+				?.metadata?.summary,
+		).toBeTruthy();
+	});
+
 	it("says nothing at all for a stretch with no tool calls", async () => {
 		const messages: MessageWithMetadata[] = [
 			{ role: "user", content: "do the thing" },
@@ -376,9 +401,25 @@ describe("dropping the tail once a run has compacted before", () => {
 		expect(dropsTailAtThisCompaction([plain, plain], undefined)).toBe(false);
 	});
 
-	it("drops it on the second compaction", () => {
+	// Off by default. The ladder used to switch the tail off from the second
+	// compaction, which meant no session ever ran one policy: compaction 1 kept
+	// the tail and every later one dropped it. The first was then measurably
+	// the weak one -- median -30% leaving 20 messages against -65% leaving 4,
+	// over 30 and 24 compactions on pandorum -- and the A/B that was supposed
+	// to justify the ladder compared "drop always" against "drop from the
+	// second", which is not a contrast and duly measured nothing.
+	//
+	// A tail policy has to hold for the whole run for either arm to mean
+	// anything. `keepRecentMessages` alone decides it now.
+	it("keeps the tail on the second compaction too", () => {
 		expect(dropsTailAtThisCompaction([summary(1), plain], undefined)).toBe(
-			true,
+			false,
+		);
+	});
+
+	it("keeps it however many compactions have happened", () => {
+		expect(dropsTailAtThisCompaction([summary(9), plain], undefined)).toBe(
+			false,
 		);
 	});
 

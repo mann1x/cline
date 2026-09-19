@@ -18,7 +18,10 @@
  * conclusions rather than as a transcript to resume.
  */
 
-import { createHandlerAsync } from "@cline/llms";
+import {
+	createHandlerAsync,
+	resolveLlamaCppThinkBudgetTokens,
+} from "@cline/llms";
 import type {
 	BasicLogger,
 	DiscardedTurnCondensation,
@@ -135,7 +138,86 @@ const CONDENSED_THINKING_MAX_CHARS = 12_000;
  * Set well above what the note needs, so it is a stop rather than a limit the
  * note is written to.
  */
-const CONDENSED_THINKING_MAX_OUTPUT_TOKENS = 2_000;
+/**
+ * What the note itself has to have room for, whatever else shares the budget.
+ *
+ * The instruction above asks for every call the turn made and what each one
+ * returned, so this is a working budget rather than a stop: 2,000 tokens is
+ * about 5,000 characters, and the two notes this was measured against were 624
+ * and 768. It is also the ceiling that stops a small model that has started
+ * repeating itself, which is why it stays a fixed number and not a share.
+ */
+export const CONDENSED_THINKING_NOTE_TOKENS = 2_000;
+
+/**
+ * The cap the condensation request carries.
+ *
+ * Static when nothing bounds the thinking, and a ladder off the level when
+ * something does -- because the server takes the thinking allowance out of this
+ * same number *first*. `ThinkBudgetWindow` prefers `num_predict` over the
+ * context length, so the share is a share of this cap: at `max` ({4,5}) a
+ * 2,000-token cap leaves the note 400 tokens, which is less than either note
+ * measured on pandorum already used.
+ *
+ * Whether that bites depends on the provider, which is why the ladder is a
+ * guard rather than a fix for a live fault. Measured on eleven2go 2026-09-19:
+ * `think:false` returns 0 characters of thinking against 2,743 with it unset,
+ * so on Ollama the switch `resolveSummarizerConfig` sets really does hold, and
+ * on llama.cpp `enabled: false` sends `reasoning_budget_tokens: 0`. The ladder
+ * is what keeps the note whole on a provider that ignores the switch and reads
+ * only the budget -- which is what opencoti does with `reasoning_effort`.
+ *
+ * A count rather than a level is the number the user typed. It is not a share
+ * of anything, so it is added rather than solved for, and it outranks a level
+ * the same way the request path ranks the two.
+ */
+export function resolveCondensedThinkingOutputCap(
+	providerConfig: Partial<ProviderConfig>,
+	noteTokens = CONDENSED_THINKING_NOTE_TOKENS,
+): number {
+	// The condenser asks for no thinking. Where that is honoured the whole cap
+	// is the note; where it is not, the branches below still hold.
+	if (providerConfig.thinking === false) {
+		return noteTokens;
+	}
+	const sampling = providerConfig.sampling;
+	const handSet =
+		readTokenCount(sampling?.thinkBudget) ??
+		(sampling?.thinkBudget === undefined
+			? readTokenCount(providerConfig.thinkingBudgetTokens)
+			: undefined);
+	if (handSet !== undefined) {
+		return noteTokens + handSet;
+	}
+	const level = sampling?.thinkBudget ?? providerConfig.reasoningEffort;
+	if (!level) {
+		return noteTokens;
+	}
+	// The share is read from the resolver rather than from the fraction table,
+	// so the ladder cannot drift from what the request path actually sends. A
+	// large probe window recovers the fraction exactly for every level in the
+	// table, and `cap - share x cap >= note` then solves in one step. Iterating
+	// towards the fixpoint instead converges as `share^n`, which at `max` is
+	// still 40 tokens short after two dozen rounds.
+	const probe = 1_000_000;
+	const think = resolveLlamaCppThinkBudgetTokens(level, probe) ?? 0;
+	if (think <= 0 || think >= probe) {
+		// A level the table does not carry bounds nothing, and one that claimed
+		// the whole window would leave no note to size.
+		return noteTokens;
+	}
+	// Kept in integers. `note / (1 - 4/5)` in floating point is
+	// 10000.000000000002, and the ceiling of that is a cap one token wider than
+	// the ladder it is supposed to be a rung of.
+	return Math.ceil((noteTokens * probe) / (probe - think));
+}
+
+function readTokenCount(value: unknown): number | undefined {
+	const parsed = typeof value === "string" ? Number(value) : value;
+	return typeof parsed === "number" && Number.isFinite(parsed) && parsed > 0
+		? Math.floor(parsed)
+		: undefined;
+}
 
 /**
  * Whether a note is the model repeating itself rather than writing.
@@ -219,9 +301,10 @@ Rewrite that reasoning, compressed, as the thinking it is. It is going back into
 
 Write it as thought, not as a report about thought:
 - First person, present tense, the way you were already thinking. No headings, no bullet lists, no preamble, no sign-off. Do not label it or announce what it is; just think.
-- A paragraph or two. Long enough to carry the specifics, short enough that none of it is padding. If you find yourself restating a line you have already written, you are finished: stop.
+- Carry what you called and what it returned. Every tool call in this turn, by name, with the argument that mattered and what came back -- the file you read and what was at the line you were looking for, the edit you attempted and whether it applied, the command you ran and what it printed. A retrospective that omits this is the one thing the next pass cannot recover, because the results are not in front of it any more.
 - State what you have settled as settled. Do not re-derive it and do not hedge it.
 - Say what you ruled out and why, in a clause each. This is the part that stops the next pass repeating this one, and it is the part that gets dropped first if you are careless.
+- Long enough that none of the above is missing, short enough that none of it is padding. Length follows the content: a turn that made four calls and settled three questions is not a paragraph. If you find yourself restating a line you have already written, you are finished: stop.
 - End on the one question still open and the single next action, stated concretely.
 
 Two things to keep out of it:
@@ -609,7 +692,9 @@ async function writeCappedThinkingNote(options: {
 				activeProviderConfig: options.providerConfig,
 				summarizer: options.config.summarizer,
 			}),
-			maxOutputTokens: CONDENSED_THINKING_MAX_OUTPUT_TOKENS,
+			maxOutputTokens: resolveCondensedThinkingOutputCap(
+				options.providerConfig,
+			),
 		};
 		const handler = await createHandlerAsync(summarizerConfig);
 		let text = "";
@@ -781,7 +866,9 @@ async function writeDiscardedRetrospective(options: {
 				activeProviderConfig: options.providerConfig,
 				summarizer: options.config.summarizer,
 			}),
-			maxOutputTokens: CONDENSED_THINKING_MAX_OUTPUT_TOKENS,
+			maxOutputTokens: resolveCondensedThinkingOutputCap(
+				options.providerConfig,
+			),
 		};
 		const handler = await createHandlerAsync(summarizerConfig);
 		let text = "";

@@ -463,9 +463,23 @@ describe("the escalation path, as the host wires it", () => {
 		// The nudge arm reads the files in play before it holds, so the notice
 		// lands a tick or two after the verdict — deliberately, since a nudge is
 		// not worth making the turn boundary wait on a disk.
-		await new Promise((resolve) => setTimeout(resolve, 50));
-
-		const struggle = noticesOfKind(events, "struggle");
+		//
+		// Polled rather than slept. This was a flat 50ms, which is a bet that a
+		// disk read finishes inside 50ms — true on an idle machine and false
+		// under a full 295-file run, where it failed as `expected 0 to be
+		// greater than 0` roughly one run in three while passing every time in
+		// isolation. Waiting on the condition is both faster when it is fast and
+		// correct when the machine is busy.
+		// `vi.waitFor` rather than the flat 50ms this used to sleep. 50ms is a
+		// bet that a disk read finishes in 50ms -- true on an idle machine, and
+		// false under a full 295-file run, where it failed as `expected 0 to be
+		// greater than 0` while passing every time in isolation. Waiting on the
+		// condition is faster when it is fast and correct when it is not.
+		const struggle = await vi.waitFor(() => {
+			const found = noticesOfKind(events, "struggle");
+			expect(found.length).toBeGreaterThan(0);
+			return found;
+		});
 		expect(struggle.length).toBeGreaterThan(0);
 		expect(["nudge", "offer"]).toContain(struggle[0]?.metadata.phase);
 	});

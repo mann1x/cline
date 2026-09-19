@@ -3,11 +3,13 @@ import { observeRequestTokens, resetTokenCalibration } from "@cline/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	buildCappedThinkingRequest,
+	CONDENSED_THINKING_NOTE_TOKENS,
 	createCappedThinkingNoteWriter,
 	createCappedThinkingPrepareTurn,
 	findCappedThinkingIndex,
 	isDegenerateNote,
 	locateCappedThinking,
+	resolveCondensedThinkingOutputCap,
 } from "./capped-thinking";
 
 /**
@@ -256,6 +258,33 @@ describe("the continuation note's request", () => {
 		expect(request).toContain("No headings, no bullet lists");
 		expect(request).toContain("I should try old_text again");
 		expect(request).toContain("No change: already reads that way");
+	});
+
+	/**
+	 * Pandorum 2026-09-19: two condensations in one session, 64,313 chars to a
+	 * 768-character note and 75,317 chars to a 624-character note -- about 250
+	 * tokens each, against a 2,000-token cap the model never came near. The cap
+	 * was not the constraint; the instruction was. "A paragraph or two" is what
+	 * it asked for and a paragraph or two is what it got, and neither note
+	 * carried what the turn had called or what came back. Reported as "it's not
+	 * a retrospective ... it should carry information, like tools usage if any
+	 * and the outcome of the reasoning, it's very generic and doesn't provide
+	 * details."
+	 */
+	it("requires the calls and their outcomes, not a paragraph or two", () => {
+		const request = buildCappedThinkingRequest({
+			thinking: "I should try old_text again",
+			outcomes: [
+				{
+					name: "editor",
+					input: "path",
+					result: "No change: already reads that way",
+				},
+			],
+		});
+
+		expect(request).toContain("what you called and what it returned");
+		expect(request).not.toContain("A paragraph or two");
 	});
 
 	it("says so when the budget ran out before any call was made", () => {
@@ -558,6 +587,83 @@ describe("reporting the note", () => {
 		await prepareTurn({ messages, emitStatusNotice });
 
 		expect(notices).toHaveLength(1);
+	});
+});
+
+/**
+ * The note is written out of the same budget the thinking is taken from, and
+ * the server takes the thinking first. Measured on eleven2go 2026-09-19 against
+ * the live gemma-4 tag: `think:false` returns 0 characters of thinking and 62
+ * eval tokens, `think` unset returns 2,743 characters and 862 -- so the switch
+ * works, and a static cap is right whenever it is off. It is only the budgets
+ * that survive it that need the ladder: at `max`, four fifths of a 2,000-token
+ * cap is thinking and the note is left 400 tokens to say everything the
+ * instruction now asks for.
+ */
+describe("the condensation cap follows the thinking budget in force", () => {
+	const note = CONDENSED_THINKING_NOTE_TOKENS;
+
+	it("stays static when nothing bounds the thinking", () => {
+		expect(resolveCondensedThinkingOutputCap({})).toBe(note);
+		expect(
+			resolveCondensedThinkingOutputCap({ providerId: "ollama", modelId: "m" }),
+		).toBe(note);
+	});
+
+	it("stays static when thinking is switched off", () => {
+		expect(
+			resolveCondensedThinkingOutputCap({
+				providerId: "ollama",
+				modelId: "m",
+				thinking: false,
+				reasoningEffort: "high",
+			}),
+		).toBe(note);
+	});
+
+	it("climbs a ladder with the level", () => {
+		const at = (level: string) =>
+			resolveCondensedThinkingOutputCap({
+				providerId: "ollama",
+				modelId: "m",
+				sampling: { thinkBudget: level },
+			});
+		// cap - fraction x cap >= note, so cap = note / (1 - fraction).
+		expect(at("max")).toBe(10_000); // 4/5 -> 8,000 thinking, 2,000 note
+		expect(at("high")).toBe(4_000); // 1/2 -> 2,000 thinking, 2,000 note
+		expect(at("medium")).toBe(2_667); // 1/4
+		expect(at("low")).toBe(2_286); // 1/8
+		expect(at("minimal")).toBe(2_134); // 1/16
+	});
+
+	it("follows a budget set by hand", () => {
+		// A count rather than a level is the number the user typed, and it is not
+		// a share of anything -- so the cap is that many tokens plus the note.
+		expect(
+			resolveCondensedThinkingOutputCap({
+				providerId: "ollama",
+				modelId: "m",
+				sampling: { thinkBudget: "6000" },
+			}),
+		).toBe(note + 6_000);
+		expect(
+			resolveCondensedThinkingOutputCap({
+				providerId: "opencoti",
+				modelId: "m",
+				thinkingBudgetTokens: 4_096,
+			}),
+		).toBe(note + 4_096);
+	});
+
+	it("prefers the hand-set count over the level", () => {
+		expect(
+			resolveCondensedThinkingOutputCap({
+				providerId: "ollama",
+				modelId: "m",
+				reasoningEffort: "max",
+				sampling: { thinkBudget: "3000" },
+			}),
+		).toBe(note + 3_000);
 	});
 });
 

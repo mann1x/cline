@@ -46,5 +46,22 @@ export const MAX_LINE_CHARS = 2_000;
 /** Max characters returned per file read window. */
 export const MAX_READ_OUTPUT_CHARS = 48_000;
 
+/**
+ * The size past which a file read is refused rather than truncated.
+ *
+ * Truncation is the wrong answer for a read. A capped read hands back part of
+ * a file with a notice the model routinely ignores, and it then reasons about
+ * the file it was given as though it were the file that exists -- editing
+ * against line numbers it never saw. The cost is also permanent: a tool result
+ * is re-sent on every subsequent request, so one oversized read is paid for by
+ * the whole rest of the run, which is how a transcript reaches the compaction
+ * trigger in twenty turns.
+ *
+ * Refusing costs one turn and produces the read the model should have made.
+ * The message names `start_line`/`end_line` and points at grep, because a
+ * refusal that does not say what to do instead is just a failed call.
+ */
+export const MAX_READ_REFUSAL_CHARS = 2_048;
+
 /** Max characters returned per search query; beyond this the middle is elided. */
 export const MAX_SEARCH_OUTPUT_CHARS = 48_000;

@@ -1142,6 +1142,24 @@ export interface AgentConfig {
 		 */
 		maxNoToolCallNudges?: number;
 		/**
+		 * Whether a turn that called nothing is nudged even when nothing
+		 * suggests unfinished work. Defaults to true.
+		 *
+		 * True is the coding reading, and the right default: in a task session a
+		 * turn that called nothing is nearly always one that should have acted,
+		 * a needless nudge costs a turn, and a missed one costs the task.
+		 *
+		 * False makes the nudge require evidence -- work the host knows is
+		 * unstarted, a run that has already called something, or a turn ending
+		 * on a promise rather than an answer. A session that is largely
+		 * conversation wants this: asked which capital belongs to which country,
+		 * a model answers and stops, and the nudge tells it the run "was about
+		 * to end" and not to describe what it is going to do without doing it --
+		 * which is the wrong description of what happened, and pushes toward
+		 * calling something to avoid being asked again.
+		 */
+		strongNudges?: boolean;
+		/**
 		 * How many consecutive turns may produce no tool call before the run is
 		 * nudged that thinking has stopped paying. Defaults to 3; zero disables
 		 * the nudge entirely.

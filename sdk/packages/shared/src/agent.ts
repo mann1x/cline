@@ -223,6 +223,20 @@ export interface AgentToolDefinition {
 	name: string;
 	description: string;
 	inputSchema: Record<string, unknown>;
+	/**
+	 * Where the tool came from, when it is not one the agent builds itself.
+	 *
+	 * Read for the fixed-price breakdown the context bar shows. Tool schemas
+	 * are most of what a request costs before a single message -- 21,000 to
+	 * 24,000 tokens of a 65,536-token window, measured on pandorum -- and on a
+	 * host that bridges an editor's MCP servers most of that is MCP rather than
+	 * anything the agent chose. Told only a total, nobody can see that turning
+	 * off a server is what buys the room back, so the two are counted apart.
+	 *
+	 * The name cannot answer this: `createMcpTools` sanitizes and hashes long
+	 * names, so `serverName__toolName` is not recoverable from the wire.
+	 */
+	source?: "mcp";
 	lifecycle?: {
 		/**
 		 * Whether a successful call to this tool completes the current run.
@@ -703,6 +717,24 @@ export interface AgentRuntimeConfig {
 		 * the bound is on consecutive silence rather than on the run.
 		 */
 		maxNoToolCallNudges?: number;
+		/**
+		 * Whether a turn that called nothing is nudged even when nothing
+		 * suggests unfinished work. Defaults to true.
+		 *
+		 * True is the coding reading, and the right default: in a task session a
+		 * turn that called nothing is nearly always one that should have acted,
+		 * a needless nudge costs a turn, and a missed one costs the task.
+		 *
+		 * False makes the nudge require evidence -- work the host knows is
+		 * unstarted, a run that has already called something, or a turn ending
+		 * on a promise rather than an answer. A session that is largely
+		 * conversation wants this: asked which capital belongs to which country,
+		 * a model answers and stops, and the nudge tells it the run "was about
+		 * to end" and not to describe what it is going to do without doing it --
+		 * which is the wrong description of what happened, and pushes toward
+		 * calling something to avoid being asked again.
+		 */
+		strongNudges?: boolean;
 		/**
 		 * How many consecutive turns may produce no tool call before the run is
 		 * nudged that thinking has stopped paying. Defaults to 3; zero disables

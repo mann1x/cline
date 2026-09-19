@@ -14,12 +14,13 @@ import {
 	formatToolActivitySummary,
 	hasToolActivity,
 	isTurnStartMessage,
+	type MeasureReportedTokens,
 	summarizeToolActivity,
 	type ToolActivitySummary,
 } from "./compaction-shared";
 
 function getTotalTokens(
-	messages: MessageWithMetadata[],
+	messages: readonly MessageWithMetadata[],
 	estimateMessageTokens: EstimateMessageTokens,
 ): number {
 	return messages.reduce(
@@ -452,6 +453,8 @@ function sanitizeOlderAssistantFinal(
 export function runBasicCompaction(options: {
 	context: CoreCompactionContext;
 	estimateMessageTokens: EstimateMessageTokens;
+	/** Measures a transcript as a request, for the reported before/after only. */
+	measureReportedTokens?: MeasureReportedTokens;
 	logger?: BasicLogger;
 }): CoreCompactionResult | undefined {
 	const originalMessages = options.context.messages;
@@ -599,10 +602,15 @@ export function runBasicCompaction(options: {
 			keptMessages.push(olderFinal);
 		}
 	}
-	const beforeTokens = getTotalTokens(
-		originalMessages,
-		options.estimateMessageTokens,
-	);
+	// Reported only (both of these reach the log and nothing else). Measured as
+	// a request so the number agrees with the context meter rather than with a
+	// sum of serialized messages, which counts reasoning the provider is not
+	// sent and metadata that never leaves the host.
+	const measureReported =
+		options.measureReportedTokens ??
+		((list: readonly MessageWithMetadata[]) =>
+			getTotalTokens(list, options.estimateMessageTokens));
+	const beforeTokens = measureReported(originalMessages);
 	// Safety valve for estimator drift. The floor is whatever the selection
 	// deliberately kept: typed prompts and frozen output of earlier
 	// compactions must not be trimmed to chase a target that is already
@@ -678,10 +686,7 @@ export function runBasicCompaction(options: {
 		);
 	});
 
-	const afterTokens = getTotalTokens(
-		resultMessages,
-		options.estimateMessageTokens,
-	);
+	const afterTokens = measureReported(resultMessages);
 	const budgetActionCount = budgeted.actions.filter(
 		(action) =>
 			action.reason === "over_budget" || action.reason === "tool_pair_boundary",

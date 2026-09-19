@@ -5,6 +5,34 @@ import {
 	trimReplayOverflow,
 } from "./replay-compaction";
 
+describe("the replay speaks in the present", () => {
+	// A replay prepended to the model's own remaining turns is read as the
+	// state of play, not as history. Past tense tells the model the facts are
+	// old and may no longer hold, and it re-checks what it already knows or
+	// treats a live warning as something that once happened. Reported from a
+	// 29-minute pandorum run: "The user asked me" should be "The user is
+	// asking me", "I started by" should be "Let me start by", "the editor then
+	// warned me" should be "the editor is warning me".
+	it("asks for present tense and not past", () => {
+		expect(DEFAULT_REPLAY_COMPACTION_PROMPT).not.toContain("Past tense");
+		expect(DEFAULT_REPLAY_COMPACTION_PROMPT).toContain("present tense");
+	});
+
+	it("shows the model the rewrite it is being asked for", () => {
+		// Examples rather than a rule: "present tense" alone gets a model to
+		// write "The user asks me to fix it", which is still a report about a
+		// session. The pairs are what move it to "The user is asking me".
+		expect(DEFAULT_REPLAY_COMPACTION_PROMPT).toContain("The user is asking me");
+		expect(DEFAULT_REPLAY_COMPACTION_PROMPT).toContain("Let me start by");
+	});
+
+	it("does not describe the work as finished", () => {
+		expect(DEFAULT_REPLAY_COMPACTION_PROMPT).not.toContain(
+			"in the order things happened",
+		);
+	});
+});
+
 describe("the replay compaction prompt", () => {
 	it("tells the model its summary is prepended to live messages, not filed away", () => {
 		// The whole fault it fixes: a note is written *about* a conversation and

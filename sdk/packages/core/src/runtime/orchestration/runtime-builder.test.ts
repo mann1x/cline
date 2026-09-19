@@ -86,6 +86,67 @@ describe("DefaultRuntimeBuilder", () => {
 		expect(names).not.toContain("spawn_agent");
 	});
 
+	describe("the profile's tool selection", () => {
+		it("withholds the tools the provider config names", async () => {
+			const withEverything = await new DefaultRuntimeBuilder().build({
+				config: makeBaseConfig(),
+			});
+			expect(withEverything.tools.map((tool) => tool.name)).toContain("grep");
+
+			const runtime = await new DefaultRuntimeBuilder().build({
+				config: makeBaseConfig({
+					providerConfig: {
+						providerId: "anthropic",
+						modelId: "claude-sonnet-4-6",
+						tools: { disabled: ["grep", "awk"] },
+					},
+				}),
+			});
+
+			const names = runtime.tools.map((tool) => tool.name);
+			expect(names).not.toContain("grep");
+			expect(names).not.toContain("awk");
+			// Only what it named: a selection is a deny list, so everything it is
+			// silent about is still there.
+			expect(names).toContain("read_files");
+			expect(names).toContain("editor");
+		});
+
+		it("leaves the toolset alone when the profile names nothing", async () => {
+			const runtime = await new DefaultRuntimeBuilder().build({
+				config: makeBaseConfig({
+					providerConfig: {
+						providerId: "anthropic",
+						modelId: "claude-sonnet-4-6",
+						tools: { disabled: [] },
+					},
+				}),
+			});
+
+			expect(runtime.tools.map((tool) => tool.name)).toContain("grep");
+		});
+
+		it("does not put back a tool the session never built", async () => {
+			// The selection can only withhold. Whether `generate_image` exists at
+			// all is answered by whether an image endpoint is configured, and a
+			// profile that could claim otherwise would be a switch that does
+			// nothing.
+			const runtime = await new DefaultRuntimeBuilder().build({
+				config: makeBaseConfig({
+					providerConfig: {
+						providerId: "anthropic",
+						modelId: "claude-sonnet-4-6",
+						tools: { disabled: ["generate_image"] },
+					},
+				}),
+			});
+
+			expect(runtime.tools.map((tool) => tool.name)).not.toContain(
+				"generate_image",
+			);
+		});
+	});
+
 	it("derives enabled provider tools without registering a local executor", async () => {
 		const settingsRoot = mkdtempSync(join(tmpdir(), "cline-model-tools-"));
 		tempDirs.push(settingsRoot);

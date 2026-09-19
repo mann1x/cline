@@ -114,6 +114,41 @@ function filterAvailableTools(
 	return filterDisabledTools(filterToolsByPolicies(tools, toolPolicies));
 }
 
+/**
+ * Fold the profile's tool selection into the session's tool policies.
+ *
+ * Expressed as policies rather than as a filter of its own because the
+ * policies are already applied everywhere a tool can enter a session --
+ * including `loadConfiguredMcpTools`, whose tools are the bulk of what a
+ * profile on a small window needs to drop. A second filter would have to be
+ * remembered at each of those sites, and the one that was forgotten would be
+ * the MCP one.
+ *
+ * Only ever withholds. A profile cannot switch on a tool the session did not
+ * build, and it should not be able to: whether `generate_image` exists is
+ * answered by whether an image endpoint is configured, and a profile that
+ * claimed otherwise would be a switch that does nothing.
+ */
+function withProfileToolSelection(
+	toolPolicies: CoreSessionConfig["toolPolicies"],
+	disabled: readonly string[] | undefined,
+): CoreSessionConfig["toolPolicies"] {
+	if (!disabled?.length) {
+		return toolPolicies;
+	}
+	const next: NonNullable<CoreSessionConfig["toolPolicies"]> = {
+		...(toolPolicies ?? {}),
+	};
+	for (const name of disabled) {
+		const toolName = name.trim();
+		if (!toolName) {
+			continue;
+		}
+		next[toolName] = { ...(next[toolName] ?? {}), enabled: false };
+	}
+	return next;
+}
+
 const CONFIGURED_AGENT_TOOL_NAME_ALIASES: Record<string, string> = {
 	apply_diff: "editor",
 	attempt_completion: "submit_and_exit",
@@ -471,7 +506,10 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 			modelTools.push({ name: "image_generation", outputFormat: "png" });
 		}
 		const workspaceConfigRoot = config.workspaceRoot ?? config.cwd;
-		const effectiveToolPolicies = input.toolPolicies ?? config.toolPolicies;
+		const effectiveToolPolicies = withProfileToolSelection(
+			input.toolPolicies ?? config.toolPolicies,
+			config.providerConfig?.tools?.disabled,
+		);
 		const globallyDisabledToolNames = resolveDisabledToolNames();
 		const tools: AgentTool[] = [];
 		const effectiveTeamName = config.teamName?.trim() || createTeamName();
@@ -1090,10 +1128,15 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 		// contract, but a coding agent is the case the nudge exists for. A model
 		// that announces edits and stops leaves the task undone and the user
 		// restarting the same cycle by hand.
+		// `strongNudges` is forwarded only when it is explicitly off. Passing
+		// `true` would be the same behaviour, but leaving the key absent keeps
+		// the default path identical to what shipped before the setting
+		// existed rather than merely equivalent to it.
 		const completionPolicy = {
 			...(requiresCompletionTool ? { requireCompletionTool: true } : {}),
 			...(teamCompletionGuard ? { completionGuard: teamCompletionGuard } : {}),
 			maxNoToolCallNudges: DEFAULT_MAX_NO_TOOL_CALL_NUDGES,
+			...(config.strongNudges === false ? { strongNudges: false } : {}),
 		};
 
 		return {

@@ -18,6 +18,7 @@ import {
 	MAX_LINE_CHARS,
 	MAX_READ_LINES,
 	MAX_READ_OUTPUT_CHARS,
+	MAX_READ_REFUSAL_CHARS,
 } from "./output-limits";
 import { type ReadReceipts, readFileStamp } from "./read-receipts";
 import type { ReadLedger } from "./unchanged-reads";
@@ -34,6 +35,13 @@ const IMAGE_MEDIA_TYPES = new Map<string, string>([
  * Options for the file read executor
  */
 export interface FileReadExecutorOptions {
+	/**
+	 * Characters past which a read window is refused instead of returned.
+	 * Defaults to {@link MAX_READ_REFUSAL_CHARS}. Raised by tests that need to
+	 * exercise the windowing and line-counting paths, which still run for every
+	 * read that fits.
+	 */
+	maxReadChars?: number;
 	/**
 	 * Ledger of what has already been returned, so an unchanged re-read can be
 	 * answered with a pointer instead of a second copy. Omit and every read
@@ -101,6 +109,7 @@ const DEFAULT_FILE_READ_OPTIONS: Required<
 	maxFileSizeBytes: 10_000_000, // 10MB default limit
 	encoding: "utf-8", // Default to UTF-8 encoding
 	includeLineNumbers: true, // Include line numbers by default
+	maxReadChars: MAX_READ_REFUSAL_CHARS,
 };
 
 const MAX_TEXT_STREAM_BYTES = 100_000_000;
@@ -163,7 +172,8 @@ async function readTextWindow(
 	includeLineNumbers: boolean,
 	startLine: number | null | undefined,
 	endLine: number | null | undefined,
-	signal?: AbortSignal,
+	signal: AbortSignal | undefined,
+	maxReadChars: number,
 ): Promise<ReadWindow> {
 	if (signal?.aborted) {
 		throw getAbortError(signal);
@@ -274,6 +284,20 @@ async function readTextWindow(
 				: text,
 		)
 		.join("\n");
+	// Refused, not truncated. `chars` is what this window would return; past
+	// the cap the model is sent back to ask for the part it needs. The range it
+	// asked for is echoed so the refusal is actionable rather than a wall.
+	if (chars > maxReadChars) {
+		const shown = captured.length;
+		const firstShown = captured[0]?.lineNumber ?? requestedStartLine;
+		throw new Error(
+			`Read too large: this window is ${chars} characters (max: ${maxReadChars}). ` +
+				`The file has ${fileLineCount} lines and you asked for ${shown} of them starting at ${firstShown}. ` +
+				"Read a smaller range with `start_line` and `end_line`, or find the part you need first with grep. " +
+				"Do not read a whole file to look for one thing in it.",
+		);
+	}
+
 	const lastCapturedLine = captured[captured.length - 1]?.lineNumber;
 	if (lastCapturedLine === undefined) {
 		// Nothing was captured, so nothing has been seen: no span to record.
@@ -341,7 +365,7 @@ export function createFileReadExecutor(
 	options: FileReadExecutorOptions = {},
 ): FileReadExecutor {
 	const { receipts, cwd, readLedger } = options;
-	const { maxFileSizeBytes, encoding, includeLineNumbers } = {
+	const { maxFileSizeBytes, encoding, includeLineNumbers, maxReadChars } = {
 		...DEFAULT_FILE_READ_OPTIONS,
 		...options,
 	};
@@ -412,6 +436,7 @@ export function createFileReadExecutor(
 				start_line,
 				end_line,
 				context.signal,
+				maxReadChars,
 			),
 		);
 		// Record what was actually looked at, so `editor` can refuse an edit
@@ -486,6 +511,8 @@ export async function readTextWindowFromText(options: {
 	startLine?: number | null;
 	endLine?: number | null;
 	signal?: AbortSignal;
+	/** Defaults to {@link MAX_READ_REFUSAL_CHARS}, as the file executor does. */
+	maxReadChars?: number;
 }): Promise<ReadWindow> {
 	return readTextWindow(
 		{ kind: "text", text: options.text },
@@ -494,5 +521,6 @@ export async function readTextWindowFromText(options: {
 		options.startLine,
 		options.endLine,
 		options.signal,
+		options.maxReadChars ?? MAX_READ_REFUSAL_CHARS,
 	);
 }

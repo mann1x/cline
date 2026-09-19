@@ -227,6 +227,17 @@ export interface CoreRuntimeFeatures {
 	enableTools: boolean;
 	enableSpawnAgent: boolean;
 	enableAgentTeams: boolean;
+	/**
+	 * Whether a turn that calls no tool is nudged to continue even when nothing
+	 * says work is unfinished. Defaults to true, which is what every host did
+	 * before this was a setting.
+	 *
+	 * A coding session wants that reading: a silent turn there is nearly always
+	 * one that should have acted, and a needless nudge costs a turn where a
+	 * missed one costs the task. A session used mostly for questions wants the
+	 * opposite -- see `completionPolicy.strongNudges`.
+	 */
+	strongNudges?: boolean;
 	disableMcpSettingsTools?: boolean;
 	yolo?: boolean;
 }
@@ -508,14 +519,15 @@ export interface CoreCompactionConfig {
 	 *
 	 * Only meaningful while {@link keepRecentMessages} is on; with it off every
 	 * compaction already keeps nothing. `1` drops the tail on every compaction
-	 * and anything below `1` never does. Unset takes the corpus-fitted default
-	 * in `FORCE_FULL_FROM_COMPACTION`, which is the second -- a run that has
-	 * compacted once already fixes the bug half the time, and one that has
-	 * compacted twice, a quarter.
+	 * and anything below `1` never does. Unset takes
+	 * `FORCE_FULL_FROM_COMPACTION`, which is now `0` -- off.
 	 *
-	 * A setting rather than a constant for the same reason the struggle
-	 * thresholds are: it is load-bearing, and the corpus that fitted it was
-	 * measured on one harness rather than on the sessions this will run in.
+	 * It defaulted to `2` and should not have. That made the tail policy change
+	 * part-way through every run: the first compaction kept the tail, every
+	 * later one dropped it. The first was then the weak one by construction,
+	 * and no experiment could compare keeping a tail with dropping one, because
+	 * neither arm ever did either for a whole run. Left as an override for
+	 * anyone who wants that behaviour on purpose.
 	 */
 	forceFullFromCompaction?: number;
 	/**
@@ -528,6 +540,16 @@ export interface CoreCompactionConfig {
 	 * still compacts, with ledger entries that say nothing about files.
 	 */
 	revisions?: CompactionRevisions;
+	/**
+	 * Whether each summary carries the harness's own record of the calls it
+	 * stands for.
+	 *
+	 * Defaults on. Set `false` with the Checkpoints switch, which owns the
+	 * revision addresses the ledger quotes: a ledger naming revisions on a
+	 * session that has no `restore_file` to reach them is an offer the session
+	 * cannot honour.
+	 */
+	toolLedgerEnabled?: boolean;
 	/**
 	 * Replaces the built-in instruction the summarizer is given when a recency
 	 * tail survives — see {@link keepRecentMessages}.

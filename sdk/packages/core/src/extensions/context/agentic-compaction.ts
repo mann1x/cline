@@ -22,6 +22,7 @@ import {
 	findCutPlan,
 	findLatestSummaryIndex,
 	getCompactionSummaryMetadata,
+	type MeasureReportedTokens,
 	planFullCut,
 	type RecencyBounds,
 	resolveCompactionOutputBudgets,
@@ -38,7 +39,19 @@ import {
 	renderToolLedger,
 } from "./tool-ledger";
 
-const MIN_AGENTIC_SUMMARY_INPUT_TOKENS = 1_024;
+/**
+ * The summarizer input budget assumed when nothing knows the summarizer's
+ * window.
+ *
+ * It has to clear the largest built-in instruction with room left for a
+ * transcript, or the guard below refuses every compaction and the context grows
+ * unbounded while the log says "skipped". The replay prompt is ~3,100
+ * characters -- about 1,030 tokens at the default ratio -- so the old 1,024
+ * floor was under the instruction alone: a summarizer with no known window
+ * compacted nothing at all, silently, and the only symptom was a session that
+ * kept growing.
+ */
+const MIN_AGENTIC_SUMMARY_INPUT_TOKENS = 4_096;
 
 function resolveProviderMaxInputTokens(
 	providerConfig: ProviderConfig,
@@ -297,8 +310,20 @@ export async function runAgenticCompaction(options: {
 	 * none, because the model will try to restore it.
 	 */
 	spanFor?: RevisionSpanLookup;
+	/**
+	 * Whether to append the harness's record of what was called.
+	 *
+	 * Defaults on. Turned off with the Checkpoints switch, which owns the
+	 * revision addresses the ledger quotes.
+	 */
+	toolLedgerEnabled?: boolean;
 	bounds: RecencyBounds;
 	estimateMessageTokens: EstimateMessageTokens;
+	/**
+	 * Measures what a transcript costs as a request, for the reported
+	 * before/after only. Absent in callers that only need the cut.
+	 */
+	measureReportedTokens?: MeasureReportedTokens;
 	logger?: BasicLogger;
 }): Promise<CoreCompactionResult | undefined> {
 	const messages = options.context.messages;
@@ -591,11 +616,24 @@ export async function runAgenticCompaction(options: {
 	// and a call whose result was dropped is exactly the one most worth a line
 	// here — it is the one the model was never shown and so cannot have
 	// described.
-	const ledgerEntries = buildToolLedger(newMessagesToFold);
-	const toolLedger = renderToolLedger(
-		ledgerEntries,
-		collectFileHistories(ledgerEntries, options.spanFor),
-	);
+	// Switched off with checkpoints, because the ledger is the readable half of
+	// the same machinery: it names the revision each file reached, and a
+	// revision number is an address for `restore_file`. Offering those addresses
+	// on a session that has no `restore_file` reads as an offer the session
+	// cannot honour, and costs tokens on every compaction to make it.
+	//
+	// Explicitly, not inferred from `spanFor`. An absent revision lookup already
+	// means "say nothing about files", and the ledger is still worth its space
+	// without one -- it is the only place a *refused* call survives compaction,
+	// which is precisely what the summary is worst at keeping.
+	const ledgerEnabled = options.toolLedgerEnabled !== false;
+	const ledgerEntries = ledgerEnabled ? buildToolLedger(newMessagesToFold) : [];
+	const toolLedger = ledgerEnabled
+		? renderToolLedger(
+				ledgerEntries,
+				collectFileHistories(ledgerEntries, options.spanFor),
+			)
+		: "";
 	const thinkingSummary = await generateThinkingSummary({
 		enabled: options.thinkingSummaryEnabled !== false,
 		messages: newMessagesToFold,
@@ -610,10 +648,19 @@ export async function runAgenticCompaction(options: {
 		summarizerInputLimit,
 		logger: options.logger,
 	});
-	const tokensBefore = messages.reduce(
-		(total, message) => total + options.estimateMessageTokens(message),
-		0,
-	);
+	// Reported, not decided with. `estimateMessageTokens` serializes the whole
+	// message, so summing it counts reasoning the provider is not sent on an
+	// older turn and metadata that never leaves the host; the number printed
+	// beside the context meter has to be the same quantity the meter shows.
+	const measureReported =
+		options.measureReportedTokens ??
+		((list: readonly MessageWithMetadata[]) =>
+			list.reduce(
+				(total: number, message) =>
+					total + options.estimateMessageTokens(message),
+				0,
+			));
+	const tokensBefore = measureReported(messages);
 	const resultMessages = [
 		buildSummaryMessage({
 			summary,
@@ -627,10 +674,7 @@ export async function runAgenticCompaction(options: {
 		...(pinnedMessage ? [pinnedMessage] : []),
 		...messages.slice(cutIndex),
 	];
-	const tokensAfter = resultMessages.reduce(
-		(total, message) => total + options.estimateMessageTokens(message),
-		0,
-	);
+	const tokensAfter = measureReported(resultMessages);
 	options.logger?.debug("Performed agentic compaction", {
 		toolLedgerChars: toolLedger.length,
 		messagesBefore: messages.length,

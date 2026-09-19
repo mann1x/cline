@@ -338,6 +338,83 @@ function runForcedBasicCompaction(
 	return result?.messages ?? messages;
 }
 
+describe("what a compaction reports", () => {
+	// These two numbers are consumed as a ratio by `getLastApiReqTotalTokens`,
+	// which rescales the provider's own total by `tokensAfter / tokensBefore`.
+	// Summing `JSON.stringify(message)` counts reasoning the provider is not
+	// sent on an older turn plus host-only metadata, so both ends of that ratio
+	// describe a transcript nobody transmits.
+	it("measures the transcript as a request, not as serialized messages", () => {
+		const messages: LlmsProviders.Message[] = [
+			{ role: "user", content: "Original task" },
+			{ role: "assistant", content: `Old answer ${"x".repeat(400)}` },
+			{ role: "user", content: `Followup ${"x".repeat(400)}` },
+			{ role: "assistant", content: `Older assistant ${"x".repeat(400)}` },
+			{ role: "user", content: "Latest user question" },
+		];
+		const targetTokens = 60;
+		const logged: Array<Record<string, unknown>> = [];
+		const measured: Array<readonly unknown[]> = [];
+
+		runBasicCompaction({
+			context: {
+				agentId: "agent-1",
+				conversationId: "conv-1",
+				parentAgentId: null,
+				iteration: 1,
+				messages,
+				model: {
+					id: "mock-model",
+					provider: "anthropic",
+					info: { id: "mock-model", maxInputTokens: targetTokens },
+				},
+				mode: "manual",
+				budget: {
+					request: {
+						inputTokens: targetTokens * 2,
+						maxInputTokens: targetTokens,
+						triggerTokens: targetTokens,
+						targetTokens,
+						overheadTokens: 0,
+						thresholdRatio: 1,
+						utilizationRatio: 2,
+					},
+					messages: {
+						inputTokens: targetTokens * 2,
+						triggerTokens: targetTokens,
+						targetTokens,
+					},
+				},
+			} as unknown as Parameters<typeof runBasicCompaction>[0]["context"],
+			estimateMessageTokens: estimateJsonTokens,
+			// A sentinel, so the assertion cannot be satisfied by the serialized
+			// sum happening to land on the same value.
+			measureReportedTokens: (list) => {
+				measured.push(list);
+				return list.length * 1_000;
+			},
+			logger: {
+				debug: (_message: string, properties?: Record<string, unknown>) => {
+					if (properties) {
+						logged.push(properties);
+					}
+				},
+			} as unknown as Parameters<typeof runBasicCompaction>[0]["logger"],
+		});
+
+		const performed = logged.find(
+			(entry) => typeof entry.tokensBefore === "number",
+		);
+		expect(performed).toBeDefined();
+		// Both ends go through the supplied measure, or the ratio mixes bases.
+		expect(measured.length).toBe(2);
+		expect(performed?.tokensBefore).toBe(messages.length * 1_000);
+		expect(performed?.tokensAfter).toBe(
+			(performed?.messagesAfter as number) * 1_000,
+		);
+	});
+});
+
 function assistantToolUseMessage(
 	id: string,
 	extraContent: LlmsProviders.ContentBlock[] = [],
@@ -429,6 +506,17 @@ function expectNoOrphanedToolPairs(messages: LlmsProviders.Message[]): void {
 describe("createContextCompactionPrepareTurn", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		// The request estimate anchors to the last count the provider returned,
+		// and that anchor lives in a module-level singleton keyed by session id.
+		// Every test here uses the same session, so without this one test's
+		// observation prices the next one's transcript -- which is exactly the
+		// coupling that made six unrelated tests fail at once when the estimator
+		// started anchoring.
+		resetTokenCalibration();
+	});
+
+	afterEach(() => {
+		resetTokenCalibration();
 	});
 
 	it("truncates text-block tool results when serializing compaction input", () => {
@@ -1870,9 +1958,16 @@ describe("createContextCompactionPrepareTurn", () => {
 			},
 		});
 
-		// Two: the summary, then the retrospective over the reasoning being
-		// discarded. Both go to the same summarizer.
-		expect(createHandlerMock).toHaveBeenCalledTimes(2);
+		// Four: the summary and the retrospective over the reasoning being
+		// discarded, then the same pair again for the no-tail escalation. This
+		// window is ten tokens, so nothing a keep-tail compaction produces can
+		// get under the trigger and the escalation is the correct answer.
+		//
+		// It used to be two, and that was the bug: the no-tail instruction is
+		// 4,192 characters and the fallback summarizer budget was 1,024 tokens,
+		// so the escalation was refused before it made a request -- "skipped
+		// agentic compaction" at warn, and a transcript left over the trigger.
+		expect(createHandlerMock).toHaveBeenCalledTimes(4);
 		expect(emitStatusNotice).toHaveBeenCalledWith(
 			"auto-compacting",
 			expect.objectContaining({
@@ -1881,13 +1976,12 @@ describe("createContextCompactionPrepareTurn", () => {
 				iteration: 1,
 			}),
 		);
-		// Three, not five: this model reports a 10-token input budget and the
-		// last turn costs 116, so keeping that turn whole would leave the
-		// transcript over the ceiling and the trigger would fire again at once.
-		// The turn is cut with its prompt pinned -- what the window cannot afford
-		// is the tool traffic under the prompt, not the sentence that asked for
-		// it, and the assertions below still hold.
-		expect(result?.messages).toHaveLength(3);
+		// Two, not five: this model reports a 10-token input budget, so nothing
+		// a keep-tail cut leaves behind fits under it and the no-tail escalation
+		// wins outright. What survives is the summary and the pinned prompt --
+		// the sentence that asked for the work, which is never the thing a
+		// window cannot afford.
+		expect(result?.messages).toHaveLength(2);
 		expect(result?.messages[0]).toMatchObject({
 			role: "user",
 			metadata: expect.objectContaining({
@@ -1934,9 +2028,11 @@ describe("createContextCompactionPrepareTurn", () => {
 			role: "user",
 			content: "Implement the change",
 		});
+		// The pinned prompt is last: the assistant turn under it, and the tool
+		// traffic with it, are what the escalation dropped.
 		expect(result?.messages.at(-1)).toEqual({
-			role: "assistant",
-			content: "Recent assistant state",
+			role: "user",
+			content: "Implement the change",
 		});
 	});
 
@@ -2162,8 +2258,10 @@ describe("createContextCompactionPrepareTurn", () => {
 			},
 		});
 
-		// The summary request, then the retrospective's.
-		expect(createMessage).toHaveBeenCalledTimes(2);
+		// The summary request and the retrospective's, then the same pair for
+		// the no-tail escalation this ten-token window always provokes. The
+		// first call is still the summary, which is the one being inspected.
+		expect(createMessage).toHaveBeenCalledTimes(4);
 		const createMessageCalls = createMessage.mock.calls as unknown as [
 			string,
 			Array<{ role: string; content: string }>,
@@ -4080,7 +4178,7 @@ describe("createContextCompactionPrepareTurn", () => {
 		expect(result).toBeUndefined();
 	});
 
-	it("targets basic compaction at a third of the input budget for long conversations", async () => {
+	it("targets basic compaction at a quarter of the content budget", async () => {
 		const compact = vi.fn((_context: CoreCompactionContext) => ({
 			messages: [
 				{ role: "user" as const, content: "Compacted by target budget" },
@@ -4137,23 +4235,28 @@ describe("createContextCompactionPrepareTurn", () => {
 		expect(compact).toHaveBeenCalledTimes(1);
 		const context = compact.mock.calls[0]?.[0];
 		expect(context?.budget.request.triggerTokens).toBe(244_800);
-		// A third of maxInputTokens (272,000), so one summary buys the run about
-		// two thirds of the window back rather than 40 points of it.
-		expect(context?.budget.request.targetTokens).toBe(89_760);
-		expect(context?.budget.messages.targetTokens).toBe(
-			(context?.budget.request.targetTokens ?? 0) -
-				(context?.budget.request.overheadTokens ?? 0),
+		// A quarter of what is left after the fixed price, not a quarter of the
+		// window: 272,000 less 20 tokens of system prompt is 271,980, and a
+		// quarter of that is 67,995. The transcript is the only thing a
+		// compaction can spend, so it is the only thing the share is taken from.
+		expect(context?.budget.messages.targetTokens).toBe(67_995);
+		// The request target is that plus the price, which is what the whole
+		// request has to come in under.
+		expect(context?.budget.request.targetTokens).toBe(
+			(context?.budget.request.overheadTokens ?? 0) + 67_995,
 		);
 	});
 
-	// The regression this pins: `modelMaxTokens < maxInputTokens` was written when
-	// the cap was almost never populated, and read as "this model has a tight
-	// cap". Once the cap reached the session it was true of every local model, so
-	// the aggressive target went from never firing to always firing and the
-	// retained context fell from 54,600 to 36,300 on a 110,000-token window.
-	// Measured across a day: the task that finished in an hour at 54,600 did not
-	// finish once at 36,300.
-	it("does not take the aggressive target for a cap that is merely smaller", async () => {
+	// The output cap does not move the target any more, and this is where that
+	// is pinned. There used to be two branches -- a third of the window when
+	// `modelMaxTokens` looked tight, 0.7 of the trigger otherwise -- and the
+	// test that stood here defended the boundary between them. The boundary was
+	// the bug: the condition was true of every local model once the cap actually
+	// reached the session, so the "rare" branch became the only one. One target,
+	// taken from the content, answers the question both branches were guessing
+	// at, and a model's num_predict has nothing to say about how much
+	// conversation should survive a summary.
+	it("takes the same content share whatever the output cap says", async () => {
 		const compact = vi.fn((_context: CoreCompactionContext) => ({
 			messages: [{ role: "user" as const, content: "Compacted" }],
 		}));
@@ -4201,11 +4304,17 @@ describe("createContextCompactionPrepareTurn", () => {
 		});
 
 		const context = compact.mock.calls[0]?.[0];
-		// Not 36,300. The conservative branch: 0.7 of the trigger, floored.
-		expect(context?.budget.request.targetTokens).toBeCloseTo(57_750, -1);
+		// 110,000 of context resolves to a 99,000-token input budget; less the
+		// 20-token system prompt that is 98,980 of content, and a quarter of it
+		// is 24,745. The 32,000-token cap is not in that arithmetic anywhere.
+		expect(context?.budget.request.maxInputTokens).toBe(99_000);
+		expect(context?.budget.messages.targetTokens).toBe(24_745);
+		expect(context?.budget.request.targetTokens).toBe(
+			(context?.budget.request.overheadTokens ?? 0) + 24_745,
+		);
 	});
 
-	it("keeps the long-conversation target below the fixed trigger", async () => {
+	it("keeps the target below the trigger it just crossed", async () => {
 		const compact = vi.fn((_context: CoreCompactionContext) => ({
 			messages: [
 				{ role: "user" as const, content: "Compacted by low threshold" },
@@ -4263,13 +4372,14 @@ describe("createContextCompactionPrepareTurn", () => {
 		expect(compact).toHaveBeenCalledTimes(1);
 		const context = compact.mock.calls[0]?.[0];
 		expect(context?.budget.request.triggerTokens).toBe(90);
-		expect(context?.budget.request.targetTokens).toBe(33);
-		expect(context?.budget.messages.targetTokens).toBe(
-			Math.max(
-				1,
-				(context?.budget.request.targetTokens ?? 0) -
-					(context?.budget.request.overheadTokens ?? 0),
-			),
+		// 100 of budget less 20 of system prompt is 80 of content; a quarter of
+		// it is 20, and the request target is that plus the price.
+		expect(context?.budget.messages.targetTokens).toBe(20);
+		expect(context?.budget.request.targetTokens).toBe(40);
+		// The point of the test: a target at or above the trigger is a
+		// compaction that cannot finish, so it is held one token below.
+		expect(context?.budget.request.targetTokens).toBeLessThan(
+			context?.budget.request.triggerTokens ?? 0,
 		);
 	});
 
@@ -5858,5 +5968,94 @@ describe("the estimator asks about the request, not just the provider", () => {
 			baseUrl: "http://localhost:11434",
 			reasoningHistory: "auto",
 		});
+	});
+	/**
+	 * The fixed price, told apart.
+	 *
+	 * Measured on pandorum against a 65,536-token window: 21,000-24,000 tokens
+	 * before a single message, of which the system prompt is 1,607. The rest is
+	 * tool schemas, and on a host bridging VS Code's MCP servers most of those
+	 * are MCP. The bar can only colour what it is told, so the notice has to
+	 * carry the three parts and they have to add up to the overhead.
+	 */
+	it("reports the fixed price split into prompt, built-in tools and MCP", async () => {
+		const schema = {
+			type: "object",
+			properties: {
+				path: { type: "string", description: "x".repeat(400) },
+			},
+		} as Record<string, unknown>;
+		const tools = [
+			{
+				name: "read_files",
+				description: "Read files from disk. ".repeat(20),
+				inputSchema: schema,
+			},
+			{
+				name: "context7__query_docs",
+				description: "Query a library's documentation. ".repeat(20),
+				inputSchema: schema,
+				source: "mcp" as const,
+			},
+			{
+				name: "context7__resolve_library_id",
+				description: "Resolve a library name to an id. ".repeat(20),
+				inputSchema: schema,
+				source: "mcp" as const,
+			},
+		];
+
+		const emitStatusNotice = vi.fn();
+		const prepareTurn = createContextCompactionPrepareTurn({
+			providerId: "ollama",
+			modelId: "mock-model",
+			providerConfig: {
+				providerId: "ollama",
+				modelId: "mock-model",
+			} as LlmsProviders.ProviderConfig,
+			compaction: { enabled: true, strategy: "agentic" },
+			logger: undefined,
+		});
+
+		await prepareTurn?.({
+			agentId: "agent-1",
+			conversationId: "conv-1",
+			parentAgentId: null,
+			iteration: 1,
+			abortSignal: new AbortController().signal,
+			emitStatusNotice,
+			systemPrompt: "You are helpful.",
+			tools,
+			messages: [{ role: "user", content: "hello" }],
+			apiMessages: [{ role: "user", content: "hello" }],
+			model: {
+				id: "mock-model",
+				provider: "ollama",
+				info: { id: "mock-model", contextWindow: 65_536 },
+			},
+		} as never);
+
+		const notice = emitStatusNotice.mock.calls.find(
+			([name]) => name === "context-breakdown",
+		);
+		expect(notice).toBeDefined();
+		const breakdown = notice?.[1] as Record<string, number>;
+		expect(breakdown.toolCount).toBe(3);
+		expect(breakdown.mcpToolCount).toBe(2);
+		// Two of the three schemas are MCP and all three are the same size, so
+		// the MCP share is the larger one. Asserted as an ordering rather than
+		// a number: what matters is that the two are counted apart, not what
+		// this estimator makes of these particular strings.
+		expect(breakdown.mcpToolSchemaTokens).toBeGreaterThan(
+			breakdown.builtinToolSchemaTokens,
+		);
+		expect(breakdown.systemPromptTokens).toBeGreaterThan(0);
+		// And the parts are the whole: a breakdown that does not reconstruct
+		// the overhead would colour the bar with a fourth, unnamed slice.
+		expect(
+			breakdown.systemPromptTokens +
+				breakdown.builtinToolSchemaTokens +
+				breakdown.mcpToolSchemaTokens,
+		).toBe(breakdown.requestOverheadTokens);
 	});
 });

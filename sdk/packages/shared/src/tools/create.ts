@@ -1,5 +1,9 @@
 import { z } from "zod";
-import type { AgentTool, AgentToolContext } from "../agent";
+import type {
+	AgentTool,
+	AgentToolContext,
+	AgentToolDefinition,
+} from "../agent";
 import { zodToJsonSchema } from "../parse/zod";
 
 function normalizeToolInputSchema(
@@ -87,6 +91,7 @@ export function createTool<TInput, TOutput>(config: {
 	timeoutMs?: number;
 	retryable?: boolean;
 	maxRetries?: number;
+	source?: AgentToolDefinition["source"];
 }): AgentTool<TInput, TOutput>;
 export function createTool<TSchema extends z.ZodTypeAny, TOutput>(config: {
 	name: string;
@@ -100,6 +105,7 @@ export function createTool<TSchema extends z.ZodTypeAny, TOutput>(config: {
 	timeoutMs?: number;
 	retryable?: boolean;
 	maxRetries?: number;
+	source?: AgentToolDefinition["source"];
 }): AgentTool<z.infer<TSchema>, TOutput>;
 export function createTool<TInput, TOutput>(config: {
 	name: string;
@@ -110,6 +116,7 @@ export function createTool<TInput, TOutput>(config: {
 	timeoutMs?: number;
 	retryable?: boolean;
 	maxRetries?: number;
+	source?: AgentToolDefinition["source"];
 }): AgentTool<TInput, TOutput> {
 	const inputSchema = normalizeToolInputSchema(
 		config.inputSchema instanceof z.ZodType
@@ -121,6 +128,7 @@ export function createTool<TInput, TOutput>(config: {
 		name: config.name,
 		description: config.description,
 		inputSchema,
+		...(config.source ? { source: config.source } : {}),
 		lifecycle: config.lifecycle,
 		timeoutMs: config.timeoutMs ?? 30_000,
 		retryable: config.retryable ?? true,

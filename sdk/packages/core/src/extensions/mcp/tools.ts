@@ -29,6 +29,10 @@ export async function createMcpTools(
 			name: agentToolName,
 			description: defaultMcpDescription(options.serverName, descriptor),
 			inputSchema: descriptor.inputSchema,
+			// Counted apart from the agent's own schemas in the request's fixed
+			// price. Every MCP tool the session sees is built here, the editor
+			// bridge included, so this is the one place that has to say so.
+			source: "mcp",
 			timeoutMs: options.timeoutMs,
 			retryable: options.retryable,
 			maxRetries: options.maxRetries,

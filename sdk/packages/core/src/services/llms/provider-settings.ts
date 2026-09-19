@@ -144,6 +144,25 @@ export type SamplingSettings = z.infer<typeof SamplingSettingsSchema>;
  * All of it is inert unless `enabled`, and inert anyway on a server launched
  * without `--polykv-max-pools`.
  */
+/**
+ * The tools a configuration withholds from its sessions.
+ *
+ * A deny list rather than an allow list: the tool set grows, and an allow list
+ * stored today would withhold every tool added after it from every profile
+ * that already exists. Naming what to drop means a new tool arrives switched
+ * on, which someone can see in the panel and correct.
+ *
+ * Held per configuration because the reason to drop a tool is the window it
+ * has to fit in: the schemas are paid before a single message exists -- 21,000
+ * to 24,000 tokens of a 65,536-token window, measured -- so a profile on a
+ * small local model and one on a 400k cloud model want opposite answers.
+ */
+export const ToolSelectionSchema = z.object({
+	disabled: z.array(z.string().min(1)).optional(),
+});
+
+export type ToolSelection = z.infer<typeof ToolSelectionSchema>;
+
 export const PolykvSettingsSchema = z.object({
 	enabled: z.boolean().optional(),
 	/**
@@ -305,6 +324,7 @@ export const ProviderSettingsSchema = z.object({
 	reasoning: ReasoningSettingsSchema.optional(),
 	sampling: SamplingSettingsSchema.optional(),
 	polykv: PolykvSettingsSchema.optional(),
+	tools: ToolSelectionSchema.optional(),
 	aws: AwsSettingsSchema.optional(),
 	gcp: GcpSettingsSchema.optional(),
 	azure: AzureSettingsSchema.optional(),
@@ -508,6 +528,7 @@ export function toProviderConfig(
 		reasoningInline: settings.reasoning?.reasoningInline,
 		sampling: settings.sampling,
 		polykv: settings.polykv,
+		tools: settings.tools,
 		region: settings.region ?? settings.aws?.region ?? settings.gcp?.region,
 		apiLine: settings.apiLine,
 		useCrossRegionInference: settings.aws?.useCrossRegionInference,

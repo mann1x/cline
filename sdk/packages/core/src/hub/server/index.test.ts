@@ -481,8 +481,16 @@ describe("hub server startup", () => {
 			});
 
 			expect(result.action).toBe("started");
-			expect(result.url).not.toBe(stale.url);
-			servers.add(requireServer(result.server));
+			// Identity, not URL. The stale server is retired before the
+			// successor binds, and the successor binds `port: 0` -- so the OS is
+			// free to hand back the port it has just reclaimed, and did, once in
+			// a full 295-file run where ephemeral ports churn hardest. That made
+			// the successor's URL equal to its predecessor's while the test was
+			// passing in every other respect. A recycled port number is still a
+			// new server, which is the thing this test is about.
+			const successor = requireServer(result.server);
+			expect(successor).not.toBe(stale);
+			servers.add(successor);
 		} finally {
 			vi.unstubAllEnvs();
 			await clearHubDiscovery(owner.discoveryPath);

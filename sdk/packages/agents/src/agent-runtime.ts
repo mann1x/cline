@@ -827,6 +827,14 @@ export class AgentRuntime {
 	/** Consecutive turns nudged for producing no tool calls; reset by any turn that does. */
 	private consecutiveNoToolCallNudges = 0;
 	/**
+	 * Whether this run has ever called a tool.
+	 *
+	 * Separates a task in progress from a conversation. Never reset: a run that
+	 * has acted once is a run with work in it, and a later quiet turn is the
+	 * silence the nudge was built for.
+	 */
+	private hasCalledAnyTool = false;
+	/**
 	 * Consecutive turns that produced no tool call, whatever answered them.
 	 *
 	 * Counted separately from the nudges above because the two ask different
@@ -1117,17 +1125,52 @@ export class AgentRuntime {
 		if (unparsed) {
 			return buildUnparsedToolCallNudge(unparsed);
 		}
-		// Only where the model actually has the tool. Gated on the registry
-		// rather than on config so it cannot drift from what was sent.
-		const base = this.tools.has("ask_question")
-			? NO_TOOL_CALL_NUDGE_MESSAGE + ASK_QUESTION_NUDGE_CLAUSE
-			: NO_TOOL_CALL_NUDGE_MESSAGE;
 		// What the host knows and this message did not say. "You called nothing"
 		// is true of a model that has not started as well as of one that has
 		// finished, and the two need different things said to them; the host is
 		// the only thing here that can tell them apart.
 		const unstarted =
 			await this.config.completionPolicy?.describeUnstartedWork?.();
+		// A turn that called nothing is not automatically a turn that failed to
+		// act. Asked which capital belongs to which country, or talked through a
+		// design, a model answers and stops -- and every branch of the message
+		// below presupposes a *task*: it says the run "was about to end", and
+		// tells the model not to describe what it is going to do without doing
+		// it. Sent to a conversational reply that is the wrong description of
+		// what happened, it costs a turn, and it pushes toward calling something
+		// to avoid being asked again, which is the failure it exists to prevent
+		// arriving from the other side.
+		//
+		// So the nudge needs evidence of unfinished work, and there are three
+		// kinds. The host may know of some (`unstarted`). The run may already
+		// have acted, which makes it a task in progress -- a model that called
+		// tools and then went quiet is the original case this was built for.
+		// Or the turn may end on a promise rather than an answer, which is the
+		// first-turn "I'll use multiple editor calls... Step 1... Step 2." that
+		// stops without starting; `announcedIntentWithoutActing` is the same
+		// narrow test the second nudge uses, and it stands down for any message
+		// claiming completion.
+		//
+		// With none of the three, the turn is an answer and the run may end --
+		// unless strong nudges are on, which is the default and says to ask
+		// anyway. A coding session wants the aggressive reading: there, a turn
+		// that called nothing is nearly always one that should have acted, and
+		// a needless nudge costs one turn while a missed one costs the task.
+		// A session that is mostly conversation wants the opposite, and only
+		// the person running it knows which they are in.
+		if (
+			this.config.completionPolicy?.strongNudges === false &&
+			!unstarted &&
+			!this.hasCalledAnyTool &&
+			!announcedIntentWithoutActing(text)
+		) {
+			return undefined;
+		}
+		// Only where the model actually has the tool. Gated on the registry
+		// rather than on config so it cannot drift from what was sent.
+		const base = this.tools.has("ask_question")
+			? NO_TOOL_CALL_NUDGE_MESSAGE + ASK_QUESTION_NUDGE_CLAUSE
+			: NO_TOOL_CALL_NUDGE_MESSAGE;
 		return unstarted ? base + unstarted : base;
 	}
 
@@ -1854,6 +1897,7 @@ export class AgentRuntime {
 
 				// A turn that calls tools is a turn that is working, so the
 				// consecutive-silence budget starts over.
+				this.hasCalledAnyTool = true;
 				this.consecutiveNoToolCallNudges = 0;
 				this.consecutiveNoToolCallTurns = 0;
 				this.noToolCallStreakReasoningChars = 0;

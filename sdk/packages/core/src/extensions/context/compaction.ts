@@ -1,13 +1,17 @@
-import { appendFileSync } from "node:fs";
+import { appendFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { reasoningHistoryModeForProvider } from "@cline/llms";
 import {
+	anchoredRequestTokens,
 	charsPerToken,
 	consumeContextOverflow,
 	estimateRequestInputTokens,
 	lastObservedRequestTokens,
 	lastOutputCap,
+	type MessageWithMetadata,
+	measureRequestInputChars,
+	measureRequestReasoningChars,
 } from "@cline/shared";
 import {
 	captureCompactionBudgetEmergency,
@@ -40,9 +44,9 @@ import {
 	COMPACTION_TRIGGER_RATIO,
 	createTokenEstimator,
 	DEFAULT_MAX_INPUT_TOKENS,
-	DEFAULT_TARGET_RATIO,
 	dropsTailAtThisCompaction,
 	getCompactionSummaryMetadata,
+	type MeasureReportedTokens,
 	resolveCompactionTriggerTokens,
 	resolveEffectiveMaxInputTokens,
 	resolveObservedOutputTokens,
@@ -110,6 +114,14 @@ type BuiltinCompactionStrategyOptions = {
 	 */
 	keepRecentMessages: boolean;
 	estimateMessageTokens: EstimateMessageTokens;
+	/**
+	 * What a compaction *reports*, as opposed to what it decides with.
+	 *
+	 * Measures the request the transcript would produce, so `tokensAfter` is
+	 * the size the next request will be and can be compared with the context
+	 * meter directly.
+	 */
+	measureReportedTokens: MeasureReportedTokens;
 	logger: Pick<CoreSessionConfig, "logger">["logger"];
 };
 
@@ -133,47 +145,6 @@ export interface ContextCompactionPrepareTurnOptions {
 	 */
 	journal?: CompactionJournal;
 }
-
-/**
- * Where a long conversation lands after an automatic compaction, as a share of
- * the usable input budget.
- *
- * Compaction is not free — it costs a summarizer call, and it costs whatever
- * the summary fails to carry — so the measure that matters is how many turns it
- * buys before the next one. At 0.5, a session that triggers at 0.9 recovers 40
- * points of window and, on a transcript that grows a couple of points a turn,
- * is back at the threshold within a handful of turns: observed sessions sat
- * near half full and compacted again and again. A third leaves nearly twice the
- * runway for one summary at the same price.
- *
- * Lower is not automatically better, and the measured floor is higher than this
- * reasoning assumed. Sessions retaining 69,300 and 54,600 tokens finished their
- * task in an hour to an hour and a half; the same task at 36,300 did not finish
- * once across a day of attempts, looping instead on files it had already read.
- * Below roughly half, the summary becomes the thing that loses the detail rather
- * than the window -- so this rung is for windows tight enough that there is no
- * alternative, which {@link LONG_CONVERSATION_MAX_OUTPUT_SHARE} is what decides.
- */
-const LONG_CONVERSATION_TARGET_RATIO = 0.33;
-
-/**
- * How small a model's per-turn output cap has to be for the aggressive target
- * to apply.
- *
- * The rule used to be `modelMaxTokens < maxInputTokens`, which was written when
- * `modelMaxTokens` was almost never populated and read as "this model has a
- * genuinely tight cap". Once the cap reached the session it became true of every
- * local model on every long session, so the aggressive target went from never
- * firing to always firing and the conservative branch became dead code. That
- * change is what took the retained context from 54,600 to 36,300, and the
- * completions stopped on the same day.
- *
- * An eighth is the line between a cap that constrains and a cap that is merely
- * smaller: a model that can only answer in 12,000 tokens against a 100,000
- * window really does need the runway more than the history, while one allowed
- * 32,000 of a 110,000 window does not.
- */
-const LONG_CONVERSATION_MAX_OUTPUT_SHARE = 0.125;
 
 /**
  * The share of the budget past which the last turn loses its exemption.
@@ -277,10 +248,11 @@ function resolveSummaryPrompt(
 }
 
 const BUILTIN_COMPACTION_STRATEGIES = {
-	basic: ({ context, estimateMessageTokens, logger }) =>
+	basic: ({ context, estimateMessageTokens, measureReportedTokens, logger }) =>
 		runBasicCompaction({
 			context,
 			estimateMessageTokens,
+			measureReportedTokens,
 			logger,
 		}),
 	agentic: ({
@@ -289,6 +261,7 @@ const BUILTIN_COMPACTION_STRATEGIES = {
 		compaction,
 		keepRecentMessages,
 		estimateMessageTokens,
+		measureReportedTokens,
 		logger,
 	}) =>
 		runAgenticCompaction({
@@ -305,6 +278,10 @@ const BUILTIN_COMPACTION_STRATEGIES = {
 							compaction.revisions?.spanFor(filePath),
 					}
 				: {}),
+			// The ledger travels with the revision log: both are what the
+			// Checkpoints switch turns off, and the host drops `revisions` when
+			// it is off.
+			toolLedgerEnabled: compaction?.toolLedgerEnabled,
 			summaryPrompt: resolveSummaryPrompt(compaction, keepRecentMessages),
 			thinkingSummaryEnabled: compaction?.thinkingSummaryEnabled,
 			thinkingSummaryPrompt: compaction?.thinkingSummaryPrompt,
@@ -330,6 +307,7 @@ const BUILTIN_COMPACTION_STRATEGIES = {
 					) * LAST_TURN_PRESERVE_CEILING_RATIO,
 			}),
 			estimateMessageTokens,
+			measureReportedTokens,
 			logger,
 		}),
 } satisfies Record<CoreCompactionStrategy, BuiltinCompactionStrategyRunner>;
@@ -360,6 +338,110 @@ function appendCompactionDiagnostics(
 	}
 }
 
+/**
+ * Sessions whose tool array has already been written out, keyed by session and
+ * tool count. A session that gains or loses a tool -- an MCP server coming up
+ * late, a mode switch -- writes a second file rather than going unrecorded.
+ */
+const dumpedToolManifests = new Set<string>();
+
+/**
+ * Write the tool array, as it goes on the wire, to `<tmpdir>/cline-tools.json`,
+ * and a per-tool size line to `<tmpdir>/cline-tools.jsonl`.
+ *
+ * `toolSchemaTokens` says the schemas cost 20,000 tokens of a 65,536-token
+ * window; it cannot say *which* tool costs what, and that is the only form of
+ * the number anyone can act on. A per-tool breakdown is the difference between
+ * "the tools are expensive" and "these four MCP tools are two thirds of it".
+ *
+ * Reconstructing this from the repo does not work: the built-ins are a third
+ * of it, and the rest is whatever MCP servers the host happened to bridge,
+ * which exists only in the running session. So it is written from the session,
+ * once, and left on disk next to `cline-compaction.jsonl`.
+ *
+ * The full schemas are the file worth reading, so that one is overwritten
+ * rather than accumulated -- a session's worth of MCP schemas is hundreds of
+ * kilobytes, and keeping one per session fills a temp directory to no purpose.
+ * The sizes, which are what a second session is compared against, append.
+ *
+ * Best-effort and never throws, for the same reason the diagnostics sink is.
+ */
+function writeToolManifest(input: {
+	sessionId: string | undefined;
+	providerId: string;
+	modelId: string;
+	tools: ContextPipelinePrepareTurnInput["tools"];
+	systemPromptTokens: number;
+	toolSchemaTokens: number;
+}): void {
+	const tools = input.tools ?? [];
+	const key = `${input.sessionId ?? "no-session"}-${tools.length}`;
+	if (dumpedToolManifests.has(key)) {
+		return;
+	}
+	dumpedToolManifests.add(key);
+	try {
+		const ratio = charsPerToken();
+		const rows = tools
+			.map((entry) => {
+				// `tools` is `unknown[]` on this input -- the pipeline never
+				// needs their shape -- so read the three fields that go on the
+				// wire and nothing else. The executor, the lifecycle and the
+				// timeouts stay on this side of it and are not part of the
+				// price.
+				const tool = (entry ?? {}) as {
+					name?: string;
+					description?: string;
+					inputSchema?: unknown;
+				};
+				const wire = {
+					name: tool.name ?? "(unnamed)",
+					description: tool.description,
+					inputSchema: tool.inputSchema,
+				};
+				const chars = JSON.stringify(wire).length;
+				return {
+					chars,
+					tokens: Math.ceil(chars / ratio),
+					descriptionChars: (tool.description ?? "").length,
+					schemaChars: JSON.stringify(tool.inputSchema ?? {}).length,
+					...wire,
+				};
+			})
+			.sort((left, right) => right.chars - left.chars);
+		const header = {
+			at: new Date().toISOString(),
+			sessionId: input.sessionId,
+			providerId: input.providerId,
+			modelId: input.modelId,
+			toolCount: tools.length,
+			charsPerToken: Math.round(ratio * 100) / 100,
+			systemPromptTokens: input.systemPromptTokens,
+			toolSchemaTokens: input.toolSchemaTokens,
+			toolChars: rows.reduce((total, row) => total + row.chars, 0),
+		};
+		writeFileSync(
+			join(tmpdir(), "cline-tools.json"),
+			`${JSON.stringify({ ...header, tools: rows }, null, 2)}\n`,
+		);
+		appendFileSync(
+			join(tmpdir(), "cline-tools.jsonl"),
+			`${JSON.stringify({
+				...header,
+				tools: rows.map((row) => ({
+					name: row.name,
+					tokens: row.tokens,
+					chars: row.chars,
+					descriptionChars: row.descriptionChars,
+					schemaChars: row.schemaChars,
+				})),
+			})}\n`,
+		);
+	} catch {
+		// A diagnostics sink that can fail the run is worse than no sink.
+	}
+}
+
 function resolveManualMessageTargetTokens(input: {
 	messageInputTokens: number;
 	messageTriggerTokens: number;
@@ -382,25 +464,40 @@ function resolveManualMessageTargetTokens(input: {
 	);
 }
 
-function resolveAutoRequestTargetTokens(input: {
+/**
+ * The share of the *content* a compaction aims to leave behind.
+ *
+ * Of the content, not of the window. The system prompt, the tool schemas and
+ * any MCP tools are paid before a single message exists, and compaction cannot
+ * touch one token of them -- measured on pandorum 2026-09-19, 21,000-24,000
+ * tokens of a 65,536-token window, about a third of it gone before the
+ * conversation starts. (The system prompt is 1,607 of that; the rest is
+ * schemas.)
+ *
+ * Taking the share from the window made the target incoherent once the fixed
+ * price grew: a quarter of 65,536 is 16,384, below the price itself, so the
+ * transcript budget floored at nothing and every compaction became a full one
+ * whatever the tail setting said. Taking it from what is left asks the
+ * question that was always meant -- how much conversation may survive -- and
+ * has an answer for any window.
+ */
+export const COMPACTION_TARGET_CONTENT_SHARE = 0.25;
+
+/**
+ * How many tokens of transcript a compaction should leave.
+ *
+ * `maxInputTokens` is the whole window and `requestOverheadTokens` is what is
+ * spent before any message; the difference is the only part a compaction can
+ * spend, and the share is taken from that.
+ */
+export function resolveMessageTargetTokens(input: {
 	maxInputTokens: number;
-	modelMaxTokens?: number;
-	triggerTokens: number;
-	messagePairCount: number;
+	requestOverheadTokens: number;
+	share?: number;
 }): number {
-	const targetTokens =
-		input.messagePairCount >= 5 &&
-		typeof input.modelMaxTokens === "number" &&
-		Number.isFinite(input.modelMaxTokens) &&
-		input.modelMaxTokens <=
-			input.maxInputTokens * LONG_CONVERSATION_MAX_OUTPUT_SHARE
-			? Math.floor(input.maxInputTokens * LONG_CONVERSATION_TARGET_RATIO)
-			: Math.floor(input.triggerTokens * DEFAULT_TARGET_RATIO);
-	const triggerCeiling = Math.max(1, input.triggerTokens - 1);
-	return Math.max(
-		1,
-		Math.min(targetTokens, input.maxInputTokens, triggerCeiling),
-	);
+	const free = input.maxInputTokens - Math.max(0, input.requestOverheadTokens);
+	const share = input.share ?? COMPACTION_TARGET_CONTENT_SHARE;
+	return Math.max(1, Math.floor(Math.max(0, free) * share));
 }
 
 /**
@@ -413,6 +510,65 @@ function resolveAutoRequestTargetTokens(input: {
  * estimate when there is nothing to calibrate against -- the first request of a
  * session, before any response has been counted.
  */
+/**
+ * The transcript budget, expressed in the units the planner measures in.
+ *
+ * Two scales meet here and used not to. `shouldCompact` compares
+ * `triggerInputTokens` -- the provider's own count of the last request, when
+ * there is one -- against the threshold. Everything after it is an estimate:
+ * `requestOverheadTokens` and the `estimateMessageTokens` sum the cut is
+ * planned with. Subtracting an estimated overhead from a target derived from
+ * the real window mixes the two, and the error goes entirely one way when the
+ * estimator under-reads.
+ *
+ * Measured on pandorum 2026-09-19, iteration 10: ollama counted the request at
+ * 58,328 and the estimator read it as 36,826. The trigger fired correctly on
+ * 58,328 against 57,536. The target was then 57,536 x 0.7 = 40,275, less an
+ * estimated overhead of 23,796, giving 16,479 -- against a transcript the
+ * planner measured at 13,045. The compaction was asked to shrink something to
+ * a size it was already 3,434 tokens under, cut two messages, and the next
+ * turn overflowed and forced a real one. Two compactions, one file read
+ * between them.
+ *
+ * Scaling the request target by `estimate / observed` before the subtraction
+ * is what makes the two halves comparable. It is a no-op when the estimator
+ * agrees with the provider, and a no-op when there is no observation to
+ * calibrate against.
+ *
+ * **One-directional: it may tighten the target and never loosen it.** The
+ * correction exists because an under-reading estimator leaves a target the
+ * transcript is already past. An over-reading one is the opposite case, and
+ * there the plain subtraction is already tight -- inflating it would hand back
+ * a budget bigger than the trigger that just fired was asking for, and the
+ * compaction would find nothing to do. That is not hypothetical: it is the
+ * starved-output-cap path, where a thin cap forces a compaction on a
+ * transcript the estimator reads at 2.7x the provider's count, and a
+ * two-directional scale suppresses it entirely.
+ */
+export function resolveMessageTargetOnTriggerScale(input: {
+	requestTargetTokens: number;
+	requestOverheadTokens: number;
+	requestInputTokens: number;
+	triggerInputTokens: number | undefined;
+}): number {
+	const { requestInputTokens: estimate, triggerInputTokens: observed } = input;
+	const scaled =
+		observed !== undefined &&
+		Number.isFinite(observed) &&
+		observed > 0 &&
+		Number.isFinite(estimate) &&
+		estimate > 0
+			? Math.min(
+					input.requestTargetTokens,
+					(input.requestTargetTokens * estimate) / observed,
+				)
+			: input.requestTargetTokens;
+	return Math.max(
+		1,
+		Math.round(scaled) - Math.max(0, input.requestOverheadTokens),
+	);
+}
+
 export function scaleEstimateToObserved(
 	estimate: number,
 	estimateOfObserved: number,
@@ -435,22 +591,6 @@ function translateRequestBudgetToMessages(
 	overheadTokens: number,
 ): number {
 	return Math.max(1, Math.floor(requestTokens - overheadTokens));
-}
-
-function countUserAssistantPairs(
-	messages: CoreCompactionContext["messages"],
-): number {
-	let pairs = 0;
-	let hasPendingUser = false;
-	for (const message of messages) {
-		if (message.role === "user") {
-			hasPendingUser = true;
-		} else if (message.role === "assistant" && hasPendingUser) {
-			pairs += 1;
-			hasPendingUser = false;
-		}
-	}
-	return pairs;
 }
 
 /**
@@ -571,13 +711,39 @@ export function createContextCompactionPrepareTurn(
 				reasoningInline: providerConfig.reasoningInline,
 			},
 		);
-		const requestInputTokens = estimateRequestInputTokens(
+		// Anchored, because the request path is. `estimateRequestInputTokens`
+		// is characters over one smoothed ratio with nothing holding it to the
+		// provider's own count, so its error compounds with the transcript:
+		// over the 192-turn pandorum run of 2026-09-19 the ratio of ollama's
+		// count to this estimate reset to ~0.95 after every compaction and
+		// decayed to 0.58 as tool results accumulated -- the estimate reading
+		// 1.7x the truth by the time the trigger fired. `anchoredRequestTokens`
+		// prices only the characters added since the last measurement and
+		// leaves everything before them as measurement, which is what the
+		// gateway has always done. Two paths reading the same evidence.
+		const requestChars = measureRequestInputChars(
 			{
 				systemPrompt: context.systemPrompt,
 				messages: context.apiMessages,
 				tools: context.tools,
 			},
 			{ reasoningHistory },
+		);
+		const requestReasoningChars = Math.min(
+			requestChars,
+			measureRequestReasoningChars(
+				{
+					systemPrompt: context.systemPrompt,
+					messages: context.apiMessages,
+					tools: context.tools,
+				},
+				{ reasoningHistory },
+			),
+		);
+		const requestInputTokens = anchoredRequestTokens(
+			requestChars,
+			requestReasoningChars,
+			config.sessionId,
 		);
 		const messageInputTokens = context.messages.reduce(
 			(total: number, message) => total + estimateMessageTokens(message),
@@ -595,6 +761,18 @@ export function createContextCompactionPrepareTurn(
 		// messages to 4 -- after which the model, having lost what it was working
 		// from, looped. The term also wandered 19,793 -> 53,323 across a single
 		// session while the payload it describes barely changed.
+		// Split, because "overhead" is three different things with three
+		// different remedies and only one number was ever reported. Measured on
+		// pandorum 2026-09-19 against a 65,536-token window: 21,000-24,000
+		// tokens before a single message, of which the system prompt -- prompt
+		// template included, it is rendered into it -- is 1,607. The rest is
+		// tool schemas, and on a host that bridges VS Code's MCP servers most
+		// of that is MCP. A user told only the total has no way to know that
+		// turning off a handful of tools is what buys the room back.
+		const systemPromptTokens = estimateRequestInputTokens(
+			{ systemPrompt: context.systemPrompt, messages: [], tools: [] },
+			{ reasoningHistory },
+		);
 		const requestOverheadTokens = estimateRequestInputTokens(
 			{
 				systemPrompt: context.systemPrompt,
@@ -603,6 +781,43 @@ export function createContextCompactionPrepareTurn(
 			},
 			{ reasoningHistory },
 		);
+		const toolSchemaTokens = Math.max(
+			0,
+			requestOverheadTokens - systemPromptTokens,
+		);
+		// And the half of *that* a user can act on without giving up a tool.
+		// MCP schemas arrive from servers the session did not choose -- on a
+		// host that bridges VS Code's they are most of the fixed price -- and
+		// turning a server off is a different decision from turning a built-in
+		// tool off. One number cannot ask for either.
+		const mcpTools = (context.tools ?? []).filter(
+			(tool) => (tool as { source?: string }).source === "mcp",
+		);
+		const mcpToolSchemaTokens = mcpTools.length
+			? Math.max(
+					0,
+					estimateRequestInputTokens(
+						{
+							systemPrompt: context.systemPrompt,
+							messages: [],
+							tools: mcpTools,
+						},
+						{ reasoningHistory },
+					) - systemPromptTokens,
+				)
+			: 0;
+		const builtinToolSchemaTokens = Math.max(
+			0,
+			toolSchemaTokens - mcpToolSchemaTokens,
+		);
+		writeToolManifest({
+			sessionId: config.sessionId,
+			providerId: config.providerId,
+			modelId: config.modelId,
+			tools: context.tools,
+			systemPromptTokens,
+			toolSchemaTokens,
+		});
 		const maxInputTokens =
 			resolveEffectiveMaxInputTokens({
 				maxInputTokens: context.model.info?.maxInputTokens,
@@ -613,7 +828,40 @@ export function createContextCompactionPrepareTurn(
 		// declared ceiling. A model that answers in two thousand tokens and one
 		// that opens seventeen thousand tokens of thinking want opposite
 		// reservations, and the transcript already says which is which.
-		const observedOutputTokens = resolveObservedOutputTokens(context.messages);
+		//
+		// Measured from the transcript, not from `metrics.outputTokens`. The bill
+		// counts reasoning the condenser may already have replaced, and on
+		// pandorum 2026-09-19 one capped think -- billed 30,786, condensed to a
+		// 624-character note the same second -- held half a 65,536-token window
+		// in reserve for the twelve turns after it, pinning the trigger to its
+		// 50% floor while those turns produced 130 and 144 tokens. This is the
+		// same estimator the trigger measures the request with, so both halves of
+		// the comparison agree about what a message costs.
+		const lastAssistantIndex = context.messages.reduce(
+			(last: number, message, index) =>
+				message.role === "assistant" ? index : last,
+			-1,
+		);
+		const measureContextTokens = (
+			message: MessageWithMetadata,
+			index: number,
+		): number =>
+			estimateRequestInputTokens(
+				{ systemPrompt: "", messages: [message] },
+				{
+					// Only the last assistant turn still carries its reasoning
+					// under `last`, and a single-message request would otherwise
+					// look like the last one every time.
+					reasoningHistory:
+						reasoningHistory === "all" || index === lastAssistantIndex
+							? reasoningHistory
+							: "none",
+				},
+			);
+		const observedOutputTokens = resolveObservedOutputTokens(
+			context.messages,
+			measureContextTokens,
+		);
 		const requestTriggerTokens = resolveCompactionTriggerTokens({
 			maxInputTokens,
 			contextWindow: context.model.info?.contextWindow,
@@ -744,9 +992,18 @@ export function createContextCompactionPrepareTurn(
 			apiMessageTokens,
 			messageInputTokens,
 			requestOverheadTokens,
+			// The two halves of it, so a session that is a third spent before it
+			// starts says which third.
+			systemPromptTokens,
+			toolSchemaTokens,
+			builtinToolSchemaTokens,
+			mcpToolSchemaTokens,
+			toolCount: context.tools?.length ?? 0,
+			mcpToolCount: mcpTools.length,
 			maxInputTokens,
 			requestTriggerTokens,
 			messageTriggerTokens,
+			messageTargetShare: COMPACTION_TARGET_CONTENT_SHARE,
 			thresholdRatio: COMPACTION_TRIGGER_RATIO,
 			contextWindow: context.model.info?.contextWindow,
 			modelMaxTokens: context.model.info?.maxTokens,
@@ -769,21 +1026,43 @@ export function createContextCompactionPrepareTurn(
 		};
 		config.logger?.debug("Context compaction diagnostics", diagnostics);
 		appendCompactionDiagnostics(diagnostics);
+		// What the request costs before a message, to whoever is drawing the
+		// context bar. Every turn, not only the ones that compact: the fixed
+		// price is what the bar is mostly showing on an idle session, and a
+		// breakdown that only appeared after the first compaction would be
+		// missing exactly when someone is asking why the bar starts a third
+		// full. Internal -- it is a measurement, not something to tell the user
+		// about in the transcript.
+		context.emitStatusNotice?.("context-breakdown", {
+			kind: "context_breakdown",
+			iteration: context.iteration,
+			systemPromptTokens,
+			builtinToolSchemaTokens,
+			mcpToolSchemaTokens,
+			toolCount: context.tools?.length ?? 0,
+			mcpToolCount: mcpTools.length,
+			requestOverheadTokens,
+			maxInputTokens,
+		});
 		if (effectiveMode === "auto" && !shouldCompact) {
 			return undefined;
 		}
 		let requestTargetTokens: number;
 		let messageTargetTokens: number;
 		if (effectiveMode === "auto") {
-			requestTargetTokens = resolveAutoRequestTargetTokens({
+			// A share of the content, not of the window: the fixed price of the
+			// system prompt and the tool schemas is not something a compaction
+			// can spend, so it is removed before the share is taken rather than
+			// subtracted from a target that was computed as though it could be.
+			messageTargetTokens = resolveMessageTargetTokens({
 				maxInputTokens,
-				modelMaxTokens: context.model.info?.maxTokens,
-				triggerTokens: requestTriggerTokens,
-				messagePairCount: countUserAssistantPairs(context.messages),
-			});
-			messageTargetTokens = translateRequestBudgetToMessages(
-				requestTargetTokens,
 				requestOverheadTokens,
+			});
+			// Kept under the threshold it just crossed: a target at or above the
+			// trigger is a compaction that cannot finish.
+			requestTargetTokens = Math.min(
+				requestOverheadTokens + messageTargetTokens,
+				Math.max(1, requestTriggerTokens - 1),
 			);
 		} else {
 			messageTargetTokens = resolveManualMessageTargetTokens({
@@ -848,6 +1127,34 @@ export function createContextCompactionPrepareTurn(
 		const beforeMessageCount = context.messages.length;
 		const startedAt = Date.now();
 
+		// What the row prints, measured the way the transcript is actually sent.
+		// `estimateMessageTokens` is `JSON.stringify` of the whole message, so
+		// summing it counts the reasoning the provider is not sent on an older
+		// turn, the metadata that never leaves the host, and the JSON structure
+		// itself -- none of which is context. The printed pair then describes a
+		// transcript nobody transmits.
+		//
+		// The transcript only: no system prompt, no tool schemas. These two
+		// numbers are consumed as a *ratio* (`getLastApiReqTotalTokens` rescales
+		// the provider's own total by `tokensAfter / tokensBefore`, because the
+		// two scales differ and substituting an estimate would make the bar
+		// re-snap when real usage lands). Overhead is identical on both sides of
+		// a compaction, so folding it in would drag that ratio toward 1 and make
+		// the bar under-report the shrink. What compaction changes is the
+		// transcript, and the ratio has to measure exactly that.
+		//
+		// Deliberately not used for any cut decision. The budgets, the recency
+		// bounds and the no-tail comparison stay on `estimateMessageTokens`:
+		// those decide what compaction *does*, and moving them would change the
+		// cut, not the caption. This changes only what it *says*.
+		const measureReportedTokens = (
+			messages: readonly MessageWithMetadata[],
+		): number =>
+			estimateRequestInputTokens(
+				{ systemPrompt: "", messages },
+				{ reasoningHistory },
+			);
+
 		const builtinOptions = {
 			context: compactionContext,
 			providerConfig: {
@@ -857,6 +1164,7 @@ export function createContextCompactionPrepareTurn(
 			compaction: userCompaction,
 			keepRecentMessages,
 			estimateMessageTokens,
+			measureReportedTokens,
 			logger: config.logger,
 		};
 		const sizeOf = (messages: CoreCompactionResult["messages"]): number =>

@@ -302,12 +302,26 @@ describe("dropping the tail when keeping it did not fit", () => {
 		const turns = 10;
 		// Seven characters per `detail `, four characters per token.
 		const repeats = Math.floor((WINDOW_TOKENS * 4 * OVERSHOOT) / turns / 7);
+		// One last turn larger than the trigger on its own.
+		//
+		// This is what actually defeats a recency budget, and spreading the
+		// same total across even turns does not reproduce it: the tail's floor
+		// is one message, so a transcript only stays oversized after a keep-tail
+		// cut when a single message is bigger than the window. With the content
+		// target taking a quarter of what is left, the tail stops at the first
+		// message that reaches it -- so ten even turns leave one 12,800-token
+		// message and fit, and only this one does not.
+		const lastTurnRepeats = Math.floor((WINDOW_TOKENS * 4 * 1.2) / 7);
 		return [
 			{ role: "user", content: "the standing request" },
 			...Array.from({ length: turns }, (_, index) => ({
 				role: index % 2 === 0 ? ("assistant" as const) : ("user" as const),
 				content: `turn ${index} ${"detail ".repeat(repeats)}`,
 			})),
+			{
+				role: "assistant",
+				content: `the long last turn ${"detail ".repeat(lastTurnRepeats)}`,
+			},
 		];
 	}
 
@@ -451,7 +465,7 @@ describe("closing the revision span at a compaction", () => {
  * three, and the summary is then what the next attempt reads instead of a tail
  * — which is the artifact the full prompt is written for.
  */
-describe("dropping the tail from the second compaction", () => {
+describe("the force-full ladder, which is off unless asked for", () => {
 	/** The transcript as it comes back to a run that has compacted before. */
 	const compactedOnce: MessageWithMetadata[] = [
 		{
@@ -517,7 +531,23 @@ describe("dropping the tail from the second compaction", () => {
 		);
 	});
 
-	it("asks for the summary that replaces everything the second time", async () => {
+	// Asked for explicitly now. It used to be the default, which meant the tail
+	// policy changed part-way through every run -- kept on the first
+	// compaction, dropped on every later one -- so no run ever used one policy
+	// and no experiment could compare the two.
+	it("asks for the summary that replaces everything when set to the second", async () => {
+		const createMessage = summarizerReplying([
+			"## Goal\nThe goal.\n\n## Next\nThe step.",
+		]);
+
+		await runOver(compactedOnce, 2);
+
+		expect(createMessage.mock.calls[0]?.[0]).toContain(
+			"the only record that remains",
+		);
+	});
+
+	it("keeps the tail on the second compaction by default", async () => {
 		const createMessage = summarizerReplying([
 			"## Goal\nThe goal.\n\n## Next\nThe step.",
 		]);
@@ -525,11 +555,11 @@ describe("dropping the tail from the second compaction", () => {
 		await runOver(compactedOnce);
 
 		expect(createMessage.mock.calls[0]?.[0]).toContain(
-			"the only record that remains",
+			"re-telling your own recent work in your own voice",
 		);
 	});
 
-	it("can be turned off, and the second compaction keeps its tail", async () => {
+	it("still honours an explicit zero", async () => {
 		const createMessage = summarizerReplying([
 			"## Goal\nThe goal.\n\n## Next\nThe step.",
 		]);

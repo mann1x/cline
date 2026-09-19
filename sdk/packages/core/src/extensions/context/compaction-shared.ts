@@ -304,8 +304,20 @@ const OUTPUT_ROOM_SAMPLE_TURNS = 12;
  */
 const OUTPUT_ROOM_HEADROOM = 1.5;
 
-/** Never reserve less than this, however quiet the session has been. */
-const MIN_OUTPUT_ROOM_TOKENS = 2_048;
+/**
+ * Never reserve less than this, however quiet the session has been.
+ *
+ * 8,000 because that is where the retry ladder in `@cline/agents` stops
+ * halving: below it an output cap is not a smaller budget, it is an unusable
+ * one. The floor matters more now that the reservation is measured from what
+ * the transcript carries rather than from what the turns were billed --
+ * context footprint systematically understates what a turn needed to *produce*
+ * it, because the reasoning it took is not in the footprint. Measured on
+ * pandorum 2026-09-18: a session whose cap walked down to 12,286 started
+ * emitting whole-file rewrites cut mid-JSON, arriving as pathless `editor`
+ * calls. A 2,048-token reservation is on the wrong side of that.
+ */
+const MIN_OUTPUT_ROOM_TOKENS = 8_000;
 
 /**
  * The largest share of the window the measurement may claim.
@@ -314,6 +326,19 @@ const MIN_OUTPUT_ROOM_TOKENS = 2_048;
  * the same argument, and the floor below settles it anyway.
  */
 const MAX_MEASURED_OUTPUT_ROOM_WINDOW_SHARE = 0.5;
+
+/**
+ * What one message costs in the context as the provider will receive it.
+ *
+ * The index comes along because the answer depends on position: under a
+ * `reasoningHistory` of `last` only the final assistant turn still carries its
+ * reasoning, and a measurer handed a message on its own cannot know whether it
+ * is that one.
+ */
+export type MeasureContextTokens = (
+	message: MessageWithMetadata,
+	index: number,
+) => number;
 
 /**
  * What this session's turns have actually cost, as a basis for how much of the
@@ -330,9 +355,20 @@ const MAX_MEASURED_OUTPUT_ROOM_WINDOW_SHARE = 0.5;
  * The high-water mark of the recent window rather than the mean: the reservation
  * exists for the largest turn, and an average over a session that thinks on one
  * turn in four describes none of them.
+ *
+ * **Measured from the transcript, never from the bill.** `metrics.outputTokens`
+ * is what the provider charged for generating the turn, and a turn whose
+ * reasoning has since been condensed away is still carrying its original
+ * invoice. Measured on pandorum 2026-09-19: a capped think billed 30,786 tokens
+ * and was replaced with a 624-character note the same second, and the bill went
+ * on reserving half a 65,536-token window for the next twelve turns -- pinning
+ * the trigger to its 50% floor while the turns that followed produced 130 and
+ * 144 tokens. `measure` is the caller's estimator for what a message costs in
+ * the context as it stands, which is the question the reservation is asking.
  */
 export function resolveObservedOutputTokens(
 	messages: readonly MessageWithMetadata[],
+	measure: MeasureContextTokens,
 	sampleTurns = OUTPUT_ROOM_SAMPLE_TURNS,
 ): number | undefined {
 	const observed: number[] = [];
@@ -341,10 +377,9 @@ export function resolveObservedOutputTokens(
 		if (message.role !== "assistant") {
 			continue;
 		}
-		const outputTokens = (message as { metrics?: { outputTokens?: number } })
-			.metrics?.outputTokens;
-		if (isPositiveFiniteNumber(outputTokens)) {
-			observed.push(outputTokens);
+		const contextTokens = measure(message, index);
+		if (isPositiveFiniteNumber(contextTokens)) {
+			observed.push(contextTokens);
 		}
 		if (observed.length >= sampleTurns) {
 			break;
@@ -453,9 +488,27 @@ export interface CompactionSummaryMetadata {
 	generation: number;
 	/** The retrospective written alongside this summary, if there was one. */
 	thinkingSummary?: string;
+	/**
+	 * The harness's record of the calls this summary stands for, when the
+	 * Checkpoints switch left it on. Read by the chat row, not by compaction.
+	 */
+	toolLedger?: string;
 }
 
 export type EstimateMessageTokens = (message: MessageWithMetadata) => number;
+
+/**
+ * Measures the request a transcript would produce, for reporting.
+ *
+ * Distinct from `EstimateMessageTokens`, which sums whole serialized messages
+ * and so counts reasoning the provider is not sent and metadata that never
+ * leaves the host. That sum is the right input for a cut decision, where the
+ * comparison is between two transcripts measured the same way, and the wrong
+ * one for a number shown beside the context meter.
+ */
+export type MeasureReportedTokens = (
+	messages: readonly MessageWithMetadata[],
+) => number;
 
 function isPositiveFiniteNumber(value: unknown): value is number {
 	return typeof value === "number" && Number.isFinite(value) && value > 0;
@@ -738,35 +791,34 @@ export function isCompactionSummaryMessage(
 }
 
 /**
- * The compaction from which the recency tail is dropped whatever the setting.
+ * The compaction from which the recency tail is dropped anyway, counting from
+ * 1. Zero -- the default -- never drops it, so the tail policy is whatever
+ * `keepRecentMessages` says and does not change part-way through a run.
  *
- * **Two, measured.** Across 335 harness runs with a verdict, the fix rate falls
- * with every compaction a run has already been through:
+ * This was 2, and that was a mistake worth recording rather than quietly
+ * deleting. It meant no session ever ran a single tail policy: the first
+ * compaction kept the tail and every later one dropped it. Two consequences
+ * followed, both measured.
  *
- * ```
- *   compactions   runs   FIXED
- *       0          218    85 %
- *       1           41    63 %
- *       2           24    50 %
- *       3            8    25 %
- *      4+           44    25 %
- * ```
+ * The first compaction became the weak one by construction -- over 30 first
+ * and 24 later compactions on pandorum, a median -30% leaving 20 messages
+ * against -65% leaving 4. A run then refilled to the trigger within a median
+ * of 12 turns and took a second compaction, which is the one the fix rate
+ * falls off (85% / 63% / 50% / 25% by compaction count over 335 runs).
  *
- * Firing from the second selects 76 of 335 runs, of which 67% go on to fail --
- * 51% of every failure in the corpus, caught at a median iteration of 180 with
- * 246 still to spend. The cost is the 10.6% of winning runs that reach a second
- * compaction and get a summary instead of a tail.
+ * The second is that it made its own evidence unreadable. The v6 A/B that
+ * appeared to justify the ladder ran `--force-full-from-compaction 2` in both
+ * arms, so "keep" meant keep-once-then-drop and "drop" meant drop-always. That
+ * is not a contrast between keeping and dropping a tail, and it duly separated
+ * nothing on the verdict. Whatever the right tail policy is, it has to be one
+ * policy for a whole run before any arm can measure it.
  *
- * An iteration bound was measured and rejected: compactions land late (median
- * 180), so bounding at 150 collapses recall from 51% to 20%.
- *
- * Nothing here measures the *treatment*. No arm has run with the tail forced
- * off, so what is calibrated is which runs are selected, not what dropping the
- * tail does to them. What makes it the cheaper side of the bet is that the
- * population it selects fails two times in three, and that a summary the model
- * reads in place of a tail is the artifact `fullSummaryPrompt` is written for.
+ * The override survives for anyone who wants the old behaviour deliberately;
+ * it is no longer the default. The no-tail *fallback* is unaffected -- a
+ * compaction that keeps the tail and still lands over the trigger retries
+ * without it, which is a rescue and not a schedule.
  */
-export const FORCE_FULL_FROM_COMPACTION = 2;
+export const FORCE_FULL_FROM_COMPACTION = 0;
 
 /**
  * Whether this compaction keeps nothing, whatever `keepRecentMessages` says.
@@ -1930,6 +1982,14 @@ export function buildSummaryMessage(options: {
 			generatedAt: Date.now(),
 			generation: Math.max(1, Math.floor(options.generation ?? 1)),
 			...(thinkingSummary ? { thinkingSummary } : {}),
+			// Carried here as well as in the content, so a reader can see it.
+			// It was on the wire from the first version and rendered nowhere,
+			// which is indistinguishable from not being written: "I can only
+			// guess they are there cause they are not in the summary displayed
+			// in the chat panel". Separate from `summary` for the reason the
+			// ledger is kept out of that field -- a ledger inside `summary`
+			// becomes the next generation's `previousSummary` and accumulates.
+			...(toolLedger ? { toolLedger } : {}),
 		} satisfies CompactionSummaryMetadata,
 	};
 }

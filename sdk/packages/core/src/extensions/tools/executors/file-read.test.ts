@@ -67,6 +67,61 @@ describe("createFileReadExecutor with a read ledger", () => {
 	});
 });
 
+describe("the read size refusal", () => {
+	async function readWholeOf(
+		body: string,
+		request: Record<string, unknown> = {},
+	) {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "agents-read-cap-"));
+		try {
+			const file = path.join(dir, "big.html");
+			await fs.writeFile(file, body, "utf-8");
+			const readFile = createFileReadExecutor({ cwd: dir });
+			return await readFile(
+				{ path: file, ...request },
+				{
+					agentId: "a",
+					conversationId: "c",
+					iteration: 1,
+				},
+			);
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	}
+
+	// Truncation was the wrong answer. A 48,000-character cap silently hands
+	// back a third of a file and the model works from it as though it were the
+	// file; the cost lands in every later request, because a tool result is
+	// re-sent for the rest of the run. Refusing makes the model ask again with
+	// a range, which is the read it should have made.
+	it("refuses a read whose window would exceed 2KB", async () => {
+		const body = `${"x".repeat(80)}\n`.repeat(120); // ~9.7KB
+		await expect(readWholeOf(body)).rejects.toThrow(/2048|2,048|too large/i);
+	});
+
+	it("names the range arguments in the refusal", async () => {
+		const body = `${"x".repeat(80)}\n`.repeat(120);
+		await expect(readWholeOf(body)).rejects.toThrow(/start_line/);
+	});
+
+	it("still returns a file that fits", async () => {
+		const body = `${"x".repeat(40)}\n`.repeat(10); // ~410 bytes
+		const result = (await readWholeOf(body)) as string;
+		expect(result).toContain("xxxx");
+	});
+
+	// A targeted read is the thing being asked for, so it must work.
+	it("returns a small window out of a large file", async () => {
+		const body = `${"x".repeat(80)}\n`.repeat(120);
+		const result = (await readWholeOf(body, {
+			start_line: 1,
+			end_line: 5,
+		})) as string;
+		expect(result).toContain("1 |");
+	});
+});
+
 describe("createFileReadExecutor", () => {
 	it("reads a file from an absolute path", async () => {
 		const result = await readTempFile("hello absolute path");
@@ -134,7 +189,13 @@ describe("createFileReadExecutor", () => {
 		try {
 			const filePath = path.join(dir, "example.txt");
 			await fs.writeFile(filePath, content, "utf-8");
-			const readFile = createFileReadExecutor();
+			// The size refusal is lifted for this helper on purpose. The tests
+			// below exercise windowing, pagination, line counting and the dense
+			// character cap -- mechanics that still run for every read that
+			// fits, and that a 2,048-character refusal would hide rather than
+			// replace. The refusal itself is covered by "the read size refusal"
+			// above, which uses the real default.
+			const readFile = createFileReadExecutor({ maxReadChars: 1_000_000 });
 			return (await readFile(
 				{ path: filePath, ...range },
 				{ agentId: "agent-1", conversationId: "conv-1", iteration: 1 },
@@ -222,7 +283,12 @@ describe("createFileReadExecutor", () => {
 		await fs.writeFile(filePath, numberedLines(2500), "utf-8");
 
 		try {
-			const readFile = createFileReadExecutor({ maxFileSizeBytes: 10 });
+			// Size gate under test, not the read cap -- lifted for the same
+			// reason as `readTempFile`.
+			const readFile = createFileReadExecutor({
+				maxFileSizeBytes: 10,
+				maxReadChars: 1_000_000,
+			});
 			const result = (await readFile(
 				{ path: filePath },
 				{ agentId: "agent-1", conversationId: "conv-1", iteration: 1 },
