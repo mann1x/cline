@@ -1,5 +1,5 @@
 import * as Llms from "@cline/llms";
-import { ReasoningLevelSchema } from "@cline/shared";
+import { ReasoningLevelSchema, resolveOutputBudgetTokens } from "@cline/shared";
 import { z } from "zod";
 import {
 	DEFAULT_EXTERNAL_OCA_BASE_URL,
@@ -353,6 +353,45 @@ function shouldRouteThroughOpenAIResponses(
 	);
 }
 
+/**
+ * The per-turn cap to hand the gateway as its default, from the settings alone.
+ *
+ * `outputBudget` has been a field of this schema for a while, but every reader
+ * of it lived in the VS Code host, so a CLI or JetBrains profile that set it was
+ * parsed, stored, and then dropped on the floor -- the gateway synthesised its
+ * flat anchor instead, and the number the user typed reached neither the wire
+ * nor the prompt. Resolving it here puts it on the one path every host shares.
+ *
+ * Precedence mirrors the VS Code factory deliberately, so the same profile means
+ * the same thing in both: a configured `numPredict` first, because it is what
+ * actually goes on the wire for a local engine and a profile written before this
+ * setting existed carries its cap there and nowhere else; then the budget.
+ *
+ * It is a *default*, not a ceiling. The model's published cap and the room left
+ * in the window still clamp it, and an explicitly requested cap still wins.
+ * `undefined` stays a real answer: `auto` is a share of a window, and a profile
+ * with no window has none to take a share of, so inventing a number there would
+ * be the same defect pointed the other way.
+ */
+function resolveSettingsDefaultOutputCap(
+	settings: ProviderSettings,
+): number | undefined {
+	const numPredict = settings.sampling?.numPredict;
+	if (
+		typeof numPredict === "number" &&
+		Number.isFinite(numPredict) &&
+		numPredict > 0
+	) {
+		return Math.floor(numPredict);
+	}
+	return resolveOutputBudgetTokens({
+		mode: settings.outputBudget?.mode ?? "auto",
+		maxTokens: settings.outputBudget?.maxTokens,
+		contextWindow: settings.contextWindow,
+		modelMaxOutputTokens: settings.maxTokens,
+	});
+}
+
 export function toProviderConfig(
 	settings: ProviderSettings,
 	options: ToProviderConfigOptions = {},
@@ -420,6 +459,7 @@ export function toProviderConfig(
 		timeoutMs: settings.timeout,
 		maxOutputTokens: settings.maxTokens,
 		maxInputTokens: settings.contextWindow,
+		defaultMaxOutputTokens: resolveSettingsDefaultOutputCap(settings),
 		thinking: settings.reasoning?.enabled,
 		reasoningEffort,
 		thinkingBudgetTokens: settings.reasoning?.budgetTokens,

@@ -137,3 +137,55 @@ describe("reasoning history", () => {
 		).toBeUndefined();
 	});
 });
+
+describe("per-turn output budget", () => {
+	// `outputBudget` is a field of the shared providers.json schema, but until
+	// now every reader of it lived in `apps/vscode`. A CLI profile that set it
+	// was parsed, stored and then dropped, so the gateway synthesised its flat
+	// anchor instead and the harness ran every arm at 32,000 -- the ladder that
+	// ended run 0405 at the 8,000 floor.
+	it("carries a manual output budget into the provider config", () => {
+		const config = toProviderConfig({
+			provider: "ollama",
+			model: "v9-agentic-ac_tb:27b-q4km-128k",
+			outputBudget: { mode: "manual", maxTokens: 82500 },
+		});
+
+		expect(config.defaultMaxOutputTokens).toBe(82500);
+	});
+
+	// Manual needs no window, but auto is a share of one, and a bare CLI profile
+	// has none. `undefined` is the honest answer there -- inventing a number
+	// would be the same defect in the other direction.
+	it("sizes an auto output budget from the configured window, and declines without one", () => {
+		const windowed = toProviderConfig({
+			provider: "ollama",
+			model: "v9-agentic-ac_tb:27b-q4km-128k",
+			contextWindow: 131072,
+			outputBudget: { mode: "auto" },
+		});
+		expect(windowed.defaultMaxOutputTokens).toBeGreaterThan(32_000);
+
+		const bare = toProviderConfig({
+			provider: "ollama",
+			model: "v9-agentic-ac_tb:27b-q4km-128k",
+			outputBudget: { mode: "auto" },
+		});
+		expect(bare.defaultMaxOutputTokens).toBeUndefined();
+	});
+
+	// A profile written before the setting existed carries its cap in
+	// `sampling.numPredict` and nowhere else. It is what actually goes on the
+	// wire, so it has to win, exactly as it does in the VS Code factory.
+	it("prefers a configured numPredict over the output budget", () => {
+		const config = toProviderConfig({
+			provider: "ollama",
+			model: "v9-agentic-ac_tb:27b-q4km-128k",
+			contextWindow: 131072,
+			sampling: { numPredict: 40000 },
+			outputBudget: { mode: "manual", maxTokens: 82500 },
+		});
+
+		expect(config.defaultMaxOutputTokens).toBe(40000);
+	});
+});
