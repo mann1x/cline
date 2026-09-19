@@ -5,58 +5,71 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
-## [4.100.139] — 2026-09-19
+## [4.100.140] — 2026-09-19
 
-### The read limit is a setting, and its default was far too tight
+### The summarizer could not see half of what the tools returned
 
-4.100.138 refused a file read past 2,048 characters — about fifty lines of
-ordinary source. A whole small file was refused, and the model answered the way
-the message invited it to, by crawling the file in tiny windows. The threshold
-is now 24,000 characters: roughly 6,000 tokens, about 9% of a 65,536-token
-window. The size worth refusing is the one that costs a real share of the
-window for the rest of the run — a tool result is re-sent on every later
-request — not the one that is larger than a screenful.
+A compaction summary told the next context that a game was running. The
+checker it was quoting had returned `ok:false` three times, the last with
+`ReferenceError: collide is not defined`. The summary was not being careless —
+it had never been shown the answer.
 
-The refusal also says how much fits. "Read a smaller range" without a size
-makes the model guess, and it guesses downwards; it now gets a number measured
-from the file in hand, counted off the rendered output rather than the raw
-bytes, because that is what is actually sent.
+`read_files`, `run_commands` and `search_codebase` reply with structured
+objects rather than text blocks, and both readers of that array in compaction
+recognised only text: the transcript serializer rendered them as an empty
+`[Tool result]:` line, and the tool ledger — the harness's own measured record,
+placed beside the summary precisely so the two accounts can be compared —
+printed `[1 items]`. On the session this was found in, 50 of 99 tool results
+came out blank, dropping 414,337 characters: every file read, every read
+refusal, and all three of the checker's verdicts. The summarizer saw a call
+followed by nothing, and wrote what it assumed had happened.
 
-And it is a switch in the **Tools** section now, per profile, with the
-threshold beside it. A capable model paginates without being made to and the
-refusal only costs it a turn; a smaller one reads whole files and pays for them
-all run. On by default, and turning it off restores the old behaviour, where an
-oversized read comes back truncated.
+Both now carry what the tools actually returned, with the same length cap text
+results already had.
 
-### The context bar was measuring three things it is not
+### A summary that copied its own request back
 
-Reported within minutes of the last build: the conversation shrinking and
-coming back, the whole of it wiped after a compaction, the system-and-tools
-part dropping from 12k to 4-5k while compacting, and the bar moving up and down
-during ordinary tool use. All four were the bar rather than the session, and all
-four are fixed.
+The same summary was 64% echo. The model wrote its replay, then reproduced the
+prompt's file scaffold, the literal `Conversation:` header and the transcript
+verbatim, and was still copying when the output limit cut it off mid-string.
 
-**It counted the reply.** The meter summed the completion tokens into the
-window. Measured over 57 turns of one session, the last reply's length ranged
-from 0 to 8,054 tokens — so a thinking turn and the tool call after it differed
-by 12% of the bar with the conversation unchanged. The reply is not in the
-window; it arrives in the next request's prompt and is counted there.
+Nothing caught it. The over-length retry did not fire, because the whole thing
+was still inside its token budget. The backstop written for exactly this was
+never actually called. The file list the harness appends was suppressed by the
+echoed heading. And a reply the provider reported as truncated was stored
+without a word, because that flag was only read when the reply was empty.
 
-**A compaction shrank the system prompt and the tool schemas, which nothing
-does.** The compaction ratio was applied to the whole total the moment the
-divider completed. Those two are re-sent at full size on the very next request.
-Two compactions compounding pushed the total below the fixed price, at which
-point the conversation read as empty and the coloured parts were squeezed to
-fit. The ratio now applies to the conversation alone.
+The echo is now cut at the harness's own transcript markers — left alone inside
+a fenced block, where a faithful replay of a refused call may legitimately
+quote them — and cut before the reply is judged, so an answer that was only the
+echo is retried. A truncated summary now says so in the log. The retrospective
+gets the same treatment: it sits above the summary, so an echo there is the
+first thing the next turn reads.
 
-**The length and the colours came from different requests**, so the coloured
-part appeared and vanished between turns — and a reopened task showed a length
-with no colours at all until its next live request. One request now answers
-both.
+### The replay prompt disagreed with itself
 
-**The bar holds still while a compaction is running.** Mid-compaction the
-transcript is being rewritten and the numbers available describe neither the
-state being left nor the one being arrived at.
+Asked for a first-person, present-tense replay, the model returned a
+present-tense opening sentence, a present-tense closing sentence, and a wholly
+past-tense body.
+
+Two reasons, both in the prompt. It carried a two-column "not this / this"
+table, and the summary came back with the left column nearly verbatim — "I
+started by running the diagnostic" against a row reading "I started by reading
+the file". A negative example is still an example: it puts the forbidden
+phrasing in front of the model at the moment it is choosing how to open a
+sentence. And the prompt labelled five of its own sections in the past tense
+while demanding the present two paragraphs above.
+
+Only the column showing what to write is left, the labels are in the tense they
+ask for, and the prompt now says plainly not to report a result it cannot see,
+and to stop when the replay is done.
+
+### Which prompt ran is recorded now
+
+The compaction diagnostics logged the strategy and the mode but not which of
+the three summary instructions was used, so a report that a prompt change had
+not worked could only be checked by reconstructing the prompt from the defaults
+and the stored settings by hand. Every compaction record now names it.
 
 ## [4.100.118] — 2026-09-15
 
