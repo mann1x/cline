@@ -59,6 +59,7 @@ export async function getStateToPostToWebview(controller: {
 	const forceFullFromCompaction = stateManager.getGlobalSettingsKey("forceFullFromCompaction")
 	const fullCompactionPrompt = stateManager.getGlobalSettingsKey("fullCompactionPrompt")
 	const thinkingCompactionEnabled = stateManager.getGlobalSettingsKey("thinkingCompactionEnabled")
+	const councilCompactionEnabled = stateManager.getGlobalSettingsKey("councilCompactionEnabled")
 	const thinkingCompactionPrompt = stateManager.getGlobalSettingsKey("thinkingCompactionPrompt")
 	const cappedThinkingEnabled = stateManager.getGlobalSettingsKey("cappedThinkingEnabled")
 	const showRequestTimings = stateManager.getGlobalSettingsKey("showRequestTimings")
@@ -179,6 +180,7 @@ export async function getStateToPostToWebview(controller: {
 		fullCompactionPrompt,
 		defaultFullCompactionPrompt: DEFAULT_FULL_COMPACTION_PROMPT,
 		thinkingCompactionEnabled,
+		councilCompactionEnabled,
 		thinkingCompactionPrompt,
 		defaultThinkingCompactionPrompt: DEFAULT_THINKING_COMPACTION_PROMPT,
 		cappedThinkingEnabled,

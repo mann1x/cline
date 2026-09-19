@@ -316,6 +316,7 @@ message Settings {
   optional string full_compaction_prompt = 211;
   optional int32 force_full_from_compaction = 212;
   optional bool strong_nudges_enabled = 213;
+  optional bool council_compaction_enabled = 214;
 }
 
 message State {
@@ -503,6 +504,9 @@ message UpdateSettingsRequest {
   // to keep in step for no gain.
   optional string update_channel = 69;
   optional bool strong_nudges_enabled = 73;
+  // Two reviewers correct the compaction summary against one half of the
+  // transcript each, and a synthesiser merges their corrections.
+  optional bool council_compaction_enabled = 74;
 }
 
 // The escalation path's budgets and switches.

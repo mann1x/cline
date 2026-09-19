@@ -1753,6 +1753,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	// Defaults on: the summary alone leaves a resumed task with no memory of
 	// having been wrong, which is how a long run repeats its own mistakes.
 	const thinkingCompactionEnabled = stateManager.getGlobalSettingsKey("thinkingCompactionEnabled") ?? true
+	const councilCompactionEnabled = stateManager.getGlobalSettingsKey("councilCompactionEnabled") ?? true
 	const thinkingCompactionPrompt = (stateManager.getGlobalSettingsKey("thinkingCompactionPrompt") ?? "").trim()
 	// The condenser that replaces an abandoned think with a note of what it
 	// settled. Also defaults on, and stands down by itself where no thinking
@@ -2237,6 +2238,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 						...(compactionPrompt ? { summaryPrompt: compactionPrompt } : {}),
 						...(fullCompactionPrompt ? { fullSummaryPrompt: fullCompactionPrompt } : {}),
 						thinkingSummaryEnabled: thinkingCompactionEnabled,
+						councilEnabled: councilCompactionEnabled,
 						...(thinkingCompactionPrompt ? { thinkingSummaryPrompt: thinkingCompactionPrompt } : {}),
 					}
 				: {}),

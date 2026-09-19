@@ -583,6 +583,21 @@ export interface CoreCompactionConfig {
 	 */
 	thinkingSummaryEnabled?: boolean;
 	/**
+	 * Whether the summary and the retrospective are reviewed before they
+	 * replace the transcript.
+	 *
+	 * Two reviewers each receive one half of the transcript along with the
+	 * whole summary, and correct it against the half they hold; a synthesiser
+	 * merges the two corrections. The summary is the one artifact in the
+	 * system that is never checked against the thing it describes, and from
+	 * the turn it is written it *is* the thing it describes -- so a claim that
+	 * went in wrong is never caught by anything downstream.
+	 *
+	 * Costs three extra model calls per compaction and cannot fail one: every
+	 * path through the review returns the summary it was given. Defaults to on.
+	 */
+	councilEnabled?: boolean;
+	/**
 	 * Replaces the built-in retrospective instruction.
 	 *
 	 * Worth changing per model for the same reason as `summaryPrompt`, and more

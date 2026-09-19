@@ -220,6 +220,7 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		fullCompactionPrompt,
 		defaultFullCompactionPrompt,
 		thinkingCompactionEnabled,
+		councilCompactionEnabled,
 		thinkingCompactionPrompt,
 		defaultThinkingCompactionPrompt,
 		cappedThinkingEnabled,
@@ -828,6 +829,30 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 							</VSCodeButton>
 						) : null}
 					</div>
+				</div>
+
+				{/* Third in the same operation, and the only part of it that
+				    reads the transcript back: the two above write, this one
+				    checks what they wrote against what happened. */}
+				<div className="space-y-2 pt-2">
+					<div className="flex items-center justify-between w-full">
+						<Label className="text-sm font-medium text-foreground">Compaction Council</Label>
+						<Switch
+							checked={councilCompactionEnabled ?? true}
+							className="shrink-0"
+							disabled={!useAutoCondense}
+							id="councilCompactionEnabled"
+							onCheckedChange={(checked) => updateSetting("councilCompactionEnabled", checked)}
+							size="lg"
+						/>
+					</div>
+					<p className="text-xs text-muted-foreground">
+						The summary is the one thing never checked against what it describes &mdash; and once written, it{" "}
+						<em>is</em> what happened, for every turn after it. This splits the transcript in two and hands each half
+						to a reviewer along with the whole summary, to correct what its half contradicts, add what its half shows
+						missing, and fix what it misquotes; a third pass merges the two. Costs three extra model calls per
+						compaction and cannot fail one.
+					</p>
 				</div>
 
 				{/* The third thing that rewrites reasoning, and the only one that

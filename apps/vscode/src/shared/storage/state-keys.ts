@@ -352,6 +352,7 @@ const USER_SETTINGS_FIELDS = {
 	forceFullFromCompaction: { default: 0 as number },
 	fullCompactionPrompt: { default: "" as string },
 	thinkingCompactionEnabled: { default: true as boolean },
+	councilCompactionEnabled: { default: true as boolean },
 	thinkingCompactionPrompt: { default: "" as string },
 	/**
 	 * The condenser that replaces a turn's abandoned reasoning with a note of

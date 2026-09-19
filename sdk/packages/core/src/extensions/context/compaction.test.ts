@@ -1981,6 +1981,8 @@ describe("createContextCompactionPrepareTurn", () => {
 			compaction: {
 				enabled: true,
 				strategy: "agentic",
+				// Counts model calls, so the council (three more) is off here.
+				councilEnabled: false,
 				preserveRecentTokens: 1,
 			},
 			logger: undefined,
@@ -2286,6 +2288,8 @@ describe("createContextCompactionPrepareTurn", () => {
 			compaction: {
 				enabled: true,
 				strategy: "agentic",
+				// Counts model calls, so the council (three more) is off here.
+				councilEnabled: false,
 				preserveRecentTokens: 1,
 			},
 			logger: undefined,
@@ -3636,6 +3640,8 @@ describe("createContextCompactionPrepareTurn", () => {
 			compaction: {
 				enabled: true,
 				strategy: "agentic",
+				// Counts model calls, so the council (three more) is off here.
+				councilEnabled: false,
 				preserveRecentTokens: 1,
 				summarizer: {
 					providerId: "openai",
@@ -5123,6 +5129,8 @@ describe("createContextCompactionPrepareTurn", () => {
 				compaction: {
 					enabled: true,
 					strategy: "agentic",
+					// Counts model calls, so the council (three more) is off here.
+					councilEnabled: false,
 				},
 				logger: undefined,
 			},
@@ -5193,7 +5201,12 @@ describe("createContextCompactionPrepareTurn", () => {
 				providerId: "anthropic",
 				modelId: "small-model",
 			} as LlmsProviders.ProviderConfig,
-			compaction: { enabled: true, strategy: "agentic" },
+			// Counts model calls, so the council (three more) is off here.
+			compaction: {
+				enabled: true,
+				strategy: "agentic",
+				councilEnabled: false,
+			},
 			logger: undefined,
 		});
 

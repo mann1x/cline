@@ -329,6 +329,45 @@ describe("Thinking Compaction", () => {
 })
 
 /**
+ * The review pass over what the two above wrote. It has a switch and no prompt
+ * of its own: the reviewer's instruction is about how to review, not about the
+ * shape of the summary, and the summary's shape is already the compaction
+ * prompt's job.
+ */
+describe("FeatureSettingsSection compaction council", () => {
+	beforeEach(() => {
+		mockUpdateSetting.mockClear()
+	})
+
+	it("sits with the two passes it reviews", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		const labels = Array.from(container.querySelectorAll("label")).map((label) => label.textContent)
+		const thinking = labels.indexOf("Thinking Compaction Prompt")
+		const council = labels.indexOf("Compaction Council")
+
+		expect(thinking).toBeGreaterThanOrEqual(0)
+		expect(council).toBe(thinking + 1)
+	})
+
+	it("is on unless it has been turned off", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		expect(container.querySelector("#councilCompactionEnabled")?.getAttribute("data-state")).toBe("checked")
+	})
+
+	it("turns off from the switch", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		const toggle = container.querySelector("#councilCompactionEnabled")
+		expect(toggle).toBeTruthy()
+		fireEvent.click(toggle as Element)
+
+		expect(mockUpdateSetting).toHaveBeenCalledWith("councilCompactionEnabled", false)
+	})
+})
+
+/**
  * The third thing that rewrites reasoning. It had a prompt and a switch in the
  * session config from the day it shipped and nothing that wrote either, so the
  * built-in note was the only note it could ever produce and there was no way to

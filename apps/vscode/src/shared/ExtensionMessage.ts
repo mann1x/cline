@@ -180,6 +180,7 @@ export interface ExtensionState {
 	defaultFullCompactionPrompt?: string
 	/** Whether compaction also writes a retrospective over the discarded reasoning. */
 	thinkingCompactionEnabled?: boolean
+	councilCompactionEnabled?: boolean
 	/** Replaces the built-in retrospective instruction; empty means default. */
 	thinkingCompactionPrompt?: string
 	/** The built-in retrospective instruction, so the field can show what it replaces. */

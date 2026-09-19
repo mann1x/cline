@@ -34,6 +34,7 @@ import {
 	serializeConversation,
 	serializeReasoningWithOutcomes,
 } from "./compaction-shared";
+import { runCouncilReview } from "./council-compaction";
 import { cutEchoedTranscript, trimReplayOverflow } from "./replay-compaction";
 import {
 	buildToolLedger,
@@ -361,6 +362,14 @@ export async function runAgenticCompaction(options: {
 	thinkingSummaryEnabled?: boolean;
 	/** Overrides the built-in retrospective instruction; blank uses the default. */
 	thinkingSummaryPrompt?: string;
+	/**
+	 * Third phase: two reviewers, each holding half the transcript, correct the
+	 * summary and the retrospective against it, and a synthesiser merges them.
+	 *
+	 * Defaults on. Costs three extra calls per compaction and cannot fail one:
+	 * every path through {@link runCouncilReview} returns what it was given.
+	 */
+	councilEnabled?: boolean;
 	/**
 	 * Whether a recency tail survives the compaction. Defaults to true.
 	 *
@@ -792,7 +801,7 @@ export async function runAgenticCompaction(options: {
 				collectFileHistories(ledgerEntries, options.spanFor),
 			)
 		: "";
-	const thinkingSummary = await generateThinkingSummary({
+	const rawThinkingSummary = await generateThinkingSummary({
 		enabled: options.thinkingSummaryEnabled !== false,
 		messages: newMessagesToFold,
 		previousThinkingSummary,
@@ -806,6 +815,41 @@ export async function runAgenticCompaction(options: {
 		summarizerInputLimit,
 		logger: options.logger,
 	});
+	// The council reads the transcript the summary was written from, so it runs
+	// on `newMessagesToFold` -- what this compaction is folding -- and not on
+	// the carried summary above it, which no reviewer holds the evidence for.
+	const reviewed =
+		options.councilEnabled === false
+			? {
+					summary,
+					thinkingSummary: rawThinkingSummary,
+					reviewers: 0,
+					merged: false,
+				}
+			: await runCouncilReview({
+					summary,
+					thinkingSummary: rawThinkingSummary,
+					messages: newMessagesToFold,
+					estimateMessageTokens: options.estimateMessageTokens,
+					maxRequestChars: summarizerInputLimit * CHARS_PER_TOKEN,
+					generate: (call) =>
+						generateSummary({
+							providerConfig: summarizerProviderConfig,
+							request: call.request,
+							systemPrompt: call.systemPrompt,
+							logger: options.logger,
+						}).then((result) => cutEchoedTranscript(result.text).text),
+					logger: options.logger,
+				});
+	const thinkingSummary = reviewed.thinkingSummary;
+	const reviewedSummary = ensureFilesSection(reviewed.summary, fileOps);
+	if (reviewed.merged) {
+		options.logger?.debug("Compaction council merged the summary", {
+			reviewers: reviewed.reviewers,
+			beforeChars: summary.length,
+			afterChars: reviewedSummary.length,
+		});
+	}
 	// Reported, not decided with. `estimateMessageTokens` serializes the whole
 	// message, so summing it counts reasoning the provider is not sent on an
 	// older turn and metadata that never leaves the host; the number printed
@@ -821,7 +865,7 @@ export async function runAgenticCompaction(options: {
 	const tokensBefore = measureReported(messages);
 	const resultMessages = [
 		buildSummaryMessage({
-			summary,
+			summary: reviewedSummary,
 			fileOps,
 			tokensBefore,
 			userRunSpan: countUserRunMessages(messagesToSummarize),

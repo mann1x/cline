@@ -285,6 +285,7 @@ const BUILTIN_COMPACTION_STRATEGIES = {
 			summaryPrompt: resolveSummaryPrompt(compaction, keepRecentMessages),
 			thinkingSummaryEnabled: compaction?.thinkingSummaryEnabled,
 			thinkingSummaryPrompt: compaction?.thinkingSummaryPrompt,
+			councilEnabled: compaction?.councilEnabled,
 			// The recency budget is a floor and the message budget a ceiling —
 			// two different bounds, not one clamped by the other. Taking the
 			// smaller of the pair (as this did) collapses them: the floor is
@@ -1287,6 +1288,10 @@ export function createContextCompactionPrepareTurn(
 				summaryPrompt: resolveSummaryPrompt(userCompaction, false),
 				thinkingSummaryEnabled: userCompaction?.thinkingSummaryEnabled,
 				thinkingSummaryPrompt: userCompaction?.thinkingSummaryPrompt,
+				// The rescue is reviewed too. Its summary is the one that
+				// ships when it wins, and the keep-tail summary it replaces
+				// is discarded whether or not a council read it.
+				councilEnabled: userCompaction?.councilEnabled,
 				bounds: resolveRecencyBounds({ preserveRecentTokens: 1 }),
 				estimateMessageTokens,
 				logger: config.logger,

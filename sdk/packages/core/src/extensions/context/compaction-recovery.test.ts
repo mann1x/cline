@@ -83,6 +83,10 @@ function prepare(options: {
 			compaction: {
 				enabled: true,
 				strategy: "agentic",
+				// This file scripts the summarizer's replies to exercise the
+				// retry ladder; the council would consume them as reviewer
+				// turns. It is covered in council-compaction.test.ts.
+				councilEnabled: false,
 				...(options.defaultRecencyBudget ? {} : { preserveRecentTokens: 1 }),
 				thinkingSummaryEnabled: false,
 				...(options.keepRecentMessages === false
@@ -494,6 +498,10 @@ describe("the force-full ladder, which is off unless asked for", () => {
 			compaction: {
 				enabled: true,
 				strategy: "agentic",
+				// This file scripts the summarizer's replies to exercise the
+				// retry ladder; the council would consume them as reviewer
+				// turns. It is covered in council-compaction.test.ts.
+				councilEnabled: false,
 				preserveRecentTokens: 1,
 				thinkingSummaryEnabled: false,
 				...(forceFullFromCompaction === undefined

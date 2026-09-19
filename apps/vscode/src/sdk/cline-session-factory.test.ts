@@ -1394,6 +1394,7 @@ describe("buildSessionConfig", () => {
 			keepRecentMessages: true,
 			// The second compaction phase, on by default.
 			thinkingSummaryEnabled: true,
+			councilEnabled: true,
 			// And the condenser, which travels here but does not belong to
 			// compaction; also on by default.
 			cappedThinkingEnabled: true,
@@ -1454,6 +1455,7 @@ describe("buildSessionConfig", () => {
 			keepRecentMessages: true,
 			// The second compaction phase, on by default.
 			thinkingSummaryEnabled: true,
+			councilEnabled: true,
 			cappedThinkingEnabled: true,
 		})
 	})
@@ -1478,6 +1480,7 @@ describe("buildSessionConfig", () => {
 			keepRecentMessages: true,
 			// The second compaction phase, on by default.
 			thinkingSummaryEnabled: true,
+			councilEnabled: true,
 			// And the condenser, which travels here but does not belong to
 			// compaction; also on by default.
 			cappedThinkingEnabled: true,
@@ -1536,6 +1539,7 @@ describe("buildSessionConfig", () => {
 			keepRecentMessages: true,
 			// The second compaction phase, on by default.
 			thinkingSummaryEnabled: true,
+			councilEnabled: true,
 			cappedThinkingEnabled: true,
 		})
 	})

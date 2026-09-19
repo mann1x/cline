@@ -235,6 +235,9 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			controller.stateManager.setGlobalState("fullCompactionPrompt", request.fullCompactionPrompt)
 		}
 
+		if (request.councilCompactionEnabled !== undefined) {
+			controller.stateManager.setGlobalState("councilCompactionEnabled", request.councilCompactionEnabled)
+		}
 		if (request.thinkingCompactionEnabled !== undefined) {
 			controller.stateManager.setGlobalState("thinkingCompactionEnabled", request.thinkingCompactionEnabled)
 		}
