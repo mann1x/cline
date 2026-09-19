@@ -1,8 +1,9 @@
-import { SELECTABLE_TOOLS, SELECTABLE_TOOLS_TOTAL_TOKENS } from "@shared/tool-selection"
+import { DEFAULT_READ_LIMIT_CHARS, SELECTABLE_TOOLS, SELECTABLE_TOOLS_TOTAL_TOKENS } from "@shared/tool-selection"
 import { useRef } from "react"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { useProviderConfig } from "@/hooks/useProviderConfig"
+import { DebouncedTextField } from "./DebouncedTextField"
 
 /**
  * Which tools this configuration brings into a session.
@@ -27,13 +28,24 @@ function formatTokens(tokens: number): string {
 	return tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens)
 }
 
+/** The section as it goes to the store: written whole, every time. */
+interface ToolsPatch {
+	disabled: string[]
+	readLimitEnabled?: boolean
+	readLimitChars?: number
+}
+
 export const ToolsSection = ({ providerId }: { providerId: string }) => {
 	const { config, write } = useProviderConfig(providerId as never)
 	// What this panel has sent and not yet seen answered. The list is written
 	// whole, so two switches flipped inside one round trip would otherwise both
 	// compose from the pre-write list and the second would undo the first —
 	// the same fault the PolyKV section documents at length.
-	const pending = useRef<string[] | undefined>(undefined)
+	//
+	// The whole section, not just the list: it is written whole, so a write
+	// that carried only the switch would clear the read limit and a write that
+	// carried only the read limit would put every tool back.
+	const pending = useRef<ToolsPatch | undefined>(undefined)
 	const inFlight = useRef(0)
 	// Rendering before the provider config resolves would show every tool on
 	// over a profile that has switched three of them off.
@@ -41,32 +53,58 @@ export const ToolsSection = ({ providerId }: { providerId: string }) => {
 		return null
 	}
 
-	const disabled = new Set(pending.current ?? config.tools?.disabled ?? [])
+	// Read at call time, never captured at render: two changes inside one round
+	// trip share a closure, and what render saw is the stale copy by the second.
+	const current = (): ToolsPatch =>
+		pending.current ?? {
+			disabled: [...(config.tools?.disabled ?? [])],
+			...(config.tools?.readLimitEnabled === false ? { readLimitEnabled: false } : {}),
+			...(config.tools?.readLimitChars !== undefined ? { readLimitChars: config.tools.readLimitChars } : {}),
+		}
+
+	const section = current()
+	const disabled = new Set(section.disabled)
 	const offered = SELECTABLE_TOOLS.filter((tool) => !disabled.has(tool.name))
 	const offeredTokens = offered.reduce((total, tool) => total + tool.tokens, 0)
+	const readLimitOn = section.readLimitEnabled !== false
+
+	const writeTools = (next: ToolsPatch) => {
+		pending.current = next
+		inFlight.current += 1
+		void write({ tools: next })
+			.catch((error) => console.error("Failed to update the tool selection:", error))
+			.finally(() => {
+				inFlight.current -= 1
+				// Only the last answer hands the section back to the config: an
+				// earlier one landing first would drop everything changed since.
+				if (inFlight.current === 0) {
+					pending.current = undefined
+				}
+			})
+	}
 
 	const setDisabled = (name: string, isDisabled: boolean) => {
-		// Read at call time: two clicks inside one round trip share a closure,
-		// and the list captured at render is the stale one by the second click.
-		const next = new Set(pending.current ?? config.tools?.disabled ?? [])
+		const next = new Set(current().disabled)
 		if (isDisabled) {
 			next.add(name)
 		} else {
 			next.delete(name)
 		}
-		const list = [...next].sort()
-		pending.current = list
-		inFlight.current += 1
-		void write({ tools: { disabled: list } })
-			.catch((error) => console.error("Failed to update the tool selection:", error))
-			.finally(() => {
-				inFlight.current -= 1
-				// Only the last answer hands the list back to the config: an
-				// earlier one landing first would drop everything clicked since.
-				if (inFlight.current === 0) {
-					pending.current = undefined
-				}
-			})
+		writeTools({ ...current(), disabled: [...next].sort() })
+	}
+
+	const setReadLimitEnabled = (enabled: boolean) => {
+		const { readLimitEnabled: _was, ...rest } = current()
+		writeTools(enabled ? rest : { ...rest, readLimitEnabled: false })
+	}
+
+	const setReadLimitChars = (value: string) => {
+		const parsed = Number.parseInt(value, 10)
+		const { readLimitChars: _was, ...rest } = current()
+		// Blank means the default, which is the only way to get back to it once
+		// a number has been typed — so an unparseable value clears rather than
+		// being stored or silently ignored.
+		writeTools(Number.isFinite(parsed) && parsed > 0 ? { ...rest, readLimitChars: parsed } : rest)
 	}
 
 	return (
@@ -102,6 +140,37 @@ export const ToolsSection = ({ providerId }: { providerId: string }) => {
 					<p className="text-xs mt-0 mb-0 text-description">{tool.summary}</p>
 				</div>
 			))}
+
+			<div className="flex flex-col gap-1 mt-[14px] pt-[10px] border-t border-(--vscode-panel-border)">
+				<div className="flex items-center justify-between w-full">
+					<Label className="text-xs font-medium text-foreground" htmlFor="tool-read-limit">
+						Refuse oversized reads
+					</Label>
+					<Switch
+						checked={readLimitOn}
+						className="shrink-0"
+						id="tool-read-limit"
+						onCheckedChange={setReadLimitEnabled}
+						size="default"
+					/>
+				</div>
+				<p className="text-xs mt-0 mb-[6px] text-description">
+					A read past the size below is refused with the number of lines that would fit, instead of being returned cut
+					short. A tool result is re-sent on every later request, so one oversized read is paid for by the rest of the
+					run — but a model that paginates on its own does not need to be made to, and for those the refusal only costs
+					a turn. Off, an oversized read comes back truncated as it did before.
+				</p>
+				{readLimitOn && (
+					<DebouncedTextField
+						initialValue={section.readLimitChars ? String(section.readLimitChars) : ""}
+						numeric
+						onChange={setReadLimitChars}
+						placeholder={`Default: ${DEFAULT_READ_LIMIT_CHARS}`}
+						style={{ width: "100%" }}>
+						<span className="text-xs font-medium">Read size limit (characters)</span>
+					</DebouncedTextField>
+				)}
+			</div>
 		</div>
 	)
 }

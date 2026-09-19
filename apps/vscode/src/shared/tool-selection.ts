@@ -110,3 +110,13 @@ export const SELECTABLE_TOOLS: readonly SelectableTool[] = [
 
 /** What the whole selectable set costs when every one of them is offered. */
 export const SELECTABLE_TOOLS_TOTAL_TOKENS = SELECTABLE_TOOLS.reduce((total, tool) => total + tool.tokens, 0)
+
+/**
+ * The read-limit threshold a profile that says nothing gets.
+ *
+ * Kept equal to core's `MAX_READ_REFUSAL_CHARS` by `tool-selection.test.ts`,
+ * because this one is only here so the panel can show the default in a
+ * placeholder without the webview importing the runtime. A copy that drifts
+ * would put a number on screen that no session uses.
+ */
+export const DEFAULT_READ_LIMIT_CHARS = 24_000

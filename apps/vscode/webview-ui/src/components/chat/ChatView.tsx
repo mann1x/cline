@@ -1,7 +1,7 @@
 import { combineApiRequests } from "@shared/combineApiRequests"
 import { combineCommandSequences } from "@shared/combineCommandSequences"
 import { combineHookSequences } from "@shared/combineHookSequences"
-import { getApiMetrics, getLastApiReqContextBreakdown, getLastApiReqTotalTokens } from "@shared/getApiMetrics"
+import { getApiMetrics, getContextWindowUsage } from "@shared/getApiMetrics"
 import { BooleanRequest } from "@shared/proto/cline/common"
 import { resolveVisionModelStatus } from "@shared/vision-config"
 import { useCallback, useEffect, useMemo, useRef } from "react"
@@ -113,10 +113,19 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 	// has to be after api_req_finished are all reduced into api_req_started messages
 	const apiMetrics = useMemo(() => getApiMetrics(modifiedMessages), [modifiedMessages])
 
-	const lastApiReqTotalTokens = useMemo(() => getLastApiReqTotalTokens(modifiedMessages) || undefined, [modifiedMessages])
-	// What of that total was spent before the first message. Read from the same
-	// row, so the bar's colours and its length always describe one request.
-	const lastApiReqContextBreakdown = useMemo(() => getLastApiReqContextBreakdown(modifiedMessages), [modifiedMessages])
+	// The length and the colours of the context bar, from one request.
+	const contextUsage = useMemo(() => getContextWindowUsage(modifiedMessages), [modifiedMessages])
+	// Held still while a compaction is open. Mid-compaction the transcript is
+	// being rewritten and the summarizer is making model calls of its own, so
+	// every number available then describes neither the state being left nor
+	// the one being arrived at — reported as the bar emptying and refilling
+	// with the conversation intact. The last settled value stays up until the
+	// compaction finishes and a real request reports what it cost.
+	const settledContextUsage = useRef(contextUsage)
+	if (!contextUsage.compacting && contextUsage.used > 0) {
+		settledContextUsage.current = contextUsage
+	}
+	const shownContextUsage = contextUsage.compacting ? settledContextUsage.current : contextUsage
 	const lastAppliedCheckpointRestoreSessionId = useRef<string | undefined>(checkpointRestoreInput?.sessionId)
 
 	useEffect(() => {
@@ -358,8 +367,8 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 				{task ? (
 					<TaskSection
 						apiMetrics={apiMetrics}
-						contextBreakdown={lastApiReqContextBreakdown}
-						lastApiReqTotalTokens={lastApiReqTotalTokens}
+						contextBreakdown={shownContextUsage.breakdown}
+						contextTokensUsed={shownContextUsage.used || undefined}
 						messageHandlers={messageHandlers}
 						selectedModelInfo={{
 							supportsPromptCache: selectedModelInfo.supportsPromptCache,

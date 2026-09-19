@@ -177,11 +177,26 @@ function readPolykv(settings: Record<string, unknown>): PolykvConfig | undefined
  */
 function readToolSelection(settings: Record<string, unknown>): ToolSelectionConfig | undefined {
 	const tools = settings.tools
-	if (!isPlainRecord(tools) || !Array.isArray(tools.disabled)) {
+	if (!isPlainRecord(tools)) {
 		return undefined
 	}
-	const disabled = tools.disabled.filter((name): name is string => typeof name === "string" && name.trim() !== "")
-	return disabled.length > 0 ? { disabled } : undefined
+	// The list is no longer what makes the section worth having: a profile that
+	// only turns the read limit off has an empty list and something to say, and
+	// requiring `disabled` to be an array dropped it on the floor.
+	const disabled = Array.isArray(tools.disabled)
+		? tools.disabled.filter((name): name is string => typeof name === "string" && name.trim() !== "")
+		: []
+	const readLimitEnabled = tools.readLimitEnabled === false ? false : undefined
+	const readLimitChars =
+		typeof tools.readLimitChars === "number" && Number.isFinite(tools.readLimitChars) && tools.readLimitChars > 0
+			? Math.floor(tools.readLimitChars)
+			: undefined
+	const section: ToolSelectionConfig = {
+		...(disabled.length > 0 ? { disabled } : {}),
+		...(readLimitEnabled === false ? { readLimitEnabled: false } : {}),
+		...(readLimitChars !== undefined ? { readLimitChars } : {}),
+	}
+	return Object.keys(section).length > 0 ? section : undefined
 }
 
 function readSampling(settings: Record<string, unknown>): SamplingConfig | undefined {

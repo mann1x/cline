@@ -761,16 +761,28 @@ function writeProviderSettingsFields(providerId: ProviderId, patch: ProviderConf
 	if ("tools" in patch) {
 		const toolsPatch = patch.tools
 		const disabled = toolsPatch?.disabled?.filter((name) => typeof name === "string" && name.trim() !== "")
-		if (toolsPatch === null || toolsPatch === undefined || !disabled?.length) {
-			delete (next as Record<string, unknown>).tools
-		} else {
+		// Only `false` is stored for the read limit: on is the default, so
+		// writing `true` would make an untouched profile indistinguishable from
+		// one that had chosen the default, and the next default change would
+		// silently not reach it.
+		const readLimitEnabled = toolsPatch?.readLimitEnabled === false ? false : undefined
+		const readLimitChars =
+			typeof toolsPatch?.readLimitChars === "number" && toolsPatch.readLimitChars > 0
+				? Math.floor(toolsPatch.readLimitChars)
+				: undefined
+		const section = {
 			// Sorted and de-duplicated, because this is written to a file people
 			// read and diff: the panel's iteration order is not a fact about the
 			// configuration, and two identical selections should not produce two
 			// different files.
-			;(next as Record<string, unknown>).tools = {
-				disabled: [...new Set(disabled)].sort(),
-			}
+			...(disabled?.length ? { disabled: [...new Set(disabled)].sort() } : {}),
+			...(readLimitEnabled === false ? { readLimitEnabled: false } : {}),
+			...(readLimitChars !== undefined ? { readLimitChars } : {}),
+		}
+		if (toolsPatch === null || toolsPatch === undefined || Object.keys(section).length === 0) {
+			delete (next as Record<string, unknown>).tools
+		} else {
+			;(next as Record<string, unknown>).tools = section
 		}
 	}
 

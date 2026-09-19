@@ -59,8 +59,8 @@ describe("ContextWindow compact button", () => {
 
 		render(
 			<ContextWindow
+				contextTokensUsed={120_000}
 				contextWindow={200_000}
-				lastApiReqTotalTokens={120_000}
 				onSendMessage={onSendMessage}
 				useAutoCondense={false}
 			/>,

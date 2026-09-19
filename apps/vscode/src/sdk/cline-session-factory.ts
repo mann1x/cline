@@ -1214,16 +1214,28 @@ function readStoredMaxToolResultChars(providerId: string | undefined): unknown {
  * else: whether a tool exists at all is answered by whatever configures it,
  * and a profile that could override that would be a switch that does nothing.
  */
-function readToolSelection(value: unknown): { disabled: string[] } | undefined {
+function readToolSelection(
+	value: unknown,
+): { disabled?: string[]; readLimitEnabled?: boolean; readLimitChars?: number } | undefined {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
 		return undefined
 	}
-	const disabled = (value as { disabled?: unknown }).disabled
-	if (!Array.isArray(disabled)) {
-		return undefined
+	const record = value as { disabled?: unknown; readLimitEnabled?: unknown; readLimitChars?: unknown }
+	const names = Array.isArray(record.disabled)
+		? record.disabled.filter((name): name is string => typeof name === "string" && name.trim() !== "")
+		: []
+	const readLimitChars =
+		typeof record.readLimitChars === "number" && Number.isFinite(record.readLimitChars) && record.readLimitChars > 0
+			? Math.floor(record.readLimitChars)
+			: undefined
+	const section = {
+		...(names.length > 0 ? { disabled: names } : {}),
+		// Only `false` counts: on is the default, so a stored `true` and an
+		// absent field mean the same thing and are stored the same way.
+		...(record.readLimitEnabled === false ? { readLimitEnabled: false } : {}),
+		...(readLimitChars !== undefined ? { readLimitChars } : {}),
 	}
-	const names = disabled.filter((name): name is string => typeof name === "string" && name.trim() !== "")
-	return names.length > 0 ? { disabled: names } : undefined
+	return Object.keys(section).length > 0 ? section : undefined
 }
 
 /**
@@ -2096,8 +2108,13 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	// reads it, and it folds the names into the session's tool policies -- which
 	// is the one filter every tool passes through, MCP tools included.
 	const toolSelection = readToolSelection(profileSettings?.tools) ?? readToolSelection(readStoredToolSelection(providerId))
-	if (toolSelection) {
+	if (toolSelection?.disabled?.length) {
 		Logger.log(`[SessionFactory] Tools withheld by this configuration: ${toolSelection.disabled.join(", ")}`)
+	}
+	if (toolSelection?.readLimitEnabled === false) {
+		Logger.log("[SessionFactory] The file-read size limit is off for this configuration")
+	} else if (toolSelection?.readLimitChars) {
+		Logger.log(`[SessionFactory] File reads are refused past ${toolSelection.readLimitChars} characters`)
 	}
 	// Spread the cloud config first so the explicit fields below — notably the
 	// proxy/CA-aware fetch — can never be clobbered if those types gain matching keys.

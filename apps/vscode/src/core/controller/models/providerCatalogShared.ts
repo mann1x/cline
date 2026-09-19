@@ -14,6 +14,7 @@ import type {
 	ProviderListing,
 	ProviderModelsResult,
 	ResolvedModelSelection,
+	ToolSelectionSettings,
 } from "@/sdk/model-catalog/contracts"
 import { parseProviderId } from "@/sdk/model-catalog/provider-id"
 import {
@@ -258,7 +259,13 @@ export function toRedactedProviderConfigResponse(
 		sampling: config.sampling ? { ...config.sampling, stop: [...(config.sampling.stop ?? [])] } : undefined,
 		polykv: config.polykv ? { ...config.polykv } : undefined,
 		outputBudget: config.outputBudget ? { ...config.outputBudget } : undefined,
-		tools: config.tools ? { disabled: [...(config.tools.disabled ?? [])] } : undefined,
+		tools: config.tools
+			? {
+					disabled: [...(config.tools.disabled ?? [])],
+					...(config.tools.readLimitEnabled !== undefined ? { readLimitEnabled: config.tools.readLimitEnabled } : {}),
+					...(config.tools.readLimitChars !== undefined ? { readLimitChars: config.tools.readLimitChars } : {}),
+				}
+			: undefined,
 	})
 }
 
@@ -308,6 +315,40 @@ function toPolykvSettings(patch: NonNullable<WriteProviderConfigPatch["polykv"]>
 		...(patch.swarm !== undefined ? { swarm: patch.swarm } : {}),
 		...(patch.maxRetryAfterMs !== undefined ? { maxRetryAfterMs: patch.maxRetryAfterMs } : {}),
 	}
+}
+
+/**
+ * A tools section from the wire, or `null` when it holds nothing.
+ *
+ * An empty `disabled` list used to be the whole test, because withholding
+ * nothing is not a selection. It is no longer sufficient: the section also
+ * carries the read limit, and a profile that only turns that off has an empty
+ * list and something to say. Clearing is therefore "every field is at its
+ * default", which keeps the panel's reset button on the same path as the other
+ * sections without discarding a setting nobody looked at.
+ */
+function toolSelectionFromProto(tools: {
+	disabled: string[]
+	readLimitEnabled?: boolean
+	readLimitChars?: number
+}): ToolSelectionSettings | null {
+	const section: {
+		disabled?: string[]
+		readLimitEnabled?: boolean
+		readLimitChars?: number
+	} = {}
+	if (tools.disabled.length > 0) {
+		section.disabled = [...tools.disabled]
+	}
+	// Only `false` is stored: on is the default, and writing it would make an
+	// untouched profile look like one that had chosen the default.
+	if (tools.readLimitEnabled === false) {
+		section.readLimitEnabled = false
+	}
+	if (typeof tools.readLimitChars === "number" && tools.readLimitChars > 0) {
+		section.readLimitChars = tools.readLimitChars
+	}
+	return Object.keys(section).length > 0 ? section : null
 }
 
 export function toProviderConfigPatch(protoPatch: WriteProviderConfigPatch | undefined): ProviderConfigPatch {
@@ -388,7 +429,7 @@ export function toProviderConfigPatch(protoPatch: WriteProviderConfigPatch | und
 		// sections.
 		...(protoPatch.tools !== undefined
 			? {
-					tools: protoPatch.tools.disabled.length > 0 ? { disabled: [...protoPatch.tools.disabled] } : null,
+					tools: toolSelectionFromProto(protoPatch.tools),
 				}
 			: {}),
 		...(protoPatch.reasoning

@@ -24,7 +24,7 @@ const meta: Meta<typeof ContextWindow> = {
 	],
 	argTypes: {
 		contextWindow: { control: "number", description: "Model context window size" },
-		lastApiReqTotalTokens: { control: "number", description: "Tokens used by the last request" },
+		contextTokensUsed: { control: "number", description: "Tokens used by the last request" },
 	},
 }
 
@@ -34,7 +34,7 @@ type Story = StoryObj<typeof ContextWindow>
 export const HighUsage: Story = {
 	args: {
 		contextWindow: 200_000,
-		lastApiReqTotalTokens: 146_000,
+		contextTokensUsed: 146_000,
 		tokensIn: 45_000,
 		tokensOut: 28_000,
 		cacheWrites: 5_200,

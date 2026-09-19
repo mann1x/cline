@@ -32,7 +32,17 @@ interface ContextWindowInfoProps {
 
 interface ContextWindowProgressProps extends ContextWindowInfoProps {
 	useAutoCondense: boolean
-	lastApiReqTotalTokens?: number
+	/**
+	 * What occupies the window now: the fixed price plus the conversation. The
+	 * reply the model wrote is deliberately not in it — that arrives in the
+	 * next request's prompt and is counted there.
+	 */
+	/**
+	 * What occupies the window now: the fixed price plus the conversation. The
+	 * reply the model wrote is deliberately not in it — that arrives in the
+	 * next request's prompt and is counted there.
+	 */
+	contextTokensUsed?: number
 	contextWindow?: number
 	onSendMessage?: (command: string, files: string[], images: string[]) => void
 }
@@ -71,7 +81,7 @@ ConfirmationDialog.displayName = "ConfirmationDialog"
 
 const ContextWindow: React.FC<ContextWindowProgressProps> = ({
 	contextWindow = 0,
-	lastApiReqTotalTokens = 0,
+	contextTokensUsed = 0,
 	onSendMessage,
 	useAutoCondense,
 	tokensIn,
@@ -120,11 +130,11 @@ const ContextWindow: React.FC<ContextWindowProgressProps> = ({
 			return null
 		}
 		return {
-			percentage: (lastApiReqTotalTokens / contextWindow) * 100,
+			percentage: (contextTokensUsed / contextWindow) * 100,
 			max: contextWindow,
-			used: lastApiReqTotalTokens,
+			used: contextTokensUsed,
 		}
-	}, [contextWindow, lastApiReqTotalTokens])
+	}, [contextWindow, contextTokensUsed])
 
 	const debounceCloseHover = useCallback((e: React.MouseEvent) => {
 		e.preventDefault()
@@ -166,7 +176,7 @@ const ContextWindow: React.FC<ContextWindowProgressProps> = ({
 		<div className="flex flex-col mt-1.5" onMouseLeave={debounceCloseHover}>
 			<div className="flex gap-1 flex-row @max-xs:flex-col @max-xs:items-start items-center text-sm">
 				<div className="flex items-center gap-1.5 flex-1 whitespace-nowrap">
-					<span className="cursor-pointer text-sm" title="Current tokens used in this request">
+					<span className="cursor-pointer text-sm" title="Tokens occupying the context window">
 						{formatTokenNumber(tokenData.used)}
 					</span>
 					<div className="flex relative items-center gap-1 flex-1 w-full h-full" onMouseEnter={() => setIsOpened(true)}>

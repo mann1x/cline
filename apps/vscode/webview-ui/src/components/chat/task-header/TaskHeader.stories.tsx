@@ -236,7 +236,7 @@ export const HighTokenUsage: Story = {
 		cacheWrites: 5200,
 		cacheReads: 3800,
 		totalCost: 1.85,
-		lastApiReqTotalTokens: 73000,
+		contextTokensUsed: 73000,
 		doesModelSupportPromptCache: true,
 		onClose: () => console.log("Close clicked"),
 	},

@@ -171,6 +171,17 @@ export interface PolykvSettings {
  */
 export interface ToolSelectionSettings {
 	readonly disabled?: readonly string[]
+	/**
+	 * Whether an oversized `read_files` window is refused. Absent means on.
+	 *
+	 * A capable model paginates without being made to, and the refusal costs it
+	 * a turn; a smaller one reads whole files and pays for them in every later
+	 * request. Which of those a configuration is describing is a per-model
+	 * judgement, so it is stored per profile beside the tool selection.
+	 */
+	readonly readLimitEnabled?: boolean
+	/** The refusal threshold in characters. Absent means the built-in default. */
+	readonly readLimitChars?: number
 }
 
 export interface EffectiveProviderConfig {

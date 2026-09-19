@@ -29,7 +29,7 @@ interface TaskHeaderProps {
 	cacheWrites?: number
 	cacheReads?: number
 	totalCost: number
-	lastApiReqTotalTokens?: number
+	contextTokensUsed?: number
 	/** The fixed price of that request, when the turn reported one. */
 	contextBreakdown?: ContextBreakdown
 	/** What each connection spent, and how fast it generated. */
@@ -51,7 +51,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 	cacheWrites,
 	cacheReads,
 	totalCost,
-	lastApiReqTotalTokens,
+	contextTokensUsed,
 	contextBreakdown,
 	byProvider,
 	generateTokens,
@@ -233,10 +233,10 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 							cacheReads={cacheReads}
 							cacheWrites={cacheWrites}
 							contextBreakdown={contextBreakdown}
+							contextTokensUsed={contextTokensUsed}
 							contextWindow={selectedModelInfo?.contextWindow}
 							generateMs={generateMs}
 							generateTokens={generateTokens}
-							lastApiReqTotalTokens={lastApiReqTotalTokens}
 							onSendMessage={onSendMessage}
 							tokensIn={tokensIn}
 							tokensOut={tokensOut}

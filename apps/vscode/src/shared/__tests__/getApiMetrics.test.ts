@@ -1,7 +1,7 @@
 import { describe, it } from "bun:test"
 import { strict as assert } from "node:assert"
 import type { ClineMessage } from "../ExtensionMessage"
-import { getApiMetrics, getLastApiReqTotalTokens } from "../getApiMetrics"
+import { getApiMetrics, getContextWindowUsage, getLastApiReqTotalTokens } from "../getApiMetrics"
 
 describe("getApiMetrics", () => {
 	// The expert is the one model whose cost has to be separable: it is usually
@@ -507,5 +507,131 @@ describe("the connection breakdown", () => {
 
 		assert.equal(metrics.byProvider[0].requests, 2)
 		assert.equal(metrics.byProvider[0].tokensIn, 1149)
+	})
+})
+
+describe("getContextWindowUsage", () => {
+	const breakdown = {
+		systemPromptTokens: 1_508,
+		builtinToolSchemaTokens: 12_291,
+		mcpToolSchemaTokens: 0,
+		toolCount: 16,
+		mcpToolCount: 0,
+	}
+	/** pandorum, 2026-09-19, session on v9-agentic_tb:q4km-64k. */
+	const FIXED = 13_799
+
+	function request(fields: Record<string, unknown>): ClineMessage {
+		return { ts: 100, type: "say", say: "api_req_started", text: JSON.stringify(fields) }
+	}
+
+	// `observedOutputTokens` ranged 0 to 8,054 across 57 turns of one session on
+	// a 65,536-token window. Counted into the meter, the bar swings by 12% of
+	// its own width between a thinking turn and the tool call after it, with the
+	// conversation unchanged. The reply is not in the window: it arrives in the
+	// next prompt and is counted there.
+	it("leaves the reply out of the window it is not in", () => {
+		const long = getContextWindowUsage([request({ tokensIn: 40_124, tokensOut: 8_054, contextBreakdown: breakdown })])
+		const short = getContextWindowUsage([request({ tokensIn: 40_124, tokensOut: 120, contextBreakdown: breakdown })])
+
+		assert.equal(long.used, 40_124)
+		assert.equal(short.used, long.used)
+	})
+
+	it("counts what was served from cache, which did occupy the window", () => {
+		const usage = getContextWindowUsage([request({ tokensIn: 3, cacheReads: 24_478, cacheWrites: 2, tokensOut: 261 })])
+
+		assert.equal(usage.used, 24_483)
+	})
+
+	// Two compactions compounding drove the scaled total below the fixed price,
+	// at which point the conversation read as empty and the measured 12k of tool
+	// schemas was squeezed to 4-5k to fit. A compaction rewrites the transcript;
+	// it does not shorten the system prompt or the tool schemas, which are
+	// re-sent whole on the very next request.
+	it("shrinks the conversation across a compaction and leaves the fixed price alone", () => {
+		const messages: ClineMessage[] = [
+			request({ tokensIn: 47_054, tokensOut: 6_020, contextBreakdown: breakdown }),
+			{
+				ts: 101,
+				type: "say",
+				say: "compaction",
+				text: JSON.stringify({ status: "completed", tokensBefore: 64_723, tokensAfter: 35_735 }),
+			},
+		]
+
+		const usage = getContextWindowUsage(messages)
+		const conversation = 47_054 - FIXED
+
+		assert.equal(usage.used, Math.ceil(FIXED + conversation * (35_735 / 64_723)))
+		// The whole point: the fixed part is untouched, so the coloured slices
+		// still add up to what was measured.
+		assert.ok(usage.used > FIXED)
+		assert.deepEqual(usage.breakdown, breakdown)
+	})
+
+	it("never reports less than the fixed price, however the ratios compound", () => {
+		const messages: ClineMessage[] = [request({ tokensIn: 20_000, contextBreakdown: breakdown })]
+		for (const [before, after] of [
+			[64_723, 35_735],
+			[60_000, 20_000],
+			[50_000, 12_000],
+		]) {
+			messages.push({
+				ts: 200,
+				type: "say",
+				say: "compaction",
+				text: JSON.stringify({ status: "completed", tokensBefore: before, tokensAfter: after }),
+			})
+		}
+
+		const usage = getContextWindowUsage(messages)
+		assert.ok(usage.used >= FIXED, `expected at least the fixed price, got ${usage.used}`)
+	})
+
+	// A delegated batch runs on its own window, routinely on the lead's own
+	// provider and model, and its rows were moving the lead's bar.
+	it("ignores a sub-agent's request", () => {
+		const messages: ClineMessage[] = [
+			request({ tokensIn: 40_000, contextBreakdown: breakdown }),
+			request({ source: "subagents", tokensIn: 900, tokensOut: 100 }),
+		]
+
+		assert.equal(getContextWindowUsage(messages).used, 40_000)
+	})
+
+	// Mid-compaction the transcript is being rewritten and the summarizer is
+	// making model calls of its own. Nothing shown then describes either state.
+	it("says when a compaction is open so the bar can hold still", () => {
+		const open: ClineMessage[] = [
+			request({ tokensIn: 40_000, contextBreakdown: breakdown }),
+			{ ts: 101, type: "say", say: "compaction", text: JSON.stringify({ status: "started" }) },
+		]
+		const closed: ClineMessage[] = [
+			...open.slice(0, 1),
+			{
+				ts: 101,
+				type: "say",
+				say: "compaction",
+				text: JSON.stringify({ status: "completed", tokensBefore: 40_000, tokensAfter: 20_000 }),
+			},
+		]
+
+		assert.equal(getContextWindowUsage(open).compacting, true)
+		assert.equal(getContextWindowUsage(closed).compacting, false)
+	})
+
+	// The length and the colours have to describe one request. Read from
+	// separate rows, a request without a breakdown next to one with it made the
+	// coloured part appear and vanish between turns.
+	it("takes the total and the breakdown from the same request", () => {
+		const messages: ClineMessage[] = [
+			request({ tokensIn: 40_000, contextBreakdown: breakdown }),
+			request({ tokensIn: 41_000 }),
+		]
+
+		const usage = getContextWindowUsage(messages)
+		assert.equal(usage.used, 41_000)
+		assert.equal(usage.breakdown, undefined)
 	})
 })

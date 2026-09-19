@@ -17,7 +17,7 @@ interface TaskSectionProps {
 		totalGenerateMs: number
 		expert?: ExpertApiMetrics
 	}
-	lastApiReqTotalTokens?: number
+	contextTokensUsed?: number
 	/** The fixed price of that request, when the turn reported one. */
 	contextBreakdown?: ContextBreakdown
 	selectedModelInfo: {
@@ -34,7 +34,7 @@ interface TaskSectionProps {
 export const TaskSection: React.FC<TaskSectionProps> = ({
 	task,
 	apiMetrics,
-	lastApiReqTotalTokens,
+	contextTokensUsed,
 	contextBreakdown,
 	selectedModelInfo,
 	messageHandlers,
@@ -45,11 +45,11 @@ export const TaskSection: React.FC<TaskSectionProps> = ({
 			cacheReads={apiMetrics.totalCacheReads}
 			cacheWrites={apiMetrics.totalCacheWrites}
 			contextBreakdown={contextBreakdown}
+			contextTokensUsed={contextTokensUsed}
 			doesModelSupportPromptCache={selectedModelInfo.supportsPromptCache}
 			expert={apiMetrics.expert}
 			generateMs={apiMetrics.totalGenerateMs}
 			generateTokens={apiMetrics.totalGenerateTokens}
-			lastApiReqTotalTokens={lastApiReqTotalTokens}
 			onClose={messageHandlers.handleTaskCloseButtonClick}
 			onSendMessage={messageHandlers.handleSendMessage}
 			task={task}

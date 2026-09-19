@@ -312,34 +312,114 @@ export function getLastApiReqTotalTokens(messages: ClineMessage[]): number {
 	return 0
 }
 
+/** What the context bar draws. */
+export interface ContextWindowUsage {
+	/**
+	 * The tokens occupying the window right now: the fixed price plus what the
+	 * conversation costs, with any compaction since the last request applied to
+	 * the conversation alone.
+	 */
+	used: number
+	/** The fixed part, as measured, never rescaled. */
+	breakdown?: ContextBreakdown
+	/**
+	 * A compaction is open. Nothing about the window is settled until it
+	 * finishes — the transcript is mid-rewrite and the summarizer's own model
+	 * calls report usage of their own — so the caller holds its last value
+	 * rather than animating through numbers that describe neither state.
+	 */
+	compacting: boolean
+}
+
+function readBreakdown(info: Record<string, unknown>): ContextBreakdown | undefined {
+	const breakdown = info.contextBreakdown as ContextBreakdown | undefined
+	return breakdown && typeof breakdown.systemPromptTokens === "number" ? breakdown : undefined
+}
+
 /**
- * The fixed price of the most recent request, if it reported one.
+ * What to draw on the context window bar.
  *
- * Read from the same `api_req_started` message {@link getLastApiReqTotalTokens}
- * takes its total from, and deliberately *not* rescaled by a compaction that
- * followed it: compacting replaces messages, and leaves the system prompt and
- * the tool schemas exactly where they were. Shrinking the fixed part along with
- * the total would draw a bar whose coloured slices lie about what compacting
- * did -- the one moment a user is most likely to be looking at it.
+ * Three things this does that {@link getLastApiReqTotalTokens} does not, each
+ * of which was visible as the bar moving for reasons the session had not:
  *
- * @param messages - An array of ClineMessage objects to process.
- * @returns The breakdown from the last api_req_started message that carried
- *          one, or undefined (older history, or a core that does not emit it).
+ * **The reply is not in the window.** `tokensOut` is what the model wrote, not
+ * what occupied its context — that arrives in the *next* request's prompt and
+ * is counted there. Summed into a context meter it makes the bar swing by the
+ * length of the last answer: measured on pandorum over 57 turns of one session,
+ * `observedOutputTokens` ranged 0 to 8,054 on a 65,536-token window, so a
+ * thinking turn and the tool call after it differ by 12% of the bar with the
+ * conversation unchanged. That is the "it goes up and down during tool usage"
+ * report. The prompt — input plus whatever was served from cache — is the
+ * number the window holds.
+ *
+ * **A compaction shrinks the conversation, not the prompt or the schemas.**
+ * Scaling the whole total by `tokensAfter/tokensBefore` shrinks the fixed price
+ * too, which nothing did: the system prompt and the tool schemas are re-sent at
+ * full size on the very next request. Two compactions compounding drove the
+ * total below the fixed price, at which point the conversation read as empty
+ * and the fixed slices were squeezed to fit — "the system and tools part became
+ * much smaller, around 4-5k instead of 12k". The ratio now applies to the
+ * conversation term alone, which is the only thing it ever described.
+ *
+ * **A sub-agent's request is not the task's window.** Rows carrying a `source`
+ * are a delegated batch, routinely on the lead's own provider and model, and
+ * they were moving the lead's bar.
+ *
+ * The breakdown is read from the same row as the total, so the coloured parts
+ * and the length always describe one request.
  */
-export function getLastApiReqContextBreakdown(messages: ClineMessage[]): ContextBreakdown | undefined {
+export function getContextWindowUsage(messages: ClineMessage[]): ContextWindowUsage {
+	let shrinkFraction = 1
+	let newestCompactionStatus: string | undefined
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const msg = messages[i]
-		if (msg.type !== "say" || msg.say !== "api_req_started" || !msg.text) {
+		if (msg.type !== "say" || !msg.text) {
 			continue
 		}
-		try {
-			const { contextBreakdown } = JSON.parse(msg.text) as { contextBreakdown?: ContextBreakdown }
-			if (contextBreakdown && typeof contextBreakdown.systemPromptTokens === "number") {
-				return contextBreakdown
+		if (msg.say === "compaction") {
+			try {
+				const { status, tokensBefore, tokensAfter } = JSON.parse(msg.text)
+				newestCompactionStatus ??= typeof status === "string" ? status : undefined
+				if (
+					status === "completed" &&
+					typeof tokensBefore === "number" &&
+					typeof tokensAfter === "number" &&
+					tokensBefore > 0 &&
+					tokensAfter > 0
+				) {
+					shrinkFraction *= tokensAfter / tokensBefore
+				}
+			} catch {
+				// Ignore JSON parse errors, continue searching
 			}
-		} catch {
-			// Ignore JSON parse errors, continue searching
+		}
+		if (msg.say === "api_req_started") {
+			try {
+				const info = JSON.parse(msg.text) as Record<string, unknown>
+				// A delegated batch spends on its own window, not on this one.
+				if (info.source !== undefined) {
+					continue
+				}
+				const prompt = (Number(info.tokensIn) || 0) + (Number(info.cacheWrites) || 0) + (Number(info.cacheReads) || 0)
+				if (prompt > 0) {
+					const breakdown = readBreakdown(info)
+					const fixed = breakdown
+						? breakdown.systemPromptTokens + breakdown.builtinToolSchemaTokens + breakdown.mcpToolSchemaTokens
+						: 0
+					// Clamped rather than scaled: below the fixed price the
+					// conversation is empty, and squeezing the measured parts to
+					// fit would report the drawing instead of the measurement.
+					const conversation = Math.max(0, prompt - fixed) * shrinkFraction
+					return {
+						used: Math.ceil(fixed + conversation),
+						breakdown,
+						compacting: newestCompactionStatus === "started",
+					}
+				}
+			} catch {
+				// Ignore JSON parse errors, continue searching
+			}
 		}
 	}
-	return undefined
+	return { used: 0, compacting: newestCompactionStatus === "started" }
 }

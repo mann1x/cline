@@ -9,8 +9,9 @@ import {
 	createBuiltinTools,
 	createCheckFileTool,
 	createListFilesTool,
+	MAX_READ_REFUSAL_CHARS,
 } from "../../node_modules/@cline/core/dist/index.js"
-import { SELECTABLE_TOOLS } from "./tool-selection"
+import { DEFAULT_READ_LIMIT_CHARS, SELECTABLE_TOOLS } from "./tool-selection"
 
 /**
  * Rebuild every selectable tool and measure it.
@@ -94,5 +95,11 @@ describe("the selectable tool catalog", () => {
 				`${entry.name} is ${measured} tokens, catalog says ${entry.tokens}`,
 			).toBeLessThan(0.05)
 		}
+	})
+
+	// The panel shows this in a placeholder as "the default". A copy that
+	// drifted from the runtime's would put a number on screen no session uses.
+	it("shows the threshold the runtime actually applies", () => {
+		expect(DEFAULT_READ_LIMIT_CHARS).toBe(MAX_READ_REFUSAL_CHARS)
 	})
 })

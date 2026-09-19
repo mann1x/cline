@@ -506,6 +506,10 @@ message PolykvProviderConfig {
 // everything is on.
 message ToolsProviderConfig {
   repeated string disabled = 1;
+  // Absent means on, which is the default: the limit exists because a model
+  // that reads a whole file pays for it in every later request.
+  optional bool read_limit_enabled = 2;
+  optional int32 read_limit_chars = 3;
 }
 
 message WriteProviderConfigPatch {

@@ -3,7 +3,7 @@ import type { ReactNode } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { ToolsSection } from "./ToolsSection"
 
-type Config = { tools?: { disabled?: string[] } }
+type Config = { tools?: { disabled?: string[]; readLimitEnabled?: boolean; readLimitChars?: number } }
 
 const mocks = vi.hoisted(() => ({ write: vi.fn(), config: { current: {} as Config } }))
 
@@ -94,5 +94,64 @@ describe("the tools section", () => {
 		// to move the number the panel prints.
 		const total = screen.getByTestId("tools-section-total").textContent ?? ""
 		expect(total).toContain("6.8k of 8.6k tokens")
+	})
+
+	// The read limit defaults to on: a model that reads a whole file pays for
+	// it in every later request, because a tool result is re-sent for the rest
+	// of the run. A capable model paginates on its own and does not need it.
+	it("has the read limit on for a profile that says nothing", () => {
+		render(<ToolsSection providerId="ollama" />)
+
+		expect((screen.getByTestId("tool-read-limit") as HTMLInputElement).checked).toBe(true)
+		expect(screen.getByLabelText(/Read size limit/)).toBeTruthy()
+	})
+
+	it("stores only the off switch, never the default", async () => {
+		render(<ToolsSection providerId="ollama" />)
+
+		await act(async () => {
+			fireEvent.click(screen.getByTestId("tool-read-limit"))
+		})
+		expect(mocks.write).toHaveBeenCalledWith({ tools: { disabled: [], readLimitEnabled: false } })
+
+		// And back on: the field is dropped rather than written as `true`, so an
+		// untouched profile and one that chose the default stay the same thing.
+		await act(async () => {
+			fireEvent.click(screen.getByTestId("tool-read-limit"))
+		})
+		expect(mocks.write).toHaveBeenLastCalledWith({ tools: { disabled: [] } })
+	})
+
+	// The section is written whole. A switch that carried only its own field
+	// would clear the other one, which is how this panel's sibling sections
+	// each lost a setting before they were written to compose at call time.
+	it("keeps the tool selection when the read limit changes", async () => {
+		mocks.config.current = { tools: { disabled: ["awk"] } }
+		render(<ToolsSection providerId="ollama" />)
+
+		await act(async () => {
+			fireEvent.click(screen.getByTestId("tool-read-limit"))
+		})
+
+		expect(mocks.write).toHaveBeenCalledWith({ tools: { disabled: ["awk"], readLimitEnabled: false } })
+	})
+
+	it("keeps the read limit when a tool is switched off", async () => {
+		mocks.config.current = { tools: { readLimitChars: 30_000 } }
+		render(<ToolsSection providerId="ollama" />)
+
+		await act(async () => {
+			fireEvent.click(screen.getByTestId("tool-grep"))
+		})
+
+		expect(mocks.write).toHaveBeenCalledWith({ tools: { disabled: ["grep"], readLimitChars: 30_000 } })
+	})
+
+	it("hides the threshold when the limit is off, since it applies to nothing", () => {
+		mocks.config.current = { tools: { readLimitEnabled: false } }
+		render(<ToolsSection providerId="ollama" />)
+
+		expect((screen.getByTestId("tool-read-limit") as HTMLInputElement).checked).toBe(false)
+		expect(screen.queryByLabelText(/Read size limit/)).toBeNull()
 	})
 })
