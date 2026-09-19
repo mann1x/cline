@@ -27,6 +27,21 @@ describe("the replay speaks in the present", () => {
 		expect(DEFAULT_REPLAY_COMPACTION_PROMPT).toContain("Let me start by");
 	});
 
+	it("makes the rule apply to every step, not only the opening", () => {
+		// Two builds in, the report was the same: "the prose of the summary is
+		// still wrong, it's still not formatted as a replay but as a summary".
+		// The measured shape was a present-tense first sentence and a
+		// present-tense last one around a wholly past-tense body, so the rule
+		// had to stop reading as advice about how to begin.
+		expect(DEFAULT_REPLAY_COMPACTION_PROMPT).toContain("every step");
+		expect(DEFAULT_REPLAY_COMPACTION_PROMPT).toContain(
+			"not only its first and last",
+		);
+		// The outcome as its own sentence, which is what turns "my second
+		// attempt also failed" into "let me try it. It failed."
+		expect(DEFAULT_REPLAY_COMPACTION_PROMPT).toContain("It failed:");
+	});
+
 	it("does not print the phrasings it is trying to prevent", () => {
 		// The table carried a "not this" column, and a pandorum summary came
 		// back with its rows nearly verbatim: "I started by running the

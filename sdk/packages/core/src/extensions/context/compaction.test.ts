@@ -2485,6 +2485,139 @@ describe("createContextCompactionPrepareTurn", () => {
 		expect(stored).not.toContain("ECHO_SHOULD_NOT_SURVIVE");
 	});
 
+	it("carries the user's own words and the ledger into a second generation", async () => {
+		// The two things a summary cannot rebuild. What was asked exists only
+		// in the messages being discarded, and from generation 2 the only copy
+		// left is whatever the model wrote down -- which is a paraphrase, and
+		// the generation after that paraphrases the paraphrase. Measured on
+		// pandorum session 1789852877349_7bbnd: a request naming the command
+		// to run came back as "The user is asking me to fix the collision in
+		// `manic_miner.html`", and the model never ran the command again.
+		const standingRequest =
+			"check manic_miner.html, it's not working. Run `node run_game.js manic_miner.html` before you tell me you are done.";
+		const createMessage = vi.fn(() =>
+			streamChunks([
+				{
+					type: "text",
+					id: "summary-carry",
+					// Deliberately a paraphrase, which is what the model does.
+					text: "I am fixing the collision in the file.",
+				},
+				{ type: "done", id: "summary-carry", success: true },
+			]),
+		);
+		createHandlerMock.mockReturnValue({ createMessage });
+
+		const prepareTurn = createContextCompactionPrepareTurn({
+			providerId: "anthropic",
+			modelId: "mock-model",
+			providerConfig: {
+				providerId: "anthropic",
+				modelId: "mock-model",
+			} as LlmsProviders.ProviderConfig,
+			compaction: {
+				enabled: true,
+				strategy: "agentic",
+				preserveRecentTokens: 1,
+			},
+			logger: undefined,
+		});
+
+		const turn = (messages: MessageWithMetadata[]) =>
+			prepareTurn?.({
+				agentId: "agent-1",
+				conversationId: "conv-1",
+				parentAgentId: null,
+				iteration: 1,
+				abortSignal: new AbortController().signal,
+				systemPrompt: "You are helpful.",
+				tools: [],
+				messages,
+				apiMessages: messages,
+				model: {
+					id: "mock-model",
+					provider: "anthropic",
+					info: { id: "mock-model", maxInputTokens: 10 },
+				},
+			});
+
+		const checkerCall = (id: string): MessageWithMetadata[] => [
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "tool_use",
+						id,
+						name: "run_commands",
+						input: { commands: ["node run_game.js manic_miner.html"] },
+					},
+				],
+			},
+			{
+				role: "user",
+				content: [
+					{
+						type: "tool_result",
+						tool_use_id: id,
+						name: "run_commands",
+						content: [
+							{
+								query: "node run_game.js manic_miner.html",
+								result: '{"ok":false,"error":"collide is not defined"}',
+								success: true,
+							},
+						] as unknown as LlmsProviders.ToolResultContent["content"],
+					},
+				],
+			},
+		];
+
+		const first = await turn([
+			{ role: "user", content: standingRequest },
+			...checkerCall("call-1"),
+			{ role: "assistant", content: "Looked at it" },
+			{ role: "user", content: "Latest request" },
+			{ role: "assistant", content: "Latest answer" },
+		]);
+		const firstSummary = first?.messages?.[0] as
+			| MessageWithMetadata
+			| undefined;
+		expect(firstSummary).toBeDefined();
+
+		// Generation 1: the harness quoted it, whatever the model wrote.
+		expect(JSON.stringify(firstSummary?.content)).toContain(
+			"node run_game.js manic_miner.html",
+		);
+
+		// Generation 2, built on generation 1's own output.
+		const second = await turn([
+			firstSummary as MessageWithMetadata,
+			...checkerCall("call-2"),
+			{ role: "assistant", content: "Tried again" },
+			{ role: "user", content: "Keep going" },
+			{ role: "assistant", content: "Still going" },
+		]);
+		const secondSummary = second?.messages?.[0] as
+			| MessageWithMetadata
+			| undefined;
+		const metadata = secondSummary?.metadata as {
+			generation?: number;
+			userRequests?: string[];
+			toolLedger?: string;
+		};
+
+		expect(metadata?.generation).toBe(2);
+		// Verbatim, not the model's account of it.
+		expect(metadata?.userRequests?.[0]).toBe(standingRequest);
+		expect(JSON.stringify(secondSummary?.content)).toContain(
+			"node run_game.js manic_miner.html",
+		);
+		// And the checker's verdict is still in the record, collapsed across
+		// the seam rather than listed twice.
+		expect(metadata?.toolLedger).toContain("collide is not defined");
+		expect(metadata?.toolLedger).toContain("2×");
+	});
+
 	it("budgets agentic summary input before serialization", () => {
 		const result = buildAgenticSummaryInputBudget({
 			messages: [

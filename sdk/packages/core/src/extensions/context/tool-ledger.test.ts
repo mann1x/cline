@@ -4,6 +4,8 @@ import {
 	buildToolLedger,
 	collectFileHistories,
 	DEFAULT_TOOL_LEDGER_LIMITS,
+	evictToolLedger,
+	mergeToolLedger,
 	renderToolLedger,
 } from "./tool-ledger";
 
@@ -395,5 +397,113 @@ describe("the measured record of a structured result", () => {
 		]);
 
 		expect(renderToolLedger(ledger)).toContain("failed: Read too large");
+	});
+});
+
+describe("a ledger that outlives its own compaction", () => {
+	// The ledger used to live for exactly one generation, on the reasoning
+	// that anything fed back accumulates. That is true of prose and false of
+	// a record: a record can be evicted. What it costs to throw away is the
+	// standing evidence -- after one compaction the model no longer knew it
+	// had a checker to run, and started again from a reading of the source.
+	const entry = (
+		toolName: string,
+		input: string,
+		result: string,
+		extra: Partial<ReturnType<typeof buildToolLedger>[number]> = {},
+	) => ({
+		index: 0,
+		toolName,
+		input,
+		result,
+		failed: false,
+		repeated: 1,
+		files: [],
+		...extra,
+	});
+
+	it("renumbers the merged run so the order still reads", () => {
+		const merged = mergeToolLedger(
+			[entry("read_files", "path=a.ts", "40 lines")],
+			[entry("editor", "path=a.ts", "replaced 3 lines")],
+		);
+
+		expect(merged.map((e) => e.index)).toEqual([1, 2]);
+		expect(merged.map((e) => e.toolName)).toEqual(["read_files", "editor"]);
+	});
+
+	it("collapses a repeat that spans the seam", () => {
+		// The same check run either side of a compaction is one fact, not two,
+		// and it is the fact most likely to be repeated: the checker is run
+		// after every edit.
+		const merged = mergeToolLedger(
+			[entry("run_commands", "commands=[node run_game.js]", "ok:false")],
+			[entry("run_commands", "commands=[node run_game.js]", "ok:false")],
+		);
+
+		expect(merged).toHaveLength(1);
+		expect(merged[0]?.repeated).toBe(2);
+	});
+
+	it("starts a new entry when the answer changed across the seam", () => {
+		const merged = mergeToolLedger(
+			[entry("run_commands", "commands=[node run_game.js]", "ok:false")],
+			[entry("run_commands", "commands=[node run_game.js]", "ok:true")],
+		);
+
+		expect(merged).toHaveLength(2);
+		expect(merged.map((e) => e.result)).toEqual(["ok:false", "ok:true"]);
+	});
+
+	it("evicts old reads before anything that returned a verdict", () => {
+		// The stated order: reads and edits go first because the files are
+		// still on disk, and a command's result is a judgement about the work
+		// that nothing else records.
+		const entries = mergeToolLedger(
+			[],
+			[
+				entry("read_files", "path=a.ts", "x".repeat(400)),
+				entry("editor", "path=a.ts", "y".repeat(400)),
+				entry("run_commands", "commands=[node run_game.js]", "ok:false"),
+				entry("read_files", "path=b.ts", "z".repeat(400)),
+			],
+		);
+
+		const kept = evictToolLedger(entries, 100);
+
+		expect(kept.map((e) => e.toolName)).toEqual(["run_commands"]);
+	});
+
+	it("keeps a failed read over a successful one", () => {
+		// A refused call is the one kind the summary is worst at keeping, and
+		// re-making it is the cost of losing it.
+		const entries = mergeToolLedger(
+			[],
+			[
+				entry("read_files", "path=a.ts", "x".repeat(400)),
+				entry("read_files", "path=b.ts", "Read too large", { failed: true }),
+			],
+		);
+
+		const kept = evictToolLedger(entries, 60);
+
+		expect(kept.map((e) => e.failed)).toEqual([true]);
+	});
+
+	it("leaves a ledger that already fits alone", () => {
+		const entries = mergeToolLedger([], [entry("read_files", "a", "b")]);
+		expect(evictToolLedger(entries, 10_000)).toEqual(entries);
+	});
+
+	it("renumbers what survives eviction", () => {
+		const entries = mergeToolLedger(
+			[],
+			[
+				entry("read_files", "path=a.ts", "x".repeat(400)),
+				entry("run_commands", "commands=[node run_game.js]", "ok:false"),
+			],
+		);
+
+		expect(evictToolLedger(entries, 100).map((e) => e.index)).toEqual([1]);
 	});
 });

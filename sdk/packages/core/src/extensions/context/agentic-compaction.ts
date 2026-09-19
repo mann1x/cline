@@ -15,6 +15,8 @@ import {
 	buildSummaryMessage,
 	buildSummaryRequest,
 	buildThinkingSummaryRequest,
+	CHARS_PER_TOKEN,
+	collectUserRequests,
 	type EstimateMessageTokens,
 	ensureFilesSection,
 	estimateTokens,
@@ -36,6 +38,8 @@ import { cutEchoedTranscript, trimReplayOverflow } from "./replay-compaction";
 import {
 	buildToolLedger,
 	collectFileHistories,
+	evictToolLedger,
+	mergeToolLedger,
 	type RevisionSpanLookup,
 	renderToolLedger,
 } from "./tool-ledger";
@@ -124,6 +128,64 @@ const SUMMARIZER_SYSTEM_PROMPTS = {
  * reasoning may need two, and a summary that overran its budget needs one
  * attempt to measure it and another to act on the measurement.
  */
+/**
+ * The ledger's share of the message budget, once it carries across
+ * compactions.
+ *
+ * A tenth, because the ledger is evidence for the summary rather than a second
+ * copy of it, and the budget it competes for is the standing context that has
+ * to leave room for the turns it gives perspective on. Small enough that a
+ * long session's record is pruned rather than allowed to crowd the prose;
+ * large enough that the calls worth keeping -- refusals and verdicts -- all
+ * fit, since those are short.
+ */
+/**
+ * What the quoted user requests may take, as a share of the message budget.
+ *
+ * More than the ledger gets, because this is the one part of a transcript that
+ * cannot be rebuilt from anywhere: the files are on disk and the calls are in
+ * the ledger, and what was asked exists only in the messages being discarded.
+ * Nothing here is ever evicted -- over budget, the requests are elided rather
+ * than dropped -- so this bounds how much of each is shown and never how many.
+ * There is no floor under it either: a window small enough to make the share
+ * tiny is a window where every quoted character is taken from the transcript,
+ * and the per-request minimum is what guarantees each one is still there.
+ */
+const USER_REQUEST_BUDGET_SHARE = 0.15;
+
+const TOOL_LEDGER_BUDGET_SHARE = 0.1;
+
+/**
+ * A floor under that share, for a caller that names no message target.
+ *
+ * Roughly a dozen entries. Below this the eviction order stops meaning
+ * anything: everything recoverable is gone on the first compaction and the
+ * ledger is a handful of verdicts with no context around them.
+ */
+const MIN_TOOL_LEDGER_CHARS = 2_000;
+
+/**
+ * Everything the user has typed, in order, without repeating what was already
+ * carried.
+ *
+ * Appended rather than merged by content: the same sentence typed twice at
+ * different points in a session is two instructions, and only an immediate
+ * repeat is one.
+ */
+function mergeUserRequests(
+	previous: readonly string[],
+	next: readonly string[],
+): string[] {
+	const merged = [...previous];
+	for (const request of next) {
+		if (merged[merged.length - 1] === request) {
+			continue;
+		}
+		merged.push(request);
+	}
+	return merged;
+}
+
 const SUMMARY_ATTEMPTS = 3;
 
 /**
@@ -365,6 +427,13 @@ export async function runAgenticCompaction(options: {
 			: undefined;
 	const previousSummary = previousSummaryMetadata?.summary;
 	const previousThinkingSummary = previousSummaryMetadata?.thinkingSummary;
+	// Carried rather than rewritten. Both of these are the harness's own record
+	// and neither has ever passed through the model: a summary can paraphrase
+	// the instruction it was given, and after one generation the paraphrase is
+	// the only copy left.
+	const previousUserRequests = previousSummaryMetadata?.userRequests ?? [];
+	const previousLedgerEntries =
+		previousSummaryMetadata?.toolLedgerEntries ?? [];
 	const generation = (previousSummaryMetadata?.generation ?? 0) + 1;
 	const newMessagesToFold =
 		latestSummaryIndex >= 0
@@ -695,7 +764,28 @@ export async function runAgenticCompaction(options: {
 	// without one -- it is the only place a *refused* call survives compaction,
 	// which is precisely what the summary is worst at keeping.
 	const ledgerEnabled = options.toolLedgerEnabled !== false;
-	const ledgerEntries = ledgerEnabled ? buildToolLedger(newMessagesToFold) : [];
+	// This compaction's calls behind the ones carried from the last, collapsed
+	// across the join and then brought back under budget. The share is small
+	// because the ledger is a record and not the record: it earns its space by
+	// holding the calls the prose is worst at keeping, not by holding all of
+	// them.
+	const ledgerBudgetChars = Math.max(
+		MIN_TOOL_LEDGER_CHARS,
+		Math.floor(
+			(options.context.budget.messages.targetTokens ?? 0) *
+				CHARS_PER_TOKEN *
+				TOOL_LEDGER_BUDGET_SHARE,
+		),
+	);
+	const ledgerEntries = ledgerEnabled
+		? evictToolLedger(
+				mergeToolLedger(
+					previousLedgerEntries,
+					buildToolLedger(newMessagesToFold),
+				),
+				ledgerBudgetChars,
+			)
+		: [];
 	const toolLedger = ledgerEnabled
 		? renderToolLedger(
 				ledgerEntries,
@@ -738,6 +828,16 @@ export async function runAgenticCompaction(options: {
 			generation,
 			thinkingSummary,
 			toolLedger,
+			...(ledgerEnabled ? { toolLedgerEntries: ledgerEntries } : {}),
+			userRequests: mergeUserRequests(
+				previousUserRequests,
+				collectUserRequests(newMessagesToFold),
+			),
+			userRequestBudgetChars: Math.floor(
+				(options.context.budget.messages.targetTokens ?? 0) *
+					CHARS_PER_TOKEN *
+					USER_REQUEST_BUDGET_SHARE,
+			),
 		}),
 		...(pinnedMessage ? [pinnedMessage] : []),
 		...messages.slice(cutIndex),

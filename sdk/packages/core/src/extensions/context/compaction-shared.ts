@@ -17,6 +17,7 @@ export { CHARS_PER_TOKEN, estimateThinkingTokens, estimateTokens };
 
 import type { CoreCompactionSummarizerConfig } from "../../types/config";
 import type { ProviderConfig } from "../../types/provider-settings";
+import type { ToolLedgerEntry } from "./tool-ledger";
 
 export const DEFAULT_MAX_INPUT_TOKENS = 128_000;
 /** Estimate the usable input share when only a context window is reported. */
@@ -489,10 +490,38 @@ export interface CompactionSummaryMetadata {
 	/** The retrospective written alongside this summary, if there was one. */
 	thinkingSummary?: string;
 	/**
-	 * The harness's record of the calls this summary stands for, when the
-	 * Checkpoints switch left it on. Read by the chat row, not by compaction.
+	 * The harness's record of the calls this summary stands for. Read by the
+	 * chat row, and by the next compaction through `toolLedgerEntries`.
 	 */
 	toolLedger?: string;
+	/**
+	 * The same record, structured, so the next generation can carry it.
+	 *
+	 * A ledger used to live for exactly one generation, on the reasoning that
+	 * anything fed back accumulates without bound. That is true of prose and
+	 * false of a record: a record can be evicted, and `evictToolLedger` does
+	 * it in the order that keeps what cannot be recovered. What the one-shot
+	 * rule cost was the standing evidence -- after a compaction the model no
+	 * longer knew it had a checker to run, and went back to declaring the work
+	 * done on a reading of the source.
+	 */
+	toolLedgerEntries?: ToolLedgerEntry[];
+	/**
+	 * Everything the user actually typed, verbatim, oldest first.
+	 *
+	 * Written by the harness and never by the model, which is the whole point.
+	 * The prompt asks for the instructions word for word and the model
+	 * paraphrases them, and from the second generation the only copy left is
+	 * the paraphrase inside the previous summary -- so each compaction
+	 * paraphrases a paraphrase. Measured on pandorum session
+	 * 1789852877349_7bbnd, where a request naming the command to run came back
+	 * as "The user is asking me to fix the collision in `manic_miner.html`"
+	 * and the model never ran the command again.
+	 *
+	 * Never evicted. It is small, and it is the one thing in a transcript that
+	 * exists nowhere else once the messages are gone.
+	 */
+	userRequests?: string[];
 }
 
 export type EstimateMessageTokens = (message: MessageWithMetadata) => number;
@@ -1000,6 +1029,30 @@ export function getCompactionSummaryMetadata(
 		metadata.thinkingSummary.trim()
 			? { thinkingSummary: metadata.thinkingSummary }
 			: {}),
+		// The two the next generation carries. This function rebuilds the
+		// metadata field by field, so anything not named here is dropped on the
+		// way through -- which is how the first attempt at carrying these
+		// produced a generation 2 with neither, while `generation` itself came
+		// through correctly and made it look as though the previous summary had
+		// not been found at all.
+		...(Array.isArray(metadata.userRequests)
+			? {
+					userRequests: metadata.userRequests
+						.filter((value): value is string => typeof value === "string")
+						.map((value) => value.trim())
+						.filter((value) => value.length > 0),
+				}
+			: {}),
+		...(Array.isArray(metadata.toolLedgerEntries)
+			? {
+					toolLedgerEntries: metadata.toolLedgerEntries.filter(
+						(value): value is ToolLedgerEntry =>
+							typeof value === "object" &&
+							value !== null &&
+							typeof (value as ToolLedgerEntry).toolName === "string",
+					),
+				}
+			: {}),
 	};
 }
 
@@ -1021,6 +1074,93 @@ export function isTurnStartMessage(message: MessageWithMetadata): boolean {
 		!isToolResultOnlyUserMessage(message) &&
 		!isCompactionSummaryMessage(message)
 	);
+}
+
+/**
+ * What the user typed, verbatim, in the order they typed it.
+ *
+ * Turn-start messages only, so a tool result and a summary the harness wrote
+ * are both excluded. Consecutive duplicates collapse: a resend of the same
+ * instruction is the same instruction.
+ */
+/** The most any single quoted request may take before its middle is cut. */
+export const MAX_USER_REQUEST_CHARS = 2_000;
+/** And the least, however many of them there are. */
+const MIN_USER_REQUEST_CHARS = 200;
+/** What the quoted requests may take together when no budget is named. */
+const DEFAULT_USER_REQUEST_BUDGET_CHARS = 6_000;
+
+/**
+ * Every instruction, as fully as the budget allows.
+ *
+ * Nothing is dropped, because a missing instruction is the one loss this block
+ * exists to prevent and a reader cannot tell an absent one from one that was
+ * never given. What happens under pressure instead is elision: each request
+ * keeps its head and its tail and says in the middle how much was cut, which
+ * is a statement a reader can act on.
+ *
+ * The share is spread evenly rather than favouring the newest. The standing
+ * task is usually the first thing typed and the steering is usually the last,
+ * and there is no general rule about which of them the next turn needs.
+ */
+function renderUserRequests(
+	requests: readonly string[],
+	budgetChars?: number,
+): string[] {
+	const kept = requests
+		.map((request) => request.trim())
+		.filter((request) => request.length > 0);
+	if (kept.length === 0) {
+		return [];
+	}
+	const budget = isPositiveFiniteNumber(budgetChars)
+		? budgetChars
+		: DEFAULT_USER_REQUEST_BUDGET_CHARS;
+	const perRequest = Math.min(
+		MAX_USER_REQUEST_CHARS,
+		Math.max(MIN_USER_REQUEST_CHARS, Math.floor(budget / kept.length)),
+	);
+	return kept.map((request) => elideMiddle(request, perRequest));
+}
+
+function elideMiddle(text: string, limit: number): string {
+	if (text.length <= limit) {
+		return text;
+	}
+	const keep = Math.max(40, Math.floor(limit / 2) - 30);
+	const head = text.slice(0, keep).trimEnd();
+	const tail = text.slice(-keep).trimStart();
+	const dropped = text.length - head.length - tail.length;
+	return `${head}\n… ${dropped} characters elided by the harness …\n${tail}`;
+}
+
+export function collectUserRequests(
+	messages: readonly MessageWithMetadata[],
+): string[] {
+	const requests: string[] = [];
+	for (const message of messages) {
+		if (!isTurnStartMessage(message)) {
+			continue;
+		}
+		const text = messageText(message).trim();
+		if (!text || requests[requests.length - 1] === text) {
+			continue;
+		}
+		requests.push(text);
+	}
+	return requests;
+}
+
+function messageText(message: MessageWithMetadata): string {
+	if (typeof message.content === "string") {
+		return message.content;
+	}
+	return message.content
+		.filter((block): block is { type: "text"; text: string } => {
+			return (block as { type?: string }).type === "text";
+		})
+		.map((block) => block.text)
+		.join("\n");
 }
 
 export function findFirstUserMessageIndex(
@@ -2026,12 +2166,49 @@ export function buildSummaryMessage(options: {
 	 * next one its calls are in the prose.
 	 */
 	toolLedger?: string;
+	/** The same ledger, structured, for the generation after this one. */
+	toolLedgerEntries?: ToolLedgerEntry[];
+	/** Everything the user typed, verbatim, oldest first. */
+	userRequests?: string[];
+	/** How much room the quoted requests may take, all together. */
+	userRequestBudgetChars?: number;
 }): MessageWithMetadata {
 	const thinkingSummary = options.thinkingSummary?.trim();
 	const toolLedger = options.toolLedger?.trim();
+	// What is shown is also what is stored, and stored is what the next
+	// generation carries. Keeping the untouched originals in metadata was the
+	// first attempt and it costs more than it buys: `estimateMessageTokens`
+	// serializes the whole message, metadata included, so a summary carrying
+	// twenty full requests measured 86,564 tokens against a 28,780 trigger
+	// while its content was 3,083 characters. The elision is bounded below --
+	// no request is ever shown at less than `MIN_USER_REQUEST_CHARS` -- so a
+	// long instruction degrades once and then holds, and a short one, which is
+	// what almost every instruction is, is never touched at all.
+	const shownRequests = renderUserRequests(
+		options.userRequests ?? [],
+		options.userRequestBudgetChars,
+	);
 	return {
 		role: "user",
 		content: [
+			// First, because it is the task. Everything else in this message is
+			// an account of work done towards it, and an account read before the
+			// instruction it serves is read without a test to apply to it.
+			//
+			// Harness text, quoted rather than described: the model has already
+			// been asked for these word for word and has already paraphrased
+			// them, and by the second generation a paraphrase is all there is to
+			// paraphrase from.
+			...(shownRequests.length > 0
+				? [
+						{
+							type: "text" as const,
+							text: `What the user asked, in their own words — every instruction given so far, quoted by the harness:\n\n${shownRequests
+								.map((request) => `<user_request>\n${request}\n</user_request>`)
+								.join("\n\n")}\n\n`,
+						},
+					]
+				: []),
 			// Ahead of the summary, because it is what the model should read
 			// first: how the work went, before what the work was.
 			//
@@ -2093,6 +2270,10 @@ export function buildSummaryMessage(options: {
 			// ledger is kept out of that field -- a ledger inside `summary`
 			// becomes the next generation's `previousSummary` and accumulates.
 			...(toolLedger ? { toolLedger } : {}),
+			...(options.toolLedgerEntries && options.toolLedgerEntries.length > 0
+				? { toolLedgerEntries: options.toolLedgerEntries }
+				: {}),
+			...(shownRequests.length > 0 ? { userRequests: shownRequests } : {}),
 		} satisfies CompactionSummaryMetadata,
 	};
 }

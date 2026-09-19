@@ -419,6 +419,99 @@ export function buildToolLedger(
 }
 
 /**
+ * The tools whose result is a judgement about the work rather than a copy of
+ * something still on disk.
+ *
+ * A read can be made again and an edit can be seen in the file; what a checker
+ * said cannot be recovered from anywhere. So when the ledger has to lose
+ * something, it loses the recoverable calls and keeps the verdicts — which is
+ * also the eviction order the tester asked for, in as many words: "the old
+ * read/edit commands should be evicted at some point but the run commands
+ * should be carried over as much as possible".
+ */
+const VERDICT_TOOLS = new Set(["run_commands", "check_file"]);
+
+/**
+ * Concatenate a carried ledger with this compaction's own, as one run.
+ *
+ * The seam is where the repeat rule matters most: a checker run just before a
+ * compaction and again just after is one fact reported twice, and it is the
+ * call most likely to repeat because it follows every edit. So the same rule
+ * `buildToolLedger` applies within a stretch is applied across the join —
+ * same tool, same arguments, same answer collapses; a changed answer does not,
+ * because a changed answer is the most informative pair in the record.
+ */
+export function mergeToolLedger(
+	previous: readonly ToolLedgerEntry[],
+	next: readonly ToolLedgerEntry[],
+): ToolLedgerEntry[] {
+	const merged: ToolLedgerEntry[] = [];
+	for (const entry of [...previous, ...next]) {
+		const last = merged[merged.length - 1];
+		if (
+			last &&
+			last.toolName === entry.toolName &&
+			last.input === entry.input &&
+			last.result === entry.result
+		) {
+			last.repeated += entry.repeated;
+			continue;
+		}
+		merged.push({ ...entry });
+	}
+	return renumber(merged);
+}
+
+function renumber(entries: ToolLedgerEntry[]): ToolLedgerEntry[] {
+	return entries.map((entry, index) => ({ ...entry, index: index + 1 }));
+}
+
+/** What one entry costs, as the model will read it. */
+function entryChars(entry: ToolLedgerEntry): number {
+	return entry.toolName.length + entry.input.length + entry.result.length + 16;
+}
+
+/**
+ * Bring a carried ledger back under budget, losing the recoverable calls
+ * first.
+ *
+ * Three tiers, oldest first within each: successful non-verdict calls, then
+ * failed non-verdict calls, then anything that returned a verdict. A refused
+ * read outranks a successful one because the summary is measurably worst at
+ * keeping refusals, and without it the model simply makes the call again.
+ *
+ * Eviction rather than truncation, because a ledger is a record: half an entry
+ * says something that did not happen, where a missing entry only fails to say
+ * something that did.
+ */
+export function evictToolLedger(
+	entries: readonly ToolLedgerEntry[],
+	budgetChars: number,
+): ToolLedgerEntry[] {
+	let total = entries.reduce((sum, entry) => sum + entryChars(entry), 0);
+	if (total <= budgetChars) {
+		return renumber([...entries]);
+	}
+	const tierOf = (entry: ToolLedgerEntry): number =>
+		VERDICT_TOOLS.has(entry.toolName) ? 2 : entry.failed ? 1 : 0;
+	// Oldest first within a tier, which is what the index already records.
+	const order = entries
+		.map((entry, position) => ({ entry, position }))
+		.sort(
+			(a, b) => tierOf(a.entry) - tierOf(b.entry) || a.position - b.position,
+		);
+	const dropped = new Set<number>();
+	for (const { position, entry } of order) {
+		if (total <= budgetChars) {
+			break;
+		}
+		dropped.add(position);
+		total -= entryChars(entry);
+	}
+	return renumber(entries.filter((_entry, position) => !dropped.has(position)));
+}
+
+/**
  * The ledger as the model will read it.
  *
  * One line per call, the marks where the eye lands rather than at the end of a

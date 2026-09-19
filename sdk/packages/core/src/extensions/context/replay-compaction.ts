@@ -62,12 +62,20 @@ Your replay will be **prepended directly to the messages that remain** — your 
 
 Write in the **first person, present tense**, in your own voice, in the same prose as the turns it sits in front of. You are not reporting on a session to someone else and you are not recounting something finished: you are picking the work back up, and everything in the replay is the situation as it stands right now.
 
-These are the openings to write. Reuse them:
+Write **every step** as the step itself, then what came back. The opening of a
+step is what you are about to do; the outcome is its own short sentence after
+it. These are the shapes — reuse them:
 
 - "The user is asking me to fix the collision."
 - "Let me start by reading the file."
+- "Let me read a large chunk of the file." — then what it showed.
+- "Let me try reconstructing the script section. It failed: \`check_file\` reports an unterminated regular expression at line 274."
 - "Now the editor is warning me this change shifted the line numbers by +11."
 - "The file parses now, so what is left is the collision check."
+
+This holds for the middle of the replay and not only its first and last
+sentences. A step that opens by reporting itself has changed voice, and the
+seam this replay exists to remove is back.
 
 Written in the past tense the replay reads as history, and history is something you are entitled to doubt: you will re-read files you already know, re-derive what you have already settled, and treat a warning that is still in force as something that merely once happened. Written in the present it is the state of play, which is what it actually is. Every sentence, not only the first and the last.
 
