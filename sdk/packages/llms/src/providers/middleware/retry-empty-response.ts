@@ -232,6 +232,24 @@ export function addUsage(
  * Fold the usage of discarded attempts into the finish part that is actually
  * emitted, so hosted-provider billing reflects every request the turn made
  * (including cache and reasoning detail), not just the accepted one.
+ *
+ * The sum is right for money and wrong for context, and both are read off the
+ * same field. A discarded attempt really was charged, so billing has to see
+ * it -- but the prompt did not double, and `inputTokens` is what the token
+ * calibration anchors to, what the compaction trigger compares against its
+ * threshold, and what the context meter draws.
+ *
+ * Measured on pandorum session 1789852877349_7bbnd: four turns in 71 reported
+ * two or three times their real prompt, the worst 151,608 tokens against a
+ * 65,536-token window -- a number no request could have been served at. One
+ * inflated count beat the compaction trigger outright; another became the
+ * calibration anchor, collapsed the next request's output cap to 6,099 and
+ * fired a compaction at 41% of the window.
+ *
+ * So the accepted attempt's own prompt travels beside the billed total rather
+ * than replacing it. It is set only when something was discarded: on an
+ * ordinary turn the two numbers are the same, and a field that is always
+ * present invites a reader to prefer it without asking why it exists.
  */
 function withAggregatedUsage(
 	finish: FinishPart,
@@ -240,11 +258,24 @@ function withAggregatedUsage(
 	if (discardedUsage.length === 0) {
 		return finish;
 	}
+	const acceptedInputTokens = finish.usage?.inputTokens?.total;
 	let usage = finish.usage;
 	for (const discarded of discardedUsage) {
 		usage = addUsage(discarded, usage);
 	}
-	return { ...finish, usage };
+	return {
+		...finish,
+		usage:
+			typeof acceptedInputTokens === "number"
+				? // Rides along on the SDK's usage object, which has no room for
+					// it in its own type. The gateway is the only reader; the SDK
+					// passes it through untouched.
+					({
+						...usage,
+						requestInputTokens: acceptedInputTokens,
+					} as LanguageModelV4Usage)
+				: usage,
+	};
 }
 
 /**

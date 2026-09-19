@@ -265,6 +265,70 @@ describe("createRetryEmptyResponseMiddleware", () => {
 		expect(finishPart.usage.inputTokens.noCache).toBeUndefined();
 	});
 
+	it("keeps the accepted attempt's own prompt beside the billed total", async () => {
+		// The aggregate above is right for money and wrong for context. A
+		// discarded attempt was charged, so billing sums it -- but the prompt
+		// did not double, and every context consumer reads the same field.
+		// Measured on pandorum session 1789852877349_7bbnd: four turns in 71
+		// reported 2x and 3x their real prompt, one of them 151,608 tokens
+		// against a 65,536-token window. The inflated count beat the compaction
+		// trigger directly on one turn, and on another it became the anchor,
+		// collapsed the output cap to 6,099 and fired a compaction at 41% of
+		// the window.
+		const doStream = vi
+			.fn()
+			.mockResolvedValueOnce(
+				streamOf([streamStart, finish("stop", v4Usage({ in: 7, out: 3 }))]),
+			)
+			.mockResolvedValueOnce(
+				streamOf([
+					streamStart,
+					{ type: "text-start", id: "t" },
+					{ type: "text-delta", id: "t", delta: "hello" },
+					{ type: "text-end", id: "t" },
+					finish("stop", v4Usage({ in: 11, out: 5 })),
+				]),
+			);
+		const parts = await collect(await run(doStream));
+
+		const finishPart = parts.find((p) => p.type === "finish") as Extract<
+			LanguageModelV4StreamPart,
+			{ type: "finish" }
+		>;
+		// Billing still sees both requests.
+		expect(finishPart.usage.inputTokens.total).toBe(18);
+		// The context path sees the one that was actually sent last.
+		expect(
+			(finishPart.usage as { requestInputTokens?: number }).requestInputTokens,
+		).toBe(11);
+	});
+
+	it("leaves the accepted prompt unset when nothing was discarded", async () => {
+		// Nothing to disambiguate, so nothing is claimed: a consumer that finds
+		// the field absent falls back to `inputTokens`, which is the same
+		// number on a turn that did not retry.
+		const doStream = vi
+			.fn()
+			.mockResolvedValueOnce(
+				streamOf([
+					streamStart,
+					{ type: "text-start", id: "t" },
+					{ type: "text-delta", id: "t", delta: "hi" },
+					{ type: "text-end", id: "t" },
+					finish("stop", v4Usage({ in: 11, out: 5 })),
+				]),
+			);
+		const parts = await collect(await run(doStream));
+		const finishPart = parts.find((p) => p.type === "finish") as Extract<
+			LanguageModelV4StreamPart,
+			{ type: "finish" }
+		>;
+		expect(finishPart.usage.inputTokens.total).toBe(11);
+		expect(
+			(finishPart.usage as { requestInputTokens?: number }).requestInputTokens,
+		).toBeUndefined();
+	});
+
 	it("aggregates usage across all attempts when retries are exhausted", async () => {
 		const doStream = vi.fn(async () =>
 			streamOf([streamStart, finish("stop", v4Usage({ in: 7, out: 3 }))]),

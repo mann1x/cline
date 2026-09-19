@@ -604,7 +604,13 @@ export function resolveGatewayOutputCap(
 			input.onContextOverflow?.(report);
 			// No cap goes out, but the window is still what decided that, and the
 			// next truncation is squarely compaction's to fix.
-			return { source: "context-overflow", windowBound: true };
+			return {
+				source: "context-overflow",
+				windowBound: true,
+				...(isPositiveFiniteNumber(input.estimatedInputTokens)
+					? { estimatedInputTokens: input.estimatedInputTokens }
+					: {}),
+			};
 		}
 		caps.push({
 			tokens: Math.floor(remainingContext),
@@ -629,10 +635,17 @@ export function resolveGatewayOutputCap(
 		}
 	}
 
+	const windowBound = winner.source === "remaining-context";
 	return {
 		maxTokens: Math.max(1, Math.floor(winner.tokens)),
 		source: winner.source,
-		windowBound: winner.source === "remaining-context",
+		windowBound,
+		// Only when the window is what decided, because only then is the cap a
+		// claim about how full the context is -- and only then is there
+		// anything for the provider's count to corroborate or contradict.
+		...(windowBound && isPositiveFiniteNumber(input.estimatedInputTokens)
+			? { estimatedInputTokens: input.estimatedInputTokens }
+			: {}),
 	};
 }
 
@@ -1037,17 +1050,25 @@ async function* calibrateFromUsage(
 		} else if (event.type === "tool-call-delta") {
 			outputChars += event.inputText?.length ?? 0;
 		}
-		if (
-			event.type === "usage" &&
-			isPositiveFiniteNumber(event.usage.inputTokens)
-		) {
-			observeRequestTokens(
-				inputChars,
-				event.usage.inputTokens,
-				reasoningChars,
-				sessionId,
-				contextWindow,
-			);
+		if (event.type === "usage") {
+			// The accepted attempt's prompt when the turn retried, and the
+			// plain count when it did not. `inputTokens` is the billed sum
+			// across every attempt an empty response provoked -- right for
+			// money, and not a measurement of the context, which is what this
+			// anchor is for and what every reader of it goes on to decide
+			// with.
+			const observed = isPositiveFiniteNumber(event.usage.requestInputTokens)
+				? event.usage.requestInputTokens
+				: event.usage.inputTokens;
+			if (isPositiveFiniteNumber(observed)) {
+				observeRequestTokens(
+					inputChars,
+					observed,
+					reasoningChars,
+					sessionId,
+					contextWindow,
+				);
+			}
 		}
 		// The reasoning ratio, from the turn this stream just produced.
 		//

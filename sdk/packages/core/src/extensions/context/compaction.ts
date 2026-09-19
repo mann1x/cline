@@ -619,6 +619,18 @@ function translateRequestBudgetToMessages(
  * Keyed by session rather than held in the pipeline closure because the closure
  * is rebuilt more often than a session lives.
  */
+/**
+ * How far the cap's estimate may run past the provider's count before the cap
+ * stops being evidence.
+ *
+ * A quarter, because the estimate is allowed to be a little high by design --
+ * it projects the characters added since the last measurement, and erring
+ * upward is what keeps a request from overflowing. What it may not do is
+ * describe a different request: the faults this catches ran at 1.9x and 2.4x,
+ * far outside anything projection accounts for.
+ */
+const OUTPUT_CAP_ESTIMATE_TOLERANCE = 1.25;
+
 const starvedOutputCapSessions = new Set<string>();
 
 /** Test seam: the latch is process-wide, so a suite has to be able to clear it. */
@@ -963,10 +975,44 @@ export function createContextCompactionPrepareTurn(
 			observedOutputTokens,
 		});
 		const lastCap = lastOutputCap(config.sessionId);
+		// A cap is a conclusion drawn from an estimate, and this is the one
+		// trigger that acts on a conclusion rather than on a measurement. When
+		// the estimate behind it disagrees with what the provider counted for
+		// the same request, the cap describes the error and not the context --
+		// and compaction cannot fix an estimate. Measured on pandorum session
+		// 1789852877349_7bbnd: a turn that retried an empty response reported
+		// the sum of both attempts' prompts, that sum anchored the next
+		// estimate, and the cap came out at 6,099 for a request the provider
+		// counted at 27,029 of a 65,536-token window. The compaction that
+		// followed threw away half a transcript at 41% of the window.
+		//
+		// Absence is not disagreement: a cap carrying no estimate is trusted,
+		// which is every cap resolved before this field existed and every one
+		// from a path that does not compute it.
+		const capEstimate = lastCap?.estimatedInputTokens;
+		const positiveNumber = (value: unknown): value is number =>
+			typeof value === "number" && Number.isFinite(value) && value > 0;
+		const capContradicted =
+			positiveNumber(capEstimate) &&
+			positiveNumber(triggerInputTokens) &&
+			capEstimate > triggerInputTokens * OUTPUT_CAP_ESTIMATE_TOLERANCE;
 		const outputCapStarved =
 			lastCap?.windowBound === true &&
 			typeof lastCap.maxTokens === "number" &&
-			lastCap.maxTokens < outputRoomTokens;
+			lastCap.maxTokens < outputRoomTokens &&
+			!capContradicted;
+		if (capContradicted) {
+			config.logger?.log(
+				"Ignored a starved output cap whose estimate the provider's count contradicts",
+				{
+					severity: "warn",
+					capEstimatedInputTokens: capEstimate,
+					observedRequestTokens: triggerInputTokens,
+					lastOutputCapTokens: lastCap?.maxTokens,
+					outputRoomTokens,
+				},
+			);
+		}
 		const latchKey = config.sessionId ?? "";
 		const outputCapStarvedFires =
 			outputCapStarved && !starvedOutputCapSessions.has(latchKey);
@@ -1015,6 +1061,12 @@ export function createContextCompactionPrepareTurn(
 			outputRoomTokens,
 			lastOutputCapTokens: lastCap?.maxTokens,
 			lastOutputCapSource: lastCap?.source,
+			// The estimate the cap was drawn from, beside the count that either
+			// corroborates it or does not. Without both numbers in the record
+			// a compaction fired from a bad cap looks identical to one fired
+			// from a good one.
+			lastOutputCapEstimatedInputTokens: capEstimate,
+			capContradicted,
 			outputCapStarved,
 			outputCapStarvedFires,
 			shouldCompact,

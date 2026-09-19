@@ -69,6 +69,13 @@ export interface ApiStreamUsageChunk {
 	type: "usage";
 	/** Total number of input tokens reported by the provider */
 	inputTokens: number;
+	/**
+	 * The prompt of the accepted request, when the turn made more than one.
+	 *
+	 * `inputTokens` bills every attempt; this is the one that describes how
+	 * full the context is. Absent when the turn did not retry.
+	 */
+	requestInputTokens?: number;
 	/** Number of output tokens */
 	outputTokens: number;
 	/** Number of tokens written to cache */

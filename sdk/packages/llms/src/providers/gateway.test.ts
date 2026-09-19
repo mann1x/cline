@@ -811,6 +811,69 @@ describe("sdk-gateway", () => {
 		expect(lastObservedRequestTokens("session-b")).toBeUndefined();
 	});
 
+	it("anchors to the accepted attempt, not the billed sum", async () => {
+		// A turn that retried an empty response bills every attempt, and the
+		// middleware sums them so the money is right. The context did not
+		// double, so the anchor has to take the accepted attempt's own prompt.
+		// Without this the sum anchors the next estimate: measured on pandorum
+		// session 1789852877349_7bbnd, a summed 49,306 collapsed the following
+		// request's output cap to 6,099 and fired a compaction at 41% of the
+		// window.
+		resetTokenCalibration();
+		const createProvider = () => ({
+			async *stream() {
+				yield {
+					type: "usage",
+					usage: {
+						inputTokens: 9_000,
+						requestInputTokens: 4_000,
+						outputTokens: 10,
+					},
+				} satisfies AgentModelEvent;
+				yield { type: "finish", reason: "stop" } satisfies AgentModelEvent;
+			},
+		});
+		const gateway = createGateway({
+			builtins: false,
+			providers: [
+				{
+					manifest: {
+						id: "scripted",
+						name: "Scripted",
+						defaultModelId: "scripted-model",
+						models: [
+							{
+								id: "scripted-model",
+								name: "Scripted Model",
+								providerId: "scripted",
+								contextWindow: 128_000,
+							},
+						],
+					},
+					createProvider,
+				},
+			],
+		});
+		for await (const _event of await gateway.stream({
+			providerId: "scripted",
+			modelId: "scripted-model",
+			conversation: true,
+			sessionId: "session-retried",
+			messages: [
+				{
+					id: "user_long",
+					role: "user",
+					content: [{ type: "text", text: "hi ".repeat(10_000) }],
+					createdAt: Date.now(),
+				},
+			] as readonly AgentMessage[],
+		})) {
+			// drain
+		}
+
+		expect(lastObservedRequestTokens("session-retried")).toBe(4_000);
+	});
+
 	it("refuses a provider count larger than the model's window", () => {
 		// The guard lives in `observeRequestTokens`, but only this gateway
 		// holds the model definition, so the window has to be carried into the

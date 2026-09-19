@@ -101,6 +101,17 @@ export type AgentMessageRole = "user" | "assistant" | "tool";
 
 export interface AgentTokenUsage {
 	inputTokens: number;
+	/**
+	 * The prompt of the accepted request, when the turn made more than one.
+	 *
+	 * `inputTokens` is the billed sum across every attempt an empty response
+	 * provoked, which is right for money and is not a measurement of the
+	 * context. Anything deciding how full the window is -- the token
+	 * calibration, the compaction trigger, the output cap, the context meter
+	 * -- wants this one, and falls back to `inputTokens` when it is absent,
+	 * which is every turn that did not retry.
+	 */
+	requestInputTokens?: number;
 	outputTokens: number;
 	cacheReadTokens: number;
 	cacheWriteTokens: number;

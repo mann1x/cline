@@ -183,6 +183,17 @@ export interface OutputCapReport {
 	source: OutputCapSource;
 	/** Whether the winning term was the context window. */
 	windowBound: boolean;
+	/**
+	 * The input estimate the window-bound term was computed from.
+	 *
+	 * Carried so a reader can ask whether the cap is corroborated. A cap is a
+	 * conclusion drawn from an estimate, and an estimate can be wrong in the
+	 * direction that starves it -- at which point acting on the cap means
+	 * acting on the error. The provider's own count for the same request is
+	 * the check, and this is the only number that makes the comparison
+	 * possible.
+	 */
+	estimatedInputTokens?: number;
 }
 
 function calibration(): TokenCalibrationState {

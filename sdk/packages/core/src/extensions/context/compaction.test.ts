@@ -1479,6 +1479,51 @@ describe("createContextCompactionPrepareTurn", () => {
 			expect((await prepare(roomy, "starved-2"))?.messages).toBeUndefined();
 		});
 
+		// The cap is an estimate's conclusion, and an estimate can be wrong in
+		// the direction that starves it. Measured on pandorum session
+		// 1789852877349_7bbnd: a turn that retried an empty response reported
+		// the sum of both attempts' prompts, that sum anchored the next
+		// estimate, and the cap resolved to 6,099 for a request the provider
+		// then counted at 27,029 of a 65,536-token window. Compaction fired at
+		// 41% of the window. Compacting cannot fix a cap that is wrong about
+		// how full the context is -- only one that is right.
+		it("says nothing when the cap's estimate disagrees with the count", async () => {
+			const roomy = starvedTranscript();
+			noteOutputCap(
+				{
+					maxTokens: 6_099,
+					source: "remaining-context",
+					windowBound: true,
+					// Nearly three times what the provider counted for the same
+					// request (41,000 in the fixture above).
+					estimatedInputTokens: 118_000,
+				},
+				"starved-disagree",
+			);
+
+			expect(
+				(await prepare(roomy, "starved-disagree"))?.messages,
+			).toBeUndefined();
+		});
+
+		// The same starved cap, from an estimate the count corroborates, still
+		// fires: this is the case .130 was written for and the gate above must
+		// not swallow it.
+		it("still compacts when the cap's estimate matches the count", async () => {
+			const roomy = starvedTranscript();
+			noteOutputCap(
+				{
+					maxTokens: 6_099,
+					source: "remaining-context",
+					windowBound: true,
+					estimatedInputTokens: 42_000,
+				},
+				"starved-agree",
+			);
+
+			expect((await prepare(roomy, "starved-agree"))?.messages).toBeDefined();
+		});
+
 		// A cap that is window-bound but ample is the ordinary state of every
 		// turn before the transcript grows, and must say nothing.
 		it("says nothing about a window-bound cap that is ample", async () => {

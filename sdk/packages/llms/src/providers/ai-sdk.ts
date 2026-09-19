@@ -87,6 +87,20 @@ import type {
 
 interface GatewayNormalizedUsage {
 	inputTokens: number;
+	/**
+	 * The prompt of the request that was actually accepted, when a turn made
+	 * more than one.
+	 *
+	 * `inputTokens` is the billed sum across every attempt, because a
+	 * discarded attempt was charged. It is not the size of the context, and
+	 * the token calibration, the compaction trigger and the context meter all
+	 * read the size of the context. See `withAggregatedUsage` in
+	 * `middleware/retry-empty-response.ts` for what the two numbers cost when
+	 * they are conflated.
+	 *
+	 * Absent on a turn that did not retry, where the two are the same number.
+	 */
+	requestInputTokens?: number;
 	outputTokens: number;
 	cacheReadTokens: number;
 	cacheWriteTokens: number;
@@ -1533,8 +1547,16 @@ export function normalizeUsage(
 				? undefined
 				: calculateUsageCostFromPricing(normalizedUsage, pricingValue);
 
+	// Carried through untouched: the middleware that sums the attempts is the
+	// only thing that knows which one was kept, so nothing here may recompute
+	// it or fill it in.
+	const requestInputTokens = getNumericValue(usage.requestInputTokens);
+
 	return {
 		...normalizedUsage,
+		...(typeof requestInputTokens === "number" && requestInputTokens > 0
+			? { requestInputTokens }
+			: {}),
 		...(reasoningTokenCount > 0 ? { reasoningTokenCount } : {}),
 		...(typeof resolvedTotalCost === "number"
 			? { totalCost: resolvedTotalCost }

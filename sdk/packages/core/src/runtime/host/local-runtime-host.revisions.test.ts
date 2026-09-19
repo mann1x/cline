@@ -5,6 +5,16 @@ import type { AgentConfig } from "@cline/shared";
 import { setClineDir, setHomeDir } from "@cline/shared/storage";
 import { nanoid } from "nanoid";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const compactionConfigs: Array<Record<string, unknown>> = [];
+vi.mock("../../extensions/context/compaction", async (importOriginal) => ({
+	...((await importOriginal()) as Record<string, unknown>),
+	createContextCompactionPrepareTurn: (config: Record<string, unknown>) => {
+		compactionConfigs.push(config);
+		return undefined;
+	},
+}));
+
 import { LocalRuntimeHost } from "./local-runtime-host";
 import { splitCoreSessionConfig } from "./runtime-host";
 
@@ -154,5 +164,73 @@ describe("what the checkpoints switch turns off", () => {
 	// would be a different change from the one that was asked for.
 	it("leaves a caller that says nothing alone", async () => {
 		expect(await toolNames(undefined)).toContain("restore_file");
+	});
+});
+
+describe("what the checkpoints switch does not turn off", () => {
+	let root: string;
+	let workspace: string;
+
+	beforeEach(() => {
+		compactionConfigs.length = 0;
+		root = mkdtempSync(join(tmpdir(), "ledger-host-"));
+		workspace = join(root, "workspace");
+		mkdirSync(workspace, { recursive: true });
+		setClineDir(join(root, ".cline"));
+		setHomeDir(root);
+	});
+
+	afterEach(() => {
+		rmSync(root, { recursive: true, force: true });
+	});
+
+	async function compactionConfig(checkpoint: {
+		enabled?: boolean;
+	}): Promise<Record<string, unknown>> {
+		const host = new LocalRuntimeHost({
+			distinctId: `test-${nanoid(5)}`,
+			sessionService: sessionServiceStub() as never,
+			createAgent: () => stubAgent() as never,
+		});
+		await host.startSession({
+			interactive: false,
+			...splitCoreSessionConfig({
+				providerId: "anthropic",
+				modelId: "claude-sonnet-4-6",
+				apiKey: "test-key",
+				cwd: workspace,
+				systemPrompt: "You are a test agent",
+				mode: "act",
+				enableTools: true,
+				enableSpawnAgent: false,
+				enableAgentTeams: false,
+				checkpoint,
+				compaction: { enabled: true, strategy: "agentic" },
+			}),
+		});
+		return (compactionConfigs.at(-1)?.compaction ?? {}) as Record<
+			string,
+			unknown
+		>;
+	}
+
+	// The ledger is the only place a refused call survives compaction, and it
+	// was wired to the checkpoints switch -- so a tester who had turned the
+	// change protocol off had never seen one. Measured on pandorum session
+	// 1789852877349_7bbnd: generation 4 carried a retrospective and a summary
+	// and no ledger, and the model went on not knowing it had a checker to
+	// run. Core's own comment argues against exactly this coupling.
+	it("keeps the tool ledger when checkpoints are off", async () => {
+		const config = await compactionConfig({ enabled: false });
+		expect(config.toolLedgerEnabled).not.toBe(false);
+		// What the switch does still take: the revision addresses, because a
+		// ledger naming revisions no tool can reach reads as an offer.
+		expect(config.revisions).toBeUndefined();
+	});
+
+	it("keeps the revision addresses when checkpoints are on", async () => {
+		const config = await compactionConfig({ enabled: true });
+		expect(config.toolLedgerEnabled).not.toBe(false);
+		expect(config.revisions).toBeDefined();
 	});
 });

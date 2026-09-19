@@ -867,12 +867,22 @@ export class LocalRuntimeHost implements RuntimeHost {
 					...bootstrap.config,
 					compaction: {
 						...bootstrap.config.compaction,
-						// Absent when the switch is off, which is also what takes
-						// the ledger's file addresses out of the summary: a ledger
-						// naming revisions no tool can reach is worse than no
-						// ledger, because the model reads it as an offer.
+						// Absent when the switch is off, which takes the ledger's
+						// file addresses out of the summary: a ledger naming
+						// revisions no tool can reach is worse than none, because
+						// the model reads it as an offer.
 						...(revisionsEnabled ? { revisions: compactionRevisions } : {}),
-						toolLedgerEnabled: revisionsEnabled,
+						// The addresses are what the switch governs, not the
+						// ledger. Core says so where it builds one -- "the ledger
+						// is still worth its space without [a revision lookup] --
+						// it is the only place a *refused* call survives
+						// compaction" -- and then this line inferred it anyway.
+						// A tester with the change protocol off had therefore
+						// never seen a ledger: pandorum session
+						// 1789852877349_7bbnd carried a retrospective and a
+						// summary at generation 4 and nothing else, and the model
+						// went on not knowing it had a checker to run.
+						toolLedgerEnabled: true,
 					},
 				}
 			: bootstrap.config;
