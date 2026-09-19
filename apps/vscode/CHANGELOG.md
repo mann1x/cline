@@ -5,107 +5,58 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
-## [4.100.138] — 2026-09-19
+## [4.100.139] — 2026-09-19
 
-### The context bar says what the tokens are
+### The read limit is a setting, and its default was far too tight
 
-The bar showed one length and one number, and on a local model most of that bar
-is a price nobody typed. Measured on pandorum against a 65,536-token window:
-21,000 to 24,000 tokens before a single message, of which the system prompt —
-prompt template included, it is rendered into it — is 1,607. The rest is tool
-schemas, and on a host that bridges VS Code's MCP servers most of *those* are
-MCP. Told only a total, someone watching the bar start a third full has no way
-to see that the remedy is a tool switch rather than a shorter conversation.
+4.100.138 refused a file read past 2,048 characters — about fifty lines of
+ordinary source. A whole small file was refused, and the model answered the way
+the message invited it to, by crawling the file in tiny windows. The threshold
+is now 24,000 characters: roughly 6,000 tokens, about 9% of a 65,536-token
+window. The size worth refusing is the one that costs a real share of the
+window for the rest of the run — a tool result is re-sent on every later
+request — not the one that is larger than a screenful.
 
-The bar is now coloured by what the tokens are, in the order they are paid:
-system prompt, the agent's own tool schemas, the MCP servers' schemas, then the
-conversation. Hovering gives a **Before the first message** section naming each
-slice with its token count and how many tools it covers.
+The refusal also says how much fits. "Read a smaller range" without a size
+makes the model guess, and it guesses downwards; it now gets a number measured
+from the file in hand, counted off the rendered output rather than the raw
+bytes, because that is what is actually sent.
 
-MCP schemas cannot be told apart by name — long ones are sanitized and hashed on
-the way to the wire — so the tools carry their origin, and the split is measured
-where the request is assembled and carried forward onto the row the bar reads. A
-task recorded before this build, or a host running an older core, shows the plain
-undivided bar exactly as before.
+And it is a switch in the **Tools** section now, per profile, with the
+threshold beside it. A capable model paginates without being made to and the
+refusal only costs it a turn; a smaller one reads whole files and pays for them
+all run. On by default, and turning it off restores the old behaviour, where an
+oversized read comes back truncated.
 
-### Tools can be switched off per profile
+### The context bar was measuring three things it is not
 
-A new **Tools** section in the provider settings lists every tool the agent
-builds for itself with what its schema costs, and a running total. It is a deny
-list stored on the profile, so a tool added in a later release arrives switched
-on rather than silently missing from every profile that predates it.
+Reported within minutes of the last build: the conversation shrinking and
+coming back, the whole of it wiped after a compaction, the system-and-tools
+part dropping from 12k to 4-5k while compacting, and the bar moving up and down
+during ordinary tool use. All four were the bar rather than the session, and all
+four are fixed.
 
-`generate_image`, `skills`, the team tools and MCP tools are deliberately absent:
-each is already governed by another setting, and a second switch for one thing is
-how two settings end up disagreeing.
+**It counted the reply.** The meter summed the completion tokens into the
+window. Measured over 57 turns of one session, the last reply's length ranged
+from 0 to 8,054 tokens — so a thinking turn and the tool call after it differed
+by 12% of the bar with the conversation unchanged. The reply is not in the
+window; it arrives in the next request's prompt and is counted there.
 
-### A number typed into settings is no longer saved half-finished
+**A compaction shrank the system prompt and the tool schemas, which nothing
+does.** The compaction ratio was applied to the whole total the moment the
+divider completed. Those two are re-sent at full size on the very next request.
+Two compactions compounding pushed the total below the fixed price, at which
+point the conversation read as empty and the coloured parts were squeezed to
+fit. The ratio now applies to the conversation alone.
 
-Settings fields waited 100ms before saving, which is shorter than the gap between
-two keystrokes. Every prefix of a typed number was therefore written to
-providers.json as a chosen value. From pandorum's own log, while a context window
-was being retyped:
+**The length and the colours came from different requests**, so the coloured
+part appeared and vanished between turns — and a reopened task showed a length
+with no colours at all until its next live request. One request now answers
+both.
 
-```
-[ProviderConfig] write provider=ollama contextWindow=6553 stored=6553
-```
-
-6553 is 65536 with the last digit not yet typed, and it was live until the next
-key — long enough for anything reading providers.json to start a session on it.
-
-Fields that hold a number now wait longer and save on blur and on Enter, so the
-wait is only ever paid by someone who types a number and then leaves the panel
-alone. Selecting all and retyping is now one write holding the new number, rather
-than a clear followed by five prefixes.
-
-### A profile that says nothing about the context window keeps yours
-
-Switching to a 128k profile and back to a 64k one started the session at 128k
-until the number was deleted and retyped. The resolver picked the *object* rather
-than the field: a profile that stores no context window made the shared
-providers.json entry unreachable, and the session fell through to the built-in
-default. A profile now falls back to the shared entry field by field, and its own
-value still wins wherever it has one.
-
-Related: loading or saving a profile recorded its name for one mode while its
-settings were applied to both, so with Plan and Act sharing a model one of the two
-kept pointing at the profile before it.
-
-### Strong coding nudges are a switch
-
-When a reply calls no tool, the session asks the model to carry on rather than
-ending the task there — coding models often describe an edit instead of making it
-and stop with the file untouched. That is the right reading inside a coding task
-and the wrong one if you mostly ask questions, so it is now a setting, default on.
-With it off, only a reply that promises work, leaves an open transaction, or
-follows a tool call is asked to continue.
-
-### Checkpoints turns the whole machinery off
-
-The switch reads as "save progress at key points for easy rollback", and the file
-history *is* the rollback — but turning it off left `restore_file` on the model
-and revision numbers in the compaction ledger. Reported as "I was expecting the
-machinery to be completely disabled." It now also stops the revision log, the
-tool, and the ledger. The CLI gains the matching `--no-checkpoints`.
-
-### An oversized file read is refused, not truncated
-
-Truncation is the wrong answer for a read: the model reasons about the part it
-was given as though it were the file, and edits against line numbers it never
-saw. The cost is also permanent, because a tool result is re-sent on every later
-request. Past a size limit the read is now refused with what to do instead.
-
-### Compaction
-
-- The replay summary is written in the present tense. A replay in the past tense
-  reads as history, and a model re-telling its own session as history re-reads
-  files it already knows and re-derives conclusions it already has.
-- The summarizer's fallback budget was 1,024 tokens while the replay instruction
-  alone is about 1,030 — so on any summarizer with an unknown window, compaction
-  refused every time and the transcript stayed over the trigger. That escalation
-  had never once run.
-- Before/after token counts on a compaction are measured as a request, so they
-  agree with the context meter instead of with a sum of serialized messages.
+**The bar holds still while a compaction is running.** Mid-compaction the
+transcript is being rewritten and the numbers available describe neither the
+state being left nor the one being arrived at.
 
 ## [4.100.118] — 2026-09-15
 
