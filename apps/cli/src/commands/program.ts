@@ -122,6 +122,10 @@ export function addRootOptions(cmd: Command): Command {
 				"Proposals put to the approver before the run gives up on having a check (default: 2)",
 			)
 			.option(
+				"--no-checkpoints",
+				"Turn off the Checkpoints machinery for this run: no git snapshot at the start of each run, no file revision log, no restore_file offered to the model, and no tool ledger on compaction summaries. Mirrors the extension's Checkpoints switch, which is on by default",
+			)
+			.option(
 				"--lint-command <command>",
 				'Project checker `check_file` runs on each file it is given, e.g. "npx biome check ${file}". Without ${file} the path is appended. Makes check_file the linter here, as it is in the extension',
 			)

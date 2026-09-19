@@ -16,7 +16,7 @@ import {
 	autoUpdateOnStartup,
 	getPreferredKanbanInstaller,
 } from "./commands/update";
-import { CLI_DEFAULT_CHECKPOINT_CONFIG } from "./runtime/defaults";
+import { resolveCliCheckpointConfig } from "./runtime/defaults";
 
 import type { TuiStartupTarget } from "./tui/types";
 import { filterChatModels } from "./utils/chat-models";
@@ -1361,7 +1361,11 @@ export async function runCli(): Promise<void> {
 						`${message}: ${error instanceof Error ? error.message : String(error)}`,
 					),
 			}),
-			checkpoint: CLI_DEFAULT_CHECKPOINT_CONFIG,
+			// The extension's Checkpoints switch, mirrored. It gates more than
+			// the git snapshot now -- the revision log, `restore_file` and the
+			// compaction tool ledger travel with it -- so the CLI needs the same
+			// off switch the panel has.
+			checkpoint: resolveCliCheckpointConfig(args),
 			compaction: buildCliCompactionConfig(
 				effectiveCompactionMode,
 				// Not `positive()`: zero is the off switch here, and a

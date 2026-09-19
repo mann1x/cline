@@ -153,6 +153,12 @@ export interface ParsedArgs {
 	taskProgressInterval?: number;
 	invalidTaskProgress?: string;
 	invalidTaskProgressInterval?: string;
+	/**
+	 * The Checkpoints switch, mirroring the extension's. Commander writes
+	 * `false` here for `--no-checkpoints`; absent means on, as it is in the
+	 * panel.
+	 */
+	checkpoints?: boolean;
 	/** Project checker `check_file` runs on each file it is given. */
 	lintCommand?: string;
 	visionModel?: string;
