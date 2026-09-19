@@ -380,6 +380,42 @@ describe("the PolyKV section", () => {
 	})
 })
 
+describe("the tool selection", () => {
+	// The read half of the write-only-field failure again: the store writes the
+	// section, and with nothing reading it back the panel shows every tool on
+	// while the session runs without them.
+	it("reads the stored selection back", async () => {
+		const { buildEffectiveProviderConfig } = await import("./effective-config")
+		mocks.setProviderSettings({
+			ollama: { provider: "ollama", tools: { disabled: ["browser", "awk"] } },
+		})
+
+		const config = buildEffectiveProviderConfig(parseProviderId("ollama"))
+
+		expect(config.tools).toEqual({ disabled: ["browser", "awk"] })
+	})
+
+	it("reads a selection that withholds nothing as no selection", async () => {
+		const { buildEffectiveProviderConfig } = await import("./effective-config")
+		mocks.setProviderSettings({ ollama: { provider: "ollama", tools: { disabled: [] } } })
+
+		const config = buildEffectiveProviderConfig(parseProviderId("ollama"))
+
+		expect(config.tools).toBeUndefined()
+	})
+
+	it("drops a name that is not one", async () => {
+		const { buildEffectiveProviderConfig } = await import("./effective-config")
+		mocks.setProviderSettings({
+			ollama: { provider: "ollama", tools: { disabled: ["grep", "", 7, null] } },
+		})
+
+		const config = buildEffectiveProviderConfig(parseProviderId("ollama"))
+
+		expect(config.tools).toEqual({ disabled: ["grep"] })
+	})
+})
+
 describe("the output budget", () => {
 	// The read half again. This one has a second reader: the session factory
 	// reads the same section to size `num_predict`/`n_predict` and to state the

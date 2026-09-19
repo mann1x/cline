@@ -80,6 +80,10 @@ export const PROVIDER_CONFIG_PROFILE_KEYS = [
 	// captures -- the two lists are one contract read from both ends.
 	"polykv",
 	"outputBudget",
+	// Which tools the profile brings in. In both lists for the same reason the
+	// two above are: a key the load clears must be a key the save captures, or
+	// a profile with no selection comes back carrying the last one's.
+	"tools",
 	"headers",
 	"region",
 	"aws",
@@ -133,6 +137,12 @@ export const PROVIDER_CONFIG_CLEARS: Readonly<Record<string, unknown>> = {
 	// Same reason again: a profile that does not name an output budget must fall
 	// back to `auto` rather than inherit the previous profile's manual cap.
 	outputBudget: {},
+	// A profile that names no tools brings all of them in, which is the state
+	// this restores. Without it a profile saved before the section existed --
+	// every profile, right now -- would inherit whatever selection the previous
+	// profile made, and a model would silently lose tools under a profile that
+	// never mentioned them.
+	tools: {},
 	// And the reasoning section, so a profile that carries none stops inheriting
 	// the previous profile's effort, budget and replay mode. `{}` rather than
 	// `null` because the patch crosses a proto boundary: `reasoning` is an

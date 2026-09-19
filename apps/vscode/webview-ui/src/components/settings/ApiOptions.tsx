@@ -13,6 +13,7 @@ import { OutputBudgetField } from "./common/OutputBudgetField"
 import ParallelSessionsField, { parallelSessionsDescription } from "./common/ParallelSessionsField"
 import { PolykvSection } from "./common/PolykvSection"
 import { ReasoningHistoryField } from "./common/ReasoningHistoryField"
+import { ToolsSection } from "./common/ToolsSection"
 import { OPENROUTER_MODEL_PICKER_Z_INDEX } from "./OpenRouterModelPicker"
 import { AIhubmixProvider } from "./providers/AihubmixProvider"
 import { AnthropicProvider } from "./providers/AnthropicProvider"
@@ -499,6 +500,13 @@ const ApiOptions = ({
 			    form, and duplicating it to bolt one section on would give two
 			    copies to keep in step. */}
 			{apiConfiguration && showModelOptions && isOpencoti && <PolykvSection providerId={selectedProvider} />}
+
+			{/* Every provider, for the same reason as the fields below: the tool
+			    schemas are sent to every endpoint there is, and what they cost is
+			    read against that endpoint's window. Placed here rather than in
+			    each panel so two dozen of them cannot disagree about where it
+			    lives. */}
+			{apiConfiguration && showModelOptions && <ToolsSection providerId={selectedProvider} />}
 
 			{/* Every provider, not a chosen few: the number describes an
 			    arrangement with an endpoint, and every endpoint has one — slots on

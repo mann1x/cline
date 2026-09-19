@@ -537,6 +537,7 @@ export const OpenAICompatibleProvider = ({
 			    than folded away with the prices. */}
 			<DebouncedTextField
 				initialValue={formatOptionalModelNumber(openAiModelInfo?.contextWindow)}
+				numeric
 				onChange={(value) => updateNumericModelOverride("contextWindow", "Model Context Window", value)}
 				placeholder={`Default: ${openAiModelInfoSafeDefaults.contextWindow}`}
 				style={{ width: "100%" }}>
@@ -587,6 +588,7 @@ export const OpenAICompatibleProvider = ({
 						<div style={{ flex: 1 }}>
 							<DebouncedTextField
 								initialValue={formatOptionalModelNumber(openAiModelInfo?.inputPrice)}
+								numeric
 								onChange={(value) => updateNumericModelOverride("inputPrice", "Input Price", value)}>
 								<span style={{ fontWeight: 500 }}>Input Price / 1M tokens</span>
 							</DebouncedTextField>
@@ -596,6 +598,7 @@ export const OpenAICompatibleProvider = ({
 						<div style={{ flex: 1 }}>
 							<DebouncedTextField
 								initialValue={formatOptionalModelNumber(openAiModelInfo?.outputPrice)}
+								numeric
 								onChange={(value) => updateNumericModelOverride("outputPrice", "Output Price", value)}>
 								<span style={{ fontWeight: 500 }}>Output Price / 1M tokens</span>
 							</DebouncedTextField>

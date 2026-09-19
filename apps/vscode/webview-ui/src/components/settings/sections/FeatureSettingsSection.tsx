@@ -10,6 +10,7 @@ import { Switch } from "@/components/ui/switch"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { DebouncedTextArea } from "../common/DebouncedTextArea"
+import { LoadDefaultPromptButton } from "../common/LoadDefaultPromptButton"
 import PromptTemplatesSection from "../PromptTemplatesSection"
 import QaCredentialsField from "../QaCredentialsField"
 import Section from "../Section"
@@ -55,6 +56,18 @@ const agentFeatures: FeatureToggle[] = [
 			"Let the model hand a piece of work to a subagent. Agents defined in .cline/agents are offered as soon as this is on; the open-ended spawn and the team tools also need the profile's parallel sessions above 1, because an endpoint that serves one request at a time would run them one after another rather than beside each other.",
 		stateKey: "subagentsEnabled",
 		settingKey: "subagentsEnabled",
+	},
+	{
+		// Default on: it is what every build did before the switch existed, and
+		// inside a coding task it is the right reading -- a turn that called
+		// nothing is nearly always one that should have acted, a needless nudge
+		// costs a turn and a missed one costs the task.
+		id: "strong-nudges",
+		label: "Strong coding nudges",
+		description:
+			'When a reply calls no tool, ask the model to carry on rather than ending the task there. Coding models often describe an edit instead of making it - "I\'ll fix the import", then stop - and the task ends with the file untouched; this catches that. Turn it off if you use Cerebriline mostly to ask questions: a plain answer then ends the turn, and only a reply that promises work, leaves an open transaction, or comes after the model has already used a tool is asked to continue.',
+		stateKey: "strongNudgesEnabled",
+		settingKey: "strongNudgesEnabled",
 	},
 	{
 		id: "auto-compact",
@@ -217,6 +230,7 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		atomicProtocolSettings,
 		webSearchEnabled,
 		subagentsEnabled,
+		strongNudgesEnabled,
 		worktreesEnabled,
 		backgroundEditEnabled,
 		showFeatureTips,
@@ -230,6 +244,9 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		hooksEnabled,
 		useAutoCondense,
 		subagentsEnabled,
+		// `?? true` rather than a bare read: the default is on, and an
+		// extension state that predates the key must not render as off.
+		strongNudgesEnabled: strongNudgesEnabled ?? true,
 		worktreesEnabled: worktreesEnabled?.user,
 		backgroundEditEnabled,
 	}
@@ -676,7 +693,7 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 							Drop the tail from compaction number
 						</Label>
 						<Input
-							defaultValue={forceFullFromCompaction ?? 2}
+							defaultValue={forceFullFromCompaction ?? 0}
 							disabled={!useAutoCondense || keepRecentMessagesAtCompaction === false}
 							id="force-full-from-compaction"
 							min={0}
@@ -691,12 +708,13 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 						/>
 					</div>
 					<p className="text-xs text-muted-foreground">
-						A task that has already been compacted is not the same as one that has not, so the tail stops surviving
-						once a run has been through this many compactions. Measured over 335 harness runs, the share that ended up
-						fixing the bug falls with each one: 85% at none, 63% after one, 50% after two, 25% after three. From the
-						second is where the count starts selecting runs that mostly do not recover &mdash; two in three of them
-						fail &mdash; and by then the summary is worth more to the model than the handful of turns it replaces. Set
-						1 to drop the tail at every compaction, or 0 to never drop it and leave the switch above in sole charge.
+						Off by default (0), which leaves the switch above in sole charge: whatever tail policy a run starts with,
+						it keeps for the whole run. This defaulted to 2 and that was wrong &mdash; it meant the first compaction
+						kept the tail and every later one dropped it, so no run ever used one policy. The first compaction was
+						then the weak one by construction: measured on 30 first and 24 later compactions, a median &minus;30%
+						leaving 20 messages against &minus;65% leaving 4, after which the context refilled and took a second
+						compaction within a median of 12 turns. Set 1 to drop the tail at every compaction, or a higher number to
+						bring back the old staged behaviour deliberately.
 					</p>
 				</div>
 
@@ -722,11 +740,22 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 								onChange={(value) => updateSetting("fullCompactionPrompt", value)}
 								placeholder={defaultFullCompactionPrompt}
 							/>
-							{fullCompactionPrompt?.trim() ? (
-								<VSCodeButton appearance="secondary" onClick={() => updateSetting("fullCompactionPrompt", "")}>
-									Reset to default
-								</VSCodeButton>
-							) : null}
+							<div className="flex flex-wrap items-start gap-2">
+								<LoadDefaultPromptButton
+									currentValue={fullCompactionPrompt}
+									defaultValue={defaultFullCompactionPrompt}
+									disabled={!useAutoCondense}
+									label="Full Compaction Prompt"
+									onLoad={(value) => updateSetting("fullCompactionPrompt", value)}
+								/>
+								{fullCompactionPrompt?.trim() ? (
+									<VSCodeButton
+										appearance="secondary"
+										onClick={() => updateSetting("fullCompactionPrompt", "")}>
+										Reset to default
+									</VSCodeButton>
+								) : null}
+							</div>
 						</>
 					) : (
 						<>
@@ -738,11 +767,20 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 								onChange={(value) => updateSetting("compactionPrompt", value)}
 								placeholder={defaultCompactionPrompt}
 							/>
-							{compactionPrompt?.trim() ? (
-								<VSCodeButton appearance="secondary" onClick={() => updateSetting("compactionPrompt", "")}>
-									Reset to default
-								</VSCodeButton>
-							) : null}
+							<div className="flex flex-wrap items-start gap-2">
+								<LoadDefaultPromptButton
+									currentValue={compactionPrompt}
+									defaultValue={defaultCompactionPrompt}
+									disabled={!useAutoCondense}
+									label="Compaction Prompt"
+									onLoad={(value) => updateSetting("compactionPrompt", value)}
+								/>
+								{compactionPrompt?.trim() ? (
+									<VSCodeButton appearance="secondary" onClick={() => updateSetting("compactionPrompt", "")}>
+										Reset to default
+									</VSCodeButton>
+								) : null}
+							</div>
 						</>
 					)}
 				</div>
@@ -776,11 +814,20 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 						onChange={(value) => updateSetting("thinkingCompactionPrompt", value)}
 						placeholder={defaultThinkingCompactionPrompt}
 					/>
-					{thinkingCompactionPrompt?.trim() ? (
-						<VSCodeButton appearance="secondary" onClick={() => updateSetting("thinkingCompactionPrompt", "")}>
-							Reset to default
-						</VSCodeButton>
-					) : null}
+					<div className="flex flex-wrap items-start gap-2">
+						<LoadDefaultPromptButton
+							currentValue={thinkingCompactionPrompt}
+							defaultValue={defaultThinkingCompactionPrompt}
+							disabled={!useAutoCondense || thinkingCompactionEnabled === false}
+							label="Thinking Compaction Prompt"
+							onLoad={(value) => updateSetting("thinkingCompactionPrompt", value)}
+						/>
+						{thinkingCompactionPrompt?.trim() ? (
+							<VSCodeButton appearance="secondary" onClick={() => updateSetting("thinkingCompactionPrompt", "")}>
+								Reset to default
+							</VSCodeButton>
+						) : null}
+					</div>
 				</div>
 
 				{/* The third thing that rewrites reasoning, and the only one that
@@ -811,11 +858,20 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 						onChange={(value) => updateSetting("cappedThinkingPrompt", value)}
 						placeholder={defaultCappedThinkingPrompt}
 					/>
-					{cappedThinkingPrompt?.trim() ? (
-						<VSCodeButton appearance="secondary" onClick={() => updateSetting("cappedThinkingPrompt", "")}>
-							Reset to default
-						</VSCodeButton>
-					) : null}
+					<div className="flex flex-wrap items-start gap-2">
+						<LoadDefaultPromptButton
+							currentValue={cappedThinkingPrompt}
+							defaultValue={defaultCappedThinkingPrompt}
+							disabled={cappedThinkingEnabled === false}
+							label="Capped Thinking Prompt"
+							onLoad={(value) => updateSetting("cappedThinkingPrompt", value)}
+						/>
+						{cappedThinkingPrompt?.trim() ? (
+							<VSCodeButton appearance="secondary" onClick={() => updateSetting("cappedThinkingPrompt", "")}>
+								Reset to default
+							</VSCodeButton>
+						) : null}
+					</div>
 				</div>
 			</Section>
 		</div>

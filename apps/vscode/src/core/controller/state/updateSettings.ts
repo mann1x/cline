@@ -197,6 +197,13 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			controller.stateManager.setGlobalState("worktreesEnabled", request.worktreesEnabled)
 		}
 
+		// Guarded on presence rather than truthiness: the default is on, so a
+		// false here is the user switching it off and must be stored, not read
+		// as unset.
+		if (request.strongNudgesEnabled !== undefined) {
+			controller.stateManager.setGlobalState("strongNudgesEnabled", !!request.strongNudgesEnabled)
+		}
+
 		// Update subagents setting
 		if (request.subagentsEnabled !== undefined) {
 			const wasEnabled = controller.stateManager.getGlobalSettingsKey("subagentsEnabled") ?? false

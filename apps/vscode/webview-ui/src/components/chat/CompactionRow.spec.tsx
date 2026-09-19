@@ -65,6 +65,31 @@ describe("CompactionRow", () => {
 		expect(screen.queryByText("Retrospective")).toBeNull()
 	})
 
+	// The tester could not tell whether the ledger was being written at all:
+	// "the ledger additions at compaction (which i can only guess are there
+	// cause they are not in the summary displayed in the chat panel)". It was
+	// on the wire and in the transcript, and nowhere a reader could reach.
+	it("shows the tool ledger it was sending all along", () => {
+		render(
+			<CompactionRow
+				message={compactionMessage({
+					summary: "what the task has done so far",
+					toolLedger: "- read_files(manic_miner.html) -> ok @r3",
+				})}
+			/>,
+		)
+
+		expect(screen.getByText("Tool ledger")).toBeTruthy()
+		fireEvent.click(screen.getByText("Tool ledger"))
+		expect(screen.getByText("- read_files(manic_miner.html) -> ok @r3")).toBeTruthy()
+	})
+
+	it("offers no ledger row when checkpoints turned it off", () => {
+		render(<CompactionRow message={compactionMessage({ summary: "just a summary" })} />)
+
+		expect(screen.queryByText("Tool ledger")).toBeNull()
+	})
+
 	it("still reads as a divider for a compaction that is only starting", () => {
 		render(<CompactionRow message={compactionMessage({ status: "started" })} />)
 

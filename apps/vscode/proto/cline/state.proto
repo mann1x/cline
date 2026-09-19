@@ -315,6 +315,7 @@ message Settings {
   optional bool keep_recent_messages_at_compaction = 210;
   optional string full_compaction_prompt = 211;
   optional int32 force_full_from_compaction = 212;
+  optional bool strong_nudges_enabled = 213;
 }
 
 message State {
@@ -501,6 +502,7 @@ message UpdateSettingsRequest {
   // are the stored ones verbatim, and an enum here would mean a second mapping
   // to keep in step for no gain.
   optional string update_channel = 69;
+  optional bool strong_nudges_enabled = 73;
 }
 
 // The escalation path's budgets and switches.

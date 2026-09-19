@@ -162,19 +162,38 @@ describe("typing a decimal into an Ollama sampling field", () => {
 				vi.advanceTimersByTime(150)
 			})
 		}
-		return { field, type, press, read: () => (config.sampling ?? {}) as Record<string, unknown> }
+		/**
+		 * Stop typing and wait the field out.
+		 *
+		 * The numbers above the sampling section carry `numeric`, so they wait
+		 * longer than a keystroke before saving and a pause mid-number is not
+		 * stored as the number. A test that asserts what was *written* has to
+		 * stop typing first; the ones that assert what is on screen do not, and
+		 * are left pressing keys at keyboard speed. Comfortably past the field's
+		 * idle window rather than exactly it, so this does not have to be
+		 * retuned when that number is.
+		 */
+		const settle = async () => {
+			await act(async () => {
+				vi.advanceTimersByTime(5_000)
+			})
+		}
+		return { field, type, press, settle, read: () => (config.sampling ?? {}) as Record<string, unknown> }
 	}
 
 	it("keeps the decimal when the store echoes a shorter rendering back", async () => {
 		// `String(0)` is "0", so a committed zero renders two characters shorter
 		// than what was typed. The field must not take the echo.
-		const { field, type, read } = await openSampling("temperature", { temperature: 1 })
+		const { field, type, read, settle } = await openSampling("temperature", { temperature: 1 })
 
 		await type("0")
 		await type("0.")
 		await type("0.0")
 
+		// The box holds what was typed the moment it was typed; the store is
+		// only told once the typing stops, so read it after settling.
 		expect(field.value).toBe("0.0")
+		await settle()
 		expect(read().temperature).toBe(0)
 	})
 
@@ -198,13 +217,14 @@ describe("typing a decimal into an Ollama sampling field", () => {
 			presence_penalty: "presencePenalty",
 			frequency_penalty: "frequencyPenalty",
 		}
-		const { field, type, read } = await openSampling(label, { [stored[label] as string]: before })
+		const { field, type, read, settle } = await openSampling(label, { [stored[label] as string]: before })
 
 		await type("0")
 		await type("0.")
 		await type("0.0")
 
 		expect(field.value).toBe("0.0")
+		await settle()
 		expect(read()[stored[label] as string]).toBe(0)
 	})
 
@@ -254,15 +274,13 @@ describe("typing a decimal into an Ollama sampling field", () => {
 	 */
 	it("writes the tool-result cap that was typed, not just shows it", async () => {
 		mocks.readExtensionState.mockReturnValue({ apiConfiguration: {}, maxToolResultChars: 64000 })
-		const { type, press } = await openSampling("Tool Results Character Cap", {}, { contextWindow: 131072 })
+		const { type, press, settle } = await openSampling("Tool Results Character Cap", {}, { contextWindow: 131072 })
 
 		await type("")
 		for (const char of "32000") {
 			await press(char)
 		}
-		await act(async () => {
-			await Promise.resolve()
-		})
+		await settle()
 
 		const written = mocks.write.mock.calls.map(([patch]: [Record<string, unknown>]) => patch)
 		expect(written.some((patch) => patch.maxToolResultChars === 32000)).toBe(true)
@@ -284,7 +302,7 @@ describe("typing a decimal into an Ollama sampling field", () => {
 		mocks.commitModelSelection.mockImplementation(async () => {
 			commitSawWrite = writeResolved
 		})
-		const { type } = await openSampling("Model Context Window", {}, { contextWindow: 64000 })
+		const { type, settle } = await openSampling("Model Context Window", {}, { contextWindow: 64000 })
 		mocks.write.mockImplementation(async () => {
 			// One turn of the microtask queue, which is all a real RPC needs to
 			// let a second one overtake it.
@@ -294,20 +312,19 @@ describe("typing a decimal into an Ollama sampling field", () => {
 		})
 
 		await type("40000")
-		await act(async () => {
-			await Promise.resolve()
-		})
+		await settle()
 
 		expect(mocks.commitModelSelection).toHaveBeenCalled()
 		expect(commitSawWrite).toBe(true)
 	})
 
 	it("lets a field be cleared", async () => {
-		const { field, type, read } = await openSampling("repeat_penalty", { repeatPenalty: 1.1 })
+		const { field, type, read, settle } = await openSampling("repeat_penalty", { repeatPenalty: 1.1 })
 
 		await type("")
 
 		expect(field.value).toBe("")
+		await settle()
 		expect(read().repeatPenalty).toBeUndefined()
 	})
 })

@@ -258,6 +258,7 @@ export function toRedactedProviderConfigResponse(
 		sampling: config.sampling ? { ...config.sampling, stop: [...(config.sampling.stop ?? [])] } : undefined,
 		polykv: config.polykv ? { ...config.polykv } : undefined,
 		outputBudget: config.outputBudget ? { ...config.outputBudget } : undefined,
+		tools: config.tools ? { disabled: [...(config.tools.disabled ?? [])] } : undefined,
 	})
 }
 
@@ -378,6 +379,16 @@ export function toProviderConfigPatch(protoPatch: WriteProviderConfigPatch | und
 					outputBudget: Object.values(protoPatch.outputBudget).some((value) => value !== undefined)
 						? toOutputBudgetSettings(protoPatch.outputBudget)
 						: null,
+				}
+			: {}),
+		// A tool selection with nothing in it is the same statement as no
+		// selection at all -- every tool is on -- so an empty list clears the
+		// section rather than storing a profile that withholds nothing. That
+		// also keeps the panel's reset button on the same path as the other
+		// sections.
+		...(protoPatch.tools !== undefined
+			? {
+					tools: protoPatch.tools.disabled.length > 0 ? { disabled: [...protoPatch.tools.disabled] } : null,
 				}
 			: {}),
 		...(protoPatch.reasoning

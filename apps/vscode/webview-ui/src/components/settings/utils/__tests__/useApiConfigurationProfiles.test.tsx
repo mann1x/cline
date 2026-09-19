@@ -109,6 +109,27 @@ describe("useApiConfigurationProfiles — loading a profile", () => {
 		expect(handleFieldsChange).toHaveBeenCalledOnce()
 	})
 
+	// Reported: a profile switch left the session on the other profile's context
+	// window. The snapshot is written to both modes when they share a model, but
+	// the profile was recorded against only the tab it was loaded from -- so the
+	// other scope kept pointing at the profile before it, and the session, which
+	// reads the provider settings of the profile named for *its* mode, resolved
+	// a window nothing in the panel was showing.
+	it("names the profile for both modes when Plan and Act share a model", async () => {
+		const { result } = renderHook(() => useApiConfigurationProfiles({ kind: "mode", mode: "act" }))
+
+		await result.current.loadProfile(PROFILE.name)
+
+		await waitFor(() => expect(updateSettings).toHaveBeenCalled())
+		const activeWrite = updateSettings.mock.calls
+			.map((call) => call[0])
+			.find((request) => request?.activeApiConfigurationProfile !== undefined)
+		expect(JSON.parse(activeWrite.activeApiConfigurationProfile)).toEqual({
+			plan: PROFILE.name,
+			act: PROFILE.name,
+		})
+	})
+
 	// Reported: "when I load a profile with a different value the tool results
 	// character cap doesn't update, and it asks me to update the new profile".
 	// A patch only carries what it names, so a profile that holds no cap left the
@@ -130,6 +151,7 @@ describe("useApiConfigurationProfiles — loading a profile", () => {
 			polykv: {},
 			outputBudget: {},
 			reasoning: {},
+			tools: {},
 		})
 	})
 

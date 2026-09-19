@@ -162,6 +162,17 @@ export interface PolykvSettings {
 	readonly maxRetryAfterMs?: number
 }
 
+/**
+ * Which tools a configuration brings into its sessions.
+ *
+ * A deny list: what a profile names is what it withholds. Everything it does
+ * not name is on, so a tool added later arrives switched on rather than
+ * silently missing from every profile written before it existed.
+ */
+export interface ToolSelectionSettings {
+	readonly disabled?: readonly string[]
+}
+
 export interface EffectiveProviderConfig {
 	readonly providerId: ProviderId
 	readonly apiKey?: string
@@ -230,6 +241,13 @@ export interface EffectiveProviderConfig {
 	 */
 	readonly outputBudget?: OutputBudgetSettings
 	/**
+	 * The tool selection (providers.json `tools`).
+	 *
+	 * Read as stored, so the panel shows what it is about to write. Absent
+	 * means the profile says nothing and every tool is brought in.
+	 */
+	readonly tools?: ToolSelectionSettings
+	/**
 	 * OAuth-style auth bundle (e.g. cline provider's WorkOS token).
 	 * Compatible with `apiKey`; some providers populate both.
 	 */
@@ -285,6 +303,7 @@ export interface ProviderConfigPatch {
 	readonly sampling?: ProviderSamplingSettings | null
 	readonly polykv?: PolykvSettings | null
 	readonly outputBudget?: OutputBudgetSettings | null
+	readonly tools?: ToolSelectionSettings | null
 	readonly extras?: Readonly<Record<string, unknown>> | null
 }
 

@@ -84,6 +84,7 @@ export const PolykvSection = ({ providerId }: { providerId: string }) => {
 		<div className="mb-[5px]" key={key}>
 			<DebouncedTextField
 				initialValue={polykv[key as keyof typeof polykv] !== undefined ? String(polykv[key as keyof typeof polykv]) : ""}
+				numeric
 				onChange={(value) => {
 					const next = parseNumber(value)
 					if (next === polykv[key as keyof typeof polykv]) {

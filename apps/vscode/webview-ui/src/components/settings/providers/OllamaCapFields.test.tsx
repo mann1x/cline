@@ -96,16 +96,25 @@ vi.mock("@vscode/webview-ui-toolkit/react", () => ({
 	VSCodeTextArea: ({ children }: { children?: ReactNode }) => <label>{children}</label>,
 	VSCodeTextField: ({
 		children,
+		onBlur,
 		onInput,
+		onKeyDown,
 		value,
 	}: {
 		children?: ReactNode
+		onBlur?: () => void
 		onInput?: (event: { target: { value: string } }) => void
+		onKeyDown?: (event: { key: string }) => void
 		value?: string
 	}) => (
 		<label>
 			{children}
-			<input onChange={(event) => onInput?.({ target: { value: event.target.value } })} value={value ?? ""} />
+			<input
+				onBlur={() => onBlur?.()}
+				onChange={(event) => onInput?.({ target: { value: event.target.value } })}
+				onKeyDown={(event) => onKeyDown?.({ key: event.key })}
+				value={value ?? ""}
+			/>
 		</label>
 	),
 }))
@@ -184,6 +193,15 @@ describe("changing a cap the configuration already has", () => {
 					vi.advanceTimersByTime(150)
 				})
 			},
+			/** Leave the field, which is the user saying they are done. */
+			blur: async (input: HTMLInputElement) => {
+				await act(async () => {
+					fireEvent.blur(input)
+				})
+				await act(async () => {
+					vi.advanceTimersByTime(300)
+				})
+			},
 			/** Let every in-flight write land before reading the store. */
 			settle: async () => {
 				await act(async () => {
@@ -210,6 +228,11 @@ describe("changing a cap the configuration already has", () => {
 			},
 			stored: () => config,
 			committed: () => selection,
+			/** Every value of one field that reached the store, in order. */
+			written: (key: string) =>
+				mocks.write.mock.calls
+					.map(([patch]) => (patch as Record<string, unknown>)[key])
+					.filter((value) => value !== undefined),
 		}
 	}
 
@@ -297,6 +320,56 @@ describe("changing a cap the configuration already has", () => {
 		await panel.switchProfile("second", { contextWindow: 131072, maxToolResultChars: 8000 })
 
 		expect(panel.field("Tool Results Character Cap").value).toBe("8000")
+	})
+
+	// From pandorum's own extension log, while the reporter was retyping a
+	// window they had just cleared:
+	//
+	//   [ProviderConfig] write provider=ollama contextWindow=6553 stored=6553
+	//
+	// 6553 is 65536 with the last digit not yet typed. The field debounces at
+	// 100ms, which is shorter than the gap between two keystrokes, so every
+	// prefix of the number is a value the store is told the user chose. A
+	// prefix of a context window is not a smaller window the user might have
+	// meant -- it is a tenth of the one they are typing, and it is live for as
+	// long as it takes to press the next key.
+	it("does not store a window that is still being typed", async () => {
+		const panel = await openPanel({ contextWindow: 131072 })
+		const window = panel.field("Model Context Window")
+
+		await panel.clear(window)
+		for (const char of "65536") {
+			await panel.press(window, char)
+		}
+		await panel.settle()
+
+		expect(window.value).toBe("65536")
+		expect(panel.stored().contextWindow).toBe(65536)
+		// One write, holding the number. Not 6, 65, 655 or 6553 -- those are
+		// keystrokes, not decisions -- and not the empty box either: selecting
+		// all and retyping is one decision, so the zero that would clear the
+		// window never reaches the store on its way to the new value.
+		expect(panel.written("contextWindow")).toEqual([65536])
+	})
+
+	// The wait a number now costs is only paid by someone who types one and
+	// then leaves the panel alone. Blur is the user saying they are done, so
+	// the value is saved there rather than after the idle timer -- otherwise
+	// the longer debounce would simply move the lost-keystroke bug to anyone
+	// who types a window and immediately clicks something else.
+	it("saves a window as soon as the field is left", async () => {
+		const panel = await openPanel({ contextWindow: 131072 })
+		const window = panel.field("Model Context Window")
+
+		await panel.clear(window)
+		for (const char of "65536") {
+			await panel.press(window, char)
+		}
+		// Well inside the idle window: nothing has been saved yet.
+		expect(panel.written("contextWindow")).toEqual([])
+
+		await panel.blur(window)
+		expect(panel.written("contextWindow")).toEqual([65536])
 	})
 
 	it("keeps a per-turn output cap typed over the stored one", async () => {

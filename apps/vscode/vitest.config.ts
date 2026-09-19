@@ -13,6 +13,7 @@ export default defineConfig({
 			"src/shared/atomic-protocol-defaults.test.ts",
 			"src/shared/escalation-thresholds.test.ts",
 			"src/shared/force-full-from-compaction.test.ts",
+			"src/shared/tool-selection.test.ts",
 			"src/shared/atomic-protocol-resolution.test.ts",
 			"src/hosts/vscode/terminal/terminal-output-fallback.test.ts",
 			"src/hosts/vscode/terminal/ansiUtils.test.ts",
@@ -65,6 +66,10 @@ export default defineConfig({
 			// here, so subpath imports fail with "Cannot find package". Keep the more
 			// specific subpath alias(es) before the bare package alias.
 			"@cline/shared/storage": path.resolve(__dirname, "node_modules/@cline/shared/dist/storage/index.js"),
+			// Reached only by suites that load the real core build rather than the
+			// stub above (see `tool-selection.test.ts`), which is what makes this
+			// subpath show up at all.
+			"@cline/shared/db": path.resolve(__dirname, "node_modules/@cline/shared/dist/db/index.js"),
 			"@cline/shared": path.resolve(__dirname, "node_modules/@cline/shared/dist/index.js"),
 			vscode: path.resolve(__dirname, "src/test/vscode-vitest-stub.ts"),
 			"@": path.resolve(__dirname, "src"),

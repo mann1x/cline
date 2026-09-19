@@ -111,6 +111,7 @@ export const CompactionRow = ({ message }: { message: ClineMessage }) => {
 	const isMuted = info.status === "skipped" || info.status === "cancelled"
 	const summary = info.summary?.trim()
 	const thinkingSummary = info.thinkingSummary?.trim()
+	const toolLedger = info.toolLedger?.trim()
 
 	return (
 		<div
@@ -132,6 +133,7 @@ export const CompactionRow = ({ message }: { message: ClineMessage }) => {
 			</div>
 			{summary ? <CompactionDetail body={summary} label="Summary" /> : null}
 			{thinkingSummary ? <CompactionDetail body={thinkingSummary} label="Retrospective" /> : null}
+			{toolLedger ? <CompactionDetail body={toolLedger} label="Tool ledger" /> : null}
 		</div>
 	)
 }

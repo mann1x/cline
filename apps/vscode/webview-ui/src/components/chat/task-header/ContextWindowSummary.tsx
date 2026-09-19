@@ -1,9 +1,11 @@
+import type { ContextBreakdown } from "@shared/ExtensionMessage"
 import type { ProviderApiMetrics } from "@shared/getApiMetrics"
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react"
 import React, { memo, useCallback, useMemo, useState } from "react"
 import { formatLargeNumber as formatTokenNumber } from "@/utils/format"
 import { formatRate } from "@/utils/request-timings"
 import { describeConnection } from "./ConnectionBreakdown"
+import { CONTEXT_SEGMENT_COLORS } from "./ContextWindowBar"
 
 interface TokenUsageInfoProps {
 	tokensIn?: number
@@ -28,6 +30,8 @@ interface TaskContextWindowButtonsProps extends TokenUsageInfoProps {
 	tokenUsed: number
 	contextWindow: number
 	autoCompactThreshold?: number
+	/** The fixed price of the last request, as the bar's colours show it. */
+	breakdown?: ContextBreakdown
 	isThresholdChanged?: boolean
 	isThresholdFadingOut?: boolean
 }
@@ -152,6 +156,21 @@ const TokenUsageDetails = memo<TokenUsageInfoProps>(
 )
 TokenUsageDetails.displayName = "TokenUsageDetails"
 
+/** One coloured slice of the bar, named and counted. */
+const LegendRow = memo<{ color: string; label: string; tokens: number; detail?: string }>(({ color, label, tokens, detail }) => (
+	<div className="flex justify-between gap-2">
+		<span className="flex items-center gap-1.5 truncate">
+			<span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: color }} />
+			<span className="truncate">{label}</span>
+			{detail && <span className="opacity-75 whitespace-nowrap">{detail}</span>}
+		</span>
+		<span className="font-mono whitespace-nowrap" title={tokens.toLocaleString()}>
+			{formatTokenNumber(tokens)}
+		</span>
+	</div>
+))
+LegendRow.displayName = "LegendRow"
+
 export const ContextWindowSummary: React.FC<TaskContextWindowButtonsProps> = ({
 	contextWindow,
 	tokenUsed,
@@ -164,6 +183,7 @@ export const ContextWindowSummary: React.FC<TaskContextWindowButtonsProps> = ({
 	generateMs,
 	percentage,
 	autoCompactThreshold = 0,
+	breakdown,
 }) => {
 	// Accordion state
 	const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set())
@@ -225,6 +245,43 @@ export const ContextWindowSummary: React.FC<TaskContextWindowButtonsProps> = ({
 					</div>
 				</div>
 			</AccordionItem>
+
+			{breakdown && (
+				<AccordionItem
+					isExpanded={expandedSections.has("fixed")}
+					onToggle={(event) => toggleSection("fixed", event)}
+					title="Before the first message"
+					value={formatTokenNumber(
+						breakdown.systemPromptTokens + breakdown.builtinToolSchemaTokens + breakdown.mcpToolSchemaTokens,
+					)}>
+					{/* The measured numbers, not the bar's: the bar scales the
+					    fixed slices down if this fork's estimate came out above
+					    the provider's count for the request, and a legend that
+					    reported the scaled figures would be reporting the
+					    drawing rather than the measurement. */}
+					<div className="space-y-1">
+						<LegendRow
+							color={CONTEXT_SEGMENT_COLORS.systemPrompt}
+							label="System prompt"
+							tokens={breakdown.systemPromptTokens}
+						/>
+						<LegendRow
+							color={CONTEXT_SEGMENT_COLORS.builtinTools}
+							detail={`${breakdown.toolCount - breakdown.mcpToolCount} tools`}
+							label="Tool schemas"
+							tokens={breakdown.builtinToolSchemaTokens}
+						/>
+						{breakdown.mcpToolCount > 0 && (
+							<LegendRow
+								color={CONTEXT_SEGMENT_COLORS.mcpTools}
+								detail={`${breakdown.mcpToolCount} tools`}
+								label="MCP tool schemas"
+								tokens={breakdown.mcpToolSchemaTokens}
+							/>
+						)}
+					</div>
+				</AccordionItem>
+			)}
 
 			{totalTokens > 0 && (
 				<AccordionItem

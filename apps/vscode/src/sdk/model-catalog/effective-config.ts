@@ -25,6 +25,7 @@ type ProviderSettingsLike = {
 	readonly sampling?: SamplingConfig
 	readonly polykv?: PolykvConfig
 	readonly outputBudget?: OutputBudgetConfig
+	readonly tools?: ToolSelectionConfig
 	readonly auth?: AuthConfig
 	readonly extras?: ExtrasConfig
 }
@@ -33,6 +34,7 @@ type ReasoningConfig = NonNullable<EffectiveProviderConfig["reasoning"]>
 type SamplingConfig = NonNullable<EffectiveProviderConfig["sampling"]>
 type PolykvConfig = NonNullable<EffectiveProviderConfig["polykv"]>
 type OutputBudgetConfig = NonNullable<EffectiveProviderConfig["outputBudget"]>
+type ToolSelectionConfig = NonNullable<EffectiveProviderConfig["tools"]>
 
 /** Sampling fields that are read as numbers, and the sign each one allows. */
 const SAMPLING_NUMBER_FIELDS = {
@@ -162,6 +164,24 @@ function readPolykv(settings: Record<string, unknown>): PolykvConfig | undefined
 		result.onSaturation = polykv.onSaturation
 	}
 	return Object.keys(result).length > 0 ? (result as PolykvConfig) : undefined
+}
+
+/**
+ * The tools this configuration withholds.
+ *
+ * Read back as well as written, for the reason `parallelSessions` and the caps
+ * needed the same treatment: a section the store writes and nothing reads is a
+ * section the panel renders blank after a reload, while the session quietly
+ * runs on it. Empty reads as absent -- a selection that withholds nothing is
+ * the same statement as no selection at all.
+ */
+function readToolSelection(settings: Record<string, unknown>): ToolSelectionConfig | undefined {
+	const tools = settings.tools
+	if (!isPlainRecord(tools) || !Array.isArray(tools.disabled)) {
+		return undefined
+	}
+	const disabled = tools.disabled.filter((name): name is string => typeof name === "string" && name.trim() !== "")
+	return disabled.length > 0 ? { disabled } : undefined
 }
 
 function readSampling(settings: Record<string, unknown>): SamplingConfig | undefined {
@@ -436,6 +456,7 @@ function readProviderSettings(providerId: ProviderId): ConfigParts {
 			sampling: readSampling(settings),
 			polykv: readPolykv(settings),
 			outputBudget: readOutputBudget(settings),
+			tools: readToolSelection(settings),
 			auth: readAuth(settings),
 			extras: isPlainRecord(settings.extras) ? settings.extras : undefined,
 		} satisfies ProviderSettingsLike
@@ -629,6 +650,7 @@ export function buildEffectiveProviderConfig(providerId: ProviderId): EffectiveP
 	assignIfDefined(merged, "sampling", providerSettings.sampling)
 	assignIfDefined(merged, "polykv", providerSettings.polykv)
 	assignIfDefined(merged, "outputBudget", providerSettings.outputBudget)
+	assignIfDefined(merged, "tools", providerSettings.tools)
 	assignIfDefined(merged, "auth", stateConfig.auth ?? providerSettings.auth)
 	assignIfDefined(merged, "extras", mergeExtras(providerSettings.extras, stateConfig.extras))
 

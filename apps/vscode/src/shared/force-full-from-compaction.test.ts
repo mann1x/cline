@@ -13,10 +13,14 @@ describe("the forced full compaction", () => {
 		assert.equal(getDefaultValue("forceFullFromCompaction"), FORCE_FULL_FROM_COMPACTION)
 	})
 
-	// Zero has to survive as a value rather than read as "unset": it is how the
-	// behaviour is turned off, and a default of zero would also mean the panel
-	// could never express "from the second".
-	it("has a default that is not the off switch", () => {
-		assert.notEqual(getDefaultValue("forceFullFromCompaction"), 0)
+	// Zero has to survive as a value rather than read as "unset". It is now the
+	// default -- the ladder is off unless someone asks for it -- so the panel
+	// shows a filled box reading 0 and writes a number when it is changed. A
+	// key that defaulted to `undefined` would render an empty box that means
+	// nothing, and `?? 0` at every reader would hide which of the two it was.
+	it("spells the off switch as a number, not as unset", () => {
+		const value = getDefaultValue("forceFullFromCompaction")
+		assert.equal(typeof value, "number")
+		assert.equal(Number.isFinite(value), true)
 	})
 })

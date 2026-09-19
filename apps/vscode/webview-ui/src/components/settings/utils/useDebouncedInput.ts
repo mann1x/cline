@@ -14,14 +14,15 @@ import { useDebounceEffect } from "@/utils/useDebounceEffect"
  *
  * @param initialValue - The initial value for the input
  * @param onChange - Callback function to save the value (e.g., to backend)
- * @param debounceMs - Debounce delay in milliseconds (default: 500ms)
- * @returns The current value, an editing setter, and an authoritative sync setter
+ * @param debounceMs - Debounce delay in milliseconds (default: 100ms)
+ * @returns The current value, an editing setter, an authoritative sync setter,
+ *          and a flush that saves a pending edit right now
  */
 export function useDebouncedInput<T>(
 	initialValue: T,
 	onChange: (value: T) => void,
 	debounceMs: number = 100,
-): [T, (value: T) => void, (value: T) => void] {
+): [T, (value: T) => void, (value: T) => void, () => void] {
 	// Local state to prevent jumpy input - initialize once
 	const [localValue, setLocalValueState] = useState(initialValue)
 
@@ -70,6 +71,8 @@ export function useDebouncedInput<T>(
 
 	// Flush a pending edit on unmount so keystrokes typed within the debounce
 	// window still save when the view closes (e.g. clicking Done in settings).
+	// The same flush is offered to callers, so a field can save on an explicit
+	// boundary -- blur, Enter -- instead of waiting out its idle timer.
 	const latestRef = useRef({ localValue, onChange })
 	latestRef.current = { localValue, onChange }
 	useEffect(
@@ -82,5 +85,13 @@ export function useDebouncedInput<T>(
 		[],
 	)
 
-	return [localValue, setLocalValue, syncLocalValue]
+	const flush = useCallback(() => {
+		if (!hasPendingUserEditRef.current) {
+			return
+		}
+		hasPendingUserEditRef.current = false
+		latestRef.current.onChange(latestRef.current.localValue)
+	}, [])
+
+	return [localValue, setLocalValue, syncLocalValue, flush]
 }

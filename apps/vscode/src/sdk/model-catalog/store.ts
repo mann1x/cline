@@ -755,6 +755,25 @@ function writeProviderSettingsFields(providerId: ProviderId, patch: ProviderConf
 		}
 	}
 
+	// The tool selection, written whole for the same reason as the sections
+	// above: the panel owns it and sends the complete list it is showing, so a
+	// merge would make switching a tool back on impossible.
+	if ("tools" in patch) {
+		const toolsPatch = patch.tools
+		const disabled = toolsPatch?.disabled?.filter((name) => typeof name === "string" && name.trim() !== "")
+		if (toolsPatch === null || toolsPatch === undefined || !disabled?.length) {
+			delete (next as Record<string, unknown>).tools
+		} else {
+			// Sorted and de-duplicated, because this is written to a file people
+			// read and diff: the panel's iteration order is not a fact about the
+			// configuration, and two identical selections should not produce two
+			// different files.
+			;(next as Record<string, unknown>).tools = {
+				disabled: [...new Set(disabled)].sort(),
+			}
+		}
+	}
+
 	// Handle reasoning patch separately — maps to ProviderSettings.reasoning
 	if ("reasoning" in patch) {
 		const reasoningPatch = patch.reasoning

@@ -495,6 +495,109 @@ describe("buildSessionConfig", () => {
 		})
 	})
 
+	it("reads the window from the shared entry when the profile is silent about it", async () => {
+		// Reported: a profile switch left the session on the other profile's
+		// window, and typing the right one into the panel did not move it. The
+		// panel writes providers.json; the session was reading the profile
+		// snapshot and, because the source was chosen with `??` on the object,
+		// never looked at providers.json again for any field the snapshot
+		// happened not to carry.
+		mocks.providerSettingsManager.getProviderSettings.mockImplementation((providerId?: string) => {
+			if (providerId !== "ollama") {
+				return undefined
+			}
+			return { provider: "ollama", contextWindow: 65536 } as any
+		})
+		mocks.stateManager.getApiConfiguration.mockReturnValue({
+			actModeApiProvider: "ollama",
+			actModeOllamaModelId: "v9-agentic",
+			ollamaBaseUrl: "http://127.0.0.1:11434",
+		} as any)
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string): any => {
+			if (key === "subagentsEnabled" || key === "useAutoCondense") {
+				return false
+			}
+			if (key === "apiConfigurationProfiles") {
+				return JSON.stringify([
+					{
+						name: "silent",
+						updatedAt: 1,
+						// A profile with a provider config that says nothing about
+						// the window. Saved before the field was captured, or saved
+						// while the panel was still loading -- both leave this.
+						snapshot: { global: {}, mode: {}, providerConfig: { baseUrl: "http://127.0.0.1:11434" } },
+					},
+				])
+			}
+			if (key === "activeApiConfigurationProfile") {
+				return JSON.stringify({ act: "silent" })
+			}
+			return undefined
+		})
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+
+		expect((config.providerConfig as { modelInfo?: { contextWindow?: number } }).modelInfo?.contextWindow).toBe(65536)
+	})
+
+	it("still lets the profile's own window win over the shared entry", async () => {
+		mocks.providerSettingsManager.getProviderSettings.mockImplementation((providerId?: string) => {
+			if (providerId !== "ollama") {
+				return undefined
+			}
+			return { provider: "ollama", contextWindow: 65536 } as any
+		})
+		mocks.stateManager.getApiConfiguration.mockReturnValue({
+			actModeApiProvider: "ollama",
+			actModeOllamaModelId: "v9-agentic",
+			ollamaBaseUrl: "http://127.0.0.1:11434",
+		} as any)
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string): any => {
+			if (key === "subagentsEnabled" || key === "useAutoCondense") {
+				return false
+			}
+			if (key === "apiConfigurationProfiles") {
+				return JSON.stringify([
+					{
+						name: "loud",
+						updatedAt: 1,
+						snapshot: { global: {}, mode: {}, providerConfig: { contextWindow: 131072 } },
+					},
+				])
+			}
+			if (key === "activeApiConfigurationProfile") {
+				return JSON.stringify({ act: "loud" })
+			}
+			return undefined
+		})
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+
+		expect((config.providerConfig as { modelInfo?: { contextWindow?: number } }).modelInfo?.contextWindow).toBe(131072)
+	})
+
+	it("carries the provider entry's tool selection onto the session", async () => {
+		mocks.providerSettingsManager.getProviderSettings.mockImplementation((providerId?: string) => {
+			if (providerId !== "anthropic") {
+				return undefined
+			}
+			return { provider: "anthropic", apiKey: "test-key", tools: { disabled: ["browser", "awk"] } } as any
+		})
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+
+		// The runtime builder folds these into the session's tool policies, and
+		// nothing else reads them -- so a selection that does not arrive here is
+		// a selection the panel stored and the session ignored.
+		expect(config.providerConfig).toMatchObject({ tools: { disabled: ["browser", "awk"] } })
+	})
+
+	it("leaves the tool selection off the session when nothing configured one", async () => {
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+
+		expect(config.providerConfig).not.toHaveProperty("tools")
+	})
+
 	it("resolves the AskSage base URL from the legacy asksageApiUrl state field", async () => {
 		mocks.stateManager.getApiConfiguration.mockReturnValue({
 			actModeApiProvider: "asksage",

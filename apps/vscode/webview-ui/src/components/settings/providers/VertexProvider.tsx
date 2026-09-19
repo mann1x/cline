@@ -284,6 +284,7 @@ export const VertexProvider = ({ showModelOptions, isPopup, currentMode }: Verte
 								<div style={{ flex: 1 }}>
 									<DebouncedTextField
 										initialValue={String(customOverrides.contextWindow ?? 200_000)}
+										numeric
 										onChange={(value) =>
 											updateNumericOverride("contextWindow", "Context Window Size", value)
 										}>
@@ -294,6 +295,7 @@ export const VertexProvider = ({ showModelOptions, isPopup, currentMode }: Verte
 								<div style={{ flex: 1 }}>
 									<DebouncedTextField
 										initialValue={String(customOverrides.maxTokens ?? 64_000)}
+										numeric
 										onChange={(value) => updateNumericOverride("maxTokens", "Max Output Tokens", value)}>
 										<span className="font-medium">Max Output Tokens</span>
 									</DebouncedTextField>

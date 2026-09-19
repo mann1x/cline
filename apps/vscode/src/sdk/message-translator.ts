@@ -46,6 +46,7 @@ import type {
 	ClineSubagentUsageInfo,
 	ClineThinkingCondensedInfo,
 	ClineTransactionInfo,
+	ContextBreakdown,
 	SubagentStatusItem,
 } from "@shared/ExtensionMessage"
 import { Logger } from "@shared/services/Logger"
@@ -177,9 +178,28 @@ export class MessageTranslatorState {
 		this.minter = minter
 	}
 
+	/**
+	 * The fixed price the last prepare-turn measured, until the next one.
+	 *
+	 * The core emits it once per turn, before the request; the usage event that
+	 * carries the request's cost arrives after. Held here so the two meet on
+	 * one `api_req_started`, which is the only row the context bar reads.
+	 */
+	private contextBreakdownSeen: ContextBreakdown | undefined
+
 	/** Provider backing the active turn, if the host can supply it. */
 	activeProviderId(): string | undefined {
 		return this.getActiveProviderId?.()
+	}
+
+	/** Record the fixed-price breakdown the current turn was prepared with. */
+	noteContextBreakdown(breakdown: ContextBreakdown): void {
+		this.contextBreakdownSeen = breakdown
+	}
+
+	/** The last measured fixed price, if any turn has reported one. */
+	contextBreakdown(): ContextBreakdown | undefined {
+		return this.contextBreakdownSeen
 	}
 
 	/** Model backing the active turn, if the host can supply it. */
@@ -1572,6 +1592,7 @@ export function parseCompactionNoticeMetadata(metadata: Record<string, unknown> 
 		...(typeof metadata.thinkingSummary === "string" && metadata.thinkingSummary.trim()
 			? { thinkingSummary: metadata.thinkingSummary }
 			: {}),
+		...(typeof metadata.toolLedger === "string" && metadata.toolLedger.trim() ? { toolLedger: metadata.toolLedger } : {}),
 	}
 }
 
@@ -1587,7 +1608,44 @@ function asFiniteNumber(value: unknown): number | undefined {
  * sdk/packages/core/src/extensions/context/compaction.ts (the compaction phase
  * slugs are handled above via parseCompactionNoticeMetadata instead).
  */
-const INTERNAL_STATUS_NOTICES = new Set(["compaction-budget-adjusted"])
+const INTERNAL_STATUS_NOTICES = new Set(["compaction-budget-adjusted", "context-breakdown"])
+
+/**
+ * Extract the fixed-price breakdown from a status notice's metadata.
+ *
+ * Emitted once per prepare-turn by
+ * sdk/packages/core/src/extensions/context/compaction.ts. Every field is
+ * required: a partial breakdown would colour the bar with slices that do not
+ * add up to the overhead, which is worse than not colouring it at all.
+ */
+function parseContextBreakdownNoticeMetadata(metadata: unknown): ContextBreakdown | undefined {
+	if (!metadata || typeof metadata !== "object") {
+		return undefined
+	}
+	const record = metadata as Record<string, unknown>
+	if (record.kind !== "context_breakdown") {
+		return undefined
+	}
+	const read = (key: string): number | undefined => {
+		const value = record[key]
+		return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined
+	}
+	const systemPromptTokens = read("systemPromptTokens")
+	const builtinToolSchemaTokens = read("builtinToolSchemaTokens")
+	const mcpToolSchemaTokens = read("mcpToolSchemaTokens")
+	const toolCount = read("toolCount")
+	const mcpToolCount = read("mcpToolCount")
+	if (
+		systemPromptTokens === undefined ||
+		builtinToolSchemaTokens === undefined ||
+		mcpToolSchemaTokens === undefined ||
+		toolCount === undefined ||
+		mcpToolCount === undefined
+	) {
+		return undefined
+	}
+	return { systemPromptTokens, builtinToolSchemaTokens, mcpToolSchemaTokens, toolCount, mcpToolCount }
+}
 
 /**
  * Extract an output-limit retry payload from a status notice's metadata.
@@ -2570,6 +2628,14 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 					messages.push(buildCompactionMessage(compaction, ts))
 					break
 				}
+				const breakdown = parseContextBreakdownNoticeMetadata(event.metadata)
+				if (breakdown) {
+					// Recorded, not rendered: it is a measurement of the request
+					// about to be made, and it reaches the user as the colours of
+					// the context bar rather than as a row in the transcript.
+					state.noteContextBreakdown(breakdown)
+					break
+				}
 				const transaction = parseAtomicTransactionNoticeMetadata(event.metadata, event.message ?? "")
 				if (transaction) {
 					messages.push({
@@ -2665,6 +2731,10 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 				...(state.activeModelId() ? { modelId: state.activeModelId() } : {}),
 				...(usageEvent.reasoningTokens ? { reasoningTokens: usageEvent.reasoningTokens } : {}),
 				...(usageEvent.timings ? { timings: usageEvent.timings } : {}),
+				// Measured before the request this usage is for, so the bar can
+				// say how much of what it is showing was spent before the first
+				// message.
+				...(state.contextBreakdown() ? { contextBreakdown: state.contextBreakdown() } : {}),
 			}
 			messages.push({
 				ts: state.nextTs(),

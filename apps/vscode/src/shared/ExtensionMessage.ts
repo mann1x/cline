@@ -201,6 +201,7 @@ export interface ExtensionState {
 	compactionStrategy?: string
 	webSearchEnabled?: boolean
 	subagentsEnabled?: boolean
+	strongNudgesEnabled?: boolean
 	worktreesEnabled?: ClineFeatureSetting
 	favoritedModelIds: string[]
 	// NEW: Add workspace information
@@ -527,6 +528,33 @@ export interface ClineApiReqInfo {
 	timings?: RequestTimings
 	cancelReason?: ClineApiReqCancelReason
 	streamingFailedMessage?: string
+	/**
+	 * What this request cost before a single message, split by what it is.
+	 *
+	 * The context bar shows one bar and one number, and on a local model most
+	 * of that bar is a price nobody typed: measured on pandorum against a
+	 * 65,536-token window, 21,000-24,000 tokens of system prompt and tool
+	 * schemas before the first word. The parts are carried separately because
+	 * they have separate remedies -- shorten the prompt, turn off a tool, turn
+	 * off an MCP server -- and a single total asks for none of them.
+	 *
+	 * Absent on a request whose turn emitted no breakdown (an older session's
+	 * history, or a host running a core that predates it); the bar then renders
+	 * exactly as it did before.
+	 */
+	contextBreakdown?: ContextBreakdown
+}
+
+/** The fixed price of a request, as {@link ClineApiReqInfo.contextBreakdown}. */
+export interface ContextBreakdown {
+	/** The system prompt, prompt template included -- it is rendered into it. */
+	systemPromptTokens: number
+	/** The schemas of the tools the agent builds for itself. */
+	builtinToolSchemaTokens: number
+	/** The schemas of tools from MCP servers, which the agent did not choose. */
+	mcpToolSchemaTokens: number
+	toolCount: number
+	mcpToolCount: number
 }
 
 /**
@@ -556,6 +584,8 @@ export interface ClineCompactionInfo {
 	summary?: string
 	/** The retrospective written alongside it, when the second phase ran. */
 	thinkingSummary?: string
+	/** What the harness recorded being called, when checkpoints are on. */
+	toolLedger?: string
 }
 
 /**

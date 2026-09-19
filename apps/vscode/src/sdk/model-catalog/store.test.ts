@@ -1375,6 +1375,52 @@ describe("reasoning history round trip", () => {
 		expect(ProviderConfigResponse.decode(ProviderConfigResponse.encode(answered).finish()).polykv?.enabled).toBe(false)
 	})
 
+	// The round trip the panel actually makes with a tool selection: the list
+	// is written whole, travels as a repeated field, and comes back on the
+	// response the switches are drawn from.
+	it("stores and answers a tool selection", async () => {
+		const { toProviderConfigPatch, toRedactedProviderConfigResponse } = await import(
+			"@core/controller/models/providerCatalogShared"
+		)
+		const { ProviderConfigResponse, WriteProviderConfigPatch } = await import("@shared/proto/cline/models")
+		const { createProviderConfigStore } = await import("./store")
+		const store = createProviderConfigStore()
+		const providerId = parseProviderId("ollama")
+
+		const sent = WriteProviderConfigPatch.create({ tools: { disabled: ["grep", "browser"] } } as never)
+		const received = WriteProviderConfigPatch.decode(WriteProviderConfigPatch.encode(sent).finish())
+		const updated = store.write(providerId, toProviderConfigPatch(received))
+
+		// Sorted on the way in: this is written to a file people read, and the
+		// panel's click order is not a fact about the configuration.
+		expect(updated.tools?.disabled).toEqual(["browser", "grep"])
+		const answered = toRedactedProviderConfigResponse(updated, store)
+		expect(ProviderConfigResponse.decode(ProviderConfigResponse.encode(answered).finish()).tools?.disabled).toEqual([
+			"browser",
+			"grep",
+		])
+	})
+
+	// Switching the last tool back on is a clear, not a stored empty list: a
+	// profile that withholds nothing says the same thing as one with no
+	// selection, and storing both would leave two spellings of one state.
+	it("clears the selection when the last tool goes back on", async () => {
+		const { toProviderConfigPatch } = await import("@core/controller/models/providerCatalogShared")
+		const { WriteProviderConfigPatch } = await import("@shared/proto/cline/models")
+		const { createProviderConfigStore } = await import("./store")
+		const store = createProviderConfigStore()
+		const providerId = parseProviderId("ollama")
+
+		store.write(
+			providerId,
+			toProviderConfigPatch(WriteProviderConfigPatch.create({ tools: { disabled: ["grep"] } } as never)),
+		)
+		expect(store.read(providerId).tools?.disabled).toEqual(["grep"])
+
+		store.write(providerId, toProviderConfigPatch(WriteProviderConfigPatch.create({ tools: { disabled: [] } } as never)))
+		expect(store.read(providerId).tools).toBeUndefined()
+	})
+
 	it("still switches thinking off for an effort of none", async () => {
 		const { toProviderConfigPatch } = await import("@core/controller/models/providerCatalogShared")
 		const { WriteProviderConfigPatch } = await import("@shared/proto/cline/models")

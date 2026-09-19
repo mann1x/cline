@@ -1,4 +1,4 @@
-import { ClineMessage } from "@shared/ExtensionMessage"
+import { ClineMessage, ContextBreakdown } from "@shared/ExtensionMessage"
 import type { ExpertApiMetrics, ProviderApiMetrics } from "@shared/getApiMetrics"
 import React from "react"
 import TaskHeader from "@/components/chat/task-header/TaskHeader"
@@ -18,6 +18,8 @@ interface TaskSectionProps {
 		expert?: ExpertApiMetrics
 	}
 	lastApiReqTotalTokens?: number
+	/** The fixed price of that request, when the turn reported one. */
+	contextBreakdown?: ContextBreakdown
 	selectedModelInfo: {
 		supportsPromptCache: boolean
 		supportsImages: boolean
@@ -33,6 +35,7 @@ export const TaskSection: React.FC<TaskSectionProps> = ({
 	task,
 	apiMetrics,
 	lastApiReqTotalTokens,
+	contextBreakdown,
 	selectedModelInfo,
 	messageHandlers,
 }) => {
@@ -41,6 +44,7 @@ export const TaskSection: React.FC<TaskSectionProps> = ({
 			byProvider={apiMetrics.byProvider}
 			cacheReads={apiMetrics.totalCacheReads}
 			cacheWrites={apiMetrics.totalCacheWrites}
+			contextBreakdown={contextBreakdown}
 			doesModelSupportPromptCache={selectedModelInfo.supportsPromptCache}
 			expert={apiMetrics.expert}
 			generateMs={apiMetrics.totalGenerateMs}

@@ -2601,6 +2601,81 @@ describe("translateSessionEvent — agent_event notice", () => {
 		expect(result.messages).toHaveLength(0)
 	})
 
+	/**
+	 * The fixed-price breakdown, from the turn that measured it to the row that
+	 * shows it.
+	 *
+	 * The core emits it before the request; the usage that pays for the request
+	 * arrives after. They have to meet on one `api_req_started`, because that
+	 * is the only row the context bar reads.
+	 */
+	it("carries the fixed-price breakdown from its notice onto the next request row", () => {
+		const state = new MessageTranslatorState()
+		const notice = translateSessionEvent(
+			noticeEvent("context-breakdown", {
+				kind: "context_breakdown",
+				systemPromptTokens: 1_607,
+				builtinToolSchemaTokens: 9_054,
+				mcpToolSchemaTokens: 12_400,
+				toolCount: 41,
+				mcpToolCount: 28,
+			}),
+			state,
+		)
+		// A measurement, not a transcript row.
+		expect(notice.messages).toHaveLength(0)
+
+		const usage = translateSessionEvent(
+			{
+				type: "agent_event",
+				payload: {
+					sessionId: "session-1",
+					event: {
+						type: "usage",
+						inputTokens: 30_000,
+						outputTokens: 120,
+						totalInputTokens: 30_000,
+						totalOutputTokens: 120,
+					} as AgentEvent,
+				},
+			},
+			state,
+		)
+
+		expect(JSON.parse(usage.messages[0].text ?? "{}").contextBreakdown).toEqual({
+			systemPromptTokens: 1_607,
+			builtinToolSchemaTokens: 9_054,
+			mcpToolSchemaTokens: 12_400,
+			toolCount: 41,
+			mcpToolCount: 28,
+		})
+	})
+
+	// A breakdown missing a part would colour the bar with slices that do not
+	// add up to the overhead, which is a wrong picture rather than no picture.
+	it("ignores a breakdown notice that is missing a part", () => {
+		const state = new MessageTranslatorState()
+		translateSessionEvent(
+			noticeEvent("context-breakdown", {
+				kind: "context_breakdown",
+				systemPromptTokens: 1_607,
+				toolCount: 41,
+			}),
+			state,
+		)
+		const usage = translateSessionEvent(
+			{
+				type: "agent_event",
+				payload: {
+					sessionId: "session-1",
+					event: { type: "usage", inputTokens: 10, outputTokens: 1 } as AgentEvent,
+				},
+			},
+			state,
+		)
+		expect(JSON.parse(usage.messages[0].text ?? "{}").contextBreakdown).toBeUndefined()
+	})
+
 	it("renders an unrecognized status notice as an info row rather than dropping it", () => {
 		// Only the known-internal set is suppressed; a status notice added to the
 		// SDK later should surface (even as a raw slug) instead of vanishing.

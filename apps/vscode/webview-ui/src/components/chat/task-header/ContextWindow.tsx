@@ -1,13 +1,14 @@
+import type { ContextBreakdown } from "@shared/ExtensionMessage"
 import type { ProviderApiMetrics } from "@shared/getApiMetrics"
 import { StringRequest } from "@shared/proto/cline/common"
 import { VSCodeButton } from "@vscode/webview-ui-toolkit/react"
 import debounce from "debounce"
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card"
-import { Progress } from "@/components/ui/progress"
 import { SlashServiceClient } from "@/services/grpc-client"
 import { formatLargeNumber as formatTokenNumber } from "@/utils/format"
 import CompactTaskButton from "./buttons/CompactTaskButton"
+import { ContextWindowBar } from "./ContextWindowBar"
 import { ContextWindowSummary } from "./ContextWindowSummary"
 
 // Type definitions
@@ -21,6 +22,12 @@ interface ContextWindowInfoProps {
 	byProvider?: ProviderApiMetrics[]
 	generateTokens?: number
 	generateMs?: number
+	/**
+	 * What the last request cost before a single message, when the turn
+	 * reported it. Absent on an older task's history, and the bar then renders
+	 * as one undivided fill.
+	 */
+	contextBreakdown?: ContextBreakdown
 }
 
 interface ContextWindowProgressProps extends ContextWindowInfoProps {
@@ -74,6 +81,7 @@ const ContextWindow: React.FC<ContextWindowProgressProps> = ({
 	byProvider,
 	generateTokens,
 	generateMs,
+	contextBreakdown,
 }) => {
 	const [isOpened, setIsOpened] = useState(false)
 	const [confirmationNeeded, setConfirmationNeeded] = useState(false)
@@ -165,6 +173,7 @@ const ContextWindow: React.FC<ContextWindowProgressProps> = ({
 						<HoverCard>
 							<HoverCardContent className="bg-menu rounded-xs shadow-sm">
 								<ContextWindowSummary
+									breakdown={contextBreakdown}
 									byProvider={byProvider}
 									cacheReads={cacheReads}
 									cacheWrites={cacheWrites}
@@ -184,11 +193,7 @@ const ContextWindow: React.FC<ContextWindowProgressProps> = ({
 									className="relative w-full text-foreground context-window-progress brightness-100"
 									onFocus={handleFocus}
 									ref={progressBarRef}>
-									<Progress
-										aria-label="Context window usage progress"
-										color="success"
-										value={tokenData.percentage}
-									/>
+									<ContextWindowBar breakdown={contextBreakdown} max={tokenData.max} used={tokenData.used} />
 									{isOpened}
 								</div>
 							</HoverCardTrigger>

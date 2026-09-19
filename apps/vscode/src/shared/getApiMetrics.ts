@@ -1,4 +1,4 @@
-import { ClineMessage } from "./ExtensionMessage"
+import { ClineMessage, ContextBreakdown } from "./ExtensionMessage"
 
 /**
  * What one connection spent over a task.
@@ -310,4 +310,36 @@ export function getLastApiReqTotalTokens(messages: ClineMessage[]): number {
 		}
 	}
 	return 0
+}
+
+/**
+ * The fixed price of the most recent request, if it reported one.
+ *
+ * Read from the same `api_req_started` message {@link getLastApiReqTotalTokens}
+ * takes its total from, and deliberately *not* rescaled by a compaction that
+ * followed it: compacting replaces messages, and leaves the system prompt and
+ * the tool schemas exactly where they were. Shrinking the fixed part along with
+ * the total would draw a bar whose coloured slices lie about what compacting
+ * did -- the one moment a user is most likely to be looking at it.
+ *
+ * @param messages - An array of ClineMessage objects to process.
+ * @returns The breakdown from the last api_req_started message that carried
+ *          one, or undefined (older history, or a core that does not emit it).
+ */
+export function getLastApiReqContextBreakdown(messages: ClineMessage[]): ContextBreakdown | undefined {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const msg = messages[i]
+		if (msg.type !== "say" || msg.say !== "api_req_started" || !msg.text) {
+			continue
+		}
+		try {
+			const { contextBreakdown } = JSON.parse(msg.text) as { contextBreakdown?: ContextBreakdown }
+			if (contextBreakdown && typeof contextBreakdown.systemPromptTokens === "number") {
+				return contextBreakdown
+			}
+		} catch {
+			// Ignore JSON parse errors, continue searching
+		}
+	}
+	return undefined
 }

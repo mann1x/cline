@@ -1202,6 +1202,77 @@ function readStoredMaxToolResultChars(providerId: string | undefined): unknown {
 }
 
 /**
+ * The tools this configuration withholds, from wherever it is configured.
+ *
+ * Shaped like `readStoredMaxToolResultChars` above and read the same way,
+ * because it is the same kind of setting: it belongs to the configuration, not
+ * to the provider. Plan, Act, Vision and Agents are in force at the same time
+ * and providers.json has one entry per provider, so a profile's own snapshot
+ * is asked first and the shared entry is the fallback.
+ *
+ * Only a deny list comes back. A selection can withhold a tool and nothing
+ * else: whether a tool exists at all is answered by whatever configures it,
+ * and a profile that could override that would be a switch that does nothing.
+ */
+function readToolSelection(value: unknown): { disabled: string[] } | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return undefined
+	}
+	const disabled = (value as { disabled?: unknown }).disabled
+	if (!Array.isArray(disabled)) {
+		return undefined
+	}
+	const names = disabled.filter((name): name is string => typeof name === "string" && name.trim() !== "")
+	return names.length > 0 ? { disabled: names } : undefined
+}
+
+/**
+ * The profile's provider settings laid over the shared entry.
+ *
+ * A profile that is silent about a field is not a profile that overrides it.
+ * `resolveOllamaProviderConfig` picks its source with `??` on the *object*, so
+ * handing it a profile snapshot made providers.json unreachable for every
+ * field the snapshot happened not to carry -- and a window typed into the
+ * panel then changed the panel, the context bar and nothing else, while the
+ * session kept resolving from the model's declared `num_ctx`. There is no
+ * scope boundary here to defend: loading a profile writes providers.json, so
+ * the two are the same store seen at two moments, and the later one is the
+ * user's most recent word.
+ *
+ * Scoped tabs are a different matter and keep their own rule -- an Agents tab
+ * that names no window must fall to what the model declares rather than to the
+ * session model's number -- which is why this merge is applied here and not
+ * inside the resolver.
+ */
+function profileOverSharedEntry(
+	profileSettings: Record<string, unknown> | undefined,
+	providerId: string | undefined,
+): Record<string, unknown> | undefined {
+	if (!profileSettings) {
+		return undefined
+	}
+	try {
+		const shared = providerId ? getProviderSettingsManager().getProviderSettings(providerId) : undefined
+		return shared && typeof shared === "object"
+			? { ...(shared as Record<string, unknown>), ...profileSettings }
+			: profileSettings
+	} catch {
+		return profileSettings
+	}
+}
+
+function readStoredToolSelection(providerId: string | undefined): unknown {
+	if (!providerId) {
+		return undefined
+	}
+	try {
+		return getProviderSettingsManager().getProviderSettings(providerId)?.tools
+	} catch {
+		return undefined
+	}
+}
+
+/**
  * The connection a scoped tab names, for a model that is not the session's.
  *
  * Resolved the same way the session's own connection is, from the tab's stored
@@ -1388,7 +1459,11 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 				// afterwards; a server that will not answer leaves the previous
 				// behaviour exactly as it was.
 				await primeDeclaredNumCtx(apiConfig.ollamaBaseUrl, modelId, fetch)
-				ollamaProviderConfig = resolveOllamaProviderConfig(apiConfig, modelId, profileSettings)
+				ollamaProviderConfig = resolveOllamaProviderConfig(
+					apiConfig,
+					modelId,
+					profileOverSharedEntry(profileSettings, providerId),
+				)
 			}
 
 			Logger.log(
@@ -1874,6 +1949,11 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	const subagentsEnabled =
 		input.taskSettings?.subagentsEnabled ?? stateManager.getGlobalSettingsKey("subagentsEnabled") ?? false
 	Logger.log(`[Agents] Subagents ${subagentsEnabled ? "enabled" : "disabled"}`)
+	// Whether a turn that calls nothing is nudged to continue even when
+	// nothing says work is unfinished. On by default, which is what the
+	// extension did before this was a setting.
+	const strongNudgesEnabled =
+		input.taskSettings?.strongNudgesEnabled ?? stateManager.getGlobalSettingsKey("strongNudgesEnabled") ?? true
 
 	// Core resolves providers against the SDK registry, which uses the SDK's
 	// own provider id spelling (e.g. "openai-compatible" rather than the
@@ -2011,6 +2091,14 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	// additionally need structured options (region/project/auth/SAP OAuth), which core
 	// reads from providerConfig in createAgentModelFromConfig.
 	const cloudProviderConfig = bedrockProviderConfig ?? vertexProviderConfig ?? sapProviderConfig ?? ollamaProviderConfig
+	// The profile's own tool selection first, the shared provider entry second.
+	// Carried on `providerConfig` because that is where the runtime builder
+	// reads it, and it folds the names into the session's tool policies -- which
+	// is the one filter every tool passes through, MCP tools included.
+	const toolSelection = readToolSelection(profileSettings?.tools) ?? readToolSelection(readStoredToolSelection(providerId))
+	if (toolSelection) {
+		Logger.log(`[SessionFactory] Tools withheld by this configuration: ${toolSelection.disabled.join(", ")}`)
+	}
 	// Spread the cloud config first so the explicit fields below — notably the
 	// proxy/CA-aware fetch — can never be clobbered if those types gain matching keys.
 	const providerConfig = {
@@ -2034,6 +2122,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		// with 66,000 for thinking, `num_predict` went out at 32,000, and the
 		// turn was cut with its 25,600-token think spent and no tool call.
 		...(sessionOutputCap !== undefined ? { defaultMaxOutputTokens: sessionOutputCap } : {}),
+		...(toolSelection ? { tools: toolSelection } : {}),
 		fetch,
 	}
 
@@ -2113,6 +2202,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		// implementation detail they have no way to choose between.
 		enableSpawnAgent: subagentsEnabled,
 		enableAgentTeams: subagentsEnabled,
+		strongNudges: strongNudgesEnabled,
 		// Sent whether or not auto compaction is on. `enabled` is the only thing
 		// that decides whether the transcript gets compacted — the runtime
 		// returns no compaction pass without it — but this object is also where

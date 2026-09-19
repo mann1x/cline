@@ -181,6 +181,7 @@ export const ThinkingBudgetField = ({ providerId }: { providerId: string }) => {
 							<DebouncedTextField
 								className="w-full"
 								initialValue={storedThinkBudget}
+								numeric
 								onChange={(value: string) => {
 									composeAndWrite({ thinkBudget: value })
 								}}

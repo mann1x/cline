@@ -451,6 +451,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 									<DebouncedTextField
 										className="w-full"
 										initialValue={thinkBudgetValue}
+										numeric
 										onChange={handleThinkBudgetChange}
 										placeholder={samplingPlaceholder("think_budget")}>
 										<span className="font-medium text-xs">think_budget</span>
@@ -484,6 +485,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 						"contextWindow",
 						Number.isFinite(scopedNumCtx) && (scopedNumCtx ?? 0) > 0 ? String(scopedNumCtx) : "",
 					)}
+					numeric
 					onChange={(v) => {
 						noteNumeric("contextWindow", v)
 						const contextWindow = Number.parseInt(v, 10)
@@ -539,6 +541,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 				<>
 					<DebouncedTextField
 						initialValue={numericValue("toolResultChars", scopedToolResultChars ? String(scopedToolResultChars) : "")}
+						numeric
 						onChange={(v) => {
 							noteNumeric("toolResultChars", v)
 							const parsed = Number.parseInt(v, 10)
@@ -574,6 +577,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 
 					<DebouncedTextField
 						initialValue={numericValue("maxTokens", committedMaxTokens ? String(committedMaxTokens) : "")}
+						numeric
 						onChange={(v) => {
 							noteNumeric("maxTokens", v)
 							const parsed = Number.parseInt(v, 10)
@@ -616,6 +620,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 							"requestTimeout",
 							apiConfiguration?.requestTimeoutMs ? apiConfiguration.requestTimeoutMs.toString() : "300000",
 						)}
+						numeric
 						onChange={(value) => {
 							// The draft is what makes this editable at all: this
 							// field falls back to "300000" when it holds nothing,

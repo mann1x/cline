@@ -274,6 +274,10 @@ describe("the provider config a profile carries", () => {
 			outputBudget: {},
 			// And the reasoning section as a whole.
 			reasoning: {},
+			// And the tool selection: a profile that names no tools brings all
+			// of them in, rather than inheriting the last profile's cuts and
+			// leaving a model short of tools nobody switched off.
+			tools: {},
 		})
 	})
 
@@ -286,6 +290,13 @@ describe("the provider config a profile carries", () => {
 			polykv: {},
 			outputBudget: {},
 			reasoning: {},
+			tools: {},
+		})
+	})
+
+	it("carries the tool selection a profile does hold", () => {
+		expect(providerConfigPatchForProfile({ tools: { disabled: ["browser", "generate_image"] } }).tools).toEqual({
+			disabled: ["browser", "generate_image"],
 		})
 	})
 

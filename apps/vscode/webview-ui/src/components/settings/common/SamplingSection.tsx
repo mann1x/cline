@@ -186,6 +186,7 @@ export const SamplingSection = ({
 									<DebouncedTextField
 										className="w-full"
 										initialValue={raw}
+										numeric
 										onChange={(text: string) => {
 											change(field.key, text)
 											// Committing a half-typed number stores it and

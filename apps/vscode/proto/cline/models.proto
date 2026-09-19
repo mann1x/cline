@@ -392,6 +392,9 @@ message ProviderConfigResponse {
   // write. Carries no secret, so it is returned unredacted.
   optional PolykvProviderConfig polykv = 19;
   optional OutputBudgetConfig output_budget = 20;
+  // Which tools this configuration brings into a session. Carries no secret,
+  // so it is returned unredacted.
+  optional ToolsProviderConfig tools = 21;
 }
 
 message CommittedModelSelection {
@@ -486,6 +489,25 @@ message PolykvProviderConfig {
   optional bool swarm = 14;
 }
 
+// The tools a configuration leaves out of its sessions.
+//
+// A deny list, not an allow list, and deliberately: the tool set grows, and an
+// allow list written today would silently withhold every tool added after it
+// from every configuration that already exists. Naming what to drop means a
+// new tool arrives switched on, which is the answer that can be corrected by
+// looking at the panel rather than by wondering why the model never uses it.
+//
+// Names are the registered tool names, so an MCP tool belongs here under the
+// name it was registered with -- which is not always `server__tool`; see
+// `defaultMcpToolNameTransform`.
+//
+// Presence is the signal: an absent message means this profile says nothing
+// about tools, while a present one holding an empty list means it says
+// everything is on.
+message ToolsProviderConfig {
+  repeated string disabled = 1;
+}
+
 message WriteProviderConfigPatch {
   optional string api_key = 1;
   optional string base_url = 2;
@@ -511,6 +533,9 @@ message WriteProviderConfigPatch {
   // The PolyKV section; an explicitly empty message clears it.
   optional PolykvProviderConfig polykv = 17;
   optional OutputBudgetConfig output_budget = 18;
+  // The tool selection; an explicitly empty message clears it, which puts
+  // every tool back.
+  optional ToolsProviderConfig tools = 19;
 }
 
 message WriteProviderConfigRequest {

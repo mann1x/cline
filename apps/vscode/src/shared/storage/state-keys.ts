@@ -349,7 +349,7 @@ const USER_SETTINGS_FIELDS = {
 	// The compaction the tail stops surviving. Kept equal to core's measured
 	// constant by `force-full-from-compaction.test.ts`; `0` turns it off and is
 	// a value rather than an absence, so nothing on the way down may `??` it.
-	forceFullFromCompaction: { default: 2 as number },
+	forceFullFromCompaction: { default: 0 as number },
 	fullCompactionPrompt: { default: "" as string },
 	thinkingCompactionEnabled: { default: true as boolean },
 	thinkingCompactionPrompt: { default: "" as string },
@@ -380,6 +380,7 @@ const USER_SETTINGS_FIELDS = {
 	availableUpdate: { default: "" as string },
 	cappedThinkingPrompt: { default: "" as string },
 	subagentsEnabled: { default: false as boolean },
+	strongNudgesEnabled: { default: true as boolean },
 	worktreesEnabled: { default: false as boolean },
 	preferredLanguage: { default: "English" as string },
 	mode: { default: "act" as Mode },

@@ -1,4 +1,4 @@
-import { ClineMessage } from "@shared/ExtensionMessage"
+import { ClineMessage, ContextBreakdown } from "@shared/ExtensionMessage"
 import type { ExpertApiMetrics, ProviderApiMetrics } from "@shared/getApiMetrics"
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react"
 import React, { useCallback, useLayoutEffect, useMemo, useState } from "react"
@@ -30,6 +30,8 @@ interface TaskHeaderProps {
 	cacheReads?: number
 	totalCost: number
 	lastApiReqTotalTokens?: number
+	/** The fixed price of that request, when the turn reported one. */
+	contextBreakdown?: ContextBreakdown
 	/** What each connection spent, and how fast it generated. */
 	byProvider?: ProviderApiMetrics[]
 	generateTokens?: number
@@ -50,6 +52,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 	cacheReads,
 	totalCost,
 	lastApiReqTotalTokens,
+	contextBreakdown,
 	byProvider,
 	generateTokens,
 	expert,
@@ -229,6 +232,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 							byProvider={byProvider}
 							cacheReads={cacheReads}
 							cacheWrites={cacheWrites}
+							contextBreakdown={contextBreakdown}
 							contextWindow={selectedModelInfo?.contextWindow}
 							generateMs={generateMs}
 							generateTokens={generateTokens}

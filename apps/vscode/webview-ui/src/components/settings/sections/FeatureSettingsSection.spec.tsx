@@ -130,6 +130,34 @@ describe("FeatureSettingsSection", () => {
 		expect(mockUpdateSetting).toHaveBeenCalledWith("subagentsEnabled", true)
 	})
 
+	// Default on. An extension state that predates the key must still render
+	// the row checked, or the first thing a user does is turn back on what was
+	// never off -- and the row reads as a new opt-in feature rather than as the
+	// behaviour they have had all along.
+	it("renders Strong coding nudges on when the state has no value for it", () => {
+		mockExtensionState.value = { ...mockExtensionState.value, strongNudgesEnabled: undefined }
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		const row = container.querySelector('[id="Strong coding nudges"]')
+		expect(row).toBeTruthy()
+		expect(row?.getAttribute("aria-checked")).toBe("true")
+	})
+
+	it("calls updateSetting with strongNudgesEnabled when switched off", () => {
+		mockExtensionState.value = { ...mockExtensionState.value, strongNudgesEnabled: true }
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		fireEvent.click(container.querySelector('[id="Strong coding nudges"]') as Element)
+
+		expect(mockUpdateSetting).toHaveBeenCalledWith("strongNudgesEnabled", false)
+	})
+
+	it("says what switching the nudges off costs", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		expect(container.querySelector("#agent-features")?.textContent).toContain("ask questions")
+	})
+
 	// The toggle is not the whole gate, and the other half is otherwise only in
 	// the extension log.
 	it("says that the open-ended spawn also needs parallel sessions above 1", () => {
@@ -186,6 +214,10 @@ describe("Keep Recent Messages At Compaction", () => {
 	// Zero is the off switch, and the whole chain from this box down to core
 	// has to carry it as a value rather than read it as an empty field.
 	it("sends a zero, which is how the tail is never dropped", () => {
+		// Started from the old staged value on purpose: zero is the default now,
+		// so typing it into a box that already reads zero is not an edit and
+		// would assert nothing.
+		mockExtensionState.value = { ...mockExtensionState.value, forceFullFromCompaction: 2 }
 		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
 
 		fireEvent.change(container.querySelector("#force-full-from-compaction") as Element, {

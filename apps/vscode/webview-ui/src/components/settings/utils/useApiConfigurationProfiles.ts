@@ -298,6 +298,22 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 		],
 	)
 
+	/**
+	 * The scopes a load actually writes to.
+	 *
+	 * With Plan and Act sharing a model, `applySnapshot` writes the snapshot to
+	 * both — so recording the profile against only the tab it was loaded from
+	 * left the other scope pointing at whatever was loaded before it, or at
+	 * nothing. That is not cosmetic: the session reads its provider settings
+	 * from the profile named for *its* mode, so Plan and Act could resolve two
+	 * different context windows from one load, and a machine that had only ever
+	 * loaded profiles from the Act tab had no `plan` entry at all.
+	 */
+	const loadedScopes = useMemo(
+		() => (snapshotKind ? [scopeKey] : planActSeparateModelsSetting ? [scopeMode] : ["plan", "act"]),
+		[snapshotKind, scopeKey, planActSeparateModelsSetting, scopeMode],
+	)
+
 	const loadProfile = useCallback(
 		async (name: string) => {
 			const profile = findApiConfigurationProfile(profiles, name)
@@ -305,9 +321,13 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 				return
 			}
 			await applySnapshot(profile.snapshot)
-			await writeActiveNames({ ...activeNames, [scopeKey]: profile.name })
+			const next = { ...activeNames }
+			for (const scope of loadedScopes) {
+				next[scope] = profile.name
+			}
+			await writeActiveNames(next)
 		},
-		[profiles, applySnapshot, activeNames, scopeKey, writeActiveNames],
+		[profiles, applySnapshot, activeNames, loadedScopes, writeActiveNames],
 	)
 
 	const saveProfile = useCallback(
@@ -317,9 +337,17 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 				return
 			}
 			const profile: ApiConfigurationProfile = { name: trimmed, updatedAt: Date.now(), snapshot: currentSnapshot }
-			await writeActiveNames({ ...activeNames, [scopeKey]: trimmed }, upsertApiConfigurationProfile(profiles, profile))
+			// The same scopes a load writes: saving from the Act tab while Plan
+			// shares its model has named the profile for both, and leaving Plan
+			// on the previous name would make the next Plan session resolve from
+			// a profile the user has replaced.
+			const next = { ...activeNames }
+			for (const scope of loadedScopes) {
+				next[scope] = trimmed
+			}
+			await writeActiveNames(next, upsertApiConfigurationProfile(profiles, profile))
 		},
-		[currentSnapshot, profiles, activeNames, scopeKey, writeActiveNames],
+		[currentSnapshot, profiles, activeNames, loadedScopes, writeActiveNames],
 	)
 
 	const deleteProfile = useCallback(

@@ -1,7 +1,7 @@
 import { combineApiRequests } from "@shared/combineApiRequests"
 import { combineCommandSequences } from "@shared/combineCommandSequences"
 import { combineHookSequences } from "@shared/combineHookSequences"
-import { getApiMetrics, getLastApiReqTotalTokens } from "@shared/getApiMetrics"
+import { getApiMetrics, getLastApiReqContextBreakdown, getLastApiReqTotalTokens } from "@shared/getApiMetrics"
 import { BooleanRequest } from "@shared/proto/cline/common"
 import { resolveVisionModelStatus } from "@shared/vision-config"
 import { useCallback, useEffect, useMemo, useRef } from "react"
@@ -114,6 +114,9 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 	const apiMetrics = useMemo(() => getApiMetrics(modifiedMessages), [modifiedMessages])
 
 	const lastApiReqTotalTokens = useMemo(() => getLastApiReqTotalTokens(modifiedMessages) || undefined, [modifiedMessages])
+	// What of that total was spent before the first message. Read from the same
+	// row, so the bar's colours and its length always describe one request.
+	const lastApiReqContextBreakdown = useMemo(() => getLastApiReqContextBreakdown(modifiedMessages), [modifiedMessages])
 	const lastAppliedCheckpointRestoreSessionId = useRef<string | undefined>(checkpointRestoreInput?.sessionId)
 
 	useEffect(() => {
@@ -355,6 +358,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 				{task ? (
 					<TaskSection
 						apiMetrics={apiMetrics}
+						contextBreakdown={lastApiReqContextBreakdown}
 						lastApiReqTotalTokens={lastApiReqTotalTokens}
 						messageHandlers={messageHandlers}
 						selectedModelInfo={{

@@ -58,6 +58,7 @@ export const ParallelSessionsField = ({ providerId }: { providerId: string }) =>
 	return (
 		<DebouncedTextField
 			initialValue={stored ? String(stored) : ""}
+			numeric
 			onChange={(value) => {
 				const next = parseTyped(value)
 				if (next === stored) {
