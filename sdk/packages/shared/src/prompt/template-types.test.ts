@@ -246,6 +246,92 @@ describe("resolvePromptTemplate", () => {
 		).toBe("w");
 	});
 
+	/**
+	 * 4.100.116 added a `model:` rung to the six shipped family templates, so a
+	 * model served from the cloud with no family of its own would still match.
+	 * That lifted every one of them from dimension 2 to dimension 3 -- and
+	 * source was compared last, under dimension, so the shipped template began
+	 * outscoring templates people had written themselves. `family:` is how the
+	 * shipped templates had always matched, so it is the form anybody writing
+	 * their own from the examples would have used.
+	 */
+	describe("a template the user wrote", () => {
+		const builtinByModel = template({
+			name: "glm",
+			source: "builtin",
+			match: { model: ["glm*"] },
+			system: "shipped",
+		});
+		const glm = {
+			providerId: "ollama",
+			modelId: "glm-5.3-flash",
+			family: "glm5.3",
+		};
+
+		it("beats a shipped one that matches on a more specific dimension", () => {
+			const mine = template({
+				name: "mine",
+				source: "global",
+				match: { family: ["glm*"] },
+				system: "mine",
+			});
+
+			expect(resolvePromptTemplate([builtinByModel, mine], glm)?.system).toBe(
+				"mine",
+			);
+			expect(resolvePromptTemplate([mine, builtinByModel], glm)?.system).toBe(
+				"mine",
+			);
+		});
+
+		it("beats it from the workspace too, and on a broader dimension still", () => {
+			const mine = template({
+				name: "mine",
+				source: "workspace",
+				match: { provider: ["ollama"] },
+				system: "mine",
+			});
+
+			expect(resolvePromptTemplate([builtinByModel, mine], glm)?.system).toBe(
+				"mine",
+			);
+		});
+
+		it("does not win by naming nothing at all", () => {
+			// `default` is the base layer, not a claim. A user default must not
+			// swallow every session just because it is nearer than a builtin.
+			const myDefault = template({
+				name: "default",
+				source: "global",
+				system: "mine",
+			});
+
+			expect(
+				resolvePromptTemplate([builtinByModel, myDefault], glm)?.system,
+			).toBe("shipped");
+		});
+
+		it("still loses to the user's own more specific template", () => {
+			// Among templates from one source the old order stands.
+			const broad = template({
+				name: "broad",
+				source: "global",
+				match: { provider: ["ollama"] },
+				system: "broad",
+			});
+			const narrow = template({
+				name: "narrow",
+				source: "global",
+				match: { family: ["glm*"] },
+				system: "narrow",
+			});
+
+			expect(resolvePromptTemplate([broad, narrow], glm)?.system).toBe(
+				"narrow",
+			);
+		});
+	});
+
 	it("returns undefined when no template applies", () => {
 		expect(
 			resolvePromptTemplate([templates[2] as PromptTemplate], {

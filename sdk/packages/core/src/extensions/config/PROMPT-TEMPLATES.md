@@ -20,6 +20,7 @@ history. Everything that cost time is written down here.
 | **A cloud tag reports no family, so every family template needs a name rung.** | `/api/show` answers `family: ""` for anything built `FROM` a cloud tag, which is how most people reach a model bigger than they can host. Six shipped templates matched on `family:` alone until 2026-09-14, so `glm-5.3:cloud`, `deepseek-v4.1-flash:cloud` and `qwen3.5:397b-cloud` all ran on `default.md`. |
 | **`default.md` is generated, not authored.** | It is a verbatim mirror of `DEFAULT_CLINE_SYSTEM_PROMPT` plus every built-in tool description. A test fails if it drifts. Editing it to change what a model sees does nothing except break CI. |
 | **The `# system` section REPLACES. It does not wrap.** | `{{DEFAULT}}` works in `# tool:` sections only. A family template's system text is the *entire* system prompt for that family — `default.md`'s system text is never appended, prepended, or merged. |
+| **Source outranks the dimension, and did not always.** | Until 4.100.145, resolution compared the matched dimension *before* where the template came from. 4.100.116 gave the six shipped family templates a `model:` rung so a cloud-served model reporting no family would still match — lifting them from dimension 2 to 3 and silently outscoring every user template matching on `family`, which is the form the shipped ones themselves used. Nothing reported it: the session simply ran on the shipped prompt. |
 | **Every family already overrides `system`.** | All six family templates ship a full `# system` section, so nothing inherits `default.md`'s system text in practice. "Add it to the base layer so everyone gets it" does not work. |
 | **The ideas in a template are ours; the prose is the model's.** | The four numbered failures and the long-horizon framing live in `PROMPT_TEMPLATE_REVIEW_INSTRUCTIONS` and are injected into every generation. A model restates them in its own words, so they read as if the model invented them. Provenance headers name the model that wrote the *wording*. |
 | **A family string changes between model generations.** | It is stable across quant, tag and rename of *one* model — not across releases. `glm5.2` became `glm_dsa_moe`; `deepseek4` became `deepseek_v41`. Both templates silently stopped claiming their own family and those sessions fell back to `default.md` with nothing reporting it. Match the family broadly (`glm*`), not the generation (`glm5*`). |
@@ -143,10 +144,17 @@ empty, and nothing reports it.
 
 ## 3. Resolution: which template wins
 
-Three keys, in order: **the dimension named** (`model` 3 > `family` 2 >
-`provider` 1 > `default` 0), then **how narrowly that dimension's pattern claims
-this session** (literal non-wildcard characters in the matched pattern; an exact
-pattern gets +1), then **source rank** (workspace > global > builtin).
+Four keys, in order: **does it claim this session at all** (anything naming a
+provider, family or model does; `default` names nothing and is the base layer),
+then **source rank** (workspace > global > builtin), then **the dimension
+named** (`model` 3 > `family` 2 > `provider` 1 > `default` 0), then **how
+narrowly that dimension's pattern claims this session** (literal non-wildcard
+characters in the matched pattern; an exact pattern gets +1).
+
+Source sits above dimension deliberately: a template you wrote is configuration,
+a builtin is a default, and a default must not outrank configuration however
+specifically it happens to match. It used to sit *below* both, and that was a
+live bug — see the note in §0.
 
 The middle key is what makes a fallback ladder work, and it was added on
 2026-09-11. Before it, two patterns claiming one value tied and the winner was
@@ -167,12 +175,13 @@ its family rung when only the architecture does.
 PROMPT_TEMPLATE_SPECIFICITY = { default: 0, provider: 1, family: 2, model: 3 }
 ```
 
-1. Score each candidate by the **most specific dimension it matched on** — not
-   by how specific the glob is.
-2. Highest score wins.
-3. Tie → `SOURCE_RANK` (workspace beats global beats builtin).
-4. Still tied → **array order**. This is why two family patterns that both match
-   are a latent bug.
+1. A candidate naming any dimension beats one that names none (`default`).
+2. Then `SOURCE_RANK` — workspace beats global beats builtin.
+3. Then the **most specific dimension it matched on** — not how specific the
+   glob is.
+4. Then narrowness within that dimension.
+5. Still tied → **array order**. This is why two family patterns that both match
+   from the same source are a latent bug.
 
 **Load order / sources**, lowest to highest rank:
 

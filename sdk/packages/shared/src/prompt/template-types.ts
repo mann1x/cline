@@ -406,8 +406,28 @@ export function shadowPromptTemplates(
 /**
  * Pick the template that governs a session, or `undefined` when none applies.
  *
- * Ties on specificity go to the nearer source, so a workspace template beats a
- * global one that is equally specific.
+ * Four keys, in order:
+ *
+ * 1. **Does it claim this session at all.** A template naming a provider,
+ *    family or model is a claim; `default` names nothing and is the base
+ *    layer, so it only wins when nothing else applies.
+ * 2. **Source.** A template the user wrote -- in the workspace, or in their
+ *    global template directory -- beats one that shipped in the box, however
+ *    specifically the shipped one happens to match. A builtin is a default,
+ *    and a default must never outrank configuration somebody wrote on purpose.
+ * 3. **The dimension named** (`model` 3 > `family` 2 > `provider` 1).
+ * 4. **How narrowly that dimension's pattern claims this session**, which is
+ *    what lets `kimi-k3*` sit under `kimi*` instead of tying with it and being
+ *    decided by array order.
+ *
+ * Source used to sit last, under both of the others, and that was wrong in a
+ * way nothing reported. Adding a `model:` rung to the six shipped family
+ * templates -- so a model served from the cloud with no family of its own
+ * still matched -- lifted every one of them from dimension 2 to 3. A user
+ * template matching on `family`, which is how the shipped ones had always
+ * matched and therefore the form anybody copying them would write, silently
+ * stopped applying from that release on: the builtin outscored it on a key
+ * that was compared before anyone looked at where the template came from.
  */
 export function resolvePromptTemplate(
 	templates: readonly PromptTemplate[],
@@ -420,24 +440,39 @@ export function resolvePromptTemplate(
 		if (score === undefined) {
 			continue;
 		}
-		// Three keys, in order: the dimension named, then how narrowly that
-		// dimension's pattern claims this session, then the source. The middle
-		// one is what lets `kimi-k3*` sit under `kimi*` instead of tying with
-		// it and being decided by array order.
 		if (
 			best === undefined ||
 			bestScore === undefined ||
-			score.dimension > bestScore.dimension ||
-			(score.dimension === bestScore.dimension &&
-				(score.specificity > bestScore.specificity ||
-					(score.specificity === bestScore.specificity &&
-						SOURCE_RANK[template.source] > SOURCE_RANK[best.source])))
+			comparePromptTemplateCandidates(
+				{ score, source: template.source },
+				{ score: bestScore, source: best.source },
+			) > 0
 		) {
 			best = template;
 			bestScore = score;
 		}
 	}
 	return best;
+}
+
+interface PromptTemplateCandidate {
+	score: PromptTemplateScore;
+	source: PromptTemplateSource;
+}
+
+/** The four keys above, as a comparator: positive when `a` should win. */
+function comparePromptTemplateCandidates(
+	a: PromptTemplateCandidate,
+	b: PromptTemplateCandidate,
+): number {
+	const claims = (candidate: PromptTemplateCandidate) =>
+		candidate.score.dimension > PROMPT_TEMPLATE_SPECIFICITY.default ? 1 : 0;
+	return (
+		claims(a) - claims(b) ||
+		SOURCE_RANK[a.source] - SOURCE_RANK[b.source] ||
+		a.score.dimension - b.score.dimension ||
+		a.score.specificity - b.score.specificity
+	);
 }
 
 /** The name reserved for the base layer every other template falls back to. */
