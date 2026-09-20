@@ -4,10 +4,10 @@ import { normalizeRunCommandsInput } from "./helpers";
 import {
 	AwkInputUnionSchema,
 	GrepInputUnionSchema,
+	MALFORMED_ARRAY_MESSAGE,
 	parseArrayString,
 	SearchCodebaseUnionInputSchema,
 	SedInputUnionSchema,
-	TRUNCATED_ARRAY_MESSAGE,
 } from "./schemas";
 
 /** The same entry point `search_codebase` uses in definitions.ts. */
@@ -30,7 +30,9 @@ describe("parseArrayString", () => {
 	});
 
 	it("calls an unclosed array truncated rather than guessing at it", () => {
-		expect(parseArrayString(TRUNCATED_QUERIES)).toEqual({ truncated: true });
+		expect(parseArrayString(TRUNCATED_QUERIES)).toMatchObject({
+			refused: expect.any(String),
+		});
 	});
 
 	// A pattern may contain anything, and most patterns are not lists. The
@@ -108,7 +110,96 @@ describe("run_commands with a list sent as text", () => {
 
 describe("the message", () => {
 	it("says what to send instead", () => {
-		expect(TRUNCATED_ARRAY_MESSAGE).toContain("actual array of strings");
+		expect(MALFORMED_ARRAY_MESSAGE).toContain("actual array of strings");
+	});
+});
+
+/**
+ * The 69 payloads that reached this guard across eight runs of the 2026-09-17
+ * compaction-tail A/B, classified by why `JSON.parse` refused them.
+ *
+ * The filed reading was that these were truncated, and for 20 of the 69 it is:
+ * no closing bracket, cut mid-argument. The other 49 arrive **closed** and are
+ * a different fault -- the model wrote a shell command, full of quotes,
+ * backslashes and regexes, into a JSON array inside a JSON string, and escaped
+ * it once instead of twice. Refusing those as "truncated" told the model to do
+ * the thing it believed it had already done, and the same run made the same
+ * mistake 56 times.
+ *
+ * Two of those classes have exactly one reading and are taken; the rest are
+ * refused with the reason, because a shell command guessed at is a shell
+ * command run.
+ */
+describe("a list sent as text that will not parse", () => {
+	// A lone backslash cannot be valid JSON, so it can only ever have been a
+	// literal one -- which is what `\s` in a regex is.
+	const REGEX_BACKSLASH = String.raw`["grep -v '^\s*<script' manic_miner.html"]`;
+
+	// No separator anywhere, so there is one entry and no way to split it
+	// wrongly: every quote inside it is part of the command.
+	const BARE_QUOTES = String.raw`["awk '/^class /{print NR": "$0}' manic.html"]`;
+
+	// The same shape, but the quotes were escaped properly -- they have to come
+	// back as quotes, not as backslash-quote.
+	const ESCAPED_QUOTES = String.raw`["sed -n '82p' f.html | grep \"ffaa00\""]`;
+
+	// The same command with its last two characters lost. It still ends `]`,
+	// so only the trailing lone backslash says it was cut.
+	const CUT_MID_ESCAPE = String.raw`["sed -n '82p' f.html | grep \"ffaa00\]`;
+
+	// Two entries and bare quotes inside them: where one ends and the next
+	// begins is a guess, and guessing wrong runs a command nobody wrote.
+	const AMBIGUOUS = String.raw`["echo "one"","echo "two""]`;
+
+	it("takes a backslash that could only have been literal", () => {
+		expect(parseArrayString(REGEX_BACKSLASH)).toEqual({
+			list: [String.raw`grep -v '^\s*<script' manic_miner.html`],
+		});
+	});
+
+	it("takes a newline that was written into the string raw", () => {
+		expect(parseArrayString('["echo one\necho two"]')).toEqual({
+			list: ["echo one\necho two"],
+		});
+	});
+
+	it("takes a single entry whose quotes were never escaped", () => {
+		expect(parseArrayString(BARE_QUOTES)).toEqual({
+			list: [String.raw`awk '/^class /{print NR": "$0}' manic.html`],
+		});
+	});
+
+	it("still decodes the escapes in a single entry", () => {
+		expect(parseArrayString(ESCAPED_QUOTES)).toEqual({
+			list: [`sed -n '82p' f.html | grep "ffaa00"`],
+		});
+	});
+
+	it("refuses a single entry that ends on a lone backslash", () => {
+		const reading = parseArrayString(CUT_MID_ESCAPE);
+		expect(reading).toMatchObject({ refused: expect.any(String) });
+	});
+
+	it("refuses a list it would have to guess the boundaries of", () => {
+		expect(parseArrayString(AMBIGUOUS)).toMatchObject({
+			refused: expect.any(String),
+		});
+	});
+
+	it("refuses an unclosed array, as it always did", () => {
+		expect(parseArrayString(TRUNCATED_QUERIES)).toMatchObject({
+			refused: expect.any(String),
+		});
+	});
+
+	// The old message named a cause that was wrong seven times in ten and gave
+	// the model nothing to act on -- it already believed it had sent an array.
+	it("says where it broke, not just that it did", () => {
+		const reading = parseArrayString(AMBIGUOUS);
+		const refused = (reading as { refused: string }).refused;
+		expect(refused).toContain("actual array of strings");
+		expect(refused).toMatch(/position \d+/);
+		expect(refused).toContain("echo");
 	});
 });
 
@@ -134,7 +225,7 @@ describe("list arguments sent as a bare string", () => {
 				pattern: "collide",
 				paths: '["src/game.js", "src/level.js"',
 			}),
-		).toThrow(TRUNCATED_ARRAY_MESSAGE);
+		).toThrow(MALFORMED_ARRAY_MESSAGE);
 	});
 
 	it("takes a single file for sed", () => {

@@ -201,30 +201,202 @@ export const ReadFilesInputUnionSchema = z.union([
  */
 export function parseArrayString(
 	value: string,
-): { list: string[] } | { truncated: true } | undefined {
+): { list: string[] } | { refused: string } | undefined {
 	if (!/^\s*\[\s*["']/.test(value)) {
 		return undefined;
 	}
+
+	const strict = readStringList(value);
+	if (strict.list) {
+		return { list: strict.list };
+	}
+	if (!strict.error) {
+		// It is valid JSON and it is not a list of strings -- `["a", 3]`, say.
+		// That is not this guard's business, and refusing it here would take a
+		// value the schemas below still accept.
+		return undefined;
+	}
+
+	// A lone backslash and a raw newline have one reading each, so taking them
+	// is not a guess. `\s` in a regex is not a JSON escape and never can be, and
+	// a control character inside a JSON string is not legal there either -- both
+	// are the model writing a shell command into a JSON string and escaping it
+	// once instead of twice.
+	const normalised = readStringList(escapeWhatCouldOnlyBeLiteral(value));
+	if (normalised.list) {
+		return { list: normalised.list };
+	}
+
+	const single = readSingleEntry(value);
+	if (single) {
+		return single;
+	}
+
+	return { refused: refusal(strict.error, value) };
+}
+
+/** `JSON.parse`, narrowed to the one shape a list field can use. */
+function readStringList(value: string): {
+	list?: string[];
+	error?: unknown;
+} {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(value);
-	} catch {
-		return { truncated: true };
+	} catch (error) {
+		return { error };
 	}
 	if (
 		!Array.isArray(parsed) ||
 		!parsed.every((entry) => typeof entry === "string")
 	) {
-		return undefined;
+		return {};
 	}
 	const list = (parsed as string[])
 		.map((entry) => entry.trim())
 		.filter(Boolean);
-	return list.length > 0 ? { list } : { truncated: true };
+	return list.length > 0 ? { list } : {};
+}
+
+/** The escapes JSON defines. Anything else after a backslash is not one. */
+const JSON_ESCAPES = new Set(['"', "\\", "/", "b", "f", "n", "r", "t", "u"]);
+
+/**
+ * Escape the characters that could not have meant anything else.
+ *
+ * Walks the text in JSON's own terms and rewrites only two things inside a
+ * string: a backslash that opens no valid escape, and a raw control character.
+ * Neither is legal JSON, so neither can be carrying structure -- they are
+ * literal text that arrived under-escaped, and writing them properly is a
+ * transcription, not a repair.
+ *
+ * Quotes are never touched here. A bare quote *is* ambiguous: it could close
+ * an entry or sit inside one, and that question is answered further down,
+ * where there is only one entry and so only one answer.
+ */
+function escapeWhatCouldOnlyBeLiteral(value: string): string {
+	let out = "";
+	let inString = false;
+	let index = 0;
+	while (index < value.length) {
+		const char = value[index];
+		if (!inString) {
+			if (char === '"') {
+				inString = true;
+			}
+			out += char;
+			index += 1;
+			continue;
+		}
+		if (char === "\\") {
+			const next = value[index + 1] ?? "";
+			if (JSON_ESCAPES.has(next)) {
+				out += char + next;
+				index += 2;
+				continue;
+			}
+			out += "\\\\";
+			index += 1;
+			continue;
+		}
+		if (char === '"') {
+			inString = false;
+			out += char;
+			index += 1;
+			continue;
+		}
+		const code = char.charCodeAt(0);
+		if (code < 0x20) {
+			out += `\\u${code.toString(16).padStart(4, "0")}`;
+			index += 1;
+			continue;
+		}
+		out += char;
+		index += 1;
+	}
+	return out;
+}
+
+/**
+ * One entry, taken as written.
+ *
+ * Measured: 23 of the 28 unescaped-quote failures were a single command, and
+ * with no `","` anywhere there is nothing to split and so nothing to split
+ * wrongly. Every quote inside belongs to the command, and the entry is exactly
+ * the text between the outer quotes.
+ *
+ * Two conditions keep a truncated payload out. It must close with `]`, and the
+ * body must not end on a lone backslash -- a command cut mid-escape ends that
+ * way, and it is the one signal that separates "quoted badly" from "cut
+ * short". Without it this would hand a half-written command to a shell, which
+ * is the failure this whole guard exists to prevent.
+ */
+function readSingleEntry(
+	value: string,
+): { list: string[] } | { refused: string } | undefined {
+	const trimmed = value.trim();
+	if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) {
+		return undefined;
+	}
+	if (/","|",\s+"/.test(value)) {
+		return undefined;
+	}
+	const inner = trimmed.slice(1, -1).trim();
+	const quote = inner[0];
+	if ((quote !== '"' && quote !== "'") || !inner.endsWith(quote)) {
+		return undefined;
+	}
+	const body = inner.slice(1, -1);
+	if (/(?<!\\)\\$/.test(body)) {
+		return {
+			refused: `${MALFORMED_ARRAY_MESSAGE} It also ends on a lone backslash, which is what a value cut off mid-escape looks like, so it has not been run.`,
+		};
+	}
+	const reading = readStringList(
+		escapeWhatCouldOnlyBeLiteral(`["${escapeBareQuotes(body)}"]`),
+	);
+	return reading.list ? { list: reading.list } : undefined;
+}
+
+/** Make every quote the model did not escape into one it did. */
+function escapeBareQuotes(body: string): string {
+	let out = "";
+	let index = 0;
+	while (index < body.length) {
+		const char = body[index];
+		if (char === "\\" && index + 1 < body.length) {
+			out += char + body[index + 1];
+			index += 2;
+			continue;
+		}
+		out += char === '"' ? '\\"' : char;
+		index += 1;
+	}
+	return out;
+}
+
+/**
+ * Say where it broke.
+ *
+ * The old message named truncation, which was the cause seven times in ten --
+ * and the advice that followed, "send an actual array", was unfollowable for a
+ * model that believed it had. One run made the same mistake 56 times. The
+ * position and the text around it are the part it can act on.
+ */
+function refusal(error: unknown, value: string): string {
+	const message = error instanceof Error ? error.message : "";
+	const at = /position (\d+)/.exec(message);
+	if (!at) {
+		return MALFORMED_ARRAY_MESSAGE;
+	}
+	const position = Number(at[1]);
+	const from = Math.max(0, position - 20);
+	const fragment = value.slice(from, position + 20).replace(/\s+/g, " ");
+	return `${MALFORMED_ARRAY_MESSAGE} It stops parsing at position ${position}, around \`${fragment}\` -- most often a quote inside an entry that needs to be written \\" , or a backslash that needs to be written \\\\.`;
 }
 
 /** What the model is told about a list it sent as text that will not parse. */
-export const TRUNCATED_ARRAY_MESSAGE =
+export const MALFORMED_ARRAY_MESSAGE =
 	"This looks like a JSON array that was sent as a string and did not survive the trip -- it starts with `[` but does not parse. Send the field as an actual array of strings, one entry per item, rather than as text.";
 
 /**
@@ -244,8 +416,8 @@ export function stringToList(value: string): string[] {
 	if (parsed === undefined) {
 		return [value];
 	}
-	if ("truncated" in parsed) {
-		throw new Error(TRUNCATED_ARRAY_MESSAGE);
+	if ("refused" in parsed) {
+		throw new Error(parsed.refused);
 	}
 	return parsed.list;
 }
