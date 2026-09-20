@@ -2,6 +2,12 @@
 .SYNOPSIS
     Collects Cline session transcripts and logs into a zip for analysis.
 
+    PRE-MIGRATION ONLY. This reads `~\.cline` and the `*-Cline.log` output
+    channel, which is the layout before the Cerebriline rename. On a migrated
+    or current install it finds no logs and lists no extension, because both
+    were renamed; use Collect-CerebrilineReport.ps1 there. Kept as-is so a
+    machine still on the old build has a collector that matches it.
+
 .DESCRIPTION
     Gathers the transcript of one or more Cline tasks, the extension's own
     output log, VS Code's extension-host and renderer logs for the same
@@ -50,20 +56,20 @@
     alongside each picture.
 
 .EXAMPLE
-    .\Collect-ClineReport.ps1
+    .\Collect-ClineReport-PreMigration.ps1
 
     Lists the sessions and asks which to include.
 
 .EXAMPLE
-    .\Collect-ClineReport.ps1 -Latest
+    .\Collect-ClineReport-PreMigration.ps1 -Latest
 
     Takes the most recent session without asking.
 
 .EXAMPLE
-    .\Collect-ClineReport.ps1 -SessionCount 3 -OutputPath C:\temp
+    .\Collect-ClineReport-PreMigration.ps1 -SessionCount 3 -OutputPath C:\temp
 
 .EXAMPLE
-    .\Collect-ClineReport.ps1 -StripImages
+    .\Collect-ClineReport-PreMigration.ps1 -StripImages
 
     Leaves the screenshots out, for when the zip will not fit through
     whatever you are sending it with.
