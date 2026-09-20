@@ -2622,6 +2622,108 @@ describe("createContextCompactionPrepareTurn", () => {
 		expect(metadata?.toolLedger).toContain("2×");
 	});
 
+	it("quotes the standing request even when the cut pins it", async () => {
+		// The shape the harness actually runs, and the one the test above does
+		// not cover: a single typed instruction followed by a long tool loop.
+		// That turn exceeds the last-turn ceiling, so the cut pins the prompt
+		// instead of folding it -- and `messagesToSummarize` filters the pinned
+		// index out, so the span the requests were collected from never
+		// contained the only instruction there was.
+		//
+		// Measured on pandorum session 1789877743966_qduum (4.100.141): no
+		// `userRequests` in the generation-2 metadata, no quoted block in the
+		// summary, and the summarizer opening with "The exact instructions are
+		// missing from my current view."
+		const standingRequest =
+			"check manic_miner.html, it's not working. Run `node run_game.js manic_miner.html` before you tell me you are done.";
+		const createMessage = vi.fn(() =>
+			streamChunks([
+				{
+					type: "text",
+					id: "summary-pinned",
+					text: "I am working on the file.",
+				},
+				{ type: "done", id: "summary-pinned", success: true },
+			]),
+		);
+		createHandlerMock.mockReturnValue({ createMessage });
+
+		const prepareTurn = createContextCompactionPrepareTurn({
+			providerId: "anthropic",
+			modelId: "mock-model",
+			providerConfig: {
+				providerId: "anthropic",
+				modelId: "mock-model",
+			} as LlmsProviders.ProviderConfig,
+			compaction: {
+				enabled: true,
+				strategy: "agentic",
+				preserveRecentTokens: 1,
+				councilEnabled: false,
+			},
+			logger: undefined,
+		});
+
+		// One prompt, then nothing but tool traffic — no second turn start for
+		// the cut to fall back to.
+		const loop: MessageWithMetadata[] = [];
+		for (let index = 0; index < 12; index += 1) {
+			loop.push({
+				role: "assistant",
+				content: [
+					{
+						type: "tool_use",
+						id: `loop-${index}`,
+						name: "run_commands",
+						input: { commands: ["node run_game.js manic_miner.html"] },
+					},
+				],
+			});
+			loop.push({
+				role: "user",
+				content: [
+					{
+						type: "tool_result",
+						tool_use_id: `loop-${index}`,
+						name: "run_commands",
+						content: `${"verdict ".repeat(200)}${index}`,
+					},
+				],
+			});
+		}
+
+		const result = await prepareTurn?.({
+			agentId: "agent-1",
+			conversationId: "conv-1",
+			parentAgentId: null,
+			iteration: 1,
+			abortSignal: new AbortController().signal,
+			systemPrompt: "You are helpful.",
+			tools: [],
+			messages: [{ role: "user", content: standingRequest }, ...loop],
+			apiMessages: [{ role: "user", content: standingRequest }, ...loop],
+			model: {
+				id: "mock-model",
+				provider: "anthropic",
+				info: { id: "mock-model", maxInputTokens: 10 },
+			},
+		});
+
+		// The prompt survives verbatim as the pinned message, so the summary
+		// does not quote it a second time — but it must be in the context.
+		const rendered = JSON.stringify(result?.messages ?? []);
+		expect(rendered).toContain(standingRequest);
+
+		// The point of the fix: the summarizer is shown it too. It is the one
+		// reader that cannot see a pinned prompt, and when it could not it
+		// wrote that the instructions were missing from its view.
+		const sent = createMessage.mock.calls
+			.map((call) => JSON.stringify(call))
+			.join("\n");
+		expect(sent).toContain("node run_game.js manic_miner.html");
+		expect(sent).toContain("<user_request>");
+	});
+
 	it("budgets agentic summary input before serialization", () => {
 		const result = buildAgenticSummaryInputBudget({
 			messages: [

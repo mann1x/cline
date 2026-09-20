@@ -7,6 +7,7 @@ import {
 	evictToolLedger,
 	mergeToolLedger,
 	renderToolLedger,
+	spliceLedgerCitations,
 } from "./tool-ledger";
 
 function call(
@@ -612,5 +613,78 @@ describe("a ledger that outlives its own compaction", () => {
 		);
 
 		expect(evictToolLedger(entries, 100).map((e) => e.index)).toEqual([1]);
+	});
+});
+
+/**
+ * The replay narrates and the ledger records, in the same order — so the
+ * writer cites rather than transcribes. Before this, tool transcription took
+ * 69% of a small model's output budget and the prose was cut off mid-sentence.
+ */
+describe("putting each call where the replay says it happened", () => {
+	const ledger = () =>
+		buildToolLedger([
+			...exchange(
+				"run_commands",
+				{ commands: ["node run_game.js"] },
+				"ok:false",
+			),
+			...exchange(
+				"read_files",
+				{ files: [{ path: "game.html" }] },
+				"<400 lines>",
+			),
+			...exchange("check_file", { path: "game.html" }, "no problems"),
+		]);
+
+	it("splices the cited entry in at the point it was cited", () => {
+		const spliced = spliceLedgerCitations(
+			"Let me run the checker. [#1] It reports a failure.",
+			ledger(),
+		);
+		expect(spliced.text).toContain("Let me run the checker.");
+		expect(spliced.text).toContain("node run_game.js");
+		expect(spliced.text).toContain("It reports a failure.");
+		expect(spliced.text).not.toContain("[#1]");
+		expect(spliced.cited).toEqual([1]);
+	});
+
+	it("keeps the narrated order, not the ledger's", () => {
+		const spliced = spliceLedgerCitations("[#3] then [#1]", ledger());
+		expect(spliced.cited).toEqual([3, 1]);
+		expect(spliced.text.indexOf("check_file")).toBeLessThan(
+			spliced.text.indexOf("run_commands"),
+		);
+	});
+
+	// Every failure degrades to the ledger block that was there before.
+	it("reports what the replay never cited", () => {
+		const spliced = spliceLedgerCitations("Let me work. [#2]", ledger());
+		expect(spliced.cited).toEqual([2]);
+		expect(spliced.uncited).toEqual([1, 3]);
+	});
+
+	// The bad number goes; the sentence around it stays. Counting them is the
+	// only signal that the prose has run past the record — measured on
+	// pandorum, a replay cited [#31]-[#33] against a 30-entry ledger.
+	it("drops a citation naming an entry that does not exist, and counts it", () => {
+		const spliced = spliceLedgerCitations("Let me work. [#99] Done.", ledger());
+		expect(spliced.text).not.toContain("[#99]");
+		expect(spliced.text).toContain("Let me work.");
+		expect(spliced.text).toContain("Done.");
+		expect(spliced.cited).toEqual([]);
+		expect(spliced.invalid).toEqual([99]);
+	});
+
+	it("drops a repeated citation rather than saying the call twice", () => {
+		const spliced = spliceLedgerCitations("[#1] and again [#1]", ledger());
+		expect(spliced.cited).toEqual([1]);
+		expect(spliced.invalid).toEqual([1]);
+		expect(spliced.text.match(/run_commands/g)).toHaveLength(1);
+	});
+
+	it("leaves a replay that cites nothing exactly as it was", () => {
+		const prose = "Let me work on the file. It is not parsing yet.";
+		expect(spliceLedgerCitations(prose, ledger()).text).toBe(prose);
 	});
 });

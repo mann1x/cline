@@ -14,9 +14,20 @@ describe("the replay speaks in the present", () => {
 	// 29-minute pandorum run: "The user asked me" should be "The user is
 	// asking me", "I started by" should be "Let me start by", "the editor then
 	// warned me" should be "the editor is warning me".
-	it("asks for present tense and not past", () => {
+	// The council splits the replay at a boundary only the writer can place:
+	// it knows where one stretch of work ends, and the harness would have to
+	// guess from prose.
+	it("asks for the halfway marker, on a step boundary", () => {
+		expect(DEFAULT_REPLAY_COMPACTION_PROMPT).toContain("<<<HALFWAY>>>");
+		expect(DEFAULT_REPLAY_COMPACTION_PROMPT).toContain("Exactly once");
+		expect(DEFAULT_REPLAY_COMPACTION_PROMPT).toContain(
+			"boundary between steps",
+		);
+	});
+
+	it("asks for present continuous and not past", () => {
 		expect(DEFAULT_REPLAY_COMPACTION_PROMPT).not.toContain("Past tense");
-		expect(DEFAULT_REPLAY_COMPACTION_PROMPT).toContain("present tense");
+		expect(DEFAULT_REPLAY_COMPACTION_PROMPT).toContain("present continuous");
 	});
 
 	it("shows the model the rewrite it is being asked for", () => {
@@ -97,16 +108,34 @@ describe("the replay compaction prompt", () => {
 		expect(prompt).not.toContain("hand-over note");
 	});
 
+	it("closes the numbering so a citation cannot run past the record", () => {
+		// Measured: against a 30-entry ledger the replay cited [#1]-[#33].
+		// The splice drops 31-33, but the invented sentences they were
+		// attached to stay in the summary as steps that were never taken.
+		const prompt = DEFAULT_REPLAY_COMPACTION_PROMPT;
+		expect(prompt).toContain("The record is complete and closed");
+		expect(prompt).toContain("no `[#N]` past the end to cite");
+		expect(prompt).toContain("a step you have not taken yet");
+	});
+
 	it("asks for the user's own words back verbatim", () => {
 		expect(DEFAULT_REPLAY_COMPACTION_PROMPT.toLowerCase()).toContain(
 			"verbatim",
 		);
 	});
 
-	it("tells the model to trim its own tool payloads", () => {
-		expect(DEFAULT_REPLAY_COMPACTION_PROMPT.toLowerCase()).toMatch(
-			/trim|shorten|abbreviate/,
-		);
+	// It used to ask the model to write each call out and trim it itself.
+	// Measured on pandorum with v9-agentic at a 4,096-token cap: 69% of the
+	// replay was tool blocks, 21 of them against 30 real calls, and the prose
+	// was cut off mid-sentence before it reached the end of the work. The
+	// harness already attaches an exact record of every call, so the model was
+	// spending its whole budget producing a worse copy of something it was
+	// being handed.
+	it("asks the model to cite the calls, not write them out", () => {
+		const prompt = DEFAULT_REPLAY_COMPACTION_PROMPT;
+		expect(prompt).toContain("cite the calls instead of writing them out");
+		expect(prompt).toContain("[#3]");
+		expect(prompt).not.toContain("```tool");
 	});
 
 	it("is task-agnostic, like the other prompts", () => {

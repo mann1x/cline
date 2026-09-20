@@ -626,6 +626,107 @@ export function evictToolLedger(
  * long line: a reader scanning for what went wrong should not have to finish
  * every line to find out.
  */
+/** One entry, as it prints in the ledger and inline in a replay. */
+export function renderToolLedgerEntry(entry: ToolLedgerEntry): string {
+	const marks: string[] = [];
+	if (entry.failed) {
+		marks.push("FAILED");
+	}
+	if (entry.repeated > 1) {
+		marks.push(`${entry.repeated}×`);
+	}
+	const mark = marks.length > 0 ? ` [${marks.join(" ")}]` : "";
+	return [
+		`${entry.index}. ${entry.toolName}${mark}  ${entry.input}`,
+		`      → ${entry.result}`,
+	].join("\n");
+}
+
+/**
+ * The numbering key the replay cites against: which call is which, and
+ * nothing else.
+ *
+ * Deliberately without the results. The writer needs to know that call 7 is
+ * the checker run, not what the checker said -- it has the conversation for
+ * that, and the results are the bulk of the ledger. Sending them would also
+ * undo a budget decision made elsewhere: a long tool result is truncated on
+ * its way into the transcript, while the ledger elides the middle and keeps
+ * the tail, so the full ledger hands back a fragment the transcript had
+ * deliberately cut.
+ */
+export function renderToolLedgerKey(
+	entries: readonly ToolLedgerEntry[],
+): string {
+	return entries
+		.map((entry) => `${entry.index}. ${entry.toolName}  ${entry.input}`)
+		.join("\n");
+}
+
+/** A citation the replay carries where a call belongs: `[#7]`. */
+const LEDGER_CITATION = /\[#(\d+)\]/g;
+
+export interface LedgerSpliceResult {
+	text: string;
+	/** Entries the replay placed itself, in the order it placed them. */
+	cited: number[];
+	/** Entries it did not, appended after the prose so nothing is lost. */
+	uncited: number[];
+	/**
+	 * Citations naming a call that does not exist, or naming one twice.
+	 *
+	 * Dropped from the text, counted here. Measured on pandorum: a replay
+	 * citing `[#31]`–`[#33]` against a 30-entry ledger, which is the model
+	 * narrating steps it did not take — the bad number is discarded but the
+	 * invented sentence around it stays, so this is the only signal that the
+	 * prose has run past the record.
+	 */
+	invalid: number[];
+}
+
+/**
+ * Put each call where the replay says it happened.
+ *
+ * The replay narrates the work and the ledger records the calls, in the same
+ * order, so the writer is asked for a citation rather than a transcription:
+ * `[#7]` costs it four tokens where writing the call out cost four hundred.
+ * Measured before this existed, tool transcription took 69% of a small model's
+ * whole output budget and the prose was cut off mid-sentence.
+ *
+ * Every way this can go wrong degrades to what it replaced. A citation naming
+ * an entry that does not exist, or one already used, is dropped; an entry the
+ * replay never cites is appended at the end. The worst case is a ledger block
+ * after the prose, which is where the ledger sat anyway.
+ */
+export function spliceLedgerCitations(
+	replay: string,
+	entries: readonly ToolLedgerEntry[],
+): LedgerSpliceResult {
+	const byIndex = new Map(entries.map((entry) => [entry.index, entry]));
+	const used = new Set<number>();
+	const cited: number[] = [];
+	const invalid: number[] = [];
+	const text = replay.replace(LEDGER_CITATION, (_match, digits: string) => {
+		const index = Number(digits);
+		const entry = byIndex.get(index);
+		if (!entry || used.has(index)) {
+			invalid.push(index);
+			return "";
+		}
+		used.add(index);
+		cited.push(index);
+		return `\n${renderToolLedgerEntry(entry)}\n`;
+	});
+	return {
+		// A dropped citation can leave a doubled blank line behind it.
+		text: text.replace(/\n{3,}/g, "\n\n").trim(),
+		cited,
+		uncited: entries
+			.filter((entry) => !used.has(entry.index))
+			.map((entry) => entry.index),
+		invalid,
+	};
+}
+
 export function renderToolLedger(
 	entries: readonly ToolLedgerEntry[],
 	histories: readonly ToolLedgerFileHistory[] = [],
@@ -633,20 +734,7 @@ export function renderToolLedger(
 	if (entries.length === 0) {
 		return "";
 	}
-	const lines = entries.map((entry) => {
-		const marks: string[] = [];
-		if (entry.failed) {
-			marks.push("FAILED");
-		}
-		if (entry.repeated > 1) {
-			marks.push(`${entry.repeated}×`);
-		}
-		const mark = marks.length > 0 ? ` [${marks.join(" ")}]` : "";
-		return [
-			`${entry.index}. ${entry.toolName}${mark}  ${entry.input}`,
-			`      → ${entry.result}`,
-		].join("\n");
-	});
+	const lines = entries.map(renderToolLedgerEntry);
 	if (histories.length > 0) {
 		lines.push(
 			"",

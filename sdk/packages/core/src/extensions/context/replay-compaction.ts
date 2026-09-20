@@ -60,7 +60,7 @@ export const DEFAULT_REPLAY_COMPACTION_PROMPT = `Your transcript has grown too l
 
 Your replay will be **prepended directly to the messages that remain** — your own most recent turns, which are still there and which you will read immediately after this. Write it so that seam is invisible.
 
-Write in the **first person, present tense**, in your own voice, in the same prose as the turns it sits in front of. You are not reporting on a session to someone else and you are not recounting something finished: you are picking the work back up, and everything in the replay is the situation as it stands right now.
+Write in the **first person, present continuous tense**, in your own voice, in the same prose as the turns it sits in front of. You are not reporting on a session to someone else and you are not recounting something finished: you are picking the work back up, and everything in the replay is the situation as it stands right now.
 
 Write **every step** as the step itself, then what came back. The opening of a
 step is what you are about to do; the outcome is its own short sentence after
@@ -82,14 +82,13 @@ Written in the past tense the replay reads as history, and history is something 
 Carry all of this:
 
 - **What you are asked to do, verbatim.** Quote the instructions you have been given word for word. Everything else here can be rebuilt from the files or from the record below your replay; what was asked exists nowhere else once these messages are gone.
-- **What you have done, in order**, with the tools you called and what they returned. Put each call in a fenced block tagged \`tool\`, with the invocation and its result:
+- **What you have done, in order.** Narrate it, and **cite the calls instead of writing them out.** Every call you made, with its arguments and what it returned, is numbered in the record below. Where a call belongs in your account, put its number in square brackets with a \`#\`, and carry on:
 
-\`\`\`tool
-<tool name> <the arguments that mattered>
-→ <what it returned>
-\`\`\`
+  "Let me run the checker. [#3] It reports a \`SyntaxError\` at line 90."
 
-  **Trim these yourself.** Give the arguments that identify the call and the part of the result you acted on — never a whole file body, never a full command dump. If something was long, say what it was and how big: \`<412 lines>\`. The material is still on disk; repeating it here is the exact weight this replay exists to shed.
+  The harness puts call 3 in at that point, exactly as it happened. Writing the call out yourself instead would spend your budget copying a record that is already exact, and yours would be the less accurate of the two. Cite each call once, in the order you made them. A number you leave out is not lost — it is added at the end — but then it sits away from the step it belongs to.
+
+  **The record is complete and closed.** Every call you have made is in it, and nothing else is. The highest number in it is the last call you made, so there is no \`[#N]\` past the end to cite — if you find yourself reaching for one, the step you are about to describe is a step you have not taken yet, and it does not belong in an account of what you have done. Cite only a number that is actually in the record, and leave a step with no call behind it uncited rather than attaching it to a number that names someone else's work.
 - **What is coming back wrong**, and what you are doing about it. A call that was refused or returned an error is the most important kind to keep — without it you will simply make it again.
 - **What you have concluded**, including anything you have ruled out and why. An approach that failed, omitted here, is an approach you will try again.
 - **Where you are now**, and what you are about to do next.
@@ -97,6 +96,21 @@ Carry all of this:
 Do not invent anything you are not sure of. In particular, do not report a result you cannot see: a call whose output is not in front of you is a call whose outcome you do not know, and writing that it succeeded is the one error here that the next turn cannot recover from.
 
 Do not write instructions to yourself to rewrite or restore content that this replay does not itself contain — you would be reconstructing from memory something that is still on disk, and producing a worse version of it.
+
+## Mark the halfway point
+
+Exactly once, put a line containing \`<<<HALFWAY>>>\` and nothing else, at the
+point where you are about half way through the work you are describing.
+
+Measure the half by the **work**, not by the words: the marker goes where the
+first half of what happened ends and the second half begins. It must sit on a
+boundary between steps — after one step and its outcome are complete, never
+inside a step, never between a call and what it returned, and never inside a
+fenced block.
+
+Nothing else about the replay changes. It is one continuous piece of prose that
+happens to carry a marker; do not write headings for the halves, do not
+summarise each half, and do not refer to the marker in the text.
 
 Write the replay and stop. Do not continue the transcript that follows these instructions, and do not copy any part of it back: it is what you are replacing.`;
 

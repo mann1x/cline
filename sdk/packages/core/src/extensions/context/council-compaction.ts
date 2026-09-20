@@ -36,16 +36,107 @@
  */
 
 import type { BasicLogger, MessageWithMetadata } from "@cline/shared";
-import type { EstimateMessageTokens } from "./compaction-shared";
 import { serializeConversation } from "./compaction-shared";
 
 /** What a reviewer and the synthesiser are told they are. */
 export const COUNCIL_SYSTEM_PROMPTS = {
 	critic:
-		"You are checking an account of your own work against the record of it. You are not rewriting it and you are not improving its prose: you are correcting it where the record shows it to be wrong, incomplete or misquoted, and leaving it alone everywhere else.",
+		"You are rewriting one half of an account of your own work, with the record of that work in front of you. Correct what the record contradicts, add what it shows missing, fix every quotation against it, and improve the prose where it has drifted out of voice. You return your half and only your half: another writer is rewriting the other one, and the two will be joined into a single continuous replay.",
 	synthesizer:
-		"You are merging two independent corrections of the same text into one. Both reviewers were correcting the same original and neither saw the other's work or the other's evidence. Your answer is the whole merged text, not an account of how you merged it.",
+		"You are joining two independently rewritten halves of one replay into a single continuous piece, and revising a retrospective against the result. Each half was rewritten by someone holding the whole record but owning only that half, so both are grounded — and both could be wrong about the other's territory. Your answer is the finished text, not an account of how you produced it.",
 } as const;
+
+/** The line the replay carries to say where its first half ends. */
+export const COUNCIL_HALF_MARKER = "<<<HALFWAY>>>";
+
+const HALF_MARKER_LINE = /^[ \t]*<<<\s*HALFWAY\s*>>>[ \t]*$/m;
+
+/**
+ * How far from the middle the model's own marker may land and still be used.
+ *
+ * The writer places the marker because only it knows where one stretch of work
+ * ends -- but "about half way" is a judgement a small model makes badly, and
+ * measured on pandorum it put the marker at 19%, leaving one writer 919
+ * characters and the other 3,939. The oversized half came back byte-identical:
+ * the writer handed four times the work did none of it.
+ *
+ * So the marker is respected inside a band and rebalanced outside it. The band
+ * is wide, because a genuine boundary rarely falls exactly at the midpoint and
+ * moving it costs the semantic split that made the marker worth asking for.
+ */
+const HALF_MARKER_BAND = 0.3;
+
+/**
+ * The replay in two pieces.
+ *
+ * Prefers the marker the writer placed, because a boundary between two
+ * stretches of work is a thing only the writer knows. Falls back to the
+ * nearest blank line to the midpoint when the marker is missing or lands far
+ * enough off-centre that one writer would get most of the replay -- a
+ * paragraph break is not a semantic boundary, but it is a boundary, and a
+ * balanced split at a slightly wrong place beats a correct one that nobody
+ * works on.
+ */
+export function splitReplayAtMarker(
+	replay: string,
+):
+	| { first: string; second: string; source: "marker" | "rebalanced" }
+	| undefined {
+	const body = replay.trim();
+	if (!body) {
+		return undefined;
+	}
+	const match = HALF_MARKER_LINE.exec(body);
+	if (match) {
+		const first = body.slice(0, match.index).trim();
+		const second = body.slice(match.index + match[0].length).trim();
+		const total = first.length + second.length;
+		if (first && second && total > 0) {
+			const share = first.length / total;
+			if (share >= HALF_MARKER_BAND && share <= 1 - HALF_MARKER_BAND) {
+				return { first, second, source: "marker" };
+			}
+		}
+	}
+	return rebalance(stripHalfMarker(body));
+}
+
+/** Split at the blank line nearest the middle; then any line; else give up. */
+function rebalance(
+	body: string,
+): { first: string; second: string; source: "rebalanced" } | undefined {
+	const midpoint = body.length / 2;
+	const boundaries: number[] = [];
+	for (const pattern of [/\n[ \t]*\n/g, /\n/g]) {
+		pattern.lastIndex = 0;
+		for (let m = pattern.exec(body); m; m = pattern.exec(body)) {
+			boundaries.push(m.index + m[0].length);
+		}
+		if (boundaries.length > 0) {
+			break;
+		}
+	}
+	if (boundaries.length === 0) {
+		return undefined;
+	}
+	let best = boundaries[0];
+	for (const at of boundaries) {
+		if (Math.abs(at - midpoint) < Math.abs(best - midpoint)) {
+			best = at;
+		}
+	}
+	const first = body.slice(0, best).trim();
+	const second = body.slice(best).trim();
+	if (!first || !second) {
+		return undefined;
+	}
+	return { first, second, source: "rebalanced" };
+}
+
+/** Strip any marker the model left behind, so it never reaches the context. */
+export function stripHalfMarker(text: string): string {
+	return text.replace(new RegExp(HALF_MARKER_LINE.source, "gm"), "").trim();
+}
 
 /** Which half of the transcript a reviewer was given. */
 export type CouncilHalf = "first" | "second";
@@ -67,135 +158,163 @@ export interface CouncilSections {
  */
 export function buildCouncilCriticRequest(input: {
 	half: CouncilHalf;
-	summary: string;
-	thinkingSummary?: string;
+	/** The half this writer owns and returns. */
+	ownReplay: string;
+	/** The other half, for grounding only. */
+	otherReplay: string;
 	transcript: string;
+	/**
+	 * The numbered record the replay's `[#N]` citations point at.
+	 *
+	 * Without it the citations are unexplained punctuation. Measured on
+	 * pandorum with thinking on, the writer wrote its own reading into its
+	 * task list -- "write every step as `Step [number]. Outcome.`" -- and
+	 * restructured its half around a step numbering that does not exist,
+	 * returning 30% of what it was given.
+	 */
+	toolLedgerKey?: string;
 }): string {
 	const other = input.half === "first" ? "second" : "first";
-	const parts = [
-		`You wrote the replay below, and the retrospective beside it, from a transcript that is about to be discarded. Here is the **${input.half} half** of that transcript. The ${other} half is not shown to you and you will never see it.`,
+	const target = input.ownReplay.length;
+	return [
+		`You wrote the replay below from the transcript that follows it. The replay has been cut in two and you own the **${input.half} half**. Someone else is rewriting the ${other} half from the same transcript, at the same time, and the two halves will be joined back into one continuous replay.`,
 		"",
-		`Everything the replay says about the ${other} half is outside what you can check. It is not unsupported — it is supported by evidence you were not given. **Leave it exactly as it stands.** Do not delete it, do not soften it, do not mark it as unverified, do not mention it. A reviewer who removes what it cannot see turns a review into a deletion, and the half it could not see is the half nobody else will check either.`,
+		`So: **return the ${input.half} half only.** Do not return the ${other} half, do not restate it, do not summarise it, do not lead into it or round it off. It is shown to you for one reason only — so you can check your own half against it and see where your half ends. Anything of it you reproduce will appear twice in the joined replay, once from you and once from the writer who owns it.`,
 		"",
-		`What you are looking for, in your half and nowhere else:`,
+		"**The user's own words stay.** If your half quotes what the user asked for, that quotation is the most load-bearing text in it — it is the only place the instruction survives at all once the transcript is gone. Keep it word for word. Do not paraphrase it, do not shorten it, and never drop it to make room.",
 		"",
-		"- **Something that happened and is missing.** A call that was made, an answer that came back, an instruction that was given, a conclusion that was reached, an approach that was ruled out. Add it, in the voice the replay is written in.",
-		"- **Something the replay states that your half contradicts.** A call reported as succeeding that returned an error; a file said to have been read that was refused; a count, a line number or a filename that does not match. Correct it to what the transcript shows.",
-		"- **Something quoted that does not match.** The user's own words, error text, identifiers, paths and numbers have to be character for character what the transcript holds. Fix them against it.",
+		"**You are revising a draft, not writing one.** Start from the text below and change what is wrong with it. Do not re-derive your half from the transcript and write it out afresh: a step that is already right is already done, and rewriting it from scratch is how a correct sentence becomes a different, shorter, wronger one.",
 		"",
-		"Then the retrospective, which is a judgement about how the work went rather than a record of what happened. Correct it only where your half shows the judgement itself to be wrong — an approach it calls wasteful that your half shows paying off, a failure mode it names that your half does not contain, a cost it misses that your half makes obvious. Its rules still hold: no file names, no identifiers, no narration of events, and terse.",
+		"**About the `[#7]` marks.** Those are citations, not step numbers and not part of the prose. Each one names a call in the numbered record, and the harness replaces it with that call before anyone reads this. So:",
 		"",
-		"Keep the replay in the first person and the present tense, every step written as the step and its outcome as its own sentence after it. If you find a step written as a report of itself, that is one of the things to correct.",
+		'- **Keep every citation your half already has, exactly as it is, where it is.** Do not renumber them, do not turn them into a numbered list, do not write them out as "Step 7".',
+		"- **Only cite a number that appears in the record.** If your half describes something with no call behind it, leave it uncited — inventing a number attaches your sentence to somebody else's call, or to nothing.",
+		"- If the transcript shows a call your half never mentions, add the step and cite its number from the record.",
 		"",
-		"Answer with exactly these two sections and nothing before, between or after them. Give the **whole** text of each, corrected — not a list of your changes, and not only the parts you touched:",
+		"What to change in your half:",
 		"",
-		"## Replay",
+		"- **Something that happened and is missing.** A call that was made, an answer that came back, an instruction that was given, a conclusion that was reached, an approach that was ruled out. Add it.",
+		"- **Something the transcript contradicts.** A call reported as succeeding that returned an error; a file said to have been read that was refused; a count, a line number or a filename that does not match. Correct it to what the transcript shows.",
+		"- **Something quoted that does not match.** The user's own words, error text, identifiers, paths and numbers have to be character for character what the transcript holds.",
+		`- **Something the ${other} half contradicts.** Ground your half against it: the two are one account of one session, and a fact stated one way in your half and another way there is a fact to settle from the transcript.`,
+		"- **Prose that has drifted.** Fix it. If a step is written as a report of itself — past tense, or narrated as something finished — rewrite it as the step and its outcome. First person, present continuous, the voice of someone picking the work back up rather than recounting it.",
 		"",
-		"## Retrospective",
+		`Write every step as the step itself, then what came back as its own short sentence after it. This holds in the middle of your half and not only at its ends.`,
 		"",
-		"---",
+		`**Length.** Your half is ${target} characters. Return something close to that — within about 10% either way. You are correcting and rewriting it, not condensing it: material you drop is material nothing else will carry, because the transcript it came from is being deleted.`,
 		"",
-		"The replay, as written:",
-		"",
-		input.summary,
-	];
-	if (input.thinkingSummary?.trim()) {
-		parts.push(
-			"",
-			"---",
-			"",
-			"The retrospective, as written:",
-			"",
-			input.thinkingSummary.trim(),
-		);
-	}
-	parts.push(
+		`Answer with the ${input.half} half of the replay and nothing else. No heading, no preamble, no note about what you changed, no marker line. Just the prose.`,
 		"",
 		"---",
 		"",
-		`The ${input.half} half of the transcript:`,
+		`The ${input.half} half of the replay — this is yours, rewrite it:`,
+		"",
+		input.ownReplay,
+		"",
+		"---",
+		"",
+		`The ${other} half of the replay — reference only, someone else owns it, do not return it:`,
+		"",
+		input.otherReplay || "(empty)",
+		"",
+		"---",
+		"",
+		...(input.toolLedgerKey?.trim()
+			? [
+					"The numbered record the citations point at:",
+					"",
+					input.toolLedgerKey.trim(),
+					"",
+					"---",
+					"",
+				]
+			: []),
+		"The transcript both halves were written from:",
 		"",
 		input.transcript || "(empty)",
-	);
-	return parts.join("\n");
+	].join("\n");
 }
 
 /**
  * The synthesiser's instruction.
  *
- * It is given the original as well as both corrections, because the diff is
- * the signal: a passage two reviewers left alone is a passage neither could
- * fault, and a passage one of them changed was changed by the only one holding
- * the evidence for it.
+ * It sees each half's original beside that half's rewrite, rather than the
+ * whole original in one piece: the halves are what the two writers actually
+ * worked on, so pairing them is what makes a change visible. It is also the
+ * only role that touches the retrospective, which is deliberate -- a
+ * retrospective is a judgement about how the work went, and a reviewer holding
+ * one half of the evidence is the worst possible judge of it. By the time this
+ * runs the merged replay exists, which is the thing the judgement is about.
  */
 export function buildCouncilSynthesizerRequest(input: {
-	summary: string;
+	firstOriginal: string;
+	secondOriginal: string;
+	firstRewritten: string;
+	secondRewritten: string;
 	thinkingSummary?: string;
-	first: CouncilSections;
-	second: CouncilSections;
+	/** What the whole replay was before either half was rewritten. */
+	originalLength: number;
 }): string {
+	const budget = Math.round(input.originalLength * 1.1);
 	const parts = [
-		"Two reviewers have corrected the same replay. Each was given one half of the transcript it was written from — the first reviewer the first half, the second the second half — and neither saw the other's half or the other's corrections. Merge their work into one replay and one retrospective.",
+		"A replay of your recent work was cut in half, and each half was rewritten against the full transcript by a different writer. Join them back into one continuous replay.",
 		"",
-		"How to decide, passage by passage:",
+		"Both writers had the whole transcript, so both halves are grounded in the record — but each owned only its own half, and either could be wrong about the seam between them or about a fact the other half settles differently. Cross-check the two against each other: where they disagree about the same fact, keep the version that quotes the transcript over the version that describes it; where one states something the other contradicts, keep the one that is specific.",
 		"",
-		"- **Both left it alone** — keep it as it is.",
-		"- **One changed it and the other did not** — take the change. The reviewer who changed it is the one who was holding the evidence for that passage; the other was not saying it is right, only that it was not theirs to check.",
-		"- **Both changed it, compatibly** — keep both facts.",
-		"- **Both changed it, incompatibly** — prefer the version that quotes the transcript over the version that describes it.",
+		"What you are producing is one piece of prose, not two halves stacked up. Make the seam invisible: no heading between them, no marker line, no sentence that restarts or recaps. If the two writers both wrote the same step — once at the end of the first half and once at the start of the second — keep it once.",
 		"",
-		"Do not shorten, summarise or tidy. Both reviewers were asked for the whole text and you are merging two whole texts into a third; a merge that comes out shorter than either input has dropped something. Keep the replay in the first person and the present tense.",
+		"Keep it in the first person and the present continuous tense, every step written as the step and its outcome after it.",
 		"",
-		"Answer with exactly these two sections and nothing else:",
+		`**Length.** The replay was ${input.originalLength} characters before it was rewritten. Aim at that. You may go up to ${budget} — about 10% more — and you should use that allowance only where it takes the extra room to keep something that would otherwise be lost. Do not use it to be more thorough for its own sake, and do not come in far under: material dropped here is material nothing else carries.`,
 		"",
-		"## Replay",
-		"",
-		"## Retrospective",
-		"",
-		"---",
-		"",
-		"The original replay:",
-		"",
-		input.summary,
 	];
 	if (input.thinkingSummary?.trim()) {
 		parts.push(
+			"Then the retrospective, which is a judgement about how the work went rather than a record of what happened. You are the first to see the finished replay, so you are the first who can judge it properly. Revise the retrospective against the replay you have just joined: drop a judgement the replay does not bear out, add one it makes obvious, sharpen one that is vague. Its rules hold — no file names, no identifiers, no narration of events, and terse. If it is already right, return it unchanged.",
 			"",
-			"The original retrospective:",
+			"Answer with exactly these two sections and nothing before, between or after them:",
+			"",
+			"## Replay",
+			"",
+			"## Retrospective",
+		);
+	} else {
+		parts.push(
+			"Answer with exactly this section and nothing before or after it:",
+			"",
+			"## Replay",
+		);
+	}
+	parts.push(
+		"",
+		"---",
+		"",
+		"**First half — as originally written:**",
+		"",
+		input.firstOriginal,
+		"",
+		"**First half — as rewritten:**",
+		"",
+		input.firstRewritten,
+		"",
+		"---",
+		"",
+		"**Second half — as originally written:**",
+		"",
+		input.secondOriginal,
+		"",
+		"**Second half — as rewritten:**",
+		"",
+		input.secondRewritten,
+	);
+	if (input.thinkingSummary?.trim()) {
+		parts.push(
+			"",
+			"---",
+			"",
+			"**The retrospective, as written:**",
 			"",
 			input.thinkingSummary.trim(),
-		);
-	}
-	parts.push(
-		"",
-		"---",
-		"",
-		"The first reviewer's corrected replay:",
-		"",
-		input.first.replay ?? "(unchanged)",
-	);
-	if (input.first.retrospective) {
-		parts.push(
-			"",
-			"The first reviewer's corrected retrospective:",
-			"",
-			input.first.retrospective,
-		);
-	}
-	parts.push(
-		"",
-		"---",
-		"",
-		"The second reviewer's corrected replay:",
-		"",
-		input.second.replay ?? "(unchanged)",
-	);
-	if (input.second.retrospective) {
-		parts.push(
-			"",
-			"The second reviewer's corrected retrospective:",
-			"",
-			input.second.retrospective,
 		);
 	}
 	return parts.join("\n");
@@ -235,79 +354,61 @@ export function parseCouncilSections(text: string): CouncilSections {
 }
 
 /**
- * Where to cut the transcript in two.
+ * How much of each intermediate text reaches the log.
  *
- * By measured tokens rather than by message count, because a transcript is
- * never evenly weighted -- one tool result can outweigh twenty turns -- and
- * the point of the split is that each reviewer gets an amount it can actually
- * read.
- *
- * The cut never lands between a tool call and its result. A reviewer handed a
- * call whose answer is in the other half would read it as a call that never
- * came back, which is the single most misleading thing a transcript can say.
+ * The host's logger writes the message string and drops the metadata object,
+ * so anything that needs to be readable after the fact has to be inside the
+ * sentence. That makes an unbounded excerpt a real hazard here -- a debug
+ * default that logged every token once filled 260,774 of 261,885 lines and
+ * took the host down with it -- so each stage gets a fixed, small budget.
  */
-export function splitForCouncil(
-	messages: readonly MessageWithMetadata[],
-	estimateMessageTokens: EstimateMessageTokens,
-): { first: MessageWithMetadata[]; second: MessageWithMetadata[] } {
-	if (messages.length < 2) {
-		return { first: [...messages], second: [] };
-	}
-	const weights = messages.map((message) => estimateMessageTokens(message));
-	const total = weights.reduce((sum, weight) => sum + weight, 0);
-	let running = 0;
-	let cut = 1;
-	for (let index = 0; index < messages.length; index += 1) {
-		running += weights[index];
-		if (running * 2 >= total) {
-			cut = index + 1;
-			break;
-		}
-	}
-	cut = Math.min(Math.max(1, cut), messages.length - 1);
-	// Walk forward past an open tool call rather than back, so the pair stays
-	// with the half that issued it.
-	//
-	// Bounded so the second half always keeps a message. A span ending on a
-	// call that never came back -- an aborted turn, a provider that dropped the
-	// result -- has an open call at every cut, and an unbounded walk would hand
-	// the whole transcript to one reviewer and silently leave the other with
-	// nothing to review. Splitting that one pair is the lesser cost: the
-	// reviewer prompt already tells each half not to touch what it cannot see.
-	while (cut < messages.length - 1 && hasUnansweredToolCall(messages, cut)) {
-		cut += 1;
-	}
-	return {
-		first: messages.slice(0, cut),
-		second: messages.slice(cut),
-	};
-}
+const COUNCIL_LOG_EXCERPT_CHARS = 1_500;
 
-function hasUnansweredToolCall(
-	messages: readonly MessageWithMetadata[],
-	cut: number,
-): boolean {
-	const called = new Set<string>();
-	const answered = new Set<string>();
-	for (let index = 0; index < cut; index += 1) {
-		const content = messages[index]?.content;
-		if (!Array.isArray(content)) {
-			continue;
-		}
-		for (const block of content) {
-			if (block.type === "tool_use") {
-				called.add(block.id);
-			} else if (block.type === "tool_result") {
-				answered.add(block.tool_use_id);
-			}
-		}
+/**
+ * How much of the original a merge must still be to be accepted.
+ *
+ * The council's one real danger is truncation, and it is written into the
+ * shape: each reviewer sees half the evidence and all of the claim, so
+ * everything the replay says about the other half looks unsupported to it. The
+ * prompts spend most of their words telling reviewers not to delete that, and
+ * the synthesiser is told outright that "a merge that comes out shorter than
+ * either input has dropped something" -- but an instruction is not a guard,
+ * and a summary is the one artifact with nothing downstream to catch it.
+ *
+ * So the ratio is checked rather than asked for. A merge that comes back at a
+ * fraction of the original is not a correction, whatever it says about itself,
+ * and the unreviewed original is strictly better than a confident excerpt of
+ * it. Deliberately loose: a real merge rewrites sentences and drops
+ * duplication, and only a collapse should trip this.
+ */
+const COUNCIL_MIN_MERGE_RATIO = 0.5;
+
+/**
+ * Head, middle and tail rather than the opening.
+ *
+ * The question these excerpts exist to answer is whether the replay holds its
+ * voice all the way through, and the prompt says as much in as many words:
+ * the rule "holds for the middle of the replay and not only its first and last
+ * sentences". An excerpt that only ever showed the opening could not tell a
+ * replay that drifts from one that does not.
+ */
+export function logExcerpt(
+	text: string,
+	limit = COUNCIL_LOG_EXCERPT_CHARS,
+): string {
+	const flat = text.replace(/\s+/g, " ").trim();
+	if (flat.length <= limit) {
+		return flat;
 	}
-	for (const id of called) {
-		if (!answered.has(id)) {
-			return true;
-		}
-	}
-	return false;
+	const slice = Math.floor(limit / 3);
+	const middleStart = Math.floor(flat.length / 2 - slice / 2);
+	return [
+		flat.slice(0, slice),
+		` …${middleStart - slice} chars… `,
+		flat.slice(middleStart, middleStart + slice),
+		` …${flat.length - middleStart - slice - slice} chars… `,
+		flat.slice(-slice),
+	].join("");
 }
 
 export interface CouncilReviewResult {
@@ -326,7 +427,6 @@ export async function runCouncilReview(input: {
 	summary: string;
 	thinkingSummary?: string;
 	messages: readonly MessageWithMetadata[];
-	estimateMessageTokens: EstimateMessageTokens;
 	/** One model call. Throwing is allowed and is handled as a decline. */
 	generate: (call: {
 		systemPrompt: string;
@@ -339,6 +439,12 @@ export async function runCouncilReview(input: {
 	 * abandon the council.
 	 */
 	maxRequestChars?: number;
+	/**
+	 * The numbered record the replay's `[#N]` citations point at, passed
+	 * through to both writers so the citations are not unexplained
+	 * punctuation they have to guess a meaning for.
+	 */
+	toolLedgerKey?: string;
 	logger?: BasicLogger;
 }): Promise<CouncilReviewResult> {
 	const unchanged: CouncilReviewResult = {
@@ -350,35 +456,62 @@ export async function runCouncilReview(input: {
 	if (!input.summary.trim()) {
 		return unchanged;
 	}
-	const { first, second } = splitForCouncil(
-		input.messages,
-		input.estimateMessageTokens,
+	// The replay says where its own halves meet. Only the writer that produced
+	// it can place that boundary: it knows where one stretch of work ends, and
+	// the harness would have to guess from prose. No marker means the replay
+	// was written by something that did not follow the instruction, and a
+	// guessed split would hand each writer a fragment starting mid-sentence.
+	const halves = splitReplayAtMarker(input.summary);
+	if (!halves) {
+		// One unbroken block of prose with nowhere to cut. Nothing to review
+		// half of, and nothing worth three model calls.
+		input.logger?.log(
+			"The compaction replay could not be split in two; skipping the council",
+			{ severity: "warn", summaryChars: input.summary.length },
+		);
+		return { ...unchanged, summary: stripHalfMarker(input.summary) };
+	}
+	if (halves.source === "rebalanced") {
+		input.logger?.log(
+			"The compaction replay's halfway marker was missing or off-centre; split at the nearest paragraph instead",
+			{
+				severity: "warn",
+				firstChars: halves.first.length,
+				secondChars: halves.second.length,
+			},
+		);
+	}
+	const transcript = serializeConversation([...input.messages]);
+	const originalLength = halves.first.length + halves.second.length;
+
+	input.logger?.debug(
+		`[council] original replay (${input.summary.length} chars, halves ${halves.first.length}/${halves.second.length} by ${halves.source}): ${logExcerpt(input.summary)}`,
 	);
-	if (first.length === 0 || second.length === 0) {
-		// One half means one reviewer looking at everything the writer already
-		// looked at, for the price of a request.
-		input.logger?.debug("Skipped the compaction council: nothing to split", {
-			messages: input.messages.length,
-		});
-		return unchanged;
+	if (input.thinkingSummary?.trim()) {
+		input.logger?.debug(
+			`[council] original retrospective (${input.thinkingSummary.length} chars): ${logExcerpt(input.thinkingSummary, 600)}`,
+		);
 	}
 
-	const review = async (
-		half: CouncilHalf,
-		messages: MessageWithMetadata[],
-	): Promise<CouncilSections> => {
+	// Both writers see the whole transcript. The halving is of the *replay*,
+	// not of the evidence: a writer that owns the first half still needs the
+	// second half's record to know that a call it describes was later refused.
+	const rewrite = async (half: CouncilHalf): Promise<string | undefined> => {
+		const ownReplay = half === "first" ? halves.first : halves.second;
+		const otherReplay = half === "first" ? halves.second : halves.first;
 		const request = buildCouncilCriticRequest({
 			half,
-			summary: input.summary,
-			thinkingSummary: input.thinkingSummary,
-			transcript: serializeConversation(messages),
+			ownReplay,
+			otherReplay,
+			transcript,
+			toolLedgerKey: input.toolLedgerKey,
 		});
 		if (
 			typeof input.maxRequestChars === "number" &&
 			request.length > input.maxRequestChars
 		) {
 			input.logger?.log(
-				"A compaction reviewer's half does not fit; skipping it",
+				"A compaction reviewer's request does not fit; keeping that half as written",
 				{
 					severity: "warn",
 					half,
@@ -386,62 +519,122 @@ export async function runCouncilReview(input: {
 					maxRequestChars: input.maxRequestChars,
 				},
 			);
-			return {};
+			return undefined;
 		}
 		try {
 			const text = await input.generate({
 				systemPrompt: COUNCIL_SYSTEM_PROMPTS.critic,
 				request,
 			});
-			return parseCouncilSections(text);
+			// A writer that returned both halves anyway gets spliced back to
+			// its own: the other half is about to arrive from the writer that
+			// owns it, and keeping both would say every step twice.
+			//
+			// Only a marker proves it returned both. `splitReplayAtMarker`
+			// falls back to `rebalance` when there is none, which is right for
+			// phase 0 -- whose output *is* the whole replay -- and ruinous
+			// here: a writer that correctly returned its own half and nothing
+			// else has that half halved again and half of it dropped. That is
+			// what every "the writer deleted instead of revising" measurement
+			// turned out to be; the model was doing the job and the splice was
+			// eating the answer.
+			const emitted = splitReplayAtMarker(text);
+			const kept = stripHalfMarker(
+				emitted && emitted.source === "marker"
+					? half === "first"
+						? emitted.first
+						: emitted.second
+					: text,
+			);
+			if (!kept) {
+				input.logger?.debug(
+					`[council] ${half}-half writer returned nothing usable (raw=${text.length})`,
+				);
+				return undefined;
+			}
+			input.logger?.debug(
+				`[council] ${half}-half rewritten (${kept.length} chars, was ${ownReplay.length}): ${logExcerpt(kept)}`,
+			);
+			return kept;
 		} catch (error) {
-			input.logger?.log("A compaction reviewer failed; ignoring it", {
+			input.logger?.log("A compaction reviewer failed; keeping that half", {
 				severity: "warn",
 				half,
 				errorMessage: error instanceof Error ? error.message : String(error),
 			});
-			return {};
+			return undefined;
 		}
 	};
 
-	// Both reviewers correct the original, so neither inherits the other's
-	// reading. In parallel because they do not depend on each other and a
-	// council that costs two round trips in series is a council nobody leaves
-	// switched on.
-	const [firstSections, secondSections] = await Promise.all([
-		review("first", first),
-		review("second", second),
+	const [firstRewritten, secondRewritten] = await Promise.all([
+		rewrite("first"),
+		rewrite("second"),
 	]);
-	const reviewers =
-		(firstSections.replay ? 1 : 0) + (secondSections.replay ? 1 : 0);
+	const reviewers = (firstRewritten ? 1 : 0) + (secondRewritten ? 1 : 0);
 	if (reviewers === 0) {
-		input.logger?.log("No compaction reviewer returned a usable answer", {
+		input.logger?.log("No compaction reviewer returned a usable half", {
 			severity: "warn",
 		});
-		return unchanged;
+		return { ...unchanged, summary: stripHalfMarker(input.summary) };
 	}
 
 	try {
-		const merged = parseCouncilSections(
-			await input.generate({
-				systemPrompt: COUNCIL_SYSTEM_PROMPTS.synthesizer,
-				request: buildCouncilSynthesizerRequest({
-					summary: input.summary,
-					thinkingSummary: input.thinkingSummary,
-					first: firstSections,
-					second: secondSections,
-				}),
+		const mergedText = await input.generate({
+			systemPrompt: COUNCIL_SYSTEM_PROMPTS.synthesizer,
+			request: buildCouncilSynthesizerRequest({
+				firstOriginal: halves.first,
+				secondOriginal: halves.second,
+				firstRewritten: firstRewritten ?? halves.first,
+				secondRewritten: secondRewritten ?? halves.second,
+				thinkingSummary: input.thinkingSummary,
+				originalLength,
 			}),
+		});
+		const merged = parseCouncilSections(mergedText);
+		// With no retrospective the synthesiser is asked for one section, and a
+		// model given one section often writes it without the heading.
+		const mergedReplay = stripHalfMarker(
+			merged.replay?.trim() || (input.thinkingSummary ? "" : mergedText),
 		);
-		if (!merged.replay?.trim()) {
+		if (mergedReplay) {
+			input.logger?.debug(
+				`[council] merged replay (${mergedReplay.length} chars, original ${originalLength}): ${logExcerpt(mergedReplay)}`,
+			);
+		}
+		if (merged.retrospective?.trim()) {
+			input.logger?.debug(
+				`[council] merged retrospective (${merged.retrospective.trim().length} chars): ${logExcerpt(merged.retrospective, 600)}`,
+			);
+		}
+		if (!mergedReplay) {
 			input.logger?.log(
 				"The compaction synthesiser returned no replay; keeping the original",
 				{ severity: "warn", reviewers },
 			);
-			return { ...unchanged, reviewers };
+			return {
+				...unchanged,
+				summary: stripHalfMarker(input.summary),
+				reviewers,
+			};
+		}
+		if (mergedReplay.length < originalLength * COUNCIL_MIN_MERGE_RATIO) {
+			input.logger?.log(
+				"The compaction council returned a merge far shorter than the original; keeping the original",
+				{
+					severity: "warn",
+					reviewers,
+					mergedChars: mergedReplay.length,
+					originalChars: originalLength,
+				},
+			);
+			return {
+				...unchanged,
+				summary: stripHalfMarker(input.summary),
+				reviewers,
+			};
 		}
 		return {
-			summary: merged.replay.trim(),
+			summary: mergedReplay,
 			thinkingSummary: merged.retrospective?.trim() || input.thinkingSummary,
 			reviewers,
 			merged: true,
@@ -455,6 +648,6 @@ export async function runCouncilReview(input: {
 				errorMessage: error instanceof Error ? error.message : String(error),
 			},
 		);
-		return { ...unchanged, reviewers };
+		return { ...unchanged, summary: stripHalfMarker(input.summary), reviewers };
 	}
 }

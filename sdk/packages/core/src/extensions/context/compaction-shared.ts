@@ -1988,12 +1988,64 @@ export function buildSummaryRequest(options: {
 	fileOps: FileOperationSummary;
 	/** Overrides {@link DEFAULT_COMPACTION_PROMPT}; blank falls back to it. */
 	promptTemplate?: string;
+	/**
+	 * What the user typed, quoted by the harness.
+	 *
+	 * The prompt asks the summary to open with what was asked, verbatim, and
+	 * the transcript below does not always contain it: a prompt the cut pinned
+	 * survives outside the span being summarized, so on the one-prompt-then-a-
+	 * long-loop shape the summarizer was asked to quote an instruction it had
+	 * never been shown. It did the honest thing and wrote that the
+	 * instructions were missing from its view, into the summary, where the
+	 * next turn reads it first.
+	 */
+	userRequests?: readonly string[];
+	/**
+	 * What the quoted block may spend of the summarizer's own input.
+	 *
+	 * Sized by the caller against the summarizer's limit rather than left at
+	 * the default: on a small model the unbounded block is a large share of
+	 * the whole request, and it pushed the summary over its output budget and
+	 * into a retry -- paying a second model call to quote an instruction more
+	 * fully than the model had room to read.
+	 */
+	userRequestBudgetChars?: number;
+	/**
+	 * The numbered record of the calls, for the replay to cite.
+	 *
+	 * Supplied so citing a number is a lookup rather than a memory feat: the
+	 * writer is asked to put `[#7]` where a call belongs, and it can only do
+	 * that if it can see which call is 7.
+	 */
+	toolLedger?: string;
 }): string {
 	const template = options.promptTemplate?.trim() || DEFAULT_COMPACTION_PROMPT;
 	const parts: string[] = [renderCompactionPrompt(template, options.fileOps)];
 
 	if (options.previousSummary?.trim()) {
 		parts.push(`Previous summary:\n${options.previousSummary.trim()}`);
+	}
+
+	const quoted = renderUserRequests(
+		options.userRequests ?? [],
+		options.userRequestBudgetChars,
+	);
+	if (quoted.length > 0) {
+		parts.push(
+			[
+				"What the user asked, in their own words. The harness quoted these; they are not always present in the transcript below, and they are what you must reproduce verbatim rather than describe:",
+				"",
+				...quoted.map(
+					(request) => `<user_request>\n${request}\n</user_request>`,
+				),
+			].join("\n"),
+		);
+	}
+
+	if (options.toolLedger?.trim()) {
+		parts.push(
+			`The calls you made, numbered. Cite these as \`[#N]\` in your replay rather than writing them out:\n${options.toolLedger.trim()}`,
+		);
 	}
 
 	parts.push(`Conversation:\n${options.conversationText || "(empty)"}`);

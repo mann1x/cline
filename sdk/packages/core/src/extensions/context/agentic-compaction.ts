@@ -34,7 +34,7 @@ import {
 	serializeConversation,
 	serializeReasoningWithOutcomes,
 } from "./compaction-shared";
-import { runCouncilReview } from "./council-compaction";
+import { logExcerpt, runCouncilReview } from "./council-compaction";
 import { cutEchoedTranscript, trimReplayOverflow } from "./replay-compaction";
 import {
 	buildToolLedger,
@@ -43,6 +43,8 @@ import {
 	mergeToolLedger,
 	type RevisionSpanLookup,
 	renderToolLedger,
+	renderToolLedgerKey,
+	spliceLedgerCitations,
 } from "./tool-ledger";
 
 /**
@@ -110,7 +112,7 @@ interface SummaryGenerationResult {
  * surviving fact. Telling a model to write a hand-over note and then handing it
  * the replay prompt reproduces the seam the replay prompt exists to remove.
  */
-const SUMMARIZER_SYSTEM_PROMPTS = {
+export const SUMMARIZER_SYSTEM_PROMPTS = {
 	tail: "You are re-telling your own recent work in your own voice, because the earlier part of your transcript is about to be discarded and what you write takes its place directly in front of the turns that remain. Match the prose of those turns. Keep every specific — names, paths, quoted wording, errors, numbers — that you would otherwise have to rediscover.",
 	full: "You write the state record for a working session of any kind. The transcript you are given is about to be discarded, so what you write is the only record that remains. Follow the requested structure exactly, section for section, and keep every specific — names, paths, quoted wording, errors, numbers — that whoever continues would otherwise have to rediscover.",
 	// The retrospective ran under the hand-over wording too, and it is the one
@@ -330,6 +332,9 @@ async function generateThinkingSummary(options: {
 		if (!trimmed) {
 			return undefined;
 		}
+		options.logger?.debug(
+			`[compaction] retrospective (${trimmed.length} chars): ${logExcerpt(trimmed, 600)}`,
+		);
 		options.logger?.debug("Generated thinking compaction", {
 			reasoningInputChars: reasoningText.length,
 			previousThinkingSummaryChars:
@@ -441,6 +446,28 @@ export async function runAgenticCompaction(options: {
 	// the instruction it was given, and after one generation the paraphrase is
 	// the only copy left.
 	const previousUserRequests = previousSummaryMetadata?.userRequests ?? [];
+	// Two lists, because the pinned prompt is in a different position for each
+	// reader.
+	//
+	// What the summary *stores* comes from the span minus the pin, since a
+	// pinned prompt survives verbatim as its own message directly below the
+	// summary -- quoting it again would say it twice, and on a small model
+	// that is enough to push the result past its budget and into the no-tail
+	// rescue. Nothing is lost by leaving it out: a prompt is pinned only while
+	// it is the latest turn start, and the moment a newer one takes the pin it
+	// falls into this span and is collected then.
+	//
+	// What the *summarizer* is shown includes it, because that reader is the
+	// one that genuinely cannot see it: `messagesToSummarize` filters the pin
+	// out, so on the one-prompt-then-a-long-loop shape the summarizer was
+	// asked to quote an instruction it had never been given, and said so --
+	// "The exact instructions are missing from my current view", written into
+	// the summary, where the next turn reads it first. Measured on pandorum
+	// session 1789877743966_qduum (4.100.141).
+	const spanUserRequests = collectUserRequests(messagesToSummarize);
+	const pinnedUserRequests = pinnedMessage
+		? collectUserRequests([pinnedMessage])
+		: [];
 	const previousLedgerEntries =
 		previousSummaryMetadata?.toolLedgerEntries ?? [];
 	const generation = (previousSummaryMetadata?.generation ?? 0) + 1;
@@ -552,13 +579,55 @@ export async function runAgenticCompaction(options: {
 		);
 		return undefined;
 	}
+	// means "say nothing about files", and the ledger is still worth its space
+	// without one -- it is the only place a *refused* call survives compaction,
+	// which is precisely what the summary is worst at keeping.
+	const ledgerEnabled = options.toolLedgerEnabled !== false;
+	// This compaction's calls behind the ones carried from the last, collapsed
+	// across the join and then brought back under budget. The share is small
+	// because the ledger is a record and not the record: it earns its space by
+	// holding the calls the prose is worst at keeping, not by holding all of
+	// them.
+	const ledgerBudgetChars = Math.max(
+		MIN_TOOL_LEDGER_CHARS,
+		Math.floor(
+			(options.context.budget.messages.targetTokens ?? 0) *
+				CHARS_PER_TOKEN *
+				TOOL_LEDGER_BUDGET_SHARE,
+		),
+	);
+	const ledgerEntries = ledgerEnabled
+		? evictToolLedger(
+				mergeToolLedger(
+					previousLedgerEntries,
+					buildToolLedger(newMessagesToFold),
+				),
+				ledgerBudgetChars,
+			)
+		: [];
+	const toolLedger = ledgerEnabled
+		? renderToolLedger(
+				ledgerEntries,
+				collectFileHistories(ledgerEntries, options.spanFor),
+			)
+		: "";
+
 	const fileOps = extractFileOps(summaryInputBudget.messages);
 	const conversationText = serializeConversation(summaryInputBudget.messages);
+	const mergedUserRequests = mergeUserRequests(
+		previousUserRequests,
+		spanUserRequests,
+	);
 	const summaryRequest = buildSummaryRequest({
 		previousSummary,
 		conversationText,
 		fileOps,
 		promptTemplate: options.summaryPrompt,
+		userRequests: mergeUserRequests(mergedUserRequests, pinnedUserRequests),
+		userRequestBudgetChars: Math.floor(
+			summarizerInputLimit * CHARS_PER_TOKEN * USER_REQUEST_BUDGET_SHARE,
+		),
+		toolLedger: ledgerEnabled ? renderToolLedgerKey(ledgerEntries) : "",
 	});
 	// Which of the three instructions actually ran. The diagnostics recorded
 	// the strategy and the mode and could not answer "which prompt", so a
@@ -752,6 +821,19 @@ export async function runAgenticCompaction(options: {
 	}
 
 	const summary = ensureFilesSection(rawSummary, fileOps);
+	// The text as the summarizer wrote it, before any reviewer touches it.
+	// `generateSummary` fires for all five calls a compaction can make, so the
+	// excerpt goes here rather than there: one line for the summary that was
+	// actually kept, and the council logs its own stages separately.
+	options.logger?.debug(
+		`[compaction] summary (${summary.length} chars, prompt=${
+			options.summaryPrompt?.trim()
+				? "custom"
+				: keepRecentMessages
+					? "replay"
+					: "full"
+		}): ${logExcerpt(summary)}`,
+	);
 	// Built from what is being folded now, not from everything the session has
 	// ever done. Earlier generations' calls are already prose in the summary
 	// this one folds, and a ledger that accumulated across generations would
@@ -769,38 +851,6 @@ export async function runAgenticCompaction(options: {
 	// cannot honour, and costs tokens on every compaction to make it.
 	//
 	// Explicitly, not inferred from `spanFor`. An absent revision lookup already
-	// means "say nothing about files", and the ledger is still worth its space
-	// without one -- it is the only place a *refused* call survives compaction,
-	// which is precisely what the summary is worst at keeping.
-	const ledgerEnabled = options.toolLedgerEnabled !== false;
-	// This compaction's calls behind the ones carried from the last, collapsed
-	// across the join and then brought back under budget. The share is small
-	// because the ledger is a record and not the record: it earns its space by
-	// holding the calls the prose is worst at keeping, not by holding all of
-	// them.
-	const ledgerBudgetChars = Math.max(
-		MIN_TOOL_LEDGER_CHARS,
-		Math.floor(
-			(options.context.budget.messages.targetTokens ?? 0) *
-				CHARS_PER_TOKEN *
-				TOOL_LEDGER_BUDGET_SHARE,
-		),
-	);
-	const ledgerEntries = ledgerEnabled
-		? evictToolLedger(
-				mergeToolLedger(
-					previousLedgerEntries,
-					buildToolLedger(newMessagesToFold),
-				),
-				ledgerBudgetChars,
-			)
-		: [];
-	const toolLedger = ledgerEnabled
-		? renderToolLedger(
-				ledgerEntries,
-				collectFileHistories(ledgerEntries, options.spanFor),
-			)
-		: "";
 	const rawThinkingSummary = await generateThinkingSummary({
 		enabled: options.thinkingSummaryEnabled !== false,
 		messages: newMessagesToFold,
@@ -830,8 +880,10 @@ export async function runAgenticCompaction(options: {
 					summary,
 					thinkingSummary: rawThinkingSummary,
 					messages: newMessagesToFold,
-					estimateMessageTokens: options.estimateMessageTokens,
 					maxRequestChars: summarizerInputLimit * CHARS_PER_TOKEN,
+					toolLedgerKey: ledgerEnabled
+						? renderToolLedgerKey(ledgerEntries)
+						: undefined,
 					generate: (call) =>
 						generateSummary({
 							providerConfig: summarizerProviderConfig,
@@ -842,7 +894,25 @@ export async function runAgenticCompaction(options: {
 					logger: options.logger,
 				});
 	const thinkingSummary = reviewed.thinkingSummary;
-	const reviewedSummary = ensureFilesSection(reviewed.summary, fileOps);
+	// After the council, so a citation survives being rewritten: the writers
+	// work on prose carrying `[#7]`, which is cheap to move around and cheap to
+	// keep, where a spliced-in call would be four hundred characters they were
+	// asked not to shorten.
+	const spliced = ledgerEnabled
+		? spliceLedgerCitations(reviewed.summary, ledgerEntries)
+		: { text: reviewed.summary, cited: [], uncited: [], invalid: [] };
+	if (ledgerEnabled && ledgerEntries.length > 0) {
+		options.logger?.debug(
+			`[compaction] ledger citations: ${spliced.cited.length} of ${ledgerEntries.length} placed inline` +
+				(spliced.uncited.length > 0
+					? `, ${spliced.uncited.length} appended (${spliced.uncited.slice(0, 12).join(", ")})`
+					: "") +
+				(spliced.invalid.length > 0
+					? `, ${spliced.invalid.length} citing no such call (${spliced.invalid.slice(0, 12).join(", ")})`
+					: ""),
+		);
+	}
+	const reviewedSummary = ensureFilesSection(spliced.text, fileOps);
 	if (reviewed.merged) {
 		options.logger?.debug("Compaction council merged the summary", {
 			reviewers: reviewed.reviewers,
@@ -871,12 +941,16 @@ export async function runAgenticCompaction(options: {
 			userRunSpan: countUserRunMessages(messagesToSummarize),
 			generation,
 			thinkingSummary,
-			toolLedger,
+			toolLedger: ledgerEnabled
+				? renderToolLedger(
+						ledgerEntries.filter((entry) =>
+							spliced.uncited.includes(entry.index),
+						),
+						collectFileHistories(ledgerEntries, options.spanFor),
+					)
+				: "",
 			...(ledgerEnabled ? { toolLedgerEntries: ledgerEntries } : {}),
-			userRequests: mergeUserRequests(
-				previousUserRequests,
-				collectUserRequests(newMessagesToFold),
-			),
+			userRequests: mergedUserRequests,
 			userRequestBudgetChars: Math.floor(
 				(options.context.budget.messages.targetTokens ?? 0) *
 					CHARS_PER_TOKEN *
