@@ -1584,6 +1584,56 @@ describe("buildSessionConfig", () => {
 		expect(config.compaction?.thinkingSummaryPrompt).toBe("my thinking prompt")
 	})
 
+	// The guard for the class, not the instance. This has now been fixed
+	// narrowly three times -- 5ed673b5d (2026-08-08) hoisted the outer object
+	// and declared "`enabled` is what turns compaction off, and it is the only
+	// thing the runtime consults", then left the inner spread; ea9d75e41 moved
+	// `councilEnabled` out and left five more. Enumerating today's fields would
+	// only catch today's, so this asserts the invariant itself: turning Auto
+	// Compact off changes `enabled` and nothing else. Any field put back inside
+	// a conditional fails here, including one that does not exist yet.
+	it("differs from the auto-condense-on config in `enabled` alone", async () => {
+		const settings: Record<string, unknown> = {
+			subagentsEnabled: false,
+			thinkingCompactionEnabled: false,
+			councilCompactionEnabled: false,
+			compactionPrompt: "my replay prompt",
+			fullCompactionPrompt: "my full prompt",
+			thinkingCompactionPrompt: "my thinking prompt",
+			compactionStrategy: "basic",
+			keepRecentMessagesAtCompaction: 7,
+			forceFullFromCompaction: 2,
+		}
+		const build = async (useAutoCondense: boolean) => {
+			mocks.stateManager.getGlobalSettingsKey.mockImplementation(((key: string) =>
+				key === "useAutoCondense" ? useAutoCondense : settings[key]) as never)
+			const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+			return config.compaction as Record<string, unknown>
+		}
+
+		const on = await build(true)
+		const off = await build(false)
+
+		expect(on.enabled).toBe(true)
+		expect(off.enabled).toBe(false)
+		// Compared by key set and by value, so a field that vanishes and one
+		// that quietly changes are both caught.
+		const strip = (o: Record<string, unknown>) => {
+			const { enabled: _enabled, ...rest } = o
+			return rest
+		}
+		expect(strip(off)).toEqual(strip(on))
+		// And the settings really were carried, rather than both being empty --
+		// two objects that are equally blank would satisfy the comparison above.
+		// `strategy` is not asserted by value here because it comes from the
+		// global settings file rather than this mock; the comparison covers it,
+		// since a conditional field would differ between the two builds.
+		expect(off.strategy).toBeDefined()
+		expect(off.summaryPrompt).toBe("my replay prompt")
+		expect(off.councilEnabled).toBe(false)
+		expect(off.thinkingSummaryEnabled).toBe(false)
+	})
+
 	it("lets task useAutoCondense override the global setting", async () => {
 		let globalUseAutoCondense = true
 		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string) => {
