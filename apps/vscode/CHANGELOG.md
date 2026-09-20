@@ -5,112 +5,114 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
-## [4.100.141] — 2026-09-20
+## [4.100.142] — 2026-09-20
 
-### Nothing ever checked the summary against what it summarised
+### The replay cites its calls instead of writing them out
 
-A compaction summary is written in one pass, by the model that has just spent
-its budget doing the work, and is then never compared to the transcript again —
-because the transcript is gone. From the turn it is written it *is* what
-happened, for every turn after it. A claim that went in wrong has nothing
-downstream to catch it.
+The compaction replay is the model's own account of the work it has just done,
+and it was spending most of its budget copying. Transcribing each tool call —
+the command, the arguments, what came back — took **69% of the output**, and the
+account of the *work* was what got truncated to make room, mid-word.
 
-Measured on pandorum: summaries reporting a checker run as a success when it had
-returned `ok:false` three times, paraphrasing an instruction they were asked to
-quote, and narrating in the past tense a prompt had asked three times to be
-present.
+It now cites. Every call is numbered in a record the harness already holds, and
+the replay writes the number where the call belongs:
 
-So the transcript is now split in two — by measured tokens rather than message
-count, and never between a tool call and its result — and each half goes to a
-reviewer along with the whole summary and retrospective. Each reviewer corrects
-what its half contradicts, adds what its half shows missing, and fixes what it
-misquotes. A synthesiser merges the two corrections against the original.
+> "Let me run the checker. `[#3]` It reports a `SyntaxError` at line 90."
 
-Three properties the shape is chosen for:
+The harness splices call 3 in at that point, exactly as it happened. The record
+costs the model nothing to reproduce and is more accurate than anything it could
+write from memory. Measured on a 60-message session: **11,420 characters of
+replay became 4,875**, with the transcription gone and the narrative intact.
 
-- **Each reviewer sees half the evidence and all of the claim.** That is the
-  point — a reviewer holding half a transcript has room to actually read it,
-  where the original pass did not. It is also the danger, and most of the
-  reviewer prompt is spent on it: a reviewer that deletes what the other half
-  supports turns a review into a truncation.
-- **The reviewers are parallel and both correct the original.** Chaining would
-  make the second one review a text the first had already changed, and the
-  corrections would compound rather than converge.
-- **Nothing here can fail a compaction.** A reviewer that throws, that answers
-  with no recognisable section, or whose half will not fit the summarizer's
-  input limit simply declines; a synthesiser that returns no replay leaves the
-  original standing. The worst case is the unreviewed summary that shipped
-  before this existed.
+A number left out is not lost — it is appended at the end — but it sits away
+from the step it belongs to, so the prompt asks for each call to be cited once,
+in order.
 
-On by default, as **Compaction Council**, sitting with the two passes it
-reviews. Costs three model calls per compaction.
+The numbering key the model is shown carries the index, the tool and the input,
+and deliberately **not** the results. The full ledger elides its middle and
+keeps the tail, which would have re-exposed the end of a long tool result that
+the transcript budget had already truncated. A test caught that reaching the
+summarizer.
 
-### The ledger counted its arguments instead of naming them
+### A citation could run off the end of the record
 
-The previous release fixed the tool ledger's result line, which had been
-printing `[1 items]` for the three tools whose answers matter most. The input
-line beside it was left doing exactly the same thing — `commands=[1 items]`,
-`files=[1 items]` — so the ledger named neither the command that ran nor the
-file that was read.
+Against a 30-entry ledger, one replay cited `[#1]` through `[#33]`.
 
-That is the ledger failing at the one job it has. It is placed beside the
-model's own replay to be the measured counterpart to it, and a model that had
-lost track of how to check its work had a record in front of it that never said
-`run_game.js` either.
+The splice drops a number that names nothing, so nothing wrong appeared in the
+output — but the *sentence* the invented number was attached to stayed, and it
+described a step that was never taken. A summary that invents work is worse than
+one that omits it, because every turn afterwards treats it as what happened.
 
-It also broke the repeat rule, which keys on the rendered input. Every
-single-element call rendered to the same string, so two different commands that
-answered the same collapsed into one entry naming neither.
+The prompt now closes the numbering explicitly: the record is complete, the
+highest number in it is the last call made, and a step reaching for a number
+past the end is a step not yet taken. After the change, the same session cited
+29 numbers against 30 entries, none invented.
 
-An argument list now renders its contents: a single element bare, so
-`commands=node run_game.js` reads as the command it is, and longer lists elided
-with a count of what was dropped. An element names itself through the key the
-schemas already accept as its name — `command`, `path`, `query` and their
-aliases — with argv joined onto an executable, because `node` alone is the same
-string for every call a session makes, and a line range carried with a path,
-because that is what separates one read of a file from the next.
+### The council was halving the answers it asked for
 
-### The summary carries what it cannot rebuild
+The Compaction Council splits the replay at a marker the writing model places
+itself, and gives each half to a writer that revises it. A writer is told to
+return its own half and only its own half.
 
-Two things the summary was losing every time it was written.
+One helper, `splitReplayAtMarker`, was doing two jobs. It never returns "no
+split": with no `<<<HALFWAY>>>` marker it falls back to rebalancing at the
+midpoint. That is correct for the first pass, whose output *is* the whole replay
+and which may simply have forgotten the marker. It was ruinous in the writer
+path, where the same helper decided whether a writer had returned both halves —
+so a writer that obeyed, and returned only its own half, had that half cut in
+two and half of it discarded.
 
-**The user's own words.** The summary paraphrased them — "the user is asking me
-to fix the collision in `manic_miner.html`" — and from the second compaction the
-original instruction survived only as that paraphrase, a paraphrase of a
-paraphrase by the third. Every typed prompt is now quoted by the harness into
-the summary message, verbatim, and carried across compactions. It never passes
-through the model, so it cannot drift.
+Only a real marker proves both halves are present. The fallback no longer
+applies there.
 
-**The ledger itself.** It was being rebuilt from scratch at each compaction from
-only the messages that compaction was folding, so everything the previous one
-had recorded was gone. It now merges with what the last summary carried and is
-evicted against a share of the budget when it grows: successful reads and edits
-first, then failed ones, and the verdicts — what a checker said — last, because
-a read can be made again and an edit can be seen in the file, while a checker's
-answer cannot be recovered from anywhere.
+This is worth naming plainly because it was read as a *model* fault for three
+measurement runs. Retention went 100% (byte-identical), then 45%, then 30%, then
+19% and 6%, and each time the reading was "the small model deletes instead of
+revising". The writer's own reasoning had already enumerated every constraint
+correctly, which was the evidence the prompt was fine. The tell was the shape of
+what came back: the first writer returned only the opening quoted request, the
+second only the closing paragraph. A model does not truncate to clean paragraph
+boundaries at both ends. A splitter does.
 
-The ledger was also switched off in this fork's host by an unrelated setting:
-it was gated on Checkpoints, which owns the revision addresses it quotes but
-not the record itself.
+### The writers were never told what `[#7]` meant
 
-### A retried turn is not a bigger context
+The citation scheme was explained to the pass that *writes* the replay and to
+nobody else. The writers that revise it saw prose full of unexplained marks, and
+one of them invented a meaning: its reasoning listed, among its own task
+constraints, *"write every step as `Step [number]. Outcome.`"* — and it then
+restructured its half around a step numbering that does not exist.
 
-A compaction fired at 27k tokens against a window four times that, cutting a
-session that had plenty of room. The trigger was not wrong about the number it
-was given; the number was wrong.
+Both writers now receive the numbering key and the rules that go with it: keep
+every citation exactly where it is, do not renumber them, and cite only a number
+that appears in the record.
 
-When a provider returns an empty response, the retry middleware sends the turn
-again and folds the discarded attempt's token usage into the one that
-succeeded. That is correct for billing and wrong for everything else: the
-gateway anchors its estimate of the *next* request to the provider's count for
-the last one, so two attempts reported one context of twice the size, three
-attempts one of three times. The output cap computed from that anchor came out
-at 6,099 tokens against a 49,306-token phantom prompt, the compaction trigger
-read a starved output budget as a full context, and compacted.
+Two related corrections to the same request:
 
-The middleware now reports the accepted attempt's input separately from the
-billed total, and the trigger refuses an output-starvation verdict that its own
-measurement of the transcript contradicts.
+- **Revise the draft; do not rebuild it.** The writers were re-deriving their
+  half from the transcript rather than editing the text they were handed, and a
+  rebuild under a length target loses its tail. They are now told plainly that a
+  step which is already right is already done.
+- **The user's own words stay.** The first writer had been deleting the verbatim
+  quotation of what the user asked for — the one place the instruction survives
+  at all once the transcript is gone.
+
+Measured after all of it, on the production path: first writer 129% of its
+draft, second 100%, merged ratio 1.01, 29 of 30 citations placed inline, and the
+user's request intact through all four stages. The second writer's single edit
+was a line number corrected against the transcript, which is exactly the job.
+
+### check_file stops asking for every bracket in one edit
+
+Both the `check_file` description and the delimiter-balance summary told the
+model to fix every line the scan names *"in one edit"*. A small model cannot
+reliably land a multi-line repair in a single call, and being told it must turns
+a mechanical fix into a planning problem — it holds the whole repair in its
+head and spends the turn reasoning about an ordering that does not matter.
+
+The instruction was never the point either. What we wanted was fewer round
+trips: check, fix everything, check again — rather than a check after each line.
+That is a statement about when to re-check, so it now says that instead. The
+advice is unchanged and the pressure is gone.
 
 ## [4.100.118] — 2026-09-15
 
