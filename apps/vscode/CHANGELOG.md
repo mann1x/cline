@@ -5,114 +5,95 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
-## [4.100.142] — 2026-09-20
+## [4.100.143] — 2026-09-20
 
-### The replay cites its calls instead of writing them out
+### A manual compaction now reads its own settings
 
-The compaction replay is the model's own account of the work it has just done,
-and it was spending most of its budget copying. Transcribing each tool call —
-the command, the arguments, what came back — took **69% of the output**, and the
-account of the *work* was what got truncated to make room, mid-word.
+With **Auto Compact** switched off, a compaction you ran yourself ignored almost
+everything the panel said.
 
-It now cites. Every call is numbered in a record the harness already holds, and
-the replay writes the number where the call belongs:
+The mechanism is one conditional. The host sends a compaction config, and every
+field except `enabled` sat inside `...(useAutoCondense ? { … } : { })`. A manual
+compaction force-enables the pass and spreads that same object for the rest — so
+with Auto Compact off, it read fields that were never sent. Each absence
+defaulted to the opposite of off:
 
-> "Let me run the checker. `[#3]` It reports a `SyntaxError` at line 90."
+| setting | what absence meant |
+|---|---|
+| Compaction Strategy | a chosen **Basic** silently ran as **Agentic** |
+| Compaction Prompt | **your prompt was never used**; the built-in one was |
+| Full Compaction Prompt | same |
+| Thinking Compaction Prompt | same |
+| Thinking Compaction | read as **on** — an extra model call you had switched off |
+| Compaction Council | read as **on** — three extra model calls you had switched off |
+| Keep Recent Messages | kept, even when turned off |
 
-The harness splices call 3 in at that point, exactly as it happened. The record
-costs the model nothing to reproduce and is more accurate than anything it could
-write from memory. Measured on a 60-message session: **11,420 characters of
-replay became 4,875**, with the transcription gone and the narrative intact.
+None of it surfaced. An extra model call and a default prompt both look exactly
+like the compaction working.
 
-A number left out is not lost — it is appended at the end — but it sits away
-from the step it belongs to, so the prompt asks for each call to be cited once,
-in order.
+`enabled` is the only setting that means *automatic* — it decides whether the
+transcript is compacted on its own. Everything else describes *how* a compaction
+is done, and a manual compaction is a compaction. All of it now travels
+unconditionally.
 
-The numbering key the model is shown carries the index, the tool and the input,
-and deliberately **not** the results. The full ledger elides its middle and
-keeps the tail, which would have re-exposed the end of a long tool result that
-the transcript budget had already truncated. A test caught that reaching the
-summarizer.
+The panel had the same fault and made it unrecoverable: ten controls were greyed
+out whenever Auto Compact was off, so these were settings you could not reach for
+the only kind of compaction you could still run. They stay live now. Controls
+that gate on something real — a prompt following its own switch — keep that gate;
+only the Auto Compact half is gone. **Auto Compact Strategy** is now
+**Compaction Strategy**, because it never governed only the automatic kind.
 
-### A citation could run off the end of the record
+This has been fixed narrowly three times, each fix adding a test naming the field
+it moved, which is exactly why the next one was missed. The guard now asserts the
+rule instead: build the config with Auto Compact on and off, and require the two
+to differ in `enabled` and nothing else. A field put back inside a conditional
+fails it, including one that does not exist yet.
 
-Against a 30-entry ledger, one replay cited `[#1]` through `[#33]`.
+### The tool switches are grouped, and the section starts shut
 
-The splice drops a number that names nothing, so nothing wrong appeared in the
-output — but the *sentence* the invented number was attached to stayed, and it
-described a step that was never taken. A summary that invents work is worse than
-one that omits it, because every turn afterwards treats it as what happened.
+The tool list is long enough to bury the settings under it, so it now opens
+collapsed like Advanced, with the token total and a `(N off)` count staying on
+the header so the state is readable without opening it.
 
-The prompt now closes the numbering explicitly: the record is complete, the
-highest number in it is the last call made, and a step reaching for a number
-past the end is a step not yet taken. After the change, the same session cited
-29 numbers against 30 entries, none invented.
+Inside, the switches are grouped — **Read**, **Write**, **Check**, **Other** —
+each with its own subtotal and banding, so the cost of a group is visible where
+you decide about it.
 
-### The council was halving the answers it asked for
+### The output budget has a slider
 
-The Compaction Council splits the replay at a marker the writing model places
-itself, and gives each half to a writer that revises it. A writer is told to
-return its own half and only its own half.
+The automatic output budget is a figure derived from the model's window, and
+overriding it meant typing an absolute token count into the Ceiling box and
+knowing what a good one was.
 
-One helper, `splitReplayAtMarker`, was doing two jobs. It never returns "no
-split": with no `<<<HALFWAY>>>` marker it falls back to rebalancing at the
-midpoint. That is correct for the first pass, whose output *is* the whole replay
-and which may simply have forgotten the marker. It was ruinous in the writer
-path, where the same helper decided whether a writer had returned both halves —
-so a writer that obeyed, and returned only its own half, had that half cut in
-two and half of it discarded.
+There is now a slider above that box, in steps of 5% of the automatic figure,
+with a readout of the tokens it resolves to. It writes the same ceiling the box
+does — one value seen two ways — and 100% clears the override rather than
+storing today's number, so the cap keeps tracking the window instead of freezing
+against it.
 
-Only a real marker proves both halves are present. The fallback no longer
-applies there.
+Two things it refuses to let you do quietly. A **bare token count** in the
+Advanced sampler's think budget is sent flat and does not scale with the cap, so
+the slider will not go below the floor that budget needs and says why. And a
+`num_predict` in the same sampler is read ahead of the budget and wins, so the
+slider says so rather than moving and changing nothing.
 
-This is worth naming plainly because it was read as a *model* fault for three
-measurement runs. Retention went 100% (byte-identical), then 45%, then 30%, then
-19% and 6%, and each time the reading was "the small model deletes instead of
-revising". The writer's own reasoning had already enumerated every constraint
-correctly, which was the evidence the prompt was fine. The tell was the shape of
-what came back: the first writer returned only the opening quoted request, the
-second only the closing paragraph. A model does not truncate to clean paragraph
-boundaries at both ends. A splitter does.
+A related fix in the same field: it was reading a reasoning property that does
+not exist, so the thinking floor applied whether or not reasoning was switched
+on.
 
-### The writers were never told what `[#7]` meant
+### A citation can name a run of calls
 
-The citation scheme was explained to the pass that *writes* the replay and to
-nobody else. The writers that revise it saw prose full of unexplained marks, and
-one of them invented a meaning: its reasoning listed, among its own task
-constraints, *"write every step as `Step [number]. Outcome.`"* — and it then
-restructured its half around a step numbering that does not exist.
+The compaction replay cites its tool calls — `[#7]` — rather than transcribing
+them. Measured on a real run, a model with four identical checks in a row wrote
+`[#2-5]`, which is the sensible thing to write and matched nothing: all four
+fell out of the prose and into the block appended after it.
 
-Both writers now receive the numbering key and the rules that go with it: keep
-every citation exactly where it is, do not renumber them, and cite only a number
-that appears in the record.
-
-Two related corrections to the same request:
-
-- **Revise the draft; do not rebuild it.** The writers were re-deriving their
-  half from the transcript rather than editing the text they were handed, and a
-  rebuild under a length target loses its tail. They are now told plainly that a
-  step which is already right is already done.
-- **The user's own words stay.** The first writer had been deleting the verbatim
-  quotation of what the user asked for — the one place the instruction survives
-  at all once the transcript is gone.
-
-Measured after all of it, on the production path: first writer 129% of its
-draft, second 100%, merged ratio 1.01, 29 of 30 citations placed inline, and the
-user's request intact through all four stages. The second writer's single edit
-was a line number corrected against the transcript, which is exactly the job.
-
-### check_file stops asking for every bracket in one edit
-
-Both the `check_file` description and the delimiter-balance summary told the
-model to fix every line the scan names *"in one edit"*. A small model cannot
-reliably land a multi-line repair in a single call, and being told it must turns
-a mechanical fix into a planning problem — it holds the whole repair in its
-head and spends the turn reasoning about an ordering that does not matter.
-
-The instruction was never the point either. What we wanted was fewer round
-trips: check, fix everything, check again — rather than a check after each line.
-That is a statement about when to re-check, so it now says that instead. The
-advice is unchanged and the pressure is gone.
+Ranges now work, spaced or not, with either dash and an optional second `#`. A
+backwards range and one wider than the whole record are refused whole rather than
+guessed at — reordering would assert an order nobody wrote, and expanding
+`[#1-9000]` would bury one bad token under thousands of numbers. The prompt
+offers the range too, since the model reached for it before anything said it
+could.
 
 ## [4.100.118] — 2026-09-15
 
