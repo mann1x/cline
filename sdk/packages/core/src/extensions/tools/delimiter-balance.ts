@@ -867,7 +867,7 @@ export function describeDelimiterBalance(
 	const closing =
 		shown.length === 1
 			? "  This scan skips strings, comments and regex literals, so it is counting real code — edit the line named above rather than re-deriving the balance yourself. It is the line the parse error could not name."
-			: "  This scan skips strings, comments and regex literals, so it is counting real code — edit the lines named above rather than re-deriving the balance yourself. The first is where the parser gave up; the others are scanned past it and may shift once it is fixed. Fix them in one edit, then re-check.";
+			: "  This scan skips strings, comments and regex literals, so it is counting real code — edit the lines named above rather than re-deriving the balance yourself. The first is where the parser gave up; the others are scanned past it and may shift once it is fixed. Fix them and then re-check.";
 
 	return [heading, ...lines, closing].join("\n");
 }
