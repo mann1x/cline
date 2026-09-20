@@ -372,11 +372,118 @@ describe("the measured record of a structured result", () => {
 		const rendered = renderToolLedger(ledger);
 
 		expect(rendered).toContain("ReferenceError: collide is not defined");
-		// The result line specifically: the input still renders as a shape, by
-		// the size discipline this module's header sets out.
+		// The result line specifically: the input names the command too, now,
+		// and the arrow is what separates the two halves of the entry.
 		expect(rendered).toMatch(
 			/\u2192 node run_game\.js game\.html: \{"ok":false/,
 		);
+	});
+
+	// The other half of the same fault. The result line was fixed first and the
+	// input line was left saying `commands=[1 items]`, so the ledger named
+	// neither the command that ran nor the file that was read -- and the model
+	// that could not remember to check with `run_game.js` had a record in front
+	// of it that never said the name either.
+	it("names the command that ran", () => {
+		const ledger = buildToolLedger([
+			...exchange(
+				"run_commands",
+				{ commands: ["node run_game.js game.html"] },
+				"ok",
+			),
+		]);
+
+		expect(ledger[0]?.input).toContain("node run_game.js game.html");
+		expect(ledger[0]?.input).not.toContain("items]");
+	});
+
+	it("names the file that was read, with the range that was asked for", () => {
+		const ledger = buildToolLedger([
+			...exchange(
+				"read_files",
+				{ files: [{ path: "game.html", start_line: 1, end_line: 200 }] },
+				"ok",
+			),
+		]);
+
+		expect(ledger[0]?.input).toContain("game.html:1-200");
+	});
+
+	it("spells out an executable and its argv", () => {
+		const ledger = buildToolLedger([
+			...exchange(
+				"run_commands",
+				{ commands: [{ command: "node", args: ["run_game.js", "game.html"] }] },
+				"ok",
+			),
+		]);
+
+		expect(ledger[0]?.input).toContain("node run_game.js game.html");
+	});
+
+	// The repeat rule keys on the rendered input, so a rendering that said
+	// `[1 items]` for every call made two different commands with the same
+	// answer indistinguishable -- and collapsed them into one entry that named
+	// neither.
+	it("does not collapse two different commands that answered the same", () => {
+		const ledger = buildToolLedger([
+			...exchange(
+				"run_commands",
+				{ commands: ["node run_game.js a.html"] },
+				"ok",
+			),
+			...exchange(
+				"run_commands",
+				{ commands: ["node run_game.js b.html"] },
+				"ok",
+			),
+		]);
+
+		expect(ledger).toHaveLength(2);
+		expect(ledger[0]?.input).toContain("a.html");
+		expect(ledger[1]?.input).toContain("b.html");
+	});
+
+	it("still collapses the same command answering the same twice", () => {
+		const ledger = buildToolLedger([
+			...exchange(
+				"run_commands",
+				{ commands: ["node run_game.js a.html"] },
+				"ok",
+			),
+			...exchange(
+				"run_commands",
+				{ commands: ["node run_game.js a.html"] },
+				"ok",
+			),
+		]);
+
+		expect(ledger).toHaveLength(1);
+		expect(ledger[0]?.repeated).toBe(2);
+	});
+
+	it("keeps a long list inside the field budget and says what it dropped", () => {
+		const files = Array.from({ length: 40 }, (_, index) => ({
+			path: `/src/module-${index}.ts`,
+		}));
+		const ledger = buildToolLedger(
+			[...exchange("read_files", { files }, "ok")],
+			{
+				limits: { maxFieldChars: 120 },
+			},
+		);
+
+		expect(ledger[0]?.input).toContain("/src/module-0.ts");
+		expect(ledger[0]?.input).toMatch(/\+\d+ more/);
+		expect(ledger[0]?.input.length).toBeLessThan(220);
+	});
+
+	it("falls back to the shape when an entry names nothing", () => {
+		const ledger = buildToolLedger([
+			...exchange("mystery", { things: [{ alpha: 1, beta: 2 }] }, "ok"),
+		]);
+
+		expect(ledger[0]?.input).toContain("{alpha, beta}");
 	});
 
 	it("names a failed entry as failed", () => {

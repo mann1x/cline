@@ -123,6 +123,112 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * The keys a tool argument uses to say *what* it is acting on.
+ *
+ * Ordered, because a model may send several of them at once and the first is
+ * the canonical spelling the schemas normalise the rest to. This is the list
+ * the read and command schemas already accept as aliases; anything outside it
+ * falls back to the shape.
+ */
+const ENTRY_NAME_KEYS = [
+	"command",
+	"cmd",
+	"path",
+	"file_path",
+	"filePath",
+	"query",
+	"pattern",
+	"url",
+	"name",
+	"text",
+] as const;
+
+/**
+ * One element of an argument list, named rather than counted.
+ *
+ * Undefined when the element names nothing, so the caller can fall back to
+ * printing its keys.
+ */
+function summariseEntry(
+	entry: Record<string, unknown>,
+	limits: ToolLedgerLimits,
+): string | undefined {
+	for (const key of ENTRY_NAME_KEYS) {
+		const value = entry[key];
+		if (typeof value !== "string" || !value) {
+			continue;
+		}
+		if (key === "command" || key === "cmd") {
+			// `{command: "node", args: ["run_game.js"]}` is one command and has
+			// to read as one: the executable alone is the same string for every
+			// call a session makes, which is exactly the collision the repeat
+			// rule keys on.
+			const args = entry.args;
+			const argv = Array.isArray(args)
+				? args.filter((arg): arg is string => typeof arg === "string")
+				: [];
+			return summariseValue(
+				argv.length > 0 ? `${value} ${argv.join(" ")}` : value,
+				limits,
+			);
+		}
+		// A range is what distinguishes one read of a file from the next, so it
+		// travels with the path or the two reads are indistinguishable here.
+		const start = entry.start_line;
+		const end = entry.end_line;
+		if (typeof start === "number" && typeof end === "number") {
+			return summariseValue(`${value}:${start}-${end}`, limits);
+		}
+		return summariseValue(value, limits);
+	}
+	return undefined;
+}
+
+/**
+ * An argument list, as its contents.
+ *
+ * This printed `[N items]`, which is the same fault the result side had and
+ * has the same cost twice over. The ledger exists to be the measured record
+ * beside the model's own account, and `commands=[1 items]` names neither the
+ * command that ran nor the file that was read -- so a model that had lost
+ * track of how to check its work had a record in front of it that never said
+ * the name either. And the repeat rule keys on this string, so every
+ * single-element call rendered identically: two different commands answering
+ * the same collapsed into one entry naming neither.
+ *
+ * A single element renders bare, because `commands=node run_game.js` reads as
+ * the command it is and `commands=[node run_game.js]` reads as a list.
+ */
+function summariseList(
+	value: readonly unknown[],
+	limits: ToolLedgerLimits,
+): string {
+	if (value.length === 0) {
+		return "[]";
+	}
+	const rendered: string[] = [];
+	let used = 0;
+	for (let index = 0; index < value.length; index += 1) {
+		const entry = value[index];
+		const part = Array.isArray(entry)
+			? // Nested lists are a shape, not a name. Recursing would spend the
+				// whole field budget on one argument's interior.
+				`[${entry.length} items]`
+			: isRecord(entry)
+				? (summariseEntry(entry, limits) ??
+					`{${Object.keys(entry).join(", ")}}`)
+				: summariseValue(entry, limits);
+		if (rendered.length > 0 && used + part.length > limits.maxFieldChars) {
+			rendered.push(`+${value.length - index} more`);
+			break;
+		}
+		rendered.push(part);
+		used += part.length + 2;
+	}
+	return rendered.length === 1 ? rendered[0] : `[${rendered.join(", ")}]`;
+}
+
+/**
  * One field, short enough to read.
  *
  * A multi-line body is reported as its shape rather than its head: the first
@@ -135,10 +241,12 @@ function summariseValue(value: unknown, limits: ToolLedgerLimits): string {
 	}
 	if (typeof value !== "string") {
 		if (Array.isArray(value)) {
-			return `[${value.length} items]`;
+			return summariseList(value, limits);
 		}
 		if (isRecord(value)) {
-			return `{${Object.keys(value).join(", ")}}`;
+			return (
+				summariseEntry(value, limits) ?? `{${Object.keys(value).join(", ")}}`
+			);
 		}
 		return String(value);
 	}
