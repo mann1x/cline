@@ -120,7 +120,8 @@ export const SamplingSection = ({
 	}, [])
 
 	const commitDraft = useCallback(() => {
-		composeAndWrite(draftRef.current)
+		// Returned so the field's flush can be awaited; see `pendingEdits`.
+		return composeAndWrite(draftRef.current)
 	}, [composeAndWrite])
 
 	const reset = useCallback(() => {
@@ -193,8 +194,9 @@ export const SamplingSection = ({
 											// renders it back over the field, which is how
 											// `0.9` became `9`. Wait until it is finished.
 											if (text.trim() === "" || isCompleteNumber(text)) {
-												commitDraft()
+												return commitDraft()
 											}
+											return undefined
 										}}
 										placeholder={placeholder(field.label)}>
 										<span className="font-medium text-xs">{field.label}</span>
@@ -214,7 +216,7 @@ export const SamplingSection = ({
 							initialValue={value("stop")}
 							onChange={(text: string) => {
 								change("stop", text)
-								commitDraft()
+								return commitDraft()
 							}}
 							placeholder={modelParameters?.stop ? placeholder("stop") : "one sequence per line"}>
 							<span className="font-medium text-xs">stop</span>
@@ -228,7 +230,7 @@ export const SamplingSection = ({
 								initialValue={value("thinkBudgetMessage")}
 								onChange={(text: string) => {
 									change("thinkBudgetMessage", text)
-									commitDraft()
+									return commitDraft()
 								}}
 								// The model's own message runs to several paragraphs, so
 								// the placeholder is the whole of it rather than the

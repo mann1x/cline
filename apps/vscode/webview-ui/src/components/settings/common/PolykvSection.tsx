@@ -61,6 +61,7 @@ export const PolykvSection = ({ providerId }: { providerId: string }) => {
 	const polykv: PolykvSettings = pending.current ?? config.polykv ?? {}
 	const enabled = polykv.enabled !== false
 
+	// Returns the write, so a field flushed at a boundary can be awaited.
 	const patch = (changes: Record<string, unknown>) => {
 		// Read at call time, not from the render this closure was made in: two
 		// clicks inside one round trip share a closure, so a section captured at
@@ -68,7 +69,7 @@ export const PolykvSection = ({ providerId }: { providerId: string }) => {
 		const next = { ...(pending.current ?? config.polykv ?? {}), ...changes } as PolykvSettings
 		pending.current = next
 		inFlight.current += 1
-		void write({ polykv: next })
+		return write({ polykv: next })
 			.catch((error) => console.error("Failed to update PolyKV settings:", error))
 			.finally(() => {
 				inFlight.current -= 1
@@ -90,7 +91,7 @@ export const PolykvSection = ({ providerId }: { providerId: string }) => {
 					if (next === polykv[key as keyof typeof polykv]) {
 						return
 					}
-					patch({ [key]: next })
+					return patch({ [key]: next })
 				}}
 				placeholder={placeholder}
 				style={{ width: "100%" }}>

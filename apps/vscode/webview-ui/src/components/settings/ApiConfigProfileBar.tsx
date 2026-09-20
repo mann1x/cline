@@ -1,6 +1,8 @@
 import { VSCodeButton, VSCodeDropdown, VSCodeOption, VSCodeTextField } from "@vscode/webview-ui-toolkit/react"
+import { AlertTriangle } from "lucide-react"
 import { useEffect, useState } from "react"
 import { DROPDOWN_Z_INDEX, DropdownContainer } from "./ApiOptions"
+import { hasPendingEdits } from "./utils/pendingEdits"
 import { type ApiConfigurationProfileScope, useApiConfigurationProfiles } from "./utils/useApiConfigurationProfiles"
 
 const NO_PROFILE = "__none__"
@@ -27,6 +29,14 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 		useApiConfigurationProfiles(scope)
 	const [isNaming, setIsNaming] = useState(false)
 	const [draftName, setDraftName] = useState("")
+	// The profile a confirmed switch would load, while the question is open.
+	const [pendingSwitch, setPendingSwitch] = useState<string | null>(null)
+	// Picking a name moves the dropdown immediately, before anything has been
+	// loaded, so a cancelled switch leaves it showing a profile that is not the
+	// one in the panel. Nothing puts it back: `value` still holds `activeName`,
+	// which has not changed, so React has nothing to re-apply. Bumping this
+	// remounts the dropdown, which re-applies `value` on mount.
+	const [selectionEpoch, setSelectionEpoch] = useState(0)
 
 	// Reopening the field after the panel has changed should offer a name for
 	// what is in it now, not the one suggested the last time it was opened.
@@ -53,6 +63,33 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 			} as React.CSSProperties)
 		: undefined
 
+	/** Puts the dropdown back to the profile that is actually loaded. */
+	const restoreSelection = () => {
+		setPendingSwitch(null)
+		setSelectionEpoch((epoch) => epoch + 1)
+	}
+
+	/**
+	 * Applies a profile, asking first if that would lose something.
+	 *
+	 * Revert never asks: saying it is how the user asks to discard. Load does,
+	 * because the button only reads "Load" rather than "Revert" when `isDirty`
+	 * is false -- and a value typed within the last 800ms has not reached the
+	 * store yet, so `isDirty` is false while there is something to lose.
+	 */
+	const requestLoad = (name: string) => {
+		if (!isDirty && hasPendingEdits()) {
+			setPendingSwitch(name)
+			return
+		}
+		return loadProfile(name)
+	}
+
+	const switchTo = async (name: string) => {
+		setPendingSwitch(null)
+		await loadProfile(name)
+	}
+
 	const commitSave = async () => {
 		if (!draftName.trim()) {
 			return
@@ -77,11 +114,21 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 					<VSCodeDropdown
 						className="w-full"
 						id="api-config-profile"
+						key={selectionEpoch}
 						onChange={async (event: any) => {
 							const value = event.target.value
-							if (value && value !== NO_PROFILE) {
-								await loadProfile(value)
+							if (!value || value === NO_PROFILE || value === activeName) {
+								return
 							}
+							// A load overwrites the whole panel, and what it overwrites is
+							// not all on screen: a value typed a moment ago may still be
+							// sitting inside its debounce, unsaved and invisible to
+							// `isDirty`. Ask on either.
+							if (isDirty || hasPendingEdits()) {
+								setPendingSwitch(value)
+								return
+							}
+							await switchTo(value)
 						}}
 						value={activeName || NO_PROFILE}>
 						<VSCodeOption value={NO_PROFILE}>
@@ -107,7 +154,7 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 				    looked like it had not taken. It is the same action either way; the
 				    label says which one it is from where the user is standing. */}
 				{activeName ? (
-					<VSCodeButton appearance="secondary" onClick={() => loadProfile(activeName)}>
+					<VSCodeButton appearance="secondary" onClick={() => requestLoad(activeName)}>
 						{isDirty ? "Revert" : "Load"}
 					</VSCodeButton>
 				) : null}
@@ -120,6 +167,49 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 					</VSCodeButton>
 				) : null}
 			</div>
+
+			{pendingSwitch ? (
+				<div
+					className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+					onClick={(event) => {
+						if (event.target === event.currentTarget) {
+							restoreSelection()
+						}
+					}}>
+					<div className="bg-(--vscode-editor-background) border border-solid border-(--vscode-panel-border) rounded-lg p-5 w-[400px] max-w-[90vw]">
+						<div className="flex items-center gap-2 mb-3">
+							<AlertTriangle className="w-5 h-5 text-(--vscode-errorForeground)" />
+							<h4 className="m-0">Unsaved changes</h4>
+						</div>
+						<p className="text-sm text-(--vscode-descriptionForeground) mt-0 mb-4">
+							Loading “{pendingSwitch}” replaces every setting on this tab.{" "}
+							{activeName
+								? `The changes you have made since loading “${activeName}” will be lost.`
+								: "The changes you have made here are not saved to any profile and will be lost."}
+						</p>
+						<div className="flex justify-end gap-2 flex-wrap">
+							<VSCodeButton appearance="secondary" onClick={restoreSelection}>
+								Cancel
+							</VSCodeButton>
+							{activeName ? (
+								<VSCodeButton
+									appearance="secondary"
+									onClick={async () => {
+										const target = pendingSwitch
+										setPendingSwitch(null)
+										await saveProfile(activeName)
+										await loadProfile(target)
+									}}>
+									Update “{activeName}” first
+								</VSCodeButton>
+							) : null}
+							<VSCodeButton appearance="primary" onClick={() => switchTo(pendingSwitch)}>
+								Discard and load
+							</VSCodeButton>
+						</div>
+					</div>
+				</div>
+			) : null}
 
 			{isNaming ? (
 				<div className="flex items-center gap-2 mt-2">

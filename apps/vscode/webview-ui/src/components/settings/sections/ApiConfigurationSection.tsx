@@ -12,6 +12,7 @@ import EscalationModelTab from "../EscalationModelTab"
 import ImageGenModelTab from "../ImageGenModelTab"
 import Section from "../Section"
 import { type ConfigTab, isModelTab } from "../utils/configTabs"
+import { flushPendingEdits } from "../utils/pendingEdits"
 import { syncModeConfigurations } from "../utils/providerUtils"
 import { useApiConfigurationHandlers } from "../utils/useApiConfigurationHandlers"
 import type { ApiConfigurationProfileScope } from "../utils/useApiConfigurationProfiles"
@@ -83,6 +84,15 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 	const [currentTab, setCurrentTab] = useState<ConfigTab>(mode)
 	const { handleFieldsChange } = useApiConfigurationHandlers()
 
+	// Switching panel unmounts the one being left, and a field still inside its
+	// debounce goes with it. Start its write first, so what reaches
+	// providers.json is the value that was on screen rather than the one before
+	// it. Not awaited -- the writes are in flight by the time this returns.
+	const switchPanel = (tab: ConfigTab) => {
+		void flushPendingEdits()
+		setCurrentTab(tab)
+	}
+
 	// A tab can be turned off while it is showing; fall back rather than render
 	// a configuration the user can no longer see the toggle for.
 	const scopedTabOff =
@@ -135,7 +145,7 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 									<TabButton
 										disabled={activeTab === "plan"}
 										isActive={activeTab === "plan"}
-										onClick={() => setCurrentTab("plan")}
+										onClick={() => switchPanel("plan")}
 										style={{
 											opacity: 1,
 											cursor: "pointer",
@@ -145,7 +155,7 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 									<TabButton
 										disabled={activeTab === "act"}
 										isActive={activeTab === "act"}
-										onClick={() => setCurrentTab("act")}
+										onClick={() => switchPanel("act")}
 										style={{
 											opacity: 1,
 											cursor: "pointer",
@@ -157,7 +167,7 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 								<TabButton
 									disabled={isModelTab(activeTab)}
 									isActive={isModelTab(activeTab)}
-									onClick={() => setCurrentTab(mode)}
+									onClick={() => switchPanel(mode)}
 									style={{
 										opacity: 1,
 										cursor: "pointer",
@@ -169,7 +179,7 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 								<TabButton
 									disabled={activeTab === "vision"}
 									isActive={activeTab === "vision"}
-									onClick={() => setCurrentTab("vision")}
+									onClick={() => switchPanel("vision")}
 									style={{
 										opacity: 1,
 										cursor: "pointer",
@@ -181,7 +191,7 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 								<TabButton
 									disabled={activeTab === "agents"}
 									isActive={activeTab === "agents"}
-									onClick={() => setCurrentTab("agents")}
+									onClick={() => switchPanel("agents")}
 									style={{
 										opacity: 1,
 										cursor: "pointer",
@@ -193,7 +203,7 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 								<TabButton
 									disabled={activeTab === "escalation"}
 									isActive={activeTab === "escalation"}
-									onClick={() => setCurrentTab("escalation")}
+									onClick={() => switchPanel("escalation")}
 									style={{
 										opacity: 1,
 										cursor: "pointer",
@@ -205,7 +215,7 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 								<TabButton
 									disabled={activeTab === "imagegen"}
 									isActive={activeTab === "imagegen"}
-									onClick={() => setCurrentTab("imagegen")}
+									onClick={() => switchPanel("imagegen")}
 									style={{
 										opacity: 1,
 										cursor: "pointer",

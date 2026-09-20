@@ -281,7 +281,7 @@ export interface SamplingWrite {
 	 * is composed from before that write — and this is the one moment where
 	 * that difference is the bug.
 	 */
-	readonly composeAndWrite: (draft: SamplingDraft, alongside?: ProviderConfigWritePatch) => void
+	readonly composeAndWrite: (draft: SamplingDraft, alongside?: ProviderConfigWritePatch) => Promise<unknown>
 	/**
 	 * Replaces the section, and keeps the value visible until the write lands.
 	 *
@@ -320,7 +320,10 @@ export function useSamplingWrite(providerId: string, dialect: SamplingDialect = 
 			entry.value = next as unknown as Record<string, unknown>
 			entry.inFlight += 1
 			pendingSampling.set(entryKey, entry)
-			void write({ ...alongside, sampling: next })
+			// Returned, not just fired: a boundary that is about to read the
+			// stored configuration -- saving a profile, leaving the panel --
+			// flushes the fields first and has to be able to wait for this.
+			return write({ ...alongside, sampling: next })
 				.catch((error) => console.error("Failed to update sampling:", error))
 				.finally(() => {
 					entry.inFlight -= 1
@@ -335,7 +338,7 @@ export function useSamplingWrite(providerId: string, dialect: SamplingDialect = 
 	const composeAndWrite = useCallback(
 		(draft: SamplingDraft, alongside?: ProviderConfigWritePatch) => {
 			const base = pendingSampling.get(entryKey)?.value ?? storedRef.current
-			writeSampling(buildSamplingPatch({ dialect, stored: base, draft }), alongside)
+			return writeSampling(buildSamplingPatch({ dialect, stored: base, draft }), alongside)
 		},
 		[writeSampling, entryKey, dialect],
 	)

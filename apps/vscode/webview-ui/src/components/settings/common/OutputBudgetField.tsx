@@ -136,6 +136,7 @@ export const OutputBudgetField = ({ providerId }: { providerId: string }) => {
 
 	// Written whole, never merged: this panel owns the section and shows its
 	// complete state, so a merge would make clearing the box impossible.
+	// Returns the write, so a field flushed at a boundary can be awaited.
 	const patch = (changes: { mode?: "auto" | "manual"; maxTokens?: number }) => {
 		// Read at call time, not from the render this closure was made in: two
 		// controls touched inside one round trip share a closure, so a section
@@ -150,7 +151,7 @@ export const OutputBudgetField = ({ providerId }: { providerId: string }) => {
 		}
 		pending.current = next
 		inFlight.current += 1
-		void write({ outputBudget: next })
+		return write({ outputBudget: next })
 			.catch((error) => console.error("Failed to update output budget:", error))
 			.finally(() => {
 				inFlight.current -= 1
@@ -277,7 +278,7 @@ export const OutputBudgetField = ({ providerId }: { providerId: string }) => {
 					if (next === stored) {
 						return
 					}
-					patch({ maxTokens: next })
+					return patch({ maxTokens: next })
 				}}
 				placeholder={auto ? `Default: ${CEILING_TOKENS}` : autoValue ? `Default: ${autoValue}` : "Default"}
 				style={{ width: "100%" }}>

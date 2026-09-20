@@ -182,9 +182,8 @@ export const ThinkingBudgetField = ({ providerId }: { providerId: string }) => {
 								className="w-full"
 								initialValue={storedThinkBudget}
 								numeric
-								onChange={(value: string) => {
-									composeAndWrite({ thinkBudget: value })
-								}}
+								// Returned so the field's flush can be awaited.
+								onChange={(value: string) => composeAndWrite({ thinkBudget: value })}
 								placeholder="4096">
 								<span className="font-medium text-xs">reasoning_budget_tokens</span>
 							</DebouncedTextField>

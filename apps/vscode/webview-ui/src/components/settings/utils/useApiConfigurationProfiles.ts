@@ -24,8 +24,14 @@ import type { Mode } from "@shared/storage/types"
 import { useCallback, useMemo } from "react"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { getActiveProviderAndModelId } from "@/hooks/useNormalizedApiConfiguration"
-import { toProtobufProviderModelOverrides, useProviderConfig, writeProviderConfigFor } from "@/hooks/useProviderConfig"
+import {
+	readProviderConfig,
+	toProtobufProviderModelOverrides,
+	useProviderConfig,
+	writeProviderConfigFor,
+} from "@/hooks/useProviderConfig"
 import { ModelsServiceClient, StateServiceClient } from "@/services/grpc-client"
+import { discardPendingEdits, flushPendingEdits } from "./pendingEdits"
 import { SCOPED_MODEL_SETTINGS, scopedSettingsPatch } from "./scopedSettingsPatch"
 import { useApiConfigurationHandlers } from "./useApiConfigurationHandlers"
 
@@ -320,6 +326,10 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 			if (!profile) {
 				return
 			}
+			// Dropped, not saved: this is also the Revert button, and a field
+			// whose debounce fires after the profile has been re-applied writes
+			// the value the user just asked to discard straight back over it.
+			discardPendingEdits()
 			await applySnapshot(profile.snapshot)
 			const next = { ...activeNames }
 			for (const scope of loadedScopes) {
@@ -330,13 +340,41 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 		[profiles, applySnapshot, activeNames, loadedScopes, writeActiveNames],
 	)
 
+	/**
+	 * The panel as it stands, read after the fields have been made to save.
+	 *
+	 * `currentSnapshot` is a memo, so it holds what the last render saw. Every
+	 * numeric field in the sampler waits 800ms before it writes, and a save
+	 * inside that window captured the configuration from before the values were
+	 * typed -- while the values themselves reached providers.json a moment
+	 * later, where only the running session could see them. Measured: a session
+	 * running `temp 0.700 / repeat_penalty 1.250 / presence_penalty 0.150` on
+	 * the server's own sampler dump, and three profiles saved that afternoon
+	 * carrying no sampler at all.
+	 *
+	 * So: end the wait, wait for the writes, then read the store directly
+	 * rather than the memo that predates them. The settings half still comes
+	 * from `apiConfiguration`; its fields write through the same flush, and the
+	 * provider half is where the sampler lives.
+	 */
+	const captureSettledSnapshot = useCallback(async (): Promise<ApiConfigurationSnapshot> => {
+		await flushPendingEdits()
+		if (snapshotKind) {
+			return currentSnapshot
+		}
+		const base = captureApiConfigurationSnapshot(apiConfiguration, scopeMode)
+		const captured = captureProviderConfigSnapshot(readProviderConfig(activeProviderId as string), scopeMode)
+		return captured === undefined ? base : { ...base, providerConfig: captured }
+	}, [snapshotKind, currentSnapshot, apiConfiguration, scopeMode, activeProviderId])
+
 	const saveProfile = useCallback(
 		async (name: string) => {
 			const trimmed = name.trim()
 			if (!trimmed) {
 				return
 			}
-			const profile: ApiConfigurationProfile = { name: trimmed, updatedAt: Date.now(), snapshot: currentSnapshot }
+			const snapshot = await captureSettledSnapshot()
+			const profile: ApiConfigurationProfile = { name: trimmed, updatedAt: Date.now(), snapshot }
 			// The same scopes a load writes: saving from the Act tab while Plan
 			// shares its model has named the profile for both, and leaving Plan
 			// on the previous name would make the next Plan session resolve from
@@ -347,7 +385,7 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 			}
 			await writeActiveNames(next, upsertApiConfigurationProfile(profiles, profile))
 		},
-		[currentSnapshot, profiles, activeNames, loadedScopes, writeActiveNames],
+		[captureSettledSnapshot, profiles, activeNames, loadedScopes, writeActiveNames],
 	)
 
 	const deleteProfile = useCallback(

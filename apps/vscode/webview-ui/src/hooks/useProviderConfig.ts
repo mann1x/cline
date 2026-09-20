@@ -144,6 +144,20 @@ export async function writeProviderConfigFor(
 	return response
 }
 
+/**
+ * The entry as it stands right now, outside React's render cycle.
+ *
+ * A component reads this through `useProviderConfig`, which is a `useMemo`
+ * over the store and therefore holds whatever the last render saw. That is
+ * right for rendering and wrong for saving: a profile save that runs after
+ * flushing a pending field has to read what the flush just wrote, and the
+ * memo it closed over predates it. Saving from the memo is how a profile came
+ * to be stored without the sampler the session was already running on.
+ */
+export function readProviderConfig(providerId: string): ProviderConfigResponse | undefined {
+	return providerConfigEntries.get(providerId)?.response
+}
+
 /** Test-only: the entries outlive any one hook, which is the point of them. */
 export function __resetProviderConfigEntries(): void {
 	providerConfigEntries.clear()

@@ -1,5 +1,6 @@
 import { renderHook, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import { registerPendingEdit } from "../pendingEdits"
 import { useApiConfigurationProfiles } from "../useApiConfigurationProfiles"
 
 // The model a profile is for lives in two places: the settings snapshot
@@ -36,12 +37,22 @@ const commitModelSelection = vi.fn().mockResolvedValue(undefined)
 // so is read while `vi.mock` is still being hoisted past its declaration.
 const writeProviderConfigFor = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
 
+/**
+ * What providers.json holds, as the save path reads it.
+ *
+ * Deliberately separate from the object `useProviderConfig` hands the render:
+ * the whole point of the fix is that a save reads the store *after* flushing
+ * the fields, rather than the memo the last render closed over.
+ */
+const storedProviderConfig = vi.hoisted(() => ({ current: { contextWindow: 110000 } as Record<string, unknown> }))
+
 vi.mock("@/hooks/useProviderConfig", () => ({
 	useProviderConfig: () => ({
 		config: { contextWindow: 110000 },
 		write: writeProviderConfig,
 		commitSelection,
 	}),
+	readProviderConfig: () => storedProviderConfig.current,
 	writeProviderConfigFor,
 	// Re-exported by the hook module; the profile load uses it to clear the
 	// committed model's overrides when the profile carries none.
@@ -229,5 +240,62 @@ describe("useApiConfigurationProfiles — loading a profile", () => {
 		expect(written.providerConfig.selectedModelId).toBe("a3b-coder_tb:iq2_xs")
 		expect(written.providerConfig.contextWindow).toBe(110000)
 		expect(commitSelection).not.toHaveBeenCalled()
+	})
+
+	/**
+	 * The 800ms the numeric sampler fields wait before they write.
+	 *
+	 * Measured on a live install: a session ran with `temp 0.700 /
+	 * repeat_penalty 1.250 / presence_penalty 0.150`, read off the server's own
+	 * sampler dump, while three profiles saved from that same panel that
+	 * afternoon carried no sampler at all. Update was pressed inside the
+	 * debounce window, so it captured the panel from before the values were
+	 * typed and the values landed in providers.json a moment later -- visible
+	 * to the run, invisible to the profile. Pressing Update again did not help:
+	 * each press captures the state as of a moment ago, so whichever field was
+	 * touched last is always the one dropped.
+	 */
+	describe("a field still holding an unsaved edit", () => {
+		it("is made to save before the profile is captured", async () => {
+			const settled = { current: false }
+			const unregister = registerPendingEdit({
+				pending: () => !settled.current,
+				flush: () =>
+					new Promise<void>((resolve) => {
+						setTimeout(() => {
+							settled.current = true
+							storedProviderConfig.current = {
+								contextWindow: 110000,
+								sampling: { temperature: 0.7, repeatPenalty: 1.25 },
+							}
+							resolve()
+						}, 5)
+					}),
+				discard: () => {},
+			})
+			const { result } = renderHook(() => useApiConfigurationProfiles({ kind: "mode", mode: "act" }))
+
+			await result.current.saveProfile("ollama / v9-agentic")
+
+			const saved = JSON.parse(updateSettings.mock.calls.at(-1)[0].apiConfigurationProfiles)
+			const profile = saved.find((entry: { name: string }) => entry.name === "ollama / v9-agentic")
+			expect(profile.snapshot.providerConfig.sampling).toEqual({ temperature: 0.7, repeatPenalty: 1.25 })
+			unregister()
+		})
+
+		it("is dropped by a load rather than written back after it", async () => {
+			// Revert goes through the same path. A debounce that fires after the
+			// profile has been re-applied puts the discarded value straight back.
+			const discard = vi.fn()
+			const flush = vi.fn()
+			const unregister = registerPendingEdit({ pending: () => true, flush, discard })
+			const { result } = renderHook(() => useApiConfigurationProfiles({ kind: "mode", mode: "act" }))
+
+			await result.current.loadProfile(PROFILE.name)
+
+			expect(discard).toHaveBeenCalled()
+			expect(flush).not.toHaveBeenCalled()
+			unregister()
+		})
 	})
 })

@@ -30,6 +30,7 @@ import FeatureSettingsSection from "./sections/FeatureSettingsSection"
 import GeneralSettingsSection from "./sections/GeneralSettingsSection"
 import { RemoteConfigSection } from "./sections/RemoteConfigSection"
 import TerminalSettingsSection from "./sections/TerminalSettingsSection"
+import { flushPendingEdits } from "./utils/pendingEdits"
 
 const IS_DEV = process.env.IS_DEV
 
@@ -142,45 +143,64 @@ const SettingsView = ({ onDone, targetSection }: SettingsViewProps) => {
 
 	const [activeTab, setActiveTab] = useState<string>(targetSection || SETTINGS_TABS[0].id)
 
+	// Leaving a tab unmounts everything on it, including a field still sitting
+	// inside its debounce. The writes are started here, before the unmount, so
+	// the value the user is looking at is the one that reaches providers.json.
+	// Not awaited: each write is already in flight by the time this returns, and
+	// making the tab wait for a round trip to paint would be a worse panel.
+	const changeTab = useCallback((tabId: string) => {
+		void flushPendingEdits()
+		setActiveTab(tabId)
+	}, [])
+
+	// Done closes the whole view, so here the writes are waited for.
+	const handleDone = useCallback(async () => {
+		await flushPendingEdits()
+		onDone()
+	}, [onDone])
+
 	// Optimized message handler with early returns
-	const handleMessage = useCallback((event: MessageEvent) => {
-		const message: ExtensionMessage = event.data
-		if (message.type !== "grpc_response") {
-			return
-		}
-
-		const grpcMessage = message.grpc_response?.message
-		if (grpcMessage?.key !== "scrollToSettings") {
-			return
-		}
-
-		const tabId = grpcMessage.value
-		if (!tabId) {
-			return
-		}
-
-		// Check if valid tab ID
-		if (SETTINGS_TABS.some((tab) => tab.id === tabId)) {
-			setActiveTab(tabId)
-			return
-		}
-
-		// Fallback to element scrolling
-		requestAnimationFrame(() => {
-			const element = document.getElementById(tabId)
-			if (!element) {
+	const handleMessage = useCallback(
+		(event: MessageEvent) => {
+			const message: ExtensionMessage = event.data
+			if (message.type !== "grpc_response") {
 				return
 			}
 
-			element.scrollIntoView({ behavior: "smooth" })
-			element.style.transition = "background-color 0.5s ease"
-			element.style.backgroundColor = "var(--vscode-textPreformat-background)"
+			const grpcMessage = message.grpc_response?.message
+			if (grpcMessage?.key !== "scrollToSettings") {
+				return
+			}
 
-			setTimeout(() => {
-				element.style.backgroundColor = "transparent"
-			}, 1200)
-		})
-	}, [])
+			const tabId = grpcMessage.value
+			if (!tabId) {
+				return
+			}
+
+			// Check if valid tab ID
+			if (SETTINGS_TABS.some((tab) => tab.id === tabId)) {
+				changeTab(tabId)
+				return
+			}
+
+			// Fallback to element scrolling
+			requestAnimationFrame(() => {
+				const element = document.getElementById(tabId)
+				if (!element) {
+					return
+				}
+
+				element.scrollIntoView({ behavior: "smooth" })
+				element.style.transition = "background-color 0.5s ease"
+				element.style.backgroundColor = "var(--vscode-textPreformat-background)"
+
+				setTimeout(() => {
+					element.style.backgroundColor = "transparent"
+				}, 1200)
+			})
+		},
+		[changeTab],
+	)
 
 	useEvent("message", handleMessage)
 
@@ -250,12 +270,12 @@ const SettingsView = ({ onDone, targetSection }: SettingsViewProps) => {
 
 	return (
 		<Tab>
-			<ViewHeader environment={environment} onDone={onDone} title="Settings" />
+			<ViewHeader environment={environment} onDone={handleDone} title="Settings" />
 
 			<div className="flex flex-1 overflow-hidden">
 				<TabList
 					className="shrink-0 flex flex-col overflow-y-auto border-r border-sidebar-background"
-					onValueChange={setActiveTab}
+					onValueChange={changeTab}
 					value={activeTab}>
 					{SETTINGS_TABS.filter((tab) => !tab.hidden?.({ user: clineUser, activeOrganization })).map(renderTabItem)}
 				</TabList>

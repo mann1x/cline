@@ -3,7 +3,7 @@ import { useDebouncedInput } from "../utils/useDebouncedInput"
 
 interface DebouncedTextAreaProps {
 	initialValue: string
-	onChange: (value: string) => void
+	onChange: (value: string) => unknown
 
 	placeholder?: string
 	id?: string

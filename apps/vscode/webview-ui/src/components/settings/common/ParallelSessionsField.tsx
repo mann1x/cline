@@ -66,7 +66,8 @@ export const ParallelSessionsField = ({ providerId }: { providerId: string }) =>
 				}
 				// Zero clears it, as with the context window; cleared reads back as
 				// one, which is what `--parallel` and a basic plan give you.
-				void write({ parallelSessions: next ?? 0 }).catch((error) =>
+				// Returned so a boundary that flushes this field can wait for it.
+				return write({ parallelSessions: next ?? 0 }).catch((error) =>
 					console.error("Failed to update parallel sessions:", error),
 				)
 			}}

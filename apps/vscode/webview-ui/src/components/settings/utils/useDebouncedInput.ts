@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useDebounceEffect } from "@/utils/useDebounceEffect"
+import { registerPendingEdit } from "./pendingEdits"
 
 /**
  * A custom hook that provides debounced input handling to prevent jumpy text inputs
@@ -16,13 +17,14 @@ import { useDebounceEffect } from "@/utils/useDebounceEffect"
  * @param onChange - Callback function to save the value (e.g., to backend)
  * @param debounceMs - Debounce delay in milliseconds (default: 100ms)
  * @returns The current value, an editing setter, an authoritative sync setter,
- *          and a flush that saves a pending edit right now
+ *          and a flush that saves a pending edit right now, returning
+ *          whatever `onChange` returns so the caller can await the write
  */
 export function useDebouncedInput<T>(
 	initialValue: T,
-	onChange: (value: T) => void,
+	onChange: (value: T) => unknown,
 	debounceMs: number = 100,
-): [T, (value: T) => void, (value: T) => void, () => void] {
+): [T, (value: T) => void, (value: T) => void, () => unknown] {
 	// Local state to prevent jumpy input - initialize once
 	const [localValue, setLocalValueState] = useState(initialValue)
 
@@ -85,13 +87,43 @@ export function useDebouncedInput<T>(
 		[],
 	)
 
+	// The return is passed through, so a caller that flushes before reading the
+	// stored configuration can wait for the write rather than racing it. That
+	// race is the bug this exists for: Update captured the panel from before
+	// the value was typed, and the value reached providers.json a moment after,
+	// where only the running session could see it.
 	const flush = useCallback(() => {
+		if (!hasPendingUserEditRef.current) {
+			return undefined
+		}
+		hasPendingUserEditRef.current = false
+		return latestRef.current.onChange(latestRef.current.localValue)
+	}, [])
+
+	// Put the field back to what is stored, without writing. For revert: a
+	// debounce that fires after the profile has been re-applied writes the
+	// value the user just asked to discard.
+	const discard = useCallback(() => {
 		if (!hasPendingUserEditRef.current) {
 			return
 		}
 		hasPendingUserEditRef.current = false
-		latestRef.current.onChange(latestRef.current.localValue)
+		setLocalValueState(prevInitialValueRef.current)
 	}, [])
+
+	// Registered for the lifetime of the field rather than only while an edit
+	// is pending: `pending` is the question every boundary asks first, and a
+	// registry that has to be kept in step with a ref is a second source of
+	// truth for the same fact.
+	useEffect(
+		() =>
+			registerPendingEdit({
+				pending: () => hasPendingUserEditRef.current,
+				flush,
+				discard,
+			}),
+		[flush, discard],
+	)
 
 	return [localValue, setLocalValue, syncLocalValue, flush]
 }

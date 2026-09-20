@@ -25,7 +25,7 @@ const NUMERIC_FIELD_DEBOUNCE_MS = 800
 interface DebouncedTextFieldProps {
 	// Custom props for debouncing functionality
 	initialValue: string
-	onChange: (value: string) => void
+	onChange: (value: string) => unknown
 	/**
 	 * This field holds a number typed digit by digit, so it waits out a pause
 	 * mid-number before saving. See {@link NUMERIC_FIELD_DEBOUNCE_MS}.

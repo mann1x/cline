@@ -231,7 +231,8 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 	const handleThinkBudgetChange = useCallback(
 		(value: string) => {
 			setThinkBudgetDraft(value)
-			composeAndWrite({ thinkBudget: value })
+			// Returned so the field's flush can be awaited.
+			return composeAndWrite({ thinkBudget: value })
 		},
 		[composeAndWrite],
 	)
@@ -561,7 +562,8 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 							// window of their own; one shared number meant a profile
 							// with a 256k window and one with 8k had to agree. Zero
 							// clears it, and the global setting decides again.
-							void write({ maxToolResultChars: next }).catch((error) =>
+							// Returned so a boundary that flushes this field can wait.
+							return write({ maxToolResultChars: next }).catch((error) =>
 								console.error("Failed to update tool result cap:", error),
 							)
 						}}
@@ -596,7 +598,8 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 							// them across; dropping maxTokens from an otherwise
 							// empty set clears the entry, which is the intent.
 							const { maxTokens: _replaced, ...rest } = committedOverrides ?? {}
-							void commitModelSelection({
+							// Returned so a boundary that flushes this field can wait.
+							return commitModelSelection({
 								modelId: selectedModel.modelId,
 								overrides: { ...rest, ...(next !== undefined ? { maxTokens: next } : {}) },
 							}).catch((error) => console.error("Failed to update Ollama per-turn output cap:", error))
