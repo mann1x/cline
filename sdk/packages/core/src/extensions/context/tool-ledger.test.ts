@@ -683,6 +683,65 @@ describe("putting each call where the replay says it happened", () => {
 		expect(spliced.text.match(/run_commands/g)).toHaveLength(1);
 	});
 
+	// Measured on pandorum, session 1789914699018_6pm02: the replay cited four
+	// consecutive identical check_file calls as `[#2-5]` and every one of them
+	// fell through to the appended block, because the pattern only matched a
+	// single number. Compressing a run of identical calls is the sensible thing
+	// to write, so the splice meets it.
+	it("expands a range citation into the calls it names", () => {
+		const spliced = spliceLedgerCitations(
+			"I check it repeatedly. [#1-3] Nothing changes.",
+			ledger(),
+		);
+		expect(spliced.cited).toEqual([1, 2, 3]);
+		expect(spliced.uncited).toEqual([]);
+		expect(spliced.invalid).toEqual([]);
+		expect(spliced.text).toContain("I check it repeatedly.");
+		expect(spliced.text).toContain("Nothing changes.");
+		expect(spliced.text).not.toContain("[#1-3]");
+		// In ledger order, between the two sentences.
+		expect(spliced.text.indexOf("run_commands")).toBeLessThan(
+			spliced.text.indexOf("read_files"),
+		);
+		expect(spliced.text.indexOf("read_files")).toBeLessThan(
+			spliced.text.indexOf("check_file"),
+		);
+	});
+
+	it("accepts the ways a model writes a range", () => {
+		for (const citation of ["[#1-2]", "[#1 - 2]", "[#1-#2]", "[#1\u20132]"]) {
+			const spliced = spliceLedgerCitations(
+				`Work. ${citation} Done.`,
+				ledger(),
+			);
+			expect(spliced.cited, citation).toEqual([1, 2]);
+		}
+	});
+
+	it("splices the half of a range that exists and counts the rest", () => {
+		const spliced = spliceLedgerCitations("Work. [#2-4] Done.", ledger());
+		expect(spliced.cited).toEqual([2, 3]);
+		expect(spliced.invalid).toEqual([4]);
+	});
+
+	// `[#5-2]` is not a range anybody meant. Reordering it would invent a
+	// reading; dropping it leaves the sentence and says so in `invalid`.
+	it("refuses a backwards range rather than guessing", () => {
+		const spliced = spliceLedgerCitations("Work. [#3-1] Done.", ledger());
+		expect(spliced.cited).toEqual([]);
+		expect(spliced.invalid).toEqual([3]);
+		expect(spliced.text).toBe("Work.  Done.");
+	});
+
+	// A span longer than the whole ledger is not a citation, and expanding it
+	// would put thousands of numbers into `invalid` for one bad token.
+	it("refuses a range wider than the ledger without enumerating it", () => {
+		const spliced = spliceLedgerCitations("Work. [#1-9000] Done.", ledger());
+		expect(spliced.cited).toEqual([]);
+		expect(spliced.invalid).toEqual([1]);
+		expect(spliced.uncited).toEqual([1, 2, 3]);
+	});
+
 	it("leaves a replay that cites nothing exactly as it was", () => {
 		const prose = "Let me work on the file. It is not parsing yet.";
 		expect(spliceLedgerCitations(prose, ledger()).text).toBe(prose);

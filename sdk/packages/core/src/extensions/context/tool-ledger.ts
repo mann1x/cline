@@ -663,7 +663,17 @@ export function renderToolLedgerKey(
 }
 
 /** A citation the replay carries where a call belongs: `[#7]`. */
-const LEDGER_CITATION = /\[#(\d+)\]/g;
+/**
+ * `[#7]`, and the range a model writes when consecutive calls are the same.
+ *
+ * The range half is not a convenience. Measured on pandorum, session
+ * 1789914699018_6pm02: the replay made four identical `check_file` calls that
+ * all reported the same error and cited them as `[#2-5]`, which is exactly the
+ * right instinct -- and all four fell through to the appended block because
+ * this pattern only matched one number. The dash may be a hyphen or either
+ * dash a model reaches for, spaced or not, with or without a second `#`.
+ */
+const LEDGER_CITATION = /\[#(\d+)(?:\s*[-\u2013\u2014]\s*#?(\d+))?\]/g;
 
 export interface LedgerSpliceResult {
 	text: string;
@@ -705,17 +715,48 @@ export function spliceLedgerCitations(
 	const used = new Set<number>();
 	const cited: number[] = [];
 	const invalid: number[] = [];
-	const text = replay.replace(LEDGER_CITATION, (_match, digits: string) => {
-		const index = Number(digits);
+	const place = (index: number): string | undefined => {
 		const entry = byIndex.get(index);
 		if (!entry || used.has(index)) {
-			invalid.push(index);
-			return "";
+			return undefined;
 		}
 		used.add(index);
 		cited.push(index);
-		return `\n${renderToolLedgerEntry(entry)}\n`;
-	});
+		return renderToolLedgerEntry(entry);
+	};
+	const text = replay.replace(
+		LEDGER_CITATION,
+		(_match, from: string, to: string | undefined) => {
+			const start = Number(from);
+			if (to === undefined) {
+				const placed = place(start);
+				if (placed === undefined) {
+					invalid.push(start);
+					return "";
+				}
+				return `\n${placed}\n`;
+			}
+			// A backwards range is not a range anybody meant, and a span wider
+			// than the whole ledger is not a citation -- expanding either would
+			// invent a reading, or put thousands of numbers in `invalid` for one
+			// bad token. Both are dropped whole, counted once at their start.
+			const end = Number(to);
+			if (end < start || end - start + 1 > entries.length) {
+				invalid.push(start);
+				return "";
+			}
+			const rendered: string[] = [];
+			for (let index = start; index <= end; index += 1) {
+				const placed = place(index);
+				if (placed === undefined) {
+					invalid.push(index);
+					continue;
+				}
+				rendered.push(placed);
+			}
+			return rendered.length > 0 ? `\n${rendered.join("\n")}\n` : "";
+		},
+	);
 	return {
 		// A dropped citation can leave a doubled blank line behind it.
 		text: text.replace(/\n{3,}/g, "\n\n").trim(),

@@ -108,6 +108,13 @@ describe("the replay compaction prompt", () => {
 		expect(prompt).not.toContain("hand-over note");
 	});
 
+	it("offers the range the model reaches for anyway", () => {
+		// It wrote `[#2-5]` for four identical check_file calls before anything
+		// told it it could, and all four were dropped. Saying so beats leaving
+		// it to guess a syntax that used to be silently discarded.
+		expect(DEFAULT_REPLAY_COMPACTION_PROMPT).toContain("[#2-5]");
+	});
+
 	it("closes the numbering so a citation cannot run past the record", () => {
 		// Measured: against a 30-entry ledger the replay cited [#1]-[#33].
 		// The splice drops 31-33, but the invented sentences they were
