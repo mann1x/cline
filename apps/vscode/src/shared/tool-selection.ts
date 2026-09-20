@@ -22,6 +22,51 @@
  * are what this build offers; the authoritative per-session figure, MCP
  * included, is the manifest each session writes to `cline-tools.json`.
  */
+/**
+ * What a tool does to the workspace, which is the axis a reader is actually
+ * scanning along.
+ *
+ * Twelve switches in one flat column, ordered by price, meant the only way to
+ * find a tool was to read every label -- and the question being asked is never
+ * "what is the most expensive tool", it is "can this profile still edit
+ * files". Grouping answers that question at a glance; the price stays beside
+ * each entry because it is still what the decision costs.
+ *
+ * `other` is deliberately not "misc": both members do arbitrary things to the
+ * outside world -- a shell and a browser -- so it is the group whose contents
+ * warrant the most thought, not the leftovers.
+ */
+export type ToolGroup = "read" | "write" | "check" | "other"
+
+/** The groups in the order the panel shows them, least dangerous first. */
+export const TOOL_GROUPS: readonly {
+	readonly id: ToolGroup
+	readonly label: string
+	/** One line under the heading, for what the group is for. */
+	readonly summary: string
+}[] = [
+	{
+		id: "read",
+		label: "Read",
+		summary: "Find and read things. None of them change anything.",
+	},
+	{
+		id: "write",
+		label: "Write",
+		summary: "Change files. Switching both off makes the profile read-only.",
+	},
+	{
+		id: "check",
+		label: "Check",
+		summary: "Ask the tooling about the code rather than reading the bytes.",
+	},
+	{
+		id: "other",
+		label: "Other",
+		summary: "Arbitrary effects outside the workspace. Worth the most thought, not the least.",
+	},
+]
+
 export interface SelectableTool {
 	/** The registered tool name, which is what a profile stores. */
 	readonly name: string
@@ -31,6 +76,8 @@ export interface SelectableTool {
 	readonly summary: string
 	/** Serialized name + description + schema, in tokens at 4 chars each. */
 	readonly tokens: number
+	/** Which heading it appears under. */
+	readonly group: ToolGroup
 }
 
 export const SELECTABLE_TOOLS: readonly SelectableTool[] = [
@@ -39,72 +86,84 @@ export const SELECTABLE_TOOLS: readonly SelectableTool[] = [
 		label: "editor",
 		summary: "Writes files: ranged replacements, whole-file writes and creations.",
 		tokens: 1860,
+		group: "write",
 	},
 	{
 		name: "read_files",
 		label: "read_files",
 		summary: "Reads files, several at once, with line ranges and revisions.",
 		tokens: 947,
+		group: "read",
 	},
 	{
 		name: "ask_lsp",
 		label: "ask_lsp",
 		summary: "Definitions, references and hovers from the language servers already installed.",
 		tokens: 921,
+		group: "check",
 	},
 	{
 		name: "check_file",
 		label: "check_file",
 		summary: "The editor's own diagnostics for a file, plus the project's lint command.",
 		tokens: 800,
+		group: "check",
 	},
 	{
 		name: "grep",
 		label: "grep",
 		summary: "Regex search across the workspace.",
 		tokens: 765,
+		group: "read",
 	},
 	{
 		name: "browser",
 		label: "browser",
 		summary: "Drives a real Chrome: loads a page, clicks, types and reads the console.",
 		tokens: 645,
+		group: "other",
 	},
 	{
 		name: "sed",
 		label: "sed",
 		summary: "Stream edits, with a preview mode and an in-place mode.",
 		tokens: 637,
+		group: "write",
 	},
 	{
 		name: "run_commands",
 		label: "run_commands",
 		summary: "Runs shell commands in the workspace terminal.",
 		tokens: 529,
+		group: "other",
 	},
 	{
 		name: "search_codebase",
 		label: "search_codebase",
 		summary: "Semantic search over the indexed workspace.",
 		tokens: 482,
+		group: "read",
 	},
 	{
 		name: "awk",
 		label: "awk",
 		summary: "Field-oriented extraction over text, read-only.",
 		tokens: 442,
+		group: "read",
 	},
 	{
 		name: "list_files",
 		label: "list_files",
 		summary: "Lists a directory or finds files by glob, without a shell.",
 		tokens: 355,
+		group: "read",
 	},
 	{
 		name: "fetch_web_content",
 		label: "fetch_web_content",
 		summary: "Fetches a URL and returns its text.",
 		tokens: 264,
+		group: "read",
 	},
 ]
 

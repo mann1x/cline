@@ -11,7 +11,7 @@ import {
 	createListFilesTool,
 	MAX_READ_REFUSAL_CHARS,
 } from "../../node_modules/@cline/core/dist/index.js"
-import { DEFAULT_READ_LIMIT_CHARS, SELECTABLE_TOOLS } from "./tool-selection"
+import { DEFAULT_READ_LIMIT_CHARS, SELECTABLE_TOOLS, TOOL_GROUPS } from "./tool-selection"
 
 /**
  * Rebuild every selectable tool and measure it.
@@ -94,6 +94,26 @@ describe("the selectable tool catalog", () => {
 				Math.abs(measured - entry.tokens) / entry.tokens,
 				`${entry.name} is ${measured} tokens, catalog says ${entry.tokens}`,
 			).toBeLessThan(0.05)
+		}
+	})
+
+	// The panel renders one block per entry in TOOL_GROUPS and filters the
+	// catalog into it. A tool whose group no block matches is dropped from the
+	// UI while staying in the profile -- switched on, costing its tokens, with
+	// no switch to turn it off.
+	it("gives every tool a group the panel renders", () => {
+		const known = new Set(TOOL_GROUPS.map((group) => group.id))
+		for (const entry of SELECTABLE_TOOLS) {
+			expect(known.has(entry.group), `${entry.name} is in group ${entry.group}`).toBe(true)
+		}
+	})
+
+	// The other direction: an empty group would print a heading and a blurb
+	// over nothing.
+	it("has at least one tool in every group it offers", () => {
+		for (const group of TOOL_GROUPS) {
+			const members = SELECTABLE_TOOLS.filter((entry) => entry.group === group.id)
+			expect(members.length, `group ${group.id} is empty`).toBeGreaterThan(0)
 		}
 	})
 
