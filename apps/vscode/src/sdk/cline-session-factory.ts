@@ -2230,28 +2230,37 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		// auto-condense was off silently took the condenser with it.
 		compaction: {
 			enabled: useAutoCondense,
-			// Outside the auto-only spread, because the council is not an
-			// auto-compaction feature. A manual compaction force-enables the
-			// pass (`sdk-compaction.ts` sets `enabled: true`) and spreads *this*
-			// object for everything else, so a flag that only appears when
-			// auto-condense is on is a flag a manual compaction never sees. The
-			// agentic strategy treats absent as on -- it tests
-			// `councilEnabled === false` -- so the switch read as ignored: with
-			// auto-condense off, every manual compaction paid three extra model
-			// calls the user had turned off. Same fault the comment above
-			// records for the capped-thinking condenser, one field over.
+			// `enabled` above is the only field here that means "automatic". It
+			// decides whether the transcript is compacted on its own; everything
+			// below decides *how* a compaction is done once one is happening, and
+			// a manual compaction is one. `sdk-compaction.ts` force-enables the
+			// pass and spreads *this* object for the rest, so anything sent only
+			// when auto-condense is on is a setting a manual compaction never
+			// sees.
+			//
+			// These all used to sit inside that gate, and each failed in its own
+			// way with Auto Compact off: the two switches read as ON, because the
+			// strategy tests `councilEnabled === false` and
+			// `thinkingSummaryEnabled !== false`, so a manual compaction paid for
+			// a council and a thinking summary the user had turned off; and the
+			// strategy, the retained-message count and all three custom prompts
+			// fell back to defaults, so the prompts someone wrote were quietly
+			// not the prompts that ran. Nothing surfaced any of it -- an extra
+			// model call and a default prompt both look like the compaction
+			// working.
+			//
+			// Same fault the comment above records for the capped-thinking
+			// condenser, which is what it should have been read as the first
+			// time: settings that travel in the compaction config but do not
+			// belong to auto-compaction were being taken down with it.
+			strategy: compactionStrategy,
+			keepRecentMessages: keepRecentMessagesAtCompaction,
 			councilEnabled: councilCompactionEnabled,
-			...(useAutoCondense
-				? {
-						strategy: compactionStrategy,
-						keepRecentMessages: keepRecentMessagesAtCompaction,
-						...(typeof forceFullFromCompaction === "number" ? { forceFullFromCompaction } : {}),
-						...(compactionPrompt ? { summaryPrompt: compactionPrompt } : {}),
-						...(fullCompactionPrompt ? { fullSummaryPrompt: fullCompactionPrompt } : {}),
-						thinkingSummaryEnabled: thinkingCompactionEnabled,
-						...(thinkingCompactionPrompt ? { thinkingSummaryPrompt: thinkingCompactionPrompt } : {}),
-					}
-				: {}),
+			thinkingSummaryEnabled: thinkingCompactionEnabled,
+			...(typeof forceFullFromCompaction === "number" ? { forceFullFromCompaction } : {}),
+			...(compactionPrompt ? { summaryPrompt: compactionPrompt } : {}),
+			...(fullCompactionPrompt ? { fullSummaryPrompt: fullCompactionPrompt } : {}),
+			...(thinkingCompactionPrompt ? { thinkingSummaryPrompt: thinkingCompactionPrompt } : {}),
 			// A turn that ran out of thinking budget is cut mid-sentence and the
 			// next turn re-derives the same reasoning from the start. Needs the
 			// allowance to detect it, so it stands down on any provider that

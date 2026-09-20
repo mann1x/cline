@@ -64,20 +64,53 @@ describe("FeatureSettingsSection", () => {
 		expect(agentSection?.querySelector('[id="Feature Tips"]')).toBeNull()
 	})
 
-	it("renders the Auto Compact Strategy setting in the Agent section", () => {
+	it("renders the Compaction Strategy setting in the Agent section", () => {
 		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
 
-		expect(screen.getByText("Auto Compact Strategy")).toBeTruthy()
+		expect(screen.getByText("Compaction Strategy")).toBeTruthy()
 
 		const agentSection = container.querySelector("#agent-features")
 		expect(agentSection?.textContent).toContain("Basic")
 	})
 
-	it("disables Auto Compact Strategy when Auto Compact is off", () => {
+	// This asserted the opposite, which was the bug written down as the
+	// contract. The strategy governs how a compaction rewrites context, and a
+	// manual compaction rewrites context: it force-enables the pass and reads
+	// this same setting. Greyed out with Auto Compact off, the strategy a manual
+	// compaction ran could not be chosen -- it silently used the default.
+	// The general form of the council fix. `enabled` is the only compaction
+	// setting that means "automatic"; every other one describes HOW a compaction
+	// is done, and a manual compaction is a compaction -- it force-enables the
+	// pass and spreads the same config for the rest. Greyed out, they were
+	// settings you could not reach for the only kind of compaction you could
+	// still run.
+	it("leaves every how-a-compaction-is-done control reachable with Auto Compact off", () => {
+		mockExtensionState.value = {
+			...mockExtensionState.value,
+			useAutoCondense: false,
+			thinkingCompactionEnabled: true,
+			keepRecentMessagesAtCompaction: true,
+		}
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		for (const id of [
+			"keepRecentMessagesAtCompaction",
+			"force-full-from-compaction",
+			"thinkingCompactionEnabled",
+			"councilCompactionEnabled",
+		]) {
+			const control = container.querySelector(`#${id}`)
+			expect(control, id).toBeTruthy()
+			expect(control?.hasAttribute("disabled"), id).toBe(false)
+		}
+	})
+
+	it("keeps Compaction Strategy usable when Auto Compact is off", () => {
 		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
 
 		const strategySelect = container.querySelector("#agent-features button[role='combobox']")
-		expect(strategySelect).toHaveAttribute("disabled")
+		expect(strategySelect).toBeTruthy()
+		expect(strategySelect).not.toHaveAttribute("disabled")
 	})
 
 	it("calls updateSetting with hooksEnabled when toggled", () => {
@@ -377,9 +410,11 @@ describe("FeatureSettingsSection compaction council", () => {
 		const council = container.querySelector("#councilCompactionEnabled")
 		expect(council).toBeTruthy()
 		expect(council?.hasAttribute("disabled")).toBe(false)
-		// The contrast that makes this assertion mean something: the passes that
-		// really are auto-only are still greyed out in the same render.
-		expect(container.querySelector("#thinkingCompactionEnabled")?.hasAttribute("disabled")).toBe(true)
+		// The thinking pass is the same shape and was fixed with it:
+		// `thinkingSummaryEnabled !== false` gates a model call exactly as
+		// `councilEnabled === false` does, so greying it out cost a second
+		// unwanted call per manual compaction.
+		expect(container.querySelector("#thinkingCompactionEnabled")?.hasAttribute("disabled")).toBe(false)
 	})
 
 	it("can still be switched off with Auto Compact off", () => {

@@ -295,10 +295,11 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 								}
 							/>
 							<div className="space-y-2 py-3">
-								<Label className="text-sm font-medium text-foreground">Auto Compact Strategy</Label>
-								<p className="text-xs text-muted-foreground">Controls how auto compaction rewrites context.</p>
+								<Label className="text-sm font-medium text-foreground">Compaction Strategy</Label>
+								<p className="text-xs text-muted-foreground">
+									Controls how context is rewritten, for automatic compactions and ones you run yourself.
+								</p>
 								<Select
-									disabled={!useAutoCondense}
 									onValueChange={(value) => updateSetting("compactionStrategy", value)}
 									value={compactionStrategy ?? "agentic"}>
 									<SelectTrigger className="w-full">
@@ -667,7 +668,6 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 						<Switch
 							checked={keepRecentMessagesAtCompaction ?? true}
 							className="shrink-0"
-							disabled={!useAutoCondense}
 							id="keepRecentMessagesAtCompaction"
 							onCheckedChange={(checked) => updateSetting("keepRecentMessagesAtCompaction", checked)}
 							size="lg"
@@ -695,7 +695,7 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 						</Label>
 						<Input
 							defaultValue={forceFullFromCompaction ?? 0}
-							disabled={!useAutoCondense || keepRecentMessagesAtCompaction === false}
+							disabled={keepRecentMessagesAtCompaction === false}
 							id="force-full-from-compaction"
 							min={0}
 							onChange={(event) => {
@@ -734,7 +734,6 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 					{keepRecentMessagesAtCompaction === false ? (
 						<>
 							<DebouncedTextArea
-								disabled={!useAutoCondense}
 								initialValue={fullCompactionPrompt ?? ""}
 								maxRows={24}
 								minRows={4}
@@ -745,7 +744,6 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 								<LoadDefaultPromptButton
 									currentValue={fullCompactionPrompt}
 									defaultValue={defaultFullCompactionPrompt}
-									disabled={!useAutoCondense}
 									label="Full Compaction Prompt"
 									onLoad={(value) => updateSetting("fullCompactionPrompt", value)}
 								/>
@@ -761,7 +759,6 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 					) : (
 						<>
 							<DebouncedTextArea
-								disabled={!useAutoCondense}
 								initialValue={compactionPrompt ?? ""}
 								maxRows={24}
 								minRows={4}
@@ -772,7 +769,6 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 								<LoadDefaultPromptButton
 									currentValue={compactionPrompt}
 									defaultValue={defaultCompactionPrompt}
-									disabled={!useAutoCondense}
 									label="Compaction Prompt"
 									onLoad={(value) => updateSetting("compactionPrompt", value)}
 								/>
@@ -795,7 +791,6 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 						<Switch
 							checked={thinkingCompactionEnabled ?? true}
 							className="shrink-0"
-							disabled={!useAutoCondense}
 							id="thinkingCompactionEnabled"
 							onCheckedChange={(checked) => updateSetting("thinkingCompactionEnabled", checked)}
 							size="lg"
@@ -808,7 +803,7 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 						compaction. Leave empty for the built-in prompt.
 					</p>
 					<DebouncedTextArea
-						disabled={!useAutoCondense || thinkingCompactionEnabled === false}
+						disabled={thinkingCompactionEnabled === false}
 						initialValue={thinkingCompactionPrompt ?? ""}
 						maxRows={24}
 						minRows={4}
@@ -819,7 +814,7 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 						<LoadDefaultPromptButton
 							currentValue={thinkingCompactionPrompt}
 							defaultValue={defaultThinkingCompactionPrompt}
-							disabled={!useAutoCondense || thinkingCompactionEnabled === false}
+							disabled={thinkingCompactionEnabled === false}
 							label="Thinking Compaction Prompt"
 							onLoad={(value) => updateSetting("thinkingCompactionPrompt", value)}
 						/>

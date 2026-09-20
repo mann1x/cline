@@ -1493,8 +1493,13 @@ describe("buildSessionConfig", () => {
 		// The object is still sent, and `enabled` is the whole of what turns
 		// compaction off: the runtime builds no compaction pass without it.
 		expect(config.compaction?.enabled).toBe(false)
-		expect(config.compaction?.strategy).toBeUndefined()
-		expect(config.compaction?.summaryPrompt).toBeUndefined()
+		// This used to assert `strategy` and `summaryPrompt` were absent, which
+		// was the bug written down as the contract. `enabled: false` already
+		// stops an automatic compaction; withholding the rest only blinded the
+		// *manual* one, which force-enables the pass and spreads this same
+		// object. The settings describe how a compaction is done, so they travel
+		// whether or not one happens on its own.
+		expect(config.compaction?.strategy).toBe("agentic")
 	})
 
 	it("keeps the capped-thinking condenser configured with auto condense off", async () => {
@@ -1537,6 +1542,46 @@ describe("buildSessionConfig", () => {
 		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
 
 		expect(config.compaction?.councilEnabled).toBe(false)
+	})
+
+	it("carries every how-a-compaction-is-done setting with auto condense off", async () => {
+		// `councilEnabled` was one field of a seven-field fault. `enabled` is the
+		// only one that means "automatic"; the rest describe HOW a compaction is
+		// done, and a manual compaction is a compaction. Dropped, they cost a
+		// second unwanted model call (`thinkingSummaryEnabled !== false` gates
+		// `generateThinkingSummary`) and silently swapped the user's strategy and
+		// custom prompts for the defaults.
+		// The mock is typed for the boolean keys; these are the string and number
+		// settings the same store serves.
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation(((key: string) => {
+			if (key === "useAutoCondense" || key === "subagentsEnabled") {
+				return false
+			}
+			if (key === "thinkingCompactionEnabled") {
+				return false
+			}
+			if (key === "compactionPrompt") {
+				return "my replay prompt"
+			}
+			if (key === "thinkingCompactionPrompt") {
+				return "my thinking prompt"
+			}
+			if (key === "keepRecentMessagesAtCompaction") {
+				return 7
+			}
+			return undefined
+		}) as unknown as (key: string) => boolean | undefined)
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+
+		// The only field that legitimately tracks Auto Compact.
+		expect(config.compaction?.enabled).toBe(false)
+		// The one that costs a model call when it goes missing.
+		expect(config.compaction?.thinkingSummaryEnabled).toBe(false)
+		expect(config.compaction?.strategy).toBeDefined()
+		expect(config.compaction?.keepRecentMessages).toBe(7)
+		expect(config.compaction?.summaryPrompt).toBe("my replay prompt")
+		expect(config.compaction?.thinkingSummaryPrompt).toBe("my thinking prompt")
 	})
 
 	it("lets task useAutoCondense override the global setting", async () => {
