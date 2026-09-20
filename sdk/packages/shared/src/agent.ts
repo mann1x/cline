@@ -799,7 +799,24 @@ export interface AgentRuntimeConfig {
 	reasoningRepetition?:
 		| false
 		| Partial<import("./agents/types").ReasoningRepetitionConfig>;
+	/**
+	 * How a batch of tool calls from one assistant message is run.
+	 *
+	 * `"sequential"` is one at a time. Anything else is bounded by
+	 * `maxParallelToolCalls`, which is the field that carries the number --
+	 * this one only says whether there is a batch at all.
+	 */
 	toolExecution?: "sequential" | "parallel";
+	/**
+	 * How many of a batch may be in flight at once. Defaults to
+	 * `DEFAULT_MAX_PARALLEL_TOOL_CALLS`; `1` is sequential, and an explicit
+	 * `toolExecution: "sequential"` means the same thing and wins.
+	 *
+	 * Results are appended in the order the model asked for them however this
+	 * resolves, so a bound changes when work happens and never what the
+	 * transcript says happened.
+	 */
+	maxParallelToolCalls?: number;
 	toolPolicies?: Record<string, ToolPolicy>;
 	toolContextMetadata?: Record<string, unknown>;
 	requestToolApproval?: (

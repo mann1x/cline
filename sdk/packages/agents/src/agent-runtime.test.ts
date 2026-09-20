@@ -3360,6 +3360,104 @@ describe("AgentRuntime", () => {
 		expect(toolMessages[1]?.content[0]).toMatchObject({ toolName: "fast" });
 	});
 
+	// The three tests below are one claim in three parts: a batch the model
+	// sends in one message is executed the way every prompt template says it
+	// will be. `maxParallelToolCalls` is documented `@default 8` and was read
+	// as a boolean nobody set, so the runtime fell through to "sequential"
+	// and "gather in parallel" was advice the runtime did not keep.
+	const countingTool = (
+		name: string,
+		delayMs: number,
+		live: { now: number; peak: number; ran: string[] },
+	): AgentTool => ({
+		name,
+		description: name,
+		inputSchema: { type: "object" },
+		async execute() {
+			live.now += 1;
+			live.peak = Math.max(live.peak, live.now);
+			live.ran.push(name);
+			await new Promise((resolve) => setTimeout(resolve, delayMs));
+			live.now -= 1;
+			return { name };
+		},
+	});
+
+	const batchOf = (names: string[]) =>
+		new ScriptedModel([
+			() => [
+				...names.map((name) => ({
+					type: "tool-call-delta" as const,
+					toolCallId: `${name}_call`,
+					toolName: name,
+					inputText: "{}",
+				})),
+				{ type: "finish" as const, reason: "tool-calls" as const },
+			],
+			() => [
+				{ type: "text-delta" as const, text: "done" },
+				{ type: "finish" as const, reason: "stop" as const },
+			],
+		]);
+
+	it("runs a batch in parallel by default", async () => {
+		const live = { now: 0, peak: 0, ran: [] as string[] };
+		const runtime = new AgentRuntime({
+			model: batchOf(["a", "b"]),
+			tools: [countingTool("a", 25, live), countingTool("b", 1, live)],
+		});
+
+		await runtime.run("Batch");
+
+		expect(live.peak).toBe(2);
+		expect(live.ran).toEqual(["a", "b"]);
+	});
+
+	it("honours maxParallelToolCalls as a bound, not a yes/no", async () => {
+		const live = { now: 0, peak: 0, ran: [] as string[] };
+		const runtime = new AgentRuntime({
+			model: batchOf(["a", "b", "c"]),
+			maxParallelToolCalls: 2,
+			tools: [
+				countingTool("a", 20, live),
+				countingTool("b", 20, live),
+				countingTool("c", 1, live),
+			],
+		});
+
+		await runtime.run("Bounded");
+
+		// Every call runs; never more than two of them at a time.
+		expect(live.ran.sort()).toEqual(["a", "b", "c"]);
+		expect(live.peak).toBe(2);
+	});
+
+	it("runs one at a time when the host asks for sequential", async () => {
+		const live = { now: 0, peak: 0, ran: [] as string[] };
+		const runtime = new AgentRuntime({
+			model: batchOf(["a", "b"]),
+			toolExecution: "sequential",
+			tools: [countingTool("a", 10, live), countingTool("b", 1, live)],
+		});
+
+		await runtime.run("Serial");
+
+		expect(live.peak).toBe(1);
+	});
+
+	it("a maxParallelToolCalls of 1 is sequential", async () => {
+		const live = { now: 0, peak: 0, ran: [] as string[] };
+		const runtime = new AgentRuntime({
+			model: batchOf(["a", "b"]),
+			maxParallelToolCalls: 1,
+			tools: [countingTool("a", 10, live), countingTool("b", 1, live)],
+		});
+
+		await runtime.run("Serial");
+
+		expect(live.peak).toBe(1);
+	});
+
 	it("captures events, logger calls, telemetry, and failed tool runs", async () => {
 		const telemetry = {
 			capture: vi.fn(),

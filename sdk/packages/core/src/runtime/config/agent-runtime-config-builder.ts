@@ -152,6 +152,10 @@ export function createAgentRuntimeConfig(
 		// runtime is the only thing that can carry the setting.
 		reasoningRepetition: agentConfig.execution?.reasoningRepetition,
 		toolExecution,
+		// The number, not just the mode it implies. `resolveToolExecution` turns
+		// it into a yes/no and the count was dropped here, so `2` and `200` were
+		// the same request and nothing bounded a batch once it was parallel.
+		maxParallelToolCalls: agentConfig.maxParallelToolCalls,
 		toolPolicies: agentConfig.toolPolicies,
 		toolContextMetadata: input.toolContextMetadata,
 		requestToolApproval: agentConfig.requestToolApproval,
@@ -214,6 +218,12 @@ export function buildMessageModelInfo(
 /**
  * `"parallel"` when `maxParallelToolCalls ≥ 2`, `"sequential"` when
  * `1`, `undefined` when the caller did not specify.
+ *
+ * `undefined` stays `undefined` on purpose: it means *this host has no
+ * opinion*, and the default that answers it lives in one place, the runtime's
+ * `resolveParallelToolCallBound`. Returning `"sequential"` here would put a
+ * second default in a second file, which is how this setting came to have a
+ * documented default of 8 that nothing ever applied.
  */
 export function resolveToolExecution(
 	maxParallelToolCalls: number | undefined,

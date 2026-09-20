@@ -160,6 +160,30 @@ describe("createAgentRuntimeConfig", () => {
 		expect(bare.reasoningLoopDetection).toBeUndefined();
 	});
 
+	it("carries maxParallelToolCalls itself, not just the mode it implies", () => {
+		// `resolveToolExecution` collapses the count to a yes/no, and for a long
+		// time that yes/no was all the builder copied -- so a host asking for two
+		// concurrent calls and one asking for two hundred sent the same config and
+		// nothing bounded a batch. The count has to survive the trip.
+		const bounded = createAgentRuntimeConfig({
+			agentConfig: makeAgentConfig({ maxParallelToolCalls: 3 }),
+			agentId: "a",
+			model: nullModel,
+		});
+		expect(bounded.maxParallelToolCalls).toBe(3);
+		expect(bounded.toolExecution).toBe("parallel");
+
+		// Absent stays absent: the one default lives in the runtime, so that a
+		// host with no opinion cannot be given a different answer here.
+		const bare = createAgentRuntimeConfig({
+			agentConfig: makeAgentConfig({}),
+			agentId: "a",
+			model: nullModel,
+		});
+		expect(bare.maxParallelToolCalls).toBeUndefined();
+		expect(bare.toolExecution).toBeUndefined();
+	});
+
 	it("produces a config with the PLAN §3.2.1 field mapping", () => {
 		const agentConfig = makeAgentConfig({
 			systemPrompt: "sp",

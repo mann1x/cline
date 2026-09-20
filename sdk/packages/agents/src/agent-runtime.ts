@@ -759,8 +759,50 @@ function normalizeInput(input: AgentRunInput): AgentMessage[] {
 	return cloneMessages([input as AgentMessage]);
 }
 
+/**
+ * How many tool calls from one assistant message run at once when nothing
+ * says otherwise.
+ *
+ * Eight is not a new number: it is the documented default of
+ * `AgentConfig.maxParallelToolCalls` and of `AgentConfigSchema`, and it had
+ * never once been applied. `resolveToolExecution` read the field as a
+ * yes/no, no host on the extension path set it, so the runtime fell through
+ * to `"sequential"` -- while every prompt template in
+ * `core/assets/prompt-templates` tells the model to emit its independent
+ * reads, searches and commands together. The batch arrived and was run one
+ * call at a time, and delegation was the visible half of it: several
+ * `spawn_agent` calls in one message waited for each other, so a model that
+ * said it would run agents in parallel never did.
+ */
+export const DEFAULT_MAX_PARALLEL_TOOL_CALLS = 8;
+
+/**
+ * The one number both tool-execution fields resolve to.
+ *
+ * `toolExecution: "sequential"` is an explicit request for one at a time and
+ * wins over any count. Otherwise the count decides, floored at 1, and its
+ * absence means the documented default. Keeping this in one function is the
+ * point: a mode field and a count field that can disagree are two homes for
+ * one setting, and the last three bugs here were a field with two readers.
+ */
+export function resolveParallelToolCallBound(config: {
+	toolExecution?: "sequential" | "parallel";
+	maxParallelToolCalls?: number;
+}): number {
+	if (config.toolExecution === "sequential") {
+		return 1;
+	}
+	const configured = config.maxParallelToolCalls;
+	if (typeof configured === "number" && Number.isFinite(configured)) {
+		return Math.max(1, Math.floor(configured));
+	}
+	return DEFAULT_MAX_PARALLEL_TOOL_CALLS;
+}
+
 export class AgentRuntime {
-	private config: Required<Pick<BaseAgentRuntimeConfig, "toolExecution">> &
+	private config: Required<
+		Pick<BaseAgentRuntimeConfig, "toolExecution" | "maxParallelToolCalls">
+	> &
 		BaseAgentRuntimeConfig;
 	private readonly listeners = new Set<AgentEventListener>();
 	// biome-ignore lint/suspicious/noExplicitAny: tool input/output types vary per tool
@@ -910,9 +952,13 @@ export class AgentRuntime {
 			trimNonEmpty(config.messageModelInfo?.id) ??
 			("modelId" in config ? trimNonEmpty(config.modelId) : undefined);
 		const resolved = resolveRuntimeConfig(config);
+		const parallelToolCallBound = resolveParallelToolCallBound(resolved);
 		this.config = {
 			...resolved,
-			toolExecution: resolved.toolExecution ?? "sequential",
+			// Derived from the bound rather than carried beside it, so the two
+			// fields cannot end up saying different things.
+			toolExecution: parallelToolCallBound > 1 ? "parallel" : "sequential",
+			maxParallelToolCalls: parallelToolCallBound,
 		};
 		this.state.agentId = resolved.agentId ?? createUID("agent");
 		this.state.agentRole = resolved.agentRole;
@@ -3084,16 +3130,40 @@ export class AgentRuntime {
 			prepared.push(await this.prepareToolExecution(toolCall));
 		}
 
-		if (this.config.toolExecution === "parallel") {
-			return Promise.all(
-				prepared.map((execution) => this.executePreparedTool(execution)),
-			);
+		const bound = Math.min(
+			Math.max(1, this.config.maxParallelToolCalls),
+			prepared.length,
+		);
+		if (bound <= 1) {
+			const results: AgentMessage[] = [];
+			for (const execution of prepared) {
+				results.push(await this.executePreparedTool(execution));
+			}
+			return results;
 		}
 
-		const results: AgentMessage[] = [];
-		for (const execution of prepared) {
-			results.push(await this.executePreparedTool(execution));
-		}
+		// A bounded pool rather than one `Promise.all` over everything: the
+		// number is a cap on what the endpoint, the disk and the host are asked
+		// to do at once, and a model that sends twenty calls in one message
+		// should not open twenty at once because it can.
+		//
+		// Results are written back at their own index, so the returned array is
+		// in the order the model asked for whatever order the work finishes in.
+		// `findCompletingToolMessage` pairs by index and the transcript is read
+		// as a sequence, so anything else would reorder the record of a turn.
+		const results = new Array<AgentMessage>(prepared.length);
+		let next = 0;
+		const worker = async (): Promise<void> => {
+			while (true) {
+				const index = next;
+				next += 1;
+				if (index >= prepared.length) {
+					return;
+				}
+				results[index] = await this.executePreparedTool(prepared[index]);
+			}
+		};
+		await Promise.all(Array.from({ length: bound }, () => worker()));
 		return results;
 	}
 
