@@ -5,71 +5,112 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
-## [4.100.140] — 2026-09-19
+## [4.100.141] — 2026-09-20
 
-### The summarizer could not see half of what the tools returned
+### Nothing ever checked the summary against what it summarised
 
-A compaction summary told the next context that a game was running. The
-checker it was quoting had returned `ok:false` three times, the last with
-`ReferenceError: collide is not defined`. The summary was not being careless —
-it had never been shown the answer.
+A compaction summary is written in one pass, by the model that has just spent
+its budget doing the work, and is then never compared to the transcript again —
+because the transcript is gone. From the turn it is written it *is* what
+happened, for every turn after it. A claim that went in wrong has nothing
+downstream to catch it.
 
-`read_files`, `run_commands` and `search_codebase` reply with structured
-objects rather than text blocks, and both readers of that array in compaction
-recognised only text: the transcript serializer rendered them as an empty
-`[Tool result]:` line, and the tool ledger — the harness's own measured record,
-placed beside the summary precisely so the two accounts can be compared —
-printed `[1 items]`. On the session this was found in, 50 of 99 tool results
-came out blank, dropping 414,337 characters: every file read, every read
-refusal, and all three of the checker's verdicts. The summarizer saw a call
-followed by nothing, and wrote what it assumed had happened.
+Measured on pandorum: summaries reporting a checker run as a success when it had
+returned `ok:false` three times, paraphrasing an instruction they were asked to
+quote, and narrating in the past tense a prompt had asked three times to be
+present.
 
-Both now carry what the tools actually returned, with the same length cap text
-results already had.
+So the transcript is now split in two — by measured tokens rather than message
+count, and never between a tool call and its result — and each half goes to a
+reviewer along with the whole summary and retrospective. Each reviewer corrects
+what its half contradicts, adds what its half shows missing, and fixes what it
+misquotes. A synthesiser merges the two corrections against the original.
 
-### A summary that copied its own request back
+Three properties the shape is chosen for:
 
-The same summary was 64% echo. The model wrote its replay, then reproduced the
-prompt's file scaffold, the literal `Conversation:` header and the transcript
-verbatim, and was still copying when the output limit cut it off mid-string.
+- **Each reviewer sees half the evidence and all of the claim.** That is the
+  point — a reviewer holding half a transcript has room to actually read it,
+  where the original pass did not. It is also the danger, and most of the
+  reviewer prompt is spent on it: a reviewer that deletes what the other half
+  supports turns a review into a truncation.
+- **The reviewers are parallel and both correct the original.** Chaining would
+  make the second one review a text the first had already changed, and the
+  corrections would compound rather than converge.
+- **Nothing here can fail a compaction.** A reviewer that throws, that answers
+  with no recognisable section, or whose half will not fit the summarizer's
+  input limit simply declines; a synthesiser that returns no replay leaves the
+  original standing. The worst case is the unreviewed summary that shipped
+  before this existed.
 
-Nothing caught it. The over-length retry did not fire, because the whole thing
-was still inside its token budget. The backstop written for exactly this was
-never actually called. The file list the harness appends was suppressed by the
-echoed heading. And a reply the provider reported as truncated was stored
-without a word, because that flag was only read when the reply was empty.
+On by default, as **Compaction Council**, sitting with the two passes it
+reviews. Costs three model calls per compaction.
 
-The echo is now cut at the harness's own transcript markers — left alone inside
-a fenced block, where a faithful replay of a refused call may legitimately
-quote them — and cut before the reply is judged, so an answer that was only the
-echo is retried. A truncated summary now says so in the log. The retrospective
-gets the same treatment: it sits above the summary, so an echo there is the
-first thing the next turn reads.
+### The ledger counted its arguments instead of naming them
 
-### The replay prompt disagreed with itself
+The previous release fixed the tool ledger's result line, which had been
+printing `[1 items]` for the three tools whose answers matter most. The input
+line beside it was left doing exactly the same thing — `commands=[1 items]`,
+`files=[1 items]` — so the ledger named neither the command that ran nor the
+file that was read.
 
-Asked for a first-person, present-tense replay, the model returned a
-present-tense opening sentence, a present-tense closing sentence, and a wholly
-past-tense body.
+That is the ledger failing at the one job it has. It is placed beside the
+model's own replay to be the measured counterpart to it, and a model that had
+lost track of how to check its work had a record in front of it that never said
+`run_game.js` either.
 
-Two reasons, both in the prompt. It carried a two-column "not this / this"
-table, and the summary came back with the left column nearly verbatim — "I
-started by running the diagnostic" against a row reading "I started by reading
-the file". A negative example is still an example: it puts the forbidden
-phrasing in front of the model at the moment it is choosing how to open a
-sentence. And the prompt labelled five of its own sections in the past tense
-while demanding the present two paragraphs above.
+It also broke the repeat rule, which keys on the rendered input. Every
+single-element call rendered to the same string, so two different commands that
+answered the same collapsed into one entry naming neither.
 
-Only the column showing what to write is left, the labels are in the tense they
-ask for, and the prompt now says plainly not to report a result it cannot see,
-and to stop when the replay is done.
+An argument list now renders its contents: a single element bare, so
+`commands=node run_game.js` reads as the command it is, and longer lists elided
+with a count of what was dropped. An element names itself through the key the
+schemas already accept as its name — `command`, `path`, `query` and their
+aliases — with argv joined onto an executable, because `node` alone is the same
+string for every call a session makes, and a line range carried with a path,
+because that is what separates one read of a file from the next.
 
-### Which prompt ran is recorded now
+### The summary carries what it cannot rebuild
 
-The compaction diagnostics logged the strategy and the mode but not which of
-the three summary instructions was used, so a report that a prompt change had
-not worked could only be checked by reconstructing the prompt from the defaults
-and the stored settings by hand. Every compaction record now names it.
+Two things the summary was losing every time it was written.
+
+**The user's own words.** The summary paraphrased them — "the user is asking me
+to fix the collision in `manic_miner.html`" — and from the second compaction the
+original instruction survived only as that paraphrase, a paraphrase of a
+paraphrase by the third. Every typed prompt is now quoted by the harness into
+the summary message, verbatim, and carried across compactions. It never passes
+through the model, so it cannot drift.
+
+**The ledger itself.** It was being rebuilt from scratch at each compaction from
+only the messages that compaction was folding, so everything the previous one
+had recorded was gone. It now merges with what the last summary carried and is
+evicted against a share of the budget when it grows: successful reads and edits
+first, then failed ones, and the verdicts — what a checker said — last, because
+a read can be made again and an edit can be seen in the file, while a checker's
+answer cannot be recovered from anywhere.
+
+The ledger was also switched off in this fork's host by an unrelated setting:
+it was gated on Checkpoints, which owns the revision addresses it quotes but
+not the record itself.
+
+### A retried turn is not a bigger context
+
+A compaction fired at 27k tokens against a window four times that, cutting a
+session that had plenty of room. The trigger was not wrong about the number it
+was given; the number was wrong.
+
+When a provider returns an empty response, the retry middleware sends the turn
+again and folds the discarded attempt's token usage into the one that
+succeeded. That is correct for billing and wrong for everything else: the
+gateway anchors its estimate of the *next* request to the provider's count for
+the last one, so two attempts reported one context of twice the size, three
+attempts one of three times. The output cap computed from that anchor came out
+at 6,099 tokens against a 49,306-token phantom prompt, the compaction trigger
+read a starved output budget as a full context, and compacted.
+
+The middleware now reports the accepted attempt's input separately from the
+billed total, and the trigger refuses an output-starvation verdict that its own
+measurement of the transcript contradicts.
 
 ## [4.100.118] — 2026-09-15
 
