@@ -833,14 +833,20 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 
 				{/* Third in the same operation, and the only part of it that
 				    reads the transcript back: the two above write, this one
-				    checks what they wrote against what happened. */}
+				    checks what they wrote against what happened.
+
+				    Not gated on Auto Compact, unlike the two above. The council
+				    belongs to the agentic strategy, and a manual compaction runs
+				    that strategy too -- it force-enables the pass and reads this
+				    same setting. Greying the switch out with Auto Compact off
+				    hid the one control over three extra model calls that were
+				    still being made on every manual compaction. */}
 				<div className="space-y-2 pt-2">
 					<div className="flex items-center justify-between w-full">
 						<Label className="text-sm font-medium text-foreground">Compaction Council</Label>
 						<Switch
 							checked={councilCompactionEnabled ?? true}
 							className="shrink-0"
-							disabled={!useAutoCondense}
 							id="councilCompactionEnabled"
 							onCheckedChange={(checked) => updateSetting("councilCompactionEnabled", checked)}
 							size="lg"
@@ -851,7 +857,8 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 						<em>is</em> what happened, for every turn after it. This splits the transcript in two and hands each half
 						to a reviewer along with the whole summary, to correct what its half contradicts, add what its half shows
 						missing, and fix what it misquotes; a third pass merges the two. Costs three extra model calls per
-						compaction and cannot fail one.
+						compaction and cannot fail one. Applies to compactions you run yourself as well as automatic ones, which
+						is why it stays available with Auto Compact off.
 					</p>
 				</div>
 

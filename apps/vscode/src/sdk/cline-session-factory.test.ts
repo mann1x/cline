@@ -1507,6 +1507,38 @@ describe("buildSessionConfig", () => {
 		expect(config.compaction?.cappedThinkingEnabled).toBe(true)
 	})
 
+	it("keeps the compaction council configured with auto condense off", async () => {
+		// Same shape as the condenser above, one field over. The council belongs
+		// to the agentic strategy, and a manual compaction runs that strategy:
+		// `sdk-compaction.ts` force-enables the pass and spreads this object for
+		// everything else. Sending the flag only when auto-condense was on meant
+		// a manual compaction never saw it, and the strategy tests
+		// `councilEnabled === false` — so absent read as on and the switch was
+		// ignored, at three extra model calls per manual compaction.
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+
+		expect(config.compaction?.enabled).toBe(false)
+		expect(config.compaction?.councilEnabled).toBe(true)
+	})
+
+	it("carries a council switched off into a manual-only configuration", async () => {
+		// The direction that actually costs money: off must survive the trip,
+		// or the switch is decorative with Auto Compact off.
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string) => {
+			if (key === "councilCompactionEnabled") {
+				return false
+			}
+			if (key === "subagentsEnabled" || key === "useAutoCondense") {
+				return false
+			}
+			return undefined
+		})
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+
+		expect(config.compaction?.councilEnabled).toBe(false)
+	})
+
 	it("lets task useAutoCondense override the global setting", async () => {
 		let globalUseAutoCondense = true
 		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string) => {

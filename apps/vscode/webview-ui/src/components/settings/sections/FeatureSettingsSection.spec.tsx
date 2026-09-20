@@ -365,6 +365,31 @@ describe("FeatureSettingsSection compaction council", () => {
 
 		expect(mockUpdateSetting).toHaveBeenCalledWith("councilCompactionEnabled", false)
 	})
+
+	it("stays usable with Auto Compact off, because a manual compaction runs it too", () => {
+		// The council belongs to the agentic strategy, and a manual compaction
+		// runs that strategy: it force-enables the pass and reads this same
+		// setting. Greying the switch out with Auto Compact off left three extra
+		// model calls per manual compaction with no control over them.
+		mockExtensionState.value = { ...mockExtensionState.value, useAutoCondense: false }
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		const council = container.querySelector("#councilCompactionEnabled")
+		expect(council).toBeTruthy()
+		expect(council?.hasAttribute("disabled")).toBe(false)
+		// The contrast that makes this assertion mean something: the passes that
+		// really are auto-only are still greyed out in the same render.
+		expect(container.querySelector("#thinkingCompactionEnabled")?.hasAttribute("disabled")).toBe(true)
+	})
+
+	it("can still be switched off with Auto Compact off", () => {
+		mockExtensionState.value = { ...mockExtensionState.value, useAutoCondense: false }
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		fireEvent.click(container.querySelector("#councilCompactionEnabled") as Element)
+
+		expect(mockUpdateSetting).toHaveBeenCalledWith("councilCompactionEnabled", false)
+	})
 })
 
 /**

@@ -2230,6 +2230,17 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		// auto-condense was off silently took the condenser with it.
 		compaction: {
 			enabled: useAutoCondense,
+			// Outside the auto-only spread, because the council is not an
+			// auto-compaction feature. A manual compaction force-enables the
+			// pass (`sdk-compaction.ts` sets `enabled: true`) and spreads *this*
+			// object for everything else, so a flag that only appears when
+			// auto-condense is on is a flag a manual compaction never sees. The
+			// agentic strategy treats absent as on -- it tests
+			// `councilEnabled === false` -- so the switch read as ignored: with
+			// auto-condense off, every manual compaction paid three extra model
+			// calls the user had turned off. Same fault the comment above
+			// records for the capped-thinking condenser, one field over.
+			councilEnabled: councilCompactionEnabled,
 			...(useAutoCondense
 				? {
 						strategy: compactionStrategy,
@@ -2238,7 +2249,6 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 						...(compactionPrompt ? { summaryPrompt: compactionPrompt } : {}),
 						...(fullCompactionPrompt ? { fullSummaryPrompt: fullCompactionPrompt } : {}),
 						thinkingSummaryEnabled: thinkingCompactionEnabled,
-						councilEnabled: councilCompactionEnabled,
 						...(thinkingCompactionPrompt ? { thinkingSummaryPrompt: thinkingCompactionPrompt } : {}),
 					}
 				: {}),
