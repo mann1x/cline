@@ -172,7 +172,7 @@ export const OutputBudgetField = ({ providerId }: { providerId: string }) => {
 	const numPredict = parseTyped(config.sampling?.numPredict as string | number | undefined)
 	const thinkFloor = thinkingFloorTokens(
 		config.sampling?.thinkBudget as string | number | undefined,
-		config.reasoning?.thinking !== false,
+		config.reasoning?.enabled !== false,
 	)
 	const floorTokens = Math.max(MIN_OUTPUT_TOKENS, thinkFloor ?? 0)
 	// The slider is a percentage *of the automatic figure*, so it needs one to
