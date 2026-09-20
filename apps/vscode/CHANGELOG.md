@@ -5,95 +5,76 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
-## [4.100.143] — 2026-09-20
+## [4.100.144] — 2026-09-20
 
-### A manual compaction now reads its own settings
+### A batch of tool calls now runs as a batch
 
-With **Auto Compact** switched off, a compaction you ran yourself ignored almost
-everything the panel said.
+Every prompt template in this fork tells the model the same thing: work out
+every independent read, search and command the next step needs, and send them
+together. *Gathering is parallel; changing is not.*
 
-The mechanism is one conditional. The host sends a compaction config, and every
-field except `enabled` sat inside `...(useAutoCondense ? { … } : { })`. A manual
-compaction force-enables the pass and spreads that same object for the rest — so
-with Auto Compact off, it read fields that were never sent. Each absence
-defaulted to the opposite of off:
+The runtime then ran them one at a time.
 
-| setting | what absence meant |
-|---|---|
-| Compaction Strategy | a chosen **Basic** silently ran as **Agentic** |
-| Compaction Prompt | **your prompt was never used**; the built-in one was |
-| Full Compaction Prompt | same |
-| Thinking Compaction Prompt | same |
-| Thinking Compaction | read as **on** — an extra model call you had switched off |
-| Compaction Council | read as **on** — three extra model calls you had switched off |
-| Keep Recent Messages | kept, even when turned off |
+Delegation was the visible half. Several `spawn_agent` calls in one message
+waited for each other, so a model that said it would run three agents in
+parallel ran them in series, and the endpoint never saw a second request. On a
+server configured for four parallel sessions and willing to grow, a full run
+measured `n_busy_slots_per_decode` of **1.00051** — one busy slot, start to
+finish. That reads like a server problem and was not one.
 
-None of it surfaced. An extra model call and a default prompt both look exactly
-like the compaction working.
+Three faults in a single line. `maxParallelToolCalls` is documented
+`@default 8`, and declared `.default(8)` in a schema **nothing in the codebase
+parses** — so that default had never once been applied. The builder read the
+field as a yes/no and copied only the yes/no, so `2` and `200` were the same
+request and nothing bounded a batch once it *was* parallel. And no host set
+the field at all, so the runtime fell through to sequential.
 
-`enabled` is the only setting that means *automatic* — it decides whether the
-transcript is compacted on its own. Everything else describes *how* a compaction
-is done, and a manual compaction is a compaction. All of it now travels
-unconditionally.
+The count now reaches the runtime, one function decides the width, and a batch
+runs in a pool of that size. Only the tool's own work is concurrent: hooks,
+the command guard, loop and duplicate detection, tool policy and approval
+prompts all still run one at a time, in the order the model asked for, so
+every gate still sees the batch as a sequence. Results are recorded in that
+same order however the work finishes, and parallel edits to one file were
+already safe — each edit holds a lock across its whole read-modify-write.
 
-The panel had the same fault and made it unrecoverable: ten controls were greyed
-out whenever Auto Compact was off, so these were settings you could not reach for
-the only kind of compaction you could still run. They stay live now. Controls
-that gate on something real — a prompt following its own switch — keep that gate;
-only the Auto Compact half is gone. **Auto Compact Strategy** is now
-**Compaction Strategy**, because it never governed only the automatic kind.
+**If you use sub-agents, check one setting.** Delegation tools are hidden
+entirely when an endpoint resolves to a single parallel session, which is the
+default for a plain local server. Set **Parallel Sessions** to 2 or more in
+the provider's settings, or `spawn_agent` is never offered.
 
-This has been fixed narrowly three times, each fix adding a test naming the field
-it moved, which is exactly why the next one was missed. The guard now asserts the
-rule instead: build the config with Auto Compact on and off, and require the two
-to differ in `enabled` and nothing else. A field put back inside a conditional
-fails it, including one that does not exist yet.
+### A list sent as text is read where there is only one reading
 
-### The tool switches are grouped, and the section starts shut
+`run_commands` refusing a JSON array that arrived as a string was **81% of all
+tool errors** measured across twelve harness runs. The refusal called it
+truncation. Classified against the archived transcripts — 69 of them — that is
+true of 20. The other 49 arrive **closed**, with their bracket: a shell
+command, full of quotes, backslashes and regexes, written into a JSON array
+inside a JSON string and escaped once instead of twice.
 
-The tool list is long enough to bury the settings under it, so it now opens
-collapsed like Advanced, with the token total and a `(N off)` count staying on
-the header so the state is readable without opening it.
+The same session sent 251 perfectly good arrays. So the model is not confused
+about the format — it is losing a level of escaping on the awkward ones, and
+being told "send an actual array of strings" is advice it cannot act on,
+because it believes it did. One run made the same mistake 56 times against
+that message.
 
-Inside, the switches are grouped — **Read**, **Write**, **Check**, **Other** —
-each with its own subtotal and banding, so the cost of a group is visible where
-you decide about it.
+Two of those classes have exactly one possible reading and are now taken. A
+backslash that opens no valid JSON escape — `\s` in a regex — cannot be
+carrying structure, and neither can a raw newline inside a string; both are
+literal text that arrived under-escaped. And where there is no separator
+anywhere, there is one entry, so there is nothing to split and no way to split
+it wrongly: every quote inside belongs to the command. Measured through the
+shipped code against those same payloads, **36 of 69 now run and 33 are still
+refused.**
 
-### The output budget has a slider
+The refusals are deliberate. Where two entries both contain bare quotes, where
+one ends and the next begins is a guess, and a guessed shell command is a
+command nobody wrote. A single entry ending on a lone backslash is refused for
+the same reason — that is what a value cut off mid-escape looks like, and it
+is the one signal that separates *quoted badly* from *cut short*.
 
-The automatic output budget is a figure derived from the model's window, and
-overriding it meant typing an absolute token count into the Ceiling box and
-knowing what a good one was.
-
-There is now a slider above that box, in steps of 5% of the automatic figure,
-with a readout of the tokens it resolves to. It writes the same ceiling the box
-does — one value seen two ways — and 100% clears the override rather than
-storing today's number, so the cap keeps tracking the window instead of freezing
-against it.
-
-Two things it refuses to let you do quietly. A **bare token count** in the
-Advanced sampler's think budget is sent flat and does not scale with the cap, so
-the slider will not go below the floor that budget needs and says why. And a
-`num_predict` in the same sampler is read ahead of the budget and wins, so the
-slider says so rather than moving and changing nothing.
-
-A related fix in the same field: it was reading a reasoning property that does
-not exist, so the thinking floor applied whether or not reasoning was switched
-on.
-
-### A citation can name a run of calls
-
-The compaction replay cites its tool calls — `[#7]` — rather than transcribing
-them. Measured on a real run, a model with four identical checks in a row wrote
-`[#2-5]`, which is the sensible thing to write and matched nothing: all four
-fell out of the prose and into the block appended after it.
-
-Ranges now work, spaced or not, with either dash and an optional second `#`. A
-backwards range and one wider than the whole record are refused whole rather than
-guessed at — reordering would assert an order nobody wrote, and expanding
-`[#1-9000]` would bury one bad token under thousands of numbers. The prompt
-offers the range too, since the model reached for it before anything said it
-could.
+What is refused now says where. The message carries the position the parse
+stopped at and the text either side of it, because a model that believes it
+sent an array needs the character, not the category.
 
 ## [4.100.118] — 2026-09-15
 
