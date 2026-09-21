@@ -132,6 +132,19 @@ export interface ExtensionStateContextType extends ExtensionState {
 	navigateToWorktrees: () => void
 	navigateToChat: () => void
 
+	/**
+	 * The task that was opened by clicking a row in the full history list, or
+	 * `null`. Closing that task returns to the list it was opened from rather
+	 * than to the home page -- browsing a list and closing one entry is a round
+	 * trip, and dropping the reader back at the top of somewhere else costs
+	 * them their place in it.
+	 *
+	 * Held as the task's id, not a boolean: a flag left set by a task that is
+	 * no longer the one on screen would send the next close to the wrong view.
+	 */
+	taskOpenedFromHistoryId: string | null
+	markTaskOpenedFromHistory: (taskId: string) => void
+
 	// Hide functions
 	hideSettings: () => void
 	hideHistory: () => void
@@ -170,6 +183,8 @@ export const ExtensionStateContextProvider: React.FC<{
 	const [showAccount, setShowAccount] = useState(false)
 	const [showWorktrees, setShowWorktrees] = useState(false)
 	const [showAnnouncement, setShowAnnouncement] = useState(false)
+	const [taskOpenedFromHistoryId, setTaskOpenedFromHistoryId] = useState<string | null>(null)
+	const markTaskOpenedFromHistory = useCallback((taskId: string) => setTaskOpenedFromHistoryId(taskId), [])
 
 	// Helper for MCP view
 	const closeMcpView = useCallback(() => {
@@ -251,6 +266,7 @@ export const ExtensionStateContextProvider: React.FC<{
 		setShowAccount(false)
 		setShowWorktrees(false)
 		setShowHistory(true)
+		setTaskOpenedFromHistoryId(null)
 	}, [closeMarketplaceView, setShowSettings, closeMcpView, setShowAccount, setShowWorktrees, setShowHistory])
 
 	const navigateToAccount = useCallback(() => {
@@ -1016,6 +1032,8 @@ export const ExtensionStateContextProvider: React.FC<{
 		navigateToAccount,
 		navigateToWorktrees,
 		navigateToChat,
+		taskOpenedFromHistoryId,
+		markTaskOpenedFromHistory,
 
 		// Hide functions
 		hideSettings,

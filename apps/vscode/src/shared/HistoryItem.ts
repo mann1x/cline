@@ -23,4 +23,15 @@ export type HistoryItem = {
 	 */
 	apiProvider?: string
 	isLegacy?: boolean
+
+	/**
+	 * What the session ran with, as label/value rows ready to display.
+	 *
+	 * Rendered on the host rather than carried raw, because deciding which
+	 * settings are worth showing needs the shape of providers.json and the
+	 * webview has no business knowing it. Empty for sessions recorded before
+	 * the snapshot existed; the provider and model rows are still present,
+	 * since those come from the session record itself.
+	 */
+	settings?: Array<{ label: string; value: string }>
 }

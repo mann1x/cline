@@ -46,10 +46,16 @@ vi.mock("@shared/proto/cline/common", () => ({
 
 // useExtensionState supplies turnState (+ backgroundCommandRunning) to the hook.
 let mockTurnState: TurnState | undefined
+let mockCurrentTaskItem: { id: string } | undefined
+let mockTaskOpenedFromHistoryId: string | null = null
+const navigateToHistory = vi.fn()
 vi.mock("@/context/ExtensionStateContext", () => ({
 	useExtensionState: () => ({
 		backgroundCommandRunning: false,
 		turnState: mockTurnState,
+		currentTaskItem: mockCurrentTaskItem,
+		taskOpenedFromHistoryId: mockTaskOpenedFromHistoryId,
+		navigateToHistory,
 	}),
 }))
 
@@ -675,5 +681,58 @@ describe("useMessageHandlers — send routing", () => {
 		expect(newTask).toHaveBeenCalledTimes(1)
 		expect(newTask).toHaveBeenCalledWith(expect.objectContaining({ text: "should be sent", images: [], files: [] }))
 		expect(askResponse).not.toHaveBeenCalled()
+	})
+})
+
+// Browsing a list and closing one entry is a round trip. Dropping the reader
+// back at the top of somewhere else costs them their place in the list, which
+// on a long history is the whole reason they were in it.
+describe("handleTaskCloseButtonClick", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+		mockCurrentTaskItem = undefined
+		mockTaskOpenedFromHistoryId = null
+	})
+
+	it("returns to the history list when the task was opened from it", async () => {
+		mockCurrentTaskItem = { id: "task-1" }
+		mockTaskOpenedFromHistoryId = "task-1"
+		const { result } = renderHook(() => useMessageHandlers([], makeChatState([])))
+
+		await act(async () => {
+			result.current.handleTaskCloseButtonClick()
+		})
+
+		expect(clearTask).toHaveBeenCalled()
+		expect(navigateToHistory).toHaveBeenCalledTimes(1)
+	})
+
+	// Reached from the home page's recent list, or by starting it here: home
+	// is where it was opened from, so home is where closing it belongs.
+	it("stays on the home page when the task was not opened from the list", async () => {
+		mockCurrentTaskItem = { id: "task-1" }
+		mockTaskOpenedFromHistoryId = null
+		const { result } = renderHook(() => useMessageHandlers([], makeChatState([])))
+
+		await act(async () => {
+			result.current.handleTaskCloseButtonClick()
+		})
+
+		expect(clearTask).toHaveBeenCalled()
+		expect(navigateToHistory).not.toHaveBeenCalled()
+	})
+
+	// The origin is held as an id rather than a flag precisely so that one left
+	// over from an earlier task cannot redirect this one.
+	it("ignores an origin recorded for a different task", async () => {
+		mockCurrentTaskItem = { id: "task-2" }
+		mockTaskOpenedFromHistoryId = "task-1"
+		const { result } = renderHook(() => useMessageHandlers([], makeChatState([])))
+
+		await act(async () => {
+			result.current.handleTaskCloseButtonClick()
+		})
+
+		expect(navigateToHistory).not.toHaveBeenCalled()
 	})
 })

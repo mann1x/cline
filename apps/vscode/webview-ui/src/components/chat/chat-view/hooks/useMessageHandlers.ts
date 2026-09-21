@@ -14,7 +14,8 @@ import type { ChatState, MessageHandlers } from "../types/chatTypes"
  * Handles sending messages, button clicks, and task management
  */
 export function useMessageHandlers(messages: ClineMessage[], chatState: ChatState): MessageHandlers {
-	const { backgroundCommandRunning, turnState } = useExtensionState()
+	const { backgroundCommandRunning, turnState, currentTaskItem, taskOpenedFromHistoryId, navigateToHistory } =
+		useExtensionState()
 	const {
 		setInputValue,
 		activeQuote,
@@ -547,8 +548,15 @@ export function useMessageHandlers(messages: ClineMessage[], chatState: ChatStat
 
 	// Handle task close button click
 	const handleTaskCloseButtonClick = useCallback(() => {
-		startNewTask()
-	}, [startNewTask])
+		// Read the id first: `startNewTask` clears the task, so by the time it
+		// resolves there is nothing left to compare the origin against.
+		const cameFromHistory = !!currentTaskItem?.id && currentTaskItem.id === taskOpenedFromHistoryId
+		void startNewTask().then(() => {
+			if (cameFromHistory) {
+				navigateToHistory()
+			}
+		})
+	}, [startNewTask, currentTaskItem?.id, taskOpenedFromHistoryId, navigateToHistory])
 
 	/**
 	 * Attach an image from the transcript to the message being composed.

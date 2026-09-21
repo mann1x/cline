@@ -15,6 +15,7 @@ import type { ActiveSession } from "./cline-session-factory"
 import type { SdkForegroundCommandCoordinator } from "./sdk-foreground-command-coordinator"
 import { buildToolPolicies } from "./sdk-tool-policies"
 import type { SdkSessionHost } from "./session-host"
+import { captureSessionSettings, SESSION_SETTINGS_METADATA_KEY } from "./session-settings-snapshot"
 import { VscodeSessionHost } from "./vscode-session-host"
 
 type RequestToolApprovalHandler = NonNullable<Parameters<typeof VscodeSessionHost.create>[0]["requestToolApproval"]>
@@ -174,9 +175,22 @@ export class SdkSessionLifecycle {
 
 		const sdkHost = await this.getOrCreateSharedHost()
 
+		// Stamped here because this is the one place every session starts --
+		// new task, resume, follow-up and the compaction sub-session all come
+		// through it. A resume is re-stamped on purpose: it really did run
+		// again, with whatever is configured now.
+		const recordedSettings = captureSessionSettings(startInput.config?.providerId)
 		const startResult = await sdkHost.start({
 			...startInput,
 			...(toolPolicies ? { toolPolicies } : {}),
+			...(recordedSettings
+				? {
+						sessionMetadata: {
+							...(startInput.sessionMetadata ?? {}),
+							[SESSION_SETTINGS_METADATA_KEY]: recordedSettings,
+						},
+					}
+				: {}),
 		})
 		this.activeSession = {
 			sessionId: startResult.sessionId,

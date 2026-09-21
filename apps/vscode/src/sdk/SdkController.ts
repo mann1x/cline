@@ -103,6 +103,7 @@ import {
 	isSyntheticSdkUserMessage,
 	type SdkUserMessage,
 } from "./sdk-user-message-mapping"
+import { describeSessionSettings, SESSION_SETTINGS_METADATA_KEY } from "./session-settings-snapshot"
 import { buildDisabledWorkflowNames, expandSlashCommands } from "./slash-command-expansion"
 import { StatePostDebouncer } from "./state-post-debouncer"
 import { createTaskProxy, type TaskProxy } from "./task-proxy"
@@ -2250,6 +2251,14 @@ export class Controller {
 				isLegacy:
 					metadataBoolean(metadata, "legacyTask") === true ||
 					metadataBoolean(metadata, "migratedFromLegacyTask") === true,
+				// Rendered here rather than in the webview: which of these are
+				// worth showing is a fact about providers.json, and the list is
+				// bounded by the page size rather than by the whole history.
+				settings: describeSessionSettings({
+					provider: item.provider,
+					model: item.model || metadataString(metadata, "modelId") || undefined,
+					settings: metadata?.[SESSION_SETTINGS_METADATA_KEY],
+				}),
 			}
 		})
 
@@ -2273,6 +2282,8 @@ export class Controller {
 					modelId: this.task.api?.getModel?.().id ?? "",
 					apiProvider: "",
 					isLegacy: false,
+					// The running task has no session record to read yet.
+					settings: [],
 				})
 			}
 		}

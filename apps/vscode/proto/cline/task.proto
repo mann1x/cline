@@ -113,6 +113,15 @@ message TaskItem {
   // Provider id the task ran on. Empty for tasks recorded before this
   // field existed and for legacy imports; consumers show cost in that case.
   string api_provider = 13;
+  // What the session ran with, already rendered for display. Empty for
+  // sessions recorded before the snapshot existed.
+  repeated TaskSettingRow settings = 14;
+}
+
+// One line of the history list's hover card.
+message TaskSettingRow {
+  string label = 1;
+  string value = 2;
 }
 
 // Request for ask response operation
