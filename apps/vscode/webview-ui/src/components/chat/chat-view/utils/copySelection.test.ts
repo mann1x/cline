@@ -29,6 +29,18 @@ describe("copyTextForSelection", () => {
 		expect(text).not.toBeInstanceOf(Promise)
 	})
 
+	// remark-stringify always terminates its document with a newline, and that
+	// newline was going on the clipboard. Pasting into the chat box then sent
+	// the message before the user had finished typing, because a newline is
+	// submit. Reported 2026-09-21.
+	it("does not put a trailing newline on the clipboard", () => {
+		const { selection, getComputedStyle } = selectionOver("<p>Hello world</p>")
+
+		const text = copyTextForSelection(selection, getComputedStyle)
+
+		expect(text).toBe("Hello world")
+	})
+
 	// Selecting *inside* a code block takes the verbatim path, indentation and
 	// all: running it through Markdown would reflow it.
 	it("keeps a selection inside a code block verbatim", () => {

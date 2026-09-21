@@ -75,7 +75,14 @@ export function copyTextForSelection(
 	const div = document.createElement("div")
 	div.appendChild(range.cloneContents())
 	try {
-		return convertHtmlToMarkdownSync(div.innerHTML) || null
+		// Trailing newlines are the serializer's, not the selection's:
+		// remark-stringify terminates every document with one, and it went on
+		// the clipboard. Pasting into the chat box then sent the message before
+		// the user had finished typing, because a newline there is submit.
+		// Only the tail is touched -- newlines inside the selection are the
+		// text, and the verbatim path above keeps its own ending untouched
+		// because whitespace is what that path exists to preserve.
+		return convertHtmlToMarkdownSync(div.innerHTML).replace(/\n+$/, "") || null
 	} catch {
 		// A conversion that throws must not cost the user their copy: the
 		// selection's own text is always available and is what the browser
