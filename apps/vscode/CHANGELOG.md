@@ -5,7 +5,26 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
-## [4.100.146] — 2026-09-21
+## [4.100.147] — 2026-09-21
+
+### A chat row belongs to its message, not to its position
+
+The message list keyed its rows by position, so the row that was showing one
+message showed a different one as soon as anything was inserted above it, a tool
+group grew, or the waiting placeholder was swapped for a real row. React reuses
+that row's component instance, which brings its state along with it.
+
+That is what made 4.100.146's crash possible in the first place — hooks below an
+early return only diverge if a single instance renders both a tool row and a
+command row, and position keying is what arranged the pairing. 4.100.146 fixed
+the crash. This fixes the reuse, and with it the quieter half of the same fault:
+output expansion, the quote button and the auto-expand state carrying across to
+whatever message arrived at that position next.
+
+Rows are now keyed by the message's own timestamp. Two messages sharing one — a
+collision is rare rather than impossible, and a duplicate key is a broken list
+rather than a cosmetic warning — are numbered by the order they appear in, and a
+row with no timestamp falls back to its position in a namespace of its own.
 
 ### The chat panel could go down mid-run
 
