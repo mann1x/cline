@@ -686,6 +686,29 @@ function noChangeMessage(
 }
 
 /**
+ * Whether the result is simply the file's own content, twice over.
+ *
+ * The range-relative rule deliberately permits repeating the lines a call
+ * names, which at whole-file scope would permit emitting the entire file twice.
+ * That one is not a deliberate edit in any session measured -- it is what a
+ * rewrite looks like when the model restarts its own output and the tail lands
+ * on top of the head. Narrow on purpose: an exact doubling, nothing else, so it
+ * cannot catch a partial repeat that the model meant.
+ */
+function isContentDoubled(content: string, updated: string): boolean {
+	const trimmedContent = content.replace(/(\r?\n)+$/, "");
+	const trimmedUpdated = updated.replace(/(\r?\n)+$/, "");
+	if (
+		trimmedContent === "" ||
+		trimmedUpdated.length < trimmedContent.length * 2
+	) {
+		return false;
+	}
+	const eol = content.includes("\r\n") ? "\r\n" : "\n";
+	return trimmedUpdated === `${trimmedContent}${eol}${trimmedContent}`;
+}
+
+/**
  * Where the lines an edit is adding already sit in the file, if they do.
  *
  * The duplication guard knows *that* a replacement restated its range and grew
@@ -700,14 +723,25 @@ function noChangeMessage(
  * or a run of blanks, is left unnamed rather than guessed at. The bar is
  * deliberately low, because the thing being detected is a verbatim copy and a
  * two-line copy is still a copy -- pasting a read's gutter back is exactly this
- * shape, and its lines are often one character wide. Where the answer is
- * genuinely ambiguous the edit is refused rather than applied, and the refusal
- * now names the lines it matched, so a wrong call is one the model can see and
- * argue with rather than one it has to guess at.
+ * shape, and its lines are often one character wide.
+ *
+ * **A copy of the range the call names is not reported.** Intent cannot be read
+ * off the payload -- repeating a line deliberately and duplicating one by
+ * accident emit identical bytes -- but *where the copy comes from* separates
+ * every case measured. Re-emitting the lines you named is a statement about
+ * those lines: `a++;` twice, or a method repeated, is an ordinary edit and the
+ * range says exactly which lines it concerns. Re-emitting lines from OUTSIDE
+ * the range is the paste-too-much accident, every time: pandorum's range 90-91
+ * carrying the methods from 92-96, the original corruption's range 84-98
+ * carrying the rest of the class below it, a read's gutter pasted back so the
+ * numbering runs past `end_line`. So the search skips matches lying wholly
+ * inside the named range, and reports the ones that do not.
  */
 function locateExistingBlock(
 	content: string,
 	addedLines: string[],
+	/** The range the call named; a copy of it is the model's own choice. */
+	namedRange: { firstLine: number; lastLine: number },
 ): { firstLine: number; lastLine: number } | undefined {
 	const trimmed = addedLines.map((line) => line.trim());
 	let from = 0;
@@ -730,7 +764,16 @@ function locateExistingBlock(
 			}
 		}
 		if (matched) {
-			return { firstLine: start + 1, lastLine: start + block.length };
+			const firstLine = start + 1;
+			const lastLine = start + block.length;
+			// A copy of the named range is the edit the model asked for.
+			if (
+				firstLine >= namedRange.firstLine &&
+				lastLine <= namedRange.lastLine
+			) {
+				continue;
+			}
+			return { firstLine, lastLine };
 		}
 	}
 	return undefined;
@@ -1190,6 +1233,7 @@ async function replaceLineRange(
 	const existingBlock = locateExistingBlock(
 		content,
 		replacement.slice(requestedLines),
+		{ firstLine: startLineOneBased, lastLine: effectiveEndLine },
 	);
 	// `added > requestedLines` used to stand in for "this is a copy, not a
 	// replacement", because there was nothing better to ask. There is now: the
@@ -1197,7 +1241,8 @@ async function replaceLineRange(
 	// merely redundant beside it, it is wrong -- duplicating a three-line range
 	// with exactly three more lines adds no more lines than the range holds and
 	// walked straight past it.
-	if (removed === 0 && added > 0 && existingBlock !== undefined) {
+	const doubled = isContentDoubled(content, updated);
+	if (removed === 0 && added > 0 && (existingBlock !== undefined || doubled)) {
 		duplicatedRangeMessage(
 			filePath,
 			range,
@@ -1209,7 +1254,10 @@ async function replaceLineRange(
 			noteNoOp?.(
 				`duplicated\u0000${filePath}\u0000${range}\u0000${newStr ?? ""}`,
 			),
-			existingBlock,
+			existingBlock ??
+				(doubled
+					? { firstLine: 1, lastLine: splitFileLines(content).lines.length }
+					: undefined),
 		);
 	}
 

@@ -854,6 +854,102 @@ describe("createEditorExecutor", () => {
 			);
 		});
 
+		// Intent cannot be read off the payload: repeating a line on purpose and
+		// duplicating one by accident emit identical bytes. What separates every
+		// case measured is where the copy comes from -- the range the call
+		// named, or the lines around it.
+		describe("a copy of the named range is the edit, not the fault", () => {
+			it("repeats a single line as many times as asked", async () => {
+				await withTempFile("x=0;\na++;\nb--;", async (filePath, dir) => {
+					await createEditorExecutor()(
+						{
+							path: filePath,
+							new_text: "a++;\na++;\na++;",
+							start_line: 2,
+							end_line: 2,
+						},
+						dir,
+						context,
+					);
+
+					await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+						"x=0;\na++;\na++;\na++;\nb--;",
+					);
+				});
+			});
+
+			it("repeats a multi-line block when the range covers it", async () => {
+				await withTempFile(
+					"f(){\n  go();\n}\nend();",
+					async (filePath, dir) => {
+						await createEditorExecutor()(
+							{
+								path: filePath,
+								new_text: "f(){\n  go();\n}\nf(){\n  go();\n}",
+								start_line: 1,
+								end_line: 3,
+							},
+							dir,
+							context,
+						);
+
+						await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+							"f(){\n  go();\n}\nf(){\n  go();\n}\nend();",
+						);
+					},
+				);
+			});
+
+			// The accident, told apart from the two above by one thing: the
+			// block being added lives outside the range the call names. This is
+			// the pandorum shape -- range 90-91, methods from 92-96.
+			it("still refuses a copy of the lines below the range", async () => {
+				await withTempFile(
+					"head\nalpha\nbeta\ngamma",
+					async (filePath, dir) => {
+						const failure = createEditorExecutor()(
+							{
+								path: filePath,
+								new_text: "head\nalpha\nbeta\ngamma",
+								start_line: 1,
+								end_line: 1,
+							},
+							dir,
+							context,
+						);
+
+						await expect(failure).rejects.toThrow(
+							"already in the file at lines 2-4",
+						);
+						await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+							"head\nalpha\nbeta\ngamma",
+						);
+					},
+				);
+			});
+
+			// Repeating the named range is permitted, which at whole-file scope
+			// would permit emitting the file twice. That is not an edit anyone
+			// makes on purpose -- it is a rewrite whose output restarted -- so
+			// an exact doubling keeps its own refusal.
+			it("refuses the whole file emitted twice", async () => {
+				await withTempFile("one\ntwo\nthree", async (filePath, dir) => {
+					await expect(
+						createEditorExecutor()(
+							{
+								path: filePath,
+								new_text: "one\ntwo\nthree\none\ntwo\nthree",
+								start_line: 1,
+								end_line: 3,
+							},
+							dir,
+							context,
+						),
+					).rejects.toThrow("Duplicated instead of replaced");
+				});
+			});
+		});
+
 		it("names the gutter when it numbers past end_line", async () => {
 			// The two mistakes arrive together: a model in "gutter mode" pastes the
 			// read output back, and the gutter it pastes runs further than the range
