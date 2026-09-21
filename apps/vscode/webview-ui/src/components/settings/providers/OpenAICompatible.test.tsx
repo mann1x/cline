@@ -306,7 +306,11 @@ describe("OpenAICompatibleProvider", () => {
 		fireEvent.click(screen.getByText("Model Configuration"))
 
 		fireEvent.change(screen.getByLabelText("Model ID"), { target: { value: "listed-model" } })
-		fireEvent.change(screen.getByLabelText("Model Context Window"), { target: { value: "64000" } })
+		// The window edit writes providers.json first and commits the override
+		// after, so the commit lands a microtask later than the other fields'.
+		await act(async () => {
+			fireEvent.change(screen.getByLabelText("Model Context Window"), { target: { value: "64000" } })
+		})
 
 		expect(mocks.commitSelection).toHaveBeenLastCalledWith("act", {
 			providerId: "custom-openai",
@@ -364,7 +368,9 @@ describe("OpenAICompatibleProvider", () => {
 		view.rerender(<OpenAICompatibleProvider currentMode="plan" providerId="custom-openai" showModelOptions={false} />)
 		await act(async () => {})
 		fireEvent.click(screen.getByText("Model Configuration"))
-		fireEvent.change(screen.getByLabelText("Model Context Window"), { target: { value: "64000" } })
+		await act(async () => {
+			fireEvent.change(screen.getByLabelText("Model Context Window"), { target: { value: "64000" } })
+		})
 
 		expect(mocks.commitSelection).toHaveBeenLastCalledWith("plan", {
 			providerId: "custom-openai",
@@ -492,13 +498,63 @@ describe("OpenAICompatibleProvider", () => {
 		await act(async () => {})
 		fireEvent.click(screen.getByText("Model Configuration"))
 
-		fireEvent.change(screen.getByLabelText(label), { target: { value: input } })
+		// Awaited for both rows: the context-window row commits after its
+		// providers.json write, and awaiting a synchronous commit costs the
+		// price row nothing.
+		await act(async () => {
+			fireEvent.change(screen.getByLabelText(label), { target: { value: input } })
+		})
 
 		expect(mocks.commitSelection).toHaveBeenCalledWith("act", {
 			providerId: "custom-openai",
 			modelId: "custom-model",
 			overrides: { [key]: expected },
 		})
+	})
+
+	// The window is the number OutputBudgetField, the tool-result cap and
+	// compaction are all read against, and they read it from providers.json --
+	// `config.contextWindow` -- not from the model override this panel wrote.
+	// So on opencoti and llama.cpp the operator typed a window, the panel
+	// showed it, and the output budget's slider never appeared because the
+	// value it sizes against was never written. Ollama writes both and is why
+	// its slider works. Sequenced, not fired together, for the reason
+	// OllamaProvider spells out: the selection commit rebuilds the entry from a
+	// fresh read, so issuing them side by side lets it republish the old
+	// number.
+	it("writes the context window to providers.json as well as the override", async () => {
+		renderProvider()
+		await act(async () => {})
+		fireEvent.click(screen.getByText("Model Configuration"))
+
+		await act(async () => {
+			fireEvent.change(screen.getByLabelText("Model Context Window"), { target: { value: "64000" } })
+		})
+
+		expect(mocks.write).toHaveBeenCalledWith({ contextWindow: 64_000 })
+		expect(mocks.commitSelection).toHaveBeenCalledWith("act", {
+			providerId: "custom-openai",
+			modelId: "custom-model",
+			overrides: { contextWindow: 64_000 },
+		})
+		expect(mocks.write.mock.invocationCallOrder[0]).toBeLessThan(mocks.commitSelection.mock.invocationCallOrder[0])
+	})
+
+	// Clearing the box has to clear the stored window too, or the budget keeps
+	// sizing against a number the panel no longer shows. Zero is how the wire
+	// says "unset"; the host drops the key rather than storing a window of
+	// nothing.
+	it("clears the stored context window when the box is emptied", async () => {
+		setCommittedSelection({ contextWindow: 64_000 })
+		renderProvider()
+		await act(async () => {})
+		fireEvent.click(screen.getByText("Model Configuration"))
+
+		await act(async () => {
+			fireEvent.change(screen.getByLabelText("Model Context Window"), { target: { value: "" } })
+		})
+
+		expect(mocks.write).toHaveBeenCalledWith({ contextWindow: 0 })
 	})
 
 	it("clears one override while preserving unrelated fields", async () => {

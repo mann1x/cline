@@ -176,6 +176,19 @@ interface ModelInfoViewProps {
 	onProviderSortingChange?: (value: string) => void
 	showProviderRouting?: boolean
 	/**
+	 * The three capability rows are rendered somewhere else, so leave them out.
+	 *
+	 * Set by the OpenAI-compatible form, which shows the sampler's "Advanced"
+	 * collapsible and then this one right underneath it: the word appeared
+	 * twice with different contents under each, which is what a reader has to
+	 * open both to discover. The rows move into the sampler's section, beside
+	 * the other per-endpoint facts. What stays here is what is genuinely about
+	 * the *model* rather than the endpoint -- the prices -- and on a local
+	 * model there are none, so the second section stops existing rather than
+	 * becoming an empty header.
+	 */
+	capabilitiesElsewhere?: boolean
+	/**
 	 * Suppress the per-token pricing display (compact input/output row, cache
 	 * pricing in Advanced, and tiered pricing). Set this for providers whose
 	 * billing is subscription-based or otherwise not per-token — any
@@ -187,6 +200,38 @@ interface ModelInfoViewProps {
 
 // ========== Component ==========
 
+/**
+ * Images / Browser / Prompt Caching, as rows.
+ *
+ * Split out of {@link ModelInfoView}'s Advanced section so the sampler's
+ * section can host them instead, rather than the two sections both being
+ * called "Advanced" and sitting one on top of the other. Reads the same
+ * helpers, so the answer cannot differ between the two places it can appear.
+ */
+export const ModelCapabilityRows = ({ modelInfo, selectedModelId }: { modelInfo: ModelInfo; selectedModelId: string }) => {
+	const { models: geminiModels } = useProviderModels("gemini")
+	const isGemini = Object.hasOwn(geminiModels, selectedModelId)
+
+	return (
+		<>
+			<AdvancedRow>
+				<AdvancedLabel>Images</AdvancedLabel>
+				<AdvancedValue>{supportsImages(modelInfo) ? "Yes" : "No"}</AdvancedValue>
+			</AdvancedRow>
+			<AdvancedRow>
+				<AdvancedLabel>Browser</AdvancedLabel>
+				<AdvancedValue>{supportsBrowserUse(modelInfo) ? "Yes" : "No"}</AdvancedValue>
+			</AdvancedRow>
+			{!isGemini && (
+				<AdvancedRow>
+					<AdvancedLabel>Prompt Caching</AdvancedLabel>
+					<AdvancedValue>{supportsPromptCache(modelInfo) ? "Yes" : "No"}</AdvancedValue>
+				</AdvancedRow>
+			)}
+		</>
+	)
+}
+
 export const ModelInfoView = ({
 	selectedModelId,
 	modelInfo,
@@ -195,6 +240,7 @@ export const ModelInfoView = ({
 	onProviderSortingChange,
 	showProviderRouting,
 	hideUsageCost,
+	capabilitiesElsewhere,
 }: ModelInfoViewProps) => {
 	const [advancedExpanded, setAdvancedExpanded] = useState(false)
 
@@ -210,6 +256,12 @@ export const ModelInfoView = ({
 
 	// Check if we have cache pricing to show in Advanced section
 	const hasCachePricing = modelInfo.supportsPromptCache && (modelInfo.cacheWritesPrice || modelInfo.cacheReadsPrice)
+	// Everything the section can hold, so an empty one is never rendered.
+	const hasAdvancedContent =
+		!capabilitiesElsewhere ||
+		Boolean(!hideUsageCost && hasCachePricing) ||
+		Boolean(!hideUsageCost && hasTiers) ||
+		Boolean(showProviderRouting && onProviderSortingChange)
 
 	return (
 		<div style={{ marginTop: 4 }}>
@@ -244,99 +296,112 @@ export const ModelInfoView = ({
 				)}
 			</InfoRow>
 
-			{/* Collapsible Advanced Section */}
-			<CollapsibleHeader onClick={() => setAdvancedExpanded(!advancedExpanded)}>
-				<CollapsibleArrow $isExpanded={advancedExpanded}>▶</CollapsibleArrow>
-				Advanced
-			</CollapsibleHeader>
-			<CollapsibleContent $isExpanded={advancedExpanded}>
-				<AdvancedSection>
-					{/* Capabilities */}
-					<AdvancedRow>
-						<AdvancedLabel>Images</AdvancedLabel>
-						<AdvancedValue>{hasImages ? "Yes" : "No"}</AdvancedValue>
-					</AdvancedRow>
-					<AdvancedRow>
-						<AdvancedLabel>Browser</AdvancedLabel>
-						<AdvancedValue>{hasBrowser ? "Yes" : "No"}</AdvancedValue>
-					</AdvancedRow>
-					{!isGemini && (
-						<AdvancedRow>
-							<AdvancedLabel>Prompt Caching</AdvancedLabel>
-							<AdvancedValue>{hasCaching ? "Yes" : "No"}</AdvancedValue>
-						</AdvancedRow>
-					)}
-
-					{/* Cache Pricing */}
-					{!hideUsageCost && hasCachePricing && (
-						<>
-							{modelInfo.cacheReadsPrice !== undefined && (
-								<AdvancedRow>
-									<AdvancedLabel>Cache Reads</AdvancedLabel>
-									<AdvancedValue>{formatCompactPrice(modelInfo.cacheReadsPrice)}</AdvancedValue>
-								</AdvancedRow>
-							)}
-							{modelInfo.cacheWritesPrice !== undefined && (
-								<AdvancedRow>
-									<AdvancedLabel>Cache Writes</AdvancedLabel>
-									<AdvancedValue>{formatCompactPrice(modelInfo.cacheWritesPrice)}</AdvancedValue>
-								</AdvancedRow>
-							)}
-						</>
-					)}
-
-					{/* Tiered Pricing */}
-					{!hideUsageCost && hasTiers && (
-						<div style={{ marginTop: 8 }}>
-							<div style={{ fontWeight: 500, marginBottom: 4 }}>Tiered Pricing:</div>
-							{modelInfo.tiers && (
+			{/* Collapsible Advanced Section.
+			    Rendered only when it has something in it. With the capability
+			    rows hosted elsewhere, a local model leaves nothing here -- no
+			    prices, no tiers, no routing -- and a header that opens onto an
+			    empty box is worse than no header, particularly when the
+			    section directly above it is also called "Advanced". */}
+			{hasAdvancedContent && (
+				<>
+					<CollapsibleHeader onClick={() => setAdvancedExpanded(!advancedExpanded)}>
+						<CollapsibleArrow $isExpanded={advancedExpanded}>▶</CollapsibleArrow>
+						Advanced
+					</CollapsibleHeader>
+					<CollapsibleContent $isExpanded={advancedExpanded}>
+						<AdvancedSection>
+							{/* Capabilities */}
+							{!capabilitiesElsewhere && (
 								<>
-									<div>
-										<span style={{ fontWeight: 500 }}>Input:</span>
-										<br />
-										{formatTiers(modelInfo.tiers, "inputPrice")}
-									</div>
-									<div style={{ marginTop: 4 }}>
-										<span style={{ fontWeight: 500 }}>Output:</span>
-										<br />
-										{formatTiers(modelInfo.tiers, "outputPrice")}
-									</div>
+									<AdvancedRow>
+										<AdvancedLabel>Images</AdvancedLabel>
+										<AdvancedValue>{hasImages ? "Yes" : "No"}</AdvancedValue>
+									</AdvancedRow>
+									<AdvancedRow>
+										<AdvancedLabel>Browser</AdvancedLabel>
+										<AdvancedValue>{hasBrowser ? "Yes" : "No"}</AdvancedValue>
+									</AdvancedRow>
+									{!isGemini && (
+										<AdvancedRow>
+											<AdvancedLabel>Prompt Caching</AdvancedLabel>
+											<AdvancedValue>{hasCaching ? "Yes" : "No"}</AdvancedValue>
+										</AdvancedRow>
+									)}
 								</>
 							)}
-						</div>
-					)}
 
-					{/* Provider Routing */}
-					{showProviderRouting && onProviderSortingChange && (
-						<ProviderRoutingContainer>
-							<ProviderRoutingLabel>Provider Routing</ProviderRoutingLabel>
-							<VSCodeDropdown
-								onChange={(e: any) => onProviderSortingChange(e.target.value)}
-								style={{ width: "100%" }}
-								value={providerSorting || ""}>
-								<VSCodeOption value="">Default</VSCodeOption>
-								<VSCodeOption value="price">Price</VSCodeOption>
-								<VSCodeOption value="throughput">Throughput</VSCodeOption>
-								<VSCodeOption value="latency">Latency</VSCodeOption>
-							</VSCodeDropdown>
-							<p
-								style={{
-									fontSize: "11px",
-									marginTop: 4,
-									marginBottom: 0,
-									color: "var(--vscode-descriptionForeground)",
-								}}>
-								{!providerSorting &&
-									"Load balance across providers (AWS, Google Vertex, etc.), prioritizing price while considering uptime"}
-								{providerSorting === "price" && "Sort by price, prioritizing the lowest cost provider"}
-								{providerSorting === "throughput" &&
-									"Sort by throughput, prioritizing highest throughput (may increase cost)"}
-								{providerSorting === "latency" && "Sort by response time, prioritizing lowest latency"}
-							</p>
-						</ProviderRoutingContainer>
-					)}
-				</AdvancedSection>
-			</CollapsibleContent>
+							{/* Cache Pricing */}
+							{!hideUsageCost && hasCachePricing && (
+								<>
+									{modelInfo.cacheReadsPrice !== undefined && (
+										<AdvancedRow>
+											<AdvancedLabel>Cache Reads</AdvancedLabel>
+											<AdvancedValue>{formatCompactPrice(modelInfo.cacheReadsPrice)}</AdvancedValue>
+										</AdvancedRow>
+									)}
+									{modelInfo.cacheWritesPrice !== undefined && (
+										<AdvancedRow>
+											<AdvancedLabel>Cache Writes</AdvancedLabel>
+											<AdvancedValue>{formatCompactPrice(modelInfo.cacheWritesPrice)}</AdvancedValue>
+										</AdvancedRow>
+									)}
+								</>
+							)}
+
+							{/* Tiered Pricing */}
+							{!hideUsageCost && hasTiers && (
+								<div style={{ marginTop: 8 }}>
+									<div style={{ fontWeight: 500, marginBottom: 4 }}>Tiered Pricing:</div>
+									{modelInfo.tiers && (
+										<>
+											<div>
+												<span style={{ fontWeight: 500 }}>Input:</span>
+												<br />
+												{formatTiers(modelInfo.tiers, "inputPrice")}
+											</div>
+											<div style={{ marginTop: 4 }}>
+												<span style={{ fontWeight: 500 }}>Output:</span>
+												<br />
+												{formatTiers(modelInfo.tiers, "outputPrice")}
+											</div>
+										</>
+									)}
+								</div>
+							)}
+
+							{/* Provider Routing */}
+							{showProviderRouting && onProviderSortingChange && (
+								<ProviderRoutingContainer>
+									<ProviderRoutingLabel>Provider Routing</ProviderRoutingLabel>
+									<VSCodeDropdown
+										onChange={(e: any) => onProviderSortingChange(e.target.value)}
+										style={{ width: "100%" }}
+										value={providerSorting || ""}>
+										<VSCodeOption value="">Default</VSCodeOption>
+										<VSCodeOption value="price">Price</VSCodeOption>
+										<VSCodeOption value="throughput">Throughput</VSCodeOption>
+										<VSCodeOption value="latency">Latency</VSCodeOption>
+									</VSCodeDropdown>
+									<p
+										style={{
+											fontSize: "11px",
+											marginTop: 4,
+											marginBottom: 0,
+											color: "var(--vscode-descriptionForeground)",
+										}}>
+										{!providerSorting &&
+											"Load balance across providers (AWS, Google Vertex, etc.), prioritizing price while considering uptime"}
+										{providerSorting === "price" && "Sort by price, prioritizing the lowest cost provider"}
+										{providerSorting === "throughput" &&
+											"Sort by throughput, prioritizing highest throughput (may increase cost)"}
+										{providerSorting === "latency" && "Sort by response time, prioritizing lowest latency"}
+									</p>
+								</ProviderRoutingContainer>
+							)}
+						</AdvancedSection>
+					</CollapsibleContent>
+				</>
+			)}
 		</div>
 	)
 }

@@ -14,7 +14,7 @@ import { getAsVar, VSC_DESCRIPTION_FOREGROUND } from "@/utils/vscStyles"
 import { ApiKeyField } from "../common/ApiKeyField"
 import { BaseUrlField } from "../common/BaseUrlField"
 import { DebouncedTextField } from "../common/DebouncedTextField"
-import { ModelInfoView } from "../common/ModelInfoView"
+import { ModelCapabilityRows, ModelInfoView } from "../common/ModelInfoView"
 import { DropdownContainer } from "../common/ModelSelector"
 import { RequestTimingsToggle } from "../common/RequestTimingsToggle"
 import { SamplingSection } from "../common/SamplingSection"
@@ -192,9 +192,33 @@ export const OpenAICompatibleProvider = ({
 			if (parsed.value === effectiveValue) {
 				return
 			}
+			// The context window has a second home, and it is the one that is
+			// read. `OutputBudgetField`, the tool-result cap and compaction all
+			// size against `config.contextWindow` in providers.json; the model
+			// override written below is a catalog fact about a model, not a
+			// fact about this endpoint. Writing only the override is why the
+			// output budget's slider never appeared on opencoti or llama.cpp
+			// however wide a window was typed here -- the number it needed was
+			// never stored. Ollama writes both, which is why its slider works.
+			//
+			// Sequenced rather than fired together, for the reason
+			// `OllamaProvider` gives at length: these are two writes to one
+			// providers.json entry, and the selection commit rebuilds that
+			// entry from a fresh read. Side by side, the commit could rebuild
+			// from a record without the new window and republish the old one.
+			if (key === "contextWindow") {
+				void (async () => {
+					// Zero is how the wire says "unset" -- the host drops the
+					// key rather than storing a window of nothing -- so
+					// clearing the box clears the stored value too.
+					await write({ contextWindow: parsed.value && parsed.value > 0 ? parsed.value : 0 })
+					updateModelOverride(key, parsed.value)
+				})().catch((error) => handleProviderConfigWriteError("context window", error))
+				return
+			}
 			updateModelOverride(key, parsed.value)
 		},
-		[updateModelOverride, currentMode, openAiModelInfo, selectedModelId],
+		[updateModelOverride, currentMode, openAiModelInfo, selectedModelId, write],
 	)
 
 	// Debounced function to refresh OpenAI models (prevents excessive API calls while typing)
@@ -626,13 +650,6 @@ export const OpenAICompatibleProvider = ({
 				</span>
 			</p>
 
-			{/* The other engine that reports its own timings: a llama.cpp or
-			    opencoti-llamafile server is reached through this form, and its
-			    `timings` object is read from the same response the tokens come
-			    from. Harmless for the hosted providers on this path, which
-			    report none and show only what Cerebriline measured. */}
-			<RequestTimingsToggle engineNote="A llama.cpp or opencoti-llamafile server also reports its own prompt and generation split, cached prefix tokens, and speculative-decoding acceptance." />
-
 			{/* llama.cpp and opencoti-llamafile are reached through this form, and
 			    they take a thinking budget rather than an effort level — the
 			    level the generic selector wrote went out as `reasoning_effort`,
@@ -648,10 +665,41 @@ export const OpenAICompatibleProvider = ({
 			    missing. `num_predict` is deliberately absent: the automatic
 			    output budget below owns that number, and a second answer above
 			    it would silently win. */}
-			<SamplingSection dialect="llamacpp" providerId={providerId} showThinkBudgetMessage />
+			<SamplingSection
+				dialect="llamacpp"
+				footer={
+					<>
+						{/* The other engine that reports its own timings: a
+						    llama.cpp or opencoti-llamafile server is reached
+						    through this form, and its `timings` object is read
+						    from the same response the tokens come from.
+						    Harmless for the hosted providers on this path,
+						    which report none and show only what Cerebriline
+						    measured. In the footer rather than above the
+						    section because that is where Ollama's is, and two
+						    panels putting the same switch in two places is
+						    what the shared section exists to stop. */}
+						<RequestTimingsToggle engineNote="A llama.cpp or opencoti-llamafile server also reports its own prompt and generation split, cached prefix tokens, and speculative-decoding acceptance." />
+						{/* Moved out of ModelInfoView's own "Advanced", which
+						    sat directly below this one under the same name. */}
+						{showModelOptions && selectedModelInfo && (
+							<div className="mt-1">
+								<ModelCapabilityRows modelInfo={selectedModelInfo} selectedModelId={selectedModelId} />
+							</div>
+						)}
+					</>
+				}
+				providerId={providerId}
+				showThinkBudgetMessage
+			/>
 
 			{showModelOptions && (
-				<ModelInfoView isPopup={isPopup} modelInfo={selectedModelInfo} selectedModelId={selectedModelId} />
+				<ModelInfoView
+					capabilitiesElsewhere
+					isPopup={isPopup}
+					modelInfo={selectedModelInfo}
+					selectedModelId={selectedModelId}
+				/>
 			)}
 		</div>
 	)
