@@ -357,6 +357,63 @@ async function generateThinkingSummary(options: {
 	}
 }
 
+/**
+ * How many model calls the council makes. Three: a reviewer for each half of
+ * the transcript, and a synthesiser to merge what they say.
+ */
+const COUNCIL_CALLS = 3;
+
+/**
+ * The model calls a compaction is about to make, counted before it makes them.
+ *
+ * A compaction is several sequential requests -- the summary, the
+ * retrospective, then the council -- each of which can take a minute or more
+ * on a local model. From outside it is one spinner that sits there, and a run
+ * that looked hung on 2026-09-21 was in fact four calls deep and working. The
+ * count is what makes the difference legible.
+ */
+export function planCompactionSteps(options: {
+	thinkingSummaryEnabled: boolean;
+	councilEnabled: boolean;
+}): number {
+	return (
+		1 +
+		(options.thinkingSummaryEnabled ? 1 : 0) +
+		(options.councilEnabled ? COUNCIL_CALLS : 0)
+	);
+}
+
+/** One compaction's progress through {@link planCompactionSteps} calls. */
+export interface CompactionProgress {
+	/** Count one model call, by the stage it belongs to. */
+	step(label: string): void;
+}
+
+export function createCompactionProgress(
+	total: number,
+	emit: (progress: {
+		step: number;
+		stepTotal: number;
+		stepLabel: string;
+	}) => void,
+): CompactionProgress {
+	let step = 0;
+	let stepTotal = Math.max(1, total);
+	return {
+		step(label: string): void {
+			step += 1;
+			// A retried stage is an extra call, not a stage that disappeared, so
+			// the plan grows with it. That keeps the pair honest -- (3/6) after
+			// the summary was written twice, never (4/4) with a step unaccounted
+			// for, and never a step number past its own total.
+			if (step > stepTotal) {
+				stepTotal = step;
+			}
+			emit({ step, stepTotal, stepLabel: label });
+		},
+	};
+}
+
 export async function runAgenticCompaction(options: {
 	context: CoreCompactionContext;
 	providerConfig: ProviderConfig;
@@ -669,6 +726,34 @@ export async function runAgenticCompaction(options: {
 	// means handing the same oversized transcript to the next turn, one turn
 	// larger, having spent a model call to achieve nothing.
 	const summaryLimitTokens = outputBudgets.summaryMaxTokens;
+
+	// Every model call this compaction makes goes through `generateSummary`
+	// here, `generateThinkingSummary` below, or the council's `generate`
+	// callback, so counting at those three points counts all of them --
+	// including the retries, which is what makes a stalled-looking compaction
+	// distinguishable from a slow one.
+	const thinkingSummaryEnabled = options.thinkingSummaryEnabled !== false;
+	const councilEnabled = options.councilEnabled !== false;
+	const statusKind =
+		options.context.mode === "manual"
+			? "manual_compaction"
+			: options.context.mode === "overflow_recovery"
+				? "overflow_recovery_compaction"
+				: "auto_compaction";
+	const progress = createCompactionProgress(
+		planCompactionSteps({ thinkingSummaryEnabled, councilEnabled }),
+		({ step, stepTotal, stepLabel }) => {
+			options.context.emitStatusNotice?.("compacting", {
+				kind: statusKind,
+				reason: statusKind,
+				phase: "progress",
+				step,
+				stepTotal,
+				stepLabel,
+			});
+		},
+	);
+
 	let summaryResult: SummaryGenerationResult | undefined;
 	let lastFailure = "none";
 	for (let attempt = 1; attempt <= SUMMARY_ATTEMPTS; attempt += 1) {
@@ -684,6 +769,7 @@ export async function runAgenticCompaction(options: {
 					)}`
 				: summaryRequest;
 		let candidate: SummaryGenerationResult | undefined;
+		progress.step("summary");
 		try {
 			candidate = await generateSummary({
 				providerConfig: summarizerProviderConfig,
@@ -851,8 +937,11 @@ export async function runAgenticCompaction(options: {
 	// cannot honour, and costs tokens on every compaction to make it.
 	//
 	// Explicitly, not inferred from `spanFor`. An absent revision lookup already
+	if (thinkingSummaryEnabled) {
+		progress.step("retrospective");
+	}
 	const rawThinkingSummary = await generateThinkingSummary({
-		enabled: options.thinkingSummaryEnabled !== false,
+		enabled: thinkingSummaryEnabled,
 		messages: newMessagesToFold,
 		previousThinkingSummary,
 		promptTemplate: options.thinkingSummaryPrompt,
@@ -884,13 +973,15 @@ export async function runAgenticCompaction(options: {
 					toolLedgerKey: ledgerEnabled
 						? renderToolLedgerKey(ledgerEntries)
 						: undefined,
-					generate: (call) =>
+					generate: (call) => (
+						progress.step("review"),
 						generateSummary({
 							providerConfig: summarizerProviderConfig,
 							request: call.request,
 							systemPrompt: call.systemPrompt,
 							logger: options.logger,
-						}).then((result) => cutEchoedTranscript(result.text).text),
+						}).then((result) => cutEchoedTranscript(result.text).text)
+					),
 					logger: options.logger,
 				});
 	const thinkingSummary = reviewed.thinkingSummary;

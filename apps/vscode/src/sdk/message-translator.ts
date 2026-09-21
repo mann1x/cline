@@ -241,6 +241,11 @@ export class MessageTranslatorState {
 		return this.openCompactionTs
 	}
 
+	/** The in-flight compaction divider's ts, left open for the next update. */
+	peekOpenCompactionTs(): number | undefined {
+		return this.openCompactionTs
+	}
+
 	/** Take (and clear) the in-flight compaction divider's ts, if any. */
 	takeOpenCompactionTs(): number | undefined {
 		const ts = this.openCompactionTs
@@ -1561,7 +1566,13 @@ export function buildToolApprovalAskMessage(toolName: string, input: unknown, ts
  * non-compaction status notices.
  */
 export function parseCompactionNoticeMetadata(metadata: Record<string, unknown> | undefined): ClineCompactionInfo | undefined {
-	if (!metadata || (metadata.phase !== "started" && metadata.phase !== "completed" && metadata.phase !== "skipped")) {
+	if (
+		!metadata ||
+		(metadata.phase !== "started" &&
+			metadata.phase !== "progress" &&
+			metadata.phase !== "completed" &&
+			metadata.phase !== "skipped")
+	) {
 		return undefined
 	}
 	const kind = metadata.kind ?? metadata.reason
@@ -1577,6 +1588,23 @@ export function parseCompactionNoticeMetadata(metadata: Record<string, unknown> 
 	const mode = kind === "manual_compaction" ? "manual" : kind === "overflow_recovery_compaction" ? "overflow" : "auto"
 	if (metadata.phase === "started") {
 		return { status: "started", mode }
+	}
+	// Still "started" -- it is the same row, saying which of its calls it is on.
+	// A progress notice with no counters would open a second divider, so the
+	// pair is required rather than optional here.
+	if (metadata.phase === "progress") {
+		const step = asFiniteNumber(metadata.step)
+		const stepTotal = asFiniteNumber(metadata.stepTotal)
+		if (step === undefined || stepTotal === undefined) {
+			return undefined
+		}
+		return {
+			status: "started",
+			mode,
+			step,
+			stepTotal,
+			...(typeof metadata.stepLabel === "string" && metadata.stepLabel.trim() ? { stepLabel: metadata.stepLabel } : {}),
+		}
 	}
 	if (metadata.phase === "skipped") {
 		return { status: "skipped", mode }
@@ -2621,10 +2649,15 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 			if (event.noticeType === "status") {
 				const compaction = parseCompactionNoticeMetadata(event.metadata)
 				if (compaction) {
+					// A progress update is the same divider, not a new one: it
+					// reuses the open ts and leaves it open, so the row is
+					// rewritten in place all the way to its terminal state.
 					const ts =
-						compaction.status === "started"
-							? state.beginCompaction()
-							: (state.takeOpenCompactionTs() ?? state.nextTs())
+						compaction.status !== "started"
+							? (state.takeOpenCompactionTs() ?? state.nextTs())
+							: compaction.step !== undefined
+								? (state.peekOpenCompactionTs() ?? state.beginCompaction())
+								: state.beginCompaction()
 					messages.push(buildCompactionMessage(compaction, ts))
 					break
 				}

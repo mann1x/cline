@@ -1135,6 +1135,10 @@ export function createContextCompactionPrepareTurn(
 			model: context.model,
 			mode: effectiveMode,
 			abortSignal: context.abortSignal,
+			// Named here or the strategy has no way to report progress: this
+			// object is built field by field, and a field left off one of these
+			// lists reaches its reader as `undefined` with nothing to say so.
+			emitStatusNotice: context.emitStatusNotice,
 			budget: {
 				request: {
 					inputTokens: requestInputTokens,

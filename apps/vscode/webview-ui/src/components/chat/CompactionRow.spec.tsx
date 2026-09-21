@@ -96,4 +96,31 @@ describe("CompactionRow", () => {
 		expect(screen.getByText(/Auto compacting context/)).toBeTruthy()
 		expect(screen.queryByText("Summary")).toBeNull()
 	})
+
+	it("says how far through its calls a running compaction is", () => {
+		// One spinner for five sequential model calls reads as a hang. The pair
+		// is what separates "working" from "stuck", and it is the only thing on
+		// screen that can.
+		render(
+			<CompactionRow
+				message={
+					{
+						ts: 1,
+						type: "say",
+						say: "info",
+						text: JSON.stringify({
+							status: "started",
+							mode: "auto",
+							step: 2,
+							stepTotal: 5,
+							stepLabel: "retrospective",
+						}),
+					} as ClineMessage
+				}
+			/>,
+		)
+
+		expect(screen.getByText(/\(2\/5\)/)).toBeTruthy()
+		expect(screen.getByText(/retrospective/)).toBeTruthy()
+	})
 })

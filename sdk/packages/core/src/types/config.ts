@@ -288,6 +288,18 @@ export interface CoreCompactionContext {
 	 * or recovering turn is not blocked on a stalled compaction.
 	 */
 	abortSignal?: AbortSignal;
+	/**
+	 * Where a compaction says how far through its own model calls it is.
+	 *
+	 * A compaction is several sequential requests and reads as one spinner
+	 * from outside; on a local model the whole sequence can run for minutes.
+	 * Supplied by the pipeline, which owns the channel -- absent means the
+	 * compaction simply says nothing, as it did before.
+	 */
+	emitStatusNotice?: (
+		message: string,
+		metadata?: Record<string, unknown>,
+	) => void;
 }
 
 // Mirrors BudgetPolicyIntent in extensions/context/budget-projection/types.ts.

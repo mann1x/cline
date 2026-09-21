@@ -281,7 +281,18 @@ export function useAgentEventHandlers(deps: AgentEventDeps) {
 								});
 								break;
 							}
-							if (compaction.status === "started") {
+							if (
+								compaction.status === "started" &&
+								openCompactionEntryRef.current
+							) {
+								// A progress update on a divider already on screen.
+								// Appending would stack one divider per model call.
+								updateEntry((entry) =>
+									entry.kind === "compaction" && entry.status === "started"
+										? { ...entry, ...compaction }
+										: entry,
+								);
+							} else if (compaction.status === "started") {
 								appendEntry({ kind: "compaction", ...compaction });
 								openCompactionEntryRef.current = true;
 							} else if (openCompactionEntryRef.current) {

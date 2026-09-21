@@ -33,10 +33,19 @@ function parseCompactionInfo(text: string | undefined): ClineCompactionInfo | un
 function formatCompactionLabel(info: ClineCompactionInfo): string {
 	const overflow = info.mode === "overflow"
 	if (info.status === "started") {
-		if (overflow) {
-			return "Making room after the output limit — compacting context"
+		const base = overflow
+			? "Making room after the output limit — compacting context"
+			: info.mode === "manual"
+				? "Compacting context"
+				: "Auto compacting context"
+		// A compaction is several sequential model calls behind one spinner.
+		// Without the pair, a run four calls deep and working is indistinguishable
+		// from one that has stopped.
+		if (typeof info.step === "number" && typeof info.stepTotal === "number") {
+			const stage = info.stepLabel ? ` · ${info.stepLabel}` : ""
+			return `${base} (${info.step}/${info.stepTotal})${stage}`
 		}
-		return info.mode === "manual" ? "Compacting context" : "Auto compacting context"
+		return base
 	}
 	if (info.status === "failed") {
 		return overflow ? "Could not compact after the output limit" : "Compaction failed"

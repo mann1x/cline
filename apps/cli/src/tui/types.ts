@@ -63,6 +63,10 @@ export type ChatEntry = (
 			tokensAfter?: number;
 			messagesBefore?: number;
 			messagesAfter?: number;
+			/** How far through its own model calls a running compaction is. */
+			step?: number;
+			stepTotal?: number;
+			stepLabel?: string;
 	  }
 	| { kind: "team"; text: string }
 	| { kind: "user_submitted"; text: string; delivery?: "queue" | "steer" }

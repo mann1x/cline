@@ -581,6 +581,19 @@ export interface ClineCompactionInfo {
 	tokensAfter?: number
 	messagesBefore?: number
 	messagesAfter?: number
+	/**
+	 * How far through its own model calls a running compaction is.
+	 *
+	 * A compaction is several sequential requests -- the summary, the
+	 * retrospective, then the council's three -- and on a local model the whole
+	 * sequence runs for minutes behind one spinner. A run that looked hung on
+	 * 2026-09-21 was four calls deep and working. `stepTotal` grows when a stage
+	 * is retried, so the pair stays honest rather than pinning at its plan.
+	 */
+	step?: number
+	stepTotal?: number
+	/** Which stage the current call belongs to: summary, retrospective, review. */
+	stepLabel?: string
 	/** The summary this compaction wrote, so the row can show it on demand. */
 	summary?: string
 	/** The retrospective written alongside it, when the second phase ran. */

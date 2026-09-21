@@ -24,6 +24,7 @@ export function parseCompactionNoticeMetadata(
 	if (
 		!metadata ||
 		(metadata.phase !== "started" &&
+			metadata.phase !== "progress" &&
 			metadata.phase !== "completed" &&
 			metadata.phase !== "skipped")
 	) {
@@ -36,6 +37,24 @@ export function parseCompactionNoticeMetadata(
 	const compactionMode = kind === "manual_compaction" ? "manual" : "auto";
 	if (metadata.phase === "started") {
 		return { compactionMode, status: "started" };
+	}
+	// The same divider, saying which of its calls it is on. Both counters or
+	// nothing: a progress notice without them would open a second divider.
+	if (metadata.phase === "progress") {
+		const step = asFiniteNumber(metadata.step);
+		const stepTotal = asFiniteNumber(metadata.stepTotal);
+		if (step === undefined || stepTotal === undefined) {
+			return undefined;
+		}
+		return {
+			compactionMode,
+			status: "started",
+			step,
+			stepTotal,
+			...(typeof metadata.stepLabel === "string" && metadata.stepLabel.trim()
+				? { stepLabel: metadata.stepLabel }
+				: {}),
+		};
 	}
 	if (metadata.phase === "skipped") {
 		return { compactionMode, status: "skipped" };
@@ -64,9 +83,15 @@ export function formatCompactionDividerLabel(
 	entry: CompactionDividerEntry,
 ): string {
 	if (entry.status === "started") {
-		return entry.compactionMode === "manual"
-			? "Compacting messages"
-			: "Auto compacting messages";
+		const base =
+			entry.compactionMode === "manual"
+				? "Compacting messages"
+				: "Auto compacting messages";
+		if (typeof entry.step === "number" && typeof entry.stepTotal === "number") {
+			const stage = entry.stepLabel ? ` · ${entry.stepLabel}` : "";
+			return `${base} (${entry.step}/${entry.stepTotal})${stage}`;
+		}
+		return base;
 	}
 	if (entry.status === "failed") {
 		return "Compaction failed";
