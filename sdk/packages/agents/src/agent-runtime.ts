@@ -70,6 +70,35 @@ import {
 	type RepetitionNudger,
 } from "./reasoning-repetition";
 
+/**
+ * Wall-clock trace of the agent loop, one line per boundary, gated on
+ * `CLINE_TIMING=1` and written to stderr.
+ *
+ * It is stderr and not `config.logger` because the CLI never wires a `debug`
+ * channel — an instrumented run through it produced zero lines — and because a
+ * boundary trace has to be readable next to the engine's own log, which is
+ * timestamped wall-clock too. The timestamp is the whole point: what is being
+ * measured is the *gap* between our boundaries and ollama's, so both sides have
+ * to be on the same clock.
+ *
+ * Off by default and free when off: one env read at module load.
+ */
+const TIMING_TRACE_ENABLED = Boolean(
+	(globalThis as { process?: { env?: Record<string, string | undefined> } })
+		.process?.env?.CLINE_TIMING,
+);
+
+function timingTrace(line: string): void {
+	if (!TIMING_TRACE_ENABLED) {
+		return;
+	}
+	(
+		globalThis as {
+			process?: { stderr?: { write?: (chunk: string) => unknown } };
+		}
+	).process?.stderr?.write?.(`[timing] ${new Date().toISOString()} ${line}\n`);
+}
+
 const MAX_TOKENS_INCOMPLETE_TURN_MESSAGE =
 	"Model reached the maximum output token limit before completing the turn";
 
@@ -521,6 +550,8 @@ interface PreparedToolExecution {
 	tool?: AgentTool;
 	input: unknown;
 	skipReason?: string;
+	/** Instrumentation: how long `prepareToolExecution` took, beforeTool hooks included. */
+	prepareMs?: number;
 }
 
 interface HookBag {
@@ -1540,6 +1571,7 @@ export class AgentRuntime {
 				this.throwIfAborted();
 
 				this.state.iteration += 1;
+				this.trace(`turn-begin iter=${this.state.iteration}`);
 				await this.emit({
 					type: "turn-started",
 					snapshot: this.snapshot(),
@@ -1951,7 +1983,16 @@ export class AgentRuntime {
 				// run out of room, so a later one gets the full allowance again.
 				this.consecutiveMaxTokensRetries = 0;
 				this.truncatedOutputCapTokens = undefined;
+				const toolsAt = Date.now();
+				this.trace(
+					`tools-begin iter=${this.state.iteration} n=${toolCalls.length} ${toolCalls
+						.map((call) => call.toolName)
+						.join(",")}`,
+				);
 				const toolMessages = await this.executeToolCalls(toolCalls);
+				this.trace(
+					`tools-end iter=${this.state.iteration} took=${Date.now() - toolsAt}ms`,
+				);
 				this.state.pendingToolCalls = [];
 				for (const toolMessage of toolMessages) {
 					this.state.messages.push(toolMessage);
@@ -2864,8 +2905,13 @@ export class AgentRuntime {
 	): AsyncIterable<AgentModelEvent> {
 		let stream: AsyncIterable<AgentModelEvent>;
 		let phase = "provider_request_started";
+		const requestAt = Date.now();
+		this.trace(`request-start iter=${this.state.iteration}`);
 		try {
 			stream = await this.config.model.stream(request);
+			this.trace(
+				`stream-open iter=${this.state.iteration} after=${Date.now() - requestAt}ms`,
+			);
 			this.throwIfAborted();
 			phase = "provider_stream_started";
 			this.captureTaskLifecycle(TASK_PROVIDER_STREAM_STARTED_EVENT, {
@@ -2888,6 +2934,9 @@ export class AgentRuntime {
 			for await (const event of stream) {
 				if (!receivedFirstChunk) {
 					receivedFirstChunk = true;
+					this.trace(
+						`first-chunk iter=${this.state.iteration} after=${Date.now() - requestAt}ms type=${event.type}`,
+					);
 					phase = "first_chunk_received";
 					this.captureTaskLifecycle(TASK_FIRST_CHUNK_RECEIVED_EVENT, {
 						durationMs: getTaskLifecycleDurationMs(),
@@ -3127,7 +3176,10 @@ export class AgentRuntime {
 		this.pendingHookContexts = [];
 		const prepared: PreparedToolExecution[] = [];
 		for (const toolCall of toolCalls) {
-			prepared.push(await this.prepareToolExecution(toolCall));
+			const preparedAt = Date.now();
+			const execution = await this.prepareToolExecution(toolCall);
+			execution.prepareMs = Date.now() - preparedAt;
+			prepared.push(execution);
 		}
 
 		const bound = Math.min(
@@ -3332,12 +3384,14 @@ export class AgentRuntime {
 		prepared: PreparedToolExecution,
 	): Promise<AgentMessage> {
 		const startedAt = new Date();
+		const phaseT0 = Date.now();
 		await this.emit({
 			type: "tool-started",
 			snapshot: this.snapshot(),
 			iteration: this.state.iteration,
 			toolCall: prepared.toolCall,
 		});
+		const phaseT1 = Date.now();
 
 		let result: AgentToolResult;
 		if (prepared.skipReason) {
@@ -3384,6 +3438,7 @@ export class AgentRuntime {
 		}
 
 		const endedAt = new Date();
+		const phaseT2 = Date.now();
 		const durationMs = Math.max(0, endedAt.getTime() - startedAt.getTime());
 
 		if (prepared.tool) {
@@ -3413,6 +3468,29 @@ export class AgentRuntime {
 				}
 			}
 		}
+
+		// One line per tool call, never per token: the debug default that logged
+		// every delta put 260,774 of 261,885 lines in one session and took the
+		// extension host down with it. Numbers go in the message because the
+		// output channel does not render the metadata object.
+		this.trace(
+			`tool ${prepared.toolCall.toolName} ` +
+				`prepare=${prepared.prepareMs ?? -1}ms ` +
+				`preEmit=${phaseT1 - phaseT0}ms ` +
+				`exec=${phaseT2 - phaseT1}ms ` +
+				`afterHooks=${Date.now() - phaseT2}ms ` +
+				`total=${Date.now() - phaseT0}ms ` +
+				`| hooks ${this.topEventHooks()}`,
+		);
+		this.config.logger?.debug?.(
+			`[tool-timing] ${prepared.toolCall.toolName} ` +
+				`prepare=${prepared.prepareMs ?? -1}ms ` +
+				`preEmit=${phaseT1 - phaseT0}ms ` +
+				`exec=${phaseT2 - phaseT1}ms ` +
+				`afterHooks=${Date.now() - phaseT2}ms ` +
+				`total=${Date.now() - phaseT0}ms ` +
+				`| hooks ${this.topEventHooks()}`,
+		);
 
 		const message = createMessage("tool", [
 			{
@@ -3541,6 +3619,54 @@ export class AgentRuntime {
 		return new Error(this.state.lastError ?? "Run aborted");
 	}
 
+	/**
+	 * Per-hook time spent inside `emit`, keyed `"<event type>#<hook index>"`.
+	 *
+	 * Instrumentation for the ~660ms floor every tool call pays even when the
+	 * tool does nothing: `task_progress` and `plan` write a string and still
+	 * took 661ms and 662ms at the median across 19,803 archived calls, and the
+	 * post-tool client gap is only 29ms, so the cost is inside the call. `emit`
+	 * awaits every `onEvent` hook in series and is awaited twice per tool, which
+	 * is the right shape for it. Totals are kept per hook because naming the
+	 * slow one is the whole point.
+	 */
+	private readonly eventHookMs = new Map<string, { ms: number; n: number }>();
+
+	private noteEventHookMs(eventType: string, index: number, ms: number): void {
+		const key = `${eventType}#${index}`;
+		const slot = this.eventHookMs.get(key);
+		if (slot) {
+			slot.ms += ms;
+			slot.n += 1;
+		} else {
+			this.eventHookMs.set(key, { ms, n: 1 });
+		}
+	}
+
+	/** The hooks that cost the most, worst first, as `key=total/count`. */
+	private topEventHooks(limit = 4): string {
+		return [...this.eventHookMs.entries()]
+			.sort((a, b) => b[1].ms - a[1].ms)
+			.slice(0, limit)
+			.map(([key, v]) => `${key}=${Math.round(v.ms)}ms/${v.n}`)
+			.join(" ");
+	}
+
+	/**
+	 * One boundary of the agent loop, to stderr under `CLINE_TIMING` and to the
+	 * logger's debug channel always.
+	 *
+	 * Both, because the two runners surface different halves: the CLI wires no
+	 * debug channel at all (an instrumented run through it produced zero lines),
+	 * and the extension host has no stderr a tester can read. The volume is one
+	 * line per turn and per tool call — not per token, which is the mistake that
+	 * put 260,774 lines in one session.
+	 */
+	private trace(line: string): void {
+		timingTrace(line);
+		this.config.logger?.debug?.(`[timing] ${line}`);
+	}
+
 	private async emit(event: AgentRuntimeEvent): Promise<void> {
 		const metadata = buildEventMetadata(event);
 		switch (event.type) {
@@ -3627,8 +3753,14 @@ export class AgentRuntime {
 		for (const listener of this.listeners) {
 			listener(event);
 		}
-		for (const hook of this.hooks.onEvent) {
-			await hook(event);
+		// Instrumented: every tool call awaits this loop twice (tool-started and
+		// the tool-updated/finished path), so a slow hook is paid per tool, not
+		// per turn. Measured per hook rather than in total because the point is
+		// to name which one -- a total says only that the loop is the cost.
+		for (let index = 0; index < this.hooks.onEvent.length; index += 1) {
+			const hookStartedAt = Date.now();
+			await this.hooks.onEvent[index](event);
+			this.noteEventHookMs(event.type, index, Date.now() - hookStartedAt);
 		}
 	}
 
