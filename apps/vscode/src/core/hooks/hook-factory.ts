@@ -819,11 +819,20 @@ export class HookFactory {
 		// they can't disagree. The first workspace folder is the primary root;
 		// the session's root joins the set when it isn't a window folder, so
 		// session-discovered hooks execute from their own workspace.
+		// Instrumented: this runs twice per tool call (PreToolUse and
+		// PostToolUse) and the caller cannot know it is a no-op until it
+		// finishes, so on a workspace with no hooks at all it is pure cost --
+		// measured at ~300ms a side on Windows, which is the plugin's per-tool
+		// floor. The cache below is watcher-invalidated and cheap; these three
+		// steps are not cached at all, so the split says which one to fix.
+		const t0 = Date.now()
 		const windowRoots = await getWindowWorkspaceRoots()
+		const t1 = Date.now()
 		const sessionRoot = this.options?.sessionWorkspaceRoot
 		const workspaceRoots = sessionRoot && !windowRoots.includes(sessionRoot) ? [...windowRoots, sessionRoot] : windowRoots
 
 		const hooksDirs = await getAllHooksDirs(windowRoots)
+		const t2 = Date.now()
 
 		// Use cache for hook discovery instead of direct file system scan,
 		// giving it the window-scoped hooks-dir snapshot for cache misses. The
@@ -831,7 +840,13 @@ export class HookFactory {
 		// singleton, so per-session results must not seed it.
 		const { HookDiscoveryCache } = await import("./HookDiscoveryCache")
 		const cachedScripts = await HookDiscoveryCache.getInstance().get(hookName, hooksDirs)
+		const t3 = Date.now()
 		const sessionScripts = await this.findSessionScripts(hookName)
+		const t4 = Date.now()
+		Logger.debug(
+			`[timing] hook-discovery ${hookName} roots=${t1 - t0}ms dirs=${t2 - t1}ms ` +
+				`cache=${t3 - t2}ms session=${t4 - t3}ms total=${t4 - t0}ms found=${cachedScripts.length + sessionScripts.length}`,
+		)
 		const scripts = [...new Set([...cachedScripts, ...sessionScripts])]
 
 		const sessionDir = this.sessionHooksDir()
