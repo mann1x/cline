@@ -5,212 +5,71 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
-## [4.100.148] — 2026-09-21
+## [4.100.149] — 2026-09-21
 
-### A retried turn stops inflating the context
+### Dragging the scrollbar counts as scrolling away
 
-A turn whose first attempt came back empty is retried, and the usage it reports
-is the **sum** of every attempt — correct for billing, and wrong for everything
-else that reads it: the token calibration, the compaction trigger, the output cap
-and the context meter are not asking about money.
+The chat could not be read while it was being written to. Grab the scrollbar,
+scroll up, and the view snapped straight back to the bottom — during a run and
+after it had finished — while the mouse wheel and PgUp/PgDn behaved perfectly.
 
-4.100.141 shipped a fix for that: the kept attempt's own prompt travels beside the
-billed total. It has never once arrived. The number was written onto the
-provider's finish part, and the layer above prefers the SDK's own recomputed
-usage — so it was dropped one hop after it was written, on every real run. The
-fallback paths kept it, and those are the paths the tests take, which is why this
-was green and did nothing.
+That difference is the whole diagnosis. Only the `wheel` handler stopped the
+view following the tail, and only for a negative `deltaY`. Dragging the thumb,
+clicking the track and paging all move the view through `scroll` events and turn
+no wheel at all, so following was never stopped and the next pin pulled the
+reader back down.
 
-Measured on a run that failed this way: a turn estimated at 56,907 tokens retried
-once and reported 113,620. The next request was estimated at **114,761 against a
-128,000 window** — 198,358 characters at 1.73 chars per token, where the
-forty-two turns before it all sat at 3.4 — resolved to no output cap at all, and
-compacted a transcript that was nowhere near full.
+The `scroll` listener that was already attached for the sticky header now makes
+the same decision. It takes two things to count as a reader scrolling away, and
+each rules out something that is not one: the view must have **moved up**, which
+a list growing beneath a pinned view never does, **and** ended more than a
+screen-edge away from the bottom, which a compaction shortening the document
+under a pinned view does not do either.
 
-The number now travels by the channel the SDK passes through untouched, and the
-test asserts it through the full streaming path rather than reading it back where
-it was written.
+The thumb itself was the other half of it. Its height is proportional to the
+visible fraction of the conversation, so by the end of a long task it was a few
+pixels in a full-height track and grabbing it was mostly landing a track click.
+It has a floor now.
 
-### A compaction says which of its calls it is on
+### A copied selection ends where the text ends
 
-A compaction is up to five sequential model requests — the summary, the
-retrospective, then the council's reviewer for each half of the transcript and
-its synthesiser. From outside it was one spinner. On a local model that is
-minutes: 111s, 21s, 45s and 82s were the first four on the run above, with a
-fifth still going, and nothing on screen could distinguish that from a hang.
+Copying from the chat always put a trailing newline on the clipboard, so pasting
+the result into the chat box submitted the message before it had been finished.
 
-The divider now carries the pair and the stage — **Auto compacting context (2/5)
-· retrospective** — rewritten in place on the row that is already there rather
-than stacking one divider per call.
+Nothing in the selection produced it. The markdown flavour of the clipboard
+payload is serialised with remark-stringify, which terminates every document it
+writes with a newline. Trailing newlines are trimmed from that flavour now. A
+selection that was nothing but whitespace still copies nothing, which is the
+existing signal for "there is nothing here to copy".
 
-The total is not fixed, because a retried stage is an extra call rather than a
-stage that vanished: the plan grows with it, so a compaction that had to write
-its summary twice reads (3/6) instead of pinning at (4/4) with a step
-unaccounted for.
+### The model is told its own reasoning is not in front of it
 
-### A chat row belongs to its message, not to its position
+When the loop guard catches a repeating passage it quotes it back and says it is
+not visible to the user. A model answered that notice with:
 
-The message list keyed its rows by position, so the row that was showing one
-message showed a different one as soon as anything was inserted above it, a tool
-group grew, or the waiting placeholder was swapped for a real row. React reuses
-that row's component instance, which brings its state along with it.
+> The previous turn was interrupted by some system messages/errors about
+> repetition (which I don't see in my thought trace but must address).
 
-That is what made 4.100.146's crash possible in the first place — hooks below an
-early return only diverge if a single instance renders both a tool row and a
-command row, and position keying is what arranged the pairing. 4.100.146 fixed
-the crash. This fixes the reuse, and with it the quieter half of the same fault:
-output expansion, the quote button and the auto-expand state carrying across to
-whatever message arrived at that position next.
+It went looking for the evidence, did not find it, and treated the notice as
+suspect before acting on it. It was right that it could not find it: a turn's
+reasoning is not carried into the next request, so the quote in the notice is
+the only copy of that passage the model has. The message now says so outright,
+so the absence reads as expected rather than as a reason to doubt the warning.
 
-Rows are now keyed by the message's own timestamp. Two messages sharing one — a
-collision is rare rather than impossible, and a duplicate key is a broken list
-rather than a cosmetic warning — are numbered by the order they appear in, and a
-row with no timestamp falls back to its position in a namespace of its own.
+### The compaction divider says how long it took
 
-### The chat panel could go down mid-run
+Carried forward from the .148 test build, which was never released: the finished
+divider now reports the wall time as well as the sizes.
 
-A run on 4.100.145 replaced the whole panel with the error boundary — *Cerebriline
-could not draw this view*, **Minified React error #310** — the moment a command
-row arrived behind a tool row. The extension log timestamps it to the
-millisecond: the terminal starts the command at `06:50:54.135`, the render fails
-at `06:50:54.175`.
+```
+Context compacted · 55.7k → 33.2k tokens · 34 → 8 messages (7m32s)
+```
 
-`ChatRowContent` returns out of the middle of its body for a tool message and
-runs on to the bottom for a command one. Two `useEffect`s belonging to the
-command row sat *below* those returns, so they were called on one render and
-skipped on the next — which is the one thing React does not allow. The message
-list keys its rows by position, so a single row instance renders whatever
-message lands at that position next, and a tool row becoming a command row is an
-ordinary sequence rather than an unusual one.
-
-Both effects now sit above every return. The guard rerenders one row instance
-across the two message shapes in both directions, and against the old order it
-reports both halves of the fault — *Rendered more hooks than during the previous
-render* one way, *Rendered fewer hooks than expected* coming back.
-
-Worth knowing why nothing caught it: the linter's hook rule judges a hook by the
-control flow it sits in, not by whether an earlier return can skip it, and it
-reported nothing at all on the file that took the panel down. A walk over every
-component in the panel finds this hazard in exactly one place, and that place is
-this one.
-
-### Reasoning replay was doing nothing
-
-**Reasoning History** had four settings and no effect. Not "chose badly" — the
-control was inert: `Automatic`, `None`, `Last only` and `Everything` all produced
-byte-identical requests, with no prior thinking on the wire under any of them.
-
-Every layer was innocent under inspection. The transcript kept the thinking. The
-codec mapped thinking blocks onto reasoning parts. The message builder included
-them. The Ollama converter folded them into its `thinking` field. And the setting
-was still in hand where the host builds its provider config.
-
-It was lost on the way to the request, in **four** builders that each name every
-field they copy and spread nothing — `buildGatewayConfig`, the gateway's
-`providerConfigs` entry, and both of the registry's copies. The last of those
-*is* the object the request reads, so the plan resolved from `undefined` every
-time and fell back to the measured capability, which answers "none".
-
-Measured on the wire, per setting, now that it arrives:
-
-| setting | requests replaying | thinking carried |
-|---|---|---|
-| Everything | all | grows 1 → 8 messages, 3,489 → 4,911 chars |
-| Last only | all | exactly one message, every request |
-| None | none | — |
-| Automatic | none | resolves to None from the endpoint's measurement |
-
-This is the third feature lost to that first field list, after
-`condenseDiscardedReasoning` and both halves of the vision model, and the fourth
-lost to the registry's two, after `defaultMaxOutputTokens`. Both registry copies
-already carried a comment saying precisely this would happen. The types never
-caught it: the settings interface declares both fields, so every one of these
-lists compiled clean while dropping them.
-
-### "Default (provider decides)" no longer sets a thinking budget
-
-A request that named no reasoning level was sent `think: "medium"`. On Ollama a
-level is not a synonym for "on" — it **is** a thinking budget, and it outranks
-the budget a model declares for itself. Measured against 0.34.2 with
-`num_predict` 8,000:
-
-| model declares | `think` absent | `think: true` | `think: "medium"` |
-|---|---|---|---|
-| nothing | unbounded | unbounded | **2,000** |
-| `think_budget "high"` | 4,000 | 4,000 | **2,000** |
-
-So the default capped an otherwise unbounded model at 2,000 tokens, and halved a
-budget a model had declared for itself — for everyone who had not picked a level,
-which is exactly what "Default (provider decides)" means.
-
-The reason there is a default at all still holds: an absent config means "never
-asked", not "off", and with `think` absent a reasoning model thinks into its
-visible output instead. That is now answered with a bare `think: true` — the
-plain "on" — rather than with a level.
-
-The same defect had a second home, CLI-only and one layer earlier: a stored
-"on, level left at Default" was turned into `medium` before a request was ever
-built, so the fix above could not see the unlevelled case at all. Both are
-fixed; an explicit level and an explicit off are unchanged.
-
-### A template you wrote outranks one that shipped
-
-Template resolution compared the matched dimension before it looked at where the
-template came from, so a built-in could outscore one you had written yourself.
-
-4.100.116 turned that into a live fault. The six shipped family templates gained
-a `model:` rung so that a cloud-served model with no family of its own would
-still match — and that lifted all six from dimension 2 to dimension 3. Any user
-template matching on `family`, which is how the shipped templates have always
-matched and therefore the form anyone copying them would write, silently stopped
-applying from that release on. Nothing reported it. The session simply ran on the
-shipped prompt.
-
-Resolution is now four keys: whether the template claims this session at all,
-then **source**, then the dimension named, then narrowness within it. A built-in
-is a default; a template in your workspace or global directory is configuration
-you wrote for this machine, and a default must not outrank it however specifically
-it happens to match. `default` is kept out of it by the first key — it names
-nothing, so a user's own `default` does not swallow every session.
-
-### A saved profile keeps the value you just typed
-
-A profile saved from the settings panel could be stored without the sampler the
-session was already running on. Measured: a session running `temp 0.700 /
-repeat_penalty 1.250 / presence_penalty 0.150`, and three profiles saved from
-that same panel the same afternoon carrying no sampling section at all. Pressing
-Update again did not help, which is the tell.
-
-The cause is the 800ms the numeric fields wait before writing. That wait is
-deliberate — a shorter one stored `0.9` as `9` and `65536` as `6553` while the
-user was still typing — but inside it the panel and the stored config disagree,
-and Update was reading the store. Whichever field was touched last was always the
-one dropped, on every press.
-
-Boundaries now end the wait before reading. Update, Save as…, Done, switching
-settings tab and the Plan/Act/Vision panel flush every pending edit and wait for
-the writes to land; a profile load discards them instead, because a debounce
-firing after Revert writes back the value you just discarded.
-
-Picking another profile also asks first now — it replaces every setting on the
-tab and nothing said so. It asks on a value typed in the last 800ms too, which is
-exactly what a dirty check cannot see.
-
-### The report collector finds a renamed install
-
-A report from 4.100.118 arrived with no extension log in it, which is the one
-thing the report exists to carry. The rename broke it in three places at once,
-none of which said anything when it missed: the output-channel file is named
-after the channel, which is now `Cerebriline`; the installed-extension filter
-looked for `cline`, and `cerebriline` does not contain it — the substring is
-`line`; and sessions, hooks and settings were read from the old data directory.
-
-`Collect-CerebrilineReport.ps1` handles all three, takes both log names (one
-machine can hold logs from either side of an upgrade), and says out loud when
-both data directories exist — that split is what produces "it stopped seeing my
-history", and it belongs in the report rather than being guessed at afterwards.
-The old script is kept verbatim as `Collect-ClineReport-PreMigration.ps1` for a
-machine still on the old build.
+A compaction is up to five sequential model calls, and on a slow endpoint the
+council alone has been measured at three minutes. The progress counter added in
+.148 says which call it is on while it runs; this says what the whole thing cost
+once it is over, which is the number that decides whether the settings are worth
+their price.
 
 ## [4.100.118] — 2026-09-15
 
