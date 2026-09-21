@@ -271,6 +271,39 @@ export const ChatRowContent = memo(
 		const isCommandPending = isCommandMessage && isLast && !message.commandCompleted && !commandHasOutput
 		const isCommandCompleted = isCommandMessage && message.commandCompleted === true
 
+		// Both command effects belong above every `return` in this body, not
+		// beside the command row they serve. The body returns early for a tool
+		// message -- out of the `if (tool)` switch -- and runs on for a command
+		// one, and the list keys its rows by index, so one instance renders a
+		// tool row and then a command row. A hook below those returns is called
+		// on one render and skipped on the next, which is React's "Rendered more
+		// hooks than during the previous render" (#310) and takes the whole
+		// panel down. Measured on 4.100.145, the moment a run_commands row
+		// landed behind a tool row.
+		// Reset output expansion state when command stops (completes or is cancelled)
+		useEffect(() => {
+			// If command was executing and now isn't, clean up
+			if (isCommandMessage && prevCommandExecutingRef.current && !isCommandExecuting) {
+				setIsOutputFullyExpanded(false)
+			}
+
+			// Update ref for next render
+			prevCommandExecutingRef.current = isCommandExecuting
+		}, [isCommandMessage, isCommandExecuting])
+
+		// Auto-expand when command starts executing (only if running > 500ms)
+		useEffect(() => {
+			if (isCommandMessage && isCommandExecuting && !isExpanded) {
+				// Wait 500ms before auto-expanding to avoid animating fast commands
+				const timer = setTimeout(() => {
+					// Expand after 500ms
+					onToggleExpand(message.ts, { preserveAutoScroll: true })
+				}, 500)
+
+				return () => clearTimeout(timer)
+			}
+		}, [isCommandMessage, isCommandExecuting, isExpanded, onToggleExpand, message.ts])
+
 		const isMcpServerResponding = isLast && lastModifiedMessage?.say === "mcp_server_request_started"
 
 		const handleToggle = useCallback(() => {
@@ -814,30 +847,6 @@ export const ChatRowContent = memo(
 					)
 			}
 		}
-
-		// Reset output expansion state when command stops (completes or is cancelled)
-		useEffect(() => {
-			// If command was executing and now isn't, clean up
-			if (isCommandMessage && prevCommandExecutingRef.current && !isCommandExecuting) {
-				setIsOutputFullyExpanded(false)
-			}
-
-			// Update ref for next render
-			prevCommandExecutingRef.current = isCommandExecuting
-		}, [isCommandMessage, isCommandExecuting])
-
-		// Auto-expand when command starts executing (only if running > 500ms)
-		useEffect(() => {
-			if (isCommandMessage && isCommandExecuting && !isExpanded) {
-				// Wait 500ms before auto-expanding to avoid animating fast commands
-				const timer = setTimeout(() => {
-					// Expand after 500ms
-					onToggleExpand(message.ts, { preserveAutoScroll: true })
-				}, 500)
-
-				return () => clearTimeout(timer)
-			}
-		}, [isCommandMessage, isCommandExecuting, isExpanded, onToggleExpand, message.ts])
 
 		if (message.ask === "command" || message.say === "command") {
 			return (

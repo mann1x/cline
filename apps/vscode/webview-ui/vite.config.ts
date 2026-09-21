@@ -52,6 +52,12 @@ export default defineConfig({
 		environment: "jsdom",
 		globals: true,
 		setupFiles: ["./src/setupTests.ts"],
+		// See src/test/undici-stub.ts: a component that imports `@shared/api`
+		// drags @cline/llms' lazy `await import("undici")` into the test graph,
+		// and undici belongs to the extension host, not to webview-ui.
+		alias: {
+			undici: resolve(__dirname, "./src/test/undici-stub.ts"),
+		},
 		coverage: {
 			provider: "v8",
 			reportOnFailure: true,
