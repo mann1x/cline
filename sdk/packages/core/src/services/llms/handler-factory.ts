@@ -270,6 +270,16 @@ export function createAgentModelFromConfig(
 				// synthesizes the flat anchor for any model that publishes a cap,
 				// and the prompt's stated budget never reaches the wire.
 				defaultMaxOutputTokens: normalizedProviderConfig.defaultMaxOutputTokens,
+				// How much prior reasoning goes back to the model. Read at request
+				// time off `context.config`, which is *this* object — so a setting
+				// absent here is `undefined` at the only place that decides, and
+				// the replay control does nothing on any of its four values.
+				// Measured before this line existed: `reasoningHistory: "all"` held
+				// correctly as far as `normalizedProviderConfig`, and the plan still
+				// resolved `{"scope":"none"}` against messages carrying 2,297
+				// characters of reasoning.
+				reasoningHistory: normalizedProviderConfig.reasoningHistory,
+				reasoningInline: normalizedProviderConfig.reasoningInline,
 				options: buildGatewayProviderOptions(
 					normalizedProviderConfig,
 					config.sessionId,

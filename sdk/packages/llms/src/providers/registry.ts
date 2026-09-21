@@ -196,6 +196,14 @@ export class GatewayRegistry {
 			// This list is explicit, so a field the host sets and this copy
 			// forgets reaches the request as `undefined` with nothing to say so.
 			defaultMaxOutputTokens: config.defaultMaxOutputTokens,
+			// Exactly what that comment warns about, found the hard way: both of
+			// these were declared on `GatewayProviderSettings`, set by the host,
+			// and dropped here, so `context.config.reasoningHistory` was
+			// `undefined` on every request and the replay control did nothing on
+			// any of its four values. Measured: a transcript holding 2,297
+			// characters of reasoning replayed none of it under `all`.
+			reasoningHistory: config.reasoningHistory,
+			reasoningInline: config.reasoningInline,
 			enabled: config.enabled ?? true,
 			defaultModelId: config.defaultModelId,
 			models: config.models?.map((model) => ({ ...model })),
@@ -328,6 +336,16 @@ export class GatewayRegistry {
 				defaultMaxOutputTokens:
 					config?.defaultMaxOutputTokens ??
 					record.defaults?.defaultMaxOutputTokens,
+				// The replay settings were in neither list, which is the whole of
+				// why the control did nothing: this object is `context.config` at
+				// request time, so `reasoningHistory` read `undefined` on every
+				// request and the plan fell back to the measurement on all four
+				// settings alike. Measured against a transcript holding 2,297
+				// characters of reasoning: `all` replayed none of it.
+				reasoningHistory:
+					config?.reasoningHistory ?? record.defaults?.reasoningHistory,
+				reasoningInline:
+					config?.reasoningInline ?? record.defaults?.reasoningInline,
 			},
 			createProvider: record.createProvider,
 		};
