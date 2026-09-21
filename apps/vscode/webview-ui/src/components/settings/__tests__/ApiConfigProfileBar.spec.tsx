@@ -90,6 +90,25 @@ describe("ApiConfigProfileBar", () => {
 			expect(screen.getByText("Unsaved changes")).toBeInTheDocument()
 		})
 
+		// Same failure as "opens its list above the provider controls", one layer
+		// further out. Every model picker in the settings view raises its list to
+		// 1,000; the dialog was on Tailwind's z-50, so the Model ID list painted
+		// straight over the top of it and the buttons underneath could not be
+		// read, let alone clicked.
+		it("puts the dialog above the model pickers, not under them", () => {
+			profilesHook.isDirty = true
+			render(<ApiConfigProfileBar scope={{ kind: "mode", mode: "act" }} />)
+
+			pick("cloud-sonnet")
+
+			const heading = screen.getByText("Unsaved changes")
+			const overlay = heading.closest("[class*='fixed']") as HTMLElement
+			expect(overlay).not.toBeNull()
+			const zIndex = Number.parseInt(window.getComputedStyle(overlay).zIndex, 10)
+			expect(Number.isNaN(zIndex)).toBe(false)
+			expect(zIndex).toBeGreaterThan(DROPDOWN_Z_INDEX)
+		})
+
 		it("asks when a field is still inside its debounce, which isDirty cannot see", () => {
 			// The measured case: the value is typed, the store has not been told
 			// yet, so nothing the profile compares against has changed.

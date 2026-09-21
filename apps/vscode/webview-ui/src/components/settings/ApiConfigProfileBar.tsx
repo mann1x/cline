@@ -1,7 +1,7 @@
 import { VSCodeButton, VSCodeDropdown, VSCodeOption, VSCodeTextField } from "@vscode/webview-ui-toolkit/react"
 import { AlertTriangle } from "lucide-react"
 import { useEffect, useState } from "react"
-import { DROPDOWN_Z_INDEX, DropdownContainer } from "./ApiOptions"
+import { DROPDOWN_Z_INDEX, DropdownContainer, SETTINGS_MODAL_Z_INDEX } from "./ApiOptions"
 import { hasPendingEdits } from "./utils/pendingEdits"
 import { type ApiConfigurationProfileScope, useApiConfigurationProfiles } from "./utils/useApiConfigurationProfiles"
 
@@ -170,12 +170,16 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 
 			{pendingSwitch ? (
 				<div
-					className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+					// Not Tailwind's z-50: that is 50, and the model pickers in
+					// this view open their lists at 1,000, so the Model ID list
+					// painted over this dialog and its buttons.
+					className="fixed inset-0 bg-black/50 flex items-center justify-center"
 					onClick={(event) => {
 						if (event.target === event.currentTarget) {
 							restoreSelection()
 						}
-					}}>
+					}}
+					style={{ zIndex: SETTINGS_MODAL_Z_INDEX }}>
 					<div className="bg-(--vscode-editor-background) border border-solid border-(--vscode-panel-border) rounded-lg p-5 w-[400px] max-w-[90vw]">
 						<div className="flex items-center gap-2 mb-3">
 							<AlertTriangle className="w-5 h-5 text-(--vscode-errorForeground)" />
