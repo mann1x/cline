@@ -938,3 +938,42 @@ describe("buildGatewayModels", () => {
 		).toBeUndefined();
 	});
 });
+
+describe("the replay settings survive the gateway config", () => {
+	/**
+	 * `buildGatewayConfig` names every field it copies and spreads nothing, and
+	 * its result — not the `ProviderConfig` it was built from — is what
+	 * `context.config` is at request time. A field missing from it is silently
+	 * `undefined` at the only place that reads it.
+	 *
+	 * Measured before the fix: `reasoningHistory: "all"` stored, validated, and
+	 * carried correctly as far as `handler-factory`, yet the plan resolved to
+	 * `{"scope":"none"}` and a transcript holding 2,297 characters of reasoning
+	 * replayed none of it — identically on every setting, so the control did
+	 * nothing at all.
+	 */
+	it("carries reasoningHistory and reasoningInline", () => {
+		const built = _testing.buildGatewayConfig({
+			providerId: "ollama",
+			modelId: "glm-5.3-flash-tpl2:latest",
+			baseUrl: "http://127.0.0.1:11434",
+			reasoningHistory: "all",
+			reasoningInline: false,
+		} as never) as {
+			reasoningHistory?: unknown;
+			reasoningInline?: unknown;
+		};
+
+		expect(built.reasoningHistory).toBe("all");
+		expect(built.reasoningInline).toBe(false);
+	});
+
+	it("leaves them undefined when nothing was chosen", () => {
+		const built = _testing.buildGatewayConfig({
+			providerId: "ollama",
+			modelId: "glm-5.3-flash-tpl2:latest",
+		} as never) as { reasoningHistory?: unknown };
+
+		expect(built.reasoningHistory).toBeUndefined();
+	});
+});

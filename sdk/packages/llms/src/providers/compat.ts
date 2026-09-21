@@ -494,6 +494,16 @@ function buildGatewayConfig(config: ProviderConfig) {
 		fetch: config.fetch,
 		defaultModelId: config.modelId,
 		models: buildGatewayModels(providerId, config),
+		// Both are read at request time from `context.config`, which is this
+		// object — not the `ProviderConfig` it was built from. This builder names
+		// every field it copies and spreads nothing, so a field missing here is
+		// silently undefined at the point that decides, and the third feature to
+		// be lost that way. Measured: with `reasoningHistory: "all"` stored and
+		// carried correctly all the way into `handler-factory`, the plan resolved
+		// to `{"scope":"none"}` and a transcript holding 2,297 characters of
+		// reasoning replayed none of it, on every setting alike.
+		reasoningHistory: config.reasoningHistory,
+		reasoningInline: config.reasoningInline,
 		options: {
 			sampling: config.sampling,
 			region: config.region ?? config.gcp?.region,
