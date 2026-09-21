@@ -246,7 +246,7 @@ Which arguments you send decides what the call does. Use one form per call; don'
 
 Rules the tool enforces:
 - An edit addressed by line number (forms 2–5) must fall inside lines you have read. An edit that changes the file's line count invalidates those reads, because every line below it moved. For the next edit to that file, either use `old_text` (form 1 only needs the file read at some point) or read the region again. Line numbers from an earlier turn, from a task summary, or from a diagnostic issued before your last edit go stale the same way.
-- `new_text` replaces the range, it is not added to it. If `new_text` repeats the lines already there and then continues, it would duplicate them, and the edit is refused. Send only the text that should end up in that range.
+- `new_text` replaces the range, it is not added to it — but repeating the lines already there and then continuing is how you insert after them, and that is allowed: the range names the lines you mean. What is refused is going on to repeat lines from *outside* the range, which would duplicate text already elsewhere in the file; the refusal names the lines it matched.
 - Text copied out of `read_files` must not carry the `  92 | ` gutter. When copying, read with `line_numbers: false`.
 
 One edit, then its check, then the next. Where two edits to the same file are genuinely unavoidable in one step, use `old_text` for both, since the first one to change the line count moves the lines the other points at.

@@ -128,7 +128,7 @@ An editor for controlled filesystem edits on the text file at `path`. Six operat
 
 **Read before you change:** read the lines you are about to change before you change them — an edit aimed at a range you have not read in its current state is refused. Your own edits count — one that changes the file's length moves every line below it, so read that region again before editing it a second time. Line numbers taken from an earlier turn, from a task summary, or from a diagnostic issued before your last edit are the ones that go stale.
 
-**Replace means replace.** If `new_text` repeats the lines already in the range and then continues, the edit appends a second copy of them rather than replacing anything, and it is refused. Send only the text that should end up in that range.
+Repeating the lines already in the range and then continuing is how you insert after them, and it is allowed — the range says which lines you mean, so repeating them is your own choice. What is refused is a `new_text` that goes on to repeat lines from *outside* the range: that appends a second copy of text already elsewhere in the file rather than replacing anything, and the refusal names the lines it matched so you can aim the next call at them.
 
 **Output:** a single `{query, result, success, error?}` object for this one edit. `query` is `edit:<path>` or `insert:<path>` and `result` describes what changed. A failed edit changes nothing: `success` is false, `error` says why, and the file is exactly as it was. Do not resend the same call — `error` names the fix. In particular, text copied out of a `read_files` result must have its `123 | ` line-number gutter removed first.
 
