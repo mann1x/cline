@@ -7,6 +7,7 @@ import styled from "styled-components"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { PLATFORM_CONFIG, PlatformType } from "@/config/platform.config"
 import { useExtensionState } from "@/context/ExtensionStateContext"
+import { useDynamicProviderSelection } from "@/hooks/useDynamicProviderSelection"
 import { useProviderListings } from "@/hooks/useProviderListings"
 import { ClinePassHint } from "./ClinePassHint"
 import { OutputBudgetField } from "./common/OutputBudgetField"
@@ -66,6 +67,17 @@ interface ApiOptionsProps {
 // This is necessary to ensure dropdown opens downward, important for when this is used in popup
 export const DROPDOWN_Z_INDEX = OPENROUTER_MODEL_PICKER_Z_INDEX + 2 // Higher than the OpenRouterModelPicker's and ModelSelectorTooltip's z-index
 
+/**
+ * The layer a modal in the settings view sits on: above every dropdown in it.
+ *
+ * Tailwind's `z-50` is 50, and every model picker in this view raises its open
+ * list to 1,000 — so a dialog on `z-50` was painted *under* the Model ID list,
+ * which covered its buttons. Derived from the dropdown layer rather than
+ * written as a number, so raising one raises the other and the two cannot drift
+ * into the same order again.
+ */
+export const SETTINGS_MODAL_Z_INDEX = DROPDOWN_Z_INDEX + 10
+
 export const DropdownContainer = styled.div<{ zIndex?: number }>`
 	position: relative;
 	z-index: ${(props) => props.zIndex || DROPDOWN_Z_INDEX};
@@ -116,6 +128,12 @@ const ApiOptions = ({
 	// custom provider in the first place. Compared as a string rather than by
 	// widening that union, which a dozen exhaustive switches still depend on.
 	const isOpencoti = (selectedProvider as string) === "opencoti"
+	// The window the selected model reports, for the output budget to fall back
+	// on. Provider-level `contextWindow` is only written when the box is edited,
+	// so a profile that predates that write has none -- and the budget's slider
+	// is a percentage of a window. Resolved here rather than inside the field
+	// because this is where the configuration and the mode already are.
+	const { selectedModelInfo: budgetModelInfo } = useDynamicProviderSelection(selectedProvider, apiConfiguration, currentMode)
 	const genericProviderSettings = isCustomProvider
 		? undefined
 		: (getGenericProviderSettings(selectedProvider, catalogProviderListing) ??
@@ -518,7 +536,9 @@ const ApiOptions = ({
 			    is what stops two dozen panels disagreeing about what it is
 			    called. It replaces the `numPredict` in the advanced sampler,
 			    which was read for Ollama alone. */}
-			{apiConfiguration && showModelOptions && selectedProvider && <OutputBudgetField providerId={selectedProvider} />}
+			{apiConfiguration && showModelOptions && selectedProvider && (
+				<OutputBudgetField fallbackContextWindow={budgetModelInfo?.contextWindow} providerId={selectedProvider} />
+			)}
 			{apiConfiguration && showModelOptions && selectedProvider && <ReasoningHistoryField providerId={selectedProvider} />}
 
 			{apiConfiguration && showModelOptions && selectedProvider && (

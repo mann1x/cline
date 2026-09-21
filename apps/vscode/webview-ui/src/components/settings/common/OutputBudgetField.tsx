@@ -114,7 +114,25 @@ export function minSliderPercent(autoValue: number, floorTokens: number): number
  * Automatic it is a ceiling of the user's own and may only lower the absolute
  * one; under Manual it is the cap itself.
  */
-export const OutputBudgetField = ({ providerId }: { providerId: string }) => {
+export const OutputBudgetField = ({
+	providerId,
+	fallbackContextWindow,
+}: {
+	providerId: string
+	/**
+	 * The window the selected model reports, used when the provider stores none.
+	 *
+	 * Provider-level `contextWindow` is only written when someone edits the box,
+	 * so an existing opencoti or llama.cpp profile has none — and the slider,
+	 * which is a percentage of that number, had nothing to be a percentage of
+	 * and stayed hidden. Meanwhile the request, the system prompt and compaction
+	 * were all sizing against the model's own figure (128,000 for an
+	 * OpenAI-compatible model with no override). The panel was the only part of
+	 * the system treating the window as unknown, so it uses the same number they
+	 * do and says which one it is.
+	 */
+	fallbackContextWindow?: number
+}) => {
 	const { config, write } = useProviderConfig(providerId as never)
 	// What this panel has sent and not yet seen answered. The section is
 	// written whole, and the panel does not see its own write until the host
@@ -163,7 +181,10 @@ export const OutputBudgetField = ({ providerId }: { providerId: string }) => {
 			})
 	}
 
-	const window = parseTyped(config.contextWindow)
+	// The provider's own number wins: it is what the operator set for this
+	// endpoint, against a model that may be describing something else.
+	const providerWindow = parseTyped(config.contextWindow)
+	const window = providerWindow ?? parseTyped(fallbackContextWindow)
 	const autoValue = window ? Math.min(Math.floor(window * AUTO_WINDOW_SHARE), CEILING_TOKENS) : undefined
 
 	// What the wire will actually carry, which is not necessarily this setting:
@@ -245,7 +266,8 @@ export const OutputBudgetField = ({ providerId }: { providerId: string }) => {
 						</div>
 						<div className="mt-[2px]">
 							{percent}% of the automatic {autoValue.toLocaleString()} ({AUTO_WINDOW_SHARE * 100}% of a{" "}
-							{window?.toLocaleString()}-token window)
+							{window?.toLocaleString()}-token window
+							{providerWindow === undefined ? ", the model's own — this provider has none set" : ""})
 							{percent === 100 ? ", which is the default." : "."}
 						</div>
 						{thinkFloor !== null && (

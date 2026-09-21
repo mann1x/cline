@@ -53,6 +53,36 @@ describe("the output budget field", () => {
 		mocks.config.current = { contextWindow: 128000, outputBudget: { mode: "manual", maxTokens: 96000 } }
 	})
 
+	// opencoti and llama.cpp store no provider-level window until someone edits
+	// the box, so an existing profile has none and the slider had nothing to be
+	// a percentage of. It stayed hidden while the request, the system prompt and
+	// compaction all sized against the model's own 128,000 — the panel was the
+	// only part of the system pretending the number was unknown.
+	it("falls back to the model's window when the provider stores none", () => {
+		mocks.config.current = { outputBudget: { mode: "auto" } }
+		render(<OutputBudgetField fallbackContextWindow={128000} providerId="opencoti" />)
+
+		expect(screen.getByTestId("output-budget-percent").textContent).toBe("100%")
+		expect(screen.getByTestId("output-budget-readout").textContent).toContain("96,000")
+	})
+
+	// The provider-level number is the one the operator set for this endpoint,
+	// so it outranks whatever the model claims.
+	it("prefers the provider's own window over the model's", () => {
+		mocks.config.current = { contextWindow: 65536, outputBudget: { mode: "auto" } }
+		render(<OutputBudgetField fallbackContextWindow={128000} providerId="opencoti" />)
+
+		expect(screen.getByTestId("output-budget-readout").textContent).toContain("49,152")
+	})
+
+	// With neither, there is still no honest number and the slider stays away.
+	it("shows no slider when neither window is known", () => {
+		mocks.config.current = { outputBudget: { mode: "auto" } }
+		render(<OutputBudgetField providerId="opencoti" />)
+
+		expect(screen.queryByTestId("output-budget-percent")).toBeNull()
+	})
+
 	it("keeps the stored cap when only the mode changes", async () => {
 		render(<OutputBudgetField providerId="opencoti" />)
 
