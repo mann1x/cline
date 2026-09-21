@@ -29,6 +29,25 @@ function parseCompactionInfo(text: string | undefined): ClineCompactionInfo | un
 	return undefined
 }
 
+/**
+ * Wall clock for a finished compaction, in the shape a run log wants: `48s`,
+ * `7m32s`, `1h04m`. Seconds are kept in the minutes form because the
+ * difference between 7m02s and 7m52s is the difference between a compaction
+ * that is quick and one that is not.
+ */
+function formatDuration(ms: number): string {
+	const totalSeconds = Math.max(0, Math.round(ms / 1000))
+	if (totalSeconds < 60) {
+		return `${totalSeconds}s`
+	}
+	const minutes = Math.floor(totalSeconds / 60)
+	const seconds = totalSeconds % 60
+	if (minutes < 60) {
+		return `${minutes}m${String(seconds).padStart(2, "0")}s`
+	}
+	return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, "0")}m`
+}
+
 /** Mirrors the CLI's formatCompactionDividerLabel wording for product consistency. */
 function formatCompactionLabel(info: ClineCompactionInfo): string {
 	const overflow = info.mode === "overflow"
@@ -69,7 +88,10 @@ function formatCompactionLabel(info: ClineCompactionInfo): string {
 	if (typeof info.messagesBefore === "number" && typeof info.messagesAfter === "number") {
 		parts.push(`${info.messagesBefore} → ${info.messagesAfter} messages`)
 	}
-	return parts.join(" · ")
+	const label = parts.join(" · ")
+	// Outside the dot-separated list on purpose: the others describe the
+	// transcript, this describes the wait.
+	return typeof info.durationMs === "number" ? `${label} (${formatDuration(info.durationMs)})` : label
 }
 
 /**

@@ -66,6 +66,7 @@ export function parseCompactionNoticeMetadata(
 		tokensAfter: asFiniteNumber(metadata.tokensAfter),
 		messagesBefore: asFiniteNumber(metadata.messagesBefore),
 		messagesAfter: asFiniteNumber(metadata.messagesAfter),
+		durationMs: asFiniteNumber(metadata.durationMs),
 	};
 }
 
@@ -77,6 +78,23 @@ export function formatTokenCount(count: number): string {
 		return `${(count / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
 	}
 	return `${(count / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+}
+
+/**
+ * Wall clock for a finished compaction: `48s`, `7m32s`, `1h04m`. Mirrors the
+ * webview's formatDuration.
+ */
+function formatDuration(ms: number): string {
+	const totalSeconds = Math.max(0, Math.round(ms / 1000));
+	if (totalSeconds < 60) {
+		return `${totalSeconds}s`;
+	}
+	const minutes = Math.floor(totalSeconds / 60);
+	const seconds = totalSeconds % 60;
+	if (minutes < 60) {
+		return `${minutes}m${String(seconds).padStart(2, "0")}s`;
+	}
+	return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, "0")}m`;
 }
 
 export function formatCompactionDividerLabel(
@@ -123,7 +141,12 @@ export function formatCompactionDividerLabel(
 	) {
 		parts.push(`${entry.messagesBefore} → ${entry.messagesAfter} messages`);
 	}
-	return parts.join(" · ");
+	const label = parts.join(" · ");
+	// Outside the dot-separated list: the others describe the transcript, this
+	// describes the wait.
+	return typeof entry.durationMs === "number"
+		? `${label} (${formatDuration(entry.durationMs)})`
+		: label;
 }
 
 export function formatCompactionStatus(

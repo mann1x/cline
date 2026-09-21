@@ -1638,6 +1638,11 @@ export function createContextCompactionPrepareTurn(
 				messagesBefore: beforeMessageCount,
 				messagesAfter: result.messages.length,
 				maxInputTokens,
+				// How long the whole thing took. A compaction is several
+				// sequential model calls and on a local model it is minutes, not
+				// seconds -- the number belongs on the row that says it happened,
+				// not only in telemetry nobody reads during a run.
+				durationMs,
 				// The summary and the retrospective travel with the notice so
 				// the row that announces a compaction can also show what it
 				// produced. A compaction is the one operation whose output the

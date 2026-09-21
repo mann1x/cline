@@ -63,6 +63,8 @@ export type ChatEntry = (
 			tokensAfter?: number;
 			messagesBefore?: number;
 			messagesAfter?: number;
+			/** How long the compaction took, wall clock, once it is done. */
+			durationMs?: number;
 			/** How far through its own model calls a running compaction is. */
 			step?: number;
 			stepTotal?: number;

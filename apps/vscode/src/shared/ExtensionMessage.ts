@@ -594,6 +594,8 @@ export interface ClineCompactionInfo {
 	stepTotal?: number
 	/** Which stage the current call belongs to: summary, retrospective, review. */
 	stepLabel?: string
+	/** How long the compaction took, wall clock, once it is done. */
+	durationMs?: number
 	/** The summary this compaction wrote, so the row can show it on demand. */
 	summary?: string
 	/** The retrospective written alongside it, when the second phase ran. */

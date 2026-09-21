@@ -123,4 +123,13 @@ describe("CompactionRow", () => {
 		expect(screen.getByText(/\(2\/5\)/)).toBeTruthy()
 		expect(screen.getByText(/retrospective/)).toBeTruthy()
 	})
+
+	it("says how long the compaction took", () => {
+		// Several sequential model calls, minutes on a local model. The number
+		// is how you tell a compaction that cost you a coffee from one that did
+		// not, and it was only ever in telemetry.
+		render(<CompactionRow message={compactionMessage({ durationMs: 452_000 })} />)
+
+		expect(screen.getByText(/\(7m32s\)/)).toBeTruthy()
+	})
 })

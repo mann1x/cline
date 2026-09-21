@@ -1616,6 +1616,7 @@ export function parseCompactionNoticeMetadata(metadata: Record<string, unknown> 
 		tokensAfter: asFiniteNumber(metadata.tokensAfter),
 		messagesBefore: asFiniteNumber(metadata.messagesBefore),
 		messagesAfter: asFiniteNumber(metadata.messagesAfter),
+		durationMs: asFiniteNumber(metadata.durationMs),
 		...(typeof metadata.summary === "string" && metadata.summary.trim() ? { summary: metadata.summary } : {}),
 		...(typeof metadata.thinkingSummary === "string" && metadata.thinkingSummary.trim()
 			? { thinkingSummary: metadata.thinkingSummary }
