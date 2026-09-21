@@ -58,7 +58,14 @@ export function resolveCliReasoning({
 	}
 
 	if (persistedReasoning?.enabled === true) {
-		return { thinking: true, reasoningEffort: "medium" };
+		// On, with no level named. Deliberately not `medium`: a level is not a
+		// synonym for "on" on every provider. On Ollama a level *is* a thinking
+		// budget and outranks the model's own `PARAMETER think_budget`, so
+		// naming one here capped an otherwise unbounded model at 2,000 tokens
+		// and halved a model declaring `high`. The provider decides what an
+		// unlevelled "on" means; `provider.ollama.native-options` turns it into
+		// a bare `think: true`.
+		return { thinking: true, reasoningEffort: undefined };
 	}
 
 	return { thinking: undefined, reasoningEffort: undefined };

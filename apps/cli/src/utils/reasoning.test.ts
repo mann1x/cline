@@ -75,7 +75,7 @@ describe("resolveCliReasoning", () => {
 		});
 	});
 
-	it("uses medium effort when persisted reasoning is enabled without an effort", () => {
+	it("names no effort when persisted reasoning is enabled without one", () => {
 		expect(
 			resolveCliReasoning({
 				thinking: false,
@@ -83,7 +83,12 @@ describe("resolveCliReasoning", () => {
 			}),
 		).toEqual({
 			thinking: true,
-			reasoningEffort: "medium",
+			// Enabled without a level means "on, provider decides". Naming a
+			// level here is not a harmless default: on Ollama a level *is* a
+			// thinking budget and it outranks the model's own
+			// `PARAMETER think_budget`, so `medium` capped an unbounded model at
+			// 2,000 tokens and halved one declaring `high`. Measured on 0.34.2.
+			reasoningEffort: undefined,
 		});
 	});
 });
