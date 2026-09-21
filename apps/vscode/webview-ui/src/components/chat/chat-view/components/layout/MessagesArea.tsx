@@ -8,6 +8,7 @@ import { useExtensionState } from "@/context/ExtensionStateContext"
 import { cn } from "@/lib/utils"
 import { useThinkingLoaderRow } from "../../hooks/useThinkingLoaderRow"
 import type { ChatState, MessageHandlers, ScrollBehavior } from "../../types/chatTypes"
+import { computeMessageRowKeys } from "../../utils/messageKeys"
 import { isPendingResponseUnconfirmed } from "../../utils/pendingResponse"
 import { createMessageRenderer } from "../messages/MessageRenderer"
 import { JumpToPresent } from "./JumpToPresent"
@@ -140,6 +141,13 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		}
 		return undefined
 	}, [displayedGroupedMessages])
+
+	// Identity for each row, so a message keeps its own component instance as the
+	// list grows around it. Without this Virtuoso keys by index, and the instance
+	// that rendered one message renders whatever lands at that index next --
+	// carrying its hooks and its state across. See utils/messageKeys.ts.
+	const rowKeys = useMemo(() => computeMessageRowKeys(displayedGroupedMessages), [displayedGroupedMessages])
+	const computeItemKey = useCallback((index: number) => rowKeys[index] ?? `row:${index}`, [rowKeys])
 
 	useEffect(() => {
 		if (disableAutoScrollRef.current) {
@@ -279,6 +287,7 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 					atBottomThreshold={64}
 					className="chat-scrollable grow overflow-y-scroll"
 					components={virtuosoComponents}
+					computeItemKey={computeItemKey}
 					data={displayedGroupedMessages}
 					// increasing top by 3_000 to prevent jumping around when user collapses a row
 					increaseViewportBy={{
