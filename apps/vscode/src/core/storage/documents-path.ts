@@ -4,7 +4,37 @@ import os from "os"
 import * as path from "path"
 import { Logger } from "@/shared/services/Logger"
 
-export async function getDocumentsPath(): Promise<string> {
+/**
+ * Memoized because resolving this **spawns a process**, and on Windows that
+ * process is PowerShell.
+ *
+ * It is called from `getAllHooksDirs`, which `hooks-adapter` calls on every
+ * `PreToolUse` and every `PostToolUse` -- so twice per tool call, measured at
+ * 274-296ms a side on pandorum, to locate a `Hooks` directory the user does
+ * not have. That was ~570ms of the plugin's ~600ms per-tool-call floor: the
+ * same tools under the CLI, which has no hooks adapter and no PowerShell,
+ * cost 15-21ms.
+ *
+ * A user's Documents folder does not move while VS Code is running, so one
+ * resolution per process is enough. The promise is cached rather than the
+ * value, so concurrent callers share the single spawn instead of racing to
+ * start their own. The degraded fallback is cached too: a host where the
+ * lookup fails would otherwise pay the failure on every call forever, and
+ * `homedir()/Documents` is the documented answer for that host anyway.
+ */
+let documentsPathPromise: Promise<string> | undefined
+
+export function getDocumentsPath(): Promise<string> {
+	documentsPathPromise ??= resolveDocumentsPath()
+	return documentsPathPromise
+}
+
+/** Test seam: drops the memoized path so the next call resolves again. */
+export function resetDocumentsPathCache(): void {
+	documentsPathPromise = undefined
+}
+
+async function resolveDocumentsPath(): Promise<string> {
 	if (process.platform === "win32") {
 		try {
 			const { stdout: docsPath } = await execa("powershell", [
