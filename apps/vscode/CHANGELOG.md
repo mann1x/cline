@@ -5,7 +5,34 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
-## [4.100.145] — 2026-09-21
+## [4.100.146] — 2026-09-21
+
+### The chat panel could go down mid-run
+
+A run on 4.100.145 replaced the whole panel with the error boundary — *Cerebriline
+could not draw this view*, **Minified React error #310** — the moment a command
+row arrived behind a tool row. The extension log timestamps it to the
+millisecond: the terminal starts the command at `06:50:54.135`, the render fails
+at `06:50:54.175`.
+
+`ChatRowContent` returns out of the middle of its body for a tool message and
+runs on to the bottom for a command one. Two `useEffect`s belonging to the
+command row sat *below* those returns, so they were called on one render and
+skipped on the next — which is the one thing React does not allow. The message
+list keys its rows by position, so a single row instance renders whatever
+message lands at that position next, and a tool row becoming a command row is an
+ordinary sequence rather than an unusual one.
+
+Both effects now sit above every return. The guard rerenders one row instance
+across the two message shapes in both directions, and against the old order it
+reports both halves of the fault — *Rendered more hooks than during the previous
+render* one way, *Rendered fewer hooks than expected* coming back.
+
+Worth knowing why nothing caught it: the linter's hook rule judges a hook by the
+control flow it sits in, not by whether an earlier return can skip it, and it
+reported nothing at all on the file that took the panel down. A walk over every
+component in the panel finds this hazard in exactly one place, and that place is
+this one.
 
 ### Reasoning replay was doing nothing
 
