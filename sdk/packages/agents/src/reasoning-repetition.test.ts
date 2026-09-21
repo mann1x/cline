@@ -168,6 +168,11 @@ describe("describeRepetition", () => {
 		expect(message).toContain("I think I found it");
 		expect(message).toContain("is visible to the user");
 		expect(message).toMatch(/run the check|make the change/);
+		// The model cannot check the claim: its own reasoning from that turn is
+		// not carried into this request. Measured on a run where it answered
+		// "which I don't see in my thought trace but must address" and then
+		// spent the turn looking for evidence that was never sent.
+		expect(message).toMatch(/will not find it|cannot see it|not carried/i);
 	});
 });
 

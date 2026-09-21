@@ -185,6 +185,15 @@ export function isRepetitionLoop(
  * model agrees with and then repeats itself. It names the count, says the
  * thinking is not on the record for the user, and gives one instruction rather
  * than a list: act, or say what is blocking.
+ *
+ * And it says outright that the evidence cannot be checked. Reasoning replay is
+ * `none` on most local endpoints, so the turn being described is not in the
+ * request the model is answering -- it is told it repeated something it cannot
+ * see. Measured on a gemma4 run: "The previous turn was interrupted by some
+ * system messages/errors about repetition (which I don't see in my thought
+ * trace but must address)", followed by a turn spent hunting for the evidence
+ * instead of acting on it. A model that distrusts the message spends the nudge
+ * on doubt, which is the one thing a rationed nudge cannot afford.
  */
 export function describeRepetition(measurement: RepetitionMeasurement): string {
 	const excerpt = measurement.sample.replace(/\s+/g, " ").slice(0, 200);
@@ -194,6 +203,8 @@ export function describeRepetition(measurement: RepetitionMeasurement): string {
 		`    "${excerpt}${measurement.sample.length > 200 ? "…" : ""}"`,
 		"",
 		`That reply restated ${measurement.duplicates} of its ${measurement.paragraphs} paragraphs verbatim. Re-deriving a conclusion you have already reached will not produce a new one, and none of that reasoning is visible to the user.`,
+		"",
+		"You will not find it above: your reasoning from that turn is not carried into this request, so the passage is quoted here because it is the only copy you have. Take it as given rather than looking for it.",
 		"",
 		"Take the next concrete step instead: make the change, run the check, or say plainly what is blocking you and what you would need to get past it.",
 	].join("\n");
