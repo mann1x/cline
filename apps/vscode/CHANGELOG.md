@@ -5,7 +5,48 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
-## [4.100.147] — 2026-09-21
+## [4.100.148] — 2026-09-21
+
+### A retried turn stops inflating the context
+
+A turn whose first attempt came back empty is retried, and the usage it reports
+is the **sum** of every attempt — correct for billing, and wrong for everything
+else that reads it: the token calibration, the compaction trigger, the output cap
+and the context meter are not asking about money.
+
+4.100.141 shipped a fix for that: the kept attempt's own prompt travels beside the
+billed total. It has never once arrived. The number was written onto the
+provider's finish part, and the layer above prefers the SDK's own recomputed
+usage — so it was dropped one hop after it was written, on every real run. The
+fallback paths kept it, and those are the paths the tests take, which is why this
+was green and did nothing.
+
+Measured on a run that failed this way: a turn estimated at 56,907 tokens retried
+once and reported 113,620. The next request was estimated at **114,761 against a
+128,000 window** — 198,358 characters at 1.73 chars per token, where the
+forty-two turns before it all sat at 3.4 — resolved to no output cap at all, and
+compacted a transcript that was nowhere near full.
+
+The number now travels by the channel the SDK passes through untouched, and the
+test asserts it through the full streaming path rather than reading it back where
+it was written.
+
+### A compaction says which of its calls it is on
+
+A compaction is up to five sequential model requests — the summary, the
+retrospective, then the council's reviewer for each half of the transcript and
+its synthesiser. From outside it was one spinner. On a local model that is
+minutes: 111s, 21s, 45s and 82s were the first four on the run above, with a
+fifth still going, and nothing on screen could distinguish that from a hang.
+
+The divider now carries the pair and the stage — **Auto compacting context (2/5)
+· retrospective** — rewritten in place on the row that is already there rather
+than stacking one divider per call.
+
+The total is not fixed, because a retried stage is an extra call rather than a
+stage that vanished: the plan grows with it, so a compaction that had to write
+its summary twice reads (3/6) instead of pinning at (4/4) with a step
+unaccounted for.
 
 ### A chat row belongs to its message, not to its position
 
