@@ -49,7 +49,10 @@ import { nanoid } from "nanoid";
 import type { PolykvOptions } from "./config";
 import { classifyProviderError } from "./error-classification";
 import { extractErrorMessage } from "./format";
-import { createRetryEmptyResponseMiddleware } from "./middleware/retry-empty-response";
+import {
+	createRetryEmptyResponseMiddleware,
+	RETRY_METADATA_NAMESPACE,
+} from "./middleware/retry-empty-response";
 import { createRetryRateLimitMiddleware } from "./middleware/retry-rate-limit";
 import {
 	isAnthropicCompatibleModel,
@@ -1408,6 +1411,28 @@ function calculateUsageCostFromPricing(
  * @param providerMetadata - Provider-specific metadata for cost extraction
  * @param pricingValue - Fallback pricing config (per 1M tokens) when no explicit cost found
  */
+/**
+ * The accepted attempt's own prompt, as the empty-response retry middleware
+ * recorded it on the finish part's provider metadata. Absent on every turn
+ * that did not retry, which is the point: the field exists to be preferred
+ * over a sum, and a sum only happens when something was discarded.
+ */
+function readRetriedRequestInputTokens(
+	providerMetadata: unknown,
+): number | undefined {
+	if (!providerMetadata || typeof providerMetadata !== "object") {
+		return undefined;
+	}
+	const namespaced = (providerMetadata as Record<string, unknown>)[
+		RETRY_METADATA_NAMESPACE
+	];
+	if (!namespaced || typeof namespaced !== "object") {
+		return undefined;
+	}
+	const value = (namespaced as Record<string, unknown>).requestInputTokens;
+	return typeof value === "number" && value > 0 ? value : undefined;
+}
+
 export function normalizeUsage(
 	usageValue:
 		| AiSdkStreamUsage
@@ -2201,6 +2226,27 @@ async function* emitAiSdkEvents(
 	} else {
 		usageToEmit = finishUsage;
 		metadataToUse = finishProviderMetadata;
+	}
+
+	// The prompt of the attempt that was kept, when an empty response was
+	// retried. Only the retry middleware knows which attempt that was, and it
+	// cannot say so through the usage object: `streamText` recomputes usage
+	// from its own steps, so a field added to the provider's finish part is
+	// gone by the time anything here looks at it. It travels through
+	// `providerMetadata`, which the SDK passes through untouched.
+	//
+	// Without this the billed sum becomes the calibration anchor. Measured on
+	// pandorum 2026-09-21: a turn that retried once reported 113,620 tokens
+	// for a 56,810-token prompt, and the next request was estimated at 114,761
+	// against a 128,000 window, resolved to no output cap and compacted.
+	const acceptedRequestTokens = readRetriedRequestInputTokens(
+		finishProviderMetadata,
+	);
+	if (usageToEmit && acceptedRequestTokens !== undefined) {
+		usageToEmit = {
+			...(usageToEmit as object),
+			requestInputTokens: acceptedRequestTokens,
+		};
 	}
 
 	if (usageToEmit) {

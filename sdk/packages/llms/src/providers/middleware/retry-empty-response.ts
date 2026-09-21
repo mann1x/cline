@@ -251,6 +251,14 @@ export function addUsage(
  * ordinary turn the two numbers are the same, and a field that is always
  * present invites a reader to prefer it without asking why it exists.
  */
+/**
+ * Provider-metadata namespace for the one number this middleware has to tell
+ * the rest of the pipeline. Named for the product rather than a vendor because
+ * it is ours, and it sits beside the vendors' own keys (`ollama`, `llamacpp`)
+ * in the same bag.
+ */
+export const RETRY_METADATA_NAMESPACE = "cerebriline";
+
 function withAggregatedUsage(
 	finish: FinishPart,
 	discardedUsage: readonly LanguageModelV4Usage[],
@@ -263,18 +271,35 @@ function withAggregatedUsage(
 	for (const discarded of discardedUsage) {
 		usage = addUsage(discarded, usage);
 	}
+	if (typeof acceptedInputTokens !== "number") {
+		return { ...finish, usage };
+	}
+	// Two channels, because the usage object is not one. `streamText`
+	// recomputes its own usage from its steps, so a field added here is gone by
+	// the time anything downstream of the SDK looks -- which is why this
+	// shipped green and did nothing: the tests read the finish part directly,
+	// production reads `stream.usage`. `providerMetadata` is the channel the
+	// SDK does pass through untouched, so the number travels there and the
+	// usage copy is kept for the paths that do read the finish part.
+	const existing =
+		(finish.providerMetadata as Record<string, unknown> | undefined) ?? {};
+	const mine =
+		(existing[RETRY_METADATA_NAMESPACE] as
+			| Record<string, unknown>
+			| undefined) ?? {};
 	return {
 		...finish,
-		usage:
-			typeof acceptedInputTokens === "number"
-				? // Rides along on the SDK's usage object, which has no room for
-					// it in its own type. The gateway is the only reader; the SDK
-					// passes it through untouched.
-					({
-						...usage,
-						requestInputTokens: acceptedInputTokens,
-					} as LanguageModelV4Usage)
-				: usage,
+		providerMetadata: {
+			...existing,
+			[RETRY_METADATA_NAMESPACE]: {
+				...mine,
+				requestInputTokens: acceptedInputTokens,
+			},
+		},
+		usage: {
+			...usage,
+			requestInputTokens: acceptedInputTokens,
+		} as LanguageModelV4Usage,
 	};
 }
 

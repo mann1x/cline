@@ -535,6 +535,52 @@ describe("full path: model output classes through emitAiSdkEvents", () => {
 		expect(usageEvent?.usage.inputTokens).toBe(27);
 		expect(usageEvent?.usage.outputTokens).toBe(10);
 	});
+
+	it("carries the accepted attempt's own prompt beside the billed sum", async () => {
+		// The sum is right for money and wrong for context, so the middleware
+		// puts the kept attempt's prompt on the finish part as
+		// `requestInputTokens`. Everything downstream that is not billing --
+		// the calibration anchor, the compaction trigger, the output cap, the
+		// context meter -- reads that one, and it has to survive the trip to
+		// the usage event or they all read the sum instead.
+		const usageOf = (input: number, output: number) =>
+			({
+				inputTokens: {
+					total: input,
+					noCache: undefined,
+					cacheRead: undefined,
+					cacheWrite: undefined,
+				},
+				outputTokens: { total: output, text: undefined, reasoning: undefined },
+			}) as never;
+		const events = await streamThroughOllama([
+			[
+				{ type: "stream-start", warnings: [] },
+				{
+					type: "finish",
+					finishReason: { unified: "stop", raw: "stop" },
+					usage: usageOf(56_810, 0),
+				},
+			],
+			[
+				{ type: "stream-start", warnings: [] },
+				{ type: "text-start", id: "t" },
+				{ type: "text-delta", id: "t", delta: "hello" },
+				{ type: "text-end", id: "t" },
+				{
+					type: "finish",
+					finishReason: { unified: "stop", raw: "stop" },
+					usage: usageOf(56_810, 265),
+				},
+			],
+		]);
+
+		const usageEvent = events.find((event) => event.type === "usage") as
+			| { usage: { inputTokens?: number; requestInputTokens?: number } }
+			| undefined;
+		expect(usageEvent?.usage.inputTokens).toBe(113_620);
+		expect(usageEvent?.usage.requestInputTokens).toBe(56_810);
+	});
 });
 
 describe("withEmptyResponseRetry", () => {
