@@ -3632,7 +3632,11 @@ export class AgentRuntime {
 	 */
 	private readonly eventHookMs = new Map<string, { ms: number; n: number }>();
 
-	private noteEventHookMs(eventType: string, index: number, ms: number): void {
+	private noteEventHookMs(
+		eventType: string,
+		index: number | string,
+		ms: number,
+	): void {
 		const key = `${eventType}#${index}`;
 		const slot = this.eventHookMs.get(key);
 		if (slot) {
@@ -3750,8 +3754,23 @@ export class AgentRuntime {
 				});
 				break;
 		}
+		// Listeners are timed alongside the hooks because the extension's whole
+		// UI bridge hangs off one: the plugin's log shows a flat ~300ms of
+		// silence between `assistant-message` being emitted and the next line
+		// anything writes, twice per tool call. A listener is called, not
+		// awaited, so nothing here waits for it -- but synchronous work inside
+		// one blocks the loop just the same, and only a number distinguishes
+		// the two.
+		let listenerIndex = 0;
 		for (const listener of this.listeners) {
+			const listenerStartedAt = Date.now();
 			listener(event);
+			this.noteEventHookMs(
+				event.type,
+				`listener${listenerIndex}`,
+				Date.now() - listenerStartedAt,
+			);
+			listenerIndex += 1;
 		}
 		// Instrumented: every tool call awaits this loop twice (tool-started and
 		// the tool-updated/finished path), so a slow hook is paid per tool, not
