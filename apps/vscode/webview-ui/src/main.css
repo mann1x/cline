@@ -119,6 +119,14 @@ above it.
 	background-clip: content-box;
 	border: 3px solid transparent;
 	border-radius: 999px;
+	/*
+	A long task makes the thumb proportionally tiny, and a tiny thumb is one
+	nobody can grab: by the end of a forty-minute run it was a few pixels in a
+	full-height track. The floor is 32px of painted thumb plus the 3px
+	transparent border on each side, which is about the smallest target a
+	pointer can take hold of without the drag turning into a track click.
+	*/
+	min-height: 38px;
 }
 
 .chat-scrollable::-webkit-scrollbar-thumb:hover {

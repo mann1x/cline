@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useEvent } from "react-use"
 import { ListRange, VirtuosoHandle } from "react-virtuoso"
 import { ScrollBehavior } from "../types/chatTypes"
+import { type ScrollPosition, shouldStopFollowing } from "../utils/scrollFollowing"
 
 // Height of the sticky user message header (padding + content)
 const STICKY_HEADER_HEIGHT = 32
@@ -181,7 +182,22 @@ export function useScrollBehavior(
 
 		const scrollableElement = findScrollableElement()
 
+		// Every way of moving the view that is not a wheel arrives here and
+		// nowhere else -- dragging the thumb, clicking the track, PgUp. The
+		// wheel handler below covers only one of them, which is why the chat
+		// snapped back to the bottom on a drag. See utils/scrollFollowing.ts
+		// for why both halves of the test are needed.
+		let previousPosition: ScrollPosition | undefined
 		const handleScroll = () => {
+			const position: ScrollPosition = {
+				scrollTop: scrollableElement.scrollTop,
+				scrollHeight: scrollableElement.scrollHeight,
+				clientHeight: scrollableElement.clientHeight,
+			}
+			if (shouldStopFollowing(previousPosition, position)) {
+				stopFollowing()
+			}
+			previousPosition = position
 			checkScrolledPastUserMessage()
 		}
 
@@ -193,7 +209,7 @@ export function useScrollBehavior(
 		return () => {
 			scrollableElement.removeEventListener("scroll", handleScroll)
 		}
-	}, [checkScrolledPastUserMessage])
+	}, [checkScrolledPastUserMessage, stopFollowing])
 
 	// Handler for when visible range changes in Virtuoso (kept for compatibility but not used for sticky)
 	const handleRangeChanged = useCallback((_range: ListRange) => {
