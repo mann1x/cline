@@ -705,12 +705,12 @@ describe("buildOllamaStreamConfig", () => {
 		);
 	}
 
-	it("names a level for a request that only asks for reasoning", () => {
-		// the SDK vocabulary has no plain "on", and provider-default would
-		// defer to a model setting this vendor deliberately does not set
-		expect(config({ enabled: true }).reasoning).toBe(
-			OLLAMA_DEFAULT_REASONING_EFFORT,
-		);
+	it("names no level for a request that only asks for reasoning", () => {
+		// The SDK vocabulary has no plain "on", and the answer is not to invent
+		// a level: on Ollama a level is a budget that outranks the model's own
+		// `PARAMETER think_budget`. Saying "on" is `provider.ollama.native-options`'s
+		// job, as a bare `think: true`.
+		expect(config({ enabled: true }).reasoning).toBeUndefined();
 	});
 
 	it("leaves an explicit level alone", () => {
@@ -723,15 +723,21 @@ describe("buildOllamaStreamConfig", () => {
 		expect(config({ enabled: false }).reasoning).toBe("none");
 	});
 
-	it("names a level when the request says nothing about reasoning", () => {
-		// Repro for `think` never reaching the wire. An absent reasoning config
-		// on this provider means "never asked", not "off": read as off, a
-		// reasoning model runs with `think` unset, thinks into content anyway,
-		// and leaves a thinking budget no level to derive a cap from. Measured
-		// as a turn ending on the 32,000-token output limit at ~51k input, with
-		// `think` absent from every logged request body.
-		expect(config(undefined).reasoning).toBe(OLLAMA_DEFAULT_REASONING_EFFORT);
-		expect(config({}).reasoning).toBe(OLLAMA_DEFAULT_REASONING_EFFORT);
+	it("names no level when the request says nothing about reasoning", () => {
+		// An absent reasoning config still means "never asked", not "off" — the
+		// repro for that is a turn ending on the 32,000-token output limit at
+		// ~51k input with `think` absent, because a reasoning model thinks into
+		// content instead. It is still answered with `think: true` from the
+		// native-options rule rather than with a level from here.
+		expect(config(undefined).reasoning).toBeUndefined();
+		expect(config({}).reasoning).toBeUndefined();
+	});
+
+	it("keeps an explicit level, which is a budget the user chose", () => {
+		// The distinction the default got wrong: a level the user named is the
+		// one thing that should outrank the model's `PARAMETER think_budget`.
+		expect(config({ enabled: true, effort: "high" }).reasoning).toBe("high");
+		expect(OLLAMA_DEFAULT_REASONING_EFFORT).toBe("medium");
 	});
 
 	it("passes the shared settings through untouched", () => {

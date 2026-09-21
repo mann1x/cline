@@ -4,6 +4,7 @@ import type {
 	ModelReasoningOption,
 } from "@cline/shared";
 import { describe, expect, it } from "vitest";
+import { toAiSdkReasoning } from "../ai-sdk";
 import { BEDROCK_ROUTING_METADATA } from "./bedrock-cache-point";
 import { GLM_THINKING_ROUTING_METADATA } from "./glm-thinking";
 import { MINIMAX_THINKING_ROUTING_METADATA } from "./minimax-thinking";
@@ -170,6 +171,23 @@ function runCases(cases: ReadonlyArray<Case>) {
 				...context,
 			}),
 		);
+		// Ollama first: it is the one target whose bucket may carry a reasoning
+		// field, so the generic "no thinking keys anywhere" sweep below would
+		// otherwise claim it. A *level* still never lands here — only the bare
+		// `think: true` that says "on" without saying how much, and only when
+		// the user named no level. See `provider.ollama.native-options`.
+		if (request.providerId === "ollama") {
+			expect(result.ollama).toHaveProperty("options.num_ctx");
+			for (const key of ["effort", "reasoningEffort", "thinkingConfig"]) {
+				expect(result.ollama).not.toHaveProperty(key);
+			}
+			if (toAiSdkReasoning(gatewayRequest.reasoning) === undefined) {
+				expect(result.ollama).toHaveProperty("think", true);
+			} else {
+				expect(result.ollama).not.toHaveProperty("think");
+			}
+			return;
+		}
 		if (resolvePortableReasoning(gatewayRequest)) {
 			for (const bucket of Object.values(result)) {
 				for (const key of [
@@ -183,11 +201,6 @@ function runCases(cases: ReadonlyArray<Case>) {
 					expect(bucket).not.toHaveProperty(key);
 				}
 			}
-			return;
-		}
-		if (request.providerId === "ollama") {
-			expect(result.ollama).toHaveProperty("options.num_ctx");
-			expect(result.ollama).not.toHaveProperty("think");
 			return;
 		}
 		if (

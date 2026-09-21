@@ -911,16 +911,17 @@ export async function createOllamaProviderModule(
 }
 
 /**
- * The effort a request stands for when it does not name one.
+ * The effort to offer where a level has to be named and none was chosen.
  *
  * `medium` rather than the strongest: asking a model to think is not asking it
  * to think as hard as it can. On Ollama an effort level also bounds how much of
  * the response the model may spend inside the thinking block, so the middle of
  * the scale is the reading that leaves room for an answer.
  *
- * Exported because the level decides the thinking budget the server will
- * enforce, and anything that wants to report that budget has to ask about the
- * level that will actually be sent.
+ * It is deliberately **not** sent for a request that named no level. A level is
+ * a budget here, and it outranks the model's own `PARAMETER think_budget`, so
+ * naming one on the user's behalf silently overrides the model — see
+ * `provider.ollama.native-options`, which sends a bare `think: true` instead.
  */
 export const OLLAMA_DEFAULT_REASONING_EFFORT = "medium" as const;
 
@@ -934,16 +935,24 @@ export const OLLAMA_DEFAULT_REASONING_EFFORT = "medium" as const;
  * this vendor constructs models with no reasoning setting precisely so
  * reasoning stays a per-request decision.
  *
- * The level is supplied for an absent reasoning config as well as an enabled
- * one, because on this provider those are the same situation. Nothing writes
- * the field: the extension's Ollama settings are `provider`, `model`,
- * `contextWindow` and `timeout`, and its settings UI has no reasoning control
- * at all, so `reasoning` is not "off", it is "never asked". Treating that as
- * off sends a reasoning model to Ollama with `think` unset, and a model that
- * thinks anyway then does it into `content`, unbounded, with no level for a
- * thinking budget to derive a cap from. Measured: a turn at ~51k input, 32,000
- * output tokens available, ended on "Model reached the maximum output token
- * limit before completing the turn" with `think` absent from the wire.
+ * A request that named no level gets no level from here. It used to get
+ * `medium`, on the reasoning that an absent config means "never asked" rather
+ * than "off" — which is still true, and still matters: with `think` absent a
+ * reasoning model thinks into `content` instead, measured as a turn at ~51k
+ * input with 32,000 output tokens available ending on "Model reached the
+ * maximum output token limit before completing the turn".
+ *
+ * What was wrong was answering that with a level. On Ollama a level *is* a
+ * budget and it outranks the model's own `PARAMETER think_budget`, so the
+ * default capped an unbounded model at 2,000 tokens and halved a model that
+ * declared `high`. Saying "think" without saying how much is now
+ * `provider.ollama.native-options`'s job, as a bare `think: true`; the
+ * measurements are in the comment there.
+ *
+ * This function keeps only the half that is genuinely top-level: a level the
+ * user chose, passed through untouched, and `"none"` for an explicit off. The
+ * portable resolver's `medium`-for-`enabled: true` is cleared, because that is
+ * the synthesis this exists to undo.
  *
  * An explicit `enabled: false` still means off — it reaches
  * `buildAiSdkStreamConfig` as `"none"`, so `config.reasoning` is already set
@@ -957,16 +966,10 @@ export function buildOllamaStreamConfig(
 	context: GatewayProviderContext,
 ): Partial<CallSettings> {
 	const config = buildAiSdkStreamConfig(request, context);
-	if (config.reasoning !== undefined) {
-		return config;
-	}
-	// The generic builder declines to send a portable reasoning once a thinking
-	// budget is set, because most providers cannot carry both. Ollama can: its
-	// `think` level is *how* a budget is bounded, so falling straight through to
-	// the default here would silently downgrade the effort the user asked for.
-	return {
-		...config,
-		reasoning:
-			toAiSdkReasoning(request.reasoning) ?? OLLAMA_DEFAULT_REASONING_EFFORT,
-	};
+	// Resolved from the request, not from `config.reasoning`: the portable
+	// resolver fills the latter with `medium` for a bare `enabled: true`, and
+	// Ollama can carry a level *and* a budget, so a level reaching the wire has
+	// to be one somebody actually chose.
+	const named = toAiSdkReasoning(request.reasoning);
+	return { ...config, reasoning: named };
 }

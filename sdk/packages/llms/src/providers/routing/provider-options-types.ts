@@ -42,6 +42,21 @@ export type ProviderOptionMatchInput = {
 	 * sent a field it discards and no budget at all.
 	 */
 	portableReasoning?: string;
+	/**
+	 * The reasoning the caller actually asked for, untouched.
+	 *
+	 * `portableReasoning` cannot stand in for it in either direction. It reports
+	 * `"medium"` for a bare `enabled: true`, so a rule reading it cannot tell a
+	 * level the user chose from one the portable resolver invented; and
+	 * `normalizeReasoningRequest` erases an explicit `enabled: false` entirely
+	 * for a model that advertises no off control, so an off becomes
+	 * indistinguishable from never having asked.
+	 *
+	 * A rule that must not invent a level, and must not override an explicit
+	 * off, needs the intent as it arrived. `provider.ollama.native-options` is
+	 * the one that does.
+	 */
+	requestedReasoning?: GatewayStreamRequest["reasoning"];
 };
 
 export type ProviderOptionBuildInput = ProviderOptionMatchInput & {

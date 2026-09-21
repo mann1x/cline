@@ -95,6 +95,11 @@ export function composeAiSdkProviderOptions(
 		providerOptionsKey,
 		target,
 		...(typeof portableReasoning === "string" ? { portableReasoning } : {}),
+		// Also from the request as it arrived, and for a sharper reason than the
+		// line above: normalization erases an explicit off, and the portable
+		// resolver invents a level for a bare `enabled: true`. Both are lossy in
+		// the direction a rule deciding whether to send `think` cares about.
+		...(request.reasoning ? { requestedReasoning: request.reasoning } : {}),
 	};
 	const matchedRules = matchProviderOptionRules(
 		PROVIDER_OPTION_RULES,

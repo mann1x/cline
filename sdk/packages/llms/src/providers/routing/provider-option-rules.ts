@@ -1,4 +1,5 @@
 import { isClineProvider } from "@cline/shared";
+import { toAiSdkReasoning } from "../ai-sdk";
 import { DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS } from "../gateway";
 import {
 	getModelReasoningControls,
@@ -475,6 +476,28 @@ const ollamaReasoningDefaultOnDisableRule: ProviderOptionRule = {
  * The sampler comes from the user's Ollama panel and includes `think_budget`,
  * which the package's option schema does not name — the vendored patch gives
  * that schema a catchall so it survives the parse instead of being dropped.
+ *
+ * `think` is the one reasoning field that does belong in this bucket, and only
+ * in its bare `true` form. A *level* still stays top-level, because on Ollama a
+ * level is how a budget is bounded and the two must not be stated twice. But a
+ * request that named no level has nothing to put top-level and still has to say
+ * "think": with `think` absent a reasoning model thinks into `content` instead,
+ * measured as a turn at ~51k input ending on the 32,000-token output limit.
+ *
+ * It must not say so by naming a level. On Ollama a level's budget outranks the
+ * model's own `PARAMETER think_budget`. Measured against 0.34.2, `num_predict`
+ * 8,000:
+ *
+ * | model declares | `think` absent | `think: true` | `think: "medium"` |
+ * |---|---|---|---|
+ * | nothing | unbounded | unbounded | **2,000** |
+ * | `think_budget "high"` | 4,000 | 4,000 | **2,000** |
+ *
+ * So the old default both capped an unbounded model and halved a budget the
+ * model had declared for itself, for every user who had not picked a level —
+ * which is what "Default (provider decides)" means. `think: true` is the plain
+ * "on" the AI SDK's effort scale cannot express, and it leaves the budget to
+ * the model.
  */
 const ollamaNativeOptionsRule: ProviderOptionRule = {
 	id: "provider.ollama.native-options",
@@ -485,8 +508,17 @@ const ollamaNativeOptionsRule: ProviderOptionRule = {
 	suppresses: { genericThinking: true },
 	build: (input) => {
 		const numPredict = readOllamaNumPredict(input.request, input.context);
+		// Read from `requestedReasoning`, not `request.reasoning`: the latter has
+		// been cleared by `withoutPortableReasoning` before any rule runs, so it
+		// reports "nothing asked" for every request including an explicit off.
+		// `toAiSdkReasoning` names a level only when the user named one and
+		// returns `"none"` for an off, so an undefined result is exactly the
+		// unnamed case — the only one that gets a bare `think`.
+		const thinkWithoutALevel =
+			toAiSdkReasoning(input.requestedReasoning) === undefined;
 		return {
 			ollama: {
+				...(thinkWithoutALevel ? { think: true } : {}),
 				options: {
 					num_ctx: readOllamaNumCtx(input.context),
 					// Before the sampler, so a `num_predict` the user configured in
