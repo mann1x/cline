@@ -1,6 +1,6 @@
 import { VSCodeButton, VSCodeDropdown, VSCodeOption, VSCodeTextField } from "@vscode/webview-ui-toolkit/react"
 import { AlertTriangle } from "lucide-react"
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { DROPDOWN_Z_INDEX, DropdownContainer, SETTINGS_MODAL_Z_INDEX } from "./ApiOptions"
 import { hasPendingEdits } from "./utils/pendingEdits"
 import { type ApiConfigurationProfileScope, useApiConfigurationProfiles } from "./utils/useApiConfigurationProfiles"
@@ -40,11 +40,11 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 
 	// Reopening the field after the panel has changed should offer a name for
 	// what is in it now, not the one suggested the last time it was opened.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `suggestedName` tracks the panel and changes as the user types, so depending on it would overwrite the name being typed on every keystroke -- the suggestion is read once, when the field opens.
 	useEffect(() => {
 		if (isNaming) {
 			setDraftName(suggestedName)
 		}
-		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [isNaming])
 
 	const nameIsTaken = profiles.some((profile) => profile.name.toLowerCase() === draftName.trim().toLowerCase())
@@ -64,10 +64,25 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 		: undefined
 
 	/** Puts the dropdown back to the profile that is actually loaded. */
-	const restoreSelection = () => {
+	const restoreSelection = useCallback(() => {
 		setPendingSwitch(null)
 		setSelectionEpoch((epoch) => epoch + 1)
-	}
+	}, [])
+
+	// A modal that can only be left with the mouse traps a keyboard user, and
+	// the backdrop it would otherwise hang off is not focusable.
+	useEffect(() => {
+		if (!pendingSwitch) {
+			return
+		}
+		const onKey = (event: KeyboardEvent) => {
+			if (event.key === "Escape") {
+				restoreSelection()
+			}
+		}
+		document.addEventListener("keydown", onKey)
+		return () => document.removeEventListener("keydown", onKey)
+	}, [pendingSwitch, restoreSelection])
 
 	/**
 	 * Applies a profile, asking first if that would lose something.
@@ -115,8 +130,8 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 						className="w-full"
 						id="api-config-profile"
 						key={selectionEpoch}
-						onChange={async (event: any) => {
-							const value = event.target.value
+						onChange={async (event) => {
+							const value = (event.target as HTMLSelectElement).value
 							if (!value || value === NO_PROFILE || value === activeName) {
 								return
 							}
@@ -169,6 +184,7 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 			</div>
 
 			{pendingSwitch ? (
+				// biome-ignore lint/a11y/noStaticElementInteractions: the backdrop is a click-away shortcut for Cancel; the same action is on the Cancel button and on Escape, so no behaviour is mouse-only.
 				<div
 					// Not Tailwind's z-50: that is 50, and the model pickers in
 					// this view open their lists at 1,000, so the Model ID list
@@ -179,11 +195,18 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 							restoreSelection()
 						}
 					}}
+					role="presentation"
 					style={{ zIndex: SETTINGS_MODAL_Z_INDEX }}>
-					<div className="bg-(--vscode-editor-background) border border-solid border-(--vscode-panel-border) rounded-lg p-5 w-[400px] max-w-[90vw]">
+					<div
+						aria-labelledby="profile-switch-dialog-title"
+						aria-modal="true"
+						className="bg-(--vscode-editor-background) border border-solid border-(--vscode-panel-border) rounded-lg p-5 w-[400px] max-w-[90vw]"
+						role="dialog">
 						<div className="flex items-center gap-2 mb-3">
 							<AlertTriangle className="w-5 h-5 text-(--vscode-errorForeground)" />
-							<h4 className="m-0">Unsaved changes</h4>
+							<h4 className="m-0" id="profile-switch-dialog-title">
+								Unsaved changes
+							</h4>
 						</div>
 						<p className="text-sm text-(--vscode-descriptionForeground) mt-0 mb-4">
 							Loading “{pendingSwitch}” replaces every setting on this tab.{" "}
@@ -219,8 +242,8 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 				<div className="flex items-center gap-2 mt-2">
 					<VSCodeTextField
 						className="flex-1"
-						onInput={(event: any) => setDraftName(event.target.value)}
-						onKeyDown={(event: any) => {
+						onInput={(event) => setDraftName((event.target as HTMLInputElement).value)}
+						onKeyDown={(event: { key: string }) => {
 							if (event.key === "Enter") {
 								void commitSave()
 							}

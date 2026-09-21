@@ -1,3 +1,4 @@
+import type { ApiProvider } from "@shared/api"
 import type { Mode } from "@shared/storage/types"
 import { VSCodeTextField } from "@vscode/webview-ui-toolkit/react"
 import Fuse from "fuse.js"
@@ -207,7 +208,12 @@ const ApiOptions = ({
 	}, [searchableItems, searchTerm, fuse, currentProviderLabel])
 
 	const handleProviderChange = (newProvider: string) => {
-		handleModeFieldChange({ plan: "planModeApiProvider", act: "actModeApiProvider" }, newProvider as any, currentMode)
+		// Cast to the union the field is typed as, not to `any`. The comment on
+		// `isCustomProvider` above says why one is needed at all: `ApiProvider`
+		// is the legacy hardcoded union and carries none of the catalog-only
+		// ids, opencoti among them. Narrowing it here keeps the other end of
+		// the call type-checked.
+		handleModeFieldChange({ plan: "planModeApiProvider", act: "actModeApiProvider" }, newProvider as ApiProvider, currentMode)
 		setIsDropdownVisible(false)
 		setSelectedIndex(-1)
 	}
@@ -256,6 +262,7 @@ const ApiOptions = ({
 	}, [currentProviderLabel])
 
 	// Reset selection when search term changes
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `searchTerm` is the trigger, not a value the body reads -- a new search is what makes the old highlight and scroll position wrong. Dropping it, as the rule suggests, would run this once and never again.
 	useEffect(() => {
 		setSelectedIndex(-1)
 		if (dropdownListRef.current) {
@@ -339,7 +346,7 @@ const ApiOptions = ({
 						}}
 						value={searchTerm}>
 						{searchTerm && searchTerm !== currentProviderLabel && (
-							<div
+							<button
 								aria-label="Clear search"
 								className="input-icon-button codicon codicon-close"
 								onClick={() => {
@@ -352,7 +359,12 @@ const ApiOptions = ({
 									justifyContent: "center",
 									alignItems: "center",
 									height: "100%",
+									background: "none",
+									border: "none",
+									padding: 0,
+									color: "inherit",
 								}}
+								type="button"
 							/>
 						)}
 					</VSCodeTextField>

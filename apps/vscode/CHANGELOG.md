@@ -5,6 +5,47 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
+## [4.100.151] — 2026-09-21
+
+### The output budget slider appears for opencoti and llama.cpp
+
+.150 made this panel store the context window the output budget sizes
+against, but only when the box is edited — so a profile that already existed
+still had none, and the slider stayed hidden exactly as before. pandorum's
+opencoti entry was precisely that: a model, a base URL, an output budget, and
+no window at all.
+
+Nothing else treated the window as unknown. An OpenAI-compatible model with no
+override resolves to 128,000, and that is the figure the request, the system
+prompt and compaction were already using. The panel was the only part of the
+system pretending there was no number.
+
+It now falls back to the model's window and says which one it is quoting:
+
+```
+Caps each reply at 96,000 tokens
+100% of the automatic 96,000 (75% of a 128,000-token window,
+the model's own — this provider has none set)
+```
+
+A window stored for the provider still wins, because that is the one set for
+this endpoint. With neither, there is still no honest figure and the slider
+stays away.
+
+### The unsaved-changes dialog is no longer painted under the model list
+
+Picking a profile with unsaved changes opens a dialog. The Model ID combobox
+rendered straight over the top of it, covering the buttons the dialog exists to
+offer.
+
+Tailwind's `z-50` is 50; every model picker in the settings view raises its
+open list to 1,000. The dialog now sits above the dropdown layer by
+construction — its z-index is derived from that layer rather than written as a
+number, so the two cannot drift back into the same order.
+
+Escape closes it too. It is a modal with three buttons and no way out that did
+not involve the mouse.
+
 ## [4.100.150] — 2026-09-21
 
 ### Every tool call on Windows was paying for two PowerShell processes
