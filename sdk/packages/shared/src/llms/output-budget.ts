@@ -18,11 +18,22 @@
  * The most this will ever ask for, however wide the window.
  *
  * Models that advertise a megatoken window start struggling well before they
- * reach it, so a share of the window is not a safe rule on its own past about
- * half a million tokens. This is the operator-set bound on that, and `auto` is
- * clamped to it rather than being trusted to stay sensible on a 1M model.
+ * reach it, so a share of the window is not a safe rule on its own. This is the
+ * operator-set bound on that, and `auto` is clamped to it rather than being
+ * trusted to stay sensible on a 1M model.
+ *
+ * 96,000 rather than the 512,000 this started at, and the reason is recovery
+ * time rather than capability. A cap is also the length of the worst turn the
+ * session can have: a model that has started repeating itself keeps going for
+ * as long as the cap allows, and half a megatoken of that is tens of minutes
+ * before control comes back. 96,000 is what three quarters of a 128,000-token
+ * window already resolves to -- the setting v9-agentic was measured working at
+ * on 2026-09-17 -- so for every window at or under 128,000 this changes
+ * nothing. It binds only above that, where the old bound was buying length no
+ * turn was observed to need: the same session's turns cost 392 to 23,140
+ * tokens.
  */
-export const OUTPUT_BUDGET_CEILING_TOKENS = 512_000;
+export const OUTPUT_BUDGET_CEILING_TOKENS = 96_000;
 
 /**
  * What `auto` asks for, as a share of the context window.

@@ -19,8 +19,9 @@ describe("resolveOutputBudgetTokens", () => {
 	});
 
 	it("holds auto to the absolute ceiling on a very wide window", () => {
-		// 75% of 1M is 750,000, and models struggle past 512k whatever the
-		// window says it can hold.
+		// 75% of 1M is 750,000. The ceiling is also the length of the worst
+		// turn a looping model can spend before control comes back, which is
+		// why it is 96,000 and not the window's own arithmetic.
 		expect(
 			resolveOutputBudgetTokens({ mode: "auto", contextWindow: 1_000_000 }),
 		).toBe(OUTPUT_BUDGET_CEILING_TOKENS);
@@ -31,9 +32,19 @@ describe("resolveOutputBudgetTokens", () => {
 			resolveOutputBudgetTokens({
 				mode: "auto",
 				contextWindow: 1_000_000,
-				maxTokens: 200_000,
+				maxTokens: 32_000,
 			}),
-		).toBe(200_000);
+		).toBe(32_000);
+	});
+
+	// The ceiling moved from 512,000 to 96,000 to bound recovery time, and the
+	// claim made for that change was that it costs nothing at the sizes people
+	// actually run. This is that claim: at and below a 128,000-token window the
+	// share is what binds, so the answer is the one it has always been.
+	it("changes nothing at or below a 128,000-token window", () => {
+		expect(resolveOutputBudgetTokens({ contextWindow: 128_000 })).toBe(96_000);
+		expect(resolveOutputBudgetTokens({ contextWindow: 64_000 })).toBe(48_000);
+		expect(resolveOutputBudgetTokens({ contextWindow: 32_768 })).toBe(24_576);
 	});
 
 	it("does not let the auto override raise the absolute ceiling", () => {
@@ -84,7 +95,7 @@ describe("resolveOutputBudgetTokens", () => {
 
 	it("keeps the share and the ceiling as the two published numbers", () => {
 		expect(OUTPUT_BUDGET_AUTO_WINDOW_SHARE).toBe(0.75);
-		expect(OUTPUT_BUDGET_CEILING_TOKENS).toBe(512_000);
+		expect(OUTPUT_BUDGET_CEILING_TOKENS).toBe(96_000);
 	});
 });
 

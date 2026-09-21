@@ -15,7 +15,7 @@ import { DebouncedTextField } from "./DebouncedTextField"
  * stored. Keep them in step with `output-budget.ts`.
  */
 const AUTO_WINDOW_SHARE = 0.75
-const CEILING_TOKENS = 512_000
+const CEILING_TOKENS = 96_000
 /**
  * The point below which the gateway stops believing the cap.
  *
