@@ -5,6 +5,19 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
+## [4.100.153] — 2026-09-21
+
+### The session settings card opened off the side of the panel
+
+Resting on a history row showed the card hanging off the left edge with only a
+sliver of it visible.
+
+It was asking to open beside the row. A row spans nearly the whole width of
+the sidebar, so there is no room on either side of it — and there is nothing
+to fall back to, because the other side is just as narrow. The card opens
+above the row now, where it has the full width of the panel to use, and a row
+near the top of the list opens downward instead.
+
 ## [4.100.152] — 2026-09-21
 
 ### The mark at the top of a new session is Cerebriline's
