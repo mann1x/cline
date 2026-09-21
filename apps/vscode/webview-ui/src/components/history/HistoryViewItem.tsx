@@ -256,8 +256,14 @@ const HistoryViewItem = ({
 						)}
 					</div>
 				</TooltipTrigger>
+				{/* Above the row, never beside it. This panel is a sidebar -- a row
+				    spans nearly its whole width, so `side="left"` leaves no room on
+				    either side, and Radix cannot flip away from a collision it has
+				    nowhere to flip to: the card hung off the left edge with only its
+				    right sliver visible. Vertically it has the full panel width, and
+				    a row near the top flips to `bottom` on its own. */}
 				{item.settings && item.settings.length > 0 && (
-					<TooltipContent align="start" side="left">
+					<TooltipContent align="start" side="top" sideOffset={4}>
 						<HistorySettingsTooltip settings={item.settings} />
 					</TooltipContent>
 				)}

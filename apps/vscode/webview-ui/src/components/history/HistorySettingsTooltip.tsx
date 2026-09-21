@@ -22,7 +22,7 @@ export const HistorySettingsTooltip = ({ settings }: { settings: HistoryItem["se
 		return null
 	}
 	return (
-		<div className="flex flex-col gap-0.5 min-w-[13rem]">
+		<div className="flex flex-col gap-0.5">
 			{settings.map((row) => (
 				<div className="flex gap-3 justify-between items-baseline" key={row.label}>
 					<span className="text-description shrink-0">{row.label}</span>
