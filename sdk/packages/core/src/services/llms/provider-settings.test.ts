@@ -206,9 +206,11 @@ describe("thinking budget for capped-thinking detection", () => {
 			sampling: { thinkBudget: "max" },
 		});
 
-		// 0.75 * 131072 = 98304 output cap, of which `max` is 4/5.
-		expect(config.defaultMaxOutputTokens).toBe(98304);
-		expect(config.thinkingBudgetTokens).toBe(78643);
+		// 0.75 * 131072 = 98304, held to the 96,000 absolute ceiling, of which
+		// `max` is 4/5. A 131,072-token window is the first common size the
+		// ceiling actually binds on -- 128,000 and below resolve below it.
+		expect(config.defaultMaxOutputTokens).toBe(96000);
+		expect(config.thinkingBudgetTokens).toBe(76800);
 	});
 
 	// An explicit count is the user typing a number, and it is not a share of
