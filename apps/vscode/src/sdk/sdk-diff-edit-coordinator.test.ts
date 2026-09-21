@@ -403,6 +403,9 @@ describe("SdkDiffEditCoordinator", () => {
 		const input = { path: "a.ts", old_text: "old", new_text: "new" }
 
 		await coordinator.executeEditorTool(input, tempDir, makeContext("tc1"))
+		// The linger, the reveal and the close all run off the agent loop, so they
+		// land after the executor has already returned -- a tick, not a wait.
+		await sleep(0)
 
 		expect(showEditedFile).toHaveBeenCalledExactlyOnceWith(path.join(tempDir, "a.ts"))
 		expect(previews[0].closed).toBe(1)
@@ -436,25 +439,23 @@ describe("SdkDiffEditCoordinator", () => {
 		expect(previews[0].closed).toBe(1)
 	})
 
-	it("shows a brief preview around auto-approved edits and lingers after the write", async () => {
+	it("lingers the auto-approve preview without holding up the agent loop", async () => {
 		coordinator = makeCoordinator({ autoApprovePreviewLingerMs: 150 })
 		await writeFile("a.ts", "old content")
 		const input = { path: "a.ts", old_text: "old", new_text: "new" }
 
-		let settled = false
-		const promise = coordinator.executeEditorTool(input, tempDir, makeContext("tc1")).then((r) => {
-			settled = true
-			return r
-		})
-		await sleep(50)
-		// Write already delegated; executor is lingering with the preview open.
-		expect(previews).toHaveLength(1)
+		// The executor returns as soon as the write is done. It used to sit out the
+		// whole linger: 1.5s on every auto-approved edit, 3.6 hours across one
+		// archive of 8,580 of them, spent watching an animation.
+		expect(await coordinator.executeEditorTool(input, tempDir, makeContext("tc1"))).toBe("fallback editor result")
 		expect(fallbackEditor).toHaveBeenCalledOnce()
+		expect(previews).toHaveLength(1)
 		expect(previews[0].closed).toBe(0)
-		expect(settled).toBe(false)
 
-		expect(await promise).toBe("fallback editor result")
+		// The preview is still the user's, and still closes on its own.
+		await sleep(250)
 		expect(previews[0].closed).toBe(1)
+		expect(showEditedFile).toHaveBeenCalledExactlyOnceWith(path.join(tempDir, "a.ts"))
 	})
 
 	it("cuts the auto-approve linger short on abort without failing the applied edit, and skips the reveal", async () => {
@@ -468,6 +469,9 @@ describe("SdkDiffEditCoordinator", () => {
 		controller.abort()
 
 		expect(await promise).toBe("fallback editor result")
+		// The detached tail is still holding the preview open on its 10s linger;
+		// the abort cuts it short and it closes on the next tick.
+		await sleep(0)
 		expect(previews[0].closed).toBe(1)
 		// A cancelled task should not pop the edited file open mid-teardown.
 		expect(showEditedFile).not.toHaveBeenCalled()
@@ -658,6 +662,7 @@ describe("SdkDiffEditCoordinator", () => {
 			leftContent: "line one\nline two\n",
 			rightContent: "line ONE\nline two\n",
 		})
+		await sleep(0)
 		expect(previews[0].closed).toBe(1)
 		expect(showEditedFile).toHaveBeenCalledExactlyOnceWith(path.join(tempDir, "patched.ts"))
 	})

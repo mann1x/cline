@@ -127,6 +127,7 @@ export class SdkDiffEditCoordinator {
 	async executeEditorTool(input: EditFileInput, cwd: string, context: AgentToolContext): Promise<string> {
 		const toolCallId = context.toolCallId ?? ""
 		const hadPreApprovalPreview = this.sessions.has(toolCallId)
+		let detached = false
 		try {
 			if (!hadPreApprovalPreview && !this.options.isBackgroundEditEnabled()) {
 				// Auto-approved (or hook-approved) edit: no preview was opened at approval
@@ -139,16 +140,22 @@ export class SdkDiffEditCoordinator {
 			}
 			const result = await this.fallbackEditorExecutor(input, cwd, context)
 			if (!hadPreApprovalPreview && this.sessions.get(toolCallId)?.preview) {
-				// Keep the auto-approve preview visible briefly after the write; an abort
-				// just cuts the linger short (the edit has already been applied).
-				await lingerDelay(this.autoApprovePreviewLingerMs, context.signal)
+				// Keep the auto-approve preview visible briefly after the write — but off
+				// the agent loop. The edit has already been applied and its result is in
+				// hand; the linger exists so a person watching sees the change land, and
+				// a person watching is not a reason for the model to stop working.
+				detached = true
+				void this.lingerThenReveal(toolCallId, this.livePreviewRevealPath(toolCallId), context.signal)
+				return result
 			}
 			if (!context.signal?.aborted) {
 				await this.showEditedFile(this.livePreviewRevealPath(toolCallId))
 			}
 			return result
 		} finally {
-			await this.discardPreview(toolCallId)
+			if (!detached) {
+				await this.discardPreview(toolCallId)
+			}
 		}
 	}
 
@@ -163,6 +170,7 @@ export class SdkDiffEditCoordinator {
 		// The pre-approval preview is discarded before the patch applies, so remember
 		// which file it showed for the post-edit reveal.
 		const preApprovalRevealPath = this.livePreviewRevealPath(toolCallId)
+		let detached = false
 		try {
 			if (hadPreApprovalPreview) {
 				await this.discardPreview(toolCallId)
@@ -175,15 +183,20 @@ export class SdkDiffEditCoordinator {
 			}
 
 			const result = await this.fallbackApplyPatchExecutor(input, cwd, context)
+			const revealPath = preApprovalRevealPath ?? this.livePreviewRevealPath(toolCallId)
 			if (!hadPreApprovalPreview && this.sessions.get(toolCallId)?.preview) {
-				await lingerDelay(this.autoApprovePreviewLingerMs, context.signal)
+				detached = true
+				void this.lingerThenReveal(toolCallId, revealPath, context.signal)
+				return result
 			}
 			if (!context.signal?.aborted) {
-				await this.showEditedFile(preApprovalRevealPath ?? this.livePreviewRevealPath(toolCallId))
+				await this.showEditedFile(revealPath)
 			}
 			return result
 		} finally {
-			await this.discardPreview(toolCallId)
+			if (!detached) {
+				await this.discardPreview(toolCallId)
+			}
 		}
 	}
 
@@ -226,6 +239,30 @@ export class SdkDiffEditCoordinator {
 	}
 
 	/** Closes one preview (reject / abort / edit applied). Never throws; unknown ids are a no-op. */
+	/**
+	 * The auto-approve preview's tail, run off the agent loop: linger, reveal the
+	 * edited file, then close the preview.
+	 *
+	 * Detached because awaiting it cost 1.5s on every auto-approved edit, which
+	 * across one archive of 8,580 `editor` calls is 3.6 hours the model spent
+	 * waiting for an animation. Nothing downstream depends on it: the write has
+	 * already returned and the tool result is already formed. The session entry
+	 * stays in `sessions` until this finishes, so it owns the discard its caller
+	 * skipped, and a later edit gets its own entry under its own tool-call id.
+	 */
+	private async lingerThenReveal(toolCallId: string, revealPath: string | undefined, signal?: AbortSignal): Promise<void> {
+		try {
+			await lingerDelay(this.autoApprovePreviewLingerMs, signal)
+			if (!signal?.aborted) {
+				await this.showEditedFile(revealPath)
+			}
+		} catch (error) {
+			Logger.warn(`[SdkDiffEditCoordinator] Auto-approve preview tail failed: ${error}`)
+		} finally {
+			await this.discardPreview(toolCallId)
+		}
+	}
+
 	async discardPreview(toolCallId: string): Promise<void> {
 		const session = this.sessions.get(toolCallId)
 		this.sessions.delete(toolCallId)
