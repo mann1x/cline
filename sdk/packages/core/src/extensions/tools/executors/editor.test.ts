@@ -683,33 +683,38 @@ describe("createEditorExecutor", () => {
 		// every time with the paragraph explaining what to send instead in front
 		// of it on all seven.
 		it("says how many times the same duplicating edit has been refused", async () => {
-			await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
-				const editor = createEditorExecutor();
-				const send = () =>
-					editor(
-						{
-							path: filePath,
-							new_text: "b\nc\nEXTRA1\nEXTRA2\nEXTRA3",
-							start_line: 2,
-							end_line: 3,
-						},
-						dir,
-						context,
-					);
+			await withTempFile(
+				"header\nalpha\nbeta\ngamma\nfooter",
+				async (filePath, dir) => {
+					const editor = createEditorExecutor();
+					const send = () =>
+						editor(
+							{
+								path: filePath,
+								new_text: "header\nalpha\nbeta\ngamma",
+								start_line: 1,
+								end_line: 1,
+							},
+							dir,
+							context,
+						);
 
-				await expect(send()).rejects.not.toThrow("identical edit");
-				await expect(send()).rejects.toThrow(
-					"You have now sent this identical edit 2 times",
-				);
-				await expect(send()).rejects.toThrow(
-					"sending it again will not apply it either",
-				);
-				// The advice it needs is still there behind the count.
-				await expect(send()).rejects.toThrow("appends a second copy");
-				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
-					"a\nb\nc\nd",
-				);
-			});
+					await expect(send()).rejects.not.toThrow("identical edit");
+					await expect(send()).rejects.toThrow(
+						"You have now sent this identical edit 2 times",
+					);
+					await expect(send()).rejects.toThrow(
+						"sending it again will not apply it either",
+					);
+					// The advice it needs is still there behind the count.
+					await expect(send()).rejects.toThrow(
+						"already in the file at lines 2-4",
+					);
+					await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+						"header\nalpha\nbeta\ngamma\nfooter",
+					);
+				},
+			);
 		});
 
 		it("refuses a replacement that duplicates the range instead of replacing it", async () => {
@@ -720,9 +725,46 @@ describe("createEditorExecutor", () => {
 			// ended up in the file three times. The old result said
 			// `success: true` and "15 of the 15 line(s) were already identical",
 			// which reads as reassurance while the file is being corrupted.
+			await withTempFile(
+				"header\nalpha\nbeta\ngamma\nfooter",
+				async (filePath, dir) => {
+					const editor = createEditorExecutor();
+					const failure = editor(
+						{
+							path: filePath,
+							new_text: "header\nalpha\nbeta\ngamma",
+							start_line: 1,
+							end_line: 1,
+						},
+						dir,
+						context,
+					);
+
+					await expect(failure).rejects.toThrow(
+						"Duplicated instead of replaced",
+					);
+					await expect(failure).rejects.toThrow(
+						"second copy of them below the first",
+					);
+					// The file must be left exactly as it was.
+					await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+						"header\nalpha\nbeta\ngamma\nfooter",
+					);
+				},
+			);
+		});
+
+		// The other half of the same shape, and the one the guard used to get
+		// wrong. Restating the range and continuing is how a range editor says
+		// "insert after this line"; when the continuation is new text nothing
+		// is duplicated and the edit is ordinary. Refusing it told a model that
+		// had done the right thing to go and do something else -- measured on
+		// pandorum 2026-09-21, where it concluded the tool was broken.
+		it("applies an insertion that restates the range and adds new lines", async () => {
 			await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
 				const editor = createEditorExecutor();
-				const failure = editor(
+
+				await editor(
 					{
 						path: filePath,
 						new_text: "b\nc\nEXTRA1\nEXTRA2\nEXTRA3",
@@ -733,13 +775,83 @@ describe("createEditorExecutor", () => {
 					context,
 				);
 
-				await expect(failure).rejects.toThrow("Duplicated instead of replaced");
-				await expect(failure).rejects.toThrow("appends a second copy");
-				// The file must be left exactly as it was.
 				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
-					"a\nb\nc\nd",
+					"a\nb\nc\nEXTRA1\nEXTRA2\nEXTRA3\nd",
 				);
 			});
+		});
+
+		// The message the model actually got said "None of the 2 line(s) you
+		// named were removed, yet 5 new line(s) were added" and then told it to
+		// "send only the text that should end up there" -- which is what it
+		// believed it had sent. Measured on pandorum 2026-09-21, session
+		// 1790005765779_rsw1k: it spent six thinking blocks theorising about a
+		// broken tool ("maybe my new_text contained characters that are
+		// special?", "this SHOULD remove them first") and never reached the
+		// actual cause, which the message never stated -- the block it was
+		// adding was already in the file. Describing the diff is not
+		// diagnosing the mistake.
+		it("names where the duplicated block already lives", async () => {
+			await withTempFile(
+				"header\nalpha\nbeta\ngamma\nfooter",
+				async (filePath, dir) => {
+					const editor = createEditorExecutor();
+					const failure = editor(
+						{
+							path: filePath,
+							// restates lines 1-1 and then re-adds a block that
+							// is already at lines 2-4
+							new_text: "header\nalpha\nbeta\ngamma",
+							start_line: 1,
+							end_line: 1,
+						},
+						dir,
+						context,
+					);
+
+					await expect(failure).rejects.toThrow(
+						"Duplicated instead of replaced",
+					);
+					const message = await failure.catch((error: Error) => error.message);
+					// the fact it was missing: where the block already is
+					expect(message).toContain("lines 2-4");
+					expect(message).toContain("already in the file");
+					// and the file is untouched
+					await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+						"header\nalpha\nbeta\ngamma\nfooter",
+					);
+				},
+			);
+		});
+
+		// The same message told the model to send "only the text that should
+		// end up there" while it was doing exactly that, and opened by
+		// reporting what had not been *removed* when removal was never the
+		// intent. Both readings sent it looking for a fault in the tool.
+		it("drops the diff-speak that sent the model after a phantom tool bug", async () => {
+			await withTempFile(
+				"header\nalpha\nbeta\ngamma\nfooter",
+				async (filePath, dir) => {
+					const editor = createEditorExecutor();
+					const message = await editor(
+						{
+							path: filePath,
+							new_text: "header\nalpha\nbeta\ngamma",
+							start_line: 1,
+							end_line: 1,
+						},
+						dir,
+						context,
+					).catch((error: Error) => error.message);
+
+					expect(message).not.toContain("were removed");
+					expect(message).not.toContain(
+						"send only the text that should end up there",
+					);
+					// it must say plainly that nothing was written
+					expect(message).toContain("The file was not modified");
+				},
+			);
 		});
 
 		it("names the gutter when it numbers past end_line", async () => {
@@ -777,24 +889,27 @@ describe("createEditorExecutor", () => {
 			// A gutter that stops inside `end_line` is not what went wrong, and
 			// pointing at it would send the model to change the one thing that was
 			// already right.
-			await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
-				const message = await createEditorExecutor()(
-					{
-						path: filePath,
-						new_text: "b\nc\nEXTRA1\nEXTRA2\nEXTRA3",
-						start_line: 2,
-						end_line: 3,
-					},
-					dir,
-					context,
-				).then(
-					() => "resolved",
-					(error: unknown) => (error as Error).message,
-				);
+			await withTempFile(
+				"header\nalpha\nbeta\ngamma\nfooter",
+				async (filePath, dir) => {
+					const message = await createEditorExecutor()(
+						{
+							path: filePath,
+							new_text: "header\nalpha\nbeta\ngamma",
+							start_line: 1,
+							end_line: 1,
+						},
+						dir,
+						context,
+					).then(
+						() => "resolved",
+						(error: unknown) => (error as Error).message,
+					);
 
-				expect(message).toContain("Duplicated instead of replaced");
-				expect(message).not.toContain("gutter on your");
-			});
+					expect(message).toContain("Duplicated instead of replaced");
+					expect(message).not.toContain("gutter on your");
+				},
+			);
 		});
 
 		it("still allows growing a range when it actually replaces something", async () => {
@@ -1508,11 +1623,15 @@ describe("createEditorExecutor", () => {
 				const editor = createEditorExecutor({ receipts });
 				receipts.noteRead(filePath, 1, 3);
 
+				// A second copy of the file's own lines, which is the shape
+				// that put one class in a file three times. Appending genuinely
+				// new lines through the same path is an ordinary rewrite and is
+				// covered above.
 				await expect(
 					editor(
 						{
 							path: filePath,
-							new_text: "one\ntwo\nthree\nfour\nfive\nsix\nseven\n",
+							new_text: "one\ntwo\nthree\none\ntwo\nthree\n",
 						},
 						dir,
 						context,

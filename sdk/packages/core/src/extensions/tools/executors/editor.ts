@@ -686,6 +686,57 @@ function noChangeMessage(
 }
 
 /**
+ * Where the lines an edit is adding already sit in the file, if they do.
+ *
+ * The duplication guard knows *that* a replacement restated its range and grew
+ * it; it did not know *what* was being duplicated, so the refusal could only
+ * describe the diff -- "none of the lines you named were removed" -- which
+ * reads as a report about removal to a model that was not removing anything.
+ * Measured on pandorum 2026-09-21: seven methods the model had read one message
+ * earlier were about to be added a second time, and the refusal never said so.
+ * The model spent six thinking blocks deciding the tool was broken.
+ *
+ * Two or more non-blank lines matching contiguously is a block; a single line,
+ * or a run of blanks, is left unnamed rather than guessed at. The bar is
+ * deliberately low, because the thing being detected is a verbatim copy and a
+ * two-line copy is still a copy -- pasting a read's gutter back is exactly this
+ * shape, and its lines are often one character wide. Where the answer is
+ * genuinely ambiguous the edit is refused rather than applied, and the refusal
+ * now names the lines it matched, so a wrong call is one the model can see and
+ * argue with rather than one it has to guess at.
+ */
+function locateExistingBlock(
+	content: string,
+	addedLines: string[],
+): { firstLine: number; lastLine: number } | undefined {
+	const trimmed = addedLines.map((line) => line.trim());
+	let from = 0;
+	let to = trimmed.length;
+	while (from < to && trimmed[from] === "") from++;
+	while (to > from && trimmed[to - 1] === "") to--;
+	const block = trimmed.slice(from, to);
+	// One line, or a run of blanks, is not evidence of anything.
+	const nonBlank = block.filter((line) => line !== "").length;
+	if (block.length < 2 || nonBlank < 2) {
+		return undefined;
+	}
+	const fileLines = splitFileLines(content).lines.map((line) => line.trim());
+	for (let start = 0; start + block.length <= fileLines.length; start++) {
+		let matched = true;
+		for (let offset = 0; offset < block.length; offset++) {
+			if (fileLines[start + offset] !== block[offset]) {
+				matched = false;
+				break;
+			}
+		}
+		if (matched) {
+			return { firstLine: start + 1, lastLine: start + block.length };
+		}
+	}
+	return undefined;
+}
+
+/**
  * Refuse a "replacement" that removed nothing and grew the range instead.
  *
  * Measured on a live session, on a dense single-file game: the model asked to
@@ -711,6 +762,8 @@ function duplicatedRangeMessage(
 	gutterSpan?: { firstLine: number; lastLine: number },
 	/** How many times this exact call has now been refused this way. */
 	repeats?: number,
+	/** Where the block being added already sits, when it could be found. */
+	existing?: { firstLine: number; lastLine: number },
 ): never {
 	const gutterHint = gutterSpan
 		? ` The gutter on your \`new_text\` covers lines ${gutterSpan.firstLine}-${gutterSpan.lastLine}, but the call names only ${range}: if you meant to replace ${gutterSpan.firstLine}-${gutterSpan.lastLine}, send \`end_line: ${gutterSpan.lastLine}\`.`
@@ -724,8 +777,21 @@ function duplicatedRangeMessage(
 		repeats && repeats > 1
 			? ` You have now sent this identical edit ${repeats} times and it has been refused ${repeats} times for the same reason, so sending it again will not apply it either.`
 			: "";
+	// Name the duplicate, do not describe the diff. The old wording opened on
+	// what had not been *removed* — a fact about the diff, and about an
+	// operation the model was not attempting — and then told it to "send only
+	// the text that should end up there", which is what it believed it had
+	// sent. Both readings pointed at the tool rather than at the mistake. What
+	// it actually needed is the one thing the message never carried: the lines
+	// it is adding are already in the file, and here is where.
+	const located = existing
+		? ` The ${added} line(s) you are adding are already in the file at lines ${existing.firstLine}-${existing.lastLine}, so applying this would put a second copy of them below the first.`
+		: ` Your \`new_text\` opens with the ${requestedLines} line(s) already at ${range} and then continues, so applying it would leave those lines in place and add ${added} more below them rather than replacing anything.`;
+	const next = existing
+		? ` If those lines are already what you want, this part is done — say so and go to the next change. If you meant to change them, edit lines ${existing.firstLine}-${existing.lastLine} directly and send only the text that should differ.`
+		: ` If you meant to add these lines, name the line they belong after instead of ${range}. If you meant to replace ${range}, leave out the copy of ${range} at the start of your \`new_text\`.`;
 	throw new Error(
-		`${DUPLICATED_RANGE_ERROR_PREFIX}the edit to ${range} in ${filePath} was not applied.${history} None of the ${requestedLines} line(s) you named were removed, yet ${added} new line(s) were added — so what you sent as \`new_text\` opens with the text already at ${range} and then continues, which appends a second copy rather than replacing anything.${gutterHint} If you meant to rewrite that range, send only the text that should end up there, without restating the lines that are already at ${range}. If you meant to add code, insert it at the line it belongs on instead. Re-read the file first: after earlier edits the line numbers you are working from may no longer point at what you think.`,
+		`${DUPLICATED_RANGE_ERROR_PREFIX}the edit to ${range} in ${filePath} was not applied. The file was not modified.${history}${located}${gutterHint}${next} Re-read the file first: after earlier edits the line numbers you are working from may no longer point at what you think.`,
 	);
 }
 
@@ -1109,7 +1175,29 @@ async function replaceLineRange(
 	// rejected edit still lands on disk and the model is told it failed.
 	const requestedLines = effectiveEndLine - startLineOneBased + 1;
 	const { removed, added } = changedLineCounts(content, updated);
-	if (removed === 0 && added > requestedLines) {
+	// Restating the range and then continuing is how a range editor expresses
+	// "insert after this line", and it is the correct way to do it — so the
+	// shape alone is not the fault. What distinguishes the corruption this
+	// guard was built for is that the lines being added are *already in the
+	// file*: that is how one class came to sit in a file three times. When they
+	// are new the edit is an ordinary insertion and is applied.
+	//
+	// Measured on pandorum 2026-09-21: the refused call restated lines 90-91
+	// and added seven methods the model had read from the same file one message
+	// earlier. Real duplication, correctly refused. The old test for this used
+	// EXTRA1-3, which existed nowhere, so the case it pinned was the one this
+	// now lets through.
+	const existingBlock = locateExistingBlock(
+		content,
+		replacement.slice(requestedLines),
+	);
+	// `added > requestedLines` used to stand in for "this is a copy, not a
+	// replacement", because there was nothing better to ask. There is now: the
+	// added lines are checked against the file itself. The size test is not
+	// merely redundant beside it, it is wrong -- duplicating a three-line range
+	// with exactly three more lines adds no more lines than the range holds and
+	// walked straight past it.
+	if (removed === 0 && added > 0 && existingBlock !== undefined) {
 		duplicatedRangeMessage(
 			filePath,
 			range,
@@ -1121,6 +1209,7 @@ async function replaceLineRange(
 			noteNoOp?.(
 				`duplicated\u0000${filePath}\u0000${range}\u0000${newStr ?? ""}`,
 			),
+			existingBlock,
 		);
 	}
 
