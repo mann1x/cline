@@ -129,6 +129,37 @@ if (PENDING_VERSION) {
 	}
 }
 
+/** 4.100.150 -> [4, 100, 150], for ordering that does not depend on a date. */
+const versionKey = (v) => v.split(".").map((n) => Number.parseInt(n, 10) || 0)
+
+function compareVersionsDesc(a, b) {
+	const x = versionKey(a)
+	const y = versionKey(b)
+	for (let i = 0; i < Math.max(x.length, y.length); i++) {
+		const d = (y[i] ?? 0) - (x[i] ?? 0)
+		if (d !== 0) {
+			return d
+		}
+	}
+	return 0
+}
+
+/** When a version's notes were committed, which is when that build was cut. */
+function noteFileDate(file) {
+	try {
+		const out = execFileSync("git", ["log", "--diff-filter=A", "--format=%ad", "--date=short", "-1", "--", file], {
+			cwd: repoRoot,
+			encoding: "utf-8",
+		}).trim()
+		if (out) {
+			return out
+		}
+	} catch {
+		// not a git tree, or the file is not committed yet
+	}
+	return fs.statSync(path.join(repoRoot, file)).mtime.toISOString().slice(0, 10)
+}
+
 if (!OFFLINE) {
 	const past = fetchReleases(REPO)
 		.filter((r) => !r.draft)
@@ -151,6 +182,37 @@ if (!OFFLINE) {
 		})
 	}
 }
+
+// Versions that were built and tested but never published as a GitHub release
+// still shipped, and their notes are committed here. Taking past entries from
+// the API alone dropped every one of them: the listing jumped .150 straight to
+// .118 with sixteen builds' worth of changes missing, none of which a reader
+// can find anywhere else. The same rule the API loop already follows applies --
+// a committed note file is the source of truth -- so any note file with no
+// release behind it is an entry in its own right.
+{
+	const dir = path.join(repoRoot, "release-notes")
+	const known = new Set(entries.map((e) => e.version))
+	const orphans = fs.existsSync(dir)
+		? fs
+				.readdirSync(dir)
+				.filter((f) => f.endsWith(".md"))
+				.map((f) => f.slice(0, -3))
+				.filter((v) => !known.has(v))
+		: []
+	for (const version of orphans) {
+		const file = path.join("release-notes", `${version}.md`)
+		const body = clean(fs.readFileSync(path.join(repoRoot, file), "utf-8"))
+		if (!body) {
+			continue
+		}
+		entries.push({ version, date: noteFileDate(file), body })
+	}
+}
+
+// Ordered by version rather than by date: an unpublished build has no
+// published_at, and a changelog is read by version anyway.
+entries.sort((a, b) => compareVersionsDesc(a.version, b.version))
 
 const out = [
 	"# Changelog",

@@ -5,6 +5,119 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
+## [4.100.150] — 2026-09-21
+
+### Every tool call on Windows was paying for two PowerShell processes
+
+A run on Windows spent about 600ms per tool call doing nothing, whatever the
+tool was. `read_files` on a small file took 562ms. `check_file` took 547ms.
+Neither reads anything that could explain it.
+
+The time was in hook discovery, which runs before and after every tool call.
+Finding the directories hooks may live in asks Windows where My Documents is,
+and that answer came from spawning PowerShell — about 285ms, twice per tool
+call, on a machine with no hooks configured at all. Discovery still runs when
+there are none, because whether any exist is what it is being asked.
+
+The path is resolved once per session now and the answer reused. Measured on
+the same session across the reload:
+
+| | before | after |
+|---|---|---|
+| before-hooks | 289ms | 11ms |
+| after-hooks | 297ms | 1ms |
+| **floor per tool call** | **586ms** | **12ms** |
+
+`read_files` 562 → 10ms, `check_file` 547 → 6ms, `run_commands` 572 → 12ms. A
+session making a few hundred tool calls gets minutes back.
+
+### The edit preview no longer holds the run up while it fades
+
+An auto-approved edit showed its diff for a second and a half before closing,
+and the agent waited out the whole animation before doing anything else. Across
+one archive of 8,580 edits that is about three and a half hours of watching a
+panel fade.
+
+The pause is still there — it is what makes an auto-approved edit legible — but
+it now happens beside the run instead of in front of it. Aborting still cuts it
+short.
+
+### A refusal that told the model to do what it had just done
+
+Ask the editor to replace lines 90-91 with those two lines plus some more, and
+it refused with:
+
+> None of the 2 line(s) you named were removed, yet 5 new line(s) were added …
+> If you meant to rewrite that range, send only the text that should end up
+> there.
+
+Both halves misfire. The model was not removing anything, so being told what had
+not been removed reads as a report about someone else's operation. And it
+believed it *was* sending the text that should end up there. In a measured run
+it spent six consecutive thinking blocks concluding the tool was broken —
+"maybe my `new_text` contained characters that are special?", "this SHOULD
+remove them first" — and never reached the actual problem, which the message
+never mentioned: the lines it was adding were already in the file.
+
+The refusal now says the file was not modified, says which lines the copy
+already sits at, and offers the two moves that follow from that. If those lines
+are what you wanted, the change is done; if you meant to change them, edit them
+where they are.
+
+### Repeating a line on purpose is an edit, not a mistake
+
+The same guard refused duplications that were meant. Turning one `a++;` into
+three worked, but duplicating a two-line pair, or a whole method, did not — and
+nothing principled sat behind the difference.
+
+Intent cannot be read off the request: repeating a line deliberately and
+duplicating it by accident produce identical calls. What does tell them apart is
+where the copy comes from. Re-emitting the lines the call **named** is a
+statement about those lines, and is now applied. Re-emitting lines from
+**outside** the range is the paste-too-much accident every time it has been
+seen, and is still refused, naming the lines it matched so the next call can be
+aimed properly.
+
+Two cases stay refused on purpose: a range covering one of two existing copies,
+where how many copies were wanted is genuinely ambiguous, and a whole file
+emitted twice, which is what a rewrite looks like when its output restarts.
+
+### opencoti and llama.cpp get the output budget slider they were missing
+
+"Share of the automatic budget" never appeared for these two providers however
+large a context window was typed in. The slider sizes against the window stored
+for the provider, and this form was writing the number somewhere else — as an
+override describing the *model* rather than a fact about the endpoint. The panel
+showed the value back, and the control that needed it stayed hidden.
+
+It is stored in both places now. Clearing the box clears it.
+
+### One "Advanced" section instead of two
+
+The same panel drew two collapsible sections both labelled Advanced, one
+directly below the other, with different things inside each. Images, Browser and
+Prompt Caching move up into the sampler's section, at the bottom, alongside the
+request timings switch — which is where Ollama already keeps it. What is left
+below is per-token pricing, so on a local model there is nothing left and the
+second section is gone rather than empty. On a paid endpoint reached through the
+same form it stays, still showing the prices.
+
+### A turn is capped at 96,000 tokens rather than 512,000
+
+The per-turn output ceiling is also the length of the worst turn a session can
+have. A model that starts repeating itself keeps going for as long as the cap
+allows, and half a megatoken of that is tens of minutes before the run can be
+stopped.
+
+96,000 is what the automatic setting already resolves to on a 128,000-token
+window, so at that size and below nothing changes. The first common size it
+actually binds on is a 131,072-token window — the one usually called 128k —
+where the cap goes from 98,304 to 96,000, a 2.3% trim, and a `max` thinking
+allowance with it from 78,643 to 76,800. Above that it bites harder, which is
+the point: the old ceiling was buying length no measured turn has needed, and
+the session this was checked against spent between 392 and 23,140 tokens per
+turn.
+
 ## [4.100.149] — 2026-09-21
 
 ### Dragging the scrollbar counts as scrolling away
@@ -70,6 +183,1418 @@ council alone has been measured at three minutes. The progress counter added in
 .148 says which call it is on while it runs; this says what the whole thing cost
 once it is over, which is the number that decides whether the settings are worth
 their price.
+
+## [4.100.148] — 2026-09-21
+
+### A retried turn stops inflating the context
+
+A turn whose first attempt came back empty is retried, and the usage it reports
+is the **sum** of every attempt — correct for billing, and wrong for everything
+else that reads it: the token calibration, the compaction trigger, the output cap
+and the context meter are not asking about money.
+
+4.100.141 shipped a fix for that: the kept attempt's own prompt travels beside the
+billed total. It has never once arrived. The number was written onto the
+provider's finish part, and the layer above prefers the SDK's own recomputed
+usage — so it was dropped one hop after it was written, on every real run. The
+fallback paths kept it, and those are the paths the tests take, which is why this
+was green and did nothing.
+
+Measured on a run that failed this way: a turn estimated at 56,907 tokens retried
+once and reported 113,620. The next request was estimated at **114,761 against a
+128,000 window** — 198,358 characters at 1.73 chars per token, where the
+forty-two turns before it all sat at 3.4 — resolved to no output cap at all, and
+compacted a transcript that was nowhere near full.
+
+The number now travels by the channel the SDK passes through untouched, and the
+test asserts it through the full streaming path rather than reading it back where
+it was written.
+
+### A compaction says which of its calls it is on
+
+A compaction is up to five sequential model requests — the summary, the
+retrospective, then the council's reviewer for each half of the transcript and
+its synthesiser. From outside it was one spinner. On a local model that is
+minutes: 111s, 21s, 45s and 82s were the first four on the run above, with a
+fifth still going, and nothing on screen could distinguish that from a hang.
+
+The divider now carries the pair and the stage — **Auto compacting context (2/5)
+· retrospective** — rewritten in place on the row that is already there rather
+than stacking one divider per call.
+
+The total is not fixed, because a retried stage is an extra call rather than a
+stage that vanished: the plan grows with it, so a compaction that had to write
+its summary twice reads (3/6) instead of pinning at (4/4) with a step
+unaccounted for.
+
+### A chat row belongs to its message, not to its position
+
+The message list keyed its rows by position, so the row that was showing one
+message showed a different one as soon as anything was inserted above it, a tool
+group grew, or the waiting placeholder was swapped for a real row. React reuses
+that row's component instance, which brings its state along with it.
+
+That is what made 4.100.146's crash possible in the first place — hooks below an
+early return only diverge if a single instance renders both a tool row and a
+command row, and position keying is what arranged the pairing. 4.100.146 fixed
+the crash. This fixes the reuse, and with it the quieter half of the same fault:
+output expansion, the quote button and the auto-expand state carrying across to
+whatever message arrived at that position next.
+
+Rows are now keyed by the message's own timestamp. Two messages sharing one — a
+collision is rare rather than impossible, and a duplicate key is a broken list
+rather than a cosmetic warning — are numbered by the order they appear in, and a
+row with no timestamp falls back to its position in a namespace of its own.
+
+### The chat panel could go down mid-run
+
+A run on 4.100.145 replaced the whole panel with the error boundary — *Cerebriline
+could not draw this view*, **Minified React error #310** — the moment a command
+row arrived behind a tool row. The extension log timestamps it to the
+millisecond: the terminal starts the command at `06:50:54.135`, the render fails
+at `06:50:54.175`.
+
+`ChatRowContent` returns out of the middle of its body for a tool message and
+runs on to the bottom for a command one. Two `useEffect`s belonging to the
+command row sat *below* those returns, so they were called on one render and
+skipped on the next — which is the one thing React does not allow. The message
+list keys its rows by position, so a single row instance renders whatever
+message lands at that position next, and a tool row becoming a command row is an
+ordinary sequence rather than an unusual one.
+
+Both effects now sit above every return. The guard rerenders one row instance
+across the two message shapes in both directions, and against the old order it
+reports both halves of the fault — *Rendered more hooks than during the previous
+render* one way, *Rendered fewer hooks than expected* coming back.
+
+Worth knowing why nothing caught it: the linter's hook rule judges a hook by the
+control flow it sits in, not by whether an earlier return can skip it, and it
+reported nothing at all on the file that took the panel down. A walk over every
+component in the panel finds this hazard in exactly one place, and that place is
+this one.
+
+### Reasoning replay was doing nothing
+
+**Reasoning History** had four settings and no effect. Not "chose badly" — the
+control was inert: `Automatic`, `None`, `Last only` and `Everything` all produced
+byte-identical requests, with no prior thinking on the wire under any of them.
+
+Every layer was innocent under inspection. The transcript kept the thinking. The
+codec mapped thinking blocks onto reasoning parts. The message builder included
+them. The Ollama converter folded them into its `thinking` field. And the setting
+was still in hand where the host builds its provider config.
+
+It was lost on the way to the request, in **four** builders that each name every
+field they copy and spread nothing — `buildGatewayConfig`, the gateway's
+`providerConfigs` entry, and both of the registry's copies. The last of those
+*is* the object the request reads, so the plan resolved from `undefined` every
+time and fell back to the measured capability, which answers "none".
+
+Measured on the wire, per setting, now that it arrives:
+
+| setting | requests replaying | thinking carried |
+|---|---|---|
+| Everything | all | grows 1 → 8 messages, 3,489 → 4,911 chars |
+| Last only | all | exactly one message, every request |
+| None | none | — |
+| Automatic | none | resolves to None from the endpoint's measurement |
+
+This is the third feature lost to that first field list, after
+`condenseDiscardedReasoning` and both halves of the vision model, and the fourth
+lost to the registry's two, after `defaultMaxOutputTokens`. Both registry copies
+already carried a comment saying precisely this would happen. The types never
+caught it: the settings interface declares both fields, so every one of these
+lists compiled clean while dropping them.
+
+### "Default (provider decides)" no longer sets a thinking budget
+
+A request that named no reasoning level was sent `think: "medium"`. On Ollama a
+level is not a synonym for "on" — it **is** a thinking budget, and it outranks
+the budget a model declares for itself. Measured against 0.34.2 with
+`num_predict` 8,000:
+
+| model declares | `think` absent | `think: true` | `think: "medium"` |
+|---|---|---|---|
+| nothing | unbounded | unbounded | **2,000** |
+| `think_budget "high"` | 4,000 | 4,000 | **2,000** |
+
+So the default capped an otherwise unbounded model at 2,000 tokens, and halved a
+budget a model had declared for itself — for everyone who had not picked a level,
+which is exactly what "Default (provider decides)" means.
+
+The reason there is a default at all still holds: an absent config means "never
+asked", not "off", and with `think` absent a reasoning model thinks into its
+visible output instead. That is now answered with a bare `think: true` — the
+plain "on" — rather than with a level.
+
+The same defect had a second home, CLI-only and one layer earlier: a stored
+"on, level left at Default" was turned into `medium` before a request was ever
+built, so the fix above could not see the unlevelled case at all. Both are
+fixed; an explicit level and an explicit off are unchanged.
+
+### A template you wrote outranks one that shipped
+
+Template resolution compared the matched dimension before it looked at where the
+template came from, so a built-in could outscore one you had written yourself.
+
+4.100.116 turned that into a live fault. The six shipped family templates gained
+a `model:` rung so that a cloud-served model with no family of its own would
+still match — and that lifted all six from dimension 2 to dimension 3. Any user
+template matching on `family`, which is how the shipped templates have always
+matched and therefore the form anyone copying them would write, silently stopped
+applying from that release on. Nothing reported it. The session simply ran on the
+shipped prompt.
+
+Resolution is now four keys: whether the template claims this session at all,
+then **source**, then the dimension named, then narrowness within it. A built-in
+is a default; a template in your workspace or global directory is configuration
+you wrote for this machine, and a default must not outrank it however specifically
+it happens to match. `default` is kept out of it by the first key — it names
+nothing, so a user's own `default` does not swallow every session.
+
+### A saved profile keeps the value you just typed
+
+A profile saved from the settings panel could be stored without the sampler the
+session was already running on. Measured: a session running `temp 0.700 /
+repeat_penalty 1.250 / presence_penalty 0.150`, and three profiles saved from
+that same panel the same afternoon carrying no sampling section at all. Pressing
+Update again did not help, which is the tell.
+
+The cause is the 800ms the numeric fields wait before writing. That wait is
+deliberate — a shorter one stored `0.9` as `9` and `65536` as `6553` while the
+user was still typing — but inside it the panel and the stored config disagree,
+and Update was reading the store. Whichever field was touched last was always the
+one dropped, on every press.
+
+Boundaries now end the wait before reading. Update, Save as…, Done, switching
+settings tab and the Plan/Act/Vision panel flush every pending edit and wait for
+the writes to land; a profile load discards them instead, because a debounce
+firing after Revert writes back the value you just discarded.
+
+Picking another profile also asks first now — it replaces every setting on the
+tab and nothing said so. It asks on a value typed in the last 800ms too, which is
+exactly what a dirty check cannot see.
+
+### The report collector finds a renamed install
+
+A report from 4.100.118 arrived with no extension log in it, which is the one
+thing the report exists to carry. The rename broke it in three places at once,
+none of which said anything when it missed: the output-channel file is named
+after the channel, which is now `Cerebriline`; the installed-extension filter
+looked for `cline`, and `cerebriline` does not contain it — the substring is
+`line`; and sessions, hooks and settings were read from the old data directory.
+
+`Collect-CerebrilineReport.ps1` handles all three, takes both log names (one
+machine can hold logs from either side of an upgrade), and says out loud when
+both data directories exist — that split is what produces "it stopped seeing my
+history", and it belongs in the report rather than being guessed at afterwards.
+The old script is kept verbatim as `Collect-ClineReport-PreMigration.ps1` for a
+machine still on the old build.
+
+## [4.100.147] — 2026-09-21
+
+### A chat row belongs to its message, not to its position
+
+The message list keyed its rows by position, so the row that was showing one
+message showed a different one as soon as anything was inserted above it, a tool
+group grew, or the waiting placeholder was swapped for a real row. React reuses
+that row's component instance, which brings its state along with it.
+
+That is what made 4.100.146's crash possible in the first place — hooks below an
+early return only diverge if a single instance renders both a tool row and a
+command row, and position keying is what arranged the pairing. 4.100.146 fixed
+the crash. This fixes the reuse, and with it the quieter half of the same fault:
+output expansion, the quote button and the auto-expand state carrying across to
+whatever message arrived at that position next.
+
+Rows are now keyed by the message's own timestamp. Two messages sharing one — a
+collision is rare rather than impossible, and a duplicate key is a broken list
+rather than a cosmetic warning — are numbered by the order they appear in, and a
+row with no timestamp falls back to its position in a namespace of its own.
+
+### The chat panel could go down mid-run
+
+A run on 4.100.145 replaced the whole panel with the error boundary — *Cerebriline
+could not draw this view*, **Minified React error #310** — the moment a command
+row arrived behind a tool row. The extension log timestamps it to the
+millisecond: the terminal starts the command at `06:50:54.135`, the render fails
+at `06:50:54.175`.
+
+`ChatRowContent` returns out of the middle of its body for a tool message and
+runs on to the bottom for a command one. Two `useEffect`s belonging to the
+command row sat *below* those returns, so they were called on one render and
+skipped on the next — which is the one thing React does not allow. The message
+list keys its rows by position, so a single row instance renders whatever
+message lands at that position next, and a tool row becoming a command row is an
+ordinary sequence rather than an unusual one.
+
+Both effects now sit above every return. The guard rerenders one row instance
+across the two message shapes in both directions, and against the old order it
+reports both halves of the fault — *Rendered more hooks than during the previous
+render* one way, *Rendered fewer hooks than expected* coming back.
+
+Worth knowing why nothing caught it: the linter's hook rule judges a hook by the
+control flow it sits in, not by whether an earlier return can skip it, and it
+reported nothing at all on the file that took the panel down. A walk over every
+component in the panel finds this hazard in exactly one place, and that place is
+this one.
+
+### Reasoning replay was doing nothing
+
+**Reasoning History** had four settings and no effect. Not "chose badly" — the
+control was inert: `Automatic`, `None`, `Last only` and `Everything` all produced
+byte-identical requests, with no prior thinking on the wire under any of them.
+
+Every layer was innocent under inspection. The transcript kept the thinking. The
+codec mapped thinking blocks onto reasoning parts. The message builder included
+them. The Ollama converter folded them into its `thinking` field. And the setting
+was still in hand where the host builds its provider config.
+
+It was lost on the way to the request, in **four** builders that each name every
+field they copy and spread nothing — `buildGatewayConfig`, the gateway's
+`providerConfigs` entry, and both of the registry's copies. The last of those
+*is* the object the request reads, so the plan resolved from `undefined` every
+time and fell back to the measured capability, which answers "none".
+
+Measured on the wire, per setting, now that it arrives:
+
+| setting | requests replaying | thinking carried |
+|---|---|---|
+| Everything | all | grows 1 → 8 messages, 3,489 → 4,911 chars |
+| Last only | all | exactly one message, every request |
+| None | none | — |
+| Automatic | none | resolves to None from the endpoint's measurement |
+
+This is the third feature lost to that first field list, after
+`condenseDiscardedReasoning` and both halves of the vision model, and the fourth
+lost to the registry's two, after `defaultMaxOutputTokens`. Both registry copies
+already carried a comment saying precisely this would happen. The types never
+caught it: the settings interface declares both fields, so every one of these
+lists compiled clean while dropping them.
+
+### "Default (provider decides)" no longer sets a thinking budget
+
+A request that named no reasoning level was sent `think: "medium"`. On Ollama a
+level is not a synonym for "on" — it **is** a thinking budget, and it outranks
+the budget a model declares for itself. Measured against 0.34.2 with
+`num_predict` 8,000:
+
+| model declares | `think` absent | `think: true` | `think: "medium"` |
+|---|---|---|---|
+| nothing | unbounded | unbounded | **2,000** |
+| `think_budget "high"` | 4,000 | 4,000 | **2,000** |
+
+So the default capped an otherwise unbounded model at 2,000 tokens, and halved a
+budget a model had declared for itself — for everyone who had not picked a level,
+which is exactly what "Default (provider decides)" means.
+
+The reason there is a default at all still holds: an absent config means "never
+asked", not "off", and with `think` absent a reasoning model thinks into its
+visible output instead. That is now answered with a bare `think: true` — the
+plain "on" — rather than with a level.
+
+The same defect had a second home, CLI-only and one layer earlier: a stored
+"on, level left at Default" was turned into `medium` before a request was ever
+built, so the fix above could not see the unlevelled case at all. Both are
+fixed; an explicit level and an explicit off are unchanged.
+
+### A template you wrote outranks one that shipped
+
+Template resolution compared the matched dimension before it looked at where the
+template came from, so a built-in could outscore one you had written yourself.
+
+4.100.116 turned that into a live fault. The six shipped family templates gained
+a `model:` rung so that a cloud-served model with no family of its own would
+still match — and that lifted all six from dimension 2 to dimension 3. Any user
+template matching on `family`, which is how the shipped templates have always
+matched and therefore the form anyone copying them would write, silently stopped
+applying from that release on. Nothing reported it. The session simply ran on the
+shipped prompt.
+
+Resolution is now four keys: whether the template claims this session at all,
+then **source**, then the dimension named, then narrowness within it. A built-in
+is a default; a template in your workspace or global directory is configuration
+you wrote for this machine, and a default must not outrank it however specifically
+it happens to match. `default` is kept out of it by the first key — it names
+nothing, so a user's own `default` does not swallow every session.
+
+### A saved profile keeps the value you just typed
+
+A profile saved from the settings panel could be stored without the sampler the
+session was already running on. Measured: a session running `temp 0.700 /
+repeat_penalty 1.250 / presence_penalty 0.150`, and three profiles saved from
+that same panel the same afternoon carrying no sampling section at all. Pressing
+Update again did not help, which is the tell.
+
+The cause is the 800ms the numeric fields wait before writing. That wait is
+deliberate — a shorter one stored `0.9` as `9` and `65536` as `6553` while the
+user was still typing — but inside it the panel and the stored config disagree,
+and Update was reading the store. Whichever field was touched last was always the
+one dropped, on every press.
+
+Boundaries now end the wait before reading. Update, Save as…, Done, switching
+settings tab and the Plan/Act/Vision panel flush every pending edit and wait for
+the writes to land; a profile load discards them instead, because a debounce
+firing after Revert writes back the value you just discarded.
+
+Picking another profile also asks first now — it replaces every setting on the
+tab and nothing said so. It asks on a value typed in the last 800ms too, which is
+exactly what a dirty check cannot see.
+
+### The report collector finds a renamed install
+
+A report from 4.100.118 arrived with no extension log in it, which is the one
+thing the report exists to carry. The rename broke it in three places at once,
+none of which said anything when it missed: the output-channel file is named
+after the channel, which is now `Cerebriline`; the installed-extension filter
+looked for `cline`, and `cerebriline` does not contain it — the substring is
+`line`; and sessions, hooks and settings were read from the old data directory.
+
+`Collect-CerebrilineReport.ps1` handles all three, takes both log names (one
+machine can hold logs from either side of an upgrade), and says out loud when
+both data directories exist — that split is what produces "it stopped seeing my
+history", and it belongs in the report rather than being guessed at afterwards.
+The old script is kept verbatim as `Collect-ClineReport-PreMigration.ps1` for a
+machine still on the old build.
+
+## [4.100.146] — 2026-09-21
+
+### The chat panel could go down mid-run
+
+A run on 4.100.145 replaced the whole panel with the error boundary — *Cerebriline
+could not draw this view*, **Minified React error #310** — the moment a command
+row arrived behind a tool row. The extension log timestamps it to the
+millisecond: the terminal starts the command at `06:50:54.135`, the render fails
+at `06:50:54.175`.
+
+`ChatRowContent` returns out of the middle of its body for a tool message and
+runs on to the bottom for a command one. Two `useEffect`s belonging to the
+command row sat *below* those returns, so they were called on one render and
+skipped on the next — which is the one thing React does not allow. The message
+list keys its rows by position, so a single row instance renders whatever
+message lands at that position next, and a tool row becoming a command row is an
+ordinary sequence rather than an unusual one.
+
+Both effects now sit above every return. The guard rerenders one row instance
+across the two message shapes in both directions, and against the old order it
+reports both halves of the fault — *Rendered more hooks than during the previous
+render* one way, *Rendered fewer hooks than expected* coming back.
+
+Worth knowing why nothing caught it: the linter's hook rule judges a hook by the
+control flow it sits in, not by whether an earlier return can skip it, and it
+reported nothing at all on the file that took the panel down. A walk over every
+component in the panel finds this hazard in exactly one place, and that place is
+this one.
+
+### Reasoning replay was doing nothing
+
+**Reasoning History** had four settings and no effect. Not "chose badly" — the
+control was inert: `Automatic`, `None`, `Last only` and `Everything` all produced
+byte-identical requests, with no prior thinking on the wire under any of them.
+
+Every layer was innocent under inspection. The transcript kept the thinking. The
+codec mapped thinking blocks onto reasoning parts. The message builder included
+them. The Ollama converter folded them into its `thinking` field. And the setting
+was still in hand where the host builds its provider config.
+
+It was lost on the way to the request, in **four** builders that each name every
+field they copy and spread nothing — `buildGatewayConfig`, the gateway's
+`providerConfigs` entry, and both of the registry's copies. The last of those
+*is* the object the request reads, so the plan resolved from `undefined` every
+time and fell back to the measured capability, which answers "none".
+
+Measured on the wire, per setting, now that it arrives:
+
+| setting | requests replaying | thinking carried |
+|---|---|---|
+| Everything | all | grows 1 → 8 messages, 3,489 → 4,911 chars |
+| Last only | all | exactly one message, every request |
+| None | none | — |
+| Automatic | none | resolves to None from the endpoint's measurement |
+
+This is the third feature lost to that first field list, after
+`condenseDiscardedReasoning` and both halves of the vision model, and the fourth
+lost to the registry's two, after `defaultMaxOutputTokens`. Both registry copies
+already carried a comment saying precisely this would happen. The types never
+caught it: the settings interface declares both fields, so every one of these
+lists compiled clean while dropping them.
+
+### "Default (provider decides)" no longer sets a thinking budget
+
+A request that named no reasoning level was sent `think: "medium"`. On Ollama a
+level is not a synonym for "on" — it **is** a thinking budget, and it outranks
+the budget a model declares for itself. Measured against 0.34.2 with
+`num_predict` 8,000:
+
+| model declares | `think` absent | `think: true` | `think: "medium"` |
+|---|---|---|---|
+| nothing | unbounded | unbounded | **2,000** |
+| `think_budget "high"` | 4,000 | 4,000 | **2,000** |
+
+So the default capped an otherwise unbounded model at 2,000 tokens, and halved a
+budget a model had declared for itself — for everyone who had not picked a level,
+which is exactly what "Default (provider decides)" means.
+
+The reason there is a default at all still holds: an absent config means "never
+asked", not "off", and with `think` absent a reasoning model thinks into its
+visible output instead. That is now answered with a bare `think: true` — the
+plain "on" — rather than with a level.
+
+The same defect had a second home, CLI-only and one layer earlier: a stored
+"on, level left at Default" was turned into `medium` before a request was ever
+built, so the fix above could not see the unlevelled case at all. Both are
+fixed; an explicit level and an explicit off are unchanged.
+
+### A template you wrote outranks one that shipped
+
+Template resolution compared the matched dimension before it looked at where the
+template came from, so a built-in could outscore one you had written yourself.
+
+4.100.116 turned that into a live fault. The six shipped family templates gained
+a `model:` rung so that a cloud-served model with no family of its own would
+still match — and that lifted all six from dimension 2 to dimension 3. Any user
+template matching on `family`, which is how the shipped templates have always
+matched and therefore the form anyone copying them would write, silently stopped
+applying from that release on. Nothing reported it. The session simply ran on the
+shipped prompt.
+
+Resolution is now four keys: whether the template claims this session at all,
+then **source**, then the dimension named, then narrowness within it. A built-in
+is a default; a template in your workspace or global directory is configuration
+you wrote for this machine, and a default must not outrank it however specifically
+it happens to match. `default` is kept out of it by the first key — it names
+nothing, so a user's own `default` does not swallow every session.
+
+### A saved profile keeps the value you just typed
+
+A profile saved from the settings panel could be stored without the sampler the
+session was already running on. Measured: a session running `temp 0.700 /
+repeat_penalty 1.250 / presence_penalty 0.150`, and three profiles saved from
+that same panel the same afternoon carrying no sampling section at all. Pressing
+Update again did not help, which is the tell.
+
+The cause is the 800ms the numeric fields wait before writing. That wait is
+deliberate — a shorter one stored `0.9` as `9` and `65536` as `6553` while the
+user was still typing — but inside it the panel and the stored config disagree,
+and Update was reading the store. Whichever field was touched last was always the
+one dropped, on every press.
+
+Boundaries now end the wait before reading. Update, Save as…, Done, switching
+settings tab and the Plan/Act/Vision panel flush every pending edit and wait for
+the writes to land; a profile load discards them instead, because a debounce
+firing after Revert writes back the value you just discarded.
+
+Picking another profile also asks first now — it replaces every setting on the
+tab and nothing said so. It asks on a value typed in the last 800ms too, which is
+exactly what a dirty check cannot see.
+
+### The report collector finds a renamed install
+
+A report from 4.100.118 arrived with no extension log in it, which is the one
+thing the report exists to carry. The rename broke it in three places at once,
+none of which said anything when it missed: the output-channel file is named
+after the channel, which is now `Cerebriline`; the installed-extension filter
+looked for `cline`, and `cerebriline` does not contain it — the substring is
+`line`; and sessions, hooks and settings were read from the old data directory.
+
+`Collect-CerebrilineReport.ps1` handles all three, takes both log names (one
+machine can hold logs from either side of an upgrade), and says out loud when
+both data directories exist — that split is what produces "it stopped seeing my
+history", and it belongs in the report rather than being guessed at afterwards.
+The old script is kept verbatim as `Collect-ClineReport-PreMigration.ps1` for a
+machine still on the old build.
+
+## [4.100.145] — 2026-09-21
+
+### Reasoning replay was doing nothing
+
+**Reasoning History** had four settings and no effect. Not "chose badly" — the
+control was inert: `Automatic`, `None`, `Last only` and `Everything` all produced
+byte-identical requests, with no prior thinking on the wire under any of them.
+
+Every layer was innocent under inspection. The transcript kept the thinking. The
+codec mapped thinking blocks onto reasoning parts. The message builder included
+them. The Ollama converter folded them into its `thinking` field. And the setting
+was still in hand where the host builds its provider config.
+
+It was lost on the way to the request, in **four** builders that each name every
+field they copy and spread nothing — `buildGatewayConfig`, the gateway's
+`providerConfigs` entry, and both of the registry's copies. The last of those
+*is* the object the request reads, so the plan resolved from `undefined` every
+time and fell back to the measured capability, which answers "none".
+
+Measured on the wire, per setting, now that it arrives:
+
+| setting | requests replaying | thinking carried |
+|---|---|---|
+| Everything | all | grows 1 → 8 messages, 3,489 → 4,911 chars |
+| Last only | all | exactly one message, every request |
+| None | none | — |
+| Automatic | none | resolves to None from the endpoint's measurement |
+
+This is the third feature lost to that first field list, after
+`condenseDiscardedReasoning` and both halves of the vision model, and the fourth
+lost to the registry's two, after `defaultMaxOutputTokens`. Both registry copies
+already carried a comment saying precisely this would happen. The types never
+caught it: the settings interface declares both fields, so every one of these
+lists compiled clean while dropping them.
+
+### "Default (provider decides)" no longer sets a thinking budget
+
+A request that named no reasoning level was sent `think: "medium"`. On Ollama a
+level is not a synonym for "on" — it **is** a thinking budget, and it outranks
+the budget a model declares for itself. Measured against 0.34.2 with
+`num_predict` 8,000:
+
+| model declares | `think` absent | `think: true` | `think: "medium"` |
+|---|---|---|---|
+| nothing | unbounded | unbounded | **2,000** |
+| `think_budget "high"` | 4,000 | 4,000 | **2,000** |
+
+So the default capped an otherwise unbounded model at 2,000 tokens, and halved a
+budget a model had declared for itself — for everyone who had not picked a level,
+which is exactly what "Default (provider decides)" means.
+
+The reason there is a default at all still holds: an absent config means "never
+asked", not "off", and with `think` absent a reasoning model thinks into its
+visible output instead. That is now answered with a bare `think: true` — the
+plain "on" — rather than with a level.
+
+The same defect had a second home, CLI-only and one layer earlier: a stored
+"on, level left at Default" was turned into `medium` before a request was ever
+built, so the fix above could not see the unlevelled case at all. Both are
+fixed; an explicit level and an explicit off are unchanged.
+
+### A template you wrote outranks one that shipped
+
+Template resolution compared the matched dimension before it looked at where the
+template came from, so a built-in could outscore one you had written yourself.
+
+4.100.116 turned that into a live fault. The six shipped family templates gained
+a `model:` rung so that a cloud-served model with no family of its own would
+still match — and that lifted all six from dimension 2 to dimension 3. Any user
+template matching on `family`, which is how the shipped templates have always
+matched and therefore the form anyone copying them would write, silently stopped
+applying from that release on. Nothing reported it. The session simply ran on the
+shipped prompt.
+
+Resolution is now four keys: whether the template claims this session at all,
+then **source**, then the dimension named, then narrowness within it. A built-in
+is a default; a template in your workspace or global directory is configuration
+you wrote for this machine, and a default must not outrank it however specifically
+it happens to match. `default` is kept out of it by the first key — it names
+nothing, so a user's own `default` does not swallow every session.
+
+### A saved profile keeps the value you just typed
+
+A profile saved from the settings panel could be stored without the sampler the
+session was already running on. Measured: a session running `temp 0.700 /
+repeat_penalty 1.250 / presence_penalty 0.150`, and three profiles saved from
+that same panel the same afternoon carrying no sampling section at all. Pressing
+Update again did not help, which is the tell.
+
+The cause is the 800ms the numeric fields wait before writing. That wait is
+deliberate — a shorter one stored `0.9` as `9` and `65536` as `6553` while the
+user was still typing — but inside it the panel and the stored config disagree,
+and Update was reading the store. Whichever field was touched last was always the
+one dropped, on every press.
+
+Boundaries now end the wait before reading. Update, Save as…, Done, switching
+settings tab and the Plan/Act/Vision panel flush every pending edit and wait for
+the writes to land; a profile load discards them instead, because a debounce
+firing after Revert writes back the value you just discarded.
+
+Picking another profile also asks first now — it replaces every setting on the
+tab and nothing said so. It asks on a value typed in the last 800ms too, which is
+exactly what a dirty check cannot see.
+
+### The report collector finds a renamed install
+
+A report from 4.100.118 arrived with no extension log in it, which is the one
+thing the report exists to carry. The rename broke it in three places at once,
+none of which said anything when it missed: the output-channel file is named
+after the channel, which is now `Cerebriline`; the installed-extension filter
+looked for `cline`, and `cerebriline` does not contain it — the substring is
+`line`; and sessions, hooks and settings were read from the old data directory.
+
+`Collect-CerebrilineReport.ps1` handles all three, takes both log names (one
+machine can hold logs from either side of an upgrade), and says out loud when
+both data directories exist — that split is what produces "it stopped seeing my
+history", and it belongs in the report rather than being guessed at afterwards.
+The old script is kept verbatim as `Collect-ClineReport-PreMigration.ps1` for a
+machine still on the old build.
+
+## [4.100.144] — 2026-09-20
+
+### A batch of tool calls now runs as a batch
+
+Every prompt template in this fork tells the model the same thing: work out
+every independent read, search and command the next step needs, and send them
+together. *Gathering is parallel; changing is not.*
+
+The runtime then ran them one at a time.
+
+Delegation was the visible half. Several `spawn_agent` calls in one message
+waited for each other, so a model that said it would run three agents in
+parallel ran them in series, and the endpoint never saw a second request. On a
+server configured for four parallel sessions and willing to grow, a full run
+measured `n_busy_slots_per_decode` of **1.00051** — one busy slot, start to
+finish. That reads like a server problem and was not one.
+
+Three faults in a single line. `maxParallelToolCalls` is documented
+`@default 8`, and declared `.default(8)` in a schema **nothing in the codebase
+parses** — so that default had never once been applied. The builder read the
+field as a yes/no and copied only the yes/no, so `2` and `200` were the same
+request and nothing bounded a batch once it *was* parallel. And no host set
+the field at all, so the runtime fell through to sequential.
+
+The count now reaches the runtime, one function decides the width, and a batch
+runs in a pool of that size. Only the tool's own work is concurrent: hooks,
+the command guard, loop and duplicate detection, tool policy and approval
+prompts all still run one at a time, in the order the model asked for, so
+every gate still sees the batch as a sequence. Results are recorded in that
+same order however the work finishes, and parallel edits to one file were
+already safe — each edit holds a lock across its whole read-modify-write.
+
+**If you use sub-agents, check one setting.** Delegation tools are hidden
+entirely when an endpoint resolves to a single parallel session, which is the
+default for a plain local server. Set **Parallel Sessions** to 2 or more in
+the provider's settings, or `spawn_agent` is never offered.
+
+### A list sent as text is read where there is only one reading
+
+`run_commands` refusing a JSON array that arrived as a string was **81% of all
+tool errors** measured across twelve harness runs. The refusal called it
+truncation. Classified against the archived transcripts — 69 of them — that is
+true of 20. The other 49 arrive **closed**, with their bracket: a shell
+command, full of quotes, backslashes and regexes, written into a JSON array
+inside a JSON string and escaped once instead of twice.
+
+The same session sent 251 perfectly good arrays. So the model is not confused
+about the format — it is losing a level of escaping on the awkward ones, and
+being told "send an actual array of strings" is advice it cannot act on,
+because it believes it did. One run made the same mistake 56 times against
+that message.
+
+Two of those classes have exactly one possible reading and are now taken. A
+backslash that opens no valid JSON escape — `\s` in a regex — cannot be
+carrying structure, and neither can a raw newline inside a string; both are
+literal text that arrived under-escaped. And where there is no separator
+anywhere, there is one entry, so there is nothing to split and no way to split
+it wrongly: every quote inside belongs to the command. Measured through the
+shipped code against those same payloads, **36 of 69 now run and 33 are still
+refused.**
+
+The refusals are deliberate. Where two entries both contain bare quotes, where
+one ends and the next begins is a guess, and a guessed shell command is a
+command nobody wrote. A single entry ending on a lone backslash is refused for
+the same reason — that is what a value cut off mid-escape looks like, and it
+is the one signal that separates *quoted badly* from *cut short*.
+
+What is refused now says where. The message carries the position the parse
+stopped at and the text either side of it, because a model that believes it
+sent an array needs the character, not the category.
+
+## [4.100.143] — 2026-09-20
+
+### A manual compaction now reads its own settings
+
+With **Auto Compact** switched off, a compaction you ran yourself ignored almost
+everything the panel said.
+
+The mechanism is one conditional. The host sends a compaction config, and every
+field except `enabled` sat inside `...(useAutoCondense ? { … } : { })`. A manual
+compaction force-enables the pass and spreads that same object for the rest — so
+with Auto Compact off, it read fields that were never sent. Each absence
+defaulted to the opposite of off:
+
+| setting | what absence meant |
+|---|---|
+| Compaction Strategy | a chosen **Basic** silently ran as **Agentic** |
+| Compaction Prompt | **your prompt was never used**; the built-in one was |
+| Full Compaction Prompt | same |
+| Thinking Compaction Prompt | same |
+| Thinking Compaction | read as **on** — an extra model call you had switched off |
+| Compaction Council | read as **on** — three extra model calls you had switched off |
+| Keep Recent Messages | kept, even when turned off |
+
+None of it surfaced. An extra model call and a default prompt both look exactly
+like the compaction working.
+
+`enabled` is the only setting that means *automatic* — it decides whether the
+transcript is compacted on its own. Everything else describes *how* a compaction
+is done, and a manual compaction is a compaction. All of it now travels
+unconditionally.
+
+The panel had the same fault and made it unrecoverable: ten controls were greyed
+out whenever Auto Compact was off, so these were settings you could not reach for
+the only kind of compaction you could still run. They stay live now. Controls
+that gate on something real — a prompt following its own switch — keep that gate;
+only the Auto Compact half is gone. **Auto Compact Strategy** is now
+**Compaction Strategy**, because it never governed only the automatic kind.
+
+This has been fixed narrowly three times, each fix adding a test naming the field
+it moved, which is exactly why the next one was missed. The guard now asserts the
+rule instead: build the config with Auto Compact on and off, and require the two
+to differ in `enabled` and nothing else. A field put back inside a conditional
+fails it, including one that does not exist yet.
+
+### The tool switches are grouped, and the section starts shut
+
+The tool list is long enough to bury the settings under it, so it now opens
+collapsed like Advanced, with the token total and a `(N off)` count staying on
+the header so the state is readable without opening it.
+
+Inside, the switches are grouped — **Read**, **Write**, **Check**, **Other** —
+each with its own subtotal and banding, so the cost of a group is visible where
+you decide about it.
+
+### The output budget has a slider
+
+The automatic output budget is a figure derived from the model's window, and
+overriding it meant typing an absolute token count into the Ceiling box and
+knowing what a good one was.
+
+There is now a slider above that box, in steps of 5% of the automatic figure,
+with a readout of the tokens it resolves to. It writes the same ceiling the box
+does — one value seen two ways — and 100% clears the override rather than
+storing today's number, so the cap keeps tracking the window instead of freezing
+against it.
+
+Two things it refuses to let you do quietly. A **bare token count** in the
+Advanced sampler's think budget is sent flat and does not scale with the cap, so
+the slider will not go below the floor that budget needs and says why. And a
+`num_predict` in the same sampler is read ahead of the budget and wins, so the
+slider says so rather than moving and changing nothing.
+
+A related fix in the same field: it was reading a reasoning property that does
+not exist, so the thinking floor applied whether or not reasoning was switched
+on.
+
+### A citation can name a run of calls
+
+The compaction replay cites its tool calls — `[#7]` — rather than transcribing
+them. Measured on a real run, a model with four identical checks in a row wrote
+`[#2-5]`, which is the sensible thing to write and matched nothing: all four
+fell out of the prose and into the block appended after it.
+
+Ranges now work, spaced or not, with either dash and an optional second `#`. A
+backwards range and one wider than the whole record are refused whole rather than
+guessed at — reordering would assert an order nobody wrote, and expanding
+`[#1-9000]` would bury one bad token under thousands of numbers. The prompt
+offers the range too, since the model reached for it before anything said it
+could.
+
+## [4.100.142] — 2026-09-20
+
+### The replay cites its calls instead of writing them out
+
+The compaction replay is the model's own account of the work it has just done,
+and it was spending most of its budget copying. Transcribing each tool call —
+the command, the arguments, what came back — took **69% of the output**, and the
+account of the *work* was what got truncated to make room, mid-word.
+
+It now cites. Every call is numbered in a record the harness already holds, and
+the replay writes the number where the call belongs:
+
+> "Let me run the checker. `[#3]` It reports a `SyntaxError` at line 90."
+
+The harness splices call 3 in at that point, exactly as it happened. The record
+costs the model nothing to reproduce and is more accurate than anything it could
+write from memory. Measured on a 60-message session: **11,420 characters of
+replay became 4,875**, with the transcription gone and the narrative intact.
+
+A number left out is not lost — it is appended at the end — but it sits away
+from the step it belongs to, so the prompt asks for each call to be cited once,
+in order.
+
+The numbering key the model is shown carries the index, the tool and the input,
+and deliberately **not** the results. The full ledger elides its middle and
+keeps the tail, which would have re-exposed the end of a long tool result that
+the transcript budget had already truncated. A test caught that reaching the
+summarizer.
+
+### A citation could run off the end of the record
+
+Against a 30-entry ledger, one replay cited `[#1]` through `[#33]`.
+
+The splice drops a number that names nothing, so nothing wrong appeared in the
+output — but the *sentence* the invented number was attached to stayed, and it
+described a step that was never taken. A summary that invents work is worse than
+one that omits it, because every turn afterwards treats it as what happened.
+
+The prompt now closes the numbering explicitly: the record is complete, the
+highest number in it is the last call made, and a step reaching for a number
+past the end is a step not yet taken. After the change, the same session cited
+29 numbers against 30 entries, none invented.
+
+### The council was halving the answers it asked for
+
+The Compaction Council splits the replay at a marker the writing model places
+itself, and gives each half to a writer that revises it. A writer is told to
+return its own half and only its own half.
+
+One helper, `splitReplayAtMarker`, was doing two jobs. It never returns "no
+split": with no `<<<HALFWAY>>>` marker it falls back to rebalancing at the
+midpoint. That is correct for the first pass, whose output *is* the whole replay
+and which may simply have forgotten the marker. It was ruinous in the writer
+path, where the same helper decided whether a writer had returned both halves —
+so a writer that obeyed, and returned only its own half, had that half cut in
+two and half of it discarded.
+
+Only a real marker proves both halves are present. The fallback no longer
+applies there.
+
+This is worth naming plainly because it was read as a *model* fault for three
+measurement runs. Retention went 100% (byte-identical), then 45%, then 30%, then
+19% and 6%, and each time the reading was "the small model deletes instead of
+revising". The writer's own reasoning had already enumerated every constraint
+correctly, which was the evidence the prompt was fine. The tell was the shape of
+what came back: the first writer returned only the opening quoted request, the
+second only the closing paragraph. A model does not truncate to clean paragraph
+boundaries at both ends. A splitter does.
+
+### The writers were never told what `[#7]` meant
+
+The citation scheme was explained to the pass that *writes* the replay and to
+nobody else. The writers that revise it saw prose full of unexplained marks, and
+one of them invented a meaning: its reasoning listed, among its own task
+constraints, *"write every step as `Step [number]. Outcome.`"* — and it then
+restructured its half around a step numbering that does not exist.
+
+Both writers now receive the numbering key and the rules that go with it: keep
+every citation exactly where it is, do not renumber them, and cite only a number
+that appears in the record.
+
+Two related corrections to the same request:
+
+- **Revise the draft; do not rebuild it.** The writers were re-deriving their
+  half from the transcript rather than editing the text they were handed, and a
+  rebuild under a length target loses its tail. They are now told plainly that a
+  step which is already right is already done.
+- **The user's own words stay.** The first writer had been deleting the verbatim
+  quotation of what the user asked for — the one place the instruction survives
+  at all once the transcript is gone.
+
+Measured after all of it, on the production path: first writer 129% of its
+draft, second 100%, merged ratio 1.01, 29 of 30 citations placed inline, and the
+user's request intact through all four stages. The second writer's single edit
+was a line number corrected against the transcript, which is exactly the job.
+
+### check_file stops asking for every bracket in one edit
+
+Both the `check_file` description and the delimiter-balance summary told the
+model to fix every line the scan names *"in one edit"*. A small model cannot
+reliably land a multi-line repair in a single call, and being told it must turns
+a mechanical fix into a planning problem — it holds the whole repair in its
+head and spends the turn reasoning about an ordering that does not matter.
+
+The instruction was never the point either. What we wanted was fewer round
+trips: check, fix everything, check again — rather than a check after each line.
+That is a statement about when to re-check, so it now says that instead. The
+advice is unchanged and the pressure is gone.
+
+## [4.100.141] — 2026-09-20
+
+### Nothing ever checked the summary against what it summarised
+
+A compaction summary is written in one pass, by the model that has just spent
+its budget doing the work, and is then never compared to the transcript again —
+because the transcript is gone. From the turn it is written it *is* what
+happened, for every turn after it. A claim that went in wrong has nothing
+downstream to catch it.
+
+Measured on pandorum: summaries reporting a checker run as a success when it had
+returned `ok:false` three times, paraphrasing an instruction they were asked to
+quote, and narrating in the past tense a prompt had asked three times to be
+present.
+
+So the transcript is now split in two — by measured tokens rather than message
+count, and never between a tool call and its result — and each half goes to a
+reviewer along with the whole summary and retrospective. Each reviewer corrects
+what its half contradicts, adds what its half shows missing, and fixes what it
+misquotes. A synthesiser merges the two corrections against the original.
+
+Three properties the shape is chosen for:
+
+- **Each reviewer sees half the evidence and all of the claim.** That is the
+  point — a reviewer holding half a transcript has room to actually read it,
+  where the original pass did not. It is also the danger, and most of the
+  reviewer prompt is spent on it: a reviewer that deletes what the other half
+  supports turns a review into a truncation.
+- **The reviewers are parallel and both correct the original.** Chaining would
+  make the second one review a text the first had already changed, and the
+  corrections would compound rather than converge.
+- **Nothing here can fail a compaction.** A reviewer that throws, that answers
+  with no recognisable section, or whose half will not fit the summarizer's
+  input limit simply declines; a synthesiser that returns no replay leaves the
+  original standing. The worst case is the unreviewed summary that shipped
+  before this existed.
+
+On by default, as **Compaction Council**, sitting with the two passes it
+reviews. Costs three model calls per compaction.
+
+### The ledger counted its arguments instead of naming them
+
+The previous release fixed the tool ledger's result line, which had been
+printing `[1 items]` for the three tools whose answers matter most. The input
+line beside it was left doing exactly the same thing — `commands=[1 items]`,
+`files=[1 items]` — so the ledger named neither the command that ran nor the
+file that was read.
+
+That is the ledger failing at the one job it has. It is placed beside the
+model's own replay to be the measured counterpart to it, and a model that had
+lost track of how to check its work had a record in front of it that never said
+`run_game.js` either.
+
+It also broke the repeat rule, which keys on the rendered input. Every
+single-element call rendered to the same string, so two different commands that
+answered the same collapsed into one entry naming neither.
+
+An argument list now renders its contents: a single element bare, so
+`commands=node run_game.js` reads as the command it is, and longer lists elided
+with a count of what was dropped. An element names itself through the key the
+schemas already accept as its name — `command`, `path`, `query` and their
+aliases — with argv joined onto an executable, because `node` alone is the same
+string for every call a session makes, and a line range carried with a path,
+because that is what separates one read of a file from the next.
+
+### The summary carries what it cannot rebuild
+
+Two things the summary was losing every time it was written.
+
+**The user's own words.** The summary paraphrased them — "the user is asking me
+to fix the collision in `manic_miner.html`" — and from the second compaction the
+original instruction survived only as that paraphrase, a paraphrase of a
+paraphrase by the third. Every typed prompt is now quoted by the harness into
+the summary message, verbatim, and carried across compactions. It never passes
+through the model, so it cannot drift.
+
+**The ledger itself.** It was being rebuilt from scratch at each compaction from
+only the messages that compaction was folding, so everything the previous one
+had recorded was gone. It now merges with what the last summary carried and is
+evicted against a share of the budget when it grows: successful reads and edits
+first, then failed ones, and the verdicts — what a checker said — last, because
+a read can be made again and an edit can be seen in the file, while a checker's
+answer cannot be recovered from anywhere.
+
+The ledger was also switched off in this fork's host by an unrelated setting:
+it was gated on Checkpoints, which owns the revision addresses it quotes but
+not the record itself.
+
+### A retried turn is not a bigger context
+
+A compaction fired at 27k tokens against a window four times that, cutting a
+session that had plenty of room. The trigger was not wrong about the number it
+was given; the number was wrong.
+
+When a provider returns an empty response, the retry middleware sends the turn
+again and folds the discarded attempt's token usage into the one that
+succeeded. That is correct for billing and wrong for everything else: the
+gateway anchors its estimate of the *next* request to the provider's count for
+the last one, so two attempts reported one context of twice the size, three
+attempts one of three times. The output cap computed from that anchor came out
+at 6,099 tokens against a 49,306-token phantom prompt, the compaction trigger
+read a starved output budget as a full context, and compacted.
+
+The middleware now reports the accepted attempt's input separately from the
+billed total, and the trigger refuses an output-starvation verdict that its own
+measurement of the transcript contradicts.
+
+## [4.100.140] — 2026-09-19
+
+### The summarizer could not see half of what the tools returned
+
+A compaction summary told the next context that a game was running. The
+checker it was quoting had returned `ok:false` three times, the last with
+`ReferenceError: collide is not defined`. The summary was not being careless —
+it had never been shown the answer.
+
+`read_files`, `run_commands` and `search_codebase` reply with structured
+objects rather than text blocks, and both readers of that array in compaction
+recognised only text: the transcript serializer rendered them as an empty
+`[Tool result]:` line, and the tool ledger — the harness's own measured record,
+placed beside the summary precisely so the two accounts can be compared —
+printed `[1 items]`. On the session this was found in, 50 of 99 tool results
+came out blank, dropping 414,337 characters: every file read, every read
+refusal, and all three of the checker's verdicts. The summarizer saw a call
+followed by nothing, and wrote what it assumed had happened.
+
+Both now carry what the tools actually returned, with the same length cap text
+results already had.
+
+### A summary that copied its own request back
+
+The same summary was 64% echo. The model wrote its replay, then reproduced the
+prompt's file scaffold, the literal `Conversation:` header and the transcript
+verbatim, and was still copying when the output limit cut it off mid-string.
+
+Nothing caught it. The over-length retry did not fire, because the whole thing
+was still inside its token budget. The backstop written for exactly this was
+never actually called. The file list the harness appends was suppressed by the
+echoed heading. And a reply the provider reported as truncated was stored
+without a word, because that flag was only read when the reply was empty.
+
+The echo is now cut at the harness's own transcript markers — left alone inside
+a fenced block, where a faithful replay of a refused call may legitimately
+quote them — and cut before the reply is judged, so an answer that was only the
+echo is retried. A truncated summary now says so in the log. The retrospective
+gets the same treatment: it sits above the summary, so an echo there is the
+first thing the next turn reads.
+
+### The replay prompt disagreed with itself
+
+Asked for a first-person, present-tense replay, the model returned a
+present-tense opening sentence, a present-tense closing sentence, and a wholly
+past-tense body.
+
+Two reasons, both in the prompt. It carried a two-column "not this / this"
+table, and the summary came back with the left column nearly verbatim — "I
+started by running the diagnostic" against a row reading "I started by reading
+the file". A negative example is still an example: it puts the forbidden
+phrasing in front of the model at the moment it is choosing how to open a
+sentence. And the prompt labelled five of its own sections in the past tense
+while demanding the present two paragraphs above.
+
+Only the column showing what to write is left, the labels are in the tense they
+ask for, and the prompt now says plainly not to report a result it cannot see,
+and to stop when the replay is done.
+
+### Which prompt ran is recorded now
+
+The compaction diagnostics logged the strategy and the mode but not which of
+the three summary instructions was used, so a report that a prompt change had
+not worked could only be checked by reconstructing the prompt from the defaults
+and the stored settings by hand. Every compaction record now names it.
+
+## [4.100.139] — 2026-09-19
+
+### The read limit is a setting, and its default was far too tight
+
+4.100.138 refused a file read past 2,048 characters — about fifty lines of
+ordinary source. A whole small file was refused, and the model answered the way
+the message invited it to, by crawling the file in tiny windows. The threshold
+is now 24,000 characters: roughly 6,000 tokens, about 9% of a 65,536-token
+window. The size worth refusing is the one that costs a real share of the
+window for the rest of the run — a tool result is re-sent on every later
+request — not the one that is larger than a screenful.
+
+The refusal also says how much fits. "Read a smaller range" without a size
+makes the model guess, and it guesses downwards; it now gets a number measured
+from the file in hand, counted off the rendered output rather than the raw
+bytes, because that is what is actually sent.
+
+And it is a switch in the **Tools** section now, per profile, with the
+threshold beside it. A capable model paginates without being made to and the
+refusal only costs it a turn; a smaller one reads whole files and pays for them
+all run. On by default, and turning it off restores the old behaviour, where an
+oversized read comes back truncated.
+
+### The context bar was measuring three things it is not
+
+Reported within minutes of the last build: the conversation shrinking and
+coming back, the whole of it wiped after a compaction, the system-and-tools
+part dropping from 12k to 4-5k while compacting, and the bar moving up and down
+during ordinary tool use. All four were the bar rather than the session, and all
+four are fixed.
+
+**It counted the reply.** The meter summed the completion tokens into the
+window. Measured over 57 turns of one session, the last reply's length ranged
+from 0 to 8,054 tokens — so a thinking turn and the tool call after it differed
+by 12% of the bar with the conversation unchanged. The reply is not in the
+window; it arrives in the next request's prompt and is counted there.
+
+**A compaction shrank the system prompt and the tool schemas, which nothing
+does.** The compaction ratio was applied to the whole total the moment the
+divider completed. Those two are re-sent at full size on the very next request.
+Two compactions compounding pushed the total below the fixed price, at which
+point the conversation read as empty and the coloured parts were squeezed to
+fit. The ratio now applies to the conversation alone.
+
+**The length and the colours came from different requests**, so the coloured
+part appeared and vanished between turns — and a reopened task showed a length
+with no colours at all until its next live request. One request now answers
+both.
+
+**The bar holds still while a compaction is running.** Mid-compaction the
+transcript is being rewritten and the numbers available describe neither the
+state being left nor the one being arrived at.
+
+## [4.100.138] — 2026-09-19
+
+### The context bar says what the tokens are
+
+The bar showed one length and one number, and on a local model most of that bar
+is a price nobody typed. Measured on pandorum against a 65,536-token window:
+21,000 to 24,000 tokens before a single message, of which the system prompt —
+prompt template included, it is rendered into it — is 1,607. The rest is tool
+schemas, and on a host that bridges VS Code's MCP servers most of *those* are
+MCP. Told only a total, someone watching the bar start a third full has no way
+to see that the remedy is a tool switch rather than a shorter conversation.
+
+The bar is now coloured by what the tokens are, in the order they are paid:
+system prompt, the agent's own tool schemas, the MCP servers' schemas, then the
+conversation. Hovering gives a **Before the first message** section naming each
+slice with its token count and how many tools it covers.
+
+MCP schemas cannot be told apart by name — long ones are sanitized and hashed on
+the way to the wire — so the tools carry their origin, and the split is measured
+where the request is assembled and carried forward onto the row the bar reads. A
+task recorded before this build, or a host running an older core, shows the plain
+undivided bar exactly as before.
+
+### Tools can be switched off per profile
+
+A new **Tools** section in the provider settings lists every tool the agent
+builds for itself with what its schema costs, and a running total. It is a deny
+list stored on the profile, so a tool added in a later release arrives switched
+on rather than silently missing from every profile that predates it.
+
+`generate_image`, `skills`, the team tools and MCP tools are deliberately absent:
+each is already governed by another setting, and a second switch for one thing is
+how two settings end up disagreeing.
+
+### A number typed into settings is no longer saved half-finished
+
+Settings fields waited 100ms before saving, which is shorter than the gap between
+two keystrokes. Every prefix of a typed number was therefore written to
+providers.json as a chosen value. From pandorum's own log, while a context window
+was being retyped:
+
+```
+[ProviderConfig] write provider=ollama contextWindow=6553 stored=6553
+```
+
+6553 is 65536 with the last digit not yet typed, and it was live until the next
+key — long enough for anything reading providers.json to start a session on it.
+
+Fields that hold a number now wait longer and save on blur and on Enter, so the
+wait is only ever paid by someone who types a number and then leaves the panel
+alone. Selecting all and retyping is now one write holding the new number, rather
+than a clear followed by five prefixes.
+
+### A profile that says nothing about the context window keeps yours
+
+Switching to a 128k profile and back to a 64k one started the session at 128k
+until the number was deleted and retyped. The resolver picked the *object* rather
+than the field: a profile that stores no context window made the shared
+providers.json entry unreachable, and the session fell through to the built-in
+default. A profile now falls back to the shared entry field by field, and its own
+value still wins wherever it has one.
+
+Related: loading or saving a profile recorded its name for one mode while its
+settings were applied to both, so with Plan and Act sharing a model one of the two
+kept pointing at the profile before it.
+
+### Strong coding nudges are a switch
+
+When a reply calls no tool, the session asks the model to carry on rather than
+ending the task there — coding models often describe an edit instead of making it
+and stop with the file untouched. That is the right reading inside a coding task
+and the wrong one if you mostly ask questions, so it is now a setting, default on.
+With it off, only a reply that promises work, leaves an open transaction, or
+follows a tool call is asked to continue.
+
+### Checkpoints turns the whole machinery off
+
+The switch reads as "save progress at key points for easy rollback", and the file
+history *is* the rollback — but turning it off left `restore_file` on the model
+and revision numbers in the compaction ledger. Reported as "I was expecting the
+machinery to be completely disabled." It now also stops the revision log, the
+tool, and the ledger. The CLI gains the matching `--no-checkpoints`.
+
+### An oversized file read is refused, not truncated
+
+Truncation is the wrong answer for a read: the model reasons about the part it
+was given as though it were the file, and edits against line numbers it never
+saw. The cost is also permanent, because a tool result is re-sent on every later
+request. Past a size limit the read is now refused with what to do instead.
+
+### Compaction
+
+- The replay summary is written in the present tense. A replay in the past tense
+  reads as history, and a model re-telling its own session as history re-reads
+  files it already knows and re-derives conclusions it already has.
+- The summarizer's fallback budget was 1,024 tokens while the replay instruction
+  alone is about 1,030 — so on any summarizer with an unknown window, compaction
+  refused every time and the transcript stayed over the trigger. That escalation
+  had never once run.
+- Before/after token counts on a compaction are measured as a request, so they
+  agree with the context meter instead of with a sum of serialized messages.
+
+## [4.100.135] — 2026-09-18
+
+### The cap in the prompt is the cap on the wire
+
+A session works out how long each reply may be — three quarters of the context
+window, or whatever the Output Budget setting holds — and tells the model, in
+the system prompt, what that number is. Unless an explicit Max Output Tokens was
+set, that number never left the extension.
+
+The request then went out with no cap at all, and the gateway invented one. Its
+rule for inventing one is: if the model publishes an output ceiling, fall back to
+a flat 32,000. For a local model, the ceiling it finds there is the session's own
+budget, written a few lines earlier so compaction could read it — so the session
+handed the gateway its budget and the gateway read it as a reason to ignore it.
+
+Measured on a 110,000-token window with `v9-coder_tb:vis-q4km`: the prompt said
+"capped at 82500 tokens … at most 66000 tokens may be spent thinking", and the
+server logged a thinking budget of 25,600 — four fifths of 32,000. The model was
+told it had 2.6x the room it had. Three turns in a row spent the whole cap
+reasoning and delivered no tool call, the retry ladder halved 32,000 → 16,000 →
+8,000, and the run ended on "Model reached the maximum output token limit before
+completing the turn" with an `editor` call cut off before its `path`.
+
+The session's budget now goes to the gateway as the default it was always meant
+to be. It is a default, not a ceiling: the model's own published cap and the room
+left in the window still clamp it, and an explicitly configured cap still wins.
+
+### A discarded turn stops being invisible
+
+When a turn is cut off at the output cap it is thrown away and taken again, and a
+row says so — live. That row was built from a status notice, and notices are
+events: nothing stores them. Reopen the task and it is rebuilt from the stored
+messages, where the only trace is a reminder addressed to the model, which the
+display layer deliberately does not render.
+
+So a run that generated and discarded three turns before dying showed a
+transcript in which nothing had happened, and the only way to find out was the
+extension log.
+
+The reminder now carries what the row needs — which attempt, how many are left,
+the cap and where it came from, and whether compaction can help — and the row is
+rebuilt from it when the task is reopened. It still never appears as a message
+from the user. The cap's provenance also gained the case it hits most often on a
+local model, which until now rendered as no provenance at all.
+
+## [4.100.134] — 2026-09-18
+
+### Ollama knows what a cloud model is — so now does Cerebriline
+
+The Ollama panel asked three endpoints it had never asked, and each one
+answered a question the client had been guessing at.
+
+**Which models are actually cloud models.** `/api/tags` has carried
+`remote_host` and `remote_model` all along, and that is the only reliable
+discriminator. The two tests one reaches for first are both wrong on a real
+server: `glm-5.3-flash-tpl2:latest` and `igovet/glm-5.2-opencode:latest` are
+cloud models that are not named like one, and `kimi-k2.6:cloud` *does* report a
+family. The `:cloud` suffix survives only as the fallback for a catalog that
+could not be read at all.
+
+**Whether the account can use them.** `POST /api/me` — proxied by the local
+server, which signs it with the host's own SSH key — gives the account name and
+its plan, and answers 401 with the sign-in URL it computed. A `503` means the
+server could not check, which is not a verdict on the account and no longer
+reads as "signed out".
+
+**What each model really offers.** `GET /api/experimental/model-recommendations`
+needs no auth and publishes, per model, the plan it requires, its real context
+length and output cap, and which thinking settings it accepts. A strip under the
+model picker shows all of it, and warns when the selected model needs a plan the
+signed-in account is not on — before the request fails rather than as an
+HTTP 402.
+
+**A cloud model is no longer budgeted as a 32k local one.** A cloud tag's
+`/api/show` carries no `parameters` block, so there is no `num_ctx` to read and
+every one of them fell back to the local default — a 262k model compacting
+against a window eight times too small. The window now comes from the Modelfile
+first and, for a cloud model only, from the published context length and then
+from `model_info`. A local model deliberately keeps the old behaviour: its
+trained window is a ceiling the card may not have the memory for.
+
+There is no cost tracking, and that is not an omission. Ollama publishes no
+per-token price anywhere — when it writes a model config for another agent
+client it hardcodes zero for cloud models too — so any price shown here would be
+one we invented.
+
+### The connection count expands
+
+The task header's "2 connections" is a disclosure now: open it and each
+connection says what it was — provider *and* model, its role, and how much of it
+there was, requests for the task's own turns and agents for a delegated batch.
+The rows add up to the totals on the line above them.
+
+The count was also wrong in the case that matters. A delegated batch running on
+the lead's own endpoint — the ordinary case — was merging into the lead's row,
+because the `subagents` tag the payload already carried was being dropped. Two
+quite different pieces of spending read as one connection.
+
+### A question can carry a recommendation
+
+When the model asks you to choose, it may now mark one option as recommended and
+give the reason in the question itself. Deliberately not a requirement: some
+choices are genuinely a matter of your taste or turn on something only you know,
+and there the honest answer is to recommend nothing. Marking several options
+says nothing, and is read as marking none.
+
+## [4.100.124] — 2026-09-18
+
+### The session that compacted at half a full window
+
+A local session compacted with 43,000 tokens of room still free. The
+auto-compact trigger was correct throughout — it reads the token count the
+provider itself reports — but the request path never looked at that number. It
+kept its own estimate from a character count, read 113,706 for a request that
+really cost 71,651, concluded there was no room left for a reply, and forced
+the compaction anyway. Over one day that estimate ran between 0.73× and 3.30×
+the measured figure on a single conversation.
+
+Both paths now read the same evidence. The estimate is anchored to what the
+last request actually cost, so only the text added since is projected — the
+ratio can be wrong by a factor of two and the answer barely moves.
+
+Two things fed the drift and are fixed with it. The reasoning-density figure
+was never once updated from a real measurement: the function that learns it
+shipped complete and was never called, so a constant stood in for it on every
+request ever made. And because the content ratio is derived by subtracting the
+reasoning estimate from the measured total, that constant dragged the content
+ratio with it — it was seen swinging from 3.0 to 13.1 and back inside a single
+session as the reasoning share rose and a compaction removed it.
+
+### One output budget, instead of two settings that disagreed
+
+The longest reply a model may produce is called `num_predict` by Ollama,
+`n_predict` by llama.cpp and opencoti, and `maxTokens` by the model catalog. It
+had two settings and no owner: a value typed into the advanced sampler was read
+for Ollama alone, so an opencoti or llama.cpp user's cap was enforced by the
+server while the system prompt told the model something else entirely, and
+compaction budgeted against the wrong one.
+
+There is now one **Output budget** control, on every provider:
+
+- **Automatic** asks for three quarters of the context window, up to an
+  absolute ceiling of 512,000 tokens — models that advertise a megatoken window
+  start struggling well before they reach it. The box stays visible so you can
+  lower that ceiling; it can never raise it.
+- **Manual** sends exactly what you type. It is not clamped to the model
+  catalog's own figure, which is routinely wrong for a local model — that is
+  the whole point of typing one.
+
+A profile that has never seen this setting reads as Automatic, and a value
+already in the sampler still wins, so nothing changes under an existing setup
+until you touch it.
+
+### Tool calls that were right, and refused anyway
+
+Measured across 240 plugin sessions and 365 harness runs: a large share of tool
+failures were payloads where the content was correct and only its container was
+wrong.
+
+- **Task checklists were being dropped silently.** The field is documented as
+  text, and a third of the time models send the list as an actual list instead —
+  which was discarded without an error, so the tool reported a perfect success
+  rate while the checklist never reached the UI. Of 1,920 calls carrying a
+  checklist, 641 were thrown away. All of those shapes are now read.
+- **`grep`, `sed` and `awk`** accept a single file or path where they document
+  a list. `expected array, received string` was the whole of `grep`'s format
+  failures and a third of `awk`'s.
+- **`search_codebase`** accepts queries wrapped one-per-object, which is what
+  models reach for when the field is plural. It previously matched nothing and
+  returned an error naming no field at all.
+
+A genuinely truncated list is still refused by name rather than run as literal
+text — that check is what stops a half-arrived argument being searched for.
 
 ## [4.100.118] — 2026-09-15
 
