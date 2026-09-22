@@ -10,12 +10,16 @@ import { type ProviderCatalogController, parseProviderIdRequest } from "./provid
  * so the panel shows the server it is configured against and cannot be pointed
  * somewhere else from the webview.
  *
- * The read touches `/props`, `/polykv/pools` and `/polykv/tps` and nothing
- * else. `/capacity` is deliberately absent: on the published c7 engine every
- * GET of it folds the settle and bias EWMAs the admission projection is built
+ * The read touches `/props`, `/polykv/pools` and `/polykv/tps` always, and
+ * `/capacity` only when the server advertises `capacity_readonly_v1`.
+ *
+ * That condition is the whole of it. On the published c7 engine every GET of
+ * `/capacity` folds the settle and bias EWMAs the admission projection is built
  * from, so a panel that refreshed would corrupt the very measurement it was
- * drawing. `kv_headroom_pct` and the SWA arm live only there, which is why they
- * are not on this response.
+ * drawing -- which is why `kv_headroom_pct` and the SWA arm, which live only
+ * there, were simply absent. The flag says the plain GET is read-only and the
+ * fold has moved behind `?fold=1`. Without it they stay absent rather than
+ * being guessed at.
  */
 export async function readPolykvStatus(
 	controller: ProviderCatalogController,
@@ -38,6 +42,15 @@ export async function readPolykvStatus(
 		shrinks: status.shrinks,
 		poolsMax: status.poolsMax,
 		treeDepth: status.treeDepth,
+		kvHeadroomPct: status.kvHeadroomPct,
+		kvCellsFree: status.kvCellsFree,
+		kvCellsTotal: status.kvCellsTotal,
+		swaActive: status.swaActive,
+		// `null` is the engine declining to state a number it does not have.
+		// proto3 has no null, and `0` here would read as "no room left", so an
+		// unstated figure stays unset.
+		swaCellsFree: status.swaCellsFree ?? undefined,
+		swaCellsTotal: status.swaCellsTotal ?? undefined,
 		pools: status.pools.map((pool) => ({
 			poolId: pool.poolId,
 			parent: pool.parent,
@@ -55,6 +68,8 @@ export async function readPolykvStatus(
 			active: session.active,
 			ctxUsed: session.ctxUsed,
 			ctxTotal: session.ctxTotal,
+			poolId: session.poolId,
+			allocKey: session.allocKey,
 		})),
 	})
 }

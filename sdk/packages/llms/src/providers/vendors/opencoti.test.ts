@@ -289,3 +289,90 @@ describe("what the engine actually says back", () => {
 		expect(facts).toMatchObject({ settleWaivedMs: 5000, sessionsRemaining: 3 });
 	});
 });
+
+/**
+ * Whether the pool attached is the one fact about a pooled turn worth having,
+ * and until `attach_in_response_v1` it was not on the response at all.
+ *
+ * The number that matters is `n_pool_shared`. A pool named on the request and
+ * `0` shared tokens back is the silent degradation this whole vendor exists to
+ * prevent: the turn succeeds, the answer is right, and the prefix was prefilled
+ * from scratch anyway. It is indistinguishable from a working attach from
+ * anywhere else in the client, which is why it is read here.
+ */
+describe("reading the attach off the response", () => {
+	function facts(response: Response, body = '{"messages":[]}') {
+		const seen: OpencotiResponseFacts[] = [];
+		const fetchImpl = createOpencotiFetch({
+			fetch: (async () => response) as unknown as typeof fetch,
+			onFacts: (f) => seen.push(f),
+		});
+		return {
+			seen,
+			run: () =>
+				fetchImpl("http://x/v1/chat/completions", { body, method: "POST" }),
+		};
+	}
+
+	it("takes the pool and the shared count off a plain JSON turn", async () => {
+		const probe = facts(
+			ok({ choices: [], opencoti: { pool_id: 4, n_pool_shared: 12_859 } }),
+		);
+		await probe.run();
+		expect(probe.seen.at(-1)).toMatchObject({
+			poolId: "4",
+			poolSharedTokens: 12_859,
+		});
+	});
+
+	// Pool id `0` is the first pool on a fresh server, and it arrives as a
+	// NUMBER. Left as one it is falsy, and every `if (poolId)` downstream drops
+	// it -- the same trap the control plane's own reader exists to close.
+	it("keeps pool 0, which is falsy as a number", async () => {
+		const probe = facts(
+			ok({ choices: [], opencoti: { pool_id: 0, n_pool_shared: 900 } }),
+		);
+		await probe.run();
+		expect(probe.seen.at(-1)?.poolId).toBe("0");
+	});
+
+	// The degraded attach. Reported, not dropped: zero shared tokens is a fact
+	// about the turn, and an absent field is the server not saying.
+	it("reports a pool that shared nothing rather than staying quiet", async () => {
+		const probe = facts(
+			ok({ choices: [], opencoti: { pool_id: 2, n_pool_shared: 0 } }),
+		);
+		await probe.run();
+		expect(probe.seen.at(-1)?.poolSharedTokens).toBe(0);
+	});
+
+	// Cline streams, so a read that only worked on a buffered response would be
+	// dead on arrival -- the shape the previous header-based path failed in.
+	it("finds it on the last frame of a stream", async () => {
+		const stream = [
+			'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n',
+			'data: {"choices":[],"opencoti":{"pool_id":7,"n_pool_shared":4096}}\n\n',
+			"data: [DONE]\n\n",
+		].join("");
+		const probe = facts(
+			new Response(stream, {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			}),
+		);
+		const response = await probe.run();
+		// The body must still arrive intact: this is a pass-through, not a tap
+		// that consumes what it read.
+		expect(await response.text()).toBe(stream);
+		expect(probe.seen.at(-1)).toMatchObject({
+			poolId: "7",
+			poolSharedTokens: 4096,
+		});
+	});
+
+	it("says nothing about a pool on a server that does not report one", async () => {
+		const probe = facts(ok({ choices: [] }));
+		await probe.run();
+		expect(probe.seen.at(-1)?.poolId).toBeUndefined();
+	});
+});

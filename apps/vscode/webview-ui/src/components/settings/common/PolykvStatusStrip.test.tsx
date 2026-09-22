@@ -98,4 +98,47 @@ describe("the PolyKV status strip", () => {
 
 		expect(await screen.findByText(/could not be reached/i)).toBeInTheDocument()
 	})
+
+	// Present only once the server says the plain GET is read-only. The strip
+	// renders whatever the host sent; the decision not to ask lives one layer
+	// down, and absent here means the question was not asked.
+	it("shows the KV headroom when the server let it be read", async () => {
+		mocks.readPolykvStatus.mockResolvedValue(status({ kvHeadroomPct: 62.5, kvCellsFree: 640000, kvCellsTotal: 1048576 }))
+		render(<PolykvStatusStrip providerId="opencoti" />)
+
+		expect(await screen.findByText(/62.5% KV headroom/)).toBeInTheDocument()
+		expect(screen.getByText(/640,000 of 1,048,576 cells/)).toBeInTheDocument()
+	})
+
+	// The sliding-window ring is a separate account, so it gets a separate
+	// line. Adding it to the base figures, or showing either as the total,
+	// is the misreading the split exists to prevent.
+	it("keeps the sliding-window arm on its own line", async () => {
+		mocks.readPolykvStatus.mockResolvedValue(
+			status({ kvCellsFree: 100, kvCellsTotal: 200, swaActive: true, swaCellsFree: 4096, swaCellsTotal: 8192 }),
+		)
+		render(<PolykvStatusStrip providerId="opencoti" />)
+
+		expect(await screen.findByText(/sliding window/i)).toBeInTheDocument()
+		expect(screen.getByText(/4,096 of 8,192/)).toBeInTheDocument()
+	})
+
+	it("shows nothing about headroom when the server was never asked", async () => {
+		mocks.readPolykvStatus.mockResolvedValue(status())
+		render(<PolykvStatusStrip providerId="opencoti" />)
+
+		await waitFor(() => expect(mocks.readPolykvStatus).toHaveBeenCalledTimes(1))
+		expect(screen.queryByText(/KV headroom/)).not.toBeInTheDocument()
+		expect(screen.queryByText(/sliding window/i)).not.toBeInTheDocument()
+	})
+
+	// A session's pool binding, on the builds that report a real one.
+	it("names the pool a session is bound to when the server reports it", async () => {
+		mocks.readPolykvStatus.mockResolvedValue(
+			status({ sessions: [{ sessionId: "lead", tps: 20, active: true, poolId: "3" }] }),
+		)
+		render(<PolykvStatusStrip providerId="opencoti" />)
+
+		expect(await screen.findByText(/pool #3/)).toBeInTheDocument()
+	})
 })

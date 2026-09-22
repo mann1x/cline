@@ -8,11 +8,13 @@ import { ModelsServiceClient } from "@/services/grpc-client"
  *
  * Every number here comes from `/props`, `/polykv/pools` or `/polykv/tps`,
  * which are served from a published snapshot and are safe to read while the
- * server is busy. `/capacity` is not on that list and must never be added: on
- * the published c7 engine every GET of it folds the settle and bias EWMAs the
- * admission projection is built from, so a strip that refreshed would corrupt
- * the measurement it was drawing. `kv_headroom_pct` and the SWA arm live only
- * there, which is why they are not shown.
+ * server is busy -- and, on a server advertising `capacity_readonly_v1`, from
+ * `/capacity` as well. On the published c7 engine every GET of that folds the
+ * settle and bias EWMAs the admission projection is built from, so a strip that
+ * refreshed would corrupt the measurement it was drawing; the flag is the
+ * server saying the plain GET no longer does. The decision not to ask lives in
+ * the host read, so an absent headroom here means the question was not asked
+ * rather than that the answer was zero.
  *
  * Read once on mount, deliberately. There is nothing here worth a timer, and a
  * panel that polls is the habit that would eventually be pointed at the one
@@ -74,6 +76,27 @@ export const PolykvStatusStrip = ({ providerId }: { providerId: string }) => {
 				</div>
 			)}
 			{status.vramFreeMib !== undefined && <div>{status.vramFreeMib} MiB VRAM free</div>}
+			{status.kvHeadroomPct !== undefined && (
+				<div>
+					{status.kvHeadroomPct.toFixed(1)}% KV headroom
+					{status.kvCellsFree !== undefined && status.kvCellsTotal !== undefined
+						? ` — ${status.kvCellsFree.toLocaleString()} of ${status.kvCellsTotal.toLocaleString()} cells`
+						: ""}
+				</div>
+			)}
+			{/*
+			 * Its own line, never folded into the figures above. On an iSWA model
+			 * the sliding-window ring is a separate account: the base cells are
+			 * not the total, and the two do not add up to one either.
+			 */}
+			{status.swaActive && (
+				<div>
+					sliding window
+					{status.swaCellsFree !== undefined && status.swaCellsTotal !== undefined
+						? ` — ${status.swaCellsFree.toLocaleString()} of ${status.swaCellsTotal.toLocaleString()} cells free`
+						: ""}
+				</div>
+			)}
 			{status.pools.length > 0 && (
 				<div className="flex flex-col gap-[2px]">
 					<div>
@@ -109,6 +132,8 @@ export const PolykvStatusStrip = ({ providerId }: { providerId: string }) => {
 							{session.ctxUsed !== undefined && session.ctxTotal !== undefined
 								? ` · ${session.ctxUsed.toLocaleString()} of ${session.ctxTotal.toLocaleString()} ctx`
 								: ""}
+							{/* Absent on a build that reports `-1` for every pool. */}
+							{session.poolId !== undefined ? ` · pool #${session.poolId}` : ""}
 						</div>
 					))}
 				</div>

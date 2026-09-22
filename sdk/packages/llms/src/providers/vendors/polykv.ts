@@ -172,9 +172,29 @@ export class PolykvSaturatedError extends Error {
 		message: string,
 		readonly retryAfterMs: number | undefined,
 		readonly reason?: string,
+		/**
+		 * The HTTP status line, which is the half that is right on both
+		 * releases. c7 answers a `429` with a body that says
+		 * `503`/`unavailable_error`, so a client that classified on the body
+		 * would call every c7 refusal a failed capacity check.
+		 */
+		readonly status: number = 429,
 	) {
 		super(message);
 		this.name = "PolykvSaturatedError";
+	}
+
+	/**
+	 * `--polykv-adm-on-error deny` refusing because the check itself failed.
+	 *
+	 * Distinct from pacing on purpose. A `429` means the server knows it is
+	 * full and has said when to come back, so waiting works. A `503` means the
+	 * server does not know whether it has room and would rather refuse than
+	 * guess -- nothing about waiting fixes that, and retrying it on a timer
+	 * turns one failed check into a loop.
+	 */
+	get capacityCheckFailed(): boolean {
+		return this.status === 503;
 	}
 }
 
@@ -259,9 +279,22 @@ export interface PolykvClient {
 	pin(poolId: string): Promise<void>;
 	unpin(poolId: string): Promise<void>;
 	releasePool(poolId: string): Promise<void>;
+	/**
+	 * Ask what the gate would say, optionally folding the learner.
+	 *
+	 * `fold` is the c8 half of a c7 hazard. On c7 every GET folds the settle
+	 * and bias EWMAs whether you wanted it to or not, which is why the status
+	 * panel may not poll this endpoint there. `capacity_readonly_v1` makes the
+	 * plain GET read-only and moves the fold behind `?fold=1`, so an admission
+	 * decision asks for it and a panel read does not.
+	 *
+	 * Asking for it on a c7 server is harmless: it folds either way, and the
+	 * unknown query parameter is ignored. `folded` echoing back is how a caller
+	 * learns which of the two it is talking to.
+	 */
 	capacity(
 		poolId: string,
-		query?: { expected_tokens?: number },
+		query?: { expected_tokens?: number; fold?: boolean },
 	): Promise<PolykvCapacity>;
 	tokenize(content: string): Promise<number[]>;
 	/**
@@ -367,6 +400,50 @@ const NOT_OPENCOTI: OpencotiProps = {
 	elastic: false,
 	features: [],
 };
+
+/**
+ * The advertised capabilities this client branches on.
+ *
+ * **These, and never a parsed release.** The published binary stamps no `c<N>`
+ * anywhere in `/props`, and the build that does stamp one carries `-c7-` on the
+ * artifact that ships the c8 behaviours -- so a version gate reads the wrong
+ * answer on both the server it was written for and the one it was written
+ * against. A flag is self-identifying; a version string that is not sent is
+ * not.
+ *
+ * Listed here rather than inlined at each branch so that the set is readable as
+ * a set, and so that a server advertising something we do not consume yet is
+ * visible as a gap rather than as nothing.
+ */
+export const OPENCOTI_FEATURES = {
+	/** `GET /capacity` no longer folds the learner; `?fold=1` asks for it. */
+	capacityReadonly: "capacity_readonly_v1",
+	/** The completion response carries `opencoti {pool_id, n_pool_shared}`. */
+	attachInResponse: "attach_in_response_v1",
+	/** `X-PolyKV-Settle-Waived` tells a timer waiver from a measured admit. */
+	settleWaivedHeader: "settle_waived_header_v1",
+	/** `/polykv/tps` reports the real pool binding, plus a stable `alloc_key`. */
+	tpsRealPoolId: "tps_real_pool_id_v1",
+	/** An elastic slot is a guaranteed allocation booked by `num_ctx`. */
+	guaranteedAlloc: "elastic_guaranteed_alloc_v1",
+	/** `GET /kv`: the pollable allocation snapshot. */
+	kvStatus: "kv_status_v1",
+	/** Pools are sub-pools of their owning session, max 8 per session. */
+	subpools: "polykv_subpools_v1",
+	/** `POST /sessions/{id}/close` releases a window before its TTL. */
+	sessionClose: "session_close_v1",
+} as const;
+
+export type OpencotiFeature =
+	(typeof OPENCOTI_FEATURES)[keyof typeof OPENCOTI_FEATURES];
+
+/** Whether a server advertised a capability. Absent always means "no". */
+export function hasOpencotiFeature(
+	features: readonly string[] | undefined,
+	feature: OpencotiFeature,
+): boolean {
+	return features?.includes(feature) === true;
+}
 
 const OPENCOTI_PROPS = new Map<string, Promise<OpencotiProps>>();
 
@@ -519,6 +596,7 @@ export function createPolykvClient(options: PolykvClientOptions): PolykvClient {
 				`PolyKV refused the request (${response.status})${reason ? `: ${reason}` : ""}`,
 				retryAfterMs(response),
 				reason,
+				response.status,
 			);
 		}
 		if (!response.ok) {
@@ -599,10 +677,17 @@ export function createPolykvClient(options: PolykvClientOptions): PolykvClient {
 			});
 		},
 		capacity: (poolId, query) => {
-			const suffix =
-				query?.expected_tokens !== undefined
-					? `?expected_tokens=${Math.max(0, Math.floor(query.expected_tokens))}`
-					: "";
+			const params = new URLSearchParams();
+			if (query?.expected_tokens !== undefined) {
+				params.set(
+					"expected_tokens",
+					String(Math.max(0, Math.floor(query.expected_tokens))),
+				);
+			}
+			if (query?.fold) {
+				params.set("fold", "1");
+			}
+			const suffix = params.size > 0 ? `?${params}` : "";
 			return call<PolykvCapacity>(
 				`/polykv/pools/${encodeURIComponent(poolId)}/capacity${suffix}`,
 			);
@@ -658,9 +743,25 @@ export interface OpencotiStatusPool {
 	children: number;
 }
 
-/** One live session, keyed the way c7 allows. */
+/** One live session, keyed the way the server allows. */
 export interface OpencotiStatusSession {
 	sessionId: string;
+	/**
+	 * The pool this session is bound to.
+	 *
+	 * Present only under `tps_real_pool_id_v1`. On c7 the field is on the wire
+	 * but reports `-1` for every registry pool -- it is the legacy donor-slot
+	 * key -- so it identifies nothing and grouping by it collapses every
+	 * session into one. Absent is the honest reading there.
+	 */
+	poolId?: string;
+	/**
+	 * The allocation this session holds, stable across a slot move.
+	 *
+	 * Elastic growth can move a session to a different slot, so a slot index is
+	 * not an identity over time and this is.
+	 */
+	allocKey?: string;
 	/**
 	 * The slot's throughput EWMA, absent while it is warming.
 	 *
@@ -677,21 +778,40 @@ export interface OpencotiStatusSession {
 /**
  * Everything the settings panel shows about a live server.
  *
- * Read from `/props`, `/polykv/pools` and `/polykv/tps` -- and from nothing
- * else. **`/capacity` is not on this list and must never be added to it**: on
- * the published c7 engine every GET of it folds the settle and bias EWMAs, so a
- * panel that refreshed would corrupt the admission projection it was drawing.
- * That is why `kv_headroom_pct` and the SWA arm, which live only on that
- * endpoint, are not here. c8 makes the plain GET read-only and moves the fold
- * behind `?fold=1`; they can be added then, not before.
+ * Read from `/props`, `/polykv/pools` and `/polykv/tps`, which are served from
+ * a published snapshot and are safe to read while the server is busy -- and,
+ * **only when the server advertises `capacity_readonly_v1`**, from `/capacity`
+ * as well.
  *
- * The other three are served from a published snapshot and are safe while the
- * server is busy.
+ * That last condition is the whole of it. On the published c7 engine every GET
+ * of `/capacity` folds the settle and bias EWMAs, so a panel that refreshed
+ * would corrupt the admission projection it was drawing; `kv_headroom_pct` and
+ * the SWA arm live only there and were therefore simply absent. The flag says
+ * the plain GET is read-only and the fold has moved behind `?fold=1`, which is
+ * what makes the fourth read safe. Without it we do not ask, and the fields
+ * stay absent rather than being guessed at from somewhere else.
  */
 export interface OpencotiStatus {
 	/** Whether `/props` answered at all. */
 	reachable: boolean;
 	release?: string;
+	/**
+	 * KV headroom, and the SWA arm beside it.
+	 *
+	 * Present only under `capacity_readonly_v1`, because these live on
+	 * `/capacity` and reading that endpoint is what the c7 arm may not do.
+	 *
+	 * `kvCells*` covers the BASE pool only. On an iSWA model the sliding-window
+	 * ring is accounted separately, so total occupancy cannot be computed by
+	 * adding them or by reading either alone.
+	 */
+	kvHeadroomPct?: number;
+	kvCellsFree?: number;
+	kvCellsTotal?: number;
+	swaActive?: boolean;
+	swaCellsFree?: number | null;
+	swaCellsTotal?: number | null;
+	swaWindow?: number | null;
 	poolsEnabled: boolean;
 	elastic: boolean;
 	/**
@@ -785,6 +905,12 @@ export async function readOpencotiStatus(
 	const release = parseRelease(props.build_info);
 	const poolsEnabled = polykv.pools_enabled === true;
 
+	const features = Array.isArray(props.features)
+		? (props.features as unknown[]).filter(
+				(entry): entry is string => typeof entry === "string",
+			)
+		: [];
+
 	const poolsBody = poolsEnabled
 		? await readJson(doFetch, `${root}/polykv/pools`)
 		: undefined;
@@ -823,14 +949,26 @@ export async function readOpencotiStatus(
 	const rawSessions = Array.isArray(tpsBody?.sessions)
 		? (tpsBody.sessions as Array<Record<string, unknown>>)
 		: [];
-	// Keyed by `session_id`, never by `pool_id`: on c7 that field reports `-1`
-	// for every registry-pool session -- it is the legacy donor-slot key -- so
-	// it identifies nothing and grouping by it collapses every session into one.
+	// Keyed by `session_id` always, and by `pool_id` only where the server says
+	// it sets one: on c7 that field reports `-1` for every registry-pool
+	// session -- it is the legacy donor-slot key -- so it identifies nothing and
+	// grouping by it collapses every session into one.
+	const realPoolKey = hasOpencotiFeature(
+		features,
+		OPENCOTI_FEATURES.tpsRealPoolId,
+	);
 	const sessions: OpencotiStatusSession[] = rawSessions.map((session) => {
 		const tps = numberOr(session.tps_ewma);
+		const poolId = numberOr(session.pool_id);
 		return {
 			sessionId:
 				typeof session.session_id === "string" ? session.session_id : "",
+			...(realPoolKey && poolId !== undefined && poolId >= 0
+				? { poolId: String(poolId) }
+				: {}),
+			...(realPoolKey && typeof session.alloc_key === "string"
+				? { allocKey: session.alloc_key }
+				: {}),
 			...(tps !== undefined && tps > 0 ? { tps } : {}),
 			active: session.active === true,
 			...(numberOr(session.ctx_used) !== undefined
@@ -842,11 +980,47 @@ export async function readOpencotiStatus(
 		};
 	});
 
+	// The fourth read, and only once the server has said the plain GET no longer
+	// folds. It needs a pool to address -- `/capacity` is a per-pool route -- so
+	// a server with pools enabled and none created yet reports no headroom
+	// rather than inventing one.
+	const capacity =
+		hasOpencotiFeature(features, OPENCOTI_FEATURES.capacityReadonly) &&
+		pools.length > 0
+			? await readJson(
+					doFetch,
+					`${root}/polykv/pools/${encodeURIComponent(pools[0].poolId)}/capacity`,
+				)
+			: undefined;
+
 	return {
 		reachable: true,
 		...(release ? { release } : {}),
 		poolsEnabled,
 		elastic: elastic.enabled === true,
+		...(numberOr(capacity?.kv_headroom_pct) !== undefined
+			? { kvHeadroomPct: capacity?.kv_headroom_pct as number }
+			: {}),
+		...(numberOr(capacity?.kv_cells_free) !== undefined
+			? { kvCellsFree: capacity?.kv_cells_free as number }
+			: {}),
+		...(numberOr(capacity?.kv_cells_total) !== undefined
+			? { kvCellsTotal: capacity?.kv_cells_total as number }
+			: {}),
+		...(capacity?.swa_active !== undefined
+			? { swaActive: capacity.swa_active === true }
+			: {}),
+		// `null` here is the engine declining to state a number it does not
+		// have, and is carried through as null rather than flattened to zero.
+		...(capacity !== undefined && "swa_cells_free" in capacity
+			? { swaCellsFree: numberOr(capacity.swa_cells_free) ?? null }
+			: {}),
+		...(capacity !== undefined && "swa_cells_total" in capacity
+			? { swaCellsTotal: numberOr(capacity.swa_cells_total) ?? null }
+			: {}),
+		...(capacity !== undefined && "swa_window" in capacity
+			? { swaWindow: numberOr(capacity.swa_window) ?? null }
+			: {}),
 		...(typeof elastic.reason === "string"
 			? { elasticReason: elastic.reason }
 			: {}),

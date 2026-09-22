@@ -80,6 +80,108 @@ export interface OpencotiResponseFacts {
 	 * this one is evidence only that the timer expired.
 	 */
 	settleWaivedMs?: number;
+	/**
+	 * The pool the turn actually ran against, as the server names it.
+	 *
+	 * A string, because pool `0` -- the first pool on a fresh server -- is
+	 * falsy as a number and is dropped by every `if (poolId)` between here and
+	 * wherever it is used.
+	 */
+	poolId?: string;
+	/**
+	 * Tokens the prefix actually shared with the pool.
+	 *
+	 * The number that says whether pooling worked. **`0` with a pool named is a
+	 * silently degraded attach**, not an absence: the turn succeeds, the answer
+	 * is right, and the prefix was prefilled from scratch anyway. Nothing else
+	 * in the client can tell that from a working attach, so it is reported
+	 * rather than treated as nothing to say. `undefined` is the different fact
+	 * that the server did not report one.
+	 */
+	poolSharedTokens?: number;
+}
+
+/**
+ * Pull the attach out of the `opencoti` block a c8 response carries.
+ *
+ * Self-identifying, so it is read unconditionally rather than behind
+ * `attach_in_response_v1`: a server that does not set the block simply has
+ * none, and the flag is only needed to know whether *absence* means "did not
+ * attach" or "does not report".
+ */
+function readAttachFacts(block: unknown): OpencotiResponseFacts {
+	if (!block || typeof block !== "object") {
+		return {};
+	}
+	const source = block as Record<string, unknown>;
+	const poolId =
+		source.pool_id === undefined || source.pool_id === null
+			? undefined
+			: String(source.pool_id);
+	const shared = source.n_pool_shared;
+	return {
+		// `-1` is the engine's "no pool", not pool minus one.
+		...(poolId !== undefined && poolId !== "" && poolId !== "-1"
+			? { poolId }
+			: {}),
+		...(typeof shared === "number" && Number.isFinite(shared)
+			? { poolSharedTokens: shared }
+			: {}),
+	};
+}
+
+/**
+ * Watch an SSE body go past, without standing in its way.
+ *
+ * A pass-through transform rather than a `tee()`: the second branch of a tee
+ * needs its own reader, and a reader nobody drains stalls the branch the caller
+ * is actually reading. Here the scan sits inside the consumer's own pipeline,
+ * so it advances exactly as fast as the consumer does and dies with it on an
+ * abort.
+ *
+ * Cline streams, so this is the path that matters. A read that only worked on a
+ * buffered response would be dead on arrival -- which is precisely how the
+ * header-based observability this replaces failed.
+ */
+function scanEventStream(
+	onBlock: (block: unknown) => void,
+): TransformStream<Uint8Array, Uint8Array> {
+	const decoder = new TextDecoder();
+	let carry = "";
+	const consider = (line: string): void => {
+		// The cheap gate first: most frames are content deltas.
+		if (!line.includes('"opencoti"')) {
+			return;
+		}
+		const payload = line.startsWith("data:")
+			? line.slice("data:".length).trim()
+			: line.trim();
+		if (!payload || payload === "[DONE]") {
+			return;
+		}
+		try {
+			onBlock((JSON.parse(payload) as Record<string, unknown>).opencoti);
+		} catch {
+			// A frame split across chunk boundaries is not a frame yet. It comes
+			// back whole once its newline arrives, so there is nothing to do.
+		}
+	};
+	return new TransformStream({
+		transform(chunk, controller) {
+			controller.enqueue(chunk);
+			carry += decoder.decode(chunk, { stream: true });
+			const lines = carry.split("\n");
+			carry = lines.pop() ?? "";
+			for (const line of lines) {
+				consider(line);
+			}
+		},
+		flush() {
+			if (carry) {
+				consider(carry);
+			}
+		},
+	});
 }
 
 /**
@@ -143,7 +245,11 @@ export function createOpencotiFetch(options: {
 		// published release, the refusal is a `429` carrying a body that says
 		// `503`/`unavailable_error`; the status line is the half that is right on
 		// both releases.
-		if (options.onFacts) {
+		if (!options.onFacts) {
+			return response;
+		}
+		{
+			const onFacts = options.onFacts;
 			const facts: OpencotiResponseFacts = {
 				...(numberOrUndefined(response.headers.get("x-sessions-remaining")) !==
 				undefined
@@ -163,8 +269,46 @@ export function createOpencotiFetch(options: {
 						}
 					: {}),
 			};
-			if (Object.keys(facts).length > 0) {
-				options.onFacts(facts);
+
+			// A stream cannot be read here and handed on intact, so the headers
+			// go out now and the attach follows when the last frame passes. Two
+			// calls on a streamed turn, one on a buffered one: the callback
+			// takes observations as they are learned, not a single summary.
+			const contentType = response.headers.get("content-type") ?? "";
+			if (contentType.includes("text/event-stream") && response.body !== null) {
+				if (Object.keys(facts).length > 0) {
+					onFacts(facts);
+				}
+				return new Response(
+					response.body.pipeThrough(
+						scanEventStream((block) => {
+							const attach = readAttachFacts(block);
+							if (Object.keys(attach).length > 0) {
+								onFacts(attach);
+							}
+						}),
+					),
+					{
+						status: response.status,
+						statusText: response.statusText,
+						headers: response.headers,
+					},
+				);
+			}
+
+			// Buffered: `clone()` so the body the caller gets is still unread.
+			// A response that is not JSON simply has no block, which is the same
+			// answer as a server that does not set one.
+			let attach: OpencotiResponseFacts = {};
+			try {
+				const body = (await response.clone().json()) as Record<string, unknown>;
+				attach = readAttachFacts(body?.opencoti);
+			} catch {
+				attach = {};
+			}
+			const merged = { ...facts, ...attach };
+			if (Object.keys(merged).length > 0) {
+				onFacts(merged);
 			}
 		}
 		return response;

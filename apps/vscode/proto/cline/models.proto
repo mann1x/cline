@@ -158,6 +158,14 @@ message PolykvStatusSession {
   bool active = 3;
   optional int32 ctx_used = 4;
   optional int32 ctx_total = 5;
+  // The pool this session is bound to, present only under
+  // tps_real_pool_id_v1. On c7 the field is on the wire but reports -1 for
+  // every registry pool -- it is the legacy donor-slot key -- so it identifies
+  // nothing and grouping by it collapses every session into one.
+  optional string pool_id = 6;
+  // The allocation, stable across a slot move. Elastic growth can move a
+  // session to a different slot, so a slot index is not an identity over time.
+  optional string alloc_key = 7;
 }
 
 // What the settings panel shows about a live opencoti server.
@@ -182,6 +190,21 @@ message PolykvStatusResponse {
   optional int32 tree_depth = 13;
   repeated PolykvStatusPool pools = 14;
   repeated PolykvStatusSession sessions = 15;
+  // KV headroom and the sliding-window arm beside it.
+  //
+  // Present only when the server advertises capacity_readonly_v1. These live
+  // on /capacity, and reading that endpoint is exactly what a c7 server cannot
+  // take: every GET of it there folds the settle and bias EWMAs the admission
+  // projection is built from. The flag says the plain GET is read-only and the
+  // fold has moved behind ?fold=1, which is what makes them readable at all.
+  optional double kv_headroom_pct = 16;
+  optional int32 kv_cells_free = 17;
+  // The BASE pool only. On an iSWA model the sliding-window ring is accounted
+  // separately, so total occupancy is neither of these and is not their sum.
+  optional int32 kv_cells_total = 18;
+  optional bool swa_active = 19;
+  optional int32 swa_cells_free = 20;
+  optional int32 swa_cells_total = 21;
 }
 
 // List of VS Code LM models

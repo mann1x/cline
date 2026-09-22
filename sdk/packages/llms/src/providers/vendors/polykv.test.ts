@@ -538,3 +538,227 @@ describe("what the engine actually puts on the wire", () => {
 		expect(call?.body).toMatchObject({ add_generation_prompt: false });
 	});
 });
+
+/**
+ * The c8 signal upgrades, each gated on the flag that carries it.
+ *
+ * The rule this file enforces is §4a's: **behaviour branches on `features`,
+ * never on a parsed release.** The published binary stamps no `c<N>` anywhere
+ * in `/props`, and the build that does carry one carries `-c7-` on the artifact
+ * that ships the c8 behaviours -- so a version gate reads the wrong answer on
+ * both. Every test below therefore drives the branch from `features` alone, and
+ * the c7 arm is the one with an empty array.
+ */
+describe("signal upgrades behind their feature flags", () => {
+	beforeEach(resetPolykvAvailability);
+
+	function capacityServer(features: string[]) {
+		const urls: string[] = [];
+		const fetchImpl = (async (input: Parameters<typeof fetch>[0]) => {
+			const url = String(input);
+			urls.push(url);
+			if (url.includes("/props")) {
+				return new Response(
+					JSON.stringify({
+						features,
+						opencoti: {
+							polykv: { pools_enabled: true },
+							elastic_slots: { enabled: true },
+						},
+					}),
+					{ status: 200 },
+				);
+			}
+			if (url.includes("/capacity")) {
+				return new Response(
+					JSON.stringify({
+						can_admit: true,
+						folded: url.includes("fold=1"),
+						kv_headroom_pct: 62.5,
+						kv_cells_free: 640_000,
+						kv_cells_total: 1_048_576,
+						swa_active: true,
+						swa_cells_free: 4096,
+						swa_cells_total: 8192,
+						swa_window: 4096,
+					}),
+					{ status: 200 },
+				);
+			}
+			if (url.includes("/polykv/pools")) {
+				return new Response(
+					JSON.stringify({
+						pools: [{ pool_id: 0, parent: -1, prefix_len: 9, children: [] }],
+					}),
+					{ status: 200 },
+				);
+			}
+			if (url.includes("/polykv/tps")) {
+				return new Response(
+					JSON.stringify({
+						sessions: [
+							{
+								session_id: "lead",
+								pool_id: 3,
+								alloc_key: "alloc-7",
+								tps_ewma: 20,
+								active: true,
+							},
+						],
+					}),
+					{ status: 200 },
+				);
+			}
+			return new Response("{}", { status: 404 });
+		}) as unknown as typeof fetch;
+		return { fetchImpl, urls };
+	}
+
+	// On c7 the fold is what the GET *does*; on c8 it is what `?fold=1` asks
+	// for. Asking for it on a server that does not know the parameter is
+	// harmless -- it folds either way -- but asserting the echo is how a caller
+	// learns which of the two it is talking to.
+	it("asks for the fold explicitly and reads the echo back", async () => {
+		const server = capacityServer(["capacity_readonly_v1"]);
+		const client = createPolykvClient({
+			baseUrl: "http://localhost:8080/v1",
+			fetch: server.fetchImpl,
+		});
+		const capacity = await client.capacity("0", {
+			expected_tokens: 500,
+			fold: true,
+		});
+		expect(server.urls.at(-1)).toContain("fold=1");
+		expect(server.urls.at(-1)).toContain("expected_tokens=500");
+		expect(capacity.folded).toBe(true);
+	});
+
+	it("does not ask for the fold when it is only reading", async () => {
+		const server = capacityServer(["capacity_readonly_v1"]);
+		const client = createPolykvClient({
+			baseUrl: "http://localhost:8080/v1",
+			fetch: server.fetchImpl,
+		});
+		const capacity = await client.capacity("0");
+		expect(server.urls.at(-1)).not.toContain("fold");
+		expect(capacity.folded).toBe(false);
+	});
+
+	// The c7 guarantee, restated as a branch rather than an absolute: the panel
+	// may read /capacity only once the server says the plain GET is read-only.
+	it("leaves /capacity alone on a server that has not said it is read-only", async () => {
+		const server = capacityServer([]);
+		const status = await readOpencotiStatus(
+			"http://localhost:8080/v1",
+			server.fetchImpl,
+		);
+		expect(server.urls.some((url) => url.includes("/capacity"))).toBe(false);
+		expect(status.kvHeadroomPct).toBeUndefined();
+	});
+
+	it("reads the headroom and the SWA arm once the GET is read-only", async () => {
+		const server = capacityServer(["capacity_readonly_v1"]);
+		const status = await readOpencotiStatus(
+			"http://localhost:8080/v1",
+			server.fetchImpl,
+		);
+		const capacityUrl = server.urls.find((url) => url.includes("/capacity"));
+		expect(capacityUrl).toBeDefined();
+		// Read-only means read-only: the panel must not fold on a poll.
+		expect(capacityUrl).not.toContain("fold");
+		expect(status.kvHeadroomPct).toBe(62.5);
+		expect(status.kvCellsFree).toBe(640_000);
+		expect(status.swaActive).toBe(true);
+		expect(status.swaCellsFree).toBe(4096);
+	});
+
+	// c7 reports `-1` as the pool key for every registry pool, so grouping by it
+	// collapses every session into one. c8 reports the real binding, plus an
+	// `alloc_key` that survives the session being moved to another slot by
+	// elastic growth.
+	it("takes the real pool key only when the server says it sets one", async () => {
+		const c7 = capacityServer([]);
+		const before = await readOpencotiStatus(
+			"http://localhost:8080/v1",
+			c7.fetchImpl,
+		);
+		expect(before.sessions[0]?.poolId).toBeUndefined();
+		expect(before.sessions[0]?.allocKey).toBeUndefined();
+
+		resetPolykvAvailability();
+		const c8 = capacityServer(["tps_real_pool_id_v1"]);
+		const after = await readOpencotiStatus(
+			"http://localhost:8081/v1",
+			c8.fetchImpl,
+		);
+		expect(after.sessions[0]?.poolId).toBe("3");
+		expect(after.sessions[0]?.allocKey).toBe("alloc-7");
+	});
+});
+
+/**
+ * A 503 and a 429 are different conditions, and the client used to raise the
+ * same error for both.
+ *
+ * `429` is the admission gate pacing you: the server has told you when to come
+ * back and waiting works. `503` is `--polykv-adm-on-error deny` -- the capacity
+ * check itself failed, so the server does not know whether it has room and is
+ * refusing rather than guessing. Retrying that on a timer is the wrong move;
+ * it needs surfacing, because nothing about waiting fixes it.
+ */
+describe("telling pacing apart from a failed capacity check", () => {
+	function refusingServer(status: number, body: unknown, retryAfter?: string) {
+		return (async () =>
+			new Response(JSON.stringify(body), {
+				status,
+				headers: retryAfter ? { "retry-after": retryAfter } : {},
+			})) as unknown as typeof fetch;
+	}
+
+	it("reads a 429 as pacing, with the server's own delay", async () => {
+		const client = createPolykvClient({
+			baseUrl: "http://localhost:8080/v1",
+			fetch: refusingServer(429, { reason: "kv headroom exhausted" }, "2"),
+		});
+		await expect(client.capacity("0")).rejects.toMatchObject({
+			name: "PolykvSaturatedError",
+			status: 429,
+			retryAfterMs: 2000,
+			capacityCheckFailed: false,
+		});
+	});
+
+	it("reads a 503 as a failed capacity check, not as pacing", async () => {
+		const client = createPolykvClient({
+			baseUrl: "http://localhost:8080/v1",
+			fetch: refusingServer(503, { reason: "capacity check failed" }),
+		});
+		await expect(client.capacity("0")).rejects.toMatchObject({
+			name: "PolykvSaturatedError",
+			status: 503,
+			capacityCheckFailed: true,
+		});
+	});
+
+	// c7's refusal carries a body saying `503`/`unavailable_error` on a `429`
+	// status line. The status is the half that is right on both releases, so a
+	// client that classified on the body would call every c7 refusal a failed
+	// capacity check and stop retrying the one thing retrying fixes.
+	it("classifies c7's lying body by its status line", async () => {
+		const client = createPolykvClient({
+			baseUrl: "http://localhost:8080/v1",
+			fetch: refusingServer(
+				429,
+				{
+					error: { code: 503, type: "unavailable_error" },
+					reason: "saturated",
+				},
+				"1",
+			),
+		});
+		await expect(client.capacity("0")).rejects.toMatchObject({
+			status: 429,
+			capacityCheckFailed: false,
+		});
+	});
+});
