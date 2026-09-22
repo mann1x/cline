@@ -238,9 +238,12 @@ export default function SubagentStatusRow({ message, isLast, lastModifiedMessage
 					// A fan-out that ran one at a time looks identical to one that
 					// ran in parallel until you can see that every agent landed on
 					// the same node.
-					const placementText = [entry.nodeId ? `on ${entry.nodeId}` : "", entry.modelId ?? ""]
-						.filter(Boolean)
-						.join(" · ")
+					// The label the settings panel uses, falling back to the id
+					// for a run recorded before nodes were named. The bare id is
+					// a storage key shown nowhere in the UI, so on its own it
+					// named a machine the reader could not look up.
+					const nodeName = entry.nodeLabel ?? entry.nodeId
+					const placementText = [nodeName ? `on ${nodeName}` : "", entry.modelId ?? ""].filter(Boolean).join(" · ")
 					const latestToolCallText = entry.latestToolCall?.trim() || ""
 					return (
 						<div

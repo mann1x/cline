@@ -48,7 +48,7 @@ import {
 	type RenderedPromptTemplate,
 	resolveOutputBudgetTokens,
 } from "@cline/shared"
-import { PRIMARY_AGENT_NODE_ID, parseAgentNodes } from "@shared/agent-nodes"
+import { agentNodeLabels, PRIMARY_AGENT_NODE_ID, parseAgentNodes } from "@shared/agent-nodes"
 import type { ApiConfiguration } from "@shared/api"
 import { profileProviderSettingsFor } from "@shared/api-config-profiles"
 import { ClineClient } from "@shared/cline"
@@ -1974,8 +1974,15 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		id: string
 		priority: number
 		capacity: number
+		label?: string
 		connection: DelegatedAgentConnectionOverride
 	}> = []
+	// The names the Agents tab shows, from the stored list rather than the
+	// placed one: a node that names no provider is skipped below, and
+	// renumbering around the gap would call Node3 "Node2" on the one screen
+	// where the user is telling them apart. The chat used to print the storage
+	// key instead -- "on node-mucuczcm" -- which names nothing the panel shows.
+	const nodeLabels = agentNodeLabels(storedAgentNodes)
 	if (agentsStatus === "ready" && storedAgentNodes.length > 1) {
 		for (const node of storedAgentNodes) {
 			const snapshot = node.id === PRIMARY_AGENT_NODE_ID ? agentsSnapshot : node.snapshot
@@ -2004,6 +2011,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 				// "node off, never place". Opposite meanings for one number,
 				// so the elastic case is said as what it is -- no ceiling.
 				capacity: slots.limit === 0 ? Number.POSITIVE_INFINITY : slots.limit,
+				...(nodeLabels[node.id] ? { label: nodeLabels[node.id] } : {}),
 				connection,
 			})
 		}

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { AgentNodeRuntimeConfig } from "./agent-node-placement";
 import { createAgentNodePlacement } from "./agent-node-placement";
 import { createDelegatedAgentConfigProvider } from "./delegated-agent";
@@ -205,5 +205,55 @@ describe("placing an agent on a node", () => {
 		);
 		expect(placement.waiting).toBe(1);
 		placed.release();
+	});
+});
+
+/**
+ * Reported from pandorum 2026-09-22, seeing the badge for the first time:
+ * "'on node-mucuczcm' what is this?" ... "I expect to see Node1 or Node2".
+ *
+ * The id is generated when a node is added and appears nowhere in the settings
+ * panel, so a chat row naming a run by it named something the reader could not
+ * look up. The panel's own numbering (`agentNodeLabels`) is what it should say.
+ */
+describe("naming the node a run landed on", () => {
+	function node(id: string, label?: string) {
+		return {
+			id,
+			priority: 1,
+			capacity: 1,
+			...(label ? { label } : {}),
+			connection: {},
+		};
+	}
+
+	it("carries the settings panel's name to the placement", async () => {
+		const placement = createAgentNodePlacement({
+			nodes: [node("primary", "Node1"), node("node-mucuczcm", "Node2")],
+			base: baseProvider("lead"),
+		});
+		const first = await placement?.place();
+		const second = await placement?.place();
+
+		expect([first?.nodeLabel, second?.nodeLabel].sort()).toEqual([
+			"Node1",
+			"Node2",
+		]);
+		// The id is still there: it is what the logs and the placement engine
+		// key on, and the label is a display name over it.
+		expect([first?.nodeId, second?.nodeId].sort()).toEqual([
+			"node-mucuczcm",
+			"primary",
+		]);
+	});
+
+	// A session recorded before nodes were named, and a host that sends no
+	// label, must not print the string "undefined" where a name goes.
+	it("leaves the name off when the host did not send one", async () => {
+		const placement = createAgentNodePlacement({
+			nodes: [node("primary")],
+			base: baseProvider("lead"),
+		});
+		expect((await placement?.place())?.nodeLabel).toBeUndefined();
 	});
 });

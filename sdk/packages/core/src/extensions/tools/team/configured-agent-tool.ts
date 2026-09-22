@@ -501,6 +501,7 @@ export function createConfiguredAgentTools(
 							// session with no nodes there is one place to run
 							// and naming it is noise.
 							...(placed ? { nodeId: placed.nodeId } : {}),
+							...(placed?.nodeLabel ? { nodeLabel: placed.nodeLabel } : {}),
 						};
 						if (options.onSubAgentEnd) {
 							try {

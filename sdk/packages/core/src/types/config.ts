@@ -828,6 +828,8 @@ export interface CoreSessionConfig
 		 * the first and silently took no agents at all.
 		 */
 		capacity: number;
+		/** What the settings panel calls it: `Node1`, `Node2`, `Node3`. */
+		label?: string;
 		connection: DelegatedAgentConnectionOverride;
 	}>;
 	agentSlotLimits?: ReadonlyArray<{

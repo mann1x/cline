@@ -41,6 +41,21 @@ export interface AgentNodeRuntimeConfig {
 	 * and for opencoti the sub-pools inside its one session.
 	 */
 	capacity: number;
+	/**
+	 * What the settings panel calls this node -- `Node1`, `Node2`, `Node3`.
+	 *
+	 * The id is a storage key (`node-mucuczcm`), generated when the node is
+	 * added and shown nowhere in the UI, so a chat row that printed it named
+	 * something the user had no way to look up. Reported exactly that way:
+	 * "on node-mucuczcm" -- what is this? I expect to see Node1 or Node2.
+	 *
+	 * Carried rather than derived here because the numbering belongs to the
+	 * stored list, including the nodes this one skips: a node that names no
+	 * provider is dropped before it reaches the placement engine, and
+	 * renumbering around the gap would call Node3 "Node2" on the one screen
+	 * where the user is trying to tell them apart.
+	 */
+	label?: string;
 	/** The node's own connection, in the shape the Agents tab already stores. */
 	connection: Partial<DelegatedAgentConnectionConfig>;
 }
@@ -48,6 +63,8 @@ export interface AgentNodeRuntimeConfig {
 /** Somewhere to run one agent, held until it is given back. */
 export interface PlacedAgentNode {
 	nodeId: string;
+	/** What the settings panel calls it; see {@link AgentNodeRuntimeConfig.label}. */
+	nodeLabel?: string;
 	configProvider: DelegatedAgentConfigProvider;
 	/**
 	 * Runs `fn` on this node. The lease IS the gate.
@@ -125,10 +142,17 @@ export function createAgentNodePlacement(input: {
 		);
 	}
 
+	const labels = new Map(
+		input.nodes.flatMap((node) =>
+			node.label ? [[node.id, node.label] as const] : [],
+		),
+	);
 	const placed = (lease: PlacementLease): PlacedAgentNode => {
 		const configProvider = providers.get(lease.nodeId) ?? input.base;
+		const label = labels.get(lease.nodeId);
 		return {
 			nodeId: lease.nodeId,
+			...(label ? { nodeLabel: label } : {}),
 			configProvider,
 			// The lease is the gate -- see `PlacedAgentNode.run`.
 			run: async <T>(fn: () => Promise<T>) => await fn(),

@@ -86,6 +86,8 @@ export interface SpawnAgentOutput {
 	 * one place an agent can run and naming it says nothing.
 	 */
 	nodeId?: string;
+	/** What the settings panel calls that node: `Node1`, `Node2`. */
+	nodeLabel?: string;
 }
 
 export interface SubAgentStartContext {
@@ -255,6 +257,7 @@ export function createSpawnAgentTool(
 					// Where it ran. Only when it was placed: on a session with
 					// no nodes there is one place to run and naming it is noise.
 					...(placed ? { nodeId: placed.nodeId } : {}),
+					...(placed?.nodeLabel ? { nodeLabel: placed.nodeLabel } : {}),
 				};
 				if (config.onSubAgentEnd) {
 					try {

@@ -2385,6 +2385,12 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 								if (typeof output.nodeId === "string") {
 									entry.nodeId = output.nodeId
 								}
+								// And what the settings panel calls it. The id is a
+								// storage key the panel never shows, so naming a run
+								// by it told the user nothing they could look up.
+								if (typeof output.nodeLabel === "string") {
+									entry.nodeLabel = output.nodeLabel
+								}
 							}
 							if (event.error) {
 								entry.status = "failed"

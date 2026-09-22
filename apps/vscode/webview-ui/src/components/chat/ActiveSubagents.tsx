@@ -20,6 +20,18 @@ import { subagentIdentity } from "./subagentIdentity"
  */
 
 /** Running or pending -- the ones there is still something to watch. */
+/**
+ * What to call the node an agent ran on.
+ *
+ * The label the settings panel uses (`Node1`, `Node2`), falling back to the
+ * stored id for a run recorded before nodes were named. The id on its own --
+ * `node-mucuczcm` -- is a storage key the panel never shows, so it named a
+ * machine the reader had no way to look up.
+ */
+function nodeNameOf(item: SubagentStatusItem): string | undefined {
+	return item.nodeLabel ?? item.nodeId
+}
+
 function isLive(item: SubagentStatusItem): boolean {
 	return item.status === "running" || item.status === "pending"
 }
@@ -56,7 +68,7 @@ function AgentDetail({ agent, onClose }: { agent: SubagentStatusItem; onClose: (
 	const stats = [
 		`${agent.toolCalls} tool${agent.toolCalls === 1 ? "" : "s"}`,
 		agent.contextTokens ? `${Intl.NumberFormat("en-US").format(agent.contextTokens)} tokens` : "",
-		agent.nodeId ? `on ${agent.nodeId}` : "",
+		nodeNameOf(agent) ? `on ${nodeNameOf(agent)}` : "",
 		agent.modelId ?? "",
 	].filter(Boolean)
 
@@ -148,7 +160,9 @@ export function ActiveSubagents({ messages }: { messages: ClineMessage[] }) {
 									style={identity.style}>
 									{identity.label}
 								</span>
-								{agent.nodeId && <span className="shrink-0 text-[10px] opacity-60">{agent.nodeId}</span>}
+								{nodeNameOf(agent) && (
+									<span className="shrink-0 text-[10px] opacity-60">{nodeNameOf(agent)}</span>
+								)}
 								<span className="min-w-0 flex-1 truncate font-mono text-[10px] opacity-70">{doing}</span>
 								<ChevronDownIcon
 									className={`size-2 shrink-0 opacity-60 transition-transform ${isOpen ? "" : "-rotate-90"}`}

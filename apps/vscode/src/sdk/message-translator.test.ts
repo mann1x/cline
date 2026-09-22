@@ -5382,6 +5382,7 @@ describe("a configured agent is a sub-agent", () => {
 						output: {
 							text: "done",
 							nodeId: "node-mucvow61",
+							nodeLabel: "Node3",
 							model: { id: "ornith-27b_tb:iq4_xs-128k", provider: "ollama" },
 						},
 					} as AgentEvent,
@@ -5392,6 +5393,10 @@ describe("a configured agent is a sub-agent", () => {
 
 		expect(state.getSpawnAgentItems()[0]).toMatchObject({
 			nodeId: "node-mucvow61",
+			// The name the settings panel uses. The id alone is a storage key
+			// shown nowhere in the UI, so the row named a node the reader had
+			// no way to look up -- "on node-mucuczcm", reported as exactly that.
+			nodeLabel: "Node3",
 			providerId: "ollama",
 			status: "completed",
 		})

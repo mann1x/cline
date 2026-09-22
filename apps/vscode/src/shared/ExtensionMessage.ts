@@ -449,6 +449,8 @@ export interface SubagentStatusItem {
 	 * ran one at a time.
 	 */
 	nodeId?: string
+	/** What the settings panel calls that node: `Node1`, `Node2`. */
+	nodeLabel?: string
 	contextTokens: number
 	contextWindow: number
 	contextUsagePercentage: number

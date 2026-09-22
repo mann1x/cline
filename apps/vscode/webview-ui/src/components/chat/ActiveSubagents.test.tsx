@@ -84,7 +84,13 @@ describe("the working-agents strip", () => {
 			<ActiveSubagents
 				messages={[
 					statusMessage([
-						item({ index: 1, agentName: "js-syntactic", latestToolCall: "editor", nodeId: "node-mucvow61" }),
+						item({
+							index: 1,
+							agentName: "js-syntactic",
+							latestToolCall: "editor",
+							nodeId: "node-mucvow61",
+							nodeLabel: "Node3",
+						}),
 						item({ index: 2, agentName: "html-structure-checker", latestToolCall: "read_files" }),
 					]),
 				]}
@@ -93,7 +99,7 @@ describe("the working-agents strip", () => {
 
 		expect(screen.getByText("2 agents working")).toBeInTheDocument()
 		expect(screen.getByText("js-syntactic")).toBeInTheDocument()
-		expect(screen.getByText("node-mucvow61")).toBeInTheDocument()
+		expect(screen.getByText("Node3")).toBeInTheDocument()
 		expect(screen.getByText("editor")).toBeInTheDocument()
 		expect(screen.getByText("read_files")).toBeInTheDocument()
 	})
@@ -101,6 +107,27 @@ describe("the working-agents strip", () => {
 	// A queued agent and a working one are the distinction the strip exists to
 	// make -- the reported run had three agents where only one was ever
 	// running.
+	// Reported the first time the badge was seen: "'on node-mucuczcm' what is
+	// this? ... I expect to see Node1 or Node2". The id is a storage key the
+	// settings panel never shows.
+	it("names the node the way the settings panel does", () => {
+		render(
+			<ActiveSubagents
+				messages={[statusMessage([item({ index: 1, agentName: "js-syntactic", nodeId: "primary", nodeLabel: "Node1" })])]}
+			/>,
+		)
+
+		expect(screen.getByText("Node1")).toBeInTheDocument()
+		expect(screen.queryByText("primary")).not.toBeInTheDocument()
+	})
+
+	// A run recorded before nodes were named still has to say something.
+	it("falls back to the id when the run carries no name", () => {
+		render(<ActiveSubagents messages={[statusMessage([item({ index: 1, agentName: "old", nodeId: "node-mucuczcm" })])]} />)
+
+		expect(screen.getByText("node-mucuczcm")).toBeInTheDocument()
+	})
+
 	it("says an agent is queued rather than pretending it is thinking", () => {
 		render(<ActiveSubagents messages={[statusMessage([item({ index: 1, agentName: "waiting", status: "pending" })])]} />)
 
