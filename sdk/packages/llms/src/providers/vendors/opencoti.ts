@@ -250,8 +250,17 @@ export function createOpencotiFetch(options: {
 		if (extras && init?.body && typeof init.body === "string") {
 			try {
 				const body = JSON.parse(init.body) as Record<string, unknown>;
-				if (extras.poolId !== undefined) {
-					body.pool_id = extras.poolId;
+				// Held as a string on this side -- the first pool is 0, and a
+				// numeric 0 is falsy -- but the engine parses the field as a
+				// number and 400s a string. Anything that is not an integer is
+				// not an id it issued: left off, the turn runs unpooled rather
+				// than failing.
+				const wirePoolId =
+					extras.poolId !== undefined && /^\d+$/.test(extras.poolId)
+						? Number(extras.poolId)
+						: undefined;
+				if (wirePoolId !== undefined) {
+					body.pool_id = wirePoolId;
 				}
 				if (extras.sessionId !== undefined) {
 					body.session_id = extras.sessionId;

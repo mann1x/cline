@@ -29,7 +29,7 @@ describe("the opencoti request body", () => {
 				return ok({ choices: [] });
 			}) as unknown as typeof fetch,
 			request: {
-				poolId: "pool-7",
+				poolId: "7",
 				sessionId: "session-3",
 				sharedPrefixTokens: 12_859,
 				overcommit: true,
@@ -43,11 +43,54 @@ describe("the opencoti request body", () => {
 
 		expect(sent).toMatchObject({
 			model: "m",
-			pool_id: "pool-7",
+			pool_id: 7,
 			session_id: "session-3",
 			shared_prefix_n_tokens: 12_859,
 			overcommit: true,
 		});
+	});
+
+	// Pool ids are held as strings on this side, because the first pool on a
+	// fresh server is 0 and a numeric 0 is falsy. The engine parses the body
+	// field as a number and 400s a string -- measured live on 8240: "Field
+	// 'pool_id': type must be number, but is string", on the very first turn.
+	it("sends the pool id as the number the engine parses, 0 included", async () => {
+		const sent: Array<Record<string, unknown>> = [];
+		for (const poolId of ["0", "12"]) {
+			const fetchImpl = createOpencotiFetch({
+				fetch: (async (_input: unknown, init?: RequestInit) => {
+					sent.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+					return ok({ choices: [] });
+				}) as unknown as typeof fetch,
+				request: { poolId },
+			});
+			await fetchImpl("http://localhost:8080/v1/chat/completions", {
+				method: "POST",
+				body: JSON.stringify({ model: "m", messages: [] }),
+			});
+		}
+
+		expect(sent.map((body) => body.pool_id)).toEqual([0, 12]);
+	});
+
+	// Not an id the engine could have issued. Sending it would fail the turn;
+	// leaving it off costs only the prefix share.
+	it("leaves off a pool id that is not a number", async () => {
+		let sent: Record<string, unknown> | undefined;
+		const fetchImpl = createOpencotiFetch({
+			fetch: (async (_input: unknown, init?: RequestInit) => {
+				sent = JSON.parse(String(init?.body)) as Record<string, unknown>;
+				return ok({ choices: [] });
+			}) as unknown as typeof fetch,
+			request: { poolId: "pool-7", sessionId: "s" },
+		});
+		await fetchImpl("http://localhost:8080/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({ model: "m", messages: [] }),
+		});
+
+		expect(sent).not.toHaveProperty("pool_id");
+		expect(sent?.session_id).toBe("s");
 	});
 
 	// An unpooled request is slower; a mangled one is broken.
