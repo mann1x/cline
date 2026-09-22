@@ -314,6 +314,12 @@ const USER_SETTINGS_FIELDS = {
 	visionModeApiConfiguration: { default: "" as string },
 	/** JSON `ApiConfigurationSnapshot` for delegated agents. */
 	agentsModeApiConfiguration: { default: "" as string },
+	/**
+	 * JSON `AgentNodeRecord[]` (`src/shared/agent-nodes.ts`): every agent node's
+	 * id and priority, and the configuration of each node after the first.
+	 * Node1's configuration stays in `agentsModeApiConfiguration`.
+	 */
+	agentNodes: { default: "" as string },
 	/** JSON `ApiConfigurationSnapshot` for the escalation expert. */
 	escalationModeApiConfiguration: { default: "" as string },
 	// JSON `{baseUrl, model, size}` naming where `generate_image` posts. Not an

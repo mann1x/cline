@@ -23,6 +23,7 @@ export default defineConfig({
 			"src/shared/storage/non-api-handler-secrets.test.ts",
 			"src/shared/api-config-profiles.test.ts",
 			"src/shared/vision-config.test.ts",
+			"src/shared/agent-nodes.test.ts",
 			"src/shared/run-duration.test.ts",
 			"src/shared/proto-conversions/models/**/*.test.ts",
 			"src/shared/proto-conversions/cline-message-duration.test.ts",

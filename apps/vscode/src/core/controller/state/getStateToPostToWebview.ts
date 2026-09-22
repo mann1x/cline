@@ -80,6 +80,7 @@ export async function getStateToPostToWebview(controller: {
 	const visionModeApiConfiguration = stateManager.getGlobalSettingsKey("visionModeApiConfiguration")
 	const agentsModelEnabled = stateManager.getGlobalSettingsKey("agentsModelEnabled")
 	const agentsModeApiConfiguration = stateManager.getGlobalSettingsKey("agentsModeApiConfiguration")
+	const agentNodes = stateManager.getGlobalSettingsKey("agentNodes")
 	const escalationModelEnabled = stateManager.getGlobalSettingsKey("escalationModelEnabled")
 	const escalationModeApiConfiguration = stateManager.getGlobalSettingsKey("escalationModeApiConfiguration")
 	const imageGenEnabled = stateManager.getGlobalSettingsKey("imageGenEnabled")
@@ -203,6 +204,7 @@ export async function getStateToPostToWebview(controller: {
 		visionModeApiConfiguration,
 		agentsModelEnabled,
 		agentsModeApiConfiguration,
+		agentNodes,
 		escalationModelEnabled,
 		escalationModeApiConfiguration,
 		imageGenEnabled,

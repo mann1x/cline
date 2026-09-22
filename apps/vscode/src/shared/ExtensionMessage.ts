@@ -94,6 +94,8 @@ export interface ExtensionState {
 	agentsModelEnabled: boolean
 	/** JSON `ApiConfigurationSnapshot` for delegated agents. */
 	agentsModeApiConfiguration: string
+	/** JSON `AgentNodeRecord[]`; see `src/shared/agent-nodes.ts`. */
+	agentNodes: string
 	/** Hand a stuck task to a second, costlier model. */
 	escalationModelEnabled: boolean
 	/** The escalation path's budgets and switches. */

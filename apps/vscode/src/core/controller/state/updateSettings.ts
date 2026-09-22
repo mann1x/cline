@@ -90,6 +90,9 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		if (request.agentsModeApiConfiguration !== undefined) {
 			controller.stateManager.setGlobalState("agentsModeApiConfiguration", request.agentsModeApiConfiguration)
 		}
+		if (request.agentNodes !== undefined) {
+			controller.stateManager.setGlobalState("agentNodes", request.agentNodes)
+		}
 		// The expert, and where it runs. Same arrangement again, for the model a
 		// stuck session hands the task to rather than the one driving it.
 		if (request.escalationModelEnabled !== undefined) {
