@@ -12,11 +12,16 @@ describe("normalizeParallelSessions", () => {
 		expect(normalizeParallelSessions(4.7)).toBe(4);
 	});
 
-	// Ten is where the number stops describing a server. Clamping rather than
-	// rejecting, because a stored 500 is a typo and not a request to serialize.
-	it("clamps to what a server could honour", () => {
-		expect(normalizeParallelSessions(500)).toBe(10);
+	// The bound catches a slipped digit and nothing else. It was 10, which was
+	// a claim about local llama.cpp servers and wrong for a hosted plan and for
+	// an elastic opencoti alike -- and binding in practice, on a profile that
+	// sat at exactly 10. The endpoint does the real refusing.
+	it("clamps a typo without capping a plausible number", () => {
+		expect(normalizeParallelSessions(5000)).toBe(64);
 		expect(normalizeParallelSessions(1)).toBe(1);
+		// Above the old cap and entirely ordinary for a hosted provider.
+		expect(normalizeParallelSessions(16)).toBe(16);
+		expect(normalizeParallelSessions(32)).toBe(32);
 	});
 
 	// `undefined` rather than the default, so a caller can tell "never

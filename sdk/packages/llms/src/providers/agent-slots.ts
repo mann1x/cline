@@ -23,11 +23,26 @@ import { probeOpencotiProps } from "./vendors/polykv";
 export const MIN_PARALLEL_SESSIONS = 1;
 
 /**
- * Above this the number stops describing a server and starts describing a
- * wish. Ten concurrent agents on one endpoint is already past where any local
- * server holds its per-session throughput.
+ * A guard against a typo, not a statement about what a server can do.
+ *
+ * This was 10, chosen on 2026-08-10 on the reasoning that "ten concurrent
+ * agents on one endpoint is already past where any local server holds its
+ * per-session throughput". That was a claim about local llama.cpp servers, and
+ * it stopped being the whole picture twice over:
+ *
+ * - A **hosted** provider's concurrency is whatever the plan allows, which is
+ *   routinely more than ten and is not ours to cap.
+ * - An **elastic** opencoti grows `slots_live` past `--parallel` on demand, so
+ *   there is no fixed local count to be past in the first place.
+ *
+ * And it was binding in practice: a tester's profile sat at exactly 10, which
+ * is what a cap looks like when it is the thing choosing the number.
+ *
+ * So the bound is now only wide enough to catch a slipped digit. The real
+ * refusal belongs to the endpoint, which knows its own admission; ours is a
+ * ceiling the user opted into, and leaving the field empty asks for none.
  */
-export const MAX_PARALLEL_SESSIONS = 10;
+export const MAX_PARALLEL_SESSIONS = 64;
 
 /** What a profile that has never been told otherwise is worth. */
 export const DEFAULT_PARALLEL_SESSIONS = 1;

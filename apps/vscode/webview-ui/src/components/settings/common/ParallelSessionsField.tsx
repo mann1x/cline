@@ -14,7 +14,7 @@ import { DebouncedTextField } from "./DebouncedTextField"
  * says what the field *shows* and never decides what it stores.
  */
 const MIN_PARALLEL_SESSIONS = 1
-const MAX_PARALLEL_SESSIONS = 10
+const MAX_PARALLEL_SESSIONS = 64
 
 function parseTyped(value: string | number | undefined): number | undefined {
 	const parsed = typeof value === "string" ? Number.parseInt(value, 10) : value
@@ -81,11 +81,54 @@ export const ParallelSessionsField = ({ providerId, engine }: { providerId: stri
 	)
 }
 
-export const PARALLEL_SESSIONS_DESCRIPTION =
-	`How many requests this endpoint serves at once — ${MIN_PARALLEL_SESSIONS} to ${MAX_PARALLEL_SESSIONS}. ` +
-	"Ollama's OLLAMA_NUM_PARALLEL, or --parallel for llama.cpp and opencoti; for a hosted provider, what your plan allows. " +
-	"It bounds how many subagents run at once: a server with no free slot queues the request instead of refusing it, so " +
-	"spawning more agents than there are slots makes a run slower, not faster."
+/**
+ * What sets the number, for the provider being configured.
+ *
+ * One sentence per family rather than one sentence naming all of them. The
+ * shared text used to open with `OLLAMA_NUM_PARALLEL` for every provider,
+ * which reads as instructions for the wrong server on three quarters of the
+ * panels it appears on.
+ *
+ * `openai` is the OpenAI-Compatible form, and it genuinely covers both a local
+ * llama.cpp and a hosted endpoint — the id cannot tell them apart, so the copy
+ * names both rather than guessing.
+ */
+function whatSetsIt(providerId: string): string {
+	switch (providerId) {
+		case "ollama":
+			return "Ollama serves this many at once: its OLLAMA_NUM_PARALLEL, set where the server is launched."
+		case "opencoti":
+			return "opencoti serves this many at once: its --parallel, set where the server is launched."
+		case "openai":
+			return "A local llama.cpp server serves this many at once — its --parallel. Pointed at a hosted endpoint instead, it is whatever your plan allows concurrently."
+		default:
+			return "For a hosted provider this is what your plan allows concurrently."
+	}
+}
+
+/**
+ * What the field does, which is the same everywhere.
+ *
+ * The range deliberately says "up to" rather than "1 to 64": the old copy said
+ * "1 to 10" beside a field whose whole point on an elastic server is that you
+ * may leave it empty, and a stated minimum of 1 reads as "empty is 1". What
+ * empty means is said per case below, because the two answers are opposite.
+ */
+const PARALLEL_SESSIONS_EFFECT =
+	`Up to ${MAX_PARALLEL_SESSIONS}. It bounds how many subagents run at once: a server with no free slot queues the ` +
+	"request instead of refusing it, so spawning more agents than there are slots makes a run slower, not faster."
+
+/**
+ * What a blank field means where nothing else decides.
+ *
+ * Phrased as a consequence, never as advice. On a server with a fixed
+ * `--parallel` count, telling someone to leave it empty is how a profile ends
+ * up running one agent at a time on a server that could have run four — so
+ * this says what empty *is*, which is the thing that was missing: the old copy
+ * said "1 to 10" and left a reader to conclude that blank was somehow outside
+ * the range, or was the 1.
+ */
+const PARALLEL_SESSIONS_EMPTY_IS_ONE = "An empty field is read as one request at a time."
 
 /**
  * What an opencoti server says about how it decides concurrency.
@@ -123,18 +166,19 @@ const PARALLEL_SESSIONS_CEILING =
  * that is true whatever the answer.
  */
 export function parallelSessionsDescription(providerId: string, engine?: OpencotiEngineMode): string {
+	const base = `${whatSetsIt(providerId)} ${PARALLEL_SESSIONS_EFFECT}`
 	if (providerId !== "opencoti") {
-		return PARALLEL_SESSIONS_DESCRIPTION
+		return `${base} ${PARALLEL_SESSIONS_EMPTY_IS_ONE}`
 	}
 	switch (engine) {
 		case "polykv":
-			return `${PARALLEL_SESSIONS_DESCRIPTION} PolyKV admission is on here, so the server decides for itself how many it will take — there is no fixed count to state. ${PARALLEL_SESSIONS_CEILING}`
+			return `${base} PolyKV admission is on here, so the server decides for itself how many it will take — there is no fixed count to state. ${PARALLEL_SESSIONS_CEILING}`
 		case "elastic":
-			return `${PARALLEL_SESSIONS_DESCRIPTION} Elastic slots are on here, so the server grows its slot count as load arrives — there is no fixed count to state. ${PARALLEL_SESSIONS_CEILING}`
+			return `${base} Elastic slots are on here, so the server grows its slot count as load arrives — there is no fixed count to state. ${PARALLEL_SESSIONS_CEILING}`
 		case "fixed":
-			return `${PARALLEL_SESSIONS_DESCRIPTION} This server has neither PolyKV nor elastic slots on, so its count is fixed by --parallel and this field should match it.`
+			return `${base} This server has neither PolyKV nor elastic slots on, so its count is fixed by --parallel and this field should match it. ${PARALLEL_SESSIONS_EMPTY_IS_ONE}`
 		default:
-			return `${PARALLEL_SESSIONS_DESCRIPTION} The server could not be asked whether it decides this itself. If it has PolyKV or elastic slots on, it does, and ${PARALLEL_SESSIONS_CEILING.charAt(0).toLowerCase()}${PARALLEL_SESSIONS_CEILING.slice(1)}`
+			return `${base} The server could not be asked whether it decides this itself. If it has PolyKV or elastic slots on, it does, and ${PARALLEL_SESSIONS_CEILING.charAt(0).toLowerCase()}${PARALLEL_SESSIONS_CEILING.slice(1)}`
 	}
 }
 
