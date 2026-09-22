@@ -2,6 +2,7 @@ import {
 	getPolykvSession,
 	resetPolykvAvailability,
 	resetPolykvSessions,
+	setPolykvSession,
 } from "@cline/llms";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -205,6 +206,64 @@ describe("the shared prefix", () => {
 		// contiguous-prefix check then 400s the fork.
 		expect(endAtTokenBoundary("system block ")).toBe("system block\n");
 		expect(endAtTokenBoundary("already ended\n")).toBe("already ended\n");
+	});
+});
+
+/**
+ * A pool with no owner is charged to nobody -- and a worker attaching to it
+ * still books a guaranteed window of its own.
+ *
+ * Measured live on 8240 (2026-09-22): a 12-worker swarm against a lead with a
+ * 65,536-token window produced THIRTEEN allocations of 65,536, 82% of the
+ * server's million cells, because every pool this client creates was unowned.
+ * The engine prices a request that attaches to a pool owned by a session as a
+ * worker OF that session: it books nothing server-wide and is priced against
+ * the owner's free window, which is the whole of the sub-pool arrangement.
+ */
+describe("who owns the pools", () => {
+	it("names the session as the owner of its root pool", async () => {
+		const server = engine();
+		await ensurePolykvPool({
+			sessionId: "s1",
+			providerConfig: provider(server.fetch),
+			systemPrompt: "You are Cline.",
+			tools: [],
+		});
+
+		expect(
+			server.calls.find((call) => call.path === "/polykv/pools")?.body,
+		).toMatchObject({
+			session_id: "s1",
+		});
+	});
+
+	it("names it on the fork a compaction re-roots onto", async () => {
+		const server = engine();
+		setPolykvSession("s1", { poolId: "pool-root", prefixTokens: 12_859 });
+		await repointPolykvAfterCompaction({
+			sessionId: "s1",
+			providerConfig: provider(server.fetch),
+			compactedPrompt: "a summary of the conversation so far",
+		});
+
+		const fork = server.calls.find((call) => call.path.endsWith("/fork"));
+		expect(fork?.body).toMatchObject({ session_id: "s1" });
+	});
+
+	it("names it on the swarm snapshot, which from_session would otherwise imply", async () => {
+		const server = engine();
+		setPolykvSession("s1", { poolId: "pool-root", prefixTokens: 12_859 });
+		await snapshotPolykvSession({
+			sessionId: "s1",
+			providerConfig: provider(server.fetch),
+		});
+
+		expect(
+			server.calls.find((call) => call.path === "/polykv/pools")?.body,
+		).toMatchObject({
+			from_session: "s1",
+			session_id: "s1",
+		});
 	});
 });
 

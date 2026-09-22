@@ -249,7 +249,15 @@ export async function ensurePolykvPool(options: {
 		if (templated.trim() === "") {
 			return undefined;
 		}
-		const pool = await client.createPool({ prompt: templated, pin: true });
+		// Owned by this session, which is what makes a worker attaching to it
+		// free: the engine prices such a request against the owner's window
+		// instead of booking a guaranteed one for it. A pool built from a
+		// prompt has no owner unless it is named here.
+		const pool = await client.createPool({
+			prompt: templated,
+			pin: true,
+			session_id: options.sessionId,
+		});
 		setPolykvSession(options.sessionId, {
 			poolId: pool.pool_id,
 			prefixTokens: pool.prefix_len,
@@ -424,6 +432,7 @@ export async function repointPolykvAfterCompaction(options: {
 		const forked = await client.forkPool(previous, {
 			branch_pos: state.prefixTokens,
 			from_session: options.sessionId,
+			session_id: options.sessionId,
 		});
 		await client.pin(forked.pool_id);
 		setPolykvSession(options.sessionId, {
@@ -585,6 +594,10 @@ export async function snapshotPolykvSession(options: {
 	try {
 		const pool = await client.createPool({
 			from_session: options.sessionId,
+			// Implied by `from_session` on the server, and stated anyway: the
+			// workers are charged to the lead's window only while the pool they
+			// share is owned by the lead.
+			session_id: options.sessionId,
 			ephemeral: true,
 		});
 		options.logger?.debug?.(

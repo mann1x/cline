@@ -257,6 +257,25 @@ function retryAfterMs(response: Response): number | undefined {
  * `from_session` removes the question entirely by never putting tokens on the
  * wire.
  */
+export interface PolykvPoolOwner {
+	/**
+	 * The session whose window this pool lives in.
+	 *
+	 * **What makes a worker free.** A request that attaches to a pool owned by
+	 * a session is priced as a worker OF that session: it books nothing
+	 * server-wide and is charged against the owner's free window. An unowned
+	 * pool is charged to nobody, and every worker attaching to it books a
+	 * guaranteed window of its own -- measured live on 8240, a 12-worker swarm
+	 * under a 65,536-token lead took THIRTEEN allocations of 65,536, 82% of the
+	 * server's cells, for a round that should have cost one.
+	 *
+	 * The server defaults it to `from_session`, or to the parent's owner on a
+	 * fork; it is sent explicitly because the pools that matter most here --
+	 * the root pool, built from a templated prompt -- have neither.
+	 */
+	session_id?: string;
+}
+
 export interface PolykvPrefixSource {
 	/** Pre-tokenized ids. The caller owns the tokenization. Prefer the others. */
 	tokens?: number[];
@@ -279,12 +298,13 @@ export interface PolykvClient {
 	 * has to outlive an idle gap.
 	 */
 	createPool(
-		body: PolykvPrefixSource & {
-			pin?: boolean;
-			ephemeral?: boolean;
-			/** Declared expected prefix length, validated server-side. */
-			expect_len?: number;
-		},
+		body: PolykvPrefixSource &
+			PolykvPoolOwner & {
+				pin?: boolean;
+				ephemeral?: boolean;
+				/** Declared expected prefix length, validated server-side. */
+				expect_len?: number;
+			},
 	): Promise<PolykvPool>;
 	/**
 	 * Branch a pool at `branch_pos`.
@@ -300,11 +320,12 @@ export interface PolykvClient {
 	 */
 	forkPool(
 		poolId: string,
-		body: PolykvPrefixSource & {
-			branch_pos?: number;
-			pin?: boolean;
-			ephemeral?: boolean;
-		},
+		body: PolykvPrefixSource &
+			PolykvPoolOwner & {
+				branch_pos?: number;
+				pin?: boolean;
+				ephemeral?: boolean;
+			},
 	): Promise<PolykvPool>;
 	/**
 	 * Give a session's guaranteed window back, before its idle TTL does.
