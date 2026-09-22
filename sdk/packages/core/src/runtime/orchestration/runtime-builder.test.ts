@@ -882,11 +882,18 @@ process.stdin.on("data", (chunk) => {
 				],
 			});
 
-			const mcpTool = runtime.tools.find(
-				(tool) => tool.description === "Portable echo",
+			// Matched on a substring, not on equality: an MCP tool's description
+			// is the server's own text plus a clause naming the server, which is
+			// the only place the model is told which server a tool belongs to.
+			const mcpTool = runtime.tools.find((tool) =>
+				tool.description?.includes("Portable echo"),
 			);
 			expect(existsSync(join(tempRoot, "plugin-data"))).toBe(true);
 			expect(mcpTool).toBeDefined();
+			// Plugin-qualified, which is the name the hub registered it under.
+			expect(mcpTool?.description).toContain(
+				'From the "portable.tools" MCP server.',
+			);
 			const extensionTools = await collectExtensionTools(runtime.extensions);
 			const skillsTool = extensionTools.find((tool) => tool.name === "skills");
 			expect(skillsTool).toBeDefined();
