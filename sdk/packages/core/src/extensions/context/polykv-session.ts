@@ -82,6 +82,33 @@ export function isPolykvProvider(
 	);
 }
 
+/**
+ * Whether this server really has a pool tree, asked of the server.
+ *
+ * {@link isPolykvProvider} answers a question about the *profile* -- opencoti,
+ * a base URL, pooling not switched off -- which is as much as most of this
+ * module needs, because every pool call it makes degrades to "no pool" on its
+ * own. Offering a tool is different: the schema is paid for out of the context
+ * window before anything is called, and a swarm on a server booted without
+ * `--polykv-max-pools` -- the default -- fails on its first pool call having
+ * already spent it.
+ *
+ * So this one waits for `/props`. The read is cached per server for the life of
+ * the process, and an unreachable server answers `false`: "cannot ask" is not
+ * "yes", which is the same reading the slot limit takes.
+ */
+export async function polykvPoolsConfirmed(
+	config: PolykvProviderConfig | undefined,
+): Promise<boolean> {
+	if (!config || !isPolykvProvider(config)) {
+		return false;
+	}
+	const props = await probeOpencotiProps(config.baseUrl, config.fetch).catch(
+		() => undefined,
+	);
+	return props?.poolsEnabled === true;
+}
+
 function clientFor(config: PolykvProviderConfig): PolykvClient | undefined {
 	if (!config.baseUrl) {
 		return undefined;

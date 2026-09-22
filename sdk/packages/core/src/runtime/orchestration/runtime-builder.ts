@@ -21,6 +21,7 @@ import {
 } from "../../extensions/config";
 import {
 	isPolykvProvider,
+	polykvPoolsConfirmed,
 	readPolykvCapacity,
 } from "../../extensions/context/polykv-session";
 import {
@@ -1095,15 +1096,21 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 			});
 
 			// `spawn_swarm` sits behind the same delegation capability and two
-			// more of its own: the engine must actually have a pool tree, and
-			// the profile must have asked for swarms. Off by default -- one
+			// more of its own: the profile must have asked for swarms, and the
+			// engine must say it has a pool tree -- `pools_enabled` from its
+			// own `/props`, not a guess from the provider id. A server booted
+			// without `--polykv-max-pools` is the default, and it would get the
+			// tool under the weaker gate and fail on the first pool call. Off by default -- one
 			// swarm spends several agents' worth of tokens on a single turn,
 			// which is a decision worth making once rather than discovering in
 			// a bill.
+			// The profile switch is read first, and the probe only after it:
+			// a session that never asked for a swarm must not spend a round
+			// trip discovering it could not have had one.
 			if (
 				createSwarmTool &&
 				config.providerConfig?.polykv?.swarm === true &&
-				isPolykvProvider(config.providerConfig)
+				(await polykvPoolsConfirmed(config.providerConfig))
 			) {
 				const swarmTool = createSwarmTool();
 				tools.push({
