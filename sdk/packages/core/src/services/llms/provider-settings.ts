@@ -205,6 +205,25 @@ export const PolykvSettingsSchema = z.object({
 	 * stops being better than failing.
 	 */
 	maxRetryAfterMs: z.number().int().nonnegative().optional(),
+
+	// The context window this profile books, and the floor it will settle for.
+	/**
+	 * Book a guaranteed window, and accept a smaller one down to
+	 * `contextFloor`.
+	 *
+	 * Off by default, and deliberately: asking for a window changes what a busy
+	 * server does with the request, from serving it best-effort to refusing it
+	 * at admission. Off books nothing and the engine decides, as before.
+	 */
+	dynamicContextSize: z.boolean().optional(),
+	/**
+	 * The smallest window still worth connecting with.
+	 *
+	 * Below it a connection is worse than none: the conversation opens and is
+	 * immediately unable to hold enough to be useful. Unset makes the ask
+	 * all-or-nothing rather than quietly open-ended.
+	 */
+	contextFloor: z.number().int().positive().optional(),
 });
 
 export type PolykvSettings = z.infer<typeof PolykvSettingsSchema>;

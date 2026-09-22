@@ -539,6 +539,15 @@ message PolykvProviderConfig {
   // Whether the model may fan a task out across a swarm. Off by default: a
   // swarm spends several agents' worth of tokens on one turn.
   optional bool swarm = 14;
+  // Book a guaranteed context window, accepting a smaller one down to
+  // context_floor. Off by default, and the default is the conservative one:
+  // asking for a window changes what a busy server does with the request,
+  // from serving it best-effort to refusing it at admission.
+  optional bool dynamic_context_size = 15;
+  // The smallest window still worth connecting with. Below it a connection is
+  // worse than none. Unset means the ask is all-or-nothing, which is the
+  // honest reading of "I did not say what smaller would be acceptable".
+  optional int32 context_floor = 16;
 }
 
 // The tools a configuration leaves out of its sessions.

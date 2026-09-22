@@ -133,7 +133,7 @@ function readPolykv(settings: Record<string, unknown>): PolykvConfig | undefined
 		return undefined
 	}
 	const result: Record<string, unknown> = {}
-	for (const field of ["enabled", "pinPrefix", "ephemeral", "overcommit", "swarm"]) {
+	for (const field of ["enabled", "pinPrefix", "ephemeral", "overcommit", "swarm", "dynamicContextSize"]) {
 		if (typeof polykv[field] === "boolean") {
 			result[field] = polykv[field]
 		}
@@ -151,6 +151,15 @@ function readPolykv(settings: Record<string, unknown>): PolykvConfig | undefined
 		if (typeof parsed === "number" && Number.isFinite(parsed) && parsed >= 0) {
 			result[field] = parsed
 		}
+	}
+	// Its own read, because zero means something different here. For the fields
+	// above, 0 is a value — `prefillMaxSlots: 0` is what turns that arm off. A
+	// floor of 0 is not a floor: it says any window at all is acceptable, which
+	// is what having no floor already means, so it is dropped rather than
+	// stored as a deliberate-looking nothing.
+	const floor = typeof polykv.contextFloor === "string" ? Number(polykv.contextFloor) : polykv.contextFloor
+	if (typeof floor === "number" && Number.isFinite(floor) && floor > 0) {
+		result.contextFloor = Math.floor(floor)
 	}
 	const threshold = polykv.compactionPressureThreshold
 	const parsedThreshold = typeof threshold === "string" ? Number(threshold) : threshold

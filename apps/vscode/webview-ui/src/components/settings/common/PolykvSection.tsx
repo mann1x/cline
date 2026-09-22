@@ -178,6 +178,18 @@ export const PolykvSection = ({ providerId }: { providerId: string }) => {
 						"Caps how many slots may be prefilling at once. Prompt processing is what stands between a new session and its first token, so a backlog here looks like the pool being full when it is not.",
 					)}
 					{toggle(
+						"dynamicContextSize",
+						"Book a context window",
+						"Asks the server to guarantee this model's context size for the conversation, so another session cannot take the cells out from under it. Off, the engine decides and a busy server serves the request best-effort; on, a server without room refuses at admission instead.",
+					)}
+					{polykv.dynamicContextSize === true &&
+						numberField(
+							"contextFloor",
+							"Never go below",
+							"Default: none — all or nothing",
+							"The smallest window still worth opening with, in tokens. If the full size is not free the server grants the largest that is, down to this; below it the conversation is refused rather than opened too small to be useful. Leave empty to accept only the full size.",
+						)}
+					{toggle(
 						"overcommit",
 						"Bypass admission",
 						"Sends every request past the admission gate. The engine stops protecting the throughput floor, so sessions can make each other slow — deliberate, and visible here rather than silent.",

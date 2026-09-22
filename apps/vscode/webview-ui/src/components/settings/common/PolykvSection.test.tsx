@@ -111,4 +111,35 @@ describe("the PolyKV section", () => {
 
 		expect(mocks.write).toHaveBeenCalledWith({ polykv: { enabled: false, settleTokens: 48 } })
 	})
+
+	// The floor only means anything under the switch that makes a window get
+	// asked for. Shown without it, it reads as a setting that does nothing —
+	// which is exactly what it would be.
+	// Counted rather than read by its label: the text-field mock above renders
+	// only the input, so the copy never reaches the DOM here. One extra field
+	// is the assertion that survives that.
+	it("shows the floor only once a window is being asked for", () => {
+		mocks.config.current = { polykv: { enabled: true } }
+		const withoutSizing = render(<PolykvSection providerId="opencoti" />)
+		const before = screen.getAllByRole("textbox").length
+		withoutSizing.unmount()
+
+		mocks.config.current = { polykv: { enabled: true, dynamicContextSize: true } }
+		render(<PolykvSection providerId="opencoti" />)
+
+		expect(screen.getAllByRole("textbox")).toHaveLength(before + 1)
+	})
+
+	it("writes the floor as a number, keeping the rest of the section", () => {
+		mocks.config.current = { polykv: { enabled: true, dynamicContextSize: true, settleTokens: 48 } }
+		render(<PolykvSection providerId="opencoti" />)
+		const fields = screen.getAllByRole("textbox") as HTMLInputElement[]
+		const floor = fields[fields.length - 1]
+
+		fireEvent.change(floor, { target: { value: "32768" } })
+
+		expect(mocks.write).toHaveBeenLastCalledWith({
+			polykv: { enabled: true, dynamicContextSize: true, settleTokens: 48, contextFloor: 32768 },
+		})
+	})
 })

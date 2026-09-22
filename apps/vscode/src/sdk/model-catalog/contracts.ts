@@ -160,6 +160,8 @@ export interface PolykvSettings {
 	readonly overcommit?: boolean
 	readonly swarm?: boolean
 	readonly maxRetryAfterMs?: number
+	readonly dynamicContextSize?: boolean
+	readonly contextFloor?: number
 }
 
 /**

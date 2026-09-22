@@ -370,6 +370,47 @@ describe("the PolyKV section", () => {
 		expect(config.polykv).toEqual({ enabled: true })
 	})
 
+	// Adding a field to this section touches a type, a patch mapping and two
+	// explicit field lists here — and the field lists are the two that fail
+	// silently. A field missing from them is stored, shown in the panel, and
+	// dropped on the way to the session, which reads as the setting simply not
+	// working.
+	it("reads the window controls back, floor included", async () => {
+		const { buildEffectiveProviderConfig } = await import("./effective-config")
+		mocks.setProviderSettings({
+			opencoti: {
+				provider: "opencoti",
+				polykv: { enabled: true, dynamicContextSize: true, contextFloor: 32_768 },
+			},
+		})
+
+		const config = buildEffectiveProviderConfig(parseProviderId("opencoti"))
+
+		expect(config.polykv).toEqual({
+			enabled: true,
+			dynamicContextSize: true,
+			contextFloor: 32_768,
+		})
+	})
+
+	// A floor of zero is not a floor. Unlike `prefillMaxSlots`, where 0 is the
+	// value that turns the arm off, here it would mean "any window at all is
+	// acceptable" — which is the same as having no floor, said in a way that
+	// looks deliberate.
+	it("drops a floor of zero rather than storing a floor of nothing", async () => {
+		const { buildEffectiveProviderConfig } = await import("./effective-config")
+		mocks.setProviderSettings({
+			opencoti: {
+				provider: "opencoti",
+				polykv: { enabled: true, dynamicContextSize: true, contextFloor: 0 },
+			},
+		})
+
+		const config = buildEffectiveProviderConfig(parseProviderId("opencoti"))
+
+		expect(config.polykv).toEqual({ enabled: true, dynamicContextSize: true })
+	})
+
 	it("leaves the section absent when nothing stored one", async () => {
 		const { buildEffectiveProviderConfig } = await import("./effective-config")
 		mocks.setProviderSettings({ opencoti: { provider: "opencoti" } })
