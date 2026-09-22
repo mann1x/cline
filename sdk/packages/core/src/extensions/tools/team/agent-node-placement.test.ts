@@ -94,32 +94,43 @@ describe("placing an agent on a node", () => {
 		expect(waited).toBe("n1");
 	});
 
-	// The node's slot gate is the engine's own answer -- PolyKV admission on an
-	// opencoti node -- and is separate from the node's capacity, which is what
-	// the user configured. Both apply.
-	it("runs the agent inside the node's slot gate", async () => {
-		const order: string[] = [];
+	// Two nodes on one server are two of its slots, not one queue.
+	//
+	// A placed agent used to run inside the shared per-endpoint gate as well
+	// as its node's lease, and that gate is one object per provider+baseUrl --
+	// so two nodes on one opencoti, or two ollama nodes carrying two different
+	// cloud models, ran strictly one agent at a time however they were
+	// configured. Measured on pandorum 2026-09-22: three nodes, three agents,
+	// each starting only as the one before it finished.
+	//
+	// How many requests a server takes at once is its own answer (`--parallel`,
+	// `OLLAMA_NUM_PARALLEL`, more under PolyKV admission with elastic slots).
+	// The nodes are the user saying how much of it to use, and the server
+	// refusing is the backstop.
+	it("runs agents on two nodes of one endpoint at the same time", async () => {
 		const placement = required(
 			createAgentNodePlacement({
-				nodes: [node("n1", 1, 1)],
+				nodes: [node("n1", 1, 1), node("n2", 1, 1)],
 				base: baseProvider("lead"),
-				slotGateFor: () => ({
-					run: async <T>(fn: () => Promise<T>) => {
-						order.push("gate-in");
-						const result = await fn();
-						order.push("gate-out");
-						return result;
-					},
-				}),
 			}),
 		);
 
-		const placed = await placement.place();
-		await placed.run(async () => {
-			order.push("agent");
+		const first = await placement.place();
+		const second = await placement.place();
+		expect([first.nodeId, second.nodeId]).toEqual(["n1", "n2"]);
+
+		let firstRunning = false;
+		let bothRanTogether = false;
+		const firstRun = first.run(async () => {
+			firstRunning = true;
+			await settle();
+		});
+		const secondRun = second.run(async () => {
+			bothRanTogether = firstRunning;
 		});
 
-		expect(order).toEqual(["gate-in", "agent", "gate-out"]);
+		await Promise.all([firstRun, secondRun]);
+		expect(bothRanTogether).toBe(true);
 	});
 
 	it("releases the node once, however the run ended", async () => {

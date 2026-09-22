@@ -898,19 +898,17 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 			Object.keys(agentsOverrides) as (keyof DelegatedAgentConnectionConfig)[],
 		);
 		// Every spawn path reads the provider above, so this is where the nodes
-		// reach them all at once. Each node's gate comes from the same registry
-		// the rest of the session uses, keyed by ITS endpoint -- a node on a
-		// one-slot ollama must not queue behind an opencoti node.
+		// reach them all at once.
+		//
+		// No per-endpoint gate on top of the node's capacity. Two nodes that
+		// resolve to one base URL are two lanes on that server -- two of its
+		// slots -- and the endpoint gate is one object per provider+baseUrl,
+		// so applying it made every node capacity decorative and ran three
+		// agents on one opencoti strictly one at a time. How much that server
+		// will take at once is its own answer, and its refusal is the backstop.
 		const nodePlacement = createAgentNodePlacement({
 			nodes: agentNodes,
 			base: delegatedAgentConfigProvider,
-			slotGateFor: (node) =>
-				agentSlotGates.for(
-					agentEndpointKey({
-						providerId: node.connection.providerId ?? config.providerId,
-						baseUrl: node.connection.baseUrl ?? config.baseUrl,
-					}),
-				),
 		});
 		if (nodePlacement) {
 			delegatedAgentConfigProvider.setNodePlacement?.(nodePlacement);

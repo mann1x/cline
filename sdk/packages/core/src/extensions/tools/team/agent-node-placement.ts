@@ -49,14 +49,30 @@ export interface AgentNodeRuntimeConfig {
 export interface PlacedAgentNode {
 	nodeId: string;
 	configProvider: DelegatedAgentConfigProvider;
-	/** Runs `fn` inside this node's own slot gate, when it has one. */
+	/**
+	 * Runs `fn` on this node. The lease IS the gate.
+	 *
+	 * A placed agent is deliberately NOT also held behind the shared
+	 * per-endpoint gate. Two nodes that resolve to one base URL are two lanes
+	 * on that server, not one: they are two of its slots, and how many
+	 * requests it will take at once is the server's own answer -- `--parallel`
+	 * on a llama.cpp family engine, `OLLAMA_NUM_PARALLEL` on ollama, more than
+	 * either under PolyKV admission with elastic slots. A node's capacity is
+	 * the user saying how much of that to use, and the sum across nodes is
+	 * what they asked for.
+	 *
+	 * It used to apply both, which made the node capacities decorative: the
+	 * endpoint gate is one object per provider+baseUrl, so three nodes on one
+	 * opencoti ran strictly one agent at a time however they were configured.
+	 * Measured on pandorum 2026-09-22 -- three agents, 80s/108s/148s, each
+	 * starting only as the one before it finished.
+	 *
+	 * The server refusing is the backstop, and it is the right one: it knows
+	 * its own admission, and we do not.
+	 */
 	run<T>(fn: () => Promise<T>): Promise<T>;
 	/** Idempotent: the first call frees the slot. */
 	release(): void;
-}
-
-export interface AgentNodeSlotGate {
-	run<T>(fn: () => Promise<T>): Promise<T>;
 }
 
 export interface AgentNodePlacement {
@@ -75,13 +91,10 @@ export interface AgentNodePlacement {
 export function createAgentNodePlacement(input: {
 	nodes: readonly AgentNodeRuntimeConfig[];
 	base: DelegatedAgentConfigProvider;
-	/** The endpoint's own gate for a node, when the session has a registry. */
-	slotGateFor?: (node: AgentNodeRuntimeConfig) => AgentNodeSlotGate | undefined;
 }): AgentNodePlacement | undefined {
 	if (input.nodes.length === 0) {
 		return undefined;
 	}
-	const byId = new Map(input.nodes.map((node) => [node.id, node]));
 	const queue = createAgentPlacementQueue(
 		input.nodes.map(
 			(node): AgentNode => ({
@@ -108,14 +121,12 @@ export function createAgentNodePlacement(input: {
 	}
 
 	const placed = (lease: PlacementLease): PlacedAgentNode => {
-		const node = byId.get(lease.nodeId);
 		const configProvider = providers.get(lease.nodeId) ?? input.base;
-		const gate = node ? input.slotGateFor?.(node) : undefined;
 		return {
 			nodeId: lease.nodeId,
 			configProvider,
-			run: async <T>(fn: () => Promise<T>) =>
-				gate ? await gate.run(fn) : await fn(),
+			// The lease is the gate -- see `PlacedAgentNode.run`.
+			run: async <T>(fn: () => Promise<T>) => await fn(),
 			release: () => lease.release(),
 		};
 	};
