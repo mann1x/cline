@@ -189,3 +189,117 @@ describe("reading a capacity payload into an admission answer", () => {
 		expect(admissionFromCapacity(undefined)).toBeUndefined();
 	});
 });
+
+/**
+ * The non-blocking probe a supervisor loop needs.
+ *
+ * `acquire()` **holds** when there is no room, which is right for one agent
+ * waiting its turn and wrong for a tick: a supervisor that re-checks every few
+ * seconds must get an answer, not a wait, or the first refusal stalls the loop
+ * that was supposed to keep asking.
+ *
+ * The part that takes care is how often it may read. On c7 every
+ * `GET /capacity` folds the engine's settle and bias EWMAs, so a 5-second tick
+ * that reached the wire would fold the learner twelve times a minute for the
+ * life of the swarm — corrupting the measurement it is reading. The rule is
+ * therefore not "read on a timer" but **read only when the answer could have
+ * changed**, and the only thing that changes it is an agent finishing.
+ */
+describe("probing without holding", () => {
+	it("hands out the round it already has without asking again", async () => {
+		const capacity = vi.fn(async () => capacityOf({ headroomSessions: 3 }));
+		const controller = controllerOf(capacity);
+
+		expect(await controller.tryAcquire()).toBeDefined();
+		expect(await controller.tryAcquire()).toBeDefined();
+		expect(await controller.tryAcquire()).toBeDefined();
+
+		expect(capacity).toHaveBeenCalledTimes(1);
+	});
+
+	// The difference from `acquire()`, in one line: it comes back.
+	it("answers rather than waiting when the round is spent", async () => {
+		const capacity = vi.fn(async () => capacityOf({ headroomSessions: 1 }));
+		const controller = controllerOf(capacity);
+
+		expect(await controller.tryAcquire()).toBeDefined();
+		expect(await controller.tryAcquire()).toBeUndefined();
+	});
+
+	// The constraint that shapes the whole design. A tick that finds no room
+	// must not ask the engine again on the next tick: nothing has happened in
+	// between that could change the answer, and asking is not free.
+	it("does not re-read while nothing has finished", async () => {
+		const capacity = vi.fn(async () => capacityOf({ headroomSessions: 1 }));
+		const controller = controllerOf(capacity);
+
+		await controller.tryAcquire();
+		for (let tick = 0; tick < 12; tick += 1) {
+			expect(await controller.tryAcquire()).toBeUndefined();
+		}
+
+		// One read for the round, and not one per tick.
+		expect(capacity).toHaveBeenCalledTimes(1);
+	});
+
+	// And the other half: an agent finishing IS the thing that changes it, so
+	// the next tick may ask. This is what makes the loop pick up slots that
+	// freed while it was waiting.
+	it("re-reads once an agent has finished", async () => {
+		const capacity = vi.fn(async () => capacityOf({ headroomSessions: 1 }));
+		const controller = controllerOf(capacity);
+
+		await controller.tryAcquire();
+		expect(await controller.tryAcquire()).toBeUndefined();
+
+		controller.release();
+
+		expect(await controller.tryAcquire()).toBeDefined();
+		expect(capacity).toHaveBeenCalledTimes(2);
+	});
+
+	// One release means one re-read, not a licence to poll from then on.
+	it("spends the re-read it was given", async () => {
+		const capacity = vi.fn(async () => capacityOf({ canAdmit: false }));
+		const controller = controllerOf(capacity);
+
+		await controller.tryAcquire();
+		controller.release();
+		await controller.tryAcquire();
+		await controller.tryAcquire();
+		await controller.tryAcquire();
+
+		// The first call read; the release bought exactly one more.
+		expect(capacity).toHaveBeenCalledTimes(2);
+	});
+
+	// A held round refuses here rather than waiting it out, because the
+	// supervisor's job is to come back later, not to block on this answer.
+	it("refuses rather than holding when the engine says no", async () => {
+		const controller = controllerOf(async () =>
+			capacityOf({ canAdmit: false }),
+		);
+
+		expect(await controller.tryAcquire()).toBeUndefined();
+	});
+
+	// A control plane that cannot be reached has not said no — the same
+	// reading `acquire()` takes, for the same reason.
+	it("admits when capacity cannot be read at all", async () => {
+		const controller = controllerOf(async () => undefined);
+
+		expect(await controller.tryAcquire()).toBeDefined();
+	});
+
+	// The two paths share one round, so a probe must not hand out a slot an
+	// awaited acquire is already holding.
+	it("draws from the same round as acquire", async () => {
+		const capacity = vi.fn(async () => capacityOf({ headroomSessions: 2 }));
+		const controller = controllerOf(capacity);
+
+		await controller.acquire();
+		expect(await controller.tryAcquire()).toBeDefined();
+		expect(await controller.tryAcquire()).toBeUndefined();
+		expect(capacity).toHaveBeenCalledTimes(1);
+	});
+});

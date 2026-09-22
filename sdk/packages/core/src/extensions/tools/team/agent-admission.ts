@@ -82,6 +82,21 @@ export interface AgentAdmissionController {
 	 * engine's answer required. Rejects only on cancellation.
 	 */
 	acquire(signal?: AbortSignal): Promise<{ reason: string }>;
+	/**
+	 * The same question, answered instead of waited on.
+	 *
+	 * `undefined` where {@link acquire} would have held. A supervisor that
+	 * re-checks on a tick needs an answer rather than a wait, or the first
+	 * refusal stalls the loop whose whole job is to ask again later.
+	 *
+	 * **It reads the engine only when the answer could have changed.** On c7
+	 * every `GET /capacity` folds the settle and bias EWMAs, so a 5-second tick
+	 * that reached the wire would fold the learner twelve times a minute for
+	 * the life of the swarm and corrupt the measurement it is reading. What
+	 * changes the answer is an agent finishing, so a fresh read is bought by a
+	 * {@link release} and by nothing else -- not by time passing.
+	 */
+	tryAcquire(): Promise<{ reason: string } | undefined>;
 	/** Called when an admitted agent finishes, however it finished. */
 	release(): void;
 }
@@ -150,6 +165,15 @@ export function createAgentAdmissionController(
 	 * uncomputable headroom, or a control plane that could not be asked.
 	 */
 	let remaining: number | undefined;
+	/**
+	 * Whether asking the engine again could produce a different answer.
+	 *
+	 * True to begin with -- nothing has been asked yet -- and set by `release`,
+	 * because an agent finishing is the only event that frees what a refusal
+	 * was about. It is what bounds `tryAcquire`'s reads to one per completed
+	 * agent instead of one per tick.
+	 */
+	let answerMayHaveChanged = true;
 	let lastReason = "";
 	let outstanding = 0;
 	const waiters: Array<() => void> = [];
@@ -188,6 +212,10 @@ export function createAgentAdmissionController(
 					throw new Error("Admission wait cancelled");
 				}
 				if (remaining === undefined) {
+					// A read here counts against `tryAcquire`'s gate too: the two
+					// draw from one round, so an answer just taken is an answer
+					// a tick must not immediately pay to take again.
+					answerMayHaveChanged = false;
 					let read: AdmissionCapacity | undefined;
 					try {
 						read = await options.capacity();
@@ -235,10 +263,63 @@ export function createAgentAdmissionController(
 				await holdOnce(signal);
 			}
 		},
+		tryAcquire: async () => {
+			if (remaining !== undefined && remaining > 0) {
+				remaining -= 1;
+				outstanding += 1;
+				return { reason: lastReason };
+			}
+			// Either nothing has been read yet or the round is spent. Both need
+			// a fresh answer, and a fresh answer costs a fold -- so it is taken
+			// only when something has happened that could change it.
+			if (!answerMayHaveChanged) {
+				return undefined;
+			}
+			answerMayHaveChanged = false;
+			let read: AdmissionCapacity | undefined;
+			try {
+				read = await options.capacity();
+			} catch (error) {
+				logger?.log?.(
+					"PolyKV capacity could not be read; admitting without it",
+					{
+						severity: "warn",
+						error: error instanceof Error ? error.message : String(error),
+					},
+				);
+				read = undefined;
+			}
+			if (read === undefined) {
+				// Not reachable is not a refusal, the same reading `acquire`
+				// takes: holding every agent on an unanswerable control plane
+				// is a worse failure than the one it avoids.
+				remaining = Number.POSITIVE_INFINITY;
+				lastReason = "capacity unavailable; not holding";
+			} else if (!read.canAdmit) {
+				lastReason = read.reason;
+				remaining = undefined;
+				return undefined;
+			} else {
+				lastReason = read.reason;
+				remaining =
+					read.headroomSessions < 0
+						? Number.POSITIVE_INFINITY
+						: Math.max(1, read.headroomSessions);
+			}
+			if (remaining > 0) {
+				remaining -= 1;
+				outstanding += 1;
+				return { reason: lastReason };
+			}
+			remaining = undefined;
+			return undefined;
+		},
 		release: () => {
 			if (outstanding > 0) {
 				outstanding -= 1;
 			}
+			// The one event that makes re-asking worth a fold.
+			answerMayHaveChanged = true;
 			wake();
 		},
 	};

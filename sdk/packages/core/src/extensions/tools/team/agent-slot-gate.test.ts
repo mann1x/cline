@@ -142,6 +142,14 @@ describe("a gate with an admission controller", () => {
 					calls.push("acquire");
 					return { reason: "ok" };
 				}),
+				// The gate awaits its agents, so it only ever uses `acquire`.
+				// The probe is the supervisor loop's route in and is stubbed
+				// here to keep the shape whole rather than because this gate
+				// reaches it.
+				tryAcquire: vi.fn(async () => {
+					calls.push("tryAcquire");
+					return { reason: "ok" };
+				}),
 				release: vi.fn(() => {
 					calls.push("release");
 				}),
@@ -415,6 +423,10 @@ describe("a registry with admission", () => {
 				asked.push(name);
 				return { reason: "ok" };
 			},
+			tryAcquire: async () => {
+				asked.push(name);
+				return { reason: "ok" };
+			},
 			release: () => {},
 		});
 		const registry = createAgentSlotGateRegistry(2, undefined, (key) =>
@@ -435,6 +447,7 @@ describe("a registry with admission", () => {
 		const acquire = vi.fn(async () => ({ reason: "ok" }));
 		const registry = createAgentSlotGateRegistry(4, undefined, () => ({
 			acquire,
+			tryAcquire: acquire,
 			release: () => {},
 		}));
 
