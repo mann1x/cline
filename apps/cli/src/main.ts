@@ -1254,6 +1254,17 @@ export async function runCli(): Promise<void> {
 			modelId: resolvedModelId,
 			apiKey: apiKey ?? "",
 			knownModels,
+			// The endpoint, carried on the session config as the extension host
+			// carries it. Core resolves its own handler from providers.json
+			// either way, but everything that asks a QUESTION of the endpoint
+			// reads it from here: the parallel-sessions probe, and the PolyKV
+			// config the swarm builds its pool calls from. Unset, both answer
+			// "not opencoti" against an opencoti -- measured live, a swarm on a
+			// PolyKV server ran unpooled and every worker prefilled the lead's
+			// context again.
+			...(selectedProviderSettings?.baseUrl
+				? { baseUrl: selectedProviderSettings.baseUrl as string }
+				: {}),
 			systemPrompt: await resolveSystemPrompt({
 				cwd,
 				explicitSystemPrompt: args.systemPrompt,
