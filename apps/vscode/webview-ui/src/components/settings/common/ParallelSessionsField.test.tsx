@@ -11,12 +11,37 @@ describe("the Parallel Sessions description", () => {
 		expect(text).not.toMatch(/ceiling/i)
 	})
 
-	// opencoti with PolyKV or elastic slots on decides for itself, so there the
-	// field stops describing the server and becomes the user's own ceiling —
-	// the opposite of what the shared copy says, which is why it is said.
-	it("says the number is a ceiling on opencoti, and that empty hands it to the engine", () => {
-		const text = parallelSessionsDescription("opencoti")
+	// The panel asks the server now. Where it says PolyKV or elastic slots are
+	// on, the field stops describing the server and becomes the user's own
+	// ceiling, and the copy names which controller is doing the deciding.
+	it("says the number is a ceiling when the server says PolyKV is on", () => {
+		const text = parallelSessionsDescription("opencoti", "polykv")
+		expect(text).toMatch(/PolyKV admission is on/)
 		expect(text).toMatch(/ceiling/i)
 		expect(text).toMatch(/leave it empty/i)
+	})
+
+	it("says the number is a ceiling when the server says elastic slots are on", () => {
+		const text = parallelSessionsDescription("opencoti", "elastic")
+		expect(text).toMatch(/elastic slots are on/i)
+		expect(text).toMatch(/leave it empty/i)
+	})
+
+	// The trap this closes: a plain opencoti has a fixed --parallel like any
+	// llama.cpp server, and being told "leave it empty to let the engine
+	// decide" there leaves it at one with nothing deciding.
+	it("does not offer the engine's decision on an opencoti that has neither on", () => {
+		const text = parallelSessionsDescription("opencoti", "fixed")
+		expect(text).not.toMatch(/leave it empty/i)
+		expect(text).not.toMatch(/ceiling/i)
+		expect(text).toMatch(/neither PolyKV nor elastic slots/i)
+	})
+
+	// Not yet answered, or not answerable. Both cases are stated, and the copy
+	// says it could not tell rather than guessing either way.
+	it("states both cases, and says so, when the server could not be asked", () => {
+		const text = parallelSessionsDescription("opencoti", "unknown")
+		expect(text).toMatch(/could not be asked/i)
+		expect(text).toMatch(/ceiling/i)
 	})
 })

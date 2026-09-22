@@ -12,7 +12,7 @@ import { useDynamicProviderSelection } from "@/hooks/useDynamicProviderSelection
 import { useProviderListings } from "@/hooks/useProviderListings"
 import { ClinePassHint } from "./ClinePassHint"
 import { OutputBudgetField } from "./common/OutputBudgetField"
-import ParallelSessionsField, { parallelSessionsDescription } from "./common/ParallelSessionsField"
+import ParallelSessionsField, { parallelSessionsDescription, useOpencotiEngineMode } from "./common/ParallelSessionsField"
 import { PolykvSection } from "./common/PolykvSection"
 import { ReasoningHistoryField } from "./common/ReasoningHistoryField"
 import { ToolsSection } from "./common/ToolsSection"
@@ -129,6 +129,9 @@ const ApiOptions = ({
 	// custom provider in the first place. Compared as a string rather than by
 	// widening that union, which a dozen exhaustive switches still depend on.
 	const isOpencoti = (selectedProvider as string) === "opencoti"
+	// Whether this opencoti decides its own concurrency, asked of the server:
+	// the parallel-sessions copy gives opposite advice in the two cases.
+	const opencotiEngine = useOpencotiEngineMode(selectedProvider)
 	// The window the selected model reports, for the output budget to fall back
 	// on. Provider-level `contextWindow` is only written when the box is edited,
 	// so a profile that predates that write has none -- and the budget's slider
@@ -555,9 +558,9 @@ const ApiOptions = ({
 
 			{apiConfiguration && showModelOptions && selectedProvider && (
 				<div className="mb-[5px]">
-					<ParallelSessionsField providerId={selectedProvider} />
+					<ParallelSessionsField engine={opencotiEngine} providerId={selectedProvider} />
 					<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
-						{parallelSessionsDescription(selectedProvider)}
+						{parallelSessionsDescription(selectedProvider, opencotiEngine)}
 					</p>
 				</div>
 			)}

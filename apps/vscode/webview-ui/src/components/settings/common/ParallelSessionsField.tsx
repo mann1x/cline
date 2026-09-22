@@ -1,4 +1,7 @@
+import { StringRequest } from "@shared/proto/cline/common"
+import { useEffect, useState } from "react"
 import { useProviderConfig } from "@/hooks/useProviderConfig"
+import { ModelsServiceClient } from "@/services/grpc-client"
 import { DebouncedTextField } from "./DebouncedTextField"
 
 /**
@@ -41,10 +44,10 @@ function parseTyped(value: string | number | undefined): number | undefined {
  * fixed number to describe, and this field changes meaning rather than going
  * unread: it becomes a ceiling of the user's own, applied on top of whatever
  * the engine would have allowed. Empty hands the decision to the engine
- * entirely. The session probes `/props` for which of the two cases it is in;
- * this field cannot, which is why the copy explains both.
+ * entirely. Which case applies is the server's to say, so the panel asks it:
+ * see {@link useOpencotiEngineMode}.
  */
-export const ParallelSessionsField = ({ providerId }: { providerId: string }) => {
+export const ParallelSessionsField = ({ providerId, engine }: { providerId: string; engine?: OpencotiEngineMode }) => {
 	const { config, write } = useProviderConfig(providerId as never)
 	// Same reason the Ollama context-window field waits: the debounced input
 	// fires onChange for its initial value shortly after mount, so rendering
@@ -71,7 +74,7 @@ export const ParallelSessionsField = ({ providerId }: { providerId: string }) =>
 					console.error("Failed to update parallel sessions:", error),
 				)
 			}}
-			placeholder={`Default: ${MIN_PARALLEL_SESSIONS}`}
+			placeholder={engineDecides(engine) ? "Empty: the engine decides" : `Default: ${MIN_PARALLEL_SESSIONS}`}
 			style={{ width: "100%" }}>
 			<span className="font-semibold">Parallel Sessions</span>
 		</DebouncedTextField>
@@ -85,27 +88,92 @@ export const PARALLEL_SESSIONS_DESCRIPTION =
 	"spawning more agents than there are slots makes a run slower, not faster."
 
 /**
- * The sentence that follows it on an elastic server, where the field means
- * something else.
+ * What an opencoti server says about how it decides concurrency.
+ *
+ * - `polykv` / `elastic`: one of the two controllers is armed, the server
+ *   decides, and the field is a ceiling of the user's own.
+ * - `fixed`: the server answered and has neither on. It has a `--parallel`
+ *   count like any llama.cpp server, and empty means one.
+ * - `unknown`: not answered yet, or not answerable.
+ *
+ * PolyKV is named over elastic slots when both are on: it is the one whose
+ * admission control actually says yes or no to the next agent.
  */
-const PARALLEL_SESSIONS_ELASTIC_NOTE =
-	" With PolyKV or elastic slots on, opencoti decides for itself how many it will take — there is no fixed count to " +
-	"state. A number here is then a ceiling of your own, applied on top of the engine's answer; leave it empty to let the " +
+export type OpencotiEngineMode = "polykv" | "elastic" | "fixed" | "unknown"
+
+function engineDecides(engine: OpencotiEngineMode | undefined): boolean {
+	return engine === "polykv" || engine === "elastic"
+}
+
+const PARALLEL_SESSIONS_CEILING =
+	"A number here is then a ceiling of your own, applied on top of the engine's answer; leave it empty to let the " +
 	"engine decide alone."
 
 /**
  * The copy under the field, for the provider it is being shown for.
  *
- * opencoti gets an extra sentence rather than different text: the shared
- * paragraph is still true of a plain opencoti, which has a fixed `--parallel`
- * count like any other llama.cpp server, and only stops being true once one of
- * the two elastic controllers is armed. Nothing in the webview can tell which,
- * so both are stated.
+ * On opencoti the extra sentence depends on what the server says, because the
+ * advice is opposite in the two cases. On an elastic one, empty hands the
+ * decision to the engine. On a plain one, which has a fixed `--parallel` count
+ * like any llama.cpp server, empty means one and nothing else is deciding --
+ * telling the user to leave it empty there is how a profile ends up running
+ * one agent at a time on a server that could have run four.
+ *
+ * Every other provider, and opencoti before anything is known, gets the text
+ * that is true whatever the answer.
  */
-export function parallelSessionsDescription(providerId: string): string {
-	return providerId === "opencoti"
-		? PARALLEL_SESSIONS_DESCRIPTION + PARALLEL_SESSIONS_ELASTIC_NOTE
-		: PARALLEL_SESSIONS_DESCRIPTION
+export function parallelSessionsDescription(providerId: string, engine?: OpencotiEngineMode): string {
+	if (providerId !== "opencoti") {
+		return PARALLEL_SESSIONS_DESCRIPTION
+	}
+	switch (engine) {
+		case "polykv":
+			return `${PARALLEL_SESSIONS_DESCRIPTION} PolyKV admission is on here, so the server decides for itself how many it will take — there is no fixed count to state. ${PARALLEL_SESSIONS_CEILING}`
+		case "elastic":
+			return `${PARALLEL_SESSIONS_DESCRIPTION} Elastic slots are on here, so the server grows its slot count as load arrives — there is no fixed count to state. ${PARALLEL_SESSIONS_CEILING}`
+		case "fixed":
+			return `${PARALLEL_SESSIONS_DESCRIPTION} This server has neither PolyKV nor elastic slots on, so its count is fixed by --parallel and this field should match it.`
+		default:
+			return `${PARALLEL_SESSIONS_DESCRIPTION} The server could not be asked whether it decides this itself. If it has PolyKV or elastic slots on, it does, and ${PARALLEL_SESSIONS_CEILING.charAt(0).toLowerCase()}${PARALLEL_SESSIONS_CEILING.slice(1)}`
+	}
+}
+
+/**
+ * Ask the configured opencoti server which case the field is in.
+ *
+ * `undefined` for every other provider, which is never asked. Read once per
+ * provider, as the PolyKV status strip does and through the same host read:
+ * there is nothing here worth a timer, and the base URL comes from the stored
+ * config on the host side, so the panel cannot be pointed somewhere else.
+ */
+export function useOpencotiEngineMode(providerId: string | undefined): OpencotiEngineMode | undefined {
+	const [mode, setMode] = useState<OpencotiEngineMode | undefined>()
+
+	useEffect(() => {
+		if (providerId !== "opencoti") {
+			setMode(undefined)
+			return
+		}
+		let cancelled = false
+		setMode("unknown")
+		ModelsServiceClient.readPolykvStatus(StringRequest.create({ value: providerId }))
+			.then((status) => {
+				if (cancelled) {
+					return
+				}
+				setMode(!status.reachable ? "unknown" : status.poolsEnabled ? "polykv" : status.elastic ? "elastic" : "fixed")
+			})
+			.catch(() => {
+				if (!cancelled) {
+					setMode("unknown")
+				}
+			})
+		return () => {
+			cancelled = true
+		}
+	}, [providerId])
+
+	return mode
 }
 
 export default ParallelSessionsField
