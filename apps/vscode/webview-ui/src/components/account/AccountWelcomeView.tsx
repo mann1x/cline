@@ -2,7 +2,7 @@ import { VSCodeButton, VSCodeLink } from "@vscode/webview-ui-toolkit/react"
 import { ClineAuthStatus } from "@/components/account/ClineAuthStatus"
 import { useClineSignIn } from "@/context/ClineAuthContext"
 import { useExtensionState } from "@/context/ExtensionStateContext"
-import ClineLogoVariable from "../../assets/ClineLogoVariable"
+import CerebrilineLogo from "../../assets/CerebrilineLogo"
 import { ClinePassWelcomeCallout } from "./ClinePassCard"
 
 // export const AccountWelcomeView = () => (
@@ -14,7 +14,7 @@ export const AccountWelcomeView = () => {
 
 	return (
 		<div className="flex flex-col items-center gap-2.5">
-			<ClineLogoVariable className="size-16 mb-4" environment={environment} />
+			<CerebrilineLogo className="size-16 mb-4" environment={environment} />
 
 			<p>
 				Sign up for an account to get access to the latest models, billing dashboard to view usage and credits, and more

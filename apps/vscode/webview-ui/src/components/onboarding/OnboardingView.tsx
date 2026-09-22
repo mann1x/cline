@@ -4,7 +4,7 @@ import type { OnboardingModel, OnboardingModelGroup, OpenRouterModelInfo } from 
 import { VSCodeLink } from "@vscode/webview-ui-toolkit/react"
 import { AlertCircleIcon, CircleCheckIcon, CircleIcon, ListIcon, LoaderCircleIcon, ZapIcon } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import ClineLogoWhite from "@/assets/ClineLogoWhite"
+import CerebrilineLogo from "@/assets/CerebrilineLogo"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -355,7 +355,7 @@ const OnboardingStepContent = ({
 
 const OnboardingViewContent = ({ onboardingModels }: { onboardingModels: OnboardingModelGroup }) => {
 	const { handleFieldsChange } = useApiConfigurationHandlers()
-	const { openRouterModels, hideSettings, hideAccount, setShowWelcome } = useExtensionState()
+	const { openRouterModels, hideSettings, hideAccount, setShowWelcome, environment } = useExtensionState()
 	const { models: clineModels } = useProviderModels("cline")
 	const { commitSelection } = useProviderConfig("cline")
 	const loginAttemptIdRef = useRef(0)
@@ -619,7 +619,7 @@ const OnboardingViewContent = ({ onboardingModels }: { onboardingModels: Onboard
 	return (
 		<div className="fixed inset-0 p-0 flex flex-col w-full">
 			<div className="h-full px-5 xs:mx-10 overflow-auto flex flex-col gap-4 items-center justify-center">
-				<ClineLogoWhite className="size-16 flex-shrink-0" />
+				<CerebrilineLogo className="size-16 flex-shrink-0" environment={environment} />
 				<h2 className="text-lg font-semibold p-0 flex-shrink-0">{stepDisplayInfo.title}</h2>
 				{stepNumber === 2 && (
 					<div className="flex w-full max-w-lg flex-col gap-6 my-4 items-center ">

@@ -1,14 +1,14 @@
 import { BooleanRequest, EmptyRequest } from "@shared/proto/cline/common"
 import { VSCodeButton, VSCodeLink } from "@vscode/webview-ui-toolkit/react"
 import { memo, useEffect, useState } from "react"
-import ClineLogoWhite from "@/assets/ClineLogoWhite"
+import CerebrilineLogo from "@/assets/CerebrilineLogo"
 import ApiOptions from "@/components/settings/ApiOptions"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { AccountServiceClient, StateServiceClient } from "@/services/grpc-client"
 import { validateApiConfiguration } from "@/utils/validate"
 
 const WelcomeView = memo(() => {
-	const { apiConfiguration, mode } = useExtensionState()
+	const { apiConfiguration, mode, environment } = useExtensionState()
 	const [apiErrorMessage, setApiErrorMessage] = useState<string | undefined>(undefined)
 	const [showApiOptions, setShowApiOptions] = useState(false)
 	const [isLoading, setIsLoading] = useState(false)
@@ -41,7 +41,7 @@ const WelcomeView = memo(() => {
 			<div className="h-full px-5 overflow-auto flex flex-col gap-2.5">
 				<h2 className="text-lg font-semibold">Hi, I'm Cline</h2>
 				<div className="flex justify-center my-5">
-					<ClineLogoWhite className="size-16" />
+					<CerebrilineLogo className="size-16" environment={environment} />
 				</div>
 				<p>
 					I can do all kinds of tasks thanks to breakthroughs in{" "}

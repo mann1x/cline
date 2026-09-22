@@ -2,7 +2,7 @@
   <img src="assets/icons/icon.png" width="80" alt="Cerebriline" />
 </p>
 
-<h1 align="center">Cerebriline</h1>
+<h1 align="center"><b>C</b>erebri<b>line</b></h1>
 
 <p align="center">
 The open source coding agent in your IDE and terminal.
