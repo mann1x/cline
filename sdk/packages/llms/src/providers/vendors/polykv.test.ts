@@ -928,3 +928,65 @@ describe("the server-wide KV account", () => {
 		expect(status.kvScope).toBe("server");
 	});
 });
+
+/**
+ * Closing a session gives its window back.
+ *
+ * Without this the server holds the whole booked allocation for the idle TTL --
+ * five minutes on the build this was written against -- so a user who ends one
+ * 256k conversation and starts another waits out their own first session. The
+ * TTL is the crash net, not the mechanism.
+ *
+ * The verb matters more here than it looks. This client's founding bug was
+ * `releasePool` calling a `DELETE` the server does not register: the 404 landed
+ * in a catch that read as "released", and every session leaked its pool while
+ * the code looked correct. So the route is asserted literally.
+ */
+describe("closing a session", () => {
+	function closer(body: unknown) {
+		const calls: Array<{ method: string; path: string }> = [];
+		const fetchImpl = (async (input: unknown, init?: RequestInit) => {
+			calls.push({
+				method: init?.method ?? "GET",
+				path: new URL(String(input)).pathname,
+			});
+			return new Response(JSON.stringify(body), { status: 200 });
+		}) as unknown as typeof fetch;
+		return { calls, fetchImpl };
+	}
+
+	it("posts to the close action the server registers", async () => {
+		const server = closer({ session_id: "lead", found: true });
+		const client = createPolykvClient({
+			baseUrl: "http://localhost:8080/v1",
+			fetch: server.fetchImpl,
+		});
+		expect(await client.closeSession("lead")).toBe(true);
+		expect(server.calls).toEqual([
+			{ method: "POST", path: "/sessions/lead/close" },
+		]);
+	});
+
+	// `200` is not the answer. The server answers `200 {"found": false}` for a
+	// session it never held, so a caller that checked the status would record a
+	// close that released nothing -- and would keep doing it while the window
+	// it meant to free stayed booked until its TTL.
+	it("reads `found`, not the status, as whether anything was released", async () => {
+		const server = closer({ session_id: "lead", found: false });
+		const client = createPolykvClient({
+			baseUrl: "http://localhost:8080/v1",
+			fetch: server.fetchImpl,
+		});
+		expect(await client.closeSession("lead")).toBe(false);
+	});
+
+	it("escapes an id that would otherwise change the path", async () => {
+		const server = closer({ found: true });
+		const client = createPolykvClient({
+			baseUrl: "http://localhost:8080/v1",
+			fetch: server.fetchImpl,
+		});
+		await client.closeSession("a/b");
+		expect(server.calls[0]?.path).toBe("/sessions/a%2Fb/close");
+	});
+});

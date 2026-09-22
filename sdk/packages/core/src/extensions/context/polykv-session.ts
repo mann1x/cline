@@ -3,9 +3,12 @@ import {
 	clearPolykvSession,
 	createPolykvClient,
 	getPolykvSession,
+	hasOpencotiFeature,
 	normalizeProviderId,
+	OPENCOTI_FEATURES,
 	type PolykvCapacity,
 	type PolykvClient,
+	probeOpencotiProps,
 	setPolykvSession,
 } from "@cline/llms";
 import type { BasicLogger } from "@cline/shared";
@@ -425,30 +428,74 @@ export async function repointPolykvAfterCompaction(options: {
 	}
 }
 
-/** Unpin and release the session's pool. The one call that stops a leak. */
+/**
+ * End a session: release its pool, then give its window back.
+ *
+ * The one call that stops a leak, and it now stops two of them. The pool half
+ * is unpin-then-release, which is what keeps a pinned prefix from blocking
+ * reclaim forever. The window half is `POST /sessions/{id}/close`, and without
+ * it a guaranteed allocation stays booked for the server's idle TTL -- five
+ * minutes on the build this was written against -- so a user who ends one 256k
+ * conversation and opens another waits out their own last session.
+ *
+ * **The window is released even when there was never a pool.** A session can
+ * book a window with pooling off, or before a pool has been built, and gating
+ * the close on pool state would leak exactly those -- which are the expensive
+ * ones, since the whole allocation is held rather than a prefix.
+ */
 export async function releasePolykvSession(options: {
 	sessionId: string | undefined;
 	providerConfig: PolykvProviderConfig;
 	logger?: BasicLogger;
 }): Promise<void> {
-	const state = getPolykvSession(options.sessionId);
-	if (!options.sessionId || !state) {
+	if (!options.sessionId) {
 		return;
 	}
-	clearPolykvSession(options.sessionId);
+	const sessionId = options.sessionId;
+	const state = getPolykvSession(sessionId);
+	clearPolykvSession(sessionId);
 	// The answer described a pool that is about to stop existing.
-	clearPolykvCapacityCache(options.sessionId);
+	clearPolykvCapacityCache(sessionId);
 	const client = clientFor(options.providerConfig);
 	if (!client) {
 		return;
 	}
+	if (state) {
+		try {
+			await client.unpin(state.poolId);
+			await client.releasePool(state.poolId);
+			options.logger?.debug?.(`[PolyKV] Released pool ${state.poolId}`);
+		} catch (error) {
+			options.logger?.debug?.(
+				`[PolyKV] Could not release pool ${state.poolId}: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+			);
+		}
+	}
+
+	// Only where the server says it has the route. A 404 landing in the catch
+	// below would read as "closed", which is this module's founding bug wearing
+	// a different hat.
+	const props = await probeOpencotiProps(
+		options.providerConfig.baseUrl,
+		options.providerConfig.fetch,
+	).catch(() => undefined);
+	if (!hasOpencotiFeature(props?.features, OPENCOTI_FEATURES.sessionClose)) {
+		return;
+	}
 	try {
-		await client.unpin(state.poolId);
-		await client.releasePool(state.poolId);
-		options.logger?.debug?.(`[PolyKV] Released pool ${state.poolId}`);
+		const released = await client.closeSession(sessionId);
+		options.logger?.debug?.(
+			released
+				? `[PolyKV] Closed session ${sessionId}`
+				: // Not an error, and worth saying: the server held no window
+					// under this id, so ours and theirs have diverged.
+					`[PolyKV] Server held no window for session ${sessionId}`,
+		);
 	} catch (error) {
 		options.logger?.debug?.(
-			`[PolyKV] Could not release pool ${state.poolId}: ${
+			`[PolyKV] Could not close session ${sessionId}: ${
 				error instanceof Error ? error.message : String(error)
 			}`,
 		);

@@ -306,6 +306,22 @@ export interface PolykvClient {
 			ephemeral?: boolean;
 		},
 	): Promise<PolykvPool>;
+	/**
+	 * Give a session's guaranteed window back, before its idle TTL does.
+	 *
+	 * Called on conversation end, always. Skipping it holds the whole booked
+	 * allocation for the TTL -- five minutes on the build this was written
+	 * against -- so a user who ends one 256k conversation and opens another
+	 * waits out their own last session. The TTL is the crash net, not the
+	 * mechanism.
+	 *
+	 * Answers whether anything was actually released. The server replies
+	 * `200 {"found": false}` for a session it never held, so the status line
+	 * says only that the request arrived; `found` says whether it did anything.
+	 * A `false` for a session we believed we held means our id and the
+	 * server's have diverged, which is worth knowing and not worth guessing at.
+	 */
+	closeSession(sessionId: string): Promise<boolean>;
 	pin(poolId: string): Promise<void>;
 	unpin(poolId: string): Promise<void>;
 	releasePool(poolId: string): Promise<void>;
@@ -689,6 +705,13 @@ export function createPolykvClient(options: PolykvClientOptions): PolykvClient {
 					{ method: "POST", body },
 				),
 			),
+		closeSession: async (sessionId) => {
+			const result = await call<{ found?: boolean }>(
+				`/sessions/${encodeURIComponent(sessionId)}/close`,
+				{ method: "POST", body: {} },
+			);
+			return result?.found === true;
+		},
 		pin: async (poolId) => {
 			await call(`/polykv/pools/${encodeURIComponent(poolId)}/pin`, {
 				method: "POST",

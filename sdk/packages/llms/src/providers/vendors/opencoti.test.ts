@@ -376,3 +376,100 @@ describe("reading the attach off the response", () => {
 		expect(probe.seen.at(-1)?.poolId).toBeUndefined();
 	});
 });
+
+/**
+ * Booking a window, and the floor that makes a smaller one acceptable.
+ *
+ * `num_ctx` asks for a guaranteed allocation. `num_ctx_min` is the floor below
+ * which a smaller window is worse than no connection at all, and the server
+ * settles the two in ONE admission: the largest window in the band, or a 429.
+ *
+ * Doing it server-side is not a convenience. The client-side version -- read
+ * `largest_admissible` off the refusal, then retry at that -- has a race, since
+ * another arrival can take the cells between the read and the retry. One
+ * request has no gap to lose.
+ */
+describe("asking for a window", () => {
+	async function sent(request: Record<string, unknown>) {
+		let body: Record<string, unknown> | undefined;
+		const fetchImpl = createOpencotiFetch({
+			fetch: (async (_input: unknown, init?: RequestInit) => {
+				body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+				return ok({ choices: [] });
+			}) as unknown as typeof fetch,
+			request,
+		});
+		await fetchImpl("http://x/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({ model: "m", messages: [] }),
+		});
+		return body;
+	}
+
+	it("puts the window and its floor at the body root", async () => {
+		const body = await sent({ numCtx: 262_144, numCtxMin: 65_536 });
+		expect(body?.num_ctx).toBe(262_144);
+		expect(body?.num_ctx_min).toBe(65_536);
+	});
+
+	// A floor with nothing to be a floor under says nothing. Sent alone it
+	// would read as a demand for a minimum window on a request that never
+	// asked for one.
+	it("sends no floor when no window was asked for", async () => {
+		const body = await sent({ numCtxMin: 65_536 });
+		expect(body).not.toHaveProperty("num_ctx_min");
+		expect(body).not.toHaveProperty("num_ctx");
+	});
+
+	// A floor above the ask is a contradiction, and the resolution is the one
+	// that means something: exactly this window or refuse. That is also the
+	// resume rule's shape, so it is the right way to be wrong.
+	it("clamps a floor above the ask down to the ask", async () => {
+		const body = await sent({ numCtx: 65_536, numCtxMin: 262_144 });
+		expect(body?.num_ctx_min).toBe(65_536);
+	});
+
+	it("leaves both out when the user stated no window", async () => {
+		const body = await sent({ sessionId: "s" });
+		expect(body).not.toHaveProperty("num_ctx");
+	});
+});
+
+/**
+ * `X-Context-Window` is the grant, and its absence is not a grant.
+ *
+ * The server sends it on every admitted response **when it is in guaranteed
+ * mode**. Absent therefore means "not guaranteed" -- an overcommit request, or
+ * a server not enforcing -- and reading that as "unchanged" is a silent lie
+ * about the one number the conversation is sized against.
+ */
+describe("reading the granted window", () => {
+	function window(headers: Record<string, string>) {
+		const seen: OpencotiResponseFacts[] = [];
+		const fetchImpl = createOpencotiFetch({
+			fetch: (async () =>
+				ok({ choices: [] }, headers)) as unknown as typeof fetch,
+			onFacts: (f) => seen.push(f),
+		});
+		return {
+			seen,
+			run: () =>
+				fetchImpl("http://x/v1/chat/completions", {
+					method: "POST",
+					body: "{}",
+				}),
+		};
+	}
+
+	it("reports the window the server granted", async () => {
+		const probe = window({ "x-context-window": "163840" });
+		await probe.run();
+		expect(probe.seen.at(-1)?.contextWindow).toBe(163_840);
+	});
+
+	it("says nothing rather than guessing when the header is absent", async () => {
+		const probe = window({});
+		await probe.run();
+		expect(probe.seen.at(-1)?.contextWindow).toBeUndefined();
+	});
+});

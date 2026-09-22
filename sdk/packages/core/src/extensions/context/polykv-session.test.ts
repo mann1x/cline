@@ -1,4 +1,8 @@
-import { getPolykvSession, resetPolykvSessions } from "@cline/llms";
+import {
+	getPolykvSession,
+	resetPolykvAvailability,
+	resetPolykvSessions,
+} from "@cline/llms";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	clearPolykvCapacityCache,
@@ -22,6 +26,8 @@ function engine(
 		capacity?: Record<string, unknown>;
 		templated?: string;
 		fail?: string;
+		features?: string[];
+		sessionHeld?: boolean;
 	} = {},
 ) {
 	const calls: Array<{ method: string; path: string; body?: unknown }> = [];
@@ -66,6 +72,17 @@ function engine(
 		) {
 			return new Response(null, { status: 204 });
 		}
+		if (url.pathname === "/props") {
+			return Response.json({
+				features: overrides.features ?? [],
+				opencoti: { polykv: { pools_enabled: true } },
+			});
+		}
+		// `found` is the answer, not the status: the server replies 200 with
+		// `found: false` for a session it never held.
+		if (url.pathname.endsWith("/close")) {
+			return Response.json({ found: overrides.sessionHeld !== false });
+		}
 		if (init?.method === "DELETE") {
 			// There is no DELETE route on this server. Say so.
 			return new Response("not found", { status: 404 });
@@ -85,6 +102,10 @@ const provider = (fetchImpl: typeof fetch) => ({
 
 afterEach(() => {
 	resetPolykvSessions();
+	// The `/props` probe is cached per server root, and every case here uses
+	// the same one. Left standing, the first test's feature list decides what
+	// every later test believes the server can do.
+	resetPolykvAvailability();
 });
 
 describe("deciding whether there is a pool tree at all", () => {
@@ -479,7 +500,11 @@ describe("ending the session", () => {
 		// Both are real actions on the server's own table. `pin` with a flag in
 		// the body is not an unpin -- the handler dispatches on the path segment
 		// and never reads the body -- and there is no DELETE route at all.
-		expect(server.calls.map((c) => `${c.method} ${c.path}`)).toEqual([
+		expect(
+			server.calls
+				.map((c) => `${c.method} ${c.path}`)
+				.filter((c) => !c.endsWith("/props")),
+		).toEqual([
 			"POST /polykv/pools/pool-root/unpin",
 			"POST /polykv/pools/pool-root/release",
 		]);
@@ -492,7 +517,64 @@ describe("ending the session", () => {
 			sessionId: "s1",
 			providerConfig: provider(server.fetch),
 		});
-		expect(server.calls).toHaveLength(0);
+		// `/props` is the flag probe and is cached per root; it is a read, not
+		// an action, so it does not count as doing something.
+		expect(server.calls.filter((c) => c.path !== "/props")).toHaveLength(0);
+	});
+
+	// A session can hold a booked WINDOW without holding a pool -- pooling off,
+	// or a window asked for before a pool was ever built. Gating the close on
+	// pool state would leak exactly those, and they are the expensive ones:
+	// the whole allocation stays booked until the idle TTL.
+	it("closes a session that booked a window but never built a pool", async () => {
+		const server = engine({ features: ["session_close_v1"] });
+		await releasePolykvSession({
+			sessionId: "s1",
+			providerConfig: provider(server.fetch),
+		});
+		expect(server.calls.map((c) => `${c.method} ${c.path}`)).toContain(
+			"POST /sessions/s1/close",
+		);
+	});
+
+	it("closes the session after releasing its pool, not instead", async () => {
+		const server = engine({ features: ["session_close_v1"] });
+		const config = provider(server.fetch);
+		await ensurePolykvPool({
+			sessionId: "s1",
+			providerConfig: config,
+			systemPrompt: "prompt",
+		});
+		server.calls.length = 0;
+
+		await releasePolykvSession({ sessionId: "s1", providerConfig: config });
+
+		expect(
+			server.calls
+				.map((c) => `${c.method} ${c.path}`)
+				.filter((c) => !c.endsWith("/props")),
+		).toEqual([
+			"POST /polykv/pools/pool-root/unpin",
+			"POST /polykv/pools/pool-root/release",
+			"POST /sessions/s1/close",
+		]);
+	});
+
+	// An older server has no such route, and a 404 landing in a catch that
+	// reads as "closed" is this module's founding bug wearing a new hat.
+	it("does not call a close route the server never advertised", async () => {
+		const server = engine();
+		const config = provider(server.fetch);
+		await ensurePolykvPool({
+			sessionId: "s1",
+			providerConfig: config,
+			systemPrompt: "prompt",
+		});
+		server.calls.length = 0;
+
+		await releasePolykvSession({ sessionId: "s1", providerConfig: config });
+
+		expect(server.calls.some((c) => c.path.endsWith("/close"))).toBe(false);
 	});
 });
 

@@ -48,6 +48,37 @@ export interface OpencotiRequestOptions {
 	sharedPrefixTokens?: number;
 	/** Bypass admission for this request, explicitly and visibly. */
 	overcommit?: boolean;
+	/**
+	 * The context window to book, in tokens.
+	 *
+	 * Sent only when the user stated one. A guaranteed allocation is booked
+	 * whole at admission and held for the session's life, so this is the number
+	 * the conversation is sized against for as long as it lives.
+	 *
+	 * On a CONTINUATION -- a turn on a session the server already holds -- it is
+	 * ignored rather than re-booked. You keep the window you were granted, and
+	 * `X-Context-Window` reports that one, so a changed value here must be
+	 * checked against what comes back rather than assumed to have taken.
+	 */
+	numCtx?: number;
+	/**
+	 * The floor below which a window is worse than no connection.
+	 *
+	 * The server settles this against `numCtx` in ONE admission: the largest
+	 * window in the band, or a 429 naming `largest_admissible`. That matters
+	 * beyond tidiness -- the client-side equivalent is to read
+	 * `largest_admissible` off a refusal and retry at it, and another arrival
+	 * can take those cells in the gap between the read and the retry. A single
+	 * request has no gap to lose.
+	 *
+	 * On a RESUME, send it equal to `numCtx`: "the window I had, or refuse".
+	 * A resumed conversation may never negotiate down, because its history no
+	 * longer fits a smaller window and a silent shrink truncates mid-thread.
+	 *
+	 * Requires `ctx_min_negotiation_v1`. Without it the field is ignored and
+	 * the caller must fall back to retrying against `largest_admissible`.
+	 */
+	numCtxMin?: number;
 }
 
 /**
@@ -99,6 +130,16 @@ export interface OpencotiResponseFacts {
 	 * that the server did not report one.
 	 */
 	poolSharedTokens?: number;
+	/**
+	 * The window the server granted, from `X-Context-Window`.
+	 *
+	 * **Absent is not "unchanged".** The header rides every admitted response
+	 * *while the server is in guaranteed mode*, so its absence means the
+	 * request was not guaranteed -- an `overcommit`, or a server not enforcing
+	 * -- and the honest reading is "unknown". Treating it as unchanged is a
+	 * silent lie about the one number the conversation is sized against.
+	 */
+	contextWindow?: number;
 }
 
 /**
@@ -217,6 +258,18 @@ export function createOpencotiFetch(options: {
 				if (extras.overcommit !== undefined) {
 					body.overcommit = extras.overcommit;
 				}
+				if (extras.numCtx !== undefined) {
+					body.num_ctx = extras.numCtx;
+					// A floor is only meaningful under an ask. Sent alone it
+					// would read as a demand for a minimum window on a request
+					// that never asked for one; sent above the ask it is a
+					// contradiction, and the resolution that means something is
+					// "exactly this window or refuse" -- which is also the
+					// resume rule's shape.
+					if (extras.numCtxMin !== undefined) {
+						body.num_ctx_min = Math.min(extras.numCtxMin, extras.numCtx);
+					}
+				}
 				nextInit = { ...init, body: JSON.stringify(body) };
 			} catch {
 				// A body that is not JSON is not ours to rewrite. The request goes
@@ -265,6 +318,14 @@ export function createOpencotiFetch(options: {
 					? {
 							settleWaivedMs: numberOrUndefined(
 								response.headers.get("x-polykv-settle-waived"),
+							) as number,
+						}
+					: {}),
+				...(numberOrUndefined(response.headers.get("x-context-window")) !==
+				undefined
+					? {
+							contextWindow: numberOrUndefined(
+								response.headers.get("x-context-window"),
 							) as number,
 						}
 					: {}),
