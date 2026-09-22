@@ -58,6 +58,10 @@ export {
 	toTeamProgressLifecycleEvent,
 } from "./projections";
 export * from "./runtime";
+export {
+	isSessionAllocationFull,
+	retryWhileSessionFull,
+} from "./session-window-retry";
 export type {
 	SubAgentEndContext,
 	SubAgentStartContext,

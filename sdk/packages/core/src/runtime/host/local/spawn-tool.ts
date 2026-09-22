@@ -23,6 +23,7 @@ import { createSpawnAgentTool } from "../../../extensions/tools/team";
 import { admissionFromCapacity } from "../../../extensions/tools/team/agent-admission";
 import type { DelegatedAgentConfigProvider } from "../../../extensions/tools/team/delegated-agent";
 import { createDelegatedAgent } from "../../../extensions/tools/team/delegated-agent";
+import { retryWhileSessionFull } from "../../../extensions/tools/team/session-window-retry";
 import {
 	createSpawnSwarmTool,
 	SWARM_REDUCER_PROMPT,
@@ -358,11 +359,25 @@ export function createSessionSwarmTool(
 			// the endpoint to itself. It also carries the engine's admission
 			// answer, which is what paces the round.
 			const slotGate = base.getRuntimeConfig().slotGate;
+			// Refused because the LEAD's window is full, not the server's: a
+			// pooled worker is charged to the session that owns the pool, so
+			// the room comes back when a running worker finishes. Waiting is
+			// the answer; failing the worker throws away a task the round was
+			// asked to do.
+			const runWorker = () =>
+				retryWhileSessionFull(() => worker.run(request.task), {
+					onRetry: (attempt, waitMs) =>
+						config.logger?.log?.(
+							`[PolyKV] ${request.name} refused: the session's window is full; waiting ${
+								waitMs / 1000
+							}s for a worker to finish (attempt ${attempt})`,
+						),
+				});
 			return placed
-				? await placed.run(() => worker.run(request.task))
+				? await placed.run(runWorker)
 				: slotGate
-					? await slotGate.run(() => worker.run(request.task))
-					: await worker.run(request.task);
+					? await slotGate.run(runWorker)
+					: await runWorker();
 		} finally {
 			clearPolykvSession(workerSessionId);
 			placed?.release();
