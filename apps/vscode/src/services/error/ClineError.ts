@@ -74,6 +74,49 @@ interface ErrorDetails {
 
 const RATE_LIMIT_PATTERNS = [/status code 429/i, /rate limit/i, /too many requests/i, /quota exceeded/i, /resource exhausted/i]
 
+/**
+ * The most specific human-readable message an error carries.
+ *
+ * A provider that answers with `{"error":{"code":400,"message":"…"}}` has no
+ * message at the top level, so the old chain fell through to `String(error)`
+ * and rendered **"[object Object]"** above the raw body — reported from
+ * pandorum against a rejected `repeat_last_n`. The nested form is checked
+ * before any fallback now, and the fallback itself can no longer be opaque:
+ * JSON is worse to read than a sentence and far better than nothing.
+ *
+ * The chain it replaces ended `String(error) || error?.cause?.means`. Neither
+ * term could ever be reached: `String()` of anything is a non-empty string, so
+ * the `||` after it was dead, and `means` is not a property any error has.
+ */
+export function clineErrorMessageOf(error: any): string {
+	const candidates = [
+		error?.message,
+		error?.error?.message,
+		error?.response?.message,
+		error?.response?.data?.error?.message,
+		error?.cause?.message,
+		error?.data?.error?.message,
+	]
+	for (const candidate of candidates) {
+		if (typeof candidate === "string" && candidate.trim()) {
+			return candidate
+		}
+	}
+	const stringified = String(error)
+	if (stringified && stringified !== "[object Object]") {
+		return stringified
+	}
+	try {
+		const json = JSON.stringify(error)
+		if (json && json !== "{}" && json !== "null") {
+			return json
+		}
+	} catch {
+		// A cyclic error object is still an error; fall through to the label.
+	}
+	return "Unknown error"
+}
+
 export class ClineError extends Error {
 	readonly title = "ClineError"
 	readonly _error: ErrorDetails
@@ -89,7 +132,7 @@ export class ClineError extends Error {
 	) {
 		const error = serializeError(raw)
 
-		const message = error.message || error?.response?.message || String(error) || error?.cause?.means
+		const message = clineErrorMessageOf(error)
 		super(message)
 
 		// Extract status from multiple possible locations

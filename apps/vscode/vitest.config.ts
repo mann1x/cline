@@ -33,6 +33,7 @@ export default defineConfig({
 			"src/core/controller/remoteConfig/**/*.test.ts",
 			"src/core/controller/state/**/*.test.ts",
 			"src/core/controller/slash/**/*.test.ts",
+			"src/services/error/*.test.ts",
 			"src/services/mcp/__tests__/settingsLock.test.ts",
 			"src/services/mcp/mcp-oauth-failure.test.ts",
 			"src/services/mcp/reserved-server-names.test.ts",
