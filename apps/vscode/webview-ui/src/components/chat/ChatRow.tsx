@@ -199,14 +199,8 @@ export const ChatRowContent = memo(
 		reasoningContent,
 		responseStarted,
 	}: ChatRowContentProps) => {
-		const {
-			backgroundEditEnabled,
-			mcpServers,
-			vscodeTerminalExecutionMode,
-			clineMessages,
-			showFeatureTips,
-			enableCheckpointsSetting,
-		} = useExtensionState()
+		const { mcpServers, vscodeTerminalExecutionMode, clineMessages, showFeatureTips, enableCheckpointsSetting } =
+			useExtensionState()
 		const [quoteButtonState, setQuoteButtonState] = useState<QuoteButtonState>({
 			visible: false,
 			top: 0,
@@ -518,7 +512,11 @@ export const ChatRowContent = memo(
 									toolIcon("sign-out", "yellow", -90, "This file is outside of your workspace")}
 								<span style={{ fontWeight: "bold" }}>{editToolTitle}</span>
 							</div>
-							{backgroundEditEnabled && tool.path && (tool.diff || tool.content) ? (
+							{/* Drawn in both edit modes. It arrived with background edit
+							    and was gated on it, so with the setting off the row showed
+							    only the payload sent to the tool. Where the edit is applied
+							    says nothing about wanting to see what changed. */}
+							{tool.path && (tool.diff || tool.content) ? (
 								<DiffEditRow
 									isLoading={message.partial}
 									patch={tool.diff || tool.content!}
@@ -563,7 +561,7 @@ export const ChatRowContent = memo(
 									toolIcon("sign-out", "yellow", -90, "This file is outside of your workspace")}
 								<span className="font-bold">Cerebriline wants to create a new file:</span>
 							</div>
-							{backgroundEditEnabled && tool.path && tool.content ? (
+							{tool.path && tool.content ? (
 								<DiffEditRow patch={tool.content} path={tool.path} startLineNumbers={tool.startLineNumbers} />
 							) : (
 								<CodeAccordian
