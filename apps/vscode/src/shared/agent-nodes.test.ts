@@ -4,6 +4,7 @@ import {
 	agentNodeLabels,
 	DEFAULT_AGENT_NODE_PRIORITY,
 	MAX_AGENT_NODES,
+	nextAgentNodeId,
 	PRIMARY_AGENT_NODE_ID,
 	parseAgentNodes,
 	removeAgentNode,
@@ -97,5 +98,31 @@ describe("agent nodes", () => {
 			"nope",
 		])
 		expect(parseAgentNodes(stored).map((node) => node.id)).toEqual([PRIMARY_AGENT_NODE_ID, "b"])
+	})
+})
+
+describe("minting an id", () => {
+	// The clock is the source so that a node added after one was removed cannot
+	// reuse a departed node's id and inherit its stored profile. Two adds in the
+	// same millisecond are the case that breaks it, and the failure is silent:
+	// addAgentNode returns the list unchanged and no tab appears.
+	it("does not collide when two nodes are added in the same millisecond", () => {
+		let nodes = parseAgentNodes(undefined)
+		const first = nextAgentNodeId(nodes, 1_700_000_000_000)
+		nodes = addAgentNode(nodes, first)
+		const second = nextAgentNodeId(nodes, 1_700_000_000_000)
+
+		expect(second).not.toBe(first)
+		nodes = addAgentNode(nodes, second)
+		expect(nodes).toHaveLength(3)
+		expect(new Set(nodes.map((node) => node.id)).size).toBe(3)
+	})
+
+	it("keeps going past a second collision", () => {
+		let nodes = parseAgentNodes(undefined)
+		for (let i = 0; i < 4; i++) {
+			nodes = addAgentNode(nodes, nextAgentNodeId(nodes, 1_700_000_000_000))
+		}
+		expect(new Set(nodes.map((node) => node.id)).size).toBe(5)
 	})
 })

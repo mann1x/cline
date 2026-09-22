@@ -89,6 +89,28 @@ export function serializeAgentNodes(nodes: readonly AgentNodeRecord[]): string {
 	return JSON.stringify(nodes)
 }
 
+/**
+ * An id no node in the list is using.
+ *
+ * Ids are minted from the clock so that a node added after one was removed can
+ * never reuse a departed node's id and inherit its stored profile. Two adds
+ * inside the same millisecond would collide though, and a collision is silent:
+ * `addAgentNode` returns the list unchanged, so the tab simply does not
+ * appear. A suffix is cheaper than explaining that.
+ */
+export function nextAgentNodeId(nodes: readonly AgentNodeRecord[], now: number = Date.now()): string {
+	const base = `node-${now.toString(36)}`
+	if (!nodes.some((node) => node.id === base)) {
+		return base
+	}
+	for (let suffix = 1; ; suffix++) {
+		const candidate = `${base}-${suffix}`
+		if (!nodes.some((node) => node.id === candidate)) {
+			return candidate
+		}
+	}
+}
+
 /** A new node at the end, empty, at priority 1. A no-op at ten. */
 export function addAgentNode(nodes: readonly AgentNodeRecord[], id: string): AgentNodeRecord[] {
 	if (nodes.length >= MAX_AGENT_NODES || nodes.some((node) => node.id === id)) {

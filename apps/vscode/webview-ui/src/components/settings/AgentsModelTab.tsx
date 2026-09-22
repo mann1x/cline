@@ -4,6 +4,7 @@ import {
 	agentNodeLabels,
 	MAX_AGENT_NODE_PRIORITY,
 	MIN_AGENT_NODE_PRIORITY,
+	nextAgentNodeId,
 	PRIMARY_AGENT_NODE_ID,
 	parseAgentNodes,
 	removeAgentNode,
@@ -69,10 +70,7 @@ const AgentsModelTab = ({
 	}, [])
 
 	const handleAdd = useCallback(async () => {
-		// Ids are minted from the clock rather than the count, so a node added
-		// after one was removed can never reuse a departed node's id and
-		// inherit its profile.
-		const id = `node-${Date.now().toString(36)}`
+		const id = nextAgentNodeId(nodes)
 		const next = addAgentNode(nodes, id)
 		setSelectedId(id)
 		await persistNodes(next)
