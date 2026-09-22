@@ -906,6 +906,48 @@ function anchorDescribesRange(rangeText: string, oldStr: string): boolean {
 		: false;
 }
 
+/**
+ * Where `old_text` sits INSIDE the lines the range names, when it names only
+ * part of them.
+ *
+ * `anchorDescribesRange` asks whether the two halves describe the same text,
+ * and a model that names a line and quotes a fragment of it answers no --
+ * while having said something exact and checkable. Measured on pandorum
+ * 2026-09-22, sub-agent `js-syntactic` on manic_miner.html:
+ *
+ *     {start_line: 90, old_text: "}});});}", new_text: "}});}"}
+ *
+ * Line 90 is 300 characters of minified JavaScript and `old_text` is its last
+ * eight. Replacing the range would have deleted the whole method, so refusing
+ * was right and accepting the range was never an option -- but the call is not
+ * ambiguous. The range says which line, the anchor says which part of it, and
+ * together they name one span of characters and no other.
+ *
+ * Exactly once inside the range, and no fallback to the rest of the file: the
+ * range is what makes a fragment like `}});});}` -- which occurs all over a
+ * minified file -- unambiguous, so widening the search past it would throw
+ * away the half that disambiguates. Twice inside the range is refused for the
+ * same reason.
+ */
+function findAnchorWithinRange(
+	rangeText: string,
+	oldStr: string,
+): { index: number; length: number } | undefined {
+	const target = anchorText(rangeText);
+	const suppliedText = anchorText(oldStr);
+	const supplied = hasLineNumberGutter(suppliedText)
+		? anchorText(stripLineNumberGutter(suppliedText))
+		: suppliedText;
+	if (supplied === "" || supplied === target) {
+		return undefined;
+	}
+	const index = target.indexOf(supplied);
+	if (index < 0 || target.indexOf(supplied, index + 1) >= 0) {
+		return undefined;
+	}
+	return { index, length: supplied.length };
+}
+
 /** How much of a line to show either side of the character that differs. */
 const DIVERGENCE_WINDOW = 48;
 
@@ -1085,9 +1127,35 @@ async function replaceLineRange(
 			effectiveEndLine = uniqueSpan.endLine;
 		}
 	}
+	// The anchor naming part of the range, rather than all of it or something
+	// somewhere else. The two halves are then narrower together than either is
+	// alone -- the range picks the line out of the file, the anchor picks the
+	// characters out of the line -- so the edit is applied to exactly those
+	// characters and the rest of the range is written back unchanged.
+	//
+	// Expressed as a substitution into the range's own text so that everything
+	// below it is unchanged: this path replaces whole lines, and the lines it
+	// now replaces are the file's own, carrying the model's `new_text` where
+	// its `old_text` was.
+	let narrowedRangeText: string | undefined;
 	if (
 		anchored &&
 		!reanchoredFrom &&
+		!anchorDescribesRange(rangeText, oldStr as string)
+	) {
+		const within = findAnchorWithinRange(rangeText, oldStr as string);
+		if (within) {
+			const target = anchorText(rangeText);
+			narrowedRangeText =
+				target.slice(0, within.index) +
+				(newStr ?? "") +
+				target.slice(within.index + within.length);
+		}
+	}
+	if (
+		anchored &&
+		!reanchoredFrom &&
+		!narrowedRangeText &&
 		!anchorDescribesRange(rangeText, oldStr as string)
 	) {
 		const suppliedLines = anchorText(oldStr as string).split("\n").length;
@@ -1148,13 +1216,20 @@ async function replaceLineRange(
 	// not occur. So the check is narrow, and silence is the failure it prevents:
 	// a refusal would cost a turn, but a gutter written into a file is a
 	// corruption that reads as success.
+	// The substitution above already carries the file's own text either side of
+	// the edit, so it is the replacement from here down. Nothing else changes:
+	// the gutter checks, the no-op ledger and the duplication guard all read
+	// whatever is going to be written.
+	const effectiveNewStr = narrowedRangeText ?? newStr;
 	const hadSequentialGutter =
-		newStr != null &&
-		newStr !== "" &&
-		hasSequentialGutter(newStr, startLineOneBased);
+		effectiveNewStr != null &&
+		effectiveNewStr !== "" &&
+		hasSequentialGutter(effectiveNewStr, startLineOneBased);
 	const replacementText = hadSequentialGutter
-		? stripLineNumberGutter(normalizeLineEndings(newStr as string, eol))
-		: newStr;
+		? stripLineNumberGutter(
+				normalizeLineEndings(effectiveNewStr as string, eol),
+			)
+		: effectiveNewStr;
 
 	// The gutter also says which lines the text was read from, and that is worth
 	// keeping: when its last number runs past `end_line`, the call names a
@@ -1169,7 +1244,7 @@ async function replaceLineRange(
 	// them 129, 130, 131 just as legitimately, and widening the range for it
 	// would delete two lines nobody asked to touch.
 	const gutterLastLine = hadSequentialGutter
-		? startLineOneBased + countNonBlankLines(newStr as string) - 1
+		? startLineOneBased + countNonBlankLines(effectiveNewStr as string) - 1
 		: undefined;
 	const gutterOverrunsRange =
 		gutterLastLine !== undefined && gutterLastLine > effectiveEndLine;
@@ -1210,7 +1285,9 @@ async function replaceLineRange(
 			filePath,
 			`${range} already reads exactly this way`,
 			quoteCurrentLines(content, startLineOneBased, effectiveEndLine),
-			noteNoOp?.(`lines\u0000${filePath}\u0000${range}\u0000${newStr ?? ""}`),
+			noteNoOp?.(
+				`lines\u0000${filePath}\u0000${range}\u0000${effectiveNewStr ?? ""}`,
+			),
 		);
 	}
 
@@ -1252,7 +1329,7 @@ async function replaceLineRange(
 				? { firstLine: startLineOneBased, lastLine: gutterLastLine as number }
 				: undefined,
 			noteNoOp?.(
-				`duplicated\u0000${filePath}\u0000${range}\u0000${newStr ?? ""}`,
+				`duplicated\u0000${filePath}\u0000${range}\u0000${effectiveNewStr ?? ""}`,
 			),
 			existingBlock ??
 				(doubled

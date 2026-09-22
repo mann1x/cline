@@ -2931,3 +2931,131 @@ describe("a column edit missing its start_column", () => {
 		});
 	});
 });
+
+/**
+ * Measured on pandorum 2026-09-22, sub-agent `js-syntactic` working on
+ * manic_miner.html. Its whole run was one read and one edit:
+ *
+ *     {path: "manic_miner.html", start_line: 90,
+ *      old_text: "}});});}", new_text: "}});}"}
+ *
+ * Line 90 is 300 characters of minified JavaScript and `old_text` is its last
+ * eight -- the mangled brace run the agent had been sent to fix. It was
+ * refused, the agent had nothing else to try, and the file was left broken.
+ *
+ * Neither half of the call was wrong. The range named the right line, the
+ * anchor named the right characters, and the tool had no reading that used
+ * both.
+ */
+describe("a range edit whose old_text names part of the range", () => {
+	const minified = `    dDec(c,x){this.dc.forEach(d=>{if(d.tp==='stl'){c.fill();}});});}`;
+
+	it("edits the characters the anchor names and leaves the rest of the line", async () => {
+		// The same fragment lower down, so the anchor is NOT unique in the file
+		// and the re-anchor path cannot fire. This is the live shape: a brace
+		// run like this occurs all over a minified file, and it is the range
+		// that makes it mean one thing.
+		await withTempFile(
+			`class Level {\n${minified}\n    other(){return 1;}});});}\n}\n`,
+			async (filePath, dir) => {
+				const receipts = createReadReceipts();
+				const editor = createEditorExecutor({ receipts });
+				receipts.noteRead(filePath, 1, 4);
+
+				await editor(
+					{
+						path: filePath,
+						start_line: 2,
+						old_text: "}});});}",
+						new_text: "}});}",
+					},
+					dir,
+					context,
+				);
+
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+					`class Level {\n    dDec(c,x){this.dc.forEach(d=>{if(d.tp==='stl'){c.fill();}});}\n    other(){return 1;}});});}\n}\n`,
+				);
+			},
+		);
+	});
+
+	// The range is what disambiguates, so ambiguity inside it has nothing left
+	// to appeal to. Refused rather than guessed at.
+	it("refuses an anchor that occurs twice inside the range", async () => {
+		await withTempFile("a\nx(1);x(1);\nb\n", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 3);
+
+			await expect(
+				editor(
+					{
+						path: filePath,
+						start_line: 2,
+						end_line: 2,
+						old_text: "x(1);",
+						new_text: "y(2);",
+					},
+					dir,
+					context,
+				),
+			).rejects.toThrow(/No replacement performed/);
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+				"a\nx(1);x(1);\nb\n",
+			);
+		});
+	});
+
+	// Deleting a fragment is the same operation with an empty `new_text`, and
+	// must not be read as "delete the range" -- the line survives without it.
+	it("deletes just the fragment when new_text is empty", async () => {
+		await withTempFile("a\nkeep();drop();\nb\n", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 3);
+
+			await editor(
+				{
+					path: filePath,
+					start_line: 2,
+					end_line: 2,
+					old_text: "drop();",
+					new_text: "",
+				},
+				dir,
+				context,
+			);
+
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+				"a\nkeep();\nb\n",
+			);
+		});
+	});
+
+	// An anchor that spans lines inside a wider range is the same case, and the
+	// lines either side of it have to come back untouched.
+	it("keeps the rest of a multi-line range", async () => {
+		await withTempFile("one\ntwo\nthree\nfour\n", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 4);
+
+			await editor(
+				{
+					path: filePath,
+					start_line: 1,
+					end_line: 4,
+					old_text: "two\nthree",
+					new_text: "TWO\nTHREE",
+				},
+				dir,
+				context,
+			);
+
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+				"one\nTWO\nTHREE\nfour\n",
+			);
+		});
+	});
+});
