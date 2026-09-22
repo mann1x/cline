@@ -48,6 +48,7 @@ import {
 	type RenderedPromptTemplate,
 	resolveOutputBudgetTokens,
 } from "@cline/shared"
+import { PRIMARY_AGENT_NODE_ID, parseAgentNodes } from "@shared/agent-nodes"
 import type { ApiConfiguration } from "@shared/api"
 import { profileProviderSettingsFor } from "@shared/api-config-profiles"
 import { ClineClient } from "@shared/cline"
@@ -1956,6 +1957,61 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 				.join(", ")}`,
 		)
 	}
+	// Agent nodes: the endpoints delegated agents are placed across.
+	//
+	// Node1 is the Agents tab itself and is already resolved above as
+	// `delegatedAgentConnection`; a second node is what makes this a list
+	// rather than a connection. So the list is built only when more than one
+	// node actually resolves to a connection -- with one node the placement
+	// engine would replace a slot gate that is already doing the same job, and
+	// an install that predates nodes would change behaviour for no reason.
+	//
+	// Capacity is asked of each node's own endpoint. Two nodes on two servers
+	// have two independent counts, and asking the lead's would spread a fan-out
+	// across machines by a number that describes neither.
+	const storedAgentNodes = parseAgentNodes(stateManager.getGlobalSettingsKey("agentNodes"))
+	const agentNodes: Array<{
+		id: string
+		priority: number
+		capacity: number
+		connection: DelegatedAgentConnectionOverride
+	}> = []
+	if (agentsStatus === "ready" && storedAgentNodes.length > 1) {
+		for (const node of storedAgentNodes) {
+			const snapshot = node.id === PRIMARY_AGENT_NODE_ID ? agentsSnapshot : node.snapshot
+			const connection =
+				node.id === PRIMARY_AGENT_NODE_ID
+					? delegatedAgentConnection
+					: await buildDelegatedAgentConnection(apiConfig, snapshot)
+			if (!connection) {
+				// A node that names no provider or no model is not a node that
+				// is merely idle: it would take placements and run them on
+				// nothing. Said out loud, because the tab looks configured.
+				Logger.warn(`[Agents] Node ${node.id} names no provider and model; it will not be placed on`)
+				continue
+			}
+			const slots = await resolveAgentSlotLimit({
+				providerId: connection.providerId,
+				baseUrl: connection.baseUrl,
+				parallelSessions: snapshotProviderSettings(snapshot)?.parallelSessions,
+				fetch,
+			})
+			agentNodes.push({
+				id: node.id,
+				priority: node.priority,
+				capacity: slots.limit,
+				connection,
+			})
+		}
+		if (agentNodes.length > 1) {
+			Logger.log(
+				`[Agents] ${agentNodes.length} nodes: ${agentNodes
+					.map((node) => `${node.id}(p${node.priority}, ${node.capacity === 0 ? "uncapped" : node.capacity})`)
+					.join(", ")}`,
+			)
+		}
+	}
+
 	const useAutoCondense = input.taskSettings?.useAutoCondense ?? globalUseAutoCondense
 	// Whether the model is offered subagents at all. Task settings win over the
 	// global one, the same way every other setting here does.
@@ -2155,6 +2211,8 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		// otherwise falls back to a conservative 64k input budget.
 		...(knownModels && Object.keys(knownModels).length > 0 ? { knownModels } : {}),
 		...(delegatedAgentConnection ? { delegatedAgentConnection } : {}),
+		// One node is the connection above; a list starts at two.
+		...(agentNodes.length > 1 ? { agentNodes } : {}),
 		// Only when there is somewhere to escalate to. An `escalation` block
 		// holding no connection would be a feature that is on and cannot run,
 		// which is the state this fork keeps finding and then has to explain.

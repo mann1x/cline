@@ -39,17 +39,42 @@ const EMPTY_SNAPSHOT = { global: {}, mode: {} }
  * string arrives as a prop, a round trip behind, and using it as the base for a
  * write is what made this tab lose edits — see that file for the measurement.
  */
-const ScopedModelTab = ({ setting, storedSnapshot }: { setting: ScopedModelSetting; storedSnapshot: string }) => {
+const ScopedModelTab = ({
+	setting,
+	storedSnapshot,
+	writeSnapshot,
+	scopeKey,
+}: {
+	setting: ScopedModelSetting
+	storedSnapshot: string
+	/**
+	 * Where this panel's configuration is stored, when it is not the settings
+	 * key. Agent nodes past Node1 keep theirs inside the `agentNodes` list, so
+	 * a second and a third agents configuration have somewhere to live —
+	 * `setting` still says which *kind* of tab this is, which is what the
+	 * profile bar and the sampler read.
+	 */
+	writeSnapshot?: (json: string) => Promise<void>
+	/**
+	 * What the sampler's stored entry is keyed on. Two nodes on one provider
+	 * are two different configurations, and sharing a key makes the second
+	 * overwrite the first.
+	 */
+	scopeKey?: string
+}) => {
 	const state = useExtensionState()
 	const { apiConfiguration } = state
 
 	const persist = useCallback(
 		async (snapshot: unknown) => {
-			await StateServiceClient.updateSettings(
-				UpdateSettingsRequest.create(scopedSettingsPatch(setting, JSON.stringify(snapshot))),
-			)
+			const json = JSON.stringify(snapshot)
+			if (writeSnapshot) {
+				await writeSnapshot(json)
+				return
+			}
+			await StateServiceClient.updateSettings(UpdateSettingsRequest.create(scopedSettingsPatch(setting, json)))
 		},
-		[setting],
+		[setting, writeSnapshot],
 	)
 
 	const writerRef = useRef<ReturnType<typeof createScopedSnapshotWriter> | undefined>(undefined)
@@ -92,7 +117,7 @@ const ScopedModelTab = ({ setting, storedSnapshot }: { setting: ScopedModelSetti
 		() => ({
 			ownsProviderSettings: true,
 			providerSettings: storedProviderSettings,
-			scopeKey: setting,
+			scopeKey: scopeKey ?? setting,
 			writeProviderSettings: async (patch: Record<string, unknown>) => {
 				await writer.mutate(scopedSnapshotPatches.providerSettings(patch))
 			},
@@ -125,7 +150,7 @@ const ScopedModelTab = ({ setting, storedSnapshot }: { setting: ScopedModelSetti
 				}
 			},
 		}),
-		[apiConfiguration, setting, storedProviderSettings, writer],
+		[apiConfiguration, setting, scopeKey, storedProviderSettings, writer],
 	)
 
 	const scopedState = useMemo(
