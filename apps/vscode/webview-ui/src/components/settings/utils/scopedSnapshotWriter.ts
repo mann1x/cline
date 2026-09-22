@@ -39,6 +39,16 @@ export interface ScopedSnapshotWriter {
 	adopt(next: ApiConfigurationSnapshot): void
 	/** Whether a write is still on its way to the host. */
 	pending(): boolean
+	/**
+	 * Called whenever the held snapshot actually changes, by either route.
+	 *
+	 * The snapshot lives in a closure variable, which React cannot see. Without
+	 * this, every read had to be triggered by something else changing — so the
+	 * panel rendered whatever it last derived from the prop, and both an
+	 * adoption and a local edit were invisible until an unrelated render came
+	 * along. Returns its own unsubscribe.
+	 */
+	subscribe(listener: () => void): () => void
 }
 
 export function createScopedSnapshotWriter(
@@ -48,20 +58,32 @@ export function createScopedSnapshotWriter(
 	let snapshot = initial
 	let inFlight = 0
 	let queue: Promise<void> = Promise.resolve()
+	const listeners = new Set<() => void>()
+	const announce = () => {
+		for (const listener of listeners) {
+			listener()
+		}
+	}
 
 	return {
 		current: () => snapshot,
 		pending: () => inFlight > 0,
+		subscribe: (listener: () => void) => {
+			listeners.add(listener)
+			return () => listeners.delete(listener)
+		},
 		adopt: (next: ApiConfigurationSnapshot) => {
 			// A prop that arrives while our own writes are unacknowledged is at
 			// best equal to what we hold and at worst the state before them.
 			// Taking it would undo an edit the user has already made.
-			if (inFlight === 0) {
+			if (inFlight === 0 && next !== snapshot) {
 				snapshot = next
+				announce()
 			}
 		},
 		mutate: async (patch: SnapshotPatch) => {
 			snapshot = patch(snapshot)
+			announce()
 			const toPersist = snapshot
 			inFlight += 1
 			const run = queue.then(() => persist(toPersist))

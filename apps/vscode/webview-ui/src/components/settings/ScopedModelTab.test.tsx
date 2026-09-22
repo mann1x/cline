@@ -96,6 +96,23 @@ describe("a scoped model panel", () => {
 		expect(screen.getByTestId("model").textContent).toBe("loaded:q4")
 	})
 
+	// The other half of the same cause, and the one with no prop change at all
+	// to hide behind: an edit made in the panel updates the writer, and anything
+	// reading the held snapshot — the sampler, the window the output-budget
+	// slider sizes against — kept showing the value from before it until the
+	// host echoed the write back, a whole round trip later.
+	it("shows a local edit immediately, with no prop change", async () => {
+		render(<ScopedModelTab setting="agentsModeApiConfiguration" storedSnapshot={snapshotFor("first:q8", 8192)} />)
+		expect(screen.getByTestId("window").textContent).toBe("8192")
+
+		fireEvent.click(screen.getByText("edit"))
+		await act(async () => {})
+
+		// Still unacknowledged: the host has not answered, and must not need to.
+		expect(grpc.store.release).toBeTypeOf("function")
+		expect(screen.getByTestId("window").textContent).toBe("131072")
+	})
+
 	// What adoption is guarded for, and what moving it must not undo: while our
 	// own write is unacknowledged, an arriving prop is the state from *before*
 	// it, so taking it would roll the user's edit back under them. The prop has

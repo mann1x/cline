@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { createScopedSnapshotWriter, scopedSnapshotPatches } from "../scopedSnapshotWriter"
 
 const EMPTY = { global: {}, mode: {} }
@@ -133,5 +133,75 @@ describe("the edits a scoped tab makes", () => {
 
 		expect(writer.current().global).toEqual({ requestTimeoutMs: 600000 })
 		expect(stored(writer).contextWindow).toBe(262144)
+	})
+})
+
+/**
+ * The snapshot lives in a closure variable, which React cannot see — so
+ * nothing outside could tell it had moved. That is what made both a profile
+ * load and a local edit invisible in the panel until an unrelated render came
+ * along.
+ */
+describe("announcing a change", () => {
+	it("tells subscribers about a local edit", async () => {
+		const writer = createScopedSnapshotWriter({ global: {}, mode: {} }, async () => {})
+		const heard = vi.fn()
+		writer.subscribe(heard)
+
+		await writer.mutate(scopedSnapshotPatches.providerSettings({ contextWindow: 131072 }))
+
+		expect(heard).toHaveBeenCalled()
+		expect(writer.current().providerConfig).toMatchObject({ contextWindow: 131072 })
+	})
+
+	it("tells subscribers about an adoption", () => {
+		const writer = createScopedSnapshotWriter({ global: {}, mode: {} }, async () => {})
+		const heard = vi.fn()
+		writer.subscribe(heard)
+
+		writer.adopt({ global: { a: 1 }, mode: {} } as never)
+
+		expect(heard).toHaveBeenCalledTimes(1)
+	})
+
+	// Announcing an adoption that did not happen would re-render for nothing.
+	it("says nothing when adoption is refused, or the value is the one it holds", async () => {
+		let release: (() => void) | undefined
+		const writer = createScopedSnapshotWriter(
+			{ global: {}, mode: {} },
+			() =>
+				new Promise<void>((resolve) => {
+					release = resolve
+				}),
+		)
+		const inFlight = writer.mutate(scopedSnapshotPatches.providerSettings({ contextWindow: 131072 }))
+		// `persist` is reached through the write queue, so it has not been
+		// called yet on the turn `mutate` returns.
+		await Promise.resolve()
+
+		const heard = vi.fn()
+		writer.subscribe(heard)
+		writer.adopt({ global: { stale: true }, mode: {} } as never)
+		expect(heard).not.toHaveBeenCalled()
+		expect(writer.current().providerConfig).toMatchObject({ contextWindow: 131072 })
+
+		release?.()
+		await inFlight
+
+		const next = { global: { fresh: true }, mode: {} } as never
+		writer.adopt(next)
+		expect(heard).toHaveBeenCalledTimes(1)
+		writer.adopt(next)
+		expect(heard).toHaveBeenCalledTimes(1)
+	})
+
+	it("stops telling a subscriber that unsubscribed", async () => {
+		const writer = createScopedSnapshotWriter({ global: {}, mode: {} }, async () => {})
+		const heard = vi.fn()
+		writer.subscribe(heard)()
+
+		await writer.mutate(scopedSnapshotPatches.providerSettings({ contextWindow: 1 }))
+
+		expect(heard).not.toHaveBeenCalled()
 	})
 })
