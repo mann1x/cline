@@ -5,7 +5,7 @@ import { UpdateApiConfigurationRequest } from "@shared/proto/cline/models"
 import { UpdateSettingsRequest } from "@shared/proto/cline/state"
 import { convertApiConfigurationToProto } from "@shared/proto-conversions/models/api-configuration-conversion"
 import { SecretKeys } from "@shared/storage/state-keys"
-import { useCallback, useEffect, useMemo, useRef } from "react"
+import { useCallback, useMemo, useRef } from "react"
 import { ExtensionStateContext, useExtensionState } from "@/context/ExtensionStateContext"
 import { ModelsServiceClient, StateServiceClient } from "@/services/grpc-client"
 import ApiOptions from "./ApiOptions"
@@ -83,17 +83,27 @@ const ScopedModelTab = ({
 	}
 	const writer = writerRef.current
 
-	// A snapshot arriving from anywhere else — a profile load, another window —
-	// is taken only when none of our own writes are still in flight, since
-	// mid-flight the prop is the state from before the edit.
-	useEffect(() => {
-		writer.adopt(parseApiConfigurationSnapshot(storedSnapshot) ?? EMPTY_SNAPSHOT)
-	}, [storedSnapshot, writer])
-
 	// What the panel renders from. `storedSnapshot` is the signal that the held
 	// snapshot may have moved; the value itself comes from the writer, so a
 	// field re-rendered before its write is acknowledged still shows the edit.
-	const heldSnapshot = useMemo(() => writer.current(), [storedSnapshot, writer])
+	//
+	// A snapshot arriving from anywhere else — a profile load, another window —
+	// is adopted here, in the same pass that reads it, and taken only when none
+	// of our own writes are still in flight: mid-flight the prop is the state
+	// from before the edit.
+	//
+	// Adopting in an effect instead is what made a profile load do nothing.
+	// Effects run after render, so the read below was a render ahead of the
+	// adoption, and the writer keeps its snapshot in a closure variable rather
+	// than in state — so nothing re-rendered to correct it. The configuration
+	// appeared only once something else forced a render, which on the Agents
+	// tab meant switching to another node and back. `adopt` is a no-op for an
+	// unchanged value, so running it during render costs nothing and repeats
+	// safely.
+	const heldSnapshot = useMemo(() => {
+		writer.adopt(parseApiConfigurationSnapshot(storedSnapshot) ?? EMPTY_SNAPSHOT)
+		return writer.current()
+	}, [storedSnapshot, writer])
 
 	const scopedConfiguration = useMemo(() => {
 		const settings = applyApiConfigurationSnapshot(heldSnapshot, ["plan", "act"])
