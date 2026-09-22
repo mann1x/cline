@@ -25,9 +25,31 @@ export interface SamplingFieldSpec {
 	readonly hint: string
 	readonly min?: number
 	readonly max?: number
+	/**
+	 * Where one engine's accepted range differs from the dialect's.
+	 *
+	 * A dialect is a set of parameter *names*; it is not a promise that every
+	 * server answering to those names takes the same values. `repeat_last_n` is
+	 * the case that proved it — see its entry below.
+	 */
+	readonly byEngine?: Partial<Record<SamplingEngine, { readonly min?: number; readonly max?: number; readonly hint?: string }>>
 }
 
 export type SamplingDialect = "ollama" | "llamacpp"
+
+/**
+ * The server a field's range is actually enforced by.
+ *
+ * `opencoti` speaks the llama.cpp dialect but is a fork, and on at least one
+ * parameter it accepts a value upstream rejects. Keeping it separate from the
+ * dialect is what lets each keep its own range without either being wrong.
+ */
+export type SamplingEngine = SamplingDialect | "opencoti"
+
+/** Which server's rules apply, given the dialect on screen and the provider. */
+export function samplingEngineFor(dialect: SamplingDialect, providerId?: string): SamplingEngine {
+	return dialect === "llamacpp" && providerId === "opencoti" ? "opencoti" : dialect
+}
 
 export type SamplingFieldKey =
 	| "temperature"
@@ -100,7 +122,21 @@ export const SAMPLING_FIELDS: readonly SamplingFieldSpec[] = [
 		key: "repeatLastN",
 		labels: { ollama: "repeat_last_n", llamacpp: "repeat_last_n" },
 		kind: "integer",
-		hint: "How far back the repeat penalty looks. 0 disables it, -1 uses the whole context.",
+		// The one field where the two engines behind the llama.cpp dialect
+		// disagree, and the disagreement is a 400 rather than a difference in
+		// behaviour. Upstream llama.cpp declares
+		// `set_hard_limits(0, INT32_MAX)` and its own description offers only
+		// `0 = disabled`; opencoti's fork declares `(-1, INT32_MAX)` and
+		// documents `-1 = ctx-size`; Ollama resolves any negative to `num_ctx`
+		// in `Options.normalize`. Offering -1 to upstream llama.cpp made every
+		// request of the session fail with
+		// "Field 'repeat_last_n': Value must be between 0 <= value <= …".
+		hint: "How far back the repeat penalty looks. 0 disables it.",
+		min: 0,
+		byEngine: {
+			ollama: { min: -1, hint: "How far back the repeat penalty looks. 0 disables it, -1 uses the whole context." },
+			opencoti: { min: -1, hint: "How far back the repeat penalty looks. 0 disables it, -1 uses the whole context." },
+		},
 	},
 	{
 		key: "repeatPenalty",
@@ -158,11 +194,26 @@ export const SAMPLING_FIELDS: readonly SamplingFieldSpec[] = [
 	},
 ]
 
-/** The fields an engine offers, with the name that engine calls each one. */
-export function samplingFieldsFor(dialect: SamplingDialect): readonly (SamplingFieldSpec & { label: string })[] {
+/**
+ * The fields an engine offers, with the name that engine calls each one and
+ * the range that engine actually enforces.
+ *
+ * `providerId` is optional so existing callers keep working; without it a
+ * field's dialect-level range applies, which is the stricter of the two
+ * wherever they differ.
+ */
+export function samplingFieldsFor(
+	dialect: SamplingDialect,
+	providerId?: string,
+): readonly (SamplingFieldSpec & { label: string })[] {
+	const engine = samplingEngineFor(dialect, providerId)
 	return SAMPLING_FIELDS.flatMap((field) => {
 		const label = field.labels[dialect]
-		return label === undefined ? [] : [{ ...field, label }]
+		if (label === undefined) {
+			return []
+		}
+		const override = field.byEngine?.[engine]
+		return [{ ...field, ...(override ?? {}), label }]
 	})
 }
 

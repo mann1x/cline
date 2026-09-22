@@ -94,7 +94,7 @@ export const SamplingSection = ({
 		setDraft({})
 	}, [resetKey])
 
-	const fields = samplingFieldsFor(dialect)
+	const fields = samplingFieldsFor(dialect, providerId)
 
 	const value = useCallback(
 		(key: SamplingFieldKey | "stop" | "thinkBudget" | "thinkBudgetMessage"): string => {
