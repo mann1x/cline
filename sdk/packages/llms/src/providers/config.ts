@@ -402,6 +402,29 @@ export interface PolykvOptions {
 	 */
 	swarm?: boolean;
 	maxRetryAfterMs?: number;
+	/**
+	 * Book a guaranteed context window, and accept a smaller one down to
+	 * `contextFloor`.
+	 *
+	 * **Off by default, and the default is the conservative one.** Asking for a
+	 * window changes what a busy server does with the request: from serving it
+	 * best-effort to refusing it at admission. That is a decision to make, not
+	 * one to take on someone's behalf -- so with this off nothing is booked and
+	 * the engine decides, exactly as before.
+	 *
+	 * On, the window asked for is the model's configured context size and the
+	 * server grants the largest that fits in `[contextFloor, window]`.
+	 */
+	dynamicContextSize?: boolean;
+	/**
+	 * The smallest window still worth connecting with.
+	 *
+	 * Below it, a connection is worse than none: the conversation would open
+	 * and immediately be unable to hold enough to be useful. With no floor set
+	 * the ask is all-or-nothing, which is the honest reading of "I did not say
+	 * what smaller would be acceptable".
+	 */
+	contextFloor?: number;
 }
 
 /**

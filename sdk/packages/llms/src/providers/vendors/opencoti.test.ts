@@ -1,11 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
 	createOpencotiFetch,
 	normalizeOpencotiBaseUrl,
 	type OpencotiResponseFacts,
 	readOpencotiRequestOptions,
 } from "./opencoti";
-import { polykvRoot } from "./polykv";
+import {
+	clearPolykvGrantedWindow,
+	getPolykvGrantedWindow,
+	polykvRoot,
+	recordPolykvGrantedWindow,
+	resetPolykvSessions,
+} from "./polykv";
 
 function ok(body: unknown, headers: Record<string, string> = {}): Response {
 	return new Response(JSON.stringify(body), { status: 200, headers });
@@ -471,5 +477,110 @@ describe("reading the granted window", () => {
 		const probe = window({});
 		await probe.run();
 		expect(probe.seen.at(-1)?.contextWindow).toBeUndefined();
+	});
+});
+
+/**
+ * The resume rule, and why it needs no signal from the task layer.
+ *
+ * A resumed conversation must get the window it was opened with. It may never
+ * negotiate down: its history no longer fits a smaller one, so a silent shrink
+ * truncates it mid-thread.
+ *
+ * The awkward part is knowing that a request *is* a resume. The server cannot
+ * tell -- after the idle TTL it has forgotten the session, and a resume is an
+ * ordinary new admission to it. The client can, but only if it remembers what
+ * it was granted.
+ *
+ * So it remembers. Once `X-Context-Window` has reported a grant for a session,
+ * every later admission for that session asks for exactly that window and
+ * floors at it, which is "the window I had, or refuse" with no caller
+ * involvement. On a continuation the server ignores both fields anyway, so the
+ * only turn where this changes anything is the one after the hold lapsed --
+ * which is precisely the resume.
+ */
+describe("remembering the window a session was granted", () => {
+	beforeEach(resetPolykvSessions);
+
+	it("asks for exactly the granted window once one is known", () => {
+		recordPolykvGrantedWindow("conv-1", 163_840);
+		const options = readOpencotiRequestOptions({
+			config: {
+				providerId: "opencoti",
+				options: {
+					polykvSessionId: "conv-1",
+					polykv: {
+						enabled: true,
+						dynamicContextSize: true,
+						contextFloor: 32_768,
+					},
+				},
+			},
+			model: { id: "m", contextWindow: 262_144 },
+		} as never);
+		// Not the configured 262,144, and not floored at 32,768: the window
+		// this conversation already has.
+		expect(options.numCtx).toBe(163_840);
+		expect(options.numCtxMin).toBe(163_840);
+	});
+
+	it("negotiates down to the floor on a session with no grant yet", () => {
+		const options = readOpencotiRequestOptions({
+			config: {
+				providerId: "opencoti",
+				options: {
+					polykvSessionId: "fresh",
+					polykv: {
+						enabled: true,
+						dynamicContextSize: true,
+						contextFloor: 32_768,
+					},
+				},
+			},
+			model: { id: "m", contextWindow: 262_144 },
+		} as never);
+		expect(options.numCtx).toBe(262_144);
+		expect(options.numCtxMin).toBe(32_768);
+	});
+
+	// Off by default: booking a guaranteed window changes what a busy server
+	// does with the request, from "serve it best-effort" to "refuse it at
+	// admission". That is a decision the user makes, not one taken for them.
+	it("books nothing at all when dynamic sizing is off", () => {
+		const options = readOpencotiRequestOptions({
+			config: {
+				providerId: "opencoti",
+				options: {
+					polykvSessionId: "fresh",
+					polykv: { enabled: true },
+				},
+			},
+			model: { id: "m", contextWindow: 262_144 },
+		} as never);
+		expect(options.numCtx).toBeUndefined();
+		expect(options.numCtxMin).toBeUndefined();
+	});
+
+	// A floor is a promise that a smaller window is still usable. Without one
+	// there is nothing to negotiate down to, so the ask is all-or-nothing.
+	it("asks all-or-nothing when sizing is on but no floor was set", () => {
+		const options = readOpencotiRequestOptions({
+			config: {
+				providerId: "opencoti",
+				options: {
+					polykvSessionId: "fresh",
+					polykv: { enabled: true, dynamicContextSize: true },
+				},
+			},
+			model: { id: "m", contextWindow: 262_144 },
+		} as never);
+		expect(options.numCtx).toBe(262_144);
+		expect(options.numCtxMin).toBeUndefined();
+	});
+
+	it("forgets the grant when the session is closed", () => {
+		recordPolykvGrantedWindow("conv-1", 163_840);
+		clearPolykvGrantedWindow("conv-1");
+		expect(getPolykvGrantedWindow("conv-1")).toBeUndefined();
 	});
 });

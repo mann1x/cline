@@ -403,7 +403,46 @@ export function clearPolykvSession(sessionId: string): void {
 }
 
 /** Test seam. Does not unpin anything -- see `releasePool` for that. */
+/**
+ * The window each session was actually granted, as the server reported it.
+ *
+ * Kept apart from the pool state on purpose, and cleared on a different event.
+ * A pool comes and goes -- a compaction re-roots onto a fork and releases the
+ * old one -- while the booked window outlives all of that and ends only when
+ * the session is closed. Clearing this with the pool would lose the one fact
+ * the resume rule depends on.
+ *
+ * In-memory, so it does not survive the extension restarting. That is a real
+ * gap and a known one: within a process it covers the case that actually
+ * happens, a hold lapsing on an idle conversation, and the setters below are
+ * the seam through which the host can hydrate it from stored task state later.
+ */
+const POLYKV_GRANTED_WINDOWS = new Map<string, number>();
+
+/** Record what `X-Context-Window` reported for this session. */
+export function recordPolykvGrantedWindow(
+	sessionId: string,
+	window: number,
+): void {
+	if (Number.isFinite(window) && window > 0) {
+		POLYKV_GRANTED_WINDOWS.set(sessionId, window);
+	}
+}
+
+/** The window this conversation already holds, if we have seen one granted. */
+export function getPolykvGrantedWindow(
+	sessionId: string | undefined,
+): number | undefined {
+	return sessionId ? POLYKV_GRANTED_WINDOWS.get(sessionId) : undefined;
+}
+
+/** Called when the session is closed, not when its pool is released. */
+export function clearPolykvGrantedWindow(sessionId: string): void {
+	POLYKV_GRANTED_WINDOWS.delete(sessionId);
+}
+
 export function resetPolykvSessions(): void {
+	POLYKV_GRANTED_WINDOWS.clear();
 	POLYKV_SESSIONS.clear();
 }
 

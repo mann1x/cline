@@ -185,8 +185,10 @@ export {
 	resolveLlamaCppThinkBudgetWindow,
 } from "./providers/vendors/llamacpp-sampling";
 export {
+	clearPolykvGrantedWindow,
 	clearPolykvSession,
 	createPolykvClient,
+	getPolykvGrantedWindow,
 	getPolykvSession,
 	hasOpencotiFeature,
 	OPENCOTI_FEATURES,
@@ -205,6 +207,7 @@ export {
 	probeOpencotiProps,
 	probePolykvEnabled,
 	readOpencotiStatus,
+	recordPolykvGrantedWindow,
 	resetPolykvAvailability,
 	resetPolykvSessions,
 	setPolykvSession,

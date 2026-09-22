@@ -10,7 +10,11 @@ import { splitToolImagesMiddleware } from "../middleware/split-tool-images";
 import { primeTemplateReinjection } from "../reasoning-history";
 import { llamaCppTimingsMetadataExtractor } from "./llamacpp-timings";
 import { localStreamFetch, resolveLocalStreamDispatcher } from "./ollama";
-import { getPolykvSession } from "./polykv";
+import {
+	getPolykvGrantedWindow,
+	getPolykvSession,
+	recordPolykvGrantedWindow,
+} from "./polykv";
 import type { ProviderFactoryResult } from "./types";
 
 /**
@@ -418,6 +422,11 @@ export function readOpencotiRequestOptions(
 	const live = getPolykvSession(
 		typeof sessionId === "string" ? sessionId : undefined,
 	);
+	const window = resolveOpencotiWindow(
+		typeof sessionId === "string" ? sessionId : undefined,
+		settings,
+		context.model?.contextWindow,
+	);
 	const poolId =
 		live?.poolId ??
 		(typeof configuredPool === "string" && configuredPool
@@ -430,7 +439,56 @@ export function readOpencotiRequestOptions(
 			? { sharedPrefixTokens: sharedPrefix }
 			: {}),
 		...(typeof overcommit === "boolean" ? { overcommit } : {}),
+		...window,
 	};
+}
+
+/**
+ * What window to ask for, and what floor to accept.
+ *
+ * Two cases, and the first one is the resume rule:
+ *
+ * - **A session we have already seen granted a window** asks for exactly that
+ *   window, floored at itself. That is "the window I had, or refuse" -- a
+ *   resumed conversation's history no longer fits a smaller one, so a silent
+ *   shrink truncates it mid-thread. The server cannot make this distinction
+ *   for us: after the idle TTL it has forgotten the session, and a resume is an
+ *   ordinary new admission from where it stands. We can, because we remember
+ *   what we were granted. On a turn that is still a continuation the server
+ *   ignores both fields, so the only turn where this changes anything is the
+ *   one after the hold lapsed -- which is exactly the resume.
+ *
+ * - **A fresh session** asks for the configured window and floors at
+ *   `contextFloor`, letting the server settle the two atomically.
+ *
+ * With `dynamicContextSize` off, neither is sent and the engine decides.
+ */
+function resolveOpencotiWindow(
+	sessionId: string | undefined,
+	settings: PolykvOptions | undefined,
+	configuredWindow: number | undefined,
+): { numCtx?: number; numCtxMin?: number } {
+	if (settings?.dynamicContextSize !== true) {
+		return {};
+	}
+	const granted = getPolykvGrantedWindow(sessionId);
+	if (granted !== undefined) {
+		return { numCtx: granted, numCtxMin: granted };
+	}
+	if (!isPositiveInteger(configuredWindow)) {
+		return {};
+	}
+	const floor = settings.contextFloor;
+	return {
+		numCtx: configuredWindow,
+		// No floor means no smaller window was declared acceptable, so the ask
+		// is all-or-nothing rather than silently open-ended.
+		...(isPositiveInteger(floor) ? { numCtxMin: floor } : {}),
+	};
+}
+
+function isPositiveInteger(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
 /** `http://host:8240` and `http://host:8240/v1` both mean the same server. */
@@ -483,6 +541,26 @@ export async function createOpencotiProviderModule(
 		dispatcher,
 		request,
 		onFacts: (facts) => {
+			// The grant, remembered. Every later admission for this session
+			// asks for exactly it, which is how a resume gets the window it was
+			// opened with rather than whatever happens to be free.
+			if (facts.contextWindow !== undefined && request.sessionId) {
+				recordPolykvGrantedWindow(request.sessionId, facts.contextWindow);
+				if (
+					request.numCtx !== undefined &&
+					facts.contextWindow !== request.numCtx
+				) {
+					// Asked for one window, given another. On a continuation
+					// this is expected -- the server ignores a changed `num_ctx`
+					// and keeps the held one -- and on a new admission it means
+					// the floor was used. Either way it is worth saying, because
+					// the conversation is now sized against a number nobody
+					// chose.
+					context.logger?.debug(
+						`[opencoti] asked for a ${request.numCtx}-token window, holding ${facts.contextWindow}`,
+					);
+				}
+			}
 			// Whether the pool attached is not on this channel: on c7 it is
 			// `/slots[].opencoti.n_pool_shared`, and on c8 the response's own
 			// `opencoti` block. What is here is the admission arm's own reporting.

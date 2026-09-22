@@ -1,5 +1,6 @@
 import type { PolykvOptions } from "@cline/llms";
 import {
+	clearPolykvGrantedWindow,
 	clearPolykvSession,
 	createPolykvClient,
 	getPolykvSession,
@@ -456,6 +457,9 @@ export async function releasePolykvSession(options: {
 	clearPolykvSession(sessionId);
 	// The answer described a pool that is about to stop existing.
 	clearPolykvCapacityCache(sessionId);
+	// The window goes with the session, not with the pool: a compaction
+	// re-root releases a pool and the booked window survives it.
+	clearPolykvGrantedWindow(sessionId);
 	const client = clientFor(options.providerConfig);
 	if (!client) {
 		return;
