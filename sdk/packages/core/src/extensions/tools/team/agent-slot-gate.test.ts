@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { AgentAdmissionController } from "./agent-admission";
 import {
 	agentEndpointKey,
 	agentSlotLimitsByEndpoint,
@@ -6,6 +7,26 @@ import {
 	createAgentSlotGateRegistry,
 	slotsAllowParallelDelegation,
 } from "./agent-slot-gate";
+
+/**
+ * A controller stub with every method present.
+ *
+ * One definition on purpose. These stubs are hand-built, so each method added
+ * to `AgentAdmissionController` breaks them at every site at once -- seven, the
+ * last two times -- and the compiler is the only thing that finds them all.
+ * Overriding what a test cares about beats restating the shape.
+ */
+function admissionStub(
+	overrides: Partial<AgentAdmissionController> = {},
+): AgentAdmissionController {
+	return {
+		acquire: async () => ({ reason: "ok" }),
+		tryAcquire: async () => ({ reason: "ok" }),
+		canAdmitMore: async () => true,
+		release: () => {},
+		...overrides,
+	};
+}
 
 /** A task that finishes only when told to, so overlap is observable. */
 function deferred(): {
@@ -137,23 +158,15 @@ describe("a gate with an admission controller", () => {
 					release = resolve;
 				}),
 			letGo: () => release?.(),
-			controller: {
+			controller: admissionStub({
 				acquire: vi.fn(async () => {
 					calls.push("acquire");
-					return { reason: "ok" };
-				}),
-				// The gate awaits its agents, so it only ever uses `acquire`.
-				// The probe is the supervisor loop's route in and is stubbed
-				// here to keep the shape whole rather than because this gate
-				// reaches it.
-				tryAcquire: vi.fn(async () => {
-					calls.push("tryAcquire");
 					return { reason: "ok" };
 				}),
 				release: vi.fn(() => {
 					calls.push("release");
 				}),
-			},
+			}),
 		};
 	}
 
@@ -418,17 +431,13 @@ describe("a bound per endpoint", () => {
 describe("a registry with admission", () => {
 	it("gives each endpoint the controller named for it, and no other", async () => {
 		const asked: string[] = [];
-		const controllerFor = (name: string) => ({
-			acquire: async () => {
-				asked.push(name);
-				return { reason: "ok" };
-			},
-			tryAcquire: async () => {
-				asked.push(name);
-				return { reason: "ok" };
-			},
-			release: () => {},
-		});
+		const controllerFor = (name: string) =>
+			admissionStub({
+				acquire: async () => {
+					asked.push(name);
+					return { reason: "ok" };
+				},
+			});
 		const registry = createAgentSlotGateRegistry(2, undefined, (key) =>
 			key === "opencoti http://localhost:8080"
 				? controllerFor("opencoti")
@@ -445,11 +454,9 @@ describe("a registry with admission", () => {
 	// one round's answer, not ask for a round each.
 	it("keeps one gate per endpoint, so the controller is asked once per agent", async () => {
 		const acquire = vi.fn(async () => ({ reason: "ok" }));
-		const registry = createAgentSlotGateRegistry(4, undefined, () => ({
-			acquire,
-			tryAcquire: acquire,
-			release: () => {},
-		}));
+		const registry = createAgentSlotGateRegistry(4, undefined, () =>
+			admissionStub({ acquire }),
+		);
 
 		const key = "opencoti http://localhost:8080";
 		expect(registry.for(key)).toBe(registry.for(key));

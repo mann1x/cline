@@ -305,3 +305,164 @@ describe("what the round cost", () => {
 		})();
 	});
 });
+
+/**
+ * A swarm is not sized once at launch.
+ *
+ * The old shape read `headroom` once, computed a worker count from it, built an
+ * array and `Promise.all`ed it. Two things were wrong with that, and both were
+ * silent. `headroom` is a point-in-time *status* — the question that needs
+ * asking is "may I start one more?", which is a different question and has to
+ * be asked again after each spawn. And a small live headroom capped the round
+ * at that number **for its whole life**, even as workers finished and the
+ * engine would happily have taken more.
+ *
+ * So the round grows: launch while the engine says yes, stop at the first no,
+ * and keep asking as workers finish. `headroom` is demoted to an opening hint.
+ */
+function growingPools(
+	answers: Array<boolean>,
+	options: { headroom?: number } = {},
+) {
+	const asked: number[] = [];
+	let admitted = 0;
+	let index = 0;
+	const source = {
+		snapshot: vi.fn(async () => ({
+			poolId: "pool-1",
+			release: async () => {},
+		})),
+		headroom: vi.fn(async () => options.headroom),
+		// Non-consuming, like the real one: it answers, the worker's own gate
+		// does the acquiring.
+		admit: vi.fn(async () => {
+			asked.push(admitted);
+			const answer = answers[Math.min(index, answers.length - 1)] ?? false;
+			index += 1;
+			if (answer) {
+				admitted += 1;
+			}
+			return answer;
+		}),
+	};
+	return { source, asked, admittedCount: () => admitted };
+}
+
+describe("a swarm that grows while it runs", () => {
+	// R1: the old constant was 8 and it was the number that decided how wide a
+	// round got. The bound is the engine's answer now, and nothing else.
+	it("goes past the old fixed ceiling when the engine keeps saying yes", async () => {
+		const pools = growingPools([
+			...Array.from({ length: 12 }, () => true),
+			false,
+		]);
+		const { tool } = toolWith(async () => agentResult("done"), pools as never);
+
+		const result = await call(tool, {
+			systemPrompt: "p",
+			task: "sweep",
+			count: "max",
+		});
+
+		expect(result.workers).toBe(12);
+	});
+
+	it("stops at the first refusal rather than queueing behind it", async () => {
+		const pools = growingPools([true, true, false]);
+		const { tool } = toolWith(async () => agentResult("done"), pools as never);
+
+		const result = await call(tool, {
+			systemPrompt: "p",
+			task: "sweep",
+			count: "max",
+		});
+
+		expect(result.workers).toBe(2);
+	});
+
+	// The reason the probe repeats at all: a slot that frees mid-round belongs
+	// to this swarm as much as one that was free at the start.
+	it("takes a slot that frees while it is running", async () => {
+		// Two in, refused, then yes again once something has finished.
+		const pools = growingPools([true, true, false, true, false]);
+		const { tool } = toolWith(async () => agentResult("done"), pools as never);
+
+		const result = await call(
+			tool,
+			{ systemPrompt: "p", task: "sweep", count: "max" },
+			// No real waiting: the tick is a seam.
+		);
+
+		expect(result.workers).toBe(3);
+	});
+
+	// A worker that throws is still a worker that ran: it is counted, and its
+	// failure is reported rather than dropped, because the lead cannot tell an
+	// empty round from a lost one otherwise.
+	it("counts and reports a worker that threw", async () => {
+		const pools = growingPools([true, true, false]);
+		let started = 0;
+		const { tool } = toolWith(async () => {
+			started += 1;
+			if (started === 1) {
+				throw new Error("worker died");
+			}
+			return agentResult("done");
+		}, pools as never);
+
+		const result = await call(tool, {
+			systemPrompt: "p",
+			task: "sweep",
+			count: "max",
+		});
+
+		expect(result.workers).toBe(2);
+		expect(result.digest).toContain("worker died");
+	});
+
+	// An explicit task list is the work, so the round cannot grow past it
+	// however much room the engine has.
+	it("never runs more workers than there are tasks", async () => {
+		const pools = growingPools(Array.from({ length: 10 }, () => true));
+		const { tool } = toolWith(async () => agentResult("done"), pools as never);
+
+		const result = await call(tool, {
+			systemPrompt: "p",
+			tasks: [{ task: "a" }, { task: "b" }],
+		});
+
+		expect(result.workers).toBe(2);
+	});
+
+	// A guard, not a policy. An engine that answers yes forever would otherwise
+	// spin this loop until something else broke.
+	it("stops at the runaway guard when the engine never says no", async () => {
+		const pools = growingPools([true]);
+		const { tool } = toolWith(async () => agentResult("done"), pools as never);
+
+		const result = await call(tool, {
+			systemPrompt: "p",
+			task: "sweep",
+			count: "max",
+			// biome-ignore lint/suspicious/noExplicitAny: test seam
+		} as any);
+
+		expect(result.workers).toBeLessThanOrEqual(64);
+		expect(result.workers).toBeGreaterThan(8);
+	});
+
+	// A source that cannot be asked keeps the old behaviour rather than
+	// growing blind: no probe means no evidence that one more would be taken.
+	it("falls back to the opening hint when there is no probe", async () => {
+		const pools = stubPools({ headroom: 3 });
+		const { tool } = toolWith(async () => agentResult("done"), pools);
+
+		const result = await call(tool, {
+			systemPrompt: "p",
+			task: "sweep",
+			count: "max",
+		});
+
+		expect(result.workers).toBe(3);
+	});
+});

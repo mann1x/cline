@@ -376,6 +376,19 @@ export function createSessionSwarmTool(
 						logger: config.logger,
 					}),
 				)?.headroomSessions,
+			// What lets the round grow. It asks the same gate the workers
+			// queue on, and asks WITHOUT taking: the worker this admits
+			// acquires through that gate itself, so a consuming probe here
+			// would book every worker twice and halve the swarm.
+			//
+			// It also inherits the gate's read discipline, which is the part
+			// that matters on c7: a fresh `GET /capacity` folds the engine's
+			// admission learner, so the answer is re-read when an agent
+			// finishes and never merely because a tick came round.
+			admit: async () => {
+				const slotGate = configProvider().getRuntimeConfig().slotGate;
+				return slotGate ? await slotGate.canAdmitMore() : true;
+			},
 		},
 		reduce: async (digests) => {
 			// The reducer runs on the SAME pool the workers did, so it writes

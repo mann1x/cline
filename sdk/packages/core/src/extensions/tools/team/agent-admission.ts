@@ -97,6 +97,18 @@ export interface AgentAdmissionController {
 	 * {@link release} and by nothing else -- not by time passing.
 	 */
 	tryAcquire(): Promise<{ reason: string } | undefined>;
+	/**
+	 * Whether one more could start right now — **without taking the slot**.
+	 *
+	 * For a caller that is deciding whether to launch, where something else
+	 * does the real acquiring: a swarm supervisor asks this, and the worker it
+	 * launches then acquires through its own gate. Consuming here would book
+	 * every worker twice and halve the round.
+	 *
+	 * Reads under the same discipline as {@link tryAcquire}: a fresh answer is
+	 * bought by an agent finishing, never by time passing.
+	 */
+	canAdmitMore(): Promise<boolean>;
 	/** Called when an admitted agent finishes, however it finished. */
 	release(): void;
 }
@@ -262,6 +274,39 @@ export function createAgentAdmissionController(
 				remaining = undefined;
 				await holdOnce(signal);
 			}
+		},
+		canAdmitMore: async () => {
+			if (remaining !== undefined && remaining > 0) {
+				return true;
+			}
+			if (!answerMayHaveChanged) {
+				return false;
+			}
+			answerMayHaveChanged = false;
+			let read: AdmissionCapacity | undefined;
+			try {
+				read = await options.capacity();
+			} catch {
+				// Unanswerable is not a refusal, as everywhere else here.
+				remaining = Number.POSITIVE_INFINITY;
+				return true;
+			}
+			if (read === undefined) {
+				remaining = Number.POSITIVE_INFINITY;
+				lastReason = "capacity unavailable; not holding";
+				return true;
+			}
+			if (!read.canAdmit) {
+				lastReason = read.reason;
+				remaining = undefined;
+				return false;
+			}
+			lastReason = read.reason;
+			remaining =
+				read.headroomSessions < 0
+					? Number.POSITIVE_INFINITY
+					: Math.max(1, read.headroomSessions);
+			return remaining > 0;
 		},
 		tryAcquire: async () => {
 			if (remaining !== undefined && remaining > 0) {

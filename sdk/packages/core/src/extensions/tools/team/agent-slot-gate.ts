@@ -41,6 +41,16 @@ export interface AgentSlotGate {
 	run<T>(task: () => Promise<T>): Promise<T>;
 	/** How many are running now. For diagnostics; never a scheduling input. */
 	active(): number;
+	/**
+	 * Whether one more would be admitted right now, without taking anything.
+	 *
+	 * For a caller deciding whether to launch, where the launch itself will go
+	 * through {@link run} and do the real acquiring — a consuming probe here
+	 * would book every worker twice. `true` where there is no admission
+	 * control to ask, which is the same reading the rest of this file takes: a
+	 * question that cannot be asked has not been answered no.
+	 */
+	canAdmitMore(): Promise<boolean>;
 }
 
 /**
@@ -97,6 +107,7 @@ export function createAgentSlotGate(
 				}
 			},
 			active: () => running,
+			canAdmitMore: async () => admission?.canAdmitMore() ?? true,
 		};
 	}
 
@@ -154,6 +165,9 @@ export function createAgentSlotGate(
 			}
 		},
 		active: () => running,
+		// No controller means nothing to ask. A question that cannot be asked
+		// has not been answered no -- the same reading `run` takes above.
+		canAdmitMore: async () => (admission ? admission.canAdmitMore() : true),
 	};
 }
 

@@ -122,8 +122,26 @@ export interface SwarmPoolSource {
 	/**
 	 * How many workers the engine will take right now, or `undefined` when it
 	 * will not say.
+	 *
+	 * An **opening hint only**, where {@link admit} exists. It is a
+	 * point-in-time status, and the question a growing round needs answered is
+	 * a different one: not "how many are free" but "may I start one more",
+	 * asked again after each spawn.
 	 */
 	headroom(): Promise<number | undefined>;
+	/**
+	 * May one more worker start right now? **Asks without taking.**
+	 *
+	 * This is what lets a round grow: the engine's answer bounds it, rather
+	 * than a number computed once at launch. Non-consuming on purpose — the
+	 * worker this admits goes on to acquire through its own slot gate, so a
+	 * probe that took the slot would book every worker twice and halve the
+	 * round.
+	 *
+	 * Absent on a source that cannot be asked, which keeps the round sized
+	 * from the hint: no probe is no evidence that one more would be taken.
+	 */
+	admit?(): Promise<boolean>;
 }
 
 export interface SwarmWorkerRequest {
@@ -149,10 +167,32 @@ export interface SpawnSwarmToolConfig {
 	reduce?: (digests: readonly WorkDigest[]) => Promise<WorkDigest | undefined>;
 	/** Most workers this will ever run, whatever the model or engine says. */
 	maxWorkers?: number;
+	/**
+	 * How long the supervisor waits before asking again, when nothing has
+	 * finished and the engine last said no.
+	 */
+	tickMs?: number;
+	/** Test seam. */
+	sleep?: (ms: number) => Promise<void>;
 }
 
-/** A swarm this size stops being a fan-out and starts being a stampede. */
+/**
+ * A spin guard, and deliberately not a policy.
+ *
+ * It exists only so that an engine answering yes forever cannot run this loop
+ * until something else breaks. It must never be the number that decides how
+ * wide a round gets — that is the engine's answer, and a constant standing in
+ * for it is the limit this was raised to remove. Set at the engine's own
+ * `--max-parallel` ceiling so that reaching it means something has gone wrong
+ * rather than that a swarm was busy.
+ */
+export const SWARM_RUNAWAY_MAX = 64;
+
+/** Opening size when the engine will not say and cannot be probed. */
 export const DEFAULT_MAX_SWARM_WORKERS = 8;
+
+/** How often the supervisor re-asks while work is left. */
+export const DEFAULT_SWARM_TICK_MS = 5_000;
 
 /**
  * The reasoning tail of a run that produced no answer.
@@ -240,6 +280,33 @@ export function createSpawnSwarmTool(
 	config: SpawnSwarmToolConfig,
 ): AgentTool<SpawnSwarmInput, SpawnSwarmOutput> {
 	const ceiling = Math.max(1, config.maxWorkers ?? DEFAULT_MAX_SWARM_WORKERS);
+	const tickMs = Math.max(0, config.tickMs ?? DEFAULT_SWARM_TICK_MS);
+	/**
+	 * A tick that can be cancelled when it loses the race.
+	 *
+	 * The supervisor waits on "a worker finishes, or the tick" — and a worker
+	 * finishing is the common case, so a plain `setTimeout` would leave one
+	 * pending timer per loop iteration. On a thirty-worker round that is thirty
+	 * live timers holding the process up for five seconds after the last
+	 * answer.
+	 */
+	const waitForTick =
+		config.sleep !== undefined
+			? (ms: number) => ({ promise: config.sleep!(ms), cancel: () => {} })
+			: (ms: number) => {
+					let handle: ReturnType<typeof setTimeout> | undefined;
+					const promise = new Promise<void>((resolve) => {
+						handle = setTimeout(resolve, ms);
+					});
+					return {
+						promise,
+						cancel: () => {
+							if (handle !== undefined) {
+								clearTimeout(handle);
+							}
+						},
+					};
+				};
 
 	return createTool<SpawnSwarmInput, SpawnSwarmOutput>({
 		name: "spawn_swarm",
@@ -261,30 +328,41 @@ export function createSpawnSwarmTool(
 				};
 			}
 
-			// The engine's number bounds the round. `max` takes it; an explicit
-			// count is an upper bound of the caller's that it also bounds --
-			// the server knowing it cannot take eight is not overridden by a
-			// model asking for eight.
+			const probe = config.pools.admit;
 			const headroom = await config.pools.headroom().catch(() => undefined);
-			const wanted = input.count === "max" ? (headroom ?? 1) : requested.length;
-			const workerCount = Math.max(
+
+			// How much work there is to do. An explicit task list is the work
+			// and bounds the round however much room the engine has; a single
+			// task repeated is bounded by the engine instead, which is what
+			// `max` asks for.
+			const explicit = input.tasks && input.tasks.length > 0;
+			const hint = Math.max(
 				1,
 				Math.min(
 					ceiling,
-					wanted,
+					input.count === "max" ? (headroom ?? 1) : requested.length,
 					headroom ?? Number.POSITIVE_INFINITY,
-					input.tasks && input.tasks.length > 0
-						? requested.length
-						: Number.POSITIVE_INFINITY,
 				),
 			);
-			const workers =
-				input.tasks && input.tasks.length > 0
-					? requested.slice(0, workerCount)
-					: Array.from({ length: workerCount }, (_entry, index) => ({
-							name: `worker-${index + 1}`,
-							task: requested[0]?.task ?? "",
-						}));
+			const queueLength = explicit
+				? requested.length
+				: probe
+					? // The engine decides, and the guard only stops a spin.
+						input.count === "max"
+						? SWARM_RUNAWAY_MAX
+						: Math.min(requested.length, SWARM_RUNAWAY_MAX)
+					: hint;
+			const queue: SwarmWorkerRequest[] = explicit
+				? requested.slice(0, queueLength).map((entry, index) => ({
+						name: entry.name ?? `worker-${index + 1}`,
+						task: entry.task,
+						systemPrompt: input.systemPrompt,
+					}))
+				: Array.from({ length: queueLength }, (_entry, index) => ({
+						name: `worker-${index + 1}`,
+						task: requested[0]?.task ?? "",
+						systemPrompt: input.systemPrompt,
+					}));
 
 			// Taken before any worker starts, for the reason at the top of this
 			// file: the host prompt cache clears an idle slot the moment a new
@@ -295,28 +373,74 @@ export function createSpawnSwarmTool(
 			let outputTokens = 0;
 
 			try {
-				const results = await Promise.all(
-					workers.map(async (worker) => {
+				// The supervisor. Launch while the engine says yes and work is
+				// left; when it says no, wait for a worker to finish or for the
+				// tick, then ask again. A slot that frees mid-round belongs to
+				// this swarm as much as one that was free at the start.
+				const results: WorkDigest[] = [];
+				const inFlight = new Set<Promise<void>>();
+				let started = 0;
+
+				const launch = (worker: SwarmWorkerRequest): void => {
+					started += 1;
+					const running = (async () => {
 						try {
 							const result = await config.runWorker({
-								name: worker.name,
-								task: worker.task,
-								systemPrompt: input.systemPrompt,
+								...worker,
 								...(snapshot ? { poolId: snapshot.poolId } : {}),
 							});
 							inputTokens += result.usage?.inputTokens ?? 0;
 							outputTokens += result.usage?.outputTokens ?? 0;
-							return digestOf(worker.name, result);
+							results.push(digestOf(worker.name, result));
 						} catch (error) {
 							// Named, never dropped: the lead cannot tell an
 							// empty round from a lost one otherwise.
-							return {
+							results.push({
 								agent: worker.name,
 								error: error instanceof Error ? error.message : String(error),
-							} satisfies WorkDigest;
+							} satisfies WorkDigest);
 						}
-					}),
-				);
+					})();
+					const tracked = running.finally(() => {
+						inFlight.delete(tracked);
+					});
+					inFlight.add(tracked);
+				};
+
+				while (queue.length > 0 || inFlight.size > 0) {
+					while (queue.length > 0 && started < SWARM_RUNAWAY_MAX) {
+						if (probe) {
+							if (!(await probe.call(config.pools))) {
+								break;
+							}
+						} else if (inFlight.size >= hint) {
+							// No probe, so the hint is the only bound there is.
+							break;
+						}
+						const next = queue.shift();
+						if (!next) {
+							break;
+						}
+						launch(next);
+					}
+					if (inFlight.size === 0) {
+						// Nothing running and nothing admitted. If work remains
+						// the engine is simply full, so wait rather than spin --
+						// but with nothing outstanding there is no release
+						// coming, and waiting forever is worse than stopping.
+						break;
+					}
+					// Whichever comes first: a worker finishing, which frees a
+					// slot, or the tick, which is the fallback when the engine
+					// freed one for some other reason.
+					const tick = waitForTick(tickMs);
+					try {
+						await Promise.race([Promise.race([...inFlight]), tick.promise]);
+					} finally {
+						tick.cancel();
+					}
+				}
+				await Promise.allSettled([...inFlight]);
 
 				let merged: WorkDigest | undefined;
 				if (results.length > 1 && config.reduce) {
@@ -326,7 +450,7 @@ export function createSpawnSwarmTool(
 
 				return {
 					digest: renderWorkDigest(digest),
-					workers: workers.length,
+					workers: started,
 					pooled: snapshot !== undefined,
 					usage: { inputTokens, outputTokens },
 				};
