@@ -40,11 +40,32 @@ describe("--agent-node", () => {
 
 	it("holds priority to 1-10 and capacity to at least 1", () => {
 		const [low, high] = parseAgentNodeFlags([
-			"model=a,priority=0,capacity=0",
+			"model=a,priority=0,capacity=1",
 			"model=b,priority=99,capacity=3.7",
 		]);
 		expect(low).toMatchObject({ priority: 1, capacity: 1 });
 		expect(high).toMatchObject({ priority: 10, capacity: 3 });
+	});
+
+	// An elastic endpoint -- opencoti with PolyKV admission, an ollama with
+	// OLLAMA_NUM_PARALLEL unset -- has a count we cannot read and must not
+	// invent. Infinity says "we impose no ceiling"; the endpoint still
+	// refuses what it cannot take. Written as a number rather than a flag
+	// because the placement engine already compares occupancy against it.
+	it("reads capacity=auto as no ceiling of ours", () => {
+		expect(parseAgentNodeFlags(["model=a,capacity=auto"])[0].capacity).toBe(
+			Number.POSITIVE_INFINITY,
+		);
+	});
+
+	// 0 is the one value with two honest readings -- "off" in the tab, "no
+	// limit" on most command lines -- and picking either silently would give
+	// the user the other one. A node you do not want is a flag you do not
+	// pass, so the flag says which word to write.
+	it("refuses capacity=0 rather than guessing which one was meant", () => {
+		expect(() => parseAgentNodeFlags(["model=a,capacity=0"])).toThrow(
+			/capacity=auto/,
+		);
 	});
 
 	// A node that names nothing is a typo, and running it on the session's own

@@ -2,9 +2,11 @@ export {
 	type AgentSlotGate,
 	type AgentSlotGateRegistry,
 	agentEndpointKey,
+	agentNodesAllowParallelDelegation,
 	agentSlotLimitsByEndpoint,
 	createAgentSlotGate,
 	createAgentSlotGateRegistry,
+	delegationCanRunInParallel,
 	slotsAllowParallelDelegation,
 } from "./agent-slot-gate";
 export {

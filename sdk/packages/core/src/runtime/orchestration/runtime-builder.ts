@@ -55,7 +55,7 @@ import {
 	createAgentSlotGateRegistry,
 	createDelegatedAgentConfigProvider,
 	type DelegatedAgentConnectionConfig,
-	slotsAllowParallelDelegation,
+	delegationCanRunInParallel,
 	type TeamEvent,
 } from "../../extensions/tools/team";
 import {
@@ -466,13 +466,19 @@ function normalizeConfig(
 		enableTools: config.enableTools !== false,
 		enableSpawnAgent:
 			config.enableSpawnAgent ?? preset.enableSpawnAgent ?? true,
-		// The team tools exist to run agents beside one another. On an endpoint
-		// that serves one request at a time there is no beside, so they are
-		// withheld rather than offered and silently serialised -- see
-		// {@link slotsAllowParallelDelegation}. The host's flag does not turn
-		// them back on: this is what the server does, not what anyone prefers.
+		// The team tools exist to run agents beside one another. With one
+		// request at a time and nowhere else to put an agent there is no
+		// beside, so they are withheld rather than offered and silently
+		// serialised -- see {@link delegationCanRunInParallel}, which asks the
+		// endpoint AND the nodes, because a second node is a second place to
+		// run and answers the question on its own. The host's flag does not
+		// turn them back on: this is what the servers do, not what anyone
+		// prefers.
 		enableAgentTeams:
-			slotsAllowParallelDelegation(config.maxConcurrentAgents) &&
+			delegationCanRunInParallel({
+				maxConcurrentAgents: config.maxConcurrentAgents,
+				nodes: config.agentNodes,
+			}) &&
 			(config.enableAgentTeams ?? preset.enableAgentTeams ?? true),
 		disableMcpSettingsTools: config.disableMcpSettingsTools === true,
 		yolo: config.yolo === true,
@@ -912,7 +918,9 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 				`[Agents] ${agentNodes.length} agent node(s): ${agentNodes
 					.map(
 						(node) =>
-							`${node.id} p${node.priority} x${node.capacity} ${
+							`${node.id} p${node.priority} x${
+								Number.isFinite(node.capacity) ? node.capacity : "uncapped"
+							} ${
 								node.connection.providerId ?? config.providerId
 							}/${node.connection.modelId ?? config.modelId}`,
 					)
@@ -927,11 +935,20 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 		// Tools that are simply absent are their own kind of confusion, so the
 		// one place that knows why says so.
 		if (
-			!slotsAllowParallelDelegation(config.maxConcurrentAgents) &&
+			!delegationCanRunInParallel({
+				maxConcurrentAgents: config.maxConcurrentAgents,
+				nodes: config.agentNodes,
+			}) &&
 			(config.enableSpawnAgent !== false || config.enableAgentTeams !== false)
 		) {
 			(logger ?? config.logger)?.log(
-				"[Agents] spawn_agent and the team tools are withheld: this endpoint serves 1 request at a time, so a delegated agent would run after the agent that spawned it rather than beside it. Raise the profile's parallel sessions to offer them.",
+				`[Agents] spawn_agent and the team tools are withheld: ${
+					(config.agentNodes?.length ?? 0) > 1
+						? "every configured node serves 1 request at a time"
+						: "this endpoint serves 1 request at a time"
+				}, so a delegated agent would run after the agent that spawned it rather than beside it. Raise the profile's parallel sessions${
+					(config.agentNodes?.length ?? 0) > 1 ? " or a node's capacity" : ""
+				} to offer them.`,
 			);
 		}
 		if (normalized.enableSpawnAgent) {
@@ -1123,7 +1140,10 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 		if (
 			normalized.enableSpawnAgent &&
 			createSpawnTool &&
-			slotsAllowParallelDelegation(config.maxConcurrentAgents)
+			delegationCanRunInParallel({
+				maxConcurrentAgents: config.maxConcurrentAgents,
+				nodes: config.agentNodes,
+			})
 		) {
 			const spawnTool = createSpawnTool();
 			tools.push({

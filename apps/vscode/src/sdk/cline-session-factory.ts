@@ -1999,14 +1999,20 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 			agentNodes.push({
 				id: node.id,
 				priority: node.priority,
-				capacity: slots.limit,
+				// `resolveAgentSlotLimit` returns 0 for "the endpoint's own
+				// admission control decides"; the placement engine reads 0 as
+				// "node off, never place". Opposite meanings for one number,
+				// so the elastic case is said as what it is -- no ceiling.
+				capacity: slots.limit === 0 ? Number.POSITIVE_INFINITY : slots.limit,
 				connection,
 			})
 		}
 		if (agentNodes.length > 1) {
 			Logger.log(
 				`[Agents] ${agentNodes.length} nodes: ${agentNodes
-					.map((node) => `${node.id}(p${node.priority}, ${node.capacity === 0 ? "uncapped" : node.capacity})`)
+					.map(
+						(node) => `${node.id}(p${node.priority}, ${Number.isFinite(node.capacity) ? node.capacity : "uncapped"})`,
+					)
 					.join(", ")}`,
 			)
 		}

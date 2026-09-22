@@ -8,6 +8,13 @@
  *
  *     --agent-node model=small,capacity=8
  *     --agent-node model=big,url=http://other:8240/v1,priority=2,capacity=2
+ *     --agent-node model=big,url=http://other:8240/v1,capacity=auto
+ *
+ * `capacity=auto` places without a ceiling of our own and lets the endpoint's
+ * admission control do the refusing -- the right answer for an elastic server.
+ * `capacity=0` is refused rather than read as either one: in the tab it means
+ * the node is off, which is not something you say by passing a flag that adds
+ * a node, and on a command line it usually means "no limit", which is `auto`.
  *
  * Priority 1 is highest and a lower tier is used only when no node above it
  * has room; within a tier, round-robin. When every node is full the next agent
@@ -50,6 +57,12 @@ export function parseAgentNodeFlags(
 				`--agent-node "${entry}" names no model. Expected model=<id>[,url=<baseUrl>][,provider=<id>][,priority=1-10][,capacity=<n>].`,
 			);
 		}
+		const capacity = fields.get("capacity");
+		if (capacity !== undefined && Number(capacity) === 0) {
+			throw new Error(
+				`--agent-node "${entry}" has capacity=0. A node placed on runs at least one agent: write capacity=auto to let the endpoint decide, or drop the flag to leave the node out.`,
+			);
+		}
 		const providerId = fields.get("provider");
 		const baseUrl = fields.get("url");
 		return {
@@ -57,7 +70,13 @@ export function parseAgentNodeFlags(
 			priority: clamp(fields.get("priority"), 1, 10, 1),
 			// 1, as everywhere else a count is missing: it is what one slot
 			// gives you, and the number under which nothing queues unseen.
-			capacity: clamp(fields.get("capacity"), 1, Number.MAX_SAFE_INTEGER, 1),
+			// `auto` is the elastic endpoint, whose count we do not know and
+			// must not guess at -- infinity here is "we impose no ceiling",
+			// and the endpoint still refuses what it cannot take.
+			capacity:
+				capacity === "auto"
+					? Number.POSITIVE_INFINITY
+					: clamp(capacity, 1, Number.MAX_SAFE_INTEGER, 1),
 			connection: {
 				...(providerId ? { providerId } : {}),
 				modelId,

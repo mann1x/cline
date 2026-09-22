@@ -819,6 +819,14 @@ export interface CoreSessionConfig
 	agentNodes?: ReadonlyArray<{
 		id: string;
 		priority: number;
+		/**
+		 * How many delegated agents this node runs at once.
+		 *
+		 * `0` is the node turned OFF -- it is never placed on. "The endpoint
+		 * decides" is `Number.POSITIVE_INFINITY`, not `0`: the two readings
+		 * collided once already, and a node meaning the second was read as
+		 * the first and silently took no agents at all.
+		 */
 		capacity: number;
 		connection: DelegatedAgentConnectionOverride;
 	}>;

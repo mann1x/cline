@@ -360,13 +360,47 @@ export function createConfiguredAgentTools(
 				inputSchema: zodToJsonSchema(ConfiguredAgentInputSchema),
 				execute: async (input, context) => {
 					const baseRuntimeConfig = options.configProvider.getRuntimeConfig();
-					const runtimeConfig = buildAgentRuntimeConfig(
+					const provisional = buildAgentRuntimeConfig(
 						baseRuntimeConfig,
 						config,
 						options.resolveProviderConnection,
 						options.resolveProfileConnection,
 						options.listProfileNames,
 					);
+					// Where it runs, before it is built -- the same order
+					// `spawn_agent` uses, and for the same reason: a node is a
+					// whole agents configuration, so which node took this agent
+					// decides which model it is.
+					//
+					// An agent that names a provider or a profile of its own has
+					// its own endpoint, and a node is not where it runs; it keeps
+					// the per-endpoint gate below. Without that check a nodeless
+					// session behaves exactly as before.
+					//
+					// This was the second half of a measured failure: two
+					// configured agents launched together, both pointed at the
+					// session's endpoint, and the slot gate served one while the
+					// other waited out the whole run and was aborted with no
+					// model turn at all. The nodes were configured and had room;
+					// nothing here looked at them.
+					const ownsEndpoint =
+						agentEndpointKey(provisional) !==
+						agentEndpointKey(baseRuntimeConfig);
+					const placement = ownsEndpoint
+						? undefined
+						: baseRuntimeConfig.nodePlacement;
+					const placed = placement
+						? await placement.place(context.signal)
+						: undefined;
+					const runtimeConfig = placed
+						? buildAgentRuntimeConfig(
+								placed.configProvider.getRuntimeConfig(),
+								config,
+								options.resolveProviderConnection,
+								options.resolveProfileConnection,
+								options.listProfileNames,
+							)
+						: provisional;
 					const configProvider =
 						createDelegatedAgentConfigProvider(runtimeConfig);
 					const tools = options.createSubAgentTools
@@ -419,12 +453,18 @@ export function createConfiguredAgentTools(
 						// building the toolset and telling the observers costs the
 						// server nothing, and holding a slot across them would leave
 						// the endpoint idle while a slot was booked.
-						const gate = baseRuntimeConfig.slotGates?.for(
-							agentEndpointKey(runtimeConfig),
-						);
-						const result: AgentResult = gate
-							? await gate.run(() => subAgent.run(input.prompt))
-							: await subAgent.run(input.prompt);
+						const gate = placed
+							? undefined
+							: baseRuntimeConfig.slotGates?.for(
+									agentEndpointKey(runtimeConfig),
+								);
+						const result: AgentResult = placed
+							? // The node's own gate, which is its endpoint's
+								// answer rather than the session's.
+								await placed.run(() => subAgent.run(input.prompt))
+							: gate
+								? await gate.run(() => subAgent.run(input.prompt))
+								: await subAgent.run(input.prompt);
 						const output: SpawnAgentOutput = {
 							text: result.text,
 							iterations: result.iterations,
@@ -481,6 +521,11 @@ export function createConfiguredAgentTools(
 							}
 						}
 						throw error;
+					} finally {
+						// The lease outlives the run on every path, or a node
+						// stays booked for an agent that is no longer on it and
+						// the round narrows with each failure.
+						placed?.release();
 					}
 				},
 				timeoutMs: 300000,

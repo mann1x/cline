@@ -224,3 +224,44 @@ describe("the round-robin cursor", () => {
 		expect(held.get("N3")).toBe(3);
 	});
 });
+
+/**
+ * "No number" has two opposite readings, and the panel produces both: a node
+ * turned off (0) and an endpoint that decides its own admission — an elastic
+ * or PolyKV opencoti with the parallel-sessions box left empty, which is what
+ * that field recommends. Resolving the second to 0 made every such node
+ * unplaceable, so configuring nodes turned delegation off.
+ */
+describe("a node whose endpoint decides its own admission", () => {
+	it("is placed on however many agents are already there", () => {
+		const nodes = [
+			{ id: "elastic", priority: 1, capacity: Number.POSITIVE_INFINITY },
+		];
+		const occupancy = new Map([["elastic", 97]]);
+
+		const { placement } = placeAgent({
+			nodes,
+			occupancy,
+			state: { cursors: {} },
+		});
+
+		expect(placement).toEqual({ kind: "node", nodeId: "elastic" });
+	});
+
+	it("is still told apart from a node that is off", () => {
+		const nodes = [
+			{ id: "off", priority: 1, capacity: 0 },
+			{ id: "elastic", priority: 2, capacity: Number.POSITIVE_INFINITY },
+		];
+
+		const { placement } = placeAgent({
+			nodes,
+			occupancy: new Map(),
+			state: { cursors: {} },
+		});
+
+		// Tier 1 is off, so the lower tier takes it rather than the tier above
+		// swallowing everything.
+		expect(placement).toEqual({ kind: "node", nodeId: "elastic" });
+	});
+});

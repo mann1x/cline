@@ -62,7 +62,7 @@ import {
 import type { TeamEvent } from "../../extensions/tools/team";
 import {
 	agentEndpointKey,
-	slotsAllowParallelDelegation,
+	delegationCanRunInParallel,
 } from "../../extensions/tools/team/agent-slot-gate";
 import {
 	type BackgroundDelegationRegistry,
@@ -1832,7 +1832,10 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// endpoint that serves one request at a time, and there is not.
 		const canDelegate =
 			configWithProvider.enableSpawnAgent !== false &&
-			slotsAllowParallelDelegation(configWithProvider.maxConcurrentAgents);
+			delegationCanRunInParallel({
+				maxConcurrentAgents: configWithProvider.maxConcurrentAgents,
+				nodes: configWithProvider.agentNodes,
+			});
 		// An expert is no longer the only thing worth supervising a run for.
 		// The detector used to be gated on one existing, which meant a session
 		// with no expert got no struggle supervision of any kind -- including

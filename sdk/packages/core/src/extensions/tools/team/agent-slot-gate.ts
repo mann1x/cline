@@ -193,6 +193,58 @@ export function createAgentSlotGate(
  * opencoti with PolyKV, where agents share a KV pool and the server paces
  * them.
  */
+/**
+ * Whether two delegated agents can actually run beside one another.
+ *
+ * The question the tools are offered on. It used to be asked of the session's
+ * one endpoint alone, which was right while there was only one place a
+ * delegated agent could go. Agent nodes made that false: two nodes serving one
+ * request each serve two at once, and reading only the session's count withheld
+ * `spawn_agent` and the team tools from exactly the configuration that exists
+ * to run them in parallel. Measured on a live run — two nodes configured, the
+ * tools absent, and the model falling back to `create_agent`, which writes an
+ * agent definition file and runs nothing.
+ */
+export function delegationCanRunInParallel(input: {
+	maxConcurrentAgents: number | undefined;
+	nodes?: ReadonlyArray<{ capacity: number }>;
+}): boolean {
+	if (slotsAllowParallelDelegation(input.maxConcurrentAgents)) {
+		return true;
+	}
+	return agentNodesAllowParallelDelegation(input.nodes);
+}
+
+/**
+ * Whether the configured nodes together have room for more than one agent.
+ *
+ * `0` is a node that is off and contributes nothing; `Infinity` is an endpoint
+ * that decides its own admission and settles the question on its own. Anything
+ * else adds up.
+ */
+export function agentNodesAllowParallelDelegation(
+	nodes: ReadonlyArray<{ capacity: number }> | undefined,
+): boolean {
+	if (!nodes || nodes.length === 0) {
+		return false;
+	}
+	let total = 0;
+	for (const node of nodes) {
+		if (Number.isNaN(node.capacity) || node.capacity <= 0) {
+			continue;
+		}
+		if (!Number.isFinite(node.capacity)) {
+			return true;
+		}
+		total += node.capacity;
+		if (total > 1) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/** Whether one endpoint on its own serves more than one request at a time. */
 export function slotsAllowParallelDelegation(
 	maxConcurrentAgents: number | undefined,
 ): boolean {

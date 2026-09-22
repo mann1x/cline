@@ -215,7 +215,7 @@ export function addRootOptions(cmd: Command): Command {
 			)
 			.option(
 				"--agent-node <spec>",
-				"Where delegated agents run, as model=<id>[,url=<baseUrl>][,provider=<id>][,priority=1-10][,capacity=<n>]. Repeatable, up to ten. Priority 1 is highest and a lower tier is used only when nothing above it has a free slot; round-robin within a tier; every node full means the next agent waits rather than fails",
+				"Where delegated agents run, as model=<id>[,url=<baseUrl>][,provider=<id>][,priority=1-10][,capacity=<n>|auto]. Repeatable, up to ten. capacity=auto imposes no ceiling and lets the endpoint's own admission control refuse. Priority 1 is highest and a lower tier is used only when nothing above it has a free slot; round-robin within a tier; every node full means the next agent waits rather than fails",
 				(value: string, previous: string[] = []) => [...previous, value],
 			)
 			.option(

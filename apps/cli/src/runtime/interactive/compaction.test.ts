@@ -221,7 +221,18 @@ describe("compactInteractiveMessages", () => {
 
 		// The agentic strategy folds older messages into a summary message
 		// built from the (mocked) summarizer output.
-		expect(createHandlerMock).toHaveBeenCalledTimes(1);
+		//
+		// Four model calls, not one: the summarizer writes the account, the
+		// council sends two reviewers to rewrite a half each, and a fourth
+		// call joins the halves back together. The retrospective is off in
+		// this config, or it would be five -- `generateSummary` in
+		// agentic-compaction.ts says so at its call sites.
+		//
+		// The number is asserted rather than loosened to `>= 1` because it is
+		// the cost of one compaction: a stage added here is four calls per
+		// fold on every session, and that should be a decision somebody makes
+		// rather than something a test lets through.
+		expect(createHandlerMock).toHaveBeenCalledTimes(4);
 		const [summaryMessage] = compactedMessages;
 		const summaryText = Array.isArray(summaryMessage?.content)
 			? summaryMessage.content

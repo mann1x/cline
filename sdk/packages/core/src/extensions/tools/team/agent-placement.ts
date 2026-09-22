@@ -37,6 +37,12 @@ export interface AgentNode {
 	 * for opencoti, the sub-pools available inside its ONE session, because
 	 * agents there share the conversation's allocation rather than booking one
 	 * each.
+	 *
+	 * `0` means the node is off and is never placed on. `Infinity` means the
+	 * endpoint decides its own admission and this layer must not be the bound —
+	 * which is what an elastic or PolyKV opencoti resolves to when the
+	 * profile's parallel-sessions box is left empty. The two are opposite
+	 * readings of "no number", so they are spelled differently on purpose.
 	 */
 	capacity: number;
 }
@@ -80,7 +86,13 @@ export function placeAgent(input: {
 	for (const node of input.nodes) {
 		// A node with no capacity is not a node with room. Reading 0 as
 		// "unbounded" would send every agent to the one node turned off.
-		if (!Number.isFinite(node.capacity) || node.capacity <= 0) {
+		//
+		// `Infinity` *is* unbounded, and is how an endpoint that decides its own
+		// admission says so — an elastic or PolyKV opencoti with the profile's
+		// parallel-sessions box left empty, which is the setting that panel
+		// recommends. Refusing it as "not finite" made every such node
+		// unplaceable, so configuring nodes at all turned delegation off.
+		if (Number.isNaN(node.capacity) || node.capacity <= 0) {
 			continue;
 		}
 		const tier = byPriority.get(node.priority);

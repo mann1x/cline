@@ -79,11 +79,72 @@ function recordingGates(): {
 	};
 }
 
+/**
+ * A placement that hands out one fixed node and records what was asked of it.
+ *
+ * `run` answers like the gate above rather than running the sub-agent, for the
+ * same reason; `placed` and `released` are the two facts under test.
+ */
+function recordingPlacement(node: {
+	nodeId: string;
+	providerId: string;
+	modelId: string;
+	baseUrl: string;
+}): {
+	placed: string[];
+	released: string[];
+	ran: string[];
+	nodePlacement: unknown;
+} {
+	const placed: string[] = [];
+	const released: string[] = [];
+	const ran: string[] = [];
+	const connection = {
+		providerId: node.providerId,
+		modelId: node.modelId,
+		baseUrl: node.baseUrl,
+	};
+	return {
+		placed,
+		released,
+		ran,
+		nodePlacement: {
+			place: async () => {
+				placed.push(node.nodeId);
+				return {
+					nodeId: node.nodeId,
+					configProvider: {
+						getRuntimeConfig: () => connection,
+						getConnectionConfig: () => connection,
+						updateConnectionDefaults: () => {},
+					},
+					run: (async () => {
+						ran.push(node.nodeId);
+						return {
+							text: "placed",
+							iterations: 1,
+							finishReason: "stop",
+							usage: { inputTokens: 0, outputTokens: 0 },
+						};
+					}) as never,
+					release: () => {
+						released.push(node.nodeId);
+					},
+				};
+			},
+			base: undefined,
+			occupancy: () => new Map(),
+			waiting: 0,
+		},
+	};
+}
+
 function runAgent(input: {
 	agent: Parameters<typeof createConfiguredAgentTools>[0]["agents"][number];
 	sessionProvider?: string;
 	sessionBaseUrl?: string;
 	resolveProviderConnection?: (providerId: string) => never;
+	nodePlacement?: unknown;
 }): { keys: string[]; execute: () => Promise<unknown> } {
 	const { keys, slotGates } = recordingGates();
 	const connection = {
@@ -93,7 +154,14 @@ function runAgent(input: {
 	};
 	const [tool] = createConfiguredAgentTools({
 		configProvider: {
-			getRuntimeConfig: () => ({ ...connection, slotGates }) as never,
+			getRuntimeConfig: () =>
+				({
+					...connection,
+					slotGates,
+					...(input.nodePlacement
+						? { nodePlacement: input.nodePlacement }
+						: {}),
+				}) as never,
 			getConnectionConfig: () => connection,
 			updateConnectionDefaults: () => {},
 		},
@@ -150,5 +218,107 @@ describe("holding configured agents to their own endpoint", () => {
 		await execute();
 
 		expect(keys).toEqual(["anthropic https://api.anthropic.com"]);
+	});
+});
+
+/**
+ * Measured on pandorum, 2026-09-22: two agent nodes configured on one
+ * opencoti, the model called two configured agents in one turn, and after 136
+ * seconds both were aborted with zero assistant turns between them. Their
+ * transcripts held one message each -- the task -- so they had been queuing,
+ * not failing. `spawn_agent` consulted the nodes; this path never did, and
+ * gated both against the session's single endpoint.
+ */
+describe("placing configured agents on the nodes", () => {
+	it("runs an agent that inherits the session connection on a node", async () => {
+		const placement = recordingPlacement({
+			nodeId: "node-2",
+			providerId: "opencoti",
+			modelId: "v9-agentic",
+			baseUrl: "http://192.168.178.2:8240/v1",
+		});
+		const { keys, execute } = runAgent({
+			agent: {
+				name: "reviewer",
+				description: "reviews code",
+				systemPrompt: "You review code.",
+			},
+			nodePlacement: placement.nodePlacement,
+		});
+
+		await execute();
+
+		expect(placement.placed).toEqual(["node-2"]);
+		// The node's own gate decided, so the session's per-endpoint gate was
+		// never consulted -- two gates for one agent would book two slots.
+		expect(placement.ran).toEqual(["node-2"]);
+		expect(keys).toEqual([]);
+	});
+
+	// A node is a whole agents configuration, so placement decides the model.
+	// An agent that named its own is not asking to be moved.
+	it("leaves an agent that names its own provider where it asked to be", async () => {
+		const placement = recordingPlacement({
+			nodeId: "node-2",
+			providerId: "opencoti",
+			modelId: "v9-agentic",
+			baseUrl: "http://192.168.178.2:8240/v1",
+		});
+		const { keys, execute } = runAgent({
+			agent: {
+				name: "auditor",
+				description: "audits code",
+				systemPrompt: "You audit code.",
+				providerId: "anthropic",
+			},
+			resolveProviderConnection: (() => ({
+				apiKey: "key",
+				baseUrl: "https://api.anthropic.com",
+			})) as never,
+			nodePlacement: placement.nodePlacement,
+		});
+
+		await execute();
+
+		expect(placement.placed).toEqual([]);
+		expect(keys).toEqual(["anthropic https://api.anthropic.com"]);
+	});
+
+	// The lease is the whole point of a capacity: a node still booked for an
+	// agent that failed is a node that takes one fewer agent for the rest of
+	// the session, and the round narrows with every failure.
+	it("gives the node back when the agent throws", async () => {
+		const placement = recordingPlacement({
+			nodeId: "node-2",
+			providerId: "opencoti",
+			modelId: "v9-agentic",
+			baseUrl: "http://192.168.178.2:8240/v1",
+		});
+		const { execute } = runAgent({
+			agent: {
+				name: "reviewer",
+				description: "reviews code",
+				systemPrompt: "You review code.",
+			},
+			nodePlacement: {
+				...(placement.nodePlacement as Record<string, unknown>),
+				place: async () => {
+					const node = await (
+						placement.nodePlacement as {
+							place: () => Promise<{ release: () => void }>;
+						}
+					).place();
+					return {
+						...node,
+						run: async () => {
+							throw new Error("the endpoint refused");
+						},
+					};
+				},
+			},
+		});
+
+		await expect(execute()).rejects.toThrow();
+		expect(placement.released).toEqual(["node-2"]);
 	});
 });
