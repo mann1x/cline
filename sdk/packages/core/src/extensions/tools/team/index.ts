@@ -6,6 +6,12 @@ export {
 	placeAgent,
 } from "./agent-placement";
 export {
+	type AgentPlacementQueue,
+	createAgentPlacementQueue,
+	NoAgentCapacityError,
+	type PlacementLease,
+} from "./agent-placement-queue";
+export {
 	type BackgroundDelegationControls,
 	type BackgroundDelegationRegistry,
 	type BackgroundDelegationStatus,
