@@ -509,10 +509,10 @@ export async function releasePolykvSession(options: {
 /**
  * Snapshot a session's live context into a pool the workers can share.
  *
- * `from_session` and nothing else: the engine takes the prefix from the slot's
- * own token history, so no tokens cross the wire and the failure class this
- * module was written to fix -- a client-tokenised prefix that does not match
- * the prefilled one -- cannot arise on this path at all.
+ * `from_session` first: the engine takes the prefix from the slot's own token
+ * history, so no tokens cross the wire and the failure class this module was
+ * written to fix -- a client-tokenised prefix that does not match the prefilled
+ * one -- cannot arise on that path at all.
  *
  * **When this runs matters as much as what it does.** The host prompt cache
  * saves and clears idle slots the moment any new task launches, so the snapshot
@@ -522,14 +522,32 @@ export async function releasePolykvSession(options: {
  * `ephemeral` so the engine's own sweep can reclaim it if this process dies
  * mid-round. That is the crash net; {@link releasePolykvPool} is the plan.
  *
- * `undefined` when the engine will not, which lets the caller run the round
- * unpooled rather than fail it.
+ * **And it is refused often.** The engine's own soak against the shipped
+ * bytes saw `400` on 331 of 715 `from_session` creates. That is correct
+ * behaviour rather than a fault: the snapshot comes from the cache resident in
+ * the session's LAST slot, and once that slot has been bound to someone else
+ * the session has no affinity left -- refusing beats building this session's
+ * pool out of another session's context. The rate rises exactly when a swarm is
+ * most worth running, because it tracks how hard the slots are churning.
+ *
+ * So a refusal falls back to **borrowing the session's own root pool**, which
+ * is still pinned and still holds the system prompt and the tool schemas --
+ * about a third of the window by measurement. The workers share most of what
+ * matters instead of re-prefilling the lead's entire context each.
+ *
+ * A borrowed pool is marked, and **the caller must not release it**: it belongs
+ * to the lead and is serving the conversation. Dropping it at the end of a
+ * round would unpin the prefix the lead is still using, which is worse than the
+ * unpooled round this fallback exists to avoid.
+ *
+ * `undefined` only when there is nothing to borrow either, which lets the
+ * caller run the round unpooled rather than fail it.
  */
 export async function snapshotPolykvSession(options: {
 	sessionId: string | undefined;
 	providerConfig: PolykvProviderConfig;
 	logger?: BasicLogger;
-}): Promise<{ poolId: string; prefixTokens: number } | undefined> {
+}): Promise<PolykvSnapshot | undefined> {
 	if (!options.sessionId || !isPolykvProvider(options.providerConfig)) {
 		return undefined;
 	}
@@ -547,6 +565,19 @@ export async function snapshotPolykvSession(options: {
 		);
 		return { poolId: pool.pool_id, prefixTokens: pool.prefix_len };
 	} catch (error) {
+		const root = getPolykvSession(options.sessionId);
+		if (root) {
+			options.logger?.debug?.(
+				`[PolyKV] Could not snapshot session ${options.sessionId} (${
+					error instanceof Error ? error.message : String(error)
+				}); the workers will share its root pool ${root.poolId} instead`,
+			);
+			return {
+				poolId: root.poolId,
+				prefixTokens: root.prefixTokens,
+				borrowed: true,
+			};
+		}
 		options.logger?.debug?.(
 			`[PolyKV] Could not snapshot session ${options.sessionId}: ${
 				error instanceof Error ? error.message : String(error)
@@ -554,6 +585,18 @@ export async function snapshotPolykvSession(options: {
 		);
 		return undefined;
 	}
+}
+
+export interface PolykvSnapshot {
+	poolId: string;
+	prefixTokens: number;
+	/**
+	 * This pool was not created for the round and is not the round's to drop.
+	 *
+	 * It is the lead's root pool, pinned and serving the conversation. A caller
+	 * that releases it unpins the prefix the lead is still using.
+	 */
+	borrowed?: boolean;
 }
 
 /**

@@ -354,12 +354,18 @@ export function createSessionSwarmTool(
 				}
 				return {
 					poolId: snapshot.poolId,
-					release: () =>
-						releasePolykvPool({
-							poolId: snapshot.poolId,
-							providerConfig,
-							logger: config.logger,
-						}),
+					// A borrowed pool is the lead's root, pinned and serving the
+					// conversation. Releasing it here would unpin the prefix the
+					// lead is still using and cost it a full prefill on its next
+					// turn -- worse than the unpooled round the borrow avoided.
+					release: snapshot.borrowed
+						? async () => undefined
+						: () =>
+								releasePolykvPool({
+									poolId: snapshot.poolId,
+									providerConfig,
+									logger: config.logger,
+								}),
 				};
 			},
 			headroom: async () =>

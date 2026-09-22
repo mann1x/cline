@@ -815,3 +815,108 @@ describe("snapshotting the lead's live context for a swarm", () => {
 		]);
 	});
 });
+
+/**
+ * A `from_session` snapshot fails often, and on a busy server it fails a lot.
+ *
+ * Measured by the engine's own soak against the shipped bytes: **331 of 715**
+ * `from_session` creates answered `400`. The reason is correct behaviour, not a
+ * fault — the snapshot is taken from the cache still resident in that session's
+ * LAST slot, and if the slot has since been bound to someone else the session
+ * has no affinity left. Refusing is right: the alternative is building this
+ * session's pool out of another session's context. The rate rises exactly when
+ * a swarm is most useful, because it tracks how hard the slots are churning.
+ *
+ * Returning nothing there costs the whole point of the round: the workers run
+ * unpooled and each re-prefills the lead's entire context. The session's own
+ * root pool is still pinned and still holds the system prompt and the tool
+ * schemas — about a third of the window by measurement — so borrowing it shares
+ * most of what matters and needs nothing that is not already there.
+ */
+describe("snapshotting a session whose slot has moved on", () => {
+	it("borrows the session's root pool when the engine refuses the snapshot", async () => {
+		// `fail: "/polykv/pools"` would also refuse the root create, so the
+		// pool is built first and only the snapshot is made to fail.
+		const server = engine();
+		const config = provider(server.fetch);
+		await ensurePolykvPool({
+			sessionId: "lead",
+			providerConfig: config,
+			systemPrompt: "prompt",
+		});
+		const refusing = provider((async (input: unknown, init?: RequestInit) => {
+			const url = new URL(String(input));
+			if (url.pathname === "/polykv/pools" && init?.method === "POST") {
+				return new Response("no slot affinity for session lead", {
+					status: 400,
+				});
+			}
+			return server.fetch(input as never, init);
+		}) as unknown as typeof fetch);
+
+		const snapshot = await snapshotPolykvSession({
+			sessionId: "lead",
+			providerConfig: refusing,
+		});
+
+		expect(snapshot?.poolId).toBe("pool-root");
+		expect(snapshot?.borrowed).toBe(true);
+	});
+
+	// The trap this exists to close. A borrowed pool is the LEAD's, pinned and
+	// serving the conversation. Releasing it at the end of a swarm round would
+	// unpin and drop the prefix the lead is still using, so the next turn pays
+	// full prefill and the pool tree loses its root — a much worse outcome than
+	// the unpooled round this fallback was meant to avoid.
+	it("marks the borrowed pool so the round cannot release it", async () => {
+		const server = engine();
+		const config = provider(server.fetch);
+		await ensurePolykvPool({
+			sessionId: "lead",
+			providerConfig: config,
+			systemPrompt: "prompt",
+		});
+		const refusing = provider((async (input: unknown, init?: RequestInit) => {
+			const url = new URL(String(input));
+			if (url.pathname === "/polykv/pools" && init?.method === "POST") {
+				return new Response("nope", { status: 400 });
+			}
+			return server.fetch(input as never, init);
+		}) as unknown as typeof fetch);
+
+		const snapshot = await snapshotPolykvSession({
+			sessionId: "lead",
+			providerConfig: refusing,
+		});
+
+		// A real snapshot is this session's to drop; a borrowed one never is.
+		expect(snapshot?.borrowed).toBe(true);
+		expect(getPolykvSession("lead")?.poolId).toBe("pool-root");
+	});
+
+	it("says nothing when there is no pool to borrow either", async () => {
+		const refusing = provider(
+			(async () =>
+				new Response("nope", { status: 400 })) as unknown as typeof fetch,
+		);
+
+		const snapshot = await snapshotPolykvSession({
+			sessionId: "lead",
+			providerConfig: refusing,
+		});
+
+		expect(snapshot).toBeUndefined();
+	});
+
+	// A successful snapshot is owned, and saying so is what lets the caller
+	// release it. Without the flag every round would have to guess.
+	it("marks a real snapshot as owned", async () => {
+		const server = engine();
+		const snapshot = await snapshotPolykvSession({
+			sessionId: "lead",
+			providerConfig: provider(server.fetch),
+		});
+
+		expect(snapshot?.borrowed).toBeFalsy();
+	});
+});

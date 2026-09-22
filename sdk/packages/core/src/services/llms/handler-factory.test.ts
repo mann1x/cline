@@ -204,6 +204,86 @@ describe("createAgentModelFromConfig", () => {
 		);
 	});
 
+	/**
+	 * Every opencoti request carries a session id, including the ones that
+	 * belong to no conversation.
+	 *
+	 * Not for our benefit. The engine binds a session to a slot and keeps that
+	 * affinity so a later `from_session` snapshot can be taken from the cache
+	 * still resident there. A request arriving with NO session id can reuse
+	 * another session's slot without clearing its affinity (opencoti
+	 * bug-3549) — and that session's next snapshot would then be built from
+	 * our context.
+	 *
+	 * Title generation, commit messages and the vision probe all build a
+	 * handler with no conversation behind them, so this is reachable, and on a
+	 * shared server the session it corrupts belongs to someone else.
+	 */
+	it("gives an aux request its own session id rather than none", async () => {
+		const { createAgentModelFromConfig } = await import("./handler-factory");
+
+		createAgentModelFromConfig(
+			{
+				providerId: "opencoti",
+				modelId: "lfm2.5-2.6b",
+				tools: [],
+				providerConfig: { providerId: "opencoti", modelId: "lfm2.5-2.6b" },
+			} as never,
+			undefined,
+		);
+
+		const calls = gatewayMock.createGateway.mock.calls as unknown as Array<
+			[{ providerConfigs: Array<{ options?: Record<string, unknown> }> }]
+		>;
+		const options = calls[calls.length - 1][0].providerConfigs[0].options ?? {};
+		expect(typeof options.polykvSessionId).toBe("string");
+		expect(options.polykvSessionId).not.toBe("");
+	});
+
+	it("uses the conversation's own id when there is one", async () => {
+		const { createAgentModelFromConfig } = await import("./handler-factory");
+
+		createAgentModelFromConfig(
+			{
+				providerId: "opencoti",
+				modelId: "lfm2.5-2.6b",
+				tools: [],
+				sessionId: "conv-7",
+				providerConfig: { providerId: "opencoti", modelId: "lfm2.5-2.6b" },
+			} as never,
+			undefined,
+		);
+
+		const calls = gatewayMock.createGateway.mock.calls as unknown as Array<
+			[{ providerConfigs: Array<{ options?: Record<string, unknown> }> }]
+		>;
+		const options = calls[calls.length - 1][0].providerConfigs[0].options ?? {};
+		expect(options.polykvSessionId).toBe("conv-7");
+	});
+
+	// Only opencoti has a pool tree to confuse, and putting the key on every
+	// other provider's bag would be noise that reads as meaningful.
+	it("adds no session key for a provider with no pool tree", async () => {
+		const { createAgentModelFromConfig } = await import("./handler-factory");
+
+		createAgentModelFromConfig(
+			{
+				providerId: "ollama",
+				modelId: "lfm2.5-2.6b",
+				tools: [],
+				providerConfig: { providerId: "ollama", modelId: "lfm2.5-2.6b" },
+			} as never,
+			undefined,
+		);
+
+		const calls = gatewayMock.createGateway.mock.calls as unknown as Array<
+			[{ providerConfigs: Array<{ options?: Record<string, unknown> }> }]
+		>;
+		expect(
+			calls[calls.length - 1][0].providerConfigs[0].options ?? {},
+		).not.toHaveProperty("polykvSessionId");
+	});
+
 	it("adds no PolyKV key when none is configured", async () => {
 		const { createAgentModelFromConfig } = await import("./handler-factory");
 

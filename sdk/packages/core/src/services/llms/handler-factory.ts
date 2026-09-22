@@ -33,6 +33,21 @@ function usesOpenAICompatibleClient(config: ProviderConfig): boolean {
 	);
 }
 
+/**
+ * One id for every request this process makes outside a conversation.
+ *
+ * Stable rather than per-request: these calls are ours, so letting them share
+ * affinity with each other costs nothing, while a fresh id each time would put
+ * a new session in the engine's ledger for every commit message. What matters
+ * is only that it is never a real conversation's id and never absent.
+ */
+let AUX_SESSION_ID: string | undefined;
+
+function auxiliarySessionId(): string {
+	AUX_SESSION_ID ??= `cerebriline-aux-${Math.random().toString(36).slice(2, 10)}`;
+	return AUX_SESSION_ID;
+}
+
 function buildGatewayProviderOptions(
 	config: ProviderConfig,
 	sessionId?: string,
@@ -70,8 +85,18 @@ function buildGatewayProviderOptions(
 	// The pool a request attaches to is not in the config -- it changes every
 	// time a compaction re-roots the conversation -- so what travels here is the
 	// key the vendor looks the live pool up under. See `polykv-session.ts`.
-	if (normalizeProviderId(config.providerId) === "opencoti" && sessionId) {
-		options.polykvSessionId = sessionId;
+	//
+	// **An opencoti request always carries one, even with no conversation
+	// behind it.** The engine binds a session to a slot and keeps that affinity
+	// so a later `from_session` snapshot can be taken from the cache still
+	// resident there; a request arriving with NO session id can reuse another
+	// session's slot without clearing its affinity, and that session's next
+	// snapshot is then built from our context. Title generation, commit
+	// messages and the vision probe all build a handler with no conversation,
+	// so this is reachable -- and on a shared server the session it corrupts
+	// belongs to somebody else.
+	if (normalizeProviderId(config.providerId) === "opencoti") {
+		options.polykvSessionId = sessionId || auxiliarySessionId();
 	}
 
 	if (config.providerId === "bedrock") {
