@@ -34,6 +34,15 @@ export interface PlacementLease {
 	release(): void;
 }
 
+/**
+ * How long a node that could not be reached is left out of the rotation.
+ *
+ * Long enough that a dead LAN box is not retried on every spawn -- with
+ * round-robin that is once a lap, each costing a connect timeout -- and short
+ * enough that a box which came back is used again within one agent's work.
+ */
+export const NODE_COOL_OFF_MS = 30_000;
+
 export interface AgentPlacementQueue {
 	/**
 	 * A slot on the best node with room, waiting for one if none has.
@@ -46,6 +55,14 @@ export interface AgentPlacementQueue {
 	readonly waiting: number;
 	/** Node id to agents running on it now. A copy. */
 	occupancy(): ReadonlyMap<string, number>;
+	/**
+	 * Take a node out of the rotation for {@link NODE_COOL_OFF_MS}.
+	 *
+	 * Called when an agent could not reach it at all -- a refused connection,
+	 * an unknown host -- never for a model error or a refusal, which say the
+	 * node is alive and answering.
+	 */
+	markUnreachable(nodeId: string): void;
 }
 
 /**
@@ -78,16 +95,45 @@ function abortReason(signal: AbortSignal): unknown {
 
 export function createAgentPlacementQueue(
 	nodes: readonly AgentNode[],
+	options?: {
+		/** Injected so the cool-off can be tested without waiting for it. */
+		now?: () => number;
+		/** Injected for the same reason; returns a canceller. */
+		schedule?: (fn: () => void, ms: number) => void;
+	},
 ): AgentPlacementQueue {
 	const occupancy = new Map<string, number>();
+	const downUntil = new Map<string, number>();
 	const waiters: Waiter[] = [];
+	const now = options?.now ?? Date.now;
+	const schedule =
+		options?.schedule ??
+		((fn: () => void, ms: number) => {
+			const timer = setTimeout(fn, ms) as unknown as {
+				unref?: () => void;
+			};
+			// A cool-off must not be a reason for the process to stay alive.
+			timer.unref?.();
+		});
 	let state: PlacementState = emptyPlacementState();
+	// `Infinity` is capacity, and the most capacity there is: it is how a node
+	// on an endpoint that decides its own admission says "no bound from here",
+	// which is what the panel recommends for an elastic or PolyKV opencoti.
+	// `Number.isFinite` reads it as no capacity at all, so a session whose
+	// nodes were ALL uncapped rejected every spawn outright with
+	// `NoAgentCapacityError`. The test for it is the all-uncapped session.
 	const anyCapacity = nodes.some(
-		(entry) => Number.isFinite(entry.capacity) && entry.capacity > 0,
+		(entry) => !Number.isNaN(entry.capacity) && entry.capacity > 0,
 	);
 
 	const tryPlace = (): PlacementLease | undefined => {
-		const result = placeAgent({ nodes, occupancy, state });
+		const result = placeAgent({
+			nodes,
+			occupancy,
+			state,
+			downUntil,
+			now: now(),
+		});
 		state = result.state;
 		if (result.placement.kind === "queued") {
 			return undefined;
@@ -158,5 +204,20 @@ export function createAgentPlacementQueue(
 			return waiters.length;
 		},
 		occupancy: () => new Map(occupancy),
+		markUnreachable: (nodeId) => {
+			if (!nodes.some((node) => node.id === nodeId)) {
+				return;
+			}
+			downUntil.set(nodeId, now() + NODE_COOL_OFF_MS);
+			// Nothing to drain now: a waiter exists only when every node is
+			// full, and taking one out of the rotation frees no slot. What
+			// does need announcing is the END of the cool-off -- a node that
+			// is down but has room is skipped while a live node is full, so an
+			// agent can be queued against capacity that exists and is merely
+			// out of favour. When the cool-off lapses that capacity becomes
+			// usable with no release to notice it, and the waiter would sit
+			// until some unrelated agent happened to finish.
+			schedule(drain, NODE_COOL_OFF_MS);
+		},
 	};
 }

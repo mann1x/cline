@@ -200,3 +200,115 @@ describe("the agent placement queue", () => {
 		expect(new Set([c.nodeId, d.nodeId])).toEqual(new Set(["n1", "n2"]));
 	});
 });
+
+/**
+ * `Infinity` is how a node on an endpoint that decides its own admission says
+ * "no bound from here" -- an elastic or PolyKV opencoti with the profile's
+ * parallel-sessions box left empty, which is what the panel recommends.
+ */
+describe("a session whose nodes are all uncapped", () => {
+	// `Number.isFinite(Infinity)` is false, so the capacity check read the
+	// recommended configuration as no capacity at all and rejected every
+	// spawn outright.
+	it("places agents rather than refusing them all", async () => {
+		const queue = createAgentPlacementQueue([
+			node("n1", 1, Number.POSITIVE_INFINITY),
+			node("n2", 1, Number.POSITIVE_INFINITY),
+		]);
+
+		await expect(queue.acquire()).resolves.toMatchObject({ nodeId: "n1" });
+		await expect(queue.acquire()).resolves.toMatchObject({ nodeId: "n2" });
+	});
+
+	// The distinction the error exists to make is still made: every node at 0
+	// is a configuration, not a state that ends.
+	it("still refuses when every node is switched off", async () => {
+		const queue = createAgentPlacementQueue([node("n1", 1, 0)]);
+
+		await expect(queue.acquire()).rejects.toBeInstanceOf(NoAgentCapacityError);
+	});
+});
+
+describe("taking an unreachable node out of the rotation", () => {
+	it("stops placing on it, and puts it back when the cool-off ends", async () => {
+		let now = 1_000;
+		const queue = createAgentPlacementQueue(
+			[node("dead", 1, 4), node("live", 1, 4)],
+			{ now: () => now, schedule: () => {} },
+		);
+
+		const first = await queue.acquire();
+		expect(first.nodeId).toBe("dead");
+		queue.markUnreachable("dead");
+		first.release();
+
+		// Every spawn for the next 30 seconds goes to the node that answers,
+		// however many there are -- this is the connect timeout per lap that
+		// the cool-off exists to stop paying.
+		const during = [
+			await queue.acquire(),
+			await queue.acquire(),
+			await queue.acquire(),
+		];
+		expect(during.map((lease) => lease.nodeId)).toEqual([
+			"live",
+			"live",
+			"live",
+		]);
+
+		now += 30_001;
+
+		// And then it is an ordinary member of the rotation again. Asserted as
+		// "within a lap" rather than "the very next one": the cursor is a
+		// position in the tier, and a node rejoining shifts the positions
+		// after it, so which of the two comes first is round-robin's business.
+		const after = [await queue.acquire(), await queue.acquire()];
+		expect(after.map((lease) => lease.nodeId).sort()).toEqual(["dead", "live"]);
+	});
+
+	// A node id nothing knows about would otherwise install a cool-off that
+	// nothing could ever clear.
+	it("ignores a node it does not have", async () => {
+		const queue = createAgentPlacementQueue([node("n1", 1, 1)], {
+			schedule: () => {},
+		});
+
+		queue.markUnreachable("not-a-node");
+
+		await expect(queue.acquire()).resolves.toMatchObject({ nodeId: "n1" });
+	});
+
+	// A node that is down but has room is skipped while a live node is full,
+	// so an agent can be queued against capacity that exists and is merely out
+	// of favour. When the cool-off lapses, no release happens to notice it --
+	// so the cool-off has to announce its own end, or the waiter sits until
+	// some unrelated agent finishes.
+	it("wakes a waiter when the cool-off it was queued behind ends", async () => {
+		let now = 1_000;
+		let scheduled: (() => void) | undefined;
+		const queue = createAgentPlacementQueue(
+			[node("dead", 1, 1), node("live", 1, 1)],
+			{
+				now: () => now,
+				schedule: (fn) => {
+					scheduled = fn;
+				},
+			},
+		);
+
+		queue.markUnreachable("dead");
+		// The only node in play, and it is taken.
+		const onLive = await queue.acquire();
+		expect(onLive.nodeId).toBe("live");
+
+		const waiter = track(queue);
+		await settle();
+		expect(waiter.nodeId).toBeUndefined();
+
+		now += 30_001;
+		scheduled?.();
+		await settle();
+
+		expect(waiter.nodeId).toBe("dead");
+	});
+});

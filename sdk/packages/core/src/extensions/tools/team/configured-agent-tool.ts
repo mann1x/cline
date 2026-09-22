@@ -20,6 +20,7 @@ import {
 	type DelegatedAgentRuntimeConfig,
 } from "./delegated-agent";
 import { readDelegationHooks } from "./delegation-call-hooks";
+import { isNodeUnreachable } from "./node-reachability";
 import type {
 	SpawnAgentOutput,
 	SubAgentEndContext,
@@ -530,6 +531,13 @@ export function createConfiguredAgentTools(
 							} catch {
 								// Best-effort observer callback.
 							}
+						}
+						// A node nothing could connect to is a node the next
+						// agent should not be sent to either. Narrow on
+						// purpose: a server that answered -- a refusal, a 400,
+						// a model error -- is a server that is alive.
+						if (placed && isNodeUnreachable(error)) {
+							placed.markUnreachable();
 						}
 						throw error;
 					} finally {

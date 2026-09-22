@@ -73,6 +73,11 @@ export interface PlacedAgentNode {
 	run<T>(fn: () => Promise<T>): Promise<T>;
 	/** Idempotent: the first call frees the slot. */
 	release(): void;
+	/**
+	 * This node could not be reached at all; leave it out of the rotation for
+	 * a cool-off. See {@link AgentPlacementQueue.markUnreachable}.
+	 */
+	markUnreachable(): void;
 }
 
 export interface AgentNodePlacement {
@@ -128,6 +133,7 @@ export function createAgentNodePlacement(input: {
 			// The lease is the gate -- see `PlacedAgentNode.run`.
 			run: async <T>(fn: () => Promise<T>) => await fn(),
 			release: () => lease.release(),
+			markUnreachable: () => queue.markUnreachable(lease.nodeId),
 		};
 	};
 

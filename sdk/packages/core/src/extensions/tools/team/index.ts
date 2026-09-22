@@ -14,6 +14,7 @@ export {
 export {
 	type AgentPlacementQueue,
 	createAgentPlacementQueue,
+	NODE_COOL_OFF_MS,
 	NoAgentCapacityError,
 	type PlacementLease,
 } from "./agent-placement-queue";
@@ -53,6 +54,7 @@ export {
 	renderDelegationForTranscript,
 	UnknownConfiguredAgentError,
 } from "./delegate-to-agent";
+export { isNodeUnreachable } from "./node-reachability";
 export {
 	buildTeamProgressSummary,
 	toTeamProgressLifecycleEvent,

@@ -23,6 +23,7 @@ import {
 	createDelegatedAgent,
 	type DelegatedAgentConfigProvider,
 } from "./delegated-agent";
+import { isNodeUnreachable } from "./node-reachability";
 import { createSubagentProgress } from "./subagent-progress";
 
 /** The tool a model calls to hand a self-contained piece of work to a subagent. */
@@ -283,6 +284,13 @@ export function createSpawnAgentTool(
 					} catch {
 						// Best-effort observer callback.
 					}
+				}
+				// A node nothing could connect to is a node the next agent
+				// should not be sent to either. Narrow on purpose: a server
+				// that answered -- a refusal, a 400, a model error -- is a
+				// server that is alive.
+				if (placed && isNodeUnreachable(error)) {
+					placed.markUnreachable();
 				}
 				throw error;
 			} finally {

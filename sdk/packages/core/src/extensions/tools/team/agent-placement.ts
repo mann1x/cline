@@ -81,9 +81,38 @@ export function placeAgent(input: {
 	/** Node id to agents currently running on it. Missing means none. */
 	occupancy: ReadonlyMap<string, number>;
 	state: PlacementState;
+	/**
+	 * Node id to the moment its cool-off ends, for nodes that could not be
+	 * reached. Missing or past means the node is in play.
+	 *
+	 * §9i.2. One dead LAN box should not be retried on every spawn for the
+	 * life of the session -- each retry costs a connect timeout, and with
+	 * round-robin it costs one per lap.
+	 */
+	downUntil?: ReadonlyMap<string, number>;
+	now?: number;
 }): { placement: Placement; state: PlacementState } {
+	const now = input.now ?? Date.now();
+	const isDown = (node: AgentNode): boolean => {
+		const until = input.downUntil?.get(node.id);
+		return until !== undefined && until > now;
+	};
+	// A cool-off must never become an outage. If every node that could take an
+	// agent is cooling off, the marks are ignored for this decision rather than
+	// queueing the agent behind nodes nothing will ever clear -- §9h's rule
+	// that a wedged node must not hold a queued agent forever. A node that is
+	// merely FULL is different: that ends by itself when an agent finishes, so
+	// a down node is skipped in favour of waiting for a live one.
+	const usable = input.nodes.filter(
+		(node) => !Number.isNaN(node.capacity) && node.capacity > 0,
+	);
+	const honourDown = usable.some((node) => !isDown(node));
+
 	const byPriority = new Map<number, AgentNode[]>();
 	for (const node of input.nodes) {
+		if (honourDown && isDown(node)) {
+			continue;
+		}
 		// A node with no capacity is not a node with room. Reading 0 as
 		// "unbounded" would send every agent to the one node turned off.
 		//

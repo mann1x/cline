@@ -265,3 +265,86 @@ describe("a node whose endpoint decides its own admission", () => {
 		expect(placement).toEqual({ kind: "node", nodeId: "elastic" });
 	});
 });
+
+/**
+ * §9i.2. One dead LAN box should not be retried on every spawn: with
+ * round-robin that is once a lap, each costing a connect timeout.
+ */
+describe("a node that could not be reached", () => {
+	const node = (id: string, priority: number, capacity: number) => ({
+		id,
+		priority,
+		capacity,
+	});
+
+	it("is skipped while its cool-off runs", () => {
+		const { placement } = placeAgent({
+			nodes: [node("dead", 1, 4), node("live", 1, 4)],
+			occupancy: new Map(),
+			state: emptyPlacementState(),
+			downUntil: new Map([["dead", 2_000]]),
+			now: 1_000,
+		});
+
+		expect(placement).toEqual({ kind: "node", nodeId: "live" });
+	});
+
+	it("comes back when the cool-off has passed", () => {
+		const { placement } = placeAgent({
+			nodes: [node("recovered", 1, 4), node("live", 1, 4)],
+			occupancy: new Map(),
+			state: emptyPlacementState(),
+			downUntil: new Map([["recovered", 2_000]]),
+			now: 2_001,
+		});
+
+		expect(placement).toEqual({ kind: "node", nodeId: "recovered" });
+	});
+
+	// Being down is not being busy. A full node frees itself when an agent
+	// finishes, so waiting for it beats sending an agent at a box that is not
+	// answering.
+	it("is passed over in favour of waiting for a live node that is full", () => {
+		const { placement } = placeAgent({
+			nodes: [node("dead", 1, 4), node("live", 1, 1)],
+			occupancy: new Map([["live", 1]]),
+			state: emptyPlacementState(),
+			downUntil: new Map([["dead", 2_000]]),
+			now: 1_000,
+		});
+
+		expect(placement).toEqual({ kind: "queued" });
+	});
+
+	// §9h: a wedged node must not hold a queued agent forever. With nothing
+	// left that could ever clear, the marks are ignored and the agent is sent
+	// at a node that may fail -- which ends, where waiting would not.
+	it("is used anyway when every node is cooling off", () => {
+		const { placement } = placeAgent({
+			nodes: [node("dead-1", 1, 4), node("dead-2", 2, 4)],
+			occupancy: new Map(),
+			state: emptyPlacementState(),
+			downUntil: new Map([
+				["dead-1", 2_000],
+				["dead-2", 2_000],
+			]),
+			now: 1_000,
+		});
+
+		expect(placement).toEqual({ kind: "node", nodeId: "dead-1" });
+	});
+
+	// A node that is OFF is not a node that could clear, so it must not make
+	// the down marks look survivable.
+	it("does not count a node that is switched off as somewhere to fall back to", () => {
+		const { placement } = placeAgent({
+			nodes: [node("dead", 1, 4), node("off", 1, 0)],
+			occupancy: new Map(),
+			state: emptyPlacementState(),
+			downUntil: new Map([["dead", 2_000]]),
+			now: 1_000,
+		});
+
+		expect(placement).toEqual({ kind: "node", nodeId: "dead" });
+	});
+});
