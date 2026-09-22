@@ -16,6 +16,12 @@ service TaskService {
   rpc cancelQueuedPrompt(StringRequest) returns (Empty);
   // Cancels the currently running background command
   rpc cancelBackgroundCommand(EmptyRequest) returns (Empty);
+  // Stop one running sub-agent, named by the id its spawn tool announced.
+  //
+  // Separate from cancelTask because that is the only control there was: a
+  // fan-out of five where one agent grinds has four finished reports, and
+  // cancelling the session throws them away along with the lead's context.
+  rpc cancelSubagent(StringRequest) returns (Empty);
   // Detaches the running foreground terminal command ("Proceed While Running"):
   // the agent receives the partial output and a log file path for the rest.
   rpc proceedWhileRunningCommand(EmptyRequest) returns (Empty);

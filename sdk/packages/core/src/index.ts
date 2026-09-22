@@ -450,6 +450,8 @@ export {
 	type SubAgentEndContext,
 	type SubAgentStartContext,
 	startBackgroundDelegation,
+	subagentCancelId,
+	subagentCancellation,
 	type TaskResult,
 	type TeamEvent,
 	type TeamMemberConfig,

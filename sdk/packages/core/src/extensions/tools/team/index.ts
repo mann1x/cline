@@ -80,3 +80,7 @@ export {
 	type SwarmPoolSource,
 	type SwarmWorkerRequest,
 } from "./spawn-swarm-tool";
+export {
+	subagentCancelId,
+	subagentCancellation,
+} from "./subagent-cancellation";

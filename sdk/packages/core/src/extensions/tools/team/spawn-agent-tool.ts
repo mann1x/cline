@@ -28,6 +28,10 @@ import {
 	type DelegatedAgentConfigProvider,
 } from "./delegated-agent";
 import { isNodeUnreachable, isWastedNodeRun } from "./node-reachability";
+import {
+	registerSubagentCancellation,
+	subagentCancelId,
+} from "./subagent-cancellation";
 import { createSubagentProgress } from "./subagent-progress";
 
 /** The tool a model calls to hand a self-contained piece of work to a subagent. */
@@ -192,6 +196,20 @@ export function createSpawnAgentTool(
 				context.emitUpdate,
 				config.onSubAgentEvent,
 			);
+			// Its own abort signal, so a runaway agent can be stopped without
+			// cancelling the session and the siblings that are working.
+			const cancelId = subagentCancelId(context.sessionId, context.toolCallId);
+			const cancellation = registerSubagentCancellation(
+				cancelId,
+				context.signal,
+			);
+			// Announced rather than reconstructed by the reader. The chat row is
+			// the thing that offers the stop, and it must name exactly what was
+			// registered -- a host rebuilding the same string from its own idea
+			// of the session id is a stop button that works until the two drift.
+			if (cancelId) {
+				context.emitUpdate?.({ cancelId });
+			}
 			// Rebuilt per attempt, because the node IS the configuration: which
 			// node took this agent decides its provider and model, and the
 			// provider is read once at construction.
@@ -203,7 +221,7 @@ export function createSpawnAgentTool(
 					tools,
 					maxIterations: config.defaultMaxIterations,
 					parentAgentId: context.agentId,
-					abortSignal: context.signal,
+					abortSignal: cancellation.signal,
 					// Its own events still go where they always went; the observer
 					// forwards them and reports the tool names on the way past.
 					onEvent: progress.observe,
@@ -340,8 +358,11 @@ export function createSpawnAgentTool(
 				throw error;
 			} finally {
 				// However the run ended. A node held by an agent that has
-				// finished is capacity the next one never sees.
+				// finished is capacity the next one never sees, and a stop
+				// registration that outlives its agent is a button that
+				// reports success and does nothing.
 				placed?.release();
+				cancellation.release();
 			}
 		},
 		timeoutMs: 300000,

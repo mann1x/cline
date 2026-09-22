@@ -455,6 +455,14 @@ export interface SubagentStatusItem {
 	contextWindow: number
 	contextUsagePercentage: number
 	latestToolCall?: string
+	/**
+	 * How to stop this agent, while it is running.
+	 *
+	 * Sent by the spawn tool that registered it rather than rebuilt here: a
+	 * reader composing the same string from its own idea of the session id is
+	 * a stop button that works until the two drift apart.
+	 */
+	cancelId?: string
 	result?: string
 	error?: string
 }

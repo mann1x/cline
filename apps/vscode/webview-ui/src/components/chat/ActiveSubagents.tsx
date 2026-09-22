@@ -1,6 +1,8 @@
 import type { ClineMessage, ClineSaySubagentStatus, SubagentStatusItem } from "@shared/ExtensionMessage"
-import { ChevronDownIcon, LoaderCircleIcon, XIcon } from "lucide-react"
+import { StringRequest } from "@shared/proto/cline/common"
+import { ChevronDownIcon, LoaderCircleIcon, SquareIcon, XIcon } from "lucide-react"
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { TaskServiceClient } from "@/services/grpc-client"
 import { subagentIdentity } from "./subagentIdentity"
 
 /**
@@ -118,6 +120,23 @@ export function ActiveSubagents({ messages }: { messages: ClineMessage[] }) {
 		setOpenIndex((previous) => (previous === index ? undefined : index))
 	}, [])
 
+	// Which agents have been asked to stop. The row stays until the agent
+	// actually ends -- an abort is a request, and the run may be inside a
+	// model call that has to come back first -- so without this the button
+	// would look like it had done nothing and invite a second press.
+	const [stopping, setStopping] = useState<ReadonlySet<string>>(new Set())
+	const stop = useCallback((cancelId: string) => {
+		setStopping((previous) => new Set(previous).add(cancelId))
+		TaskServiceClient.cancelSubagent(StringRequest.create({ value: cancelId })).catch((error) => {
+			console.error("Failed to stop sub-agent:", error)
+			setStopping((previous) => {
+				const next = new Set(previous)
+				next.delete(cancelId)
+				return next
+			})
+		})
+	}, [])
+
 	if (agents.length === 0) {
 		return null
 	}
@@ -138,36 +157,54 @@ export function ActiveSubagents({ messages }: { messages: ClineMessage[] }) {
 						// What it is doing, in the order of how much it says: the
 						// tool it is running now, else that it has not started one.
 						const doing = agent.latestToolCall?.trim() || (agent.status === "pending" ? "queued" : "thinking")
+						const isStopping = agent.cancelId !== undefined && stopping.has(agent.cancelId)
 						return (
-							<button
-								aria-expanded={isOpen}
-								aria-label={`${identity.label}: ${doing}`}
-								className="flex w-full cursor-pointer items-center gap-1.5 border-0 bg-transparent p-0 text-left"
-								key={agent.index}
-								onClick={() => toggle(agent.index)}
-								type="button">
-								{/* A spinner per agent, not one for the strip: a
+							<div className="flex w-full items-center gap-1.5" key={agent.index}>
+								<button
+									aria-expanded={isOpen}
+									aria-label={`${identity.label}: ${doing}`}
+									className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 border-0 bg-transparent p-0 text-left"
+									onClick={() => toggle(agent.index)}
+									type="button">
+									{/* A spinner per agent, not one for the strip: a
 								    queued agent and a working one look the same
 								    otherwise, and telling them apart is the whole
 								    reason this strip exists. */}
-								{agent.status === "running" ? (
-									<LoaderCircleIcon className="size-2 shrink-0 animate-spin text-link" />
-								) : (
-									<span className="size-2 shrink-0 rounded-full border border-description opacity-60" />
+									{agent.status === "running" ? (
+										<LoaderCircleIcon className="size-2 shrink-0 animate-spin text-link" />
+									) : (
+										<span className="size-2 shrink-0 rounded-full border border-description opacity-60" />
+									)}
+									<span
+										className="inline-block shrink-0 rounded-xs border px-1.5 py-[1px] text-[10px] font-medium text-foreground"
+										style={identity.style}>
+										{identity.label}
+									</span>
+									{nodeNameOf(agent) && (
+										<span className="shrink-0 text-[10px] opacity-60">{nodeNameOf(agent)}</span>
+									)}
+									<span className="min-w-0 flex-1 truncate font-mono text-[10px] opacity-70">{doing}</span>
+									<ChevronDownIcon
+										className={`size-2 shrink-0 opacity-60 transition-transform ${isOpen ? "" : "-rotate-90"}`}
+									/>
+								</button>
+								{/* Its own control, outside the row's button: one
+							    agent stops without touching the session or the
+							    siblings that are working. Absent on a run
+							    recorded before agents carried a stop id, rather
+							    than shown and doing nothing. */}
+								{agent.cancelId && (
+									<button
+										aria-label={`Stop ${identity.label}`}
+										className="shrink-0 cursor-pointer border-0 bg-transparent p-0 opacity-50 hover:opacity-100 disabled:cursor-default disabled:opacity-30"
+										disabled={isStopping}
+										onClick={() => stop(agent.cancelId as string)}
+										title={isStopping ? `Stopping ${identity.label}…` : `Stop ${identity.label}`}
+										type="button">
+										<SquareIcon className="size-2.5 fill-current" />
+									</button>
 								)}
-								<span
-									className="inline-block shrink-0 rounded-xs border px-1.5 py-[1px] text-[10px] font-medium text-foreground"
-									style={identity.style}>
-									{identity.label}
-								</span>
-								{nodeNameOf(agent) && (
-									<span className="shrink-0 text-[10px] opacity-60">{nodeNameOf(agent)}</span>
-								)}
-								<span className="min-w-0 flex-1 truncate font-mono text-[10px] opacity-70">{doing}</span>
-								<ChevronDownIcon
-									className={`size-2 shrink-0 opacity-60 transition-transform ${isOpen ? "" : "-rotate-90"}`}
-								/>
-							</button>
+							</div>
 						)
 					})}
 				</div>

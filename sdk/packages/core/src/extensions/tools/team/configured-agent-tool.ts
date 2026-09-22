@@ -31,6 +31,10 @@ import type {
 	SubAgentEndContext,
 	SubAgentStartContext,
 } from "./spawn-agent-tool";
+import {
+	registerSubagentCancellation,
+	subagentCancelId,
+} from "./subagent-cancellation";
 import { createSubagentProgress } from "./subagent-progress";
 
 const CONFIGURED_AGENT_TOOL_NAME_PREFIX = "subagent_";
@@ -408,6 +412,24 @@ export function createConfiguredAgentTools(
 					let placed = placement
 						? await placement.place(context.signal)
 						: undefined;
+					// Its own abort signal, so a runaway agent can be stopped
+					// without cancelling the session and the siblings that are
+					// working.
+					const cancelId = subagentCancelId(
+						context.sessionId,
+						context.toolCallId,
+					);
+					const cancellation = registerSubagentCancellation(
+						cancelId,
+						context.signal,
+					);
+					// Announced rather than reconstructed by the reader. The chat row is
+					// the thing that offers the stop, and it must name exactly what was
+					// registered -- a host rebuilding the same string from its own idea
+					// of the session id is a stop button that works until the two drift.
+					if (cancelId) {
+						context.emitUpdate?.({ cancelId });
+					}
 					// Rebuilt per attempt: the node IS the configuration, so
 					// re-placing means resolving the connection again.
 					const buildRuntimeConfig = () =>
@@ -440,7 +462,7 @@ export function createConfiguredAgentTools(
 							tools,
 							maxIterations: config.maxIterations,
 							parentAgentId: context.agentId,
-							abortSignal: context.signal,
+							abortSignal: cancellation.signal,
 							// The caller's hooks for this run alone -- the pause barrier
 							// of a background delegation, and nothing in an ordinary
 							// call the model makes.
@@ -593,8 +615,11 @@ export function createConfiguredAgentTools(
 					} finally {
 						// The lease outlives the run on every path, or a node
 						// stays booked for an agent that is no longer on it and
-						// the round narrows with each failure.
+						// the round narrows with each failure. Same for the stop
+						// registration: one that outlives its agent is a button
+						// that reports success and does nothing.
 						placed?.release();
+						cancellation.release();
 					}
 				},
 				timeoutMs: 300000,

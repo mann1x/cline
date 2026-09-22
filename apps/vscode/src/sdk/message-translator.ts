@@ -2238,6 +2238,10 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 						if (typeof updateData.contextUsagePercentage === "number")
 							entry.contextUsagePercentage = updateData.contextUsagePercentage
 						if (typeof updateData.latestToolCall === "string") entry.latestToolCall = updateData.latestToolCall
+						// How the row stops this agent. Sent by the spawn tool
+						// as soon as it registers, so the button exists before
+						// the agent's first tool call rather than after it.
+						if (typeof updateData.cancelId === "string") entry.cancelId = updateData.cancelId
 					}
 				}
 				// Emit a running status update

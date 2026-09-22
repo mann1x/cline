@@ -1,6 +1,12 @@
 import type { ClineMessage, SubagentStatusItem } from "@shared/ExtensionMessage"
 import { fireEvent, render, screen } from "@testing-library/react"
-import { describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+
+const mocks = vi.hoisted(() => ({ cancelSubagent: vi.fn() }))
+vi.mock("@/services/grpc-client", () => ({
+	TaskServiceClient: { cancelSubagent: mocks.cancelSubagent },
+}))
+
 import { ActiveSubagents, liveSubagentsFrom } from "./ActiveSubagents"
 
 /**
@@ -183,5 +189,69 @@ describe("the working-agents strip", () => {
 		)
 
 		expect(screen.queryByText("fix the braces")).not.toBeInTheDocument()
+	})
+})
+
+/**
+ * Stopping one agent. `cancelTask` was the only control, and it is the wrong
+ * one here: a fan-out of five where one grinds has four finished reports, and
+ * cancelling the session throws them away with the lead's context.
+ */
+describe("stopping a running agent", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+		mocks.cancelSubagent.mockResolvedValue(undefined)
+	})
+
+	it("stops the agent it is next to, by the id that agent announced", () => {
+		render(
+			<ActiveSubagents
+				messages={[
+					statusMessage([
+						item({ index: 1, agentName: "js-syntactic", cancelId: "s1::call-1" }),
+						item({ index: 2, agentName: "html", cancelId: "s1::call-2" }),
+					]),
+				]}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: "Stop html" }))
+
+		expect(mocks.cancelSubagent).toHaveBeenCalledTimes(1)
+		expect(mocks.cancelSubagent.mock.calls[0][0]).toMatchObject({ value: "s1::call-2" })
+	})
+
+	// An abort is a request: the run may be inside a model call that has to
+	// come back first, so the row stays. Without this the button looks like it
+	// did nothing and invites a second press.
+	it("will not be pressed twice", () => {
+		render(<ActiveSubagents messages={[statusMessage([item({ index: 1, agentName: "js", cancelId: "s1::c" })])]} />)
+
+		const button = screen.getByRole("button", { name: "Stop js" })
+		fireEvent.click(button)
+		fireEvent.click(button)
+
+		expect(mocks.cancelSubagent).toHaveBeenCalledTimes(1)
+		expect(button).toBeDisabled()
+	})
+
+	// A run recorded before agents carried a stop id has nothing to send.
+	it("offers no stop it cannot send", () => {
+		render(<ActiveSubagents messages={[statusMessage([item({ index: 1, agentName: "old" })])]} />)
+
+		expect(screen.queryByRole("button", { name: /^Stop / })).not.toBeInTheDocument()
+	})
+
+	// Opening the agent's task and stopping it are different intents, and the
+	// stop sits inside the row that opens it.
+	it("does not open the agent's panel when it is stopped", () => {
+		render(
+			<ActiveSubagents
+				messages={[statusMessage([item({ index: 1, agentName: "js", prompt: "fix it", cancelId: "s1::c" })])]}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: "Stop js" }))
+		expect(screen.queryByText("fix it")).not.toBeInTheDocument()
 	})
 })
