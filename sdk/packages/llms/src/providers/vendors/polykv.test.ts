@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	createPolykvClient,
 	probeOpencotiProps,
@@ -988,5 +988,137 @@ describe("closing a session", () => {
 		});
 		await client.closeSession("a/b");
 		expect(server.calls[0]?.path).toBe("/sessions/a%2Fb/close");
+	});
+});
+
+/**
+ * A read that answers its headers and never ends its body.
+ *
+ * Measured on bs2, 2026-09-22, on two different ports so it is the engine and
+ * not a proxy in front of it: `GET /polykv/tps` returns `200` and then never
+ * finishes. Every read in this file was unbounded, so `readOpencotiStatus`
+ * simply never resolved -- and it is what the settings panel asks to decide
+ * whether Parallel Sessions is elastic. The visible symptom was the field
+ * offering "Default: 1" on a server whose admission gate was on.
+ *
+ * `/props` is the worse one: it is read at session start to resolve the slot
+ * limit, so the same hang stalls a session rather than a panel.
+ */
+describe("a read that never ends", () => {
+	beforeEach(() => {
+		resetPolykvAvailability();
+	});
+
+	const PROPS = {
+		build_info: "opencoti-0.10.5-c7-2609031229001",
+		features: [],
+		opencoti: {
+			polykv: { pools_enabled: false },
+			elastic_slots: { enabled: true, slots_live: 2, slots_max: 8 },
+		},
+	};
+
+	/**
+	 * A server that answers everything except one path, where it sends the
+	 * headers and then stops -- the measured shape. The stub ignores the abort
+	 * signal on purpose: a `fetch` that honours it would prove only that
+	 * `AbortSignal` works, and the hang has to be survivable without that.
+	 */
+	function hangsOn(path: string, bodies: Record<string, unknown> = {}) {
+		const aborted: string[] = [];
+		const fetchImpl = (async (input: unknown, init?: RequestInit) => {
+			const url = new URL(String(input));
+			if (url.pathname === path) {
+				init?.signal?.addEventListener("abort", () =>
+					aborted.push(url.pathname),
+				);
+				return {
+					ok: true,
+					status: 200,
+					json: () => new Promise<never>(() => {}),
+				} as unknown as Response;
+			}
+			const body =
+				url.pathname === "/props" ? PROPS : (bodies[url.pathname] ?? {});
+			return new Response(JSON.stringify(body), { status: 200 });
+		}) as unknown as typeof fetch;
+		return { aborted, fetch: fetchImpl };
+	}
+
+	it("gives up on /polykv/tps and reports everything else", async () => {
+		vi.useFakeTimers();
+		try {
+			const server = hangsOn("/polykv/tps");
+			const pending = readOpencotiStatus(
+				"http://localhost:8080/v1",
+				server.fetch,
+			);
+			await vi.advanceTimersByTimeAsync(6_000);
+			const status = await pending;
+
+			// The panel's actual question. Before the bound it never got an
+			// answer at all, and rendered the "could not be asked" placeholder.
+			expect(status.reachable).toBe(true);
+			expect(status.elastic).toBe(true);
+			expect(status.release).toBe("c7");
+			// The one thing that did not answer is the one thing that is empty.
+			expect(status.sessions).toEqual([]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("cancels the request it gave up on", async () => {
+		vi.useFakeTimers();
+		try {
+			const server = hangsOn("/polykv/tps");
+			const pending = readOpencotiStatus(
+				"http://localhost:8080/v1",
+				server.fetch,
+			);
+			await vi.advanceTimersByTimeAsync(6_000);
+			await pending;
+
+			// Abandoning the promise would leave the socket open for the life of
+			// the process, once per poll.
+			expect(server.aborted).toEqual(["/polykv/tps"]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	// This one is on the session-start path through `probeOpencotiProps`, so an
+	// unbounded read here stalls a session rather than a panel.
+	it("gives up on /props and answers 'not opencoti'", async () => {
+		vi.useFakeTimers();
+		try {
+			const server = hangsOn("/props");
+			const pending = probeOpencotiProps(
+				"http://localhost:8080/v1",
+				server.fetch,
+			);
+			await vi.advanceTimersByTimeAsync(6_000);
+			const props = await pending;
+
+			// The same reading an unreachable server gets: the fixed slot count
+			// is what you use when the question cannot be asked.
+			expect(props).toMatchObject({ poolsEnabled: false, elastic: false });
+			expect(props.release).toBeUndefined();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not bound a server that answers", async () => {
+		// The bound must not truncate a slow-but-alive read into a wrong
+		// "unreachable" -- the whole point is that a healthy answer is orders of
+		// magnitude inside it.
+		const server = hangsOn("/nothing");
+		const status = await readOpencotiStatus(
+			"http://localhost:8080/v1",
+			server.fetch,
+		);
+		expect(status.reachable).toBe(true);
+		expect(server.aborted).toEqual([]);
 	});
 });

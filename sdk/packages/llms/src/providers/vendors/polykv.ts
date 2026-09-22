@@ -614,11 +614,12 @@ export function probeOpencotiProps(
 	const doFetch = fetchImpl ?? fetch;
 	const pending = (async (): Promise<OpencotiProps> => {
 		try {
-			const response = await doFetch(`${root}/props`, { method: "GET" });
-			if (!response.ok) {
+			// Bounded like every other read here: this one is on the
+			// session-start path, so an unbounded `/props` stalls a session.
+			const body = await boundedJson(doFetch, `${root}/props`);
+			if (!body) {
 				return NOT_OPENCOTI;
 			}
-			const body = (await response.json()) as Record<string, unknown>;
 			const opencoti = (body.opencoti ?? {}) as Record<string, unknown>;
 			const polykv = (opencoti.polykv ?? {}) as Record<string, unknown>;
 			const elasticSlots = (opencoti.elastic_slots ?? {}) as Record<
@@ -1014,19 +1015,77 @@ function numberOr(value: unknown): number | undefined {
 		: undefined;
 }
 
+/**
+ * How long any one of these reads may take before it is abandoned.
+ *
+ * Measured on bs2, 2026-09-22: `GET /polykv/tps` answers with headers and a
+ * `200`, and then never ends the body. Every one of these reads was unbounded,
+ * so the caller simply stopped -- the settings panel's engine probe never
+ * resolved, which left the Parallel Sessions field showing "Default: 1" on a
+ * server with PolyKV admission on, and left its description on the "could not
+ * be asked" branch. The same unbounded read is on the session-start path
+ * through `probeOpencotiProps`, where a hung `/props` would stall a session
+ * rather than a panel.
+ *
+ * Five seconds is far past a healthy answer -- `/props` returns in 70ms and
+ * `/polykv/pools` in 20ms on the same server -- and far short of anything a
+ * person would wait through. These are all display and admission reads: none
+ * of them is worth blocking on, and every one of them already has an
+ * "unanswered" spelling.
+ */
+const OPENCOTI_READ_TIMEOUT_MS = 5_000;
+
+/**
+ * A GET that cannot outlive its bound, however the other end misbehaves.
+ *
+ * Both halves are needed. The signal cancels the real request, so a hung read
+ * does not leak a socket for the life of the process; the race bounds the
+ * wait even when the caller passed a `fetch` that ignores signals -- which
+ * every stub in a test does, and which is exactly the shape that hangs.
+ *
+ * Reading the body is inside the bound too. The measured failure delivered its
+ * headers promptly and never finished the body, so anything that awaited only
+ * the response would have called this a success and hung on `.json()`.
+ */
+async function boundedJson(
+	doFetch: typeof fetch,
+	url: string,
+	timeoutMs: number = OPENCOTI_READ_TIMEOUT_MS,
+): Promise<Record<string, unknown> | undefined> {
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), timeoutMs);
+	let expired: (() => void) | undefined;
+	const expiry = new Promise<undefined>((resolve) => {
+		expired = () => resolve(undefined);
+	});
+	const abandon = setTimeout(() => expired?.(), timeoutMs);
+	try {
+		return await Promise.race([
+			(async () => {
+				const response = await doFetch(url, {
+					method: "GET",
+					signal: controller.signal,
+				});
+				if (!response.ok) {
+					return undefined;
+				}
+				return (await response.json()) as Record<string, unknown>;
+			})(),
+			expiry,
+		]);
+	} catch {
+		return undefined;
+	} finally {
+		clearTimeout(timer);
+		clearTimeout(abandon);
+	}
+}
+
 async function readJson(
 	doFetch: typeof fetch,
 	url: string,
 ): Promise<Record<string, unknown> | undefined> {
-	try {
-		const response = await doFetch(url, { method: "GET" });
-		if (!response.ok) {
-			return undefined;
-		}
-		return (await response.json()) as Record<string, unknown>;
-	} catch {
-		return undefined;
-	}
+	return boundedJson(doFetch, url);
 }
 
 /**
