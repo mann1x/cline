@@ -215,6 +215,8 @@ export interface ParsedArgs {
 	 * secret never appears on a command line, in shell history, or in any file
 	 * this program writes.
 	 */
+	/** Repeated `--agent-node` specs; see `runtime/agent-nodes-flag.ts`. */
+	agentNode?: string[];
 	qaCredential?: string[];
 	cwd?: string;
 	teamName?: string;

@@ -1586,6 +1586,14 @@ export async function runCli(): Promise<void> {
 			parallelSessions: args.parallelSessions,
 		});
 		config.maxConcurrentAgents = agentSlots.limit;
+		// Agent nodes, when the run names any. Each is a whole agents
+		// connection with a priority and a capacity of its own; core places
+		// every delegated agent on one and queues when they are all full.
+		const { parseAgentNodeFlags } = await import("./runtime/agent-nodes-flag");
+		const agentNodes = parseAgentNodeFlags(args.agentNode);
+		if (agentNodes.length > 0) {
+			config.agentNodes = agentNodes;
+		}
 		// QA credentials named on the command line, read from this process's
 		// environment. Names only in the log — the values exist in exactly two
 		// places, this environment and the child of a command that asked.

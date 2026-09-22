@@ -214,6 +214,11 @@ export function addRootOptions(cmd: Command): Command {
 				"How many requests this endpoint serves at once (OLLAMA_NUM_PARALLEL, --parallel); bounds concurrent agents (default: 1, max: 10)",
 			)
 			.option(
+				"--agent-node <spec>",
+				"Where delegated agents run, as model=<id>[,url=<baseUrl>][,provider=<id>][,priority=1-10][,capacity=<n>]. Repeatable, up to ten. Priority 1 is highest and a lower tier is used only when nothing above it has a free slot; round-robin within a tier; every node full means the next agent waits rather than fails",
+				(value: string, previous: string[] = []) => [...previous, value],
+			)
+			.option(
 				"--qa-credential <name>",
 				"Name of an environment variable holding a QA secret. It is withheld from every command and given only to the ones that ask for it by name, and is masked out of their output. Repeatable.",
 				(value: string, previous: string[] = []) => [...previous, value],
@@ -535,6 +540,7 @@ export function commanderToParsedArgs(program: Command): ParsedArgs {
 		result.expertNoRelay = opts.expertNoRelay;
 	if (opts.parallelSessions !== undefined)
 		result.parallelSessions = opts.parallelSessions;
+	if (opts.agentNode !== undefined) result.agentNode = opts.agentNode;
 	if (opts.qaCredential !== undefined) result.qaCredential = opts.qaCredential;
 	if (opts.provider !== undefined) result.provider = opts.provider;
 	if (opts.key !== undefined) result.key = opts.key;
