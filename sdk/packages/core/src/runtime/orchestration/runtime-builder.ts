@@ -51,6 +51,7 @@ import {
 	agentEndpointKey,
 	agentSlotLimitsByEndpoint,
 	bootstrapAgentTeams,
+	createAgentNodePlacement,
 	createAgentSlotGateRegistry,
 	createDelegatedAgentConfigProvider,
 	type DelegatedAgentConnectionConfig,
@@ -834,6 +835,16 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 							: {}),
 					}
 				: {};
+		// The nodes, when the profile names any. Built after the registry so a
+		// node can take its endpoint's own gate from it, and handed to the
+		// delegated config provider below, which is the one thing every spawn
+		// path already reads.
+		const agentNodes = (config.agentNodes ?? []).map((node) => ({
+			id: node.id,
+			priority: node.priority,
+			capacity: node.capacity,
+			connection: node.connection as Partial<DelegatedAgentConnectionConfig>,
+		}));
 		const delegatedAgentConfigProvider = createDelegatedAgentConfigProvider(
 			{
 				providerId: config.providerId,
@@ -880,6 +891,34 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 			},
 			Object.keys(agentsOverrides) as (keyof DelegatedAgentConnectionConfig)[],
 		);
+		// Every spawn path reads the provider above, so this is where the nodes
+		// reach them all at once. Each node's gate comes from the same registry
+		// the rest of the session uses, keyed by ITS endpoint -- a node on a
+		// one-slot ollama must not queue behind an opencoti node.
+		const nodePlacement = createAgentNodePlacement({
+			nodes: agentNodes,
+			base: delegatedAgentConfigProvider,
+			slotGateFor: (node) =>
+				agentSlotGates.for(
+					agentEndpointKey({
+						providerId: node.connection.providerId ?? config.providerId,
+						baseUrl: node.connection.baseUrl ?? config.baseUrl,
+					}),
+				),
+		});
+		if (nodePlacement) {
+			delegatedAgentConfigProvider.setNodePlacement?.(nodePlacement);
+			(logger ?? config.logger)?.log(
+				`[Agents] ${agentNodes.length} agent node(s): ${agentNodes
+					.map(
+						(node) =>
+							`${node.id} p${node.priority} x${node.capacity} ${
+								node.connection.providerId ?? config.providerId
+							}/${node.connection.modelId ?? config.modelId}`,
+					)
+					.join(", ")}`,
+			);
+		}
 		if (agentsConnection) {
 			(logger ?? config.logger)?.log(
 				`[Agents] Delegated agents run on provider=${agentsConnection.providerId} model=${agentsConnection.modelId}, not the session's`,

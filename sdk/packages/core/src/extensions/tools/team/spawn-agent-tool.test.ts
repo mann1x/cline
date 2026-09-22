@@ -40,6 +40,57 @@ describe("createSpawnAgentTool", () => {
 		vi.clearAllMocks();
 	});
 
+	// A profile with agent nodes decides WHERE each sub-agent runs, and the
+	// node decides which model it is -- so the node has to be taken before the
+	// agent is built, and given back however the run ended.
+	it("builds the sub-agent on the node it was placed on, and frees it after", async () => {
+		const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
+		const { createAgentNodePlacement } = await import(
+			"./agent-node-placement.js"
+		);
+		runMock.mockResolvedValue({
+			text: "done",
+			iterations: 1,
+			finishReason: "completed",
+			usage: { inputTokens: 1, outputTokens: 1 },
+		});
+
+		const placement = createAgentNodePlacement({
+			nodes: [
+				{
+					id: "n1",
+					priority: 1,
+					capacity: 1,
+					connection: { providerId: "opencoti", modelId: "worker-model" },
+				},
+			],
+			base: createDelegatedAgentConfigProvider({
+				providerId: "anthropic",
+				modelId: "lead-model",
+			}),
+		});
+		const tool = createSpawnAgentTool({
+			configProvider: createDelegatedAgentConfigProvider({
+				providerId: "anthropic",
+				modelId: "lead-model",
+				nodePlacement: placement,
+			} as never),
+		});
+
+		await tool.execute({ systemPrompt: "p", task: "t" }, {
+			agentId: "parent",
+			conversationId: "c",
+			iteration: 1,
+		} as never);
+
+		expect(agentConstructorSpy).toHaveBeenCalledWith(
+			expect.objectContaining({ modelId: "worker-model" }),
+		);
+		// Released: the node is free for the next agent rather than held by one
+		// that has already finished.
+		expect(placement?.occupancy().get("n1") ?? 0).toBe(0);
+	});
+
 	it("creates a sub-agent, forwards callbacks, and returns normalized output", async () => {
 		const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
 		runMock.mockResolvedValue({

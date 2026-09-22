@@ -160,10 +160,18 @@ export function createSpawnAgentTool(
 				? await config.createSubAgentTools(input, context)
 				: (config.subAgentTools ?? []);
 
+			// Where it runs, before it is built: a node is a whole agents
+			// configuration, so which node took this agent decides which model
+			// it is. Without nodes this is undefined and everything below is
+			// the single delegated connection, as it always was.
+			const placement = config.configProvider.getRuntimeConfig().nodePlacement;
+			const placed = placement
+				? await placement.place(context.signal)
+				: undefined;
 			const subAgent = createDelegatedAgent({
 				kind: "subagent",
 				prompt: input.systemPrompt,
-				configProvider: config.configProvider,
+				configProvider: placed?.configProvider ?? config.configProvider,
 				tools,
 				maxIterations: config.defaultMaxIterations,
 				parentAgentId: context.agentId,
@@ -196,9 +204,14 @@ export function createSpawnAgentTool(
 				// observers costs the server nothing, and holding a slot across them
 				// would leave the endpoint idle while a slot was booked.
 				const slotGate = config.configProvider.getRuntimeConfig().slotGate;
-				const result = slotGate
-					? await slotGate.run(() => subAgent.run(input.task))
-					: await subAgent.run(input.task);
+				const result = placed
+					? // The node's own gate, which is its endpoint's answer
+						// rather than the session's -- a node on a one-slot
+						// ollama must not queue behind an opencoti node.
+						await placed.run(() => subAgent.run(input.task))
+					: slotGate
+						? await slotGate.run(() => subAgent.run(input.task))
+						: await subAgent.run(input.task);
 				const output: SpawnAgentOutput = {
 					text: result.text,
 					iterations: result.iterations,
@@ -250,6 +263,10 @@ export function createSpawnAgentTool(
 					}
 				}
 				throw error;
+			} finally {
+				// However the run ended. A node held by an agent that has
+				// finished is capacity the next one never sees.
+				placed?.release();
 			}
 		},
 		timeoutMs: 300000,

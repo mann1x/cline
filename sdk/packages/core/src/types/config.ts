@@ -800,6 +800,28 @@ export interface CoreSessionConfig
 	 * An endpoint nobody named takes `maxConcurrentAgents`, which is what every
 	 * endpoint took before this existed.
 	 */
+	/**
+	 * Agent Nodes: where delegated agents run, in priority order.
+	 *
+	 * A node is a complete agents configuration -- its own provider, model,
+	 * context window, sampler and budget -- so a set of them is heterogeneous
+	 * by design. 1 is the highest priority and a lower tier is used only when
+	 * no node in a higher one has a free slot; within a tier, round-robin.
+	 * When all of them are full the next agent WAITS, in spawn order.
+	 *
+	 * Resolved by the host, capacity included: the unit differs by provider
+	 * (a parallel-sessions setting for ollama, llama.cpp and the cloud ones;
+	 * the sub-pools inside one session for opencoti).
+	 *
+	 * Empty or absent is every session that predates this: delegated agents
+	 * take `delegatedAgentConnection`, or the session's own.
+	 */
+	agentNodes?: ReadonlyArray<{
+		id: string;
+		priority: number;
+		capacity: number;
+		connection: DelegatedAgentConnectionOverride;
+	}>;
 	agentSlotLimits?: ReadonlyArray<{
 		providerId?: string;
 		baseUrl?: string;

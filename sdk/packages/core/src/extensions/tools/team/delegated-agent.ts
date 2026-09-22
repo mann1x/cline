@@ -11,6 +11,7 @@ import type {
 } from "@cline/shared";
 import { mergeAgentHooks } from "../../../hooks/hook-file-hooks";
 import { SessionRuntime } from "../../../runtime/orchestration/session-runtime-orchestrator";
+import type { AgentNodePlacement } from "./agent-node-placement";
 import type { AgentSlotGate, AgentSlotGateRegistry } from "./agent-slot-gate";
 import {
 	buildSubAgentSystemPrompt,
@@ -73,6 +74,17 @@ export interface DelegatedAgentRuntimeConfig
 	 */
 	slotGates?: AgentSlotGateRegistry;
 	/**
+	 * Where a delegated agent runs, when the profile configures agent nodes.
+	 *
+	 * A node is a whole agents configuration, so the node decides the agent's
+	 * connection and has to be chosen BEFORE the agent is built. A spawn path
+	 * that has this takes a node, builds the agent on that node's config
+	 * provider, runs inside the node's own gate, and gives the node back --
+	 * see `agent-node-placement.ts`. Absent is every session that names no
+	 * node: the single delegated connection, and `slotGate` above.
+	 */
+	nodePlacement?: AgentNodePlacement;
+	/**
 	 * Stable end-user identity inherited from the parent session so
 	 * delegated-agent telemetry (Langfuse `userId`) groups with the user.
 	 */
@@ -101,6 +113,15 @@ export interface DelegatedAgentRuntimeConfig
 
 export interface DelegatedAgentConfigProvider {
 	getRuntimeConfig(): DelegatedAgentRuntimeConfig;
+	/**
+	 * Hand this provider the session's node placement.
+	 *
+	 * A setter because the placement needs this provider to build from -- each
+	 * node's connection is the session's with the node's fields over it -- so
+	 * the two cannot both be constructed first. Optional on the interface for
+	 * the hand-built providers a couple of hosts fall back to.
+	 */
+	setNodePlacement?(placement: AgentNodePlacement): void;
 	getConnectionConfig(): DelegatedAgentConnectionConfig;
 	updateConnectionDefaults(
 		overrides: Partial<DelegatedAgentConnectionConfig>,
@@ -166,6 +187,9 @@ export function createDelegatedAgentConfigProvider(
 
 	return {
 		getRuntimeConfig: () => runtimeConfig,
+		setNodePlacement: (placement) => {
+			runtimeConfig = { ...runtimeConfig, nodePlacement: placement };
+		},
 		getConnectionConfig: () => ({
 			providerId: runtimeConfig.providerId,
 			modelId: runtimeConfig.modelId,

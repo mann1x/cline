@@ -1,4 +1,10 @@
 export {
+	type AgentNodePlacement,
+	type AgentNodeRuntimeConfig,
+	createAgentNodePlacement,
+	type PlacedAgentNode,
+} from "./agent-node-placement";
+export {
 	type AgentNode,
 	emptyPlacementState,
 	type Placement,

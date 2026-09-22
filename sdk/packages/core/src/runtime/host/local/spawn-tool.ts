@@ -290,6 +290,18 @@ export function createSessionSwarmTool(
 	 */
 	let sharedPoolId: string | undefined;
 
+	/**
+	 * Whether two connections point at the same server.
+	 *
+	 * The provider and the base URL together, because a pool id is meaningful
+	 * only on the engine that issued it: same provider on two hosts is two pool
+	 * trees, and the same host under two providers is not a case that arises.
+	 */
+	const sameEndpoint = (
+		a: { providerId?: string; baseUrl?: string },
+		b: { providerId?: string; baseUrl?: string },
+	): boolean => a.providerId === b.providerId && a.baseUrl === b.baseUrl;
+
 	/** Run one agent attached to a pool, under its own session id. */
 	const runOnPool = async (request: {
 		name: string;
@@ -298,8 +310,21 @@ export function createSessionSwarmTool(
 		poolId?: string;
 	}) => {
 		const base = configProvider();
+		// A node, when the profile configures them. The node decides the
+		// worker's connection, so it is taken before the worker is built.
+		const placed = await base.getRuntimeConfig().nodePlacement?.place();
+		const workerConfig = placed?.configProvider ?? base;
+		// The lead's pool lives on the lead's engine. A worker placed on
+		// another endpoint cannot attach to it, and sending the id there would
+		// name a pool that server has never heard of -- so the pool travels
+		// only with a worker that stayed home. It still shares the round;
+		// it just prefills its own prefix.
+		const onLeadEndpoint = sameEndpoint(
+			base.getRuntimeConfig(),
+			workerConfig.getRuntimeConfig(),
+		);
 		const workerSessionId = `${rootSessionId}:swarm:${request.name}:${Date.now().toString(36)}`;
-		if (request.poolId) {
+		if (request.poolId && onLeadEndpoint) {
 			// The vendor looks the live pool up under this key, so this is what
 			// makes the agent attach to the lead's snapshot rather than prefill
 			// the whole prompt for itself.
@@ -321,7 +346,7 @@ export function createSessionSwarmTool(
 		const worker = createDelegatedAgent({
 			kind: "subagent",
 			prompt: request.systemPrompt,
-			configProvider: forWorker(base, workerSessionId),
+			configProvider: forWorker(workerConfig, workerSessionId),
 			tools,
 			maxIterations: config.maxIterations,
 			parentAgentId: rootSessionId,
@@ -333,11 +358,14 @@ export function createSessionSwarmTool(
 			// the endpoint to itself. It also carries the engine's admission
 			// answer, which is what paces the round.
 			const slotGate = base.getRuntimeConfig().slotGate;
-			return slotGate
-				? await slotGate.run(() => worker.run(request.task))
-				: await worker.run(request.task);
+			return placed
+				? await placed.run(() => worker.run(request.task))
+				: slotGate
+					? await slotGate.run(() => worker.run(request.task))
+					: await worker.run(request.task);
 		} finally {
 			clearPolykvSession(workerSessionId);
+			placed?.release();
 		}
 	};
 
@@ -386,7 +414,16 @@ export function createSessionSwarmTool(
 			// admission learner, so the answer is re-read when an agent
 			// finishes and never merely because a tick came round.
 			admit: async () => {
-				const slotGate = configProvider().getRuntimeConfig().slotGate;
+				const runtime = configProvider().getRuntimeConfig();
+				// With nodes, the placement queue is the pacing: a worker
+				// launched into a full set of nodes waits there rather than
+				// being refused, and it is drained in spawn order. Asking the
+				// lead endpoint's gate as well would bound the round by ONE
+				// node's capacity.
+				if (runtime.nodePlacement) {
+					return true;
+				}
+				const slotGate = runtime.slotGate;
 				return slotGate ? await slotGate.canAdmitMore() : true;
 			},
 		},
