@@ -93,8 +93,12 @@ export interface PlacedAgentNode {
 	/**
 	 * This node could not be reached at all; leave it out of the rotation for
 	 * a cool-off. See {@link AgentPlacementQueue.markUnreachable}.
+	 *
+	 * `coolOffMs` overrides the default, for a condition that heals on a
+	 * different scale -- a model the server does not have, which no amount of
+	 * waiting fixes on its own.
 	 */
-	markUnreachable(): void;
+	markUnreachable(coolOffMs?: number): void;
 }
 
 export interface AgentNodePlacement {
@@ -157,7 +161,8 @@ export function createAgentNodePlacement(input: {
 			// The lease is the gate -- see `PlacedAgentNode.run`.
 			run: async <T>(fn: () => Promise<T>) => await fn(),
 			release: () => lease.release(),
-			markUnreachable: () => queue.markUnreachable(lease.nodeId),
+			markUnreachable: (coolOffMs) =>
+				queue.markUnreachable(lease.nodeId, coolOffMs),
 		};
 	};
 

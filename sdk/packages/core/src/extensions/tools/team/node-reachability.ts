@@ -75,3 +75,72 @@ export function isNodeUnreachable(error: unknown, depth = 0): boolean {
 	const cause = (error as { cause?: unknown }).cause;
 	return cause === undefined ? false : isNodeUnreachable(cause, depth + 1);
 }
+
+/**
+ * The endpoint answered, and it has no such model.
+ *
+ * Deliberately separate from {@link isNodeUnreachable}, which must stay
+ * transport-level: this server is alive and talking, so by that test it is
+ * healthy, and it kept taking placements it could not serve. What makes it
+ * worth acting on is that unlike a rate limit or a context overflow -- the
+ * other things a live server says no with -- nothing about it is transient.
+ * Every agent sent there fails identically, having spent nothing:
+ *
+ *   {"text":"model 'ornith-27b_tb:iq4_xs-128k' not found",
+ *    "finishReason":"error","usage":{"inputTokens":0,"outputTokens":0},
+ *    "nodeId":"node-mucvow61"}
+ *
+ * Measured on pandorum 2026-09-22 against a server holding 193 models and not
+ * that one. It cost two agents of a five-agent fan-out, plus a third when the
+ * lead retried into the same node, and said nothing on screen but an empty
+ * report.
+ *
+ * Matched on the message because that is all the providers agree on -- ollama
+ * returns a 404 carrying this text, the OpenAI-compatible families a 404 or
+ * 400 with `model_not_found`. The patterns require the word "model" next to
+ * the complaint so that a model's own output quoting "not found" cannot take a
+ * healthy node out of rotation.
+ */
+const MODEL_MISSING_MESSAGES = [
+	// `model`, then at most the model's own name, then the complaint. The gap
+	// admits an identifier and its quotes and nothing else: a window wide
+	// enough for a few words of prose matches "the model's weights ... was not
+	// found", which is a sentence about a file.
+	/\bmodels?\b\s*["'`]?[\w./:+-]*["'`]?[,:]?\s*(?:was |is )?(?:not found|does ?n[o']t exist|is unavailable)/i,
+	/\bunknown model\b/i,
+	/\bno such model\b/i,
+	/\bmodel_not_found\b/i,
+];
+
+export function isModelMissing(text: unknown): boolean {
+	return (
+		typeof text === "string" &&
+		MODEL_MISSING_MESSAGES.some((pattern) => pattern.test(text))
+	);
+}
+
+/**
+ * This attempt spent nothing, so the agent may be placed again.
+ *
+ * The whole point of re-placing rather than failing: a run that never reached
+ * a model has done no work to lose and no side effect to repeat. Both halves
+ * are required -- a failure that burned tokens may have edited a file, and
+ * running it again on another node would do it twice.
+ *
+ * Note this reads a *returned* result, not a thrown error. The measured
+ * failure did not throw: the sub-agent returned `finishReason: "error"` with
+ * the message in `text`, so the catch clause that marks nodes down was never
+ * entered, and the node stayed in rotation for the rest of the session.
+ */
+export function isWastedNodeRun(result: {
+	finishReason?: unknown;
+	text?: unknown;
+	usage?: { inputTokens?: number; outputTokens?: number };
+}): boolean {
+	return (
+		result.finishReason === "error" &&
+		(result.usage?.inputTokens ?? 0) === 0 &&
+		(result.usage?.outputTokens ?? 0) === 0 &&
+		isModelMissing(result.text)
+	);
+}

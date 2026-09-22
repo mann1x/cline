@@ -3,6 +3,7 @@ import {
 	type AgentResult,
 	type AgentTool,
 	type AgentToolContext,
+	type BasicLogger,
 	createTool,
 	type HookErrorMode,
 	type ToolApprovalRequest,
@@ -11,6 +12,10 @@ import {
 	zodToJsonSchema,
 } from "@cline/shared";
 import { z } from "zod";
+import {
+	MAX_NODE_PLACEMENT_ATTEMPTS,
+	NODE_MODEL_MISSING_COOL_OFF_MS,
+} from "./agent-placement-queue";
 import { agentEndpointKey } from "./agent-slot-gate";
 import type { ConfiguredAgentConfig } from "./configured-agent-config";
 import {
@@ -20,7 +25,7 @@ import {
 	type DelegatedAgentRuntimeConfig,
 } from "./delegated-agent";
 import { readDelegationHooks } from "./delegation-call-hooks";
-import { isNodeUnreachable } from "./node-reachability";
+import { isNodeUnreachable, isWastedNodeRun } from "./node-reachability";
 import type {
 	SpawnAgentOutput,
 	SubAgentEndContext,
@@ -72,6 +77,15 @@ export interface AgentProfileConnection extends AgentProviderConnection {
 }
 
 export interface ConfiguredAgentToolConfig {
+	/**
+	 * Optional logger, for the things only the log can carry.
+	 *
+	 * Specifically a node that could not run an agent at all: the agent is
+	 * re-queued elsewhere and succeeds, so the run looks clean, and without a
+	 * line here the misconfigured node is invisible until someone counts the
+	 * spawns.
+	 */
+	logger?: BasicLogger;
 	configProvider: DelegatedAgentConfigProvider;
 	agents: ConfiguredAgentConfig[];
 	/**
@@ -391,19 +405,23 @@ export function createConfiguredAgentTools(
 					const placement = ownsEndpoint
 						? undefined
 						: baseRuntimeConfig.nodePlacement;
-					const placed = placement
+					let placed = placement
 						? await placement.place(context.signal)
 						: undefined;
-					const runtimeConfig = placed
-						? buildAgentRuntimeConfig(
-								placed.configProvider.getRuntimeConfig(),
-								config,
-								options.resolveProviderConnection,
-								options.resolveProfileConnection,
-								options.listProfileNames,
-							)
-						: provisional;
-					const configProvider =
+					// Rebuilt per attempt: the node IS the configuration, so
+					// re-placing means resolving the connection again.
+					const buildRuntimeConfig = () =>
+						placed
+							? buildAgentRuntimeConfig(
+									placed.configProvider.getRuntimeConfig(),
+									config,
+									options.resolveProviderConnection,
+									options.resolveProfileConnection,
+									options.listProfileNames,
+								)
+							: provisional;
+					let runtimeConfig = buildRuntimeConfig();
+					let configProvider =
 						createDelegatedAgentConfigProvider(runtimeConfig);
 					const tools = options.createSubAgentTools
 						? await options.createSubAgentTools(config, input, context)
@@ -414,23 +432,27 @@ export function createConfiguredAgentTools(
 						context.emitUpdate,
 						options.onSubAgentEvent,
 					);
-					const subAgent = createDelegatedAgent({
-						kind: "subagent",
-						prompt: config.systemPrompt,
-						configProvider,
-						tools,
-						maxIterations: config.maxIterations,
-						parentAgentId: context.agentId,
-						abortSignal: context.signal,
-						// The caller's hooks for this run alone -- the pause barrier
-						// of a background delegation, and nothing in an ordinary
-						// call the model makes.
-						hooks: readDelegationHooks(context.metadata),
-						onEvent: progress.observe,
-						hookErrorMode: options.hookErrorMode,
-						toolPolicies: options.toolPolicies,
-						requestToolApproval: options.requestToolApproval,
-					});
+					const buildSubAgent = () =>
+						createDelegatedAgent({
+							kind: "subagent",
+							prompt: config.systemPrompt,
+							configProvider,
+							tools,
+							maxIterations: config.maxIterations,
+							parentAgentId: context.agentId,
+							abortSignal: context.signal,
+							// The caller's hooks for this run alone -- the pause barrier
+							// of a background delegation, and nothing in an ordinary
+							// call the model makes.
+							hooks: readDelegationHooks(context.metadata),
+							onEvent: progress.observe,
+							hookErrorMode: options.hookErrorMode,
+							toolPolicies: options.toolPolicies,
+							requestToolApproval: options.requestToolApproval,
+						});
+					let subAgent = buildSubAgent();
+					// From the first build and kept across re-placements: the
+					// observers identify one delegation, not one attempt at it.
 					const subAgentId = subAgent.getAgentId();
 					const conversationId = subAgent.getConversationId();
 					const parentAgentId = context.agentId;
@@ -466,13 +488,40 @@ export function createConfiguredAgentTools(
 							: baseRuntimeConfig.slotGates?.for(
 									agentEndpointKey(runtimeConfig),
 								);
-						const result: AgentResult = placed
-							? // The node's own gate, which is its endpoint's
-								// answer rather than the session's.
-								await placed.run(() => subAgent.run(input.prompt))
-							: gate
-								? await gate.run(() => subAgent.run(input.prompt))
-								: await subAgent.run(input.prompt);
+						const runOnce = async (): Promise<AgentResult> =>
+							placed
+								? // The node's own gate, which is its endpoint's
+									// answer rather than the session's.
+									await placed.run(() => subAgent.run(input.prompt))
+								: gate
+									? await gate.run(() => subAgent.run(input.prompt))
+									: await subAgent.run(input.prompt);
+
+						// The agent goes back in the queue when the node it
+						// landed on could not run it at all. See the same block
+						// in `spawn-agent-tool`; this is the path a configured
+						// agent takes, and the path the measured failure took.
+						let result: AgentResult = await runOnce();
+						let attemptsLeft = placement ? MAX_NODE_PLACEMENT_ATTEMPTS - 1 : 0;
+						while (
+							placed &&
+							placement &&
+							attemptsLeft > 0 &&
+							isWastedNodeRun(result)
+						) {
+							attemptsLeft -= 1;
+							options.logger?.log(
+								`[Agents] ${placed.nodeLabel ?? placed.nodeId} cannot run ${config.name} (${String(result.text).slice(0, 120)}); re-queueing it on another node`,
+							);
+							placed.markUnreachable(NODE_MODEL_MISSING_COOL_OFF_MS);
+							placed.release();
+							placed = await placement.place(context.signal);
+							runtimeConfig = buildRuntimeConfig();
+							configProvider =
+								createDelegatedAgentConfigProvider(runtimeConfig);
+							subAgent = buildSubAgent();
+							result = await runOnce();
+						}
 						const output: SpawnAgentOutput = {
 							text: result.text,
 							iterations: result.iterations,

@@ -20,10 +20,14 @@ import {
 } from "@cline/shared";
 import { z } from "zod";
 import {
+	MAX_NODE_PLACEMENT_ATTEMPTS,
+	NODE_MODEL_MISSING_COOL_OFF_MS,
+} from "./agent-placement-queue";
+import {
 	createDelegatedAgent,
 	type DelegatedAgentConfigProvider,
 } from "./delegated-agent";
-import { isNodeUnreachable } from "./node-reachability";
+import { isNodeUnreachable, isWastedNodeRun } from "./node-reachability";
 import { createSubagentProgress } from "./subagent-progress";
 
 /** The tool a model calls to hand a self-contained piece of work to a subagent. */
@@ -179,7 +183,7 @@ export function createSpawnAgentTool(
 			// it is. Without nodes this is undefined and everything below is
 			// the single delegated connection, as it always was.
 			const placement = config.configProvider.getRuntimeConfig().nodePlacement;
-			const placed = placement
+			let placed = placement
 				? await placement.place(context.signal)
 				: undefined;
 			// What it is doing, on the tool call that started it. Nothing else
@@ -188,21 +192,29 @@ export function createSpawnAgentTool(
 				context.emitUpdate,
 				config.onSubAgentEvent,
 			);
-			const subAgent = createDelegatedAgent({
-				kind: "subagent",
-				prompt: input.systemPrompt,
-				configProvider: placed?.configProvider ?? config.configProvider,
-				tools,
-				maxIterations: config.defaultMaxIterations,
-				parentAgentId: context.agentId,
-				abortSignal: context.signal,
-				// Its own events still go where they always went; the observer
-				// forwards them and reports the tool names on the way past.
-				onEvent: progress.observe,
-				hookErrorMode: config.hookErrorMode,
-				toolPolicies: config.toolPolicies,
-				requestToolApproval: config.requestToolApproval,
-			});
+			// Rebuilt per attempt, because the node IS the configuration: which
+			// node took this agent decides its provider and model, and the
+			// provider is read once at construction.
+			const buildSubAgent = () =>
+				createDelegatedAgent({
+					kind: "subagent",
+					prompt: input.systemPrompt,
+					configProvider: placed?.configProvider ?? config.configProvider,
+					tools,
+					maxIterations: config.defaultMaxIterations,
+					parentAgentId: context.agentId,
+					abortSignal: context.signal,
+					// Its own events still go where they always went; the observer
+					// forwards them and reports the tool names on the way past.
+					onEvent: progress.observe,
+					hookErrorMode: config.hookErrorMode,
+					toolPolicies: config.toolPolicies,
+					requestToolApproval: config.requestToolApproval,
+				});
+			let subAgent = buildSubAgent();
+			// Captured from the first build and kept across re-placements: the
+			// observers identify one delegation, not one attempt at it, and the
+			// chat row is keyed by the tool call rather than by either.
 			const subAgentId = subAgent.getAgentId();
 			const conversationId = subAgent.getConversationId();
 			const parentAgentId = context.agentId;
@@ -226,14 +238,44 @@ export function createSpawnAgentTool(
 				// observers costs the server nothing, and holding a slot across them
 				// would leave the endpoint idle while a slot was booked.
 				const slotGate = config.configProvider.getRuntimeConfig().slotGate;
-				const result = placed
-					? // The node's own gate, which is its endpoint's answer
-						// rather than the session's -- a node on a one-slot
-						// ollama must not queue behind an opencoti node.
-						await placed.run(() => subAgent.run(input.task))
-					: slotGate
-						? await slotGate.run(() => subAgent.run(input.task))
-						: await subAgent.run(input.task);
+				const runOnce = async () =>
+					placed
+						? // The node's own gate, which is its endpoint's answer
+							// rather than the session's -- a node on a one-slot
+							// ollama must not queue behind an opencoti node.
+							await placed.run(() => subAgent.run(input.task))
+						: slotGate
+							? await slotGate.run(() => subAgent.run(input.task))
+							: await subAgent.run(input.task);
+
+				// The agent goes back in the queue when the node it landed on
+				// could not run it at all.
+				//
+				// A node whose model its server does not have answers instantly
+				// and spends nothing, so there is no work to lose and no side
+				// effect to repeat -- and the node will answer the same way for
+				// every agent after this one. Failing the agent there reported
+				// the node's misconfiguration as the agent's failure, which is
+				// what it looked like on screen: an empty report, three times,
+				// while two healthy nodes sat idle.
+				let result = await runOnce();
+				let attemptsLeft = placement ? MAX_NODE_PLACEMENT_ATTEMPTS - 1 : 0;
+				while (
+					placed &&
+					placement &&
+					attemptsLeft > 0 &&
+					isWastedNodeRun(result)
+				) {
+					attemptsLeft -= 1;
+					config.logger?.log(
+						`[Agents] ${placed.nodeLabel ?? placed.nodeId} cannot run this agent (${String(result.text).slice(0, 120)}); re-queueing it on another node`,
+					);
+					placed.markUnreachable(NODE_MODEL_MISSING_COOL_OFF_MS);
+					placed.release();
+					placed = await placement.place(context.signal);
+					subAgent = buildSubAgent();
+					result = await runOnce();
+				}
 				const output: SpawnAgentOutput = {
 					text: result.text,
 					iterations: result.iterations,

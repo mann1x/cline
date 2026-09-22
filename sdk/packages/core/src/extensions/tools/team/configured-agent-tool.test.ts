@@ -322,3 +322,175 @@ describe("placing configured agents on the nodes", () => {
 		expect(placement.released).toEqual(["node-2"]);
 	});
 });
+
+/**
+ * A node whose server does not have its model answers instantly, spends
+ * nothing, and will answer the same way for every agent after this one.
+ *
+ * Measured on pandorum 2026-09-22 in a five-agent fan-out: two agents died on
+ * `node-mucvow61` with `model 'ornith-27b_tb:iq4_xs-128k' not found`, a third
+ * died when the lead retried straight back into it, and two healthy nodes sat
+ * idle. Nothing on screen said why -- the reports were simply empty.
+ */
+describe("a node that cannot run the agent it was given", () => {
+	/** Nodes handed out in order, each answering however it is told to. */
+	function rotation(
+		nodes: Array<{
+			nodeId: string;
+			nodeLabel?: string;
+			result: {
+				text: string;
+				finishReason: string;
+				usage: { inputTokens: number; outputTokens: number };
+			};
+		}>,
+	) {
+		const placed: string[] = [];
+		const down: Array<{ nodeId: string; coolOffMs?: number }> = [];
+		let next = 0;
+		return {
+			placed,
+			down,
+			nodePlacement: {
+				place: async () => {
+					const node = nodes[Math.min(next, nodes.length - 1)];
+					next += 1;
+					placed.push(node.nodeId);
+					const connection = {
+						providerId: "ollama",
+						modelId: "m",
+						baseUrl: "http://localhost:11434",
+					};
+					return {
+						nodeId: node.nodeId,
+						nodeLabel: node.nodeLabel,
+						configProvider: {
+							getRuntimeConfig: () => connection,
+							getConnectionConfig: () => connection,
+							updateConnectionDefaults: () => {},
+						},
+						run: (async () => ({ iterations: 1, ...node.result })) as never,
+						release: () => {},
+						markUnreachable: (coolOffMs?: number) =>
+							down.push({ nodeId: node.nodeId, coolOffMs }),
+					};
+				},
+				base: undefined,
+				occupancy: () => new Map(),
+				waiting: 0,
+			},
+		};
+	}
+
+	const missing = {
+		text: "model 'ornith-27b_tb:iq4_xs-128k' not found",
+		finishReason: "error",
+		usage: { inputTokens: 0, outputTokens: 0 },
+	};
+	const worked = {
+		text: "reviewed",
+		finishReason: "stop",
+		usage: { inputTokens: 900, outputTokens: 120 },
+	};
+
+	it("puts the agent back in the queue and answers from the next node", async () => {
+		const placement = rotation([
+			{ nodeId: "node-mucvow61", nodeLabel: "Node3", result: missing },
+			{ nodeId: "primary", nodeLabel: "Node1", result: worked },
+		]);
+		const { execute } = runAgent({
+			agent: {
+				name: "reviewer",
+				description: "reviews code",
+				systemPrompt: "You review code.",
+			},
+			nodePlacement: placement.nodePlacement,
+		});
+
+		const output = (await execute()) as {
+			text: string;
+			nodeId?: string;
+			nodeLabel?: string;
+		};
+
+		expect(placement.placed).toEqual(["node-mucvow61", "primary"]);
+		expect(output.text).toBe("reviewed");
+		// And it reports where it actually ran, not where it was first sent.
+		expect(output.nodeId).toBe("primary");
+		expect(output.nodeLabel).toBe("Node1");
+	});
+
+	// The node is why, so the node leaves the rotation -- and for longer than a
+	// dead box does, because a missing model does not come back on its own.
+	it("takes the node out of the rotation for a long cool-off", async () => {
+		const placement = rotation([
+			{ nodeId: "node-mucvow61", result: missing },
+			{ nodeId: "primary", result: worked },
+		]);
+		const { execute } = runAgent({
+			agent: {
+				name: "reviewer",
+				description: "reviews code",
+				systemPrompt: "You review code.",
+			},
+			nodePlacement: placement.nodePlacement,
+		});
+
+		await execute();
+
+		expect(placement.down).toEqual([
+			{ nodeId: "node-mucvow61", coolOffMs: 600_000 },
+		]);
+	});
+
+	// Bounded: a request that fails the same way everywhere must be reported,
+	// not walked around the whole rotation taking every node down with it.
+	it("stops after three nodes and reports the failure", async () => {
+		const placement = rotation([
+			{ nodeId: "a", result: missing },
+			{ nodeId: "b", result: missing },
+			{ nodeId: "c", result: missing },
+			{ nodeId: "d", result: missing },
+		]);
+		const { execute } = runAgent({
+			agent: {
+				name: "reviewer",
+				description: "reviews code",
+				systemPrompt: "You review code.",
+			},
+			nodePlacement: placement.nodePlacement,
+		});
+
+		const output = (await execute()) as { text: string };
+		expect(placement.placed).toEqual(["a", "b", "c"]);
+		expect(output.text).toContain("not found");
+	});
+
+	// The guard that makes any of this safe: a failure that spent tokens may
+	// have edited a file, and re-running it elsewhere would do it twice.
+	it("never re-places a failure that spent something", async () => {
+		const placement = rotation([
+			{
+				nodeId: "node-mucvow61",
+				result: {
+					text: "model 'x' not found",
+					finishReason: "error",
+					usage: { inputTokens: 4000, outputTokens: 12 },
+				},
+			},
+			{ nodeId: "primary", result: worked },
+		]);
+		const { execute } = runAgent({
+			agent: {
+				name: "reviewer",
+				description: "reviews code",
+				systemPrompt: "You review code.",
+			},
+			nodePlacement: placement.nodePlacement,
+		});
+
+		await execute();
+		expect(placement.placed).toEqual(["node-mucvow61"]);
+		expect(placement.down).toEqual([]);
+	});
+});

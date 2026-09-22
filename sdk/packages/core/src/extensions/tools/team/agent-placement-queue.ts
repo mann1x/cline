@@ -43,6 +43,34 @@ export interface PlacementLease {
  */
 export const NODE_COOL_OFF_MS = 30_000;
 
+/**
+ * The cool-off for a node whose model is not on its server.
+ *
+ * Longer, because the two conditions heal on different scales. A box that was
+ * unplugged can be back in thirty seconds; a model tag that the server has
+ * never heard of does not appear on its own, and until someone pulls it every
+ * agent sent there dies the same way. Measured on pandorum 2026-09-22: a node
+ * configured for `ornith-27b_tb:iq4_xs-128k` against a server holding 193
+ * models and not that one, killing two agents of a five-agent fan-out and
+ * taking a third when the lead retried.
+ *
+ * Still a cool-off rather than a removal: `ollama pull` during a long session
+ * is an ordinary thing to do, and a node that is out for good would stay out
+ * after the user fixed it.
+ */
+export const NODE_MODEL_MISSING_COOL_OFF_MS = 600_000;
+
+/**
+ * How many nodes one agent may be placed on before its failure is its own.
+ *
+ * Bounded rather than "every node": a request that fails the same way
+ * everywhere -- a malformed tool schema, an oversized prompt -- would
+ * otherwise walk the whole rotation and take every node out of it on the way
+ * past. Three is enough to step over a misconfigured node in any realistic
+ * setup and small enough that a systematic failure is reported as one.
+ */
+export const MAX_NODE_PLACEMENT_ATTEMPTS = 3;
+
 export interface AgentPlacementQueue {
 	/**
 	 * A slot on the best node with room, waiting for one if none has.
@@ -56,13 +84,19 @@ export interface AgentPlacementQueue {
 	/** Node id to agents running on it now. A copy. */
 	occupancy(): ReadonlyMap<string, number>;
 	/**
-	 * Take a node out of the rotation for {@link NODE_COOL_OFF_MS}.
+	 * Take a node out of the rotation for a cool-off.
 	 *
 	 * Called when an agent could not reach it at all -- a refused connection,
-	 * an unknown host -- never for a model error or a refusal, which say the
-	 * node is alive and answering.
+	 * an unknown host -- never for a refusal or an ordinary model error, which
+	 * say the node is alive and answering.
+	 *
+	 * The exception is a model the server does not have. That is an answer,
+	 * so it is not unreachable, but it is a node that cannot run anything
+	 * until its configuration changes: see
+	 * {@link NODE_MODEL_MISSING_COOL_OFF_MS}, which callers pass as
+	 * `coolOffMs`.
 	 */
-	markUnreachable(nodeId: string): void;
+	markUnreachable(nodeId: string, coolOffMs?: number): void;
 }
 
 /**
@@ -204,11 +238,11 @@ export function createAgentPlacementQueue(
 			return waiters.length;
 		},
 		occupancy: () => new Map(occupancy),
-		markUnreachable: (nodeId) => {
+		markUnreachable: (nodeId, coolOffMs = NODE_COOL_OFF_MS) => {
 			if (!nodes.some((node) => node.id === nodeId)) {
 				return;
 			}
-			downUntil.set(nodeId, now() + NODE_COOL_OFF_MS);
+			downUntil.set(nodeId, now() + coolOffMs);
 			// Nothing to drain now: a waiter exists only when every node is
 			// full, and taking one out of the rotation frees no slot. What
 			// does need announcing is the END of the cool-off -- a node that
@@ -217,7 +251,7 @@ export function createAgentPlacementQueue(
 			// out of favour. When the cool-off lapses that capacity becomes
 			// usable with no release to notice it, and the waiter would sit
 			// until some unrelated agent happened to finish.
-			schedule(drain, NODE_COOL_OFF_MS);
+			schedule(drain, coolOffMs);
 		},
 	};
 }
