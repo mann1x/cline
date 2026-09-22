@@ -39,10 +39,24 @@ import ScopedModelTab from "./ScopedModelTab"
  * snapshot it is editing and would otherwise carry one node's edits into the
  * next.
  */
-const AgentsModelTab = () => {
+const AgentsModelTab = ({
+	selectedNodeId,
+	onSelectNode,
+}: {
+	/**
+	 * Which node is showing. Owned by the section above rather than here,
+	 * because the profile bar sits outside this panel and a bar pointed at a
+	 * different node than the form below it writes one node's profile into
+	 * another.
+	 */
+	selectedNodeId?: string
+	onSelectNode?: (id: string) => void
+} = {}) => {
 	const { agentsModeApiConfiguration, agentNodes } = useExtensionState()
 	const nodes = useMemo(() => parseAgentNodes(agentNodes), [agentNodes])
-	const [selectedId, setSelectedId] = useState<string>(PRIMARY_AGENT_NODE_ID)
+	const [ownSelectedId, setOwnSelectedId] = useState<string>(PRIMARY_AGENT_NODE_ID)
+	const selectedId = selectedNodeId ?? ownSelectedId
+	const setSelectedId = onSelectNode ?? setOwnSelectedId
 
 	// A node removed while it was showing leaves nothing selected; fall back to
 	// Node1, which is always there.

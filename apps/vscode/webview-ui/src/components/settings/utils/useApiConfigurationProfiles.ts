@@ -1,3 +1,4 @@
+import { PRIMARY_AGENT_NODE_ID, parseAgentNodes, serializeAgentNodes, setAgentNodeSnapshot } from "@shared/agent-nodes"
 import type { ApiConfiguration } from "@shared/api"
 import {
 	type ApiConfigurationProfile,
@@ -48,7 +49,7 @@ const EMPTY_SNAPSHOT: ApiConfigurationSnapshot = { global: {}, mode: {} }
 export type ApiConfigurationProfileScope =
 	| { kind: "mode"; mode: Mode }
 	| { kind: "vision" }
-	| { kind: "agents" }
+	| { kind: "agents"; nodeId?: string }
 	| { kind: "escalation" }
 
 /**
@@ -96,6 +97,7 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 		visionModeApiConfiguration,
 		agentsModeApiConfiguration,
 		escalationModeApiConfiguration,
+		agentNodes,
 		planActSeparateModelsSetting,
 	} = useExtensionState()
 	const { handleFieldsChange } = useApiConfigurationHandlers()
@@ -103,9 +105,21 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 	// A tab that keeps its own snapshot, and the snapshot it keeps. `undefined`
 	// on Plan and Act, which read the panel's live configuration instead.
 	const snapshotKind: SnapshotScopeKind | undefined = scope.kind === "mode" ? undefined : scope.kind
+	// Which agent node the Agents bar is standing on. Node1's configuration is
+	// `agentsModeApiConfiguration` itself; the rest live in the `agentNodes`
+	// list. Without this the bar reads and writes Node1 whatever tab is
+	// showing, so loading a profile onto Node2 silently replaced Node1.
+	const agentNodeId = scope.kind === "agents" ? (scope.nodeId ?? PRIMARY_AGENT_NODE_ID) : undefined
+	const onSecondaryAgentNode = agentNodeId !== undefined && agentNodeId !== PRIMARY_AGENT_NODE_ID
+	const secondaryAgentNodes = useMemo(
+		() => (onSecondaryAgentNode ? parseAgentNodes(agentNodes) : undefined),
+		[onSecondaryAgentNode, agentNodes],
+	)
 	const storedSnapshot =
 		snapshotKind === "agents"
-			? agentsModeApiConfiguration
+			? onSecondaryAgentNode
+				? (secondaryAgentNodes?.find((node) => node.id === agentNodeId)?.snapshot ?? "")
+				: agentsModeApiConfiguration
 			: snapshotKind === "escalation"
 				? escalationModeApiConfiguration
 				: visionModeApiConfiguration
@@ -147,7 +161,9 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 	// about what Plan, Act, Agents and Escalation are holding, so a single
 	// stored name would show the wrong one on four tabs out of five.
 	const activeNames = useMemo(() => parseActiveNames(activeApiConfigurationProfile), [activeApiConfigurationProfile])
-	const scopeKey = snapshotKind ?? scopeMode
+	// Per scope, and on the Agents tab per node: two nodes are two
+	// configurations, so one stored name would show the wrong profile on both.
+	const scopeKey = onSecondaryAgentNode ? `agents::${agentNodeId}` : (snapshotKind ?? scopeMode)
 	const activeProfile = useMemo(
 		() => findApiConfigurationProfile(profiles, activeNames[scopeKey] ?? ""),
 		[profiles, activeNames, scopeKey],
@@ -224,6 +240,18 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 					...(selection.modelId ? { selectedModelId: selection.modelId } : {}),
 				}
 				const stored = JSON.stringify(Object.keys(providerConfig).length > 0 ? { ...snapshot, providerConfig } : snapshot)
+				if (onSecondaryAgentNode && agentNodeId) {
+					// Into the node, not into the shared key. This is the write
+					// that made a profile load onto Node2 overwrite Node1.
+					await StateServiceClient.updateSettings(
+						UpdateSettingsRequest.create({
+							agentNodes: serializeAgentNodes(
+								setAgentNodeSnapshot(parseAgentNodes(agentNodes), agentNodeId, stored),
+							),
+						}),
+					)
+					return
+				}
 				// Through the same map the tab's own writes go through: a computed
 				// key would widen the object to an index signature, and the request
 				// builder then accepts it without checking the field exists.

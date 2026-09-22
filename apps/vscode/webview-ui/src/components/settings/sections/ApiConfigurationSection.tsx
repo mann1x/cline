@@ -1,3 +1,4 @@
+import { PRIMARY_AGENT_NODE_ID } from "@shared/agent-nodes"
 import { resolveScopedModelStatus } from "@shared/model-scope-config"
 import { UpdateSettingsRequest } from "@shared/proto/cline/state"
 import { useState } from "react"
@@ -82,6 +83,11 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 	// knows about provider snapshots and this is not one.
 	const imageGenUnconfigured = imageGenEnabled && !isImageEndpointComplete(imageGenEndpoint)
 	const [currentTab, setCurrentTab] = useState<ConfigTab>(mode)
+	// Which agent node the Agents tab is showing. Held here rather than inside
+	// that tab because the profile bar is rendered above it and has to point at
+	// the same node: a bar still on Node1 while the form shows Node2 saves and
+	// loads the wrong node's configuration.
+	const [agentNodeId, setAgentNodeId] = useState<string>(PRIMARY_AGENT_NODE_ID)
 	const { handleFieldsChange } = useApiConfigurationHandlers()
 
 	// Switching panel unmounts the one being left, and a field still inside its
@@ -119,7 +125,7 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 		activeTab === "vision"
 			? { kind: "vision" }
 			: activeTab === "agents"
-				? { kind: "agents" }
+				? { kind: "agents", nodeId: agentNodeId }
 				: activeTab === "escalation"
 					? { kind: "escalation" }
 					: { kind: "mode", mode: activeTab === "imagegen" ? mode : activeTab }
@@ -230,7 +236,7 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 							{activeTab === "vision" ? (
 								<VisionModelTab />
 							) : activeTab === "agents" ? (
-								<AgentsModelTab />
+								<AgentsModelTab onSelectNode={setAgentNodeId} selectedNodeId={agentNodeId} />
 							) : activeTab === "escalation" ? (
 								<EscalationModelTab />
 							) : activeTab === "imagegen" ? (
