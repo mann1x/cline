@@ -49,6 +49,7 @@ import { expandEnvironmentVariables } from "@/utils/envExpansion"
 import type { TelemetryService } from "../telemetry/TelemetryService"
 import { McpOAuthManager } from "./McpOAuthManager"
 import { describeMcpOAuthFailure, type WatchedMcpFetch, watchMcpOAuthFetch } from "./mcp-oauth-failure"
+import { stripReservedServerNames } from "./reserved-server-names"
 import { StreamableHttpReconnectHandler } from "./StreamableHttpReconnectHandler"
 import { McpSettingsSchema, McpTimeoutSecondsSchema, ServerConfigSchema } from "./schemas"
 import { updateMcpSettingsFile } from "./settingsLock"
@@ -101,6 +102,8 @@ export class McpHub {
 	private fileWatchers: Map<string, FSWatcher> = new Map()
 	connections: McpConnection[] = []
 	isConnecting = false
+	/** So the reserved-name warning is shown once, not on every file read. */
+	private warnedAboutReservedServerName = false
 	/**
 	 * Fingerprint of the connection-relevant view of the settings file as of the
 	 * watcher's last reconciliation.
@@ -313,11 +316,53 @@ export class McpHub {
 				return undefined
 			}
 
-			return result.data
+			return this.withoutReservedServerNames(result.data, settingsPath)
 		} catch (error) {
 			Logger.error("Failed to read MCP settings:", error)
 			return undefined
 		}
+	}
+
+	/**
+	 * Refuses configured servers whose names the editor bridge has taken, and
+	 * says so once.
+	 *
+	 * The decision itself is `stripReservedServerNames`, which is pure and
+	 * tested; this is only the part that needs a window to talk to.
+	 */
+	private withoutReservedServerNames(
+		settings: z.infer<typeof McpSettingsSchema>,
+		settingsPath: string,
+	): z.infer<typeof McpSettingsSchema> {
+		const { settings: kept, refused } = stripReservedServerNames(settings)
+		if (refused.length === 0) {
+			return settings
+		}
+
+		for (const name of refused) {
+			Logger.warn(
+				`[McpHub] Ignoring the MCP server configured as "${name}": that name is reserved for the VS Code bridge. Rename it to load it.`,
+			)
+		}
+		if (!this.warnedAboutReservedServerName) {
+			this.warnedAboutReservedServerName = true
+			HostProvider.window
+				.showMessage({
+					type: ShowMessageType.WARNING,
+					message: `The MCP server named "${refused.join('", "')}" was not loaded.`,
+					options: {
+						detail: `That name is reserved for the MCP servers VS Code itself provides. Rename your server to load it.`,
+						modal: false,
+						items: ["Open Settings File"],
+					},
+				})
+				.then((response) => {
+					if (response.selectedOption === "Open Settings File") {
+						HostProvider.window.showTextDocument({ path: settingsPath, options: {} })
+					}
+				})
+		}
+		return kept
 	}
 
 	private async watchMcpSettingsFile(): Promise<void> {
