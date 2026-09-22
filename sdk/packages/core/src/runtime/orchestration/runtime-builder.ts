@@ -845,10 +845,15 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 		// node can take its endpoint's own gate from it, and handed to the
 		// delegated config provider below, which is the one thing every spawn
 		// path already reads.
+		// Spread, not a field list. This was four named fields, and when the
+		// host started sending `label` the mapping silently dropped it -- the
+		// chat went on printing storage keys (`on primary`) while every test
+		// passed, because they hand the placement a label directly and none of
+		// them comes through here. A list of fields to copy is a list that goes
+		// stale on the next field; the only part that needs naming is the cast,
+		// which is the one thing the two shapes genuinely disagree about.
 		const agentNodes = (config.agentNodes ?? []).map((node) => ({
-			id: node.id,
-			priority: node.priority,
-			capacity: node.capacity,
+			...node,
 			connection: node.connection as Partial<DelegatedAgentConnectionConfig>,
 		}));
 		const delegatedAgentConfigProvider = createDelegatedAgentConfigProvider(
@@ -966,6 +971,11 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 						createConfiguredAgentTools({
 							configProvider: delegatedAgentConfigProvider,
 							agents: configuredAgents.configs,
+							// So a node that could not run an agent leaves a
+							// line: the agent is re-queued and succeeds, so the
+							// run looks clean and the bad node is otherwise
+							// invisible.
+							logger: logger ?? config.logger,
 							// An agent naming a second provider needs that provider's
 							// own credentials and base URL, and only the host knows
 							// where its provider store is.
