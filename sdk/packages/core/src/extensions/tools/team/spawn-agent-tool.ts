@@ -23,6 +23,7 @@ import {
 	createDelegatedAgent,
 	type DelegatedAgentConfigProvider,
 } from "./delegated-agent";
+import { createSubagentProgress } from "./subagent-progress";
 
 /** The tool a model calls to hand a self-contained piece of work to a subagent. */
 export const SPAWN_AGENT_TOOL_NAME = "spawn_agent";
@@ -178,6 +179,12 @@ export function createSpawnAgentTool(
 			const placed = placement
 				? await placement.place(context.signal)
 				: undefined;
+			// What it is doing, on the tool call that started it. Nothing else
+			// reports a running sub-agent to the user at all.
+			const progress = createSubagentProgress(
+				context.emitUpdate,
+				config.onSubAgentEvent,
+			);
 			const subAgent = createDelegatedAgent({
 				kind: "subagent",
 				prompt: input.systemPrompt,
@@ -186,7 +193,9 @@ export function createSpawnAgentTool(
 				maxIterations: config.defaultMaxIterations,
 				parentAgentId: context.agentId,
 				abortSignal: context.signal,
-				onEvent: config.onSubAgentEvent,
+				// Its own events still go where they always went; the observer
+				// forwards them and reports the tool names on the way past.
+				onEvent: progress.observe,
 				hookErrorMode: config.hookErrorMode,
 				toolPolicies: config.toolPolicies,
 				requestToolApproval: config.requestToolApproval,

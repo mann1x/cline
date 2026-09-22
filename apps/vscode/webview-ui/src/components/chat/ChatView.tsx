@@ -11,6 +11,7 @@ import { useShowNavbar } from "@/context/PlatformContext"
 import { useNormalizedApiConfiguration } from "@/hooks/useNormalizedApiConfiguration"
 import { FileServiceClient, UiServiceClient } from "@/services/grpc-client"
 import { Navbar } from "../menu/Navbar"
+import { ActiveSubagents } from "./ActiveSubagents"
 import AutoApproveBar from "./auto-approve-menu/AutoApproveBar"
 // Import utilities and hooks from the new structure
 import {
@@ -387,6 +388,12 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 						version={version}
 					/>
 				)}
+				{/* Between the task panel and the conversation, because that is
+				    where something that must not scroll away belongs: a
+				    sub-agent's own row goes up with the messages and is gone by
+				    the lead's next tool call, while the agents it describes are
+				    still running. */}
+				{task && <ActiveSubagents messages={modifiedMessages} />}
 				{task && (
 					<MessagesArea
 						chatState={chatState}

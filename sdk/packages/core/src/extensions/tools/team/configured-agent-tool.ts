@@ -25,6 +25,7 @@ import type {
 	SubAgentEndContext,
 	SubAgentStartContext,
 } from "./spawn-agent-tool";
+import { createSubagentProgress } from "./subagent-progress";
 
 const CONFIGURED_AGENT_TOOL_NAME_PREFIX = "subagent_";
 const CONFIGURED_AGENT_TOOL_NAME_MAX_LENGTH = 64;
@@ -406,6 +407,12 @@ export function createConfiguredAgentTools(
 					const tools = options.createSubAgentTools
 						? await options.createSubAgentTools(config, input, context)
 						: [];
+					// What it is doing, on the tool call that started it. Nothing
+					// else reports a running sub-agent to the user at all.
+					const progress = createSubagentProgress(
+						context.emitUpdate,
+						options.onSubAgentEvent,
+					);
 					const subAgent = createDelegatedAgent({
 						kind: "subagent",
 						prompt: config.systemPrompt,
@@ -418,7 +425,7 @@ export function createConfiguredAgentTools(
 						// of a background delegation, and nothing in an ordinary
 						// call the model makes.
 						hooks: readDelegationHooks(context.metadata),
-						onEvent: options.onSubAgentEvent,
+						onEvent: progress.observe,
 						hookErrorMode: options.hookErrorMode,
 						toolPolicies: options.toolPolicies,
 						requestToolApproval: options.requestToolApproval,
