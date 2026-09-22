@@ -1025,6 +1025,18 @@ describe("team tool output descriptions", () => {
 		expect(describedBy("team_list_outcomes")).toContain("Output: [{");
 	});
 
+	// The other half of the swarm's description. A teammate is durable and
+	// takes task after task; spawning a roster of them is not how a broad job
+	// gets fanned out to as many workers as the machine will take.
+	it("says a teammate is durable and that a one-round fan-out is not a team", () => {
+		const description =
+			tools.find((tool) => tool.name === "team_spawn_teammate")?.description ??
+			"";
+
+		expect(description).toMatch(/stays|durable|persists/i);
+		expect(description).toMatch(/swarm/i);
+	});
+
 	it("keeps the discriminator of a branching result", () => {
 		// `team_task` answers with a different shape per action. Repeating the
 		// bare word `action` five times would say nothing; the literal is what

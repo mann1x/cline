@@ -226,7 +226,7 @@ Switch from plan mode to act mode. Switching to act mode immediately starts exec
 Spawn a sub-agent with a custom system prompt for specialized tasks. Use when delegating work that benefits from focused expertise. Output: `{text, iterations, finishReason, usage: {inputTokens, outputTokens}}`. `text` is the sub-agent's final answer and the only part you need: it worked in its own context, so nothing it read or edited is visible to you except through `text`. It has already finished by the time you see this — there is nothing to poll and nothing to await. Give each sub-agent a short `name`: when several run at once it is the only thing telling their progress apart on screen.
 
 # tool: team_spawn_teammate
-Spawn a teammate with a required agentId and rolePrompt. Output: {agentId, status}. The teammate exists after this returns but has done nothing; give it work with team_run_task.
+Spawn a teammate with a required agentId and rolePrompt. A teammate is durable: it stays until it is shut down, takes one task at a time through team_run_task, and remembers the earlier ones. Spawn teammates when the work is a known load and you know how many workers it wants. Fanning one broad job out to as many workers as the machine will take, for a single merged answer, is a swarm; a roster of teammates is not how to do that. Output: {agentId, status}. The teammate exists after this returns but has done nothing; give it work with team_run_task.
 
 # tool: team_shutdown_teammate
 Shutdown a teammate by agentId. Output: {agentId, status}.

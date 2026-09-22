@@ -315,6 +315,7 @@ export function createSpawnSwarmTool(
 			"Use it when a task splits into parts that do not depend on each other — searching a repo several ways, checking several files, trying several approaches. " +
 			"Give `tasks` when the workers should do different things, or `task` with `count` to fan the same question out. " +
 			'`count: "max"` means as many as the server will take right now; that is what to pass when asked for as many agents as possible. ' +
+			"A swarm is one round: its workers are made for it, run once, and are gone when the digest comes back — there is nobody left to send a second task to. Work that is a known list of jobs, each wanting a worker you keep talking to, is a team instead. " +
 			"Output: `{digest, workers, pooled, usage}`. `digest` is the whole result — the workers' own transcripts are discarded, so nothing they saw reaches you except through it.",
 		inputSchema: zodToJsonSchema(SpawnSwarmInputSchema),
 		execute: async (input) => {

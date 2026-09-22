@@ -74,6 +74,18 @@ async function call(
 }
 
 describe("spawn_swarm", () => {
+	// A model choosing between a swarm and a team reads only these two
+	// descriptions. A swarm is one round of disposable workers; a teammate is
+	// durable and takes task after task. The description has to say which
+	// shape this is, or the two tools read as synonyms.
+	it("says the round is disposable and that a durable roster is the other thing", () => {
+		const { tool } = toolWith(async () => agentResult("{}"));
+		const description = tool.description ?? "";
+
+		expect(description).toMatch(/one round/i);
+		expect(description).toMatch(/\bteam\b/i);
+	});
+
 	it("runs one worker per task, all on the lead's snapshot", async () => {
 		const seen: Array<{ task: string; poolId?: string }> = [];
 		const { tool, pools } = toolWith(async (task, poolId) => {
