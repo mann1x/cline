@@ -135,6 +135,41 @@ function normalizeUsageEvent(usageEvent: {
  * Tracks the state of streaming content to properly handle
  * partial message updates.
  */
+/**
+ * Whether a tool call is a sub-agent being spawned.
+ *
+ * Two tools do it. `spawn_agent` is the open-ended one the model reaches for
+ * on its own; `subagent_<name>` is a configured agent, one per file in
+ * `.cline/agents`, and there is one such tool per agent the workspace defines.
+ *
+ * Only the first was ever routed to the rich row. Measured on pandorum
+ * 2026-09-22: a run that spawned `subagent_game_logic_reviewer`,
+ * `subagent_js_syntactic` and `subagent_html_structure_checker` in one batch
+ * rendered three bare "Cerebriline used `subagent_js_syntactic`:" headers --
+ * no name, no colour, no prompt, and no sign that three agents were running.
+ * The agents are the same agents; only the tool that starts them differs.
+ */
+export function isSubagentSpawnTool(toolName: string | undefined): boolean {
+	return toolName === "spawn_agent" || (toolName?.startsWith("subagent_") ?? false)
+}
+
+/**
+ * The agent's name as the workspace spells it, from the tool that runs it.
+ *
+ * `buildConfiguredAgentToolName` builds `subagent_js_syntactic` from
+ * "js-syntactic" by lowercasing and replacing every run of non-alphanumerics
+ * with `_`, which cannot be reversed exactly -- a hyphen and an underscore
+ * both arrive as `_`. Undoing it to a hyphen matches how the agent files are
+ * named in practice, and the name is a label, not a key.
+ */
+export function subagentNameFromToolName(toolName: string): string | undefined {
+	if (!toolName.startsWith("subagent_")) {
+		return undefined
+	}
+	const name = toolName.slice("subagent_".length).replace(/_/g, "-")
+	return name || undefined
+}
+
 export class MessageTranslatorState {
 	/** Current streaming text message timestamp (used for dedup) */
 	private streamingTextTs: number | undefined
@@ -1529,15 +1564,17 @@ export function buildToolApprovalAskMessage(toolName: string, input: unknown, ts
 		}
 	}
 
-	if (toolName === "spawn_agent") {
+	if (isSubagentSpawnTool(toolName)) {
 		const parsedInput = parseToolInput(input)
-		const taskPrompt = getStringField(parsedInput, "task") ?? ""
+		const taskPrompt = getStringField(parsedInput, "task") ?? getStringField(parsedInput, "prompt") ?? ""
+		const agentName = getStringField(parsedInput, "name") ?? subagentNameFromToolName(toolName)
 		return {
 			ts,
 			type: "ask",
 			ask: "use_subagents",
 			text: JSON.stringify({
 				prompts: [taskPrompt],
+				...(agentName ? { names: [agentName] } : {}),
 			} satisfies ClineAskUseSubagents),
 			partial: false,
 		}
@@ -2104,11 +2141,18 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 					// Emit say:"use_subagents" with prompts list, then say:"subagent"
 					// with running status. Multiple parallel spawn_agent calls in the
 					// same iteration are aggregated into a single status message.
-					if (toolName === "spawn_agent") {
+					if (isSubagentSpawnTool(toolName)) {
 						const parsedInput = parseToolInput(input)
-						const taskPrompt = getStringField(parsedInput, "task") ?? ""
+						// `spawn_agent` calls it `task`; a configured agent's tool
+						// takes `prompt`. Same field to a reader either way.
+						const taskPrompt = getStringField(parsedInput, "task") ?? getStringField(parsedInput, "prompt") ?? ""
 						const callId = event.toolCallId ?? `spawn-${state.nextTs()}`
-						state.addSpawnAgent(callId, taskPrompt, getStringField(parsedInput, "name"))
+						// A configured agent is named by the tool that runs it, and
+						// that name is the whole point of the row: "js-syntactic"
+						// says what it is, `subagent_js_syntactic` says how it was
+						// called.
+						const agentName = getStringField(parsedInput, "name") ?? subagentNameFromToolName(toolName)
+						state.addSpawnAgent(callId, taskPrompt, agentName)
 						if (approvedToolMessageTs !== undefined) {
 							state.setSpawnAgentPromptsTs(approvedToolMessageTs)
 						}
@@ -2178,7 +2222,7 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 			// sub-agent progress (iterations, tool calls, usage). We translate
 			// these into the ClineSaySubagentStatus format for the rich UI.
 			const updateToolName = event.toolName ?? state.getStreamingToolName()
-			if (updateToolName === "spawn_agent" && state.hasSpawnAgents()) {
+			if (isSubagentSpawnTool(updateToolName) && state.hasSpawnAgents()) {
 				const callId = event.toolCallId ?? ""
 				const entry = callId ? state.getSpawnAgent(callId) : undefined
 				if (entry) {
@@ -2313,7 +2357,7 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 					// say:"subagent" (completed/failed) + say:"subagent_usage".
 					// When all spawn_agent calls in this iteration finish, the
 					// final say:"subagent" has partial=false.
-					if (toolName === "spawn_agent") {
+					if (isSubagentSpawnTool(toolName)) {
 						const callId = event.toolCallId ?? ""
 						const entry = callId ? state.getSpawnAgent(callId) : undefined
 						if (entry) {
@@ -2334,6 +2378,12 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 								if (model) {
 									if (typeof model.provider === "string") entry.providerId = model.provider
 									if (typeof model.id === "string") entry.modelId = model.id
+								}
+								// Which node took it. Present only on a session
+								// that has nodes, which is the only session where
+								// the answer is worth anything.
+								if (typeof output.nodeId === "string") {
+									entry.nodeId = output.nodeId
 								}
 							}
 							if (event.error) {
@@ -2959,7 +3009,7 @@ export function translateSessionEvent(event: CoreSessionEvent, state: MessageTra
 			const isToolLifecycleEvent =
 				agentEvent.type === "content_start" || agentEvent.type === "content_update" || agentEvent.type === "content_end"
 			const isSpawnAgentToolEvent =
-				isToolLifecycleEvent && agentEvent.contentType === "tool" && agentEvent.toolName === "spawn_agent"
+				isToolLifecycleEvent && agentEvent.contentType === "tool" && isSubagentSpawnTool(agentEvent.toolName)
 
 			// Newer SDK events carry parentAgentId on sub-agent events. Older/local
 			// RuntimeEventAdapter output does not, so while spawn_agent calls are in

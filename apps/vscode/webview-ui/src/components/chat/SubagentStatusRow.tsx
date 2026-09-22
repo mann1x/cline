@@ -234,6 +234,13 @@ export default function SubagentStatusRow({ message, isLast, lastModifiedMessage
 						isPromptConstructionRow && message.partial === true && index === data.items.length - 1
 					const shouldShowStats = !isStreamingPromptUnderConstruction
 					const statsText = `${formatCount(entry.toolCalls)} tools called · ${formatCount(entry.contextTokens)} tokens · ${formatCost(entry.totalCost)}`
+					// Where it ran, when the session has nodes to choose between.
+					// A fan-out that ran one at a time looks identical to one that
+					// ran in parallel until you can see that every agent landed on
+					// the same node.
+					const placementText = [entry.nodeId ? `on ${entry.nodeId}` : "", entry.modelId ?? ""]
+						.filter(Boolean)
+						.join(" · ")
 					const latestToolCallText = entry.latestToolCall?.trim() || ""
 					return (
 						<div
@@ -260,6 +267,9 @@ export default function SubagentStatusRow({ message, isLast, lastModifiedMessage
 								<div className="mt-1 text-[11px] opacity-70 min-w-0 whitespace-pre-wrap break-words">
 									<span>{statsText}</span>
 								</div>
+							)}
+							{shouldShowStats && placementText && (
+								<div className="mt-0.5 text-[10px] opacity-60 min-w-0 truncate">{placementText}</div>
 							)}
 							{shouldShowStats && hasDetails && (
 								<button

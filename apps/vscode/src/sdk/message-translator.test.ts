@@ -5271,6 +5271,134 @@ describe("spawn_agent names", () => {
 })
 
 // ---------------------------------------------------------------------------
+// configured agents in the rich row
+// ---------------------------------------------------------------------------
+
+/**
+ * Measured on pandorum 2026-09-22. One turn spawned three configured agents
+ * together -- `subagent_game_logic_reviewer`, `subagent_js_syntactic` and
+ * `subagent_html_structure_checker` -- and the chat showed three bare
+ * "Cerebriline used `subagent_js_syntactic`:" headers: no name, no colour, no
+ * prompt, and nothing to say that three agents were running at once.
+ *
+ * The rich row existed the whole time. It was gated on the tool being
+ * `spawn_agent` exactly, and a configured agent arrives as `subagent_<name>`.
+ */
+describe("a configured agent is a sub-agent", () => {
+	const spawnConfigured = (
+		state: MessageTranslatorState,
+		toolName: string,
+		toolCallId: string,
+		input: Record<string, unknown>,
+	) =>
+		translateSessionEvent(
+			{
+				type: "agent_event",
+				payload: {
+					sessionId: "session-1",
+					event: {
+						type: "content_start",
+						contentType: "tool",
+						toolName,
+						toolCallId,
+						input,
+					} as AgentEvent,
+				},
+			},
+			state,
+		)
+
+	it("registers it instead of leaving it to the generic tool row", () => {
+		const state = new MessageTranslatorState()
+		const result = spawnConfigured(state, "subagent_js_syntactic", "call-1", {
+			prompt: "fix the braces on line 90",
+		})
+
+		expect(state.getSpawnAgentItems()).toHaveLength(1)
+		// The row it now renders, rather than say:"tool".
+		expect(result.messages[0]).toMatchObject({ say: "use_subagents" })
+	})
+
+	// `prompt` on a configured agent, `task` on spawn_agent. The row shows one
+	// thing either way, so the translator has to read both.
+	it("takes the prompt from the field that tool actually uses", () => {
+		const state = new MessageTranslatorState()
+		spawnConfigured(state, "subagent_js_syntactic", "call-1", {
+			prompt: "fix the braces on line 90",
+		})
+
+		expect(state.getSpawnAgentItems()[0].prompt).toBe("fix the braces on line 90")
+	})
+
+	// The name is the point of the row. `subagent_js_syntactic` is how it was
+	// called; "js-syntactic" is what it is.
+	it("names it from the tool that runs it", () => {
+		const state = new MessageTranslatorState()
+		spawnConfigured(state, "subagent_html_structure_checker", "call-1", { prompt: "check the DOM" })
+
+		expect(state.getSpawnAgentItems()[0].agentName).toBe("html-structure-checker")
+	})
+
+	// An explicit name still wins -- the tool name is the fallback, not an
+	// override.
+	it("prefers a name the call carried", () => {
+		const state = new MessageTranslatorState()
+		spawnConfigured(state, "subagent_js_syntactic", "call-1", { prompt: "x", name: "brace-fixer" })
+
+		expect(state.getSpawnAgentItems()[0].agentName).toBe("brace-fixer")
+	})
+
+	// Three in one batch is the reported case, and one row has to hold all
+	// three or the batch reads as three unrelated tool calls.
+	it("aggregates a batch into one row", () => {
+		const state = new MessageTranslatorState()
+		spawnConfigured(state, "subagent_game_logic_reviewer", "call-1", { prompt: "review the logic" })
+		spawnConfigured(state, "subagent_js_syntactic", "call-2", { prompt: "fix the braces" })
+		const result = spawnConfigured(state, "subagent_html_structure_checker", "call-3", {
+			prompt: "check the DOM",
+		})
+
+		const payload = JSON.parse(result.messages[0].text ?? "{}")
+		expect(payload.prompts).toEqual(["review the logic", "fix the braces", "check the DOM"])
+		expect(payload.names).toEqual(["game-logic-reviewer", "js-syntactic", "html-structure-checker"])
+	})
+
+	// Which node took it. Two nodes can carry the same model on two endpoints,
+	// so the model alone does not answer "where did this run".
+	it("records the node the agent was placed on", () => {
+		const state = new MessageTranslatorState()
+		spawnConfigured(state, "subagent_js_syntactic", "call-1", { prompt: "fix the braces" })
+
+		translateSessionEvent(
+			{
+				type: "agent_event",
+				payload: {
+					sessionId: "session-1",
+					event: {
+						type: "content_end",
+						contentType: "tool",
+						toolName: "subagent_js_syntactic",
+						toolCallId: "call-1",
+						output: {
+							text: "done",
+							nodeId: "node-mucvow61",
+							model: { id: "ornith-27b_tb:iq4_xs-128k", provider: "ollama" },
+						},
+					} as AgentEvent,
+				},
+			},
+			state,
+		)
+
+		expect(state.getSpawnAgentItems()[0]).toMatchObject({
+			nodeId: "node-mucvow61",
+			providerId: "ollama",
+			status: "completed",
+		})
+	})
+})
+
+// ---------------------------------------------------------------------------
 // configuredAgentUsage
 // ---------------------------------------------------------------------------
 

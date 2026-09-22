@@ -74,6 +74,16 @@ export interface SpawnAgentOutput {
 		id: string;
 		provider: string;
 	};
+	/**
+	 * Which agent node this agent was placed on, when the session has any.
+	 *
+	 * The model and the node are different facts and both are worth showing:
+	 * two nodes can carry the same model on two endpoints, and the reason a
+	 * fan-out is slow is usually which node took the work rather than which
+	 * model did it. Absent on a session with no nodes, where there is only
+	 * one place an agent can run and naming it says nothing.
+	 */
+	nodeId?: string;
 }
 
 export interface SubAgentStartContext {
@@ -232,6 +242,9 @@ export function createSpawnAgentTool(
 								},
 							}
 						: {}),
+					// Where it ran. Only when it was placed: on a session with
+					// no nodes there is one place to run and naming it is noise.
+					...(placed ? { nodeId: placed.nodeId } : {}),
 				};
 				if (config.onSubAgentEnd) {
 					try {

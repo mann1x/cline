@@ -489,6 +489,10 @@ export function createConfiguredAgentTools(
 										},
 									}
 								: {}),
+							// Where it ran. Only when it was placed: on a
+							// session with no nodes there is one place to run
+							// and naming it is noise.
+							...(placed ? { nodeId: placed.nodeId } : {}),
 						};
 						if (options.onSubAgentEnd) {
 							try {

@@ -441,6 +441,14 @@ export interface SubagentStatusItem {
 	/** The connection this sub-agent ran on, which need not be the lead's. */
 	providerId?: string
 	modelId?: string
+	/**
+	 * Which agent node it was placed on, when the session has any.
+	 *
+	 * Separate from the model: two nodes can carry the same model on two
+	 * endpoints, and which node took an agent is what explains a fan-out that
+	 * ran one at a time.
+	 */
+	nodeId?: string
 	contextTokens: number
 	contextWindow: number
 	contextUsagePercentage: number
