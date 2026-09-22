@@ -185,10 +185,18 @@ export function parallelSessionsDescription(providerId: string, engine?: Opencot
 /**
  * Ask the configured opencoti server which case the field is in.
  *
- * `undefined` for every other provider, which is never asked. Read once per
- * provider, as the PolyKV status strip does and through the same host read:
- * there is nothing here worth a timer, and the base URL comes from the stored
- * config on the host side, so the panel cannot be pointed somewhere else.
+ * `undefined` for every other provider, which is never asked. The base URL
+ * comes from the stored config on the host side, so the panel cannot be
+ * pointed somewhere else.
+ *
+ * Its own host read rather than the status strip's, which is the difference
+ * between an answer in 70ms and an answer in five seconds. The strip wants
+ * pools, sessions and the KV ledger; this wants one boolean, and `/props`
+ * carries it and is cached per server. Sharing the strip's call meant waiting
+ * on `/polykv/tps`, which on the published engine answers its headers and then
+ * never ends the body -- so the field showed "Default: 1" for the whole of
+ * that read's bound, on a server whose admission gate was on, every time the
+ * panel opened.
  */
 export function useOpencotiEngineMode(providerId: string | undefined): OpencotiEngineMode | undefined {
 	const [mode, setMode] = useState<OpencotiEngineMode | undefined>()
@@ -200,12 +208,12 @@ export function useOpencotiEngineMode(providerId: string | undefined): OpencotiE
 		}
 		let cancelled = false
 		setMode("unknown")
-		ModelsServiceClient.readPolykvStatus(StringRequest.create({ value: providerId }))
-			.then((status) => {
+		ModelsServiceClient.readOpencotiEngine(StringRequest.create({ value: providerId }))
+			.then((engine) => {
 				if (cancelled) {
 					return
 				}
-				setMode(!status.reachable ? "unknown" : status.poolsEnabled ? "polykv" : status.elastic ? "elastic" : "fixed")
+				setMode(!engine.reachable ? "unknown" : engine.poolsEnabled ? "polykv" : engine.elastic ? "elastic" : "fixed")
 			})
 			.catch(() => {
 				if (!cancelled) {

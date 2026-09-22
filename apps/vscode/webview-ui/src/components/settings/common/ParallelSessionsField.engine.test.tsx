@@ -1,15 +1,15 @@
 import { renderHook, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-const mocks = vi.hoisted(() => ({ readPolykvStatus: vi.fn() }))
+const mocks = vi.hoisted(() => ({ readOpencotiEngine: vi.fn() }))
 
 vi.mock("@/services/grpc-client", () => ({
-	ModelsServiceClient: { readPolykvStatus: mocks.readPolykvStatus },
+	ModelsServiceClient: { readOpencotiEngine: mocks.readOpencotiEngine },
 }))
 
 import { useOpencotiEngineMode } from "./ParallelSessionsField"
 
-function status(overrides: { reachable?: boolean; poolsEnabled?: boolean; elastic?: boolean }) {
+function engine(overrides: { reachable?: boolean; poolsEnabled?: boolean; elastic?: boolean }) {
 	return { reachable: true, poolsEnabled: false, elastic: false, ...overrides }
 }
 
@@ -21,7 +21,7 @@ describe("asking opencoti which case the field is in", () => {
 	it("never asks on any other provider", () => {
 		const { result } = renderHook(() => useOpencotiEngineMode("ollama"))
 		expect(result.current).toBeUndefined()
-		expect(mocks.readPolykvStatus).not.toHaveBeenCalled()
+		expect(mocks.readOpencotiEngine).not.toHaveBeenCalled()
 	})
 
 	// PolyKV is named when both are on: its admission control is what says yes
@@ -32,7 +32,7 @@ describe("asking opencoti which case the field is in", () => {
 		[{}, "fixed"],
 		[{ reachable: false }, "unknown"],
 	] as const)("reads %j as %s", async (answer, expected) => {
-		mocks.readPolykvStatus.mockResolvedValue(status(answer))
+		mocks.readOpencotiEngine.mockResolvedValue(engine(answer))
 		const { result } = renderHook(() => useOpencotiEngineMode("opencoti"))
 		await waitFor(() => expect(result.current).toBe(expected))
 	})
@@ -41,9 +41,9 @@ describe("asking opencoti which case the field is in", () => {
 	// controller on because the question failed would be a guess wearing a
 	// fact's clothes.
 	it("reads a failed request as unknown, not as fixed", async () => {
-		mocks.readPolykvStatus.mockRejectedValue(new Error("no host"))
+		mocks.readOpencotiEngine.mockRejectedValue(new Error("no host"))
 		const { result } = renderHook(() => useOpencotiEngineMode("opencoti"))
-		await waitFor(() => expect(mocks.readPolykvStatus).toHaveBeenCalledTimes(1))
+		await waitFor(() => expect(mocks.readOpencotiEngine).toHaveBeenCalledTimes(1))
 		await waitFor(() => expect(result.current).toBe("unknown"))
 	})
 })

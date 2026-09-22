@@ -78,6 +78,18 @@ service ModelsService {
   // particular never /capacity, every GET of which folds the engine's
   // admission learner on the published c7 build.
   rpc readPolykvStatus(StringRequest) returns (PolykvStatusResponse);
+  // Which case the Parallel Sessions field is in, from `/props` and nothing
+  // else.
+  //
+  // Split out from readPolykvStatus because the two questions have opposite
+  // costs. The status strip wants pools, sessions and the KV ledger, and pays
+  // whatever those reads cost; the field wants one boolean, and `/props`
+  // answers it in 70ms and is cached per server afterwards. Sharing the RPC
+  // made the field wait on `/polykv/tps`, which on the published engine
+  // answers its headers and then never ends the body -- so the field sat on
+  // its "could not be asked" copy for the whole bound, on a server whose
+  // admission gate was on.
+  rpc readOpencotiEngine(StringRequest) returns (OpencotiEngineResponse);
   // Reads an Ollama endpoint's account and model catalog for display.
   //
   // Three reads: POST /api/me, which the local server signs with the host's own
@@ -166,6 +178,21 @@ message PolykvStatusSession {
   // The allocation, stable across a slot move. Elastic growth can move a
   // session to a different slot, so a slot index is not an identity over time.
   optional string alloc_key = 7;
+}
+
+// Which controller, if any, decides concurrency on an opencoti server.
+//
+// Four fields, because four answers are needed and three booleans cannot carry
+// them: a plain llama.cpp server and a server that is not there both have
+// neither controller on, and what to say about them is opposite.
+message OpencotiEngineResponse {
+  // Whether /props answered at all.
+  bool reachable = 1;
+  optional string release = 2;
+  // PolyKV admission is on: the engine decides how many it will take.
+  bool pools_enabled = 3;
+  // The elastic slot controller is armed: the slot count is not fixed.
+  bool elastic = 4;
 }
 
 // What the settings panel shows about a live opencoti server.

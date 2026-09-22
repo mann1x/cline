@@ -1122,3 +1122,75 @@ describe("a read that never ends", () => {
 		expect(server.aborted).toEqual([]);
 	});
 });
+
+/**
+ * The props probe answers the settings panel's own question now, so two things
+ * it could get away with before it could not.
+ */
+describe("what the props probe has to answer on its own", () => {
+	beforeEach(() => {
+		resetPolykvAvailability();
+	});
+
+	// A plain llama.cpp server and a server that is not there both report
+	// `poolsEnabled: false, elastic: false`, and what to say about them is
+	// opposite: one has a fixed --parallel count, the other was never asked.
+	it("separates a server that answered from one that did not", async () => {
+		const answered = (async () =>
+			new Response(JSON.stringify({ build_info: "b1788384120" }), {
+				status: 200,
+			})) as unknown as typeof fetch;
+		expect(
+			await probeOpencotiProps("http://localhost:8080/v1", answered),
+		).toMatchObject({ reachable: true, poolsEnabled: false, elastic: false });
+
+		resetPolykvAvailability();
+		const silent = (async () => {
+			throw new Error("fetch failed");
+		}) as unknown as typeof fetch;
+		expect(
+			await probeOpencotiProps("http://localhost:8080/v1", silent),
+		).toMatchObject({ reachable: false, poolsEnabled: false, elastic: false });
+	});
+
+	// The probe caches per server for the life of the process, which is right
+	// for an answer and wrong for a failure: the panel reads this to decide what
+	// the Parallel Sessions field means, so a cached "could not be asked" is a
+	// panel that never asks again.
+	it("does not cache a server that did not answer", async () => {
+		let attempts = 0;
+		const flaky = (async () => {
+			attempts += 1;
+			if (attempts === 1) {
+				throw new Error("fetch failed");
+			}
+			return new Response(
+				JSON.stringify({ opencoti: { polykv: { pools_enabled: true } } }),
+				{ status: 200 },
+			);
+		}) as unknown as typeof fetch;
+
+		expect(
+			(await probeOpencotiProps("http://localhost:8080/v1", flaky)).reachable,
+		).toBe(false);
+		expect(
+			await probeOpencotiProps("http://localhost:8080/v1", flaky),
+		).toMatchObject({ reachable: true, poolsEnabled: true });
+		expect(attempts).toBe(2);
+	});
+
+	it("caches a server that answered", async () => {
+		let attempts = 0;
+		const once = (async () => {
+			attempts += 1;
+			return new Response(
+				JSON.stringify({ opencoti: { polykv: { pools_enabled: true } } }),
+				{ status: 200 },
+			);
+		}) as unknown as typeof fetch;
+
+		await probeOpencotiProps("http://localhost:8080/v1", once);
+		await probeOpencotiProps("http://localhost:8080/v1", once);
+		expect(attempts).toBe(1);
+	});
+});

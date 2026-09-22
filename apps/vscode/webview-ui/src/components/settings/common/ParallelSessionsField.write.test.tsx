@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({ write: vi.fn(), config: { parallelSessions: 1 
 vi.mock("@/hooks/useProviderConfig", () => ({
 	useProviderConfig: () => ({ config: mocks.config, write: mocks.write }),
 }))
-vi.mock("@/services/grpc-client", () => ({ ModelsServiceClient: { readPolykvStatus: vi.fn() } }))
+vi.mock("@/services/grpc-client", () => ({ ModelsServiceClient: { readOpencotiEngine: vi.fn() } }))
 // `DebouncedTextField` is half of what is under test, so the toolkit field it
 // wraps is a real input here rather than a mock of the whole thing.
 vi.mock("@vscode/webview-ui-toolkit/react", () => ({

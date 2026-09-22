@@ -488,6 +488,17 @@ export interface OpencotiProps {
 	 * back to the conservative path.
 	 */
 	release?: string;
+	/**
+	 * Whether `/props` answered at all.
+	 *
+	 * The three other fields cannot carry this: a plain llama.cpp server and a
+	 * server that is not there both report `poolsEnabled: false, elastic:
+	 * false`, and the right thing to say about them is opposite -- one has a
+	 * fixed `--parallel` count, the other was never asked. A panel that
+	 * collapses them tells a user their server has neither controller on
+	 * because the question failed, which is a guess wearing a fact's clothes.
+	 */
+	reachable: boolean;
 	/** Pools are compiled in AND the server was launched with `--polykv-max-pools`. */
 	poolsEnabled: boolean;
 	/** The elastic slot controller is armed, so the slot count is not fixed. */
@@ -502,6 +513,7 @@ export interface OpencotiProps {
 }
 
 const NOT_OPENCOTI: OpencotiProps = {
+	reachable: false,
 	poolsEnabled: false,
 	elastic: false,
 	features: [],
@@ -629,6 +641,9 @@ export function probeOpencotiProps(
 			const release = parseRelease(body.build_info);
 			return {
 				...(release ? { release } : {}),
+				// It answered. Whether it is opencoti at all is the next three
+				// fields' business, not this one's.
+				reachable: true,
 				poolsEnabled: polykv.pools_enabled === true,
 				elastic: elasticSlots.enabled === true,
 				...(typeof elasticSlots.slots_live === "number"
@@ -651,6 +666,17 @@ export function probeOpencotiProps(
 		}
 	})();
 	OPENCOTI_PROPS.set(root, pending);
+	// A server that did not answer has not been read, so caching that forever
+	// would make one bad moment permanent: the settings panel reads this to
+	// decide what the Parallel Sessions field means, and a cached "could not be
+	// asked" is a panel that never asks again for the life of the window. A
+	// real answer -- including "answered, and is not opencoti" -- is cached,
+	// which is the whole point of reading it once.
+	void pending.then((props) => {
+		if (!props.reachable && OPENCOTI_PROPS.get(root) === pending) {
+			OPENCOTI_PROPS.delete(root);
+		}
+	});
 	return pending;
 }
 
