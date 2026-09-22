@@ -64,6 +64,31 @@ export interface PolykvCapacity {
 	/** Whether this read folded the admission learner. c8 and later only. */
 	folded?: boolean;
 
+	/**
+	 * Which window the `kv_*` and `headroom_*` figures above describe.
+	 *
+	 * **The field that stops this endpoint being misread.** Under guarantees a
+	 * pool owned by a session reports them against the OWNER'S window rather
+	 * than against the server, so a caller that takes them off the first pool it
+	 * finds and calls the result "KV headroom" is stating one session's private
+	 * occupancy as the machine's free capacity -- wrong in the most misleading
+	 * direction there is, since a full server with one idle session then reads
+	 * as nearly empty.
+	 *
+	 * `session` is that case. `unallocated` is an unowned pool, whose free cells
+	 * are what admission can still grant and so genuinely are the server's.
+	 * `cache` is a server without guarantees, where the distinction does not
+	 * exist. Absent is a build from before the split, which has no per-session
+	 * windows to confuse these with.
+	 */
+	pressure_scope?: "session" | "unallocated" | "cache";
+	/** The session owning this pool, when one does. */
+	owner?: string | null;
+	/** Raw `used/window`, 0..1. Never a ramp. */
+	pressure?: number;
+	/** The denominator `pressure` is taken against. */
+	window_cells?: number;
+
 	// Room.
 	headroom_sessions?: number;
 	kv_headroom_pct?: number;
@@ -131,6 +156,11 @@ export interface PolykvCapacity {
 	 * session -- a chars-per-token ratio swinging 3.16 to 5.42, an overhead
 	 * term reading 53,323 tokens for a 12,700-token payload. This number is
 	 * measured by the thing that owns the cells.
+	 *
+	 * **Superseded by `pressure` where the server offers it.** This one is a
+	 * 0.70..1.0 ramp over the same denominator, kept for compatibility; a
+	 * pre-scaled figure stops matching the threshold the user set, which is the
+	 * number they are looking at. Take the raw ratio and own the policy here.
 	 */
 	compaction_pressure?: number;
 
@@ -432,6 +462,14 @@ export const OPENCOTI_FEATURES = {
 	subpools: "polykv_subpools_v1",
 	/** `POST /sessions/{id}/close` releases a window before its TTL. */
 	sessionClose: "session_close_v1",
+	/** `num_ctx_min`: the floor is negotiated server-side, in one admission. */
+	ctxMinNegotiation: "ctx_min_negotiation_v1",
+	/** `/capacity` carries `pressure`, `window_cells`, `owner`, `pressure_scope`. */
+	sessionPressure: "session_pressure_v1",
+	/** The tps floor is settable at runtime via `POST /elastic`. */
+	elasticRw: "elastic_rw_v1",
+	/** `hold_ticks` -- how long a grow condition must hold -- is settable too. */
+	elasticHoldRw: "elastic_hold_rw_v1",
 } as const;
 
 export type OpencotiFeature =
@@ -791,6 +829,25 @@ export interface OpencotiStatusSession {
  * what makes the fourth read safe. Without it we do not ask, and the fields
  * stay absent rather than being guessed at from somewhere else.
  */
+export interface OpencotiAllocation {
+	sessionId: string;
+	/** The window this session booked, in cells. */
+	window: number;
+	used: number;
+	free: number;
+	/**
+	 * Raw `used/window`, 0..1, never a ramp.
+	 *
+	 * The compaction trigger. It is deliberately taken raw from the server and
+	 * compared against a threshold we own, because the number the user set is
+	 * the number they should see: a server-side ramp would make the figure in
+	 * our UI stop matching the one in theirs.
+	 */
+	pressure: number;
+	/** Sub-pools this session holds, of `poolsMaxPerSlot`. */
+	pools: number;
+}
+
 export interface OpencotiStatus {
 	/** Whether `/props` answered at all. */
 	reachable: boolean;
@@ -798,16 +855,33 @@ export interface OpencotiStatus {
 	/**
 	 * KV headroom, and the SWA arm beside it.
 	 *
-	 * Present only under `capacity_readonly_v1`, because these live on
-	 * `/capacity` and reading that endpoint is what the c7 arm may not do.
+	 * From `GET /kv` where the server offers it, which needs no pool to address
+	 * and is server-wide by construction; otherwise from a pool's `/capacity`,
+	 * which needs `capacity_readonly_v1` before it may be read at all.
 	 *
-	 * `kvCells*` covers the BASE pool only. On an iSWA model the sliding-window
-	 * ring is accounted separately, so total occupancy cannot be computed by
-	 * adding them or by reading either alone.
+	 * **`kvScope` says which window these describe** and must be read with
+	 * them -- see `PolykvCapacity.pressure_scope`. `kvCells*` covers the BASE
+	 * pool only: on an iSWA model the sliding-window ring is a separate
+	 * account, so total occupancy is neither of them and is not their sum.
 	 */
 	kvHeadroomPct?: number;
 	kvCellsFree?: number;
 	kvCellsTotal?: number;
+	kvCellsUsed?: number;
+	/** `server` or one session's private window. Never assumed. */
+	kvScope?: "server" | "session";
+	/** The session those figures belong to, when `kvScope` is `session`. */
+	kvScopeOwner?: string;
+	/** The largest window a new session could book right now. */
+	largestAdmissible?: number;
+	/** Whether the server is enforcing guaranteed allocations at all. */
+	guaranteed?: boolean;
+	/** Sub-pools one session may hold. */
+	poolsMaxPerSlot?: number;
+	/** How long an idle window is held before the server reclaims it. */
+	allocTtlSeconds?: number;
+	/** One row per session holding a window. Empty on a server without them. */
+	allocations: OpencotiAllocation[];
 	swaActive?: boolean;
 	swaCellsFree?: number | null;
 	swaCellsTotal?: number | null;
@@ -848,6 +922,7 @@ const UNREACHABLE: OpencotiStatus = {
 	elastic: false,
 	pools: [],
 	sessions: [],
+	allocations: [],
 };
 
 function numberOr(value: unknown): number | undefined {
@@ -980,11 +1055,18 @@ export async function readOpencotiStatus(
 		};
 	});
 
-	// The fourth read, and only once the server has said the plain GET no longer
-	// folds. It needs a pool to address -- `/capacity` is a per-pool route -- so
-	// a server with pools enabled and none created yet reports no headroom
-	// rather than inventing one.
+	// Where the KV account comes from, in order of preference.
+	//
+	// `GET /kv` first: it is the server-wide ledger, it needs no pool to
+	// address, and it carries the per-session allocations besides. A pool's
+	// `/capacity` is the fallback for a server that does not offer it -- and
+	// only once `capacity_readonly_v1` says the plain GET has stopped folding
+	// the admission learner.
+	const kv = hasOpencotiFeature(features, OPENCOTI_FEATURES.kvStatus)
+		? await readJson(doFetch, `${root}/kv`)
+		: undefined;
 	const capacity =
+		kv === undefined &&
 		hasOpencotiFeature(features, OPENCOTI_FEATURES.capacityReadonly) &&
 		pools.length > 0
 			? await readJson(
@@ -993,33 +1075,115 @@ export async function readOpencotiStatus(
 				)
 			: undefined;
 
+	// The pool we asked may be owned, in which case its figures describe that
+	// session's window and not the server's. Absent scope is a build from
+	// before the split, which has no per-session windows to confuse them with.
+	const capacityScope = capacity?.pressure_scope;
+	const scopedToSession = capacityScope === "session";
+	const kvSwa = (kv?.swa ?? undefined) as Record<string, unknown> | undefined;
+	const account = kv
+		? {
+				scope: "server" as const,
+				cellsTotal: numberOr(kv.cells_total),
+				cellsFree: numberOr(kv.cells_free),
+				cellsUsed: numberOr(kv.cells_used),
+				// `/kv` states the free cells rather than a percentage, so the
+				// headroom is derived here instead of being read.
+				headroomPct:
+					numberOr(kv.cells_total) && numberOr(kv.cells_free) !== undefined
+						? ((kv.cells_free as number) / (kv.cells_total as number)) * 100
+						: undefined,
+				owner: undefined,
+				swaTotal: numberOr(kvSwa?.cells_total),
+				swaFree: numberOr(kvSwa?.cells_free),
+				swaWindow: numberOr(kvSwa?.window),
+				swaActive: kvSwa !== undefined,
+			}
+		: capacity
+			? {
+					scope: scopedToSession ? ("session" as const) : ("server" as const),
+					cellsTotal: numberOr(capacity.kv_cells_total),
+					cellsFree: numberOr(capacity.kv_cells_free),
+					cellsUsed: undefined,
+					headroomPct: numberOr(capacity.kv_headroom_pct),
+					owner:
+						scopedToSession && typeof capacity.owner === "string"
+							? capacity.owner
+							: undefined,
+					swaTotal: numberOr(capacity.swa_cells_total),
+					swaFree: numberOr(capacity.swa_cells_free),
+					swaWindow: numberOr(capacity.swa_window),
+					swaActive: capacity.swa_active === true,
+				}
+			: undefined;
+
+	const rawAllocations = Array.isArray(kv?.allocations)
+		? (kv.allocations as Array<Record<string, unknown>>)
+		: [];
+	const allocations: OpencotiAllocation[] = rawAllocations.flatMap((entry) => {
+		const window = numberOr(entry.window);
+		if (typeof entry.session_id !== "string" || window === undefined) {
+			return [];
+		}
+		const used = numberOr(entry.used) ?? 0;
+		return [
+			{
+				sessionId: entry.session_id,
+				window,
+				used,
+				free: numberOr(entry.free) ?? Math.max(0, window - used),
+				// Derived only as a fallback: the server states it, and a
+				// division here would silently disagree with theirs on a zero
+				// window.
+				pressure: numberOr(entry.pressure) ?? (window > 0 ? used / window : 0),
+				pools: numberOr(entry.pools) ?? 0,
+			},
+		];
+	});
+
 	return {
 		reachable: true,
 		...(release ? { release } : {}),
 		poolsEnabled,
 		elastic: elastic.enabled === true,
-		...(numberOr(capacity?.kv_headroom_pct) !== undefined
-			? { kvHeadroomPct: capacity?.kv_headroom_pct as number }
+		...(account ? { kvScope: account.scope } : {}),
+		...(account?.owner !== undefined ? { kvScopeOwner: account.owner } : {}),
+		...(account?.headroomPct !== undefined
+			? { kvHeadroomPct: account.headroomPct }
 			: {}),
-		...(numberOr(capacity?.kv_cells_free) !== undefined
-			? { kvCellsFree: capacity?.kv_cells_free as number }
+		...(account?.cellsFree !== undefined
+			? { kvCellsFree: account.cellsFree }
 			: {}),
-		...(numberOr(capacity?.kv_cells_total) !== undefined
-			? { kvCellsTotal: capacity?.kv_cells_total as number }
+		...(account?.cellsTotal !== undefined
+			? { kvCellsTotal: account.cellsTotal }
 			: {}),
-		...(capacity?.swa_active !== undefined
-			? { swaActive: capacity.swa_active === true }
+		...(account?.cellsUsed !== undefined
+			? { kvCellsUsed: account.cellsUsed }
 			: {}),
-		// `null` here is the engine declining to state a number it does not
-		// have, and is carried through as null rather than flattened to zero.
-		...(capacity !== undefined && "swa_cells_free" in capacity
-			? { swaCellsFree: numberOr(capacity.swa_cells_free) ?? null }
+		...(numberOr(kv?.largest_admissible) !== undefined
+			? { largestAdmissible: kv?.largest_admissible as number }
 			: {}),
-		...(capacity !== undefined && "swa_cells_total" in capacity
-			? { swaCellsTotal: numberOr(capacity.swa_cells_total) ?? null }
+		...(kv?.guaranteed !== undefined
+			? { guaranteed: kv.guaranteed === true }
 			: {}),
-		...(capacity !== undefined && "swa_window" in capacity
-			? { swaWindow: numberOr(capacity.swa_window) ?? null }
+		...(numberOr(kv?.pools_max_per_slot) !== undefined
+			? { poolsMaxPerSlot: kv?.pools_max_per_slot as number }
+			: {}),
+		...(numberOr(kv?.alloc_ttl_s) !== undefined
+			? { allocTtlSeconds: kv?.alloc_ttl_s as number }
+			: {}),
+		allocations,
+		...(account?.swaActive !== undefined
+			? { swaActive: account.swaActive }
+			: {}),
+		// `null` is the engine declining to state a number it does not have,
+		// and is carried through as null rather than flattened to zero.
+		...(account?.swaActive
+			? {
+					swaCellsFree: account.swaFree ?? null,
+					swaCellsTotal: account.swaTotal ?? null,
+					swaWindow: account.swaWindow ?? null,
+				}
 			: {}),
 		...(typeof elastic.reason === "string"
 			? { elasticReason: elastic.reason }

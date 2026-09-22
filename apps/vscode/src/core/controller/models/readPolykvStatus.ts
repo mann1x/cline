@@ -20,6 +20,11 @@ import { type ProviderCatalogController, parseProviderIdRequest } from "./provid
  * there, were simply absent. The flag says the plain GET is read-only and the
  * fold has moved behind `?fold=1`. Without it they stay absent rather than
  * being guessed at.
+ *
+ * Where `GET /kv` is offered it supersedes that read entirely: it is the
+ * server-wide ledger, needs no pool to address, and carries the per-session
+ * allocations besides. `kvScope` says which window the figures belong to and
+ * must be rendered with them.
  */
 export async function readPolykvStatus(
 	controller: ProviderCatalogController,
@@ -45,6 +50,21 @@ export async function readPolykvStatus(
 		kvHeadroomPct: status.kvHeadroomPct,
 		kvCellsFree: status.kvCellsFree,
 		kvCellsTotal: status.kvCellsTotal,
+		kvCellsUsed: status.kvCellsUsed,
+		kvScope: status.kvScope,
+		kvScopeOwner: status.kvScopeOwner,
+		largestAdmissible: status.largestAdmissible,
+		guaranteed: status.guaranteed,
+		poolsMaxPerSlot: status.poolsMaxPerSlot,
+		allocTtlS: status.allocTtlSeconds,
+		allocations: status.allocations.map((allocation) => ({
+			sessionId: allocation.sessionId,
+			window: allocation.window,
+			used: allocation.used,
+			free: allocation.free,
+			pressure: allocation.pressure,
+			pools: allocation.pools,
+		})),
 		swaActive: status.swaActive,
 		// `null` is the engine declining to state a number it does not have.
 		// proto3 has no null, and `0` here would read as "no room left", so an

@@ -762,3 +762,169 @@ describe("telling pacing apart from a failed capacity check", () => {
 		});
 	});
 });
+
+/**
+ * `GET /kv` is the server-wide account; `/capacity` is a pool's view of it.
+ *
+ * Under guarantees those are no longer the same number. A pool owned by a
+ * session reports `kv_cells_total`, `kv_cells_free` and `kv_headroom_pct`
+ * against **the owner's window**, not against the server -- so a panel reading
+ * them off the first pool it finds and calling the result "KV headroom" states
+ * one session's private occupancy as the machine's free capacity. It is wrong
+ * in the most misleading direction available: a full server with one idle
+ * session reads as nearly empty.
+ *
+ * `pressure_scope` is the field that says which it is, and `/kv` is the source
+ * that never needs asking.
+ */
+describe("the server-wide KV account", () => {
+	beforeEach(resetPolykvAvailability);
+
+	function kvServer(features: string[], capacityScope?: string) {
+		const urls: string[] = [];
+		const fetchImpl = (async (input: Parameters<typeof fetch>[0]) => {
+			const url = String(input);
+			urls.push(url);
+			if (url.includes("/props")) {
+				return new Response(
+					JSON.stringify({
+						features,
+						opencoti: {
+							polykv: { pools_enabled: true },
+							elastic_slots: { enabled: true, slots_live: 4, slots_max: 64 },
+						},
+					}),
+					{ status: 200 },
+				);
+			}
+			if (url.endsWith("/kv")) {
+				return new Response(
+					JSON.stringify({
+						guaranteed: true,
+						cells_total: 1_048_576,
+						cells_free: 786_432,
+						cells_used: 262_144,
+						largest_admissible: 262_144,
+						session_ctx_max: 262_144,
+						pools_max_per_slot: 8,
+						alloc_ttl_s: 300,
+						swa: { cells_total: 131_072, cells_free: 131_072, window: 1024 },
+						allocations: [
+							{
+								session_id: "lead",
+								window: 262_144,
+								used: 131_072,
+								free: 131_072,
+								pressure: 0.5,
+								pools: 3,
+							},
+						],
+					}),
+					{ status: 200 },
+				);
+			}
+			if (url.includes("/capacity")) {
+				return new Response(
+					JSON.stringify({
+						can_admit: true,
+						kv_headroom_pct: 12.5,
+						kv_cells_free: 8192,
+						kv_cells_total: 65_536,
+						window_cells: 65_536,
+						pressure: 0.875,
+						...(capacityScope ? { pressure_scope: capacityScope } : {}),
+						...(capacityScope === "session" ? { owner: "lead" } : {}),
+					}),
+					{ status: 200 },
+				);
+			}
+			if (url.includes("/polykv/pools")) {
+				return new Response(
+					JSON.stringify({
+						pools: [{ pool_id: 0, parent: -1, prefix_len: 9, children: [] }],
+					}),
+					{ status: 200 },
+				);
+			}
+			return new Response(JSON.stringify({ sessions: [] }), { status: 200 });
+		}) as unknown as typeof fetch;
+		return { fetchImpl, urls };
+	}
+
+	it("takes the server-wide figures from /kv, not from a pool", async () => {
+		const server = kvServer(["kv_status_v1", "capacity_readonly_v1"]);
+		const status = await readOpencotiStatus(
+			"http://localhost:8080/v1",
+			server.fetchImpl,
+		);
+		expect(status.kvScope).toBe("server");
+		expect(status.kvCellsFree).toBe(786_432);
+		expect(status.kvCellsTotal).toBe(1_048_576);
+		expect(status.largestAdmissible).toBe(262_144);
+		expect(status.guaranteed).toBe(true);
+		// The SWA ring comes from the same snapshot.
+		expect(status.swaCellsFree).toBe(131_072);
+	});
+
+	// One read, not two. `/kv` answers everything `/capacity` was being asked
+	// for and needs no pool to address.
+	it("stops asking a pool once /kv can answer", async () => {
+		const server = kvServer(["kv_status_v1", "capacity_readonly_v1"]);
+		await readOpencotiStatus("http://localhost:8080/v1", server.fetchImpl);
+		expect(server.urls.some((url) => url.includes("/capacity"))).toBe(false);
+	});
+
+	it("reports each session's own window and its raw pressure", async () => {
+		const server = kvServer(["kv_status_v1"]);
+		const status = await readOpencotiStatus(
+			"http://localhost:8080/v1",
+			server.fetchImpl,
+		);
+		expect(status.allocations).toEqual([
+			{
+				sessionId: "lead",
+				window: 262_144,
+				used: 131_072,
+				free: 131_072,
+				pressure: 0.5,
+				pools: 3,
+			},
+		]);
+	});
+
+	// The fallback, on a server with the read-only GET but no /kv. An unowned
+	// pool's view IS the server's, so it may be reported as such.
+	it("still reads a pool when /kv is not offered, and says it is server-wide", async () => {
+		const server = kvServer(["capacity_readonly_v1"], "unallocated");
+		const status = await readOpencotiStatus(
+			"http://localhost:8080/v1",
+			server.fetchImpl,
+		);
+		expect(status.kvScope).toBe("server");
+		expect(status.kvCellsFree).toBe(8192);
+	});
+
+	// The defect this describes: the same fields, scoped to one session's
+	// window. Reported, but never as the server's.
+	it("never calls one session's window the server's headroom", async () => {
+		const server = kvServer(["capacity_readonly_v1"], "session");
+		const status = await readOpencotiStatus(
+			"http://localhost:8080/v1",
+			server.fetchImpl,
+		);
+		expect(status.kvScope).toBe("session");
+		expect(status.kvScopeOwner).toBe("lead");
+		expect(status.kvCellsFree).toBe(8192);
+	});
+
+	// A server that predates `pressure_scope` has no per-session windows to
+	// confuse them with, so its unscoped answer is server-wide by construction.
+	it("reads an unscoped answer from an older build as server-wide", async () => {
+		const server = kvServer(["capacity_readonly_v1"]);
+		const status = await readOpencotiStatus(
+			"http://localhost:8080/v1",
+			server.fetchImpl,
+		);
+		expect(status.kvScope).toBe("server");
+	});
+});

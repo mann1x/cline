@@ -76,12 +76,28 @@ export const PolykvStatusStrip = ({ providerId }: { providerId: string }) => {
 				</div>
 			)}
 			{status.vramFreeMib !== undefined && <div>{status.vramFreeMib} MiB VRAM free</div>}
+			{/*
+			 * Labelled by scope, never assumed. A pool owned by a session reports
+			 * its headroom against the OWNER'S window, so calling that "KV
+			 * headroom" would state one session's private occupancy as the
+			 * machine's free capacity — and a full server with one idle session
+			 * would read as nearly empty.
+			 */}
 			{status.kvHeadroomPct !== undefined && (
 				<div>
-					{status.kvHeadroomPct.toFixed(1)}% KV headroom
+					{status.kvHeadroomPct.toFixed(1)}%{" "}
+					{status.kvScope === "session"
+						? `free in the window of ${status.kvScopeOwner ?? "another session"}`
+						: "KV headroom"}
 					{status.kvCellsFree !== undefined && status.kvCellsTotal !== undefined
 						? ` — ${status.kvCellsFree.toLocaleString()} of ${status.kvCellsTotal.toLocaleString()} cells`
 						: ""}
+				</div>
+			)}
+			{status.largestAdmissible !== undefined && (
+				<div>
+					{status.largestAdmissible.toLocaleString()} largest admissible
+					{status.guaranteed ? " · guaranteed windows" : ""}
 				</div>
 			)}
 			{/*
@@ -114,6 +130,28 @@ export const PolykvStatusStrip = ({ providerId }: { providerId: string }) => {
 							{pool.orphanedPin && (
 								<span className="text-(--vscode-errorForeground)"> · orphaned pin, nothing will reclaim it</span>
 							)}
+						</div>
+					))}
+				</div>
+			)}
+			{status.allocations.length > 0 && (
+				<div className="flex flex-col gap-[2px]">
+					<div>
+						{status.allocations.length} booked {status.allocations.length === 1 ? "window" : "windows"}
+					</div>
+					{status.allocations.map((allocation) => (
+						<div className="pl-[10px]" key={allocation.sessionId}>
+							<code>{allocation.sessionId}</code>
+							{` · ${allocation.used.toLocaleString()} of ${allocation.window.toLocaleString()}`}
+							{/*
+							 * The raw ratio, which is what the compaction threshold
+							 * setting is expressed against. The server also offers a
+							 * 0.70→1.0 ramp over the same denominator; showing that
+							 * instead would print a number that disagrees with the
+							 * one in the setting beside it.
+							 */}
+							{` · ${Math.round(allocation.pressure * 100)}% full`}
+							{allocation.pools > 0 ? ` · ${allocation.pools} ${allocation.pools === 1 ? "pool" : "pools"}` : ""}
 						</div>
 					))}
 				</div>

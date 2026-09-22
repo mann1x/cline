@@ -205,6 +205,35 @@ message PolykvStatusResponse {
   optional bool swa_active = 19;
   optional int32 swa_cells_free = 20;
   optional int32 swa_cells_total = 21;
+  optional int32 kv_cells_used = 22;
+  // Which window the kv_* figures describe: "server" or "session".
+  //
+  // The field that stops them being misread. Under guarantees a pool owned by
+  // a session reports its headroom against the OWNER'S window rather than
+  // against the server, so calling that "KV headroom" states one session's
+  // private occupancy as the machine's free capacity -- and a full server with
+  // one idle session then reads as nearly empty.
+  optional string kv_scope = 23;
+  optional string kv_scope_owner = 24;
+  // The largest window a new session could book right now.
+  optional int32 largest_admissible = 25;
+  optional bool guaranteed = 26;
+  optional int32 pools_max_per_slot = 27;
+  optional int32 alloc_ttl_s = 28;
+  repeated PolykvAllocation allocations = 29;
+}
+
+// One session holding a guaranteed window.
+message PolykvAllocation {
+  string session_id = 1;
+  int32 window = 2;
+  int32 used = 3;
+  int32 free = 4;
+  // Raw used/window, 0..1, never a ramp. The compaction trigger: taken raw so
+  // that the number shown here is the number the user's threshold is set
+  // against.
+  double pressure = 5;
+  int32 pools = 6;
 }
 
 // List of VS Code LM models

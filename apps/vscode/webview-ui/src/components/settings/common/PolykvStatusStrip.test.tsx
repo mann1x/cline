@@ -19,6 +19,11 @@ function status(overrides: Record<string, unknown> = {}) {
 		slotsMax: 8,
 		pools: [],
 		sessions: [],
+		// A repeated proto field always decodes to an array, never to
+		// undefined. The fixture is hand-built, so it has to say so too --
+		// omitting one is how a hand-built fixture stops resembling the message
+		// it stands in for, and the component then crashes only in production.
+		allocations: [],
 		...overrides,
 	}
 }
@@ -140,5 +145,53 @@ describe("the PolyKV status strip", () => {
 		render(<PolykvStatusStrip providerId="opencoti" />)
 
 		expect(await screen.findByText(/pool #3/)).toBeInTheDocument()
+	})
+
+	// A session's window is not the server's free capacity, and saying so is
+	// wrong in the most misleading direction: a full server with one idle
+	// session would read as nearly empty.
+	it("says whose window the headroom belongs to when it is not the server's", async () => {
+		mocks.readPolykvStatus.mockResolvedValue(
+			status({ kvHeadroomPct: 12.5, kvCellsFree: 8192, kvCellsTotal: 65536, kvScope: "session", kvScopeOwner: "lead" }),
+		)
+		render(<PolykvStatusStrip providerId="opencoti" />)
+
+		expect(await screen.findByText(/window of lead/i)).toBeInTheDocument()
+		expect(screen.queryByText(/KV headroom/)).not.toBeInTheDocument()
+	})
+
+	it("calls it the server's headroom only when it is", async () => {
+		mocks.readPolykvStatus.mockResolvedValue(
+			status({ kvHeadroomPct: 62.5, kvCellsFree: 640000, kvCellsTotal: 1048576, kvScope: "server" }),
+		)
+		render(<PolykvStatusStrip providerId="opencoti" />)
+
+		expect(await screen.findByText(/62.5% KV headroom/)).toBeInTheDocument()
+		expect(screen.queryByText(/window of/i)).not.toBeInTheDocument()
+	})
+
+	// What a new session could book right now, which is the number that decides
+	// whether a conversation opens at all.
+	it("shows the largest window still admissible", async () => {
+		mocks.readPolykvStatus.mockResolvedValue(status({ largestAdmissible: 262144, guaranteed: true }))
+		render(<PolykvStatusStrip providerId="opencoti" />)
+
+		expect(await screen.findByText(/262,144 largest admissible/)).toBeInTheDocument()
+	})
+
+	// Raw pressure, shown as the percentage the compaction threshold is set
+	// against -- not the server's legacy ramp, which would disagree with the
+	// number in the setting beside it.
+	it("lists each session's window and its raw pressure", async () => {
+		mocks.readPolykvStatus.mockResolvedValue(
+			status({
+				allocations: [{ sessionId: "lead", window: 262144, used: 131072, free: 131072, pressure: 0.5, pools: 3 }],
+			}),
+		)
+		render(<PolykvStatusStrip providerId="opencoti" />)
+
+		expect(await screen.findByText(/131,072 of 262,144/)).toBeInTheDocument()
+		expect(screen.getByText(/50% full/)).toBeInTheDocument()
+		expect(screen.getByText(/3 pools/)).toBeInTheDocument()
 	})
 })
