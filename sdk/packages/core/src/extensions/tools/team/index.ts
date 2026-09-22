@@ -1,4 +1,11 @@
 export {
+	type AgentNode,
+	emptyPlacementState,
+	type Placement,
+	type PlacementState,
+	placeAgent,
+} from "./agent-placement";
+export {
 	type BackgroundDelegationControls,
 	type BackgroundDelegationRegistry,
 	type BackgroundDelegationStatus,
