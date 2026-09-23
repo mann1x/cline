@@ -3182,15 +3182,42 @@ export class AgentRuntime {
 			prepared.push(execution);
 		}
 
+		// Results are written back at their own index, so the returned array is
+		// in the order the model asked for whatever order the work finishes in.
+		// `findCompletingToolMessage` pairs by index and the transcript is read
+		// as a sequence, so anything else would reorder the record of a turn.
+		const results = new Array<AgentMessage>(prepared.length);
+
+		// A tool that bounds its own concurrency is not bounded again here.
+		// Delegation is the case: how many agents run at once is the node
+		// placement queue's answer and then the engine's, and putting them
+		// behind this pool as well ran forty requested agents eight wide on two
+		// uncapped PolyKV nodes. They start together and wait where their own
+		// gate says to. Only when parallel execution is on at all -- an
+		// explicit `sequential` still means one at a time, for everything.
+		const pooled: number[] = [];
+		const selfGated: number[] = [];
+		const parallel = this.config.maxParallelToolCalls > 1;
+		prepared.forEach((execution, index) => {
+			const tool = this.tools.get(execution.toolCall.toolName);
+			(parallel && tool?.lifecycle?.boundsOwnConcurrency === true
+				? selfGated
+				: pooled
+			).push(index);
+		});
+		const running = selfGated.map(async (index) => {
+			results[index] = await this.executePreparedTool(prepared[index]);
+		});
+
 		const bound = Math.min(
 			Math.max(1, this.config.maxParallelToolCalls),
-			prepared.length,
+			pooled.length,
 		);
 		if (bound <= 1) {
-			const results: AgentMessage[] = [];
-			for (const execution of prepared) {
-				results.push(await this.executePreparedTool(execution));
+			for (const index of pooled) {
+				results[index] = await this.executePreparedTool(prepared[index]);
 			}
+			await Promise.all(running);
 			return results;
 		}
 
@@ -3198,24 +3225,22 @@ export class AgentRuntime {
 		// number is a cap on what the endpoint, the disk and the host are asked
 		// to do at once, and a model that sends twenty calls in one message
 		// should not open twenty at once because it can.
-		//
-		// Results are written back at their own index, so the returned array is
-		// in the order the model asked for whatever order the work finishes in.
-		// `findCompletingToolMessage` pairs by index and the transcript is read
-		// as a sequence, so anything else would reorder the record of a turn.
-		const results = new Array<AgentMessage>(prepared.length);
 		let next = 0;
 		const worker = async (): Promise<void> => {
 			while (true) {
-				const index = next;
+				const slot = next;
 				next += 1;
-				if (index >= prepared.length) {
+				if (slot >= pooled.length) {
 					return;
 				}
+				const index = pooled[slot];
 				results[index] = await this.executePreparedTool(prepared[index]);
 			}
 		};
-		await Promise.all(Array.from({ length: bound }, () => worker()));
+		await Promise.all([
+			...Array.from({ length: bound }, () => worker()),
+			...running,
+		]);
 		return results;
 	}
 

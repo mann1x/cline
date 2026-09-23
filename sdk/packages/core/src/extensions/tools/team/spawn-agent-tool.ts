@@ -367,5 +367,9 @@ export function createSpawnAgentTool(
 		},
 		timeoutMs: 300000,
 		retryable: false,
+		// It gates itself -- the node lease when placed, the endpoint's
+		// slot gate when not -- so the runtime's pool of eight must not
+		// gate it again. Forty requested agents ran eight wide behind it.
+		lifecycle: { boundsOwnConcurrency: true },
 	});
 }

@@ -253,6 +253,24 @@ export interface AgentToolDefinition {
 		 * Whether a successful call to this tool completes the current run.
 		 */
 		completesRun?: boolean;
+		/**
+		 * This tool bounds its own concurrency, so the runtime's parallel
+		 * tool-call pool must not bound it a second time.
+		 *
+		 * The pool is a cap on what the disk, the terminal and the endpoint are
+		 * asked to do at once, and for a batch of reads it is the right one. A
+		 * delegation tool is different: how many of its calls may run together
+		 * is decided by the agent-node placement queue -- which holds a node
+		 * with a capacity of 1 to 1 -- and, past that, by the engine's own
+		 * admission gate. The pool of eight on top made both decorative.
+		 * Measured on pandorum 2026-09-23: the lead asked for forty agents in
+		 * one message across two uncapped PolyKV nodes, and they ran eight
+		 * wide, each starting at the millisecond another one finished.
+		 *
+		 * Only for a tool that genuinely gates itself. Set on one that does not
+		 * and a model that emits forty calls opens forty at once.
+		 */
+		boundsOwnConcurrency?: boolean;
 	};
 }
 

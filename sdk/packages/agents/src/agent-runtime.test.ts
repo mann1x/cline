@@ -5468,3 +5468,136 @@ describe("the no-tool-call nudge and ask_question", () => {
 		expect(nudges[0]).not.toContain("ask_question");
 	});
 });
+
+/**
+ * Measured on pandorum 2026-09-23: the lead asked for forty agents in one
+ * message, across two uncapped PolyKV nodes and a third capped at one. They ran
+ * eight wide, each starting at the millisecond another finished --
+ *
+ *   ib6al1 ends +42.6  ->  4lg67f starts +42.6
+ *   avzh7u ends +44.6  ->  zs1rg2 starts +44.6
+ *
+ * -- because every call in a batch went through the parallel tool-call pool,
+ * and the pool's eight sat on top of the node placement that already decides
+ * how many agents run. Delegation gates itself; the pool gating it again made
+ * the node capacities, and the engine's admission, decorative.
+ */
+describe("a tool that bounds its own concurrency", () => {
+	const batch = (toolName: string, count: number) =>
+		new ScriptedModel([
+			() => [
+				...Array.from({ length: count }, (_, index) => ({
+					type: "tool-call-delta" as const,
+					toolCallId: `${toolName}_${index}`,
+					toolName,
+					inputText: "{}",
+				})),
+				{ type: "finish" as const, reason: "tool-calls" as const },
+			],
+			() => [
+				{ type: "text-delta" as const, text: "done" },
+				{ type: "finish" as const, reason: "stop" as const },
+			],
+		]);
+
+	const tracked = (
+		name: string,
+		live: { now: number; peak: number },
+		selfGated: boolean,
+	): AgentTool => ({
+		name,
+		description: name,
+		inputSchema: { type: "object" },
+		...(selfGated ? { lifecycle: { boundsOwnConcurrency: true } } : {}),
+		async execute() {
+			live.now += 1;
+			live.peak = Math.max(live.peak, live.now);
+			await new Promise((resolve) => setTimeout(resolve, 5));
+			live.now -= 1;
+			return { ok: true };
+		},
+	});
+
+	it("starts all forty rather than eight", async () => {
+		const live = { now: 0, peak: 0 };
+		const runtime = new AgentRuntime({
+			model: batch("spawn_agent", 40),
+			tools: [tracked("spawn_agent", live, true)],
+		});
+
+		await runtime.run("Launch a swarm of forty");
+
+		expect(live.peak).toBe(40);
+	});
+
+	// The pool is still right for everything it was written for: a batch of
+	// reads must not open forty file handles because the model sent forty.
+	it("leaves every other tool behind the pool", async () => {
+		const live = { now: 0, peak: 0 };
+		const runtime = new AgentRuntime({
+			model: batch("read_files", 40),
+			tools: [tracked("read_files", live, false)],
+		});
+
+		await runtime.run("Read everything");
+
+		expect(live.peak).toBe(8);
+	});
+
+	// An explicit sequential request is one at a time for everything. A tool
+	// that gates itself is not asking to override the user's choice.
+	it("is still one at a time under explicit sequential execution", async () => {
+		const live = { now: 0, peak: 0 };
+		const runtime = new AgentRuntime({
+			model: batch("spawn_agent", 5),
+			tools: [tracked("spawn_agent", live, true)],
+			toolExecution: "sequential",
+		});
+
+		await runtime.run("One at a time");
+
+		expect(live.peak).toBe(1);
+	});
+
+	// Mixed batch: the agents start together, the reads keep their bound, and
+	// the transcript is still in the order the model asked for.
+	it("keeps the transcript in the order the model asked", async () => {
+		const agents = { now: 0, peak: 0 };
+		const reads = { now: 0, peak: 0 };
+		const model = new ScriptedModel([
+			() => [
+				...Array.from({ length: 12 }, (_, index) => ({
+					type: "tool-call-delta" as const,
+					toolCallId: `call_${index}`,
+					toolName: index % 2 === 0 ? "spawn_agent" : "read_files",
+					inputText: "{}",
+				})),
+				{ type: "finish" as const, reason: "tool-calls" as const },
+			],
+			() => [
+				{ type: "text-delta" as const, text: "done" },
+				{ type: "finish" as const, reason: "stop" as const },
+			],
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			tools: [
+				tracked("spawn_agent", agents, true),
+				tracked("read_files", reads, false),
+			],
+			maxParallelToolCalls: 2,
+		});
+
+		const result = await runtime.run("Mixed");
+
+		expect(agents.peak).toBe(6);
+		expect(reads.peak).toBeLessThanOrEqual(2);
+		const order = result.messages
+			.filter((message) => message.role === "tool")
+			.flatMap((message) => message.content)
+			.map((part) => (part as { toolCallId?: string }).toolCallId);
+		expect(order).toEqual(
+			Array.from({ length: 12 }, (_, index) => `call_${index}`),
+		);
+	});
+});
