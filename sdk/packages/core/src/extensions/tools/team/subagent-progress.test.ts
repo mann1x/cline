@@ -1,6 +1,9 @@
 import type { AgentEvent } from "@cline/shared";
 import { describe, expect, it, vi } from "vitest";
-import { createSubagentProgress } from "./subagent-progress";
+import {
+	createSubagentProgress,
+	SUBAGENT_OUTPUT_TAIL_CHARS,
+} from "./subagent-progress";
 
 const toolStart = (toolName: string): AgentEvent =>
 	({ type: "content_start", contentType: "tool", toolName }) as AgentEvent;
@@ -38,15 +41,11 @@ describe("reporting what a sub-agent is doing", () => {
 
 	// An agent between tools is thinking, not still running the last one it
 	// finished, so the end of a tool says nothing new.
-	it("ignores everything that is not a tool starting", () => {
+	// Text is reported as output (below), never as a tool call.
+	it("counts only a tool starting as a tool call", () => {
 		const emitUpdate = vi.fn();
 		const progress = createSubagentProgress(emitUpdate);
 
-		progress.observe({
-			type: "content_start",
-			contentType: "text",
-			text: "hello",
-		} as AgentEvent);
 		progress.observe({
 			type: "content_end",
 			contentType: "tool",
@@ -80,5 +79,77 @@ describe("reporting what a sub-agent is doing", () => {
 
 		expect(() => progress.observe(toolStart("editor"))).not.toThrow();
 		expect(forward).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("the output tail", () => {
+	const text = (chunk: string) =>
+		({ type: "content_start", contentType: "text", text: chunk }) as never;
+	const reasoning = (chunk: string) =>
+		({
+			type: "content_start",
+			contentType: "reasoning",
+			reasoning: chunk,
+		}) as never;
+
+	// What an agent is writing is what tells a stuck one from a working one.
+	it("reports what the agent writes, at most every two seconds", () => {
+		const updates: Array<Record<string, unknown>> = [];
+		let clock = 10_000;
+		const progress = createSubagentProgress(
+			(update) => updates.push(update as Record<string, unknown>),
+			undefined,
+			() => clock,
+		);
+		progress.observe(text("hello "));
+		progress.observe(text("world"));
+		expect(updates).toEqual([
+			{ latestOutput: "hello", latestOutputKind: "text" },
+		]);
+		clock += 2_000;
+		progress.observe(text("!"));
+		expect(updates.at(-1)).toEqual({
+			latestOutput: "hello world!",
+			latestOutputKind: "text",
+		});
+	});
+
+	it("says it is thinking when it has written nothing yet", () => {
+		const updates: Array<Record<string, unknown>> = [];
+		const progress = createSubagentProgress(
+			(update) => updates.push(update as Record<string, unknown>),
+			undefined,
+			() => 0,
+		);
+		progress.observe(reasoning("the brace on line 90"));
+		expect(updates[0]).toEqual({
+			latestOutput: "the brace on line 90",
+			latestOutputKind: "reasoning",
+		});
+	});
+
+	it("keeps only the tail, and starts over at each tool call", () => {
+		const updates: Array<Record<string, unknown>> = [];
+		let clock = 0;
+		const progress = createSubagentProgress(
+			(update) => updates.push(update as Record<string, unknown>),
+			undefined,
+			() => clock,
+		);
+		progress.observe(text("x".repeat(SUBAGENT_OUTPUT_TAIL_CHARS + 50)));
+		expect(String(updates[0]?.latestOutput)).toHaveLength(
+			SUBAGENT_OUTPUT_TAIL_CHARS,
+		);
+		progress.observe({
+			type: "content_start",
+			contentType: "tool",
+			toolName: "read_files",
+		} as never);
+		clock += 5_000;
+		progress.observe(text("next step"));
+		expect(updates.at(-1)).toEqual({
+			latestOutput: "next step",
+			latestOutputKind: "text",
+		});
 	});
 });

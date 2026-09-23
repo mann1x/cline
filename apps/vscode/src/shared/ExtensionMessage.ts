@@ -456,6 +456,12 @@ export interface SubagentStatusItem {
 	contextUsagePercentage: number
 	latestToolCall?: string
 	/**
+	 * The tail of what the agent is writing right now, or of its reasoning when
+	 * it has written nothing yet. `latestOutputKind` says which.
+	 */
+	latestOutput?: string
+	latestOutputKind?: "text" | "reasoning"
+	/**
 	 * How to stop this agent, while it is running.
 	 *
 	 * Sent by the spawn tool that registered it rather than rebuilt here: a

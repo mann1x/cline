@@ -2238,6 +2238,9 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 						if (typeof updateData.contextUsagePercentage === "number")
 							entry.contextUsagePercentage = updateData.contextUsagePercentage
 						if (typeof updateData.latestToolCall === "string") entry.latestToolCall = updateData.latestToolCall
+						if (typeof updateData.latestOutput === "string") entry.latestOutput = updateData.latestOutput
+						if (updateData.latestOutputKind === "text" || updateData.latestOutputKind === "reasoning")
+							entry.latestOutputKind = updateData.latestOutputKind
 						// How the row stops this agent. Sent by the spawn tool
 						// as soon as it registers, so the button exists before
 						// the agent's first tool call rather than after it.

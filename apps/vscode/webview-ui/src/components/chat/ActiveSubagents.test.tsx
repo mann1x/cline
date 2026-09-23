@@ -85,18 +85,13 @@ describe("the working-agents strip", () => {
 		expect(container).toBeEmptyDOMElement()
 	})
 
-	it("names each agent, what it is doing, and where it is doing it", () => {
+	// One line of tags, not a row per agent: fifty rows buried the chat.
+	it("lists every agent as a tag with its name", () => {
 		render(
 			<ActiveSubagents
 				messages={[
 					statusMessage([
-						item({
-							index: 1,
-							agentName: "js-syntactic",
-							latestToolCall: "editor",
-							nodeId: "node-mucvow61",
-							nodeLabel: "Node3",
-						}),
+						item({ index: 1, agentName: "js-syntactic", latestToolCall: "editor" }),
 						item({ index: 2, agentName: "html-structure-checker", latestToolCall: "read_files" }),
 					]),
 				]}
@@ -104,43 +99,64 @@ describe("the working-agents strip", () => {
 		)
 
 		expect(screen.getByText("2 agents working")).toBeInTheDocument()
-		expect(screen.getByText("js-syntactic")).toBeInTheDocument()
-		expect(screen.getByText("Node3")).toBeInTheDocument()
-		expect(screen.getByText("editor")).toBeInTheDocument()
-		expect(screen.getByText("read_files")).toBeInTheDocument()
+		expect(screen.getByRole("button", { name: /js-syntactic/ })).toBeInTheDocument()
+		expect(screen.getByRole("button", { name: /html-structure-checker/ })).toBeInTheDocument()
+		// Details are behind the name, not on the tag.
+		expect(screen.queryByText("editor")).not.toBeInTheDocument()
 	})
 
 	// A queued agent and a working one are the distinction the strip exists to
-	// make -- the reported run had three agents where only one was ever
-	// running.
+	// make: a clock while it waits for a slot, the spinner once it runs.
+	it("shows a clock for a queued agent and a spinner for a running one", () => {
+		render(
+			<ActiveSubagents
+				messages={[
+					statusMessage([
+						item({ index: 1, agentName: "busy" }),
+						item({ index: 2, agentName: "waiting", status: "pending" }),
+					]),
+				]}
+			/>,
+		)
+
+		expect(screen.getByRole("button", { name: "busy (running)" })).toBeInTheDocument()
+		expect(screen.getByRole("button", { name: "waiting (queued)" })).toBeInTheDocument()
+		expect(screen.getByLabelText("queued")).toBeInTheDocument()
+		expect(screen.getByLabelText("running")).toBeInTheDocument()
+		expect(screen.getByText(/1 running, 1 queued/)).toBeInTheDocument()
+	})
+
 	// Reported the first time the badge was seen: "'on node-mucuczcm' what is
 	// this? ... I expect to see Node1 or Node2". The id is a storage key the
 	// settings panel never shows.
-	it("names the node the way the settings panel does", () => {
+	it("names the node the way the settings panel does, in the agent's box", () => {
 		render(
 			<ActiveSubagents
 				messages={[statusMessage([item({ index: 1, agentName: "js-syntactic", nodeId: "primary", nodeLabel: "Node1" })])]}
 			/>,
 		)
 
-		expect(screen.getByText("Node1")).toBeInTheDocument()
-		expect(screen.queryByText("primary")).not.toBeInTheDocument()
+		fireEvent.click(screen.getByRole("button", { name: /js-syntactic/ }))
+		expect(screen.getByText("on Node1")).toBeInTheDocument()
+		expect(screen.queryByText(/primary/)).not.toBeInTheDocument()
 	})
 
 	// A run recorded before nodes were named still has to say something.
 	it("falls back to the id when the run carries no name", () => {
 		render(<ActiveSubagents messages={[statusMessage([item({ index: 1, agentName: "old", nodeId: "node-mucuczcm" })])]} />)
 
-		expect(screen.getByText("node-mucuczcm")).toBeInTheDocument()
+		fireEvent.click(screen.getByRole("button", { name: /old/ }))
+		expect(screen.getByText("on node-mucuczcm")).toBeInTheDocument()
 	})
 
 	it("says an agent is queued rather than pretending it is thinking", () => {
 		render(<ActiveSubagents messages={[statusMessage([item({ index: 1, agentName: "waiting", status: "pending" })])]} />)
 
+		fireEvent.click(screen.getByRole("button", { name: /waiting/ }))
 		expect(screen.getByText("queued")).toBeInTheDocument()
 	})
 
-	it("opens the agent's task when it is clicked, and closes it again", () => {
+	it("opens the agent's box when its name is clicked, and closes it again", () => {
 		render(
 			<ActiveSubagents
 				messages={[
@@ -160,14 +176,46 @@ describe("the working-agents strip", () => {
 
 		fireEvent.click(screen.getByRole("button", { name: /js-syntactic/ }))
 		expect(screen.getByText("fix the mangled braces on line 90")).toBeInTheDocument()
+		expect(screen.getByText("editor")).toBeInTheDocument()
 
 		fireEvent.click(screen.getByRole("button", { name: /js-syntactic/ }))
 		expect(screen.queryByText("fix the mangled braces on line 90")).not.toBeInTheDocument()
 	})
 
+	// What it is writing is what tells a stuck agent from a working one.
+	it("shows the last lines of the agent's output in its box", () => {
+		const output = ["line 1", "line 2", "line 3", "line 4", "line 5", "line 6", "line 7", "line 8"].join("\n")
+		render(
+			<ActiveSubagents
+				messages={[statusMessage([item({ index: 1, agentName: "js", latestOutput: output, latestOutputKind: "text" })])]}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: /js/ }))
+		expect(screen.getByText("Output")).toBeInTheDocument()
+		const tail = screen.getByText(/line 8/)
+		expect(tail.textContent).toContain("line 3")
+		expect(tail.textContent).not.toContain("line 2")
+	})
+
+	it("labels reasoning as thinking, not as output", () => {
+		render(
+			<ActiveSubagents
+				messages={[
+					statusMessage([
+						item({ index: 1, agentName: "js", latestOutput: "considering the brace", latestOutputKind: "reasoning" }),
+					]),
+				]}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: /js/ }))
+		expect(screen.getByText("Thinking")).toBeInTheDocument()
+	})
+
 	// The panel outliving the agent it describes would claim work is still
 	// going on.
-	it("closes the panel when its agent finishes", () => {
+	it("closes the box when its agent finishes", () => {
 		const running = [
 			statusMessage([item({ index: 1, agentName: "js-syntactic", prompt: "fix the braces" })], 100),
 		] as ClineMessage[]
@@ -203,7 +251,9 @@ describe("stopping a running agent", () => {
 		mocks.cancelSubagent.mockResolvedValue(undefined)
 	})
 
-	it("stops the agent it is next to, by the id that agent announced", () => {
+	// Inside the agent's box, below its name: the stop is a decision about one
+	// agent, taken after looking at it.
+	it("stops the agent whose box is open, by the id that agent announced", () => {
 		render(
 			<ActiveSubagents
 				messages={[
@@ -215,6 +265,8 @@ describe("stopping a running agent", () => {
 			/>,
 		)
 
+		expect(screen.queryByRole("button", { name: /^Stop / })).not.toBeInTheDocument()
+		fireEvent.click(screen.getByRole("button", { name: /^html/ }))
 		fireEvent.click(screen.getByRole("button", { name: "Stop html" }))
 
 		expect(mocks.cancelSubagent).toHaveBeenCalledTimes(1)
@@ -222,11 +274,12 @@ describe("stopping a running agent", () => {
 	})
 
 	// An abort is a request: the run may be inside a model call that has to
-	// come back first, so the row stays. Without this the button looks like it
-	// did nothing and invites a second press.
+	// come back first, so the agent stays. Without this the button looks like
+	// it did nothing and invites a second press.
 	it("will not be pressed twice", () => {
 		render(<ActiveSubagents messages={[statusMessage([item({ index: 1, agentName: "js", cancelId: "s1::c" })])]} />)
 
+		fireEvent.click(screen.getByRole("button", { name: /^js/ }))
 		const button = screen.getByRole("button", { name: "Stop js" })
 		fireEvent.click(button)
 		fireEvent.click(button)
@@ -239,19 +292,7 @@ describe("stopping a running agent", () => {
 	it("offers no stop it cannot send", () => {
 		render(<ActiveSubagents messages={[statusMessage([item({ index: 1, agentName: "old" })])]} />)
 
+		fireEvent.click(screen.getByRole("button", { name: /old/ }))
 		expect(screen.queryByRole("button", { name: /^Stop / })).not.toBeInTheDocument()
-	})
-
-	// Opening the agent's task and stopping it are different intents, and the
-	// stop sits inside the row that opens it.
-	it("does not open the agent's panel when it is stopped", () => {
-		render(
-			<ActiveSubagents
-				messages={[statusMessage([item({ index: 1, agentName: "js", prompt: "fix it", cancelId: "s1::c" })])]}
-			/>,
-		)
-
-		fireEvent.click(screen.getByRole("button", { name: "Stop js" }))
-		expect(screen.queryByText("fix it")).not.toBeInTheDocument()
 	})
 })

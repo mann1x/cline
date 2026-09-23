@@ -24,15 +24,68 @@ export interface SubagentProgress {
 	observe(event: AgentEvent): void;
 }
 
+/** How much of an agent's latest output the UI is given. */
+export const SUBAGENT_OUTPUT_TAIL_CHARS = 400;
+
+/**
+ * How often output progress is reported, at most.
+ *
+ * Deltas arrive per token; fifty agents reporting each one would be thousands
+ * of chat updates a second for a tail nobody reads that fast.
+ */
+export const SUBAGENT_OUTPUT_REPORT_MS = 2_000;
+
 export function createSubagentProgress(
 	emitUpdate: ((update: unknown) => void) | undefined,
 	forward?: (event: AgentEvent) => void,
+	now: () => number = Date.now,
 ): SubagentProgress {
 	let toolCalls = 0;
+	// The tail of what it is writing, and separately of what it is thinking:
+	// an agent deep in reasoning has written nothing, and "nothing" is not what
+	// it is doing.
+	let text = "";
+	let reasoning = "";
+	let lastReport = Number.NEGATIVE_INFINITY;
+	const tail = (value: string) =>
+		value.length > SUBAGENT_OUTPUT_TAIL_CHARS
+			? value.slice(value.length - SUBAGENT_OUTPUT_TAIL_CHARS)
+			: value;
+	const reportOutput = (force: boolean) => {
+		const at = now();
+		if (!force && at - lastReport < SUBAGENT_OUTPUT_REPORT_MS) {
+			return;
+		}
+		lastReport = at;
+		const latestOutput = text.trim() ? text : reasoning;
+		if (latestOutput.trim()) {
+			emitUpdate?.({
+				latestOutput: latestOutput.trim(),
+				latestOutputKind: text.trim() ? "text" : "reasoning",
+			});
+		}
+	};
 	return {
 		observe(event: AgentEvent): void {
 			forward?.(event);
 			if (!emitUpdate) {
+				return;
+			}
+			if (event.type === "content_start" && event.contentType === "text") {
+				text = tail(text + (event.text ?? ""));
+				reportOutput(false);
+				return;
+			}
+			if (event.type === "content_start" && event.contentType === "reasoning") {
+				reasoning = tail(reasoning + (event.reasoning ?? event.text ?? ""));
+				reportOutput(false);
+				return;
+			}
+			if (
+				event.type === "content_end" &&
+				(event.contentType === "text" || event.contentType === "reasoning")
+			) {
+				reportOutput(true);
 				return;
 			}
 			// Only the start of a tool. `content_end` would report what it has
@@ -46,6 +99,9 @@ export function createSubagentProgress(
 				return;
 			}
 			toolCalls += 1;
+			// A new step: what it wrote before is the previous step's.
+			text = "";
+			reasoning = "";
 			emitUpdate({ latestToolCall: event.toolName, toolCalls });
 		},
 	};
