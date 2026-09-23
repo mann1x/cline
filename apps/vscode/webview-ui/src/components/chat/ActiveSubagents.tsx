@@ -2,6 +2,8 @@ import type { ClineMessage, ClineSaySubagentStatus, SubagentStatusItem } from "@
 import { StringRequest } from "@shared/proto/cline/common"
 import { ClockIcon, LoaderCircleIcon, SquareIcon, XIcon } from "lucide-react"
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { Button } from "@/components/ui/button"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { TaskServiceClient } from "@/services/grpc-client"
 import { subagentIdentity } from "./subagentIdentity"
 
@@ -201,6 +203,17 @@ export function ActiveSubagents({ messages }: { messages: ClineMessage[] }) {
 		})
 	}, [])
 
+	// The safety stop: every agent that can be stopped, after a confirmation.
+	// A round of 75 has no other way out short of cancelling the task.
+	const [confirmingStopAll, setConfirmingStopAll] = useState(false)
+	const stoppable = agents.filter((agent) => agent.cancelId !== undefined && !stopping.has(agent.cancelId))
+	const stopAll = useCallback(() => {
+		setConfirmingStopAll(false)
+		for (const agent of stoppable) {
+			stop(agent.cancelId as string)
+		}
+	}, [stoppable, stop])
+
 	if (agents.length === 0) {
 		return null
 	}
@@ -223,6 +236,17 @@ export function ActiveSubagents({ messages }: { messages: ClineMessage[] }) {
 							</span>
 						)}
 					</span>
+					{stoppable.length > 0 && (
+						<button
+							aria-label="Stop all agents"
+							className="mr-1 flex shrink-0 cursor-pointer items-center gap-1 rounded-xs border border-editor-group-border bg-transparent px-1.5 py-[1px] text-[10px] text-foreground opacity-80 hover:opacity-100"
+							onClick={() => setConfirmingStopAll(true)}
+							title="Stop every running and queued agent"
+							type="button">
+							<SquareIcon className="size-2.5 fill-current" />
+							<span>Stop all</span>
+						</button>
+					)}
 					{agents.map((agent) => {
 						const identity = subagentIdentity(agent.index, agent.agentName)
 						const isOpen = agent.index === openIndex
@@ -243,6 +267,28 @@ export function ActiveSubagents({ messages }: { messages: ClineMessage[] }) {
 						)
 					})}
 				</div>
+				<Dialog onOpenChange={setConfirmingStopAll} open={confirmingStopAll}>
+					<DialogContent>
+						<DialogHeader>
+							<DialogTitle className="text-sm">Stop all agents?</DialogTitle>
+							<DialogDescription className="text-xs">
+								{stoppable.length === 1
+									? "The agent that is running or queued will be stopped."
+									: `All ${stoppable.length} agents that are running or queued will be stopped.`}{" "}
+								Work they have not reported yet is lost. The lead conversation keeps going and gets their results
+								as stopped.
+							</DialogDescription>
+						</DialogHeader>
+						<DialogFooter className="gap-2">
+							<Button onClick={() => setConfirmingStopAll(false)} size="sm" variant="secondary">
+								Keep running
+							</Button>
+							<Button onClick={stopAll} size="sm" variant="danger">
+								Stop {stoppable.length === 1 ? "agent" : `${stoppable.length} agents`}
+							</Button>
+						</DialogFooter>
+					</DialogContent>
+				</Dialog>
 				{open && (
 					<AgentDetail
 						agent={open}

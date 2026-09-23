@@ -478,3 +478,94 @@ describe("a swarm that grows while it runs", () => {
 		expect(result.workers).toBe(3);
 	});
 });
+
+describe("spawn_swarm worker rows", () => {
+	const rowContext = (updates: unknown[]) =>
+		({
+			agentId: "lead",
+			sessionId: "s1",
+			toolCallId: "call-1",
+			emitUpdate: (update: unknown) => updates.push(update),
+		}) as never;
+
+	it("reports each worker on its own row: queued, progress, and how it ended", async () => {
+		const updates: unknown[] = [];
+		const tool = createSpawnSwarmTool({
+			pools: stubPools({ snapshotFails: true }).source,
+			runWorker: async ({ task, emitUpdate }) => {
+				emitUpdate?.({ toolCalls: 1 });
+				return task === "bad"
+					? agentResult("admission rejected: context allocation exhausted", {
+							finishReason: "error",
+						})
+					: {
+							...agentResult('```json\n{"done":["ok"]}\n```'),
+							placed: { nodeId: "n2", nodeLabel: "Node2" },
+						};
+			},
+		});
+		const output = (await tool.execute(
+			{
+				systemPrompt: "s",
+				tasks: [
+					{ name: "a", task: "good" },
+					{ name: "b", task: "bad" },
+				],
+			},
+			rowContext(updates),
+		)) as { results?: Array<Record<string, unknown>> };
+
+		expect(updates).toContainEqual({
+			cancelId: "s1::call-1#0",
+			queued: true,
+			member: 0,
+		});
+		expect(updates).toContainEqual({ toolCalls: 1, member: 1 });
+		expect(output.results?.[0]).toMatchObject({
+			name: "a",
+			nodeLabel: "Node2",
+		});
+		expect(output.results?.[0]?.error).toBeUndefined();
+		expect(output.results?.[1]).toMatchObject({
+			name: "b",
+			error: "admission rejected: context allocation exhausted",
+		});
+	});
+
+	it("names a worker that never started as never started", async () => {
+		const tool = createSpawnSwarmTool({
+			pools: {
+				...stubPools({ snapshotFails: true }).source,
+				admit: async () => false,
+			},
+			runWorker: async () => agentResult("unused"),
+		});
+		const output = (await tool.execute(
+			{ systemPrompt: "s", tasks: [{ name: "a", task: "t" }] },
+			rowContext([]),
+		)) as { results?: Array<Record<string, unknown>>; digest: string };
+		expect(output.results?.[0]?.error).toMatch(/never started/);
+		expect(output.digest).toMatch(/never started/);
+	});
+
+	it("does not start a worker whose row was stopped while it waited", async () => {
+		const run = vi.fn(async () => agentResult("x"));
+		const controller = new AbortController();
+		controller.abort();
+		const tool = createSpawnSwarmTool({
+			pools: stubPools({ snapshotFails: true }).source,
+			runWorker: run,
+		});
+		const output = (await tool.execute(
+			{ systemPrompt: "s", tasks: [{ name: "a", task: "t" }] },
+			{
+				agentId: "lead",
+				sessionId: "s1",
+				toolCallId: "call-1",
+				signal: controller.signal,
+			} as never,
+		)) as { results?: Array<Record<string, unknown>> };
+		expect(run).not.toHaveBeenCalled();
+		expect(output.results?.[0]?.error).toBe("stopped before it started");
+	});
+});

@@ -55,7 +55,8 @@ export interface PlacementLease {
 	/**
 	 * The engine refused this agent before admitting it. The node takes no
 	 * one else until one of its agents finishes or `holdMs` passes, whichever
-	 * is first. Frees the slot, like {@link release}.
+	 * is first -- capped or not: a count says nothing about what the engine
+	 * will take. Frees the slot, like {@link release}.
 	 */
 	refused(holdMs?: number): void;
 }
@@ -70,7 +71,7 @@ export interface AcquireOptions {
 }
 
 /**
- * How long a refused uncapped node is held when the engine gave no time.
+ * How long a refused node is held when the engine gave no time.
  *
  * Short: a refusal describes this moment, and it usually ends when one of the
  * node's own agents finishes, which reopens it at once. This is only the
@@ -206,11 +207,17 @@ export function createAgentPlacementQueue(
 	// said as a capacity so `placeAgent`'s tiers and round-robin still apply.
 	const view = (): AgentNode[] =>
 		nodes.map((node) => {
-			if (!isPaced(node)) {
-				return node;
-			}
 			const running = occupancy.get(node.id) ?? 0;
 			const held = (heldUntil.get(node.id) ?? 0) > now();
+			if (!isPaced(node)) {
+				// A capped node that just refused has room by its count and
+				// none by the engine's word. Read by the count, the refused
+				// agent went straight back to it while the queue never looked
+				// at another node.
+				return held
+					? { ...node, capacity: Math.min(node.capacity, running) }
+					: node;
+			}
 			const pending = (unadmitted.get(node.id) ?? 0) > 0;
 			return {
 				...node,
@@ -282,10 +289,8 @@ export function createAgentPlacementQueue(
 				released = true;
 				settle();
 				occupancy.set(nodeId, Math.max(0, (occupancy.get(nodeId) ?? 0) - 1));
-				if (paced) {
-					heldUntil.set(nodeId, now() + holdMs);
-					schedule(drain, holdMs);
-				}
+				heldUntil.set(nodeId, now() + holdMs);
+				schedule(drain, holdMs);
 				drain();
 			},
 		};

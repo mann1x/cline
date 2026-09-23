@@ -101,6 +101,16 @@ export function isRefusedSpawn(outcome: unknown): boolean {
 	);
 }
 
+/** What the engine said when it refused, for a person to read. */
+export function refusalReason(outcome: unknown): string {
+	const result = outcome as Partial<AgentResult> | undefined;
+	const text =
+		result && typeof result === "object" && typeof result.text === "string"
+			? result.text
+			: messageChain(outcome)[0];
+	return (text ?? "no reason given").trim().slice(0, 300);
+}
+
 /** An event that shows the engine is generating for this agent. */
 export function isAdmissionEvent(event: AgentEvent): boolean {
 	return event.type === "content_start";
@@ -165,6 +175,13 @@ export async function runPlacedAgent(
 				input.logger?.log(
 					`[Agents] ${where} refused ${input.label} before starting it; back to the front of the queue (refusal ${refusals})`,
 				);
+				// On the agent's row as well as in the log: a refused agent
+				// otherwise looks exactly like one that is working, and the
+				// only place the engine's reason appeared was a log file.
+				input.emitUpdate?.({
+					latestOutput: `${where} refused it (refusal ${refusals} of ${MAX_REFUSED_REQUEUES}): ${refusalReason(failure)}`,
+					latestOutputKind: "text",
+				});
 				await input.beforeRetry?.().catch(() => undefined);
 				front = true;
 				continue;

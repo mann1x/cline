@@ -265,7 +265,8 @@ describe("stopping a running agent", () => {
 			/>,
 		)
 
-		expect(screen.queryByRole("button", { name: /^Stop / })).not.toBeInTheDocument()
+		// The strip-wide "Stop all agents" is there; no single agent's stop is.
+		expect(screen.queryByRole("button", { name: /^Stop (?!all agents)/ })).not.toBeInTheDocument()
 		fireEvent.click(screen.getByRole("button", { name: /^html/ }))
 		fireEvent.click(screen.getByRole("button", { name: "Stop html" }))
 
@@ -293,7 +294,8 @@ describe("stopping a running agent", () => {
 		render(<ActiveSubagents messages={[statusMessage([item({ index: 1, agentName: "old" })])]} />)
 
 		fireEvent.click(screen.getByRole("button", { name: /old/ }))
-		expect(screen.queryByRole("button", { name: /^Stop / })).not.toBeInTheDocument()
+		// The strip-wide "Stop all agents" is there; no single agent's stop is.
+		expect(screen.queryByRole("button", { name: /^Stop (?!all agents)/ })).not.toBeInTheDocument()
 	})
 })
 
@@ -343,5 +345,39 @@ describe("the agent's box, first row", () => {
 		)
 		fireEvent.click(screen.getByRole("button", { name: /^later/ }))
 		expect(screen.queryByText(/tok\/s/)).not.toBeInTheDocument()
+	})
+})
+
+describe("stopping every agent at once", () => {
+	beforeEach(() => {
+		mocks.cancelSubagent.mockReset()
+		mocks.cancelSubagent.mockResolvedValue({})
+	})
+
+	const round = () =>
+		statusMessage([
+			item({ index: 1, cancelId: "s::c#0" }),
+			item({ index: 2, cancelId: "s::c#1", status: "pending" }),
+			item({ index: 3 }),
+		])
+
+	it("asks first, and stops nothing when the user keeps them running", () => {
+		render(<ActiveSubagents messages={[round()]} />)
+		fireEvent.click(screen.getByRole("button", { name: "Stop all agents" }))
+		expect(screen.getByText("Stop all agents?")).toBeTruthy()
+		fireEvent.click(screen.getByRole("button", { name: "Keep running" }))
+		expect(mocks.cancelSubagent).not.toHaveBeenCalled()
+	})
+
+	it("stops every running and queued agent that can be stopped once confirmed", () => {
+		render(<ActiveSubagents messages={[round()]} />)
+		fireEvent.click(screen.getByRole("button", { name: "Stop all agents" }))
+		fireEvent.click(screen.getByRole("button", { name: "Stop 2 agents" }))
+		expect(mocks.cancelSubagent.mock.calls.map(([request]) => request.value)).toEqual(["s::c#0", "s::c#1"])
+	})
+
+	it("offers no stop-all when nothing can be stopped", () => {
+		render(<ActiveSubagents messages={[statusMessage([item({ index: 1 })])]} />)
+		expect(screen.queryByRole("button", { name: "Stop all agents" })).toBeNull()
 	})
 })

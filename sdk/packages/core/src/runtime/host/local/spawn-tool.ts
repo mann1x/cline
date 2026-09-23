@@ -1,6 +1,7 @@
 import { clearPolykvSession, setPolykvSession } from "@cline/llms";
 import type { AgentEvent, AgentTool } from "@cline/shared";
 import {
+	isPolykvProvider,
 	readPolykvCapacity,
 	releasePolykvPool,
 	snapshotPolykvSession,
@@ -29,10 +30,13 @@ import {
 } from "../../../extensions/tools/team/placed-run";
 import { retryWhileSessionFull } from "../../../extensions/tools/team/session-window-retry";
 import type { SpawnToolOptions } from "../../../extensions/tools/team/spawn-agent-tool";
+import type { SwarmWorkerResult } from "../../../extensions/tools/team/spawn-swarm-tool";
 import {
 	createSpawnSwarmTool,
 	SWARM_REDUCER_PROMPT,
 } from "../../../extensions/tools/team/spawn-swarm-tool";
+import { buildSubagentLayout } from "../../../extensions/tools/team/subagent-layout";
+import { createSubagentProgress } from "../../../extensions/tools/team/subagent-progress";
 import { buildTelemetryAgentIdentity } from "../../../services/agent-events";
 import { filterDisabledTools } from "../../../services/global-settings";
 import {
@@ -232,6 +236,9 @@ export function createSessionSpawnTool(
  * worker therefore gets an id of its own, registered against the shared pool so
  * the vendor sends `pool_id` with it, and cleared when the worker finishes.
  */
+/** Tools a swarm worker does not get; see `runOnPool`. */
+const SWARM_WORKER_EXCLUDED_TOOLS = new Set(["ask_question"]);
+
 export function createSessionSwarmTool(
 	deps: SpawnToolDeps,
 	config: CoreSessionConfig,
@@ -319,9 +326,15 @@ export function createSessionSwarmTool(
 		task: string;
 		systemPrompt: string;
 		poolId?: string;
-	}) => {
+		emitUpdate?: (update: unknown) => void;
+		signal?: AbortSignal;
+	}): Promise<SwarmWorkerResult> => {
 		const base = configProvider();
 		const workerSessionId = `${rootSessionId}:swarm:${request.name}:${Date.now().toString(36)}`;
+		// No questions to the user: a worker's transcript is discarded and
+		// nobody is watching it, so a question from one blocked the round on a
+		// prompt the user could not place -- measured on pandorum, a worker
+		// asked, and the lead then sat "generating" for as long as it waited.
 		const tools: AgentTool[] = config.enableTools
 			? filterDisabledTools(
 					createBuiltinTools({
@@ -330,8 +343,13 @@ export function createSessionSwarmTool(
 						...ToolPresets[resolveToolPresetName({ mode: config.mode })],
 						executors: toolExecutors,
 					}),
-				)
+				).filter((tool) => !SWARM_WORKER_EXCLUDED_TOOLS.has(tool.name))
 			: [];
+		// The worker's row: what it is running and writing, as a lone
+		// `spawn_agent` reports it.
+		const progress = createSubagentProgress(request.emitUpdate, (event) =>
+			lifecycle.onSubAgentEvent?.(event),
+		);
 		// Built on the connection it runs on: a node decides the worker's
 		// connection, so with nodes this runs once per placement.
 		const attempt = async (
@@ -348,7 +366,29 @@ export function createSessionSwarmTool(
 				workerConfig.getRuntimeConfig(),
 			);
 			clearPolykvSession(workerSessionId);
-			if (request.poolId && onLeadEndpoint) {
+			const attached = Boolean(request.poolId && onLeadEndpoint);
+			// With no lead pool to attach to, a worker on a PolyKV node joins
+			// that node's pool tree the way a `spawn_agent` worker does: the
+			// vendor books one owner window for the group and charges every
+			// worker to it. Without it each worker was admitted as a session of
+			// its own at the full per-session window -- 262,144 cells apiece on
+			// a 1M server, four at a time, and the fifth refused 120 times.
+			const connection = workerConfig.getConnectionConfig();
+			const pooled =
+				!attached &&
+				isPolykvProvider({
+					providerId: connection.providerId,
+					baseUrl: connection.baseUrl,
+					polykv: (connection.providerConfig as { polykv?: never } | undefined)
+						?.polykv,
+				});
+			const layout = await buildSubagentLayout({
+				instructions: request.systemPrompt,
+				task: request.task,
+				pooled,
+				cwd: workerConfig.getRuntimeConfig().cwd,
+			});
+			if (attached && request.poolId) {
 				// The vendor looks the live pool up under this key, so this is
 				// what makes the agent attach to the lead's snapshot rather than
 				// prefill the whole prompt for itself.
@@ -359,19 +399,32 @@ export function createSessionSwarmTool(
 			}
 			const worker = createDelegatedAgent({
 				kind: "subagent",
-				prompt: request.systemPrompt,
+				prompt: layout.systemPrompt,
+				// The worker's engine session, for its compaction as well as its
+				// requests. Without it the compaction pipeline ran in the LEAD's
+				// name, and on a node the lead is not on it pinned a root pool
+				// for a session holding no allocation there -- unowned, pinned,
+				// and never released.
+				engineSessionId: workerSessionId,
+				...(pooled
+					? { polykvWorker: { group: rootSessionId, layers: layout.layers } }
+					: {}),
+				pinnedHead: layout.pinnedHead,
 				configProvider: forWorker(workerConfig, workerSessionId),
 				tools,
 				maxIterations: config.maxIterations,
 				parentAgentId: rootSessionId,
+				...(request.signal ? { abortSignal: request.signal } : {}),
 				onEvent: (event) => {
 					if (isAdmissionEvent(event)) {
 						admitted();
 					}
-					lifecycle.onSubAgentEvent?.(event);
+					progress.observe(event);
 				},
 			});
-			return await worker.run(request.task);
+			return layout.pinnedHead.length > 0
+				? await worker.runWithHead(layout.pinnedHead, layout.task)
+				: await worker.run(layout.task);
 		};
 		try {
 			const placement = base.getRuntimeConfig().nodePlacement;
@@ -379,14 +432,15 @@ export function createSessionSwarmTool(
 				// Through the spawn queue like every other agent: a refusal --
 				// the lead's window full, or the admission gate's 429 -- puts the
 				// worker back at the front rather than failing it.
-				return (
-					await runPlacedAgent({
-						placement,
-						...(config.logger ? { logger: config.logger } : {}),
-						label: `swarm worker ${request.name}`,
-						run: (node, admitted) => attempt(node.configProvider, admitted),
-					})
-				).result;
+				const outcome = await runPlacedAgent({
+					placement,
+					...(request.signal ? { signal: request.signal } : {}),
+					...(request.emitUpdate ? { emitUpdate: request.emitUpdate } : {}),
+					...(config.logger ? { logger: config.logger } : {}),
+					label: `swarm worker ${request.name}`,
+					run: (node, admitted) => attempt(node.configProvider, admitted),
+				});
+				return { ...outcome.result, placed: outcome.placed };
 			}
 			// The same gate the lead's sub-agents queue on, so a swarm and a
 			// `spawn_agent` beside it share one bound rather than each getting
@@ -407,7 +461,12 @@ export function createSessionSwarmTool(
 							}s for a worker to finish (attempt ${retry})`,
 						),
 				});
-			return slotGate ? await slotGate.run(runWorker) : await runWorker();
+			// Off the queue the moment it has a slot, not when it ends.
+			const started = () => {
+				request.emitUpdate?.({ queued: false });
+				return runWorker();
+			};
+			return slotGate ? await slotGate.run(started) : await started();
 		} finally {
 			clearPolykvSession(workerSessionId);
 		}

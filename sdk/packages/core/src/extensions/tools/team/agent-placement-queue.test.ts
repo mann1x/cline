@@ -399,6 +399,25 @@ describe("an uncapped node, paced by admission", () => {
 		await settle();
 		expect(next.nodeId).toBe("oc");
 	});
+
+	it("sends the next agent to another node while a capped node that refused is held", async () => {
+		let clock = 0;
+		const queue = createAgentPlacementQueue(
+			[node("oc", 1, 8), node("ollama", 2, 1)],
+			{ now: () => clock, schedule: () => {} },
+		);
+		const onOc = await queue.acquire();
+		expect(onOc.nodeId).toBe("oc");
+		onOc.refused(5_000);
+		// Room by its count of 8, none by the engine's word: the agent that
+		// comes back goes to the node that has not said no.
+		const back = await queue.acquire(undefined, { front: true });
+		expect(back.nodeId).toBe("ollama");
+
+		clock = 5_000;
+		const later = await queue.acquire();
+		expect(later.nodeId).toBe("oc");
+	});
 });
 
 describe("an agent coming back from a failed spawn", () => {

@@ -40,6 +40,7 @@ import {
 	type AgentReasoningPart,
 	type AgentResult,
 	type AgentTool,
+	type AgentToolContext,
 	createTool,
 	zodToJsonSchema,
 } from "@cline/shared";
@@ -50,6 +51,10 @@ import {
 	renderWorkDigest,
 	type WorkDigest,
 } from "../../context/work-digest";
+import {
+	registerSubagentCancellation,
+	subagentCancelId,
+} from "./subagent-cancellation";
 
 export const SpawnSwarmInputSchema = z.object({
 	systemPrompt: z
@@ -102,7 +107,32 @@ export interface SpawnSwarmOutput {
 	 * estimate of what was spent.
 	 */
 	usage: { inputTokens: number; outputTokens: number };
+	/**
+	 * One report per requested worker, in the order they were asked for.
+	 *
+	 * What the host puts on each worker's row. Without it every row of a
+	 * 75-worker round sat at "0 tools called · 0 tokens" for the whole round,
+	 * and a worker that failed -- or never started -- said so nowhere.
+	 */
+	results?: SwarmMemberReport[];
 }
+
+/** How one worker ended, for its row. */
+export interface SwarmMemberReport {
+	name: string;
+	text?: string;
+	usage?: { inputTokens: number; outputTokens: number };
+	/** Why it failed, or why it never ran. Absent means it finished. */
+	error?: string;
+	model?: { provider: string; id: string };
+	nodeId?: string;
+	nodeLabel?: string;
+}
+
+/** A worker's result, with where it ran when the runner knows. */
+export type SwarmWorkerResult = AgentResult & {
+	placed?: { nodeId: string; nodeLabel?: string };
+};
 
 /** An ephemeral pool holding a snapshot of the lead's live context. */
 export interface SwarmPoolSnapshot {
@@ -150,12 +180,19 @@ export interface SwarmWorkerRequest {
 	systemPrompt: string;
 	/** The shared pool, when there is one. */
 	poolId?: string;
+	/**
+	 * Progress for this worker's row: placement, tool calls, output. Already
+	 * tagged with the worker, so the runner reports as a lone agent would.
+	 */
+	emitUpdate?: (update: unknown) => void;
+	/** This worker's own stop, which the lead's cancel also trips. */
+	signal?: AbortSignal;
 }
 
 export interface SpawnSwarmToolConfig {
 	pools: SwarmPoolSource;
 	/** Run one worker to completion. */
-	runWorker: (request: SwarmWorkerRequest) => Promise<AgentResult>;
+	runWorker: (request: SwarmWorkerRequest) => Promise<SwarmWorkerResult>;
 	/**
 	 * Rewrite several digests into one, with a model that knows what the lead
 	 * knows because it was forked from the same pool.
@@ -319,7 +356,7 @@ export function createSpawnSwarmTool(
 			"A swarm is one round: its workers are made for it, run once, and are gone when the digest comes back — there is nobody left to send a second task to. Work that is a known list of jobs, each wanting a worker you keep talking to, is a team instead. " +
 			"Output: `{digest, workers, pooled, usage}`. `digest` is the whole result — the workers' own transcripts are discarded, so nothing they saw reaches you except through it.",
 		inputSchema: zodToJsonSchema(SpawnSwarmInputSchema),
-		execute: async (input) => {
+		execute: async (input, context?: AgentToolContext) => {
 			const requested = requestedWorkers(input);
 			if (requested.length === 0) {
 				return {
@@ -354,17 +391,75 @@ export function createSpawnSwarmTool(
 						? SWARM_RUNAWAY_MAX
 						: Math.min(requested.length, SWARM_RUNAWAY_MAX)
 					: hint;
-			const queue: SwarmWorkerRequest[] = explicit
+			// Each worker of a task list has a row of its own in the host, keyed
+			// by the call and its index, and a stop of its own under the same
+			// pair. A task repeated `count` times has one row, the call's, and
+			// one stop that reaches every worker on it.
+			const cancellations = explicit
+				? requested.map((_entry, index) =>
+						registerSubagentCancellation(
+							subagentCancelId(
+								context?.sessionId,
+								context?.toolCallId
+									? `${context.toolCallId}#${index}`
+									: undefined,
+							),
+							context?.signal,
+						),
+					)
+				: [
+						registerSubagentCancellation(
+							subagentCancelId(context?.sessionId, context?.toolCallId),
+							context?.signal,
+						),
+					];
+			const updatesFor = (member: number) =>
+				context?.emitUpdate
+					? (update: unknown) =>
+							context.emitUpdate?.(
+								explicit
+									? { ...(update as Record<string, unknown>), member }
+									: update,
+							)
+					: undefined;
+			const signalFor = (member: number) =>
+				cancellations[explicit ? member : 0]?.signal;
+			cancellations.forEach((cancellation, index) => {
+				const cancelId = explicit
+					? subagentCancelId(
+							context?.sessionId,
+							context?.toolCallId
+								? `${context.toolCallId}#${index}`
+								: undefined,
+						)
+					: subagentCancelId(context?.sessionId, context?.toolCallId);
+				if (cancelId && cancellation.signal) {
+					// Waiting its turn until the supervisor launches it: every row
+					// otherwise starts as "running", and a round of 75 showed 75
+					// agents at work while four of them were.
+					updatesFor(index)?.({ cancelId, queued: true });
+				}
+			});
+
+			const queue: Array<SwarmWorkerRequest & { member: number }> = explicit
 				? requested.slice(0, queueLength).map((entry, index) => ({
+						member: index,
 						name: entry.name ?? `worker-${index + 1}`,
 						task: entry.task,
 						systemPrompt: input.systemPrompt,
 					}))
 				: Array.from({ length: queueLength }, (_entry, index) => ({
+						member: index,
 						name: `worker-${index + 1}`,
 						task: requested[0]?.task ?? "",
 						systemPrompt: input.systemPrompt,
 					}));
+			const reports: SwarmMemberReport[] = [];
+			const report = (member: number, entry: SwarmMemberReport): void => {
+				if (explicit) {
+					reports[member] = entry;
+				}
+			};
 
 			// Taken before any worker starts, for the reason at the top of this
 			// file: the host prompt cache clears an idle slot the moment a new
@@ -383,24 +478,69 @@ export function createSpawnSwarmTool(
 				const inFlight = new Set<Promise<void>>();
 				let started = 0;
 
-				const launch = (worker: SwarmWorkerRequest): void => {
+				const launch = (
+					worker: SwarmWorkerRequest & { member: number },
+				): void => {
 					started += 1;
+					const { member, ...request } = worker;
 					const running = (async () => {
+						const signal = signalFor(member);
+						if (signal?.aborted) {
+							const error = "stopped before it started";
+							report(member, { name: worker.name, error });
+							results.push({ agent: worker.name, error });
+							return;
+						}
 						try {
+							const emitUpdate = updatesFor(member);
 							const result = await config.runWorker({
-								...worker,
+								...request,
 								...(snapshot ? { poolId: snapshot.poolId } : {}),
+								...(emitUpdate ? { emitUpdate } : {}),
+								...(signal ? { signal } : {}),
 							});
 							inputTokens += result.usage?.inputTokens ?? 0;
 							outputTokens += result.usage?.outputTokens ?? 0;
 							results.push(digestOf(worker.name, result));
+							const failed =
+								result.finishReason === "error" ||
+								result.finishReason === "aborted";
+							report(member, {
+								name: worker.name,
+								text: result.text,
+								usage: {
+									inputTokens: result.usage?.inputTokens ?? 0,
+									outputTokens: result.usage?.outputTokens ?? 0,
+								},
+								...(result.model
+									? {
+											model: {
+												provider: result.model.provider,
+												id: result.model.id,
+											},
+										}
+									: {}),
+								...(result.placed ? result.placed : {}),
+								...(failed
+									? {
+											error:
+												result.text.trim() ||
+												(result.finishReason === "aborted"
+													? "stopped"
+													: "failed without saying why"),
+										}
+									: {}),
+							});
 						} catch (error) {
+							const message =
+								error instanceof Error ? error.message : String(error);
 							// Named, never dropped: the lead cannot tell an
 							// empty round from a lost one otherwise.
 							results.push({
 								agent: worker.name,
-								error: error instanceof Error ? error.message : String(error),
+								error: message,
 							} satisfies WorkDigest);
+							report(member, { name: worker.name, error: message });
 						}
 					})();
 					const tracked = running.finally(() => {
@@ -443,6 +583,25 @@ export function createSpawnSwarmTool(
 					}
 				}
 				await Promise.allSettled([...inFlight]);
+				// Asked for and never run: the round stopped with work left.
+				// Each one is named, in the digest and on its row.
+				for (const worker of queue) {
+					const error = context?.signal?.aborted
+						? "stopped before it started"
+						: "never started: no node had room when the round ended";
+					if (explicit) {
+						results.push({ agent: worker.name, error });
+						report(worker.member, { name: worker.name, error });
+					}
+				}
+				if (explicit) {
+					requested.forEach((entry, index) => {
+						reports[index] ??= {
+							name: entry.name ?? `worker-${index + 1}`,
+							error: "never started",
+						};
+					});
+				}
 
 				let merged: WorkDigest | undefined;
 				if (results.length > 1 && config.reduce) {
@@ -455,8 +614,12 @@ export function createSpawnSwarmTool(
 					workers: started,
 					pooled: snapshot !== undefined,
 					usage: { inputTokens, outputTokens },
+					...(explicit ? { results: reports } : {}),
 				};
 			} finally {
+				for (const cancellation of cancellations) {
+					cancellation.release();
+				}
 				// The leak this whole change set exists to stop. On the failure
 				// paths too.
 				await snapshot?.release().catch(() => {});
