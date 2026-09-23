@@ -109,6 +109,8 @@ interface SwarmGroup {
 	/** Agent session -> its shard. An agent stays on the shard it started on. */
 	assigned: Map<string, OwnerShard>;
 	opening?: Promise<OwnerShard | undefined>;
+	/** Agents waiting on `opening`, told when it has to wait for room. */
+	awaitingOwner: Set<string>;
 	serial: number;
 }
 
@@ -228,6 +230,7 @@ function groupFor(
 			...(headers ? { headers } : {}),
 			shards: [],
 			assigned: new Map(),
+			awaitingOwner: new Set(),
 			serial: 0,
 		};
 		GROUPS.set(key, group);
@@ -309,6 +312,13 @@ async function openOwner(
 			return undefined;
 		}
 		const wait = Number(response.headers.get("retry-after"));
+		for (const agent of group.awaitingOwner) {
+			reportPolykvRoomWait(agent, {
+				waiting: true,
+				reason:
+					"Waiting for room on the server: every cell is booked, so a new window for this swarm cannot open yet.",
+			});
+		}
 		await sleep(Number.isFinite(wait) && wait > 0 ? wait * 1000 : 2000, signal);
 	}
 }
@@ -395,6 +405,20 @@ async function ensureChain(
 	return parent;
 }
 
+/** Wait on an owner opening, as one of the agents that will be told if it stalls. */
+async function awaitOwner<T>(
+	group: SwarmGroup,
+	sessionId: string,
+	open: () => Promise<T>,
+): Promise<T> {
+	group.awaitingOwner.add(sessionId);
+	try {
+		return await open();
+	} finally {
+		group.awaitingOwner.delete(sessionId);
+	}
+}
+
 function openShard(
 	group: SwarmGroup,
 	body: Record<string, unknown>,
@@ -461,7 +485,9 @@ export async function preparePolykvWorker(options: {
 				((await openShard(group, body, options.signal, false)) ??
 				(current && !current.closed ? current : undefined))
 			: ([...group.shards].reverse().find((candidate) => !candidate.closed) ??
-				(await openShard(group, body, options.signal)));
+				(await awaitOwner(group, spec.sessionId, () =>
+					openShard(group, body, options.signal),
+				)));
 		if (!shard) {
 			return unpooled;
 		}
@@ -596,6 +622,7 @@ export async function releasePolykvAgent(
 ): Promise<PolykvReleaseResult> {
 	const group = AGENT_GROUPS.get(sessionId);
 	AGENT_GROUPS.delete(sessionId);
+	ROOM_WAITING.delete(engineSessionId(sessionId));
 	const known = OPENCOTI_SESSIONS.get(sessionId);
 	OPENCOTI_SESSIONS.delete(sessionId);
 	const result: PolykvReleaseResult = { closed: [], failed: [] };
@@ -658,6 +685,74 @@ export async function releaseAllPolykvSwarms(): Promise<void> {
 	GROUPS.clear();
 	AGENT_GROUPS.clear();
 	await Promise.all(closes);
+}
+
+/** Where an agent's request is while it waits on the engine for room. */
+export interface PolykvRoomWait {
+	/** `true` while the request is held client-side, `false` once it is sent. */
+	waiting: boolean;
+	/** What it is waiting for, worded for the agent's row. */
+	reason?: string;
+}
+
+const ROOM_WAIT_LISTENERS = new Map<
+	string,
+	Set<(state: PolykvRoomWait) => void>
+>();
+const ROOM_WAITING = new Set<string>();
+
+/**
+ * Be told when an agent's requests are held waiting for room on the engine.
+ *
+ * The wait happens inside this vendor's fetch, where nothing of the agent's UI
+ * can be reached, so the agent's row went on saying "running" for as long as
+ * it waited -- 75 rows running on 2026-09-24 while the server was processing
+ * 27. Keyed by the agent's own session id, as the worker spec carries it.
+ * Returns the unsubscribe.
+ */
+export function onPolykvRoomWait(
+	sessionId: string,
+	listener: (state: PolykvRoomWait) => void,
+): () => void {
+	const key = engineSessionId(sessionId);
+	let listeners = ROOM_WAIT_LISTENERS.get(key);
+	if (!listeners) {
+		listeners = new Set();
+		ROOM_WAIT_LISTENERS.set(key, listeners);
+	}
+	listeners.add(listener);
+	return () => {
+		listeners?.delete(listener);
+		if (listeners?.size === 0) {
+			ROOM_WAIT_LISTENERS.delete(key);
+		}
+	};
+}
+
+/**
+ * Report an agent waiting, or no longer waiting. Only changes are passed on,
+ * so a wait of forty refusals is one "waiting" and one "sent".
+ */
+export function reportPolykvRoomWait(
+	sessionId: string,
+	state: PolykvRoomWait,
+): void {
+	const key = engineSessionId(sessionId);
+	if (state.waiting === ROOM_WAITING.has(key)) {
+		return;
+	}
+	if (state.waiting) {
+		ROOM_WAITING.add(key);
+	} else {
+		ROOM_WAITING.delete(key);
+	}
+	for (const listener of ROOM_WAIT_LISTENERS.get(key) ?? []) {
+		try {
+			listener(state);
+		} catch {
+			// A listener is a UI update; it must never fail a request.
+		}
+	}
 }
 
 /** Test seam. */

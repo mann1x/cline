@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createOpencotiFetch } from "./opencoti";
 import {
 	engineSessionId,
+	onPolykvRoomWait,
 	polykvSwarmState,
 	releaseAllPolykvSwarms,
 	releasePolykvAgent,
@@ -218,6 +219,20 @@ describe("a PolyKV swarm", () => {
 		);
 		expect(owners.length).toBe(2);
 		expect(sent(engine)).toHaveLength(4);
+	});
+
+	// The wait is inside this fetch, where the agent's row cannot be reached:
+	// the row said "running" for as long as it waited.
+	it("reports the wait for room, and its end, once each", async () => {
+		const engine = stubEngine({ refuseWorkersTimes: 3 });
+		const states: boolean[] = [];
+		const stop = onPolykvRoomWait("a", (state) => states.push(state.waiting));
+		try {
+			await send(engine, "a", agentBody("r", "t"));
+		} finally {
+			stop();
+		}
+		expect(states).toEqual([true, false]);
 	});
 
 	// A summary call is the agent's, but not its conversation: charged to the

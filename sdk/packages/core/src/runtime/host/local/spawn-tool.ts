@@ -1,4 +1,8 @@
-import { clearPolykvSession, setPolykvSession } from "@cline/llms";
+import {
+	clearPolykvSession,
+	releasePolykvAgent,
+	setPolykvSession,
+} from "@cline/llms";
 import type { AgentEvent, AgentTool } from "@cline/shared";
 import {
 	isPolykvProvider,
@@ -36,7 +40,10 @@ import {
 	SWARM_REDUCER_PROMPT,
 } from "../../../extensions/tools/team/spawn-swarm-tool";
 import { buildSubagentLayout } from "../../../extensions/tools/team/subagent-layout";
-import { createSubagentProgress } from "../../../extensions/tools/team/subagent-progress";
+import {
+	createSubagentProgress,
+	watchPolykvRoom,
+} from "../../../extensions/tools/team/subagent-progress";
 import { buildTelemetryAgentIdentity } from "../../../services/agent-events";
 import { filterDisabledTools } from "../../../services/global-settings";
 import {
@@ -359,6 +366,8 @@ export function createSessionSwarmTool(
 		const progress = createSubagentProgress(request.emitUpdate, (event) =>
 			lifecycle.onSubAgentEvent?.(event),
 		);
+		// Queued again while its requests wait for room on the engine.
+		const stopRoomWatch = watchPolykvRoom(workerSessionId, request.emitUpdate);
 		// Built on the connection it runs on: a node decides the worker's
 		// connection, so with nodes this runs once per placement.
 		const attempt = async (
@@ -448,6 +457,11 @@ export function createSessionSwarmTool(
 					...(config.logger ? { logger: config.logger } : {}),
 					label: `swarm worker ${request.name}`,
 					run: (node, admitted) => attempt(node.configProvider, admitted),
+					// A re-placed worker starts clean on its new node: its session
+					// and, if it was the last, its owner go back first.
+					beforeRetry: async () => {
+						await releasePolykvAgent(workerSessionId);
+					},
 				});
 				return { ...outcome.result, placed: outcome.placed };
 			}
@@ -478,6 +492,21 @@ export function createSessionSwarmTool(
 			return slotGate ? await slotGate.run(started) : await started();
 		} finally {
 			clearPolykvSession(workerSessionId);
+			stopRoomWatch();
+			// Its engine session goes back the moment it ends, and its owner
+			// window with it if it was the last agent on it. The swarm path
+			// never did this: `spawn_agent` and configured agents released,
+			// swarm workers did not, so every owner a swarm opened stayed
+			// booked until the engine's 300 s idle TTL -- on 2026-09-24 four
+			// owners held all 1,048,576 cells of 8240.
+			const released = await releasePolykvAgent(workerSessionId).catch(
+				() => undefined,
+			);
+			for (const failure of released?.failed ?? []) {
+				config.logger?.log?.(
+					`[PolyKV] could not close engine session ${failure.sessionId}: ${failure.error}`,
+				);
+			}
 		}
 	};
 

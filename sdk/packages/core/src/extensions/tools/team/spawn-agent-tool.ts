@@ -35,6 +35,7 @@ import { buildSubagentLayout } from "./subagent-layout";
 import {
 	createSubagentProgress,
 	DELEGATION_PACING_NOTE,
+	watchPolykvRoom,
 } from "./subagent-progress";
 
 /** The tool a model calls to hand a self-contained piece of work to a subagent. */
@@ -713,6 +714,8 @@ async function runSpawnedAgent(
 		context.emitUpdate,
 		config.onSubAgentEvent,
 	);
+	// Queued again while its requests wait for room on the engine.
+	const stopRoomWatch = watchPolykvRoom(engineSessionId, context.emitUpdate);
 	// Its own abort signal, so a runaway agent can be stopped without
 	// cancelling the session and the siblings that are working.
 	const cancelId = subagentCancelId(context.sessionId, context.toolCallId);
@@ -870,6 +873,7 @@ async function runSpawnedAgent(
 		// However the run ended: a stop registration that outlives its agent
 		// is a button that reports success and does nothing.
 		cancellation.release();
+		stopRoomWatch();
 		// Its engine session goes back the moment it ends, and its pool owner
 		// with it if it was the last: admission is decided against held
 		// windows, and one held past its work refuses the next agent.

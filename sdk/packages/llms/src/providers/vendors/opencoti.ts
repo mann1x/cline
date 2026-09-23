@@ -29,6 +29,7 @@ import {
 	type PolykvWorkerSpec,
 	preparePolykvWorker,
 	rememberOpencotiSession,
+	reportPolykvRoomWait,
 } from "./polykv-swarm";
 import type { ProviderFactoryResult } from "./types";
 
@@ -572,6 +573,7 @@ function createWorkerFetch(options: {
 				if (response.ok) {
 					ranOnce = true;
 				}
+				reportPolykvRoomWait(options.worker.sessionId, { waiting: false });
 				return response;
 			}
 			const text = await response
@@ -579,6 +581,7 @@ function createWorkerFetch(options: {
 				.text()
 				.catch(() => "");
 			if (!isWorkerWindowFull(response.status, text) || Date.now() > deadline) {
+				reportPolykvRoomWait(options.worker.sessionId, { waiting: false });
 				return response;
 			}
 			await response.body?.cancel().catch(() => {});
@@ -594,6 +597,11 @@ function createWorkerFetch(options: {
 				continue;
 			}
 			const seconds = Number(response.headers.get("retry-after"));
+			reportPolykvRoomWait(options.worker.sessionId, {
+				waiting: true,
+				reason:
+					"Waiting for room on the server: this swarm's window is full, and it starts when another agent finishes.",
+			});
 			await new Promise<void>((resolve, reject) => {
 				const handle = setTimeout(
 					resolve,

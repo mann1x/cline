@@ -36,6 +36,7 @@ import {
 import {
 	createSubagentProgress,
 	DELEGATION_PACING_NOTE,
+	watchPolykvRoom,
 } from "./subagent-progress";
 
 const CONFIGURED_AGENT_TOOL_NAME_PREFIX = "subagent_";
@@ -447,6 +448,11 @@ export function createConfiguredAgentTools(
 					// every instance of this agent shares its system prompt and
 					// tools as one pool.
 					const engineSessionId = `${context.sessionId ?? "cerebriline"}~agent-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+					// Queued again while its requests wait for room on the engine.
+					const stopRoomWatch = watchPolykvRoom(
+						engineSessionId,
+						context.emitUpdate,
+					);
 					const parentAgentId = context.agentId;
 					const spawnInput = {
 						systemPrompt: config.systemPrompt,
@@ -627,6 +633,7 @@ export function createConfiguredAgentTools(
 						// registration: one that outlives its agent is a button
 						// that reports success and does nothing.
 						cancellation.release();
+						stopRoomWatch();
 						// Its engine session goes back the moment it ends.
 						const released = await releasePolykvAgent(engineSessionId).catch(
 							() => undefined,

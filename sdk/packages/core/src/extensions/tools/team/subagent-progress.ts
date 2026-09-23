@@ -1,3 +1,4 @@
+import { onPolykvRoomWait } from "@cline/llms";
 import type { AgentEvent } from "@cline/shared";
 
 /**
@@ -60,6 +61,40 @@ export function reportSubagentPlaced(
 		queued: false,
 		...(placed?.nodeId ? { nodeId: placed.nodeId } : {}),
 		...(placed?.nodeLabel ? { nodeLabel: placed.nodeLabel } : {}),
+	});
+}
+
+/**
+ * Keep an agent's row honest while its requests wait for room on the engine.
+ *
+ * A PolyKV worker whose window is full is held inside the opencoti vendor's
+ * fetch, re-asking until another agent finishes. Nothing there can reach the
+ * agent's row, so it went on saying "running": 75 rows running on 2026-09-24
+ * while the server processed 27. The vendor reports each change under the
+ * agent's engine session; this turns it into the same `queued` the placement
+ * queue sends, with the reason as the row's output line.
+ *
+ * Returns the unsubscribe; call it when the agent is done, not between
+ * re-placements -- the listener belongs to the delegation.
+ */
+export function watchPolykvRoom(
+	engineSessionId: string | undefined,
+	emitUpdate: ((update: unknown) => void) | undefined,
+): () => void {
+	if (!engineSessionId || !emitUpdate) {
+		return () => {};
+	}
+	return onPolykvRoomWait(engineSessionId, (state) => {
+		emitUpdate(
+			state.waiting
+				? {
+						queued: true,
+						...(state.reason
+							? { latestOutput: state.reason, latestOutputKind: "text" }
+							: {}),
+					}
+				: { queued: false },
+		);
 	});
 }
 
