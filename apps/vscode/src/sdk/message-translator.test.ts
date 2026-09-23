@@ -13,6 +13,7 @@ import {
 	historyItemToSessionFields,
 	MessageTranslatorState,
 	sdkMessagesToClineMessages,
+	spawnBatchMembers,
 	summarizeSubagentUsageByProvider,
 	translateSessionEvent,
 } from "./message-translator"
@@ -5811,5 +5812,31 @@ describe("translateSessionEvent — the checklist that rides on a tool call", ()
 
 	it("says nothing when no checklist was sent", () => {
 		expect(checklistRows("editor", { path: "/src/app.ts" })).toHaveLength(0)
+	})
+})
+
+describe("spawnBatchMembers", () => {
+	it("reads agents sent as text, with the call's other fields run on after the list", () => {
+		// pandorum 2026-09-23 (5rybo): `agents` arrived as this string, twice.
+		const members = spawnBatchMembers({
+			agents: '[{"name": "CV-1", "task": "a"}, {"type": "code-verifier", "task": "b"}], "merge": true',
+		})
+		expect(members).toEqual([
+			{ name: "CV-1", task: "a" },
+			{ name: "code-verifier", task: "b" },
+		])
+	})
+
+	it("gives a swarm of one task, a stated number of times, a row per agent", () => {
+		expect(spawnBatchMembers({ merge: true, count: 3, task: "t", name: "CV" })).toEqual([
+			{ name: "CV-1", task: "t" },
+			{ name: "CV-2", task: "t" },
+			{ name: "CV-3", task: "t" },
+		])
+	})
+
+	it('leaves count: "max" and a lone agent to one row', () => {
+		expect(spawnBatchMembers({ merge: true, count: "max", task: "t" })).toBeUndefined()
+		expect(spawnBatchMembers({ task: "t" })).toBeUndefined()
 	})
 })

@@ -335,6 +335,97 @@ function withKnowledge(
 		: task;
 }
 
+/** Fields a call can carry beside `agents`; see {@link readAgentsField}. */
+const AGENTS_SIBLING_FIELDS = new Set([
+	"merge",
+	"count",
+	"knowledge",
+	"instructions",
+	"systemPrompt",
+	"task",
+	"name",
+]);
+
+/**
+ * `agents` as the list it was meant to be, or a refusal that says how to send it.
+ *
+ * Measured on pandorum 2026-09-23 (5rybo): qwen sent `agents` as text, twice,
+ * and the text was the list followed by the rest of the call --
+ * `[{...}, ...], "merge": true`. That is not JSON on its own, it went through
+ * as a string, and the batch failed with `a.map is not a function`, which
+ * told the model nothing it could act on. It gave up on the list and fanned
+ * one task out fifteen times instead.
+ *
+ * Two readings are taken, each the only one its text has: the list as JSON
+ * text, and the list with the fields written after it, read as the object
+ * they close. A field that bled in fills only what the call left unset.
+ * Anything else is refused by name, never run.
+ */
+export function readAgentsField(input: SpawnAgentInput): SpawnAgentInput {
+	const raw = (input as { agents?: unknown }).agents;
+	if (raw === undefined || Array.isArray(raw)) {
+		return checkMembers(input);
+	}
+	if (typeof raw !== "string") {
+		throw new Error(AGENTS_SHAPE_HELP);
+	}
+	let listError: unknown;
+	try {
+		const parsed: unknown = JSON.parse(raw);
+		if (Array.isArray(parsed)) {
+			return checkMembers({ ...input, agents: parsed });
+		}
+	} catch (error) {
+		listError = error;
+	}
+	try {
+		const parsed: unknown = JSON.parse(`{"agents":${raw}}`);
+		if (
+			parsed &&
+			typeof parsed === "object" &&
+			Array.isArray((parsed as { agents?: unknown }).agents)
+		) {
+			const { agents, ...rest } = parsed as Record<string, unknown>;
+			const bled = Object.fromEntries(
+				Object.entries(rest).filter(
+					([key]) =>
+						AGENTS_SIBLING_FIELDS.has(key) &&
+						(input as Record<string, unknown>)[key] === undefined,
+				),
+			);
+			return checkMembers({
+				...bled,
+				...input,
+				agents,
+			} as SpawnAgentInput);
+		}
+	} catch {
+		// Refused below, with the first reading's error: that is the one that
+		// says where the list itself stops parsing.
+	}
+	throw new Error(
+		`\`agents\` arrived as text, not as an array, and the text does not parse (${
+			listError instanceof Error ? listError.message : "not a list"
+		}). ${AGENTS_SHAPE_HELP}`,
+	);
+}
+
+const AGENTS_SHAPE_HELP =
+	'Send `agents` as an array of objects, one per agent -- [{"name": "...", "task": "..."}, ...] -- and put `merge`, `count` and `knowledge` in fields of their own, not inside `agents`.';
+
+function checkMembers(input: SpawnAgentInput): SpawnAgentInput {
+	const members = (input.agents ?? []) as unknown[];
+	members.forEach((member, index) => {
+		const task = (member as { task?: unknown } | null)?.task;
+		if (typeof task !== "string" || task.trim() === "") {
+			throw new Error(
+				`\`agents[${index}]\` has no \`task\`. Every entry needs one: what that agent alone must do. ${AGENTS_SHAPE_HELP}`,
+			);
+		}
+	});
+	return input;
+}
+
 /** The swarm tool's input, from a `merge` call. */
 function toSwarmInput(input: SpawnAgentInput): Record<string, unknown> {
 	const role = input.instructions ?? input.systemPrompt ?? "";
@@ -377,7 +468,8 @@ export function createSpawnAgentTool(
 		inputSchema: zodToJsonSchema(
 			config.swarm ? SpawnAgentSwarmInputSchema : SpawnAgentBatchInputSchema,
 		),
-		execute: async (input, context) => {
+		execute: async (raw, context) => {
+			const input = readAgentsField(raw);
 			if (input.merge && config.swarm) {
 				return (await config.swarm.execute(
 					toSwarmInput(input) as never,

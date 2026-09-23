@@ -154,6 +154,32 @@ export function isSubagentSpawnTool(toolName: string | undefined): boolean {
 }
 
 /**
+ * `agents` as the tool reads it (`readAgentsField` in core): the array, or the
+ * text of one -- including the text of one with the call's other fields run on
+ * after it, `[...], "merge": true`, which is how qwen sent it on pandorum.
+ */
+function agentsList(value: unknown): unknown[] | undefined {
+	if (Array.isArray(value)) {
+		return value.length > 0 ? value : undefined
+	}
+	if (typeof value !== "string") {
+		return undefined
+	}
+	for (const text of [value, `{"agents":${value}}`]) {
+		try {
+			const parsed: unknown = JSON.parse(text)
+			const list = Array.isArray(parsed) ? parsed : (parsed as { agents?: unknown } | null)?.agents
+			if (Array.isArray(list) && list.length > 0) {
+				return list
+			}
+		} catch {
+			// The next reading, or none.
+		}
+	}
+	return undefined
+}
+
+/**
  * The agents of a `spawn_agent` batch (`agents: [...]`), when the call is one.
  *
  * One call, one row per agent: the call id alone would put every member of a
@@ -162,8 +188,19 @@ export function isSubagentSpawnTool(toolName: string | undefined): boolean {
  * member's stop under.
  */
 export function spawnBatchMembers(input: unknown): Array<{ task: string; name?: string }> | undefined {
-	const agents = (input as { agents?: unknown } | undefined)?.agents
-	if (!Array.isArray(agents) || agents.length === 0) {
+	const call = (input ?? {}) as { agents?: unknown; merge?: unknown; count?: unknown; task?: unknown; name?: unknown }
+	const agents = agentsList(call.agents)
+	if (!agents) {
+		// A swarm of one task, a stated number of times: that many agents,
+		// and as many rows. The tool keys them the same way. `count: "max"` is
+		// the engine's number and stays one row, the call's.
+		if (call.merge === true && typeof call.count === "number" && call.count > 1 && typeof call.task === "string") {
+			const base = typeof call.name === "string" && call.name.trim() ? call.name.trim() : "worker"
+			return Array.from({ length: Math.min(call.count, 64) }, (_entry, index) => ({
+				task: call.task as string,
+				name: `${base}-${index + 1}`,
+			}))
+		}
 		return undefined
 	}
 	return agents.map((entry, index) => {

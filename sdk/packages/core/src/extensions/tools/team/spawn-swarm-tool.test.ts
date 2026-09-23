@@ -532,6 +532,22 @@ describe("spawn_swarm worker rows", () => {
 		});
 	});
 
+	it("gives a counted swarm a row per worker, not one for the call", async () => {
+		const updates: Array<Record<string, unknown>> = [];
+		const tool = createSpawnSwarmTool({
+			pools: stubPools({ snapshotFails: true }).source,
+			runWorker: async () => agentResult('```json\n{"done":["ok"]}\n```'),
+		});
+		const output = (await tool.execute(
+			{ systemPrompt: "s", task: "t", count: 3 },
+			rowContext(updates as unknown[]),
+		)) as { results?: unknown[] };
+		expect(
+			updates.filter((update) => update.queued === true).map((u) => u.member),
+		).toEqual([0, 1, 2]);
+		expect(output.results).toHaveLength(3);
+	});
+
 	it("names a worker that never started as never started", async () => {
 		const tool = createSpawnSwarmTool({
 			pools: {

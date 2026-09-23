@@ -375,6 +375,12 @@ export function createSpawnSwarmTool(
 			// task repeated is bounded by the engine instead, which is what
 			// `max` asks for.
 			const explicit = input.tasks && input.tasks.length > 0;
+			// A row per worker wherever the workers are known up front: a task
+			// list, or one task repeated a stated number of times. Only
+			// `count: "max"` leaves the number to the engine, and its workers
+			// share the call's one row. Rowed as one before, a count of 15
+			// showed as a single agent while fifteen ran.
+			const rowed = explicit || typeof input.count === "number";
 			const hint = Math.max(
 				1,
 				Math.min(
@@ -395,7 +401,7 @@ export function createSpawnSwarmTool(
 			// by the call and its index, and a stop of its own under the same
 			// pair. A task repeated `count` times has one row, the call's, and
 			// one stop that reaches every worker on it.
-			const cancellations = explicit
+			const cancellations = rowed
 				? requested.map((_entry, index) =>
 						registerSubagentCancellation(
 							subagentCancelId(
@@ -417,15 +423,15 @@ export function createSpawnSwarmTool(
 				context?.emitUpdate
 					? (update: unknown) =>
 							context.emitUpdate?.(
-								explicit
+								rowed
 									? { ...(update as Record<string, unknown>), member }
 									: update,
 							)
 					: undefined;
 			const signalFor = (member: number) =>
-				cancellations[explicit ? member : 0]?.signal;
+				cancellations[rowed ? member : 0]?.signal;
 			cancellations.forEach((cancellation, index) => {
-				const cancelId = explicit
+				const cancelId = rowed
 					? subagentCancelId(
 							context?.sessionId,
 							context?.toolCallId
@@ -456,7 +462,7 @@ export function createSpawnSwarmTool(
 					}));
 			const reports: SwarmMemberReport[] = [];
 			const report = (member: number, entry: SwarmMemberReport): void => {
-				if (explicit) {
+				if (rowed) {
 					reports[member] = entry;
 				}
 			};
@@ -589,12 +595,12 @@ export function createSpawnSwarmTool(
 					const error = context?.signal?.aborted
 						? "stopped before it started"
 						: "never started: no node had room when the round ended";
-					if (explicit) {
+					if (rowed) {
 						results.push({ agent: worker.name, error });
 						report(worker.member, { name: worker.name, error });
 					}
 				}
-				if (explicit) {
+				if (rowed) {
 					requested.forEach((entry, index) => {
 						reports[index] ??= {
 							name: entry.name ?? `worker-${index + 1}`,
@@ -614,7 +620,7 @@ export function createSpawnSwarmTool(
 					workers: started,
 					pooled: snapshot !== undefined,
 					usage: { inputTokens, outputTokens },
-					...(explicit ? { results: reports } : {}),
+					...(rowed ? { results: reports } : {}),
 				};
 			} finally {
 				for (const cancellation of cancellations) {
