@@ -523,4 +523,150 @@ describe("createSpawnAgentTool", () => {
 		expect(task).toContain("check lines 1-10");
 		expect(runMock).not.toHaveBeenCalled();
 	});
+
+	// sx4bp (pandorum, 2026-09-23): asked for 75 reports, the lead wrote 75
+	// calls, each repeating the same knowledge and instructions. A list states
+	// them once, and every agent still reports on its own row.
+	it("runs every entry of `agents` as its own agent, each on its own row", async () => {
+		const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
+		runMock.mockImplementation(async (task: string) => ({
+			text: `report for ${task}`,
+			iterations: 1,
+			finishReason: "completed",
+			usage: { inputTokens: 3, outputTokens: 2 },
+		}));
+		const updates: unknown[] = [];
+		const tool = createSpawnAgentTool({
+			configProvider: createDelegatedAgentConfigProvider({
+				providerId: "anthropic",
+				modelId: "mock-model",
+			}),
+		});
+
+		const output = (await tool.execute(
+			{
+				instructions: "You review code.",
+				agents: [
+					{ name: "one", task: "lines 1-50" },
+					{ name: "two", task: "lines 51-100" },
+				],
+			},
+			{
+				agentId: "parent-1",
+				conversationId: "conv-parent",
+				iteration: 1,
+				toolCallId: "call-7",
+				sessionId: "lead",
+				emitUpdate: (update: unknown) => updates.push(update),
+			} as never,
+		)) as { results: Array<{ name: string; text?: string }>; usage: unknown };
+
+		expect(output.results.map((entry) => [entry.name, entry.text])).toEqual([
+			["one", "report for lines 1-50"],
+			["two", "report for lines 51-100"],
+		]);
+		expect(output.usage).toEqual({ inputTokens: 6, outputTokens: 4 });
+		// Every update names its member, and each member has a stop of its own.
+		const cancelIds = updates
+			.filter((update) => (update as { cancelId?: string }).cancelId)
+			.map((update) => update as { cancelId: string; member: number });
+		expect(cancelIds.map((entry) => entry.member).sort()).toEqual([0, 1]);
+		expect(new Set(cancelIds.map((entry) => entry.cancelId)).size).toBe(2);
+	});
+
+	it("runs an entry naming a configured agent through that agent's own tool", async () => {
+		const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
+		const configuredExecute = vi.fn(async () => ({
+			text: "configured report",
+			iterations: 1,
+			finishReason: "completed",
+			usage: { inputTokens: 1, outputTokens: 1 },
+		}));
+		const tool = createSpawnAgentTool({
+			configProvider: createDelegatedAgentConfigProvider({
+				providerId: "anthropic",
+				modelId: "mock-model",
+			}),
+			configuredAgents: () =>
+				new Map([
+					[
+						"js_syntactic",
+						{
+							name: "subagent_js_syntactic",
+							execute: configuredExecute,
+						} as never,
+					],
+				]),
+		});
+
+		const output = (await tool.execute(
+			{
+				knowledge: { files: ["game.html"] },
+				agents: [
+					{ name: "a", task: "check braces", type: "subagent_js-syntactic" },
+					{ name: "b", task: "x", type: "nonexistent" },
+				],
+			},
+			{
+				agentId: "p",
+				conversationId: "c",
+				iteration: 1,
+				toolCallId: "t",
+			} as never,
+		)) as { results: Array<{ name: string; text?: string; error?: string }> };
+
+		expect(output.results[0]?.text).toBe("configured report");
+		const prompt = (configuredExecute.mock.calls[0] as unknown[])[0] as {
+			prompt: string;
+		};
+		expect(prompt.prompt).toContain("game.html");
+		expect(prompt.prompt).toContain("check braces");
+		// One bad entry is its own failure, not the batch's.
+		expect(output.results[1]?.error).toContain(
+			'No configured agent named "nonexistent"',
+		);
+		expect(output.results[1]?.error).toContain("js_syntactic");
+	});
+
+	it("routes `merge` to the swarm, and offers it only when there is one", async () => {
+		const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
+		const swarmExecute = vi.fn(async () => ({ digest: "merged", workers: 2 }));
+		const provider = createDelegatedAgentConfigProvider({
+			providerId: "anthropic",
+			modelId: "mock-model",
+		});
+		const plain = createSpawnAgentTool({ configProvider: provider });
+		const swarming = createSpawnAgentTool({
+			configProvider: provider,
+			swarm: { name: "spawn_swarm", execute: swarmExecute } as never,
+		});
+		const properties = (tool: { inputSchema: unknown }) =>
+			Object.keys(
+				(tool.inputSchema as { properties: Record<string, unknown> })
+					.properties,
+			);
+		expect(properties(plain)).not.toContain("merge");
+		expect(properties(swarming)).toEqual(
+			expect.arrayContaining(["agents", "merge", "count"]),
+		);
+
+		const output = await swarming.execute(
+			{
+				instructions: "Find the bug.",
+				merge: true,
+				agents: [{ name: "a", task: "search src" }, { task: "search tests" }],
+			},
+			{ agentId: "p", conversationId: "c", iteration: 1 } as never,
+		);
+
+		expect(output).toEqual({ digest: "merged", workers: 2 });
+		expect(swarmExecute).toHaveBeenCalledWith(
+			{
+				systemPrompt: "Find the bug.",
+				tasks: [{ name: "a", task: "search src" }, { task: "search tests" }],
+			},
+			expect.anything(),
+		);
+		expect(runMock).not.toHaveBeenCalled();
+	});
 });

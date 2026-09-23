@@ -16,6 +16,19 @@
  *   queue, so a slot freed in tier 1 takes the head of the queue back up to
  *   tier 1 rather than leaving it for tier 2 to fill.
  *
+ * - **An uncapped node is paced by admission, one agent at a time.** A node
+ *   with no ceiling (`Infinity`: an elastic or PolyKV opencoti, where the
+ *   engine decides) takes one agent, and the next only once the engine has
+ *   admitted that one -- its first output is the proof. Before this an
+ *   uncapped node "had room" by definition, so at t=0 every queued agent was
+ *   leased to it and waited inside the engine instead of here. Measured in
+ *   the 75-agent sx4bp run (2026-09-23): two opencoti nodes took all 75 at
+ *   once, and an ollama node that finished its one agent in 66 s sat idle for
+ *   the rest of the run with 70 agents queued -- queued on a node, not here.
+ * - **A spawn that fails goes back to the head.** A lease given back through
+ *   {@link AcquireOptions.front} is re-placed before any waiter, so an agent
+ *   that was refused or landed on a dead node keeps its place in the FIFO.
+ *
  * The occupancy it keeps is its own ledger of leases: a node's capacity is a
  * count of agents *we* may run on it -- its Parallel Sessions setting, or for
  * opencoti the sub-pools inside its one session -- so what we have put there
@@ -32,7 +45,38 @@ export interface PlacementLease {
 	nodeId: string;
 	/** Frees the slot. Safe to call more than once; only the first counts. */
 	release(): void;
+	/**
+	 * The engine took this agent: its first output arrived.
+	 *
+	 * On an uncapped node this is what opens the node to the next agent.
+	 * Idempotent, and a no-op on a capped node, whose room is its count.
+	 */
+	admitted(): void;
+	/**
+	 * The engine refused this agent before admitting it. The node takes no
+	 * one else until one of its agents finishes or `holdMs` passes, whichever
+	 * is first. Frees the slot, like {@link release}.
+	 */
+	refused(holdMs?: number): void;
 }
+
+export interface AcquireOptions {
+	/**
+	 * Go before every waiter: an agent coming back from a spawn that failed.
+	 * It was first in the queue when it was placed, and a refusal is not a
+	 * reason to lose that.
+	 */
+	front?: boolean;
+}
+
+/**
+ * How long a refused uncapped node is held when the engine gave no time.
+ *
+ * Short: a refusal describes this moment, and it usually ends when one of the
+ * node's own agents finishes, which reopens it at once. This is only the
+ * fallback for a refusal with nothing of ours running there to finish.
+ */
+export const NODE_REFUSED_HOLD_MS = 5_000;
 
 /**
  * How long a node that could not be reached is left out of the rotation.
@@ -78,7 +122,10 @@ export interface AgentPlacementQueue {
 	 * Rejects only when `signal` aborts, or when no node could ever take an
 	 * agent -- see {@link NoAgentCapacityError}.
 	 */
-	acquire(signal?: AbortSignal): Promise<PlacementLease>;
+	acquire(
+		signal?: AbortSignal,
+		options?: AcquireOptions,
+	): Promise<PlacementLease>;
 	/** Agents waiting for a slot, for a status line. */
 	readonly waiting: number;
 	/** Node id to agents running on it now. A copy. */
@@ -150,6 +197,26 @@ export function createAgentPlacementQueue(
 			timer.unref?.();
 		});
 	let state: PlacementState = emptyPlacementState();
+	// Uncapped nodes: leases not yet admitted, and refusals still holding.
+	const unadmitted = new Map<string, number>();
+	const heldUntil = new Map<string, number>();
+	const isPaced = (node: AgentNode): boolean => node.capacity === Infinity;
+	// What placement sees. An uncapped node has room for exactly one agent
+	// the engine has not yet admitted, and none while a refusal holds it --
+	// said as a capacity so `placeAgent`'s tiers and round-robin still apply.
+	const view = (): AgentNode[] =>
+		nodes.map((node) => {
+			if (!isPaced(node)) {
+				return node;
+			}
+			const running = occupancy.get(node.id) ?? 0;
+			const held = (heldUntil.get(node.id) ?? 0) > now();
+			const pending = (unadmitted.get(node.id) ?? 0) > 0;
+			return {
+				...node,
+				capacity: held || pending ? running : running + 1,
+			};
+		});
 	// `Infinity` is capacity, and the most capacity there is: it is how a node
 	// on an endpoint that decides its own admission says "no bound from here",
 	// which is what the panel recommends for an elastic or PolyKV opencoti.
@@ -162,7 +229,7 @@ export function createAgentPlacementQueue(
 
 	const tryPlace = (): PlacementLease | undefined => {
 		const result = placeAgent({
-			nodes,
+			nodes: view(),
 			occupancy,
 			state,
 			downUntil,
@@ -173,16 +240,52 @@ export function createAgentPlacementQueue(
 			return undefined;
 		}
 		const nodeId = result.placement.nodeId;
+		const paced = nodes.some((node) => node.id === nodeId && isPaced(node));
 		occupancy.set(nodeId, (occupancy.get(nodeId) ?? 0) + 1);
 		let released = false;
+		let pending = paced;
+		if (pending) {
+			unadmitted.set(nodeId, (unadmitted.get(nodeId) ?? 0) + 1);
+		}
+		const settle = (): void => {
+			if (pending) {
+				pending = false;
+				unadmitted.set(nodeId, Math.max(0, (unadmitted.get(nodeId) ?? 0) - 1));
+			}
+		};
+		const release = (): void => {
+			if (released) {
+				return;
+			}
+			released = true;
+			settle();
+			occupancy.set(nodeId, Math.max(0, (occupancy.get(nodeId) ?? 0) - 1));
+			// One of its own agents finishing is the room a refusal was
+			// waiting for.
+			heldUntil.delete(nodeId);
+			drain();
+		};
 		return {
 			nodeId,
-			release: () => {
+			release,
+			admitted: () => {
+				if (released || !pending) {
+					return;
+				}
+				settle();
+				drain();
+			},
+			refused: (holdMs = NODE_REFUSED_HOLD_MS) => {
 				if (released) {
 					return;
 				}
 				released = true;
+				settle();
 				occupancy.set(nodeId, Math.max(0, (occupancy.get(nodeId) ?? 0) - 1));
+				if (paced) {
+					heldUntil.set(nodeId, now() + holdMs);
+					schedule(drain, holdMs);
+				}
 				drain();
 			},
 		};
@@ -203,7 +306,7 @@ export function createAgentPlacementQueue(
 	};
 
 	return {
-		acquire: (signal) => {
+		acquire: (signal, options) => {
 			if (!anyCapacity) {
 				return Promise.reject(new NoAgentCapacityError());
 			}
@@ -212,8 +315,9 @@ export function createAgentPlacementQueue(
 			}
 			// Nobody ahead: place now if anything has room. With anyone
 			// waiting there is no room by construction, and asking anyway
-			// would let a newcomer take a slot that frees mid-call.
-			if (waiters.length === 0) {
+			// would let a newcomer take a slot that frees mid-call. An agent
+			// coming back to the front has nobody ahead by definition.
+			if (waiters.length === 0 || options?.front) {
 				const lease = tryPlace();
 				if (lease) {
 					return Promise.resolve(lease);
@@ -231,7 +335,11 @@ export function createAgentPlacementQueue(
 					};
 					signal.addEventListener("abort", waiter.onAbort, { once: true });
 				}
-				waiters.push(waiter);
+				if (options?.front) {
+					waiters.unshift(waiter);
+				} else {
+					waiters.push(waiter);
+				}
 			});
 		},
 		get waiting() {

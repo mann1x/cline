@@ -1359,6 +1359,11 @@ export async function buildDelegatedAgentConnection(
 		// to bare global fetch.
 		providerConfig: {
 			...(ollamaConfig ?? {}),
+			// The tab's PolyKV section, which this list had been leaving out:
+			// a node on an opencoti server ran with pooling and swarms off
+			// whatever its tab said, and nothing could tell a node offered
+			// swarms from one that was not.
+			...(providerSettings?.polykv ? { polykv: providerSettings.polykv } : {}),
 			providerId: sdkProviderId,
 			modelId,
 			...(apiKey ? { apiKey } : {}),

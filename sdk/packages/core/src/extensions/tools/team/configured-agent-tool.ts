@@ -14,10 +14,6 @@ import {
 } from "@cline/shared";
 import { z } from "zod";
 import { isPolykvProvider } from "../../context/polykv-session";
-import {
-	MAX_NODE_PLACEMENT_ATTEMPTS,
-	NODE_MODEL_MISSING_COOL_OFF_MS,
-} from "./agent-placement-queue";
 import { agentEndpointKey } from "./agent-slot-gate";
 import type { ConfiguredAgentConfig } from "./configured-agent-config";
 import {
@@ -27,7 +23,7 @@ import {
 	type DelegatedAgentRuntimeConfig,
 } from "./delegated-agent";
 import { readDelegationHooks } from "./delegation-call-hooks";
-import { isNodeUnreachable, isWastedNodeRun } from "./node-reachability";
+import { isAdmissionEvent, runPlacedAgent } from "./placed-run";
 import type {
 	SpawnAgentOutput,
 	SubAgentEndContext,
@@ -40,8 +36,6 @@ import {
 import {
 	createSubagentProgress,
 	DELEGATION_PACING_NOTE,
-	reportSubagentPlaced,
-	reportSubagentQueued,
 } from "./subagent-progress";
 
 const CONFIGURED_AGENT_TOOL_NAME_PREFIX = "subagent_";
@@ -420,15 +414,6 @@ export function createConfiguredAgentTools(
 					const placement = ownsEndpoint
 						? undefined
 						: baseRuntimeConfig.nodePlacement;
-					if (placement) {
-						reportSubagentQueued(context.emitUpdate);
-					}
-					let placed = placement
-						? await placement.place(context.signal)
-						: undefined;
-					if (placement) {
-						reportSubagentPlaced(context.emitUpdate, placed);
-					}
 					// Its own abort signal, so a runaway agent can be stopped
 					// without cancelling the session and the siblings that are
 					// working.
@@ -447,21 +432,6 @@ export function createConfiguredAgentTools(
 					if (cancelId) {
 						context.emitUpdate?.({ cancelId });
 					}
-					// Rebuilt per attempt: the node IS the configuration, so
-					// re-placing means resolving the connection again.
-					const buildRuntimeConfig = () =>
-						placed
-							? buildAgentRuntimeConfig(
-									placed.configProvider.getRuntimeConfig(),
-									config,
-									options.resolveProviderConnection,
-									options.resolveProfileConnection,
-									options.listProfileNames,
-								)
-							: provisional;
-					let runtimeConfig = buildRuntimeConfig();
-					let configProvider =
-						createDelegatedAgentConfigProvider(runtimeConfig);
 					const tools = options.createSubAgentTools
 						? await options.createSubAgentTools(config, input, context)
 						: [];
@@ -475,8 +445,24 @@ export function createConfiguredAgentTools(
 					// every instance of this agent shares its system prompt and
 					// tools as one pool.
 					const engineSessionId = `${context.sessionId ?? "cerebriline"}~agent-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-					const buildSubAgent = () =>
-						createDelegatedAgent({
+					const parentAgentId = context.agentId;
+					const spawnInput = {
+						systemPrompt: config.systemPrompt,
+						task: input.prompt,
+					};
+					// From the first build and kept across re-placements: the
+					// observers identify one delegation, not one attempt at it.
+					let started:
+						| { subAgentId: string; conversationId: string }
+						| undefined;
+
+					// Built per attempt: the node IS the configuration, so
+					// re-placing means resolving the connection again.
+					const attempt = async (
+						runtimeConfig: typeof provisional,
+						admitted: () => void,
+					): Promise<AgentResult> => {
+						const subAgent = createDelegatedAgent({
 							kind: "subagent",
 							prompt: config.systemPrompt,
 							engineSessionId,
@@ -494,7 +480,7 @@ export function createConfiguredAgentTools(
 										},
 									}
 								: {}),
-							configProvider,
+							configProvider: createDelegatedAgentConfigProvider(runtimeConfig),
 							tools,
 							maxIterations: config.maxIterations,
 							parentAgentId: context.agentId,
@@ -503,85 +489,75 @@ export function createConfiguredAgentTools(
 							// of a background delegation, and nothing in an ordinary
 							// call the model makes.
 							hooks: readDelegationHooks(context.metadata),
-							onEvent: progress.observe,
+							// The first event is also the engine admitting it.
+							onEvent: (event) => {
+								if (isAdmissionEvent(event)) {
+									admitted();
+								}
+								progress.observe(event);
+							},
 							hookErrorMode: options.hookErrorMode,
 							toolPolicies: options.toolPolicies,
 							requestToolApproval: options.requestToolApproval,
 						});
-					let subAgent = buildSubAgent();
-					// From the first build and kept across re-placements: the
-					// observers identify one delegation, not one attempt at it.
-					const subAgentId = subAgent.getAgentId();
-					const conversationId = subAgent.getConversationId();
-					const parentAgentId = context.agentId;
-					const spawnInput = {
-						systemPrompt: config.systemPrompt,
-						task: input.prompt,
+						if (!started) {
+							started = {
+								subAgentId: subAgent.getAgentId(),
+								conversationId: subAgent.getConversationId(),
+							};
+							if (options.onSubAgentStart) {
+								try {
+									await options.onSubAgentStart({
+										...started,
+										parentAgentId,
+										input: spawnInput,
+									});
+								} catch {
+									// Best-effort observer callback.
+								}
+							}
+						}
+						return await subAgent.run(input.prompt);
 					};
 
-					if (options.onSubAgentStart) {
-						try {
-							await options.onSubAgentStart({
-								subAgentId,
-								conversationId,
-								parentAgentId,
-								input: spawnInput,
-							});
-						} catch {
-							// Best-effort observer callback.
-						}
-					}
-
 					try {
-						// Held to what the endpoint *this* agent resolved to will
-						// serve, which is not necessarily the session's: an agent
-						// naming a provider or a profile has its own. Two agents on
-						// different servers therefore run at once, and two on the same
-						// one queue. Gated around the run alone, like `spawn_agent` --
-						// building the toolset and telling the observers costs the
-						// server nothing, and holding a slot across them would leave
-						// the endpoint idle while a slot was booked.
-						const gate = placed
-							? undefined
-							: baseRuntimeConfig.slotGates?.for(
-									agentEndpointKey(runtimeConfig),
-								);
-						const runOnce = async (): Promise<AgentResult> =>
-							placed
-								? // The node's own gate, which is its endpoint's
-									// answer rather than the session's.
-									await placed.run(() => subAgent.run(input.prompt))
-								: gate
-									? await gate.run(() => subAgent.run(input.prompt))
-									: await subAgent.run(input.prompt);
-
-						// The agent goes back in the queue when the node it
-						// landed on could not run it at all. See the same block
-						// in `spawn-agent-tool`; this is the path a configured
-						// agent takes, and the path the measured failure took.
-						let result: AgentResult = await runOnce();
-						let attemptsLeft = placement ? MAX_NODE_PLACEMENT_ATTEMPTS - 1 : 0;
-						while (
-							placed &&
-							placement &&
-							attemptsLeft > 0 &&
-							isWastedNodeRun(result)
-						) {
-							attemptsLeft -= 1;
-							options.logger?.log(
-								`[Agents] ${placed.nodeLabel ?? placed.nodeId} cannot run ${config.name} (${String(result.text).slice(0, 120)}); re-queueing it on another node`,
+						let result: AgentResult;
+						let placed: { nodeId: string; nodeLabel?: string } | undefined;
+						if (placement) {
+							const outcome = await runPlacedAgent({
+								placement,
+								signal: context.signal,
+								emitUpdate: context.emitUpdate,
+								...(options.logger ? { logger: options.logger } : {}),
+								label: config.name,
+								run: (node, admitted) =>
+									attempt(
+										buildAgentRuntimeConfig(
+											node.configProvider.getRuntimeConfig(),
+											config,
+											options.resolveProviderConnection,
+											options.resolveProfileConnection,
+											options.listProfileNames,
+										),
+										admitted,
+									),
+								beforeRetry: async () => {
+									await releasePolykvAgent(engineSessionId);
+								},
+							});
+							result = outcome.result;
+							placed = outcome.placed;
+						} else {
+							// Held to what the endpoint *this* agent resolved to will
+							// serve, which is not necessarily the session's: an agent
+							// naming a provider or a profile has its own. Two agents on
+							// different servers therefore run at once, and two on the
+							// same one queue.
+							const gate = baseRuntimeConfig.slotGates?.for(
+								agentEndpointKey(provisional),
 							);
-							placed.markUnreachable(NODE_MODEL_MISSING_COOL_OFF_MS);
-							placed.release();
-							reportSubagentQueued(context.emitUpdate);
-							placed = await placement.place(context.signal);
-							reportSubagentPlaced(context.emitUpdate, placed);
-							runtimeConfig = buildRuntimeConfig();
-							configProvider =
-								createDelegatedAgentConfigProvider(runtimeConfig);
-							await releasePolykvAgent(engineSessionId).catch(() => undefined);
-							subAgent = buildSubAgent();
-							result = await runOnce();
+							const run = () => attempt(provisional, () => {});
+							result = gate ? await gate.run(run) : await run();
 						}
 						const output: SpawnAgentOutput = {
 							text: result.text,
@@ -613,11 +589,10 @@ export function createConfiguredAgentTools(
 							...(placed ? { nodeId: placed.nodeId } : {}),
 							...(placed?.nodeLabel ? { nodeLabel: placed.nodeLabel } : {}),
 						};
-						if (options.onSubAgentEnd) {
+						if (options.onSubAgentEnd && started) {
 							try {
 								await options.onSubAgentEnd({
-									subAgentId,
-									conversationId,
+									...started,
 									parentAgentId,
 									input: spawnInput,
 									result: output,
@@ -629,11 +604,10 @@ export function createConfiguredAgentTools(
 						}
 						return output;
 					} catch (error) {
-						if (options.onSubAgentEnd) {
+						if (options.onSubAgentEnd && started) {
 							try {
 								await options.onSubAgentEnd({
-									subAgentId,
-									conversationId,
+									...started,
 									parentAgentId,
 									input: spawnInput,
 									error:
@@ -643,13 +617,6 @@ export function createConfiguredAgentTools(
 								// Best-effort observer callback.
 							}
 						}
-						// A node nothing could connect to is a node the next
-						// agent should not be sent to either. Narrow on
-						// purpose: a server that answered -- a refusal, a 400,
-						// a model error -- is a server that is alive.
-						if (placed && isNodeUnreachable(error)) {
-							placed.markUnreachable();
-						}
 						throw error;
 					} finally {
 						// The lease outlives the run on every path, or a node
@@ -657,7 +624,6 @@ export function createConfiguredAgentTools(
 						// the round narrows with each failure. Same for the stop
 						// registration: one that outlives its agent is a button
 						// that reports success and does nothing.
-						placed?.release();
 						cancellation.release();
 						// Its engine session goes back the moment it ends.
 						const released = await releasePolykvAgent(engineSessionId).catch(

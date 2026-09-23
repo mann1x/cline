@@ -54,18 +54,30 @@ function stubTool(name: string): AgentTool {
 	} as unknown as AgentTool;
 }
 
+/**
+ * Whether `spawn_agent` was handed the swarm -- its `merge` mode.
+ *
+ * The swarm is not a tool of its own any more: asked for one, the model
+ * reaches for `spawn_agent` first (the sx4bp lead did, with a swarm tool
+ * offered or not), and one tool is one schema less in every request.
+ */
 async function swarmOffered(input: {
 	config: CoreSessionConfig;
 }): Promise<boolean> {
+	let handed = false;
 	const runtime = await new DefaultRuntimeBuilder().build({
 		config: input.config,
-		createSpawnTool: () => stubTool("spawn_agent"),
+		createSpawnTool: (options?: { swarm?: AgentTool }) => {
+			handed = options?.swarm !== undefined;
+			return stubTool("spawn_agent");
+		},
 		createSwarmTool: () => stubTool("spawn_swarm"),
 	} as never);
-	return runtime.tools.some((tool) => tool.name === "spawn_swarm");
+	expect(runtime.tools.some((tool) => tool.name === "spawn_swarm")).toBe(false);
+	return handed;
 }
 
-describe("spawn_swarm is gated on an engine that has pools", () => {
+describe("spawn_agent's swarm mode is gated on an engine that has pools", () => {
 	afterEach(() => {
 		resetPolykvAvailability();
 	});
@@ -109,5 +121,43 @@ describe("spawn_swarm is gated on an engine that has pools", () => {
 			}),
 		).toBe(false);
 		expect(fetchImpl.mock.calls).toHaveLength(0);
+	});
+
+	// Reported 2026-09-23: "if there's at least one Node supporting swarms, the
+	// swarm should be offered". The lead here is an ollama model; the swarm is
+	// on the node's opencoti, and its switch is the node's own.
+	it("offers it when an agent node has swarms, whatever the lead runs on", async () => {
+		const fetchImpl = propsServer(true);
+		const leadOnOllama = config(
+			{
+				providerId: "ollama",
+				agentNodes: [
+					{
+						id: "primary",
+						priority: 1,
+						capacity: 1,
+						connection: { providerId: "ollama", modelId: "qwen" },
+					},
+					{
+						id: "node-2",
+						priority: 1,
+						capacity: Number.POSITIVE_INFINITY,
+						connection: {
+							providerId: "opencoti",
+							modelId: "gemma",
+							baseUrl: "http://127.0.0.1:8240/v1",
+							providerConfig: {
+								providerId: "opencoti",
+								baseUrl: "http://127.0.0.1:8240/v1",
+								polykv: { swarm: true },
+								fetch: fetchImpl,
+							},
+						},
+					},
+				],
+			} as never,
+			{ providerId: "ollama", polykv: undefined },
+		);
+		expect(await swarmOffered({ config: leadOnOllama })).toBe(true);
 	});
 });

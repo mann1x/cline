@@ -23,7 +23,12 @@ import { createSpawnAgentTool } from "../../../extensions/tools/team";
 import { admissionFromCapacity } from "../../../extensions/tools/team/agent-admission";
 import type { DelegatedAgentConfigProvider } from "../../../extensions/tools/team/delegated-agent";
 import { createDelegatedAgent } from "../../../extensions/tools/team/delegated-agent";
+import {
+	isAdmissionEvent,
+	runPlacedAgent,
+} from "../../../extensions/tools/team/placed-run";
 import { retryWhileSessionFull } from "../../../extensions/tools/team/session-window-retry";
+import type { SpawnToolOptions } from "../../../extensions/tools/team/spawn-agent-tool";
 import {
 	createSpawnSwarmTool,
 	SWARM_REDUCER_PROMPT,
@@ -141,6 +146,7 @@ export function createSessionSpawnTool(
 	config: CoreSessionConfig,
 	rootSessionId: string,
 	toolExecutors?: Partial<ToolExecutors>,
+	options?: SpawnToolOptions,
 ): AgentTool {
 	const lifecycle = createSessionSubAgentLifecycleCallbacks(
 		deps,
@@ -165,6 +171,10 @@ export function createSessionSpawnTool(
 	};
 
 	return createSpawnAgentTool({
+		...(options?.swarm ? { swarm: options.swarm } : {}),
+		...(options?.configuredAgents
+			? { configuredAgents: options.configuredAgents }
+			: {}),
 		configProvider: {
 			getRuntimeConfig: () =>
 				deps
@@ -311,29 +321,7 @@ export function createSessionSwarmTool(
 		poolId?: string;
 	}) => {
 		const base = configProvider();
-		// A node, when the profile configures them. The node decides the
-		// worker's connection, so it is taken before the worker is built.
-		const placed = await base.getRuntimeConfig().nodePlacement?.place();
-		const workerConfig = placed?.configProvider ?? base;
-		// The lead's pool lives on the lead's engine. A worker placed on
-		// another endpoint cannot attach to it, and sending the id there would
-		// name a pool that server has never heard of -- so the pool travels
-		// only with a worker that stayed home. It still shares the round;
-		// it just prefills its own prefix.
-		const onLeadEndpoint = sameEndpoint(
-			base.getRuntimeConfig(),
-			workerConfig.getRuntimeConfig(),
-		);
 		const workerSessionId = `${rootSessionId}:swarm:${request.name}:${Date.now().toString(36)}`;
-		if (request.poolId && onLeadEndpoint) {
-			// The vendor looks the live pool up under this key, so this is what
-			// makes the agent attach to the lead's snapshot rather than prefill
-			// the whole prompt for itself.
-			setPolykvSession(workerSessionId, {
-				poolId: request.poolId,
-				prefixTokens: 0,
-			});
-		}
 		const tools: AgentTool[] = config.enableTools
 			? filterDisabledTools(
 					createBuiltinTools({
@@ -344,16 +332,62 @@ export function createSessionSwarmTool(
 					}),
 				)
 			: [];
-		const worker = createDelegatedAgent({
-			kind: "subagent",
-			prompt: request.systemPrompt,
-			configProvider: forWorker(workerConfig, workerSessionId),
-			tools,
-			maxIterations: config.maxIterations,
-			parentAgentId: rootSessionId,
-			onEvent: lifecycle.onSubAgentEvent,
-		});
+		// Built on the connection it runs on: a node decides the worker's
+		// connection, so with nodes this runs once per placement.
+		const attempt = async (
+			workerConfig: DelegatedAgentConfigProvider,
+			admitted: () => void,
+		) => {
+			// The lead's pool lives on the lead's engine. A worker placed on
+			// another endpoint cannot attach to it, and sending the id there
+			// would name a pool that server has never heard of -- so the pool
+			// travels only with a worker that stayed home. It still shares the
+			// round; it just prefills its own prefix.
+			const onLeadEndpoint = sameEndpoint(
+				base.getRuntimeConfig(),
+				workerConfig.getRuntimeConfig(),
+			);
+			clearPolykvSession(workerSessionId);
+			if (request.poolId && onLeadEndpoint) {
+				// The vendor looks the live pool up under this key, so this is
+				// what makes the agent attach to the lead's snapshot rather than
+				// prefill the whole prompt for itself.
+				setPolykvSession(workerSessionId, {
+					poolId: request.poolId,
+					prefixTokens: 0,
+				});
+			}
+			const worker = createDelegatedAgent({
+				kind: "subagent",
+				prompt: request.systemPrompt,
+				configProvider: forWorker(workerConfig, workerSessionId),
+				tools,
+				maxIterations: config.maxIterations,
+				parentAgentId: rootSessionId,
+				onEvent: (event) => {
+					if (isAdmissionEvent(event)) {
+						admitted();
+					}
+					lifecycle.onSubAgentEvent?.(event);
+				},
+			});
+			return await worker.run(request.task);
+		};
 		try {
+			const placement = base.getRuntimeConfig().nodePlacement;
+			if (placement) {
+				// Through the spawn queue like every other agent: a refusal --
+				// the lead's window full, or the admission gate's 429 -- puts the
+				// worker back at the front rather than failing it.
+				return (
+					await runPlacedAgent({
+						placement,
+						...(config.logger ? { logger: config.logger } : {}),
+						label: `swarm worker ${request.name}`,
+						run: (node, admitted) => attempt(node.configProvider, admitted),
+					})
+				).result;
+			}
 			// The same gate the lead's sub-agents queue on, so a swarm and a
 			// `spawn_agent` beside it share one bound rather than each getting
 			// the endpoint to itself. It also carries the engine's admission
@@ -365,22 +399,17 @@ export function createSessionSwarmTool(
 			// the answer; failing the worker throws away a task the round was
 			// asked to do.
 			const runWorker = () =>
-				retryWhileSessionFull(() => worker.run(request.task), {
-					onRetry: (attempt, waitMs) =>
+				retryWhileSessionFull(() => attempt(base, () => {}), {
+					onRetry: (retry, waitMs) =>
 						config.logger?.log?.(
 							`[PolyKV] ${request.name} refused: the session's window is full; waiting ${
 								waitMs / 1000
-							}s for a worker to finish (attempt ${attempt})`,
+							}s for a worker to finish (attempt ${retry})`,
 						),
 				});
-			return placed
-				? await placed.run(runWorker)
-				: slotGate
-					? await slotGate.run(runWorker)
-					: await runWorker();
+			return slotGate ? await slotGate.run(runWorker) : await runWorker();
 		} finally {
 			clearPolykvSession(workerSessionId);
-			placed?.release();
 		}
 	};
 
@@ -430,13 +459,17 @@ export function createSessionSwarmTool(
 			// finishes and never merely because a tick came round.
 			admit: async () => {
 				const runtime = configProvider().getRuntimeConfig();
-				// With nodes, the placement queue is the pacing: a worker
-				// launched into a full set of nodes waits there rather than
-				// being refused, and it is drained in spawn order. Asking the
-				// lead endpoint's gate as well would bound the round by ONE
-				// node's capacity.
+				// With nodes, the spawn queue is the pacing, and the question is
+				// whether it has room now: nobody waiting means the last worker
+				// found a node. A worker placed synchronously registers as a
+				// waiter before this is asked again, so a round never launches
+				// ahead of what the nodes take. An uncapped node opens for the
+				// next worker once the engine admits the last one, which is what
+				// lets `count: "max"` grow with the servers instead of stopping
+				// at one. Asking the lead endpoint's gate as well would bound the
+				// round by ONE node's capacity.
 				if (runtime.nodePlacement) {
-					return true;
+					return runtime.nodePlacement.waiting === 0;
 				}
 				const slotGate = runtime.slotGate;
 				return slotGate ? await slotGate.canAdmitMore() : true;

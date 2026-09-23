@@ -19,6 +19,7 @@
  */
 import type { AgentNode } from "./agent-placement";
 import {
+	type AcquireOptions,
 	createAgentPlacementQueue,
 	type PlacementLease,
 } from "./agent-placement-queue";
@@ -90,6 +91,13 @@ export interface PlacedAgentNode {
 	run<T>(fn: () => Promise<T>): Promise<T>;
 	/** Idempotent: the first call frees the slot. */
 	release(): void;
+	/** The engine took the agent; see {@link PlacementLease.admitted}. */
+	admitted(): void;
+	/**
+	 * The engine refused the agent before admitting it. Frees the slot and
+	 * holds the node; see {@link PlacementLease.refused}.
+	 */
+	refused(holdMs?: number): void;
 	/**
 	 * This node could not be reached at all; leave it out of the rotation for
 	 * a cool-off. See {@link AgentPlacementQueue.markUnreachable}.
@@ -103,7 +111,10 @@ export interface PlacedAgentNode {
 
 export interface AgentNodePlacement {
 	/** The node for the next agent, waiting for one when all are full. */
-	place(signal?: AbortSignal): Promise<PlacedAgentNode>;
+	place(
+		signal?: AbortSignal,
+		options?: AcquireOptions,
+	): Promise<PlacedAgentNode>;
 	/** The session's own delegated connection, for callers that skip placement. */
 	base: DelegatedAgentConfigProvider;
 	occupancy(): ReadonlyMap<string, number>;
@@ -161,13 +172,16 @@ export function createAgentNodePlacement(input: {
 			// The lease is the gate -- see `PlacedAgentNode.run`.
 			run: async <T>(fn: () => Promise<T>) => await fn(),
 			release: () => lease.release(),
+			admitted: () => lease.admitted(),
+			refused: (holdMs) => lease.refused(holdMs),
 			markUnreachable: (coolOffMs) =>
 				queue.markUnreachable(lease.nodeId, coolOffMs),
 		};
 	};
 
 	return {
-		place: async (signal) => placed(await queue.acquire(signal)),
+		place: async (signal, options) =>
+			placed(await queue.acquire(signal, options)),
 		base: input.base,
 		occupancy: () => queue.occupancy(),
 		get waiting() {

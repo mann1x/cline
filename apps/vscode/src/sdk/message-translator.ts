@@ -154,6 +154,66 @@ export function isSubagentSpawnTool(toolName: string | undefined): boolean {
 }
 
 /**
+ * The agents of a `spawn_agent` batch (`agents: [...]`), when the call is one.
+ *
+ * One call, one row per agent: the call id alone would put every member of a
+ * batch on one row, and the stop, the node and the speed are all per agent.
+ * Members are keyed `<call id>#<index>`, the same key the tool registers each
+ * member's stop under.
+ */
+export function spawnBatchMembers(input: unknown): Array<{ task: string; name?: string }> | undefined {
+	const agents = (input as { agents?: unknown } | undefined)?.agents
+	if (!Array.isArray(agents) || agents.length === 0) {
+		return undefined
+	}
+	return agents.map((entry, index) => {
+		const member = (entry ?? {}) as { task?: unknown; name?: unknown; type?: unknown }
+		const name =
+			typeof member.name === "string" && member.name.trim()
+				? member.name.trim()
+				: typeof member.type === "string" && member.type.trim()
+					? member.type.trim()
+					: `agent-${index + 1}`
+		return { task: typeof member.task === "string" ? member.task : "", name }
+	})
+}
+
+export function spawnMemberKey(callId: string, index: number): string {
+	return `${callId}#${index}`
+}
+
+/** A spawned agent's report, onto its row: text, tokens, model and node. */
+function applySpawnAgentOutput(entry: SubagentStatusItem, output: Record<string, unknown>): void {
+	entry.result = typeof output.text === "string" ? output.text : undefined
+	const usage = output.usage as Record<string, unknown> | undefined
+	if (usage) {
+		if (typeof usage.inputTokens === "number") entry.inputTokens = usage.inputTokens
+		if (typeof usage.outputTokens === "number") entry.outputTokens = usage.outputTokens
+	}
+	// Which connection it actually ran on. Agents can be
+	// given one of their own, and a configured agent may
+	// name a provider per file, so this is not the lead's
+	// to assume.
+	const model = output.model as Record<string, unknown> | undefined
+	if (model) {
+		if (typeof model.provider === "string") entry.providerId = model.provider
+		if (typeof model.id === "string") entry.modelId = model.id
+	}
+	// Which node took it. Present only on a session
+	// that has nodes, which is the only session where
+	// the answer is worth anything.
+	if (typeof output.nodeId === "string") {
+		entry.nodeId = output.nodeId
+	}
+	// And what the settings panel calls it. The id is a
+	// storage key the panel never shows, so naming a run
+	// by it told the user nothing they could look up.
+	if (typeof output.nodeLabel === "string") {
+		entry.nodeLabel = output.nodeLabel
+	}
+}
+
+/**
  * The agent's name as the workspace spells it, from the tool that runs it.
  *
  * `buildConfiguredAgentToolName` builds `subagent_js_syntactic` from
@@ -592,6 +652,15 @@ export class MessageTranslatorState {
 	/** Get a spawn_agent entry by toolCallId */
 	getSpawnAgent(toolCallId: string): SubagentStatusItem | undefined {
 		return this.spawnAgentEntries.get(toolCallId)
+	}
+
+	/** How many batch members a `spawn_agent` call registered; 0 for a single agent. */
+	countSpawnMembers(toolCallId: string): number {
+		let count = 0
+		while (this.spawnAgentEntries.has(spawnMemberKey(toolCallId, count))) {
+			count += 1
+		}
+		return count
 	}
 
 	/** Whether there are any active spawn_agent calls */
@@ -1566,6 +1635,19 @@ export function buildToolApprovalAskMessage(toolName: string, input: unknown, ts
 
 	if (isSubagentSpawnTool(toolName)) {
 		const parsedInput = parseToolInput(input)
+		const members = spawnBatchMembers(parsedInput)
+		if (members) {
+			return {
+				ts,
+				type: "ask",
+				ask: "use_subagents",
+				text: JSON.stringify({
+					prompts: members.map((member) => member.task),
+					names: members.map((member) => member.name ?? null),
+				} satisfies ClineAskUseSubagents),
+				partial: false,
+			}
+		}
 		const taskPrompt = getStringField(parsedInput, "task") ?? getStringField(parsedInput, "prompt") ?? ""
 		const agentName = getStringField(parsedInput, "name") ?? subagentNameFromToolName(toolName)
 		return {
@@ -2152,7 +2234,14 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 						// says what it is, `subagent_js_syntactic` says how it was
 						// called.
 						const agentName = getStringField(parsedInput, "name") ?? subagentNameFromToolName(toolName)
-						state.addSpawnAgent(callId, taskPrompt, agentName)
+						const members = spawnBatchMembers(parsedInput)
+						if (members) {
+							members.forEach((member, index) => {
+								state.addSpawnAgent(spawnMemberKey(callId, index), member.task, member.name)
+							})
+						} else {
+							state.addSpawnAgent(callId, taskPrompt, agentName)
+						}
 						if (approvedToolMessageTs !== undefined) {
 							state.setSpawnAgentPromptsTs(approvedToolMessageTs)
 						}
@@ -2224,10 +2313,14 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 			const updateToolName = event.toolName ?? state.getStreamingToolName()
 			if (isSubagentSpawnTool(updateToolName) && state.hasSpawnAgents()) {
 				const callId = event.toolCallId ?? ""
-				const entry = callId ? state.getSpawnAgent(callId) : undefined
+				const updateData = event.update as Record<string, unknown> | undefined
+				// A batch member's update names its member; everything else is
+				// the call's one agent.
+				const member = typeof updateData?.member === "number" ? updateData.member : undefined
+				const entry = callId
+					? state.getSpawnAgent(member !== undefined ? spawnMemberKey(callId, member) : callId)
+					: undefined
 				if (entry) {
-					// Apply progress from the update payload if available
-					const updateData = event.update as Record<string, unknown> | undefined
 					if (updateData) {
 						if (typeof updateData.toolCalls === "number") entry.toolCalls = updateData.toolCalls
 						if (typeof updateData.inputTokens === "number") entry.inputTokens = updateData.inputTokens
@@ -2377,38 +2470,36 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 					// final say:"subagent" has partial=false.
 					if (isSubagentSpawnTool(toolName)) {
 						const callId = event.toolCallId ?? ""
-						const entry = callId ? state.getSpawnAgent(callId) : undefined
+						const output = event.output as Record<string, unknown> | undefined
+						// A batch: each member's own report, on its own row. A
+						// merged swarm returns one digest and no per-agent
+						// reports, so its rows end with the call.
+						const batchSize = callId ? state.countSpawnMembers(callId) : 0
+						if (batchSize > 0) {
+							const results = Array.isArray(output?.results) ? (output.results as unknown[]) : []
+							for (let index = 0; index < batchSize; index += 1) {
+								const memberEntry = state.getSpawnAgent(spawnMemberKey(callId, index))
+								if (!memberEntry) {
+									continue
+								}
+								const result = results[index] as Record<string, unknown> | undefined
+								if (result) {
+									applySpawnAgentOutput(memberEntry, result)
+								}
+								const failure = event.error ?? (typeof result?.error === "string" ? result.error : undefined)
+								if (failure) {
+									memberEntry.status = "failed"
+									memberEntry.error = failure
+								} else {
+									memberEntry.status = "completed"
+								}
+							}
+						}
+						const entry = callId && batchSize === 0 ? state.getSpawnAgent(callId) : undefined
 						if (entry) {
 							// Extract output stats from SpawnAgentOutput
-							const output = event.output as Record<string, unknown> | undefined
 							if (output) {
-								entry.result = typeof output.text === "string" ? output.text : undefined
-								const usage = output.usage as Record<string, unknown> | undefined
-								if (usage) {
-									if (typeof usage.inputTokens === "number") entry.inputTokens = usage.inputTokens
-									if (typeof usage.outputTokens === "number") entry.outputTokens = usage.outputTokens
-								}
-								// Which connection it actually ran on. Agents can be
-								// given one of their own, and a configured agent may
-								// name a provider per file, so this is not the lead's
-								// to assume.
-								const model = output.model as Record<string, unknown> | undefined
-								if (model) {
-									if (typeof model.provider === "string") entry.providerId = model.provider
-									if (typeof model.id === "string") entry.modelId = model.id
-								}
-								// Which node took it. Present only on a session
-								// that has nodes, which is the only session where
-								// the answer is worth anything.
-								if (typeof output.nodeId === "string") {
-									entry.nodeId = output.nodeId
-								}
-								// And what the settings panel calls it. The id is a
-								// storage key the panel never shows, so naming a run
-								// by it told the user nothing they could look up.
-								if (typeof output.nodeLabel === "string") {
-									entry.nodeLabel = output.nodeLabel
-								}
+								applySpawnAgentOutput(entry, output)
 							}
 							if (event.error) {
 								entry.status = "failed"

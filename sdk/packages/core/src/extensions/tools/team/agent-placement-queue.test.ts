@@ -312,3 +312,109 @@ describe("taking an unreachable node out of the rotation", () => {
 		expect(waiter.nodeId).toBe("dead");
 	});
 });
+
+/**
+ * The sx4bp run (pandorum, 2026-09-23): two uncapped opencoti nodes and an
+ * ollama node of capacity 1. The opencoti nodes took all 75 agents at t=0, so
+ * the ollama node finished its one in 66 s and got nothing more for the rest
+ * of the run -- the other 70 were queued on nodes, inside the engine, instead
+ * of here where a free node could take them.
+ */
+describe("an uncapped node, paced by admission", () => {
+	const lease = (queue: ReturnType<typeof createAgentPlacementQueue>) =>
+		queue.acquire();
+
+	it("takes one agent, and the next only once the engine admits it", async () => {
+		const queue = createAgentPlacementQueue([
+			node("oc", 1, Number.POSITIVE_INFINITY),
+		]);
+		const first = await lease(queue);
+		const second = track(queue);
+		await settle();
+		expect(second.nodeId).toBeUndefined();
+
+		first.admitted();
+		await settle();
+		expect(second.nodeId).toBe("oc");
+		expect(queue.occupancy().get("oc")).toBe(2);
+	});
+
+	it("leaves the queue to a capped node that frees while it waits on admission", async () => {
+		const queue = createAgentPlacementQueue([
+			node("oc", 1, Number.POSITIVE_INFINITY),
+			node("ollama", 1, 1),
+		]);
+		const a = await lease(queue);
+		const b = await lease(queue);
+		expect([a.nodeId, b.nodeId].sort()).toEqual(["oc", "ollama"]);
+		const onOllama = a.nodeId === "ollama" ? a : b;
+		const third = track(queue);
+		await settle();
+		expect(third.nodeId).toBeUndefined();
+
+		// The ollama agent finishes while opencoti's is still unadmitted: the
+		// head of the queue goes to the node that has room.
+		onOllama.release();
+		await settle();
+		expect(third.nodeId).toBe("ollama");
+	});
+
+	it("holds a node that refused, and reopens it when one of its agents finishes", async () => {
+		const queue = createAgentPlacementQueue(
+			[node("oc", 1, Number.POSITIVE_INFINITY)],
+			{ schedule: () => {} },
+		);
+		const running = await lease(queue);
+		running.admitted();
+		const refused = await lease(queue);
+		const next = track(queue);
+		await settle();
+
+		refused.refused();
+		await settle();
+		// Held: a refusal describes the engine now, so no one else is sent in
+		// behind it.
+		expect(next.nodeId).toBeUndefined();
+
+		running.release();
+		await settle();
+		expect(next.nodeId).toBe("oc");
+	});
+
+	it("reopens a refused node when the hold ends, with nothing of ours to finish", async () => {
+		let clock = 0;
+		const timers: Array<() => void> = [];
+		const queue = createAgentPlacementQueue(
+			[node("oc", 1, Number.POSITIVE_INFINITY)],
+			{ now: () => clock, schedule: (fn) => timers.push(fn) },
+		);
+		const refused = await lease(queue);
+		refused.refused(5_000);
+		const next = track(queue);
+		await settle();
+		expect(next.nodeId).toBeUndefined();
+
+		clock = 5_000;
+		for (const fire of timers) fire();
+		await settle();
+		expect(next.nodeId).toBe("oc");
+	});
+});
+
+describe("an agent coming back from a failed spawn", () => {
+	it("goes to the head of the queue, ahead of agents asked for after it", async () => {
+		const queue = createAgentPlacementQueue([node("n1", 1, 1)]);
+		const held = await queue.acquire();
+		const later = track(queue);
+		const order: string[] = [];
+		queue
+			.acquire(undefined, { front: true })
+			.then(() => order.push("returned"));
+		await settle();
+
+		held.release();
+		await settle();
+		expect(order).toEqual(["returned"]);
+		expect(later.nodeId).toBeUndefined();
+	});
+});

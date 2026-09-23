@@ -5458,6 +5458,67 @@ describe("a sub-agent's placement, while it runs", () => {
 	})
 })
 
+describe("a spawn_agent batch", () => {
+	const send = (state: MessageTranslatorState, event: Record<string, unknown>) =>
+		translateSessionEvent(
+			{ type: "agent_event", payload: { sessionId: "session-1", event: event as unknown as AgentEvent } },
+			state,
+		)
+
+	// One call, several agents: each needs its own row, because the stop, the
+	// node and the speed are all per agent.
+	it("gives every member its own row, updated and finished on its own", () => {
+		const state = new MessageTranslatorState()
+		send(state, {
+			type: "content_start",
+			contentType: "tool",
+			toolName: "spawn_agent",
+			toolCallId: "call-1",
+			input: {
+				instructions: "review",
+				agents: [
+					{ name: "one", task: "lines 1-50" },
+					{ task: "lines 51-100", type: "js_syntactic" },
+				],
+			},
+		})
+		expect(state.getSpawnAgentItems().map((item) => [item.agentName, item.prompt])).toEqual([
+			["one", "lines 1-50"],
+			["js_syntactic", "lines 51-100"],
+		])
+
+		send(state, {
+			type: "content_update",
+			contentType: "tool",
+			toolName: "spawn_agent",
+			toolCallId: "call-1",
+			update: { member: 1, queued: false, nodeLabel: "Node2", genTps: 40 },
+		})
+		const [first, second] = state.getSpawnAgentItems()
+		expect(first?.nodeLabel).toBeUndefined()
+		expect(second).toMatchObject({ nodeLabel: "Node2", genTps: 40 })
+
+		send(state, {
+			type: "content_end",
+			contentType: "tool",
+			toolName: "spawn_agent",
+			toolCallId: "call-1",
+			output: {
+				results: [
+					{ name: "one", text: "all good", usage: { inputTokens: 5, outputTokens: 2 }, nodeLabel: "Node1" },
+					{ name: "js_syntactic", error: "No configured agent named js_syntactic" },
+				],
+				usage: { inputTokens: 5, outputTokens: 2 },
+			},
+		})
+		expect(state.getSpawnAgentItems().map((item) => [item.status, item.nodeLabel])).toEqual([
+			["completed", "Node1"],
+			["failed", "Node2"],
+		])
+		expect(state.getSpawnAgentItems()[0]?.result).toBe("all good")
+	})
+})
+
 // ---------------------------------------------------------------------------
 // configuredAgentUsage
 // ---------------------------------------------------------------------------

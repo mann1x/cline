@@ -66,6 +66,7 @@ import type { ConfiguredAgentConfig } from "../../extensions/tools/team/configur
 import { loadConfiguredAgentConfigs } from "../../extensions/tools/team/configured-agent-config";
 import { createConfiguredAgentTools } from "../../extensions/tools/team/configured-agent-tool";
 import { createCreateAgentTool } from "../../extensions/tools/team/create-agent-tool";
+import { configuredAgentKey } from "../../extensions/tools/team/spawn-agent-tool";
 import {
 	filterDisabledTools,
 	isModelToolEnabledGlobally,
@@ -954,6 +955,9 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 				} to offer them.`,
 			);
 		}
+		// Kept by name as well as registered, so a `spawn_agent` batch entry can
+		// run as one of them (`agents[].type`).
+		let configuredAgentTools: AgentTool[] = [];
 		if (normalized.enableSpawnAgent) {
 			// Offered to the lead only, and gated with the subagents it creates:
 			// writing an agent file is pointless in a session that cannot run one,
@@ -966,58 +970,57 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 				),
 			);
 			if (configuredAgents.configs.length > 0) {
-				tools.push(
-					...filterAvailableTools(
-						createConfiguredAgentTools({
-							configProvider: delegatedAgentConfigProvider,
-							agents: configuredAgents.configs,
-							// So a node that could not run an agent leaves a
-							// line: the agent is re-queued and succeeds, so the
-							// run looks clean and the bad node is otherwise
-							// invisible.
-							logger: logger ?? config.logger,
-							// An agent naming a second provider needs that provider's
-							// own credentials and base URL, and only the host knows
-							// where its provider store is.
-							resolveProviderConnection: config.resolveProviderConnection,
-							resolveProfileConnection: config.resolveProfileConnection,
-							listProfileNames: config.listProfileNames,
-							createSubAgentTools: (agent) =>
-								normalized.enableTools
-									? filterToolsForConfiguredAgent(
-											createBuiltinToolsList(
-												config.cwd,
-												agent.providerId ?? config.providerId,
-												normalized.mode,
-												agent.modelId ?? config.modelId,
-												config.toolRoutingRules,
-												effectiveToolPolicies,
-												agent.skills !== undefined &&
-													userInstructionService?.createSkillsExecutor
-													? userInstructionService.createSkillsExecutor(
-															agent.skills,
-														)
-													: undefined,
-												toolExecutors,
-												telemetry ?? config.telemetry,
-												config.qaCredentials,
-												input.runCommandExecutionController,
-												input.readReceipts,
-												fileReadMaxChars,
-											),
-											agent,
-										)
-									: [],
-							hookErrorMode: config.hookErrorMode,
-							toolPolicies: effectiveToolPolicies,
-							requestToolApproval: input.requestToolApproval,
-							onSubAgentEvent: input.onSubAgentEvent,
-							onSubAgentStart: input.onSubAgentStart,
-							onSubAgentEnd: input.onSubAgentEnd,
-						}),
-						effectiveToolPolicies,
-					),
+				configuredAgentTools = filterAvailableTools(
+					createConfiguredAgentTools({
+						configProvider: delegatedAgentConfigProvider,
+						agents: configuredAgents.configs,
+						// So a node that could not run an agent leaves a
+						// line: the agent is re-queued and succeeds, so the
+						// run looks clean and the bad node is otherwise
+						// invisible.
+						logger: logger ?? config.logger,
+						// An agent naming a second provider needs that provider's
+						// own credentials and base URL, and only the host knows
+						// where its provider store is.
+						resolveProviderConnection: config.resolveProviderConnection,
+						resolveProfileConnection: config.resolveProfileConnection,
+						listProfileNames: config.listProfileNames,
+						createSubAgentTools: (agent) =>
+							normalized.enableTools
+								? filterToolsForConfiguredAgent(
+										createBuiltinToolsList(
+											config.cwd,
+											agent.providerId ?? config.providerId,
+											normalized.mode,
+											agent.modelId ?? config.modelId,
+											config.toolRoutingRules,
+											effectiveToolPolicies,
+											agent.skills !== undefined &&
+												userInstructionService?.createSkillsExecutor
+												? userInstructionService.createSkillsExecutor(
+														agent.skills,
+													)
+												: undefined,
+											toolExecutors,
+											telemetry ?? config.telemetry,
+											config.qaCredentials,
+											input.runCommandExecutionController,
+											input.readReceipts,
+											fileReadMaxChars,
+										),
+										agent,
+									)
+								: [],
+						hookErrorMode: config.hookErrorMode,
+						toolPolicies: effectiveToolPolicies,
+						requestToolApproval: input.requestToolApproval,
+						onSubAgentEvent: input.onSubAgentEvent,
+						onSubAgentStart: input.onSubAgentStart,
+						onSubAgentEnd: input.onSubAgentEnd,
+					}),
+					effectiveToolPolicies,
 				);
+				tools.push(...configuredAgentTools);
 			}
 		}
 		if (!this.teamRuntimeEntries.has(registryKey)) {
@@ -1153,7 +1156,55 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 				nodes: config.agentNodes,
 			})
 		) {
-			const spawnTool = createSpawnTool();
+			// Swarms are offered when anything the agents can run on has them:
+			// the lead's own connection, the Agents tab's, or any agent node --
+			// each asked for by its profile's switch AND confirmed by its engine
+			// (`pools_enabled` from its own `/props`; a server booted without
+			// `--polykv-max-pools` is the default and would fail on the first
+			// pool call). A node without them still takes swarm workers, as a
+			// fixed-capacity resource; the spawn queue paces the uncapped ones
+			// by admission. The switch is read before the probe, so a session
+			// that never asked for a swarm spends no round trip on it.
+			//
+			// Off by default -- one swarm spends several agents' worth of tokens
+			// on a single turn, which is a decision worth making once rather than
+			// discovering in a bill.
+			const swarmCandidates = [
+				config.providerConfig,
+				config.delegatedAgentConnection?.providerConfig,
+				...(config.agentNodes ?? []).map(
+					(node) => node.connection.providerConfig,
+				),
+			].filter(
+				(candidate): candidate is NonNullable<typeof candidate> =>
+					(candidate as { polykv?: { swarm?: boolean } } | undefined)?.polykv
+						?.swarm === true,
+			);
+			let swarmTool: AgentTool | undefined;
+			if (createSwarmTool && swarmCandidates.length > 0) {
+				const confirmed = await Promise.all(
+					swarmCandidates.map((candidate) =>
+						polykvPoolsConfirmed(candidate as never).catch(() => false),
+					),
+				);
+				if (confirmed.some(Boolean)) {
+					swarmTool = createSwarmTool();
+				}
+			}
+			// The swarm is a mode of `spawn_agent` (`merge`), not a tool of its
+			// own: asked for a swarm, the model reaches for `spawn_agent` first
+			// either way, and one tool is one schema less in every request.
+			const configuredByName = new Map(
+				configuredAgentTools.map(
+					(tool) => [configuredAgentKey(tool.name), tool] as const,
+				),
+			);
+			const spawnTool = createSpawnTool({
+				...(swarmTool ? { swarm: swarmTool } : {}),
+				...(configuredByName.size > 0
+					? { configuredAgents: () => configuredByName }
+					: {}),
+			});
 			tools.push({
 				...spawnTool,
 				execute: async (spawnInput, context) => {
@@ -1161,33 +1212,6 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 					return spawnTool.execute(spawnInput, context);
 				},
 			});
-
-			// `spawn_swarm` sits behind the same delegation capability and two
-			// more of its own: the profile must have asked for swarms, and the
-			// engine must say it has a pool tree -- `pools_enabled` from its
-			// own `/props`, not a guess from the provider id. A server booted
-			// without `--polykv-max-pools` is the default, and it would get the
-			// tool under the weaker gate and fail on the first pool call. Off by default -- one
-			// swarm spends several agents' worth of tokens on a single turn,
-			// which is a decision worth making once rather than discovering in
-			// a bill.
-			// The profile switch is read first, and the probe only after it:
-			// a session that never asked for a swarm must not spend a round
-			// trip discovering it could not have had one.
-			if (
-				createSwarmTool &&
-				config.providerConfig?.polykv?.swarm === true &&
-				(await polykvPoolsConfirmed(config.providerConfig))
-			) {
-				const swarmTool = createSwarmTool();
-				tools.push({
-					...swarmTool,
-					execute: async (swarmInput, context) => {
-						ensureTeamRuntime();
-						return swarmTool.execute(swarmInput, context);
-					},
-				});
-			}
 		}
 
 		if (normalized.enableAgentTeams) {

@@ -30,6 +30,7 @@ import type {
 	TeamEvent,
 } from "../../extensions/tools/team";
 import type { ConfiguredAgentConfig } from "../../extensions/tools/team/configured-agent-config";
+import type { SpawnToolOptions } from "../../extensions/tools/team/spawn-agent-tool";
 import type { WorkspaceManager } from "../../services/workspace/workspace-manager";
 import type { CoreSessionConfig } from "../../types/config";
 
@@ -81,7 +82,7 @@ export interface RuntimeBuilderInput {
 	onSubAgentEvent?: (event: AgentEvent) => void;
 	onSubAgentStart?: (context: SubAgentStartContext) => void | Promise<void>;
 	onSubAgentEnd?: (context: SubAgentEndContext) => void | Promise<void>;
-	createSpawnTool?: () => AgentTool;
+	createSpawnTool?: (options?: SpawnToolOptions) => AgentTool;
 	/** `spawn_swarm`, when the host can build one. See `local/spawn-tool.ts`. */
 	createSwarmTool?: () => AgentTool;
 	onTeamRestored?: () => void;

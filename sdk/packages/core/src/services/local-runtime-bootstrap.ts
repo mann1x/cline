@@ -35,6 +35,7 @@ import type {
 	SubAgentStartContext,
 	TeamEvent,
 } from "../extensions/tools/team";
+import type { SpawnToolOptions } from "../extensions/tools/team/spawn-agent-tool";
 import { createCheckpointHooks } from "../hooks/checkpoint-hooks";
 import {
 	createHookAuditHooks,
@@ -260,7 +261,7 @@ export interface PrepareLocalRuntimeBootstrapOptions {
 		onSubAgentStart?: (context: SubAgentStartContext) => void | Promise<void>;
 		onSubAgentEnd?: (context: SubAgentEndContext) => void | Promise<void>;
 	};
-	createSpawnTool: () => AgentTool;
+	createSpawnTool: (options?: SpawnToolOptions) => AgentTool;
 	createSwarmTool?: () => AgentTool;
 	readSessionMetadata: () => Promise<Record<string, unknown> | undefined>;
 	writeSessionMetadata: (

@@ -774,12 +774,13 @@ export class LocalRuntimeHost implements RuntimeHost {
 				void this.eventBridge.handleTeamEvent(sessionId, event);
 				bootstrap.config.onTeamEvent?.(event);
 			},
-			createSpawnTool: () =>
+			createSpawnTool: (options) =>
 				createSessionSpawnTool(
 					subAgentDeps,
 					bootstrap.config,
 					sessionId,
 					sessionToolExecutors,
+					options,
 				),
 			createSwarmTool: () =>
 				createSessionSwarmTool(
