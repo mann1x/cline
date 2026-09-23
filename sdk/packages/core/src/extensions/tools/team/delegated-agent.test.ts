@@ -176,3 +176,38 @@ describe("buildDelegatedAgentConfig", () => {
 		expect(config.condenseDiscardedReasoning).toBeUndefined();
 	});
 });
+
+describe("a tab that turns thinking off", () => {
+	// pandorum, 2026-09-23: the lead ran thinking `high` and the Agents tab
+	// thinking off. The tab's override is spread over the session's runtime
+	// config and its keys pinned, so a present key -- even one whose value is
+	// undefined -- must beat the lead's, now and after every session push.
+	it("keeps thinking off and drops the lead's budget and cap", () => {
+		const lead = {
+			providerId: "ollama",
+			modelId: "lead",
+			thinking: true,
+			reasoningEffort: "high" as const,
+			thinkingBudgetTokens: 32_000,
+			maxTokensPerTurn: 64_000,
+		};
+		const tab = {
+			providerId: "opencoti",
+			modelId: "agent",
+			thinking: false,
+			thinkingBudgetTokens: undefined,
+			maxTokensPerTurn: undefined,
+		};
+		const provider = createDelegatedAgentConfigProvider(
+			{ ...lead, ...tab } as never,
+			Object.keys(tab) as never,
+		);
+		provider.updateConnectionDefaults(lead as never);
+
+		const connection = provider.getConnectionConfig();
+		expect(connection.thinking).toBe(false);
+		expect(connection.thinkingBudgetTokens).toBeUndefined();
+		expect(connection.maxTokensPerTurn).toBeUndefined();
+		expect(connection.modelId).toBe("agent");
+	});
+});

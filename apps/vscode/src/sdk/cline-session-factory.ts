@@ -1348,6 +1348,27 @@ export async function buildDelegatedAgentConnection(
 	// follows, and the reason a tab that changes nothing changes nothing.
 	const scopedMaxToolResultChars = positiveFiniteNumber(providerSettings?.maxToolResultChars)
 
+	// The tab's thinking, temperature and output cap. Each is taken only when
+	// the tab states it, and then it is the tab's whole answer: a tab with
+	// thinking off must not keep the lead's budget, and a tab on `auto` output
+	// must not keep the lead's cap -- so those keys are present and undefined,
+	// which is what overrides and pins them downstream.
+	const scopedReasoning = providerSettings?.reasoning as ProviderReasoningSettings | undefined
+	const reasoningOverride = scopedReasoning
+		? { ...normalizeProviderReasoningSettings(scopedReasoning), thinkingBudgetTokens: undefined }
+		: {}
+	const scopedSampling = providerSettings?.sampling as { temperature?: unknown; numPredict?: unknown } | undefined
+	const scopedTemperature =
+		typeof scopedSampling?.temperature === "number" && Number.isFinite(scopedSampling.temperature)
+			? scopedSampling.temperature
+			: undefined
+	const scopedOutputBudget = providerSettings?.outputBudget as { mode?: unknown; maxTokens?: unknown } | undefined
+	const scopedOutputCap =
+		positiveFiniteNumber(scopedSampling?.numPredict) ??
+		(scopedOutputBudget?.mode === "manual" ? positiveFiniteNumber(scopedOutputBudget.maxTokens) : undefined)
+	const outputCapOverride =
+		scopedOutputCap !== undefined || scopedOutputBudget !== undefined ? { maxTokensPerTurn: scopedOutputCap } : {}
+
 	return {
 		providerId: sdkProviderId,
 		modelId,
@@ -1355,6 +1376,9 @@ export async function buildDelegatedAgentConnection(
 		...(baseUrl !== undefined ? { baseUrl } : {}),
 		...(hasKnownModels ? { knownModels } : {}),
 		...(scopedMaxToolResultChars !== undefined ? { maxToolResultChars: scopedMaxToolResultChars } : {}),
+		...reasoningOverride,
+		...(scopedTemperature !== undefined ? { temperature: scopedTemperature } : {}),
+		...outputCapOverride,
 		// The proxy/CA-aware fetch belongs here for the same reason it does on
 		// the session's own config: without it the agents' model calls fall back
 		// to bare global fetch.
@@ -1365,6 +1389,11 @@ export async function buildDelegatedAgentConnection(
 			// whatever its tab said, and nothing could tell a node offered
 			// swarms from one that was not.
 			...(providerSettings?.polykv ? { polykv: providerSettings.polykv } : {}),
+			// The tab's sampler, which this list had been leaving out the same
+			// way: the request builders read `providerConfig.sampling`, so an
+			// opencoti node sent the engine's defaults whatever its tab said.
+			...(providerSettings?.sampling ? { sampling: providerSettings.sampling as ProviderSamplingOptions } : {}),
+			...reasoningOverride,
 			providerId: sdkProviderId,
 			modelId,
 			...(apiKey ? { apiKey } : {}),

@@ -94,6 +94,17 @@ export type DelegatedAgentConnectionOverride = Pick<
 	// context window, and an Agents tab that names a window of its own has
 	// named a different budget with it. Absent, agents keep the session's.
 	| "maxToolResultChars"
+	// The tab's thinking, sampler temperature and output cap. Leaving these
+	// out handed every delegated agent the LEAD's: on 2026-09-23 an Agents
+	// tab with thinking off ran its opencoti agents at the lead's `high`, a
+	// 32,000-token budget against the lead's 64,000 cap, and one of them
+	// thought for 11 minutes. A key that is present wins even when its value
+	// is undefined -- that is how a tab says "not the session's, none".
+	| "thinking"
+	| "reasoningEffort"
+	| "thinkingBudgetTokens"
+	| "maxTokensPerTurn"
+	| "temperature"
 >;
 
 /**

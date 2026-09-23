@@ -2237,6 +2237,55 @@ describe("buildDelegatedAgentConnection", () => {
 		expect(connection?.providerConfig?.modelInfo?.contextWindow).not.toBe(128_000)
 	})
 
+	// pandorum, 2026-09-23: the Agents tab (opencoti) had thinking off and the
+	// lead (ollama) had it on at `high`. The tab's reasoning never reached the
+	// override, so every agent ran at the lead's 32,000-token budget.
+	it("carries the tab's thinking, sampler and output cap, not the lead's", async () => {
+		const off = await buildDelegatedAgentConnection(
+			{ actModeApiProvider: "ollama" } as never,
+			snapshot({
+				selectedModelId: "small-agent",
+				reasoning: { enabled: false, effort: "xhigh" },
+				sampling: { temperature: 0.7, repeatPenalty: 1.15 },
+				outputBudget: { mode: "auto" },
+			}),
+		)
+
+		expect(off?.thinking).toBe(false)
+		expect(off?.reasoningEffort).toBeUndefined()
+		// Present and undefined: that is what overrides the lead's budget and cap.
+		expect(off && "thinkingBudgetTokens" in off).toBe(true)
+		expect(off?.thinkingBudgetTokens).toBeUndefined()
+		expect(off && "maxTokensPerTurn" in off).toBe(true)
+		expect(off?.maxTokensPerTurn).toBeUndefined()
+		expect(off?.temperature).toBe(0.7)
+		expect(off?.providerConfig?.sampling).toMatchObject({ temperature: 0.7, repeatPenalty: 1.15 })
+		expect(off?.providerConfig?.thinking).toBe(false)
+
+		const on = await buildDelegatedAgentConnection(
+			{ actModeApiProvider: "ollama" } as never,
+			snapshot({
+				selectedModelId: "small-agent",
+				reasoning: { enabled: true, effort: "medium" },
+				outputBudget: { mode: "manual", maxTokens: 8_000 },
+			}),
+		)
+		expect(on?.thinking).toBe(true)
+		expect(on?.reasoningEffort).toBe("medium")
+		expect(on?.maxTokensPerTurn).toBe(8_000)
+	})
+
+	// A tab that states none of them keeps the session's, as before.
+	it("leaves thinking, temperature and the cap to the session when the tab says nothing", async () => {
+		const connection = await buildDelegatedAgentConnection(
+			{ actModeApiProvider: "ollama" } as never,
+			snapshot({ selectedModelId: "small-agent" }),
+		)
+		for (const key of ["thinking", "reasoningEffort", "thinkingBudgetTokens", "maxTokensPerTurn", "temperature"]) {
+			expect(connection && key in connection).toBe(false)
+		}
+	})
+
 	// Not configured is not the same as configured badly: agents keep inheriting
 	// the session's connection, which is the behaviour every build has had.
 	it.each([

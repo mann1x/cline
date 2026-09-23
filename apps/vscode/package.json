@@ -2,7 +2,7 @@
 	"name": "cerebriline",
 	"displayName": "Cerebriline",
 	"description": "Autonomous coding agent for your IDE. A Cline fork optimized for small local LLMs, with per-model prompt templating, expert escalation, sub-agents, and image generation.",
-	"version": "4.100.168",
+	"version": "4.100.169",
 	"icon": "assets/icons/icon.png",
 	"engines": {
 		"vscode": "^1.101.0"

@@ -817,31 +817,13 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 				? (key) => (key === polykvEndpointKey ? polykvAdmission : undefined)
 				: undefined,
 		);
+		// Spread, not a field list: the list here copied seven fields and
+		// dropped the tab's thinking, temperature and output cap, so the lead's
+		// won (2026-09-23). The host includes a key only when the tab means it,
+		// and a present key -- even one set to undefined -- is what pins it
+		// against the session's pushes below.
 		const agentsOverrides: Partial<DelegatedAgentConnectionConfig> =
-			agentsConnection
-				? {
-						providerId: agentsConnection.providerId,
-						modelId: agentsConnection.modelId,
-						...(agentsConnection.apiKey !== undefined
-							? { apiKey: agentsConnection.apiKey }
-							: {}),
-						...(agentsConnection.baseUrl !== undefined
-							? { baseUrl: agentsConnection.baseUrl }
-							: {}),
-						...(agentsConnection.headers !== undefined
-							? { headers: agentsConnection.headers }
-							: {}),
-						...(agentsConnection.knownModels !== undefined
-							? { knownModels: agentsConnection.knownModels }
-							: {}),
-						...(agentsConnection.providerConfig !== undefined
-							? { providerConfig: agentsConnection.providerConfig }
-							: {}),
-						...(agentsConnection.maxToolResultChars !== undefined
-							? { maxToolResultChars: agentsConnection.maxToolResultChars }
-							: {}),
-					}
-				: {};
+			agentsConnection ? { ...agentsConnection } : {};
 		// The nodes, when the profile names any. Built after the registry so a
 		// node can take its endpoint's own gate from it, and handed to the
 		// delegated config provider below, which is the one thing every spawn
