@@ -214,6 +214,7 @@ export {
 } from "./providers/vendors/polykv";
 export {
 	hoistLeadEnvironment,
+	type LeadAttach,
 	markLeadWindowLive,
 	POLYKV_LEAD_RECHECK_MS,
 	polykvLeadState,

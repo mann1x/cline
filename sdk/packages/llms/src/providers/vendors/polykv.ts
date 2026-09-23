@@ -31,6 +31,10 @@ export interface PolykvPool {
 	parent?: string;
 	branch_pos?: number;
 	prefix_len: number;
+	/** A `shared: true` create found an existing root instead of making one. */
+	reused?: boolean;
+	/** Said, not refused: e.g. an owner that holds no live allocation. */
+	warning?: string;
 }
 
 /**
@@ -304,6 +308,12 @@ export interface PolykvClient {
 				ephemeral?: boolean;
 				/** Declared expected prefix length, validated server-side. */
 				expect_len?: number;
+				/**
+				 * Find-or-create (`polykv_shared_root_v1`): an unowned root with
+				 * exactly these tokens and the same `ephemeral` is returned with
+				 * `reused: true`. A 400 with an owner or a snapshot source.
+				 */
+				shared?: boolean;
 			},
 	): Promise<PolykvPool>;
 	/**
@@ -574,6 +584,24 @@ export const OPENCOTI_FEATURES = {
 	elasticRw: "elastic_rw_v1",
 	/** `hold_ticks` -- how long a grow condition must hold -- is settable too. */
 	elasticHoldRw: "elastic_hold_rw_v1",
+	/**
+	 * A slot whose own cache covers a named pool's whole prefix is rebased onto
+	 * the pool, so a continuation turn keeps its share (`n_pool_shared = P`).
+	 */
+	rebase: "polykv_rebase_v1",
+	/** Under the tps floor a busy top slot drains instead of taking new work. */
+	elasticDrain: "elastic_drain_v1",
+	/**
+	 * `num_ctx` is the PRIVATE budget: an attached pool's shared prefix rides
+	 * above it, capped at the per-session maximum.
+	 */
+	privateWindow: "polykv_private_window_v1",
+	/** `POST /polykv/pools {shared: true}` is find-or-create for an unowned root. */
+	sharedRoot: "polykv_shared_root_v1",
+	/** `POST /sessions/close {session_id}`: the close for ids the path cannot carry. */
+	sessionCloseBody: "session_close_body_v1",
+	/** The response's `opencoti` block carries `pool_match` and `pool_len`. */
+	poolMatchInResponse: "pool_match_in_response_v1",
 } as const;
 
 export type OpencotiFeature =

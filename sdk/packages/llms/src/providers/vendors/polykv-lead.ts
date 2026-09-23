@@ -3,6 +3,8 @@ import {
 	clearPolykvSession,
 	createPolykvClient,
 	getPolykvSession,
+	hasOpencotiFeature,
+	OPENCOTI_FEATURES,
 	type PolykvClient,
 	polykvRoot,
 	probeOpencotiProps,
@@ -57,8 +59,23 @@ interface LeadRoot {
 	root: string;
 	client: PolykvClient;
 	/** `undefined` when the root could not be pooled. */
-	pool?: Promise<{ id: string; prompt: string } | undefined>;
+	pool?: Promise<
+		| { id: string; prompt: string; prefixLen: number; shared: boolean }
+		| undefined
+	>;
 	sessions: Set<string>;
+}
+
+/** Where a lead request attaches, and what that means for its window. */
+export interface LeadAttach {
+	poolId: string;
+	/** Tokens of the request's prefix the pool holds. */
+	sharedTokens: number;
+	/**
+	 * The server counts `num_ctx` as the private budget
+	 * (`polykv_private_window_v1`): the shared prefix rides above it.
+	 */
+	privateWindow: boolean;
 }
 
 interface LeadSession {
@@ -169,7 +186,9 @@ async function detach(lead: LeadSession): Promise<void> {
 	if (root.sessions.size === 0 && ROOTS.get(root.key) === root) {
 		ROOTS.delete(root.key);
 		const pool = await root.pool?.catch(() => undefined);
-		if (pool) {
+		// A shared root is every process's: another window may be attached to it
+		// right now. The engine's ephemeral sweep releases it once nothing is.
+		if (pool && !pool.shared) {
 			await releasePool(root.client, pool.id);
 		}
 	}
@@ -191,7 +210,7 @@ export async function prepareLeadPool(options: {
 	/** The conversation's session id, as the host knows it. */
 	sessionId: string;
 	now?: number;
-}): Promise<string | undefined> {
+}): Promise<LeadAttach | undefined> {
 	const { body, sessionId } = options;
 	const now = options.now ?? Date.now();
 	const messages = body.messages as Array<Record<string, unknown>>;
@@ -253,20 +272,37 @@ export async function prepareLeadPool(options: {
 	}
 	lead.lastUsed = now;
 
+	const sharedRoot = hasOpencotiFeature(
+		props.features,
+		OPENCOTI_FEATURES.sharedRoot,
+	);
 	root.pool ??= (async () => {
 		const prompt = await renderLayer(root.client, [messages[0]], tools);
 		if (!prompt) {
 			return undefined;
 		}
-		const pool = await root.client.createPool({ prompt, pin: true });
-		return { id: pool.pool_id, prompt };
+		// Find-or-create where the server has it: every process -- two VS Code
+		// windows, the CLI -- converges on one root, and the engine owns its
+		// life. Ephemeral and unpinned, it is swept once nothing references it
+		// (no sub-pool, no attach for 60 s), so no process has to decide when
+		// the others are done and a crash leaks nothing. Without it, the root is
+		// this process's own: pinned, and released with its last conversation.
+		const pool = sharedRoot
+			? await root.client.createPool({ prompt, shared: true, ephemeral: true })
+			: await root.client.createPool({ prompt, pin: true });
+		return {
+			id: pool.pool_id,
+			prompt,
+			prefixLen: pool.prefix_len,
+			shared: sharedRoot,
+		};
 	})().catch(() => undefined);
 	const rootPool = await root.pool;
 	if (!rootPool) {
 		return undefined;
 	}
 
-	let attach = { id: rootPool.id, prefixLen: 0 };
+	let attach = { id: rootPool.id, prefixLen: 0, shared: rootPool.prefixLen };
 	if (lead.windowLive) {
 		const subKey = hashString(`${rootKey}\n${JSON.stringify(messages[1])}`);
 		if (lead.sub?.key !== subKey) {
@@ -300,7 +336,7 @@ export async function prepareLeadPool(options: {
 		}
 		const sub = await lead.sub?.pool;
 		if (sub) {
-			attach = sub;
+			attach = { ...sub, shared: sub.prefixLen };
 		}
 	}
 	setPolykvSession(sessionId, {
@@ -308,7 +344,14 @@ export async function prepareLeadPool(options: {
 		prefixTokens: attach.prefixLen,
 		layout: "lead",
 	});
-	return attach.id;
+	return {
+		poolId: attach.id,
+		sharedTokens: attach.shared,
+		privateWindow: hasOpencotiFeature(
+			props.features,
+			OPENCOTI_FEATURES.privateWindow,
+		),
+	};
 }
 
 /**

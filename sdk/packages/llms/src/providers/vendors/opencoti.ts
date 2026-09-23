@@ -163,6 +163,14 @@ export interface OpencotiResponseFacts {
 	 */
 	poolSharedTokens?: number;
 	/**
+	 * How far the prompt matched the named pool, and the pool's length
+	 * (`pool_match_in_response_v1`). `match < length` is a pool prompt that
+	 * diverges from the rendered request: it was built wrong, and shares only
+	 * the part before the divergence. The server log names the token.
+	 */
+	poolMatchTokens?: number;
+	poolLengthTokens?: number;
+	/**
 	 * The window the server granted, from `X-Context-Window`.
 	 *
 	 * **Absent is not "unchanged".** The header rides every admitted response
@@ -192,7 +200,13 @@ function readAttachFacts(block: unknown): OpencotiResponseFacts {
 			? undefined
 			: String(source.pool_id);
 	const shared = source.n_pool_shared;
+	const count = (value: unknown) =>
+		typeof value === "number" && Number.isFinite(value) ? value : undefined;
+	const match = count(source.pool_match);
+	const length = count(source.pool_len);
 	return {
+		...(match !== undefined ? { poolMatchTokens: match } : {}),
+		...(length !== undefined ? { poolLengthTokens: length } : {}),
 		// `-1` is the engine's "no pool", not pool minus one.
 		...(poolId !== undefined && poolId !== "" && poolId !== "-1"
 			? { poolId }
@@ -350,8 +364,28 @@ export function createOpencotiFetch(options: {
 							body,
 							sessionId: extras.sessionId,
 						}).catch(() => undefined);
-						if (leadPool !== undefined && /^\d+$/.test(leadPool)) {
-							body.pool_id = Number(leadPool);
+						if (leadPool && /^\d+$/.test(leadPool.poolId)) {
+							body.pool_id = Number(leadPool.poolId);
+							// `num_ctx` is the private budget on a server that says so,
+							// and the shared prefix rides above it. A new conversation
+							// then books its window minus what it shares -- the whole
+							// point of sharing, in admission terms: N conversations
+							// cost N·(W − P) + P, not N·W. A resumed one keeps what it
+							// was granted (the resume rule), which is already that.
+							if (
+								leadPool.privateWindow &&
+								typeof body.num_ctx === "number" &&
+								getPolykvGrantedWindow(extras.sessionId) === undefined
+							) {
+								const budget = Math.max(
+									1,
+									body.num_ctx - leadPool.sharedTokens,
+								);
+								body.num_ctx = budget;
+								if (typeof body.num_ctx_min === "number") {
+									body.num_ctx_min = Math.min(body.num_ctx_min, budget);
+								}
+							}
 						}
 						leadSession = extras.sessionId;
 						leadAskedWindow = body.num_ctx !== undefined;
@@ -774,9 +808,20 @@ export async function createOpencotiProviderModule(
 					);
 				}
 			}
-			// Whether the pool attached is not on this channel: on c7 it is
-			// `/slots[].opencoti.n_pool_shared`, and on c8 the response's own
-			// `opencoti` block. What is here is the admission arm's own reporting.
+			// A pool prompt that diverges from the rendered request is a bug on
+			// this side -- the prefix was built from something other than what
+			// the request renders -- and the turn succeeds regardless, so this
+			// is the only place it can surface.
+			if (
+				facts.poolMatchTokens !== undefined &&
+				facts.poolLengthTokens !== undefined &&
+				facts.poolMatchTokens < facts.poolLengthTokens
+			) {
+				context.logger?.log(
+					`[opencoti] pool ${facts.poolId ?? "?"} matched ${facts.poolMatchTokens} of its ${facts.poolLengthTokens} tokens: its prompt diverges from this request's (the server log names the token)`,
+					{ severity: "warn" },
+				);
+			}
 			const parts: string[] = [];
 			if (facts.sessionsRemaining !== undefined) {
 				parts.push(`${facts.sessionsRemaining} session(s) of headroom left`);

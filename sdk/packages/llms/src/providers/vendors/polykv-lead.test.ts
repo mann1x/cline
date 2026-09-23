@@ -15,9 +15,12 @@ import {
  * A stub engine: pools on, a template that renders one delimited block per
  * turn, and a pool registry the listing reads back.
  */
-function stubEngine(options: { poolsEnabled?: boolean } = {}) {
+function stubEngine(
+	options: { poolsEnabled?: boolean; features?: string[] } = {},
+) {
 	const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
 	const pools = new Set<string>();
+	const sharedRoots = new Map<string, string>();
 	let nextPool = 0;
 	const render = (messages: Array<{ role: string; content: unknown }>) =>
 		messages
@@ -39,6 +42,7 @@ function stubEngine(options: { poolsEnabled?: boolean } = {}) {
 			});
 		if (url.pathname === "/props") {
 			return json({
+				features: options.features ?? [],
 				opencoti: {
 					polykv: { pools_enabled: options.poolsEnabled !== false },
 					elastic_slots: { enabled: true },
@@ -53,8 +57,23 @@ function stubEngine(options: { poolsEnabled?: boolean } = {}) {
 			});
 		}
 		if (url.pathname === "/polykv/pools" && init?.method === "POST") {
+			// Find-or-create: the same prompt, shared, is the same root.
+			const existing = body.shared
+				? sharedRoots.get(String(body.prompt))
+				: undefined;
+			if (existing !== undefined && pools.has(existing)) {
+				return json({
+					pool_id: Number(existing),
+					parent: -1,
+					prefix_len: 100,
+					reused: true,
+				});
+			}
 			const id = String(nextPool++);
 			pools.add(id);
+			if (body.shared) {
+				sharedRoots.set(String(body.prompt), id);
+			}
 			return json({ pool_id: Number(id), parent: -1, prefix_len: 100 });
 		}
 		if (url.pathname === "/polykv/pools") {
@@ -169,8 +188,9 @@ describe("the lead tree", () => {
 		const engine = stubEngine();
 		const one = await prepare(engine, "lead-1", hoisted("c:/one"));
 		const two = await prepare(engine, "lead-2", hoisted("d:/two"));
-		expect(one).toBe("0");
-		expect(two).toBe("0");
+		expect(one?.poolId).toBe("0");
+		expect(two?.poolId).toBe("0");
+		expect(one?.sharedTokens).toBe(100);
 		expect(creates(engine)).toHaveLength(1);
 		expect(creates(engine)[0]?.body.session_id).toBeUndefined();
 		expect(creates(engine)[0]?.body.pin).toBe(true);
@@ -277,6 +297,65 @@ describe("the lead tree", () => {
 			1_000 + POLYKV_LEAD_RECHECK_MS + 1,
 		);
 		expect(creates(engine)).toHaveLength(2);
+	});
+
+	// Two processes -- two VS Code windows -- converge on one root, and neither
+	// may release it: the other could be attached right now.
+	it("finds a shared root rather than making its own, and leaves it to the engine", async () => {
+		const engine = stubEngine({ features: ["polykv_shared_root_v1"] });
+		await prepare(engine, "lead-1", hoisted("c:/one"));
+		expect(creates(engine)[0]?.body).toMatchObject({
+			shared: true,
+			ephemeral: true,
+		});
+		expect(creates(engine)[0]?.body.pin).toBeUndefined();
+		await releasePolykvLead("lead-1");
+		expect(engine.pools.has("0")).toBe(true);
+		expect(
+			engine.calls.some((call) => call.path === "/polykv/pools/0/release"),
+		).toBe(false);
+	});
+
+	// With `num_ctx` as the private budget, a conversation books its window
+	// minus what it shares -- and a resumed one keeps what it was granted.
+	it("books the window minus the shared prefix where the server counts it privately", async () => {
+		const engine = stubEngine({ features: ["polykv_private_window_v1"] });
+		const fetchImpl = createOpencotiFetch({
+			fetch: engine.fetch,
+			baseUrl: "http://engine/v1",
+			request: {
+				sessionId: "lead-9",
+				leadPool: true,
+				numCtx: 65_536,
+				numCtxMin: 65_536,
+			},
+		});
+		await fetchImpl("http://engine/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify(leadBody("c:/one")),
+		});
+		const wire = engine.calls.find(
+			(call) => call.path === "/v1/chat/completions",
+		);
+		expect(wire?.body.num_ctx).toBe(65_436);
+		expect(wire?.body.num_ctx_min).toBe(65_436);
+	});
+
+	it("books the whole window where the server counts shared tokens against it", async () => {
+		const engine = stubEngine();
+		const fetchImpl = createOpencotiFetch({
+			fetch: engine.fetch,
+			baseUrl: "http://engine/v1",
+			request: { sessionId: "lead-8", leadPool: true, numCtx: 65_536 },
+		});
+		await fetchImpl("http://engine/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify(leadBody("c:/one")),
+		});
+		const wire = engine.calls.find(
+			(call) => call.path === "/v1/chat/completions",
+		);
+		expect(wire?.body.num_ctx).toBe(65_536);
 	});
 
 	it("runs unpooled on a server without pools", async () => {
