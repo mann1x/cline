@@ -1161,6 +1161,39 @@ export {
 	selectImageGenerationModels,
 	sniffMediaType,
 } from "./extensions/tools/image-generation";
+// Jev, TypeSafe's scoring model: typed questions answered with probabilities.
+// The tool the model calls when it is unsure, and the two host hooks that run
+// it without being asked -- ranking a question's options, and scoring a task
+// about to be escalated. Offered only when the user enabled it and set a key.
+export {
+	applyOptionRanking,
+	appraiseEscalation,
+	boundJevText,
+	createJevTool,
+	describeJevAnswer,
+	describeOptionRanking,
+	evaluateJev,
+	JEV_COMPLEXITY_LEVELS,
+	JEV_DEFAULT_BASE_URL,
+	JEV_DEFAULT_FLOOR,
+	JEV_DEFAULT_HIGH_STAKES_FLOOR,
+	JEV_DEFAULT_MODEL,
+	JEV_DEFAULT_TIMEOUT_MS,
+	JEV_DROP_BELOW,
+	JEV_TOOL_DESCRIPTION,
+	JEV_TOOL_INPUT_SCHEMA,
+	JEV_TOOL_NAME,
+	type JevAnswer,
+	type JevEndpoint,
+	JevError,
+	type JevQuestion,
+	type JevResponse,
+	type JevToolOptions,
+	jevConfidence,
+	type RankedOptions,
+	rankQuestionOptions,
+	readJevToolQuestions,
+} from "./extensions/tools/jev";
 // The workspace lister, and the tool that reads it. Both hosts install this:
 // the reflex it displaces -- `ls`, `dir /s` -- is not VS Code's, it is any
 // model that has no other way to find out what exists.

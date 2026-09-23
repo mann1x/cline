@@ -300,6 +300,11 @@ const USER_SETTINGS_FIELDS = {
 	// a machine until someone stands one up, and a tool that always fails is
 	// worse than an absent one.
 	imageGenEnabled: { default: false as boolean },
+	// Offer `jev`, and let the harness ask Jev (TypeSafe's scoring model) for
+	// a confidence before a question reaches the user and before an
+	// escalation. Off by default: it is a paid, hosted service, and turning it
+	// on sends parts of the conversation to it.
+	jevEnabled: { default: false as boolean },
 	// Both of these hold JSON rather than a proto message. What they carry is a
 	// snapshot of the API configuration panel, and the panel's field list grows
 	// with every provider added — spelling it out here would mean a generated
@@ -327,6 +332,10 @@ const USER_SETTINGS_FIELDS = {
 	// second model in the conversation, and the provider list a snapshot carries
 	// has no image models in it. The key is not here -- it is a secret.
 	imageGenEndpoint: { default: "" as string },
+	// JSON `{model, floor, highStakesFloor, timeoutMs, rankQuestions,
+	// appraiseEscalation}` for Jev, round-tripped whole by its tab like the
+	// image endpoint above. The key is not here -- it is a secret.
+	jevSettings: { default: "" as string },
 	enableCheckpointsSetting: { default: true as boolean },
 	shellIntegrationTimeout: { default: 4000 as number },
 	// 0 means "unset": the SDK's own DEFAULT_MAX_TOOL_RESULT_CHARS applies.
@@ -492,6 +501,8 @@ const SECRETS_KEYS = [
 	// snapshot travels to the webview as one `state_json` string, and this must
 	// never be in it. The webview is told whether one is set, and nothing else.
 	"imageGenApiKey",
+	// The Jev key, a secret for the same reason.
+	"jevApiKey",
 	"openai-codex-oauth-credentials", // JSON blob containing OAuth tokens for OpenAI Codex (ChatGPT subscription)
 	"wandbApiKey",
 ] as const
@@ -535,7 +546,7 @@ export type RemoteConfigFields = GlobalStateAndSettings & RemoteConfigExtra
  * exact leak the feature exists to prevent. These are stored the same way and
  * left out of the API configuration, because they are not one.
  */
-export const NonApiHandlerSecretKeys = new Set<string>(["qaCredentials", "imageGenApiKey"])
+export const NonApiHandlerSecretKeys = new Set<string>(["qaCredentials", "imageGenApiKey", "jevApiKey"])
 
 export type Secrets = { [K in (typeof SecretKeys)[number]]: string | undefined }
 export type LocalState = { [K in (typeof LocalStateKeys)[number]]: ClineRulesToggles }

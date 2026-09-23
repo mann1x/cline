@@ -108,6 +108,12 @@ export interface ExtensionState {
 	imageGenEndpoint: string
 	/** Whether a key is stored for that endpoint. Never the key itself. */
 	imageGenApiKeySet: boolean
+	/** Whether `jev` is offered and the harness's Jev hooks run. */
+	jevEnabled: boolean
+	/** JSON `JevSettings` (model, floors, timeout, hook switches). */
+	jevSettings: string
+	/** Whether a Jev key is stored. Never the key itself. */
+	jevApiKeySet: boolean
 	/** Whether a run may finish with a file it changed and never checked. */
 	editVerificationSettings: EditVerificationSettings
 	/** Whether a task runs as judged, revertible transactions. */

@@ -11,6 +11,7 @@ import ApiOptions from "../ApiOptions"
 import { SettingsCheckbox } from "../common/SettingsCheckbox"
 import EscalationModelTab from "../EscalationModelTab"
 import ImageGenModelTab from "../ImageGenModelTab"
+import JevTab from "../JevTab"
 import Section from "../Section"
 import { type ConfigTab, isModelTab } from "../utils/configTabs"
 import { flushPendingEdits } from "../utils/pendingEdits"
@@ -58,6 +59,8 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 		escalationModeApiConfiguration,
 		imageGenEnabled,
 		imageGenEndpoint,
+		jevEnabled,
+		jevApiKeySet,
 		mode,
 		apiConfiguration,
 	} = useExtensionState()
@@ -82,6 +85,8 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 	// Read from the stored record rather than `resolveScopedModelStatus`, which
 	// knows about provider snapshots and this is not one.
 	const imageGenUnconfigured = imageGenEnabled && !isImageEndpointComplete(imageGenEndpoint)
+	// And of Jev, which needs nothing but a key.
+	const jevUnconfigured = jevEnabled && !jevApiKeySet
 	const [currentTab, setCurrentTab] = useState<ConfigTab>(mode)
 	// Which agent node the Agents tab is showing. Held here rather than inside
 	// that tab because the profile bar is rendered above it and has to point at
@@ -105,7 +110,8 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 		(currentTab === "vision" && !visionModelEnabled) ||
 		(currentTab === "agents" && !agentsModelEnabled) ||
 		(currentTab === "escalation" && !escalationModelEnabled) ||
-		(currentTab === "imagegen" && !imageGenEnabled)
+		(currentTab === "imagegen" && !imageGenEnabled) ||
+		(currentTab === "jev" && !jevEnabled)
 	const activeTab: ConfigTab = scopedTabOff ? mode : currentTab
 	// The feature toggles belong to the Model tab and are shown only there.
 	//
@@ -117,7 +123,12 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 	// to offer them.
 	const onModelTab = isModelTab(activeTab)
 	const showTabs =
-		planActSeparateModelsSetting || visionModelEnabled || agentsModelEnabled || escalationModelEnabled || imageGenEnabled
+		planActSeparateModelsSetting ||
+		visionModelEnabled ||
+		agentsModelEnabled ||
+		escalationModelEnabled ||
+		imageGenEnabled ||
+		jevEnabled
 	// One profile list for every tab; only the target changes with the tab. The
 	// Images tab is not in it: a profile is a provider and a model for a
 	// conversation, and that tab configures neither.
@@ -128,7 +139,7 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 				? { kind: "agents", nodeId: agentNodeId }
 				: activeTab === "escalation"
 					? { kind: "escalation" }
-					: { kind: "mode", mode: activeTab === "imagegen" ? mode : activeTab }
+					: { kind: "mode", mode: activeTab === "imagegen" || activeTab === "jev" ? mode : activeTab }
 
 	return (
 		<div>
@@ -229,6 +240,18 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 									Images
 								</TabButton>
 							) : null}
+							{jevEnabled ? (
+								<TabButton
+									disabled={activeTab === "jev"}
+									isActive={activeTab === "jev"}
+									onClick={() => switchPanel("jev")}
+									style={{
+										opacity: 1,
+										cursor: "pointer",
+									}}>
+									Jev
+								</TabButton>
+							) : null}
 						</div>
 
 						{/* Content container */}
@@ -241,6 +264,8 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 								<EscalationModelTab />
 							) : activeTab === "imagegen" ? (
 								<ImageGenModelTab />
+							) : activeTab === "jev" ? (
+								<JevTab />
 							) : (
 								<ApiOptions currentMode={activeTab} initialModelTab={initialModelTab} showModelOptions={true} />
 							)}
@@ -403,6 +428,36 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 								<p className="text-xs mt-[5px] text-(--vscode-errorForeground)">
 									The Images tab does not name both an endpoint and a model, so the tool is not offered at all
 									and the model is never told it could make one. Fill in both on the Images tab.
+								</p>
+							) : null}
+						</div>
+
+						<div className="mb-[5px]">
+							<SettingsCheckbox
+								checked={jevEnabled}
+								className="mb-[5px]"
+								onChange={async (checked: boolean) => {
+									try {
+										await StateServiceClient.updateSettings(
+											UpdateSettingsRequest.create({ jevEnabled: checked }),
+										)
+									} catch (error) {
+										console.error("Failed to update the Jev setting:", error)
+										throw error
+									}
+								}}>
+								Use Jev for confidence
+							</SettingsCheckbox>
+							<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
+								Asks Jev, TypeSafe's scoring model, how sure to be. The model gets a <code>jev</code> tool for
+								when it is unsure of your request, a fact or a choice. The harness also uses Jev to score a
+								question's options before you see it, and a task's complexity before it is escalated. The Jev tab
+								holds the key and the confidence floors.
+							</p>
+							{jevUnconfigured ? (
+								<p className="text-xs mt-[5px] text-(--vscode-errorForeground)">
+									No Jev API key is stored, so nothing is scored and the tool is not offered. Set one on the Jev
+									tab.
 								</p>
 							) : null}
 						</div>

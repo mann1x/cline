@@ -109,6 +109,7 @@ message Secrets {
   optional string wandb_api_key = 50;
   optional string qa_credentials = 51;
   optional string image_gen_api_key = 52;
+  optional string jev_api_key = 53;
 }
 
 // NOTE: Add new fields under API_HANDLER_SETTINGS_FIELDS or USER_SETTINGS_FIELDS
@@ -322,6 +323,8 @@ message Settings {
   optional string council_critic_prompt = 217;
   optional string council_synthesizer_prompt = 218;
   optional bool translate_compaction_prompts = 219;
+  optional bool jev_enabled = 220;
+  optional string jev_settings = 221;
 }
 
 message State {
@@ -497,6 +500,10 @@ message UpdateSettingsRequest {
   // Write-only, and travelling in this direction only: an empty string clears
   // the stored key, and an unset field leaves it alone.
   optional string image_gen_api_key = 64;
+  optional bool jev_enabled = 80;
+  optional string jev_settings = 81;
+  // Write-only like the image key: empty clears it, unset leaves it alone.
+  optional string jev_api_key = 82;
   optional EditVerificationSettings edit_verification_settings = 57;
   // A change to the stored set. Sent only when the user edits it; values
   // travel in this direction and never the other.

@@ -246,6 +246,9 @@ Output: plain text, one result per line as `file:line:column` followed by that s
 # tool: generate_image
 {{DEFAULT}}
 
+# tool: jev
+{{DEFAULT}}
+
 # tool: switch_to_act_mode
 {{DEFAULT}}
 

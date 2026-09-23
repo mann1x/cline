@@ -160,7 +160,10 @@ import { createSessionRevisions } from "../atomic/session-revisions";
 import type { RuntimeCapabilities } from "../capabilities";
 import { normalizeRuntimeCapabilities } from "../capabilities";
 import { normalizeConnectionUpdate } from "../config/connection-update";
-import { buildEscalationAssessment } from "../escalation/assessment";
+import {
+	buildEscalationAssessment,
+	type EscalationAssessmentInput,
+} from "../escalation/assessment";
 import { createEscalationSession } from "../escalation/escalation-session";
 import { createExpertGuards } from "../escalation/expert-guards";
 import { createExpertMailbox } from "../escalation/expert-mailbox";
@@ -316,6 +319,31 @@ function maxAccumulatedUsage(
  * its problem. Truncating that to the first three threw the description away.
  */
 const COMPLEXITY_FILE_LIMIT = 10;
+
+/**
+ * How long an escalation waits for an outside scorer's reading. Jev answers in
+ * ~100-300 ms; a scorer still silent after this is down, and the assessment
+ * goes without its lines.
+ */
+const ESCALATION_APPRAISAL_TIMEOUT_MS = 8_000;
+
+/** A promise's value, or `undefined` if it rejects or outlasts `ms`. */
+async function withinDeadline<T>(
+	promise: Promise<T>,
+	ms: number,
+): Promise<T | undefined> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			promise.catch(() => undefined),
+			new Promise<undefined>((resolve) => {
+				timer = setTimeout(() => resolve(undefined), ms);
+			}),
+		]);
+	} finally {
+		if (timer) clearTimeout(timer);
+	}
+}
 
 /**
  * What the complexity walker makes of the files the model named.
@@ -1584,7 +1612,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 						configWithProvider.workspaceRoot ?? configWithProvider.cwd,
 					)
 				).lines;
-				return buildEscalationAssessment({
+				const measured: EscalationAssessmentInput = {
 					...(complexity.length > 0 ? { complexity } : {}),
 					...(struggleIteration > 0 ? { iteration: struggleIteration } : {}),
 					...(struggleDetector
@@ -1602,6 +1630,28 @@ export class LocalRuntimeHost implements RuntimeHost {
 							}
 						: {}),
 					...(forcedEscalation?.spent ? { guardStoodDown: true } : {}),
+				};
+				// An outside scorer's reading, where the host has one. Asked
+				// after the counts so it can read them, and bounded: the user is
+				// waiting on this escalation, and a scorer that is down or slow
+				// must cost the assessment its lines, never the hand-over.
+				const appraise = configWithProvider.escalation?.appraise;
+				if (!appraise) {
+					return buildEscalationAssessment(measured);
+				}
+				const appraisal = await withinDeadline(
+					appraise({
+						task:
+							this.sessions.get(sessionId)?.pendingPrompt ?? manifest.prompt,
+						...(context.goal ? { goal: context.goal } : {}),
+						...(context.reason ? { reason: context.reason } : {}),
+						measured: buildEscalationAssessment(measured) ?? "",
+					}),
+					ESCALATION_APPRAISAL_TIMEOUT_MS,
+				);
+				return buildEscalationAssessment({
+					...measured,
+					...(appraisal?.length ? { appraisal } : {}),
 				});
 			},
 			// Putting it to the user, where the host set `requireApproval` and

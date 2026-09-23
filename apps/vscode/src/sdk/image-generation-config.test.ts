@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-const stored = { endpoint: "" as string, apiKey: undefined as string | undefined }
+const stored = { endpoint: "" as string, apiKey: undefined as string | undefined, enabled: true as boolean | undefined }
 
 vi.mock("@/core/storage/StateManager", () => ({
 	StateManager: {
 		get: () => ({
-			getGlobalSettingsKey: (key: string) => (key === "imageGenEndpoint" ? stored.endpoint : undefined),
+			getGlobalSettingsKey: (key: string) =>
+				key === "imageGenEndpoint" ? stored.endpoint : key === "imageGenEnabled" ? stored.enabled : undefined,
 			getSecretKey: (key: string) => (key === "imageGenApiKey" ? stored.apiKey : undefined),
 		}),
 	},
@@ -20,6 +21,7 @@ import { isImageGenerationConfigured, readImageGenerationEndpoint } from "./imag
 beforeEach(() => {
 	stored.endpoint = ""
 	stored.apiKey = undefined
+	stored.enabled = true
 })
 
 describe("readImageGenerationEndpoint", () => {
@@ -70,5 +72,22 @@ describe("readImageGenerationEndpoint", () => {
 		stored.endpoint = "{not json"
 
 		expect(readImageGenerationEndpoint()).toBeUndefined()
+	})
+})
+
+describe("isImageGenerationConfigured", () => {
+	// The checkbox is the user's decision. A stored endpoint used to keep the
+	// tool offered with the box unticked, because the gate read only the
+	// endpoint and nothing else read the box at all.
+	it("is off with the box unticked, whatever is stored", () => {
+		stored.endpoint = JSON.stringify({ baseUrl: "http://localhost:8080", model: "z-image" })
+		stored.enabled = false
+		expect(isImageGenerationConfigured()).toBe(false)
+
+		stored.enabled = undefined
+		expect(isImageGenerationConfigured()).toBe(false)
+
+		stored.enabled = true
+		expect(isImageGenerationConfigured()).toBe(true)
 	})
 })

@@ -21,6 +21,7 @@ import type { ExtensionState, Platform } from "@shared/ExtensionMessage"
 import { ClineEnv } from "@/config"
 import { ExtensionRegistryInfo } from "@/registry"
 import { readImageGenerationApiKey } from "@/sdk/image-generation-config"
+import { readJevApiKey } from "@/sdk/jev-config"
 import { readQaCredentialNames } from "@/sdk/qa-credentials-store"
 import { BannerService } from "@/services/banner/BannerService"
 import { featureFlagsService } from "@/services/feature-flags"
@@ -92,6 +93,8 @@ export async function getStateToPostToWebview(controller: {
 	const escalationModeApiConfiguration = stateManager.getGlobalSettingsKey("escalationModeApiConfiguration")
 	const imageGenEnabled = stateManager.getGlobalSettingsKey("imageGenEnabled")
 	const imageGenEndpoint = stateManager.getGlobalSettingsKey("imageGenEndpoint")
+	const jevEnabled = stateManager.getGlobalSettingsKey("jevEnabled")
+	const jevSettings = stateManager.getGlobalSettingsKey("jevSettings")
 	const editVerificationSettings = stateManager.getGlobalSettingsKey("editVerificationSettings")
 	// Normalized on the way out so the settings dropdown has a value it knows:
 	// a profile stored before the rename still says `auto` or `always`, and a
@@ -226,6 +229,10 @@ export async function getStateToPostToWebview(controller: {
 		// Whether a key is stored, never the key: this object is serialised into
 		// the one `state_json` string the webview holds.
 		imageGenApiKeySet: readImageGenerationApiKey() !== undefined,
+		jevEnabled,
+		jevSettings,
+		// The same rule as the image key.
+		jevApiKeySet: readJevApiKey() !== undefined,
 		editVerificationSettings,
 		atomicProtocolSettings,
 		escalationSettings,

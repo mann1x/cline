@@ -67,7 +67,13 @@ export function readImageGenerationApiKey(): string | undefined {
 	return StateManager.get().getSecretKey("imageGenApiKey")?.trim() || undefined
 }
 
-/** Whether the `generate_image` tool should be offered at all. */
+/**
+ * Whether the `generate_image` tool should be offered at all: the box ticked,
+ * and an endpoint complete enough to call.
+ *
+ * The box used to be read by nothing but the settings panel, so a stored
+ * endpoint kept the tool offered after the user unticked it.
+ */
 export function isImageGenerationConfigured(): boolean {
-	return readImageGenerationEndpoint() !== undefined
+	return StateManager.get().getGlobalSettingsKey("imageGenEnabled") === true && readImageGenerationEndpoint() !== undefined
 }

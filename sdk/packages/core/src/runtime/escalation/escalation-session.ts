@@ -119,11 +119,14 @@ export interface EscalationSessionOptions {
 	/**
 	 * The harness's own reading of the run, and of the code in play.
 	 *
-	 * Given the files the model named so the reading can cover them. What comes
-	 * back is opaque text for the brief and the approval dialog.
+	 * Given the files the model named so the reading can cover them, and the
+	 * model's goal and reason so a scorer can read what is being handed over.
+	 * What comes back is opaque text for the brief and the approval dialog.
 	 */
 	assess?: (context: {
 		files?: readonly string[];
+		goal?: string;
+		reason?: string;
 	}) => Promise<string | undefined>;
 	/** Retires what the base model had read about a file the expert changed. */
 	forgetReads?: (absolutePath: string) => void;
@@ -630,6 +633,8 @@ export function createEscalationSession(
 		const transaction = options.readTransaction?.();
 		const assessment = await options.assess?.({
 			...(request.files?.length ? { files: request.files } : {}),
+			...(request.goal ? { goal: request.goal } : {}),
+			...(request.message ? { reason: request.message } : {}),
 		});
 		const index = controller.used + 1;
 		const brief = buildEscalationBrief({

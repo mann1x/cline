@@ -72,6 +72,17 @@ describe("the harness's own reading", () => {
 		expect(assessment).toContain("Cognitive complexity of `step`");
 	});
 
+	it("carries an outside scorer's lines, and renders on those alone", () => {
+		const assessment = buildEscalationAssessment({
+			appraisal: [
+				"Jev, an external scoring model, rates the task's complexity 3.1 of 4.",
+			],
+		});
+
+		expect(assessment).toContain("Jev, an external scoring model");
+		expect(assessment).toContain("None of this is a verdict");
+	});
+
 	it("says when a guard has already stood down", () => {
 		const assessment = buildEscalationAssessment({
 			signals: { iteration: 90, failedCalls: 6, distress: 0 },

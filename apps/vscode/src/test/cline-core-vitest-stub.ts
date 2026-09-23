@@ -126,6 +126,22 @@ export {
 	GENERATE_IMAGE_TOOL_INPUT_SCHEMA,
 	GENERATE_IMAGE_TOOL_NAME,
 } from "../../../../sdk/packages/core/src/extensions/tools/image-generation"
+// From source: the host's Jev hooks are pure over these, and a fake would
+// agree with itself about which option was recommended.
+export {
+	applyOptionRanking,
+	appraiseEscalation,
+	createJevTool,
+	describeOptionRanking,
+	JEV_DEFAULT_FLOOR,
+	JEV_DEFAULT_HIGH_STAKES_FLOOR,
+	JEV_DEFAULT_MODEL,
+	JEV_DEFAULT_TIMEOUT_MS,
+	JEV_TOOL_DESCRIPTION,
+	JEV_TOOL_INPUT_SCHEMA,
+	JEV_TOOL_NAME,
+	rankQuestionOptions,
+} from "../../../../sdk/packages/core/src/extensions/tools/jev"
 // Re-exported from source rather than stubbed: the session factory composes
 // its hook layers with it, so a fake would test the fake's composition.
 export { mergeAgentHooks } from "../../../../sdk/packages/core/src/hooks/hook-file-hooks"

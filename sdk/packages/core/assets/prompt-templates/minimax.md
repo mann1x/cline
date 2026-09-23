@@ -299,6 +299,9 @@ The image is written to a file and, if you can see images, returned to you as we
 
 This costs real time — seconds to a minute per image — and on a hosted backend it costs money. Generate one image and look at it before generating variations.
 
+# tool: jev
+{{DEFAULT}}
+
 # tool: switch_to_act_mode
 Switch from plan mode to act mode. Call shape: `switch_to_act_mode()`.
 

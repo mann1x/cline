@@ -83,6 +83,7 @@ import { type BedrockProviderConfig, buildBedrockProviderConfig } from "./bedroc
 import { createEditorDiagnosticsHooks } from "./editor-diagnostics"
 import { createEscalationApprover } from "./escalation-approval"
 import { buildAgentHooks } from "./hooks-adapter"
+import { appraiseEscalationWithJev, buildJevPromptSection, isJevConfigured, readJevSettings } from "./jev-config"
 import { readTaskHistory, resolveDataDir } from "./legacy-state-reader"
 import type { ResolvedModelSelection } from "./model-catalog/contracts"
 import { nonNegativeFiniteNumber, positiveFiniteNumber, toSdkApiFormat } from "./model-catalog/model-values"
@@ -1668,6 +1669,16 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		Logger.warn("[SessionFactory] Failed to inject preferredLanguage instructions:", error)
 	}
 
+	// When to reach for `jev`, only in a session that has it. Its description
+	// says how to call it; this says when, which is the part a model skips.
+	try {
+		if (isJevConfigured()) {
+			systemPrompt = `${systemPrompt}${buildJevPromptSection(readJevSettings())}`
+		}
+	} catch (error) {
+		Logger.warn("[SessionFactory] Failed to add the Jev section:", error)
+	}
+
 	// The one context window for this session.
 	//
 	// Everything that budgets against the window has to read this and nothing
@@ -2335,6 +2346,10 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 						// one, which is the path every real session takes; this is
 						// what is left for the ones that do not.
 						approve: createEscalationApprover(undefined),
+						// Jev's complexity and "stuck" scores, into the assessment
+						// the user approves from and the expert reads. A no-op
+						// until Jev is ticked and keyed; read per escalation.
+						appraise: appraiseEscalationWithJev,
 					},
 				}
 			: {}),

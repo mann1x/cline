@@ -312,6 +312,9 @@ Reach for it the moment you are about to do one of these by hand:
 # tool: generate_image
 {{DEFAULT}}
 
+# tool: jev
+{{DEFAULT}}
+
 # tool: switch_to_act_mode
 Switch from plan mode to act mode.
 

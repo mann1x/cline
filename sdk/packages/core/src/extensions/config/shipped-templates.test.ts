@@ -98,6 +98,7 @@ const HOST_TOOL_NAMES = [
 	"switch_to_act_mode",
 	"browser",
 	"generate_image",
+	"jev",
 ];
 
 const SHIPPED_TOOL_NAMES = [

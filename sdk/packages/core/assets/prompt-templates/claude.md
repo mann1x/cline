@@ -405,6 +405,9 @@ It is the wrong tool for text that is not a symbol: strings, comments, config ke
 # tool: generate_image
 {{DEFAULT}}
 
+# tool: jev
+{{DEFAULT}}
+
 # tool: switch_to_act_mode
 Only after the user approves the plan in a message sent *after* you presented it. Never in the same turn as the plan, never proactively, and the original request is not approval. It ends this run and the next one starts in act mode — a handover, not a failure, so carry on with the plan there.
 

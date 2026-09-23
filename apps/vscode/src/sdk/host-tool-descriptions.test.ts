@@ -11,6 +11,8 @@ import {
 	GENERATE_IMAGE_TOOL_NAME,
 	getBuiltinPromptTemplates,
 	HOST_TOOL_INPUT_SCHEMAS,
+	JEV_TOOL_DESCRIPTION,
+	JEV_TOOL_NAME,
 	LIST_FILES_TOOL_INPUT_SCHEMA,
 	LIST_FILES_TOOL_NAME,
 	summarizeToolCallSignatures,
@@ -57,6 +59,11 @@ describe("host tool descriptions in default.md", () => {
 	// because what makes it drift is a change to this host's tool set.
 	it("reproduces generate_image verbatim", () => {
 		expect(shipped?.tools[GENERATE_IMAGE_TOOL_NAME]).toBe(GENERATE_IMAGE_TOOL_DESCRIPTION.trim())
+	})
+
+	// Same position as generate_image: offered by this host, text in core.
+	it("reproduces jev verbatim", () => {
+		expect(shipped?.tools[JEV_TOOL_NAME]).toBe(JEV_TOOL_DESCRIPTION.trim())
 	})
 })
 

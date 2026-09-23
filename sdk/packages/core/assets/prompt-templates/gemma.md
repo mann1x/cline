@@ -197,6 +197,9 @@ Query the language servers for semantic information. Use this instead of `search
 # tool: generate_image
 {{DEFAULT}}
 
+# tool: jev
+{{DEFAULT}}
+
 # tool: switch_to_act_mode
 Transition from planning to execution.
 - **Arguments:** None.

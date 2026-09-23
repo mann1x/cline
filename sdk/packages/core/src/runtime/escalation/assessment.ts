@@ -39,6 +39,12 @@ export interface EscalationAssessmentInput {
 	 * read -- the same discipline `check_file` keeps about its own bound.
 	 */
 	complexity?: readonly string[];
+	/**
+	 * An outside scorer's reading of the task, already worded -- Jev's
+	 * complexity and "stuck" scores, where the host configured it. Each line
+	 * says whose reading it is and what it saw; it is not one of the counts.
+	 */
+	appraisal?: readonly string[];
 }
 
 /**
@@ -79,6 +85,9 @@ export function buildEscalationAssessment(
 		);
 	}
 	for (const line of input.complexity ?? []) {
+		lines.push(line);
+	}
+	for (const line of input.appraisal ?? []) {
 		lines.push(line);
 	}
 	if (input.guardStoodDown) {

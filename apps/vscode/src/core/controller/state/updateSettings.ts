@@ -112,6 +112,16 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		if (request.imageGenApiKey !== undefined) {
 			controller.stateManager.setSecret("imageGenApiKey", request.imageGenApiKey.trim() || undefined)
 		}
+		if (request.jevEnabled !== undefined) {
+			controller.stateManager.setGlobalState("jevEnabled", request.jevEnabled)
+		}
+		if (request.jevSettings !== undefined) {
+			controller.stateManager.setGlobalState("jevSettings", request.jevSettings)
+		}
+		// Write-only, like the image key.
+		if (request.jevApiKey !== undefined) {
+			controller.stateManager.setSecret("jevApiKey", request.jevApiKey.trim() || undefined)
+		}
 		if (request.apiConfigurationProfiles !== undefined) {
 			controller.stateManager.setGlobalState("apiConfigurationProfiles", request.apiConfigurationProfiles)
 		}

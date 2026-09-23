@@ -218,6 +218,21 @@ export interface CoreEscalationConfig {
 	 * when the runs end and there will be a ton").
 	 */
 	relayNothing?: boolean;
+	/**
+	 * An outside reading of the task, added to the assessment.
+	 *
+	 * Supplied by a host with a scorer configured (Jev, on VS Code). Given the
+	 * user's task, the model's goal and reason, and what the harness measured;
+	 * returns lines worded for the assessment, or none. Its failure, or its
+	 * being slow, must never hold up an escalation: it is bounded where it is
+	 * called and its errors read as silence.
+	 */
+	appraise?: (context: {
+		task?: string;
+		goal?: string;
+		reason?: string;
+		measured?: string;
+	}) => Promise<readonly string[] | undefined>;
 	/** Escalations allowed in one task. Three by default. */
 	maxEscalations?: number;
 	/** Follow-ups within one escalation, after the first delivery. Twenty by default. */

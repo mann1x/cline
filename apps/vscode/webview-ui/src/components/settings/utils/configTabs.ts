@@ -6,10 +6,10 @@ import type { Mode } from "@shared/storage/types"
  * `plan` and `act` are the session's own model. The rest are scoped tabs, each
  * configuring a model or endpoint used for one particular job.
  */
-export type ConfigTab = Mode | "vision" | "agents" | "escalation" | "imagegen"
+export type ConfigTab = Mode | "vision" | "agents" | "escalation" | "imagegen" | "jev"
 
 /** The tabs that are not the session's model. */
-export const SCOPED_TABS = ["vision", "agents", "escalation", "imagegen"] as const
+export const SCOPED_TABS = ["vision", "agents", "escalation", "imagegen", "jev"] as const
 
 /**
  * Is this tab the session's own model, rather than one of the scoped tabs?

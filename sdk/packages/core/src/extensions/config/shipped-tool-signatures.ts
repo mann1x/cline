@@ -33,6 +33,7 @@ import {
 	GENERATE_IMAGE_TOOL_INPUT_SCHEMA,
 	GENERATE_IMAGE_TOOL_NAME,
 } from "../tools/image-generation";
+import { JEV_TOOL_INPUT_SCHEMA, JEV_TOOL_NAME } from "../tools/jev";
 import { createSpawnAgentTool } from "../tools/team/spawn-agent-tool";
 import { createAgentTeamsTools } from "../tools/team/team-tools";
 import {
@@ -68,6 +69,11 @@ export const HOST_TOOL_INPUT_SCHEMAS: readonly {
 	{
 		name: GENERATE_IMAGE_TOOL_NAME,
 		inputSchema: GENERATE_IMAGE_TOOL_INPUT_SCHEMA,
+	},
+	// Likewise `jev`: host-contributed, schema defined in core.
+	{
+		name: JEV_TOOL_NAME,
+		inputSchema: JEV_TOOL_INPUT_SCHEMA,
 	},
 	{
 		name: "check_file",

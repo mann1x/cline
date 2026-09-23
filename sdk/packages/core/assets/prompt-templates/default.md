@@ -219,6 +219,25 @@ Arguments:
 
 This costs real time — seconds to a minute per image — and on a hosted backend it costs money. Generate one image and look at it before generating variations.
 
+# tool: jev
+Get a calibrated confidence score from Jev, an external scoring model, before acting on something you are not sure of. Jev reads the context you give it and answers typed questions with probabilities; it writes no text and cannot explain itself.
+
+Use it when you are unsure:
+- whether you understood the user's request — ask whether the request is ambiguous, or which of your readings it means;
+- whether a fact your answer rests on is supported by what you have read — put the source text in the context and ask whether it states the claim;
+- which approach, option or file to choose;
+- how complex the task is, before deciding to escalate or delegate it.
+
+Arguments:
+- `context` — the situation, in plain text: what the user asked, what you found, what you are deciding. Only what the questions need; unrelated text makes the answers worse.
+- `questions` — 1 to 10, all asked in one call. Each has an `id`, a `kind` and a `question`:
+  - `yes_no` — a yes/no question. Returns the probability of yes.
+  - `choice` — pick one of `options` (2 to 50). Include a "none of these" option when that is possible: a choice always picks something.
+  - `score` — rate on `levels` (2 to 10, lowest first).
+  Set `high_stakes: true` on a question whose wrong answer is costly; it must clear a higher bar.
+
+Each answer comes back as confident or unsure against the user's confidence floor. Act on a confident answer. On an unsure one, verify it yourself or ask the user — do not treat it as settled. Jev is weak at arithmetic, counting and multi-step reasoning, so check those in code, and ask one property per question rather than one broad question.
+
 # tool: switch_to_act_mode
 Switch from plan mode to act mode. Switching to act mode immediately starts executing the plan, so only call this after the user has explicitly approved the plan in a message sent AFTER you presented it (e.g. 'looks good', 'go ahead', 'switch to act mode'). Never call this in the same turn you present a plan, never call it proactively, and never treat the original task request as approval. Output: a one-line confirmation, as plain text. This call ends the current run and the next one starts in act mode with the file and command tools available, so it is a handover, not a failure — carry on with the plan there.
 

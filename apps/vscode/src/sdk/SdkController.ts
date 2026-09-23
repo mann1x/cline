@@ -59,6 +59,7 @@ import { ClineAccountService } from "./account-service"
 import { AuthService, LogoutReason } from "./auth-service"
 import { BUILTIN_SLASH_COMMANDS } from "./builtin-slash-commands"
 import { buildStartSessionInput, createHistoryItemFromSession } from "./cline-session-factory"
+import { rankQuestionWithJev } from "./jev-question-ranking"
 import { MessageTranslatorState, reshapeErrorForWebview } from "./message-translator"
 import { createProviderCatalog } from "./model-catalog/catalog"
 import type { Disposable, ProviderCatalog, ProviderConfigChange, ProviderConfigStore } from "./model-catalog/contracts"
@@ -409,7 +410,17 @@ export class Controller {
 			mcpHub: this.mcpHub,
 			telemetry: this.sdkTelemetry.telemetry,
 			requestToolApproval: (request) => this.interactions.handleRequestToolApproval(request),
-			askQuestion: (question, options, context) => this.interactions.handleAskQuestion(question, options, context),
+			// The model's own questions only, and the only place that is so:
+			// escalation and check approvals reach the same handler through
+			// `askUser`, and Jev must not rank "Hand it over".
+			askQuestion: async (question, options, context) => {
+				const ranked = await rankQuestionWithJev(
+					question,
+					options,
+					this.task?.messageStateHandler.getClineMessages() ?? [],
+				)
+				return this.interactions.handleAskQuestion(ranked.question, ranked.options, context)
+			},
 			editorExecutor: (input, cwd, context) => this.diffEdits.executeEditorTool(input, cwd, context),
 			applyPatchExecutor: (input, cwd, context) => this.diffEdits.executeApplyPatchTool(input, cwd, context),
 			// The SDK's built-in reader resolves relative paths against the extension

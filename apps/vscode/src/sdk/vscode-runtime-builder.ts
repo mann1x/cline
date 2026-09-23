@@ -1,4 +1,11 @@
-import { createAskLspTool, createBrowserTool, createGenerateImageTool, createListFilesTool, createMcpTools } from "@cline/core"
+import {
+	createAskLspTool,
+	createBrowserTool,
+	createGenerateImageTool,
+	createJevTool,
+	createListFilesTool,
+	createMcpTools,
+} from "@cline/core"
 import type { AgentTool, AgentToolContext } from "@cline/shared"
 import { createVscodeBrowserDriver, isBrowserToolEnabled } from "@/hosts/vscode/browser-support"
 import { loadDocumentForDiagnostics, resolveLintCommand, runLintCommand } from "@/hosts/vscode/check-file-support"
@@ -11,6 +18,7 @@ import { resolveMcpServerTimeoutMs } from "@/services/mcp/timeout"
 import { Logger } from "@/shared/services/Logger"
 import { createCheckFileTool } from "./check-file-tool"
 import { isImageGenerationConfigured, readImageGenerationEndpoint } from "./image-generation-config"
+import { isJevConfigured, readJevEndpoint } from "./jev-config"
 import { readQaCredentials } from "./qa-credentials-store"
 import type { SdkForegroundCommandCoordinator } from "./sdk-foreground-command-coordinator"
 import { createVscodeLmMcpTools } from "./vscode-lm-mcp-tools"
@@ -175,6 +183,18 @@ export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExt
 				cwd: options?.cwd ?? process.cwd(),
 				getEndpoint: readImageGenerationEndpoint,
 				writeFile: writeGeneratedImage,
+				onError: (message, error) => Logger.error(`${message}:`, error),
+			}),
+		)
+	}
+
+	// `jev` is off by default for a different reason from `generate_image`: it
+	// sends parts of the conversation to a hosted, paid service, so it is the
+	// user's box and key, both, that offer it.
+	if (isJevConfigured()) {
+		tools.push(
+			createJevTool({
+				getEndpoint: readJevEndpoint,
 				onError: (message, error) => Logger.error(`${message}:`, error),
 			}),
 		)
