@@ -15,6 +15,14 @@ import {
 	getPolykvSession,
 	recordPolykvGrantedWindow,
 } from "./polykv";
+import {
+	engineSessionId,
+	isWorkerWindowFull,
+	POLYKV_WORKER_MAX_WAIT_MS,
+	type PolykvWorkerSpec,
+	preparePolykvWorker,
+	rememberOpencotiSession,
+} from "./polykv-swarm";
 import type { ProviderFactoryResult } from "./types";
 
 /**
@@ -83,6 +91,15 @@ export interface OpencotiRequestOptions {
 	 * the caller must fall back to retrying against `largest_admissible`.
 	 */
 	numCtxMin?: number;
+	/**
+	 * This request is one agent of a swarm sharing a pool tree.
+	 *
+	 * Replaces `poolId` and `sessionId`: the pool is the deepest layer of the
+	 * tree its own messages match, and the session is the agent's own. A worker
+	 * books no window of its own -- the owner's is charged -- so `numCtx` is not
+	 * sent either. See `polykv-swarm.ts`.
+	 */
+	worker?: PolykvWorkerSpec;
 }
 
 /**
@@ -242,8 +259,15 @@ export function createOpencotiFetch(options: {
 	dispatcher?: unknown;
 	request?: OpencotiRequestOptions;
 	onFacts?: (facts: OpencotiResponseFacts) => void;
+	/** Server root, for the swarm's control-plane calls and session close. */
+	baseUrl?: string;
+	headers?: Record<string, string>;
 }): typeof fetch {
 	const base = options.fetch ?? fetch;
+	const worker = options.request?.worker;
+	if (worker && options.baseUrl) {
+		return createWorkerFetch({ ...options, worker, baseUrl: options.baseUrl });
+	}
 	return (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
 		let nextInit = init;
 		const extras = options.request;
@@ -263,7 +287,15 @@ export function createOpencotiFetch(options: {
 					body.pool_id = wirePoolId;
 				}
 				if (extras.sessionId !== undefined) {
-					body.session_id = extras.sessionId;
+					body.session_id = engineSessionId(extras.sessionId);
+					if (options.baseUrl) {
+						rememberOpencotiSession(
+							extras.sessionId,
+							options.baseUrl,
+							base,
+							options.headers,
+						);
+					}
 				}
 				if (extras.sharedPrefixTokens !== undefined) {
 					body.shared_prefix_n_tokens = extras.sharedPrefixTokens;
@@ -389,6 +421,112 @@ export function createOpencotiFetch(options: {
 	}) as typeof fetch;
 }
 
+/**
+ * The fetch of one swarm agent.
+ *
+ * Attaches each request to the pool tree its messages match, then honours the
+ * engine's admission: a "session allocation full (worker of ...)" refusal is a
+ * queue on a window the other agents are draining, so it waits the
+ * `Retry-After` the engine names and sends again. An agent that has not yet run
+ * a single turn first tries a fresh owner instead -- the engine decides whether
+ * one fits -- because nothing of it lives on the full one yet.
+ *
+ * Any other response is returned untouched, and so is a refusal that outlasts
+ * the wait: the caller sees the 429 it was.
+ */
+function createWorkerFetch(options: {
+	fetch?: typeof fetch;
+	dispatcher?: unknown;
+	worker: PolykvWorkerSpec;
+	baseUrl: string;
+	headers?: Record<string, string>;
+}): typeof fetch {
+	const base = options.fetch ?? fetch;
+	let ranOnce = false;
+	return (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+		if (!init?.body || typeof init.body !== "string") {
+			return base(input, init);
+		}
+		let body: Record<string, unknown>;
+		try {
+			body = JSON.parse(init.body) as Record<string, unknown>;
+		} catch {
+			return base(input, init);
+		}
+		rememberOpencotiSession(
+			options.worker.sessionId,
+			options.baseUrl,
+			base,
+			options.headers,
+		);
+		const signal = init.signal ?? undefined;
+		const deadline = Date.now() + POLYKV_WORKER_MAX_WAIT_MS;
+		let fresh = false;
+		// One fresh owner per agent, at most: after that a full window is a
+		// queue to wait in, not a reason to keep opening owners.
+		let triedFresh = false;
+		while (true) {
+			const attach = await preparePolykvWorker({
+				spec: options.worker,
+				baseUrl: options.baseUrl,
+				fetch: base,
+				...(options.headers ? { headers: options.headers } : {}),
+				body,
+				signal,
+				fresh,
+			});
+			const wire: Record<string, unknown> = { ...body };
+			// A worker books nothing: its window is the owner's.
+			delete wire.num_ctx;
+			delete wire.num_ctx_min;
+			wire.session_id = attach.sessionId;
+			if (attach.poolId !== undefined && /^\d+$/.test(attach.poolId)) {
+				wire.pool_id = Number(attach.poolId);
+			}
+			const response = await base(input, {
+				...init,
+				body: JSON.stringify(wire),
+				...(options.dispatcher ? { dispatcher: options.dispatcher } : {}),
+			} as RequestInit);
+			if (response.status !== 429 || attach.poolId === undefined) {
+				if (response.ok) {
+					ranOnce = true;
+				}
+				return response;
+			}
+			const text = await response
+				.clone()
+				.text()
+				.catch(() => "");
+			if (!isWorkerWindowFull(response.status, text) || Date.now() > deadline) {
+				return response;
+			}
+			await response.body?.cancel().catch(() => {});
+			if (!ranOnce && !triedFresh) {
+				triedFresh = true;
+				fresh = true;
+				continue;
+			}
+			fresh = false;
+			const seconds = Number(response.headers.get("retry-after"));
+			await new Promise<void>((resolve, reject) => {
+				const handle = setTimeout(
+					resolve,
+					Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 2000,
+				);
+				signal?.addEventListener(
+					"abort",
+					() => {
+						clearTimeout(handle);
+						reject(signal.reason ?? new Error("aborted"));
+					},
+					{ once: true },
+				);
+			});
+		}
+	}) as typeof fetch;
+}
+
 function numberOrUndefined(value: string | null): number | undefined {
 	if (!value) {
 		return undefined;
@@ -423,6 +561,7 @@ export function readOpencotiRequestOptions(
 	const configuredPool = read("polykvPoolId");
 	const sessionId = read("polykvSessionId");
 	const sharedPrefix = read("polykvSharedPrefixTokens");
+	const worker = read("polykvWorker") as PolykvWorkerSpec | undefined;
 	// The section wins where it says anything; the loose key is the fallback.
 	const overcommit = settings?.overcommit ?? read("polykvOvercommit");
 	// The live pool wins over anything the config froze: after a compaction
@@ -441,6 +580,18 @@ export function readOpencotiRequestOptions(
 		(typeof configuredPool === "string" && configuredPool
 			? configuredPool
 			: undefined);
+	if (
+		worker &&
+		typeof worker.group === "string" &&
+		typeof worker.sessionId === "string" &&
+		settings?.enabled !== false
+	) {
+		return {
+			worker,
+			sessionId: worker.sessionId,
+			...(typeof overcommit === "boolean" ? { overcommit } : {}),
+		};
+	}
 	return {
 		...(poolId ? { poolId } : {}),
 		...(typeof sessionId === "string" && sessionId ? { sessionId } : {}),
@@ -549,6 +700,8 @@ export async function createOpencotiProviderModule(
 		...(baseFetch ? { fetch: baseFetch } : {}),
 		dispatcher,
 		request,
+		...(baseURL ? { baseUrl: baseURL } : {}),
+		...(config.headers ? { headers: config.headers } : {}),
 		onFacts: (facts) => {
 			// The grant, remembered. Every later admission for this session
 			// asks for exactly it, which is how a resume gets the window it was

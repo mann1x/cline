@@ -483,7 +483,7 @@ function buildGatewayModels(
 	return definitions.size > 0 ? [...definitions.values()] : undefined;
 }
 
-function buildGatewayConfig(config: ProviderConfig) {
+export function buildGatewayConfig(config: ProviderConfig) {
 	const providerId = normalizeProviderId(config.providerId);
 	return {
 		providerId,
@@ -506,6 +506,20 @@ function buildGatewayConfig(config: ProviderConfig) {
 		reasoningInline: config.reasoningInline,
 		options: {
 			sampling: config.sampling,
+			// opencoti: the session and the pool tree these requests belong to.
+			// Absent, a summary call is an anonymous per-request admission.
+			polykv: config.polykv,
+			...(config.engineSessionId
+				? { polykvSessionId: config.engineSessionId }
+				: {}),
+			...(config.engineSessionId && config.polykvWorker
+				? {
+						polykvWorker: {
+							...config.polykvWorker,
+							sessionId: config.engineSessionId,
+						},
+					}
+				: {}),
 			region: config.region ?? config.gcp?.region,
 			project: config.gcp?.projectId,
 			projectId: config.gcp?.projectId,

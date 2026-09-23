@@ -1,0 +1,579 @@
+import { createPolykvClient, type PolykvClient, polykvRoot } from "./polykv";
+
+/**
+ * Agents that share a prefix, deduplicated on the engine that holds the cells.
+ *
+ * A swarm of sub-agents on one opencoti server repeats the same context in
+ * every agent: the system prompt and tool schemas, then whatever knowledge they
+ * were all handed, then the instructions of their role. Measured on 8240 with a
+ * 15k-character file as the knowledge: each agent's prompt was 6,133 tokens and
+ * 6,099 of them were identical across every agent of a role. Sent as ordinary
+ * sessions they are prefilled and held once per agent; attached to a pool tree
+ * they are prefilled and held once.
+ *
+ * The tree mirrors how the agent's first request is laid out, one layer per
+ * turn:
+ *
+ *   P0  system prompt + tools             -- every agent
+ *   P1  P0 + the knowledge turn           -- every agent given that knowledge
+ *   P2  P1 + the instructions turn        -- every agent of that role
+ *   worker: P2 + its own task, attached with `pool_id`
+ *
+ * Every pool is owned by one **owner session**, whose guaranteed window the
+ * whole tree lives in. A worker attached to an owned pool books nothing of its
+ * own: the engine charges its private suffix to the owner, so fifty agents fit
+ * where one agent's window would otherwise be booked fifty times.
+ *
+ * Three rules this module exists to keep:
+ *
+ * - **The prefix is the server's rendering, never ours.** Each layer is the
+ *   request's own messages rendered through `/apply-template` and cut at a
+ *   sentinel turn, then checked to be a byte-prefix of the rendering of the
+ *   request it is for. A prefix that is not is never attached: attaching it
+ *   costs a pool and shares nothing.
+ * - **Each layer ends after the next turn's opener.** A worker's prompt always
+ *   continues with the opener of its task turn. A pool that stops before it is
+ *   beaten by any warm slot that last served an agent of the same role -- the
+ *   slot's cache matches those extra tokens, the engine prefers it, and the
+ *   worker then runs on a private copy charged to the owner in full. Measured:
+ *   9 of 40 agents attached with the opener outside the pool.
+ * - **Nothing outlives its agents.** Each agent's own session is closed when
+ *   the agent ends, and the owner -- with every pool it owns -- when its last
+ *   agent does. The engine's idle TTL is the crash net: admission is decided
+ *   against held windows, and a window held for five minutes after its work is
+ *   done is five minutes of refusals for everyone queued behind it.
+ */
+
+/** How one agent's requests attach to the shared tree. */
+export interface PolykvWorkerSpec {
+	/**
+	 * Agents that share owners. The lead conversation's session id: a swarm's
+	 * agents dedupe against each other, never against another conversation's.
+	 */
+	group: string;
+	/** This agent's own engine session -- slot affinity for its private suffix. */
+	sessionId: string;
+	/**
+	 * How many turns after the system turn are shared layers.
+	 *
+	 * The agent's first request is `[system, ...layers, task]`; each layer turn
+	 * becomes a pool. `0` shares the system prompt and tools only.
+	 */
+	layers: number;
+	/**
+	 * Attach to the tree this agent already has, and build nothing.
+	 *
+	 * For requests of the agent's that are not its conversation -- the
+	 * compaction summarizer. Their prompt shares little with the tree, but
+	 * attached to an owned pool they are charged to the owner as a worker
+	 * instead of booking a window of their own.
+	 */
+	attachOnly?: boolean;
+}
+
+export interface PolykvWorkerAttach {
+	poolId?: string;
+	sessionId: string;
+}
+
+/** An owner session and the pool tree inside its window. */
+interface OwnerShard {
+	sessionId: string;
+	/** Layer key -> pool id (`undefined` when that layer could not be pooled). */
+	pools: Map<string, Promise<string | undefined>>;
+	/** Agents currently assigned here. */
+	agents: Set<string>;
+	closed: boolean;
+}
+
+interface SwarmGroup {
+	key: string;
+	root: string;
+	client: PolykvClient;
+	fetch: typeof fetch;
+	headers?: Record<string, string>;
+	shards: OwnerShard[];
+	/** Agent session -> its shard. An agent stays on the shard it started on. */
+	assigned: Map<string, OwnerShard>;
+	opening?: Promise<OwnerShard | undefined>;
+	serial: number;
+}
+
+const GROUPS = new Map<string, SwarmGroup>();
+/** Agent session -> its group, for release by agent id alone. */
+const AGENT_GROUPS = new Map<string, SwarmGroup>();
+
+/**
+ * Every opencoti session this process opened, so it can be closed by id alone.
+ *
+ * An agent's session holds a slot affinity even as a worker, and a whole
+ * guaranteed window when it is not one -- an agent on an opencoti node without
+ * pooling books its own. Its end is the moment to give that back.
+ */
+const OPENCOTI_SESSIONS = new Map<
+	string,
+	{ root: string; fetch: typeof fetch; headers?: Record<string, string> }
+>();
+
+export function rememberOpencotiSession(
+	sessionId: string,
+	baseUrl: string,
+	fetchFn: typeof fetch,
+	headers?: Record<string, string>,
+): void {
+	if (!OPENCOTI_SESSIONS.has(sessionId)) {
+		OPENCOTI_SESSIONS.set(sessionId, {
+			root: polykvRoot(baseUrl),
+			fetch: fetchFn,
+			...(headers ? { headers } : {}),
+		});
+	}
+}
+
+/** A turn that is never anyone's content, marking where a layer ends. */
+const SENTINEL = "⁣POLYKV-LAYER-END⁣";
+
+/** Owner windows start here and the engine grants what fits above it. */
+export const POLYKV_OWNER_MIN_WINDOW = 32_768;
+
+/**
+ * How long a worker waits on a full owner before handing the refusal back.
+ *
+ * Long on purpose: a full window is a queue, not a fault -- it drains as the
+ * other agents finish -- and the engine names the wait on every refusal.
+ */
+export const POLYKV_WORKER_MAX_WAIT_MS = 15 * 60_000;
+
+function hashString(text: string): string {
+	// cyrb53: a key, not a fingerprint -- a collision costs one shared pool
+	// between two prefixes, which the byte-prefix check then refuses to attach.
+	let h1 = 0xdeadbeef;
+	let h2 = 0x41c6ce57;
+	for (let index = 0; index < text.length; index++) {
+		const code = text.charCodeAt(index);
+		h1 = Math.imul(h1 ^ code, 2654435761);
+		h2 = Math.imul(h2 ^ code, 1597334677);
+	}
+	h1 =
+		Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^
+		Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+	h2 =
+		Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^
+		Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+	return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
+
+/**
+ * A session id the engine can close.
+ *
+ * The close route is `/sessions/:session_id/close`, and its parameter cannot
+ * hold a `/` -- encoded as `%2F` the route does not match and the close 404s,
+ * leaving the window held until the idle TTL. Measured on 8240: an owner named
+ * `lead/polykv-owner-1` could be opened, filled and used, and never closed.
+ */
+export function engineSessionId(id: string): string {
+	return id.replace(/[/\\?#%]/g, "~");
+}
+
+function sleep(ms: number, signal?: AbortSignal | null): Promise<void> {
+	return new Promise((resolve, reject) => {
+		if (signal?.aborted) {
+			reject(signal.reason ?? new Error("aborted"));
+			return;
+		}
+		const handle = setTimeout(() => {
+			signal?.removeEventListener("abort", onAbort);
+			resolve();
+		}, ms);
+		const onAbort = () => {
+			clearTimeout(handle);
+			reject(signal?.reason ?? new Error("aborted"));
+		};
+		signal?.addEventListener("abort", onAbort, { once: true });
+	});
+}
+
+function groupFor(
+	spec: PolykvWorkerSpec,
+	baseUrl: string,
+	fetchFn: typeof fetch,
+	headers?: Record<string, string>,
+): SwarmGroup {
+	const root = polykvRoot(baseUrl);
+	const key = `${root}\n${spec.group}`;
+	let group = GROUPS.get(key);
+	if (!group) {
+		group = {
+			key,
+			root,
+			client: createPolykvClient({
+				baseUrl: root,
+				fetch: fetchFn,
+				...(headers ? { headers } : {}),
+			}),
+			fetch: fetchFn,
+			...(headers ? { headers } : {}),
+			shards: [],
+			assigned: new Map(),
+			serial: 0,
+		};
+		GROUPS.set(key, group);
+	}
+	return group;
+}
+
+/** The model's own per-session maximum, which is what an owner asks for. */
+async function sessionContextMax(group: SwarmGroup): Promise<number> {
+	try {
+		const response = await group.fetch(`${group.root}/kv`, {
+			headers: group.headers ?? {},
+		});
+		const body = (await response.json()) as { session_ctx_max?: unknown };
+		if (typeof body.session_ctx_max === "number" && body.session_ctx_max > 0) {
+			return body.session_ctx_max;
+		}
+	} catch {
+		// Falls through to the floor: an owner that asks for less than the
+		// engine could give still works, and the engine clamps anyway.
+	}
+	return POLYKV_OWNER_MIN_WINDOW;
+}
+
+/**
+ * Open an owner: a one-token request that books a window under a new id.
+ *
+ * `num_ctx` is the model's maximum and `num_ctx_min` the floor, so the engine
+ * settles the grant in one admission -- the largest window that fits right
+ * now, or a 429 naming when to come back. The size is the engine's decision,
+ * which is the point: nothing on this side knows how many other sessions the
+ * cells are owed to.
+ */
+async function openOwner(
+	group: SwarmGroup,
+	body: Record<string, unknown>,
+	signal: AbortSignal | null | undefined,
+	/**
+	 * Queue for room when the engine has none. Off for an extra owner: that is
+	 * an offer, and a refused one means "wait on the owner you have".
+	 */
+	waitForRoom: boolean,
+): Promise<OwnerShard | undefined> {
+	const messages = body.messages as Array<Record<string, unknown>>;
+	const system = messages[0];
+	const sessionId = engineSessionId(
+		`${group.key.split("\n")[1]}~polykv-owner-${++group.serial}`,
+	);
+	const window = await sessionContextMax(group);
+	const deadline = Date.now() + POLYKV_WORKER_MAX_WAIT_MS;
+	while (true) {
+		const response = await group.fetch(`${group.root}/v1/chat/completions`, {
+			method: "POST",
+			headers: { "content-type": "application/json", ...(group.headers ?? {}) },
+			body: JSON.stringify({
+				...(body.model !== undefined ? { model: body.model } : {}),
+				messages: [system, { role: "user", content: "." }],
+				...(body.tools !== undefined ? { tools: body.tools } : {}),
+				session_id: sessionId,
+				num_ctx: window,
+				num_ctx_min: Math.min(window, POLYKV_OWNER_MIN_WINDOW),
+				max_tokens: 1,
+				stream: false,
+			}),
+			...(signal ? { signal } : {}),
+		});
+		await response.body?.cancel().catch(() => {});
+		if (response.ok) {
+			const shard: OwnerShard = {
+				sessionId,
+				pools: new Map(),
+				agents: new Set(),
+				closed: false,
+			};
+			group.shards.push(shard);
+			return shard;
+		}
+		if (response.status !== 429 || !waitForRoom || Date.now() > deadline) {
+			return undefined;
+		}
+		const wait = Number(response.headers.get("retry-after"));
+		await sleep(Number.isFinite(wait) && wait > 0 ? wait * 1000 : 2000, signal);
+	}
+}
+
+/**
+ * The layer's prefix: the conversation so far, rendered by the server, up to
+ * and including the opener of the turn that follows it.
+ */
+async function renderLayer(
+	client: PolykvClient,
+	messages: readonly unknown[],
+	tools: readonly unknown[] | undefined,
+): Promise<string | undefined> {
+	const rendered = await client.applyTemplate({
+		messages: [...messages, { role: "user", content: SENTINEL }],
+		...(tools ? { tools } : {}),
+	});
+	const at = rendered.indexOf(SENTINEL);
+	return at > 0 ? rendered.slice(0, at) : undefined;
+}
+
+/**
+ * The pool for `layer` of this request on `shard`, creating the chain to it.
+ *
+ * Returns the deepest pool that could be made. A layer the engine refuses --
+ * the per-session pool limit, a contract violation -- stops the chain there,
+ * and the worker attaches to its parent: sharing less is still sharing.
+ */
+async function ensureChain(
+	group: SwarmGroup,
+	shard: OwnerShard,
+	body: Record<string, unknown>,
+	layers: number,
+	fullRendering: string,
+): Promise<string | undefined> {
+	const messages = body.messages as unknown[];
+	const tools = body.tools as unknown[] | undefined;
+	let parent: string | undefined;
+	let key = hashString(JSON.stringify([body.model ?? "", tools ?? []]));
+	for (let depth = 0; depth <= layers; depth++) {
+		key = hashString(`${key}\n${JSON.stringify(messages[depth])}`);
+		let pending = shard.pools.get(key);
+		if (!pending) {
+			const parentId = parent;
+			pending = (async () => {
+				const prompt = await renderLayer(
+					group.client,
+					messages.slice(0, depth + 1),
+					tools,
+				);
+				if (!prompt || !fullRendering.startsWith(prompt)) {
+					return undefined;
+				}
+				const pool =
+					parentId === undefined
+						? await group.client.createPool({
+								prompt,
+								session_id: shard.sessionId,
+								pin: true,
+							})
+						: await group.client.forkPool(parentId, {
+								prompt,
+								session_id: shard.sessionId,
+								pin: true,
+							});
+				return pool.pool_id;
+			})().catch(() => undefined);
+			shard.pools.set(key, pending);
+		}
+		const poolId = await pending;
+		if (poolId === undefined) {
+			return parent;
+		}
+		parent = poolId;
+	}
+	return parent;
+}
+
+function openShard(
+	group: SwarmGroup,
+	body: Record<string, unknown>,
+	signal: AbortSignal | null | undefined,
+	waitForRoom = true,
+): Promise<OwnerShard | undefined> {
+	group.opening ??= openOwner(group, body, signal, waitForRoom).finally(() => {
+		group.opening = undefined;
+	});
+	return group.opening;
+}
+
+/**
+ * Where this agent's request attaches, creating what it needs.
+ *
+ * `undefined` pool means "run unpooled": no owner could be opened, or the
+ * request is not shaped `[system, ...layers, task]`. The request then goes out
+ * as an ordinary session of its own, which is slower, never wrong.
+ */
+export async function preparePolykvWorker(options: {
+	spec: PolykvWorkerSpec;
+	baseUrl: string;
+	fetch: typeof fetch;
+	headers?: Record<string, string>;
+	body: Record<string, unknown>;
+	signal?: AbortSignal | null;
+	/** Start on a fresh owner: the current one refused this agent. */
+	fresh?: boolean;
+}): Promise<PolykvWorkerAttach> {
+	const { spec, body } = options;
+	const group = groupFor(spec, options.baseUrl, options.fetch, options.headers);
+	AGENT_GROUPS.set(spec.sessionId, group);
+	const unpooled = { sessionId: engineSessionId(spec.sessionId) };
+	if (spec.attachOnly) {
+		const shard = group.assigned.get(spec.sessionId);
+		if (!shard || shard.closed) {
+			return unpooled;
+		}
+		for (const pending of shard.pools.values()) {
+			const poolId = await pending;
+			if (poolId !== undefined) {
+				return { poolId, sessionId: unpooled.sessionId };
+			}
+		}
+		return unpooled;
+	}
+	const messages = body.messages;
+	if (
+		!Array.isArray(messages) ||
+		messages.length < spec.layers + 2 ||
+		(messages[0] as { role?: string })?.role !== "system" ||
+		messages
+			.slice(1, spec.layers + 1)
+			.some((message) => (message as { role?: string })?.role !== "user")
+	) {
+		return unpooled;
+	}
+	const current = group.assigned.get(spec.sessionId);
+	let shard = options.fresh ? undefined : current;
+	if (!shard || shard.closed) {
+		shard = options.fresh
+			? // An extra owner, if the engine has room for one; otherwise the
+				// agent keeps its place on the owner it has and waits there.
+				((await openShard(group, body, options.signal, false)) ??
+				(current && !current.closed ? current : undefined))
+			: ([...group.shards].reverse().find((candidate) => !candidate.closed) ??
+				(await openShard(group, body, options.signal)));
+		if (!shard) {
+			return unpooled;
+		}
+		const previous = group.assigned.get(spec.sessionId);
+		previous?.agents.delete(spec.sessionId);
+		group.assigned.set(spec.sessionId, shard);
+		shard.agents.add(spec.sessionId);
+	}
+	let fullRendering: string;
+	try {
+		fullRendering = await group.client.applyTemplate({
+			messages,
+			...(body.tools ? { tools: body.tools as unknown[] } : {}),
+		});
+	} catch {
+		return unpooled;
+	}
+	const poolId = await ensureChain(
+		group,
+		shard,
+		body,
+		spec.layers,
+		fullRendering,
+	);
+	return poolId === undefined
+		? unpooled
+		: { poolId, sessionId: unpooled.sessionId };
+}
+
+/**
+ * A worker refused because its owner's window is full, as the engine words it.
+ *
+ * Distinct from every other 429 on purpose: this one is a queue on a window
+ * other agents are draining, and it may also be answered by opening another
+ * owner.
+ */
+export function isWorkerWindowFull(status: number, text: string): boolean {
+	return status === 429 && /session allocation full \(worker of/i.test(text);
+}
+
+/**
+ * The agent is done: close its session, and its owner if it was the last.
+ *
+ * Never throws and never waits on anything but the close calls themselves --
+ * this runs on every agent's way out, including the ones being cancelled.
+ */
+export interface PolykvReleaseResult {
+	/** Engine session ids closed. */
+	closed: string[];
+	/** Engine session ids whose close failed, with why. */
+	failed: Array<{ sessionId: string; error: string }>;
+}
+
+export async function releasePolykvAgent(
+	sessionId: string,
+): Promise<PolykvReleaseResult> {
+	const group = AGENT_GROUPS.get(sessionId);
+	AGENT_GROUPS.delete(sessionId);
+	const known = OPENCOTI_SESSIONS.get(sessionId);
+	OPENCOTI_SESSIONS.delete(sessionId);
+	const result: PolykvReleaseResult = { closed: [], failed: [] };
+	const closes: Promise<unknown>[] = [];
+	const close = (client: PolykvClient, id: string) =>
+		closes.push(
+			client.closeSession(id).then(
+				() => {
+					result.closed.push(id);
+				},
+				(error: unknown) => {
+					result.failed.push({
+						sessionId: id,
+						error: error instanceof Error ? error.message : String(error),
+					});
+				},
+			),
+		);
+	if (known) {
+		close(
+			createPolykvClient({
+				baseUrl: known.root,
+				fetch: known.fetch,
+				...(known.headers ? { headers: known.headers } : {}),
+			}),
+			engineSessionId(sessionId),
+		);
+	}
+	if (group) {
+		const shard = group.assigned.get(sessionId);
+		group.assigned.delete(sessionId);
+		if (shard) {
+			shard.agents.delete(sessionId);
+			if (shard.agents.size === 0 && !shard.closed) {
+				// Closing the owner releases every pool it owns with it.
+				shard.closed = true;
+				group.shards = group.shards.filter((candidate) => candidate !== shard);
+				close(group.client, shard.sessionId);
+			}
+		}
+		if (group.shards.length === 0 && group.assigned.size === 0) {
+			GROUPS.delete(group.key);
+		}
+	}
+	await Promise.all(closes);
+	return result;
+}
+
+/** Close every owner this process holds. For shutdown and for tests. */
+export async function releaseAllPolykvSwarms(): Promise<void> {
+	const closes: Promise<unknown>[] = [];
+	for (const group of GROUPS.values()) {
+		for (const shard of group.shards) {
+			shard.closed = true;
+			closes.push(
+				group.client.closeSession(shard.sessionId).catch(() => false),
+			);
+		}
+	}
+	GROUPS.clear();
+	AGENT_GROUPS.clear();
+	await Promise.all(closes);
+}
+
+/** Test seam. */
+export function polykvSwarmState(): Array<{
+	group: string;
+	owners: Array<{ sessionId: string; agents: string[]; pools: number }>;
+}> {
+	return [...GROUPS.values()].map((group) => ({
+		group: group.key,
+		owners: group.shards.map((shard) => ({
+			sessionId: shard.sessionId,
+			agents: [...shard.agents],
+			pools: shard.pools.size,
+		})),
+	}));
+}

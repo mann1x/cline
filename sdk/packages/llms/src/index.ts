@@ -212,6 +212,20 @@ export {
 	resetPolykvSessions,
 	setPolykvSession,
 } from "./providers/vendors/polykv";
+export {
+	engineSessionId,
+	isWorkerWindowFull,
+	POLYKV_OWNER_MIN_WINDOW,
+	POLYKV_WORKER_MAX_WAIT_MS,
+	type PolykvReleaseResult,
+	type PolykvWorkerAttach,
+	type PolykvWorkerSpec,
+	polykvSwarmState,
+	preparePolykvWorker,
+	releaseAllPolykvSwarms,
+	releasePolykvAgent,
+	rememberOpencotiSession,
+} from "./providers/vendors/polykv-swarm";
 export { disposeLangfuseTelemetry } from "./services/langfuse-telemetry";
 export {
 	type AudioTranscriptionRequest,

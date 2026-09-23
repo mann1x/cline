@@ -977,3 +977,37 @@ describe("the replay settings survive the gateway config", () => {
 		expect(built.reasoningHistory).toBeUndefined();
 	});
 });
+
+describe("the opencoti session on a config-only handler", () => {
+	// The compaction summarizer builds its handler from a config alone. Without
+	// these, each summary call reached opencoti with no session -- a
+	// per-request admission of the model's whole window.
+	it("carries the agent's engine session and pool tree", async () => {
+		const { buildGatewayConfig } = await import("./compat");
+		const config = buildGatewayConfig({
+			providerId: "opencoti",
+			modelId: "m",
+			engineSessionId: "lead~agent-1",
+			polykvWorker: { group: "lead", layers: 2, attachOnly: true },
+		} as never);
+		expect(config.options).toMatchObject({
+			polykvSessionId: "lead~agent-1",
+			polykvWorker: {
+				group: "lead",
+				layers: 2,
+				attachOnly: true,
+				sessionId: "lead~agent-1",
+			},
+		});
+	});
+
+	it("adds nothing for a config with no engine session", async () => {
+		const { buildGatewayConfig } = await import("./compat");
+		const config = buildGatewayConfig({
+			providerId: "openai",
+			modelId: "m",
+		} as never);
+		expect(config.options).not.toHaveProperty("polykvSessionId");
+		expect(config.options).not.toHaveProperty("polykvWorker");
+	});
+});

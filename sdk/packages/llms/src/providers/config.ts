@@ -340,6 +340,23 @@ export interface ProviderOptions {
 	sampling?: ProviderSamplingOptions;
 	/** opencoti's PolyKV control plane. Inert for every other provider. */
 	polykv?: PolykvOptions;
+	/**
+	 * The engine session requests built from this config run in (opencoti).
+	 *
+	 * On the config rather than only on an agent because some requests are
+	 * built from a config alone -- the compaction summarizer is one. Without it
+	 * each summary call arrived with no session, which the engine admits as a
+	 * per-request allocation of the model's whole window: two or three extra
+	 * sessions for every compaction, on the server the agents were queued on.
+	 */
+	engineSessionId?: string;
+	/** Attach those requests to a PolyKV pool tree; see `polykv-swarm.ts`. */
+	polykvWorker?: {
+		group: string;
+		layers: number;
+		/** Attach to the agent's existing tree without building anything. */
+		attachOnly?: boolean;
+	};
 	/** Which tools this configuration withholds from its sessions. */
 	tools?: ToolSelectionOptions;
 }
