@@ -35,7 +35,12 @@ import {
 	subagentCancelId,
 } from "./subagent-cancellation";
 import { buildSubagentLayout } from "./subagent-layout";
-import { createSubagentProgress } from "./subagent-progress";
+import {
+	createSubagentProgress,
+	DELEGATION_PACING_NOTE,
+	reportSubagentPlaced,
+	reportSubagentQueued,
+} from "./subagent-progress";
 
 /** The tool a model calls to hand a self-contained piece of work to a subagent. */
 export const SPAWN_AGENT_TOOL_NAME = "spawn_agent";
@@ -214,7 +219,8 @@ export function createSpawnAgentTool(
 			"Spawn a sub-agent for a focused task. Structure it in three parts, from most shared to least: `knowledge` (files and notes several agents need -- identical across them), `instructions` (the role -- identical for every agent of the same kind), `task` (what this agent alone does). Shared parts are loaded once for all agents that share them, so many agents cost little more than one. " +
 			"Output: `{text, iterations, finishReason, usage: {inputTokens, outputTokens}}`. " +
 			"`text` is the sub-agent's final answer and the only part you need: it worked in its own context, so nothing it read or edited is visible to you except through `text`. It has already finished by the time you see this — there is nothing to poll and nothing to await. " +
-			"Give each sub-agent a short `name`: when several run at once it is the only thing telling their progress apart on screen.",
+			"Give each sub-agent a short `name`: when several run at once it is the only thing telling their progress apart on screen. " +
+			DELEGATION_PACING_NOTE,
 		inputSchema: zodToJsonSchema(SpawnAgentInputSchema),
 		execute: async (input, context) => {
 			const tools = config.createSubAgentTools
@@ -226,9 +232,15 @@ export function createSpawnAgentTool(
 			// it is. Without nodes this is undefined and everything below is
 			// the single delegated connection, as it always was.
 			const placement = config.configProvider.getRuntimeConfig().nodePlacement;
+			if (placement) {
+				reportSubagentQueued(context.emitUpdate);
+			}
 			let placed = placement
 				? await placement.place(context.signal)
 				: undefined;
+			if (placement) {
+				reportSubagentPlaced(context.emitUpdate, placed);
+			}
 			// This agent's own engine session -- never the lead's. Slash-free:
 			// the engine's close route cannot carry one.
 			const engineSessionId = `${context.sessionId ?? "cerebriline"}~agent-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
@@ -360,7 +372,9 @@ export function createSpawnAgentTool(
 					);
 					placed.markUnreachable(NODE_MODEL_MISSING_COOL_OFF_MS);
 					placed.release();
+					reportSubagentQueued(context.emitUpdate);
 					placed = await placement.place(context.signal);
+					reportSubagentPlaced(context.emitUpdate, placed);
 					await releasePolykvAgent(engineSessionId);
 					built = await buildSubAgent();
 					subAgent = built.agent;

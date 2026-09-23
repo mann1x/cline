@@ -2245,6 +2245,17 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 						// as soon as it registers, so the button exists before
 						// the agent's first tool call rather than after it.
 						if (typeof updateData.cancelId === "string") entry.cancelId = updateData.cancelId
+						// Waiting for a node, or placed on one. Every entry starts as
+						// running, so without this a fan-out larger than its nodes
+						// showed every agent at work while most of them were queued.
+						if (updateData.queued === true && entry.status === "running") entry.status = "pending"
+						if (updateData.queued === false && entry.status === "pending") entry.status = "running"
+						// The node it runs on, known at placement -- not only at the
+						// end, when it no longer explains anything.
+						if (typeof updateData.nodeId === "string") entry.nodeId = updateData.nodeId
+						if (typeof updateData.nodeLabel === "string") entry.nodeLabel = updateData.nodeLabel
+						if (typeof updateData.genTps === "number" && Number.isFinite(updateData.genTps))
+							entry.genTps = updateData.genTps
 					}
 				}
 				// Emit a running status update

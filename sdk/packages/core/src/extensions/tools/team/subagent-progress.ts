@@ -35,6 +35,48 @@ export const SUBAGENT_OUTPUT_TAIL_CHARS = 400;
  */
 export const SUBAGENT_OUTPUT_REPORT_MS = 2_000;
 
+/**
+ * The agent is waiting for a node: every node that could take it is full.
+ *
+ * Without this the UI had no way to tell a queued agent from a working one --
+ * every agent was shown running from the moment it was spawned, so a fan-out
+ * of seventy-five on nodes that take three looked like seventy-five at work.
+ */
+export function reportSubagentQueued(
+	emitUpdate: ((update: unknown) => void) | undefined,
+): void {
+	emitUpdate?.({ queued: true });
+}
+
+/**
+ * The agent has a node and starts now. Sent at placement, not at the end: the
+ * node is what explains a slow agent while it is slow.
+ */
+export function reportSubagentPlaced(
+	emitUpdate: ((update: unknown) => void) | undefined,
+	placed: { nodeId?: string; nodeLabel?: string } | undefined,
+): void {
+	emitUpdate?.({
+		queued: false,
+		...(placed?.nodeId ? { nodeId: placed.nodeId } : {}),
+		...(placed?.nodeLabel ? { nodeLabel: placed.nodeLabel } : {}),
+	});
+}
+
+/**
+ * What every delegating tool tells the model about launching many agents.
+ *
+ * Measured on pandorum 2026-09-23 (sx4bp): asked for 75 reports, the lead
+ * spent its planning turn arguing with itself -- "that's 75 tool calls which
+ * is a LOT", "I'll do this in waves", "can I really make 75 tool calls at
+ * once?" -- five reversals before it launched them all together, which was
+ * right all along: placement queues what does not fit. Nothing in any
+ * description said so, so the model reasoned as if every call it made
+ * started a process on the spot.
+ */
+export const DELEGATION_PACING_NOTE =
+	"Launching many is safe: the harness paces them. Each agent starts when a node has room for it and waits in a queue until then, so asking for more than can run at once overloads nothing -- it only means some start later. Do not hold back or split the work into waves: make every call the job needs in one message, and each returns its own result when its agent finishes.";
+
 export function createSubagentProgress(
 	emitUpdate: ((update: unknown) => void) | undefined,
 	forward?: (event: AgentEvent) => void,
@@ -47,6 +89,13 @@ export function createSubagentProgress(
 	let text = "";
 	let reasoning = "";
 	let lastReport = Number.NEGATIVE_INFINITY;
+	// Generation speed, measured over each report window. A streamed delta is
+	// one token as the engines here send them (llama.cpp and ollama stream per
+	// token), so deltas per second is tokens per second, near enough to tell a
+	// crawling agent from a working one -- which is what it is shown for.
+	let deltas = 0;
+	let windowStart = Number.NaN;
+	let genTps: number | undefined;
 	const tail = (value: string) =>
 		value.length > SUBAGENT_OUTPUT_TAIL_CHARS
 			? value.slice(value.length - SUBAGENT_OUTPUT_TAIL_CHARS)
@@ -57,13 +106,27 @@ export function createSubagentProgress(
 			return;
 		}
 		lastReport = at;
+		if (deltas > 0 && at > windowStart) {
+			genTps = Math.round((deltas / ((at - windowStart) / 1000)) * 10) / 10;
+		}
+		deltas = 0;
+		// A forced report ends a block: whatever comes next starts after a model
+		// round trip, which is not generation time.
+		windowStart = force ? Number.NaN : at;
 		const latestOutput = text.trim() ? text : reasoning;
 		if (latestOutput.trim()) {
 			emitUpdate?.({
 				latestOutput: latestOutput.trim(),
 				latestOutputKind: text.trim() ? "text" : "reasoning",
+				...(genTps !== undefined ? { genTps } : {}),
 			});
 		}
+	};
+	const countDelta = () => {
+		if (Number.isNaN(windowStart)) {
+			windowStart = now();
+		}
+		deltas += 1;
 	};
 	return {
 		observe(event: AgentEvent): void {
@@ -72,11 +135,13 @@ export function createSubagentProgress(
 				return;
 			}
 			if (event.type === "content_start" && event.contentType === "text") {
+				countDelta();
 				text = tail(text + (event.text ?? ""));
 				reportOutput(false);
 				return;
 			}
 			if (event.type === "content_start" && event.contentType === "reasoning") {
+				countDelta();
 				reasoning = tail(reasoning + (event.reasoning ?? event.text ?? ""));
 				reportOutput(false);
 				return;
@@ -99,9 +164,12 @@ export function createSubagentProgress(
 				return;
 			}
 			toolCalls += 1;
-			// A new step: what it wrote before is the previous step's.
+			// A new step: what it wrote before is the previous step's. So is the
+			// speed window: time spent running a tool is not generation.
 			text = "";
 			reasoning = "";
+			deltas = 0;
+			windowStart = Number.NaN;
 			emitUpdate({ latestToolCall: event.toolName, toolCalls });
 		},
 	};

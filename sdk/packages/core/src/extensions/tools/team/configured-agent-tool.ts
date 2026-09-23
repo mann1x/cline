@@ -37,7 +37,12 @@ import {
 	registerSubagentCancellation,
 	subagentCancelId,
 } from "./subagent-cancellation";
-import { createSubagentProgress } from "./subagent-progress";
+import {
+	createSubagentProgress,
+	DELEGATION_PACING_NOTE,
+	reportSubagentPlaced,
+	reportSubagentQueued,
+} from "./subagent-progress";
 
 const CONFIGURED_AGENT_TOOL_NAME_PREFIX = "subagent_";
 const CONFIGURED_AGENT_TOOL_NAME_MAX_LENGTH = 64;
@@ -378,7 +383,11 @@ export function createConfiguredAgentTools(
 		({ toolName, config }) => {
 			const tool = createTool<ConfiguredAgentInput, SpawnAgentOutput>({
 				name: toolName,
-				description: `Use the "${config.name}" subagent: ${config.description}`,
+				// One call is one agent of this kind. The lead in sx4bp read that as a
+				// reason to avoid these tools for a fan-out ("those subagent tools
+				// seem to be individual calls") and rebuilt all five roles by hand
+				// on spawn_agent -- so say that several calls are the fan-out.
+				description: `Use the "${config.name}" subagent: ${config.description} Each call runs one agent of this kind; for several, make several calls in one message. ${DELEGATION_PACING_NOTE}`,
 				inputSchema: zodToJsonSchema(ConfiguredAgentInputSchema),
 				execute: async (input, context) => {
 					const baseRuntimeConfig = options.configProvider.getRuntimeConfig();
@@ -411,9 +420,15 @@ export function createConfiguredAgentTools(
 					const placement = ownsEndpoint
 						? undefined
 						: baseRuntimeConfig.nodePlacement;
+					if (placement) {
+						reportSubagentQueued(context.emitUpdate);
+					}
 					let placed = placement
 						? await placement.place(context.signal)
 						: undefined;
+					if (placement) {
+						reportSubagentPlaced(context.emitUpdate, placed);
+					}
 					// Its own abort signal, so a runaway agent can be stopped
 					// without cancelling the session and the siblings that are
 					// working.
@@ -558,7 +573,9 @@ export function createConfiguredAgentTools(
 							);
 							placed.markUnreachable(NODE_MODEL_MISSING_COOL_OFF_MS);
 							placed.release();
+							reportSubagentQueued(context.emitUpdate);
 							placed = await placement.place(context.signal);
+							reportSubagentPlaced(context.emitUpdate, placed);
 							runtimeConfig = buildRuntimeConfig();
 							configProvider =
 								createDelegatedAgentConfigProvider(runtimeConfig);

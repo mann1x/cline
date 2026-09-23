@@ -461,6 +461,8 @@ export interface SubagentStatusItem {
 	 */
 	latestOutput?: string
 	latestOutputKind?: "text" | "reasoning"
+	/** Tokens per second it is generating at, measured over the last couple of seconds. */
+	genTps?: number
 	/**
 	 * How to stop this agent, while it is running.
 	 *

@@ -2,6 +2,8 @@ import type { AgentEvent } from "@cline/shared";
 import { describe, expect, it, vi } from "vitest";
 import {
 	createSubagentProgress,
+	reportSubagentPlaced,
+	reportSubagentQueued,
 	SUBAGENT_OUTPUT_TAIL_CHARS,
 } from "./subagent-progress";
 
@@ -111,6 +113,7 @@ describe("the output tail", () => {
 		expect(updates.at(-1)).toEqual({
 			latestOutput: "hello world!",
 			latestOutputKind: "text",
+			genTps: 1,
 		});
 	});
 
@@ -151,5 +154,82 @@ describe("the output tail", () => {
 			latestOutput: "next step",
 			latestOutputKind: "text",
 		});
+	});
+});
+
+describe("generation speed", () => {
+	const text = (chunk: string) =>
+		({ type: "content_start", contentType: "text", text: chunk }) as never;
+
+	// A crawling agent and a working one wrote the same tail; only the rate
+	// told them apart, and it was nowhere on screen.
+	it("is deltas per second over the report window", () => {
+		const updates: Array<Record<string, unknown>> = [];
+		let clock = 0;
+		const progress = createSubagentProgress(
+			(update) => updates.push(update as Record<string, unknown>),
+			undefined,
+			() => clock,
+		);
+		progress.observe(text("a"));
+		expect(updates[0]).not.toHaveProperty("genTps");
+		// A delta every 50 ms; the report due at 2 s carries the 40 counted
+		// since the first report.
+		for (let i = 0; i < 40; i++) {
+			clock += 50;
+			progress.observe(text("b"));
+		}
+		expect(updates).toHaveLength(2);
+		expect(updates.at(-1)?.genTps).toBe(20);
+	});
+
+	// Running a tool is not generating: a window across one would report an
+	// agent waiting on a slow command as a slow model.
+	it("does not count time spent in a tool", () => {
+		const updates: Array<Record<string, unknown>> = [];
+		let clock = 0;
+		const progress = createSubagentProgress(
+			(update) => updates.push(update as Record<string, unknown>),
+			undefined,
+			() => clock,
+		);
+		progress.observe(text("a"));
+		progress.observe({
+			type: "content_start",
+			contentType: "tool",
+			toolName: "run_commands",
+		} as AgentEvent);
+		clock = 60_000;
+		progress.observe(text("b"));
+		clock = 62_000;
+		progress.observe(text("c"));
+		// One delta in the two seconds since "b" opened the window, and no
+		// rate at all before that: the minute in the tool is in neither.
+		const rates = updates
+			.map((update) => update.genTps)
+			.filter((rate) => rate !== undefined);
+		expect(rates).toEqual([0.5]);
+	});
+});
+
+describe("placement", () => {
+	// Every agent read as running from the moment it was spawned, so a
+	// fan-out of seventy-five on nodes that take three looked like
+	// seventy-five at work.
+	it("says an agent is queued, then where it runs once placed", () => {
+		const emitUpdate = vi.fn();
+		reportSubagentQueued(emitUpdate);
+		reportSubagentPlaced(emitUpdate, { nodeId: "n2", nodeLabel: "bs2" });
+		expect(emitUpdate.mock.calls).toEqual([
+			[{ queued: true }],
+			[{ queued: false, nodeId: "n2", nodeLabel: "bs2" }],
+		]);
+	});
+
+	it("still starts the agent when there is no node to name", () => {
+		const emitUpdate = vi.fn();
+		reportSubagentPlaced(emitUpdate, undefined);
+		expect(emitUpdate).toHaveBeenCalledWith({ queued: false });
+		expect(() => reportSubagentQueued(undefined)).not.toThrow();
 	});
 });

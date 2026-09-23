@@ -103,22 +103,43 @@ function AgentDetail({
 	const identity = subagentIdentity(agent.index, agent.agentName)
 	const node = nodeNameOf(agent)
 	const doing = agent.latestToolCall?.trim() || (agent.status === "pending" ? "queued" : "thinking")
-	const stats = [
-		`${agent.toolCalls} tool${agent.toolCalls === 1 ? "" : "s"}`,
+	const tools = `${agent.toolCalls} tool${agent.toolCalls === 1 ? "" : "s"}`
+	const tps = agent.status === "running" && agent.genTps ? `~${agent.genTps} tok/s` : ""
+	const details = [
+		agent.modelId ?? "",
 		agent.contextTokens ? `${Intl.NumberFormat("en-US").format(agent.contextTokens)} tokens` : "",
 	].filter(Boolean)
 	const tail = outputTail(agent)
 
 	return (
 		<div className="mt-2 rounded-xs border border-editor-group-border bg-code px-2.5 py-2">
-			<div className="flex items-center gap-2">
+			{/* Everything that changes while it runs, on one line: who it is,
+			    the stop, how far it has got, what it is doing, where and how
+			    fast. The stop is absent on a run recorded before agents carried
+			    a stop id, rather than shown and doing nothing. */}
+			<div className="flex items-center gap-2 text-[10px]">
 				<StatusIcon agent={agent} />
 				<span
-					className="inline-block min-w-0 truncate rounded-xs border px-1.5 py-[1px] text-[10px] font-medium text-foreground"
+					className="inline-block min-w-0 shrink truncate rounded-xs border px-1.5 py-[1px] font-medium text-foreground"
 					style={identity.style}>
 					{identity.label}
 				</span>
-				<span className="min-w-0 flex-1 truncate font-mono text-[10px] opacity-70">{doing}</span>
+				{onStop && (
+					<button
+						aria-label={`Stop ${identity.label}`}
+						className="flex shrink-0 cursor-pointer items-center gap-1 rounded-xs border border-editor-group-border bg-transparent px-1.5 py-[1px] text-foreground opacity-80 hover:opacity-100 disabled:cursor-default disabled:opacity-40"
+						disabled={stopping}
+						onClick={onStop}
+						title={stopping ? `Stopping ${identity.label}…` : `Stop ${identity.label}`}
+						type="button">
+						<SquareIcon className="size-2.5 fill-current" />
+						<span>{stopping ? "Stopping…" : "Stop"}</span>
+					</button>
+				)}
+				<span className="shrink-0 opacity-70">{tools}</span>
+				<span className="min-w-0 flex-1 truncate font-mono opacity-70">{doing}</span>
+				{node && <span className="max-w-[8rem] shrink-0 truncate opacity-70">on {node}</span>}
+				{tps && <span className="shrink-0 tabular-nums opacity-70">{tps}</span>}
 				<button
 					aria-label="Close agent details"
 					className="shrink-0 cursor-pointer border-0 bg-transparent p-0 text-foreground opacity-60 hover:opacity-100"
@@ -127,27 +148,7 @@ function AgentDetail({
 					<XIcon className="size-3" />
 				</button>
 			</div>
-			{/* Below the name, inside the box it belongs to: the stop is a
-			    decision about one agent, taken after looking at it. Absent on a
-			    run recorded before agents carried a stop id, rather than shown
-			    and doing nothing. */}
-			{onStop && (
-				<button
-					aria-label={`Stop ${identity.label}`}
-					className="mt-1.5 flex cursor-pointer items-center gap-1 rounded-xs border border-editor-group-border bg-transparent px-1.5 py-[1px] text-[10px] text-foreground opacity-80 hover:opacity-100 disabled:cursor-default disabled:opacity-40"
-					disabled={stopping}
-					onClick={onStop}
-					title={stopping ? `Stopping ${identity.label}…` : `Stop ${identity.label}`}
-					type="button">
-					<SquareIcon className="size-2.5 fill-current" />
-					<span>{stopping ? "Stopping…" : "Stop"}</span>
-				</button>
-			)}
-			<div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] opacity-70">
-				{node && <span>on {node}</span>}
-				{agent.modelId && <span className="min-w-0 truncate">{agent.modelId}</span>}
-				{stats.length > 0 && <span>{stats.join(" · ")}</span>}
-			</div>
+			{details.length > 0 && <div className="mt-1 truncate text-[10px] opacity-60">{details.join(" · ")}</div>}
 			{/* What it was asked to do. */}
 			<div className="mt-1.5 max-h-20 overflow-y-auto whitespace-pre-wrap break-words text-[11px] text-foreground opacity-90">
 				{agent.prompt}

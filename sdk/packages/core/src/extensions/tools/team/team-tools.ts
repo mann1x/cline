@@ -393,7 +393,8 @@ export function createAgentTeamsTools(
 				description:
 					"Spawn a teammate with a required agentId and rolePrompt. " +
 					"A teammate is durable: it stays until it is shut down, takes one task at a time through team_run_task, and remembers the earlier ones. Spawn teammates when the work is a known load and you know how many workers it wants. " +
-					"Fanning one broad job out to as many workers as the machine will take, for a single merged answer, is a swarm; a roster of teammates is not how to do that." +
+					"Fanning one broad job out to as many workers as the machine will take, for a single merged answer, is a swarm; a roster of teammates is not how to do that. " +
+					"Many one-shot jobs, each with its own report, are spawn_agent (or subagent_*) calls, all in one message: those are queued and paced for you, and teammates are not." +
 					describeOutput(
 						TeamSimpleAgentStatusToolResultSchema,
 						"The teammate exists after this returns but has done nothing; give it work with team_run_task.",

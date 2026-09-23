@@ -5403,6 +5403,61 @@ describe("a configured agent is a sub-agent", () => {
 	})
 })
 
+describe("a sub-agent's placement, while it runs", () => {
+	const update = (state: MessageTranslatorState, payload: Record<string, unknown>) =>
+		translateSessionEvent(
+			{
+				type: "agent_event",
+				payload: {
+					sessionId: "session-1",
+					event: {
+						type: "content_update",
+						contentType: "tool",
+						toolName: "subagent_js_syntactic",
+						toolCallId: "call-1",
+						update: payload,
+					} as AgentEvent,
+				},
+			},
+			state,
+		)
+
+	// Every agent was registered as running at spawn and the node arrived
+	// with its result, so seventy-five agents on three nodes read as
+	// seventy-five at work on no node at all.
+	it("is queued until placed, then names its node and speed", () => {
+		const state = new MessageTranslatorState()
+		translateSessionEvent(
+			{
+				type: "agent_event",
+				payload: {
+					sessionId: "session-1",
+					event: {
+						type: "content_start",
+						contentType: "tool",
+						toolName: "subagent_js_syntactic",
+						toolCallId: "call-1",
+						input: { prompt: "fix the braces" },
+					} as AgentEvent,
+				},
+			},
+			state,
+		)
+
+		update(state, { queued: true })
+		expect(state.getSpawnAgentItems()[0]?.status).toBe("pending")
+
+		update(state, { queued: false, nodeId: "node-mucvow61", nodeLabel: "Node3" })
+		update(state, { latestOutput: "…", genTps: 21.5 })
+		expect(state.getSpawnAgentItems()[0]).toMatchObject({
+			status: "running",
+			nodeId: "node-mucvow61",
+			nodeLabel: "Node3",
+			genTps: 21.5,
+		})
+	})
+})
+
 // ---------------------------------------------------------------------------
 // configuredAgentUsage
 // ---------------------------------------------------------------------------

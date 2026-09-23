@@ -296,3 +296,52 @@ describe("stopping a running agent", () => {
 		expect(screen.queryByRole("button", { name: /^Stop / })).not.toBeInTheDocument()
 	})
 })
+
+describe("the agent's box, first row", () => {
+	// Reported on pandorum 2026-09-23: "the panel with the agent status is
+	// using too many rows for information that can be shown in the first row".
+	// The stop sat on a row of its own, and the tool count, node and speed on
+	// another below it.
+	it("reads name, stop, tool count, current tool, node and speed in that order, on one row", () => {
+		render(
+			<ActiveSubagents
+				messages={[
+					statusMessage([
+						item({
+							index: 1,
+							agentName: "css",
+							cancelId: "s1::c",
+							toolCalls: 1,
+							latestToolCall: "read_files",
+							nodeId: "primary",
+							nodeLabel: "Node1",
+							genTps: 23.4,
+						}),
+					]),
+				]}
+			/>,
+		)
+		fireEvent.click(screen.getByRole("button", { name: /^css/ }))
+
+		const stop = screen.getByRole("button", { name: "Stop css" })
+		const row = stop.parentElement as HTMLElement
+		const order = ["Stop", "1 tool", "read_files", "on Node1", "~23.4 tok/s"].map((text) =>
+			Array.from(row.children).findIndex((child) => child.textContent === text),
+		)
+		expect(order.every((position) => position > 0)).toBe(true)
+		expect([...order].sort((a, b) => a - b)).toEqual(order)
+		expect(row).toContainElement(screen.getByRole("button", { name: "Close agent details" }))
+	})
+
+	// A queued agent is generating nothing; a rate left over from a previous
+	// placement would say otherwise.
+	it("shows no speed for an agent that is not running", () => {
+		render(
+			<ActiveSubagents
+				messages={[statusMessage([item({ index: 1, agentName: "later", status: "pending", genTps: 12 })])]}
+			/>,
+		)
+		fireEvent.click(screen.getByRole("button", { name: /^later/ }))
+		expect(screen.queryByText(/tok\/s/)).not.toBeInTheDocument()
+	})
+})

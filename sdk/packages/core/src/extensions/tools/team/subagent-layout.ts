@@ -48,6 +48,11 @@ export const SUBAGENT_BASE_PROMPT = [
 	"- Your role and your task follow in the conversation. Shared knowledge, when there is any, comes first and is the same for every agent working alongside you.",
 	"- Files inlined in the shared knowledge are already in your context: do not read them again. Read other files with your tools when you need them.",
 	"- Stay inside your task. Other agents are handling the rest.",
+	// sx4bp, 2026-09-23: the three agents that finished last made no tool call
+	// at all -- each spent one ~30k-token thinking turn counting braces on a
+	// single line by hand, 50 minutes at the speed it ran, until the thinking
+	// budget cut it off. A syntax check would have answered in one call.
+	"- When running something can settle a question -- a parser, a syntax check, a test -- and you have a tool for it, run it rather than working it out in your head. Tracing long code by hand in your thinking is slow and often wrong.",
 	"- Finish with a short report of what you found or did, with file paths and line numbers where they apply. The report is all the lead sees.",
 ].join("\n");
 
