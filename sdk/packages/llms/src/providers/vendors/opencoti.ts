@@ -13,6 +13,7 @@ import { localStreamFetch, resolveLocalStreamDispatcher } from "./ollama";
 import {
 	getPolykvGrantedWindow,
 	getPolykvSession,
+	polykvAdmissionPolicy,
 	recordPolykvGrantedWindow,
 } from "./polykv";
 import {
@@ -23,6 +24,7 @@ import {
 import {
 	engineSessionId,
 	isWorkerWindowFull,
+	movePolykvWorker,
 	POLYKV_WORKER_MAX_WAIT_MS,
 	type PolykvWorkerSpec,
 	preparePolykvWorker,
@@ -586,6 +588,11 @@ function createWorkerFetch(options: {
 				continue;
 			}
 			fresh = false;
+			// Another owner of this swarm may have room this one lacks. Tried
+			// before waiting, on every refusal: the room moves as agents end.
+			if (await movePolykvWorker(options.worker.sessionId)) {
+				continue;
+			}
 			const seconds = Number(response.headers.get("retry-after"));
 			await new Promise<void>((resolve, reject) => {
 				const handle = setTimeout(
@@ -664,8 +671,11 @@ export function readOpencotiRequestOptions(
 		typeof worker.sessionId === "string" &&
 		settings?.enabled !== false
 	) {
+		const admission = settings?.overcommit
+			? undefined
+			: polykvAdmissionPolicy(settings);
 		return {
-			worker,
+			worker: admission ? { ...worker, admission } : worker,
 			sessionId: worker.sessionId,
 			...(typeof overcommit === "boolean" ? { overcommit } : {}),
 		};

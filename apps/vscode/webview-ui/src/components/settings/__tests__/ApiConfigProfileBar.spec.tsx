@@ -212,4 +212,33 @@ describe("ApiConfigProfileBar", () => {
 			expect(profilesHook.loadProfile).toHaveBeenCalledWith("local-qwen")
 		})
 	})
+
+	// One press next to "Save as…" used to take the profile with it.
+	it("asks before deleting, and deletes only on confirm", () => {
+		render(<ApiConfigProfileBar scope={{ kind: "mode", mode: "act" }} />)
+
+		fireEvent.click(screen.getByText("Delete"))
+		expect(profilesHook.deleteProfile).not.toHaveBeenCalled()
+		expect(screen.getByText("Delete “local-qwen”?")).toBeInTheDocument()
+
+		fireEvent.click(screen.getByText("Keep it"))
+		expect(profilesHook.deleteProfile).not.toHaveBeenCalled()
+		expect(screen.queryByText("Delete “local-qwen”?")).toBeNull()
+
+		fireEvent.click(screen.getByText("Delete"))
+		fireEvent.click(screen.getByText("Delete profile"))
+		expect(profilesHook.deleteProfile).toHaveBeenCalledWith("local-qwen")
+	})
+
+	// The picker has no text to select, so Copy copied nothing; the name is
+	// what a "Save as…" wants to start from.
+	it("copies the selected profile's name", () => {
+		render(<ApiConfigProfileBar scope={{ kind: "mode", mode: "act" }} />)
+		const setData = vi.fn()
+		const wrapper = document.getElementById("api-config-profile")?.parentElement as HTMLElement
+
+		fireEvent.copy(wrapper, { clipboardData: { setData } })
+
+		expect(setData).toHaveBeenCalledWith("text/plain", "local-qwen")
+	})
 })

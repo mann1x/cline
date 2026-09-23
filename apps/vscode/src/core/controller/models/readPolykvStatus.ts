@@ -81,6 +81,8 @@ export async function readPolykvStatus(
 			orphanedPin: pool.orphanedPin,
 			sourceSession: pool.sourceSession,
 			children: pool.children,
+			admissionFloor: pool.admissionFloor,
+			admissionMode: pool.admissionMode,
 		})),
 		sessions: status.sessions.map((session) => ({
 			sessionId: session.sessionId,

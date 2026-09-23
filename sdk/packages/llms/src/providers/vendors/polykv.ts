@@ -181,6 +181,72 @@ export interface PolykvCapacity {
 	};
 }
 
+/** The body of `POST /polykv/pools/{id}/admission`, as the engine reads it. */
+export interface PolykvAdmissionPolicy {
+	target_tps_per_session?: number;
+	mode?: "advisory" | "enforced";
+	on_saturation?: "reject" | "warn";
+	guarantee_min_sessions?: number;
+	settle_tokens?: number;
+	settle_max_ms?: number;
+	prefill_max_slots?: number;
+}
+
+/**
+ * The admission policy a profile's PolyKV section asks for, or nothing.
+ *
+ * A floor with no mode is sent as `enforced`. The engine's own default is
+ * `advisory`, which reports and refuses nothing, and the section's floor field
+ * promises the opposite: "a new session that would push the projected mean
+ * below this is refused rather than admitted". Before this was sent at all,
+ * a 15 tok/s floor on both of a user's nodes let 60 agents run at 5 tok/s --
+ * the server's own boot floor -- because no pool ever carried the policy.
+ */
+export function polykvAdmissionPolicy(
+	settings:
+		| {
+				targetTpsPerSession?: number;
+				mode?: "advisory" | "enforced";
+				onSaturation?: "reject" | "warn";
+				guaranteeMinSessions?: number;
+				settleTokens?: number;
+				settleMaxMs?: number;
+				prefillMaxSlots?: number;
+		  }
+		| undefined,
+): PolykvAdmissionPolicy | undefined {
+	if (!settings) {
+		return undefined;
+	}
+	const count = (value: unknown) =>
+		typeof value === "number" && Number.isFinite(value) && value >= 0
+			? value
+			: undefined;
+	const floor = count(settings.targetTpsPerSession);
+	const policy: PolykvAdmissionPolicy = {
+		...(floor !== undefined ? { target_tps_per_session: floor } : {}),
+		...(settings.mode
+			? { mode: settings.mode }
+			: floor !== undefined && floor > 0
+				? { mode: "enforced" as const }
+				: {}),
+		...(settings.onSaturation ? { on_saturation: settings.onSaturation } : {}),
+		...(count(settings.guaranteeMinSessions) !== undefined
+			? { guarantee_min_sessions: count(settings.guaranteeMinSessions) }
+			: {}),
+		...(count(settings.settleTokens) !== undefined
+			? { settle_tokens: count(settings.settleTokens) }
+			: {}),
+		...(count(settings.settleMaxMs) !== undefined
+			? { settle_max_ms: count(settings.settleMaxMs) }
+			: {}),
+		...(count(settings.prefillMaxSlots) !== undefined
+			? { prefill_max_slots: count(settings.prefillMaxSlots) }
+			: {}),
+	};
+	return Object.keys(policy).length > 0 ? policy : undefined;
+}
+
 export interface PolykvClientOptions {
 	/** Server root, with or without a trailing `/v1`. */
 	baseUrl: string;
@@ -364,6 +430,8 @@ export interface PolykvClient {
 	listPoolIds(): Promise<Set<string>>;
 	pin(poolId: string): Promise<void>;
 	unpin(poolId: string): Promise<void>;
+	/** Set a pool's admission policy (`POST /polykv/pools/{id}/admission`). */
+	setAdmission(poolId: string, policy: PolykvAdmissionPolicy): Promise<void>;
 	releasePool(poolId: string): Promise<void>;
 	/**
 	 * Ask what the gate would say, optionally folding the learner.
@@ -854,6 +922,12 @@ export function createPolykvClient(options: PolykvClientOptions): PolykvClient {
 					.map(String),
 			);
 		},
+		setAdmission: async (poolId, policy) => {
+			await call(`/polykv/pools/${encodeURIComponent(poolId)}/admission`, {
+				method: "POST",
+				body: policy,
+			});
+		},
 		pin: async (poolId) => {
 			await call(`/polykv/pools/${encodeURIComponent(poolId)}/pin`, {
 				method: "POST",
@@ -944,6 +1018,10 @@ export interface OpencotiStatusPool {
 	/** The session a `from_session` snapshot was taken from. */
 	sourceSession?: string;
 	children: number;
+	/** The floor this pool's admission policy holds new sessions to, when set. */
+	admissionFloor?: number;
+	/** `enforced` refuses below the floor; `advisory` only reports. */
+	admissionMode?: string;
 }
 
 /** One live session, keyed the way the server allows. */
@@ -1089,6 +1167,22 @@ const UNREACHABLE: OpencotiStatus = {
 	sessions: [],
 	allocations: [],
 };
+
+/** A pool's `admission` block, where the engine says a policy was set. */
+function admissionOf(value: unknown): {
+	admissionFloor?: number;
+	admissionMode?: string;
+} {
+	const block = (value ?? {}) as Record<string, unknown>;
+	if (block.set === false) {
+		return {};
+	}
+	const floor = numberOr(block.target_tps_per_session);
+	return {
+		...(floor !== undefined ? { admissionFloor: floor } : {}),
+		...(typeof block.mode === "string" ? { admissionMode: block.mode } : {}),
+	};
+}
 
 function numberOr(value: unknown): number | undefined {
 	return typeof value === "number" && Number.isFinite(value)
@@ -1241,6 +1335,7 @@ export async function readOpencotiStatus(
 			orphanedPin: pool.orphaned_pin === true,
 			...(source !== undefined ? { sourceSession: source } : {}),
 			children,
+			...admissionOf(pool.admission),
 		};
 	});
 

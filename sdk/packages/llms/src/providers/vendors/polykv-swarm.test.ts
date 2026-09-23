@@ -299,3 +299,145 @@ describe("engine session ids", () => {
 		expect(engineSessionId("1790137120308_fotu9")).toBe("1790137120308_fotu9");
 	});
 });
+
+/**
+ * An engine whose owners fill independently: workers of a full owner are
+ * refused, and `/kv` reports each owner's room.
+ */
+function ownerAwareEngine() {
+	const full = new Set<string>();
+	const poolOwner = new Map<number, string>();
+	const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
+	const owners = new Set<string>();
+	let nextPool = 0;
+	const render = (messages: Array<{ role: string; content: unknown }>) =>
+		messages.map((m) => `<|${m.role}|>${String(m.content)}<|end|>`).join("");
+	const fetchImpl = (async (input: unknown, init?: RequestInit) => {
+		const url = new URL(String(input));
+		const body = init?.body
+			? (JSON.parse(String(init.body)) as Record<string, unknown>)
+			: {};
+		calls.push({ path: url.pathname, body });
+		const json = (value: unknown, status = 200) =>
+			new Response(JSON.stringify(value), {
+				status,
+				headers: { "content-type": "application/json", "retry-after": "0" },
+			});
+		if (url.pathname === "/kv") {
+			return json({
+				session_ctx_max: 65_536,
+				allocations: [...owners].map((key) => ({
+					key,
+					cells: 65_536,
+					used: full.has(key) ? 65_536 : 1_000,
+				})),
+			});
+		}
+		if (url.pathname === "/apply-template") {
+			return json({ prompt: render(body.messages as never) });
+		}
+		if (url.pathname === "/polykv/pools" || url.pathname.endsWith("/fork")) {
+			const id = nextPool++;
+			poolOwner.set(id, String(body.session_id));
+			return json({ pool_id: id, parent: -1, prefix_len: 100 });
+		}
+		if (url.pathname.endsWith("/admission")) {
+			return json({ ok: true });
+		}
+		if (/^\/sessions\/[^/]+\/close$/.test(url.pathname)) {
+			owners.delete(decodeURIComponent(url.pathname.split("/")[2] ?? ""));
+			return json({ found: true });
+		}
+		if (url.pathname === "/v1/chat/completions") {
+			if (body.max_tokens === 1) {
+				owners.add(String(body.session_id));
+				return json({ choices: [] });
+			}
+			const owner = poolOwner.get(Number(body.pool_id));
+			if (owner && full.has(owner)) {
+				return json(
+					{
+						error: {
+							message:
+								"admission rejected: session allocation full (worker of 'x')",
+						},
+					},
+					429,
+				);
+			}
+			return json({ choices: [{ message: { content: "ok" } }] });
+		}
+		return json({ error: "no route" }, 404);
+	}) as unknown as typeof fetch;
+	return { calls, full, poolOwner, owners, fetch: fetchImpl };
+}
+
+describe("a refused worker", () => {
+	// 2026-09-24: four owners booked the whole server, one full and three at
+	// 3-8%, and the full one's agents waited on it for up to 15 minutes.
+	it("moves to the owner with room instead of waiting on a full one", async () => {
+		const engine = ownerAwareEngine();
+		const agent = (sessionId: string) =>
+			createOpencotiFetch({
+				fetch: engine.fetch,
+				baseUrl: "http://engine/v1",
+				request: { worker: { group: "lead-m", sessionId, layers: 2 } },
+			});
+		const call = (f: typeof fetch, task: string) =>
+			f("http://engine/v1/chat/completions", {
+				method: "POST",
+				body: JSON.stringify(agentBody("r", task)),
+			});
+
+		const a = agent("a");
+		expect((await call(a, "t1")).status).toBe(200);
+		const first = [...engine.owners][0] as string;
+		// b opens a second owner because the first is full for it.
+		engine.full.add(first);
+		expect((await call(agent("b"), "t2")).status).toBe(200);
+		expect(engine.owners.size).toBe(2);
+
+		// a has run already, so it may not open a fresh owner: it moves.
+		expect((await call(a, "t3")).status).toBe(200);
+		const last = engine.calls
+			.filter(
+				(c) => c.path === "/v1/chat/completions" && c.body.max_tokens !== 1,
+			)
+			.at(-1);
+		expect(engine.poolOwner.get(Number(last?.body.pool_id))).not.toBe(first);
+		// a was the full owner's only agent, so its window went back.
+		expect(engine.owners.has(first)).toBe(false);
+	});
+});
+
+describe("the admission policy", () => {
+	it("is posted on every pool a worker's tree creates", async () => {
+		const engine = ownerAwareEngine();
+		const f = createOpencotiFetch({
+			fetch: engine.fetch,
+			baseUrl: "http://engine/v1",
+			request: {
+				worker: {
+					group: "lead-p",
+					sessionId: "a",
+					layers: 2,
+					admission: { target_tps_per_session: 15, mode: "enforced" },
+				},
+			},
+		});
+		await f("http://engine/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify(agentBody("r", "t")),
+		});
+		const posted = engine.calls.filter((c) => c.path.endsWith("/admission"));
+		expect(posted.map((c) => c.path)).toEqual([
+			"/polykv/pools/0/admission",
+			"/polykv/pools/1/admission",
+			"/polykv/pools/2/admission",
+		]);
+		expect(posted[0]?.body).toEqual({
+			target_tps_per_session: 15,
+			mode: "enforced",
+		});
+	});
+});

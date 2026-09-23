@@ -158,6 +158,10 @@ message PolykvStatusPool {
   bool orphaned_pin = 7;
   optional string source_session = 8;
   int32 children = 9;
+  // The admission policy set on this pool, when one was: the floor the
+  // engine's gate holds new sessions to, and whether it refuses or reports.
+  optional double admission_floor = 10;
+  optional string admission_mode = 11;
 }
 
 // One live session. Keyed by session id because c7 reports -1 as the pool key

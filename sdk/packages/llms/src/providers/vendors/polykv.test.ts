@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	createPolykvClient,
+	polykvAdmissionPolicy,
 	probeOpencotiProps,
 	readOpencotiStatus,
 	resetPolykvAvailability,
@@ -1192,5 +1193,43 @@ describe("what the props probe has to answer on its own", () => {
 		await probeOpencotiProps("http://localhost:8080/v1", once);
 		await probeOpencotiProps("http://localhost:8080/v1", once);
 		expect(attempts).toBe(1);
+	});
+});
+
+describe("polykvAdmissionPolicy", () => {
+	// The section's floor promises a refusal; the engine's default mode is
+	// advisory, which refuses nothing.
+	it("sends a floor with no mode as enforced", () => {
+		expect(polykvAdmissionPolicy({ targetTpsPerSession: 15 })).toEqual({
+			target_tps_per_session: 15,
+			mode: "enforced",
+		});
+	});
+
+	it("keeps an explicit mode, and maps every field to the wire name", () => {
+		expect(
+			polykvAdmissionPolicy({
+				targetTpsPerSession: 10,
+				mode: "advisory",
+				onSaturation: "warn",
+				guaranteeMinSessions: 2,
+				settleTokens: 48,
+				settleMaxMs: 5000,
+				prefillMaxSlots: 0,
+			}),
+		).toEqual({
+			target_tps_per_session: 10,
+			mode: "advisory",
+			on_saturation: "warn",
+			guarantee_min_sessions: 2,
+			settle_tokens: 48,
+			settle_max_ms: 5000,
+			prefill_max_slots: 0,
+		});
+	});
+
+	it("is nothing when the section sets no policy", () => {
+		expect(polykvAdmissionPolicy({})).toBeUndefined();
+		expect(polykvAdmissionPolicy(undefined)).toBeUndefined();
 	});
 });

@@ -31,6 +31,10 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 	const [draftName, setDraftName] = useState("")
 	// The profile a confirmed switch would load, while the question is open.
 	const [pendingSwitch, setPendingSwitch] = useState<string | null>(null)
+	// The profile a confirmed Delete would remove, while the question is open.
+	// Delete used to act on the click: one misplaced press next to "Save as…"
+	// took a profile with it, with nothing to undo.
+	const [pendingDelete, setPendingDelete] = useState<string | null>(null)
 	// Picking a name moves the dropdown immediately, before anything has been
 	// loaded, so a cancelled switch leaves it showing a profile that is not the
 	// one in the panel. Nothing puts it back: `value` still holds `activeName`,
@@ -72,17 +76,36 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 	// A modal that can only be left with the mouse traps a keyboard user, and
 	// the backdrop it would otherwise hang off is not focusable.
 	useEffect(() => {
-		if (!pendingSwitch) {
+		if (!pendingSwitch && !pendingDelete) {
 			return
 		}
 		const onKey = (event: KeyboardEvent) => {
 			if (event.key === "Escape") {
-				restoreSelection()
+				if (pendingSwitch) {
+					restoreSelection()
+				}
+				setPendingDelete(null)
 			}
 		}
 		document.addEventListener("keydown", onKey)
 		return () => document.removeEventListener("keydown", onKey)
-	}, [pendingSwitch, restoreSelection])
+	}, [pendingSwitch, pendingDelete, restoreSelection])
+
+	/**
+	 * Copy on the profile picker copies the selected profile's name.
+	 *
+	 * The picker is a dropdown, so there is no text to select in it, and a
+	 * right-click Copy copied nothing -- when what the user wanted was the name,
+	 * to start a "Save as…" from it rather than from the generated one. A real
+	 * text selection still wins: this only answers a copy with nothing selected.
+	 */
+	const copyProfileName = (event: React.ClipboardEvent) => {
+		if (!activeName || (window.getSelection()?.toString() ?? "") !== "") {
+			return
+		}
+		event.clipboardData.setData("text/plain", activeName)
+		event.preventDefault()
+	}
 
 	/**
 	 * Applies a profile, asking first if that would lose something.
@@ -125,7 +148,7 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 				    off — the more profiles are saved, the more of the list is lost.
 				    This is the container the provider dropdowns already use, one step
 				    higher, and it also pins the list to open downward. */}
-				<DropdownContainer className="flex-1 min-w-[140px]" zIndex={DROPDOWN_Z_INDEX + 1}>
+				<DropdownContainer className="flex-1 min-w-[140px]" onCopy={copyProfileName} zIndex={DROPDOWN_Z_INDEX + 1}>
 					<VSCodeDropdown
 						className="w-full"
 						id="api-config-profile"
@@ -177,7 +200,7 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 					Save as…
 				</VSCodeButton>
 				{activeName ? (
-					<VSCodeButton appearance="secondary" onClick={() => deleteProfile(activeName)}>
+					<VSCodeButton appearance="secondary" onClick={() => setPendingDelete(activeName)}>
 						Delete
 					</VSCodeButton>
 				) : null}
@@ -232,6 +255,50 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 							) : null}
 							<VSCodeButton appearance="primary" onClick={() => switchTo(pendingSwitch)}>
 								Discard and load
+							</VSCodeButton>
+						</div>
+					</div>
+				</div>
+			) : null}
+
+			{pendingDelete ? (
+				// biome-ignore lint/a11y/noStaticElementInteractions: the backdrop is a click-away shortcut for Cancel; the same action is on the Cancel button and on Escape.
+				<div
+					className="fixed inset-0 bg-black/50 flex items-center justify-center"
+					onClick={(event) => {
+						if (event.target === event.currentTarget) {
+							setPendingDelete(null)
+						}
+					}}
+					role="presentation"
+					style={{ zIndex: SETTINGS_MODAL_Z_INDEX }}>
+					<div
+						aria-labelledby="profile-delete-dialog-title"
+						aria-modal="true"
+						className="bg-(--vscode-editor-background) border border-solid border-(--vscode-panel-border) rounded-lg p-5 w-[400px] max-w-[90vw]"
+						role="dialog">
+						<div className="flex items-center gap-2 mb-3">
+							<AlertTriangle className="w-5 h-5 text-(--vscode-errorForeground)" />
+							<h4 className="m-0" id="profile-delete-dialog-title">
+								Delete “{pendingDelete}”?
+							</h4>
+						</div>
+						<p className="text-sm text-(--vscode-descriptionForeground) mt-0 mb-4">
+							The profile is removed from every tab that uses it. The settings on this tab stay as they are; they
+							are just no longer saved anywhere. This cannot be undone.
+						</p>
+						<div className="flex justify-end gap-2 flex-wrap">
+							<VSCodeButton appearance="secondary" onClick={() => setPendingDelete(null)}>
+								Keep it
+							</VSCodeButton>
+							<VSCodeButton
+								appearance="primary"
+								onClick={async () => {
+									const target = pendingDelete
+									setPendingDelete(null)
+									await deleteProfile(target)
+								}}>
+								Delete profile
 							</VSCodeButton>
 						</div>
 					</div>

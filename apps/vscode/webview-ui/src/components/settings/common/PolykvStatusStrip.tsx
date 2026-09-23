@@ -61,6 +61,18 @@ export const PolykvStatusStrip = ({ providerId }: { providerId: string }) => {
 		status.slotsLive !== undefined && status.slotsMax !== undefined
 			? `${status.slotsLive} of ${status.slotsMax} slots live`
 			: undefined
+	// The floors in force, both of them: the engine's own, below which it
+	// stops growing slots, and the one set on the pools, below which it
+	// refuses new sessions. On 2026-09-24 the first was 5 and the second was
+	// never set -- 60 agents ran at 5 tok/s under a profile asking for 15 --
+	// and nothing on this strip said either.
+	const enforcedFloors = [
+		...new Set(
+			status.pools
+				.filter((pool) => pool.admissionFloor !== undefined && pool.admissionFloor > 0)
+				.map((pool) => `${pool.admissionFloor} tok/s ${pool.admissionMode ?? "advisory"}`),
+		),
+	]
 
 	return (
 		<div className="mt-[10px] text-xs text-(--vscode-descriptionForeground) flex flex-col gap-[4px]">
@@ -73,6 +85,16 @@ export const PolykvStatusStrip = ({ providerId }: { providerId: string }) => {
 				<div>
 					{slots}
 					{status.elasticReason ? ` — ${status.elasticReason}` : ""}
+				</div>
+			)}
+			{status.tpsFloor !== undefined && (
+				<div>Slots grow while the mean stays above {status.tpsFloor} tok/s (the server's floor)</div>
+			)}
+			{status.pools.length > 0 && (
+				<div>
+					{enforcedFloors.length > 0
+						? `Admission floor on the pools: ${enforcedFloors.join(", ")}`
+						: "No admission floor set on any pool: new sessions are admitted at any speed"}
 				</div>
 			)}
 			{status.vramFreeMib !== undefined && <div>{status.vramFreeMib} MiB VRAM free</div>}
@@ -126,6 +148,7 @@ export const PolykvStatusStrip = ({ providerId }: { providerId: string }) => {
 							{pool.prefixLen !== undefined ? ` · ${pool.prefixLen.toLocaleString()} tokens` : ""}
 							{pool.pinned ? " · pinned" : ""}
 							{pool.ephemeral ? " · ephemeral" : ""}
+							{pool.admissionFloor ? ` · floor ${pool.admissionFloor} ${pool.admissionMode ?? "advisory"}` : ""}
 							{pool.sourceSession ? ` · from ${pool.sourceSession}` : ""}
 							{pool.orphanedPin && (
 								<span className="text-(--vscode-errorForeground)"> · orphaned pin, nothing will reclaim it</span>

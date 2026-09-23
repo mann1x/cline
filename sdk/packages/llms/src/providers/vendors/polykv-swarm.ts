@@ -1,4 +1,9 @@
-import { createPolykvClient, type PolykvClient, polykvRoot } from "./polykv";
+import {
+	createPolykvClient,
+	type PolykvAdmissionPolicy,
+	type PolykvClient,
+	polykvRoot,
+} from "./polykv";
 
 /**
  * Agents that share a prefix, deduplicated on the engine that holds the cells.
@@ -69,6 +74,14 @@ export interface PolykvWorkerSpec {
 	 * instead of booking a window of their own.
 	 */
 	attachOnly?: boolean;
+	/**
+	 * The admission policy for every pool this agent's tree creates.
+	 *
+	 * Posted as each pool is made, because the engine's gate reads the policy
+	 * of the pool a new session names, and that is the pool the worker
+	 * attaches to -- a policy on the root alone gates nobody.
+	 */
+	admission?: PolykvAdmissionPolicy;
 }
 
 export interface PolykvWorkerAttach {
@@ -330,6 +343,7 @@ async function ensureChain(
 	body: Record<string, unknown>,
 	layers: number,
 	fullRendering: string,
+	admission?: PolykvAdmissionPolicy,
 ): Promise<string | undefined> {
 	const messages = body.messages as unknown[];
 	const tools = body.tools as unknown[] | undefined;
@@ -361,6 +375,13 @@ async function ensureChain(
 								session_id: shard.sessionId,
 								pin: true,
 							});
+				if (admission) {
+					// A pool without its policy still shares; one refused
+					// policy must not cost the tree.
+					await group.client
+						.setAdmission(pool.pool_id, admission)
+						.catch(() => undefined);
+				}
 				return pool.pool_id;
 			})().catch(() => undefined);
 			shard.pools.set(key, pending);
@@ -464,6 +485,7 @@ export async function preparePolykvWorker(options: {
 		body,
 		spec.layers,
 		fullRendering,
+		spec.admission,
 	);
 	return poolId === undefined
 		? unpooled
@@ -479,6 +501,81 @@ export async function preparePolykvWorker(options: {
  */
 export function isWorkerWindowFull(status: number, text: string): boolean {
 	return status === 429 && /session allocation full \(worker of/i.test(text);
+}
+
+/**
+ * Below this many free cells an owner is not worth moving to: a worker's
+ * next request charges its whole prompt, and a sliver of room refuses it again.
+ */
+export const POLYKV_MOVE_MIN_FREE_CELLS = 16_384;
+
+/**
+ * Move a refused worker to the open owner with the most room, if one has more
+ * than its own.
+ *
+ * An agent stays on the owner it started on so its private suffix stays warm
+ * -- but that rule, alone, stalled a 75-agent swarm on 2026-09-24: the engine's
+ * whole KV was booked by four owners, one of them 77% full and refusing its
+ * workers, the other three at 3-8%. The refused agents waited on their own
+ * owner for up to fifteen minutes while three quarters of the cells sat idle,
+ * and a fresh owner could not open because there were no cells left to book.
+ * One full reprocess on a roomier owner is cheaper than that queue.
+ *
+ * Moving the last agent off an owner closes it, as a release would: its window
+ * is then free for an owner that has work.
+ */
+export async function movePolykvWorker(sessionId: string): Promise<boolean> {
+	const group = AGENT_GROUPS.get(sessionId);
+	const current = group?.assigned.get(sessionId);
+	if (!group || !current) {
+		return false;
+	}
+	const open = group.shards.filter(
+		(shard) => !shard.closed && shard !== current,
+	);
+	if (open.length === 0) {
+		return false;
+	}
+	let allocations: Array<{ key?: unknown; cells?: unknown; used?: unknown }>;
+	try {
+		const response = await group.fetch(`${group.root}/kv`, {
+			headers: group.headers ?? {},
+		});
+		const body = (await response.json()) as { allocations?: unknown };
+		allocations = Array.isArray(body.allocations)
+			? (body.allocations as typeof allocations)
+			: [];
+	} catch {
+		return false;
+	}
+	const freeOf = (shard: OwnerShard): number => {
+		const entry = allocations.find((a) => a.key === shard.sessionId);
+		const cells = typeof entry?.cells === "number" ? entry.cells : 0;
+		const used = typeof entry?.used === "number" ? entry.used : cells;
+		return Math.max(0, cells - used);
+	};
+	const here = freeOf(current);
+	let best: OwnerShard | undefined;
+	let bestFree = Math.max(here, POLYKV_MOVE_MIN_FREE_CELLS - 1);
+	for (const shard of open) {
+		const free = freeOf(shard);
+		if (free > bestFree) {
+			best = shard;
+			bestFree = free;
+		}
+	}
+	if (!best) {
+		return false;
+	}
+	current.agents.delete(sessionId);
+	group.assigned.set(sessionId, best);
+	best.agents.add(sessionId);
+	if (current.agents.size === 0 && !current.closed) {
+		current.closed = true;
+		group.shards = group.shards.filter((shard) => shard !== current);
+		await group.client.closeSession(current.sessionId).catch(() => false);
+	}
+	return true;
 }
 
 /**
