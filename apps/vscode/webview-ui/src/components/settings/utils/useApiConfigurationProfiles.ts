@@ -18,6 +18,7 @@ import {
 	captureProviderConfigSnapshot,
 	PROVIDER_CONFIG_MODEL_OVERRIDES_KEY,
 	providerConfigPatchForProfile,
+	withoutScopeBookkeeping,
 } from "@shared/api-config-snapshot"
 import { CommitModelSelectionRequest } from "@shared/proto/cline/models"
 import { UpdateSettingsRequest } from "@shared/proto/cline/state"
@@ -388,7 +389,13 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 	const captureSettledSnapshot = useCallback(async (): Promise<ApiConfigurationSnapshot> => {
 		await flushPendingEdits()
 		if (snapshotKind) {
-			return currentSnapshot
+			// Without the tab's own picker key: the profile is the same one Plan
+			// and Act load, and a key only this kind of tab writes made it read as
+			// changed there. A load puts it back (`applySnapshot`).
+			const providerConfig = currentSnapshot.providerConfig as Record<string, unknown> | undefined
+			return providerConfig
+				? { ...currentSnapshot, providerConfig: withoutScopeBookkeeping(providerConfig) }
+				: currentSnapshot
 		}
 		const base = captureApiConfigurationSnapshot(apiConfiguration, scopeMode)
 		const captured = captureProviderConfigSnapshot(readProviderConfig(activeProviderId as string), scopeMode)

@@ -185,7 +185,8 @@ const PROVIDER_CONFIG_SECTION_CLEARS: Readonly<Record<string, Readonly<Record<st
  * committing the model selection, not by writing a provider field.
  */
 export function providerConfigPatchForProfile(providerConfig: Record<string, unknown> | undefined): Record<string, unknown> {
-	const patch: Record<string, unknown> = { ...(providerConfig ?? {}) }
+	// Not the saving tab's picker key: the model is committed as a selection.
+	const patch: Record<string, unknown> = { ...withoutScopeBookkeeping(providerConfig ?? {}) }
 	delete patch[PROVIDER_CONFIG_MODEL_OVERRIDES_KEY]
 	// Which sections the profile actually carries, read before the clears below
 	// fill the rest in — a section the profile does not have is cleared whole,
@@ -410,7 +411,30 @@ function providerConfigsEqual(stored: Record<string, unknown> | undefined, panel
 	if (panel === undefined) {
 		return true
 	}
-	return sameValues(stored ?? {}, panel)
+	return sameValues(withoutScopeBookkeeping(stored ?? {}), withoutScopeBookkeeping(panel))
+}
+
+/**
+ * Keys a tab that keeps its own snapshot writes into it for its own picker.
+ *
+ * `selectedModelId` is added on every load into an Agents node, Vision or
+ * Escalation, and never by Plan or Act; the model it names is already in the
+ * snapshot's own fields. Compared as profile content, the same profile read
+ * as changed on whichever kind of tab it had not been saved from -- on
+ * pandorum, every profile saved from a node carried it and none saved from
+ * Act did, so switching one profile between the two always asked to update.
+ */
+const SCOPE_BOOKKEEPING_KEYS = ["selectedModelId"] as const
+
+export function withoutScopeBookkeeping(config: Record<string, unknown>): Record<string, unknown> {
+	if (!SCOPE_BOOKKEEPING_KEYS.some((key) => key in config)) {
+		return config
+	}
+	const rest = { ...config }
+	for (const key of SCOPE_BOOKKEEPING_KEYS) {
+		delete rest[key]
+	}
+	return rest
 }
 
 function sameValues(a: Record<string, unknown>, b: Record<string, unknown>): boolean {

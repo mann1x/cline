@@ -131,6 +131,17 @@ describe("apiConfigurationSnapshotsEqual", () => {
 		expect(apiConfigurationSnapshotsEqual(snapshot, captureApiConfigurationSnapshot(configuration, "act"))).toBe(true)
 	})
 
+	// pandorum 2026-09-23: every profile saved from an agent node carried
+	// `selectedModelId` and none saved from Act did, so one profile used on both
+	// always asked to be updated on whichever side it had not been saved from.
+	it("does not count the saving tab's picker key as a change", () => {
+		const fromAct = { global: {}, mode: {}, providerConfig: { baseUrl: "http://x", contextWindow: 8000 } }
+		const onNode = { ...fromAct, providerConfig: { ...fromAct.providerConfig, selectedModelId: "m" } }
+		expect(apiConfigurationSnapshotsEqual(fromAct, onNode)).toBe(true)
+		expect(apiConfigurationSnapshotsEqual(onNode, fromAct)).toBe(true)
+		expect(providerConfigPatchForProfile(onNode.providerConfig).selectedModelId).toBeUndefined()
+	})
+
 	it("notices a changed field", () => {
 		const a = captureApiConfigurationSnapshot(configuration, "act")
 		const b = captureApiConfigurationSnapshot({ ...configuration, ollamaApiOptionsCtxNum: "8000" }, "act")
