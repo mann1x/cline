@@ -117,7 +117,8 @@ export interface CompactionSectionAudit {
 	/** Ids whose section must not be kept as written. */
 	failing: Set<string>;
 	/**
-	 * Ids whose section is the source copied through. Not a failure -- the
+	 * Ids whose section is the source copied through, exactly or nearly
+	 * (`NEAR_COPY_SIMILARITY`). Not a failure -- the
 	 * request allows it -- but not kept either: a copy is a snapshot, and the
 	 * next edit to the built-in prompt would reach every model except this one.
 	 * Leaving the section out is what "use the built-in" means.
@@ -127,6 +128,59 @@ export interface CompactionSectionAudit {
 
 function normalizeForComparison(text: string): string {
 	return text.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * A rewrite at least this similar to its source, by words, is a copy.
+ *
+ * Measured 2026-09-23 at temperature 0.7: qwen3.5:397b's "rewrite" of the
+ * reviewer prompt changed one word, "being deleted" to "being deleting", and
+ * glm-5.3-flash's full prompt moved one sentence up a paragraph. Both passed
+ * as translations because only an exact copy counted as unchanged -- and a
+ * near-copy is worse than an exact one: the same frozen snapshot, plus
+ * whatever the model broke. glm's real restructure of the replay prompt sat
+ * well below this.
+ */
+export const NEAR_COPY_SIMILARITY = 0.98;
+
+/**
+ * The same sentences in another order. glm-5.3-flash's "rewrite" of the full
+ * prompt was exactly this: one block moved up a paragraph, 0.95 by words,
+ * because a word LCS charges a move its whole length.
+ */
+export function isReordering(a: string, b: string): boolean {
+	const sentences = (text: string) =>
+		normalizeForComparison(text)
+			.split(/(?<=[.!?:])\s+/)
+			.sort()
+			.join("\n");
+	return sentences(a) === sentences(b);
+}
+
+/**
+ * Word-level similarity, 2·LCS / (|a| + |b|): 1 for identical text, 0 for
+ * nothing in common. Order counts, so a moved sentence costs its length.
+ */
+export function wordSimilarity(a: string, b: string): number {
+	const x = normalizeForComparison(a).split(" ").filter(Boolean);
+	const y = normalizeForComparison(b).split(" ").filter(Boolean);
+	if (x.length + y.length === 0) {
+		return 1;
+	}
+	// One row of the LCS table at a time: these prompts run to ~800 words,
+	// so the whole table would be ~640k cells for no reason.
+	let previous = new Array<number>(y.length + 1).fill(0);
+	for (let i = 1; i <= x.length; i++) {
+		const current = new Array<number>(y.length + 1).fill(0);
+		for (let j = 1; j <= y.length; j++) {
+			current[j] =
+				x[i - 1] === y[j - 1]
+					? (previous[j - 1] ?? 0) + 1
+					: Math.max(previous[j] ?? 0, current[j - 1] ?? 0);
+		}
+		previous = current;
+	}
+	return (2 * (previous[y.length] ?? 0)) / (x.length + y.length);
 }
 
 /**
@@ -164,7 +218,10 @@ export function auditCompactionSections(
 			);
 			continue;
 		}
-		if (normalizeForComparison(body) === normalizeForComparison(source)) {
+		if (
+			wordSimilarity(body, source) >= NEAR_COPY_SIMILARITY ||
+			isReordering(body, source)
+		) {
 			unchanged.add(id);
 			continue;
 		}

@@ -3,8 +3,10 @@ import {
 	auditCompactionSections,
 	BUILTIN_COMPACTION_PROMPTS,
 	buildCompactionTranslationRequest,
+	NEAR_COPY_SIMILARITY,
 	resolveCompactionPromptSources,
 	stripCompactionSections,
+	wordSimilarity,
 } from "./prompt-template-compaction";
 import { parsePromptTemplate } from "./prompt-template-parser";
 import { generatePromptTemplate } from "./prompt-template-review";
@@ -94,6 +96,56 @@ describe("auditing a translated compaction prompt", () => {
 			sources,
 		);
 		expect([...result.failing].sort()).toEqual(["council-critic", "replay"]);
+	});
+});
+
+describe("a copy that is not quite a copy", () => {
+	const LONG = Array.from(
+		{ length: 12 },
+		(_, i) =>
+			`Rule ${i}: keep every path, every error and every decision made in step ${i}.`,
+	).join(" ");
+
+	// qwen3.5:397b, 2026-09-23: "being deleted" became "being deleting".
+	it("reads a one-word change as unchanged", () => {
+		const result = auditCompactionSections(
+			{
+				replay: LONG.replace(
+					"every decision made in step 3",
+					"every decisions made in step 3",
+				),
+			},
+			{ replay: LONG },
+		);
+		expect([...result.unchanged]).toEqual(["replay"]);
+		expect(result.problems).toEqual([]);
+	});
+
+	// glm-5.3-flash, 2026-09-23: one block moved up, nothing else.
+	it("reads the same sentences in another order as unchanged", () => {
+		const sentences = LONG.split(/(?<=\.)\s+/);
+		const moved = [
+			sentences[5],
+			...sentences.slice(0, 5),
+			...sentences.slice(6),
+		].join(" ");
+		expect(wordSimilarity(moved, LONG)).toBeLessThan(NEAR_COPY_SIMILARITY);
+		expect([
+			...auditCompactionSections({ replay: moved }, { replay: LONG }).unchanged,
+		]).toEqual(["replay"]);
+	});
+
+	it("keeps a rewrite that restates the rules", () => {
+		const restated = LONG.replace(
+			/keep every path, every error and every decision made in/g,
+			"hold on to the paths, errors and decisions of",
+		);
+		const result = auditCompactionSections(
+			{ replay: restated },
+			{ replay: LONG },
+		);
+		expect(result.unchanged.size).toBe(0);
+		expect(result.failing.size).toBe(0);
 	});
 });
 

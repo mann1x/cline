@@ -338,6 +338,16 @@ for tools, and leaving the section out is what "use the built-in" means.
 Measured on `qwen3.5:397b-cloud`, 2026-09-23: asked for all six, it returned
 all six byte-identical.
 
+A **near-copy** counts as a copy too. That is word similarity of
+`NEAR_COPY_SIMILARITY` (0.98) or more, or the same sentences in another order
+(`isReordering`). The case that forced it came at temperature 0.7: qwen's
+"rewrite" of the reviewer prompt changed one word ("being deleted" → "being
+deleting", 0.9985), and glm-5.3-flash's full prompt moved one block up a
+paragraph (0.95 by words, identical as sentences). Both passed as translations
+under the exact-match rule, and a near-copy is worse than a copy: the same
+frozen snapshot plus whatever the model broke. glm's genuine restructure of the
+replay prompt scores 0.91 and is kept.
+
 `auditCompactionSections()` then checks, and each failure is a repair problem
 like any other:
 
@@ -369,9 +379,23 @@ Where the sources come from:
 * **For the built-in templates**, run
   `review-prompt-templates.mts --compaction`, or `--compaction-id <id>`
   (repeatable) for a subset, always from the built-in text. The run log prints
-  `compaction sections kept: … removed as failing: …`. These are proposals
-  under test: **no shipped template carries a `# compaction:` section** until
-  one has been run against the prompt it replaces and measured no worse.
+  `compaction sections kept: … removed as failing: … left out as verbatim
+  copies: …`.
+
+  **Decided 2026-09-23: the shipped templates carry no `# compaction:`
+  section.** Measured on qwen3.5:397b and glm-5.3-flash-tpl2, one cloud
+  session at a time:
+
+  | temperature | qwen | glm |
+  |---|---|---|
+  | 0.2 (default) | 6/6 copied | 6/6 copied |
+  | 0.7 | 5 copied, critic a one-word typo | 4 copied, full reordered, replay restructured |
+
+  The one real translation, glm's replay, keeps every rule and adds none. A
+  shipped copy would stop following edits to the built-in prompt. Do not run
+  `--compaction` across the families expecting translations. Pass
+  `--temperature 0.7` if you run it at all, since at 0.2 every model hands the
+  text back.
 
 ### Repair loop
 
