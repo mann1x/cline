@@ -2651,6 +2651,43 @@ describe("SessionRuntime.run — tracker wiring (P1 #3)", () => {
 		return abortCalls;
 	};
 
+	// pandorum 2026-09-23 (6djrz): asked for 15 agents of each of five types,
+	// the lead sent 75 calls in one message, 15 identical per type. Counted as
+	// consecutive attempts, the fifth warned and the sixth stopped the run --
+	// no answer had come back between any of them.
+	it("counts identical calls in one message once", async () => {
+		const { deps, abortCalls } = makeScriptedRuntime({
+			events: [
+				{ type: "turn-started", iteration: 1, snapshot: makeSnapshot() },
+				...Array.from(
+					{ length: 15 },
+					(_, i): AgentRuntimeEvent => ({
+						type: "tool-started",
+						iteration: 1,
+						toolCall: {
+							type: "tool-call",
+							toolCallId: `fan${i}`,
+							toolName: "same",
+							input: { a: 1 },
+						},
+						snapshot: makeSnapshot(),
+					}),
+				),
+			],
+		});
+		const session = new SessionRuntime(
+			makeAgentConfig({
+				execution: {
+					maxConsecutiveMistakes: 6,
+					loopDetection: { softThreshold: 2, hardThreshold: 3 },
+				},
+			}),
+			deps,
+		);
+		await session.run("fan-out");
+		expect(abortCalls).toHaveLength(0);
+	});
+
 	it("warns rather than aborting on the first hard loop verdict", async () => {
 		expect(await runIdenticalCalls(3)).toHaveLength(0);
 	});

@@ -83,6 +83,7 @@ import {
 import {
 	LoopDetectionTracker,
 	loopResultSignature,
+	toolCallSignature,
 } from "../safety/loop-detection";
 import { MistakeTracker } from "../safety/mistake-tracker";
 import { RuntimeEventAdapter } from "./runtime-event-adapter";
@@ -531,6 +532,21 @@ export class SessionRuntime {
 	 * another has not recovered, and the second one gets no second warning.
 	 */
 	private loopHardEscalations = 0;
+	/**
+	 * The calls already inspected in the current assistant message, by
+	 * signature, and the ids of the identical siblings that were not.
+	 *
+	 * An identical call in the same message is not a repeat: no answer came
+	 * back between them, so there is nothing the model failed to learn from.
+	 * Counted as consecutive attempts, a fan-out of fifteen identical agents
+	 * -- what the user asked for on pandorum 2026-09-23 (6djrz) -- tripped the
+	 * last warning at the fifth and stopped the run at the sixth, failing all
+	 * 75 calls of the message. The batch counts once; the next message's
+	 * repeat is still a repeat.
+	 */
+	private loopBatchIteration: number | undefined;
+	private readonly loopBatchKeys = new Set<string>();
+	private readonly loopBatchSiblings = new Set<string>();
 	/**
 	 * True when `execution.loopDetection === false` at construction
 	 * time. Loop inspection is skipped entirely — the tracker still
@@ -1502,21 +1518,27 @@ export class SessionRuntime {
 				// `regressed`.
 				const finishedOutput =
 					resultPart?.type === "tool-result" ? resultPart.output : undefined;
-				this.noteLoopOutcome(
-					!isError &&
-						!allOperationsFailed(finishedOutput) &&
-						!introducedRegression(finishedOutput),
-					declaredNoOp(finishedOutput),
-					// The answer itself, so the tracker can see a call that keeps
-					// being answered the same way. The consecutive counter is
-					// defeated by any call in between, and in the session this was
-					// built from there always was one.
-					//
-					// Not the raw signature: `editor` and `restore_file` end their
-					// answer with the revision the file is now at, which goes up on
-					// every write, so two otherwise identical answers never matched.
-					loopResultSignature(finishedOutput),
+				// A sibling of an identical call in the same message was never
+				// inspected, and its outcome is the first one's, not a second.
+				const loopSibling = this.loopBatchSiblings.delete(
+					event.toolCall.toolCallId,
 				);
+				if (!loopSibling)
+					this.noteLoopOutcome(
+						!isError &&
+							!allOperationsFailed(finishedOutput) &&
+							!introducedRegression(finishedOutput),
+						declaredNoOp(finishedOutput),
+						// The answer itself, so the tracker can see a call that keeps
+						// being answered the same way. The consecutive counter is
+						// defeated by any call in between, and in the session this was
+						// built from there always was one.
+						//
+						// Not the raw signature: `editor` and `restore_file` end their
+						// answer with the revision the file is now at, which goes up on
+						// every write, so two otherwise identical answers never matched.
+						loopResultSignature(finishedOutput),
+					);
 				const errorText = isError
 					? formatToolResultError(finishedOutput)
 					: undefined;
@@ -1680,6 +1702,16 @@ export class SessionRuntime {
 		if (this.trackerAbortInFlight || this.loopDetectionDisabled) {
 			return;
 		}
+		if (iteration !== this.loopBatchIteration) {
+			this.loopBatchIteration = iteration;
+			this.loopBatchKeys.clear();
+		}
+		const batchKey = `${toolName}:${toolCallSignature(input)}`;
+		if (this.loopBatchKeys.has(batchKey)) {
+			this.loopBatchSiblings.add(toolCallId);
+			return;
+		}
+		this.loopBatchKeys.add(batchKey);
 		const verdict = this.loopTracker.inspect({ name: toolName, input });
 		if (verdict.kind === "ok") {
 			return;
