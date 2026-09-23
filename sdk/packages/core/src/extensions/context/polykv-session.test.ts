@@ -4,6 +4,7 @@ import {
 	resetPolykvSessions,
 	setPolykvSession,
 } from "@cline/llms";
+import { markPromptEnvironment } from "@cline/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	clearPolykvCapacityCache,
@@ -977,5 +978,51 @@ describe("snapshotting a session whose slot has moved on", () => {
 		});
 
 		expect(snapshot?.borrowed).toBeFalsy();
+	});
+});
+
+describe("a lead conversation in the server-wide lead tree", () => {
+	// The vendor's fetch attaches such a conversation on the wire; a root of
+	// its own here would be the private copy the lead tree exists to share.
+	it("builds no pool of its own for a prompt carrying environment spans", async () => {
+		const server = engine();
+		const pool = await ensurePolykvPool({
+			sessionId: "s1",
+			providerConfig: provider(server.fetch),
+			systemPrompt: `static${markPromptEnvironment("Date", "today")}`,
+		});
+		expect(pool).toBeUndefined();
+		expect(server.calls.filter((c) => c.path !== "/props")).toHaveLength(0);
+	});
+
+	// Its pool may be the root every other conversation attaches to.
+	it("neither re-roots nor releases a lead pool by id", async () => {
+		const server = engine({ features: ["session_close_v1"] });
+		const config = provider(server.fetch);
+		setPolykvSession("s1", { poolId: "7", prefixTokens: 0, layout: "lead" });
+		expect(
+			await repointPolykvAfterCompaction({
+				sessionId: "s1",
+				providerConfig: config,
+				compactedPrompt: "summary",
+			}),
+		).toBeUndefined();
+		await releasePolykvSession({ sessionId: "s1", providerConfig: config });
+		const actions = server.calls
+			.map((c) => `${c.method} ${c.path}`)
+			.filter((c) => !c.endsWith("/props"));
+		expect(actions).toEqual(["POST /sessions/s1/close"]);
+		expect(getPolykvSession("s1")).toBeUndefined();
+	});
+
+	it("closes the id the wire carried", async () => {
+		const server = engine({ features: ["session_close_v1"] });
+		await releasePolykvSession({
+			sessionId: "lead/one",
+			providerConfig: provider(server.fetch),
+		});
+		expect(server.calls.map((c) => c.path)).toContain(
+			"/sessions/lead~one/close",
+		);
 	});
 });

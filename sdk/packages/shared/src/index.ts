@@ -354,6 +354,13 @@ export {
 	POSIX_TOOL_AVAILABILITY,
 	processWorkspaceInfo,
 } from "./prompt/cline";
+export {
+	flattenPromptEnvironment,
+	hasPromptEnvironment,
+	hoistPromptEnvironment,
+	markPromptEnvironment,
+	PROMPT_ENVIRONMENT_REFERENCE,
+} from "./prompt/environment";
 export type {
 	ModeSwitchNotice,
 	ModeSwitchNoticeTracker,

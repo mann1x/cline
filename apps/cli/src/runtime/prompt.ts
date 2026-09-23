@@ -50,6 +50,9 @@ export async function resolveSystemPrompt(input: {
 		providerId: input.providerId,
 		overridePrompt: input.explicitSystemPrompt,
 		basePrompt: input.basePrompt,
+		// See the extension's session factory: opencoti shares one prefix across
+		// conversations once the per-session values are a turn of their own.
+		environmentTurn: input.providerId === "opencoti",
 		platform:
 			(typeof process !== "undefined" && process?.platform) || "unknown",
 	});

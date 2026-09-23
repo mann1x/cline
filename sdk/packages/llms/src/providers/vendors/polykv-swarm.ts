@@ -144,7 +144,7 @@ export const POLYKV_OWNER_MIN_WINDOW = 32_768;
  */
 export const POLYKV_WORKER_MAX_WAIT_MS = 15 * 60_000;
 
-function hashString(text: string): string {
+export function hashString(text: string): string {
 	// cyrb53: a key, not a fingerprint -- a collision costs one shared pool
 	// between two prefixes, which the byte-prefix check then refuses to attach.
 	let h1 = 0xdeadbeef;
@@ -304,7 +304,7 @@ async function openOwner(
  * The layer's prefix: the conversation so far, rendered by the server, up to
  * and including the opener of the turn that follows it.
  */
-async function renderLayer(
+export async function renderLayer(
 	client: PolykvClient,
 	messages: readonly unknown[],
 	tools: readonly unknown[] | undefined,

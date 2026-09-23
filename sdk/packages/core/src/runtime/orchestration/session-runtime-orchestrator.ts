@@ -38,6 +38,7 @@ import {
 	type BasicLogger,
 	type ContributionRegistry,
 	createContributionRegistry,
+	hasPromptEnvironment,
 	type ITelemetryService,
 	isLikelyAuthError,
 	type LegacyAgentUsage,
@@ -45,6 +46,7 @@ import {
 	type Message,
 	type MessageWithMetadata,
 	type ModelInfo,
+	markPromptEnvironment,
 	mergeModelOptions,
 	modelSupportsToolCalling,
 	type ToolCallRecord,
@@ -301,10 +303,16 @@ function mergeSystemPromptRules(
 	rules: ReadonlyArray<string>,
 ): string {
 	const base = systemPrompt.trim();
-	const additional = rules
+	const joined = rules
 		.map((rule) => rule.trim())
 		.filter(Boolean)
 		.join("\n\n");
+	// A prompt carrying its per-session values as spans gets the registered
+	// rules the same way: they are the workspace's, and in place they would end
+	// the prefix every session on the engine shares.
+	const additional = hasPromptEnvironment(base)
+		? markPromptEnvironment("Workspace rules", joined)
+		: joined;
 	if (base && additional) {
 		return `${base}\n\n${additional}`;
 	}

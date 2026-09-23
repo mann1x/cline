@@ -2,6 +2,10 @@ import type { WorkspaceContext } from "../extensions/context";
 import { isClineProvider } from "../providers/utils";
 import type { WorkspaceInfo } from "../session/workspace";
 import {
+	markPromptEnvironment,
+	PROMPT_ENVIRONMENT_REFERENCE,
+} from "./environment";
+import {
 	DEFAULT_CLINE_SYSTEM_PROMPT,
 	YOLO_CLINE_SYSTEM_PROMPT,
 } from "./system";
@@ -208,6 +212,16 @@ export interface ClineSystemPromptOptions
 	 * calling a tool that is not in its toolset.
 	 */
 	planModeSwitchTool?: boolean;
+	/**
+	 * Carry the per-session values as marked spans instead of in place.
+	 *
+	 * For an engine that shares one prefix across sessions: the date, working
+	 * directory, platform, IDE, the caller's rules, the mode contract and the
+	 * workspace metadata are lifted into an `<environment>` turn by the
+	 * provider, so the system turn is the same for every conversation. See
+	 * `./environment.ts`. Off, the prompt is exactly what it always was.
+	 */
+	environmentTurn?: boolean;
 }
 
 export function buildClineSystemPrompt(
@@ -256,18 +270,49 @@ export function buildClineSystemPrompt(
 	// composing its own copy. Order matches what the CLI historically built by
 	// hand (caller rules, then the mode-tag explanation, then the plan-mode
 	// contract), keeping CLI output byte-identical after the promotion.
-	const effectiveRules = [
-		rules,
-		POSIX_TOOL_AVAILABILITY,
-		MODE_TAG_INSTRUCTIONS,
+	const modeContract =
 		mode === "plan"
 			? planModeSwitchTool
 				? PLAN_MODE_INSTRUCTIONS
 				: PLAN_MODE_INSTRUCTIONS_MANUAL_SWITCH
-			: undefined,
+			: undefined;
+	const effectiveRules = [
+		rules,
+		POSIX_TOOL_AVAILABILITY,
+		MODE_TAG_INSTRUCTIONS,
+		modeContract,
 	]
 		.filter(Boolean)
 		.join("\n\n");
+
+	if (options.environmentTurn) {
+		// The static rules stay in place; everything that differs between
+		// sessions -- or between turns, as the mode does -- becomes a span.
+		const staticRules = [POSIX_TOOL_AVAILABILITY, MODE_TAG_INSTRUCTIONS].join(
+			"\n\n",
+		);
+		const metadataBlock = isCline
+			? buildWorkspaceMetadata(workspaceRoot, workspaceName, metadata)
+			: "";
+		const spans = [
+			markPromptEnvironment("Platform", platform),
+			markPromptEnvironment("Date", new Date().toLocaleDateString()),
+			markPromptEnvironment("IDE", ide),
+			markPromptEnvironment("Working Directory", workspaceRoot),
+			markPromptEnvironment("Rules", rules),
+			markPromptEnvironment("Mode", modeContract),
+			markPromptEnvironment("Workspace", metadataBlock),
+		].join("");
+		const staticPrompt = basePrompt
+			.replace("{{PLATFORM_NAME}}", PROMPT_ENVIRONMENT_REFERENCE)
+			.replace("{{CWD}}", PROMPT_ENVIRONMENT_REFERENCE)
+			.replace("{{CURRENT_DATE}}", PROMPT_ENVIRONMENT_REFERENCE)
+			.replace("{{IDE_NAME}}", PROMPT_ENVIRONMENT_REFERENCE)
+			.replace("{{CLINE_METADATA}}", "")
+			.replace("{{CLINE_RULES}}", staticRules)
+			.trim();
+		return `${staticPrompt}\n\n${spans}`;
+	}
 
 	return basePrompt
 		.replace("{{PLATFORM_NAME}}", platform)

@@ -22,6 +22,7 @@ import {
 	type AiSdkFormatterPart,
 	captureSdkError,
 	createMediaBudgetState,
+	flattenPromptEnvironment,
 	formatMessagesForAiSdk,
 	GeneratedMediaSchema,
 	generatedMediaModalityFromMediaType,
@@ -1242,9 +1243,16 @@ function buildRecoverableToolErrorMetadata(input: {
 function resolveAiSdkSystemPrompt(
 	request: GatewayStreamRequest,
 ): string | undefined {
-	return request.providerId === "openai-codex"
-		? undefined
-		: request.systemPrompt;
+	if (request.providerId === "openai-codex") {
+		return undefined;
+	}
+	// Only opencoti lifts the environment spans into a turn of their own (its
+	// fetch does it, on the wire). Anywhere else -- a session that switched
+	// provider mid-conversation, say -- they are flattened into the one
+	// system text the prompt would otherwise have been.
+	return request.providerId === "opencoti" || !request.systemPrompt
+		? request.systemPrompt
+		: flattenPromptEnvironment(request.systemPrompt);
 }
 
 function mapFinishReason(

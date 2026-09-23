@@ -3,6 +3,7 @@ import {
 	clearPolykvGrantedWindow,
 	clearPolykvSession,
 	createPolykvClient,
+	engineSessionId,
 	getPolykvSession,
 	hasOpencotiFeature,
 	normalizeProviderId,
@@ -10,9 +11,10 @@ import {
 	type PolykvCapacity,
 	type PolykvClient,
 	probeOpencotiProps,
+	releasePolykvLead,
 	setPolykvSession,
 } from "@cline/llms";
-import type { BasicLogger } from "@cline/shared";
+import { type BasicLogger, hasPromptEnvironment } from "@cline/shared";
 
 /**
  * The conversation's KV pool, on the engine that owns the cells.
@@ -240,6 +242,13 @@ export async function ensurePolykvPool(options: {
 	if (existing) {
 		return existing.poolId;
 	}
+	// A prompt carrying environment spans is a lead conversation's, and the
+	// vendor's fetch attaches it to the server-wide lead tree on the wire
+	// (`polykv-lead.ts`). A root of its own here would be the private copy of
+	// the prefix that tree exists to share.
+	if (hasPromptEnvironment(options.systemPrompt)) {
+		return undefined;
+	}
 	const client = clientFor(options.providerConfig);
 	if (!client) {
 		return undefined;
@@ -427,6 +436,13 @@ export async function repointPolykvAfterCompaction(options: {
 	) {
 		return undefined;
 	}
+	// A lead's pool covers the system prompt, tools and environment turn only,
+	// and compaction rewrites none of them: the compacted conversation still
+	// opens with that prefix. Nothing to re-root -- and the pool may be the
+	// root every other conversation on the server attaches to.
+	if (state.layout === "lead") {
+		return undefined;
+	}
 	const client = clientFor(options.providerConfig);
 	if (!client) {
 		return undefined;
@@ -500,6 +516,10 @@ export async function releasePolykvSession(options: {
 	}
 	const sessionId = options.sessionId;
 	const state = getPolykvSession(sessionId);
+	// Its place in the lead tree first: the sub-pool it owns, and the shared
+	// root with the last conversation on it. Never by the registry's id, which
+	// may name that shared root.
+	await releasePolykvLead(sessionId).catch(() => undefined);
 	clearPolykvSession(sessionId);
 	// The answer described a pool that is about to stop existing.
 	clearPolykvCapacityCache(sessionId);
@@ -510,7 +530,7 @@ export async function releasePolykvSession(options: {
 	if (!client) {
 		return;
 	}
-	if (state) {
+	if (state && state.layout !== "lead") {
 		try {
 			await client.unpin(state.poolId);
 			await client.releasePool(state.poolId);
@@ -535,7 +555,9 @@ export async function releasePolykvSession(options: {
 		return;
 	}
 	try {
-		const released = await client.closeSession(sessionId);
+		// The id the wire carried: the fetch sends `engineSessionId(...)`, and
+		// the close route cannot match a `/`.
+		const released = await client.closeSession(engineSessionId(sessionId));
 		options.logger?.debug?.(
 			released
 				? `[PolyKV] Closed session ${sessionId}`

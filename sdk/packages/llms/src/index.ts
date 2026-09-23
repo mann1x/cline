@@ -213,6 +213,15 @@ export {
 	setPolykvSession,
 } from "./providers/vendors/polykv";
 export {
+	hoistLeadEnvironment,
+	markLeadWindowLive,
+	POLYKV_LEAD_RECHECK_MS,
+	polykvLeadState,
+	prepareLeadPool,
+	releaseAllPolykvLeads,
+	releasePolykvLead,
+} from "./providers/vendors/polykv-lead";
+export {
 	engineSessionId,
 	isWorkerWindowFull,
 	POLYKV_OWNER_MIN_WINDOW,

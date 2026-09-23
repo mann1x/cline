@@ -16,6 +16,11 @@ import {
 	recordPolykvGrantedWindow,
 } from "./polykv";
 import {
+	hoistLeadEnvironment,
+	markLeadWindowLive,
+	prepareLeadPool,
+} from "./polykv-lead";
+import {
 	engineSessionId,
 	isWorkerWindowFull,
 	POLYKV_WORKER_MAX_WAIT_MS,
@@ -60,6 +65,12 @@ export interface OpencotiRequestOptions {
 	sharedPrefixTokens?: number;
 	/** Bypass admission for this request, explicitly and visibly. */
 	overcommit?: boolean;
+	/**
+	 * Attach a lead conversation to the server-wide lead tree
+	 * (`polykv-lead.ts`). Only requests whose system turn carries environment
+	 * spans are a lead's; the rest ignore it.
+	 */
+	leadPool?: boolean;
 	/**
 	 * The context window to book, in tokens.
 	 *
@@ -271,55 +282,85 @@ export function createOpencotiFetch(options: {
 	return (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
 		let nextInit = init;
 		const extras = options.request;
-		if (extras && init?.body && typeof init.body === "string") {
+		let leadSession: string | undefined;
+		let leadAskedWindow = false;
+		if (init?.body && typeof init.body === "string") {
 			try {
 				const body = JSON.parse(init.body) as Record<string, unknown>;
-				// Held as a string on this side -- the first pool is 0, and a
-				// numeric 0 is falsy -- but the engine parses the field as a
-				// number and 400s a string. Anything that is not an integer is
-				// not an id it issued: left off, the turn runs unpooled rather
-				// than failing.
-				const wirePoolId =
-					extras.poolId !== undefined && /^\d+$/.test(extras.poolId)
-						? Number(extras.poolId)
-						: undefined;
-				if (wirePoolId !== undefined) {
-					body.pool_id = wirePoolId;
-				}
-				if (extras.sessionId !== undefined) {
-					body.session_id = engineSessionId(extras.sessionId);
-					if (options.baseUrl) {
-						rememberOpencotiSession(
-							extras.sessionId,
-							options.baseUrl,
-							base,
-							options.headers,
-						);
+				// Environment spans become a turn of their own on every request
+				// that carries them, pooled or not: the system turn left behind is
+				// the same for every conversation, which is what the engine's
+				// prefix cache and the lead tree both key on.
+				const isLead = hoistLeadEnvironment(body);
+				if (extras) {
+					// Held as a string on this side -- the first pool is 0, and a
+					// numeric 0 is falsy -- but the engine parses the field as a
+					// number and 400s a string. Anything that is not an integer is
+					// not an id it issued: left off, the turn runs unpooled rather
+					// than failing.
+					const wirePoolId =
+						extras.poolId !== undefined && /^\d+$/.test(extras.poolId)
+							? Number(extras.poolId)
+							: undefined;
+					if (wirePoolId !== undefined) {
+						body.pool_id = wirePoolId;
 					}
-				}
-				if (extras.sharedPrefixTokens !== undefined) {
-					body.shared_prefix_n_tokens = extras.sharedPrefixTokens;
-				}
-				if (extras.overcommit !== undefined) {
-					body.overcommit = extras.overcommit;
-				}
-				if (extras.numCtx !== undefined) {
-					body.num_ctx = extras.numCtx;
-					// A floor is only meaningful under an ask. Sent alone it
-					// would read as a demand for a minimum window on a request
-					// that never asked for one; sent above the ask it is a
-					// contradiction, and the resolution that means something is
-					// "exactly this window or refuse" -- which is also the
-					// resume rule's shape.
-					if (extras.numCtxMin !== undefined) {
-						body.num_ctx_min = Math.min(extras.numCtxMin, extras.numCtx);
+					if (extras.sessionId !== undefined) {
+						body.session_id = engineSessionId(extras.sessionId);
+						if (options.baseUrl) {
+							rememberOpencotiSession(
+								extras.sessionId,
+								options.baseUrl,
+								base,
+								options.headers,
+							);
+						}
+					}
+					if (extras.sharedPrefixTokens !== undefined) {
+						body.shared_prefix_n_tokens = extras.sharedPrefixTokens;
+					}
+					if (extras.overcommit !== undefined) {
+						body.overcommit = extras.overcommit;
+					}
+					if (extras.numCtx !== undefined) {
+						body.num_ctx = extras.numCtx;
+						// A floor is only meaningful under an ask. Sent alone it
+						// would read as a demand for a minimum window on a request
+						// that never asked for one; sent above the ask it is a
+						// contradiction, and the resolution that means something is
+						// "exactly this window or refuse" -- which is also the
+						// resume rule's shape.
+						if (extras.numCtxMin !== undefined) {
+							body.num_ctx_min = Math.min(extras.numCtxMin, extras.numCtx);
+						}
+					}
+					if (
+						isLead &&
+						extras.leadPool &&
+						extras.sessionId !== undefined &&
+						options.baseUrl
+					) {
+						// The lead tree decides the pool for a lead request; whatever
+						// the registry held is its own answer from the last turn.
+						delete body.pool_id;
+						const leadPool = await prepareLeadPool({
+							baseUrl: options.baseUrl,
+							fetch: base,
+							...(options.headers ? { headers: options.headers } : {}),
+							body,
+							sessionId: extras.sessionId,
+						}).catch(() => undefined);
+						if (leadPool !== undefined && /^\d+$/.test(leadPool)) {
+							body.pool_id = Number(leadPool);
+						}
+						leadSession = extras.sessionId;
+						leadAskedWindow = body.num_ctx !== undefined;
 					}
 				}
 				nextInit = { ...init, body: JSON.stringify(body) };
 			} catch {
 				// A body that is not JSON is not ours to rewrite. The request goes
 				// as it was: an unpooled turn is slower, a mangled one is broken.
-				nextInit = init;
 			}
 		}
 		const response = await base(input, {
@@ -343,6 +384,9 @@ export function createOpencotiFetch(options: {
 		// published release, the refusal is a `429` carrying a body that says
 		// `503`/`unavailable_error`; the status line is the half that is right on
 		// both releases.
+		if (leadSession !== undefined && leadAskedWindow && response.ok) {
+			markLeadWindowLive(leadSession);
+		}
 		if (!options.onFacts) {
 			return response;
 		}
@@ -599,6 +643,13 @@ export function readOpencotiRequestOptions(
 			? { sharedPrefixTokens: sharedPrefix }
 			: {}),
 		...(typeof overcommit === "boolean" ? { overcommit } : {}),
+		// A conversation's place in the lead tree is keyed by its session: no
+		// session, no place to hold.
+		...(settings?.enabled !== false &&
+		typeof sessionId === "string" &&
+		sessionId
+			? { leadPool: true }
+			: {}),
 		...window,
 	};
 }

@@ -1,4 +1,4 @@
-import { isClineProvider } from "@cline/shared";
+import { flattenPromptEnvironment, isClineProvider } from "@cline/shared";
 import { toAiSdkReasoning } from "../ai-sdk";
 import { DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS } from "../gateway";
 import {
@@ -189,7 +189,9 @@ const openAiCodexRule: ProviderOptionRule = {
 	build: (input) => {
 		const codexOptions = {
 			...input.compatibleOptions,
-			instructions: input.request.systemPrompt,
+			instructions: input.request.systemPrompt
+				? flattenPromptEnvironment(input.request.systemPrompt)
+				: input.request.systemPrompt,
 			store: false,
 			strictJsonSchema: false,
 			systemMessageMode: "remove" as const,

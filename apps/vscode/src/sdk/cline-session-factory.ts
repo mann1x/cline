@@ -1592,6 +1592,10 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 			providerId,
 			platform: process.platform,
 			basePrompt: renderedTemplate?.system,
+			// opencoti lifts the per-session values into a turn of their own, so
+			// every conversation on the server opens with the same system turn
+			// and shares one prefix (sdk polykv-lead.ts).
+			environmentTurn: providerId === "opencoti",
 		})
 		Logger.log(`[SessionFactory] Built system prompt: ${systemPrompt.length} chars`)
 	} catch (error) {

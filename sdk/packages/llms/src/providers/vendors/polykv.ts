@@ -343,6 +343,15 @@ export interface PolykvClient {
 	 * server's have diverged, which is worth knowing and not worth guessing at.
 	 */
 	closeSession(sessionId: string): Promise<boolean>;
+	/**
+	 * The ids of the pools the server holds now.
+	 *
+	 * How a client learns a pool it named is gone: the engine releases every
+	 * pool a session owns when that session's window lapses, and a request
+	 * naming a released pool is not refused -- it is a server-side warning and
+	 * a full reprocess, invisible from here.
+	 */
+	listPoolIds(): Promise<Set<string>>;
 	pin(poolId: string): Promise<void>;
 	unpin(poolId: string): Promise<void>;
 	releasePool(poolId: string): Promise<void>;
@@ -402,6 +411,13 @@ export interface PolykvSessionState {
 	 * with its ancestors, and the `branch_pos` a re-root forks at.
 	 */
 	prefixTokens: number;
+	/**
+	 * `"lead"`: the pool is the conversation's place in the server-wide lead
+	 * tree (`polykv-lead.ts`) -- a shared root, or the conversation's own
+	 * sub-pool of it. Not this session's to re-root or release by id: the root
+	 * is every session's, and the lead tree releases what it made.
+	 */
+	layout?: "lead";
 }
 
 const POLYKV_SESSIONS = new Map<string, PolykvSessionState>();
@@ -798,6 +814,17 @@ export function createPolykvClient(options: PolykvClientOptions): PolykvClient {
 				{ method: "POST", body: {} },
 			);
 			return result?.found === true;
+		},
+		listPoolIds: async () => {
+			const result = await call<{ pools?: Array<{ pool_id?: unknown }> }>(
+				"/polykv/pools",
+			);
+			return new Set(
+				(result?.pools ?? [])
+					.map((pool) => pool.pool_id)
+					.filter((id) => id !== undefined && id !== null)
+					.map(String),
+			);
 		},
 		pin: async (poolId) => {
 			await call(`/polykv/pools/${encodeURIComponent(poolId)}/pin`, {
