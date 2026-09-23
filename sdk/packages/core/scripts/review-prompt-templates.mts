@@ -20,6 +20,15 @@
  * anything else in those files:
  *
  *   bun scripts/review-prompt-templates.mts --all --tool grep --tool sed
+ *
+ * To also have the model translate the compaction prompts into
+ * `# compaction: <id>` sections (all six, or only the named ones):
+ *
+ *   bun scripts/review-prompt-templates.mts --model kimi-k3:cloud --compaction
+ *   bun scripts/review-prompt-templates.mts --all --compaction-id council-critic
+ *
+ * These are proposals under test. No built-in template ships a compaction
+ * section until one has been measured against the built-in prompt it replaces.
  *   OLLAMA_HOST=http://pandorum:11439 bun scripts/review-prompt-templates.mts
  *
  * What comes back is a proposal, not a template. It is parsed and validated
@@ -32,9 +41,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
 	DEFAULT_PROMPT_TEMPLATE_NAME,
+	isPromptTemplateCompactionId,
+	PROMPT_TEMPLATE_COMPACTION_IDS,
+	type PromptTemplateCompactionId,
 	renderPromptTemplate,
 } from "@cline/shared";
 import { getBuiltinPromptTemplates } from "../src/extensions/config/builtin-templates";
+import { BUILTIN_COMPACTION_PROMPTS } from "../src/extensions/config/prompt-template-compaction";
 import { generatePromptTemplate } from "../src/extensions/config/prompt-template-review";
 import { getShippedToolCallSignatures } from "../src/extensions/config/shipped-tool-signatures";
 
@@ -396,6 +409,11 @@ interface Options {
 	 * between reviewing the glm template and reviewing the base prompt.
 	 */
 	family?: string;
+	/**
+	 * Compaction prompts to translate, from the built-in text. Empty asks for
+	 * none. Whole-file runs only: `--tool` cannot be combined with it.
+	 */
+	compaction: PromptTemplateCompactionId[];
 }
 
 function parseArgs(argv: string[]): Options {
@@ -412,6 +430,7 @@ function parseArgs(argv: string[]): Options {
 	let name: string | undefined;
 	let family: string | undefined;
 	let think = false;
+	const compaction = new Set<PromptTemplateCompactionId>();
 
 	for (let index = 0; index < argv.length; index++) {
 		const arg = argv[index];
@@ -419,6 +438,20 @@ function parseArgs(argv: string[]): Options {
 		switch (arg) {
 			case "--think":
 				think = true;
+				break;
+			case "--compaction":
+				for (const id of PROMPT_TEMPLATE_COMPACTION_IDS) {
+					compaction.add(id);
+				}
+				break;
+			case "--compaction-id":
+				if (!value || !isPromptTemplateCompactionId(value)) {
+					throw new Error(
+						`--compaction-id needs one of ${PROMPT_TEMPLATE_COMPACTION_IDS.join(", ")}`,
+					);
+				}
+				compaction.add(value);
+				index++;
 				break;
 			case "--family":
 				if (!value) {
@@ -536,6 +569,7 @@ function parseArgs(argv: string[]): Options {
 		name,
 		family,
 		think,
+		compaction: [...compaction],
 	};
 }
 
@@ -712,6 +746,16 @@ async function review(model: string, options: Options): Promise<boolean> {
 			toolSignatures: getShippedToolCallSignatures(),
 			requiredMentions: [...REQUIRED_MENTIONS, ...options.require],
 			onlyTools: options.onlyTools,
+			...(options.compaction.length > 0
+				? {
+						compactionPrompts: Object.fromEntries(
+							options.compaction.map((id) => [
+								id,
+								BUILTIN_COMPACTION_PROMPTS[id],
+							]),
+						),
+					}
+				: {}),
 			expectedName: options.name ?? (isDefault ? undefined : matchedName),
 			matchModel: options.matchModel,
 			matchFamily: options.matchFamily,
@@ -771,6 +815,11 @@ async function review(model: string, options: Options): Promise<boolean> {
 			})}\n`,
 			"utf8",
 		);
+		if (result.compaction) {
+			runLog.log(
+				`  compaction sections kept: ${result.compaction.kept.join(", ") || "none"}; removed as failing: ${result.compaction.removed.join(", ") || "none"}`,
+			);
+		}
 		if (result.audit.problems.length === 0) {
 			runLog.log(
 				`  clean on attempt ${result.attempts}: system=${

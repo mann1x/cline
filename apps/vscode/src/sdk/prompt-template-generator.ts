@@ -1,5 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs"
 import {
+	type CompactionPromptSources,
 	generatePromptTemplate,
 	getBuiltinPromptTemplateSource,
 	getBuiltinPromptTemplates,
@@ -46,6 +47,11 @@ export interface GenerateTemplateOptions {
 	targetDirectory?: string
 	onAttempt?: (attempt: number, problems: readonly string[]) => void
 	signal?: AbortSignal
+	/**
+	 * Compaction prompts to translate into `# compaction:` sections, by id.
+	 * Absent means none are asked for, and any the model writes are cut.
+	 */
+	compactionPrompts?: CompactionPromptSources
 }
 
 export interface GeneratedTemplate {
@@ -54,6 +60,8 @@ export interface GeneratedTemplate {
 	attempts: number
 	/** Empty when the proposal was clean; otherwise what is still wrong. */
 	problems: string[]
+	/** Compaction sections kept and removed, when translation was asked for. */
+	compaction?: { kept: string[]; removed: string[] }
 }
 
 /**
@@ -155,6 +163,7 @@ export async function generateTemplateForModel(options: GenerateTemplateOptions)
 		attempts: ATTEMPTS,
 		complete: createCompletion(options),
 		onAttempt: options.onAttempt,
+		...(options.compactionPrompts ? { compactionPrompts: options.compactionPrompts } : {}),
 	})
 
 	const directory = options.targetDirectory ?? resolveGlobalTemplateDirectory()
@@ -170,6 +179,7 @@ export async function generateTemplateForModel(options: GenerateTemplateOptions)
 		name,
 		attempts: result.attempts,
 		problems: result.audit.problems,
+		...(result.compaction ? { compaction: result.compaction } : {}),
 	}
 }
 

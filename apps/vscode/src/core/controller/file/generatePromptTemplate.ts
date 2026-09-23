@@ -1,3 +1,4 @@
+import { resolveCompactionPromptSources } from "@cline/core"
 import { EmptyRequest } from "@shared/proto/cline/common"
 import { GeneratedPromptTemplate } from "@shared/proto/cline/file"
 import { resolveBaseUrl, resolveModelId } from "@/sdk/cline-session-factory"
@@ -33,12 +34,29 @@ export async function generatePromptTemplate(controller: Controller, _request: E
 		family = await resolveOllamaModelFamily(baseUrl, modelId).catch(() => undefined)
 	}
 
+	// Opt-in, off by default: a compaction prompt's answer replaces the
+	// transcript, so a bad translation loses the session's history rather than
+	// a turn. The sources are what this user's sessions send today -- their own
+	// prompt where they wrote one, the built-in one otherwise.
+	const settings = controller.stateManager
+	const compactionPrompts = settings.getGlobalSettingsKey("translateCompactionPrompts")
+		? resolveCompactionPromptSources({
+				replay: settings.getGlobalSettingsKey("compactionPrompt"),
+				full: settings.getGlobalSettingsKey("fullCompactionPrompt"),
+				retrospective: settings.getGlobalSettingsKey("thinkingCompactionPrompt"),
+				"council-writer": settings.getGlobalSettingsKey("councilWriterPrompt"),
+				"council-critic": settings.getGlobalSettingsKey("councilCriticPrompt"),
+				"council-synthesizer": settings.getGlobalSettingsKey("councilSynthesizerPrompt"),
+			})
+		: undefined
+
 	const generated = await generateTemplateForModel({
 		providerId,
 		modelId,
 		mode,
 		apiConfiguration,
 		family,
+		...(compactionPrompts ? { compactionPrompts } : {}),
 	})
 
 	return GeneratedPromptTemplate.create({
@@ -46,5 +64,7 @@ export async function generatePromptTemplate(controller: Controller, _request: E
 		name: generated.name,
 		attempts: generated.attempts,
 		problems: generated.problems,
+		compactionKept: generated.compaction?.kept ?? [],
+		compactionRemoved: generated.compaction?.removed ?? [],
 	})
 }

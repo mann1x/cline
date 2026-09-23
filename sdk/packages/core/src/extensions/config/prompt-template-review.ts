@@ -6,6 +6,13 @@ import {
 	resolvePromptTemplate,
 } from "@cline/shared";
 import { getBuiltinPromptTemplates } from "./builtin-templates";
+import {
+	auditCompactionSections,
+	buildCompactionTranslationRequest,
+	type CompactionPromptSources,
+	compactionIdsWithWarnings,
+	stripCompactionSections,
+} from "./prompt-template-compaction";
 import { parsePromptTemplate } from "./prompt-template-parser";
 
 /**
@@ -1313,6 +1320,16 @@ export interface GeneratePromptTemplateArgs {
 	 * a section into otherwise.
 	 */
 	onlyTools?: readonly string[];
+	/**
+	 * Compaction prompts to translate into `# compaction: <id>` sections, by id,
+	 * with the text to translate from. Omit, or pass none, and the proposal may
+	 * carry no compaction section at all.
+	 *
+	 * Opt-in because a wrong compaction prompt is the one template failure that
+	 * cannot be noticed and undone: its answer replaces the transcript. Whole
+	 * file only -- a section rewrite (`onlyTools`) cannot also ask for these.
+	 */
+	compactionPrompts?: CompactionPromptSources;
 	/** Tries, including the first. Each retry hands back the problem list. */
 	attempts?: number;
 	/** One completion. Returns the reply text; throws to abort. */
@@ -1329,6 +1346,75 @@ export interface GeneratePromptTemplateResult {
 	audit: PromptTemplateProposalAudit;
 	/** How many model calls it took. */
 	attempts: number;
+	/**
+	 * The compaction sections the file carries, and the ones that were removed
+	 * because they still failed the check after the last attempt. Present only
+	 * when `compactionPrompts` asked for some.
+	 */
+	compaction?: { kept: string[]; removed: string[] };
+}
+
+interface GenerationAttempt extends GeneratePromptTemplateResult {
+	/** Compaction ids whose section must not survive as written. */
+	compactionFailing: Set<string>;
+	/** Why each of those failed, in the audit's words. */
+	compactionProblems: string[];
+}
+
+/**
+ * The file as it is handed back: any compaction section that failed is cut
+ * out, so it falls back to the built-in prompt instead of shipping broken.
+ */
+function finishGeneration(
+	attempt: GenerationAttempt,
+	requested: readonly string[],
+): GeneratePromptTemplateResult {
+	const { compactionFailing, compactionProblems, ...result } = attempt;
+	if (requested.length === 0 && compactionFailing.size === 0) {
+		return result;
+	}
+	const removed = [...compactionFailing].sort();
+	const raw = stripCompactionSections(result.raw, compactionFailing);
+	const template = result.audit.template;
+	const keptEntries = Object.entries(template?.compaction ?? {}).filter(
+		([id]) => !compactionFailing.has(id),
+	);
+	const others = result.audit.problems.filter(
+		(problem) =>
+			!compactionProblems.includes(problem) &&
+			compactionIdsWithWarnings([problem]).length === 0,
+	);
+	const notes = removed.map((id) =>
+		`Removed '# compaction: ${id}': it still failed the check after the last attempt, so the built-in prompt is used for it. ${compactionProblems
+			.filter((problem) => problem.includes(`compaction: ${id}'`))
+			.join(" ")}`.trim(),
+	);
+	return {
+		...result,
+		raw,
+		audit: {
+			...(template
+				? {
+						template: {
+							...template,
+							compaction:
+								keptEntries.length > 0
+									? Object.fromEntries(keptEntries)
+									: undefined,
+						},
+					}
+				: {}),
+			problems: [...others, ...notes],
+		},
+		...(requested.length > 0
+			? {
+					compaction: {
+						kept: keptEntries.map(([id]) => id).sort(),
+						removed: removed.filter((id) => requested.includes(id)),
+					},
+				}
+			: {}),
+	};
 }
 
 export async function generatePromptTemplate(
@@ -1356,6 +1442,19 @@ export async function generatePromptTemplate(
 	if (unknownAsked.length > 0) {
 		throw new Error(
 			`Asked to rewrite ${unknownAsked.map((name) => `\`${name}\``).join(", ")}, which ${unknownAsked.length === 1 ? "is not a tool" : "are not tools"}. A section can only be written for a tool that exists.`,
+		);
+	}
+	const compactionSources = args.compactionPrompts ?? {};
+	const compactionRequest =
+		buildCompactionTranslationRequest(compactionSources);
+	const requestedCompaction = Object.keys(compactionSources).filter(
+		(id) =>
+			(compactionSources[id as keyof typeof compactionSources] ?? "").trim() !==
+			"",
+	);
+	if (isDelta && compactionRequest !== "") {
+		throw new Error(
+			"A section rewrite cannot also translate the compaction prompts: leave `onlyTools` empty to write a whole template with them.",
 		);
 	}
 	const defaultSections = new Map(
@@ -1406,11 +1505,11 @@ export async function generatePromptTemplate(
 									model: args.matchModel,
 								}
 							: undefined,
-					),
+					) + (compactionRequest ? `\n\n${compactionRequest}` : ""),
 		},
 	];
 
-	let best: GeneratePromptTemplateResult | undefined;
+	let best: GenerationAttempt | undefined;
 
 	for (let attempt = 1; attempt <= attemptLimit; attempt++) {
 		const reply = await args.complete(messages);
@@ -1499,11 +1598,33 @@ export async function generatePromptTemplate(
 		// A delta's own failures are reported alongside the file's, first,
 		// because "you did not send the section" explains an audit failure that
 		// would otherwise read as the template being broken.
+		// Compaction last: a missing tool section explains more than a missing
+		// compaction one does. Unasked-for sections fail too, so a proposal
+		// that was never asked for them cannot slip one in.
+		const compactionAudit = auditCompactionSections(
+			fileAudit.template?.compaction,
+			compactionSources,
+		);
+		for (const id of compactionIdsWithWarnings(fileAudit.problems)) {
+			compactionAudit.failing.add(id);
+		}
+		const problems = [
+			...deltaProblems,
+			...fileAudit.problems,
+			...compactionAudit.problems,
+		];
 		const audit: PromptTemplateProposalAudit =
-			deltaProblems.length > 0
-				? { ...fileAudit, problems: [...deltaProblems, ...fileAudit.problems] }
-				: fileAudit;
+			problems.length === fileAudit.problems.length
+				? fileAudit
+				: { ...fileAudit, problems };
 		args.onAttempt?.(attempt, audit.problems);
+		const current: GenerationAttempt = {
+			raw,
+			audit,
+			attempts: attempt,
+			compactionFailing: compactionAudit.failing,
+			compactionProblems: compactionAudit.problems,
+		};
 
 		// Keep the cleanest attempt, so a run that never reaches zero problems
 		// still yields the best version rather than the last one.
@@ -1512,10 +1633,10 @@ export async function generatePromptTemplate(
 			(audit.template && !best.audit.template) ||
 			audit.problems.length < best.audit.problems.length
 		) {
-			best = { raw, audit, attempts: attempt };
+			best = current;
 		}
 		if (audit.problems.length === 0) {
-			return { raw, audit, attempts: attempt };
+			return finishGeneration(current, requestedCompaction);
 		}
 		if (attempt < attemptLimit) {
 			messages.push({ role: "assistant", content: raw });
@@ -1532,7 +1653,7 @@ export async function generatePromptTemplate(
 	if (!best) {
 		throw new Error("No proposal was produced.");
 	}
-	return best;
+	return finishGeneration(best, requestedCompaction);
 }
 
 /**

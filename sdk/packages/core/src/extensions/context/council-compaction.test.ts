@@ -509,3 +509,45 @@ describe("splicing a writer's answer back to its own half", () => {
 		expect(synthRequest.split("REWROTE-SECOND").length - 1).toBe(1);
 	});
 });
+
+describe("a custom council prompt", () => {
+	// The instruction is the user's to change; the evidence is not. A custom
+	// reviewer prompt that forgot to ask for the transcript must still be
+	// handed it, or the review checks the summary against nothing.
+	it("replaces the reviewer's instruction and keeps the evidence after it", () => {
+		const request = buildCouncilCriticRequest({
+			half: "first",
+			ownReplay: "x".repeat(120),
+			otherReplay: "other half",
+			transcript: "THE TRANSCRIPT",
+			instructions:
+				"Fix the {{half}} half ({{half_length}} chars); {{other_half}} is not yours.",
+		});
+		expect(
+			request.startsWith(
+				"Fix the first half (120 chars); second is not yours.",
+			),
+		).toBe(true);
+		expect(request).not.toContain("You wrote the replay below");
+		expect(request).toContain("other half");
+		expect(request).toContain("THE TRANSCRIPT");
+	});
+
+	it("replaces the synthesiser's instruction and keeps the parsed answer format", () => {
+		const request = buildCouncilSynthesizerRequest({
+			firstOriginal: "a",
+			secondOriginal: "b",
+			firstRewritten: "c",
+			secondRewritten: "d",
+			thinkingSummary: "retro",
+			originalLength: 1000,
+			instructions:
+				"Join them; stay near {{original_length}}, at most {{max_length}}.",
+		});
+		expect(request.startsWith("Join them; stay near 1000, at most 1100.")).toBe(
+			true,
+		);
+		expect(request).toContain("## Replay");
+		expect(request).toContain("## Retrospective");
+	});
+});

@@ -3,6 +3,14 @@ export {
 	getBuiltinPromptTemplates,
 } from "./builtin-templates";
 export {
+	auditCompactionSections,
+	BUILTIN_COMPACTION_PROMPTS,
+	buildCompactionTranslationRequest,
+	type CompactionPromptSources,
+	resolveCompactionPromptSources,
+	stripCompactionSections,
+} from "./prompt-template-compaction";
+export {
 	createPromptTemplateHooks,
 	type PromptTemplateHooksOptions,
 } from "./prompt-template-hooks";

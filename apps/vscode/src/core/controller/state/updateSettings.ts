@@ -249,6 +249,22 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			controller.stateManager.setGlobalState("thinkingCompactionPrompt", request.thinkingCompactionPrompt)
 		}
 
+		if (request.councilWriterPrompt !== undefined) {
+			controller.stateManager.setGlobalState("councilWriterPrompt", request.councilWriterPrompt)
+		}
+
+		if (request.councilCriticPrompt !== undefined) {
+			controller.stateManager.setGlobalState("councilCriticPrompt", request.councilCriticPrompt)
+		}
+
+		if (request.councilSynthesizerPrompt !== undefined) {
+			controller.stateManager.setGlobalState("councilSynthesizerPrompt", request.councilSynthesizerPrompt)
+		}
+
+		if (request.translateCompactionPrompts !== undefined) {
+			controller.stateManager.setGlobalState("translateCompactionPrompts", request.translateCompactionPrompts)
+		}
+
 		if (request.showRequestTimings !== undefined) {
 			controller.stateManager.setGlobalState("showRequestTimings", request.showRequestTimings)
 		}

@@ -20,6 +20,7 @@ import {
 	normalizeProviderReasoningSettings,
 	normalizeSdkBaseUrl,
 	resolveApiKey,
+	resolveCompactionPrompt,
 	resolveOllamaProviderConfig,
 	resolveThinkingAllowance,
 	updateHistoryItem,
@@ -2422,5 +2423,24 @@ describe("composeSessionHooks", () => {
 
 		expect(hooks?.beforeTool).toBeDefined()
 		expect(hooks?.afterTool).toBeDefined()
+	})
+})
+
+describe("resolveCompactionPrompt", () => {
+	it("takes the matched template's section over the Features setting", () => {
+		expect(resolveCompactionPrompt({ "council-critic": " from template " }, "council-critic", "from setting")).toBe(
+			"from template",
+		)
+	})
+
+	it("falls back to the setting where the template has no section, or a blank one", () => {
+		expect(resolveCompactionPrompt({ replay: "   " }, "replay", " from setting ")).toBe("from setting")
+		expect(resolveCompactionPrompt({ replay: "tpl" }, "full", "from setting")).toBe("from setting")
+	})
+
+	// "" is what leaves the config key unset, which is what makes core use its
+	// built-in prompt.
+	it("is empty when neither says anything", () => {
+		expect(resolveCompactionPrompt({}, "council-writer", "")).toBe("")
 	})
 })

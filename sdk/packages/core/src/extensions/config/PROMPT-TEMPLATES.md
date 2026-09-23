@@ -12,7 +12,7 @@ history. Everything that cost time is written down here.
 
 ---
 
-## 0. The nineteen things that are easy to get wrong
+## 0. The twenty-four things that are easy to get wrong
 
 | | |
 |---|---|
@@ -38,6 +38,7 @@ history. Everything that cost time is written down here.
 | **`think: false` is a request, and a model may answer it by not *separating* its reasoning.** | The generator disables thinking because a reasoning model otherwise spends the whole budget on it. glm-5.3 complies by writing the reasoning into `content` instead. Same prompt, same sampler: thinking on → `thinking` 2,978 chars / `content` 46 chars, exactly the template; thinking off → `thinking` 0 / `content` 1,598 chars, all of it reasoning. That is what "does not parse: no '# system' or '# tool:' section" meant. Use `--think`, and raise `--timeout` with it. |
 | **The audit only read `# system` until 2026-09-12.** | The batch-edits ban was enforced against model proposals and against that section only, so nine of the ten shipped templates carried the rule in `# tool: editor` while reporting clean. A model reads a tool description in the same request as the system prompt. `findBatchedEditRules()` now runs over both, and `builtin-templates.test.ts` runs it over what ships. |
 | **A rule can reach every template from code, not from a template.** | The batch-edits rule was in `DEFAULT_CLINE_SYSTEM_PROMPT`, `YOLO_CLINE_SYSTEM_PROMPT` and the `editor` and `run_commands` tool descriptions. `default.md` mirrors all of those verbatim, and every other template is regenerated from `default.md`, so fixing the templates alone fixes nothing that lasts. Fix the code, re-sync `default.md`, then regenerate. **And grep the packaged bundle for the string you removed.** On 2026-09-20 a one-sentence fix to the `check_file` description landed in `@cline/core` and the old sentence was still in the built `.vsix` twice: `apps/vscode/src/sdk/check-file-tool.ts` restates the whole description again for the host's own registration, and it is outside everything on this page — `sync-default-template.mts` says so itself ("Host tools ... cannot be constructed from here at all"). `unzip -p <vsix> extension/dist/extension.js | grep -cF '<old sentence>'` is the check that does not care how many homes the text has. |
+| **A `# compaction:` section is the one section whose failure cannot be seen afterwards.** | Its answer *replaces* the transcript, so a translated prompt that drops a rule loses that part of the session's history for good, with nothing left to compare it against. That is why translating them is opt-in (the **Translate Compaction Prompts** switch, `--compaction` in the script). It is also why the generator **cuts** a compaction section that still fails after the last repair round, rather than keeping it as "the best attempt". And it is why no built-in template ships one until it has been measured against the built-in prompt it replaces. |
 | **Keep the generic pattern when you add a narrow one.** | `kimi*` + `kimi-k3*` means an unreleased `kimi-k4` lands on `kimi.md`. `kimi-k2*` + `kimi-k3*` means it falls silently to `default.md` — the `glm5*` / `deepseek4*` failure again. The fallback rung is the point of the ladder. |
 
 ---
@@ -111,6 +112,39 @@ match:
 * Placeholders must survive verbatim: `{{PLATFORM_NAME}}`, `{{CURRENT_DATE}}`,
   `{{IDE_NAME}}`, `{{CWD}}`, `{{CLINE_RULES}}`, `{{CLINE_METADATA}}`,
   `{{DEFAULT}}`.
+
+### `# compaction: <id>` sections
+
+A template can also carry the prompts used when a session is compacted, one
+section per id. They are optional, and a template made of nothing but them is
+valid:
+
+```markdown
+# compaction: council-critic
+...the reviewer's instructions, in this family's words...
+```
+
+| id | replaces | Features field | must keep |
+|---|---|---|---|
+| `replay` | `DEFAULT_REPLAY_COMPACTION_PROMPT` | Compaction Prompt | `{{files_read}}`, `{{files_edited}}` where the source has them |
+| `full` | `DEFAULT_FULL_COMPACTION_PROMPT` | Full Compaction Prompt | as above |
+| `retrospective` | `DEFAULT_THINKING_COMPACTION_PROMPT` | Thinking Compaction Prompt | — |
+| `council-writer` | `DEFAULT_COUNCIL_WRITER_PROMPT` | Council: Writer Instruction | `<<<HALFWAY>>>` |
+| `council-critic` | `DEFAULT_COUNCIL_CRITIC_PROMPT` | Council: Reviewer Prompt | `{{half}}`, `{{other_half}}`, `{{half_length}}` |
+| `council-synthesizer` | `DEFAULT_COUNCIL_SYNTHESIZER_PROMPT` | Council: Synthesizer Prompt | `{{original_length}}`, `{{max_length}}` |
+
+* An unknown id is reported like an unknown heading, and the section is ignored.
+* A `council-writer` section without `<<<HALFWAY>>>`, or a `council-critic`
+  one without `{{half}}`, parses with a `compaction-missing-token` warning
+  (`PROMPT_TEMPLATE_COMPACTION_REQUIREMENTS` in `template-validation.ts`).
+* The writer instruction is not a whole prompt. It is inserted into the replay
+  or full prompt, before `Write the replay and stop.` where that line exists,
+  and only while the council is on (`withCouncilWriterPrompt`). A prompt that
+  already says `<<<HALFWAY>>>` is left alone.
+* The critic and synthesizer sections change the *instructions* only. The
+  harness still appends what it depends on: the two halves, the call record, the
+  transcript and the answer format. A custom prompt cannot break the format the
+  council parses.
 
 ### The `match:` block, and the fallback ladder
 
@@ -204,6 +238,13 @@ This is the single most misunderstood part.
 |---|---|---|
 | `# system` | `matched.system ?? base.system` — **wholesale replacement** | **none** |
 | `# tool: X` | `applyPromptTemplateToTools()` splices | **`{{DEFAULT}}`** |
+| `# compaction: <id>` | per id, `{...base.compaction, ...matched.compaction}`; then the host picks **template section > Features setting > built-in** (`resolveCompactionPrompt` in `cline-session-factory.ts`) | **none**, and no layering inside the text |
+
+The compaction precedence puts the template above the user's own setting on
+purpose. The template was written for this model, usually by translating that
+very setting, and deleting the section is how a user goes back. The session
+logs `[PromptTemplates] <name> supplies compaction prompts: …` when it happens,
+so a prompt the user did not type is never in effect silently.
 
 `{{DEFAULT}}` in a tool section expands to that tool's built-in description at
 runtime. Two tools **must** keep it:
@@ -282,6 +323,49 @@ see §6.
    * **Hard constraints** — placeholders, tool coverage, the eight tools that
      must be written in the model's own words, `{{DEFAULT}}` rules, no verbatim
      copies, leave `match:` alone.
+
+### Compaction prompts (opt-in)
+
+`GeneratePromptTemplateArgs.compactionPrompts` maps ids to the text to translate.
+When it is set, `buildCompactionTranslationRequest()` appends a *compaction
+prompts* block to the request. That block states the rules, then each source
+under `=== <id> ===`, and asks for one `# compaction: <id>` section each.
+Copying a source through unchanged is allowed here, unlike for tools.
+
+`auditCompactionSections()` then checks, and each failure is a repair problem
+like any other:
+
+* every requested id has a section, and no unrequested one does. With nothing
+  requested, any compaction section the model writes is a failure, so the
+  default generation cannot pick one up by accident;
+* every `{{placeholder}}` in the source is still in the rewrite;
+* the validator's marker checks (`<<<HALFWAY>>>`, `{{half}}`);
+* the rewrite is at least `MIN_COMPACTION_LENGTH_RATIO` (half) of the source.
+  These prompts are long because each paragraph is a rule a summary once broke.
+
+**A section that still fails after the last attempt is removed**
+(`stripCompactionSections`), and the result says so under
+`compaction: {kept, removed}` and in `problems`. A tool section is kept as "the
+best attempt" instead. A compaction section is not, because a removed one falls
+back to the built-in prompt and a broken one loses history. Section rewrites
+(`onlyTools`) refuse to combine with it.
+
+Where the sources come from:
+
+* **In the app**, the **Translate Compaction Prompts** switch sits in Features,
+  under the template generator, and is off by default
+  (`translateCompactionPrompts`). When it is on, Generate sends all six ids.
+  Each source is the user's own Features prompt where set and the built-in one
+  otherwise (`resolveCompactionPromptSources`), because that is what their
+  sessions actually send. The Generate notice names the compaction sections
+  the file kept and the ones it cut. Review them before relying on the file,
+  and delete a section to fall back.
+* **For the built-in templates**, run
+  `review-prompt-templates.mts --compaction`, or `--compaction-id <id>`
+  (repeatable) for a subset, always from the built-in text. The run log prints
+  `compaction sections kept: … removed as failing: …`. These are proposals
+  under test: **no shipped template carries a `# compaction:` section** until
+  one has been run against the prompt it replaces and measured no worse.
 
 ### Repair loop
 
@@ -769,6 +853,9 @@ in `shipped-templates.test.ts`.
 | `findBatchedEditRules()` — phrasings | "Batching:", "Do not split … edits across separate turns", "emit multiple editor calls together", and the cadence rule stated correctly, which must pass |
 | `auditSystemSection()` — read-back | the system section does not tell the model to read a file back after editing it |
 | `auditSystemSection()` — verbatim copy | the system section is not `default.md` reproduced word for word |
+| `prompt-template-compaction.test.ts` | a dropped placeholder, a collapse, a missing or unrequested section each fail; the strip removes only the named sections; the generator keeps a good one, **cuts a failing one**, strips any it was never asked for, and refuses a section rewrite with compaction |
+| `prompt-template-parser.test.ts` — compaction | `# compaction: <id>` parses, an unknown id is reported, a compaction-only template is valid |
+| `cline-session-factory.test.ts` `resolveCompactionPrompt` | template section > Features setting > built-in (empty) |
 | `auditSystemSection()` — completion rule | the system section does not say a response without tool calls counts as completion |
 
 ---
@@ -837,6 +924,9 @@ false positive blocks a correct answer.
 | Change a **tool description** | the tool's own definition in code, then `sync-default-template.mts` |
 | Change the **base prompt for all providers** | `shared/src/prompt/system.ts` — upstream-owned; expect rebase conflicts |
 | Add a **new model family** | new `<family>.md` + `REVIEW_MODELS` + `shipped-templates.test.ts` name list |
+| Change a **compaction prompt for everyone** | its `DEFAULT_*` constant in `extensions/context/` (table in §2); the Features field placeholder follows it |
+| Change a **compaction prompt for one family** | a `# compaction: <id>` section in that family's template, but only after measuring it (§6) |
+| Add a **compaction id** | `PROMPT_TEMPLATE_COMPACTION_IDS` (shared), `BUILTIN_COMPACTION_PROMPTS`, the core config key, the host's `compactionPromptFor` call and the controller's source map |
 | Fix **non-deterministic routing** | add a `"!pattern"` exclusion or switch to a `model:` match (§3) |
 
 ---

@@ -55,6 +55,7 @@ import {
 	resolveRecencyBounds,
 	seedCalibrationFromTranscript,
 } from "./compaction-shared";
+import { withCouncilWriterPrompt } from "./council-compaction";
 import { DEFAULT_FULL_COMPACTION_PROMPT } from "./full-compaction";
 import {
 	ensurePolykvPool,
@@ -237,14 +238,15 @@ function resolveSummaryPrompt(
 	compaction: CoreCompactionConfig | undefined,
 	keepRecentMessages: boolean,
 ): string {
-	if (keepRecentMessages) {
-		return (
-			compaction?.summaryPrompt?.trim() || DEFAULT_REPLAY_COMPACTION_PROMPT
-		);
-	}
-	return (
-		compaction?.fullSummaryPrompt?.trim() || DEFAULT_FULL_COMPACTION_PROMPT
-	);
+	const prompt = keepRecentMessages
+		? compaction?.summaryPrompt?.trim() || DEFAULT_REPLAY_COMPACTION_PROMPT
+		: compaction?.fullSummaryPrompt?.trim() || DEFAULT_FULL_COMPACTION_PROMPT;
+	// The council splits what this writes at a marker only the writer can
+	// place, so it is asked for exactly when a council will read it -- with
+	// either prompt, and never otherwise.
+	return compaction?.councilEnabled === false
+		? prompt
+		: withCouncilWriterPrompt(prompt, compaction?.councilWriterPrompt);
 }
 
 const BUILTIN_COMPACTION_STRATEGIES = {
@@ -286,6 +288,8 @@ const BUILTIN_COMPACTION_STRATEGIES = {
 			thinkingSummaryEnabled: compaction?.thinkingSummaryEnabled,
 			thinkingSummaryPrompt: compaction?.thinkingSummaryPrompt,
 			councilEnabled: compaction?.councilEnabled,
+			councilCriticPrompt: compaction?.councilCriticPrompt,
+			councilSynthesizerPrompt: compaction?.councilSynthesizerPrompt,
 			// The recency budget is a floor and the message budget a ceiling —
 			// two different bounds, not one clamped by the other. Taking the
 			// smaller of the pair (as this did) collapses them: the floor is
@@ -1296,6 +1300,8 @@ export function createContextCompactionPrepareTurn(
 				// ships when it wins, and the keep-tail summary it replaces
 				// is discarded whether or not a council read it.
 				councilEnabled: userCompaction?.councilEnabled,
+				councilCriticPrompt: userCompaction?.councilCriticPrompt,
+				councilSynthesizerPrompt: userCompaction?.councilSynthesizerPrompt,
 				bounds: resolveRecencyBounds({ preserveRecentTokens: 1 }),
 				estimateMessageTokens,
 				logger: config.logger,

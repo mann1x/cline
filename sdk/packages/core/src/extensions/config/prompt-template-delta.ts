@@ -20,7 +20,8 @@
  */
 
 /** The heading grammar, identical to the parser's. Kept in step by a test. */
-const SECTION_HEADING = /^#[ \t]+(system|tool:[ \t]*([A-Za-z0-9_.-]+))[ \t]*$/;
+const SECTION_HEADING =
+	/^#[ \t]+(system|tool:[ \t]*([A-Za-z0-9_.-]+)|compaction:[ \t]*[A-Za-z0-9_-]+)[ \t]*$/;
 
 export interface TemplateSection {
 	/** The heading line verbatim, or "" for the frontmatter and preamble. */

@@ -45,6 +45,7 @@ import {
 	buildClineSystemPrompt,
 	buildOutputBudgetSection,
 	isClineProvider,
+	type PromptTemplateCompactionId,
 	type RenderedPromptTemplate,
 	resolveOutputBudgetTokens,
 } from "@cline/shared"
@@ -1375,6 +1376,24 @@ export async function buildDelegatedAgentConnection(
 }
 
 /**
+ * One compaction prompt, by precedence: the matched template's
+ * `# compaction: <id>` section, then the Features setting, then "" -- which
+ * leaves the key unset so core uses its built-in prompt.
+ */
+export function resolveCompactionPrompt(
+	templateCompaction: Readonly<Partial<Record<PromptTemplateCompactionId, string>>>,
+	id: PromptTemplateCompactionId,
+	setting: string,
+): string {
+	return templateCompaction[id]?.trim() || setting.trim()
+}
+
+/** `{ [key]: text }` when there is text, `{}` when there is none -- a blank must mean "the built-in". */
+function optionalPrompt<K extends string>(key: K, text: string): Partial<Record<K, string>> {
+	return text ? ({ [key]: text } as Record<K, string>) : {}
+}
+
+/**
  * Build a CoreSessionConfig from the current state.
  *
  * Reads provider settings from the classic StateManager's ApiConfiguration
@@ -1765,6 +1784,23 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	const thinkingCompactionEnabled = stateManager.getGlobalSettingsKey("thinkingCompactionEnabled") ?? true
 	const councilCompactionEnabled = stateManager.getGlobalSettingsKey("councilCompactionEnabled") ?? true
 	const thinkingCompactionPrompt = (stateManager.getGlobalSettingsKey("thinkingCompactionPrompt") ?? "").trim()
+	const councilWriterPrompt = (stateManager.getGlobalSettingsKey("councilWriterPrompt") ?? "").trim()
+	const councilCriticPrompt = (stateManager.getGlobalSettingsKey("councilCriticPrompt") ?? "").trim()
+	const councilSynthesizerPrompt = (stateManager.getGlobalSettingsKey("councilSynthesizerPrompt") ?? "").trim()
+	// A matched template's `# compaction: <id>` section, then the Features
+	// setting, then the built-in. The template is the more specific of the
+	// two -- it was written for this model, usually by translating the very
+	// setting it now outranks -- and deleting the section from the template is
+	// how a user goes back.
+	const templateCompaction = renderedTemplate?.compaction ?? {}
+	const fromTemplate = Object.entries(templateCompaction)
+		.filter(([, text]) => text?.trim())
+		.map(([id]) => id)
+	if (fromTemplate.length > 0) {
+		Logger.log(`[PromptTemplates] ${renderedTemplate?.name} supplies compaction prompts: ${fromTemplate.join(", ")}`)
+	}
+	const compactionPromptFor = (id: PromptTemplateCompactionId, setting: string): string =>
+		resolveCompactionPrompt(templateCompaction, id, setting)
 	// The condenser that replaces an abandoned think with a note of what it
 	// settled. Also defaults on, and stands down by itself where no thinking
 	// budget is known, so the switch is about turning it off deliberately.
@@ -2339,9 +2375,12 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 			councilEnabled: councilCompactionEnabled,
 			thinkingSummaryEnabled: thinkingCompactionEnabled,
 			...(typeof forceFullFromCompaction === "number" ? { forceFullFromCompaction } : {}),
-			...(compactionPrompt ? { summaryPrompt: compactionPrompt } : {}),
-			...(fullCompactionPrompt ? { fullSummaryPrompt: fullCompactionPrompt } : {}),
-			...(thinkingCompactionPrompt ? { thinkingSummaryPrompt: thinkingCompactionPrompt } : {}),
+			...optionalPrompt("summaryPrompt", compactionPromptFor("replay", compactionPrompt)),
+			...optionalPrompt("fullSummaryPrompt", compactionPromptFor("full", fullCompactionPrompt)),
+			...optionalPrompt("thinkingSummaryPrompt", compactionPromptFor("retrospective", thinkingCompactionPrompt)),
+			...optionalPrompt("councilWriterPrompt", compactionPromptFor("council-writer", councilWriterPrompt)),
+			...optionalPrompt("councilCriticPrompt", compactionPromptFor("council-critic", councilCriticPrompt)),
+			...optionalPrompt("councilSynthesizerPrompt", compactionPromptFor("council-synthesizer", councilSynthesizerPrompt)),
 			// A turn that ran out of thinking budget is cut mid-sentence and the
 			// next turn re-derives the same reasoning from the start. Needs the
 			// allowance to detect it, so it stands down on any provider that

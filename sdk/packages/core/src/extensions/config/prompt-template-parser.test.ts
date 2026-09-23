@@ -267,3 +267,79 @@ Just some prose.
 		).toBe(true);
 	});
 });
+
+describe("compaction sections", () => {
+	const raw = [
+		"---",
+		"name: gemma",
+		"match:",
+		"  family: [gemma*]",
+		"---",
+		"",
+		"# system",
+		"Be useful.",
+		"",
+		"# compaction: replay",
+		"Retell the work in your own voice. {{files_read}}",
+		"",
+		"# compaction: council-critic",
+		"Fix the {{half}} half.",
+		"",
+		"# compaction: counsil-critic",
+		"a typo, which must not become a prompt",
+	].join("\n");
+
+	it("reads each known id into the template", () => {
+		const result = parsePromptTemplate({
+			raw,
+			source: "global",
+			fileName: "gemma.md",
+		});
+		expect(result.template?.compaction).toEqual({
+			replay: "Retell the work in your own voice. {{files_read}}",
+			"council-critic": "Fix the {{half}} half.",
+		});
+		expect(result.template?.system).toBe("Be useful.");
+	});
+
+	it("leaves a template without them exactly as it was", () => {
+		const result = parsePromptTemplate({
+			raw: "---\nname: plain\n---\n\n# system\nHi.",
+			source: "global",
+			fileName: "plain.md",
+		});
+		expect(result.template).not.toHaveProperty("compaction");
+	});
+});
+
+describe("rendering compaction sections", () => {
+	it("takes the matched template's sections over the base's, id by id", async () => {
+		const { renderPromptTemplate } = await import("@cline/shared");
+		const parse = (text: string, fileName: string) => {
+			const template = parsePromptTemplate({
+				raw: text,
+				source: "global",
+				fileName,
+			}).template;
+			if (!template) throw new Error(`did not parse ${fileName}`);
+			return template;
+		};
+		const base = parse(
+			"---\nname: default\n---\n\n# system\nBase.\n\n# compaction: full\nBase full.",
+			"default.md",
+		);
+		const gemma = parse(
+			"---\nname: gemma\nmatch:\n  family: [gemma*]\n---\n\n# compaction: replay\nGemma replay.",
+			"gemma.md",
+		);
+		const rendered = renderPromptTemplate([base, gemma], {
+			providerId: "ollama",
+			modelId: "gemma4",
+			family: "gemma4",
+		});
+		expect(rendered?.compaction).toEqual({
+			full: "Base full.",
+			replay: "Gemma replay.",
+		});
+	});
+});

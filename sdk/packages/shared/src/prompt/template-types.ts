@@ -93,6 +93,49 @@ export interface PromptTemplate {
 	system?: string;
 	/** Tool name to replacement description. Tools absent here keep theirs. */
 	tools: Record<string, string>;
+	/**
+	 * Compaction instructions for this model, from `# compaction: <id>`
+	 * sections. Absent ids keep the built-in (or the user's own setting).
+	 */
+	compaction?: PromptTemplateCompactionPrompts;
+}
+
+/**
+ * The compaction instructions a template may carry, by section id.
+ *
+ * Optional in every template and absent from every shipped one: a compaction
+ * prompt decides what survives of a whole session, and a bad one loses it
+ * with nothing downstream to notice. So they are written only on request --
+ * the generator's opt-in -- and reviewed by a person before they are kept.
+ * Deleting a section falls back to the built-in.
+ *
+ * - `replay` -- the summary written when recent turns are kept
+ * - `full` -- the summary written when nothing is kept
+ * - `retrospective` -- the pass over the reasoning being discarded
+ * - `council-writer` -- where the writer puts the `<<<HALFWAY>>>` split
+ * - `council-critic` -- the two reviewers
+ * - `council-synthesizer` -- the pass that joins them
+ */
+export const PROMPT_TEMPLATE_COMPACTION_IDS = [
+	"replay",
+	"full",
+	"retrospective",
+	"council-writer",
+	"council-critic",
+	"council-synthesizer",
+] as const;
+
+export type PromptTemplateCompactionId =
+	(typeof PROMPT_TEMPLATE_COMPACTION_IDS)[number];
+
+export type PromptTemplateCompactionPrompts = Partial<
+	Record<PromptTemplateCompactionId, string>
+>;
+
+export function isPromptTemplateCompactionId(
+	value: string,
+): value is PromptTemplateCompactionId {
+	return (PROMPT_TEMPLATE_COMPACTION_IDS as readonly string[]).includes(value);
 }
 
 /** The session a template is being resolved for. */
@@ -506,6 +549,8 @@ export interface RenderedPromptTemplate {
 	system?: string;
 	/** Already merged: the default's descriptions, overlaid with the custom. */
 	tools: Record<string, string>;
+	/** Already merged, id by id. Absent or empty when no template carries any. */
+	compaction?: PromptTemplateCompactionPrompts;
 }
 
 /**
@@ -543,6 +588,7 @@ export function renderPromptTemplate(
 			overlaid: false,
 			system: only.system,
 			tools: { ...only.tools },
+			compaction: { ...only.compaction },
 		};
 	}
 
@@ -554,6 +600,7 @@ export function renderPromptTemplate(
 		overlaid: base !== undefined,
 		system: matched.system ?? base?.system,
 		tools: { ...base?.tools, ...matched.tools },
+		compaction: { ...base?.compaction, ...matched.compaction },
 	};
 }
 

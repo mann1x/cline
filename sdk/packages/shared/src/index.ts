@@ -400,6 +400,8 @@ export {
 export type {
 	PromptTemplate,
 	PromptTemplateClaim,
+	PromptTemplateCompactionId,
+	PromptTemplateCompactionPrompts,
 	PromptTemplateMatch,
 	PromptTemplateScore,
 	PromptTemplateSource,
@@ -410,7 +412,9 @@ export type {
 export {
 	applyPromptTemplateToTools,
 	DEFAULT_PROMPT_TEMPLATE_NAME,
+	isPromptTemplateCompactionId,
 	matchesPromptPattern,
+	PROMPT_TEMPLATE_COMPACTION_IDS,
 	PROMPT_TEMPLATE_DEFAULT_MARKER,
 	PROMPT_TEMPLATE_EXCLUDE_PREFIX,
 	PROMPT_TEMPLATE_SPECIFICITY,
@@ -429,6 +433,7 @@ export type {
 	ValidatePromptTemplateOptions,
 } from "./prompt/template-validation";
 export {
+	PROMPT_TEMPLATE_COMPACTION_REQUIREMENTS,
 	PROMPT_TEMPLATE_REQUIRED_PLACEHOLDERS,
 	PROMPT_TEMPLATE_SYSTEM_PLACEHOLDERS,
 	validatePromptTemplate,

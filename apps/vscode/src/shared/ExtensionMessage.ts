@@ -187,6 +187,15 @@ export interface ExtensionState {
 	thinkingCompactionPrompt?: string
 	/** The built-in retrospective instruction, so the field can show what it replaces. */
 	defaultThinkingCompactionPrompt?: string
+	/** The council's instructions; empty means the built-in. */
+	councilWriterPrompt?: string
+	defaultCouncilWriterPrompt?: string
+	councilCriticPrompt?: string
+	defaultCouncilCriticPrompt?: string
+	councilSynthesizerPrompt?: string
+	defaultCouncilSynthesizerPrompt?: string
+	/** Whether Generate also rewrites the compaction prompts into the template. */
+	translateCompactionPrompts?: boolean
 	/** Whether a turn that ran out of thinking budget has its reasoning condensed. */
 	cappedThinkingEnabled?: boolean
 	showRequestTimings?: boolean

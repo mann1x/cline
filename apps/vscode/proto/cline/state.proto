@@ -318,6 +318,10 @@ message Settings {
   optional bool strong_nudges_enabled = 213;
   optional bool council_compaction_enabled = 214;
   optional string agent_nodes = 215;
+  optional string council_writer_prompt = 216;
+  optional string council_critic_prompt = 217;
+  optional string council_synthesizer_prompt = 218;
+  optional bool translate_compaction_prompts = 219;
 }
 
 message State {
@@ -510,6 +514,12 @@ message UpdateSettingsRequest {
   // Two reviewers correct the compaction summary against one half of the
   // transcript each, and a synthesiser merges their corrections.
   optional bool council_compaction_enabled = 74;
+  // The council's instructions; blank uses the built-in.
+  optional string council_writer_prompt = 76;
+  optional string council_critic_prompt = 77;
+  optional string council_synthesizer_prompt = 78;
+  // Generate also rewrites the compaction prompts into the template.
+  optional bool translate_compaction_prompts = 79;
 }
 
 // The escalation path's budgets and switches.

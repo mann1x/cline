@@ -619,6 +619,25 @@ export interface CoreCompactionConfig {
 	 */
 	thinkingSummaryPrompt?: string;
 	/**
+	 * Replaces the council's instruction to the replay's writer -- where to put
+	 * the `<<<HALFWAY>>>` line the review splits on. Appended to whichever
+	 * summary prompt runs, and only while {@link councilEnabled} is on. Blank
+	 * or unset uses the default.
+	 */
+	councilWriterPrompt?: string;
+	/**
+	 * Replaces the council reviewers' instruction. `{{half}}`, `{{other_half}}`
+	 * and `{{half_length}}` are substituted; the halves, the record and the
+	 * transcript are appended after it either way.
+	 */
+	councilCriticPrompt?: string;
+	/**
+	 * Replaces the council synthesiser's instruction. `{{original_length}}` and
+	 * `{{max_length}}` are substituted; the answer format and the halves are
+	 * appended after it either way, because the reply is parsed by its headings.
+	 */
+	councilSynthesizerPrompt?: string;
+	/**
 	 * Whether a turn whose reasoning hit the thinking cap has that reasoning
 	 * replaced, for the next request, with a note of what it settled.
 	 *

@@ -292,7 +292,10 @@ export type {
 } from "./extensions/config";
 export {
 	type AuditPromptTemplateProposalArgs,
+	auditCompactionSections,
 	auditPromptTemplateProposal,
+	BUILTIN_COMPACTION_PROMPTS,
+	type CompactionPromptSources,
 	combineUserInstructionConfigServices,
 	createPromptTemplateHooks,
 	createRulesConfigDefinition,
@@ -324,6 +327,7 @@ export {
 	parseSkillConfigFromMarkdown,
 	parseWorkflowConfigFromMarkdown,
 	RULES_CONFIG_DIRECTORY_NAME,
+	resolveCompactionPromptSources,
 	resolvePromptTemplateDirectories,
 	resolveRulesConfigSearchPaths,
 	resolveSessionPromptTemplateFrom,
@@ -332,6 +336,7 @@ export {
 	type SessionPromptTemplateRequest,
 	type SessionPromptTemplateResult,
 	SKILLS_CONFIG_DIRECTORY_NAME,
+	stripCompactionSections,
 	summarizeToolCallSignatures,
 	type ToolCallSignature,
 	UnifiedConfigFileWatcher,
@@ -1008,6 +1013,12 @@ export {
 	// them together.
 	FORCE_FULL_FROM_COMPACTION,
 } from "./extensions/context/compaction-shared";
+export {
+	DEFAULT_COUNCIL_CRITIC_PROMPT,
+	DEFAULT_COUNCIL_SYNTHESIZER_PROMPT,
+	DEFAULT_COUNCIL_WRITER_PROMPT,
+	withCouncilWriterPrompt,
+} from "./extensions/context/council-compaction";
 export {
 	DEFAULT_FULL_COMPACTION_PROMPT,
 	FULL_COMPACTION_SECTIONS,

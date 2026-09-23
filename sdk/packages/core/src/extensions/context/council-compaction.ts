@@ -46,6 +46,115 @@ export const COUNCIL_SYSTEM_PROMPTS = {
 		"You are joining two independently rewritten halves of one replay into a single continuous piece, and revising a retrospective against the result. Each half was rewritten by someone holding the whole record but owning only that half, so both are grounded — and both could be wrong about the other's territory. Your answer is the finished text, not an account of how you produced it.",
 } as const;
 
+/**
+ * What the replay's writer is told when a council will review it: where to
+ * put the line that splits it in two.
+ *
+ * Its own prompt rather than a paragraph of the replay prompt, where it used
+ * to live: it was sent with the council switched off, when nothing reads the
+ * marker, and never with the full-compaction prompt, so a full compaction
+ * reviewed by the council always fell back to a guessed split. It is appended
+ * to whichever writer prompt runs, and only while the council is on.
+ */
+export const DEFAULT_COUNCIL_WRITER_PROMPT = `## Mark the halfway point
+
+Exactly once, put a line containing \`<<<HALFWAY>>>\` and nothing else, at the
+point where you are about half way through the work you are describing.
+
+Measure the half by the **work**, not by the words: the marker goes where the
+first half of what happened ends and the second half begins. It must sit on a
+boundary between steps — after one step and its outcome are complete, never
+inside a step, never between a call and what it returned, and never inside a
+fenced block.
+
+Nothing else about the replay changes. It is one continuous piece of prose that
+happens to carry a marker; do not write headings for the halves, do not
+summarise each half, and do not refer to the marker in the text.`;
+
+/**
+ * The reviewer's instruction, as a template.
+ *
+ * `{{half}}`, `{{other_half}}` and `{{half_length}}` are substituted; the two
+ * halves, the numbered record and the transcript are appended by the harness
+ * after it, so a custom prompt cannot drop the evidence it is asked to check.
+ */
+export const DEFAULT_COUNCIL_CRITIC_PROMPT = `You wrote the replay below from the transcript that follows it. The replay has been cut in two and you own the **{{half}} half**. Someone else is rewriting the {{other_half}} half from the same transcript, at the same time, and the two halves will be joined back into one continuous replay.
+
+So: **return the {{half}} half only.** Do not return the {{other_half}} half, do not restate it, do not summarise it, do not lead into it or round it off. It is shown to you for one reason only — so you can check your own half against it and see where your half ends. Anything of it you reproduce will appear twice in the joined replay, once from you and once from the writer who owns it.
+
+**The user's own words stay.** If your half quotes what the user asked for, that quotation is the most load-bearing text in it — it is the only place the instruction survives at all once the transcript is gone. Keep it word for word. Do not paraphrase it, do not shorten it, and never drop it to make room.
+
+**You are revising a draft, not writing one.** Start from the text below and change what is wrong with it. Do not re-derive your half from the transcript and write it out afresh: a step that is already right is already done, and rewriting it from scratch is how a correct sentence becomes a different, shorter, wronger one.
+
+**About the \`[#7]\` marks.** Those are citations, not step numbers and not part of the prose. Each one names a call in the numbered record, and the harness replaces it with that call before anyone reads this. So:
+
+- **Keep every citation your half already has, exactly as it is, where it is.** Do not renumber them, do not turn them into a numbered list, do not write them out as "Step 7".
+- **Only cite a number that appears in the record.** If your half describes something with no call behind it, leave it uncited — inventing a number attaches your sentence to somebody else's call, or to nothing.
+- If the transcript shows a call your half never mentions, add the step and cite its number from the record.
+
+What to change in your half:
+
+- **Something that happened and is missing.** A call that was made, an answer that came back, an instruction that was given, a conclusion that was reached, an approach that was ruled out. Add it.
+- **Something the transcript contradicts.** A call reported as succeeding that returned an error; a file said to have been read that was refused; a count, a line number or a filename that does not match. Correct it to what the transcript shows.
+- **Something quoted that does not match.** The user's own words, error text, identifiers, paths and numbers have to be character for character what the transcript holds.
+- **Something the {{other_half}} half contradicts.** Ground your half against it: the two are one account of one session, and a fact stated one way in your half and another way there is a fact to settle from the transcript.
+- **Prose that has drifted.** Fix it. If a step is written as a report of itself — past tense, or narrated as something finished — rewrite it as the step and its outcome. First person, present continuous, the voice of someone picking the work back up rather than recounting it.
+
+Write every step as the step itself, then what came back as its own short sentence after it. This holds in the middle of your half and not only at its ends.
+
+**Length.** Your half is {{half_length}} characters. Return something close to that — within about 10% either way. You are correcting and rewriting it, not condensing it: material you drop is material nothing else will carry, because the transcript it came from is being deleted.
+
+Answer with the {{half}} half of the replay and nothing else. No heading, no preamble, no note about what you changed, no marker line. Just the prose.`;
+
+/**
+ * The synthesiser's instruction, as a template.
+ *
+ * `{{original_length}}` and `{{max_length}}` are substituted. The retrospective
+ * paragraph and the answer format come after it from the harness, because the
+ * reply is parsed by its headings, and so do the halves themselves.
+ */
+export const DEFAULT_COUNCIL_SYNTHESIZER_PROMPT = `A replay of your recent work was cut in half, and each half was rewritten against the full transcript by a different writer. Join them back into one continuous replay.
+
+Both writers had the whole transcript, so both halves are grounded in the record — but each owned only its own half, and either could be wrong about the seam between them or about a fact the other half settles differently. Cross-check the two against each other: where they disagree about the same fact, keep the version that quotes the transcript over the version that describes it; where one states something the other contradicts, keep the one that is specific.
+
+What you are producing is one piece of prose, not two halves stacked up. Make the seam invisible: no heading between them, no marker line, no sentence that restarts or recaps. If the two writers both wrote the same step — once at the end of the first half and once at the start of the second — keep it once.
+
+Keep it in the first person and the present continuous tense, every step written as the step and its outcome after it.
+
+**Length.** The replay was {{original_length}} characters before it was rewritten. Aim at that. You may go up to {{max_length}} — about 10% more — and you should use that allowance only where it takes the extra room to keep something that would otherwise be lost. Do not use it to be more thorough for its own sake, and do not come in far under: material dropped here is material nothing else carries.`;
+
+/** Substitute `{{name}}` placeholders; an unknown one is left as written. */
+export function renderCouncilPrompt(
+	template: string,
+	values: Record<string, string | number>,
+): string {
+	return template.replace(/\{\{\s*([a-z_]+)\s*\}\}/g, (whole, name: string) =>
+		name in values ? String(values[name]) : whole,
+	);
+}
+
+/**
+ * A writer prompt with the council's marker instruction, when the council runs.
+ *
+ * Not appended twice: a custom prompt copied from an older default already
+ * carries the section, marker and all.
+ */
+export function withCouncilWriterPrompt(
+	prompt: string,
+	writerPrompt?: string,
+): string {
+	if (/<<<\s*HALFWAY\s*>>>/.test(prompt)) {
+		return prompt;
+	}
+	const section = writerPrompt?.trim() || DEFAULT_COUNCIL_WRITER_PROMPT;
+	// Before the closing "stop" paragraph when the prompt has one, so the last
+	// thing before the transcript is still the instruction not to continue it.
+	const stop = prompt.lastIndexOf("\n\nWrite the replay and stop.");
+	return stop >= 0
+		? `${prompt.slice(0, stop)}\n\n${section}${prompt.slice(stop)}`
+		: `${prompt.trimEnd()}\n\n${section}`;
+}
+
 /** The line the replay carries to say where its first half ends. */
 export const COUNCIL_HALF_MARKER = "<<<HALFWAY>>>";
 
@@ -173,37 +282,19 @@ export function buildCouncilCriticRequest(input: {
 	 * returning 30% of what it was given.
 	 */
 	toolLedgerKey?: string;
+	/** Replaces {@link DEFAULT_COUNCIL_CRITIC_PROMPT}; blank uses it. */
+	instructions?: string;
 }): string {
 	const other = input.half === "first" ? "second" : "first";
-	const target = input.ownReplay.length;
 	return [
-		`You wrote the replay below from the transcript that follows it. The replay has been cut in two and you own the **${input.half} half**. Someone else is rewriting the ${other} half from the same transcript, at the same time, and the two halves will be joined back into one continuous replay.`,
-		"",
-		`So: **return the ${input.half} half only.** Do not return the ${other} half, do not restate it, do not summarise it, do not lead into it or round it off. It is shown to you for one reason only — so you can check your own half against it and see where your half ends. Anything of it you reproduce will appear twice in the joined replay, once from you and once from the writer who owns it.`,
-		"",
-		"**The user's own words stay.** If your half quotes what the user asked for, that quotation is the most load-bearing text in it — it is the only place the instruction survives at all once the transcript is gone. Keep it word for word. Do not paraphrase it, do not shorten it, and never drop it to make room.",
-		"",
-		"**You are revising a draft, not writing one.** Start from the text below and change what is wrong with it. Do not re-derive your half from the transcript and write it out afresh: a step that is already right is already done, and rewriting it from scratch is how a correct sentence becomes a different, shorter, wronger one.",
-		"",
-		"**About the `[#7]` marks.** Those are citations, not step numbers and not part of the prose. Each one names a call in the numbered record, and the harness replaces it with that call before anyone reads this. So:",
-		"",
-		'- **Keep every citation your half already has, exactly as it is, where it is.** Do not renumber them, do not turn them into a numbered list, do not write them out as "Step 7".',
-		"- **Only cite a number that appears in the record.** If your half describes something with no call behind it, leave it uncited — inventing a number attaches your sentence to somebody else's call, or to nothing.",
-		"- If the transcript shows a call your half never mentions, add the step and cite its number from the record.",
-		"",
-		"What to change in your half:",
-		"",
-		"- **Something that happened and is missing.** A call that was made, an answer that came back, an instruction that was given, a conclusion that was reached, an approach that was ruled out. Add it.",
-		"- **Something the transcript contradicts.** A call reported as succeeding that returned an error; a file said to have been read that was refused; a count, a line number or a filename that does not match. Correct it to what the transcript shows.",
-		"- **Something quoted that does not match.** The user's own words, error text, identifiers, paths and numbers have to be character for character what the transcript holds.",
-		`- **Something the ${other} half contradicts.** Ground your half against it: the two are one account of one session, and a fact stated one way in your half and another way there is a fact to settle from the transcript.`,
-		"- **Prose that has drifted.** Fix it. If a step is written as a report of itself — past tense, or narrated as something finished — rewrite it as the step and its outcome. First person, present continuous, the voice of someone picking the work back up rather than recounting it.",
-		"",
-		`Write every step as the step itself, then what came back as its own short sentence after it. This holds in the middle of your half and not only at its ends.`,
-		"",
-		`**Length.** Your half is ${target} characters. Return something close to that — within about 10% either way. You are correcting and rewriting it, not condensing it: material you drop is material nothing else will carry, because the transcript it came from is being deleted.`,
-		"",
-		`Answer with the ${input.half} half of the replay and nothing else. No heading, no preamble, no note about what you changed, no marker line. Just the prose.`,
+		renderCouncilPrompt(
+			input.instructions?.trim() || DEFAULT_COUNCIL_CRITIC_PROMPT,
+			{
+				half: input.half,
+				other_half: other,
+				half_length: input.ownReplay.length,
+			},
+		),
 		"",
 		"---",
 		"",
@@ -254,18 +345,15 @@ export function buildCouncilSynthesizerRequest(input: {
 	thinkingSummary?: string;
 	/** What the whole replay was before either half was rewritten. */
 	originalLength: number;
+	/** Replaces {@link DEFAULT_COUNCIL_SYNTHESIZER_PROMPT}; blank uses it. */
+	instructions?: string;
 }): string {
 	const budget = Math.round(input.originalLength * 1.1);
 	const parts = [
-		"A replay of your recent work was cut in half, and each half was rewritten against the full transcript by a different writer. Join them back into one continuous replay.",
-		"",
-		"Both writers had the whole transcript, so both halves are grounded in the record — but each owned only its own half, and either could be wrong about the seam between them or about a fact the other half settles differently. Cross-check the two against each other: where they disagree about the same fact, keep the version that quotes the transcript over the version that describes it; where one states something the other contradicts, keep the one that is specific.",
-		"",
-		"What you are producing is one piece of prose, not two halves stacked up. Make the seam invisible: no heading between them, no marker line, no sentence that restarts or recaps. If the two writers both wrote the same step — once at the end of the first half and once at the start of the second — keep it once.",
-		"",
-		"Keep it in the first person and the present continuous tense, every step written as the step and its outcome after it.",
-		"",
-		`**Length.** The replay was ${input.originalLength} characters before it was rewritten. Aim at that. You may go up to ${budget} — about 10% more — and you should use that allowance only where it takes the extra room to keep something that would otherwise be lost. Do not use it to be more thorough for its own sake, and do not come in far under: material dropped here is material nothing else carries.`,
+		renderCouncilPrompt(
+			input.instructions?.trim() || DEFAULT_COUNCIL_SYNTHESIZER_PROMPT,
+			{ original_length: input.originalLength, max_length: budget },
+		),
 		"",
 	];
 	if (input.thinkingSummary?.trim()) {
@@ -455,6 +543,10 @@ export async function runCouncilReview(input: {
 	 * relieve, not add to.
 	 */
 	serial?: boolean;
+	/** Replaces the reviewers' instruction; blank uses the default. */
+	criticPrompt?: string;
+	/** Replaces the synthesiser's instruction; blank uses the default. */
+	synthesizerPrompt?: string;
 }): Promise<CouncilReviewResult> {
 	const unchanged: CouncilReviewResult = {
 		summary: input.summary,
@@ -514,6 +606,7 @@ export async function runCouncilReview(input: {
 			otherReplay,
 			transcript,
 			toolLedgerKey: input.toolLedgerKey,
+			instructions: input.criticPrompt,
 		});
 		if (
 			typeof input.maxRequestChars === "number" &&
@@ -596,6 +689,7 @@ export async function runCouncilReview(input: {
 				secondRewritten: secondRewritten ?? halves.second,
 				thinkingSummary: input.thinkingSummary,
 				originalLength,
+				instructions: input.synthesizerPrompt,
 			}),
 		});
 		const merged = parseCouncilSections(mergedText);

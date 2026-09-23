@@ -1,4 +1,7 @@
-import type { PromptTemplate } from "./template-types";
+import type {
+	PromptTemplate,
+	PromptTemplateCompactionId,
+} from "./template-types";
 import {
 	PROMPT_TEMPLATE_DEFAULT_MARKER,
 	PROMPT_TEMPLATE_TOOL_PLACEHOLDERS,
@@ -50,7 +53,8 @@ export type PromptTemplateWarningCode =
 	| "default-marker-in-system"
 	| "unknown-tool"
 	| "duplicate-section"
-	| "empty-section";
+	| "empty-section"
+	| "compaction-missing-token";
 
 export interface PromptTemplateWarning {
 	code: PromptTemplateWarningCode;
@@ -83,6 +87,33 @@ function suggestPlaceholder(
 			candidate.replace(/[{}\s_]/g, "").toLowerCase() === normalized,
 	);
 }
+
+/**
+ * What each compaction section must still contain, and why.
+ *
+ * The harness reads these back out of what the prompt produces or substitutes
+ * them into it, so a rewrite that loses one changes behaviour with nothing
+ * failing: a writer prompt without the marker line leaves the council to guess
+ * where to split, and a reviewer prompt without `{{half}}` never tells the
+ * reviewer which half it owns. Shared by the loader's warnings and the
+ * generator's audit, so the two cannot disagree about what a section needs.
+ */
+export const PROMPT_TEMPLATE_COMPACTION_REQUIREMENTS: Partial<
+	Record<PromptTemplateCompactionId, readonly { token: string; why: string }[]>
+> = {
+	"council-writer": [
+		{
+			token: "<<<HALFWAY>>>",
+			why: "the council splits the replay at that line, and without it guesses",
+		},
+	],
+	"council-critic": [
+		{
+			token: "{{half}}",
+			why: "it is how each reviewer is told which half it owns",
+		},
+	],
+};
 
 export interface ValidatePromptTemplateOptions {
 	/**
@@ -183,6 +214,20 @@ export function validatePromptTemplate(
 				section,
 				message: `There is no tool called '${toolName}', so this section has no effect.`,
 			});
+		}
+	}
+
+	for (const [id, text] of Object.entries(template.compaction ?? {})) {
+		const needs =
+			PROMPT_TEMPLATE_COMPACTION_REQUIREMENTS[id as PromptTemplateCompactionId];
+		for (const need of needs ?? []) {
+			if (!text.includes(need.token)) {
+				warnings.push({
+					code: "compaction-missing-token",
+					section: `compaction: ${id}`,
+					message: `This section never says '${need.token}', and ${need.why}.`,
+				});
+			}
 		}
 	}
 

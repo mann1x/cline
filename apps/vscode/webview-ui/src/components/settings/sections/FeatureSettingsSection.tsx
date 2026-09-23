@@ -223,6 +223,13 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		councilCompactionEnabled,
 		thinkingCompactionPrompt,
 		defaultThinkingCompactionPrompt,
+		translateCompactionPrompts,
+		councilWriterPrompt,
+		defaultCouncilWriterPrompt,
+		councilCriticPrompt,
+		defaultCouncilCriticPrompt,
+		councilSynthesizerPrompt,
+		defaultCouncilSynthesizerPrompt,
 		cappedThinkingEnabled,
 		cappedThinkingPrompt,
 		defaultCappedThinkingPrompt,
@@ -654,6 +661,33 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 
 				<PromptTemplatesSection />
 
+				{/* Under the generator because it changes what Generate asks
+				    for. Off by default: a compaction prompt's answer replaces
+				    the transcript, so a bad translation costs the session's
+				    history, not a turn. What comes back is checked, a section
+				    that fails is cut rather than kept, and the file is the
+				    user's to review before anything uses it. */}
+				<div className="space-y-2 mt-3 mb-4">
+					<div className="flex items-center justify-between w-full">
+						<Label className="text-sm font-medium text-foreground">Translate Compaction Prompts</Label>
+						<Switch
+							checked={translateCompactionPrompts ?? false}
+							className="shrink-0"
+							id="translateCompactionPrompts"
+							onCheckedChange={(checked) => updateSetting("translateCompactionPrompts", checked)}
+							size="lg"
+						/>
+					</div>
+					<p className="text-xs text-muted-foreground">
+						When on, Generate also asks the model to rewrite the compaction prompts &mdash; replay, full,
+						retrospective, and the council's writer, reviewers and synthesizer &mdash; as <code># compaction:</code>{" "}
+						sections of the template, starting from your custom prompts where you set them. A matched template's
+						sections replace the prompts below for that model. A section that drops a placeholder or a marker, or
+						shrinks to under half its source, is removed and the built-in prompt is used. Review the generated file
+						before relying on it; delete a section to fall back.
+					</p>
+				</div>
+
 				{/* Last, because it is the longest field on the page and the one
 				    most people never touch.
 
@@ -855,6 +889,64 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 						compaction and cannot fail one. Applies to compactions you run yourself as well as automatic ones, which
 						is why it stays available with Auto Compact off.
 					</p>
+					{/* The council's three instructions, each replaceable like the
+					    prompts above. What the harness depends on is appended by it
+					    -- the halves, the record, the transcript, the answer format --
+					    so a custom prompt changes what is asked and not what is
+					    checked. A matched prompt template's `# compaction:` section
+					    outranks these. */}
+					{(
+						[
+							{
+								key: "councilWriterPrompt",
+								label: "Council: Writer Instruction",
+								help: "Added to the compaction prompt while the council is on: where the writer puts the line the council splits on. Keep the marker line <<<HALFWAY>>> in it, or the council guesses the split.",
+								value: councilWriterPrompt,
+								defaultValue: defaultCouncilWriterPrompt,
+							},
+							{
+								key: "councilCriticPrompt",
+								label: "Council: Reviewer Prompt",
+								help: "What each of the two reviewers is told. {{half}}, {{other_half}} and {{half_length}} are substituted; the two halves, the call record and the transcript are appended automatically.",
+								value: councilCriticPrompt,
+								defaultValue: defaultCouncilCriticPrompt,
+							},
+							{
+								key: "councilSynthesizerPrompt",
+								label: "Council: Synthesizer Prompt",
+								help: "What the pass that joins the two halves is told. {{original_length}} and {{max_length}} are substituted; the retrospective step, the answer format and the halves are appended automatically.",
+								value: councilSynthesizerPrompt,
+								defaultValue: defaultCouncilSynthesizerPrompt,
+							},
+						] as const
+					).map((field) => (
+						<div className="space-y-2 pt-1" key={field.key}>
+							<Label className="text-sm font-medium text-foreground">{field.label}</Label>
+							<p className="text-xs text-muted-foreground">{field.help} Leave empty for the built-in prompt.</p>
+							<DebouncedTextArea
+								disabled={councilCompactionEnabled === false}
+								initialValue={field.value ?? ""}
+								maxRows={24}
+								minRows={3}
+								onChange={(value) => updateSetting(field.key, value)}
+								placeholder={field.defaultValue}
+							/>
+							<div className="flex flex-wrap items-start gap-2">
+								<LoadDefaultPromptButton
+									currentValue={field.value}
+									defaultValue={field.defaultValue}
+									disabled={councilCompactionEnabled === false}
+									label={field.label}
+									onLoad={(value) => updateSetting(field.key, value)}
+								/>
+								{field.value?.trim() ? (
+									<VSCodeButton appearance="secondary" onClick={() => updateSetting(field.key, "")}>
+										Reset to default
+									</VSCodeButton>
+								) : null}
+							</div>
+						</div>
+					))}
 				</div>
 
 				{/* The third thing that rewrites reasoning, and the only one that

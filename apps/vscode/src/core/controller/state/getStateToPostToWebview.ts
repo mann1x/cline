@@ -6,6 +6,9 @@
 
 import {
 	DEFAULT_CAPPED_THINKING_PROMPT,
+	DEFAULT_COUNCIL_CRITIC_PROMPT,
+	DEFAULT_COUNCIL_SYNTHESIZER_PROMPT,
+	DEFAULT_COUNCIL_WRITER_PROMPT,
 	DEFAULT_FULL_COMPACTION_PROMPT,
 	DEFAULT_REPLAY_COMPACTION_PROMPT,
 	DEFAULT_THINKING_COMPACTION_PROMPT,
@@ -61,6 +64,10 @@ export async function getStateToPostToWebview(controller: {
 	const thinkingCompactionEnabled = stateManager.getGlobalSettingsKey("thinkingCompactionEnabled")
 	const councilCompactionEnabled = stateManager.getGlobalSettingsKey("councilCompactionEnabled")
 	const thinkingCompactionPrompt = stateManager.getGlobalSettingsKey("thinkingCompactionPrompt")
+	const councilWriterPrompt = stateManager.getGlobalSettingsKey("councilWriterPrompt")
+	const councilCriticPrompt = stateManager.getGlobalSettingsKey("councilCriticPrompt")
+	const councilSynthesizerPrompt = stateManager.getGlobalSettingsKey("councilSynthesizerPrompt")
+	const translateCompactionPrompts = stateManager.getGlobalSettingsKey("translateCompactionPrompts")
 	const cappedThinkingEnabled = stateManager.getGlobalSettingsKey("cappedThinkingEnabled")
 	const showRequestTimings = stateManager.getGlobalSettingsKey("showRequestTimings")
 	const updateChannel = stateManager.getGlobalSettingsKey("updateChannel")
@@ -184,6 +191,13 @@ export async function getStateToPostToWebview(controller: {
 		councilCompactionEnabled,
 		thinkingCompactionPrompt,
 		defaultThinkingCompactionPrompt: DEFAULT_THINKING_COMPACTION_PROMPT,
+		councilWriterPrompt,
+		defaultCouncilWriterPrompt: DEFAULT_COUNCIL_WRITER_PROMPT,
+		councilCriticPrompt,
+		defaultCouncilCriticPrompt: DEFAULT_COUNCIL_CRITIC_PROMPT,
+		councilSynthesizerPrompt,
+		defaultCouncilSynthesizerPrompt: DEFAULT_COUNCIL_SYNTHESIZER_PROMPT,
+		translateCompactionPrompts,
 		cappedThinkingEnabled,
 		showRequestTimings,
 		updateChannel,

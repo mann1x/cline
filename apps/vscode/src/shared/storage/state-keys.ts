@@ -360,6 +360,15 @@ const USER_SETTINGS_FIELDS = {
 	thinkingCompactionEnabled: { default: true as boolean },
 	councilCompactionEnabled: { default: true as boolean },
 	thinkingCompactionPrompt: { default: "" as string },
+	// The council's three instructions. Blank uses the built-in; a matched
+	// prompt template's `# compaction: council-*` section outranks both.
+	councilWriterPrompt: { default: "" as string },
+	councilCriticPrompt: { default: "" as string },
+	councilSynthesizerPrompt: { default: "" as string },
+	// Whether "Generate" also has the model rewrite the compaction prompts
+	// into the template. Off: a compaction prompt decides what survives of a
+	// session, and a bad one loses it with nothing downstream to notice.
+	translateCompactionPrompts: { default: false as boolean },
 	/**
 	 * The condenser that replaces a turn's abandoned reasoning with a note of
 	 * what it settled, when that reasoning ran out of thinking budget.

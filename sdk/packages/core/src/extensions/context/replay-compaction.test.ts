@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+	DEFAULT_COUNCIL_WRITER_PROMPT,
+	withCouncilWriterPrompt,
+} from "./council-compaction";
+import {
 	cutEchoedTranscript,
 	DEFAULT_REPLAY_COMPACTION_PROMPT,
 	REPLAY_BLOCK_LIMITS,
@@ -17,12 +21,29 @@ describe("the replay speaks in the present", () => {
 	// The council splits the replay at a boundary only the writer can place:
 	// it knows where one stretch of work ends, and the harness would have to
 	// guess from prose.
-	it("asks for the halfway marker, on a step boundary", () => {
-		expect(DEFAULT_REPLAY_COMPACTION_PROMPT).toContain("<<<HALFWAY>>>");
-		expect(DEFAULT_REPLAY_COMPACTION_PROMPT).toContain("Exactly once");
-		expect(DEFAULT_REPLAY_COMPACTION_PROMPT).toContain(
-			"boundary between steps",
+	it("asks for the halfway marker, on a step boundary, when a council reads it", () => {
+		expect(DEFAULT_COUNCIL_WRITER_PROMPT).toContain("<<<HALFWAY>>>");
+		expect(DEFAULT_COUNCIL_WRITER_PROMPT).toContain("Exactly once");
+		expect(DEFAULT_COUNCIL_WRITER_PROMPT).toContain("boundary between steps");
+		// Not part of the replay prompt itself: with the council off nothing
+		// reads the marker.
+		expect(DEFAULT_REPLAY_COMPACTION_PROMPT).not.toContain("<<<HALFWAY>>>");
+		const withCouncil = withCouncilWriterPrompt(
+			DEFAULT_REPLAY_COMPACTION_PROMPT,
 		);
+		expect(withCouncil).toContain("<<<HALFWAY>>>");
+		// Still the last instruction before the transcript: do not continue it.
+		expect(
+			withCouncil.trimEnd().endsWith("it is what you are replacing."),
+		).toBe(true);
+	});
+
+	it("does not ask twice, and takes a custom writer instruction", () => {
+		const once = withCouncilWriterPrompt(DEFAULT_REPLAY_COMPACTION_PROMPT);
+		expect(withCouncilWriterPrompt(once)).toBe(once);
+		expect(
+			withCouncilWriterPrompt("Summarise.", "Put the split at <<<HALFWAY>>>."),
+		).toBe("Summarise.\n\nPut the split at <<<HALFWAY>>>.");
 	});
 
 	it("asks for present continuous and not past", () => {

@@ -432,6 +432,10 @@ export async function runAgenticCompaction(options: {
 	 * every path through {@link runCouncilReview} returns what it was given.
 	 */
 	councilEnabled?: boolean;
+	/** Replaces the council reviewers' instruction; blank uses the default. */
+	councilCriticPrompt?: string;
+	/** Replaces the council synthesiser's instruction; blank uses the default. */
+	councilSynthesizerPrompt?: string;
 	/**
 	 * Whether a recency tail survives the compaction. Defaults to true.
 	 *
@@ -974,16 +978,18 @@ export async function runAgenticCompaction(options: {
 					toolLedgerKey: ledgerEnabled
 						? renderToolLedgerKey(ledgerEntries)
 						: undefined,
-					generate: (call) => (
-						progress.step("review"),
-						generateSummary({
+					generate: (call) => {
+						progress.step("review");
+						return generateSummary({
 							providerConfig: summarizerProviderConfig,
 							request: call.request,
 							systemPrompt: call.systemPrompt,
 							logger: options.logger,
-						}).then((result) => cutEchoedTranscript(result.text).text)
-					),
+						}).then((result) => cutEchoedTranscript(result.text).text);
+					},
 					logger: options.logger,
+					criticPrompt: options.councilCriticPrompt,
+					synthesizerPrompt: options.councilSynthesizerPrompt,
 				});
 	const thinkingSummary = reviewed.thinkingSummary;
 	// After the council, so a citation survives being rewritten: the writers

@@ -1,0 +1,198 @@
+import { describe, expect, it } from "vitest";
+import {
+	auditCompactionSections,
+	BUILTIN_COMPACTION_PROMPTS,
+	buildCompactionTranslationRequest,
+	resolveCompactionPromptSources,
+	stripCompactionSections,
+} from "./prompt-template-compaction";
+import { parsePromptTemplate } from "./prompt-template-parser";
+import { generatePromptTemplate } from "./prompt-template-review";
+
+const CRITIC =
+	"You own the {{half}} half; the {{other_half}} half is someone else's. Stay near {{half_length}} characters. Keep every path, every error, every decision.";
+
+const TEMPLATE = (compaction: string) =>
+	[
+		"---",
+		"name: sample",
+		"match:",
+		'  family: ["sample*"]',
+		"---",
+		"",
+		"# system",
+		"",
+		"System words.",
+		"",
+		"# tool: grep",
+		"",
+		"Grep words.",
+		"",
+		compaction,
+	].join("\n");
+
+describe("the compaction sources", () => {
+	it("are the user's prompt where set and the built-in one elsewhere", () => {
+		const sources = resolveCompactionPromptSources({
+			"council-critic": "  mine  ",
+			replay: "   ",
+		});
+		expect(sources["council-critic"]).toBe("mine");
+		expect(sources.replay).toBe(BUILTIN_COMPACTION_PROMPTS.replay);
+		expect(Object.keys(sources)).toHaveLength(6);
+	});
+
+	it("ask for nothing when none are given", () => {
+		expect(buildCompactionTranslationRequest({})).toBe("");
+		const asked = buildCompactionTranslationRequest({
+			"council-critic": CRITIC,
+		});
+		expect(asked).toContain("=== council-critic ===");
+		expect(asked).toContain(CRITIC);
+		expect(asked).not.toContain("=== replay ===");
+	});
+});
+
+describe("auditing a translated compaction prompt", () => {
+	const sources = { "council-critic": CRITIC };
+
+	it("passes a rewrite that keeps the placeholders and most of the length", () => {
+		const result = auditCompactionSections(
+			{
+				"council-critic":
+					"Rewrite the {{half}} half only; {{other_half}} belongs to another writer. Aim for {{half_length}} characters and keep every path and error.",
+			},
+			sources,
+		);
+		expect(result.problems).toEqual([]);
+		expect(result.failing.size).toBe(0);
+	});
+
+	it("fails a dropped placeholder, naming it", () => {
+		const result = auditCompactionSections(
+			{
+				"council-critic":
+					"Rewrite the {{half}} half only; the other one belongs to another writer. Keep every path, every error and every decision you made.",
+			},
+			sources,
+		);
+		expect([...result.failing]).toEqual(["council-critic"]);
+		expect(result.problems.join("\n")).toContain("`{{other_half}}`");
+	});
+
+	it("fails a collapse, however well it reads", () => {
+		const result = auditCompactionSections(
+			{ "council-critic": "{{half}} {{other_half}} {{half_length}}" },
+			sources,
+		);
+		expect(result.problems.join("\n")).toContain("under half the length");
+	});
+
+	it("fails a section that is missing, and one nobody asked for", () => {
+		const result = auditCompactionSections(
+			{ replay: "x".repeat(500) },
+			sources,
+		);
+		expect([...result.failing].sort()).toEqual(["council-critic", "replay"]);
+	});
+});
+
+describe("stripping compaction sections", () => {
+	it("removes only the named ones and leaves the rest of the file alone", () => {
+		const raw = TEMPLATE(
+			"# compaction: council-critic\n\nCritic.\n\n# compaction: replay\n\nReplay.\n",
+		);
+		const stripped = stripCompactionSections(raw, new Set(["council-critic"]));
+		expect(stripped).not.toContain("Critic.");
+		expect(stripped).toContain("# compaction: replay\n\nReplay.");
+		expect(stripped).toContain(
+			"# tool: grep\n\nGrep words.\n\n# compaction: replay",
+		);
+		const parsed = parsePromptTemplate({
+			raw: stripped,
+			source: "global",
+			fileName: "s.md",
+		});
+		expect(parsed.template?.compaction).toEqual({ replay: "Replay." });
+	});
+});
+
+describe("the generator with compaction prompts", () => {
+	const run = (reply: string, compactionPrompts?: Record<string, string>) =>
+		generatePromptTemplate({
+			defaultTemplate: TEMPLATE(""),
+			providerId: "ollama",
+			modelId: "sample:cloud",
+			family: "sample",
+			knownToolNames: ["grep"],
+			attempts: 1,
+			fileName: "sample.md",
+			...(compactionPrompts ? { compactionPrompts } : {}),
+			complete: async (messages) => {
+				seen.push(messages[0]?.content ?? "");
+				return reply;
+			},
+		});
+	let seen: string[] = [];
+
+	it("asks for them, keeps a good one and reports it", async () => {
+		seen = [];
+		const good =
+			"Rewrite the {{half}} half only; {{other_half}} belongs to another writer. Aim for {{half_length}} characters and keep every path and error.";
+		const result = await run(
+			TEMPLATE(`# compaction: council-critic\n\n${good}\n`),
+			{
+				"council-critic": CRITIC,
+			},
+		);
+		expect(seen[0]).toContain("# compaction: <id>");
+		expect(result.compaction).toEqual({
+			kept: ["council-critic"],
+			removed: [],
+		});
+		expect(result.raw).toContain(good);
+	});
+
+	// The one outcome that must never happen is a broken compaction prompt
+	// written to disk as the best attempt.
+	it("removes one that still fails, and says so", async () => {
+		const result = await run(
+			TEMPLATE("# compaction: council-critic\n\nShort {{half}}.\n"),
+			{ "council-critic": CRITIC },
+		);
+		expect(result.raw).not.toContain("# compaction:");
+		expect(result.compaction).toEqual({
+			kept: [],
+			removed: ["council-critic"],
+		});
+		expect(result.audit.template?.compaction).toBeUndefined();
+		expect(result.audit.problems.join("\n")).toContain(
+			"Removed '# compaction: council-critic'",
+		);
+	});
+
+	it("does not ask, and strips any it is sent, when not opted in", async () => {
+		seen = [];
+		const result = await run(
+			TEMPLATE(`# compaction: replay\n\n${"Keep everything. ".repeat(40)}\n`),
+		);
+		expect(seen[0]).not.toContain("# compaction: <id>");
+		expect(result.raw).not.toContain("# compaction:");
+		expect(result.compaction).toBeUndefined();
+	});
+
+	it("refuses to combine them with a section rewrite", async () => {
+		await expect(
+			generatePromptTemplate({
+				defaultTemplate: TEMPLATE(""),
+				familyTemplate: TEMPLATE(""),
+				providerId: "ollama",
+				modelId: "sample:cloud",
+				knownToolNames: ["grep"],
+				onlyTools: ["grep"],
+				compactionPrompts: { "council-critic": CRITIC },
+				complete: async () => "",
+			}),
+		).rejects.toThrow("cannot also translate");
+	});
+});

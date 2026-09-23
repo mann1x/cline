@@ -181,10 +181,23 @@ const PromptTemplatesSection = () => {
 		setGenerated(undefined)
 		try {
 			const result = await FileServiceClient.generatePromptTemplate(EmptyRequest.create({}))
+			// Named, because these are the sections that can lose a session's
+			// history: the user has to know they are in the file to review them.
+			const compaction = [
+				...(result.compactionKept.length > 0
+					? [`It carries compaction prompts for ${result.compactionKept.join(", ")}: review them before relying on it.`]
+					: []),
+				...(result.compactionRemoved.length > 0
+					? [
+							`Removed failing compaction prompts for ${result.compactionRemoved.join(", ")}; those use the built-in prompt.`,
+						]
+					: []),
+			].join(" ")
 			setGenerated(
-				result.problems.length > 0
+				(result.problems.length > 0
 					? `Generated ${result.name} in ${result.attempts} attempt(s), but it still has problems: ${result.problems.join(" ")}`
-					: `Generated ${result.name} in ${result.attempts} attempt(s). Edit it to review what the model proposed.`,
+					: `Generated ${result.name} in ${result.attempts} attempt(s). Edit it to review what the model proposed.`) +
+					(compaction ? ` ${compaction}` : ""),
 			)
 			setError(undefined)
 			await refresh()

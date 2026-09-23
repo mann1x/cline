@@ -97,21 +97,6 @@ Do not invent anything you are not sure of. In particular, do not report a resul
 
 Do not write instructions to yourself to rewrite or restore content that this replay does not itself contain — you would be reconstructing from memory something that is still on disk, and producing a worse version of it.
 
-## Mark the halfway point
-
-Exactly once, put a line containing \`<<<HALFWAY>>>\` and nothing else, at the
-point where you are about half way through the work you are describing.
-
-Measure the half by the **work**, not by the words: the marker goes where the
-first half of what happened ends and the second half begins. It must sit on a
-boundary between steps — after one step and its outcome are complete, never
-inside a step, never between a call and what it returned, and never inside a
-fenced block.
-
-Nothing else about the replay changes. It is one continuous piece of prose that
-happens to carry a marker; do not write headings for the halves, do not
-summarise each half, and do not refer to the marker in the text.
-
 Write the replay and stop. Do not continue the transcript that follows these instructions, and do not copy any part of it back: it is what you are replacing.`;
 
 /**

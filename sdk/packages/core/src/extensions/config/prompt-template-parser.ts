@@ -1,6 +1,9 @@
 import {
+	isPromptTemplateCompactionId,
 	type PromptTemplate,
 	type PromptTemplateClaim,
+	type PromptTemplateCompactionId,
+	type PromptTemplateCompactionPrompts,
 	type PromptTemplateMatch,
 	type PromptTemplateSource,
 	type PromptTemplateWarning,
@@ -65,7 +68,8 @@ export type PromptTemplateParseResult =
 	| { template?: undefined; error: string; warnings?: undefined };
 
 /** `# tool: <name>` or `# system`, at the start of a line. */
-const SECTION_HEADING = /^#[ \t]+(system|tool:[ \t]*([A-Za-z0-9_.-]+))[ \t]*$/;
+const SECTION_HEADING =
+	/^#[ \t]+(system|tool:[ \t]*([A-Za-z0-9_.-]+)|compaction:[ \t]*([A-Za-z0-9_-]+))[ \t]*$/;
 
 function normalizePatternList(
 	value: unknown,
@@ -151,6 +155,7 @@ function parseMatchBlock(record: Record<string, unknown>): PromptTemplateMatch {
 function parseSections(body: string): {
 	system?: string;
 	tools: Record<string, string>;
+	compaction: PromptTemplateCompactionPrompts;
 	unknownHeadings: string[];
 	duplicateSections: string[];
 } {
@@ -164,7 +169,12 @@ function parseSections(body: string): {
 	const duplicateSections: string[] = [];
 	let system: string | undefined;
 
-	let current: { kind: "system" } | { kind: "tool"; name: string } | undefined;
+	const compaction: PromptTemplateCompactionPrompts = {};
+	let current:
+		| { kind: "system" }
+		| { kind: "tool"; name: string }
+		| { kind: "compaction"; id: PromptTemplateCompactionId }
+		| undefined;
 	let buffer: string[] = [];
 
 	const flush = () => {
@@ -179,6 +189,11 @@ function parseSections(body: string): {
 					duplicateSections.push("system");
 				}
 				system = text;
+			} else if (current.kind === "compaction") {
+				if (compaction[current.id] !== undefined) {
+					duplicateSections.push(`compaction: ${current.id}`);
+				}
+				compaction[current.id] = text;
 			} else {
 				if (tools[current.name] !== undefined) {
 					duplicateSections.push(`tool: ${current.name}`);
@@ -191,11 +206,15 @@ function parseSections(body: string): {
 
 	for (const line of lines) {
 		const heading = line.match(SECTION_HEADING);
-		if (heading) {
+		// A compaction section for an id that does not exist falls through to
+		// the unknown-heading report below, like any other typo.
+		if (heading && (!heading[3] || isPromptTemplateCompactionId(heading[3]))) {
 			flush();
-			current = heading[2]
-				? { kind: "tool", name: heading[2] }
-				: { kind: "system" };
+			current = heading[3]
+				? { kind: "compaction", id: heading[3] as PromptTemplateCompactionId }
+				: heading[2]
+					? { kind: "tool", name: heading[2] }
+					: { kind: "system" };
 			continue;
 		}
 		// Any other top-level heading ends the section and is reported, so a
@@ -210,7 +229,7 @@ function parseSections(body: string): {
 	}
 	flush();
 
-	return { system, tools, unknownHeadings, duplicateSections };
+	return { system, tools, compaction, unknownHeadings, duplicateSections };
 }
 
 export function parsePromptTemplate(
@@ -252,9 +271,13 @@ export function parsePromptTemplate(
 		};
 	}
 
-	const { system, tools, unknownHeadings, duplicateSections } =
+	const { system, tools, compaction, unknownHeadings, duplicateSections } =
 		parseSections(body);
-	if (system === undefined && Object.keys(tools).length === 0) {
+	if (
+		system === undefined &&
+		Object.keys(tools).length === 0 &&
+		Object.keys(compaction).length === 0
+	) {
 		return {
 			error:
 				unknownHeadings.length > 0
@@ -273,6 +296,7 @@ export function parsePromptTemplate(
 		match,
 		system,
 		tools,
+		...(Object.keys(compaction).length > 0 ? { compaction } : {}),
 	};
 
 	return {
