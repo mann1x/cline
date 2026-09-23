@@ -6,17 +6,29 @@ match:
 
 <!-- PROVENANCE -- written by scripts/review-prompt-templates.mts, not by the model.
 
-     Sections `grep`, `sed`, `awk`, `run_commands` written by minimax-m3:cloud (Ollama family `minimax-m3`) on 2026-09-12.
+     Sections `ask_question`, `spawn_agent` written by minimax-m3-tpl:latest (family declared as `minimax`, because the tag reports none of its own) on 2026-09-23.
+     Every other section is as it was. Before this run:
 
-     Every other section is unchanged. Written by minimax-m3-tpl:latest (family declared as `minimax`, because the tag reports none of its own) on 2026-09-12.
-     Run, with its log: prompt-reviews/regen/20260912-2324-minimax-m3-cloud
+       Sections `grep`, `sed`, `awk`, `run_commands` written by minimax-m3:cloud (Ollama family `minimax-m3`) on 2026-09-12.
+
+       Every other section is unchanged. Written by minimax-m3-tpl:latest (family declared as `minimax`, because the tag reports none of its own) on 2026-09-12.
+       Run, with its log: prompt-reviews/regen/20260912-2324-minimax-m3-cloud
+
+     Run, with its log: prompt-reviews/regen/20260923-1650-minimax-m3-tpl-latest
 
      Sampler asked for by the generator, overriding the model's own:
-       temperature 0.2
+       temperature 0.7
 
      Sampler the tag sources (`/api/show`), which applies to every key
      the request above does not set:
-       (none reported)
+       frequency_penalty              0.1
+       num_ctx                        262144
+       num_predict                    131072
+       presence_penalty               0.1
+       repeat_last_n                  2048
+       repeat_penalty                 1.1
+       temperature                    1
+       top_p                          0.95
 
      The script hands a model the prompt it would really receive, names the
      failures observed with models in its family, and asks for the version it
@@ -159,9 +171,12 @@ Rules: use `@@` markers when extra context is needed to disambiguate repeated bl
 **Output:** a single `{query, result, success, error?}` object covering the whole patch. `result` says which files were added, updated, moved or deleted. A patch that did not apply — usually because its context lines no longer match the file — sets `success: false` and says so in `error`; re-read the file and rebuild the patch from what is actually there rather than resending it.
 
 # tool: ask_question
+
 Ask the user a clarifying question. Call shape: `ask_question(question: string, options: [string])`. Provide 2–5 options as an array. Never include an option to toggle to Act mode.
 
 Use it when you actually need an answer to proceed. Do not use it to declare intent, and do not use it as a substitute for acting.
+
+Before you send it, consider whether one of the options is the one you would pick. If it is, end that option with ` (recommended)` and give the reason in a sentence in the question text, where there is room for it. Mark at most one; marking several says nothing. If the options are genuinely different choices and you have no basis to prefer one — a matter of the user's taste, or a decision that turns on something only they know — recommend none. A recommendation you had to invent is worse than none.
 
 **Output:** the user's answer, as plain text — one of the options you offered, or whatever they wrote instead. Act on it in the same turn; the answer arriving is not a reason to stop.
 
@@ -292,11 +307,16 @@ Switching to act mode immediately starts executing the plan, so only call this a
 **Output:** a one-line confirmation, as plain text. This call ends the current run and the next one starts in act mode with the file and command tools available, so it is a handover, not a failure — carry on with the plan there.
 
 # tool: spawn_agent
-Spawn a sub-agent with a custom system prompt for specialised tasks. Call shape: `spawn_agent(systemPrompt: string, task: string, name?: string)`.
+
+Spawn a sub-agent with a custom system prompt for specialised tasks. Call shape: `spawn_agent(knowledge?: {files?, text?}, instructions?: string, systemPrompt?: string, task?: string, name?: string, agents?: [{name?, task, instructions?, type?}])`.
 
 Use it when delegating work that benefits from focused expertise.
 
-**Output:** `{text, iterations, finishReason, usage: {inputTokens, outputTokens}}`. `text` is the sub-agent's final answer and the only part you need: it worked in its own context, so nothing it read or edited is visible to you except through `text`. It has already finished by the time you see this — there is nothing to poll and nothing to await. Give each sub-agent a short `name`: when several run at once it is the only thing telling their progress apart on screen.
+**Structure the work in three parts, from most shared to least:** `knowledge` (files and notes the agents need — identical across them), `instructions` (the role — identical for every agent of the same kind), and each agent's `task` (what it alone does). Shared parts are loaded once for all agents that share them, so many agents cost little more than one. An entry in `agents` may name a configured agent in `type`; it then runs with that agent's own role and model.
+
+**Launching many is safe: the harness paces them.** Each agent starts when a node has room for it and waits in a queue until then, so asking for more than can run at once overloads nothing — it only means some start later. Do not hold back or split the work into waves: make every call the job needs in one message, and each returns its own result when its agent finishes.
+
+**Output:** `{text, iterations, finishReason, usage: {inputTokens, outputTokens}}` for a single agent; `{results: [{name, text, finishReason, error?}], usage}` for `agents`. `text` is the sub-agent's final answer and the only part you need: it worked in its own context, so nothing it read or edited is visible to you except through `text`. It has already finished by the time you see this — there is nothing to poll and nothing to await. Give each sub-agent a short `name`: when several run at once it is the only thing telling their progress apart on screen.
 
 # tool: team_spawn_teammate
 {{DEFAULT}}

@@ -7,13 +7,23 @@ match:
 
 <!-- PROVENANCE -- written by scripts/review-prompt-templates.mts, not by the model.
 
-     Sections `grep`, `sed`, `awk`, `run_commands` written by qwen3.5:397b-cloud (Ollama family `qwen3.5`) on 2026-09-12.
+     Sections `check_file` written by qwen3.5:397b-cloud (Ollama family `qwen3.5`) on 2026-09-23.
+     One passage of `check_file` edited by hand on 2026-09-23: the model's
+     text kept the retired claim that the scan names the *opening* bracket,
+     and told the reader to fix every listed line "in a single edit", which
+     the one-edit-at-a-time rule forbids. Both restated to match the built-in.
 
-     Every other section is unchanged. Written by qwen3.5:397b-cloud (Ollama family `qwen3.5`) on 2026-09-12.
-     Run, with its log: prompt-reviews/regen/20260912-2324-qwen3.5-397b-cloud
+     Every other section is as it was. Before this run:
+
+       Sections `grep`, `sed`, `awk`, `run_commands` written by qwen3.5:397b-cloud (Ollama family `qwen3.5`) on 2026-09-12.
+
+       Every other section is unchanged. Written by qwen3.5:397b-cloud (Ollama family `qwen3.5`) on 2026-09-12.
+       Run, with its log: prompt-reviews/regen/20260912-2324-qwen3.5-397b-cloud
+
+     Run, with its log: prompt-reviews/regen/20260923-1650-qwen3.5-397b-cloud
 
      Sampler asked for by the generator, overriding the model's own:
-       temperature 0.2
+       temperature 0.7
 
      Sampler the tag sources (`/api/show`), which applies to every key
      the request above does not set:
@@ -235,15 +245,24 @@ Execute shell commands for builds, tests, git operations, package management, or
 {{DEFAULT}}
 
 # tool: check_file
-Check files for errors and warnings using the language servers (LSP). **This is the linter** — and the type checker, and the problems a Problems panel would list. Whatever the question calls it, ask here. These are live and follow your edits: a result is current as of the moment you ask, so a problem still reported after an edit is still there. There is no language server to restart from here.
 
-- **Usage**: Whenever the question is about the linter, lint errors, diagnostics, problems, type errors or compile errors — "how many errors is the linter reporting?", "is it clean now?" — call this. You have no other way to know, and the report from an earlier edit is already out of date. Call this after editing a file to validate syntax/types before running heavy builds. It answers what `tsc`, `eslint`, `ruff`, etc., would tell you, but instantly.
-- **Parallelism**: Pass all files to check in the `paths` array.
-- **Arguments**: `paths` is an array of strings.
-- **Output**: Plain text listing problems per file (`file:line:column severity message`). If no problems are reported, the file is valid according to the language servers. Note: This does not run tests or builds; use `run_commands` for those.
-- **Ask this and the run together**: call this and the thing that executes the code — `run_commands`, or `browser` for a page — in the **same turn**, not one or the other. Running it says *that* something is broken and where the parser gave up; this says *which line* to edit. Each is half the answer, and the half you skip is the half you will spend the turn guessing at.
-When a file's brackets do not match, a `Delimiter scan` section names the line to edit and how many brackets that line is out by, one line per place the trouble starts — fix every line it lists in one edit. A parse error is always reported where the parser gave up, which is the closing bracket; the line named here is the one the error cannot name. It runs even when the editor reported nothing, which is the only report you get for script inside an `.html` file. Where one edit clears the first crossing, the scan names that edit and says it checked it — that means the edit was applied to a copy and the file scanned again before you were shown it, so it is a measured result and not a suggestion. Make it.
-- **This section is the answer, not a second opinion**: it is the measurement, and your own bracket count is the estimate. Where the two disagree, it is the count that is wrong — measured twice, a model called this scan a false positive, counted by hand instead, and was wrong both times, at over 30,000 thinking tokens a turn. If you still doubt it, do not count: make the edit it names and run the program. That costs milliseconds and settles it either way.
+Ask the language servers (LSP) for every error, warning, and diagnostic in the named files. **This is the linter.** It is also the type checker and the source of the Problems panel list. Whatever word the question uses — lint, type, syntax, compile — this tool answers it. The results are live: they reflect the file state at the exact moment you ask, so a problem still listed after an edit is still present. You cannot and need not restart any server from here.
+
+Call this before running your own heavy checkers. For any language with LSP support, it tells you what `tsc`, `eslint`, `biome`, `ruff`, `mypy`, `go build`, or `cargo check` would report for the files you name, but in milliseconds and without building the project.
+
+**When to call:**
+- Anytime the question mentions lint errors, diagnostics, problems, warnings, type errors, syntax errors, or compile errors ("how many errors?", "is it clean?", "what remains broken?"). You have no other way to know; a report from a previous turn is stale the moment you edit.
+- Immediately after editing a file, to confirm the change is valid before proceeding.
+- Before declaring a task finished, on every file you modified.
+- On a file you are about to change, to learn what was already wrong.
+
+Pass every path you need checked in the `paths` array in a single call.
+
+**Output:** Plain text. One section per file you named. Each problem appears on its own line as `file:line:column severity message`. A clean file states that in one line. There is no JSON object to unpack and no `success` field — listing problems (or listing none) is the tool working correctly. If the result is empty and you expected errors, or if the project uses a checker the LSP does not run, invoke that checker with `run_commands`. This tool never runs tests or builds; those are always `run_commands`.
+
+**Delimiter scan:** When brackets do not match, a `Delimiter scan` section follows the main report. It names the line to edit and how many brackets that line is out by, one line per trouble spot. Work through every line it lists before re-checking, rather than re-checking after each one. A parse error is reported where the parser gave up (the closing bracket); the line the scan names is the one the error cannot name. Trust these lines over counting brackets yourself — the scan skips strings, comments, and regex literals, which manual counting does not. The scan runs even when the editor reports nothing, making it the only diagnostic available for script inside `.html` files. If an edit clears the first crossing and the scan reports that it re-checked the edit, treat that as a measured fact: the system applied your change to a copy, scanned it, and confirmed the result. Make that edit.
+
+**The measurement, not an opinion:** This report is the ground truth; your own bracket count is an estimate. Where they disagree, your count is wrong. Models have called this scan a false positive, counted by hand instead, and been wrong both times after spending over 30,000 thinking tokens. If you doubt the report, do not recount: make the edit it names and run the program. That settles it in milliseconds.
 
 # tool: list_files
 List files in the workspace. Use this rather than `ls`, `dir` or `find` through `run_commands`.

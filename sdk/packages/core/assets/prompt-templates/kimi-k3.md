@@ -5,44 +5,49 @@ match:
   - family: ["kimi-k3*"]
 ---
 
-<!-- PROVENANCE -- assembled by hand from three generator runs, not by one.
+<!-- PROVENANCE -- written by scripts/review-prompt-templates.mts, not by the model.
 
-     Sections `grep` and `run_commands` written by kimi-k3:cloud (Ollama
-     family `kimi-k3`) on 2026-09-13 at temperature 0.6, clean on attempt 4.
-     Run, with its log: prompt-reviews/regen/20260913-0452-kimi-k3-cloud
+     Sections `read_files`, `editor`, `check_file` written by kimi-k3:cloud (Ollama family `kimi-k3`) on 2026-09-23.
+     Every other section is as it was. Before this run:
 
-     Section `awk` written by kimi-k3:cloud on 2026-09-13 at temperature 0.9,
-     clean on attempt 3; the 0.6 run had changed one sentence of it and no
-     more. Run, with its log: prompt-reviews/regen/20260913-0456-kimi-k3-cloud
+       Sections `grep` and `run_commands` written by kimi-k3:cloud (Ollama
+       family `kimi-k3`) on 2026-09-13 at temperature 0.6, clean on attempt 4.
+       Run, with its log: prompt-reviews/regen/20260913-0452-kimi-k3-cloud
 
-     Section `sed` is still written by hand, from 2026-09-12. kimi-k3:cloud
-     will not rewrite it. Asked six times on 2026-09-12 it returned the
-     built-in text verbatim; asked again on 2026-09-13 at 0.6 and at 0.9 it
-     returned the hand-written text with a single sentence extended, both
-     times borrowing the tail of its own `grep` section to do it. Three
-     sections of this file are the model's words and this one is not, which
-     is the whole reason this header distinguishes them.
+       Section `awk` written by kimi-k3:cloud on 2026-09-13 at temperature 0.9,
+       clean on attempt 3; the 0.6 run had changed one sentence of it and no
+       more. Run, with its log: prompt-reviews/regen/20260913-0456-kimi-k3-cloud
 
-     Every other section is unchanged. Written by kimi-k3:cloud (Ollama
-     family `kimi-k3`) on 2026-09-12.
+       Section `sed` is still written by hand, from 2026-09-12. kimi-k3:cloud
+       will not rewrite it. Asked six times on 2026-09-12 it returned the
+       built-in text verbatim; asked again on 2026-09-13 at 0.6 and at 0.9 it
+       returned the hand-written text with a single sentence extended, both
+       times borrowing the tail of its own `grep` section to do it. Three
+       sections of this file are the model's words and this one is not, which
+       is the whole reason this header distinguishes them.
+
+       Every other section is unchanged. Written by kimi-k3:cloud (Ollama
+       family `kimi-k3`) on 2026-09-12.
+
+     Run, with its log: prompt-reviews/regen/20260923-1648-kimi-k3-cloud
 
      Sampler asked for by the generator, overriding the model's own:
-       temperature 0.6 (`grep`, `run_commands`), 0.9 (`awk`)
+       temperature 0.7
 
      Sampler the tag sources (`/api/show`), which applies to every key
      the request above does not set:
        (none reported)
 
-     Why a temperature at all: the generator pins 0.2, and at 0.2 this model
-     hands back the text it was shown. The copy was invisible until the delta
-     path learned to compare a returned section against the one it replaced
-     -- before that, a byte-identical reply audited clean, because the
-     verbatim rule only ever compared against the BUILT-IN description and
-     these sections no longer held it.
-
      The script hands a model the prompt it would really receive, names the
      failures observed with models in its family, and asks for the version it
      would rather read; the reply is parsed and audited before it lands here.
+
+     This line is stamped by the caller because a model cannot report which
+     model it is. Shown a template that opens with a header, a model copies
+     that header verbatim -- deepseek-v4.1-flash returned one naming
+     deepseek-v4-flash and family `deepseek4` while the live family was
+     `deepseek_v41`. Any header in a model's reply is stripped before this
+     one is added.
 
      Regenerate rather than hand-edit, and audit a hand-edit with
      scripts/audit-prompt-template.mts. -->
@@ -93,9 +98,14 @@ If user asked a simple question without any coding context, answer it directly w
 {{CLINE_METADATA}}
 
 # tool: read_files
-Read text or image files by absolute path. Give `start_line` and `end_line` (1-based, inclusive) on the same entry to read a range. Batch every file you already know you need into one call, and emit this together with other independent tool calls in the same response. Each file returns at most 2000 lines / ~47k characters; longer files report their total line count, so paginate with `start_line`/`end_line` on that entry. Binary non-image files and very large files are not supported.
 
-Output: one object per file, in request order — `{query, result, success, error?}`. `query` echoes the path (as `path:start-end` for ranges). `result` is the file content. A failed entry has `success: false` with the reason in `error`.
+Read text or image files by absolute path, or a one-based inclusive line range when `start_line`/`end_line` appear on the same file entry. Batch every file you already know you need into one call, and emit it in the same response as other independent tool calls. Each file returns at most 2000 lines / ~47k characters; longer files report their total line count, so paginate with `start_line`/`end_line` on that entry.
+
+Locate first, then read: a diagnostic or stack trace already names the line, `search_codebase` reports the line every match is on, and `ask_lsp` resolves a symbol to where it is defined. Any of those hands you a line number to read around — take roughly 30 lines either side of it, and widen only if what you needed turned out to fall outside that. Reading a range is the normal case; reading a file whole is the exception, reserved for small files when you have no line to start from. Every line returned stays in the conversation for the rest of the task, crowding out the room left to reason about it.
+
+Binary files that are not images and very large files are not supported.
+
+Output: one object per requested file, in the order requested — `{query, result, success, error?}`. `query` echoes the path you asked for (as `path:start-end` when you gave a range). `result` is that file's content, with every line prefixed by its number as `  92 | text`. Those numbers are how you address an edit, and they are not in the file. Never paste them into another tool: text carrying a `92 | ` prefix will not match anything. When you are reading in order to copy text into `editor`, set `line_numbers: false` on that file's entry and get it clean.
 
 # tool: search_codebase
 Run regex searches across the codebase. Multiple independent patterns go in one call, together with other independent tool calls in the same response. Use for finding patterns, definitions, classes, imports, etc.
@@ -145,6 +155,7 @@ Fetch web pages and extract information using a prompt. Each request needs a `ur
 Output: one object per request — `{query, result, success, error?}`. `query` is the URL. `result` is the extracted text for your prompt. A failed entry has `success: false` with the reason in `error`.
 
 # tool: editor
+
 Make precise edits to a single text file at `path`. Six modes, chosen by which arguments you send:
 
 - Replace text: `old_text` plus `new_text`. When `old_text` occurs more than once, add `occurrence` (one-based, in file order) to pick one, or `replace_all: true` to change every one.
@@ -153,7 +164,7 @@ Make precise edits to a single text file at `path`. Six modes, chosen by which a
 - Insert: `insert_line` plus `new_text`, which adds text before that line without replacing anything. Use `line_count + 1` to append at EOF. Add `insert_column` to insert inside that line instead, before the character at that column — this is how you add one missing bracket, with `line_length + 1` appending at the end of the line.
 - Create or replace whole: `new_text` alone. Creates the file when it does not exist; replaces every line when it does, which needs the file read first. No size limit on this one — a file written whole cannot be split. Never `rm` a file to write it fresh: this is that, and a deleted file is gone if the turn ends first.
 
-Use this rather than a shell command for anything that changes a file. Make one edit at a time and check it before starting the next: reads and searches cost nothing if one turns out to be unnecessary, but several edits made together and checked once leave several things to undo and no way to tell which one was wrong.
+Use this rather than a shell command for anything that changes a file. Make one edit at a time and check it before starting the next: reads and searches cost nothing if one turns out to be unnecessary, but several edits made together and checked once leave several things to undo and no way to tell which one was wrong. Read the lines you are about to change before you change them: an edit aimed at a range you have not read in its current state is refused. Your own edits count — one that changes the file's length moves every line below it, so read that region again before editing it a second time. Line numbers taken from an earlier turn, from a task summary, or from a diagnostic issued before your last edit are the ones that go stale. Repeating the lines already in the range and then continuing is how you insert after them, and it is allowed — the range says which lines you mean, so repeating them is your own choice. What is refused is a `new_text` that goes on to repeat lines from *outside* the range: that appends a second copy of text already elsewhere in the file rather than replacing anything, and the refusal names the lines it matched so you can aim the next call at them.
 
 Output: a single `{query, result, success, error?}` object for this one edit, where `query` is `edit:<path>` or `insert:<path>` and `result` describes what changed. A failed edit changes nothing: `success` is false, `error` says why, and the file is exactly as it was. Do not resend the same call — `error` names the fix. In particular, text copied out of a `read_files` result must have its `123 | ` line-number gutter removed first.
 
@@ -215,20 +226,24 @@ Output: one object per command, in order — `{query, result, success, error?}`,
 {{DEFAULT}}
 
 # tool: check_file
-Check files for errors and warnings using the language servers (LSP). **This is the linter** — and the type checker, and the problems a Problems panel would list. Whatever the question calls it, ask here. These are live and follow your edits: a result is current as of the moment you ask, so a problem still reported after an edit is still there. There is no language server to restart from here. Call this before running a checker yourself with `run_commands`. For files a language server covers, it answers the same question as `tsc`, `eslint`, `biome`, `ruff`, `mypy`, `go build`, or `cargo check` — for the files you name, in milliseconds, without building the project.
 
-When to call:
-- Whenever the question is about the linter, lint errors, diagnostics, problems, type errors or compile errors — "how many errors is the linter reporting?", "is it clean now?" — call this. You have no other way to know, and the report from an earlier edit is already out of date.
+Query the language servers for errors and warnings on files you name. **This is the linter** — the type checker, the syntax check, and the source of the problems that would show in a Problems panel. Whatever the question calls it, this tool answers it. The results are live and track your edits: what you get is current as of the moment you ask, so a problem still listed after an edit is still present. You cannot restart a language server from here, nor do you need to.
+
+Ask this before running a checker yourself. Where a language server covers the language, it answers the same question as `tsc`, `eslint`, `biome`, `ruff`, `mypy`, `go build` or `cargo check` — for the files you name, in milliseconds, without building the project.
+
+When to call it:
+- Whenever the question is about the linter, lint errors, diagnostics, problems, warnings, type errors, syntax errors or compile errors — "how many errors is the linter reporting?", "is it clean now?", "what is still broken?". You have no other way to know, and the report you were shown after an earlier edit does not answer it: that was true then, and you have edited since.
 - After editing a file, to confirm the edit is valid before moving on.
 - Before reporting a task finished, on every file you changed.
-- On a file you are about to change, to know what was already wrong with it.
+- On a file you are about to change, when you want to know what was already wrong with it.
 
 Pass every file you want checked in one call.
 
 Read a clean result carefully. "No problems reported by the editor" is conclusive only where a language server covers that file, and it does not for every language on every machine. If this reports nothing and you have reason to expect a problem, or the project has a checker the language servers do not run, run that checker with `run_commands`. Tests and builds are always `run_commands`; this tool does not run them.
 
-Output: plain text, one section per file, each problem on its own line as `file:line:column` with severity and message. A clean file says so in one line. No object to unpack, no `success` field — problems being listed is this tool working, not failing.
-When a file's brackets do not match, a `Delimiter scan` section names the *opening* bracket involved, one line per place the trouble starts — fix every line it lists in one edit. A parse error is always reported where the parser gave up, which is the closing bracket; the opener is the one you have to edit, and it is the one the error cannot name. Trust that line over counting brackets yourself — it skips strings, comments and regex literals. It runs even when the editor reported nothing, which is the only report you get for script inside an `.html` file.
+Output: plain text, one section per file you named, each problem on its own line as `file:line:column` with its severity and message. A file with nothing wrong says so in one line. There is no object to unpack and no `success` field — problems being listed is this tool working, not failing.
+
+When a file's brackets do not match, a `Delimiter scan` section names the line to edit and how many brackets that line is out by, one line per place the trouble starts — a file can be broken in several spots at once, so work through every line it lists before re-checking rather than re-checking after each one. A parse error is always reported where the parser gave up, which is the closing bracket; the line named here is the one the error cannot name. Trust those lines over counting brackets yourself — the scan skips strings, comments and regex literals, which counting characters does not. It runs whether or not the editor reported anything, so it can appear beneath a file the editor called clean — no language server checks the script inside an `.html` file, and there this is the only report you will get.
 
 # tool: list_files
 List the files in the workspace. Use this to find out what exists, rather than running `ls`, `dir`, `find` or `Get-ChildItem` with `run_commands` — this is scoped to the folders the user opened and those commands are not.

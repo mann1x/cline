@@ -134,13 +134,13 @@ being broken. All eight are clean at 34/34 sections as of 2026-09-11.
 |---|---|---|---|
 | `claude.md` | `regen/20260911-0617-claude-opus-5` | `claude -p --model opus` | clean |
 | `gemma.md` | `regen/20260911-0538-gemma4-31b-cloud` | `gemma4:31b-cloud` | clean |
-| `qwen.md` | `regen/20260911-0611-qwen3.5-397b-cloud` | `qwen3.5:397b-cloud` | clean |
+| `qwen.md` | `regen/20260911-0611-qwen3.5-397b-cloud` + `regen/20260923-1650-qwen3.5-397b-cloud` (`check_file`, one passage hand-fixed) | `qwen3.5:397b-cloud` | clean |
 | `kimi-k2.md` | `regen/20260911-0611-kimi-k2.6-cloud` | `kimi-k2.6:cloud` | clean |
 | `glm.md` | `regen/20260911-0611-glm-5.2-cloud` | `glm-5.2:cloud` | clean |
-| `deepseek.md` | `regen/20260911-0551-deepseek-v4.1-flash-cloud` | `deepseek-v4.1-flash:cloud` | clean |
-| `minimax.md` | `regen/20260911-0650-igovet-minimax-m3-opencode-latest` | `igovet/minimax-m3-opencode` | clean |
+| `deepseek.md` | `regen/20260911-0551-deepseek-v4.1-flash-cloud` + `regen/20260923-1647-deepseek-v4.1-flash-cloud` (`read_files`, `editor`, `ask_question`, `check_file`, `spawn_agent`) | `deepseek-v4.1-flash:cloud` | clean |
+| `minimax.md` | `regen/20260911-0650-igovet-minimax-m3-opencode-latest` + `regen/20260923-1650-minimax-m3-tpl-latest` (`ask_question`, `spawn_agent`) | `igovet/minimax-m3-opencode` | clean |
 | `nemotron.md` | `regen/20260911-0710-nemotron-3-ultra-cloud` | `nemotron-3-ultra:cloud` | clean |
-| `kimi-k3.md` | `regen/20260911-0749-kimi-k3-cloud` | `kimi-k3:cloud` | clean |
+| `kimi-k3.md` | `regen/20260911-0749-kimi-k3-cloud` + `regen/20260923-1648-kimi-k3-cloud` (`read_files`, `editor`, `check_file`) | `kimi-k3:cloud` | clean |
 
 All eight were generated under the gated rule set — the four folded rules plus
 the three `REQUIRED_SYSTEM_GUIDANCE` checks. A template generated before a rule

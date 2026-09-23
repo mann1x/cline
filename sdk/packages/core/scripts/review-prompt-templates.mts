@@ -150,6 +150,36 @@ function describeSampler(sampler: Record<string, number>): string[] {
  * `/api/show` reported, and strips any header the model supplied first. A
  * model cannot report which model it is; the caller always can.
  */
+/**
+ * What the file being spliced into already says about who wrote it: the
+ * authorship paragraphs of its provenance block, verbatim, up to the sampler
+ * lines.
+ *
+ * The base clause used to be read only from a line that STARTS with
+ * `Written by`. A file one delta run has touched carries it mid-line
+ * ("Every other section is unchanged. Written by ..."), and `kimi-k3.md`'s
+ * hand-assembled header wraps it across lines, so the second delta found
+ * nothing and stamped "unchanged from the previous version": all four
+ * section rewrites of 2026-09-23 lost the record of who wrote the rest of
+ * their file. Carried verbatim, any header shape survives, and repeated runs
+ * read as a history, newest first.
+ */
+function priorProvenance(template: string): string[] {
+	const block =
+		/<!-- PROVENANCE[^\n]*\n([\s\S]*?)-->/.exec(template)?.[1] ?? "";
+	const authorship = block.split(/\n\s*Sampler asked for/)[0] ?? "";
+	const lines = authorship
+		.split("\n")
+		.map((line) => line.replace(/^\s{5}/, ""));
+	while (lines.length > 0 && lines[0]?.trim() === "") {
+		lines.shift();
+	}
+	while (lines.length > 0 && lines[lines.length - 1]?.trim() === "") {
+		lines.pop();
+	}
+	return lines;
+}
+
 function stampProvenance(
 	raw: string,
 	details: {
@@ -180,8 +210,8 @@ function stampProvenance(
 		 */
 		delta?: {
 			tools: readonly string[];
-			/** The `Written by ...` line the base template already carried. */
-			base: string | undefined;
+			/** The authorship paragraphs of the file's previous provenance block. */
+			earlier: readonly string[];
 		};
 	},
 ): string {
@@ -206,11 +236,18 @@ function stampProvenance(
 			details.familyDeclared ? ", because the tag reports none of its own" : ""
 		}) on ${RUN_STAMP.slice(0, 4)}-${RUN_STAMP.slice(4, 6)}-${RUN_STAMP.slice(6, 8)}.`,
 		...(details.delta
-			? [
-					details.delta.base
-						? `     Every other section is unchanged. ${details.delta.base.trim()}`
-						: "     Every other section is unchanged from the previous version of this file.",
-				]
+			? details.delta.earlier.length > 0
+				? [
+						"     Every other section is as it was. Before this run:",
+						"",
+						...details.delta.earlier.map((line) =>
+							line.trim() === "" ? "" : `       ${line}`,
+						),
+						"",
+					]
+				: [
+						"     Every other section is unchanged from the previous version of this file.",
+					]
 			: []),
 		`     Run, with its log: ${details.runDir.replace(/^.*?(?=prompt-reviews\/)/, "")}`,
 		"",
@@ -801,6 +838,9 @@ async function review(model: string, options: Options): Promise<boolean> {
 			},
 		});
 
+		// Exactly one trailing newline. A spliced delta already ends in one, and
+		// adding another broke the byte-exact split/join round trip that
+		// `prompt-template-delta.test.ts` holds every shipped file to.
 		writeFileSync(
 			outputPath,
 			`${stampProvenance(result.raw, {
@@ -814,11 +854,11 @@ async function review(model: string, options: Options): Promise<boolean> {
 					? {
 							delta: {
 								tools: options.onlyTools,
-								base: /^\s*Written by .*$/m.exec(familyTemplate ?? "")?.[0],
+								earlier: priorProvenance(familyTemplate ?? ""),
 							},
 						}
 					: {}),
-			})}\n`,
+			}).replace(/\n+$/, "")}\n`,
 			"utf8",
 		);
 		if (result.compaction) {
