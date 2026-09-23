@@ -913,6 +913,29 @@ export class SessionRuntime {
 		});
 	}
 
+	/**
+	 * Start a run whose conversation opens with `head`, then the task.
+	 *
+	 * The head is user turns that precede the task verbatim -- a sub-agent's
+	 * shared knowledge and role. Seeded as their own turns rather than folded
+	 * into the task, because on a KV pool each is a layer several agents share,
+	 * and it only shares if it is its own turn, byte for byte.
+	 */
+	runWithHead(
+		head: readonly string[],
+		userMessage: string,
+	): Promise<AgentResult> {
+		this.conversation.resetForRun();
+		this.resetConversationBoundaryTrackers();
+		this.conversation.appendMessages(
+			head.map((text) => ({
+				role: "user" as const,
+				content: [{ type: "text" as const, text }],
+			})),
+		);
+		return this.executeRun({ userMessage, isContinue: false });
+	}
+
 	continue(
 		userMessage?: string,
 		userImages?: string[],

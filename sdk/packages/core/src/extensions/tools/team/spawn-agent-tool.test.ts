@@ -5,6 +5,7 @@ import { createDelegatedAgentConfigProvider } from "./delegated-agent";
 type AgentExtension = NonNullable<AgentConfig["extensions"]>[number];
 
 const runMock = vi.fn();
+const runWithHeadMock = vi.fn();
 const getAgentIdMock = vi.fn(() => "sub-agent-1");
 const getConversationIdMock = vi.fn(() => "conv-sub-1");
 const agentConstructorSpy = vi.fn();
@@ -30,6 +31,10 @@ vi.mock("../../../runtime/orchestration/session-runtime-orchestrator", () => {
 
 			async run(input: string): Promise<unknown> {
 				return runMock(input);
+			}
+
+			async runWithHead(head: string[], task: string): Promise<unknown> {
+				return runWithHeadMock(head, task);
 			}
 		},
 	};
@@ -427,5 +432,95 @@ describe("createSpawnAgentTool", () => {
 				temperature: 0.3,
 			}),
 		);
+	});
+
+	// Each agent is its own engine session. Inheriting the lead's put 51 agents
+	// into one 262,144-cell allocation and stopped 49 of them when it filled.
+	it("runs every sub-agent in an engine session of its own", async () => {
+		const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
+		runMock.mockResolvedValue({
+			text: "ok",
+			iterations: 1,
+			finishReason: "completed",
+			usage: { inputTokens: 1, outputTokens: 1 },
+		});
+		const tool = createSpawnAgentTool({
+			configProvider: createDelegatedAgentConfigProvider({
+				providerId: "opencoti",
+				modelId: "m",
+				sessionId: "lead-session",
+			} as never),
+		});
+		const context = {
+			agentId: "parent",
+			conversationId: "c",
+			iteration: 1,
+			sessionId: "lead-session",
+		} as never;
+		await tool.execute({ instructions: "role", task: "one" }, context);
+		await tool.execute({ instructions: "role", task: "two" }, context);
+
+		const ids = agentConstructorSpy.mock.calls.map(
+			([config]) => (config as { engineSessionId?: string }).engineSessionId,
+		);
+		expect(ids[0]).toMatch(/^lead-session~agent-/);
+		expect(ids[1]).toMatch(/^lead-session~agent-/);
+		expect(ids[0]).not.toBe(ids[1]);
+		// Telemetry still groups with the lead.
+		expect(
+			(agentConstructorSpy.mock.calls[0]?.[0] as { sessionId?: string })
+				.sessionId,
+		).toBe("lead-session");
+		// No base URL, so no pool tree: nothing to attach to.
+		expect(
+			(agentConstructorSpy.mock.calls[0]?.[0] as { polykvWorker?: unknown })
+				.polykvWorker,
+		).toBeUndefined();
+	});
+
+	// On a PolyKV node the request is laid out for the pool tree: a fixed
+	// system prompt, then knowledge, role and task as their own turns.
+	it("lays a PolyKV agent out as shared layers under its lead's swarm", async () => {
+		const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
+		runWithHeadMock.mockResolvedValue({
+			text: "ok",
+			iterations: 1,
+			finishReason: "completed",
+			usage: { inputTokens: 1, outputTokens: 1 },
+		});
+		const tool = createSpawnAgentTool({
+			configProvider: createDelegatedAgentConfigProvider({
+				providerId: "opencoti",
+				modelId: "m",
+				baseUrl: "http://127.0.0.1:9/v1",
+				sessionId: "lead-session",
+			} as never),
+		});
+		await tool.execute(
+			{
+				knowledge: { text: "shared notes" },
+				instructions: "You are a js-brace-fixer.",
+				task: "check lines 1-10",
+			},
+			{
+				agentId: "parent",
+				conversationId: "c",
+				iteration: 1,
+				sessionId: "lead-session",
+			} as never,
+		);
+
+		const config = agentConstructorSpy.mock.calls[0]?.[0] as {
+			systemPrompt?: string;
+			polykvWorker?: { group: string; layers: number };
+		};
+		expect(config.polykvWorker).toEqual({ group: "lead-session", layers: 2 });
+		expect(config.systemPrompt).not.toContain("js-brace-fixer");
+		const [head, task] = runWithHeadMock.mock.calls[0] ?? [];
+		expect(head).toHaveLength(2);
+		expect(head[0]).toContain("shared notes");
+		expect(head[1]).toContain("js-brace-fixer");
+		expect(task).toContain("check lines 1-10");
+		expect(runMock).not.toHaveBeenCalled();
 	});
 });

@@ -2,6 +2,7 @@
  * Reusable spawn_agent tool for delegating tasks to sub-agents.
  */
 
+import { releasePolykvAgent } from "@cline/llms";
 import {
 	type AgentConfig,
 	type AgentEvent,
@@ -19,6 +20,7 @@ import {
 	zodToJsonSchema,
 } from "@cline/shared";
 import { z } from "zod";
+import { isPolykvProvider } from "../../context/polykv-session";
 import {
 	MAX_NODE_PLACEMENT_ATTEMPTS,
 	NODE_MODEL_MISSING_COOL_OFF_MS,
@@ -32,6 +34,7 @@ import {
 	registerSubagentCancellation,
 	subagentCancelId,
 } from "./subagent-cancellation";
+import { buildSubagentLayout } from "./subagent-layout";
 import { createSubagentProgress } from "./subagent-progress";
 
 /** The tool a model calls to hand a self-contained piece of work to a subagent. */
@@ -41,10 +44,46 @@ type AgentExtension = NonNullable<AgentConfig["extensions"]>[number];
 type AgentFinishReason = AgentResult["finishReason"];
 
 export const SpawnAgentInputSchema = z.object({
+	/**
+	 * What several sub-agents are given in common, stated once per agent and
+	 * identically. On an engine with a shared KV pool it is held once for all
+	 * of them; elsewhere the files are passed by name.
+	 */
+	knowledge: z
+		.object({
+			files: z
+				.array(z.string())
+				.optional()
+				.describe(
+					"Workspace files the agent works from. Give the SAME list to every agent that works on them: they are loaded once and shared, instead of each agent reading its own copy.",
+				),
+			text: z
+				.string()
+				.optional()
+				.describe(
+					"Shared notes every agent given this knowledge needs: findings, constraints, context. Keep it identical across those agents.",
+				),
+		})
+		.optional()
+		.describe(
+			"Knowledge shared by several agents. Put here what they all need, and keep it identical across them; what differs goes in `instructions` and `task`.",
+		),
+	instructions: z
+		.string()
+		.optional()
+		.describe(
+			"The agent's role: how it works and what it looks for. Reuse the same text for every agent of the same kind (e.g. all 'js-brace-fixer' agents) -- it is shared between them. Put per-agent specifics in `task`.",
+		),
+	/** The older name for `instructions`, still accepted. */
 	systemPrompt: z
 		.string()
-		.describe("System prompt defining the sub-agent's behavior"),
-	task: z.string().describe("Task for the sub-agent to complete"),
+		.optional()
+		.describe("Deprecated: use `instructions`."),
+	task: z
+		.string()
+		.describe(
+			"This agent's own task: what it alone must do. Refer to shared files by path; their content is already shared through `knowledge`.",
+		),
 	/**
 	 * What to call this sub-agent in the UI.
 	 *
@@ -172,7 +211,7 @@ export function createSpawnAgentTool(
 	return createTool<SpawnAgentInput, SpawnAgentOutput>({
 		name: SPAWN_AGENT_TOOL_NAME,
 		description:
-			"Spawn a sub-agent with a custom system prompt for specialized tasks. Use when delegating work that benefits from focused expertise. " +
+			"Spawn a sub-agent for a focused task. Structure it in three parts, from most shared to least: `knowledge` (files and notes several agents need -- identical across them), `instructions` (the role -- identical for every agent of the same kind), `task` (what this agent alone does). Shared parts are loaded once for all agents that share them, so many agents cost little more than one. " +
 			"Output: `{text, iterations, finishReason, usage: {inputTokens, outputTokens}}`. " +
 			"`text` is the sub-agent's final answer and the only part you need: it worked in its own context, so nothing it read or edited is visible to you except through `text`. It has already finished by the time you see this — there is nothing to poll and nothing to await. " +
 			"Give each sub-agent a short `name`: when several run at once it is the only thing telling their progress apart on screen.",
@@ -190,6 +229,10 @@ export function createSpawnAgentTool(
 			let placed = placement
 				? await placement.place(context.signal)
 				: undefined;
+			// This agent's own engine session -- never the lead's. Slash-free:
+			// the engine's close route cannot carry one.
+			const engineSessionId = `${context.sessionId ?? "cerebriline"}~agent-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+			const lead = context.sessionId ?? "cerebriline";
 			// What it is doing, on the tool call that started it. Nothing else
 			// reports a running sub-agent to the user at all.
 			const progress = createSubagentProgress(
@@ -213,11 +256,31 @@ export function createSpawnAgentTool(
 			// Rebuilt per attempt, because the node IS the configuration: which
 			// node took this agent decides its provider and model, and the
 			// provider is read once at construction.
-			const buildSubAgent = () =>
-				createDelegatedAgent({
+			const buildSubAgent = async () => {
+				const provider = placed?.configProvider ?? config.configProvider;
+				const connection = provider.getConnectionConfig();
+				const pooled = isPolykvProvider({
+					providerId: connection.providerId,
+					baseUrl: connection.baseUrl,
+					polykv: (connection.providerConfig as { polykv?: never } | undefined)
+						?.polykv,
+				});
+				const layout = await buildSubagentLayout({
+					instructions: input.instructions ?? input.systemPrompt ?? "",
+					task: input.task,
+					...(input.knowledge ? { knowledge: input.knowledge } : {}),
+					pooled,
+					cwd: provider.getRuntimeConfig().cwd,
+				});
+				const agent = createDelegatedAgent({
 					kind: "subagent",
-					prompt: input.systemPrompt,
-					configProvider: placed?.configProvider ?? config.configProvider,
+					prompt: layout.systemPrompt,
+					engineSessionId,
+					...(pooled
+						? { polykvWorker: { group: lead, layers: layout.layers } }
+						: {}),
+					pinnedHead: layout.pinnedHead,
+					configProvider: provider,
 					tools,
 					maxIterations: config.defaultMaxIterations,
 					parentAgentId: context.agentId,
@@ -229,7 +292,14 @@ export function createSpawnAgentTool(
 					toolPolicies: config.toolPolicies,
 					requestToolApproval: config.requestToolApproval,
 				});
-			let subAgent = buildSubAgent();
+				return { agent, head: layout.pinnedHead, task: layout.task };
+			};
+			let built = await buildSubAgent();
+			let subAgent = built.agent;
+			const start = () =>
+				built.head.length > 0
+					? subAgent.runWithHead(built.head, built.task)
+					: subAgent.run(built.task);
 			// Captured from the first build and kept across re-placements: the
 			// observers identify one delegation, not one attempt at it, and the
 			// chat row is keyed by the tool call rather than by either.
@@ -261,10 +331,10 @@ export function createSpawnAgentTool(
 						? // The node's own gate, which is its endpoint's answer
 							// rather than the session's -- a node on a one-slot
 							// ollama must not queue behind an opencoti node.
-							await placed.run(() => subAgent.run(input.task))
+							await placed.run(start)
 						: slotGate
-							? await slotGate.run(() => subAgent.run(input.task))
-							: await subAgent.run(input.task);
+							? await slotGate.run(start)
+							: await start();
 
 				// The agent goes back in the queue when the node it landed on
 				// could not run it at all.
@@ -291,7 +361,9 @@ export function createSpawnAgentTool(
 					placed.markUnreachable(NODE_MODEL_MISSING_COOL_OFF_MS);
 					placed.release();
 					placed = await placement.place(context.signal);
-					subAgent = buildSubAgent();
+					await releasePolykvAgent(engineSessionId);
+					built = await buildSubAgent();
+					subAgent = built.agent;
 					result = await runOnce();
 				}
 				const output: SpawnAgentOutput = {
@@ -363,6 +435,17 @@ export function createSpawnAgentTool(
 				// reports success and does nothing.
 				placed?.release();
 				cancellation.release();
+				// Its engine session goes back the moment it ends, and its pool
+				// owner with it if it was the last: admission is decided against
+				// held windows, and one held past its work refuses the next agent.
+				const released = await releasePolykvAgent(engineSessionId).catch(
+					() => undefined,
+				);
+				for (const failure of released?.failed ?? []) {
+					config.logger?.log(
+						`[Agents] could not close engine session ${failure.sessionId}: ${failure.error}`,
+					);
+				}
 			}
 		},
 		timeoutMs: 300000,

@@ -968,6 +968,7 @@ export async function runAgenticCompaction(options: {
 			: await runCouncilReview({
 					summary,
 					thinkingSummary: rawThinkingSummary,
+					serial: Boolean(summarizerProviderConfig.engineSessionId),
 					messages: newMessagesToFold,
 					maxRequestChars: summarizerInputLimit * CHARS_PER_TOKEN,
 					toolLedgerKey: ledgerEnabled

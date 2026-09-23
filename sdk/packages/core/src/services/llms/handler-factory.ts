@@ -96,7 +96,15 @@ function buildGatewayProviderOptions(
 	// so this is reachable -- and on a shared server the session it corrupts
 	// belongs to somebody else.
 	if (normalizeProviderId(config.providerId) === "opencoti") {
-		options.polykvSessionId = sessionId || auxiliarySessionId();
+		const engineSession =
+			config.engineSessionId || sessionId || auxiliarySessionId();
+		options.polykvSessionId = engineSession;
+		if (config.polykvWorker) {
+			options.polykvWorker = {
+				...config.polykvWorker,
+				sessionId: engineSession,
+			};
+		}
 	}
 
 	if (config.providerId === "bedrock") {
@@ -259,6 +267,10 @@ export function createAgentModelFromConfig(
 		thinking: config.thinking,
 		logger,
 		extensionContext: config.extensionContext,
+		...(config.engineSessionId
+			? { engineSessionId: config.engineSessionId }
+			: {}),
+		...(config.polykvWorker ? { polykvWorker: config.polykvWorker } : {}),
 	};
 
 	// Host-registered custom handlers (e.g. VS Code LM, which needs the host's

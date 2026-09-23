@@ -24,6 +24,7 @@ import type {
 import type {
 	AgentTeamsRuntime,
 	DelegatedAgentConfigProvider,
+	DelegatedPrepareTurnTarget,
 	SubAgentEndContext,
 	SubAgentStartContext,
 	TeamEvent,
@@ -114,7 +115,9 @@ export interface RuntimeBuilderInput {
 	 * is neither bounded nor visible: their transcripts grow past the model's
 	 * window and the only sign is the provider quietly truncating the prompt.
 	 */
-	createDelegatedPrepareTurn?: () => AgentConfig["prepareTurn"];
+	createDelegatedPrepareTurn?: (
+		agent?: DelegatedPrepareTurnTarget,
+	) => AgentConfig["prepareTurn"];
 	/**
 	 * The other half of that pipeline, for the same agents.
 	 *

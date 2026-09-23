@@ -446,6 +446,15 @@ export async function runCouncilReview(input: {
 	 */
 	toolLedgerKey?: string;
 	logger?: BasicLogger;
+	/**
+	 * Review the halves one after the other instead of at once.
+	 *
+	 * Set when the agent runs inside an engine session it shares with a swarm:
+	 * two concurrent reviewers are two concurrent requests against a window the
+	 * other agents are drawing on, which is the load compaction is meant to
+	 * relieve, not add to.
+	 */
+	serial?: boolean;
 }): Promise<CouncilReviewResult> {
 	const unchanged: CouncilReviewResult = {
 		summary: input.summary,
@@ -566,10 +575,9 @@ export async function runCouncilReview(input: {
 		}
 	};
 
-	const [firstRewritten, secondRewritten] = await Promise.all([
-		rewrite("first"),
-		rewrite("second"),
-	]);
+	const [firstRewritten, secondRewritten] = input.serial
+		? [await rewrite("first"), await rewrite("second")]
+		: await Promise.all([rewrite("first"), rewrite("second")]);
 	const reviewers = (firstRewritten ? 1 : 0) + (secondRewritten ? 1 : 0);
 	if (reviewers === 0) {
 		input.logger?.log("No compaction reviewer returned a usable half", {

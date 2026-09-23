@@ -17,7 +17,15 @@ export {
 	type DelegatedAgentConnectionConfig,
 	type DelegatedAgentKind,
 	type DelegatedAgentRuntimeConfig,
+	type DelegatedPrepareTurnTarget,
 } from "./delegated-agent";
+export {
+	buildSubagentLayout,
+	pinConversationHead,
+	SUBAGENT_BASE_PROMPT,
+	type SubagentKnowledge,
+	type SubagentLayout,
+} from "./subagent-layout";
 
 // =============================================================================
 // Spawn Agent Tool

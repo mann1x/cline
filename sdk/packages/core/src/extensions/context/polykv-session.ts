@@ -61,6 +61,12 @@ export interface PolykvProviderConfig {
 	fetch?: typeof fetch;
 	/** The profile's PolyKV section. Absent means "never configured". */
 	polykv?: PolykvOptions;
+	/**
+	 * Set on a swarm agent's config: its pools belong to the swarm's tree
+	 * (`polykv-swarm.ts`), so the lead-conversation pool logic here stands down
+	 * rather than building a second, private tree for every agent.
+	 */
+	polykvWorker?: unknown;
 }
 
 /**
@@ -223,7 +229,11 @@ export async function ensurePolykvPool(options: {
 	tools?: readonly unknown[];
 	logger?: BasicLogger;
 }): Promise<string | undefined> {
-	if (!options.sessionId || !isPolykvProvider(options.providerConfig)) {
+	if (
+		!options.sessionId ||
+		!isPolykvProvider(options.providerConfig) ||
+		options.providerConfig.polykvWorker
+	) {
 		return undefined;
 	}
 	const existing = getPolykvSession(options.sessionId);

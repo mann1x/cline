@@ -930,16 +930,28 @@ export class LocalRuntimeHost implements RuntimeHost {
 			...bootstrap.runtimeBuilderInput,
 			distinctId: this.distinctId,
 			runCommandExecutionController: this.runCommandExecutionController,
-			createDelegatedPrepareTurn: () => {
+			createDelegatedPrepareTurn: (agent) => {
 				// This agent's compaction state, held for as long as it runs and
 				// no longer. A sub-agent's transcript is never resumed, so there
 				// is nothing to persist; writing it to the session's sidecar
 				// would replace the lead's state with one computed from another
 				// agent's messages, which is worse than not compacting at all.
 				let delegatedCompactionState: SessionCompactionState | undefined;
+				// Its own compaction, not the lead's: summarised by its own model,
+				// triggered by its own request counts, and -- on opencoti -- run
+				// inside its own engine session instead of an anonymous one.
+				const agentCompact = agent
+					? createContextCompactionPrepareTurn({
+							...configWithProvider,
+							providerId: agent.providerId,
+							modelId: agent.modelId,
+							providerConfig: agent.providerConfig as never,
+							sessionId: agent.engineSessionId ?? configWithProvider.sessionId,
+						})
+					: compact;
 				return createCappedThinkingPrepareTurn(
 					createCompactionStateAwarePrepareTurn({
-						compact,
+						compact: agentCompact,
 						getState: () => delegatedCompactionState,
 						saveState: (state) => {
 							delegatedCompactionState = state;

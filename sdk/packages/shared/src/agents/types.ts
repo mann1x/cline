@@ -855,6 +855,25 @@ export interface AgentConfig {
 	 * model transcript managed by the agent runtime.
 	 */
 	sessionId?: string;
+	/**
+	 * The session this agent's requests run in on the inference engine.
+	 *
+	 * Not `sessionId`, which a delegated agent inherits from its lead so its
+	 * telemetry groups with the lead's. Used as the engine's session as well,
+	 * that id put every sub-agent of a conversation into the lead's own
+	 * allocation on opencoti: 51 agents, one 262,144-cell window, 49 of them
+	 * stopped when it filled. Each agent runs in its own; absent means
+	 * `sessionId`, which is right for the lead.
+	 */
+	engineSessionId?: string;
+	/**
+	 * Attach this agent's requests to a shared PolyKV pool tree (opencoti).
+	 *
+	 * `group` is the swarm the agent dedupes against, `layers` how many turns
+	 * after the system turn are shared. The agent's own session is
+	 * `engineSessionId`.
+	 */
+	polykvWorker?: { group: string; layers: number };
 	// -------------------------------------------------------------------------
 	// Provider Settings
 	// -------------------------------------------------------------------------

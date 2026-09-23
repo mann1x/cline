@@ -13,6 +13,7 @@ import { mergeAgentHooks } from "../../../hooks/hook-file-hooks";
 import { SessionRuntime } from "../../../runtime/orchestration/session-runtime-orchestrator";
 import type { AgentNodePlacement } from "./agent-node-placement";
 import type { AgentSlotGate, AgentSlotGateRegistry } from "./agent-slot-gate";
+import { pinConversationHead } from "./subagent-layout";
 import {
 	buildSubAgentSystemPrompt,
 	buildTeammateSystemPrompt,
@@ -106,9 +107,26 @@ export interface DelegatedAgentRuntimeConfig
 	 * and it is how a sub-agent reached 1.87x its model's context window across
 	 * 34 consecutive requests with nothing in the transcript to say so.
 	 */
-	createPrepareTurn?: () => AgentConfig["prepareTurn"];
+	createPrepareTurn?: (
+		agent?: DelegatedPrepareTurnTarget,
+	) => AgentConfig["prepareTurn"];
 	/** The pipeline's other half; stateless, so shared rather than built. */
 	condenseDiscardedReasoning?: AgentConfig["condenseDiscardedReasoning"];
+}
+
+/**
+ * Whose compaction a delegated agent's pipeline is.
+ *
+ * The agent's own: its connection and its engine session. Built from the
+ * lead's instead -- as it was -- a sub-agent on an opencoti node summarised
+ * itself with the lead's model, measured its trigger against the lead's
+ * request counts, and read pool pressure in the lead's name.
+ */
+export interface DelegatedPrepareTurnTarget {
+	providerId: string;
+	modelId: string;
+	providerConfig: NonNullable<AgentConfig["providerConfig"]>;
+	engineSessionId?: string;
 }
 
 export interface DelegatedAgentConfigProvider {
@@ -166,6 +184,18 @@ export interface BuildDelegatedAgentConfigOptions {
 	 * escalation's base model watches the expert and may need to stop it.
 	 */
 	consumePendingUserMessage?: AgentConfig["consumePendingUserMessage"];
+	/**
+	 * The engine session this agent runs in -- its own, never the lead's.
+	 * See `AgentConfig.engineSessionId`.
+	 */
+	engineSessionId?: string;
+	/** Attach to a shared PolyKV pool tree; see `AgentConfig.polykvWorker`. */
+	polykvWorker?: AgentConfig["polykvWorker"];
+	/**
+	 * Shared turns at the head of the conversation that compaction must keep
+	 * verbatim. See `subagent-layout.ts`.
+	 */
+	pinnedHead?: readonly string[];
 }
 
 /**
@@ -225,22 +255,54 @@ export function buildDelegatedAgentConfig(
 	options: BuildDelegatedAgentConfigOptions,
 ): AgentConfig & { role?: string } {
 	const runtimeConfig = options.configProvider.getRuntimeConfig();
+	const connection = options.configProvider.getConnectionConfig();
+	// What this agent's own requests are built from, summarizer included: the
+	// node's connection, the agent's engine session and its pool tree.
+	const ownProviderConfig = {
+		...((connection.providerConfig ?? {}) as Record<string, unknown>),
+		providerId: connection.providerId,
+		modelId: connection.modelId,
+		...(connection.apiKey ? { apiKey: connection.apiKey } : {}),
+		...(connection.baseUrl ? { baseUrl: connection.baseUrl } : {}),
+		...(connection.headers ? { headers: connection.headers } : {}),
+		...(options.engineSessionId
+			? { engineSessionId: options.engineSessionId }
+			: {}),
+		...(options.polykvWorker
+			? { polykvWorker: { ...options.polykvWorker, attachOnly: true } }
+			: {}),
+	} as NonNullable<AgentConfig["providerConfig"]>;
+	const prepareTurn = runtimeConfig.createPrepareTurn?.({
+		providerId: connection.providerId,
+		modelId: connection.modelId,
+		providerConfig: ownProviderConfig,
+		...(options.engineSessionId
+			? { engineSessionId: options.engineSessionId }
+			: {}),
+	});
 	const systemPrompt =
 		options.kind === "teammate"
 			? buildTeammateSystemPrompt(options.prompt, runtimeConfig)
 			: buildSubAgentSystemPrompt(options.prompt, runtimeConfig);
 
 	return {
-		...options.configProvider.getConnectionConfig(),
+		...connection,
 		distinctId: runtimeConfig.distinctId,
 		sessionId: runtimeConfig.sessionId,
+		...(options.engineSessionId
+			? { engineSessionId: options.engineSessionId }
+			: {}),
+		...(options.polykvWorker ? { polykvWorker: options.polykvWorker } : {}),
 		systemPrompt,
 		tools: options.tools,
 		maxIterations: options.maxIterations ?? runtimeConfig.maxIterations,
 		// One pipeline per agent, built here rather than passed in: see
 		// `createPrepareTurn`. A delegated agent that inherited the lead's
 		// would compact against the lead's summary and overwrite its state.
-		prepareTurn: runtimeConfig.createPrepareTurn?.(),
+		prepareTurn: pinConversationHead(
+			prepareTurn as never,
+			options.pinnedHead ?? [],
+		) as AgentConfig["prepareTurn"],
 		condenseDiscardedReasoning: runtimeConfig.condenseDiscardedReasoning,
 		parentAgentId: options.parentAgentId,
 		abortSignal: options.abortSignal,

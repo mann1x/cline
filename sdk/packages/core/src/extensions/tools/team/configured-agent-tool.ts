@@ -1,3 +1,4 @@
+import { releasePolykvAgent } from "@cline/llms";
 import {
 	type AgentEvent,
 	type AgentResult,
@@ -12,6 +13,7 @@ import {
 	zodToJsonSchema,
 } from "@cline/shared";
 import { z } from "zod";
+import { isPolykvProvider } from "../../context/polykv-session";
 import {
 	MAX_NODE_PLACEMENT_ATTEMPTS,
 	NODE_MODEL_MISSING_COOL_OFF_MS,
@@ -454,10 +456,29 @@ export function createConfiguredAgentTools(
 						context.emitUpdate,
 						options.onSubAgentEvent,
 					);
+					// Its own engine session, never the lead's; on a PolyKV node
+					// every instance of this agent shares its system prompt and
+					// tools as one pool.
+					const engineSessionId = `${context.sessionId ?? "cerebriline"}~agent-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 					const buildSubAgent = () =>
 						createDelegatedAgent({
 							kind: "subagent",
 							prompt: config.systemPrompt,
+							engineSessionId,
+							...(isPolykvProvider({
+								providerId: runtimeConfig.providerId,
+								baseUrl: runtimeConfig.baseUrl,
+								polykv: (
+									runtimeConfig.providerConfig as { polykv?: never } | undefined
+								)?.polykv,
+							})
+								? {
+										polykvWorker: {
+											group: context.sessionId ?? "cerebriline",
+											layers: 0,
+										},
+									}
+								: {}),
 							configProvider,
 							tools,
 							maxIterations: config.maxIterations,
@@ -541,6 +562,7 @@ export function createConfiguredAgentTools(
 							runtimeConfig = buildRuntimeConfig();
 							configProvider =
 								createDelegatedAgentConfigProvider(runtimeConfig);
+							await releasePolykvAgent(engineSessionId).catch(() => undefined);
 							subAgent = buildSubAgent();
 							result = await runOnce();
 						}
@@ -620,6 +642,15 @@ export function createConfiguredAgentTools(
 						// that reports success and does nothing.
 						placed?.release();
 						cancellation.release();
+						// Its engine session goes back the moment it ends.
+						const released = await releasePolykvAgent(engineSessionId).catch(
+							() => undefined,
+						);
+						for (const failure of released?.failed ?? []) {
+							options.logger?.log(
+								`[Agents] could not close engine session ${failure.sessionId}: ${failure.error}`,
+							);
+						}
 					}
 				},
 				timeoutMs: 300000,
