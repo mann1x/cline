@@ -149,6 +149,7 @@ describe("the generator with compaction prompts", () => {
 		expect(result.compaction).toEqual({
 			kept: ["council-critic"],
 			removed: [],
+			unchanged: [],
 		});
 		expect(result.raw).toContain(good);
 	});
@@ -164,11 +165,29 @@ describe("the generator with compaction prompts", () => {
 		expect(result.compaction).toEqual({
 			kept: [],
 			removed: ["council-critic"],
+			unchanged: [],
 		});
 		expect(result.audit.template?.compaction).toBeUndefined();
 		expect(result.audit.problems.join("\n")).toContain(
 			"Removed '# compaction: council-critic'",
 		);
+	});
+
+	// Measured on qwen3.5:397b-cloud, 2026-09-23: all six came back
+	// byte-identical. Kept, they would freeze today's built-in text into the
+	// template and stop following it.
+	it("leaves a verbatim copy out of the file, without calling it a failure", async () => {
+		const result = await run(
+			TEMPLATE(`# compaction: council-critic\n\n${CRITIC}\n`),
+			{ "council-critic": CRITIC },
+		);
+		expect(result.raw).not.toContain("# compaction:");
+		expect(result.compaction).toEqual({
+			kept: [],
+			removed: [],
+			unchanged: ["council-critic"],
+		});
+		expect(result.audit.problems.join("\n")).not.toContain("compaction");
 	});
 
 	it("does not ask, and strips any it is sent, when not opted in", async () => {

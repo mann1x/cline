@@ -1351,12 +1351,14 @@ export interface GeneratePromptTemplateResult {
 	 * because they still failed the check after the last attempt. Present only
 	 * when `compactionPrompts` asked for some.
 	 */
-	compaction?: { kept: string[]; removed: string[] };
+	compaction?: { kept: string[]; removed: string[]; unchanged: string[] };
 }
 
 interface GenerationAttempt extends GeneratePromptTemplateResult {
 	/** Compaction ids whose section must not survive as written. */
 	compactionFailing: Set<string>;
+	/** Compaction ids copied through verbatim, to be left out of the file. */
+	compactionUnchanged: Set<string>;
 	/** Why each of those failed, in the audit's words. */
 	compactionProblems: string[];
 }
@@ -1369,15 +1371,21 @@ function finishGeneration(
 	attempt: GenerationAttempt,
 	requested: readonly string[],
 ): GeneratePromptTemplateResult {
-	const { compactionFailing, compactionProblems, ...result } = attempt;
+	const {
+		compactionFailing,
+		compactionUnchanged,
+		compactionProblems,
+		...result
+	} = attempt;
 	if (requested.length === 0 && compactionFailing.size === 0) {
 		return result;
 	}
 	const removed = [...compactionFailing].sort();
-	const raw = stripCompactionSections(result.raw, compactionFailing);
+	const dropped = new Set([...compactionFailing, ...compactionUnchanged]);
+	const raw = stripCompactionSections(result.raw, dropped);
 	const template = result.audit.template;
 	const keptEntries = Object.entries(template?.compaction ?? {}).filter(
-		([id]) => !compactionFailing.has(id),
+		([id]) => !dropped.has(id),
 	);
 	const others = result.audit.problems.filter(
 		(problem) =>
@@ -1411,6 +1419,7 @@ function finishGeneration(
 					compaction: {
 						kept: keptEntries.map(([id]) => id).sort(),
 						removed: removed.filter((id) => requested.includes(id)),
+						unchanged: [...compactionUnchanged].sort(),
 					},
 				}
 			: {}),
@@ -1623,6 +1632,7 @@ export async function generatePromptTemplate(
 			audit,
 			attempts: attempt,
 			compactionFailing: compactionAudit.failing,
+			compactionUnchanged: compactionAudit.unchanged,
 			compactionProblems: compactionAudit.problems,
 		};
 

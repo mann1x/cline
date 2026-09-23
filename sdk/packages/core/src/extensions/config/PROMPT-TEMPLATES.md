@@ -126,7 +126,7 @@ valid:
 
 | id | replaces | Features field | must keep |
 |---|---|---|---|
-| `replay` | `DEFAULT_REPLAY_COMPACTION_PROMPT` | Compaction Prompt | `{{files_read}}`, `{{files_edited}}` where the source has them |
+| `replay` | `DEFAULT_REPLAY_COMPACTION_PROMPT` | Compaction Prompt | — (no placeholders; any a custom source has are checked) |
 | `full` | `DEFAULT_FULL_COMPACTION_PROMPT` | Full Compaction Prompt | as above |
 | `retrospective` | `DEFAULT_THINKING_COMPACTION_PROMPT` | Thinking Compaction Prompt | — |
 | `council-writer` | `DEFAULT_COUNCIL_WRITER_PROMPT` | Council: Writer Instruction | `<<<HALFWAY>>>` |
@@ -330,7 +330,13 @@ see §6.
 When it is set, `buildCompactionTranslationRequest()` appends a *compaction
 prompts* block to the request. That block states the rules, then each source
 under `=== <id> ===`, and asks for one `# compaction: <id>` section each.
-Copying a source through unchanged is allowed here, unlike for tools.
+Copying a source through unchanged is allowed. **But a copy is not kept**: the
+section is left out of the file and reported under `compaction.unchanged`. A
+verbatim section is a snapshot, so the next edit to the built-in prompt would
+reach every model except this one. This is the same reason `{{DEFAULT}}` exists
+for tools, and leaving the section out is what "use the built-in" means.
+Measured on `qwen3.5:397b-cloud`, 2026-09-23: asked for all six, it returned
+all six byte-identical.
 
 `auditCompactionSections()` then checks, and each failure is a repair problem
 like any other:
@@ -345,7 +351,7 @@ like any other:
 
 **A section that still fails after the last attempt is removed**
 (`stripCompactionSections`), and the result says so under
-`compaction: {kept, removed}` and in `problems`. A tool section is kept as "the
+`compaction: {kept, removed, unchanged}` and in `problems`. A tool section is kept as "the
 best attempt" instead. A compaction section is not, because a removed one falls
 back to the built-in prompt and a broken one loses history. Section rewrites
 (`onlyTools`) refuse to combine with it.
@@ -785,6 +791,9 @@ $R --model gemma4:31b-cloud --model qwen3.5:397b-cloud \
 # --match-* states the block the model must write, and the audit fails the
 # attempt if the stated match does not arrive.
 # glm needs --think as well, and a longer timeout to pay for it (see below)
+# (before 2026-09-23 Bun's fetch cut any request idle for 300 s whatever
+#  --timeout said, reported only as "The operation timed out"; the script now
+#  passes `timeout: false`)
 $R2="bun scripts/review-prompt-templates.mts --timeout 3000"
 $R2 --model glm-5.3-flash-tpl2:latest  --family glm5_next --think \
    --match-family 'glm*'      --name glm

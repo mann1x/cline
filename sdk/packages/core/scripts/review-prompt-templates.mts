@@ -582,12 +582,18 @@ async function post(
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), timeoutMs);
 	try {
+		// `timeout: false` turns off Bun's own 300 s idle bound, so `--timeout`
+		// is the only limit. A non-streaming request to a reasoning model sends
+		// no byte until the whole reply is done: glm-5.3-flash with `--think`
+		// was cut at exactly 300 s on 2026-09-23, reported only as "The
+		// operation timed out", with `--timeout 3000` set.
 		const response = await fetch(`${host}${path}`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify(body),
 			signal: controller.signal,
-		});
+			timeout: false,
+		} as RequestInit);
 		if (!response.ok) {
 			throw new Error(`${path} returned ${response.status}`);
 		}
@@ -817,7 +823,7 @@ async function review(model: string, options: Options): Promise<boolean> {
 		);
 		if (result.compaction) {
 			runLog.log(
-				`  compaction sections kept: ${result.compaction.kept.join(", ") || "none"}; removed as failing: ${result.compaction.removed.join(", ") || "none"}`,
+				`  compaction sections kept: ${result.compaction.kept.join(", ") || "none"}; removed as failing: ${result.compaction.removed.join(", ") || "none"}; left out as verbatim copies: ${result.compaction.unchanged.join(", ") || "none"}`,
 			);
 		}
 		if (result.audit.problems.length === 0) {

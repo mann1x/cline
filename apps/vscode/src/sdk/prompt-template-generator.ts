@@ -61,7 +61,7 @@ export interface GeneratedTemplate {
 	/** Empty when the proposal was clean; otherwise what is still wrong. */
 	problems: string[]
 	/** Compaction sections kept and removed, when translation was asked for. */
-	compaction?: { kept: string[]; removed: string[] }
+	compaction?: { kept: string[]; removed: string[]; unchanged: string[] }
 }
 
 /**

@@ -66,5 +66,6 @@ export async function generatePromptTemplate(controller: Controller, _request: E
 		problems: generated.problems,
 		compactionKept: generated.compaction?.kept ?? [],
 		compactionRemoved: generated.compaction?.removed ?? [],
+		compactionUnchanged: generated.compaction?.unchanged ?? [],
 	})
 }

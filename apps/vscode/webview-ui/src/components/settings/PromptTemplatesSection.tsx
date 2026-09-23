@@ -192,6 +192,9 @@ const PromptTemplatesSection = () => {
 							`Removed failing compaction prompts for ${result.compactionRemoved.join(", ")}; those use the built-in prompt.`,
 						]
 					: []),
+				...(result.compactionUnchanged.length > 0
+					? [`The model left ${result.compactionUnchanged.join(", ")} unchanged; those keep using the built-in prompt.`]
+					: []),
 			].join(" ")
 			setGenerated(
 				(result.problems.length > 0

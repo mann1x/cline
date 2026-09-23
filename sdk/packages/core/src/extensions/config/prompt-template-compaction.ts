@@ -102,7 +102,7 @@ export function buildCompactionTranslationRequest(
 		"- Keep every rule. Reorder, restate and sharpen, but do not drop a requirement, a prohibition, a step or a format. A rewrite much shorter than its source has lost rules and is rejected.",
 		"- Keep every placeholder exactly as written, braces included: they are substituted at runtime.",
 		"- Keep every literal marker exactly as written, such as `<<<HALFWAY>>>`: the harness splits on it.",
-		"- Where you would not change a prompt, copy it through unchanged. That is always acceptable here, unlike for the tools.",
+		"- Where you would not change a prompt, copy it through unchanged. That is accepted, and the copy is then left out of the file, so that prompt keeps using the built-in text and follows its future edits.",
 		"- Write each section once. Do not add a `# compaction:` section for an id that is not listed.",
 		"",
 	];
@@ -116,6 +116,17 @@ export interface CompactionSectionAudit {
 	problems: string[];
 	/** Ids whose section must not be kept as written. */
 	failing: Set<string>;
+	/**
+	 * Ids whose section is the source copied through. Not a failure -- the
+	 * request allows it -- but not kept either: a copy is a snapshot, and the
+	 * next edit to the built-in prompt would reach every model except this one.
+	 * Leaving the section out is what "use the built-in" means.
+	 */
+	unchanged: Set<string>;
+}
+
+function normalizeForComparison(text: string): string {
+	return text.replace(/\s+/g, " ").trim();
 }
 
 /**
@@ -130,6 +141,7 @@ export function auditCompactionSections(
 ): CompactionSectionAudit {
 	const problems: string[] = [];
 	const failing = new Set<string>();
+	const unchanged = new Set<string>();
 	const got = compaction ?? {};
 	const wanted = new Set<string>(requestedIds(sources));
 
@@ -150,6 +162,10 @@ export function auditCompactionSections(
 			problems.push(
 				`There is no '# compaction: ${id}' section. Add it after the tool sections, holding your rewrite of the '${id}' prompt, or the source copied through unchanged.`,
 			);
+			continue;
+		}
+		if (normalizeForComparison(body) === normalizeForComparison(source)) {
+			unchanged.add(id);
 			continue;
 		}
 		// Literal markers such as `<<<HALFWAY>>>` are checked by the template
@@ -175,7 +191,7 @@ export function auditCompactionSections(
 			);
 		}
 	}
-	return { problems, failing };
+	return { problems, failing, unchanged };
 }
 
 /**

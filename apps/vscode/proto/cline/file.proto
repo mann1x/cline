@@ -171,6 +171,7 @@ message GeneratedPromptTemplate {
   repeated string problems = 4; // Empty when the proposal was clean
   repeated string compaction_kept = 5; // `# compaction:` ids the file carries, when translation was asked for
   repeated string compaction_removed = 6; // Ids that failed the check and were cut, so they use the built-in prompt
+  repeated string compaction_unchanged = 7; // Ids the model copied through verbatim; left out, so they keep following the built-in
 }
 
 // One prompt template, as the settings panel shows it
