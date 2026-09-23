@@ -21,6 +21,7 @@ import {
 } from "@cline/shared";
 import { z } from "zod";
 import { isPolykvProvider } from "../../context/polykv-session";
+import type { ConfiguredAgentConfig } from "./configured-agent-config";
 import {
 	createDelegatedAgent,
 	type DelegatedAgentConfigProvider,
@@ -317,6 +318,8 @@ export interface SpawnAgentToolConfig {
 	 * would give it.
 	 */
 	configuredAgents?: () => ReadonlyMap<string, AgentTool>;
+	/** The same agents' definitions, keyed alike: what a swarm worker needs. */
+	configuredAgentConfigs?: () => ReadonlyMap<string, ConfiguredAgentConfig>;
 	/**
 	 * The session's swarm, when it can run one. Present means `merge` and
 	 * `count` are offered and routed to it, and `spawn_swarm` is not
@@ -342,7 +345,7 @@ const SPAWN_AGENT_DESCRIPTION =
 	"Give each sub-agent a short `name`: when several run at once it is the only thing telling their progress apart on screen. ";
 
 const SPAWN_AGENT_SWARM_DESCRIPTION =
-	'With `merge: true` the agents run as a swarm instead: they share a snapshot of your current context, so they need no `knowledge` about what you already know, and you get back one merged report rather than one per agent. Use it when the parts do not depend on each other and you want one answer -- searching a repo several ways, checking several files, trying several approaches. With a single `task`, `count` says how many agents run it; `count: "max"` means as many as the servers will take. ';
+	'With `merge: true` the agents run as a swarm instead: they share a snapshot of your current context, so they need no `knowledge` about what you already know, and you get back one merged report rather than one per agent. Use it when the parts do not depend on each other and you want one answer -- searching a repo several ways, checking several files, trying several approaches. With a single `task`, `count` says how many agents run it; `count: "max"` means as many as the servers will take. An `agents` entry with a `type` keeps the role and tools of that agent in the swarm. ';
 
 export function describeSpawnAgent(swarm: boolean): string {
 	return (
@@ -471,24 +474,75 @@ function checkMembers(input: SpawnAgentInput): SpawnAgentInput {
 	};
 }
 
-/** The swarm tool's input, from a `merge` call. */
-function toSwarmInput(input: SpawnAgentInput): Record<string, unknown> {
+/**
+ * The swarm tool's input, from a `merge` call.
+ *
+ * An entry naming a configured agent in `type` becomes a worker with that
+ * agent's role and tool list, on the swarm's nodes and snapshot. Dropped
+ * before, so asked for "15 code-verifiers as a swarm" the round ran fifteen
+ * generic workers under the lead's shared instructions.
+ */
+export function toSwarmInput(
+	input: SpawnAgentInput,
+	configs?: ReadonlyMap<string, ConfiguredAgentConfig>,
+): Record<string, unknown> {
 	const role = input.instructions ?? input.systemPrompt ?? "";
 	const knowledge = withKnowledge(input.knowledge, "").replace(
 		/\n\n# Your task\n\n$/,
 		"",
 	);
+	const roleOf = (member: SpawnAgentMember) => {
+		const type = member.type?.trim();
+		if (!type) {
+			return undefined;
+		}
+		const agent = configs?.get(configuredAgentKey(type));
+		if (!agent) {
+			const known = [...(configs?.values() ?? [])].map((entry) => entry.name);
+			throw new Error(
+				`No configured agent named "${type}".${
+					known.length > 0
+						? ` Configured agents: ${known.join(", ")}.`
+						: " None are configured."
+				}`,
+			);
+		}
+		// A swarm's workers share the lead's snapshot on the swarm's nodes. An
+		// agent pinned to a model of its own cannot share it, and running it on
+		// the node's model would change its model without saying so.
+		if (agent.providerId || agent.modelId || agent.profile) {
+			throw new Error(
+				`The configured agent "${agent.name}" runs on its own model (${
+					agent.profile
+						? `profile ${agent.profile}`
+						: [agent.providerId, agent.modelId].filter(Boolean).join("/")
+				}), and a swarm runs every worker on the swarm's shared snapshot. Send its entries without \`merge\` to run them on their own model, each with its own report.`,
+			);
+		}
+		return agent;
+	};
 	return {
 		systemPrompt: [role, knowledge].filter((part) => part.trim()).join("\n\n"),
 		...(input.task ? { task: input.task } : {}),
 		...(input.agents && input.agents.length > 0
 			? {
-					tasks: input.agents.map((member) => ({
-						...(member.name ? { name: member.name } : {}),
-						task: member.instructions
-							? `${member.instructions}\n\n${member.task}`
-							: member.task,
-					})),
+					tasks: input.agents.map((member) => {
+						const agent = roleOf(member);
+						return {
+							...(member.name ? { name: member.name } : {}),
+							task: member.instructions
+								? `${member.instructions}\n\n${member.task}`
+								: member.task,
+							...(agent
+								? {
+										systemPrompt: [agent.systemPrompt, knowledge]
+											.filter((part) => part.trim())
+											.join("\n\n"),
+										...(agent.tools ? { tools: agent.tools } : {}),
+									}
+								: {}),
+						};
+					}),
 				}
 			: {}),
 		...(input.count !== undefined ? { count: input.count } : {}),
@@ -498,7 +552,7 @@ function toSwarmInput(input: SpawnAgentInput): Record<string, unknown> {
 /** What a session hands its spawn tool beyond the connection. */
 export type SpawnToolOptions = Pick<
 	SpawnAgentToolConfig,
-	"swarm" | "configuredAgents"
+	"swarm" | "configuredAgents" | "configuredAgentConfigs"
 >;
 
 /**
@@ -517,7 +571,7 @@ export function createSpawnAgentTool(
 			const input = readAgentsField(raw);
 			if (input.merge && config.swarm) {
 				return (await config.swarm.execute(
-					toSwarmInput(input) as never,
+					toSwarmInput(input, config.configuredAgentConfigs?.()) as never,
 					context,
 				)) as never;
 			}

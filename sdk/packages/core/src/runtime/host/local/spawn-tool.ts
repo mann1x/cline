@@ -179,6 +179,9 @@ export function createSessionSpawnTool(
 		...(options?.configuredAgents
 			? { configuredAgents: options.configuredAgents }
 			: {}),
+		...(options?.configuredAgentConfigs
+			? { configuredAgentConfigs: options.configuredAgentConfigs }
+			: {}),
 		configProvider: {
 			getRuntimeConfig: () =>
 				deps
@@ -326,6 +329,7 @@ export function createSessionSwarmTool(
 		task: string;
 		systemPrompt: string;
 		poolId?: string;
+		tools?: string[];
 		emitUpdate?: (update: unknown) => void;
 		signal?: AbortSignal;
 	}): Promise<SwarmWorkerResult> => {
@@ -343,7 +347,12 @@ export function createSessionSwarmTool(
 						...ToolPresets[resolveToolPresetName({ mode: config.mode })],
 						executors: toolExecutors,
 					}),
-				).filter((tool) => !SWARM_WORKER_EXCLUDED_TOOLS.has(tool.name))
+				).filter(
+					(tool) =>
+						!SWARM_WORKER_EXCLUDED_TOOLS.has(tool.name) &&
+						// A configured agent's own list, when the worker is one.
+						(request.tools === undefined || request.tools.includes(tool.name)),
+				)
 			: [];
 		// The worker's row: what it is running and writing, as a lone
 		// `spawn_agent` reports it.

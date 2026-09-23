@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readAgentsField } from "./spawn-agent-tool";
+import { readAgentsField, toSwarmInput } from "./spawn-agent-tool";
 
 describe("readAgentsField", () => {
 	it("takes an array as it is", () => {
@@ -70,5 +70,61 @@ describe("an agents entry with a count", () => {
 		]);
 		expect(read.agents?.every((agent) => !("count" in agent))).toBe(true);
 		expect(read.agents?.[0]?.type).toBe("code-verifier");
+	});
+});
+
+describe("a merged swarm entry naming a configured agent", () => {
+	const configs = new Map([
+		[
+			"code_verifier",
+			{
+				name: "code-verifier",
+				description: "",
+				systemPrompt: "You verify code.",
+				tools: ["read_files"],
+			},
+		],
+		[
+			"pinned",
+			{
+				name: "pinned",
+				description: "",
+				systemPrompt: "x",
+				profile: "big-model",
+			},
+		],
+	]);
+
+	it("runs with that agent's role and tools", () => {
+		const swarm = toSwarmInput(
+			{
+				merge: true,
+				knowledge: { text: "The file is a.html." },
+				agents: [{ type: "Code-Verifier", task: "check it" }],
+			} as never,
+			configs as never,
+		) as { tasks: Array<Record<string, unknown>> };
+		expect(swarm.tasks[0]?.systemPrompt).toMatch(
+			/^You verify code\.[\s\S]*a\.html/,
+		);
+		expect(swarm.tasks[0]?.tools).toEqual(["read_files"]);
+	});
+
+	it("refuses an agent pinned to its own model, saying how to run it", () => {
+		expect(() =>
+			toSwarmInput(
+				{ merge: true, agents: [{ type: "pinned", task: "t" }] } as never,
+				configs as never,
+			),
+		).toThrow(/profile big-model.*without `merge`/s);
+	});
+
+	it("refuses a type nobody configured, by name", () => {
+		expect(() =>
+			toSwarmInput(
+				{ merge: true, agents: [{ type: "ghost", task: "t" }] } as never,
+				configs as never,
+			),
+		).toThrow(/No configured agent named "ghost".*code-verifier/s);
 	});
 });

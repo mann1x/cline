@@ -78,6 +78,20 @@ describe("createSessionSwarmTool workers", () => {
 		expect(worker?.prompt).toBe("Check the syntax.");
 	});
 
+	it("gives a configured agent's worker only that agent's tools", async () => {
+		await (
+			swarmOn("ollama") as unknown as {
+				execute: (i: unknown, c: unknown) => Promise<unknown>;
+			}
+		).execute(
+			{ systemPrompt: "s", tasks: [{ task: "a", tools: ["read_files"] }] },
+			{ agentId: "lead" },
+		);
+		expect(
+			(built[0]?.tools as Array<{ name: string }>).map((tool) => tool.name),
+		).toEqual(["read_files"]);
+	});
+
 	it("gives a worker no way to ask the user a question", async () => {
 		await (
 			swarmOn("ollama") as unknown as {

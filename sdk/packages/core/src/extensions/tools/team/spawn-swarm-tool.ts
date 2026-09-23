@@ -74,6 +74,16 @@ export const SpawnSwarmInputSchema = z.object({
 					.optional()
 					.describe("Short label for this worker, shown in the UI."),
 				task: z.string().describe("What this worker is to do."),
+				systemPrompt: z
+					.string()
+					.optional()
+					.describe(
+						"This worker's own role, in place of the shared `systemPrompt`.",
+					),
+				tools: z
+					.array(z.string())
+					.optional()
+					.describe("The only tools this worker may use, by name."),
 			}),
 		)
 		.optional()
@@ -180,6 +190,8 @@ export interface SwarmWorkerRequest {
 	systemPrompt: string;
 	/** The shared pool, when there is one. */
 	poolId?: string;
+	/** The only tools this worker gets, by name; absent means all of them. */
+	tools?: string[];
 	/**
 	 * Progress for this worker's row: placement, tool calls, output. Already
 	 * tagged with the worker, so the runner reports as a lone agent would.
@@ -276,11 +288,15 @@ function digestOf(name: string, result: AgentResult): WorkDigest {
 function requestedWorkers(input: SpawnSwarmInput): Array<{
 	name: string;
 	task: string;
+	systemPrompt?: string;
+	tools?: string[];
 }> {
 	if (input.tasks && input.tasks.length > 0) {
 		return input.tasks.map((entry, index) => ({
 			name: entry.name?.trim() || `worker-${index + 1}`,
 			task: entry.task,
+			...(entry.systemPrompt ? { systemPrompt: entry.systemPrompt } : {}),
+			...(entry.tools ? { tools: entry.tools } : {}),
 		}));
 	}
 	const task = input.task?.trim();
@@ -452,7 +468,8 @@ export function createSpawnSwarmTool(
 						member: index,
 						name: entry.name ?? `worker-${index + 1}`,
 						task: entry.task,
-						systemPrompt: input.systemPrompt,
+						systemPrompt: entry.systemPrompt ?? input.systemPrompt,
+						...(entry.tools ? { tools: entry.tools } : {}),
 					}))
 				: Array.from({ length: queueLength }, (_entry, index) => ({
 						member: index,

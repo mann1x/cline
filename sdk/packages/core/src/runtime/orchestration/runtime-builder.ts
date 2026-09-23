@@ -1181,10 +1181,21 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 					(tool) => [configuredAgentKey(tool.name), tool] as const,
 				),
 			);
+			// What a swarm needs of a configured agent: not its tool, which runs
+			// it on its own, but its role and tool list, for a worker on the
+			// swarm's shared snapshot.
+			const configuredConfigsByName = new Map(
+				configuredAgents.configs.map(
+					(agent) => [configuredAgentKey(agent.name), agent] as const,
+				),
+			);
 			const spawnTool = createSpawnTool({
 				...(swarmTool ? { swarm: swarmTool } : {}),
 				...(configuredByName.size > 0
-					? { configuredAgents: () => configuredByName }
+					? {
+							configuredAgents: () => configuredByName,
+							configuredAgentConfigs: () => configuredConfigsByName,
+						}
 					: {}),
 			});
 			tools.push({
