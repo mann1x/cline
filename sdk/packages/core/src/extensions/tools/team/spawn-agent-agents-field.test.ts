@@ -4,7 +4,7 @@ import { readAgentsField } from "./spawn-agent-tool";
 describe("readAgentsField", () => {
 	it("takes an array as it is", () => {
 		const input = { agents: [{ task: "a" }] };
-		expect(readAgentsField(input as never)).toBe(input);
+		expect(readAgentsField(input as never)).toEqual(input);
 	});
 
 	it("reads a list sent as JSON text", () => {
@@ -51,5 +51,24 @@ describe("readAgentsField", () => {
 		expect(() =>
 			readAgentsField({ agents: [{ task: "a" }, { name: "b" }] } as never),
 		).toThrow(/agents\[1\]` has no `task`/);
+	});
+});
+
+describe("an agents entry with a count", () => {
+	it("becomes that many agents, named apart, in place", () => {
+		const read = readAgentsField({
+			agents: [
+				{ type: "code-verifier", task: "a", count: 3 },
+				{ name: "solo", task: "b" },
+			],
+		} as never);
+		expect(read.agents?.map((agent) => agent.name)).toEqual([
+			"code-verifier-1",
+			"code-verifier-2",
+			"code-verifier-3",
+			"solo",
+		]);
+		expect(read.agents?.every((agent) => !("count" in agent))).toBe(true);
+		expect(read.agents?.[0]?.type).toBe("code-verifier");
 	});
 });

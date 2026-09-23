@@ -65,6 +65,37 @@ describe("an agent through the spawn queue", () => {
 		expect(log).toEqual(["refused oc", "admitted ollama", "release ollama"]);
 	});
 
+	// pandorum 2026-09-23 (qjryk): the route to bs2 went, and Node1 answered
+	// every agent with a zero-token `Bad Gateway` run. It stayed in rotation
+	// and 13 agents were lost to it while Node2 had room.
+	it("takes a node whose gateway has nothing behind it out, and places the agent elsewhere", async () => {
+		const { placement, log } = fakePlacement(["oc", "ollama"]);
+		const updates: unknown[] = [];
+		const run = vi
+			.fn()
+			.mockResolvedValueOnce({
+				text: "Bad Gateway",
+				finishReason: "error",
+				iterations: 0,
+				usage: { inputTokens: 0, outputTokens: 0 },
+			} as AgentResult)
+			.mockImplementationOnce(async (_node, admitted: () => void) => {
+				admitted();
+				return ok("done");
+			});
+
+		const outcome = await runPlacedAgent({
+			placement,
+			label: "a",
+			run,
+			emitUpdate: (update) => updates.push(update),
+		});
+
+		expect(outcome.placed.nodeId).toBe("ollama");
+		expect(log.slice(0, 2)).toEqual(["unreachable oc", "release oc"]);
+		expect(JSON.stringify(updates)).toContain("the node is not answering");
+	});
+
 	// Re-running an agent that has started would redo whatever it did.
 	it("does not re-run an agent that failed after it was admitted", async () => {
 		const { placement, log } = fakePlacement(["oc"]);

@@ -144,3 +144,44 @@ export function isWastedNodeRun(result: {
 		isModelMissing(result.text)
 	);
 }
+
+/**
+ * The node's front door answered for a server that is not there.
+ *
+ * A 502 or 504 is a proxy or tunnel saying the thing behind it did not reply,
+ * which is "unreachable" one hop further in. Measured on pandorum 2026-09-23
+ * (qjryk): the route to bs2 went when the WAN address changed, and every
+ * agent sent to Node1 came back six seconds later as a zero-token run whose
+ * text was `Bad Gateway`. The server had answered, so the transport test above
+ * kept the node in rotation, and the queue sent the next agent there: 13 lost
+ * in two minutes while Node2 had room.
+ *
+ * Anchored on the whole text, like the transport messages, so that a model's
+ * output mentioning a 502 cannot take a node out.
+ */
+const GATEWAY_DOWN_MESSAGES = [
+	/^(?:(?:error:\s*)?(?:502|504)\s*)?bad gateway$/i,
+	/^(?:(?:error:\s*)?(?:502|504)\s*)?gateway time-?out$/i,
+	/^no healthy upstream$/i,
+];
+
+export function isGatewayDown(text: unknown): boolean {
+	return (
+		typeof text === "string" &&
+		GATEWAY_DOWN_MESSAGES.some((pattern) => pattern.test(text.trim()))
+	);
+}
+
+/** A run that spent nothing because the node's gateway had nothing behind it. */
+export function isGatewayDownRun(result: {
+	finishReason?: unknown;
+	text?: unknown;
+	usage?: { inputTokens?: number; outputTokens?: number };
+}): boolean {
+	return (
+		result.finishReason === "error" &&
+		(result.usage?.inputTokens ?? 0) === 0 &&
+		(result.usage?.outputTokens ?? 0) === 0 &&
+		isGatewayDown(result.text)
+	);
+}

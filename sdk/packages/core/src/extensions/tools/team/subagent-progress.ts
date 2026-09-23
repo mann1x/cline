@@ -75,7 +75,7 @@ export function reportSubagentPlaced(
  * started a process on the spot.
  */
 export const DELEGATION_PACING_NOTE =
-	"Launching many is safe: the harness paces them. Each agent starts when a node has room for it and waits in a queue until then, so asking for more than can run at once overloads nothing -- it only means some start later. Do not hold back or split the work into waves: make every call the job needs in one message, and each returns its own result when its agent finishes.";
+	"Launching many is safe: the harness paces them. Each agent starts when a node has room for it and waits in a queue until then, so asking for more than can run at once overloads nothing -- it only means some start later. A call returns when every agent in it has finished, and your next message is sent only after that -- so ask for the whole job at once: one `spawn_agent` call whose `agents` list holds every agent (a configured agent by `type`, several of one kind with `count`), or every call in the same message.";
 
 export function createSubagentProgress(
 	emitUpdate: ((update: unknown) => void) | undefined,

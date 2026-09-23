@@ -12,6 +12,10 @@ match:
      text kept the retired claim that the scan names the *opening* bracket,
      and told the reader to fix every listed line "in a single edit", which
      the one-edit-at-a-time rule forbids. Both restated to match the built-in.
+     `spawn_agent` cut back to `{{DEFAULT}}` by hand on 2026-09-23: the
+     model's preface described one agent per call (`systemPrompt`, `task`)
+     ahead of the built-in text, with no `agents`, `type` or `count`, and the
+     lead sent a 75-agent fan-out as one call per message (pandorum qjryk).
 
      Every other section is as it was. Before this run:
 
@@ -318,12 +322,6 @@ Switch from plan mode to act mode.
 {{DEFAULT}}
 
 # tool: spawn_agent
-Spawn a sub-agent with a custom system prompt for specialized tasks.
-
-- **Usage**: Delegate focused work. The sub-agent runs to completion in its own context.
-- **Arguments**: `systemPrompt` (string), `task` (string).
-- **Output**: `{text, iterations, finishReason, usage}`. `text` is the final answer. The sub-agent has already finished; no polling is needed.
-
 {{DEFAULT}}
 
 # tool: team_spawn_teammate

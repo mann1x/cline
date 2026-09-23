@@ -203,15 +203,21 @@ export function spawnBatchMembers(input: unknown): Array<{ task: string; name?: 
 		}
 		return undefined
 	}
-	return agents.map((entry, index) => {
-		const member = (entry ?? {}) as { task?: unknown; name?: unknown; type?: unknown }
+	// `count` spelled out the way the tool does (`expandAgentCounts` in core):
+	// the rows are keyed by position after expansion, so both have to agree.
+	return agents.flatMap((entry, index) => {
+		const member = (entry ?? {}) as { task?: unknown; name?: unknown; type?: unknown; count?: unknown }
 		const name =
 			typeof member.name === "string" && member.name.trim()
 				? member.name.trim()
 				: typeof member.type === "string" && member.type.trim()
 					? member.type.trim()
 					: `agent-${index + 1}`
-		return { task: typeof member.task === "string" ? member.task : "", name }
+		const task = typeof member.task === "string" ? member.task : ""
+		const count = typeof member.count === "number" ? Math.min(100, Math.max(1, Math.floor(member.count))) : 1
+		return count === 1
+			? [{ task, name }]
+			: Array.from({ length: count }, (_copy, copy) => ({ task, name: `${name}-${copy + 1}` }))
 	})
 }
 

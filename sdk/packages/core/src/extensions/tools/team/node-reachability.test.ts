@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isNodeUnreachable } from "./node-reachability";
+import { isGatewayDown, isNodeUnreachable } from "./node-reachability";
 
 /**
  * §9i.2. A node that is off, unplugged or behind a dead tunnel costs a connect
@@ -90,5 +90,27 @@ describe("telling a dead node from a node that answered", () => {
 		error.cause = error;
 
 		expect(isNodeUnreachable(error)).toBe(false);
+	});
+});
+
+describe("isGatewayDown", () => {
+	it("reads a proxy's 502 and 504 as nothing behind it", () => {
+		for (const text of [
+			"Bad Gateway",
+			"502 Bad Gateway",
+			"Error: 502 Bad Gateway",
+			"Gateway Timeout",
+			"504 Gateway Time-out",
+			"no healthy upstream",
+		]) {
+			expect(isGatewayDown(text)).toBe(true);
+		}
+	});
+
+	it("does not read a model's prose about a gateway as one", () => {
+		expect(
+			isGatewayDown("The server returned a 502 Bad Gateway, so I retried"),
+		).toBe(false);
+		expect(isGatewayDown("Service Unavailable")).toBe(false);
 	});
 });

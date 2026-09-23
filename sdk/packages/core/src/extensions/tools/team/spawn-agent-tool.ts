@@ -128,7 +128,46 @@ export const SpawnAgentMemberSchema = z.object({
 		.describe(
 			"A configured agent to run this entry as (the name after `subagent_`). It keeps its own role and model; the shared `knowledge` is given to it with the task.",
 		),
+	count: z
+		.number()
+		.int()
+		.positive()
+		.optional()
+		.describe(
+			"How many agents run this entry, each with its own report (default 1). 15 of each of five agent types is five entries with `count: 15`, not 75 entries.",
+		),
 });
+
+/** Most agents one entry's `count` may ask for. */
+export const MAX_AGENTS_PER_ENTRY = 100;
+
+/**
+ * One entry per agent, with each `count` spelled out.
+ *
+ * Copies are named `<name>-<n>` so their rows and reports tell them apart.
+ * The host expands the same way (`spawnBatchMembers`), which is what keeps a
+ * row keyed `<call>#<index>` on the agent it shows.
+ */
+export function expandAgentCounts(
+	agents: readonly SpawnAgentMember[],
+): SpawnAgentMember[] {
+	return agents.flatMap((member, index) => {
+		const count = Math.min(
+			MAX_AGENTS_PER_ENTRY,
+			Math.max(1, Math.floor(member.count ?? 1)),
+		);
+		const { count: _count, ...rest } = member;
+		if (count === 1) {
+			return [rest];
+		}
+		const base =
+			member.name?.trim() || member.type?.trim() || `agent-${index + 1}`;
+		return Array.from({ length: count }, (_entry, copy) => ({
+			...rest,
+			name: `${base}-${copy + 1}`,
+		}));
+	});
+}
 
 export const SpawnAgentBatchInputSchema = SpawnAgentInputSchema.extend({
 	agents: z
@@ -415,6 +454,9 @@ const AGENTS_SHAPE_HELP =
 
 function checkMembers(input: SpawnAgentInput): SpawnAgentInput {
 	const members = (input.agents ?? []) as unknown[];
+	if (members.length === 0) {
+		return input;
+	}
 	members.forEach((member, index) => {
 		const task = (member as { task?: unknown } | null)?.task;
 		if (typeof task !== "string" || task.trim() === "") {
@@ -423,7 +465,10 @@ function checkMembers(input: SpawnAgentInput): SpawnAgentInput {
 			);
 		}
 	});
-	return input;
+	return {
+		...input,
+		agents: expandAgentCounts(input.agents as SpawnAgentMember[]),
+	};
 }
 
 /** The swarm tool's input, from a `merge` call. */

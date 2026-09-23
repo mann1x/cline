@@ -380,8 +380,10 @@ export function createConfiguredAgentTools(
 				// One call is one agent of this kind. The lead in sx4bp read that as a
 				// reason to avoid these tools for a fan-out ("those subagent tools
 				// seem to be individual calls") and rebuilt all five roles by hand
-				// on spawn_agent -- so say that several calls are the fan-out.
-				description: `Use the "${config.name}" subagent: ${config.description} Each call runs one agent of this kind; for several, make several calls in one message. ${DELEGATION_PACING_NOTE}`,
+				// on spawn_agent. Then in qjryk (2026-09-23) "several calls in one
+				// message" came out as one call per message, each waiting for the
+				// last -- so name the one call that is the whole fan-out.
+				description: `Use the "${config.name}" subagent: ${config.description} Each call runs one agent of this kind. For several, or several kinds at once, use one \`spawn_agent\` call with \`agents\` entries of \`type: "${config.name}"\` and a \`count\`. ${DELEGATION_PACING_NOTE}`,
 				inputSchema: zodToJsonSchema(ConfiguredAgentInputSchema),
 				execute: async (input, context) => {
 					const baseRuntimeConfig = options.configProvider.getRuntimeConfig();

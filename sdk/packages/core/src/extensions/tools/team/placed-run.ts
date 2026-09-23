@@ -29,7 +29,12 @@ import {
 	MAX_NODE_PLACEMENT_ATTEMPTS,
 	NODE_MODEL_MISSING_COOL_OFF_MS,
 } from "./agent-placement-queue";
-import { isNodeUnreachable, isWastedNodeRun } from "./node-reachability";
+import {
+	isGatewayDown,
+	isGatewayDownRun,
+	isNodeUnreachable,
+	isWastedNodeRun,
+} from "./node-reachability";
 import {
 	reportSubagentPlaced,
 	reportSubagentQueued,
@@ -187,7 +192,12 @@ export async function runPlacedAgent(
 				continue;
 			}
 			const unreachable =
-				"error" in outcome && isNodeUnreachable(outcome.error);
+				("error" in outcome &&
+					(isNodeUnreachable(outcome.error) ||
+						isGatewayDown(
+							(outcome.error as { message?: unknown } | null)?.message,
+						))) ||
+				("result" in outcome && isGatewayDownRun(outcome.result));
 			const wasted = "result" in outcome && isWastedNodeRun(outcome.result);
 			if (
 				(unreachable || wasted) &&
@@ -208,6 +218,12 @@ export async function runPlacedAgent(
 							: "unreachable"
 					}); back to the front of the queue`,
 				);
+				input.emitUpdate?.({
+					latestOutput: `${where} could not run it (${
+						wasted ? "it does not have the model" : "the node is not answering"
+					}); waiting for another node`,
+					latestOutputKind: "text",
+				});
 				await input.beforeRetry?.().catch(() => undefined);
 				front = true;
 				continue;

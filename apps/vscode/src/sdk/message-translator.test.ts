@@ -5835,6 +5835,21 @@ describe("spawnBatchMembers", () => {
 		])
 	})
 
+	it("gives an entry with a count a row per agent, named as the tool names them", () => {
+		expect(
+			spawnBatchMembers({
+				agents: [
+					{ type: "code-verifier", task: "a", count: 2 },
+					{ name: "solo", task: "b" },
+				],
+			}),
+		).toEqual([
+			{ name: "code-verifier-1", task: "a" },
+			{ name: "code-verifier-2", task: "a" },
+			{ name: "solo", task: "b" },
+		])
+	})
+
 	it('leaves count: "max" and a lone agent to one row', () => {
 		expect(spawnBatchMembers({ merge: true, count: "max", task: "t" })).toBeUndefined()
 		expect(spawnBatchMembers({ task: "t" })).toBeUndefined()
