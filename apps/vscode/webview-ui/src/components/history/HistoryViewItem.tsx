@@ -8,6 +8,7 @@ import {
 	ArrowUpIcon,
 	ChevronsDownUpIcon,
 	ChevronsUpDownIcon,
+	CopyIcon,
 	DownloadIcon,
 	StarIcon,
 	TrashIcon,
@@ -19,6 +20,7 @@ import { useExtensionState } from "@/context/ExtensionStateContext"
 import { hasReportableCost, useUsageCostVisibility } from "@/hooks/useUsageCostVisibility"
 import { cn } from "@/lib/utils"
 import { TaskServiceClient } from "@/services/grpc-client"
+import { writeToClipboard } from "@/utils/clipboard"
 import { formatLargeNumber, formatSize } from "@/utils/format"
 import { HISTORY_SETTINGS_HOVER_DELAY_MS, HistorySettingsTooltip } from "./HistorySettingsTooltip"
 
@@ -118,6 +120,12 @@ const HistoryViewItem = ({
 								e.stopPropagation()
 								handleShowTaskWithId(item.id)
 							}
+							// Copy the first prompt (the task text) to the clipboard.
+							if ((e.metaKey || e.ctrlKey) && (e.key === "c" || e.key === "C")) {
+								e.preventDefault()
+								e.stopPropagation()
+								void writeToClipboard(item.task)
+							}
 						}}
 						role="button"
 						tabIndex={0}>
@@ -131,6 +139,18 @@ const HistoryViewItem = ({
 								</span>
 							)}
 							<div className="flex gap-2 flex-shrink-0">
+								<Button
+									aria-label="Copy first prompt"
+									className="p-0 opacity-0 group-hover:opacity-100 transition-opacity"
+									onClick={(e) => {
+										e.stopPropagation()
+										void writeToClipboard(item.task)
+									}}
+									variant="ghost">
+									<span className="flex items-center gap-1 text-xs">
+										<CopyIcon className="stroke-1" />
+									</span>
+								</Button>
 								<Button
 									aria-label="Delete"
 									className="p-0 opacity-0 group-hover:opacity-100 transition-opacity"
