@@ -17,13 +17,23 @@ jobs:
     runs-on: ubuntu-latest
     # Auto-run only for trusted PR authors. Anyone else needs a maintainer
     # to opt their PR in by commenting /test-jetbrains.
+    #
+    # This job drives the upstream `cline/intellij-plugin` integration test and
+    # needs the CLINE_JETBRAINS_APP_ID / _APP_KEY app credentials. A fork does
+    # not have them, and without the guard the job fired anyway and failed hard
+    # at "Generate GitHub App Token — Input required and not supplied: app-id",
+    # a red check on every fork PR. Skip the whole job where the app id is not
+    # configured, so it runs where the credentials exist and is a clean skip
+    # (not a failure) everywhere else.
     if: |
-      (github.event_name == 'pull_request_target' &&
-       contains(fromJSON('["MEMBER","OWNER","COLLABORATOR"]'), github.event.pull_request.author_association)) ||
-      (github.event_name == 'issue_comment' &&
-       github.event.issue.pull_request &&
-       contains(github.event.comment.body, '/test-jetbrains') &&
-       contains(fromJSON('["MEMBER","OWNER","COLLABORATOR"]'), github.event.comment.author_association))
+      vars.CLINE_JETBRAINS_APP_ID != '' && (
+        (github.event_name == 'pull_request_target' &&
+         contains(fromJSON('["MEMBER","OWNER","COLLABORATOR"]'), github.event.pull_request.author_association)) ||
+        (github.event_name == 'issue_comment' &&
+         github.event.issue.pull_request &&
+         contains(github.event.comment.body, '/test-jetbrains') &&
+         contains(fromJSON('["MEMBER","OWNER","COLLABORATOR"]'), github.event.comment.author_association))
+      )
     steps:
       - name: Generate GitHub App Token
         id: app-token
