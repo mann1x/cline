@@ -17,7 +17,7 @@ hand-back, so both halves share the exact `.wh.<name>` on-disk format.
 | Linux | **L1** — user namespace + overlayfs over the workspace path | **done** (`src/linux.rs`) |
 | Linux | **L2** — ptrace path rewriting (fallback when L1 can't run) | **done**, x86_64 (`src/linux_l2.rs`, `src/resolve.rs`) |
 | Windows | W1 — Detours DLL injection (`../w1-spike`, C++) | shipped separately as `sandbox-launch.exe` + `hook.dll`; folding it in here is planned |
-| macOS | M1 — APFS clonefile | planned |
+| macOS | **M1** — APFS clonefile | **done**, x86_64 + arm64 (`src/macos.rs`); verified on a real Apple-Silicon runner in CI (`sandbox-test.yml`) |
 
 Backend selection is automatic: `CEREBRILINE_SANDBOX_BACKEND=auto` (the default)
 uses **L1** where unprivileged user namespaces are available and **L2** where
@@ -85,6 +85,40 @@ lexical, not resolved; a few rarer path syscalls (link, symlink, chdir-relative
 edge cases, `*at` with an O_PATH dirfd) are not intercepted. These are tracked in
 PLANS.md §10.
 
+### macOS M1 detail
+
+macOS gives an unprivileged process no mount namespace, and SIP strips
+`DYLD_INSERT_LIBRARIES` from `/bin/sh` and every system binary, so neither the L1
+overlay-over-the-path trick nor a DYLD-interpose redirect is available. M1 is a
+block-level copy-on-write clone instead: `clonefile(2)` clones the whole workspace
+tree to a hidden sibling on the same APFS volume instantly and copies no data (the
+blocks are shared until written), the agent's existing overlay is laid onto the
+clone (a prior tool's file becomes visible, a prior tool's deletion is removed) so
+the shell shares the tools' view, the command runs with its **cwd at the clone
+root**, and the change set is recovered afterwards by **diffing the clone against
+the workspace** — there is no kernel whiteout to read, so the reconcile is a tree
+diff that writes the same `.wh.` format (a changed file copies out, a deleted one
+becomes an empty `.wh.<name>` marker). An unchanged file is still block-shared and
+is skipped, exactly as the in-process `changedFiles()` skips a copy-up equal to the
+lower.
+
+**Known M1 limitation — runtime-constructed absolute paths.** Redirection is by
+cwd and by rewriting workspace-rooted paths in the command's **argv**, so the
+common case — the model writing `/Users/…/ws/x.html` straight into the command — is
+redirected to the clone. A path the command *constructs* at run time (a shell
+`$WS/x` expansion, a path a script builds from an env var) is not in the launcher's
+argv and still resolves to the real workspace. This is the one platform where
+absolute-path fidelity is lost; the alternatives (DYLD interpose, an FSKit
+filesystem) are dead under SIP or too heavy, so it is documented and accepted
+rather than worked around. `clonefile` is same-volume only, so the clone is a
+sibling of the workspace; on a non-APFS volume the clone fails and the launcher
+exits non-zero rather than run the command unsandboxed.
+
+Because no macOS host exists in development, the M1 backend is verified only in CI:
+`.github/workflows/sandbox-test.yml` builds and runs `tests/macos_isolation.rs` on
+a `macos-14` runner (Apple Silicon, arm64), asserting the same isolation contract
+as the Linux backends against the runner's own APFS volume.
+
 ## Invocation
 
 ```text
@@ -100,10 +134,14 @@ one `wrapSpawn` shape drives every platform.
 
 ```
 ./build.sh            # release build for the host target
-cargo test --release  # reconcile unit tests + the L1 integration test
+cargo test --release  # reconcile unit tests + the host's integration tests
 ```
 
-The build has **no external crate dependencies** (the Linux backend declares the
-handful of libc entry points it needs directly), so it compiles offline with a
-bare toolchain. Ship the resulting `target/release/cerebriline-sandbox` into
-`apps/vscode/assets/sandbox/`.
+Each integration test is gated to its own platform (`#![cfg(target_os = …)]`) and
+skips itself when its kernel/filesystem prerequisite is absent, so the suite is
+green on any host and the full matrix runs in CI (`sandbox-test.yml`).
+
+The build has **no external crate dependencies** (each backend declares the handful
+of libc entry points it needs directly — the Linux syscalls, `clonefile` on macOS),
+so it compiles offline with a bare toolchain. Ship the resulting
+`target/release/cerebriline-sandbox` into `apps/vscode/assets/sandbox/`.

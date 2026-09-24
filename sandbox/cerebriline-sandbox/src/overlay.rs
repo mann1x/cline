@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 /// AUFS-style whiteout marker prefix, shared with the TS overlay and the
 /// Windows hook (`WHITEOUT_PREFIX` in `overlay-fs.ts`).
-pub const WHITEOUT_PREFIX: &str = ".wh.";
+pub use crate::WHITEOUT_PREFIX;
 
 /// What a walk of the kernel upper layer found, as workspace-relative paths.
 #[derive(Default, Debug)]

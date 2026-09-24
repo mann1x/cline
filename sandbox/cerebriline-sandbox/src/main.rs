@@ -20,6 +20,14 @@
 //! injected library the Windows backend needs and every other backend ignores;
 //! it is kept positional so a single `wrapSpawn` shape drives every platform.
 
+/// The whiteout marker prefix shared with the in-process overlay
+/// (`WHITEOUT_PREFIX` in `overlay-fs.ts`): a deletion is an empty `.wh.<name>`.
+/// Lives at the crate root so every backend's reconcile speaks the same format.
+pub const WHITEOUT_PREFIX: &str = ".wh.";
+
+// The overlayfs `.wh.` reconcile machinery is the L1 (Linux) teardown; macOS does
+// its own diff-against-base reconcile, so the module is Linux-only.
+#[cfg(target_os = "linux")]
 mod overlay;
 
 #[cfg(target_os = "linux")]
@@ -31,6 +39,10 @@ mod linux_l2;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod resolve;
+
+// The macOS M1 backend (APFS clonefile). x86_64 and arm64 both have clonefile.
+#[cfg(target_os = "macos")]
+mod macos;
 
 use std::path::PathBuf;
 
@@ -130,11 +142,20 @@ fn main() {
         std::process::exit(code);
     }
 
+    // macOS: the M1 backend (APFS clonefile). No user namespace and no viable
+    // interpose, so the command runs against a copy-on-write clone and the change
+    // set is diffed back out. `CEREBRILINE_SANDBOX_BACKEND` is accepted for
+    // symmetry but there is only one backend to name here.
+    #[cfg(target_os = "macos")]
+    {
+        std::process::exit(macos::run(&cfg));
+    }
+
     // The escape-critical rule: with no working backend, refuse the command
     // rather than run it unsandboxed. The caller withholds `run_commands` when
     // no launcher exists, so reaching here is a wiring bug, and running the
     // command anyway would write straight to the lead's workspace.
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = &cfg;
         eprintln!(

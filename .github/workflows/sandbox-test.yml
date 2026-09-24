@@ -1,0 +1,72 @@
+name: sandbox-test
+
+# Builds and tests the `cerebriline-sandbox` launcher on every platform whose
+# backend it carries. The macOS M1 (APFS clonefile) backend has no local host in
+# development, so this workflow's macos-14 leg — Apple Silicon, a real arm64 M1
+# runner — is the one place its isolation contract is verified end to end. The
+# project rule is that a backend does not ship unverified, so this gates it.
+
+on:
+    push:
+        branches:
+            - main
+        paths:
+            - "sandbox/cerebriline-sandbox/**"
+            - ".github/workflows/sandbox-test.yml"
+    workflow_dispatch:
+    pull_request:
+        branches:
+            - main
+        paths:
+            - "sandbox/cerebriline-sandbox/**"
+            - ".github/workflows/sandbox-test.yml"
+    workflow_call:
+
+permissions:
+    contents: read
+
+defaults:
+    run:
+        working-directory: sandbox/cerebriline-sandbox
+
+jobs:
+    test:
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    # L1 (user namespace + overlayfs) and L2 (ptrace) — x86_64.
+                    - os: ubuntu-latest
+                      backend: linux-l1-l2
+                    # M1 (APFS clonefile) — arm64 Apple Silicon. macos-14 is the
+                    # first Apple-Silicon image, so the arm64 backend runs on the
+                    # hardware it targets, not under emulation.
+                    - os: macos-14
+                      backend: macos-m1
+        runs-on: ${{ matrix.os }}
+        name: Test (${{ matrix.os }}, ${{ matrix.backend }})
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Install the Rust toolchain
+              uses: dtolnay/rust-toolchain@stable
+              with:
+                  components: clippy, rustfmt
+
+            - name: Format check
+              run: cargo fmt --all --check
+
+            - name: Clippy (warnings are errors)
+              run: cargo clippy --release --tests -- -D warnings
+
+            - name: Build
+              run: cargo build --release
+
+            # On ubuntu this exercises L1 + L2; on macos-14 the M1 clonefile
+            # backend against the runner's APFS volume. Each integration test
+            # skips itself (rather than failing) if its kernel/filesystem
+            # prerequisite is absent, so a hardened runner does not produce a
+            # spurious red.
+            - name: Test
+              run: cargo test --release
