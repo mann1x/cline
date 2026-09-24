@@ -16,7 +16,7 @@ hand-back, so both halves share the exact `.wh.<name>` on-disk format.
 |---|---|---|
 | Linux | **L1** — user namespace + overlayfs over the workspace path | **done** (`src/linux.rs`) |
 | Linux | **L2** — ptrace path rewriting (fallback when L1 can't run) | **done**, x86_64 (`src/linux_l2.rs`, `src/resolve.rs`) |
-| Windows | W1 — Detours DLL injection (`../w1-spike`, C++) | shipped separately as `sandbox-launch.exe` + `hook.dll`; folding it in here is planned |
+| Windows | **W1** — Detours DLL injection | **done** (`src/windows.rs` — the launcher folded in here; the C++ `hook.dll` in `../w1-spike` is unchanged); verified on a `windows-latest` runner in CI (`sandbox-test.yml`) |
 | macOS | **M1** — APFS clonefile | **done**, x86_64 + arm64 (`src/macos.rs`); verified on a real Apple-Silicon runner in CI (`sandbox-test.yml`) |
 
 Backend selection is automatic: `CEREBRILINE_SANDBOX_BACKEND=auto` (the default)
@@ -118,6 +118,32 @@ Because no macOS host exists in development, the M1 backend is verified only in 
 `.github/workflows/sandbox-test.yml` builds and runs `tests/macos_isolation.rs` on
 a `macos-14` runner (Apple Silicon, arm64), asserting the same isolation contract
 as the Linux backends against the runner's own APFS volume.
+
+### Windows W1 detail
+
+W1 injects a small file-redirect DLL (`hook.dll`, C++, in `../w1-spike`) into the
+command with Microsoft Detours and lets the DLL re-inject itself into every child,
+so the whole process tree sees the agent's overlay: reads fall through to the
+workspace, writes copy up into the overlay, deletes become `.wh.<name>` whiteouts,
+and the real workspace is never touched — the same `.wh.` change set the other
+backends produce. `src/windows.rs` is only the **loader**: it starts the command
+with the DLL mapped via `DetourCreateProcessWithDllExW`, waits, and returns the
+child's exit code (the C++ `sandbox-launch.exe` folded into the one Rust binary).
+
+Like the other backends it declares the few Win32 calls plus the one Detours
+entry point directly (`extern "system"`, no crates); the only native library on
+the link line is Detours' `detours.lib`, found at build time via `DETOURS_LIB_DIR`
+(`build.rs`) and matched with `+crt-static` (`.cargo/config.toml`) so the CRT
+agrees with Detours' `/MT` and the `.exe` is self-contained. Build it with
+`sandbox/w1-spike/build.bat` (Detours + `hook.dll`) then `cargo build`; the CI
+`windows-latest` leg does exactly this and runs `tests/w1_isolation.rs`.
+
+**Known W1 gaps (from the spike, pre-production):** 8.3 short names are zeroed in
+the `*BothDir` info classes; a directory query with a *specific* wildcard (not
+`*`) falls through unmerged — which is why `cmd`'s `del` is unreliable and the
+tests delete via `node`'s `fs.unlink`; case-insensitive matching (NTFS default) is
+assumed. The launcher's command-line rebuild does not yet escape embedded
+quotes/backslashes (it matches the C++ launcher's `JoinArgs`).
 
 ## Invocation
 

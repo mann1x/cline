@@ -49,6 +49,83 @@ at the start of **every run**. Two rules follow, and both have cost us a run:
 Check before starting: a run in flight means `native.sh` is alive and the newest
 directory under `runs-native/` has a `run.jsonl` written in the last few minutes.
 
+## The command-sandbox binaries
+
+The delegated-agent command sandbox ships as native launchers under
+`apps/vscode/assets/sandbox/`, bundled into the `.vsix` by the single
+`!assets/sandbox/**` line in `.vscodeignore`. They are **committed binaries** —
+the release packages whatever bytes are on disk there and never compiles them —
+so a release with no sandbox change ships byte-identical launchers, which is what
+keeps the installed-hash check (step 8) meaningful. A rebuild-every-release would
+churn the hash for no reason.
+
+**The set** the host resolves per OS (`resolveSandboxBinaries`,
+`local-runtime-host.ts`):
+
+| OS | binaries | backend |
+|---|---|---|
+| Linux | `cerebriline-sandbox-x64`, `cerebriline-sandbox-arm64` | L1 userns+overlayfs / L2 ptrace |
+| macOS | `cerebriline-sandbox-darwin-x64`, `cerebriline-sandbox-darwin-arm64` | M1 APFS clonefile |
+| Windows | `cerebriline-sandbox.exe` + `hook.dll` | W1 Detours injection |
+
+Miss the set for an OS and that OS silently loses `run_commands` for delegated
+agents — the launcher resolves to `undefined`, the shell is withheld, and only
+the in-process **overlay** (file isolation) still works.
+
+### Built by CI, refreshed on change — never at release
+
+`.github/workflows/sandbox-test.yml` builds and **verifies** every backend on its
+own native runner: `ubuntu-latest` (L1+L2), `macos-14` (M1, real Apple Silicon),
+`windows-latest` (W1 — it clones + builds Microsoft Detours and the C++
+`hook.dll` via `sandbox/w1-spike/build.bat`, then links the Rust launcher against
+`detours.lib`). It is path-filtered to `sandbox/cerebriline-sandbox/**`, so it
+does not run on an unrelated change, and it is the one place the macOS and Windows
+backends — which have no local host in development — are exercised end to end
+(each leg's `*_isolation.rs` asserts the read-through / copy-up / whiteout /
+workspace-untouched contract, and skips cleanly where a runner can't host the
+backend).
+
+Because there is no macOS or Windows box in development, **CI is also the builder
+of the shipped binaries.** On a change under `sandbox/`, an auto-commit job
+rebuilds the affected launchers on their native runners and commits the refreshed
+bytes back into `apps/vscode/assets/sandbox/`. The binary you ship is then the
+exact one CI verified; the commit is the "change" that regenerated it; and every
+release in between reuses it untouched. `fork-release.yml` has no `cargo`/Detours
+step — it only packages.
+
+> **Status (2026-09-24).** The L1/L2/M1/W1 backends and the three verifying CI
+> legs are green and on `main`. Still to land before the six-binary set above is
+> what `assets/sandbox/` actually carries: the **auto-commit refresh job**; the
+> resolver rename `sandbox-launch.exe` → `cerebriline-sandbox.exe` (the W1 fold
+> gives the Windows launcher the same CLI shape under the unified name) in
+> `local-runtime-host.ts`, `apps/cli/.../sandbox-binaries.ts`, `build.ts` and
+> their tests; and the **darwin** resolver entries. Today `assets/sandbox/` still
+> holds the pre-fold four: `sandbox-launch.exe`, `hook.dll`,
+> `cerebriline-sandbox-{x64,arm64}`.
+
+### Building a launcher by hand (local / pandorum)
+
+You rarely need to — CI is the builder — but to reproduce or debug:
+
+- **Linux (L1/L2):** `sandbox/cerebriline-sandbox/build.sh` builds
+  `cerebriline-sandbox-x64` and `-arm64` (the arm64 leg cross-links via
+  `.cargo/config.toml`). No external crates, so it builds offline.
+- **Windows (W1), on pandorum** (VS Build Tools + git + the Rust
+  `x86_64-pc-windows-msvc` target — all present as of 2026-09-24):
+  1. From a plain `cmd`, run `sandbox\w1-spike\build.bat`. It clones Microsoft
+     Detours, builds its `/MT` static `detours.lib` and the C++ `hook.dll`, and
+     enters the VS build environment itself (`vcvars64`), so no dev-prompt setup
+     is needed. Output lands in `sandbox\w1-spike\` (`Detours\lib.X64\detours.lib`,
+     `hook.dll`).
+  2. `set DETOURS_LIB_DIR=<repo>\sandbox\w1-spike\Detours\lib.X64`, then in
+     `sandbox\cerebriline-sandbox` run `cargo build --release`. `build.rs` puts
+     `detours.lib` on the link line and `.cargo/config.toml` builds with
+     `+crt-static`, so the CRT matches Detours' `/MT` and the `.exe` is
+     self-contained (no VC++ runtime DLL). Result:
+     `target\release\cerebriline-sandbox.exe`, shipped beside `hook.dll`.
+- **macOS (M1):** no local host, so the `macos-14` CI leg is the only build path
+  (`clonefile`-based; `cargo build --release` for `x86_64`/`aarch64-apple-darwin`).
+
 ## The cycle
 
 ### 1. Commit the work
@@ -234,21 +311,22 @@ a command on the affected OS. Assert them by name:
 ```bash
 unzip -l "$VSIX" | grep -E \
   'assets/sandbox/(sandbox-launch\.exe|hook\.dll|cerebriline-sandbox-(x64|arm64))'
-# expect FOUR lines: the Windows pair AND both Linux launchers.
+# expect FOUR lines today: the Windows pair AND both Linux launchers.
 ```
 
-The host (`resolveSandboxBinaries`, `local-runtime-host.ts`) resolves per OS:
-**win32** needs *both* `sandbox-launch.exe` and `hook.dll`; **linux** needs
-`cerebriline-sandbox-x64` or `-arm64` (arch-suffixed, flat `cerebriline-sandbox`
-tolerated). macOS has no backend yet, by design. Miss the pair for an OS and
-that OS silently loses `run_commands` for delegated agents — the launcher
-resolves to `undefined`, the shell is withheld, and only the pure-path-rewrite
-**overlay** (file isolation) still works. So the count is load-bearing: three
-lines, not four, means the Linux launchers didn't rebuild into `assets/` before
-packaging (they are produced by `sandbox/cerebriline-sandbox/build.sh`, not by
-`bun run package`), and a Windows-only `.vsix` is the result. Rebuild the
-launchers into `assets/sandbox/` and repackage rather than shipping the short
-set.
+The count is load-bearing: miss the set for an OS and that OS silently loses
+`run_commands` for delegated agents — the launcher resolves to `undefined`, the
+shell is withheld, and only the in-process **overlay** (file isolation) still
+works. Three lines, not four, means the Linux launchers didn't rebuild into
+`assets/` before packaging, and a Windows-only `.vsix` is the result.
+
+**Which set to expect** is the set the resolver names for the shipped code — see
+*The command-sandbox binaries* above. It is **four today** (the pre-fold Windows
+`sandbox-launch.exe`/`hook.dll` plus the two Linux launchers) and becomes **six**
+once the W1 fold's `cerebriline-sandbox.exe` and the two macOS `-darwin-` launchers
+are committed into `assets/sandbox/` by the auto-commit refresh; update this grep
+and the count in the same commit that lands them, so the assertion always matches
+the resolver.
 
 ### 7. Deploy to pandorum
 
