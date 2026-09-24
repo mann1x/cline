@@ -264,7 +264,6 @@ describe("buildDelegatedAgentConfig", () => {
 		it("forwards events to the supervisor and preserves the original onEvent", () => {
 			const supervisor = createWorkerStruggleSupervisor({
 				nudgeAfterIterations: 4,
-				stopAfterIterations: 100,
 			});
 			const { config, events } = build(supervisor);
 			for (let n = 1; n <= 4; n += 1) {
@@ -280,7 +279,6 @@ describe("buildDelegatedAgentConfig", () => {
 		it("wraps the tools so the held nudge lands on the next result", async () => {
 			const supervisor = createWorkerStruggleSupervisor({
 				nudgeAfterIterations: 4,
-				stopAfterIterations: 100,
 				nudgeMessage: "COMMIT NOW",
 			});
 			const { config } = build(supervisor);
@@ -294,16 +292,30 @@ describe("buildDelegatedAgentConfig", () => {
 			expect(result).toContain("COMMIT NOW");
 		});
 
+		// A stop comes only from thinking that keeps running out its budget, so
+		// drive exactly that: each turn's reasoning ends on the engine's marker.
+		const spentTurn = (n: number): AgentEvent[] => [
+			{ type: "iteration_start", iteration: n },
+			{
+				type: "content_end",
+				contentType: "reasoning",
+				reasoning:
+					"…\n\nI have used my thinking budget. I must stop analysing now.",
+			},
+			{
+				type: "iteration_end",
+				iteration: n,
+				hadToolCalls: true,
+				toolCallCount: 1,
+			},
+		];
+
 		it("composes the abort signal so a supervisor stop reaches the runtime", () => {
-			const supervisor = createWorkerStruggleSupervisor({
-				nudgeAfterIterations: 2,
-				stopAfterIterations: 4,
-				graceIterations: 1,
-			});
+			const supervisor = createWorkerStruggleSupervisor({ graceIterations: 0 });
 			const { config } = build(supervisor);
 			expect(config.abortSignal?.aborted).toBe(false);
-			for (let n = 1; n <= 4; n += 1) {
-				for (const event of iter(n)) {
+			for (let n = 1; n <= 5; n += 1) {
+				for (const event of spentTurn(n)) {
 					config.onEvent?.(event);
 				}
 			}

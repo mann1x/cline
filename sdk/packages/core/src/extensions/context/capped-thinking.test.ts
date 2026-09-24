@@ -9,6 +9,7 @@ import {
 	findCappedThinkingIndex,
 	isDegenerateNote,
 	locateCappedThinking,
+	reasoningHitBudget,
 	resolveCondensedThinkingOutputCap,
 } from "./capped-thinking";
 
@@ -858,5 +859,31 @@ describe("salvaging a turn discarded at the output cap", () => {
 		await writer?.({ ...input });
 
 		expect(summarizerCalls()).toHaveLength(1);
+	});
+});
+
+describe("reasoningHitBudget", () => {
+	const engine =
+		"\r\n\r\nI have used my thinking budget. I must stop analysing now and act on what I have: make the tool call, or give a short final answer if no call is needed.\r\nI'll be more terse and concise now and maybe I need to consider a different approach.";
+
+	it("recognises the engine's admission at the end of the reasoning", () => {
+		expect(reasoningHitBudget(`${"x".repeat(12_000)}${engine}`)).toBe(true);
+	});
+
+	it("uses the session's own message when it knows it", () => {
+		expect(
+			reasoningHitBudget("thought...\nBUDGET GONE", "\n\nBUDGET GONE\n"),
+		).toBe(true);
+		// Knowing the message means the generic admission is not consulted.
+		expect(reasoningHitBudget(`thought${engine}`, "BUDGET GONE")).toBe(false);
+	});
+
+	// A model discussing its budget early on has not run out of it.
+	it("ignores a mention that is not at the tail", () => {
+		expect(
+			reasoningHitBudget(
+				`I have used my thinking budget sparingly. ${"More analysis. ".repeat(100)}`,
+			),
+		).toBe(false);
 	});
 });

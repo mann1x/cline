@@ -5,35 +5,47 @@ import {
 	describeWorkerNudge,
 } from "./worker-struggle";
 
-const iterStart = (iteration: number): AgentEvent => ({
-	type: "iteration_start",
-	iteration,
-});
+const BUDGET_MESSAGE =
+	"I have used my thinking budget. I must stop analysing now and act on what I have: make the tool call, or give a short final answer if no call is needed.";
 
-const iterEnd = (iteration: number): AgentEvent => ({
-	type: "iteration_end",
-	iteration,
-	hadToolCalls: true,
-	toolCallCount: 1,
-});
+type Supervisor = ReturnType<typeof createWorkerStruggleSupervisor>;
 
-const failedEdit = (): AgentEvent => ({
-	type: "content_end",
-	contentType: "tool",
-	toolName: "editor",
-	error: "refused: the range no longer matches the file",
-});
-
-/** Drive the supervisor through a run of `turns` tool-calling iterations. */
-function grind(
-	supervisor: ReturnType<typeof createWorkerStruggleSupervisor>,
-	turns: number,
-	start = 1,
+/**
+ * One tool-calling turn. `spent` ends its reasoning the way the engine ends
+ * reasoning it cut at the budget -- which is what the replayed `k76ar4` did on
+ * 9 of its 18 turns.
+ */
+function turn(
+	supervisor: Supervisor,
+	iteration: number,
+	options: { spent?: boolean; reasoning?: string; refusedEdit?: boolean } = {},
 ): void {
-	for (let i = start; i < start + turns; i += 1) {
-		supervisor.observe(iterStart(i));
-		supervisor.observe(iterEnd(i));
-	}
+	supervisor.observe({ type: "iteration_start", iteration });
+	const reasoning =
+		options.reasoning ??
+		(options.spent
+			? `Line 90 ends with }}});} so one brace is extra. Actually, I have enough evidence to write the report. Let me try awk once more.\n\n${BUDGET_MESSAGE}`
+			: "Reading the next section.");
+	supervisor.observe({
+		type: "content_end",
+		contentType: "reasoning",
+		reasoning,
+	});
+	supervisor.observe({
+		type: "content_end",
+		contentType: "tool",
+		toolName: options.refusedEdit ? "editor" : "grep",
+		...(options.refusedEdit
+			? { error: "refused: the range no longer matches" }
+			: {}),
+		output: "ok",
+	});
+	supervisor.observe({
+		type: "iteration_end",
+		iteration,
+		hadToolCalls: true,
+		toolCallCount: 1,
+	});
 }
 
 function textTool(name: string, result: string): AgentTool<unknown, unknown> {
@@ -52,37 +64,115 @@ describe("createWorkerStruggleSupervisor", () => {
 		expect(supervisor.stopSignal.aborted).toBe(false);
 	});
 
-	// The grep-grind class: a worker that keeps issuing slightly-varying probes
-	// and never converges, with no failure the struggle detector can see. The
-	// only thing that separates it from a productive worker is the turn count,
-	// so that is what the non-progress signal reads.
-	it("nudges once on a turn-count grind, then stops", () => {
+	// The loop the replay found: thinking that runs out its budget turn after
+	// turn, each time followed by one more probe instead of an answer.
+	it("nudges on thinking that keeps exhausting its budget, then stops if it carries on", () => {
+		const transitions: string[] = [];
 		const supervisor = createWorkerStruggleSupervisor({
-			nudgeAfterIterations: 6,
-			stopAfterIterations: 10,
-			graceIterations: 2,
+			onTransition: (phase, reason) => transitions.push(`${phase}:${reason}`),
 		});
-
-		grind(supervisor, 6);
+		// k76ar4's first six turns: 1 2 [spent] 2 [spent] [spent].
+		turn(supervisor, 1);
+		turn(supervisor, 2);
+		turn(supervisor, 3, { spent: true });
+		turn(supervisor, 4);
+		turn(supervisor, 5, { spent: true });
+		expect(supervisor.phase).toBe("watching");
+		turn(supervisor, 6, { spent: true });
 		expect(supervisor.phase).toBe("nudged");
-		expect(supervisor.stopSignal.aborted).toBe(false);
 
-		grind(supervisor, 4, 7);
+		// Inside the grace window nothing counts toward the stop.
+		turn(supervisor, 7, { spent: true });
+		turn(supervisor, 8, { spent: true });
+		expect(supervisor.phase).toBe("nudged");
+
+		turn(supervisor, 9, { spent: true });
+		expect(supervisor.phase).toBe("nudged");
+		turn(supervisor, 10, { spent: true });
 		expect(supervisor.phase).toBe("stopped");
 		expect(supervisor.stopSignal.aborted).toBe(true);
+		expect(transitions).toEqual([
+			"nudged:thinking-budget",
+			"stopped:thinking-budget",
+		]);
 	});
 
-	// The nudge is delivered on the worker's next tool result, never appended to
-	// the conversation -- the same delivery the lead's struggle offer uses,
-	// because a delegated run's message store is snapshotted at start and
-	// overwritten at end.
-	it("attaches the held nudge to the next tool result, once", async () => {
+	// The workers that took longest on the replayed swarms -- 29, 36 and 43
+	// turns -- all answered. The turn count earns a nudge and nothing more.
+	it("nudges a long run but never stops it for its length alone", () => {
 		const supervisor = createWorkerStruggleSupervisor({
 			nudgeAfterIterations: 6,
-			stopAfterIterations: 100,
+		});
+		for (let i = 1; i <= 60; i += 1) {
+			turn(supervisor, i);
+		}
+		expect(supervisor.phase).toBe("nudged");
+		expect(supervisor.stopSignal.aborted).toBe(false);
+	});
+
+	// Detection parity with the lead: the reused detector catches an unbroken
+	// run of refused edits. Nudge only -- the replayed workers it fired on went
+	// on to answer.
+	it("nudges on a refused-edit streak and does not stop for it", () => {
+		const transitions: string[] = [];
+		const supervisor = createWorkerStruggleSupervisor({
+			nudgeAfterIterations: 1_000,
+			onTransition: (phase, reason) => transitions.push(`${phase}:${reason}`),
+		});
+		for (let i = 1; i <= 30; i += 1) {
+			turn(supervisor, i, { refusedEdit: true });
+		}
+		expect(transitions).toEqual(["nudged:struggle"]);
+		expect(supervisor.stopSignal.aborted).toBe(false);
+	});
+
+	// Budget turns spread thinly are a model using its thinking, not a loop.
+	it("does not nudge on budget turns spread outside its window", () => {
+		const supervisor = createWorkerStruggleSupervisor({
+			nudgeAfterIterations: 1_000,
+		});
+		for (let i = 1; i <= 30; i += 1) {
+			turn(supervisor, i, { spent: i % 4 === 0 });
+		}
+		expect(supervisor.phase).toBe("watching");
+	});
+
+	it("matches the session's own budget message when it knows it", () => {
+		const supervisor = createWorkerStruggleSupervisor({
+			thinkingBudgetMessage: "\n\nBUDGET GONE -- act now.\n",
+			nudgeAfterIterations: 1_000,
+		});
+		for (let i = 1; i <= 3; i += 1) {
+			turn(supervisor, i, {
+				reasoning: "long thought...\nBUDGET GONE -- act now.",
+			});
+		}
+		expect(supervisor.phase).toBe("nudged");
+	});
+
+	// Tail-anchored: reasoning that talks about a budget mid-thought has not
+	// run out of it.
+	it("does not count reasoning that only mentions its budget mid-thought", () => {
+		const supervisor = createWorkerStruggleSupervisor({
+			nudgeAfterIterations: 1_000,
+		});
+		const mention = `I have used my thinking budget wisely so far. ${"More careful analysis of the braces. ".repeat(40)}`;
+		for (let i = 1; i <= 6; i += 1) {
+			turn(supervisor, i, { reasoning: mention });
+		}
+		expect(supervisor.phase).toBe("watching");
+	});
+
+	// Delivered on the next tool result, never appended to the conversation --
+	// a delegated run's message store is snapshotted at start and overwritten
+	// at end.
+	it("attaches the held nudge to the next tool result, once", async () => {
+		const supervisor = createWorkerStruggleSupervisor({
+			nudgeAfterIterations: 2,
 			nudgeMessage: "COMMIT NOW",
 		});
-		grind(supervisor, 6);
+		turn(supervisor, 1);
+		turn(supervisor, 2);
 		expect(supervisor.phase).toBe("nudged");
 
 		const [grep] = supervisor.wrapTools([textTool("grep", "found 3 matches")]);
@@ -90,71 +180,33 @@ describe("createWorkerStruggleSupervisor", () => {
 		expect(first).toContain("found 3 matches");
 		expect(first).toContain("COMMIT NOW");
 
-		// Consumed: a second call does not repeat it.
 		const second = await grep.execute({}, {} as never);
 		expect(second).toBe("found 3 matches");
 	});
 
-	// Detection parity with the lead: an unbroken run of refused edits is caught
-	// by the reused StruggleDetector well before the turn budget runs out. This
-	// is the `xsvod4` failing-editor grind from the 75-agent swarm.
-	it("nudges on a refused-edit streak before the turn budget", () => {
+	it("words the nudge for what fired it", async () => {
 		const supervisor = createWorkerStruggleSupervisor({
-			nudgeAfterIterations: 100,
-			stopAfterIterations: 200,
+			nudgeAfterIterations: 1_000,
 		});
-		supervisor.observe(iterStart(1));
-		supervisor.observe(failedEdit());
-		supervisor.observe(failedEdit());
-		supervisor.observe(failedEdit());
-		expect(supervisor.phase).toBe("nudged");
+		for (let i = 1; i <= 3; i += 1) {
+			turn(supervisor, i, { spent: true });
+		}
+		const [grep] = supervisor.wrapTools([textTool("grep", "ok")]);
+		expect(await grep.execute({}, {} as never)).toContain(
+			"run out its whole budget",
+		);
 	});
 
-	// The one nudge is given a grace window to land before a stop can fire: a
-	// struggle verdict the turn after the nudge must not stop the worker, or the
-	// nudge it was just handed never reaches a tool result.
-	it("does not stop within the grace window after nudging", () => {
-		const supervisor = createWorkerStruggleSupervisor({
-			nudgeAfterIterations: 4,
-			stopAfterIterations: 200,
-			graceIterations: 5,
-		});
-		grind(supervisor, 4);
-		expect(supervisor.phase).toBe("nudged");
-
-		// A refused-edit streak one turn later -- inside the grace window.
-		supervisor.observe(iterStart(5));
-		supervisor.observe(failedEdit());
-		supervisor.observe(failedEdit());
-		supervisor.observe(failedEdit());
-		expect(supervisor.phase).toBe("nudged");
-		expect(supervisor.stopSignal.aborted).toBe(false);
-	});
-
-	it("reports each transition to the observer", () => {
-		const transitions: string[] = [];
-		const supervisor = createWorkerStruggleSupervisor({
-			nudgeAfterIterations: 4,
-			stopAfterIterations: 6,
-			graceIterations: 1,
-			onTransition: (phase, reason) => transitions.push(`${phase}:${reason}`),
-		});
-		grind(supervisor, 6);
-		expect(transitions).toEqual([
-			"nudged:non-progress",
-			"stopped:non-progress",
-		]);
-	});
-
-	it("holds a caller-provided abort controller so an outer stop still works", () => {
+	it("stops through a caller-provided abort controller", () => {
 		const controller = new AbortController();
 		const supervisor = createWorkerStruggleSupervisor({
-			nudgeAfterIterations: 2,
-			stopAfterIterations: 4,
-			graceIterations: 1,
 			abortController: controller,
+			graceIterations: 0,
+			budgetTurnsToStop: 1,
 		});
-		grind(supervisor, 4);
+		for (let i = 1; i <= 4; i += 1) {
+			turn(supervisor, i, { spent: true });
+		}
 		expect(controller.signal.aborted).toBe(true);
 		expect(supervisor.stopSignal).toBe(controller.signal);
 	});
@@ -162,11 +214,16 @@ describe("createWorkerStruggleSupervisor", () => {
 
 describe("describeWorkerNudge", () => {
 	it("tells the worker to commit a SUMMARY and names no tool it cannot reach", () => {
-		const message = describeWorkerNudge();
-		expect(message).toMatch(/SUMMARY/);
-		// It may say the expert is *unavailable*, but must never offer a tool a
-		// headless worker does not hold.
-		expect(message).toMatch(/cannot hand this to an expert/i);
-		expect(message).not.toMatch(/`escalate`|`spawn_agent`/);
+		for (const reason of [
+			"thinking-budget",
+			"struggle",
+			"non-progress",
+			undefined,
+		] as const) {
+			const message = describeWorkerNudge(reason);
+			expect(message).toMatch(/SUMMARY/);
+			expect(message).toMatch(/cannot hand this to an expert/i);
+			expect(message).not.toMatch(/`escalate`|`spawn_agent`/);
+		}
 	});
 });
